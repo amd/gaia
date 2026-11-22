@@ -1,5 +1,5 @@
 {
-  "_source": "The TUI <-> flagship agent stdio protocol. Hand-maintained; both sides are checked against it: hub/agents/gaia/python/tests/test_stdio_wire_contract.py (Python, gaia_agent/stdio.py) and tui/internal/client/wire_contract_test.go + tui/internal/event/wire_contract_test.go (Go). Rename a key or verb on one side and the other side's test fails. Human-readable spec: docs/spec/agent-ui-query-sse-contract.md section 10.",
+  "_source": "The TUI <-> flagship agent stdio protocol. Hand-maintained; both sides are checked against it: hub/agents/gaia/python/tests/test_stdio_wire_contract.py (Python, gaiapy/stdio.py) and tui/internal/client/wire_contract_test.go + tui/internal/event/wire_contract_test.go (Go). Rename a key or verb on one side and the other side's test fails. Human-readable spec: docs/spec/agent-ui-query-sse-contract.md section 10.",
   "stdin": {
     "query_key": "gaia_query",
     "control_key": "gaia_control",
@@ -33,7 +33,10 @@
         "skills"
       ],
       "phase_extension": ["phase", "words", "chars"],
-      "history_cut_extension": ["history_cut"]
+      "warning_extension": ["level"],
+      "history_cut_extension": ["history_cut"],
+      "plan_extension": ["plan"],
+      "retracts_answer_extension": ["retracts_answer"]
     },
     "token": { "fields": ["delta"] },
     "tool_call": { "fields": ["tool", "args", "narration"] },
@@ -55,7 +58,28 @@
       ]
     },
     "final": { "fields": ["answer", "usage"] },
-    "error": { "fields": ["detail", "status", "source"], "not_sent_over_stdio": ["source"] }
+    "error": { "fields": ["detail", "status", "source"], "not_sent_over_stdio": ["source"] },
+    "context_usage": {
+      "fields": [
+        "window",
+        "reply_reserve",
+        "system",
+        "skills",
+        "memory",
+        "tools",
+        "tool_definitions",
+        "documents",
+        "history",
+        "query",
+        "history_budget",
+        "history_used",
+        "turns_in_view",
+        "turns_hidden",
+        "at_risk",
+        "at_risk_tokens",
+        "used"
+      ]
+    }
   },
   "session_index": {
     "_doc": "Opt-in listing the agent writes beside --history-file (<id>.sqlite3): <id>.json is replaced atomically on every status change, <id>.jsonl gains one line per finished turn, and <id>.lock is held for the life of the process. Read by tui/internal/sessionstore.",

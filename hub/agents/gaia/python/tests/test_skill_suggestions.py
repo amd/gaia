@@ -14,25 +14,29 @@ from types import SimpleNamespace
 
 import numpy as np
 import pytest
-from gaia_agent import agent as agent_module
-from gaia_agent.agent import GaiaAgent, GaiaAgentConfig, _apply_fast_mode
+from gaiapy import agent as agent_module
+from gaiapy.agent import GaiaAgent, GaiaAgentConfig, _apply_fast_mode
 
+from gaia.agents.base import skill_budget
 from gaia.agents.base.agent import Agent
 from gaia.agents.base.model_features import COMPACT
+from gaia.agents.base.skill_budget import SKILL_BUDGET_CEILING, skill_body_budget
 from gaia.agents.base.skill_suggester import (
     DEFAULT_AUTOLOAD_MARGIN,
     DEFAULT_AUTOLOAD_THRESHOLD,
     DEFAULT_SUGGEST_THRESHOLD,
     DOC_PROMPT,
+    SUGGESTION_LEAD_IN,
     SkillMatches,
     SkillSuggester,
+    render_suggestion,
 )
 from gaia.agents.registry import DEFAULT_EMBEDDING_MODEL, get_embedding_model_for_device
 from gaia.agents.tools.shell_tools import skill_granted_binaries
 from gaia.skills.binaries import BinaryGrants
 from gaia.skills.manager import ROOT_AGENT_BUNDLED, ROOT_CLAUDE_PROJECT, ROOT_USER
 
-#: The default context window, which the auto-load budget is a share of.
+#: The default context window, which the skill body budget is sized from.
 WINDOW = 32768
 
 
@@ -144,6 +148,47 @@ def test_scores_the_current_message_against_installed_skills(monkeypatch):
     assert list_project is False
 
 
+def test_a_skill_the_user_typed_counts_as_loaded(monkeypatch):
+    """``/summarize ...`` loads its skill after the context is built."""
+    agent = _wired(monkeypatch, [])
+    agent._select_skill_suggestions_for_turn("/summarize the notes in notes.txt")
+    assert agent.skill_suggester.calls[0][2] == {"coding", "summarize"}
+    agent._select_skill_suggestions_for_turn("/tmp/notes.txt is empty")
+    assert agent.skill_suggester.calls[1][2] == {"coding"}
+
+
+def test_a_typed_skill_is_never_suggested_back(monkeypatch):
+    """rc4: ``/log-triage What went wrong in app.log?`` was told to load
+    log-triage."""
+    agent = _agent(monkeypatch)
+    skills = {
+        name: SimpleNamespace(
+            name=name,
+            description=f"does {name}",
+            root="agent",
+            tool_names=[],
+            gaia=SimpleNamespace(pairs_with=[], tools_required=[]),
+        )
+        for name in ("log-triage", "coding")
+    }
+
+    def embed(text):
+        v = np.zeros(4, dtype=np.float32)
+        v[1 if text.endswith("does coding") else 0] = 1.0
+        return v
+
+    agent.skill_suggester = SkillSuggester(embed)
+    agent._memory_store = object()
+    agent._loaded_skills = {}
+    agent._skill_manager = SimpleNamespace(discover=lambda: skills)
+    request = "/log-triage What went wrong in app.log?"
+    assert agent._select_skill_suggestions_for_turn("What went wrong in app.log?") == [
+        "log-triage"
+    ]
+    assert agent._select_skill_suggestions_for_turn(request) == []
+    assert "log-triage" not in _with_turn_context(monkeypatch, agent, request)
+
+
 def test_skills_the_model_cannot_load_are_never_suggested(monkeypatch):
     # Same pool as the catalogue: a compact model is not offered the mail tools.
     agent = _wired(monkeypatch, [])
@@ -205,8 +250,7 @@ def test_the_line_joins_this_turns_context(monkeypatch):
     context = _with_turn_context(monkeypatch, agent, "sum up this spreadsheet")
     assert context.splitlines() == [
         "Current time: now",
-        "Call load_skill('summarize') before you start: it covers this kind of "
-        "request. Also consider: data-explore.",
+        render_suggestion(["summarize", "data-explore"]),
     ]
     assert agent.skill_suggester.calls[0][0] == "sum up this spreadsheet"
 
@@ -251,7 +295,7 @@ def test_a_real_suggester_reaches_the_turn_context(monkeypatch):
     agent._loaded_skills = {}
     agent._skill_manager = SimpleNamespace(discover=lambda: skills)
     context = _with_turn_context(monkeypatch, agent, "draw a lighthouse")
-    assert "Call load_skill('image-gen') before you start" in context
+    assert "call load_skill('image-gen') before you start" in context
 
 
 # ── auto-load: settings ─────────────────────────────────────────────────────
@@ -485,6 +529,10 @@ def _loading(monkeypatch, auto, *, names=(), library=None, fail=None, window=WIN
     agent.console = SimpleNamespace(full_access=False)
     agent.window = window
     monkeypatch.setattr(agent_module, "context_window", lambda host: host.window)
+    # The skill budget's window, pinned: the real one depends on this machine.
+    monkeypatch.setattr(
+        skill_budget, "resolve_skill_window", lambda host: (host.window, "test")
+    )
     library = library or {}
     for name in [*auto, *names]:
         library.setdefault(name, _full_skill(name))
@@ -522,7 +570,7 @@ def _suggests(context, name):
     """The last line names *name*: as the instruction, or after an auto-load
     as available."""
     line = context.splitlines()[-1]
-    return line.startswith(("Call load_skill(", "Also available: ")) and name in line
+    return line.startswith(SUGGESTION_LEAD_IN) and name in line
 
 
 def test_a_high_confidence_match_is_loaded_and_announced(monkeypatch):
@@ -534,8 +582,7 @@ def test_a_high_confidence_match_is_loaded_and_announced(monkeypatch):
         "Current time: now",
         "Loaded report-from-sources because it matches this request — its "
         "instructions are in the system prompt.",
-        "Also available: office-docs. Call load_skill for one only if this "
-        "request needs it.",
+        render_suggestion(["office-docs"], after_autoload=True),
     ]
     # Pinned, so this turn's body selection cannot hide what it was loaded for.
     assert "report-from-sources" in agent._sticky_skill_turns
@@ -566,10 +613,7 @@ def test_reading_the_context_outside_a_turn_never_loads(monkeypatch):
     agent._memory_turn_query = "sum this up"
     context = agent.get_memory_dynamic_context()
     assert agent.loads == [] and agent._loaded_skills == {}
-    assert context.splitlines()[-1] == (
-        "Call load_skill('summarize') before you start: it covers this kind of "
-        "request. Also consider: pdf."
-    )
+    assert context.splitlines()[-1] == (render_suggestion(["summarize", "pdf"]))
 
 
 def test_a_prepared_turn_is_reported_once(monkeypatch):
@@ -625,14 +669,15 @@ def test_unloading_a_skill_that_is_not_loaded_records_nothing(monkeypatch):
 
 
 def test_a_rebuilt_agent_keeps_what_was_auto_loaded_and_unloaded(monkeypatch):
-    from gaia_agent.session_registry import _carry_session_state
+    from gaiapy.session_registry import _carry_session_state
 
-    old = _loading(monkeypatch, ["summarize", "pdf"])
+    # A large window, which auto-loads two skills per turn.
+    old = _loading(monkeypatch, ["summarize", "pdf"], window=200_000)
     _with_turn_context(monkeypatch, old, "sum up this pdf")
     old.unload_skill("pdf")
     old._autoload_granted = {"summarize": ["pytest"]}
 
-    new = _loading(monkeypatch, ["summarize", "pdf"])
+    new = _loading(monkeypatch, ["summarize", "pdf"], window=200_000)
     _carry_session_state(old, new, "session-1")
     assert new.loads == ["summarize"]  # the loaded skill came across
     assert new._autoloaded_skills == {"summarize", "pdf"}
@@ -647,7 +692,7 @@ def test_a_rebuilt_agent_keeps_what_was_auto_loaded_and_unloaded(monkeypatch):
 
 
 def test_a_rebuild_from_an_agent_without_the_records_carries_none(monkeypatch):
-    from gaia_agent.session_registry import _carry_session_state
+    from gaiapy.session_registry import _carry_session_state
 
     new = _loading(monkeypatch, ["summarize"])
     _carry_session_state(SimpleNamespace(loaded_skills={}), new, "session-1")
@@ -735,8 +780,7 @@ def test_a_real_suggester_loads_the_best_match_and_names_its_companions(monkeypa
     assert context.splitlines()[-2:] == [
         "Loaded slide-decks because it matches this request — its instructions "
         "are in the system prompt.",
-        "Also available: report-from-sources, office-docs. Call load_skill for "
-        "one only if this request needs it.",
+        render_suggestion(["report-from-sources", "office-docs"], after_autoload=True),
     ]
 
 
@@ -749,7 +793,8 @@ def test_a_companion_that_leads_the_rest_itself_loads_with_the_best_match(
         "beta": _plain("beta"),
         "gamma": _plain("gamma"),
     }
-    agent = _loading(monkeypatch, [], names=names)
+    # A large window, which auto-loads two skills per turn.
+    agent = _loading(monkeypatch, [], names=names, window=200_000)
     agent.skill_suggester = SkillSuggester(
         _scoring(names, {"alpha": 0.62, "beta": 0.60, "gamma": 0.41}),
         autoload_threshold=DEFAULT_AUTOLOAD_THRESHOLD,
@@ -999,19 +1044,22 @@ def test_a_skill_without_a_grant_stays_loaded_when_full_access_goes_off(monkeypa
 
 
 def _budget(window=WINDOW):
-    return int(window * GaiaAgent.SKILL_AUTOLOAD_CONTEXT_SHARE)
+    return skill_body_budget(window)
 
 
 def _sized(tokens):
     return "x" * (tokens * 4)
 
 
-def test_the_default_window_gives_about_six_thousand_tokens():
-    assert 5500 <= _budget(32768) <= 6500
+def test_the_budget_scales_with_the_window_between_floor_and_ceiling():
+    assert _budget(8192) == 1000
+    assert 1500 <= _budget(32768) <= 1700
+    assert 3200 <= _budget(65536) <= 3400
+    assert _budget(131072) == SKILL_BUDGET_CEILING
 
 
 @pytest.mark.parametrize("window", [8192, 32768, 131072])
-def test_the_body_budget_is_a_share_of_the_context_window(monkeypatch, window):
+def test_the_body_budget_scales_with_the_context_window(monkeypatch, window):
     budget = _budget(window)
     library = {
         "fits": _full_skill("fits", body=_sized(budget)),
@@ -1024,16 +1072,21 @@ def test_the_body_budget_is_a_share_of_the_context_window(monkeypatch, window):
 
 
 def test_a_skill_skipped_for_size_is_a_warning_with_the_numbers(monkeypatch, caplog):
-    agent = _loading(monkeypatch, ["summarize"], window=10000)
-    agent._loaded_skills["coding"] = _full_skill("coding", body=_sized(1750))
+    agent = _loading(monkeypatch, ["summarize"], window=40000)
+    agent._loaded_skills["coding"] = _full_skill("coding", body=_sized(1950))
     agent.skill_manager.load("summarize").body = _sized(100)
     with caplog.at_level(logging.WARNING):
         context = _with_turn_context(monkeypatch, agent, "sum this up")
     assert agent.loads == []
     assert _suggests(context, "summarize")
-    (warning,) = [m for m in _warnings(caplog) if "over the budget" in m]
+    (warning,) = [m for m in _warnings(caplog) if "-token budget" in m]
     assert "'summarize'" in warning
-    for number in ("~100-token body", "~1750 tokens", "budget of 1800", "10000-token"):
+    for number in (
+        "~100-token body",
+        "~1950 tokens",
+        "2000-token budget",
+        "40000-token",
+    ):
         assert number in warning, warning
 
 
@@ -1050,19 +1103,33 @@ def test_bodies_loaded_this_turn_count_against_the_budget(monkeypatch):
     assert _suggests(context, "small")
 
 
-def test_a_window_change_between_turns_is_honoured(monkeypatch):
+def test_a_model_switch_between_turns_resizes_the_budget(monkeypatch):
     library = {"big": _full_skill("big", body=_sized(3000))}
     agent = _loading(monkeypatch, ["big"], library=library, window=8192)
+    agent.model_id = "small-model"
     _with_turn_context(monkeypatch, agent, "do it")
     assert agent.loads == []
-    agent.window = 32768
+    agent.window = 131072
+    agent.model_id = "large-model"
     _with_turn_context(monkeypatch, agent, "do it")
     assert agent.loads == ["big"]
     agent._loaded_skills.clear()
     agent._autoloaded_skills.clear()
+    agent.loads.clear()
     agent.window = 8192
+    agent.model_id = "small-model"
     _with_turn_context(monkeypatch, agent, "do it")
-    assert agent.loads == ["big"]
+    assert agent.loads == []
+
+
+def test_free_memory_moving_the_window_keeps_the_budget(monkeypatch):
+    # A budget that moved would re-render the skills section and the prompt.
+    library = {"big": _full_skill("big", body=_sized(3000))}
+    agent = _loading(monkeypatch, ["big"], library=library, window=8192)
+    _with_turn_context(monkeypatch, agent, "do it")
+    agent.window = 131072
+    _with_turn_context(monkeypatch, agent, "do it")
+    assert agent.loads == []
 
 
 class _BodySelector:
@@ -1124,3 +1191,54 @@ def test_every_loaded_body_counts_when_none_is_collapsed(monkeypatch, why):
         agent.skill_loader.session_disabled = True
     _with_turn_context(monkeypatch, agent, "sum this up")
     assert agent.loads == []
+
+
+# ── auto-load: the per-turn cap on small windows ────────────────────────────
+
+
+def test_a_64k_window_auto_loads_one_skill_per_turn(monkeypatch):
+    library = {
+        "alpha": _full_skill("alpha", body="x" * 800),
+        "beta": _full_skill("beta", body="x" * 800),
+    }
+    agent = _loading(monkeypatch, ["alpha", "beta"], library=library, window=65_536)
+    context = _with_turn_context(monkeypatch, agent, "do both")
+    assert agent.loads == ["alpha"]
+    assert _suggests(context, "beta")
+
+
+def test_a_200k_window_still_auto_loads_two(monkeypatch):
+    library = {
+        "alpha": _full_skill("alpha", body="x" * 800),
+        "beta": _full_skill("beta", body="x" * 800),
+    }
+    agent = _loading(monkeypatch, ["alpha", "beta"], library=library, window=200_000)
+    _with_turn_context(monkeypatch, agent, "do both")
+    assert agent.loads == ["alpha", "beta"]
+
+
+@pytest.mark.parametrize("window", [16_384, 65_536])
+def test_a_small_window_budget_stops_a_body_the_ceiling_allows(monkeypatch, window):
+    budget = skill_body_budget(window)
+    assert budget < SKILL_BUDGET_CEILING
+    library = {"big": _full_skill("big", body=_sized(budget + 200))}
+    agent = _loading(monkeypatch, ["big"], library=library, window=window)
+    context = _with_turn_context(monkeypatch, agent, "do the big thing")
+    assert agent.loads == []
+    assert _suggests(context, "big")
+
+
+def test_the_flagship_scales_skills_to_its_context_window():
+    assert GaiaAgent.SKILL_CONTEXT_BUDGET is True
+    assert Agent.SKILL_CONTEXT_BUDGET is False
+
+
+def test_relevance_is_dropped_on_a_turn_selection_does_not_score(monkeypatch):
+    agent = _agent(monkeypatch)
+    agent.skill_loader = SimpleNamespace(
+        last_scores={"coding": 0.9}, session_disabled=False
+    )
+    assert agent._skill_relevance() == {"coding": 0.9}
+    agent._memory_store = None  # selection off this turn
+    assert agent._select_skills_for_turn("anything") is None
+    assert agent._skill_relevance() == {}

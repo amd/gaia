@@ -209,7 +209,8 @@ def _local_modules(directory: Path) -> list[str]:
     modules: list[str] = []
     for path in python_sources(directory):
         relative = path.relative_to(directory)
-        modules.append(relative.parts[0].removesuffix(".py"))
+        top = relative.parts[0]
+        modules.append(Path(top).stem if len(relative.parts) == 1 else top)
     return modules
 
 

@@ -112,7 +112,7 @@ def test_polling_the_saved_key_reports_locked_not_no_key(dismissed):
 def test_the_locked_message_says_where_to_try_again(dismissed):
     with pytest.raises(store.KeyringRefused) as e:
         store.peek_connection("google")
-    assert "Try again under Settings → Model" in str(e.value)
+    assert "Try again under Settings → Agent & model" in str(e.value)
 
 
 def test_a_read_that_returned_a_key_is_not_reported_locked():

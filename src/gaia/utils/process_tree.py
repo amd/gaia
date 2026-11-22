@@ -138,6 +138,23 @@ def kill_tree(
     _kill_seen(proc.pid, seen)
 
 
+def kill_pid_tree(pid: "int | psutil.Process") -> None:
+    """Kill the process *pid* and every process it started.
+
+    For a process this one did not start, so there is no ``Popen`` to give
+    :func:`kill_tree`. The caller confirms *pid* is the program it means first;
+    pass the ``psutil.Process`` it checked so a reused pid is never killed.
+    """
+    try:
+        root = pid if isinstance(pid, psutil.Process) else psutil.Process(pid)
+        if not root.is_running():
+            return  # exited, or its pid now names another process
+        tree = [*root.children(recursive=True), root]
+    except psutil.Error:
+        return  # gone, or not ours to read
+    _kill_seen(root.pid, {p.pid: p for p in tree})
+
+
 def launch(
     cmd: Sequence[str],
     *,

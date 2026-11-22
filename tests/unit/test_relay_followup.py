@@ -228,17 +228,18 @@ class _FollowUpAgent:
 @pytest.fixture
 def live_gaia_sidecar(monkeypatch):
     uvicorn = pytest.importorskip("uvicorn")
-    pytest.importorskip("gaia_agent")
+    pytest.importorskip("gaiapy")
     import requests
-    from gaia_agent import caller_auth
-    from gaia_agent import server as server_mod
-    from gaia_agent import session_registry as sr
+    from gaiapy import caller_auth
+    from gaiapy import server as server_mod
+    from gaiapy import session_registry as sr
 
     from gaia.daemon.sidecars.manager import find_free_port
 
     caller_auth.reset()
     monkeypatch.delenv(caller_auth.TOKEN_FILE_ENV_VAR, raising=False)
     monkeypatch.delenv(caller_auth.TOKEN_ENV_VAR, raising=False)
+    monkeypatch.setenv(caller_auth.ALLOW_NO_TOKEN_ENV_VAR, "1")
     monkeypatch.setattr(server_mod, "build_query_agent", _FollowUpAgent)
     monkeypatch.setattr(sr, "build_session_agent", _FollowUpAgent)
     monkeypatch.setattr(server_mod, "_warmup_blocking", lambda: None)
@@ -374,7 +375,7 @@ def _deliver_once_running(session_id, text, timeout=10):
 def test_a_followup_reaches_the_running_sidecar_turn(
     monkeypatch, live_gaia_sidecar, chat
 ):
-    from gaia_agent.server import API_VERSION
+    from gaiapy.server import API_VERSION
 
     _point_ui_at(monkeypatch, live_gaia_sidecar, API_VERSION)
     result: dict = {}

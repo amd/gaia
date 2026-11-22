@@ -1,6 +1,7 @@
 package root
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"sync"
@@ -11,6 +12,7 @@ import (
 	"github.com/amd/gaia/tui/internal/client"
 	"github.com/amd/gaia/tui/internal/control"
 	"github.com/amd/gaia/tui/internal/event"
+	"github.com/amd/gaia/tui/internal/gaiaprogram"
 	"github.com/amd/gaia/tui/internal/ui/agents"
 	"github.com/amd/gaia/tui/internal/ui/chat"
 	"github.com/amd/gaia/tui/internal/ui/components"
@@ -148,6 +150,26 @@ type FlagshipModel struct {
 	// the replacement ChatModel launchAgent is about to build. Cleared once
 	// consumed there, or if the switch is cancelled from the gate.
 	pendingTranscript []chat.Message
+
+	// agentPin names what fixed the agent program at launch (a flag or a
+	// variable); empty leaves /agent free to switch it (agentprogram.go).
+	agentPin string
+	// programSwitch is a switch of agent program waiting on the gate.
+	programSwitch *programSwitch
+	// programs, savedProgram and saveProgram stand in for the machine in tests.
+	programs     func(program string) (*catalog.Catalog, string, error)
+	savedProgram func() (preflight.FlagshipAgent, error)
+	saveProgram  func(choice string) (string, error)
+	// programFetch is gaiacpp being offered or downloaded (programfetch.go).
+	programFetch *programFetch
+	// programFetched marks the switch that follows a finished download, so a
+	// gaiacpp still not found is an error rather than a second offer.
+	programFetched bool
+	// checkProgram and downloadProgram stand in for the gaia CLI in tests.
+	checkProgram    func(context.Context) (gaiaprogram.Status, error)
+	downloadProgram func(context.Context, func(gaiaprogram.Progress)) (string, error)
+	// reopened is set while the session on screen is one that was reopened.
+	reopened bool
 
 	// sessionID is the session the chat on screen writes to (sessions.go).
 	sessionID string
@@ -289,6 +311,9 @@ func (m FlagshipModel) BeforeExit() error {
 // transport without cancelling it can leave a reader streaming into a screen
 // that no longer exists.
 func (m FlagshipModel) Close() error {
+	if m.programFetch != nil && m.programFetch.cancel != nil {
+		m.programFetch.cancel()
+	}
 	if m.chat != nil {
 		m.chat.Retire()
 	}
@@ -539,6 +564,18 @@ func (m FlagshipModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m.switchAgent(msg.ID)
 
+	case chat.AgentProgramMsg:
+		return m.agentProgram(msg.Arg)
+
+	case programStatusMsg:
+		return m.programStatus(msg)
+
+	case programProgressMsg:
+		return m.programProgress(msg)
+
+	case programDownloadedMsg:
+		return m.programDownloaded(msg)
+
 	case status.Outcome:
 		return m.applyOutcome(msg)
 
@@ -576,6 +613,9 @@ func (m FlagshipModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// who presses ctrl+c there means it.
 		if m.activeView == viewSplash && msg.String() == "ctrl+c" {
 			return m, tea.Quit
+		}
+		if model, cmd, took := m.programFetchKey(msg); took {
+			return model, cmd
 		}
 	}
 
@@ -717,6 +757,15 @@ func (m FlagshipModel) launchAgent(agent catalog.Agent, setupVerified bool) (tea
 			m.activeView = viewChat
 			return m, nil
 		}
+		if m.chat != nil && m.programSwitch != nil {
+			sw := m.programSwitch
+			m.programSwitch = nil
+			m.chat.AppendStatus(fmt.Sprintf(
+				"Could not switch to %s: %v. Staying on %s. Your saved choice was not changed.",
+				sw.to, err, sw.from))
+			m.activeView = viewChat
+			return m, nil
+		}
 		if m.chat != nil {
 			m.chat.AppendStatus(fmt.Sprintf("Could not switch to %s: %v. Staying on %s.", agent.ID, err, m.agent.ID))
 			m.activeView = viewChat
@@ -739,8 +788,9 @@ func (m FlagshipModel) launchAgent(agent catalog.Agent, setupVerified bool) (tea
 	m.chatClient.set(c)
 	m.sessionID = plan.id
 
-	chatModel := chat.NewChatModelForFlagship(c, agent.ID, agent.Name, m.dev, setupVerified).
-		WithHubClient(m.hub())
+	chatModel := chat.NewChatModelForFlagship(c, agent.ID, agent.Name, setupVerified).
+		WithHubClient(m.hub()).
+		WithAgentPrograms()
 	if len(m.pendingTranscript) > 0 {
 		// Set only on the switch path (switchAgent) — a fresh launch never
 		// has one, so this is a no-op there.
@@ -774,6 +824,8 @@ func (m FlagshipModel) launchAgent(agent catalog.Agent, setupVerified bool) (tea
 	m.gateChatModel = ""
 	m.chat = &chatModel
 	m.agent = agent
+	m.reopened = resuming
+	m.commitProgramSwitch(agent)
 	m.activeView = viewChat
 
 	var cmds []tea.Cmd

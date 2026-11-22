@@ -10,7 +10,7 @@ import { useModelStore } from '../../stores/modelStore';
 import * as api from '../../services/api';
 import { FlagshipMissing } from '../../utils/newTask';
 import newChatCss from '../NewChat.css?raw';
-import type { ActiveModel, Document, StartScreen, SystemStatus } from '../../types';
+import type { ActiveModel, AgentProgram, AgentPrograms, Document, Settings, StartScreen, SystemStatus } from '../../types';
 
 vi.mock('../../services/api');
 
@@ -27,6 +27,7 @@ beforeEach(() => {
     useChatStore.setState({ systemStatus: null });
     vi.mocked(api.requestWarmUp).mockResolvedValue({ state: 'ready' });
     vi.mocked(api.getStartScreen).mockResolvedValue(START);
+    vi.mocked(api.listSkills).mockResolvedValue({ skills: [], invalid: {} });
     vi.mocked(api.listDocuments).mockResolvedValue({ documents: [], total: 0, total_size_bytes: 0, total_chunks: 0 });
     useChatStore.setState({ documents: [], draftDocumentIds: [], showDocLibrary: false });
 });
@@ -289,7 +290,7 @@ describe('NewChat while the first prompt is being primed', () => {
         vi.useFakeTimers({ shouldAdvanceTime: true });
         try {
             useChatStore.setState({ systemStatus: { init_state: 'ready' } as SystemStatus });
-            vi.mocked(api.requestWarmUp).mockResolvedValue({ state: 'warming', elapsed_seconds: 1 });
+            vi.mocked(api.requestWarmUp).mockResolvedValue({ state: 'warming', elapsed_seconds: 2 });
             vi.mocked(api.getWarmUp).mockResolvedValue({ state: 'ready', elapsed_seconds: 3 });
             render(<NewChat onSend={vi.fn()} />);
 
@@ -299,6 +300,15 @@ describe('NewChat while the first prompt is being primed', () => {
         } finally {
             vi.useRealTimers();
         }
+    });
+
+    it('stays quiet while a warm-up is too short to mention', async () => {
+        useChatStore.setState({ systemStatus: { init_state: 'ready' } as SystemStatus });
+        vi.mocked(api.requestWarmUp).mockResolvedValue({ state: 'warming', elapsed_seconds: 0.4 });
+        vi.mocked(api.getWarmUp).mockResolvedValue({ state: 'warming', elapsed_seconds: 1.2 });
+        render(<NewChat onSend={vi.fn()} />);
+        await waitFor(() => expect(api.requestWarmUp).toHaveBeenCalled());
+        expect(screen.queryByText(/Getting GAIA ready/)).toBeNull();
     });
 
     it('stays quiet when nothing needs priming', async () => {
@@ -620,6 +630,48 @@ describe('NewChat after first-run setup failed', () => {
     });
 });
 
+describe('NewChat research mode', () => {
+    beforeEach(() => {
+        useChatStore.setState({ systemStatus: { init_state: 'ready' } as SystemStatus, research: {} });
+    });
+    afterEach(() => {
+        useChatStore.setState({ research: {} });
+    });
+
+    it('sends the first message as a /research turn while Research is on', async () => {
+        const onSend = vi.fn().mockResolvedValue(undefined);
+        render(<NewChat onSend={onSend} />);
+        fireEvent.click(await screen.findByRole('button', { name: 'Research' }));
+        const box = screen.getByRole('textbox', { name: 'Message' });
+        expect(box).toHaveAttribute('placeholder', 'What should GAIA research?');
+        fireEvent.change(box, { target: { value: 'the history of RISC-V' } });
+        fireEvent.keyDown(box, { key: 'Enter' });
+        await waitFor(() => expect(onSend).toHaveBeenCalledWith('/research the history of RISC-V'));
+    });
+
+    it('sends the message as typed while Research is off', async () => {
+        const onSend = vi.fn().mockResolvedValue(undefined);
+        render(<NewChat onSend={onSend} />);
+        const box = await screen.findByRole('textbox', { name: 'Message' });
+        fireEvent.change(box, { target: { value: 'hello' } });
+        fireEvent.keyDown(box, { key: 'Enter' });
+        await waitFor(() => expect(onSend).toHaveBeenCalledWith('hello'));
+    });
+});
+
+it('marks a right-to-left override in a held document name and its button', async () => {
+    const rlo = String.fromCodePoint(0x202e);
+    useChatStore.setState({ systemStatus: { init_state: 'ready' } as SystemStatus, draftDocumentIds: ['d9'] });
+    vi.mocked(api.listDocuments).mockResolvedValue({
+        documents: [libraryDoc('d9', `report${rlo}txt.md`)], total: 1, total_size_bytes: 100, total_chunks: 2,
+    });
+    render(<NewChat onSend={vi.fn()} />);
+    const list = await screen.findByRole('list', { name: 'Documents for this chat' });
+    expect(list).toHaveTextContent('report[U+202E]txt.md');
+    expect(screen.getByRole('button', { name: "Don't attach report[U+202E]txt.md" })).toBeInTheDocument();
+    expect(list.innerHTML).not.toContain(rlo);
+});
+
 describe('NewChat and the browser pane', () => {
     afterEach(() => {
         delete window.gaiaBrowserPane;
@@ -646,5 +698,129 @@ describe('the greeting gloss', () => {
         const rule = newChatCss.match(/\.new-chat-greeting \.i18n-gloss\.i18n-gloss \{([^}]*)\}/);
         expect(rule?.[1]).toMatch(/font-size:\s*0\.55em/);
         expect(rule?.[1]).toMatch(/display:\s*block/);
+    });
+});
+
+describe('NewChat when the chosen gaiacpp cannot start', () => {
+    const MISSING = {
+        ...START,
+        cards: [],
+        skills_error: "the daemon refused to ensure the 'gaia' sidecar: Cannot start the GAIA agent",
+        agent_problem: { code: 'gaiacpp_missing' as const, detail: 'gaiacpp is chosen as the agent but it is not installed on this PC (looked in: C:\\gaia\\bin\\gaiacpp.exe).' },
+    };
+    const IDLE = { state: 'idle' as const, bytes_done: 0, bytes_total: null, error: null };
+    const programs = (gaiacpp: Partial<AgentProgram> = {}): AgentPrograms => ({
+        current: 'gaiacpp',
+        programs: [
+            { id: 'gaiapy', installed: true, size_bytes: null, can_download: false, unavailable_reason: null },
+            { id: 'gaiacpp', installed: false, size_bytes: 4_000_000, can_download: true, unavailable_reason: null, ...gaiacpp },
+        ],
+        download: IDLE,
+    });
+
+    beforeEach(() => {
+        useChatStore.setState({ systemStatus: { init_state: 'ready' } as SystemStatus });
+        vi.mocked(api.getStartScreen).mockResolvedValue(MISSING);
+        vi.mocked(api.getAgentPrograms).mockResolvedValue(programs());
+    });
+
+    it('says in plain words that gaiacpp is not on this PC, with the detail behind Details', async () => {
+        render(<NewChat onSend={vi.fn()} />);
+
+        expect(await screen.findByText("gaiacpp, the agent you chose, isn't on this PC, so GAIA can't start it.")).toBeInTheDocument();
+        expect(screen.queryByText(/assistant didn.t start yet/)).not.toBeInTheDocument();
+        expect(screen.queryByText(MISSING.agent_problem.detail)).not.toBeInTheDocument();
+        fireEvent.click(screen.getByRole('button', { name: /Details/ }));
+        expect(screen.getByText(MISSING.agent_problem.detail)).toBeInTheDocument();
+
+        expect(await screen.findByRole('button', { name: 'Download gaiacpp again' })).toBeInTheDocument();
+        expect(screen.getByRole('button', { name: 'Use the Python agent' })).toBeInTheDocument();
+        // Nothing is switched until the user picks it.
+        expect(api.updateSettings).not.toHaveBeenCalled();
+    });
+
+    it('says gaiacpp failed its check when the file no longer matches its download', async () => {
+        vi.mocked(api.getStartScreen).mockResolvedValue({
+            ...MISSING, agent_problem: { code: 'gaiacpp_invalid', detail: 'does not match the gaiacpp that was downloaded' },
+        });
+        render(<NewChat onSend={vi.fn()} />);
+
+        expect(await screen.findByText(/gaiacpp, the agent you chose, failed its check/)).toBeInTheDocument();
+    });
+
+    it('downloads gaiacpp again, then asks for the agent again', async () => {
+        vi.mocked(api.startAgentDownload).mockResolvedValue({ state: 'done', bytes_done: 10, bytes_total: 10, error: null });
+        render(<NewChat onSend={vi.fn()} />);
+        await screen.findByText(/isn't on this PC/);
+        vi.mocked(api.getStartScreen).mockResolvedValue(START);
+
+        fireEvent.click(await screen.findByRole('button', { name: 'Download gaiacpp again' }));
+
+        await waitFor(() => expect(api.startAgentDownload).toHaveBeenCalledTimes(1));
+        await waitFor(() => expect(api.getStartScreen).toHaveBeenCalledTimes(2));
+        await waitFor(() => expect(screen.queryByText(/isn't on this PC/)).not.toBeInTheDocument());
+        expect(api.updateSettings).not.toHaveBeenCalled();
+    });
+
+    it("says why gaiacpp can't be downloaded instead of offering a dead button", async () => {
+        vi.mocked(api.getAgentPrograms).mockResolvedValue(programs({ can_download: false, unavailable_reason: 'gaiacpp is not built for this kind of PC' }));
+        render(<NewChat onSend={vi.fn()} />);
+
+        expect(await screen.findByText("gaiacpp can't be downloaded here: gaiacpp is not built for this kind of PC")).toBeInTheDocument();
+        expect(screen.queryByRole('button', { name: /Download gaiacpp/ })).not.toBeInTheDocument();
+        expect(screen.getByRole('button', { name: 'Use the Python agent' })).toBeInTheDocument();
+    });
+
+    it('switches to the Python agent only when asked, then asks for the agent again', async () => {
+        vi.mocked(api.updateSettings).mockResolvedValue({ flagship_agent: 'gaiapy' } as Settings);
+        render(<NewChat onSend={vi.fn()} />);
+        await screen.findByText(/isn't on this PC/);
+        expect(api.updateSettings).not.toHaveBeenCalled();
+        vi.mocked(api.getStartScreen).mockResolvedValue(START);
+
+        fireEvent.click(screen.getByRole('button', { name: 'Use the Python agent' }));
+
+        await waitFor(() => expect(api.updateSettings).toHaveBeenCalledWith({ flagship_agent: 'gaiapy' }));
+        expect(api.updateSettings).toHaveBeenCalledTimes(1);
+        await waitFor(() => expect(screen.queryByText(/isn't on this PC/)).not.toBeInTheDocument());
+    });
+
+    it('says so, and stays put, when the switch is refused', async () => {
+        vi.mocked(api.updateSettings).mockRejectedValue(new Error('GAIA is answering in a chat'));
+        render(<NewChat onSend={vi.fn()} />);
+        await screen.findByText(/isn't on this PC/);
+
+        fireEvent.click(screen.getByRole('button', { name: 'Use the Python agent' }));
+
+        expect(await screen.findByText(/Couldn't switch to the Python agent: GAIA is answering in a chat/)).toBeInTheDocument();
+        expect(screen.getByText(/isn't on this PC/)).toBeInTheDocument();
+    });
+
+    it('keeps a message sent meanwhile in the box instead of losing it', async () => {
+        const onSend = vi.fn().mockResolvedValue(undefined);
+        render(<NewChat onSend={onSend} />);
+        await screen.findByText(/isn't on this PC/);
+
+        const box = screen.getByLabelText('Message');
+        fireEvent.change(box, { target: { value: 'summarize my notes' } });
+        fireEvent.keyDown(box, { key: 'Enter' });
+
+        expect(onSend).not.toHaveBeenCalled();
+        expect(box).toHaveValue('summarize my notes');
+        expect(screen.getByText('Your message is still in the box. Send it once the agent starts.')).toBeInTheDocument();
+    });
+
+    it('puts a message back in the box when sending it fails because the agent did not start', async () => {
+        vi.mocked(api.getStartScreen).mockResolvedValue(START);
+        const onSend = vi.fn().mockRejectedValue(new Error("GAIA couldn't start its agent."));
+        render(<NewChat onSend={onSend} />);
+        await screen.findByText('my-project');
+
+        const box = screen.getByLabelText('Message');
+        fireEvent.change(box, { target: { value: 'summarize my notes' } });
+        fireEvent.keyDown(box, { key: 'Enter' });
+
+        expect(await screen.findByText(/couldn't start its agent/)).toBeInTheDocument();
+        expect(box).toHaveValue('summarize my notes');
     });
 });

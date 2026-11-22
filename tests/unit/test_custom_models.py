@@ -554,3 +554,93 @@ def test_first_pull_registers_the_added_model_under_its_user_name(
     assert body["mmproj"] == "mmproj-F16.gguf"
     assert body["vision"] is True and body["reasoning"] is True
     assert "embedding" not in body
+
+
+def _added_client(monkeypatch):
+    from gaia.llm.lemonade_client import LemonadeClient
+
+    cm.add_custom_model(_inspect())
+    client = LemonadeClient(host="127.0.0.1", port=13305)
+    monkeypatch.setattr(client, "cloud_model_provider", lambda name: None)
+    return client
+
+
+def test_ensure_model_downloaded_registers_the_added_model_by_id_alone(
+    web, config_file, monkeypatch
+):
+    """Named by id with no checkpoint or recipe, the plain (unstreamed) pull
+    still carries the registration; without it Lemonade answers 500 "not
+    registered with Lemonade Server"."""
+    import responses
+
+    client = _added_client(monkeypatch)
+    monkeypatch.setattr("gaia.llm.lemonade_client.time.sleep", lambda s: None)
+    with responses.RequestsMock() as rsps:
+        rsps.add(responses.GET, f"{client.base_url}/models", json={"data": []})
+        rsps.add(
+            responses.GET,
+            f"{client.base_url}/models",
+            json={"data": [{"id": "user.Tiny-Q4_K_M-GGUF", "downloaded": True}]},
+        )
+        rsps.add(responses.POST, f"{client.base_url}/pull", json={"status": "ok"})
+        assert client.ensure_model_downloaded(
+            "user.Tiny-Q4_K_M-GGUF", show_progress=False
+        )
+        (pull,) = [c for c in rsps.calls if c.request.url.endswith("/pull")]
+    assert json.loads(pull.request.body) == {
+        "model_name": "user.Tiny-Q4_K_M-GGUF",
+        "checkpoint": "unsloth/Tiny-GGUF:Tiny-Q4_K_M.gguf",
+        "recipe": "llamacpp",
+        "reasoning": True,
+        "mmproj": "mmproj-F16.gguf",
+        "vision": True,
+    }
+
+
+def test_pull_model_fills_in_only_what_the_caller_left_out(
+    web, config_file, monkeypatch
+):
+    import responses
+
+    client = _added_client(monkeypatch)
+    with responses.RequestsMock() as rsps:
+        rsps.add(responses.POST, f"{client.base_url}/pull", json={"status": "ok"})
+        client.pull_model("Tiny-Q4_K_M-GGUF", reasoning=False, mmproj="other.gguf")
+        # A caller that brings its own checkpoint registers the model itself.
+        client.pull_model("user.Tiny-Q4_K_M-GGUF", checkpoint="me/Mine:Q8", recipe="x")
+        filled, own = (json.loads(c.request.body) for c in rsps.calls)
+    assert filled == {
+        "model_name": "user.Tiny-Q4_K_M-GGUF",
+        "checkpoint": "unsloth/Tiny-GGUF:Tiny-Q4_K_M.gguf",
+        "recipe": "llamacpp",
+        "reasoning": False,
+        "mmproj": "other.gguf",
+        "vision": True,
+    }
+    assert own == {
+        "model_name": "user.Tiny-Q4_K_M-GGUF",
+        "checkpoint": "me/Mine:Q8",
+        "recipe": "x",
+    }
+
+
+def test_an_added_model_reports_the_size_it_was_added_with(
+    web, config_file, monkeypatch
+):
+    """Lemonade lists no size for a model it has not pulled yet."""
+    import responses
+
+    client = _added_client(monkeypatch)
+    size = cm.find_custom_model("user.Tiny-Q4_K_M-GGUF")["size_gb"]
+    assert size
+    with responses.RequestsMock() as rsps:
+        rsps.add(responses.GET, f"{client.base_url}/models", json={"data": []})
+        rsps.add(
+            responses.GET,
+            f"{client.base_url}/models",
+            json={"data": [{"id": "user.Tiny-Q4_K_M-GGUF", "downloaded": False}]},
+        )
+        unlisted = client.get_model_info("user.Tiny-Q4_K_M-GGUF")
+        listed = client.get_model_info("user.Tiny-Q4_K_M-GGUF")
+    assert unlisted["size_gb"] == size and unlisted["listed"] is False
+    assert listed["size_gb"] == size and listed["listed"] is True

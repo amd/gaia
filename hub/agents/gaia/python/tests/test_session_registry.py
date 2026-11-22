@@ -12,7 +12,7 @@ telling the user the skill is still loaded.
 import threading
 
 import pytest
-from gaia_agent import session_registry as sr
+from gaiapy import session_registry as sr
 
 
 class _FakeAgent:
@@ -310,7 +310,7 @@ def test_close_agent_is_loud_when_an_agent_exposes_no_teardown(caplog):
 def test_the_real_gaia_agent_exposes_the_teardown_the_registry_calls():
     """The regression itself, asserted against the shipped class rather than a
     fake — a fake that defines ``close_db`` proved nothing about GaiaAgent."""
-    from gaia_agent.agent import GaiaAgent
+    from gaiapy.agent import GaiaAgent
 
     assert callable(getattr(GaiaAgent, "close", None)) or callable(
         getattr(GaiaAgent, "close_db", None)
@@ -479,6 +479,16 @@ def test_checkout_takes_the_turn_atomically_with_eviction(monkeypatch):
     finally:
         session.run_lock.release()
         reg.clear()
+
+
+def test_a_rebuilt_agent_keeps_the_sources_its_chat_has_seen():
+    from types import SimpleNamespace
+
+    seen = [("read_file", {"path": "q3.csv"}, "Revenue 12,431,220")]
+    old = SimpleNamespace(conversation_history=[], _seen_sources=seen)
+    new = SimpleNamespace(conversation_history=[], _seen_sources=[], config=None)
+    sr._carry_session_state(old, new, "s1")
+    assert new._seen_sources == seen and new._seen_sources is not seen
 
 
 class _SkilledAgent(_FakeAgent):

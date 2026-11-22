@@ -1343,6 +1343,24 @@ def test_a_missing_ca_file_is_named_instead_of_the_key(
     assert model_list["keys_checked"] == []
 
 
+def test_a_missing_ca_file_lemond_was_given_is_not_blamed(
+    client, lemonade, keys, model_list, monkeypatch
+):
+    """#7226: lemond runs with the file supplied, so a key with no models is
+    judged by the key check, not the host's store."""
+    from gaia.llm.lemonade_embedded import EmbeddedLemonade
+
+    monkeypatch.setattr(
+        EmbeddedLemonade, "_read_state", lambda self: {"ca_supplied": True}
+    )
+    model_list["ca_problem"] = "should not be shown"
+    lemonade.answers[("POST", "cloud/auth")] = (200, {"models_discovered": False})
+    resp = client.post("/api/providers/fireworks/connect", json={"api_key": KEY})
+    assert resp.status_code == 401
+    assert "did not accept that key" in resp.json()["detail"]
+    assert model_list["keys_checked"] == [KEY]
+
+
 def test_a_missing_ca_file_on_the_users_own_server_is_not_claimed(
     client, lemonade, keys, model_list
 ):
@@ -1411,7 +1429,7 @@ def test_connect_unregistered_provider_names_settings_not_a_command(
     assert resp.status_code == 409, resp.text
     detail = resp.json()["detail"]
     assert "no cloud provider registered" in detail
-    assert "Settings > Model" in detail
+    assert "Settings > Agent & model" in detail
     assert "connect it again" in detail
     assert "older than" not in detail
     assert "gaia gateway install" not in detail

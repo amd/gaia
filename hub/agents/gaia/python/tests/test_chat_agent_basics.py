@@ -4,7 +4,7 @@
 
 
 def test_config_defaults():
-    from gaia_agent.chat_agent import ChatAgentConfig
+    from gaiapy.chat_agent import ChatAgentConfig
 
     cfg = ChatAgentConfig()
     assert cfg.use_claude is False

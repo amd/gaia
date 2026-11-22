@@ -39,6 +39,13 @@ describe('localizeLiveStatus', () => {
         expect(ar('The model server stopped. GAIA is restarting it…')).toContain('توقف خادم النموذج');
     });
 
+    it('localizes the skill reload warning while keeping the skill name', () => {
+        const label = "Skill 'broken' was not restored after settings changed: its files could not be found. Reload it if needed.";
+        expect(localizeLiveStatus(tEn, label)).toBe(label);
+        expect(ar(label)).toContain('لم تُستعد المهارة broken');
+        expect(ar(label)).toContain('تعذّر العثور على ملفاتها');
+    });
+
     it('keeps counts, attempts and model names in the Arabic line', () => {
         expect(ar('Reasoning — 1,234 words so far')).toContain('الكلمات حتى الآن: 1,234');
         expect(ar('Connection lost. Reconnecting (attempt 2 of 3)…')).toContain('المحاولة 2 من 3');

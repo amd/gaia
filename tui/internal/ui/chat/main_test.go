@@ -10,14 +10,16 @@ import (
 	"os/exec"
 	"path/filepath"
 	"testing"
+	"time"
 
+	"github.com/amd/gaia/tui/internal/control"
 	"github.com/amd/gaia/tui/internal/daemon"
 	"github.com/amd/gaia/tui/internal/lemonade"
 	"github.com/amd/gaia/tui/internal/setupapi"
 	"github.com/amd/gaia/tui/internal/setupapi/setupapitest"
 )
 
-// TestMain keeps the package off the developer's own GAIA home: a fake
+// TestMain keeps the package off the developer's own GAIA home and logs: a fake
 // Lemonade on loopback would otherwise be taken for GAIA's server and its
 // requests followed to the real one.
 func TestMain(m *testing.M) {
@@ -26,6 +28,12 @@ func TestMain(m *testing.M) {
 		panic(err)
 	}
 	os.Setenv("GAIA_HOME", home)
+	// Diagnostics are always written to the session log; keep them off the
+	// developer's own ~/.gaia/logs.
+	os.Setenv(control.EnvHome, home)
+	// The first screen's suggestions read installed skills; keep them off the
+	// developer's own ~/.gaia/skills.
+	skillsDir = func() string { return filepath.Join(home, "skills") }
 	// A developer's own Local only must not change what these tests send.
 	os.Setenv("GAIA_POLICY_FILE", home+"/policy.json")
 	os.Setenv("LEMONADE_BASE_URL", "")
@@ -42,7 +50,10 @@ func TestMain(m *testing.M) {
 		return &setupapitest.Fake{PlanErr: errors.New("test: no daemon"), GPUErr: errors.New("test: no daemon")}
 	}
 	newGPUProbeAPI = newChatSetupAPI
+	// Tests run an answer's hold out for real; keep that wait off the clock.
+	confirmAnswerHold = time.Millisecond
 	code := m.Run()
+	control.CloseLog()
 	os.RemoveAll(home)
 	os.Exit(code)
 }

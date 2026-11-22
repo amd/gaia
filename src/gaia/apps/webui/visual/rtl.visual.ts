@@ -12,8 +12,9 @@
 
 import { expect, test, type Page } from '@playwright/test';
 
-import { ANSWER_SESSION, AUTOMATIONS, DISCORD_STATES, MESSAGES, MODEL_LIST, NOW, RESOURCES, SESSIONS, SYSTEM_STATUS, TOOL_STATUS, holdOnToolStatus, mockApi, shownText, useLocale, useTheme, withAutomations, withConnectors, withCrashedBackend, withDesktopBridges, withDiscord, withMemory, withModelPage, withSettingsPanes, withoutFlagship, type MemoryState } from './fixtures';
-import { NARROW_SCENES, SETUP_SCENES, scene, withSetup } from './setup-scenes';
+import { ANSWER_SESSION, AUTOMATIONS, DISCORD_STATES, MESSAGES, MODEL_LIST, NOW, RESOURCES, SESSIONS, SYSTEM_STATUS, TOOL_STATUS, holdOnToolStatus, mockApi, shownText, useLocale, useTheme, withAutomations, withConnectors, withCrashedBackend, withDesktopBridges, withDiscord, withMemory, withModelPage, withSettingsPanes, withoutFlagship, withAgentPrograms, AGENT_DOWNLOADING, AGENT_DOWNLOAD_FAILED, type AgentProgramsAnswers, type MemoryState } from './fixtures';
+import { ENGINE_FAILED, NARROW_SCENES, PLAN_COLD, SETUP_SCENES, expectSnugTags, scene, withSetup } from './setup-scenes';
+import { translateBare } from '../src/i18n/registry';
 
 test.use({ viewport: { width: 1400, height: 900 } });
 
@@ -291,6 +292,19 @@ const audit = async (page: Page): Promise<string[]> => {
             }
         }
 
+        // The floating update chip must never cover a button, such as setup's Try again.
+        for (const chip of document.querySelectorAll('.update-chip')) {
+            if (!shown(chip)) continue;
+            const c = chip.getBoundingClientRect();
+            for (const button of document.querySelectorAll('button')) {
+                if (chip.contains(button) || !shown(button)) continue;
+                const b = button.getBoundingClientRect();
+                if (b.left < c.right && b.right > c.left && b.top < c.bottom && b.bottom > c.top) {
+                    problems.push(`update chip covers a button: ${label(button)}`);
+                }
+            }
+        }
+
         // An icon drawn over a field must sit in its padding, not on the text, in either direction.
         for (const input of document.querySelectorAll('input:not([type="checkbox"]):not([type="radio"])')) {
             if (!shown(input)) continue;
@@ -506,6 +520,18 @@ for (const [title, locale, name] of [
     });
 }
 
+for (const locale of ['en', 'ar']) {
+    test(`a browser without the API token is told how to sign in (${locale})`, async ({ page }, info) => {
+        await open(page, '', locale, (p) => p.route('**/api/**', (route) =>
+            route.fulfill({ status: 401, json: { detail: 'Sign in with the link gaia chat --ui prints.', code: 'ui_token_required' } })));
+        const notice = page.getByRole('alert');
+        await expect(notice).toContainText(translateBare(locale, 'auth.signIn.title'));
+        await expect(notice).toContainText('gaia chat --ui');
+        expect(await audit(page)).toEqual([]);
+        await page.screenshot({ path: info.outputPath(`sign-in-${locale}.png`) });
+    });
+}
+
 test('new chat', async ({ page }) => {
     await open(page);
     await expect(page.locator('html')).toHaveAttribute('dir', 'rtl');
@@ -561,6 +587,40 @@ for (const locale of ['en', 'ar']) {
         await expect(menu).toHaveCount(0);
         expect(await audit(page)).toEqual([]);
     });
+
+    for (const [width, height] of [[1280, 800], [390, 844], [1280, 420]]) {
+        test(`a long skill list stays inside a ${width}x${height} window (${locale})`, async ({ page }) => {
+            await page.setViewportSize({ width, height });
+            const skills = Array.from({ length: 24 }, (_, i) => ({ ...SKILL_LIST[0], name: `skill-${String(i).padStart(2, '0')}` }));
+            await open(page, '', locale, (p) => p.route((url) => url.pathname === '/api/skills', (route) =>
+                route.fulfill({ json: { skills, invalid: {} } })));
+            const box = page.locator('.new-chat textarea').first();
+            await box.fill('/');
+            const menu = page.locator('.skill-menu');
+            await expect(menu.getByRole('option')).toHaveCount(24);
+            await shot(page, `skill-menu-long-${width}x${height}-${locale}`);
+
+            const [menuBox, composerBox] = [(await menu.boundingBox())!, (await page.locator('.new-chat .composer').boundingBox())!];
+            expect(menuBox.y, 'the list runs off the top of the window').toBeGreaterThanOrEqual(0);
+            expect(menuBox.y + menuBox.height, 'the list runs off the bottom of the window').toBeLessThanOrEqual(height);
+            const clear = menuBox.y + menuBox.height <= composerBox.y + 1 || menuBox.y >= composerBox.y + composerBox.height - 1;
+            expect(clear, 'the list covers the message box').toBe(true);
+            expect(menuBox.height, 'the list is too short to read a row').toBeGreaterThan(60);
+
+            // Every skill can be reached: the first is in view, and the arrow keys bring the last one in.
+            const inView = async (name: string) => {
+                const row = (await menu.getByRole('option', { name }).boundingBox())!;
+                const now = (await menu.boundingBox())!;
+                return row.y >= now.y - 1 && row.y + row.height <= now.y + now.height + 1;
+            };
+            expect(await inView('/skill-00'), 'the first skill is out of view').toBe(true);
+            await box.press('ArrowUp');
+            await expect(menu.getByRole('option', { name: '/skill-23' })).toHaveAttribute('aria-selected', 'true');
+            expect(await inView('/skill-23'), 'the selected skill is out of view').toBe(true);
+            // At phone width the closed sidebar sits off screen by design.
+            if (width >= 1280) expect(await audit(page)).toEqual([]);
+        });
+    }
 }
 
 const BIG_LIBRARY = Array.from({ length: 600 }, (_, i) => ({
@@ -593,6 +653,31 @@ for (const locale of ['en', 'ar']) {
 }
 
 for (const locale of ['en', 'ar']) {
+    test(`research mode: the chip, the box's prompt, and a chat's compact chip (${locale})`, async ({ page }) => {
+        await open(page, '', locale);
+        const chip = page.locator('.new-chat .composer-chip-research');
+        await expect(chip).toBeVisible();
+        await chip.click();
+        await expect(chip).toHaveAttribute('aria-pressed', 'true');
+        await expect(page.locator('.new-chat textarea').first()).toHaveAttribute('placeholder', /research|يبحث/);
+        await shot(page, `research-on-new-chat-${locale}`);
+        expect(await audit(page)).toEqual([]);
+        if (locale === 'ar') expect(await untranslated(page, '.new-chat .composer-row')).toEqual([]);
+
+        // Another chat is not affected; its own chip is an icon in the crowded box.
+        await page.goto(`/#${ANSWER_SESSION}`);
+        const inChat = page.locator('main .composer-chip-research').first();
+        await expect(inChat).toHaveAttribute('aria-pressed', 'false');
+        await expect(inChat.locator('.composer-chip-label')).toHaveCount(0);
+        await inChat.click();
+        await expect(inChat).toHaveAttribute('aria-pressed', 'true');
+        await expect(page.locator('main textarea').first()).toHaveAttribute('placeholder', /research|يبحث/);
+        await shot(page, `research-on-chat-${locale}`);
+        expect(await audit(page)).toEqual([]);
+    });
+}
+
+for (const locale of ['en', 'ar']) {
     test(`the folder control says what it does, not GAIA's own folder name (${locale})`, async ({ page }) => {
         await open(page, '', locale, (p) => p.route('**/api/onboarding/start', (route) => route.fulfill({
             json: { cards: [], working_folder: { path: '/home/you/.gaia/documents', name: 'documents', gaia_folder: true, choosable: true } },
@@ -603,6 +688,37 @@ for (const locale of ['en', 'ar']) {
         await shot(page, `new-chat-add-folder-${locale}`);
         expect(await audit(page)).toEqual([]);
     });
+}
+
+const GAIACPP_MISSING_START = {
+    cards: [],
+    working_folder: { path: '/home/you/projects/gaia', name: 'gaia', gaia_folder: false, choosable: false },
+    skills_error: "the daemon refused to ensure the 'gaia' sidecar: Cannot start the GAIA agent: gaiacpp is chosen as the agent but it is not installed on this PC",
+    agent_problem: {
+        code: 'gaiacpp_missing',
+        detail: 'gaiacpp is chosen as the agent but it is not installed on this PC (looked in: /home/you/.gaia/bin/gaiacpp).',
+    },
+};
+
+for (const locale of ['en', 'ar']) {
+    for (const gaiacpp of ['downloadable', 'unavailable'] as const) {
+        test(`a chosen gaiacpp that isn't here offers its two fixes (${gaiacpp}, ${locale})`, async ({ page }) => {
+            await open(page, '', locale, async (p) => {
+                await p.route('**/api/onboarding/start', (route) => route.fulfill({ json: GAIACPP_MISSING_START }));
+                await withAgentPrograms(p, { gaiacpp });
+            });
+            const panel = page.locator('.agent-recovery');
+            await expect(panel).toBeVisible();
+            await expect(panel.locator('.agent-recovery-actions button')).toHaveCount(gaiacpp === 'downloadable' ? 2 : 1);
+            await expect(panel.locator('.new-chat-details-text')).toHaveCount(0);
+            await shot(page, `new-chat-gaiacpp-missing-${gaiacpp}-${locale}`);
+            expect(await audit(page)).toEqual([]);
+            await panel.locator('.new-chat-details').click();
+            await expect(panel.locator('.new-chat-details-text')).toBeVisible();
+            await shot(page, `new-chat-gaiacpp-missing-${gaiacpp}-details-${locale}`);
+            expect(await audit(page)).toEqual([]);
+        });
+    }
 }
 
 for (const locale of ['en', 'ar']) {
@@ -852,6 +968,7 @@ for (const locale of ['ar', 'en']) {
             await p.route('**/api/settings', (route) => route.fulfill({ json: {
                 custom_model: 'no-such-model-xyz-123', model_status: { found: false, checked: true, downloaded: false, loaded: false },
                 context_size: null, agent_mode: 'goal_driven', dynamic_tools: false, dynamic_tools_locked: false,
+                network_policy: 'cloud_allowed', flagship_agent: 'gaiapy', gaiacpp_available: true,
             } }));
         });
         await page.locator('.msg-error .msg-try-again').filter({ hasText: /Advanced|متقدم/ }).click();
@@ -1910,6 +2027,36 @@ for (const locale of ['en', 'ar']) {
         expect(await audit(page)).toEqual([]);
     });
 
+    // A busy-server file showed Failed with Retry, was counted as waiting, and was retried behind the user's back.
+    test(`a document the model server was too busy to add (${locale})`, async ({ page }) => {
+        let retried = 0;
+        await open(page, '', locale, async (p) => {
+            await p.route('**/api/documents/*/reindex', (route) => {
+                retried += 1;
+                return route.fulfill({ status: 500, json: { detail: 'Reindex failed; see server logs for details' } });
+            });
+            await p.route('**/api/documents', (route) => route.fulfill({ json: {
+                documents: [
+                    { id: 'd1', filename: 'busy.md', filepath: 'C:/busy.md', file_size: 1024, chunk_count: 0, indexing_status: 'failed', error_kind: 'model_server_busy', last_error: 'RAG indexing failed for busy.md: Lemonade Server timed out', indexed_at: NOW.toISOString(), last_accessed_at: null, sessions_using: 0 },
+                ],
+                total: 1, total_size_bytes: 1024, total_chunks: 0,
+            } }));
+        });
+        await page.locator('.sb').getByRole('button', { name: /Documents/ }).click();
+        const row = page.locator('.doc-failure');
+        await expect(row.locator('.doc-status-failed')).toBeVisible();
+        const stats = page.locator('.doc-stats');
+        await expect(stats).toContainText(locale === 'ar' ? 'بحاجة إلى إعادة المحاولة: 1' : '1 to retry');
+        await expect(stats.locator('.doc-stats-server')).toHaveCount(0);
+        if (locale === 'ar') {
+            expect(await untranslated(page, '.doc-failure', 'bdi')).toEqual([]);
+            expect(await untranslated(page, '.doc-stats', 'bdi')).toEqual([]);
+        }
+        expect(retried, 'a busy-server file waits for the Retry button').toBe(0);
+        await shot(page, `documents-${locale}-server-busy`);
+        expect(await audit(page)).toEqual([]);
+    });
+
     // The chat's document bar called a server-down file unreadable while the library didn't.
     test(`the chat's document bar with a file waiting for the model server (${locale})`, async ({ page }) => {
         const docs = [
@@ -2097,7 +2244,7 @@ for (const locale of ['ar', 'en']) {
         });
         await expect(page.locator('.msg-stats-ts')).toHaveText(month);
         await expect(page.getByText('q1-summary.csv')).toBeVisible();
-        await expect(page.locator('.sp-list[aria-label]')).toContainText(month);
+        await expect(page.locator('.sp-list[aria-label]:has(.sp-output)')).toContainText(month);
         await expect(page.locator('.library-notices')).toContainText('schedule-fall.xlsx');
         await expect(page.locator('.library-notices')).toContainText('run.exe');
         await page.getByText('The plan has three goals.').hover();
@@ -2121,6 +2268,19 @@ test('settings in the dark theme', async ({ page }) => {
 });
 
 for (const [locale, theme] of [['ar', 'light'], ['ar', 'dark'], ['en', 'light']] as const) {
+    test(`image creation settings (${locale}, ${theme})`, async ({ page }) => {
+        await open(page, '', locale, undefined, theme);
+        await page.getByRole('button', { name: /Settings/ }).first().click();
+        await page.getByRole('dialog').locator('[data-section="images"]').click();
+        await expect(page.locator('#image-size')).toHaveValue('1280x720');
+        const notice = page.locator('.settings-notice');
+        await expect(notice).toBeVisible();
+        // The notice hugs its two lines and button, never a stretched empty box.
+        const { height } = (await notice.boundingBox())!;
+        expect(height).toBeLessThan(160);
+        expect(await audit(page)).toEqual([]);
+    });
+
     test(`read-aloud settings (${locale}, ${theme})`, async ({ page }) => {
         await open(page, '', locale, undefined, theme);
         await page.getByRole('button', { name: /Settings/ }).first().click();
@@ -2206,7 +2366,7 @@ test('session panel with Arabic names', async ({ page }) => {
 });
 
 for (const locale of ['ar', 'en'] as const) {
-    test(`the session panel leads with files and folders, details last (${locale})`, async ({ page }) => {
+    test(`the session panel leads with the environment, details last (${locale})`, async ({ page }) => {
         await open(page, `#${ANSWER_SESSION}`, locale);
         const panel = page.locator('.session-panel');
         await expect(panel.locator('.sp-group-title')).toBeVisible();
@@ -2220,14 +2380,14 @@ for (const locale of ['ar', 'en'] as const) {
     });
 }
 
-test('a long hyphenated folder path wraps as one unit, below its Arabic label', async ({ page }) => {
+test('a long folder path stays on its row and gives way to the folder name', async ({ page }) => {
     const path = `C:\\gtest\\h-r6\\${'a-long-folder-name\\'.repeat(4)}.gaia\\documents`;
     await open(page, `#${ANSWER_SESSION}`, 'ar', async (p) => {
         await p.route(`**/api/sessions/${ANSWER_SESSION}/environment`, (route) =>
             route.fulfill({
                 json: {
                     session_id: ANSWER_SESSION,
-                    folders: [{ path, kind: 'folder', source: 'gaia_documents', removable: false }],
+                    folders: [{ path, kind: 'folder', source: 'added', removable: false }],
                     removed: [], internet: true, enforced: true,
                 },
             }),
@@ -2236,22 +2396,365 @@ test('a long hyphenated folder path wraps as one unit, below its Arabic label', 
     const el = page.locator('.sp-item-path', { hasText: 'h-r6' });
     await expect(el).toBeVisible();
     const layout = await el.evaluate((node) => {
-        const box = node.getBoundingClientRect();
         const text = document.createRange();
         text.selectNodeContents(node);
-        const label = document.createRange();
-        label.setStart(node.parentElement!, 0);
-        label.setEndBefore(node);
+        const name = node.parentElement!.querySelector('.sp-item-name')!;
         return {
             lines: new Set([...text.getClientRects()].map((r) => Math.round(r.top))).size,
-            boxes: node.getClientRects().length,
-            labelInside: [...label.getClientRects()].some((r) => r.width > 0 && r.bottom > box.top + 1),
+            clipped: node.scrollWidth > node.clientWidth,
+            nameCut: name.scrollWidth > name.clientWidth + 1,
+            sameRow: Math.abs(name.getBoundingClientRect().top - node.getBoundingClientRect().top) < 6,
         };
     });
-    expect(layout.lines, 'the path should be long enough to wrap').toBeGreaterThan(1);
-    expect(layout.boxes, 'the path splits into pieces around the label').toBe(1);
-    expect(layout.labelInside, 'the label sits between the halves of the path').toBe(false);
+    expect(layout.lines, 'the path wraps onto a second line').toBe(1);
+    expect(layout.clipped, 'the path should be long enough to be cut short').toBe(true);
+    expect(layout.nameCut, 'the folder name is cut instead of the path').toBe(false);
+    expect(layout.sameRow, 'the path dropped below its name').toBe(true);
     expect(await audit(page)).toEqual([]);
+});
+
+/** A chat that has made things: every section that only shows with content, at once. */
+async function withBusyPanel(page: Page): Promise<void> {
+    await page.route(`**/api/sessions/${ANSWER_SESSION}/environment`, (route) =>
+        route.fulfill({
+            json: {
+                session_id: ANSWER_SESSION,
+                folders: [
+                    { path: 'C:\\Users\\you\\Work\\gaia', kind: 'folder', source: 'added', removable: true },
+                    { path: 'C:\\Users\\you\\.gaia\\documents', kind: 'folder', source: 'gaia_documents', removable: false },
+                    { path: 'C:\\Users\\you\\Documents\\lease-2026.pdf', kind: 'file', source: 'document', removable: false },
+                ],
+                removed: [], internet: false, enforced: true, internet_enforced: true,
+            },
+        }),
+    );
+    await page.route('**/api/providers/local/status', (route) =>
+        route.fulfill({
+            json: {
+                state: 'loaded', active_model: 'Gemma-4-E4B-it-GGUF', active_display_name: 'Gemma 4 E4B', active_remote: false,
+                model: 'Gemma-4-E4B-it-GGUF', display_name: 'Gemma 4 E4B',
+                placement: { device: 'gpu', backend: 'vulkan', label: 'GPU · Vulkan', source: 'lemonade', warning: null },
+                ctx_size: 65536, memory: { source: 'lemonade', total_gb: 96, free_gb: 65.2, model_gb: 6.2 }, memory_error: null,
+                error: null, base_url: 'http://127.0.0.1:13305', owner: 'gaia', busy: false, restarting: false, restart_error: null,
+            },
+        }),
+    );
+    await page.route(`**/api/sessions/${ANSWER_SESSION}/outputs`, (route) =>
+        route.fulfill({
+            json: {
+                session_id: ANSWER_SESSION,
+                items: [{
+                    id: 'o1', kind: 'file', name: 'action-items.md', path: 'C:\\Users\\you\\Documents\\action-items.md', detail: null,
+                    message_id: 2, created_at: null, change: 'created', state: 'present', openable: true, revealable: true,
+                }],
+            },
+        }),
+    );
+    await page.route(`**/api/sessions/${ANSWER_SESSION}/capabilities`, (route) =>
+        route.fulfill({
+            json: {
+                session_id: ANSWER_SESSION, agent_type: 'gaia',
+                skills: [{ name: 'summarize', how: 'model' }],
+                tools: [{ name: 'read_file', description: 'Read a file from disk.', category: 'file_io' }],
+            },
+        }),
+    );
+}
+
+for (const locale of ['ar', 'en'] as const) {
+    test(`the session panel with outputs, a skill and internet off (${locale})`, async ({ page }) => {
+        await open(page, `#${ANSWER_SESSION}`, locale, withBusyPanel);
+        const panel = page.locator('.session-panel');
+        await expect(panel.locator('.sp-item-name', { hasText: 'action-items.md' })).toBeVisible();
+        await expect(panel.locator('.sp-item-name', { hasText: 'summarize' })).toBeVisible();
+        await expect(panel.getByRole('switch').first()).toHaveAttribute('aria-checked', 'false');
+        expect(await audit(page)).toEqual([]);
+expect(await forcedLeftToRight(page)).toEqual([]);
+        await shot(page, `session-panel-full-${locale}`);
+    });
+}
+
+/**
+ * Translated phrases that an ancestor forces left to right. In Arabic that
+ * reverses the phrase: "3 من 5" reads as "5 of 3". Only numbers, paths and
+ * names take dir="ltr"; a sentence takes its language's direction.
+ */
+const forcedLeftToRight = (page: Page, within = '.session-panel'): Promise<string[]> =>
+    page.evaluate((selector) =>
+        [...document.querySelectorAll(`${selector} [dir="ltr"] i18n-label`)]
+            .map((el) => `forced left to right: "${(el.closest('[dir="ltr"]')?.textContent ?? '').trim().slice(0, 60)}"`),
+    within);
+
+/** The panel shapes itself to the chat: each kind of work brings its own rows. */
+const json = (body: unknown) => (route: { fulfill: (r: { json: unknown }) => Promise<void> }) => route.fulfill({ json: body });
+
+const CONTEXT_USED = {
+    available: true, session_id: ANSWER_SESSION, window: 65536, reply_reserve: 4096, system: 6200, tools: 5400, documents: 3100,
+    history: 2800, query: 200, used: 17700, history_budget: 40000, history_used: 2800, turns_in_view: 2, turns_hidden: 0,
+    at_risk: [], categories: [], model: 'Gemma-4-E4B-it-GGUF', tokenizer: { exact: true, model: 'Gemma-4-E4B-it-GGUF' },
+};
+
+async function withCodingPanel(page: Page): Promise<void> {
+    await page.route(`**/api/sessions/${ANSWER_SESSION}/environment`, json({
+        session_id: ANSWER_SESSION,
+        folders: [
+            { path: '/home/you/projects/kestrel', kind: 'folder', source: 'working_folder', removable: false },
+            { path: '/home/you/.gaia/documents', kind: 'folder', source: 'gaia_documents', removable: false },
+        ],
+        removed: [], internet: true, enforced: true, internet_enforced: true,
+    }));
+    await page.route(`**/api/sessions/${ANSWER_SESSION}/changes/total`, json({
+        files: [
+            {
+                path: '/home/you/projects/kestrel/src/upload.ts', change: 'edited', unified: '', binary: false, too_large: false,
+                truncated: false, additions: 14, deletions: 6, before_size: 900, after_size: 1100, message_ids: [2], changed_since: null,
+            },
+            {
+                path: '/home/you/projects/kestrel/tests/upload.test.ts', change: 'created', unified: '', binary: false, too_large: false,
+                truncated: false, additions: 42, deletions: 0, before_size: 0, after_size: 1300, message_ids: [2], changed_since: null,
+            },
+        ],
+        totals: { files: 2, additions: 56, deletions: 6, uncounted: 0 }, turns: 1, pending: false, untracked: [], incomplete: false,
+    }));
+    await page.route(`**/api/sessions/${ANSWER_SESSION}/changes/git`, json({
+        available: true,
+        repos: [{
+            root: '/home/you/projects/kestrel', branch: 'fix/flaky-upload', remote: 'origin', default_branch: 'main', gh: true,
+            files: ['src/upload.ts', 'tests/upload.test.ts'], uncommitted: ['src/upload.ts', 'tests/upload.test.ts'], ignored: [],
+            draft: { title: 'Fix the flaky upload test', body: '' }, pr_blocked: null,
+        }],
+    }));
+    await page.route(`**/api/sessions/${ANSWER_SESSION}/capabilities`, json({
+        session_id: ANSWER_SESSION, agent_type: 'gaia', skills: [{ name: 'coding', how: 'model' }],
+        tools: [{ name: 'read_file', description: 'Read a file from disk.', category: 'file_io' }],
+    }));
+    await page.route(`**/api/chat/context/${ANSWER_SESSION}`, json({ ...CONTEXT_USED, used: 54300 }));
+}
+
+async function withDocumentsPanel(page: Page): Promise<void> {
+    await page.route(`**/api/sessions/${ANSWER_SESSION}/environment`, json({
+        session_id: ANSWER_SESSION,
+        folders: [
+            { path: '/home/you/.gaia/documents', kind: 'folder', source: 'gaia_documents', removable: false },
+            { path: '/home/you/Documents/lease-2025.pdf', name: 'lease-2025.pdf', kind: 'file', source: 'document', removable: false },
+            { path: '/home/you/Documents/lease-2026.pdf', name: 'lease-2026.pdf', kind: 'file', source: 'document', removable: false },
+            { path: '/home/you/Documents/addendum-scan.pdf', name: 'addendum-scan.pdf', kind: 'file', source: 'document', removable: false },
+        ],
+        removed: [], internet: true, enforced: true, internet_enforced: true,
+    }));
+    const doc = (id: string, name: string, chunks: number, status: string, error: string | null = null) => ({
+        id, filename: name, filepath: `/home/you/Documents/${name}`, file_size: 200_000, chunk_count: chunks, indexed_at: NOW.toISOString(),
+        last_accessed_at: null, sessions_using: 1, indexing_status: status, last_error: error,
+    });
+    await page.route((url) => url.pathname === '/api/documents', json({
+        documents: [
+            doc('d1', 'lease-2025.pdf', 84, 'complete'),
+            doc('d2', 'lease-2026.pdf', 91, 'complete'),
+            doc('d3', 'addendum-scan.pdf', 0, 'indexing'),
+        ],
+        total: 3, total_size_bytes: 600_000, total_chunks: 175,
+    }));
+    await page.route(`**/api/chat/context/${ANSWER_SESSION}`, json(CONTEXT_USED));
+}
+
+async function withScheduledPanel(page: Page): Promise<void> {
+    await page.route((url) => url.pathname === '/api/schedules', json({
+        schedules: [{
+            id: 's9', name: 'Morning brief', interval_seconds: 86_400, prompt: 'Summarize my unread email and calendar for today',
+            status: 'active', created_at: NOW.toISOString(), last_run_at: NOW.toISOString(),
+            next_run_at: new Date(NOW.getTime() + 17 * 3_600_000).toISOString(),
+            last_result: '3 new items', run_count: 9, error_count: 0, session_id: ANSWER_SESSION, schedule_config: null,
+            last_error: null, description: 'Every day',
+            description_parts: { kind: 'every', count: 1, unit: 'day', days: null, time: null, start_hour: null, end_hour: null },
+        }],
+        total: 1,
+    }));
+}
+
+/** A chat that only ran shell commands: no file GAIA tracks changed, no skill loaded. */
+async function withCommandsPanel(page: Page): Promise<void> {
+    const shell = (id: number, command: string, over: Record<string, unknown> = {}) => ({
+        id, type: 'tool', tool: 'run_shell_command', label: 'Using run_shell_command', detail: `command: ${command}, timeout: 120`,
+        success: true, active: false, timestamp: id, ...over,
+    });
+    await page.route((url) => url.pathname === `/api/sessions/${ANSWER_SESSION}/messages`, json({
+        messages: [
+            { id: 1, session_id: ANSWER_SESSION, role: 'user', content: 'Clone the gaia repo into my Work folder', created_at: NOW.toISOString(), rag_sources: null },
+            {
+                id: 2, session_id: ANSWER_SESSION, role: 'assistant', content: 'Git is installed, but the clone was not run.',
+                created_at: NOW.toISOString(), rag_sources: null,
+                agent_steps: [
+                    shell(1, 'git clone https://github.com/amd/gaia.git /home/you/Work/gaia', { success: false }),
+                    // As the server saves a finished command: its output kept, in snake_case.
+                    shell(2, 'winget install Git.Git --source winget --silent --accept-source-agreements', {
+                        commandOutput: {
+                            command: 'winget install Git.Git --source winget --silent --accept-source-agreements',
+                            stdout: 'Successfully installed', stderr: '', return_code: 0, cwd: null, duration_seconds: 41.5, truncated: false,
+                        },
+                    }),
+                    shell(3, 'git clone https://github.com/amd/gaia.git /home/you/Work/gaia', { success: false, declined: true }),
+                ],
+            },
+        ],
+        total: 2,
+    }));
+}
+
+const USE_CASES: Array<{ name: string; setup: (page: Page) => Promise<void>; chip: string; section: string }> = [
+    { name: 'commands', setup: withCommandsPanel, chip: 'commands', section: 'commands' },
+    { name: 'coding', setup: withCodingPanel, chip: 'coding', section: 'changes' },
+    { name: 'documents', setup: withDocumentsPanel, chip: 'documents', section: 'documents' },
+    { name: 'scheduled', setup: withScheduledPanel, chip: 'scheduled', section: 'schedule' },
+];
+
+for (const useCase of USE_CASES) {
+    for (const locale of ['ar', 'en'] as const) {
+        test(`the session panel for a ${useCase.name} chat brings that work's rows (${locale})`, async ({ page }) => {
+            await open(page, `#${ANSWER_SESSION}`, locale, useCase.setup);
+            const panel = page.locator('.session-panel');
+            await expect(panel.locator(`[data-section="${useCase.section}"]`)).toBeVisible();
+            // The chip for this work, by its kind, so the check holds in every language.
+            await expect(panel.locator(`.sp-chip.is-${useCase.chip}`)).toBeVisible();
+            await expect(panel.locator('.sp-chip.is-chat')).toHaveCount(0);
+            if (useCase.name === 'commands') {
+                // One ran, one failed, one was refused: a saved command is not called failed for how it was stored.
+                for (const state of ['ok', 'failed', 'declined']) {
+                    await expect(panel.locator(`.sp-cmd-icon.is-${state}`)).toHaveCount(1);
+                }
+            }
+            // Nothing for work this chat isn't doing.
+            for (const other of USE_CASES.filter((u) => u !== useCase)) {
+                await expect(panel.locator(`[data-section="${other.section}"]`)).toHaveCount(0);
+            }
+            expect(await audit(page)).toEqual([]);
+expect(await forcedLeftToRight(page)).toEqual([]);
+            await shot(page, `session-panel-${useCase.name}-${locale}`);
+        });
+    }
+}
+
+/** The plan's lines in the interface language, as the agent writes them. */
+const PLAN_LINES = {
+    en: ['Read the upload handler', 'Make the retry wait for the lock', 'Run the upload tests'],
+    ar: ['قراءة معالج الرفع', 'جعل إعادة المحاولة تنتظر القفل', 'تشغيل اختبارات الرفع'],
+};
+
+/** POST /api/chat/send makes a three-step plan, is on its second step, then holds the turn open. */
+async function holdOnPlan(page: Page, narrations: string[]): Promise<void> {
+    await page.addInitScript((stepNarrations) => {
+        const realFetch = window.fetch.bind(window);
+        window.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+            const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
+            if (!url.includes('/api/chat/send')) return realFetch(input, init);
+            const events = [
+                {
+                    type: 'plan', steps: ['read_file', 'edit_file', 'run_shell_command'],
+                    step_narrations: stepNarrations,
+                    current_step: 1,
+                },
+                { type: 'tool_start', tool: 'edit_file', detail: '', narration: 'Editing upload.ts' },
+            ];
+            const body = new ReadableStream<Uint8Array>({
+                start(controller) {
+                    for (const e of events) controller.enqueue(new TextEncoder().encode(`data: ${JSON.stringify(e)}\n\n`));
+                },
+            });
+            return new Response(body, { status: 200, headers: { 'content-type': 'text/event-stream' } });
+        };
+    }, narrations);
+}
+
+for (const locale of ['ar', 'en'] as const) {
+    test(`the session panel shows the plan a running turn is working through (${locale})`, async ({ page }) => {
+        await open(page, `#${ANSWER_SESSION}`, locale, (p) => holdOnPlan(p, PLAN_LINES[locale]));
+        const panel = page.locator('.session-panel');
+        await expect(panel.locator('[data-section="plan"]')).toHaveCount(0);
+        const box = page.getByRole('textbox').first();
+        await box.fill('Fix the flaky upload test');
+        await box.press('Enter');
+        const steps = panel.locator('[data-section="plan"] .sp-plan-step');
+        await expect(steps).toHaveCount(3);
+        await expect(steps.nth(0)).toHaveClass(/is-done/);
+        await expect(steps.nth(1)).toHaveClass(/is-running/);
+        await expect(steps.nth(2)).toHaveClass(/is-pending/);
+        await expect(panel.getByRole('progressbar')).toHaveAttribute('aria-valuenow', '1');
+        expect(await audit(page)).toEqual([]);
+expect(await forcedLeftToRight(page)).toEqual([]);
+        await shot(page, `session-panel-plan-${locale}`);
+    });
+}
+
+for (const locale of ['ar', 'en'] as const) {
+    test(`the session panel keeps a finished plan, all ticked, after the reply ends (${locale})`, async ({ page }) => {
+        await open(page, `#${ANSWER_SESSION}`, locale, async (p) => {
+            await p.route((url) => url.pathname === `/api/sessions/${ANSWER_SESSION}/messages`, json({
+                messages: [
+                    { id: 1, session_id: ANSWER_SESSION, role: 'user', content: 'Fix the flaky upload test', created_at: NOW.toISOString(), rag_sources: null },
+                    {
+                        id: 2, session_id: ANSWER_SESSION, role: 'assistant', content: 'The upload test passes now.',
+                        created_at: NOW.toISOString(), rag_sources: null,
+                        agent_steps: [{
+                            id: 1, type: 'plan', label: 'Created plan', active: false, success: true, timestamp: 1,
+                            planSteps: ['read_file', 'edit_file', 'run_shell_command'], planNarrations: PLAN_LINES[locale], currentStep: 2,
+                        }, {
+                            id: 2, type: 'tool', tool: 'run_shell_command', label: 'Using run_shell_command', detail: 'command: npm test',
+                            success: true, active: false, timestamp: 2,
+                        }],
+                    },
+                ],
+                total: 2,
+            }));
+        });
+        const panel = page.locator('.session-panel');
+        const steps = panel.locator('[data-section="plan"] .sp-plan-step');
+        await expect(steps).toHaveCount(3);
+        await expect(page.getByText(locale === 'en' ? 'The upload test passes now.' : /The upload test passes now/).first()).toBeVisible();
+        await expect(panel.locator('[data-section="plan"] .sp-plan-step.is-done')).toHaveCount(3);
+        await expect(panel.locator('[data-section="plan"] .sp-plan-step.is-done svg').first()).toBeVisible();
+        await expect(panel.locator('[data-section="plan"] .spin')).toHaveCount(0);
+        await expect(panel.getByRole('progressbar')).toHaveAttribute('aria-valuenow', '3');
+        // The work is over: the chat is no longer "working a plan".
+        await expect(panel.locator('.sp-chip.is-plan')).toHaveCount(0);
+        expect(await audit(page)).toEqual([]);
+expect(await forcedLeftToRight(page)).toEqual([]);
+        await shot(page, `session-panel-plan-finished-${locale}`);
+    });
+}
+
+test('a plain chat keeps the panel to its environment, with one quiet chip', async ({ page }) => {
+    await open(page, `#${ANSWER_SESSION}`, 'en');
+    const panel = page.locator('.session-panel');
+    await expect(panel.locator('.sp-chip')).toHaveText(['Chat']);
+    for (const section of ['plan', 'schedule', 'documents', 'commands', 'changes', 'outputs', 'skills']) {
+        await expect(panel.locator(`[data-section="${section}"]`)).toHaveCount(0);
+    }
+});
+
+test('a section that turns up later eases in; one there from the start does not', async ({ page }) => {
+    let made = false;
+    await open(page, `#${ANSWER_SESSION}`, 'en', async (p) => {
+        await p.route(`**/api/sessions/${ANSWER_SESSION}/outputs`, (route) =>
+            route.fulfill({
+                json: {
+                    session_id: ANSWER_SESSION,
+                    items: made ? [{
+                        id: 'o1', kind: 'file', name: 'action-items.md', path: '/home/you/Documents/action-items.md', detail: null,
+                        message_id: 2, created_at: null, change: 'created', state: 'present', openable: true, revealable: true,
+                    }] : [],
+                },
+            }),
+        );
+    });
+    const panel = page.locator('.session-panel');
+    await expect(panel.locator('[data-section="environment"]')).toBeVisible();
+    await expect(panel.locator('[data-section="environment"]')).not.toHaveClass(/sp-appear/);
+    // Past the settle window, the chat makes something: an undo event makes Outputs read again.
+    await page.waitForTimeout(1200);
+    made = true;
+    await page.evaluate((id) => window.dispatchEvent(new CustomEvent('gaia:changes-undone', { detail: id })), ANSWER_SESSION);
+    const outputs = panel.locator('[data-section="outputs"]');
+    await expect(outputs).toBeVisible();
+    await expect(outputs).toHaveClass(/sp-appear/);
 });
 
 test.describe('English', () => {
@@ -2404,6 +2907,7 @@ for (const locale of ['ar', 'en'] as const) {
                 return route.fulfill({ json: {
                     custom_model: UNLISTED_ID, context_size: null, agent_mode: 'goal_driven', dynamic_tools: false, dynamic_tools_locked: false,
                     model_status: { found: false, downloaded: false, loaded: false, checked },
+                    network_policy: 'cloud_allowed', flagship_agent: 'gaiapy', gaiacpp_available: true,
                 } });
             }));
             await page.getByRole('button', { name: /Settings/ }).first().click();
@@ -2464,10 +2968,14 @@ interface ModelPageOptions {
     theme?: 'light' | 'dark';
     fireworks?: Record<string, unknown>;
     localOnly?: boolean;
+    agent?: AgentProgramsAnswers;
 }
 
-async function openModelPage(page: Page, locale: string, { models = MODEL_LIST, status, theme = 'light', fireworks, localOnly = false }: ModelPageOptions = {}): Promise<void> {
-    await open(page, '', locale, (p) => withModelPage(p, models, SETUP_PLAN, status, fireworks, localOnly), theme);
+async function openModelPage(page: Page, locale: string, { models = MODEL_LIST, status, theme = 'light', fireworks, localOnly = false, agent }: ModelPageOptions = {}): Promise<void> {
+    await open(page, '', locale, async (p) => {
+        await withModelPage(p, models, SETUP_PLAN, status, fireworks, localOnly);
+        if (agent) await withAgentPrograms(p, agent);
+    }, theme);
     const sidebar = page.getByRole('button', { name: /Open sidebar/ });
     if (await sidebar.isVisible()) await sidebar.click();
     await page.getByRole('button', { name: /Settings/ }).first().click();
@@ -2482,6 +2990,80 @@ const groups = (page: Page) => page.locator('.settings-card .settings-disclosure
 
 for (const locale of ['ar', 'en']) {
     test.describe(`settings model page (${locale})`, () => {
+        for (const noGaiacpp of [false, true]) {
+            for (const expanded of [false, true]) {
+                const state = `${noGaiacpp ? 'unavailable-' : ''}${expanded ? 'expanded' : 'collapsed'}`;
+                test(`the agent choice (${state})`, async ({ page }) => {
+                    await openModelPage(page, locale, noGaiacpp ? { agent: { gaiacpp: 'unavailable' } } : {});
+                    const agent = page.locator('.agent-choice');
+                    await expect(agent.locator('[role="radio"]')).toHaveCount(2);
+                    await expect(agent.locator('.agent-choice-off')).toHaveCount(noGaiacpp ? 1 : 0);
+                    // Why it can't be picked is read under its row, without opening anything.
+                    const why = agent.locator('.agent-choice-why');
+                    await expect(why).toHaveCount(noGaiacpp ? 1 : 0);
+                    if (noGaiacpp) {
+                        await expect(why).toBeVisible();
+                        expect((await why.boundingBox())!.height, 'the reason takes no room on the screen').toBeGreaterThan(10);
+                    }
+                    await expect(agent.locator('.agent-choice-size')).toHaveCount(noGaiacpp ? 1 : 2);
+                    const more = agent.locator('.agent-choice-more');
+                    if (expanded) await more.click();
+                    await expect(more).toHaveAttribute('aria-expanded', String(expanded));
+                    await expect(agent.locator('.agent-choice-detail')).toBeVisible({ visible: expanded });
+                    for (const row of await agent.locator('[role="radio"]').all()) {
+                        expect((await row.boundingBox())!.height).toBeLessThan(48);
+                    }
+                    // The product names and sizes read left to right in either language.
+                    for (const name of await agent.locator('bdi.agent-choice-name, bdi.agent-choice-size').all()) {
+                        expect(await name.evaluate((el) => getComputedStyle(el).direction)).toBe('ltr');
+                    }
+                    await expectSnugTags(agent);
+                    // The section is named for both: the nav and the pane's title.
+                    await expect(page.locator('.settings-pane-title')).toHaveText(locale === 'ar' ? /الوكيل والنموذج/ : /^Agent & model$/);
+                    await shot(page, `model-${locale}-agent-${state}`);
+                    expect(await audit(page)).toEqual([]);
+                });
+            }
+        }
+
+        test('gaiacpp not on this PC: a Download button on its row, and Download shows a bar', async ({ page }) => {
+            await openModelPage(page, locale, { agent: { gaiacpp: 'downloadable', poll: AGENT_DOWNLOADING } });
+            const agent = page.locator('.agent-choice');
+            const button = agent.locator('.agent-choice-download');
+            await expect(button).toBeVisible();
+            await expect(agent.locator('[role="radio"]').nth(1)).toHaveAttribute('aria-disabled', 'true');
+            // The button stays inside its row, clear of the row's text.
+            const [row, btn, what] = await Promise.all([
+                agent.locator('[role="radio"]').nth(1).boundingBox(),
+                button.boundingBox(),
+                agent.locator('.agent-choice-item .agent-choice-what').boundingBox(),
+            ]);
+            expect(btn!.x).toBeGreaterThanOrEqual(row!.x);
+            expect(btn!.x + btn!.width).toBeLessThanOrEqual(row!.x + row!.width);
+            expect(btn!.x >= what!.x + what!.width || btn!.x + btn!.width <= what!.x).toBe(true);
+            await expectSnugTags(agent);
+            await shot(page, `model-${locale}-agent-download-button`);
+            expect(await audit(page)).toEqual([]);
+
+            await button.click();
+            await expect(agent.getByRole('progressbar', { name: /gaiacpp/ })).toHaveAttribute('aria-valuenow', '40');
+            await expect(agent.locator('[role="radio"]').first()).toHaveAttribute('aria-checked', 'true');
+            // The bar replaces the button; a dimmed button once slid out of its row here.
+            await expect(button).toHaveCount(0);
+            await shot(page, `model-${locale}-agent-downloading`);
+            expect(await audit(page)).toEqual([]);
+        });
+
+        test('a failed gaiacpp download says so in the card, with Retry', async ({ page }) => {
+            await openModelPage(page, locale, { agent: { gaiacpp: 'downloadable', download: AGENT_DOWNLOADING, poll: AGENT_DOWNLOAD_FAILED } });
+            const failed = page.locator('.agent-choice .dl-fail');
+            await expect(failed).toBeVisible();
+            await expect(failed.getByRole('button')).toBeVisible();
+            await expect(page.locator('.agent-choice-detail')).toBeHidden();
+            await shot(page, `model-${locale}-agent-download-failed`);
+            expect(await audit(page)).toEqual([]);
+        });
+
         test('the model in use and its controls sit above the list', async ({ page }) => {
             await openModelPage(page, locale);
             await expect(page.locator('#ctx-size')).toBeVisible();
@@ -2500,6 +3082,10 @@ for (const locale of ['ar', 'en']) {
             await page.locator('.settings-disclosure:not([open]) > summary').evaluateAll((els) => els.forEach((el) => (el as HTMLElement).click()));
             await page.locator('.settings-more:not([open]) > summary').evaluateAll((els) => els.forEach((el) => (el as HTMLElement).click()));
             await expect(page.getByText('needs 180 GB of memory', { exact: false }).first()).toBeVisible();
+            // A model that fits but squeezes other apps says so instead of "Fits this PC".
+            await expect(page.locator('.model-badge.is-tight')).toHaveCount(1);
+            await page.locator('.model-badge.is-tight').scrollIntoViewIfNeeded();
+            await shot(page, `model-${locale}-tight`);
             // A size inside a sentence stays whole only inside its own bidi isolate.
             if (locale === 'ar') await expect(page.locator('.model-row-meta', { hasText: 'tok/s' }).first()).toContainText('\u206841 tok/s\u2069');
             await shot(page, `model-${locale}-long`);
@@ -3379,7 +3965,7 @@ for (const locale of ['ar', 'en']) {
 
         test(`session panel Runs on: server not answering, ${owner}'s server (${locale})`, async ({ page }) => {
             await open(page, `#${ANSWER_SESSION}`, locale, async (p) => { await p.route('**/api/providers/local/status', (route) => route.fulfill({ json: SERVER_DOWN(owner) })); });
-            const row = page.locator('.session-panel .sp-env-row').filter({ has: page.locator('.sp-error') });
+            const row = page.locator('.session-panel .sp-row').filter({ has: page.locator('.sp-error') });
             await row.scrollIntoViewIfNeeded();
             const error = row.locator('.sp-error');
             await expect(error).toBeVisible();
@@ -3387,7 +3973,7 @@ for (const locale of ['ar', 'en']) {
             if (locale === 'ar') await expect(error).toContainText('خادم النماذج لا يستجيب');
             await shot(page, `session-panel-runs-on-${locale}-server-down-${owner}`);
             expect(await audit(page)).toEqual([]);
-            if (locale === 'ar') expect(await untranslated(page, '.session-panel .sp-env-row:has(.sp-error)')).toEqual([]);
+            if (locale === 'ar') expect(await untranslated(page, '.session-panel .sp-row:has(.sp-error)')).toEqual([]);
         });
     }
 }
@@ -3452,6 +4038,20 @@ async function withCloudSpending(page: Page): Promise<void> {
 }
 
 for (const locale of ['ar', 'en']) {
+    // Fonts differ by OS, so a row that fits on one PC runs past the panel's edge on another. Narrowest panel, longest row.
+    test(`a cloud chat's rows stay inside the session panel at its narrowest (${locale})`, async ({ page }) => {
+        await open(page, `#${ANSWER_SESSION}`, locale, async (p) => {
+            await withCloudSpending(p);
+            await p.addInitScript(() => window.localStorage.setItem('gaia.sessionPanel.width', '280'));
+        });
+        const panel = page.locator('.session-panel');
+        await expect(panel.locator('.sp-row.is-remote')).toBeVisible();
+        expect(Math.round((await panel.boundingBox())!.width)).toBe(280);
+        expect(await audit(page)).toEqual([]);
+expect(await forcedLeftToRight(page)).toEqual([]);
+        await shot(page, `session-panel-cloud-narrow-${locale}`);
+    });
+
     test(`cloud spending chip and breakdown (${locale})`, async ({ page }) => {
         await open(page, `#${ANSWER_SESSION}`, locale, withCloudSpending);
         const chip = page.locator('.spend-meter');
@@ -4929,6 +5529,38 @@ for (const locale of ['ar', 'en']) {
     });
 }
 
+const SCRIPT_PATH = 'C:\\Users\\you\\AppData\\Local\\Temp\\gaia-scratch-e521a62e2608\\build_recon.py';
+const SCRIPT_PROMPTS = {
+    capped: { text: Array.from({ length: 40 }, (_, i) => `rows.append(build_row(${i}))`).join('\n'), hidden_lines: 260 },
+    missing: { unreadable: 'missing' },
+};
+
+for (const locale of ['ar', 'en']) {
+    for (const [state, script] of Object.entries(SCRIPT_PROMPTS)) {
+        test(`a prompt to run a Python file shows the script or says why not (${state}, ${locale})`, async ({ page }) => {
+            await page.addInitScript(streamThenWait, [{
+                type: 'permission_request', tool: 'execute_python_file', tool_label: 'running python file', confirm_id: 'c-script',
+                args: { file_path: SCRIPT_PATH, _script: script, _scratch_dir: 'C:\\Users\\you\\AppData\\Local\\Temp\\gaia-scratch-e521a62e2608' },
+            }]);
+            await open(page, `#${ANSWER_SESSION}`, locale);
+            await page.locator('textarea').first().fill('build the reconciliation workbook');
+            await page.keyboard.press('Enter');
+            const note = page.getByTestId(state === 'capped' ? 'perm-script-more' : 'perm-script-unreadable');
+            await expect(note).toBeVisible();
+            if (state === 'capped') {
+                await expect(page.getByTestId('perm-code')).toContainText('rows.append(build_row(0))');
+                await expect(note).toContainText('260');
+            } else {
+                await expect(page.getByTestId('perm-code')).toHaveCount(0);
+            }
+            await expect(page.locator('.perm-card-actions')).toBeInViewport();
+            expect(await audit(page)).toEqual([]);
+            if (locale === 'ar') expect(await untranslated(page, '.perm-card', 'bdi, pre')).toEqual([]);
+            await shot(page, `permission-script-${state}-${locale}`);
+        });
+    }
+}
+
 for (const locale of ['ar', 'en'] as const) {
     test(`a file-write prompt words its heading and always button in the UI language (${locale})`, async ({ page }) => {
         await page.addInitScript(streamThenWait, [{
@@ -5672,6 +6304,13 @@ function withUpdater(update: Record<string, unknown>) {
                 value: {
                     getStatus: resolved, check: resolved, listReleases: async () => [],
                     restart: refuse, onStatusChange: () => () => undefined,
+                    markSetupWorked: resolved,
+                    revertToLastWorking: async () => {
+                        throw new Error(
+                            "Error invoking remote method 'gaia:update:revert-to-working': Error: gaia-update-error:" +
+                                JSON.stringify({ code: 'downloadFailed', params: { version: '0.26.0-rc.12', reason: 'net::ERR_INTERNET_DISCONNECTED' }, message: 'x' }),
+                        );
+                    },
                 },
             });
         }, update);
@@ -5687,6 +6326,83 @@ const UPDATE_STATES: Record<string, Record<string, unknown>> = {
     'did not start': { startFailed: true, previousVersion: '0.25.3' },
     'check failed': { status: 'error', error: 'net::ERR_INTERNET_DISCONNECTED' },
 };
+
+const LAST_WORKED = { currentVersion: '0.26.0-rc.13', lastWorking: { version: '0.26.0-rc.12', at: '2026-11-02T09:30:00.000Z' } };
+
+/** Setup stopped on a broken engine, with an older version that finished setup here. */
+const brokenBuild = (update: Record<string, unknown> = {}) => async (page: Page) => {
+    await withSetup(page, { plan: PLAN_COLD, status: ENGINE_FAILED });
+    await withUpdater({ ...LAST_WORKED, ...update })(page);
+};
+
+for (const locale of ['ar', 'en']) {
+    test.describe(`setup failed, with a version that worked (${locale})`, () => {
+        for (const theme of ['light', 'dark'] as const) {
+            test(`the way back is offered (${theme})`, async ({ page }, info) => {
+                await open(page, '', locale, brokenBuild(), theme);
+                const offer = page.locator('.setup-card').filter({ has: page.locator('.btn-secondary') }).last();
+                await expect(offer.getByRole('button')).toBeVisible();
+                await expect(page.locator('.setup-result.is-failed')).toBeVisible();
+                expect(await audit(page)).toEqual([]);
+                await shot(page, `setup-${locale}-go-back-${theme}`);
+                await page.screenshot({ path: info.outputPath('go-back.png'), fullPage: true });
+            });
+        }
+
+        test('downloading the version that worked', async ({ page }, info) => {
+            await open(page, '', locale, brokenBuild({ status: 'downloading', version: '0.26.0-rc.12', progress: 42 }));
+            await expect(page.locator('.setup-card [role="status"]')).toBeVisible();
+            expect(await audit(page)).toEqual([]);
+            await shot(page, `setup-${locale}-go-back-downloading`);
+            await page.screenshot({ path: info.outputPath('go-back-downloading.png'), fullPage: true });
+        });
+
+        test('downloaded, waiting for a restart', async ({ page }, info) => {
+            await open(page, '', locale, brokenBuild({ status: 'downloaded', version: '0.26.0-rc.12', progress: 100, pinnedVersion: 'v0.26.0-rc12' }));
+            await expect(page.locator('.setup-card .go-back-action')).toBeVisible();
+            expect(await audit(page)).toEqual([]);
+            await shot(page, `setup-${locale}-go-back-waiting`);
+            await page.screenshot({ path: info.outputPath('go-back-waiting.png'), fullPage: true });
+        });
+
+        test('going back failed', async ({ page }, info) => {
+            await open(page, '', locale, brokenBuild());
+            await page.locator('.setup-card .btn-secondary').last().click();
+            await expect(page.locator('.setup-card .setup-error')).toBeVisible();
+            expect(await audit(page)).toEqual([]);
+            await shot(page, `setup-${locale}-go-back-failed`);
+            await page.screenshot({ path: info.outputPath('go-back-failed.png'), fullPage: true });
+        });
+
+        test('at phone width', async ({ page }) => {
+            await page.setViewportSize({ width: 390, height: 844 });
+            await open(page, '', locale, brokenBuild());
+            await expect(page.locator('.setup-card .btn-secondary').last()).toBeVisible();
+            expect(await audit(page)).toEqual([]);
+            await shot(page, `setup-${locale}-go-back-phone`);
+        });
+
+        test('an engine update that failed offers it too', async ({ page }, info) => {
+            await open(page, '', locale, async (p) => {
+                await withSetup(p);
+                await withUpdater(LAST_WORKED)(p);
+                const failed = { state: 'failed', upgrade_embedded: true, steps: [], error: 'Lemonade Server 10.8.1 did not start: exit code 127.' };
+                const at = (path: string) => (url: URL) => url.pathname === `/api/setup/${path}`;
+                await p.route(at('check'), (route) => route.fulfill({ json: { ready: false, stage: 'upgrade', reasons: [], steps: [] } }));
+                await p.route(at('status'), (route) => route.fulfill({ json: failed }));
+                await p.route(at('run'), (route) => route.fulfill({ json: failed }));
+            });
+            await expect(page.locator('.app-go-back button')).toBeVisible();
+            // Inset like the notice above it, not edge to edge across the pane.
+            const [card, notice] = [await page.locator('.app-go-back').boundingBox(), await page.locator('.app-notice').first().boundingBox()];
+            expect(Math.abs(card!.x - notice!.x)).toBeLessThan(1);
+            expect(Math.abs(card!.width - notice!.width)).toBeLessThan(1);
+            expect(await audit(page)).toEqual([]);
+            await shot(page, `upgrade-${locale}-go-back`);
+            await page.screenshot({ path: info.outputPath('upgrade-go-back.png') });
+        });
+    });
+}
 
 for (const locale of ['ar', 'en']) {
     test.describe(`updates (${locale})`, () => {
@@ -6214,5 +6930,65 @@ for (const locale of ['ar', 'en']) {
         await shot(page, `skills-link-result-${locale}`);
         expect(await audit(page)).toEqual([]);
         if (locale === 'ar') expect(await untranslated(page, '.skill-link-result')).toEqual([]);
+    });
+}
+
+/** A dictation saved to the user's folder: the card names the copy and the script. */
+const DICTATION_CARD = {
+    src: '/api/media/audio/dictation_q3_report_20261016_150000_ab12cd.wav',
+    path: 'C:\\Users\\test\\.gaia\\cache\\audio\\generations\\dictation_q3_report_20261016_150000_ab12cd.wav',
+    duration_seconds: 196.54,
+    saved_to: 'C:\\Users\\test\\Documents\\Audio books\\Q3 report.mp3',
+    script_path: 'C:\\Users\\test\\Documents\\Audio books\\Q3 report.script.md',
+};
+
+/** One second of silence, so the player loads instead of reporting a broken file. */
+function oneSecondWav(): Buffer {
+    const rate = 8000;
+    const wav = Buffer.alloc(44 + rate * 2);
+    wav.write('RIFF', 0); wav.writeUInt32LE(36 + rate * 2, 4); wav.write('WAVE', 8);
+    wav.write('fmt ', 12); wav.writeUInt32LE(16, 16); wav.writeUInt16LE(1, 20); wav.writeUInt16LE(1, 22);
+    wav.writeUInt32LE(rate, 24); wav.writeUInt32LE(rate * 2, 28); wav.writeUInt16LE(2, 32); wav.writeUInt16LE(16, 34);
+    wav.write('data', 36); wav.writeUInt32LE(rate * 2, 40);
+    return wav;
+}
+
+async function withDictationCard(page: Page): Promise<void> {
+    await page.route((url) => url.pathname.startsWith('/api/media/audio/'), (route) =>
+        route.fulfill({ status: 200, contentType: 'audio/wav', body: oneSecondWav() }),
+    );
+    await page.route((url) => url.pathname === `/api/sessions/${ANSWER_SESSION}/messages`, (route) =>
+        route.fulfill({
+            json: {
+                messages: [
+                    { id: 1, session_id: ANSWER_SESSION, role: 'user', content: 'Turn Q3 report.pdf into audio', created_at: NOW.toISOString(), rag_sources: null },
+                    {
+                        id: 2, session_id: ANSWER_SESSION, role: 'assistant', content: 'The audio is ready.', created_at: NOW.toISOString(), rag_sources: null,
+                        agent_steps: [
+                            { id: 1, type: 'tool', tool: 'dictate_document', active: false, success: true, render: 'audio', data: DICTATION_CARD },
+                        ],
+                    },
+                ],
+                total: 2,
+            },
+        }),
+    );
+}
+
+for (const locale of ['ar', 'en']) {
+    test(`a dictation's audio card names the saved copy and the script (${locale})`, async ({ page }, info) => {
+        await open(page, `#${ANSWER_SESSION}`, locale, withDictationCard);
+        const card = page.locator('.render-audio');
+        await expect(card.locator('audio')).toBeVisible();
+        await expect(card.locator('.render-audio__error')).toHaveCount(0);
+        const where = card.locator('.render-audio__where');
+        await expect(where).toHaveCount(2);
+        // The label follows the interface language; the path stays left to right.
+        await expect(where.nth(0)).toContainText(locale === 'ar' ? 'حُفظ في' : 'Saved to');
+        await expect(where.nth(1)).toContainText(locale === 'ar' ? 'حُفظ النص في' : 'Script saved to');
+        await expect(where.nth(0).locator('bdi[dir="ltr"]')).toHaveText(DICTATION_CARD.saved_to);
+        await expect(card.locator('.render-audio__meta')).toContainText('3:17');
+        expect(await audit(page)).toEqual([]);
+        await card.screenshot({ path: info.outputPath(`dictation-card-${locale}.png`) });
     });
 }

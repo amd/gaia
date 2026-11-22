@@ -60,7 +60,7 @@ jobs:
       - name: Install everything GAIA ships
         shell: bash
         # Every user-facing extra, the agents, and the flagship binary's script
-        # libraries (see build_flagship_sidecar.yml). Dev/lint/eval/publish
+        # libraries (see build_gaiapy.yml). Dev/lint/eval/publish
         # extras are tooling and never ship.
         run: |
           uv venv .venv-licences --python 3.12

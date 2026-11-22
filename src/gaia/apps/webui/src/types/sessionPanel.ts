@@ -29,7 +29,7 @@ export interface SessionEnvironment {
     internet_enforced: boolean;
 }
 
-export type OutputKind = 'file' | 'export' | 'image' | 'document' | 'memory' | 'schedule';
+export type OutputKind = 'file' | 'export' | 'image' | 'audio' | 'document' | 'memory' | 'schedule';
 
 export interface OutputItem {
     id: string;
@@ -74,6 +74,8 @@ export interface AgentCapabilities {
     tools: AgentTool[];
     /** Loaded skills, in load order; null when the agent runs elsewhere and doesn't report them. */
     skills?: ActiveSkill[] | null;
+    /** The program running the relayed GAIA agent; null for any other agent. */
+    program?: 'gaiapy' | 'gaiacpp' | null;
 }
 
 export interface ChatFileChange {

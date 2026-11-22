@@ -48,17 +48,18 @@ class _AskingAgent:
 def live_gaia_sidecar(monkeypatch):
     """The real flagship ``/v1/gaia`` app on a real port, with an asking agent."""
     uvicorn = pytest.importorskip("uvicorn")
-    pytest.importorskip("gaia_agent")
+    pytest.importorskip("gaiapy")
     import requests
-    from gaia_agent import caller_auth
-    from gaia_agent import server as server_mod
-    from gaia_agent import session_registry as sr
+    from gaiapy import caller_auth
+    from gaiapy import server as server_mod
+    from gaiapy import session_registry as sr
 
     from gaia.daemon.sidecars.manager import find_free_port
 
     caller_auth.reset()
     monkeypatch.delenv(caller_auth.TOKEN_FILE_ENV_VAR, raising=False)
     monkeypatch.delenv(caller_auth.TOKEN_ENV_VAR, raising=False)
+    monkeypatch.setenv(caller_auth.ALLOW_NO_TOKEN_ENV_VAR, "1")
     agents: list = []
 
     def build(**kw):
@@ -144,8 +145,8 @@ def test_the_ui_answer_reaches_the_flagship_question(live_gaia_sidecar):
 
 def test_the_flagship_takes_the_relay_answer_body():
     """The relay posts the spec §5.1 ``value``; the flagship reads it as the answer."""
-    pytest.importorskip("gaia_agent")
-    from gaia_agent.server import QueryRespondRequest
+    pytest.importorskip("gaiapy")
+    from gaiapy.server import QueryRespondRequest
 
     body = {"request_id": "q-1", "value": "blue"}
     assert QueryRespondRequest(**body).answer == "blue"

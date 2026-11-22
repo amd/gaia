@@ -338,3 +338,50 @@ def test_the_cli_exits_3_for_a_scorecard_from_another_model(
     assert result.returncode == expected, result.stdout + result.stderr
     if expected == 3:
         assert "Not comparable" in result.stdout
+
+
+def _meta_baseline(tmp_path, **meta):
+    base = tmp_path / "baseline"
+    base.mkdir()
+    (base / "meta.json").write_text(
+        json.dumps({"model": GEMMA, "eval_model": JUDGE, **meta})
+    )
+    return _scorecard(base / "scorecard_tool_selection.json")
+
+
+def _with_harness(path, harness):
+    card = json.loads(path.read_text())
+    card["config"]["harness"] = harness
+    path.write_text(json.dumps(card))
+    return path
+
+
+def test_a_run_on_another_harness_is_refused(tmp_path):
+    # Every committed baseline is gaiapy's; a gaiacpp run must not be diffed against one.
+    baseline = _meta_baseline(tmp_path)
+    current = _with_harness(_scorecard(tmp_path / "current.json"), "gaiacpp")
+
+    with pytest.raises(ScorecardMismatchError, match="harness"):
+        compare_scorecards(baseline, current)
+
+
+def test_a_harness_baseline_compares_with_a_run_on_that_harness(tmp_path):
+    baseline = _meta_baseline(tmp_path, harness="gaiacpp")
+    current = _with_harness(_scorecard(tmp_path / "current.json"), "gaiacpp")
+
+    assert compare_scorecards(baseline, current)["regressed"] == []
+
+
+def test_a_run_whose_harness_could_not_be_read_compares_with_nothing(tmp_path):
+    baseline = _meta_baseline(tmp_path)
+    current = _with_harness(_scorecard(tmp_path / "current.json"), "unknown")
+
+    with pytest.raises(ScorecardMismatchError, match="harness"):
+        compare_scorecards(baseline, current)
+
+
+def test_a_run_from_before_harnesses_were_recorded_counts_as_gaiapy(tmp_path):
+    baseline = _meta_baseline(tmp_path)
+    current = _scorecard(tmp_path / "current.json")
+
+    assert compare_scorecards(baseline, current)["regressed"] == []

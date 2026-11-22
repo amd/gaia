@@ -10,12 +10,11 @@
 name: Gaia Agent Tests
 
 on:
-  workflow_call:
   push:
     branches: [ main ]
     paths:
       - '.github/workflows/test_gaia_agent.yml'
-      - '.github/workflows/build_flagship_sidecar.yml'
+      - '.github/workflows/build_gaiapy.yml'
       - 'setup.py'
       - 'pyproject.toml'
       - 'conftest.py'
@@ -69,6 +68,7 @@ on:
       - 'tests/unit/agents/test_engine_down_query_start.py'
       - 'tests/unit/test_tool_loader_token_budget.py'
       - 'tests/unit/test_tool_list_invariants.py'
+      - 'tests/unit/test_skill_tools_pinned.py'
       - 'tests/unit/test_warm_up.py'
       - 'tests/unit/test_flagship_tool_labels.py'
       - 'tests/unit/eval/test_harness_flagship_target.py'
@@ -88,7 +88,7 @@ on:
     types: [opened, synchronize, reopened, ready_for_review, labeled]
     paths:
       - '.github/workflows/test_gaia_agent.yml'
-      - '.github/workflows/build_flagship_sidecar.yml'
+      - '.github/workflows/build_gaiapy.yml'
       - 'setup.py'
       - 'pyproject.toml'
       - 'conftest.py'
@@ -142,6 +142,7 @@ on:
       - 'tests/unit/agents/test_engine_down_query_start.py'
       - 'tests/unit/test_tool_loader_token_budget.py'
       - 'tests/unit/test_tool_list_invariants.py'
+      - 'tests/unit/test_skill_tools_pinned.py'
       - 'tests/unit/test_warm_up.py'
       - 'tests/unit/test_flagship_tool_labels.py'
       - 'tests/unit/eval/test_harness_flagship_target.py'
@@ -255,12 +256,13 @@ jobs:
           echo "================================================================"
           echo "                  TOOL-PROMPT BUDGET TESTS"
           echo "================================================================"
-          # The file opens with importorskip("gaia_agent"), so it silently
+          # The file opens with importorskip("gaiapy"), so it silently
           # skipped in test_unit.yml and ran in no lane at all (#3294). This is
           # the cheapest lane that installs that wheel.
           python -m pytest \
             tests/unit/test_tool_loader_token_budget.py \
             tests/unit/test_tool_list_invariants.py \
+            tests/unit/test_skill_tools_pinned.py \
             tests/unit/test_warm_up.py \
             tests/unit/test_flagship_tool_labels.py \
             tests/unit/eval/test_harness_flagship_target.py \
@@ -293,7 +295,7 @@ jobs:
         env:
           GAIA_MEMORY_DISABLED: "1"
         run: |
-          # Each of these importorskips gaia_agent, at module level or per
+          # Each of these importorskips gaiapy, at module level or per
           # test, so test_unit.yml collects them and runs none of it (#4206).
           python -m pytest \
             tests/unit/messaging/test_bridge_contract.py \

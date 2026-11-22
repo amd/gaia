@@ -49,9 +49,9 @@ describe('a turn that failed on a model the server does not have', () => {
         expect(outside.textContent).not.toMatch(/gaia lemonade|re-run your/);
     });
 
-    it('offers Settings > Model as a button', () => {
+    it('offers Settings > Agent & model as a button', () => {
         renderFailed(RAW);
-        fireEvent.click(screen.getByRole('button', { name: 'Open Settings › Model' }));
+        fireEvent.click(screen.getByRole('button', { name: 'Open Settings › Agent & model' }));
         expect(useChatStore.getState().settingsSection).toBe('model');
     });
 
@@ -60,9 +60,14 @@ describe('a turn that failed on a model the server does not have', () => {
         expect(screen.getByText("This model isn't available")).toBeInTheDocument();
         expect(container.querySelector('details.msg-failed-details')).toBeNull();
         expect(container.textContent).toContain('Check the name for a typo');
-        expect(screen.getByRole('button', { name: 'Open Settings › Model' })).toBeInTheDocument();
+        expect(screen.getByRole('button', { name: 'Open Settings › Agent & model' })).toBeInTheDocument();
         fireEvent.click(screen.getByRole('button', { name: 'Open Settings › Advanced' }));
         expect(useChatStore.getState().settingsSection).toBe('advanced');
+    });
+
+    it('reads the tab by its new name and its old one', () => {
+        expect(describeFailedTurn('Pick a smaller model in Settings › Agent & model.').sections).toEqual(['model']);
+        expect(describeFailedTurn('Pick a smaller model in Settings > Model.').sections).toEqual(['model']);
     });
 
     it('lands on the setting the sentence names, with no way "back" to a Settings tab it never came from', () => {

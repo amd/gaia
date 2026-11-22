@@ -19,7 +19,6 @@ import random
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence
-from urllib.parse import urlencode
 
 from gaia.eval.bench import swebench
 
@@ -32,7 +31,6 @@ REBENCH_COLUMNS = (
     "patch",
     "created_at",
 )
-FETCH_TIMEOUT_S = 120
 
 
 class InstanceError(RuntimeError):
@@ -83,26 +81,14 @@ def _rows(dataset: str, split: str) -> List[Dict[str, Any]]:
     rows: List[Dict[str, Any]] = []
     offset = 0
     while True:
-        query = urlencode(
-            {
-                "dataset": dataset,
-                "config": "default",
-                "split": split,
-                "offset": offset,
-                "length": swebench.ROWS_PER_PAGE,
-            }
-        )
         try:
-            resp = requests.get(
-                f"{swebench.DATASET_ROWS_URL}?{query}", timeout=FETCH_TIMEOUT_S
-            )
-            resp.raise_for_status()
-            page = resp.json()
+            page = swebench.rows_page(dataset, split, offset)
         except (requests.RequestException, ValueError) as exc:
             raise InstanceError(
                 f"could not read {dataset} split {split} from "
-                f"{swebench.DATASET_ROWS_URL} (offset {offset}): {exc}. Retry when "
-                "the Hugging Face datasets-server answers."
+                f"{swebench.DATASET_ROWS_URL} (offset {offset}): {exc}. A 5xx is "
+                f"retried {len(swebench.FETCH_RETRY_DELAYS_S)} times first; retry "
+                "when the Hugging Face datasets-server answers."
             ) from exc
         batch = [entry["row"] for entry in page.get("rows") or []]
         rows.extend(batch)

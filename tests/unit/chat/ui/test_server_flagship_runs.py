@@ -134,17 +134,17 @@ def test_scheduled_runs_use_the_flagship(monkeypatch):
         def close(self):
             pass
 
-    fake = types.ModuleType("gaia_agent.agent")
+    fake = types.ModuleType("gaiapy.agent")
     fake.GaiaAgent = FakeGaiaAgent
     fake.GaiaAgentConfig = FakeConfig
-    monkeypatch.setitem(sys.modules, "gaia_agent.agent", fake)
-    chat_mod = types.ModuleType("gaia_agent.chat_agent")
+    monkeypatch.setitem(sys.modules, "gaiapy.agent", fake)
+    chat_mod = types.ModuleType("gaiapy.chat_agent")
 
     def _chat_agent(*_a, **_k):
         raise AssertionError("scheduled runs must not build ChatAgent")
 
     chat_mod.ChatAgent = chat_mod.ChatAgentConfig = _chat_agent
-    monkeypatch.setitem(sys.modules, "gaia_agent.chat_agent", chat_mod)
+    monkeypatch.setitem(sys.modules, "gaiapy.chat_agent", chat_mod)
     monkeypatch.setattr(lemonade_service, "ensure_daemon_owns_lemonade", lambda: None)
 
     with TestClient(server.create_app(db_path=":memory:")) as client:

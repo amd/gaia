@@ -45,3 +45,17 @@ func TestHistoryCutLandsInTheTranscriptOnce(t *testing.T) {
 		t.Errorf("notice not rendered:\n%s", view)
 	}
 }
+
+func TestCanonicalWarningStaysInChatAfterProgress(t *testing.T) {
+	const warning = "Skill 'broken' was not restored after settings changed."
+	wire := `{"type":"status","level":"warning","message":"` + warning + `"}`
+	m, _ := newTestModel(t)
+	m.streaming = true
+	m = feed(t, m, event.ParseCanonicalEvent([]byte(wire)), event.CanonicalStatusEvent{
+		Type: "status", Message: "Reading your request",
+	})
+	m.updateViewport()
+	if view := ansi.Strip(m.viewport.View()); !strings.Contains(view, "was not restored") {
+		t.Errorf("warning not kept in chat:\n%s", view)
+	}
+}

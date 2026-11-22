@@ -48,6 +48,7 @@ from ..lemonade_client import (
     local_sampling_defaults,
     requested_thinking,
     resolve_ctx_size,
+    resolve_local_chat_model,
     runs_on_npu,
 )
 from ..lemonade_launcher import describe_client_hint
@@ -135,6 +136,8 @@ def _defang_think_tags(text: str) -> str:
 TOOL_CALL_PROGRESS_INTERVAL_S = 3.0
 #: Argument characters before a tool call is long enough to report on.
 TOOL_CALL_PROGRESS_MIN_CHARS = 1500
+#: Seconds between live drafts of a tool call's arguments.
+TOOL_CALL_DRAFT_INTERVAL_S = 0.25
 #: Seconds between word counts while the model reasons.
 REASONING_PROGRESS_INTERVAL_S = 1.0
 
@@ -368,12 +371,32 @@ _LOCAL_SERVER_RE = re.compile(r"\bthe local (?:LLM|model)(?: server)?\b", re.IGN
 def wording_for_model(message: str, model_id: Optional[str]) -> str:
     """*message* as a chat on *model_id* should read it.
 
-    A cloud chat still goes through GAIA's Lemonade, so a failure there is
-    real, but "the local LLM" would tell the user their model runs here.
+    A cloud chat still goes through a Lemonade on this side, so a failure
+    there is real, but "the local LLM" would tell the user their model runs
+    here. The server is named as GAIA's only when GAIA runs it.
     """
     if not message or cloud_model_provider(model_id) is None:
         return message
-    return _LOCAL_SERVER_RE.sub("GAIA's AI engine", message)
+    if not _user_chose_the_server():
+        return _LOCAL_SERVER_RE.sub("GAIA's AI engine", message)
+    return _LOCAL_SERVER_RE.sub(
+        lambda m: (
+            "Your model server" if m.group()[0].isupper() else "your model server"
+        ),
+        message,
+    )
+
+
+def _user_chose_the_server() -> bool:
+    """True when the model server is the user's own, not one GAIA runs."""
+    from ..lemonade_choice import LemonadeChoiceError
+    from ..lemonade_client import configured_lemonade_url
+
+    try:
+        return configured_lemonade_url() is not None
+    except LemonadeChoiceError:
+        # "Use the one I have" saved without an address: still not GAIA's.
+        return True
 
 
 #: The wording of :class:`LemonadeServerDownError`, once a wrapper flattened it.
@@ -1129,6 +1152,10 @@ class LemonadeProvider(LLMClient):
     #: its arguments arrive as silent deltas, minutes of nothing to show.
     tool_call_progress: Optional[Callable[[str, int], None]] = None
 
+    #: Called as (tool_name, arguments_so_far) while a tool call streams, so a
+    #: client can show what is being written before the call is complete.
+    tool_call_draft: Optional[Callable[[str, str], None]] = None
+
     #: Called with the reasoning word count so far while a thinking model
     #: reasons. Its text is held back a line at a time, so a one-paragraph
     #: thought otherwise shows nothing until it is finished.
@@ -1249,8 +1276,8 @@ class LemonadeProvider(LLMClient):
         self._last_streamed = stream
         request_started = time.perf_counter()
 
-        # Use provided model, instance model, or default CPU model
-        effective_model = model or self._model or DEFAULT_MODEL_NAME
+        # Provided model, instance model, else the PC's default from setup.
+        effective_model = model or self._model or resolve_local_chat_model()
         self._last_model = effective_model
         tool_capable = is_tool_calling_model(effective_model)
 
@@ -1427,6 +1454,14 @@ class LemonadeProvider(LLMClient):
         """Generate an image; see :meth:`LemonadeClient.generate_image`."""
         return self._backend.generate_image(prompt, **kwargs)
 
+    def edit_image(self, image_path: str, prompt: str, **kwargs) -> dict:
+        """Edit an image through the provider interface."""
+        return self._backend.edit_image(image_path, prompt, **kwargs)
+
+    def upscale_image(self, image_path: str, **kwargs) -> dict:
+        """Upscale an image through the provider interface."""
+        return self._backend.upscale_image(image_path, **kwargs)
+
     def transcribe_audio(
         self, audio_path: str, model: Optional[str] = None, **kwargs
     ) -> "Transcript":
@@ -1542,6 +1577,7 @@ class LemonadeProvider(LLMClient):
         thought = ""  # reasoning held back until a line is whole (see below)
         tool_calls: dict[int, dict] = {}
         next_progress = time.perf_counter()
+        next_draft = next_progress
         next_reasoning_progress: Optional[float] = None
         finish_reason = ""
         usage_seen = False
@@ -1574,6 +1610,16 @@ class LemonadeProvider(LLMClient):
                 ):
                     self._last_ttft_seconds = time.perf_counter() - request_started
                 _accumulate_tool_calls(tool_calls, delta.get("tool_calls"))
+                # tool_calls stays empty when a frame holds only non-dict fragments.
+                if (
+                    delta.get("tool_calls")
+                    and tool_calls
+                    and self.tool_call_draft is not None
+                    and time.perf_counter() >= next_draft
+                ):
+                    latest = tool_calls[max(tool_calls)]["function"]
+                    self.tool_call_draft(latest["name"], latest["arguments"])
+                    next_draft = time.perf_counter() + TOOL_CALL_DRAFT_INTERVAL_S
                 if (
                     delta.get("tool_calls")
                     and self.tool_call_progress is not None

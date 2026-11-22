@@ -23,7 +23,7 @@ from tests.fixtures.fake_lemonade import FakeLemonade
 @pytest.fixture
 def chat(tmp_path, monkeypatch):
     """An open flagship chat, and ``add(name)`` / ``remove(name)`` for user skills."""
-    from gaia_agent.session_registry import build_session_agent, close_agent
+    from gaiapy.session_registry import build_session_agent, close_agent
 
     gaia_dir = tmp_path / "home"
     gaia_dir.mkdir()

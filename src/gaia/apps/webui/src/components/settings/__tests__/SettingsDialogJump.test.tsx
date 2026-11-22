@@ -134,7 +134,7 @@ describe('SettingsDialog jump from Setup', () => {
         act(() => screen.getByRole('button', { name: 'Setup' }).focus());
         act(() => useChatStore.getState().jumpToSetting({ section: 'model', target: '#no-such-setting', from: 'setup' }));
         await act(async () => { await vi.advanceTimersByTimeAsync(100); });
-        expect(screen.getByRole('button', { name: 'Model' })).toHaveFocus();
+        expect(screen.getByRole('button', { name: 'Agent & model' })).toHaveFocus();
     });
 
     it('focuses the heading\'s own summary when a row points at a section title', async () => {
@@ -146,7 +146,7 @@ describe('SettingsDialog jump from Setup', () => {
 
     it('shows no way back when the section was picked from the list', () => {
         render(<SettingsDialog onUseSkill={vi.fn()} />);
-        fireEvent.click(screen.getByRole('button', { name: 'Model' }));
+        fireEvent.click(screen.getByRole('button', { name: 'Agent & model' }));
         expect(screen.queryByRole('button', { name: /Back to/ })).not.toBeInTheDocument();
     });
 });

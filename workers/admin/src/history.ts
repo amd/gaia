@@ -64,6 +64,8 @@ interface GhItem {
   created_at: string;
   closed_at: string | null;
   author_association: string;
+  /** Pull requests only. */
+  draft?: boolean;
   pull_request?: { merged_at: string | null };
 }
 
@@ -79,8 +81,8 @@ export async function collectItems(env: CollectEnv, f: Fetcher, sinceDay?: strin
   );
   await writeAtomic(
     env.DB,
-    insertMany(env.DB, "items", ["number", "kind", "created_at", "closed_at", "merged_at", "assoc", "author"],
-      list.map((i) => [i.number, i.pull_request ? "pr" : "issue", i.created_at, i.closed_at, i.pull_request?.merged_at ?? null, i.author_association, i.user?.login ?? null])),
+    insertMany(env.DB, "items", ["number", "kind", "created_at", "closed_at", "merged_at", "assoc", "author", "draft"],
+      list.map((i) => [i.number, i.pull_request ? "pr" : "issue", i.created_at, i.closed_at, i.pull_request?.merged_at ?? null, i.author_association, i.user?.login ?? null, i.pull_request ? (i.draft ? 1 : 0) : null])),
   );
   return `${list.length} issues and PRs${sinceDay ? ` updated since ${sinceDay}` : " (full history)"}`;
 }

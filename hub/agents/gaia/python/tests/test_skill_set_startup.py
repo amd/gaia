@@ -12,12 +12,12 @@ import io
 
 import pytest
 
-pytest.importorskip("gaia_agent")
+pytest.importorskip("gaiapy")
 
 import uvicorn  # noqa: E402
-from gaia_agent import server as server_mod  # noqa: E402
-from gaia_agent import stdio as stdio_mod  # noqa: E402
-from gaia_agent.agent import (  # noqa: E402
+from gaiapy import server as server_mod  # noqa: E402
+from gaiapy import stdio as stdio_mod  # noqa: E402
+from gaiapy.agent import (  # noqa: E402
     SKILL_SET_ENV,
     GaiaAgent,
     GaiaAgentConfig,
@@ -50,6 +50,9 @@ def manifest_with_sets(tmp_path, monkeypatch):
 @pytest.fixture
 def served(monkeypatch):
     calls = []
+    # Every real launcher passes a caller token; the sidecar refuses to start without.
+    monkeypatch.delenv("GAIA_GAIA_SIDECAR_TOKEN_FILE", raising=False)
+    monkeypatch.setenv("GAIA_GAIA_SIDECAR_TOKEN", "launch-test-token")
     monkeypatch.setattr(
         uvicorn, "run", lambda app, **kwargs: calls.append((app, kwargs))
     )

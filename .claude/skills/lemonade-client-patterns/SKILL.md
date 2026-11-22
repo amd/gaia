@@ -28,7 +28,7 @@ grep -n "requests\.post\|requests\.get\|OpenAI(" src/gaia/llm/lemonade_client.py
 
 It is a **public SDK surface that real user paths reach**. In-tree callers: `__main__`, the
 client's own tests, the flagship sidecar's warm-up turn
-(`hub/agents/gaia/python/gaia_agent/server.py`) and the audio tools' transcript-refinement
+(`hub/agents/gaia/python/gaiapy/server.py`) and the audio tools' transcript-refinement
 LLM (`src/gaia/agents/tools/audio_tools.py`). Both of those pass no `host`/`port`, so a
 change to how the factory resolves the server address changes audio transcription
 and the flagship's warm-up (#3558).

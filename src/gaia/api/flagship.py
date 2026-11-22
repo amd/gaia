@@ -29,6 +29,6 @@ def api_unavailable_reason() -> Optional[str]:
     Only the frozen build is refused up front: there the agent can never be
     imported. A source install without it gets the install command per request.
     """
-    if is_frozen() and importlib.util.find_spec("gaia_agent") is None:
+    if is_frozen() and importlib.util.find_spec("gaiapy") is None:
         return FROZEN_API_UNAVAILABLE
     return None

@@ -25,7 +25,12 @@ from typing import Optional
 import requests
 
 from gaia.daemon import paths
-from gaia.daemon.client import UPGRADE_CORE_GUIDANCE, attach, start_or_attach
+from gaia.daemon.client import (
+    UPGRADE_CORE_GUIDANCE,
+    attach,
+    error_detail,
+    start_or_attach,
+)
 from gaia.daemon.errors import DaemonError, DaemonVersionError
 from gaia.daemon.instance import DaemonInstance
 from gaia.daemon.sidecars.errors import (
@@ -101,16 +106,6 @@ def _check_agents_floor(inst: DaemonInstance) -> None:
         )
 
 
-def _error_detail(response) -> str:
-    try:
-        body = response.json()
-    except ValueError:
-        return f"HTTP {response.status_code}"
-    if isinstance(body, dict) and body.get("detail"):
-        return str(body["detail"])
-    return f"HTTP {response.status_code}"
-
-
 def acquire_handle(agent_id: str) -> SidecarHandle:
     """Spawn-or-attach *agent_id*'s sidecar via the daemon; return a handle.
 
@@ -155,7 +150,7 @@ def running_handle(agent_id: str) -> Optional[SidecarHandle]:
         ) from e
     if r.status_code != 200:
         raise SidecarError(
-            f"the daemon could not list its agents: {_error_detail(r)}",
+            f"the daemon could not list its agents: {error_detail(r)}",
             kind=r.headers.get(ERROR_KIND_HEADER, ""),
         )
     entry = _running_entry(r, agent_id, inst.base_url)
@@ -220,7 +215,7 @@ def _ensure(inst: DaemonInstance, agent_id: str) -> SidecarHandle:
     if r.status_code != 200:
         raise SidecarError(
             f"the daemon refused to ensure the '{agent_id}' sidecar: "
-            f"{_error_detail(r)}",
+            f"{error_detail(r)}",
             kind=r.headers.get(ERROR_KIND_HEADER, ""),
         )
     # Never log this body — it carries the sidecar bearer token.
@@ -265,6 +260,5 @@ def stop_sidecar(agent_id: str) -> None:
         ) from e
     if r.status_code != 200:
         raise SidecarError(
-            f"the daemon failed to stop the '{agent_id}' sidecar: "
-            f"{_error_detail(r)}"
+            f"the daemon failed to stop the '{agent_id}' sidecar: {error_detail(r)}"
         )

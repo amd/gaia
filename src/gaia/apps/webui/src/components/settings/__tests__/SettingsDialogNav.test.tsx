@@ -23,7 +23,7 @@ describe('SettingsDialog nav', () => {
         const general = screen.getByRole('button', { name: 'General' });
         expect(general).toHaveFocus();
 
-        const model = screen.getByRole('button', { name: 'Model' });
+        const model = screen.getByRole('button', { name: 'Agent & model' });
         fireEvent.click(model);
 
         expect(model).toHaveFocus();
@@ -37,7 +37,7 @@ describe('SettingsDialog nav', () => {
         const pane = container.ownerDocument.querySelector('.settings-scroll') as HTMLElement;
         pane.scrollTop = 900;
 
-        fireEvent.click(screen.getByRole('button', { name: 'Model' }));
+        fireEvent.click(screen.getByRole('button', { name: 'Agent & model' }));
 
         expect(pane.scrollTop).toBe(0);
     });

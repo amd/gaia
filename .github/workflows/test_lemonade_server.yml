@@ -4,7 +4,6 @@
 name: Lemonade Server Smoke Test
 
 on:
-  workflow_call:
   push:
     branches: [ main ]
     paths:
@@ -54,7 +53,7 @@ jobs:
         uses: ./.github/actions/setup-venv
         with:
           python-version: '3.12'
-          install-package: '.[lemonade]'
+          install-package: '.'
 
       - name: Install Lemonade Server
         uses: ./.github/actions/install-lemonade

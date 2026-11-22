@@ -5,7 +5,7 @@
 A restarted lemond forgets its cloud providers as well as their keys. GAIA gave
 the key back only to a provider that was still registered, so after a crash,
 update or daemon restart every Fireworks turn failed with "isn't deployed
-there, was renamed…" until the user opened Settings > Model.
+there, was renamed…" until the user opened Settings > Agent & model.
 
 Mocks sit at the HTTP boundary (``requests.post`` / ``requests.request``) and
 the credential store; the state file is the real one GAIA reads.

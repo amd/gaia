@@ -76,6 +76,11 @@ _DIFF_CARD_MAX_CHARS = 64_000
 #: relayed result is reduced to.
 RESULT_PATH_KEYS = ("file_path", "image_path", "audio_path")
 
+#: What a speech tool reports beside ``audio_path``: the recording's length,
+#: and where the user's copy and the listening script went. The audio card
+#: shows them as text.
+RESULT_AUDIO_KEYS = ("duration_seconds", "saved_to", "script_path")
+
 #: Generated media file types that a client may later open through an explicit
 #: card action.  Keep this intentionally narrow: a successful tool result is
 #: not enough to turn an arbitrary local file into a launchable UI payload.
@@ -114,6 +119,9 @@ _USE_HANDLER_TIMEOUT = object()
 # description of the user's work (#2804). The emitter is the only layer that
 # knows which it is, so it tags at the source; downstream
 # (:mod:`gaia.ui.sse_translation`) decides whether to forward it.
+
+#: Phase of the status that takes back a draft answer an answer check replaces.
+ANSWER_CHECK_PHASE = "answer_check"
 
 #: ``start_progress`` labels the agent loop uses to say "I am alive" rather than
 #: "here is what I am doing". Compared lower-cased and stripped of trailing
@@ -511,6 +519,27 @@ def _peel_response_socket(resp: Any) -> Optional[socket.socket]:
 _ANSWER_FIRST_RE = re.compile(r'\s*\{\s*"answer"\s*:')
 
 
+#: Longest string argument a plan item carries; a plan is re-sent every step.
+_PLAN_ARG_MAX = 300
+
+
+def _plan_item(step: Any) -> Dict[str, Any]:
+    """One plan step as ``{tool, description, args}`` for a client to narrate."""
+    if not isinstance(step, dict):
+        return {"description": str(step)}
+    item: Dict[str, Any] = {}
+    if step.get("tool"):
+        item["tool"] = str(step["tool"])
+    if step.get("description"):
+        item["description"] = str(step["description"])
+    args = step.get("tool_args")
+    if isinstance(args, dict) and args:
+        item["args"] = {
+            k: (v[:_PLAN_ARG_MAX] if isinstance(v, str) else v) for k, v in args.items()
+        }
+    return item
+
+
 class SSEOutputHandler(OutputHandler):
     """
     OutputHandler that queues agent events as JSON for SSE streaming.
@@ -526,7 +555,7 @@ class SSEOutputHandler(OutputHandler):
     #: raises this — a person reading a prompt routinely takes longer than a
     #: minute — but must not set it to ``None``: an unanswerable question with
     #: no bound is a turn that never ends, which reads as a hang rather than as
-    #: the refusal it effectively is. See ``gaia_agent.stdio.PermissionState``,
+    #: the refusal it effectively is. See ``gaiapy.stdio.PermissionState``,
     #: whose backstop deliberately outlasts its client's own bound.
     #:
     #: Class-level so a handler built with ``__new__`` — which callers that only
@@ -698,10 +727,31 @@ class SSEOutputHandler(OutputHandler):
         self.turn_ledger = TurnLedger()
         # The diff print_diff drew for the call in flight; its result carries it.
         self._pending_diff_card: Optional[Dict[str, Any]] = None
+        # Live line for a draft answer a check is replacing; the draft is taken
+        # back when the next reply or tool call starts. None when none is.
+        self._superseded_answer: Optional[str] = None
 
     def _emit(self, event: Dict[str, Any]):
         """Push an event to the queue for SSE delivery."""
         etype = event.get("type") if event else None
+        if self._superseded_answer is not None and etype in (
+            "chunk",
+            "tool_start",
+            "answer",
+        ):
+            message, self._superseded_answer = self._superseded_answer, None
+            # The final answer replaces the draft by itself.
+            if etype != "answer":
+                self.delivered_answer = ""
+                self._emit(
+                    {
+                        "type": "status",
+                        "status": "working",
+                        "phase": ANSWER_CHECK_PHASE,
+                        "message": message,
+                        "retracts_answer": True,
+                    }
+                )
         if etype == "chunk":
             self._shown_fence, self._shown_line_start = _fence_after(
                 event.get("content") or "", self._shown_fence, self._shown_line_start
@@ -746,6 +796,7 @@ class SSEOutputHandler(OutputHandler):
         self._step_count = 0
         self._tool_count = 0
         self.delivered_answer = ""
+        self._superseded_answer = None
         model_label = model_id or "LLM"
         self._emit(
             {
@@ -828,6 +879,7 @@ class SSEOutputHandler(OutputHandler):
                 "steps": plan_strs,
                 "step_narrations": narrations,
                 "current_step": current_step,
+                "items": [_plan_item(step) for step in plan],
             }
         )
 
@@ -933,6 +985,8 @@ class SSEOutputHandler(OutputHandler):
         latency_ms = self.record_tool_result(data, success)
         event = {
             "type": "tool_result",
+            # Which call this answers, so a client can follow one tool's results.
+            "tool": self._last_tool_name,
             "title": title,
             "summary": summary,
             "success": success,
@@ -961,11 +1015,18 @@ class SSEOutputHandler(OutputHandler):
         # summary may be incomplete instead of making them infer truncation.
         if not isinstance(data, dict) and len(str(data)) > _SUMMARY_CHAR_CAP:
             event["summary_truncated"] = True
+        # The file a tool wrote, so a client can offer to open it.
+        if isinstance(data, dict) and isinstance(data.get("path"), str):
+            event["path"] = data["path"]
         # Where the tool wrote, resolved: a relayed turn's Outputs need it.
         if isinstance(data, dict):
             for key in RESULT_PATH_KEYS:
                 if isinstance(data.get(key), str):
                     event[key] = data[key]
+            if isinstance(data.get("audio_path"), str):
+                for key in RESULT_AUDIO_KEYS:
+                    if isinstance(data.get(key), (str, int, float)):
+                        event[key] = data[key]
             if isinstance(data.get("num_chunks"), int):
                 event["num_chunks"] = data["num_chunks"]
         # The summary drops the hits a relayed turn's sources are made of.
@@ -1183,6 +1244,11 @@ class SSEOutputHandler(OutputHandler):
             }
         )
 
+    def supersede_answer(self, message: str) -> None:
+        # Only text still on screen as the answer is a draft to take back.
+        if self._text_since_tool.strip():
+            self._superseded_answer = message
+
     def report_phase(self, phase: str, message: str, **counts: int):
         self._emit(
             {
@@ -1193,6 +1259,9 @@ class SSEOutputHandler(OutputHandler):
                 **counts,
             }
         )
+
+    def report_draft(self, tool: str, text: str):
+        self._emit({"type": "draft", "tool": tool, "text": text})
 
     # === Structured-render map (#2109) ===
 
@@ -1217,6 +1286,7 @@ class SSEOutputHandler(OutputHandler):
         "generate_music": "media",
         "generate_sound_effect": "media",
         "text_to_speech": "media",
+        "dictate_document": "media",
     }
 
     def _render_card_payload(self, data: Any) -> Optional[Dict[str, Any]]:
@@ -1309,6 +1379,9 @@ class SSEOutputHandler(OutputHandler):
             "duration_seconds",
             "duration_requested",
             "generation_time_s",
+            "saved_to",
+            "script_path",
+            "form",
         ):
             if envelope.get(key) is not None:
                 payload[key] = envelope[key]

@@ -237,7 +237,7 @@ def test_flagship_readiness_hint_pulls_with_the_resolved_client(mocker, tooling)
     dead command there is as user-visible as one from the CLI."""
     import asyncio
 
-    server = pytest.importorskip("gaia_agent.server")
+    server = pytest.importorskip("gaiapy.server")
 
     mocker.patch("platform.system", return_value="Linux")
     mocker.patch("gaia.llm.lemonade_launcher.resolve_lemonade", return_value=tooling)
@@ -321,7 +321,7 @@ def test_the_download_guard_actually_reaches_the_hub_and_the_docs():
     """
     scanned = {p.relative_to(_REPO).as_posix() for p in _user_facing_files()}
     for rel in (
-        "hub/agents/gaia/python/gaia_agent/server.py",
+        "hub/agents/gaia/python/gaiapy/server.py",
         "hub/agents/gaia/npm/SKILL.md",
         "docs/guides/gaia.mdx",
     ):

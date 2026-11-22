@@ -299,6 +299,9 @@ def test_a_chat_with_no_relayed_run_only_saves_the_mode(client):
 # ── End to end against the real flagship sidecar app ───────────────────────
 
 
+_SIDECAR_TOKEN = "test-sidecar-token"
+
+
 class _GatedAgent:
     """Asks to run one gated tool when told to, and records the answer."""
 
@@ -324,18 +327,19 @@ class _GatedAgent:
 @pytest.fixture
 def live_gaia_sidecar(monkeypatch):
     uvicorn = pytest.importorskip("uvicorn")
-    pytest.importorskip("gaia_agent")
+    pytest.importorskip("gaiapy")
     import requests
-    from gaia_agent import caller_auth
-    from gaia_agent import server as server_mod
-    from gaia_agent import session_registry as sr
-    from gaia_agent import stdio
+    from gaiapy import caller_auth
+    from gaiapy import server as server_mod
+    from gaiapy import session_registry as sr
+    from gaiapy import stdio
 
     from gaia.daemon.sidecars.manager import find_free_port
 
     caller_auth.reset()
     monkeypatch.delenv(caller_auth.TOKEN_FILE_ENV_VAR, raising=False)
-    monkeypatch.delenv(caller_auth.TOKEN_ENV_VAR, raising=False)
+    # Full access over HTTP needs caller auth, as the shipped sidecar has.
+    monkeypatch.setenv(caller_auth.TOKEN_ENV_VAR, _SIDECAR_TOKEN)
     # An unanswered prompt is denied after this long instead of 15 minutes.
     monkeypatch.setattr(stdio, "ORPHANED_CONFIRM_TIMEOUT_SECONDS", 1.0)
     agents: list = []
@@ -382,7 +386,7 @@ def test_the_flagship_follows_the_chats_mode_turn_by_turn(live_gaia_sidecar):
     from gaia.ui.sidecar.proxy import SidecarProxy
 
     base_url, agents = live_gaia_sidecar
-    proxy = SidecarProxy(base_url, agent_id="gaia")
+    proxy = SidecarProxy(base_url, agent_id="gaia", auth_token=_SIDECAR_TOKEN)
     session_id = f"s-{uuid.uuid4().hex[:8]}"
 
     def turn(query, full_access):

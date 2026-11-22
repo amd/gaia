@@ -172,7 +172,7 @@ def test_an_agent_package_from_another_checkout_is_refused(tmp_path):
     env = {**os.environ, "PYTHONPATH": str(tmp_path)}
     env.pop("GAIA_ALLOW_EXTERNAL_IMPORTS", None)
 
-    with pytest.raises(SystemExit, match="gaia_agent ->"):
+    with pytest.raises(SystemExit, match="gaiapy ->"):
         run_eval_lane.require_checkout_imports(env)
 
     run_eval_lane.require_checkout_imports({**env, "GAIA_ALLOW_EXTERNAL_IMPORTS": "1"})
@@ -247,3 +247,66 @@ def test_a_category_that_passed_cleans_its_gaia_home_up(tmp_path, monkeypatch):
 
     assert not home.exists()
     assert not kept.exists()
+
+
+def test_scenarios_are_routed_to_the_category_that_holds_them():
+    found = run_eval_lane.scenarios_by_category(
+        ["gaia_skills_tasks", "gaia_skills_selection"],
+        ["task_rss_digest,select_none_fits"],
+    )
+    assert found == {
+        "gaia_skills_tasks": ["task_rss_digest"],
+        "gaia_skills_selection": ["select_none_fits"],
+    }
+
+
+def test_a_scenario_outside_the_selected_categories_fails_loudly():
+    with pytest.raises(SystemExit, match="not in the selected categories"):
+        run_eval_lane.scenarios_by_category(["gaia_skills_tasks"], ["select_none_fits"])
+
+
+# ---------------------------------------------------------------- --harness
+
+
+def test_no_harness_changes_nothing():
+    assert run_eval_lane.harness_setup(None, None) == {}
+
+
+def test_an_unknown_harness_names_the_real_ones():
+    with pytest.raises(SystemExit) as e:
+        run_eval_lane.harness_setup("rust", None)
+    assert "gaiapy" in str(e.value) and "gaiacpp" in str(e.value)
+
+
+def test_a_native_harness_needs_its_program(tmp_path):
+    with pytest.raises(SystemExit, match="--harness-binary"):
+        run_eval_lane.harness_setup("gaiacpp", None)
+    with pytest.raises(SystemExit, match="not a file"):
+        run_eval_lane.harness_setup("gaiacpp", tmp_path / "missing")
+
+
+def test_gaiacpp_is_found_where_the_daemon_looks_first(tmp_path):
+    binary = tmp_path / "gaiacpp"
+    binary.write_bytes(b"")
+    assert run_eval_lane.harness_setup("gaiacpp", binary) == {
+        "GAIA_GAIACPP_PATH": str(binary.resolve())
+    }
+
+
+def test_a_harness_not_yet_offered_is_named_for_the_eval_only():
+    # gaiacode can't run in this checkout yet, so the lane says so instead of
+    # quietly scoring another harness.
+    with pytest.raises(SystemExit, match="can't start gaiacode yet"):
+        run_eval_lane.harness_setup("gaiacode", None)
+
+
+def test_the_harness_is_written_beside_the_agent_model(tmp_path):
+    run_eval_lane.category_home(tmp_path / "gaia_code", tmp_path / "_staged")
+    run_eval_lane.write_agent_model(tmp_path / "gaia_code", "Gemma-4-E4B-it-GGUF")
+    run_eval_lane.write_config_keys(tmp_path / "gaia_code", flagship_agent="gaiacpp")
+
+    saved = json.loads((tmp_path / "gaia_code" / "config.json").read_text())
+    assert saved == {
+        "default_model": "Gemma-4-E4B-it-GGUF",
+        "flagship_agent": "gaiacpp",
+    }

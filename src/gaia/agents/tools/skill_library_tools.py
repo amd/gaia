@@ -65,6 +65,7 @@ this turn's query matched it.
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 from typing import Any, Dict, List, Set
 
@@ -92,6 +93,43 @@ SKILL_LIBRARY_TOOL_NAMES = (
 _CHARS_PER_TOKEN = 4
 
 _DOCS_URL = "https://amd-gaia.ai/docs/spec/agent-skills"
+
+
+#: "add the skill at C:/x/receipt-format", "install the skill from ~/skills/foo".
+_SKILL_AT_PATH = re.compile(
+    r"\b(?:add|install|capture|import)\b[^.?!\n]{0,30}?\bskill\b[^.?!\n]{0,20}?"
+    r"\b(?:at|from|in)\s+(?:([`'\"])((?:[A-Za-z]:[\\/]|~[\\/]|/)[^`'\"\n]+)\1"
+    r"|((?:[A-Za-z]:[\\/]|~[\\/]|/)[^\s`'\"]+))",
+    re.IGNORECASE,
+)
+_DONT = re.compile(r"\b(?:don'?t|do\s+not|never|not\s+yet)\b", re.IGNORECASE)
+#: Before the match in its sentence: a colon or open quote (pasted text) or "how".
+_NOT_ASKED = re.compile(r"[:\"`“]|(?:^|\s)'|\bhow\b", re.IGNORECASE)
+
+
+def uncaptured_skill_path(request: str, tools_called: Set[str]) -> str:
+    """The folder the user asked to add as a skill when capture_skill never ran, or ""."""
+    if "capture_skill" in tools_called:
+        return ""
+    from gaia.agents.base.memory import _own_words
+
+    match, text = None, ""
+    for part in _own_words(request or ""):
+        for found in _SKILL_AT_PATH.finditer(part):
+            # Pasted text or a how-to question names a path; it asks for nothing.
+            if not _NOT_ASKED.search(re.split(r"[.?!\n]", part[: found.start()])[-1]):
+                match, text = found, part
+                break
+        if match:
+            break
+    if not match:
+        return ""
+    # A "don't" near the request may hold it back; stay quiet rather than guess.
+    if _DONT.search(text[max(0, match.start() - 40) : match.start()]) or _DONT.search(
+        text[match.end() :]
+    ):
+        return ""
+    return (match.group(2) or match.group(3)).rstrip(".,;:)?!")
 
 
 def estimate_prompt_tokens(text: str) -> int:
@@ -333,6 +371,29 @@ class SkillLibraryToolsMixin:
                 "a terminal — do not claim it works."
             )
 
+        # What the model can call now, by name: "registered_tools: []" alone
+        # reads as "no tools" for a skill that uses the agent's own.
+        report = self.skill_tool_report(skill)
+        if report["available"]:
+            payload["tools_available"] = report["available"]
+            payload["tools_hint"] = (
+                "These tools are on your tool list now and stay there for this "
+                "chat. Call them directly, as the skill's instructions say."
+            )
+        unlisted = [*report["blocked"], *report["unlisted"]]
+        if unlisted:
+            payload["unavailable_tools"] = unlisted
+            unlisted_warning = (
+                f"Skill '{skill.name}' names tool(s) {', '.join(unlisted)}, "
+                "which are turned off or not on the tool list in this chat, so "
+                "you cannot call them. The parts of its instructions that use "
+                "them cannot run — say so instead of improvising a substitute."
+            )
+            existing = payload.get("warning")
+            payload["warning"] = (
+                f"{existing} {unlisted_warning}" if existing else unlisted_warning
+            )
+
         # tools_required is advisory at load time — the base loader logs the
         # gap and loads anyway, so surface it here or the model discovers it
         # mid-recipe as a missing tool.
@@ -433,6 +494,12 @@ class SkillLibraryToolsMixin:
                     "needs a larger model. Tell the user so; a skill they paste "
                     "or point to can still be added with capture_skill. "
                     f"See {_DOCS_URL}"
+                )
+            elif not hub_offered:
+                payload["hint"] = (
+                    "Searching and installing skills from the hub needs a larger "
+                    "model. If the user wants a skill not listed here, tell them "
+                    "so; they can switch to a larger model in the model list."
                 )
             return payload
 
@@ -743,6 +810,8 @@ class SkillLibraryToolsMixin:
         # Activation
         # ------------------------------------------------------------------
 
+        # A model not offered install_skill gets Agent._fit_load_skill_hint's
+        # ``name`` wording instead.
         @tool
         def load_skill(name: str) -> dict:
             """Activate an installed skill and show its full instructions now.

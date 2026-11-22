@@ -52,8 +52,10 @@ from gaia.daemon.constants import (
 )
 from gaia.daemon.sidecars import fetch
 from gaia.daemon.sidecars.errors import (
+    KIND_HARNESS_UNAVAILABLE,
     HealthTimeoutError,
     IntegrityError,
+    PlatformError,
     SidecarInhibitedError,
     SidecarNotRunningError,
     SidecarSpawnError,
@@ -61,6 +63,7 @@ from gaia.daemon.sidecars.errors import (
     VersionMismatchError,
 )
 from gaia.daemon.sidecars.spec import AgentSidecarSpec
+from gaia.harnesses import HarnessUnavailableError
 from gaia.logger import get_logger
 from gaia.utils.terminal import (
     background_popen_kwargs,
@@ -310,6 +313,11 @@ class AgentSidecarManager:
         # A dead PyInstaller bootloader can leave its server child on the port.
         return self._proc.poll() is None or self._tree_survives(self._proc.pid)
 
+    @property
+    def exited_unexpectedly(self) -> bool:
+        """Its process is gone though :meth:`shutdown` never ran: it crashed."""
+        return self._proc is not None and not self.is_running
+
     @staticmethod
     def _group_alive(pgid: int) -> bool:
         """POSIX: True while any process remains in group *pgid*.
@@ -384,9 +392,55 @@ class AgentSidecarManager:
     def __exit__(self, exc_type, exc, tb) -> None:
         self.shutdown()
 
+    def _native_flagship_command(self, port: int):
+        """The command for ``gaiacpp``, the agent the user chose in Settings."""
+        try:
+            binary = fetch.verified_native_flagship()
+        except IntegrityError as e:
+            raise SidecarSpawnError(
+                f"Cannot start the GAIA agent: {e} Or switch back to the Python "
+                f"agent in Settings › Agent & model. Sidecar logs: {self.log_dir}."
+            ) from e
+        if binary is None:
+            looked = ", ".join(str(p) for p in fetch.native_flagship_candidates())
+            raise SidecarSpawnError(
+                "Cannot start the GAIA agent: gaiacpp is chosen as the agent but "
+                f"it is not installed on this PC (looked in: {looked}). Download "
+                "it in Settings › Agent & model, or switch back to the Python "
+                f"agent there. Sidecar logs: {self.log_dir}."
+            )
+        try:
+            self.installed_binary_version = fetch.native_flagship_version(binary)
+        except PlatformError as e:
+            raise SidecarSpawnError(
+                f"Cannot start the GAIA agent: {e}. Switch back to the Python "
+                f"agent in Settings › Agent & model. Sidecar logs: {self.log_dir}."
+            ) from e
+        # A binary of its own: the dev-mode source launch does not apply to it.
+        self.resolved_mode = "user"
+        return [str(binary), "--host", self.host, "--port", str(port)], {}
+
     def build_spawn_command(self, *, port: int):
         if port == RESERVED_PORT:
             raise ValueError(f"port {RESERVED_PORT} is reserved and must never be used")
+        if self.spec.agent_id == fetch.FLAGSHIP_AGENT_ID:
+            try:
+                harness = fetch.chosen_flagship()
+            except HarnessUnavailableError as e:
+                raise SidecarSpawnError(
+                    f"Cannot start the GAIA agent: {e} Sidecar logs: {self.log_dir}.",
+                    kind=KIND_HARNESS_UNAVAILABLE,
+                ) from e
+            if harness == fetch.NATIVE_FLAGSHIP:
+                return self._native_flagship_command(port)
+            if harness != fetch.PYTHON_FLAGSHIP:
+                # Never let the Python agent answer for a harness with no launcher here.
+                raise SidecarSpawnError(
+                    f"Cannot start the GAIA agent: this version of GAIA has no way to "
+                    f"start {harness} yet. Choose another agent program in Settings › "
+                    f"Agent & model. Sidecar logs: {self.log_dir}.",
+                    kind=KIND_HARNESS_UNAVAILABLE,
+                )
         if self.mode == "user":
             try:
                 result = fetch.fetch_binary(

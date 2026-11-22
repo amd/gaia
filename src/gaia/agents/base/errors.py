@@ -21,7 +21,7 @@ FRAMEWORK_PATHS: Set[str] = {
     # Hub-migrated agents: wheel installs land under site-packages
     # (covered below); editable hub checkouts show as hub/agents/<id>/python/.
     "hub/agents/",
-    "gaia_agent/",
+    "gaiapy/",
     "site-packages/",
 }
 
@@ -126,65 +126,6 @@ def _raised_inside_getter(host: Any, attr_name: str, error: AttributeError) -> b
         and getattr(error, "obj", None) is host
     )
     return not lookup_failed
-
-
-def format_user_error(
-    exception: Exception,
-    context_lines: int = 2,
-) -> str:
-    """
-    Format an exception to show user's code with visual pointer.
-
-    Filters out framework internals, shows only user code frames
-    with source context around the error line.
-
-    Args:
-        exception: The caught exception
-        context_lines: Lines of code context before/after error
-
-    Returns:
-        Formatted error string with traceback and code pointer
-
-    Example output:
-        KeyError: 'data'
-
-        Traceback (most recent call last):
-          File "my_agent.py", line 39, in get_big_llms
-              37 | url = f"{base_url}/models?show_all=true"
-              38 | response = requests.get(url, timeout=60)
-          >>> 39 | models = response.json()["data"]
-              40 |
-              41 | top_5_models = sorted(
-    """
-    lines = []
-    lines.append(f"{type(exception).__name__}: {exception}")
-    lines.append("")
-
-    # Extract traceback frames
-    tb = traceback.extract_tb(exception.__traceback__)
-    user_frames = _filter_user_frames(tb)
-
-    if not user_frames:
-        # No user frames found, show last frame as fallback
-        if tb:
-            user_frames = [tb[-1]]
-        else:
-            return "\n".join(lines)
-
-    lines.append("Traceback (most recent call last):")
-
-    for frame in user_frames:
-        lines.append(f'  File "{frame.filename}", line {frame.lineno}, in {frame.name}')
-
-        # Show code context
-        if frame.lineno is not None:
-            code_context = _get_code_context(
-                frame.filename, frame.lineno, context_lines
-            )
-            if code_context:
-                lines.append(code_context)
-
-    return "\n".join(lines)
 
 
 def format_execution_trace(

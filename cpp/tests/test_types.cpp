@@ -1,6 +1,7 @@
 // Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 // SPDX-License-Identifier: MIT
 
+#include "support/unique_temp.h"
 #include <gtest/gtest.h>
 #include <gaia/types.h>
 
@@ -73,7 +74,7 @@ TEST(TypesTest, ParamTypeToString) {
 
 TEST(TypesTest, AgentConfigDefaults) {
     AgentConfig config;
-    EXPECT_EQ(config.maxSteps, 20);
+    EXPECT_EQ(config.maxSteps, 50);
     EXPECT_EQ(config.maxPlanIterations, 3);
     EXPECT_EQ(config.maxConsecutiveRepeats, 4);
     EXPECT_EQ(config.contextSize, 16384);
@@ -108,7 +109,7 @@ TEST(TypesTest, AgentConfigToJson) {
     EXPECT_EQ(j["maxTokens"], 8192);
     EXPECT_DOUBLE_EQ(j["temperature"].get<double>(), 0.5);
     EXPECT_EQ(j["debug"], true);
-    EXPECT_EQ(j["maxSteps"], 20);
+    EXPECT_EQ(j["maxSteps"], 50);
     EXPECT_EQ(j["contextSize"], 16384);
 }
 
@@ -137,9 +138,52 @@ TEST(TypesTest, AgentConfigFromJsonPartial) {
     AgentConfig config = AgentConfig::fromJson(j);
     EXPECT_EQ(config.maxTokens, 512);
     EXPECT_TRUE(config.debug);
-    EXPECT_EQ(config.maxSteps, 20);           // default
+    EXPECT_EQ(config.maxSteps, 50);           // default
     EXPECT_EQ(config.contextSize, 16384);     // default
     EXPECT_DOUBLE_EQ(config.temperature, 0.7); // default
+}
+
+TEST(TypesTest, AgentConfigNeverSerializesApiKey) {
+    AgentConfig config;
+    config.apiKey = "sk-secret";
+    config.apiKeyEnv = "MY_KEY";
+    const std::string dumped = config.toJson().dump();
+    EXPECT_EQ(dumped.find("sk-secret"), std::string::npos);
+    EXPECT_EQ(config.toJson()["apiKeyEnv"], "MY_KEY");
+}
+
+TEST(TypesTest, AgentConfigRejectsApiKeyInFile) {
+    json j;
+    j["apiKey"] = "sk-secret";
+    EXPECT_THROW(AgentConfig::fromJson(j), std::invalid_argument);
+}
+
+TEST(TypesTest, ResolveApiKeyOrder) {
+    AgentConfig config;
+    config.apiKey = "direct";
+    EXPECT_EQ(resolveApiKey(config), "direct");
+
+    config.apiKey.clear();
+    config.apiKeyEnv = "GAIA_TEST_UNSET_KEY_VAR_12345";
+    EXPECT_THROW(resolveApiKey(config), std::invalid_argument);
+
+#ifndef _WIN32
+    setenv("LEMONADE_API_KEY", "lemonade-key", 1);
+    unsetenv("GAIA_API_KEY");
+    config.apiKeyEnv.clear();
+    config.baseUrl = "http://127.0.0.1:13305/api/v1";
+    EXPECT_EQ(resolveApiKey(config), "lemonade-key");
+    config.baseUrl = "https://api.example.com/v1";
+    EXPECT_EQ(resolveApiKey(config), "") << "the local Lemonade key must not leave the machine";
+    config.baseUrl = "http://127.evil.example/v1";
+    EXPECT_EQ(resolveApiKey(config), "");
+    unsetenv("LEMONADE_API_KEY");
+
+    setenv("GAIA_TEST_KEY_VAR", "from-env", 1);
+    config.apiKeyEnv = "GAIA_TEST_KEY_VAR";
+    EXPECT_EQ(resolveApiKey(config), "from-env");
+    unsetenv("GAIA_TEST_KEY_VAR");
+#endif
 }
 
 TEST(TypesTest, AgentConfigValidateEmptyBaseUrl) {
@@ -185,7 +229,7 @@ TEST(TypesTest, AgentConfigFromJsonFileNotFound) {
 
 TEST(TypesTest, AgentConfigFromJsonFileMalformed) {
     // Write a temp file with invalid JSON
-    std::string tmpPath = (std::filesystem::temp_directory_path() / "gaia_test_malformed.json").string();
+    std::string tmpPath = (std::filesystem::temp_directory_path() / testsupport::perProcess("gaia_test_malformed.json")).string();
     {
         std::ofstream f(tmpPath);
         f << "{ invalid json }";
@@ -195,7 +239,7 @@ TEST(TypesTest, AgentConfigFromJsonFileMalformed) {
 }
 
 TEST(TypesTest, AgentConfigFromJsonFileValid) {
-    std::string tmpPath = (std::filesystem::temp_directory_path() / "gaia_test_valid.json").string();
+    std::string tmpPath = (std::filesystem::temp_directory_path() / testsupport::perProcess("gaia_test_valid.json")).string();
     {
         std::ofstream f(tmpPath);
         f << R"({"maxSteps": 5, "maxTokens": 1024, "temperature": 0.3})";
@@ -360,4 +404,19 @@ TEST(TypesTest, ParsedResponseDefaults) {
     EXPECT_FALSE(parsed.toolName.has_value());
     EXPECT_FALSE(parsed.toolArgs.has_value());
     EXPECT_FALSE(parsed.plan.has_value());
+}
+
+TEST(TypesTest, AToolResultWithNoCallIdIsSentAsAUserMessage) {
+    Message msg;
+    msg.role = MessageRole::TOOL;
+    msg.content = "{\"ok\":true}";
+    msg.name = "read_file";
+    json j = msg.toJson();
+    EXPECT_EQ(j["role"], "user");
+    EXPECT_EQ(j["content"], "[Result from read_file]: {\"ok\":true}");
+    EXPECT_FALSE(j.contains("tool_call_id"));
+    EXPECT_FALSE(j.contains("name"));
+
+    msg.name.reset();
+    EXPECT_EQ(msg.toJson()["content"], "[Result from tool]: {\"ok\":true}");
 }

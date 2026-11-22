@@ -27,8 +27,8 @@ RAGToolsMixin provides comprehensive document retrieval and query capabilities f
 
 **Search Strategy:**
 1. Semantic embeddings search with multiple query reformulations
-2. Keyword boost for exact term matches
-3. Hash-based deduplication
+2. Keyword ranking fused with the semantic ranking by reciprocal rank fusion
+3. Deduplication by chunk text during rank fusion
 4. Adaptive max chunks (5-25) based on document size
 5. Page number extraction with lookback for citation
 
@@ -52,7 +52,7 @@ attribute (see below):
 | `self.session_manager` | any, or `None` | `None` is a valid, expected value. |
 
 Nothing sets these for you — not the base `Agent` class, not `RAGToolsMixin`
-itself. `ChatAgent` ([`hub/agents/gaia/python/gaia_agent/chat_agent.py`](https://github.com/amd/gaia/blob/main/hub/agents/gaia/python/gaia_agent/chat_agent.py))
+itself. `ChatAgent` ([`hub/agents/gaia/python/gaiapy/chat_agent.py`](https://github.com/amd/gaia/blob/main/hub/agents/gaia/python/gaiapy/chat_agent.py))
 is the reference implementation: it sets all five before calling
 `super().__init__()`, because `_register_tools()` runs inside that call. The
 [custom agent guide](/guides/custom-agent) shows the same pattern for a
@@ -96,7 +96,7 @@ analysis.
 
 1. **Document Query (query_documents)**
    - Multi-key semantic search with reformulation
-   - Keyword boost for exact matches
+   - Keyword ranking fused with the semantic ranking (reciprocal rank fusion)
    - Adaptive chunk limits (5-25 based on doc size)
    - Page extraction for citations
    - Debug mode with full retrieval metrics
@@ -147,7 +147,7 @@ cache is locked keeps the `index_document` tool's `error_type` and its
 ### Non-Functional Requirements
 
 1. **Performance**
-   - Hash-based deduplication (O(1) instead of O(N))
+   - Deduplication by chunk text during rank fusion (O(1) instead of O(N))
    - Adaptive chunk limits prevent context overflow
    - Cached text reuse (no VLM re-extraction)
    - Timeout handling for long summarizations
@@ -215,8 +215,8 @@ class RAGToolsMixin:
         Hybrid search strategy:
         1. Generate multiple search keys (reformulations)
         2. Semantic embeddings search for each key
-        3. Keyword boost for exact term matches
-        4. Hash-based deduplication
+        3. Keyword ranking fused with the semantic ranking by reciprocal rank fusion
+        4. Deduplication by chunk text during rank fusion
         5. Sort by score, take adaptive top-N
 
         When the search fails for every key, the result is an error and no
@@ -439,7 +439,7 @@ class RAGToolsMixin:
     @tool
     def summarize_document(
         file_path: str,
-        summary_type: str = "detailed",
+        summary_type: Literal["brief", "detailed", "bullets"] = "detailed",
         max_words_per_section: int = 20000
     ) -> Dict[str, Any]:
         """
@@ -514,20 +514,21 @@ for search_key in search_keys:
     all_chunks.extend(chunks)
     all_scores.extend(scores)
 
-# 2. Keyword boost: the five best matches in any language, scored 0.6-0.9.
-# Rare words count for more, and query words side by side in a chunk count again.
-# Each chunk's words are read once and kept until the chunk list changes.
+# 2. Keyword ranking: every keyword hit, ranked by term rarity and
+# proximity, then fused with the semantic ranking by reciprocal rank
+# fusion (each list contributes 1 / (k + rank), k = 60); a chunk both
+# rankings like scores from both. Fused scores are rescaled to 0-1.
 keywords = keyword_index(self.rag)
-for chunk_idx, boost_score, _words in keywords.rank(query):
-    all_chunks.append(keywords.texts[chunk_idx])
-    all_scores.append(boost_score)
+for chunk_idx, _boost_score, _words in keywords.rank(
+    query, limit=_adaptive_max(len(self.rag.chunks), self.max_chunks)
+):
+    keyword_chunks.append(keywords.texts[chunk_idx])
+sorted_items = _fuse_dense_and_keyword(dense_ranked, keyword_chunks)
 
-# 3. Hash-based deduplication (O(1))
+# 3. Deduplication by chunk text (dict key) during fusion
 unique_chunks = {}
-for chunk, score in zip(all_chunks, all_scores):
-    chunk_hash = hash(chunk)
-    if chunk_hash not in unique_chunks or unique_chunks[chunk_hash][1] < score:
-        unique_chunks[chunk_hash] = (chunk, score)
+for chunk, score in sorted_items:
+    unique_chunks[chunk] = max(unique_chunks.get(chunk, 0.0), score)
 
 # 4. Adaptive max chunks
 total_chunks = len(self.rag.chunks)
@@ -563,10 +564,10 @@ final_summary = self.rag.chat.send(synthesis_prompt).text
 
 ## Testing Requirements
 
-**File:** `tests/agents/chat/test_rag_tools_mixin.py`
+**File:** `tests/unit/test_rag_tools.py`
 
 Key test scenarios:
-- Hybrid search with keyword boost
+- Hybrid search with keyword ranking fused by reciprocal rank fusion
 - Per-file targeted search
 - Exact text search in chunks
 - Retrieval evaluation metrics

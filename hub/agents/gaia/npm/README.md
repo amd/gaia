@@ -79,7 +79,7 @@ reply; the bundled `inbox-triage` skill does the triage judgment on top of them.
 The bundled `send-email` skill drafts, replies, forwards and sends, and asks
 before anything leaves the mailbox. The agent never archives, labels or deletes
 received mail, and every email body is read by the local model. Gemma 4 E4B
-(GPU or NPU) is not offered the mail tools; a larger model is. Setup and the
+(GPU or NPU) and the small Qwen3.5 models are not offered the mail tools; a larger model is. Setup and the
 full tool list:
 [Email guide](https://amd-gaia.ai/docs/guides/email).
 
@@ -170,10 +170,10 @@ curl http://127.0.0.1:8141/health
 It waits for `GET /health`, checks the contract version, and tears the whole
 process tree down on Ctrl+C. See [`SPEC.md`](./SPEC.md) for the endpoints.
 
-The sidecar normally requires a per-session bearer token on `/v1/gaia/*`, but
-neither `serve` nor `startSidecar` mints one, so both leave it in dev mode — the
-token check off, `Host`/`Origin` still enforced. This agent has shell and file
-tools, so before you expose it to anything, supply a token of your own: see
+Every `/v1/gaia/*` request needs the per-session bearer token, and the sidecar
+refuses to start without one. `serve` and `startSidecar` mint a fresh token for
+each start and hand it to the sidecar in a `0600` file; `serve` prints that
+file's path, and `startSidecar` returns the token as `authToken`. See
 [`SPEC.md` §5.4](./SPEC.md#54-caller-authentication).
 
 ## Programmatic use
@@ -189,7 +189,10 @@ const sessionId = randomUUID(); // reuse across the whole conversation, see belo
 
 const res = await fetch(`${proc.baseUrl}/v1/gaia/query`, {
   method: "POST",
-  headers: { "content-type": "application/json" },
+  headers: {
+    "content-type": "application/json",
+    authorization: `Bearer ${proc.authToken}`,
+  },
   body: JSON.stringify({
     query: "summarize my notes",
     run_id: randomUUID(),
@@ -203,6 +206,13 @@ await shutdown(proc);
 
 `/v1/gaia/query` streams Server-Sent Events terminated by exactly one `final` or
 `error`. `fetchAll()` also returns the TUI's path if you would rather launch that.
+
+**Want a researched, cited report?** Start the query with `/research`, as in
+`"query": "/research the history of RISC-V"`. The agent loads its
+`research-report` skill for the turn and answers with a report that links every
+claim to a page it fetched. Before the answer is final, every cited link is
+checked against the pages the agent opened; any it could not back is listed
+under the report. See [`SPEC.md` §5.1](./SPEC.md#query-request-body).
 
 **Reuse the same `session_id` for every turn in a conversation.** It is what
 lets a document you had it index, or a skill you had it load, survive to the
@@ -256,8 +266,8 @@ event's `args` are exactly the arguments the model sent for the gated call,
 each value capped at 64,000 characters; `args_truncated: true` means one was
 cut, so don't auto-approve that call. What the agent adds to its own prompt —
 the folder a shell call runs in, a risk note, the full path of a relative
-write — comes in `prompt_context`, never
-in `args`. See [`SPEC.md` §5.1](./SPEC.md#51-endpoints).
+write, the content of a Python file it asks to run — comes in
+`prompt_context`, never in `args`. See [`SPEC.md` §5.1](./SPEC.md#51-endpoints).
 
 **Serving the turn from the Agent UI? Send `surface: "agent_ui"`** (contract ≥
 2.20), and the agent points recurring requests at the **Scheduled tasks** page
@@ -284,6 +294,12 @@ never silently replaces the old one. While the server restarts, `status` lines
 carry phase `model_restart`, also when it stopped under a tool's own model
 calls (a long document extraction, say), which report each page with phase
 `reading` ("Reading page 4 of 12…").
+
+**A checked answer replaces the first one.** When GAIA checks its answer at the
+end of a turn and writes it again, a `status` with `retracts_answer: true`
+(phase `answer_check`) comes before the new text or the check's next tool
+call: drop the `token` text since the last tool call, so the turn shows one
+answer. A check that keeps the answer sends no retraction.
 
 **Showing how full the model's window is?** From contract 2.21 the `final`
 event carries `context`: the window size, the tokens the next call will take,

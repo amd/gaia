@@ -206,7 +206,7 @@ class TestDefaultPick:
         [
             (STRIX_HALO_128, lc.LARGE_DEFAULT_MODEL_NAME),
             (STRIX_HALO_64, lc.LARGE_DEFAULT_MODEL_NAME),
-            (MAC_M4, lc.DEFAULT_MODEL_NAME),
+            (MAC_M4, lc.TINY_DEFAULT_MODEL_NAME),
         ],
     )
     def test_recommend_reads_lemonade(self, info, expected):
@@ -221,7 +221,247 @@ class TestDefaultPick:
         assert model_id == expected
 
 
+def _windows_laptop(ram_gb: float, carve_out_gb: float) -> dict:
+    """An AMD APU laptop on Windows: Lemonade reports installed RAM."""
+    return {
+        "Physical Memory": f"{ram_gb} GB",
+        "OS Version": "Windows 11 Pro",
+        "devices": {
+            "amd_gpu": [
+                {
+                    "available": True,
+                    "integrated": True,
+                    "vram_gb": carve_out_gb,
+                    "virtual_mem_gb": (ram_gb - carve_out_gb) / 2,
+                }
+            ]
+        },
+        "model_storage": {"free_bytes": 500e9},
+    }
+
+
+def _fake_lemonade(info):
+    class FakeClient:
+        def get_system_info(self, timeout=None):
+            return info
+
+        def health_check(self):
+            return {"version": "2026.44.1"}
+
+    return FakeClient()
+
+
+class TestTiers:
+    """Which default each size of PC gets, from 8 GB to 128 GB."""
+
+    @pytest.mark.parametrize(
+        "info,expected",
+        [
+            (_windows_laptop(8, 0.5), lc.TINY_DEFAULT_MODEL_NAME),
+            (_windows_laptop(12, 0.5), lc.TINY_DEFAULT_MODEL_NAME),
+            (_windows_laptop(16, 0.5), lc.TINY_DEFAULT_MODEL_NAME),
+            (_windows_laptop(16, 4), lc.TINY_DEFAULT_MODEL_NAME),
+            (_windows_laptop(24, 1), lc.DEFAULT_MODEL_NAME),
+            (_windows_laptop(32, 2), lc.DEFAULT_MODEL_NAME),
+            (STRIX_HALO_64, lc.LARGE_DEFAULT_MODEL_NAME),
+            (STRIX_HALO_128, lc.LARGE_DEFAULT_MODEL_NAME),
+            ({"Physical Memory": "8 GB", "devices": {}}, lc.TINY_DEFAULT_MODEL_NAME),
+            ({"Physical Memory": "16 GB", "devices": {}}, lc.TINY_DEFAULT_MODEL_NAME),
+            (CPU_ONLY, lc.DEFAULT_MODEL_NAME),
+            (MAC_M4, lc.TINY_DEFAULT_MODEL_NAME),
+        ],
+        ids=[
+            "8GB-laptop",
+            "12GB-laptop",
+            "16GB-laptop",
+            "16GB-laptop-4GB-carve-out",
+            "24GB-laptop",
+            "32GB-laptop",
+            "64GB-strix-halo",
+            "128GB-strix-halo",
+            "8GB-cpu-only",
+            "16GB-cpu-only",
+            "32GB-cpu-only",
+            "16GB-mac",
+        ],
+    )
+    def test_default_per_machine(self, info, expected):
+        model_id, _, _ = lc.recommend_default_chat_model(_fake_lemonade(info))
+        assert model_id == expected
+
+    def test_gemma_fits_a_16gb_laptop_but_is_passed_over_for_headroom(self):
+        """It would load, but leave the OS and other apps too little."""
+        info = _windows_laptop(16, 4)
+        cap = capacity_from_system_info(info)
+        gemma = lc.find_model_requirement(lc.DEFAULT_MODEL_NAME)
+        assert check_fit(gemma.size_gb, cap, lc.kv_cache_for(gemma, cap)).fits
+        _, skipped, _ = lc.recommend_default_chat_model(_fake_lemonade(info))
+        reasons = dict(skipped)
+        assert "once 10 GB is kept for other apps" in reasons[lc.DEFAULT_MODEL_NAME]
+        assert (
+            "once 10 GB is kept for other apps" in reasons[lc.SMALL_DEFAULT_MODEL_NAME]
+        )
+
+    def test_a_12gb_card_with_16gb_of_ram_gets_gemma(self):
+        """The model sits in the card's memory, so the RAM rule does not apply."""
+        info = {
+            "Physical Memory": "16 GB",
+            "OS Version": "Windows 11 Pro",
+            "devices": {
+                "amd_gpu": [{"available": True, "integrated": False, "vram_gb": 12.0}]
+            },
+        }
+        model_id, _, _ = lc.recommend_default_chat_model(_fake_lemonade(info))
+        assert model_id == lc.DEFAULT_MODEL_NAME
+
+    def test_a_dgpu_too_small_for_gemma_gets_the_4b(self):
+        info = {
+            "Physical Memory": "32 GB",
+            "devices": {
+                "amd_gpu": [{"available": True, "integrated": False, "vram_gb": 8.0}]
+            },
+        }
+        model_id, _, _ = lc.recommend_default_chat_model(_fake_lemonade(info))
+        assert model_id == lc.SMALL_DEFAULT_MODEL_NAME
+
+    def test_unreadable_memory_keeps_the_old_default(self):
+        model_id, skipped, cap = lc.recommend_default_chat_model(
+            _fake_lemonade({"devices": {}})
+        )
+        assert model_id == lc.DEFAULT_MODEL_NAME and cap is None
+        assert lc.DEFAULT_MODEL_NAME not in dict(skipped)
+
+    def test_small_defaults_think_off_and_stay_at_64k(self):
+        for model_id in (lc.SMALL_DEFAULT_MODEL_NAME, lc.TINY_DEFAULT_MODEL_NAME):
+            mr = lc.find_model_requirement(model_id)
+            assert mr.thinking is False and mr.feature_tier == "compact"
+            assert not mr.scales_with_memory
+            cap = capacity_from_system_info(STRIX_HALO_128)
+            assert lc.context_for_capacity(mr, cap) == lc.GPU_CTX_SIZE
+            assert lc.no_thinking_kwargs(model_id) == {
+                "chat_template_kwargs": {"enable_thinking": False}
+            }
+            assert lc.local_sampling_defaults(model_id, False)["temperature"] == 0.7
+
+
+class TestInstalledRam:
+    def test_windows_reports_installed_ram(self):
+        cap = capacity_from_system_info(_windows_laptop(16, 4))
+        assert cap.installed_ram_gb == 16
+
+    def test_linux_adds_the_apu_carve_out_back(self):
+        """Linux reports MemTotal, which the BIOS carve-out is already out of."""
+        info = {
+            "Physical Memory": "28 GB",
+            "OS Version": "Ubuntu 24.04",
+            "devices": {
+                "amd_gpu": [
+                    {
+                        "available": True,
+                        "integrated": True,
+                        "vram_gb": 4.0,
+                        "virtual_mem_gb": 14.0,
+                    }
+                ]
+            },
+        }
+        cap = capacity_from_system_info(info)
+        assert cap.installed_ram_gb == 32
+        model_id, _, _ = lc.recommend_default_chat_model(_fake_lemonade(info))
+        assert model_id == lc.DEFAULT_MODEL_NAME
+
+    def test_a_dgpu_keeps_its_whole_pool(self):
+        """The model sits in the card's own memory, not the apps' RAM."""
+        cap = capacity_from_system_info(DGPU)
+        assert model_fit.app_reserve_gb(cap) == 0
+        assert model_fit.with_app_headroom(cap) == cap
+
+
+class TestAppHeadroom:
+    """Where a model shares the PC's RAM, other apps keep max(10 GB, 25%)."""
+
+    @pytest.mark.parametrize(
+        "info,kept,budget",
+        [
+            (_windows_laptop(8, 0.5), 10, 0),
+            (_windows_laptop(16, 4), 10, 6),
+            (_windows_laptop(32, 2), 10, 17),
+            ({"Physical Memory": "16 GB", "devices": {}}, 10, 6),
+            ({"Physical Memory": "64 GB", "devices": {}}, 16, 48),
+            (MAC_M4, 10, 6),
+        ],
+        ids=["8GB-laptop", "16GB-laptop", "32GB-laptop", "16GB-cpu", "64GB-cpu", "mac"],
+    )
+    def test_budget(self, info, kept, budget):
+        cap = model_fit.with_app_headroom(capacity_from_system_info(info))
+        assert cap.kept_for_apps_gb == pytest.approx(kept)
+        assert cap.memory_gb == pytest.approx(budget)
+
+    def test_applying_it_twice_changes_nothing(self):
+        cap = model_fit.with_app_headroom(
+            capacity_from_system_info(_windows_laptop(16, 4))
+        )
+        assert model_fit.with_app_headroom(cap) == cap
+
+    def test_unknown_ram_keeps_the_pool(self):
+        info = _windows_laptop(16, 4)
+        del info["Physical Memory"]
+        info["devices"]["amd_gpu"][0]["virtual_mem_gb"] = 6.0
+        cap = capacity_from_system_info(info)
+        assert model_fit.with_app_headroom(cap) == cap
+
+    def test_a_window_grows_only_into_what_apps_can_spare(self):
+        """Qwen3.6 on a 64 GB Windows Strix Halo: 48 GB once 16 GB is kept."""
+        info = {**STRIX_HALO_64, "OS Version": "Windows 11 Pro"}
+        cap = capacity_from_system_info(info)
+        roomy = model_fit.with_app_headroom(cap)
+        assert roomy.memory_gb == pytest.approx(48)
+        window = lc.context_for_capacity(QWEN, cap)
+        need = model_fit.required_memory_gb(QWEN.size_gb) + model_fit.kv_cache_gb(
+            QWEN.kv_bytes_per_token, window
+        )
+        assert need <= roomy.memory_gb
+        assert window == QWEN.max_ctx_size
+
+    def test_a_report_without_an_os_is_not_counted_twice(self):
+        """Only Linux leaves the carve-out out of Physical Memory."""
+        info = _windows_laptop(16, 4)
+        del info["OS Version"]
+        assert capacity_from_system_info(info).installed_ram_gb == 16
+        model_id, _, _ = lc.recommend_default_chat_model(_fake_lemonade(info))
+        assert model_id == lc.TINY_DEFAULT_MODEL_NAME
+
+
 class TestResolveDefault:
+    @pytest.mark.parametrize(
+        "saved,expected",
+        [
+            ("Qwen3.5-2B-GGUF", "Qwen3.5-2B-GGUF"),
+            ("claude-sonnet-4-6", "Gemma-4-E4B-it-GGUF"),
+            ("fireworks.glm-5p3-flash", "Gemma-4-E4B-it-GGUF"),
+            (None, "Gemma-4-E4B-it-GGUF"),
+        ],
+    )
+    def test_lemonade_only_callers_get_a_local_model(self, saved, expected):
+        """A Claude or cloud default is not something Lemonade can load."""
+        cfg = GaiaConfig()
+        cfg.default_model = saved
+        cfg.save()
+        assert lc.resolve_local_chat_model() == expected
+
+    def test_sdk_configs_default_to_the_local_model(self):
+        from gaia.chat.sdk import AgentConfig
+        from gaia.rag.sdk import RAGConfig
+
+        cfg = GaiaConfig()
+        cfg.default_model = lc.TINY_DEFAULT_MODEL_NAME
+        cfg.save()
+        assert AgentConfig().model == lc.TINY_DEFAULT_MODEL_NAME
+        assert RAGConfig().model == lc.TINY_DEFAULT_MODEL_NAME
+        cfg.default_model = "claude-sonnet-4-6"
+        cfg.save()
+        assert AgentConfig().model == lc.DEFAULT_MODEL_NAME
+
     def test_unset_config_is_gemma(self):
         assert lc.resolve_default_chat_model() == lc.DEFAULT_MODEL_NAME
 
@@ -420,6 +660,8 @@ class TestTuiDrift:
             doc["fit"]["windows_igpu_shared_ram_fraction"]
             == model_fit.WINDOWS_IGPU_SHARED_RAM_FRACTION
         )
+        assert doc["fit"]["app_reserve_min_gb"] == model_fit.APP_RESERVE_MIN_GB
+        assert doc["fit"]["app_reserve_fraction"] == model_fit.APP_RESERVE_FRACTION
 
     def test_custom_registrations_match_the_python_registry(self, doc):
         custom = [m for m in doc["models"] if m.get("register_as")]
@@ -437,10 +679,16 @@ class TestTuiDrift:
             assert entry["size_gb"] == mr.size_gb
             assert "min_lemonade_version" not in entry
 
-    def test_both_defaults_are_recommended(self, doc):
-        local = {m["id"] for m in doc["models"] if m["provider"] == "local"}
-        assert lc.DEFAULT_MODEL_NAME in local
-        assert lc.LARGE_DEFAULT_MODEL_NAME in local
+    def test_the_floor_is_marked_and_is_the_ladders_last(self, doc):
+        floors = [m["id"] for m in doc["models"] if m.get("floor")]
+        assert floors == [lc.DEFAULT_MODEL_LADDER[-1]]
+
+    def test_every_default_is_recommended_in_ladder_order(self, doc):
+        """Every tier's default is offered, largest first, as the ladder walks."""
+        local = [m["id"] for m in doc["models"] if m["provider"] == "local"]
+        assert all(m in local for m in lc.DEFAULT_MODEL_LADDER)
+        positions = [local.index(m) for m in lc.DEFAULT_MODEL_LADDER]
+        assert positions == sorted(positions)
 
     def test_fit_inputs_match_the_python_registry(self, doc):
         """The TUI's fit check must judge a model as Python does."""

@@ -188,11 +188,11 @@ The server exposes **two** document upload endpoints, each for a different sourc
 | Endpoint | Input | Used By | Storage |
 |----------|-------|---------|---------|
 | `POST /api/documents/upload-path` | JSON `{filepath}` — absolute server-side path | File browser (user picks an existing file) | Indexes in place; server does NOT own the file |
-| `POST /api/documents/upload` | `multipart/form-data` file blob | Drag-and-drop in browser mode / modern Electron | File is persisted under `$GAIA_HOME/documents/<name>.<ext>`, or `<id>_<name>.<ext>` when that name is taken (default `~/.gaia/documents/`) and owned by the server |
+| `POST /api/documents/upload` | `multipart/form-data` file blob | Drag-and-drop in browser mode / modern Electron | File is persisted under `$GAIA_HOME/chat/documents/<name>.<ext>`, or `<id>_<name>.<ext>` when that name is taken (default `~/.gaia/chat/documents/`) and owned by the server. Only a chat it is attached to can read it |
 
 The blob endpoint exists because browser `File` objects never expose a filesystem path, and since Electron 32 `File.path` has been removed as well (see issue [#728](https://github.com/amd/gaia/issues/728)). It streams the upload with a running size check (capped at 20 MB), computes a SHA-256 hash, short-circuits on dedup by hash, and only then promotes the file into the managed directory via an atomic `os.replace`. On failure, partial and orphan files are cleaned up.
 
-When a server-owned document is deleted (`DELETE /api/documents/{id}`), the on-disk file under `$GAIA_HOME/documents/` is also unlinked as a best-effort cleanup. User-owned files from `upload-path` are left untouched.
+When a server-owned document is deleted (`DELETE /api/documents/{id}`), the on-disk file under `$GAIA_HOME/chat/documents/` (or, for a document uploaded before 0.27 whose copy hasn't moved yet, `$GAIA_HOME/documents/`) is also unlinked as a best-effort cleanup. User-owned files from `upload-path` are left untouched.
 
 ### Cascade Deletes
 
@@ -262,11 +262,12 @@ All 14 Pydantic models:
 
 ## Security Considerations
 
+- **API token:** Every `/api/*` and `/v1/*` request needs the per-install token in `<GAIA home>/agent-ui-token` (created 0600 on first start), as `Authorization: Bearer` or the HttpOnly, `SameSite=Strict` `gaia_ui_token` cookie, local callers included. Only `GET /api/health` (no user data) and CORS preflights are exempt. A browser is signed in by a single-use, 10-minute `/?launch=<code>` link; over mobile access the tunnel token is accepted instead. Enforced in `ApiTokenMiddleware` (`gaia/ui/security.py`), so a new route is covered on the day it lands. See [Security](/sdk/sdks/agent-ui#api-token)
 - **CSRF:** Every mutating (`POST`/`PUT`/`PATCH`/`DELETE`) request to `/api/*` or `/v1/*` must carry `X-Gaia-UI: 1`. A page cannot set a custom header cross-origin without a CORS preflight, and preflights are approved only from GAIA's own origins — so a site the user visits cannot drive the backend. Enforced in `UIRequestGuardMiddleware` (`gaia/ui/security.py`), not per route, so a new route is covered on the day it lands
 - **Origin:** A mutating request whose `Origin` is neither this server, loopback, nor the live tunnel is refused with 403. Extend with `GAIA_UI_ALLOWED_ORIGINS` (comma-separated) when fronting the backend with a proxy
 - **Host:** A request whose `Host` is a name the server does not know is refused with 400, which blocks DNS rebinding. IP literals and loopback names always pass, so `--host 0.0.0.0` LAN access keeps working; add named hosts with `GAIA_UI_ALLOWED_HOSTS`
 - **CORS:** An allowlist of localhost dev origins. No tunnel origin is listed: the mobile flow serves the SPA *from* the tunnel, so those requests are same-origin and CORS never applies. The standalone server (`python -m gaia.ui.server`) binds to `localhost` by default
-- **No authentication:** Designed for single-user local use. Do not expose to untrusted networks
+- **Single user:** The token stands for the PC's user; there are no per-user accounts. Do not expose the backend to untrusted networks
 - **File path validation:** The `upload-path` endpoint sanitizes all user-provided paths:
   - Null byte rejection (prevents path injection)
   - Path resolution to absolute canonical paths (eliminates `..` traversal)

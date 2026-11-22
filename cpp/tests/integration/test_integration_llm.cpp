@@ -3,14 +3,14 @@
 //
 // C++ GAIA agent integration tests.
 // Requires: lemonade-server running at GAIA_CPP_BASE_URL (default: http://localhost:13305/api/v1)
-//           with GAIA_CPP_TEST_MODEL (default: Qwen3-4B-GGUF) loaded.
+//           with GAIA_CPP_TEST_MODEL (default: Qwen3-4B-Instruct-2507-GGUF) loaded.
 //
 // Build:
 //   cmake -B build -S cpp -DGAIA_BUILD_INTEGRATION_TESTS=ON
 //   cmake --build build --config Release
 //
 // Run:
-//   GAIA_CPP_TEST_MODEL=Qwen3-4B-GGUF ctest --test-dir build -C Release --output-on-failure
+//   GAIA_CPP_TEST_MODEL=Qwen3-4B-Instruct-2507-GGUF ctest --test-dir build -C Release --output-on-failure
 
 #include <gtest/gtest.h>
 #include <gaia/agent.h>
