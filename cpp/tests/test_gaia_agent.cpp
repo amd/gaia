@@ -588,26 +588,6 @@ TEST(GaiaAgentTest, ABareOutputIsNotLookedForInAFolderNobodyNamed) {
     EXPECT_EQ(t.mock.receivedBodies().size(), 3u);
 }
 
-TEST(GaiaAgentTest, CodeSearchHonorsGitignoreAndFindsCode) {
-    Workdir w;
-    fs::create_directories(w.path / "src");
-    fs::create_directories(w.path / "node_modules" / "dep");
-    std::ofstream(w.path / ".gitignore") << "generated/\n";
-    fs::create_directories(w.path / "generated");
-    std::ofstream(w.path / "src" / "net.py") << "def fetch_with_retries(url, max_retries=3):\n    pass\n";
-    std::ofstream(w.path / "node_modules" / "dep" / "x.js") << "function fetch_with_retries() {}\n";
-    std::ofstream(w.path / "generated" / "gen.py") << "fetch_with_retries = None\n";
-    bench::MockLlmServer mock;
-    GaiaAgent agent(cfgFor(mock), optionsFor(w));
-    json idx = agent.toolRegistry().executeTool("index_codebase", json{{"path", w.path.string()}});
-    ASSERT_EQ(idx["status"], "success") << idx.dump();
-    EXPECT_EQ(idx["files"], 1) << "node_modules and .gitignore'd folders are skipped";
-    json r = agent.toolRegistry().executeTool("search_code", json{{"query", "fetch_with_retries max_retries"}});
-    ASSERT_EQ(r["status"], "success");
-    ASSERT_FALSE(r["results"].empty());
-    EXPECT_NE(r["results"][0]["file"].get<std::string>().find("net.py"), std::string::npos);
-}
-
 // ---- compact models ----
 
 namespace {
@@ -632,8 +612,6 @@ TEST(GaiaAgentTest, ACompactModelGetsFewerToolsAndNoProseToolList) {
     agent.processQuery("hello");
     const json compactBody = json::parse(mock.receivedBodies().back());
     const auto compactTools = toolNamesIn(compactBody);
-    EXPECT_FALSE(has(compactTools, "git_status"));
-    EXPECT_FALSE(has(compactTools, "search_code"));
     EXPECT_FALSE(has(compactTools, "env_inspect"));
     EXPECT_TRUE(has(compactTools, "bash_execute"));
     EXPECT_TRUE(has(compactTools, "file_read"));
@@ -644,9 +622,20 @@ TEST(GaiaAgentTest, ACompactModelGetsFewerToolsAndNoProseToolList) {
     agent.setConfig(full);
     agent.processQuery("hello again");
     const json fullBody = json::parse(mock.receivedBodies().back());
-    EXPECT_TRUE(has(toolNamesIn(fullBody), "git_status")) << "the tier follows the config each turn";
+    EXPECT_TRUE(has(toolNamesIn(fullBody), "env_inspect")) << "the tier follows the config each turn";
     EXPECT_NE(fullBody["messages"][0]["content"].get<std::string>().find("AVAILABLE TOOLS"), std::string::npos);
     EXPECT_GT(fullBody.dump().size(), compactBody.dump().size() + 4000);
+}
+
+// Coding moved to gaiacode: gaiacpp offers no git or code-index tools on any tier.
+TEST(GaiaAgentTest, CarriesNoCodingTools) {
+    Workdir w;
+    bench::MockLlmServer mock;
+    GaiaAgent agent(cfgFor(mock), optionsFor(w));
+    for (const char* tool : {"git_status", "git_diff", "git_log", "git_show", "index_codebase",
+                             "search_code"}) {
+        EXPECT_FALSE(agent.toolRegistry().hasTool(tool)) << tool;
+    }
 }
 
 TEST(GaiaAgentTest, FeatureTierIsValidatedAndRoundTrips) {

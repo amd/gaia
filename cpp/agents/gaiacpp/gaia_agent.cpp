@@ -15,7 +15,6 @@
 #include <sstream>
 
 #include <gaia/file_tools.h>
-#include <gaia/git_tools.h>
 #include <gaia/media_tools.h>
 #include <gaia/model_registry.h>
 #include <gaia/security.h>
@@ -61,8 +60,6 @@ GaiaAgent::GaiaAgent(const AgentConfig& config, Options options)
             };
         }
         docs_ = std::make_unique<DocumentIndex>(embed, options_.embeddingModel);
-        // Code gets its own index so a document question never ranks source files.
-        code_ = std::make_unique<DocumentIndex>(embed, options_.embeddingModel, ChunkingConfig{200, 40});
     }
     init();
 }
@@ -73,7 +70,6 @@ void GaiaAgent::registerTools() {
     std::shared_ptr<const Workspace> ws;
     if (options_.fullAccess) {
         FileIOTools::registerAll(toolRegistry());
-        GitTools::registerAll(toolRegistry());
         toolRegistry().registerTool(BashTools::bashExecute(options_.shell));
         toolRegistry().registerTool(BashTools::envInspect());
     } else {
@@ -83,10 +79,6 @@ void GaiaAgent::registerTools() {
         reg.registerTool(Workspace::confine(FileIOTools::fileWrite(), ws, {"path"}));
         reg.registerTool(Workspace::confine(FileIOTools::fileEdit(), ws, {"path"}));
         reg.registerTool(Workspace::confine(FileIOTools::fileSearch(), ws, {"path"}));
-        reg.registerTool(Workspace::confine(GitTools::gitStatus(), ws, {"path"}));
-        reg.registerTool(Workspace::confine(GitTools::gitDiff(), ws, {"path"}));
-        reg.registerTool(Workspace::confine(GitTools::gitLog(), ws, {"path"}));
-        reg.registerTool(Workspace::confine(GitTools::gitShow(), ws, {"path"}));
         ToolInfo sh = Workspace::confineShell(BashTools::bashExecute(options_.shell), ws, "command",
                                               !BashTools::detectShell().empty());
         const std::shared_ptr<ShellSession> shell = options_.shell;
@@ -216,7 +208,6 @@ void GaiaAgent::registerTools() {
         if (why.empty()) return std::nullopt;
         return json{{"status", "error"}, {"error", why}, {"executed", false}};
     });
-    if (code_) registerCodeTools(ws);
     if (options_.vision) registerVisionTool(ws);
     {
         MediaToolsOptions m;
@@ -243,7 +234,7 @@ void GaiaAgent::registerTools() {
 }
 
 std::string GaiaAgent::getSystemPrompt() const {
-    return R"(You are GAIA, an AI agent running locally on the user's PC. You do real work for the user: you read and write files, analyze documents and data, write and fix code, and run programs. You work in the current directory unless the user names another place.
+    return R"(You are GAIA, an AI agent running locally on the user's PC. You do real work for the user: you read and write files, analyze documents and data, and run programs. Changing a code project and running its tests is the work of gaiacode, GAIA's coding harness: when a request is that, do what you can and tell the user gaiacode is built for it. You work in the current directory unless the user names another place.
 
 ## How to work
 1. Look before you answer. If the request names files or a folder, list and read them first. Never say a file or fact does not exist without checking.
@@ -560,59 +551,6 @@ std::string GaiaAgent::systemContext() const {
     }
 #endif
     return out.str();
-}
-
-void GaiaAgent::registerCodeTools(std::shared_ptr<const Workspace> ws) {
-    ToolInfo index;
-    index.name = "index_codebase";
-    index.description =
-        "Index a code project (default: the working folder) so search_code can find code by "
-        "meaning or keywords. Honors .gitignore and skips dependency and build folders.";
-    index.parameters = {{"path", ToolParamType::STRING, false, "Project folder."}};
-    index.policy = ToolPolicy::ALLOW;
-    index.callback = [this, ws](const json& a) -> json {
-        std::error_code ec;
-        const std::string root = a.value("path", fs::current_path(ec).u8string());
-        if (ws) {
-            const std::string why = ws->checkPath(root);
-            if (!why.empty()) return {{"status", "error"}, {"error", why}};
-        }
-        if (!fs::is_directory(root, ec)) return {{"status", "error"}, {"error", "Not a folder: " + root}};
-        std::vector<std::string> failed;
-        const size_t chunks = code_->indexDirectory(root, &failed);
-        json out = {{"status", chunks ? "success" : "error"}, {"files", code_->files().size()},
-                    {"chunks", chunks}};
-        if (!chunks) out["error"] = "No source files found under " + root;
-        if (!failed.empty()) out["failed"] = failed;
-        return out;
-    };
-    toolRegistry().registerTool(std::move(index));
-
-    ToolInfo search;
-    search.name = "search_code";
-    search.description =
-        "Find code that matches a description or identifiers (e.g. 'where are retries "
-        "configured'). Returns file paths and snippets. Index the codebase first.";
-    search.parameters = {{"query", ToolParamType::STRING, true, "What to find."},
-                         {"top_k", ToolParamType::INTEGER, false, "Snippets (default 8, max 25)."},
-                         {"file", ToolParamType::STRING, false, "Only files whose path contains this."}};
-    search.policy = ToolPolicy::ALLOW;
-    search.callback = [this](const json& a) -> json {
-        if (code_->files().empty()) {
-            return {{"status", "error"}, {"error", "The codebase isn't indexed yet. Call index_codebase first."}};
-        }
-        const size_t k = static_cast<size_t>(std::clamp<long long>(a.value("top_k", 8LL), 1, 25));
-        json results = json::array();
-        try {
-            for (const auto& h : code_->query(a.value("query", ""), k, a.value("file", ""))) {
-                results.push_back({{"file", h.chunk.file}, {"snippet", h.chunk.text}});
-            }
-        } catch (const std::exception& e) {
-            return {{"status", "error"}, {"error", std::string("Code search failed: ") + e.what()}};
-        }
-        return {{"status", "success"}, {"results", results}};
-    };
-    toolRegistry().registerTool(std::move(search));
 }
 
 void GaiaAgent::registerVisionTool(std::shared_ptr<const Workspace> ws) {

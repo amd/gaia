@@ -22,8 +22,67 @@ namespace gaia::code {
 
 namespace fs = std::filesystem;
 
-CodeAgent::CodeAgent(const AgentConfig& config, Options options) : Agent(config), options_(std::move(options)) {
+CodeAgent::CodeAgent(const AgentConfig& config, Options options)
+    : Agent(config),
+      options_(std::move(options)),
+      // Keyword search over code; chunks sized for source rather than prose.
+      code_(std::make_unique<DocumentIndex>(EmbedFunction{}, "", ChunkingConfig{200, 40})) {
     init();
+}
+
+CodeAgent::~CodeAgent() = default;
+
+void CodeAgent::registerCodeTools(std::shared_ptr<const Workspace> ws) {
+    ToolInfo index;
+    index.name = "index_codebase";
+    index.description =
+        "Index a code project (default: the working folder) so search_code can find code by "
+        "keywords. Honors .gitignore and skips dependency and build folders.";
+    index.parameters = {{"path", ToolParamType::STRING, false, "Project folder."}};
+    index.policy = ToolPolicy::ALLOW;
+    index.callback = [this, ws](const json& a) -> json {
+        std::error_code ec;
+        const std::string root = a.value("path", fs::current_path(ec).u8string());
+        if (ws) {
+            const std::string why = ws->checkPath(root);
+            if (!why.empty()) return {{"status", "error"}, {"error", why}};
+        }
+        if (!fs::is_directory(root, ec)) return {{"status", "error"}, {"error", "Not a folder: " + root}};
+        std::vector<std::string> failed;
+        const size_t chunks = code_->indexDirectory(root, &failed);
+        json out = {{"status", chunks ? "success" : "error"}, {"files", code_->files().size()},
+                    {"chunks", chunks}};
+        if (!chunks) out["error"] = "No source files found under " + root;
+        if (!failed.empty()) out["failed"] = failed;
+        return out;
+    };
+    toolRegistry().registerTool(std::move(index));
+
+    ToolInfo search;
+    search.name = "search_code";
+    search.description =
+        "Find code that matches a description or identifiers (e.g. 'where are retries "
+        "configured'). Returns file paths and snippets. Index the codebase first.";
+    search.parameters = {{"query", ToolParamType::STRING, true, "What to find."},
+                         {"top_k", ToolParamType::INTEGER, false, "Snippets (default 8, max 25)."},
+                         {"file", ToolParamType::STRING, false, "Only files whose path contains this."}};
+    search.policy = ToolPolicy::ALLOW;
+    search.callback = [this](const json& a) -> json {
+        if (code_->files().empty()) {
+            return {{"status", "error"}, {"error", "The codebase isn't indexed yet. Call index_codebase first."}};
+        }
+        const size_t k = static_cast<size_t>(std::clamp<long long>(a.value("top_k", 8LL), 1, 25));
+        json results = json::array();
+        try {
+            for (const auto& h : code_->query(a.value("query", ""), k, a.value("file", ""))) {
+                results.push_back({{"file", h.chunk.file}, {"snippet", h.chunk.text}});
+            }
+        } catch (const std::exception& e) {
+            return {{"status", "error"}, {"error", std::string("Code search failed: ") + e.what()}};
+        }
+        return {{"status", "success"}, {"results", results}};
+    };
+    toolRegistry().registerTool(std::move(search));
 }
 
 void CodeAgent::registerTools() {
@@ -75,6 +134,7 @@ void CodeAgent::registerTools() {
         reg.registerTool(observed(std::move(sh)));
     }
     reg.registerTool(observed(runChecksTool(options_.shell, ws)));
+    registerCodeTools(ws);
 }
 
 ToolInfo CodeAgent::observed(ToolInfo tool) {

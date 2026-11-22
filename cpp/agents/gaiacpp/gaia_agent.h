@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: MIT
 //
 // GaiaAgent (C++): the general-purpose desktop agent — files, documents, data,
-// code, shell and web — built on gaia_core. The native counterpart of the
+// shell and web — built on gaia_core. The native counterpart of the
 // Python flagship, packaged for embedding (e.g. `lemonade agents`).
 
 #pragma once
@@ -206,9 +206,7 @@ private:
     std::unique_ptr<SkillLibrary> skills_;
     std::unique_ptr<LemonadeClient> embedClient_;
     std::unique_ptr<DocumentIndex> docs_;
-    std::unique_ptr<DocumentIndex> code_;
 
-    void registerCodeTools(std::shared_ptr<const Workspace> ws);
     std::unique_ptr<MemoryStore> memory_;
     std::unique_ptr<LemonadeClient> visionClient_;
 

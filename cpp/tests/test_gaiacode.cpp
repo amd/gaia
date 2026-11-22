@@ -287,3 +287,30 @@ TEST(GaiacodeClaims, OnlyAGreenRunAfterTheLastEditBacksTheClaim) {
     EXPECT_TRUE(CodeAgent::testClaimNote(claim, {kEdit, kGreen, kRed}).has_value()) << "the last run decides";
     EXPECT_FALSE(CodeAgent::testClaimNote("Renamed it.", {kEdit}).has_value()) << "no claim, no note";
 }
+
+// ---------------------------------------------------------------- code search (moved from gaiacpp)
+
+TEST(GaiacodeTools, CodeSearchHonorsGitignoreAndFindsCode) {
+    const fs::path w = freshDir("gaiacode-code-search");
+    writeFile(w / ".gitignore", "generated/\n");
+    writeFile(w / "src" / "net.py", "def fetch_with_retries(url, max_retries=3):\n    pass\n");
+    writeFile(w / "node_modules" / "dep" / "x.js", "function fetch_with_retries() {}\n");
+    writeFile(w / "generated" / "gen.py", "fetch_with_retries = None\n");
+    AgentConfig cfg;
+    cfg.modelId = "mock-model";
+    cfg.baseUrl = "http://127.0.0.1:1/api/v1";
+    CodeAgent::Options options;
+    options.workspaceRoots = {w.u8string()};
+    CodeAgent agent(cfg, options);
+    json idx = agent.toolRegistry().executeTool("index_codebase", json{{"path", w.u8string()}});
+    ASSERT_EQ(idx["status"], "success") << idx.dump();
+    EXPECT_EQ(idx["files"], 1) << "node_modules and .gitignore'd folders are skipped";
+    json r = agent.toolRegistry().executeTool("search_code", json{{"query", "fetch_with_retries max_retries"}});
+    ASSERT_EQ(r["status"], "success");
+    ASSERT_FALSE(r["results"].empty());
+    EXPECT_NE(r["results"][0]["file"].get<std::string>().find("net.py"), std::string::npos);
+    for (const char* tool : {"git_status", "git_diff", "git_log", "git_show", "run_checks", "bash_execute"}) {
+        EXPECT_TRUE(agent.toolRegistry().hasTool(tool)) << tool;
+    }
+    fs::remove_all(w);
+}

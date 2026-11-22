@@ -8,7 +8,7 @@ icon: "sparkles"
   **First time here?** Complete the [C++ Framework Setup](/cpp/setup) guide first.
 </Info>
 
-`gaiacpp` is the general-purpose GAIA agent as one native binary: it reads and writes files, works through documents and data with the programs on the PC, runs shell commands, edits code and fetches web pages. It needs no Python runtime, starts instantly, and stays around 15 MB of memory through a multi-step task.
+`gaiacpp` is the general-purpose GAIA agent as one native binary: it reads and writes files, works through documents and data with the programs on the PC, runs shell commands and fetches web pages. Coding work in a repository is [gaiacode](/cpp/gaiacode)'s. It needs no Python runtime, starts instantly, and stays around 15 MB of memory through a multi-step task.
 
 It is one of the GAIA agent's [two harnesses](/reference/harnesses); the other, `gaiapy`, is the Python one and the default.
 
@@ -92,7 +92,7 @@ Any [`AgentConfig`](/cpp/api-reference) field is accepted. The extras are `provi
 
 The file, git and shell tools are confined to the working directory (`--cwd`) and any folder added with `--allow-dir DIR`. A file tool given a path outside them is refused, and so is a shell command that names an existing folder outside them, other than system folders such as `/usr`, `/etc` and `/tmp`. The prompt tells the model which folders it has. A link or Windows junction inside the folder that leads outside it is treated as outside, and so is one that can't be followed (a loop): file search and folder indexing walk into no folder link at all, and a shell command that names one that leads out is refused. A file write is judged by where it would land: every link and junction on the way is followed, including one to a file or folder that doesn't exist yet, and a path whose landing can't be worked out (an unreadable link, a loop) is refused. The shell check reads the command text: it stops an agent from wandering, for example a whole-disk `find` or a path a document planted, but it is not a sandbox. `--full-access` removes the confinement.
 
-Every tool result is masked before the model, the console and the step log see it, and before `POST /v1/tools/:name` returns it, error text included: provider tokens (GitHub, GitLab, AWS, Google, Slack, and `sk-` keys), the `user:password@` part of a URL and secret query values such as `?access_token=` become `[redacted]`, a PEM private key block becomes `[redacted private key]`, and a line a search printed from a credential file (`./.env:3:...`) keeps its file name and loses the rest. `file_read`, `file_write` and `file_edit` refuse a credential file by name (`.env`, `id_rsa`, `*.pem`, `*.key` and the like), `git_show` refuses one named in a `ref:path`, a content search skips those files, and a write that would put `[redacted]` where the file holds the real secret is refused. This is a backstop, not a guarantee: a shell command that prints a credential file is not refused, though a plain read of one (`cat .env`) asks first where other reads don't.
+Every tool result is masked before the model, the console and the step log see it, and before `POST /v1/tools/:name` returns it, error text included: provider tokens (GitHub, GitLab, AWS, Google, Slack, and `sk-` keys), the `user:password@` part of a URL and secret query values such as `?access_token=` become `[redacted]`, a PEM private key block becomes `[redacted private key]`, and a line a search printed from a credential file (`./.env:3:...`) keeps its file name and loses the rest. `file_read`, `file_write` and `file_edit` refuse a credential file by name (`.env`, `id_rsa`, `*.pem`, `*.key` and the like), a content search skips those files, and a write that would put `[redacted]` where the file holds the real secret is refused. This is a backstop, not a guarantee: a shell command that prints a credential file is not refused, though a plain read of one (`cat .env`) asks first where other reads don't.
 
 ### Documents
 
@@ -100,7 +100,7 @@ Every tool result is masked before the model, the console and the step log see i
 
 ### Code
 
-`index_codebase` indexes a project (default: the working folder), honoring `.gitignore` and skipping `.git`, `node_modules`, virtual environments, build output and files over 1 MB. `search_code` then finds code by keywords or, with an embedding model, by meaning, and returns file paths and snippets. Code has its own index, so document questions never rank source files.
+gaiacpp has no git or code-search tools: those moved to [gaiacode](/cpp/gaiacode), GAIA's coding agent. gaiacpp still reads and edits files and runs commands, so it can fix a script or a config file; for work on a code project and its tests, it points you to gaiacode.
 
 ### Models
 

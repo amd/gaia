@@ -13,6 +13,7 @@
 #include <vector>
 
 #include <gaia/agent.h>
+#include <gaia/document_index.h>
 #include <gaia/process.h>
 #include <gaia/workspace.h>
 
@@ -32,6 +33,7 @@ public:
     };
 
     CodeAgent(const AgentConfig& config, Options options);
+    ~CodeAgent() override;
 
     /// Whether the answer says the tests (or the build) pass.
     static bool claimsTestsPass(const std::string& answer);
@@ -55,8 +57,11 @@ private:
     /// `tool` with its callback reporting what it did to the turn's events.
     ToolInfo observed(ToolInfo tool);
     std::vector<TurnEvent> events() const;
+    /// index_codebase and search_code over code_.
+    void registerCodeTools(std::shared_ptr<const Workspace> ws);
 
     Options options_;
+    std::unique_ptr<DocumentIndex> code_;
     mutable std::mutex eventsMu_;
     std::vector<TurnEvent> events_;
 };

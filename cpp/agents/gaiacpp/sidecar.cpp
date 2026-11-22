@@ -232,7 +232,7 @@ std::string toolCategory(const ToolInfo& t) {
         {"file_read", "file_io"}, {"file_write", "file_io"}, {"file_edit", "file_io"},
         {"file_search", "file_search"}, {"bash_execute", "shell"}, {"env_inspect", "shell"},
         {"web_fetch", "browser"}, {"index_document", "rag"}, {"query_documents", "rag"},
-        {"list_indexed_documents", "rag"}, {"index_codebase", "code_index"}, {"search_code", "code_index"},
+        {"list_indexed_documents", "rag"},
         {"analyze_image", "vlm"}, {"generate_image", "sd"}, {"transcribe_audio", "audio"},
         {"take_screenshot", "screenshot"}, {"list_skills", "skills"}, {"load_skill", "skills"}};
     auto it = known.find(t.name);

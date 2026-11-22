@@ -62,6 +62,7 @@ Exit codes: 0 when the run finished, 1 when it failed, 2 for a usage error.
 |---|---|
 | `file_read`, `file_write`, `file_edit`, `file_search` | Read, create, edit and find files, confined to the working folder and `--allow-dir` |
 | `git_status`, `git_diff`, `git_log`, `git_show` | Read the repository's state and history |
+| `index_codebase`, `search_code` | Index the project (honoring `.gitignore`, skipping dependency and build folders) and find code by keywords, with file paths and snippets |
 | `bash_execute` | Run a shell command in a persistent shell; read-only commands inside the workspace don't ask |
 | `run_checks` | Run the project's tests and report passed, failed and skipped counts and the failing tests' names. With no command it finds the runner: pytest, `go test`, `cargo test`, an `npm test` script, or ctest in a CMake build |
 
