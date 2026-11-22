@@ -584,9 +584,12 @@ error. To run the chat model in the cloud instead, see
   <Accordion title="A chat model fails with 'llama-server failed to start'" icon="triangle-exclamation">
     llama.cpp exited while loading the model. GAIA starts a llama.cpp chat model with three
     slots over one shared KV cache (`--parallel 3 --kv-unified --cache-ram 0
-    --slot-prompt-similarity 0.5 --ctx-checkpoints 16`), so side work such as titles and
+    --slot-prompt-similarity 0.5 --ctx-checkpoints 16 --no-warmup --cache-type-k q8_0
+    --cache-type-v q8_0`), so side work such as titles and
     memory doesn't evict the conversation, and a long chat doesn't keep growing the model
-    server's memory. Some models and llama.cpp builds can't start with those flags: Gemma 4 with
+    server's memory. On the Vulkan backend, on a PC with a GPU, it adds `-ot token_embd.weight=Vulkan0`, which keeps
+    the model's token tables in GPU memory instead of system RAM (2.2 GB for Gemma 4 E4B).
+    Some models and llama.cpp builds can't start with those flags: Gemma 4 with
     an MTP draft model aborts on llama.cpp b12020, for example
     ([#6221](https://github.com/amd/gaia/issues/6221)).
 

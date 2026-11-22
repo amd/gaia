@@ -267,6 +267,8 @@ def forget_session(session_id: str) -> None:
     """Drop what *session_id*'s relayed agent was allowed at its prompts."""
     with _approved_guard:
         _approved_paths.pop(session_id, None)
+    with _switch_locks_guard:
+        _switch_locks.pop(session_id, None)
 
 
 def _approved(session_id: str) -> List[str]:

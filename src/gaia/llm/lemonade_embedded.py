@@ -1239,6 +1239,7 @@ class EmbeddedLemonade:
             DEFAULT_EMBEDDING_MODEL,
             EMBEDDER_LLAMACPP_ARGS,
             manages_embedder_backend,
+            without_vulkan_token_tables,
         )
 
         path = self.config_dir / "recipe_options.json"
@@ -1273,6 +1274,11 @@ class EmbeddedLemonade:
                 )
                 del entry["llamacpp_backend"]
             args = str(entry.get("llamacpp_args") or "")
+            if entry.get("llamacpp_backend") != "vulkan":
+                # The token-table override names a Vulkan device.
+                args = without_vulkan_token_tables(args)
+                if args:
+                    entry["llamacpp_args"] = args
             if "--ubatch-size" not in args:
                 entry["llamacpp_args"] = f"{args} {EMBEDDER_LLAMACPP_ARGS}".strip()
             options[model] = entry

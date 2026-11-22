@@ -18,10 +18,15 @@ from gaia.llm.lemonade_client import (
     DEFAULT_EMBEDDING_MODEL,
     EMBEDDER_LLAMACPP_ARGS,
     EMBEDDER_ON_CPU_WITH_ROCM,
+    VULKAN_TOKEN_TABLE_ARGS,
     LemonadeClient,
     LemonadeClientError,
+    embedder_llamacpp_args,
     manages_embedder_backend,
+    without_vulkan_token_tables,
 )
+
+_VULKAN_ARGS = f"{EMBEDDER_LLAMACPP_ARGS} {VULKAN_TOKEN_TABLE_ARGS}"
 
 _STARTUP_FAILURE = "model_load_error: llama-server failed to start"
 
@@ -39,15 +44,25 @@ def fresh_state(monkeypatch):
     monkeypatch.setattr(lemonade_client, "preferred_llamacpp_backend", lambda: None)
 
 
-def _recording_client(calls, default_backend="vulkan", failing_backends=()):
+_GPU = {"amd_igpu": {"available": True, "name": "AMD Radeon"}}
+_NO_GPU = {"amd_igpu": {"available": False}}
+
+
+def _recording_client(
+    calls, default_backend="vulkan", failing_backends=(), devices=None
+):
     """A client whose HTTP layer records calls and fails the named backends."""
     client = LemonadeClient(verbose=False)
+    devices = _GPU if devices is None else devices
 
     def fake_send(method, url, data=None, **kwargs):
         endpoint = url.rsplit("/", 1)[-1]
         calls.append((endpoint, dict(data or {})))
         if endpoint == "system-info":
-            return {"recipes": {"llamacpp": {"default_backend": default_backend}}}
+            return {
+                "recipes": {"llamacpp": {"default_backend": default_backend}},
+                "devices": devices,
+            }
         if endpoint == "load" and (data or {}).get("llamacpp_backend") in (
             failing_backends
         ):
@@ -81,7 +96,7 @@ def test_every_platform_saves_the_embedder_ubatch(monkeypatch, system):
     client.load_model(DEFAULT_EMBEDDING_MODEL, prompt=False)
 
     (load,) = _loads(calls)
-    assert load["llamacpp_args"] == EMBEDDER_LLAMACPP_ARGS
+    assert EMBEDDER_LLAMACPP_ARGS in load["llamacpp_args"]
     assert load["save_options"] is True
     # macOS leaves the backend to Lemonade, which runs everything on Metal.
     assert ("llamacpp_backend" in load) is (system != "Darwin")
@@ -115,10 +130,54 @@ def test_the_embedder_loads_on_lemonades_gpu_backend_and_saves_it(not_macos):
         {
             "model_name": DEFAULT_EMBEDDING_MODEL,
             "llamacpp_backend": "vulkan",
-            "llamacpp_args": EMBEDDER_LLAMACPP_ARGS,
+            "llamacpp_args": _VULKAN_ARGS,
             "save_options": True,
         }
     ]
+
+
+def test_only_vulkan_keeps_the_token_table_on_the_gpu():
+    """The override names a Vulkan device; other backends refuse to start with it."""
+    assert embedder_llamacpp_args("vulkan") == _VULKAN_ARGS
+    for backend in ("cpu", "rocm", "metal", None):
+        assert embedder_llamacpp_args(backend) == EMBEDDER_LLAMACPP_ARGS
+    assert without_vulkan_token_tables(_VULKAN_ARGS) == EMBEDDER_LLAMACPP_ARGS
+
+
+def test_a_pc_with_no_gpu_gets_no_vulkan_token_table_override(not_macos):
+    """The Vulkan build runs on the CPU there, and llama.cpp won't start when
+    told to use a Vulkan device that does not exist."""
+    calls = []
+    client = _recording_client(calls, devices=_NO_GPU)
+
+    client.load_model(DEFAULT_EMBEDDING_MODEL, prompt=False)
+
+    (load,) = _loads(calls)
+    assert load["llamacpp_args"] == EMBEDDER_LLAMACPP_ARGS
+    assert load["llamacpp_backend"] == "vulkan"
+
+
+def test_the_cpu_fallback_drops_the_vulkan_token_table_override(not_macos):
+    calls = []
+    client = _recording_client(calls, failing_backends=("vulkan",))
+
+    client.load_model(DEFAULT_EMBEDDING_MODEL, prompt=False)
+
+    args = [load["llamacpp_args"] for load in _loads(calls)]
+    assert args == [_VULKAN_ARGS, _VULKAN_ARGS, EMBEDDER_LLAMACPP_ARGS]
+    calls.clear()
+    client.load_model(DEFAULT_EMBEDDING_MODEL, prompt=False)
+    assert _loads(calls)[0]["llamacpp_args"] == EMBEDDER_LLAMACPP_ARGS
+
+
+def test_macos_gets_no_vulkan_token_table_override(monkeypatch):
+    monkeypatch.setattr(lemonade_client.platform, "system", lambda: "Darwin")
+    calls = []
+    client = _recording_client(calls)
+
+    client.load_model(DEFAULT_EMBEDDING_MODEL, prompt=False)
+
+    assert _loads(calls)[0]["llamacpp_args"] == EMBEDDER_LLAMACPP_ARGS
 
 
 def test_a_gpu_startup_failure_falls_back_to_cpu_with_a_warning(not_macos, caplog):
@@ -221,6 +280,7 @@ def test_the_first_embedding_loads_the_embedder_once(not_macos):
 
     assert [endpoint for endpoint, _ in calls] == [
         "system-info",
+        "system-info",
         "load",
         "embeddings",
         "embeddings",
@@ -320,7 +380,7 @@ def test_without_rocm_the_embedder_request_is_unchanged(
         {
             "model_name": DEFAULT_EMBEDDING_MODEL,
             "llamacpp_backend": default_backend,
-            "llamacpp_args": EMBEDDER_LLAMACPP_ARGS,
+            "llamacpp_args": embedder_llamacpp_args(default_backend),
             "save_options": True,
         }
     ]
@@ -425,6 +485,28 @@ def test_embedded_lemonade_clears_a_saved_cpu_pin_so_the_gpu_is_retried(
     )
 
     assert options[DEFAULT_EMBEDDING_MODEL] == {"llamacpp_args": EMBEDDER_LLAMACPP_ARGS}
+
+
+def test_embedded_lemonade_keeps_the_token_table_override_with_vulkan(
+    tmp_path, not_macos
+):
+    saved = {"llamacpp_backend": "vulkan", "llamacpp_args": _VULKAN_ARGS}
+    options = _options_after_write_config(tmp_path, {DEFAULT_EMBEDDING_MODEL: saved})
+
+    assert options[DEFAULT_EMBEDDING_MODEL] == saved
+
+
+@pytest.mark.parametrize("backend", ["cpu", "rocm", None])
+def test_embedded_lemonade_drops_the_override_without_vulkan(
+    tmp_path, not_macos, backend
+):
+    """Saved args load on whichever backend Lemonade picks next."""
+    saved = {"llamacpp_args": _VULKAN_ARGS}
+    if backend:
+        saved["llamacpp_backend"] = backend
+    options = _options_after_write_config(tmp_path, {DEFAULT_EMBEDDING_MODEL: saved})
+
+    assert options[DEFAULT_EMBEDDING_MODEL]["llamacpp_args"] == EMBEDDER_LLAMACPP_ARGS
 
 
 def test_embedded_lemonade_keeps_a_gpu_backend_the_user_chose(tmp_path, not_macos):

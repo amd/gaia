@@ -732,6 +732,22 @@ Every other path serves the Agent UI page, except paths under `/api`: an unknown
     `409` while an answer is running or a document is indexing in this app. `422` without a `model_name`. `502` with the model server's error when it refuses.
   </Accordion>
 
+  <Accordion title="POST /api/system/window-visibility">
+    The desktop app's window went to the tray or was minimised, or came back. GAIA's background service unloads the models of an app that has sat hidden and unused for `hidden_idle_unload_minutes` (15 by default); the next message loads them again. The desktop app's main process calls this on every change and again whenever the backend restarts. A browser tab never calls it, so it always counts as showing.
+
+    **Request:**
+    ```json
+    { "hidden": true }
+    ```
+
+    **Response (200):**
+    ```json
+    { "hidden": true }
+    ```
+
+    `403` over mobile access or from another computer: only the PC running GAIA can say where its window is. `422` without a boolean `hidden`.
+  </Accordion>
+
   <Accordion title="POST /api/system/warm-up">
     Read a new chat's system prompt and tool schemas into Lemonade's prompt cache, so the first message doesn't wait on them. The UI calls this when a new chat opens, and with `?fresh=true` when the user presses **Try again** on a picked model that failed to load. Only one warm-up runs at a time, a repeat within 30 s of a finished one does nothing, and none starts while a streamed chat turn runs; a fresh request made then starts once no turn is running. Cloud models and models that aren't downloaded are skipped, so it never starts a download or a paid request. When the GAIA agent runs in its daemon sidecar (a Hub install), the model is loaded but the prompt is not read, since the sidecar reads its own. It is skipped on a PC with under 24 GB of RAM, where the model loads with the first message instead, and before first-run setup has finished, when it would load a model setup didn't pick. A chat turn on the model being warmed waits for the warm-up and reuses what it cached; a turn on any other model, local or cloud, stops it, so the warm-up never loads over the turn's model. A local turn that arrives while the warm-up is loading its model waits for that load to finish first, since it can't be interrupted and holds the memory the turn's own load needs. An NPU (FastFlowLM) model is only loaded, not primed: FastFlowLM reuses a prompt only when the next request continues it, so the first message reads the prompt either way. A fresh request (a model pick, or `?fresh=true`) skips the 30 s debounce, and one made while a warm-up runs starts as soon as that one ends, stopping it first when it is loading a different model. Returns the warm-up state, with the `model` it loads and its `device` (`npu`, `gpu` or `cpu`) once known. `GET /api/system/warm-up` returns the same state without starting one, and `GET /api/system/status` carries it as `warm_up`.
 

@@ -31,6 +31,7 @@ class _World:
         self.now = 1000.0
         self.busy = False
         self.timeout = 15 * 60.0
+        self.hidden_idle = 15 * 60.0
         # GAIA's server is up and serving nothing.
         self.activity = LemonadeActivity(busy=False, marker=("idle",))
         self.owner = mock.Mock()
@@ -81,6 +82,7 @@ class _World:
             ancestors=self.ancestors,
             activity=lambda: self.activity,
             timeout=lambda: self.timeout,
+            hidden_idle=lambda: self.hidden_idle,
             identity=self.identity,
             clock=lambda: self.now,
         )
@@ -442,6 +444,282 @@ class TestAncestorPids:
             assert ancestor_pids(9) == []
 
 
+class TestHiddenAppsGiveTheModelsBack:
+    """A GAIA left in the tray held 4 GB of models for as long as it ran."""
+
+    LIMIT = 15 * 60.0
+
+    def _app(self, world, clients, pid=10, hidden=None):
+        return clients.register("app", [world.spawn(pid)], hidden=hidden)["client_id"]
+
+    def _hide(self, world, clients, client_id, hidden=True):
+        clients.register("app", [10], client_id=client_id, hidden=hidden)
+
+    def test_a_showing_app_keeps_its_models_however_long_it_sits(self, world):
+        clients = world.clients()
+        self._app(world, clients)
+        for _ in range(100):
+            world.now += 600
+            clients.sweep()
+        world.owner.unload_models.assert_not_called()
+
+    def test_models_unload_once_hidden_and_unused_for_the_limit(self, world):
+        clients = world.clients()
+        app = self._app(world, clients)
+        clients.sweep()
+        self._hide(world, clients, app)
+        world.now += self.LIMIT - 10
+        clients.sweep()
+        world.owner.unload_models.assert_not_called()
+
+        world.now += 20
+        clients.sweep()
+        world.owner.unload_models.assert_called_once()
+        # The app is still open: its server and agents stay.
+        world.owner.stop.assert_not_called()
+        world.stop_agents.assert_not_called()
+
+    def test_the_clock_starts_when_the_window_is_hidden(self, world):
+        """Idle for an hour while showing, then minimised for a moment: kept."""
+        clients = world.clients()
+        app = self._app(world, clients)
+        clients.sweep()
+        world.now += 4 * self.LIMIT
+        clients.sweep()
+        self._hide(world, clients, app)
+        world.now += 60
+        clients.sweep()
+        world.owner.unload_models.assert_not_called()
+
+    def test_showing_the_window_again_calls_it_off(self, world):
+        clients = world.clients()
+        app = self._app(world, clients, hidden=True)
+        clients.sweep()
+        world.now += self.LIMIT - 10
+        self._hide(world, clients, app, hidden=False)
+        world.now += 20
+        clients.sweep()
+        world.owner.unload_models.assert_not_called()
+
+        # Hidden again: a full quiet spell is needed from here.
+        self._hide(world, clients, app)
+        world.now += self.LIMIT - 10
+        clients.sweep()
+        world.owner.unload_models.assert_not_called()
+        world.now += 20
+        clients.sweep()
+        world.owner.unload_models.assert_called_once()
+
+    def test_an_app_that_starts_hidden_counts_from_its_start(self, world):
+        clients = world.clients()
+        self._app(world, clients, hidden=True)
+        clients.sweep()
+        world.now += self.LIMIT + 10
+        clients.sweep()
+        world.owner.unload_models.assert_called_once()
+
+    def test_a_renewal_that_does_not_say_leaves_the_window_as_it_was(self, world):
+        """An older backend renews without the field; it must not un-hide."""
+        clients = world.clients()
+        app = self._app(world, clients, hidden=True)
+        clients.sweep()
+        world.now += self.LIMIT / 2
+        clients.register("app", [10], client_id=app)
+        world.now += self.LIMIT / 2 + 10
+        clients.sweep()
+        world.owner.unload_models.assert_called_once()
+
+    def test_an_app_that_never_says_counts_as_showing(self, world):
+        """The terminal app and older builds send no window state."""
+        clients = world.clients()
+        self._app(world, clients)
+        world.now += 10 * self.LIMIT
+        clients.sweep()
+        world.owner.unload_models.assert_not_called()
+
+    def test_a_second_app_still_showing_keeps_the_models(self, world):
+        clients = world.clients()
+        self._app(world, clients, pid=10, hidden=True)
+        self._app(world, clients, pid=11)
+        world.now += 10 * self.LIMIT
+        clients.sweep()
+        world.owner.unload_models.assert_not_called()
+
+    def test_a_running_command_keeps_the_models(self, world):
+        clients = world.clients()
+        self._app(world, clients, hidden=True)
+        clients.register("cli", [world.spawn(20)])
+        world.now += 10 * self.LIMIT
+        clients.sweep()
+        world.owner.unload_models.assert_not_called()
+
+    def test_a_command_cannot_be_hidden(self, world):
+        clients = world.clients()
+        clients.register("cli", [world.spawn(20)], hidden=True)
+        world.now += 10 * self.LIMIT
+        clients.sweep()
+        world.owner.unload_models.assert_not_called()
+
+    def test_a_sidecar_agent_does_not_keep_the_models(self, world):
+        clients = world.clients()
+        self._app(world, clients, hidden=True)
+        clients.register("cli", [world.sidecar(30)])
+        clients.sweep()
+        world.now += self.LIMIT + 10
+        clients.sweep()
+        world.owner.unload_models.assert_called_once()
+
+    def test_it_unloads_once_not_on_every_sweep(self, world):
+        clients = world.clients()
+        self._app(world, clients, hidden=True)
+        for _ in range(10):
+            world.now += self.LIMIT
+            clients.sweep()
+        assert world.owner.unload_models.call_count == 1
+
+    def test_the_unload_itself_is_not_taken_for_a_request(self, world):
+        """Unloading changes what the server reports; that must not re-arm it."""
+        clients = world.clients()
+        self._app(world, clients, hidden=True)
+
+        def unload(still_wanted):
+            wanted = still_wanted()
+            world.activity = LemonadeActivity(busy=False, marker=("nothing loaded",))
+            return wanted
+
+        world.owner.unload_models.side_effect = unload
+        for _ in range(10):
+            world.now += self.LIMIT + 10
+            clients.sweep()
+        assert world.owner.unload_models.call_count == 1
+
+    def test_a_request_restarts_the_clock(self, world):
+        """A scheduled run or a phone over mobile access uses a hidden app."""
+        clients = world.clients()
+        self._app(world, clients, hidden=True)
+        clients.sweep()
+        world.now += self.LIMIT - 10
+        world.activity = LemonadeActivity(busy=False, marker=("used",))
+        clients.sweep()
+        world.now += 20
+        clients.sweep()
+        world.owner.unload_models.assert_not_called()
+
+        world.now += self.LIMIT
+        clients.sweep()
+        world.owner.unload_models.assert_called_once()
+
+    def test_models_used_again_are_unloaded_again_after_another_quiet_spell(
+        self, world
+    ):
+        clients = world.clients()
+        self._app(world, clients, hidden=True)
+        clients.sweep()
+        world.now += self.LIMIT + 10
+        clients.sweep()
+        world.activity = LemonadeActivity(busy=False, marker=("reloaded",))
+        clients.sweep()
+        world.now += self.LIMIT + 10
+        clients.sweep()
+        assert world.owner.unload_models.call_count == 2
+
+    def test_a_request_in_flight_keeps_the_models(self, world):
+        clients = world.clients()
+        self._app(world, clients, hidden=True)
+        world.activity = LemonadeActivity(busy=True, marker=("idle",))
+        world.now += 10 * self.LIMIT
+        clients.sweep()
+        world.owner.unload_models.assert_not_called()
+
+    def test_an_open_agent_turn_keeps_the_models(self, world):
+        clients = world.clients()
+        self._app(world, clients, hidden=True)
+        world.busy = True
+        world.now += 10 * self.LIMIT
+        clients.sweep()
+        world.owner.unload_models.assert_not_called()
+
+    def test_a_request_landing_mid_decision_wins(self, world):
+        clients = world.clients()
+        self._app(world, clients, hidden=True)
+        clients.sweep()
+        world.now += self.LIMIT + 10
+
+        def unload(still_wanted):
+            world.activity = LemonadeActivity(busy=False, marker=("just used",))
+            return still_wanted()
+
+        world.owner.unload_models.side_effect = unload
+        clients.sweep()
+        assert world.owner.unload_models.call_count == 1
+        world.now += 30
+        clients.sweep()
+        assert world.owner.unload_models.call_count == 1, "clock did not restart"
+
+    def test_a_window_shown_mid_decision_wins(self, world):
+        clients = world.clients()
+        app = self._app(world, clients, hidden=True)
+        clients.sweep()
+        world.now += self.LIMIT + 10
+        decided = []
+
+        def unload(still_wanted):
+            self._hide(world, clients, app, hidden=False)
+            decided.append(still_wanted())
+            return decided[-1]
+
+        world.owner.unload_models.side_effect = unload
+        clients.sweep()
+        assert decided == [False]
+
+    def test_zero_turns_it_off(self, world):
+        world.hidden_idle = None
+        clients = world.clients()
+        self._app(world, clients, hidden=True)
+        world.now += 100 * self.LIMIT
+        clients.sweep()
+        world.owner.unload_models.assert_not_called()
+
+    def test_a_refused_unload_is_logged_and_tried_again(self, world, caplog):
+        from gaia.llm.lemonade_embedded import EmbeddedLemonadeError
+
+        clients = world.clients()
+        self._app(world, clients, hidden=True)
+        clients.sweep()
+        world.owner.unload_models.side_effect = EmbeddedLemonadeError("refused")
+        world.now += self.LIMIT + 10
+        with caplog.at_level("ERROR"):
+            clients.sweep()
+        assert "could not unload idle models: refused" in caplog.text
+        world.owner.unload_models.side_effect = None
+        clients.sweep()
+        assert world.owner.unload_models.call_count == 2
+
+    def test_closing_a_hidden_app_still_unloads_at_once(self, world):
+        """Rule 1 is untouched: quitting from the tray frees the models now."""
+        clients = world.clients()
+        app = self._app(world, clients, hidden=True)
+        clients.release(app)
+        world.owner.unload_models.assert_called_once()
+
+    def test_the_default_is_fifteen_minutes_and_zero_is_off(
+        self, tmp_path, monkeypatch
+    ):
+        from gaia.daemon.lemonade_clients import hidden_idle_unload_seconds
+
+        config = tmp_path / "config.json"
+        monkeypatch.setattr("gaia.config.GAIA_CONFIG_FILE", config)
+        assert hidden_idle_unload_seconds() == 15 * 60.0
+        config.write_text('{"hidden_idle_unload_minutes": 0}')
+        assert hidden_idle_unload_seconds() is None
+
+    def test_the_client_list_says_which_apps_are_hidden(self, world):
+        clients = world.clients()
+        self._app(world, clients, pid=10, hidden=True)
+        self._app(world, clients, pid=11)
+        assert [c["hidden"] for c in clients.snapshot()["clients"]] == [True, False]
+
+
 class TestIdleTimeout:
     def test_fires_once_the_timeout_passes_with_nobody_connected(self, world):
         clients = world.clients()
@@ -660,6 +938,35 @@ class TestRoutes:
         )
         assert r.status_code == 200
         assert r.json()["unloaded"] is True
+
+    def test_an_app_reports_its_window_hidden_through_the_route(self, world):
+        http = self._client(world)
+        auth = {"Authorization": "Bearer tok"}
+        body = {"kind": "app", "pids": [world.spawn(10)], "name": "agent-ui"}
+        first = http.post("/daemon/v1/lemonade/clients", json=body, headers=auth)
+        listed = http.get("/daemon/v1/lemonade/clients", headers=auth).json()
+        assert listed["clients"][0]["hidden"] is False
+
+        r = http.post(
+            "/daemon/v1/lemonade/clients",
+            json={**body, "client_id": first.json()["client_id"], "hidden": True},
+            headers=auth,
+        )
+        assert r.status_code == 200
+        listed = http.get("/daemon/v1/lemonade/clients", headers=auth).json()
+        assert listed["clients"][0]["hidden"] is True
+
+    def test_a_field_this_daemon_does_not_know_is_ignored_not_refused(self, world):
+        """A newer app sends fields an older daemon lacks, as this one sends
+        ``hidden`` to daemons that predate it. A 422 there would drop the app's
+        lease, and the daemon would unload the models under an open window."""
+        http = self._client(world)
+        r = http.post(
+            "/daemon/v1/lemonade/clients",
+            json={"kind": "app", "pids": [world.spawn(10)], "from_the_future": 1},
+            headers={"Authorization": "Bearer tok"},
+        )
+        assert r.status_code == 200
 
     def test_a_renewal_does_not_restart_anything(self, world):
         http = self._client(world)

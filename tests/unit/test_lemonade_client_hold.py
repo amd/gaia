@@ -24,6 +24,7 @@ def _inst(api_version="1.4"):
 def _no_hold(monkeypatch):
     monkeypatch.setattr(lemonade_service, "_LEASE", None)
     monkeypatch.setattr(lemonade_service, "_AUTO_LEASED", False)
+    monkeypatch.setattr(lemonade_service, "_WINDOW_HIDDEN", None)
     monkeypatch.delenv(lemonade_service.APP_PID_ENV, raising=False)
     monkeypatch.delenv("LEMONADE_BASE_URL", raising=False)
     monkeypatch.delenv("GAIA_LEMONADE_EMBEDDED", raising=False)
@@ -45,6 +46,28 @@ class TestRegisterCall:
             "name": "tui",
             "client_id": None,
         }
+
+    @pytest.mark.parametrize("hidden", [True, False])
+    def test_an_app_that_reports_its_window_sends_it(self, hidden):
+        response = mock.Mock(status_code=200)
+        response.json.return_value = {"client_id": "abc", "clients": 1}
+        with (
+            mock.patch.object(client, "attach", return_value=_inst()),
+            mock.patch("requests.post", return_value=response) as post,
+        ):
+            client.register_lemonade_client("app", [10], "agent-ui", hidden=hidden)
+        assert post.call_args.kwargs["json"]["hidden"] is hidden
+
+    def test_a_client_that_does_not_report_sends_the_same_body_as_before(self):
+        """The terminal app and every command: the daemon reads them as in use."""
+        response = mock.Mock(status_code=200)
+        response.json.return_value = {"client_id": "abc", "clients": 1}
+        with (
+            mock.patch.object(client, "attach", return_value=_inst()),
+            mock.patch("requests.post", return_value=response) as post,
+        ):
+            client.register_lemonade_client("cli", [10], "gaia")
+        assert "hidden" not in post.call_args.kwargs["json"]
 
     def test_another_homes_daemon_is_reached_through_its_instance_file(
         self, tmp_path, monkeypatch
@@ -140,6 +163,70 @@ class TestHold:
         )
         lemonade_service.ensure_daemon_owns_lemonade(kind="app")
         assert "daemon said no" in caplog.text
+
+
+class TestWindowHidden:
+    """The desktop app's window went to the tray, or came back."""
+
+    def _hold(self, monkeypatch, calls, fail=None):
+        def _register(kind, pids, name, client_id=None, **said):
+            calls.append((client_id, said))
+            if fail:
+                raise fail
+            return "id-1"
+
+        monkeypatch.setattr(client, "register_lemonade_client", _register)
+        monkeypatch.setattr(client, "release_lemonade_client", lambda cid: None)
+        monkeypatch.setattr(lemonade_service.atexit, "register", lambda fn: None)
+        # No renewal thread traffic during the test.
+        monkeypatch.setattr(lemonade_service, "HOLD_RENEW_SECONDS", 3600)
+
+    def test_the_daemon_hears_at_once_not_at_the_next_renewal(self, monkeypatch):
+        calls = []
+        self._hold(monkeypatch, calls)
+        lemonade_service.hold_lemonade_open("app", "agent-ui")
+
+        lemonade_service.set_window_hidden(True)
+        lemonade_service.set_window_hidden(False)
+        lemonade_service.release_lemonade_hold()
+
+        assert calls == [
+            (None, {}),
+            ("id-1", {"hidden": True}),
+            ("id-1", {"hidden": False}),
+        ]
+
+    def test_a_lease_taken_after_the_report_carries_it(self, monkeypatch):
+        """The window can be hidden before the backend has leased anything."""
+        calls = []
+        self._hold(monkeypatch, calls)
+
+        lemonade_service.set_window_hidden(True)
+        assert calls == []
+        lemonade_service.hold_lemonade_open("app", "agent-ui")
+        lemonade_service.release_lemonade_hold()
+
+        assert calls == [(None, {"hidden": True})]
+
+    def test_a_daemon_that_is_down_is_logged_and_the_state_is_kept(
+        self, monkeypatch, caplog
+    ):
+        calls = []
+        self._hold(monkeypatch, calls)
+        lemonade_service.hold_lemonade_open("app", "agent-ui")
+        self._hold(
+            monkeypatch, calls, fail=DaemonError("the GAIA daemon is not running")
+        )
+
+        with caplog.at_level("WARNING"):
+            lemonade_service.set_window_hidden(True)
+
+        assert "window is hidden" in caplog.text
+        assert "the GAIA daemon is not running" in caplog.text
+        # The renewal loop sends it: it reads this, not the failed call.
+        assert lemonade_service._WINDOW_HIDDEN is True
+        monkeypatch.setattr(client, "release_lemonade_client", lambda cid: None)
+        lemonade_service.release_lemonade_hold()
 
 
 class TestAnotherGaiaHome:

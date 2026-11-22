@@ -280,6 +280,11 @@ def _gpu_entries(devices: Dict[str, Any]) -> List[Tuple[str, bool, Dict[str, Any
     return out
 
 
+def gpu_available(devices: Dict[str, Any]) -> bool:
+    """Lemonade's ``devices`` list at least one GPU it can use."""
+    return bool(_gpu_entries(devices))
+
+
 #: Windows' display-adapter class; each adapter's subkey records its memory.
 _DISPLAY_CLASS_KEY = (
     r"SYSTEM\CurrentControlSet\Control\Class\{4d36e968-e325-11ce-bfc1-08002be10318}"

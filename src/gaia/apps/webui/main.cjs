@@ -126,6 +126,7 @@ const {
 } = require("./services/link-policy.cjs");
 const { installWindowKeys } = require("./services/window-keys.cjs");
 const { installQuitCleanup } = require("./services/quit-cleanup.cjs");
+const { createWindowVisibility } = require("./services/window-visibility.cjs");
 const { chromiumSwitches } = require("./services/chromium-switches.cjs");
 const { titleBarKind, titleBarOptions } = require("./services/window-frame.cjs");
 const { resolveDevQaMode } = require("./services/dev-qa-mode.cjs");
@@ -266,6 +267,8 @@ let shutdownStarted = false;
 // Set once an update install starts quitting the app.
 let updateQuitStarted = false;
 let backendPort = DEFAULT_BACKEND_PORT;
+// The backend answered its health check and has not exited since.
+let backendAnswering = false;
 let healthCheckUrl = `http://localhost:${backendPort}/api/health`;
 let backendStderrTail = [];
 let isIntentionalKill = false;
@@ -320,6 +323,14 @@ let isQuitting = false;
 function quitStarted() {
   return shutdownStarted || isQuitting || updateQuitStarted;
 }
+
+// Tells the backend when the window is in the tray or minimised, so GAIA can
+// give the models' memory back while nobody is looking at it.
+const windowVisibility = createWindowVisibility({
+  getPort: () => (backendAnswering ? backendPort : null),
+  getWindows: () => (mainWindow && !mainWindow.isDestroyed() ? [mainWindow] : []),
+  quitting: quitStarted,
+});
 
 // ── Backend Process ────────────────────────────────────────────────────────
 
@@ -457,6 +468,7 @@ async function startBackend() {
       console.error(`Backend exited with code ${code} (signal=${signal}, pid=${child.pid})`);
     }
     if (backendProcess === child) backendProcess = null;
+    if (!backendProcess) backendAnswering = false;
     if (trayManager && !isQuitting) trayManager.setBackendAlive(false);
 
     // Once restarts run out, the supervisor's onStopped shows the crash dialog.
@@ -509,6 +521,8 @@ async function restartBackend() {
     throw new Error(`The backend did not answer within ${RESTART_TIMEOUT / 1000} s.`);
   }
   console.log(`[main] Backend restarted on port ${backendPort} (pid=${child.pid})`);
+  backendAnswering = true;
+  windowVisibility.backendStarted();
   if (trayManager) {
     trayManager.setBackendPort(backendPort);
     trayManager.setBackendAlive(true);
@@ -773,6 +787,7 @@ function createWindow() {
     mainWindow = null;
     if (trayManager) trayManager.windowClosed();
   });
+  windowVisibility.watch(mainWindow);
 
   // Show window when ready (unless --minimized or startMinimized config)
   revealWhenReady(mainWindow, (via) => {
@@ -1219,6 +1234,8 @@ app.whenReady().then(async () => {
     backendReady = await waitForBackend(STARTUP_TIMEOUT);
     if (backendReady) {
       console.log("Backend API is ready on port", backendPort);
+      backendAnswering = true;
+      windowVisibility.backendStarted();
     } else {
       console.warn("Backend did not respond within timeout.");
     }

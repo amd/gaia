@@ -507,6 +507,60 @@ class _EmbedderSwapLock:
 
 _EMBEDDER_SWAP = _EmbedderSwapLock()
 
+#: How long after the last document is embedded the embedder is reloaded.
+#: llama.cpp grows a buffer of about 1 MiB of host RAM per token of the longest
+#: input and keeps it until the process is replaced (0.7 GB after one document).
+EMBEDDER_RELEASE_DELAY_S = 20.0
+
+
+class _EmbedderRelease:
+    """Reloads the embedder once indexing has gone quiet, freeing what it grew.
+
+    One reload follows a run of documents, however many were indexed.
+    """
+
+    def __init__(self):
+        self._lock = threading.Lock()
+        self._timer: Optional[threading.Timer] = None
+
+    def cancel(self) -> None:
+        with self._lock:
+            if self._timer is not None:
+                self._timer.cancel()
+                self._timer = None
+
+    def schedule(self, client: Any, model: str, log: Any) -> None:
+        timer = threading.Timer(
+            EMBEDDER_RELEASE_DELAY_S, self.release, args=(client, model, log)
+        )
+        timer.daemon = True
+        with self._lock:
+            if self._timer is not None:
+                self._timer.cancel()
+            self._timer = timer
+        timer.start()
+
+    @staticmethod
+    def release(client: Any, model: str, log: Any) -> None:
+        from gaia.daemon.broker_client import model_lease
+
+        try:
+            with model_lease(model, priority="background"), _EMBEDDER_SWAP.swap():
+                client.unload_model(model, ignore_if_not_loaded=True)
+                client.load_model(model, llamacpp_args=EMBEDDER_LLAMACPP_ARGS)
+        except Exception as e:  # pylint: disable=broad-exception-caught
+            # A timer thread has no caller to raise to.
+            log.warning(
+                f"Could not reload the embedding model {model} to free the memory "
+                f"indexing used ({e}). It keeps that memory until the next "
+                "document is indexed or GAIA restarts."
+            )
+            return
+        log.info(f"Reloaded the embedding model {model} to free indexing memory")
+
+
+_EMBEDDER_RELEASE = _EmbedderRelease()
+
 
 class EmbeddingUnavailableError(RuntimeError):
     """The embedding model could not run, so nothing was embedded or searched.
@@ -3743,6 +3797,7 @@ These positions indicate where to split the text."""
             print(f"{'='*60}")
 
         embed_start = time_module.time()
+        _EMBEDDER_RELEASE.cancel()
         if progress_callback is None or not chunks:
             embeddings = self._encode_texts(
                 chunks,
@@ -3764,6 +3819,15 @@ These positions indicate where to split the text."""
                 progress_callback(start + len(part), len(chunks))
             embeddings = np.concatenate(parts)
         embed_duration = time_module.time() - embed_start
+        # A server the user runs is never unloaded by GAIA.
+        if (
+            chunks
+            and self.use_lemonade_embeddings
+            and not self.llm_client.is_users_server()
+        ):
+            _EMBEDDER_RELEASE.schedule(
+                self.llm_client, self.config.embedding_model, self.log
+            )
         if vectors_path:
             try:
                 self._save_vectors(vectors_path, embeddings)
