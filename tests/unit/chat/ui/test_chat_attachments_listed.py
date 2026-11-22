@@ -252,3 +252,39 @@ def test_the_turn_tells_the_app_about_the_listed_attachment(app):
     assert [(d["id"], d["filename"]) for d in documents] == [
         (listed[0]["id"], "brief.md")
     ]
+
+
+def test_attaching_a_removed_file_again_reopens_it(app):
+    client, db = app
+    chat = db.create_session(title="A")
+    listed, readable = _send(
+        db, chat["id"], "Read it\n\n" + _attach(client, "brief.md", b"ALPHA-7")
+    )
+    upload = readable[0]
+    resp = client.delete(f"/api/sessions/{chat['id']}/documents/{listed[0]['id']}")
+    assert resp.status_code == 200, resp.text
+
+    relisted, readable = _send(
+        db, chat["id"], "Here it is again\n\n" + _attach(client, "brief.md", b"ALPHA-7")
+    )
+    assert upload in readable
+    assert [d["filename"] for d in relisted] == ["brief.md"]
+    assert _session_docs(client, chat["id"]) == [listed[0]["id"]]
+
+
+def test_a_removed_file_stays_off_when_another_chat_attaches_it(app):
+    client, db = app
+    chat_a = db.create_session(title="A")
+    chat_b = db.create_session(title="B")
+    listed, readable = _send(
+        db, chat_a["id"], "Read it\n\n" + _attach(client, "brief.md", b"ALPHA-7")
+    )
+    upload = readable[0]
+    client.delete(f"/api/sessions/{chat_a['id']}/documents/{listed[0]['id']}")
+
+    _send(db, chat_b["id"], "Mine now\n\n" + _attach(client, "brief.md", b"ALPHA-7"))
+    relisted, readable = _send(db, chat_a["id"], "Read it again")
+
+    assert relisted == []
+    assert upload not in readable
+    assert _session_docs(client, chat_a["id"]) == []

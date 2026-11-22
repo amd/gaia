@@ -205,16 +205,22 @@ def _listed_as_document(path: Path) -> bool:
 
 
 def add_chat_uploads(
-    db: ChatDatabase, session_id: str, uploads: Iterable[str]
+    db: ChatDatabase,
+    session_id: str,
+    uploads: Iterable[str],
+    reattached: Iterable[str] = (),
 ) -> List[Dict[str, Any]]:
     """Put the documents attached in the chat's composer in the library, attached to it.
 
     Each upload goes in once: one the user takes off stays off, and the chat
-    stops reading it (``ChatDatabase.removed_session_uploads``). Returns the
-    library rows newly attached. An upload that can't be recorded stays
-    readable by the chat, as before it was listed; the error is logged.
+    stops reading it (``ChatDatabase.removed_session_uploads``), unless it is
+    in *reattached*, the uploads the user attached again in this message.
+    Returns the library rows newly attached. An upload that can't be recorded
+    stays readable by the chat, as before it was listed; the error is logged.
     """
-    known = db.session_upload_paths(session_id)
+    # The same file attached again reuses its upload path.
+    reopened = db.removed_session_uploads(session_id) & set(reattached)
+    known = db.session_upload_paths(session_id) - reopened
     added: List[Dict[str, Any]] = []
     for upload in uploads:
         path = Path(os.path.realpath(upload))

@@ -2277,7 +2277,7 @@ def _list_chat_uploads(
     from .agent_documents import add_chat_uploads
 
     added = add_chat_uploads(
-        db, session_id, _linked_upload_paths(db, session_id, attached)
+        db, session_id, _linked_upload_paths(db, session_id, attached), attached
     )
     ids = list(document_ids)
     ids += [d["id"] for d in added if d["id"] not in ids]
