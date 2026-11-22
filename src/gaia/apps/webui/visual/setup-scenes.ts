@@ -218,11 +218,12 @@ const RUN_READY_EXTRA = {
 const RUN_EXTRAS_STOPPED = {
     ...RUN, state: 'cancelled', text: 'Setup stopped',
     models: [
-        row(EMBED_ID, ['embedding'], 'unchecked', 330e6, 330e6),
-        row(GEMMA_ID, ['chat', 'vision'], 'unchecked', 5.97e9, 5.97e9),
+        // Already on disk when this run started, so they report no byte counts (#8797).
+        row(EMBED_ID, ['embedding'], 'unchecked', 0, 0),
+        row(GEMMA_ID, ['chat', 'vision'], 'unchecked', 0, 0),
         row(SPEECH.id, ['speech'], 'cancelled', 0.56e9, 1.6e9),
     ],
-    overall: { bytes_done: 6.86e9, bytes_total: 7.9e9, speed_bps: 0, eta_s: null, percent: 86, failed: 0 },
+    overall: { bytes_done: 0.56e9, bytes_total: 1.6e9, speed_bps: 0, eta_s: null, percent: 35, failed: 0 },
 };
 
 const SERVER_RUNNING = { state: 'running', server_only: true, text: 'Starting the local model server', steps: [], log_tail: [] };
@@ -783,6 +784,8 @@ export const SETUP_SCENES: SetupScene[] = [
             // A way to finish without the extra, beside Resume all.
             await expect(page.locator('.setup-footer .btn-secondary')).toBeVisible();
             await expect(page.locator('.setup-rail-step.is-failed')).toHaveCount(0);
+            // The overall line counts the kept models whole, as their rows show.
+            await expect(page.locator('.dl-overall-line')).toContainText(/(?:^|\D)[89]\d\D{0,2}%/);
         },
     },
     {

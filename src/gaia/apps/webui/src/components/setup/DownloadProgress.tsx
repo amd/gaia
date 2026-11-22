@@ -109,7 +109,8 @@ function ProgressRow({ model: m, name, estimate, now, freeGb, onRetry, onResume,
     const logId = useId();
     const [showLog, setShowLog] = useState(false);
     const lines = m.log ?? [];
-    const pct = m.bytes_total > 0 ? Math.min(100, (m.bytes_done / m.bytes_total) * 100) : m.state === 'ready' ? 100 : 0;
+    const onDisk = m.state === 'ready' || m.state === 'unchecked';
+    const pct = onDisk ? 100 : m.bytes_total > 0 ? Math.min(100, (m.bytes_done / m.bytes_total) * 100) : 0;
     const state = t(STATE_KEY[m.state]);
     const retryingFor = m.retrying_until ? Math.max(0, Math.round(m.retrying_until - now / 1000)) : 0;
     const stalled = m.state === 'downloading' && !retryingFor ? estimate?.stalledFor ?? 0 : 0;
