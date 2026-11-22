@@ -991,3 +991,33 @@ def test_a_sidecar_spawned_before_the_switch_is_marked_stale(monkeypatch, tmp_pa
     GaiaConfig.save_key("lemonade_env_url_ignored", _DEAD_ENV_URL)
     assert m.uses_ignored_lemonade is True
     m.shutdown()
+
+
+@pytest.mark.parametrize("agent_id", sorted(builtin_specs()))
+def test_every_builtin_sidecar_declares_a_token_file_channel(agent_id):
+    # A sidecar refuses to start without a token, so the daemon must always
+    # have a file leg to hand one over.
+    spec = builtin_specs()[agent_id]
+    assert spec.token_env_var
+    assert spec.token_file_env_var
+    assert spec.secret_file_min_version
+
+
+@pytest.mark.parametrize("agent_id", sorted(builtin_specs()))
+@pytest.mark.parametrize("installed_version", [None, "99.0.0"])
+def test_every_builtin_sidecar_launch_carries_the_token_file(
+    agent_id, installed_version, tmp_path
+):
+    spec = builtin_specs()[agent_id]
+    m = mgr.AgentSidecarManager(spec, cache_dir=tmp_path, log_dir=tmp_path / "logs")
+    m.resolved_mode = "user" if installed_version else "dev"
+    m.installed_binary_version = installed_version
+    env = {spec.token_env_var: "stale-inherited-token"}
+    m._apply_secret_delivery(env)
+    try:
+        assert m.secret_delivery == "file"
+        secret = Path(env[spec.token_file_env_var])
+        assert secret.read_text(encoding="utf-8") == m.auth_token
+        assert spec.token_env_var not in env
+    finally:
+        m._cleanup_secret_file()

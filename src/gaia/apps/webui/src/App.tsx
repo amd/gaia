@@ -24,6 +24,7 @@ import { FlagshipAgentNotice } from './components/FlagshipAgentNotice';
 import { BrowserPane } from './components/browser-pane/BrowserPane';
 import { browserPaneApi, useBrowserPaneStore } from './stores/browserPaneStore';
 import { useChatStore } from './stores/chatStore';
+import { useUiAuthStore } from './stores/uiAuthStore';
 import { useModelStore } from './stores/modelStore';
 import { useNotificationStore } from './stores/notificationStore';
 import { useScheduleStore } from './stores/scheduleStore';
@@ -127,6 +128,7 @@ function noteSetupWorked() {
 
 function App() {
     const t = useT();
+    const signInRequired = useUiAuthStore((s) => s.signInRequired);
     useWindowTitle();
     const currentSessionId = useChatStore((s) => s.currentSessionId);
     const setSessions = useChatStore((s) => s.setSessions);
@@ -338,6 +340,15 @@ function App() {
     }, [checkSetup]);
     const onBackendBackRef = useRef(onBackendBack);
     onBackendBackRef.current = onBackendBack;
+    // Signed in again: what was refused meanwhile is read now, like after an outage.
+    const wasSignedOut = useRef(false);
+    useEffect(() => {
+        if (signInRequired) wasSignedOut.current = true;
+        else if (wasSignedOut.current) {
+            wasSignedOut.current = false;
+            onBackendBack();
+        }
+    }, [signInRequired, onBackendBack]);
 
     // ── Backend and model-server health ─────────────────────────────────
     const failCount = useRef(0);
@@ -831,6 +842,18 @@ function App() {
         mainUiShownRef.current,
     );
     if (!showStartup && setup.state !== 'needed') mainUiShownRef.current = true;
+
+    // Nothing works without the API token; the status poll clears this once the browser signs in.
+    if (signInRequired) {
+        return (
+            <div className="app">
+                <main className="startup" role="alert">
+                    <p className="startup-text" dir="auto">{t('auth.signIn.title')}</p>
+                    <p className="startup-text" dir="auto">{t('auth.signIn.hint', { command: 'gaia chat --ui' })}</p>
+                </main>
+            </div>
+        );
+    }
 
     // A PC set up before can chat while the check runs; a new one waits, so
     // the chat screen never appears and is then replaced by setup.

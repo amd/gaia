@@ -52,6 +52,7 @@ from gaia.eval.fixture_env import localize
 from gaia.eval.scenario_backend import ScenarioBackend, validate_approve_prompts
 from gaia.eval.scorecard import NOT_RUN, SKIPPED_STATUSES
 from gaia.llm.local_only import assert_provider_permitted, cloud_blocked
+from gaia.ui.api_token import UITokenError, auth_headers, read_token, token_path
 from gaia.utils.process_tree import kill_tree as _kill_tree
 
 logger = logging.getLogger(__name__)
@@ -139,6 +140,8 @@ def resolve_mcp_config(run_dir, backend_url: str) -> Path:
             "cannot reach the Agent UI backend."
         )
     server["args"] = [*server.get("args", []), "--backend", backend_url]
+    # The MCP server must present the token of the backend this run targets.
+    server["env"] = {**server.get("env", {}), "GAIA_UI_TOKEN_FILE": str(token_path())}
     resolved = Path(run_dir).resolve() / "mcp-config.resolved.json"
     resolved.parent.mkdir(parents=True, exist_ok=True)
     resolved.write_text(json.dumps(config, indent=2) + "\n", encoding="utf-8")
@@ -217,7 +220,7 @@ def _read_session_agent_type(backend_url: str, session_id: str, timeout: float =
     is worth nothing.
     """
     url = f"{backend_url.rstrip('/')}/api/sessions/{session_id}"
-    response = requests.get(url, timeout=timeout)
+    response = requests.get(url, timeout=timeout, headers=auth_headers())
     response.raise_for_status()
     return response.json().get("agent_type")
 
@@ -490,7 +493,7 @@ def _read_session_model(backend_url: str, session_id: str, timeout: float = 15.0
     one the session was created with. Raises on any transport or parse failure.
     """
     url = f"{backend_url.rstrip('/')}/api/sessions/{session_id}"
-    response = requests.get(url, timeout=timeout)
+    response = requests.get(url, timeout=timeout, headers=auth_headers())
     response.raise_for_status()
     return response.json().get("effective_model")
 
@@ -1749,6 +1752,10 @@ def preflight_check(backend_url, scenarios=None):
         # ConnectionError catches http.client.RemoteDisconnected, which is not a
         # URLError - see urllib.request.AbstractHTTPHandler.do_open.
         errors.append(f"Agent UI not reachable at {backend_url}: {e}")
+    try:
+        read_token()
+    except UITokenError as e:
+        errors.append(str(e))
 
     # Check corpus manifest
     if not MANIFEST.exists():
@@ -1850,15 +1857,17 @@ def _apply_mailbox_fixture(backend_url: str, scenario_data: dict) -> Optional[st
             f"{sorted(_MAILBOX_FIXTURE_STATES)}"
         )
     url = f"{backend_url}/api/connectors/eval-mailbox"
-    req = urllib.request.Request(
-        url,
-        data=json.dumps({"attached": _MAILBOX_FIXTURE_STATES[state]}).encode(),
-        headers={"Content-Type": "application/json", "X-Gaia-UI": "1"},
-        method="POST",
-    )
     try:
+        req = urllib.request.Request(
+            url,
+            data=json.dumps({"attached": _MAILBOX_FIXTURE_STATES[state]}).encode(),
+            headers={"Content-Type": "application/json", **auth_headers()},
+            method="POST",
+        )
         with urllib.request.urlopen(req, timeout=10) as r:
             body = json.loads(r.read().decode("utf-8"))
+    except UITokenError as e:
+        return str(e)
     except (urllib.error.URLError, ConnectionError, TimeoutError) as e:
         return (
             f"could not set the fixture mailbox to {state} via {url}: {e}. Start "
@@ -1964,8 +1973,8 @@ def _probe_eval_mailbox(backend_url: str) -> Optional[str]:
     import urllib.request
 
     url = f"{backend_url}/api/connectors/eval-mailbox"
-    req = urllib.request.Request(url, headers={"X-Gaia-UI": "1"})
     try:
+        req = urllib.request.Request(url, headers=auth_headers())
         with urllib.request.urlopen(req, timeout=5) as r:
             if r.status != 200:
                 return (
@@ -1980,6 +1989,8 @@ def _probe_eval_mailbox(backend_url: str) -> Optional[str]:
                 "with the absolute path."
             )
         return None
+    except UITokenError as e:
+        return str(e)
     except urllib.error.HTTPError as e:
         if e.code in (403, 404):
             return (
@@ -2044,15 +2055,17 @@ def _reset_memory(backend_url: str, scenario_data: dict) -> Optional[str]:
     if not _scenario_clears_memory(scenario_data):
         return None
     url = f"{backend_url}/api/memory/admin/clear"
-    req = urllib.request.Request(
-        url,
-        data=json.dumps({"scope": "all"}).encode("utf-8"),
-        headers={"Content-Type": "application/json", "X-Gaia-UI": "1"},
-        method="POST",
-    )
     try:
+        req = urllib.request.Request(
+            url,
+            data=json.dumps({"scope": "all"}).encode("utf-8"),
+            headers={"Content-Type": "application/json", **auth_headers()},
+            method="POST",
+        )
         with urllib.request.urlopen(req, timeout=30) as r:
             body = json.loads(r.read().decode("utf-8"))
+    except UITokenError as e:
+        return f"could not clear memory before the scenario: {e}"
     except urllib.error.HTTPError as e:
         if e.code == 403:
             return (
@@ -2088,12 +2101,16 @@ def _probe_memory_enabled(backend_url: str) -> Optional[str]:
 
     url = f"{backend_url}/api/memory/settings"
     enable = (
-        f"curl -X PUT {url} -H 'X-Gaia-UI: 1' -H 'Content-Type: application/json' "
-        "-d '{\"memory_enabled\": true}'"
+        f"curl -X PUT {url} -H 'X-Gaia-UI: 1' "
+        f"-H \"Authorization: Bearer $(cat '{token_path()}')\" "
+        "-H 'Content-Type: application/json' -d '{\"memory_enabled\": true}'"
     )
     try:
-        with urllib.request.urlopen(url, timeout=5) as r:
+        req = urllib.request.Request(url, headers=auth_headers())
+        with urllib.request.urlopen(req, timeout=5) as r:
             settings = json.loads(r.read().decode("utf-8"))
+    except UITokenError as e:
+        return str(e)
     except urllib.error.HTTPError as e:
         return f"Memory settings probe failed with HTTP {e.code} from {url}: {e.reason}"
     except (urllib.error.URLError, ConnectionError, TimeoutError) as e:
@@ -2134,13 +2151,13 @@ def _probe_memory_admin(backend_url: str) -> Optional[str]:
     import urllib.error
     import urllib.request
 
-    req = urllib.request.Request(
-        f"{backend_url}/api/memory/admin/seed",
-        data=b'{"items":[]}',
-        headers={"Content-Type": "application/json", "X-Gaia-UI": "1"},
-        method="POST",
-    )
     try:
+        req = urllib.request.Request(
+            f"{backend_url}/api/memory/admin/seed",
+            data=b'{"items":[]}',
+            headers={"Content-Type": "application/json", **auth_headers()},
+            method="POST",
+        )
         with urllib.request.urlopen(req, timeout=5) as r:
             if r.status == 200:
                 return None
@@ -2148,6 +2165,8 @@ def _probe_memory_admin(backend_url: str) -> Optional[str]:
                 f"Memory admin probe returned unexpected HTTP {r.status} "
                 f"from {backend_url}/api/memory/admin/seed"
             )
+    except UITokenError as e:
+        return str(e)
     except urllib.error.HTTPError as e:
         if e.code == 403:
             return (
@@ -2261,17 +2280,19 @@ def _set_scripted_user(backend_url: str, commands: list) -> Optional[str]:
     import urllib.error
     import urllib.request
 
-    req = urllib.request.Request(
-        f"{backend_url}/api/eval/scripted-user",
-        data=json.dumps({"decline_commands": commands}).encode("utf-8"),
-        headers={"Content-Type": "application/json", "X-Gaia-UI": "1"},
-        method="POST",
-    )
     try:
+        req = urllib.request.Request(
+            f"{backend_url}/api/eval/scripted-user",
+            data=json.dumps({"decline_commands": commands}).encode("utf-8"),
+            headers={"Content-Type": "application/json", **auth_headers()},
+            method="POST",
+        )
         with urllib.request.urlopen(req, timeout=5) as r:
             if r.status == 200:
                 return None
             return f"Scripted-user setup returned HTTP {r.status} from {backend_url}"
+    except UITokenError as e:
+        return str(e)
     except urllib.error.HTTPError as e:
         if e.code == 403:
             return (
@@ -2503,7 +2524,7 @@ def run_scenario_subprocess(
     if scenario_backend is not None:
         try:
             scenario_backend.start()
-        except requests.RequestException as e:
+        except (requests.RequestException, UITokenError) as e:
             error = (
                 f"Could not watch {scenario_id}'s sessions on the backend at "
                 f"{backend_url}: {e}. Check the Agent UI backend is running."

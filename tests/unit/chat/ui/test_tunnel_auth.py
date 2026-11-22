@@ -1,20 +1,35 @@
 # Copyright(C) 2024-2025 Advanced Micro Devices, Inc. All rights reserved.
 # SPDX-License-Identifier: MIT
 
-"""Unit tests for TunnelAuthMiddleware.
+"""Mobile access: a paired phone reaches /api with the tunnel token.
 
-Validates that the tunnel authentication middleware correctly gates
-remote /api/* requests when the ngrok tunnel is active, while allowing
-local requests and exempt paths through without a token.
+The phone never holds the install's Agent UI API token, so every client here
+drops it. The tunnel token works only while mobile access is on; nothing,
+loopback included, gets in with neither token.
 """
 
 import uuid
 
 import pytest
-from fastapi.testclient import TestClient
+from fastapi.testclient import TestClient as _TestClient
 
 from gaia.ui.server import create_app
 from gaia.ui.tunnel import TunnelManager
+
+#: ngrok adds these to every tunnelled request.
+_VIA_TUNNEL = {"x-forwarded-for": "203.0.113.7", "x-forwarded-proto": "https"}
+
+
+def TestClient(app, **kwargs):
+    """A phone over the tunnel: forwarded headers, no Agent UI API token."""
+    client = _TestClient(app, **kwargs)
+    client.headers.pop("authorization", None)
+    client.headers.update(_VIA_TUNNEL)
+    return client
+
+
+def _refused(resp) -> bool:
+    return resp.status_code == 401 and resp.json()["code"] == "ui_token_required"
 
 
 class _FakeProcess:
@@ -50,42 +65,36 @@ def client(app):
     return TestClient(app)
 
 
-# ── Tests: tunnel inactive (no auth required) ───────────────────────────
+# ── Tests: no token at all ──────────────────────────────────────────────
 
 
-class TestTunnelInactive:
-    """When the tunnel is NOT active, all requests pass through freely."""
+class TestNoToken:
+    """Without either token, nothing under /api gets in, loopback included."""
 
-    def test_api_endpoint_allowed_without_token(self, client):
-        resp = client.get("/api/health")
-        assert resp.status_code == 200
+    def test_refused_while_tunnel_off(self, client):
+        assert _refused(client.get("/api/sessions"))
 
-    def test_sessions_endpoint_allowed_without_token(self, client):
-        resp = client.get("/api/sessions")
-        assert resp.status_code == 200
-
-
-# ── Tests: tunnel active, local requests (bypass auth) ──────────────────
-
-
-class TestLocalBypass:
-    """Local requests bypass authentication even when the tunnel is active."""
-
-    def test_localhost_bypasses_auth(self, app):
+    def test_refused_from_loopback_while_tunnel_on(self, app):
         _activate_tunnel(app)
-        # TestClient uses "testclient" as host by default, which is NOT
-        # in _LOCAL_HOSTS.  We override the ASGI scope directly via a
-        # custom transport to simulate 127.0.0.1.
-        with TestClient(
-            app,
-            headers={},
-            root_path="",
-        ) as c:
-            # TestClient doesn't let us easily set client host, so we
-            # verify via a direct request without auth that the middleware
-            # at least rejects non-local hosts (covered in TestRemoteAuth),
-            # and verify the logic by checking the health bypass below.
-            pass
+        client = TestClient(app, client=("127.0.0.1", 50000))
+        for name in _VIA_TUNNEL:
+            client.headers.pop(name)
+        assert _refused(client.get("/api/sessions"))
+
+    def test_tunnel_token_counts_only_on_tunnelled_requests(self, app):
+        token = _activate_tunnel(app)
+        client = TestClient(app, client=("127.0.0.1", 50000))
+        for name in _VIA_TUNNEL:
+            client.headers.pop(name)
+        client.headers["Authorization"] = f"Bearer {token}"
+        assert _refused(client.get("/api/sessions"))
+
+    def test_tunnel_token_cannot_change_permissions(self, app):
+        token = _activate_tunnel(app)
+        client = TestClient(app, client=("127.0.0.1", 50000))
+        client.headers["Authorization"] = f"Bearer {token}"
+        resp = client.put("/api/chat/permissions", json={"mode": "full"})
+        assert resp.status_code == 403
 
     def test_health_always_allowed_when_tunnel_active(self, app):
         """The /api/health endpoint is exempt even for remote callers."""
@@ -108,8 +117,7 @@ class TestRemoteAuth:
         # TestClient host is "testclient" which is not in _LOCAL_HOSTS,
         # so this simulates a remote caller.
         resp = client.get("/api/sessions")
-        assert resp.status_code == 401
-        assert "Missing or invalid" in resp.json()["detail"]
+        assert _refused(resp)
 
     def test_malformed_auth_header_returns_401(self, app):
         _activate_tunnel(app)
@@ -118,8 +126,7 @@ class TestRemoteAuth:
             "/api/sessions",
             headers={"Authorization": "Basic dXNlcjpwYXNz"},
         )
-        assert resp.status_code == 401
-        assert "Missing or invalid" in resp.json()["detail"]
+        assert _refused(resp)
 
     def test_wrong_token_returns_401(self, app):
         _activate_tunnel(app)
@@ -128,8 +135,7 @@ class TestRemoteAuth:
             "/api/sessions",
             headers={"Authorization": "Bearer wrong-token-value"},
         )
-        assert resp.status_code == 401
-        assert "Invalid tunnel" in resp.json()["detail"]
+        assert _refused(resp)
 
     def test_valid_token_allows_request(self, app):
         token = _activate_tunnel(app)
@@ -187,25 +193,20 @@ class TestRemoteAuth:
 
 
 class TestTunnelDeactivated:
-    """After the tunnel is stopped, auth requirements are lifted."""
+    """Once mobile access stops, the tunnel token stops working."""
 
-    def test_requests_pass_after_tunnel_stopped(self, app):
+    def test_tunnel_token_refused_after_tunnel_stopped(self, app):
         token = _activate_tunnel(app)
         client = TestClient(app)
+        client.headers["Authorization"] = f"Bearer {token}"
+        assert client.get("/api/sessions").status_code == 200
 
-        # While active, no-auth request is rejected
-        resp = client.get("/api/sessions")
-        assert resp.status_code == 401
-
-        # Stop the tunnel (simulate)
         tunnel: TunnelManager = app.state.tunnel
         tunnel._url = None
         tunnel._process = None
         assert not tunnel.active
 
-        # Now request should pass without auth
-        resp = client.get("/api/sessions")
-        assert resp.status_code == 200
+        assert _refused(client.get("/api/sessions"))
 
 
 # ── Tests: cookie-based auth (set by serve_spa ?token= bootstrap) ───────
@@ -226,8 +227,7 @@ class TestCookieAuth:
         _activate_tunnel(app)
         client = TestClient(app, cookies={"gaia_tunnel_token": "bogus"})
         resp = client.get("/api/sessions")
-        assert resp.status_code == 401
-        assert "Invalid tunnel" in resp.json()["detail"]
+        assert _refused(resp)
 
     def test_cookie_fallback_when_header_missing(self, app):
         """Cookie is accepted when Authorization header is absent."""
@@ -376,7 +376,8 @@ class TestSpaCookieBootstrap:
     def test_bootstrap_then_subsequent_api_call_succeeds(self, app_with_frontend):
         """End-to-end: GET /?token=<x> redirects + sets cookie, /api/sessions works."""
         token = _activate_tunnel(app_with_frontend)
-        client = TestClient(app_with_frontend)
+        # The tunnel is HTTPS, so the cookie is Secure.
+        client = TestClient(app_with_frontend, base_url="https://testserver")
 
         # Step 1: visit bootstrap URL -- should redirect (303) and set cookie.
         resp = client.get(f"/?token={token}", follow_redirects=False)
@@ -395,52 +396,20 @@ class TestSpaCookieBootstrap:
 
 
 class TestForwardedHeaderSpoofRejected:
-    """Localhost bypass MUST require the absence of ``X-Forwarded-*`` headers.
+    """Claiming a local origin through ``X-Forwarded-*`` earns nothing."""
 
-    Without this gate, a remote attacker through the ngrok tunnel could
-    send ``X-Forwarded-For: 127.0.0.1`` and -- if the framework rewrites
-    ``request.client.host`` based on the header -- impersonate the
-    Electron desktop app, bypassing tunnel auth entirely.
-
-    These tests pin the contract regardless of whether the framework
-    happens to do that rewrite today.
-    """
-
-    def test_forwarded_for_blocks_bypass(self, app):
-        """Even from a localhost peer, ``X-Forwarded-For`` forces auth."""
+    @pytest.mark.parametrize(
+        "header",
+        [
+            {"X-Forwarded-For": "127.0.0.1"},
+            {"X-Forwarded-Host": "fake.ngrok-free.app"},
+            {"X-Forwarded-Proto": "https"},
+        ],
+    )
+    def test_forwarded_header_without_token_is_refused(self, app, header):
         _activate_tunnel(app)
-        client = TestClient(app)
-        # TestClient peer is "testclient", not in _LOCAL_HOSTS, so the
-        # bypass would not apply anyway -- but adding X-Forwarded-For
-        # is the realistic shape an attacker would use, and we lock in
-        # that auth is still required (not silently skipped).
-        resp = client.get(
-            "/api/sessions",
-            headers={"X-Forwarded-For": "127.0.0.1"},
-        )
-        assert (
-            resp.status_code == 401
-        ), "Spoofed X-Forwarded-For: 127.0.0.1 must NOT bypass tunnel auth"
-
-    def test_forwarded_host_blocks_bypass(self, app):
-        """``X-Forwarded-Host`` set to a tunnel host also forces auth."""
-        _activate_tunnel(app)
-        client = TestClient(app)
-        resp = client.get(
-            "/api/sessions",
-            headers={"X-Forwarded-Host": "fake.ngrok-free.app"},
-        )
-        assert resp.status_code == 401
-
-    def test_forwarded_proto_blocks_bypass(self, app):
-        """``X-Forwarded-Proto`` is enough to force auth too."""
-        _activate_tunnel(app)
-        client = TestClient(app)
-        resp = client.get(
-            "/api/sessions",
-            headers={"X-Forwarded-Proto": "https"},
-        )
-        assert resp.status_code == 401
+        client = TestClient(app, client=("127.0.0.1", 50000))
+        assert _refused(client.get("/api/sessions", headers=header))
 
 
 class TestConnectedDevice:

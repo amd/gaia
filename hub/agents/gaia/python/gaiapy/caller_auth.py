@@ -18,8 +18,10 @@ from __future__ import annotations
 from typing import FrozenSet
 
 from gaia.sidecar.caller_auth import (  # noqa: F401  (re-exported)
+    ALLOW_NO_TOKEN_ENV_VAR,
     CallerAuthConfig,
     HostOriginMiddleware,
+    check_startup,
     config_from_env,
     configure,
     generate_session_token,
@@ -87,12 +89,14 @@ def install_openapi_security(app) -> None:
 
 
 __all__ = [
+    "ALLOW_NO_TOKEN_ENV_VAR",
     "TOKEN_ENV_VAR",
     "TOKEN_FILE_ENV_VAR",
     "SURFACE",
     "EXEMPT_PATHS",
     "CallerAuthConfig",
     "HostOriginMiddleware",
+    "check_startup",
     "config_from_environment",
     "configure",
     "generate_session_token",

@@ -985,6 +985,7 @@ def _launch_agent_ui(port=4200, base_url=None, log=None, debug=False, webui_dist
     try:
         from gaia.ui.server import (
             create_app,
+            launch_url,
             lemonade_is_remote,
             start_model_server_owner,
         )
@@ -999,13 +1000,20 @@ def _launch_agent_ui(port=4200, base_url=None, log=None, debug=False, webui_dist
         # "localhost" can resolve to IPv6 ::1 and fail against this IPv4 listener.
         log.info(f"Starting GAIA Agent UI on http://127.0.0.1:{port}")
         print(f"Starting GAIA Agent UI on http://127.0.0.1:{port}")
-        print(f"   Open your browser to http://127.0.0.1:{port}")
-        print("   Press Ctrl+C to stop")
-        print()
         import uvicorn
 
         # create_app() refuses an unsafe GAIA_HOME, so nothing is written there first.
         app = create_app(webui_dist=webui_dist)
+        # Only to a terminal: the desktop app logs this process's stdout.
+        if sys.stdout.isatty():
+            print(
+                f"   Open your browser to {launch_url(app, '127.0.0.1', port)}",
+                flush=True,
+            )
+        else:
+            print(f"   Agent UI API on http://127.0.0.1:{port}", flush=True)
+        print("   Press Ctrl+C to stop")
+        print()
         _enable_backend_fault_log(log)
         if not base_url and not lemonade_is_remote():
             # First run is set up in the app; the daemon owns the model server.

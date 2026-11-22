@@ -1332,9 +1332,11 @@ async def main():
     report = StressReport()
     report.start_time = time.time()
 
-    # The backend refuses mutating /api requests without this header
-    # (gaia/ui/security.py) — session create, chat send and delete all need it.
-    async with httpx.AsyncClient(headers={"X-Gaia-UI": "1"}) as client:
+    # The backend refuses /api requests without the CSRF header and its API
+    # token (gaia/ui/security.py, gaia/ui/api_token.py).
+    from gaia.ui.api_token import auth_headers
+
+    async with httpx.AsyncClient(headers=auth_headers()) as client:
         # ── Phase 1: Infrastructure Tests ──
         print("\n--- Phase 1: Infrastructure ---")
         await test_health_check(client, report)

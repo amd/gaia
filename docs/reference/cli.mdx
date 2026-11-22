@@ -87,7 +87,7 @@ gaia --ui --base-url https://your-server:13305/api/v1
 </CodeGroup>
 
 <Note>
-  `gaia chat --ui` continues to work as an alias. The Agent UI does not gate on your processor model — the Settings panel reports your processor, memory and model status for information only.
+  `gaia chat --ui` continues to work as an alias. It prints a link to open, `http://127.0.0.1:4200/?launch=...`, that signs the browser in once ([API token](/sdk/sdks/agent-ui#api-token)). The Agent UI does not gate on your processor model — the Settings panel reports your processor, memory and model status for information only.
 </Note>
 
 ### One-shot headless run (`gaia -p`)

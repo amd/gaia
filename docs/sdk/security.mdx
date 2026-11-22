@@ -187,6 +187,19 @@ except ValueError as e:
 
 ---
 
+## Local services require a token
+
+Binding loopback is not access control, so GAIA's local HTTP services ask
+every caller for a secret, including callers on the same PC:
+
+- **Agent UI backend** — a per-install token in `~/.gaia/agent-ui-token` on
+  every `/api` and `/v1` route. See [Agent UI security](/sdk/sdks/agent-ui#security).
+- **Agent sidecars** — a per-launch bearer token the launcher writes to an
+  owner-only file and passes by path. A sidecar started without one refuses to
+  start unless `GAIA_SIDECAR_ALLOW_NO_TOKEN=1` is set, for local development only.
+
+---
+
 ## Related Topics
 
 - [Core Agent System](/sdk/core/agent-system) - Agent security configuration

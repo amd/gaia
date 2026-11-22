@@ -8,6 +8,12 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 Requires the `gaia` Python CLI 0.27.0+ on `PATH`.
 
+- **The sidecar always runs with a caller token.** `startSidecar`,
+  `spawnSidecar` and `gaia serve` now mint a token for each start, hand it to
+  the sidecar in a `0600` file, and return it as `authToken` (`gaia serve`
+  prints the file's path). They used to mint nothing, which left the sidecar
+  with its token check off. A sidecar started with no token now refuses to
+  start; a developer running one by hand sets `GAIA_SIDECAR_ALLOW_NO_TOKEN=1`.
 - **The Python package is now `gaiapy`.** `import gaia_agent` and
   `gaia_agent.<module>` still work and return the same modules, so code that
   imports the old name keeps running. A `gaiapy` command now starts the harness

@@ -272,12 +272,28 @@ def _get(url: str) -> bool:
         return False
 
 
-def _enable_memory(backend: str) -> None:
+def _ui_headers(env: dict) -> dict:
+    """The CSRF header and the API token the backend started with *env* wrote."""
+    override = env.get("GAIA_UI_TOKEN_FILE", "").strip()
+    path = Path(override) if override else Path(env["GAIA_HOME"]) / "agent-ui-token"
+    try:
+        token = path.read_text(encoding="utf-8").strip()
+    except OSError as e:
+        raise SystemExit(
+            f"Cannot read the Agent UI API token at {path} ({e}); the backend "
+            "writes it on startup, so check its log."
+        ) from e
+    if not token:
+        raise SystemExit(f"The Agent UI API token file {path} is empty.")
+    return {"X-Gaia-UI": "1", "Authorization": f"Bearer {token}"}
+
+
+def _enable_memory(backend: str, env: dict) -> None:
     req = urllib.request.Request(
         f"{backend}/api/memory/settings",
         data=b'{"memory_enabled": true}',
         method="PUT",
-        headers={"X-Gaia-UI": "1", "Content-Type": "application/json"},
+        headers={**_ui_headers(env), "Content-Type": "application/json"},
     )
     with urllib.request.urlopen(req, timeout=30) as resp:
         body = json.loads(resp.read())
@@ -459,8 +475,8 @@ def _run_category(category: str, env: dict, p: dict, args) -> int:
                 raise SystemExit(f"Backend not healthy in 10 min; see {log_path}")
             time.sleep(3)
         if p["memory"]:
-            _enable_memory(p["backend"])
-        _require_empty_memory(p["backend"], Path(env["GAIA_MEMORY_DB"]), category)
+            _enable_memory(p["backend"], env)
+        _require_empty_memory(p["backend"], Path(env["GAIA_MEMORY_DB"]), category, env)
 
         print(f"=== {category}  (GAIA_HOME={cat_home})", flush=True)
         with open(args.out / f"{category}.log", "w", encoding="utf-8") as log:
@@ -558,10 +574,12 @@ def _keep_home(cat_home: Path, dest: Path) -> Path:
     return dest
 
 
-def _require_empty_memory(backend: str, memory_db: Path, category: str) -> None:
+def _require_empty_memory(
+    backend: str, memory_db: Path, category: str, env: dict
+) -> None:
     """Refuse to run *category* unless the backend's own memory store is empty."""
     req = urllib.request.Request(
-        f"{backend}/api/memory/stats", headers={"X-Gaia-UI": "1"}
+        f"{backend}/api/memory/stats", headers=_ui_headers(env)
     )
     with urllib.request.urlopen(req, timeout=30) as resp:
         stats = json.loads(resp.read())

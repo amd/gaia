@@ -1291,9 +1291,9 @@ def _probe_lemonade() -> Dict[str, Any]:
 async def require_caller_token(request: Request) -> None:
     """Reject a request that does not carry this session's bearer token.
 
-    No-ops when auth was never configured (the product server and the OpenAPI
-    export mount this router without it) or when no token is set (dev mode,
-    warned about at startup) — Host/Origin still apply in both cases.
+    No-ops when auth was never configured in this process. With no token,
+    every request is refused unless the developer set
+    ``GAIA_SIDECAR_ALLOW_NO_TOKEN=1``; Host/Origin always apply.
     """
     config = caller_auth.get_config()
     if config is None or caller_auth.is_exempt_path(request.url.path):
@@ -2617,33 +2617,26 @@ async def revoke_grants(session_id: str, key: Optional[str] = None) -> GrantsRes
 
 
 def _log_caller_auth_state(auth_config: Any) -> None:
-    """Report which caller-auth channel this server came up on.
+    """Refuse to serve without a token, else report the caller-auth channel.
 
-    Emitted from the app's LIFESPAN, not from ``build_app``: importing this
-    module is also how the frozen binary reaches the stdio transport, whose
-    stdout is the event wire — a line logged at import time lands in the middle
-    of the JSON stream and the reader renders it as a malformed event.
+    Runs from the app's LIFESPAN, not from ``build_app``: importing this module
+    is also how the frozen binary reaches the stdio transport, which needs no
+    token and whose stdout is the event wire — a line logged at import time
+    lands in the middle of the JSON stream as a malformed event.
     """
-    if auth_config.token:
-        channel = (
-            f"0600 secret file ({caller_auth.TOKEN_FILE_ENV_VAR})"
-            if os.environ.get(caller_auth.TOKEN_FILE_ENV_VAR)
-            else f"{caller_auth.TOKEN_ENV_VAR} env var (legacy delivery)"
-        )
-        logger.info(
-            "GAIA sidecar: caller authentication ENABLED via %s "
-            "(per-session bearer token required on /v1/%s/* requests).",
-            channel,
-            AGENT_ID,
-        )
+    caller_auth.check_startup(auth_config)
+    if not auth_config.token:
         return
-    logger.warning(
-        "GAIA sidecar: caller authentication DISABLED — neither %s nor %s "
-        "is in the environment. This is intended for LOCAL DEVELOPMENT "
-        "only; the shipped product spawns the sidecar with a per-session "
-        "token. Host/Origin protection is still enforced.",
-        caller_auth.TOKEN_FILE_ENV_VAR,
-        caller_auth.TOKEN_ENV_VAR,
+    channel = (
+        f"0600 secret file ({caller_auth.TOKEN_FILE_ENV_VAR})"
+        if os.environ.get(caller_auth.TOKEN_FILE_ENV_VAR)
+        else f"{caller_auth.TOKEN_ENV_VAR} env var (legacy delivery)"
+    )
+    logger.info(
+        "GAIA sidecar: caller authentication ENABLED via %s "
+        "(per-session bearer token required on /v1/%s/* requests).",
+        channel,
+        AGENT_ID,
     )
 
 
@@ -2946,6 +2939,15 @@ def serve_http(argv: List[str]) -> int:
     except (SkillSetError, AllowedPathsEnvError) as exc:
         print(f"gaia-agent: {exc}", file=sys.stderr)
         return 2
+
+    # The lifespan refuses too; checking here gives a clean message, not a trace.
+    auth_config = caller_auth.config_from_environment()
+    if not auth_config.token and not auth_config.allow_no_token:
+        try:
+            caller_auth.check_startup(auth_config)
+        except RuntimeError as exc:
+            print(f"gaia-agent: {exc}", file=sys.stderr)
+            return 2
 
     try:
         from gaia.sidecar import parent_watch

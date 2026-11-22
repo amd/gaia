@@ -752,14 +752,21 @@ play, and none of them exposes user data or accepts work. Host and Origin still
 apply to them, so `waitForHealth` and `checkVersion` work against a
 token-protected sidecar without knowing the token.
 
-**Dev mode.** If neither env var is set the token check is skipped and the
-sidecar logs a loud warning saying so; Host and Origin are still enforced. That
-is the state a sidecar this package spawns comes up in, because `spawnSidecar`
-mints nothing — pass your own token through `spawnSidecar`'s `env` option to
-turn the check on. The shipped product does not rely on dev mode: the daemon
-mints a per-session token and passes it as `GAIA_GAIA_SIDECAR_TOKEN_FILE`
-(`gaia.daemon.sidecars.spec` mirrors both names as plain strings so core never
-imports this wheel).
+**No token, no start.** If neither env var is set the sidecar refuses to
+start, with an error naming both variables and the fix. Every launcher mints a
+per-session token: `spawnSidecar` / `startSidecar` (and so `gaia serve`) write
+it to a fresh `0600` file passed as `GAIA_GAIA_SIDECAR_TOKEN_FILE`, return it as
+`sidecar.authToken` (and the file path as `sidecar.tokenFile`), and remove the
+file when the sidecar exits; pass `authToken` to choose the value. The daemon
+does the same (`gaia.daemon.sidecars.spec` mirrors both names as plain strings
+so core never imports this wheel). A developer running the sidecar by hand can
+set `GAIA_SIDECAR_ALLOW_NO_TOKEN=1` (only `1` counts) to start it without a
+token; the token check is then off, a loud warning is logged, and Host and
+Origin are still enforced. No GAIA launcher sets it.
+
+The OpenAPI document declares the gate: a `bearerAuth` HTTP scheme, and
+`security: [{"bearerAuth": []}]` on every gated operation; the token-exempt
+probes declare `security: []`.
 
 **Child processes.** The programs the agent starts — shell commands, MCP
 servers, CLI installs and sign-ins, native hub agents, media tools, the Lemonade
@@ -1068,7 +1075,7 @@ Exported from the package root — see `src/index.ts`.
 
 **Lifecycle:** `spawnSidecar`, `startSidecar`, `waitForHealth`, `checkVersion`,
 `health`, `version`, `shutdown`, `runTui`, `resolveSidecarPath`, `resolveTuiPath`,
-`sidecarExecutableName`, `tuiExecutableName`.
+`sidecarExecutableName`, `tuiExecutableName`, `generateSessionToken`.
 
 **Platform:** `currentPlatformKey`, `loadLock`, `resolveEntry`, `componentLock`,
 `componentBaseUrl`, `platformsFor`, `defaultLockPath`, `isPlaceholderSha`,
@@ -1076,7 +1083,7 @@ Exported from the package root — see `src/index.ts`.
 `SUPPORTED_SIDECAR_PLATFORMS`, `SUPPORTED_TUI_PLATFORMS`, `SUPPORTED_PLATFORMS`.
 
 **Constants:** `AGENT_ID`, `API_VERSION`, `DEFAULT_HOST`, `DEFAULT_PORT`,
-`RESERVED_PORT`.
+`RESERVED_PORT`, `TOKEN_FILE_ENV_VAR`, `TOKEN_ENV_VAR`.
 
 `resolveSidecarPath` / `resolveTuiPath` re-verify the file's SHA-256 against
 `binaries.lock.json` before returning a path that is about to be spawned — the

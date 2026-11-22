@@ -14,6 +14,7 @@ import { expect, test, type Page } from '@playwright/test';
 
 import { ANSWER_SESSION, AUTOMATIONS, DISCORD_STATES, MESSAGES, MODEL_LIST, NOW, RESOURCES, SESSIONS, SYSTEM_STATUS, TOOL_STATUS, holdOnToolStatus, mockApi, shownText, useLocale, useTheme, withAutomations, withConnectors, withCrashedBackend, withDesktopBridges, withDiscord, withMemory, withModelPage, withSettingsPanes, withoutFlagship, withAgentPrograms, AGENT_DOWNLOADING, AGENT_DOWNLOAD_FAILED, type AgentProgramsAnswers, type MemoryState } from './fixtures';
 import { ENGINE_FAILED, NARROW_SCENES, PLAN_COLD, SETUP_SCENES, expectSnugTags, scene, withSetup } from './setup-scenes';
+import { translateBare } from '../src/i18n/registry';
 
 test.use({ viewport: { width: 1400, height: 900 } });
 
@@ -516,6 +517,18 @@ for (const [title, locale, name] of [
         await shot(page, `attachment-name-${locale}`);
         expect(await audit(page)).toEqual([]);
         await page.screenshot({ path: info.outputPath('recording.png') });
+    });
+}
+
+for (const locale of ['en', 'ar']) {
+    test(`a browser without the API token is told how to sign in (${locale})`, async ({ page }, info) => {
+        await open(page, '', locale, (p) => p.route('**/api/**', (route) =>
+            route.fulfill({ status: 401, json: { detail: 'Sign in with the link gaia chat --ui prints.', code: 'ui_token_required' } })));
+        const notice = page.getByRole('alert');
+        await expect(notice).toContainText(translateBare(locale, 'auth.signIn.title'));
+        await expect(notice).toContainText('gaia chat --ui');
+        expect(await audit(page)).toEqual([]);
+        await page.screenshot({ path: info.outputPath(`sign-in-${locale}.png`) });
     });
 }
 
