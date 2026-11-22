@@ -722,7 +722,11 @@ TEST(GaiaAgentTest, OnlyAnExplicitStatementThatATestStillFailsExcusesAFailedRun)
           "All tests pass. test_median won't fail again.", "All tests pass. median() can't fail on an empty list.",
           "All tests pass. parse() fails fast on bad input.", "All tests pass. 2 tests failed, so I fixed them.",
           "All tests pass. test_mode didn't pass before the fix.", "All tests pass. test_mode fails no more.",
-          "All tests pass. None of the tests are failing.", "All tests pass. The loader fails loudly on a bad path."}) {
+          "All tests pass. None of the tests are failing.", "All tests pass. The loader fails loudly on a bad path.",
+          "All tests pass; the regression test fails on the old code.",
+          "All tests pass; the test fails if the input is empty.",
+          "All tests pass; the guard test fails when the limit is exceeded.",
+          "All tests pass; the new test fails before the fix and passes after."}) {
         EXPECT_EQ(why(GaiaAgent::unsupportedTestClaim(answer, hidden)), "`pytest` didn't pass when it last ran")
             << answer;
         EXPECT_EQ(why(GaiaAgent::unsupportedTestClaim(answer, onlyFailed)), "the tests run this turn didn't pass")
@@ -778,7 +782,10 @@ TEST(GaiaAgentTest, ACountOfFailuresTheAnswerSaysAreOverDoesNotExcuseAFailedRun)
           "51 tests pass and test_mode fails.", "All 4 tests pass; test_mode fails.",
           "The rest pass but the median tests fail.", "2 failing tests remain; the others pass.",
           "The median tests pass. 2 failing tests and the rest pass.", "The median tests pass. 1 failure, 3 passed.",
-          "The median tests pass. The 2 failing tests don't pass yet."}) {
+          "The median tests pass. The 2 failing tests don't pass yet.", "The rest pass but test_mode fails",
+          "All tests pass but test_mode still fails.", "All tests pass; test_mode fails now.",
+          "All tests pass; tests.test_stats.test_mode fails.", "All tests pass; tests/test_stats.py::test_mode fails.",
+          "The median tests pass. 2 failing tests that I am working on."}) {
         EXPECT_FALSE(GaiaAgent::unsupportedTestClaim(answer, onlyFailed)) << answer;
         EXPECT_FALSE(GaiaAgent::unsupportedTestClaim(answer, hidden)) << answer;
     }

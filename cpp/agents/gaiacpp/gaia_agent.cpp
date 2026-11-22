@@ -1108,7 +1108,7 @@ std::string withoutResolvedFailures(const std::string& text) {
         std::regex::icase);
 #undef GAIA_NUM
     static const std::regex resolved(
-        R"(\b(?:pass(?:es|ed|ing)?|green|succeed(?:s|ed)?|gone|cleared|fixed|resolved|work(?:s|ing)?)\b)",
+        R"(\b(?:pass(?:es|ed|ing)?|green|succeed(?:s|ed)?|gone|cleared|fixed|resolved|work(?:s|ing)?\b(?!\s+on\b))\b)",
         std::regex::icase);
     static const std::regex negation(R"(n't\b|n’t\b|\b(?:not|never|no|nor)\b)", std::regex::icase);
     std::string out;
@@ -1171,9 +1171,11 @@ bool reportsOutstandingFailure(const std::string& text) {
         R"(\bfail(?:s|ed|ing)?\s+(?:fast|early|loudly|gracefully|safely|closed|open|over|quickly|cleanly)\b)",
         std::regex::icase);
     static const std::regex asBefore(R"(\b(?:as|like)\s+before\b)", std::regex::icase);
-    // "All tests pass; test_mode fails", "the rest pass but the median tests fail".
+    // "All tests pass; test_mode fails", "the rest pass but the median tests fail". Only a bare "fails"
+    // ending its clause: "the regression test fails on the old code" describes the test, not a result.
     static const std::regex namedFails(
-        R"((?:;|\bbut\b)\s*(?:the\s+)?(?:[\w-]+\s+)?[\w.:/\[\]-]*test[\w.:/\[\]-]*\s+(?:still\s+)?fails?\b(?!-))",
+        R"((?:;|\bbut\b)\s*(?:the\s+)?(?:[\w-]+\s+)?[\w.:/\[\]-]*test[\w.:/\[\]-]*\s+(?:still\s+)?fails?)"
+        R"((?:\s+(?:still|now))?(?=\s*(?:$|[.!?;,:)\n]|(?:—|–|-)\s|\bbut\b)))",
         std::regex::icase);
     static const std::regex sentenceBreak(R"((?:[.!?](?:\s+|$))|\n+)");
     static const std::regex clauseBreak(
