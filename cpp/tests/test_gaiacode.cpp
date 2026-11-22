@@ -336,7 +336,9 @@ TEST(GaiacodeEvents, AClippedOrUnreadRunBacksNothing) {
 
 TEST(GaiacodeClaims, RecognisesTestNamesChecksAndCi) {
     for (const char* a : {"test_parse now passes.", "test_stats.py passes after the fix.", "All checks pass.",
-                          "run_checks passed.", "CI is green now.", "parser_test passes"}) {
+                          "run_checks passed.", "CI is green now.", "parser_test passes",
+                          "All checks passed successfully.", "CI passed successfully.", "checks pass (3/3)",
+                          "All CI checks pass for this PR.", "test_parse_dates passes successfully."}) {
         EXPECT_TRUE(CodeAgent::claimsTestsPass(a)) << a;
     }
     EXPECT_FALSE(CodeAgent::claimsTestsPass("I couldn't get test_parse to pass."));
@@ -377,29 +379,93 @@ TEST(GaiacodeChecks, AnOutsideCommandIsRefusedBeforeAnyApproval) {
     fs::remove_all(other);
 }
 
-TEST(GaiacodeEvents, ReadsAndLogsAfterTheTestsAreNotEdits) {
-    EXPECT_EQ(bashRun("python -m pytest -q && git status", "4 passed in 0.1s\n", 0), kGreen);
-    EXPECT_EQ(bashRun("python -m pytest -q; git diff --stat", "4 passed in 0.1s\n", 0), kGreen);
-    EXPECT_EQ(bashRun("python -m pytest -q | tee run.log", "4 passed in 0.1s\n", 0), kGreen);
-    json truncated = {{"stdout", "ok pkg\n"}, {"stderr", ""}, {"exit_code", 0}, {"timed_out", false},
-                      {"truncated", true}};
-    EXPECT_FALSE(CodeAgent::classify("bash_execute", {{"command", "go test ./..."}}, truncated).has_value())
-        << "a clipped run backs nothing";
+TEST(GaiacodeEvents, AClippedRunBacksNothingUnlessItFailed) {
+    json clipped = {{"stdout", "ok pkg\n"}, {"stderr", ""}, {"exit_code", 0}, {"timed_out", false}, {"truncated", true}};
+    EXPECT_FALSE(CodeAgent::testResult("bash_execute", {{"command", "go test ./..."}}, clipped).has_value());
+    clipped["exit_code"] = 1;
+    EXPECT_EQ(CodeAgent::testResult("bash_execute", {{"command", "go test ./..."}}, clipped), kRed)
+        << "a long failing run still failed";
 }
 
-TEST(GaiacodeEvents, ALintRunIsNotAnEditButAFormatterIs) {
-    auto check = [](const std::string& command) {
-        return CodeAgent::classify("run_checks", {{"command", command}},
-                                   {{"status", "success"}, {"command", command}, {"test_run", false},
-                                    {"exit_code", 0}});
-    };
-    for (const char* lint : {"ruff check .", "mypy src", "eslint .", "tsc --noEmit", "cargo clippy", "go vet ./...",
-                             "black --check ."}) {
-        EXPECT_FALSE(check(lint).has_value()) << lint;
+namespace {
+// A git repository with a stand-in pytest, and an agent whose shell works in it.
+struct MeasuredRepo {
+    fs::path dir;
+    std::string pytest;
+    std::unique_ptr<CodeAgent> agent;
+    explicit MeasuredRepo(const std::string& name, bool git = true) {
+        dir = freshDir(name);
+        writeFile(dir / "calc.py", "def add(a, b):\n    return a + b\n");
+        pytest = fakePytest(dir);
+        if (git) {
+            for (const char* c : {"git init -q", "git -c user.email=t@t -c user.name=t add -A",
+                                  "git -c user.email=t@t -c user.name=t commit -qm init"}) {
+                EXPECT_EQ(ProcessRunner::run(c, 30000, dir.u8string()).exitCode, 0) << c;
+            }
+        }
+        AgentConfig cfg;
+        cfg.modelId = "mock-model";
+        cfg.baseUrl = "http://127.0.0.1:1/api/v1";
+        CodeAgent::Options o;
+        o.workspaceRoots = {dir.u8string()};
+        o.shell = BashTools::newSession(dir.u8string());
+        agent = std::make_unique<CodeAgent>(cfg, o);
+        agent->setToolConfirmCallback([](const std::string&, const json&) { return ToolConfirmResult::ALLOW_ONCE; });
     }
-    for (const char* fmt : {"black .", "ruff format", "eslint --fix .", "prettier --write src", "cargo fmt"}) {
-        EXPECT_EQ(check(fmt), kEdit) << fmt;
+    ~MeasuredRepo() {
+        std::error_code ec;
+        fs::remove_all(dir, ec);
     }
+    json run(const std::string& tool, const json& args) { return agent->toolRegistry().executeTool(tool, args); }
+};
+}  // namespace
+
+TEST(GaiacodeEvents, AnEditIsWhatChangedTheFilesNotWhatTheCommandLooksLike) {
+    if (BashTools::detectShell().empty()) GTEST_SKIP() << "needs a POSIX shell for the commands below";
+    MeasuredRepo repo("gaiacode-measured");
+    ASSERT_EQ(repo.run("run_checks", {{"command", repo.pytest}}).value("green", false), true);
+    // Lint-like and git reads after the tests change nothing, whatever their words.
+    repo.run("run_checks", {{"command", "git diff --stat"}});
+    repo.run("bash_execute", {{"command", repo.pytest + " && git status --short && git log -1 --oneline"}});
+    const std::vector<TurnEvent> events = repo.agent->events();
+    ASSERT_FALSE(events.empty());
+    EXPECT_EQ(events.back(), kGreen);
+}
+
+TEST(GaiacodeEvents, ATeeIntoASourceFileIsAnEdit) {
+    if (BashTools::detectShell().empty()) GTEST_SKIP() << "needs a POSIX shell for the commands below";
+    MeasuredRepo repo("gaiacode-measured-tee");
+    repo.run("run_checks", {{"command", repo.pytest}});
+    repo.run("bash_execute", {{"command", "printf 'x = 1\\n' | tee -a calc.py"}});
+    const std::vector<TurnEvent> events = repo.agent->events();
+    ASSERT_FALSE(events.empty());
+    EXPECT_EQ(events.back(), kEdit);
+}
+
+TEST(GaiacodeEvents, ALintRunChangesNothingButAFormatterDoes) {
+    if (BashTools::detectShell().empty()) GTEST_SKIP() << "needs a POSIX shell for the commands below";
+    MeasuredRepo repo("gaiacode-measured-lint");
+    // Stand-ins: one reads the code, one rewrites it.
+    writeFile(repo.dir / "lint", "#!/bin/sh\ngrep -q add calc.py && echo 'All checks passed!'\n");
+    writeFile(repo.dir / "fmt", "#!/bin/sh\nprintf '\\n' >> calc.py\n");
+    fs::permissions(repo.dir / "lint", fs::perms::owner_all, fs::perm_options::add);
+    fs::permissions(repo.dir / "fmt", fs::perms::owner_all, fs::perm_options::add);
+    ProcessRunner::run("git -c user.email=t@t -c user.name=t add -A && git -c user.email=t@t -c user.name=t "
+                       "commit -qm tools",
+                       30000, repo.dir.u8string());
+    repo.run("run_checks", {{"command", repo.pytest}});
+    repo.run("run_checks", {{"command", "./lint"}});
+    EXPECT_EQ(repo.agent->events().back(), kGreen) << "a lint run after the tests is no edit";
+    repo.run("run_checks", {{"command", "./fmt"}});
+    EXPECT_EQ(repo.agent->events().back(), kEdit) << "a formatter that rewrote a file is";
+}
+
+TEST(GaiacodeEvents, OutsideARepositoryAnythingButAReadMayHaveEdited) {
+    EXPECT_FALSE(CodeAgent::treeFingerprint(fs::temp_directory_path().u8string() + "/no-such-repo-here").has_value());
+    EXPECT_EQ(CodeAgent::classify("run_checks", {{"command", "ruff check ."}},
+                                  {{"status", "success"}, {"command", "ruff check ."}, {"test_run", false}}),
+              kEdit)
+        << "with nothing to measure, it can't be shown to have changed nothing";
 }
 
 TEST(GaiacodeChecks, SumsDotnetProjectsAndTakesSwiftsOuterSuite) {
