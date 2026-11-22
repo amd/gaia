@@ -131,6 +131,7 @@ from gaia.agents.base.model_features import (
     FULL,
     ModelFeatures,
     features_for_model,
+    platform_withheld_tools,
     withheld_tools,
 )
 from gaia.agents.base.planted_instructions import (
@@ -3259,10 +3260,12 @@ def _plan_step_placeholder(
 
 
 def _withheld_skill_tools(agent: Any, skill: Any) -> List[str]:
-    """The tools *skill* consumes or provides that *agent*'s model is not offered."""
+    """The tools *skill* consumes or provides that *agent* is not offered,
+    by its model or on this PC."""
     # getattr: test stubs copy load_skill onto a plain class.
     features = getattr(agent, "model_features", FULL)
-    return sorted(set(_skill_tool_names(skill)) & withheld_tools(features))
+    withheld = withheld_tools(features) | set(platform_withheld_tools())
+    return sorted(set(_skill_tool_names(skill)) & withheld)
 
 
 def _skill_tool_names(skill: Any) -> List[str]:
@@ -5422,7 +5425,9 @@ Do NOT wrap conversational replies in JSON.
             self._instance_tools.update(getattr(self, "_withheld_tool_entries", {}))
             self._withheld_tool_entries = {
                 name: self._instance_tools.pop(name)
-                for name in sorted(withheld_tools(features))
+                for name in sorted(
+                    withheld_tools(features) | set(platform_withheld_tools())
+                )
                 if name in self._instance_tools
             }
             self._fit_load_skill_hint()
@@ -6264,6 +6269,13 @@ Do NOT wrap conversational replies in JSON.
         if withheld:
             from gaia.skills.errors import SkillUnavailableError
 
+            on_this_pc = platform_withheld_tools()
+            if all(name in on_this_pc for name in withheld):
+                raise SkillUnavailableError(
+                    f"Skill '{skill.name}' needs {', '.join(withheld)}, which "
+                    f"aren't offered on this PC. {on_this_pc[withheld[0]]} "
+                    "Tell the user this."
+                )
             raise SkillUnavailableError(
                 f"Skill '{skill.name}' needs {', '.join(withheld)}, which "
                 f"{self.model_id} is not offered. Tell the user this needs a "
