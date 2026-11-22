@@ -13,6 +13,13 @@ Requires the `gaia` Python CLI 0.27.0+ on `PATH`.
   without a new approval prompt, and the agent says it was declined. It is
   asked about again once the user asks for it ("run it again", or naming the
   command) or clears the conversation.
+- **The session panel no longer keeps listing a file as approved after its
+  agent is gone (contract 2.31).** A chat's "Files GAIA can reach" could
+  keep showing a file as approved after the agent that held that approval —
+  evicted, or lost to a sidecar restart — no longer existed. `final` and
+  `error` now carry `session_created: true` when the sidecar had to rebuild
+  the turn's agent, so a client can drop exactly the approvals that predate
+  this turn and keep any the turn's own prompt just granted.
 - **The sidecar always runs with a caller token.** `startSidecar`,
   `spawnSidecar` and `gaia serve` now mint a token for each start, hand it to
   the sidecar in a `0600` file, and return it as `authToken` (`gaia serve`
