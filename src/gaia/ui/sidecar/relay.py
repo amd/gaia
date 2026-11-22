@@ -467,6 +467,9 @@ def _dispatch_one(
             }
         )
 
+    elif etype == "task_list":
+        handler._emit(dict(event))
+
     elif etype == "context_usage":
         # A live measurement from a sidecar on contract 2.28, streamed before
         # the answer so the composer fills during a long turn. Its shape is the

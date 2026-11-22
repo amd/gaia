@@ -21,6 +21,7 @@ type canonicalEventsFixture struct {
 		PhaseExtension []string `json:"phase_extension"`
 		Warning        []string `json:"warning_extension"`
 		HistoryCut     []string `json:"history_cut_extension"`
+		ItemFields     []string `json:"item_fields"`
 		Plan           []string `json:"plan_extension"`
 	} `json:"events"`
 }
@@ -63,6 +64,7 @@ func TestCanonicalEventStructsMatchTheSharedFixture(t *testing.T) {
 		CanonicalTypeToolResult:        CanonicalToolResultEvent{},
 		CanonicalTypeNeedsConfirmation: CanonicalNeedsConfirmationEvent{},
 		CanonicalTypeNeedsInput:        CanonicalNeedsInputEvent{},
+		CanonicalTypeTaskList:          CanonicalTaskListEvent{},
 		CanonicalTypeFinal:             CanonicalFinalEvent{},
 		CanonicalTypeError:             CanonicalErrorEvent{},
 		CanonicalTypeContextUsage:      CanonicalContextUsageEvent{},
@@ -82,5 +84,10 @@ func TestCanonicalEventStructsMatchTheSharedFixture(t *testing.T) {
 		if got := jsonFields(v); strings.Join(got, ",") != strings.Join(want, ",") {
 			t.Errorf("%s decodes %v, fixture says %v", etype, got, want)
 		}
+	}
+	items := append([]string(nil), f.Events[CanonicalTypeTaskList].ItemFields...)
+	sort.Strings(items)
+	if got := jsonFields(TaskListItem{}); strings.Join(got, ",") != strings.Join(items, ",") {
+		t.Errorf("task_list items decode %v, fixture says %v", got, items)
 	}
 }

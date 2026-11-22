@@ -388,6 +388,9 @@ func (m ChatModel) handleCanonicalEvent(evt interface{}) (ChatModel, tea.Cmd, bo
 		m.updateViewport()
 		return m, nil, true
 
+	case event.CanonicalTaskListEvent:
+		// Pinned above the composer, never in the transcript: it updates in place.
+		m.setTaskList(&e)
 	case event.CanonicalContextUsageEvent:
 		m.takeContextUsage(e)
 

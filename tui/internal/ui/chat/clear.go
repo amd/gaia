@@ -41,6 +41,7 @@ func (m ChatModel) clearConversation() (tea.Model, tea.Cmd) {
 	if resetter, ok := m.client.(client.TranscriptResetter); ok {
 		resetter.ResetTranscript()
 		m.messages = nil
+		m.setTaskList(nil)
 	} else {
 		m.messages = []Message{{Role: RoleStatus, Content: "View cleared. This connection cannot reset the agent's conversation context; that context is unchanged."}}
 	}
@@ -59,6 +60,8 @@ func (m ChatModel) handleConversationCleared(msg conversationClearedMsg) (tea.Mo
 	} else {
 		m.messages = nil
 		m.clearSelection()
+		// The agent forgot its task list with the conversation.
+		m.setTaskList(nil)
 		m.ctxMeter = contextMeter{}
 	}
 	m.updateViewport()

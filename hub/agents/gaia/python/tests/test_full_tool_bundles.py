@@ -62,6 +62,8 @@ def flagship_registry():
     """
     with _isolated_registry(), pytest.MonkeyPatch.context() as mp:
         mp.setenv("GAIA_MEMORY_DISABLED", "1")
+        # With plans off, which is the one setting that registers update_tasks.
+        mp.setenv("GAIA_AGENT_PLANS", "0")
         mp.setattr(BrowserUseToolsMixin, "_pane_at_startup", lambda self: (True, True))
         # Opt-in (GAIA_DYNAMIC_TOOLS=1 / the UI toggle), and the bundles must
         # still cover the registry whenever someone turns it on.
@@ -159,6 +161,7 @@ def test_core_is_the_list_every_session_starts_on():
         "sleep",
         "summarize_document",
         "update_memory",
+        "update_tasks",
         "write_file",
     }
 

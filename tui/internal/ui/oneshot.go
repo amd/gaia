@@ -198,6 +198,9 @@ func RunOneShot(
 		// A phase repeats once a second while its count climbs; stderr gets
 		// each phase once, not a line per tick.
 		lastPhase string
+		// The task list re-sends itself on every tool call; stderr gets a line
+		// only when a different step starts.
+		lastTask string
 	)
 
 	handle := func(evt interface{}) {
@@ -280,6 +283,14 @@ func RunOneShot(
 			}
 			fmt.Fprintf(errW, "❌ %s\n", e.Detail)
 
+		case event.CanonicalTaskListEvent:
+			for i, item := range e.Items {
+				if item.Status != event.TaskInProgress || item.Content == lastTask {
+					continue
+				}
+				lastTask = item.Content
+				fmt.Fprintf(errW, "  [>] %d/%d %s\n", i+1, len(e.Items), item.Content)
+			}
 		case event.CanonicalContextUsageEvent:
 			// A meter for the next message; a one-shot has none.
 			debugf("context_usage: %d of %d tokens", e.Used, e.Window)

@@ -37,6 +37,7 @@ from gaia.agents.base.history import (
     with_session_context,
 )
 from gaia.agents.base.memory import MemoryMixin
+from gaia.agents.base.plan_tracker import PLAN_HINT
 from gaia.agents.base.skill_synthesis import DistilledProcedure, load_synthesis_config
 from gaia.agents.base.tool_loader import THIN_DESCRIPTION_CHARS, thin_tool_schema
 from gaia.agents.base.tools import _TOOL_REGISTRY
@@ -668,7 +669,8 @@ def test_fresh_sessions_share_the_system_prompt_and_tool_list(make_flagship, tmp
     for moved in ("Sam works on the safety team", "pinned-notes", str(other_folder)):
         assert moved in opening
         assert moved not in after[0][0]["content"]
-    assert opening.endswith("hello")
+    # The plan hint rides with the request; see gaia.agents.base.plan_tracker.
+    assert opening.endswith("hello" + PLAN_HINT)
 
 
 def test_an_empty_memory_store_changes_nothing_cached(make_flagship, tmp_path):

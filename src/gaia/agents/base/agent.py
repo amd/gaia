@@ -133,6 +133,19 @@ from gaia.agents.base.model_features import (
     features_for_model,
     withheld_tools,
 )
+from gaia.agents.base.plan_tracker import (
+    PLAN_HINT,
+    PLAN_INSTRUCTION,
+    PLAN_REMINDER,
+    SEND_BACK,
+    PlanTextFilter,
+    PlanTracker,
+    asks_for_plan,
+    parse_plan,
+    plan_from_thinking,
+    plans_enabled,
+    strip_plan,
+)
 from gaia.agents.base.planted_instructions import (
     acted_after,
     flag_tool_result,
@@ -217,6 +230,7 @@ from gaia.agents.base.verification import (
     VERIFY_AFTER_CHANGE_TAG,
     build_verification_scope,
     check_output,
+    is_mutating_tool,
     observed_text,
     project_has_tests,
     strip_verification_scope,
@@ -3537,6 +3551,10 @@ def _resolve_output_handles(agent, value):
     return value
 
 
+#: Tool names that mark a plan step as one that changes something.
+PLAN_CHANGE_TOOLS = WRITE_TOOLS
+
+
 class Agent(abc.ABC):
     """
     Base Agent class that provides core functionality for domain-specific agents.
@@ -3711,6 +3729,14 @@ class Agent(abc.ABC):
     _skill_set_loaded: Optional[List[str]] = None
 
     # Define state constants
+    # Class-level so a skeleton built without ``__init__`` still has them.
+    _plan_tracker_obj: Optional[PlanTracker] = None
+    #: Whether plans apply this turn; ``None`` until worked out.
+    _plans_active: Optional[bool] = None
+    #: The user's own words this turn ask for a plan.
+    _plan_asked = False
+    _plan_stream_filter: Optional[PlanTextFilter] = None
+
     STATE_PLANNING = "PLANNING"
     STATE_EXECUTING_PLAN = "EXECUTING_PLAN"
     STATE_DIRECT_EXECUTION = "DIRECT_EXECUTION"
@@ -5633,6 +5659,185 @@ Do NOT wrap conversational replies in JSON.
         ``super()._on_task_start(user_input)``. Anything expensive belongs
         behind a once-per-session guard inside the override, not here.
         """
+
+    def _task_list_reminder(self) -> Optional[str]:
+        """The task-list reminder due now, at most once a turn, or ``None``.
+
+        It rides at the end of the tool result being built, so it is saved
+        with the turn and every later request still extends this one.
+        """
+        tracker = self._plan_tracker()
+        if tracker is not None:
+            if not tracker.needs_reminder():
+                return None
+            tracker.reminded = True
+            logger.debug("Plan reminder sent")
+            return PLAN_REMINDER
+        task_list = getattr(self, "task_list", None)
+        if task_list is None or "update_tasks" not in self._tools_registry:
+            # Nothing to remind: the reminder names a tool this agent lacks.
+            return None
+        note = task_list.nudge()
+        if note is not None:
+            logger.debug("Task list reminder: %s", note)
+        return note
+
+    # -- the plan the loop ticks (see ``plan_tracker``) ---------------------
+
+    def _plan_tracker(self) -> Optional[PlanTracker]:
+        """The tracker for this agent, or ``None`` when plans are off for it."""
+        if self._plans_active is None:
+            self._plans_active = self._plans_configured()
+        if not self._plans_active:
+            return None
+        tracker = getattr(self, "_plan_tracker_obj", None)
+        if tracker is None:
+            tracker = PlanTracker(
+                tool_names=self._tools_registry,
+                change_tools=PLAN_CHANGE_TOOLS,
+                is_change=is_mutating_tool,
+            )
+            self._plan_tracker_obj = tracker
+        return tracker
+
+    def _plans_configured(self) -> bool:
+        """Whether this agent, on this model, asks for plans at all."""
+        return (
+            getattr(self, "task_list", None) is not None
+            and plans_enabled()
+            and self._uses_native_tool_calls()
+        )
+
+    def get_plan_system_prompt(self) -> str:
+        # Not the per-turn switch: the prompt is cached across turns.
+        return PLAN_INSTRUCTION if self._plans_configured() else ""
+
+    def _publish_plan(self, tracker: PlanTracker) -> None:
+        task_list = getattr(self, "task_list", None)
+        if task_list is not None:
+            task_list.track(tracker.snapshot())
+
+    def _adopt_plan(self, parsed: Dict[str, Any], reasoning: Optional[str]) -> None:
+        """Read a plan out of the model's reply, or out of its first thinking."""
+        tracker = self._plan_tracker()
+        if tracker is None:
+            return
+        if not parsed.get("tool_calls"):
+            if not self._plan_opens_answer_after_work():
+                # A plan in an answer is the user's to read.
+                return
+            items = parse_plan(parsed.get("answer"))
+            if items and tracker.set_steps(items):
+                # The work is done; there is nothing left to send it back for.
+                tracker.sent_back = True
+                self._publish_plan(tracker)
+            return
+        text = parsed.get("content")
+        items = parse_plan(text if isinstance(text, str) else None)
+        first_reply = not tracker.planned_this_request and tracker.tool_calls == 0
+        if items is None and first_reply:
+            items = plan_from_thinking(reasoning)
+        if items and tracker.set_steps(items):
+            self._publish_plan(tracker)
+
+    def _note_plan_progress(self, tool_name: str, tool_args: Any, ok: bool) -> None:
+        tracker = self._plan_tracker()
+        if tracker is None:
+            return
+        args = tool_args if isinstance(tool_args, dict) else None
+        if tracker.on_tool_result(tool_name, args, ok) and tracker.steps:
+            self._publish_plan(tracker)
+
+    def _plan_opens_answer_after_work(self) -> bool:
+        """Whether a plan in this answer recaps work the request already did.
+
+        Then it is the task list, not something the user asked to read.
+        """
+        tracker = self._plan_tracker()
+        return (
+            tracker is not None
+            and tracker.tool_calls > 0
+            and not tracker.planned_this_request
+            and not self._plan_asked
+        )
+
+    def _plan_hint(self) -> str:
+        """The plan reminder sent with the request.
+
+        Recorded with it too, unlike the one-shot notes: the next request must
+        resend this one exactly, or the server's prompt cache is lost.
+        """
+        return PLAN_HINT if self._plan_tracker() is not None else ""
+
+    def _without_plan(self, text: Any) -> Any:
+        """*text* as the user sees it: the task list already shows the plan."""
+        tracker = self._plan_tracker()
+        if not isinstance(text, str) or tracker is None:
+            return text
+        if not tracker.planned_this_request:
+            return text
+        # Only the plan the list shows: another plan is the user's to read.
+        return strip_plan(text, only=tracker.is_this_plan())
+
+    def _show_streamed(self, chunk: str) -> None:
+        """Forward streamed text, holding back a ``Plan:`` block."""
+        if self._plan_tracker() is None:
+            self.console.print_streaming_text(chunk)
+            return
+        if self._plan_stream_filter is None:
+            self._plan_stream_filter = PlanTextFilter()
+        shown = self._plan_stream_filter.feed(chunk)
+        if shown:
+            self.console.print_streaming_text(shown)
+
+    def _end_streamed(self, reply: str) -> None:
+        held, self._plan_stream_filter = self._plan_stream_filter, None
+        is_answer = not reply.lstrip().startswith('{"__tool_calls__"')
+        keep = is_answer and not self._plan_opens_answer_after_work()
+        tail = held.flush(keep_plan=keep) if held is not None else ""
+        if tail:
+            self.console.print_streaming_text(tail)
+        self.console.print_streaming_text("", end_of_stream=True)
+
+    def _finish_plan(self) -> None:
+        """The model answered: settle the steps that have nothing to check."""
+        tracker = self._plan_tracker()
+        if tracker is not None and tracker.finish():
+            self._publish_plan(tracker)
+
+    def _plan_send_back(self, answer: str) -> Optional[str]:
+        """The note that sends an early answer back, at most once a request."""
+        tracker = self._plan_tracker()
+        if tracker is None or not tracker.planned_this_request:
+            return None
+        if tracker.sent_back or tracker.has_failed() or tracker.failed_calls:
+            # After an error a model sent back tends to argue, not finish.
+            return None
+        if answer.rstrip().endswith("?"):
+            # The model is asking the user something; that is theirs to answer.
+            return None
+        if self.time_capped_run_seconds(1) == 0:
+            return None
+        pending = tracker.unfinished_checked()
+        if not pending:
+            return None
+        tracker.sent_back = True
+        return SEND_BACK.format(steps="\n".join("- " + text for text in pending))
+
+    def _mirror_plan_to_task_list(self) -> None:
+        """Derive the task list from the reply's ``plan`` field.
+
+        Only for a model that did not keep the list with ``update_tasks`` this
+        turn; the task list itself decides and logs that it did.
+        """
+        task_list = getattr(self, "task_list", None)
+        if task_list is None or not self.current_plan:
+            return
+        from gaia.agents.tools.task_list_tools import plan_step_text
+
+        task_list.mirror_plan(
+            [plan_step_text(step) for step in self.current_plan], self.current_step
+        )
 
     def _admit_skill_tools(  # pylint: disable=unused-argument
         self, names: List[str]
@@ -9207,6 +9412,7 @@ Do NOT wrap conversational replies in JSON.
         try:
             result = self._execute_tool(tool_name, tool_args)
             ok = not self._is_error_result(result)
+            self._note_plan_progress(tool_name, tool_args, ok)
             self._note_verification_signal(tool_name, tool_args, result, before=before)
             result = self._with_computation_note(tool_name, result)
             if scope is not None:
@@ -9781,6 +9987,9 @@ Do NOT wrap conversational replies in JSON.
         note_skill = getattr(self, "_note_skill_tool_use", None)
         if note_skill is not None:
             note_skill(tool_name)
+        task_list = getattr(self, "task_list", None)
+        if task_list is not None:
+            task_list.action_started(tool_name, tool_args)
 
         tool = execution_registry[tool_name]["function"]
         sig = inspect.signature(tool)
@@ -11618,6 +11827,9 @@ Do NOT wrap conversational replies in JSON.
                 if block.get("type") == "text":
                     block["text"] += _SINGLE_TOOL_DONE_SUFFIX
                     break
+        reminder = self._task_list_reminder()
+        if reminder is not None:
+            msg["content"][-1]["text"] += "\n\n" + reminder
         return msg
 
     def _recast_unpaired_tool_results(self, messages: List[Dict[str, Any]]) -> None:
@@ -13060,6 +13272,9 @@ Do NOT wrap conversational replies in JSON.
             # Spans a mixin parked for a turn that never opened must not
             # backdate the next one.
             self._pre_turn_spans = None
+            task_list = getattr(self, "task_list", None)
+            if task_list is not None:
+                task_list.end_turn()
             self._run_turn_end_hooks()
 
     def _expand_skill_command(self, user_input: Any) -> Any:
@@ -13556,6 +13771,14 @@ Do NOT wrap conversational replies in JSON.
         # Orientation. Runs before the prompt is composed so anything it
         # establishes is in the prompt on the turn that established it.
         self._on_task_start(user_input)
+        task_list = getattr(self, "task_list", None)
+        if task_list is not None:
+            task_list.begin_turn()
+        self._plan_stream_filter = None
+        self._plans_active = None
+        plan_tracker = self._plan_tracker()
+        if plan_tracker is not None:
+            plan_tracker.reset_request()
 
         # Lazy skill-body activation: re-selected every turn,
         # so a stale skill match never survives into a turn that no longer
@@ -13619,6 +13842,10 @@ Do NOT wrap conversational replies in JSON.
         # "Do not run anything, answer only with a plan": no nudge to act.
         request_text = self._request_text(user_input)
         no_action_requested = _asks_for_no_action(request_text)
+        self._plan_asked = asks_for_plan(request_text)
+        if no_action_requested:
+            # Asked for a plan and nothing else: it is the answer, not a to-do list.
+            self._plans_active = False
         # "Why does foo.py fail? Don't touch anything": look, but don't edit.
         no_look_requested = _asks_not_to_look(request_text)
         self._turn_no_look_requested = no_look_requested
@@ -13777,7 +14004,10 @@ Do NOT wrap conversational replies in JSON.
         conversation.append({"role": "user", "content": user_input})
         messages.recorded.clear()
         messages.append(
-            {"role": "user", "content": self._with_long_message_file(user_input)}
+            {
+                "role": "user",
+                "content": self._with_long_message_file(user_input) + self._plan_hint(),
+            }
         )
         self._tell_no_one_to_ask(messages)
         self._tell_time_budget(messages)
@@ -13892,6 +14122,7 @@ Do NOT wrap conversational replies in JSON.
                 # Display the current plan with the current step highlighted
                 if self.current_plan:
                     self.console.print_plan(self.current_plan, self.current_step)
+                    self._mirror_plan_to_task_list()
 
                 # Extract next step from plan
                 next_step = self.current_plan[self.current_step]
@@ -14055,6 +14286,7 @@ Do NOT wrap conversational replies in JSON.
                         # Check if we've completed the plan
                         if self.current_step >= self.total_plan_steps:
                             logger.debug("Plan execution completed")
+                            self._mirror_plan_to_task_list()
                             self.execution_state = self.STATE_COMPLETION
                             self.console.print_state_info(
                                 "COMPLETION: Plan fully executed"
@@ -14295,6 +14527,7 @@ Do NOT wrap conversational replies in JSON.
                 while True:
                     try:
                         self._before_model_call(messages)
+                        self._plan_stream_filter = None
                         model_calls += 1
                         response_stream = self.chat.send_messages_stream(
                             messages=self._with_session_context(messages),
@@ -14336,13 +14569,13 @@ Do NOT wrap conversational replies in JSON.
                                 if chunk_response.text:
                                     full_response = chunk_response.text
                             else:
-                                self.console.print_streaming_text(chunk_response.text)
+                                self._show_streamed(chunk_response.text)
                                 full_response += chunk_response.text
 
                         if cancelled_by_console:
                             break
 
-                        self.console.print_streaming_text("", end_of_stream=True)
+                        self._end_streamed(full_response)
                         response = full_response
                         self._turn_model_retries[
                             "request_retries"
@@ -14894,6 +15127,7 @@ Do NOT wrap conversational replies in JSON.
             logger.debug(f"Parsed response: {parsed}")
             thought_only = bool(parsed.pop("thought_only", False))
             thought_only_replies = thought_only_replies + 1 if thought_only else 0
+            self._adopt_plan(parsed, reasoning)
             conversation.append(
                 {"role": "assistant", "content": parsed}
                 | ({"reasoning": reasoning} if reasoning else {})
@@ -14905,12 +15139,18 @@ Do NOT wrap conversational replies in JSON.
             messages.append(self._build_assistant_message(response, parsed, reasoning))
             if "answer" not in parsed:
                 answer_beside_tool_calls = _answer_beside_tool_calls(
-                    parsed.get("content") if parsed.get("tool_calls") else None,
+                    (
+                        self._without_plan(parsed.get("content"))
+                        if parsed.get("tool_calls")
+                        else None
+                    ),
                     parsed.get("tool_calls"),
                 )
                 if parsed.get("tool_calls"):
                     answer_given_mid_turn = (
-                        _answer_beside_tool_calls(parsed.get("content"))
+                        _answer_beside_tool_calls(
+                            self._without_plan(parsed.get("content"))
+                        )
                         or answer_given_mid_turn
                     )
 
@@ -15508,6 +15748,7 @@ Do NOT wrap conversational replies in JSON.
                 # Display the current plan with the current step highlighted
                 if self.current_plan:
                     self.console.print_plan(self.current_plan, self.current_step)
+                    self._mirror_plan_to_task_list()
 
                 # When both plan and tool are present, prioritize the plan execution
                 # If we have a plan, we should execute from the plan, not the standalone tool call
@@ -15765,11 +16006,24 @@ Do NOT wrap conversational replies in JSON.
             if "answer" in parsed:
                 # Every check below must see the text the user will see.
                 answer_candidate = _with_answer_beside_tool_calls(
-                    parsed["answer"], answer_beside_tool_calls
+                    self._without_plan(parsed["answer"]), answer_beside_tool_calls
                 )
                 answer_candidate = _with_earlier_answer(
                     answer_candidate, answer_given_mid_turn
                 )
+                self._finish_plan()
+                if steps_taken < steps_limit - 1 and self_check_open is None:
+                    plan_note = self._plan_send_back(answer_candidate)
+                    if plan_note is not None:
+                        logger.info(
+                            "[WORKFLOW] Answer at step %d with plan steps open; "
+                            "sending it back once",
+                            steps_taken,
+                        )
+                        messages.append({"role": "user", "content": plan_note})
+                        conversation.append({"role": "user", "content": plan_note})
+                        self._reopen_turn_scope(conversation)
+                        continue
                 # FastFlowLM occasionally ends a long prefill with zero tokens.
                 if (
                     parsed.get("empty_response")

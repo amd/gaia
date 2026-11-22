@@ -419,6 +419,53 @@ for (const [title, locale] of [
     });
 }
 
+// The pinned plan while a turn runs: one step done, one failed, one to do.
+const TASK_LIST_EVENTS = [
+    {
+        type: 'task_list',
+        source: 'plan',
+        items: [
+            { id: 1, content: 'Read Documents/notes.txt', status: 'completed', started_at: 1_792_162_700, completed_at: 1_792_162_712 },
+            { id: 2, content: 'Save the merged list to Documents/actions.md', status: 'failed', started_at: 1_792_162_712, completed_at: null },
+            { id: 3, content: 'Tell the user what was saved', status: 'in_progress', started_at: 1_792_162_730, completed_at: null },
+        ],
+        current_action: null,
+        action_started_at: null,
+        steps_since_update: 0,
+        updated_at: 1_792_162_730,
+    },
+];
+
+for (const [title, locale] of [
+    ['task list with a failed step, Arabic', 'ar'],
+    ['task list with a failed step, English', 'en'],
+] as const) {
+    test(title, async ({ page }, info) => {
+        await page.addInitScript((events) => {
+            const real = window.fetch;
+            window.fetch = (input, init) => {
+                if (!String(input).includes('/chat/send')) return real(input, init);
+                const body = new ReadableStream({
+                    start(controller) {
+                        for (const event of events) controller.enqueue(new TextEncoder().encode(`data: ${JSON.stringify(event)}\n\n`));
+                    },
+                });
+                return Promise.resolve(new Response(body, { headers: { 'Content-Type': 'text/event-stream' } }));
+            };
+        }, TASK_LIST_EVENTS);
+        await open(page, `#${ANSWER_SESSION}`, locale);
+        await page.locator('textarea').first().fill('Merge the action items');
+        await page.keyboard.press('Enter');
+        const card = page.getByTestId('task-list-card');
+        await expect(card).toBeVisible();
+        await expect(card.locator('.task-item')).toHaveCount(3);
+        await expect(card.locator('.task-item-failed .task-mark-failed')).toBeVisible();
+        expect(await audit(page)).toEqual([]);
+        await card.screenshot({ path: info.outputPath(`task-list-failed-${locale}.png`) });
+        await page.screenshot({ path: info.outputPath(`task-list-failed-page-${locale}.png`) });
+    });
+}
+
 // Sections read so far while the rest are analyzed, one in each script.
 const FOUND_EVENTS = [
     { type: 'status', status: 'working', message: 'x', phase: 'recording', stage: 5, state: 0, percent: 67, eta_seconds: 40 },
