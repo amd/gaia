@@ -376,3 +376,50 @@ TEST(GaiacodeChecks, AnOutsideCommandIsRefusedBeforeAnyApproval) {
     fs::remove_all(dir);
     fs::remove_all(other);
 }
+
+TEST(GaiacodeEvents, ReadsAndLogsAfterTheTestsAreNotEdits) {
+    EXPECT_EQ(bashRun("python -m pytest -q && git status", "4 passed in 0.1s\n", 0), kGreen);
+    EXPECT_EQ(bashRun("python -m pytest -q; git diff --stat", "4 passed in 0.1s\n", 0), kGreen);
+    EXPECT_EQ(bashRun("python -m pytest -q | tee run.log", "4 passed in 0.1s\n", 0), kGreen);
+    json truncated = {{"stdout", "ok pkg\n"}, {"stderr", ""}, {"exit_code", 0}, {"timed_out", false},
+                      {"truncated", true}};
+    EXPECT_FALSE(CodeAgent::classify("bash_execute", {{"command", "go test ./..."}}, truncated).has_value())
+        << "a clipped run backs nothing";
+}
+
+TEST(GaiacodeEvents, ALintRunIsNotAnEditButAFormatterIs) {
+    auto check = [](const std::string& command) {
+        return CodeAgent::classify("run_checks", {{"command", command}},
+                                   {{"status", "success"}, {"command", command}, {"test_run", false},
+                                    {"exit_code", 0}});
+    };
+    for (const char* lint : {"ruff check .", "mypy src", "eslint .", "tsc --noEmit", "cargo clippy", "go vet ./...",
+                             "black --check ."}) {
+        EXPECT_FALSE(check(lint).has_value()) << lint;
+    }
+    for (const char* fmt : {"black .", "ruff format", "eslint --fix .", "prettier --write src", "cargo fmt"}) {
+        EXPECT_EQ(check(fmt), kEdit) << fmt;
+    }
+}
+
+TEST(GaiacodeChecks, SumsDotnetProjectsAndTakesSwiftsOuterSuite) {
+    CheckResult r = parsed("Passed!  - Failed:     0, Passed:     5, Skipped:     0, Total:     5\n"
+                           "Failed!  - Failed:     2, Passed:     3, Skipped:     1, Total:     6\n",
+                           1);
+    EXPECT_EQ(r.passed, 8);
+    EXPECT_EQ(r.failed, 2);
+    r = parsed("Test summary: total: 9, failed: 0, succeeded: 9, skipped: 0, duration: 1.2s\n");
+    EXPECT_TRUE(r.green());
+    EXPECT_EQ(r.passed, 9);
+    r = parsed("Executed 3 tests, with 0 failures\nExecuted 8 tests, with 2 failures (0 unexpected)\n", 1);
+    EXPECT_EQ(r.failed, 2);
+    EXPECT_EQ(r.passed, 6);
+}
+
+TEST(GaiacodeClaims, DescribingCiOrAChecksJobIsNoClaim) {
+    for (const char* a : {"I updated the CI config so it passes --cov to pytest.",
+                          "The bounds check passes control to the handler.", "test_x fails on Windows.",
+                          "The CI config now caches pip."}) {
+        EXPECT_FALSE(CodeAgent::claimsTestsPass(a)) << a;
+    }
+}
