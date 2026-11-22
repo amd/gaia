@@ -80,7 +80,8 @@ void CodeAgent::registerTools() {
     }
     reg.registerTool(observed(runChecksTool(options_.shell, ws)));
     // One pre-check for every tool, before any approval card: what would be refused is never asked about.
-    reg.setPreCheck([ws, off = options_.internetOff](const ToolInfo& tool, const json& args) -> std::optional<json> {
+    reg.setPreCheck([ws, off = options_.internetOff, shell = options_.shell](const ToolInfo& tool,
+                                                                            const json& args) -> std::optional<json> {
         auto refuse = [](const std::string& why) { return std::optional<json>(json{{"status", "error"}, {"error", why}}); };
         const bool shellLike = tool.name == "bash_execute" || tool.name == "run_checks";
         if (off && off->load()) {
@@ -102,9 +103,13 @@ void CodeAgent::registerTools() {
         if (args.contains("command") && args["command"].is_string()) {
             why = ws->checkCommand(args["command"].get<std::string>(), posix);
         }
-        if (why.empty() && tool.name == "run_checks" && args.contains("path") && args["path"].is_string() &&
-            fs::u8path(args["path"].get<std::string>()).is_absolute()) {
-            why = ws->checkPath(args["path"].get<std::string>());
+        if (why.empty() && tool.name == "run_checks" && args.contains("path") && args["path"].is_string()) {
+            // Relative to the shell's folder, as run_checks reads it.
+            fs::path dir = fs::u8path(args["path"].get<std::string>());
+            if (!dir.is_absolute()) {
+                dir = fs::u8path(nativeFolder((shell ? *shell : BashTools::defaultSession()).cwd())) / dir;
+            }
+            why = ws->checkPath(dir.u8string());
         }
         return why.empty() ? std::nullopt : refuse(why);
     });

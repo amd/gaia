@@ -2983,6 +2983,29 @@ def _dispatch_sidecar_query(
 
     try:
         handle = daemon_client.acquire_handle(agent_type)
+        if getattr(handle, "stale_harness", False):
+            from gaia.ui.run_manager import run_manager
+
+            others = [s for s in run_manager.active_sessions() if s != session_id]
+            if others:
+                # Restarting now would cut those answers off.
+                sse_handler._emit(
+                    {
+                        "type": "status",
+                        "status": "info",
+                        "message": (
+                            "The agent program was changed in another GAIA app. "
+                            "It takes over once the chats answering now finish."
+                        ),
+                    }
+                )
+            else:
+                logger.info(
+                    "chat: restarting the %s agent on the agent program now chosen",
+                    agent_type,
+                )
+                daemon_client.stop_sidecar(agent_type)
+                handle = daemon_client.acquire_handle(agent_type)
     except SidecarError as exc:
         # The daemon's text names its internals and can carry a traceback.
         logger.error("chat: could not start the %s agent: %s", agent_type, exc)
@@ -3011,6 +3034,18 @@ def _dispatch_sidecar_query(
     if harness in NO_DEFAULT_MODEL:
         # The session's model may be a filled-in default; this harness takes none.
         model_id = chosen_model()
+        if model_id and model_id.startswith("claude-"):
+            sse_handler._emit(
+                {
+                    "type": "agent_error",
+                    "content": (
+                        f"Claude models are not available with {harness}. Choose a "
+                        "model your Lemonade server offers in the model picker, then "
+                        "send your message again."
+                    ),
+                }
+            )
+            return
         if not model_id:
             sse_handler._emit(
                 {

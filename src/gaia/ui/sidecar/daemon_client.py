@@ -69,6 +69,8 @@ class SidecarHandle:
     pid: Optional[int]
     #: Which sidecar this handle is for.
     agent_id: str
+    #: The sidecar runs as an agent program other than the one now chosen.
+    stale_harness: bool = False
 
     def proxy(self, **kwargs):
         """Build the request proxy for THIS handle's agent."""
@@ -228,6 +230,7 @@ def _ensure(inst: DaemonInstance, agent_id: str) -> SidecarHandle:
         agent_version=body.get("agent_version"),
         mode=body.get("mode"),
         pid=body.get("pid"),
+        stale_harness=bool(body.get("stale_harness", False)),
     )
 
 

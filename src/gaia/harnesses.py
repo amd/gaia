@@ -95,7 +95,10 @@ def chosen_model() -> Optional[str]:
     env = os.environ.get("GAIA_MODEL_ID", "").strip()
     if env:
         return env
-    return (GaiaConfig.load().last_model or "").strip() or None
+    from gaia.llm.hybrid import start_model
+
+    # hybrid starts on its cheap model, as the TUI's ChosenChatModel does.
+    return start_model((GaiaConfig.load().last_model or "").strip() or None)
 
 
 def require_runnable(name: str) -> str:

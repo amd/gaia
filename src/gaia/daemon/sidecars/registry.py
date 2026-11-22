@@ -212,13 +212,6 @@ class SidecarRegistry:
             lock_digest = self._check_binary_lock(
                 agent_id, spec, mode, manager, binary_lock_sha256, binary_lock_path
             )
-            if manager.is_running and manager.uses_stale_harness:
-                # The user switched agent programs elsewhere (the TUI) since it started.
-                logger.info(
-                    "daemon: restarting agent '%s' on the agent program now chosen",
-                    agent_id,
-                )
-                self._stop_locked(agent_id, manager)
             if manager.is_running and manager.uses_ignored_lemonade:
                 # GAIA's own was chosen over the LEMONADE_BASE_URL it got.
                 logger.info(
@@ -390,6 +383,9 @@ class SidecarRegistry:
 
     def _ensured(self, agent_id: str, manager, lock_digest: Optional[str]) -> dict:
         entry = self._entry(agent_id, manager, include_token=True)
+        # Running as a harness other than the saved one (switched in another app). The caller
+        # restarts it once nothing is mid-answer; stopping it here would cut a turn off.
+        entry["stale_harness"] = getattr(manager, "uses_stale_harness", False)
         if lock_digest is not None:
             entry["binary_lock_sha256"] = lock_digest
         return entry
