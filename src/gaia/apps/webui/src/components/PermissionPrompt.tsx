@@ -42,19 +42,31 @@ function shownField(key: string, text: string): { shown: string; coded: boolean 
     return { shown: visibleStrict(text), coded: unseenStrict(text) };
 }
 
-/** Keys the card reads as a name or a command — `summarize`'s list, an id, and the folder a risk note names. */
-const NAME_LIKE_ARGS = new Set(['command', 'file_path', 'path', 'url', '_site', 'name', 'id', 'working_directory']);
+/**
+ * Keys read as a name or a command: `summarize`'s list less `query` (prose), plus any key
+ * shaped like a path, folder, file, URL, name or id, so a tool's `output_path` or an MCP
+ * server's `target_dir` gets the name rule without being listed by hand.
+ */
+const NAME_LIKE_ARG = /^(command|_site|uri)$|(^|_)(files?|urls?|ids?|cwds?)$|(paths?|dirs?|director(y|ies)|folders?|names?)$/;
+
+/** Whether a key, snake_case or camelCase, names a thing rather than holding prose. */
+function nameLikeArg(key: string): boolean {
+    return NAME_LIKE_ARG.test(key.replace(/([a-z0-9])([A-Z])/g, '$1_$2').toLowerCase());
+}
 
 /**
- * Argument values as the main field shows them: each name-like one marked with that
- * field's rule, so the expanded view reads like the card above it. The rest — code,
- * prose, the approved-exact text — stay as written for the prose pass over the JSON.
+ * Argument values as the main field shows them: each name-like string, alone or in a
+ * list, marked with that field's rule, so the expanded view reads like the card above it.
+ * The rest — code, prose, the approved-exact text — stay as written for the prose pass.
  */
 function shownArgs(args: Record<string, unknown>): Record<string, unknown> {
-    return Object.fromEntries(Object.entries(args).map(([key, value]) => [
-        key,
-        NAME_LIKE_ARGS.has(key) && typeof value === 'string' ? shownField(key, value).shown : value,
-    ]));
+    const shown = (key: string, value: unknown): unknown => {
+        if (typeof value === 'string') return nameLikeArg(key) ? shownField(key, value).shown : value;
+        if (Array.isArray(value)) return value.map((item) => shown(key, item));
+        if (value && typeof value === 'object') return shownArgs(value as Record<string, unknown>);
+        return value;
+    };
+    return Object.fromEntries(Object.entries(args).map(([key, value]) => [key, shown(key, value)]));
 }
 
 /** Tools whose relayed summary is a command and its risk note (`COMMAND_SUMMARY_TOOLS` in sse_translation.py). */

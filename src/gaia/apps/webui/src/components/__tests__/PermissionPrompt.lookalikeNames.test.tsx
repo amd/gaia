@@ -115,3 +115,49 @@ describe('the expanded arguments view marks name-like args like the main field',
         expect(shown).toContain('echo a\\n\\tgi[U+200C]t log');
     });
 });
+
+describe('the expanded view finds name-like args by their key shape', () => {
+    const prose = '\u0645\u06cc\u200c\u062e\u0648\u0627\u0647\u0645';
+    const family = '\u{1F468}\u200d\u{1F469}\u200d\u{1F467}';
+
+    function expanded(toolArgs: Record<string, unknown>): string {
+        useNotificationStore.getState().addNotification(request({ tool: 'mcp_tool', toolArgs }));
+        render(<PermissionPrompt sessionId="chat-1" />);
+        fireEvent.click(screen.getByRole('button', { name: 'Details' }));
+        return document.querySelector('.perm-card-args pre')?.textContent ?? '';
+    }
+
+    it.each([
+        ['output_path'], ['target_dir'], ['output_dir'], ['directory'], ['folder'], ['cwd'],
+        ['src_path'], ['dest_path'], ['image_path'], ['filename'], ['filePath'], ['targetDir'],
+        ['session_id'], ['userId'], ['tool_name'], ['repo_url'],
+    ])('codes a joiner in %s', (key) => {
+        expect(expanded({ [key]: 'inv\u200doice.txt' })).toContain('inv[U+200D]oice.txt');
+    });
+
+    it('codes each entry of a list of paths', () => {
+        const shown = expanded({ file_paths: ['a\u200d.txt', 'b\u200e.txt'], watch_directories: ['c\u200c'] });
+        expect(shown).toContain('a[U+200D].txt');
+        expect(shown).toContain('b[U+200E].txt');
+        expect(shown).toContain('c[U+200C]');
+    });
+
+    it('codes a path nested in a list of edits, but not the text beside it', () => {
+        const shown = expanded({ edits: [{ path: 'x\u200d.py', new_text: prose }] });
+        expect(shown).toContain('x[U+200D].py');
+        expect(shown).toContain(prose);
+    });
+
+    it.each([
+        ['content'], ['query'], ['text'], ['message'], ['new_text'], ['_risk_note'], ['valid'], ['paid'], ['profile'],
+    ])('keeps prose joiners in %s as written', (key) => {
+        expect(expanded({ [key]: `${prose} ${family}` })).toContain(`${prose} ${family}`);
+    });
+
+    it('leaves numbers, booleans and null alone', () => {
+        const shown = expanded({ id: 7, file_path: null, recursive: true });
+        expect(shown).toContain('"id": 7');
+        expect(shown).toContain('"file_path": null');
+        expect(shown).toContain('"recursive": true');
+    });
+});
