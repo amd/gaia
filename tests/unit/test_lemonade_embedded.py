@@ -1366,3 +1366,27 @@ class TestOrphanedBackends:
 
         manager.status()
         assert manager._read_state()["pid"] == 9999
+
+
+class TestPortProbeOnAFullBacklog:
+    """A listener with a full backlog holds the port. Linux leaves the connect
+    hanging (a timeout); macOS resets it. Both must read as taken (#8789)."""
+
+    @pytest.mark.parametrize("error", [TimeoutError, ConnectionResetError])
+    def test_the_port_answers(self, monkeypatch, error):
+        def full_backlog(*args, **kwargs):
+            raise error()
+
+        monkeypatch.setattr(lemonade_embedded.socket, "create_connection", full_backlog)
+        assert lemonade_embedded._answers(
+            lemonade_embedded.socket.AF_INET, "127.0.0.1", 65000
+        )
+
+    @pytest.mark.parametrize("error", [TimeoutError, ConnectionResetError])
+    def test_the_port_is_not_free(self, monkeypatch, error):
+        def full_backlog(*args, **kwargs):
+            raise error()
+
+        monkeypatch.setattr(lemonade_embedded.sys, "platform", "darwin")
+        monkeypatch.setattr(lemonade_embedded.socket, "create_connection", full_backlog)
+        assert lemonade_embedded._port_free(65000) is False
