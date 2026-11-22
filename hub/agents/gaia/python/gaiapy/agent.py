@@ -44,6 +44,7 @@ unchanged.
 from __future__ import annotations
 
 import os
+import re
 import sys
 from collections import deque
 from dataclasses import dataclass, field
@@ -129,6 +130,109 @@ _SKILLS_DIR = Path(__file__).resolve().parent / "skills"
 
 #: Answer-check problem when the user named a skill folder and nothing captured it.
 _SKILL_NOT_ADDED = "No skill was added from"
+_DOCS_NOT_READ = "The answer did not read the documents attached to this chat"
+_SKILL_NOT_LOADED = "The skill the user asked for was not loaded:"
+_URL_NOT_FETCHED = "The answer did not fetch the web address the user gave:"
+_URL = re.compile(r"https?://[^\s<>\"'`]+", re.IGNORECASE)
+#: Tools that read a web address; any of them this turn is enough.
+_FETCHES = frozenset(
+    {"fetch_page", "fetch_webpage", "download_file", "open_url", "browse_page"}
+)
+#: Simple arithmetic in a request, worked out exactly: a 2B model answered
+#: 17 × 23 = 411 and 15% of 240 = 120.
+_NUM = r"(-?\d+(?:,\d{3})*(?:\.\d+)?)"
+_ARITHMETIC = (
+    (re.compile(_NUM + r"\s*%\s*of\s*" + _NUM, re.I), lambda a, b: a * b / 100),
+    (
+        re.compile(_NUM + r"\s*(?:[x×*]|times|multiplied by)\s*" + _NUM, re.I),
+        lambda a, b: a * b,
+    ),
+    (re.compile(_NUM + r"\s*(?:/|÷|divided by)\s*" + _NUM, re.I), lambda a, b: a / b),
+    (re.compile(_NUM + r"\s*(?:\+|plus)\s*" + _NUM, re.I), lambda a, b: a + b),
+)
+#: Only a request that asks for a result: "3 - 5 days" is a range, not a sum.
+_ASKS_TO_COMPUTE = re.compile(
+    r"\?|=|\b(?:what(?:'s| is)|calculate|compute|how (?:much|many)|work out)\b", re.I
+)
+
+
+def _number_forms(value: float) -> List[str]:
+    """How *value* may appear in an answer: 391, 391.0, 1,234, 0.5."""
+    if abs(value - round(value)) < 1e-9:
+        whole = int(round(value))
+        return [str(whole), f"{whole:,}", f"{whole}.0"]
+    return [f"{value:g}", f"{value:.2f}".rstrip("0").rstrip("."), f"{value:,.2f}"]
+
+
+def _wrong_arithmetic(request: str, answer: str) -> str:
+    """The correction for one simple calculation the answer got wrong, or ""."""
+    if not answer or len(request) > 200 or not _ASKS_TO_COMPUTE.search(request):
+        return ""
+    for pattern, compute in _ARITHMETIC:
+        for match in pattern.finditer(request):
+            a, b = (float(g.replace(",", "")) for g in match.groups())
+            try:
+                value = compute(a, b)
+            except ZeroDivisionError:
+                continue
+            forms = _number_forms(value)
+            if not any(
+                re.search(rf"(?<![\d.]){re.escape(f)}(?![\d])", answer) for f in forms
+            ):
+                return (
+                    f"{match.group(0).strip()} is {forms[1]}, which the answer "
+                    "does not say; give that exact result."
+                )
+    return ""
+
+
+#: "load the rss-digest skill", "use the research-report skill".
+_NAMED_SKILL = re.compile(
+    r"\b(?:load|use|run|start|activate|enable|open|apply)\s+(?:the\s+|my\s+)?"
+    r"([a-z0-9][a-z0-9-]*[a-z0-9])\s+skill\b",
+    re.IGNORECASE,
+)
+_SMALL_TALK_TOO_LONG = (
+    "This is small talk: answer in two or three sentences, with no list or headings."
+)
+#: Greetings, thanks and "what can you do?": a small model answered "Hi!" with
+#: a bulleted list of its capabilities.
+_SMALL_TALK = re.compile(
+    r"^\W*(?:hi|hello|hey|yo|good (?:morning|afternoon|evening)|thanks|thank you|"
+    r"how are you|what(?:'s| is) up|what can you do|who are you|what are you)\b",
+    re.IGNORECASE,
+)
+#: Longest reply to small talk, in words, before it reads as a lecture.
+_SMALL_TALK_WORDS = 60
+
+
+def _too_long_for_small_talk(request: str, answer: str) -> bool:
+    """True when a short greeting or "what can you do?" got a long or listed reply."""
+    if len(request.split()) > 8 or not _SMALL_TALK.search(request):
+        return False
+    listed = len(re.findall(r"^\s*(?:[-*•]|\d+\.)\s", answer, re.MULTILINE)) >= 3
+    return listed or len(answer.split()) > _SMALL_TALK_WORDS
+
+
+#: Tools that read an attached document; any of them this turn is enough.
+_READS_DOCUMENTS = frozenset(
+    {
+        "query_documents",
+        "query_specific_file",
+        "search_indexed_chunks",
+        "read_file",
+        "dump_document",
+        "summarize_document",
+        "analyze_data_file",
+        "evaluate_retrieval",
+    }
+)
+#: A question: a question mark, or a request that opens by asking for content.
+_QUESTION = re.compile(
+    r"\?|^\W*(?:what|which|who|whom|whose|when|where|why|how|is|are|does|do|did|"
+    r"can|could|list|summari[sz]e|explain|compare|tell me|according to)\b",
+    re.IGNORECASE,
+)
 
 # Rendered in a code repository for a model that gets the full project context
 # (gaia.project_context). General software practice, not any one repo's rules:
@@ -654,6 +758,8 @@ class GaiaAgent(
             self._turn_web_calls.append((tool_name, tool_args, result))
         return result
 
+    STYLE_ANSWER_PROBLEMS = frozenset({_SMALL_TALK_TOO_LONG})
+
     def answer_problems(self, answer):
         problems = super().answer_problems(answer)
         request = getattr(self, "_original_user_input", None) or ""
@@ -666,6 +772,21 @@ class GaiaAgent(
             )
             if path:
                 problems.append(f"{_SKILL_NOT_ADDED} `{path}`.")
+            if not called and _too_long_for_small_talk(str(request), answer or ""):
+                problems.append(_SMALL_TALK_TOO_LONG)
+            wrong = _wrong_arithmetic(str(request), answer or "")
+            if wrong:
+                problems.append(wrong)
+            skill = self._named_skill_not_loaded(str(request), called)
+            if skill:
+                problems.append(f"{_SKILL_NOT_LOADED} `{skill}`.")
+            url = self._url_not_fetched(str(request), called)
+            if url:
+                problems.append(f"{_URL_NOT_FETCHED} {url}")
+            unread = self._unread_documents(str(request), called)
+            if unread:
+                names = ", ".join(Path(d).name for d in unread[:3])
+                problems.append(f"{_DOCS_NOT_READ} ({names}).")
             return problems
         return problems + citation_problems(
             answer or "",
@@ -684,7 +805,59 @@ class GaiaAgent(
         if path:
             # capture_skill still asks the user before it copies anything.
             calls.append(("capture_skill", {"source": path}))
+        skill = self._named_skill_not_loaded(request, called)
+        if skill:
+            calls.append(("load_skill", {"name": skill}))
+        url = self._url_not_fetched(request, called)
+        if url:
+            calls.append(("fetch_page", {"url": url}))
+        unread = self._unread_documents(request, called)
+        if len(unread) == 1 and "query_specific_file" in self._tools_registry:
+            calls.append(
+                ("query_specific_file", {"file_path": unread[0], "query": request})
+            )
+        elif unread and "query_documents" in self._tools_registry:
+            calls.append(("query_documents", {"query": request}))
         return calls
+
+    def _named_skill_not_loaded(self, request: str, called) -> str:
+        """An installed skill the user named ("load the rss-digest skill") that this
+        turn did not load, or "". Small models said "loaded" and called nothing."""
+        if "load_skill" in called or "load_skill" not in self._tools_registry:
+            return ""
+        named = _NAMED_SKILL.search(request or "")
+        if not named:
+            return ""
+        name = named.group(1).lower()
+        if name in self.loaded_skills:
+            return ""
+        installed = self.skill_manager.discover()
+        return name if name in installed else ""
+
+    def _url_not_fetched(self, request: str, called) -> str:
+        """A web address the user gave that nothing fetched this turn, or "".
+
+        A small model answered "what are the ferry times on <url>?" from memory,
+        said it had no web access, or fetched a shortened address.
+        """
+        if called & _FETCHES or "fetch_page" not in self._tools_registry:
+            return ""
+        found = _URL.search(request or "")
+        return found.group(0).rstrip(".,;:!?)'\"") if found else ""
+
+    def _unread_documents(self, request: str, called) -> List[str]:
+        """Documents this session holds that a question went unanswered from.
+
+        Small models answer "what does the datasheet say about…" from memory with
+        the datasheet attached. Empty when nothing is attached, the request is
+        not a question, or a reading tool ran this turn.
+        """
+        documents = sorted(getattr(self, "indexed_files", None) or ())
+        if not documents or not _QUESTION.search(request or ""):
+            return []
+        if called & _READS_DOCUMENTS:
+            return []
+        return documents
 
     def answer_repair_prompt(self, problems):
         if self._research_brief != RESEARCH_BRIEF:
@@ -693,6 +866,22 @@ class GaiaAgent(
                 prompt += (
                     " Call capture_skill with source set to that path now; it "
                     "asks the user and reports whether the skill was added."
+                )
+            if any(p.startswith(_URL_NOT_FETCHED) for p in problems):
+                prompt += (
+                    " Call fetch_page with the exact address the user gave, then "
+                    "answer from what it returns."
+                )
+            if any(p.startswith(_SKILL_NOT_LOADED) for p in problems):
+                prompt += (
+                    " Call load_skill with the skill the user named, then follow "
+                    "its instructions."
+                )
+            if any(p.startswith(_DOCS_NOT_READ) for p in problems):
+                prompt += (
+                    " Call query_specific_file on the document (or query_documents "
+                    "for several) with the user's question, then answer from what "
+                    "it returns and name the document."
                 )
             return prompt
         return CITATION_REPAIR.format(problems=" ".join(problems))

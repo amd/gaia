@@ -172,7 +172,7 @@ def loop(tmp_path, monkeypatch, claude_login):
     monkeypatch.setattr(runner, "SCENARIOS_DIR", scenarios)
     monkeypatch.setattr(runner, "USER_SCENARIOS_DIR", tmp_path / "absent")
     monkeypatch.setattr(runner, "preflight_check", lambda *a, **k: [])
-    monkeypatch.setattr(runner, "_missing_requirements", lambda _sd, _m: [])
+    monkeypatch.setattr(runner, "_missing_requirements", lambda *_a: [])
     monkeypatch.setattr(runner, "_stamp_agent_provenance", lambda *a, **k: None)
     monkeypatch.setattr(runner, "_current_commit", lambda: "abc")
     monkeypatch.setattr(

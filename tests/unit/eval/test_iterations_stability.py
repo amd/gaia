@@ -108,7 +108,7 @@ class TestPerAttemptEvidence:
 
         statuses = iter(["PASS", "FAIL"])
         monkeypatch.setattr(runner, "_documents_exist", lambda _sd: True)
-        monkeypatch.setattr(runner, "_missing_requirements", lambda _sd, _m: [])
+        monkeypatch.setattr(runner, "_missing_requirements", lambda *_a: [])
         monkeypatch.setattr(
             runner,
             "run_scripted_scenario",

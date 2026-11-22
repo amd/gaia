@@ -461,3 +461,166 @@ def test_a_research_turn_that_read_pages_must_still_cite_them():
         result = agent.process_query("/research the EU AI Act timeline")
     assert result["result"] == cited
     assert left == []
+
+
+def test_a_question_about_an_attached_document_must_read_it():
+    # Qwen3.5-2B answered RFC 7231 and Raspberry Pi questions from memory with
+    # the document attached; Gemma queried it.
+    doc = "C:/docs/rfc7231.txt"
+    with _agent() as (agent, _seen):
+        agent.indexed_files = {doc}
+        agent._original_user_input = "What does section 4.3.1 say about GET?"
+        agent._turn_tool_executions = []
+        (problem,) = agent.answer_problems("GET retrieves a resource.")
+        assert problem.startswith("The answer did not read the documents")
+        assert "rfc7231.txt" in problem
+        assert "query_specific_file" in agent.answer_repair_prompt([problem])
+        assert agent.required_calls() == [
+            (
+                "query_specific_file",
+                {"file_path": doc, "query": "What does section 4.3.1 say about GET?"},
+            )
+        ]
+        agent._turn_tool_executions = [{"tool": "query_specific_file"}]
+        assert agent.answer_problems("Section 4.3.1 says…") == []
+        assert agent.required_calls() == []
+
+
+@pytest.mark.parametrize(
+    "request_text, docs",
+    [
+        ("What is the capital of France?", set()),  # nothing attached
+        ("Thanks, that helps.", {"C:/docs/a.pdf"}),  # not a question
+        ("Index this folder for me.", {"C:/docs/a.pdf"}),
+    ],
+)
+def test_no_document_check_where_it_does_not_apply(request_text, docs):
+    with _agent() as (agent, _seen):
+        agent.indexed_files = docs
+        agent._original_user_input = request_text
+        agent._turn_tool_executions = []
+        assert agent.answer_problems("Sure.") == []
+        assert agent.required_calls() == []
+
+
+def test_several_unread_documents_are_queried_together():
+    with _agent() as (agent, _seen):
+        agent.indexed_files = {"C:/docs/a.pdf", "C:/docs/b.pdf"}
+        agent._original_user_input = "Which document mentions the deadline?"
+        agent._turn_tool_executions = []
+        assert agent.required_calls() == [
+            ("query_documents", {"query": "Which document mentions the deadline?"})
+        ]
+
+
+@pytest.mark.parametrize(
+    "request_text, answer, flagged",
+    [
+        ("Hi!", "Hi! How can I help?", False),
+        (
+            "Hi!",
+            "Hello! I can help with:\n- files\n- documents\n- the web\n- memory",
+            True,
+        ),
+        ("What can you do?", " ".join(["word"] * 80), True),
+        (
+            "What can you do?",
+            "I read and write files, search the web and remember things.",
+            False,
+        ),
+        # Not small talk: a real question may get a long answer.
+        (
+            "How do I set up a Python virtual environment on Windows?",
+            " ".join(["w"] * 200),
+            False,
+        ),
+    ],
+)
+def test_small_talk_gets_a_short_reply(request_text, answer, flagged):
+    from gaiapy.agent import _SMALL_TALK_TOO_LONG
+
+    with _agent() as (agent, _seen):
+        agent.indexed_files = set()
+        agent._original_user_input = request_text
+        agent._turn_tool_executions = []
+        problems = agent.answer_problems(answer)
+        assert (_SMALL_TALK_TOO_LONG in problems) is flagged
+        # A style problem gets a repair but is never named to the user.
+        assert _SMALL_TALK_TOO_LONG in agent.STYLE_ANSWER_PROBLEMS
+
+
+def test_a_named_skill_that_was_not_loaded_is_loaded():
+    with _agent() as (agent, _seen):
+        installed = agent.skill_manager.discover()
+        if (
+            "research-report" not in installed
+            or "load_skill" not in agent._tools_registry
+        ):
+            pytest.skip("this build installs no research-report skill")
+        agent.indexed_files = set()
+        agent._original_user_input = "Load the research-report skill."
+        agent._turn_tool_executions = []
+        problems = agent.answer_problems("Loaded the research-report skill.")
+        assert (
+            "The skill the user asked for was not loaded: `research-report`."
+            in problems
+        )
+        assert "load_skill" in agent.answer_repair_prompt(problems)
+        assert ("load_skill", {"name": "research-report"}) in agent.required_calls()
+        agent._turn_tool_executions = [{"tool": "load_skill"}]
+        assert not [p for p in agent.answer_problems("Done.") if "skill" in p]
+
+
+@pytest.mark.parametrize(
+    "request_text",
+    [
+        "Load the no-such-thing skill.",
+        "What skills do you have?",
+        "Write a skill file.",
+    ],
+)
+def test_no_skill_check_for_a_skill_that_is_not_installed(request_text):
+    with _agent() as (agent, _seen):
+        agent.indexed_files = set()
+        agent._original_user_input = request_text
+        agent._turn_tool_executions = []
+        assert not [p for p in agent.answer_problems("OK.") if "skill" in p]
+
+
+@pytest.mark.parametrize(
+    "request_text, answer, wrong",
+    [
+        # Verbatim from the 2B's core_arithmetic_direct failure.
+        ("What is 17 times 23?", "17 × 23 = 411.", True),
+        ("What is 17 times 23?", "It's 391.", False),
+        ("What's 15% of 240?", "That comes to 120.", True),
+        ("What's 15% of 240?", "36", False),
+        ("How much is 1,200 / 3?", "Each gets $400.", False),
+        ("what is 2.5 x 4?", "10", False),
+        # Not a calculation request.
+        ("Remind me in 3 - 5 days", "ok", False),
+        ("call me at 555-1234", "ok", False),
+    ],
+)
+def test_simple_arithmetic_is_checked(request_text, answer, wrong):
+    from gaiapy.agent import _wrong_arithmetic
+
+    assert bool(_wrong_arithmetic(request_text, answer)) is wrong
+
+
+def test_a_web_address_nothing_fetched_is_fetched_as_given():
+    url = "http://127.0.0.1:8765/web/ferry.html"
+    with _agent() as (agent, _seen):
+        if "fetch_page" not in agent._tools_registry:
+            pytest.skip("this build registers no fetch_page")
+        agent.indexed_files = set()
+        agent._original_user_input = f"What time is the last ferry? See {url}."
+        agent._turn_tool_executions = []
+        problems = agent.answer_problems("The last ferry leaves at 11pm.")
+        assert (
+            f"The answer did not fetch the web address the user gave: {url}" in problems
+        )
+        assert "fetch_page" in agent.answer_repair_prompt(problems)
+        assert ("fetch_page", {"url": url}) in agent.required_calls()
+        agent._turn_tool_executions = [{"tool": "fetch_page"}]
+        assert not [p for p in agent.answer_problems("At 9pm.") if "web address" in p]
