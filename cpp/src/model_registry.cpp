@@ -4,6 +4,7 @@
 #include "gaia/model_registry.h"
 
 #include <algorithm>
+#include <utility>
 
 namespace gaia {
 
@@ -37,6 +38,21 @@ const std::vector<ModelCapability>& knownModels() {
 std::optional<bool> knownToolCalling(const std::string& modelId) {
     for (const auto& m : knownModels()) {
         if (m.modelId == modelId) return m.toolCalling;
+    }
+    return std::nullopt;
+}
+
+std::optional<bool> knownThinking(const std::string& modelId) {
+    // Mirrors ``thinking`` in Python's MODELS. Qwen3.5's template thinks unless told
+    // not to, and the small ones then spend the whole reply budget reasoning.
+    static const std::vector<std::pair<std::string, bool>> kThinking = {
+        {"Qwen3.5-4B-GGUF",              false},
+        {"Qwen3.5-2B-GGUF",              false},
+        {"user.Qwen3.8-Flash-Next-GGUF", true},
+        {"Qwen3.6-35B-A3B-GGUF",         true},
+    };
+    for (const auto& [id, thinking] : kThinking) {
+        if (id == modelId) return thinking;
     }
     return std::nullopt;
 }

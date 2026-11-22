@@ -664,6 +664,8 @@ void GaiaAgent::registerVisionTool(std::shared_ptr<const Workspace> ws) {
                      {"max_tokens", 2048},
                      {"temperature", 0.1},
                      {"messages", json::array({m.toJson()})}};
+        // A thinking model would spend the 2048 tokens reasoning and describe nothing.
+        if (knownThinking(model)) body["chat_template_kwargs"] = {{"enable_thinking", false}};
         try {
             const json resp = json::parse(visionClient_->chatCompletions(body));
             const json& msg = resp.at("choices").at(0).at("message");

@@ -43,6 +43,23 @@ def test_the_cpp_table_lists_every_python_model_with_the_same_flag():
     )
 
 
+def _cpp_thinking() -> dict[str, bool]:
+    text = REGISTRY.read_text(encoding="utf-8")
+    body = text[
+        text.index("kThinking = {") : text.index("for (const auto& [id, thinking]")
+    ]
+    return {m["id"]: m["flag"] == "true" for m in ROW.finditer(body)}
+
+
+def test_the_cpp_thinking_table_matches_python():
+    python = {r.model_id: r.thinking for r in MODELS.values() if r.thinking is not None}
+    assert python, "MODELS sets no thinking switch; the C++ table has nothing to mirror"
+    assert _cpp_thinking() == python, (
+        "kThinking in cpp/src/model_registry.cpp and MODELS' thinking flags "
+        "differ; mirror the change in the same commit"
+    )
+
+
 def test_the_cpp_table_has_no_duplicate_rows():
     ids = [model_id for model_id, _ in _cpp_table()]
     assert len(ids) == len(set(ids))

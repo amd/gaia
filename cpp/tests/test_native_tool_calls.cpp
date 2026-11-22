@@ -298,6 +298,38 @@ TEST(NativeToolCallsTest, NonToolCallingModelRequestBodyIsUnchanged) {
     EXPECT_FALSE(body.contains("tool_choice"));
 }
 
+TEST(NativeToolCallsTest, ModelWithAThinkingSwitchGetsGaiasChoiceSent) {
+    bench::MockLlmServer mock;
+    mock.pushResponse(kPlainAnswer);
+
+    ToolAgent agent(makeCfg(mock.baseUrl(), "Qwen3.5-2B-GGUF"));
+    agent.initForTest();
+    agent.processQuery("hello", 1);
+
+    ASSERT_GE(mock.receivedBodies().size(), 1u);
+    json body = json::parse(mock.receivedBodies().back());
+    ASSERT_TRUE(body.contains("chat_template_kwargs"));
+    EXPECT_EQ(body["chat_template_kwargs"], (json{{"enable_thinking", false}}));
+}
+
+TEST(NativeToolCallsTest, ModelWithoutAThinkingSwitchSendsNone) {
+    bench::MockLlmServer mock;
+    mock.pushResponse(kPlainAnswer);
+
+    ToolAgent agent(makeCfg(mock.baseUrl(), kToolCallingModel));
+    agent.initForTest();
+    agent.processQuery("hello", 1);
+
+    ASSERT_GE(mock.receivedBodies().size(), 1u);
+    EXPECT_FALSE(json::parse(mock.receivedBodies().back()).contains("chat_template_kwargs"));
+}
+
+TEST(ModelRegistryTest, ThinkingMirrorsPythonsModels) {
+    EXPECT_EQ(knownThinking("Qwen3.5-2B-GGUF"), std::optional<bool>(false));
+    EXPECT_EQ(knownThinking("Qwen3.6-35B-A3B-GGUF"), std::optional<bool>(true));
+    EXPECT_FALSE(knownThinking("Gemma-4-E4B-it-GGUF").has_value());
+}
+
 TEST(NativeToolCallsTest, NonToolCallingModelKeepsTheResponseFormatTemplate) {
     bench::MockLlmServer mock;
     mock.pushResponse(kPlainAnswer);

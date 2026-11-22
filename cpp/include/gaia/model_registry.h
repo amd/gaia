@@ -49,6 +49,12 @@ GAIA_API bool isToolCallingModel(const std::string& modelId);
 /// model from the server's own catalog instead of assuming "no".
 GAIA_API std::optional<bool> knownToolCalling(const std::string& modelId);
 
+/// Whether ``modelId`` runs with thinking on, sent as
+/// ``chat_template_kwargs.enable_thinking`` on every request. Mirrors
+/// ``thinking`` in Python's ``MODELS``. Nothing for a model whose template has
+/// no such switch, so the request carries none.
+GAIA_API std::optional<bool> knownThinking(const std::string& modelId);
+
 /// True for a small model that gets the compact feature set: fewer tools and no
 /// prose copy of the tool list, so every step re-reads a shorter prompt. Mirrors
 /// ``feature_tier="compact"`` in Python's ``MODELS``, plus the small local models
