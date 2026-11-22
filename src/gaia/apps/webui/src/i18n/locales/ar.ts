@@ -3638,7 +3638,7 @@ const messages: Messages = {
     'mem.knowledge.filterEntity': 'التصفية حسب الكيان',
     'mem.knowledge.allEntities': 'كل الكيانات',
     'mem.knowledge.search': 'البحث في الذكريات',
-    'mem.knowledge.searchPlaceholder': 'ابحث في الذكريات…',
+    'mem.knowledge.searchPlaceholder': 'ابحث في الذكريات',
     'mem.knowledge.superseded': 'المستبدلة',
     'mem.knowledge.supersededTitle': 'إظهار الإدخالات التي حلّت محلها نسخ أحدث',
     'mem.knowledge.embedded': 'مفهرس للبحث',
