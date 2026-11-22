@@ -1269,6 +1269,9 @@ func (m ChatModel) updateChat(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.updateViewport()
 		return m, nil
 
+	case skillsCommandListedMsg:
+		return m.showListedSkills(msg)
+
 	case capabilitiesProbedMsg:
 		if msg.err != nil {
 			control.Logf("chat: capability probe failed (%v); gated commands stay in their 'unknown' (shown) state", msg.err)

@@ -33,7 +33,6 @@ tests/
 ├── unit/                 # Isolated, mocked-dependency tests
 ├── integration/          # Cross-system tests against real services
 ├── mcp/                  # MCP protocol tests
-├── stress/               # Stress/load tests
 ├── electron/             # Jest tests for Electron apps
 ├── fixtures/             # Shared data/PDFs/etc.
 └── test_*.py             # Top-level feature tests (test_sdk.py, test_api.py, test_rag.py, test_chat_agent.py, …)

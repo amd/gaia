@@ -305,6 +305,24 @@ describe('a failed model download', () => {
         expect(screen.getByRole('alert')).toHaveTextContent('Download of Gemma-4-E4B-it-GGUF failed');
     });
 
+    it('names the model as the model list does, not by its id', () => {
+        const id = 'user.ggml-gpt-oss-20b-MXFP4-GGUF';
+        useModelStore.setState({ names: { [id]: 'gpt-oss 20B' } });
+        useChatStore.setState({ systemStatus: { ...healthy, download_progress: progress('error', id) } as SystemStatus });
+        render(<ConnectionBanner />);
+        expect(screen.getByRole('alert')).toHaveTextContent('Download of gpt-oss 20B failed. disk full');
+        expect(screen.getByRole('alert')).not.toHaveTextContent('ggml');
+        useModelStore.setState({ names: {} });
+    });
+
+    it('says the download failed in the interface language', () => {
+        useChatStore.setState({ locale: 'ar', systemStatus: { ...healthy, download_progress: progress('error') } as SystemStatus });
+        render(<ConnectionBanner />);
+        expect(screen.getByRole('alert')).toHaveTextContent('تعذّر تنزيل');
+        expect(screen.getByRole('button', { name: /إعادة المحاولة/ })).toBeInTheDocument();
+        useChatStore.setState({ locale: 'en' });
+    });
+
     it('offers no dismiss while the download is still running', () => {
         useChatStore.setState({ systemStatus: { ...healthy, download_progress: progress('downloading') } as SystemStatus });
         render(<ConnectionBanner />);

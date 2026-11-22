@@ -477,6 +477,24 @@ describe('SetupScreen: the recommendation', () => {
         expect(await planScreen()).not.toHaveTextContent('for your other apps');
     });
 
+    it('warns about a kept model that leaves other apps little memory, instead of calling it a fit', async () => {
+        const big = { ...QWEN, fits: false as const, fit_code: 'memory' as const, need_gb: 27.1, capacity_gb: 9.7, planned: false, selected: false, recommended: false };
+        const tight = { ...GEMMA_CHAT, chat_choice: true, fits: true as const, tight: true, need_gb: 8.5, capacity_gb: 9.7 };
+        mockedApi.getSetupPlan.mockResolvedValue(plan([tight, big, EMBED], { chat_model: { id: GEMMA.id, user_set: true, size_gb: 0, downloaded: true } }));
+        await open();
+        const card = await planScreen();
+        expect(card).toHaveTextContent('Leaves your other apps little memory, so your PC may slow down while it runs.');
+        expect(card).not.toHaveTextContent('Fits this PC');
+        expect(card).not.toHaveTextContent('is a bigger model');
+    });
+
+    it("says a chosen model that doesn't fit may fail to load", async () => {
+        const noFit = { ...GEMMA_CHAT, chat_choice: true, fits: false as const, fit_code: 'memory' as const, need_gb: 8.5, capacity_gb: 4.3 };
+        mockedApi.getSetupPlan.mockResolvedValue(plan([noFit, EMBED], { chat_model: { id: GEMMA.id, user_set: true, size_gb: 0, downloaded: true } }));
+        await open();
+        expect(await planScreen()).toHaveTextContent('Needs about 8.5 GB; this PC has 4.3 GB. It may be very slow or fail to load.');
+    });
+
     it("calls no model this PC can't run a bigger model", async () => {
         const npu = { ...QWEN, fits: false as const, fit_code: 'npu' as const, need_gb: 27.1, capacity_gb: 16, planned: false, selected: false, recommended: false };
         const small = { ...GEMMA_CHAT, chat_choice: true };
