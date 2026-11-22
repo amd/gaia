@@ -5191,10 +5191,6 @@
       },
       "flagship_agent": {
         "default": "gaiapy",
-        "enum": [
-          "gaiapy",
-          "gaiacpp"
-        ],
         "title": "Flagship Agent",
         "type": "string"
       },

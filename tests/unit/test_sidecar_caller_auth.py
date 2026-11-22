@@ -24,8 +24,9 @@ _ENV_VAR = "GAIA_TEST_SIDECAR_TOKEN"
 
 
 @pytest.fixture(autouse=True)
-def _isolate():
+def _isolate(monkeypatch):
     caller_auth.reset()
+    monkeypatch.delenv(caller_auth.ALLOW_NO_TOKEN_ENV_VAR, raising=False)
     yield
     caller_auth.reset()
 
@@ -64,9 +65,16 @@ def test_token_ok_accepts_only_a_correct_bearer_header(header, expected):
     assert caller_auth.token_ok(config, header) is expected
 
 
-def test_token_check_is_disabled_when_no_token_is_configured():
-    """Dev mode: the token check goes off, deliberately and loudly."""
-    assert caller_auth.token_ok(CallerAuthConfig(token=None), "") is True
+def test_no_token_fails_every_token_check_without_the_opt_in():
+    """A missing token never means "anyone may call"."""
+    config = CallerAuthConfig(token=None)
+    assert caller_auth.token_ok(config, "") is False
+    assert caller_auth.token_ok(config, f"Bearer {_TOKEN}") is False
+
+
+def test_the_developer_opt_in_turns_the_token_check_off():
+    config = CallerAuthConfig(token=None, allow_no_token=True)
+    assert caller_auth.token_ok(config, "") is True
 
 
 # -- Host header parsing (the DNS-rebinding verdict) -------------------------
@@ -109,7 +117,59 @@ def test_token_comes_from_the_plain_env_var(monkeypatch):
 def test_no_env_vars_means_no_token(monkeypatch):
     monkeypatch.delenv(_FILE_VAR, raising=False)
     monkeypatch.delenv(_ENV_VAR, raising=False)
-    assert _from_env().token is None
+    config = _from_env()
+    assert config.token is None
+    assert config.allow_no_token is False
+
+
+# -- check_startup: no token refuses to start unless a developer opts in -------
+
+
+def test_no_token_and_no_opt_in_refuses_to_start(monkeypatch):
+    monkeypatch.delenv(_FILE_VAR, raising=False)
+    monkeypatch.delenv(_ENV_VAR, raising=False)
+    with pytest.raises(RuntimeError) as exc:
+        caller_auth.check_startup(_from_env())
+    message = str(exc.value)
+    # What failed, what to do, where to look.
+    assert "test sidecar refuses to start without a caller-auth token" in message
+    assert _FILE_VAR in message and _ENV_VAR in message
+    assert "GAIA_SIDECAR_ALLOW_NO_TOKEN=1" in message
+    assert "SPEC.md" in message
+
+
+@pytest.mark.parametrize("value", ["true", "yes", "0", " 2 "])
+def test_only_the_value_1_opts_in(monkeypatch, value):
+    monkeypatch.delenv(_FILE_VAR, raising=False)
+    monkeypatch.delenv(_ENV_VAR, raising=False)
+    monkeypatch.setenv(caller_auth.ALLOW_NO_TOKEN_ENV_VAR, value)
+    config = _from_env()
+    assert config.allow_no_token is False
+    with pytest.raises(RuntimeError, match="only '1' opts in"):
+        caller_auth.check_startup(config)
+
+
+def test_the_opt_in_starts_with_a_loud_warning(monkeypatch, caplog):
+    monkeypatch.delenv(_FILE_VAR, raising=False)
+    monkeypatch.delenv(_ENV_VAR, raising=False)
+    monkeypatch.setenv(caller_auth.ALLOW_NO_TOKEN_ENV_VAR, "1")
+    config = _from_env()
+    assert config.allow_no_token is True
+    with caplog.at_level("WARNING"):
+        caller_auth.check_startup(config)
+    assert "caller authentication DISABLED" in caplog.text
+
+
+def test_a_token_starts_quietly_and_ignores_the_opt_in(monkeypatch, caplog):
+    monkeypatch.delenv(_FILE_VAR, raising=False)
+    monkeypatch.setenv(_ENV_VAR, _TOKEN)
+    monkeypatch.setenv(caller_auth.ALLOW_NO_TOKEN_ENV_VAR, "1")
+    config = _from_env()
+    assert config.allow_no_token is False
+    with caplog.at_level("WARNING"):
+        caller_auth.check_startup(config)
+    assert "DISABLED" not in caplog.text
+    assert caller_auth.token_ok(config, "") is False
 
 
 def test_the_secret_file_is_preferred_over_the_bare_env_var(monkeypatch, tmp_path):

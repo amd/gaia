@@ -302,6 +302,64 @@ def _get(url: str) -> Any:
             attempt += 1
 
 
+def _rate_limit(exc: BaseException) -> Optional[Tuple[float, str]]:
+    """(seconds until GitHub allows the next read, what it said) when ``exc`` is
+    a GitHub API rate limit, else None.
+
+    A 403 only counts when GitHub marks it as a limit (Retry-After, an exhausted
+    X-RateLimit-Remaining, or a "rate limit" message), so a real permission
+    error is never waited on.
+    """
+    http = exc if isinstance(exc, urllib.error.HTTPError) else exc.__cause__
+    if not isinstance(http, urllib.error.HTTPError) or http.code not in _RETRY_STATUSES:
+        return None
+    headers = http.headers or {}
+    try:
+        body = http.read().decode("utf-8", "replace") if http.fp else ""
+    except OSError:
+        body = ""
+    message = ""
+    try:
+        message = str(json.loads(body).get("message", "")) if body else ""
+    except (ValueError, AttributeError):
+        message = body[:200]
+    remaining = headers.get("X-RateLimit-Remaining")
+    retry_after = headers.get("Retry-After")
+    detail = (
+        f"HTTP {http.code}: {message or 'no message'} "
+        f"(X-RateLimit-Remaining={remaining}, "
+        f"X-RateLimit-Resource={headers.get('X-RateLimit-Resource')}, "
+        f"Retry-After={retry_after})"
+    )
+    limited = (
+        http.code == 429
+        or retry_after is not None
+        or str(remaining).strip() == "0"
+        or "rate limit" in message.lower()
+    )
+    if not limited:
+        print(f"::error::not a GitHub rate limit, failing: {detail}", flush=True)
+        return None
+    wait = 60.0
+    if retry_after:
+        try:
+            wait = float(str(retry_after).strip())
+        except ValueError:
+            try:
+                wait = (
+                    email.utils.parsedate_to_datetime(str(retry_after)).timestamp()
+                    - time.time()
+                )
+            except (TypeError, ValueError):
+                pass
+    elif str(remaining).strip() == "0" and headers.get("X-RateLimit-Reset"):
+        try:
+            wait = float(headers["X-RateLimit-Reset"]) - time.time() + 1
+        except (TypeError, ValueError):
+            pass
+    return max(1.0, wait), detail
+
+
 def list_releases() -> List[Dict[str, Any]]:
     fixture = _fixture_releases()
     if fixture is not None:
@@ -399,7 +457,29 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     deadline = time.monotonic() + args.wait_minutes * 60
     while True:
-        assets = release_assets(tag)
+        try:
+            assets = release_assets(tag)
+        except (urllib.error.HTTPError, RuntimeError) as exc:
+            limit = _rate_limit(exc)
+            if limit is None:
+                raise
+            wait, detail = limit
+            if time.monotonic() + wait > deadline:
+                print(
+                    f"::error::{tag}: the GitHub API is rate-limiting this job's "
+                    f"token ({detail}) and allows the next read in {wait:.0f}s, "
+                    f"after the {args.wait_minutes:g} min wait ends. Re-run this "
+                    f"workflow once the limit resets. Nothing was tested.",
+                    flush=True,
+                )
+                return 1
+            print(
+                f"{tag}: GitHub API rate limit ({detail}); "
+                f"waiting {wait:.0f}s before checking again",
+                flush=True,
+            )
+            time.sleep(wait)
+            continue
         names = expected_assets(tag, assets or ())
         missing = [
             names[i] for i in required(tag) if assets is None or names[i] not in assets

@@ -110,10 +110,9 @@ router = APIRouter(prefix="/api/connectors", tags=["connectors"])
 # Issue #1292 — forwarded pre-authenticated connections. Separate prefix
 # (``/v1/connections``) per the issue's REST contract: a host app that already
 # authenticated a user POSTs the forwarded grant here; GAIA persists it and
-# acts on the mailbox as the host app's client — no second OAuth. The UI
-# server binds localhost by default and gates remote/tunnel access behind a
-# token (see ``TunnelAuthMiddleware``); mutating routes also require the
-# ``X-Gaia-UI`` CSRF header below.
+# acts on the mailbox as the host app's client — no second OAuth. Every caller
+# presents the Agent UI API token (see ``ApiTokenMiddleware``); mutating routes
+# also require the ``X-Gaia-UI`` CSRF header below.
 forwarded_router = APIRouter(prefix="/v1/connections", tags=["connections"])
 
 

@@ -51,6 +51,9 @@ on:
       - 'src/gaia/llm/providers/**'
       - 'src/gaia/llm/model_device.py'
       - 'src/gaia/llm/model_fit.py'
+      # The token check_npu_agent_chat.py sends to the Agent UI.
+      - 'src/gaia/ui/__init__.py'
+      - 'src/gaia/ui/api_token.py'
       # The Agent UI's chat path to the agent sidecar.
       - 'src/gaia/ui/_chat_helpers.py'
       - 'src/gaia/ui/dispatch.py'
@@ -83,6 +86,9 @@ on:
       - 'src/gaia/llm/providers/**'
       - 'src/gaia/llm/model_device.py'
       - 'src/gaia/llm/model_fit.py'
+      # The token check_npu_agent_chat.py sends to the Agent UI.
+      - 'src/gaia/ui/__init__.py'
+      - 'src/gaia/ui/api_token.py'
       # The Agent UI's chat path to the agent sidecar.
       - 'src/gaia/ui/_chat_helpers.py'
       - 'src/gaia/ui/dispatch.py'

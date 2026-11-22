@@ -20,14 +20,28 @@ constexpr std::size_t kMaxOutputBytes = 32u * 1024u;
 /// Run `git <command>` via ProcessRunner, capturing stdout+stderr. `failure`
 /// receives why git did not succeed, or "" when it exited 0.
 std::string runGit(const std::string& command, std::string& failure) {
+#ifdef _WIN32
+    // By full path: cmd.exe would run a git.bat or git.exe in the repository before the real one.
+    const std::string gitPath = gaia::findProgramOnPath("git");
+    if (gitPath.empty()) {
+        failure = "git isn't installed, or isn't on PATH. Install Git for Windows, then try again.";
+        return "";
+    }
+    // cmd /c drops the first and last quote of a line that starts with one, so the line gets an extra pair.
+    const std::string git = "\"\"" + gitPath + "\"";
+    const std::string close = "\"";
+#else
+    const std::string git = "git";
+    const std::string close;
+#endif
     // These tools run without asking, and a repo's own config can name a program for git to start:
     // a file-system monitor, an external diff, a textconv filter.
-    std::string guarded = "git -c core.fsmonitor=false " + command;
+    std::string guarded = git + " -c core.fsmonitor=false " + command + close;
     for (const char* sub : {"diff", "show", "log"}) {
         const size_t n = std::strlen(sub);
         if (command.compare(0, n, sub) == 0 && (command.size() == n || command[n] == ' ')) {
-            guarded = std::string("git -c core.fsmonitor=false ") + sub + " --no-ext-diff --no-textconv" +
-                      command.substr(n);
+            guarded = git + " -c core.fsmonitor=false " + sub + " --no-ext-diff --no-textconv" +
+                      command.substr(n) + close;
         }
     }
     auto result = gaia::ProcessRunner::run(

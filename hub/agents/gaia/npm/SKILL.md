@@ -167,7 +167,7 @@ Do not guess — ask the sidecar. `GET /v1/gaia/init` is a read-only preflight
 floor, and checks the model is present:
 
 ```bash
-curl -s http://127.0.0.1:8141/v1/gaia/init
+curl -s -H "authorization: Bearer $TOKEN" http://127.0.0.1:8141/v1/gaia/init
 ```
 
 It answers **200** when ready and **503** when not, with the **same body shape
@@ -224,26 +224,21 @@ await shutdown(proc);   // tree-kill; auto-cleanup also reaps on exit
   on `exit`, `SIGINT`/`SIGTERM`/`SIGHUP`, `uncaughtException`, and
   `unhandledRejection`. A `SIGKILL` of *your* process is the one case nothing
   in-process can catch.
-- **Mint a caller token, or you are running the sidecar unauthenticated.** The
-  sidecar requires `Authorization: Bearer <token>` on every `/v1/gaia/*`
-  request, and skips the check only when neither token env var is set — dev
-  mode, which is what `startSidecar` gives you, because this package mints
-  nothing. Loopback binding is not the boundary: this agent has shell and file
-  tools. Mint your own and pass it through the `env` option (`StartOptions`
-  extends `SpawnOptions`, so it merges over `process.env`):
+- **Every request needs the caller token.** The sidecar requires
+  `Authorization: Bearer <token>` on every `/v1/gaia/*` request and refuses to
+  start without a token. Loopback binding is not the boundary: this agent has
+  shell and file tools. `startSidecar` mints one per spawn, hands it to the
+  sidecar in a `0600` file, and returns it on the handle (pass `authToken` to
+  choose the value yourself):
 
   ```ts
-  import { randomBytes } from "node:crypto";
-  const token = randomBytes(32).toString("hex");
-  const proc = await startSidecar({
-    binaryPath: sidecar.binaryPath,
-    env: { GAIA_GAIA_SIDECAR_TOKEN: token },   // or ..._TOKEN_FILE, a 0600 path
-  });
+  const proc = await startSidecar({ binaryPath: sidecar.binaryPath });
+  const headers = { authorization: `Bearer ${proc.authToken}` };
   ```
 
-  Then send `authorization: "Bearer " + token` on every `/v1/gaia/*` call.
+  Send that header on every `/v1/gaia/*` call.
   `/health`, `/version`, and `/v1/gaia/version` are exempt, so `startSidecar`'s
-  own health-and-version handshake works either way. **If you did not spawn the
+  own health-and-version handshake needs no token. **If you did not spawn the
   sidecar** — you are talking to one the GAIA daemon started — the token is the
   daemon's, delivered to the sidecar as `GAIA_GAIA_SIDECAR_TOKEN_FILE` (a `0600`
   file path); read it from there, don't invent one. A 401 whose `detail` names
@@ -269,7 +264,7 @@ curl http://127.0.0.1:8141/health
 ## 7. Call `POST /v1/gaia/query`
 
 This is the whole agent surface. There is **no typed query client** in this
-package: call it with plain `fetch`. Contract version **2.30**; the stream is
+package: call it with plain `fetch`. Contract version **2.31**; the stream is
 `text/event-stream` terminated by **exactly one** `final` or `error`.
 
 Request body (`extra: "forbid"` — an unknown field is a **422**, not ignored):
@@ -303,7 +298,7 @@ const res = await fetch(`${proc.baseUrl}/v1/gaia/query`, {
   headers: {
     "content-type": "application/json",
     accept: "text/event-stream",
-    authorization: `Bearer ${token}`,   // required unless the sidecar is in dev mode — §6
+    authorization: `Bearer ${proc.authToken}`,   // always required — §6
   },
   body: JSON.stringify({
     query: "Summarize the PDFs in ~/Documents/reports",
@@ -355,8 +350,8 @@ The canonical event shapes, as emitted:
 | `context_usage` | `{ type, window, used, turns_in_view, turns_hidden, ... }`: the context meter, not terminal. A request that sent `turns` gets it before the answer (contract ≥ 2.28), so the meter fills during a long turn; `final.context` follows with the loaded model's own count |
 | `needs_confirmation` | `{ type, run_id, action, summary, confirm_id?, always_scope?, always_label?, risk?, tool_label?, args?, args_truncated?, prompt_context? }` — answer it, or it ends the run; see §8. `summary` shortens long code; `args` is the call itself, exactly the arguments the model sent, each value capped at 64,000 characters (`args_truncated: true` when one was cut — don't auto-approve a call you can't fully see). What GAIA adds to the prompt is in `prompt_context`, never `args`: `working_directory` (where a shell call runs, when the model's arguments don't say), `risk_note` (why GAIA's checks don't cover the call) `file_path` (the absolute path a write lands at, when the model gave a relative one) and `script` (for `execute_python_file`, the file as read when the prompt was built: `{ text, hidden_lines }`, or `{ unreadable }` saying why there is none; show it, and expect an error instead of a run if the file changes before it starts) |
 | `needs_input` | `{ type, run_id, request_id, question, options[], allow_free_text, sensitive, respond_url, timeout_seconds? }` |
-| `final` | `{ type, answer, usage?, failed?, failure?, context?, context_error?, performance?, model_messages?, route? }` — terminal. `route` (contract ≥ 2.29, `hybrid` sessions only): the turn's routing decision; `route.model` is the model it ran on, so bill and label by it. `failed: true`: the turn did not complete (a model call broke, or a gated tool was refused on a run nobody can answer) and `answer` says what was and wasn't done; show it as an error, not a result. `failure: "model_server_down"`: the local model server took no connection (cloud models go through it too), so offer to start it rather than blaming the cloud provider; older binaries never send `failure`. `model_messages` (contract ≥ 2.25, only when the request sent `turns`) is the turn as the model saw it; store it with the reply and send it back in `turns`. `context` / `context_error` and `performance` (the turn's step timings) are optional; see SPEC §5.1 |
-| `error` | `{ type, detail, status }` — terminal, surface `detail` verbatim |
+| `final` | `{ type, answer, usage?, failed?, failure?, context?, context_error?, performance?, model_messages?, route?, session_created? }` — terminal. `route` (contract ≥ 2.29, `hybrid` sessions only): the turn's routing decision; `route.model` is the model it ran on, so bill and label by it. `failed: true`: the turn did not complete (a model call broke, or a gated tool was refused on a run nobody can answer) and `answer` says what was and wasn't done; show it as an error, not a result. `failure: "model_server_down"`: the local model server took no connection (cloud models go through it too), so offer to start it rather than blaming the cloud provider; older binaries never send `failure`. `model_messages` (contract ≥ 2.25, only when the request sent `turns`) is the turn as the model saw it; store it with the reply and send it back in `turns`. `context` / `context_error` and `performance` (the turn's step timings) are optional; see SPEC §5.1. `session_created: true` (contract ≥ 2.31): the sidecar built a fresh agent for this turn (eviction, restart, or first use) — drop only client-side state that pre-dates this turn's start, never this turn's own approvals |
+| `error` | `{ type, detail, status, session_created? }` — terminal, surface `detail` verbatim. `session_created` (contract ≥ 2.31): same meaning as on `final` |
 
 Rules a client must respect:
 
@@ -792,10 +787,8 @@ There is no silent null.
 - **A `401` from `/v1/gaia/*` is the caller-auth token, not a bug.** The sidecar
   requires `Authorization: Bearer <token>`; `/health`, `/version`, and
   `/v1/gaia/version` are exempt, which is why a green health check sits happily
-  in front of a 401 on `/query`. It skips the check only in dev mode — neither
-  token env var set — which is what `spawnSidecar` and `gaia serve` produce,
-  because this package mints nothing. Do not treat loopback binding as the
-  boundary; mint a token and pass it (§6).
+  in front of a 401 on `/query`. `startSidecar` returns the token as
+  `authToken`; `gaia serve` prints the file holding it (§6).
 - **`run_id` must be a UUID**, and unknown fields in the request body are a
   **422** — the model forbids extras. Typos don't get ignored.
 - **`gaia run` needs the *Python* `gaia` CLI on `PATH`** — the TUI shells out to
@@ -831,13 +824,15 @@ Against a lock that still carries `PENDING-…` hashes, `fetch` is *expected* to
 fail with a `PlatformError` before any download — that is the gate working, not a
 broken install. Only a published release has real hashes.
 
-Then, in another terminal:
+Then, in another terminal, with `TOKEN` read from the file `serve` printed:
 
 ```bash
+TOKEN=$(cat /path/printed/by/serve/launch-secret)
 curl -s http://127.0.0.1:8141/health          # {"status":"ok","service":"gaia-agent-gaia"}
-curl -s http://127.0.0.1:8141/version         # {"apiVersion":"2.30","agentVersion":"0.3.6"}
-curl -s http://127.0.0.1:8141/v1/gaia/init    # 200 + "ready":true, or 503 + a "hint"
+curl -s http://127.0.0.1:8141/version         # {"apiVersion":"2.31","agentVersion":"0.3.6"}
+curl -s -H "authorization: Bearer $TOKEN"   http://127.0.0.1:8141/v1/gaia/init          # 200 + "ready":true, or 503 + a "hint"
 curl -N -X POST http://127.0.0.1:8141/v1/gaia/query \
+  -H "authorization: Bearer $TOKEN" \
   -H 'content-type: application/json' \
   -d '{"query":"What can you do?","run_id":"00000000-0000-4000-8000-000000000001","context":[],"can_answer_questions":false}'
 ```
@@ -846,10 +841,8 @@ A healthy run streams `status` / `token` events and ends with one `final`. If
 `/v1/gaia/init` is 503, fix what its `hint` names and retry — the rest of your
 integration is fine.
 
-That `/query` call carries no `Authorization` header because `gaia serve` starts
-the sidecar in dev mode. Against one started with a token, add
-`-H "authorization: Bearer $TOKEN"` — a **401** here and a green `/health` is
-that and nothing else (§6).
+A **401** here and a green `/health` means the token is missing or wrong, and
+nothing else (§6).
 
 **A 503 from `/query` itself is a different condition**: every retained
 session slot is busy and none is idle enough to evict (SPEC §5.2). Do NOT
