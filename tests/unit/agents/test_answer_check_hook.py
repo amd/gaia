@@ -479,9 +479,57 @@ def test_only_a_permission_change_breaks_a_no_permission_change_request(
         ("Why is there no shell in this container?", 0),
         ("There's no terminal on this box, so check it another way.", 0),
         ("Fix it, and do not use the shell.", 1),
+        ("There’s no shell here, so read the file another way.", 0),
+        ("there’s no terminal on this box. What's in /tmp?", 0),
+        ("I don’t use the shell much; please list the files.", 0),
+        ("Don’t use the shell.", 1),
     ],
 )
 def test_what_counts_as_ruling_a_step_out(request_text, forbidden):
     from gaia.agents.base.forbidden_steps import ruled_out
 
     assert len(ruled_out(request_text)) == forbidden
+
+
+_RAN_CHMOD = [
+    {"tool": "run_shell_command", "args": {"command": "chmod u+w ro.txt"}, "ran": True}
+]
+
+
+@pytest.mark.parametrize(
+    "answer",
+    [
+        "Done, alpha is beta now. It's writable now.",
+        "Done. I made the file writable first.",
+    ],
+)
+def test_saying_only_the_effect_does_not_disclose_the_step(answer):
+    from gaia.agents.base.forbidden_steps import undisclosed_forbidden_steps
+
+    request = "Replace alpha with beta in ro.txt. Don't change permissions."
+    assert "`chmod u+w ro.txt`" in undisclosed_forbidden_steps(
+        request, _RAN_CHMOD, answer
+    )
+
+
+@pytest.mark.parametrize(
+    "request_text",
+    [
+        "Replace alpha with beta in ro.txt.",
+        "Make ro.txt writable and fix the typo.",
+        "Can you check the file permissions on ro.txt?",
+        "There’s no shell on my laptop, can you run it for me?",
+        "Why is there no terminal in this container?",
+        "I don't use the shell much; please fix the file.",
+        "Use the shell to fix the permissions.",
+        "Don't worry about permissions, just make it work.",
+        "We never open a terminal at work, so walk me through it.",
+        "Please don't delete anything else.",
+        "Run chmod on ro.txt so I can edit it.",
+    ],
+)
+def test_ordinary_requests_do_not_trigger_the_check(request_text):
+    from gaia.agents.base.forbidden_steps import undisclosed_forbidden_steps
+
+    answer = "Done, alpha is beta now."
+    assert undisclosed_forbidden_steps(request_text, _RAN_CHMOD, answer) == ""

@@ -9,6 +9,7 @@ back once to say so (#8803).
 
 Deliberately narrow: only an explicit "don't use the shell" or "don't change
 permissions" in the request counts, and only a shell command that actually ran.
+English phrasing only; a ban in another language is left to the prompt rule.
 """
 
 from __future__ import annotations
@@ -47,7 +48,7 @@ _PERMISSION_COMMAND = re.compile(
 )
 
 _MENTIONS_STEP = re.compile(
-    rf"\b(?:shell|terminal|command|{_PERMISSION_PROGRAMS}|permissions?|writable)\b",
+    rf"\b(?:shell|terminal|command|{_PERMISSION_PROGRAMS}|permissions?)\b",
     re.IGNORECASE,
 )
 
@@ -66,9 +67,12 @@ _STATEMENT_LEAD = frozenset(
 )
 
 
+_APOSTROPHES = str.maketrans({"’": "'", "‘": "'", "ʼ": "'"})
+
+
 def _normalised(text: str) -> str:
-    """*text* in NFKC with invisible format characters dropped."""
-    text = unicodedata.normalize("NFKC", text or "")
+    """*text* in NFKC, apostrophes plain, invisible format characters dropped."""
+    text = unicodedata.normalize("NFKC", text or "").translate(_APOSTROPHES)
     return "".join(ch for ch in text if unicodedata.category(ch) != "Cf")
 
 
