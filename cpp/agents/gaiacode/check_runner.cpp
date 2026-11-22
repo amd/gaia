@@ -142,13 +142,21 @@ void parseCheckOutput(const std::string& output, CheckResult& r) {
     static const std::regex junit(R"(Tests run: (\d+), Failures: (\d+), Errors: (\d+), Skipped: (\d+))");
     // dotnet: "Passed!  - Failed:     0, Passed:     5, Skipped:     0, Total:     5"
     static const std::regex dotnet(R"(Failed:\s+(\d+), Passed:\s+(\d+), Skipped:\s+(\d+), Total:\s+\d+)");
+    static const std::regex dotnet9(
+        R"(Test summary: total: (\d+), failed: (\d+), succeeded: (\d+), skipped: (\d+))", std::regex::icase);
     // swift: "Executed 5 tests, with 1 failure"
     static const std::regex swiftRan(R"(Executed (\d+) tests?, with (\d+) failures?)");
 
-    if (std::regex_search(output, m, dotnet)) {
-        r.failed = count(m[1].str());
-        r.passed = count(m[2].str());
-        r.skipped = count(m[3].str());
+    if (std::regex_search(output, m, dotnet9)) {
+        r.failed = count(m[2].str());
+        r.passed = count(m[3].str());
+        r.skipped = count(m[4].str());
+        return;
+    }
+    if (std::regex_search(output, dotnet)) {
+        r.failed = sumMatches(output, dotnet, 1);
+        r.passed = sumMatches(output, dotnet, 2);
+        r.skipped = sumMatches(output, dotnet, 3);
         return;
     }
     if (std::regex_search(output, junit)) {
@@ -164,8 +172,14 @@ void parseCheckOutput(const std::string& output, CheckResult& r) {
         r.skipped = skipped;
         return;
     }
-    if (std::regex_search(output, m, swiftRan)) {
-        const int ran = count(m[1].str()), bad = count(m[2].str());
+    if (std::regex_search(output, swiftRan)) {
+        // XCTest prints one line per suite, innermost first: the last is the whole run.
+        std::smatch outer;
+        for (auto it = std::sregex_iterator(output.begin(), output.end(), swiftRan); it != std::sregex_iterator();
+             ++it) {
+            outer = *it;
+        }
+        const int ran = count(outer[1].str()), bad = count(outer[2].str());
         r.passed = std::max(0, ran - bad);
         r.failed = bad;
         return;
@@ -413,13 +427,14 @@ ToolInfo runChecksTool(std::shared_ptr<ShellSession> session, std::shared_ptr<co
             restore.armed = true;
         }
         constexpr size_t kCapture = 4 * 1024 * 1024;
-        const ProcessResult p = shell.run(r.command, timeout, kCapture);
+        // Twice the limit: CRLF folding can halve a capped capture, which must still read as too long.
+        const ProcessResult p = shell.run(r.command, timeout, 2 * kCapture + 2);
         r.exitCode = p.exitCode;
         r.timedOut = p.timedOut;
         const std::string output = p.stdout_output + (p.stderr_output.empty() ? "" : "\n" + p.stderr_output);
         parseCheckOutput(output, r);
         // The capture keeps the start; past its limit the summary at the end is gone.
-        const bool clipped = p.stdout_output.size() >= kCapture || p.stderr_output.size() >= kCapture;
+        const bool clipped = p.stdout_output.size() > kCapture || p.stderr_output.size() > kCapture;
         if (clipped) r.passed = -1;
         constexpr size_t kTail = 8000;  // the summary and failures are at the end
         json out = {{"status", "success"},
