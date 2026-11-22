@@ -207,9 +207,16 @@ export function shortfall(plan: SetupPlan, sel: Selection): Shortfall | null {
     return { needGb: downloadGb, freeGb, freeUpGb, drop };
 }
 
-/** Ticked models (and the default chat model) that may not fit this PC's memory. */
+/** Ticked models (and the default chat model) that may not fit this PC's memory,
+ *  and a chosen chat model that fits but leaves other apps little room: both ask first. */
 export function tooBig(catalog: SetupCatalogEntry[], sel: Selection): SetupCatalogEntry[] {
-    return catalog.filter((e) => e.fits === false && (sel.ticked.has(e.id) || e.id === sel.defaultChat));
+    return catalog.filter((e) => (e.fits === false && (sel.ticked.has(e.id) || e.id === sel.defaultChat))
+        || (e.fits === true && !!e.tight && e.id === sel.defaultChat));
+}
+
+/** Every model in *asks* fits, so the question is about room for other apps. */
+export function onlyTight(asks: SetupCatalogEntry[]): boolean {
+    return asks.length > 0 && asks.every((e) => e.fits === true && !!e.tight);
 }
 
 /** Vision is lost when the vision model is neither ticked nor on disk. */

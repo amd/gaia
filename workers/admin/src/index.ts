@@ -14,7 +14,7 @@ type Env = CollectEnv & AuthEnv & { MAINTAINER_LOGINS?: string };
 const PAGES: Record<string, (env: Env) => string | Promise<string>> = {
   "/": renderUsersPage,
   "/growth": async (env) => renderGrowthPage((await coreTeam(env.DB, env.MAINTAINER_LOGINS)).people),
-  "/developers": async (env) => renderDevelopersPage(await coreTeam(env.DB, env.MAINTAINER_LOGINS)),
+  "/developers": async (env) => renderDevelopersPage(await coreTeam(env.DB, env.MAINTAINER_LOGINS), env.GITHUB_REPO),
   "/ci": renderCiPage,
   "/evals": renderEvalsPage,
 };

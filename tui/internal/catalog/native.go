@@ -17,11 +17,15 @@ const (
 	NativeAgentBinary = "gaiacpp"
 	// PythonAgentBinary is the Python flagship's stdio child.
 	PythonAgentBinary = "gaia-agent"
+	// PythonAgentChoice is the Python agent's name as a choice: the value
+	// flagship_agent and /agent take. It is accepted wherever
+	// PythonAgentBinary is, so one name works for every way of choosing.
+	PythonAgentChoice = "gaiapy"
 	// NativeStdioFlag puts gaiacpp on the stdio protocol; without it the
 	// program opens its own interactive session.
 	NativeStdioFlag = "--stdio"
 	// AgentEnv names the agent program to run: NativeAgentBinary,
-	// PythonAgentBinary, or a path to either. Unset leaves the saved choice,
+	// PythonAgentChoice or PythonAgentBinary, or a path to either. Unset leaves the saved choice,
 	// else the Python agent.
 	AgentEnv = "GAIA_TUI_AGENT"
 )
@@ -197,7 +201,7 @@ func (c *Catalog) SelectFlagshipAgent(choice string) (notice string, err error) 
 		agent.useNative(l.Path)
 		return "", nil
 
-	case strings.EqualFold(name, PythonAgentBinary):
+	case strings.EqualFold(name, PythonAgentBinary), strings.EqualFold(name, PythonAgentChoice):
 		if agent.Transport == TransportDaemon {
 			// The install record put the Python agent behind the daemon; the
 			// file of that name in the install directory is its HTTP sidecar,
@@ -206,7 +210,11 @@ func (c *Catalog) SelectFlagshipAgent(choice string) (notice string, err error) 
 		}
 		l := Find(PythonAgentBinary, FlagshipID)
 		if !l.Found() {
-			return "", missingChoiceError(PythonAgentBinary, l)
+			asked := PythonAgentBinary
+			if strings.EqualFold(name, PythonAgentChoice) {
+				asked = PythonAgentChoice + " (the " + PythonAgentBinary + " program)"
+			}
+			return "", missingChoiceError(asked, l)
 		}
 		agent.BinaryPath = l.Path
 		return "", nil
@@ -216,7 +224,7 @@ func (c *Catalog) SelectFlagshipAgent(choice string) (notice string, err error) 
 			return "", fmt.Errorf(
 				"the agent program %s was asked for, but it is not an executable file. "+
 					"Fix the path, or name %s or %s to have it found for you. "+
-					"See %s", choice, NativeAgentBinary, PythonAgentBinary, AgentChoiceDocsURL)
+					"See %s", choice, NativeAgentBinary, PythonAgentChoice, AgentChoiceDocsURL)
 		}
 		switch {
 		case IsNativeAgentBinary(choice):
@@ -238,13 +246,14 @@ func (c *Catalog) SelectFlagshipAgent(choice string) (notice string, err error) 
 		return "", nil
 	}
 	return "", fmt.Errorf(
-		"%q is not an agent program the terminal UI knows. Use %s, %s, or a path to one of them. See %s",
-		choice, NativeAgentBinary, PythonAgentBinary, AgentChoiceDocsURL)
+		"%q is not an agent program the terminal UI knows. Use %s, %s (or %s), or a path to one of them. See %s",
+		choice, NativeAgentBinary, PythonAgentChoice, PythonAgentBinary, AgentChoiceDocsURL)
 }
 
-// DaemonPythonNotice tells a user who named gaia-agent that, on their install,
-// the Python agent is reached through the daemon rather than spawned.
-const DaemonPythonNotice = "[!] " + PythonAgentBinary + " was asked for. On this install the Python agent " +
+// DaemonPythonNotice tells a user who named the Python agent (gaiapy or
+// gaia-agent) that, on their install, it is reached through the daemon rather
+// than spawned.
+const DaemonPythonNotice = "[!] The Python agent was asked for. On this install it " +
 	"runs through the GAIA background service, so that is what answers. To run one particular " +
 	PythonAgentBinary + " program instead, give its full path."
 

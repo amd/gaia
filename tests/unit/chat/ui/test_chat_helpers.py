@@ -841,7 +841,7 @@ class TestChatAgentNamespacedIdentity:
             / "agents"
             / "gaia"
             / "python"
-            / "gaia_agent"
+            / "gaiapy"
             / "chat_agent.py"
         ).read_text(encoding="utf-8")
         init_start = src.index("def __init__(self, config: Optional[ChatAgentConfig]")

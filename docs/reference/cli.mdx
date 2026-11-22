@@ -12,12 +12,15 @@ GAIA provides a comprehensive command-line interface (CLI) for interacting with 
 
 ## Platform Support
 
-<CardGroup cols={2}>
-  <Card title="Windows 11" icon="windows">
+<CardGroup cols={3}>
+  <Card title="Windows 10/11" icon="windows">
     Full GUI and CLI support
   </Card>
   <Card title="Linux" icon="linux">
-    Full GUI and CLI support via source installation (Ubuntu/Debian)
+    Full GUI and CLI support (glibc 2.38+, e.g. Ubuntu 24.04+)
+  </Card>
+  <Card title="macOS 14+" icon="apple">
+    The desktop app and the terminal, on Apple Silicon
   </Card>
 </CardGroup>
 
@@ -151,7 +154,7 @@ echo "List the Python files here" | gaia -p --output-format json
 | `--base-url <url>` | Use a remote Lemonade server instead of the local one |
 | `--disallowed-tools <tools>` | Tools the agent may neither see nor call, comma- or space-separated, with `*` globs (`search_web,browser_*`). Repeatable. `search_tools` never finds a withheld tool, and a tool a skill adds mid-turn is withheld too when a pattern matches it. Each pattern must match a tool the agent has when the turn starts, or the run fails (exit 1) before it begins, so a typo can't leave a tool on |
 | `--no-web` | Withhold GAIA's tools that search, read, download or install from the internet: `search_web`, `fetch_page`, `fetch_webpage`, `download_file`, `open_url`, `browser_*`, `search_documentation`, `search_skill_hub`, `install_skill`, `install_cli` and `transcribe_media`. The shell and connector (MCP) tools stay available; withhold those with `--disallowed-tools`. The agent is also told not to search or fetch from the web through the shell or a script. That is an instruction, not a block: cut the network to enforce it |
-| `--no-skills` | No skill catalogue or suggestions in the prompt, no learned skill changes, and no tools to find, load, install or learn skills. A skill the agent always loads stays loaded |
+| `--no-skills` | No skill catalogue or suggestions in the prompt, no learned skill changes, and no tools to find, load, install or learn skills. A prompt that starts with `/<skill-name>` does not load that skill either: the answer says skills are off. `--disallowed-tools load_skill` does the same. A skill the agent always loads stays loaded |
 
 `-p` takes no subcommand: `gaia -p "hi" chat` is a usage error. The flags above
 apply only to `-p`; given before a subcommand without it (`gaia --model X chat`)
@@ -576,12 +579,12 @@ CPU-only PC — `gaia init` also sets up `Qwen3.6-35B-A3B-GGUF` (a 23 GB Lemonad
 built-in MoE, run with thinking on) as the chat model,
 prints why, and records it as `default_model`. It must also fit the memory free when
 setup runs, so a PC busy with other apps keeps Gemma and says why: close them and
-re-run `gaia init`. If setup's verify step fails, no default model is recorded. It loads with the largest window the
+re-run `gaia init`. Open apps and a full disk never push a PC below Gemma. If setup's verify step fails, no default model is recorded. It loads with the largest window the
 memory holds, up to 262,144 tokens: 256K on a Strix Halo, about 88K on a 32 GB GPU
 (see [Context length follows memory](/guides/ai-providers#context-length-follows-memory)). Gemma is
-still downloaded, since vision and document-image extraction load it by name. Every
-smaller PC gets Gemma alone. A `default_model` you set yourself always wins and is
-downloaded instead of Gemma. With no local `default_model`, a downloaded local
+still downloaded, since vision and document-image extraction load it by name. Smaller
+PCs get one of the tiers in the table below. A `default_model` you set yourself always
+wins and is downloaded instead of Gemma. With no local `default_model`, a downloaded local
 model you last chatted on (for example one picked after setting up on a cloud
 model) counts as set up too, so nothing else is downloaded for chat. If Lemonade explicitly reports the configured
 vision model as missing, image questions ask you to download it first (for the
@@ -589,6 +592,30 @@ built-in VLM, use `gaia download --agent vlm`) instead of silently starting the
 download during image analysis. Gemma is about 6 GB, and `gaia init` also warns
 when it is missing. `--check` asks for the same models `gaia init` would download.
 </Note>
+
+GAIA leaves room for your other apps. Where the model shares the PC's RAM (an
+integrated GPU, a Mac, or no GPU), it first keeps the larger of 10 GB and a quarter of
+the RAM for the OS and other apps, then picks the largest model that fits the rest. A
+discrete GPU is judged on its own memory.
+
+| This PC | Default chat model | Memory it needs |
+|---|---|---|
+| A GPU with about 27 GB for models to spare: a 64 GB+ Strix Halo or a 32 GB GPU | `Qwen3.6-35B-A3B-GGUF` | ~27 GB |
+| 24–32 GB of RAM, or a 10–24 GB GPU | `Gemma-4-E4B-it-GGUF` | ~8.5 GB |
+| An 8 GB GPU | `Qwen3.5-4B-GGUF` | ~7 GB |
+| 16 GB of RAM or less (laptops, Macs, CPU-only PCs) | `Qwen3.5-2B-GGUF` | ~4 GB |
+
+Each needs its weights, vision projector and a 64K context cache. A model's context
+window also grows only into memory other apps can spare. The Qwen3.5 models run with
+thinking off and read images themselves, so on those PCs `gaia init` downloads them
+alone, without Gemma. Any model can still be chosen on a PC it fits, with
+`gaia config set default_model <id>` or in the model pickers; the pickers mark a model
+that would leave other apps little memory, and setup asks before using one. A model on
+a Ryzen AI NPU, chosen with `--profile npu`, is judged against the NPU's own memory.
+
+A PC that set up before these smaller models existed and already has Gemma keeps it
+after an update: setup does not download a new default. Switch with
+`gaia init --use-model Qwen3.5-2B-GGUF` or in the model picker.
 
 <Note>
 `user.Qwen3.8-Flash-Next-GGUF` (an 82 GB download, multimodal, thinking on) is
@@ -2448,8 +2475,9 @@ are fetched separately, and only the ones your hardware needs:
 | `flm:npu` | ~169 MB | Ryzen AI NPU |
 | `llamacpp:rocm` | ~4.3 GB | ROCm, including a per-GPU runtime |
 
-GAIA's default models (`Gemma-4-E4B-it-GGUF`, `embeddinggemma-300m`) run on the
-`llamacpp` backends, so CPU + Vulkan is enough for the common case:
+GAIA's default models (the chat model [setup picks for this PC](#choosing-models)
+and `embeddinggemma-300m`) run on the `llamacpp` backends, so CPU + Vulkan is
+enough for the common case:
 
 ```bash
 gaia lemonade embedded install-backend llamacpp:vulkan

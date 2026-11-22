@@ -162,6 +162,34 @@ func TestTheNativeAgentIsLaunchedOnStdioWithTheFlagsItAccepts(t *testing.T) {
 	}
 }
 
+// With no model named, gaiacpp (which reads no GAIA config) is told GAIA's
+// local chat model, so a small PC starts on its Qwen3.5 pick, not Gemma; a
+// Claude default names nothing.
+func TestTheNativeAgentStartsOnGAIAsLocalModel(t *testing.T) {
+	for _, tc := range []struct {
+		config string
+		want   []string
+	}{
+		{`{"default_model":"Qwen3.5-2B-GGUF"}`, []string{"--stdio", "--model", "Qwen3.5-2B-GGUF"}},
+		{`{"default_model":"claude-sonnet-4-6"}`, []string{"--stdio"}},
+	} {
+		path := filepath.Join(t.TempDir(), "config.json")
+		if err := os.WriteFile(path, []byte(tc.config), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		t.Setenv("GAIA_CONFIG_FILE", path)
+		c, err := ForAgent(nativeAgent(t), ForAgentOptions{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		sub := c.(*SubprocessClient)
+		if !reflect.DeepEqual(sub.args, tc.want) {
+			t.Errorf("%s: argv = %v, want %v", tc.config, sub.args, tc.want)
+		}
+		c.Close()
+	}
+}
+
 // The Python agent's launch is unchanged: no --stdio, and Claude still reaches it.
 func TestThePythonAgentKeepsItsLaunchAndItsClaudeFlags(t *testing.T) {
 	agent := nativeAgent(t)

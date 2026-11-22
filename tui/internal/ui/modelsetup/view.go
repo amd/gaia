@@ -569,6 +569,8 @@ func (m Model) marks(it item, avail int) string {
 		parts = append(parts, warnStyle.Render("[!] "+notWithThisChat))
 	case r.fits != nil && !*r.fits:
 		parts = append(parts, warnStyle.Render("[!] won't fit"))
+	case r.fits != nil && *r.fits && r.tight:
+		parts = append(parts, warnStyle.Render("[!] "+tightChip))
 	case r.fits == nil && !r.downloaded:
 		parts = append(parts, warnStyle.Render("[?] "+fitUnknownChip))
 	case m.caveat(it) != "":
@@ -638,6 +640,8 @@ func (m Model) noteLines(w int) []string {
 		add(warnStyle, "[!] "+cantRunLine(r.fitReason))
 	case r.fits != nil && !*r.fits && r.needGB != nil && r.haveGB != nil:
 		add(warnStyle, noFitLine(*r.needGB, *r.haveGB))
+	case r.fits != nil && *r.fits && r.tight:
+		add(warnStyle, "[!] "+tightLine)
 	case r.fits == nil && !r.downloaded:
 		add(warnStyle, "[?] "+fitUnknownLine)
 	}
@@ -1682,6 +1686,10 @@ func (m Model) detailLines(w int) []string {
 			raw = append(raw, fmt.Sprintf("Memory for models: %s%s", formatGBShort(*p.CapacityGB), src))
 		} else {
 			raw = append(raw, "Memory for models: unknown")
+		}
+		// The figure is the recommendation's: say it only while that is the pick.
+		if p.LeftForAppsGB != nil && !p.ChatModel.UserSet && p.RecommendedModel != nil && sameID(m.sel.chat, *p.RecommendedModel) {
+			raw = append(raw, leftForAppsLine(*p.LeftForAppsGB))
 		}
 		if p.Disk.Path != nil {
 			free := "unknown"

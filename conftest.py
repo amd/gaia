@@ -46,7 +46,7 @@ def _source_roots():
 
     For a hub agent the importable root is the directory CONTAINING the package
     (``hub/agents/gaia/python``), not the package itself — putting the package
-    dir on sys.path makes ``import gaia_agent`` miss it entirely.
+    dir on sys.path makes ``import gaiapy`` miss it entirely.
 
     A hub agent is included ONLY when its package already resolves somewhere.
     This redirects an existing install to this checkout; it must not *create*
@@ -66,8 +66,8 @@ _SOURCE_ROOTS = _source_roots()
 
 #: Modules whose origin proves which checkout is under test. The hub agents are
 #: listed too: they are separately editable-installed, so ``gaia`` can resolve
-#: here while ``gaia_agent`` quietly comes from another worktree.
-_ANCHOR_MODULES = ("gaia", "gaia_agent")
+#: here while ``gaiapy`` quietly comes from another worktree.
+_ANCHOR_MODULES = ("gaia", "gaiapy")
 
 
 def _prepend_source_roots() -> None:

@@ -65,7 +65,8 @@ export function ModelRow({ model: m, label, current, remote, busy, onUse, onDown
                     {m.placement?.device && <span className="model-badge is-device">{m.placement.device.toUpperCase()}</span>}
                     {m.rank && <span className="model-badge is-rank"><bdi dir="ltr">#{m.rank}</bdi> {m.note && (NOTES[m.note] ? t(NOTES[m.note]) : <bdi>{m.note}</bdi>)}</span>}
                     {m.state === 'loaded' && <span className="model-badge is-loaded">{t('settings.model.loaded')}</span>}
-                    {m.fits === true && m.available !== false && <span className="model-badge is-fit">{t('settings.model.fits')}</span>}
+                    {m.fits === true && m.available !== false && !m.tight && <span className="model-badge is-fit">{t('settings.model.fits')}</span>}
+                    {m.fits === true && m.available !== false && m.tight && <span className="model-badge is-tight" title={t('setup.models.warn.tight')}>{t('settings.model.tight')}</span>}
                     {m.custom && <span className="model-badge is-custom">{t('settings.model.custom')}</span>}
                     {!!m.size_gb && <bdi dir="ltr" className="model-badge is-size">{m.size_gb} GB</bdi>}
                     {hasDetails && (

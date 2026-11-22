@@ -642,6 +642,17 @@ textarea:focus-visible {
     animation: toastIn var(--duration-spring) var(--ease-spring), toastOut var(--duration) var(--ease) var(--toast-hold) forwards;
     pointer-events: none;
 }
+/* "Restored your last model": long enough to read, gone before it's in the way.
+   Up top, so it never sits on the message box in an open chat. */
+.app-restore-toast {
+    --toast-hold: 3.4s;
+    top: 16px;
+    bottom: auto;
+}
+:root[data-titlebar] .app-restore-toast {
+    top: calc(var(--titlebar-h) + 8px);
+}
+
 /* Right to left the pane takes the window's left, so the chat's centre moves right. */
 :root[dir="rtl"] .toast {
     left: calc(50% + var(--browser-pane-inset) / 2);
@@ -681,7 +692,8 @@ textarea:focus-visible {
 /* ── Animations ──────────────────────────────────────────────────── */
 
 @keyframes toastIn { from { opacity: 0; transform: translateX(-50%) translateY(8px); } to { opacity: 1; transform: translateX(-50%) translateY(0); } }
-@keyframes toastOut { from { opacity: 1; transform: translateY(0); } to { opacity: 0; transform: translateY(8px); } }
+/* Keeps the toast's centring: a bare translateY would jump it sideways as it leaves. */
+@keyframes toastOut { from { opacity: 1; transform: translateX(-50%) translateY(0); } to { opacity: 0; transform: translateX(-50%) translateY(8px); } }
 @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
 @keyframes fadeOut { from { opacity: 1; } to { opacity: 0; } }
 @keyframes slideUp { from { opacity: 0; transform: translateY(12px); } to { opacity: 1; transform: translateY(0); } }

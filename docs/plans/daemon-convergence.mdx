@@ -40,8 +40,8 @@ new work:
 |---|---|---|
 | Daemon sidecar spec for the flagship | `daemon/sidecars/spec.py:342` | Complete — service id, token file contract, cache dir, dev src dir |
 | ASGI app for frozen-binary and dev launch | `hub/agents/gaia/python/packaging/server.py` | Complete — re-exports `app`, both launchers resolve it |
-| HTTP query surface | `gaia_agent/server.py` | `/query`, `/query/{id}/respond`, `/query/{id}/cancel`, `/init` |
-| Per-session agent retention | `gaia_agent/session_registry.py` | Idle TTL, LRU, capacity, `close()` |
+| HTTP query surface | `gaiapy/server.py` | `/query`, `/query/{id}/respond`, `/query/{id}/cancel`, `/init` |
+| Per-session agent retention | `gaiapy/session_registry.py` | Idle TTL, LRU, capacity, `close()` |
 | Daemon relay with crash semantics | `daemon/relay.py` | Unbuffered SSE, synthetic terminal event, cancel on disconnect |
 | TUI daemon transport | `client/sse.go`, `client/factory.go` | Used today by the email agent |
 | Model-slot broker | `daemon/broker.py` | Leases, so two callers cannot race-evict a model |
@@ -60,11 +60,11 @@ architecture.
 
 ### 3.1 `gaia-agent --serve` does not work
 
-`gaia_agent/server.py:main()` is a dual-transport dispatcher — `--serve`/`--host`/`--port`
+`gaiapy/server.py:main()` is a dual-transport dispatcher — `--serve`/`--host`/`--port`
 runs HTTP, anything else runs stdio. But the console script points straight past it:
 
 ```toml
-gaia-agent = "gaia_agent.stdio:main"   # hub/agents/gaia/python/pyproject.toml:38
+gaia-agent = "gaiapy.stdio:main"   # hub/agents/gaia/python/pyproject.toml:38
 ```
 
 So a pip-installed `gaia-agent --serve` exits with `unrecognized arguments: --serve`. The
@@ -72,14 +72,14 @@ frozen binary and the daemon's dev mode both reach the dispatcher by module path
 why nobody has hit this — but it means the documented transport is unreachable from the
 package that documents it.
 
-**Fix:** point the script at `gaia_agent.server:main`. One line, plus a test that runs the
+**Fix:** point the script at `gaiapy.server:main`. One line, plus a test that runs the
 real entry point with `--serve` rather than importing `main` directly — importing is what
 would have kept passing through this bug.
 
 ### 3.2 Claude is refused by the HTTP surface
 
 ```python
-_ALLOWED_PROVIDERS = frozenset({"lemonade"})   # gaia_agent/server.py:64
+_ALLOWED_PROVIDERS = frozenset({"lemonade"})   # gaiapy/server.py:64
 ```
 
 `/query` already accepts `model` and `provider`, and rejects anything but Lemonade with a
@@ -187,7 +187,7 @@ work; it falls out of convergence rather than being built.
 
 ### 4.3 What is NOT deleted
 
-`gaia_agent/stdio.py` stays. It is the agent package's own supported transport, the frozen
+`gaiapy/stdio.py` stays. It is the agent package's own supported transport, the frozen
 binary dispatches to it, and an integrator embedding the agent without a daemon needs it.
 What goes away is **GAIA's** use of it as a second way to run the flagship — not the
 module.

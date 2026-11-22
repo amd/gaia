@@ -1,6 +1,6 @@
-# GAIA Hub Agents
+# Agent packages
 
-Standalone agent packages for the GAIA Agent Hub. Each agent gets one directory
+Standalone agent packages. Each agent gets one directory
 with a runtime subdir inside — `hub/agents/<id>/python/` for the Python wheel,
 `hub/agents/<id>/npm/` for a JS/TS client, `hub/agents/<id>/cpp/` for a native
 build. Each package depends on the published `amd-gaia` framework — third-party
@@ -28,7 +28,7 @@ Every Python agent package has the same shape:
 <id>/python/
 ├── gaia-agent.yaml          # Hub manifest (id, category, models, interfaces)
 ├── pyproject.toml           # gaia-agent-<id>, amd-gaia dep, gaia.agent entry point
-├── gaia_agent_<id>/         # the flagship's is plain gaia_agent/
+├── gaia_agent_<id>/         # the flagship's is plain gaiapy/
 │   ├── __init__.py          # build_registration() — advertises the agent
 │   └── agent.py             # the Agent subclass
 ├── tests/

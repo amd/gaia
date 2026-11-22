@@ -22,11 +22,11 @@ from gaia.llm import lemonade_client as lc
 from gaia.llm.lemonade_embedded import EmbeddedLemonade
 from gaia.llm.surface_hints import AGENT_UI_SETUP_HINT, TUI_SETUP_HINT
 
-pytest.importorskip("gaia_agent")
+pytest.importorskip("gaiapy")
 
 from fastapi.testclient import TestClient  # noqa: E402
-from gaia_agent import caller_auth  # noqa: E402
-from gaia_agent import server as server_mod  # noqa: E402
+from gaiapy import caller_auth  # noqa: E402
+from gaiapy import server as server_mod  # noqa: E402
 
 _REASON = "GAIA's Lemonade Server install is incomplete: lemond.exe is missing"
 _HEADLINE = "GAIA's AI engine couldn't start"

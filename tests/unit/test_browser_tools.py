@@ -14,7 +14,7 @@ import pytest
 # WebClient / BrowserToolsMixin tests below don't need it, so import it lazily
 # and skip only the ChatAgent integration class when the wheel is absent.
 try:
-    from gaia_agent.chat_agent import ChatAgent, ChatAgentConfig
+    from gaiapy.chat_agent import ChatAgent, ChatAgentConfig
 except ImportError:
     ChatAgent = ChatAgentConfig = None
 
@@ -1365,8 +1365,8 @@ class TestChatAgentBrowserIntegration:
             enable_scratchpad=False,
         )
         with (
-            patch("gaia_agent.chat_agent.RAGSDK"),
-            patch("gaia_agent.chat_agent.RAGConfig"),
+            patch("gaiapy.chat_agent.RAGSDK"),
+            patch("gaiapy.chat_agent.RAGConfig"),
         ):
             agent = ChatAgent(config)
         assert agent._web_client is not None
@@ -1381,8 +1381,8 @@ class TestChatAgentBrowserIntegration:
             enable_scratchpad=False,
         )
         with (
-            patch("gaia_agent.chat_agent.RAGSDK"),
-            patch("gaia_agent.chat_agent.RAGConfig"),
+            patch("gaiapy.chat_agent.RAGSDK"),
+            patch("gaiapy.chat_agent.RAGConfig"),
         ):
             agent = ChatAgent(config)
         assert agent._web_client is None
@@ -1399,8 +1399,8 @@ class TestChatAgentBrowserIntegration:
             enable_scratchpad=False,
         )
         with (
-            patch("gaia_agent.chat_agent.RAGSDK"),
-            patch("gaia_agent.chat_agent.RAGConfig"),
+            patch("gaiapy.chat_agent.RAGSDK"),
+            patch("gaiapy.chat_agent.RAGConfig"),
         ):
             agent = ChatAgent(config)
         assert agent._web_client._timeout == 60
@@ -1417,8 +1417,8 @@ class TestChatAgentBrowserIntegration:
             enable_scratchpad=False,
         )
         with (
-            patch("gaia_agent.chat_agent.RAGSDK"),
-            patch("gaia_agent.chat_agent.RAGConfig"),
+            patch("gaiapy.chat_agent.RAGSDK"),
+            patch("gaiapy.chat_agent.RAGConfig"),
         ):
             agent = ChatAgent(config)
 
@@ -1438,8 +1438,8 @@ class TestChatAgentBrowserIntegration:
             enable_scratchpad=False,
         )
         with (
-            patch("gaia_agent.chat_agent.RAGSDK"),
-            patch("gaia_agent.chat_agent.RAGConfig"),
+            patch("gaiapy.chat_agent.RAGSDK"),
+            patch("gaiapy.chat_agent.RAGConfig"),
         ):
             agent = ChatAgent(config)
 

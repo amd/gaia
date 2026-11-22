@@ -726,3 +726,102 @@ def test_gate_fails_when_a_passing_baseline_hard_case_was_not_run():
     current["hard_cases"] = []
     passed, lines = runner.compare(_results(), current, 0.02)
     assert not passed and any("not run now" in line for line in lines)
+
+
+# ── label errors ────────────────────────────────────────────────────────────
+
+
+def _minimal_meta(**extra):
+    meta = {
+        "suite": "pr",
+        "started": "t",
+        "git_sha": "abc",
+        "machine": {},
+        "llm_model": "m",
+        "answers": False,
+        "rag_defaults": {},
+        "duration_s": 1,
+        "sources": {},
+    }
+    meta.update(extra)
+    return meta
+
+
+def test_report_lists_label_errors_only_when_there_are_some():
+    clean = runner.render_markdown({"meta": _minimal_meta(), "datasets": []})
+    assert "Label errors" not in clean
+    text = runner.render_markdown(
+        {
+            "meta": _minimal_meta(label_errors=["technical_docs/tech-012: not found"]),
+            "datasets": [],
+        }
+    )
+    assert "## Label errors" in text
+    assert "- technical_docs/tech-012: not found" in text
+
+
+def test_report_describes_the_agent_path_as_rank_fusion_not_a_keyword_boost():
+    text = runner.render_markdown({"meta": _minimal_meta(), "datasets": []})
+    assert "keyword boost" not in text
+    assert "reciprocal rank fusion" in text
+
+
+def _fake_run_with(label_errors, errors=()):
+    def fake_run(opts):
+        opts.label_errors.extend(label_errors)
+        opts.errors.extend(errors)
+        opts.out_dir.mkdir(parents=True, exist_ok=True)
+        results = {
+            "meta": _minimal_meta(label_errors=opts.label_errors),
+            "datasets": [],
+        }
+        (opts.out_dir / "report.md").write_text(
+            runner.render_markdown(results), encoding="utf-8"
+        )
+        return results
+
+    return fake_run
+
+
+@pytest.fixture
+def cli_run(tmp_path, monkeypatch):
+    import contextlib
+
+    monkeypatch.setattr(
+        "gaia.eval.eval_lock.exclusive_eval",
+        lambda command: contextlib.nullcontext(),
+    )
+    root = sources.repo_root()
+    monkeypatch.setattr(sources, "_repo_root", None)
+
+    def invoke(fake):
+        monkeypatch.setattr(runner, "run", fake)
+        args = cli.build_parser().parse_args(
+            [
+                "eval",
+                "retrieval",
+                "--suite",
+                "pr",
+                "--repo-root",
+                str(root),
+                "--out",
+                str(tmp_path / "out"),
+            ]
+        )
+        cli._handle_eval_retrieval(args)  # pylint: disable=protected-access
+
+    return invoke
+
+
+def test_cli_fails_the_run_when_any_label_error_occurred(cli_run, capsys):
+    with pytest.raises(SystemExit) as exc:
+        cli_run(_fake_run_with(["technical_docs/tech-012: quote not found"]))
+    assert exc.value.code == 1
+    out = capsys.readouterr().out
+    assert "[ERROR] 1 question label(s) do not match" in out
+    assert "tech-012" in out
+
+
+def test_cli_passes_a_clean_run(cli_run, capsys):
+    cli_run(_fake_run_with([]))
+    assert "[ERROR]" not in capsys.readouterr().out

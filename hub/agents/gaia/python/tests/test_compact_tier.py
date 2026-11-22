@@ -7,8 +7,8 @@ from __future__ import annotations
 import contextlib
 
 import pytest
-from gaia_agent import stdio
-from gaia_agent.agent import GaiaAgent, GaiaAgentConfig
+from gaiapy import stdio
+from gaiapy.agent import GaiaAgent, GaiaAgentConfig
 
 from gaia.agents.base.model_features import COMPACT, FULL, TIER_ENV, withheld_tools
 from gaia.agents.base.tools import _TOOL_REGISTRY
@@ -224,7 +224,7 @@ def test_a_session_started_on_claude_keeps_every_feature(monkeypatch, full_tools
     # built, never called, so a placeholder key is enough.
     monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-placeholder")
     monkeypatch.setattr(
-        "gaia_agent.chat_agent.resolve_default_chat_model",
+        "gaiapy.chat_agent.resolve_default_chat_model",
         lambda: DEFAULT_MODEL_NAME,
     )
     with _agent(None, use_claude=True, claude_model="claude-sonnet-5") as agent:

@@ -482,10 +482,10 @@ class TestChatAgentInheritsTheNarrowedScope:
     """One narrowing in ChatAgent reaches every consumer of its scope."""
 
     def test_validator_rag_and_config_agree(self, confined):
-        pytest.importorskip("gaia_agent")
+        pytest.importorskip("gaiapy")
         from unittest.mock import patch
 
-        from gaia_agent.chat_agent import ChatAgent, ChatAgentConfig
+        from gaiapy.chat_agent import ChatAgent, ChatAgentConfig
 
         config = ChatAgentConfig(
             prompt_profile="doc",
@@ -493,8 +493,8 @@ class TestChatAgentInheritsTheNarrowedScope:
             allowed_paths=[str(confined.home)],
         )
         with (
-            patch("gaia_agent.chat_agent.RAGSDK"),
-            patch("gaia_agent.chat_agent.SessionManager"),
+            patch("gaiapy.chat_agent.RAGSDK"),
+            patch("gaiapy.chat_agent.SessionManager"),
         ):
             agent = ChatAgent(config)
 
@@ -518,8 +518,8 @@ class TestHostsRefuseToStart:
             create_app(db_path=":memory:")
 
     def test_flagship_sidecar(self, monkeypatch, capsys):
-        pytest.importorskip("gaia_agent")
-        from gaia_agent.server import serve_http
+        pytest.importorskip("gaiapy")
+        from gaiapy.server import serve_http
 
         monkeypatch.setenv(ALLOWED_PATHS_ENV, "relative")
         assert serve_http(["--serve"]) == 2
@@ -557,8 +557,8 @@ class TestNothingLeftInScope:
         assert host._code_index_ceilings == ()
 
     def test_flagship_code_search_start_survives_an_empty_scope(self):
-        pytest.importorskip("gaia_agent")
-        from gaia_agent.agent import _code_search_start
+        pytest.importorskip("gaiapy")
+        from gaiapy.agent import _code_search_start
 
         assert _code_search_start([]) == os.getcwd()
 

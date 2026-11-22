@@ -20,10 +20,7 @@ import yaml
 
 PACKAGING = Path(__file__).resolve().parents[1] / "packaging"
 WORKFLOW = (
-    Path(__file__).resolve().parents[5]
-    / ".github"
-    / "workflows"
-    / "build_flagship_sidecar.yml"
+    Path(__file__).resolve().parents[5] / ".github" / "workflows" / "build_gaiapy.yml"
 )
 
 
@@ -196,18 +193,59 @@ def test_ca_hook_points_a_foreign_openssl_at_the_host_bundle():
     assert found == "/etc/ssl/certs/ca-certificates.crt"
 
 
+def test_ca_hook_finds_fedora_44s_only_bundle():
+    # Fedora 44's original ca-certificates: neither the Debian nor the RHEL 6+ file.
+    fedora = "/etc/pki/ca-trust/extracted/pem/tls-ca-bundle.pem"
+    assert rthook._os_ca_bundle({}, _paths(), exists=lambda p: p == fedora) == fedora
+
+
+def test_ca_hook_ignores_an_empty_capath_and_uses_the_fedora_bundle():
+    fedora = "/etc/pki/ca-trust/extracted/pem/tls-ca-bundle.pem"
+    assert (
+        rthook._os_ca_bundle(
+            {},
+            _paths(capath="/usr/lib/ssl/certs"),
+            exists=lambda p: p == fedora,
+            has_ca=lambda capath: False,
+        )
+        == fedora
+    )
+
+
 @pytest.mark.parametrize(
-    "environ, paths",
+    "environ, paths, has_ca",
     [
-        ({"SSL_CERT_FILE": "/mine.pem"}, _paths()),
-        ({"SSL_CERT_DIR": "/mine"}, _paths()),
-        ({}, _paths(cafile="/etc/pki/tls/cert.pem")),
-        ({}, _paths(capath="/usr/lib/ssl/certs")),
+        ({"SSL_CERT_FILE": "/mine.pem"}, _paths(), None),
+        ({"SSL_CERT_DIR": "/mine"}, _paths(), None),
+        ({}, _paths(cafile="/etc/pki/tls/cert.pem"), None),
+        ({}, _paths(capath="/usr/lib/ssl/certs"), lambda capath: True),
     ],
 )
-def test_ca_hook_leaves_a_working_or_user_set_store_alone(environ, paths):
-    assert rthook._os_ca_bundle(environ, paths, exists=lambda p: True) is None
+def test_ca_hook_leaves_a_working_or_user_set_store_alone(environ, paths, has_ca):
+    assert (
+        rthook._os_ca_bundle(environ, paths, exists=lambda p: True, has_ca=has_ca)
+        is None
+    )
 
 
 def test_ca_hook_sets_nothing_when_the_host_has_no_bundle():
     assert rthook._os_ca_bundle({}, _paths(), exists=lambda p: False) is None
+
+
+def test_has_ca_links_empty_directory_returns_false(tmp_path):
+    assert rthook._has_ca_links(str(tmp_path)) is False
+
+
+def test_has_ca_links_directory_with_valid_zero_file_returns_true(tmp_path):
+    ca_dir = tmp_path / "ca"
+    ca_dir.mkdir()
+    (ca_dir / "1234abcd.0").write_text("...")
+    assert rthook._has_ca_links(str(ca_dir)) is True
+
+
+def test_has_ca_links_os_listdir_raises_returns_false(monkeypatch, tmp_path):
+    def raise_oserror(*args, **kwargs):
+        raise OSError
+
+    monkeypatch.setattr("os.listdir", raise_oserror)
+    assert rthook._has_ca_links(str(tmp_path)) is False

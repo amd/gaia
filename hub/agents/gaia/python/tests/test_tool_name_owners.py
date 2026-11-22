@@ -12,15 +12,15 @@ from __future__ import annotations
 import contextlib
 
 import pytest
-from gaia_agent.agent import GaiaAgent, GaiaAgentConfig
-from gaia_agent.profiles import PROFILE_SPECS
+from gaiapy.agent import GaiaAgent, GaiaAgentConfig
+from gaiapy.profiles import PROFILE_SPECS
 
 from gaia.agents.base.tools import _TOOL_REGISTRY
 
 FILE_IO = "gaia.agents.tools.file_io_tools.FileIOToolsMixin"
 FILE_SEARCH = "gaia.agents.tools.file_tools.FileSearchToolsMixin"
 BROWSER = "gaia.agents.tools.browser_tools.BrowserToolsMixin"
-PERPLEXITY = "gaia_agent.chat_agent.ChatAgent._register_external_tools_conditional"
+PERPLEXITY = "gaiapy.chat_agent.ChatAgent._register_external_tools_conditional"
 
 # name -> {profile: owner}; a profile without the tool is left out.
 OWNERS = {

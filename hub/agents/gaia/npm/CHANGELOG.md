@@ -8,6 +8,18 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 Requires the `gaia` Python CLI 0.27.0+ on `PATH`.
 
+- **Small models are held to what they actually did.** On a PC with 16 GB of
+  RAM or less the default is now Qwen3.5 2B (Qwen3.5 4B on an 8 GB GPU), and
+  their answers are checked: a memory save that never happened is named, a
+  garbled answer is retried once, and a skill folder the user asked to add is
+  captured when the model skips it (the approval prompt still applies). Both
+  models are on the `compact` feature tier, like Gemma 4 E4B.
+- **The Python package is now `gaiapy`.** `import gaia_agent` and
+  `gaia_agent.<module>` still work and return the same modules, so code that
+  imports the old name keeps running. A `gaiapy` command now starts the harness
+  beside `gaia-agent`. A core that imports `gaiapy` needs this flagship or newer:
+  with an older one installed, `gaia chat` relays through the daemon and setup
+  reports the flagship as not installed, until `gaia init` upgrades it.
 - **A conversation can't read another conversation's documents.** Every
   document dragged into any chat sat in GAIA's documents folder, which every
   chat may use, so a chat could list and read the others'. Those copies now

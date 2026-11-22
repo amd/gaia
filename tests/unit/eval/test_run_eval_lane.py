@@ -172,7 +172,7 @@ def test_an_agent_package_from_another_checkout_is_refused(tmp_path):
     env = {**os.environ, "PYTHONPATH": str(tmp_path)}
     env.pop("GAIA_ALLOW_EXTERNAL_IMPORTS", None)
 
-    with pytest.raises(SystemExit, match="gaia_agent ->"):
+    with pytest.raises(SystemExit, match="gaiapy ->"):
         run_eval_lane.require_checkout_imports(env)
 
     run_eval_lane.require_checkout_imports({**env, "GAIA_ALLOW_EXTERNAL_IMPORTS": "1"})

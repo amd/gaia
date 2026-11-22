@@ -26,7 +26,7 @@ Two ways in:
 > **This file is NOT one of the agent's own skills.** It is the integration
 > playbook: how *you* wire this package into an app. The agent separately loads
 > **Agent Skills** into its own prompt at runtime from
-> `gaia_agent/skills/<name>/SKILL.md`. Same filename, different artifact —
+> `gaiapy/skills/<name>/SKILL.md`. Same filename, different artifact —
 > don't ship this one as an agent skill. See
 > [Skills](#10-skills--one-always-on-the-rest-opt-in).
 
@@ -151,7 +151,9 @@ does not install. Required before any query succeeds:
 2. The machine's default chat model downloaded — run `gaia init`. It picks
    `Qwen3.6-35B-A3B-GGUF` where a GPU holds it (~27 GB for models,
    weights plus context cache — a 64 GB+ Strix Halo or a 32 GB GPU) and
-   `Gemma-4-E4B-it-GGUF` everywhere else, CPU-only PCs included, and records the pick as
+   `Gemma-4-E4B-it-GGUF` on 24 GB+ PCs and 10–24 GB GPUs, `Qwen3.5-4B-GGUF` on an
+   8 GB GPU, and `Qwen3.5-2B-GGUF` on PCs with 16 GB of RAM or less (CPU-only
+   included), and records the pick as
    `default_model` in `~/.gaia/config.json`. On 128 GB-class PCs the user may
    switch to the multimodal `user.Qwen3.8-Flash-Next-GGUF` with `gaia config set
    default_model`. `model.id` below names whichever this machine uses.
@@ -616,7 +618,7 @@ separate OS user, container or VM. Embedding `GaiaAgent` lets you pass an explic
 list instead (the variable still narrows it):
 
 ```python
-from gaia_agent.agent import GaiaAgent, GaiaAgentConfig
+from gaiapy.agent import GaiaAgent, GaiaAgentConfig
 
 agent = GaiaAgent(config=GaiaAgentConfig(allowed_paths=["/home/me/Documents"]))
 ```
@@ -833,7 +835,7 @@ Then, in another terminal:
 
 ```bash
 curl -s http://127.0.0.1:8141/health          # {"status":"ok","service":"gaia-agent-gaia"}
-curl -s http://127.0.0.1:8141/version         # {"apiVersion":"2.30","agentVersion":"0.3.5"}
+curl -s http://127.0.0.1:8141/version         # {"apiVersion":"2.30","agentVersion":"0.3.6"}
 curl -s http://127.0.0.1:8141/v1/gaia/init    # 200 + "ready":true, or 503 + a "hint"
 curl -N -X POST http://127.0.0.1:8141/v1/gaia/query \
   -H 'content-type: application/json' \

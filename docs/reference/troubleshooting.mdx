@@ -52,7 +52,7 @@ icon: "bug"
 
     - **A warning says GAIA "could not switch HTTPS verification to the system
       certificate store"** — the `truststore` package is missing or broken. Run
-      `pip install --upgrade "truststore>=0.10.0"` in GAIA's environment. The warning
+      `pip install --upgrade "truststore>=0.10.3"` in GAIA's environment. The warning
       appears in the terminal, or in `gaia daemon logs` (add `--agent <id>` for an
       agent's own requests).
     - **No such warning in either place** — the proxy's root certificate is not in the OS
@@ -481,17 +481,23 @@ it needs about 7.8 GB and only 6.0 GB is free.
 
 **Fix:** close apps that use a lot of memory, then send your message again.
 Web browsers, games, other AI apps and another Lemonade server with models loaded
-are the usual ones. On a 16 GB PC, about 8 GB free is the least Gemma-4-E4B loads
-in, and about 11 GB free when GAIA starts gets it the full window.
+are the usual ones. On a 16 GB PC GAIA's default is Qwen3.5-2B, which loads in
+about 4 GB free; Gemma-4-E4B, if you chose it there, needs about 8 GB, and about
+11 GB free when GAIA starts gets it the full window.
 
 What GAIA does on a small PC:
 
+- **Setup leaves room for your other apps.** Where the model shares the PC's
+  RAM, GAIA keeps the larger of 10 GB and a quarter of the RAM for everything
+  else, so a PC with 16 GB or less gets Qwen3.5-2B. It reads images itself, so
+  Gemma is not downloaded beside it. A model that would leave other apps little
+  memory is marked in the pickers, and setup asks before using it.
 - **Setup picks a model that fits the memory free now.** Before it downloads
-  the larger default (Qwen3.6), `gaia init` and the Agent UI's setup screen
-  check free memory, not just the PC's total. When it won't fit, they pick
-  Gemma-4-E4B and say how much Qwen3.6 needs and how much is free.
-- **The context window shrinks to fit.** Gemma-4-E4B loads with a 65,536-token
-  window when there is room, and otherwise steps down in 8,192-token steps to no
+  a larger default, `gaia init` and the Agent UI's setup screen check free
+  memory, not just the PC's total. When it won't fit, they pick the next smaller
+  model and say how much the larger one needs and how much is free.
+- **The context window shrinks to fit.** Gemma-4-E4B and the Qwen3.5 models load
+  with a 65,536-token window when there is room, and otherwise steps down in 8,192-token steps to no
   less than 32,768. The log says so. Restart GAIA after freeing memory to get the
   full window back.
 - **Below 32,768 tokens, GAIA refuses.** The flagship's prompt and tools alone
@@ -912,11 +918,16 @@ error. To run the chat model in the cloud instead, see
 
   <Accordion title="Cloud models and downloads fail: the certificate store has no ca-certificates.crt" icon="certificate">
     **Cause:** the model server inside GAIA trusts HTTPS sites through exactly
-    one file, `/etc/ssl/certs/ca-certificates.crt`. The `ca-certificates`
-    package Fedora 44 first shipped leaves that file out, so every cloud model
-    and every model download fails. GAIA says so in setup's cloud step and in
-    a failed download, and `~/.gaia/lemonade/lemond.log` shows
-    `Problem with the SSL CA cert`. Your key is not the problem.
+    one file, `/etc/ssl/certs/ca-certificates.crt`, and ignores
+    `SSL_CERT_FILE`. Where that file is missing (the `ca-certificates`
+    package Fedora 44 first shipped leaves it out), GAIA starts the model
+    server in a private view of the filesystem that shows your system's own
+    bundle at that path, so cloud models and downloads work with no change to
+    your system. That needs unprivileged user namespaces; when the kernel
+    refuses them, every cloud model and every model download fails. GAIA then
+    says so in setup's cloud step and in a failed download, and
+    `~/.gaia/lemonade/lemond.log` shows `Problem with the SSL CA cert`. Your
+    key is not the problem.
 
     **Fix:** install your system's updates (GNOME Software, or
     `sudo dnf upgrade ca-certificates`); the updated package adds the file.

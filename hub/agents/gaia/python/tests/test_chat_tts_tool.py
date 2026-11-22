@@ -7,7 +7,7 @@ from unittest.mock import patch
 
 import pytest
 
-pytest.importorskip("gaia_agent")
+pytest.importorskip("gaiapy")
 
 import gaia.config
 from gaia.audio.lemonade_tts import LemonadeTTSError

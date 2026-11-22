@@ -16,7 +16,7 @@ import (
 
 // Research mode. `/research <topic>` sends one research turn: the agent loads
 // its research-report skill and writes a report citing every page it read
-// (gaia_agent.research). A bare `/research` switches research mode on or off,
+// (gaiapy.research). A bare `/research` switches research mode on or off,
 // the TUI's form of the Agent UI's Research switch: while it is on, every
 // message is sent as `/research <message>`.
 
@@ -80,6 +80,10 @@ func (m ChatModel) isSkillCommand(query string) bool {
 	match := skillCommandRE.FindStringSubmatch(strings.TrimLeftFunc(query, unicode.IsSpace))
 	if match == nil {
 		return false
+	}
+	// Not reported yet: the agent decides, as it would with research mode off.
+	if m.skillCommands == nil {
+		return true
 	}
 	for _, s := range m.skillCommands {
 		if s.Name == match[1] {

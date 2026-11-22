@@ -6,7 +6,7 @@
 A fresh ``SSEOutputHandler`` is built for every turn, so whatever the user
 decided about permissions has to live somewhere that outlives a turn. This is
 the Agent UI's counterpart of ``PermissionState`` in the flagship's stdio host
-(``hub/agents/gaia/python/gaia_agent/stdio.py``), with the same semantics:
+(``hub/agents/gaia/python/gaiapy/stdio.py``), with the same semantics:
 
 - **ask** (the default): every confirmation-gated tool call asks.
 - **full access**: gated calls run without asking and the shell runs any

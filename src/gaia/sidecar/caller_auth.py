@@ -30,7 +30,7 @@ Host/Origin still apply — so a hand-run developer sidecar keeps the control th
 stops a web page driving it.
 
 A sidecar binds its own env-var names and exempt paths and inherits everything
-else from here. Only the flagship (``gaia_agent.caller_auth``) does so today —
+else from here. Only the flagship (``gaiapy.caller_auth``) does so today —
 the email sidecar still carries its own copy of this logic, so a change here
 does NOT reach it.
 """

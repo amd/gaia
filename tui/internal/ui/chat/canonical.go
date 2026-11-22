@@ -105,8 +105,9 @@ func (m ChatModel) handleCanonicalEvent(evt interface{}) (ChatModel, tea.Cmd, bo
 			m.updatePlan(planFromWire(e.Plan.Steps, e.Plan.CurrentStep))
 		}
 
-		// Kept in the transcript, not the live line: it explains later answers.
-		if e.HistoryCut != nil {
+		// Kept in the transcript, not the live line, so later progress cannot
+		// erase a notice about the turn or what the agent is able to do.
+		if e.HistoryCut != nil || e.Level == "warning" {
 			m.messages = append(m.messages, Message{
 				Role:    RoleStatus,
 				Content: truncateRunes(clean(e.Message), narrationMax),

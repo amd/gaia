@@ -93,6 +93,7 @@ setup(
     ],
     package_data={
         "gaia.eval.memory": ["scenarios/*.yaml"],
+        "gaia.eval.bench": ["swebench_verified_ids.json"],
         # Browser-mode Agent UI bundle. Recursive globs in package_data are
         # unreliable across setuptools versions, so we list shallow patterns
         # here and back them up with `recursive-include` in MANIFEST.in. The
@@ -140,7 +141,7 @@ setup(
         # HTTPS trusts the OS certificate store (gaia.tls), so a corporate
         # TLS-inspecting proxy's root works as it does for pip. 0.10 also
         # honours CA files loaded on top (certifi), so nothing stops verifying.
-        "truststore>=0.10.0",
+        "truststore>=0.10.3",
         "beautifulsoup4",
         # watchdog 7.0.0 starves Windows change delivery while a neighbouring
         # file is written continuously; stay on the known-good 6.x line until
