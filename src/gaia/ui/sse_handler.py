@@ -120,6 +120,9 @@ _USE_HANDLER_TIMEOUT = object()
 # knows which it is, so it tags at the source; downstream
 # (:mod:`gaia.ui.sse_translation`) decides whether to forward it.
 
+#: Phase of the status that takes back a draft answer an answer check replaces.
+ANSWER_CHECK_PHASE = "answer_check"
+
 #: ``start_progress`` labels the agent loop uses to say "I am alive" rather than
 #: "here is what I am doing". Compared lower-cased and stripped of trailing
 #: punctuation. Anything else — a goal, a real narration — passes through.
@@ -724,10 +727,31 @@ class SSEOutputHandler(OutputHandler):
         self.turn_ledger = TurnLedger()
         # The diff print_diff drew for the call in flight; its result carries it.
         self._pending_diff_card: Optional[Dict[str, Any]] = None
+        # Live line for a draft answer a check is replacing; the draft is taken
+        # back when the next reply or tool call starts. None when none is.
+        self._superseded_answer: Optional[str] = None
 
     def _emit(self, event: Dict[str, Any]):
         """Push an event to the queue for SSE delivery."""
         etype = event.get("type") if event else None
+        if self._superseded_answer is not None and etype in (
+            "chunk",
+            "tool_start",
+            "answer",
+        ):
+            message, self._superseded_answer = self._superseded_answer, None
+            # The final answer replaces the draft by itself.
+            if etype != "answer":
+                self.delivered_answer = ""
+                self._emit(
+                    {
+                        "type": "status",
+                        "status": "working",
+                        "phase": ANSWER_CHECK_PHASE,
+                        "message": message,
+                        "retracts_answer": True,
+                    }
+                )
         if etype == "chunk":
             self._shown_fence, self._shown_line_start = _fence_after(
                 event.get("content") or "", self._shown_fence, self._shown_line_start
@@ -772,6 +796,7 @@ class SSEOutputHandler(OutputHandler):
         self._step_count = 0
         self._tool_count = 0
         self.delivered_answer = ""
+        self._superseded_answer = None
         model_label = model_id or "LLM"
         self._emit(
             {
@@ -1218,6 +1243,11 @@ class SSEOutputHandler(OutputHandler):
                 "retracts_answer": True,
             }
         )
+
+    def supersede_answer(self, message: str) -> None:
+        # Only text still on screen as the answer is a draft to take back.
+        if self._text_since_tool.strip():
+            self._superseded_answer = message
 
     def report_phase(self, phase: str, message: str, **counts: int):
         self._emit(

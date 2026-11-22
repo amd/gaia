@@ -1,6 +1,6 @@
 # `@amd-gaia/gaia` — technical reference
 
-Version **0.3.5**. Companion to [`README.md`](./README.md), which is the
+Version **0.3.6**. Companion to [`README.md`](./README.md), which is the
 user-facing doc. This file specifies the wire and file formats the package
 depends on and the guarantees it makes.
 
@@ -32,11 +32,11 @@ of truth for what is downloaded and what it must hash to.
 ```jsonc
 {
   "schemaVersion": "3.0",
-  "agentVersion": "0.3.5",
+  "agentVersion": "0.3.6",
   "components": {
     "sidecar": {
-      "componentVersion": "0.3.5",
-      "baseUrl": "https://hub.amd-gaia.ai/agents/gaia/0.3.5",
+      "componentVersion": "0.3.6",
+      "baseUrl": "https://hub.amd-gaia.ai/agents/gaia/0.3.6",
       "platforms": { "<platformKey>": { /* entry */ } }
     },
     "tui": {
@@ -479,6 +479,12 @@ the daemon restarts the server, `status` lines carry `"phase":
 `failure: "model_server_down"`. A tool's own model calls report the same
 restart, and `extract_document_items` sends `"phase": "reading"` before each
 page's call ("Reading page 4 of 12…").
+
+An answer the end-of-turn check rewrites is taken back the same way: a
+`status` with `"phase": "answer_check"` and `"retracts_answer": true` comes
+before the new text or the check's next `tool_call`, and the client drops the
+`token` text since the last `tool_call`, so a turn shows one answer. A check
+that keeps the answer sends no retraction.
 
 ```json
 {

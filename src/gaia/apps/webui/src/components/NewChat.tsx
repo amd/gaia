@@ -3,6 +3,7 @@
 
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { ChevronRight, FileText, X } from 'lucide-react';
+import { AgentRecovery } from './AgentRecovery';
 import { BrowserPaneToggle } from './browser-pane/BrowserPane';
 import { Composer } from './Composer';
 import { FolderChip } from './FolderChip';
@@ -26,7 +27,7 @@ import { requestErrorText } from '../utils/requestErrors';
 import { FlagshipMissing } from '../utils/newTask';
 import { durationMs, prefersReducedMotion } from '../utils/motion';
 import { deviceLabel } from '../utils/modelLabels';
-import type { StartScreen } from '../types';
+import type { AgentProblem, StartScreen } from '../types';
 import './NewChat.css';
 import { useSavedDraft } from '../hooks/useSavedDraft';
 import { NEW_CHAT_DRAFT_KEY } from '../utils/savedDraft';
@@ -52,6 +53,9 @@ interface NewChatProps {
 
 /** How often the start screen is asked for again while the assistant is unavailable. */
 export const START_RETRY_MS = 15_000;
+
+/** A warm-up shorter than this finishes unseen, rather than flashing "0s". */
+export const WARM_UP_SHOWN_AFTER_S = 2;
 
 export function greeting(now: Date = new Date(), t: Translate = tEn): string {
     const h = now.getHours();
@@ -207,6 +211,9 @@ export function NewChat({ onSend, initialText = '', focusRequest = 0, agentMissi
     const [sending, setSending] = useState(false);
     const [start, setStart] = useState<StartScreen | null>(null);
     const [startError, setStartError] = useState<string | null>(null);
+    const [agentProblem, setAgentProblem] = useState<AgentProblem | null>(null);
+    // A message sent while the chosen agent can't start: it stays in the box.
+    const [keptForAgent, setKeptForAgent] = useState(false);
     const inputRef = useRef<HTMLTextAreaElement | null>(null);
     const innerRef = useRef<HTMLDivElement | null>(null);
     const composerRef = useRef<HTMLDivElement | null>(null);
@@ -223,6 +230,8 @@ export function NewChat({ onSend, initialText = '', focusRequest = 0, agentMissi
                 if (!live.current) return;
                 setStart(s);
                 setStartError(s.skills_error ?? null);
+                setAgentProblem(s.agent_problem ?? null);
+                if (!s.agent_problem) setKeptForAgent(false);
             })
             .catch((err) => {
                 log.api.warn('New-chat start screen unavailable', err);
@@ -290,10 +299,14 @@ export function NewChat({ onSend, initialText = '', focusRequest = 0, agentMissi
         }
     }, [attachments, onSend]);
 
-    const submit = useCallback(
-        () => send(attachments.compose(withResearchCommand(text.trim(), researchOn(useChatStore.getState(), null))), text.trim()),
-        [attachments, send, text],
-    );
+    const submit = useCallback(() => {
+        // It would only fail: the box keeps the message until the agent is back.
+        if (agentProblem) {
+            setKeptForAgent(true);
+            return;
+        }
+        return send(attachments.compose(withResearchCommand(text.trim(), researchOn(useChatStore.getState(), null))), text.trim());
+    }, [agentProblem, attachments, send, text]);
 
     useEffect(() => {
         if (focusRequest) inputRef.current?.focus();
@@ -356,6 +369,7 @@ export function NewChat({ onSend, initialText = '', focusRequest = 0, agentMissi
             <div className="new-chat-inner" ref={innerRef}>
                 <h1 className="new-chat-greeting" aria-hidden={docked}>{greeting(new Date(), t)}</h1>
                 {setupError && !remote && <SetupFailed error={setupError} />}
+                {agentProblem && <AgentRecovery problem={agentProblem} onRetry={() => loadStart()} kept={keptForAgent} />}
                 <div ref={composerRef}>
                     <Composer
                         value={text}
@@ -374,13 +388,13 @@ export function NewChat({ onSend, initialText = '', focusRequest = 0, agentMissi
                     {folder && <FolderChip folder={folder} disabled={starting || sending} />}
                 </div>
                 <LibraryDocuments />
-                {warming !== null && !starting && (
+                {warming !== null && !starting && warming.seconds >= WARM_UP_SHOWN_AFTER_S && (
                     <p className="new-chat-warmup" role="status">{warmUpLine(warming, t)}</p>
                 )}
                 {error && <p className="new-chat-error" role="alert">{error}</p>}
                 {agentRefused && agentMissing && <p className="new-chat-error" role="alert">{t('agentNotice.sendRefused')}</p>}
                 <TryChips onPick={fillPrompt} disabled={starting || sending} />
-                {startError && <AssistantUnavailable detail={startError} onRetry={() => loadStart()} />}
+                {!agentProblem && startError && <AssistantUnavailable detail={startError} onRetry={() => loadStart()} />}
             </div>
         </main>
     );

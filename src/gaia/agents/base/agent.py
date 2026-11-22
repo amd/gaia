@@ -643,6 +643,7 @@ SERVER_STARTING_MESSAGE = "Starting the model server…"
 ANSWER_RESTART_MESSAGE = (
     "The answer so far was cut off, so GAIA is starting it again from the top."
 )
+ANSWER_CHECK_MESSAGE = "Checking the answer"
 
 
 def model_step_retries() -> int:
@@ -1335,6 +1336,33 @@ def _repeat_count(history: List[Any], max_period: int = _MAX_LOOP_PERIOD) -> int
     return best
 
 
+def _note_turn_result(seen: Dict[Any, Tuple[int, int]], call: Any, result: Any) -> None:
+    """Record *call*'s result: how many times in a row this turn it came back the same.
+
+    A wait clears every count: the model expects the next result to differ, as
+    when it polls a job's status between waits.
+    """
+    if _call_tool_name(call) in _PACING_TOOLS:
+        seen.clear()
+        return
+    digest = hash(str(result))
+    last, times = seen.get(call, (None, 0))
+    seen[call] = (digest, times + 1 if last == digest else 1)
+
+
+def _same_result_repeats(seen: Dict[Any, Tuple[int, int]], call: Any) -> int:
+    """How many times this turn *call* would repeat a result it already gave.
+
+    Catches a loop with no fixed order — a small model cycling twenty searches
+    in shuffled order ran 314 calls in one turn — while a read after an edit,
+    whose result changed, starts over. The count spans the whole turn, so four
+    re-reads of a file that never changed end it however far apart they were.
+    """
+    if _call_tool_name(call) in _PACING_TOOLS:
+        return 0
+    return seen.get(call, (None, 0))[1]
+
+
 # Tools that mutate external state (mark read, archive, star, …). A small
 # model that loses track of sequential state may re-issue an identical
 # mutation (same tool + same id). Unlike query dedup we key on the *args*,
@@ -1739,6 +1767,12 @@ _ENVELOPE_KEYS = ("thought", "goal", "tool", "tool_args", "plan")
 # Every field the loop reads off a decoded reply. A JSON object carrying none
 # of them is the model's data, not a protocol envelope.
 _PROTOCOL_KEYS = frozenset(_ENVELOPE_KEYS) | {"answer", "tool_calls", "needs_plan"}
+#: Times the model is told its plan is malformed before the turn ends.
+_MAX_PLAN_CORRECTIONS = 2
+_PLAN_FORMAT_FAILURE_ANSWER = (
+    "I had trouble formatting my plan. Could you rephrase or break the request "
+    "into smaller pieces?"
+)
 # "Index my reports folder", "please re-index ~/docs": the verb opens a clause
 # and takes a path or a folder/file object, so "index.html" or "S&P 500 index"
 # never count.
@@ -4037,6 +4071,7 @@ Do NOT wrap conversational replies in JSON.
             )
         self.max_consecutive_repeats = max_consecutive_repeats
         self._turn_scope = TurnScopeGuard(max_consecutive_repeats)
+        self._stopped_on_failing_repeats = False
         self._task_lessons = TaskLessons()
         self._current_query: Optional[str] = (
             None  # Store current query for error context
@@ -7804,7 +7839,16 @@ Do NOT wrap conversational replies in JSON.
     def _parse_llm_response(self, response: str) -> Dict[str, Any]:
         """Decode a reply and reject tool arguments that cannot be executed."""
         parsed = self._decode_llm_response(response)
-        calls = parsed.get("tool_calls") or (
+        raw_calls = parsed.get("tool_calls")
+        if raw_calls and not (
+            isinstance(raw_calls, list)
+            and all(isinstance(c, dict) and "tool_args" in c for c in raw_calls)
+        ):
+            raise ValueError(
+                "Malformed tool_calls: expected a list of calls, each with a "
+                f"name and tool_args, got {type(raw_calls).__name__}."
+            )
+        calls = raw_calls or (
             [{"name": parsed["tool"], "tool_args": parsed.get("tool_args", {})}]
             if parsed.get("tool")
             else []
@@ -7820,9 +7864,30 @@ Do NOT wrap conversational replies in JSON.
     def _decode_llm_response(self, response: str) -> Dict[str, Any]:
         """Decode a reply; a JSON object with no protocol field is the answer."""
         parsed = self._decode_llm_response_fields(response)
-        if isinstance(parsed, dict) and not _PROTOCOL_KEYS.intersection(parsed):
+        if isinstance(parsed, dict) and (
+            not _PROTOCOL_KEYS.intersection(parsed) or self._is_data_not_a_plan(parsed)
+        ):
             return {"thought": "", "goal": "", "answer": (response or "").strip()}
         return parsed
+
+    def _is_data_not_a_plan(self, parsed: Dict[str, Any]) -> bool:
+        """Whether *parsed* only looks like a plan: nothing in it can be run.
+
+        Its ``plan`` is not a list, it has no ``thought`` or ``goal`` (those mark
+        the agent's own reply), and its ``tool``, if any, names no tool this
+        agent has, so the object is the data the user asked for.
+        """
+        if "plan" not in parsed or isinstance(parsed["plan"], list):
+            return False
+        if parsed.get("thought") or parsed.get("goal"):
+            return False
+        if parsed.get("tool_calls") or parsed.get("needs_plan"):
+            return False
+        answer = parsed.get("answer")
+        if isinstance(answer, str) and answer.strip():
+            return False
+        tool = parsed.get("tool")
+        return not (isinstance(tool, str) and tool in self._tools_registry)
 
     def _decode_llm_response_fields(self, response: str) -> Dict[str, Any]:
         """
@@ -11112,6 +11177,25 @@ Do NOT wrap conversational replies in JSON.
         if hook is not None:
             hook(ANSWER_RESTART_MESSAGE)
 
+    def _supersede_checked_answer(self, messages: List[Dict[str, Any]]) -> None:
+        """Tell the front end the reply on screen is a draft when an answer check is next.
+
+        The check's reply, or the answer kept after it, takes the draft's place,
+        so a turn never shows two answers.
+        """
+        from gaia.agents.base.history import CHECK_TAG
+
+        last = messages[-1] if messages else {}
+        content = last.get("content")
+        if (
+            last.get("role") == "user"
+            and isinstance(content, str)
+            and content.startswith(CHECK_TAG)
+        ):
+            hook = getattr(self.console, "supersede_answer", None)
+            if hook is not None:
+                hook(ANSWER_CHECK_MESSAGE)
+
     def _server_not_back_answer(
         self,
         conversation: List[Dict[str, Any]],
@@ -12041,7 +12125,7 @@ Do NOT wrap conversational replies in JSON.
         did not fix. The loop then makes each call itself, through the same
         approval gates as any call, once per turn, and has the model answer from
         the result. A call goes here only when its arguments come straight from
-        the request ("remember X", "add the skill at <path>"). Empty by default.
+        the request ("add the skill at <path>"). Empty by default.
         """
         return []
 
@@ -13484,6 +13568,7 @@ Do NOT wrap conversational replies in JSON.
             os.getcwd(),
             scratch=getattr(self._read_validator(), "scratch_dir", None),
         )
+        self._stopped_on_failing_repeats = False
         if getattr(self, "_task_lessons", None) is None:
             self._task_lessons = TaskLessons()
         self._task_lessons.begin_turn()
@@ -13573,13 +13658,19 @@ Do NOT wrap conversational replies in JSON.
         error_count = 0
         # Malformed replies get their own budget: failed tool calls are ordinary work.
         parse_failures = 0
+        plan_corrections = 0
+        # Every request to the model, so no reply stream outruns the step budget.
+        # A turn this stops is reported as a step-limit stop, with fewer tool steps.
+        model_calls = 0
         markup_retries = 0
         tool_call_history = []  # Recent tool calls, for loop detection
         loop_window = max(
             5, _MAX_LOOP_PERIOD * getattr(self, "max_consecutive_repeats", 4)
         )
-        # Repeated calls already sent one correction; the next repeat ends the turn.
+        # One loop correction per turn; the next repeat of any call ends the turn.
         loop_corrected_calls: set = set()
+        # Each call's last result and how many times in a row it came back the same.
+        turn_results: Dict[Any, Tuple[int, int]] = {}
         tool_call_log = (
             []
         )  # Full unbounded log of all tool calls this turn (for workflow guards)
@@ -13734,7 +13825,11 @@ Do NOT wrap conversational replies in JSON.
         logger.debug(f"Input prompt: {prompt[:200]}...")
 
         # Process the query in steps, allowing for multiple tool usages
-        while steps_taken < steps_limit and final_answer is None:
+        while (
+            steps_taken < steps_limit
+            and model_calls < steps_limit
+            and final_answer is None
+        ):
             # Cooperative cancellation: if a consumer (e.g. the Agent UI's
             # stream-timeout/disconnect cleanup) signalled cancel, stop here so
             # the producer thread is torn down rather than left running. Checked
@@ -13760,6 +13855,8 @@ Do NOT wrap conversational replies in JSON.
                     if latest:
                         final_answer += f"\n\nWhat I had found so far:\n{latest}"
                 break
+
+            self._supersede_checked_answer(messages)
 
             # Anything the user sent mid-turn joins the context here, where the
             # loop is between steps and nothing is half-applied. AFTER the
@@ -14220,6 +14317,7 @@ Do NOT wrap conversational replies in JSON.
                 while True:
                     try:
                         self._before_model_call(messages)
+                        model_calls += 1
                         response_stream = self.chat.send_messages_stream(
                             messages=self._with_session_context(messages),
                             system_prompt=self.system_prompt,
@@ -14484,6 +14582,7 @@ Do NOT wrap conversational replies in JSON.
                 while True:
                     try:
                         self._before_model_call(messages)
+                        model_calls += 1
                         chat_response = self.chat.send_messages(
                             messages=self._with_session_context(messages),
                             system_prompt=self.system_prompt,
@@ -14839,6 +14938,9 @@ Do NOT wrap conversational replies in JSON.
 
             # If the LLM needs to create a plan first, re-prompt it specifically for that
             if "needs_plan" in parsed and parsed["needs_plan"]:
+                if model_calls >= steps_limit:
+                    # The plan request is a model call; the budget has none left.
+                    break
                 # Prepare a special prompt that specifically requests a plan
                 deferred_tool = parsed.get("deferred_tool", None)
                 deferred_args = parsed.get("deferred_tool_args", {})
@@ -14891,6 +14993,7 @@ Do NOT wrap conversational replies in JSON.
                     messages.append({"role": "user", "content": plan_prompt})
 
                     # Use AgentSDK for streaming plan response
+                    model_calls += 1
                     stream_gen = self.chat.send_messages_stream(
                         messages=self._with_session_context(messages),
                         system_prompt=self.system_prompt,
@@ -14937,6 +15040,7 @@ Do NOT wrap conversational replies in JSON.
                     messages.append({"role": "user", "content": plan_prompt})
 
                     # Use AgentSDK for non-streaming plan response
+                    model_calls += 1
                     chat_response = self.chat.send_messages(
                         messages=self._with_session_context(messages),
                         system_prompt=self.system_prompt,
@@ -15064,6 +15168,10 @@ Do NOT wrap conversational replies in JSON.
                         f"Invalid plan format: expected list, got {type(parsed['plan']).__name__}. "
                         f"Plan content: {parsed['plan']}"
                     )
+                    plan_corrections += 1
+                    if plan_corrections > _MAX_PLAN_CORRECTIONS:
+                        final_answer = _PLAN_FORMAT_FAILURE_ANSWER
+                        break
                     # The "continue" below asks the LLM to correct itself —
                     # not a fatal top-level failure.
                     self.console.print_error(
@@ -15103,6 +15211,10 @@ Do NOT wrap conversational replies in JSON.
 
                 if invalid_steps:
                     logger.error(f"Invalid plan steps found: {invalid_steps}")
+                    plan_corrections += 1
+                    if plan_corrections > _MAX_PLAN_CORRECTIONS:
+                        final_answer = _PLAN_FORMAT_FAILURE_ANSWER
+                        break
                     # The "continue" below asks the LLM to correct itself —
                     # not a fatal top-level failure.
                     self.console.print_error(
@@ -15202,7 +15314,10 @@ Do NOT wrap conversational replies in JSON.
                     tool_call_log.append((tool_name, str(tool_args)))
                     if len(tool_call_history) > loop_window:
                         tool_call_history.pop(0)
-                    consecutive_count = _repeat_count(tool_call_history)
+                    consecutive_count = max(
+                        _repeat_count(tool_call_history),
+                        _same_result_repeats(turn_results, current_call) + 1,
+                    )
                     if consecutive_count >= self.max_consecutive_repeats:
                         self.console.stop_progress()
                         self._close_unrun_tool_card()
@@ -15211,7 +15326,7 @@ Do NOT wrap conversational replies in JSON.
                         # ``result`` field so the helper sees actual tool
                         # results, not the wrapper dicts.
                         recent_results = [o.get("result") for o in previous_outputs]
-                        if current_call not in loop_corrected_calls:
+                        if not loop_corrected_calls:
                             loop_corrected_calls.add(current_call)
                             # Sent as this call's result so tool_call_id pairing holds.
                             messages.append(
@@ -15248,6 +15363,8 @@ Do NOT wrap conversational replies in JSON.
                         # limiter's windows drain within a few capped waits.
                         tool_call_history.pop()
                         self._wait_out_rate_limit(tool_result)
+                    else:
+                        _note_turn_result(turn_results, current_call, tool_result)
 
                     # Result-based dedup for query family tools
                     _QUERY_TOOLS = (
@@ -15455,8 +15572,12 @@ Do NOT wrap conversational replies in JSON.
                 if len(tool_call_history) > loop_window:
                     tool_call_history.pop(0)
 
-                # Back-to-back repeats of this call, or of the cycle it closes
-                consecutive_count = _repeat_count(tool_call_history)
+                # Back-to-back repeats of this call, or of the cycle it closes,
+                # or of a result it already gave this turn in any order.
+                consecutive_count = max(
+                    _repeat_count(tool_call_history),
+                    _same_result_repeats(turn_results, current_call) + 1,
+                )
 
                 # Stop after max_consecutive_repeats identical calls
                 if consecutive_count >= self.max_consecutive_repeats:
@@ -15466,7 +15587,7 @@ Do NOT wrap conversational replies in JSON.
 
                     # Not ``step_results``: error recovery clears it before each retry.
                     recent_results = [o.get("result") for o in previous_outputs]
-                    if current_call not in loop_corrected_calls:
+                    if not loop_corrected_calls:
                         loop_corrected_calls.add(current_call)
                         messages.append(
                             self._create_tool_message(
@@ -15503,6 +15624,8 @@ Do NOT wrap conversational replies in JSON.
                     # windows drain within a few capped waits.
                     tool_call_history.pop()
                     self._wait_out_rate_limit(tool_result)
+                else:
+                    _note_turn_result(turn_results, current_call, tool_result)
 
                 if _is_image_tool(tool_name):
                     capability_tool_last_succeeded = not tool_result_failed(
@@ -16881,6 +17004,7 @@ Do NOT wrap conversational replies in JSON.
                     "success"
                     if has_valid_answer
                     and not blocking_gaps(completion_gaps)
+                    and not getattr(self, "_stopped_on_failing_repeats", False)
                     and not max_steps_reached
                     and not time_limit_reached
                     else "incomplete"
@@ -17146,6 +17270,10 @@ Do NOT wrap conversational replies in JSON.
             tool_name, executed_count, recent_results
         )
         failed = self._repeats_carry_a_failure(recent_results)
+        # A turn stopped by a call that kept failing did not finish, whatever it says.
+        self._stopped_on_failing_repeats = (
+            getattr(self, "_stopped_on_failing_repeats", False) or failed
+        )
 
         steps_taken = self._write_deliverables_before_stop(
             messages,

@@ -150,6 +150,22 @@ def test_chunks_are_located_after_whitespace_normalization():
     assert spans[1].pages == {2, 3}
 
 
+def test_a_chinese_chunk_across_a_paragraph_break_is_located():
+    """The chunker joins Chinese sentences with no gap, a paragraph break included."""
+    from gaia.rag.text_units import join_pieces
+
+    full = "# 超级碗50\n\n卡罗来纳黑豹队。\n\n黑豹队的防守只丢了308分。\n\nThe end. Next part."
+    doc = DocText.from_full_text("d.md", full)
+    chunks = [
+        join_pieces(["# 超级碗50", "卡罗来纳黑豹队。", "黑豹队的防守只丢了308分。"]),
+        join_pieces(["The end.", "Next part."]),
+    ]
+    assert "黑豹队。黑豹队" in chunks[0]
+    spans, unlocated = locate_chunks(chunks, {"d.md": [0, 1]}, {"d.md": doc})
+    assert unlocated == []
+    assert spans[1].start > spans[0].start
+
+
 def test_a_chunk_may_start_before_the_previous_one_only_if_it_runs_through_it():
     doc = DocText.from_full_text("d.txt", "alpha beta gamma delta epsilon zeta eta")
     paths, docs = {"d.txt": [0, 1, 2]}, {"d.txt": doc}

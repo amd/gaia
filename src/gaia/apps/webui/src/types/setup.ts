@@ -349,6 +349,15 @@ export interface StartScreen {
     working_folder: { path: string; name: string; gaia_folder: boolean; choosable: boolean };
     /** Why there are no cards: the agent couldn't list its skills. */
     skills_error?: string | null;
+    /** Set with `skills_error` when the agent the user chose is why it didn't start. */
+    agent_problem?: AgentProblem | null;
+}
+
+/** Why the chosen gaiacpp can't start: not on this PC, or it no longer matches its download. */
+export interface AgentProblem {
+    code: 'gaiacpp_missing' | 'gaiacpp_invalid';
+    /** The backend's own wording, for a Details disclosure. */
+    detail: string;
 }
 
 // ── Which Lemonade Server GAIA uses (/api/lemonade/*) ─────────────────────
