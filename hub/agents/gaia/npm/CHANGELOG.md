@@ -8,6 +8,20 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 Requires the `gaia` Python CLI 0.27.0+ on `PATH`.
 
+- **A follow-up in a research chat answers with its own result.** With
+  research on, a later turn that did a task — writing a memo with
+  `/office-docs` — did the work, then answered with the earlier research
+  report: the citation check sent its short answer back for citing none of the
+  pages read, and the model re-sent the old report. An answer must now cite a
+  page only when its own turn read one; links it does cite are still checked
+  against every page read in the conversation.
+- **The session panel no longer keeps listing a file as approved after its
+  agent is gone (contract 2.31).** A chat's "Files GAIA can reach" could
+  keep showing a file as approved after the agent that held that approval —
+  evicted, or lost to a sidecar restart — no longer existed. `final` and
+  `error` now carry `session_created: true` when the sidecar had to rebuild
+  the turn's agent, so a client can drop exactly the approvals that predate
+  this turn and keep any the turn's own prompt just granted.
 - **The sidecar always runs with a caller token.** `startSidecar`,
   `spawnSidecar` and `gaia serve` now mint a token for each start, hand it to
   the sidecar in a `0600` file, and return it as `authToken` (`gaia serve`

@@ -5375,9 +5375,17 @@ Do NOT wrap conversational replies in JSON.
 
         After this call, tool lookup, prompt formatting, and execution all
         use the snapshot.  Mutations on this instance's ``_instance_tools``
-        will not affect other agents or the global dict.
+        will not affect other agents or the global dict. Tools of a skill another
+        agent loaded are left out: this one gets them when it loads that skill.
         """
-        self._instance_tools = dict(_TOOL_REGISTRY)
+        loaded = getattr(self, "_loaded_skills", None) or {}
+        self._instance_tools = {
+            name: entry
+            for name, entry in _TOOL_REGISTRY.items()
+            if not isinstance(entry, dict)
+            or not entry.get("skill")
+            or entry["skill"] in loaded
+        }
         if hasattr(self, "_tool_overrides"):
             self._instance_tools.update(self._tool_overrides)
 
@@ -8781,8 +8789,21 @@ Do NOT wrap conversational replies in JSON.
         # only to be refused by its own body a moment later.
         preflight = (self._tools_registry.get(tool_name) or {}).get("preflight")
         if preflight is not None:
-            with self._skill_tool_scope(tool_name):
-                refusal = preflight(tool_args or {})
+            try:
+                with self._skill_tool_scope(tool_name):
+                    refusal = preflight(tool_args or {})
+            except Exception as exc:  # pylint: disable=broad-exception-caught
+                # Tool boundary: the model relays it, like an error in the body.
+                logger.exception("Permission check for %s raised", tool_name)
+                return {
+                    "status": "error",
+                    "error": (
+                        f"{tool_name} was not run: its permission check failed "
+                        f"({type(exc).__name__}: {exc}). Tell the user it did "
+                        "not run."
+                    ),
+                    "tool_name": tool_name,
+                }
             if refusal is not None:
                 return refusal
         if not tool_args:
@@ -9542,6 +9563,20 @@ Do NOT wrap conversational replies in JSON.
                 "error": (
                     f"Unexpected argument(s) for {tool_name}: {', '.join(reserved)}. "
                     "Call the tool again without them."
+                ),
+            }
+
+        # The registry is process-wide; a skill another chat loaded is not this one's.
+        owner = (self._tools_registry.get(tool_name) or {}).get("skill")
+        if owner and owner not in (getattr(self, "_loaded_skills", None) or {}):
+            logger.warning("%s refused: skill '%s' is not loaded", tool_name, owner)
+            return {
+                **NOT_EXECUTED,
+                "status": "error",
+                "error": (
+                    f"{tool_name} was not run: it belongs to the '{owner}' skill, "
+                    f"which is not loaded in this chat. Load the '{owner}' skill "
+                    "(load_skill), then call the tool again."
                 ),
             }
 

@@ -300,7 +300,7 @@ All three send the turn as `/research <topic>`, and the agent handles it the sam
 - a check for developments newer than its sources, with dates, so a superseded status is not reported as current;
 - what it could not confirm, and a Sources list at the end.
 
-**Citations are checked before you see the report.** GAIA compares every link in the report with the pages it actually opened. A link it only saw in search results, or one that matches nothing it read (often a link the model retyped wrong), goes back to the model once to open or remove. Anything still unchecked after that is listed under the report, so you know which links to treat with care.
+**Citations are checked before you see the report.** GAIA compares every link in the report with the pages it actually opened. A link it only saw in search results, or one that matches nothing it read (often a link the model retyped wrong), goes back to the model once to open or remove. Anything still unchecked after that is listed under the report, so you know which links to treat with care. A follow-up that does a task instead of research, such as drafting a memo, answers with what it did; it is not asked to cite the earlier report's pages.
 
 Without research mode, a request that reads like research ("research X and write a report") is still matched to the skill, and the agent decides whether to load it.
 

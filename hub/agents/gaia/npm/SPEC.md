@@ -261,7 +261,7 @@ the header.
 | ------------------ | --------------------------------------- |
 | Default port       | `8141` (`DEFAULT_PORT` in `server.py`)  |
 | Reserved port      | `4001` — refused with a `RangeError`    |
-| Contract version   | `API_VERSION = "2.30"`                  |
+| Contract version   | `API_VERSION = "2.31"`                  |
 | Agent id / prefix  | `gaia` → `/v1/gaia/...`                 |
 
 ### 5.1 Endpoints
@@ -315,7 +315,9 @@ the conversation's `search_web`, `fetch_page` and `download_file` results (a
 PDF counts once its downloaded file is read): a link that was never fetched, or that appears in
 no result at all, is sent back to the model once to fetch or drop. Links still
 unbacked after that are listed in the `final` answer under "I couldn't confirm
-all of this".
+all of this". An answer that cites nothing is sent back only when that turn
+fetched pages of its own, so a follow-up in a research chat that does a task
+(drafts a memo) answers with its own result.
 The agent needs `search_web` and `fetch_page` for it; a profile without them
 ends the turn with an `error` naming the missing tools. Any other `query` runs
 unchanged.
