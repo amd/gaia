@@ -10,7 +10,7 @@ import { useModelStore } from '../../stores/modelStore';
 import * as api from '../../services/api';
 import type { AgentDownload, LemonadeFound, LemonadeTarget, PreflightReport, SetupPlan, SetupRunStatus, SetupStep, SetupTest, StartScreen } from '../../types';
 import {
-    COLD_BIG, COMPONENTS, EMBED, FLM, GEMMA, GEMMA_CHAT, QWEN, QWEN_READS, WHISPER, gpuStatus, plan, progress, runStatus,
+    COLD_BIG, COMPONENTS, EMBED, FLM, GEMMA, GEMMA_CHAT, QWEN, QWEN_READS, WHISPER, entry, gpuStatus, plan, progress, runStatus,
 } from '../setup/__tests__/fixtures';
 import { AGENT_PROGRAMS, NO_BACKENDS, NO_GPU_SPLIT, SETTINGS, withoutGaiacpp } from '../../test/setupApiMocks';
 
@@ -475,6 +475,21 @@ describe('SetupScreen: the recommendation', () => {
         mockedApi.getSetupPlan.mockResolvedValue(plan([QWEN, GEMMA, EMBED], { left_for_apps_gb: 13.1, chat_model: { id: QWEN.id, user_set: true, size_gb: 23.3, downloaded: false } }));
         await open();
         expect(await planScreen()).not.toHaveTextContent('for your other apps');
+    });
+
+    it('warns that a kept model is tight and names the smaller pick, with no bigger model offered', async () => {
+        const kept = { ...GEMMA_CHAT, chat_choice: true, downloaded: true, size_gb: 0, tight: true, need_gb: 8.5, capacity_gb: 9.7, recommended: false };
+        const small = entry({ id: 'Qwen3.5-2B-GGUF', name: 'Qwen3.5-2B', recommended: true, need_gb: 3.8, capacity_gb: 9.7 });
+        const big = { ...QWEN, fits: false as const, fit_code: 'memory' as const, capacity_gb: 9.7, planned: false, selected: false, recommended: false };
+        mockedApi.getSetupPlan.mockResolvedValue(plan([kept, small, big, EMBED], {
+            recommended_model: small.id, chat_model: { id: kept.id, user_set: true, size_gb: 0, downloaded: true },
+        }));
+        await open();
+        const hero = await planScreen();
+        expect(hero).toHaveTextContent('Leaves your other apps little memory, so your PC may slow down while it runs.');
+        expect(hero).toHaveTextContent('Qwen3.5-2B is the model GAIA picks for this PC now, and leaves your other apps more memory.');
+        expect(hero).not.toHaveTextContent('Fits this PC');
+        expect(hero).not.toHaveTextContent('is a bigger model');
     });
 
     it("calls no model this PC can't run a bigger model", async () => {

@@ -1750,6 +1750,7 @@ const messages: Messages = {
     'setup.plan.why.private': 'يعمل دون اتصال، وتبقى محادثاتك على هذا الجهاز.',
     'setup.plan.why.bigger': '{name} نموذج أكبر يجيب بشكل أفضل، لكنه يحتاج إلى نحو {need} من الذاكرة ولدى هذا الجهاز {have}.',
     'setup.plan.why.headroom': 'يترك {left} من الذاكرة لتطبيقاتك الأخرى، فيبقى جهازك سريعًا أثناء عمل GAIA.',
+    'setup.plan.why.smaller': '{name} هو النموذج الذي يختاره GAIA لهذا الجهاز الآن، ويترك لتطبيقاتك الأخرى ذاكرة أكبر. اختره من التخصيص.',
     'setup.plan.start': 'تنزيل وبدء',
     'setup.plan.startNoDownload': 'اختبار وبدء',
     'setup.plan.customize': 'تخصيص',

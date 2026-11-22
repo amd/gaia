@@ -1217,6 +1217,8 @@ export function SetupScreen({ onReady, onClose }: SetupScreenProps) {
     const optional = selection && !cloud ? catalog.filter((e) => isOptional(e) && !selection.ticked.has(e.id) && !e.downloaded
         && (canCreateImages(chatEntry) || !e.roles.includes('image_creation'))) : [];
     const biggerOption = catalog.find((e) => e.fit_code === 'memory' && e.chat_choice && e.support === 'verified');
+    const smallerOption = plan?.recommended_model && plan.recommended_model !== chatEntry?.id
+        ? catalog.find((e) => e.id === plan.recommended_model && e.fits === true && !e.tight) : undefined;
 
     return (
         <main className="setup" aria-labelledby="setup-title">
@@ -1331,12 +1333,14 @@ export function SetupScreen({ onReady, onClose }: SetupScreenProps) {
                                     <ul className="setup-reasons">
                                         {!selection.chatChosen && <li>{t('setup.plan.why.evaluated')}</li>}
                                         {!selection.chatChosen && plan.left_for_apps_gb != null && <li>{t('setup.plan.why.headroom', { left: formatFitGb(plan.left_for_apps_gb) })}</li>}
-                                        {chatEntry?.need_gb != null && chatEntry.capacity_gb != null && chatEntry.fits && (
+                                        {chatEntry?.need_gb != null && chatEntry.capacity_gb != null && chatEntry.fits && !chatEntry.tight && (
                                             <li>{t('setup.plan.why.fits', { need: formatFitGb(chatEntry.need_gb), have: formatFitGb(chatEntry.capacity_gb) })}</li>
                                         )}
+                                        {chatEntry?.fits && chatEntry.tight && <li>{t('setup.models.warn.tight')}</li>}
+                                        {chatEntry?.fits && chatEntry.tight && smallerOption && <li>{t('setup.plan.why.smaller', { name: smallerOption.name })}</li>}
                                         <li>{t('setup.plan.why.private')}</li>
                                         {chatEntry && isNpu(chatEntry) && <li>{t('setup.plan.why.noImagesNpu')}</li>}
-                                        {biggerOption && biggerOption.id !== chatEntry?.id && biggerOption.need_gb != null && biggerOption.capacity_gb != null && (
+                                        {biggerOption && !chatEntry?.tight && biggerOption.id !== chatEntry?.id && biggerOption.need_gb != null && biggerOption.capacity_gb != null && (
                                             <li>{t('setup.plan.why.bigger', { name: biggerOption.name, need: formatFitGb(biggerOption.need_gb), have: formatFitGb(biggerOption.capacity_gb) })}</li>
                                         )}
                                     </ul>

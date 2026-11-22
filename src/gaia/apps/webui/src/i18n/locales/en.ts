@@ -1750,6 +1750,7 @@ export const enMessages = {
     'setup.plan.why.private': 'Works offline, and your chats stay on this PC.',
     'setup.plan.why.bigger': '{name} is a bigger model that answers better, but it needs about {need} of memory and this PC has {have}.',
     'setup.plan.why.headroom': 'Leaves {left} of memory for your other apps, so your PC stays quick while GAIA runs.',
+    'setup.plan.why.smaller': '{name} is the model GAIA picks for this PC now, and leaves your other apps more memory. Choose it under Customize.',
     'setup.plan.start': 'Download and start',
     'setup.plan.startNoDownload': 'Test and start',
     'setup.plan.customize': 'Customize',
