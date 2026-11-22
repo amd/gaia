@@ -1104,4 +1104,23 @@ TEST(FindProgramOnPathTest, FindsSystemProgramsAndNeverTheWorkingFolder) {
     EXPECT_EQ(withExtension, "");
     EXPECT_EQ(findProgramOnPath("..\\cmd"), "");
 }
+
+// env_inspect runs without asking, and a cloned repository can carry a systeminfo.bat or bash.bat.
+TEST(BashToolsTest, EnvInspectNeverRunsProgramsPlantedInTheWorkingFolder) {
+    namespace tfs = std::filesystem;
+    const auto dir = plantedFolder("gaia-planted-env-inspect");
+    for (const char* program : {"bash.bat", "sh.bat", "systeminfo.bat", "findstr.bat", "where.bat", "git.bat"}) {
+        std::ofstream(dir / program) << "@echo PLANTED_PROGRAM_RAN\r\n";
+    }
+    const tfs::path before = tfs::current_path();
+    tfs::current_path(dir);
+
+    const nlohmann::json result = BashTools::envInspect().callback(nlohmann::json::object());
+
+    tfs::current_path(before);
+    std::error_code ec;
+    tfs::remove_all(dir, ec);
+    EXPECT_EQ(result.dump().find("PLANTED_PROGRAM_RAN"), std::string::npos) << result.dump();
+    EXPECT_NE(result.value("os", "").find("OS Name"), std::string::npos) << result.dump();
+}
 #endif
