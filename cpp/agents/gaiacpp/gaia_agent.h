@@ -101,12 +101,14 @@ public:
     };
 
     /// Why the turn's record doesn't back the answer's report that tests passed: no test
-    /// ran, the latest run of each failed, every passing run came before a code change (a
-    /// file tool or a shell edit), or ran in a folder apart from the changed file.
-    /// `first` is the claim as worded, `second` the reason. nullopt when there is no such
-    /// claim, or a test run passed after the last change. A command counts as a test run
-    /// when it names a runner (not to install it or ask its version) or its output holds
-    /// a runner's summary.
+    /// ran, the latest run of each failed, the latest run of some test command after the
+    /// last code change failed and the answer doesn't say so (a narrower passing rerun
+    /// doesn't hide it), every passing run came before a code change (a file tool or a
+    /// shell edit), or ran in a folder apart from the changed file. `first` is the claim
+    /// as worded, `second` the reason. nullopt when there is no such claim, or the runs
+    /// after the last change back it. A command counts as a test run when it names a
+    /// runner (not to install it or ask its version) or its output holds a runner's
+    /// summary that the command didn't just print.
     static std::optional<std::pair<std::string, std::string>> unsupportedTestClaim(
         const std::string& answer, const std::vector<CallSeen>& calls);
 
