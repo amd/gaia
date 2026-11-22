@@ -7,7 +7,6 @@
 #include <cctype>
 #include <cmath>
 #include <cstdint>
-#include <cstdlib>
 #include <cstring>
 #include <filesystem>
 #include <regex>
@@ -62,11 +61,9 @@ std::string docxText(const std::string& path) {
 #ifdef _WIN32
     // Windows ships no unzip; its own tar reads zip archives. Named in full: a GNU tar earlier on
     // PATH (Git's) does not read them, and takes C: for a remote host.
-    const char* root = std::getenv("SystemRoot");
-    const std::string tar = std::string(root != nullptr && *root != '\0' ? root : "C:\\Windows") + "\\System32\\tar.exe";
-    // Quoted only when it must be: cmd.exe drops the quotes of a command that starts with one.
-    const std::string extract = (tar.find(' ') == std::string::npos ? tar : shellQuote(tar)) + " -xOf " +
-                                shellQuote(path) + " word/document.xml";
+    const std::string tar = systemProgramPath("tar.exe");
+    // cmd /c drops the first and last quote of a line that starts with one, so the line gets an extra pair.
+    const std::string extract = "\"\"" + tar + "\" -xOf " + shellQuote(path) + " word/document.xml\"";
     const char* tool = "tar";
 #else
     const std::string extract = "unzip -p " + shellQuote(path) + " word/document.xml";
@@ -242,8 +239,18 @@ std::vector<std::pair<int, std::string>> DocumentIndex::extractPages(const std::
     const std::string ext = lowerExt(path);
     std::vector<std::pair<int, std::string>> pages;
     if (ext == ".pdf") {
-        ProcessResult r = ProcessRunner::run("pdftotext -layout " + shellQuote(path) + " -", 120000,
-                                             "", {}, kMaxExtractBytes);
+#ifdef _WIN32
+        // By full path: cmd.exe would run a pdftotext.bat in the working folder first.
+        const std::string pdftotext = findProgramOnPath("pdftotext");
+        if (pdftotext.empty()) {
+            throw std::runtime_error("Can't read PDF " + path + ": pdftotext is not installed (install poppler)");
+        }
+        // cmd /c drops the first and last quote of a line that starts with one, so the line gets an extra pair.
+        const std::string extract = "\"\"" + pdftotext + "\" -layout " + shellQuote(path) + " -\"";
+#else
+        const std::string extract = "pdftotext -layout " + shellQuote(path) + " -";
+#endif
+        ProcessResult r = ProcessRunner::run(extract, 120000, "", {}, kMaxExtractBytes);
         if (r.stdout_output.size() >= kMaxExtractBytes) {
             throw std::runtime_error("PDF " + path + " has more than " +
                                      std::to_string(kMaxExtractBytes >> 20) +
