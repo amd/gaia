@@ -784,7 +784,7 @@ Every other path serves the Agent UI page, except paths under `/api`: an unknown
     | Field | Type | Required | Description |
     |-------|------|----------|-------------|
     | `custom_model` | string or null | No | Model ID to use instead of the default. An empty string clears the override; `null` leaves it unchanged. |
-    | `flagship_agent` | string or null | No | Which program is the GAIA agent: `gaiapy` (the Python agent) or `gaiacpp` (the native C++ agent, beta). Saved as `flagship_agent` in `~/.gaia/config.json`, which the terminal UI reads too, and applied from the next message. Refused with `422` when `gaiacpp` isn't installed, `409` while a chat is answering, and `403` unless the request comes from the PC running GAIA. `GET /api/settings` returns the one in use as `flagship_agent`, and `gaiacpp_available`. |
+    | `flagship_agent` | string or null | No | Which program is the GAIA agent: `gaiapy` (the Python agent) or `gaiacpp` (the native C++ agent, beta). Saved as `flagship_agent` in `~/.gaia/config.json`, which the terminal UI reads too, and applied from the next message. Refused with `422` when `gaiacpp` isn't installed, `409` while a chat is answering, and `403` unless the request comes from the PC running GAIA. `GET /api/settings` returns the saved one as `flagship_agent` (which can be a name a newer GAIA saved that this version can't run, until another is chosen), and `gaiacpp_available`. |
 
     **Response:** Same shape as `GET /api/settings`.
   </Accordion>
@@ -806,7 +806,7 @@ Every other path serves the Agent UI page, except paths under `/api`: an unknown
 
     | Field | Type | Description |
     |-------|------|-------------|
-    | `current` | string | The agent in use, `gaiapy` or `gaiacpp`. |
+    | `current` | string | The saved agent choice: `gaiapy` or `gaiacpp`, or a name a newer GAIA saved that this version can't run (it matches no entry in `programs`; choosing another in Settings fixes it). |
     | `programs[].size_bytes` | number or null | Download size for this PC; `null` when it could not be read. |
     | `programs[].can_download` | boolean | `true` for a `gaiacpp` this release offers that is not installed, or is from another release. |
     | `programs[].unavailable_reason` | string or null | Why `gaiacpp` can be neither used nor downloaded here, for example a development build. |

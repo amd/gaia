@@ -3169,6 +3169,40 @@ class ScorecardMismatchError(ValueError):
     """Two scorecards measured different things, so diffing them means nothing."""
 
 
+#: What a scorecard without a ``harness`` ran: every run before harnesses were
+#: recorded, and every committed baseline, used the default (Python) harness.
+DEFAULT_RUN_HARNESS = "gaiapy"
+#: Recorded when the backend couldn't say; never comparable with anything.
+UNKNOWN_HARNESS = "unknown"
+
+
+def backend_harness(backend_url: str) -> str:
+    """The harness the backend runs as the GAIA agent (``flagship_agent``).
+
+    ``UNKNOWN_HARNESS`` when the backend can't be asked, which makes the
+    scorecard refuse every comparison rather than pass as the default harness.
+    """
+    import urllib.error
+    import urllib.request
+
+    req = urllib.request.Request(
+        f"{backend_url}/api/settings", headers={"X-Gaia-UI": "1"}
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=5) as r:
+            value = json.loads(r.read().decode("utf-8")).get("flagship_agent")
+    except (urllib.error.URLError, OSError, ValueError) as e:
+        logger.warning(
+            "Could not read which harness %s runs (%s); the scorecard records "
+            "it as %r and won't compare with any baseline.",
+            backend_url,
+            e,
+            UNKNOWN_HARNESS,
+        )
+        return UNKNOWN_HARNESS
+    return value if isinstance(value, str) and value else UNKNOWN_HARNESS
+
+
 def baseline_identity(baseline_path, baseline: dict) -> dict:
     """What a baseline was measured with: agent model, driver model, and source.
 
@@ -3190,12 +3224,14 @@ def baseline_identity(baseline_path, baseline: dict) -> dict:
             return {
                 "agent_model": meta.get("model"),
                 "eval_model": meta.get("eval_model"),
+                "harness": meta.get("harness") or DEFAULT_RUN_HARNESS,
                 "source": str(meta_path),
             }
     config = baseline.get("config") or {}
     return {
         "agent_model": config.get("agent_model"),
         "eval_model": config.get("model"),
+        "harness": config.get("harness") or DEFAULT_RUN_HARNESS,
         "source": str(baseline_path),
     }
 
@@ -3224,6 +3260,14 @@ def check_comparable(baseline_path, baseline: dict, current: dict) -> None:
             want["eval_model"],
             config.get("model"),
             "Re-run with --model set to the baseline's eval model.",
+        ),
+        (
+            "harness (the program that answered as GAIA)",
+            want["harness"],
+            config.get("harness") or DEFAULT_RUN_HARNESS,
+            "Run the eval with the backend's flagship_agent set to the baseline's "
+            "harness (util/run_eval_lane.py --harness), or compare against that "
+            "harness's own baseline.",
         ),
     )
     problems = []
@@ -4089,6 +4133,17 @@ class AgentEvalRunner:
             for s in previous
         ]
 
+        started_on = config.get("harness") or DEFAULT_RUN_HARNESS
+        now_on = backend_harness(self.backend_url)
+        if now_on != started_on:
+            print(
+                f"[ERROR] Cannot resume {run_dir}: it started on the {started_on} "
+                f"harness and the backend now runs {now_on}, so the scorecard would "
+                "mix two programs. Set flagship_agent back, or start a new run.",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+
         self._commit = _current_commit()
         earlier = sorted({s.get("commit") for s in kept.values() if s.get("commit")})
         if earlier and earlier != [self._commit]:
@@ -4196,6 +4251,8 @@ class AgentEvalRunner:
             "model": self.model,
             "budget_per_scenario_usd": float(self.budget),
             "agent_type": self.agent_type,
+            # Which program answered; --compare refuses a baseline from another.
+            "harness": backend_harness(self.backend_url),
             # The local model under test, as pinned; _finish replaces it with
             # what the sessions ran when nothing was pinned.
             "agent_model": self.agent_model,
