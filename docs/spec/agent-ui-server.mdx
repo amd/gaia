@@ -139,6 +139,7 @@ The main tables, with foreign key relationships:
 documents          -- Global document library
 sessions           -- Chat conversations
 session_documents  -- Many-to-many attachment relationship
+session_uploads    -- A chat's composer uploads put in the library, by content hash
 messages           -- Conversation messages with optional RAG metadata
 unfinished_turns   -- Turns (chat or scheduled) that have not saved a reply yet
 ```
