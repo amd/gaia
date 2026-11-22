@@ -1136,7 +1136,7 @@ def _hide_subcommands(subparsers, names) -> None:
 
 # Kept for scripts, hidden from help: GAIA ships one agent, so browsing and
 # publishing agents is no longer a user-facing feature (#5172).
-HIDDEN_TOP_LEVEL_COMMANDS = ("hub",)
+HIDDEN_TOP_LEVEL_COMMANDS = ("hub", "agent-program")
 HIDDEN_AGENT_COMMANDS = ("init", "version", "pack", "publish", "login")
 
 # Removed commands: old scripts get the replacement instead of "invalid choice".
@@ -3748,6 +3748,11 @@ afterwards (or `swebench <run_dir>` does, later).
 
     custom_models_cli.add_subparser(subparsers)
 
+    # gaiacpp for the terminal UI, which shells out here to download it.
+    from gaia.daemon.sidecars import gaiacpp_fetch_cli
+
+    gaiacpp_fetch_cli.add_subparser(subparsers)
+
     # Persistent CLI config (~/.gaia/config.json) — e.g. a default model so
     # users don't have to pass --model on every chat/llm/prompt (issue #98).
     config_parser = subparsers.add_parser(
@@ -6206,6 +6211,13 @@ Let me know your answer!
         from gaia.llm import custom_models_cli  # pylint: disable=reimported
 
         sys.exit(custom_models_cli.handle(args))
+
+    if args.action == "agent-program":
+        from gaia.daemon.sidecars import (  # pylint: disable=reimported
+            gaiacpp_fetch_cli,
+        )
+
+        sys.exit(gaiacpp_fetch_cli.handle(args))
 
     # Handle Config command
     if args.action == "config":
