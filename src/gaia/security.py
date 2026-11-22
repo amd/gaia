@@ -531,6 +531,25 @@ def protected_directory_of(path: Any) -> Optional[str]:
     return None
 
 
+#: Added to a refusal of an operating-system file (the hosts file, /etc).
+_ADMIN_ONLY = (
+    " It is an operating-system file, which takes administrator rights that "
+    "GAIA never uses, even when the user says yes. Don't try another way. Tell "
+    "the user exactly what to do and how to do it themselves as administrator."
+)
+
+
+def _is_os_file(path: Path) -> bool:
+    """Whether *path* is in a system folder, not GAIA's state or the user's home."""
+    blocked = protected_directory_of(path)
+    if blocked is None or blocked in SECRET_DIRECTORIES:
+        return False
+    normalized = os.path.normpath(blocked)
+    if normalized in GAIA_STATE_DIRECTORIES:
+        return False
+    return not _path_is_within(Path(normalized), Path.home())
+
+
 def is_credential_file_name(name: str) -> bool:
     """Whether a file called *name* is one the read tools refuse by name.
 
@@ -1730,6 +1749,7 @@ class PathValidator:
         if unaskable:
             remedy = (
                 f" No approval can grant it: {unaskable.rstrip('.')}."
+                f"{_ADMIN_ONLY if _is_os_file(real_path) else ''}"
                 f"{self._folders_inside_home_hint(real_path)}"
             )
         elif self._access_prompt is not None or self._can_prompt():

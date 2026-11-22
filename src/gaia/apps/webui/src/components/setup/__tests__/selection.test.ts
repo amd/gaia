@@ -5,7 +5,7 @@ import { describe, expect, it } from 'vitest';
 import {
     chatCandidates, extraModels, initialSelection, installedOnlyRows, mainRows, moreRows, overallFromPlan, recommendedSelection,
     chooseChat, pendingDownloads, pickChat, pickVision, resolveVision, savedVision, shortfall, skipChanges,
-    toggle, tooBig, totals, visionSkipped, VISION_NONE,
+    toggle, tooBig, onlyTight, totals, visionSkipped, VISION_NONE,
 } from '../selection';
 import {
     COLD_BIG, EMBED, FLM, GEMMA, GEMMA_CHAT, GPT_OSS, QWEN, QWEN_READS, SDXL, entry, gpuStatus, plan, progress, runStatus,
@@ -108,6 +108,18 @@ describe('ticking and the default chat model', () => {
         const big = { ...QWEN, fits: false, need_gb: 27.1, capacity_gb: 16 };
         const p = plan([big, GEMMA, EMBED]);
         expect(tooBig(p.catalog!, initialSelection(p)).map((e) => e.id)).toEqual([QWEN.id]);
+    });
+
+    it('asks before a chosen chat model that fits but leaves other apps little room', () => {
+        const tightGemma = { ...GEMMA_CHAT, fits: true, tight: true, need_gb: 9.0, capacity_gb: 10.7 };
+        const p = plan([tightGemma, EMBED]);
+        const chosen = { ...initialSelection(p), defaultChat: GEMMA.id };
+        const asks = tooBig(p.catalog!, chosen);
+        expect(asks.map((e) => e.id)).toEqual([GEMMA.id]);
+        expect(onlyTight(asks)).toBe(true);
+        // A tight model that is not the chat choice asks nothing.
+        expect(tooBig(p.catalog!, { ...chosen, defaultChat: 'other' })).toEqual([]);
+        expect(onlyTight([])).toBe(false);
     });
 });
 

@@ -48,6 +48,7 @@ from ..lemonade_client import (
     local_sampling_defaults,
     requested_thinking,
     resolve_ctx_size,
+    resolve_local_chat_model,
     runs_on_npu,
 )
 from ..lemonade_launcher import describe_client_hint
@@ -1275,8 +1276,8 @@ class LemonadeProvider(LLMClient):
         self._last_streamed = stream
         request_started = time.perf_counter()
 
-        # Use provided model, instance model, or default CPU model
-        effective_model = model or self._model or DEFAULT_MODEL_NAME
+        # Provided model, instance model, else the PC's default from setup.
+        effective_model = model or self._model or resolve_local_chat_model()
         self._last_model = effective_model
         tool_capable = is_tool_calling_model(effective_model)
 

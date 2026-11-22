@@ -360,7 +360,8 @@ const modelRow = (id: string, over: Record<string, unknown>) => ({
     ...over,
 });
 
-/** A Strix Halo with models on disk, more to download, an added one, and two it can't run. */
+/** A Strix Halo with models on disk, more to download, an added one, one that would leave
+ *  other apps little memory, and two it can't run. */
 export const MODEL_LIST = [
     modelRow('Gemma-4-E4B-it-GGUF', {
         display_name: 'Gemma 4 E4B (Multimodal)', state: 'loaded', size_gb: 4.9, tokens_per_second: 41.2,
@@ -378,6 +379,7 @@ export const MODEL_LIST = [
     }),
     ...['gpt-oss 20B', 'Qwen3-VL-4B Instruct', 'SDXL-Turbo', 'Kokoro TTS', 'Whisper Large v3'].map((name, i) =>
         modelRow(`${name.replace(/ /g, '-')}-GGUF`, { display_name: name, downloaded: false, state: 'not_downloaded', size_gb: 3 + i * 4.5 })),
+    modelRow('Muse-Glimmer-30B-GGUF', { display_name: 'Muse Glimmer 30B', downloaded: false, state: 'not_downloaded', size_gb: 21.4, tight: true }),
     modelRow('Qwen3.8-Flash-Next-GGUF', {
         display_name: 'Qwen3.8 Flash Next', downloaded: false, state: 'not_downloaded', size_gb: 82.9, fits: false,
         placement: { device: 'gpu', backend: 'vulkan', label: 'GPU · Vulkan', source: 'expected', warning: 'Lemonade reports this model on the CPU, not the GPU.' },
