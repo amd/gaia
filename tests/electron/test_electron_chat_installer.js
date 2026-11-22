@@ -401,6 +401,7 @@ ReactDOM.createRoot(document.getElementById('root')!).render(
       // MemoryDashboard.tsx (~159KB) legitimately exceeds 100KB since #606 added
       // the full observability dashboard with hybrid search, extraction, and charts.
       // ChatView.tsx owns the turn's whole event stream; it reached 100KB with no room for a fix.
+      // If it nears 120KB, split it rather than raise the cap again.
       const LARGE_FILE_LIMITS = { 'MemoryDashboard.tsx': 200 * 1024, 'ChatView.tsx': 120 * 1024 };
       const DEFAULT_LIMIT = 100 * 1024;
 
