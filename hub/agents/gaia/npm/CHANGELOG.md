@@ -8,6 +8,16 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 Requires the `gaia` Python CLI 0.27.0+ on `PATH`.
 
+- **`gaia -p` flags work on an installed GAIA (contract 2.31).** There the
+  turn runs on this sidecar, which had no way to take a time limit, a tool
+  restriction or a permission override, so `gaia -p` refused them and a
+  headless run could not write a file at all. `/query` now takes
+  `time_limit`, `disallowed_tools`, `no_web`, `no_skills`, `skip_permissions`
+  and `full_access` for a one-shot run: they are a `422` beside a
+  `session_id`, so no chat inherits them, and the permission fields need a
+  caller token. `final` adds `time_limit_reached` and `withheld_tools`. A
+  gated tool refused on a `surface: "cli"` run now names the flag that allows
+  it, not "a surface that supports confirmation".
 - **The sidecar always runs with a caller token.** `startSidecar`,
   `spawnSidecar` and `gaia serve` now mint a token for each start, hand it to
   the sidecar in a `0600` file, and return it as `authToken` (`gaia serve`
