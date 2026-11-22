@@ -1401,7 +1401,7 @@ describe('SetupScreen: optional extras added during the download', () => {
         status = { state: 'idle' };
         mockedApi.getSetupStatus.mockImplementation(async () => status);
         mockedApi.getSetupPlan.mockResolvedValue(plan([QWEN, GEMMA, EMBED, WHISPER]));
-        mockedApi.startSetup.mockResolvedValueOnce(first).mockResolvedValueOnce(second);
+        mockedApi.startSetup.mockResolvedValueOnce(first);
     });
 
     async function downloading() {
@@ -1411,20 +1411,19 @@ describe('SetupScreen: optional extras added during the download', () => {
         return within(await screen.findByRole('region', { name: 'Optional' }));
     }
 
-    it('fetches a queued extra in a follow-up run, and is not ready until that ends', async () => {
+    it('downloads a queued extra on its own once the run is ready, without holding up Ready', async () => {
         const optional = await downloading();
         expect(optional.getByText('Turns speech and recordings into text').closest('li')).toHaveTextContent('1.6 GB');
         fireEvent.click(optional.getByRole('button', { name: 'Add' }));
         expect(optional.getByRole('button', { name: 'Added' })).toHaveAttribute('aria-pressed', 'true');
         expect(mockedApi.startSetup).toHaveBeenCalledTimes(1);
 
-        status = READY;
-        await waitFor(() => expect(mockedApi.startSetup).toHaveBeenCalledTimes(2), { timeout: 4000 });
-        expect(mockedApi.startSetup).toHaveBeenLastCalledWith(false, false, { keepTrying: false, extraModels: [WHISPER.id] });
-        expect(screen.queryByRole('button', { name: 'Start chatting' })).not.toBeInTheDocument();
-
+        const pulling: SetupRunStatus = { ...READY, models: [...(READY.models ?? []), ...(second.models ?? [])] };
+        mockedApi.downloadSetupModel.mockImplementation(async () => { status = pulling; return pulling; });
         status = READY;
         expect(await startChatting(4000)).toBeInTheDocument();
+        expect(mockedApi.downloadSetupModel).toHaveBeenCalledWith(WHISPER.id, { keepTrying: false });
+        expect(mockedApi.startSetup).toHaveBeenCalledTimes(1);
     });
 
     it('runs nothing more for an extra taken back before the run ended', async () => {
