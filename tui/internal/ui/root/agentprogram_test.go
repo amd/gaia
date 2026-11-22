@@ -438,7 +438,16 @@ func TestAgentProgramListingNamesBothMarksBetaCurrentAndUnavailable(t *testing.T
 		t.Fatal(err)
 	}
 	updated, _ = m.agentProgram("")
-	if got = lastLine(t, updated.(FlagshipModel)); !strings.Contains(got, "could not be read") || !strings.Contains(got, f2.configPath) {
+	if got = lastLine(t, updated.(FlagshipModel)); !strings.Contains(got, "can't run here") || !strings.Contains(got, f2.configPath) {
 		t.Errorf("an unknown saved value was not reported:\n%s", got)
+	}
+
+	// A malformed one still says it could not be read.
+	if err := os.WriteFile(f2.configPath, []byte(`{"flagship_agent": 2}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	updated, _ = m.agentProgram("")
+	if got = lastLine(t, updated.(FlagshipModel)); !strings.Contains(got, "could not be read") || !strings.Contains(got, f2.configPath) {
+		t.Errorf("a malformed saved value was not reported:\n%s", got)
 	}
 }

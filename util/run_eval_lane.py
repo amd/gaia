@@ -45,7 +45,11 @@ import urllib.request
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from eval_gaia_home import env_for, write_default_model  # noqa: E402
+from eval_gaia_home import (  # noqa: E402
+    env_for,
+    write_config_keys,
+    write_default_model,
+)
 from eval_lane_matrix import REPO_ROOT, lane_env  # noqa: E402
 
 LANES_FILE = REPO_ROOT / "eval" / "ci_lanes.json"
@@ -305,6 +309,17 @@ def main() -> int:
         "category's GAIA home). Default: what a fresh home resolves, as in CI.",
     )
     parser.add_argument(
+        "--harness",
+        help="Program that answers as GAIA (written as flagship_agent in each "
+        "category's GAIA home): gaiapy (the default), gaiacpp, or a harness this "
+        "version doesn't offer yet, which also sets GAIA_UNPROVEN_HARNESS.",
+    )
+    parser.add_argument(
+        "--harness-binary",
+        type=Path,
+        help="The native harness's program; required with a native --harness.",
+    )
+    parser.add_argument(
         "--scenario",
         action="append",
         default=[],
@@ -314,6 +329,7 @@ def main() -> int:
     parser.add_argument("--out", type=Path, default=REPO_ROOT / "eval-out")
     args = parser.parse_args()
     args.judge_model = args.judge_model or baseline_eval_model()
+    harness_env = harness_setup(args.harness, args.harness_binary)
 
     categories = lane_categories(args.lane) if args.lane else args.category
     args.scenarios_by_category = scenarios_by_category(categories, args.scenario)
@@ -352,9 +368,15 @@ def main() -> int:
             )
         failed = []
         for category in categories:
-            cat_env = {**env, **category_home(homes / category, staged_home)}
+            cat_env = {
+                **env,
+                **category_home(homes / category, staged_home),
+                **harness_env,
+            }
             if args.agent_model:
                 write_agent_model(Path(cat_env["GAIA_HOME"]), args.agent_model)
+            if args.harness:
+                write_config_keys(Path(cat_env["GAIA_HOME"]), flagship_agent=args.harness)
             code = _run_category(category, cat_env, p, args)
             if code != 0:
                 failed.append(category)
@@ -400,6 +422,46 @@ def category_home(cat_home: Path, staged_home: Path) -> dict[str, str]:
     if (staged_home / "skills").is_dir():
         shutil.copytree(staged_home / "skills", cat_home / "skills")
     return env_for(cat_home)
+
+
+#: The variable each native harness's daemon lookup reads its program from.
+HARNESS_PATH_ENV = {"gaiacpp": "GAIA_GAIACPP_PATH"}
+
+
+def harness_setup(name: str | None, binary: Path | None) -> dict[str, str]:
+    """The environment every category's backend needs to run harness *name*."""
+    if not name:
+        if binary is not None:
+            raise SystemExit("--harness-binary needs --harness naming its harness.")
+        return {}
+    sys.path.insert(0, str(REPO_ROOT / "src"))
+    from gaia.harnesses import HARNESSES, UNPROVEN_HARNESS_ENV, harness
+
+    known = harness(name)
+    if known is None:
+        raise SystemExit(
+            f"--harness {name!r} is not a harness; choose one of "
+            f"{', '.join(h.name for h in HARNESSES)}."
+        )
+    env: dict[str, str] = {}
+    if not known.runnable:
+        env[UNPROVEN_HARNESS_ENV] = name
+    if not known.native:
+        if binary is not None:
+            raise SystemExit(f"{name} is not a native harness; drop --harness-binary.")
+        return env
+    if name not in HARNESS_PATH_ENV:
+        raise SystemExit(
+            f"This checkout can't start {name} yet: the daemon has no way to find its "
+            "program. That comes with the routing for it."
+        )
+    if binary is None or not binary.is_file():
+        raise SystemExit(
+            f"--harness {name} needs --harness-binary pointing at its program"
+            + (f" ({binary} is not a file)." if binary is not None else ".")
+        )
+    env[HARNESS_PATH_ENV[name]] = str(binary.resolve())
+    return env
 
 
 def write_agent_model(cat_home: Path, model: str) -> None:

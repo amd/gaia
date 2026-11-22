@@ -120,11 +120,18 @@ def check(home: Path) -> list[str]:
     return problems
 
 
+def write_config_keys(home: Path, **keys) -> Path:
+    """Set *keys* in *home*'s config, keeping any already there, as `gaia config set` would."""
+    path = Path(home) / "config.json"
+    doc = json.loads(path.read_text(encoding="utf-8")) if path.is_file() else {}
+    doc.update(keys)
+    path.write_text(json.dumps(doc), encoding="utf-8")
+    return path
+
+
 def write_default_model(home: Path, model: str) -> Path:
     """Write *model* as ``default_model`` in *home*'s config, as `gaia config set` would."""
-    path = Path(home) / "config.json"
-    path.write_text(json.dumps({"default_model": model}), encoding="utf-8")
-    return path
+    return write_config_keys(home, default_model=model)
 
 
 def pin_model(home: Path, model: str) -> list[str]:

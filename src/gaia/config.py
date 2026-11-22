@@ -19,6 +19,7 @@ from pathlib import Path
 from typing import Any, Callable, ClassVar, Dict, Iterator, List, Optional, Tuple
 
 # Re-exported: the resolver lives in a leaf module so gaia.logger can use it.
+from gaia.harnesses import HARNESSES
 from gaia.home import (  # noqa: F401  pylint: disable=unused-import
     default_gaia_home,
     gaia_home,
@@ -501,16 +502,32 @@ class GaiaConfig:
             )
         return word
 
-    #: Values ``flagship_agent`` accepts: the Python agent and the native C++ one.
-    FLAGSHIP_AGENT_CHOICES = ("gaiapy", "gaiacpp")
+    #: Values ``flagship_agent`` can be set to: the harnesses this version can run.
+    FLAGSHIP_AGENT_CHOICES = tuple(h.name for h in HARNESSES if h.runnable)
+
+    #: The shape of a harness name, so a name a newer GAIA saved still loads.
+    _HARNESS_NAME = re.compile(r"[a-z][a-z0-9_-]{0,31}")
 
     @classmethod
-    def _check_flagship_agent(cls, value: Any, where: str) -> Optional[str]:
-        """Normalise a ``flagship_agent`` value, raising on anything else."""
+    def _check_flagship_agent(
+        cls, value: Any, where: str, *, setting: bool = False
+    ) -> Optional[str]:
+        """Normalise a ``flagship_agent`` value.
+
+        Loading keeps any well-formed name, even one this version can't run, so a
+        config a newer GAIA wrote never stops this one from starting; launching it
+        raises instead (``gaia.harnesses.require_runnable``). Setting accepts only
+        the harnesses this version can run.
+        """
         if value is None:
             return None
-        word = str(value).strip().lower() if isinstance(value, str) else value
-        if word not in cls.FLAGSHIP_AGENT_CHOICES:
+        word = value.strip().lower() if isinstance(value, str) else value
+        if setting and word not in cls.FLAGSHIP_AGENT_CHOICES:
+            raise GaiaConfigError(
+                f"{where}: 'flagship_agent' must be one of "
+                f"{', '.join(cls.FLAGSHIP_AGENT_CHOICES)}, but it is {value!r}."
+            )
+        if not isinstance(word, str) or not cls._HARNESS_NAME.fullmatch(word):
             raise GaiaConfigError(
                 f"{where}: 'flagship_agent' must be one of "
                 f"{', '.join(cls.FLAGSHIP_AGENT_CHOICES)}, but it is {value!r}. "
@@ -946,7 +963,11 @@ class GaiaConfig:
             setattr(self, key, self._check_cloud_reasoning_effort(value, "gaia config"))
             return
         if key == "flagship_agent":
-            setattr(self, key, self._check_flagship_agent(value, "gaia config"))
+            setattr(
+                self,
+                key,
+                self._check_flagship_agent(value, "gaia config", setting=True),
+            )
             return
         if key == "embedding_device":
             setattr(

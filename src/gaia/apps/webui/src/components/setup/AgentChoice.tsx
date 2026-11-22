@@ -36,8 +36,8 @@ const messageOf = (err: unknown) => (err instanceof Error ? err.message : String
 export interface AgentPick {
     id: FlagshipAgent;
     download: boolean;
-    /** The agent in use now, which setup carries on with if the pick can't be had. */
-    current: FlagshipAgent;
+    /** The agent saved now (possibly one this version can't run), which setup carries on with if the pick can't be had. */
+    current: string;
 }
 
 interface Props {
@@ -63,7 +63,7 @@ export function AgentChoice({ inSettings = false, disabled = false, pending = nu
     const [open, setOpen] = useState(false);
     const mounted = useRef(true);
 
-    const save = useCallback(async (id: FlagshipAgent, previous: FlagshipAgent) => {
+    const save = useCallback(async (id: FlagshipAgent, previous: string) => {
         setSaving(true);
         setSaveError(null);
         setListing((l) => (l ? { ...l, current: id } : l));
@@ -82,7 +82,7 @@ export function AgentChoice({ inSettings = false, disabled = false, pending = nu
         }
     }, []);
 
-    const currentRef = useRef<FlagshipAgent>('gaiapy');
+    const currentRef = useRef<string>('gaiapy');
     currentRef.current = listing?.current ?? 'gaiapy';
     // Switch only after a download the user started here with Download; one followed in is just shown.
     const { job, start, follow, interrupted } = useAgentDownload((startedHere) => {

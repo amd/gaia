@@ -273,6 +273,9 @@ func (m FlagshipModel) programListing() string {
 	switch {
 	case savedErr != nil:
 		fmt.Fprintf(&b, "Your saved choice could not be read: %v\n", savedErr)
+	case preflight.FlagshipAgentUnavailable(saved.Choice) != "":
+		fmt.Fprintf(&b, "Your saved choice can't run here: %s (%s in %s).\n",
+			preflight.FlagshipAgentUnavailable(saved.Choice), preflight.FlagshipAgentKey, saved.Path)
 	case saved.Choice == "":
 		fmt.Fprintf(&b, "No saved choice yet: GAIA runs %s.\n", preflight.FlagshipAgentPython)
 	}

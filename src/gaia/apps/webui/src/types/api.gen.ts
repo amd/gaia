@@ -1454,7 +1454,7 @@ export interface SettingsResponse {
   custom_model?: string | null;
   dynamic_tools?: boolean;
   dynamic_tools_locked?: boolean;
-  flagship_agent?: "gaiapy" | "gaiacpp";
+  flagship_agent?: string;
   gaiacpp_available?: boolean;
   model_status?: ModelStatus | null;
   network_policy?: "cloud_allowed" | "local_ai_only";
