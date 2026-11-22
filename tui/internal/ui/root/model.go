@@ -1,6 +1,7 @@
 package root
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"sync"
@@ -11,6 +12,7 @@ import (
 	"github.com/amd/gaia/tui/internal/client"
 	"github.com/amd/gaia/tui/internal/control"
 	"github.com/amd/gaia/tui/internal/event"
+	"github.com/amd/gaia/tui/internal/gaiaprogram"
 	"github.com/amd/gaia/tui/internal/ui/agents"
 	"github.com/amd/gaia/tui/internal/ui/chat"
 	"github.com/amd/gaia/tui/internal/ui/components"
@@ -158,6 +160,14 @@ type FlagshipModel struct {
 	programs     func(program string) (*catalog.Catalog, string, error)
 	savedProgram func() (preflight.FlagshipAgent, error)
 	saveProgram  func(choice string) (string, error)
+	// programFetch is gaiacpp being offered or downloaded (programfetch.go).
+	programFetch *programFetch
+	// programFetched marks the switch that follows a finished download, so a
+	// gaiacpp still not found is an error rather than a second offer.
+	programFetched bool
+	// checkProgram and downloadProgram stand in for the gaia CLI in tests.
+	checkProgram    func(context.Context) (gaiaprogram.Status, error)
+	downloadProgram func(context.Context, func(gaiaprogram.Progress)) (string, error)
 	// reopened is set while the session on screen is one that was reopened.
 	reopened bool
 
@@ -301,6 +311,9 @@ func (m FlagshipModel) BeforeExit() error {
 // transport without cancelling it can leave a reader streaming into a screen
 // that no longer exists.
 func (m FlagshipModel) Close() error {
+	if m.programFetch != nil && m.programFetch.cancel != nil {
+		m.programFetch.cancel()
+	}
 	if m.chat != nil {
 		m.chat.Retire()
 	}
@@ -554,6 +567,15 @@ func (m FlagshipModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case chat.AgentProgramMsg:
 		return m.agentProgram(msg.Arg)
 
+	case programStatusMsg:
+		return m.programStatus(msg)
+
+	case programProgressMsg:
+		return m.programProgress(msg)
+
+	case programDownloadedMsg:
+		return m.programDownloaded(msg)
+
 	case status.Outcome:
 		return m.applyOutcome(msg)
 
@@ -591,6 +613,9 @@ func (m FlagshipModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// who presses ctrl+c there means it.
 		if m.activeView == viewSplash && msg.String() == "ctrl+c" {
 			return m, tea.Quit
+		}
+		if model, cmd, took := m.programFetchKey(msg); took {
+			return model, cmd
 		}
 	}
 

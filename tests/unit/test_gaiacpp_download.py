@@ -205,8 +205,8 @@ def test_a_release_without_gaiacpp_says_why_it_cannot_be_downloaded(
     gaiacpp = _program(client.get("/api/agent-programs").json(), "gaiacpp")
     assert gaiacpp["can_download"] is False
     assert gaiacpp["size_bytes"] is None
-    assert "could not read" in gaiacpp["unavailable_reason"]
-    assert gaiacpp["unavailable_code"] is None
+    assert "has no gaiacpp to download" in gaiacpp["unavailable_reason"]
+    assert gaiacpp["unavailable_code"] == "no_release"
 
 
 class _Answers:
@@ -334,6 +334,29 @@ def test_gaiacpp_already_here_is_not_downloaded_again(client, release, tmp_path)
     _place(target, PAYLOAD)
     r = client.post("/api/agent-programs/gaiacpp/download")
     assert r.status_code == 409
+
+
+def test_a_gaiacpp_that_fails_its_check_can_be_downloaded_again(
+    client, release, tmp_path
+):
+    target = _target(tmp_path)
+    target.parent.mkdir(parents=True)
+    _place(target, b"changed after download")
+    (target.parent / gaiacpp_fetch.INSTALL_RECORD_NAME).write_text(
+        json.dumps(
+            {
+                "version": "0.26.1",
+                "sha256": hashlib.sha256(PAYLOAD).hexdigest(),
+                "tag": "v0.26.1",
+            }
+        )
+    )
+    gaiacpp = _program(client.get("/api/agent-programs").json(), "gaiacpp")
+    assert gaiacpp["installed"] is True and gaiacpp["can_download"] is True
+    assert gaiacpp["update_available"] is False
+    assert client.post("/api/agent-programs/gaiacpp/download").status_code == 202
+    assert _wait(client, {"done", "failed"})["state"] == "done"
+    assert fetch.verified_native_flagship() == target
 
 
 def test_only_gaiacpp_is_downloaded_here(client):
