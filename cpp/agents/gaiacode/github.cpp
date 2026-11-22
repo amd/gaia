@@ -206,6 +206,15 @@ public:
 
     json get(const std::string& path) { return parse(check(callGet(path), path, false)); }
 
+    /// Like get(), but nullopt when the token may not read it (403, not a rate limit) or it isn't
+    /// there (404): every other failure is still an error.
+    std::optional<json> getIfAllowed(const std::string& path) {
+        const HttpResponse r = callGet(path);
+        const bool rateLimited = r.header("x-ratelimit-remaining") == "0" || !r.header("retry-after").empty();
+        if (r.status == 404 || (r.status == 403 && !rateLimited)) return std::nullopt;
+        return parse(check(r, path, false));
+    }
+
     /// A text resource that GitHub may serve from another host (job logs).
     std::string getText(const std::string& path) {
         HttpResponse r = callGet(path);
@@ -520,10 +529,16 @@ void registerGitHubTools(ToolRegistry& registry, std::function<std::string()> fo
             // checks but not statuses still gets the checks, told what it couldn't see.
             json statuses = json::array();
             std::string statusesUnavailable;
-            try {
-                statuses = api.get("/repos/" + r.slug() + "/commits/" + sha + "/status").value("statuses", json::array());
-            } catch (const std::exception& e) {
-                statusesUnavailable = e.what();
+            if (const auto combined = api.getIfAllowed("/repos/" + r.slug() + "/commits/" + sha + "/status")) {
+                statuses = combined->value("statuses", json::array());
+            } else {
+                statusesUnavailable = "the token can't read this repository's commit statuses";
+                // With no check runs either, "nothing failing" would be a guess.
+                if (checks.empty()) {
+                    throw std::runtime_error("No CI results could be read for pull request " + std::to_string(n) +
+                                             ": it has no check runs, and " + statusesUnavailable +
+                                             ". Use a token that can read commit statuses.");
+                }
             }
             for (const auto& st : statuses) {
                 const std::string state = str(st, "state");

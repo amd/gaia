@@ -331,14 +331,6 @@ bool runsTests(const std::vector<std::string>& argv) {
     return false;
 }
 
-std::string nativeFolderOf(const std::string& cwd) {
-#ifdef _WIN32
-    if (cwd.size() >= 3 && cwd[0] == '/' && std::isalpha(static_cast<unsigned char>(cwd[1])) && cwd[2] == '/') {
-        return std::string(1, cwd[1]) + ":" + cwd.substr(2);
-    }
-#endif
-    return cwd;
-}
 
 // Puts the shell back in the folder it was in, however the run ends.
 struct FolderRestore {
@@ -352,7 +344,15 @@ struct FolderRestore {
 
 }  // namespace
 
-std::string nativeFolder(const std::string& cwd) { return nativeFolderOf(cwd); }
+// The shell's folder as a native path: Git Bash on Windows reports /c/Users/....
+std::string nativeFolder(const std::string& cwd) {
+#ifdef _WIN32
+    if (cwd.size() >= 3 && cwd[0] == '/' && std::isalpha(static_cast<unsigned char>(cwd[1])) && cwd[2] == '/') {
+        return std::string(1, cwd[1]) + ":" + cwd.substr(2);
+    }
+#endif
+    return cwd;
+}
 
 bool looksLikeTestCommand(const std::string& command) {
     std::vector<std::vector<std::string>> segments;

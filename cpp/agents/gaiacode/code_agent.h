@@ -55,6 +55,17 @@ public:
     /// (nullopt). Read from the tool's whole result as it returns, never a clipped copy.
     static std::optional<TurnEvent> classify(const std::string& tool, const json& args, const json& result);
 
+    /// The test result a tool call reported, if it ran tests; nullopt when it ran none or its
+    /// result can't be read. Says nothing about edits.
+    static std::optional<TurnEvent> testResult(const std::string& tool, const json& args, const json& result);
+
+    /// A fingerprint of every file git would see in `folder`'s repository (tracked and untracked,
+    /// .gitignore honored), taken through a throwaway index; nullopt outside a git repository.
+    static std::optional<std::string> treeFingerprint(const std::string& folder);
+
+    /// What this turn's tool calls did so far, in order.
+    std::vector<TurnEvent> events() const;
+
 protected:
     void registerTools() override;
     std::string getSystemPrompt() const override;
@@ -65,7 +76,6 @@ protected:
 private:
     /// `tool` with its callback reporting what it did to the turn's events.
     ToolInfo observed(ToolInfo tool);
-    std::vector<TurnEvent> events() const;
 
     Options options_;
     std::unique_ptr<SkillLibrary> skills_;
