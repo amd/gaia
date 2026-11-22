@@ -95,6 +95,7 @@ on:
       - 'tests/unit/skills_helpers.py'
       - 'tests/unit/test_indexed_docs_per_turn.py'
       - 'tests/unit/test_profilespec_characterization.py'
+      - 'tests/unit/test_ruled_out_step_prompt.py'
   pull_request:
     # No `branches:` filter: it matches the PR base, so `[ main ]` skipped stacked PRs (#2767).
     types: [opened, synchronize, reopened, ready_for_review, labeled]
@@ -183,6 +184,7 @@ on:
       - 'tests/unit/skills_helpers.py'
       - 'tests/unit/test_indexed_docs_per_turn.py'
       - 'tests/unit/test_profilespec_characterization.py'
+      - 'tests/unit/test_ruled_out_step_prompt.py'
   merge_group:
   workflow_dispatch:
 
@@ -257,6 +259,7 @@ jobs:
             tests/unit/test_indexed_docs_per_turn.py \
             tests/unit/test_profilespec_characterization.py \
             tests/unit/test_prompt_size_budget.py \
+            tests/unit/test_ruled_out_step_prompt.py \
             tests/unit/test_sd_rule_gating.py \
             tests/unit/test_run_python_tool.py \
             tests/unit/test_run_python_timeouts.py \
