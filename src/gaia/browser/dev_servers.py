@@ -22,6 +22,10 @@ GAIA desktop's main process runs the servers (``dev-servers.cjs``). This
 module turns a name into a :class:`DevServerSpec` main can run, never a shell
 string, and gives it the digest its approval is keyed on, so writing or
 editing the file approves nothing.
+
+Every server listens on loopback only. For the commands :data:`LOOPBACK_BINDS`
+knows, a configuration with no bind flag gets one, and one bound elsewhere is
+refused; main checks the bound address of every server once its port answers.
 """
 
 from __future__ import annotations
@@ -29,6 +33,7 @@ from __future__ import annotations
 import ast
 import errno
 import hashlib
+import ipaddress
 import json
 import re
 import secrets
@@ -38,6 +43,7 @@ import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
+from urllib.parse import urlsplit
 
 from gaia.agents.base.call_risk import DESTRUCTIVE, shell_command_risk
 from gaia.agents.base.tool_grants import launch_digest
@@ -391,6 +397,18 @@ def _parse(
             f"env {', '.join(refused)} is not allowed. Allowed: {', '.join(sorted(ENV_NAMES))}, "
             f"and names starting {', '.join(ENV_PREFIXES)}."
         )
+    exposed = [
+        k for k in ("HOST", "HOSTNAME") if k in env and not loopback_host(env[k])
+    ]
+    if exposed:
+        raise bad(
+            f"env {', '.join(f'{k}={env[k]}' for k in exposed)} would let other "
+            "computers on the network reach the server. Use 127.0.0.1, or leave it out."
+        )
+    try:
+        argv = bind_loopback(argv, port)
+    except ValueError as e:
+        raise bad(str(e)) from e
     url = config.get("url", "/")
     if not isinstance(url, str) or not url.startswith("/"):
         raise bad('"url" must be a path on the server, like "/" or "/settings".')
@@ -410,6 +428,110 @@ def _parse(
         url_path=url,
         ready_timeout_s=timeout,
     )
+
+
+# ------------------------------------------------------------- loopback binds
+
+
+@dataclass(frozen=True)
+class LoopbackBind:
+    """How one dev server picks its listen address: its flags, and the args that make it 127.0.0.1."""
+
+    what: str
+    pattern: "re.Pattern[str]"
+    flags: Tuple[str, ...]
+    loopback: Callable[[int], Tuple[str, ...]]
+
+
+#: Matched like :data:`SHELL_SERVERS`, on the command after :func:`_normalize`.
+LOOPBACK_BINDS: Tuple[LoopbackBind, ...] = (
+    LoopbackBind(
+        "Python's http.server",
+        re.compile(r"^http\.server\b"),
+        ("--bind", "-b"),
+        lambda port: ("--bind", "127.0.0.1"),
+    ),
+    LoopbackBind(
+        "Vite",
+        re.compile(r"^vite( (dev|serve|preview)\b| -|$)"),
+        ("--host",),
+        lambda port: ("--host", "127.0.0.1"),
+    ),
+    LoopbackBind(
+        "Next.js",
+        re.compile(r"^next (dev|start)\b"),
+        ("--hostname", "-H"),
+        lambda port: ("--hostname", "127.0.0.1"),
+    ),
+    LoopbackBind(
+        "serve",
+        re.compile(r"^serve\b"),
+        ("--listen", "-l", "-p"),
+        lambda port: ("--listen", f"tcp://127.0.0.1:{port}"),
+    ),
+    LoopbackBind(
+        "http-server",
+        re.compile(r"^http-server\b"),
+        ("-a",),
+        lambda port: ("-a", "127.0.0.1"),
+    ),
+    LoopbackBind(
+        "webpack's dev server",
+        re.compile(r"^(webpack (serve|s)|webpack-dev-server)\b"),
+        ("--host",),
+        lambda port: ("--host", "127.0.0.1"),
+    ),
+)
+
+
+def loopback_host(value: str) -> bool:
+    """True for localhost, 127.0.0.0/8 and ::1, bare or in a URL like tcp://127.0.0.1:3000."""
+    host = urlsplit(value).hostname if "://" in value else value.strip("[]")
+    if not host:
+        return False
+    if host.lower() == "localhost":
+        return True
+    try:
+        return ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        return False
+
+
+def _bind_value(argv: Tuple[str, ...], flags: Tuple[str, ...]) -> Tuple[bool, str]:
+    """Whether a bind flag is present, and its value (empty when it has none)."""
+    for n, arg in enumerate(argv):
+        for flag in flags:
+            if arg.startswith(f"{flag}="):
+                return True, arg.split("=", 1)[1]
+            if arg == flag:
+                after = argv[n + 1] if n + 1 < len(argv) else ""
+                return True, "" if after.startswith("-") else after
+    return False, ""
+
+
+def bind_loopback(argv: Tuple[str, ...], port: int) -> Tuple[str, ...]:
+    """``argv`` bound to 127.0.0.1 when it is a server :data:`LOOPBACK_BINDS` knows.
+
+    Adds the bind when there is none; raises ValueError naming the fix when
+    the command binds anything else. Other commands come back unchanged, and
+    main's check of the bound address covers them.
+    """
+    server = tuple(_normalize(list(argv)))
+    for bind in LOOPBACK_BINDS:
+        if not bind.pattern.search(" ".join(server)):
+            continue
+        present, value = _bind_value(server, bind.flags)
+        if not present:
+            return (*argv, *bind.loopback(port))
+        if loopback_host(value):
+            return argv
+        given = repr(value) if value else "no address"
+        raise ValueError(
+            f"{bind.what} is given {given} to listen on, so other computers on the "
+            f"network could reach it. Use {shlex.join(bind.loopback(port))} "
+            "instead, or leave the flag out."
+        )
+    return argv
 
 
 # ----------------------------------------------------- servers run the wrong way
@@ -686,12 +808,15 @@ __all__ = [
     "ENV_NAMES",
     "ENV_PREFIXES",
     "LAUNCH_FILE",
+    "LOOPBACK_BINDS",
     "PYTHON_SERVERS",
     "SHELL_SERVERS",
     "STATIC_NAME",
     "DevServerSpec",
     "LaunchConfigError",
+    "LoopbackBind",
     "ServerMatch",
+    "bind_loopback",
     "describe",
     "dev_server_offered",
     "env_name_allowed",
@@ -699,6 +824,7 @@ __all__ = [
     "find_projects",
     "launch_file",
     "load_specs",
+    "loopback_host",
     "pick_running",
     "resolve_spec",
     "server_in_command",
