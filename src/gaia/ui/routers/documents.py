@@ -15,6 +15,7 @@ import asyncio
 import hashlib
 import logging
 import os
+import sqlite3
 import sys
 import tempfile
 import unicodedata
@@ -405,7 +406,9 @@ async def upload_document_blob(
     size check, deduplicated by SHA-256 content hash, then indexed via the
     standard RAG pipeline. Files are capped at ``MAX_DOCUMENT_UPLOAD_SIZE``.
 
-    On any failure, partial / orphaned files are cleaned up.
+    On any failure, partial / orphaned files are cleaned up, except when the
+    model server couldn't index it: the copy then stays as a failed row that
+    is indexed again once the server is back.
     """
     # 1. Validate filename
     if not file.filename:
@@ -543,17 +546,12 @@ async def upload_document_blob(
             status_code=422, detail={"status": e.kind, "message": str(e)}
         ) from e
     except ModelServerIndexError as e:
-        _cleanup_temp(final_path)
+        # The file is fine: keep it as a row that waits for the server.
         # The connection error stays in the log; the client words the reason.
         logger.warning("Could not index uploaded document %s: %s", display_name, e)
-        raise HTTPException(
-            status_code=503,
-            detail={
-                "status": e.kind,
-                "message": "GAIA's model server isn't answering, so the "
-                "document couldn't be added. Retry once it's back.",
-            },
-        ) from e
+        return _waiting_for_server(
+            db, final_path, display_name, file_hash, bytes_written, e
+        )
     except Exception as e:
         _cleanup_temp(final_path)
         logger.error(
@@ -766,6 +764,55 @@ async def delete_document(doc_id: str, db: ChatDatabase = Depends(get_db)):
         _cleanup_temp(Path(filepath))
 
     return {"deleted": True}
+
+
+_SERVER_OUT = {
+    "model_server_down": "GAIA's model server isn't answering. GAIA adds this "
+    "document once it is back.",
+    "model_server_busy": "GAIA's model server was too busy to add this "
+    "document. Retry it.",
+}
+
+
+def _waiting_for_server(
+    db: ChatDatabase,
+    copy: Path,
+    display_name: str,
+    file_hash: str,
+    file_size: int,
+    error: ModelServerIndexError,
+) -> DocumentResponse:
+    """Record a dropped file the model server couldn't index as a failed row.
+
+    The app retries a ``model_server_down`` row by itself once the server is
+    back; a ``model_server_busy`` one waits on the row's Retry. The copy stays.
+    """
+    try:
+        doc = db.add_document(
+            filename=display_name,
+            filepath=str(copy),
+            file_hash=file_hash,
+            file_size=file_size,
+            chunk_count=0,
+            file_mtime=copy.stat().st_mtime,
+        )
+    except (OSError, sqlite3.Error):
+        _cleanup_temp(copy)
+        raise
+    if Path(doc["filepath"]).resolve() != copy.resolve():
+        # The same content went in meanwhile; that row stands for this file.
+        _cleanup_temp(copy)
+    if doc.get("indexing_status") in ("pending", "indexing") or (
+        doc.get("indexing_status") == "complete" and doc.get("chunk_count")
+    ):
+        return doc_to_response(doc)
+    db.update_document_status(
+        doc["id"],
+        "failed",
+        last_error=_SERVER_OUT.get(error.kind, str(error)),
+        error_kind=error.kind,
+    )
+    return doc_to_response(db.get_document(doc["id"]))
 
 
 def _record_failed_document(
