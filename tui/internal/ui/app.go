@@ -2,6 +2,7 @@ package ui
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -70,6 +71,12 @@ type AgentChoice struct {
 
 func RunFlagship(dev bool, mockAgent string, agentChoice AgentChoice, ctrl *control.Options, fullAccess, fullAccessSaved bool, useClaude bool, claudeModel string, trace *event.TraceWriter, resume Resume) error {
 	cat, agentNotice, err := loadCatalog(mockAgent, agentChoice.Program, catalog.FlagshipID)
+	if why, detail, ok := savedNativeBroken(agentChoice, err); ok {
+		cat, agentNotice, err = recoverSavedAgent(why, detail, err, dev, ctrl)
+		if errors.Is(err, errLeftRecovery) {
+			return nil
+		}
+	}
 	if err != nil {
 		return err
 	}

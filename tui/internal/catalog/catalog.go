@@ -89,11 +89,11 @@ const ArtifactKindBinary = "binary"
 // gaia.hub.installer.default_install_root() exactly — a client that looked
 // somewhere else would report an agent as missing that is sitting on disk.
 func InstallRoot() string {
-	home, err := os.UserHomeDir()
-	if err != nil {
+	home := gaiaHome()
+	if home == "" {
 		return ""
 	}
-	return filepath.Join(home, ".gaia", "agents")
+	return filepath.Join(home, "agents")
 }
 
 // executableNames returns the candidate file names for a binary on this OS.

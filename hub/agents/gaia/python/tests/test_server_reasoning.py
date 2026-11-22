@@ -41,6 +41,7 @@ def client(monkeypatch):
     caller_auth.reset()
     monkeypatch.delenv(caller_auth.TOKEN_FILE_ENV_VAR, raising=False)
     monkeypatch.delenv(caller_auth.TOKEN_ENV_VAR, raising=False)
+    monkeypatch.setenv(caller_auth.ALLOW_NO_TOKEN_ENV_VAR, "1")
     monkeypatch.setattr(server_mod, "build_query_agent", lambda **kw: _Agent(**kw))
     monkeypatch.setattr(sr, "build_session_agent", lambda **kw: _Agent(**kw))
     sr.registry.clear()

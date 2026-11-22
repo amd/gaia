@@ -719,7 +719,7 @@ TEST_F(GaiacppStdio, AllowRunsTheToolOnce) {
     }
     EXPECT_EQ(prompt["action"], "file_write");
     EXPECT_EQ(prompt["risk"], "write");
-    EXPECT_EQ(prompt["summary"], "Write " + out.string());
+    EXPECT_EQ(prompt["summary"], out.string() + "\n\nWhat will be saved:\n    hi");
     EXPECT_FALSE(fs::exists(out)) << "nothing is written before the answer";
 
     decide("allow", prompt["confirm_id"]);
@@ -739,6 +739,144 @@ TEST_F(GaiacppStdio, AllowRunsTheToolOnce) {
     decide("deny", second["confirm_id"]);
     ASSERT_TRUE(waitTerminal(2).is_object());
     EXPECT_FALSE(fs::exists(again));
+}
+
+TEST_F(GaiacppStdio, AnEditPromptShowsBeforeAndAfterAndItsResultReadsInWords) {
+    const fs::path file = work_ / "inventory.py";
+    std::ofstream(file) << "count = 1\nname = 'a'\n";
+    mock_.pushResponse(toolCall("file_read", {{"path", file.string()}}));
+    mock_.pushResponse(
+        toolCall("file_edit", {{"path", file.string()}, {"old_string", "count = 1"}, {"new_string", "count = 2"}}));
+    mock_.pushResponse(answer("Fixed."));
+    start();
+    ask("fix the count");
+    const json prompt = waitFor("needs_confirmation");
+    ASSERT_TRUE(prompt.is_object());
+    EXPECT_EQ(prompt["action"], "file_edit");
+    EXPECT_EQ(prompt["summary"],
+              file.string() + "\n\nBefore:\n    count = 1\n\nAfter:\n    count = 2");
+    decide("allow", prompt["confirm_id"]);
+    ASSERT_TRUE(waitTerminal(1).is_object());
+
+    std::vector<std::string> previews;
+    for (const auto& e : events()) {
+        if (e.value("type", "") == "tool_result") previews.push_back(e.value("preview", ""));
+    }
+    ASSERT_EQ(previews.size(), 2u);
+    EXPECT_EQ(previews[0], "Read 2 lines from inventory.py");
+    EXPECT_EQ(previews[1], "Changed 1 place in inventory.py");
+    for (const auto& p : previews) EXPECT_EQ(p.find('{'), std::string::npos) << p;
+}
+
+TEST_F(GaiacppStdio, ALongWritePromptCountsTheLinesItLeavesOut) {
+    std::string content;
+    for (int i = 1; i <= 15; ++i) content += "line " + std::to_string(i) + "\n";
+    const fs::path out = work_ / "long.txt";
+    mock_.pushResponse(toolCall("file_write", {{"path", out.string()}, {"content", content}}));
+    mock_.pushResponse(answer("Not written."));
+    start();
+    ask("write it");
+    const json prompt = waitFor("needs_confirmation");
+    ASSERT_TRUE(prompt.is_object());
+    const std::string summary = prompt.value("summary", "");
+    EXPECT_NE(summary.find("    line 12\n"), std::string::npos) << summary;
+    EXPECT_EQ(summary.find("line 13"), std::string::npos) << summary;
+    EXPECT_NE(summary.find("[+3 more lines not shown]"), std::string::npos) << summary;
+    decide("deny", prompt["confirm_id"]);
+    ASSERT_TRUE(waitTerminal(1).is_object());
+}
+
+TEST_F(GaiacppStdio, AWritePromptShowsHiddenTextAsCodesAndCountsACutLine) {
+    // An ESC sequence could repaint the card and a bidi override reorder it.
+    const std::string content = "ok\x1b[2Ksneaky\nabc\xE2\x80\xAE" "cba\n" + std::string(250, 'x') + "\n";
+    const fs::path out = work_ / "odd.txt";
+    mock_.pushResponse(toolCall("file_write", {{"path", out.string()}, {"content", content}}));
+    mock_.pushResponse(answer("Not written."));
+    start();
+    ask("write it");
+    const json prompt = waitFor("needs_confirmation");
+    ASSERT_TRUE(prompt.is_object());
+    const std::string summary = prompt.value("summary", "");
+    EXPECT_EQ(summary.find('\x1b'), std::string::npos) << summary;
+    EXPECT_NE(summary.find("    ok[U+001B][2Ksneaky\n"), std::string::npos) << summary;
+    EXPECT_NE(summary.find("abc[U+202E]cba"), std::string::npos) << summary;
+    EXPECT_NE(summary.find("    " + std::string(200, 'x') + "… [+50 more characters not shown]"), std::string::npos)
+        << summary;
+    decide("deny", prompt["confirm_id"]);
+    ASSERT_TRUE(waitTerminal(1).is_object());
+}
+
+// A zero-width space would make "inv" + U+200B + "oice.txt" read as invoice.txt.
+TEST_F(GaiacppStdio, AZeroWidthCharacterInAPathShowsAsACode) {
+    const std::string start_of_path = (work_ / "inv").string();
+    mock_.pushResponse(
+        toolCall("file_write", {{"path", start_of_path + "\xE2\x80\x8B" "oice.txt"}, {"content", "hi"}}));
+    mock_.pushResponse(answer("Not written."));
+    start();
+    ask("write it");
+    const json prompt = waitFor("needs_confirmation");
+    ASSERT_TRUE(prompt.is_object());
+    EXPECT_EQ(prompt["summary"], start_of_path + "[U+200B]oice.txt\n\nWhat will be saved:\n    hi");
+    decide("deny", prompt["confirm_id"]);
+    ASSERT_TRUE(waitTerminal(1).is_object());
+}
+
+TEST_F(GaiacppStdio, AZeroWidthCharacterInAShellCommandShowsAsACode) {
+    // Word joiner in the program, zero-width space in the argument.
+    mock_.pushResponse(toolCall("bash_execute", {{"command", "mk\xE2\x81\xA0" "dir inv\xE2\x80\x8B" "oice"}}));
+    mock_.pushResponse(answer("Not made."));
+    Start s;
+    s.shell = true;
+    start(s);
+    ask("make a folder");
+    const json prompt = waitFor("needs_confirmation");
+    ASSERT_TRUE(prompt.is_object());
+    EXPECT_EQ(prompt["summary"], "mk[U+2060]dir inv[U+200B]oice");
+    const std::string scope = prompt.value("always_scope", "");
+    for (const char* hidden : {"\xE2\x81\xA0", "\xE2\x80\x8B"}) {
+        EXPECT_EQ(scope.find(hidden), std::string::npos) << scope;
+    }
+    decide("deny", prompt["confirm_id"]);
+    ASSERT_TRUE(waitTerminal(1).is_object());
+}
+
+TEST_F(GaiacppStdio, InvisibleCharactersInAnEditShowAsCodes) {
+    const fs::path file = work_ / "totals.py";
+    std::ofstream(file) << "total = 1\n";
+    mock_.pushResponse(toolCall("file_read", {{"path", file.string()}}));
+    mock_.pushResponse(toolCall("file_edit", {{"path", file.string()},
+                                              {"old_string", "total = 1"},
+                                              {"new_string", "total\xE2\x81\xA0 = 2\xEF\xBB\xBF\xC2\xAD"}}));
+    mock_.pushResponse(answer("Not changed."));
+    start();
+    ask("change the total");
+    const json prompt = waitFor("needs_confirmation");
+    ASSERT_TRUE(prompt.is_object());
+    EXPECT_EQ(prompt["summary"],
+              file.string() + "\n\nBefore:\n    total = 1\n\nAfter:\n    total[U+2060] = 2[U+FEFF][U+00AD]");
+    decide("deny", prompt["confirm_id"]);
+    ASSERT_TRUE(waitTerminal(1).is_object());
+}
+
+// Same text and expected line as person_approval.visible() gives in Python.
+TEST_F(GaiacppStdio, BidiAndZeroWidthTogetherShowAsThePythonAgentShowsThem) {
+    const std::string content =
+        "abc\xE2\x80\xAE" "cba\xE2\x80\x8B\xE2\x81\xA6" "x\xE2\x81\xA9 a\xE2\x80\x8D" "b "
+        "\xE2\x9D\xA4\xEF\xB8\x8F x\xEF\xB8\x8F \xF3\xA0\x81\x81\xE1\xA0\x8E\xC2\xAD end";
+    const fs::path out = work_ / "mixed.txt";
+    mock_.pushResponse(toolCall("file_write", {{"path", out.string()}, {"content", content}}));
+    mock_.pushResponse(answer("Not written."));
+    start();
+    ask("write it");
+    const json prompt = waitFor("needs_confirmation");
+    ASSERT_TRUE(prompt.is_object());
+    // ZWJ and an emoji's own variation selector stay as written; a stray selector is a code.
+    EXPECT_EQ(prompt["summary"], out.string() +
+                                     "\n\nWhat will be saved:\n"
+                                     "    abc[U+202E]cba[U+200B][U+2066]x[U+2069] a\xE2\x80\x8D" "b "
+                                     "\xE2\x9D\xA4\xEF\xB8\x8F x[U+FE0F] [U+E0041][U+180E][U+00AD] end");
+    decide("deny", prompt["confirm_id"]);
+    ASSERT_TRUE(waitTerminal(1).is_object());
 }
 
 TEST_F(GaiacppStdio, DenyAndTimeoutLeaveTheToolUnrun) {
@@ -821,7 +959,7 @@ TEST_F(GaiacppStdio, AlwaysForAShellCommandCoversThatProgramOnly) {
     ASSERT_TRUE(prompt.is_object());
     EXPECT_EQ(prompt["action"], "bash_execute");
     EXPECT_EQ(prompt["risk"], "execute");
-    EXPECT_EQ(prompt["summary"], "Run: mkdir first");
+    EXPECT_EQ(prompt["summary"], "mkdir first") << "the command itself: the prompt's title asks the question";
     EXPECT_EQ(prompt["always_scope"], "Run mkdir commands");
     decide("always", prompt["confirm_id"]);
     ASSERT_TRUE(waitTerminal(1).is_object());

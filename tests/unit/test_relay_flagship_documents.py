@@ -125,6 +125,7 @@ def live_gaia_sidecar(monkeypatch, tmp_path):
     LemonadeManager.reset()
     monkeypatch.delenv(caller_auth.TOKEN_FILE_ENV_VAR, raising=False)
     monkeypatch.delenv(caller_auth.TOKEN_ENV_VAR, raising=False)
+    monkeypatch.setenv(caller_auth.ALLOW_NO_TOKEN_ENV_VAR, "1")
     # Context measurement is exercised by the relay after every turn. Keep it
     # local: the document contract does not need a real Lemonade health check.
     monkeypatch.setattr(turn_insights, "_loaded_chat_model", lambda *_args: None)

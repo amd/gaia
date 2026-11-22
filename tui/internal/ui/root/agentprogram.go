@@ -145,6 +145,9 @@ func (m FlagshipModel) switchProgram(choice string) (tea.Model, tea.Cmd) {
 	// Found before anything is saved: a choice that cannot run would stop the
 	// next launch.
 	cat, notice, err := m.resolveProgram(choice)
+	if why, ok := downloadable(err); ok && !m.programFetched {
+		return m.offerProgram(why)
+	}
 	if err != nil {
 		m.chat.AppendStatus(fmt.Sprintf(
 			"Cannot switch to %s: %v\nNothing was changed: this session is still on %s and your saved choice is as it was.",
@@ -323,6 +326,9 @@ func (m FlagshipModel) programUnavailable(choice string) string {
 		if missing.Lookup.Unverified != "" {
 			return fmt.Sprintf("Unavailable: %s is there but its install is unfinished. Re-run the GAIA installer.",
 				missing.Lookup.Unverified)
+		}
+		if missing.Binary == catalog.NativeAgentBinary {
+			return "Not on this PC yet: /agent " + choice + " offers to download it."
 		}
 		return "Unavailable: not installed. Looked in: " + strings.Join(missing.Lookup.Looked, ", ")
 	}

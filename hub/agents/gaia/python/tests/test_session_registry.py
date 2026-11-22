@@ -225,6 +225,46 @@ def test_reclaimed_flag_is_not_repeated_on_the_next_lookup(monkeypatch):
 
 
 # ---------------------------------------------------------------------------
+# freshly_built: unlike reclaimed_after_eviction (eviction only), this is set
+# on every path that builds a session's agent for the first time in this
+# process — including a true first use and, critically, a session_id the
+# registry has no record of because the process itself restarted (#8083).
+# ---------------------------------------------------------------------------
+
+
+def test_first_use_is_flagged_freshly_built(registry):
+    session = registry.get_or_create("never-seen-before")
+    assert session.freshly_built is True
+
+
+def test_reclaimed_after_eviction_is_also_freshly_built(monkeypatch):
+    monkeypatch.setattr(sr, "build_session_agent", lambda **kw: _FakeAgent(**kw))
+    reg = sr._SessionRegistry(max_sessions=1)
+
+    reg.get_or_create("a")
+    reg.get_or_create("b")  # evicts "a"
+
+    reclaimed = reg.get_or_create("a")
+    assert reclaimed.freshly_built is True
+    reg.clear()
+
+
+def test_freshly_built_flag_is_not_repeated_on_the_next_lookup(monkeypatch):
+    """Same consume-once contract as reclaimed_after_eviction, owned by the caller."""
+    monkeypatch.setattr(sr, "build_session_agent", lambda **kw: _FakeAgent(**kw))
+    reg = sr._SessionRegistry(max_sessions=1)
+
+    session = reg.get_or_create("a")
+    assert session.freshly_built is True
+
+    session.freshly_built = False  # server.py's consume step
+    same = reg.get_or_create("a")
+    assert same is session
+    assert same.freshly_built is False
+    reg.clear()
+
+
+# ---------------------------------------------------------------------------
 # Teardown: the helper must actually reach a real agent's handles. It probed
 # only ``close_db`` — which GaiaAgent does not define — so every eviction was a
 # silent no-op that leaked the whole agent while looking like it had cleaned up.

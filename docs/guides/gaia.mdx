@@ -85,15 +85,14 @@ Inference runs locally by default. The sidecar's `/query` endpoint accepts `prov
 `GET /v1/gaia/init` is a read-only preflight: it probes Lemonade, compares its version against the 2026.44.1 floor, and confirms the model is downloaded. It never pulls or loads a model.
 
 ```bash
-curl -s http://127.0.0.1:8141/v1/gaia/init
+curl -s -H "authorization: Bearer $TOKEN" http://127.0.0.1:8141/v1/gaia/init
 ```
 
 It answers **200** when ready and **503** when not, with a `hint` naming the fix — Lemonade unreachable, Lemonade too old, or model not downloaded. Liveness alone is `GET /health`, which never touches the model server.
 
 <Note>
-  A **401** here means the sidecar wants a caller token — `/v1/gaia/*` requires one, while
-  `/health` and `/version` don't. That's the normal state for the sidecar the daemon
-  spawns. See [Authenticating your requests](#authenticating-your-requests).
+  A **401** here means the token is missing or wrong — `/v1/gaia/*` requires one, while
+  `/health` and `/version` don't. See [Authenticating your requests](#authenticating-your-requests).
 </Note>
 
 ## Tool surface
@@ -355,6 +354,7 @@ Only **`query`**, **`run_id`**, and **`context`** are required; everything else 
 - **`final` reports how full the model's window is** (contract >= 2.21): its `context` field gives the window size, the tokens the next call will take and what takes them. A stopped or failed turn leaves it out.
 - **The model's reasoning can stream on its own** (contract >= 2.22): send `reasoning: true` and it arrives as `reasoning` events with a `delta`, apart from `status` lines and the answer. A model whose chat template opens the reasoning block streams it as `token`s until its `</think>`; the `reasoning` event that follows carries `retracts_answer: true`, so drop the `token` text since the last `tool_call` from the answer. Without the field it folds into `status` lines.
 - **A reply cut off by a model-server restart is taken back.** When GAIA's model server stops part-way through a reply, the step runs again once it is back, and a `status` with phase `answer_restart` and `retracts_answer: true` comes first: drop the `token` text since the last `tool_call` and show its `message` in its place. While the server restarts, `status` lines carry phase `model_restart`, also when it stopped under a tool's own model calls; a long document extraction reports each page with phase `reading` ("Reading page 4 of 12…").
+- **A checked answer replaces the first one.** When GAIA checks its answer at the end of a turn and writes it again, a `status` with phase `answer_check` and `retracts_answer: true` comes before the new text or the check's next tool call: drop the `token` text since the last `tool_call`, so the turn shows one answer. A check that keeps the answer sends no retraction.
 - **A bare file name lands in the chat's folder** (contract >= 2.24): send `working_directory`, an absolute path, and a relative path in a read, write or edit resolves under it, as does the path the approval prompt names. It sets where a file goes, not what the agent may reach; that is still `allowed_paths`.
 - **The agent can see its own earlier tool calls** (contract >= 2.25): send `turns` instead of `context` (which must then be `[]`, or the request is a 422), and send `[]` on the first turn. A request that sent `turns` gets `model_messages` on its `final`, the turn as the model saw it, tool calls and results included; store it with the reply and send it back in `turns`, oldest first. The agent keeps the newest whole turns that fit its window. `turns: []` means no earlier turns and clears a retained session's history. A caller that sends no `turns` gets no `model_messages`.
 - **Idle streams emit `: keepalive` comments** every 10 seconds so a long tool call doesn't look like a dead connection.
@@ -375,7 +375,7 @@ The programs the agent starts (shell commands, MCP servers, CLI installs and sig
 
 `GET /health`, `GET /version`, and `GET /v1/gaia/version` skip the token — they're the probes a host polls before any token is in play, and none of them exposes your data. `Host` and `Origin` still apply to them.
 
-If neither token variable is set, the sidecar starts with the token check off and says so loudly in its log; `Host` and `Origin` stay enforced. That's a **local development** convenience — a sidecar you started by hand — not something to build on. Full details, including how to supply a token when you spawn the sidecar yourself, are in the package's [SPEC.md §5.4](https://github.com/amd/gaia/blob/main/hub/agents/gaia/npm/SPEC.md).
+If neither token variable is set, the sidecar refuses to start and says which variables to set. The GAIA daemon and the npm package's `startSidecar` and `gaia serve` always mint a token for you. Only for a sidecar you run by hand while developing can you set `GAIA_SIDECAR_ALLOW_NO_TOKEN=1` to start it without one; it then logs a loud warning, and `Host` and `Origin` stay enforced. Full details, including how to read the token when you spawn the sidecar yourself, are in the package's [SPEC.md §5.4](https://github.com/amd/gaia/blob/main/hub/agents/gaia/npm/SPEC.md).
 
 ## Troubleshooting
 

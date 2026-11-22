@@ -18,10 +18,16 @@ import gaia.config as config_mod
 from gaia.config import GaiaConfig, GaiaConfigError
 from gaia.daemon.sidecars import fetch
 from gaia.daemon.sidecars import manager as mgr
-from gaia.daemon.sidecars.errors import SidecarError, SidecarSpawnError
+from gaia.daemon.sidecars.errors import (
+    KIND_HARNESS_UNAVAILABLE,
+    KIND_START_FAILED,
+    SidecarError,
+    SidecarSpawnError,
+)
 from gaia.daemon.sidecars.spec import builtin_specs
 from gaia.harnesses import HarnessUnavailableError
 from gaia.ui import _chat_helpers
+from gaia.ui.models import ChatRequest
 from gaia.ui.server import create_app
 
 
@@ -243,6 +249,7 @@ def test_the_daemon_refuses_to_start_a_harness_it_cannot_run():
     with pytest.raises(SidecarSpawnError) as e:
         _flagship_manager().build_spawn_command(port=45123)
     assert "gaiacode" in str(e.value) and "Settings" in str(e.value)
+    assert e.value.kind == KIND_HARNESS_UNAVAILABLE
 
 
 def test_the_daemon_starts_gaiacode_under_the_eval_override(monkeypatch, tmp_path):
@@ -295,6 +302,48 @@ def test_each_native_harness_looks_for_its_own_program(monkeypatch, tmp_path):
     )
     with pytest.raises(ValueError):
         fetch.native_flagship_candidates("gaiapy")
+
+
+@pytest.mark.parametrize("saved", ["gaiacode", "gaiazzz"])
+def test_an_unrunnable_harness_tells_the_chat_to_choose_another_in_settings(
+    monkeypatch, saved
+):
+    # Known-but-not-runnable and unknown names both reach the user as "choose another".
+    from gaia.ui.sidecar import daemon_client
+    from gaia.ui.sidecar.profiles import GAIA_PROFILE
+
+    _save_raw(saved)
+
+    def _acquire(agent_id):
+        try:
+            _flagship_manager().build_spawn_command(port=45123)
+        except SidecarSpawnError as e:
+            # What the daemon route forwards in its error-kind header.
+            raise SidecarError(str(e), kind=e.kind) from e
+        pytest.fail("the daemon started an agent")
+
+    monkeypatch.setattr(daemon_client, "acquire_handle", _acquire)
+    events = []
+
+    class _Handler:
+        def _emit(self, event):
+            events.append(event)
+
+    request = ChatRequest(session_id="s1", message="hi", agent_type="gaia")
+    _chat_helpers._dispatch_sidecar_query(_Handler(), request, [], "m", "gaia")
+
+    [error] = [e["content"] for e in events if e["type"] == "agent_error"]
+    assert "Settings" in error and "Choose another" in error
+    for word in ("reinstall", "restart", "send your message again. if"):
+        assert word not in error.lower(), word
+    assert error != GAIA_PROFILE.start_failed_text()
+
+
+def test_a_missing_gaiacpp_is_not_reported_as_an_unrunnable_harness():
+    _choose("gaiacpp")
+    with pytest.raises(SidecarSpawnError) as e:
+        _flagship_manager().build_spawn_command(port=45123)
+    assert e.value.kind == KIND_START_FAILED
 
 
 # ---------------------------------------------------------------- settings API

@@ -643,6 +643,7 @@ SERVER_STARTING_MESSAGE = "Starting the model server…"
 ANSWER_RESTART_MESSAGE = (
     "The answer so far was cut off, so GAIA is starting it again from the top."
 )
+ANSWER_CHECK_MESSAGE = "Checking the answer"
 
 
 def model_step_retries() -> int:
@@ -11176,6 +11177,25 @@ Do NOT wrap conversational replies in JSON.
         if hook is not None:
             hook(ANSWER_RESTART_MESSAGE)
 
+    def _supersede_checked_answer(self, messages: List[Dict[str, Any]]) -> None:
+        """Tell the front end the reply on screen is a draft when an answer check is next.
+
+        The check's reply, or the answer kept after it, takes the draft's place,
+        so a turn never shows two answers.
+        """
+        from gaia.agents.base.history import CHECK_TAG
+
+        last = messages[-1] if messages else {}
+        content = last.get("content")
+        if (
+            last.get("role") == "user"
+            and isinstance(content, str)
+            and content.startswith(CHECK_TAG)
+        ):
+            hook = getattr(self.console, "supersede_answer", None)
+            if hook is not None:
+                hook(ANSWER_CHECK_MESSAGE)
+
     def _server_not_back_answer(
         self,
         conversation: List[Dict[str, Any]],
@@ -13835,6 +13855,8 @@ Do NOT wrap conversational replies in JSON.
                     if latest:
                         final_answer += f"\n\nWhat I had found so far:\n{latest}"
                 break
+
+            self._supersede_checked_answer(messages)
 
             # Anything the user sent mid-turn joins the context here, where the
             # loop is between steps and nothing is half-applied. AFTER the
