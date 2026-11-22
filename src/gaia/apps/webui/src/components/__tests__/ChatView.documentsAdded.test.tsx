@@ -148,3 +148,27 @@ it('leaves the chat alone when the turn indexed nothing', async () => {
     expect(state.documents).toEqual([]);
     expect(state.sessions[0].document_ids).toEqual([]);
 });
+
+// A file attached in the composer is listed for the chat, and Remove takes it off (#8812).
+it('lists a composer attachment for the chat and removes it from there', async () => {
+    const BRIEF: Document = {
+        ...MANUAL,
+        id: 'doc-brief',
+        filename: 'private-brief.md',
+        filepath: '/Users/me/.gaia/chat/uploads/private-brief.md',
+        chunk_count: 0,
+    };
+    mockedApi.detachDocument.mockResolvedValue(undefined);
+    await answerWith({ documents_added: [BRIEF] });
+
+    const bar = screen.getByLabelText('1 document added to this chat');
+    expect(within(bar).getByText('private-brief.md')).toBeInTheDocument();
+
+    await act(async () => {
+        fireEvent.click(within(bar).getByLabelText('Remove private-brief.md from this chat'));
+    });
+
+    expect(mockedApi.detachDocument).toHaveBeenCalledWith(SESSION.id, 'doc-brief');
+    expect(useChatStore.getState().sessions[0].document_ids).toEqual([]);
+    expect(screen.queryByLabelText('1 document added to this chat')).not.toBeInTheDocument();
+});

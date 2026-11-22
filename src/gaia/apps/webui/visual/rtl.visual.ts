@@ -6744,6 +6744,48 @@ for (const locale of ['ar', 'en']) {
     });
 }
 
+const ATTACHED_BRIEF = {
+    id: 'd-brief', filename: 'private-brief.md', filepath: '/home/you/.gaia/chat/uploads/private-brief.md',
+    file_size: 1_536, chunk_count: 0, indexed_at: NOW.toISOString(), last_accessed_at: null, sessions_using: 1,
+    indexing_status: 'complete',
+};
+const ATTACH_REQUEST = 'What does the brief ask for?\n\n[private-brief.md](/api/files/uploads/private-brief.md)';
+const ATTACH_ANSWER = 'The brief asks for a launch plan by Friday.';
+
+/** A turn whose message linked a composer upload: the backend lists it as the chat's document (#8812). */
+const ATTACHED_IN_COMPOSER = [
+    { type: 'tool_start', tool: 'index_documents', detail: 'Indexing 1 document(s) for RAG' },
+    { type: 'tool_result', title: 'Index Documents', summary: 'Indexed 1 document(s) in 0.4s', success: true },
+    { type: 'chunk', content: ATTACH_ANSWER },
+    { type: 'done', message_id: 4, content: ATTACH_ANSWER, documents_added: [ATTACHED_BRIEF] },
+];
+
+async function withAttachedBrief(page: Page): Promise<void> {
+    await page.route(`**/api/sessions/${ANSWER_SESSION}/environment`, json({
+        session_id: ANSWER_SESSION,
+        folders: [
+            { path: '/home/you/.gaia/documents', kind: 'folder', source: 'gaia_documents', removable: false },
+            { path: ATTACHED_BRIEF.filepath, name: ATTACHED_BRIEF.filename, kind: 'file', source: 'document', removable: false },
+        ],
+        removed: [], internet: true, enforced: true, internet_enforced: true,
+    }));
+}
+
+for (const locale of ['ar', 'en']) {
+    test(`a file attached in the message box is listed for its chat (${locale})`, async ({ page }) => {
+        await page.addInitScript(streamThenWait, ATTACHED_IN_COMPOSER);
+        await open(page, `#${ANSWER_SESSION}`, locale, withAttachedBrief);
+        await page.locator('textarea').first().fill(ATTACH_REQUEST);
+        await page.keyboard.press('Enter');
+        await expect(page.locator('.doc-pill-name')).toHaveText('private-brief.md');
+        await expect(page.getByText(ATTACH_ANSWER)).toBeVisible();
+        const panel = page.locator('.session-panel');
+        await expect(panel.locator('[data-section="documents"]')).toContainText('private-brief.md');
+        expect(await audit(page)).toEqual([]);
+        await shot(page, `composer-attachment-listed-${locale}`);
+    });
+}
+
 const PICKED = 'Qwen3.6-35B-A3B-GGUF';
 
 /** The model list offers a downloaded Qwen; picking it starts its load, shown by *warmUp*. */

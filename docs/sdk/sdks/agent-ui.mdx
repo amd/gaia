@@ -1559,9 +1559,13 @@ Deleting a chat deletes its copies.
   </Accordion>
 
   <Accordion title="POST /api/files/upload">
-    Upload an arbitrary file for use as a chat attachment (not added to the
-    RAG library). Use `POST /api/documents/upload` instead if you want the
-    file indexed for Q&A.
+    Upload an arbitrary file for use as a chat attachment. Nothing is added to
+    the library on upload; when a chat message links a document uploaded here,
+    that turn adds it to the library and attaches it to the chat (images and
+    recordings are not added), and the turn's `done` event lists it in
+    `documents_added`. Detaching it from the chat takes the upload away from
+    that chat too. Use `POST /api/documents/upload` to add a file to the
+    library without a chat.
 
     A refused upload returns HTTP 400 (or 413) with `detail` as an object:
     `{"status", "message"}`, where `message` is an English sentence. `status` is

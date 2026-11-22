@@ -2243,12 +2243,8 @@ def _relayed_documents(rag_file_paths: list, attached: list) -> list:
     return list(rag_file_paths) + extra
 
 
-def _chat_upload_paths(db: ChatDatabase, session_id: str, attached: list) -> list:
-    """Every upload the chat's messages have linked so far, *attached* included.
-
-    A relayed flagship drops a document a turn leaves out, so a file dropped
-    into an earlier message must keep going with every later turn.
-    """
+def _linked_upload_paths(db: ChatDatabase, session_id: str, attached: list) -> list:
+    """Every upload the chat's messages have linked so far, *attached* included."""
     found = set(attached)
     for message in db.get_messages(session_id, limit=-1):
         if message["role"] == "user" and message.get("content"):
@@ -2256,6 +2252,36 @@ def _chat_upload_paths(db: ChatDatabase, session_id: str, attached: list) -> lis
                 attached_upload_paths(resolve_upload_links(message["content"]))
             )
     return sorted(found)
+
+
+def _chat_upload_paths(db: ChatDatabase, session_id: str, attached: list) -> list:
+    """The chat's uploads it may read: every one linked, less those taken off it.
+
+    A relayed flagship drops a document a turn leaves out, so a file dropped
+    into an earlier message must keep going with every later turn.
+    """
+    removed = db.removed_session_uploads(session_id)
+    return [
+        p for p in _linked_upload_paths(db, session_id, attached) if p not in removed
+    ]
+
+
+def _list_chat_uploads(
+    db: ChatDatabase, session_id: str, document_ids: list, attached: list
+) -> Tuple[list, list]:
+    """Put the chat's composer documents in its document list, before its scope is read.
+
+    Returns *document_ids* with the new ones added, and the library rows newly
+    attached, for the turn's ``documents_added``.
+    """
+    from .agent_documents import add_chat_uploads
+
+    added = add_chat_uploads(
+        db, session_id, _linked_upload_paths(db, session_id, attached)
+    )
+    ids = list(document_ids)
+    ids += [d["id"] for d in added if d["id"] not in ids]
+    return ids, added
 
 
 def _extend_cached_scope(agent, allowed: list) -> None:
@@ -3910,23 +3936,32 @@ def _done_event(
 
 
 async def _add_indexed_documents_to_library(
-    db: ChatDatabase, session_id: str, sse_handler
+    db: ChatDatabase,
+    session_id: str,
+    sse_handler,
+    listed_uploads: Optional[list] = None,
 ) -> Tuple[list, list]:
-    """Library rows for the files the agent indexed this turn, and notices.
+    """Library rows the turn attached to the chat, and notices.
 
-    Each file is recorded in the Document library and attached to the chat, as
-    if the user had added it there.
+    Each file the agent indexed is recorded in the Document library and
+    attached to the chat, as if the user had added it there. *listed_uploads*
+    are the composer attachments already put there when the turn began; they
+    are read again for what indexing them recorded.
     """
-    indexed = sse_handler.turn_ledger.indexed_documents()
-    if not indexed:
-        return [], []
     from .agent_documents import add_indexed_documents
     from .utils import doc_to_response
 
-    added = await asyncio.to_thread(add_indexed_documents, db, session_id, indexed)
+    indexed = sse_handler.turn_ledger.indexed_documents()
+    rows = [db.get_document(doc["id"]) for doc in listed_uploads or []]
+    notices: list = []
+    if indexed:
+        added = await asyncio.to_thread(add_indexed_documents, db, session_id, indexed)
+        rows += added.documents
+        notices = added.notices
+    unique = {doc["id"]: doc for doc in rows if doc}
     return (
-        [doc_to_response(doc).model_dump(mode="json") for doc in added.documents],
-        added.notices,
+        [doc_to_response(doc).model_dump(mode="json") for doc in unique.values()],
+        notices,
     )
 
 
@@ -4341,8 +4376,10 @@ async def _get_chat_response(
     activity_box: dict = {}
 
     def _do_chat():
-        # Resolve document IDs to file paths.
-        document_ids = session.get("document_ids", [])
+        attached = attached_upload_paths(request.message)
+        document_ids, _listed = _list_chat_uploads(
+            db, request.session_id, session.get("document_ids", []), attached
+        )
         rag_file_paths, library_paths = _resolve_rag_paths(db, document_ids)
 
         all_doc_paths = rag_file_paths + library_paths
@@ -4353,7 +4390,6 @@ async def _get_chat_response(
                 len(library_paths),
             )
 
-        attached = attached_upload_paths(request.message)
         # Every upload in the chat, not just this turn's: no prompt opens them later.
         allowed = _with_attachments(
             _compute_allowed_paths(all_doc_paths),
@@ -4797,10 +4833,16 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
         history_pairs = _build_history_pairs(relay_messages)
         relay_turns = transcript_turns(relay_messages)
 
-        # Resolve document IDs to file paths.
         # Session-specific docs get auto-indexed; library docs are available
         # for on-demand indexing by the agent based on user's query.
-        document_ids = session.get("document_ids", [])
+        attached = attached_upload_paths(request.message)
+        document_ids, listed_uploads = await asyncio.to_thread(
+            _list_chat_uploads,
+            db,
+            request.session_id,
+            session.get("document_ids", []),
+            attached,
+        )
         rag_file_paths, library_paths = _resolve_rag_paths(db, document_ids)
 
         all_doc_paths = rag_file_paths + library_paths
@@ -4811,7 +4853,6 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                 len(library_paths),
             )
 
-        attached = attached_upload_paths(request.message)
         # Every upload in the chat, not just this turn's: no prompt opens them later.
         allowed = _with_attachments(
             _compute_allowed_paths(all_doc_paths),
@@ -5768,7 +5809,7 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
             full_response = result_holder.get("answer", "") or ""
 
         documents_added, library_notices = await _add_indexed_documents_to_library(
-            db, request.session_id, sse_handler
+            db, request.session_id, sse_handler, listed_uploads
         )
         if library_notices:
             # Live status makes the outcome visible before the turn closes; the
