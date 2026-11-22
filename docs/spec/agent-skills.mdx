@@ -284,7 +284,9 @@ When a skill is selected — by the model calling `load_skill`, or by the user
 asking for it — the `SKILL.md` Markdown body is
 injected and the skill's declared `tools` are registered into the agent's tool
 registry. A loaded body does not stay resident forever: it collapses to a
-one-line menu entry on turns that no longer relate to it.
+one-line menu entry on turns that no longer relate to it, and on a small model
+the bodies that do relate share a budget sized to its context window (see
+[Context budget](#context-budget)).
 </Step>
 <Step title="Resources (on demand)">
 Files the body references (scripts, reference docs, templates) load only when the
@@ -411,13 +413,13 @@ to defer and simply loads.
 ### Bundled skills: code trusted by provenance
 
 A skill that ships **inside GAIA** — the flagship's starter pack in
-`hub/skills/<name>/` and its own `gaia_agent/skills/` — needs no promote. It
+`hub/skills/<name>/` and its own `gaiapy/skills/` — needs no promote. It
 loads from the `agent-bundled` root, which has no `skill-lock.json`, so its
 `tools.py` registers on the first `load_skill` and its `scripts/` are on disk
 beside it. In a checkout the flagship reads `hub/skills` in place, and only
 when it runs from that checkout's `hub/agents/gaia/python/`: an installed
 package never treats a folder beside it as bundled. The frozen binary carries
-the pack under `gaia_agent/skills`, and the build fails if any `.py` in a
+the pack under `gaiapy/skills`, and the build fails if any `.py` in a
 bundled skill imports a module the binary would not contain. An import inside a `try`
 that catches `ImportError`, or under `if TYPE_CHECKING:`, is optional: it is
 bundled when installed and never fails the build.
@@ -738,7 +740,8 @@ they are without it.
   only because its partner matched cost context on every step and its tools
   went unused. The best-scoring companion loads with the best match only when
   it reaches 0.40 and leads every remaining skill by 0.03 itself; otherwise
-  it is named as available. At most two skills load per turn.
+  it is named as available. At most two skills load per turn, and one on a
+  model with a 64K window or smaller.
   Example: `slide-decks` 0.62, `report-from-sources` 0.60 and `office-docs`
   0.595, all paired, load `slide-decks` and name the other two. On the tuning
   half, 1 of the 7 companions loaded under the earlier rule (reaching 0.40
@@ -776,10 +779,11 @@ they are without it.
   turn and its grant goes with it. It is not auto-loaded again in that
   session. Pre-approving gated tools without full access does not count.
 - **Size.** The skill bodies in the prompt this turn, plus the new one, must
-  fit in 18% of the model's context window: about 5,900 tokens of the default
-  32,768. The window is read each turn. Bodies that have collapsed to their
-  one-line reminder do not count. A skill skipped for size stays a suggestion,
-  and a warning gives its size, the tokens in use, the budget and the window.
+  fit in the model's [context budget](#context-budget): 6,000 tokens at most,
+  ~3,300 on a 64K model, ~1,600 on the default 32,768. Bodies that have
+  collapsed to their one-line reminder do not count. A skill skipped for size
+  stays a suggestion, and a warning gives its size, the tokens in use, the
+  budget and the window.
 - **Unloaded skills stay unloaded.** A skill unloaded earlier in the session,
   by the model or by you, is not auto-loaded again, also after the agent is
   rebuilt for changed settings.
@@ -791,6 +795,56 @@ they are without it.
   is inactive and why.
 
 The loaded body pins for the next few turns, like an explicit `load_skill`.
+
+### Context budget
+
+A skill body that helps a 200K-context cloud model can crowd a 64K local model
+out of its own instructions. On one such model, loading two or three skills
+with their tools took each request from about 23K to 40K tokens, and the
+model followed its instructions less well. So the flagship agent sizes the
+skill text in the prompt to the model's context window. Other agents opt in
+with `SKILL_CONTEXT_BUDGET = True`.
+
+| Window | Skill body budget | Auto-loads per turn |
+|---|---|---|
+| 16K | 1,000 tokens (the floor) | 1 |
+| 32K | ~1,600 tokens | 1 |
+| 64K | ~3,300 tokens | 1 |
+| 120K and up, or Claude (200K) | 6,000 tokens (the ceiling) | 2 |
+
+- **Budget.** 5% of the window, between 1,000 and 6,000 tokens. The window is
+  the one the conversation history is sized from. A Lemonade cloud model is
+  admitted at 64K by policy, not by its own window, so it uses the window
+  Lemonade's catalogue lists for it, or the 6,000-token ceiling when the
+  catalogue lists none. The window is read once per model, so the budget does
+  not move from turn to turn.
+- **Which bodies show in full.** When the bodies selected for a turn exceed
+  the budget, they are ranked: skills loaded since the last turn began (by
+  the model, the user, or auto-load), most recent first; then this turn's
+  relevance score; then the most recently loaded. The first is always shown
+  in full, whatever it costs. Each later one is shown in full if it still
+  fits, and otherwise as one line under its own heading:
+
+  ```
+  ==== LOADED SKILLS (summarized to fit this model's context — call
+  load_skill('<name>') again for one's full instructions, or read just the
+  references/<file> you need) ====
+  - data-explore: Explore a spreadsheet or CSV. References in
+    .../data-explore/references: charts.md, pivots.md
+  ```
+
+  Calling `load_skill` on a summarized skill shows it in full straight away,
+  summarizing another if it has to. A skill summarized partway through a turn
+  this way is announced as still loaded, with its tools and its one line,
+  never as no longer active.
+- **Tools are never withdrawn.** Only text shrinks. Every loaded skill keeps
+  its tools on the tool list whether its body is shown in full or summarized:
+  its `tools_required` and the tools it provides itself (its `tools.py`,
+  registered as `<skill>/<tool>`), on every window size.
+- **Diagnostics.** Each decision is logged at debug level under `[skills]`.
+  The turn's result and its `GAIA_TURN_LOG` record carry `skill_budget` —
+  the window and where it came from, the budget, the bodies shown in full and
+  summarized, the tokens they take, and the auto-load limit — and the Agent UI's context endpoint reports the same.
 
 ## Learned changes: the effective skill vs. the shipped one
 

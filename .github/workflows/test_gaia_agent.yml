@@ -10,12 +10,11 @@
 name: Gaia Agent Tests
 
 on:
-  workflow_call:
   push:
     branches: [ main ]
     paths:
       - '.github/workflows/test_gaia_agent.yml'
-      - '.github/workflows/build_flagship_sidecar.yml'
+      - '.github/workflows/build_gaiapy.yml'
       - 'setup.py'
       - 'pyproject.toml'
       - 'conftest.py'
@@ -89,7 +88,7 @@ on:
     types: [opened, synchronize, reopened, ready_for_review, labeled]
     paths:
       - '.github/workflows/test_gaia_agent.yml'
-      - '.github/workflows/build_flagship_sidecar.yml'
+      - '.github/workflows/build_gaiapy.yml'
       - 'setup.py'
       - 'pyproject.toml'
       - 'conftest.py'
@@ -257,7 +256,7 @@ jobs:
           echo "================================================================"
           echo "                  TOOL-PROMPT BUDGET TESTS"
           echo "================================================================"
-          # The file opens with importorskip("gaia_agent"), so it silently
+          # The file opens with importorskip("gaiapy"), so it silently
           # skipped in test_unit.yml and ran in no lane at all (#3294). This is
           # the cheapest lane that installs that wheel.
           python -m pytest \
@@ -296,7 +295,7 @@ jobs:
         env:
           GAIA_MEMORY_DISABLED: "1"
         run: |
-          # Each of these importorskips gaia_agent, at module level or per
+          # Each of these importorskips gaiapy, at module level or per
           # test, so test_unit.yml collects them and runs none of it (#4206).
           python -m pytest \
             tests/unit/messaging/test_bridge_contract.py \

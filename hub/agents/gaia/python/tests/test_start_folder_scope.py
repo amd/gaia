@@ -14,7 +14,7 @@ import pytest
 
 @pytest.fixture
 def started_in(monkeypatch, tmp_path):
-    from gaia_agent.agent import GaiaAgent, GaiaAgentConfig
+    from gaiapy.agent import GaiaAgent, GaiaAgentConfig
 
     from gaia.agents.base.tools import _TOOL_REGISTRY
 

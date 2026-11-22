@@ -8,6 +8,7 @@
     "browse_directory",
     "check_cli_setup",
     "create_table",
+    "dictate_document",
     "drop_table",
     "edit_file",
     "execute_python_file",

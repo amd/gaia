@@ -18,6 +18,8 @@ export type PanelSectionId =
 export interface PanelSignals {
     /** Files the chat has changed on disk. */
     changedFiles?: number;
+    /** How many of those are source code or project files. */
+    changedCode?: number;
     /** Names of the skills it has loaded. */
     skills?: string[];
 }

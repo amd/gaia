@@ -16,7 +16,7 @@ var _ MemoryProvider = (*SubprocessClient)(nil)
 
 // memoryDumpQuery is the sentinel FetchMemory sends instead of a real
 // question. Must match MEMORY_DUMP_QUERY in
-// hub/agents/gaia/python/gaia_agent/memory_dump.py exactly — the wire text is
+// hub/agents/gaia/python/gaiapy/memory_dump.py exactly — the wire text is
 // the whole contract, and the leading/trailing NUL makes it something a human
 // could never type, so it can never collide with a real chat message.
 const memoryDumpQuery = "\x00gaia:memory_dump\x00"
@@ -31,7 +31,7 @@ type MemoryProvider interface {
 }
 
 // MemoryDump mirrors the JSON payload build_memory_dump() in
-// hub/agents/gaia/python/gaia_agent/memory_dump.py returns. Available is
+// hub/agents/gaia/python/gaiapy/memory_dump.py returns. Available is
 // false when the session has no live store (Lemonade down, embedding model
 // not pulled, GAIA_MEMORY_DISABLED=1) — Reason is the actionable, cause-
 // specific explanation from MemoryMixin.memory_unavailable_message(), not a
@@ -56,7 +56,7 @@ type MemoryStats struct {
 	ByContext      map[string]int `json:"by_context"`
 	SensitiveCount int            `json:"sensitive_count"`
 	EntityCount    int            `json:"entity_count"`
-	AvgConfidence  float64        `json:"avg_confidence"`
+	AvgConfidence  *float64       `json:"avg_confidence,omitempty"`
 }
 
 // MemoryContext is one row of MemoryStore.get_contexts().
@@ -71,16 +71,16 @@ type MemoryContext struct {
 // the LLM to summarize its own memory, which is exactly the unreliable path
 // this view replaces).
 type MemoryItem struct {
-	ID         string  `json:"id"`
-	Category   string  `json:"category"`
-	Content    string  `json:"content"`
-	Entity     string  `json:"entity,omitempty"`
-	Context    string  `json:"context"`
-	Confidence float64 `json:"confidence"`
-	Sensitive  bool    `json:"sensitive"`
-	CreatedAt  string  `json:"created_at,omitempty"`
-	UpdatedAt  string  `json:"updated_at,omitempty"`
-	LastUsed   string  `json:"last_used,omitempty"`
+	ID         string   `json:"id"`
+	Category   string   `json:"category"`
+	Content    string   `json:"content"`
+	Entity     string   `json:"entity,omitempty"`
+	Context    string   `json:"context"`
+	Confidence *float64 `json:"confidence,omitempty"`
+	Sensitive  bool     `json:"sensitive"`
+	CreatedAt  string   `json:"created_at,omitempty"`
+	UpdatedAt  string   `json:"updated_at,omitempty"`
+	LastUsed   string   `json:"last_used,omitempty"`
 }
 
 // FetchMemory asks the running agent for its memory snapshot over the SAME

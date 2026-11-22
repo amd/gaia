@@ -35,9 +35,9 @@ _AGENT_SOURCE_SUBDIRS = {
 
 # Map wheel name -> actual top-level Python package name.
 # Needed because wheel names use hyphens but package directories use underscores,
-# and the mapping isn't always a simple replace (e.g. gaia-agent-gaia -> gaia_agent).
+# and the mapping isn't always a simple replace (e.g. gaia-agent-gaia -> gaiapy).
 _WHEEL_TOP_LEVEL_PACKAGE = {
-    "gaia-agent-gaia": "gaia_agent",
+    "gaia-agent-gaia": "gaiapy",
 }
 
 _REPO_URL = "https://github.com/amd/gaia.git"

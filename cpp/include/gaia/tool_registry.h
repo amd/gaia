@@ -21,8 +21,21 @@
 
 namespace gaia {
 
+/// Runs before a tool asks for confirmation. A returned object is the call's
+/// result and the tool doesn't run (e.g. internet off for this chat).
+using ToolPreCheck = std::function<std::optional<json>(const ToolInfo& tool, const json& args)>;
+
+/// Runs before the pre-check and may correct the arguments the tool will get.
+using ToolArgRewrite = std::function<void(const ToolInfo& tool, json& args)>;
+
 class GAIA_API ToolRegistry {
 public:
+    /// Install (or clear, with {}) the argument correction.
+    void setArgRewrite(ToolArgRewrite rewrite) { argRewrite_ = std::move(rewrite); }
+
+    /// Install (or clear, with {}) the pre-confirmation check.
+    void setPreCheck(ToolPreCheck check) { preCheck_ = std::move(check); }
+
     /// Register a tool with the registry.
     /// @param info Complete tool information including callback.
     /// @throws std::runtime_error if a tool with the same name is already registered.
@@ -85,6 +98,10 @@ public:
     static std::string validateArgsAgainstSchema(const std::vector<ToolParameter>& params,
                                                  const json& args);
 
+    /// Turn whole-string numbers and "true"/"false" into the declared type.
+    /// Anything else is returned unchanged for validation to judge.
+    static json coerceArgsToSchema(const std::vector<ToolParameter>& params, const json& args);
+
     // ---- Enable / disable ----
 
     /// Enable or disable a tool by name.
@@ -117,6 +134,8 @@ public:
     void setAllowedToolsStore(std::shared_ptr<AllowedToolsStore> store);
 
 private:
+    ToolPreCheck preCheck_;
+    ToolArgRewrite argRewrite_;
     std::map<std::string, ToolInfo> tools_;
     ToolConfirmCallback confirmCallback_;
     ToolPolicy defaultPolicy_ = ToolPolicy::ALLOW;

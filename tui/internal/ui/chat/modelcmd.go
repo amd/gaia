@@ -14,7 +14,7 @@ import (
 // Lemonade models are downloaded and validate a Claude id against a live
 // credential. So it is recognized here (so the composer never treats it as a
 // question typed at the LLM) but still dispatched over the query channel —
-// see gaia_agent.stdio.run_model_command for why that channel, not the
+// see gaiapy.stdio.run_model_command for why that channel, not the
 // fire-and-forget control one /full-access uses, is the only one this transport
 // can reliably carry a response back on.
 
@@ -47,7 +47,7 @@ func isModelCommand(query string) bool {
 		strings.HasPrefix(trimmed, modelCommandPrefix+" ")
 }
 
-// modelCommandPrefix must match gaia_agent.stdio.MODEL_COMMAND_PREFIX — the
+// modelCommandPrefix must match gaiapy.stdio.MODEL_COMMAND_PREFIX — the
 // agent dispatches on the same literal.
 const modelCommandPrefix = "/model"
 
@@ -77,6 +77,10 @@ func (m ChatModel) refuseModelSwitch(arg string) string {
 	}
 
 	if client.IsClaudeModelID(arg) {
+		if m.nativeAgent() {
+			return client.NativeClaudeUnavailable + " Nothing was switched: this session is still on " +
+				m.currentModelName() + "."
+		}
 		if _, ok := client.KnownClaudeModel(arg); ok {
 			return ""
 		}
@@ -124,11 +128,20 @@ func (m ChatModel) refuseModelSwitch(arg string) string {
 // suggesting it to a local session both misreads the state and pushes
 // off-machine inference at someone who may have no ANTHROPIC_API_KEY.
 func (m ChatModel) remoteAlternative() string {
+	if m.nativeAgent() {
+		return "Or pick a cloud model with /provider."
+	}
 	if m.claudeMode {
 		return "Or stay on Claude — this session already is."
 	}
 	return "Or move to Claude with `/model " + client.ExampleClaudeModelID +
 		"`, which sends the conversation to Anthropic and needs ANTHROPIC_API_KEY."
+}
+
+// nativeAgent reports whether this session's agent is the C++ one (gaiacpp).
+func (m ChatModel) nativeAgent() bool {
+	c, ok := m.client.(interface{ Native() bool })
+	return ok && c.Native()
 }
 
 // currentModelName names the model this session is on right now, for a

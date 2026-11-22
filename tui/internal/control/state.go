@@ -140,6 +140,11 @@ type Frame struct {
 // sends three keys and reads the screen can see a mid-sequence frame.
 type MarkMsg struct{ ID int64 }
 
+// InputBatchEndMsg tells the model that an injected batch of keys has ended,
+// so nothing more is being typed behind its last key. A model that waits to
+// see whether a key was the start of a word can stop waiting.
+type InputBatchEndMsg struct{}
+
 // State holds everything the HTTP handlers read: the last rendered frame, the
 // frame history, the terminal size, and the model's own snapshot.
 //
@@ -387,9 +392,12 @@ func (r Recorder) Init() tea.Cmd {
 func (r Recorder) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch m := msg.(type) {
 	case MarkMsg:
-		// The sentinel is ours; the wrapped model must never see it.
+		// The sentinel is ours; the wrapped model must never see it. It is told
+		// only that the batch is over.
 		r.state.setPendingMark(m.ID)
-		return r, nil
+		next, cmd := r.inner.Update(InputBatchEndMsg{})
+		r.inner = next
+		return r, cmd
 	case tea.WindowSizeMsg:
 		r.state.SetSize(m.Width, m.Height)
 	case tea.KeyMsg:

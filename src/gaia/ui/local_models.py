@@ -114,6 +114,29 @@ def _fit(model: Dict[str, Any], size_gb: Optional[float], capacity) -> Optional[
     )
 
 
+def _tight(model: Dict[str, Any], size_gb: Optional[float], capacity) -> bool:
+    """The model fits, but would leave other apps less RAM than GAIA keeps for
+    them (``model_fit.with_app_headroom``). Never for an NPU model, nor for the
+    ladder's floor, which has no smaller model to suggest instead."""
+    from gaia.llm.lemonade_client import (
+        DEFAULT_MODEL_LADDER,
+        _model_ids_match,
+        find_model_requirement,
+        runs_on_npu,
+    )
+    from gaia.llm.model_fit import kv_cache_gb, required_memory_gb, with_app_headroom
+
+    if capacity is None or size_gb is None:
+        return False
+    if runs_on_npu(model["id"]) or model.get("recipe") == "flm":
+        return False
+    if _model_ids_match(model["id"], DEFAULT_MODEL_LADDER[-1]):
+        return False
+    req = find_model_requirement(model["id"])
+    kv = kv_cache_gb(req.kv_bytes_per_token, req.min_ctx_size) if req else 0.0
+    return required_memory_gb(size_gb, kv) > with_app_headroom(capacity).memory_gb
+
+
 def annotate_local_models(
     models: List[Dict[str, Any]],
     *,
@@ -168,6 +191,7 @@ def annotate_local_models(
                 ),
                 "size_gb": round(size, 1) if size else None,
                 "fits": None if fit_reason is None else fit_reason == "",
+                "tight": fit_reason == "" and _tight(m, size, capacity),
                 "available": unavailable is None,
                 "unavailable_reason": unavailable,
                 # The same reasons, for the UI to say in its own language.

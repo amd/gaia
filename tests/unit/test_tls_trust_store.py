@@ -58,7 +58,7 @@ def test_missing_truststore_warns_on_stderr_and_keeps_default(
     message = captured.err
     assert "system certificate store" in message
     assert "CERTIFICATE_VERIFY_FAILED" in message
-    assert "pip install --upgrade 'truststore>=0.10.0'" in message
+    assert "pip install --upgrade 'truststore>=0.10.3'" in message
     assert fresh_tls._injected is False
 
 
@@ -110,7 +110,7 @@ def test_process_entry_points_inject(monkeypatch, module_name, entry):
         getattr(module, entry)()
 
 
-@pytest.mark.parametrize("module_name", ["gaia_agent.entry"])
+@pytest.mark.parametrize("module_name", ["gaiapy.entry"])
 def test_hub_agent_sidecars_inject(monkeypatch, module_name):
     module = pytest.importorskip(module_name)
     monkeypatch.setattr(tls, "use_os_trust_store", mock.Mock(side_effect=_Stop))

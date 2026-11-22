@@ -250,7 +250,7 @@ Both defaults are overridable (`--sidecar-dir`, `--cache-dir`).
 
 ## 5. Sidecar HTTP surface
 
-Served by `gaia_agent.server`. Bound to `127.0.0.1` only.
+Served by `gaiapy.server`. Bound to `127.0.0.1` only.
 
 Every request must carry a loopback `Host` header. A `Host` that is non-loopback,
 absent or empty is refused with `400` before routing — that check is what defeats
@@ -291,7 +291,7 @@ the header.
 The full, machine-readable contract — every field, type, and which are
 required — is the committed
 [`openapi.gaia.json`](https://github.com/amd/gaia/blob/main/hub/agents/gaia/python/openapi.gaia.json),
-regenerated from the live routes by `python -m gaia_agent.export_openapi` and
+regenerated from the live routes by `python -m gaiapy.export_openapi` and
 checked for drift in CI. Required: **`query`**, **`run_id`**,
 **`context`** — `additionalProperties: false`, so an unrecognized field or a
 missing required one is `422` before the agent runs. `run_id` must parse as a
@@ -299,6 +299,26 @@ UUID (`uuid.UUID(v)`); a non-UUID string is also `422`. Everything else
 (`model`, `provider`, `max_steps`, `session_id`, `can_answer_questions`,
 `documents`, `allowed_paths`, `working_directory`, `memory`, `internet_off`,
 `changes_turn_id`, `surface`) is optional.
+
+A `query` that starts with `/research` is a research turn: the agent loads its
+`research-report` skill (or reuses it) and keeps the skill's instructions in the
+prompt for the turn and the next few. The topic after `/research` becomes the
+user's message, so memory and the conversation keep what the user asked, and
+the turn's context gets a research brief: cite, inline, a page fetched in the
+conversation for every factual claim, and end with a Sources list. Bracketed
+notes a caller puts before the command (the Agent UI's `[This chat is working
+in the folder …]`) stay in front of the topic. A bare `/research` asks the user
+for a topic. `/research-report`, the skill's own `/<skill-name>` command, is the
+same research turn, brief and citation check included.
+Before a research turn's answer is final, its cited links are checked against
+the conversation's `search_web`, `fetch_page` and `download_file` results (a
+PDF counts once its downloaded file is read): a link that was never fetched, or that appears in
+no result at all, is sent back to the model once to fetch or drop. Links still
+unbacked after that are listed in the `final` answer under "I couldn't confirm
+all of this".
+The agent needs `search_web` and `fetch_page` for it; a profile without them
+ends the turn with an `error` naming the missing tools. Any other `query` runs
+unchanged.
 
 `max_steps` (≥ 1) caps agent-loop steps for this turn. Omit it and the default
 is **1000** (`FLAGSHIP_MAX_STEPS`). A value in this body, or
@@ -338,8 +358,13 @@ it is granted. If the session has full access
 (enabled through the session bypass route) and the caller can answer for the
 session, that path is granted without a separate path prompt; this is the same
 full-access behavior as in-process. Full access does not override
-`GAIA_ALLOWED_PATHS`, the secret-path denylist, the write denylist, or the
-refusal of grants that cover the home folder or a drive root. Omit
+`GAIA_ALLOWED_PATHS`, the secret-path denylist, the write denylist, the
+refusal of grants that cover the home folder or a drive root, or GAIA's chat
+data (`$GAIA_HOME/chat`: every chat's attachments and document copies), where
+the file tools open only a path sent in this turn's `documents` or
+`allowed_paths`, and only to read (full access still runs shell and Python
+code unchecked). A refused path there, or a file taken off the chat, is
+reported to the model with "attach it to this chat (again)" as the remedy. Omit
 `allowed_paths` for the agent's default scope. Pre-2.18 binaries `422` the
 field. Whatever the scope, its existing folders are named once in the session
 context at the start of the first user message, when the session is built, with GAIA's documents folder first; a folder
@@ -477,7 +502,15 @@ its own prompt is in `prompt_context`: `working_directory` (where a shell call
 runs, when the model's arguments don't say it), `risk_note` (why the
 agent's checks don't cover the call, which is then approved once) and
 `file_path` (the absolute path a write lands at, when the model gave a relative
-one). A prompt
+one) and `script` (for `execute_python_file`, the file's content as read when
+the prompt was built: `{ text, hidden_lines }` with up to 400 lines or 48,000
+characters and a count of the lines left out, or `{ unreadable }`, one of
+`missing`, `not_text`, `too_large`, `unreadable`). Show `script` to the user:
+the path alone does not say what will run. A credential file, or a path no
+approval can grant, never reaches a prompt: the call is refused first and the
+file is not opened. A file that changes after the
+prompt was built is not run; the call returns an error and the agent asks
+again. A prompt
 the agent raises on its own, such as `allow_path_access`, has the path it asks
 about in `args`.
 
@@ -694,7 +727,7 @@ backward-compatible addition and is accepted.
 
 Loopback binding is not access control: this sidecar exposes shell and file
 tools, so an unauthenticated port lets any page the user visits drive it. Three
-controls guard it, all in `gaia_agent.caller_auth`, which binds this sidecar's
+controls guard it, all in `gaiapy.caller_auth`, which binds this sidecar's
 env-var names and exempt paths onto the shared mechanism in
 `gaia.sidecar.caller_auth`:
 
@@ -753,7 +786,10 @@ scratch directory stays writable. An empty, relative or missing entry stops
 the sidecar at startup, before it binds a port. It confines the agent's tools
 — every file tool, search, index, and the shell path check outside full access
 — not code they run: under full access the shell and Python tools run in any
-folder, and a `run_python` script or shell command can always read anything the OS user can,
+folder, and a `run_python` script or shell command can always read anything the OS user can
+(outside full access, code whose text names a credential folder or file is refused before it runs,
+a credential file only when the code reads it,
+but code that works a path out while it runs is not caught),
 so isolating a run from files it must not see needs a separate OS user,
 container or VM.
 
@@ -761,7 +797,7 @@ container or VM.
 
 The HTTP server above is the surface this package drives, and everything in
 this document describes it. It is not the agent's only transport:
-`gaia_agent.stdio` runs the same agent over newline-delimited JSON on
+`gaiapy.stdio` runs the same agent over newline-delimited JSON on
 stdin/stdout — no port, no token, no discovery file. The terminal UI reaches it
 that way when it spawns the agent as a subprocess; an agent **installed** from
 the hub, which is what this package delivers, is supervised by the daemon over
@@ -772,12 +808,20 @@ a JSON line carrying a `gaia_control` key: a back-channel that answers a
 confirmation prompt *while* a turn is in flight, toggles full access or
 "accept edits" (file edits inside the starting folder run unasked; commands still
 ask), and stops a turn (`cancel`) without ending the process — so loaded skills,
-"always" grants, history and the permission mode survive a cancel. When stdin
+"always" grants, history and the permission mode survive a cancel. Clearing the
+conversation (the `clear_conversation` query or the `clear_history` control) drops
+its "always" grants with its history; full access and loaded skills stay. When stdin
 closes mid-turn (the host has gone), the running turn is cancelled and saved in
 the session history as interrupted: "This answer was interrupted when GAIA
 closed." The question is saved when the turn starts, so it survives even if the
 host kills the process before the turn ends. Another process sharing the
 history file leaves a turn that is still running out of its model view.
+
+Over stdio, a recorded turn is followed by the same `context_usage` event,
+measured for the next message, so the terminal UI's context meter moves with
+every answer; and a turn that runs a plan sends it on a `status` as
+`plan: {steps, current_step}`. Both are in §10.3 of
+`docs/spec/agent-ui-query-sse-contract.md`.
 
 Contract 2.14 gave the HTTP surface the same three capabilities per run and per
 session — `/tool_decision`, `/sessions/{id}/bypass` (the route keeps its
@@ -789,7 +833,8 @@ of the process (embeddings stay on Lemonade either way).
 Sessions a host can list and reopen are stdio-only too: `--history-file` plus
 `--session-kind` keeps the session's title, status (`running`, `waiting` on a
 permission prompt, `done`, `failed`) and a readable transcript beside the
-transcript file. The terminal UI's `/sessions` and `--resume` read it. The
+transcript file. The terminal UI's `/sessions` and `--resume` read it, and
+reopen a session in a new process, so it starts with no "always" grants. The
 layout is §10.4 of `docs/spec/agent-ui-query-sse-contract.md`.
 
 The stdio TUI also supports Local, Fireworks AI, and AMD LLM Gateway through
@@ -908,7 +953,7 @@ the Google or Microsoft connector connected and granted to the agent. Drafting
 and sending come from the bundled `send-email` skill, whose tools join the
 list as `send-email/<tool>` once it loads; each send, and each change to a
 saved draft, raises a `needs_confirmation` first. A model on the `compact`
-feature tier (Gemma 4 E4B) is offered neither. Setup:
+feature tier (Gemma 4 E4B, Qwen3.5 4B and 2B) is offered neither. Setup:
 [Email guide](https://amd-gaia.ai/docs/guides/email).
 
 ## 6. Process ownership

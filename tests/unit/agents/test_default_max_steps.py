@@ -46,9 +46,9 @@ class TestDefaultMaxSteps(unittest.TestCase):
         import pytest
 
         # ChatAgentConfig ships in the flagship gaia-agent-gaia wheel (#6099).
-        pytest.importorskip("gaia_agent")
+        pytest.importorskip("gaiapy")
 
-        from gaia_agent.chat_agent import ChatAgentConfig
+        from gaiapy.chat_agent import ChatAgentConfig
 
         with mock.patch.dict(os.environ, {"GAIA_AGENT_MAX_STEPS": "42"}):
             self.assertEqual(ChatAgentConfig().max_steps, 42)

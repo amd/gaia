@@ -41,7 +41,7 @@ import time
 import uuid
 from typing import Any, Callable, ContextManager, Dict, List, Optional
 
-from gaia.agents.base.call_risk import RISK_NOTE_ARG
+from gaia.agents.base.call_risk import RISK_NOTE_ARG, SCRIPT_ARG
 from gaia.agents.base.tool_grants import (
     PATH_ACCESS_PROMPT_TOOL,
     PROJECT_TRUST_PROMPT_TOOL,
@@ -318,6 +318,8 @@ def _dispatch_one(
                     args[SITE_ARG] = str(context["site"])
                 if context.get("file_path"):
                     args["file_path"] = str(context["file_path"])
+                if isinstance(context.get("script"), dict):
+                    args[SCRIPT_ARG] = context["script"]
                 # What GAIA checked, in place of the model's own spelling.
                 if isinstance(context.get("shown_args"), dict):
                     args.update(context["shown_args"])

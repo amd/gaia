@@ -25,16 +25,18 @@ SERVICE_NAME = "gaia.connections"
 
 
 def _keyring():
+    """``gaia.connectors.keyring_access``; a missing keyring is a 503."""
     try:
-        from gaia.connectors._keyring import keyring
-        from gaia.connectors.store import verify_keyring_backend
-
-        # The sidecar's own check sees only DaemonKeyring, so refuse a
-        # plaintext backend here, where the secrets are actually stored.
-        verify_keyring_backend()
+        from gaia.connectors import keyring_access
     except ConnectorsError as e:
         raise HTTPException(status_code=503, detail=str(e)) from e
-    return keyring
+    return keyring_access
+
+
+def _refused(e: ConnectorsError) -> HTTPException:
+    # The sidecar's own check sees only DaemonKeyring, so a plaintext backend
+    # is refused here, where the secrets are actually stored.
+    return HTTPException(status_code=503, detail=str(e))
 
 
 class KeychainSlot(BaseModel):
@@ -77,7 +79,9 @@ def build_keychain_router(auth) -> APIRouter:
         _check_service(slot)
         keyring = _keyring()
         try:
-            return {"value": keyring.get_password(slot.service, slot.username)}
+            return {"value": keyring.read(slot.service, slot.username)}
+        except ConnectorsError as e:
+            raise _refused(e) from e
         except keyring.errors.KeyringError as e:
             raise _unavailable("read", e) from e
 
@@ -89,7 +93,9 @@ def build_keychain_router(auth) -> APIRouter:
         _check_service(write)
         keyring = _keyring()
         try:
-            keyring.set_password(write.service, write.username, write.value)
+            keyring.write(write.service, write.username, write.value)
+        except ConnectorsError as e:
+            raise _refused(e) from e
         except keyring.errors.KeyringError as e:
             raise _unavailable("write", e) from e
         return {"ok": True}
@@ -102,7 +108,9 @@ def build_keychain_router(auth) -> APIRouter:
         _check_service(slot)
         keyring = _keyring()
         try:
-            keyring.delete_password(slot.service, slot.username)
+            keyring.delete(slot.service, slot.username)
+        except ConnectorsError as e:
+            raise _refused(e) from e
         except keyring.errors.PasswordDeleteError as e:
             raise HTTPException(status_code=404, detail="Not stored.") from e
         except keyring.errors.KeyringError as e:

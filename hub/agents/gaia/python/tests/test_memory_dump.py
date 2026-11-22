@@ -10,8 +10,8 @@ not "the call is valid").
 import json
 
 import pytest
-from gaia_agent import stdio
-from gaia_agent.memory_dump import (
+from gaiapy import stdio
+from gaiapy.memory_dump import (
     MAX_MEMORY_DUMP_ITEMS,
     MEMORY_DUMP_QUERY,
     build_memory_dump,

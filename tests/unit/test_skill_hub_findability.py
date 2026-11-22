@@ -33,6 +33,7 @@ QUERIES: dict[str, list[str]] = {
     "coding": ["fix a bug", "refactor code", "make a test pass"],
     "daily-brief": ["morning briefing", "what do I need to know today"],
     "data-explore": ["csv totals", "spreadsheet breakdown"],
+    "dictation": ["turn this PDF into audio", "audiobook"],
     "document-brief": ["contract", "what does this PDF say"],
     "file-ops": ["edit a file", "create a new file"],
     "github-triage": ["github issues", "github notifications"],

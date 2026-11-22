@@ -228,7 +228,7 @@ describe('a file the model server could not embed', () => {
 });
 
 describe('a file the model server was too busy to embed', () => {
-    // GAIA retries these only after an outage, so the row must not promise it will.
+    // GAIA never retries these by itself, so the row and the header must not say it waits.
     const BUSY: Document = {
         ...BROKEN,
         id: 'doc-busy',
@@ -249,6 +249,17 @@ describe('a file the model server was too busy to embed', () => {
         const row = document.querySelector('.doc-failure')!;
         expect(row).toHaveTextContent('Retry in a moment');
         expect(row).not.toHaveTextContent('when the server is back');
+    });
+
+    it('is counted as a file to retry, not as waiting for the model server', async () => {
+        mockedApi.listDocuments.mockResolvedValue({ documents: [BUSY, BROKEN], total: 2, total_size_bytes: 2048, total_chunks: 0 });
+        render(<DocumentLibrary />);
+
+        await screen.findByText('busy.md');
+        const stats = document.querySelector('.doc-stats')!;
+        expect(stats).toHaveTextContent('1 to retry');
+        expect(stats).not.toHaveTextContent('waiting for the model server');
+        expect(stats).toHaveTextContent("1 couldn't be read");
     });
 
     it('asks for a Retry when the add fails, instead of promising GAIA adds it later', async () => {

@@ -12,8 +12,8 @@
 
 import { expect, test, type Page } from '@playwright/test';
 
-import { ANSWER_SESSION, AUTOMATIONS, DISCORD_STATES, MESSAGES, MODEL_LIST, NOW, RESOURCES, SESSIONS, SYSTEM_STATUS, TOOL_STATUS, holdOnToolStatus, mockApi, shownText, useLocale, useTheme, withAutomations, withConnectors, withCrashedBackend, withDesktopBridges, withDiscord, withMemory, withModelPage, withSettingsPanes, withoutFlagship, type MemoryState } from './fixtures';
-import { ENGINE_FAILED, NARROW_SCENES, PLAN_COLD, SETUP_SCENES, scene, withSetup } from './setup-scenes';
+import { ANSWER_SESSION, AUTOMATIONS, DISCORD_STATES, MESSAGES, MODEL_LIST, NOW, RESOURCES, SESSIONS, SYSTEM_STATUS, TOOL_STATUS, holdOnToolStatus, mockApi, shownText, useLocale, useTheme, withAutomations, withConnectors, withCrashedBackend, withDesktopBridges, withDiscord, withMemory, withModelPage, withSettingsPanes, withoutFlagship, withAgentPrograms, AGENT_DOWNLOADING, AGENT_DOWNLOAD_FAILED, type AgentProgramsAnswers, type MemoryState } from './fixtures';
+import { ENGINE_FAILED, NARROW_SCENES, PLAN_COLD, SETUP_SCENES, expectSnugTags, scene, withSetup } from './setup-scenes';
 
 test.use({ viewport: { width: 1400, height: 900 } });
 
@@ -621,6 +621,40 @@ for (const locale of ['en', 'ar']) {
         await expect(menu).toHaveCount(0);
         expect(await audit(page)).toEqual([]);
     });
+
+    for (const [width, height] of [[1280, 800], [390, 844], [1280, 420]]) {
+        test(`a long skill list stays inside a ${width}x${height} window (${locale})`, async ({ page }) => {
+            await page.setViewportSize({ width, height });
+            const skills = Array.from({ length: 24 }, (_, i) => ({ ...SKILL_LIST[0], name: `skill-${String(i).padStart(2, '0')}` }));
+            await open(page, '', locale, (p) => p.route((url) => url.pathname === '/api/skills', (route) =>
+                route.fulfill({ json: { skills, invalid: {} } })));
+            const box = page.locator('.new-chat textarea').first();
+            await box.fill('/');
+            const menu = page.locator('.skill-menu');
+            await expect(menu.getByRole('option')).toHaveCount(24);
+            await shot(page, `skill-menu-long-${width}x${height}-${locale}`);
+
+            const [menuBox, composerBox] = [(await menu.boundingBox())!, (await page.locator('.new-chat .composer').boundingBox())!];
+            expect(menuBox.y, 'the list runs off the top of the window').toBeGreaterThanOrEqual(0);
+            expect(menuBox.y + menuBox.height, 'the list runs off the bottom of the window').toBeLessThanOrEqual(height);
+            const clear = menuBox.y + menuBox.height <= composerBox.y + 1 || menuBox.y >= composerBox.y + composerBox.height - 1;
+            expect(clear, 'the list covers the message box').toBe(true);
+            expect(menuBox.height, 'the list is too short to read a row').toBeGreaterThan(60);
+
+            // Every skill can be reached: the first is in view, and the arrow keys bring the last one in.
+            const inView = async (name: string) => {
+                const row = (await menu.getByRole('option', { name }).boundingBox())!;
+                const now = (await menu.boundingBox())!;
+                return row.y >= now.y - 1 && row.y + row.height <= now.y + now.height + 1;
+            };
+            expect(await inView('/skill-00'), 'the first skill is out of view').toBe(true);
+            await box.press('ArrowUp');
+            await expect(menu.getByRole('option', { name: '/skill-23' })).toHaveAttribute('aria-selected', 'true');
+            expect(await inView('/skill-23'), 'the selected skill is out of view').toBe(true);
+            // At phone width the closed sidebar sits off screen by design.
+            if (width >= 1280) expect(await audit(page)).toEqual([]);
+        });
+    }
 }
 
 const BIG_LIBRARY = Array.from({ length: 600 }, (_, i) => ({
@@ -648,6 +682,31 @@ for (const locale of ['en', 'ar']) {
         await expect(page.locator('.new-chat-doc')).toHaveCount(600);
         await onScreen('the whole list opened');
         await shot(page, `new-chat-600-docs-open-${locale}`);
+        expect(await audit(page)).toEqual([]);
+    });
+}
+
+for (const locale of ['en', 'ar']) {
+    test(`research mode: the chip, the box's prompt, and a chat's compact chip (${locale})`, async ({ page }) => {
+        await open(page, '', locale);
+        const chip = page.locator('.new-chat .composer-chip-research');
+        await expect(chip).toBeVisible();
+        await chip.click();
+        await expect(chip).toHaveAttribute('aria-pressed', 'true');
+        await expect(page.locator('.new-chat textarea').first()).toHaveAttribute('placeholder', /research|يبحث/);
+        await shot(page, `research-on-new-chat-${locale}`);
+        expect(await audit(page)).toEqual([]);
+        if (locale === 'ar') expect(await untranslated(page, '.new-chat .composer-row')).toEqual([]);
+
+        // Another chat is not affected; its own chip is an icon in the crowded box.
+        await page.goto(`/#${ANSWER_SESSION}`);
+        const inChat = page.locator('main .composer-chip-research').first();
+        await expect(inChat).toHaveAttribute('aria-pressed', 'false');
+        await expect(inChat.locator('.composer-chip-label')).toHaveCount(0);
+        await inChat.click();
+        await expect(inChat).toHaveAttribute('aria-pressed', 'true');
+        await expect(page.locator('main textarea').first()).toHaveAttribute('placeholder', /research|يبحث/);
+        await shot(page, `research-on-chat-${locale}`);
         expect(await audit(page)).toEqual([]);
     });
 }
@@ -912,6 +971,7 @@ for (const locale of ['ar', 'en']) {
             await p.route('**/api/settings', (route) => route.fulfill({ json: {
                 custom_model: 'no-such-model-xyz-123', model_status: { found: false, checked: true, downloaded: false, loaded: false },
                 context_size: null, agent_mode: 'goal_driven', dynamic_tools: false, dynamic_tools_locked: false,
+                network_policy: 'cloud_allowed', flagship_agent: 'gaiapy', gaiacpp_available: true,
             } }));
         });
         await page.locator('.msg-error .msg-try-again').filter({ hasText: /Advanced|متقدم/ }).click();
@@ -1970,6 +2030,36 @@ for (const locale of ['en', 'ar']) {
         expect(await audit(page)).toEqual([]);
     });
 
+    // A busy-server file showed Failed with Retry, was counted as waiting, and was retried behind the user's back.
+    test(`a document the model server was too busy to add (${locale})`, async ({ page }) => {
+        let retried = 0;
+        await open(page, '', locale, async (p) => {
+            await p.route('**/api/documents/*/reindex', (route) => {
+                retried += 1;
+                return route.fulfill({ status: 500, json: { detail: 'Reindex failed; see server logs for details' } });
+            });
+            await p.route('**/api/documents', (route) => route.fulfill({ json: {
+                documents: [
+                    { id: 'd1', filename: 'busy.md', filepath: 'C:/busy.md', file_size: 1024, chunk_count: 0, indexing_status: 'failed', error_kind: 'model_server_busy', last_error: 'RAG indexing failed for busy.md: Lemonade Server timed out', indexed_at: NOW.toISOString(), last_accessed_at: null, sessions_using: 0 },
+                ],
+                total: 1, total_size_bytes: 1024, total_chunks: 0,
+            } }));
+        });
+        await page.locator('.sb').getByRole('button', { name: /Documents/ }).click();
+        const row = page.locator('.doc-failure');
+        await expect(row.locator('.doc-status-failed')).toBeVisible();
+        const stats = page.locator('.doc-stats');
+        await expect(stats).toContainText(locale === 'ar' ? 'بحاجة إلى إعادة المحاولة: 1' : '1 to retry');
+        await expect(stats.locator('.doc-stats-server')).toHaveCount(0);
+        if (locale === 'ar') {
+            expect(await untranslated(page, '.doc-failure', 'bdi')).toEqual([]);
+            expect(await untranslated(page, '.doc-stats', 'bdi')).toEqual([]);
+        }
+        expect(retried, 'a busy-server file waits for the Retry button').toBe(0);
+        await shot(page, `documents-${locale}-server-busy`);
+        expect(await audit(page)).toEqual([]);
+    });
+
     // The chat's document bar called a server-down file unreadable while the library didn't.
     test(`the chat's document bar with a file waiting for the model server (${locale})`, async ({ page }) => {
         const docs = [
@@ -2181,6 +2271,19 @@ test('settings in the dark theme', async ({ page }) => {
 });
 
 for (const [locale, theme] of [['ar', 'light'], ['ar', 'dark'], ['en', 'light']] as const) {
+    test(`image creation settings (${locale}, ${theme})`, async ({ page }) => {
+        await open(page, '', locale, undefined, theme);
+        await page.getByRole('button', { name: /Settings/ }).first().click();
+        await page.getByRole('dialog').locator('[data-section="images"]').click();
+        await expect(page.locator('#image-size')).toHaveValue('1280x720');
+        const notice = page.locator('.settings-notice');
+        await expect(notice).toBeVisible();
+        // The notice hugs its two lines and button, never a stretched empty box.
+        const { height } = (await notice.boundingBox())!;
+        expect(height).toBeLessThan(160);
+        expect(await audit(page)).toEqual([]);
+    });
+
     test(`read-aloud settings (${locale}, ${theme})`, async ({ page }) => {
         await open(page, '', locale, undefined, theme);
         await page.getByRole('button', { name: /Settings/ }).first().click();
@@ -2807,6 +2910,7 @@ for (const locale of ['ar', 'en'] as const) {
                 return route.fulfill({ json: {
                     custom_model: UNLISTED_ID, context_size: null, agent_mode: 'goal_driven', dynamic_tools: false, dynamic_tools_locked: false,
                     model_status: { found: false, downloaded: false, loaded: false, checked },
+                    network_policy: 'cloud_allowed', flagship_agent: 'gaiapy', gaiacpp_available: true,
                 } });
             }));
             await page.getByRole('button', { name: /Settings/ }).first().click();
@@ -2867,10 +2971,14 @@ interface ModelPageOptions {
     theme?: 'light' | 'dark';
     fireworks?: Record<string, unknown>;
     localOnly?: boolean;
+    agent?: AgentProgramsAnswers;
 }
 
-async function openModelPage(page: Page, locale: string, { models = MODEL_LIST, status, theme = 'light', fireworks, localOnly = false }: ModelPageOptions = {}): Promise<void> {
-    await open(page, '', locale, (p) => withModelPage(p, models, SETUP_PLAN, status, fireworks, localOnly), theme);
+async function openModelPage(page: Page, locale: string, { models = MODEL_LIST, status, theme = 'light', fireworks, localOnly = false, agent }: ModelPageOptions = {}): Promise<void> {
+    await open(page, '', locale, async (p) => {
+        await withModelPage(p, models, SETUP_PLAN, status, fireworks, localOnly);
+        if (agent) await withAgentPrograms(p, agent);
+    }, theme);
     const sidebar = page.getByRole('button', { name: /Open sidebar/ });
     if (await sidebar.isVisible()) await sidebar.click();
     await page.getByRole('button', { name: /Settings/ }).first().click();
@@ -2885,6 +2993,80 @@ const groups = (page: Page) => page.locator('.settings-card .settings-disclosure
 
 for (const locale of ['ar', 'en']) {
     test.describe(`settings model page (${locale})`, () => {
+        for (const noGaiacpp of [false, true]) {
+            for (const expanded of [false, true]) {
+                const state = `${noGaiacpp ? 'unavailable-' : ''}${expanded ? 'expanded' : 'collapsed'}`;
+                test(`the agent choice (${state})`, async ({ page }) => {
+                    await openModelPage(page, locale, noGaiacpp ? { agent: { gaiacpp: 'unavailable' } } : {});
+                    const agent = page.locator('.agent-choice');
+                    await expect(agent.locator('[role="radio"]')).toHaveCount(2);
+                    await expect(agent.locator('.agent-choice-off')).toHaveCount(noGaiacpp ? 1 : 0);
+                    // Why it can't be picked is read under its row, without opening anything.
+                    const why = agent.locator('.agent-choice-why');
+                    await expect(why).toHaveCount(noGaiacpp ? 1 : 0);
+                    if (noGaiacpp) {
+                        await expect(why).toBeVisible();
+                        expect((await why.boundingBox())!.height, 'the reason takes no room on the screen').toBeGreaterThan(10);
+                    }
+                    await expect(agent.locator('.agent-choice-size')).toHaveCount(noGaiacpp ? 1 : 2);
+                    const more = agent.locator('.agent-choice-more');
+                    if (expanded) await more.click();
+                    await expect(more).toHaveAttribute('aria-expanded', String(expanded));
+                    await expect(agent.locator('.agent-choice-detail')).toBeVisible({ visible: expanded });
+                    for (const row of await agent.locator('[role="radio"]').all()) {
+                        expect((await row.boundingBox())!.height).toBeLessThan(48);
+                    }
+                    // The product names and sizes read left to right in either language.
+                    for (const name of await agent.locator('bdi.agent-choice-name, bdi.agent-choice-size').all()) {
+                        expect(await name.evaluate((el) => getComputedStyle(el).direction)).toBe('ltr');
+                    }
+                    await expectSnugTags(agent);
+                    // The section is named for both: the nav and the pane's title.
+                    await expect(page.locator('.settings-pane-title')).toHaveText(locale === 'ar' ? /الوكيل والنموذج/ : /^Agent & model$/);
+                    await shot(page, `model-${locale}-agent-${state}`);
+                    expect(await audit(page)).toEqual([]);
+                });
+            }
+        }
+
+        test('gaiacpp not on this PC: a Download button on its row, and Download shows a bar', async ({ page }) => {
+            await openModelPage(page, locale, { agent: { gaiacpp: 'downloadable', poll: AGENT_DOWNLOADING } });
+            const agent = page.locator('.agent-choice');
+            const button = agent.locator('.agent-choice-download');
+            await expect(button).toBeVisible();
+            await expect(agent.locator('[role="radio"]').nth(1)).toHaveAttribute('aria-disabled', 'true');
+            // The button stays inside its row, clear of the row's text.
+            const [row, btn, what] = await Promise.all([
+                agent.locator('[role="radio"]').nth(1).boundingBox(),
+                button.boundingBox(),
+                agent.locator('.agent-choice-item .agent-choice-what').boundingBox(),
+            ]);
+            expect(btn!.x).toBeGreaterThanOrEqual(row!.x);
+            expect(btn!.x + btn!.width).toBeLessThanOrEqual(row!.x + row!.width);
+            expect(btn!.x >= what!.x + what!.width || btn!.x + btn!.width <= what!.x).toBe(true);
+            await expectSnugTags(agent);
+            await shot(page, `model-${locale}-agent-download-button`);
+            expect(await audit(page)).toEqual([]);
+
+            await button.click();
+            await expect(agent.getByRole('progressbar', { name: /gaiacpp/ })).toHaveAttribute('aria-valuenow', '40');
+            await expect(agent.locator('[role="radio"]').first()).toHaveAttribute('aria-checked', 'true');
+            // The bar replaces the button; a dimmed button once slid out of its row here.
+            await expect(button).toHaveCount(0);
+            await shot(page, `model-${locale}-agent-downloading`);
+            expect(await audit(page)).toEqual([]);
+        });
+
+        test('a failed gaiacpp download says so in the card, with Retry', async ({ page }) => {
+            await openModelPage(page, locale, { agent: { gaiacpp: 'downloadable', download: AGENT_DOWNLOADING, poll: AGENT_DOWNLOAD_FAILED } });
+            const failed = page.locator('.agent-choice .dl-fail');
+            await expect(failed).toBeVisible();
+            await expect(failed.getByRole('button')).toBeVisible();
+            await expect(page.locator('.agent-choice-detail')).toBeHidden();
+            await shot(page, `model-${locale}-agent-download-failed`);
+            expect(await audit(page)).toEqual([]);
+        });
+
         test('the model in use and its controls sit above the list', async ({ page }) => {
             await openModelPage(page, locale);
             await expect(page.locator('#ctx-size')).toBeVisible();
@@ -2903,6 +3085,10 @@ for (const locale of ['ar', 'en']) {
             await page.locator('.settings-disclosure:not([open]) > summary').evaluateAll((els) => els.forEach((el) => (el as HTMLElement).click()));
             await page.locator('.settings-more:not([open]) > summary').evaluateAll((els) => els.forEach((el) => (el as HTMLElement).click()));
             await expect(page.getByText('needs 180 GB of memory', { exact: false }).first()).toBeVisible();
+            // A model that fits but squeezes other apps says so instead of "Fits this PC".
+            await expect(page.locator('.model-badge.is-tight')).toHaveCount(1);
+            await page.locator('.model-badge.is-tight').scrollIntoViewIfNeeded();
+            await shot(page, `model-${locale}-tight`);
             // A size inside a sentence stays whole only inside its own bidi isolate.
             if (locale === 'ar') await expect(page.locator('.model-row-meta', { hasText: 'tok/s' }).first()).toContainText('\u206841 tok/s\u2069');
             await shot(page, `model-${locale}-long`);
@@ -5346,6 +5532,38 @@ for (const locale of ['ar', 'en']) {
     });
 }
 
+const SCRIPT_PATH = 'C:\\Users\\you\\AppData\\Local\\Temp\\gaia-scratch-e521a62e2608\\build_recon.py';
+const SCRIPT_PROMPTS = {
+    capped: { text: Array.from({ length: 40 }, (_, i) => `rows.append(build_row(${i}))`).join('\n'), hidden_lines: 260 },
+    missing: { unreadable: 'missing' },
+};
+
+for (const locale of ['ar', 'en']) {
+    for (const [state, script] of Object.entries(SCRIPT_PROMPTS)) {
+        test(`a prompt to run a Python file shows the script or says why not (${state}, ${locale})`, async ({ page }) => {
+            await page.addInitScript(streamThenWait, [{
+                type: 'permission_request', tool: 'execute_python_file', tool_label: 'running python file', confirm_id: 'c-script',
+                args: { file_path: SCRIPT_PATH, _script: script, _scratch_dir: 'C:\\Users\\you\\AppData\\Local\\Temp\\gaia-scratch-e521a62e2608' },
+            }]);
+            await open(page, `#${ANSWER_SESSION}`, locale);
+            await page.locator('textarea').first().fill('build the reconciliation workbook');
+            await page.keyboard.press('Enter');
+            const note = page.getByTestId(state === 'capped' ? 'perm-script-more' : 'perm-script-unreadable');
+            await expect(note).toBeVisible();
+            if (state === 'capped') {
+                await expect(page.getByTestId('perm-code')).toContainText('rows.append(build_row(0))');
+                await expect(note).toContainText('260');
+            } else {
+                await expect(page.getByTestId('perm-code')).toHaveCount(0);
+            }
+            await expect(page.locator('.perm-card-actions')).toBeInViewport();
+            expect(await audit(page)).toEqual([]);
+            if (locale === 'ar') expect(await untranslated(page, '.perm-card', 'bdi, pre')).toEqual([]);
+            await shot(page, `permission-script-${state}-${locale}`);
+        });
+    }
+}
+
 for (const locale of ['ar', 'en'] as const) {
     test(`a file-write prompt words its heading and always button in the UI language (${locale})`, async ({ page }) => {
         await page.addInitScript(streamThenWait, [{
@@ -6715,5 +6933,65 @@ for (const locale of ['ar', 'en']) {
         await shot(page, `skills-link-result-${locale}`);
         expect(await audit(page)).toEqual([]);
         if (locale === 'ar') expect(await untranslated(page, '.skill-link-result')).toEqual([]);
+    });
+}
+
+/** A dictation saved to the user's folder: the card names the copy and the script. */
+const DICTATION_CARD = {
+    src: '/api/media/audio/dictation_q3_report_20261016_150000_ab12cd.wav',
+    path: 'C:\\Users\\test\\.gaia\\cache\\audio\\generations\\dictation_q3_report_20261016_150000_ab12cd.wav',
+    duration_seconds: 196.54,
+    saved_to: 'C:\\Users\\test\\Documents\\Audio books\\Q3 report.mp3',
+    script_path: 'C:\\Users\\test\\Documents\\Audio books\\Q3 report.script.md',
+};
+
+/** One second of silence, so the player loads instead of reporting a broken file. */
+function oneSecondWav(): Buffer {
+    const rate = 8000;
+    const wav = Buffer.alloc(44 + rate * 2);
+    wav.write('RIFF', 0); wav.writeUInt32LE(36 + rate * 2, 4); wav.write('WAVE', 8);
+    wav.write('fmt ', 12); wav.writeUInt32LE(16, 16); wav.writeUInt16LE(1, 20); wav.writeUInt16LE(1, 22);
+    wav.writeUInt32LE(rate, 24); wav.writeUInt32LE(rate * 2, 28); wav.writeUInt16LE(2, 32); wav.writeUInt16LE(16, 34);
+    wav.write('data', 36); wav.writeUInt32LE(rate * 2, 40);
+    return wav;
+}
+
+async function withDictationCard(page: Page): Promise<void> {
+    await page.route((url) => url.pathname.startsWith('/api/media/audio/'), (route) =>
+        route.fulfill({ status: 200, contentType: 'audio/wav', body: oneSecondWav() }),
+    );
+    await page.route((url) => url.pathname === `/api/sessions/${ANSWER_SESSION}/messages`, (route) =>
+        route.fulfill({
+            json: {
+                messages: [
+                    { id: 1, session_id: ANSWER_SESSION, role: 'user', content: 'Turn Q3 report.pdf into audio', created_at: NOW.toISOString(), rag_sources: null },
+                    {
+                        id: 2, session_id: ANSWER_SESSION, role: 'assistant', content: 'The audio is ready.', created_at: NOW.toISOString(), rag_sources: null,
+                        agent_steps: [
+                            { id: 1, type: 'tool', tool: 'dictate_document', active: false, success: true, render: 'audio', data: DICTATION_CARD },
+                        ],
+                    },
+                ],
+                total: 2,
+            },
+        }),
+    );
+}
+
+for (const locale of ['ar', 'en']) {
+    test(`a dictation's audio card names the saved copy and the script (${locale})`, async ({ page }, info) => {
+        await open(page, `#${ANSWER_SESSION}`, locale, withDictationCard);
+        const card = page.locator('.render-audio');
+        await expect(card.locator('audio')).toBeVisible();
+        await expect(card.locator('.render-audio__error')).toHaveCount(0);
+        const where = card.locator('.render-audio__where');
+        await expect(where).toHaveCount(2);
+        // The label follows the interface language; the path stays left to right.
+        await expect(where.nth(0)).toContainText(locale === 'ar' ? 'حُفظ في' : 'Saved to');
+        await expect(where.nth(1)).toContainText(locale === 'ar' ? 'حُفظ النص في' : 'Script saved to');
+        await expect(where.nth(0).locator('bdi[dir="ltr"]')).toHaveText(DICTATION_CARD.saved_to);
+        await expect(card.locator('.render-audio__meta')).toContainText('3:17');
+        expect(await audit(page)).toEqual([]);
+        await card.screenshot({ path: info.outputPath(`dictation-card-${locale}.png`) });
     });
 }

@@ -99,7 +99,7 @@ WebSocket), #2985 (untested voice-stack paths), #3494 (the mic hearing GAIA's ow
   - the `read_aloud_voice` / `read_aloud_speed` / `read_aloud_auto` config keys
   - a TUI player that shells out to the OS per file (`tui/internal/speech/`)
 - **Neither the chat request nor the flagship has a per-request style option.** `ChatRequest`
-  (`src/gaia/ui/models.py`) and the flagship's strict `QueryRequest` (`gaia_agent/server.py`)
+  (`src/gaia/ui/models.py`) and the flagship's strict `QueryRequest` (`gaiapy/server.py`)
   need a new field.
 - **The agent stream already separates the work from the answer:** `step`, `tool_*`,
   `thinking`, `chunk`, `answer` and `done` (`_chat_helpers.py`, `sse_handler.py`, and the TUI's

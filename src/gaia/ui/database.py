@@ -2074,6 +2074,23 @@ class ChatDatabase:
             )
             return cursor.rowcount > 0
 
+    def update_document_path(self, doc_id: str, filepath: str) -> bool:
+        """Point a library row at its file's new location.
+
+        Args:
+            doc_id: Document ID.
+            filepath: Where the file now is.
+
+        Returns:
+            True if the document was found and updated.
+        """
+        with self._transaction():
+            cursor = self._conn.execute(
+                "UPDATE documents SET filepath = ? WHERE id = ?",
+                (filepath, doc_id),
+            )
+            return cursor.rowcount > 0
+
     def recent_inference_stats(self, limit: int = 500) -> List[Dict]:
         """Inference stats of the newest assistant messages that recorded any."""
         with self._lock:

@@ -11,7 +11,9 @@ script would fail certificate verification. The agent itself routes through
 
 Runs before any other code in every launch of the binary, including the
 ``run_python`` re-launch. It changes nothing when the user set
-``SSL_CERT_FILE``/``SSL_CERT_DIR`` or the built-in default path exists. Names are
+``SSL_CERT_FILE``/``SSL_CERT_DIR``, when a built-in CA file exists, or when a
+built-in CA directory contains hashed CA links. It falls back to a bundled CA
+bundle only when that directory is empty or unreadable. Names are
 private because hooks share the entry script's ``__main__`` namespace.
 """
 
@@ -30,12 +32,24 @@ _CA_BUNDLES = (
 )
 
 
-def _os_ca_bundle(environ, default_paths, exists=os.path.isfile):
+def _has_ca_links(capath):
+    try:
+        return os.path.isdir(capath) and any(
+            os.path.isfile(os.path.join(capath, name))
+            for name in os.listdir(capath)
+            if name.endswith(".0")
+        )
+    except OSError:
+        return False
+
+
+def _os_ca_bundle(environ, default_paths, exists=os.path.isfile, has_ca=_has_ca_links):
     """The bundle to point ``SSL_CERT_FILE`` at, or ``None`` to leave it alone."""
     if environ.get("SSL_CERT_FILE") or environ.get("SSL_CERT_DIR"):
         return None
-    # cafile/capath are None when the built-in location does not exist here.
-    if default_paths.cafile or default_paths.capath:
+    if default_paths.cafile:
+        return None
+    if default_paths.capath and has_ca(default_paths.capath):
         return None
     return next((path for path in _CA_BUNDLES if exists(path)), None)
 

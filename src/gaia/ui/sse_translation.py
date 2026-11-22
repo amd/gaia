@@ -74,9 +74,11 @@ import re
 from typing import Any, Callable, Dict, List, Optional
 
 from gaia.agents.base.call_risk import (
+    CODE_RISK_NOTE,
     EXACT_TEXT_ARG,
     NEEDS_PERSON_ARG,
     RISK_NOTE_ARG,
+    SCRIPT_ARG,
     plain_risk_note,
 )
 from gaia.agents.base.tool_grants import (
@@ -139,6 +141,11 @@ SUMMARY_VIEW_KEYS = (
     "file_path",
     "image_path",
     "audio_path",
+    # A recording's length, the user's copy and the listening script
+    # (``RESULT_AUDIO_KEYS`` in ``gaia.ui.sse_handler``).
+    "duration_seconds",
+    "saved_to",
+    "script_path",
     # How many chunks ``index_document`` stored, for the Document library.
     "num_chunks",
     # A ``search_web`` result's hits, so a relayed turn can cite them.
@@ -449,7 +456,19 @@ class CanonicalTranslator:
     def _on_plan(self, event: Dict[str, Any]) -> List[Dict[str, Any]]:
         steps = event.get("steps") or []
         joined = " → ".join(str(s) for s in steps)
-        return self._user_status(f"Plan: {joined}" if joined else "Plan")
+        out = self._user_status(f"Plan: {joined}" if joined else "Plan")
+        items = event.get("items")
+        if not isinstance(items, list) or not items:
+            return out
+        # The plan rides even a repeated headline: current_step is what moved.
+        if not out:
+            out = [{"type": "status", "message": ""}]
+        current = event.get("current_step")
+        out[0]["plan"] = {
+            "steps": items,
+            "current_step": current if isinstance(current, int) else 0,
+        }
+        return out
 
     def _on_task_list(self, event: Dict[str, Any]) -> List[Dict[str, Any]]:
         return [
@@ -598,6 +617,8 @@ class CanonicalTranslator:
             note = str(args.get(RISK_NOTE_ARG) or "") or plain_risk_note(
                 event.get("risk")
             )
+        elif tool in CODE_SUMMARY_TOOLS:
+            note = str(args.get(RISK_NOTE_ARG) or "") or CODE_RISK_NOTE
         elif tool in PATH_TOOLS or tool in CALENDAR_WRITE_TOOLS:
             # A file prompt's note says what else a yes grants; a calendar
             # prompt's, that its text holds characters that don't show.
@@ -666,6 +687,9 @@ class CanonicalTranslator:
         shown_path = args.get("file_path")
         if isinstance(shown_path, str) and shown_path != call_args.get("file_path"):
             prompt_context["file_path"] = shown_path
+        # The script a file-running call runs, as read when the prompt was built.
+        if isinstance(args.get(SCRIPT_ARG), dict):
+            prompt_context["script"] = args[SCRIPT_ARG]
         if prompt_context:
             canonical["prompt_context"] = prompt_context
         return [canonical]
@@ -834,42 +858,6 @@ def _normalize_options(event: Dict[str, Any]) -> List[Dict[str, str]]:
     return out
 
 
-def render_labelled_summary(
-    tool: str,
-    args: Dict[str, Any],
-    *,
-    labels: Dict[str, str],
-    detail_fields: Dict[str, str],
-    max_field_chars: int = 120,
-) -> str:
-    """Build a confirmation sentence from a label plus selected argument fields.
-
-    ``detail_fields`` maps an argument name to a prefix, e.g.
-    ``{"to": "to", "subject": "— subject"}`` renders
-    ``Send this email to a@b.com — subject "Re: …"?``. Values longer than
-    ``max_field_chars`` are elided. Agents pass this (via ``functools.partial``)
-    as ``summary_renderer`` rather than reimplementing the shape.
-    """
-    label = labels.get(tool, f"Run {tool!r}")
-    if not isinstance(args, dict) or not args:
-        return f"{label}?"
-    detail = []
-    for field, prefix in detail_fields.items():
-        value = args.get(field)
-        if not value:
-            continue
-        text = str(value)
-        if len(text) > max_field_chars:
-            text = text[:max_field_chars] + "…"
-        # A quoted field reads as a title; a bare one reads as an identifier.
-        detail.append(
-            f'{prefix} "{text}"' if prefix.startswith("—") else f"{prefix} {text}"
-        )
-    if detail:
-        return f"{label} " + " ".join(detail) + "?"
-    return f"{label}?"
-
-
 #: Tools whose confirmation shows a command or code, rendered by
 #: :func:`render_command_summary` instead of as a ``key="value"`` clause.
 COMMAND_SUMMARY_TOOLS = frozenset({"run_shell_command", "wait_for_condition"})
@@ -906,6 +894,7 @@ PROMPT_ONLY_ARGS = frozenset(
         EXACT_TEXT_ARG,
         RESOLVED_PATH_ARG,
         NEEDS_PERSON_ARG,
+        SCRIPT_ARG,
         SITE_ARG,
     }
 )
@@ -1015,6 +1004,59 @@ def _split_leading_cd(command: str) -> "tuple[str, str]":
     return "", command
 
 
+#: Why a script's content is not on its prompt, in plain words.
+_UNREADABLE_SCRIPT = {
+    "missing": "This file does not exist, so there is no code to show.",
+    "not_text": "This file is not text, so its code can't be shown.",
+    "too_large": "This file is too large to show here.",
+    "unreadable": "GAIA could not read this file, so its code isn't shown.",
+}
+
+
+def _code_summary(code: str, unseen: int = 0, where: str = "") -> str:
+    """*code* cut to :data:`SUMMARY_CODE_LINES`, counting every line left out.
+
+    *unseen* is how many more lines follow *code* that the prompt was never
+    given; the end of the code is then not on hand, so only its start shows.
+    *where* is the file the code was read from: a cut then names it, since a
+    terminal prompt has no way to show the rest.
+    """
+    lines = [
+        _elide_middle(line, SUMMARY_COMMAND_CHARS)
+        for line in code.strip("\n").splitlines() or [""]
+    ]
+    read_it = f": open {where} to read them" if where else ""
+    if unseen:
+        hidden = max(len(lines) - SUMMARY_CODE_LINES, 0) + unseen
+        lines = lines[:SUMMARY_CODE_LINES] + [
+            f"…[{hidden} more lines not shown{read_it}]"
+        ]
+    elif len(lines) > SUMMARY_CODE_LINES:
+        hidden = len(lines) - SUMMARY_CODE_LINES
+        lines = (
+            lines[: SUMMARY_CODE_LINES - 4]
+            + [f"…[{hidden} more lines{read_it}]…"]
+            + lines[-4:]
+        )
+    return "\n".join(lines)
+
+
+def _script_summary(script: Any, path: str = "") -> str:
+    """The lines a file-running prompt shows under the file's *path*."""
+    if not isinstance(script, dict):
+        return ""
+    if isinstance(script.get("text"), str):
+        if not script["text"].strip():
+            return "This file is empty."
+        hidden = script.get("hidden_lines")
+        return _code_summary(
+            script["text"], hidden if isinstance(hidden, int) else 0, path
+        )
+    return _UNREADABLE_SCRIPT.get(
+        str(script.get("unreadable")), _UNREADABLE_SCRIPT["unreadable"]
+    )
+
+
 def render_calendar_summary(args: Dict[str, Any]) -> str:
     """What a calendar change does, whole: the generic clause cuts long attendee lists.
 
@@ -1071,6 +1113,7 @@ def render_command_summary(
         "file_path",
         RISK_NOTE_ARG,
         SCRATCH_ARG,
+        SCRIPT_ARG,
     }
     if args.get(RISK_NOTE_ARG) and tool in COMMAND_SUMMARY_TOOLS:
         # GAIA's checks did not vouch for this line, so the user approves the
@@ -1085,22 +1128,14 @@ def render_command_summary(
         return f"{args.get('command') or ''}\nin {folder}{tail}"
     if tool in CODE_SUMMARY_TOOLS:
         if isinstance(args.get("code"), str):
-            lines = args["code"].strip("\n").splitlines() or [""]
-            if len(lines) > SUMMARY_CODE_LINES:
-                hidden = len(lines) - SUMMARY_CODE_LINES
-                lines = (
-                    lines[: SUMMARY_CODE_LINES - 4]
-                    + [f"…[{hidden} more lines]…"]
-                    + lines[-4:]
-                )
-            body = "\n".join(
-                _elide_middle(line, SUMMARY_COMMAND_CHARS) for line in lines
-            )
-            location = ""
+            body = _code_summary(args["code"])
+            script = ""
         else:
             path = str(args.get("file_path") or "")
             body = _short_location(path, workspace) or os.path.basename(path)
-            location = ""
+            # A path does not say what the file does: its code follows.
+            script = _script_summary(args.get(SCRIPT_ARG), path)
+        location = ""
     else:
         command = str(args.get("command") or "").strip()
         cd_target, command = _split_leading_cd(command)
@@ -1113,6 +1148,7 @@ def render_command_summary(
         command = _strip_base(command, folder or workspace)
         body = _elide_middle(" ".join(command.split()), SUMMARY_COMMAND_CHARS)
         location = _short_location(folder, workspace) if folder else ""
+        script = ""
 
     extras = [
         f"{key}={json.dumps(args[key], default=str) if not isinstance(args[key], str) else args[key]}"
@@ -1122,6 +1158,8 @@ def render_command_summary(
     out = body
     if extras:
         out += f"  ({', '.join(extras)})"
+    if script:
+        out += f"\n{script}"
     if location:
         out += f"\nin {location}"
     return out
@@ -1217,5 +1255,4 @@ __all__ = [
     "TERMINAL_TYPES",
     "render_command_summary",
     "render_invocation",
-    "render_labelled_summary",
 ]

@@ -243,9 +243,9 @@ def test_a_search_says_which_attached_documents_it_could_not_reach(library):
 
 
 def test_the_flagship_is_told_every_attached_document_is_attached(library):
-    gaia_agent = pytest.importorskip("gaia_agent.chat_agent")
-    agent = gaia_agent.ChatAgent.__new__(gaia_agent.ChatAgent)
-    agent.config = gaia_agent.ChatAgentConfig()
+    gaiapy = pytest.importorskip("gaiapy.chat_agent")
+    agent = gaiapy.ChatAgent.__new__(gaiapy.ChatAgent)
+    agent.config = gaiapy.ChatAgentConfig()
     agent._rag = library.rag
     agent.indexed_files = set()
     agent.path_validator = PathValidator([str(library.root)])
@@ -262,7 +262,7 @@ def test_the_flagship_is_told_every_attached_document_is_attached(library):
 
 
 def test_a_relayed_flagship_loads_up_to_the_cap_and_evicts_nothing(library):
-    server = pytest.importorskip("gaia_agent.server")
+    server = pytest.importorskip("gaiapy.server")
     agent = SimpleNamespace(
         rag=library.rag,
         indexed_files=set(),
@@ -284,9 +284,9 @@ def test_a_relayed_flagship_loads_up_to_the_cap_and_evicts_nothing(library):
 
 
 def test_the_flagship_names_the_passage_limit_for_long_documents(books):
-    gaia_agent = pytest.importorskip("gaia_agent.chat_agent")
-    agent = gaia_agent.ChatAgent.__new__(gaia_agent.ChatAgent)
-    agent.config = gaia_agent.ChatAgentConfig()
+    gaiapy = pytest.importorskip("gaiapy.chat_agent")
+    agent = gaiapy.ChatAgent.__new__(gaiapy.ChatAgent)
+    agent.config = gaiapy.ChatAgentConfig()
     agent._rag = books.rag
     agent.indexed_files = set()
     agent.path_validator = PathValidator([str(books.root)])
@@ -304,7 +304,7 @@ def test_the_flagship_names_the_passage_limit_for_long_documents(books):
 
 
 def test_a_relayed_flagship_names_the_passage_limit_for_long_documents(books):
-    server = pytest.importorskip("gaia_agent.server")
+    server = pytest.importorskip("gaiapy.server")
     agent = SimpleNamespace(
         rag=books.rag,
         indexed_files=set(),
@@ -358,7 +358,7 @@ def test_the_last_document_pushing_one_out_is_reported_in_the_agent_ui(books):
 
 
 def test_the_last_document_pushing_one_out_is_reported_by_the_relay(books):
-    server = pytest.importorskip("gaia_agent.server")
+    server = pytest.importorskip("gaiapy.server")
     three = books.paths[:3]
     agent = SimpleNamespace(
         rag=books.rag,
@@ -421,7 +421,7 @@ def test_a_stop_right_after_a_push_out_reports_the_pushed_out_document(books):
 
 
 def test_a_relayed_stop_right_after_a_push_out_reports_the_pushed_out_document(books):
-    server = pytest.importorskip("gaia_agent.server")
+    server = pytest.importorskip("gaiapy.server")
     four = books.paths[:4]
     cancel = threading.Event()
     agent = SimpleNamespace(

@@ -175,3 +175,64 @@ def test_full_list_skills_has_no_hub_hint(library_agent):
     payload = library_agent._execute_tool("list_skills", {})
 
     assert "hint" not in payload
+
+
+def _name_hint(agent) -> str:
+    return agent._tools_registry["load_skill"]["parameters"]["name"]["description"]
+
+
+def test_compact_load_skill_does_not_point_at_install_skill(library_agent):
+    from gaia.agents.base.agent import LOAD_SKILL_NAME_WITHOUT_INSTALL
+
+    library_agent._snapshot_tools()
+    library_agent._offer_features(COMPACT)
+
+    assert "install_skill" not in library_agent._tools_registry
+    assert _name_hint(library_agent) == LOAD_SKILL_NAME_WITHOUT_INSTALL
+    assert "install_skill" not in _name_hint(library_agent)
+    sent = library_agent._build_openai_tool_schemas(filter_to=["load_skill"])
+    hint = sent[0]["function"]["parameters"]["properties"]["name"]["description"]
+    assert hint == LOAD_SKILL_NAME_WITHOUT_INSTALL
+
+
+def test_full_load_skill_points_at_install_skill(library_agent):
+    library_agent._snapshot_tools()
+    library_agent._offer_features(TIERS["full"])
+
+    assert "Install it first with install_skill" in _name_hint(library_agent)
+
+
+def test_switching_tiers_swaps_the_hint_both_ways(library_agent):
+    from gaia.agents.base.tools import _TOOL_REGISTRY
+
+    library_agent._snapshot_tools()
+    full_entry = _TOOL_REGISTRY["load_skill"]
+
+    for _ in range(2):
+        library_agent._offer_features(COMPACT)
+        assert "install_skill" not in _name_hint(library_agent)
+        library_agent._offer_features(TIERS["full"])
+        assert library_agent._tools_registry["load_skill"] is full_entry
+
+    # The shared registry entry is never edited in place.
+    assert "install_skill" in full_entry["parameters"]["name"]["description"]
+
+
+def test_compact_load_skill_still_runs_and_fits_the_budget(library_agent):
+    from gaia.agents.base.tools import MAX_TOOL_PARAM_DESCRIPTION_CHARS
+
+    library_agent._snapshot_tools()
+    library_agent._offer_features(COMPACT)
+
+    assert len(_name_hint(library_agent)) <= MAX_TOOL_PARAM_DESCRIPTION_CHARS
+    payload = library_agent._execute_tool("load_skill", {"name": "no-such-skill"})
+    assert payload["status"] == "error"
+
+
+def test_an_agent_without_skill_tools_is_left_alone(library_agent):
+    library_agent._snapshot_tools()
+    library_agent._instance_tools.pop("load_skill")
+
+    library_agent._offer_features(COMPACT)
+
+    assert "load_skill" not in library_agent._tools_registry

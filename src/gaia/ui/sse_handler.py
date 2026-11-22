@@ -76,6 +76,11 @@ _DIFF_CARD_MAX_CHARS = 64_000
 #: relayed result is reduced to.
 RESULT_PATH_KEYS = ("file_path", "image_path", "audio_path")
 
+#: What a speech tool reports beside ``audio_path``: the recording's length,
+#: and where the user's copy and the listening script went. The audio card
+#: shows them as text.
+RESULT_AUDIO_KEYS = ("duration_seconds", "saved_to", "script_path")
+
 #: Generated media file types that a client may later open through an explicit
 #: card action.  Keep this intentionally narrow: a successful tool result is
 #: not enough to turn an arbitrary local file into a launchable UI payload.
@@ -511,6 +516,27 @@ def _peel_response_socket(resp: Any) -> Optional[socket.socket]:
 _ANSWER_FIRST_RE = re.compile(r'\s*\{\s*"answer"\s*:')
 
 
+#: Longest string argument a plan item carries; a plan is re-sent every step.
+_PLAN_ARG_MAX = 300
+
+
+def _plan_item(step: Any) -> Dict[str, Any]:
+    """One plan step as ``{tool, description, args}`` for a client to narrate."""
+    if not isinstance(step, dict):
+        return {"description": str(step)}
+    item: Dict[str, Any] = {}
+    if step.get("tool"):
+        item["tool"] = str(step["tool"])
+    if step.get("description"):
+        item["description"] = str(step["description"])
+    args = step.get("tool_args")
+    if isinstance(args, dict) and args:
+        item["args"] = {
+            k: (v[:_PLAN_ARG_MAX] if isinstance(v, str) else v) for k, v in args.items()
+        }
+    return item
+
+
 class SSEOutputHandler(OutputHandler):
     """
     OutputHandler that queues agent events as JSON for SSE streaming.
@@ -526,7 +552,7 @@ class SSEOutputHandler(OutputHandler):
     #: raises this — a person reading a prompt routinely takes longer than a
     #: minute — but must not set it to ``None``: an unanswerable question with
     #: no bound is a turn that never ends, which reads as a hang rather than as
-    #: the refusal it effectively is. See ``gaia_agent.stdio.PermissionState``,
+    #: the refusal it effectively is. See ``gaiapy.stdio.PermissionState``,
     #: whose backstop deliberately outlasts its client's own bound.
     #:
     #: Class-level so a handler built with ``__new__`` — which callers that only
@@ -828,6 +854,7 @@ class SSEOutputHandler(OutputHandler):
                 "steps": plan_strs,
                 "step_narrations": narrations,
                 "current_step": current_step,
+                "items": [_plan_item(step) for step in plan],
             }
         )
 
@@ -974,6 +1001,10 @@ class SSEOutputHandler(OutputHandler):
             for key in RESULT_PATH_KEYS:
                 if isinstance(data.get(key), str):
                     event[key] = data[key]
+            if isinstance(data.get("audio_path"), str):
+                for key in RESULT_AUDIO_KEYS:
+                    if isinstance(data.get(key), (str, int, float)):
+                        event[key] = data[key]
             if isinstance(data.get("num_chunks"), int):
                 event["num_chunks"] = data["num_chunks"]
         # The summary drops the hits a relayed turn's sources are made of.
@@ -1228,6 +1259,7 @@ class SSEOutputHandler(OutputHandler):
         "generate_music": "media",
         "generate_sound_effect": "media",
         "text_to_speech": "media",
+        "dictate_document": "media",
     }
 
     def _render_card_payload(self, data: Any) -> Optional[Dict[str, Any]]:
@@ -1320,6 +1352,9 @@ class SSEOutputHandler(OutputHandler):
             "duration_seconds",
             "duration_requested",
             "generation_time_s",
+            "saved_to",
+            "script_path",
+            "form",
         ):
             if envelope.get(key) is not None:
                 payload[key] = envelope[key]

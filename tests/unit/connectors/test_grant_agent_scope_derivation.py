@@ -443,7 +443,7 @@ class TestFlagshipSidecarGrantDerivation:
             assert by_provider[provider].required_scopes == tuple(scopes)
 
     def test_spec_matches_flagship_required_connectors(self):
-        connectors = pytest.importorskip("gaia_agent.connectors")
+        connectors = pytest.importorskip("gaiapy.connectors")
 
         from gaia.daemon.sidecars.spec import builtin_specs
 

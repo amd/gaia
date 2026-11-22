@@ -6,6 +6,7 @@
 [![GitHub downloads](https://img.shields.io/github/downloads/amd/gaia/total.svg)](https://github.com/amd/gaia/releases)
 [![OS - Windows](https://img.shields.io/badge/OS-Windows-blue)](https://amd-gaia.ai/docs/quickstart "Windows installation")
 [![OS - Linux](https://img.shields.io/badge/OS-Linux-green)](https://amd-gaia.ai/docs/quickstart "Linux installation")
+[![OS - macOS](https://img.shields.io/badge/OS-macOS-lightgrey)](https://amd-gaia.ai/docs/guides/install "macOS installation")
 [![Python 3.10+](https://img.shields.io/badge/Python-3.10+-blue?logo=python&logoColor=white)](https://www.python.org/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Discord](https://img.shields.io/badge/Discord-Join%20Community-7289DA?logo=discord&logoColor=white)](https://discord.com/invite/5xXzkMu8Zk)
@@ -92,9 +93,22 @@ print(result)
 
 ---
 
+## Two harnesses: gaiapy and gaiacpp
+
+The GAIA agent has two interchangeable programs behind it, and the desktop app and the terminal run either one:
+
+| Harness | What it is | Source |
+|---------|------------|--------|
+| **`gaiapy`** | The Python harness: every tool and feature, and the default | [`hub/agents/gaia/python/`](hub/agents/gaia/python/) on the SDK in [`src/gaia/`](src/gaia/) |
+| **`gaiacpp`** | The native C++ harness: starts instantly and uses little memory, with fewer features so far (beta) | [`cpp/agents/gaiacpp/`](cpp/agents/gaiacpp/) on the framework in [`cpp/`](cpp/README.md) |
+
+Switch in the desktop app under Settings › Agent & model, or with `/agent` in the terminal. See [The two harnesses](docs/reference/harnesses.mdx).
+
+---
+
 ## C++ Framework
 
-A C++17 port of the GAIA base agent framework is available under [`cpp/`](cpp/README.md). It implements the same agent loop, tool registry, and MCP client interface without any Python dependency — suitable for embedding in native applications or resource-constrained environments.
+`gaiacpp` is built on a C++17 port of the GAIA base agent framework, under [`cpp/`](cpp/README.md). It implements the same agent loop, tool registry, and MCP client interface without any Python dependency — suitable for embedding in native applications or resource-constrained environments.
 
 ```cpp
 #include <gaia/agent.h>
@@ -125,8 +139,8 @@ For complete setup instructions including Lemonade Server, see the **[Quickstart
 
 | Requirement | Minimum | Recommended |
 |-------------|---------|-------------|
-| **Processor** | AMD Ryzen AI 300-series | AMD Ryzen AI Max+ 395 |
-| **OS** | Windows 11, Linux | - |
+| **Processor** | AMD Ryzen AI 300-series (Apple Silicon on macOS) | AMD Ryzen AI Max+ 395 |
+| **OS** | Windows 10/11, macOS 14+ (Apple Silicon), Linux (glibc 2.38+) | - |
 | **RAM** | 16GB | 64GB |
 
 ---

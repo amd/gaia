@@ -50,6 +50,14 @@ struct GAIA_API LemonadeHealth {
     std::string modelId;   // currently loaded model (empty if none)
     int contextSize = 0;   // active n_ctx (0 if unknown)
     json raw;              // full health response JSON
+    std::string error;     // why the server could not be reached (empty when it answered)
+};
+
+/// How many requests a loaded model serves at once.
+struct GAIA_API ModelCapacity {
+    int slots = 0;        // llama.cpp slots; 0 when the server did not say
+    std::string recipe;   // "llamacpp", "flm", "cloud"; empty when not reported
+    std::string unknown;  // why slots is 0 (empty when it is known)
 };
 
 // ---- Composite status ----
@@ -122,6 +130,13 @@ public:
     /// Mirrors Python get_status().
     LemonadeStatus getStatus();
 
+    /// The slot count modelId was loaded with: `--parallel` in Lemonade's /health, or
+    /// `total_slots` in /props on a bare llama.cpp server. Mirrors Python slot_count().
+    ModelCapacity modelCapacity(const std::string& modelId);
+
+    /// The `--parallel N` / `-np N` value in a llama.cpp argument list; 0 when absent.
+    static int slotsInFlags(const std::vector<std::string>& flags);
+
     // ---- Model management ----
 
     /// List models available on the server.
@@ -153,6 +168,20 @@ public:
 
     /// Set server-side parameters.
     json setParams(const json& params);
+
+    /// Download a model with POST /pull. A built-in model is pulled by name
+    /// alone; `checkpoint` / `recipe` register a new one and are only valid for
+    /// a `user.` model (Lemonade rejects them for built-ins). Throws
+    /// std::invalid_argument on that misuse, HttpError on a server refusal.
+    json pullModel(const std::string& modelName, const std::string& checkpoint = "",
+                   const std::string& recipe = "", int timeoutSec = 3600);
+
+    /// Embed `inputs` with `model` via POST /embeddings (OpenAI shape), in
+    /// batches. One vector per input, in order. Throws on any failure or a
+    /// response that doesn't hold exactly one vector per input.
+    std::vector<std::vector<float>> embeddings(const std::string& model,
+                                               const std::vector<std::string>& inputs,
+                                               size_t batchSize = 32);
 
     /// Load (or reload) a model on the server.
     ///
@@ -230,10 +259,24 @@ public:
     void setModel(const std::string& m) { model_ = m; }
 
     int contextSize() const { return contextSize_; }
+    /// modelId's recipe as the server last reported it ("flm", "llamacpp"), or "" if not yet seen.
+    std::string recipeOf(const std::string& modelId) const {
+        return modelId == recipeModel_ ? loadedRecipe_ : std::string();
+    }
     void setContextSize(int ctx) { contextSize_ = ctx; }
 
     bool debug() const { return debug_; }
     void setDebug(bool d) { debug_ = d; http_.setDebug(d); }
+
+    /// Sends `Authorization: Bearer <key>` on every request; empty removes it.
+    void setApiKey(const std::string& key);
+    bool hasApiKey() const { return hasApiKey_; }
+
+    /// Polled on every streamed chunk; returning true ends the stream early.
+    void setAbortCheck(std::function<bool()> check) {
+        abortCheck_ = check;
+        http_.setCancelCheck(std::move(check));  // also ends a load, or the wait for a first token
+    }
 
 private:
     /// Normalize URL: strip trailing slashes, preserve /v1 or /api/v1, append /api/v1 otherwise.
@@ -257,7 +300,11 @@ private:
     std::string baseUrl_;
     std::string model_;
     int contextSize_ = 0;
+    std::string loadedRecipe_;
+    std::string recipeModel_;
     bool debug_ = false;
+    bool hasApiKey_ = false;
+    std::function<bool()> abortCheck_;
     HttpClient http_;
 };
 

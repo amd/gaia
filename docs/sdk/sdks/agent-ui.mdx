@@ -678,7 +678,7 @@ Every other path serves the Agent UI page, except paths under `/api`: an unknown
     }
     ```
 
-    **Response (400):** the model cannot be pulled — it is hosted on a gateway (no weights to download), it is a `user.` model GAIA has no checkpoint and recipe for and Lemonade doesn't list either, or Lemonade's model list couldn't be read to check such a model (`detail` asks the user to try again). A `user.` model Lemonade already lists is pulled by name instead. `detail` says which case applies, and for an unknown model tells the user to add it from its Hugging Face link: **Settings > Model > Add a model from Hugging Face** in the Agent UI, or `/provider` → **Local** → `ctrl+a` in the terminal app. The Agent UI shows `detail` next to the Download button that was pressed.
+    **Response (400):** the model cannot be pulled — it is hosted on a gateway (no weights to download), it is a `user.` model GAIA has no checkpoint and recipe for and Lemonade doesn't list either, or Lemonade's model list couldn't be read to check such a model (`detail` asks the user to try again). A `user.` model Lemonade already lists is pulled by name instead. `detail` says which case applies, and for an unknown model tells the user to add it from its Hugging Face link: **Settings > Agent & model > Add a model from Hugging Face** in the Agent UI, or `/provider` → **Local** → `ctrl+a` in the terminal app. The Agent UI shows `detail` next to the Download button that was pressed.
   </Accordion>
 
   <Accordion title="POST /api/system/download-progress/dismiss">
@@ -784,8 +784,40 @@ Every other path serves the Agent UI page, except paths under `/api`: an unknown
     | Field | Type | Required | Description |
     |-------|------|----------|-------------|
     | `custom_model` | string or null | No | Model ID to use instead of the default. An empty string clears the override; `null` leaves it unchanged. |
+    | `flagship_agent` | string or null | No | Which program is the GAIA agent: `gaiapy` (the Python agent) or `gaiacpp` (the native C++ agent, beta). Saved as `flagship_agent` in `~/.gaia/config.json`, which the terminal UI reads too, and applied from the next message. Refused with `422` when `gaiacpp` isn't installed, `409` while a chat is answering, and `403` unless the request comes from the PC running GAIA. `GET /api/settings` returns the one in use as `flagship_agent`, and `gaiacpp_available`. |
 
     **Response:** Same shape as `GET /api/settings`.
+  </Accordion>
+
+  <Accordion title="GET /api/agent-programs">
+    List the two programs that can be the GAIA agent, with whether each is on this PC and its download size.
+
+    **Response:**
+    ```json
+    {
+      "current": "gaiapy",
+      "programs": [
+        { "id": "gaiapy", "installed": true, "size_bytes": 163381945, "can_download": false, "update_available": false, "unavailable_reason": null, "unavailable_code": null },
+        { "id": "gaiacpp", "installed": false, "size_bytes": 43909632, "can_download": true, "update_available": false, "unavailable_reason": null, "unavailable_code": null }
+      ],
+      "download": { "state": "idle", "bytes_done": 0, "bytes_total": null, "error": null }
+    }
+    ```
+
+    | Field | Type | Description |
+    |-------|------|-------------|
+    | `current` | string | The agent in use, `gaiapy` or `gaiacpp`. |
+    | `programs[].size_bytes` | number or null | Download size for this PC; `null` when it could not be read. |
+    | `programs[].can_download` | boolean | `true` for a `gaiacpp` this release offers that is not installed, or is from another release. |
+    | `programs[].unavailable_reason` | string or null | Why `gaiacpp` can be neither used nor downloaded here, for example a development build. |
+    | `programs[].unavailable_code` | string or null | `no_release`, `unreachable` or `unverifiable` when the reason is one of those, so a client can show it in the user's language; `null` for any other reason. |
+    | `download` | object | The `gaiacpp` download: `state` is `idle`, `downloading`, `done` or `failed`, with `bytes_done`, `bytes_total` and `error`. |
+  </Accordion>
+
+  <Accordion title="POST /api/agent-programs/{program_id}/download">
+    Start downloading `gaiacpp` in the background (`program_id` must be `gaiacpp`). The file is checked against the release's SHA-256 list and the version it prints before it is installed in `~/.gaia/bin`. Answers `202` with the `download` object above; a second call while one is running returns the running one. `409` when it is already installed, or when it would replace the agent in use while a chat is answering or setup is still running; `404` for any other id; `403` unless the request comes from the PC running GAIA. A copy from another GAIA release can be downloaded again, and a download that fails leaves the copy in use and its record as they were.
+
+    `GET /api/agent-programs/{program_id}/download` returns the same `download` object; poll it for the progress bar. Choosing the agent afterwards is `PUT /api/settings`.
   </Accordion>
 </AccordionGroup>
 
@@ -1097,6 +1129,32 @@ Deleting a chat deletes its copies.
     unreachable, **502** when Lemonade can't make the speech; each `detail`
     says why. The app splits a long reply into pieces and plays them back to
     back.
+  </Accordion>
+</AccordionGroup>
+
+### Image creation
+
+<AccordionGroup>
+  <Accordion title="GET /api/images/settings">
+    The saved image model, size and steps, and the models this Lemonade
+    offers: `{"model": "SDXL-Turbo", "size": null, "steps": null,
+    "max_steps": 100, "models": [{"id": "Z-Image-Turbo", "downloaded": true,
+    "downloads_on_first_use": false, "default_size": "1024x1024",
+    "default_steps": 9, "sizes": ["512x512", "1024x1024", ...]}, ...],
+    "model_available": true, "chat_model": "Qwen3.6-35B-A3B-GGUF",
+    "chat_model_creates_images": true}`. `null` size or steps is the model's
+    own default. Models are the downloaded image models plus the legacy SD
+    models that download on first use; sizes stay under each model's
+    `soft_pixel_cap`. Stored as `image_model`, `image_size` and `image_steps`
+    in `~/.gaia/config.json`, which the TUI reads too. **503** when Lemonade's
+    catalog can't be read.
+  </Accordion>
+
+  <Accordion title="PUT /api/images/settings">
+    Save any of `model`, `size` (`WIDTHxHEIGHT`, or `null` for automatic) and
+    `steps` (1–100, or `null`). A new model resets size and steps to automatic
+    unless the request sets them. **422** names a model that isn't on this
+    Lemonade or a size it doesn't take, and nothing is saved.
   </Accordion>
 </AccordionGroup>
 
@@ -1884,8 +1942,10 @@ Used to reach the UI from a phone.
 
 <AccordionGroup>
   <Accordion title="POST /api/documents/upload">
-    Multipart drag-and-drop upload. Stores the file in the library and
-    enqueues it for indexing. Content already in the library returns the
+    Multipart drag-and-drop upload. Stores a copy of the file in the library
+    (under `$GAIA_HOME/chat/documents/`) and enqueues it for indexing. A chat's
+    agent can read the copy only once it is attached to that chat; other chats
+    can't list or open it. Content already in the library returns the
     existing document; if that document's stored file is gone, the new copy
     takes its place. A file that can't be read is a **422** whose
     `detail.status` is one of the `error_kind` values listed under
@@ -3647,7 +3707,7 @@ def test_message_ordering():
 The Agent UI server delegates to the GAIA [Agent](/sdk/core/agent-system) for LLM communication and tool execution:
 
 ```python
-from gaia_agent.chat_agent import ChatAgent, ChatAgentConfig
+from gaiapy.chat_agent import ChatAgent, ChatAgentConfig
 
 # The server creates a ChatAgent instance per request. ChatAgent derives its
 # system prompt from `prompt_profile` ("chat" | "doc" | "file" | "data" |

@@ -35,7 +35,11 @@ from gaia.agents.base.call_risk import (
     RISK_NOTE_ARG,
     shell_command_risk,
 )
-from gaia.agents.base.checks import attach_check, check_from_command
+from gaia.agents.base.checks import (
+    attach_check,
+    check_from_command,
+    command_check_label,
+)
 from gaia.agents.base.command_wrappers import command_starts
 from gaia.agents.base.denied_effects import (
     COMPUTED_PATH,
@@ -76,6 +80,7 @@ from gaia.agents.tools.shell_deletes import (
 )
 from gaia.agents.tools.shell_session import ShellSession
 from gaia.agents.tools.workspace_paths import _workspace_default, _workspace_target
+from gaia.canonical_path import UncheckablePathError, canonical_path, join_under
 from gaia.env import child_env
 from gaia.tool_cancellation import tool_cancelled
 
@@ -1170,6 +1175,20 @@ def _final_even_unattended(command: str) -> bool:
     if _one_time_hard_reason(command) or deletes_a_path(command, cwd):
         return True
     return creates_a_link(command, cwd) or bool(_hard_target(command))
+
+
+_PYTHON_PROGRAMS = frozenset({"python", "python3", "py", "pythonw"})
+
+
+def _runs_python_script(command: str) -> bool:
+    """Whether *command* is ``python <script>.py ...``: a job for execute_python_file."""
+    words = _command_words(command)
+    if not words:
+        return False
+    program = os.path.basename(words[0]).lower().removesuffix(".exe")
+    return program in _PYTHON_PROGRAMS and any(
+        word.lower().endswith(".py") for word in words[1:3]
+    )
 
 
 def _changes_files(command: str) -> bool:
@@ -2443,11 +2462,16 @@ def _flag_path_values(arg: str) -> list:
 
 
 def _protected_folder(resolved_path: str) -> Optional[str]:
-    """The credential folder *resolved_path* sits in, whatever the allowed scope."""
+    """The credential folder *resolved_path* sits in, whatever the allowed scope.
+
+    Raises:
+        UncheckablePathError: *resolved_path* is not a file on this PC.
+    """
     from gaia import security
 
+    canonical = Path(canonical_path(resolved_path, for_comparison=True))
     for folder in security.SECRET_DIRECTORIES:
-        if security._path_is_within(Path(resolved_path), Path(folder)):
+        if security._path_is_within(canonical, Path(folder)):
             return folder
     return None
 
@@ -4586,7 +4610,13 @@ def _git_path_flag_values(cmd_parts: list, cwd: str) -> list:
         else:
             break
         if name in _GIT_PATH_FLAGS:
-            resolved = base.joinpath(value).resolve()
+            try:
+                resolved = Path(
+                    canonical_path(join_under(base, value), for_comparison=True)
+                )
+            except UncheckablePathError:
+                # Unchanged here: the allowed-paths check refuses it.
+                resolved = base.joinpath(value)
             values.append((name, str(resolved)))
             if name == "-C":
                 base = resolved
@@ -6637,6 +6667,16 @@ class ShellToolsMixin:
             # With no console, a tool that asks can't run either.
             return name in tools and not (nobody and callable(asks) and asks(name))
 
+        if _runs_python_script(command) and runs("execute_python_file"):
+            # Small models otherwise fall back to reading the script and
+            # working the answer out by hand. Named here, so it must be callable.
+            loader = getattr(self, "tool_loader", None)
+            if loader is not None:
+                loader.admit_tools(["execute_python_file"], tools)
+            return (
+                "execute_python_file, passing the script's full path as "
+                "file_path and the rest of the command as args"
+            )
         if _changes_files(command):
             writers = [name for name in ("write_file", "edit_file") if runs(name)]
             if not writers:
@@ -7355,7 +7395,10 @@ class ShellToolsMixin:
             return False
         if os.path.getsize(path) > MAX_SHELL_DELETE_COPY_BYTES:
             return False
-        if _protected_folder(os.path.realpath(path)):
+        try:
+            if _protected_folder(path):
+                return False
+        except UncheckablePathError:
             return False
         return self._path_allowed(path, prompt_user=False)
 
@@ -7383,10 +7426,10 @@ class ShellToolsMixin:
         """
         if outside is None:
             return refusal
-        unaskable = getattr(
-            getattr(self, "path_validator", None), "_unaskable_reason", None
+        refusal_reason = getattr(
+            getattr(self, "path_validator", None), "grant_refusal_reason", None
         )
-        reason = unaskable(Path(path)) if callable(unaskable) else ""
+        reason = refusal_reason(path) if callable(refusal_reason) else ""
         if reason:
             scratch = getattr(self.path_validator, "scratch_hint", None)
             return {
@@ -7416,7 +7459,17 @@ class ShellToolsMixin:
         *any_folder* skips the allowed-paths check: full access.
         """
         try:
-            resolved = str(Path(cwd).joinpath(_expand_home(target)).resolve())
+            resolved = canonical_path(
+                join_under(cwd, _expand_home(target)), for_comparison=True
+            )
+        except UncheckablePathError as exc:
+            return cwd, {
+                **NOT_EXECUTED,
+                "status": "error",
+                "tier": TIER_REFUSE,
+                "error": f"Access denied: cd {exc}",
+                "has_errors": True,
+            }
         except (OSError, ValueError) as exc:
             return cwd, {
                 **NOT_EXECUTED,
@@ -7541,6 +7594,47 @@ class ShellToolsMixin:
             if kind == _BULK_READ:
                 return _credential_refusal("Command", " ".join(argv), path)
             return _search_refusal(" ".join(argv), path, kind)
+        for segment in segments:
+            refusal = self._inline_code_refusal(segment, cwd)
+            if refusal:
+                return refusal
+        return None
+
+    def _inline_code_refusal(self, segment: list, cwd: str) -> Optional[Dict[str, Any]]:
+        """Refuse code handed to an interpreter that names a protected path.
+
+        The word-by-word check above sees literal paths; this also reads the
+        names a script builds (``os.path.join(home, '.ssh')``, ``$HOME``), the
+        same screen ``run_python`` gets.
+        """
+        from gaia.agents.base.code_path_screen import (
+            beyond_credential_files,
+            code_refusal,
+            protected_paths_in_code,
+        )
+
+        program = _interpreter_name(segment[0])
+        for index, dialect in _inline_script_positions(segment).items():
+            dialect = dialect.rstrip(_MAYBE)
+            if dialect in (_SWITCH, _ENV_SPLIT, _ENV_SPLIT_ATTACHED):
+                continue
+            body = segment[index]
+            if dialect == _PS_ENCODED:
+                body = " ".join(_script_words(body, dialect))
+            elif dialect == _CMD_ATTACHED:
+                body = body[2:]
+            mentions = protected_paths_in_code(
+                body,
+                python=program == "python",
+                cwd=cwd,
+                validator=getattr(self, "path_validator", None),
+            )
+            mentions = beyond_credential_files(mentions)
+            if mentions:
+                return {
+                    **code_refusal(f"the {program} script", mentions),
+                    "tier": TIER_REFUSE,
+                }
         return None
 
     def _path_candidate_refusal(
@@ -7604,7 +7698,18 @@ class ShellToolsMixin:
     ) -> Optional[Dict[str, Any]]:
         """Refuse *candidate_path* when it resolves outside the allowed paths."""
         try:
-            resolved_path = str(Path(cwd).joinpath(candidate_path).resolve())
+            resolved_path = canonical_path(
+                join_under(cwd, candidate_path), for_comparison=True
+            )
+        except UncheckablePathError as exc:
+            return {
+                **NOT_EXECUTED,
+                "status": "error",
+                "tier": TIER_REFUSE,
+                "error": f"Access denied: {label} {exc}",
+                "has_errors": True,
+                "hint": "Pass a plain path inside an allowed folder.",
+            }
         except (OSError, ValueError) as exc:
             # Fail closed: a path nobody could resolve was never shown to be inside.
             logger.warning("Refusing unresolvable path '%s': %s", arg, exc)
@@ -7782,12 +7887,14 @@ class ShellToolsMixin:
             except subprocess.TimeoutExpired:
                 continue  # slice expired, not the command's own deadline
 
-    def _timeout_hint(self, timeout_class: str, cwd: str) -> str:
-        """The next step after a kill: scope the run to what this turn changed.
+    def _timeout_hint(self, timeout_class: str, cwd: str, command: str = "") -> str:
+        """The next step after a kill: scope a check to what this turn changed.
 
-        Never "raise the timeout": a repo-wide lint or test run that blew its
-        class default usually blows a larger one too. A build or download is
-        pointed at a background run instead.
+        A test or lint run is never told to "raise the timeout": a repo-wide
+        check that blew its class default usually blows a larger one too. A
+        script that is not a check (a data job, a build step) may just be slow,
+        so it gets the background run and the longer timeout. A build or
+        download is pointed at a background run.
         """
         if cut_by_time_limit(self):
             return TIME_LIMIT_CUT_RUN
@@ -7797,6 +7904,12 @@ class ShellToolsMixin:
             f"{cls.seconds}s by default). Whatever it printed before the kill "
             "is in 'stdout'/'stderr' above."
         )
+        if timeout_class == "script" and not command_check_label(command):
+            return (
+                f"{hint} If it was still making progress, run it in the "
+                f"background and poll it with {_WAIT_TOOL}, or re-run it with a "
+                f"larger timeout, up to {MAX_COMMAND_TIMEOUT}s."
+            )
         if timeout_class not in ("test", "script"):
             return (
                 f"{hint} If it was still making progress, run it in the "
@@ -8440,7 +8553,7 @@ class ShellToolsMixin:
                 "duration_seconds": time.monotonic() - start_time,
                 "cwd": cwd,
                 "steps": [{"command": command, "return_code": None}],
-                "hint": self._timeout_hint(timeout_class, cwd),
+                "hint": self._timeout_hint(timeout_class, cwd, command),
             }
         except BaseException:
             terminate_process_tree(process)
@@ -8870,7 +8983,7 @@ class ShellToolsMixin:
                                 "duration_seconds": time.monotonic() - start_time,
                                 "cwd": cwd,
                                 "steps": ran,
-                                "hint": self._timeout_hint(timeout_class, cwd),
+                                "hint": self._timeout_hint(timeout_class, cwd, command),
                             },
                             check_from_command(
                                 command,

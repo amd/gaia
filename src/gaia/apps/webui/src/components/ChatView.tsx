@@ -38,6 +38,8 @@ import { TaskListCard, parseTaskListEvent, pickTaskList } from './TaskListCard';
 import { ModelChip } from './ModelChip';
 import { SessionFolderChip } from './FolderChip';
 import { PermissionModeChip } from './PermissionModeChip';
+import { ResearchChip, useResearchMode, withResearch } from './ResearchChip';
+import { HistoryNotice, LibraryNotices } from './ChatNotices';
 import { PermissionPrompt } from './PermissionPrompt';
 import { QueuedMessages } from './QueuedMessages';
 import { ContextMeter, ContextWarning } from './ContextMeter';
@@ -63,7 +65,7 @@ import { useChatExport } from '../hooks/useChatExport';
 import { CLAIMS_ESCAPE, isEscapeClaimed } from '../hooks/useEscapeToClose';
 import { usePolicyToast } from '../hooks/usePolicyToast';
 import { FLAGSHIP_AGENT_ID } from '../utils/newTask';
-import { isPlaceholderTitle } from '../utils/sessionTitle';
+import { isPlaceholderTitle, shownTitle } from '../utils/sessionTitle';
 import { laterTurns, lastSentMessage } from '../utils/editLast';
 import { addDroppedFiles, showAddedDocuments } from '../utils/chatDocuments';
 import { requestErrorParam } from '../utils/requestErrors';
@@ -93,19 +95,6 @@ const NO_CARDS: RenderCardData[] = [];
 /** Notices by server message id: a refetch replaces messages, so they cannot live on them alone. */
 const historyNotices = new Map<number, string>();
 
-/** One quiet line saying older turns left the model's view. */
-function HistoryNotice({ text }: { text: string }) {
-    return <div className="history-notice" role="note">{text}</div>;
-}
-
-function LibraryNotices({ notices }: { notices: string[] }) {
-    return (
-        <div className="library-notices" role="note">
-            {notices.map((notice, index) => <div key={`${index}-${notice}`} dir="auto">{notice}</div>)}
-        </div>
-    );
-}
-
 interface ChatViewProps {
     sessionId: string;
 }
@@ -128,6 +117,7 @@ export const RESOURCES_NOTE_MS = 12_000;
 
 export function ChatView({ sessionId }: ChatViewProps) {
     const t = useT();
+    const researchMode = useResearchMode(sessionId);
     const {
         sessions, messages, setMessages, addMessage, removeMessage, removeMessagesFrom, updateSessionInList,
         isStreaming, streamingContent, setStreaming, setStreamContent, clearStreamContent,
@@ -520,7 +510,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
         const hasImage = fromComposer && attach.hasImage;
         const takeDraft = () => {
             if (!fromComposer) return text;
-            const composed = attach.compose(text);
+            const composed = attach.compose(withResearch(text, sessionId));
             setInput('');
             attach.clear();
             inputRef.current?.focus();
@@ -1597,8 +1587,8 @@ export function ChatView({ sessionId }: ChatViewProps) {
         setActionError(null);
         const failures = await addDroppedFiles(sessionId, documents);
         if (failures.length > 0) {
-            setActionError(failures.map(({ name, stage, error }) => (stage === 'unreadable' || stage === 'server'
-                ? t(stage === 'server' ? 'docsBar.serverTitle' : 'docsBar.failedTitle', { name })
+            setActionError(failures.map(({ name, stage, error }) => (stage === 'unreadable' || stage === 'server' || stage === 'busy'
+                ? t(stage === 'server' ? 'docsBar.serverTitle' : stage === 'busy' ? 'docsBar.busyTitle' : 'docsBar.failedTitle', { name })
                 : t(
                     stage === 'attach' ? 'chat.dropAttachFailed' : 'chat.dropUploadFailed',
                     { name, error: requestErrorParam(error) },
@@ -1656,7 +1646,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
             onDrop={handleDrop}
             onDragOver={handleDragOver}
             onDragLeave={handleDragLeave}
-            aria-label={session?.title || 'Chat'}
+            aria-label={shownTitle(session?.title) || 'Chat'}
         >
             <TurnAnnouncer busy={busy} />
             <header className="task-header">
@@ -1679,7 +1669,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
                         />
                     ) : (
                         <button type="button" className="task-title" onClick={startEditTitle} title={t('row.rename')}>
-                            <span>{isPlaceholderTitle(session?.title) ? t('sidebar.newChat') : session?.title}</span>
+                            <span>{isPlaceholderTitle(session?.title) ? t('sidebar.newChat') : shownTitle(session?.title)}</span>
                             <Edit3 size={12} aria-hidden="true" className="task-title-edit" />
                         </button>
                     )}
@@ -1917,8 +1907,10 @@ export function ChatView({ sessionId }: ChatViewProps) {
                             ? t('composer.answerQuestion')
                             : isStreaming
                             ? t('composer.queueNext')
+                            : researchMode
+                            ? t('composer.researchPlaceholder')
                             : messages.length === 0 ? t('composer.placeholder') : t('composer.reply')}
-                        leftControls={<PermissionModeChip sessionId={sessionId} disabled={!!retiredAgent} />}
+                        leftControls={<><PermissionModeChip sessionId={sessionId} disabled={!!retiredAgent} /><ResearchChip sessionId={sessionId} disabled={!!retiredAgent} compact /></>}
                         rightControls={(
                             <>
                                 <ContextMeter

@@ -6,6 +6,7 @@
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { EnvironmentSection } from '../EnvironmentSection';
+import { formatWindow } from '../../modelMeta';
 import { OfflineNotice } from '../OfflineNotice';
 import { PermissionModeChip } from '../../PermissionModeChip';
 import { useChatStore } from '../../../stores/chatStore';
@@ -45,6 +46,23 @@ describe('Runs on', () => {
         // Memory is a hover detail on the model, not a line of its own.
         expect(screen.getByTitle('6.2 GB in use · 40.5 GB free')).toHaveTextContent('Gemma 4 E4B');
         expect(screen.getByText('64K tokens')).toBeInTheDocument();
+    });
+
+    it("gives this chat's window, as the context meter does, not the server's larger load", async () => {
+        const status = await mocked.getLocalModelStatus();
+        mocked.getLocalModelStatus.mockResolvedValue({ ...status, ctx_size: 131072 });
+        const usage = {
+            window: 65536, reply_reserve: 4096, system: 3000, tools: 2000, documents: 0, history: 1000, query: 0,
+            used: 6000, history_budget: 12000, history_used: 1000, turns_in_view: 2, turns_hidden: 0,
+            at_risk: [], at_risk_tokens: 0,
+        };
+        render(<EnvironmentSection sessionId={SID} busy={false} usage={usage} />);
+        expect(await screen.findByText('64K tokens')).toBeInTheDocument();
+        expect(screen.queryByText('128K tokens')).not.toBeInTheDocument();
+    });
+
+    it('formats a window as Settings lists it, and any other size in thousands', () => {
+        expect([65536, 131072, 32768, 200000, 1_000_000, 8000].map(formatWindow)).toEqual(['64K', '128K', '32K', '200K', '1M', '8.0K']);
     });
 
     it("doesn't describe another chat's model as this one's", async () => {
@@ -552,5 +570,19 @@ describe('Permission mode', () => {
         expect(mocked.setPermissionMode).not.toHaveBeenCalled();
         expect(full).toHaveAttribute('aria-checked', 'false');
         expect(screen.getByRole('button', { name: 'Turn it on' })).toBeInTheDocument();
+    });
+});
+
+describe('EnvironmentSection marks hidden characters in names', () => {
+    it('shows a right-to-left override in a folder as a code', async () => {
+        mocked.getEnvironment.mockResolvedValue({
+            ...ENV,
+            folders: [{ path: 'C:\\Users\\me\\exe\u202Etxt', kind: 'folder', source: 'added', removable: true }],
+        });
+        render(<EnvironmentSection sessionId={SID} busy={false} />);
+        const list = await screen.findByRole('list');
+        expect(list).toHaveTextContent('exe[U+202E]txt');
+        expect(list.textContent).not.toContain('\u202E');
+        expect(list.querySelector('.sp-item-name')!.getAttribute('title')).toBe('C:\\Users\\me\\exe[U+202E]txt');
     });
 });

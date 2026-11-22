@@ -53,7 +53,9 @@ from gaia.connectors.errors import (
 )
 from gaia.connectors.store import (
     DEFAULT_ACCOUNT,
+    connection_slot_in_use,
     delete_connection,
+    keyring_read_refusal,
     peek_connection,
     save_connection,
 )
@@ -192,11 +194,22 @@ def _section(data: Dict[str, Any], connector_id: str) -> Dict[str, Any]:
     )
 
 
-def _legacy_entry(connector_id: str) -> Optional[Dict[str, Any]]:
-    """An index entry for a ``default`` slot written without one, or None."""
-    blob = peek_connection(connector_id, slot=LEGACY_SLOT)
-    if blob is None:
-        return None
+def _legacy_entry(
+    connector_id: str, *, for_delete: bool = False
+) -> Optional[Dict[str, Any]]:
+    """An index entry for a ``default`` slot written without one, or None.
+
+    ``for_delete`` on a keyring that refuses reads checks only that the slot
+    is in use, so the entry carries no address or id.
+    """
+    if for_delete and keyring_read_refusal() is not None:
+        if not connection_slot_in_use(connector_id, slot=LEGACY_SLOT):
+            return None
+        blob = {}
+    else:
+        blob = peek_connection(connector_id, slot=LEGACY_SLOT)
+        if blob is None:
+            return None
     return {
         "slot": LEGACY_SLOT,
         "account_id": blob.get("account_id") or UNIDENTIFIED,
@@ -206,11 +219,13 @@ def _legacy_entry(connector_id: str) -> Optional[Dict[str, Any]]:
     }
 
 
-def _entries(connector_id: str, data: Dict[str, Any]) -> List[Dict[str, Any]]:
+def _entries(
+    connector_id: str, data: Dict[str, Any], *, for_delete: bool = False
+) -> List[Dict[str, Any]]:
     section = data["connectors"].get(connector_id) or {}
     entries = [dict(e) for e in section.get("accounts", [])]
     if not any(e["slot"] == LEGACY_SLOT for e in entries):
-        legacy = _legacy_entry(connector_id)
+        legacy = _legacy_entry(connector_id, for_delete=for_delete)
         if legacy is not None:
             entries.insert(0, legacy)
     return entries
@@ -226,12 +241,12 @@ def _default_of(section: Dict[str, Any], slots: List[str]) -> Optional[str]:
 
 
 @contextmanager
-def _mutate(connector_id: str) -> Iterator[Dict[str, Any]]:
+def _mutate(connector_id: str, *, for_delete: bool = False) -> Iterator[Dict[str, Any]]:
     """Yield this connector's index section, materialized, and save it after."""
     with _index_locked():
         data = _load_index()
         section = _section(data, connector_id)
-        section["accounts"] = _entries(connector_id, data)
+        section["accounts"] = _entries(connector_id, data, for_delete=for_delete)
         yield section
         slots = [e["slot"] for e in section["accounts"]]
         section["default_slot"] = _default_of(section, slots)
@@ -278,6 +293,33 @@ def list_accounts(connector_id: str) -> List[Account]:
     return out
 
 
+def accounts_for_delete(connector_id: str) -> List[Account]:
+    """The stored accounts of ``connector_id``, for a disconnect.
+
+    :func:`list_accounts` when the keyring can be read. On a keyring that
+    refuses reads (weak or uninspectable), the accounts come from the index
+    alone and no token is read, so they can still be removed.
+    """
+    if keyring_read_refusal() is None:
+        return list_accounts(connector_id)
+    data = _load_index()
+    entries = _entries(connector_id, data, for_delete=True)
+    section = data["connectors"].get(connector_id) or {}
+    default = _default_of(section, [e["slot"] for e in entries])
+    return [
+        Account(
+            connector_id=connector_id,
+            account_id=entry.get("account_id") or UNIDENTIFIED,
+            email=entry.get("email") or "",
+            status=_status(entry, {}),
+            is_default=entry["slot"] == default,
+            slot=entry["slot"],
+            account_type=entry.get("account_type"),
+        )
+        for entry in entries
+    ]
+
+
 def default_slot(connector_id: str) -> str:
     """The default account's slot, from the index alone (no keyring read when
     the index lists accounts). ``default`` when nothing is stored."""
@@ -307,12 +349,12 @@ def resolve_slot(connector_id: str, account: Optional[str]) -> str:
     if not hits and not any(
         e["slot"] == LEGACY_SLOT for e in section.get("accounts", [])
     ):
-        legacy = _legacy_entry(connector_id)
+        legacy = _legacy_entry(connector_id, for_delete=True)
         if legacy is not None and _matches(legacy, account):
             hits = [legacy]
     if len(hits) == 1:
         return hits[0]["slot"]
-    choices = [a.email or a.account_id for a in list_accounts(connector_id)]
+    choices = [a.email or a.account_id for a in accounts_for_delete(connector_id)]
     raise UnknownAccountError(connector_id, account, choices, ambiguous=bool(hits))
 
 
@@ -444,7 +486,7 @@ def remove_account(connector_id: str, slot: str) -> int:
     """Delete one account's token and index entry; returns how many accounts
     remain. Blocking; the caller holds the provider lock."""
     _delete_slot(connector_id, slot)
-    with _mutate(connector_id) as section:
+    with _mutate(connector_id, for_delete=True) as section:
         section["accounts"] = [e for e in section["accounts"] if e["slot"] != slot]
         remaining = len(section["accounts"])
     return remaining
@@ -457,7 +499,7 @@ def remove_all_accounts(connector_id: str) -> int:
     The ``default`` slot goes first, so an unreadable account list (which
     raises) still never leaves the first account's token behind.
     """
-    had_legacy = peek_connection(connector_id, slot=LEGACY_SLOT) is not None
+    had_legacy = connection_slot_in_use(connector_id, slot=LEGACY_SLOT)
     _delete_slot(connector_id, LEGACY_SLOT)
     section = _load_index()["connectors"].get(connector_id) or {}
     slots = {e["slot"] for e in section.get("accounts", [])}
@@ -598,6 +640,7 @@ __all__ = [
     "AccountStatus",
     "LEGACY_SLOT",
     "UNIDENTIFIED",
+    "accounts_for_delete",
     "default_slot",
     "list_accounts",
     "mark_state",

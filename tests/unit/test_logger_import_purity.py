@@ -161,7 +161,7 @@ def test_flagship_sidecar_writes_gaia_log(monkeypatch, tmp_path):
     """Regression: the HTTP sidecar calls configure() so the log file gets
     written. Before the fix, importing the entry point left log_manager as
     None and no log file was created."""
-    entry = pytest.importorskip("gaia_agent.entry")
+    entry = pytest.importorskip("gaiapy.entry")
     log_file = tmp_path / "sidecar.log"
     monkeypatch.setenv("GAIA_LOG_FILE", str(log_file))
     monkeypatch.setenv("GAIA_ALLOWED_PATHS", str(tmp_path))
@@ -180,8 +180,8 @@ def test_flagship_sidecar_writes_gaia_log(monkeypatch, tmp_path):
 
         assert log_file.exists(), "configure() should have created gaia.log"
 
-        # Verify a gaia_agent.* logger can write to the file post-configure.
-        logger = gaia_logger.get_logger("gaia_agent.sidecar_test")
+        # Verify a gaiapy.* logger can write to the file post-configure.
+        logger = gaia_logger.get_logger("gaiapy.sidecar_test")
         logger.info("regression check")
         assert "regression check" in log_file.read_text(encoding="utf-8")
     finally:
@@ -228,10 +228,10 @@ def test_flagship_stdio_transport_configures_logging(
     """Regression: the stdio transport installs GAIA's handlers before moving
     them, so INFO logs and gaia.log output survive. The HTTP sidecar test
     covers the other branch."""
-    entry = pytest.importorskip("gaia_agent.entry")
-    stdio = types.ModuleType("gaia_agent.stdio")
+    entry = pytest.importorskip("gaiapy.entry")
+    stdio = types.ModuleType("gaiapy.stdio")
     stdio.main = lambda argv: 0
-    monkeypatch.setitem(sys.modules, "gaia_agent.stdio", stdio)
+    monkeypatch.setitem(sys.modules, "gaiapy.stdio", stdio)
 
     assert gaia_logger.log_manager is None
     assert entry.main([]) == 0
@@ -239,7 +239,7 @@ def test_flagship_stdio_transport_configures_logging(
 
     log_file = tmp_path / "gaia.log"
     assert log_file.exists(), "configure() should have created gaia.log"
-    logger = gaia_logger.get_logger("gaia_agent.stdio_test")
+    logger = gaia_logger.get_logger("gaiapy.stdio_test")
     logger.info("stdio regression check")
     assert "stdio regression check" in log_file.read_text(encoding="utf-8")
 
@@ -292,10 +292,10 @@ def test_hub_entry_point_runs_on_core_without_configure(
 
 @pytest.mark.parametrize("argv", [[], ["--serve", "--port", "1"]])
 def test_flagship_entry_runs_on_core_without_configure(unconfigured, monkeypatch, argv):
-    entry = pytest.importorskip("gaia_agent.entry")
-    stdio = types.ModuleType("gaia_agent.stdio")
+    entry = pytest.importorskip("gaiapy.entry")
+    stdio = types.ModuleType("gaiapy.stdio")
     stdio.main = lambda args: 0
-    monkeypatch.setitem(sys.modules, "gaia_agent.stdio", stdio)
+    monkeypatch.setitem(sys.modules, "gaiapy.stdio", stdio)
     monkeypatch.delattr(gaia_logger, "configure")
     with patch("uvicorn.run"):
         assert entry.main(argv) in (0, None)
@@ -306,7 +306,7 @@ def test_flagship_entry_surfaces_import_error_from_inside_configure(
     unconfigured, monkeypatch
 ):
     """The old-core guard covers a missing configure(), not a broken one."""
-    entry = pytest.importorskip("gaia_agent.entry")
+    entry = pytest.importorskip("gaiapy.entry")
 
     def broken_configure(*args, **kwargs):
         raise ImportError("broken handler dependency")
@@ -348,7 +348,6 @@ def _calls_configure(node):
 _ENTRY_POINTS_STATIC = [
     ("src/gaia/daemon/server.py", "run"),
     ("src/gaia/api/app.py", "main"),
-    ("src/gaia/chat/app.py", "main"),
 ]
 
 

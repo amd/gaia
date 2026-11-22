@@ -1,0 +1,14 @@
+{
+  "algorithm": "ed25519",
+  "files": {
+    "SKILL.md": "1e38eab3557ef922750768e45447c3beb992b25557efbf238dc94f407a9a6d5a",
+    "refs/notes.md": "c3afd80aaa080b6cff0fc86e0c8e6c8bef9d9b9c4a2c58c860dd9ac418270374"
+  },
+  "key_id": "157c98968990fb529a3107c86b391a3f",
+  "name": "signed-demo",
+  "public_key": "Gec4oPMbQfiRtGbT/AoebCyFTI6qrx7SVD7sI/bSC7g=",
+  "publisher": "Test Publisher",
+  "signature": "fCa2IJ4kU/97rYYWP6W4GP0X9Q9Cn46svepEYjCoZumlbMbE0x+vMbcFjpLeSKtZfce0YYjSD4vZzyNKCEXICw==",
+  "signature_version": 1,
+  "version": "1.2.0"
+}

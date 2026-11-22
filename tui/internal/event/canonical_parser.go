@@ -63,6 +63,8 @@ func ParseCanonicalEvent(data []byte) interface{} {
 		return decodeCanonical[CanonicalTaskListEvent](data, probe.Type)
 	case CanonicalTypeFinal:
 		return decodeCanonical[CanonicalFinalEvent](data, probe.Type)
+	case CanonicalTypeContextUsage:
+		return decodeCanonical[CanonicalContextUsageEvent](data, probe.Type)
 	case CanonicalTypeError:
 		decoded := decodeCanonical[CanonicalErrorEvent](data, probe.Type)
 		if e, ok := decoded.(CanonicalErrorEvent); ok && e.Source == DaemonRelaySource {

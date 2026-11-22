@@ -63,7 +63,7 @@ def test_an_app_is_never_given_a_terminal_command(monkeypatch, no_install_found,
 def test_the_sidecar_never_names_a_command_or_a_missing_install(
     monkeypatch, no_install_found, failure
 ):
-    stdio = pytest.importorskip("gaia_agent.stdio")
+    stdio = pytest.importorskip("gaiapy.stdio")
     monkeypatch.setattr(lemonade_launcher, "gaia_runs_lemonade", lambda *a: False)
 
     message = stdio.model_server_message(failure, "agent_ui")
@@ -75,7 +75,7 @@ def test_the_sidecar_never_names_a_command_or_a_missing_install(
 
 
 def test_the_sidecar_says_a_server_that_refuses_is_not_answering(monkeypatch):
-    stdio = pytest.importorskip("gaia_agent.stdio")
+    stdio = pytest.importorskip("gaiapy.stdio")
     monkeypatch.setattr(lemonade_launcher, "gaia_runs_lemonade", lambda *a: False)
 
     message = stdio.model_server_message(LemonadeServerUnreachableError(), "agent_ui")
@@ -86,7 +86,7 @@ def test_the_sidecar_says_a_server_that_refuses_is_not_answering(monkeypatch):
 def test_a_failed_request_to_a_running_server_says_to_send_again_first(monkeypatch):
     """This error also covers a server that answered with a failure: it is up,
     so "isn't answering, start it" would be wrong."""
-    stdio = pytest.importorskip("gaia_agent.stdio")
+    stdio = pytest.importorskip("gaiapy.stdio")
     monkeypatch.setattr(lemonade_launcher, "gaia_runs_lemonade", lambda *a: False)
 
     message = stdio.model_server_message(LemonadeNetworkError(), "agent_ui")
@@ -105,7 +105,7 @@ def test_a_failed_request_to_a_running_server_says_to_send_again_first(monkeypat
 def test_a_terminal_gets_the_hosts_start_instruction_for_a_server_gaia_cant_own(
     monkeypatch, failure, surface
 ):
-    stdio = pytest.importorskip("gaia_agent.stdio")
+    stdio = pytest.importorskip("gaiapy.stdio")
     resolved = "Run: lemond ./ --port 13399"
     monkeypatch.setattr(
         lemonade_launcher,
@@ -123,7 +123,7 @@ def test_a_terminal_gets_the_hosts_start_instruction_for_a_server_gaia_cant_own(
 
 
 def test_gaias_own_server_gets_no_start_instruction_on_a_terminal(monkeypatch):
-    stdio = pytest.importorskip("gaia_agent.stdio")
+    stdio = pytest.importorskip("gaiapy.stdio")
     monkeypatch.setattr(
         lemonade_launcher,
         "describe_start_hint",
@@ -155,7 +155,12 @@ class _RelayedFailure(_StreamAgent):
 @pytest.mark.parametrize(
     "model, local", [(FLASH, False), ("Gemma-4-E4B-it-GGUF", True)]
 )
-async def test_a_cloud_chat_is_not_told_its_model_is_local(db, model, local):
+async def test_a_cloud_chat_is_not_told_its_model_is_local(
+    db, model, local, monkeypatch
+):
+    monkeypatch.setattr(
+        "gaia.llm.lemonade_client.configured_lemonade_url", lambda: None
+    )
     events = await _stream_turn(db, model, _RelayedFailure(model, fail=False))
 
     [error] = [e for e in events if e.get("type") == "agent_error"]

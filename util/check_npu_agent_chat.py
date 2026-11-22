@@ -457,9 +457,9 @@ def run(args: argparse.Namespace) -> None:
         if problems:
             raise CheckFailed(f"{'; '.join(problems)}. {LINUX_DRIVER_HELP}")
 
-    if importlib.util.find_spec("gaia_agent") is not None:
+    if importlib.util.find_spec("gaiapy") is not None:
         raise CheckFailed(
-            "gaia_agent is importable in this Python, so the backend would run "
+            "gaiapy is importable in this Python, so the backend would run "
             "the agent in-process instead of through the gaia-agent binary the "
             "apps use. Install GAIA without the flagship wheel."
         )

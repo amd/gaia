@@ -4,11 +4,13 @@
 #include "gaia/vector_index.h"
 
 #include <algorithm>
+#include <atomic>
 #include <cmath>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <limits>
+#include <random>
 #include <stdexcept>
 #include <string>
 #include <system_error>
@@ -358,7 +360,11 @@ void VectorIndex::save(const std::string& path) const {
 
     // Write to a sibling temp file and rename, so an interrupted save never
     // leaves a half-written index where a good one used to be.
-    const fs::path tmp = target.string() + ".tmp";
+    // A unique name: two processes saving the same index must not share a temp file.
+    static std::atomic<unsigned> saveCounter{0};
+    std::random_device entropy;
+    const fs::path tmp = target.string() + "." + std::to_string(entropy()) + "-" +
+                         std::to_string(saveCounter.fetch_add(1)) + ".tmp";
     {
         std::ofstream out(tmp, std::ios::binary | std::ios::trunc);
         if (!out) {

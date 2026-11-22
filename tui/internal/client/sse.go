@@ -1341,7 +1341,7 @@ type fullAccessRequest struct {
 // decisionWire validates a decision before it goes on the wire.
 //
 // PermissionDecision's values ARE the wire words — a deliberate cross-process
-// contract with gaia_agent.stdio's DECISION_* constants and the server's
+// contract with gaiapy.stdio's DECISION_* constants and the server's
 // _TOOL_DECISIONS — so there is nothing to translate, only something to check.
 // The agent fails closed on a value it does not recognise, which would turn the
 // approval the user just gave into a silent denial; catching that here names it

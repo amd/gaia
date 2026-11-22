@@ -15,6 +15,13 @@ const EXACT: Record<string, Parameters<Translate>[0]> = {
     'Starting the model server…': 'live.serverStarting',
 };
 
+const SKILL_RELOAD_REASONS = new Map<string, Parameters<Translate>[0]>([
+    ['its files could not be found', 'live.skillReloadMissing'],
+    ['the current model does not offer the tools it needs', 'live.skillReloadModel'],
+    ['the current settings do not permit it to load', 'live.skillReloadPermission'],
+    ['it failed to load with the current settings', 'live.skillReloadFailed'],
+]);
+
 /**
  * `label` in the chosen language when it is a status line GAIA knows; any other
  * line (a tool's progress, a retry notice) is shown as the backend wrote it.
@@ -22,6 +29,11 @@ const EXACT: Record<string, Parameters<Translate>[0]> = {
 export function localizeLiveStatus(t: Translate, label: string): string {
     const key = EXACT[label];
     if (key) return t(key);
+    const skill = /^Skill '([a-z0-9-]+)' was not restored after settings changed: ([^.]+)\. Reload it if needed\.$/.exec(label);
+    if (skill) {
+        const reason = SKILL_RELOAD_REASONS.get(skill[2]);
+        if (reason) return t(reason, { skill: skill[1] });
+    }
     let m = /^Reasoning — ([\d,]+) words so far$/.exec(label);
     if (m) return t('live.reasoningWords', { n: m[1] });
     m = /^Connection lost\. Reconnecting \(attempt (\d+) of (\d+)\)…$/.exec(label);

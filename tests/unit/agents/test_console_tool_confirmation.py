@@ -498,8 +498,8 @@ class TestSilentModeStillAsks:
 
     def test_chat_agents_console_can_be_asked(self, tty, monkeypatch):
         """Pins the real console the real entry point builds."""
-        pytest.importorskip("gaia_agent")
-        from gaia_agent.chat_agent import ChatAgent, ChatAgentConfig
+        pytest.importorskip("gaiapy")
+        from gaiapy.chat_agent import ChatAgent, ChatAgentConfig
 
         stub = _StubChatAgent(ChatAgentConfig(silent_mode=True))
         console = ChatAgent._create_console(stub)

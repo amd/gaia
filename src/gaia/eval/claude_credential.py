@@ -25,10 +25,13 @@ from dataclasses import dataclass, field
 from typing import Dict, Mapping, Optional
 
 from gaia.env import dotenv_credential_file, working_dir_credential
-from gaia.eval.process_tree import NEW_GROUP, kill_tree
 from gaia.logger import get_logger
+from gaia.utils.process_tree import kill_tree, popen_kwargs
 
 log = get_logger(__name__)
+
+#: Popen kwargs that put the child at the root of a tree ``kill_tree`` can end.
+NEW_GROUP = popen_kwargs()
 
 API_KEY_VAR = "ANTHROPIC_API_KEY"
 OAUTH_TOKEN_VAR = "CLAUDE_CODE_OAUTH_TOKEN"

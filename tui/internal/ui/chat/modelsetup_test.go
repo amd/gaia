@@ -221,7 +221,7 @@ func TestFirstRunSetupUsesTheSelectedLocalModelBeforeTheAgentStarts(t *testing.T
 	selected := "Gemma-4-E4B-it-GGUF"
 	c := client.NewCanonicalSubprocessClient("unused", []string{"--json-events", "--model", "old-model"}, false)
 	var saves []savedCall
-	m := NewChatModelForCatalogAgent(c, setupAgentID, "GAIA", false).
+	m := NewChatModelForCatalogAgent(c, setupAgentID, "GAIA").
 		WithModelMemory(func(provider, model string) error {
 			saves = append(saves, savedCall{provider, model})
 			return nil
@@ -256,7 +256,7 @@ func TestFirstRunSetupSwitchesARunningAgentAndCancelsAnOldRestore(t *testing.T) 
 	selected := "Gemma-4-E4B-it-GGUF"
 	c := &queryCapturingClient{}
 	var saves []savedCall
-	m := NewChatModelForCatalogAgent(c, setupAgentID, "GAIA", false).
+	m := NewChatModelForCatalogAgent(c, setupAgentID, "GAIA").
 		WithModelMemory(func(provider, model string) error {
 			saves = append(saves, savedCall{provider, model})
 			return nil

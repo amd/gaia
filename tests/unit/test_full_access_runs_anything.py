@@ -560,7 +560,7 @@ def test_full_access_records_no_refusal_of_its_own(probe, folders):
 
 
 def test_a_session_over_http_gets_the_same_full_access():
-    registry = pytest.importorskip("gaia_agent.session_registry")
+    registry = pytest.importorskip("gaiapy.session_registry")
     from gaia.ui.sse_handler import SSEOutputHandler
 
     state = registry._permission_state()
@@ -579,7 +579,7 @@ def test_a_session_over_http_gets_the_same_full_access():
 
 
 def test_a_command_past_the_gates_is_not_put_to_a_person_in_that_session():
-    registry = pytest.importorskip("gaia_agent.session_registry")
+    registry = pytest.importorskip("gaiapy.session_registry")
     from gaia.ui.sse_handler import SSEOutputHandler
 
     state = registry._permission_state()

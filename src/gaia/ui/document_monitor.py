@@ -8,7 +8,6 @@ and content hash) and triggers re-indexing when files are modified on disk.
 """
 
 import asyncio
-import hashlib
 import logging
 import os
 import sqlite3
@@ -17,20 +16,12 @@ from pathlib import Path
 from typing import Any, Awaitable, Callable, Dict, Optional, Set
 
 from .database import ChatDatabase
+from .utils import compute_file_hash as _compute_file_hash
 
 logger = logging.getLogger(__name__)
 
 # Default polling interval in seconds
 DEFAULT_INTERVAL = 30.0
-
-
-def _compute_file_hash(filepath: Path) -> str:
-    """Compute SHA-256 hash of file contents."""
-    sha256 = hashlib.sha256()
-    with open(filepath, "rb") as f:
-        for block in iter(lambda: f.read(8192), b""):
-            sha256.update(block)
-    return sha256.hexdigest()
 
 
 def _get_file_info(filepath: str) -> Optional[tuple]:

@@ -9,7 +9,7 @@ import { useChatStore } from '../../stores/chatStore';
 import * as api from '../../services/api';
 import type { PreflightReport, SetupRunStatus } from '../../types';
 import { COLD_BIG, QWEN, progress, runStatus } from '../setup/__tests__/fixtures';
-import { NO_BACKENDS, NO_GPU_SPLIT } from '../../test/setupApiMocks';
+import { AGENT_PROGRAMS, NO_BACKENDS, NO_GPU_SPLIT, SETTINGS } from '../../test/setupApiMocks';
 
 vi.mock('../../services/api', async (importOriginal) => {
     const real = await importOriginal<typeof api>();
@@ -33,6 +33,8 @@ beforeEach(() => {
     mockedApi.getSetupPlan.mockResolvedValue(COLD_BIG());
     mockedApi.getGpuMemory.mockResolvedValue(NO_GPU_SPLIT);
     mockedApi.getModelServer.mockResolvedValue(NO_BACKENDS);
+    mockedApi.getSettings.mockResolvedValue(SETTINGS);
+    mockedApi.getAgentPrograms.mockResolvedValue(AGENT_PROGRAMS);
     mockedApi.getStartScreen.mockResolvedValue({ cards: [], working_folder: null } as unknown as Awaited<ReturnType<typeof api.getStartScreen>>);
     mockedApi.getCloudPrices.mockResolvedValue({ provider: 'fireworks', models: [], source: null, note: '' } as unknown as Awaited<ReturnType<typeof api.getCloudPrices>>);
 });

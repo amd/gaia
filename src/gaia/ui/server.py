@@ -57,9 +57,11 @@ from .agent_loop import agent_loop
 
 # pylint: enable=unused-import
 from .database import ChatDatabase
+from .document_copies import move_library_files_out_of_shared_folder
 from .document_monitor import DocumentMonitor
 from .memory_settings import memory_enabled
 from .restart_recovery import recover_interrupted_work, sweep_interrupted_work
+from .routers import agent_programs as agent_programs_router_mod
 from .routers import agents as agents_router_mod
 from .routers import automations as automations_router_mod
 from .routers import changes as changes_router_mod
@@ -71,6 +73,7 @@ from .routers import files as files_router_mod
 from .routers import goals as goals_router_mod
 from .routers import gpu_memory as gpu_memory_router_mod
 from .routers import hub as hub_router_mod
+from .routers import images as images_router_mod
 from .routers import lemonade as lemonade_router_mod
 from .routers import logs as logs_router_mod
 from .routers import mcp as mcp_router_mod
@@ -334,9 +337,9 @@ def _run_scheduled_prompt(
         return _relay_scheduled_prompt(db, prompt, cancel_event, console)
 
     try:
-        from gaia_agent.agent import GaiaAgent, GaiaAgentConfig
+        from gaiapy.agent import GaiaAgent, GaiaAgentConfig
     except ModuleNotFoundError as e:
-        if (e.name or "").partition(".")[0] != "gaia_agent":
+        if (e.name or "").partition(".")[0] != "gaiapy":
             raise RuntimeError(_scheduled_import_error(e)) from e
         raise RuntimeError(_flagship_missing_message(registry)) from e
     except ImportError as e:
@@ -531,6 +534,8 @@ def create_app(db_path: str = None, webui_dist: str = None) -> FastAPI:
     db = ChatDatabase(db_path)
     # What a crashed or closed server left mid-way, before anything new starts.
     recover_interrupted_work(db)
+    # Chats must not reach each other's documents through the folder they share.
+    move_library_files_out_of_shared_folder(db)
 
     # Background indexing: track running tasks by document ID
     # so we can report status and cancel them.
@@ -991,6 +996,7 @@ def create_app(db_path: str = None, webui_dist: str = None) -> FastAPI:
 
     # ── Include Routers ──────────────────────────────────────────────────
     app.include_router(system_router_mod.router)
+    app.include_router(agent_programs_router_mod.router)
     app.include_router(onboarding_router_mod.router)
     app.include_router(setup_router_mod.router)
     app.include_router(gpu_memory_router_mod.router)
@@ -1002,6 +1008,7 @@ def create_app(db_path: str = None, webui_dist: str = None) -> FastAPI:
     app.include_router(spending_router_mod.router)
     app.include_router(skills_router_mod.router)
     app.include_router(hub_router_mod.router)
+    app.include_router(images_router_mod.router)
     app.include_router(agents_router_mod.router)
     app.include_router(sessions_router_mod.router)
     app.include_router(chat_router_mod.router)

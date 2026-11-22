@@ -141,13 +141,13 @@ func TestTaskListMarksNeedNoColourOrSymbolFont(t *testing.T) {
 
 func TestTaskListTakesItsRowsFromTheTranscript(t *testing.T) {
 	m := newTestChat(t)
-	before := m.viewport.Height
 	m = feed(t, m, threeSteps())
 	if m.taskRows != 5 {
 		t.Fatalf("taskRows = %d, want 5 (divider, head, three steps)", m.taskRows)
 	}
-	if m.viewport.Height != before-m.taskRows {
-		t.Errorf("transcript is %d rows, want %d", m.viewport.Height, before-m.taskRows)
+	// The status line a running turn adds is chrome; the card takes the rest from the transcript.
+	if want := m.height - m.chatChromeRows() - m.taskRows; m.viewport.Height != want {
+		t.Errorf("transcript is %d rows, want %d", m.viewport.Height, want)
 	}
 	if h := lipgloss.Height(m.View()); h != m.height {
 		t.Errorf("frame is %d rows on a %d-row terminal", h, m.height)
@@ -156,7 +156,8 @@ func TestTaskListTakesItsRowsFromTheTranscript(t *testing.T) {
 
 func TestALongListKeepsTheRunningStepInView(t *testing.T) {
 	m := newTestChat(t)
-	m.height = 16
+	// Room for two steps and the "more" line beside a running turn's status line.
+	m.height = 18
 	m.resize()
 	long := threeSteps()
 	long.Items = nil
@@ -224,5 +225,31 @@ func TestTaskListShowsAFailedStepAsFailed(t *testing.T) {
 	}
 	if strings.Contains(joined, "[x] Fix the off-by-one") {
 		t.Fatalf("a failed step must not read as done, got:\n%s", joined)
+	}
+}
+
+func TestATightCardNeverDrawsMoreRowsThanItWasGiven(t *testing.T) {
+	m := newTestChat(t)
+	long := threeSteps()
+	long.Items = nil
+	for i := 1; i <= 10; i++ {
+		status := event.TaskPending
+		if i < 8 {
+			status = event.TaskCompleted
+		}
+		if i == 8 {
+			status = event.TaskInProgress
+		}
+		long.Items = append(long.Items, event.TaskListItem{ID: i, Content: "step " + string(rune('0'+i%10)), Status: status})
+	}
+	m = feed(t, m, long)
+	for rows := 2; rows <= 8; rows++ {
+		card := m.renderTaskList(rows)
+		if h := lipgloss.Height(card); h > rows {
+			t.Errorf("given %d rows the card drew %d:\n%s", rows, h, ansi.Strip(card))
+		}
+		if strings.Contains(ansi.Strip(card), "[x] step 7") && !strings.Contains(ansi.Strip(card), "[>] step 8") {
+			t.Errorf("given %d rows the card showed a finished step instead of the running one:\n%s", rows, ansi.Strip(card))
+		}
 	}
 }

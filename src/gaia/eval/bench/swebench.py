@@ -2,7 +2,8 @@
 # SPDX-License-Identifier: MIT
 """SWE-bench Verified: real issues from public repositories, graded by the official harness.
 
-Nothing of the dataset is committed here. At run time:
+Only the split's instance ids are committed (``swebench_verified_ids.json``,
+so a seeded sample needs no network). At run time:
 
 - :func:`load_instances` fetches each instance from the Hugging Face dataset
   ``SWE-bench/SWE-bench_Verified`` (the ``datasets`` package when it is
@@ -44,6 +45,7 @@ import site
 import subprocess
 import sys
 import sysconfig
+import time
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence, Tuple
@@ -61,6 +63,14 @@ SPLIT = "test"
 DATASET_ROWS_URL = "https://datasets-server.huggingface.co/rows"
 #: The datasets-server pages at most 100 rows at a time.
 ROWS_PER_PAGE = 100
+#: Seconds to wait before each retry of a page the datasets-server answered
+#: with a 5xx or dropped; it is overloaded now and then for minutes at a time.
+FETCH_RETRY_DELAYS_S = (15, 45, 90)
+#: Every instance id in the split, committed so a seeded sample needs no
+#: network. Verified is fixed at 500 instances; ``load_instances`` raises if
+#: the dataset ever lacks one of them.
+VERIFIED_IDS_FILE = Path(__file__).with_name("swebench_verified_ids.json")
+VERIFIED_SIZE = 500
 #: Kept from each dataset row; the rest (hints, eval script, test patch) is not.
 COLUMNS = (
     "instance_id",
@@ -150,39 +160,88 @@ def _fetch_with_datasets(ids: Sequence[str]) -> Dict[str, Dict[str, Any]]:
     return {r["instance_id"]: r for r in rows if r["instance_id"] in wanted}
 
 
-def _fetch_with_rest(ids: Optional[Sequence[str]]) -> Dict[str, Dict[str, Any]]:
-    """Page through the split on the datasets-server; stop once every id is seen.
+def _transient(exc: Exception) -> bool:
+    """A 5xx, a timeout or a dropped connection: worth asking again."""
+    import requests  # pylint: disable=import-outside-toplevel
 
-    ``None`` reads every row.
+    if isinstance(exc, requests.HTTPError):
+        return exc.response is not None and exc.response.status_code >= 500
+    if isinstance(exc, requests.exceptions.SSLError):
+        return False
+    return isinstance(
+        exc,
+        (
+            requests.ConnectionError,
+            requests.Timeout,
+            requests.exceptions.ChunkedEncodingError,
+        ),
+    )
+
+
+def rows_page(
+    dataset: str,
+    split: str,
+    offset: int,
+    delays: Optional[Sequence[float]] = None,
+) -> Dict[str, Any]:
+    """One page of *dataset* rows from the datasets-server.
+
+    A 5xx, timeout or dropped connection is retried once after each of
+    *delays* (default :data:`FETCH_RETRY_DELAYS_S`), each retry printed; the
+    last failure is raised. A 4xx or unreadable JSON is raised at once.
     """
     import requests  # pylint: disable=import-outside-toplevel
 
-    wanted = None if ids is None else set(ids)
-    found: Dict[str, Dict[str, Any]] = {}
-    offset = 0
-    while wanted is None or wanted - set(found):
-        query = urlencode(
-            {
-                "dataset": DATASET,
-                "config": "default",
-                "split": SPLIT,
-                "offset": offset,
-                "length": ROWS_PER_PAGE,
-            }
-        )
+    if delays is None:
+        delays = FETCH_RETRY_DELAYS_S
+
+    query = urlencode(
+        {
+            "dataset": dataset,
+            "config": "default",
+            "split": split,
+            "offset": offset,
+            "length": ROWS_PER_PAGE,
+        }
+    )
+    for attempt in range(len(delays) + 1):
         try:
             resp = requests.get(f"{DATASET_ROWS_URL}?{query}", timeout=FETCH_TIMEOUT_S)
             resp.raise_for_status()
-            page = resp.json()
+            return resp.json()
+        except requests.RequestException as exc:
+            if attempt == len(delays) or not _transient(exc):
+                raise
+            print(
+                f"[RETRY] {dataset} {split} offset {offset}: {exc}; retry "
+                f"{attempt + 1}/{len(delays)} in {delays[attempt]:g}s",
+                file=sys.stderr,
+                flush=True,
+            )
+            time.sleep(delays[attempt])
+    raise AssertionError("unreachable")  # pragma: no cover
+
+
+def _fetch_with_rest(ids: Sequence[str]) -> Dict[str, Dict[str, Any]]:
+    """Page through the split on the datasets-server; stop once every id is seen."""
+    import requests  # pylint: disable=import-outside-toplevel
+
+    wanted = set(ids)
+    found: Dict[str, Dict[str, Any]] = {}
+    offset = 0
+    while wanted - set(found):
+        try:
+            page = rows_page(DATASET, SPLIT, offset)
         except (requests.RequestException, ValueError) as exc:
             raise SweBenchError(
                 f"could not read {DATASET} from {DATASET_ROWS_URL} (offset {offset}): "
-                f"{exc}. Install the `datasets` package to read it directly, or "
-                "retry when the datasets-server answers."
+                f"{exc}. A 5xx is retried {len(FETCH_RETRY_DELAYS_S)} times first. "
+                "Install the `datasets` package to read it directly, or retry when "
+                "the datasets-server answers."
             ) from exc
         rows = [entry["row"] for entry in page.get("rows") or []]
         for row in rows:
-            if wanted is None or row.get("instance_id") in wanted:
+            if row.get("instance_id") in wanted:
                 found[row["instance_id"]] = row
         offset += len(rows)
         if not rows or offset >= int(page.get("num_rows_total") or 0):
@@ -207,14 +266,14 @@ SAMPLE_SEED = 20260930
 
 
 def all_instance_ids() -> List[str]:
-    """Every instance id in the split, sorted."""
-    if importlib.util.find_spec("datasets") is not None:
-        from datasets import (  # pylint: disable=import-outside-toplevel,import-error
-            load_dataset,
+    """Every instance id in the split, sorted, from :data:`VERIFIED_IDS_FILE`."""
+    ids = json.loads(VERIFIED_IDS_FILE.read_text(encoding="utf-8"))
+    if len(ids) != VERIFIED_SIZE or ids != sorted(set(ids)):
+        raise SweBenchError(
+            f"{VERIFIED_IDS_FILE} must hold the {VERIFIED_SIZE} {DATASET} ids, "
+            "sorted and unique; restore it from git."
         )
-
-        return sorted(load_dataset(DATASET, split=SPLIT)["instance_id"])
-    return sorted(_fetch_with_rest(None))
+    return ids
 
 
 def sample_ids(

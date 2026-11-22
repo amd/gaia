@@ -79,7 +79,7 @@ reply; the bundled `inbox-triage` skill does the triage judgment on top of them.
 The bundled `send-email` skill drafts, replies, forwards and sends, and asks
 before anything leaves the mailbox. The agent never archives, labels or deletes
 received mail, and every email body is read by the local model. Gemma 4 E4B
-(GPU or NPU) is not offered the mail tools; a larger model is. Setup and the
+(GPU or NPU) and the small Qwen3.5 models are not offered the mail tools; a larger model is. Setup and the
 full tool list:
 [Email guide](https://amd-gaia.ai/docs/guides/email).
 
@@ -204,6 +204,13 @@ await shutdown(proc);
 `/v1/gaia/query` streams Server-Sent Events terminated by exactly one `final` or
 `error`. `fetchAll()` also returns the TUI's path if you would rather launch that.
 
+**Want a researched, cited report?** Start the query with `/research`, as in
+`"query": "/research the history of RISC-V"`. The agent loads its
+`research-report` skill for the turn and answers with a report that links every
+claim to a page it fetched. Before the answer is final, every cited link is
+checked against the pages the agent opened; any it could not back is listed
+under the report. See [`SPEC.md` §5.1](./SPEC.md#query-request-body).
+
 **Reuse the same `session_id` for every turn in a conversation.** It is what
 lets a document you had it index, or a skill you had it load, survive to the
 next question — drop it (or mint a new one per call) and the agent still
@@ -256,8 +263,8 @@ event's `args` are exactly the arguments the model sent for the gated call,
 each value capped at 64,000 characters; `args_truncated: true` means one was
 cut, so don't auto-approve that call. What the agent adds to its own prompt —
 the folder a shell call runs in, a risk note, the full path of a relative
-write — comes in `prompt_context`, never
-in `args`. See [`SPEC.md` §5.1](./SPEC.md#51-endpoints).
+write, the content of a Python file it asks to run — comes in
+`prompt_context`, never in `args`. See [`SPEC.md` §5.1](./SPEC.md#51-endpoints).
 
 **Serving the turn from the Agent UI? Send `surface: "agent_ui"`** (contract ≥
 2.20), and the agent points recurring requests at the **Scheduled tasks** page

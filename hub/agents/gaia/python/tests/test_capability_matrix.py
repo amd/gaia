@@ -8,7 +8,7 @@ agent-loop tools, REST verbs, eval coverage) and renders a committed
 
 - AC1: the committed matrix doc is byte-identical to a freshly regenerated one.
 - AC2: ``tools_count`` (68) is identical across ``gaia-agent.yaml``,
-  ``gaia_agent.build_gaia()``, and the AST-derived bundle union.
+  ``gaiapy.build_gaia()``, and the AST-derived bundle union.
 - AC3: every exposed REST functional op is annotated with an eval suite name or
   the "no quality eval" sentinel — closed-set, bidirectional.
 - AC4: the no-MCP scope decision is pinned and matches the manifest.
@@ -30,8 +30,8 @@ from pathlib import Path
 
 import pytest
 
-pytest.importorskip("gaia_agent")
-pytest.importorskip("gaia_agent")
+pytest.importorskip("gaiapy")
+pytest.importorskip("gaiapy")
 
 import yaml  # noqa: E402
 
@@ -67,8 +67,9 @@ _spec.loader.exec_module(capability_matrix)
 # 98 with the three audio_generation tools (music, sound effects, model list).
 # 101 with get_thread, list_connected_mailboxes and list_waiting_on_you.
 # 102 with `forget_everything`, 103 once search_tools became a default tool.
-# 105 with analyze_transcript and export_transcript, 106 with update_tasks.
-_EXPECTED_TOOLS_TOTAL = 106
+# 105 with analyze_transcript and export_transcript; 106 with dictate_document;
+# 107 with update_tasks, which registers only with GAIA_AGENT_PLANS=0.
+_EXPECTED_TOOLS_TOTAL = 107
 # 11 since #3235 put `load_skill` in the core set: the shortlist prompt tells
 # the model to call it even when the skills bundle was not selected.
 # 16 with `sleep`, which joins the core set rather than a bundle: waiting out a
@@ -82,8 +83,8 @@ _EXPECTED_TOOLS_TOTAL = 106
 _EXPECTED_CORE_COUNT = 30
 # 25: the `cli_setup` bundle, `shell_session` (get_shell_state,
 # reset_shell_session), plus `browser_nav` and `browser_use`.
-# 26 with `audio_generation`; 27 with `email_threads`.
-_EXPECTED_BUNDLE_COUNT = 27
+# 26 with `audio_generation`; 27 with `email_threads`; 28 with `speech`.
+_EXPECTED_BUNDLE_COUNT = 28
 
 _EXPECTED_SKILL_LIBRARY_TOOLS = frozenset(
     {
@@ -157,9 +158,9 @@ def test_committed_capability_matrix_is_up_to_date(matrix):
 def test_tools_count_matches_derived(matrix):
     manifest = yaml.safe_load(_GAIA_AGENT_YAML.read_text(encoding="utf-8"))
 
-    import gaia_agent
+    import gaiapy
 
-    registration_count = gaia_agent.build_gaia().tools_count
+    registration_count = gaiapy.build_gaia().tools_count
 
     assert manifest["tools_count"] == _EXPECTED_TOOLS_TOTAL
     assert registration_count == _EXPECTED_TOOLS_TOTAL

@@ -111,11 +111,11 @@ class _DocAgent:
 def live_gaia_sidecar(monkeypatch, tmp_path):
     """The real flagship ``/v1/gaia`` app on a real port, with a document agent."""
     uvicorn = pytest.importorskip("uvicorn")
-    pytest.importorskip("gaia_agent")
+    pytest.importorskip("gaiapy")
     import requests
-    from gaia_agent import caller_auth
-    from gaia_agent import server as server_mod
-    from gaia_agent import session_registry as sr
+    from gaiapy import caller_auth
+    from gaiapy import server as server_mod
+    from gaiapy import session_registry as sr
 
     import gaia.ui.turn_insights as turn_insights
     from gaia.daemon.sidecars.manager import find_free_port

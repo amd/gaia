@@ -52,6 +52,8 @@ class BenchConfig:
     #: GAIA with no path boundary, the reach Claude Code has with its
     #: permissions skipped. Recorded in the scorecard either way.
     full_access: bool = False
+    #: Send each research task as ``/research <prompt>``: GAIA's research mode.
+    research_command: bool = False
     repeats: int = 1
     meter: Optional[str] = None
     fireworks_account: Optional[str] = None
@@ -77,6 +79,7 @@ def resolve(
     therock_url: Optional[str] = None,
     fence: bool = False,
     full_access: bool = False,
+    research_command: bool = False,
     repeats: int = 1,
     meter: Optional[str] = None,
     fireworks_account: Optional[str] = None,
@@ -99,6 +102,11 @@ def resolve(
             "Metering with Fireworks needs the account id. Pass "
             f"--fireworks-account or set {ENV_FIREWORKS_ACCOUNT} (the id in "
             "https://app.fireworks.ai/account/profile)."
+        )
+    if research_command and harness != "gaia":
+        raise BenchConfigError(
+            "--research-command sends GAIA's /research command, which only the "
+            "gaia harness understands. Run the other harness without it."
         )
     if fence and sys.platform != "darwin":
         raise BenchConfigError(
@@ -124,6 +132,7 @@ def resolve(
         therock_url=therock_url or env.get(ENV_THEROCK_URL) or DEFAULT_THEROCK_URL,
         fence=fence,
         full_access=full_access,
+        research_command=research_command,
         repeats=_int(repeats, "--repeats", 1),
         meter=meter,
         fireworks_account=account,

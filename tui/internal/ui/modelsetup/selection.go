@@ -29,6 +29,7 @@ type rowEntry struct {
 	fullGB      float64
 	fits        *bool
 	fitCode     *string // "npu" and "backend" hard-block: nothing can run it
+	tight       bool    // fits, but leaves other apps little memory
 	fitReason   *string // the backend's words, for display
 	needGB      *float64
 	haveGB      *float64
@@ -65,6 +66,7 @@ func entryFrom(e setupapi.CatalogEntry) rowEntry {
 		leftGB:      e.SizeGB,
 		fits:        e.Fits,
 		fitCode:     e.FitCode,
+		tight:       e.Tight,
 		fitReason:   e.FitReason,
 		needGB:      e.NeedGB,
 		haveGB:      e.CapacityGB,

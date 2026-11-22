@@ -6,8 +6,11 @@
 #include "gaia/tui_app.h"
 
 #include <algorithm>
+#include <cstddef>
 #include <iostream>
+#include <string>
 #include <utility>
+#include <vector>
 
 #include <ftxui/component/component_options.hpp>
 #include <ftxui/dom/node.hpp>
@@ -30,7 +33,24 @@ std::string trimCopy(const std::string& s) {
 
 constexpr int kScrollStep = 5;
 constexpr auto kTokenRedrawInterval = std::chrono::milliseconds(33);
-constexpr std::size_t kArgsPreviewLimit = 240;
+constexpr std::size_t kArgsLineWidth = 60;
+constexpr std::size_t kArgsMaxLines = 9;
+
+// Fixed-width lines: paragraph() clips a long unbroken word such as a JSON blob.
+std::vector<std::string> hardWrap(const std::string& s, std::size_t width) {
+    std::vector<std::string> lines;
+    std::size_t pos = 0;
+    while (pos < s.size()) {
+        std::size_t end = std::min(s.size(), pos + width);
+        while (end < s.size() && end > pos + 1 &&
+               (static_cast<unsigned char>(s[end]) & 0xC0) == 0x80) {
+            --end;
+        }
+        lines.push_back(s.substr(pos, end - pos));
+        pos = end;
+    }
+    return lines;
+}
 
 } // namespace
 
@@ -527,24 +547,43 @@ std::string TuiApp::keyHint() const {
 
 Element TuiApp::buildModal() const {
     auto request = broker_->pending();
-    std::string preview = request.args.is_null() ? std::string("{}") : request.args.dump();
-    if (preview.size() > kArgsPreviewLimit) {
-        preview = preview.substr(0, kArgsPreviewLimit) + "...";
+    const std::string preview =
+        request.args.is_null()
+            ? std::string("{}")
+            : request.args.dump(-1, ' ', false, json::error_handler_t::replace);
+
+    // The end of a command matters as much as its start, so a long one keeps both.
+    std::vector<std::string> lines = hardWrap(preview, kArgsLineWidth);
+    if (lines.size() > kArgsMaxLines) {
+        const std::size_t keep = (kArgsMaxLines - 1) / 2;
+        std::size_t hidden = 0;
+        for (std::size_t i = keep; i < lines.size() - keep; ++i) {
+            for (unsigned char c : lines[i]) {
+                if ((c & 0xC0) != 0x80) ++hidden;
+            }
+        }
+        std::vector<std::string> shown(lines.begin(),
+                                       lines.begin() + static_cast<std::ptrdiff_t>(keep));
+        shown.push_back("... " + std::to_string(hidden) + " characters hidden ...");
+        shown.insert(shown.end(), lines.end() - static_cast<std::ptrdiff_t>(keep), lines.end());
+        lines = std::move(shown);
     }
 
     // ASCII rules instead of border(): FTXUI's border is box-drawing, and the
     // TUI is ASCII by default (tui-user-journey.md R3).
-    return vbox({
-               separatorCharacter("="),
-               text("[!] tool confirmation required") | bold,
-               separatorCharacter("-"),
-               paragraph("tool: " + request.toolName),
-               paragraph("args: " + preview),
-               separatorCharacter("-"),
-               text("[y] allow once   [a] always allow   [n] deny   [esc] deny"),
-               separatorCharacter("="),
-           }) |
-           size(WIDTH, LESS_THAN, 68) | size(HEIGHT, LESS_THAN, 16);
+    Elements rows = {
+        separatorCharacter("="),
+        text("[!] tool confirmation required") | bold,
+        separatorCharacter("-"),
+        paragraph("tool: " + request.toolName),
+    };
+    for (std::size_t i = 0; i < lines.size(); ++i) {
+        rows.push_back(text((i == 0 ? "args: " : "      ") + lines[i]));
+    }
+    rows.push_back(separatorCharacter("-"));
+    rows.push_back(text("[y] allow once   [a] always allow   [n] deny   [esc] deny"));
+    rows.push_back(separatorCharacter("="));
+    return vbox(std::move(rows)) | size(WIDTH, LESS_THAN, 68) | size(HEIGHT, LESS_THAN, 17);
 }
 
 Element TuiApp::buildFrame() {

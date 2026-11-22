@@ -26,7 +26,7 @@ Two ways in:
 > **This file is NOT one of the agent's own skills.** It is the integration
 > playbook: how *you* wire this package into an app. The agent separately loads
 > **Agent Skills** into its own prompt at runtime from
-> `gaia_agent/skills/<name>/SKILL.md`. Same filename, different artifact —
+> `gaiapy/skills/<name>/SKILL.md`. Same filename, different artifact —
 > don't ship this one as an agent skill. See
 > [Skills](#10-skills--one-always-on-the-rest-opt-in).
 
@@ -151,7 +151,9 @@ does not install. Required before any query succeeds:
 2. The machine's default chat model downloaded — run `gaia init`. It picks
    `Qwen3.6-35B-A3B-GGUF` where a GPU holds it (~27 GB for models,
    weights plus context cache — a 64 GB+ Strix Halo or a 32 GB GPU) and
-   `Gemma-4-E4B-it-GGUF` everywhere else, CPU-only PCs included, and records the pick as
+   `Gemma-4-E4B-it-GGUF` on 24 GB+ PCs and 10–24 GB GPUs, `Qwen3.5-4B-GGUF` on an
+   8 GB GPU, and `Qwen3.5-2B-GGUF` on PCs with 16 GB of RAM or less (CPU-only
+   included), and records the pick as
    `default_model` in `~/.gaia/config.json`. On 128 GB-class PCs the user may
    switch to the multimodal `user.Qwen3.8-Flash-Next-GGUF` with `gaia config set
    default_model`. `model.id` below names whichever this machine uses.
@@ -351,7 +353,7 @@ The canonical event shapes, as emitted:
 | `tool_call` | `{ type, tool, args, mcp_server?, mcp_server_label?, mcp_tool? }` — an MCP tool names its connector (`mcp_server_label`, e.g. `"Git"`) and the server's own tool name (`mcp_tool`, e.g. `"git_log"`); label the call with those, not the prefixed `tool` |
 | `tool_result` | `{ type, tool, data, render? }` — an MCP tool that returned text carries it in `data.mcp_output` (`{ text, truncated }`); a `search_web` result lists its hits in `data.sources` (`[{ title, url }]`); `render` names the card to draw — `guide` for the bundled `guides` skill's tools, `calculator` for the `calculators` skill's — and a host without a renderer for a key draws its generic result card |
 | `context_usage` | `{ type, window, used, turns_in_view, turns_hidden, ... }`: the context meter, not terminal. A request that sent `turns` gets it before the answer (contract ≥ 2.28), so the meter fills during a long turn; `final.context` follows with the loaded model's own count |
-| `needs_confirmation` | `{ type, run_id, action, summary, confirm_id?, always_scope?, always_label?, risk?, tool_label?, args?, args_truncated?, prompt_context? }` — answer it, or it ends the run; see §8. `summary` shortens long code; `args` is the call itself, exactly the arguments the model sent, each value capped at 64,000 characters (`args_truncated: true` when one was cut — don't auto-approve a call you can't fully see). What GAIA adds to the prompt is in `prompt_context`, never `args`: `working_directory` (where a shell call runs, when the model's arguments don't say), `risk_note` (why GAIA's checks don't cover the call) and `file_path` (the absolute path a write lands at, when the model gave a relative one) |
+| `needs_confirmation` | `{ type, run_id, action, summary, confirm_id?, always_scope?, always_label?, risk?, tool_label?, args?, args_truncated?, prompt_context? }` — answer it, or it ends the run; see §8. `summary` shortens long code; `args` is the call itself, exactly the arguments the model sent, each value capped at 64,000 characters (`args_truncated: true` when one was cut — don't auto-approve a call you can't fully see). What GAIA adds to the prompt is in `prompt_context`, never `args`: `working_directory` (where a shell call runs, when the model's arguments don't say), `risk_note` (why GAIA's checks don't cover the call) `file_path` (the absolute path a write lands at, when the model gave a relative one) and `script` (for `execute_python_file`, the file as read when the prompt was built: `{ text, hidden_lines }`, or `{ unreadable }` saying why there is none; show it, and expect an error instead of a run if the file changes before it starts) |
 | `needs_input` | `{ type, run_id, request_id, question, options[], allow_free_text, sensitive, respond_url, timeout_seconds? }` |
 | `task_list` | `{ type, items[], source, current_action, action_started_at, steps_since_update, updated_at }`: the plan for the request, ticked by the agent loop from tool results (a step's `status` is `pending`, `in_progress`, `completed` or `failed`), or kept by the model with `update_tasks` when `GAIA_AGENT_PLANS=0`; not terminal. `source` is `plan` when the agent read the list from the reply (a `Plan:` block, or the `plan` field of a model that writes its tool calls as text); label that one as the agent's plan, not a kept list. Each event is the whole list, so replace what you show rather than merging. `items[]` are `{ id, content, status, started_at, completed_at }` with `status` `pending`, `in_progress`, `completed` or `failed`; drop `current_action` at `final` or `error` |
 | `final` | `{ type, answer, usage?, failed?, failure?, context?, context_error?, performance?, model_messages?, route? }` — terminal. `route` (contract ≥ 2.29, `hybrid` sessions only): the turn's routing decision; `route.model` is the model it ran on, so bill and label by it. `failed: true`: the turn did not complete (a model call broke, or a gated tool was refused on a run nobody can answer) and `answer` says what was and wasn't done; show it as an error, not a result. `failure: "model_server_down"`: the local model server took no connection (cloud models go through it too), so offer to start it rather than blaming the cloud provider; older binaries never send `failure`. `model_messages` (contract ≥ 2.25, only when the request sent `turns`) is the turn as the model saw it; store it with the reply and send it back in `turns`. `context` / `context_error` and `performance` (the turn's step timings) are optional; see SPEC §5.1 |
@@ -484,7 +486,8 @@ is `pytest` on one call and `rm -rf` on the next. `always` grants the family
 named in `always_scope` for the rest of the session (`pytest` covers every
 spelling of a test run) — say so in your UI, because it stops asking; no
 `always_scope` means don't offer it. `always_label` (when present) says the same
-grant in plain words, e.g. `editing notes.md`. If your prompt expires unanswered, send
+grant in plain words, e.g. `editing notes.md`. Both arrive with any hidden or
+reordering character in the name written as `[U+XXXX]`, so show them as sent. If your prompt expires unanswered, send
 `timeout`, not `deny`: it still refuses, but the agent tells the user the
 request timed out instead of claiming they said no. Unknown run → **404**; a
 prompt that is no longer pending → **409**; any other decision → **422**. All loud,
@@ -578,8 +581,10 @@ In normal permission mode, a path outside the conversation's supplied scope
 requires an approval before it is granted. Full access (the session bypass
 route) grants such a path without that separate prompt when the caller can
 answer for the session, but it does not override `GAIA_ALLOWED_PATHS`, the
-secret- and write-path denylists described below, or the refusal of grants that
-cover the home folder or a drive root.
+secret- and write-path denylists described below, the refusal of grants that
+cover the home folder or a drive root, or GAIA's chat data (`$GAIA_HOME/chat`),
+where the file tools open only the files you sent in `documents` or
+`allowed_paths`, read-only — never another conversation's.
 
 **Being in scope is not the same as being safe, and two denylists apply inside
 it.** Reads refuse secrets — `.env`, `id_rsa`, `credentials.json`, `.netrc`,
@@ -607,12 +612,14 @@ the conversation's scope without that extra prompt, but still cannot widen this
 environment-level restriction. The scratch directory stays writable. An empty,
 relative or missing entry stops the sidecar at startup. It confines the agent's
 tools, not code they run: a `run_python` script or shell command can still read
-anything the OS user can, so isolating a run from files it must not see needs a
+anything the OS user can (code whose text names a credential folder or file is refused before it runs,
+a credential file only when the code reads it, but code that works a path out while it runs is not
+caught), so isolating a run from files it must not see needs a
 separate OS user, container or VM. Embedding `GaiaAgent` lets you pass an explicit
 list instead (the variable still narrows it):
 
 ```python
-from gaia_agent.agent import GaiaAgent, GaiaAgentConfig
+from gaiapy.agent import GaiaAgent, GaiaAgentConfig
 
 agent = GaiaAgent(config=GaiaAgentConfig(allowed_paths=["/home/me/Documents"]))
 ```
@@ -649,6 +656,17 @@ not claim work you did not do, do not present empty output as a result, do not
 substitute a near-miss and report success. Those failures corrupt an answer
 whatever the task is, which is why it cannot live in an opt-in bundle. It
 declares no tools, and its body measures 789 tokens (tiktoken `cl100k`).
+
+**`/research` loads `research-report` for you.** A `query` that starts with
+`/research` (for example `"/research the EU AI Act timeline"`) is a research
+turn: the agent loads `research-report`, keeps its body rendered past the
+per-turn selection, and asks for a report that cites a fetched page for every
+claim. Its cited links are then checked against the pages it fetched, and any
+it could not back are listed under the report. The Agent UI's Research switch
+and the TUI's `/research` both send this
+form, so a caller gets the same behavior by sending it too. `/research-report`
+is the same turn. See
+[`SPEC.md`](./SPEC.md#query-request-body) for the exact contract.
 
 **`document-extract` ships bundled but not enabled.** `gaia-voice` routes a
 request for every item in a document to it, and it drives

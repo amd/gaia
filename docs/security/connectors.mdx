@@ -19,10 +19,19 @@ operator should know about.
 - Linux SecretService (gnome-keyring or kwallet)
 
 Plaintext fallbacks (`keyrings.alt.PlaintextKeyring`,
-`EncryptedKeyring`) are explicitly **refused** at the entry of every
-save and load (plan amendment A4). A Linux user without SecretService
-sees an actionable error pointing at this page rather than silently
-writing tokens to disk.
+`EncryptedKeyring`, `Win32CryptoKeyring`, and anything derived from them) are
+explicitly **refused** before every keyring read and write, by every GAIA
+feature that keeps a secret there (plan amendment A4). Deletes still go ahead,
+with a warning, so secrets saved there earlier can be removed. Disconnecting an
+OAuth account works there too, but only locally: revoking at the provider needs
+the stored refresh token, which GAIA won't read from such a backend, so the
+disconnect skips that step and tells the user where to revoke GAIA's access by
+hand. When keyring chains
+several backends, every backend in the chain is checked, and a chain GAIA cannot
+inspect, or one holding something that is not a keyring backend, is refused
+rather than trusted. A Linux user
+without SecretService sees an actionable error pointing at this page rather
+than silently writing tokens to disk.
 
 **Refresh tokens never cross a public API or response body.** The public
 `gaia.connectors.list_connections()` returns only metadata

@@ -149,7 +149,7 @@ func TestRapidUpdatesLeaveOnlyTheLatestList(t *testing.T) {
 }
 
 func BenchmarkTaskListRender(b *testing.B) {
-	m := NewChatModel(&nullClient{}, "gaia", "", false)
+	m := NewChatModel(&nullClient{}, "gaia", "")
 	m.width, m.height = 120, 40
 	m.resize()
 	m.streaming = true
@@ -164,7 +164,7 @@ func BenchmarkTaskListRender(b *testing.B) {
 }
 
 func BenchmarkFrameWithTaskList(b *testing.B) {
-	m := NewChatModel(&nullClient{}, "gaia", "", false)
+	m := NewChatModel(&nullClient{}, "gaia", "")
 	m.width, m.height = 120, 40
 	m.resize()
 	m.streaming = true
@@ -178,7 +178,7 @@ func BenchmarkFrameWithTaskList(b *testing.B) {
 }
 
 func BenchmarkFrameWithoutTaskList(b *testing.B) {
-	m := NewChatModel(&nullClient{}, "gaia", "", false)
+	m := NewChatModel(&nullClient{}, "gaia", "")
 	m.width, m.height = 120, 40
 	m.resize()
 	m.streaming = true

@@ -123,7 +123,11 @@ func (m ChatModel) renderTaskList(maxRows int) string {
 	}
 
 	available := maxRows - 2 // divider and head
-	if !m.streaming || available < 1 {
+	start, end := 0, 0
+	if m.streaming && available >= 1 {
+		start, end = taskWindow(len(tl.Items), current, available, m.taskHidden)
+	}
+	if end == start {
 		if !allDone {
 			next := current
 			if next < 0 {
@@ -137,7 +141,6 @@ func (m ChatModel) renderTaskList(maxRows int) string {
 	}
 
 	rows := []string{divider, m.fitTaskLine(head)}
-	start, end := taskWindow(len(tl.Items), current, available, m.taskHidden)
 	for i := start; i < end; i++ {
 		rows = append(rows, m.renderTaskItem(tl.Items[i]))
 	}
@@ -154,11 +157,16 @@ func taskWindow(n, current, rows, dropped int) (int, int) {
 	if n <= rows && (dropped == 0 || n < rows) {
 		return 0, n
 	}
+	// One row goes to the "… more" line; with none left, the head says what is next.
 	shown := rows - 1
 	if shown < 1 {
-		shown = 1
+		return 0, 0
 	}
-	start := current - 1
+	// The finished step above the running one only when both fit.
+	start := current
+	if shown > 1 {
+		start = current - 1
+	}
 	if start > n-shown {
 		start = n - shown
 	}

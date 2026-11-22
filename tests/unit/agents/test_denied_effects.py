@@ -13,12 +13,14 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import tempfile
 import threading
 from unittest.mock import MagicMock, patch
 
 import pytest
 
+from gaia.agents.base import denied_effects
 from gaia.agents.base.agent import DECLINED_HINT, Agent
 from gaia.agents.base.console import AgentConsole
 from gaia.agents.base.denied_effects import (
@@ -1498,19 +1500,23 @@ def test_with_no_way_to_ask_the_policy_every_delete_is_kept(tmp_path):
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize(
-    "declined, later",
-    [
-        ("pip install pandas", "pip install openpyxl"),
-        ("gh issue close 3", "gh issue close 4"),
-        ("git push origin main", "git push upstream dev"),
-        (
-            "powershell -Command \"Expand-Archive -Path 'a.zip' -DestinationPath out\"",
-            "powershell -Command \"Expand-Archive -Path 'b.zip' -DestinationPath tmp\"",
-        ),
-        ("dir /s reports", "dir invoices"),
-    ],
-)
+_ANOTHER_ACTION = [
+    ("pip install pandas", "pip install openpyxl"),
+    ("gh issue close 3", "gh issue close 4"),
+    ("git push origin main", "git push upstream dev"),
+    (
+        "powershell -Command \"Expand-Archive -Path 'a.zip' -DestinationPath out\"",
+        "powershell -Command \"Expand-Archive -Path 'b.zip' -DestinationPath tmp\"",
+    ),
+    ("dir /s reports", "dir invoices"),
+    ("pip install ./pkg-a", "pip install ./pkg-b"),
+    ("pip install ./a/pkg[x]", "pip install ./b/pkg[x]"),
+    ("pip install dist/a.whl", "pip install dist/b.whl"),
+    ("pip install a/x.whl", "pip install b/x.whl"),
+]
+
+
+@pytest.mark.parametrize("declined, later", _ANOTHER_ACTION)
 def test_the_same_program_on_something_else_is_another_action(
     declined, later, tmp_path
 ):
@@ -1523,24 +1529,201 @@ def test_the_same_program_on_something_else_is_another_action(
     )
 
 
+_SAME_ACTION = [
+    ("pip install pandas", "pip install --upgrade pandas"),
+    ("pip install pandas", "python -m pip install pandas"),
+    ("pip install pandas", "pip install pandas openpyxl"),
+    ("git push origin main", "git push --force origin main"),
+    ("git push origin main", "git push"),
+    ("git push", "git push origin main"),
+    ("gh issue close 3", 'bash -c "gh issue close 3"'),
+    ("git add a.txt", "git add ."),
+    ("git add src", "git add src/app.py"),
+    ('git commit -m "fix bug"', 'git commit -m "Fix the bug"'),
+    ('gh pr create --title "Fix" --body "one"', 'gh pr create -t "A fix" -b "two"'),
+    ("pip install pandas", "pip install pandas==2.2"),
+    ("pip install pandas>=2", "pip install 'pandas[excel]<3'"),
+    ('git commit -am "fix bug"', 'git commit -m "Fix the bug"'),
+    ('git commit -sam "fix bug"', 'git commit -m "Fix the bug"'),
+    ('git commit -qam "fix bug"', 'git commit -m "Fix the bug"'),
+    ("npm install @scope/pkg@1.0", "npm install @scope/pkg"),
+    ("pip install ./pkg[excel]", "pip install ./pkg"),
+    (r'pip install "C:\My Wheels\pkg[x]"', r'pip install "C:\My Wheels\pkg"'),
+    ('git tag -am "v1" v1', 'git tag -m "Release one" v1'),
+    ('pip install "./My Wheels/a.whl"', 'pip install "My Wheels/a.whl"'),
+    ('pip install "My Wheels/a.whl"', 'pip install "./My Wheels/a.whl"'),
+    ("pip install ./w@1/a.whl", "pip install w@1/a.whl"),
+    ('pip install "My Wheels/a.whl[x]"', 'pip install "./My Wheels/a.whl"'),
+    ("npm install ./w@1/pkg", "npm install w@1/pkg"),
+    ("pip install ./dist/a.whl", "pip install dist/a.whl"),
+    ("pip install git+https://h/r@v1", "pip install git+https://h/r@v2"),
+    (
+        "conda install conda-forge/label/dev::numpy=1.26",
+        "conda install conda-forge/label/dev::numpy=1.25",
+    ),
+    (
+        "conda install conda-forge/label/dev::numpy=1.26",
+        "conda install conda-forge/label/dev::numpy",
+    ),
+    ("npm install alias@npm:@scope/pkg@1", "npm install alias@npm:@scope/pkg@2"),
+    ("pip install dist/a.whl", "pip install ./dist/a.whl"),
+    ("pip install git+ssh://git@h/r@v1", "pip install git+ssh://git@h/r@v2"),
+    ("pip install pkg@https://h/a.whl", "pip install pkg@https://h/b.whl"),
+    ("npm install file:./w@1/a.zip", "npm install file:./w@2/a.zip"),
+]
+
+#: Two different local package files stay one action once either is declined.
+#: A file name can hold spaces, ``@`` and version-like text, so telling two
+#: files apart reliably also lets the same file through under another spelling.
+_DIFFERENT_FILES_STILL_ONE_ACTION = [
+    (r'pip install "C:\My Wheels\a.whl"', r'pip install "C:\My Wheels\b.whl"'),
+    ('pip install "My Wheels/a.whl"', 'pip install "My Wheels/b.whl"'),
+    ("pip install w@1/a.whl", "pip install w@1/b.whl"),
+    ("pip install w@1/a.whl", "pip install w@2/a.whl"),
+    ("npm install foo@./foo-1.0.0.tar.gz", "npm install foo@./foo-2.0.0.tar.gz"),
+    ("yarn add foo@./foo-1.tar.gz", "yarn add foo@./foo-2.tar.gz"),
+    ("pip install pkg@dist/pkg-1.0.tar.gz", "pip install pkg@dist/pkg-2.0.tar.gz"),
+]
+
+
+@pytest.mark.parametrize("declined, later", _DIFFERENT_FILES_STILL_ONE_ACTION)
+def test_a_declined_package_file_also_covers_another_file(declined, later, tmp_path):
+    args = ("run_shell_command", _shell(declined), "run_shell_command", _shell(later))
+    assert _overlaps(*args, tmp_path)
+
+
+#: Review probes: other spellings of one file, ``name @ path`` references,
+#: extras, markers, archive-looking pins, channel labels, aliases, and ``-m``
+#: switches that are not a commit message.
+_PROBES = [
+    ('pip install "./w@1/a.whl"', 'pip install "w@1/a.whl"'),
+    ("pip install ./a/../a/pkg.whl", "pip install ./a/pkg.whl"),
+    (r"pip install .\A\PKG.whl", "pip install ./a/pkg.whl"),
+    (r'pip install "C:\My Wheels\a.whl"', 'pip install "c:/my wheels/x/../a.whl"'),
+    (r'pip install "C:\My Wheels\a.whl"', r'pip install "C:\My Wheels\a.WHL"'),
+    (
+        'pip install "./My Wheels/a.whl"',
+        'python -m pip install --force-reinstall "My Wheels/a.whl"',
+    ),
+    (r'pip install ".\My Wheels\a.whl"', 'pip install "My Wheels/a.whl"'),
+    ("pip install dist/./a.whl", "pip install dist/../dist/a.whl"),
+    ("pip install w@1/a.whl", r"pip install .\w@1\a.whl"),
+    ("pip install -e .[dev]", "pip install -e ."),
+    ("pip install a.whl[x]", "pip install a.whl"),
+    (
+        'uv pip install "pkg @ ./dist/pkg.whl"',
+        'uv pip install "pkg[cli] @ ./dist/pkg.whl"',
+    ),
+    (
+        'pip install "pkg @ ./dist/pkg.whl"',
+        "pip install \"pkg @ ./dist/pkg.whl ; python_version>'3'\"",
+    ),
+    ('pip install "pkg @ ./dist/pkg.whl"', "pip install pkg"),
+    ("pip install pkg@./dist/pkg.whl", "pip install pkg"),
+    ("npm install foo@./foo-1.0.0.tar.gz", "npm install foo"),
+    ("pnpm add foo@./foo-1.zip", "pnpm add foo"),
+    ("pip install 'dist/a 1.whl'", "pip install dist/a"),
+    ("pip install numpy==1.0.zip", "pip install numpy"),
+    ("pip install pkg==1.0.tar.gz", "pip install pkg"),
+    ("pip install numpy>=1.whl", "pip install numpy<2.whl"),
+    ("npm install pkg@latest.zip", "npm install pkg"),
+    ("conda install numpy=1.2=py_0.tar.bz2", "conda install numpy"),
+    ("conda install conda-forge::numpy=1.26", "conda install conda-forge::numpy"),
+    ("pip install pkg@git+https://h/r@v1", "pip install pkg@git+https://h/r@v2"),
+    ('pip install "pkg @ https://h/a.whl"', 'pip install "pkg @ https://h/b.whl"'),
+    ("npm install file:./pkg", "npm install file:../pkg"),
+    ("npm install git@github.com:org/repo", "npm install git@github.com:other/repo"),
+    ("npm install github:org/repo@v1", "npm install github:org/repo@v2"),
+    ("npm install @scope/pkg@1.0", "npm install @scope/other"),
+    ('git commit -am "fix bug"', 'git commit -a -m "Fix the bug"'),
+    ('git commit -AM "fix bug"', 'git commit -m "Fix the bug"'),
+    ('git commit -sam "fix bug"', 'git commit --message "Fix the bug"'),
+    ('git commit -am "fix bug"', "git push"),
+    # A value-taking flag first swallows the rest of its word: no message follows.
+    ("git commit -F custom a.py", "git commit -Fcustom a.py b.py"),
+    ("git commit -Cupstream a.py b.py", "git commit -C upstream a.py"),
+    ("git commit -Fm a.py b.py", "git commit --file=m a.py"),
+    ("git commit -Sm a.py b.py", "git commit -S a.py"),
+    ("git commit -um a.py b.py", "git commit -u a.py"),
+    # After a bare ``--`` every word is a path, ``-am`` included.
+    ("git commit -- -am a.py b.py", "git commit a.py"),
+    ("git commit -- -am a.py b.py", "git commit --am a.py -m b.py"),
+    ("git checkout -qm main -- src", "git checkout main"),
+    ("git branch -fm old new", "git branch old"),
+]
+
+
+_MAIN_TEXT_FLAGS = frozenset({"--message", "--title", "--body", "--comment", "--notes"})
+_MAIN_SHORT_TEXT_FLAGS = {"git": frozenset({"-m"}), "gh": frozenset({"-m", "-b", "-t"})}
+_MAIN_VERSION_PIN = re.compile(r"[\[<>=!~;@ ]")
+
+
+def _without_text_values_on_main(family, rest):
+    flags = _MAIN_TEXT_FLAGS | _MAIN_SHORT_TEXT_FLAGS.get(
+        family.split(" ")[0], frozenset()
+    )
+    kept = []
+    skip = False
+    for word in rest:
+        if skip:
+            skip = False
+        elif word.lower() in flags:
+            skip = True
+        else:
+            kept.append(word)
+    return kept
+
+
+def _unpinned_on_main(word):
+    return word[:1] + _MAIN_VERSION_PIN.split(word[1:], maxsplit=1)[0]
+
+
+def _blocked_on_main(*args):
+    """The matcher as main had it (cca639f8e4), the bar no pair may fall below."""
+    with (
+        patch.object(
+            denied_effects, "_without_text_values", _without_text_values_on_main
+        ),
+        patch.object(denied_effects, "_unpinned", _unpinned_on_main),
+    ):
+        return _overlaps(*args)
+
+
+_EVERY_PAIR = (
+    _SAME_ACTION + _ANOTHER_ACTION + _DIFFERENT_FILES_STILL_ONE_ACTION + _PROBES
+)
+
+
+@pytest.mark.parametrize(
+    "declined, later",
+    _EVERY_PAIR + [(later, declined) for declined, later in _EVERY_PAIR],
+)
+def test_nothing_main_blocked_now_slips_through(declined, later, tmp_path):
+    args = ("run_shell_command", _shell(declined), "run_shell_command", _shell(later))
+    if _blocked_on_main(*args, tmp_path):
+        assert _overlaps(*args, tmp_path)
+
+
 @pytest.mark.parametrize(
     "declined, later",
     [
-        ("pip install pandas", "pip install --upgrade pandas"),
-        ("pip install pandas", "python -m pip install pandas"),
-        ("pip install pandas", "pip install pandas openpyxl"),
-        ("git push origin main", "git push --force origin main"),
-        ("git push origin main", "git push"),
-        ("git push", "git push origin main"),
-        ("gh issue close 3", 'bash -c "gh issue close 3"'),
-        ("git add a.txt", "git add ."),
-        ("git add src", "git add src/app.py"),
-        ('git commit -m "fix bug"', 'git commit -m "Fix the bug"'),
-        ('gh pr create --title "Fix" --body "one"', 'gh pr create -t "A fix" -b "two"'),
-        ("pip install pandas", "pip install pandas==2.2"),
-        ("pip install pandas>=2", "pip install 'pandas[excel]<3'"),
+        ("git checkout -qm main -- src", "git checkout main"),
+        ("git checkout main", "git checkout -qm main -- src"),
+        ("git branch -fm old new", "git branch old"),
+        ("git branch old", "git branch -fm old new"),
+        ("git checkout -qm main -- src", "git checkout dev"),
+        ("git branch -fm old new", "git branch other"),
     ],
 )
+def test_a_dash_m_that_is_not_a_commit_message_reads_as_on_main(
+    declined, later, tmp_path
+):
+    """``checkout -m`` merges and ``branch -m`` moves: the next word is a branch."""
+    args = ("run_shell_command", _shell(declined), "run_shell_command", _shell(later))
+    assert _overlaps(*args, tmp_path) == _blocked_on_main(*args, tmp_path)
+
+
+@pytest.mark.parametrize("declined, later", _SAME_ACTION)
 def test_a_reworded_command_is_the_same_action(declined, later, tmp_path):
     assert _overlaps(
         "run_shell_command",
@@ -1580,6 +1763,12 @@ def test_a_declined_programs_new_output_can_be_made_another_way(tmp_path):
     assert ledger.conflict("write_file", report) is None
     other = "open('out/report.csv', 'w').write('a,b\\n')"
     assert ledger.conflict("run_python", {"code": other}) is None
+
+
+def test_a_declined_program_that_only_made_new_files_records_nothing(tmp_path):
+    ledger = _declined_program(tmp_path, _BUILDS_A_REPORT)
+    assert not ledger
+    assert ledger.conflict("run_python", {"code": _BUILDS_A_REPORT}) is None
 
 
 def test_a_folder_that_is_already_there_is_not_what_was_declined(tmp_path):

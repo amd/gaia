@@ -9,6 +9,7 @@ OpenAI-compatible API and additional functionality.
 """
 
 import atexit
+import base64
 import contextvars
 import json
 import logging
@@ -24,7 +25,7 @@ import threading
 import time
 import weakref
 from contextlib import contextmanager, nullcontext
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from enum import Enum
 from pathlib import Path
@@ -466,6 +467,18 @@ DEFAULT_MODEL_NAME = "Gemma-4-E4B-it-GGUF"
 # gaia.llm.model_fit says it fits, and records the pick as ``default_model``.
 LARGE_DEFAULT_MODEL_NAME = "Qwen3.6-35B-A3B-GGUF"
 
+# The default where Gemma does not fit the memory left once other apps get
+# theirs (``model_fit.with_app_headroom``), such as a GPU with 8 GB of its own:
+# ~7 GB at a 64K window against Gemma's ~8.5 GB. Matched Gemma on GAIA's
+# flagship benchmark with thinking off. A Lemonade built-in (UD-Q4_K_XL +
+# vision projector), pulled by name.
+SMALL_DEFAULT_MODEL_NAME = "Qwen3.5-4B-GGUF"
+
+# The floor: the default on a PC with 16 GB of RAM or less, where a larger
+# model would leave other apps too little (~3.8 GB at 64K). A Lemonade
+# built-in, pulled by name.
+TINY_DEFAULT_MODEL_NAME = "Qwen3.5-2B-GGUF"
+
 # The multimodal big-PC alternative: a 125B MoE with 6B active. Not a
 # Lemonade built-in — registered as a ``user.`` model on first pull (see its
 # MODELS entry). Not auto-selected by ``gaia init`` — switch to it explicitly
@@ -508,6 +521,19 @@ def resolve_default_chat_model() -> str:
     return start_model(config.resolve_model(None, DEFAULT_MODEL_NAME), config)
 
 
+def resolve_local_chat_model() -> str:
+    """The local model a Lemonade-only caller runs when none was passed.
+
+    :func:`resolve_default_chat_model` when that is a local model (on a small
+    PC, the Qwen3.5 pick setup saved), else Gemma: a Claude or cloud default
+    is not something Lemonade can load.
+    """
+    model = resolve_default_chat_model()
+    if model.startswith("claude-") or cloud_model_provider(model):
+        return DEFAULT_MODEL_NAME
+    return model
+
+
 def resolve_chat_model() -> str:
     """The model chat reopens on: ``last_model``, the user's last pick in the
     Agent UI or TUI, else :func:`resolve_default_chat_model`. May be a cloud model.
@@ -526,6 +552,8 @@ VISION_CHAT_MODELS = frozenset(
         LARGE_DEFAULT_MODEL_NAME,
         FLASH_OPTION_MODEL_NAME,
         MUSE_GLIMMER_MODEL_NAME,
+        SMALL_DEFAULT_MODEL_NAME,
+        TINY_DEFAULT_MODEL_NAME,
     }
 )
 
@@ -534,14 +562,14 @@ VISION_CHAT_MODELS = frozenset(
 VISION_OFF_ON_NPU = (
     "GAIA can't read images while it runs on the NPU, because the NPU model "
     "doesn't read images. To read images, switch the chat model to the GPU in "
-    "Settings > Model."
+    "Settings > Agent & model."
 )
 
 #: Why there is no vision model on the NPU when none that reads images is downloaded.
 VISION_NOT_INSTALLED = (
     "No image-reading model is installed on this PC, and the chat model runs on "
     "the NPU, which doesn't read images. To read images, pick Gemma 4 E4B as the "
-    "chat model in Settings > Model (GAIA offers to download it), then ask again."
+    "chat model in Settings > Agent & model (GAIA offers to download it), then ask again."
 )
 
 
@@ -656,6 +684,8 @@ def downloaded_vision_model(
             LARGE_DEFAULT_MODEL_NAME,
             FLASH_OPTION_MODEL_NAME,
             MUSE_GLIMMER_MODEL_NAME,
+            SMALL_DEFAULT_MODEL_NAME,
+            TINY_DEFAULT_MODEL_NAME,
         )
         if not _model_ids_match(name, configured)
         and any(
@@ -1605,12 +1635,15 @@ def context_for_capacity(requirement: "ModelRequirement", capacity) -> int:
     """
     if not requirement.scales_with_memory:
         return requirement.min_ctx_size
-    from gaia.llm.model_fit import largest_context, npu_capacity
+    from gaia.llm.model_fit import largest_context, npu_capacity, with_app_headroom
 
     if runs_on_npu(requirement.model_id):
         capacity = npu_capacity(capacity)
         if capacity is None:
             return requirement.min_ctx_size
+    else:
+        # The window grows only into memory other apps can spare.
+        capacity = with_app_headroom(capacity)
     return largest_context(
         size_gb=requirement.size_gb,
         kv_bytes_per_token=requirement.kv_bytes_per_token,
@@ -1673,7 +1706,7 @@ def _chosen_ctx_size(model: str, base_url: Optional[str]) -> Optional[int]:
         raise LemonadeClientError(
             f"GAIA can't read this PC's memory ({e}), so it can't check that the "
             f"{tokens // 1024}K context size you chose for {model} fits, and won't "
-            "load it unchecked. Choose Automatic in Settings › Model, or set "
+            "load it unchecked. Choose Automatic in Settings › Agent & model, or set "
             "GAIA_CTX_SIZE to pin a size yourself."
         ) from e
     try:
@@ -2124,6 +2157,40 @@ MODELS = {
         kv_bytes_per_token=16384,
         feature_tier="compact",
     ),
+    # --- Qwen3.5 4B and 2B: the defaults below Gemma ---
+    # Lemonade built-ins on llama.cpp (UD-Q4_K_XL + F16 vision projector), so
+    # pulled by name. Three of every four layers are Gated DeltaNet, whose state
+    # does not grow; the rest carry 256-dim K and V heads in f16. Thinking is
+    # off: on GAIA's agent benchmark both looped in their reasoning with it on.
+    "qwen3.5-4b": ModelRequirement(
+        model_type=ModelType.LLM,
+        model_id=SMALL_DEFAULT_MODEL_NAME,
+        display_name="Qwen3.5 4B (Multimodal)",
+        min_ctx_size=GPU_CTX_SIZE,
+        tool_calling=True,
+        thinking=False,
+        # Weights 2.91 + vision projector 0.67 GB: the size Lemonade lists.
+        size_gb=3.58,
+        # 8 of 32 layers: 4 KV heads x 256 dims x K+V x f16 = 32 KiB/token,
+        # 2.1 GB at 64K. No max_ctx_size: it stays at the 64K its evals ran at
+        # rather than growing into the memory a small PC needs elsewhere.
+        kv_bytes_per_token=32768,
+        feature_tier="compact",
+    ),
+    "qwen3.5-2b": ModelRequirement(
+        model_type=ModelType.LLM,
+        model_id=TINY_DEFAULT_MODEL_NAME,
+        display_name="Qwen3.5 2B (Multimodal)",
+        min_ctx_size=GPU_CTX_SIZE,
+        tool_calling=True,
+        thinking=False,
+        # Weights 1.34 + vision projector 0.67 GB: the size Lemonade lists.
+        size_gb=2.01,
+        # 6 of 24 layers: 2 KV heads x 256 dims x K+V x f16 = 12 KiB/token,
+        # 0.8 GB at 64K. Stays at 64K, like the 4B.
+        kv_bytes_per_token=12288,
+        feature_tier="compact",
+    ),
     # --- Qwen3.8-Flash-Next: opt-in on a 128 GB Strix Halo, never a default ---
     # 125B MoE (6B active) + 51B n-gram embedding; needs llama.cpp's qwen4exp
     # (llama.cpp #27742, in b10825), first bundled in Lemonade v2026.39.1.
@@ -2477,6 +2544,49 @@ MODEL_SAMPLING_PROFILES: Dict[str, CardSampling] = {
             "gpt-oss-120b-GGUF",
         )
     },
+    # https://huggingface.co/Qwen/Qwen3.5-4B "Best Practices": the 4B thinks by
+    # default, the 2B does not; GAIA runs both with thinking off. Non-thinking
+    # uses the 4B card's general profile, which is the 2B card's VL-task one:
+    # the 2B's text profile adds presence_penalty 2.0, too strong for edits
+    # that copy text verbatim.
+    SMALL_DEFAULT_MODEL_NAME: CardSampling(
+        thinks_by_default=True,
+        thinking={
+            "temperature": 1.0,
+            "top_p": 0.95,
+            "top_k": 20,
+            "min_p": 0.0,
+            "presence_penalty": 1.5,
+            "repeat_penalty": 1.0,
+        },
+        non_thinking={
+            "temperature": 0.7,
+            "top_p": 0.8,
+            "top_k": 20,
+            "min_p": 0.0,
+            "presence_penalty": 1.5,
+            "repeat_penalty": 1.0,
+        },
+    ),
+    TINY_DEFAULT_MODEL_NAME: CardSampling(
+        thinks_by_default=False,
+        thinking={
+            "temperature": 1.0,
+            "top_p": 0.95,
+            "top_k": 20,
+            "min_p": 0.0,
+            "presence_penalty": 1.5,
+            "repeat_penalty": 1.0,
+        },
+        non_thinking={
+            "temperature": 0.7,
+            "top_p": 0.8,
+            "top_k": 20,
+            "min_p": 0.0,
+            "presence_penalty": 1.5,
+            "repeat_penalty": 1.0,
+        },
+    ),
     # The MTP build is the same weights plus a speculative-decoding head.
     "Qwen3.6-35B-A3B-GGUF": _QWEN3_6_35B_A3B,
     "Qwen3.6-35B-A3B-MTP-GGUF": _QWEN3_6_35B_A3B,
@@ -2756,13 +2866,6 @@ AGENT_PROFILES = {
         min_ctx_size=GPU_CTX_SIZE,
         description="Interactive chat with RAG and vision support",
     ),
-    "bash": AgentProfile(
-        name="bash",
-        display_name="Bash Agent",
-        models=["gemma-4-e4b"],
-        min_ctx_size=GPU_CTX_SIZE,
-        description="Native C++ bash scripting agent (gaia-bash binary)",
-    ),
     "talk": AgentProfile(
         name="talk",
         display_name="Talk Agent",
@@ -2822,7 +2925,12 @@ def lemonade_server_version(client: "LemonadeClient") -> Optional[str]:
 
 
 #: Largest-first default chat models; the last is the floor every machine gets.
-DEFAULT_MODEL_LADDER = (LARGE_DEFAULT_MODEL_NAME, DEFAULT_MODEL_NAME)
+DEFAULT_MODEL_LADDER = (
+    LARGE_DEFAULT_MODEL_NAME,
+    DEFAULT_MODEL_NAME,
+    SMALL_DEFAULT_MODEL_NAME,
+    TINY_DEFAULT_MODEL_NAME,
+)
 
 #: NPU chat models the pickers offer. Only models whose agent evals ran on the
 #: NPU belong here.
@@ -2923,22 +3031,26 @@ def recommend_npu_chat_model(client: "LemonadeClient") -> Tuple[str, list, Any]:
     return model_id, skipped, npu
 
 
-def _free_memory_rules_out(client, requirement, capacity) -> Optional[str]:
+def below_gemma(model_id: str) -> bool:
+    """A ladder model smaller than Gemma: the default on a PC Gemma is too big for."""
+    return model_id in DEFAULT_MODEL_LADDER and DEFAULT_MODEL_LADDER.index(
+        model_id
+    ) > DEFAULT_MODEL_LADDER.index(DEFAULT_MODEL_NAME)
+
+
+def above_gemma(model_id: str) -> bool:
+    """A ladder model larger than Gemma, the default every PC had before the
+    ladder knew small models."""
+    return model_id in DEFAULT_MODEL_LADDER and DEFAULT_MODEL_LADDER.index(
+        model_id
+    ) < DEFAULT_MODEL_LADDER.index(DEFAULT_MODEL_NAME)
+
+
+def free_memory_shortfall(client, requirement, capacity) -> Optional[str]:
     """Why the memory free now cannot load *requirement*'s model, or None.
 
     Judged at the smallest window a load shrinks to, so a model refused here
     is one setup's verify step would also refuse.
-    """
-    from gaia.llm.model_fit import ModelFitError
-
-    try:
-        return free_memory_shortfall(client, requirement, capacity)
-    except (ModelFitError, LemonadeClientError) as e:
-        return f"could not read this PC's free memory, so cannot confirm it would load: {e}"
-
-
-def free_memory_shortfall(client, requirement, capacity) -> Optional[str]:
-    """:func:`_free_memory_rules_out`'s reason, built from the numbers only.
 
     Raises ``ModelFitError`` or ``LemonadeClientError`` when the free memory
     cannot be read, so the caller decides what to show.
@@ -2966,6 +3078,52 @@ def free_memory_shortfall(client, requirement, capacity) -> Optional[str]:
     )
 
 
+def ladder_verdict(
+    client, model_id: str, capacity, judge_free_memory: bool = True
+) -> Tuple[Optional[bool], Optional[str]]:
+    """Whether ladder model *model_id* may be the default on *capacity*.
+
+    ``(True, None)``; ``(False, why)``; or ``(None, why)`` when the memory free
+    now could not be read. The pick and the setup screen's options both ask
+    this, so they never disagree. Judged against the memory left once other
+    apps get theirs (``model_fit.with_app_headroom``). Disk space and the memory
+    free right now rule out only models above Gemma: both pass in minutes, while
+    the pick is saved as this PC's default.
+    """
+    from gaia.llm.model_fit import ModelFitError, check_fit, with_app_headroom
+
+    mr = find_model_requirement(model_id)
+    size = (mr.size_gb if mr else None) or 0.0
+    if not size:
+        # A size of 0 would fit every PC; never guess a larger model in.
+        return False, "GAIA does not know its download size"
+    if model_id == LARGE_DEFAULT_MODEL_NAME and not capacity.on_gpu:
+        # A product rule, not a fit rule: a CPU-only PC could hold it in RAM
+        # but runs it too slowly to be the default.
+        return False, (
+            "the default only where a GPU holds it; this PC has no GPU memory "
+            f"to report. Choose it yourself with "
+            f"`gaia config set default_model {model_id}`"
+        )
+    above = above_gemma(model_id)
+    judged = with_app_headroom(capacity)
+    if not above:
+        judged = replace(judged, disk_free_gb=None)
+    verdict = check_fit(size, judged, kv_cache_for(mr, judged))
+    if not verdict.fits:
+        return False, verdict.reason
+    if not (above and judge_free_memory):
+        return True, None
+    try:
+        short = free_memory_shortfall(client, mr, capacity)
+    except (ModelFitError, LemonadeClientError) as e:
+        return None, (
+            "could not read this PC's free memory, so cannot confirm it would "
+            f"load: {e}"
+        )
+    return (False, short) if short else (True, None)
+
+
 def recommend_default_chat_model(
     client: "LemonadeClient", judge_free_memory: bool = True
 ) -> Tuple[str, list, Any]:
@@ -2982,48 +3140,30 @@ def recommend_default_chat_model(
     from gaia.llm.model_fit import (
         ModelFitError,
         capacity_from_system_info,
-        check_fit,
         pick_default_model,
+        with_app_headroom,
     )
 
     floor = DEFAULT_MODEL_LADDER[-1]
     try:
         capacity = capacity_from_system_info(client.get_system_info(timeout=15))
     except (ModelFitError, LemonadeClientError) as e:
-        # An unanswered request is as unjudgeable as an unreadable answer.
-        return floor, [(m, str(e)) for m in DEFAULT_MODEL_LADDER[:-1]], None
+        # An unanswered request is as unjudgeable as an unreadable answer: fall
+        # back to the model every PC ran before the ladder knew its memory.
+        return DEFAULT_MODEL_NAME, [(LARGE_DEFAULT_MODEL_NAME, str(e))], None
     candidates, unsupported = [], []
     for model_id in DEFAULT_MODEL_LADDER:
         mr = find_model_requirement(model_id)
-        size = (mr.size_gb if mr else None) or 0.0
-        if model_id != floor and not size:
-            # A size of 0 would fit every PC; never guess a larger model in.
-            unsupported.append((model_id, "GAIA does not know its download size"))
-            continue
-        kv = kv_cache_for(mr, capacity) if mr else 0.0
-        if model_id == LARGE_DEFAULT_MODEL_NAME and not capacity.on_gpu:
-            # A product rule, not a fit rule: a CPU-only PC could hold it in
-            # RAM but runs it too slowly to be the default.
-            unsupported.append(
-                (
-                    model_id,
-                    "the default only where a GPU holds it; this PC has no GPU "
-                    f"memory to report. Choose it yourself with "
-                    f"`gaia config set default_model {model_id}`",
-                )
-            )
-            continue
-        if model_id != floor and check_fit(size, capacity, kv).fits:
-            reason = (
-                _free_memory_rules_out(client, mr, capacity)
-                if judge_free_memory
-                else None
-            )
-            if reason:
+        if model_id != floor:
+            fits, reason = ladder_verdict(client, model_id, capacity, judge_free_memory)
+            if not fits:
                 unsupported.append((model_id, reason))
                 continue
-        candidates.append((model_id, size, kv))
-    model_id, skipped = pick_default_model(candidates, capacity)
+        size = (mr.size_gb if mr else None) or 0.0
+        candidates.append((model_id, size, kv_cache_for(mr, capacity) if mr else 0.0))
+    # Every candidate before the floor already passed, so the first one wins.
+    judged = replace(with_app_headroom(capacity), disk_free_gb=None)
+    model_id, skipped = pick_default_model(candidates, judged)
     return model_id, unsupported + skipped, capacity
 
 
@@ -3738,7 +3878,7 @@ def _unknown_user_model_message(model_id: str) -> str:
     return (
         f"Can't download '{model_id}': GAIA doesn't know where it comes from. "
         "Add it from its Hugging Face link, then download it: in the Agent UI "
-        "use Settings > Model > Add a model from Hugging Face; in the terminal "
+        "use Settings > Agent & model > Add a model from Hugging Face; in the terminal "
         "app use /provider, choose Local, then ctrl+a."
     )
 
@@ -5579,7 +5719,7 @@ class LemonadeClient:
             self.log.warning(
                 f"The restarted Lemonade Server still lists no {provider} models; "
                 f"reconnect {provider} in the TUI's /provider panel or the Agent "
-                "UI's Settings > Model."
+                "UI's Settings > Agent & model."
             )
         return bool(usable)
 
@@ -8136,6 +8276,154 @@ class LemonadeClient:
         except Exception as e:
             self.log.error(f"Error generating image: {str(e)}")
             raise LemonadeClientError(f"Error generating image: {str(e)}")
+
+    IMAGE_EDIT_DEFAULT_MODEL = "Flux-2-Klein-4B"
+    IMAGE_UPSCALE_DEFAULT_MODEL = "RealESRGAN-x4plus"
+
+    @staticmethod
+    def _image_path(
+        image_path: Union[str, Path], *, allowed_suffixes: set[str], endpoint: str
+    ) -> Path:
+        """Return an existing source image accepted by one image endpoint."""
+        path = Path(image_path).expanduser()
+        if not path.is_file():
+            raise LemonadeClientError(f"Image file does not exist: {path}")
+        if path.suffix.lower() not in allowed_suffixes:
+            suffixes = ", ".join(sorted(allowed_suffixes))
+            raise LemonadeClientError(
+                f"{endpoint} requires an image with one of: {suffixes}."
+            )
+        return path
+
+    def _image_response(
+        self, response: requests.Response, *, endpoint: str
+    ) -> Dict[str, Any]:
+        """Return a JSON image response without exposing credential-bearing errors."""
+        if response.status_code == 401:
+            raise LemonadeAuthError(
+                "Lemonade returned 401 Unauthorized. Verify LEMONADE_API_KEY."
+            )
+        if response.status_code >= 400:
+            raise LemonadeClientError(
+                f"Request to {endpoint} failed with status {response.status_code}: "
+                f"{http_body_text(response)}"
+            )
+        try:
+            return response.json()
+        except ValueError as exc:
+            raise LemonadeClientError(
+                "Lemonade returned a non-JSON image response."
+            ) from exc
+
+    def _post_image_multipart(
+        self,
+        endpoint: str,
+        image_path: Union[str, Path],
+        fields: Dict[str, Any],
+        *,
+        timeout: int,
+    ) -> Dict[str, Any]:
+        """POST an image and fields to a Lemonade multipart endpoint."""
+        from gaia.llm.lemonade_choice import setup_change_refusal
+
+        path = self._image_path(
+            image_path,
+            allowed_suffixes={".png", ".jpg", ".jpeg"},
+            endpoint="Image editing",
+        )
+        url = f"{self.base_url}/{endpoint.lstrip('/')}"
+        refusal = setup_change_refusal(url, "POST", fields)
+        if refusal:
+            raise UsersServerUnchangedError(refusal)
+        try:
+            with path.open("rb") as image_file:
+                response = requests.post(
+                    url,
+                    data=fields,
+                    files={
+                        "image": (path.name, image_file, "application/octet-stream")
+                    },
+                    headers=self._auth_headers(),
+                    timeout=(10, timeout),
+                )
+            return self._image_response(response, endpoint=endpoint)
+        except requests.RequestException as exc:
+            raise LemonadeClientError(f"Lemonade image request failed: {exc}") from exc
+
+    def _post_image_json(
+        self,
+        endpoint: str,
+        payload: Dict[str, Any],
+        *,
+        timeout: int,
+    ) -> Dict[str, Any]:
+        """POST a JSON request to a Lemonade image endpoint."""
+        from gaia.llm.lemonade_choice import setup_change_refusal
+
+        url = f"{self.base_url}/{endpoint.lstrip('/')}"
+        refusal = setup_change_refusal(url, "POST", payload)
+        if refusal:
+            raise UsersServerUnchangedError(refusal)
+        try:
+            response = requests.post(
+                url,
+                json=payload,
+                headers={"Content-Type": "application/json", **self._auth_headers()},
+                timeout=(10, timeout),
+            )
+            return self._image_response(response, endpoint=endpoint)
+        except requests.RequestException as exc:
+            raise LemonadeClientError(f"Lemonade image request failed: {exc}") from exc
+
+    @guard_inference()
+    def edit_image(
+        self,
+        image_path: Union[str, Path],
+        prompt: str,
+        model: str = IMAGE_EDIT_DEFAULT_MODEL,
+        size: Optional[str] = None,
+        n: int = 1,
+        timeout: int = 900,
+    ) -> Dict[str, Any]:
+        """Edit a PNG or JPEG with Lemonade's OpenAI-compatible endpoint."""
+        if not isinstance(prompt, str) or not prompt.strip():
+            raise LemonadeClientError("Image editing requires a non-empty prompt.")
+        if isinstance(n, bool) or not isinstance(n, int) or not 1 <= n <= 10:
+            raise LemonadeClientError("Image editing requires n between 1 and 10.")
+        if size is not None and not re.fullmatch(r"[1-9]\d{0,3}x[1-9]\d{0,3}", size):
+            raise LemonadeClientError(
+                "Image editing size must use WIDTHxHEIGHT, e.g. 1024x1024."
+            )
+        fields: Dict[str, Any] = {
+            "model": model,
+            "prompt": prompt,
+            "n": n,
+            "response_format": "b64_json",
+        }
+        if size is not None:
+            fields["size"] = size
+        return self._post_image_multipart(
+            "images/edits", image_path, fields, timeout=timeout
+        )
+
+    @guard_inference()
+    def upscale_image(
+        self,
+        image_path: Union[str, Path],
+        model: str = IMAGE_UPSCALE_DEFAULT_MODEL,
+        timeout: int = 900,
+    ) -> Dict[str, Any]:
+        """Upscale a PNG through Lemonade's base64-JSON endpoint."""
+        path = self._image_path(
+            image_path,
+            allowed_suffixes={".png"},
+            endpoint="Image upscaling",
+        )
+        payload = {
+            "image": base64.b64encode(path.read_bytes()).decode("ascii"),
+            "model": model,
+        }
+        return self._post_image_json("images/upscale", payload, timeout=timeout)
 
     @guard_inference()
     def generate_3d_model(
@@ -11472,56 +11760,3 @@ def create_lemonade_client(
             raise
 
     return client
-
-
-def initialize_lemonade(
-    agent: str = "mcp",
-    ctx_size: Optional[int] = None,
-    auto_start: bool = True,
-    timeout: int = 120,
-    verbose: bool = False,
-    quiet: bool = False,
-    host: Optional[str] = None,
-    port: Optional[int] = None,
-) -> LemonadeStatus:
-    """
-    Convenience function to initialize Lemonade Server.
-
-    This is a simplified interface for initializing Lemonade with agent-specific
-    profiles. It creates a temporary client and runs initialization.
-
-    Args:
-        agent: Agent name (gaia, chat, email, rag, talk, vlm, minimal, mcp)
-        ctx_size: Override context size
-        auto_start: Automatically start server if not running
-        timeout: Timeout for server startup
-        verbose: Enable verbose output
-        quiet: Suppress output
-        host: Lemonade server host (defaults to LEMONADE_BASE_URL, then
-              LEMONADE_HOST, then localhost)
-        port: Lemonade server port (same resolution as host)
-
-    Returns:
-        LemonadeStatus with server status
-
-    Example:
-        from gaia.llm.lemonade_client import initialize_lemonade
-
-        # Initialize for chat agent
-        status = initialize_lemonade(agent="chat")
-
-        # Initialize with a larger context window
-        status = initialize_lemonade(agent="chat", ctx_size=65536)
-    """
-    # Named host/port win; otherwise LEMONADE_BASE_URL, which this defaulted
-    # past entirely — a documented remote server was initialized on localhost
-    # instead, and auto_start then tried to free the local port (#3558).
-    client = LemonadeClient(host=host, port=port, keep_alive=True)
-    return client.initialize(
-        agent=agent,
-        ctx_size=ctx_size,
-        auto_start=auto_start,
-        timeout=timeout,
-        verbose=verbose,
-        quiet=quiet,
-    )
