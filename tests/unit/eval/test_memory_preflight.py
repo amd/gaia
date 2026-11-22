@@ -108,7 +108,8 @@ def test_a_missing_token_file_is_named(monkeypatch, tmp_path):
     error = runner._probe_memory_enabled("http://127.0.0.1:4200")
 
     assert str(missing) in error
-    assert "gaia chat --ui" in error
+    assert "Open the GAIA desktop app" in error
+    assert "gaia chat --ui" not in error
 
 
 def test_backend_with_memory_on_passes_the_probe(monkeypatch, settings_endpoint):
