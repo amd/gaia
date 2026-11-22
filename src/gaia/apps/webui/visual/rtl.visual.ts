@@ -1689,6 +1689,71 @@ for (const locale of ['en', 'ar']) {
     });
 }
 
+for (const locale of ['en', 'ar']) {
+    test(`GAIA's eyes take each running step's icon spot, then become its blue icon (${locale})`, async ({ page }, testInfo) => {
+        const theme = testInfo.project.name === 'dark' ? 'dark' : 'light';
+        await page.addInitScript(() => {
+            const real = window.fetch;
+            window.fetch = (input, init) => {
+                if (!String(input).includes('/chat/send')) return real(input, init);
+                const body = new ReadableStream({
+                    start(controller) {
+                        (window as unknown as { __send: (e: unknown) => void }).__send = (event) =>
+                            controller.enqueue(new TextEncoder().encode(`data: ${JSON.stringify(event)}\n\n`));
+                    },
+                });
+                return Promise.resolve(new Response(body, { headers: { 'Content-Type': 'text/event-stream' } }));
+            };
+        });
+        await open(page, `#${ANSWER_SESSION}`, locale, undefined, theme);
+        const send = (events: unknown[]) => page.evaluate((list) => {
+            for (const e of list) (window as unknown as { __send: (e: unknown) => void }).__send(e);
+        }, events);
+        const box = page.getByRole('textbox').first();
+        await box.fill('Summarize the minutes');
+        await box.press('Enter');
+        await page.waitForFunction(() => '__send' in window);
+
+        const glyphs = page.locator('.agent-activity .step-glyph');
+        const edges = async () => Promise.all((await glyphs.all()).map(async (g) => {
+            const b = (await g.boundingBox())!;
+            expect([b.width, b.height]).toEqual([16, 16]);
+            return locale === 'ar' ? Math.round(b.x + b.width) : Math.round(b.x);
+        }));
+
+        // 1. A live thought: the eyes, where the spinner used to be.
+        await send([{ type: 'thinking', content: 'The minutes are in notes.txt.' }]);
+        await expect(page.locator('.flow-reasoning.live .step-glyph .gaia-eyes')).toHaveAttribute('data-eyes', 'think');
+        await expect(page.locator('.flow-tool-spinner')).toHaveCount(0);
+        await shot(page, `step-rows-thinking-${theme}-${locale}`);
+        expect(await audit(page)).toEqual([]);
+
+        // 2. A running call: the eyes move to its spot.
+        await send([{ type: 'tool_start', tool: 'read_file', narration: 'Reading file: notes.txt' }]);
+        const call = page.locator('.flow-tool').last();
+        await expect(call.locator('.step-glyph .gaia-eyes')).toHaveAttribute('data-eyes', 'read');
+        await expect(page.locator('.flow-tool-spinner')).toHaveCount(0);
+        await shot(page, `step-rows-tool-${theme}-${locale}`);
+        expect(await audit(page)).toEqual([]);
+
+        // 3. All done and the answer streams: blue icon for the call, a brain for the thought.
+        await send([
+            { type: 'tool_end', success: true },
+            { type: 'thinking', content: 'Three dates are listed.' },
+            { type: 'chunk', content: 'The minutes list three dates.' },
+        ]);
+        // The page clock is frozen; let the moment the last step waits for GAIA's mood pass.
+        await page.clock.setFixedTime(NOW.getTime() + 10_000);
+        await expect(call.locator('.step-glyph .gaia-eyes')).toHaveCount(0);
+        await expect(call.locator('.step-glyph svg.flow-tool-icon')).toBeVisible();
+        await expect(page.locator('.flow-reasoning').last().locator('.step-glyph .gaia-eyes')).toHaveAttribute('data-eyes', 'brain');
+        // Every label starts at the same edge, eyes or icon.
+        expect(new Set(await edges()).size).toBe(1);
+        await shot(page, `step-rows-done-${theme}-${locale}`);
+        expect(await audit(page)).toEqual([]);
+    });
+}
+
 const QUESTION_EVENTS = [
     {
         type: 'needs_input', request_id: 'q-1', question: 'Which colour do you prefer?',
