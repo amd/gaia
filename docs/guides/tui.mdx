@@ -1094,7 +1094,9 @@ error — the agent is told you said no to that one action, doesn't do the same
 thing through another tool, and carries on with the task by other means. A no
 covers the command on what it named (`pip install pandas`, not every `pip
 install`), and a declined script's own new output files can still be produced
-another way. When nobody can answer — a
+another way. The exact call you denied isn't asked about again in that chat,
+even one that changes nothing such as `echo`, until you ask for it again or
+`/clear` the conversation. When nobody can answer — a
 scheduled or background run, or a prompt that expires — the command doesn't run.
 A command GAIA's own checks don't cover offers no `a`: it shows the exact line
 and a risk line, and runs once if you say yes (see

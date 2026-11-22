@@ -8,6 +8,11 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 Requires the `gaia` Python CLI 0.27.0+ on `PATH`.
 
+- **A call the user denied is not asked about again in that chat.** Retrying
+  the exact call, even one that changes nothing such as `echo`, is refused
+  without a new approval prompt, and the agent says it was declined. It is
+  asked about again once the user asks for it ("run it again", or naming the
+  command) or clears the conversation.
 - **The sidecar always runs with a caller token.** `startSidecar`,
   `spawnSidecar` and `gaia serve` now mint a token for each start, hand it to
   the sidecar in a `0600` file, and return it as `authToken` (`gaia serve`

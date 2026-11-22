@@ -104,6 +104,7 @@ from gaia.agents.base.denied_effects import (
     PATH,
     PROGRAM_NOT_FOUND,
     UNATTENDED_REFUSAL,
+    DeclinedCalls,
     Denial,
     DeniedEffects,
     Effect,
@@ -4095,6 +4096,8 @@ Do NOT wrap conversational replies in JSON.
         self._followup_queue: Optional["queue.Queue[str]"] = None
         # Effects the user declined this turn; reset per turn.
         self._denied_effects = DeniedEffects()
+        # Exact calls the user declined; kept for the chat, not reset per turn.
+        self._declined_calls = DeclinedCalls()
         # (turn, call) for each approval prompt nobody answered.
         self._expired_calls: set = set()
         # (turn, path) for each access prompt declined or left unanswered.
@@ -8891,6 +8894,7 @@ Do NOT wrap conversational replies in JSON.
                 f"command you need (`{command}`) and why you need it."
             )
         elif answer is False:
+            Agent._note_declined_call(self, tool_name, tool_args)
             asked = (
                 "The user was asked about this exact call and said no again. "
                 "Tell them what is blocked and what you can do without it."
@@ -8924,6 +8928,47 @@ Do NOT wrap conversational replies in JSON.
             },
             False,
         )
+
+    def _note_declined_call(self, tool_name: str, tool_args: Any) -> None:
+        """Keep this exact call off the approval card for the rest of the chat."""
+        if getattr(self, "_declined_calls", None) is None:
+            self._declined_calls = DeclinedCalls()
+        self._declined_calls.record(tool_name, tool_args)
+
+    def forget_declined_calls(self) -> None:
+        """A cleared chat starts with no declined calls, as a new one would."""
+        self._declined_calls = DeclinedCalls()
+
+    def _lift_declined_calls(self, message: str) -> None:
+        """Let the calls *message* asks for again be put to the user again."""
+        declined = getattr(self, "_declined_calls", None)
+        if not declined:
+            return
+        for shown in declined.lift_for(message):
+            logger.info("The user asked again for declined call %s", shown)
+
+    def _repeat_of_declined_call(
+        self, tool_name: str, tool_args: Any
+    ) -> Optional[Dict[str, Any]]:
+        """The refusal for a call the user already declined in this chat, or None."""
+        declined = getattr(self, "_declined_calls", None)
+        shown = declined.declined(tool_name, tool_args) if declined else None
+        if shown is None:
+            return None
+        logger.info("Refused %s (%s): the user declined it earlier", tool_name, shown)
+        return {
+            **NOT_EXECUTED,
+            "status": "denied",
+            "declined_call": shown,
+            "already_declined": True,
+            "hint": DECLINED_HINT,
+            "error": (
+                f"Not run, and not put to the user again: they declined this "
+                f"exact call (`{shown}`) earlier in this chat. Do not repeat it "
+                "or reword it. Tell the user you did not run it because they "
+                "declined it, and that they can ask you to run it again."
+            ),
+        }
 
     def _ask_to_lift_denial(
         self, denial: Denial, effect: Effect, command: str
@@ -9585,6 +9630,11 @@ Do NOT wrap conversational replies in JSON.
             _record_refused_write(self, tool_name, tool_args, refusal)
             return {**refusal, **NOT_EXECUTED} if isinstance(refusal, dict) else refusal
 
+        # The very call the user just said no to is not put to them again.
+        repeated = Agent._repeat_of_declined_call(self, tool_name, tool_args)
+        if repeated is not None:
+            return repeated
+
         # A "no" covers the effect, not the tool: another route to it is asked
         # about, never taken silently.
         asked_and_allowed = False
@@ -9757,14 +9807,17 @@ Do NOT wrap conversational replies in JSON.
                     if callable(unasked) and unasked(tool_name) is True:
                         # Nobody was asked, so no surface calls it the user's no.
                         denied["denied_by"] = "policy"
-                    elif ledger is not None:
-                        ledger.record(
-                            tool_name,
-                            tool_args,
-                            denied_error,
-                            by_user=by_user,
-                            may_create=self._may_create_unasked,
-                        )
+                    else:
+                        if by_user:
+                            Agent._note_declined_call(self, tool_name, tool_args)
+                        if ledger is not None:
+                            ledger.record(
+                                tool_name,
+                                tool_args,
+                                denied_error,
+                                by_user=by_user,
+                                may_create=self._may_create_unasked,
+                            )
                 return denied
             # A call approved once runs against this record, and only once.
             noted = getattr(self, "note_confirmed_call", None)
@@ -13457,6 +13510,7 @@ Do NOT wrap conversational replies in JSON.
                 text = pending.get_nowait()
             except queue.Empty:
                 break
+            Agent._lift_declined_calls(self, text)
             framed = self.FOLLOWUP_PREAMBLE + text
             # Two dicts, not one shared object: every other append in this loop
             # builds its own, and downstream code edits entries in place.
@@ -13543,6 +13597,9 @@ Do NOT wrap conversational replies in JSON.
         self._single_tool_done = False
         self._turn_seq += 1
         self._denied_effects = DeniedEffects(os.getcwd())
+        Agent._lift_declined_calls(
+            self, getattr(self, "_original_user_input", None) or user_input
+        )
         self._begin_turn_provenance()
         self._turn_unasked_removals = []
         # Cleared per turn: a trace must never report the previous turn's

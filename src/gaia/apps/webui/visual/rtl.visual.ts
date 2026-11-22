@@ -2593,6 +2593,7 @@ async function withCommandsPanel(page: Page): Promise<void> {
                         },
                     }),
                     shell(3, 'git clone https://github.com/amd/gaia.git /home/you/Work/gaia', { success: false, declined: true }),
+                    shell(4, 'echo hi\u200bthere'),
                 ],
             },
         ],
@@ -2617,10 +2618,12 @@ for (const useCase of USE_CASES) {
             await expect(panel.locator(`.sp-chip.is-${useCase.chip}`)).toBeVisible();
             await expect(panel.locator('.sp-chip.is-chat')).toHaveCount(0);
             if (useCase.name === 'commands') {
-                // One ran, one failed, one was refused: a saved command is not called failed for how it was stored.
-                for (const state of ['ok', 'failed', 'declined']) {
-                    await expect(panel.locator(`.sp-cmd-icon.is-${state}`)).toHaveCount(1);
+                // Two ran, one failed, one was refused: a saved command is not called failed for how it was stored.
+                for (const [state, count] of [['ok', 2], ['failed', 1], ['declined', 1]] as const) {
+                    await expect(panel.locator(`.sp-cmd-icon.is-${state}`)).toHaveCount(count);
                 }
+                // A character that doesn't show is marked, as on the approval card.
+                await expect(panel.locator('[data-section="commands"] code').first()).toHaveText('echo hi[U+200B]there');
             }
             // Nothing for work this chat isn't doing.
             for (const other of USE_CASES.filter((u) => u !== useCase)) {
