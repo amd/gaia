@@ -211,7 +211,7 @@ const messages: Messages = {
     'newChat.agent.cantDownload': 'لا يمكن تنزيل {name} هنا: {reason}',
     'newChat.agent.checkFailed': 'تعذّر التحقق مما إذا كان يمكن تنزيل {name}: {error}',
     'newChat.agent.switchFailed': 'تعذّر التبديل إلى وكيل Python: {error}',
-    'newChat.agent.pythonMissing': 'إنه غير مثبّت على هذا الكمبيوتر، لذا يبقى {name} وكيلك. شغّل gaia init لتثبيته.',
+    'newChat.agent.pythonMissing': 'إنه غير مثبّت على هذا الكمبيوتر، لذا يبقى {name} وكيلك.',
     'newChat.agent.kept': 'رسالتك لا تزال في المربع. أرسلها بعد أن يبدأ الوكيل.',
     'newChat.agent.starting': 'جارٍ تشغيل الوكيل…',
     'newChat.docs.forChat': 'مستندات هذه المحادثة',
