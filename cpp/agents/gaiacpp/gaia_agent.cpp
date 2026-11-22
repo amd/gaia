@@ -1686,6 +1686,126 @@ std::optional<std::string> GaiaAgent::unsavedFiguresNote(const std::string& answ
            "plainly that the file doesn't contain them.";
 }
 
+namespace {
+
+// Sentences of an answer; a '.' inside a name (stats.py) doesn't end one.
+std::vector<std::string> sentencesOf(const std::string& text) {
+    std::vector<std::string> out;
+    std::string cur;
+    for (size_t i = 0; i < text.size(); ++i) {
+        const char ch = text[i];
+        if (ch == '\n') {
+            out.push_back(cur);
+            cur.clear();
+            continue;
+        }
+        cur += ch;
+        const bool atEnd = i + 1 == text.size() || std::isspace(static_cast<unsigned char>(text[i + 1]));
+        if ((ch == '.' || ch == '!' || ch == '?') && atEnd) {
+            out.push_back(cur);
+            cur.clear();
+        }
+    }
+    if (!cur.empty()) out.push_back(cur);
+    return out;
+}
+
+}  // namespace
+
+std::string GaiaAgent::passingTestClaim(const std::string& answer) {
+    static const std::regex claim(
+        R"(\btests?\b(?:[^.;\n]|\.(?=\S)){0,60}?)"
+        R"(\b(?:pass(?:es|ed)?|succeed(?:s|ed)?|(?:are|were|is) (?:all )?(?:passing|green))\b|)"
+        R"(\bran the tests? successfully\b|\bconfirmed (?:the fix |this |it |the change )?by running the tests?\b|)"
+        R"(\btests? (?:run|ran) (?:successfully|clean|green)\b|\ball tests? green\b)",
+        std::regex::icase);
+    // A sentence that also reports a failure is a mixed report, not a claim of success.
+    static const std::regex failure(R"(\bfail(?:s|ed|ing|ures?)?\b|\berrors?\b)", std::regex::icase);
+    // Negation and intent are local to a clause: "the tests pass, confirming nothing broke" claims.
+    static const std::regex hedge(
+        R"(\b(?:not|no|never|didn't|did not|couldn't|could not|unable|without|should|will|would|could|may|might|)"
+        R"(if|once|to (?:confirm|make sure|verify|check))\b|n't\b)",
+        std::regex::icase);
+    static const std::regex clauseBreak(R"(,|;|\bbut\b|\bhowever\b)", std::regex::icase);
+    for (const auto& sentence : sentencesOf(answer)) {
+        if (std::regex_search(sentence, failure)) continue;
+        std::sregex_token_iterator it(sentence.begin(), sentence.end(), clauseBreak, -1), end;
+        for (; it != end; ++it) {
+            const std::string clause = *it;
+            std::smatch m;
+            if (std::regex_search(clause, m, claim) && !std::regex_search(clause, hedge)) return m.str();
+        }
+    }
+    return "";
+}
+
+GaiaAgent::TestEvidence GaiaAgent::testEvidence(const std::vector<CallSeen>& calls) {
+    static const std::regex runner(
+        R"((?:^|[\s;&|("'])(?:py\.?test(?![\w.])|\S*python[\d.]*(?:\.exe)?\s+-m\s+(?:pytest|unittest)\b|)"
+        R"(py\s+-m\s+(?:pytest|unittest)\b|(?:npm|pnpm|yarn|bun)\s+(?:run\s+)?test\b|npx\s+(?:jest|vitest|mocha)\b|)"
+        R"((?:jest|vitest|mocha|ctest|tox|nox|phpunit|rspec)(?![\w.])|go\s+test\b|cargo\s+test\b|dotnet\s+test\b|)"
+        R"(mvn\s+test\b|(?:\./)?gradlew?\s+test\b|make\s+(?:test|check)\b|deno\s+test\b))",
+        std::regex::icase);
+    // Lines only a test runner prints; a script that merely imports a test file prints none.
+    static const std::regex summary(
+        R"(\b\d+ passed\b|\bRan \d+ tests? in\b|\bTests?:\s+\d+ passed\b|\btest result: (?:ok|FAILED)\b|)"
+        R"(\b\d+ (?:tests? )?passing\b|\b\d+ failed\b|\bno tests ran\b|\bcollected \d+ items?\b)");
+    static const std::regex failed(
+        R"(\b[1-9]\d* (?:failed|failing|errors?)\b|\bFAILED\b|\bFAIL\b|\bfailures=[1-9]|\berrors=[1-9]|)"
+        R"(\bno tests ran\b|\bcollected 0 items\b)");
+    static const std::regex exitCode(R"rx("exit_code":\s*(-?\d+))rx");
+    TestEvidence last = TestEvidence::None;
+    for (const auto& c : calls) {
+        if ((c.name == "file_write" || c.name == "file_edit") && c.succeeded) {
+            if (last != TestEvidence::None) last = TestEvidence::Stale;
+            continue;
+        }
+        if (c.name != "bash_execute") continue;
+        const std::string command = strArg(c.args, "command");
+        // The console text, not its JSON escaping: "\n4 passed" must still start a word.
+        std::string text;
+        bool nonzero = false;
+        const json result = json::parse(c.output, nullptr, false);
+        if (result.is_object()) {
+            text = strArg(result, "stdout") + "\n" + strArg(result, "stderr");
+            const auto code = result.find("exit_code");
+            nonzero = code != result.end() && code->is_number_integer() && code->get<long long>() != 0;
+        } else {  // clipped past parsing
+            text = std::regex_replace(c.output, std::regex(R"(\\[nrt])"), " ");
+            std::smatch code;
+            nonzero = std::regex_search(c.output, code, exitCode) && code[1].str() != "0";
+        }
+        if (!std::regex_search(command, runner) && !std::regex_search(text, summary)) continue;
+        last = (!c.succeeded || nonzero || std::regex_search(text, failed)) ? TestEvidence::Failed
+                                                                            : TestEvidence::Passed;
+    }
+    return last;
+}
+
+std::optional<std::string> GaiaAgent::testClaimNote(const std::string& answer, const std::vector<CallSeen>& calls,
+                                                    bool forUser) {
+    if (passingTestClaim(answer).empty()) return std::nullopt;
+    switch (testEvidence(calls)) {
+        case TestEvidence::Passed:
+            return std::nullopt;
+        case TestEvidence::None:
+            return forUser ? "Note from GAIA: I couldn't confirm the tests pass: no tests were run this turn."
+                           : "Your answer says the tests pass, but no test runner ran in this request. Running a "
+                             "test file directly (python test_x.py) only imports it and checks nothing. Run the "
+                             "tests (for example python -m pytest), or say they weren't run.";
+        case TestEvidence::Failed:
+            return forUser ? "Note from GAIA: I couldn't confirm the tests pass: the last test run failed."
+                           : "Your answer says the tests pass, but the last test run in this request failed. Fix "
+                             "what failed and run the tests again, or tell the user which tests fail.";
+        case TestEvidence::Stale:
+            return forUser ? "Note from GAIA: I couldn't confirm the tests pass: files changed after the last "
+                             "test run."
+                           : "Your answer says the tests pass, but files changed after the last test run. Run the "
+                             "tests again, or say they weren't run after the change.";
+    }
+    return std::nullopt;
+}
+
 std::optional<std::string> GaiaAgent::reviewFinalAnswer(const std::string& answer) {
     return reviewAnswer(reviewedPart(answer), false);
 }
@@ -1813,18 +1933,25 @@ std::optional<std::string> GaiaAgent::reviewAnswer(const std::string& answer, bo
         }
         savedText += text + '\n';
     }
+    std::vector<CallSeen> seen;
+    for (const auto& c : calls) seen.push_back({c.name, c.args, c.output, c.succeeded});
+    const std::optional<std::string> testNote = testClaimNote(answer, seen, factsOnly);
     if (factsOnly) {
         std::string list;
         for (const auto& m : missing) list += (list.empty() ? "" : ", ") + m;
+        std::vector<std::string> facts;
         if (!list.empty()) {
-            return "Note from GAIA: the answer says " + list + (missing.size() == 1 ? " was" : " were") +
-                   " saved, but no such file exists in the working folders.";
+            facts.push_back("Note from GAIA: the answer says " + list + (missing.size() == 1 ? " was" : " were") +
+                            " saved, but no such file exists in the working folders.");
+        } else if (comparable && !savedText.empty() && unsavedFiguresNote(answer, turnRequest(), savedText)) {
+            facts.push_back("Note from GAIA: the saved file does not contain the figures given in this "
+                            "answer. Open the file before relying on it.");
         }
-        if (comparable && !savedText.empty() && unsavedFiguresNote(answer, turnRequest(), savedText)) {
-            return std::string("Note from GAIA: the saved file does not contain the figures given in this "
-                               "answer. Open the file before relying on it.");
-        }
-        return std::nullopt;
+        if (testNote) facts.push_back(*testNote);
+        if (facts.empty()) return std::nullopt;
+        std::string out;
+        for (const auto& f : facts) out += (out.empty() ? "" : "\n\n") + f;
+        return out;
     }
     if (!missing.empty()) {
         std::string list;
@@ -1849,7 +1976,9 @@ std::optional<std::string> GaiaAgent::reviewAnswer(const std::string& answer, bo
         R"(\b(I ran|I've run|I have run|ran the (tests?|script|command|program|code)|executed the|)"
         R"(tests? (all )?pass(ed|es)?|all \d+ tests pass))",
         std::regex::icase);
-    if (std::regex_search(answer, ranClaim) && !called({"bash_execute"}, true)) {
+    if (testNote) {
+        notes.push_back(*testNote);
+    } else if (std::regex_search(answer, ranClaim) && !called({"bash_execute"}, true)) {
         notes.push_back("Your answer says a command or the tests ran, but no command ran "
                         "successfully in this request. Run it, or say it wasn't run.");
     }
@@ -1872,8 +2001,6 @@ std::optional<std::string> GaiaAgent::reviewAnswer(const std::string& answer, bo
     }
 
     if (!asksForNoAction(turnRequest())) {
-        std::vector<CallSeen> seen;
-        for (const auto& c : calls) seen.push_back({c.name, c.args, c.output});
         // A named file that isn't there is the missing thing, not a fact other files might hold.
         static const std::regex namedFile(
             R"([\w.&~-]+\.(?:md|txt|csv|tsv|xlsx?|docx?|pdf|pptx?|json|ya?ml|log|html?|xml|ini|toml|eml|zip)\b)",

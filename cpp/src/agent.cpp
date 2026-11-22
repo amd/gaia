@@ -2044,7 +2044,8 @@ json Agent::processQueryInternal(const std::vector<Message>& userMessages, int m
             m.role = MessageRole::USER;
             m.content = "[Not done yet] " + *still +
                         " Your last reply said it was done but called no tool, so nothing changed. Call the tool "
-                        "that does it now (file_write saves a file), then give your whole answer again.";
+                        "that does it now (file_write saves a file, bash_execute runs the tests), then give your "
+                        "whole answer again.";
             return m;
         }
         answerReviewed = true;
@@ -2066,6 +2067,8 @@ json Agent::processQueryInternal(const std::vector<Message>& userMessages, int m
         if (stepLogger_) stepLogger_({{"kind", "review"}, {"step", stepsTaken}, {"unresolved", *still}});
         // Streamed text is already on screen; otherwise the note prints with the answer.
         if (cfg.streaming && !cfg.structuredEvents) console_->printWarning(*still);
+        // An answer whose claims the turn can't back is not a finished turn.
+        incomplete = true;
         return answer + "\n\n" + *still;
     };
 

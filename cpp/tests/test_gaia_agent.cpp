@@ -297,7 +297,67 @@ TEST(GaiaAgentTest, ClaimingTestsRanWithoutRunningThemIsSentBack) {
     GaiaAgent agent(cfgFor(mock), optionsFor(w));
     json r = agent.processQuery("fix it");
     EXPECT_EQ(r["result"], "Fixed the bug; I did not run the tests.");
-    EXPECT_NE(mock.receivedBodies()[1].find("no command ran"), std::string::npos);
+    EXPECT_NE(mock.receivedBodies()[1].find("no test runner ran"), std::string::npos);
+    EXPECT_EQ(r["status"], "success") << "an honest answer after the send-back is a finished turn";
+}
+
+TEST(GaiaAgentTest, ClaimsThatTheTestsPassAreRecognised) {
+    for (const char* claim : {"The tests in `test_stats.py` now pass.",
+                              "I corrected the indices in `stats.py` and confirmed the fix by running the tests "
+                              "successfully.",
+                              "The tests were run and passed, confirming that the refactoring did not introduce "
+                              "any regressions.",
+                              "All 12 tests pass.", "The test suite is passing now, and the bug is fixed."}) {
+        EXPECT_FALSE(GaiaAgent::passingTestClaim(claim).empty()) << claim;
+    }
+    for (const char* none : {"I did not run the tests.", "Run python -m pytest to confirm the tests pass.",
+                             "The tests should pass now.", "3 passed, 1 failed: test_median_even still fails.",
+                             "The tests don't pass yet.", "I wrote the tests.", "Paris is the capital of France."}) {
+        EXPECT_EQ(GaiaAgent::passingTestClaim(none), "") << none;
+    }
+}
+
+TEST(GaiaAgentTest, OnlyARealTestRunBacksAClaimThatTheTestsPass) {
+    using E = GaiaAgent::TestEvidence;
+    auto run = [](const std::string& command, const std::string& stdoutText, int exitCode) {
+        return GaiaAgent::CallSeen{"bash_execute", json{{"command", command}},
+                                   json{{"stdout", stdoutText}, {"stderr", ""}, {"exit_code", exitCode}}.dump()};
+    };
+    const GaiaAgent::CallSeen edit{"file_edit", json{{"path", "stats.py"}}, "{\"status\":\"success\"}"};
+    // Running a pytest-style file directly imports it and runs nothing.
+    EXPECT_EQ(GaiaAgent::testEvidence({run("python test_stats.py", "", 0)}), E::None);
+    EXPECT_EQ(GaiaAgent::testEvidence({run("python -m pytest -q", "4 passed in 0.10s", 0)}), E::Passed);
+    EXPECT_EQ(GaiaAgent::testEvidence({run("pytest -q", "1 failed, 3 passed in 0.6s", 1)}), E::Failed);
+    EXPECT_EQ(GaiaAgent::testEvidence({run("pytest", "no tests ran in 0.01s", 5)}), E::Failed);
+    // A file that calls unittest.main() prints the runner's own summary.
+    EXPECT_EQ(GaiaAgent::testEvidence({run("python test_app.py", "....\nRan 4 tests in 0.001s\n\nOK", 0)}),
+              E::Passed);
+    EXPECT_EQ(GaiaAgent::testEvidence({run("go test ./...", "ok  \texample/pkg\t0.2s", 0)}), E::Passed);
+    EXPECT_EQ(GaiaAgent::testEvidence({run("cat pytest.log", "4 passed", 0)}), E::Passed)
+        << "output only a runner prints still counts";
+    EXPECT_EQ(GaiaAgent::testEvidence({run("cat pytest.ini", "[pytest]", 0)}), E::None);
+    EXPECT_EQ(GaiaAgent::testEvidence({run("pytest -q", "4 passed", 0), edit}), E::Stale);
+    EXPECT_EQ(GaiaAgent::testEvidence({edit, run("pytest -q", "4 passed", 0)}), E::Passed);
+    EXPECT_EQ(GaiaAgent::testEvidence({run("pytest -q", "1 failed", 1), run("pytest -q", "4 passed", 0)}),
+              E::Passed)
+        << "the last run is what the answer reports";
+}
+
+TEST(GaiaAgentTest, AClaimThatTheTestsPassIsCheckedAgainstTheRun) {
+    auto run = [](const std::string& out, int code) {
+        return std::vector<GaiaAgent::CallSeen>{
+            {"bash_execute", json{{"command", "python -m pytest"}},
+             json{{"stdout", out}, {"exit_code", code}}.dump()}};
+    };
+    const std::string claim = "Fixed it. The tests now pass.";
+    EXPECT_FALSE(GaiaAgent::testClaimNote(claim, run("4 passed", 0), true).has_value());
+    const auto failed = GaiaAgent::testClaimNote(claim, run("1 failed, 3 passed", 1), true);
+    ASSERT_TRUE(failed.has_value());
+    EXPECT_NE(failed->find("the last test run failed"), std::string::npos) << *failed;
+    const auto none = GaiaAgent::testClaimNote(claim, {}, true);
+    ASSERT_TRUE(none.has_value());
+    EXPECT_NE(none->find("no tests were run this turn"), std::string::npos) << *none;
+    EXPECT_FALSE(GaiaAgent::testClaimNote("Fixed it; I didn't run the tests.", {}, true).has_value());
 }
 
 TEST(GaiaAgentTest, SayingAFileIsMissingWithoutLookingIsSentBack) {
@@ -563,6 +623,22 @@ TEST(GaiaAgentTest, ASaveMadeAfterThePushLeavesNoNote) {
     json r = t.run("Read " + (t.kx / "reconciliation.md").string() + " and write summary.md beside it.");
     EXPECT_EQ(r["result"], "summary.md is written.") << r.dump();
     EXPECT_TRUE(fs::exists(out));
+}
+
+TEST(GaiaAgentTest, TestsClaimedToPassAfterAScriptThatRanNoneAreFlaggedForTheUser) {
+    UnconfinedRun t;
+    // Stands in for `python test_stats.py`: it runs, prints nothing, and tests nothing.
+    t.mock.pushResponse(shellCall("echo checked"));
+    t.mock.pushResponse(answer("I fixed median. The tests now pass."));
+    t.mock.pushResponse(answer("I fixed median and confirmed the fix by running the tests."));
+    t.mock.pushResponse(answer("I fixed median. The tests now pass."));
+    json r = t.run("Fix the bug in stats.py so the tests in test_stats.py pass.");
+    const std::string result = r["result"];
+    EXPECT_EQ(result.rfind("I fixed median. The tests now pass.", 0), 0u) << result;
+    EXPECT_NE(result.find("no tests were run this turn"), std::string::npos) << result;
+    EXPECT_EQ(r["status"], "incomplete") << r.dump();
+    ASSERT_EQ(t.mock.receivedBodies().size(), 4u) << "one send-back, then one push to run them";
+    EXPECT_NE(t.mock.receivedBodies()[2].find("no test runner ran"), std::string::npos);
 }
 
 TEST(GaiaAgentTest, ASavedFileWithoutTheFiguresTheAnswerGivesIsSentBack) {

@@ -96,7 +96,22 @@ public:
         std::string name;
         json args;
         std::string output;  // what the tool returned, clipped
+        bool succeeded = true;
     };
+
+    /// What the turn's tool calls show about a test run, for an answer that says the tests pass.
+    enum class TestEvidence { None, Passed, Failed, Stale };
+
+    /// The words of *answer* that say the tests pass, or "" when it claims no such thing.
+    static std::string passingTestClaim(const std::string& answer);
+
+    /// The last test run of the turn: a test runner's command, or output only a runner prints.
+    static TestEvidence testEvidence(const std::vector<CallSeen>& calls);
+
+    /// Why the answer's "the tests pass" isn't backed by this turn's tool calls; nullopt when
+    /// it is, or when the answer claims nothing about tests. *forUser* picks the wording.
+    static std::optional<std::string> testClaimNote(const std::string& answer, const std::vector<CallSeen>& calls,
+                                                    bool forUser);
 
     /// A file or page the turn read holds text addressed to an AI assistant, and
     /// the answer doesn't tell the user about it.
