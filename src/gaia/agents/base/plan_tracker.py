@@ -27,6 +27,9 @@ from typing import (
 )
 from urllib.parse import urlparse
 
+THINK_OPEN = "<think>"
+THINK_CLOSE = "</think>"
+
 OPEN = "open"
 DONE = "done"
 FAILED = "failed"
@@ -279,38 +282,79 @@ def strip_plan(text: str, only: Optional[Sequence[str]] = None) -> str:
 class PlanTextFilter:
     """Keeps a streamed reply's opening ``Plan:`` block off the screen.
 
-    A reply that does not open with a plan passes straight through. One that
-    does is held whole until it ends, because only then is it known whether it
-    was a step of the work (the plan is dropped) or the answer (it is shown).
+    A model may stream its thinking first, inside ``<think>`` tags (or with only
+    the closing tag, when the template opened the block). That passes straight
+    through, and the reply is judged from where the thinking ends. A reply that
+    does not open with a plan passes straight through too. One that does is held
+    whole until it ends, because only then is it known whether it was a step of
+    the work (the plan is dropped) or the answer (it is shown).
     """
 
     def __init__(self) -> None:
         self._held = ""
         self._passing = False
+        self._thinking = False
+        # Thinking ended once; the reply after it is judged once.
+        self._rearmed = False
 
     def feed(self, chunk: str) -> str:
         """Add *chunk*; return the text that is safe to show now."""
-        if self._passing:
-            return chunk
         self._held += chunk
-        first = self._held.lstrip("\r\n")
+        shown = []
+        while True:
+            out, again = self._step()
+            shown.append(out)
+            if not again:
+                return "".join(shown)
+
+    def _step(self) -> "tuple[str, bool]":
+        held = self._held
+        if self._thinking or self._passing:
+            if self._rearmed:
+                self._held = ""
+                return held, False
+            at = held.find(THINK_CLOSE)
+            if at >= 0:
+                cut = at + len(THINK_CLOSE)
+                self._held = held[cut:]
+                self._thinking = self._passing = False
+                self._rearmed = True
+                return held[:cut], True
+            keep = _partial_close(held)
+            self._held = held[len(held) - keep :]
+            return held[: len(held) - keep], False
+        lead = held.lstrip()
+        if not self._rearmed and lead:
+            if lead.startswith(THINK_OPEN):
+                self._thinking = True
+                return "", True
+            if THINK_OPEN.startswith(lead):
+                return "", False
+        first = held.lstrip("\r\n")
         line = first.split("\n", 1)[0]
         if "\n" not in first and len(first) <= _MAX_INLINE:
             # Still the first line: wait while it could be a plan heading.
             if len(first) <= _MAX_LINE or _INLINE_HEAD.match(first.strip()):
-                return ""
+                return "", False
         if _is_head(line) or _INLINE_HEAD.match(line.strip()):
-            return ""
+            return "", False
         self._passing = True
-        out, self._held = self._held, ""
-        return out
+        return "", True
 
     def flush(self, keep_plan: bool = False) -> str:
         """The reply ended; return what was held, without the plan unless *keep_plan*."""
         out, self._held = self._held, ""
-        if self._passing or keep_plan:
+        if self._passing or self._thinking or keep_plan:
             return out
         return strip_plan(out)
+
+
+def _partial_close(text: str) -> int:
+    """Length of *text*'s tail that may be the start of a closing think tag."""
+    for size in range(min(len(text), len(THINK_CLOSE) - 1), 0, -1):
+        if THINK_CLOSE.startswith(text[-size:]):
+            return size
+    return 0
 
 
 class PlanTracker:

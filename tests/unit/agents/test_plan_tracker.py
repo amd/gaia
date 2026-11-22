@@ -584,3 +584,36 @@ def test_failed_calls_are_counted_whatever_step_they_were_for():
     t.on_tool_result("read_file", {"path": "log1.txt"}, False)
     assert t.failed_calls == 1
     assert not t.has_failed()
+
+
+# -- streamed thinking before the plan ------------------------------------------
+
+
+@pytest.mark.parametrize("size", [1, 3, 7, 1000])
+def test_filter_finds_the_plan_after_streamed_thinking(size):
+    text = (
+        "<think>The user wants two files read.\nThen merged.</think>\n"
+        "Plan:\n1. Read a.txt\n2. Merge them\n3. Save b.md\n\nReading now."
+    )
+    shown = _stream(text, size)
+    assert "<think>The user wants two files read." in shown
+    assert "1. Read a.txt" not in shown
+    assert shown.rstrip().endswith("Reading now.")
+
+
+@pytest.mark.parametrize("size", [1, 3, 7, 1000])
+def test_filter_finds_the_plan_after_thinking_with_only_a_closing_tag(size):
+    text = "The user wants a merge.\n</think>\nPlan:\n1. Read a.txt\n2. Merge them\n3. Save b.md\n"
+    shown = _stream(text, size)
+    assert "The user wants a merge." in shown
+    assert "1. Read a.txt" not in shown
+
+
+@pytest.mark.parametrize("size", [1, 3, 1000])
+def test_filter_passes_thinking_and_an_ordinary_reply_unchanged(size):
+    for text in (
+        "<think>short</think>The answer is 391.",
+        "<think>no end yet",
+        "The answer mentions </think> in passing.\nAnd more.",
+    ):
+        assert _stream(text, size) == text
