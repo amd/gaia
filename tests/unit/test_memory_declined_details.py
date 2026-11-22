@@ -162,6 +162,60 @@ def test_only_the_declined_clause_is_refused(store):
     assert _contents(store) == ["Locker code is plum-walrus-63"]
 
 
+@pytest.mark.parametrize(
+    "request_text, kept, declined",
+    [
+        (
+            "Remember my work phone is 555-1111, and my home phone is 555-2222, "
+            "leave it out",
+            "Work phone is 555-1111",
+            "Home phone is 555-2222",
+        ),
+        (
+            "Remember my sister's birthday is May 3 and my sister's address is "
+            "4 Elm St, leave it out",
+            "Sister's birthday is May 3",
+            "Sister's address is 4 Elm St",
+        ),
+    ],
+)
+def test_a_kept_fact_sharing_a_word_with_the_declined_one_still_saves(
+    store, request_text, kept, declined
+):
+    host = _Host(store)
+    host.user_says(request_text)
+    with _memory_tools(host) as tools:
+        saved = tools["remember"](fact=kept)
+        refused = tools["remember"](fact=declined)
+
+    assert saved["status"] == "stored"
+    assert refused["status"] == "skipped"
+    assert _contents(store) == [kept]
+
+
+@pytest.mark.parametrize(
+    "request_text",
+    [
+        "Remember my phone, and my phone is 555-1234, leave it out",
+        # Every word repeats in a kept clause: nothing tells them apart, so refuse.
+        "Remember my phone is 555-1234, and my phone is 555-1234, leave it out",
+    ],
+)
+@pytest.mark.parametrize(
+    "fact", ["Phone is 555-1234", "My phone number: 555-1234", "555-1234"]
+)
+def test_a_declined_detail_repeated_in_a_kept_clause_is_still_refused(
+    store, request_text, fact
+):
+    host = _Host(store)
+    host.user_says(request_text)
+    with _memory_tools(host) as tools:
+        result = tools["remember"](fact=fact)
+
+    assert result["status"] == "skipped"
+    assert _contents(store) == []
+
+
 def test_update_memory_refuses_the_declined_detail(store):
     host = _Host(store)
     host.user_says("Remember that my locker code is plum-walrus-63.")
