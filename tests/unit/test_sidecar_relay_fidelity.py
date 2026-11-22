@@ -224,12 +224,11 @@ def test_an_approval_from_an_earlier_turn_does_not_count_as_this_turns(approvals
 
 def test_forgetting_a_session_also_forgets_this_turns_approvals(approvals):
     env, sid = approvals
+    env.begin_turn(sid)
     env.note_approved_path(sid, "/a")
     env.forget_session(sid)
-    env.note_approved_path(sid, "/b")
-    before = env.begin_turn(sid)
-    _rebuilt_turn_ends(sid, before)
     assert env.approved_paths(sid) == []
+    assert sid not in env._approved_this_turn
 
 
 def test_another_chats_reapproval_does_not_shield_this_chats_stale_file(approvals):
