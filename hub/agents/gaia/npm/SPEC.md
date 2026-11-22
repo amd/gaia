@@ -1,6 +1,6 @@
 # `@amd-gaia/gaia` — technical reference
 
-Version **0.3.5**. Companion to [`README.md`](./README.md), which is the
+Version **0.3.6**. Companion to [`README.md`](./README.md), which is the
 user-facing doc. This file specifies the wire and file formats the package
 depends on and the guarantees it makes.
 
@@ -32,11 +32,11 @@ of truth for what is downloaded and what it must hash to.
 ```jsonc
 {
   "schemaVersion": "3.0",
-  "agentVersion": "0.3.5",
+  "agentVersion": "0.3.6",
   "components": {
     "sidecar": {
-      "componentVersion": "0.3.5",
-      "baseUrl": "https://hub.amd-gaia.ai/agents/gaia/0.3.5",
+      "componentVersion": "0.3.6",
+      "baseUrl": "https://hub.amd-gaia.ai/agents/gaia/0.3.6",
       "platforms": { "<platformKey>": { /* entry */ } }
     },
     "tui": {
@@ -959,7 +959,7 @@ the Google or Microsoft connector connected and granted to the agent. Drafting
 and sending come from the bundled `send-email` skill, whose tools join the
 list as `send-email/<tool>` once it loads; each send, and each change to a
 saved draft, raises a `needs_confirmation` first. A model on the `compact`
-feature tier (Gemma 4 E4B) is offered neither. Setup:
+feature tier (Gemma 4 E4B, Qwen3.5 4B and 2B) is offered neither. Setup:
 [Email guide](https://amd-gaia.ai/docs/guides/email).
 
 ## 6. Process ownership

@@ -49,8 +49,8 @@ def test_the_cpp_table_has_no_duplicate_rows():
 
 
 def test_gaias_default_models_take_native_tool_calls():
-    from gaia.llm.lemonade_client import DEFAULT_MODEL_NAME, LARGE_DEFAULT_MODEL_NAME
+    from gaia.llm.lemonade_client import DEFAULT_MODEL_LADDER
 
     table = dict(_cpp_table())
-    assert table[DEFAULT_MODEL_NAME] is True
-    assert table[LARGE_DEFAULT_MODEL_NAME] is True
+    for model_id in DEFAULT_MODEL_LADDER:
+        assert table[model_id] is True, model_id

@@ -1468,6 +1468,41 @@ class TestLemonadeClientMock(unittest.TestCase):
         )
 
     @responses.activate
+    def test_small_defaults_pull_by_name_only(self):
+        """Qwen3.5 4B and 2B are Lemonade built-ins: a cold pull names the model
+        and nothing else, because a recipe on a built-in pull is a 400 (#1655)."""
+        from gaia.llm.lemonade_client import (
+            SMALL_DEFAULT_MODEL_NAME,
+            TINY_DEFAULT_MODEL_NAME,
+        )
+
+        responses.add(
+            responses.POST,
+            f"{API_BASE}/pull",
+            body='event: complete\ndata: {"percent":100}\n\n',
+            status=200,
+            content_type="text/event-stream",
+        )
+        responses.add(
+            responses.POST, f"{API_BASE}/pull", json={"status": "success"}, status=200
+        )
+        for name in (SMALL_DEFAULT_MODEL_NAME, TINY_DEFAULT_MODEL_NAME):
+            self.assertFalse(name.startswith("user."))
+            list(self.client.pull_model_stream(model_name=name))
+            self.client.pull_model(model_name=name)
+
+        bodies = [json.loads(c.request.body) for c in responses.calls]
+        self.assertEqual(
+            bodies,
+            [
+                {"model_name": SMALL_DEFAULT_MODEL_NAME, "stream": True},
+                {"model_name": SMALL_DEFAULT_MODEL_NAME},
+                {"model_name": TINY_DEFAULT_MODEL_NAME, "stream": True},
+                {"model_name": TINY_DEFAULT_MODEL_NAME},
+            ],
+        )
+
+    @responses.activate
     def test_pull_model_stream_error(self):
         """Test handling errors during streaming model pull."""
         # Mock SSE response with error

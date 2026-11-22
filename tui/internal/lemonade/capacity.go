@@ -25,6 +25,34 @@ type Capacity struct {
 	// sees, so installed RAM less an APU's GPU carve-out. 0 when Lemonade
 	// reports no available NPU.
 	NPUMemoryGB float64
+	// InstalledRAMGB is the PC's RAM, an APU's carve-out included; 0 when
+	// Lemonade did not report it. Mirrors MachineCapacity.installed_ram_gb.
+	InstalledRAMGB float64
+}
+
+// sharedRAMSources are the MemorySource values whose pool is the PC's own RAM,
+// as gaia.llm.model_fit.SHARED_RAM_SOURCES.
+var sharedRAMSources = map[string]bool{"AMD iGPU": true, "Apple GPU": true, "System RAM": true}
+
+// AppReserveGB is the RAM kept for the OS and other apps when a model loads,
+// as gaia.llm.model_fit.app_reserve_gb: 0 on a discrete GPU or unknown RAM.
+func (c Capacity) AppReserveGB() float64 {
+	if !sharedRAMSources[c.MemorySource] || c.InstalledRAMGB <= 0 {
+		return 0
+	}
+	return math.Max(fitRule.AppReserveMinGB, fitRule.AppReserveFraction*c.InstalledRAMGB)
+}
+
+// WithAppHeadroom is c less AppReserveGB, as gaia.llm.model_fit.with_app_headroom.
+func (c Capacity) WithAppHeadroom() Capacity {
+	kept := c.AppReserveGB()
+	if kept == 0 {
+		return c
+	}
+	c.MemoryGB = math.Min(c.MemoryGB, math.Max(0, c.InstalledRAMGB-kept))
+	c.MemorySource += fmt.Sprintf(", %s GB kept for other apps", formatGB(kept))
+	c.InstalledRAMGB = 0 // already applied
+	return c
 }
 
 type gpuInfo struct {
@@ -115,7 +143,39 @@ type gpuEntry struct {
 func capacityFrom(info systemInfo) (Capacity, error) {
 	c, err := gpuCapacityFrom(info)
 	c.NPUMemoryGB = npuMemoryGB(info)
+	c.InstalledRAMGB = installedRAMGB(info)
 	return c, err
+}
+
+// installedRAMGB mirrors gaia.llm.model_fit._installed_ram_gb: Physical Memory,
+// plus an APU's carve-out on Linux, whose MemTotal leaves it out.
+func installedRAMGB(info systemInfo) float64 {
+	physical := physicalMemoryGB(info.PhysicalMemory)
+	if physical <= 0 {
+		return 0
+	}
+	if physicalCountsCarveOut(info) {
+		return physical
+	}
+	for _, src := range []struct {
+		list       gpuList
+		integrated bool
+	}{{info.Devices.AMD, false}, {info.Devices.AMDIGPU, true}, {info.Devices.AMDDGPU, false}} {
+		for _, g := range src.list {
+			if g.available() && (src.integrated || g.Integrated) && g.VRAMGB > 0 {
+				return physical + g.VRAMGB
+			}
+		}
+	}
+	return physical
+}
+
+// physicalCountsCarveOut mirrors gaia.llm.model_fit._physical_counts_carve_out:
+// only a Windows Lemonade reports installed RAM; Linux's MemTotal is already
+// without the carve-out. A report naming no OS counts as Windows.
+func physicalCountsCarveOut(info systemInfo) bool {
+	os := strings.ToLower(strings.TrimSpace(info.OSVersion))
+	return os == "" || strings.HasPrefix(os, "windows")
 }
 
 // npuMemoryGB mirrors gaia.llm.model_fit._npu_memory_gb.
@@ -124,9 +184,7 @@ func npuMemoryGB(info systemInfo) float64 {
 	if info.Devices.NPU == nil || !info.Devices.NPU.Available || physical <= 0 {
 		return 0
 	}
-	// Only a Windows Lemonade reports installed RAM; Linux's MemTotal is
-	// already without the carve-out.
-	if !strings.HasPrefix(strings.ToLower(info.OSVersion), "windows") {
+	if !physicalCountsCarveOut(info) {
 		return physical
 	}
 	carveOut := 0.0

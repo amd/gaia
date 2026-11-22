@@ -1065,6 +1065,8 @@ export interface ProviderModel {
     size_gb?: number | null;
     /** Fits this PC's memory; null when GAIA can't tell. */
     fits?: boolean | null;
+    /** Fits, but would leave other apps less memory than GAIA keeps for them. */
+    tight?: boolean;
     available?: boolean;
     unavailable_reason?: string | null;
     /** What stops this NPU model on this PC's NPU (Linux setup), in place of the reason. */

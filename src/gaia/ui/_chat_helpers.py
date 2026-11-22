@@ -3727,7 +3727,12 @@ def _turn_summary(
             location=(
                 _agent_location(agent) if agent is not None else relayed_location
             ),
-            written_files=evidence.written_files() if evidence is not None else (),
+            # The ledger's keys are case-folded on Windows; realpath restores the name on disk.
+            written_files=(
+                [os.path.realpath(key) for key in evidence.written_files()]
+                if evidence is not None
+                else ()
+            ),
             display_names=upload_display_names(message),
             usage=answer_event,
         )
@@ -4396,6 +4401,7 @@ async def _get_chat_response(
         refusal = spending.limit_refusal(db, model_id)
         if refusal:
             return refusal
+        _refuse_turn_on_stopped_users_server()
 
         # ── Agent cache ──────────────────────────────────────────────────────
         # Reuse what a running warm-up is caching rather than read it twice.

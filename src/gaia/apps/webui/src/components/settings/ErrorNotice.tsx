@@ -19,10 +19,18 @@ export function namesSetupCommand(text: string | null | undefined): boolean {
 /** The backend's sentence for a model server GAIA doesn't run (`OTHER_SERVER_START_HINT`). */
 const OTHER_SERVER_START_HINT = "GAIA doesn't run this model server, so it can't start it. Start it the way you usually do.";
 
+/** The same sentence after the address of the server the user chose (`chosen_server_start_hint`). */
+const CHOSEN_SERVER_AT = /^The model server GAIA uses is at (\S+)\. (.*)$/s;
+
 /** The backend's English start instruction in the app's language; one with a command or path in it shows as written. */
 export function startInstructionText(t: Translate, text: string | null | undefined): string | null {
     if (!text) return null;
-    return text === OTHER_SERVER_START_HINT ? t('server.otherServerStart') : text;
+    if (text === OTHER_SERVER_START_HINT) return t('server.otherServerStart');
+    const chosen = CHOSEN_SERVER_AT.exec(text);
+    if (chosen && chosen[2] === OTHER_SERVER_START_HINT) {
+        return `${t('server.chosenServerAt', { address: chosen[1] })} ${t('server.otherServerStart')}`;
+    }
+    return text;
 }
 
 /** True when this PC has no model server yet, the one case setup, not waiting, fixes. */

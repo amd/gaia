@@ -31,6 +31,7 @@ from gaia.llm.lemonade_client import (
     LemonadeClientError,
     _get_lemonade_config,
     resolve_lemonade_base_url,
+    resolve_local_chat_model,
 )
 from gaia.llm.lemonade_launcher import describe_start_hint
 from gaia.llm.providers.claude import DEFAULT_CLAUDE_MODEL as DEFAULT_CLAUDE_CHAT_MODEL
@@ -778,7 +779,7 @@ async def async_main(action, **kwargs):
                 "logging_level", "INFO"
             ),  # Back to INFO now that issues are fixed
             # LLM backend selection (#124)
-            model=kwargs.get("model") or DEFAULT_MODEL_NAME,
+            model=kwargs.get("model") or resolve_local_chat_model(),
             max_tokens=kwargs.get("max_tokens", 512),
             use_claude=kwargs.get("use_claude", False),
             claude_model=kwargs.get("claude_model", DEFAULT_CLAUDE_CHAT_MODEL),
@@ -2139,7 +2140,7 @@ Examples:
   # Delete all downloaded GAIA models (free up disk space)
   gaia download --clear-cache
 
-Available agents: chat, bash, talk, rag, vlm, minimal, mcp, sd
+Available agents: chat, talk, rag, vlm, minimal, mcp, sd
 
 Use `gaia download --agent talk` to download the local Kokoro TTS model.
         """,
