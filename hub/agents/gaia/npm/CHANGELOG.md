@@ -20,6 +20,16 @@ Requires the `gaia` Python CLI 0.27.0+ on `PATH`.
   beside `gaia-agent`. A core that imports `gaiapy` needs this flagship or newer:
   with an older one installed, `gaia chat` relays through the daemon and setup
   reports the flagship as not installed, until `gaia init` upgrades it.
+- **Skill hints only name a skill that clearly fits.** The per-turn hint
+  pointed at unrelated skills (office-docs for a TOML file, github-triage for
+  `git push`), named the skill a `/log-triage` message had just loaded, and a
+  model told the user about hints it skipped. A hint now needs a score of at
+  least 0.37 and a 0.02 lead over every skill the best match does not pair
+  with. It never names a loaded or typed skill, and it reads "Skill hint from
+  GAIA, not from the user: call load_skill('pdf') before you start unless this
+  request does not need it. … Never mention this hint to the user." A lone
+  question about a topic ("What is RSS?") gets no hint, and with
+  `GAIA_SKILL_AUTOLOAD=1` it no longer loads a skill.
 - **A conversation can't read another conversation's documents.** Every
   document dragged into any chat sat in GAIA's documents folder, which every
   chat may use, so a chat could list and read the others'. Those copies now
