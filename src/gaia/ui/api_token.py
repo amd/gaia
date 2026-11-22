@@ -62,9 +62,9 @@ def _read(path: Path) -> str:
         token = path.read_text(encoding="utf-8").strip()
     except OSError as e:
         raise UITokenError(
-            f"Cannot read the Agent UI API token at {path}: {e}. Start the "
-            "Agent UI once (`gaia chat --ui` or the GAIA desktop app) so it "
-            f"creates the token in GAIA's home folder, or point {ENV_TOKEN_FILE} "
+            f"Cannot read the Agent UI API token at {path}: {e}. Open the "
+            "GAIA desktop app or the Agent UI once so it creates the token "
+            f"in GAIA's home folder, or point {ENV_TOKEN_FILE} "
             "at an existing token file."
         ) from e
     if not token:
