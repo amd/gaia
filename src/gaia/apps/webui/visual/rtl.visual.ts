@@ -2342,6 +2342,31 @@ for (const [locale, theme] of [['ar', 'light'], ['ar', 'dark'], ['en', 'light']]
         expect(await audit(page)).toEqual([]);
     });
 
+    test(`read aloud where GAIA doesn't offer it (${locale}, ${theme})`, async ({ page }) => {
+        await open(page, `#${ANSWER_SESSION}`, locale, async (p) => {
+            await p.route('**/api/speech/settings', (route) =>
+                route.fulfill({
+                    status: 200,
+                    contentType: 'application/json',
+                    body: JSON.stringify({
+                        voice: 'bf_emma', speed: 125, auto: true, min_speed: 50, max_speed: 200, voices: [],
+                        available: false, unavailable_reason: "Reading aloud and dictation aren't offered on macOS yet.",
+                    }),
+                }),
+            );
+        }, theme);
+        const reply = page.locator('.msg-assistant').last();
+        await reply.hover();
+        await expect(reply.locator('.msg-copy')).toBeVisible();
+        await expect(reply.locator('.msg-read-aloud')).toHaveCount(0);
+        await page.getByRole('button', { name: /Settings/ }).first().click();
+        await page.getByRole('dialog').locator('[data-section="voice"]').click();
+        await expect(page.getByRole('dialog').locator('.settings-pane-lede[role="status"]')).toBeVisible();
+        await expect(page.locator('#read-aloud-voice')).toHaveCount(0);
+        expect(await audit(page)).toEqual([]);
+        await shot(page, `read-aloud-unavailable-${locale}-${theme}`);
+    });
+
     test(`a reply that could not be read aloud (${locale}, ${theme})`, async ({ page }) => {
         await open(page, `#${ANSWER_SESSION}`, locale, async (p) => {
             await p.route('**/api/speech', (route) =>

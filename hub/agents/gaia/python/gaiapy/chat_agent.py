@@ -96,6 +96,7 @@ from gaia.agents.base.memory import MemoryMixin
 from gaia.agents.base.model_features import (
     FEATURE_TOOLS,
     features_for_model,
+    platform_withheld_tools,
     withheld_tools,
 )
 from gaia.agents.base.project_map import PROJECT_ROOT_ENV, resolve_project_root
@@ -1640,7 +1641,9 @@ class ChatAgent(
         """Fail loudly on first use if a CORE/bundle name left the registry."""
         if not self._dynamic_tools_validated:
             self.tool_loader.validate_registry(
-                self._tools_registry, withheld=withheld_tools(self.model_features)
+                self._tools_registry,
+                withheld=withheld_tools(self.model_features)
+                | set(platform_withheld_tools()),
             )
             self._dynamic_tools_validated = True
 
@@ -1842,7 +1845,7 @@ class ChatAgent(
             if name != "search_tools"
         }
         # A skill this model cannot load would only cost a failed load_skill.
-        compact = bool(withheld_tools(self.model_features))
+        compact = bool(withheld_tools(self.model_features) or platform_withheld_tools())
         skill_docs = (
             {
                 name: f"{name}: {skill.description}"

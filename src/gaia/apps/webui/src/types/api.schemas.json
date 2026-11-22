@@ -5572,6 +5572,11 @@
         "title": "Auto",
         "type": "boolean"
       },
+      "available": {
+        "default": true,
+        "title": "Available",
+        "type": "boolean"
+      },
       "max_speed": {
         "default": 200,
         "title": "Max Speed",
@@ -5585,6 +5590,17 @@
       "speed": {
         "title": "Speed",
         "type": "integer"
+      },
+      "unavailable_reason": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Unavailable Reason"
       },
       "voice": {
         "title": "Voice",

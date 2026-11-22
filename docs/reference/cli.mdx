@@ -2274,7 +2274,7 @@ When that server can't be reached, `gaia download` (with or without `--list` or
 **Available Agents:**
 chat, talk, rag, vlm, minimal, mcp, sd
 
-`gaia download --agent talk` also fetches the Kokoro voice model (`kokoro-v1`), which the GAIA agent's `text_to_speech` and `dictate_document` tools need and never download themselves.
+`gaia download --agent talk` also fetches the Kokoro voice model (`kokoro-v1`), which the GAIA agent's `text_to_speech` and `dictate_document` tools need and never download themselves. On macOS, where GAIA doesn't offer the voice yet, it refuses `kokoro-v1` with the reason and exits 1.
 
 **Examples:**
 
