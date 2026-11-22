@@ -10,6 +10,7 @@
 #include <filesystem>
 #include <fstream>
 #include <random>
+#include <set>
 #include <thread>
 
 #include "../agents/gaiacpp/gaia_agent.h"
@@ -2144,6 +2145,34 @@ TEST(GaiaAgentTest, AVeryLongAnswerIsStillCheckedAtItsEnd) {
     const auto bodies = mock.receivedBodies();
     ASSERT_EQ(bodies.size(), 2u);
     EXPECT_NE(bodies[1].find("no such file exists"), std::string::npos);
+}
+
+TEST(GaiaAgentTest, EveryToolIsOnTheListTheAppsWordInPlainLanguage) {
+    Workdir w;
+    bench::MockLlmServer mock;
+    GaiaAgent::Options o = optionsFor(w);
+    o.webTools = true;
+    o.screenshots = true;
+    o.transcribeModel = "whisper";
+    o.imageModel = "sd";
+    GaiaAgent agent(cfgFor(mock), o);
+    std::ifstream in(fs::path(GAIA_REPO_FIXTURES_DIR) / "gaiacpp_tools.json");
+    ASSERT_TRUE(in) << "tests/fixtures/gaiacpp_tools.json";
+    const json listed = json::parse(in);
+    const auto tools = listed["tools"].get<std::set<std::string>>();
+    const auto gated = listed["gated"].get<std::set<std::string>>();
+    ASSERT_GT(agent.tools().allTools().size(), 15u) << "the registry looks empty";
+    for (const auto& [name, info] : agent.tools().allTools()) {
+        EXPECT_TRUE(tools.count(name))
+            << name << " is not in tests/fixtures/gaiacpp_tools.json: add it there, and give it a label in the "
+            << "Agent UI (src/gaia/ui/sidecar/native_tools.py) and the TUI (tui/internal/ui/chat/narrate.go)";
+        if (info.policy == ToolPolicy::CONFIRM) {
+            EXPECT_TRUE(gated.count(name))
+                << name << " asks for approval but is not under \"gated\" in tests/fixtures/gaiacpp_tools.json: add it, "
+                << "and a question for it in tui/internal/ui/components/confirmation.go";
+        }
+    }
+    for (const auto& name : gated) EXPECT_TRUE(tools.count(name)) << name;
 }
 
 TEST(GaiaAgentTest, AnAlwaysGrantMadeOnlineDoesNotRunAnOnlineCommandOnceTheInternetIsOff) {
