@@ -182,8 +182,8 @@ gaia eval agent --compare eval/results/run1/scorecard.json eval/results/run2/sco
 
 | Device | Model | Backend | Best For |
 |--------|-------|---------|----------|
-| **GPU** (default) | Gemma-4-E4B-it-GGUF | llamacpp:vulkan | General use, best throughput |
-| **CPU** | Gemma-4-E4B-it-GGUF | llamacpp:cpu | No GPU available (slower) |
+| **GPU** (default) | The chat model for this PC (see the [CLI reference](/reference/cli#choosing-models)) | llamacpp:vulkan | General use, best throughput |
+| **CPU** | The chat model for this PC (Qwen3.5 2B with 16 GB of RAM or less) | llamacpp:cpu | No GPU available (slower) |
 | **NPU** | gemma4-it-e4b-FLM | flm:npu | Power efficiency, leaving the GPU free |
 
 ### Fallback Behavior

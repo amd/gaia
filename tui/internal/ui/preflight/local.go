@@ -817,8 +817,19 @@ func (l localRunner) verifyModelsStatus(ctx context.Context, _ Config) (Row, str
 	return l.verifyModelsWith(ctx)
 }
 
-// nativeDefaultModel is the model gaiacpp runs when the launch names none.
+// nativeDefaultModel is the model gaiacpp runs when neither the launch nor
+// GAIA's config names one.
 const nativeDefaultModel = "Gemma-4-E4B-it-GGUF"
+
+// nativeStartModel is the local model gaiacpp is started on when the launch
+// names none: GAIA's local chat model (setup saves a small PC's pick), else
+// Gemma. The client factory passes the same model.
+func nativeStartModel() string {
+	if m := lemonade.LocalChatModel(); m != "" {
+		return m
+	}
+	return nativeDefaultModel
+}
 
 // verifyNativeModel answers the model row for gaiacpp from the model server
 // alone: the chat model it will be started on is one the server can run.
@@ -841,7 +852,7 @@ func (l localRunner) verifyNativeModel(ctx context.Context) (Row, string, string
 	}
 	model, picked := l.opts.Model, true
 	if model == "" {
-		model, picked = nativeDefaultModel, false
+		model, picked = nativeStartModel(), false
 	}
 	row = checkLocalModelDownloaded(ctx, model, row)
 	switch {

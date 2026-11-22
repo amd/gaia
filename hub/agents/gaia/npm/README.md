@@ -79,7 +79,7 @@ reply; the bundled `inbox-triage` skill does the triage judgment on top of them.
 The bundled `send-email` skill drafts, replies, forwards and sends, and asks
 before anything leaves the mailbox. The agent never archives, labels or deletes
 received mail, and every email body is read by the local model. Gemma 4 E4B
-(GPU or NPU) is not offered the mail tools; a larger model is. Setup and the
+(GPU or NPU) and the small Qwen3.5 models are not offered the mail tools; a larger model is. Setup and the
 full tool list:
 [Email guide](https://amd-gaia.ai/docs/guides/email).
 
