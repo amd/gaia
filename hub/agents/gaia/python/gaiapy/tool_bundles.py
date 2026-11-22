@@ -704,6 +704,11 @@ FULL_TRIGGERS: Tuple[Tuple[Pattern[str], FrozenSet[str]], ...] = tuple(
             {"forget", "update_memory"},
         ),
         (
+            r"\b(?:forget everything|wipe (?:your |my )?memory|"
+            r"delete (?:all )?(?:of )?(?:my |your )?memor(?:y|ies))\b",
+            {"forget_everything"},
+        ),
+        (
             r"\b(?:last time|earlier (?:chat|conversation)|we (?:talked|discussed))\b",
             {"search_past_conversations"},
         ),

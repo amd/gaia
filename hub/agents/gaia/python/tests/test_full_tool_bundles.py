@@ -274,6 +274,8 @@ def test_every_triggered_tool_is_registered(flagship_registry):
         ("summarize the lease for me", "summarize_document"),
         ("remind me in 5 minutes", "sleep"),
         ("forget that I live in Austin", "forget"),
+        ("forget everything about me", "forget_everything"),
+        ("please wipe your memory", "forget_everything"),
     ],
 )
 def test_a_request_triggers_the_tool_it_needs(request_text, expected):
