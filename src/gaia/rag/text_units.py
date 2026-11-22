@@ -21,7 +21,8 @@ _UNSPACED_CHARS = (
 WIDE_CHARS = _UNSPACED_CHARS + "\u1100-\u11ff\uac00-\ud7af"
 _WIDE = re.compile(f"[{WIDE_CHARS}]")
 _UNIT = re.compile(f"[{WIDE_CHARS}]|[^\\s{WIDE_CHARS}]+")
-_NO_SPACE = re.compile(f"[{_UNSPACED_CHARS}\u3000-\u303f\uff01-\uff65]")
+_UNSPACED_CLASS = f"[{_UNSPACED_CHARS}\u3000-\u303f\uff01-\uff65]"
+_NO_SPACE = re.compile(_UNSPACED_CLASS)
 
 # Capitals of Latin with accents, Greek, Cyrillic and Armenian (É, Ł, Ω, Д, Ա).
 # Their upper and lower case letters alternate, so the class is not written as ranges.
@@ -76,7 +77,6 @@ def join_pieces(pieces: Sequence[str]) -> str:
     return joined
 
 
-_UNSPACED_CLASS = f"[{_UNSPACED_CHARS}　-〿！-･]"
 _UNSPACED_GAP = re.compile(f"(?<={_UNSPACED_CLASS})\\s+|\\s+(?={_UNSPACED_CLASS})")
 
 
