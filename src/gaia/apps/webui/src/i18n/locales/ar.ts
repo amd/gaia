@@ -2930,6 +2930,7 @@ const messages: Messages = {
 
     // The connection banner
     'banner.serverStopped': 'خادم النماذج لا يستجيب.',
+    'server.chosenServerAt': 'خادم النماذج الذي يستخدمه GAIA موجود على {address}.',
     'server.otherServerStart': 'GAIA لا يشغّل خادم النماذج هذا، لذلك لا يستطيع بدء تشغيله. شغّله بالطريقة التي تعتادها.',
     'banner.restartHint': 'إذا استمرّ على هذه الحال، فأعد تشغيله:',
     'banner.startHint': 'لتشغيله يدويًا، نفّذ',
@@ -2961,6 +2962,8 @@ const messages: Messages = {
     'banner.download.progress': 'تقدّم التنزيل',
     'banner.download.starting': 'جارٍ بدء التنزيل…',
     'banner.download.downloading': 'جارٍ التنزيل…',
+    'model.restore.done': 'تمت استعادة آخر نموذج استخدمته.',
+    'model.restore.pick': 'اختر نموذجًا',
     'banner.boot.check_server': 'جارٍ فحص خادم النماذج',
     'banner.boot.load_libraries': 'جارٍ تجهيز البحث في المستندات',
     'banner.boot.load_model': 'جارٍ تحميل النموذج',

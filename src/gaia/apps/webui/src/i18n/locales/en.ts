@@ -2929,6 +2929,7 @@ export const enMessages = {
 
     // The connection banner
     'banner.serverStopped': "The model server isn't answering.",
+    'server.chosenServerAt': 'The model server GAIA uses is at {address}.',
     'server.otherServerStart': "GAIA doesn't run this model server, so it can't start it. Start it the way you usually do.",
     'banner.restartHint': 'If it stays this way, restart it:',
     'banner.startHint': 'To start it by hand, run',
@@ -2960,6 +2961,8 @@ export const enMessages = {
     'banner.download.progress': 'Download progress',
     'banner.download.starting': 'Starting download…',
     'banner.download.downloading': 'Downloading…',
+    'model.restore.done': 'Restored your last model.',
+    'model.restore.pick': 'Pick a model',
     // Start-up steps, keyed by the backend's init_tasks[].step; the banner adds animated dots.
     'banner.boot.check_server': 'Checking the model server',
     'banner.boot.load_libraries': 'Getting document search ready',
