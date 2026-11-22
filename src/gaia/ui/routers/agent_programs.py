@@ -18,7 +18,6 @@ from fastapi import APIRouter, Depends, HTTPException
 from fastapi.concurrency import run_in_threadpool
 
 from gaia.daemon.sidecars import fetch, gaiacpp_fetch
-from gaia.harnesses import HarnessUnavailableError
 from gaia.daemon.sidecars import platform as plat
 from gaia.daemon.sidecars.errors import (
     KIND_NO_RELEASE,
@@ -26,6 +25,7 @@ from gaia.daemon.sidecars.errors import (
     PlatformError,
     SidecarError,
 )
+from gaia.harnesses import HarnessUnavailableError
 from gaia.logger import get_logger
 from gaia.ui.security import FLAGSHIP_AGENT_ID, require_local_pc, require_ui_header
 

@@ -741,7 +741,9 @@ def test_the_daemon_reports_a_stale_agent_instead_of_stopping_it(
     from gaia.daemon.sidecars import registry as reg_mod
 
     src = Path(reg_mod.__file__).read_text(encoding="utf-8")
-    assert 'entry["stale_harness"] = getattr(manager, "uses_stale_harness", False)' in src
+    assert (
+        'entry["stale_harness"] = getattr(manager, "uses_stale_harness", False)' in src
+    )
     assert (
         "uses_stale_harness:"
         not in src.split("def ensure", 1)[1].split("def _fire_started", 1)[0]
