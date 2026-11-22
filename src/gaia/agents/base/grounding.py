@@ -944,7 +944,7 @@ def action_findings(
 _SHELL = r"(?:shell|terminal|command[- ]line|bash|powershell|cmd)"
 _SHELL_REQUEST = re.compile(
     # Not "do not use the shell": checking that would push the forbidden step.
-    r"\b(?<!not\s)(?<!n't\s)(?<!n’t\s)(?<!never\s)(?<!without\s)"
+    r"\b(?<!not\s)(?<!n't\s)(?<!n’t\s)(?<!n＇t\s)(?<!dont\s)(?<!never\s)(?<!without\s)"
     rf"(?:use|using|with)\s+(?:your|the)\s+{_SHELL}\b"
     # "In the shell, run: dir", but not "In the terminal, can I run it?"
     rf"|\b(?:in|from)\s+(?:your|the|a)\s+{_SHELL}[\s,:]+(?:please\s+)?(?:run|execute)\b"

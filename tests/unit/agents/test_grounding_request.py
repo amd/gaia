@@ -142,6 +142,9 @@ def test_an_answer_to_a_run_request_with_nothing_run_is_flagged(query, answer):
         ("Fix it without using the terminal.", "It's fixed.", []),
         ("Don’t use your shell for this.", "Done.", []),
         ("Never use the command line here.", "Okay.", []),
+        ("dont use the shell, just tell me the date", "It is Monday.", []),
+        ("Don＇t use your terminal for this.", "Done.", []),
+        ("Do​n't use the shell.", "Okay.", []),
         # A pasted document's "Run ..." line is not the user's request.
         (
             "Summarize this README:\nRun npm install, then npm start.",
