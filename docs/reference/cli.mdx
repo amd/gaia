@@ -174,7 +174,7 @@ subcommand instead.
 |-------|---------|
 | `type` | Always `"result"` |
 | `is_error` | `true` when `status` is anything but `"success"` |
-| `status` | The agent's turn status (`"success"` on a completed answer) |
+| `status` | The agent's turn status (`"success"` on a completed answer; `"incomplete"` when the turn stopped short, including when it stopped because the same tool call kept failing) |
 | `result` | The answer text (`""` when there is none) |
 | `model` | The model the agent ran |
 | `num_steps` | Agent steps taken |
