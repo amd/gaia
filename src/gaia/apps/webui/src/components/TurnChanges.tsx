@@ -5,15 +5,14 @@ import { useCallback, useState } from 'react';
 import { AlertTriangle, FileDiff as FileDiffIcon, Undo2 } from 'lucide-react';
 import * as api from '../services/api';
 import { useTurnChanges } from '../hooks/useTurnChanges';
+import { pluralKey, type PluralKey, type Say } from '../i18n/registry';
 import { useT } from '../i18n/useT';
 import { announceUndo } from '../utils/undoEvents';
 import { groupUntracked, untrackedWarning } from '../utils/untrackedWork';
 import { ChangesReview } from './ChangesReview';
 import './TurnChanges.css';
 
-function plural(n: number, one: string, many = `${one}s`): string {
-    return `${n} ${n === 1 ? one : many}`;
-}
+const sayCount = (say: Say, base: PluralKey, n: number) => say(pluralKey(base, n), { n });
 
 type Phase = 'idle' | 'confirm' | 'working' | 'conflict' | 'done';
 
@@ -31,14 +30,16 @@ export function TurnChanges({ sessionId, messageId }: { sessionId: string; messa
         setMessage(null);
         try {
             const result = await api.undoTurn(sessionId, turn.turn_id, force);
-            const parts = [];
-            if (result.restored.length) parts.push(`restored ${plural(result.restored.length, 'file')}`);
-            if (result.removed.length) parts.push(`removed ${plural(result.removed.length, 'new file')}`);
-            let text = `Undone: ${parts.join(', ') || 'no files needed changing'}.`;
-            if (result.kept_folders.length) {
-                text += ` Kept ${plural(result.kept_folders.length, 'folder')} it created, because they now hold other files.`;
-            }
-            setMessage(text);
+            setMessage(t.compose((say) => {
+                const parts = [];
+                if (result.restored.length) parts.push(sayCount(say, 'turnChanges.restored', result.restored.length));
+                if (result.removed.length) parts.push(sayCount(say, 'turnChanges.removed', result.removed.length));
+                let text = parts.length
+                    ? say('turnChanges.undone', { list: parts.join(say('untracked.sep')) })
+                    : say('turnChanges.undoneNothing');
+                if (result.kept_folders.length) text += ` ${sayCount(say, 'turnChanges.keptFolders', result.kept_folders.length)}`;
+                return text;
+            }));
             setPhase('done');
             announceUndo(sessionId);
             await refresh();
@@ -47,7 +48,7 @@ export function TurnChanges({ sessionId, messageId }: { sessionId: string; messa
             setMessage(err instanceof api.ApiError ? err.detail : String(err));
             setPhase(conflict ? 'conflict' : 'idle');
         }
-    }, [refresh, sessionId, turn]);
+    }, [refresh, sessionId, t, turn]);
 
     if (loadError) {
         return (
@@ -64,15 +65,14 @@ export function TurnChanges({ sessionId, messageId }: { sessionId: string; messa
     const groups = groupUntracked(turn.untracked, t);
 
     return (
-        <div className="turn-changes" aria-label="File changes from this turn">
+        <div className="turn-changes" aria-label={t('turnChanges.label')}>
             {count > 0 && (
                 <div className="turn-changes-row">
                     <span className="turn-changes-summary">
-                        Changed {plural(count, 'file')}
-                        {undone && ' · undone'}
+                        {t.plural(undone ? 'turnChanges.changedUndone' : 'turnChanges.changed', count)}
                     </span>
                     <button type="button" className="turn-changes-btn" onClick={() => setReviewing(true)}>
-                        <FileDiffIcon size={12} aria-hidden="true" /> Review changes
+                        <FileDiffIcon size={12} aria-hidden="true" /> {t('chg.review')}
                     </button>
                     {!undone && phase !== 'confirm' && phase !== 'conflict' && (
                         <button
@@ -81,14 +81,14 @@ export function TurnChanges({ sessionId, messageId }: { sessionId: string; messa
                             onClick={() => setPhase('confirm')}
                             disabled={phase === 'working'}
                         >
-                            <Undo2 size={12} aria-hidden="true" /> {phase === 'working' ? 'Undoing…' : 'Undo this turn'}
+                            <Undo2 size={12} aria-hidden="true" /> {phase === 'working' ? t('chg.undoing') : t('turnChanges.undo')}
                         </button>
                     )}
                     {phase === 'confirm' && (
-                        <span className="turn-changes-confirm" role="group" aria-label="Confirm undo">
-                            Put {plural(count, 'file')} back the way {count === 1 ? 'it was' : 'they were'} before this turn?
-                            <button type="button" className="turn-changes-btn is-primary" onClick={() => void undo(false)}>Undo</button>
-                            <button type="button" className="turn-changes-btn" onClick={() => setPhase('idle')}>Cancel</button>
+                        <span className="turn-changes-confirm" role="group" aria-label={t('turnChanges.confirmLabel')}>
+                            {t.plural('turnChanges.confirm', count)}
+                            <button type="button" className="turn-changes-btn is-primary" onClick={() => void undo(false)}>{t('turnChanges.confirmUndo')}</button>
+                            <button type="button" className="turn-changes-btn" onClick={() => setPhase('idle')}>{t('turnChanges.cancel')}</button>
                         </span>
                     )}
                 </div>
@@ -130,9 +130,9 @@ export function TurnChanges({ sessionId, messageId }: { sessionId: string; messa
                     {phase === 'conflict' && (
                         <span className="turn-changes-confirm">
                             <button type="button" className="turn-changes-btn is-danger" onClick={() => void undo(true)}>
-                                Undo anyway and lose those changes
+                                {t('chg.undoAnyway')}
                             </button>
-                            <button type="button" className="turn-changes-btn" onClick={() => { setPhase('idle'); setMessage(null); }}>Keep them</button>
+                            <button type="button" className="turn-changes-btn" onClick={() => { setPhase('idle'); setMessage(null); }}>{t('chg.keep')}</button>
                         </span>
                     )}
                 </div>
