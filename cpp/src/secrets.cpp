@@ -739,8 +739,8 @@ json redactFileContent(json value) {
 }
 
 json redactToolResult(const std::string& tool, json value) {
-    static const std::set<std::string> printsCommandOutput = {"bash_execute", "git_status", "git_diff", "git_log",
-                                                              "git_show"};
+    static const std::set<std::string> printsCommandOutput = {"bash_execute", "run_checks", "git_status",
+                                                              "git_diff", "git_log", "git_show"};
     return printsCommandOutput.count(tool) > 0 ? redactToolOutput(std::move(value))
                                                : redactFileContent(std::move(value));
 }

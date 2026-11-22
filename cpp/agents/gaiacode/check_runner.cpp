@@ -130,6 +130,86 @@ void parseCheckOutput(const std::string& output, CheckResult& r) {
     static const std::regex utRan(R"(Ran (\d+) tests? in)"), utFailures(R"(FAILED \((?:[^)]*?)failures=(\d+))"),
         utErrors(R"(FAILED \((?:[^)]*?)errors=(\d+))"), utSkipped(R"(\((?:[^)]*?)skipped=(\d+))");
 
+    // mocha: "5 passing" / "1 failing" / "2 pending"
+    static const std::regex mochaPassing(R"(^\s*(\d+) passing\b)"), mochaFailing(R"(^\s*(\d+) failing\b)"),
+        mochaPending(R"(^\s*(\d+) pending\b)");
+    // rspec: "5 examples, 1 failure, 2 pending"
+    static const std::regex rspec(R"((\d+) examples?, (\d+) failures?(?:, (\d+) pending)?)");
+    // phpunit: "OK (5 tests, 9 assertions)" / "Tests: 5, Assertions: 9, Failures: 1, Errors: 1, Skipped: 1."
+    static const std::regex phpOk(R"(OK \((\d+) tests?,)"), phpTests(R"(Tests: (\d+), Assertions: \d+)"),
+        phpFailures(R"(Failures: (\d+))"), phpErrors(R"(Errors: (\d+))"), phpSkipped(R"(Skipped: (\d+))");
+    // maven / gradle (JUnit): "Tests run: 5, Failures: 1, Errors: 0, Skipped: 1"
+    static const std::regex junit(R"(Tests run: (\d+), Failures: (\d+), Errors: (\d+), Skipped: (\d+))");
+    // dotnet: "Passed!  - Failed:     0, Passed:     5, Skipped:     0, Total:     5"
+    static const std::regex dotnet(R"(Failed:\s+(\d+), Passed:\s+(\d+), Skipped:\s+(\d+), Total:\s+\d+)");
+    // swift: "Executed 5 tests, with 1 failure"
+    static const std::regex swiftRan(R"(Executed (\d+) tests?, with (\d+) failures?)");
+
+    if (std::regex_search(output, m, dotnet)) {
+        r.failed = count(m[1].str());
+        r.passed = count(m[2].str());
+        r.skipped = count(m[3].str());
+        return;
+    }
+    if (std::regex_search(output, junit)) {
+        // Maven prints one line per class, then the totals last.
+        std::smatch last;
+        for (auto it = std::sregex_iterator(output.begin(), output.end(), junit); it != std::sregex_iterator(); ++it) {
+            last = *it;
+        }
+        const int ran = count(last[1].str()), bad = count(last[2].str()) + count(last[3].str()),
+                  skipped = count(last[4].str());
+        r.passed = std::max(0, ran - bad - skipped);
+        r.failed = bad;
+        r.skipped = skipped;
+        return;
+    }
+    if (std::regex_search(output, m, swiftRan)) {
+        const int ran = count(m[1].str()), bad = count(m[2].str());
+        r.passed = std::max(0, ran - bad);
+        r.failed = bad;
+        return;
+    }
+    if (std::regex_search(output, m, rspec)) {
+        const int ran = count(m[1].str()), bad = count(m[2].str());
+        const int pending = m[3].matched ? count(m[3].str()) : 0;
+        r.passed = std::max(0, ran - bad - pending);
+        r.failed = bad;
+        r.skipped = pending;
+        return;
+    }
+    if (std::regex_search(output, m, phpOk)) {
+        r.passed = count(m[1].str());
+        r.failed = 0;
+        return;
+    }
+    if (std::regex_search(output, m, phpTests)) {
+        const int ran = count(m[1].str());
+        int bad = 0, skipped = 0;
+        if (std::regex_search(output, m, phpFailures)) bad += count(m[1].str());
+        if (std::regex_search(output, m, phpErrors)) bad += count(m[1].str());
+        if (std::regex_search(output, m, phpSkipped)) skipped = count(m[1].str());
+        r.passed = std::max(0, ran - bad - skipped);
+        r.failed = bad;
+        r.skipped = skipped;
+        return;
+    }
+    {
+        std::istringstream mochaLines(output);
+        bool mocha = false;
+        int passing = 0, failing = 0, pending = 0;
+        for (std::string line; std::getline(mochaLines, line);) {
+            if (std::regex_search(line, m, mochaPassing)) passing = count(m[1].str()), mocha = true;
+            else if (std::regex_search(line, m, mochaFailing)) failing = count(m[1].str()), mocha = true;
+            else if (std::regex_search(line, m, mochaPending)) pending = count(m[1].str());
+        }
+        if (mocha) {
+            r.passed = passing;
+            r.failed = failing;
+            r.skipped = pending;
+            return;
+        }
+    }
     if (std::regex_search(output, m, ctest)) {
         const int failed = count(m[2].str()), total = count(m[3].str());
         r.failed = failed;
@@ -281,6 +361,11 @@ ToolInfo runChecksTool(std::shared_ptr<ShellSession> session, std::shared_ptr<co
     };
     // It runs the repository's own code.
     info.policy = ToolPolicy::CONFIRM;
+    // "Always allow" covers the command it was given, never every command run_checks may later take.
+    info.grantScope = [](const json& args) {
+        const std::string command = args.is_object() ? args.value("command", "") : "";
+        return command.empty() ? std::string("the project's test runner") : shellCommandScope(command);
+    };
     info.callback = [session, ws](const json& args) -> json {
         ShellSession& shell = session ? *session : BashTools::defaultSession();
         const bool posix = !BashTools::detectShell().empty();
@@ -327,11 +412,15 @@ ToolInfo runChecksTool(std::shared_ptr<ShellSession> session, std::shared_ptr<co
             }
             restore.armed = true;
         }
-        const ProcessResult p = shell.run(r.command, timeout, 512 * 1024);
+        constexpr size_t kCapture = 4 * 1024 * 1024;
+        const ProcessResult p = shell.run(r.command, timeout, kCapture);
         r.exitCode = p.exitCode;
         r.timedOut = p.timedOut;
         const std::string output = p.stdout_output + (p.stderr_output.empty() ? "" : "\n" + p.stderr_output);
         parseCheckOutput(output, r);
+        // The capture keeps the start; past its limit the summary at the end is gone.
+        const bool clipped = p.stdout_output.size() >= kCapture || p.stderr_output.size() >= kCapture;
+        if (clipped) r.passed = -1;
         constexpr size_t kTail = 8000;  // the summary and failures are at the end
         json out = {{"status", "success"},
                     {"command", r.command},
@@ -346,6 +435,9 @@ ToolInfo runChecksTool(std::shared_ptr<ShellSession> session, std::shared_ptr<co
                     {"output", output.size() > kTail ? "…" + output.substr(output.size() - kTail) : output}};
         if (!r.testRun) {
             out["note"] = "This command doesn't read as a test run, so its result can't show that tests pass.";
+        } else if (clipped) {
+            out["note"] = "The output was too long to keep whole, so its summary is missing: run fewer tests, or "
+                          "quieter, to see the result.";
         } else if (r.passed < 0) {
             out["note"] = "The output didn't say how many tests ran; read it before reporting a result.";
         }
