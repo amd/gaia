@@ -203,12 +203,42 @@ bool leavesTreeAlone(const std::vector<std::string>& argv) {
     size_t k = i + 1;
     while (k < argv.size() && argv[k].rfind("-", 0) == 0) k += (argv[k] == "-C" || argv[k] == "-c") ? 2 : 1;
     if (k >= argv.size()) return false;
-    static const std::set<std::string> recordOnly = {"add", "commit", "push", "fetch", "branch", "tag", "remote",
+    static const std::set<std::string> recordOnly = {"status", "diff", "log", "show", "rev-parse", "ls-files",
+                                                     "blame", "add", "commit", "push", "fetch", "branch", "tag", "remote",
                                                      "config", "notes"};
     if (recordOnly.count(argv[k])) return true;
     // A new branch at the current commit: same files.
     if ((argv[k] == "checkout" || argv[k] == "switch") && k + 3 == argv.size()) {
         return argv[k + 1] == "-b" || argv[k + 1] == "-c";
+    }
+    return false;
+}
+
+// `tee run.log` keeps a copy of a run's output; it writes no file the tests read.
+bool logsOutput(const std::vector<std::string>& argv) {
+    if (argv.empty()) return false;
+    std::string p = fs::u8path(argv[0]).filename().u8string();
+    return p == "tee";
+}
+
+// Lint and type checks read the code; only these rewrite it.
+bool rewritesFiles(const std::string& command) {
+    std::vector<std::vector<std::string>> segments;
+    if (!splitShellCommand(command, !BashTools::detectShell().empty(), segments)) return true;
+    for (const auto& argv : segments) {
+        size_t i = 0;
+        while (i < argv.size() && argv[i].find('=') != std::string::npos && argv[i][0] != '-') ++i;
+        if (i >= argv.size()) continue;
+        std::string p = fs::u8path(argv[i]).filename().u8string();
+        if (p.size() > 4 && p.compare(p.size() - 4, 4, ".exe") == 0) p.resize(p.size() - 4);
+        auto has = [&](const char* flag) { return std::find(argv.begin() + i, argv.end(), flag) != argv.end(); };
+        const std::string sub = i + 1 < argv.size() ? argv[i + 1] : "";
+        if (p == "black" || p == "isort" || p == "autopep8" || p == "gofmt" || p == "rustfmt") {
+            if (!has("--check") && !has("--diff")) return true;
+        }
+        if ((p == "cargo" || p == "go") && (sub == "fmt" || (p == "go" && sub == "generate"))) return true;
+        if (p == "ruff" && sub == "format" && !has("--check")) return true;
+        if (has("--fix") || has("--write") || has("-w") || has("-i") || has("--in-place")) return true;
     }
     return false;
 }
@@ -223,7 +253,8 @@ std::optional<TurnEvent> shellEvent(const std::string& command, const json& resu
         std::string text;
         for (const auto& w : seg) text += " " + w;
         const bool test = looksLikeTestCommand(text);
-        const bool mutates = !test && !leavesTreeAlone(seg) && !isReadOnlyShellCommand(text + " ", posix);
+        const bool mutates = !test && !leavesTreeAlone(seg) && !logsOutput(seg) &&
+                             !isReadOnlyShellCommand(text + " ", posix);
         if (test) tested = true;
         if (mutates) {
             changed = true;
@@ -235,8 +266,9 @@ std::optional<TurnEvent> shellEvent(const std::string& command, const json& resu
     if (tested) {
         const std::string out = result.value("stdout", "") + "\n" + result.value("stderr", "");
         // A clipped capture lost its summary at the end; the run backs nothing either way.
-        if (out.find("[output truncated at") != std::string::npos) return changed ? std::optional(TurnEvent::Edit)
-                                                                                    : std::nullopt;
+        if (result.value("truncated", false) || out.find("[output truncated at") != std::string::npos) {
+            return changed ? std::optional(TurnEvent::Edit) : std::nullopt;
+        }
         CheckResult r;
         r.exitCode = result.value("exit_code", -1);
         r.timedOut = result.value("timed_out", false);
@@ -256,9 +288,7 @@ std::optional<TurnEvent> CodeAgent::classify(const std::string& tool, const json
         // A command that isn't a test run backs nothing, but may have written files (a formatter).
         if (!result.value("test_run", false)) {
             const std::string command = result.value("command", "");
-            return command.empty() || isReadOnlyShellCommand(" " + command + " ", !BashTools::detectShell().empty())
-                       ? std::nullopt
-                       : std::optional(TurnEvent::Edit);
+            return rewritesFiles(command) ? std::optional(TurnEvent::Edit) : std::nullopt;
         }
         if (result.value("passed", -1) < 0 && result.value("exit_code", -1) == 0) return std::nullopt;
         return result.value("green", false) ? TurnEvent::TestsPassed : TurnEvent::TestsFailed;
@@ -271,8 +301,11 @@ bool CodeAgent::claimsTestsPass(const std::string& answer) {
     // The verb with no object after it: "the test passes a mock client" is no claim.
     static const std::string noObject = R"((?!\s+(a|an|the|its|my|our|your|this|that)\b))";
     static const std::vector<std::regex> claims = {
-        std::regex(R"((\b(tests?|test suite|specs?|checks?|run_checks|ci)\b|\btest_[\w.]*\w|\w+_test(\.\w+)?\b|[\w-]+\.(test|spec)\.\w+)[^.!?;\n]{0,40}?\b(pass|passes|passed|passing|are green|is green|all green)\b)" +
+        std::regex(R"(\b(tests?|test suite|specs?)\b[^.!?;\n]{0,40}?\b(pass|passes|passed|passing|are green|is green|all green)\b)" +
                    noObject),
+        // "the bounds check passes control to", "the CI config passes --cov": a verb that goes on is no claim.
+        std::regex(R"((\b(checks?|run_checks|ci)\b|\btest_[\w.]*\w|\w+_test(\.\w+)?\b|[\w-]+\.(test|spec)\.\w+)[^.!?;\n]{0,40}?\b(pass|passes|passed|passing|are green|is green|all green)\b)"
+                   R"((?=\s*($|[.!?;,:)]|\s(now|again|locally|too|and|after|with|in|on)\b)))"),
         std::regex(R"(\bci\b[^.!?;\n]{0,15}\b(is green|green|succeeds|succeeded)\b)"),
         std::regex(R"(\b(everything|it all)\b[^.!?;\n]{0,15}\b(passes|passed|is green)\b)" + noObject),
         std::regex(R"(\bbuild\b[^.!?;\n]{0,20}\b(succeeds|succeeded|passes|passed|is green)\b)"),

@@ -84,7 +84,8 @@ json BashTools::doBashExecute(ShellSession& session, const json& args) {
         timeoutMs = DEFAULT_TIMEOUT_MS;
     }
 
-    ProcessResult result = session.run(command, timeoutMs, MAX_OUTPUT_BYTES);
+    // Twice the limit: CRLF folding can halve a capped capture, which must still read as too long.
+    ProcessResult result = session.run(command, timeoutMs, 2 * MAX_OUTPUT_BYTES + 2);
 
     // Truncate stdout/stderr if needed
     std::string stdoutStr = result.stdout_output;
@@ -109,6 +110,9 @@ json BashTools::doBashExecute(ShellSession& session, const json& args) {
         {"cwd", session.cwd()},
     };
     if (result.cancelled) out["cancelled"] = true;
+    if (stdoutStr.size() != result.stdout_output.size() || stderrStr.size() != result.stderr_output.size()) {
+        out["truncated"] = true;
+    }
     return out;
 }
 

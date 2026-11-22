@@ -101,7 +101,7 @@ public:
                                                           {"conclusion", nullptr}, {"id", 5}}})}});
         });
         server_.Get("/repos/o/nulls/commits/fedcba9876/status", [json](const httplib::Request&, httplib::Response& res) {
-            json(res, {{"statuses", gaia::json::array()}});
+            json(res, {{"message", "Resource not accessible by personal access token"}}, 403);
         });
         // A renamed repository answers with a redirect.
         server_.Get("/repos/o/moved/issues/1", [](const httplib::Request&, httplib::Response& res) {
@@ -300,6 +300,8 @@ TEST(GaiacodeGitHub, NullFieldsFromGitHubAreRead) {
     const json checks = tools.call("gh_pr_checks", {{"number", 4}});
     ASSERT_EQ(checks.value("status", ""), "success") << checks.dump();
     EXPECT_EQ(checks["failing"], 0) << "a running check is not failing";
+    EXPECT_EQ(checks["checks"].size(), 1u) << "the check runs survive a refused statuses read";
+    EXPECT_TRUE(checks.contains("statuses_unavailable")) << checks.dump();
 }
 
 TEST(GaiacodeGitHub, AMovedRepositoryIsAnErrorNotAnEmptyAnswer) {
