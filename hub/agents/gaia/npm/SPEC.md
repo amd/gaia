@@ -896,7 +896,8 @@ conditions and several lines all run. No working folder, `cd`, path argument,
 link, credential file, package install or address is refused, the shell rate
 limit is dropped, and `run_python` / `execute_python_file` run their code
 unchecked. A refusal GAIA made by itself is not kept against later calls. What
-still holds: a call the user declined stays declined for that request, calendar
+still holds: a call the user declined stays declined (that exact call for the
+rest of the chat, another route to it for that request), calendar
 changes and outgoing mail wait for a person, and a program that is not
 installed fails with the shell's own error. Without full access those commands
 ask the user once, or are refused on a run nobody can answer.

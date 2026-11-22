@@ -8,6 +8,11 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 Requires the `gaia` Python CLI 0.27.0+ on `PATH`.
 
+- **A call the user denied is not asked about again in that chat.** Retrying
+  the exact call, even one that changes nothing such as `echo`, is refused
+  without a new approval prompt, and the agent says it was declined. It is
+  asked about again once the user asks for it ("run it again", or naming the
+  command) or clears the conversation.
 - **A follow-up in a research chat answers with its own result.** With
   research on, a later turn that did a task — writing a memo with
   `/office-docs` — did the work, then answered with the earlier research
