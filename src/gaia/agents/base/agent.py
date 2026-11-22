@@ -1335,6 +1335,33 @@ def _repeat_count(history: List[Any], max_period: int = _MAX_LOOP_PERIOD) -> int
     return best
 
 
+def _note_turn_result(seen: Dict[Any, Tuple[int, int]], call: Any, result: Any) -> None:
+    """Record *call*'s result: how many times in a row this turn it came back the same.
+
+    A wait clears every count: the model expects the next result to differ, as
+    when it polls a job's status between waits.
+    """
+    if _call_tool_name(call) in _PACING_TOOLS:
+        seen.clear()
+        return
+    digest = hash(str(result))
+    last, times = seen.get(call, (None, 0))
+    seen[call] = (digest, times + 1 if last == digest else 1)
+
+
+def _same_result_repeats(seen: Dict[Any, Tuple[int, int]], call: Any) -> int:
+    """How many times this turn *call* would repeat a result it already gave.
+
+    Catches a loop with no fixed order — a small model cycling twenty searches
+    in shuffled order ran 314 calls in one turn — while a read after an edit,
+    whose result changed, starts over. The count spans the whole turn, so four
+    re-reads of a file that never changed end it however far apart they were.
+    """
+    if _call_tool_name(call) in _PACING_TOOLS:
+        return 0
+    return seen.get(call, (None, 0))[1]
+
+
 # Tools that mutate external state (mark read, archive, star, …). A small
 # model that loses track of sequential state may re-issue an identical
 # mutation (same tool + same id). Unlike query dedup we key on the *args*,
@@ -13618,8 +13645,10 @@ Do NOT wrap conversational replies in JSON.
         loop_window = max(
             5, _MAX_LOOP_PERIOD * getattr(self, "max_consecutive_repeats", 4)
         )
-        # Repeated calls already sent one correction; the next repeat ends the turn.
+        # One loop correction per turn; the next repeat of any call ends the turn.
         loop_corrected_calls: set = set()
+        # Each call's last result and how many times in a row it came back the same.
+        turn_results: Dict[Any, Tuple[int, int]] = {}
         tool_call_log = (
             []
         )  # Full unbounded log of all tool calls this turn (for workflow guards)
@@ -15261,7 +15290,10 @@ Do NOT wrap conversational replies in JSON.
                     tool_call_log.append((tool_name, str(tool_args)))
                     if len(tool_call_history) > loop_window:
                         tool_call_history.pop(0)
-                    consecutive_count = _repeat_count(tool_call_history)
+                    consecutive_count = max(
+                        _repeat_count(tool_call_history),
+                        _same_result_repeats(turn_results, current_call) + 1,
+                    )
                     if consecutive_count >= self.max_consecutive_repeats:
                         self.console.stop_progress()
                         self._close_unrun_tool_card()
@@ -15270,7 +15302,7 @@ Do NOT wrap conversational replies in JSON.
                         # ``result`` field so the helper sees actual tool
                         # results, not the wrapper dicts.
                         recent_results = [o.get("result") for o in previous_outputs]
-                        if current_call not in loop_corrected_calls:
+                        if not loop_corrected_calls:
                             loop_corrected_calls.add(current_call)
                             # Sent as this call's result so tool_call_id pairing holds.
                             messages.append(
@@ -15307,6 +15339,8 @@ Do NOT wrap conversational replies in JSON.
                         # limiter's windows drain within a few capped waits.
                         tool_call_history.pop()
                         self._wait_out_rate_limit(tool_result)
+                    else:
+                        _note_turn_result(turn_results, current_call, tool_result)
 
                     # Result-based dedup for query family tools
                     _QUERY_TOOLS = (
@@ -15514,8 +15548,12 @@ Do NOT wrap conversational replies in JSON.
                 if len(tool_call_history) > loop_window:
                     tool_call_history.pop(0)
 
-                # Back-to-back repeats of this call, or of the cycle it closes
-                consecutive_count = _repeat_count(tool_call_history)
+                # Back-to-back repeats of this call, or of the cycle it closes,
+                # or of a result it already gave this turn in any order.
+                consecutive_count = max(
+                    _repeat_count(tool_call_history),
+                    _same_result_repeats(turn_results, current_call) + 1,
+                )
 
                 # Stop after max_consecutive_repeats identical calls
                 if consecutive_count >= self.max_consecutive_repeats:
@@ -15525,7 +15563,7 @@ Do NOT wrap conversational replies in JSON.
 
                     # Not ``step_results``: error recovery clears it before each retry.
                     recent_results = [o.get("result") for o in previous_outputs]
-                    if current_call not in loop_corrected_calls:
+                    if not loop_corrected_calls:
                         loop_corrected_calls.add(current_call)
                         messages.append(
                             self._create_tool_message(
@@ -15562,6 +15600,8 @@ Do NOT wrap conversational replies in JSON.
                     # windows drain within a few capped waits.
                     tool_call_history.pop()
                     self._wait_out_rate_limit(tool_result)
+                else:
+                    _note_turn_result(turn_results, current_call, tool_result)
 
                 if _is_image_tool(tool_name):
                     capability_tool_last_succeeded = not tool_result_failed(

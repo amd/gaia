@@ -587,7 +587,7 @@ def search_codebase(query: str) -> str:
 
 **Cause:** Usually means `max_steps` is too high, or tools return ambiguous results.
 
-**What the user gets:** at `max_consecutive_repeats` identical calls the model gets one correction in place of the call, and a repeat after that ends the turn. If the calls that ran worked, the agent makes one more model call with no tool calls allowed and answers from their results; if they errored or were refused, the answer names that failure.
+**What the user gets:** at `max_consecutive_repeats` identical calls the model gets one correction in place of the call, and a repeat after that ends the turn. The calls need not be back to back: a call that has returned the same result that many times this turn, in any order among other calls, counts the same, while one whose result changed (a file read again after an edit) starts over, and a call to the wait tool resets every count. A turn gets one correction in total; the next repeat of any call ends it. If the calls that ran worked, the agent makes one more model call with no tool calls allowed and answers from their results; if they errored or were refused, the answer names that failure.
 
 Two loops that vary their arguments are stopped the same way:
 
