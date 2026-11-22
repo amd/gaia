@@ -363,6 +363,11 @@ def test_a_running_model_is_never_hidden_by_the_estimate():
         ("user.Phi-4-mini-instruct-GGUF", "Phi 4 mini"),
         # A user-registered build: date stamp and format tag dropped, sizes upper-case.
         ("user.qwen38-27b-gguf-20260826", "Qwen38 27B"),
+        # A built-in copy keeps its own name beside the plain one, without the raw prefix.
+        ("builtin.Qwen3.5-4B-GGUF", "Qwen3.5 4B (built-in)"),
+        # gpt-oss keeps its official spelling; a quantization tag reads as one.
+        ("gpt-oss-20b-mxfp4-GGUF", "gpt-oss 20B MXFP4"),
+        ("LFM2-24B-A2B-GGUF", "LFM2 24B A2B"),
     ],
 )
 def test_friendly_name(model_id, name):
