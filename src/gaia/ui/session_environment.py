@@ -15,7 +15,7 @@ import os
 import threading
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Any, Dict, Iterator, List, Optional
+from typing import Any, Dict, Iterator, List, Optional, Set
 
 from gaia.logger import get_logger
 from gaia.security import AllowedPathsEnvError, env_allowed_paths
@@ -252,6 +252,8 @@ def _computed_scope(db: ChatDatabase, session: Dict[str, Any]) -> List[str]:
 
 # Paths approved at a relayed agent's prompt; its sidecar holds the grant itself.
 _approved_paths: Dict[str, List[str]] = {}
+# Paths approved since the current turn began, including re-approvals.
+_approved_this_turn: Dict[str, Set[str]] = {}
 _approved_guard = threading.Lock()
 
 
@@ -261,28 +263,32 @@ def note_approved_path(session_id: str, path: str) -> None:
         paths = _approved_paths.setdefault(session_id, [])
         if path not in paths:
             paths.append(path)
+        _approved_this_turn.setdefault(session_id, set()).add(path)
 
 
 def forget_session(session_id: str) -> None:
     """Drop what *session_id*'s relayed agent was allowed at its prompts."""
     with _approved_guard:
         _approved_paths.pop(session_id, None)
+        _approved_this_turn.pop(session_id, None)
+
+
+def begin_turn(session_id: str) -> List[str]:
+    """Start tracking a new turn's approvals; returns what was approved before it."""
+    with _approved_guard:
+        _approved_this_turn.pop(session_id, None)
+        return list(_approved_paths.get(session_id, []))
 
 
 def approved_paths(session_id: str) -> List[str]:
-    """What *session_id*'s relayed agent was allowed at its prompts, right now.
-
-    A snapshot for :func:`forget_approved_before` to diff against later —
-    taking it at a turn's start lets that turn's own approval, made before
-    the turn ends, survive a `session_created` that also arrives this turn.
-    """
+    """What *session_id*'s relayed agent was allowed at its prompts, right now."""
     return _approved(session_id)
 
 
 def forget_approved_before(session_id: str, before: List[str]) -> None:
     """Drop *session_id*'s approved paths that were already approved in
-    *before* (an earlier :func:`approved_paths` snapshot), keeping any
-    approved since.
+    *before* (the :func:`begin_turn` snapshot), keeping any approved
+    since, or approved again, in this turn.
 
     Used when the agent was rebuilt partway through a turn: *before* is
     stale — it belongs to the agent instance that is now gone — but a path
@@ -290,8 +296,9 @@ def forget_approved_before(session_id: str, before: List[str]) -> None:
     """
     if not before:
         return
-    stale = set(before)
     with _approved_guard:
+        # A path approved again this turn belongs to the new agent too.
+        stale = set(before) - _approved_this_turn.get(session_id, set())
         paths = _approved_paths.get(session_id)
         if not paths:
             return
