@@ -162,6 +162,13 @@ func TestANativeAgentIsStillStoppedWhenItsModelCannotRun(t *testing.T) {
 			t.Errorf("the row does not say gaiacode has no model: %q", row.Line)
 		}
 	})
+	t.Run("gaiacode on a saved Claude model", func(t *testing.T) {
+		t.Setenv("GAIA_MODEL_ID", "claude-sonnet-5")
+		row := blockedOnModel(t, LocalOptions{Harness: "gaiacode"})
+		if !strings.Contains(row.Detail, "Claude models are not available") || strings.Contains(row.Line, "not downloaded") {
+			t.Errorf("the row does not say Claude can't run here: %+v", row)
+		}
+	})
 	t.Run("a cloud provider chosen but not connected", func(t *testing.T) {
 		rep := localRunner{opts: LocalOptions{Binary: bin, Native: true, ChatProvider: "fireworks"}}.
 			Check(context.Background(), localCfg())

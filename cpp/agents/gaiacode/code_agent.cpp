@@ -80,6 +80,14 @@ void CodeAgent::registerTools() {
     }
     reg.registerTool(observed(runChecksTool(options_.shell, ws)));
     if (options_.github) {
+        reg.setPreCheck([off = options_.internetOff](const ToolInfo& tool, const json&) -> std::optional<json> {
+            if (off && off->load() && tool.name.rfind("gh_", 0) == 0) {
+                return json{{"status", "error"},
+                            {"error", "Internet access is off for this chat, so GitHub can't be reached. Turn it on "
+                                      "to use GitHub."}};
+            }
+            return std::nullopt;
+        });
         const std::shared_ptr<ShellSession> shell = options_.shell;
         registerGitHubTools(
             reg, [shell] { return nativeFolder((shell ? *shell : BashTools::defaultSession()).cwd()); },

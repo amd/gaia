@@ -189,6 +189,9 @@ func ForAgent(agent catalog.Agent, opts ForAgentOptions) (AgentClient, error) {
 				if model = lemonade.ChosenChatModel(); model == "" {
 					return nil, errors.New(NoGaiacodeModel)
 				}
+				if IsClaudeModelID(model) {
+					return nil, errors.New(NativeClaudeUnavailableFor(agent.Harness))
+				}
 			} else {
 				// gaiacpp reads no GAIA config: name GAIA's local chat model, which
 				// on a small PC is not the Gemma it would otherwise start on.
@@ -203,7 +206,9 @@ func ForAgent(agent catalog.Agent, opts ForAgentOptions) (AgentClient, error) {
 		}
 		// Before the session flags: gaiacpp doesn't take them and exits on an unknown argument.
 		if agent.Native {
-			return NewNativeSubprocessClient(bin, args, opts.Dev).WithTrace(opts.Trace).WithLogf(opts.Logf), nil
+			c := NewNativeSubprocessClient(bin, args, opts.Dev).WithTrace(opts.Trace).WithLogf(opts.Logf)
+			c.harness = agent.Harness
+			return c, nil
 		}
 		if opts.HistoryFile != "" {
 			args = append(append([]string{}, args...), HistoryFileFlag, opts.HistoryFile)

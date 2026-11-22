@@ -400,3 +400,32 @@ func TestClaudeRefusalNamesTheHarness(t *testing.T) {
 		t.Fatalf("err = %v, want it to name gaiacode", err)
 	}
 }
+
+// A Claude model saved from a Python-agent session gets the Claude message, not a launch.
+func TestGaiacodeOnASavedClaudeModelSaysClaudeIsUnavailable(t *testing.T) {
+	t.Setenv("GAIA_MODEL_ID", "")
+	path := filepath.Join(t.TempDir(), "config.json")
+	if err := os.WriteFile(path, []byte(`{"last_model":"claude-sonnet-5"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("GAIA_CONFIG_FILE", path)
+	agent := nativeAgent(t)
+	agent.Harness = "gaiacode"
+	if _, err := ForAgent(agent, ForAgentOptions{}); err == nil || !strings.Contains(err.Error(), "(gaiacode)") {
+		t.Fatalf("err = %v, want the Claude-unavailable message for gaiacode", err)
+	}
+}
+
+func TestTheNativeClientKnowsItsHarnessFromTheCatalog(t *testing.T) {
+	agent := nativeAgent(t)
+	agent.Harness = "gaiacode"
+	t.Setenv("GAIA_MODEL_ID", "Qwen3.6-35B-A3B-GGUF")
+	c, err := ForAgent(agent, ForAgentOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	if got := c.(*SubprocessClient).NativeHarness(); got != "gaiacode" {
+		t.Errorf("NativeHarness() = %q, want gaiacode (the binary here is the test program)", got)
+	}
+}

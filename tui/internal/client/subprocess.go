@@ -222,6 +222,8 @@ type SubprocessClient struct {
 	// native marks the C++ agent, which has no Claude provider and reads the
 	// model server's address and key from its environment only.
 	native bool
+	// harness names the native harness when the catalog said which; else the binary's name decides.
+	harness string
 	// trace records every event line this client reads, verbatim. Nil means
 	// tracing is off (--trace not passed).
 	trace *event.TraceWriter
@@ -325,6 +327,9 @@ func (s *SubprocessClient) Native() bool { return s.native }
 func (s *SubprocessClient) NativeHarness() string {
 	if !s.native {
 		return ""
+	}
+	if s.harness != "" {
+		return s.harness
 	}
 	return catalog.NativeHarnessOf(s.path)
 }

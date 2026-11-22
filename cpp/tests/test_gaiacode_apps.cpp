@@ -327,30 +327,40 @@ TEST_F(GaiacodeSidecar, AGitHubWriteAsksAndADenialPostsNothing) {
     EXPECT_EQ(events[result]["data"].dump().find("\"html_url\""), std::string::npos) << events[result].dump();
 }
 
-TEST_F(GaiacodeSidecar, AttachedFilesAreNamedOncePerChat) {
+TEST_F(GaiacodeSidecar, AttachedFilesAreNamedUnlessTheConversationAlreadyHasThem) {
     mock_.pushResponse(answerReply("Read it."));
     mock_.pushResponse(answerReply("Still read."));
+    mock_.pushResponse(answerReply("Again."));
     ASSERT_NO_FATAL_FAILURE(start());
     const fs::path file = work_ / "calc.py";
-    for (const char* run : {"run-a1", "run-a2"}) {
+    const auto ask = [&](const char* run, const json& context) {
         turn({{"query", "Look at the attached file"},
               {"run_id", run},
-              {"context", json::array()},
-              {"session_id", "chat-once"},
+              {"context", context},
+              {"session_id", "chat-names"},
               {"documents", json::array({file.string()})}});
-    }
+    };
+    ask("run-n1", json::array());
+    // A retry, a trimmed history, or the UI's own copy of turn 1: the path isn't in it.
+    ask("run-n2", json::array({{{"role", "user"}, {"content", "Look at the attached file"}},
+                               {{"role", "assistant"}, {"content", "Read it."}}}));
+    // Turn 1 as the model saw it: the path is there already.
+    ask("run-n3", json::array({{{"role", "user"}, {"content", "Look at the attached file\n\nAttached files: "
+                                                              "\n- " + file.string()}},
+                               {{"role", "assistant"}, {"content", "Read it."}}}));
     const auto sent = mock_.receivedBodies();
-    ASSERT_EQ(sent.size(), 2u);
+    ASSERT_EQ(sent.size(), 3u);
     const auto lastUser = [](const std::string& body) {
-        const json b = json::parse(body);
         std::string text;
-        for (const auto& m : b["messages"]) {
+        const json parsed = json::parse(body);
+        for (const auto& m : parsed["messages"]) {
             if (m.value("role", "") == "user" && m["content"].is_string()) text = m["content"].get<std::string>();
         }
         return text;
     };
     EXPECT_NE(lastUser(sent[0]).find("Attached files"), std::string::npos) << lastUser(sent[0]);
-    EXPECT_EQ(lastUser(sent[1]).find("Attached files"), std::string::npos) << "named again: " << lastUser(sent[1]);
+    EXPECT_NE(lastUser(sent[1]).find("Attached files"), std::string::npos) << "lost: " << lastUser(sent[1]);
+    EXPECT_EQ(lastUser(sent[2]).find("Attached files ("), std::string::npos) << "repeated: " << lastUser(sent[2]);
 }
 
 TEST_F(GaiacodeSidecar, InternetOffNeverAsksAboutAGitHubWrite) {

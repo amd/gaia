@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/amd/gaia/tui/internal/catalog"
+	"github.com/amd/gaia/tui/internal/client"
 	"github.com/amd/gaia/tui/internal/daemon"
 	"github.com/amd/gaia/tui/internal/gaiainit"
 	"github.com/amd/gaia/tui/internal/lemonade"
@@ -92,7 +93,7 @@ type LocalOptions struct {
 	// Native marks a C++ harness. It needs no Python setup and no embedding
 	// model, so the model row is answered by the model server alone.
 	Native bool
-	// Harness names the native harness (gaiacpp, gaiacode); empty for gaiacpp.
+	// Harness names the native harness (gaiacpp, gaiacode); empty is treated as gaiacpp.
 	Harness string
 }
 
@@ -852,6 +853,15 @@ func (l localRunner) verifyNativeModel(ctx context.Context) (Row, string, string
 			row.Fix = FixNone
 			row.Line = "no model chosen for gaiacode"
 			row.Detail = "gaiacode has no default model: none is proven for it yet."
+			row.Remedy = Remedy{Action: "Press p and choose where chat runs: a model on this PC, or a cloud provider."}
+			return row, "", ""
+		}
+		if client.IsClaudeModelID(model) {
+			row.State = StateFailed
+			row.Disposition = status.DispositionHalt
+			row.Fix = FixNone
+			row.Line = model + " can't run on gaiacode"
+			row.Detail = client.NativeClaudeUnavailableFor(l.opts.Harness)
 			row.Remedy = Remedy{Action: "Press p and choose where chat runs: a model on this PC, or a cloud provider."}
 			return row, "", ""
 		}
