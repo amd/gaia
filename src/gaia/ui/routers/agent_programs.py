@@ -146,7 +146,7 @@ def _listing() -> Dict[str, Any]:
     if native_path is not None and native_size is None:
         native_size = native_path.stat().st_size
     return {
-        "current": fetch.chosen_flagship(),
+        "current": fetch.saved_flagship(),
         "programs": [
             {
                 "id": fetch.PYTHON_FLAGSHIP,
@@ -187,7 +187,7 @@ def _on_progress(done: int, total: Optional[int]) -> None:
 
 def _run_download() -> None:
     try:
-        if fetch.chosen_flagship() == fetch.NATIVE_FLAGSHIP:
+        if fetch.saved_flagship() == fetch.NATIVE_FLAGSHIP:
             # An update replaces the file the running agent was started from.
             from gaia.ui.sidecar import daemon_client
 
@@ -243,7 +243,7 @@ def _start_download() -> Dict[str, Any]:
         raise HTTPException(
             status_code=409, detail="gaiacpp is already installed on this PC."
         )
-    if installed is not None and fetch.chosen_flagship() == fetch.NATIVE_FLAGSHIP:
+    if installed is not None and fetch.saved_flagship() == fetch.NATIVE_FLAGSHIP:
         _refuse_while_agent_is_busy()
     with _lock:
         if _job["state"] == "downloading":

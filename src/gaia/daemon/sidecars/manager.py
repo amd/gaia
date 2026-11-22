@@ -62,6 +62,7 @@ from gaia.daemon.sidecars.errors import (
     VersionMismatchError,
 )
 from gaia.daemon.sidecars.spec import AgentSidecarSpec
+from gaia.harnesses import HarnessUnavailableError
 from gaia.logger import get_logger
 from gaia.utils.terminal import (
     background_popen_kwargs,
@@ -421,11 +422,15 @@ class AgentSidecarManager:
     def build_spawn_command(self, *, port: int):
         if port == RESERVED_PORT:
             raise ValueError(f"port {RESERVED_PORT} is reserved and must never be used")
-        if (
-            self.spec.agent_id == fetch.FLAGSHIP_AGENT_ID
-            and fetch.chosen_flagship() == fetch.NATIVE_FLAGSHIP
-        ):
-            return self._native_flagship_command(port)
+        if self.spec.agent_id == fetch.FLAGSHIP_AGENT_ID:
+            try:
+                harness = fetch.chosen_flagship()
+            except HarnessUnavailableError as e:
+                raise SidecarSpawnError(
+                    f"Cannot start the GAIA agent: {e} Sidecar logs: {self.log_dir}."
+                ) from e
+            if harness == fetch.NATIVE_FLAGSHIP:
+                return self._native_flagship_command(port)
         if self.mode == "user":
             try:
                 result = fetch.fetch_binary(
