@@ -30,6 +30,7 @@ class GaiaAgent : public Agent {
 public:
     struct Options {
         bool webTools = true;  // web_fetch (still CONFIRM-gated)
+        bool webOff = false;   // the model is told not to use the web, and shell fetches are refused
         bool skills = true;    // SKILL.md catalog, list_skills, load_skill
         // Folders the tools may touch; empty = the working directory. Ignored
         // with fullAccess, which lets the tools reach anywhere the user can.

@@ -18,6 +18,7 @@ import pytest
 from gaia.llm import lemonade_client as lc
 from gaia.llm.vlm_client import VLMClient
 from gaia.vlm.mixin import VLMToolsMixin
+from tests.unit.image_bytes import PNG
 
 GEMMA = lc.DEFAULT_MODEL_NAME
 QWEN = lc.LARGE_DEFAULT_MODEL_NAME
@@ -53,7 +54,7 @@ def server():
 @pytest.fixture
 def image(tmp_path):
     path = tmp_path / "red_square.png"
-    path.write_bytes(b"png")
+    path.write_bytes(PNG)
     return str(path)
 
 

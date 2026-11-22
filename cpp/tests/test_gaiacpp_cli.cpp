@@ -222,6 +222,25 @@ TEST_F(GaiacppCli, TheDefaultStepLimitIsABackstopNotABudget) {
     }
 }
 
+TEST_F(GaiacppCli, NoWebRefusesAShellFetchAndTellsTheModelTheRule) {
+    bench::MockLlmServer mock;
+    // A reserved name: a regression shows as a failed lookup, not a page fetched.
+    mock.pushResponse(
+        withUsage(toolCall("bash_execute", R"({"command":"curl -s -L https://example.invalid/page"})"), 100, 0, 5));
+    mock.pushResponse(withUsage(finalAnswer("Web access is off, so I could not read the page."), 120, 0, 9));
+    const gaia::ProcessResult r = run(mock, "", " --dangerously-skip-permissions");
+    ASSERT_EQ(r.exitCode, 0) << r.stderr_output;
+
+    const auto bodies = mock.receivedBodies();
+    ASSERT_EQ(bodies.size(), 2u);
+    EXPECT_NE(bodies[0].find("Web access is off for this run. Do not search the web or fetch pages"),
+              std::string::npos)
+        << "the prompt states the rule";
+    EXPECT_NE(bodies[1].find("Web access is off for this run, so GAIA didn't run"), std::string::npos)
+        << "the command is refused, not run: " << bodies[1];
+    EXPECT_EQ(bodies[1].find("Could not resolve host"), std::string::npos) << "curl ran";
+}
+
 TEST_F(GaiacppCli, ATurnThatRanOutOfStepsWithAnAnswerIsIncompleteAndExitsOne) {
     bench::MockLlmServer mock;
     pushReads(mock, dir_ / "work", 3);

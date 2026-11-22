@@ -824,7 +824,7 @@ def relay_query(
     if session_id:
         from gaia.ui import session_environment
 
-        approved_before = session_environment.approved_paths(session_id)
+        approved_before = session_environment.begin_turn(session_id)
     # can_answer_questions=True (#2595): this relay DOES render needs_input
     # and POST the answer back via POST /api/chat/user-input ->
     # SidecarProxy.respond_query. Omitting it defaults to the sidecar's
