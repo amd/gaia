@@ -56,7 +56,7 @@ from gaia.agents.base.command_facts import (
     line_words,
     read_command,
 )
-from gaia.agents.base.person_approval import visible_line
+from gaia.agents.base.person_approval import visible_strict
 from gaia.agents.base.write_safety import (
     has_hidden_part,
     is_too_broad_folder,
@@ -367,10 +367,10 @@ def grant_scope(tool_name: str, tool_args: Any) -> Optional[GrantScope]:
             return None
     if scope is None:
         return None
-    # The words a button shows come from the model: a hidden or reordering
-    # character in them reads as its code. The keys keep the real name.
+    # The words a button shows come from the model: a hidden, reordering or
+    # joining character in them reads as its code. The keys keep the real name.
     return replace(
-        scope, label=visible_line(scope.label), subject=visible_line(scope.subject)
+        scope, label=visible_strict(scope.label), subject=visible_strict(scope.subject)
     )
 
 

@@ -14,6 +14,10 @@ Requires the `gaia` Python CLI 0.27.0+ on `PATH`.
   prints the file's path). They used to mint nothing, which left the sidecar
   with its token check off. A sidecar started with no token now refuses to
   start; a developer running one by hand sets `GAIA_SIDECAR_ALLOW_NO_TOKEN=1`.
+- **An "always allow" label can't pass one name off as another.** `always_scope`
+  and `always_label` now also write joiners, direction marks, tabs, line breaks
+  and variation selectors as `[U+XXXX]`, so `inv` + U+200D + `oice.txt` no longer
+  reads as `invoice.txt`. Prose such as an event's description keeps them.
 - **Small models are held to what they actually did.** On a PC with 16 GB of
   RAM or less the default is now Qwen3.5 2B (Qwen3.5 4B on an 8 GB GPU), and
   their answers are checked: a memory save that never happened is named, a

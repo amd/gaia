@@ -1,0 +1,90 @@
+// Copyright(C) 2026 Advanced Micro Devices, Inc. All rights reserved.
+// SPDX-License-Identifier: MIT
+
+import { render, screen } from '@testing-library/react';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { PermissionPrompt } from '../PermissionPrompt';
+import { visibleCommand, visibleStrict, visibleText } from '../CalendarApproval';
+import { useNotificationStore } from '../../stores/notificationStore';
+import type { GaiaNotification } from '../../types/agent';
+import parity from './fixtures/approval-name-parity.json';
+
+const originalRespond = useNotificationStore.getState().respondToPermission;
+
+function request(over: Partial<GaiaNotification> = {}): GaiaNotification {
+    return {
+        id: 'perm-1', type: 'permission_request', agentId: 'chat-1', sessionId: 'chat-1',
+        agentName: 'GAIA', title: 'Allow run_shell_command?', message: '', timestamp: 1,
+        read: false, dismissed: false, priority: 'high', tool: 'run_shell_command',
+        toolArgs: { command: 'git status' }, ...over,
+    };
+}
+
+beforeEach(() => {
+    useNotificationStore.setState({ notifications: [], respondToPermission: vi.fn().mockResolvedValue(undefined) });
+});
+afterEach(() => {
+    useNotificationStore.setState({ notifications: [], respondToPermission: originalRespond });
+});
+
+describe('a name on an approval card shows every character that could pass it off as another', () => {
+    it.each([
+        ['ZWJ', 'inv\u200doice.txt', 'inv[U+200D]oice.txt'],
+        ['ZWNJ', 'inv\u200coice.txt', 'inv[U+200C]oice.txt'],
+        ['LRM', 'report\u200e.txt', 'report[U+200E].txt'],
+        ['RLM', 'report\u200f.txt', 'report[U+200F].txt'],
+        ['emoji and VS16', '\u{1F4C1}\ufe0fnotes.txt', '\u{1F4C1}[U+FE0F]notes.txt'],
+        ['CJK and VS17', '\u845b\u{E0100}.txt', '\u845b[U+E0100].txt'],
+        ['CRLF', 'a\r\nb.txt', 'a[U+000D][U+000A]b.txt'],
+        ['tab', 'a\tb.txt', 'a[U+0009]b.txt'],
+    ])('in a file path (%s)', (_name, name, shown) => {
+        useNotificationStore.getState().addNotification(request({
+            tool: 'write_file', toolLabel: 'writing file',
+            toolArgs: { file_path: `/home/u/${name}`, content: 'hi' },
+        }));
+        render(<PermissionPrompt sessionId="chat-1" />);
+        expect(document.querySelector('.perm-card-detail code')?.textContent).toBe(`/home/u/${shown}`);
+        expect(screen.getByTestId('perm-hidden-note')).toBeInTheDocument();
+    });
+
+    it('in a program name, on the card and on its always button', () => {
+        useNotificationStore.getState().addNotification(request({
+            toolArgs: { command: 'gi\u200dt status' }, alwaysScope: 'gi\u200dt status',
+        }));
+        render(<PermissionPrompt sessionId="chat-1" />);
+        expect(document.querySelector('.perm-card-detail code')?.textContent).toBe('gi[U+200D]t status');
+        expect(screen.getByRole('button', { name: 'Always allow gi[U+200D]t status in this chat' })).toBeInTheDocument();
+        expect(screen.getByTestId('perm-hidden-note')).toBeInTheDocument();
+    });
+
+    it('in a command, while its line breaks and indents stay layout', () => {
+        useNotificationStore.getState().addNotification(request({
+            toolArgs: { command: 'echo a\n\tgi\u200ct log' },
+        }));
+        render(<PermissionPrompt sessionId="chat-1" />);
+        expect(document.querySelector('.perm-card-detail code')?.textContent).toBe('echo a\n\tgi[U+200C]t log');
+    });
+
+    it('but code keeps emoji joiner sequences as written', () => {
+        const family = '\u{1F468}\u200d\u{1F469}\u200d\u{1F467}';
+        useNotificationStore.getState().addNotification(request({
+            tool: 'run_python', toolArgs: { code: `print("${family}")\nprint("\u2764\ufe0f")` },
+        }));
+        render(<PermissionPrompt sessionId="chat-1" />);
+        expect(screen.getByTestId('perm-code').textContent).toBe(`print("${family}")\nprint("\u2764\ufe0f")`);
+        expect(screen.queryByTestId('perm-hidden-note')).not.toBeInTheDocument();
+    });
+
+    it('a plain name and command are unchanged', () => {
+        expect(visibleStrict('/home/u/notes.txt')).toBe('/home/u/notes.txt');
+        expect(visibleCommand('git status\n\tgit log')).toBe('git status\n\tgit log');
+        // Prose is unchanged by this rule: the joiners Persian needs stay as written.
+        expect(visibleText('\u0645\u06cc\u200c\u062e\u0648\u0627\u0647\u0645', false)).toBe('\u0645\u06cc\u200c\u062e\u0648\u0627\u0647\u0645');
+    });
+});
+
+describe('the name rule matches the Python agent', () => {
+    it.each(parity.map((c) => [JSON.stringify(c.input), c] as const))('shows %s as visible_strict does', (_label, { input, shown }) => {
+        expect(visibleStrict(input)).toBe(shown);
+    });
+});
