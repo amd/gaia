@@ -33,6 +33,7 @@ from typing import Any, Callable, ContextManager, Optional, Tuple
 
 from fastapi import HTTPException
 
+from gaia.agents.base.mood import MOODS
 from gaia.agents.install_hints import LEGACY_FLAGSHIP_AGENT_IDS
 from gaia.daemon.broker_client import BrokerUnavailableError, LeaseWaitCancelled
 from gaia.llm import lemonade_client as _lemonade_client_mod
@@ -71,6 +72,7 @@ from gaia.ui.sidecar.profiles import (
     grants_supported,
     internet_supported,
     memory_supported,
+    mood_supported,
     profile_for,
     reasoning_supported,
     scope_supported,
@@ -2298,6 +2300,7 @@ def _session_agent_kwargs(
         "ui_session_id": session_id,
         "memory_incognito": memory_incognito,
         "surface": "agent_ui",
+        "express_mood": True,
     }
 
 
@@ -3281,6 +3284,7 @@ def _dispatch_sidecar_query(
                 "agent_ui" if surface_supported(profile, handle.api_version) else None
             ),
             reasoning=reasoning_supported(profile, handle.api_version),
+            mood=mood_supported(profile, handle.api_version),
             max_steps=max_steps,
             turns=relayed_turns,
         )
@@ -5232,6 +5236,7 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
         full_response = ""
         answer_event = None
         fatal_error = None
+        gaia_mood = None
         captured_steps = []  # Collect agent steps for DB persistence
         persisted_policy_block_msg_id = None
         persisted_policy_block_content = None
@@ -5370,6 +5375,13 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                 elif event_type == "agent_error" and event.get("fatal"):
                     # A relayed sidecar's terminal error: the turn ends here.
                     fatal_error = event.get("content") or ""
+                elif event_type == "mood":
+                    # The last one named is the reply's: earlier ones went with steps.
+                    named = event.get("mood")
+                    if named in MOODS:
+                        gaia_mood = named
+                    else:
+                        logger.warning("Ignoring unknown mood %r from the agent", named)
 
                 # Capture agent steps for persistence
                 if event_type == "thinking":
@@ -5932,6 +5944,7 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                 stopped=turn_cancelled,
                 # As on `done`: a Stop wins over the failure it cut short.
                 failed=turn_failed and not turn_cancelled,
+                mood=gaia_mood,
             )
             link_warning = (
                 turn_box["recording"].link_message(msg_id)

@@ -904,6 +904,8 @@ Every other path serves the Agent UI page, except paths under `/api`: an unknown
     Get messages for a session, ordered oldest first. Each message carries `stopped`:
     true when the person stopped the answer, and `failed`: true when a model
     failure ended the turn, as on the stream's `done`. Both are kept across restarts.
+    An answer also carries `mood`: the word GAIA named for her reply (the stream's
+    last `mood` event), or null, so the icon her eyes settled on survives a reload.
 
     **Query params:** `limit` (default 100), `offset` (default 0)
 

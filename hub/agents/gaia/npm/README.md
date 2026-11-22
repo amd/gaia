@@ -277,6 +277,13 @@ its own settings screen sends `surface` (`"tui"`, `"agent_ui"` or `"cli"`) to
 get its own wording; a headless caller omits it. See
 [`SPEC.md` §5.1](./SPEC.md#51-endpoints).
 
+**Showing how the agent feels?** Send `mood: true` (contract ≥ 2.31) and the
+model may open a reply with a one-word mood (`happy`, `curious`, `sad`, ...).
+The agent takes it out of the text and sends it as a `mood` event,
+`{ "type": "mood", "mood": "happy" }`; the Agent UI plays it on GAIA's eyes.
+Send the same value on every turn of a session. Older binaries reject the
+field with `422`.
+
 **Showing the model's reasoning?** Send `reasoning: true` (contract ≥ 2.22)
 and it arrives as `reasoning` events with a `delta`, apart from `status` lines
 and the answer. Join the deltas as they come. One with `retracts_answer: true`

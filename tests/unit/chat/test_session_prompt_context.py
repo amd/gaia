@@ -186,3 +186,24 @@ def test_in_process_agent_ui_chats_say_they_are_the_agent_ui():
         rag_file_paths=[], library_paths=[], allowed=[], session_id="s"
     )
     assert kwargs["surface"] == "agent_ui"
+
+
+def test_a_caller_that_asks_gets_the_mood_line(gaia_docs):
+    from gaia.agents.base.mood import MOOD_PROMPT
+
+    agent = _build(allowed_paths=[str(gaia_docs)], express_mood=True)
+    try:
+        assert agent.expresses_mood
+        assert agent._get_system_prompt().rstrip().endswith(MOOD_PROMPT)
+    finally:
+        agent.__del__()
+
+
+@pytest.mark.parametrize("surface", [None, "tui", "cli", "agent_ui"])
+def test_no_surface_gets_the_mood_line_unasked(gaia_docs, surface):
+    agent = _build(allowed_paths=[str(gaia_docs)], surface=surface)
+    try:
+        assert not agent.expresses_mood
+        assert "[mood:" not in agent._get_system_prompt()
+    finally:
+        agent.__del__()

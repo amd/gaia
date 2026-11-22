@@ -1,7 +1,9 @@
 // Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 // SPDX-License-Identifier: MIT
 
-import { fireEvent, render, screen, within } from '@testing-library/react';
+import { act, fireEvent, render, screen, within } from '@testing-library/react';
+import { useChatStore } from '../../stores/chatStore';
+import { LONGEST_MOOD_MS } from '../../utils/gaiaEyes';
 import { describe, expect, it, vi } from 'vitest';
 import {
     AgentActivity,
@@ -12,6 +14,7 @@ import {
     readableListValue,
     thoughtDurations,
     thoughtLabel,
+    timelineShowsFinalGlyph,
 } from '../AgentActivity';
 import type { AgentStep } from '../../types';
 import activityCss from '../AgentActivity.css?raw';
@@ -182,6 +185,108 @@ describe('plain step lines', () => {
         const row = screen.getByRole('button', { name: /Reading file: notes.txt/ });
         expect(within(row).getByText('12s')).toBeInTheDocument();
         expect(screen.queryByText('Thinking')).toBeNull();
+    });
+
+    it("puts GAIA's eyes in a running call's icon slot, and the call's blue icon there once it ends", () => {
+        const running = call(1, 'Reading file: notes.txt', { active: true, success: undefined, result: undefined });
+        const { container, rerender } = render(<AgentActivity steps={[running]} isActive running />);
+
+        const glyph = () => container.querySelector('.flow-tool .step-glyph')!;
+        expect(glyph().querySelector('.gaia-eyes')?.getAttribute('data-eyes')).toBe('read');
+        expect(container.querySelector('.flow-tool-spinner')).toBeNull();
+
+        rerender(<AgentActivity steps={[{ ...running, active: false, success: true }]} isActive running />);
+        expect(glyph().querySelector('.gaia-eyes')).toBeNull();
+        expect(glyph().querySelector('svg.flow-tool-icon')).not.toBeNull();
+        expect(glyph().classList.contains('is-settling')).toBe(true);
+    });
+
+    it('turns the eyes of a live thought into a brain once it ends', () => {
+        const thought = { id: 1, type: 'thinking', label: 'Thinking', detail: 'Weigh it up.', active: true, timestamp: Date.now() } as const;
+        const { container, rerender } = render(<AgentActivity steps={[thought]} isActive running />);
+
+        const eyes = () => container.querySelector('.flow-reasoning .step-glyph .gaia-eyes')!;
+        expect(eyes().getAttribute('data-eyes')).toBe('think');
+
+        rerender(<AgentActivity steps={[{ ...thought, active: false }]} isActive running />);
+        expect(eyes().getAttribute('data-eyes')).toBe('brain');
+    });
+
+    it('shows a finished thought from history as the brain, without playing it', () => {
+        const thought = { id: 1, type: 'thinking', label: 'Thinking', detail: 'Weigh it up.', active: false, timestamp: Date.now() } as const;
+        const { container } = render(<AgentActivity steps={[thought]} isActive={false} />);
+
+        const glyph = container.querySelector('.flow-reasoning .step-glyph')!;
+        expect(glyph.querySelector('.gaia-eyes')?.getAttribute('data-eyes')).toBe('brain');
+        expect(glyph.classList.contains('is-settling')).toBe(false);
+    });
+
+    it("puts GAIA's final icon on the thought that led to the answer, still and named, after a reload", () => {
+        const thought = { id: 1, type: 'thinking', label: 'Thinking', detail: 'They were kind.', active: false, timestamp: Date.now() } as const;
+        const { container } = render(<AgentActivity steps={[thought]} isActive={false} finalGlyph="heart" />);
+
+        const icon = container.querySelector('.flow-reasoning .final-glyph')!;
+        expect(icon.getAttribute('data-glyph')).toBe('heart');
+        expect(icon.getAttribute('aria-label')).toBe('GAIA is touched');
+        expect(icon.querySelector('.gaia-eyes')!.getAttribute('data-eyes')).toBe('heart');
+        expect(container.querySelector('.step-glyph.is-settling')).toBeNull();
+        expect(timelineShowsFinalGlyph([thought])).toBe(true);
+    });
+
+    it("turns a live thought's eyes into the final icon when it ends", () => {
+        const thought = { id: 1, type: 'thinking', label: 'Thinking', detail: 'They were kind.', active: true, timestamp: Date.now() } as const;
+        const { container, rerender } = render(<AgentActivity steps={[thought]} isActive running finalGlyph="heart" />);
+        expect(container.querySelector('.flow-reasoning .step-glyph .gaia-eyes')!.getAttribute('data-eyes')).toBe('think');
+
+        rerender(<AgentActivity steps={[{ ...thought, active: false }]} isActive running finalGlyph="heart" />);
+        const glyph = container.querySelector('.flow-reasoning .step-glyph')!;
+        expect(glyph.querySelector('.final-glyph')!.getAttribute('data-glyph')).toBe('heart');
+        expect(glyph.classList.contains('is-settling')).toBe(true);
+    });
+
+    it("waits for GAIA's mood to finish before the eyes become the icon, so they are never in two places", () => {
+        vi.useFakeTimers();
+        try {
+            const thought = { id: 1, type: 'thinking', label: 'Thinking', detail: 'They were kind.', active: true, timestamp: Date.now() } as const;
+            const { container, rerender } = render(<AgentActivity steps={[thought]} isActive running />);
+            act(() => { useChatStore.getState().setGaiaMood('love'); });
+            // The mood plays on the live line; this row keeps the brain meanwhile.
+            rerender(<AgentActivity steps={[{ ...thought, active: false }]} isActive={false} running finalGlyph="heart" />);
+            expect(container.querySelector('.flow-reasoning .gaia-eyes')!.getAttribute('data-eyes')).toBe('brain');
+            act(() => { vi.advanceTimersByTime(LONGEST_MOOD_MS + 100); });
+            expect(container.querySelector('.flow-reasoning .final-glyph')!.getAttribute('data-glyph')).toBe('heart');
+        } finally {
+            act(() => { useChatStore.getState().resetStreaming(); });
+            vi.useRealTimers();
+        }
+    });
+
+    it('shows the final icon on a folded group that ends in the thought, in place of its check', () => {
+        const steps: AgentStep[] = [
+            call(1, 'Reading file: notes.txt'),
+            { id: 2, type: 'thinking', label: 'Thinking', detail: 'Three dates.', active: false, timestamp: Date.now() },
+        ];
+        const { container } = render(<AgentActivity steps={steps} isActive={false} finalGlyph="question" />);
+
+        const summary = container.querySelector('.flow-steps-summary')!;
+        expect(summary.querySelector('.final-glyph')!.getAttribute('data-glyph')).toBe('question');
+        expect(summary.querySelector('.lucide-circle-check')).toBeNull();
+        expect(timelineShowsFinalGlyph(steps)).toBe(true);
+    });
+
+    it('keeps the check on a folded group when the reply settles on the brain', () => {
+        const steps: AgentStep[] = [
+            call(1, 'Reading file: notes.txt'),
+            { id: 2, type: 'thinking', label: 'Thinking', detail: 'Three dates.', active: false, timestamp: Date.now() },
+        ];
+        const { container } = render(<AgentActivity steps={steps} isActive={false} />);
+        expect(container.querySelector('.flow-steps-summary .lucide-circle-check')).not.toBeNull();
+        expect(container.querySelector('.flow-steps-summary .final-glyph')).toBeNull();
+    });
+
+    it('leaves the final icon to a line of its own when the turn ended on a tool call', () => {
+        expect(timelineShowsFinalGlyph([call(1, 'Reading file: notes.txt')])).toBe(false);
+        expect(timelineShowsFinalGlyph([])).toBe(false);
     });
 
     it('shows the live line between steps, where the next one will appear', () => {
@@ -533,7 +638,7 @@ describe('step icons', () => {
         const { container } = render(<AgentActivity steps={steps} isActive={false} />);
         fireEvent.click(screen.getByRole('button', { name: /^Searched web, read web page$/ }));
 
-        const icons = [...container.querySelectorAll('.flow-tool-left > svg')].map((svg) => svg.getAttribute('class'));
+        const icons = [...container.querySelectorAll('.flow-tool-left .step-glyph > svg')].map((svg) => svg.getAttribute('class'));
         expect(icons[0]).toContain('lucide-globe');
         expect(icons[1]).toContain('lucide-link');
         expect(container.querySelector('.flow-tool .lucide-circle-check')).toBeNull();
@@ -544,7 +649,7 @@ describe('step icons', () => {
             <AgentActivity steps={[call(1, 'Reading web page: nps.gov', { tool: 'fetch_page', success: false })]} isActive={false} />,
         );
 
-        expect(container.querySelector('.flow-tool-left > svg')?.getAttribute('class')).toContain('lucide-circle-alert');
+        expect(container.querySelector('.flow-tool-left .step-glyph > svg')?.getAttribute('class')).toContain('lucide-circle-alert');
     });
 });
 

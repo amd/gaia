@@ -63,7 +63,7 @@
     animation-timeline: scroll(self inline);
     min-width: 0;
 }
-.flow-steps-done { color: var(--text-muted); flex-shrink: 0; }
+.flow-steps-done { color: var(--accent-cyan); flex-shrink: 0; }
 
 .flow-steps-rows {
     display: flex;
@@ -102,7 +102,7 @@
 }
 .flow-done > svg {
     flex-shrink: 0;
-    color: var(--accent-green);
+    color: var(--accent-cyan);
 }
 
 .flow-live-line {
@@ -167,7 +167,7 @@
 .flow-tool-thought-mark {
     display: inline-flex;
     margin-inline-end: 6px;
-    color: var(--text-muted);
+    color: var(--accent-cyan);
 }
 .flow-tool-thought {
     display: flex;
@@ -192,7 +192,6 @@
 
 
 /* Picking up a skill changes how the agent works from here, so it stands out. */
-.flow-tool.skill .flow-tool-left > svg:not(.flow-tool-spinner),
 .flow-tool.skill .flow-tool-label {
     color: var(--accent);
 }
@@ -226,19 +225,9 @@
     min-width: 0;
 }
 
-/* Smooth transition for spinner → checkmark/error icon swap */
-.flow-tool-left > svg {
-    transition: transform var(--duration) var(--ease), color var(--duration) var(--ease);
-    flex-shrink: 0;
-}
-.flow-steps.live .flow-tool-left > svg:not(.flow-tool-spinner) {
-    animation: toolStatusPop var(--duration) var(--ease);
-}
-
-@keyframes toolStatusPop {
-    0% { transform: scale(0.6); opacity: 0; }
-    60% { transform: scale(1.15); }
-    100% { transform: scale(1); opacity: 1; }
+/* A step's icon changes colour smoothly, e.g. when it turns out to have failed. */
+.flow-tool-left .step-glyph > svg {
+    transition: color var(--duration) var(--ease);
 }
 
 .flow-tool-right {
@@ -255,7 +244,13 @@
 
 .flow-tool-icon {
     flex-shrink: 0;
+    color: var(--accent-cyan);
+}
+.flow-tool-icon.is-muted {
     color: var(--text-muted);
+}
+.flow-tool-icon.is-error {
+    color: var(--danger);
 }
 
 .flow-tool-label {
@@ -1064,9 +1059,7 @@
         animation: none;
     }
 
-    .flow-tool-left > svg,
-    .flow-steps.live .flow-tool-left > svg:not(.flow-tool-spinner) {
-        animation: none;
+    .flow-tool-left .step-glyph > svg {
         transition: none;
     }
 

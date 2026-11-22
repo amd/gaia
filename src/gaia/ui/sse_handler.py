@@ -901,6 +901,9 @@ class SSEOutputHandler(OutputHandler):
         event.update(_mcp_identity(tool_name))
         self._emit(event)
 
+    def print_mood(self, mood: str):
+        self._emit({"type": "mood", "mood": mood})
+
     def print_skill_use(self, name: str, loaded: List[str], how: str):
         self._emit({"type": "skill_use", "skill": name, "how": how, "loaded": loaded})
 

@@ -133,6 +133,12 @@ from gaia.agents.base.model_features import (
     features_for_model,
     withheld_tools,
 )
+from gaia.agents.base.mood import (
+    MOOD_REMINDER,
+    strip_mood,
+    with_text,
+    without_mood,
+)
 from gaia.agents.base.planted_instructions import (
     acted_after,
     flag_tool_result,
@@ -10199,11 +10205,13 @@ Do NOT wrap conversational replies in JSON.
         no_calls.update(self._reasoning_request_kwargs())
         stats = None
         if self.streaming:
-            stream = self.chat.send_messages_stream(
-                messages=self._with_session_context(request),
-                system_prompt=self.system_prompt,
-                tools=tools,
-                **no_calls,
+            stream = self._mood_stream(
+                self.chat.send_messages_stream(
+                    messages=self._with_session_context(request),
+                    system_prompt=self.system_prompt,
+                    tools=tools,
+                    **no_calls,
+                )
             )
             response = ""
             for chunk in stream:
@@ -10220,11 +10228,13 @@ Do NOT wrap conversational replies in JSON.
         else:
             self.console.start_progress(self._progress_label())
             try:
-                reply = self.chat.send_messages(
-                    messages=self._with_session_context(request),
-                    system_prompt=self.system_prompt,
-                    tools=tools,
-                    **no_calls,
+                reply = self._mood_reply(
+                    self.chat.send_messages(
+                        messages=self._with_session_context(request),
+                        system_prompt=self.system_prompt,
+                        tools=tools,
+                        **no_calls,
+                    )
                 )
             finally:
                 self.console.stop_progress()
@@ -11105,6 +11115,36 @@ Do NOT wrap conversational replies in JSON.
         provider = getattr(getattr(self, "chat", None), "llm_client", None)
         check = getattr(provider, "gaia_lemonade_stopped", None)
         return callable(check) and check() is True
+
+    #: The model is asked to open a reply with a mood tag (``mood.py``).
+    expresses_mood: bool = False
+
+    def _hear_mood(self, mood: str) -> None:
+        hook = getattr(self.console, "print_mood", None)
+        if hook is not None:
+            hook(mood)
+
+    def _remind_mood(self, messages) -> None:
+        """Ask for this turn's mood in its request only, never in saved history."""
+        if self.expresses_mood:
+            getattr(messages, "append_transient", messages.append)(
+                {"role": "user", "content": MOOD_REMINDER}
+            )
+
+    def _mood_stream(self, stream):
+        """*stream* with the reply's mood tag taken out and sent to the console."""
+        if not self.expresses_mood:
+            return stream
+        return without_mood(stream, self._hear_mood)
+
+    def _mood_reply(self, reply):
+        """A whole *reply* with its mood tag taken out and sent to the console."""
+        if not self.expresses_mood:
+            return reply
+        text, mood = strip_mood(reply.text or "")
+        if mood:
+            self._hear_mood(mood)
+        return reply if text == reply.text else with_text(reply, text)
 
     def _restart_answer(self) -> None:
         """Take back the cut-off reply on screen before the step starts over."""
@@ -13710,6 +13750,7 @@ Do NOT wrap conversational replies in JSON.
         )
         self._tell_no_one_to_ask(messages)
         self._tell_time_budget(messages)
+        self._remind_mood(messages)
 
         # Use provided max_steps or fall back to class default
         steps_limit = max_steps if max_steps is not None else self.max_steps
@@ -14220,13 +14261,15 @@ Do NOT wrap conversational replies in JSON.
                 while True:
                     try:
                         self._before_model_call(messages)
-                        response_stream = self.chat.send_messages_stream(
-                            messages=self._with_session_context(messages),
-                            system_prompt=self.system_prompt,
-                            tools=self._openai_tools,
-                            max_tokens=self._max_output_tokens(),
-                            **self._conversation_request_kwargs(),
-                            **self._reasoning_request_kwargs(),
+                        response_stream = self._mood_stream(
+                            self.chat.send_messages_stream(
+                                messages=self._with_session_context(messages),
+                                system_prompt=self.system_prompt,
+                                tools=self._openai_tools,
+                                max_tokens=self._max_output_tokens(),
+                                **self._conversation_request_kwargs(),
+                                **self._reasoning_request_kwargs(),
+                            )
                         )
 
                         # Process the streaming response chunks as they arrive
@@ -14484,13 +14527,15 @@ Do NOT wrap conversational replies in JSON.
                 while True:
                     try:
                         self._before_model_call(messages)
-                        chat_response = self.chat.send_messages(
-                            messages=self._with_session_context(messages),
-                            system_prompt=self.system_prompt,
-                            tools=self._openai_tools,
-                            max_tokens=self._max_output_tokens(),
-                            **self._conversation_request_kwargs(),
-                            **self._reasoning_request_kwargs(),
+                        chat_response = self._mood_reply(
+                            self.chat.send_messages(
+                                messages=self._with_session_context(messages),
+                                system_prompt=self.system_prompt,
+                                tools=self._openai_tools,
+                                max_tokens=self._max_output_tokens(),
+                                **self._conversation_request_kwargs(),
+                                **self._reasoning_request_kwargs(),
+                            )
                         )
                         response = chat_response.text
                         response_stats = chat_response.stats
@@ -14891,13 +14936,15 @@ Do NOT wrap conversational replies in JSON.
                     messages.append({"role": "user", "content": plan_prompt})
 
                     # Use AgentSDK for streaming plan response
-                    stream_gen = self.chat.send_messages_stream(
-                        messages=self._with_session_context(messages),
-                        system_prompt=self.system_prompt,
-                        tools=self._openai_tools,
-                        max_tokens=self._max_output_tokens(),
-                        **self._conversation_request_kwargs(),
-                        **self._reasoning_request_kwargs(),
+                    stream_gen = self._mood_stream(
+                        self.chat.send_messages_stream(
+                            messages=self._with_session_context(messages),
+                            system_prompt=self.system_prompt,
+                            tools=self._openai_tools,
+                            max_tokens=self._max_output_tokens(),
+                            **self._conversation_request_kwargs(),
+                            **self._reasoning_request_kwargs(),
+                        )
                     )
 
                     for chunk_response in stream_gen:
@@ -14937,13 +14984,15 @@ Do NOT wrap conversational replies in JSON.
                     messages.append({"role": "user", "content": plan_prompt})
 
                     # Use AgentSDK for non-streaming plan response
-                    chat_response = self.chat.send_messages(
-                        messages=self._with_session_context(messages),
-                        system_prompt=self.system_prompt,
-                        tools=self._openai_tools,
-                        max_tokens=self._max_output_tokens(),
-                        **self._conversation_request_kwargs(),
-                        **self._reasoning_request_kwargs(),
+                    chat_response = self._mood_reply(
+                        self.chat.send_messages(
+                            messages=self._with_session_context(messages),
+                            system_prompt=self.system_prompt,
+                            tools=self._openai_tools,
+                            max_tokens=self._max_output_tokens(),
+                            **self._conversation_request_kwargs(),
+                            **self._reasoning_request_kwargs(),
+                        )
                     )
                     plan_response = chat_response.text
                     plan_reasoning = _response_reasoning(chat_response)
@@ -17252,13 +17301,15 @@ Do NOT wrap conversational replies in JSON.
         conversation.append({"role": "user", "content": instruction})
         self.console.start_progress(self._progress_label())
         try:
-            reply = self.chat.send_messages(
-                messages=self._with_session_context(messages),
-                system_prompt=self.system_prompt,
-                tools=self._openai_tools,
-                max_tokens=self._max_output_tokens(),
-                **self._conversation_request_kwargs(),
-                **self._reasoning_request_kwargs(),
+            reply = self._mood_reply(
+                self.chat.send_messages(
+                    messages=self._with_session_context(messages),
+                    system_prompt=self.system_prompt,
+                    tools=self._openai_tools,
+                    max_tokens=self._max_output_tokens(),
+                    **self._conversation_request_kwargs(),
+                    **self._reasoning_request_kwargs(),
+                )
             )
             response, inline_reasoning = _split_reasoning(reply.text or "")
             reasoning = _response_reasoning(reply) or inline_reasoning

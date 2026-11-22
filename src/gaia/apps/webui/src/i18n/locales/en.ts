@@ -684,6 +684,19 @@ export const enMessages = {
 
     // Agent activity while GAIA works
     'activity.thinking': 'Thinking',
+    // What GAIA's eyes settled on for a reply, said in words.
+    'eyes.glyph.heart': 'GAIA is touched',
+    'eyes.glyph.question': 'GAIA asked you a question',
+    'eyes.glyph.exclaim': 'GAIA is surprised',
+    'eyes.glyph.star': 'GAIA is impressed',
+    'eyes.glyph.sun': 'GAIA is happy',
+    'eyes.glyph.note': 'GAIA is being playful',
+    'eyes.glyph.tear': 'GAIA is sad',
+    'eyes.glyph.bolt': 'GAIA is upset',
+    'eyes.glyph.cloud': 'GAIA is worried',
+    'eyes.glyph.sprout': 'GAIA is hopeful',
+    'eyes.glyph.moon': 'GAIA is at ease',
+    'eyes.glyph.check': 'GAIA is glad it worked out',
     'activity.thought': 'Thought',
     'activity.thoughtFor': 'Thought for {time}',
     'activity.thinkingFor': 'Thinking · {time}',

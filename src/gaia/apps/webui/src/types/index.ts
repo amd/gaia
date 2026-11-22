@@ -488,6 +488,8 @@ export interface Message {
     stopError?: string;
     /** Client-side: this reply stands in for a turn that failed before answering. */
     failed?: boolean;
+    /** The reaction GAIA named for this reply; picks the icon it settles on. */
+    mood?: string | null;
     /** Client-side: the raw error, to recognize the server's saved copy of this failure. */
     failureText?: string;
     /** Client-side: the cause a failed turn named (`done.failure`), for its fix. */

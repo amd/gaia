@@ -684,6 +684,19 @@ const messages: Messages = {
 
     // Agent activity while GAIA works
     'activity.thinking': 'جارٍ التفكير',
+    // What GAIA's eyes settled on for a reply, said in words.
+    'eyes.glyph.heart': 'تأثّرت GAIA',
+    'eyes.glyph.question': 'طرحت عليك GAIA سؤالًا',
+    'eyes.glyph.exclaim': 'تفاجأت GAIA',
+    'eyes.glyph.star': 'أُعجبت GAIA',
+    'eyes.glyph.sun': 'GAIA سعيدة',
+    'eyes.glyph.note': 'GAIA في مزاج مرح',
+    'eyes.glyph.tear': 'GAIA حزينة',
+    'eyes.glyph.bolt': 'GAIA منزعجة',
+    'eyes.glyph.cloud': 'GAIA قلقة',
+    'eyes.glyph.sprout': 'GAIA متفائلة',
+    'eyes.glyph.moon': 'GAIA مرتاحة',
+    'eyes.glyph.check': 'GAIA مسرورة لأن الأمر نجح',
     'activity.thought': 'فكّر',
     'activity.thoughtFor': 'فكّر لمدة {time}',
     'activity.thinkingFor': 'جارٍ التفكير · {time}',

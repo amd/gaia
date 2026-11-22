@@ -178,6 +178,13 @@ Requires the `gaia` Python CLI 0.27.0+ on `PATH`.
   as `.wav`.
 ### Changed
 
+- **The agent can say how it feels (contract 2.31).** With the new `/query`
+  field `mood: true`, the prompt asks the model to open a reply with a
+  one-word tag for its own reaction to the message: one of 22 feelings or 12
+  conversational gestures (a nod, a shrug, a wink...). The agent removes the
+  tag from the text and sends the word as a new non-terminal `mood` event,
+  `{ "type": "mood", "mood": "happy" }`, which the Agent UI plays on GAIA's
+  eyes. A request without the field gets the prompt and stream it always did.
 - **A file a skill's tool saves counts as saved.** A deck or report written by
   a skill tool existed on disk, yet the turn ended "incomplete" with "No
   successful write to `deck.pptx` is recorded for this turn", because the

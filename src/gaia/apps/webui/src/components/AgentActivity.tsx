@@ -47,6 +47,8 @@ import { tEn, useT, type Translate } from '../i18n/useT';
 import { localizeLiveStatus } from '../utils/liveStatus';
 import { ensureModel } from '../stores/modelNeededStore';
 import './AgentActivity.css';
+import { MoodHostContext, StepGlyph } from './StepGlyph';
+import { eyesPhase, type EyesGlyph } from '../utils/gaiaEyes';
 import { visibleName, markStrayDirection } from './CalendarApproval';
 
 // ── Tool metadata: friendly names, icons, colors ──────────────────────────
@@ -508,6 +510,37 @@ export function stepsSummary(rows: ActivityRow[], t: Translate = tEn): string {
 }
 
 /** A failed call the agent recovered from stays folded; a turn-level error never hides behind a click. */
+/** The rows a finished timeline group shows, as the component draws them. */
+function doneRows(rows: ActivityRow[]): ActivityRow[] {
+    return foldThoughts(rows.filter((r) => shownWhenDone(r) || isWarning(r) || isKept(r)));
+}
+
+/**
+ * Where a turn's final icon shows: on the row of the thought that led to the
+ * answer, or, once the turn is done and that thought is folded away, on its
+ * group's summary line. Nowhere when the turn ended on something else.
+ */
+export function finalGlyphSpot(rows: ActivityRow[], timeline: TimelineItem[], running: boolean): { rowId?: number; summary?: boolean } {
+    const last = [...rows].reverse().find((r) => r.type === 'thinking' || r.type === 'tool');
+    if (!last || last.type !== 'thinking') return {};
+    if (running) return { rowId: last.id };
+    const item = timeline[timeline.length - 1];
+    if (!item || item.kind !== 'steps') return {};
+    const visible = doneRows(item.rows);
+    const end = visible[visible.length - 1];
+    if (!end || end.type !== 'thinking') return {};
+    if (visible.length === 1) return { rowId: end.id };
+    const quiet = !visible.some(isTurnError) && !visible.some((r) => r.type === 'tool' && (r.declined || r.refused || r.autoDeclined));
+    return quiet ? { summary: true } : {};
+}
+
+/** Whether a finished turn's timeline shows its final icon, so no line of its own is needed. */
+export function timelineShowsFinalGlyph(steps: AgentStep[], answer = ''): boolean {
+    const rows = consolidateSteps(steps, false);
+    const spot = finalGlyphSpot(rows, toTimeline(rows, answer), false);
+    return spot.rowId !== undefined || !!spot.summary;
+}
+
 function isTurnError(row: ActivityRow): boolean {
     return row.type === 'error' || row.type === 'policy_alert';
 }
@@ -563,6 +596,10 @@ interface AgentActivityProps {
     awaitingUser?: boolean;
     /** What the model is doing between steps; drawn at the end of the timeline while no row is live. */
     liveLine?: React.ReactNode;
+    /** This turn may show GAIA's mood (streaming, or the chat's latest answer): its last step plays it. */
+    moodHost?: boolean;
+    /** What GAIA's eyes settle on for this reply, shown where the thought that led to it is. */
+    finalGlyph?: EyesGlyph;
     /** What the running call's own model calls are doing (page progress, a server restart); shown on its row. */
     toolStatus?: string | null;
     /** The turn's answer, so a note it repeats is not shown twice. */
@@ -585,7 +622,7 @@ function VisionOffer() {
 }
 
 /** The turn as a timeline: the agent's notes in full, the steps between them folded once done. */
-export function AgentActivity({ steps, isActive, running = isActive, awaitingUser = false, liveLine, toolStatus = null, answer }: AgentActivityProps) {
+export function AgentActivity({ steps, isActive, running = isActive, awaitingUser = false, liveLine, moodHost = false, finalGlyph = 'brain', toolStatus = null, answer }: AgentActivityProps) {
     const t = useT();
     const [openGroups, setOpenGroups] = useState<Map<number, boolean>>(new Map());
     const [expandedTools, setExpandedTools] = useState<Set<number>>(new Set());
@@ -600,6 +637,10 @@ export function AgentActivity({ steps, isActive, running = isActive, awaitingUse
     // While the turn runs, the latest plan stays in view as a live checklist.
     const livePlan = running ? [...displaySteps].reverse().find((s) => s.type === 'plan' && s.planSteps?.length) : undefined;
     const liveRow = running && displaySteps.some((s) => s.active && s.type !== 'status');
+    // The turn's last step plays GAIA's mood for the reply before it settles.
+    const hostId = moodHost
+        ? [...displaySteps].reverse().find((s) => s.type === 'thinking' || s.type === 'tool')?.id
+        : undefined;
     const statusRowId = running && toolStatus
         ? [...displaySteps].reverse().find((s) => s.type === 'tool' && s.active)?.id
         : undefined;
@@ -626,7 +667,7 @@ export function AgentActivity({ steps, isActive, running = isActive, awaitingUse
 
     const renderRow = (step: ActivityRow) => {
         if (step.type === 'thinking') {
-            return <FlowThought key={step.id} step={step} live={running && !!step.active} durationMs={durations.get(step.id)} now={now} />;
+            return <FlowThought key={step.id} step={step} live={running && !!step.active} durationMs={durations.get(step.id)} now={now} host={step.id === hostId} settled={step.id === spot.rowId ? finalGlyph : 'brain'} />;
         }
         if (step.type === 'tool') {
             return (
@@ -638,6 +679,7 @@ export function AgentActivity({ steps, isActive, running = isActive, awaitingUse
                     now={now}
                     awaitingUser={running && awaitingUser}
                     status={step.id === statusRowId ? toolStatus : null}
+                    host={step.id === hostId}
                     onToggle={() => toggleTool(step.id)}
                 />
             );
@@ -659,6 +701,7 @@ export function AgentActivity({ steps, isActive, running = isActive, awaitingUse
     const lastIndex = timeline.length - 1;
     const visibleRows = (rows: ActivityRow[]) =>
         foldThoughts(rows.filter((r) => (shownWhenDone(r) || isWarning(r) || isKept(r)) && !isPlanShownLive(r, livePlan)));
+    const spot = finalGlyphSpot(displaySteps, timeline, running);
     // Calls in the runs that are open; folded runs and lone rows have nothing to sift.
     const openCalls = timeline.reduce((n, item, i) => {
         if (item.kind !== 'steps') return n;
@@ -670,6 +713,7 @@ export function AgentActivity({ steps, isActive, running = isActive, awaitingUse
     }, 0);
 
     return (
+        <MoodHostContext.Provider value={hostId !== undefined}>
         <div className={`agent-activity ${running ? 'active' : 'done'}`}>
             <div className="agent-timeline">
                 {timeline.map((item, i) => {
@@ -688,6 +732,11 @@ export function AgentActivity({ steps, isActive, running = isActive, awaitingUse
                     }
                     const open = openGroups.get(item.id) ?? (live || failed);
                     const shown = visible.filter(keep);
+                    // The step playing GAIA's mood is folded away: its group's icon plays it instead.
+                    const hostsMood = !open && hostId !== undefined && visible.some((r) => r.id === hostId);
+                    const done = i === lastIndex && spot.summary && finalGlyph !== 'brain'
+                        ? finalGlyph
+                        : <CheckCircle2 size={13} className="flow-steps-done" />;
                     return (
                         <div key={item.id} className={`flow-steps ${open ? 'open' : 'folded'} ${live ? 'live' : ''}`}>
                             {!live && (
@@ -700,7 +749,9 @@ export function AgentActivity({ steps, isActive, running = isActive, awaitingUse
                                         ? <AlertCircle size={13} className="agent-icon-error" />
                                         : visible.some((r) => r.type === 'tool' && (r.declined || r.refused || r.autoDeclined))
                                             ? <Ban size={13} className="flow-steps-done" />
-                                            : <CheckCircle2 size={13} className="flow-steps-done" />}
+                                            : hostsMood || typeof done === 'string'
+                                                ? <StepGlyph live={false} phase="think" settled={done} host={hostsMood} />
+                                                : done}
                                     <span className="flow-steps-text">{stepsSummary(visible, t)}</span>
                                     <ChevronRight size={12} className={`flow-tool-chevron ${open ? 'expanded' : ''}`} />
                                 </button>
@@ -742,6 +793,7 @@ export function AgentActivity({ steps, isActive, running = isActive, awaitingUse
                 </div>
             )}
         </div>
+        </MoodHostContext.Provider>
     );
 }
 
@@ -805,7 +857,7 @@ export function thoughtLabel(live: boolean, durationMs?: number, t: Translate = 
 }
 
 /** Reasoning stays one line, live or done, until the user opens it. */
-function FlowThought({ step, live, durationMs, now }: { step: AgentStep; live: boolean; durationMs?: number; now: number }) {
+function FlowThought({ step, live, durationMs, now, host = false, settled = 'brain' }: { step: AgentStep; live: boolean; durationMs?: number; now: number; host?: boolean; settled?: EyesGlyph }) {
     const t = useT();
     const text = (step.detail || '').trim();
     const [open, setOpen] = useState(false);
@@ -819,7 +871,7 @@ function FlowThought({ step, live, durationMs, now }: { step: AgentStep; live: b
                 onClick={() => setOpen((o) => !o)}
                 aria-expanded={open}
             >
-                {live ? <Loader2 size={13} className="flow-tool-spinner" /> : <Brain size={13} className="flow-tool-icon" />}
+                <StepGlyph live={live} phase="think" settled={settled} host={host} />
                 <span>{thoughtLabel(live, live ? now - step.timestamp : durationMs, t)}</span>
                 <ChevronRight size={12} className={`flow-tool-chevron ${open ? 'expanded' : ''}`} />
             </button>
@@ -934,9 +986,11 @@ interface FlowToolCardProps {
     status?: string | null;
     /** How long the reasoning folded into this call ran. */
     thoughtMs?: number;
+    /** The turn's last step, which plays GAIA's mood before it settles. */
+    host?: boolean;
 }
 
-function FlowToolCard({ step, isExpanded, onToggle, now, awaitingUser = false, status = null, thoughtMs }: FlowToolCardProps) {
+function FlowToolCard({ step, isExpanded, onToggle, now, awaitingUser = false, status = null, thoughtMs, host = false }: FlowToolCardProps) {
     const t = useT();
     const Icon = getToolMeta(step.tool, step).icon;
     // A call held for the user's answer hasn't started, so it neither runs nor times.
@@ -968,15 +1022,16 @@ function FlowToolCard({ step, isExpanded, onToggle, now, awaitingUser = false, s
             >
                 <div className="flow-tool-left">
                     {/* What the step did, not whether it worked: only a running or failed step says otherwise. */}
-                    {step.active && !waiting ? (
-                        <Loader2 size={13} className="flow-tool-spinner" />
-                    ) : notRun ? (
-                        <Ban size={13} className="flow-tool-icon" />
-                    ) : step.success === false ? (
-                        <AlertCircle size={13} style={{ color: 'var(--danger)' }} />
-                    ) : (
-                        <Icon size={13} className="flow-tool-icon" />
-                    )}
+                    <StepGlyph
+                        live={!!step.active}
+                        phase={waiting ? 'wait' : eyesPhase(toolRowText(step), false)}
+                        host={host}
+                        settled={
+                            notRun ? <Ban size={13} className="flow-tool-icon is-muted" />
+                                : step.success === false ? <AlertCircle size={13} className="flow-tool-icon is-error" />
+                                : <Icon size={13} className="flow-tool-icon" />
+                        }
+                    />
                     {/* The model's narration is English in every UI language; it truncates at its own end. */}
                     <span className="flow-tool-label" dir="auto">{line}</span>
                     {count > 1 && (
