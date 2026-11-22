@@ -6,7 +6,6 @@
 #include <algorithm>
 #include <atomic>
 #include <chrono>
-#include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <random>
@@ -398,8 +397,7 @@ std::string SkillLibrary::installFromHub(const std::string& name, const std::str
 #ifdef _WIN32
     // Windows' own tar by full path: it reads zip archives (Git's tar earlier on PATH doesn't), and
     // cmd.exe would run a tar.bat in the working folder first.
-    const char* root = std::getenv("SystemRoot");
-    const std::string tar = std::string(root != nullptr && *root != '\0' ? root : "C:\\Windows") + "\\System32\\tar.exe";
+    const std::string tar = systemProgramPath("tar.exe");
     // cmd /c drops the first and last quote of a line that starts with one, so the line gets an extra pair.
     const std::string cmd = "\"\"" + tar + "\" -xf \"" + zip.string() + "\" -C \"" + (work / "x").string() + "\"\"";
 #else

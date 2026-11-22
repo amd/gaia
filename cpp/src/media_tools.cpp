@@ -5,7 +5,7 @@
 
 #include <algorithm>
 #include <cctype>
-#include <cstdlib>
+#include <stdexcept>
 #include <ctime>
 #include <vector>
 #include <filesystem>
@@ -124,9 +124,12 @@ ToolInfo MediaTools::screenshotTool(std::function<std::string(const std::string&
         std::string ps = abs;
         for (size_t i = 0; (i = ps.find('\'', i)) != std::string::npos; i += 2) ps.insert(i, "'");
         // Windows' own PowerShell by full path: cmd.exe would run a powershell.bat in the working folder first.
-        const char* root = std::getenv("SystemRoot");
-        const std::string powershell = std::string(root != nullptr && *root != '\0' ? root : "C:\\Windows") +
-                                       "\\System32\\WindowsPowerShell\\v1.0\\powershell.exe";
+        std::string powershell;
+        try {
+            powershell = systemProgramPath("WindowsPowerShell\\v1.0\\powershell.exe");
+        } catch (const std::runtime_error& e) {
+            return {{"status", "error"}, {"error", e.what()}};
+        }
         if (powershell.find(' ') != std::string::npos) {
             return {{"status", "error"}, {"error", "Windows is installed in a folder with a space (" + powershell +
                                                        "), which the screenshot command can't start PowerShell from."}};

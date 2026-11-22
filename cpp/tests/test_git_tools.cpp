@@ -1,6 +1,7 @@
 // Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 // SPDX-License-Identifier: MIT
 
+#include "support/unique_temp.h"
 #include <gtest/gtest.h>
 #include <gaia/git_tools.h>
 #include <gaia/tool_registry.h>
@@ -261,7 +262,7 @@ TEST(GitToolsTest, ShowRefusesACommittedCredentialFile) {
 TEST(GitToolsTest, StatusNeverRunsAGitBatchFileInTheRepository) {
     namespace tfs = std::filesystem;
     if (findProgramOnPath("git").empty()) GTEST_SKIP() << "git is not on PATH";
-    const tfs::path dir = tfs::temp_directory_path() / "gaia-planted-git";
+    const tfs::path dir = tfs::temp_directory_path() / testsupport::perProcess("gaia-planted-git");
     tfs::create_directories(dir);
     std::ofstream(dir / "git.bat") << "@echo PLANTED_GIT_RAN\r\n";
     const tfs::path before = tfs::current_path();

@@ -237,4 +237,8 @@ GAIA_API std::string findProgramOnPath(const std::string& program);
 /// Every match findProgramOnPath would consider, in PATH order (one per folder). Empty off Windows.
 GAIA_API std::vector<std::string> findProgramsOnPath(const std::string& program);
 
+/// Windows: `relative` under the system folder (System32), as UTF-8, e.g. "tar.exe". Throws when
+/// Windows won't report that folder. Always "" off Windows.
+GAIA_API std::string systemProgramPath(const std::string& relative);
+
 } // namespace gaia

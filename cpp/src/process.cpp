@@ -1502,9 +1502,20 @@ std::vector<std::string> findProgramsOnPath(const std::string& program) {
     }
     return found;
 }
+
+std::string systemProgramPath(const std::string& relative) {
+    wchar_t systemDir[MAX_PATH];
+    const UINT len = GetSystemDirectoryW(systemDir, MAX_PATH);
+    if (len == 0 || len >= MAX_PATH) {
+        throw std::runtime_error("Windows didn't report its system folder (error " +
+                                 std::to_string(GetLastError()) + "), so " + relative + " can't be started.");
+    }
+    return (std::filesystem::path(std::wstring(systemDir, len)) / widen(relative)).u8string();
+}
 #else
 std::string findProgramOnPath(const std::string&) { return ""; }
 std::vector<std::string> findProgramsOnPath(const std::string&) { return {}; }
+std::string systemProgramPath(const std::string&) { return ""; }
 #endif
 
 } // namespace gaia

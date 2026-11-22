@@ -661,23 +661,30 @@ StdioTransport& StdioTransport::operator=(StdioTransport&& other) noexcept = def
 
 #ifdef _WIN32
 namespace {
+// The program a command line starts, as launch() reads it: a leading quoted string, else up to the first space.
+std::string programOf(const std::string& cmdLine) {
+    const bool quoted = !cmdLine.empty() && cmdLine[0] == '"';
+    const size_t end = quoted ? cmdLine.find('"', 1) : cmdLine.find(' ');
+    return cmdLine.substr(quoted ? 1 : 0, end == std::string::npos ? std::string::npos : end - (quoted ? 1 : 0));
+}
+
+// launch() resolves a bare name on PATH only, never in the working folder.
+bool isBareProgram(const std::string& program) {
+    return !program.empty() && program.find_first_of("\\/:") == std::string::npos;
+}
+
 // True when CreateProcess would run `command` through cmd.exe: a .cmd or .bat file, named or found on PATH.
 bool runsUnderCmd(const std::string& command) {
+    const std::string program = programOf(command);
+    // Judged on the file launch() actually starts, found by the same lookup.
+    const std::string target = isBareProgram(program) ? findProgramOnPath(program) : program;
     std::string lower;
-    for (const char c : command) lower += static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    for (const char c : target) lower += static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
     const auto endsWith = [&lower](const char* ext) {
         const size_t n = std::strlen(ext);
         return lower.size() >= n && lower.compare(lower.size() - n, n, ext) == 0;
     };
-    if (endsWith(".cmd") || endsWith(".bat")) return true;
-    if (command.empty() || command.find_first_of("\\/:.") != std::string::npos) return false;
-    char found[MAX_PATH];
-    if (SearchPathA(nullptr, command.c_str(), ".exe", MAX_PATH, found, nullptr) != 0) return false;
-    for (const char* ext : {".cmd", ".bat"}) {
-        const DWORD n = SearchPathA(nullptr, command.c_str(), ext, MAX_PATH, found, nullptr);
-        if (n != 0 && n < MAX_PATH) return true;
-    }
-    return false;
+    return endsWith(".cmd") || endsWith(".bat");
 }
 }  // namespace
 #endif
@@ -730,6 +737,12 @@ bool StdioTransport::connect() {
     }
 
 #ifdef _WIN32
+    const std::string program = programOf(command_);
+    if (isBareProgram(program) && findProgramOnPath(program).empty()) {
+        throw std::runtime_error("'" + program + "' isn't on PATH, so the server can't start (the working folder "
+                                 "is never searched). Install it (npx and npm come with Node.js), or give its full "
+                                 "path as the command in mcp.json.");
+    }
     // npx and npm ship as .cmd files, so cmd.exe reads the line and acts on these characters itself.
     if (runsUnderCmd(command_)) {
         for (const auto& arg : args_) {
