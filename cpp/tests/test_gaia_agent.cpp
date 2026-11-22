@@ -400,6 +400,122 @@ TEST(GaiaAgentTest, ATestsPassClaimNeedsATestRunThatPassedAfterTheLastChange) {
         "3 pass; test_median still fails.", {shellRun("pytest", 1, "1 failed, 3 passed in 0.6s")}));
 }
 
+namespace {
+GaiaAgent::CallSeen shellRunIn(const std::string& cwd, const std::string& command, int exitCode,
+                               const std::string& stdoutText) {
+    const json result = {{"cwd", cwd}, {"exit_code", exitCode}, {"stderr", ""}, {"stdout", stdoutText},
+                         {"timed_out", false}};
+    return {"bash_execute", {{"command", command}}, result.dump(), exitCode == 0};
+}
+}  // namespace
+
+TEST(GaiaAgentTest, ATestsPassClaimIsNotBackedByInstallsProbesPrintedSummariesOrOtherFolders) {
+    const std::string none = "no tests were run this turn";
+    const std::string failed = "the tests run this turn didn't pass";
+    const std::string stale = "the tests ran before the last change, so they don't cover it";
+    const std::string elsewhere = "the tests that passed ran in a different folder from the last change";
+    const std::string pytestOk = "....\n4 passed in 0.02s\n";
+    const auto noOp = shellRun("python test_stats.py", 0, "");
+
+    // Installing or probing a runner, then the no-op test file: nothing was tested.
+    for (const char* setup : {"pip install pytest", "python -m pip install pytest", "uv pip install pytest",
+                              "npm install jest", "npm i -D vitest", "pytest --version", "pytest -V",
+                              "python -m pytest --help", "which pytest", "command -v pytest",
+                              "pytest --collect-only -q"}) {
+        EXPECT_EQ(why(GaiaAgent::unsupportedTestClaim(
+                      "All 4 tests pass.", {edit("stats.py"), shellRun(setup, 0, "pytest 8.3.2\n"), noOp})),
+                  none)
+            << setup;
+    }
+    // Installing and then really running the tests in one command is a run.
+    EXPECT_FALSE(GaiaAgent::unsupportedTestClaim(
+        "All 4 tests pass.", {edit("stats.py"), shellRun("pip install pytest && python -m pytest -q", 0, pytestOk)}));
+
+    // A summary the model printed, or an old log, is not a run.
+    for (const char* shown : {"echo \"4 passed in 0.02s\"", "cat pytest.log", "echo pytest", "grep pytest requirements.txt"}) {
+        EXPECT_EQ(why(GaiaAgent::unsupportedTestClaim("All 4 tests pass.", {edit("stats.py"), shellRun(shown, 0, pytestOk)})),
+                  none)
+            << shown;
+    }
+
+    // A failing run, then a "pass" claim backed only by a command that runs no tests.
+    const auto failing = shellRun("python -m pytest -q", 1, "F...\n1 failed, 3 passed in 0.64s\n");
+    EXPECT_EQ(why(GaiaAgent::unsupportedTestClaim("Fixed it. All tests pass now.", {edit("stats.py"), failing, noOp})),
+              failed);
+    EXPECT_EQ(why(GaiaAgent::unsupportedTestClaim(
+                  "All tests pass now.", {failing, edit("stats.py"), shellRun("echo All tests passed", 0, "All tests passed\n")})),
+              failed);
+    // A run cut off by a timeout does not pass, whatever it printed first.
+    EXPECT_EQ(why(GaiaAgent::unsupportedTestClaim(
+                  "All tests pass.",
+                  {{"bash_execute", {{"command", "pytest"}},
+                    R"({"exit_code":-1,"stderr":"","stdout":"....","timed_out":true})", false}})),
+              failed);
+
+    // Code changed in the shell after the passing run.
+    for (const char* shellEdit : {"sed -i 's/n \\/ 2/n \\/\\/ 2/' stats.py", "git checkout stats.py",
+                                  "git apply fix.patch", "echo 'x = 1' > stats.py", "printf 'x\\n' >> app/util.py",
+                                  "Set-Content -Path stats.py -Value 'x = 1'"}) {
+        EXPECT_EQ(why(GaiaAgent::unsupportedTestClaim("All 4 tests pass.",
+                                                      {edit("stats.py"), shellRun("pytest", 0, pytestOk),
+                                                       shellRun(shellEdit, 0, "")})),
+                  stale)
+            << shellEdit;
+    }
+    // Reading code, or saving the test output, changes nothing.
+    for (const char* harmless : {"cat stats.py", "git diff", "git status", "pytest -q > out.txt",
+                                 "Get-Process | Out-File procs.txt", "python report.py > summary.txt"}) {
+        EXPECT_FALSE(GaiaAgent::unsupportedTestClaim(
+            "All 4 tests pass.", {edit("stats.py"), shellRun("pytest", 0, pytestOk), shellRun(harmless, 0, "")}))
+            << harmless;
+    }
+
+    // A run in another folder doesn't cover the change; one in the project, or its tests folder, does.
+    const auto changed = edit("/work/proj/stats.py");
+    EXPECT_EQ(why(GaiaAgent::unsupportedTestClaim("All 4 tests pass.",
+                                                  {changed, shellRunIn("/tmp/scratch", "pytest", 0, pytestOk)})),
+              elsewhere);
+    EXPECT_EQ(why(GaiaAgent::unsupportedTestClaim(
+                  "All 4 tests pass.", {changed, shellRunIn("/work/proj", "pytest", 1, "1 failed, 3 passed in 0.6s"),
+                                        shellRunIn("/work/other", "pytest", 0, pytestOk)})),
+              elsewhere);
+    EXPECT_FALSE(GaiaAgent::unsupportedTestClaim("All 4 tests pass.",
+                                                 {changed, shellRunIn("/work/proj", "pytest", 0, pytestOk)}));
+    EXPECT_FALSE(GaiaAgent::unsupportedTestClaim("All 4 tests pass.",
+                                                 {changed, shellRunIn("/work/proj/tests", "pytest", 0, pytestOk)}));
+    EXPECT_FALSE(GaiaAgent::unsupportedTestClaim(
+        "All 4 tests pass.", {edit("/work/proj/src/stats.py"), shellRunIn("/work/proj/tests", "pytest", 0, pytestOk)}));
+    EXPECT_FALSE(GaiaAgent::unsupportedTestClaim(
+        "All 4 tests pass.", {edit("C:\\work\\proj\\stats.py"), shellRunIn("C:\\work\\proj", "pytest", 0, pytestOk)}));
+    // A relative path gives no folder to compare: the run stands.
+    EXPECT_FALSE(GaiaAgent::unsupportedTestClaim("All 4 tests pass.",
+                                                 {edit("stats.py"), shellRunIn("/tmp/scratch", "pytest", 0, pytestOk)}));
+
+    // Partial output: clipped JSON still gives the folder and the exit code.
+    std::string clipped = shellRunIn("C:\\tmp\\scratch", "pytest", 0, pytestOk + std::string(60, 'y')).output;
+    clipped.resize(clipped.size() - 40);
+    EXPECT_EQ(why(GaiaAgent::unsupportedTestClaim(
+                  "All 4 tests pass.",
+                  {edit("C:\\work\\proj\\stats.py"), {"bash_execute", {{"command", "pytest"}}, clipped, true}})),
+              elsewhere);
+    std::string clippedFail = shellRun("pytest", 1, "F...\n1 failed, 3 passed in 0.6s\n" + std::string(60, 'y')).output;
+    clippedFail.resize(clippedFail.size() - 40);
+    EXPECT_EQ(why(GaiaAgent::unsupportedTestClaim("All 4 tests pass.",
+                                                  {{"bash_execute", {{"command", "pytest"}}, clippedFail, false}})),
+              failed);
+    // Clipped before the exit code: nothing shows a run finished.
+    EXPECT_EQ(why(GaiaAgent::unsupportedTestClaim("All 4 tests pass.",
+                                                  {{"bash_execute", {{"command", "pytest"}}, R"({"cwd":"/work/pr)", true}})),
+              none);
+
+    // More ways of saying it, all claims with nothing behind them.
+    for (const char* claim : {"I confirmed the fix by running the tests.", "The tests succeeded.", "Tests ran clean.",
+                              "All tests pass with no errors.", "12 passed, 0 failed.",
+                              "The tests pass and no regressions were introduced."}) {
+        EXPECT_EQ(why(GaiaAgent::unsupportedTestClaim(claim, {edit("stats.py"), noOp})), none) << claim;
+    }
+}
+
 TEST(GaiaAgentTest, AFalseTestsPassClaimIsSentBackOnceThenCaveatedAndTheTurnIsIncomplete) {
     for (const bool honestAfter : {false, true}) {
         Workdir w;

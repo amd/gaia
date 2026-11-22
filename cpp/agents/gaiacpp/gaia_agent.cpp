@@ -1098,7 +1098,9 @@ std::string passingTestClaim(const std::string& answer) {
     static const std::regex claim(
         R"(\b(?:\d+\s+(?:(?:sub)?tests?\s+pass(?:es|ed|ing)?|pass(?:ed|ing)))"
         R"(|(?:sub)?tests?(?:\s+(?:in|for|of)\s+\S+)?\s+(?:suite\s+)?)"
-        R"((?:(?:are|is|all|now|still|were|have|has|both|each|successfully)\s+)*(?:pass(?:es|ed|ing)?|green))"
+        R"((?:(?:are|is|all|now|still|were|have|has|both|each|successfully)\s+)*(?:pass(?:es|ed|ing)?|green|succeed(?:s|ed)?))"
+        R"(|tests?\s+(?:run|ran)\s+(?:clean|green)\b)"
+        R"(|confirmed\s+(?:[\w-]+\s+){0,3}?by\s+(?:re-?)?running\s+the\s+(?:unit\s+)?tests?)"
         R"(|(?:test\s+)?suite\s+(?:is\s+)?(?:green|pass(?:es|ed|ing)?))"
         R"(|everything\s+pass(?:es|ed|ing)?)"
         R"(|tests?\s+(?:were|was)\s+(?:run|executed)\b(?:[^.!?\n]|[.](?!\s)){0,80}?\band\s+(?:(?:they|all|both|each)\s+)*pass(?:ed)?)"
@@ -1141,6 +1143,7 @@ struct ShellRun {
     bool timedOut = false;
     bool ran = false;  // false: refused or denied before it started
     std::string text;  // stdout then stderr
+    std::string cwd;   // the shell's folder after the command, "" when unknown
 };
 
 ShellRun readShellRun(const std::string& output) {
@@ -1148,6 +1151,7 @@ ShellRun readShellRun(const std::string& output) {
     const json j = json::parse(output, nullptr, false);
     if (j.is_object()) {
         if (j.contains("exit_code") && j["exit_code"].is_number_integer()) r.exitCode = j["exit_code"].get<int>();
+        if (j.contains("cwd") && j["cwd"].is_string()) r.cwd = j["cwd"].get<std::string>();
         r.timedOut = j.value("timed_out", false) == true || j.value("cancelled", false) == true;
         // A call refused or denied before it started has no exit code.
         r.ran = r.exitCode.has_value() && !(j.contains("executed") && j["executed"] == false);
@@ -1160,6 +1164,10 @@ ShellRun readShellRun(const std::string& output) {
     static const std::regex exitCode(R"("exit_code":(-?\d+))");
     std::smatch m;
     if (std::regex_search(output, m, exitCode)) r.exitCode = std::stoi(m[1].str());
+    // "cwd" sorts first, so it survives the clip; its JSON escaping is undone for a Windows path.
+    static const std::regex cwd(R"rx("cwd":"((?:[^"\\]|\\.)*)")rx");
+    static const std::regex escaped(R"(\\(.))");
+    if (std::regex_search(output, m, cwd)) r.cwd = std::regex_replace(m[1].str(), escaped, "$1");
     r.timedOut = output.find("\"timed_out\":true") != std::string::npos;
     r.ran = r.exitCode.has_value() && output.find("\"executed\":false") == std::string::npos;
     for (size_t i = 0; i < output.size(); ++i) {
@@ -1256,6 +1264,37 @@ bool namesTestRunner(const std::string& command) {
     return std::regex_search(command, runner);
 }
 
+// Installing, locating or asking a runner its version names it without running a test.
+bool onlySetsUpRunner(const std::string& command) {
+    static const std::regex setup(
+        R"((?:^|[\s;&|(])(?:pip[0-9.]*|pipx|conda|mamba|uv|poetry|pdm|npm|yarn|pnpm|bun|gem|cargo|go|dotnet)(?:\.exe|\.cmd)?)"
+        R"(\s+(?:pip\s+)?(?:install|add|i|show|list|get|update|upgrade|uninstall|remove)\b)"
+        R"(|\s--(?:version|help|collect-only|co)\b|\s-h\b)"
+        R"(|(?:^|[\s;&|(])(?:which|where|whereis|type|command\s+-v|Get-Command|gcm)\s)",
+        std::regex::icase);
+    static const std::regex version(R"(\s-V\b)");
+    return std::regex_search(command, setup) || std::regex_search(command, version);
+}
+
+// Printing text or an old log shows a summary without running anything: `echo "4 passed in 0.1s"`, `cat pytest.log`.
+bool onlyShowsText(const std::string& command) {
+    static const std::regex show(
+        R"(^\s*(?:echo|printf|cat|type|more|less|head|tail|grep|findstr|Get-Content|gc|Write-Output|Write-Host|Select-String)\b[^;&|]*$)",
+        std::regex::icase);
+    return std::regex_search(command, show);
+}
+
+// A shell command that rewrites code in place: sed -i, a patch, a git checkout, a redirect into a source file.
+bool shellChangesCode(const std::string& command) {
+    static const std::regex edit(
+        R"(\bsed\s+(?:-[^\s]*\s+)*-[a-zA-Z]*i|\bperl\s+-[a-zA-Z]*i)"
+        R"(|\bgit\s+(?:apply|am|checkout|restore|revert|cherry-pick|stash\s+(?:pop|apply))\b|(?:^|[\s;&|(])patch\s)"
+        R"(|(?:(?:^|[^>&0-9])>>?\s*["']?|\b(?:Set-Content|Add-Content|Out-File)\b[^|;&]*?)[^\s|;&>"']+)"
+        R"(\.(?:py|pyi|js|jsx|ts|tsx|mjs|cjs|go|rs|c|cc|cpp|cxx|h|hpp|java|kt|rb|php|cs|swift)\b)",
+        std::regex::icase);
+    return std::regex_search(command, edit);
+}
+
 // A write a test run could depend on; docs and notes leave an earlier run standing.
 bool changesCode(const GaiaAgent::CallSeen& c) {
     if ((c.name != "file_write" && c.name != "file_edit") || !c.succeeded) return false;
@@ -1263,6 +1302,44 @@ bool changesCode(const GaiaAgent::CallSeen& c) {
     static const std::regex doc(R"((?:^|[/\\])(?:README|CHANGELOG|LICENSE)[^/\\]*$|\.(?:md|mdx|rst|txt)$)",
                                 std::regex::icase);
     return !std::regex_search(c.args["path"].get<std::string>(), doc);
+}
+
+std::string comparablePath(std::string p) {
+    std::replace(p.begin(), p.end(), '\\', '/');
+    while (p.size() > 1 && p.back() == '/') p.pop_back();
+#ifdef _WIN32
+    std::transform(p.begin(), p.end(), p.begin(), [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
+#endif
+    return p;
+}
+
+bool isAbsolutePath(const std::string& p) {
+    return (!p.empty() && (p[0] == '/' || p[0] == '\\')) ||
+           (p.size() > 2 && std::isalpha(static_cast<unsigned char>(p[0])) && p[1] == ':' && (p[2] == '/' || p[2] == '\\'));
+}
+
+bool isUnder(const std::string& path, const std::string& folder) {
+    if (folder.empty()) return false;
+    if (path == folder) return true;
+    const std::string prefix = folder.back() == '/' ? folder : folder + "/";
+    return path.compare(0, prefix.size(), prefix) == 0;
+}
+
+std::string parentOf(const std::string& p) {
+    const size_t slash = p.find_last_of('/');
+    if (slash == std::string::npos) return "";
+    return slash == 0 ? "/" : p.substr(0, slash);
+}
+
+// Whether a run in `cwd` could have tested `changed`: the file is under the run's folder, or
+// beside a tests folder the run was in, or the run is under the file's folder. Unknown: yes.
+bool runCovers(const std::string& cwd, const std::string& changed) {
+    if (cwd.empty() || changed.empty() || !isAbsolutePath(changed) || !isAbsolutePath(cwd)) return true;
+    const std::string file = comparablePath(changed);
+    const std::string dir = comparablePath(cwd);
+    if (isUnder(file, dir) || isUnder(dir, parentOf(file))) return true;
+    static const std::regex testsFolder(R"((?:^|/)(?:tests?|specs?|__tests__|testing)$)", std::regex::icase);
+    return std::regex_search(dir, testsFolder) && isUnder(file, parentOf(dir));
 }
 }  // namespace
 
@@ -1273,15 +1350,20 @@ std::optional<std::pair<std::string, std::string>> GaiaAgent::unsupportedTestCla
     struct Run {
         size_t at;
         bool passed;
+        std::string cwd;
     };
-    std::vector<std::pair<std::string, Run>> latest;  // by command: a rerun replaces the run before it
+    std::vector<std::pair<std::string, Run>> latest;  // by folder and command: a rerun replaces the run before it
     size_t lastChange = 0;
     bool changed = false;
+    std::string changedPath;  // "" when the change names no file (a shell edit)
     for (size_t i = 0; i < calls.size(); ++i) {
         const CallSeen& c = calls[i];
         if (changesCode(c)) {
             lastChange = i;
             changed = true;
+            changedPath = c.args.is_object() && c.args.contains("path") && c.args["path"].is_string()
+                              ? c.args["path"].get<std::string>()
+                              : "";
         }
         if (c.name != "bash_execute" || !c.args.is_object() || !c.args.contains("command") ||
             !c.args["command"].is_string()) {
@@ -1291,25 +1373,40 @@ std::optional<std::pair<std::string, std::string>> GaiaAgent::unsupportedTestCla
         if (!run.ran) continue;
         const std::string command = c.args["command"].get<std::string>();
         const RunnerSummary summary = readRunnerSummary(run.text);
+        const bool ranTests = summary.found && summary.ran && !onlyShowsText(command);
         // `python test_x.py` with no main block exits 0 and prints nothing: not a test run.
-        if (!namesTestRunner(command) && !(summary.found && summary.ran)) continue;
+        // Nor is installing pytest, asking its version, or printing a summary.
+        if (!ranTests && (!namesTestRunner(command) || onlySetsUpRunner(command) || onlyShowsText(command))) {
+            if (c.succeeded && shellChangesCode(command)) {
+                lastChange = i;
+                changed = true;
+                changedPath.clear();
+            }
+            continue;
+        }
         const bool passed = c.succeeded && run.exitCode.value_or(0) == 0 && !run.timedOut && !summary.failed &&
                             (!summary.found || summary.ran);
-        auto same = std::find_if(latest.begin(), latest.end(), [&](const auto& e) { return e.first == command; });
-        if (same != latest.end()) same->second = {i, passed};
-        else latest.push_back({command, {i, passed}});
+        const std::string key = run.cwd + "\n" + command;
+        auto same = std::find_if(latest.begin(), latest.end(), [&](const auto& e) { return e.first == key; });
+        if (same != latest.end()) same->second = {i, passed, run.cwd};
+        else latest.push_back({key, {i, passed, run.cwd}});
     }
     if (latest.empty()) return std::make_pair(claim, std::string("no tests were run this turn"));
-    bool anyPassed = false, passedAfterChange = false;
-    for (const auto& [command, run] : latest) {
+    bool anyPassed = false, passedAfterChange = false, passedElsewhere = false;
+    for (const auto& [key, run] : latest) {
         if (!run.passed) continue;
         anyPassed = true;
-        if (!changed || run.at > lastChange) passedAfterChange = true;
+        if (changed && run.at <= lastChange) continue;
+        if (runCovers(run.cwd, changedPath)) passedAfterChange = true;
+        else passedElsewhere = true;
     }
     if (!anyPassed) {
         // "52 tests pass. 3 fail." after a failed run is the run reported honestly.
         if (reportsTestFailure(answer)) return std::nullopt;
         return std::make_pair(claim, std::string("the tests run this turn didn't pass"));
+    }
+    if (!passedAfterChange && passedElsewhere) {
+        return std::make_pair(claim, std::string("the tests that passed ran in a different folder from the last change"));
     }
     if (!passedAfterChange) {
         return std::make_pair(claim, std::string("the tests ran before the last change, so they don't cover it"));
