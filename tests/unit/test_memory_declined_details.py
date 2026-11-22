@@ -193,6 +193,20 @@ def test_a_kept_fact_sharing_a_word_with_the_declined_one_still_saves(
     assert _contents(store) == [kept]
 
 
+def test_two_declines_of_one_detail_keep_the_other_facts(store):
+    host = _Host(store)
+    host.user_says(
+        "Remember my home phone is 555-2222, leave it out, don't save it, "
+        "and my work phone is 555-1111"
+    )
+    with _memory_tools(host) as tools:
+        saved = tools["remember"](fact="Work phone is 555-1111")
+        refused = tools["remember"](fact="Home phone is 555-2222")
+
+    assert saved["status"] == "stored"
+    assert refused["status"] == "skipped"
+
+
 @pytest.mark.parametrize(
     "request_text",
     [

@@ -837,10 +837,12 @@ def _user_declined(content: str, user_text: str) -> bool:
         return False
     for part in _own_words(_normalised(user_text or "")):
         spans = _declined_spans(part)
-        kept = part
-        for start, end in sorted(spans, reverse=True):
-            kept = kept[:start] + " " + kept[end:]
-        kept_stems = _detail_stems(kept)
+        kept_stems = _detail_stems(
+            "".join(
+                " " if any(s <= i < e for s, e in spans) else ch
+                for i, ch in enumerate(part)
+            )
+        )
         for start, end in spans:
             declined = _detail_stems(part[start:end])
             # A word the kept facts share ("phone") can't tell the declined one apart.
