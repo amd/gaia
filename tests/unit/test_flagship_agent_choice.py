@@ -239,6 +239,20 @@ def test_the_daemon_refuses_to_start_a_harness_it_cannot_run():
     assert "gaiacode" in str(e.value) and "Settings" in str(e.value)
 
 
+def test_an_unproven_harness_with_no_launcher_is_not_run_as_the_python_agent(
+    monkeypatch,
+):
+    # The eval override makes gaiacode "runnable", but nothing here can start it.
+    _save_raw("gaiacode")
+    monkeypatch.setenv("GAIA_UNPROVEN_HARNESS", "gaiacode")
+    monkeypatch.setattr(
+        fetch, "fetch_binary", lambda **k: pytest.fail("ran the Python agent")
+    )
+    with pytest.raises(SidecarSpawnError) as e:
+        _flagship_manager().build_spawn_command(port=45123)
+    assert "gaiacode" in str(e.value) and "Settings" in str(e.value)
+
+
 # ---------------------------------------------------------------- settings API
 
 

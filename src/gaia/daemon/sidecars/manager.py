@@ -431,6 +431,13 @@ class AgentSidecarManager:
                 ) from e
             if harness == fetch.NATIVE_FLAGSHIP:
                 return self._native_flagship_command(port)
+            if harness != fetch.PYTHON_FLAGSHIP:
+                # Never let the Python agent answer for a harness with no launcher here.
+                raise SidecarSpawnError(
+                    f"Cannot start the GAIA agent: this version of GAIA has no way to "
+                    f"start {harness} yet. Choose another agent program in Settings › "
+                    f"Agent & model. Sidecar logs: {self.log_dir}."
+                )
         if self.mode == "user":
             try:
                 result = fetch.fetch_binary(
