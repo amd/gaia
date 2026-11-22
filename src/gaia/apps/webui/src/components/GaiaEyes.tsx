@@ -11,9 +11,15 @@ import './GaiaEyes.css';
 export interface EyesReaction {
     mood: EyesMood;
     key: string;
+    /** When it began (ms since epoch), if before these eyes first saw it. */
+    at?: number;
 }
 
 let lastReactionKey: string | null = null;
+/** When the latest reaction began, so eyes that mount partway through carry on from there. */
+let reactionStarted = 0;
+/** The variation the latest reaction plays, so every pair of eyes showing it agrees. */
+let reactionVariant: { key: string; name: EyesAnimation } | null = null;
 const lastPlayed = new Map<EyesState, EyesAnimation>();
 
 /** One way to play `state`, never the one it played last, so the eyes rarely repeat themselves. */
@@ -26,25 +32,41 @@ function pickVariant(state: EyesState): EyesAnimation {
     return picked;
 }
 
+const lengthMs = (name: EyesAnimation) => (EYES_ANIMATIONS[name].frames / EYES_ANIMATIONS[name].fps) * 1000;
+
 /**
  * GAIA's two pixel eyes, beside the live status line. They act out the work in
  * progress, after first playing a short reaction to how the user's message sounded.
  * Frames step from script at the sheet's own rate; under reduced motion each
  * state is one still.
  */
-export function GaiaEyes({ phase, reaction = null }: { phase: EyesPhase; reaction?: EyesReaction | null }) {
+export function GaiaEyes({ phase, reaction = null, holdReaction = false }: {
+    phase: EyesPhase;
+    reaction?: EyesReaction | null;
+    /** Show only the reaction, resting on its last frame, instead of going back to `phase`. */
+    holdReaction?: boolean;
+}) {
     const ref = useRef<HTMLSpanElement>(null);
     const [reactingTo, setReactingTo] = useState<string | null>(null);
     const mood = reaction?.mood;
     const reactionKey = reaction?.key;
+    const reactionAt = reaction?.at;
 
     useLayoutEffect(() => {
-        if (!reactionKey || reactionKey === lastReactionKey) return;
-        lastReactionKey = reactionKey;
+        if (!reactionKey) return;
+        if (reactionKey !== lastReactionKey) {
+            lastReactionKey = reactionKey;
+            reactionStarted = reactionAt ?? Date.now();
+            reactionVariant = null;
+        } else if (!reactionVariant || Date.now() - reactionStarted >= lengthMs(reactionVariant.name)) {
+            // Already played out: a remount never replays it.
+            return;
+        }
+        // New, or the status line was rebuilt partway through: play on from where it has got to.
         setReactingTo(reactionKey);
-    }, [reactionKey]);
+    }, [reactionKey, reactionAt]);
 
-    const reacting = !!mood && reactingTo === reactionKey;
+    const reacting = !!mood && (holdReaction || reactingTo === reactionKey);
     const state: EyesState = reacting ? mood : phase;
 
     useLayoutEffect(() => {
@@ -60,19 +82,25 @@ export function GaiaEyes({ phase, reaction = null }: { phase: EyesPhase; reactio
             el.style.setProperty('-webkit-mask-position', position);
             el.style.setProperty('mask-position', position);
         };
-        const finish = () => { if (reacting) setReactingTo(null); };
+        const finish = () => { if (reacting && !holdReaction) setReactingTo(null); };
 
         if (prefersReducedMotion()) {
             play(EYES_VARIANTS[state][0]);
             show(anim!.pose);
-            if (!reacting) return;
+            if (!reacting || holdReaction) return;
             const held = window.setTimeout(finish, (anim!.frames / anim!.fps) * 1000);
             return () => window.clearTimeout(held);
         }
 
         let frame = 0;
-        play(pickVariant(state));
-        show(0);
+        if (reacting && reactionKey) {
+            play(reactionVariant?.key === reactionKey ? reactionVariant.name : pickVariant(state));
+            reactionVariant = { key: reactionKey, name: el.dataset.variant as EyesAnimation };
+            frame = Math.max(0, Math.min(anim!.frames - 1, Math.floor(((Date.now() - reactionStarted) * anim!.fps) / 1000)));
+        } else {
+            play(pickVariant(state));
+        }
+        show(frame);
         const timer = window.setInterval(() => {
             frame += 1;
             if (frame >= anim.frames) {
@@ -89,7 +117,7 @@ export function GaiaEyes({ phase, reaction = null }: { phase: EyesPhase; reactio
             show(frame);
         }, 1000 / anim!.fps);
         return () => window.clearInterval(timer);
-    }, [state, reacting]);
+    }, [state, reacting, holdReaction, reactionKey]);
 
     const size = `${EYES_SHEET_WIDTH}px ${EYES_SHEET_HEIGHT}px`;
     return (

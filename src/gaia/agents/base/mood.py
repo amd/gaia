@@ -61,7 +61,8 @@ class MoodFilter:
     :meth:`feed` returns the text safe to show; a tail that may be the start of
     a tag is held until it resolves. :meth:`flush` returns whatever is still
     held once the reply ends. Reasoning and code are left alone: a model weighs
-    tags while it thinks, and a tag in backticks is one the user asked to see.
+    tags while it thinks, and a tag in backticks is one the user asked to see
+    (so a stray backtick hides a tag later on its own line, no further).
     Only the first mood of a reply is reported. Reasoning that arrives with no
     opening marker is only known as such when its closing marker comes: a tag
     in it is already gone and reported by then, and the reply's own tag is
@@ -74,8 +75,15 @@ class MoodFilter:
         self._shown_text = False
         self._skip: Optional[str] = None
         self._thinking = False
-        self._in_code = False
+        # Inline code ends with its line; only a ``` fence spans lines.
+        self._inline = False
+        self._fence = False
+        self._ticks = 0
         self.mood: Optional[str] = None
+
+    @property
+    def _in_code(self) -> bool:
+        return self._inline or self._fence
 
     def feed(self, text: str) -> str:
         buffer = self._held + text
@@ -100,7 +108,7 @@ class MoodFilter:
                     if not opens and not self._thinking:
                         # The template opened the block, so the text so far was
                         # reasoning: the reply and its mood start here.
-                        self._shown_text = self._in_code = False
+                        self._shown_text = self._inline = self._fence = False
                         self._skip = self.mood = None
                     self._thinking = opens
                     out.append(marker)
@@ -110,9 +118,14 @@ class MoodFilter:
                     self._held = buffer[at:]
                     break
             elif char == "`":
-                # Odd backticks so far means inside inline code or a fence.
                 if not self._thinking:
-                    self._in_code = not self._in_code
+                    self._ticks += 1
+                    if self._ticks == 3:
+                        self._fence, self._inline = not self._fence, False
+                    elif self._ticks < 3:
+                        self._inline = not self._inline
+                    out.append(self._show(char, tick=True))
+                    continue
             elif not (self._thinking or self._in_code):
                 tag = _TAG_RE.match(buffer, at)
                 if tag:
@@ -138,9 +151,13 @@ class MoodFilter:
         if self._on_mood is not None:
             self._on_mood(mood)
 
-    def _show(self, text: str) -> str:
+    def _show(self, text: str, tick: bool = False) -> str:
         if self._thinking:
             return text
+        if text and not tick:
+            self._ticks = 0
+            if "\n" in text:
+                self._inline = False
         if self._skip and text:
             text = text.lstrip(self._skip)
             if text:
@@ -151,7 +168,7 @@ class MoodFilter:
 
 
 def strip_mood(text: str) -> Tuple[str, Optional[str]]:
-    """*text* without its mood tags, and the last mood it named (or None).
+    """*text* without its mood tags, and the first mood its reply named (or None).
 
     A native tool-call envelope keeps its shape: only its ``content`` is cleaned.
     """

@@ -107,8 +107,23 @@ describe('GaiaEyes', () => {
         const reaction = { mood: 'angry', key: 'same-message' } as const;
         const first = render(<GaiaEyes phase="think" reaction={reaction} />);
         expect(eyes(first.container).dataset.eyes).toBe('angry');
+        act(() => { vi.advanceTimersByTime(longestMs('angry') + 1); });
         first.unmount();
         const second = render(<GaiaEyes phase="think" reaction={reaction} />);
+        expect(eyes(second.container).dataset.eyes).toBe('think');
+    });
+
+    it('carries a reaction on when the status line is rebuilt partway through it', () => {
+        const reaction = { mood: 'angry', key: 'rebuilt-mid-reaction' } as const;
+        const first = render(<GaiaEyes phase="think" reaction={reaction} />);
+        const playing = variant(first.container);
+        act(() => { vi.advanceTimersByTime(4 * frameMs(playing) + 1); });
+        first.unmount();
+        const second = render(<GaiaEyes phase="think" reaction={reaction} />);
+        expect(eyes(second.container).dataset.eyes).toBe('angry');
+        expect(variant(second.container)).toBe(playing);
+        expect(shown(second.container)).toBe(at(playing, 4));
+        act(() => { vi.advanceTimersByTime(lengthMs(playing)); });
         expect(eyes(second.container).dataset.eyes).toBe('think');
     });
 
@@ -187,10 +202,39 @@ describe('the eyes in the live status line', () => {
         expect(container.querySelector('.thinking-indicator')).toBeNull();
     });
 
-    it("forget GAIA's mood when the next turn starts", () => {
-        useChatStore.getState().setGaiaMood('happy');
+    it('finish her mood beside a short answer that ended first, from where it had got to', () => {
+        useChatStore.setState({ messages: [message({ content: 'my dog died this morning' })] });
+        act(() => { useChatStore.getState().setGaiaMood('sad'); });
+        act(() => { vi.advanceTimersByTime(500); });
+        // The reply is over: the finished message takes the place of the streaming one.
         useChatStore.getState().clearAgentSteps();
-        expect(useChatStore.getState().gaiaMood).toBeNull();
+        const { container } = render(
+            <MessageBubble message={message({ id: 2, role: 'assistant', content: 'I am so sorry.' })} latest />,
+        );
+        expect(eyes(container).dataset.eyes).toBe('sad');
+        expect(shown(container)).toBe(at(variant(container), 5));
+        act(() => { vi.advanceTimersByTime(LONGEST_MOOD_MS); });
+        expect(container.querySelector('.gaia-eyes')).toBeNull();
+    });
+
+    it('show no eyes beside an older answer', () => {
+        act(() => { useChatStore.getState().setGaiaMood('sad'); });
+        const { container } = render(
+            <MessageBubble message={message({ id: 2, role: 'assistant', content: 'I am so sorry.' })} />,
+        );
+        expect(container.querySelector('.gaia-eyes')).toBeNull();
+    });
+
+    it("react to the next message once GAIA's last mood has played out", () => {
+        act(() => { useChatStore.getState().setGaiaMood('sad'); });
+        act(() => { vi.advanceTimersByTime(LONGEST_MOOD_MS + 100); });
+        const { container } = renderTurn('thank you so much, that fixed it');
+        expect(eyes(container).dataset.eyes).toBe('happy');
+    });
+
+    it('react at once to bad news about a pet', () => {
+        const { container } = renderTurn('my dog died this morning');
+        expect(eyes(container).dataset.eyes).toBe('sad');
     });
 
     it('sit before the status text and follow what GAIA is doing', () => {

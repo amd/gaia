@@ -25,7 +25,7 @@ import { displayModelName, useInferencePlace, useModelNames } from '../stores/mo
 import { MODEL_WAIT_HINT_S, isModelWaitLabel } from '../utils/modelWait';
 import { localizeLiveStatus } from '../utils/liveStatus';
 import { LONGEST_MOOD_MS, eyesPhase, messageMood } from '../utils/gaiaEyes';
-import { GaiaEyes } from './GaiaEyes';
+import { GaiaEyes, type EyesReaction } from './GaiaEyes';
 import type { Message, AgentStep, RenderCardData } from '../types';
 import { TurnChanges } from './TurnChanges';
 import { ReadAloudButton, ReadAloudError, ReadAloudNote } from './ReadAloudButton';
@@ -116,17 +116,16 @@ function ThinkingIndicator({ active, label, awaitingUser = false }: { active: bo
         }
         return undefined;
     });
-    const gaiaMood = useChatStore((s) => s.gaiaMood);
-    // GAIA's own mood for this reply, once she names one; until then, how the user's message sounded.
+    const gaiaMood = usePlayingMood();
+    // GAIA's own mood for this reply while it plays; otherwise how the user's message sounded.
     const reaction = useMemo(() => {
-        if (gaiaMood) return { mood: gaiaMood.mood, key: `gaia|${gaiaMood.at}` };
+        if (gaiaMood) return gaiaMood;
         const mood = asked ? messageMood(asked.content) : null;
         return asked && mood ? { mood, key: `${asked.created_at}|${asked.content}` } : null;
     }, [asked, gaiaMood]);
-    const moodPlaying = useUntil(gaiaMood ? gaiaMood.at + LONGEST_MOOD_MS : 0);
 
     // Her mood often arrives with the answer's first words: the eyes stay to play it, without the status text.
-    if (!active) return moodPlaying ? <span className="thinking-indicator"><GaiaEyes phase="wait" reaction={reaction} /></span> : null;
+    if (!active) return <MoodEyes />;
 
     const showModelWaitHint = waitingOnModel && modelWaitElapsed >= MODEL_WAIT_HINT_S;
 
@@ -144,6 +143,26 @@ function ThinkingIndicator({ active, label, awaitingUser = false }: { active: bo
     );
 }
 
+
+/** GAIA's own mood as a reaction for her eyes, for as long as it takes to play; null before and after. */
+function usePlayingMood(): EyesReaction | null {
+    const gaiaMood = useChatStore((s) => s.gaiaMood);
+    const playing = useUntil(gaiaMood ? gaiaMood.at + LONGEST_MOOD_MS : 0);
+    return useMemo(
+        () => (gaiaMood && playing ? { mood: gaiaMood.mood, key: `gaia|${gaiaMood.at}`, at: gaiaMood.at } : null),
+        [gaiaMood, playing],
+    );
+}
+
+/**
+ * The eyes alone, playing GAIA's mood to its end. Her mood often arrives with the
+ * answer's first words, and a short answer is finished before the eyes are.
+ */
+function MoodEyes() {
+    const reaction = usePlayingMood();
+    if (!reaction) return null;
+    return <span className="thinking-indicator"><GaiaEyes phase="think" reaction={reaction} holdReaction /></span>;
+}
 
 /** True until the clock reaches `deadline` (ms since epoch). */
 function useUntil(deadline: number): boolean {
@@ -854,6 +873,7 @@ export function MessageBubble({ message, isStreaming, agentSteps, agentStepsActi
                             )}
                         />
                     )}
+                    {message.role === 'assistant' && latest && !isStreaming && <MoodEyes />}
                     {isError && (
                         <div className="error-banner">
                             <AlertTriangle size={14} />

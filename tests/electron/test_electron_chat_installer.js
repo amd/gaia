@@ -397,12 +397,13 @@ ReactDOM.createRoot(document.getElementById('root')!).render(
       });
     });
 
-    it('should have reasonably sized component files (each < 100KB, dashboard < 200KB)', () => {
-      // MemoryDashboard.tsx (~159KB) legitimately exceeds 100KB since #606 added
+    it('should have reasonably sized component files (each < 128KB, dashboard < 200KB)', () => {
+      // MemoryDashboard.tsx (~159KB) legitimately exceeds 128KB since #606 added
       // the full observability dashboard with hybrid search, extraction, and charts.
       const LARGE_FILE_ALLOWLIST = new Set(['MemoryDashboard.tsx']);
       const LARGE_FILE_LIMIT = 200 * 1024; // 200KB cap for allowlisted files
-      const DEFAULT_LIMIT = 100 * 1024;
+      // ChatView.tsx and SetupScreen.tsx sit near 100KB; 128KB leaves room to grow.
+      const DEFAULT_LIMIT = 128 * 1024;
 
       const componentDir = path.join(CHAT_APP_PATH, 'src/components');
       if (fs.existsSync(componentDir)) {

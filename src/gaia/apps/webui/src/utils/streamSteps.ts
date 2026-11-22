@@ -3,6 +3,7 @@
 
 import { getT } from '../i18n/useT';
 import type { StreamEvent, AgentStep } from '../types';
+import { useChatStore } from '../stores/chatStore';
 
 /** The backend's periodic "Model is processing... (Ns)" tick; the live line beside GAIA's name already times that wait. */
 export function isProgressTick(event: StreamEvent): boolean {
@@ -115,6 +116,10 @@ export function agentEventToStep(event: StreamEvent, stepIdRef: { current: numbe
                 timestamp: ts,
             };
         }
+        case 'mood':
+            // Not a step: GAIA's mood for this reply goes to her eyes.
+            useChatStore.getState().setGaiaMood(event.mood);
+            return null;
         default:
             return null;
     }

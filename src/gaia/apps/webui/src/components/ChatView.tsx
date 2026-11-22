@@ -789,10 +789,6 @@ export function ChatView({ sessionId }: ChatViewProps) {
                     showContextUsage(event as unknown as ContextUsage);
                     return;
                 }
-                if (event.type === 'mood') {
-                    useChatStore.getState().setGaiaMood(event.mood);
-                    return;
-                }
                 // The agent emits nothing while it blocks on the user, so the next event ends the wait.
                 const waitsOnUser = event.type === 'permission_request' || event.type === 'needs_input';
                 if (useChatStore.getState().awaitingUser !== waitsOnUser) {

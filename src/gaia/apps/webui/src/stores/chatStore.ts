@@ -249,7 +249,7 @@ interface ChatState {
     /** Counts skill_use events, so the session panel's Skills section re-reads mid-reply. */
     skillUses: number;
     clearAgentSteps: () => void;
-    /** The mood GAIA named for the reply in progress, and when it arrived; null until she names one. */
+    /** The latest mood GAIA named for a reply, and when it arrived. It outlives the reply so a short one can't cut it off; the eyes play it only while fresh. */
     gaiaMood: { mood: EyesMood; at: number } | null;
     /** Note a mood event; a word the eyes can't draw is ignored. */
     setGaiaMood: (word: string | undefined) => void;
@@ -614,7 +614,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
     addStepBeforeRunningCall: (step) =>
         set((state) => ({ agentSteps: beforeRunningCall(state.agentSteps, step) })),
     skillUses: 0,
-    clearAgentSteps: () => set({ agentSteps: [], gaiaMood: null, liveStatus: null, livePhase: null, recordingStages: null, recordingSections: null, awaitingUser: false }),
+    clearAgentSteps: () => set({ agentSteps: [], liveStatus: null, livePhase: null, recordingStages: null, recordingSections: null, awaitingUser: false }),
     gaiaMood: null,
     setGaiaMood: (word) => {
         const mood = asEyesMood(word);

@@ -217,6 +217,14 @@ def test_a_reasoning_marker_quoted_in_code_does_not_switch_the_filter_off(sizes)
     assert heard == ["curious"]
 
 
+@pytest.mark.parametrize("sizes", [[1], [3], [1000]])
+def test_a_stray_backtick_hides_a_tag_no_further_than_its_line(sizes):
+    text = "It's the 5`th try.\n[mood:determined] One more.\n```\n[mood:sad]\n\n```"
+    shown, heard = _stream(text, sizes)
+    assert shown == "It's the 5`th try.\nOne more.\n```\n[mood:sad]\n\n```"
+    assert heard == ["determined"]
+
+
 def test_only_the_first_mood_of_a_reply_is_reported():
     shown, heard = _stream("[mood:happy] Yes! [mood:excited] Really.", [5])
     assert shown == "Yes! Really."
