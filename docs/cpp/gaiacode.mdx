@@ -53,6 +53,10 @@ gaiacode -p "fix the failing test in stats.py" --model Qwen3.6-35B-A3B-GGUF \
 | `--output-format FMT` | `text` (default) or `json`, with the same field names as `gaiacpp -p` |
 | `--dangerously-skip-permissions` | Run tools that would ask: shell commands that change things, file writes, `run_checks` |
 | `--max-steps N` | Step limit for the run (default 200) |
+| `--repo OWNER/NAME` | GitHub repository to work on; default: the `upstream` remote, else `origin` |
+| `--allow-github-writes KINDS` | GitHub writes this run may make: `comment`, `pr` (comma-separated) |
+| `--no-github` | No GitHub tools |
+| `--no-skills` | Load no skills |
 
 Exit codes: 0 when the run finished, 1 when it failed, 2 for a usage error.
 
@@ -67,6 +71,49 @@ Exit codes: 0 when the run finished, 1 when it failed, 2 for a usage error.
 
 `run_checks` runs the repository's own code, so in a headless run it needs
 `--dangerously-skip-permissions`.
+
+## GitHub
+
+gaiacode reads and writes GitHub itself over its REST API; the `gh` CLI isn't needed.
+
+| Tool | Does |
+|---|---|
+| `gh_issue_view`, `gh_issue_list`, `gh_search` | Read an issue with its comments, list issues, search issues and pull requests |
+| `gh_pr_view` | A pull request's title, body, branches and changed files, with their patches when asked |
+| `gh_pr_checks` | The CI checks on a pull request's latest commit, with the job ids of failing ones |
+| `gh_run_log` | The end of a CI job's log, where the failure usually is |
+| `gh_issue_comment` | Post a comment on an issue or pull request |
+| `gh_pr_create` | Open a pull request from a pushed branch, as a draft unless told otherwise |
+
+The two writes ask first, and a headless run makes them only when `--allow-github-writes`
+names the kind (`comment`, `pr`), even with `--dangerously-skip-permissions`. Text that would
+be posted is checked for credentials first, and refused if it holds one. Everything the read
+tools return is marked as text written by other people, so the model treats it as data.
+
+**Which repository:** the `upstream` remote when there is one (a fork's issues live there),
+else `origin`, or `--repo`. A token embedded in a remote URL is ignored.
+
+**Which token, and where it goes.** A token is only sent to the host it belongs to:
+
+| Repository on | Token |
+|---|---|
+| github.com | `GH_TOKEN`, else `GITHUB_TOKEN`, else the login `gh` holds for github.com |
+| GitHub Enterprise | `GH_ENTERPRISE_TOKEN` when `GH_HOST` names that host, else the login `gh` holds for it |
+
+With no token, public repositories can still be read. `GITHUB_API_URL` points the tools at
+another API, and is honored only on this machine (127.0.0.1), for tests. A CI log GitHub
+serves from its storage is downloaded without the token.
+
+## Skills
+
+gaiacode loads skills from the `skills` folder beside its binary, from `~/.gaia/skills/`, and
+from the repository's and your own skill folders, like gaiacpp. It ships with:
+
+| Skill | Covers |
+|---|---|
+| `fix-ci` | Read a pull request's failing check and its log, reproduce it with `run_checks`, fix it, prove it |
+| `issue-to-pr` | Read an issue, add a test that fails, fix it, and open a draft pull request that closes it |
+| `pr-review` | Review a pull request for real defects, and post the review only once you approve it |
 
 ## Building it
 

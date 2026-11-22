@@ -9,11 +9,13 @@
 #include <memory>
 #include <mutex>
 #include <optional>
+#include <set>
 #include <string>
 #include <vector>
 
 #include <gaia/agent.h>
 #include <gaia/process.h>
+#include <gaia/skill_library.h>
 #include <gaia/workspace.h>
 
 namespace gaia::code {
@@ -29,9 +31,18 @@ public:
         bool fullAccess = false;
         /// The shell commands and checks run in; unset = one per process.
         std::shared_ptr<ShellSession> shell;
+        /// GitHub tools (gh_*); off for a run that must not reach GitHub.
+        bool github = true;
+        /// "owner/name" to work on instead of the git remotes' repository.
+        std::string repo;
+        /// GitHub writes this run may make: "comment", "pr".
+        std::set<std::string> githubWrites;
+        /// Load SKILL.md skills (bundled beside the binary, and the user's).
+        bool skills = true;
     };
 
     CodeAgent(const AgentConfig& config, Options options);
+    ~CodeAgent() override;
 
     /// Whether the answer says the tests (or the build) pass.
     static bool claimsTestsPass(const std::string& answer);
@@ -57,6 +68,7 @@ private:
     std::vector<TurnEvent> events() const;
 
     Options options_;
+    std::unique_ptr<SkillLibrary> skills_;
     mutable std::mutex eventsMu_;
     std::vector<TurnEvent> events_;
 };

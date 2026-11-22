@@ -456,8 +456,13 @@ if(GAIA_BUILD_GAIACODE)
         agents/gaiacode/main.cpp
         agents/gaiacode/code_agent.cpp
         agents/gaiacode/check_runner.cpp
+        agents/gaiacode/github.cpp
         agents/gaiacpp/bash_tools.cpp
     )
+    # Bundled skills sit beside the binary, where SkillLibrary looks first.
+    add_custom_command(TARGET gaiacode POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_directory
+            ${CMAKE_CURRENT_SOURCE_DIR}/agents/gaiacode/skills $<TARGET_FILE_DIR:gaiacode>/skills)
     set(GAIACODE_VERSION "${PROJECT_VERSION}" CACHE STRING "Version gaiacode reports")
     target_compile_definitions(gaiacode PRIVATE GAIACODE_VERSION="${GAIACODE_VERSION}")
     target_link_libraries(gaiacode PRIVATE gaia::gaia_core)
@@ -595,8 +600,10 @@ if(GAIA_BUILD_TESTS)
         target_sources(tests_mock PRIVATE
             tests/test_gaiacode.cpp
             tests/test_gaiacode_cli.cpp
+            tests/test_gaiacode_github.cpp
             agents/gaiacode/code_agent.cpp
             agents/gaiacode/check_runner.cpp
+            agents/gaiacode/github.cpp
         )
         target_compile_definitions(tests_mock PRIVATE GAIACODE_BIN="$<TARGET_FILE:gaiacode>")
         add_dependencies(tests_mock gaiacode)

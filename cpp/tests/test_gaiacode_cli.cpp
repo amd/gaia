@@ -130,3 +130,21 @@ TEST_F(GaiacodeCli, RefusesToGuessAModel) {
     EXPECT_EQ(r.exitCode, 2);
     EXPECT_NE(r.stderr_output.find("no model is proven"), std::string::npos) << r.stderr_output;
 }
+
+// The bundled skills load from beside the binary, and the GitHub tools are offered.
+TEST_F(GaiacodeCli, OffersItsSkillsAndGitHubTools) {
+    bench::MockLlmServer mock;
+    mock.pushResponse(reply(say("Nothing to do.")));
+    const gaia::ProcessResult r = run(mock);
+    ASSERT_EQ(r.exitCode, 0) << r.stderr_output;
+    const std::vector<std::string> bodies = mock.receivedBodies();
+    ASSERT_FALSE(bodies.empty());
+    const std::string request = bodies.front();
+    for (const char* skill : {"fix-ci", "issue-to-pr", "pr-review"}) {
+        EXPECT_NE(request.find(skill), std::string::npos) << skill << " is not in the request";
+    }
+    for (const char* tool : {"gh_issue_view", "gh_pr_view", "gh_pr_checks", "gh_run_log", "gh_issue_comment",
+                             "gh_pr_create", "run_checks"}) {
+        EXPECT_NE(request.find(tool), std::string::npos) << tool << " is not offered";
+    }
+}

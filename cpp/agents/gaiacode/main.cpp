@@ -18,6 +18,8 @@
 #include <iostream>
 #include <iterator>
 #include <optional>
+#include <set>
+#include <sstream>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -44,6 +46,10 @@ struct Cli {
     std::string baseUrl;
     std::string apiKeyEnv;
     std::string nativeTools;
+    std::string repo;
+    std::set<std::string> githubWrites;
+    bool noGithub = false;
+    bool noSkills = false;
     std::string cwd;
     std::vector<std::string> allowDirs;
     std::string outputFormat = "text";
@@ -71,6 +77,10 @@ const char* kUsage =
     "  --output-format FMT          text (default) or json\n"
     "  --dangerously-skip-permissions  Run tools that would ask (shell, writes, run_checks)\n"
     "  --max-steps N                Step limit for the run\n"
+    "  --repo OWNER/NAME            GitHub repository to work on (default: the upstream, else origin, remote)\n"
+    "  --allow-github-writes KINDS  GitHub writes this run may make: comment, pr (comma-separated)\n"
+    "  --no-github                  No GitHub tools\n"
+    "  --no-skills                  Load no skills\n"
     "  --version, -h/--help\n";
 
 [[noreturn]] void usageError(const std::string& why) {
@@ -105,6 +115,20 @@ Cli parse(int argc, char** argv) {
             cli.baseUrl = need(i, argc, argv, a);
         } else if (a == "--api-key-env") {
             cli.apiKeyEnv = need(i, argc, argv, a);
+        } else if (a == "--repo") {
+            cli.repo = need(i, argc, argv, a);
+        } else if (a == "--allow-github-writes") {
+            std::istringstream kinds(need(i, argc, argv, a));
+            for (std::string kind; std::getline(kinds, kind, ',');) {
+                if (kind != "comment" && kind != "pr") {
+                    usageError("--allow-github-writes takes comment and pr, got " + kind);
+                }
+                cli.githubWrites.insert(kind);
+            }
+        } else if (a == "--no-github") {
+            cli.noGithub = true;
+        } else if (a == "--no-skills") {
+            cli.noSkills = true;
         } else if (a == "--native-tools") {
             cli.nativeTools = need(i, argc, argv, a);
         } else if (a == "--cwd") {
@@ -182,6 +206,10 @@ int run(const Cli& cli) {
         options.workspaceRoots.push_back(fs::absolute(d).u8string());
     }
     options.shell = gaia::BashTools::newSession(fs::current_path(ec).u8string());
+    options.github = !cli.noGithub;
+    options.repo = cli.repo;
+    options.githubWrites = cli.githubWrites;
+    options.skills = !cli.noSkills;
 
     gaia::AgentConfig cfg;
     cfg.modelId = cli.model;
