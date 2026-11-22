@@ -691,6 +691,145 @@ TEST(WebFetchRefusalTest, ManyPipedInterpretersDoNotRereadTheCommand) {
     EXPECT_LT(std::chrono::steady_clock::now() - began, std::chrono::seconds(5));
 }
 
+// Inside double quotes \" \\ \$ and \` are escapes, so code nested in escaped quotes is read whole.
+TEST(WebFetchRefusalTest, EscapedQuotesNestCodeInAShellString) {
+    ToolInfo sh;
+    sh.name = "bash_execute";
+    for (const char* fetched : {
+             "bash -c \"python3 -c \\\"import urllib.request as u; u.urlopen('https://example.com')\\\"\"",
+             "sh -c \"node -e \\\"fetch('https://example.com')\\\"\"",
+             "bash -c \"python3 -c \\\"import requests; requests.get(\\\\\\\"https://example.com\\\\\\\")\\\"\""}) {
+        const std::string why = webFetchRefusal(sh, {{"command", fetched}});
+        EXPECT_NE(why.find("Web access is off"), std::string::npos) << fetched << ": " << why;
+    }
+    for (const char* allowed : {
+             "bash -c \"python3 -c \\\"print(1 + 1)\\\"\"", "bash -c \"echo \\\"cost: \\$5\\\"\"",
+             "echo \"a \\\\ b\" | wc -c"}) {
+        EXPECT_EQ(webFetchRefusal(sh, {{"command", allowed}}), "") << allowed;
+    }
+}
+
+// -c is a flag: the shell's command string is the first word after its options, however many there are.
+TEST(WebFetchRefusalTest, ShellOptionsBeforeTheCommandStringDoNotHideIt) {
+    ToolInfo sh;
+    sh.name = "bash_execute";
+    const std::string code = "'python3 -c \"import urllib.request as u; u.urlopen(\\\"https://example.com\\\")\"'";
+    for (const std::string& fetched : std::vector<std::string>{
+             "bash -o pipefail -c " + code, "bash -O extglob -c " + code, "bash -c -- " + code,
+             "bash +o history -c " + code, "bash -euo pipefail -c " + code, "sh -e -c " + code,
+             "bash --norc -c " + code, "bash --rcfile x.rc -c " + code, "zsh -c - " + code,
+             "bash -o pipefail -c 'git clone https://github.com/example/repo'"}) {
+        const std::string why = webFetchRefusal(sh, {{"command", fetched}});
+        EXPECT_NE(why.find("Web access is off"), std::string::npos) << fetched << ": " << why;
+    }
+    for (const char* allowed : {
+             "bash -o pipefail -c 'ls | wc -l'", "bash -euo pipefail build.sh", "bash -c -- 'echo hi'",
+             "bash -O extglob script.sh https://example.com"}) {
+        EXPECT_EQ(webFetchRefusal(sh, {{"command", allowed}}), "") << allowed;
+    }
+}
+
+// Text piped into a shell runs as commands, so it gets the same checks as a command line.
+TEST(WebFetchRefusalTest, TextPipedIntoAShellIsReadAsCommands) {
+    ToolInfo sh;
+    sh.name = "bash_execute";
+    for (const char* fetched : {
+             "echo \"curl -s https://example.com\" | sh", "echo 'wget https://example.com/a.html' | bash",
+             "printf '%s\\n' 'curl https://example.com' | bash -s", "echo curl https://example.com | sh",
+             "echo \"python3 -c 'import urllib.request as u; u.urlopen(\\\"https://example.com\\\")'\" | sh",
+             "echo 'git clone https://github.com/example/repo' | zsh", "echo 'wget -i urls.txt' | dash",
+             "echo \"echo 'curl https://example.com' | sh\" | bash",
+             "cat <<EOF | sh\ngit clone https://github.com/example/repo\nEOF"}) {
+        const std::string why = webFetchRefusal(sh, {{"command", fetched}});
+        EXPECT_NE(why.find("Web access is off"), std::string::npos) << fetched << ": " << why;
+    }
+    for (const char* allowed : {
+             "echo 'ls -la' | sh", "cat build.sh | bash", "echo 'curl http://localhost:13305/api/v1/health' | sh",
+             "echo 'echo see https://example.com' | sh", "echo hi | sh -c 'cat'", "echo hi | bash script.sh",
+             "sh < install.sh", "echo 'curl --version' | sh"}) {
+        EXPECT_EQ(webFetchRefusal(sh, {{"command", allowed}}), "") << allowed;
+    }
+    // Many piped shells on one long command read it once per line, not once per shell.
+    std::string many;
+    while (many.size() < 60000) many += "echo hi | sh\n";
+    const auto began = std::chrono::steady_clock::now();
+    EXPECT_EQ(webFetchRefusal(sh, {{"command", many}}), "");
+    EXPECT_LT(std::chrono::steady_clock::now() - began, std::chrono::seconds(5));
+    std::string spaced;
+    while (spaced.size() < 60000) spaced += "echo 'a b c d e f' | bash\n";
+    const auto spacedBegan = std::chrono::steady_clock::now();
+    EXPECT_EQ(webFetchRefusal(sh, {{"command", spaced}}), "");
+    EXPECT_LT(std::chrono::steady_clock::now() - spacedBegan, std::chrono::seconds(5));
+    std::string heredoc = "cat <<'EOF' | sh\n";
+    while (heredoc.size() < 60000) heredoc += "echo 'a b' | sh\n";
+    heredoc += "EOF";
+    const auto heredocBegan = std::chrono::steady_clock::now();
+    EXPECT_EQ(webFetchRefusal(sh, {{"command", heredoc}}), "");
+    EXPECT_LT(std::chrono::steady_clock::now() - heredocBegan, std::chrono::seconds(5));
+}
+
+// cmd /c and /k run the string after them as a command line.
+TEST(WebFetchRefusalTest, CmdReadsTheStringAfterSlashCAsACommandLine) {
+    ToolInfo sh;
+    sh.name = "bash_execute";
+    for (const char* fetched : {
+             "cmd /c \"python -c \\\"import urllib.request as u; u.urlopen('https://example.com')\\\"\"",
+             "cmd /k \"git clone https://github.com/example/repo\"",
+             "cmd /s /c \"node -e \\\"fetch('https://example.com')\\\"\"",
+             "cmd.exe /C \"powershell -Command iwr https://example.com\"",
+             "cmd /d /s /c \"echo x | python3 -c \\\"import requests; requests.get(input())\\\"\""}) {
+        const std::string why = webFetchRefusal(sh, {{"command", fetched}});
+        EXPECT_NE(why.find("Web access is off"), std::string::npos) << fetched << ": " << why;
+    }
+    for (const char* allowed : {"cmd /c \"dir /b\"", "cmd /s /c \"python -c \\\"print(1)\\\"\"", "cmd /c build.bat"}) {
+        EXPECT_EQ(webFetchRefusal(sh, {{"command", allowed}}), "") << allowed;
+    }
+}
+
+// Start-Process takes its program after any switches, and a program may be named by its path.
+TEST(WebFetchRefusalTest, PowerShellLaunchesAndPathQualifiedFetchProgramsAreSeen) {
+    ToolInfo sh;
+    sh.name = "bash_execute";
+    for (const char* fetched : {
+             "powershell -Command \"Start-Process -NoNewWindow -Wait -FilePath curl.exe -ArgumentList x\"",
+             "pwsh -c \"Start-Process -Wait -PassThru -WindowStyle Hidden curl.exe -ArgumentList x\"",
+             "pwsh -c \"Start-Process -FilePath 'C:\\Tools\\wget.exe' -Wait -NoNewWindow\"",
+             "powershell -Command \"Start-Process -WorkingDirectory C:\\tmp -Wait wget\"",
+             "pwsh -c \"saps -FilePath:curl.exe -ArgumentList x\"",
+             "powershell -Command \"Get-Date; Start-Process -Wait -NoNewWindow -FilePath curl\"",
+             "powershell -Command \"& 'C:\\Program Files\\curl\\curl.exe' https://example.com\"",
+             "powershell -Command \".\\curl.exe -s https://example.com\"",
+             "pwsh -c \"./curl -s https://example.com\"", "./curl -s https://example.com",
+             ".\\curl.exe https://example.com", "& 'C:\\Tools\\curl.exe' https://example.com"}) {
+        const std::string why = webFetchRefusal(sh, {{"command", fetched}});
+        EXPECT_NE(why.find("Web access is off"), std::string::npos) << fetched << ": " << why;
+    }
+    for (const char* allowed : {
+             "powershell -Command \"Start-Process -Wait -FilePath notepad.exe -ArgumentList curl\"",
+             "pwsh -c \"Start-Process -Wait -WindowStyle Hidden build.exe\"",
+             "powershell -Command \"Get-Content C:\\logs\\curl.log\"", "./build.sh curl", "cat ./curl/README.md"}) {
+        EXPECT_EQ(webFetchRefusal(sh, {{"command", allowed}}), "") << allowed;
+    }
+}
+
+// Asking a fetch program for its version or help reaches nothing.
+TEST(WebFetchRefusalTest, AFetchProgramsVersionOrHelpIsAllowed) {
+    ToolInfo sh;
+    sh.name = "bash_execute";
+    for (const char* allowed : {
+             "curl --version", "curl -V", "wget --version", "wget -V", "curl --help", "curl -h", "wget -h",
+             "curl.exe --version", "/usr/bin/curl --version", "curl --version | head -1",
+             "wget --version && echo ok"}) {
+        EXPECT_EQ(webFetchRefusal(sh, {{"command", allowed}}), "") << allowed;
+    }
+    for (const char* fetched : {
+             "curl --version https://example.com", "curl -V example.com", "curl --help; curl example.com",
+             "curl --version && wget -i urls.txt", "curl", "curl -v", "wget --help all example.com"}) {
+        const std::string why = webFetchRefusal(sh, {{"command", fetched}});
+        EXPECT_NE(why.find("Web access is off"), std::string::npos) << fetched << ": " << why;
+    }
+}
+
 TEST(SplitShellCommandTest, SegmentsAndWords) {
     std::vector<std::vector<std::string>> s;
     ASSERT_TRUE(splitShellCommand("cd src && cat 'a b.txt' | wc -l; ls", true, s));

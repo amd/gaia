@@ -755,15 +755,21 @@ private:
     std::string wrapper_;
 };
 
+// Programs that fetch whatever address they are given.
+const std::set<std::string>& fetchPrograms() {
+    static const std::set<std::string> fetchers = {"curl", "wget", "wget2", "iwr", "irm", "invoke-webrequest",
+                                                   "invoke-restmethod", "http", "https", "xh", "xhs", "lynx",
+                                                   "w3m", "links", "elinks"};
+    return fetchers;
+}
+
 // True when a web-request program is what a command runs, not a word handed to another
 // program: `grep curl notes.md` only searches for the name. `bare` is the command with quotes,
 // backslashes and ^ dropped, which is how a shell sees `bash -c "curl ..."`.
 bool runsFetchProgram(const std::string& command, const std::string& bare) {
-    static const std::set<std::string> fetchers = {"curl", "wget", "wget2", "iwr", "irm", "invoke-webrequest",
-                                                   "invoke-restmethod", "http", "https", "xh", "xhs", "lynx",
-                                                   "w3m", "links", "elinks"};
+    static const std::set<std::string>& fetchers = fetchPrograms();
     // With quotes dropped, a shell's command string is the words after it.
-    static const std::set<std::string> shells = {"bash", "sh", "zsh", "powershell", "pwsh"};
+    static const std::set<std::string> shells = {"bash", "sh", "zsh", "dash", "ksh", "powershell", "pwsh"};
     const auto scan = [](const std::string& text) {
         CommandStart start;
         std::string word;
@@ -840,6 +846,9 @@ std::vector<ShellToken> shellTokens(const std::string& line) {
         if (quote != 0) {
             if (c == quote) {
                 quote = 0;
+            } else if (quote == '"' && c == '\\' && (next == '"' || next == '\\' || next == '$' || next == '`')) {
+                word.push_back(next);  // bash -c "python3 -c \"...\"" nests code in escaped quotes
+                ++i;
             } else {
                 word.push_back(c);
             }
@@ -952,6 +961,65 @@ std::string interpreterLanguage(const std::string& name) {
     return "";
 }
 
+// True when a line of PowerShell code (lowercase, quotes dropped) has Start-Process launch a web-request
+// program, given with -FilePath or as its first positional word, past any number of switches.
+bool startProcessRunsFetcher(const std::string& text) {
+    static const std::regex launcher(R"((?:^|[^a-z0-9-])(?:start-process|saps|start)\s+)");
+    // Start-Process's switches that take a value, and the common ones.
+    static const std::set<std::string> valued = {
+        "argumentlist", "args", "credential", "workingdirectory", "windowstyle", "verb", "environment",
+        "redirectstandarderror", "redirectstandardinput", "redirectstandardoutput", "rse", "rsi", "rso",
+        "erroraction", "ea", "errorvariable", "ev", "warningaction", "wa", "warningvariable", "wv",
+        "informationaction", "infa", "informationvariable", "iv", "outvariable", "ov", "outbuffer", "ob",
+        "pipelinevariable", "pv"};
+    const auto takesValue = [](const std::string& name) {
+        if (name.size() < 2) return name == "a" || name == "c" || name == "v";  // unique one-letter prefixes
+        for (const std::string& full : valued) {
+            if (full.rfind(name, 0) == 0 && (full.size() > 3 || full == name)) return true;
+        }
+        return false;
+    };
+    const auto launchesFetcher = [](std::string word) {
+        word = word.substr(0, word.find_first_of(",;|})"));
+        return fetchPrograms().count(programName(word)) > 0;
+    };
+    for (std::sregex_iterator m(text.begin(), text.end(), launcher), done; m != done; ++m) {
+        std::istringstream in(text.substr(static_cast<size_t>(m->position() + m->length())));
+        bool programNext = false, skipNext = false;
+        for (std::string w; in >> w;) {
+            if (std::strchr(";|}&)", w[0])) break;
+            if (programNext) {
+                if (launchesFetcher(w)) return true;
+                break;
+            }
+            if (skipNext) {
+                skipNext = false;
+            } else if (w[0] == '-') {
+                std::string name = w.substr(1);
+                const size_t colon = name.find(':');
+                const bool attached = colon != std::string::npos;
+                const std::string value = attached ? name.substr(colon + 1) : "";
+                name = name.substr(0, colon);
+                const bool filePath = !name.empty() && std::string("filepath").rfind(name, 0) == 0;
+                if (filePath || name == "path" || name == "pspath") {
+                    if (attached) {
+                        if (launchesFetcher(value)) return true;
+                        break;
+                    }
+                    programNext = true;
+                } else if (!attached && takesValue(name)) {
+                    skipNext = true;
+                }
+            } else {
+                if (launchesFetcher(w)) return true;
+                break;
+            }
+            if (w.find_first_of(";|}") != std::string::npos) break;
+        }
+    }
+    return false;
+}
+
 // True when code in `language` calls something that reaches another computer, or loads a network
 // library with a remote address in sight (`urlNearby`: a remote URL elsewhere on its command).
 // Loading a library alone connects to nothing: `import requests; print(requests.__version__)`.
@@ -1014,18 +1082,32 @@ bool codeGoesOnline(const std::string& language, const std::string& code, bool u
     }
     if (language != "powershell") return false;
     // A command starts at the line's start, after ; | { ( & = or $(, or as what iex, Start-Process
-    // or Invoke-Command runs (with at most one switch before it).
+    // or Invoke-Command runs (with at most one switch before it). The program may carry a folder:
+    // & c:\tools\curl.exe, .\curl.exe, ./curl.
     static const std::regex atStart(
         R"((?:^|[;|{(&=]|\$\(|(?:^|[^a-z0-9-])(?:iex|invoke-expression|start-process|saps|start|invoke-command|icm))"
-        R"((?:\s+-[a-z]+)?\s)\s*(?:iwr|irm|curl|wget|invoke-webrequest|invoke-restmethod)(?:[^a-z0-9-]|$))");
+        R"((?:\s+-[a-z]+)?\s)\s*(?:[^\s;|&(){}=]*[\\/])?)"
+        R"((?:iwr|irm|curl|wget|invoke-webrequest|invoke-restmethod)(?:[^a-z0-9-]|$))");
     static const std::regex anywhere(
         R"((?:^|[^a-z0-9-])(?:iwr|irm|curl|wget|invoke-webrequest|invoke-restmethod)(?:[^a-z0-9-]|$))");
+    // The call operator runs a quoted path: & 'C:\Program Files\curl\curl.exe'.
+    for (size_t at = code.find('&'); at != std::string::npos; at = code.find('&', at + 1)) {
+        size_t k = at + 1;
+        while (k < code.size() && (code[k] == ' ' || code[k] == '\t')) ++k;
+        if (k >= code.size() || (code[k] != '\'' && code[k] != '"')) continue;
+        // A path is short; a bounded look keeps a line of many & linear.
+        const size_t close = code.substr(k + 1, 512).find(code[k]);
+        if (close != std::string::npos && fetchPrograms().count(programName(code.substr(k + 1, close)))) {
+            return true;
+        }
+    }
     // One line at a time bounds the matcher's recursion; a line too long to read whole is not known
     // to stay local.
     for (size_t start = 0; start < lower.size();) {
         const size_t end = (std::min)(lower.find('\n', start), lower.size());
         if (end - start > kMaxScannedLine) return true;
-        if (std::regex_search(lower.substr(start, end - start), anyWord ? anywhere : atStart)) return true;
+        const std::string text = lower.substr(start, end - start);
+        if (std::regex_search(text, anyWord ? anywhere : atStart) || startProcessRunsFetcher(text)) return true;
         start = end + 1;
     }
     return false;
@@ -1185,6 +1267,38 @@ bool urlInSegment(const std::vector<ShellToken>& tokens, size_t from) {
     return false;
 }
 
+bool commandLineGoesOnline(const std::string& line, CodeScan& scan, int depth, bool pipedIn = false);
+
+// True when text on a line piped into a shell, read as shell code, reaches another computer. What
+// the pipe carries is unknown, so each quoted word, each command's arguments and each heredoc is
+// read as a command line: echo "curl https://..." | sh.
+bool pipedShellTextGoesOnline(const std::vector<ShellToken>& tokens, CodeScan& scan, int depth) {
+    if (depth >= 4) return true;  // nested past any real use: not known to stay local
+    std::string arguments;
+    bool first = true;
+    for (size_t k = 0; k <= tokens.size(); ++k) {
+        if (k == tokens.size() || tokens[k].separator) {
+            if (!arguments.empty() && commandLineGoesOnline(arguments, scan, depth + 1)) return true;
+            arguments.clear();
+            first = true;
+            continue;
+        }
+        const ShellToken& t = tokens[k];
+        if (t.redirect) continue;
+        if (t.body || t.text.find_first_of(" \t\n") != std::string::npos) {
+            if (commandLineGoesOnline(t.text, scan, depth + 1)) return true;
+        }
+        if (t.body) continue;
+        if (first) {
+            first = false;
+            continue;
+        }
+        if (!arguments.empty()) arguments += ' ';
+        arguments += t.text;
+    }
+    return false;
+}
+
 // True when an interpreter is given code that reaches another computer, on its command line or on
 // stdin: python -c, perl -MLWP -e, powershell's bare command, node <<EOF, python3 <<< "...", or code
 // piped in. Code in a script file is not read. `pipedIn` says the line's first command reads a pipe.
@@ -1194,6 +1308,11 @@ bool inlineCodeGoesOnline(const std::string& line, CodeScan& scan, int depth, bo
     CommandStart start;
     bool piped = pipedIn;
     size_t powershellCodeEnd = 0;  // tokens before this were read as a powershell's code
+    int pipedText = -1;            // pipedShellTextGoesOnline for this line, read once
+    const auto pipedTextGoesOnline = [&] {
+        if (pipedText < 0) pipedText = pipedShellTextGoesOnline(tokens, scan, depth) ? 1 : 0;
+        return pipedText == 1;
+    };
     for (size_t i = 0; i < tokens.size(); ++i) {
         const ShellToken& token = tokens[i];
         if (token.separator) {
@@ -1217,9 +1336,11 @@ bool inlineCodeGoesOnline(const std::string& line, CodeScan& scan, int depth, bo
         if (!start.at() || word.empty()) continue;
         const std::string name = programName(word);
         // bash -c "python -c ..." runs the string as a command line of its own, and so is a here-string.
-        if (name == "bash" || name == "sh" || name == "zsh") {
+        // -c is a flag: the command string is the first word after the options, which end at -- or -,
+        // and -o/-O/+o/+O take an option name. With no -c and no script, the shell runs its stdin.
+        if (name == "bash" || name == "sh" || name == "zsh" || name == "dash" || name == "ksh") {
             StdinFeed feed;
-            bool flags = true;
+            bool options = true, commandString = false, readsStdin = false, operand = false;
             size_t j = i + 1;
             for (; j < tokens.size() && !tokens[j].separator; ++j) {
                 if (tokens[j].redirect) {
@@ -1227,20 +1348,45 @@ bool inlineCodeGoesOnline(const std::string& line, CodeScan& scan, int depth, bo
                     continue;
                 }
                 const std::string& arg = tokens[j].text;
-                if (!flags || tokens[j].body) continue;
-                if (arg.size() < 2 || arg[0] != '-' || arg[1] == '-') {
-                    flags = arg.size() > 1 && arg[0] == '-';
+                if (operand || tokens[j].body) continue;
+                if (options && (arg == "--" || arg == "-")) {
+                    options = false;
                     continue;
                 }
-                if (arg.find('c') != std::string::npos && isWordToken(tokens, j + 1)) {
-                    if (inlineCodeGoesOnline(tokens[++j].text, scan, depth + 1, piped)) return true;
-                    flags = false;
+                if (options && arg.size() > 1 && (arg[0] == '-' || arg[0] == '+')) {
+                    if (arg[1] == '-') {
+                        if ((arg == "--rcfile" || arg == "--init-file") && isWordToken(tokens, j + 1)) ++j;
+                        continue;
+                    }
+                    const std::string flags = arg.substr(1, 64);
+                    if (arg[0] == '-' && flags.find('c') != std::string::npos) commandString = true;
+                    if (arg[0] == '-' && flags.find('s') != std::string::npos) readsStdin = true;
+                    for (const char f : flags) {
+                        if ((f == 'o' || f == 'O') && isWordToken(tokens, j + 1)) ++j;
+                    }
+                    continue;
                 }
+                operand = true;
+                if (commandString && commandLineGoesOnline(arg, scan, depth + 1, piped)) return true;
             }
-            if (feed.given && inlineCodeGoesOnline(feed.code, scan, depth + 1, false)) return true;
+            if (feed.given && commandLineGoesOnline(feed.code, scan, depth + 1)) return true;
+            const bool runsStdin = !commandString && (readsStdin || !operand);
+            if (runsStdin && piped && !feed.given && !feed.fromFile && pipedTextGoesOnline()) return true;
             start.stop();
             i = j - 1;
             continue;
+        }
+        // cmd /c "..." and /k run the string after them as a command line of their own.
+        if (name == "cmd") {
+            for (size_t j = i + 1; isWordToken(tokens, j) && tokens[j].text.size() > 1 && tokens[j].text[0] == '/';
+                 ++j) {
+                const std::string flag = lowerAscii(tokens[j].text);
+                if (flag != "/c" && flag != "/k") continue;
+                if (isWordToken(tokens, j + 1) && commandLineGoesOnline(tokens[j + 1].text, scan, depth + 1, piped)) {
+                    return true;
+                }
+                break;
+            }
         }
         const std::string language = interpreterLanguage(name);
         if (language.empty()) {
@@ -1405,6 +1551,54 @@ bool clonesRemoteRepository(const std::string& command, int depth = 0) {
     }
     return false;
 }
+
+// The command with every `<fetch program> --version` (or -V, --help, -h) blanked out: it prints
+// and exits without a destination.
+std::string withoutFetchInfoSegments(std::string command) {
+    size_t start = 0;
+    for (size_t i = 0; i <= command.size(); ++i) {
+        if (i < command.size() && std::string("\n;|&()").find(command[i]) == std::string::npos) continue;
+        const std::string segment = command.substr(start, i - start);
+        std::istringstream in(segment);
+        std::vector<std::string> words;
+        for (std::string w; words.size() < 3 && in >> w;) words.push_back(w);
+        if (words.size() == 2 && segment.find_first_of("'\"$`\\^%!") == std::string::npos &&
+            fetchPrograms().count(programName(words[0])) &&
+            (words[1] == "--version" || words[1] == "-V" || words[1] == "--help" || words[1] == "-h")) {
+            std::fill(command.begin() + static_cast<std::ptrdiff_t>(start),
+                      command.begin() + static_cast<std::ptrdiff_t>(i), ' ');
+        }
+        start = i + 1;
+    }
+    return command;
+}
+
+// The --no-web checks on one command line: a socket path, a download tool, interpreter code that
+// connects, a web-request program aimed off this PC, or a remote git repository.
+bool commandLineGoesOnline(const std::string& line, CodeScan& scan, int depth, bool pipedIn) {
+    if (line.find("/dev/tcp/") != std::string::npos || line.find("/dev/udp/") != std::string::npos) return true;
+    const auto withoutQuotes = [](const std::string& text) {
+        std::string bare;
+        for (const char c : text) {
+            if (c != '\'' && c != '"' && c != '\\' && c != '^') bare.push_back(c);
+        }
+        return bare;
+    };
+    static const std::regex downloader(R"(\b(?:start-bitstransfer\b|bitsadmin\b|certutil\b.*-urlcache|aria2c\b))",
+                                       std::regex::icase);
+    const std::string bare = withoutQuotes(line);
+    if (std::regex_search(line, downloader) || std::regex_search(bare, downloader)) return true;
+    // Code handed to an interpreter that opens a connection. A library's name anywhere else is not
+    // one: `pip install requests` and `pytest test_requests.py` stay allowed.
+    if (inlineCodeGoesOnline(line, scan, depth, pipedIn)) return true;
+    const std::string fetchable = withoutFetchInfoSegments(line);
+    const std::string bareFetchable = withoutQuotes(fetchable);
+    if (runsFetchProgram(fetchable, bareFetchable) &&
+        (mentionsRemoteUrl(fetchable) || fetchLeavesThisPc(fetchable, bareFetchable))) {
+        return true;
+    }
+    return clonesRemoteRepository(line, depth);
+}
 }  // namespace
 
 std::string webFetchRefusal(const ToolInfo& tool, const json& args) {
@@ -1416,21 +1610,8 @@ std::string webFetchRefusal(const ToolInfo& tool, const json& args) {
     const std::string asked = args["command"].get<std::string>();
     const std::string unchecked = tooLongToCheck(asked);
     if (!unchecked.empty()) return why + unchecked;
-    std::string bare;
-    for (const char c : asked) {
-        if (c != '\'' && c != '"' && c != '\\' && c != '^') bare.push_back(c);
-    }
-    static const std::regex downloader(R"(\b(?:start-bitstransfer\b|bitsadmin\b|certutil\b.*-urlcache|aria2c\b))",
-                                       std::regex::icase);
-    const bool socketFile = asked.find("/dev/tcp/") != std::string::npos ||
-                            asked.find("/dev/udp/") != std::string::npos;
-    const bool download = std::regex_search(asked, downloader) || std::regex_search(bare, downloader);
-    // Code handed to an interpreter that opens a connection. A library's name anywhere else is not
-    // one: `pip install requests` and `pytest test_requests.py` stay allowed.
     CodeScan scan(asked);
-    const bool script = inlineCodeGoesOnline(asked, scan, 0, false);
-    const bool fetch = runsFetchProgram(asked, bare) && (mentionsRemoteUrl(asked) || fetchLeavesThisPc(asked, bare));
-    if (socketFile || download || script || fetch || clonesRemoteRepository(asked)) {
+    if (commandLineGoesOnline(asked, scan, 0)) {
         return why + "`" + asked.substr(0, 80) + "`, which fetches from the web. Don't fetch it another way: "
                "answer from what is on this PC, or say what you could not read.";
     }
