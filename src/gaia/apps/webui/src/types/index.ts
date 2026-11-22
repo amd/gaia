@@ -587,7 +587,8 @@ export interface AgentProgram {
 
 /** `GET /api/agent-programs`: both agent programs and any running download. */
 export interface AgentPrograms {
-    current: FlagshipAgent;
+    /** The saved choice as written; may name a harness this version can't run (none of `programs`). */
+    current: string;
     programs: AgentProgram[];
     download: AgentDownload;
 }
@@ -605,8 +606,9 @@ export interface Settings {
     agent_mode: 'manual' | 'goal_driven';
     /** Shared network policy controlling cloud AI use. */
     network_policy: 'cloud_allowed' | 'local_ai_only';
-    /** The program that runs the GAIA agent; "gaiapy" when the user never chose. */
-    flagship_agent: FlagshipAgent;
+    /** The program that runs the GAIA agent; "gaiapy" when the user never chose. May name a
+     *  harness a newer GAIA saved that this one can't run, until the user picks another. */
+    flagship_agent: string;
     /** False when the gaiacpp program isn't installed on this PC, so it can't be chosen. */
     gaiacpp_available: boolean;
     policy_warnings?: string[];

@@ -1585,9 +1585,10 @@ class PathValidator:
         read_blocked, reason = self.is_read_blocked(str(path))
         if read_blocked:
             return reason
-        write_blocked, reason = self.is_write_blocked(str(path))
-        if write_blocked:
-            return reason
+        # Said as what the path is: this refuses reads as well as writes.
+        protected = self._write_block(str(path))[0]
+        if protected:
+            return protected
         for root in _system_temp_roots():
             if _path_is_within(path, Path(os.path.realpath(root))):
                 return f"'{path}' is inside the system temp directory '{root}'"
@@ -2039,6 +2040,19 @@ class PathValidator:
         Returns:
             Tuple of (is_blocked, reason). If blocked, reason explains why.
         """
+        why, advice = self._write_block(path)
+        if not why:
+            return (False, "")
+        return (True, f"Write blocked: {why}{advice}")
+
+    def _write_block(self, path: str) -> Tuple[str, str]:
+        """Why *path* may not be written, and what to say to a writer.
+
+        Returns:
+            ``(why, advice)``: *why* names what the path is, with no verb, so
+            a refused read can give it too; *advice* is for a writer only.
+            ``("", "")`` when the path may be written.
+        """
         try:
             # Use os.path.realpath exclusively for symlink resolution — do NOT
             # chain Path.resolve(), which re-resolves on Python <3.12 via a
@@ -2054,11 +2068,10 @@ class PathValidator:
             # Chats share one copy of each attached file; editing it edits theirs.
             if _chat_data_root(real_path) is not None:
                 return (
-                    True,
-                    f"Write blocked: '{real_path.name}' is GAIA's copy of a file "
-                    "attached to a chat, which other chats may share. Save the "
-                    "changed version as a new file in a folder this chat can "
-                    "write to.",
+                    f"'{real_path.name}' is GAIA's copy of a file "
+                    "attached to a chat, which other chats may share",
+                    ". Save the changed version as a new file in a folder this "
+                    "chat can write to.",
                 )
 
             # Check blocked directories (case-insensitive on Windows and macOS)
@@ -2075,62 +2088,61 @@ class PathValidator:
                     ):
                         continue
                     return (
-                        True,
-                        f"Write blocked: '{real_path}' is inside protected "
-                        f"directory '{blocked_dir}'",
+                        f"'{real_path}' is inside protected directory "
+                        f"'{blocked_dir}'",
+                        "",
                     )
 
             # Credential folders also hold config their tools execute.
             for secret_dir in SECRET_DIRECTORIES:
                 if _path_is_within(real_path, Path(secret_dir)):
                     return (
-                        True,
-                        f"Write blocked: '{real_path}' is inside protected "
-                        f"directory '{secret_dir}', which holds credentials and "
-                        f"tool configuration. Edit it yourself if you need to.",
+                        f"'{real_path}' is inside protected directory "
+                        f"'{secret_dir}', which holds credentials and tool "
+                        "configuration",
+                        ". Edit it yourself if you need to.",
                     )
             shared = secret_folder_sharing(real_path)
             if shared:
                 return (
-                    True,
-                    f"Write blocked: '{real_path}' is the same file as one inside "
-                    f"'{shared}', which holds credentials and tool configuration. "
-                    f"Edit it yourself if you need to.",
+                    f"'{real_path}' is the same file as one inside "
+                    f"'{shared}', which holds credentials and tool configuration",
+                    ". Edit it yourself if you need to.",
                 )
 
             # Check sensitive file names
             if file_name in {s.lower() for s in SENSITIVE_FILE_NAMES}:
                 return (
-                    True,
-                    f"Write blocked: '{real_path.name}' is a sensitive file "
-                    f"(credentials/keys/secrets). Writing to it is not allowed.",
+                    f"'{real_path.name}' is a sensitive file "
+                    "(credentials/keys/secrets)",
+                    ". Writing to it is not allowed.",
                 )
 
             # Check sensitive extensions
             if file_ext in SENSITIVE_EXTENSIONS:
                 return (
-                    True,
-                    f"Write blocked: files with extension '{file_ext}' are "
-                    f"sensitive (certificates/keys). Writing is not allowed.",
+                    f"files with extension '{file_ext}' are sensitive "
+                    "(certificates/keys)",
+                    ". Writing is not allowed.",
                 )
 
             startup_reason = _startup_execution_reason(real_path)
             if startup_reason:
                 return (
-                    True,
-                    f"Write blocked: {startup_reason}. Writing to it would make "
-                    f"the agent's content run on your machine without you asking. "
-                    f"Edit it yourself if that is what you intended.",
+                    startup_reason,
+                    ". Writing to it would make the agent's content run on your "
+                    "machine without you asking. Edit it yourself if that is what "
+                    "you intended.",
                 )
 
-            return (False, "")
+            return ("", "")
 
         except UncheckablePathError as e:
-            return (True, f"Write blocked: {e}")
+            return (str(e), "")
         except Exception as e:
             logger.error(f"Error checking write block for {path}: {e}")
             # Fail-closed: block if we can't determine safety
-            return (True, f"Write blocked: unable to validate path safety: {e}")
+            return (f"unable to validate path safety: {e}", "")
 
     def validate_write(
         self,

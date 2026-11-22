@@ -3,6 +3,7 @@
 
 #include "gaia/mcp_client.h"
 #include "gaia/keyring.h"
+#include "gaia/process.h"
 
 #include <cctype>
 #include <chrono>
@@ -328,9 +329,9 @@ struct StdioTransport::Impl {
             return false;
         }
 
-        STARTUPINFOEXA six;
+        STARTUPINFOEXW six;
         ZeroMemory(&six, sizeof(six));
-        STARTUPINFOA& si = six.StartupInfo;
+        STARTUPINFOW& si = six.StartupInfo;
         si.cb = sizeof(six);
         si.hStdInput = childStdinRead;
         si.hStdOutput = childStdoutWrite;
@@ -379,7 +380,8 @@ struct StdioTransport::Impl {
             lpEnv = envBlock.empty() ? nullptr : static_cast<LPVOID>(&envBlock[0]);
         }
 
-        // CreateProcess only adds .exe, and npx, npm and yarn ship as .cmd files.
+        // A bare name is resolved on PATH only: CreateProcess would look in the working folder
+        // first, and it only adds .exe while npx, npm and yarn ship as .cmd files.
         std::string mutableCmd(cmdLine);
         {
             const bool quoted = !cmdLine.empty() && cmdLine[0] == '"';
@@ -388,20 +390,29 @@ struct StdioTransport::Impl {
                 cmdLine.substr(quoted ? 1 : 0, end == std::string::npos ? std::string::npos : end - (quoted ? 1 : 0));
             const std::string rest =
                 end == std::string::npos ? std::string() : cmdLine.substr(quoted ? end + 1 : end);
-            const bool bare = !program.empty() && program.find_first_of("\\/:.") == std::string::npos;
-            char found[MAX_PATH];
-            if (bare && SearchPathA(nullptr, program.c_str(), ".exe", MAX_PATH, found, nullptr) == 0) {
-                for (const char* ext : {".cmd", ".bat"}) {
-                    const DWORD n = SearchPathA(nullptr, program.c_str(), ext, MAX_PATH, found, nullptr);
-                    if (n == 0 || n >= MAX_PATH) continue;
-                    mutableCmd = "\"" + std::string(found, n) + "\"" + rest;
-                    break;
+            const bool bare = !program.empty() && program.find_first_of("\\/:") == std::string::npos;
+            if (bare) {
+                const std::string found = findProgramOnPath(program);
+                if (found.empty()) {
+                    DeleteProcThreadAttributeList(six.lpAttributeList);
+                    CloseHandle(childStdinRead);
+                    CloseHandle(childStdoutWrite);
+                    CloseHandle(childStderr);
+                    return false;
                 }
+                mutableCmd = "\"" + found + "\"" + rest;
             }
         }
-        BOOL ok = CreateProcessA(
+        // Wide: the command line and a resolved path (npm under C:\Users\Jürgen) are UTF-8, not the code page.
+        std::wstring wideCmd(
+            static_cast<size_t>(MultiByteToWideChar(CP_UTF8, 0, mutableCmd.data(),
+                                                    static_cast<int>(mutableCmd.size()), nullptr, 0)),
+            L'\0');
+        MultiByteToWideChar(CP_UTF8, 0, mutableCmd.data(), static_cast<int>(mutableCmd.size()), wideCmd.data(),
+                            static_cast<int>(wideCmd.size()));
+        BOOL ok = CreateProcessW(
             nullptr,
-            mutableCmd.data(),
+            wideCmd.data(),
             nullptr, nullptr,
             TRUE, EXTENDED_STARTUPINFO_PRESENT,
             lpEnv, nullptr,
@@ -650,23 +661,30 @@ StdioTransport& StdioTransport::operator=(StdioTransport&& other) noexcept = def
 
 #ifdef _WIN32
 namespace {
+// The program a command line starts, as launch() reads it: a leading quoted string, else up to the first space.
+std::string programOf(const std::string& cmdLine) {
+    const bool quoted = !cmdLine.empty() && cmdLine[0] == '"';
+    const size_t end = quoted ? cmdLine.find('"', 1) : cmdLine.find(' ');
+    return cmdLine.substr(quoted ? 1 : 0, end == std::string::npos ? std::string::npos : end - (quoted ? 1 : 0));
+}
+
+// launch() resolves a bare name on PATH only, never in the working folder.
+bool isBareProgram(const std::string& program) {
+    return !program.empty() && program.find_first_of("\\/:") == std::string::npos;
+}
+
 // True when CreateProcess would run `command` through cmd.exe: a .cmd or .bat file, named or found on PATH.
 bool runsUnderCmd(const std::string& command) {
+    const std::string program = programOf(command);
+    // Judged on the file launch() actually starts, found by the same lookup.
+    const std::string target = isBareProgram(program) ? findProgramOnPath(program) : program;
     std::string lower;
-    for (const char c : command) lower += static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    for (const char c : target) lower += static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
     const auto endsWith = [&lower](const char* ext) {
         const size_t n = std::strlen(ext);
         return lower.size() >= n && lower.compare(lower.size() - n, n, ext) == 0;
     };
-    if (endsWith(".cmd") || endsWith(".bat")) return true;
-    if (command.empty() || command.find_first_of("\\/:.") != std::string::npos) return false;
-    char found[MAX_PATH];
-    if (SearchPathA(nullptr, command.c_str(), ".exe", MAX_PATH, found, nullptr) != 0) return false;
-    for (const char* ext : {".cmd", ".bat"}) {
-        const DWORD n = SearchPathA(nullptr, command.c_str(), ext, MAX_PATH, found, nullptr);
-        if (n != 0 && n < MAX_PATH) return true;
-    }
-    return false;
+    return endsWith(".cmd") || endsWith(".bat");
 }
 }  // namespace
 #endif
@@ -719,6 +737,12 @@ bool StdioTransport::connect() {
     }
 
 #ifdef _WIN32
+    const std::string program = programOf(command_);
+    if (isBareProgram(program) && findProgramOnPath(program).empty()) {
+        throw std::runtime_error("'" + program + "' isn't on PATH, so the server can't start (the working folder "
+                                 "is never searched). Install it (npx and npm come with Node.js), or give its full "
+                                 "path as the command in mcp.json.");
+    }
     // npx and npm ship as .cmd files, so cmd.exe reads the line and acts on these characters itself.
     if (runsUnderCmd(command_)) {
         for (const auto& arg : args_) {

@@ -1226,7 +1226,7 @@ def _flagship_agent_setting() -> tuple[str, bool]:
     """``(flagship_agent, gaiacpp_available)`` for the settings response."""
     from gaia.daemon.sidecars import fetch
 
-    return fetch.chosen_flagship(), fetch.native_flagship() is not None
+    return fetch.saved_flagship(), fetch.native_flagship() is not None
 
 
 def _set_flagship_agent(choice: str) -> None:
@@ -1540,14 +1540,9 @@ async def update_settings(
 
 
 @router.get("/api/health")
-async def health(db: ChatDatabase = Depends(get_db)):
-    """Health check endpoint."""
-    stats = db.get_stats()
-    return {
-        "status": "ok",
-        "service": "gaia-agent-ui",
-        "stats": stats,
-    }
+async def health():
+    """Liveness probe. Needs no token, so it returns nothing about the user."""
+    return {"status": "ok", "service": "gaia-agent-ui"}
 
 
 def _read_model_server(custom_model: Optional[str]) -> ModelServerInfo:

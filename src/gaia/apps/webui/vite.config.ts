@@ -1,6 +1,7 @@
 import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
 import { readFileSync } from 'fs';
+import { createRequire } from 'module';
 import { resolve } from 'path';
 import { serviceWorkerPlugin } from './src/pwa/serviceWorkerPlugin';
 
@@ -26,6 +27,9 @@ function getGaiaVersion(): string {
 
 const gaiaVersion = getGaiaVersion();
 
+// The backend refuses /api without its token; the dev server sends it like the desktop app does.
+const uiToken = createRequire(import.meta.url)('./services/ui-token.cjs');
+
 export default defineConfig({
     plugins: [react({ jsxImportSource: '@gaia/jsx' }), serviceWorkerPlugin(resolve(__dirname, 'src/pwa/sw.js'), gaiaVersion)],
     resolve: { alias: { '@gaia/jsx': resolve(__dirname, 'src/i18n/jsx') } },
@@ -41,7 +45,12 @@ export default defineConfig({
                 changeOrigin: true,
                 // Disable buffering for SSE streaming support
                 configure: (proxy) => {
+                    proxy.on('proxyReq', (proxyReq) => {
+                        const token = uiToken.defaultReader.get();
+                        if (token) proxyReq.setHeader('Authorization', `Bearer ${token}`);
+                    });
                     proxy.on('proxyRes', (proxyRes) => {
+                        if (proxyRes.statusCode === 401) uiToken.defaultReader.clear();
                         // Prevent response buffering for text/event-stream
                         if (proxyRes.headers['content-type']?.includes('text/event-stream')) {
                             proxyRes.headers['cache-control'] = 'no-cache';

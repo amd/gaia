@@ -172,19 +172,55 @@ jobs:
         with:
           python-version: '3.x'
 
+      # One bounded retry: a stalled download once cancelled a whole release.
       - uses: actions/download-artifact@v8
+        id: download_try_1
+        continue-on-error: true
+        timeout-minutes: 5
         with:
           name: ${{ inputs.artifact_prefix }}tui-binaries
           path: bin
 
+      - name: Download (second try)
+        uses: actions/download-artifact@v8
+        if: steps.download_try_1.outcome == 'failure'
+        timeout-minutes: 5
+        with:
+          name: ${{ inputs.artifact_prefix }}tui-binaries
+          path: bin
+
+      # One bounded retry: a stalled download once cancelled a whole release.
       - uses: actions/download-artifact@v8
         if: inputs.agent_ui_artifact == ''
+        id: download_try_2
+        continue-on-error: true
+        timeout-minutes: 5
         with:
           name: ${{ inputs.artifact_prefix }}agent-ui-win-setup
           path: agent-ui
 
+      - name: Download (second try)
+        uses: actions/download-artifact@v8
+        if: (inputs.agent_ui_artifact == '') && steps.download_try_2.outcome == 'failure'
+        timeout-minutes: 5
+        with:
+          name: ${{ inputs.artifact_prefix }}agent-ui-win-setup
+          path: agent-ui
+
+      # One bounded retry: a stalled download once cancelled a whole release.
       - uses: actions/download-artifact@v8
         if: inputs.agent_ui_artifact != ''
+        id: download_try_3
+        continue-on-error: true
+        timeout-minutes: 5
+        with:
+          name: ${{ inputs.agent_ui_artifact }}
+          path: agent-ui-artifact
+
+      - name: Download (second try)
+        uses: actions/download-artifact@v8
+        if: (inputs.agent_ui_artifact != '') && steps.download_try_3.outcome == 'failure'
+        timeout-minutes: 5
         with:
           name: ${{ inputs.agent_ui_artifact }}
           path: agent-ui-artifact
@@ -216,19 +252,55 @@ jobs:
           print(verify(Path(shutil.copy(src, out / src.name)), version))
           PY
 
+      # One bounded retry: a stalled download once cancelled a whole release.
       - uses: actions/download-artifact@v8
         if: inputs.sidecar == 'artifact'
+        id: download_try_4
+        continue-on-error: true
+        timeout-minutes: 5
         with:
           name: gaia-agent-win32-x64
           path: flagship
 
+      - name: Download (second try)
+        uses: actions/download-artifact@v8
+        if: (inputs.sidecar == 'artifact') && steps.download_try_4.outcome == 'failure'
+        timeout-minutes: 5
+        with:
+          name: gaia-agent-win32-x64
+          path: flagship
+
+      # One bounded retry: a stalled download once cancelled a whole release.
       - uses: actions/download-artifact@v8
+        id: download_try_5
+        continue-on-error: true
+        timeout-minutes: 5
         with:
           name: ${{ inputs.artifact_prefix }}winsetup-gaia-core-win32-x64
           path: core-download
 
+      - name: Download (second try)
+        uses: actions/download-artifact@v8
+        if: steps.download_try_5.outcome == 'failure'
+        timeout-minutes: 5
+        with:
+          name: ${{ inputs.artifact_prefix }}winsetup-gaia-core-win32-x64
+          path: core-download
+
+      # One bounded retry: a stalled download once cancelled a whole release.
       - uses: actions/download-artifact@v8
         if: inputs.gaiacpp == 'artifact' || inputs.gaiacpp == 'release'
+        id: download_gaiacpp
+        continue-on-error: true
+        timeout-minutes: 5
+        with:
+          name: ${{ inputs.artifact_prefix }}gaiacpp-binaries
+          path: gaiacpp
+
+      - name: Download (second try)
+        uses: actions/download-artifact@v8
+        if: (inputs.gaiacpp == 'artifact' || inputs.gaiacpp == 'release') && steps.download_gaiacpp.outcome == 'failure'
+        timeout-minutes: 5
         with:
           name: ${{ inputs.artifact_prefix }}gaiacpp-binaries
           path: gaiacpp
@@ -364,7 +436,19 @@ jobs:
         with:
           python-version: '3.x'
 
+      # One bounded retry: a stalled download once cancelled a whole release.
       - uses: actions/download-artifact@v8
+        id: download_try_6
+        continue-on-error: true
+        timeout-minutes: 5
+        with:
+          name: ${{ inputs.artifact_prefix }}windows-setup
+          path: dist
+
+      - name: Download (second try)
+        uses: actions/download-artifact@v8
+        if: steps.download_try_6.outcome == 'failure'
+        timeout-minutes: 5
         with:
           name: ${{ inputs.artifact_prefix }}windows-setup
           path: dist

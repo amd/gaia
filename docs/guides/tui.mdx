@@ -798,7 +798,7 @@ mouse at all with `Ctrl+Y`, `/copy` or `/copy all`. The status bar shows the
 | `/cost help` | Where the rates come from, and how to set your own |
 | `/copy` | Pick any message with `↑` / `↓` and copy it with `Enter` (`Esc` cancels) |
 | `/copy all` | Copy the whole conversation as markdown |
-| `/agent` | Show the two programs that can answer as GAIA and which one is running. `/agent gaiapy` or `/agent gaiacpp` saves that choice and switches to it — see [Which agent program answers](#which-agent-program-answers) |
+| `/agent` | Show the two programs that can answer as GAIA and which one is running. `/agent gaiapy` or `/agent gaiacpp` saves that choice and switches to it, offering to download `gaiacpp` (Beta) first when it isn't on this PC — see [Which agent program answers](#which-agent-program-answers) |
 | `/agents` | List agents installed on this machine and switch to one, without quitting |
 | `/update` | Check for a newer GAIA. `/update now` installs the newest, `/update v0.25.0` installs and pins that exact one, `/update back` returns to the version before the last update, `/update auto on` installs new releases when you quit (off by default), `/update rc on` offers release candidates too. See [Updating GAIA](/guides/install#updating-gaia) |
 | `/sessions` | Reopen a past session — see [Reopening a session](#reopening-a-session) |
@@ -1151,14 +1151,16 @@ the Python one. The terminal installers and the one-line installers put `gaiacpp
 to `gaia-cli` on Windows x64, Linux x64 and Apple silicon, alongside `gaia-agent`. The
 terminal UI runs `gaia-agent` until you choose `gaiacpp`, the same default as the Agent UI,
 so `--use-claude` and `--resume` keep working. Once chosen, `gaiacpp` is looked for in `~/.gaia/bin`
-(where the Agent UI downloads it), next to `gaia-cli`, on your PATH, then in
-`~/.gaia/agents/gaia`. The header says which program is answering:
+(where GAIA downloads it), next to `gaia-cli`, on your PATH, then in
+`~/.gaia/agents/gaia`. With `GAIA_HOME` set, both `~/.gaia` folders are looked for
+under it instead. The header says which program is answering, and that `gaiacpp`
+is a Beta:
 
 ```
- GAIA  │ agent gaia v0.25.4 (gaiacpp) │ Gemma-4-E4B-it-GGUF
+ GAIA  │ agent gaia v0.25.4 (gaiacpp · Beta) │ Gemma-4-E4B-it-GGUF
 ```
 
-Without `(gaiacpp)` the Python agent is answering, as it does on an Intel Mac,
+Without `(gaiacpp · Beta)` the Python agent is answering, as it does on an Intel Mac,
 Windows on Arm or Linux on Arm, where no `gaiacpp` is built.
 
 ### Choosing one
@@ -1181,11 +1183,38 @@ readiness check, or the program does not start, the session stays where it was
 and the saved choice is not changed. Typing `/agent` and a space turns the `/`
 palette into the same two-way picker.
 
-A program that is not installed is listed as unavailable with the places GAIA
-looked for it, and switching to it is refused with nothing changed. `/agent
-gaiacpp` is also refused in a session started with `--use-claude` and in one
+### Getting gaiacpp
+
+If `gaiacpp` is not on this PC, `/agent gaiacpp` offers to download it. GAIA
+checks whether this release has one for your PC and says how large it is; press
+Enter to download it or Esc to leave things as they are. Typing something else
+does not answer the offer. The download shows its progress on one line (Esc
+cancels it), is checked against the release's checksums, and is installed in
+`~/.gaia/bin` only if it passes. Then the switch carries on as above. It is the
+same download the [Agent UI](/guides/agent-ui/settings) does in Settings ›
+Agent & model.
+
+When this GAIA release has no `gaiacpp` for your PC, or the release can't be
+reached, `/agent gaiacpp` says which and changes nothing. A `gaiacpp` that fails
+its checksum check is offered as a fresh download the same way.
+
+`/agent gaiacpp` is refused in a session started with `--use-claude` and in one
 reopened with `--resume` or `/sessions`, since `gaiacpp` has no Claude provider
 and keeps no sessions yet.
+
+### When the saved gaiacpp can't start
+
+If `gaiacpp` is your saved choice and it is missing or fails its check, GAIA
+opens on a short screen instead of stopping with an error. It says why and
+waits for you to pick:
+
+- **Download gaiacpp again**, with a progress bar, then GAIA starts on it
+- **Use the Python agent**, which saves `gaiapy` as your choice (`/agent gaiacpp` switches back)
+- **Quit**
+
+GAIA never moves you to the Python agent by itself. `?` shows the full error,
+including where it looked. When the release has no `gaiacpp` to download, the
+first row says so and can't be picked.
 
 For one launch, set `GAIA_TUI_AGENT` to `gaiacpp`, `gaiapy` (or the program's
 own name, `gaia-agent`), or the path of either, or pass the same value to
@@ -1205,15 +1234,17 @@ Which program a launch runs is decided in this order:
 3. The saved choice, `flagship_agent` (`gaiapy` or `gaiacpp`)
 4. With none of those, `gaia-agent`, even when `gaiacpp` is installed
 
-If the one named by any of the first three is not installed, `gaia-cli` stops
-and lists where it looked; it does not start the other one.
+If the one named by `--agent-program` or `GAIA_TUI_AGENT` is not installed,
+`gaia-cli` stops and lists where it looked; it does not start the other one. A
+saved `gaiacpp` that is not installed opens the screen described in
+[When the saved gaiacpp can't start](#when-the-saved-gaiacpp-cant-start).
 
 A `gaiacpp` the Agent UI downloaded has a record of its checksum next to it
 (`gaiacpp.install.json`), and the terminal UI checks the file against it before
-every run. If the file no longer matches, or the record is damaged, `gaia-cli`
-stops and names the file: download `gaiacpp` again in the Agent UI (Settings ›
-Agent & model), or switch to the Python agent. It does not run another copy or
-the other program instead. A `flagship_agent`
+every run. If the file no longer matches, or the record is damaged, GAIA does
+not run it: a saved choice opens the same screen, offering the download again or
+the Python agent, and a flag or variable stops the launch and names the file. It
+does not run another copy or the other program instead. A `flagship_agent`
 value other than `gaiapy` or `gaiacpp` also stops the launch, naming the file
 and the key.
 

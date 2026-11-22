@@ -5,13 +5,22 @@
 #include <gtest/gtest.h>
 #include <gaia/agent.h>
 #include <gaia/mcp_client.h>
+#include <gaia/process.h>
 #include <gaia/security.h>
 #include <gaia/tool_registry.h>
 
 #include <filesystem>
 #include <fstream>
+#include <vector>
 
 #include "support/mock_llm_server.h"
+
+#ifdef _WIN32
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#endif
 
 using namespace gaia;
 
@@ -103,6 +112,60 @@ TEST(MCPClientTest, ABatchFileServerRefusesAnArgumentCmdWouldActOn) {
     }
     std::error_code ec;
     std::filesystem::remove_all(dir, ec);
+}
+
+TEST(MCPClientTest, ABareProgramNotOnPathFailsNamingIt) {
+    StdioTransport transport("gaia-no-such-mcp-program", {"-y"}, 5, false);
+    try {
+        transport.connect();
+        ADD_FAILURE() << "a missing program started";
+    } catch (const std::runtime_error& e) {
+        EXPECT_NE(std::string(e.what()).find("gaia-no-such-mcp-program"), std::string::npos) << e.what();
+        EXPECT_NE(std::string(e.what()).find("isn't on PATH"), std::string::npos) << e.what();
+    }
+
+    MCPClient client("missing", std::make_unique<StdioTransport>("gaia-no-such-mcp-program", 5, false));
+    EXPECT_FALSE(client.connect());
+    EXPECT_NE(client.lastError().find("isn't on PATH"), std::string::npos) << client.lastError();
+}
+
+// The batch-file screen must judge the file launch() starts from PATH, not an .exe of the same
+// name in the working folder, and must read the program the way launch() does.
+TEST(MCPClientTest, ABareBatchServerOnPathIsScreenedDespiteAPlantedExe) {
+    namespace tfs = std::filesystem;
+    const tfs::path onPath = tfs::temp_directory_path() / testsupport::perProcess("gaia-mcp-onpath");
+    const tfs::path working = tfs::temp_directory_path() / testsupport::perProcess("gaia-mcp-working");
+    tfs::create_directories(onPath);
+    tfs::create_directories(working);
+    { std::ofstream(onPath / "gaia-mcp-probe.cmd") << "@echo off\r\n"; }
+    tfs::copy_file(tfs::u8path(systemProgramPath("hostname.exe")), working / "gaia-mcp-probe.exe",
+                   tfs::copy_options::overwrite_existing);
+
+    const DWORD size = GetEnvironmentVariableW(L"PATH", nullptr, 0);
+    std::wstring oldPath(size, L'\0');
+    oldPath.resize(GetEnvironmentVariableW(L"PATH", oldPath.data(), size));
+    SetEnvironmentVariableW(L"PATH", (onPath.wstring() + L";" + oldPath).c_str());
+    const tfs::path before = tfs::current_path();
+    tfs::current_path(working);
+
+    std::vector<std::string> reached;
+    for (const char* command : {"gaia-mcp-probe", "\"gaia-mcp-probe\"", "gaia-mcp-probe -y"}) {
+        StdioTransport transport(command, {"a&b"}, 5, false);
+        try {
+            transport.connect();
+            reached.push_back(command);
+            transport.disconnect();
+        } catch (const std::runtime_error& e) {
+            EXPECT_NE(std::string(e.what()).find("cmd.exe"), std::string::npos) << command << ": " << e.what();
+        }
+    }
+
+    tfs::current_path(before);
+    SetEnvironmentVariableW(L"PATH", size != 0 ? oldPath.c_str() : nullptr);
+    std::error_code ec;
+    tfs::remove_all(onPath, ec);
+    tfs::remove_all(working, ec);
+    for (const auto& command : reached) ADD_FAILURE() << command << " passed a & to cmd.exe";
 }
 #endif
 

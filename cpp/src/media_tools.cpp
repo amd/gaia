@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <stdexcept>
 #include <ctime>
 #include <vector>
 #include <filesystem>
@@ -122,8 +123,19 @@ ToolInfo MediaTools::screenshotTool(std::function<std::string(const std::string&
 #ifdef _WIN32
         std::string ps = abs;
         for (size_t i = 0; (i = ps.find('\'', i)) != std::string::npos; i += 2) ps.insert(i, "'");
+        // Windows' own PowerShell by full path: cmd.exe would run a powershell.bat in the working folder first.
+        std::string powershell;
+        try {
+            powershell = systemProgramPath("WindowsPowerShell\\v1.0\\powershell.exe");
+        } catch (const std::runtime_error& e) {
+            return {{"status", "error"}, {"error", e.what()}};
+        }
+        if (powershell.find(' ') != std::string::npos) {
+            return {{"status", "error"}, {"error", "Windows is installed in a folder with a space (" + powershell +
+                                                       "), which the screenshot command can't start PowerShell from."}};
+        }
         attempts.push_back(
-            "powershell -NoProfile -Command \"Add-Type -AssemblyName System.Windows.Forms,System.Drawing; "
+            powershell + " -NoProfile -Command \"Add-Type -AssemblyName System.Windows.Forms,System.Drawing; "
             "$b=[System.Windows.Forms.SystemInformation]::VirtualScreen; "
             "$bmp=New-Object System.Drawing.Bitmap $b.Width,$b.Height; "
             "$g=[System.Drawing.Graphics]::FromImage($bmp); "
