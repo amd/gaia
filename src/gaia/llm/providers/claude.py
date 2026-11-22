@@ -1333,7 +1333,16 @@ class ClaudeProvider(LLMClient):
     def vision(self, images: list[bytes], prompt: str, **kwargs) -> str:
         import base64  # pylint: disable=import-outside-toplevel
 
-        image_b64 = base64.b64encode(images[0]).decode()
+        from gaia.utils.image_alpha import (  # pylint: disable=import-outside-toplevel
+            flatten_image_bytes,
+        )
+
+        from ..vlm_client import (  # pylint: disable=import-outside-toplevel
+            detect_image_mime_type,
+        )
+
+        image = flatten_image_bytes(images[0])
+        image_b64 = base64.b64encode(image).decode()
         messages = [
             {
                 "role": "user",
@@ -1342,7 +1351,7 @@ class ClaudeProvider(LLMClient):
                         "type": "image",
                         "source": {
                             "type": "base64",
-                            "media_type": "image/jpeg",
+                            "media_type": detect_image_mime_type(image),
                             "data": image_b64,
                         },
                     },
