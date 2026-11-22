@@ -103,7 +103,7 @@ public:
     /// Why the turn's record doesn't back the answer's report that tests passed: no test
     /// ran, the latest run of each failed, the latest run of some test command after the
     /// last code change failed and the answer doesn't plainly say a test still fails (a
-    /// narrower passing rerun doesn't hide it), every passing run came before a code change
+    /// narrower passing rerun doesn't hide it, and neither does "the 2 failing tests now pass"), every passing run came before a code change
     /// (a file tool or a shell edit), or ran in a folder apart from the changed file. A run
     /// whose result could be lost (`pytest | head -3`, `pytest || true`, `pytest; echo $?`,
     /// `pytest > out.txt`, `! pytest`, `pytest &`) counts only by its own summary, and is

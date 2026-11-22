@@ -1085,17 +1085,51 @@ std::string withoutZeroFailures(const std::string& text) {
     return std::regex_replace(std::regex_replace(text, zero, " "), without, "cleanly");
 }
 
+// "The 2 failing tests now pass", "2 errors are cleared": a count of failures the same clause says
+// are over is the tests, not a failure now. "2 failing tests remain, the rest pass" keeps its count.
+std::string withoutResolvedFailures(const std::string& text) {
+#define GAIA_NUM R"((?:[1-9]\d*|one|two|three|four|five|six|seven|eight|nine|ten))"
+    static const std::regex counted(
+        R"(\b(?:(?:the|both|all|these|those)\s+(?:)" GAIA_NUM R"(\s+)?|)" GAIA_NUM R"(\s+)(?:[\w-]+\s+)?)"
+        R"((?:(?:failing|failed|broken)\s+(?:[\w-]+\s+)?(?:tests?|cases?|specs?|checks?)|failures?|errors?)\b)",
+        std::regex::icase);
+    static const std::regex stop(
+        R"([;,:\n]|[.!?](?:\s|$)|\s(?:—|–|-)\s)"
+        R"(|\b(?:but|however|though|although|except|whereas|while|still|remains?|yet|with|versus|vs|out\s+of)\b)"
+        R"(|\band\s+(?:the\s+)?(?:)" GAIA_NUM R"(|rest|others?|remaining|everything|all)\b)",
+        std::regex::icase);
+#undef GAIA_NUM
+    static const std::regex resolved(
+        R"(\b(?:pass(?:es|ed|ing)?|green|succeed(?:s|ed)?|gone|cleared|fixed|resolved|work(?:s|ing)?)\b)",
+        std::regex::icase);
+    static const std::regex negation(R"(n't\b|n’t\b|\b(?:not|never|no|nor)\b)", std::regex::icase);
+    std::string out;
+    auto from = text.cbegin();
+    for (std::sregex_iterator it(text.begin(), text.end(), counted), end; it != end; ++it) {
+        const std::smatch& m = *it;
+        std::string after = m.suffix().str();
+        std::smatch s;
+        if (std::regex_search(after, s, stop)) after = s.prefix().str();
+        out.append(from, m[0].first);
+        out += std::regex_search(after, resolved) && !std::regex_search(after, negation) ? "the tests" : m.str(0);
+        from = m[0].second;
+    }
+    out.append(from, text.cend());
+    return out;
+}
+
 // Without what was fixed or what made a test fail, which is history and not a failure now:
 // "Fixed the 2 failing tests", "the off-by-one that made test_median fail", "was failing".
 std::string withoutFixedFailures(const std::string& text) {
     static const std::regex history(
-        R"(\b(?:fix(?:ed|es|ing)?|resolv(?:ed|es|ing)|repair(?:ed|s)?|address(?:ed|es)?|correct(?:ed|s)?)\s+)"
+        R"(\b(?:fix(?:ed|es|ing)?|resolv(?:ed|es|ing)|repair(?:ed|s)?|address(?:ed|es)?|correct(?:ed|s)?)"
+        R"(|handled|dealt\s+with|(?:took|taken|take|takes|taking)\s+care\s+of)\s+)"
         R"((?:(?:the|all|both|a|an|these|those|this|that)\s+)?(?:\d+\s+)?(?:[\w-]+\s+){0,2}?)"
         R"((?:failing|failed|broken|failures?|errors?)\b)"
         R"(|\b(?:made|make|makes|making|caused?|causes|causing|let|lets)\s+(?:\S+\s+){0,4}?(?:to\s+)?fail\b)"
         R"(|\b(?:was|were|had\s+been|used\s+to)\s+(?:\w+\s+)?(?:fail(?:ing)?|broken|erroring)\b)",
         std::regex::icase);
-    return std::regex_replace(withoutZeroFailures(text), history, " ");
+    return std::regex_replace(withoutResolvedFailures(withoutZeroFailures(text)), history, " ");
 }
 
 // Whether the text plainly says a test fails now. Only a short list of statements counts:
@@ -1129,6 +1163,10 @@ bool reportsOutstandingFailure(const std::string& text) {
         R"(\bfail(?:s|ed|ing)?\s+(?:fast|early|loudly|gracefully|safely|closed|open|over|quickly|cleanly)\b)",
         std::regex::icase);
     static const std::regex asBefore(R"(\b(?:as|like)\s+before\b)", std::regex::icase);
+    // "All tests pass; test_mode fails", "the rest pass but the median tests fail".
+    static const std::regex namedFails(
+        R"((?:;|\bbut\b)\s*(?:the\s+)?(?:[\w-]+\s+)?[\w.:/\[\]-]*test[\w.:/\[\]-]*\s+(?:still\s+)?fails?\b(?!-))",
+        std::regex::icase);
     static const std::regex sentenceBreak(R"((?:[.!?](?:\s+|$))|\n+)");
     static const std::regex clauseBreak(
         R"([.!?;,:\n]|\s(?:—|–|-)\s|\b(?:but|and|so|although|though|because|since|while|whereas|after|which)\b)",
@@ -1137,14 +1175,21 @@ bool reportsOutstandingFailure(const std::string& text) {
         std::regex_replace(std::regex_replace(withoutFixedFailures(text), behaviour, " "), asBefore, " ");
     for (std::sregex_token_iterator s(cleaned.begin(), cleaned.end(), sentenceBreak, -1), end; s != end; ++s) {
         const std::string sentence = *s;
+        std::smatch named;
+        if (std::regex_search(sentence, named, namedFails) && !std::regex_search(named.str(0), negation) &&
+            !std::regex_search(named.suffix().str(), negation)) {
+            return true;
+        }
         const bool pastSentence = std::regex_search(sentence, pastOrFixed);
         for (std::sregex_token_iterator c(sentence.begin(), sentence.end(), clauseBreak, -1); c != end; ++c) {
             const std::string clause = *c;
             if (std::regex_search(clause, pastOrFixed)) continue;
             std::smatch m;
-            if (std::regex_search(clause, present) || (!pastSentence && std::regex_search(clause, pastCount))) {
-                if (!std::regex_search(clause, negation)) return true;
-            } else if (std::regex_search(clause, m, notPassing)) {
+            if ((std::regex_search(clause, present) || (!pastSentence && std::regex_search(clause, pastCount))) &&
+                !std::regex_search(clause, negation)) {
+                return true;
+            }
+            if (std::regex_search(clause, m, notPassing)) {
                 // The statement's own "not" is allowed; any other negation, or "now"/"again", is not.
                 const std::string rest = m.prefix().str() + " " + m.suffix().str();
                 if (!std::regex_search(rest, negation) && !std::regex_search(rest, notNow)) return true;

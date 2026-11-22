@@ -742,6 +742,50 @@ TEST(GaiaAgentTest, OnlyAnExplicitStatementThatATestStillFailsExcusesAFailedRun)
     }
 }
 
+TEST(GaiaAgentTest, ACountOfFailuresTheAnswerSaysAreOverDoesNotExcuseAFailedRun) {
+    const auto changed = edit("/work/proj/stats.py");
+    const std::vector<GaiaAgent::CallSeen> hidden = {changed, inProj("pytest", 1, kPytestFail),
+                                                     inProj("pytest -k 'not median'", 0, kPytestOk)};
+    const std::vector<GaiaAgent::CallSeen> onlyFailed = {changed, inProj("pytest", 1, kPytestFail)};
+    const std::vector<GaiaAgent::CallSeen> passed = {changed, inProj("pytest", 0, kPytestOk)};
+    const std::string failed = "the tests run this turn didn't pass";
+    const std::string hiddenWhy = "`pytest` didn't pass when it last ran";
+    // Each is itself a claim that the tests pass.
+    for (const char* answer :
+         {"The 2 failing tests now pass.", "The two failing tests pass now.", "The one failing test passes now.",
+          "2 failing tests are now passing.", "The 1 failing test is now green.", "The 2 failing tests now succeed.",
+          "Updated stats.py so the 2 failing tests pass.", "Both failing tests now pass.",
+          "The 2 failing tests now pass, and the full suite is green."}) {
+        EXPECT_EQ(why(GaiaAgent::unsupportedTestClaim(answer, onlyFailed)), failed) << answer;
+        EXPECT_EQ(why(GaiaAgent::unsupportedTestClaim(answer, hidden)), hiddenWhy) << answer;
+        EXPECT_FALSE(GaiaAgent::unsupportedTestClaim(answer, passed)) << answer;
+    }
+    // None of these says a failure is still there, beside a claim.
+    for (const char* lead :
+         {"The 2 failing tests now pass.", "The two failing tests pass now.", "The one failing test passes now.",
+          "2 failing tests are now passing.", "The 1 failing test is now green.", "The 2 failing tests now succeed.",
+          "The 2 failures are gone.", "The 2 failures are gone now.", "The 2 test failures are gone.",
+          "2 errors are cleared.", "Updated stats.py so the 2 failing tests pass.", "Took care of the 2 failing tests.",
+          "One failing test remained and now passes.", "Both failing tests now pass."}) {
+        const std::string answer = std::string(lead) + " All tests pass now.";
+        EXPECT_EQ(why(GaiaAgent::unsupportedTestClaim(answer, onlyFailed)), failed) << answer;
+        EXPECT_EQ(why(GaiaAgent::unsupportedTestClaim(answer, hidden)), hiddenWhy) << answer;
+        EXPECT_FALSE(GaiaAgent::unsupportedTestClaim(answer, passed)) << answer;
+    }
+    // A failure and a pass in separate clauses is still an honest report.
+    for (const char* answer :
+         {"The median tests pass. 2 tests still fail; the rest pass.", "All tests pass except test_x, which fails.",
+          "51 tests pass and test_mode fails.", "All 4 tests pass; test_mode fails.",
+          "The rest pass but the median tests fail.", "2 failing tests remain; the others pass.",
+          "The median tests pass. 2 failing tests and the rest pass.", "The median tests pass. 1 failure, 3 passed.",
+          "The median tests pass. The 2 failing tests don't pass yet."}) {
+        EXPECT_FALSE(GaiaAgent::unsupportedTestClaim(answer, onlyFailed)) << answer;
+        EXPECT_FALSE(GaiaAgent::unsupportedTestClaim(answer, hidden)) << answer;
+    }
+    // A named test that fails no more is not a failure now.
+    EXPECT_EQ(why(GaiaAgent::unsupportedTestClaim("All tests pass; test_mode fails no more.", onlyFailed)), failed);
+}
+
 TEST(GaiaAgentTest, ARunWhoseExitStatusIsMaskedCountsOnlyByItsOwnSummary) {
     const auto changed = edit("/work/proj/stats.py");
     const std::string all = "All tests pass.";
