@@ -285,6 +285,22 @@ RESOLVED_PATH_ARG = "_resolved_file_path"
 #: prompt asks about.
 SITE_ARG = "_site"
 
+#: Arguments that name one file, folder, address or id: on an approval card,
+#: every character that doesn't show or joins letters reads as its code.
+NAME_ARGS = frozenset(
+    {
+        "path",
+        "file_path",
+        "folder",
+        "working_directory",
+        "output_path",
+        "url",
+        SITE_ARG,
+        "id",
+        "name",
+    }
+)
+
 #: The tool that starts a project's dev server from ``.gaia/launch.json``.
 DEV_SERVER_TOOL = "dev_server"
 
@@ -960,6 +976,7 @@ __all__ = [
     "BROWSER_PANE_SKILL",
     "DEV_SERVER_TOOL",
     "GrantScope",
+    "NAME_ARGS",
     "PATH_ACCESS_PROMPT_TOOL",
     "PATH_TOOLS",
     "PROJECT_TRUST_PROMPT_TOOL",

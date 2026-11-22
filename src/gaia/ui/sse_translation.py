@@ -81,8 +81,9 @@ from gaia.agents.base.call_risk import (
     SCRIPT_ARG,
     plain_risk_note,
 )
-from gaia.agents.base.person_approval import visible_line, visible_strict
+from gaia.agents.base.person_approval import visible, visible_line, visible_strict
 from gaia.agents.base.tool_grants import (
+    NAME_ARGS,
     PATH_ACCESS_PROMPT_TOOL,
     PATH_TOOLS,
     PROJECT_TRUST_PROMPT_TOOL,
@@ -1177,21 +1178,6 @@ INVOCATION_TOTAL_CHARS = 1200
 #: breaks; flattened, "line 1 line 2" hides the structure being approved.
 INVOCATION_BLOCK_LINES = 12
 INVOCATION_BLOCK_LINE_CHARS = 200
-#: Arguments that name one file, folder, address or id: in a prompt, every
-#: character that doesn't show or joins letters reads as its code.
-NAME_ARGS = frozenset(
-    {
-        "path",
-        "file_path",
-        "folder",
-        "working_directory",
-        "output_path",
-        "url",
-        SITE_ARG,
-        "id",
-        "name",
-    }
-)
 _CONTROL_CHARS = re.compile(r"[\x00-\x08\x0b-\x1f\x7f]")
 
 
@@ -1244,11 +1230,13 @@ def render_invocation(args: Dict[str, Any]) -> str:
 def _render_block(key: str, value: str) -> str:
     """Render a multi-line value as an indented block, so its lines stay lines."""
     lines = value.strip("\n").splitlines()
+    # A name or command split over lines is still a name; a body keeps its script.
+    shown_as = visible_strict if key in NAME_ARGS or key == "command" else visible
     shown = []
     for line in lines[:INVOCATION_BLOCK_LINES]:
         # Tabs as spaces so indentation survives; other controls shown, not obeyed.
-        line = _CONTROL_CHARS.sub(
-            lambda c: f"\\x{ord(c.group()):02x}", line.expandtabs(4)
+        line = shown_as(
+            _CONTROL_CHARS.sub(lambda c: f"\\x{ord(c.group()):02x}", line.expandtabs(4))
         )
         if len(line) > INVOCATION_BLOCK_LINE_CHARS:
             hidden = len(line) - INVOCATION_BLOCK_LINE_CHARS

@@ -219,3 +219,27 @@ class TestLookAlikeNamesInTheTerminalCard:
 
     def test_a_joiner_in_an_argument_name_is_coded(self):
         assert render_invocation({f"pa{self.ZWJ}th": "a"}) == 'pa[U+200D]th="a"'
+
+
+class TestLinesOfABlockFollowTheirRule:
+    """A value split over lines goes to a block, which must not drop the rule."""
+
+    def test_a_joiner_in_a_path_with_a_line_break_is_coded(self):
+        rendered = render_invocation({"path": "inv\u200doice.txt\nnotes"})
+        assert "inv[U+200D]oice.txt" in rendered
+        assert "\u200d" not in rendered
+
+    def test_a_bidi_override_in_a_body_line_is_coded(self):
+        rendered = render_invocation({"content": "line one\nab\u202ecd"})
+        assert "ab[U+202E]cd" in rendered
+
+    def test_a_body_keeps_its_emoji_and_persian(self):
+        family = "\U0001f468\u200d\U0001f469\u200d\U0001f467"
+        persian = "\u0645\u06cc\u200c\u062e\u0648\u0627\u0647\u0645"
+        rendered = render_invocation({"content": f"{family}\n{persian}"})
+        assert family in rendered and persian in rendered
+        assert "[U+" not in rendered
+
+    def test_a_multi_line_command_codes_its_joiners(self):
+        rendered = render_invocation({"command": "echo a\nr\u200dm -rf x"})
+        assert "r[U+200D]m -rf x" in rendered
