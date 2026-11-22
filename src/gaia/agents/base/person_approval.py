@@ -28,8 +28,11 @@ import idna
 # LRM, RLM) can't reorder text, so those stay as written. A variation selector
 # stays only where Unicode defines it: FE0E/FE0F right after an emoji or FE0F
 # in a keycap (1, FE0F, U+20E3), and E0100-E01EF right after a CJK ideograph.
-# Anywhere else it shows nothing, so it is a code.
-# CalendarApproval.tsx mirrors these lists; a test keeps them equal.
+# Anywhere else it shows nothing, so it is a code. A one-line name (a path,
+# URL, id, a command's program or an "always allow" label) keeps none of
+# these: there they can only make one name read as another (strict_hidden).
+# CalendarApproval.tsx and gaiacpp's stdio_server.cpp mirror these lists;
+# tests keep them equal.
 HIDDEN_CATEGORIES = frozenset({"Cf", "Cc", "Zl", "Zp"})
 KEPT_AS_WRITTEN = frozenset(
     {"\u0009", "\u000a", "\u200c", "\u200d", "\u200e", "\u200f"}
@@ -280,6 +283,19 @@ def is_hidden(char: str) -> bool:
     )
 
 
+def strict_hidden(char: str) -> bool:
+    """True when *char* doesn't show or changes how a name reads, wherever it stands.
+
+    :func:`is_hidden` plus tab, line breaks, joiners, direction marks and every
+    variation selector, which prose needs but a name never does.
+    """
+    return (
+        is_hidden(char)
+        or is_variation_selector(char)
+        or unicodedata.category(char) in HIDDEN_CATEGORIES
+    )
+
+
 def _unfolded(text: str) -> str:
     return text.replace("\r\n", "\n")
 
@@ -335,6 +351,18 @@ def visible_line(text: str) -> str:
     return visible(text).replace("\n", "[U+000A]")
 
 
+def visible_strict(text: str) -> str:
+    """A path, URL, id, program or "always allow" label as an approval card shows it.
+
+    Stricter than :func:`visible_line`: every :func:`strict_hidden` character,
+    CR included, is written as ``[U+XXXX]``, so no look-alike of the name can
+    stand in for it.
+    """
+    return "".join(
+        f"[U+{ord(char):04X}]" if strict_hidden(char) else char for char in text
+    )
+
+
 def sendable_address(address: str, field: str) -> str:
     """*address* as it goes on the wire, or raise ``ValueError`` naming *field*.
 
@@ -342,12 +370,7 @@ def sendable_address(address: str, field: str) -> str:
     letter shows as what it is.
     """
     for char in address:
-        # Stricter than display: no joiner or mark belongs in an address.
-        if (
-            is_hidden(char)
-            or is_variation_selector(char)
-            or unicodedata.category(char) in HIDDEN_CATEGORIES
-        ):
+        if strict_hidden(char):
             raise ValueError(
                 f"`{field}` has an address with an invisible or control character "
                 f"(U+{ord(char):04X}), which could disguise who receives it: "
@@ -392,6 +415,8 @@ __all__ = [
     "is_variation_selector",
     "preapproved",
     "sendable_address",
+    "strict_hidden",
     "visible",
     "visible_line",
+    "visible_strict",
 ]

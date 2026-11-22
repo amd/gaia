@@ -840,6 +840,69 @@ TEST_F(GaiacppStdio, AZeroWidthCharacterInAShellCommandShowsAsACode) {
     ASSERT_TRUE(waitTerminal(1).is_object());
 }
 
+// Joiners, direction marks, variation selectors and CR read as nothing inside a
+// name, so "inv" + ZWJ + "oice.txt" would pass for invoice.txt. Same lines as
+// person_approval.visible_strict() in Python.
+TEST_F(GaiacppStdio, LookAlikeCharactersInAPathShowAsCodes) {
+    const std::string base = (work_ / "").string();
+    const std::vector<std::pair<std::string, std::string>> cases = {
+        {"inv\xE2\x80\x8D" "oice.txt", "inv[U+200D]oice.txt"},                // ZWJ
+        {"inv\xE2\x80\x8C" "oice.txt", "inv[U+200C]oice.txt"},                // ZWNJ
+        {"report\xE2\x80\x8E.txt", "report[U+200E].txt"},                     // LRM
+        {"report\xE2\x80\x8F.txt", "report[U+200F].txt"},                     // RLM
+        {"\xF0\x9F\x93\x81\xEF\xB8\x8F" "notes.txt", "\xF0\x9F\x93\x81[U+FE0F]notes.txt"},  // emoji + VS16
+        {"\xE8\x91\x9B\xF3\xA0\x84\x80.txt", "\xE8\x91\x9B[U+E0100].txt"},    // CJK + VS17
+        {"a\r\nb.txt", "a[U+000D][U+000A]b.txt"},                            // CRLF
+        {"a\tb.txt", "a[U+0009]b.txt"},                                       // tab
+    };
+    for (const auto& [name, shown] : cases) {
+        mock_.pushResponse(toolCall("file_write", {{"path", base + name}, {"content", "hi"}}));
+        mock_.pushResponse(answer("Not written."));
+        if (!agent_) start();
+        ask("write it");
+        const json prompt = waitFor("needs_confirmation", queries_);
+        ASSERT_TRUE(prompt.is_object()) << shown;
+        EXPECT_EQ(prompt["summary"], base + shown + "\n\nWhat will be saved:\n    hi");
+        decide("deny", prompt["confirm_id"]);
+        ASSERT_TRUE(waitTerminal(queries_).is_object());
+    }
+}
+
+TEST_F(GaiacppStdio, AJoinerInAProgramNameShowsAsACodeInTheCardAndItsAlwaysLabel) {
+    mock_.pushResponse(toolCall("bash_execute", {{"command", "gi\xE2\x80\x8D" "t status\n\tgi\xE2\x80\x8C" "t log"}}));
+    mock_.pushResponse(answer("Not run."));
+    Start s;
+    s.shell = true;
+    start(s);
+    ask("check the repo");
+    const json prompt = waitFor("needs_confirmation");
+    ASSERT_TRUE(prompt.is_object());
+    // A command's words get the name rule; its line breaks and indents stay layout.
+    EXPECT_EQ(prompt["summary"], "gi[U+200D]t status\n\tgi[U+200C]t log");
+    // The label is one line: the name rule codes its line break and tab too.
+    EXPECT_EQ(prompt["always_scope"], "Run `gi[U+200D]t status[U+000A][U+0009]gi[U+200C]t log`");
+    decide("deny", prompt["confirm_id"]);
+    ASSERT_TRUE(waitTerminal(1).is_object());
+}
+
+// Content keeps the prose rule: emoji ZWJ sequences, an emoji's own selector and
+// a keycap still read as written.
+TEST_F(GaiacppStdio, AWrittenBodyKeepsEmojiJoinersAsWritten) {
+    const std::string family = "\xF0\x9F\x91\xA8\xE2\x80\x8D\xF0\x9F\x91\xA9\xE2\x80\x8D\xF0\x9F\x91\xA7";
+    const std::string body = "family " + family + "\n\xE2\x9D\xA4\xEF\xB8\x8F and 1\xEF\xB8\x8F\xE2\x83\xA3";
+    const fs::path out = work_ / "notes.txt";
+    mock_.pushResponse(toolCall("file_write", {{"path", out.string()}, {"content", body}}));
+    mock_.pushResponse(answer("Not written."));
+    start();
+    ask("write it");
+    const json prompt = waitFor("needs_confirmation");
+    ASSERT_TRUE(prompt.is_object());
+    EXPECT_EQ(prompt["summary"], out.string() + "\n\nWhat will be saved:\n    family " + family +
+                                     "\n    \xE2\x9D\xA4\xEF\xB8\x8F and 1\xEF\xB8\x8F\xE2\x83\xA3");
+    decide("deny", prompt["confirm_id"]);
+    ASSERT_TRUE(waitTerminal(1).is_object());
+}
+
 TEST_F(GaiacppStdio, InvisibleCharactersInAnEditShowAsCodes) {
     const fs::path file = work_ / "totals.py";
     std::ofstream(file) << "total = 1\n";
