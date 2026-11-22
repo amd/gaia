@@ -416,6 +416,88 @@ TEST(WebFetchRefusalTest, RefusesShellFetchesButNotInstallsOrLocalRequests) {
     EXPECT_EQ(webFetchRefusal(write, {{"path", "a.md"}, {"content", "curl https://example.com"}}), "");
 }
 
+// --no-web is the narrower switch: it may never refuse what the internet-off table allows, and
+// every fetch that table refuses through a web-request program or a socket file it refuses too.
+TEST(WebFetchRefusalTest, AgreesWithTheSharedOfflineTable) {
+    std::ifstream in(fs::path(GAIA_REPO_FIXTURES_DIR) / "offline_commands.json");
+    ASSERT_TRUE(in) << "tests/fixtures/offline_commands.json";
+    const json table = json::parse(in);
+    ToolInfo sh;
+    sh.name = "bash_execute";
+    for (const auto& c : table["allowed"]) {
+        EXPECT_EQ(webFetchRefusal(sh, {{"command", c}}), "") << c.get<std::string>();
+    }
+    size_t fetches = 0;
+    for (const auto& c : table["refused"]) {
+        const std::string command = c.get<std::string>();
+        std::string plain;
+        for (const char ch : command) {
+            if (ch != '^') plain.push_back(ch);
+        }
+        if (plain.find("curl") == std::string::npos && plain.find("/dev/tcp/") == std::string::npos &&
+            plain.find("/dev/udp/") == std::string::npos) {
+            continue;
+        }
+        ++fetches;
+        EXPECT_NE(webFetchRefusal(sh, {{"command", command}}), "") << command;
+    }
+    EXPECT_GE(fetches, 8u);
+}
+
+// Routes a model reaches for once curl is refused, and look-alikes that must stay allowed.
+TEST(WebFetchRefusalTest, RefusesOtherRoutesToTheWebAndNotTheirLookAlikes) {
+    ToolInfo sh;
+    sh.name = "bash_execute";
+    for (const char* fetched : {
+             // Library loaded by a flag before the code, or code given without a flag.
+             "perl -MLWP::Simple -e 'getprint \"https://example.com\"'",
+             "ruby -rnet/http -e 'puts Net::HTTP.get(URI(ARGV[0]))' https://example.com",
+             "powershell \"(New-Object Net.WebClient).DownloadString('https://example.com')\"",
+             "powershell -NoProfile -ExecutionPolicy Bypass (New-Object Net.WebClient).DownloadFile($u, 'a')",
+             "python3 -uc \"import urllib.request as u; print(u.urlopen('https://example.com').read())\"",
+             "python -c \"import os; import requests; print(requests.get('https://example.com').text)\"",
+             "node -p \"require('https').get('https://example.com')\"",
+             "php -r \"echo file_get_contents('https://example.com');\"",
+             // Code read from stdin.
+             "python3 - <<'EOF'\nimport urllib.request\nprint(urllib.request.urlopen('https://example.com').read())\nEOF",
+             "echo \"import socket; socket.create_connection(('example.com', 80))\" | python3",
+             "node <<EOF\nfetch('https://example.com').then(r => r.text()).then(console.log)\nEOF",
+             // Destinations read from a file, where the URL scan can't see them.
+             "curl -K urls.txt http://localhost/", "curl --config=urls.txt", "wget -i urls.txt",
+             "wget --input-file=urls.txt",
+             // A host hidden behind credentials or a full path to the program.
+             "curl http://localhost@example.com/", "/usr/bin/curl -s https://example.com",
+             "\"C:\\Program Files\\curl\\curl.exe\" https://example.com",
+             // Other page fetchers.
+             "lynx -dump https://example.com", "w3m -dump https://example.com", "http GET https://example.com",
+             "wget2 https://example.com",
+             // A repository is a page too.
+             "git clone https://github.com/example/repo"}) {
+        const std::string why = webFetchRefusal(sh, {{"command", fetched}});
+        EXPECT_NE(why.find("Web access is off"), std::string::npos) << fetched << ": " << why;
+    }
+    for (const char* allowed : {
+             "python -m pip install -e . requests", "py -m pip install -e \".[httpx]\"",
+             "python -W ignore manage.py test requests", "python -c \"print(1 + 1)\"",
+             "node -e \"console.log(process.version)\"", "perl -ne 'print if /requests/' notes.txt",
+             "powershell -Command \"Get-ChildItem requests\"", "ruby -e 'puts File.read(\"Gemfile\")'",
+             "cat requirements.txt | grep requests", "curl -i http://localhost:13305/api/v1/health",
+             "wget -O out.html http://127.0.0.1:8000/", "git clone ../local-repo copy", "git status",
+             "echo http GET is a verb", "pip install httpie", "npm install axios"}) {
+        EXPECT_EQ(webFetchRefusal(sh, {{"command", allowed}}), "") << allowed;
+    }
+
+    // The internet switch shares the destinations-from-a-file rule, and still allows curl -i.
+    EXPECT_NE(internetRefusal(sh, {{"command", "curl -K urls.txt http://localhost/"}}), "");
+    EXPECT_EQ(internetRefusal(sh, {{"command", "curl -i http://localhost:13305/api/v1/health"}}), "");
+
+    // Long code attached to its flag is read without the pattern matcher recursing through it.
+    std::string longCode = "python -c\"import os";
+    for (int i = 0; i < 40; ++i) longCode += "\n" + std::string(1500, 'x');
+    longCode += "\nimport urllib\"";
+    EXPECT_NE(webFetchRefusal(sh, {{"command", longCode}}), "");
+}
+
 TEST(SplitShellCommandTest, SegmentsAndWords) {
     std::vector<std::vector<std::string>> s;
     ASSERT_TRUE(splitShellCommand("cd src && cat 'a b.txt' | wc -l; ls", true, s));
