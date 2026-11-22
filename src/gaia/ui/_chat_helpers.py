@@ -33,6 +33,7 @@ from typing import Any, Callable, ContextManager, Optional, Tuple
 
 from fastapi import HTTPException
 
+from gaia.agents.base.mood import MOODS
 from gaia.agents.install_hints import LEGACY_FLAGSHIP_AGENT_IDS
 from gaia.daemon.broker_client import BrokerUnavailableError, LeaseWaitCancelled
 from gaia.llm import lemonade_client as _lemonade_client_mod
@@ -5376,7 +5377,11 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                     fatal_error = event.get("content") or ""
                 elif event_type == "mood":
                     # The last one named is the reply's: earlier ones went with steps.
-                    gaia_mood = event.get("mood") or gaia_mood
+                    named = event.get("mood")
+                    if named in MOODS:
+                        gaia_mood = named
+                    else:
+                        logger.warning("Ignoring unknown mood %r from the agent", named)
 
                 # Capture agent steps for persistence
                 if event_type == "thinking":

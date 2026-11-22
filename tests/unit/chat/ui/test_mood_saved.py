@@ -113,3 +113,9 @@ async def test_a_message_saved_without_a_mood_reads_none(runtime):
 
     [saved] = runtime.get_messages(session["id"])
     assert saved["mood"] is None
+
+
+async def test_an_unknown_mood_is_not_saved(runtime):
+    sid, _ = await _run(runtime, ["love", "not-a-mood"])
+
+    assert runtime.get_messages(sid)[-1]["mood"] == "love"

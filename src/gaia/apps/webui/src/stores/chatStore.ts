@@ -550,7 +550,8 @@ export const useChatStore = create<ChatState>((set, get) => ({
     // Streaming
     isStreaming: false,
     streamingContent: '',
-    setStreaming: (streaming) => set({ isStreaming: streaming }),
+    // A new turn starts without the last reply's mood, so its eyes react to the new message.
+    setStreaming: (streaming) => set(streaming ? { isStreaming: true, gaiaMood: null } : { isStreaming: false }),
     setStreamContent: (content) => set({ streamingContent: content }),
     clearStreamContent: () => set({ streamingContent: '' }),
     resetStreaming: () => set({ isStreaming: false, streamingContent: '', agentSteps: [], cards: [], gaiaMood: null, liveStatus: null, livePhase: null, recordingStages: null, recordingSections: null, awaitingUser: false }),

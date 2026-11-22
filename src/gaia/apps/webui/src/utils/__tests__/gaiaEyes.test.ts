@@ -145,6 +145,14 @@ describe('finalGlyph', () => {
         expect(asksUser('A few things first:\n- Where to?\n- How many people?\n\nI will draft it after.')).toBe(true);
         expect(asksUser('Done? Yes.\n\nAll three files are saved.')).toBe(false);
         expect(asksUser('Why does it work? Caching.\n\nThat is all.')).toBe(false);
+        // A question, then an aside.
+        expect(asksUser('Where are you starting from?\n\nWhat is the best trip you have taken?\n\n(And good luck with the exam.)')).toBe(true);
+        expect(asksUser('Here is the summary.\n\nIt has three parts.\n\nThat is all.')).toBe(false);
+        // Code, links and headings ask nothing.
+        expect(asksUser('Search it here: https://example.com/find?q=cats')).toBe(false);
+        expect(asksUser('Use `a ? b : c` for that.')).toBe(false);
+        expect(asksUser('Run this:\n\n```sql\nSELECT * FROM t WHERE id = ?\n```')).toBe(false);
+        expect(asksUser('### Why does this happen?\n\nThe cache was cold.')).toBe(false);
     });
 
     it('draws every icon it can settle on', () => {

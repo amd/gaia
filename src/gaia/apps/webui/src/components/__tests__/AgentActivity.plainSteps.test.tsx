@@ -1,7 +1,9 @@
 // Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 // SPDX-License-Identifier: MIT
 
-import { fireEvent, render, screen, within } from '@testing-library/react';
+import { act, fireEvent, render, screen, within } from '@testing-library/react';
+import { useChatStore } from '../../stores/chatStore';
+import { LONGEST_MOOD_MS } from '../../utils/gaiaEyes';
 import { describe, expect, it, vi } from 'vitest';
 import {
     AgentActivity,
@@ -240,6 +242,23 @@ describe('plain step lines', () => {
         const glyph = container.querySelector('.flow-reasoning .step-glyph')!;
         expect(glyph.querySelector('.final-glyph')!.getAttribute('data-glyph')).toBe('heart');
         expect(glyph.classList.contains('is-settling')).toBe(true);
+    });
+
+    it("waits for GAIA's mood to finish before the eyes become the icon, so they are never in two places", () => {
+        vi.useFakeTimers();
+        try {
+            const thought = { id: 1, type: 'thinking', label: 'Thinking', detail: 'They were kind.', active: true, timestamp: Date.now() } as const;
+            const { container, rerender } = render(<AgentActivity steps={[thought]} isActive running />);
+            act(() => { useChatStore.getState().setGaiaMood('love'); });
+            // The mood plays on the live line; this row keeps the brain meanwhile.
+            rerender(<AgentActivity steps={[{ ...thought, active: false }]} isActive={false} running finalGlyph="heart" />);
+            expect(container.querySelector('.flow-reasoning .gaia-eyes')!.getAttribute('data-eyes')).toBe('brain');
+            act(() => { vi.advanceTimersByTime(LONGEST_MOOD_MS + 100); });
+            expect(container.querySelector('.flow-reasoning .final-glyph')!.getAttribute('data-glyph')).toBe('heart');
+        } finally {
+            act(() => { useChatStore.getState().resetStreaming(); });
+            vi.useRealTimers();
+        }
     });
 
     it('shows the final icon on a folded group that ends in the thought, in place of its check', () => {

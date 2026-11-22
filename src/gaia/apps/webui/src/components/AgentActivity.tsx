@@ -732,6 +732,11 @@ export function AgentActivity({ steps, isActive, running = isActive, awaitingUse
                     }
                     const open = openGroups.get(item.id) ?? (live || failed);
                     const shown = visible.filter(keep);
+                    // The step playing GAIA's mood is folded away: its group's icon plays it instead.
+                    const hostsMood = !open && hostId !== undefined && visible.some((r) => r.id === hostId);
+                    const done = i === lastIndex && spot.summary && finalGlyph !== 'brain'
+                        ? finalGlyph
+                        : <CheckCircle2 size={13} className="flow-steps-done" />;
                     return (
                         <div key={item.id} className={`flow-steps ${open ? 'open' : 'folded'} ${live ? 'live' : ''}`}>
                             {!live && (
@@ -744,9 +749,9 @@ export function AgentActivity({ steps, isActive, running = isActive, awaitingUse
                                         ? <AlertCircle size={13} className="agent-icon-error" />
                                         : visible.some((r) => r.type === 'tool' && (r.declined || r.refused || r.autoDeclined))
                                             ? <Ban size={13} className="flow-steps-done" />
-                                            : i === lastIndex && spot.summary && finalGlyph !== 'brain'
-                                                ? <StepGlyph live={false} phase="think" settled={finalGlyph} />
-                                                : <CheckCircle2 size={13} className="flow-steps-done" />}
+                                            : hostsMood || typeof done === 'string'
+                                                ? <StepGlyph live={false} phase="think" settled={done} host={hostsMood} />
+                                                : done}
                                     <span className="flow-steps-text">{stepsSummary(visible, t)}</span>
                                     <ChevronRight size={12} className={`flow-tool-chevron ${open ? 'expanded' : ''}`} />
                                 </button>

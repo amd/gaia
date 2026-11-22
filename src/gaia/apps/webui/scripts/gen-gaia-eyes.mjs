@@ -44,9 +44,9 @@ for (const name of ['ang', 'angs', 'sad', 'wor', 'dis']) {
 }
 
 /** A rectangular eye, `w` by `h`, moved `dx`,`dy` from its resting place. */
-const R = (w = 3, h = 5, dx = 0, dy = 0) => ({ rows: Array(h).fill('#'.repeat(w)), dx, dy });
+const R = (w = 3, h = 5, dx = 0, dy = 0) => ({ rows: Array(h).fill('#'.repeat(w)), dx, dy, rect: [w, h] });
 /** A shaped eye from SHAPES. */
-const S = (name, dx = 0, dy = 0) => ({ rows: SHAPES[name], dx, dy });
+const S = (name, dx = 0, dy = 0) => ({ rows: SHAPES[name], dx, dy, shape: name });
 /** A frame: the left eye, the right eye (the same when omitted), and loose pixels such as a tear. */
 const F = (left, right = left, px = []) => ({ eyes: [left, right ?? left], px });
 /** Both eyes the same shape. */
@@ -120,8 +120,11 @@ const BRAIN = [
 /** A frame with no eyes, only loose pixels. */
 const G = (px) => ({ eyes: [], px });
 /** `icon`'s pixels within `r` of either eye, moved `dy`: it grows out of the eyes. */
-const growFrom = (icon, r, dy = 0) => G(icon.flatMap((row, y) => [...row].flatMap((ch, x) =>
-    ch === '#' && HOME.some(([cx, cy]) => Math.hypot(x - cx, y - cy) <= r) ? [[x, y + dy]] : [])));
+const growFrom = (icon, r, dy = 0) => ({
+    ...G(icon.flatMap((row, y) => [...row].flatMap((ch, x) =>
+        ch === '#' && HOME.some(([cx, cy]) => Math.hypot(x - cx, y - cy) <= r) ? [[x, y + dy]] : []))),
+    grow: { icon, r, dy },
+});
 /** The eyes widen, close, and `icon` grows out of them, with a small settle. */
 const becomes = (icon) => ({
     fps: 16, loop: false, pose: -1,
@@ -770,24 +773,65 @@ export const STATES = {
     ...Object.fromEntries(Object.entries(ICONS).map(([name, icon]) => [name, becomes(icon)])),
 };
 
-/** The sheet as one bit per pixel (1 = eye), one variant per row of cells, plus where each sits. */
+/** Frames per row of the sheet. Animations run on from one row into the next, so no cell is wasted. */
+export const COLUMNS = 48;
+
+const mid = (a, b) => Math.round((a + b) / 2);
+
+/** An eye halfway between `a` and `b`: a rectangle's size and place, or a shape's place. Null when they don't blend. */
+function tweenEye(a, b) {
+    if (a.rect && b.rect) return R(mid(a.rect[0], b.rect[0]), mid(a.rect[1], b.rect[1]), mid(a.dx, b.dx), mid(a.dy, b.dy));
+    if (a.shape && a.shape === b.shape) return S(a.shape, mid(a.dx, b.dx), mid(a.dy, b.dy));
+    return null;
+}
+
+/** The frame halfway between `a` and `b`, or `a` again when they don't blend (a new shape, a falling tear). */
+function tween(a, b) {
+    if (a.grow && b.grow && a.grow.icon === b.grow.icon) {
+        return growFrom(a.grow.icon, (a.grow.r + b.grow.r) / 2, mid(a.grow.dy, b.grow.dy));
+    }
+    if (a.eyes.length !== 2 || b.eyes.length !== 2 || JSON.stringify(a.px) !== JSON.stringify(b.px)) return a;
+    const eyes = a.eyes.map((eye, i) => tweenEye(eye, b.eyes[i]));
+    return eyes.every(Boolean) ? F(eyes[0], eyes[1], a.px) : a;
+}
+
+/**
+ * Twice the frames at twice the rate: an in-between after every frame, so moves
+ * and blinks glide instead of jumping. Same length in time; a loop also blends
+ * its last frame back into its first, and a one-shot ends on its own last frame.
+ */
+export function smooth(frames, loop) {
+    const out = frames.flatMap((frame, i) => [frame, tween(frame, frames[i + 1] ?? frames[0])]);
+    return loop ? out : out.slice(0, -1);
+}
+
+/** The sheet as one bit per pixel (1 = eye), every animation's frames in a run of cells, plus where each starts. */
 export function buildSheet() {
-    const rows = Object.entries(STATES).flatMap(([state, { variants, ...rest }]) =>
-        variants.map((frames, i) => ({ name: i ? `${state}${i + 1}` : state, state, frames, ...rest })));
-    const width = Math.max(...rows.map((row) => row.frames.length)) * CELL;
-    const height = rows.length * CELL;
+    const runs = Object.entries(STATES).flatMap(([state, { variants, fps, loop, pose }]) =>
+        variants.map((frames, i) => ({
+            name: i ? `${state}${i + 1}` : state, state, frames: smooth(frames, loop), fps: fps * 2, loop,
+            // The still is the same frame as before smoothing; -1 is the last.
+            pose: 2 * ((pose + frames.length) % frames.length),
+        })));
+    const total = runs.reduce((sum, run) => sum + run.frames.length, 0);
+    const width = COLUMNS * CELL;
+    const height = Math.ceil(total / COLUMNS) * CELL;
     const pixels = new Uint8Array(width * height);
     const meta = {};
     const variants = {};
-    rows.forEach(({ name, state, frames, fps, loop, pose }, row) => {
+    let start = 0;
+    for (const { name, state, frames, fps, loop, pose } of runs) {
         frames.forEach((frame, i) => {
+            const cell = start + i;
+            const [cx, cy] = [(cell % COLUMNS) * CELL, Math.floor(cell / COLUMNS) * CELL];
             render(frame).forEach((line, y) => line.forEach((on, x) => {
-                if (on) pixels[(row * CELL + y) * width + i * CELL + x] = 1;
+                if (on) pixels[(cy + y) * width + cx + x] = 1;
             }));
         });
-        meta[name] = { row, frames: frames.length, fps, loop, pose: (pose + frames.length) % frames.length };
+        meta[name] = { start, frames: frames.length, fps, loop, pose };
         (variants[state] ??= []).push(name);
-    });
+        start += frames.length;
+    }
     return { width, height, pixels, meta, variants };
 }
 
@@ -858,7 +902,7 @@ export function decodePng(png) {
 /** The TypeScript table the component reads. */
 export function metaSource({ width, height, meta, variants }) {
     const rows = Object.entries(meta).map(([name, m]) =>
-        `    ${name}: { row: ${m.row}, frames: ${m.frames}, fps: ${m.fps}, loop: ${m.loop}, pose: ${m.pose} },`);
+        `    ${name}: { start: ${m.start}, frames: ${m.frames}, fps: ${m.fps}, loop: ${m.loop}, pose: ${m.pose} },`);
     const sets = Object.entries(variants).map(([state, names]) => `    ${state}: [${names.map((n) => `'${n}'`).join(', ')}],`);
     return `// Copyright(C) 2026 Advanced Micro Devices, Inc. All rights reserved.
 // SPDX-License-Identifier: MIT
@@ -866,12 +910,13 @@ export function metaSource({ width, height, meta, variants }) {
 // AUTO-GENERATED by scripts/gen-gaia-eyes.mjs — do not edit.
 // Regenerate from the repo root: ${REGENERATE_HINT}
 
-/** Pixels per frame, and the size of src/assets/gaia-eyes.png. */
+/** Pixels per frame, frames per row, and the size of src/assets/gaia-eyes.png. */
 export const EYES_CELL = ${CELL};
+export const EYES_COLUMNS = ${COLUMNS};
 export const EYES_SHEET_WIDTH = ${width};
 export const EYES_SHEET_HEIGHT = ${height};
 
-/** Where each animation sits on the sheet: its row, frame count, speed, and the still shown under reduced motion. */
+/** Where each animation sits on the sheet: its first cell (counted along the rows), frame count, speed, and the still shown under reduced motion. */
 export const EYES_ANIMATIONS = {
 ${rows.join('\n')}
 } as const;

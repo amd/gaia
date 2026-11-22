@@ -1,10 +1,10 @@
 // Copyright(C) 2026 Advanced Micro Devices, Inc. All rights reserved.
 // SPDX-License-Identifier: MIT
 
-import { useLayoutEffect, useRef, useState } from 'react';
+import { useLayoutEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { prefersReducedMotion } from '../utils/motion';
-import type { EyesGlyph, EyesMood, EyesPhase } from '../utils/gaiaEyes';
-import { EYES_ANIMATIONS, EYES_CELL, EYES_SHEET_HEIGHT, EYES_SHEET_WIDTH, EYES_VARIANTS, type EyesAnimation, type EyesState } from './gaiaEyesSheet';
+import { EYES_GLYPHS, type EyesGlyph, type EyesMood, type EyesPhase } from '../utils/gaiaEyes';
+import { EYES_ANIMATIONS, EYES_CELL, EYES_COLUMNS, EYES_SHEET_HEIGHT, EYES_SHEET_WIDTH, EYES_VARIANTS, type EyesAnimation, type EyesState } from './gaiaEyesSheet';
 import './GaiaEyes.css';
 
 /** A reaction to one message; `key` names that message, so a remount never replays it. */
@@ -31,6 +31,23 @@ function pickVariant(state: EyesState): EyesAnimation {
     lastPlayed.set(state, picked);
     return picked;
 }
+
+/**
+ * The one place GAIA's eyes are. Every pair showing the eyes themselves (not a
+ * settled icon) joins; the newest is shown and the rest step aside. An icon only
+ * grows out of the eyes when no other pair is on screen, else it simply appears.
+ */
+const stage = new Set<number>();
+let stageSeq = 0;
+const stageListeners = new Set<() => void>();
+const onStage = () => (stage.size ? Math.max(...stage) : 0);
+const nobody = () => 0;
+const stageChanged = () => stageListeners.forEach((listener) => listener());
+const watchStage = (listener: () => void) => {
+    stageListeners.add(listener);
+    return () => { stageListeners.delete(listener); };
+};
+const isGlyphState = (state: EyesState) => (EYES_GLYPHS as readonly string[]).includes(state);
 
 /** A state shown for less than this is replaced without a blink: it was never really seen. */
 const BLINK_AFTER_MS = 150;
@@ -76,6 +93,30 @@ export function GaiaEyes({ phase, reaction = null, holdReaction = false, still =
     const reacting = !!mood && (holdReaction || reactingTo === reactionKey);
     const state: EyesState = reacting ? mood : phase;
 
+    const isEyes = !still && !isGlyphState(state);
+    const seat = useRef(0);
+    useLayoutEffect(() => {
+        if (!isEyes) return;
+        const mine = ++stageSeq;
+        seat.current = mine;
+        stage.add(mine);
+        stageChanged();
+        return () => {
+            stage.delete(mine);
+            stageChanged();
+        };
+    }, [isEyes]);
+    // A still icon (an older reply's) never re-renders when the eyes move.
+    const shown = useSyncExternalStore(watchStage, still ? nobody : onStage, nobody);
+    const offstage = isEyes && shown !== 0 && shown !== seat.current;
+    // An icon that would grow while another pair plays just appears, and stays put.
+    // Checked once committed: on its first render the pair it grows from is still leaving.
+    const settledAs = useRef<EyesState | null>(null);
+    const committed = useRef(false);
+    useLayoutEffect(() => { committed.current = true; }, []);
+    if (!still && !isEyes && committed.current && shown !== 0 && shown !== seat.current) settledAs.current = state;
+    const rest = still || offstage || settledAs.current === state;
+
     useLayoutEffect(() => {
         const el = ref.current;
         if (!el) return;
@@ -85,7 +126,8 @@ export function GaiaEyes({ phase, reaction = null, holdReaction = false, still =
             el.dataset.variant = name;
         };
         const show = (frame: number) => {
-            const position = `${-frame * EYES_CELL}px ${-anim.row * EYES_CELL}px`;
+            const cell = anim.start + frame;
+            const position = `${-(cell % EYES_COLUMNS) * EYES_CELL}px ${-Math.floor(cell / EYES_COLUMNS) * EYES_CELL}px`;
             el.style.setProperty('-webkit-mask-position', position);
             el.style.setProperty('mask-position', position);
         };
@@ -97,13 +139,15 @@ export function GaiaEyes({ phase, reaction = null, holdReaction = false, still =
             && Date.now() - shownSince.current >= BLINK_AFTER_MS;
         if (shownState.current !== state) shownSince.current = Date.now();
         shownState.current = state;
-        if (changed && !still) {
+        if (changed && !rest) {
             el.classList.remove('is-swapping');
             void el.offsetWidth; // restart the blink when states change quickly
             el.classList.add('is-swapping');
         }
 
-        if (still) {
+        // Effects run after the leaving pair's cleanup, so the stage here is the real one.
+        if (!rest && !isEyes && onStage() !== 0) settledAs.current = state;
+        if (rest || settledAs.current === state) {
             play(EYES_VARIANTS[state][0]);
             show(anim!.pose);
             return;
@@ -126,12 +170,14 @@ export function GaiaEyes({ phase, reaction = null, holdReaction = false, still =
             play(pickVariant(state));
         }
         show(frame);
+        el.dataset.playing = '';
         const timer = window.setInterval(() => {
             frame += 1;
             if (frame >= anim.frames) {
                 if (!anim.loop) {
                     // A one-shot rests on its last frame.
                     window.clearInterval(timer);
+                    delete el.dataset.playing;
                     finish();
                     return;
                 }
@@ -141,8 +187,11 @@ export function GaiaEyes({ phase, reaction = null, holdReaction = false, still =
             }
             show(frame);
         }, 1000 / anim!.fps);
-        return () => window.clearInterval(timer);
-    }, [state, reacting, holdReaction, reactionKey, still]);
+        return () => {
+            window.clearInterval(timer);
+            delete el.dataset.playing;
+        };
+    }, [state, reacting, holdReaction, reactionKey, rest]);
 
     const size = `${EYES_SHEET_WIDTH}px ${EYES_SHEET_HEIGHT}px`;
     return (
@@ -150,6 +199,7 @@ export function GaiaEyes({ phase, reaction = null, holdReaction = false, still =
             ref={ref}
             className="gaia-eyes"
             data-eyes={state}
+            data-offstage={offstage ? '' : undefined}
             aria-hidden="true"
             style={{ WebkitMaskSize: size, maskSize: size }}
             onAnimationEnd={(e) => { if (e.animationName === 'eyesSwap') e.currentTarget.classList.remove('is-swapping'); }}

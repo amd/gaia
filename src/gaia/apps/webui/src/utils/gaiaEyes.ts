@@ -31,18 +31,28 @@ const GLYPH_FOR: Partial<Record<EyesMood, EyesGlyph>> = {
     worried: 'cloud', disgusted: 'cloud', embarrassed: 'cloud',
     hopeful: 'sprout',
     calm: 'moon', sleepy: 'moon', goodbye: 'moon',
-    relieved: 'check', nod: 'check',
+    relieved: 'check',
 };
+
+const ENDS_ASKING = /[?؟]["'”’)\]*_\s]*$/;
 
 /**
  * True when a reply leaves the user something to answer: its last paragraph
- * asks a question, or it lists questions, one per line.
+ * asks a question, the one before ends on one (an aside may follow), or it
+ * lists questions, one per line. Code, links and headings ask nothing.
  */
 export function asksUser(answer: string): boolean {
-    const text = answer.trim();
-    const last = text.split(/\n\s*\n/).pop() ?? '';
-    if (/[?؟]/.test(last)) return true;
-    return text.split('\n').filter((line) => /[?؟]["'”’)\]*_\s]*$/.test(line.trim())).length >= 2;
+    const text = answer
+        .replace(/```[\s\S]*?(```|$)/g, '')
+        .replace(/`[^`\n]*`/g, '')
+        .replace(/\bhttps?:\/\/\S+/g, '')
+        .replace(/^\s{0,3}#{1,6}\s.*$/gm, '')
+        .replace(/\n{3,}/g, '\n\n')
+        .trim();
+    const paragraphs = text.split(/\n\s*\n/);
+    if (/[?؟]/.test(paragraphs[paragraphs.length - 1] ?? '')) return true;
+    if (paragraphs.length > 1 && ENDS_ASKING.test(paragraphs[paragraphs.length - 2].trim())) return true;
+    return text.split('\n').filter((line) => ENDS_ASKING.test(line.trim())).length >= 2;
 }
 
 /** Reactions too strong for a closing question to replace: what she felt is the message. */

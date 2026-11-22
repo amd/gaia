@@ -24,6 +24,11 @@
     scale: -1 1;
 }
 
+/* Another pair of eyes is on screen: this one keeps its spot, unseen. */
+.gaia-eyes[data-offstage] {
+    visibility: hidden;
+}
+
 /* A check mark and a music note read the same in either direction, so they never flip. */
 :root[dir="rtl"] .gaia-eyes:is([data-eyes="check"], [data-eyes="note"]) {
     scale: none;

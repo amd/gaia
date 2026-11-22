@@ -30,8 +30,8 @@ function useUntil(deadline: number): boolean {
 }
 
 /** GAIA's own mood as a reaction for her eyes, for as long as it takes to play; null before and after. */
-export function usePlayingMood(): EyesReaction | null {
-    const gaiaMood = useChatStore((s) => s.gaiaMood);
+export function usePlayingMood(wanted = true): EyesReaction | null {
+    const gaiaMood = useChatStore((s) => (wanted ? s.gaiaMood : null));
     const playing = useUntil(gaiaMood ? gaiaMood.at + LONGEST_MOOD_MS : 0);
     return useMemo(
         () => (gaiaMood && playing ? { mood: gaiaMood.mood, key: `gaia|${gaiaMood.at}`, at: gaiaMood.at } : null),
@@ -89,18 +89,23 @@ export function StepGlyph({ live, phase, settled, host = false }: {
     settled: EyesGlyph | ReactNode;
     host?: boolean;
 }) {
-    const mood = usePlayingMood();
     const hadEyes = useRef(false);
-    const [endedAt, setEndedAt] = useState(0);
+    // Only this turn's rows care about the mood; older ones never re-render for it.
+    const mood = usePlayingMood(live || host || hadEyes.current);
+    // Noted in render, so the frame where the step ends already shows the grace eyes.
+    const endedAt = useRef(0);
     const wasLive = useRef(live);
-    useEffect(() => {
-        if (wasLive.current && !live) setEndedAt(Date.now());
-        wasLive.current = live;
-    }, [live]);
-    const inGrace = useUntil(host && endedAt ? endedAt + MOOD_GRACE_MS : 0);
+    if (wasLive.current && !live) endedAt.current = Date.now();
+    wasLive.current = live;
+    const inGrace = useUntil(host && endedAt.current ? endedAt.current + MOOD_GRACE_MS : 0);
+    // This turn's icon waits for GAIA's mood to finish playing, so the eyes are never in two places.
+    const lastGlyph = useRef<EyesGlyph | null>(null);
+    const waits = isGlyph(settled) && settled !== 'brain' && !!mood && !host;
+    const target = waits ? (lastGlyph.current ?? 'brain') : settled;
+    if (isGlyph(target)) lastGlyph.current = target;
     // An icon that changes while in view (the brain becoming a question mark) plays its change.
-    const firstGlyph = useRef(isGlyph(settled) ? settled : null);
-    const changedGlyph = isGlyph(settled) && firstGlyph.current !== null && settled !== firstGlyph.current;
+    const firstGlyph = useRef(isGlyph(target) ? target : null);
+    const changedGlyph = isGlyph(target) && firstGlyph.current !== null && target !== firstGlyph.current;
 
     let content: ReactNode;
     let eyes = true;
@@ -112,14 +117,14 @@ export function StepGlyph({ live, phase, settled, host = false }: {
         content = <GaiaEyes phase="think" />;
     } else {
         eyes = false;
-        content = isGlyph(settled) ? <Glyph glyph={settled} still={!hadEyes.current && !changedGlyph} /> : settled;
+        content = isGlyph(target) ? <Glyph glyph={target} still={!hadEyes.current && !changedGlyph} /> : target;
     }
     const settling = !eyes && hadEyes.current;
     if (eyes) hadEyes.current = true;
 
     return (
         // The eyes and a step's own icon are decoration; an icon GAIA's eyes became says something.
-        <span className={`step-glyph${eyes ? ' is-live' : ''}${settling ? ' is-settling' : ''}`} aria-hidden={!eyes && isGlyph(settled) && settled !== 'brain' ? undefined : true}>
+        <span className={`step-glyph${eyes ? ' is-live' : ''}${settling ? ' is-settling' : ''}`} aria-hidden={!eyes && isGlyph(target) && target !== 'brain' ? undefined : true}>
             {content}
         </span>
     );
@@ -137,8 +142,7 @@ export function MoodEyes({ glyph = 'brain', playMood = true }: {
     playMood?: boolean;
 }) {
     const hosted = useContext(MoodHostContext);
-    const current = usePlayingMood();
-    const playing = playMood ? current : null;
+    const playing = usePlayingMood(playMood);
     const [shown, setShown] = useState<EyesReaction | null>(null);
     const keeps = glyph !== 'brain';
     useEffect(() => {

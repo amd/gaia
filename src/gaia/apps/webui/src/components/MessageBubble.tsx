@@ -660,6 +660,9 @@ export function MessageBubble({ message, isStreaming, agentSteps, agentStepsActi
     const final = message.role === 'assistant' && !isError
         ? finalGlyph(isStreaming ? liveMood : message.mood, isStreaming ? '' : cleanedContent)
         : 'brain';
+    // Where this turn's mood and icon live: on its last thought, or on a line of their own.
+    // Decided once, so nothing appears or moves when the reply finishes.
+    const finalOnTimeline = useMemo(() => timelineShowsFinalGlyph(echo.steps ?? [], cleanedContent), [echo.steps, cleanedContent]);
     const hasAnswerText = Boolean(cleanedContent.trim()) && !(stopState && cleanedContent.trim() === SERVER_CANCELLED_TEXT);
     const summaryFiles = message.turnSummary?.files;
     const writtenFiles = useMemo(() => summaryFiles?.map((f) => f.path) ?? [], [summaryFiles]);
@@ -834,11 +837,11 @@ export function MessageBubble({ message, isStreaming, agentSteps, agentStepsActi
                                 <ThinkingIndicator active={!!agentStepsActive || !cleanedContent} label={liveStatus} awaitingUser={awaitingUser} glyph={final} />
                             )}
                             // Only once the live line is gone: while it shows, it has the eyes.
-                            moodHost={isStreaming ? !agentStepsActive && !!cleanedContent : latest}
+                            moodHost={finalOnTimeline && (isStreaming ? !agentStepsActive && !!cleanedContent : latest)}
                             finalGlyph={final}
                         />
                     )}
-                    {message.role === 'assistant' && !isStreaming && !timelineShowsFinalGlyph(echo.steps ?? [], cleanedContent) && (
+                    {message.role === 'assistant' && !isStreaming && !finalOnTimeline && (
                         <MoodEyes glyph={final} playMood={latest} />
                     )}
                     {isError && (

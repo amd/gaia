@@ -7,9 +7,11 @@ import { act, render } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { GaiaEyes } from '../GaiaEyes';
 import { MessageBubble } from '../MessageBubble';
+import { AgentActivity } from '../AgentActivity';
+import { StepGlyph } from '../StepGlyph';
 import { useChatStore } from '../../stores/chatStore';
 import type { Message } from '../../types';
-import { EYES_ANIMATIONS, EYES_CELL, EYES_VARIANTS } from '../gaiaEyesSheet';
+import { EYES_ANIMATIONS, EYES_CELL, EYES_COLUMNS, EYES_VARIANTS } from '../gaiaEyesSheet';
 import { LONGEST_MOOD_MS } from '../../utils/gaiaEyes';
 
 type Name = keyof typeof EYES_ANIMATIONS;
@@ -27,7 +29,10 @@ const eyes = (c: HTMLElement) => c.querySelector<HTMLElement>('.gaia-eyes')!;
 const shown = (c: HTMLElement) => eyes(c).style.getPropertyValue('mask-position');
 /** The variation being played, which the eyes pick themselves. */
 const variant = (c: HTMLElement) => eyes(c).dataset.variant as Name;
-const at = (name: Name, frame: number) => `${-frame * EYES_CELL}px ${-EYES_ANIMATIONS[name].row * EYES_CELL}px`;
+const at = (name: Name, frame: number) => {
+    const cell = EYES_ANIMATIONS[name].start + frame;
+    return `${-(cell % EYES_COLUMNS) * EYES_CELL}px ${-Math.floor(cell / EYES_COLUMNS) * EYES_CELL}px`;
+};
 const frameMs = (name: Name) => 1000 / EYES_ANIMATIONS[name].fps;
 const lengthMs = (name: Name) => EYES_ANIMATIONS[name].frames * frameMs(name);
 /** Long enough for any variation of a one-shot state to finish. */
@@ -228,7 +233,7 @@ describe('the eyes in the live status line', () => {
             <MessageBubble message={message({ id: 2, role: 'assistant', content: 'I am so sorry.' })} latest />,
         );
         expect(eyes(container).dataset.eyes).toBe('sad');
-        expect(shown(container)).toBe(at(variant(container), 5));
+        expect(shown(container)).toBe(at(variant(container), (500 * EYES_ANIMATIONS[variant(container)].fps) / 1000));
         act(() => { vi.advanceTimersByTime(LONGEST_MOOD_MS); });
         act(() => { vi.advanceTimersByTime(400); });
         expect(container.querySelector('.gaia-eyes')).toBeNull();
@@ -299,5 +304,90 @@ describe('the eyes in the live status line', () => {
         expect(eyes(container).dataset.eyes).toBe('relieved');
         act(() => { vi.advanceTimersByTime(longestMs('relieved') + 1); });
         expect(eyes(container).dataset.eyes).toBe('think');
+    });
+
+    const visiblePairs = (c: HTMLElement) => c.querySelectorAll('.gaia-eyes:not([data-offstage])').length;
+    const call = { id: 1, type: 'tool' as const, label: 'read_file', tool: 'read_file', detail: 'Reading file: notes.txt', active: false, success: true, timestamp: Date.now() };
+    const thought = (id: number) => ({ id, type: 'thinking' as const, label: 'Thinking', detail: 'Three dates.', active: false, timestamp: Date.now() });
+
+    it('play the mood in one visible spot when the turn ended on a tool call, with no hidden icon', () => {
+        useChatStore.setState({ messages: [message({ content: 'my dog died this morning' })] });
+        act(() => { useChatStore.getState().setGaiaMood('sad'); });
+        const { container } = render(
+            <MessageBubble message={message({ id: 2, role: 'assistant', content: 'I am so sorry.', mood: 'sad' })} agentSteps={[call]} latest />,
+        );
+        expect(visiblePairs(container)).toBe(1);
+        expect(container.querySelector('.gaia-eyes[data-offstage]')).toBeNull();
+        expect(container.querySelector('.mood-line .gaia-eyes')!.getAttribute('data-eyes')).toBe('sad');
+        // The tool keeps its own icon throughout.
+        expect(container.querySelector('.flow-tool .gaia-eyes')).toBeNull();
+    });
+
+    it('play the mood to its end on the icon of a folded group that ends on a thought', () => {
+        useChatStore.setState({ messages: [message({ content: 'read the notes' })] });
+        act(() => { useChatStore.getState().setGaiaMood('nod'); });
+        const { container } = render(
+            <MessageBubble message={message({ id: 2, role: 'assistant', content: 'The notes list three dates.' })} agentSteps={[call, thought(2)]} latest />,
+        );
+        expect(container.querySelector('.flow-steps-summary .gaia-eyes')!.getAttribute('data-eyes')).toBe('nod');
+        expect(visiblePairs(container)).toBe(1);
+        act(() => { vi.advanceTimersByTime(LONGEST_MOOD_MS + 100); });
+        // A quiet reply: back to the group's check.
+        expect(container.querySelector('.flow-steps-summary .gaia-eyes')).toBeNull();
+        expect(container.querySelector('.flow-steps-summary .lucide-circle-check')).not.toBeNull();
+    });
+});
+
+describe('a step that ends', () => {
+    it('grows its brain out of the eyes, rather than the brain just appearing', () => {
+        const step = (active: boolean) => <AgentActivity steps={[{ id: 1, type: 'thinking', label: 'Thinking', detail: 'Hm.', active, timestamp: Date.now() }]} isActive={active} running />;
+        const { container, rerender } = render(step(true));
+        rerender(step(false));
+        const brain = container.querySelector('.flow-reasoning .gaia-eyes')!;
+        expect(brain.getAttribute('data-eyes')).toBe('brain');
+        expect('playing' in (brain as HTMLElement).dataset).toBe(true);
+    });
+
+    it('keeps the eyes on the very frame a mood-hosting step ends, never flashing its icon', () => {
+        act(() => { useChatStore.getState().setGaiaMood('nod'); });
+        act(() => { vi.advanceTimersByTime(LONGEST_MOOD_MS + 100); });
+        const step = (live: boolean) => <StepGlyph live={live} phase="tool" settled={<svg className="flow-tool-icon" />} host />;
+        const { container, rerender } = render(step(true));
+        rerender(step(false));
+        expect(container.querySelector('.flow-tool-icon')).toBeNull();
+        expect(container.querySelector('.gaia-eyes')).not.toBeNull();
+    });
+});
+
+describe('one pair of eyes on screen', () => {
+    it('shows only the newest pair; the other keeps its spot unseen and stops', () => {
+        const first = render(<GaiaEyes phase="think" />);
+        expect(eyes(first.container).dataset.offstage).toBeUndefined();
+        const second = render(<GaiaEyes phase="read" />);
+        expect(eyes(second.container).dataset.offstage).toBeUndefined();
+        expect(eyes(first.container).dataset.offstage).toBe('');
+        expect('playing' in eyes(first.container).dataset).toBe(false);
+        second.unmount();
+        // Back on stage once the other pair is gone.
+        expect(eyes(first.container).dataset.offstage).toBeUndefined();
+        expect('playing' in eyes(first.container).dataset).toBe(true);
+    });
+
+    it('lets an icon appear without growing out of eyes while eyes play elsewhere', () => {
+        render(<GaiaEyes phase="think" />);
+        const icon = render(<GaiaEyes phase="heart" />);
+        expect('playing' in eyes(icon.container).dataset).toBe(false);
+        expect(eyes(icon.container).dataset.offstage).toBeUndefined();
+    });
+
+    it('grows an icon out of the eyes when no other pair is on screen', () => {
+        const icon = render(<GaiaEyes phase="heart" />);
+        expect('playing' in eyes(icon.container).dataset).toBe(true);
+    });
+
+    it("starts a new turn without the last reply's mood", () => {
+        act(() => { useChatStore.getState().setGaiaMood('sad'); });
+        act(() => { useChatStore.getState().setStreaming(true); });
+        expect(useChatStore.getState().gaiaMood).toBeNull();
     });
 });

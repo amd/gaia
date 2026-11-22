@@ -7,9 +7,9 @@ import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import committedMeta from '../gaiaEyesSheet.ts?raw';
 import eyesCss from '../GaiaEyes.css?raw';
-import { EYES_ANIMATIONS, EYES_CELL, EYES_SHEET_HEIGHT, EYES_SHEET_WIDTH, EYES_VARIANTS } from '../gaiaEyesSheet';
+import { EYES_ANIMATIONS, EYES_CELL, EYES_COLUMNS, EYES_SHEET_HEIGHT, EYES_SHEET_WIDTH, EYES_VARIANTS } from '../gaiaEyesSheet';
 import { EYES_MOODS, MATCHED_MOODS, asEyesMood } from '../../utils/gaiaEyes';
-import { REGENERATE_HINT, SHEET_PATH, buildSheet, decodePng, encodePng, metaSource } from '../../../scripts/gen-gaia-eyes.mjs';
+import { REGENERATE_HINT, SHEET_PATH, buildSheet, decodePng, smooth, encodePng, metaSource } from '../../../scripts/gen-gaia-eyes.mjs';
 
 const stale = `GAIA's eye sprite is stale. Regenerate it: ${REGENERATE_HINT}`;
 
@@ -32,11 +32,18 @@ describe("GAIA's eye sprite sheet", () => {
     });
 
     it('fits every animation inside the sheet, with a real still for reduced motion', () => {
-        expect(EYES_SHEET_HEIGHT).toBe(Object.keys(EYES_ANIMATIONS).length * EYES_CELL);
+        const cells = (EYES_SHEET_WIDTH / EYES_CELL) * (EYES_SHEET_HEIGHT / EYES_CELL);
+        expect(EYES_SHEET_WIDTH).toBe(EYES_COLUMNS * EYES_CELL);
+        let next = 0;
         for (const [name, anim] of Object.entries(EYES_ANIMATIONS)) {
-            expect(anim.frames * EYES_CELL, name).toBeLessThanOrEqual(EYES_SHEET_WIDTH);
+            // Packed end to end, none overlapping.
+            expect(anim.start, name).toBe(next);
+            next += anim.frames;
             expect(anim.pose, name).toBeLessThan(anim.frames);
         }
+        expect(next).toBeLessThanOrEqual(cells);
+        // Less than one row of cells left over.
+        expect(cells - next).toBeLessThan(EYES_COLUMNS);
     });
 
     it('draws something in every frame, so the eyes never vanish mid-animation', () => {
@@ -45,12 +52,25 @@ describe("GAIA's eye sprite sheet", () => {
                 let lit = 0;
                 for (let y = 0; y < EYES_CELL; y++) {
                     for (let x = 0; x < EYES_CELL; x++) {
-                        lit += sheet.pixels[(anim.row * EYES_CELL + y) * sheet.width + frame * EYES_CELL + x];
+                        const cell = anim.start + frame;
+                        const [cx, cy] = [(cell % EYES_COLUMNS) * EYES_CELL, Math.floor(cell / EYES_COLUMNS) * EYES_CELL];
+                        lit += sheet.pixels[(cy + y) * sheet.width + cx + x];
                     }
                 }
                 expect(lit, `${name} frame ${frame}`).toBeGreaterThan(0);
             }
         }
+    });
+
+    it('glides between poses with an in-between frame', () => {
+        const eye = (w: number, h: number, dx: number, dy: number) => ({ rows: Array(h).fill('#'.repeat(w)), dx, dy, rect: [w, h] });
+        const frame = (e: ReturnType<typeof eye>) => ({ eyes: [e, e], px: [] });
+        const [a, between, b] = smooth([frame(eye(3, 5, 0, 0)), frame(eye(5, 1, 0, -4))], false);
+        expect(between.eyes[0]).toMatchObject({ rect: [4, 3], dx: 0, dy: -2 });
+        // A one-shot ends on its own last frame; a loop blends back into its first.
+        expect(b).toEqual(frame(eye(5, 1, 0, -4)));
+        expect(a).toEqual(frame(eye(3, 5, 0, 0)));
+        expect(smooth([frame(eye(3, 5, 0, 0)), frame(eye(3, 5, 0, -4))], true)).toHaveLength(4);
     });
 
     it('loops only the states where GAIA is working', () => {
