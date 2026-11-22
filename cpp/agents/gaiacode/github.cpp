@@ -516,9 +516,16 @@ void registerGitHubTools(ToolRegistry& registry, std::function<std::string()> fo
                     break;
                 }
             }
-            // Older CI (and some apps) report commit statuses, not check runs.
-            for (const auto& st : api.get("/repos/" + r.slug() + "/commits/" + sha + "/status")
-                                      .value("statuses", json::array())) {
+            // Older CI (and some apps) report commit statuses, not check runs. A token allowed to read
+            // checks but not statuses still gets the checks, told what it couldn't see.
+            json statuses = json::array();
+            std::string statusesUnavailable;
+            try {
+                statuses = api.get("/repos/" + r.slug() + "/commits/" + sha + "/status").value("statuses", json::array());
+            } catch (const std::exception& e) {
+                statusesUnavailable = e.what();
+            }
+            for (const auto& st : statuses) {
                 const std::string state = str(st, "state");
                 if (state == "failure" || state == "error") ++failing;
                 checks.push_back({{"name", str(st, "context")}, {"status", state == "pending" ? "in_progress" : "completed"},
@@ -527,6 +534,10 @@ void registerGitHubTools(ToolRegistry& registry, std::function<std::string()> fo
             }
             json out = {{"status", "success"}, {"head_sha", sha}, {"failing", failing}, {"checks", checks}};
             if (!complete) out["checks_truncated"] = true;
+            if (!statusesUnavailable.empty()) {
+                out["statuses_unavailable"] = "Commit statuses couldn't be read, so older CI may be missing: " +
+                                              statusesUnavailable;
+            }
             return out;
         }));
 
