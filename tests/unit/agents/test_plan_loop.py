@@ -587,13 +587,14 @@ def test_a_streamed_answer_that_opens_with_a_plan_is_shown_whole():
 # -- the hint with each request, and a plan that opens a final answer ----------
 
 
-def test_the_hint_goes_with_the_request_but_not_into_the_saved_history():
+def test_the_hint_is_recorded_with_the_request():
+    # Recorded so the next request resends it exactly; the hub's prefix-stability
+    # tests check the full replay on the flagship.
     agent, _ = _agent()
     sent = _script(agent, [_calls(READ), "It says hello."])
     agent.process_query("what is in notes.txt?")
-    assert PLAN_HINT in sent[0][-1]["content"]
-    saved = [m for m in agent.conversation_history if m.get("role") == "user"]
-    assert all(PLAN_HINT not in str(m.get("content")) for m in saved)
+    assert sent[0][-1]["content"].endswith(PLAN_HINT)
+    assert sent[-1][0]["content"].endswith(PLAN_HINT)
 
 
 def test_no_hint_when_plans_are_off_or_only_a_plan_was_asked_for(monkeypatch):

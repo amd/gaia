@@ -5727,13 +5727,13 @@ Do NOT wrap conversational replies in JSON.
             and not self._plan_asked
         )
 
-    def _tell_plan_hint(self, messages: List[Dict]) -> None:
-        """Remind the model of the plan with its request; the saved history keeps the user's words."""
-        if self._plan_tracker() is None:
-            return
-        request = messages[-1]
-        if isinstance(request.get("content"), str):
-            request["content"] += PLAN_HINT
+    def _plan_hint(self) -> str:
+        """The plan reminder sent with the request.
+
+        Recorded with it too, unlike the one-shot notes: the next request must
+        resend this one exactly, or the server's prompt cache is lost.
+        """
+        return PLAN_HINT if self._plan_tracker() is not None else ""
 
     def _without_plan(self, text: Any) -> Any:
         """*text* as the user sees it: the task list already shows the plan."""
@@ -13933,11 +13933,13 @@ Do NOT wrap conversational replies in JSON.
         conversation.append({"role": "user", "content": user_input})
         messages.recorded.clear()
         messages.append(
-            {"role": "user", "content": self._with_long_message_file(user_input)}
+            {
+                "role": "user",
+                "content": self._with_long_message_file(user_input) + self._plan_hint(),
+            }
         )
         self._tell_no_one_to_ask(messages)
         self._tell_time_budget(messages)
-        self._tell_plan_hint(messages)
 
         # Use provided max_steps or fall back to class default
         steps_limit = max_steps if max_steps is not None else self.max_steps
