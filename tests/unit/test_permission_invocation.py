@@ -5,6 +5,7 @@
 from gaia.ui.sse_translation import (
     INVOCATION_TOTAL_CHARS,
     CanonicalTranslator,
+    render_command_summary,
     render_invocation,
 )
 
@@ -131,3 +132,90 @@ class TestCalendarSummary:
             notify_attendees=[],
         )
         assert summary.splitlines()[-1] == "Notifies: nobody"
+
+
+class TestLookAlikeNamesInTheTerminalCard:
+    """The TUI shows only the summary, so a joiner in a name must read as a code."""
+
+    ZWJ = "\u200d"
+
+    def _summary(self, tool, **args):
+        [event] = CanonicalTranslator(run_id="r", agent_id="gaia").translate(
+            {"type": "permission_request", "tool": tool, "args": args}
+        )
+        return event["summary"]
+
+    def test_a_joiner_in_a_written_path_shows_as_a_code(self):
+        summary = self._summary(
+            "write_file", file_path=f"inv{self.ZWJ}oice.txt", content="x"
+        )
+        assert "inv[U+200D]oice.txt" in summary
+        assert self.ZWJ not in summary
+
+    def test_marks_and_selectors_in_a_url_show_as_codes(self):
+        summary = self._summary(
+            "fetch_page", url="https://exa\u200emple.com/a\ufe0f", note="ok"
+        )
+        assert "exa[U+200E]mple.com/a[U+FE0F]" in summary
+
+    def test_a_path_access_question_codes_the_path(self):
+        summary = self._summary(
+            "allow_path_access", path=f"C:/inv{self.ZWJ}oice", kind="folder"
+        )
+        assert "C:/inv[U+200D]oice" in summary
+        assert self.ZWJ not in summary
+
+    def test_a_trusted_folder_and_its_files_are_coded(self):
+        summary = self._summary(
+            "trust_project_folder",
+            folder=f"C:/pro{self.ZWJ}j",
+            files=[f"AGENTS{self.ZWJ}.md"],
+        )
+        assert "C:/pro[U+200D]j" in summary
+        assert "AGENTS[U+200D].md" in summary
+
+    def test_a_joiner_in_a_shell_program_and_its_folder_is_coded(self):
+        summary = self._summary(
+            "run_shell_command",
+            command=f"g{self.ZWJ}it status",
+            working_directory=f"/tmp/re{self.ZWJ}po",
+        )
+        assert "g[U+200D]it status" in summary
+        assert "re[U+200D]po" in summary
+        assert self.ZWJ not in summary
+
+    def test_an_unvetted_command_keeps_its_lines_but_codes_joiners(self):
+        summary = render_command_summary(
+            "run_shell_command",
+            {
+                "command": f"echo a\ng{self.ZWJ}it push",
+                "working_directory": "/w",
+                "_risk_note": "unchecked",
+            },
+            workspace="/w",
+        )
+        assert summary.startswith("echo a\ng[U+200D]it push\nin /w")
+
+    def test_a_script_path_is_coded(self):
+        summary = render_command_summary(
+            "execute_python_file", {"file_path": f"/w/ru{self.ZWJ}n.py"}, workspace="/w"
+        )
+        assert "ru[U+200D]n.py" in summary
+
+    def test_a_bidi_override_in_any_one_line_value_is_coded(self):
+        assert render_invocation({"query": "abc\u202edef"}) == 'query="abc[U+202E]def"'
+
+    def test_emoji_and_persian_in_prose_values_still_read(self):
+        family = "\U0001f468\u200d\U0001f469\u200d\U0001f467"
+        persian = "\u0645\u06cc\u200c\u062e\u0648\u0627\u0647\u0645"
+        assert render_invocation({"message": f"{family} {persian}"}) == (
+            f'message="{family} {persian}"'
+        )
+
+    def test_a_plain_name_is_unchanged(self):
+        assert render_invocation(
+            {"file_path": "C:/notes/caf\u00e9 \u65e5\u672c.txt"}
+        ) == ('file_path="C:/notes/caf\u00e9 \u65e5\u672c.txt"')
+
+    def test_a_joiner_in_an_argument_name_is_coded(self):
+        assert render_invocation({f"pa{self.ZWJ}th": "a"}) == 'pa[U+200D]th="a"'
