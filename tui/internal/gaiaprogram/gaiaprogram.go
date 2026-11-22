@@ -5,7 +5,7 @@
 // `gaia` CLI (`gaia agent-program status|download --json`).
 //
 // It shells out for the reason gaiamodel does: the release lookup, the
-// checksum check and the install live in gaia.daemon.sidecars.native_fetch,
+// checksum check and the install live in gaia.daemon.sidecars.gaiacpp_fetch,
 // which the Agent UI uses too, so a Go copy would drift from both.
 package gaiaprogram
 

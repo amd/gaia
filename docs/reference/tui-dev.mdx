@@ -101,7 +101,7 @@ A `gaiacpp` that is missing (`catalog.MissingProgramError`) or fails its check
 (`catalog.NativeIntegrityError`) is offered as a download rather than refused
 (`internal/ui/root/programfetch.go`). The terminal UI does not fetch it itself:
 `internal/gaiaprogram` shells out to the hidden `gaia agent-program` command,
-which wraps `gaia.daemon.sidecars.native_fetch`, the code behind the Agent UI's
+which wraps `gaia.daemon.sidecars.gaiacpp_fetch`, the code behind the Agent UI's
 `/api/agent-programs` routes. One implementation owns the release lookup, the
 checksum check, the version check and the install record.
 
