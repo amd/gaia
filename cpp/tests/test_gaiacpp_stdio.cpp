@@ -786,7 +786,7 @@ TEST_F(GaiacppStdio, ALongWritePromptCountsTheLinesItLeavesOut) {
     ASSERT_TRUE(waitTerminal(1).is_object());
 }
 
-TEST_F(GaiacppStdio, AWritePromptShowsHiddenTextAsEscapesAndCountsACutLine) {
+TEST_F(GaiacppStdio, AWritePromptShowsHiddenTextAsCodesAndCountsACutLine) {
     // An ESC sequence could repaint the card and a bidi override reorder it.
     const std::string content = "ok\x1b[2Ksneaky\nabc\xE2\x80\xAE" "cba\n" + std::string(250, 'x') + "\n";
     const fs::path out = work_ / "odd.txt";
@@ -798,10 +798,83 @@ TEST_F(GaiacppStdio, AWritePromptShowsHiddenTextAsEscapesAndCountsACutLine) {
     ASSERT_TRUE(prompt.is_object());
     const std::string summary = prompt.value("summary", "");
     EXPECT_EQ(summary.find('\x1b'), std::string::npos) << summary;
-    EXPECT_NE(summary.find("    ok\\x1b[2Ksneaky\n"), std::string::npos) << summary;
-    EXPECT_NE(summary.find("abc\\u202ecba"), std::string::npos) << summary;
+    EXPECT_NE(summary.find("    ok[U+001B][2Ksneaky\n"), std::string::npos) << summary;
+    EXPECT_NE(summary.find("abc[U+202E]cba"), std::string::npos) << summary;
     EXPECT_NE(summary.find("    " + std::string(200, 'x') + "… [+50 more characters not shown]"), std::string::npos)
         << summary;
+    decide("deny", prompt["confirm_id"]);
+    ASSERT_TRUE(waitTerminal(1).is_object());
+}
+
+// A zero-width space would make "inv" + U+200B + "oice.txt" read as invoice.txt.
+TEST_F(GaiacppStdio, AZeroWidthCharacterInAPathShowsAsACode) {
+    const std::string start_of_path = (work_ / "inv").string();
+    mock_.pushResponse(
+        toolCall("file_write", {{"path", start_of_path + "\xE2\x80\x8B" "oice.txt"}, {"content", "hi"}}));
+    mock_.pushResponse(answer("Not written."));
+    start();
+    ask("write it");
+    const json prompt = waitFor("needs_confirmation");
+    ASSERT_TRUE(prompt.is_object());
+    EXPECT_EQ(prompt["summary"], start_of_path + "[U+200B]oice.txt\n\nWhat will be saved:\n    hi");
+    decide("deny", prompt["confirm_id"]);
+    ASSERT_TRUE(waitTerminal(1).is_object());
+}
+
+TEST_F(GaiacppStdio, AZeroWidthCharacterInAShellCommandShowsAsACode) {
+    // Word joiner in the program, zero-width space in the argument.
+    mock_.pushResponse(toolCall("bash_execute", {{"command", "mk\xE2\x81\xA0" "dir inv\xE2\x80\x8B" "oice"}}));
+    mock_.pushResponse(answer("Not made."));
+    Start s;
+    s.shell = true;
+    start(s);
+    ask("make a folder");
+    const json prompt = waitFor("needs_confirmation");
+    ASSERT_TRUE(prompt.is_object());
+    EXPECT_EQ(prompt["summary"], "mk[U+2060]dir inv[U+200B]oice");
+    const std::string scope = prompt.value("always_scope", "");
+    for (const char* hidden : {"\xE2\x81\xA0", "\xE2\x80\x8B"}) {
+        EXPECT_EQ(scope.find(hidden), std::string::npos) << scope;
+    }
+    decide("deny", prompt["confirm_id"]);
+    ASSERT_TRUE(waitTerminal(1).is_object());
+}
+
+TEST_F(GaiacppStdio, InvisibleCharactersInAnEditShowAsCodes) {
+    const fs::path file = work_ / "totals.py";
+    std::ofstream(file) << "total = 1\n";
+    mock_.pushResponse(toolCall("file_read", {{"path", file.string()}}));
+    mock_.pushResponse(toolCall("file_edit", {{"path", file.string()},
+                                              {"old_string", "total = 1"},
+                                              {"new_string", "total\xE2\x81\xA0 = 2\xEF\xBB\xBF\xC2\xAD"}}));
+    mock_.pushResponse(answer("Not changed."));
+    start();
+    ask("change the total");
+    const json prompt = waitFor("needs_confirmation");
+    ASSERT_TRUE(prompt.is_object());
+    EXPECT_EQ(prompt["summary"],
+              file.string() + "\n\nBefore:\n    total = 1\n\nAfter:\n    total[U+2060] = 2[U+FEFF][U+00AD]");
+    decide("deny", prompt["confirm_id"]);
+    ASSERT_TRUE(waitTerminal(1).is_object());
+}
+
+// Same text and expected line as person_approval.visible() gives in Python.
+TEST_F(GaiacppStdio, BidiAndZeroWidthTogetherShowAsThePythonAgentShowsThem) {
+    const std::string content =
+        "abc\xE2\x80\xAE" "cba\xE2\x80\x8B\xE2\x81\xA6" "x\xE2\x81\xA9 a\xE2\x80\x8D" "b "
+        "\xE2\x9D\xA4\xEF\xB8\x8F x\xEF\xB8\x8F \xF3\xA0\x81\x81\xE1\xA0\x8E\xC2\xAD end";
+    const fs::path out = work_ / "mixed.txt";
+    mock_.pushResponse(toolCall("file_write", {{"path", out.string()}, {"content", content}}));
+    mock_.pushResponse(answer("Not written."));
+    start();
+    ask("write it");
+    const json prompt = waitFor("needs_confirmation");
+    ASSERT_TRUE(prompt.is_object());
+    // ZWJ and an emoji's own variation selector stay as written; a stray selector is a code.
+    EXPECT_EQ(prompt["summary"], out.string() +
+                                     "\n\nWhat will be saved:\n"
+                                     "    abc[U+202E]cba[U+200B][U+2066]x[U+2069] a\xE2\x80\x8D" "b "
+                                     "\xE2\x9D\xA4\xEF\xB8\x8F x[U+FE0F] [U+E0041][U+180E][U+00AD] end");
     decide("deny", prompt["confirm_id"]);
     ASSERT_TRUE(waitTerminal(1).is_object());
 }
