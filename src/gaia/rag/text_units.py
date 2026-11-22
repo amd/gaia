@@ -76,6 +76,20 @@ def join_pieces(pieces: Sequence[str]) -> str:
     return joined
 
 
+_UNSPACED_CLASS = f"[{_UNSPACED_CHARS}　-〿！-･]"
+_UNSPACED_GAP = re.compile(f"(?<={_UNSPACED_CLASS})\\s+|\\s+(?={_UNSPACED_CLASS})")
+
+
+def close_unspaced_gaps(text: str) -> str:
+    """``text`` without whitespace next to a Chinese or Japanese character.
+
+    :func:`join_pieces` drops the gap between two such pieces, a paragraph
+    break included, and adds a space where one meets other text, so the
+    whitespace there is not the source's and can't be matched against it.
+    """
+    return _UNSPACED_GAP.sub("", text)
+
+
 def last_tokens(text: str, n_tokens: int) -> str:
     """About the last ``n_tokens`` of ``text``, starting at a word or sentence."""
     if n_tokens <= 0:
