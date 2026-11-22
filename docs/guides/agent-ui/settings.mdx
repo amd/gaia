@@ -89,7 +89,7 @@ A banner, a badge or nothing for each event, and keeping the PC awake. See [Noti
 
 ### Read aloud
 
-The voice, the speed, and whether every reply is read. See [Read aloud](/guides/agent-ui/chat#read-aloud).
+The voice, the speed, and whether every reply is read. See [Read aloud](/guides/agent-ui/chat#read-aloud). On macOS this tab only says read aloud isn't offered there yet; a voice or auto-read saved earlier is kept.
 
 ### Privacy
 
@@ -285,6 +285,7 @@ available over mobile access.
   <Accordion title="Document indexing fails">
     - The reason shows under the document in the library. A damaged, password-protected or scanned (no text) PDF is marked **Can't be read**: retrying won't help until you re-export the file, remove the password or run OCR on it
     - Ensure the file is a supported format and does not need a password to open (PDFs with only permission restrictions index fine)
+    - A document added while GAIA's model server is stopped stays in the library marked **Waiting**, and GAIA indexes it by itself once the server is back. One added while the server was too busy is marked **Failed** with **Retry**
     - Keep file size under 100MB
     - For PDF image extraction, download the VLM model: `gaia download --agent chat`
     - Two large documents index at a time and the rest wait their turn; small files (under 20 MB) have their own two slots, so they never wait behind big ones. A document that keeps making progress indexes to the end however long it takes. One that makes no progress for 10 minutes stops with an error that says so; to allow longer stalls, set `GAIA_INDEX_TIMEOUT` (seconds without progress) before GAIA starts, e.g. `export GAIA_INDEX_TIMEOUT=1200`

@@ -669,8 +669,8 @@ def document_roots() -> List[Path]:
     """Return the directories documents may be read from.
 
     Always includes the user's home directory, plus GAIA's own documents
-    folder and its document copies when ``GAIA_HOME`` moves them outside
-    every other root.
+    folder, its document copies and chat uploads when ``GAIA_HOME`` moves
+    them outside every other root.
     Each entry of ``GAIA_DOCUMENT_ROOTS`` adds another root; a relative or
     non-existent entry is a server misconfiguration and raises HTTP 500 rather than being
     skipped, so a typo can never silently narrow access back to home.
@@ -706,7 +706,7 @@ def document_roots() -> List[Path]:
             )
         declared.append(candidate)
 
-    for owned in (managed_documents_dir(), document_copies_dir()):
+    for owned in (managed_documents_dir(), document_copies_dir(), uploads_dir()):
         owned = owned.resolve()
         if not any(owned.is_relative_to(root.resolve()) for root in declared):
             declared.append(owned)

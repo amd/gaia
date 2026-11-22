@@ -833,9 +833,20 @@ def declined_details(text: str) -> List[str]:
 def _user_declined(content: str, user_text: str) -> bool:
     """Whether saving *content* would keep a detail *user_text* said to leave out."""
     stems = _detail_stems(content)
-    return bool(stems) and any(
-        stems & _detail_stems(clause) for clause in declined_details(user_text)
-    )
+    if not stems:
+        return False
+    for part in _own_words(_normalised(user_text or "")):
+        spans = _declined_spans(part)
+        kept = part
+        for start, end in sorted(spans, reverse=True):
+            kept = kept[:start] + " " + kept[end:]
+        kept_stems = _detail_stems(kept)
+        for start, end in spans:
+            declined = _detail_stems(part[start:end])
+            # A word the kept facts share ("phone") can't tell the declined one apart.
+            if stems & (declined - kept_stems or declined):
+                return True
+    return False
 
 
 def asks_to_keep_in_memory(text: str) -> bool:
