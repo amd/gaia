@@ -373,10 +373,10 @@ describe('SetupScreen: a cold PC (no model server yet)', () => {
         mockedApi.getSetupPlan.mockResolvedValue(COLD_SERVER);
         mockedApi.startSetup.mockResolvedValueOnce({
             state: 'failed', server_only: true, steps: [], error: "Your Lemonade Server at 127.0.0.1:9 isn't answering.",
-            problem: { kind: 'server_unreachable', message: "Your Lemonade Server at 127.0.0.1:9 isn't answering.", start: 'Start Lemonade Server from the Lemonade tray icon.', use_gaia: true },
+            problem: { kind: 'server_unreachable', message: "Your Lemonade Server at 127.0.0.1:9 isn't answering.", start: "The model server GAIA uses is at 127.0.0.1:9. GAIA doesn't run this model server, so it can't start it. Start it the way you usually do.", use_gaia: true },
         }).mockResolvedValueOnce(SERVER_RUNNING);
         renderSetup();
-        expect(await screen.findByText('Start Lemonade Server from the Lemonade tray icon.')).toBeInTheDocument();
+        expect(await screen.findByText("The model server GAIA uses is at 127.0.0.1:9. GAIA doesn't run this model server, so it can't start it. Start it the way you usually do.")).toBeInTheDocument();
         fireEvent.click(screen.getByRole('button', { name: /Use GAIA.s own instead/ }));
         await waitFor(() => expect(mockedApi.startSetup).toHaveBeenLastCalledWith(false, true, { serverOnly: true }));
     });
@@ -1263,12 +1263,12 @@ describe('SetupScreen: downloading', () => {
         ], {
             state: 'failed',
             error: "Your Lemonade Server at 127.0.0.1:9 isn't answering.",
-            problem: { kind: 'server_unreachable', message: "Your Lemonade Server at 127.0.0.1:9 isn't answering.", start: 'Start Lemonade Server from the Lemonade tray icon.', use_gaia: true },
+            problem: { kind: 'server_unreachable', message: "Your Lemonade Server at 127.0.0.1:9 isn't answering.", start: "The model server GAIA uses is at 127.0.0.1:9. GAIA doesn't run this model server, so it can't start it. Start it the way you usually do.", use_gaia: true },
         });
         mockedApi.startSetup.mockResolvedValue(stopped);
         await startLocal();
         expect(await screen.findByRole('button', { name: /Finish setup/ })).toBeInTheDocument();
-        expect(screen.getByText('Start Lemonade Server from the Lemonade tray icon.')).toBeInTheDocument();
+        expect(screen.getByText("The model server GAIA uses is at 127.0.0.1:9. GAIA doesn't run this model server, so it can't start it. Start it the way you usually do.")).toBeInTheDocument();
     });
 
     it('deletes and re-downloads a model that failed its load check only after the user confirms', async () => {
@@ -1983,7 +1983,7 @@ describe("SetupScreen: the user's server isn't answering", () => {
         problem: {
             kind: 'server_unreachable',
             message: "Your Lemonade Server at 127.0.0.1:9 isn't answering.",
-            start: 'Start Lemonade Server from the Lemonade tray icon.',
+            start: "The model server GAIA uses is at 127.0.0.1:9. GAIA doesn't run this model server, so it can't start it. Start it the way you usually do.",
             use_gaia: true,
         },
         command: 'gaia init --profile gaia',
@@ -1999,7 +1999,7 @@ describe("SetupScreen: the user's server isn't answering", () => {
         expect(await screen.findByRole('button', { name: /Use GAIA.s own instead/ })).toBeInTheDocument();
         expect(screen.queryByText(/set outside the app/)).not.toBeInTheDocument();
         expect(await screen.findByRole('alert')).toHaveTextContent("Your Lemonade Server at 127.0.0.1:9 isn't answering.");
-        expect(screen.getByText('Start Lemonade Server from the Lemonade tray icon.')).toBeInTheDocument();
+        expect(screen.getByText("The model server GAIA uses is at 127.0.0.1:9. GAIA doesn't run this model server, so it can't start it. Start it the way you usually do.")).toBeInTheDocument();
         expect(screen.queryByText(/HTTPConnectionPool/)).not.toBeInTheDocument();
         // A failed step opens "Having trouble?" by itself.
         expect(screen.getByRole('button', { name: 'Having trouble?' })).toHaveAttribute('aria-expanded', 'true');

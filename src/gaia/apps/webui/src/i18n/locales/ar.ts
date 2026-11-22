@@ -2930,6 +2930,7 @@ const messages: Messages = {
 
     // The connection banner
     'banner.serverStopped': 'خادم النماذج لا يستجيب.',
+    'server.chosenServerAt': 'خادم النماذج الذي يستخدمه GAIA موجود على {address}.',
     'server.otherServerStart': 'GAIA لا يشغّل خادم النماذج هذا، لذلك لا يستطيع بدء تشغيله. شغّله بالطريقة التي تعتادها.',
     'banner.restartHint': 'إذا استمرّ على هذه الحال، فأعد تشغيله:',
     'banner.startHint': 'لتشغيله يدويًا، نفّذ',
