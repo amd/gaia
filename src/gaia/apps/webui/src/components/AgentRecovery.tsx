@@ -5,7 +5,7 @@ import { useEffect, useRef, useState } from 'react';
 import { ChevronRight, Download, Loader2 } from 'lucide-react';
 import * as api from '../services/api';
 import { useT } from '../i18n/useT';
-import type { Param } from '../i18n/registry';
+import { ref, type Param } from '../i18n/registry';
 import { requestErrorParam } from '../utils/requestErrors';
 import { log } from '../utils/logger';
 import { AgentDownloadRow, useAgentDownload } from './setup/AgentDownload';
@@ -65,6 +65,13 @@ export function AgentRecovery({ problem, onRetry, kept = false }: Props) {
         setSwitching(true);
         setSwitchError(null);
         try {
+            // Checked before saving: a Python agent that can't start must not replace the gaiacpp choice.
+            const listing = await api.getAgentPrograms();
+            if (!live.current) return;
+            if (listing.programs.find((p) => p.id === 'gaiapy')?.installed !== true) {
+                setSwitchError(ref('newChat.agent.pythonMissing', { name: NAME }));
+                return;
+            }
             await api.updateSettings({ flagship_agent: 'gaiapy' });
             if (!live.current) return;
             setRetrying(true);

@@ -211,6 +211,7 @@ export const enMessages = {
     'newChat.agent.cantDownload': "{name} can't be downloaded here: {reason}",
     'newChat.agent.checkFailed': "Couldn't check whether {name} can be downloaded: {error}",
     'newChat.agent.switchFailed': "Couldn't switch to the Python agent: {error}",
+    'newChat.agent.pythonMissing': 'it isn’t installed on this PC, so {name} stays your agent. Run gaia init to install it.',
     'newChat.agent.kept': 'Your message is still in the box. Send it once the agent starts.',
     'newChat.agent.starting': 'Starting the agent…',
     'newChat.docs.forChat': 'Documents for this chat',
