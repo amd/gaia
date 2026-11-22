@@ -129,8 +129,14 @@ func (m FlagshipModel) agentProgram(arg string) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	if preflight.FlagshipAgentProgram(choice) == "" {
+		if _, known := catalog.HarnessNamed(choice); known {
+			m.chat.AppendStatus(fmt.Sprintf(
+				"%s isn't available in this version of the GAIA TUI yet. Use /agent %s or /agent %s.",
+				choice, preflight.FlagshipAgentPython, preflight.FlagshipAgentNative))
+			return m, nil
+		}
 		m.chat.AppendStatus(fmt.Sprintf(
-			"%q is not an agent program. Use /agent %s or /agent %s; /agent alone shows both.",
+			"%q is not an agent program. Use /agent %s or /agent %s; /agent alone lists them.",
 			arg, preflight.FlagshipAgentPython, preflight.FlagshipAgentNative))
 		return m, nil
 	}

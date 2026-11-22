@@ -236,6 +236,8 @@ class AgentSidecarManager:
         )
         self.expected_api_version = expected_api_version
         self._proc: Optional[subprocess.Popen] = None
+        # The harness the flagship was last spawned as; None for other agents.
+        self._spawned_harness: Optional[str] = None
         # Latch: set once our process group has been observed empty. A group
         # never comes back, so a later hit on that number is a recycled pgid.
         self._group_gone = False
@@ -298,6 +300,13 @@ class AgentSidecarManager:
                 f"{_VALID_MODES}. There is no fallback — set it explicitly."
             )
         return m
+
+    @property
+    def uses_stale_harness(self) -> bool:
+        """The flagship runs as a harness other than the one saved since it started."""
+        if self._spawned_harness is None:
+            return False
+        return fetch.saved_flagship() != self._spawned_harness
 
     @property
     def uses_ignored_lemonade(self) -> bool:
@@ -442,6 +451,7 @@ class AgentSidecarManager:
                     f"Cannot start the GAIA agent: {e} Sidecar logs: {self.log_dir}.",
                     kind=KIND_HARNESS_UNAVAILABLE,
                 ) from e
+            self._spawned_harness = harness
             if harness in fetch.NATIVE_HARNESS_PATH_ENV:
                 return self._native_flagship_command(port, harness)
             if harness != fetch.PYTHON_FLAGSHIP:

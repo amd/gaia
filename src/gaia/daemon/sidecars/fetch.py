@@ -290,7 +290,13 @@ def native_flagship(name: str = NATIVE_FLAGSHIP) -> Optional[Path]:
 def native_install_record(binary: Path, name: str = NATIVE_FLAGSHIP) -> Optional[dict]:
     """The record the in-app download wrote beside *binary*, else ``None``."""
     record = binary.parent / native_install_record_name(name)
-    if binary.name != native_flagship_executable_name(name) or not record.is_file():
+    expected = native_flagship_executable_name(name)
+    same = (
+        binary.name.lower() == expected.lower()
+        if sys.platform == "win32"
+        else binary.name == expected
+    )
+    if not same or not record.is_file():
         return None
     try:
         data = json.loads(record.read_text(encoding="utf-8"))

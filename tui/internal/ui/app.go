@@ -147,7 +147,17 @@ func loadCatalog(mockAgent, agentChoice, agentID string) (*catalog.Catalog, stri
 		cat.DiscoverBinaries()
 		return cat, "", nil
 	}
-	return catalog.ForFlagship(agentChoice)
+	cat, notice, err := catalog.ForFlagship(agentChoice)
+	if err == nil && notice == catalog.DaemonPythonNotice {
+		// The service runs the saved choice, so a Python pin can't hold against a native one.
+		if saved, rerr := preflight.ReadFlagshipAgent(); rerr == nil && saved.Choice != "" &&
+			saved.Choice != preflight.FlagshipAgentPython {
+			return nil, "", fmt.Errorf("the Python agent was asked for, but on this install the GAIA agent "+
+				"runs through the background service, which runs your saved choice, %s. Switch with "+
+				"/agent %s to use the Python agent", saved.Choice, preflight.FlagshipAgentPython)
+		}
+	}
+	return cat, notice, err
 }
 
 func joinNotices(notices ...string) string {
@@ -189,6 +199,10 @@ func RunChat(subprocess string, query string, dev bool, ctrl *control.Options, t
 	}
 
 	c := client.NewSubprocessClient(bin, argv[1:], dev)
+	if h := catalog.NativeHarnessOf(bin); h != "" && !catalog.HarnessRunnable(h) {
+		return fmt.Errorf("--subprocess %q starts %s, which isn't available in this version of the GAIA TUI yet",
+			subprocess, h)
+	}
 	if catalog.IsNativeAgentBinary(bin) {
 		if !hasArg(argv[1:], catalog.NativeStdioFlag) {
 			return fmt.Errorf("--subprocess %q starts %s without %s, so it would not talk to the "+

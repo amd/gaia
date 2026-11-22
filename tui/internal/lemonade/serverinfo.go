@@ -318,28 +318,39 @@ func LocalChatModel() string {
 }
 
 // ChosenChatModel is the model the user chose for chat: GAIA_MODEL_ID, else
-// GaiaChatModel when config.json names one. "" when nothing was chosen, for a
-// harness with no proven model to fall back to (gaiacode).
-func ChosenChatModel() string {
+// config.json's last_model, mirroring gaia.harnesses.chosen_model. Never
+// default_model, which setup fills in from the hardware by itself. "" with no
+// error when nothing was chosen, for a harness with no proven model (gaiacode).
+func ChosenChatModel() (string, error) {
 	if m := strings.TrimSpace(os.Getenv("GAIA_MODEL_ID")); m != "" {
-		return m
-	}
-	var doc struct {
-		Last    string `json:"last_model"`
-		Default string `json:"default_model"`
+		return m, nil
 	}
 	path := ConfigPathFrom(os.Getenv, os.UserHomeDir)
 	if path == "" {
-		return ""
+		return "", nil
 	}
 	raw, err := filelock.ReadFile(path)
-	if err != nil || json.Unmarshal(raw, &doc) != nil {
-		return ""
+	if os.IsNotExist(err) {
+		return "", nil
 	}
-	if strings.TrimSpace(doc.Last) == "" && strings.TrimSpace(doc.Default) == "" {
-		return ""
+	if err != nil {
+		return "", fmt.Errorf("cannot read the chosen model from %s: %w", path, err)
 	}
-	return GaiaChatModel()
+	var doc struct {
+		Last string `json:"last_model"`
+	}
+	if err := json.Unmarshal(raw, &doc); err != nil {
+		return "", fmt.Errorf("cannot read the chosen model from %s: %w", path, err)
+	}
+	last := strings.TrimSpace(doc.Last)
+	if last == "" || !IsHybridID(last) {
+		return last, nil
+	}
+	h, err := ReadHybridModels()
+	if err != nil {
+		return "", fmt.Errorf("cannot read the hybrid model %s: %w", last, err)
+	}
+	return h.Cheap, nil
 }
 
 // GaiaChatModel is the model GAIA chats with, resolved as

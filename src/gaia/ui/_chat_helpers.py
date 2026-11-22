@@ -3004,6 +3004,26 @@ def _dispatch_sidecar_query(
         )
         return
 
+    from gaia.daemon.sidecars import fetch as _fetch
+    from gaia.harnesses import NO_DEFAULT_MODEL, chosen_model
+
+    harness = _fetch.saved_flagship() if agent_type == FLAGSHIP_AGENT_ID else None
+    if harness in NO_DEFAULT_MODEL:
+        # The session's model may be a filled-in default; this harness takes none.
+        model_id = chosen_model()
+        if not model_id:
+            sse_handler._emit(
+                {
+                    "type": "agent_error",
+                    "content": (
+                        f"No model is chosen for {harness}, and it has no default "
+                        "because no model is proven for it yet. Choose a model in "
+                        "the model picker, then send your message again."
+                    ),
+                }
+            )
+            return
+
     relayed_documents = None
     takes_documents = documents_supported(profile, handle.api_version)
     if documents is not None and profile.min_documents_api_version is not None:

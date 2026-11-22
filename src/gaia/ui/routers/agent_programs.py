@@ -18,6 +18,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from fastapi.concurrency import run_in_threadpool
 
 from gaia.daemon.sidecars import fetch, gaiacpp_fetch
+from gaia.harnesses import HarnessUnavailableError
 from gaia.daemon.sidecars import platform as plat
 from gaia.daemon.sidecars.errors import (
     KIND_NO_RELEASE,
@@ -123,6 +124,7 @@ def _gaiapy_installed() -> bool:
 #: ``chosen_agent_problem()`` codes: why the chosen gaiacpp can't be started.
 GAIACPP_MISSING = "gaiacpp_missing"
 GAIACPP_INVALID = "gaiacpp_invalid"
+HARNESS_UNAVAILABLE = "harness_unavailable"
 
 
 def chosen_agent_problem() -> Optional[Dict[str, str]]:
@@ -131,7 +133,11 @@ def chosen_agent_problem() -> Optional[Dict[str, str]]:
     Only gaiacpp has such a reason of its own: it is chosen but not on this
     PC, or no longer matches what was downloaded.
     """
-    if fetch.chosen_flagship() != fetch.NATIVE_FLAGSHIP:
+    try:
+        chosen = fetch.chosen_flagship()
+    except HarnessUnavailableError as e:
+        return {"code": HARNESS_UNAVAILABLE, "detail": str(e)}
+    if chosen != fetch.NATIVE_FLAGSHIP:
         return None
     try:
         binary = fetch.verified_native_flagship()

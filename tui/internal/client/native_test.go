@@ -365,7 +365,8 @@ func TestGaiacodeStartsOnlyOnAChosenModel(t *testing.T) {
 		want   []string
 	}{
 		{`{"last_model":"fireworks.glm-5p3-flash"}`, []string{"--stdio", "--model", "fireworks.glm-5p3-flash"}},
-		{`{"default_model":"Qwen3.6-35B-A3B-GGUF"}`, []string{"--stdio", "--model", "Qwen3.6-35B-A3B-GGUF"}},
+		// Setup writes default_model from the hardware by itself: that is no choice.
+		{`{"default_model":"Qwen3.6-35B-A3B-GGUF"}`, nil},
 		{`{}`, nil},
 	} {
 		path := filepath.Join(t.TempDir(), "config.json")

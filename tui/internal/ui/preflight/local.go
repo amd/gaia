@@ -847,7 +847,17 @@ func (l localRunner) verifyNativeModel(ctx context.Context) (Row, string, string
 	model, picked := l.opts.Model, true
 	if model == "" && l.opts.Harness == "gaiacode" {
 		// No model is proven for gaiacode: start only on one the user chose.
-		if model = lemonade.ChosenChatModel(); model == "" {
+		chosen, err := lemonade.ChosenChatModel()
+		if err != nil {
+			row.State = StateFailed
+			row.Disposition = status.DispositionHalt
+			row.Fix = FixNone
+			row.Line = "cannot read the chosen model"
+			row.Detail = err.Error()
+			row.Remedy = Remedy{Action: "Press p and choose where chat runs again; that rewrites the saved choice."}
+			return row, "", ""
+		}
+		if model = chosen; model == "" {
 			row.State = StateFailed
 			row.Disposition = status.DispositionHalt
 			row.Fix = FixNone

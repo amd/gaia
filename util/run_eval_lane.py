@@ -346,6 +346,13 @@ def main() -> int:
     args = parser.parse_args()
     args.judge_model = args.judge_model or baseline_eval_model()
     harness_env = harness_setup(args.harness, args.harness_binary)
+    NO_DEFAULT_MODEL = frozenset()
+    if args.harness:
+        from gaia.harnesses import NO_DEFAULT_MODEL
+    if args.harness in NO_DEFAULT_MODEL and not args.agent_model:
+        raise SystemExit(
+            f"--harness {args.harness} needs --agent-model: it has no default model."
+        )
 
     categories = lane_categories(args.lane) if args.lane else args.category
     args.scenarios_by_category = scenarios_by_category(categories, args.scenario)
@@ -392,7 +399,11 @@ def main() -> int:
             if args.agent_model:
                 write_agent_model(Path(cat_env["GAIA_HOME"]), args.agent_model)
             if args.harness:
-                write_config_keys(Path(cat_env["GAIA_HOME"]), flagship_agent=args.harness)
+                keys = {"flagship_agent": args.harness}
+                if args.harness in NO_DEFAULT_MODEL:
+                    # It takes only a model the user chose, which last_model records.
+                    keys["last_model"] = args.agent_model
+                write_config_keys(Path(cat_env["GAIA_HOME"]), **keys)
             code = _run_category(category, cat_env, p, args)
             if code != 0:
                 failed.append(category)

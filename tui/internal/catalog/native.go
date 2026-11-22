@@ -153,6 +153,10 @@ func FindNativeHarness(name string, inRepo bool) Lookup {
 	// First match wins. The places GAIA itself fills come before PATH.
 	steps := []func() string{
 		func() string {
+			// A build of another known harness is not this one, whatever the variable says.
+			if other := NativeHarnessOf(explicit); other != "" && other != name {
+				return ""
+			}
 			if explicit != "" && isExecutableFile(explicit) {
 				return explicit
 			}

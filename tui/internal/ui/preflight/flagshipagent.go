@@ -55,6 +55,9 @@ func CheckFlagshipAgent(choice string) error {
 		return fmt.Errorf("%s must be %q or %q, got %q",
 			FlagshipAgentKey, FlagshipAgentPython, FlagshipAgentNative, choice)
 	}
+	if h, ok := catalog.HarnessNamed(choice); ok && !h.Runnable {
+		return fmt.Errorf("%s isn't offered yet, so it runs only for this session and is not saved", choice)
+	}
 	return nil
 }
 

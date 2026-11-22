@@ -81,6 +81,23 @@ def unavailable_reason(name: str) -> str:
     )
 
 
+#: Harnesses with no proven model: they run only on one the user chose.
+NO_DEFAULT_MODEL = frozenset({"gaiacode"})
+
+
+def chosen_model() -> Optional[str]:
+    """The model the user chose for chat: ``GAIA_MODEL_ID``, else ``last_model``.
+
+    Never ``default_model``, which setup fills in from the hardware on its own.
+    """
+    from gaia.config import GaiaConfig
+
+    env = os.environ.get("GAIA_MODEL_ID", "").strip()
+    if env:
+        return env
+    return (GaiaConfig.load().last_model or "").strip() or None
+
+
 def require_runnable(name: str) -> str:
     """``name`` when this version can run it; else raise naming the fix."""
     known = harness(name)

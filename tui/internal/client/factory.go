@@ -186,7 +186,11 @@ func ForAgent(agent catalog.Agent, opts ForAgentOptions) (AgentClient, error) {
 		if model == "" && agent.Native && agent.ID == catalog.FlagshipID {
 			if agent.Harness == "gaiacode" {
 				// No model is proven for it: only one the user chose, never a default.
-				if model = lemonade.ChosenChatModel(); model == "" {
+				chosen, err := lemonade.ChosenChatModel()
+				if err != nil {
+					return nil, err
+				}
+				if model = chosen; model == "" {
 					return nil, errors.New(NoGaiacodeModel)
 				}
 				if IsClaudeModelID(model) {

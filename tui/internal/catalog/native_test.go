@@ -582,3 +582,24 @@ func TestAPathToAnUnofferedHarnessIsRefused(t *testing.T) {
 		t.Fatalf("under the eval override a path to gaiacode was refused: %v", err)
 	}
 }
+
+// GAIA_GAIACPP_PATH pointing at a gaiacode build doesn't run gaiacode as gaiacpp.
+func TestOneHarnessPathVariableNeverRunsAnother(t *testing.T) {
+	f := isolateNative(t)
+	other := writeProgram(t, filepath.Join(f.cwd, "build"), "gaiacode")
+	t.Setenv(NativePathEnv, other)
+	if l := FindNativeHarness(NativeAgentBinary, false); l.Found() {
+		t.Fatalf("gaiacpp's lookup returned the gaiacode build %s", l.Path)
+	}
+}
+
+// Every native harness the TUI can launch has a path variable the daemon shares.
+func TestEveryNativeHarnessHasAPathVariable(t *testing.T) {
+	for _, h := range Harnesses() {
+		if h.Native {
+			if _, ok := NativePathEnvs[h.Name]; !ok {
+				t.Errorf("native harness %s has no entry in NativePathEnvs", h.Name)
+			}
+		}
+	}
+}

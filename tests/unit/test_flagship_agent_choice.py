@@ -581,3 +581,95 @@ def test_a_switch_is_refused_while_setup_is_running_its_tests(
         client.put("/api/settings", json={"flagship_agent": "gaiacpp"}).status_code
         == 200
     )
+
+
+# ---------------------------------------------------------------- gaiacode's model
+
+
+def test_gaiacode_takes_only_a_model_the_user_chose(monkeypatch):
+    from gaia.harnesses import chosen_model
+
+    monkeypatch.delenv("GAIA_MODEL_ID", raising=False)
+    GaiaConfig.save_key("default_model", "Gemma-4-E4B-it-GGUF")
+    assert chosen_model() is None, "setup's hardware pick is not the user's choice"
+    GaiaConfig.save_key("last_model", "fireworks.glm-5p3")
+    assert chosen_model() == "fireworks.glm-5p3"
+    monkeypatch.setenv("GAIA_MODEL_ID", "Qwen3.6-35B-A3B-GGUF")
+    assert chosen_model() == "Qwen3.6-35B-A3B-GGUF"
+
+
+def _relay_once(monkeypatch, model):
+    """Run one Agent UI turn for gaia; return (events, the model relay_query was given)."""
+    from gaia.ui.sidecar import daemon_client, relay
+
+    handle = daemon_client.SidecarHandle(
+        base_url="http://127.0.0.1:1",
+        token="t",
+        api_version="99.0",
+        agent_version="0.1.0",
+        mode="user",
+        pid=1,
+        agent_id="gaia",
+    )
+    monkeypatch.setattr(daemon_client, "acquire_handle", lambda agent_id: handle)
+    sent = {}
+
+    def _relay(*args, **kwargs):
+        sent["model"] = kwargs.get("model_id", args[3] if len(args) > 3 else None)
+
+    monkeypatch.setattr(relay, "relay_query", _relay)
+    events = []
+
+    class _Handler:
+        def _emit(self, event):
+            events.append(event)
+
+    request = ChatRequest(session_id="s1", message="hi", agent_type="gaia")
+    _chat_helpers._dispatch_sidecar_query(_Handler(), request, [], model, "gaia")
+    return events, sent
+
+
+def test_an_agent_ui_turn_never_sends_gaiacode_a_filled_in_model(monkeypatch):
+    monkeypatch.delenv("GAIA_MODEL_ID", raising=False)
+    _save_raw("gaiacode")
+    events, sent = _relay_once(monkeypatch, "Gemma-4-E4B-it-GGUF")
+    errors = [e["content"] for e in events if e["type"] == "agent_error"]
+    assert errors and "No model is chosen for gaiacode" in errors[0], events
+    assert "model" not in sent, "the turn reached gaiacode"
+
+
+# ---------------------------------------------------------------- a switch made elsewhere
+
+
+def test_a_flagship_started_as_another_harness_is_stale_after_a_switch(
+    fake_gaiacpp, monkeypatch
+):
+    monkeypatch.setattr(
+        fetch, "native_flagship_version", lambda b, name="gaiacpp": "0.1.0"
+    )
+    _choose("gaiacpp")
+    m = _flagship_manager()
+    m.build_spawn_command(port=45123)
+    assert not m.uses_stale_harness
+    _choose("gaiapy")  # the TUI's /agent writes only config.json
+    assert m.uses_stale_harness
+
+
+def test_a_non_flagship_agent_is_never_stale():
+    other = [s for s in builtin_specs().values() if s.agent_id != "gaia"]
+    if not other:
+        pytest.skip("no other built-in sidecar spec")
+    assert not mgr.AgentSidecarManager(other[0]).uses_stale_harness
+
+
+# ---------------------------------------------------------------- start screen
+
+
+def test_the_start_screen_explains_a_saved_harness_it_cannot_run(monkeypatch):
+    from gaia.ui.routers import agent_programs
+
+    monkeypatch.delenv("GAIA_UNPROVEN_HARNESS", raising=False)
+    _save_raw("gaiacode")
+    problem = agent_programs.chosen_agent_problem()
+    assert problem["code"] == "harness_unavailable"
+    assert "gaiacode" in problem["detail"]
