@@ -52,6 +52,7 @@ from gaia.daemon.constants import (
 )
 from gaia.daemon.sidecars import fetch
 from gaia.daemon.sidecars.errors import (
+    KIND_HARNESS_UNAVAILABLE,
     HealthTimeoutError,
     IntegrityError,
     PlatformError,
@@ -427,7 +428,8 @@ class AgentSidecarManager:
                 harness = fetch.chosen_flagship()
             except HarnessUnavailableError as e:
                 raise SidecarSpawnError(
-                    f"Cannot start the GAIA agent: {e} Sidecar logs: {self.log_dir}."
+                    f"Cannot start the GAIA agent: {e} Sidecar logs: {self.log_dir}.",
+                    kind=KIND_HARNESS_UNAVAILABLE,
                 ) from e
             if harness == fetch.NATIVE_FLAGSHIP:
                 return self._native_flagship_command(port)
@@ -436,7 +438,8 @@ class AgentSidecarManager:
                 raise SidecarSpawnError(
                     f"Cannot start the GAIA agent: this version of GAIA has no way to "
                     f"start {harness} yet. Choose another agent program in Settings › "
-                    f"Agent & model. Sidecar logs: {self.log_dir}."
+                    f"Agent & model. Sidecar logs: {self.log_dir}.",
+                    kind=KIND_HARNESS_UNAVAILABLE,
                 )
         if self.mode == "user":
             try:
