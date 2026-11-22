@@ -334,7 +334,7 @@ describe('ContextPanel', () => {
     it("shows how much of a cloud model's window GAIA uses", async () => {
         mockedApi.getContextUsage.mockResolvedValue({ available: true, ...usage({ model_window: 1048576 }) });
         render(<ContextPanel sessionId="s1" busy={false} onClose={() => {}} />);
-        expect(await screen.findByText(/GAIA uses/)).toHaveTextContent("GAIA uses 66K of the model's 1M");
+        expect(await screen.findByText(/GAIA uses/)).toHaveTextContent("GAIA uses 64K of the model's 1M");
     });
 
     it('closes on Escape', async () => {
@@ -359,10 +359,10 @@ describe('ContextMeter entry point', () => {
     it("says the meter measures GAIA's window when a cloud model allows more", () => {
         render(<ContextMeter usage={usage({ used: 21850, model_window: 1048576 })} sessionId="s1" />);
         const meter = screen.getByRole('button', { name: /^Context 33% full/ });
-        expect(meter).toHaveAccessibleName("Context 33% full: 22K of 66K tokens (GAIA uses 66K of the model's 1M)");
-        expect(meter).toHaveAttribute('title', expect.stringContaining("GAIA uses 66K of the model's 1M"));
+        expect(meter).toHaveAccessibleName("Context 33% full: 22K of 64K tokens (GAIA uses 64K of the model's 1M)");
+        expect(meter).toHaveAttribute('title', expect.stringContaining("GAIA uses 64K of the model's 1M"));
         fireEvent.click(meter);
-        expect(screen.getByText(/GAIA uses/)).toHaveTextContent("GAIA uses 66K of the model's 1M");
+        expect(screen.getByText(/GAIA uses/)).toHaveTextContent("GAIA uses 64K of the model's 1M");
     });
 
     it('adds no cap note when GAIA uses the whole window', () => {
@@ -431,10 +431,10 @@ describe('ContextMeter entry point', () => {
         it("says in Arabic that the meter measures GAIA's window", () => {
             render(<ContextMeter usage={usage({ used: 21850, model_window: 1048576 })} sessionId="s1" />);
             const meter = screen.getByRole('button', { name: /السياق ممتلئ بنسبة 33%/ });
-            expect(stripIsolates(meter.getAttribute('aria-label') ?? '')).toContain('يستخدم GAIA 66K من أصل نافذة النموذج البالغة 1M');
-            expect(stripIsolates(meter.getAttribute('title') ?? '')).toContain('يستخدم GAIA 66K من أصل نافذة النموذج البالغة 1M');
+            expect(stripIsolates(meter.getAttribute('aria-label') ?? '')).toContain('يستخدم GAIA 64K من أصل نافذة النموذج البالغة 1M');
+            expect(stripIsolates(meter.getAttribute('title') ?? '')).toContain('يستخدم GAIA 64K من أصل نافذة النموذج البالغة 1M');
             fireEvent.click(meter);
-            expect(text(document.querySelector('.context-meter-cap') as HTMLElement)).toBe(' · يستخدم GAIA 66K من أصل نافذة النموذج البالغة 1M');
+            expect(text(document.querySelector('.context-meter-cap') as HTMLElement)).toBe(' · يستخدم GAIA 64K من أصل نافذة النموذج البالغة 1M');
         });
     });
 });

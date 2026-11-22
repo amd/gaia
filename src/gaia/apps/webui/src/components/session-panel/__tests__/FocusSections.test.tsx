@@ -7,7 +7,7 @@ import { act, fireEvent, render, screen, waitFor, within } from '@testing-librar
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { SessionPanel } from '../SessionPanel';
 import { COMMANDS_SHOWN, CommandsSection, DocumentsSection, FocusBar, PlanSection, ScheduleSection } from '../FocusSections';
-import { commandsRun, finishedPlan, isDevCommand, livePlan, sitesContacted } from '../sessionFocus';
+import { commandsRun, finishedPlan, isCodeFile, isDevCommand, livePlan, sitesContacted } from '../sessionFocus';
 import { PanelSettled, SETTLE_MS } from '../appear';
 import { useChatStore } from '../../../stores/chatStore';
 import { useScheduleStore } from '../../../stores/scheduleStore';
@@ -116,6 +116,36 @@ describe('what the chat is doing', () => {
         await waitFor(() => expect(chips()).toEqual(['Coding1']));
         const heads = [...document.querySelectorAll('.sp-section-title')].map((el) => el.textContent);
         expect(heads.indexOf('Changes')).toBe(heads.indexOf('Environment') + 1);
+    });
+
+    it('does not call a chat coding because it deleted a note with del', async () => {
+        mocked.getSessionChanges.mockResolvedValue({
+            files: [{
+                path: 'C:\\Users\\me\\junk3.txt', change: 'deleted', unified: '', binary: false, too_large: false, truncated: false,
+                additions: 0, deletions: 1, before_size: 6, after_size: 0, message_ids: [2], changed_since: null,
+            }],
+            totals: { files: 1, additions: 0, deletions: 1, uncounted: 0 }, turns: 1, pending: false, untracked: [], incomplete: false,
+        });
+        const del: Message[] = [QUESTION, {
+            id: 2, session_id: SID, role: 'assistant', content: 'Done.', created_at: '', rag_sources: null,
+            agentSteps: [{
+                id: 1, type: 'tool', tool: 'run_shell_command', label: 'Using run_shell_command', detail: 'command: del junk3.txt',
+                timestamp: 0, success: true,
+            }],
+        }];
+        render(<Panel messages={del} />);
+        await waitFor(() => expect(chips()).toEqual(['Commands1']));
+        // The change is still listed, just not as code work.
+        expect(await screen.findByText('junk3.txt')).toBeInTheDocument();
+    });
+
+    it('counts code and project files as coding, and notes and documents not', () => {
+        for (const path of ['C:\\p\\a.ts', '/p/main.py', 'C:\\p\\Makefile', '/p/config.yaml', '/p/requirements-dev.txt']) {
+            expect(isCodeFile(path), path).toBe(true);
+        }
+        for (const path of ['C:\\p\\junk3.txt', '/p/Q3 Results.pptx', '/p/notes.md', '/p/data.csv', '/p/report.docx']) {
+            expect(isCodeFile(path), path).toBe(false);
+        }
     });
 
     it('keeps what Undo all said after the chat stops being a coding chat', async () => {
