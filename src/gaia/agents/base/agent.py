@@ -12041,7 +12041,7 @@ Do NOT wrap conversational replies in JSON.
         did not fix. The loop then makes each call itself, through the same
         approval gates as any call, once per turn, and has the model answer from
         the result. A call goes here only when its arguments come straight from
-        the request ("remember X", "add the skill at <path>"). Empty by default.
+        the request ("add the skill at <path>"). Empty by default.
         """
         return []
 
