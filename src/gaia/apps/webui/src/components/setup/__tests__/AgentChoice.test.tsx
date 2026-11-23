@@ -315,7 +315,7 @@ describe('AgentChoice in setup: a pick is held for Continue', () => {
         expect(cpp).not.toHaveAttribute('aria-disabled');
         expect(screen.queryByRole('button', { name: /Download/ })).toBeNull();
         fireEvent.click(cpp);
-        expect(onPending).toHaveBeenCalledWith({ id: 'gaiacpp', download: true, current: 'gaiapy' });
+        expect(onPending).toHaveBeenCalledWith({ id: 'gaiacpp', download: true, current: 'gaiapy', sizeBytes: 6_800_000 });
         expect(mockedApi.startAgentDownload).not.toHaveBeenCalled();
         expect(mockedApi.updateSettings).not.toHaveBeenCalled();
         rerender(<AgentChoice pending="gaiacpp" onPending={onPending} />);
@@ -328,7 +328,7 @@ describe('AgentChoice in setup: a pick is held for Continue', () => {
         const onPending = vi.fn();
         render(<AgentChoice onPending={onPending} />);
         fireEvent.click(await radio(/gaiacpp/));
-        expect(onPending).toHaveBeenLastCalledWith({ id: 'gaiacpp', download: false, current: 'gaiapy' });
+        expect(onPending).toHaveBeenLastCalledWith({ id: 'gaiacpp', download: false, current: 'gaiapy', sizeBytes: 6_800_000 });
         fireEvent.click(screen.getByRole('radio', { name: /gaiapy/ }));
         expect(onPending).toHaveBeenLastCalledWith(null);
         expect(mockedApi.updateSettings).not.toHaveBeenCalled();

@@ -726,6 +726,8 @@ export function SetupScreen({ onReady, onClose }: SetupScreenProps) {
         await download(held.acknowledgeLowDisk, latest);
     }, [download, setAgentPick, setHeldRun]);
 
+    // A picked agent that isn't here downloads first, so it counts in the total.
+    const agentGb = agentPick?.download && agentPick.sizeBytes ? agentPick.sizeBytes / 1e9 : 0;
     const pickRef = useRef(agentPick);
     pickRef.current = agentPick;
     const heldRef = useRef(heldRun);
@@ -1386,7 +1388,7 @@ export function SetupScreen({ onReady, onClose }: SetupScreenProps) {
                                         <bdi id="setup-where-local">{t('setup.plan.run', { name: chatEntry?.name ?? '' })}</bdi>
                                     </p>
                                     <dl className="setup-facts">
-                                        <div><dt>{t('setup.summary.download')}</dt><dd><bdi dir="ltr">{formatSize(totals(plan, selection).downloadGb ?? 0)}</bdi></dd></div>
+                                        <div><dt>{t('setup.summary.download')}</dt><dd><bdi dir="ltr">{formatSize(totals(plan, selection, agentGb).downloadGb ?? 0)}</bdi></dd></div>
                                         <div><dt>{t('setup.plan.runsOn')}</dt><dd><bdi>{chatEntry && isNpu(chatEntry) ? t('setup.checks.npu') : hardware?.gpu_name ?? t('setup.plan.cpu')}</bdi></dd></div>
                                         <div><dt>{t('setup.plan.diskAfter')}</dt><dd><bdi dir="ltr">{totals(plan, selection).afterGb != null ? formatSize(Math.max(0, totals(plan, selection).afterGb as number)) : '—'}</bdi></dd></div>
                                     </dl>
@@ -1502,6 +1504,7 @@ export function SetupScreen({ onReady, onClose }: SetupScreenProps) {
                                 onBack={backOne}
                                 onContinue={(ack) => void commit(ack)}
                                 busy={busy || runGoing}
+                                agentGb={agentGb}
                                 error={actionError ?? startError}
                             />
                         </>

@@ -374,6 +374,29 @@ def test_partial_files_count_without_a_manifest(tmp_path):
     assert found == {"Qwen3.6-35B-A3B-GGUF": round(11 * MICRO * GB)}
 
 
+def _copied_in(store, name, size):
+    """A model file put in the store by hand or by another tool: no manifest."""
+    snapshot = store / "models--unsloth--Qwen3.6-35B-A3B-GGUF" / "snapshots" / "abc"
+    snapshot.mkdir(parents=True, exist_ok=True)
+    (snapshot / name).write_bytes(b"x" * size)
+
+
+def test_a_whole_model_file_counts_without_a_manifest(tmp_path):
+    """Lemonade reuses the checkpoint's own file, so it is not a download."""
+    _copied_in(tmp_path, "Qwen3.6-35B-A3B-Q4_K_M.gguf", 21_000)
+    client = _qwen_only(_client(store=tmp_path))
+    found = bytes_already_on_disk(client, ["Qwen3.6-35B-A3B-GGUF"], str(tmp_path))
+    assert found == {"Qwen3.6-35B-A3B-GGUF": 21_000}
+
+
+def test_another_builds_file_does_not_count_without_a_manifest(tmp_path):
+    _copied_in(tmp_path, "Qwen3.6-35B-A3B-Q8_0.gguf", 30_000)
+    _copied_in(tmp_path, "notes.txt", 500)
+    client = _qwen_only(_client(store=tmp_path))
+    found = bytes_already_on_disk(client, ["Qwen3.6-35B-A3B-GGUF"], str(tmp_path))
+    assert found == {"Qwen3.6-35B-A3B-GGUF": 0}
+
+
 @pytest.mark.parametrize("store", ["/not/on/this/pc", "corrupt-manifest"])
 def test_unreadable_partials_warn_instead_of_refusing(capsys, tmp_path, store):
     if store == "corrupt-manifest":
@@ -438,6 +461,37 @@ def test_setup_lists_models_when_the_store_is_unreadable(monkeypatch, tmp_path):
     )
     qwen = next(e for e in catalog if e["id"] == "Qwen3.6-35B-A3B-GGUF")
     assert qwen["size_gb"] == 21.7 and qwen["partial"] is False
+
+
+def test_setup_asks_for_no_download_of_a_model_whose_file_is_already_here(
+    monkeypatch, tmp_path
+):
+    """The file is whole on disk and Lemonade has not registered it yet: setup
+    showed a download for it and then fetched nothing."""
+    from gaia.installer import init_command
+    from gaia.ui import setup_plan
+
+    monkeypatch.setattr(
+        init_command,
+        "bytes_already_on_disk",
+        lambda _client, ids, _store: {m: 21_700_000_000 for m in ids},
+    )
+    catalog = setup_plan._catalog(
+        _client(store=tmp_path),
+        "minimal",
+        "Qwen3.6-35B-A3B-GGUF",
+        ["Qwen3.6-35B-A3B-GGUF"],
+        None,
+        None,
+        str(tmp_path),
+        [],
+        [],
+    )
+    qwen = next(e for e in catalog if e["id"] == "Qwen3.6-35B-A3B-GGUF")
+    assert qwen["downloaded"] is False
+    assert qwen["size_gb"] == 0.0
+    # Not an interrupted download: setup must not offer to resume it.
+    assert qwen["partial"] is False
 
 
 def test_free_space_is_unknown_under_a_folder_this_user_cannot_read(

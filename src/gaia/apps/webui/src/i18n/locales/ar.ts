@@ -2299,6 +2299,7 @@ const messages: Messages = {
     'setup.models.fit.ok': 'يحتاج إلى نحو {need} من الذاكرة؛ لدى هذا الجهاز {have} للنماذج.',
     'setup.models.fit.unknown': 'تعذّر على GAIA قراءة ذاكرة هذا الجهاز، لذا لا يستطيع معرفة ما إذا كان هذا النموذج مناسبًا.',
     'setup.models.status.onPc': 'على هذا الجهاز',
+    'setup.models.status.found': 'على هذا الجهاز، ويُفحص أثناء الإعداد',
     'setup.models.status.download': 'تنزيل {size}',
     'setup.models.status.partial': 'نُزّل جزئيًا، يتبقى {size}',
     'setup.models.status.sizeUnknown': 'الحجم غير معروف',

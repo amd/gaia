@@ -1027,9 +1027,31 @@ describe('SetupScreen: agent', () => {
         expect(mockedApi.updateSettings).toHaveBeenCalledTimes(1);
     });
 
+    // Only the 300 MB document model is left to download.
+    const MODELS_HERE = () => plan([{ ...QWEN, downloaded: true, size_gb: 0 }, { ...GEMMA, downloaded: true, size_gb: 0 }, EMBED]);
+    const downloadTotal = () => screen.getByRole('group', { name: 'Download total' }).querySelector('.mc-stat-value')?.textContent;
+
+    it('gaiacpp already here: the download total is the models alone', async () => {
+        mockedApi.getSetupPlan.mockResolvedValue(MODELS_HERE());
+        await pick(/gaiacpp/);
+        await waitFor(() => expect(downloadTotal()).toBe('300 MB'));
+    });
+
     describe('gaiacpp not on this PC', () => {
         beforeEach(() => {
             mockedApi.getAgentPrograms.mockResolvedValue(withoutGaiacpp());
+        });
+
+        it('counts the agent in the download total, and drops it when gaiapy is picked back', async () => {
+            mockedApi.getSetupPlan.mockResolvedValue(MODELS_HERE());
+            await open();
+            await toModels();
+            const agent = within(await screen.findByRole('region', { name: 'Agent' }));
+            await waitFor(() => expect(downloadTotal()).toBe('300 MB'));
+            fireEvent.click(await agent.findByRole('radio', { name: /gaiacpp/ }));
+            await waitFor(() => expect(downloadTotal()).toBe('307 MB'));
+            fireEvent.click(agent.getByRole('radio', { name: /gaiapy/ }));
+            await waitFor(() => expect(downloadTotal()).toBe('300 MB'));
         });
 
         it('downloads first with the rest waiting, then saves it, then starts the run', async () => {

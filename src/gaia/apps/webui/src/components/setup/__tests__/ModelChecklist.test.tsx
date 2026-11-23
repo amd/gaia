@@ -33,3 +33,11 @@ describe('image-reading caveat in Settings', () => {
         expect(screen.getAllByText(/can’t read images or screenshots/).length).toBeGreaterThan(0);
     });
 });
+
+describe('a model whose files are on this PC but not yet registered', () => {
+    it('says it is here and will be checked, not that it downloads', () => {
+        renderSettings([{ ...GEMMA, downloaded: false, size_gb: 0, partial: false }]);
+        expect(screen.getByText('On this PC, checked during setup')).toBeInTheDocument();
+        expect(screen.queryByText(/Download 0/)).not.toBeInTheDocument();
+    });
+});

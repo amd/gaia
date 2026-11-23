@@ -47,6 +47,8 @@ export interface AgentPick {
     download: boolean;
     /** The agent saved now (possibly one this version can't run), which setup carries on with if the pick can't be had. */
     current: string;
+    /** The pick's size, for setup's download total; null when it couldn't be read. */
+    sizeBytes?: number | null;
 }
 
 interface Props {
@@ -135,7 +137,7 @@ export function AgentChoice({ inSettings = false, disabled = false, pending = nu
         if (!listing || !p || disabled || off(p)) return;
         // Setup saves nothing here: Continue gets the agent and saves it before setup's own test runs.
         if (!inSettings) {
-            onPending?.(id === listing.current ? null : { id, download: !installed(p), current: listing.current });
+            onPending?.(id === listing.current ? null : { id, download: !installed(p), current: listing.current, sizeBytes: p.size_bytes });
             return;
         }
         if (saving || downloading || needsDownload(p)) return;

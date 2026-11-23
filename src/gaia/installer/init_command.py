@@ -586,12 +586,28 @@ def _model_checkpoint(entry: Optional[dict], model_id: str) -> Optional[str]:
     return checkpoint if isinstance(checkpoint, str) and checkpoint else None
 
 
-def _snapshot_bytes(snapshot: Path) -> Optional[int]:
+def _snapshot_bytes(snapshot: Path, variant: str = "") -> Optional[int]:
     """Bytes in one snapshot: the files its download manifest lists, finished
-    or ``.partial``. None when the manifest cannot be read."""
+    or ``.partial``. None when the manifest cannot be read.
+
+    With no manifest (a file copied in, or fetched by another tool), a whole
+    ``.gguf`` named for the checkpoint's *variant* counts too: Lemonade uses it
+    as it is.
+    """
     manifest = snapshot / ".download_manifest.json"
     if not manifest.is_file():
-        return sum(p.stat().st_size for p in snapshot.rglob("*.partial"))
+        partial = sum(p.stat().st_size for p in snapshot.rglob("*.partial"))
+        tag = variant.lower()
+        whole = (
+            sum(
+                p.stat().st_size
+                for p in snapshot.iterdir()
+                if p.is_file() and p.suffix == ".gguf" and tag in p.name.lower()
+            )
+            if tag
+            else 0
+        )
+        return partial + whole
     try:
         files = json.loads(manifest.read_text(encoding="utf-8"))["files"]
         names = [f["name"] for f in files]
@@ -631,11 +647,11 @@ def bytes_already_on_disk(client, model_ids, store_path: Optional[str]) -> dict:
         if not checkpoint:
             found[model_id] = None
             continue
-        repo = checkpoint.split(":", 1)[0]
+        repo, _, variant = checkpoint.partition(":")
         snapshots = store / ("models--" + repo.replace("/", "--")) / "snapshots"
         try:
             counted = (
-                [_snapshot_bytes(s) for s in snapshots.iterdir() if s.is_dir()]
+                [_snapshot_bytes(s, variant) for s in snapshots.iterdir() if s.is_dir()]
                 if snapshots.is_dir()
                 else []
             )

@@ -2299,6 +2299,7 @@ export const enMessages = {
     'setup.models.fit.ok': 'Needs about {need} of memory; this PC has {have} for models.',
     'setup.models.fit.unknown': 'GAIA couldn’t read this PC’s memory, so it can’t tell if this fits.',
     'setup.models.status.onPc': 'On this PC',
+    'setup.models.status.found': 'On this PC, checked during setup',
     'setup.models.status.download': 'Download {size}',
     'setup.models.status.partial': 'Partly downloaded, {size} left',
     'setup.models.status.sizeUnknown': 'Size unknown',
