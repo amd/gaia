@@ -608,9 +608,8 @@ class TunnelManager:
             if self._url:
                 self._started_at = datetime.now(timezone.utc).isoformat()
                 self._error = None
-                logger.info(
-                    "Tunnel started: %s (token: %s...)", self._url, self._token[:8]
-                )
+                # The URL is the host only; the token and password stay out of logs.
+                logger.info("Tunnel started: %s", self._url)
             else:
                 # _poll_ngrok_api already sets self._error with a friendly
                 # message; keep a sensible fallback if it somehow didn't.
@@ -801,7 +800,7 @@ class TunnelManager:
                 resp = await client.get("https://api.ipify.org")
                 if resp.status_code == 200:
                     self._public_ip = resp.text.strip()
-                    logger.info("Public IP: %s", self._public_ip)
+                    logger.info("Public IP fetched for the tunnel password")
         except Exception as e:
             logger.debug("Could not fetch public IP: %s", e)
             self._public_ip = None

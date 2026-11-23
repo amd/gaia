@@ -3536,6 +3536,22 @@ for (const locale of ['ar', 'en']) {
         expect(await audit(page)).toEqual([]);
     });
 
+    test(`Mobile access with the tunnel on (${locale})`, async ({ page }) => {
+        const active = { active: true, url: 'https://quiet-otter.ngrok.app', token: 'a1b2c3d4-0000-4000-8000-00000000beef', startedAt: NOW.toISOString(), error: null, reason: null, installCommands: [], publicIp: '203.0.113.77', device: null };
+        await open(page, '', locale, async (p) => {
+            await p.route('**/api/tunnel/start', (route) => route.fulfill({ json: active }));
+            await p.route('**/api/tunnel/status', (route) => route.fulfill({ json: active }));
+        });
+        await page.locator('.sb-icon-btn').filter({ has: page.locator('.lucide-smartphone') }).click();
+        const dialog = page.locator('.mobile-modal');
+        await expect(dialog.locator('.tunnel-url-area')).toBeVisible();
+        // ngrok is a third party; the dialog must not promise the data stays secure.
+        await expect(dialog).toContainText('ngrok');
+        await expect(dialog).not.toContainText('stays secure');
+        await shot(page, `mobile-access-active-${locale}`);
+        expect(await audit(page)).toEqual([]);
+    });
+
     test(`a Setup row lands on its setting, with a way back (${locale})`, async ({ page }) => {
         await open(page, '', locale, async (p) => {
             await withModelPage(p, MODEL_LIST, SETUP_PLAN);
