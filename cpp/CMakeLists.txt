@@ -263,6 +263,7 @@ add_library(gaia_core
     src/mcp_client.cpp
     src/mcp_registry.cpp
     src/security.cpp
+    src/internet_refusal.cpp
     src/sse_parser.cpp
     src/process.cpp
     src/file_tools.cpp
