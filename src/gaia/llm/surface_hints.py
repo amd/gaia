@@ -95,8 +95,8 @@ AGENT_UI_SERVER_RESTART_HINT = (
     "Press Start the model server below, then send your message again."
 )
 #: gaiacpp's remedy for the same thing, as its readiness check (`/init`) words
-#: it: that check can't be told which front-end asks. Pinned to the C++ source
-#: by tests/unit/test_surface_hints.py.
+#: it: that check can't be told which front-end asks. gaiacpp's own test
+#: (ModelCheck.UnreachableGaiaServerSaysHowToStartGaia) pins the same sentence.
 NATIVE_SERVER_START_HINT = "Open GAIA, or run `gaia daemon start`, then try again."
 
 #: How a user repairs GAIA's install (a missing or broken Lemonade Server).

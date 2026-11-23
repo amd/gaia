@@ -325,16 +325,10 @@ class TestGaiaDispatch:
         self, monkeypatch
     ):
         """ "Open GAIA" is no remedy in the app; the hint names its Start button."""
-        from pathlib import Path
-
         from gaia.llm.surface_hints import (
             AGENT_UI_SERVER_RESTART_HINT,
             NATIVE_SERVER_START_HINT,
         )
-
-        # The swap only works while gaiacpp still writes this exact sentence.
-        source = Path(__file__).parents[4] / "cpp/agents/gaiacpp/gaia_setup.cpp"
-        assert f'"{NATIVE_SERVER_START_HINT}"' in source.read_text(encoding="utf-8")
 
         hint = (
             "GAIA's model server isn't running (it last ran at "

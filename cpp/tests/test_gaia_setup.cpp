@@ -331,7 +331,8 @@ TEST_F(ModelCheck, UnreachableGaiaServerSaysHowToStartGaia) {
     } catch (const std::exception& e) {
         const std::string msg = e.what();
         EXPECT_NE(msg.find("GAIA's model server isn't running"), std::string::npos) << msg;
-        EXPECT_NE(msg.find("gaia daemon start"), std::string::npos) << msg;
+        // The Agent UI swaps this exact sentence for its own (NATIVE_SERVER_START_HINT in surface_hints.py).
+        EXPECT_NE(msg.find("Open GAIA, or run `gaia daemon start`, then try again."), std::string::npos) << msg;
     }
 }
 
