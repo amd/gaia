@@ -511,6 +511,30 @@ TEST(GaiacodeEvents, RunChecksIsMeasuredInTheFolderItRunsIn) {
     EXPECT_EQ(repo.agent->events().back(), kEdit) << "the rewrite happened in pkg's own repository";
 }
 
+TEST(GaiacodeEvents, AnEditInsideASubmoduleIsSeen) {
+    if (BashTools::detectShell().empty()) GTEST_SKIP() << "needs a POSIX shell for the commands below";
+    MeasuredRepo repo("gaiacode-measured-super");
+    const fs::path lib = repo.dir.parent_path() / (repo.dir.filename().u8string() + "-lib");
+    fs::remove_all(lib);
+    fs::create_directories(lib);
+    writeFile(lib / "lib.py", "x = 1\n");
+    for (const char* c : {"git init -q", "git -c user.email=t@t -c user.name=t add -A",
+                          "git -c user.email=t@t -c user.name=t commit -qm lib"}) {
+        ASSERT_EQ(ProcessRunner::run(c, 30000, lib.u8string()).exitCode, 0) << c;
+    }
+    ASSERT_EQ(ProcessRunner::run("git -c protocol.file.allow=always submodule add -q " + lib.u8string() +
+                                     " vendor/lib && git -c user.email=t@t -c user.name=t commit -qm sub",
+                                 60000, repo.dir.u8string())
+                  .exitCode,
+              0);
+    const auto before = CodeAgent::treeFingerprint(repo.dir.u8string());
+    ASSERT_TRUE(before.has_value());
+    EXPECT_EQ(CodeAgent::treeFingerprint(repo.dir.u8string()), before) << "nothing changed, nothing differs";
+    writeFile(repo.dir / "vendor" / "lib" / "lib.py", "x = 2\n");
+    EXPECT_NE(CodeAgent::treeFingerprint(repo.dir.u8string()), before) << "the outer tree alone wouldn't show it";
+    fs::remove_all(lib);
+}
+
 TEST(GaiacodeEvents, ARelativePathOutOfTheWorkspaceRunsNothingThere) {
     if (BashTools::detectShell().empty()) GTEST_SKIP() << "needs a POSIX shell for the commands below";
     MeasuredRepo repo("gaiacode-measured-inside");
