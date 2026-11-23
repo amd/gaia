@@ -19,6 +19,7 @@ sources here too.
 | `security-demo` | `examples/security_demo.cpp` | win-x64, linux-x64, darwin-arm64 |
 | `vlm` | `examples/vlm_agent.cpp` | win-x64, linux-x64, darwin-arm64 |
 | `gaia` | `agents/gaiacpp/` (binary `gaiacpp`) | win-x64, linux-x64, darwin-arm64 |
+| `gaiacode` | `agents/gaiacode/` (binary `gaiacode`) | none yet: built and tested, not packaged until it is offered |
 
 `health`, `wifi`, and `process` use Windows-only APIs (`windows.h`, `psapi`,
 `netsh`/PowerShell), so they are built only on the `win-x64` matrix leg.
