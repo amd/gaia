@@ -208,11 +208,27 @@ public:
 
     /// Like get(), but nullopt when the token may not read it (403, not a rate limit) or it isn't
     /// there (404): every other failure is still an error.
-    std::optional<json> getIfAllowed(const std::string& path) {
+    std::optional<json> getIfAllowed(const std::string& path, std::string& why) {
         const HttpResponse r = callGet(path);
-        const bool rateLimited = r.header("x-ratelimit-remaining") == "0" || !r.header("retry-after").empty();
-        if (r.status == 404 || (r.status == 403 && !rateLimited)) return std::nullopt;
+        if (r.status == 403 && !rateLimited(r)) {
+            why = "the token can't read them";
+            return std::nullopt;
+        }
+        if (r.status == 404) {
+            why = "GitHub couldn't find them, or the token can't see them";
+            return std::nullopt;
+        }
         return parse(check(r, path, false));
+    }
+
+    /// A primary limit says so in its headers; a secondary one may only say so in its message.
+    static bool rateLimited(const HttpResponse& r) {
+        if (r.status != 403 && r.status != 429) return false;
+        if (r.header("x-ratelimit-remaining") == "0" || !r.header("retry-after").empty()) return true;
+        std::string body = r.body;
+        std::transform(body.begin(), body.end(), body.begin(),
+                       [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+        return body.find("rate limit") != std::string::npos;
     }
 
     /// A text resource that GitHub may serve from another host (job logs).
@@ -277,13 +293,15 @@ private:
                                          : "GitHub refused the token from " + access_.tokenSource +
                                                ". Replace it, or sign in again with `gh auth login`.");
         }
-        if ((r.status == 403 || r.status == 429) &&
-            (r.header("x-ratelimit-remaining") == "0" || !r.header("retry-after").empty())) {
+        if (rateLimited(r)) {
             const std::string retry = r.header("retry-after");
-            throw std::runtime_error(retry.empty()
-                                         ? "GitHub's rate limit is used up until " + r.header("x-ratelimit-reset") +
-                                               " (Unix time). Try again after that."
-                                         : "GitHub asked to wait " + retry + " seconds before the next request.");
+            const std::string reset = r.header("x-ratelimit-reset");
+            throw std::runtime_error(!retry.empty()  ? "GitHub asked to wait " + retry + " seconds before the next request."
+                                     : !reset.empty() ? "GitHub's rate limit is used up until " + reset +
+                                                            " (Unix time). Try again after that."
+                                                      : "GitHub is limiting requests from this token for now (" +
+                                                            (message.empty() ? std::string("rate limit") : message) +
+                                                            "). Wait a minute, then try again.");
         }
         if (r.status == 404) {
             throw std::runtime_error(path + " was not found on GitHub, or the token can't see it" +
@@ -535,16 +553,16 @@ void registerGitHubTools(ToolRegistry& registry, std::function<std::string()> fo
             // Older CI (and some apps) report commit statuses, not check runs. A token allowed to read
             // checks but not statuses still gets the checks, told what it couldn't see.
             json statuses = json::array();
-            std::string statusesUnavailable;
-            if (const auto combined = api.getIfAllowed("/repos/" + r.slug() + "/commits/" + sha + "/status")) {
+            std::string statusesUnavailable, why;
+            if (const auto combined = api.getIfAllowed("/repos/" + r.slug() + "/commits/" + sha + "/status", why)) {
                 statuses = combined->value("statuses", json::array());
             } else {
-                statusesUnavailable = "the token can't read this repository's commit statuses";
+                statusesUnavailable = "the commit statuses couldn't be read: " + why;
                 // With no check runs either, "nothing failing" would be a guess.
                 if (checks.empty()) {
                     throw std::runtime_error("No CI results could be read for pull request " + std::to_string(n) +
                                              ": it has no check runs, and " + statusesUnavailable +
-                                             ". Use a token that can read commit statuses.");
+                                             ". Use a token that can read this repository's commit statuses.");
                 }
             }
             for (const auto& st : statuses) {

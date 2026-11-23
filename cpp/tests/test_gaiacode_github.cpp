@@ -81,7 +81,11 @@ public:
             res.set_header("x-ratelimit-reset", "1900000000");
             json(res, {{"message", "API rate limit exceeded"}}, 403);
         });
-        server_.Get("/repos/o/denied/issues/1", [json](const httplib::Request&, httplib::Response& res) {
+        // A secondary limit: a 403 that says so only in its message.
+        server_.Get("/repos/o/throttled/issues/1", [json](const httplib::Request&, httplib::Response& res) {
+            json(res, {{"message", "You have exceeded a secondary rate limit. Please wait a few minutes."}}, 403);
+        });
+        server_.Get("/repos/o/denied/issues/1",[json](const httplib::Request&, httplib::Response& res) {
             json(res, {{"message", "Bad credentials"}}, 401);
         });
         // GitHub sends null for an empty body, a deleted user and a check still running.
@@ -254,6 +258,8 @@ TEST(GaiacodeGitHub, ErrorsSayWhatToDo) {
     const json limited = Tools(gh, "o/limited").call("gh_issue_view", {{"number", 1}});
     EXPECT_EQ(limited.value("status", ""), "error");
     EXPECT_NE(limited.value("error", "").find("rate limit"), std::string::npos) << limited.dump();
+    const json throttled = Tools(gh, "o/throttled").call("gh_issue_view", {{"number", 1}});
+    EXPECT_NE(throttled.value("error", "").find("limiting requests"), std::string::npos) << throttled.dump();
     const json denied = Tools(gh, "o/denied").call("gh_issue_view", {{"number", 1}});
     EXPECT_NE(denied.value("error", "").find("refused the token from GH_TOKEN"), std::string::npos) << denied.dump();
     const json bad = Tools(gh, "o/r").call("gh_issue_view", {{"number", -1}});

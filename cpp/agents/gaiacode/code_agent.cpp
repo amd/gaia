@@ -127,6 +127,10 @@ void CodeAgent::registerTools() {
     if (skills_ && !skills_->skills().empty()) skills_->registerTools(reg);
 }
 
+namespace {
+bool mutatesAfterTests(const std::string& command);
+}  // namespace
+
 ToolInfo CodeAgent::observed(ToolInfo tool) {
     ToolCallback inner = std::move(tool.callback);
     const std::string name = tool.name;
@@ -141,6 +145,12 @@ ToolInfo CodeAgent::observed(ToolInfo tool) {
         std::optional<std::string> before;
         if (measure) {
             folder = nativeFolder((options_.shell ? *options_.shell : BashTools::defaultSession()).cwd());
+            // run_checks runs in its `path`, relative to the shell's folder.
+            if (name == "run_checks" && args.is_object() && args.contains("path") && args["path"].is_string()) {
+                fs::path dir = fs::u8path(args["path"].get<std::string>());
+                if (!dir.is_absolute()) dir = fs::u8path(folder) / dir;
+                folder = dir.u8string();
+            }
             before = treeFingerprint(folder);
         }
         json result = inner(args);
@@ -148,9 +158,14 @@ ToolInfo CodeAgent::observed(ToolInfo tool) {
         const std::optional<std::string> after = before ? treeFingerprint(folder) : std::nullopt;
         const bool failed = !result.is_object() || result.value("status", "") == "error" || result.contains("error");
         if (before && after && !failed) {
-            if (const auto t = testResult(name, args, result)) seen.push_back(*t);
-            // Changed files after a test run in the same call: the tests may not have seen them.
-            if (*before != *after) seen.push_back(TurnEvent::Edit);
+            const std::optional<TurnEvent> t = testResult(name, args, result);
+            const bool changed = *before != *after;
+            // What a test run writes itself (__pycache__, .coverage) comes before its result; only
+            // a step after the tests (`pytest && black .`) leaves them behind the files.
+            const bool changedAfter = changed && t && name == "bash_execute" && mutatesAfterTests(command);
+            if (changed && !changedAfter) seen.push_back(TurnEvent::Edit);
+            if (t) seen.push_back(*t);
+            if (changedAfter) seen.push_back(TurnEvent::Edit);
         } else if (const std::optional<TurnEvent> e = classify(name, args, result)) {
             seen.push_back(*e);
         }
@@ -280,6 +295,24 @@ std::optional<TurnEvent> shellEvent(const std::string& command, const json& resu
     return changed ? std::optional(TurnEvent::Edit) : std::nullopt;
 }
 
+// A step after a test step that may change files, or a command too tangled to tell.
+bool mutatesAfterTests(const std::string& command) {
+    const bool posix = !BashTools::detectShell().empty();
+    std::vector<std::vector<std::string>> segments;
+    if (!splitShellCommand(command, posix, segments)) return true;
+    bool tested = false;
+    for (const auto& seg : segments) {
+        std::string text;
+        for (const auto& w : seg) text += " " + w;
+        if (looksLikeTestCommand(text)) {
+            tested = true;
+        } else if (tested && !leavesTreeAlone(seg) && !isReadOnlyShellCommand(text + " ", posix)) {
+            return true;
+        }
+    }
+    return false;
+}
+
 }  // namespace
 
 std::optional<TurnEvent> CodeAgent::classify(const std::string& tool, const json& args, const json& result) {
@@ -323,35 +356,89 @@ std::optional<TurnEvent> CodeAgent::testResult(const std::string& tool, const js
     return r.green() ? TurnEvent::TestsPassed : TurnEvent::TestsFailed;
 }
 
+namespace {
+#ifdef _WIN32
+std::string shellQuoted(const std::string& v) { return "\"" + v + "\""; }
+#else
+std::string shellQuoted(const std::string& v) {
+    std::string out = "'";
+    for (char c : v) out += c == '\'' ? std::string("'\\''") : std::string(1, c);
+    return out + "'";
+}
+#endif
+
+// One git command in *folder*, its environment set for that child alone.
+ProcessResult gitIn(const std::string& git, const std::string& folder,
+                    const std::vector<std::pair<std::string, std::string>>& env, const std::string& args,
+                    int timeoutMs) {
+#ifdef _WIN32
+    // cmd /c strips the outer quotes; each `set` lives only in that cmd.
+    std::string line = "\"";
+    for (const auto& [k, v] : env) line += "set \"" + k + "=" + v + "\"&& ";
+    line += shellQuoted(git) + " -C " + shellQuoted(folder) + " -c core.fsmonitor=false " + args + "\"";
+#else
+    std::string line;
+    for (const auto& [k, v] : env) line += k + "=" + shellQuoted(v) + " ";
+    line += shellQuoted(git) + " -C " + shellQuoted(folder) + " -c core.fsmonitor=false " + args;
+#endif
+    return ProcessRunner::run(line, timeoutMs);
+}
+
+std::string trimmed(std::string s) {
+    while (!s.empty() && std::isspace(static_cast<unsigned char>(s.back()))) s.pop_back();
+    return s;
+}
+}  // namespace
+
 std::optional<std::string> CodeAgent::treeFingerprint(const std::string& folder) {
 #ifdef _WIN32
     // By full path: cmd.exe would run a git.cmd in the repository first.
-    const std::string path = findProgramOnPath("git");
-    if (path.empty()) return std::nullopt;
-    const std::string open = "\"\"" + path + "\" ", close = "\"";
+    const std::string git = findProgramOnPath("git");
+    if (git.empty()) return std::nullopt;
 #else
-    const std::string open = "git ", close;
+    const std::string git = "git";
 #endif
-    const std::string guard = "-c core.fsmonitor=false ";
-    const ProcessResult dir = ProcessRunner::run(open + guard + "rev-parse --absolute-git-dir" + close, 10000, folder);
-    if (dir.exitCode != 0) return std::nullopt;
-    std::string gitDir = dir.stdout_output;
-    while (!gitDir.empty() && std::isspace(static_cast<unsigned char>(gitDir.back()))) gitDir.pop_back();
-    // A throwaway index, seeded from the real one so unchanged files aren't hashed again;
-    // the user's staging area is never touched.
+    const ProcessResult dirs = gitIn(git, folder, {}, "rev-parse --absolute-git-dir --git-path objects", 10000);
+    if (dirs.exitCode != 0) return std::nullopt;
+    std::istringstream lines(dirs.stdout_output);
+    std::string gitDir, objects;
+    std::getline(lines, gitDir);
+    std::getline(lines, objects);
+    gitDir = trimmed(gitDir);
+    objects = trimmed(objects);
+    if (gitDir.empty() || objects.empty()) return std::nullopt;
+    fs::path objectsDir = fs::u8path(objects);
+    if (!objectsDir.is_absolute()) objectsDir = fs::u8path(folder) / objectsDir;
+    // A throwaway index seeded from the real one, and a throwaway object store that reads the
+    // real one: the user's staging area and .git/objects are never written.
     std::error_code ec;
     static std::atomic<unsigned long long> counter{0};
-    const fs::path temp = fs::temp_directory_path(ec) /
-                          ("gaiacode-index-" + std::to_string(std::random_device{}()) + "-" + std::to_string(++counter));
-    fs::copy_file(fs::u8path(gitDir) / "index", temp, fs::copy_options::overwrite_existing, ec);
-    const std::map<std::string, std::string> env = {{"GIT_INDEX_FILE", temp.u8string()}};
-    const ProcessResult add = ProcessRunner::run(open + guard + "add -A" + close, 120000, folder, env);
+    const std::string tag = std::to_string(std::random_device{}()) + "-" + std::to_string(++counter);
+    const fs::path base = fs::temp_directory_path(ec);
+    const fs::path index = base / ("gaiacode-index-" + tag);
+    const fs::path store = base / ("gaiacode-objects-" + tag);
+    fs::create_directories(store, ec);
+    if (ec) return std::nullopt;
+    fs::copy_file(fs::u8path(gitDir) / "index", index, fs::copy_options::overwrite_existing, ec);
+    const std::vector<std::pair<std::string, std::string>> env = {
+        {"GIT_INDEX_FILE", index.u8string()},
+        {"GIT_OBJECT_DIRECTORY", store.u8string()},
+        {"GIT_ALTERNATE_OBJECT_DIRECTORIES", objectsDir.u8string()},
+    };
     std::optional<std::string> tree;
-    if (add.exitCode == 0) {
-        const ProcessResult write = ProcessRunner::run(open + guard + "write-tree" + close, 30000, folder, env);
-        if (write.exitCode == 0) tree = write.stdout_output;
+    if (gitIn(git, folder, env, "add -A", 120000).exitCode == 0) {
+        const ProcessResult write = gitIn(git, folder, env, "write-tree", 30000);
+        if (write.exitCode == 0) tree = trimmed(write.stdout_output);
     }
-    fs::remove(temp, ec);
+    fs::remove(index, ec);
+    fs::remove(fs::path(index.native() + fs::path(".lock").native()), ec);
+    // git writes objects read-only, which Windows won't delete.
+    for (fs::recursive_directory_iterator it(store, ec), end; !ec && it != end; it.increment(ec)) {
+        std::error_code permEc;
+        fs::permissions(it->path(), fs::perms::owner_write, fs::perm_options::add, permEc);
+    }
+    ec.clear();
+    fs::remove_all(store, ec);
     return tree;
 }
 
