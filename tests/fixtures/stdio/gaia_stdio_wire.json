@@ -42,8 +42,8 @@
     "tool_call": { "fields": ["tool", "args", "narration"] },
     "tool_result": { "fields": ["tool", "render", "data", "preview"], "not_sent_over_stdio": ["render"] },
     "needs_confirmation": {
-      "fields": ["run_id", "action", "summary", "confirm_id", "always_scope", "risk", "confirm_url"],
-      "not_sent_over_stdio": ["confirm_url"]
+      "fields": ["run_id", "action", "summary", "confirm_id", "always_scope", "always_label", "risk", "confirm_url"],
+      "not_sent_over_stdio": ["confirm_url", "always_label"]
     },
     "needs_input": {
       "fields": [
