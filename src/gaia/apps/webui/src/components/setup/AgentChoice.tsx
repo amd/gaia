@@ -24,6 +24,15 @@ const OPTIONS: Option[] = [
     { id: 'gaiacpp', label: 'setup.agent.gaiacpp', more: 'setup.agent.gaiacppMore', tag: 'setup.agent.beta' },
 ];
 
+/** What changes for the user on gaiacpp, each checked against the sidecar (docs/cpp/gaia-agent.mdx). */
+const DIFFERENCES: MessageKey[] = [
+    'setup.agent.diff.memory',
+    'setup.agent.diff.undo',
+    'setup.agent.diff.search',
+    'setup.agent.diff.media',
+    'setup.agent.diff.context',
+];
+
 const WHY: Record<NonNullable<AgentProgram['unavailable_code']>, MessageKey> = {
     no_release: 'setup.agent.why.noRelease',
     unreachable: 'setup.agent.why.unreachable',
@@ -212,11 +221,12 @@ export function AgentChoice({ inSettings = false, disabled = false, pending = nu
                     {/* Kept mounted while hidden: the row waiting on Download is described by its note here. */}
                     <div id={moreId} className="agent-choice-detail" hidden={!open}>
                         {OPTIONS.map((o) => (
-                            <p key={o.id}>
-                                {t(o.more, { name: o.id })}
-                                {o.id === 'gaiacpp' && cppNote && !off(cpp) && <> <span id={offId}>{cppNote}</span></>}
-                            </p>
+                            <p key={o.id}>{t(o.more, { name: o.id })}</p>
                         ))}
+                        <ul className="agent-choice-diffs">
+                            {DIFFERENCES.map((key) => <li key={key}>{t(key, { name: 'gaiacpp', other: 'gaiapy' })}</li>)}
+                        </ul>
+                        {cppNote && !off(cpp) && <p id={offId}>{cppNote}</p>}
                         <p>{t(inSettings ? 'settings.agent.nextMessage' : 'setup.agent.hint')}</p>
                     </div>
                 </>

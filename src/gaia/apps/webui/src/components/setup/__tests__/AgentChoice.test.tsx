@@ -4,6 +4,7 @@
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import * as api from '../../../services/api';
+import { stripIsolates } from '../../../i18n/registry';
 import { useChatStore } from '../../../stores/chatStore';
 import { AGENT_PROGRAMS, SETTINGS, withoutGaiacpp } from '../../../test/setupApiMocks';
 import type { AgentDownload } from '../../../types';
@@ -50,6 +51,21 @@ describe('AgentChoice', () => {
         expect(screen.getByText(/gaiapy is the Python agent: every tool and feature, and the most tested/)).toBeVisible();
         expect(screen.getByText(/gaiacpp is the native C\+\+ agent: it starts in a fraction of a second/)).toBeVisible();
         expect(screen.getByText('You can switch later in Settings › Agent & model.')).toBeVisible();
+    });
+
+    it('lists what changes on gaiacpp, not just "fewer features"', async () => {
+        render(<AgentChoice />);
+        await radio(/gaiacpp/);
+        fireEvent.click(screen.getByRole('button', { name: 'Compare the two' }));
+        const differences = within(screen.getByRole('list')).getAllByRole('listitem').map((li) => stripIsolates(li.textContent ?? ''));
+        expect(differences).toEqual([
+            "Memory is separate: what GAIA remembered with gaiapy isn't seen by gaiacpp, and the other way round.",
+            "File changes it makes can't be undone from the chat.",
+            'Document search matches words, not meaning.',
+            "It can't create images, transcribe audio or turn a document into speech.",
+            "The context meter doesn't show how full the conversation is.",
+        ]);
+        expect(screen.queryByText(/fewer tools and features/)).not.toBeInTheDocument();
     });
 
     it('selects nothing for a saved agent this version cannot run, and lets the user pick one', async () => {

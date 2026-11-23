@@ -3090,6 +3090,17 @@ for (const locale of ['ar', 'en']) {
                     if (expanded) await more.click();
                     await expect(more).toHaveAttribute('aria-expanded', String(expanded));
                     await expect(agent.locator('.agent-choice-detail')).toBeVisible({ visible: expanded });
+                    if (expanded) {
+                        // What changes on gaiacpp is a list of its own, each line inside the card.
+                        const diffs = agent.locator('.agent-choice-diffs li');
+                        await expect(diffs).toHaveCount(5);
+                        const card = (await agent.boundingBox())!;
+                        for (const line of await diffs.all()) {
+                            const box = (await line.boundingBox())!;
+                            expect(box.x).toBeGreaterThanOrEqual(card.x - 1);
+                            expect(box.x + box.width).toBeLessThanOrEqual(card.x + card.width + 1);
+                        }
+                    }
                     for (const row of await agent.locator('[role="radio"]').all()) {
                         expect((await row.boundingBox())!.height).toBeLessThan(48);
                     }
