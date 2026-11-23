@@ -343,6 +343,12 @@ const messages: Messages = {
     'question.send': 'إرسال',
     'question.sendFailed': 'تعذّر إرسال الإجابة.',
     'question.timeLeft': 'ينتظر GAIA إجابتك لمدة {time} أخرى.',
+
+    // خطوة توقّف عندها وكيل قديم بدل أن يطلب الموافقة
+    'confirmCard.badge': 'لم تُنفَّذ',
+    'confirmCard.agentTooOld': 'تحتاج هذه الخطوة إلى موافقتك، لكن وكيل GAIA المثبّت قديم جدًا ولا يستطيع طلبها هنا، لذلك لم يُنفَّذ شيء. حدّث GAIA إلى أحدث إصدار، ثم اطلب ذلك مرة أخرى.',
+    'confirmCard.dismiss': 'إغلاق',
+    'confirmCard.dismissed': 'لم تُنفَّذ: {step}',
     'composer.private': 'خاصة',
     'composer.research': 'بحث',
     'composer.researchOnTitle': 'البحث مفعّل: يبحث GAIA في الويب ويقرأ المصادر ويكتب تقريرًا يذكر كل مصدر. انقر لإيقافه.',
