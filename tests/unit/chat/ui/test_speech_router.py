@@ -227,3 +227,37 @@ def test_gaia_config_set_checks_the_voice_and_speed():
         config.set("read_aloud_voice", "nobody")
     with pytest.raises(GaiaConfigError, match="50 to 200"):
         config.set("read_aloud_speed", "201")
+
+
+# ── Where GAIA doesn't offer its voice ─────────────────────────────────────
+
+
+@pytest.fixture
+def on_a_mac(monkeypatch):
+    monkeypatch.setattr(config_mod, "_current_platform", lambda: "darwin")
+
+
+def test_settings_say_read_aloud_is_offered_on_a_proven_platform(client):
+    body = client.get("/api/speech/settings").json()
+    assert body["available"] is True and body["unavailable_reason"] is None
+
+
+def test_settings_say_read_aloud_is_not_offered_on_a_mac(client, on_a_mac):
+    body = client.get("/api/speech/settings").json()
+    assert body["available"] is False
+    assert "aren't offered on macOS" in body["unavailable_reason"]
+
+
+def test_a_saved_auto_read_still_loads_where_read_aloud_is_withheld(client, on_a_mac):
+    GaiaConfig.save_keys({"read_aloud_auto": True, "read_aloud_voice": "bm_lewis"})
+    body = client.get("/api/speech/settings").json()
+    assert (body["auto"], body["voice"], body["available"]) == (True, "bm_lewis", False)
+
+
+def test_speech_on_a_mac_is_409_and_reaches_no_lemonade(client, on_a_mac):
+    # The real client: its gate refuses before any request is built.
+    reply = client.post("/api/speech", json={"text": "Hello there."})
+    assert reply.status_code == 409
+    assert "aren't offered on macOS" in reply.json()["detail"]
+    reply = client.get("/api/speech/model")
+    assert reply.status_code == 409
