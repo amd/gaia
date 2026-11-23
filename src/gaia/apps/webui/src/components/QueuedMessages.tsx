@@ -52,7 +52,7 @@ export function QueuedMessages({ items, onRemove, onSteer, onRetry, replying = t
                         {item.state === 'failed'
                             ? (item.error ? t('queue.notSent', { error: item.error }) : t('queue.notSentBare'))
                             : item.state === 'queued'
-                                ? (replying && item.note) || queuedLabel(replying, busyRetry, t)
+                                ? (replying && item.note ? t(item.note) : '') || queuedLabel(replying, busyRetry, t)
                                 : t(STATE_LABEL[item.state as keyof typeof STATE_LABEL])}
                     </span>
                     {item.state === 'failed' && (

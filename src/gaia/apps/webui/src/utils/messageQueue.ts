@@ -8,6 +8,9 @@
  * it, or by the user.
  */
 
+import { isMessageKey } from '../i18n/registry';
+import type { MessageKey } from '../i18n/types';
+
 /**
  * `sending`: offered to the running reply. `delivered`: it accepted, not yet read.
  * `queued`: sent after the reply. `starting`: going out as its own message now.
@@ -24,7 +27,7 @@ export interface QueuedMessage {
     /** Why a `failed` message did not go out. */
     error?: string;
     /** Why a `queued` message could not be added to the running reply. */
-    note?: string;
+    note?: MessageKey;
 }
 
 /** What a finished turn did with the messages offered to it (GET /api/chat/followup). */
@@ -48,7 +51,7 @@ export function promote(items: QueuedMessage[], id: number, from: QueuedState, t
     return items.map((m) => (m.id === id && m.state === from ? { ...m, state: to, error: undefined, note: undefined } : m));
 }
 
-export const STEER_REFUSED_NOTE = "Can't add to this reply; it will send when the reply ends.";
+export const STEER_REFUSED_NOTE: MessageKey = 'queue.steerRefused';
 
 /** The running reply refused a message offered to it: back in line, saying so. */
 export function steerRefused(items: QueuedMessage[], id: number): QueuedMessage[] {
@@ -163,6 +166,8 @@ export function restore(saved: unknown): Record<string, QueuedMessage[]> {
             .map((m): QueuedMessage => {
                 if (m.state === 'sending') return { ...m, state: 'delivered' };
                 if (m.state === 'starting') return { ...m, state: 'failed', error: INTERRUPTED_ERROR };
+                // A note saved as English text by an older build is not a key to translate.
+                if (m.note !== undefined && !isMessageKey(m.note)) return { ...m, note: undefined };
                 return m;
             });
         for (const m of items) nextId = Math.max(nextId, m.id + 1);
