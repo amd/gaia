@@ -3,7 +3,7 @@
 
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { NewChat, START_RETRY_MS, greeting, warmUpLine } from '../NewChat';
+import { NewChat, START_RETRY_MS, STARTERS_WAIT_MS, greeting, warmUpLine } from '../NewChat';
 import { useBrowserPaneStore } from '../../stores/browserPaneStore';
 import { useChatStore } from '../../stores/chatStore';
 import { useModelStore } from '../../stores/modelStore';
@@ -171,44 +171,109 @@ describe('NewChat without the GAIA agent', () => {
     });
 });
 
-describe('NewChat try chips', () => {
-    it('fills the box with an example that ends in a card, without sending it', () => {
+describe('NewChat starters', () => {
+    beforeEach(() => {
         useChatStore.setState({ systemStatus: { init_state: 'ready' } as SystemStatus });
+    });
+
+    const starters = async () => {
+        const group = await screen.findByRole('group', { name: 'Things to try' });
+        return Array.from(group.querySelectorAll('button')).map((b) => b.textContent);
+    };
+
+    it("offers this PC's tasks first, then an example, three in all", async () => {
+        render(<NewChat onSend={vi.fn()} />);
+        expect(await starters()).toEqual(['Ask about your documents', 'Research a topic', 'Recipe']);
+    });
+
+    it("holds the row's place, unseen and unreachable, until this PC's tasks arrive", async () => {
+        let answer!: (v: typeof START) => void;
+        vi.mocked(api.getStartScreen).mockReturnValue(new Promise((resolve) => { answer = resolve; }));
+        const { container } = render(<NewChat onSend={vi.fn()} />);
+        const held = container.querySelector('.try-chips');
+        expect(held).toHaveClass('is-pending');
+        expect(held).toHaveAttribute('aria-hidden', 'true');
+        expect(screen.queryByRole('group', { name: 'Things to try' })).toBeNull();
+
+        await act(async () => { answer(START); });
+        expect(await starters()).toEqual(['Ask about your documents', 'Research a topic', 'Recipe']);
+        expect(container.querySelector('.try-chips')).not.toHaveClass('is-pending');
+    });
+
+    it('shows the examples if the start screen has not answered after a short wait', async () => {
+        vi.useFakeTimers();
+        try {
+            vi.mocked(api.getStartScreen).mockReturnValue(new Promise(() => {}));
+            const { container } = render(<NewChat onSend={vi.fn()} />);
+            expect(container.querySelector('.try-chips')).toHaveClass('is-pending');
+            await act(async () => { vi.advanceTimersByTime(STARTERS_WAIT_MS); });
+            expect(container.querySelector('.try-chips')).not.toHaveClass('is-pending');
+            const group = screen.getByRole('group', { name: 'Things to try' });
+            expect(Array.from(group.querySelectorAll('button')).map((b) => b.textContent)).toEqual(['Recipe', 'Checklist', 'Split a bill']);
+        } finally {
+            vi.useRealTimers();
+        }
+    });
+
+    it('offers three examples when this PC has no tasks to offer', async () => {
+        vi.mocked(api.getStartScreen).mockResolvedValue({ ...START, cards: [] });
+        render(<NewChat onSend={vi.fn()} />);
+        expect(await starters()).toEqual(['Recipe', 'Checklist', 'Split a bill']);
+    });
+
+    it('offers three examples when the start screen cannot be fetched', async () => {
+        vi.mocked(api.getStartScreen).mockRejectedValue(new Error('backend restarting'));
+        render(<NewChat onSend={vi.fn()} />);
+        expect(await starters()).toEqual(['Recipe', 'Checklist', 'Split a bill']);
+    });
+
+    it('fills the box with a task that needs nothing typed, without sending it', async () => {
         const onSend = vi.fn().mockResolvedValue(undefined);
         render(<NewChat onSend={onSend} />);
 
-        fireEvent.click(screen.getByRole('button', { name: /^Recipe:/ }));
+        fireEvent.click(await screen.findByRole('button', { name: /^Ask about your documents:/ }));
+
+        expect(screen.getByLabelText('Message')).toHaveValue(START.cards[0].prompt);
+        expect(screen.getByLabelText('Message')).toHaveFocus();
+        expect(onSend).not.toHaveBeenCalled();
+    });
+
+    it('fills the box with an example that ends in a card, without sending it', async () => {
+        const onSend = vi.fn().mockResolvedValue(undefined);
+        render(<NewChat onSend={onSend} />);
+
+        fireEvent.click(await screen.findByRole('button', { name: /^Recipe:/ }));
 
         expect(screen.getByLabelText('Message')).toHaveValue('Give me a banana bread recipe');
         expect(screen.getByLabelText('Message')).toHaveFocus();
         expect(onSend).not.toHaveBeenCalled();
     });
 
-    it('keeps a question already typed and adds the example after it (#7594)', () => {
-        useChatStore.setState({ systemStatus: { init_state: 'ready' } as SystemStatus });
+    it('keeps a question already typed and adds the example after it (#7594)', async () => {
         render(<NewChat onSend={vi.fn().mockResolvedValue(undefined)} />);
 
         fireEvent.change(screen.getByLabelText('Message'), { target: { value: 'What should I cook this week?' } });
-        fireEvent.click(screen.getByRole('button', { name: /^Recipe:/ }));
+        fireEvent.click(await screen.findByRole('button', { name: /^Recipe:/ }));
 
         expect(screen.getByLabelText('Message')).toHaveValue('What should I cook this week?\n\nGive me a banana bread recipe');
     });
 
-    it('swaps the earlier chip example for the next one, with and without a typed question', () => {
-        useChatStore.setState({ systemStatus: { init_state: 'ready' } as SystemStatus });
+    it('swaps the earlier starter for the next one, with and without a typed question', async () => {
         render(<NewChat onSend={vi.fn().mockResolvedValue(undefined)} />);
         const box = screen.getByLabelText('Message');
+        const docs = await screen.findByRole('button', { name: /^Ask about your documents:/ });
+        const recipe = screen.getByRole('button', { name: /^Recipe:/ });
 
-        fireEvent.click(screen.getByRole('button', { name: /^Recipe:/ }));
-        fireEvent.click(screen.getByRole('button', { name: /^Workout:/ }));
-        expect(box).toHaveValue('A 15-minute workout I can do at home');
-        fireEvent.click(screen.getByRole('button', { name: /^Workout:/ }));
-        expect(box).toHaveValue('A 15-minute workout I can do at home');
+        fireEvent.click(docs);
+        fireEvent.click(recipe);
+        expect(box).toHaveValue('Give me a banana bread recipe');
+        fireEvent.click(recipe);
+        expect(box).toHaveValue('Give me a banana bread recipe');
 
         fireEvent.change(box, { target: { value: 'What should I do today?' } });
-        fireEvent.click(screen.getByRole('button', { name: /^Recipe:/ }));
-        fireEvent.click(screen.getByRole('button', { name: /^Workout:/ }));
-        expect(box).toHaveValue('What should I do today?\n\nA 15-minute workout I can do at home');
+        fireEvent.click(docs);
+        fireEvent.click(recipe);
+        expect(box).toHaveValue('What should I do today?\n\nGive me a banana bread recipe');
     });
 });
 
@@ -338,11 +403,12 @@ describe('NewChat empty state', () => {
         other.remove();
     });
 
-    it('stays clean: no task cards, only the greeting and the composer', async () => {
-        render(<NewChat onSend={vi.fn()} />);
+    it('stays clean: no task cards, the tasks are starters in one row', async () => {
+        const { container } = render(<NewChat onSend={vi.fn()} />);
         await screen.findByText('my-project');
         expect(screen.queryByRole('list', { name: 'Things to try' })).not.toBeInTheDocument();
-        expect(screen.queryByText('Ask about your documents')).not.toBeInTheDocument();
+        expect(container.querySelector('.start-card')).toBeNull();
+        expect(await screen.findAllByRole('button', { name: /^Ask about your documents:/ })).toHaveLength(1);
     });
 
     it('draws the NPU backdrop behind the content', () => {

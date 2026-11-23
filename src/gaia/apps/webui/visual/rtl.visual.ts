@@ -820,20 +820,36 @@ for (const locale of ['ar', 'en']) {
     }
 }
 
+const START_TASKS = {
+    cards: [
+        { skill: 'document-brief', title: 'Ask about your documents', note: '12 indexed documents', prompt: 'Using my indexed documents, give me the key points and anything I should act on.', needs_input: false },
+        { skill: 'research-report', title: 'Research a topic', note: 'A cited report from the web', prompt: 'Research and write a short cited report on: ', needs_input: true },
+        { skill: 'coding', title: 'Work on code', note: 'In gaia', prompt: 'Look around gaia and tell me what this project does.', needs_input: false },
+    ],
+    working_folder: { path: '/home/you/projects/gaia', name: 'gaia', gaia_folder: false, choosable: true },
+};
+
 for (const locale of ['ar', 'en']) {
-    for (const width of [1440, 390]) {
-        test(`Try chips fit in ${locale} at ${width}px`, async ({ page }) => {
-            await page.setViewportSize({ width, height: 900 });
-            await open(page, '', locale);
-            const chips = page.locator('.try-chip');
-            await expect(chips).toHaveCount(7);
-            await expect(chips.first()).toBeVisible();
-            if (locale === 'ar') await expect(chips.first()).toContainText('وصفة');
-            await shot(page, `try-chips-${locale}-${width}`);
-            // The closed sidebar drawer waits off screen at phone width; judge the chips.
-            const problems = (await audit(page)).filter((p) => p.includes('try-chip') || p.includes('scrolls sideways'));
-            expect(problems).toEqual([]);
-        });
+    for (const tasks of [false, true]) {
+        for (const width of [1200, 390]) {
+            test(`new-chat starters fit in ${locale} at ${width}px${tasks ? ", with this PC's tasks" : ''}`, async ({ page }) => {
+                await page.setViewportSize({ width, height: 900 });
+                await open(page, '', locale, tasks ? (p) => p.route('**/api/onboarding/start', (route) => route.fulfill({ json: START_TASKS })) : undefined);
+                const chips = page.locator('.try-chip');
+                await expect(chips).toHaveCount(3);
+                await expect(chips.first()).toBeVisible();
+                if (locale === 'ar') await expect(chips.first()).toContainText(tasks ? 'اسأل عن مستنداتك' : 'وصفة');
+                if (tasks) await expect(chips.last()).toContainText(locale === 'ar' ? 'وصفة' : 'Recipe');
+                await shot(page, `starters-${locale}-${width}${tasks ? '-tasks' : ''}`);
+                if (width >= 1200) {
+                    const tops = await chips.evaluateAll((els) => els.map((el) => Math.round(el.getBoundingClientRect().top)));
+                    expect(new Set(tops).size, 'the starters sit in one row').toBe(1);
+                }
+                // The closed sidebar drawer waits off screen at phone width; judge the chips.
+                const problems = (await audit(page)).filter((p) => p.includes('try-chip') || p.includes('scrolls sideways'));
+                expect(problems).toEqual([]);
+            });
+        }
     }
 }
 
