@@ -412,6 +412,7 @@ def _catalog(
     )
     from gaia.llm.lemonade_client import (
         DEFAULT_MODEL_LADDER,
+        FLASH_OPTION_MODEL_NAME,
         is_cloud_model_entry,
         runs_on_npu,
     )
@@ -487,6 +488,9 @@ def _catalog(
         recipe = (entry or {}).get("recipe") or (
             "flm" if runs_on_npu(model_id) else None
         )
+        fit = model_choice.backend_fit(
+            model_choice.memory_fit(model_id, full, capacity), recipe, system_info
+        )
         catalog.append(
             {
                 "id": model_id,
@@ -523,11 +527,13 @@ def _catalog(
                 "reads_images": model_choice.reads_images(model_id),
                 "feature_tier": model_choice.feature_tier(model_id),
                 "source": _model_source(entry),
-                **model_choice.backend_fit(
-                    model_choice.memory_fit(model_id, full, capacity),
-                    recipe,
-                    system_info,
+                # Only what runs here, never config-only Flash; the user's own stays.
+                "setup_offer": same(model_id, chat_id)
+                or (
+                    fit["fits"] is not False
+                    and not same(model_id, FLASH_OPTION_MODEL_NAME)
                 ),
+                **fit,
             }
         )
     return catalog

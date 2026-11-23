@@ -2859,7 +2859,10 @@ plan and make one set of choices.
     `/models/skip` checks the model against that plan.
 
     Each `catalog` entry says `support` (`verified`, `untested`, or null for an
-    optional model), `reads_images`, `feature_tier` and `source`. `components`
+    optional model), `reads_images`, `feature_tier` and `source`, and
+    `setup_offer`: whether setup lists it as a chat choice, which is false for
+    a model that doesn't fit this PC and for the opt-in Qwen3.8 Flash Next, and
+    always true for the plan's own chat model. `components`
     lists what setup fetches besides the models, `backends` what Lemonade
     reports for this PC, and `vision_model` the user's vision pick.
 

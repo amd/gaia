@@ -1837,6 +1837,8 @@ export const enMessages = {
     'setup.job.chat': 'Chat',
     'setup.job.verifiedNote': 'Verified models are tested by GAIA on PCs like this one.',
     'setup.job.untestedNote': 'Untested models are used at your own risk. They may run, but tools, documents or images might not work well.',
+    'setup.job.showUntested': 'Show untested models ({n})',
+    'setup.job.untestedLabel': 'Untested chat models',
     'setup.job.untestedPicked': "GAIA will use this model, but we haven't tested it. You can switch in Settings at any time.",
     'setup.job.vision': 'Reading images',
     'setup.job.visionBuiltIn': 'Handled by {name}',

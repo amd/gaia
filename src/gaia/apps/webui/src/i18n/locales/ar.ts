@@ -1837,6 +1837,8 @@ const messages: Messages = {
     'setup.job.chat': 'المحادثة',
     'setup.job.verifiedNote': 'النماذج الموثّقة اختبرها GAIA على أجهزة مثل هذا.',
     'setup.job.untestedNote': 'استخدام النماذج غير المختبرة على مسؤوليتك. قد تعمل، لكن الأدوات أو المستندات أو الصور قد لا تعمل جيدًا.',
+    'setup.job.showUntested': 'عرض النماذج غير المختبرة ({n})',
+    'setup.job.untestedLabel': 'نماذج محادثة غير مختبرة',
     'setup.job.untestedPicked': 'سيستخدم GAIA هذا النموذج، لكننا لم نختبره. يمكنك التبديل من الإعدادات في أي وقت.',
     'setup.job.vision': 'قراءة الصور',
     'setup.job.visionBuiltIn': 'يتولى ذلك {name}',
