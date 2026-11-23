@@ -74,10 +74,30 @@ function cardsFromSteps(steps: AgentStep[] | undefined): RenderCardData[] | unde
     return cards.length > 0 ? cards : undefined;
 }
 
+/** A saved step's command output is stored under the stream's names (`return_code`). */
+function stepFromApi(step: any): AgentStep {
+    const saved = step?.commandOutput;
+    if (!saved || 'returnCode' in saved) return step;
+    return {
+        ...step,
+        commandOutput: {
+            command: saved.command,
+            stdout: saved.stdout,
+            stderr: saved.stderr,
+            returnCode: saved.return_code,
+            expectedExit: saved.expected_exit,
+            cwd: saved.cwd,
+            durationSeconds: saved.duration_seconds,
+            truncated: saved.truncated,
+        },
+    };
+}
+
 /** Messages as the API sends them, with steps and stats under the names the view reads. */
 export function fromApiMessages(raw: unknown[] | undefined): Message[] {
     return (raw || []).map((m: any) => {
-        const agentSteps = m.agentSteps || m.agent_steps || undefined;
+        const steps = m.agentSteps || m.agent_steps || undefined;
+        const agentSteps = Array.isArray(steps) ? steps.map(stepFromApi) : steps;
         return {
             ...m,
             agentSteps,

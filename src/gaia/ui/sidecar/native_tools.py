@@ -87,6 +87,24 @@ def _count(n: int, one: str, many: str) -> str:
     return f"{n:,} {one if n == 1 else many}"
 
 
+def native_command_output(
+    tool: str, command: Any, data: Any
+) -> Optional[Dict[str, Any]]:
+    """gaiacpp's shell result as the Agent UI's terminal view reads one, else None.
+
+    The whole command and output: a step's detail and summary are shortened.
+    """
+    if tool != "bash_execute" or not isinstance(data, dict) or "exit_code" not in data:
+        return None
+    return {
+        "command": command if isinstance(command, str) else "",
+        "stdout": str(data.get("stdout") or ""),
+        "stderr": str(data.get("stderr") or ""),
+        "return_code": data["exit_code"],
+        "cwd": str(data.get("cwd") or ""),
+    }
+
+
 def native_result_summary(tool: str, data: Any) -> Optional[str]:
     """A gaiacpp tool's result in plain words, or None to summarize it generically.
 
