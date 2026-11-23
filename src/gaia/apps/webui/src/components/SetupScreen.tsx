@@ -726,8 +726,10 @@ export function SetupScreen({ onReady, onClose }: SetupScreenProps) {
         await download(held.acknowledgeLowDisk, latest);
     }, [download, setAgentPick, setHeldRun]);
 
-    // A picked agent that isn't here downloads first, so it counts in the total.
-    const agentGb = agentPick?.download && agentPick.sizeBytes ? agentPick.sizeBytes / 1e9 : 0;
+    // Setup's run installs the Python agent when it isn't here, whichever agent is picked.
+    const [pythonAgentGb, setPythonAgentGb] = useState(0);
+    // A picked agent that isn't here downloads first, so it counts in the total too.
+    const agentGb = pythonAgentGb + (agentPick?.download && agentPick.sizeBytes ? agentPick.sizeBytes / 1e9 : 0);
     const pickRef = useRef(agentPick);
     pickRef.current = agentPick;
     const heldRef = useRef(heldRun);
@@ -790,6 +792,8 @@ export function SetupScreen({ onReady, onClose }: SetupScreenProps) {
         resumed.current = true;
         api.getAgentPrograms()
             .then((l) => {
+                const py = l.programs.find((p) => p.id === 'gaiapy');
+                setPythonAgentGb(py && !py.installed && py.size_bytes ? py.size_bytes / 1e9 : 0);
                 const running = l.download.state === 'downloading';
                 followAgentDownload(l.download);
                 if (!heldRef.current) return;

@@ -189,18 +189,21 @@ export interface AgentProgramsAnswers {
     download?: object;
     /** What each poll of the download answers. */
     poll?: object;
+    /** gaiapy missing is a fresh PC, where setup's run installs it. */
+    gaiapy?: 'installed' | 'missing';
     /** The program the GAIA agent runs on now, when it differs from the saved one. */
     running?: string | null;
 }
 
 /** The agent programs as this PC would report them, and the gaiacpp download's answers. */
-export async function withAgentPrograms(page: Page, { gaiacpp = 'installed', download = IDLE_AGENT_DOWNLOAD, poll, running = null }: AgentProgramsAnswers = {}): Promise<void> {
+export async function withAgentPrograms(page: Page, { gaiacpp = 'installed', download = IDLE_AGENT_DOWNLOAD, poll, gaiapy = 'installed', running = null }: AgentProgramsAnswers = {}): Promise<void> {
     const cpp = gaiacpp === 'installed' ? AGENT_PROGRAMS.programs[1]
         : gaiacpp === 'downloadable' ? { ...AGENT_PROGRAMS.programs[1], installed: false, can_download: true }
             // A copy an older installer left on PATH, under a newer app.
             : gaiacpp === 'outdated' ? { ...AGENT_PROGRAMS.programs[1], can_download: true, update_available: true, version: '0.27.0-rc.8', release_version: '0.27.0-rc.10' }
             : { ...AGENT_PROGRAMS.programs[1], installed: false, size_bytes: null, unavailable_reason: 'this GAIA release has no gaiacpp to download. Use the Python agent, or update GAIA.', unavailable_code: 'no_release' };
-    const listing = { ...AGENT_PROGRAMS, running, programs: [AGENT_PROGRAMS.programs[0], cpp], download };
+    const py = gaiapy === 'installed' ? AGENT_PROGRAMS.programs[0] : { ...AGENT_PROGRAMS.programs[0], installed: false, size_bytes: 153_000_000 };
+    const listing = { ...AGENT_PROGRAMS, running, programs: [py, cpp], download };
     await page.route((url) => url.pathname.startsWith('/api/agent-programs'), async (route) => {
         const { pathname } = new URL(route.request().url());
         if (pathname === '/api/agent-programs') await route.fulfill({ json: listing });

@@ -173,8 +173,9 @@ conversation is. Your pick is saved when you press **Continue**, before
 setup's test chat, so that chat talks to the agent you chose. If gaiacpp isn't
 on the PC, the **Download** step gets it first, with its own progress bar,
 while the models wait; then it becomes the agent and the models download, and
-the download total on the page counts it. An agent already on the PC adds
-nothing to the total, and neither does a model whose file is already in the
+the download total on the page counts it. Setup installs gaiapy when it isn't
+on the PC, whichever agent you pick, so on a fresh PC the total counts gaiapy
+too. An agent already on the PC adds nothing to the total, and neither does a model whose file is already in the
 model folder: its row says **On this PC, checked during setup**. If
 that download fails, or GAIA can't switch to it, setup stops there and offers
 to try again or carry on with gaiapy. Where this release offers no gaiacpp, its row says

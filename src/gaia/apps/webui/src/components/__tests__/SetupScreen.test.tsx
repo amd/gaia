@@ -1037,6 +1037,21 @@ describe('SetupScreen: agent', () => {
         await waitFor(() => expect(downloadTotal()).toBe('300 MB'));
     });
 
+    // A fresh PC: setup's run installs the Python agent, so it counts whichever agent is picked.
+    it('gaiapy not on this PC: the download total counts it, and gaiacpp on top when picked', async () => {
+        mockedApi.getSetupPlan.mockResolvedValue(MODELS_HERE());
+        mockedApi.getAgentPrograms.mockResolvedValue({
+            ...withoutGaiacpp(),
+            programs: withoutGaiacpp().programs.map((p) => (p.id === 'gaiapy' ? { ...p, installed: false, size_bytes: 153_000_000 } : p)),
+        });
+        await open();
+        await toModels();
+        const agent = within(await screen.findByRole('region', { name: 'Agent' }));
+        await waitFor(() => expect(downloadTotal()).toBe('453 MB'));
+        fireEvent.click(await agent.findByRole('radio', { name: /gaiacpp/ }));
+        await waitFor(() => expect(downloadTotal()).toBe('460 MB'));
+    });
+
     describe('gaiacpp not on this PC', () => {
         beforeEach(() => {
             mockedApi.getAgentPrograms.mockResolvedValue(withoutGaiacpp());

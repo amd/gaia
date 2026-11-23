@@ -631,6 +631,20 @@ export const SETUP_SCENES: SetupScene[] = [
         },
     },
     {
+        // A fresh PC: setup's run installs gaiapy, so both download totals count it.
+        name: 'models-gaiapy-missing',
+        answers: { plan: PLAN_FILE_FOUND, agent: { gaiacpp: 'installed', gaiapy: 'missing' } },
+        reach: async (page) => {
+            await toPlan(page);
+            await expect(page.locator('.setup-facts dd').first()).toHaveText('153 MB');
+            await page.locator('.setup-footer .btn-secondary').click();
+            await expect(page.locator('.mc-list').first()).toBeVisible();
+            const total = page.locator('.mc-summary .mc-stat-value').first();
+            await expect(total).toHaveText('153 MB');
+            await total.scrollIntoViewIfNeeded();
+        },
+    },
+    {
         // An older installer's gaiacpp under a newer app: flagged on Customize, with Update, and still pickable.
         name: 'models-agent-outdated',
         answers: { agent: { gaiacpp: 'outdated' } },
