@@ -76,8 +76,10 @@ export function stubPanelApi() {
     return m;
 }
 
-export function resetPanelState() {
+/** A fresh panel state; *open* remembers the user opened it, as the panel's own tests need. */
+export function resetPanelState({ open = true }: { open?: boolean } = {}) {
     window.localStorage.clear();
+    if (open) window.localStorage.setItem('gaia.sessionPanel.open', '1');
     useSessionPanelStore.getState().reload();
     resetSessionEnvironmentCache();
 }
