@@ -158,8 +158,11 @@ jobs:
               --compare \
               --baseline "$BASELINE" \
               --current  "$CURRENT"
+          elif [ "$SIZES_ONLY" = "true" ]; then
+            echo "::error::No benchmark baseline from main to compare binary sizes against (cache benchmark-baseline-${{ matrix.os }}-* missing or expired). The next push to main that touches cpp/ and passes C++ Benchmarks saves one; re-run this job after that."
+            exit 1
           else
-            echo "No baseline found — first run establishes the baseline"
+            echo "::warning::No benchmark baseline found — this run establishes the baseline"
           fi
 
       # Save new baseline only on pushes to main (immutable cache: unique key per run)
