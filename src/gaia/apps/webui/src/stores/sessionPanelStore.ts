@@ -88,6 +88,10 @@ interface SessionPanelState {
     setOpen: (open: boolean) => void;
     /** Open the docked panel for the user without remembering it as their choice. */
     autoOpen: () => void;
+    /** Shown by `autoOpen`, not by the user; giving the side to another pane then remembers nothing. */
+    autoOpened: boolean;
+    /** Give the right side to another pane: an auto-opened panel just hides, a user-opened one closes as before. */
+    yieldSide: () => void;
     setOverlayOpen: (open: boolean) => void;
     setWidth: (width: number) => void;
     setSection: (id: PanelSectionId, open: boolean) => void;
@@ -115,13 +119,18 @@ export const useSessionPanelStore = create<SessionPanelState>((set, get) => ({
     focus: null,
     signals: {},
     setSignals: (sessionId, patch) => set((s) => ({ signals: { ...s.signals, [sessionId]: { ...s.signals[sessionId], ...patch } } })),
+    autoOpened: false,
     setOpen: (open) => {
         write(OPEN_KEY, open ? '1' : '0');
-        set({ open, closedByUser: !open });
+        set({ open, closedByUser: !open, autoOpened: false });
     },
     autoOpen: () => {
-        if (get().closedByUser) return;
-        set({ open: true });
+        if (get().closedByUser || get().open) return;
+        set({ open: true, autoOpened: true });
+    },
+    yieldSide: () => {
+        if (get().autoOpened) set({ open: false, autoOpened: false });
+        else get().setOpen(false);
     },
     setOverlayOpen: (overlayOpen) => set({ overlayOpen }),
     setWidth: (width) => {
@@ -138,9 +147,9 @@ export const useSessionPanelStore = create<SessionPanelState>((set, get) => ({
         const sections = { ...get().sections, [id]: true };
         write(SECTIONS_KEY, JSON.stringify(sections));
         write(OPEN_KEY, '1');
-        set({ sections, open: true, closedByUser: false, overlayOpen: true, focus: { section: id, nonce: Date.now() } });
+        set({ sections, open: true, closedByUser: false, autoOpened: false, overlayOpen: true, focus: { section: id, nonce: Date.now() } });
     },
-    reload: () => set({ ...loadPersisted(), overlayOpen: false, focus: null, signals: {} }),
+    reload: () => set({ ...loadPersisted(), autoOpened: false, overlayOpen: false, focus: null, signals: {} }),
 }));
 
 /** How long a request to show a section stays one: long enough for the panel to open, not to haunt a later render. */

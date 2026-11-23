@@ -118,6 +118,35 @@ describe('SessionPanel', () => {
         expect(window.localStorage.getItem('gaia.sessionPanel.open')).toBeNull();
     });
 
+    it('hides an auto-opened panel for the browser pane without counting it as the user closing it', () => {
+        resetPanelState({ open: false });
+        const made: Message[] = [
+            ...ANSWERED,
+            { id: 3, session_id: SID, role: 'user', content: 'save it', created_at: '', rag_sources: null },
+            { id: 4, session_id: SID, role: 'assistant', content: 'saved', created_at: '', rag_sources: null, turnSummary: { ...SUMMARY, outputs: [{ kind: 'image', name: 'chart.png', path: 'C:\\chart.png' }] } },
+        ];
+        const { rerender } = render(<Panel busy messages={ANSWERED} />);
+        rerender(<Panel busy={false} messages={made} />);
+        expect(panel()).toHaveClass('is-docked');
+
+        act(() => useSessionPanelStore.getState().yieldSide());
+        expect(screen.queryByRole('complementary')).not.toBeInTheDocument();
+        expect(window.localStorage.getItem('gaia.sessionPanel.open')).toBeNull();
+        expect(useSessionPanelStore.getState().closedByUser).toBe(false);
+
+        // The next chat's first file still opens it.
+        rerender(<Panel busy messages={ANSWERED} />);
+        rerender(<Panel busy={false} messages={made} />);
+        expect(panel()).toHaveClass('is-docked');
+    });
+
+    it('closes a panel the user opened, as before, when the browser pane takes the side', () => {
+        render(<Panel />);
+        act(() => useSessionPanelStore.getState().yieldSide());
+        expect(screen.queryByRole('complementary')).not.toBeInTheDocument();
+        expect(window.localStorage.getItem('gaia.sessionPanel.open')).toBe('0');
+    });
+
     it('closes, remembers it, and reopens from the header toggle', () => {
         const { unmount } = render(<Panel />);
         fireEvent.click(screen.getByRole('button', { name: 'Close session panel' }));
