@@ -102,7 +102,7 @@ describe('an open chat whose agent could not start', () => {
 
         expect(await screen.findByText("gaiacpp, the agent you chose, isn't on this PC, so GAIA can't start it.")).toBeInTheDocument();
         expect(await screen.findByRole('button', { name: 'Download gaiacpp again' })).toBeInTheDocument();
-        expect(screen.getByRole('button', { name: 'Use the Python agent' })).toBeInTheDocument();
+        expect(screen.getByRole('button', { name: 'Use Full-featured' })).toBeInTheDocument();
         const turn = document.querySelector('[data-message-id="42"]')!;
         expect(turn.querySelector('.agent-recovery')).not.toBeNull();
         expect(api.updateSettings).not.toHaveBeenCalled();
@@ -129,10 +129,10 @@ describe('an open chat whose agent could not start', () => {
         expect(document.querySelector('.agent-recovery')).toBeNull();
     });
 
-    it('sends the question again the Try again way once the Python agent is chosen', async () => {
+    it('sends the question again the Try again way once Full-featured is chosen', async () => {
         render(<ChatView sessionId={SESSION.id} />);
 
-        fireEvent.click(await screen.findByRole('button', { name: 'Use the Python agent' }));
+        fireEvent.click(await screen.findByRole('button', { name: 'Use Full-featured' }));
 
         await waitFor(() => expect(api.updateSettings).toHaveBeenCalledWith({ flagship_agent: 'gaiapy' }));
         await waitFor(() => expect(sends).toEqual([QUESTION]));
@@ -155,7 +155,7 @@ describe('an open chat whose agent could not start', () => {
         const box = screen.getByLabelText('Message');
         fireEvent.change(box, { target: { value: 'and a day trip to Sintra' } });
 
-        fireEvent.click(await screen.findByRole('button', { name: 'Use the Python agent' }));
+        fireEvent.click(await screen.findByRole('button', { name: 'Use Full-featured' }));
 
         await waitFor(() => expect(sends).toEqual([QUESTION]));
         expect(screen.getByLabelText('Message')).toHaveValue('and a day trip to Sintra');
