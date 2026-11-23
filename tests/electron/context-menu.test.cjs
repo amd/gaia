@@ -6,6 +6,7 @@
 const {
   buildContextMenuTemplate,
   installContextMenu,
+  menuLabels,
   MAX_SUGGESTIONS,
 } = require("../../src/gaia/apps/webui/services/context-menu.cjs");
 
@@ -117,7 +118,7 @@ describe("buildContextMenuTemplate", () => {
 });
 
 describe("installContextMenu", () => {
-  function setup() {
+  function setup(locale) {
     const handlers = {};
     const wc = {
       on: jest.fn((event, fn) => { handlers[event] = fn; }),
@@ -129,7 +130,7 @@ describe("installContextMenu", () => {
     const popup = jest.fn();
     const Menu = { buildFromTemplate: jest.fn(() => ({ popup })) };
     const clipboard = { writeText: jest.fn() };
-    installContextMenu(window, { Menu, clipboard });
+    installContextMenu(window, { Menu, clipboard, locale });
     return { handlers, wc, window, Menu, popup, clipboard };
   }
 
@@ -155,5 +156,29 @@ describe("installContextMenu", () => {
     handlers["context-menu"]({}, params());
     expect(Menu.buildFromTemplate).not.toHaveBeenCalled();
     expect(popup).not.toHaveBeenCalled();
+  });
+
+  test("an Arabic OS gets Arabic labels on the custom items, like the OS-labelled ones", () => {
+    const { handlers, Menu } = setup("ar-EG");
+    handlers["context-menu"]({}, params({
+      isEditable: true, misspelledWord: "teh", dictionarySuggestions: [], editFlags: allEdits,
+      linkURL: "https://amd-gaia.ai", mediaType: "image", hasImageContents: true,
+    }));
+    const labels = Menu.buildFromTemplate.mock.calls[0][0].map((i) => i.label).filter(Boolean);
+    expect(labels).toEqual(["إضافة إلى القاموس", "نسخ عنوان الرابط", "نسخ الصورة"]);
+  });
+});
+
+describe("menuLabels", () => {
+  test.each([
+    ["ar", "نسخ الصورة"],
+    ["ar-SA", "نسخ الصورة"],
+    ["AR_eg", "نسخ الصورة"],
+    ["en-US", "Copy image"],
+    ["fr", "Copy image"],
+    ["", "Copy image"],
+    [undefined, "Copy image"],
+  ])("%s → %s", (locale, copyImage) => {
+    expect(menuLabels(locale).copyImage).toBe(copyImage);
   });
 });

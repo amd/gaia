@@ -735,7 +735,7 @@ function createWindow() {
     installWindowKeys(mainWindow.webContents, { devTools: !app.isPackaged });
   }
   mainWindow.setMenuBarVisibility(false);
-  installContextMenu(mainWindow, { Menu, clipboard });
+  installContextMenu(mainWindow, { Menu, clipboard, locale: app.getLocale() });
 
   // Open external links in the default browser. The URL here is already
   // RESOLVED against the file:// document, so a scheme-less markdown link
