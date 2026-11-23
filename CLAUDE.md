@@ -419,6 +419,25 @@ v0.25.4's Arabic UI is the canonical miss: it passed 2,100 component tests and a
 with filenames floating mid-row, `MB 9.7` backwards and model names cut at the wrong
 end, all visible at a glance. The audit only looked for overflow and leftover English.
 
+### IMPORTANT: Design every screen against the `ui-ux-pro-max` skill
+
+**Any change to what a person sees or touches uses the
+[`ui-ux-pro-max`](.claude/skills/ui-ux-pro-max/SKILL.md) skill:** the Agent UI at
+desktop and phone width, its Electron shell, and the TUI. Search its rules for the
+pattern you are changing before you design it, then check the result against them.
+
+- **GAIA's specs win where they disagree:**
+  [`gaia-design-language.mdx`](docs/spec/gaia-design-language.mdx) everywhere, plus
+  [`mobile-design-system.md`](docs/spec/mobile-design-system.md) at phone width.
+- **In the TUI, use the rules that fit a terminal:** hierarchy, contrast, feedback,
+  states, wording and keyboard flow. CSS and hover rules don't apply. Look at it
+  running with the `driving-the-tui` skill.
+- **A shared hook reminds you.** The first Agent UI or TUI edit in a session gets a
+  reminder from `scripts/ui_design_reminder.sh`, wired in `.claude/settings.json`.
+
+The Agent UI pass from #8893 to #8918 came from this skill: it found the contrast gaps,
+unclear buttons, misleading copy and slow long-chat typing that no test had flagged.
+
 ### Tests always run against THIS checkout
 
 The root `conftest.py` puts this repo's `src/` and `hub/agents/*/python` at the

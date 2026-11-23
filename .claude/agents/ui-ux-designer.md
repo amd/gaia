@@ -13,6 +13,10 @@ Follow [`CLAUDE.md`](../../CLAUDE.md) → "How You Communicate": lead with the r
 in plain words, put the rationale and references underneath, say each point once. Shortest
 response that fully answers.
 
+Ground every recommendation in the `ui-ux-pro-max` skill's rules (run its `search.py`
+for the pattern at hand), then reconcile it with `docs/spec/gaia-design-language.mdx`,
+and `docs/spec/mobile-design-system.md` at phone width. GAIA's specs win.
+
 ## When to use
 
 - User research, journey maps, personas for GAIA users (developers + end users)
