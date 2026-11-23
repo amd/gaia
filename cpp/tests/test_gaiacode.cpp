@@ -651,6 +651,12 @@ TEST(GaiacodeUndo, AWriteTheToolRefusesKeepsNoCopy) {
                                              {"old_string", "no such text"},
                                              {"new_string", "y"}});
     EXPECT_TRUE(edit.contains("error")) << edit.dump();
+    // A file outside the workspace is refused before anything reads it, copies included.
+    const fs::path outside = repo.dir.parent_path() / (repo.dir.filename().u8string() + "-outside.txt");
+    writeFile(outside, "private\n");
+    const json away = repo.run("file_write", {{"path", outside.u8string()}, {"content", "x"}});
+    EXPECT_TRUE(away.contains("error")) << away.dump();
+    fs::remove(outside);
     repo.agent->setChangeRecorder(nullptr);
     recorder->finish();
     EXPECT_FALSE(fs::exists(store / "chat-r" / "20261122120000-0123abd2")) << "no copy of a credential file, and no record of an edit not made";
