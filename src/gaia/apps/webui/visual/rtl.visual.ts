@@ -3584,6 +3584,12 @@ for (const locale of ['en', 'ar']) {
         const menu = page.getByRole('dialog');
         await expect(menu.locator('.popover-heading').first()).toHaveText('Fireworks AI');
         await expect(menu.locator('.popover-subheading')).toBeVisible();
+        // Each local row carries setup's tag, on one line beside the name.
+        await expect(menu.locator('.mc-chip.is-verified').first()).toBeVisible();
+        await expect(menu.locator('.mc-chip.is-untested').first()).toBeVisible();
+        for (const chip of await menu.locator('.mc-chip').all()) {
+            expect((await chip.boundingBox())!.height).toBeLessThan(24);
+        }
         await shot(page, `model-menu-${locale}`);
         expect(await audit(page)).toEqual([]);
         await menu.getByRole('option', { name: /gpt-oss 20B/ }).click();
@@ -3591,6 +3597,32 @@ for (const locale of ['en', 'ar']) {
         await shot(page, `model-menu-confirm-${locale}`);
         // The question scrolls into view under its row, so the list is scrolled on purpose here.
         expect((await audit(page)).filter((p) => !p.startsWith('popover opens scrolled'))).toEqual([]);
+    });
+}
+
+for (const locale of ['en', 'ar']) {
+    test(`the model menu's last row can be reached in a 1280x800 window (${locale})`, async ({ page }) => {
+        await page.setViewportSize({ width: 1280, height: 800 });
+        // A verified model to download, sent last: the menu still lists it before the untested ones.
+        const verified = { ...MODEL_LIST[1], id: 'Qwen3.5-4B-GGUF', display_name: 'Qwen3.5 4B', downloaded: false, state: 'not_downloaded', size_gb: 7, support: 'verified' };
+        await open(page, '', locale, (p) => withModelPage(p, [...MODEL_LIST, verified], null));
+        await page.locator('.composer-chip').filter({ hasText: /Gemma/ }).first().click();
+        const menu = page.getByRole('dialog');
+        await expect(menu.locator('.popover-subheading')).toBeVisible();
+        // Every provider's list is in, so nothing grows the menu after it is measured.
+        await expect(menu.getByRole('option', { name: /glm-5p3-flash/ })).toBeAttached();
+        await menu.evaluate((el) => { el.scrollTop = el.scrollHeight; });
+        const box = (await menu.boundingBox())!;
+        expect(box.y).toBeGreaterThanOrEqual(0);
+        expect(box.y + box.height).toBeLessThanOrEqual(800);
+        const last = menu.locator('button').last();
+        await expect(last).toBeInViewport();
+        const row = (await last.boundingBox())!;
+        expect(row.y + row.height).toBeLessThanOrEqual(box.y + box.height + 1);
+        // Verified rows to download come before untested ones.
+        const tags = await menu.locator('.popover-subheading ~ .popover-row .mc-chip').evaluateAll((chips) => chips.map((c) => c.classList.contains('is-verified')));
+        expect(tags[0]).toBe(true);
+        expect(tags.slice(tags.indexOf(false))).not.toContain(true);
     });
 }
 

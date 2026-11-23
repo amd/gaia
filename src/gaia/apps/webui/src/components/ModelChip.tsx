@@ -5,6 +5,7 @@ import { Fragment, useCallback, useEffect, useId, useRef, useState, type Keyboar
 import { AlertCircle, Check, ChevronDown, Cloud, Cpu, Download, HelpCircle, KeyRound, Link2, Loader2 } from 'lucide-react';
 import { Popover } from './Popover';
 import './ModelPicker.css';
+import './setup/setup.css';
 import * as api from '../services/api';
 import { requestErrorText } from '../utils/requestErrors';
 import { useChatStore } from '../stores/chatStore';
@@ -50,15 +51,25 @@ function toDownload(m: ProviderModel, current: string | null | undefined): boole
     return !sameModelId(current, m.id) && (isDownloading(m) || modelState(m) === 'not_downloaded');
 }
 
-/** The provider in use first; in a local list, the models on this PC before the ones to download. */
+/** The provider in use first; in a local list, the models on this PC before the ones to download,
+ *  and among those to download the verified ones first, in the server's (setup's) order. */
 function orderGroups(groups: ProviderModels[], activeProvider: string | undefined, current: string | null | undefined): ProviderModels[] {
     const inUse = (g: ProviderModels) => (g.provider.id === activeProvider ? 0 : 1);
+    const rank = (m: ProviderModel) => (toDownload(m, current) ? (m.support === 'verified' ? 1 : 2) : 0);
     return [...groups]
         .sort((a, b) => inUse(a) - inUse(b))
         .map((g) => (g.provider.remote ? g : {
             ...g,
-            models: [...g.models].sort((a, b) => Number(toDownload(a, current)) - Number(toDownload(b, current))),
+            models: [...g.models].sort((a, b) => rank(a) - rank(b)),
         }));
+}
+
+/** Setup's Verified / Untested tag. */
+function SupportTag({ support }: { support: ProviderModel['support'] }) {
+    const t = useT();
+    if (support === 'verified') return <span className="mc-chip is-verified">{t('setup.label.verified')}</span>;
+    if (support === 'untested') return <span className="mc-chip is-untested">{t('setup.label.untested')}</span>;
+    return null;
 }
 
 /** Loaded (green dot), downloaded, or a download button — always with a text label. */
@@ -528,6 +539,7 @@ export function ModelChip() {
                                             </span>
                                             <span className="popover-item-body is-inline">
                                                 <span className="popover-item-title is-model">{modelName}</span>
+                                                {!provider.remote && <SupportTag support={m.support} />}
                                                 {!provider.remote && m.size_gb ? (
                                                     <span className="popover-item-meta"><bdi dir="ltr">{m.size_gb} GB</bdi></span>
                                                 ) : null}

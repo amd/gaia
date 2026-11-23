@@ -591,8 +591,40 @@ def _list_models(provider: str, *, offer_optional: bool = True) -> List[Dict[str
         m["source_url"] = entry["source_url"] if entry else None
     if provider == AMD:
         _rank_gateway_models(out)
+    if provider == LOCAL:
+        for m in out:
+            m["support"] = model_choice.support_label(m["id"])
+        order = _setup_chat_order()
+        out.sort(
+            key=lambda x: (
+                x["support"] != "verified",
+                next(
+                    (i for i, o in enumerate(order) if _model_ids_match(x["id"], o)),
+                    len(order),
+                ),
+                x["id"].lower(),
+            )
+        )
+        return out
     out.sort(key=lambda x: (x["rank"] is None, x["rank"] or 0, x["id"].lower()))
     return out
+
+
+def _setup_chat_order() -> List[str]:
+    """GAIA's chat models in the order setup lists them (``setup_plan._known_chat_models``)."""
+    from gaia.llm.lemonade_client import (
+        DEFAULT_MODEL_LADDER,
+        FLASH_OPTION_MODEL_NAME,
+        NPU_MODEL_LADDER,
+        OPTIONAL_CHAT_MODELS,
+    )
+
+    return [
+        *DEFAULT_MODEL_LADDER,
+        *NPU_MODEL_LADDER,
+        *OPTIONAL_CHAT_MODELS,
+        FLASH_OPTION_MODEL_NAME,
+    ]
 
 
 def _model_entries(body: Dict[str, Any]) -> List[Dict[str, Any]]:

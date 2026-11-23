@@ -3,7 +3,7 @@
 
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest';
 import { ModelChip } from '../ModelChip';
 import { useModelStore } from '../../stores/modelStore';
 import { useChatStore } from '../../stores/chatStore';
@@ -405,6 +405,52 @@ describe('ModelChip', () => {
         const subheading = dialog.querySelector('.popover-subheading')!;
         expect(subheading).toHaveTextContent('Available to download');
         expect(subheading.compareDocumentPosition(within(dialog).getByRole('option', { name: /^Qwen3/ })) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    });
+
+    it('lists verified models to download first, in the order sent, each tagged as setup tags it', async () => {
+        mockedApi.listProviderModels.mockImplementation(async (id) => ({
+            provider: id,
+            models: id === 'local'
+                ? [
+                    model('Gemma-4-E4B-it-GGUF', { support: 'verified' }),
+                    model('Qwen3.6-35B-A3B-GGUF', { downloaded: false, support: 'verified' }),
+                    model('Aardvark-21B-GGUF', { downloaded: false, support: 'untested' }),
+                    model('Qwen3.5-4B-GGUF', { downloaded: false, support: 'verified' }),
+                    model('Mine-GGUF', { downloaded: false, support: null }),
+                    model('Qwen3.5-2B-GGUF', { downloaded: false, support: 'verified' }),
+                ]
+                : [],
+        }));
+        render(<ModelChip />);
+        const dialog = await openPicker();
+        await within(dialog).findByRole('option', { name: /^Aardvark/ });
+        const local = within(dialog).getByRole('group', { name: 'Local' });
+        const rows = within(local).getAllByRole('option');
+        expect(rows.map((r) => r.querySelector('.popover-item-title')!.textContent)).toEqual([
+            'Gemma-4-E4B-it-GGUF', 'Qwen3.6-35B-A3B-GGUF', 'Qwen3.5-4B-GGUF', 'Qwen3.5-2B-GGUF', 'Aardvark-21B-GGUF', 'Mine-GGUF',
+        ]);
+        const tags = rows.map((r) => r.querySelector('.mc-chip')?.textContent ?? null);
+        expect(tags).toEqual(['Verified', 'Verified', 'Verified', 'Verified', 'Untested', null]);
+        expect(rows[4].querySelector('.mc-chip')).toHaveClass('is-untested');
+    });
+
+    it('caps the list to the room the main column leaves it, so its last row can be scrolled to', async () => {
+        vi.stubGlobal('innerHeight', 800);
+        const real = HTMLElement.prototype.getBoundingClientRect;
+        // The main column clips what overflows it, and ends before the window does.
+        const box = vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function (this: HTMLElement) {
+            if (this.classList.contains('main-content')) return { top: 0, bottom: 700, left: 0, right: 1000 } as DOMRect;
+            if (this.classList.contains('composer-chip')) return { top: 200, bottom: 230, left: 600, right: 700 } as DOMRect;
+            return real.call(this);
+        });
+        const tall = vi.spyOn(HTMLElement.prototype, 'scrollHeight', 'get').mockReturnValue(900);
+        onTestFinished(() => { box.mockRestore(); tall.mockRestore(); vi.unstubAllGlobals(); });
+        render(<div className="main-content" style={{ overflow: 'hidden' }}><ModelChip /></div>);
+        const dialog = await openPicker();
+        await within(dialog).findByRole('option', { name: /^Qwen3/ });
+        expect(dialog).toHaveClass('popover-below');
+        // 700 - 230 - 14: to the column's end, not the window's 800.
+        expect(dialog.style.getPropertyValue('--popover-room')).toBe('456px');
     });
 
     it('a download the server reports as failed drops the pick and says why', async () => {

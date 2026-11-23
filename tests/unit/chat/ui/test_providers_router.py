@@ -1830,6 +1830,26 @@ def test_active_does_not_size_optional_models(client, lemonade):
     assert "system-info" not in lemonade.paths()
 
 
+def test_local_models_list_verified_first_in_setups_order_and_say_so(client, lemonade):
+    """Setup's order and Verified/Untested tags, not the alphabet: an untested
+    model whose id sorts first must not lead the list."""
+    ladder = list(lemonade_client.DEFAULT_MODEL_LADDER)
+    lemonade.models = [
+        {"id": "Aardvark-7B-GGUF", "downloaded": True, "labels": []},
+        *_GPT_OSS,
+        *({"id": m, "downloaded": False, "labels": []} for m in sorted(ladder)),
+    ]
+    lemonade.answers[("GET", "system-info")] = (200, _STRIX_128)
+    models = client.get("/api/providers/local/models").json()["models"]
+    ids = [m["id"] for m in models]
+    assert ids[: len(ladder)] == ladder
+    assert ids.index("gpt-oss-120b-mxfp-GGUF") < ids.index("Aardvark-7B-GGUF")
+    support = {m["id"]: m["support"] for m in models}
+    assert {support[m] for m in ladder} == {"verified"}
+    assert support["Aardvark-7B-GGUF"] == "untested"
+    assert support["gpt-oss-120b-mxfp-GGUF"] == "untested"
+
+
 def test_downloaded_gpt_oss_lists_even_when_memory_is_unknown(client, lemonade):
     lemonade.models = [{**_GPT_OSS[0], "downloaded": True}]
     lemonade.answers[("GET", "system-info")] = (200, {"devices": {}})

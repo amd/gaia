@@ -355,7 +355,7 @@ export async function withoutFlagship(page: Page): Promise<void> {
 
 const modelRow = (id: string, over: Record<string, unknown>) => ({
     id, context_length: null, downloaded: true, labels: [], rank: null, note: null, evidence: null, state: 'downloaded',
-    available: true, unavailable_reason: null, fits: true, custom: false,
+    available: true, unavailable_reason: null, fits: true, custom: false, support: 'untested',
     placement: { device: 'gpu', backend: 'vulkan', label: 'GPU · Vulkan', source: 'expected', warning: null },
     ...over,
 });
@@ -364,13 +364,13 @@ const modelRow = (id: string, over: Record<string, unknown>) => ({
  *  other apps little memory, and two it can't run. */
 export const MODEL_LIST = [
     modelRow('Gemma-4-E4B-it-GGUF', {
-        display_name: 'Gemma 4 E4B (Multimodal)', state: 'loaded', size_gb: 4.9, tokens_per_second: 41.2,
+        display_name: 'Gemma 4 E4B (Multimodal)', state: 'loaded', size_gb: 4.9, tokens_per_second: 41.2, support: 'verified',
         placement: { device: 'gpu', backend: 'vulkan', label: 'GPU · Vulkan', source: 'reported', warning: null },
         evidence: 'Eval: 128 of 218 scenarios passed on this model',
     }),
-    modelRow('Qwen3.6-35B-A3B-GGUF', { display_name: 'Qwen3.6 35B A3B (Multimodal)', size_gb: 23.3 }),
+    modelRow('Qwen3.6-35B-A3B-GGUF', { display_name: 'Qwen3.6 35B A3B (Multimodal)', size_gb: 23.3, support: 'verified' }),
     modelRow('gemma4-it-e4b-FLM', {
-        display_name: 'Gemma 4 E4B (NPU)', size_gb: 9.1,
+        display_name: 'Gemma 4 E4B (NPU)', size_gb: 9.1, support: 'verified',
         placement: { device: 'npu', backend: 'flm', label: 'NPU · FLM', source: 'expected', warning: null },
     }),
     modelRow('user.Qwen3-4B-Instruct-2507-Q4_K_M-GGUF', {
