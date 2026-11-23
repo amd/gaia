@@ -223,7 +223,8 @@ public:
 
     /// A primary limit says so in its headers; a secondary one may only say so in its message.
     static bool rateLimited(const HttpResponse& r) {
-        if (r.status != 403 && r.status != 429) return false;
+        if (r.status == 429) return true;
+        if (r.status != 403) return false;
         if (r.header("x-ratelimit-remaining") == "0" || !r.header("retry-after").empty()) return true;
         std::string body = r.body;
         std::transform(body.begin(), body.end(), body.begin(),
@@ -358,6 +359,14 @@ int positive(const json& args, const char* name) {
         throw std::invalid_argument(std::string(name) + " must be a positive whole number");
     }
     return static_cast<int>(std::min<long long>(args[name].get<long long>(), 2147483647LL));
+}
+
+// An id GitHub hands out (a CI job's is 11 digits): never clamped to an int.
+long long positiveId(const json& args, const char* name) {
+    if (!args.contains(name) || !args[name].is_number_integer() || args[name].get<long long>() < 1) {
+        throw std::invalid_argument(std::string(name) + " must be a positive whole number");
+    }
+    return args[name].get<long long>();
 }
 
 }  // namespace
@@ -536,7 +545,7 @@ void registerGitHubTools(ToolRegistry& registry, std::function<std::string()> fo
                     const std::string conclusion = str(c, "conclusion");
                     if (bad.count(conclusion)) ++failing;
                     checks.push_back({{"name", str(c, "name")}, {"status", str(c, "status")},
-                                      {"conclusion", conclusion}, {"job_id", c.value("id", 0)}});
+                                      {"conclusion", conclusion}, {"job_id", c.value("id", 0LL)}});
                 }
                 if (list.size() < 100) {
                     complete = true;
@@ -579,7 +588,7 @@ void registerGitHubTools(ToolRegistry& registry, std::function<std::string()> fo
         {{"job_id", ToolParamType::INTEGER, true, "The job's id."},
          {"lines_chars", ToolParamType::INTEGER, false, "How many characters from the end (default 12000)."}},
         ToolPolicy::ALLOW, [](const GitHubRepo& r, Api& api, GitHubAccess&, const json& a) {
-            const int job = positive(a, "job_id");
+            const long long job = positiveId(a, "job_id");
             const size_t keep = static_cast<size_t>(std::clamp(a.value("lines_chars", 12000), 1000, 60000));
             const std::string log = api.getText("/repos/" + r.slug() + "/actions/jobs/" + std::to_string(job) + "/logs");
             return json{{"status", "success"}, {"note", kUntrusted}, {"job_id", job}, {"log", tail(log, keep)}};
