@@ -23,6 +23,7 @@
 
 #include <atomic>
 #include <filesystem>
+#include <functional>
 
 namespace gaia {
 
@@ -58,6 +59,11 @@ public:
         int helperMaxSteps = 30;         // one helper's step budget
         int helperTimeoutSeconds = 600;  // one helper's wall-clock limit
     };
+
+    /// Have a host ask the user before a tool is refused a path outside the
+    /// folders: `ask` returns true to let that path in for the agent's lifetime.
+    /// Never set, such a call is refused with the terminal's --allow-dir advice.
+    void setPathAccessPrompt(std::function<bool(const std::string& path)> ask);
 
     /// delegate_task for this agent: runs read-only helpers on stated tasks.
     ToolInfo delegateTaskTool();
@@ -230,7 +236,11 @@ private:
     std::unique_ptr<LemonadeClient> visionClient_;
 
     json delegateTasks(const json& args);
-    std::shared_ptr<const Workspace> workspace_;  // null with full access
+    std::shared_ptr<Workspace> workspace_;  // null with full access
+    std::function<bool(const std::string& path)> askPathAccess_;
+    std::vector<std::string> openedFolders_;  // opened by the user since the start; guarded by turnListingMu_
+    /// The folders the agent started with, then those the user opened since.
+    std::vector<std::string> foldersInUse() const;
     struct HelperTotals {
         int runs = 0, ok = 0, partial = 0, failed = 0, width = 0;
         UsageStats usage;

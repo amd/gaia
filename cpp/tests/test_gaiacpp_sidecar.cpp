@@ -1204,29 +1204,179 @@ TEST_F(GaiacppSidecar, TurnsBeyondTheQueueBoundGet503AndApprovalsStillGetThrough
 
 // ---- 8. per-chat scope ----
 
-TEST_F(GaiacppSidecar, FileOutsideTheChatsFoldersIsRefused) {
+bool isFolderCard(const json& e) {
+    return e.value("type", "") == "needs_confirmation" && e.value("action", "") == "allow_path_access";
+}
+
+int countFolderCards(const std::vector<json>& events) {
+    int n = 0;
+    for (const auto& e : events) n += isFolderCard(e) ? 1 : 0;
+    return n;
+}
+
+TEST_F(GaiacppSidecar, OutsideFileRaisesTheFolderCardAndDenyRefusesWithoutLeaking) {
     const fs::path secret = root_ / "outside" / "secret.txt";
+    mock().pushResponse(toolReply("file_read", {{"path", secret.string()}}));
     mock().pushResponse(toolReply("file_read", {{"path", secret.string()}}));
     mock().pushResponse(answerReply("I can't read that."));
     ASSERT_NO_FATAL_FAILURE(startSidecar());
 
-    Turn t(port_, queryBody("run-scope", "read the secret",
+    const std::string run = "run-scope";
+    Turn t(port_, queryBody(run, "read the secret",
                             {{"session_id", "chat-scope"}, {"allowed_paths", json::array({work_.string()})}}));
+    auto card = t.waitEvent(isFolderCard);
+    ASSERT_TRUE(card) << "no folder card: " << t.describe();
+    EXPECT_EQ((*card)["run_id"], run);
+    EXPECT_EQ((*card)["args"].value("path", ""), secret.string()) << card->dump();
+    EXPECT_EQ((*card)["args"].value("kind", ""), "file") << card->dump();
+    EXPECT_NE((*card)["summary"].get<std::string>().find(secret.string()), std::string::npos) << card->dump();
+    EXPECT_FALSE(card->contains("always_scope")) << "a folder card offers no 'always'";
+    auto deny = decide(run, "deny", (*card)["confirm_id"].get<std::string>());
+    ASSERT_TRUE(deny);
+    ASSERT_EQ(deny->status, 200) << deny->body;
+
+    ASSERT_TRUE(t.waitDone()) << t.describe();
+    auto events = t.events();
+    ASSERT_NO_FATAL_FAILURE(expectSingleTerminal(events, "final")) << t.describe();
+    EXPECT_EQ(countFolderCards(events), 1) << "a no is not asked again in the same turn: " << t.describe();
+    int results = 0;
+    for (const auto& e : events) {
+        if (e["type"] != "tool_result") continue;
+        ++results;
+        EXPECT_EQ(e["tool"], "file_read");
+        EXPECT_EQ(e["data"].value("status", ""), "error") << e.dump();
+        const std::string why = e["data"].value("error", "");
+        EXPECT_NE(why.find("did not allow"), std::string::npos) << why;
+        EXPECT_EQ(why.find("--allow-dir"), std::string::npos) << "a desktop user has no command line: " << why;
+    }
+    EXPECT_EQ(results, 2) << t.describe();
+    EXPECT_EQ(t.raw().find("outside secret 4471"), std::string::npos) << "the file's content must not leak";
+    for (const auto& body : mock().receivedBodies()) {
+        EXPECT_EQ(body.find("outside secret 4471"), std::string::npos) << "the model must not see the refused file";
+    }
+}
+
+TEST_F(GaiacppSidecar, ApprovingTheFolderCardOpensThatPathForThatChatOnly) {
+    const fs::path secret = root_ / "outside" / "secret.txt";
+    for (int i = 0; i < 3; ++i) {
+        mock().pushResponse(toolReply("file_read", {{"path", secret.string()}}));
+        mock().pushResponse(answerReply("Done."));
+    }
+    ASSERT_NO_FATAL_FAILURE(startSidecar());
+    const json folders = json::array({work_.string()});
+    auto readResult = [](const std::vector<json>& events) {
+        const int at = indexOf(events, "tool_result");
+        return at < 0 ? json::object() : events[at]["data"];
+    };
+
+    {
+        Turn t(port_, queryBody("run-open-1", "read it", {{"session_id", "chat-open"}, {"allowed_paths", folders}}));
+        auto card = t.waitEvent(isFolderCard);
+        ASSERT_TRUE(card) << "no folder card: " << t.describe();
+        EXPECT_EQ(indexOf(t.events(), "tool_result"), -1) << "nothing is read before the user answers";
+        auto allow = decide("run-open-1", "allow", (*card)["confirm_id"].get<std::string>());
+        ASSERT_TRUE(allow);
+        ASSERT_EQ(allow->status, 200) << allow->body;
+        ASSERT_TRUE(t.waitDone()) << t.describe();
+        ASSERT_NO_FATAL_FAILURE(expectSingleTerminal(t.events(), "final")) << t.describe();
+        EXPECT_NE(readResult(t.events()).dump().find("outside secret 4471"), std::string::npos)
+            << "the approved read goes ahead: " << t.describe();
+        EXPECT_EQ(countFolderCards(t.events()), 1);
+    }
+    {
+        // The same chat keeps the path on its next turn.
+        Turn t(port_, queryBody("run-open-2", "read it", {{"session_id", "chat-open"}, {"allowed_paths", folders}}));
+        ASSERT_TRUE(t.waitDone()) << t.describe();
+        EXPECT_EQ(countFolderCards(t.events()), 0) << t.describe();
+        EXPECT_NE(readResult(t.events()).dump().find("outside secret 4471"), std::string::npos) << t.describe();
+    }
+    {
+        // Another chat was never given it.
+        Turn t(port_, queryBody("run-open-3", "read it", {{"session_id", "chat-other"}, {"allowed_paths", folders}}));
+        auto card = t.waitEvent(isFolderCard);
+        ASSERT_TRUE(card) << "another chat must be asked for itself: " << t.describe();
+        auto deny = decide("run-open-3", "deny", (*card)["confirm_id"].get<std::string>());
+        ASSERT_TRUE(deny);
+        ASSERT_TRUE(t.waitDone()) << t.describe();
+        EXPECT_EQ(readResult(t.events()).value("status", ""), "error") << t.describe();
+    }
+}
+
+TEST_F(GaiacppSidecar, FileInsideTheChatsFoldersRaisesNoFolderCard) {
+    mock().pushResponse(toolReply("file_read", {{"path", (work_ / "note.txt").string()}}));
+    mock().pushResponse(answerReply("Read it."));
+    ASSERT_NO_FATAL_FAILURE(startSidecar());
+
+    Turn t(port_, queryBody("run-inside", "read the note",
+                            {{"session_id", "chat-inside"}, {"allowed_paths", json::array({work_.string()})}}));
+    ASSERT_TRUE(t.waitDone()) << t.describe();
+    auto events = t.events();
+    ASSERT_NO_FATAL_FAILURE(expectSingleTerminal(events, "final")) << t.describe();
+    EXPECT_EQ(indexOf(events, "needs_confirmation"), -1) << t.describe();
+    const int result = indexOf(events, "tool_result");
+    ASSERT_GE(result, 0) << t.describe();
+    EXPECT_NE(events[result]["data"].dump().find("hello from the work folder"), std::string::npos);
+}
+
+#ifndef _WIN32
+TEST_F(GaiacppSidecar, ShellCommandNamingAnOutsideFolderRaisesTheFolderCard) {
+    // Not under the temp folder: commands may always read system folders.
+    struct Scratch {
+        fs::path dir = fs::canonical(fs::current_path()) / ("gaiacpp-sidecar-out-" + std::to_string(std::random_device{}()));
+        ~Scratch() {
+            std::error_code ec;
+            fs::remove_all(dir, ec);
+        }
+    } scratch;
+    const fs::path outside = scratch.dir;
+    fs::create_directories(outside);
+    std::ofstream(outside / "secret.txt") << "outside secret 4471";
+    mock().pushResponse(toolReply("bash_execute", {{"command", "ls " + outside.string()}}));
+    mock().pushResponse(answerReply("Listed."));
+    ASSERT_NO_FATAL_FAILURE(startSidecar());
+
+    Turn t(port_, queryBody("run-shell-out", "list it",
+                            {{"session_id", "chat-shell-out"}, {"allowed_paths", json::array({work_.string()})}}));
+    auto card = t.waitEvent(isFolderCard);
+    ASSERT_TRUE(card) << "no folder card: " << t.describe();
+    EXPECT_EQ((*card)["args"].value("path", ""), outside.string()) << card->dump();
+    EXPECT_EQ((*card)["args"].value("kind", ""), "folder") << card->dump();
+    auto allow = decide("run-shell-out", "allow", (*card)["confirm_id"].get<std::string>());
+    ASSERT_TRUE(allow);
+    ASSERT_EQ(allow->status, 200) << allow->body;
     ASSERT_TRUE(t.waitDone()) << t.describe();
     auto events = t.events();
     ASSERT_NO_FATAL_FAILURE(expectSingleTerminal(events, "final")) << t.describe();
     const int result = indexOf(events, "tool_result");
     ASSERT_GE(result, 0) << t.describe();
-    EXPECT_EQ(events[result]["tool"], "file_read");
-    EXPECT_EQ(events[result]["data"].value("status", ""), "error") << events[result].dump();
-    EXPECT_FALSE(events[result]["data"].value("error", "").empty()) << events[result].dump();
-    EXPECT_EQ(t.raw().find("outside secret 4471"), std::string::npos) << "the file's content must not leak";
-    EXPECT_EQ(indexOf(events, "needs_confirmation"), -1);
+    EXPECT_NE(events[result]["data"].value("stdout", "").find("secret.txt"), std::string::npos)
+        << events[result].dump();
+}
+#endif
 
-    auto sent = modelRequests();
-    ASSERT_EQ(sent.size(), 2u);
-    EXPECT_EQ(mock().receivedBodies()[1].find("outside secret 4471"), std::string::npos)
-        << "the model must not see the refused file";
+TEST_F(GaiacppSidecar, FullAccessOpensAnOutsidePathWithoutAsking) {
+    const fs::path secret = root_ / "outside" / "secret.txt";
+    mock().pushResponse(answerReply("Hello."));
+    mock().pushResponse(toolReply("file_read", {{"path", secret.string()}}));
+    mock().pushResponse(answerReply("Read it."));
+    ASSERT_NO_FATAL_FAILURE(startSidecar());
+    const json chat = {{"session_id", "chat-full"}, {"allowed_paths", json::array({work_.string()})}};
+    {
+        Turn t(port_, queryBody("run-full-1", "hello", chat));
+        ASSERT_TRUE(t.waitDone()) << t.describe();
+    }
+    auto bypass = send("POST", "/v1/gaia/sessions/chat-full/bypass", bearer(), R"({"enabled":true})");
+    ASSERT_TRUE(bypass);
+    ASSERT_EQ(bypass->status, 200) << bypass->body;
+
+    Turn t(port_, queryBody("run-full-2", "read the secret", chat));
+    ASSERT_TRUE(t.waitDone()) << t.describe();
+    auto events = t.events();
+    ASSERT_NO_FATAL_FAILURE(expectSingleTerminal(events, "final")) << t.describe();
+    EXPECT_EQ(indexOf(events, "needs_confirmation"), -1) << "full access asks nothing: " << t.describe();
+    const int result = indexOf(events, "tool_result");
+    ASSERT_GE(result, 0) << t.describe();
+    EXPECT_NE(events[result]["data"].dump().find("outside secret 4471"), std::string::npos) << events[result].dump();
 }
 
 TEST_F(GaiacppSidecar, InternetOffRefusesWebFetchBeforeAnyApprovalCard) {

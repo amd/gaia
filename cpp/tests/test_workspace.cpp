@@ -177,6 +177,47 @@ TEST(WorkspaceTest, ReadsStayInside) {
 #endif
 }
 
+TEST(WorkspaceTest, TerminalRefusalNamesAllowDir) {
+    Dirs d;
+    Workspace ws({d.work.string()});
+    const std::string why = ws.checkPath((d.other / "x").string());
+    const std::string tail = "). Work inside them. If the user needs another folder, say so: they can start "
+                             "the agent with --allow-dir <folder>.";
+    ASSERT_GE(why.size(), tail.size()) << why;
+    EXPECT_EQ(why.substr(why.size() - tail.size()), tail) << why;
+}
+
+TEST(WorkspaceTest, JudgeNamesThePlaceToAskAboutAndAddRootOpensIt) {
+    Dirs d;
+    Workspace ws({d.work.string()});
+    const std::string outside = (d.other / "x").string();
+    EXPECT_TRUE(ws.judgePath((d.work / "inside.txt").string()).refusal.empty());
+    EXPECT_TRUE(ws.judgePath((d.work / "inside.txt").string()).askPath.empty());
+
+    const Workspace::Outside file = ws.judgePath(outside);
+    EXPECT_FALSE(file.refusal.empty());
+    EXPECT_EQ(file.askPath, fs::weakly_canonical(d.other / "x").u8string());
+    const Workspace::Outside command = ws.judgeCommand("ls " + d.other.string());
+    EXPECT_FALSE(command.refusal.empty());
+    EXPECT_EQ(command.askPath, fs::canonical(d.other).u8string());
+    EXPECT_TRUE(ws.judgeCommand("ls //server/share").askPath.empty()) << "a network share is not asked about";
+
+    ws.addRoot(file.askPath);
+    EXPECT_TRUE(ws.checkPath(outside).empty());
+    EXPECT_FALSE(ws.checkPath((d.other / "y").string()).empty()) << "only the path that was added opens";
+    ws.addRoot(command.askPath);
+    EXPECT_TRUE(ws.checkCommand("ls " + d.other.string()).empty());
+}
+
+TEST(WorkspaceTest, RemedyReplacesTheAllowDirAdvice) {
+    Dirs d;
+    Workspace ws({d.work.string()});
+    ws.setRemedy("Tell the user.");
+    const std::string why = ws.checkPath((d.other / "x").string());
+    EXPECT_EQ(why.find("--allow-dir"), std::string::npos) << why;
+    EXPECT_NE(why.find("Work inside them. Tell the user."), std::string::npos) << why;
+}
+
 TEST(WorkspaceTest, ConfinedToolsRefuseOutsidePaths) {
     Dirs d;
     auto ws = std::make_shared<const Workspace>(std::vector<std::string>{d.work.string()});
