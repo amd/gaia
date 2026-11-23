@@ -431,8 +431,10 @@ textarea:focus-visible {
 }
 .btn-primary { background: var(--action-fill); color: var(--action-fill-text); }
 .btn-primary:hover { background: var(--action-fill-hover); }
-/* Lightened, the English fell to 4.46:1 on the hover fill. */
-.btn-primary .i18n-gloss.i18n-gloss { color: inherit; }
+/* On an ink fill the gloss's own lightened colour would vanish into the button, so it takes the label's. */
+:is(.btn-primary, .perm-btn.is-primary, .compare-keep, .vp-btn-confirm, .fb-action-btn.primary, .composer-send,
+    .render-needs-input__free-text-submit, .render-connect__button, .render-guide__start, .email-connect-cta__button)
+    .i18n-gloss.i18n-gloss { color: inherit; }
 .btn-secondary { background: var(--bg-tertiary); color: var(--text-primary); }
 .btn-secondary:hover { background: var(--bg-active); }
 .btn-danger { background: var(--danger-dim); color: var(--danger); }
