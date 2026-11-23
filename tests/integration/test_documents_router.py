@@ -21,7 +21,7 @@ from fastapi.testclient import TestClient
 
 from gaia.ui.routers.documents import MAX_DOCUMENT_UPLOAD_SIZE
 from gaia.ui.server import create_app
-from gaia.ui.utils import managed_documents_dir
+from gaia.ui.utils import document_copies_dir
 
 logger = logging.getLogger(__name__)
 
@@ -52,8 +52,8 @@ def mock_index_document():
 
 @pytest.fixture
 def managed_docs_sandbox(isolated_gaia_home):
-    """The server-managed documents dir, under the test's ``GAIA_HOME``."""
-    sandbox = managed_documents_dir()
+    """Where uploaded copies go, under the test's ``GAIA_HOME`` (#8379)."""
+    sandbox = document_copies_dir()
     sandbox.mkdir(parents=True)
     return sandbox
 

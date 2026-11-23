@@ -61,6 +61,8 @@ async function startServe(
       host: "127.0.0.1",
       port: 8141,
       baseUrl: "http://127.0.0.1:8141",
+      authToken: "test-token",
+      tokenFile: "/tmp/gaia-gaia-secret-test/launch-secret",
     })),
     shutdown: vi.fn(shutdownImpl),
   }));

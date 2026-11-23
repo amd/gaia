@@ -23,7 +23,7 @@ INSTALLER_TUI = REPO_ROOT / "installer" / "tui"
 sys.path.insert(0, str(INSTALLER_TUI))
 
 import artifacts  # noqa: E402
-import fetch_sidecar  # noqa: E402
+import fetch_gaiapy  # noqa: E402
 
 VERSION = "1.4.0"
 
@@ -90,9 +90,9 @@ def test_website_download_map_matches_the_table():
 
 
 def test_every_installer_platform_has_a_sidecar_lane():
-    # An installer for a platform fetch_sidecar.py cannot serve would ship the
+    # An installer for a platform fetch_gaiapy.py cannot serve would ship the
     # terminal hub with no agent behind it.
-    assert set(artifacts.ARTIFACTS) <= set(fetch_sidecar.PLATFORM_KEYS)
+    assert set(artifacts.ARTIFACTS) <= set(fetch_gaiapy.PLATFORM_KEYS)
 
 
 def test_publish_keys_are_unique_and_not_raw_binary_keys():
@@ -211,14 +211,14 @@ def test_absent_platform_is_no_installer_not_a_hard_stop(tmp_path):
     # a placeholder digest means "stop, this cannot be verified".
     lock = _lock(tmp_path, {"win32-x64": {"sha256": "a" * 64}})
     sidecar = json.loads(lock.read_text())["components"]["sidecar"]
-    with pytest.raises(fetch_sidecar.NoSidecarForPlatform):
-        fetch_sidecar._expected_sha256(sidecar, "darwin-x64", lock)
+    with pytest.raises(fetch_gaiapy.NoSidecarForPlatform):
+        fetch_gaiapy._expected_sha256(sidecar, "darwin-x64", lock)
 
 
 def test_placeholder_digest_is_a_hard_stop(tmp_path):
     lock = _lock(tmp_path, {"darwin-x64": {"sha256": "PENDING-replace-with-real"}})
     sidecar = json.loads(lock.read_text())["components"]["sidecar"]
     with pytest.raises(SystemExit) as excinfo:
-        fetch_sidecar._expected_sha256(sidecar, "darwin-x64", lock)
-    assert not isinstance(excinfo.value, fetch_sidecar.NoSidecarForPlatform)
+        fetch_gaiapy._expected_sha256(sidecar, "darwin-x64", lock)
+    assert not isinstance(excinfo.value, fetch_gaiapy.NoSidecarForPlatform)
     assert "cannot be verified" in str(excinfo.value)

@@ -32,7 +32,7 @@ REPO = Path(__file__).resolve().parents[2]
 PYTHON_ROOTS = (
     "src/gaia/ui",
     "src/gaia/agents",
-    "hub/agents/gaia/python/gaia_agent",
+    "hub/agents/gaia/python/gaiapy",
 )
 #: The Agent UI's own English text.
 LOCALE = "src/gaia/apps/webui/src/i18n/locales/en.ts"
@@ -69,17 +69,17 @@ RULES = {
 
 #: ``{file: {rule: (count, issue)}}`` for text that breaks a rule today.
 KNOWN: dict[str, dict[str, tuple[int, str]]] = {
-    "hub/agents/gaia/python/gaia_agent/chat_agent.py": {
+    "hub/agents/gaia/python/gaiapy/chat_agent.py": {
         "pip": (1, "amd/gaia#7338"),
     },
-    "hub/agents/gaia/python/gaia_agent/entry.py": {
+    "hub/agents/gaia/python/gaiapy/entry.py": {
         "pip": (3, "amd/gaia#7338"),
         "terminal command": (1, "amd/gaia#7338"),
     },
-    "hub/agents/gaia/python/gaia_agent/stdio.py": {
+    "hub/agents/gaia/python/gaiapy/stdio.py": {
         "terminal command": (1, "amd/gaia#7338"),
     },
-    "hub/agents/gaia/python/gaia_agent/tool_bundles.py": {
+    "hub/agents/gaia/python/gaiapy/tool_bundles.py": {
         "removed feature": (1, "amd/gaia#7339"),
     },
     "src/gaia/agents/base/bootstrap.py": {
@@ -112,9 +112,6 @@ KNOWN: dict[str, dict[str, tuple[int, str]]] = {
     "src/gaia/agents/tools/skill_library_tools.py": {
         "terminal command": (2, "amd/gaia#7338"),
     },
-    "src/gaia/ui/email_sidecar/profiles.py": {
-        "removed feature": (6, "amd/gaia#4825"),
-    },
     "src/gaia/ui/routers/memory.py": {
         "pip": (1, "amd/gaia#7338"),
     },
@@ -138,7 +135,7 @@ KNOWN: dict[str, dict[str, tuple[int, str]]] = {
 
 #: Matches that are not text for a user, each with why. Counted like KNOWN.
 NOT_USER_TEXT: dict[str, dict[str, tuple[int, str]]] = {
-    "hub/agents/gaia/python/gaia_agent/server.py": {
+    "hub/agents/gaia/python/gaiapy/server.py": {
         "removed feature": (2, "API schema text for developers"),
         "pip": (
             1,
@@ -151,6 +148,12 @@ NOT_USER_TEXT: dict[str, dict[str, tuple[int, str]]] = {
     },
     "src/gaia/agents/base/tool_grants.py": {
         "pip": (2, "names commands GAIA holds for approval"),
+    },
+    "src/gaia/agents/base/project_map.py": {
+        "terminal command": (
+            1,
+            "stderr of a run nobody can answer, such as gaia -p; the apps ask",
+        ),
     },
     "src/gaia/agents/tools/connect_card.py": {
         "terminal command": (

@@ -1663,7 +1663,7 @@ func TestUnreadyNPUModelIsBlockedNotAcknowledged(t *testing.T) {
 	if m := h.m.marks(h.m.items()[h.m.focus], 80); strings.Contains(m, markRecommended) {
 		t.Fatalf("a blocked NPU model kept the recommendation star: %q", m)
 	}
-	h.expect(npuBlockedLine(f.Str(notReadyReason)))
+	h.expect(cantRunLine(f.Str(notReadyReason)))
 	if s := h.screen(); strings.Contains(s, "Needs about") {
 		t.Fatalf("a blocked NPU model was given a memory warning:\n%s", s)
 	}
@@ -1843,4 +1843,101 @@ func TestMemoryUnfitModelStillAsksAndCanBeConfirmed(t *testing.T) {
 	if !api.Called("run") {
 		t.Fatalf("an acknowledged memory-unfit model must go ahead: %v", api.CallList())
 	}
+}
+
+// --- a model no runtime on this PC can run (#7341) ----------------------------
+
+const backendReason = "this Lemonade cannot run llamacpp models on this PC"
+
+// qwenBackendBlocked is small16 with Qwen's llama.cpp backend unable to run
+// here. The plan keeps the memory numbers alongside the "backend" code, which
+// is what sent it down the memory-warning path.
+func qwenBackendBlocked() setupapi.Plan {
+	p := small16()
+	for i := range p.Catalog {
+		if p.Catalog[i].ID == qwen {
+			p.Catalog[i].NeedGB, p.Catalog[i].CapacityGB = f.Float(5), f.Float(16)
+			p.Catalog[i].FitCode = f.Str("backend")
+			p.Catalog[i].FitReason = f.Str(backendReason)
+		}
+	}
+	return p
+}
+
+func TestBackendUnrunnableModelIsBlockedNotAcknowledged(t *testing.T) {
+	api := &f.Fake{P: qwenBackendBlocked(), G: discreteGPU()}
+	h := newHarness(t, ModeFirstRun, api)
+	h.focusID(qwen)
+	h.expect(cantRunLine(f.Str(backendReason)))
+	h.expect(backendBlockedPurpose)
+	h.expectNot("Needs about")
+	h.expectNot(npuBlockedPurpose)
+	h.key("space")
+	if h.m.sel.ticked[qwen] {
+		t.Fatal("a model no runtime here can run was ticked")
+	}
+	if h.m.sel.canChat(qwen) {
+		t.Fatal("a model no runtime here can run was a chat candidate")
+	}
+	h.m.sel.pickChat(qwen)
+	if sameID(h.m.sel.chat, qwen) {
+		t.Fatal("a model no runtime here can run became the chat model")
+	}
+	h.key("enter")
+	if s := h.screen(); strings.Contains(s, "download anyway") {
+		t.Fatalf("a backend-blocked model was offered behind a memory prompt:\n%s", s)
+	}
+	for _, r := range h.m.sel.pending() {
+		if sameID(r.id, qwen) {
+			t.Fatalf("a backend-blocked model was queued: %v", h.m.sel.pending())
+		}
+	}
+}
+
+// Only "npu" and "backend" block; a memory verdict, an unknown code, or a fit
+// never does.
+func TestCantRunHereOnlyForRuntimeCodes(t *testing.T) {
+	no, yes := false, true
+	for _, tc := range []struct {
+		fits *bool
+		code *string
+		want bool
+	}{
+		{&no, f.Str("npu"), true},
+		{&no, f.Str("backend"), true},
+		{&no, f.Str("memory"), false},
+		{&no, f.Str(""), false},
+		{&no, f.Str("Backend"), false},
+		{&no, nil, false},
+		{&yes, f.Str("backend"), false},
+		{nil, f.Str("backend"), false},
+	} {
+		r := rowEntry{fits: tc.fits, fitCode: tc.code}
+		if got := r.cantRunHere(); got != tc.want {
+			t.Errorf("fits=%v code=%v: cantRunHere=%v, want %v", tc.fits, tc.code, got, tc.want)
+		}
+	}
+}
+
+// A PC whose model shares its RAM says how much it keeps for other apps,
+// behind d with the other machine details; a PC with no reserve never does.
+func TestAPCThatSharesRAMSaysWhatItKeepsForApps(t *testing.T) {
+	h := newHarness(t, ModeFirstRun, &f.Fake{P: smallPC(), G: discreteGPU()})
+	h.expectNot(leftForAppsLine(13.1))
+	h.key("d")
+	h.expect(leftForAppsLine(13.1))
+
+	big := newHarness(t, ModeFirstRun, &f.Fake{P: coldPlan(), G: discreteGPU()})
+	big.key("d")
+	big.expectNot("for your other apps")
+}
+
+// A model that fits but leaves other apps little room is marked and explained.
+func TestATightModelIsMarkedAndSaysWhy(t *testing.T) {
+	h := newHarness(t, ModeFirstRun, &f.Fake{P: smallPC(), G: discreteGPU()})
+	h.focusID(qwen4b)
+	h.expect("[!] " + tightChip)
+	h.expect(tightLine)
+	h.focusID(qwen2b)
+	h.expectNot(tightLine)
 }

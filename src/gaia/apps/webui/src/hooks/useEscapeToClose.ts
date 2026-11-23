@@ -10,6 +10,26 @@ export const CLAIMS_ESCAPE = { 'data-claims-escape': '' } as const;
 interface Layer { close?: () => void }
 
 const layers: Layer[] = [];
+const layerListeners = new Set<() => void>();
+
+/** Hear every overlay open and close (useAppOverlayOpen). Returns its unsubscribe. */
+export function subscribeLayers(listener: () => void): () => void {
+    layerListeners.add(listener);
+    return () => layerListeners.delete(listener);
+}
+
+export function openLayerCount(): number {
+    return layers.length;
+}
+
+/**
+ * True while a modal dialog covers the app. Narrower than the layer registry:
+ * a menu, a popover and the Memory page join that too, and app shortcuts should
+ * keep working beside those.
+ */
+export function isModalOpen(): boolean {
+    return document.querySelector('[aria-modal="true"]') !== null;
+}
 
 function closeTopLayer(e: KeyboardEvent): void {
     if (e.key !== 'Escape' || e.defaultPrevented) return;
@@ -22,9 +42,11 @@ function closeTopLayer(e: KeyboardEvent): void {
 function pushLayer(layer: Layer): () => void {
     if (layers.length === 0) document.addEventListener('keydown', closeTopLayer);
     layers.push(layer);
+    layerListeners.forEach((l) => l());
     return () => {
         layers.splice(layers.indexOf(layer), 1);
         if (layers.length === 0) document.removeEventListener('keydown', closeTopLayer);
+        layerListeners.forEach((l) => l());
     };
 }
 

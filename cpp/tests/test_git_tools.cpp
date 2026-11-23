@@ -1,6 +1,7 @@
 // Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 // SPDX-License-Identifier: MIT
 
+#include "support/unique_temp.h"
 #include <gtest/gtest.h>
 #include <gaia/git_tools.h>
 #include <gaia/tool_registry.h>
@@ -235,3 +236,42 @@ TEST(GitToolsTest, LogRejectsUnsafePath) {
     json result = info.callback(args);
     EXPECT_TRUE(result.contains("error"));
 }
+
+TEST(GitToolsTest, AFailureWithoutTheWordFatalIsStillAnError) {
+    // git rejects the option with "error: invalid option" and a non-zero exit code.
+    json result = GitTools::gitDiff().callback({{"ref", "--gaia-no-such-option"}});
+    ASSERT_TRUE(result.contains("error")) << result.dump();
+    EXPECT_FALSE(result.contains("diff"));
+}
+
+TEST(GitToolsTest, ShowRefusesACommittedCredentialFile) {
+    for (const char* ref : {"HEAD:.env", "HEAD:config/id_rsa", "main:deploy.pem"}) {
+        json result = GitTools::gitShow().callback({{"ref", ref}});
+        ASSERT_TRUE(result.contains("error")) << ref;
+        EXPECT_NE(result["error"].get<std::string>().find("credentials"), std::string::npos) << result.dump();
+    }
+}
+
+#ifdef _WIN32
+#include <gaia/process.h>
+
+#include <filesystem>
+#include <fstream>
+
+// cmd.exe looks in the working folder before PATH, and a cloned repository can carry a git.bat.
+TEST(GitToolsTest, StatusNeverRunsAGitBatchFileInTheRepository) {
+    namespace tfs = std::filesystem;
+    if (findProgramOnPath("git").empty()) GTEST_SKIP() << "git is not on PATH";
+    const tfs::path dir = tfs::temp_directory_path() / testsupport::perProcess("gaia-planted-git");
+    tfs::create_directories(dir);
+    std::ofstream(dir / "git.bat") << "@echo PLANTED_GIT_RAN\r\n";
+    const tfs::path before = tfs::current_path();
+    tfs::current_path(dir);
+
+    const json result = GitTools::gitStatus().callback(json::object());
+
+    tfs::current_path(before);
+    tfs::remove_all(dir);
+    EXPECT_EQ(result.dump().find("PLANTED_GIT_RAN"), std::string::npos) << result.dump();
+}
+#endif

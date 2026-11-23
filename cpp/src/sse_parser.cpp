@@ -121,6 +121,13 @@ void SseParser::accumulateToolCalls(const json& deltaToolCalls) {
     for (const auto& entry : deltaToolCalls) {
         if (!entry.is_object()) continue;
 
+        // A delta carrying an `id` is a first-or-restated call; one without is a
+        // continuation fragment. That distinction is what keeps a repeated
+        // `{"id":..,"name":"echo"}` from accumulating into "echoecho" while
+        // still reassembling a genuinely split name.
+        const bool hasId = entry.contains("id") && entry["id"].is_string() &&
+                           !entry["id"].get<std::string>().empty();
+
         // `index` is how parallel calls stay apart across deltas. When a server
         // omits it, fall back to the entry's position within THIS delta —
         // servers that drop `index` send the whole array in one delta, so
@@ -128,16 +135,22 @@ void SseParser::accumulateToolCalls(const json& deltaToolCalls) {
         int index = positional;
         if (entry.contains("index") && entry["index"].is_number_integer()) {
             index = entry["index"].get<int>();
+        } else if (hasId) {
+            // Without `index`, a new id is a new call even when it arrives in a later delta.
+            const std::string id = entry["id"].get<std::string>();
+            const auto held = toolCallsByIndex_.find(index);
+            if (held != toolCallsByIndex_.end() && !held->second.id.empty() && held->second.id != id) {
+                index = toolCallsByIndex_.rbegin()->first + 1;
+                for (const auto& [slot, call] : toolCallsByIndex_) {
+                    if (call.id == id) index = slot;
+                }
+            }
+            if (positional == 0) unindexedSlot_ = index;
+        } else if (positional == 0 && unindexedSlot_ >= 0) {
+            index = unindexedSlot_;
         }
         ++positional;
         ToolCall& tc = toolCallsByIndex_[index];
-
-        // A delta carrying an `id` is a first-or-restated call; one without is a
-        // continuation fragment. That distinction is what keeps a repeated
-        // `{"id":..,"name":"echo"}` from accumulating into "echoecho" while
-        // still reassembling a genuinely split name.
-        const bool hasId = entry.contains("id") && entry["id"].is_string() &&
-                           !entry["id"].get<std::string>().empty();
         if (tc.id.empty() && hasId) {
             tc.id = entry["id"].get<std::string>();
         }

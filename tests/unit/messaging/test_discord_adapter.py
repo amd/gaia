@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import itertools
 import os
 import time
 from pathlib import Path
@@ -15,10 +16,11 @@ from gaia.messaging.discord import adapter as da
 from gaia.messaging.discord import state
 
 EPOCH_MS = 1420070400000
+_SEQUENCE = itertools.count()
 
 
 def snowflake(at: float) -> str:
-    return str((int(at * 1000) - EPOCH_MS) << 22)
+    return str(((int(at * 1000) - EPOCH_MS) << 22) | (next(_SEQUENCE) & 0x3FFFFF))
 
 
 class FakeTransport:
@@ -704,6 +706,14 @@ def test_attachment_names_cannot_escape_or_be_special(name, expected):
 def test_snowflake_time_round_trips():
     now = time.time()
     assert abs(da.snowflake_time(snowflake(now)) - now) < 0.01
+
+
+def test_snowflake_ids_advance_with_the_clock():
+    # This clock value is an exact millisecond, where truncating used to fold
+    # the next message into the same ID and the adapter dropped it as a replay.
+    at = 1_767_723_494_958 / 1000
+    ids = [snowflake(at + offset) for offset in (0.0, 0.001, 0.002)]
+    assert len(set(ids)) == 3
 
 
 def test_an_edit_never_starts_a_turn():

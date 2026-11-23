@@ -9,6 +9,8 @@
  * so nothing polls while GAIA is idle.
  */
 
+const { authHeaders, defaultReader } = require("./ui-token.cjs");
+
 const CHECK_TIMEOUT_MS = 3000;
 // After the quit question fails, how long a second quit goes through without it.
 const QUIT_ANYWAY_MS = 60_000;
@@ -17,14 +19,14 @@ const QUIT_ANYWAY_MS = 60_000;
 async function backendJson(
   port,
   route,
-  { method = "GET", body, timeoutMs = CHECK_TIMEOUT_MS, fetchImpl = fetch } = {}
+  { method = "GET", body, timeoutMs = CHECK_TIMEOUT_MS, fetchImpl = fetch, tokenReader = defaultReader } = {}
 ) {
   const url = `http://127.0.0.1:${port}${route}`;
+  // The service refuses a request without its token, and a state-changing one without X-Gaia-UI (ui/security.py).
+  const headers = { "X-Gaia-UI": "1", ...authHeaders(tokenReader) };
+  if (body !== undefined) headers["Content-Type"] = "application/json";
   let resp;
   try {
-    const headers = { "X-Gaia-UI": "1" };
-    // The service refuses a state-changing request without X-Gaia-UI (ui/security.py).
-    if (body !== undefined) headers["Content-Type"] = "application/json";
     resp = await fetchImpl(url, {
       method,
       headers,
@@ -41,6 +43,8 @@ async function backendJson(
     throw new Error(`the GAIA service sent an unreadable reply from ${route} (HTTP ${resp.status}): ${err.message}`);
   }
   if (!resp.ok) {
+    // A rotated token file is re-read on the next call.
+    if (resp.status === 401) tokenReader.clear();
     const detail = reply && typeof reply.detail === "string" ? reply.detail : `HTTP ${resp.status}`;
     const error = new Error(detail);
     error.status = resp.status;

@@ -13,7 +13,7 @@ from types import SimpleNamespace
 from unittest.mock import Mock
 
 import pytest
-from gaia_agent.interactive import interactive_mode
+from gaiapy.interactive import interactive_mode
 
 SECRET_DIR = "/home/user/.ssh"
 DENIAL = (

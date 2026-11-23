@@ -12,9 +12,9 @@ from __future__ import annotations
 
 import pytest
 
-pytest.importorskip("gaia_agent")
+pytest.importorskip("gaiapy")
 
-from gaia_agent.server import QueryRespondRequest  # noqa: E402
+from gaiapy.server import QueryRespondRequest  # noqa: E402
 from pydantic import ValidationError  # noqa: E402
 
 

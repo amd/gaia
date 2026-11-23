@@ -1209,8 +1209,8 @@ class FileSearchToolsMixin:
 
             Automatically detects file type and provides appropriate analysis:
             - Python files (.py): Syntax validation + symbol extraction (functions/classes)
-            - Word (.docx), PDF and Excel (.xlsx): extracted text, in parts when
-              long; continue at next_offset until it is null
+            - Word (.docx), PDF, Excel (.xlsx), PowerPoint (.pptx): extracted
+              text, in parts when long; continue at next_offset until it is null
             - Other text files: Raw content
 
             Args:
@@ -1246,7 +1246,7 @@ class FileSearchToolsMixin:
                         ),
                     }
 
-                unreadable = index_only_error(file_path)
+                unreadable = index_only_error(file_path, self)
                 if unreadable:
                     return unreadable
                 if document_type(file_path) is not None:

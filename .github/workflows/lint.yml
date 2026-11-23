@@ -9,7 +9,6 @@
 name: Code Quality (Lint)
 
 on:
-  workflow_call:
   push:
     branches: [ main ]
     paths:

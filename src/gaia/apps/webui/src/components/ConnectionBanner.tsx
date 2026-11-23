@@ -8,11 +8,12 @@ import { useBackendStore } from '../stores/backendStore';
 import type { BackendLifecycle } from '../types/agent';
 import { useT } from '../i18n/useT';
 import { isMessageKey } from '../i18n/registry';
-import { namesSetupCommand, needsLocalSetup, SetUpLocalButton } from './settings/ErrorNotice';
+import { namesSetupCommand, needsLocalSetup, SetUpLocalButton, startInstructionText } from './settings/ErrorNotice';
 import { MIN_CONTEXT_SIZE, DEFAULT_MODEL_NAME } from '../utils/constants';
 import { useModelActions } from '../hooks/useModelActions';
 import { isStarting, modelServerHealth } from '../services/statusPoll';
 import { displayModelName, useModelNames, useModelStore } from '../stores/modelStore';
+import { ltrIn } from './setup/format';
 import './ConnectionBanner.css';
 
 /**
@@ -155,11 +156,7 @@ export function ConnectionBanner({ onRetry, backendSlow = false, backendError = 
         isDownloadingModel ||
         activeProgress?.state === 'downloading' ||
         activeProgress?.state === 'starting';
-    const [downloadErrorDismissed, setDownloadErrorDismissed] = useState(false);
-    // A new download's failure must show even if the last one was dismissed.
-    useEffect(() => {
-        if (isActiveDownload) setDownloadErrorDismissed(false);
-    }, [isActiveDownload]);
+    const dismissDownloadFailure = useChatStore((s) => s.dismissDownloadFailure);
 
     // A crashed backend outranks everything, even a chat in progress: nothing answers until it's back.
     if (lifecycle && lifecycle.status !== 'running') return <BackendRestartBanner lifecycle={lifecycle} />;
@@ -173,10 +170,18 @@ export function ConnectionBanner({ onRetry, backendSlow = false, backendError = 
     // suppressing during an active conversation: if the download fails
     // mid-chat we still want to surface the failure prominently.
     const downloadName = activeProgress?.model_name || modelName;
-    if (isActiveDownload || (activeProgress?.state === 'error' && !downloadErrorDismissed)) {
+    const dismissDownloadError = async () => {
+        try {
+            await dismissDownloadFailure(activeProgress?.model_name ?? downloadName);
+        } catch {
+            // The server still holds the failure; keep the warning until a retry works.
+        }
+    };
+    if (isActiveDownload || activeProgress?.state === 'error') {
+        const shownName = displayModelName(downloadName);
         const sizeHint = activeProgress?.total_bytes
-            ? `${(activeProgress.total_bytes / 1e9).toFixed(1)} GB`
-            : 'large download';
+            ? ltrIn(t.locale, `${(activeProgress.total_bytes / 1e9).toFixed(1)} GB`)
+            : t('banner.download.sizeUnknown');
         const isError = activeProgress?.state === 'error';
         return (
             <div
@@ -191,19 +196,20 @@ export function ConnectionBanner({ onRetry, backendSlow = false, backendError = 
                 <div className="connection-banner__text" dir="auto">
                     {isError ? (
                         <>
-                            Download of <strong>{downloadName}</strong> failed.{' '}
+                            {t('banner.download.failed', { model: shownName })}{' '}
                             {(downloadError ?? activeProgress?.message) && (
                                 <span className="connection-banner__hint">{downloadError ?? activeProgress?.message}</span>
                             )}
                         </>
                     ) : (
                         <>
-                            Downloading <strong>{downloadName}</strong> ({sizeHint}).
+                            {t('banner.download.running', { model: shownName, size: sizeHint })}
                             {activeProgress?.state === 'downloading' && activeProgress.file && (
                                 <>
                                     {' '}
                                     <span className="connection-banner__hint">
-                                        File {activeProgress.file_index} / {activeProgress.total_files}: <code>{activeProgress.file}</code>
+                                        {t('banner.download.file', { index: activeProgress.file_index, total: activeProgress.total_files })}{' '}
+                                        <code>{activeProgress.file}</code>
                                     </span>
                                 </>
                             )}
@@ -215,7 +221,7 @@ export function ConnectionBanner({ onRetry, backendSlow = false, backendError = 
                         className="connection-banner__retry"
                         onClick={() => downloadModel(false, downloadName, !systemStatus?.model_loaded)}
                     >
-                        Retry
+                        {t('banner.download.retry')}
                     </button>
                 ) : (
                     <span className="connection-banner__loading connection-banner__progress">
@@ -227,23 +233,23 @@ export function ConnectionBanner({ onRetry, backendSlow = false, backendError = 
                                     aria-valuenow={activeProgress.percent}
                                     aria-valuemin={0}
                                     aria-valuemax={100}
-                                    aria-label="Download progress"
+                                    aria-label={t('banner.download.progress')}
                                 >
                                     <span
                                         className="connection-banner__progress-fill"
                                         style={{ width: `${activeProgress.percent}%` }}
                                     />
                                 </span>
-                                <span className="connection-banner__progress-label">
+                                <bdi className="connection-banner__progress-label" dir="ltr">
                                     {activeProgress.percent}% &middot;{' '}
                                     {(activeProgress.downloaded_bytes / 1e9).toFixed(2)} /{' '}
                                     {(activeProgress.total_bytes / 1e9).toFixed(2)} GB
-                                </span>
+                                </bdi>
                             </>
                         ) : (
                             <>
                                 <Loader2 size={13} className="connection-banner__spinner" />
-                                {activeProgress?.state === 'starting' ? activeProgress.message ?? 'Starting download…' : 'Downloading…'}
+                                {activeProgress?.state === 'starting' ? activeProgress.message ?? t('banner.download.starting') : t('banner.download.downloading')}
                             </>
                         )}
                     </span>
@@ -255,8 +261,8 @@ export function ConnectionBanner({ onRetry, backendSlow = false, backendError = 
                 {isError && (
                     <button
                         className="connection-banner__dismiss"
-                        onClick={() => setDownloadErrorDismissed(true)}
-                        aria-label="Dismiss"
+                        onClick={() => void dismissDownloadError()}
+                        aria-label={t('banner.dismiss')}
                     >
                         <X size={14} />
                     </button>
@@ -429,7 +435,7 @@ export function ConnectionBanner({ onRetry, backendSlow = false, backendError = 
                             <code dir="ltr">{startCommand}</code>
                         </span>
                     ) : startInstruction && (
-                        <span className="connection-banner__hint">{startInstruction}</span>
+                        <span className="connection-banner__hint">{startInstructionText(t, startInstruction)}</span>
                     )}
                 </div>
                 {setupNeeded && <SetUpLocalButton className="connection-banner__retry" />}

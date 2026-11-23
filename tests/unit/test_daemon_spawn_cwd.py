@@ -165,6 +165,9 @@ def test_tilde_gaia_home_expands_to_the_user_home(launch_dir, tmp_path, monkeypa
 
 def test_blank_gaia_home_is_left_alone(launch_dir, tmp_path, monkeypatch):
     """A blank GAIA_HOME means "unset" to every reader; it must not become cwd."""
+    # With both unset the host dir falls back to ~/.gaia/host.
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path))
     monkeypatch.delenv(client.paths.HOME_ENV_VAR, raising=False)
     monkeypatch.setenv("GAIA_HOME", "  ")
     seen = _env_seen(monkeypatch, tmp_path)

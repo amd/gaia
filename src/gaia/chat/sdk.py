@@ -13,20 +13,19 @@ import threading
 import time
 from collections import deque
 from contextlib import contextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Optional
 
 from gaia.chat.prompts import Prompts
 from gaia.daemon.broker_client import LeaseWaitCancelled, lease_cancel_scope
 from gaia.llm import create_client
 from gaia.llm.lemonade_client import (
-    DEFAULT_MODEL_NAME,
     GPU_CTX_SIZE,
     LemonadeClient,
     cloud_model_provider,
     resolve_ctx_size,
+    resolve_local_chat_model,
 )
-from gaia.llm.providers.claude import CLAUDE_CTX_SIZE
 from gaia.llm.providers.lemonade import _NATIVE_TC_KEY, NATIVE_TOOL_CALLS_PREFIX
 from gaia.llm.retry import stopped_by_user
 from gaia.logger import get_logger
@@ -78,7 +77,8 @@ _LARGER_WINDOW_HINT = {
 class AgentConfig:
     """Configuration for AgentSDK."""
 
-    model: str = DEFAULT_MODEL_NAME
+    # The PC's default from setup: a small PC never downloads Gemma.
+    model: str = field(default_factory=resolve_local_chat_model)
     max_tokens: int = 512
     temperature: Optional[float] = None
     top_p: Optional[float] = None  # None = the provider's default
@@ -129,7 +129,7 @@ class AgentSDK:
         from gaia.chat.sdk import AgentSDK, AgentConfig
 
         # Create SDK instance
-        config = AgentConfig(model=DEFAULT_MODEL_NAME, show_stats=True)
+        config = AgentConfig(show_stats=True)
         chat = AgentSDK(config)
 
         # Single message (synchronous — send() is a regular def)
@@ -1335,6 +1335,9 @@ class AgentSDK:
         *source* is ``"claude"``, ``"cloud"``, ``"pin"`` or ``"local"``.
         """
         if self.config.use_claude:
+            # Imported here: the module loads the Anthropic SDK.
+            from gaia.llm.providers.claude import CLAUDE_CTX_SIZE
+
             return CLAUDE_CTX_SIZE, "claude"
         model = self.config.model
         backend = getattr(self.llm_client, "_backend", None)
@@ -1503,11 +1506,11 @@ class SimpleChat:
 
         Args:
             system_prompt: Optional system prompt for the AI
-            model: Model to use (defaults to DEFAULT_MODEL_NAME)
+            model: Model to use (defaults to the PC's default chat model)
             assistant_name: Name to use for the assistant (defaults to "gaia")
         """
         config = AgentConfig(
-            model=model or DEFAULT_MODEL_NAME,
+            model=model or resolve_local_chat_model(),
             system_prompt=system_prompt,
             assistant_name=assistant_name or "gaia",
             show_stats=False,
@@ -1696,7 +1699,7 @@ def quick_chat(
         AI response
     """
     config = AgentConfig(
-        model=model or DEFAULT_MODEL_NAME,
+        model=model or resolve_local_chat_model(),
         system_prompt=system_prompt,
         assistant_name=assistant_name or "gaia",
         show_stats=False,
@@ -1727,7 +1730,7 @@ def quick_chat_with_memory(
         List of AI responses
     """
     config = AgentConfig(
-        model=model or DEFAULT_MODEL_NAME,
+        model=model or resolve_local_chat_model(),
         system_prompt=system_prompt,
         assistant_name=assistant_name or "gaia",
         show_stats=False,

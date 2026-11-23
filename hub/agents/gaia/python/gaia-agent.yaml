@@ -1,6 +1,6 @@
 id: gaia
 name: GAIA
-version: 0.3.5
+version: 0.3.6
 description: "The flagship GAIA agent — conversation, document Q&A, data analysis, and web research, with persistent memory and add-on skills"
 author: AMD
 license: MIT
@@ -21,7 +21,7 @@ icon: sparkles
 # wait_for_condition, sleep, the three CLI-setup tools
 # and the persistent shell session's get_shell_state / reset_shell_session)
 # + 8 skill-library tools
-# (gaia_agent.skill_tools.SKILL_LIBRARY_TOOL_NAMES) + 4 code-index tools
+# (gaia.agents.tools.skill_library_tools.SKILL_LIBRARY_TOOL_NAMES) + 4 code-index tools
 # + 8 read-only email tools (gaia.agents.tools.email_tools)
 # + 3 Stable Diffusion tools (enable_sd_tools is on for this agent)
 # + 8 live-browser tools, which register only with the `browser` extra
@@ -32,22 +32,22 @@ icon: sparkles
 # This is the REGISTERED size — what the agent can do. Bundled skills that
 # ship their own tools add them only once loaded, so they are not counted:
 # send-email (8 drafting and sending tools) and calendar (5).
-tools_count: 105
+tools_count: 106
 
 language: python
-# ChatAgent (gaia_agent.chat_agent) calls RAGSDK.document_scripts (#6165)
+# ChatAgent (gaiapy.chat_agent) calls RAGSDK.document_scripts (#6165)
 # and init_memory(session_id=) (#5931); 0.25.4 is the first core that ships
 # them. (0.25.1 added reasoning_tools;
 # 0.25.0 added the allowed-folders check, #4656; 0.24.1 was the first whose
 # daemon can supervise this, #2932.)
-min_gaia_version: "0.26.0"
+min_gaia_version: "0.27.0"
 models: [Gemma-4-E4B-it-GGUF]
 
 python:
-  entry_module: gaia_agent
+  entry_module: gaiapy
   entry_class: GaiaAgent
   dependencies:
-    - "amd-gaia>=0.26.0"
+    - "amd-gaia>=0.27.0"
 
 interfaces:
   tui: true
@@ -63,7 +63,7 @@ requirements:
 # ---------------------------------------------------------------------------
 # Skills
 # ---------------------------------------------------------------------------
-# The bundled library under gaia_agent/skills/ is the highest-precedence
+# The bundled library under gaiapy/skills/ is the highest-precedence
 # discovery root, so a skill shipped here wins over a same-named user copy.
 #
 # `default_skill_set` is deliberately COMMENTED OUT, following the email agent's

@@ -8,6 +8,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from gaia.llm.vlm_client import VLMClient
+from tests.unit.image_bytes import PNG
 
 
 @pytest.fixture
@@ -19,7 +20,7 @@ def sent_prompt():
         "choices": [{"message": {"content": "نص الصفحة"}}]
     }
 
-    client.extract_from_image(b"fake-png")
+    client.extract_from_image(PNG)
 
     content = client.client.chat_completions.call_args.kwargs["messages"][0]["content"]
     return next(part["text"] for part in content if part["type"] == "text")
@@ -43,7 +44,7 @@ def test_a_caller_prompt_is_sent_unchanged():
         "choices": [{"message": {"content": "a cat"}}]
     }
 
-    client.extract_from_image(b"fake-png", prompt="Describe this image.")
+    client.extract_from_image(PNG, prompt="Describe this image.")
 
     content = client.client.chat_completions.call_args.kwargs["messages"][0]["content"]
     assert content[0] == {"type": "text", "text": "Describe this image."}

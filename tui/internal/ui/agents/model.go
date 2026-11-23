@@ -43,7 +43,6 @@ type HubAgentLister interface {
 // print the id twice. Never guessed for an id not in this map.
 var knownDisplayNames = map[string]string{
 	catalog.FlagshipID: "GAIA",
-	"email":            "Email",
 }
 
 // row is one installed agent as this panel renders it.

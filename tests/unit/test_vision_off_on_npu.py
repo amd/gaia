@@ -165,7 +165,11 @@ def test_npu_chat_with_no_vision_model_names_both_causes_and_every_step(
     error = _read(call, tmp_path)
     assert error == lc.VISION_NOT_INSTALLED
     assert error.startswith("No image-reading model is installed on this PC")
-    assert "NPU" in error and "Gemma 4 E4B" in error and "Settings > Model" in error
+    assert (
+        "NPU" in error
+        and "Gemma 4 E4B" in error
+        and "Settings > Agent & model" in error
+    )
     assert "`" not in error and "gaia " not in error
 
 

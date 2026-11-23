@@ -201,7 +201,7 @@ def _cloud_error(
         if not install and isinstance(message, str) and "is not installed" in message:
             return ProviderError(
                 f"Lemonade has no cloud provider registered for {name}, so it "
-                "cannot accept a key yet. Open Settings > Model and connect it "
+                "cannot accept a key yet. Open Settings > Agent & model and connect it "
                 "again, then try again.",
                 409,
             )
@@ -1286,12 +1286,11 @@ def _use_known_models(provider: str, key: str, *, persist_key: bool = True) -> N
     from gaia.llm.fireworks_known_models import KnownModelsError, use_known_models
     from gaia.llm.lemonade_embedded import EmbeddedLemonade, EmbeddedLemonadeError
     from gaia.llm.lemonade_launcher import gaia_runs_lemonade
-    from gaia.llm.lemonade_tls import ca_store_problem
     from gaia.llm.providers.fireworks import ModelListState, check_model_list
 
     name = _NAMES[provider]
     runs_lemonade = gaia_runs_lemonade(_base_url())
-    ca_problem = ca_store_problem() if runs_lemonade else None
+    ca_problem = EmbeddedLemonade().ca_problem() if runs_lemonade else None
     if ca_problem:
         raise ProviderError(ca_problem, 503)
     check = check_model_list(key) if provider == FIREWORKS else None
@@ -1543,6 +1542,39 @@ def _local_unavailable(models: List[Dict[str, Any]], model_id: str) -> Optional[
             system_info,
         )
     )
+
+
+def device_unavailable_reason(recipe: str) -> Optional[str]:
+    """Why this PC can't run a model with *recipe*, judged by its hardware.
+
+    For a model the chat list leaves out, such as an embedder: no NPU, an NPU
+    that isn't set up, or no backend for *recipe*. Raises
+    :class:`ProviderError` when Lemonade can't be read.
+    """
+    from gaia.installer.model_choice import backend_fit, cant_run_reason
+    from gaia.llm.model_fit import (
+        ModelFitError,
+        capacity_from_system_info,
+        npu_capacity,
+        npu_not_ready_reason,
+    )
+
+    system_info = _read_system_info()
+    if recipe == "flm":
+        try:
+            capacity = capacity_from_system_info(system_info)
+        except ModelFitError:
+            # No memory figures: the backend check below still decides.
+            capacity = None
+        if capacity is not None:
+            npu = npu_capacity(capacity)
+            if npu is None:
+                return "Lemonade reports no Ryzen AI NPU on this PC"
+            reason = npu_not_ready_reason(npu)
+            if reason:
+                return reason
+    fit = {"fits": None, "fit_reason": None, "fit_code": None}
+    return cant_run_reason(backend_fit(fit, recipe, system_info))
 
 
 def local_unavailable_reason(model_id: str) -> Optional[str]:

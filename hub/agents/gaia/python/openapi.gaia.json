@@ -276,7 +276,7 @@
                 "type": "null"
               }
             ],
-            "description": "Absolute paths of the files the user attached to this conversation (contract >= 2.16). Each is granted as that exact file, never its folder, and indexed before the turn runs, up to 100 documents or 10,000 passages; the rest load when the agent is asked about one. Send the full set every turn, an empty list when none are attached: files already indexed in a retained session are skipped, so one attached mid-conversation is picked up on the next turn, and one sent before but left out now is removed from the session's index.",
+            "description": "Absolute paths of the files the user attached to this conversation (contract >= 2.16). Each is granted as that exact file, never its folder, and indexed before the turn runs, up to 100 documents or 10,000 passages; the rest load when the agent is asked about one. Send the full set every turn, an empty list when none are attached: files already indexed in a retained session are skipped, so one attached mid-conversation is picked up on the next turn, and one sent before but left out now is removed from the session's index and can no longer be read.",
             "title": "Documents"
           },
           "internet_off": {
@@ -495,6 +495,26 @@
         "title": "QueryRespondResponse",
         "type": "object"
       },
+      "SessionDeletedResponse": {
+        "additionalProperties": false,
+        "description": "``DELETE /sessions/{id}`` (contract >= 2.30).",
+        "properties": {
+          "deleted": {
+            "title": "Deleted",
+            "type": "boolean"
+          },
+          "session_id": {
+            "title": "Session Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "session_id",
+          "deleted"
+        ],
+        "title": "SessionDeletedResponse",
+        "type": "object"
+      },
       "ToolDecisionRequest": {
         "additionalProperties": false,
         "description": "Body of ``POST /v1/gaia/query/{run_id}/tool_decision``.\n\nThe HTTP twin of the stdio transport's ``tool_decision`` control message —\nthe seam that lets a remote surface answer a confirmation while the agent\nthread is still parked on it.",
@@ -648,7 +668,7 @@
   "info": {
     "description": "REST surface for the GAIA flagship agent sidecar (/v1/gaia/*). Cross-implementation contract for embedders and typed clients.",
     "title": "GAIA Agent API",
-    "version": "2.29"
+    "version": "2.31"
   },
   "openapi": "3.1.0",
   "paths": {
@@ -696,8 +716,7 @@
         "security": [
           {
             "bearerAuth": []
-          },
-          {}
+          }
         ],
         "summary": "Init",
         "tags": [
@@ -707,7 +726,7 @@
     },
     "/v1/gaia/memory": {
       "get": {
-        "description": "The ``/memory`` view's snapshot, for the daemon transport.\n\nSame payload as the stdio ``MEMORY_DUMP_QUERY`` sentinel\n(``gaia_agent.stdio._memory_dump_event`` -> ``build_memory_dump``), just\nwithout that path's JSON-in-a-final-event wrapping — this is a plain GET,\nso the dict is the whole response body. ``*SSEClient.FetchMemory`` decodes\nit straight into ``client.MemoryDump`` (``tui/internal/client/memory.go``).\nA one-shot agent is enough: the memory store lives at ``~/.gaia/memory.db``\nregardless of which agent instance opens it.",
+        "description": "The ``/memory`` view's snapshot, for the daemon transport.\n\nSame payload as the stdio ``MEMORY_DUMP_QUERY`` sentinel\n(``gaiapy.stdio._memory_dump_event`` -> ``build_memory_dump``), just\nwithout that path's JSON-in-a-final-event wrapping — this is a plain GET,\nso the dict is the whole response body. ``*SSEClient.FetchMemory`` decodes\nit straight into ``client.MemoryDump`` (``tui/internal/client/memory.go``).\nA one-shot agent is enough: the memory store lives at ``~/.gaia/memory.db``\nregardless of which agent instance opens it.",
         "operationId": "memory_v1_gaia_memory_get",
         "responses": {
           "200": {
@@ -726,8 +745,7 @@
         "security": [
           {
             "bearerAuth": []
-          },
-          {}
+          }
         ],
         "summary": "Memory",
         "tags": [
@@ -759,7 +777,7 @@
                 }
               }
             },
-            "description": "Server-Sent Events stream (text/event-stream). Each `data:` line is one canonical event discriminated on `type`: status {message, level?, phase?, queue?, retracts_answer?} | token {delta} | reasoning {delta, retracts_answer?} | tool_call {tool, args} | tool_result {tool, data, render?} | context_usage {window, used, ...} | needs_confirmation {run_id, action, summary, confirm_id?, always_scope?, risk?, tool_label?, args?, args_truncated?, prompt_context?} | needs_input {run_id, request_id, question, options, allow_free_text, sensitive, respond_url, timeout_seconds?} | final {answer, usage?, failed?, failure?, performance?, context?, context_error?, model_messages?, route?} | error {detail, status}. A needs_confirmation's `args` are exactly the arguments the model sent for the gated call, each value capped at 64,000 characters (`args_truncated: true` when one was cut); what the agent adds to its prompt is in `prompt_context` {working_directory?, risk_note?, file_path?}, never in `args`. The stream ends with exactly one `final` or `error`. `:`-prefixed heartbeat comments carry no payload."
+            "description": "Server-Sent Events stream (text/event-stream). Each `data:` line is one canonical event discriminated on `type`: status {message, level?, phase?, queue?, retracts_answer?} | token {delta} | reasoning {delta, retracts_answer?} | tool_call {tool, args} | tool_result {tool, data, render?} | context_usage {window, used, ...} | needs_confirmation {run_id, action, summary, confirm_id?, always_scope?, risk?, tool_label?, args?, args_truncated?, prompt_context?} | needs_input {run_id, request_id, question, options, allow_free_text, sensitive, respond_url, timeout_seconds?} | final {answer, usage?, failed?, failure?, performance?, context?, context_error?, model_messages?, route?} | error {detail, status}. A needs_confirmation's `args` are exactly the arguments the model sent for the gated call, each value capped at 64,000 characters (`args_truncated: true` when one was cut); what the agent adds to its prompt is in `prompt_context` {working_directory?, risk_note?, file_path?, script?}, never in `args`. The stream ends with exactly one `final` or `error`. `:`-prefixed heartbeat comments carry no payload."
           },
           "422": {
             "content": {
@@ -775,8 +793,7 @@
         "security": [
           {
             "bearerAuth": []
-          },
-          {}
+          }
         ],
         "summary": "Query",
         "tags": [
@@ -824,8 +841,7 @@
         "security": [
           {
             "bearerAuth": []
-          },
-          {}
+          }
         ],
         "summary": "Cancel Query",
         "tags": [
@@ -883,8 +899,7 @@
         "security": [
           {
             "bearerAuth": []
-          },
-          {}
+          }
         ],
         "summary": "Followup To Query",
         "tags": [
@@ -942,8 +957,7 @@
         "security": [
           {
             "bearerAuth": []
-          },
-          {}
+          }
         ],
         "summary": "Respond To Query",
         "tags": [
@@ -1001,8 +1015,7 @@
         "security": [
           {
             "bearerAuth": []
-          },
-          {}
+          }
         ],
         "summary": "Tool Decision",
         "tags": [
@@ -1010,9 +1023,57 @@
         ]
       }
     },
+    "/v1/gaia/sessions/{session_id}": {
+      "delete": {
+        "description": "End a session and close its agent, stopping its MCP servers.\n\nA session running a turn is a 409, not a quiet success: its agent and\nservers are still alive, so the caller must not believe they are gone.",
+        "operationId": "delete_session_v1_gaia_sessions__session_id__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "session_id",
+            "required": true,
+            "schema": {
+              "title": "Session Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SessionDeletedResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "summary": "Delete Session",
+        "tags": [
+          "gaia-query"
+        ]
+      }
+    },
     "/v1/gaia/sessions/{session_id}/bypass": {
       "post": {
-        "description": "Turn unattended tool approval on or off for a session.\n\nSession-scoped rather than run-scoped because it must outlive any one turn —\nthat is the whole point of bypass — and it takes effect on the very next\ngated tool, including one in a turn already running.\n\nOnly an EXISTING session is accepted: creating one here would build a whole\nagent as a side effect of a settings toggle, and would silently succeed\nagainst a typo'd session id.",
+        "description": "Turn full access on or off for a session.\n\nOn, gated tools run unasked, the shell runs any command and Python runs any\ncode, as with the stdio transport's ``--full-access``.\n\nSession-scoped rather than run-scoped because it must outlive any one turn —\nthat is the whole point of bypass — and it takes effect on the very next\ngated tool, including one in a turn already running.\n\nOnly an EXISTING session is accepted: creating one here would build a whole\nagent as a side effect of a settings toggle, and would silently succeed\nagainst a typo'd session id.",
         "operationId": "set_bypass_v1_gaia_sessions__session_id__bypass_post",
         "parameters": [
           {
@@ -1060,8 +1121,7 @@
         "security": [
           {
             "bearerAuth": []
-          },
-          {}
+          }
         ],
         "summary": "Set Bypass",
         "tags": [
@@ -1125,8 +1185,7 @@
         "security": [
           {
             "bearerAuth": []
-          },
-          {}
+          }
         ],
         "summary": "Revoke Grants",
         "tags": [
@@ -1172,8 +1231,7 @@
         "security": [
           {
             "bearerAuth": []
-          },
-          {}
+          }
         ],
         "summary": "List Grants",
         "tags": [
@@ -1231,8 +1289,7 @@
         "security": [
           {
             "bearerAuth": []
-          },
-          {}
+          }
         ],
         "summary": "Set Internet",
         "tags": [
@@ -1280,8 +1337,7 @@
         "security": [
           {
             "bearerAuth": []
-          },
-          {}
+          }
         ],
         "summary": "List Tools",
         "tags": [
@@ -1310,8 +1366,7 @@
         "security": [
           {
             "bearerAuth": []
-          },
-          {}
+          }
         ],
         "summary": "Skills",
         "tags": [

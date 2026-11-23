@@ -9,7 +9,8 @@
     align-items: center;
     justify-content: center;
     padding: 16px;
-    background: rgb(0 0 0 / 45%);
+    background: var(--bg-modal-overlay);
+    animation: fadeIn var(--duration) var(--ease);
 }
 
 .model-needed {
@@ -22,11 +23,12 @@
     border-radius: var(--radius-lg);
     background: var(--bg-primary);
     color: var(--text-primary);
+    animation: slideUp var(--duration) var(--ease);
 }
 
 .model-needed-title {
     font-size: 16px;
-    font-weight: 600;
+    font-weight: 500;
 }
 
 .model-needed-line {

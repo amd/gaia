@@ -26,6 +26,7 @@ const AFTER_SETUP = () => plan([on(QWEN), { ...GEMMA, skipped: true, selected: f
 beforeEach(() => {
     vi.clearAllMocks();
     resetSetupDownloads();
+    useChatStore.setState({ systemStatus: null });
     mocked.getSetupPlan.mockResolvedValue(AFTER_SETUP());
     mocked.getGpuMemory.mockResolvedValue(NO_GPU_SPLIT);
     mocked.getSetupStatus.mockResolvedValue({ state: 'idle' });
@@ -213,6 +214,94 @@ describe('the download chip in the app chrome', () => {
         expect(screen.queryByRole('button', { name: /Model downloads/ })).not.toBeInTheDocument();
         expect(useSetupDownloads.getState().status).toEqual({ state: 'idle' });
     });
+
+    it('follows a download Settings started, not only setup downloads', async () => {
+        useChatStore.setState({
+            systemStatus: {
+                download_progress: {
+                    state: 'downloading', model_name: 'ggml-gpt-oss-20b-MXFP4-GGUF', percent: 37,
+                    file: null, file_index: 0, total_files: 1, downloaded_bytes: 0, total_bytes: 0, message: null,
+                },
+            } as never,
+        });
+        render(<DownloadChip />);
+        const chip = await screen.findByRole('button', { name: 'Model downloads. Open Settings to see them.' });
+        expect(chip).toHaveTextContent('Downloading 1 of 1 · 37%');
+        expect(screen.queryByRole('button', { name: 'Dismiss the failed download' })).not.toBeInTheDocument();
+    });
+
+    it('keeps a failed Settings download visible after it stops', async () => {
+        useChatStore.setState({
+            systemStatus: {
+                download_progress: {
+                    state: 'error', model_name: 'ggml-gpt-oss-20b-MXFP4-GGUF', percent: 0,
+                    file: null, file_index: 0, total_files: 0, downloaded_bytes: 0, total_bytes: 0,
+                    message: 'Download stream interrupted: the connection to the model server closed',
+                },
+            } as never,
+        });
+        render(<DownloadChip />);
+        const chip = await screen.findByRole('button', { name: 'Model downloads. Open Settings to see them.' });
+        expect(chip).toHaveTextContent('A download failed');
+    });
+
+    it('dismisses a failed Settings download from the chip, without opening Settings', async () => {
+        mocked.dismissDownloadFailure.mockResolvedValue({ status: 'dismissed', model: 'ggml-gpt-oss-20b-MXFP4-GGUF' });
+        const openSettings = vi.fn();
+        useChatStore.setState({
+            openSettings,
+            systemStatus: {
+                download_progress: {
+                    state: 'error', model_name: 'ggml-gpt-oss-20b-MXFP4-GGUF', percent: 0,
+                    file: null, file_index: 0, total_files: 0, downloaded_bytes: 0, total_bytes: 0,
+                    message: 'disk full',
+                },
+            } as never,
+        });
+        render(<DownloadChip />);
+
+        fireEvent.click(await screen.findByRole('button', { name: 'Dismiss the failed download' }));
+
+        await waitFor(() => expect(mocked.dismissDownloadFailure).toHaveBeenCalledWith('ggml-gpt-oss-20b-MXFP4-GGUF'));
+        expect(openSettings).not.toHaveBeenCalled();
+        await waitFor(() => expect(screen.queryByRole('button', { name: /Model downloads/ })).not.toBeInTheDocument());
+        // A reload's status poll carries no failure, so the chip stays hidden.
+        act(() => useChatStore.setState({ systemStatus: { download_progress: null } as never }));
+        expect(screen.queryByRole('button', { name: /Model downloads/ })).not.toBeInTheDocument();
+    });
+
+    it('keeps the failed chip when the server could not forget the failure', async () => {
+        mocked.dismissDownloadFailure.mockRejectedValueOnce(new Error('offline'));
+        useChatStore.setState({
+            systemStatus: {
+                download_progress: {
+                    state: 'error', model_name: 'ggml-gpt-oss-20b-MXFP4-GGUF', percent: 0,
+                    file: null, file_index: 0, total_files: 0, downloaded_bytes: 0, total_bytes: 0,
+                    message: 'disk full',
+                },
+            } as never,
+        });
+        render(<DownloadChip />);
+
+        fireEvent.click(await screen.findByRole('button', { name: 'Dismiss the failed download' }));
+
+        await waitFor(() => expect(mocked.dismissDownloadFailure).toHaveBeenCalledTimes(1));
+        expect(screen.getByRole('button', { name: 'Model downloads. Open Settings to see them.' })).toHaveTextContent('A download failed');
+    });
+
+    it('stays hidden for a download that already finished', async () => {
+        useChatStore.setState({
+            systemStatus: {
+                download_progress: {
+                    state: 'complete', model_name: 'ggml-gpt-oss-20b-MXFP4-GGUF', percent: 100,
+                    file: null, file_index: 1, total_files: 1, downloaded_bytes: 1, total_bytes: 1, message: null,
+                },
+            } as never,
+        });
+        render(<DownloadChip />);
+        await waitFor(() => expect(mocked.getSetupStatus).toHaveBeenCalled());
+        expect(screen.queryByRole('button', { name: /Model downloads/ })).not.toBeInTheDocument();
+    });
 });
 
 describe('Settings > default chat model', () => {
@@ -265,6 +354,15 @@ describe('Settings > default chat model', () => {
         fireEvent.click(screen.getByRole('button', { name: /^Apply/ }));
         await waitFor(() => expect(refresh).toHaveBeenCalled());
         expect(select).not.toHaveBeenCalled();
+    });
+
+    it('asks for the plan of where chat runs now, never for a local setup', async () => {
+        mocked.getSetupPlan.mockResolvedValue(plan([QWEN, GEMMA, on(EMBED)]));
+        render(<LocalModelsSections />);
+        await screen.findByRole('combobox', { name: 'Default chat model' });
+        expect(mocked.getSetupPlan).toHaveBeenCalled();
+        // Unset lets the server leave the local chat model out while chat runs on a cloud model.
+        for (const call of mocked.getSetupPlan.mock.calls) expect(call[0]).toBeUndefined();
     });
 });
 

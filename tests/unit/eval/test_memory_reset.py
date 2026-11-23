@@ -16,6 +16,7 @@ import pytest
 import yaml
 
 from gaia.eval import runner
+from gaia.ui.api_token import auth_headers
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 SCENARIOS = REPO_ROOT / "eval" / "scenarios"
@@ -123,6 +124,8 @@ def backend(monkeypatch, tmp_path):
     store = MemoryStore(db_path=tmp_path / "memory.db")
     monkeypatch.setattr(memory_router, "_store", store)
     client = TestClient(create_app(db_path=":memory:"))
+    # Only the runner's own headers may carry the API token.
+    client.headers.pop("authorization", None)
     sent = []
 
     def urlopen(req, timeout=None):
@@ -148,7 +151,7 @@ def _seed(client):
     resp = client.post(
         "/api/memory/admin/seed",
         json={"items": [{"content": "User's name is Riley", "category": "fact"}]},
-        headers={"X-Gaia-UI": "1"},
+        headers=auth_headers(),
     )
     assert resp.status_code == 200, resp.text
 

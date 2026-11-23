@@ -1,0 +1,9 @@
+{
+  "error": {
+    "code": "off_scope",
+    "message": "The page is on https://evil.example, which this call was not approved to read.",
+    "data": {
+      "origin": "https://evil.example"
+    }
+  }
+}

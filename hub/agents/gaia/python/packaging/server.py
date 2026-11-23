@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: MIT
 """Frozen-binary / dev-mode entrypoint for the GAIA flagship agent.
 
-A thin re-export of :mod:`gaia_agent.server`, which is the single source of
+A thin re-export of :mod:`gaiapy.server`, which is the single source of
 truth for the app wiring AND for the transport dispatch: running this module
 (so, running the frozen binary) serves HTTP on ``--serve``/``--host``/``--port``
 and the stdio JSONL wire on anything else. Kept as a separate top-level module
@@ -13,7 +13,7 @@ because two launchers reach the sidecar by *module path* rather than by import:
 - PyInstaller freezes this file as the binary entry.
 
 Both must therefore resolve a module-level ``app``. Because the frozen binary
-and a source ``uvicorn gaia_agent.server:app`` share that one app object,
+and a source ``uvicorn gaiapy.server:app`` share that one app object,
 they serve a byte-for-byte identical ``/v1/gaia/*`` contract.
 
     GET /health   -> {"status": "ok", "service": "gaia-agent-gaia"}
@@ -34,7 +34,7 @@ from __future__ import annotations
 import multiprocessing
 import sys
 
-from gaia_agent.python_runner import dispatch as python_dispatch
+from gaiapy.python_runner import dispatch as python_dispatch
 
 if __name__ == "__main__":
     # A script's multiprocessing workers re-launch this binary too.
@@ -45,10 +45,15 @@ if __name__ == "__main__":
     if _python_exit is not None:
         sys.exit(_python_exit)
 
+from gaia.platform_guard import avoid_wmi  # noqa: E402
+
+# Before anything asks `platform`: a timed-out WMI query crashes the process.
+avoid_wmi()
+
 from gaia.logger import configure  # noqa: E402
 
 configure()
-from gaia_agent.server import (  # noqa: E402,F401  (re-exported for the freeze/daemon)
+from gaiapy.server import (  # noqa: E402,F401  (re-exported for the freeze/daemon)
     DEFAULT_HOST,
     DEFAULT_PORT,
     app,

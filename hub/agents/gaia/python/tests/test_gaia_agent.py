@@ -33,13 +33,14 @@ from pathlib import Path
 
 import pytest
 import yaml
-from gaia_agent import build_gaia
-from gaia_agent.agent import GaiaAgent, GaiaAgentConfig
+from gaiapy import build_gaia
+from gaiapy.agent import GaiaAgent, GaiaAgentConfig
 
 # The canonical name set for the memory surface — hand-copying it here is
 # exactly the drift these tests exist to catch.
 from gaia.agents.base.memory import _MEMORY_TOOLS
 from gaia.agents.base.tools import _TOOL_REGISTRY
+from gaia.agents.tools.browser_use_tools import BrowserUseToolsMixin
 
 MANIFEST = Path(__file__).resolve().parent.parent / "gaia-agent.yaml"
 
@@ -58,9 +59,14 @@ def _isolated_registry():
 
 @pytest.fixture(scope="module")
 def tool_surfaces():
-    """``(core, full)`` tool names — memory off, then memory on."""
+    """``(core, full)`` tool names — memory off, then memory on.
+
+    Both are pinned open in GAIA desktop's browser pane, where the browser
+    tools register Playwright or not, so the count doesn't depend on the machine.
+    """
     with _isolated_registry(), pytest.MonkeyPatch.context() as mp:
         mp.setenv("GAIA_MEMORY_DISABLED", "1")
+        mp.setattr(BrowserUseToolsMixin, "_pane_at_startup", lambda self: (True, True))
         agent = GaiaAgent(config=GaiaAgentConfig(silent_mode=True))
         agent._register_tools()
         core = sorted(agent._tools_registry.keys())
@@ -215,6 +221,7 @@ CAPABILITIES = {
     "scratchpad (data-explore)": ("create_table", "list_tables"),
     "browser (research-report)": ("fetch_page", "fetch_webpage"),
     "file io (research-report)": ("read_file", "write_file"),
+    "speech (dictation)": ("dictate_document", "text_to_speech"),
     "audio generation (music-gen)": (
         "list_audio_generation_models",
         "generate_music",
@@ -370,7 +377,7 @@ def test_passing_both_a_config_and_kwargs_is_refused():
 
 def test_flagship_step_limit_defaults_to_1000(monkeypatch):
     """150 steps ended multi-part desktop tasks before the last part."""
-    from gaia_agent.agent import FLAGSHIP_MAX_STEPS
+    from gaiapy.agent import FLAGSHIP_MAX_STEPS
 
     from gaia.agents.base.agent import DEFAULT_MAX_STEPS
 
@@ -382,7 +389,7 @@ def test_flagship_step_limit_defaults_to_1000(monkeypatch):
 
 def test_the_flagship_limit_does_not_bring_the_wrap_up_notices_forward():
     """The notices count steps left, so a higher limit must not fire them early."""
-    from gaia_agent.agent import FLAGSHIP_MAX_STEPS
+    from gaiapy.agent import FLAGSHIP_MAX_STEPS
 
     from gaia.agents.base.agent import _BUDGET_NOTICES, _budget_notice_trigger
 
@@ -401,7 +408,7 @@ def test_flagship_step_limit_env_and_explicit_values_win(monkeypatch):
 
 def test_an_unset_step_limit_resolves_to_the_flagship_default(monkeypatch):
     """The CLI passes ``max_steps=None`` when --max-steps is not given."""
-    from gaia_agent.chat_agent import ChatAgent
+    from gaiapy.chat_agent import ChatAgent
 
     seen = {}
 
@@ -419,7 +426,7 @@ def test_an_unset_step_limit_resolves_to_the_flagship_default(monkeypatch):
 def test_the_readiness_probe_takes_no_request_parameters():
     """``init(response: Any = None)`` was unused, and FastAPI published it as a
     real query parameter — an argument callers could pass that does nothing."""
-    from gaia_agent.server import build_app
+    from gaiapy.server import build_app
 
     schema = build_app().openapi()
     operation = schema["paths"]["/v1/gaia/init"]["get"]
@@ -564,7 +571,7 @@ def test_fast_mode_meets_the_conversational_prefill_budget(monkeypatch):
     from pathlib import Path
     from types import SimpleNamespace
 
-    from gaia_agent import chat_agent
+    from gaiapy import chat_agent
 
     from gaia.agents.base import project_map
 
@@ -776,7 +783,7 @@ def test_the_callable_entry_point_publishes_the_requirements_to_the_registry():
     what hid this: the callable form never consulted the agent class."""
     import importlib.metadata
 
-    pytest.importorskip("gaia_agent")
+    pytest.importorskip("gaiapy")
     installed = {ep.name for ep in importlib.metadata.entry_points(group="gaia.agent")}
     if "gaia" not in installed:
         pytest.fail(
@@ -818,9 +825,9 @@ def test_building_the_registration_does_not_import_the_heavy_agent_module():
     env = dict(os.environ, PYTHONPATH=os.pathsep.join(p for p in sys.path if p))
     probe = (
         "import sys\n"
-        "from gaia_agent import build_gaia\n"
+        "from gaiapy import build_gaia\n"
         "build_gaia()\n"
-        "print('gaia_agent.agent' in sys.modules)\n"
+        "print('gaiapy.agent' in sys.modules)\n"
     )
     result = subprocess.run(
         [sys.executable, "-c", probe],

@@ -19,7 +19,7 @@
 
 .schedule-field-label {
     font-size: var(--fs-label);
-    font-weight: 600;
+    font-weight: 500;
     color: var(--text-secondary);
 }
 
@@ -52,6 +52,12 @@
 
 .schedule-form-row input::placeholder {
     color: var(--text-muted);
+}
+
+/* An edited schedule keeps its name, so the field reads as fixed. */
+.schedule-form-row input[readonly] {
+    background: var(--bg-secondary);
+    color: var(--text-secondary);
 }
 
 .schedule-prompt-input {
@@ -114,7 +120,7 @@
 
 .schedule-section h4 {
     font-size: var(--fs-label);
-    font-weight: 700;
+    font-weight: 500;
     color: var(--text-muted);
     margin-bottom: 10px;
 }
@@ -171,16 +177,18 @@
 
 .schedule-card-name {
     font-size: 13px;
-    font-weight: 600;
+    font-weight: 500;
     flex: 1;
     overflow: hidden;
-    text-overflow: ellipsis;
+    text-overflow: clip;
+    animation: fade-cut-inline both;
+    animation-timeline: scroll(self inline);
     white-space: nowrap;
 }
 
 .schedule-card-status {
     font-size: var(--fs-caption);
-    font-weight: 600;
+    font-weight: 500;
     text-transform: capitalize;
     padding: 2px 8px;
     border-radius: var(--radius-sm);
@@ -229,6 +237,8 @@
     display: -webkit-box;
     -webkit-box-orient: vertical;
     -webkit-line-clamp: 3;
+    animation: fade-cut-block both;
+    animation-timeline: scroll(self block);
     overflow-wrap: anywhere;
 }
 
@@ -242,7 +252,8 @@
     display: inline-flex;
     align-items: center;
     gap: 4px;
-    font-size: 11px;
+    min-height: var(--hit-min);
+    font-size: var(--fs-label);
     padding: 3px 10px;
     border-radius: var(--radius-sm);
     border: 1px solid var(--border);
@@ -256,22 +267,56 @@
     background: var(--bg-active);
 }
 
-.schedule-card-actions .btn-sm.chat {
-    color: var(--accent-blue);
-    border-color: var(--accent-blue);
-}
-
-.schedule-card-actions .btn-sm.chat:hover {
-    background: color-mix(in srgb, var(--accent-blue) 10%, transparent);
-}
-
+/* Delete wears the danger hue, not brass: brass marks what you would most likely do. */
 .schedule-card-actions .btn-sm.danger {
-    color: var(--accent);
-    border-color: var(--accent);
+    color: var(--danger);
+    border-color: color-mix(in srgb, var(--danger) 45%, var(--border));
 }
 
 .schedule-card-actions .btn-sm.danger:hover {
     background: color-mix(in srgb, var(--danger) 10%, transparent);
+}
+
+.schedule-card-actions {
+    flex-wrap: wrap;
+}
+
+/* Past runs sit at the far end, as the disclosure for the panel below. */
+.schedule-card-actions .schedule-history-toggle {
+    margin-inline-start: auto;
+    background: transparent;
+    border-color: transparent;
+    color: var(--text-secondary);
+}
+
+.schedule-form-title {
+    margin: 0;
+    font-size: 14px;
+    font-weight: 500;
+    color: var(--text-primary);
+}
+
+/* Quick picks for "When to run" */
+.schedule-presets {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+}
+
+.schedule-preset {
+    padding: 3px 10px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-full);
+    background: var(--bg-secondary);
+    color: var(--text-secondary);
+    font-size: 12px;
+    transition: border-color var(--duration-fast) var(--ease), color var(--duration-fast) var(--ease);
+}
+
+.schedule-preset:hover,
+.schedule-preset.is-picked {
+    border-color: var(--accent);
+    color: var(--accent);
 }
 
 /* Results panel */
@@ -283,7 +328,7 @@
 
 .schedule-results h4 {
     font-size: var(--fs-label);
-    font-weight: 700;
+    font-weight: 500;
     color: var(--text-muted);
     margin-bottom: 10px;
 }
@@ -379,7 +424,7 @@
 }
 
 .schedule-parsed-description {
-    font-weight: 600;
+    font-weight: 500;
     color: var(--text-primary);
     margin-bottom: 4px;
 }

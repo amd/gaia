@@ -1281,7 +1281,13 @@ def _handle_remove(args: argparse.Namespace) -> int:
 
 def _handle_lock(args: argparse.Namespace) -> int:
     """Check the user root against ``skill-lock.json``, or re-record it."""
-    from gaia.skills.drift import DRIFT_UNRECORDED, DRIFT_UNTRACKED, check_drift, relock
+    from gaia.skills.drift import (
+        DRIFT_REAUDIT,
+        DRIFT_UNRECORDED,
+        DRIFT_UNTRACKED,
+        check_drift,
+        relock,
+    )
 
     root = _manager().user_root
 
@@ -1309,6 +1315,17 @@ def _handle_lock(args: argparse.Namespace) -> int:
         print(
             f"⚠ {len(unrecorded)} skill(s) in {root} predate content digests, so "
             f"{report.lock_file.name} cannot verify them{also}:\n",
+            file=sys.stderr,
+        )
+        print(report.render(), file=sys.stderr)
+        return EXIT_INVALID
+
+    reaudit = [d for d in report.drifts if d.kind == DRIFT_REAUDIT]
+    if reaudit and len(reaudit) == len(notable):
+        print(
+            f"⚠ {len(reaudit)} skill(s) in {root} were checked by an older GAIA "
+            "and need re-auditing under this version's rules. Their files are "
+            "unchanged; their code stays off until you re-check them:\n",
             file=sys.stderr,
         )
         print(report.render(), file=sys.stderr)
@@ -1370,10 +1387,14 @@ def _render_relock(result: "RelockResult", root: Path, *, as_json: bool) -> int:
 
 
 def _handle_publish(args: argparse.Namespace) -> int:
-    from gaia.hub.publisher import get_hub_token
+    from gaia.hub.publisher import PublisherError, get_hub_token
     from gaia.skills.publish import publish_skill
 
-    token = get_hub_token() or ""
+    try:
+        token = get_hub_token() or ""
+    except PublisherError as exc:
+        sys.stderr.write(f"❌ {exc}\n")
+        return EXIT_INVALID
     result = publish_skill(
         Path(args.directory),
         token=token,

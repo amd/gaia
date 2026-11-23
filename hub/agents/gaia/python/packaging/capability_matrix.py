@@ -3,16 +3,15 @@
 # SPDX-License-Identifier: MIT
 """Code-derived capability matrix for the flagship GAIA agent.
 
-Mirrors ``hub/agents/email/python/packaging/capability_matrix.py`` (#2013):
-several surfaces exist (the registered agent-loop tool inventory, the REST
-sidecar API, and the eval suites) and nothing else guarantees they describe the
+Several surfaces exist (#2013) — the registered agent-loop tool inventory, the
+REST sidecar API, and the eval suites — and nothing else guarantees they describe the
 same agent. This module introspects each surface directly from source/config —
 never from memory, never re-typed by hand — and renders the result to a
 committed ``CAPABILITY_MATRIX.md`` that CI diffs against a fresh regeneration.
 
-Placement note: this file lives in ``packaging/``, NOT inside the ``gaia_agent``
+Placement note: this file lives in ``packaging/``, NOT inside the ``gaiapy``
 package. ``packaging/freeze.py`` does a blanket ``--collect-submodules
-gaia_agent`` when building the frozen sidecar binary, so any module under the
+gaiapy`` when building the frozen sidecar binary, so any module under the
 package ships in the shipped artifact. This is a dev/CI tool that reads
 repo-root ``tests/fixtures/`` and a sibling hub package — it must never ship.
 ``packaging/`` has no ``__init__.py`` by design, so invoke by **script path**,
@@ -24,13 +23,13 @@ never ``-m``::
 Surface mechanisms (one per surface, no fallback hedges):
 
 - Registered tools — a pure AST parse of the flagship's tool source of truth:
-  ``gaia_agent.tool_bundles``'s ``FULL_CORE_TOOLS`` ∪ every
+  ``gaiapy.tool_bundles``'s ``FULL_CORE_TOOLS`` ∪ every
   ``FULL_BUNDLES`` member. The full-profile CORE ∪ bundles must equal the
   registry exactly (drift-guarded by ``tests/unit/test_chat_tool_bundles.py``
   and this package's ``tests/test_gaia_agent.py``, which builds the live
   agent), so the union IS the registered surface — without instantiating an
   agent or touching the env-dependent ``_TOOL_REGISTRY``.
-- REST — a pure AST parse of ``gaia_agent/server.py``'s route decorators
+- REST — a pure AST parse of ``gaiapy/server.py``'s route decorators
   (``@router.get/post`` plus the ``build_app`` probe routes). No import, no
   FastAPI app construction.
 - Evals — ``sorted(glob(<repo_root>/tests/fixtures/gaia/*_gate_thresholds.json))``
@@ -59,12 +58,12 @@ _PYTHON_ROOT = _PACKAGING_DIR.parent
 _AGENT_ROOT = _PYTHON_ROOT.parent
 _REPO_ROOT = _AGENT_ROOT.parent.parent.parent
 
-_TOOL_BUNDLES_PATH = _PYTHON_ROOT / "gaia_agent" / "tool_bundles.py"
+_TOOL_BUNDLES_PATH = _PYTHON_ROOT / "gaiapy" / "tool_bundles.py"
 _SKILL_LIBRARY_TOOLS_PATH = (
     _REPO_ROOT / "src" / "gaia" / "agents" / "tools" / "skill_library_tools.py"
 )
-_SERVER_PATH = _PYTHON_ROOT / "gaia_agent" / "server.py"
-_INIT_PATH = _PYTHON_ROOT / "gaia_agent" / "__init__.py"
+_SERVER_PATH = _PYTHON_ROOT / "gaiapy" / "server.py"
+_INIT_PATH = _PYTHON_ROOT / "gaiapy" / "__init__.py"
 _GAIA_AGENT_YAML = _PYTHON_ROOT / "gaia-agent.yaml"
 _GATE_FIXTURES_DIR = _REPO_ROOT / "tests" / "fixtures" / "gaia"
 _SCENARIOS_DIR = _REPO_ROOT / "eval" / "scenarios"
@@ -84,7 +83,7 @@ _NO_EVAL_SENTINEL = "no quality eval (contract-tested only)"
 TOOLS_COUNT_DEFINITION = (
     "tools_count = the number of registered agent-loop tools for the default "
     "construction (prompt_profile='full', memory available): FULL_CORE_TOOLS "
-    "unioned with every FULL_BUNDLES member in gaia_agent.tool_bundles "
+    "unioned with every FULL_BUNDLES member in gaiapy.tool_bundles "
     "(which the flagship's registry must equal exactly, including the 8 "
     "skill-library tools and the 4 code-index tools), less "
     "set_reasoning_effort, which registers only on a model that grades its "
@@ -118,6 +117,7 @@ OP_EVAL_COVERAGE: Dict[str, str] = {
     "sessions/{session_id}/internet": _NO_EVAL_SENTINEL,
     "sessions/{session_id}/grants": _NO_EVAL_SENTINEL,
     "sessions/{session_id}/tools": _NO_EVAL_SENTINEL,
+    "sessions/{session_id}": _NO_EVAL_SENTINEL,
     "memory": _NO_EVAL_SENTINEL,
     "skills": _NO_EVAL_SENTINEL,
 }
@@ -477,7 +477,7 @@ def derive_matrix(repo_root: Path | None = None) -> CapabilityMatrix:
         raise ValueError(
             f"SKILL_LIBRARY_TOOL_NAMES entries {sorted(missing)} are not in the "
             "full-profile bundle union — the skills/skill_hub bundles in "
-            "gaia_agent.tool_bundles drifted from the framework mixin."
+            "gaiapy.tool_bundles drifted from the framework mixin."
         )
 
     # Fail loud at generation/--check time too, not only under pytest: a

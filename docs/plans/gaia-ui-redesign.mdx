@@ -90,13 +90,13 @@ compare website, graphical app, and TUI renders together in dark and light setti
 | Web defaults to `chat`; sidebar groups sessions by agent | `src/gaia/apps/webui/src/stores/chatStore.ts`, `components/Sidebar.tsx` | Change new-task defaults and navigation; preserve existing task identities |
 | Welcome mixes animated branding, capability tiles, and Hub discovery | `components/WelcomeScreen.tsx` under the same frontend | Replace with a ready composer and a few useful prompts |
 | Web and Electron share React/Vite, Zustand, CSS variables, and Lucide | `src/gaia/apps/webui/package.json`, `main.cjs` | One shared UI; no framework migration or separate desktop redesign |
-| TUI holds a persistent flagship process and sends control messages during a run | `hub/agents/gaia/python/gaia_agent/stdio.py` | Preserve loaded skills/conversation across turns and interactive approvals |
-| Flagship HTTP retains agent sessions and supports input responses, but refuses confirmation-gated actions | `hub/agents/gaia/python/gaia_agent/server.py` | Transport parity is a release blocker, not visual polish |
-| Flagship stdio lacks a correlated question-response control; the TUI subprocess client does not implement `AgentResponder` | `gaia_agent/stdio.py`, `tui/internal/client/subprocess.go` | Question support requires a transport change; an adapter alone cannot provide it |
+| TUI holds a persistent flagship process and sends control messages during a run | `hub/agents/gaia/python/gaiapy/stdio.py` | Preserve loaded skills/conversation across turns and interactive approvals |
+| Flagship HTTP retains agent sessions and supports input responses, but refuses confirmation-gated actions | `hub/agents/gaia/python/gaiapy/server.py` | Transport parity is a release blocker, not visual polish |
+| Flagship stdio lacks a correlated question-response control; the TUI subprocess client does not implement `AgentResponder` | `gaiapy/stdio.py`, `tui/internal/client/subprocess.go` | Question support requires a transport change; an adapter alone cannot provide it |
 | Canonical events and card renderers already exist | `tui/internal/event/canonical.go`, `src/gaia/ui/sse_translation.py`, `components/render/` | Reuse vocabulary and renderers; test parity instead of inventing a second protocol |
 
 Paths beginning with `components/` above are relative to `src/gaia/apps/webui/src/`;
-`gaia_agent/` is under `hub/agents/gaia/python/`.
+`gaiapy/` is under `hub/agents/gaia/python/`.
 Older Agent UI v2 and email-TUI plans describe broader or historical work; they are
 context, not evidence that a capability ships. Recheck live code before implementation.
 

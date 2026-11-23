@@ -6,7 +6,8 @@
  * is installed. Shapes follow /api/setup/plan and /api/setup/status.
  */
 
-import { expect, type Page } from '@playwright/test';
+import { expect, type Locator, type Page } from '@playwright/test';
+import { AGENT_DOWNLOAD_FAILED, AGENT_DOWNLOADING, SETTINGS, withAgentPrograms, type AgentProgramsAnswers } from './fixtures';
 
 const entry = (over: Record<string, unknown> & { id: string }) => ({
     roles: ['chat'], purpose: 'Answers your chats', if_skipped: null, recipe: 'llamacpp', size_gb: 1, full_size_gb: 1,
@@ -63,7 +64,7 @@ const PLAN = {
     },
 };
 
-const PLAN_COLD = { ...PLAN, lemonade: { mode: 'gaia', url: null, reachable: false }, decided_after_server: true, catalog: [] };
+export const PLAN_COLD = { ...PLAN, lemonade: { mode: 'gaia', url: null, reachable: false }, decided_after_server: true, catalog: [] };
 // Everything setup would recommend is already on the PC.
 const PLAN_PRESENT = {
     ...PLAN,
@@ -71,6 +72,16 @@ const PLAN_PRESENT = {
     catalog: CATALOG.map((e) => (e.planned ? { ...e, downloaded: true, size_gb: 0 } : e)),
 };
 const PLAN_SHORT = { ...PLAN, disk: { ...PLAN.disk, free_gb: 2.1 } };
+// A 16 GB laptop: GAIA keeps 10.7 GB for other apps, so Qwen3.5 2B is the pick (13.1 GB left) and reads
+// images itself; the 4B and Gemma would load but are tight.
+const QWEN_2B = entry({ id: 'Qwen3.5-2B-GGUF', name: 'Qwen3.5 2B (Multimodal)', roles: ['chat'], size_gb: 2.01, full_size_gb: 2.01, recommended: true, planned: true, selected: true, need_gb: 4.1, capacity_gb: 10.7, reads_images: true, feature_tier: 'compact' });
+const QWEN_4B = entry({ id: 'Qwen3.5-4B-GGUF', name: 'Qwen3.5 4B (Multimodal)', roles: ['chat'], size_gb: 3.58, full_size_gb: 3.58, need_gb: 7.4, capacity_gb: 10.7, reads_images: true, feature_tier: 'compact', tight: true });
+const PLAN_SMALL_PC = {
+    ...PLAN,
+    chat_model: { id: 'Qwen3.5-2B-GGUF', user_set: false, size_gb: 2.01, downloaded: false },
+    recommended_model: 'Qwen3.5-2B-GGUF', left_for_apps_gb: 13.1, memory_gb: 10, capacity_gb: 10.7, download_gb: 2.3,
+    catalog: [QWEN_2B, EMBED, QWEN_4B, { ...GEMMA, recommended: false, planned: false, selected: false, capacity_gb: 10.7, tight: true }, { ...QWEN, capacity_gb: 10.7 }],
+};
 // #6632: Linux with an NPU Lemonade reports, but memlock at 8 MB and no access to the device.
 const PLAN_NPU_NOT_READY = {
     ...PLAN,
@@ -198,13 +209,35 @@ const RUN_AGENT_FAILED = {
 };
 const RUN_READY = { ...RUN, state: 'ready', text: 'GAIA is ready', models: DONE_ROWS.map((m) => ({ ...m, state: 'ready' })) };
 
+// Setup is ready; speech-to-text, added on the Download step, is downloading on its own.
+const RUN_READY_EXTRA = {
+    ...RUN_READY,
+    models: [...RUN_READY.models, row(SPEECH.id, ['speech'], 'downloading', 0.56e9, 1.6e9, { speed_bps: 0.5e6, eta_s: 2080 })],
+};
+// Cancel › Stop with the required models on disk and only an extra still coming.
+const RUN_EXTRAS_STOPPED = {
+    ...RUN, state: 'cancelled', text: 'Setup stopped',
+    models: [
+        // Already on disk when this run started, so they report no byte counts (#8797).
+        row(EMBED_ID, ['embedding'], 'unchecked', 0, 0),
+        row(GEMMA_ID, ['chat', 'vision'], 'unchecked', 0, 0),
+        row(SPEECH.id, ['speech'], 'cancelled', 0.56e9, 1.6e9),
+    ],
+    overall: { bytes_done: 0.56e9, bytes_total: 1.6e9, speed_bps: 0, eta_s: null, percent: 35, failed: 0 },
+};
+
 const SERVER_RUNNING = { state: 'running', server_only: true, text: 'Starting the local model server', steps: [], log_tail: [] };
+/** GAIA's own engine won't start: a build that broke it (#7007). */
+export const ENGINE_FAILED = {
+    state: 'failed', server_only: true, steps: [], log_tail: [], components: { server: 'failed' },
+    error: "lemond: /tmp/_MEIq1f0/libstdc++.so.6: version `GLIBCXX_3.4.32' not found (required by /usr/lib/lemonade/lemond)",
+};
 const SERVER_FAILED = {
     state: 'failed', server_only: true, steps: [], log_tail: [],
     error: "Your Lemonade Server at 127.0.0.1:9 isn't answering.",
     problem: {
         kind: 'server_unreachable', message: "Your Lemonade Server at 127.0.0.1:9 isn't answering.",
-        start: 'Start Lemonade Server from the Lemonade tray icon.', use_gaia: true,
+        start: "The model server GAIA uses is at 127.0.0.1:9. GAIA doesn't run this model server, so it can't start it. Start it the way you usually do.", use_gaia: true,
     },
 };
 
@@ -241,6 +274,10 @@ interface SetupAnswers {
     localOnly?: boolean;
     /** A Lemonade the user already runs, which Check this PC offers. */
     theirs?: boolean;
+    /** The agent programs and the gaiacpp download, when a scene isn't about the default. */
+    agent?: AgentProgramsAnswers;
+    /** Continue was pressed with gaiacpp picked: setup's run waits for its download (as after a reload). */
+    agentHeld?: boolean;
 }
 
 const THEIRS_TARGET = {
@@ -250,7 +287,7 @@ const THEIRS_TARGET = {
 const THEIRS_FOUND = { found: { url: 'http://localhost:13305/api/v1', version: '2026.44.1', status: 'ok', message: null }, unchecked: [] };
 
 /** First-run setup, every call the screens make answered from the backend's shapes. */
-export async function withSetup(page: Page, { status = { state: 'idle' }, plan = PLAN, gpu = NO_GPU, hardware = HARDWARE, gatewayReachable = true, envKey = false, localOnly = false, theirs = false }: SetupAnswers = {}): Promise<void> {
+export async function withSetup(page: Page, { status = { state: 'idle' }, plan = PLAN, gpu = NO_GPU, hardware = HARDWARE, gatewayReachable = true, envKey = false, localOnly = false, theirs = false, agent, agentHeld = false }: SetupAnswers = {}): Promise<void> {
     const prices = { provider: 'fireworks', models: [{ model: 'qwen', name: 'Qwen3.6', rank: 1, note: null, price: { input_per_million: 0.5, cached_input_per_million: 0.1, output_per_million: 3, source: 'list price' } }], source: 'Fireworks list price', note: null };
     const answers: Record<string, unknown> = {
         'GET /setup/check': { ready: false, stage: 'setup', reasons: [], steps: [{ key: 'server', label: 'Install the local model server', detail: 'about 1 minute' }] },
@@ -271,6 +308,7 @@ export async function withSetup(page: Page, { status = { state: 'idle' }, plan =
         'GET /spending/prices/fireworks': prices,
         'GET /spending/prices/amd': { provider: 'amd', models: [], source: null, note: 'Prices are set by the organization that runs the gateway.' },
         'GET /memory/settings': { enabled: true },
+        'GET /settings': SETTINGS,
         'GET /spending': { month: '2026-10', total_usd: 0, turns: 0, unpriced_turns: 0, unreported_turns: 0, limit_usd: null, state: 'no_limit', by_model: [], price_source: 'list price' },
     };
     await page.route('**/api/**', async (route) => {
@@ -279,6 +317,13 @@ export async function withSetup(page: Page, { status = { state: 'idle' }, plan =
         if (key in answers) await route.fulfill({ json: answers[key] });
         else await route.fallback();
     });
+    if (agent) await withAgentPrograms(page, agent);
+    if (agentHeld) {
+        await page.addInitScript(() => {
+            sessionStorage.setItem('gaia.setup.agentPick', JSON.stringify({ id: 'gaiacpp', download: true, current: 'gaiapy' }));
+            sessionStorage.setItem('gaia.setup.heldRun', JSON.stringify({ acknowledgeLowDisk: false }));
+        });
+    }
 }
 
 const hero = (page: Page) => page.locator('.setup-hero').first();
@@ -310,6 +355,16 @@ async function toKey(page: Page): Promise<void> {
     await expect(page.locator('.setup-form')).toBeVisible();
 }
 
+// A tag hugs its words; a choice card stretches its spans unless told not to.
+export async function expectSnugTags(scope: Locator): Promise<void> {
+    const slack = await scope.locator('.setup-choice-tag').evaluateAll((tags) => tags.map((tag) => {
+        const range = document.createRange();
+        range.selectNodeContents(tag);
+        return Math.round(tag.getBoundingClientRect().width - range.getBoundingClientRect().width);
+    }));
+    for (const s of slack) expect(s, 'a tag is wider than its words').toBeLessThan(30);
+}
+
 export interface SetupScene {
     name: string;
     answers?: SetupAnswers;
@@ -332,6 +387,11 @@ export const SETUP_SCENES: SetupScene[] = [
     {
         name: 'check-found',
         reach: (page) => expect(page.locator('.found')).toBeVisible(),
+    },
+    {
+        name: 'check-engine-failed',
+        answers: { plan: PLAN_COLD, status: ENGINE_FAILED },
+        reach: (page) => expect(page.locator('.setup-result.is-failed')).toBeVisible(),
     },
     {
         // Logs open: the page grows past the window, and the scrollbar belongs at the window's edge.
@@ -392,6 +452,16 @@ export const SETUP_SCENES: SetupScene[] = [
             await page.locator('.setup-where-card').nth(1).click();
             await expect(page.locator('.setup-where-card.is-active')).toHaveCount(1);
             await expect(page.locator('.setup-where-card').nth(1)).toHaveClass(/is-active/);
+        },
+    },
+    {
+        // A 16 GB laptop says why it gets a smaller model.
+        name: 'plan-small-pc',
+        answers: { plan: PLAN_SMALL_PC },
+        reach: async (page) => {
+            await toPlan(page);
+            // Evaluated, small PC, fits, private: the local card's four reasons.
+            await expect(page.locator('.setup-where-card').first().locator('.setup-reasons li')).toHaveCount(4);
         },
     },
     {
@@ -490,6 +560,43 @@ export const SETUP_SCENES: SetupScene[] = [
             await expect(page.locator('.mc-row.is-off')).toBeVisible();
         },
     },
+    ...[false, true].flatMap((noGaiacpp) => [false, true].map((expanded): SetupScene => ({
+        name: `models-agent${noGaiacpp ? '-unavailable' : ''}-${expanded ? 'expanded' : 'collapsed'}`,
+        answers: noGaiacpp ? { agent: { gaiacpp: 'unavailable' } } : {},
+        reach: async (page) => {
+            await toModels(page);
+            const agent = page.locator('.agent-choice');
+            await expect(agent.locator('[role="radio"]')).toHaveCount(2);
+            await expect(agent.locator('[role="radio"][aria-checked="true"] bdi.agent-choice-name')).toHaveText('gaiapy');
+            await expect(agent.locator('[aria-disabled="true"]')).toHaveCount(noGaiacpp ? 1 : 0);
+            await expect(agent.locator('.agent-choice-size')).toHaveCount(noGaiacpp ? 1 : 2);
+            const more = agent.locator('.agent-choice-more');
+            if (expanded) await more.click();
+            await expect(more).toHaveAttribute('aria-expanded', String(expanded));
+            await expect(agent.locator('.agent-choice-detail')).toBeVisible({ visible: expanded });
+            // Each row is one line at desktop width.
+            for (const row of await agent.locator('[role="radio"]').all()) {
+                const box = await row.boundingBox();
+                if (page.viewportSize()!.width > 600) expect(box!.height).toBeLessThan(48);
+            }
+            await expectSnugTags(agent);
+            await agent.scrollIntoViewIfNeeded();
+        },
+    }))),
+    {
+        name: 'models-agent-download-picked',
+        answers: { agent: { gaiacpp: 'downloadable' } },
+        reach: async (page) => {
+            await toModels(page);
+            const agent = page.locator('.agent-choice');
+            await agent.locator('[role="radio"]').nth(1).click();
+            await expect(agent.locator('[role="radio"]').nth(1)).toHaveAttribute('aria-checked', 'true');
+            await expect(agent.locator('.agent-choice-off.is-quiet')).toBeVisible();
+            await agent.locator('.agent-choice-more').click();
+            await expectSnugTags(agent);
+            await agent.scrollIntoViewIfNeeded();
+        },
+    },
     {
         name: 'models-npu',
         reach: async (page) => {
@@ -585,6 +692,30 @@ export const SETUP_SCENES: SetupScene[] = [
         },
     },
     {
+        name: 'download-gaiacpp-downloading',
+        answers: { agentHeld: true, agent: { gaiacpp: 'downloadable', download: AGENT_DOWNLOADING } },
+        reach: async (page) => {
+            const bar = page.getByRole('progressbar', { name: /gaiacpp/ });
+            await expect(bar).toHaveAttribute('aria-valuenow', '40');
+            // The run waits on the agent: the rest is listed as not started, with no overall bar yet.
+            await expect(page.locator('.setup-contents .setup-content.is-waiting').first()).toBeVisible();
+            await expect(page.getByRole('progressbar', { name: /Overall/ })).toHaveCount(0);
+            await expect(page.locator('.setup-footer .btn-secondary')).toBeVisible();
+        },
+    },
+    {
+        name: 'download-gaiacpp-failed',
+        answers: { agentHeld: true, agent: { gaiacpp: 'downloadable', download: AGENT_DOWNLOADING, poll: AGENT_DOWNLOAD_FAILED } },
+        reach: async (page) => {
+            const failed = page.locator('.agent-download .dl-fail');
+            await expect(failed).toBeVisible();
+            // Two ways on: Retry in the row, and carrying on with gaiapy in the bottom bar.
+            await expect(failed.getByRole('button')).toBeVisible();
+            await expect(page.locator('.setup-footer .btn-secondary')).toBeVisible();
+            await failed.scrollIntoViewIfNeeded();
+        },
+    },
+    {
         name: 'download-running',
         answers: { status: RUN },
         reach: async (page) => {
@@ -633,6 +764,31 @@ export const SETUP_SCENES: SetupScene[] = [
         reach: (page) => expect(page.locator('.dl-row').first()).toBeVisible(),
     },
     {
+        // An extra still downloading after setup is ready: its Optional row reads Added, not Add.
+        name: 'download-extra-in-flight',
+        answers: { status: RUN_READY_EXTRA, plan: PLAN_DONE },
+        reach: async (page) => {
+            await expect(page.locator('.setup-done')).toBeVisible();
+            await page.locator('.setup-rail-list > li').nth(2).getByRole('button').click();
+            const optional = page.locator('section.setup-card', { has: page.locator('button[aria-pressed]') });
+            await expect(optional.getByRole('button', { pressed: true })).toBeDisabled();
+            await expect(optional.getByRole('button', { pressed: false })).toBeVisible();
+            await optional.scrollIntoViewIfNeeded();
+        },
+    },
+    {
+        name: 'download-extras-stopped',
+        answers: { status: RUN_EXTRAS_STOPPED },
+        reach: async (page) => {
+            await expect(page.locator('.dl-row.is-cancelled')).toBeVisible();
+            // A way to finish without the extra, beside Resume all.
+            await expect(page.locator('.setup-footer .btn-secondary')).toBeVisible();
+            await expect(page.locator('.setup-rail-step.is-failed')).toHaveCount(0);
+            // The overall line counts the kept models whole, as their rows show.
+            await expect(page.locator('.dl-overall-line')).toContainText(/(?:^|\D)[89]\d\D{0,2}%/);
+        },
+    },
+    {
         name: 'test-running',
         answers: { status: RUN_TESTING },
         reach: (page) => expect(page.locator('.setup-result.is-running')).toBeVisible(),
@@ -673,10 +829,18 @@ export const SETUP_SCENES: SetupScene[] = [
             await expect(page.locator('.start-card')).toHaveCount(1);
         },
     },
+    {
+        name: 'ready-extra-downloading',
+        answers: { status: RUN_READY_EXTRA, plan: PLAN_DONE },
+        reach: async (page) => {
+            await expect(page.locator('.setup-done')).toBeVisible();
+            await expect(page.locator('.setup-hint[role="status"]')).toBeVisible();
+        },
+    },
 ];
 
 /** The screens whose rows wrap: each must hold together in a narrow window too. */
-export const NARROW_SCENES = ['check-failed', 'plan', 'check-details', 'models', 'models-npu-not-ready', 'models-long', 'key', 'plan-local-only', 'download-running', 'download-failed', 'download-agent-failed', 'test-long', 'ready'];
+export const NARROW_SCENES = ['check-failed', 'plan', 'check-details', 'models', 'models-agent-unavailable-collapsed', 'models-agent-unavailable-expanded', 'download-gaiacpp-failed', 'models-npu-not-ready', 'models-long', 'key', 'plan-local-only', 'download-running', 'download-failed', 'download-agent-failed', 'test-long', 'ready'];
 
 export const scene = (name: string): SetupScene => {
     const found = SETUP_SCENES.find((s) => s.name === name);

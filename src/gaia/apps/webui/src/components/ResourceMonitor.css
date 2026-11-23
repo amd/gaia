@@ -14,6 +14,23 @@
     flex-shrink: 0;
 }
 
+/* What the strip leaves behind for a moment when its ✕ closes it. */
+.resource-hidden-note {
+    flex-wrap: wrap;
+    font-size: 12px;
+    color: var(--text-secondary);
+}
+
+.resource-hidden-undo {
+    padding: 0;
+    border: 0;
+    background: none;
+    font: inherit;
+    color: var(--text-primary);
+    text-decoration: underline;
+    cursor: pointer;
+}
+
 /* Tiles keep their content's width and wrap before they would overlap. */
 .resource-tiles {
     display: flex;
@@ -64,10 +81,12 @@
 }
 .resource-label {
     font-size: 12px;
-    font-weight: 600;
+    font-weight: 500;
     white-space: nowrap;
     overflow: hidden;
-    text-overflow: ellipsis;
+    text-overflow: clip;
+    animation: fade-cut-inline both;
+    animation-timeline: scroll(self inline);
     color: var(--text-primary);
 }
 .resource-reading {
@@ -91,7 +110,9 @@
 .resource-detail {
     min-width: 0;
     overflow: hidden;
-    text-overflow: ellipsis;
+    text-overflow: clip;
+    animation: fade-cut-inline both;
+    animation-timeline: scroll(self inline);
     color: var(--text-muted);
 }
 

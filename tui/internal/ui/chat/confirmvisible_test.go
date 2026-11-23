@@ -8,7 +8,6 @@ import (
 	"strings"
 	"testing"
 
-	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/amd/gaia/tui/internal/ui/components"
 )
@@ -121,7 +120,7 @@ func TestTheStatusBarSaysADecisionIsPending(t *testing.T) {
 	}
 	// The modal says "n/esc deny". A status hint saying "Esc cancel" one row
 	// below it gives the same key two meanings on one screen.
-	if strings.Contains(frame, "Esc cancel") {
+	if strings.Contains(frame, "Esc to interrupt") {
 		t.Errorf("the status hint contradicts the modal about Esc:\n%s", frame)
 	}
 
@@ -147,7 +146,7 @@ func TestResolvingTheConfirmationReturnsTheRowsToTheTranscript(t *testing.T) {
 			tall, m.viewport.Height)
 	}
 
-	updated, cmd := m.handleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("n")})
+	updated, cmd := answerKey(t, m, "n")
 	m = updated.(ChatModel)
 	updated2, _ := m.Update(cmd().(components.ConfirmationDecidedMsg))
 	m = updated2.(ChatModel)

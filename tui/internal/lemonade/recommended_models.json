@@ -2,7 +2,9 @@
   "fit": {
     "memory_overhead_factor": 1.05,
     "memory_overhead_gb": 1.0,
-    "windows_igpu_shared_ram_fraction": 0.5
+    "windows_igpu_shared_ram_fraction": 0.5,
+    "app_reserve_min_gb": 10.0,
+    "app_reserve_fraction": 0.25
   },
   "models": [
     {
@@ -33,10 +35,29 @@
       "id": "Gemma-4-E4B-it-GGUF",
       "provider": "local",
       "label": "Gemma 4 E4B",
-      "note": "default on CPU-only PCs and GPUs below ~27 GB for models",
+      "note": "default on 24-32 GB PCs and 12-24 GB GPUs (~8.5 GB for models), with vision",
       "size_gb": 5.97,
       "min_ctx_size": 65536,
       "kv_bytes_per_token": 16384
+    },
+    {
+      "id": "Qwen3.5-4B-GGUF",
+      "provider": "local",
+      "label": "Qwen3.5 4B",
+      "note": "default on an 8 GB GPU (~7 GB for models); thinking off, with vision",
+      "size_gb": 3.58,
+      "min_ctx_size": 65536,
+      "kv_bytes_per_token": 32768
+    },
+    {
+      "id": "Qwen3.5-2B-GGUF",
+      "provider": "local",
+      "floor": true,
+      "label": "Qwen3.5 2B",
+      "note": "default on PCs with 16 GB of RAM or less (~4 GB for models), leaving room for other apps; fastest, with vision",
+      "size_gb": 2.01,
+      "min_ctx_size": 65536,
+      "kv_bytes_per_token": 12288
     },
     {
       "id": "gemma4-it-e4b-FLM",

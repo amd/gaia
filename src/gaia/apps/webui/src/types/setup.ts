@@ -112,6 +112,8 @@ export interface SetupCatalogEntry {
     fit_reason: string | null;
     /** Why it doesn't fit: too little memory, no NPU that can run it, or no backend for its kind. */
     fit_code?: 'memory' | 'npu' | 'backend' | null;
+    /** Fits, but leaves other apps less memory than GAIA keeps for them. */
+    tight?: boolean;
 }
 
 /** A 409 from a setup choice that asks to be confirmed, then sent again with `acknowledge` true. */
@@ -304,6 +306,8 @@ export interface SetupPlan {
     recommended_model: string | null;
     /** GAIA's own server isn't running yet, so the final pick comes once it is. */
     decided_after_server: boolean;
+    /** GB of RAM other apps keep with the recommended model loaded; null when the model has its own GPU memory. */
+    left_for_apps_gb?: number | null;
     memory_gb: number | null;
     memory_source: string | null;
     options: Array<{ id: string; size_gb: number | null; fits: boolean | null; reason: string | null }>;
@@ -317,8 +321,8 @@ export interface SetupPlan {
     catalog?: SetupCatalogEntry[];
     /** Backends Lemonade reports for this PC. */
     backends?: Array<{ recipe: string; backend: string; state: string | null; version?: string | null; default: boolean }>;
-    /** An NPU Lemonade reports, and what stops a model running on it yet. */
-    npu?: SetupNpuStatus;
+    /** An NPU Lemonade reports, and what stops a model running on it yet; null when it couldn't be checked. */
+    npu?: SetupNpuStatus | null;
     /** What setup found across the stack; null where nothing could find out. */
     system?: SetupSystem;
     /** Everything else setup fetches. */
@@ -345,6 +349,15 @@ export interface StartScreen {
     working_folder: { path: string; name: string; gaia_folder: boolean; choosable: boolean };
     /** Why there are no cards: the agent couldn't list its skills. */
     skills_error?: string | null;
+    /** Set with `skills_error` when the agent the user chose is why it didn't start. */
+    agent_problem?: AgentProblem | null;
+}
+
+/** Why the chosen gaiacpp can't start: not on this PC, or it no longer matches its download. */
+export interface AgentProblem {
+    code: 'gaiacpp_missing' | 'gaiacpp_invalid';
+    /** The backend's own wording, for a Details disclosure. */
+    detail: string;
 }
 
 // ── Which Lemonade Server GAIA uses (/api/lemonade/*) ─────────────────────

@@ -15,6 +15,7 @@ import asyncio
 import hashlib
 import logging
 import os
+import sqlite3
 import sys
 import tempfile
 import unicodedata
@@ -42,6 +43,7 @@ from ..models import (
     IndexFolderRequest,
     IndexFolderResponse,
 )
+from ..session_environment import path_error_reason
 from ..utils import (
     ALLOWED_EXTENSIONS,
     FOLDER_INDEX_EXTENSIONS,
@@ -49,6 +51,7 @@ from ..utils import (
     compute_file_hash,
     compute_file_hash_from_fd,
     doc_to_response,
+    document_copies_dir,
     ensure_document_path_allowed,
     harden_served_file,
     managed_documents_dir,
@@ -108,16 +111,19 @@ def _cleanup_temp(path: Path) -> None:
 
 
 def _is_server_owned(filepath: str) -> bool:
-    """Return True if *filepath* lives inside the server-managed docs dir.
+    """Return True if *filepath* lives in a folder the server owns.
 
-    Used by ``delete_document`` to decide whether to unlink the on-disk file.
+    That is GAIA's documents folder or its folder of document copies. Used by
+    ``delete_document`` to decide whether to unlink the on-disk file.
     User-provided paths (from ``upload-path``) are NOT server-owned and must
     be left untouched on delete.
     """
     try:
         resolved = Path(filepath).resolve()
-        managed = managed_documents_dir().resolve()
-        return resolved.is_relative_to(managed)
+        return any(
+            resolved.is_relative_to(owned.resolve())
+            for owned in (managed_documents_dir(), document_copies_dir())
+        )
     except (OSError, ValueError):
         return False
 
@@ -225,7 +231,12 @@ async def upload_by_path(
         raise HTTPException(status_code=400, detail="Invalid file path")
 
     # Resolve once — used for both the lock key and safe_open validation
-    resolved = Path(request.filepath).resolve()
+    try:
+        resolved = Path(request.filepath).resolve()
+    except (ValueError, OSError) as e:  # too long for the OS
+        raise HTTPException(
+            status_code=400, detail=f"Invalid file path: {path_error_reason(e)}"
+        ) from e
     lock = upload_locks.setdefault(str(resolved), asyncio.Lock())
 
     async with lock:
@@ -391,11 +402,13 @@ async def upload_document_blob(
     required because browser File objects do not expose an absolute
     filesystem path.
 
-    The blob is streamed to ``managed_documents_dir()`` with an abort-on-overflow
+    The blob is streamed to ``document_copies_dir()`` with an abort-on-overflow
     size check, deduplicated by SHA-256 content hash, then indexed via the
     standard RAG pipeline. Files are capped at ``MAX_DOCUMENT_UPLOAD_SIZE``.
 
-    On any failure, partial / orphaned files are cleaned up.
+    On any failure, partial / orphaned files are cleaned up, except when the
+    model server couldn't index it: the copy then stays as a failed row that
+    is indexed again once the server is back.
     """
     # 1. Validate filename
     if not file.filename:
@@ -417,12 +430,13 @@ async def upload_document_blob(
             detail=unsupported_type_message(display_name),
         )
 
-    # 3. Ensure the managed directory exists
-    managed_dir = managed_documents_dir()
+    # 3. Ensure the copies directory exists. Not GAIA's documents folder: every
+    # chat may use that one, and this copy is only for the chats it's attached to.
+    copies_dir = document_copies_dir()
     try:
-        managed_dir.mkdir(parents=True, exist_ok=True)
+        copies_dir.mkdir(parents=True, exist_ok=True)
     except OSError as e:
-        logger.error("Failed to create managed docs dir %s: %s", managed_dir, e)
+        logger.error("Failed to create document copies dir %s: %s", copies_dir, e)
         raise HTTPException(
             status_code=500, detail="Failed to prepare document storage"
         )
@@ -430,7 +444,7 @@ async def upload_document_blob(
     # 4. Stream-write to a .partial file, hashing as we go, aborting on
     # oversize. try/finally ensures the partial is cleaned up on any exit
     # path (including ClientDisconnect and CancelledError).
-    partial_path: Path | None = managed_dir / f"{_short_id()}.partial"
+    partial_path: Path | None = copies_dir / f"{_short_id()}.partial"
     final_path: Path | None = None
     hasher = hashlib.sha256()
     bytes_written = 0
@@ -490,7 +504,7 @@ async def upload_document_blob(
         safe_stem = _sanitize_stem(Path(display_name).stem)
         try:
             final_path = reserve_copy_path(
-                managed_dir,
+                copies_dir,
                 safe_stem,
                 ext,
                 taken=lambda p: db.path_held_by_other_content(str(p), file_hash),
@@ -532,17 +546,12 @@ async def upload_document_blob(
             status_code=422, detail={"status": e.kind, "message": str(e)}
         ) from e
     except ModelServerIndexError as e:
-        _cleanup_temp(final_path)
+        # The file is fine: keep it as a row that waits for the server.
         # The connection error stays in the log; the client words the reason.
         logger.warning("Could not index uploaded document %s: %s", display_name, e)
-        raise HTTPException(
-            status_code=503,
-            detail={
-                "status": e.kind,
-                "message": "GAIA's model server isn't answering, so the "
-                "document couldn't be added. Retry once it's back.",
-            },
-        ) from e
+        return _waiting_for_server(
+            db, final_path, display_name, file_hash, bytes_written, e
+        )
     except Exception as e:
         _cleanup_temp(final_path)
         logger.error(
@@ -734,7 +743,7 @@ async def delete_document(doc_id: str, db: ChatDatabase = Depends(get_db)):
     """Remove a document from the library.
 
     For blob-uploaded documents (files the server owns under
-    ``managed_documents_dir()``), the on-disk file is also unlinked as a
+    ``document_copies_dir()``), the on-disk file is also unlinked as a
     best-effort cleanup. User-owned files from ``upload-path`` are left
     alone.
     """
@@ -755,6 +764,55 @@ async def delete_document(doc_id: str, db: ChatDatabase = Depends(get_db)):
         _cleanup_temp(Path(filepath))
 
     return {"deleted": True}
+
+
+_SERVER_OUT = {
+    "model_server_down": "GAIA's model server isn't answering. GAIA adds this "
+    "document once it is back.",
+    "model_server_busy": "GAIA's model server was too busy to add this "
+    "document. Retry it.",
+}
+
+
+def _waiting_for_server(
+    db: ChatDatabase,
+    copy: Path,
+    display_name: str,
+    file_hash: str,
+    file_size: int,
+    error: ModelServerIndexError,
+) -> DocumentResponse:
+    """Record a dropped file the model server couldn't index as a failed row.
+
+    The app retries a ``model_server_down`` row by itself once the server is
+    back; a ``model_server_busy`` one waits on the row's Retry. The copy stays.
+    """
+    try:
+        doc = db.add_document(
+            filename=display_name,
+            filepath=str(copy),
+            file_hash=file_hash,
+            file_size=file_size,
+            chunk_count=0,
+            file_mtime=copy.stat().st_mtime,
+        )
+    except (OSError, sqlite3.Error):
+        _cleanup_temp(copy)
+        raise
+    if Path(doc["filepath"]).resolve() != copy.resolve():
+        # The same content went in meanwhile; that row stands for this file.
+        _cleanup_temp(copy)
+    if doc.get("indexing_status") in ("pending", "indexing") or (
+        doc.get("indexing_status") == "complete" and doc.get("chunk_count")
+    ):
+        return doc_to_response(doc)
+    db.update_document_status(
+        doc["id"],
+        "failed",
+        last_error=_SERVER_OUT.get(error.kind, str(error)),
+        error_kind=error.kind,
+    )
+    return doc_to_response(db.get_document(doc["id"]))
 
 
 def _record_failed_document(

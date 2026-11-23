@@ -294,7 +294,7 @@ class TestFlagshipPathUnchanged:
         called = []
         monkeypatch.setattr(cli, "_run_registered_agent", lambda *a: called.append(a))
         monkeypatch.setattr(cli, "_registry_with_agent", lambda *a: called.append(a))
-        monkeypatch.setitem(sys.modules, "gaia_agent.agent", None)
+        monkeypatch.setitem(sys.modules, "gaiapy.agent", None)
         relayed = []
         monkeypatch.setattr(cli, "_gaia_chat_relay", lambda kw: relayed.append(kw) or 0)
         kwargs = {"no_lemonade_check": True, "query": "hi"}

@@ -485,6 +485,8 @@ def _kill_tree(pid: int) -> None:
     """End the bridge and its agent child."""
     import psutil
 
+    from gaia.utils.process_tree import kill_pid_tree
+
     try:
         proc = psutil.Process(pid)
         cmdline = " ".join(proc.cmdline())
@@ -493,15 +495,7 @@ def _kill_tree(pid: int) -> None:
     if "discord" not in cmdline or "start" not in cmdline:
         log.warning("Pid %s is not a Discord bridge (%s); not killing it", pid, cmdline)
         return
-    for child in proc.children(recursive=True):
-        try:
-            child.kill()
-        except psutil.NoSuchProcess:
-            pass
-    try:
-        proc.kill()
-    except psutil.NoSuchProcess:
-        pass
+    kill_pid_tree(proc)
 
 
 def run_stop(*, emit: Callable[[str], None] = print) -> int:

@@ -112,26 +112,27 @@ export function findCitations(index: CitationIndex, text: string): FoundCitation
     const found: FoundCitation[] = [];
     for (const m of text.matchAll(index.re)) {
         const end = m.index! + m[0].length;
-        const doc = docForToken(index, m[0]);
-        if (doc) {
-            found.push({ start: m.index!, end, doc });
-            continue;
-        }
+        // The pattern stops at a space, so a folder with one is found by its stored path.
         const spaced = storedPathEndingAt(index, text, end, baseName(m[0]).toLowerCase());
-        if (spaced) found.push({ start: spaced.start, end, doc: spaced.doc });
+        const doc = spaced && spaced.start <= m.index! ? null : docForToken(index, m[0]);
+        if (doc) found.push({ start: m.index!, end, doc });
+        else if (spaced) found.push({ start: spaced.start, end, doc: spaced.doc });
     }
     return found;
 }
 
-/** A stored path the text spells out in full up to `end`, for a shared name whose folders hold spaces. */
+/** The longest stored path named `name` that the text spells out in full up to `end`. */
 function storedPathEndingAt(
     index: CitationIndex, text: string, end: number, name: string,
 ): { start: number; doc: CitedDoc } | null {
     const before = text.slice(0, end).replace(/\\/g, '/').toLowerCase();
+    let best: { start: number; doc: CitedDoc } | null = null;
     for (const [key, doc] of index.byPath) {
-        if (baseName(key) === name && before.endsWith(key)) return { start: end - key.length, doc };
+        if (baseName(key) === name && before.endsWith(key) && (!best || end - key.length < best.start)) {
+            best = { start: end - key.length, doc };
+        }
     }
-    return null;
+    return best;
 }
 
 const DIGITS = '[0-9\\u0660-\\u0669\\u06F0-\\u06F9]+';

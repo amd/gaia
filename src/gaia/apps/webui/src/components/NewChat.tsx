@@ -3,18 +3,22 @@
 
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { ChevronRight, FileText, X } from 'lucide-react';
+import { AgentRecovery } from './AgentRecovery';
+import { BrowserPaneToggle } from './browser-pane/BrowserPane';
 import { Composer } from './Composer';
 import { FolderChip } from './FolderChip';
 import { ModelChip } from './ModelChip';
 import { NpuBackdrop } from './NpuBackdrop';
 import { PermissionModeChip } from './PermissionModeChip';
 import { PrivateChip } from './PrivateChip';
+import { ResearchChip } from './ResearchChip';
 import { TryChips } from './TryChips';
 import { useAttachments } from '../hooks/useAttachments';
 import { useWarmUp, type WarmUpProgress } from '../hooks/useWarmUp';
 import * as api from '../services/api';
 import { isStarting } from '../services/statusPoll';
-import { useChatStore } from '../stores/chatStore';
+import { researchOn, useChatStore } from '../stores/chatStore';
+import { withResearchCommand } from '../utils/research';
 import { displayModelName, useModelNames, useModelStore } from '../stores/modelStore';
 import * as messageQueue from '../utils/messageQueue';
 import { setVisibleInterval } from '../utils/visibleInterval';
@@ -23,12 +27,13 @@ import { requestErrorText } from '../utils/requestErrors';
 import { FlagshipMissing } from '../utils/newTask';
 import { durationMs, prefersReducedMotion } from '../utils/motion';
 import { deviceLabel } from '../utils/modelLabels';
-import type { StartScreen } from '../types';
+import type { AgentProblem, StartScreen } from '../types';
 import './NewChat.css';
 import { useSavedDraft } from '../hooks/useSavedDraft';
 import { NEW_CHAT_DRAFT_KEY } from '../utils/savedDraft';
 import { ref, type MessageKey } from '../i18n/registry';
 import { tEn, useT, type Translate } from '../i18n/useT';
+import { visibleName } from './CalendarApproval';
 
 interface NewChatProps {
     /**
@@ -48,6 +53,9 @@ interface NewChatProps {
 
 /** How often the start screen is asked for again while the assistant is unavailable. */
 export const START_RETRY_MS = 15_000;
+
+/** A warm-up shorter than this finishes unseen, rather than flashing "0s". */
+export const WARM_UP_SHOWN_AFTER_S = 2;
 
 export function greeting(now: Date = new Date(), t: Translate = tEn): string {
     const h = now.getHours();
@@ -126,12 +134,12 @@ function LibraryDocuments() {
                     {shown.map((d) => (
                         <li key={d.id} className="new-chat-doc">
                             <FileText size={12} aria-hidden="true" />
-                            <span dir="ltr">{d.filename}</span>
+                            <span dir="ltr">{visibleName(d.filename)}</span>
                             <button
                                 type="button"
                                 className="new-chat-doc-remove"
                                 onClick={() => removeDraftDocument(d.id)}
-                                aria-label={t('newChat.docs.dontAttach', { name: d.filename })}
+                                aria-label={t('newChat.docs.dontAttach', { name: visibleName(d.filename) })}
                             >
                                 <X size={12} aria-hidden="true" />
                             </button>
@@ -191,6 +199,7 @@ function SetupFailed({ error }: { error: string }) {
 /** An empty chat: a greeting and the composer over the NPU backdrop. Created on the first message. */
 export function NewChat({ onSend, initialText = '', focusRequest = 0, agentMissing = false, agentRefused: heldRefused = false }: NewChatProps) {
     const t = useT();
+    const researchMode = useChatStore((s) => researchOn(s, null));
     const starting = useChatStore((s) => isStarting(s.systemStatus));
     const download = useChatStore((s) => s.systemStatus?.download_progress ?? null);
     // Moot once chats run in the cloud or a local model has loaded after all.
@@ -202,6 +211,9 @@ export function NewChat({ onSend, initialText = '', focusRequest = 0, agentMissi
     const [sending, setSending] = useState(false);
     const [start, setStart] = useState<StartScreen | null>(null);
     const [startError, setStartError] = useState<string | null>(null);
+    const [agentProblem, setAgentProblem] = useState<AgentProblem | null>(null);
+    // A message sent while the chosen agent can't start: it stays in the box.
+    const [keptForAgent, setKeptForAgent] = useState(false);
     const inputRef = useRef<HTMLTextAreaElement | null>(null);
     const innerRef = useRef<HTMLDivElement | null>(null);
     const composerRef = useRef<HTMLDivElement | null>(null);
@@ -218,6 +230,8 @@ export function NewChat({ onSend, initialText = '', focusRequest = 0, agentMissi
                 if (!live.current) return;
                 setStart(s);
                 setStartError(s.skills_error ?? null);
+                setAgentProblem(s.agent_problem ?? null);
+                if (!s.agent_problem) setKeptForAgent(false);
             })
             .catch((err) => {
                 log.api.warn('New-chat start screen unavailable', err);
@@ -269,7 +283,7 @@ export function NewChat({ onSend, initialText = '', focusRequest = 0, agentMissi
             if (held.length > 0 && sessionId) {
                 // The chat is open now; if its first message never went out, the rest wait for Send again.
                 const add = (items: messageQueue.QueuedMessage[], text: string) => sent === false
-                    ? [...items, { ...messageQueue.item(text, 'failed'), error: 'The first message was not sent.' }]
+                    ? [...items, { ...messageQueue.item(text, 'failed'), error: messageQueue.FIRST_NOT_SENT_ERROR }]
                     : messageQueue.enqueue(items, text, 'queued');
                 useChatStore.getState().updateQueue(sessionId, (q) => held.reduce(add, q));
             }
@@ -285,7 +299,14 @@ export function NewChat({ onSend, initialText = '', focusRequest = 0, agentMissi
         }
     }, [attachments, onSend]);
 
-    const submit = useCallback(() => send(attachments.compose(text.trim()), text.trim()), [attachments, send, text]);
+    const submit = useCallback(() => {
+        // It would only fail: the box keeps the message until the agent is back.
+        if (agentProblem) {
+            setKeptForAgent(true);
+            return;
+        }
+        return send(attachments.compose(withResearchCommand(text.trim(), researchOn(useChatStore.getState(), null))), text.trim());
+    }, [agentProblem, attachments, send, text]);
 
     useEffect(() => {
         if (focusRequest) inputRef.current?.focus();
@@ -342,9 +363,13 @@ export function NewChat({ onSend, initialText = '', focusRequest = 0, agentMissi
                 contentRef={innerRef}
                 composerRef={composerRef}
             />
+            <div className="new-chat-actions">
+                <BrowserPaneToggle />
+            </div>
             <div className="new-chat-inner" ref={innerRef}>
                 <h1 className="new-chat-greeting" aria-hidden={docked}>{greeting(new Date(), t)}</h1>
                 {setupError && !remote && <SetupFailed error={setupError} />}
+                {agentProblem && <AgentRecovery problem={agentProblem} onRetry={() => loadStart()} kept={keptForAgent} />}
                 <div ref={composerRef}>
                     <Composer
                         value={text}
@@ -354,7 +379,8 @@ export function NewChat({ onSend, initialText = '', focusRequest = 0, agentMissi
                         disabledReason={starting ? t('composer.starting') : null}
                         autoFocus
                         inputRef={inputRef}
-                        leftControls={<><PermissionModeChip sessionId={null} /><PrivateChip disabled={sending} /></>}
+                        placeholder={researchMode ? t('composer.researchPlaceholder') : undefined}
+                        leftControls={<><PermissionModeChip sessionId={null} /><PrivateChip disabled={sending} /><ResearchChip sessionId={null} disabled={sending} compact /></>}
                         rightControls={<ModelChip />}
                     />
                 </div>
@@ -362,13 +388,13 @@ export function NewChat({ onSend, initialText = '', focusRequest = 0, agentMissi
                     {folder && <FolderChip folder={folder} disabled={starting || sending} />}
                 </div>
                 <LibraryDocuments />
-                {warming !== null && !starting && (
+                {warming !== null && !starting && warming.seconds >= WARM_UP_SHOWN_AFTER_S && (
                     <p className="new-chat-warmup" role="status">{warmUpLine(warming, t)}</p>
                 )}
                 {error && <p className="new-chat-error" role="alert">{error}</p>}
                 {agentRefused && agentMissing && <p className="new-chat-error" role="alert">{t('agentNotice.sendRefused')}</p>}
                 <TryChips onPick={fillPrompt} disabled={starting || sending} />
-                {startError && <AssistantUnavailable detail={startError} onRetry={() => loadStart()} />}
+                {!agentProblem && startError && <AssistantUnavailable detail={startError} onRetry={() => loadStart()} />}
             </div>
         </main>
     );

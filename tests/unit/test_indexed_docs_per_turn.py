@@ -6,7 +6,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-pytest.importorskip("gaia_agent")
+pytest.importorskip("gaiapy")
 
 from gaia.agents.tools import rag_tools  # noqa: E402
 from tests.unit.test_profilespec_characterization import (  # noqa: E402

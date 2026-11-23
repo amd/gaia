@@ -72,6 +72,8 @@ public:
     /// from the enclosing git repository root down to `directory` itself, so
     /// searching `repo/src` still honours `repo/.gitignore`. When `directory`
     /// is not inside a git repository, only its own `.gitignore` is read.
+    /// The same holds when the repository ignores `directory` itself (a
+    /// project under `build/`): naming an ignored folder still searches it.
     ///
     /// This covers everything *above* the starting directory. A caller that
     /// walks downward must fold in each subdirectory's own `.gitignore` with

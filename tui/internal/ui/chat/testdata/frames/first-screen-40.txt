@@ -1,0 +1,20 @@
+ GAIA  │ agent gaia
+────────────────────────────────────────
+Welcome to GAIA
+Connected to: agent gaia
+
+Try one — press its number:
+  1  Today's tech news in brief
+  2  Research a topic, with sources
+  3  What fills up this folder
+  4  Book recommendations
+
+Ask a question, or type /help for what e
+
+
+
+
+
+────────────────────────────────────────
+› Ask anything — Enter to send,
+  ● agent gaia connected   Ctrl+C quit

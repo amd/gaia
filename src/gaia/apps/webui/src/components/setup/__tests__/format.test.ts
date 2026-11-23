@@ -2,10 +2,13 @@
 // SPDX-License-Identifier: MIT
 
 import { describe, expect, it } from 'vitest';
+import { stripIsolates, translateBare, type Say } from '../../../i18n/registry';
 import { tEn } from '../../../i18n/useT';
-import { DownloadMeter, formatEta, formatSize, formatSpeed } from '../format';
+import { DownloadMeter, formatEta, formatSize, formatSpeed, spokenEta } from '../format';
 import { copyableCommand } from '../GpuMemoryPanel';
 import { driveName } from '../ModelChecklist';
+
+const tAr: Say = (key, params) => stripIsolates(translateBare('ar', key, params));
 
 describe('sizes, speeds and times', () => {
     it('shows decimal GB to one place, and MB under 1 GB', () => {
@@ -23,7 +26,39 @@ describe('sizes, speeds and times', () => {
     it('rounds the ETA as the spec says', () => {
         expect(formatEta(40, tEn)).toBe('about 40 sec');
         expect(formatEta(13 * 60, tEn)).toBe('about 13 min');
-        expect(formatEta(3 * 3600, tEn)).toBe('over 2 hours');
+    });
+
+    it('gives a figure in hours past two hours, up to a day', () => {
+        const H = 3600;
+        expect(formatEta(2 * H, tEn)).toBe('about 120 min');
+        expect(formatEta(2 * H + 1, tEn)).toBe('about 2 hours');
+        expect(formatEta(2.4 * H, tEn)).toBe('about 2 hours');
+        expect(formatEta(2.5 * H, tEn)).toBe('about 3 hours');
+        expect(formatEta(16 * H, tEn)).toBe('about 16 hours');
+        expect(formatEta(24 * H, tEn)).toBe('about 24 hours');
+        expect(formatEta(24 * H + 1, tEn)).toBe('more than a day');
+        expect(formatEta(30 * H, tEn)).toBe('more than a day');
+        expect(formatEta(400 * H, tEn)).toBe('more than a day');
+    });
+
+    it('speaks the hours in full', () => {
+        const H = 3600;
+        expect(spokenEta(13 * 60, tEn)).toBe('about 13 minutes left');
+        expect(spokenEta(2.4 * H, tEn)).toBe('about 2 hours left');
+        expect(spokenEta(16 * H, tEn)).toBe('about 16 hours left');
+        expect(spokenEta(30 * H, tEn)).toBe('more than a day left');
+    });
+
+    it('says the hours in Arabic, with the noun in the form the count takes', () => {
+        const H = 3600;
+        expect(formatEta(2.5 * H, tAr)).toBe('نحو 3 س');
+        expect(formatEta(16 * H, tAr)).toBe('نحو 16 س');
+        expect(formatEta(30 * H, tAr)).toBe('أكثر من يوم');
+        expect(spokenEta(2.4 * H, tAr)).toBe('يتبقى نحو ساعتين');
+        expect(spokenEta(2.5 * H, tAr)).toBe('يتبقى نحو 3 ساعات');
+        expect(spokenEta(10 * H, tAr)).toBe('يتبقى نحو 10 ساعات');
+        expect(spokenEta(16 * H, tAr)).toBe('يتبقى نحو 16 ساعة');
+        expect(spokenEta(30 * H, tAr)).toBe('يتبقى أكثر من يوم');
     });
 
     it('names the drive, or the folder when there is no drive letter', () => {

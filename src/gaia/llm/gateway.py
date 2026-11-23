@@ -548,9 +548,10 @@ def recall_token() -> Optional[str]:
 
 def forget_token() -> bool:
     """Remove the remembered token. True when one was actually stored."""
-    from gaia.connectors.store import delete_secret
+    from gaia.connectors.store import delete_secret, secret_in_use
 
-    had = recall_token() is not None
+    # A weak keyring refuses the read but not the delete.
+    had = recall_token() is not None or secret_in_use(GATEWAY_SECRET_NAME)
     delete_secret(GATEWAY_SECRET_NAME)
     return had
 

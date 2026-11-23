@@ -226,6 +226,48 @@ def test_lists_offer_only_models_this_pc_runs(pc, capacity, available):
         assert m["available"] == (m["unavailable_reason"] is None)
 
 
+def test_settings_marks_models_that_leave_other_apps_little_memory():
+    """A 16 GB laptop: Gemma and the 4B load, but are tight; the 2B is not."""
+    laptop = MachineCapacity(
+        memory_gb=10.0,
+        memory_source="AMD iGPU",
+        disk_free_gb=500.0,
+        installed_ram_gb=16.0,
+    )
+    models = [
+        {"id": m, "recipe": "llamacpp", "downloaded": False, "size": size}
+        for m, size in (
+            ("Gemma-4-E4B-it-GGUF", 5.97),
+            ("Qwen3.5-4B-GGUF", 3.58),
+            ("Qwen3.5-2B-GGUF", 2.01),
+        )
+    ]
+    out = annotate_local_models(
+        models,
+        health={"all_models_loaded": []},
+        system_info=system_info(npu=False),
+        capacity=laptop,
+        preferred_backend=None,
+        speeds={},
+    )
+    by_id = {m["id"]: m for m in out}
+    assert all(m["fits"] and m["available"] for m in out)
+    assert by_id["Gemma-4-E4B-it-GGUF"]["tight"] is True
+    assert by_id["Qwen3.5-4B-GGUF"]["tight"] is True
+    assert by_id["Qwen3.5-2B-GGUF"]["tight"] is False
+    # A discrete GPU's own memory holds the model: nothing is tight.
+    card = replace(laptop, memory_source="AMD GPU", memory_gb=12.0)
+    out = annotate_local_models(
+        models,
+        health={"all_models_loaded": []},
+        system_info=system_info(npu=False),
+        capacity=card,
+        preferred_backend=None,
+        speeds={},
+    )
+    assert not any(m["tight"] for m in out)
+
+
 @pytest.mark.parametrize(
     "state,offered",
     [("installed", True), ("installable", True), ("unsupported", False)],
@@ -321,6 +363,11 @@ def test_a_running_model_is_never_hidden_by_the_estimate():
         ("user.Phi-4-mini-instruct-GGUF", "Phi 4 mini"),
         # A user-registered build: date stamp and format tag dropped, sizes upper-case.
         ("user.qwen38-27b-gguf-20260826", "Qwen38 27B"),
+        # A built-in copy keeps its own name beside the plain one, without the raw prefix.
+        ("builtin.Qwen3.5-4B-GGUF", "Qwen3.5 4B (built-in)"),
+        # gpt-oss keeps its official spelling; a quantization tag reads as one.
+        ("gpt-oss-20b-mxfp4-GGUF", "gpt-oss 20B MXFP4"),
+        ("LFM2-24B-A2B-GGUF", "LFM2 24B A2B"),
     ],
 )
 def test_friendly_name(model_id, name):
@@ -453,7 +500,7 @@ def test_config_rejects_a_malformed_context_sizes():
     # Looked up at call time: test_cli_config reloads gaia.config, replacing the class.
     with pytest.raises(config_mod.GaiaConfigError, match="context_sizes"):
         config_mod.GaiaConfig.load()
-    with pytest.raises(config_mod.GaiaConfigError, match="Settings › Model"):
+    with pytest.raises(config_mod.GaiaConfigError, match="Settings › Agent & model"):
         config_mod.GaiaConfig().set("context_sizes", "{}")
 
 
@@ -537,7 +584,7 @@ def test_a_saved_size_is_not_loaded_unchecked_when_memory_is_unreadable(monkeypa
             LemonadeClientError, match="can't read this PC's memory"
         ) as e:
             resolve_ctx_size(LARGE_DEFAULT_MODEL_NAME, base_url=BASE)
-        assert "Choose Automatic in Settings › Model" in str(e.value)
+        assert "Choose Automatic in Settings › Agent & model" in str(e.value)
         assert _load_bodies() == []
     finally:
         lc._CAPACITY_CACHE.clear()

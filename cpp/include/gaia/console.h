@@ -20,6 +20,11 @@ namespace gaia {
 
 using json = nlohmann::json;
 
+/// Model or tool text made safe to print: drops C0 controls other than \n and
+/// \t, ESC/CSI/OSC sequences, DEL and UTF-8 C1 controls. Never pass text that
+/// already carries the console's own colour codes.
+GAIA_API std::string sanitizeTerminalText(const std::string& text);
+
 /// Abstract output handler interface.
 /// Mirrors Python OutputHandler ABC with 15+ required methods.
 class GAIA_API OutputHandler {
@@ -48,6 +53,12 @@ public:
     // === Progress Indicators ===
     virtual void startProgress(const std::string& message) = 0;
     virtual void stopProgress() = 0;
+
+    /// How far the running tool has got ("2 of 4 helpers done"). `phase` names the kind of
+    /// progress so a UI can show it on that tool's row. Default: an info line.
+    virtual void printToolProgress(const std::string& /*phase*/, const std::string& message) {
+        printInfo(message);
+    }
 
     // === Completion Methods ===
     virtual void printFinalAnswer(const std::string& answer,

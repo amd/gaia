@@ -9,12 +9,14 @@ remove real software and refuse to run outside CI; this checks that they refuse.
 
 from __future__ import annotations
 
+import email.utils
 import importlib.util
 import json
 import os
 import subprocess
 import sys
 import threading
+import time
 import urllib.error
 import urllib.request
 from pathlib import Path
@@ -26,6 +28,7 @@ REPO = Path(__file__).resolve().parents[3]
 HEADLESS = REPO / "installer" / "headless"
 WORKFLOW = REPO / ".github" / "workflows" / "test_installers_headless.yml"
 THRESHOLDS = REPO / "installer" / "install_time_thresholds.json"
+FIXTURE = REPO / "tests" / "fixtures" / "github" / "releases.json"
 
 
 def _load(name: str):
@@ -189,6 +192,590 @@ class TestReleaseNaming:
         assert names["tui-pkg-darwin-arm64"] == built["darwin-arm64-pkg"]
         assert names["tui-pkg-darwin-x64"] == built["darwin-x64-pkg"]
         assert names["win-setup"] == built["win-x64-setup"]
+
+
+# ── releases API retries ─────────────────────────────────────────────────────
+
+
+RETRY_URL = "https://api.github.com/repos/amd/gaia/releases?per_page=100&page=1"
+
+
+def _http_error(status: int, headers=None) -> urllib.error.HTTPError:
+    return urllib.error.HTTPError(RETRY_URL, status, "error", headers or {}, None)
+
+
+class _JsonResponse:
+    def __init__(self, body: bytes):
+        self._body = body
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+    def read(self):
+        return self._body
+
+
+class TestResolveReleaseRetries:
+    URL = RETRY_URL
+
+    @pytest.fixture(autouse=True)
+    def _isolate_env(self, monkeypatch):
+        for name in ("GITHUB_FETCH_RETRIES", "GH_TOKEN", "GITHUB_TOKEN"):
+            monkeypatch.delenv(name, raising=False)
+        self.sleeps = []
+        self.requests = []
+        monkeypatch.setattr(resolve.time, "sleep", self.sleeps.append)
+
+    def _urlopen(self, monkeypatch, *responses):
+        """urlopen returning or raising each response in turn."""
+        pending = list(responses)
+
+        def fake(req, timeout):
+            self.requests.append(req)
+            item = pending.pop(0)
+            if isinstance(item, BaseException):
+                raise item
+            return item
+
+        monkeypatch.setattr(resolve.urllib.request, "urlopen", fake)
+
+    def test_retries_a_403_then_returns_the_json(self, monkeypatch):
+        monkeypatch.setenv("GITHUB_FETCH_RETRIES", "2")
+        self._urlopen(
+            monkeypatch,
+            _http_error(403, {"Retry-After": "1"}),
+            _JsonResponse(b'[{"tag_name": "v1.0.0"}]'),
+        )
+
+        assert resolve._get(self.URL) == [{"tag_name": "v1.0.0"}]
+        assert len(self.requests) == 2
+        assert self.sleeps == [1.0]
+
+    def test_retries_a_429(self, monkeypatch):
+        monkeypatch.setenv("GITHUB_FETCH_RETRIES", "1")
+        self._urlopen(
+            monkeypatch,
+            _http_error(429, {"Retry-After": "0"}),
+            _JsonResponse(b"[]"),
+        )
+
+        assert resolve._get(self.URL) == []
+        assert len(self.requests) == 2
+
+    def test_exhausted_retries_name_the_url_status_attempts_and_setting(
+        self, monkeypatch
+    ):
+        monkeypatch.setenv("GITHUB_FETCH_RETRIES", "2")
+        monkeypatch.setenv("GH_TOKEN", "test-token")
+        self._urlopen(
+            monkeypatch,
+            *[_http_error(403, {"Retry-After": "0"}) for _ in range(3)],
+        )
+
+        with pytest.raises(RuntimeError) as caught:
+            resolve._get(self.URL)
+        message = str(caught.value)
+        assert self.URL in message
+        assert "HTTP 403" in message
+        assert "3 attempt" in message
+        assert "GITHUB_FETCH_RETRIES=2" in message
+        assert "hourly quota" in message
+        assert isinstance(caught.value.__cause__, urllib.error.HTTPError)
+        assert len(self.requests) == 3
+        assert self.sleeps == [0.0, 0.0]
+
+    def test_default_is_no_retry_and_the_original_error_propagates(self, monkeypatch):
+        error = _http_error(403)
+        self._urlopen(monkeypatch, error)
+
+        with pytest.raises(urllib.error.HTTPError) as caught:
+            resolve._get(self.URL)
+        assert caught.value is error
+        assert len(self.requests) == 1
+        assert self.sleeps == []
+
+    def test_a_500_is_not_retried(self, monkeypatch):
+        monkeypatch.setenv("GITHUB_FETCH_RETRIES", "3")
+        error = _http_error(500)
+        self._urlopen(monkeypatch, error)
+
+        with pytest.raises(urllib.error.HTTPError) as caught:
+            resolve._get(self.URL)
+        assert caught.value is error
+        assert len(self.requests) == 1
+        assert self.sleeps == []
+
+    @pytest.mark.parametrize("value", ["not-a-number", "3.5", "-1", "6"])
+    def test_invalid_retry_limit_is_rejected(self, monkeypatch, value):
+        monkeypatch.setenv("GITHUB_FETCH_RETRIES", value)
+        with pytest.raises(SystemExit, match="GITHUB_FETCH_RETRIES"):
+            resolve._retry_limit()
+
+    def test_a_wait_that_lands_exactly_on_the_budget_is_allowed(self, monkeypatch):
+        monkeypatch.setenv("GITHUB_FETCH_RETRIES", "1")
+        self._urlopen(
+            monkeypatch,
+            _http_error(403, {"Retry-After": "30"}),
+            _JsonResponse(b"[]"),
+        )
+
+        assert resolve._get(self.URL) == []
+        assert self.sleeps == [30.0]
+        assert len(self.requests) == 2
+
+    def test_the_total_wait_cannot_be_pushed_past_the_budget(self, monkeypatch):
+        monkeypatch.setenv("GITHUB_FETCH_RETRIES", "3")
+        self._urlopen(
+            monkeypatch,
+            _http_error(403, {"Retry-After": "20"}),
+            _http_error(403, {"Retry-After": "10"}),
+            _http_error(403, {"Retry-After": "1"}),
+        )
+
+        with pytest.raises(RuntimeError, match="wait budget"):
+            resolve._get(self.URL)
+        assert sum(self.sleeps) == 30.0
+        assert len(self.requests) == 3
+
+    @pytest.mark.parametrize(
+        "env, expected",
+        [
+            ({"GITHUB_TOKEN": "g"}, "Bearer g"),
+            ({"GH_TOKEN": "h"}, "Bearer h"),
+            ({"GH_TOKEN": "h", "GITHUB_TOKEN": "g"}, "Bearer h"),
+            ({}, None),
+        ],
+    )
+    def test_token_header(self, monkeypatch, env, expected):
+        for name, value in env.items():
+            monkeypatch.setenv(name, value)
+        self._urlopen(monkeypatch, _JsonResponse(b"[]"))
+
+        resolve._get(self.URL)
+        assert self.requests[0].get_header("Authorization") == expected
+
+    def test_delay_prefers_retry_after_seconds(self):
+        assert resolve._retry_delay(_http_error(403, {"Retry-After": "5"}), 1) == 5.0
+
+    def test_delay_accepts_retry_after_as_an_http_date(self):
+        when = email.utils.formatdate(time.time() + 5, usegmt=True)
+        delay = resolve._retry_delay(_http_error(403, {"Retry-After": when}), 1)
+        assert 3.0 <= delay <= 5.0
+
+    def test_delay_uses_the_rate_limit_reset_epoch(self):
+        reset = str(int(time.time()) + 10)
+        delay = resolve._retry_delay(_http_error(403, {"X-RateLimit-Reset": reset}), 1)
+        assert 8.0 <= delay <= 10.0
+
+    def test_delay_falls_back_and_caps_at_30_seconds(self):
+        assert resolve._retry_delay(_http_error(403), 1) == 0.5
+        assert resolve._retry_delay(_http_error(403), 3) == 2.0
+        assert resolve._retry_delay(_http_error(403, {"Retry-After": "600"}), 1) == 30.0
+
+
+class _Body:
+    def __init__(self, body: bytes):
+        self._body = body
+
+    def read(self, *args):
+        return self._body
+
+    def close(self):
+        pass
+
+
+def _limit_error(status, headers, message="", url=RETRY_URL):
+    body = json.dumps({"message": message}).encode() if message else b""
+    return urllib.error.HTTPError(url, status, "error", headers, _Body(body))
+
+
+class _LimitClock:
+    """A fake clock and stubbed reads for the rate-limit tests."""
+
+    TAG = "v1.0.0"
+
+    @pytest.fixture(autouse=True)
+    def _clock(self, monkeypatch):
+        for name in ("GITHUB_FETCH_RETRIES", resolve.FIXTURE_ENV):
+            monkeypatch.delenv(name, raising=False)
+        monkeypatch.delenv("GITHUB_OUTPUT", raising=False)
+        self.now = 0.0
+        self.sleeps = []
+
+        def sleep(seconds):
+            self.sleeps.append(seconds)
+            self.now += seconds
+
+        monkeypatch.setattr(resolve.time, "sleep", sleep)
+        monkeypatch.setattr(resolve.time, "monotonic", lambda: self.now)
+        monkeypatch.setattr(resolve, "list_releases", lambda: [])
+
+    def _complete(self):
+        names = resolve.expected_assets(self.TAG)
+        return {
+            names[i]: f"https://example/{names[i]}" for i in resolve.required(self.TAG)
+        }
+
+    def _reads(self, monkeypatch, *results):
+        pending = list(results)
+
+        def fake(tag):
+            item = pending.pop(0)
+            if isinstance(item, BaseException):
+                raise item
+            return item
+
+        monkeypatch.setattr(resolve, "release_assets", fake)
+        return pending
+
+    def _run(self, tmp_path, wait_minutes):
+        return resolve.main(
+            [
+                "--tag",
+                self.TAG,
+                "--wait-minutes",
+                str(wait_minutes),
+                "--out",
+                str(tmp_path / "r.json"),
+            ]
+        )
+
+
+class TestWaitRidesOutRateLimits(_LimitClock):
+    """A rate-limited read during the asset wait is "not ready yet", not a failure."""
+
+    def test_secondary_limit_waits_then_succeeds(self, monkeypatch, tmp_path, capsys):
+        pending = self._reads(
+            monkeypatch,
+            None,
+            _limit_error(
+                403,
+                {"X-RateLimit-Remaining": "4000"},
+                "You have exceeded a secondary rate limit.",
+            ),
+            self._complete(),
+        )
+        assert self._run(tmp_path, 300) == 0
+        assert pending == []
+        assert self.sleeps == [60, 60.0]
+        assert "secondary rate limit" in capsys.readouterr().out
+
+    def test_exhausted_quota_waits_until_its_reset(self, monkeypatch, tmp_path):
+        reset = str(int(time.time()) + 1800)
+        self._reads(
+            monkeypatch,
+            _limit_error(
+                403, {"X-RateLimit-Remaining": "0", "X-RateLimit-Reset": reset}
+            ),
+            self._complete(),
+        )
+        assert self._run(tmp_path, 300) == 0
+        assert 1790 <= self.sleeps[0] <= 1802
+
+    def test_a_limit_wrapped_by_get_retries_is_still_recognised(
+        self, monkeypatch, tmp_path
+    ):
+        cause = _limit_error(429, {"Retry-After": "45"})
+        wrapped = RuntimeError("returned HTTP 429 after 2 attempt(s)")
+        wrapped.__cause__ = cause
+        self._reads(monkeypatch, wrapped, self._complete())
+        assert self._run(tmp_path, 300) == 0
+        assert self.sleeps == [45.0]
+
+    def test_a_limit_past_the_deadline_fails_loudly(
+        self, monkeypatch, tmp_path, capsys
+    ):
+        reset = str(int(time.time()) + 3600)
+        self._reads(
+            monkeypatch,
+            _limit_error(
+                403, {"X-RateLimit-Remaining": "0", "X-RateLimit-Reset": reset}
+            ),
+        )
+        assert self._run(tmp_path, 10) == 1
+        out = capsys.readouterr().out
+        assert "rate-limiting" in out and "X-RateLimit-Remaining=0" in out
+        assert "Nothing was tested" in out
+        assert self.sleeps == []
+
+    def test_a_plain_forbidden_is_not_waited_on(self, monkeypatch, tmp_path, capsys):
+        error = _limit_error(
+            403,
+            {"X-RateLimit-Remaining": "4000"},
+            "Resource not accessible by integration",
+        )
+        self._reads(monkeypatch, error)
+        with pytest.raises(urllib.error.HTTPError) as caught:
+            self._run(tmp_path, 300)
+        assert caught.value is error
+        assert self.sleeps == []
+        # GitHub's own reason is on record, so the next failure is diagnosable.
+        out = capsys.readouterr().out
+        assert "not a GitHub rate limit" in out
+        assert "Resource not accessible by integration" in out
+        assert "X-RateLimit-Remaining=4000" in out
+
+    def test_a_forbidden_hidden_behind_get_retries_is_still_explained(
+        self, monkeypatch, tmp_path, capsys
+    ):
+        cause = _limit_error(403, {}, "Must have admin rights to Repository.")
+        wrapped = RuntimeError("returned HTTP 403 after 4 attempt(s)")
+        wrapped.__cause__ = cause
+        self._reads(monkeypatch, wrapped)
+        with pytest.raises(RuntimeError) as caught:
+            self._run(tmp_path, 300)
+        assert caught.value is wrapped
+        assert self.sleeps == []
+        assert "Must have admin rights" in capsys.readouterr().out
+
+    def test_a_404_still_means_not_published_yet(self, monkeypatch, tmp_path, capsys):
+        self._reads(monkeypatch, None, self._complete())
+        assert self._run(tmp_path, 300) == 0
+        assert "not a GitHub rate limit" not in capsys.readouterr().out
+
+    def test_a_server_error_is_not_waited_on(self, monkeypatch, tmp_path):
+        error = _limit_error(500, {"Retry-After": "5"})
+        self._reads(monkeypatch, error)
+        with pytest.raises(urllib.error.HTTPError):
+            self._run(tmp_path, 300)
+        assert self.sleeps == []
+
+    def test_an_unrelated_runtime_error_propagates(self, monkeypatch, tmp_path):
+        self._reads(monkeypatch, RuntimeError("boom"))
+        with pytest.raises(RuntimeError, match="boom"):
+            self._run(tmp_path, 300)
+
+
+class TestReleaseListingRidesOutRateLimits(_LimitClock):
+    """The first call, listing releases, waits out a rate limit like the asset wait.
+
+    Other workflows can spend the shared token quota before this job starts, so
+    the listing used to 403 before anything was tested (v0.27.0-rc6..rc8).
+    """
+
+    def _listings(self, monkeypatch, *results):
+        pending = list(results)
+
+        def fake():
+            item = pending.pop(0)
+            if isinstance(item, BaseException):
+                raise item
+            return item
+
+        monkeypatch.setattr(resolve, "list_releases", fake)
+        return pending
+
+    def _run_limited(self, tmp_path, wait_minutes, limit_minutes, tag=None):
+        args = ["--wait-minutes", str(wait_minutes), "--out", str(tmp_path / "r.json")]
+        if limit_minutes is not None:
+            args += ["--rate-limit-minutes", str(limit_minutes)]
+        return resolve.main(["--tag", tag or self.TAG, *args])
+
+    def _exhausted(self, seconds):
+        reset = str(int(time.time()) + seconds)
+        return _limit_error(
+            403,
+            {"X-RateLimit-Remaining": "0", "X-RateLimit-Reset": reset},
+            "API rate limit exceeded for installation.",
+        )
+
+    def test_a_limited_listing_waits_for_the_reset_then_resolves(
+        self, monkeypatch, tmp_path, capsys
+    ):
+        pending = self._listings(monkeypatch, self._exhausted(1800), [])
+        self._reads(monkeypatch, self._complete())
+        assert self._run_limited(tmp_path, 0, 65) == 0
+        assert pending == []
+        assert len(self.sleeps) == 1 and 1790 <= self.sleeps[0] <= 1802
+        assert "the release list: GitHub API rate limit" in capsys.readouterr().out
+
+    def test_a_limit_wrapped_by_get_retries_is_recognised_on_the_listing(
+        self, monkeypatch, tmp_path
+    ):
+        wrapped = RuntimeError("returned HTTP 403 after 2 attempt(s)")
+        wrapped.__cause__ = self._exhausted(600)
+        self._listings(monkeypatch, wrapped, [])
+        self._reads(monkeypatch, self._complete())
+        assert self._run_limited(tmp_path, 0, 65) == 0
+        assert len(self.sleeps) == 1
+
+    def test_repeated_limits_share_one_window(self, monkeypatch, tmp_path, capsys):
+        # Two 40-min resets don't fit a 65-min window: the second fails.
+        self._listings(monkeypatch, self._exhausted(2400), self._exhausted(2400))
+        self._reads(monkeypatch, self._complete())
+        assert self._run_limited(tmp_path, 0, 65) == 1
+        assert len(self.sleeps) == 1
+        out = capsys.readouterr().out
+        assert "::error::the release list" in out and "Nothing was tested" in out
+
+    def test_a_limit_past_the_window_fails_loudly_without_waiting(
+        self, monkeypatch, tmp_path, capsys
+    ):
+        self._listings(monkeypatch, self._exhausted(3600 * 3))
+        assert self._run_limited(tmp_path, 0, 65) == 1
+        out = capsys.readouterr().out
+        assert "::error::the release list" in out
+        assert "API rate limit exceeded for installation" in out
+        assert "X-RateLimit-Remaining=0" in out
+        assert self.sleeps == []
+
+    def test_without_a_window_a_dispatch_still_fails_at_once(
+        self, monkeypatch, tmp_path
+    ):
+        self._listings(monkeypatch, self._exhausted(60))
+        assert self._run_limited(tmp_path, 0, None) == 1
+        assert self.sleeps == []
+
+    def test_a_plain_forbidden_listing_is_not_waited_on(
+        self, monkeypatch, tmp_path, capsys
+    ):
+        error = _limit_error(
+            403,
+            {"X-RateLimit-Remaining": "4000"},
+            "Resource not accessible by integration",
+        )
+        self._listings(monkeypatch, error)
+        with pytest.raises(urllib.error.HTTPError) as caught:
+            self._run_limited(tmp_path, 0, 65)
+        assert caught.value is error
+        assert self.sleeps == []
+        out = capsys.readouterr().out
+        assert "not a GitHub rate limit" in out
+        assert "Resource not accessible by integration" in out
+
+    def test_a_listing_server_error_is_not_waited_on(self, monkeypatch, tmp_path):
+        self._listings(monkeypatch, _limit_error(502, {"Retry-After": "5"}))
+        with pytest.raises(urllib.error.HTTPError):
+            self._run_limited(tmp_path, 0, 65)
+        assert self.sleeps == []
+
+    def test_the_window_also_covers_a_dispatch_asset_read(self, monkeypatch, tmp_path):
+        self._listings(monkeypatch, [])
+        self._reads(monkeypatch, self._exhausted(900), self._complete())
+        assert self._run_limited(tmp_path, 0, 65) == 0
+        assert len(self.sleeps) == 1
+
+    def test_the_window_does_not_extend_the_asset_wait(
+        self, monkeypatch, tmp_path, capsys
+    ):
+        # A dispatch (wait 0) with a missing asset still fails at once.
+        self._listings(monkeypatch, [])
+        self._reads(monkeypatch, None)
+        assert self._run_limited(tmp_path, 0, 65) == 1
+        assert self.sleeps == []
+        assert "has no GitHub release yet" in capsys.readouterr().out
+
+    def test_the_workflow_passes_a_rate_limit_window(self):
+        text = (REPO / ".github/workflows/test_installers_headless.yml").read_text(
+            encoding="utf-8"
+        )
+        assert "--rate-limit-minutes 65" in text
+
+
+# ── checked-in release fixture ────────────────────────────────────────────────
+
+
+class TestResolveReleaseFixture:
+    @pytest.fixture(autouse=True)
+    def _fixture(self, monkeypatch):
+        for name in (
+            "GITHUB_FETCH_RETRIES",
+            "GH_TOKEN",
+            "GITHUB_TOKEN",
+            "GITHUB_OUTPUT",
+        ):
+            monkeypatch.delenv(name, raising=False)
+        monkeypatch.setenv("GAIA_GITHUB_FIXTURE", str(FIXTURE))
+
+        def no_network(*args, **kwargs):
+            raise AssertionError("fixture reads must not call the network")
+
+        monkeypatch.setattr(resolve.urllib.request, "urlopen", no_network)
+
+    def test_list_releases_comes_from_the_fixture(self):
+        releases = resolve.list_releases()
+        assert [release["tag_name"] for release in releases] == [
+            "v0.26.1-rc2",
+            "v0.26.0",
+        ]
+
+    def test_pick_default_and_previous_stable_use_the_fixture(self):
+        releases = resolve.list_releases()
+        tag = resolve.pick_default(releases)
+        assert tag == "v0.26.1-rc2"
+        assert resolve.previous_stable(releases, tag)["tag_name"] == "v0.26.0"
+
+    def test_release_assets_come_from_the_fixture(self):
+        assets = resolve.release_assets("v0.26.1-rc2")
+        assert assets is not None
+        assert "gaia-0.26.1-rc.2-win-x64-setup.exe" in assets
+        assert resolve.release_assets("v9.9.9") is None
+
+    def test_main_writes_the_fixture_release_without_network(self, tmp_path):
+        out = tmp_path / "release.json"
+        assert resolve.main(["--out", str(out)]) == 0
+        info = json.loads(out.read_text(encoding="utf-8"))
+        assert info["tag"] == "v0.26.1-rc2"
+        assert info["prev_tag"] == "v0.26.0"
+        assert info["missing"] == {}
+        assert info["urls"]
+        for name, url in info["urls"].items():
+            assert url == (
+                f"https://github.com/amd/gaia/releases/download/{info['tag']}/{name}"
+            )
+        assert info["prev_urls"]
+        for name, url in info["prev_urls"].items():
+            assert url == (
+                "https://github.com/amd/gaia/releases/download/"
+                f"{info['prev_tag']}/{name}"
+            )
+
+    def test_fixture_matches_the_live_transformations(self, monkeypatch):
+        data = json.loads(FIXTURE.read_text(encoding="utf-8"))
+        by_tag = {release["tag_name"]: release for release in data["releases"]}
+
+        def fake_get(url):
+            if "/tags/" in url:
+                return by_tag[url.rsplit("/", 1)[-1]]
+            return data["releases"]
+
+        monkeypatch.delenv("GAIA_GITHUB_FIXTURE", raising=False)
+        monkeypatch.setattr(resolve, "_get", fake_get)
+        live_releases = resolve.list_releases()
+        live_tag = resolve.pick_default(live_releases)
+        live_assets = resolve.release_assets(live_tag)
+
+        monkeypatch.setenv("GAIA_GITHUB_FIXTURE", str(FIXTURE))
+        fixture_releases = resolve.list_releases()
+        fixture_tag = resolve.pick_default(fixture_releases)
+        fixture_assets = resolve.release_assets(fixture_tag)
+
+        assert fixture_releases == live_releases
+        assert fixture_tag == live_tag
+        assert fixture_assets == live_assets
+
+    def test_main_rejects_invalid_retries_even_with_a_fixture(
+        self, monkeypatch, tmp_path
+    ):
+        monkeypatch.setenv("GITHUB_FETCH_RETRIES", "not-a-number")
+        with pytest.raises(SystemExit, match="must be an integer"):
+            resolve.main(["--out", str(tmp_path / "release.json")])
+
+    def test_a_missing_fixture_fails_loudly(self, monkeypatch, tmp_path):
+        missing = tmp_path / "missing.json"
+        monkeypatch.setenv("GAIA_GITHUB_FIXTURE", str(missing))
+        with pytest.raises(SystemExit, match="could not read GAIA_GITHUB_FIXTURE"):
+            resolve.list_releases()
+
+    def test_a_malformed_fixture_fails_loudly(self, monkeypatch, tmp_path):
+        bad = tmp_path / "bad.json"
+        bad.write_text(json.dumps({"releases": [{"assets": []}]}), encoding="utf-8")
+        monkeypatch.setenv("GAIA_GITHUB_FIXTURE", str(bad))
+        with pytest.raises(SystemExit, match="without a string tag_name"):
+            resolve.list_releases()
 
 
 # ── phase records and the gate ───────────────────────────────────────────────
@@ -769,6 +1356,18 @@ class TestWorkflow:
     def test_pull_request_trigger_has_no_base_branch_filter(self):
         wf = yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))
         assert "branches" not in wf[True]["pull_request"]
+
+    def test_resolve_step_passes_tokens_retries_and_the_pr_fixture(self):
+        wf = yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))
+        step = next(s for s in wf["jobs"]["resolve"]["steps"] if s.get("id") == "r")
+        assert step["env"]["GH_TOKEN"] == "${{ github.token }}"
+        assert step["env"]["GITHUB_TOKEN"] == "${{ github.token }}"
+        retries = step["env"]["GITHUB_FETCH_RETRIES"]
+        assert "github.event_name != 'pull_request'" in retries
+        assert "'3'" in retries
+        fixture = step["env"]["GAIA_GITHUB_FIXTURE"]
+        assert "github.event_name == 'pull_request'" in fixture
+        assert "tests/fixtures/github/releases.json" in fixture
 
 
 class TestScriptsRefuseOutsideCi:

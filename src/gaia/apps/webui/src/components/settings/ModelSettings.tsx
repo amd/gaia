@@ -14,6 +14,7 @@ import { ErrorNotice, isServerDown } from './ErrorNotice';
 import { LocalModelsSections } from './LocalModelsSections';
 import { ModelInUse } from './ModelInUse';
 import { ModelRow } from './ModelRow';
+import { AgentChoice } from '../setup/AgentChoice';
 import { ConfirmSheet } from '../setup/ConfirmSheet';
 import { SettingsDisclosure } from './SettingsDisclosure';
 import { isDownloading } from '../modelMeta';
@@ -302,6 +303,8 @@ export function ModelSettings() {
     return (
         <div className="settings-pane">
             <h2 className="settings-pane-title">{t('settings.section.model')}</h2>
+
+            <AgentChoice inSettings />
 
             <ModelInUse
                 row={listedInUse ?? (sameModelId(inUseRow?.id, active?.model) ? inUseRow : null)}

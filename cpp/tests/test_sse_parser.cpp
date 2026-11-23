@@ -454,3 +454,26 @@ TEST(SseParserTest, CallbackExceptionPropagates) {
                  std::logic_error);
     EXPECT_EQ(parser.malformedEventCount(), 0u);
 }
+
+TEST(SseParserTest, ToolCallsWithoutAnIndexStayApartAcrossDeltas) {
+    SseParser parser([](const std::string&) {});
+    auto delta = [&parser](const std::string& toolCall) {
+        feedString(parser, "data: {\"choices\":[{\"delta\":{\"tool_calls\":[" + toolCall + "]}}]}\n\n");
+    };
+    delta(R"({"id":"call_a","function":{"name":"read","arguments":""}})");
+    delta(R"({"function":{"arguments":"{\"path\":"}})");
+    delta(R"({"function":{"arguments":"\"a.txt\"}"}})");
+    delta(R"({"id":"call_b","function":{"name":"list","arguments":""}})");
+    delta(R"({"function":{"arguments":"{}"}})");
+    delta(R"({"id":"call_a","function":{"name":"read"}})");
+    feedString(parser, "data: [DONE]\n\n");
+
+    const std::vector<ToolCall> calls = parser.toolCalls();
+    ASSERT_EQ(calls.size(), 2u);
+    EXPECT_EQ(calls[0].id, "call_a");
+    EXPECT_EQ(calls[0].name, "read");
+    EXPECT_EQ(calls[0].arguments, R"({"path":"a.txt"})");
+    EXPECT_EQ(calls[1].id, "call_b");
+    EXPECT_EQ(calls[1].name, "list");
+    EXPECT_EQ(calls[1].arguments, "{}");
+}

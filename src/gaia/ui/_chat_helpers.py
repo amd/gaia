@@ -57,7 +57,9 @@ from gaia.stream_timeout import (
     STREAM_TIMEOUT_ENV,
     stream_timeout_from_env,
 )
-from gaia.ui.email_sidecar.profiles import (
+from gaia.ui.memory_settings import memory_enabled
+from gaia.ui.security import FLAGSHIP_AGENT_ID
+from gaia.ui.sidecar.profiles import (
     _NO_PROFILE,
     SIDECAR_AGENT_IDS,
     api_version_supported,
@@ -77,8 +79,6 @@ from gaia.ui.email_sidecar.profiles import (
     turns_supported,
     working_directory_supported,
 )
-from gaia.ui.memory_settings import memory_enabled
-from gaia.ui.security import FLAGSHIP_AGENT_ID
 from gaia.ui.turn_changes import TurnRecording
 from gaia.utils import awake_clock as _awake_clock
 from gaia.utils.awake_clock import AwakeClockError
@@ -193,13 +193,11 @@ def get_agent_registry():
 
 
 # Agent types served by an out-of-process sidecar with a dedicated dispatch
-# branch below. Since #2408, an installed sidecar IS registry-loadable (the
-# installer bridge registers it for the connectors grant flow), but its
-# factory always raises — chat dispatch must still go through the branch
-# below, never registry.create_agent(). Derived from the relay profiles so a
-# new sidecar cannot be half-wired: #4161 shipped the flagship as a binary
-# sidecar and left this set at {"email"}, which sent every flagship turn into
-# registry.create_agent() and surfaced the stub factory's RuntimeError.
+# branch below. An installed sidecar IS registry-loadable (the installer
+# bridge registers it for the connectors grant flow), but its factory always
+# raises — chat dispatch must still go through the branch below, never
+# registry.create_agent(). Derived from the relay profiles so a new sidecar
+# cannot be half-wired.
 _SIDECAR_AGENT_TYPES = SIDECAR_AGENT_IDS
 
 
@@ -222,6 +220,17 @@ def refuse_unstreamed_sidecar_chat(agent_type: str) -> None:
     )
 
 
+def _native_flagship_chosen() -> bool:
+    """Whether the saved harness is anything but the Python one.
+
+    A harness this version can't run still relays, so the daemon's spawn reports
+    why instead of the Python agent quietly answering in its place.
+    """
+    from gaia.daemon.sidecars import fetch
+
+    return fetch.saved_flagship() != fetch.PYTHON_FLAGSHIP
+
+
 def _should_relay_to_sidecar(agent_type: str, registry) -> bool:
     """Whether *agent_type* must be served by its daemon sidecar this turn.
 
@@ -233,12 +242,9 @@ def _should_relay_to_sidecar(agent_type: str, registry) -> bool:
     * a **wheel**/dev install registers a real factory and runs in-process,
       which is the path ``gaia eval agent`` and a source checkout use.
 
-    Email is the exception and says so on its profile: its in-process loop was
-    retired in #2109, so it relays even when the wheel is importable.
-
     The "no registration" branches below are defence in depth, not a live
-    path: ``_agent_type_unknown`` already rejects a non-always-relay sidecar
-    that does not resolve, so chat never reaches them today. They keep this
+    path: ``_agent_type_unknown`` already rejects a sidecar that does not
+    resolve, so chat never reaches them today. They keep this
     function correct on its own terms — a missing registration relays, unless
     the registry recorded an import failure, in which case that recorded
     reason is the answer the user needs and relaying would bury it.
@@ -246,7 +252,8 @@ def _should_relay_to_sidecar(agent_type: str, registry) -> bool:
     profile = profile_for(agent_type)
     if profile is None:
         return False
-    if profile.always_relay:
+    if agent_type == FLAGSHIP_AGENT_ID and _native_flagship_chosen():
+        # A native harness is a program of its own: it only ever runs behind the daemon.
         return True
     if registry is None:
         return True
@@ -262,16 +269,11 @@ def _should_relay_to_sidecar(agent_type: str, registry) -> bool:
 def _agent_type_unknown(agent_type: str, registry) -> bool:
     """True when *agent_type* must be rejected as unknown before dispatch.
 
-    Email is exempt: its relay does not need a registration to work.
-
-    Every other agent — ``chat`` and the flagship included — must resolve in
-    the registry. An agent that was never installed is worth saying so about:
+    Every agent — ``chat`` and the flagship included — must resolve in the
+    registry. An agent that was never installed is worth saying so about:
     "install it from the Hub" beats asking the daemon to start a sidecar that
     isn't there and surfacing whatever it says about the failure.
     """
-    profile = profile_for(agent_type)
-    if profile is not None and profile.always_relay:
-        return False
     if not registry or registry.get(agent_type):
         return False
     # Setup or `gaia hub install` may have added it after startup.
@@ -554,7 +556,7 @@ def _refuse_unrunnable_model(model_id: str) -> None:
     raise LemonadeModelUnavailableError(
         user_message=(
             f"{display_name(model_id)} can't run on this PC: {reason.rstrip('.')}. "
-            "Open Settings › Model to fix it on the model's card, or switch to "
+            "Open Settings › Agent & model to fix it on the model's card, or switch to "
             "another model there."
         )
     )
@@ -709,6 +711,10 @@ _TITLE_INSTRUCTION_WORDS = frozenset(
 _QUESTION_TITLE_MAX_CHARS = 60
 #: A link or image the user typed: ``[text](target)`` / ``![alt](target)``.
 _MARKDOWN_LINK_RE = _re.compile(r"!?\[([^\]]*)\]\([^)]*\)")
+#: The Research switch sends ``/research <topic>``; the topic is the title.
+_RESEARCH_COMMAND_RE = _re.compile(
+    r"\A\s*/research(?:-report)?(?=\s|\Z)", _re.IGNORECASE
+)
 #: A cloud model may reason before it answers, and only some providers let a
 #: request turn that off; this leaves room for the reasoning and the title.
 _CLOUD_TITLE_MAX_TOKENS = 512
@@ -810,7 +816,7 @@ def _title_from_question(user_msg: str) -> Optional[str]:
     Only the user's own words count: the attachment links the composer appends
     are dropped, and a message of attachments alone is named by its first file.
     """
-    user_msg = user_msg or ""
+    user_msg = _RESEARCH_COMMAND_RE.sub("", user_msg or "", count=1)
     words = UPLOAD_LINK_RE.sub(" ", user_msg)
     text = " ".join(_MARKDOWN_LINK_RE.sub(r"\1", words).split())
     if not text and (first := UPLOAD_LINK_RE.search(user_msg)):
@@ -1666,10 +1672,13 @@ def _canonical_agent_type(agent_type: str) -> str:
 
 
 def _follow_model_settings(agent) -> None:
-    """Apply a vision model chosen in Settings since this cached agent last ran."""
+    """Apply a vision model, or skills, changed in Settings since this cached agent last ran."""
     follow = getattr(agent, "follow_model_switch", None)
     if callable(follow):
         follow()
+    follow_skills = getattr(agent, "follow_installed_skills", None)
+    if callable(follow_skills):
+        follow_skills()
 
 
 def _get_cached_agent(
@@ -1716,6 +1725,17 @@ def _get_cached_agent(
                 )
                 return None
             entry["document_ids"] = list(document_ids)
+        changed = getattr(entry["agent"], "built_settings_changed", None)
+        # ``is True``: a stand-in agent's mock answers truthy to anything.
+        if callable(changed) and changed() is True:
+            # Its model server and MCP tools were fixed as it was built.
+            old_entry = _agent_cache.pop(session_id)
+            _disconnect_cached_agent(old_entry)
+            logger.debug(
+                "Agent cache miss (settings changed) for session %s",
+                session_id[:8],
+            )
+            return None
         _agent_cache[session_id] = _agent_cache.pop(session_id)
         return entry["agent"]
 
@@ -2223,12 +2243,8 @@ def _relayed_documents(rag_file_paths: list, attached: list) -> list:
     return list(rag_file_paths) + extra
 
 
-def _chat_upload_paths(db: ChatDatabase, session_id: str, attached: list) -> list:
-    """Every upload the chat's messages have linked so far, *attached* included.
-
-    A relayed flagship drops a document a turn leaves out, so a file dropped
-    into an earlier message must keep going with every later turn.
-    """
+def _linked_upload_paths(db: ChatDatabase, session_id: str, attached: list) -> list:
+    """Every upload the chat's messages have linked so far, *attached* included."""
     found = set(attached)
     for message in db.get_messages(session_id, limit=-1):
         if message["role"] == "user" and message.get("content"):
@@ -2236,6 +2252,36 @@ def _chat_upload_paths(db: ChatDatabase, session_id: str, attached: list) -> lis
                 attached_upload_paths(resolve_upload_links(message["content"]))
             )
     return sorted(found)
+
+
+def _chat_upload_paths(db: ChatDatabase, session_id: str, attached: list) -> list:
+    """The chat's uploads it may read: every one linked, less those taken off it.
+
+    A relayed flagship drops a document a turn leaves out, so a file dropped
+    into an earlier message must keep going with every later turn.
+    """
+    removed = db.removed_session_uploads(session_id)
+    return [
+        p for p in _linked_upload_paths(db, session_id, attached) if p not in removed
+    ]
+
+
+def _list_chat_uploads(
+    db: ChatDatabase, session_id: str, document_ids: list, attached: list
+) -> Tuple[list, list]:
+    """Put the chat's composer documents in its document list, before its scope is read.
+
+    Returns *document_ids* with the new ones added, and the library rows newly
+    attached, for the turn's ``documents_added``.
+    """
+    from .agent_documents import add_chat_uploads
+
+    added = add_chat_uploads(
+        db, session_id, _linked_upload_paths(db, session_id, attached), attached
+    )
+    ids = list(document_ids)
+    ids += [d["id"] for d in added if d["id"] not in ids]
+    return ids, added
 
 
 def _extend_cached_scope(agent, allowed: list) -> None:
@@ -2312,10 +2358,10 @@ def _apply_memory_state(agent, session: dict, db) -> None:
 
 
 def _session_mail_provider(session: dict) -> str | None:
-    """Session mailbox FILTER for the email agent (#1596 / #1603 Phase 2).
+    """Session mailbox FILTER for the mail tools (#1596 / #1603 Phase 2).
 
     ``None`` (unset, null, or empty string from the frontend) means "every
-    connected mailbox" — the email agent scans all of them and fails loudly
+    connected mailbox" — the mail tools scan all of them and fails loudly
     when none is connected. An explicit ``"google"`` / ``"microsoft"``
     restricts to that provider. Never coerce a missing pick to "google":
     that silently triaged Gmail for sessions that never chose a provider
@@ -2325,7 +2371,7 @@ def _session_mail_provider(session: dict) -> str | None:
 
 
 # The per-agent /query contract floor and its upgrade copy live on the relay
-# profile (``gaia.ui.email_sidecar.profiles``); ``api_version_supported``
+# profile (``gaia.ui.sidecar.profiles``); ``api_version_supported``
 # applies it. The daemon's own gate only pins MAJOR (the spec's
 # expected_api_major), so a too-old Hub binary passes that handshake and then
 # 404s every /query call — the profile's finer MAJOR.MINOR check catches it
@@ -2539,7 +2585,25 @@ def _withdrawn_reply(content: str) -> Optional[str]:
             if not kept:
                 return _CUT_OFF_REPLY_FOR_MODEL
             return f"{kept}\n\n{_CUT_OFF_REPLY_FOR_MODEL}"
+    # A relayed agent that crashed ends the reply with its own note and log folder.
+    kept, _, last = text.rpartition("\n\n")
+    if any(last.startswith(note) for note in _agent_crash_notes()):
+        kept = kept.rstrip()
+        return (
+            f"{kept}\n\n{_CUT_OFF_REPLY_FOR_MODEL}"
+            if kept
+            else _CUT_OFF_REPLY_FOR_MODEL
+        )
     return None
+
+
+def _agent_crash_notes() -> tuple:
+    """What each relayed agent's reply ends with when the agent crashed mid-answer."""
+    from .sidecar.profiles import relay_profiles
+
+    return tuple(
+        p.stream_ended_message for p in relay_profiles() if p.stream_ended_message
+    )
 
 
 def _with_final_reply(model_messages: Optional[list], reply: str) -> Optional[list]:
@@ -2738,23 +2802,23 @@ def _missing_local_model_text(init_body: dict) -> str:
         if cloud_blocked():
             return (
                 f"Local only is on, so {name} can't answer. Pick a local model "
-                "under Settings > Model, or turn off Local only under Settings > "
+                "under Settings > Agent & model, or turn off Local only under Settings > "
                 "Privacy."
             )
         return (
             f"{name} isn't connected, so GAIA can't answer. Reconnect {provider} "
-            "under Settings > Model, or pick another model."
+            "under Settings > Agent & model, or pick another model."
         )
     name = friendly_name(model_id)
     if cloud_blocked():
         return (
             f"Local only is on and {name} isn't downloaded yet, so GAIA can't "
-            "answer. Get a local model under Settings > Model, or turn off Local "
+            "answer. Get a local model under Settings > Agent & model, or turn off Local "
             "only under Settings > Privacy to use a cloud model."
         )
     return (
         f"{name} isn't downloaded yet, so GAIA can't answer. Get it, or pick "
-        "another model, under Settings > Model."
+        "another model, under Settings > Agent & model."
     )
 
 
@@ -2786,7 +2850,7 @@ def _replay_cloud_key_for_relay(sse_handler, model_id: str | None) -> None:
                 "type": "status",
                 "message": _agent_ui_wording(
                     f"Could not reconnect {provider}: {exc}. If the answer says "
-                    "the model is unavailable, reconnect it in Settings > Model."
+                    "the model is unavailable, reconnect it in Settings > Agent & model."
                 ),
             }
         )
@@ -2928,8 +2992,8 @@ def _dispatch_sidecar_query(
     from gaia.daemon.sidecars.errors import SidecarError
     from gaia.llm.lemonade_client import LemonadeClientError
     from gaia.llm.model_fit import ModelFitError
-    from gaia.ui.email_sidecar import daemon_client
-    from gaia.ui.email_sidecar.relay import relay_query
+    from gaia.ui.sidecar import daemon_client
+    from gaia.ui.sidecar.relay import relay_query
 
     profile = profile_for(agent_type)
     if profile is None:
@@ -3151,8 +3215,8 @@ def _dispatch_sidecar_query(
         )
         return
 
-    from gaia.ui.email_sidecar import grants as relayed_grants
-    from gaia.ui.email_sidecar.profiles import full_access_supported
+    from gaia.ui.sidecar import grants as relayed_grants
+    from gaia.ui.sidecar.profiles import full_access_supported
 
     answers_confirmations = confirmations_supported(profile, handle.api_version)
     offers_always = bool(
@@ -3272,16 +3336,19 @@ def _find_last_tool_step(steps: list) -> dict | None:
 
 
 def _denial(event: dict) -> Optional[str]:
-    """``"declined"``, ``"timedOut"`` or ``"autoDeclined"`` for a call that never ran.
+    """Why a ``tool_result``'s call never ran, as the step field that records it.
 
-    A relayed result nests its status in ``data``.
+    ``"declined"`` (the user said no), ``"timedOut"`` (nobody answered),
+    ``"refused"`` (GAIA's own rule) or ``"autoDeclined"`` (GAIA judged it not
+    needed, unasked). A relayed result nests these in ``data``.
     """
     data = event.get("data") if isinstance(event.get("data"), dict) else {}
     if event.get("status", data.get("status")) != "denied":
         return None
-    timed_out = event.get("timed_out") is True or data.get("timed_out") is True
-    if timed_out:
+    if event.get("timed_out") is True or data.get("timed_out") is True:
         return "timedOut"
+    if event.get("denied_by", data.get("denied_by")) == "policy":
+        return "refused"
     if event.get("declined_by", data.get("declined_by")) == "agent":
         return "autoDeclined"
     return "declined"
@@ -3691,7 +3758,12 @@ def _turn_summary(
             location=(
                 _agent_location(agent) if agent is not None else relayed_location
             ),
-            written_files=evidence.written_files() if evidence is not None else (),
+            # The ledger's keys are case-folded on Windows; realpath restores the name on disk.
+            written_files=(
+                [os.path.realpath(key) for key in evidence.written_files()]
+                if evidence is not None
+                else ()
+            ),
             display_names=upload_display_names(message),
             usage=answer_event,
         )
@@ -3864,23 +3936,32 @@ def _done_event(
 
 
 async def _add_indexed_documents_to_library(
-    db: ChatDatabase, session_id: str, sse_handler
+    db: ChatDatabase,
+    session_id: str,
+    sse_handler,
+    listed_uploads: Optional[list] = None,
 ) -> Tuple[list, list]:
-    """Library rows for the files the agent indexed this turn, and notices.
+    """Library rows the turn attached to the chat, and notices.
 
-    Each file is recorded in the Document library and attached to the chat, as
-    if the user had added it there.
+    Each file the agent indexed is recorded in the Document library and
+    attached to the chat, as if the user had added it there. *listed_uploads*
+    are the composer attachments already put there when the turn began; they
+    are read again for what indexing them recorded.
     """
-    indexed = sse_handler.turn_ledger.indexed_documents()
-    if not indexed:
-        return [], []
     from .agent_documents import add_indexed_documents
     from .utils import doc_to_response
 
-    added = await asyncio.to_thread(add_indexed_documents, db, session_id, indexed)
+    indexed = sse_handler.turn_ledger.indexed_documents()
+    rows = [db.get_document(doc["id"]) for doc in listed_uploads or []]
+    notices: list = []
+    if indexed:
+        added = await asyncio.to_thread(add_indexed_documents, db, session_id, indexed)
+        rows += added.documents
+        notices = added.notices
+    unique = {doc["id"]: doc for doc in rows if doc}
     return (
-        [doc_to_response(doc).model_dump(mode="json") for doc in added.documents],
-        added.notices,
+        [doc_to_response(doc).model_dump(mode="json") for doc in unique.values()],
+        notices,
     )
 
 
@@ -3929,6 +4010,42 @@ def _restart_stopped_gaia_lemonade(model_id: str, sse_handler) -> bool:
     client.wait_for_gaia_lemonade(model_id, on_status=on_status)
     logger.info("Pre-flight for %s: GAIA's Lemonade Server is back", model_id)
     return True
+
+
+def _refuse_turn_on_stopped_users_server() -> None:
+    """Fail a turn at once when the model server the user chose refuses connections.
+
+    GAIA starts only its own server, so nothing this turn does can bring that
+    one back, and every probe of it on the way costs seconds.
+
+    Raises:
+        LemonadeServerDownError: nothing accepts a connection at its address.
+    """
+    from gaia.llm.lemonade_client import LemonadeServerDownError
+
+    if _eval_provider_kwargs():
+        return  # The turn runs on another provider; Lemonade is not in use.
+    endpoint = _stopped_users_server()
+    if endpoint:
+        raise LemonadeServerDownError(endpoint)
+
+
+def _stopped_users_server() -> Optional[str]:
+    """``host:port`` of the model server the user chose when it refuses
+    connections; None when it accepts them or GAIA runs its own."""
+    from gaia.llm.lemonade_client import (
+        LemonadeClient,
+        _endpoint_label,
+        configured_lemonade_url,
+    )
+
+    url = configured_lemonade_url()
+    if not url:
+        return None
+    client = LemonadeClient(base_url=url, verbose=False)
+    if client._server_accepts_connections():
+        return None
+    return _endpoint_label(client.base_url)
 
 
 def _preflight_load(
@@ -4259,8 +4376,10 @@ async def _get_chat_response(
     activity_box: dict = {}
 
     def _do_chat():
-        # Resolve document IDs to file paths.
-        document_ids = session.get("document_ids", [])
+        attached = attached_upload_paths(request.message)
+        document_ids, _listed = _list_chat_uploads(
+            db, request.session_id, session.get("document_ids", []), attached
+        )
         rag_file_paths, library_paths = _resolve_rag_paths(db, document_ids)
 
         all_doc_paths = rag_file_paths + library_paths
@@ -4271,8 +4390,11 @@ async def _get_chat_response(
                 len(library_paths),
             )
 
-        attached = attached_upload_paths(request.message)
-        allowed = _with_attachments(_compute_allowed_paths(all_doc_paths), attached)
+        # Every upload in the chat, not just this turn's: no prompt opens them later.
+        allowed = _with_attachments(
+            _compute_allowed_paths(all_doc_paths),
+            _chat_upload_paths(db, request.session_id, attached),
+        )
 
         model_id = session.get("model")
         custom_model = db.get_setting("custom_model")
@@ -4320,6 +4442,7 @@ async def _get_chat_response(
         refusal = spending.limit_refusal(db, model_id)
         if refusal:
             return refusal
+        _refuse_turn_on_stopped_users_server()
 
         # ── Agent cache ──────────────────────────────────────────────────────
         # Reuse what a running warm-up is caching rather than read it twice.
@@ -4432,8 +4555,8 @@ async def _get_chat_response(
                             memory_incognito=_memory_off(session, db),
                         ),
                         # Forwarded only here (not via _session_agent_kwargs, which
-                        # also feeds the strict ChatAgentConfig). Non-email factories
-                        # drop it via dataclasses.fields filtering. None = scan every
+                        # also feeds the strict ChatAgentConfig). Factories without
+                        # mail tools drop it via dataclasses.fields filtering. None = scan every
                         # connected mailbox (#1596).
                         mail_provider=_session_mail_provider(session),
                     )
@@ -4508,6 +4631,8 @@ async def _get_chat_response(
             counts,
             failed=isinstance(result, dict) and bool(result.get("model_failed")),
         )
+        if turn_box is not None:
+            turn_box["failed"] = _turn_failure(None, None, result)[0]
         if isinstance(result, dict):
             if model_messages is not None:
                 model_messages.extend(result.get("model_messages", []))
@@ -4576,6 +4701,8 @@ async def _get_chat_response(
         raise
     except Exception as e:
         logger.error("Chat error: %s", e, exc_info=True)
+        if turn_box is not None:
+            turn_box["failed"] = True
         # Surface the typed Lemonade error's friendly user_message
         # when we have one, instead of a stock "trouble connecting"
         # blob.  Falls back to the generic copy when we can't
@@ -4706,10 +4833,16 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
         history_pairs = _build_history_pairs(relay_messages)
         relay_turns = transcript_turns(relay_messages)
 
-        # Resolve document IDs to file paths.
         # Session-specific docs get auto-indexed; library docs are available
         # for on-demand indexing by the agent based on user's query.
-        document_ids = session.get("document_ids", [])
+        attached = attached_upload_paths(request.message)
+        document_ids, listed_uploads = await asyncio.to_thread(
+            _list_chat_uploads,
+            db,
+            request.session_id,
+            session.get("document_ids", []),
+            attached,
+        )
         rag_file_paths, library_paths = _resolve_rag_paths(db, document_ids)
 
         all_doc_paths = rag_file_paths + library_paths
@@ -4720,8 +4853,11 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                 len(library_paths),
             )
 
-        attached = attached_upload_paths(request.message)
-        allowed = _with_attachments(_compute_allowed_paths(all_doc_paths), attached)
+        # Every upload in the chat, not just this turn's: no prompt opens them later.
+        allowed = _with_attachments(
+            _compute_allowed_paths(all_doc_paths),
+            _chat_upload_paths(db, request.session_id, attached),
+        )
         model_id = session.get("model")
 
         # Use custom model override if set in user settings
@@ -4800,6 +4936,7 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
             turn_box["recording"] = recording
             try:
                 t0 = _time.monotonic()
+                _refuse_turn_on_stopped_users_server()
 
                 # ── Agent cache check ─────────────────────────────────────────
                 # Reuse what a running warm-up is caching rather than read it twice.
@@ -4973,8 +5110,8 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                                     working_directory=working_directory,
                                     memory_incognito=_memory_off(session, db),
                                 ),
-                                # See the non-streaming path: email-only kwarg,
-                                # filtered out by non-email factories. None = scan
+                                # See the non-streaming path: mail-tools kwarg,
+                                # filtered out by factories without them. None = scan
                                 # every connected mailbox (#1596).
                                 mail_provider=_session_mail_provider(session),
                             )
@@ -5672,7 +5809,7 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
             full_response = result_holder.get("answer", "") or ""
 
         documents_added, library_notices = await _add_indexed_documents_to_library(
-            db, request.session_id, sse_handler
+            db, request.session_id, sse_handler, listed_uploads
         )
         if library_notices:
             # Live status makes the outcome visible before the turn closes; the
@@ -5798,7 +5935,7 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                     for k, v in route.items()
                 }
                 inference_stats = {**(inference_stats or {}), "route": shown}
-            # Settings › Model shows each model's speed measured on this PC.
+            # Settings › Agent & model shows each model's speed measured on this PC.
             if inference_stats is not None and ran_on:
                 inference_stats["measured_model"] = ran_on
             # The model that wrote this answer, so a later model switch can't relabel it.
@@ -5840,6 +5977,8 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                 library_notices=library_notices,
                 ends_turn=True,
                 stopped=turn_cancelled,
+                # As on `done`: a Stop wins over the failure it cut short.
+                failed=turn_failed and not turn_cancelled,
             )
             link_warning = (
                 turn_box["recording"].link_message(msg_id)
@@ -5952,6 +6091,7 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                     library_notices=library_notices,
                     ends_turn=True,
                     stopped=turn_cancelled,
+                    failed=failed,
                 )
                 done_event = _done_event(
                     msg_id,
@@ -6460,6 +6600,7 @@ async def _index_document(
         progress["at"] = _time.monotonic()
 
     def _do_index():
+        from gaia.agents.registry import machine_embedding_model
         from gaia.daemon.broker_client import lease_cancel_scope, lease_wait_listener
         from gaia.rag.sdk import RAGSDK, RAGConfig
 
@@ -6468,9 +6609,13 @@ async def _index_document(
             pages["total"] = _page_total(filepath)
             _report("reading", 0, pages["total"])
         # Allow access to the file's directory (and user home) since the UI
-        # explicitly selected this file via the file browser.
-        allowed = [str(filepath.parent), str(Path.home())]
-        config = RAGConfig(allowed_paths=allowed)
+        # explicitly selected this file via the file browser. The file itself
+        # too: no folder grant opens a copy in GAIA's chat data.
+        allowed = [str(filepath), str(filepath.parent), str(Path.home())]
+        # The embedder chat searches with, so the upload's vectors are reused.
+        config = RAGConfig(
+            allowed_paths=allowed, embedding_model=machine_embedding_model()
+        )
         rag = RAGSDK(config)
         loaded = batch.pop("embedder", None) if batch is not None else None
         if loaded is not None:

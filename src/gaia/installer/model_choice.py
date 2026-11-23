@@ -136,6 +136,18 @@ def optional_role(model_id: str) -> Optional[str]:
     return next((r for m, r in OPTIONAL_MODELS.items() if ids_match(model_id, m)), None)
 
 
+def withheld_reason(model_id: str) -> Optional[str]:
+    """Why setup doesn't offer *model_id* on this PC, or None when it does.
+
+    Only the read-aloud voice is withheld, where GAIA hasn't proven it.
+    """
+    if optional_role(model_id) != ROLE_VOICE:
+        return None
+    from gaia.config import speech_output_unproven_reason
+
+    return speech_output_unproven_reason()
+
+
 def is_vision_only(model_id: str) -> bool:
     return any(ids_match(model_id, m) for m in VISION_ONLY_MODELS)
 
@@ -285,6 +297,7 @@ def memory_fit(model_id: str, size_gb: Optional[float], capacity) -> Dict[str, A
     model_fit's; the numbers are converted to decimal GB.
     """
     from gaia.llm.lemonade_client import (
+        DEFAULT_MODEL_LADDER,
         find_model_requirement,
         kv_cache_for,
         runs_on_npu,
@@ -295,6 +308,7 @@ def memory_fit(model_id: str, size_gb: Optional[float], capacity) -> Dict[str, A
         npu_capacity,
         npu_not_ready_reason,
         required_memory_gb,
+        with_app_headroom,
     )
 
     if capacity is None or not size_gb:
@@ -306,6 +320,7 @@ def memory_fit(model_id: str, size_gb: Optional[float], capacity) -> Dict[str, A
             ),
             "fit_reason": None,
             "fit_code": None,
+            "tight": False,
         }
     if runs_on_npu(model_id):
         capacity = npu_capacity(capacity)
@@ -317,6 +332,7 @@ def memory_fit(model_id: str, size_gb: Optional[float], capacity) -> Dict[str, A
                 "fit_reason": "runs on a Ryzen AI NPU, and Lemonade reports none "
                 "on this PC",
                 "fit_code": FIT_NPU,
+                "tight": False,
             }
         not_ready = npu_not_ready_reason(capacity)
         if not_ready:
@@ -326,18 +342,27 @@ def memory_fit(model_id: str, size_gb: Optional[float], capacity) -> Dict[str, A
                 "capacity_gb": None,
                 "fit_reason": not_ready,
                 "fit_code": FIT_NPU,
+                "tight": False,
             }
     mr = find_model_requirement(model_id)
     kv = kv_cache_for(mr, capacity) if mr else 0.0
     memory_only = MachineCapacity(capacity.memory_gb, capacity.memory_source, None)
     verdict = check_fit(float(size_gb), memory_only, kv)
     need = required_memory_gb(float(size_gb), kv)
+    roomy = with_app_headroom(capacity)
     return {
         "fits": verdict.fits,
         "need_gb": round(to_decimal_gb(need), 1),
         "capacity_gb": round(to_decimal_gb(capacity.memory_gb), 1),
         "fit_reason": None if verdict.fits else memory_reason(need, capacity),
         "fit_code": None if verdict.fits else FIT_MEMORY,
+        # Runs, but would leave other apps less than GAIA keeps for them. Never
+        # the ladder's floor: there is no smaller model to suggest instead.
+        "tight": bool(
+            verdict.fits
+            and need > roomy.memory_gb
+            and not ids_match(model_id, DEFAULT_MODEL_LADDER[-1])
+        ),
     }
 
 
@@ -362,6 +387,7 @@ def backend_fit(
         "fits": False,
         "fit_reason": reason,
         "fit_code": FIT_NPU if recipe in NPU_RECIPES else FIT_BACKEND,
+        "tight": False,
     }
 
 
