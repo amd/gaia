@@ -105,6 +105,27 @@ describe('Disconnect outcome notice', () => {
         expect(notice).toHaveTextContent(ar.messages['settings.connectors.nothingStored']);
     });
 
+    it('says an unreadable sign-in could not be read instead of nothing stored', async () => {
+        await renderSection();
+        const reason =
+            "GAIA could not read the stored sign-in, so it removed the local copy without revoking GAIA's access at Google. To revoke it, remove GAIA at https://myaccount.google.com/permissions.";
+        await disconnected({
+            connector_id: 'google',
+            revoke_supported: true,
+            revoked_remotely: false,
+            nothing_stored: false,
+            revoke_error: reason,
+        });
+        const notice = await screen.findByRole('status');
+        expect(notice).toHaveTextContent(/could not read/i);
+        expect(notice).toHaveTextContent(
+            'https://myaccount.google.com/permissions',
+        );
+        expect(notice).not.toHaveTextContent(
+            enMessages['settings.connectors.nothingStored'],
+        );
+    });
+
     it('stays quiet after a confirmed revoke', async () => {
         await renderSection();
         await disconnected({

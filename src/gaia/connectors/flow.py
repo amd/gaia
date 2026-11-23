@@ -656,7 +656,10 @@ async def _teardown_flow(flow_id: str) -> None:
 
 
 async def revoke_provider_token(
-    provider_id: str, *, slot: str = DEFAULT_ACCOUNT
+    provider_id: str,
+    *,
+    slot: str = DEFAULT_ACCOUNT,
+    account_type: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
     Attempt a provider-side OAuth revoke of the stored refresh token (#2591).
@@ -682,8 +685,14 @@ async def revoke_provider_token(
     - ``revoke_supported=True, revoked_remotely=True`` — the provider's
       revoke endpoint accepted the request.
     - ``revoke_supported=True, revoked_remotely=False,
-      nothing_stored=True``: there was no refresh token to revoke, so no
-      provider call was made. This is distinct from a revoke that failed.
+      nothing_stored=True``: the slot was empty, so there was no refresh
+      token to revoke and no provider call was made. This is distinct from a
+      revoke that failed.
+    - ``revoke_supported=<provider's>, revoked_remotely=False,
+      nothing_stored=False, revoke_error=<why>`` — the slot holds a sign-in
+      GAIA cannot read (#8713), so there was no token to send. The local copy
+      is still removed and ``revoke_error`` says where to revoke by hand. The
+      slot is not empty, so this must never be reported as nothing stored.
     - ``revoke_supported=True, revoked_remotely=False`` — the endpoint call
       failed; ``revoke_error`` carries why. The provider-side grant is still
       live and the caller must say so.
@@ -714,13 +723,14 @@ async def revoke_provider_token(
             ),
         }
 
-    # An empty slot needs no provider, so an unconfigured OAuth client can't mask it.
-    if (
-        blob is None
-        and provider_id in HAS_REVOKE_ENDPOINT
-        and not connection_slot_in_use(provider_id, slot=slot)
-    ):
-        return nothing_to_revoke(provider_id)
+    # ``peek_connection`` returns None both for an empty slot and for a value
+    # it cannot read (a corrupt blob). An empty slot needs no provider, so an
+    # unconfigured OAuth client can't mask it; a slot that is in use but
+    # unreadable is NOT empty and must say so, not "nothing stored" (#8713).
+    if blob is None and provider_id in HAS_REVOKE_ENDPOINT:
+        if not connection_slot_in_use(provider_id, slot=slot):
+            return nothing_to_revoke(provider_id)
+        return unreadable_sign_in(provider_id, account_type=account_type)
 
     try:
         provider = get_provider(provider_id)
@@ -839,6 +849,48 @@ REVOKE_PAGES: Dict[str, Tuple[str, str]] = {
 }
 
 
+def revoke_page_for(
+    provider_id: str, *, account_type: Optional[str] = None
+) -> Tuple[str, str]:
+    """The provider label and connected-apps URL where the user revokes GAIA.
+
+    ``account_type`` sends a work account saved under ``microsoft`` to the
+    work page. Shared by every path that has to tell the user to revoke by
+    hand (weak keyring, unreadable sign-in).
+    """
+    from gaia.connectors.providers.microsoft import ACCOUNT_TYPE_WORK
+
+    page_id = provider_id
+    if provider_id == "microsoft" and account_type == ACCOUNT_TYPE_WORK:
+        page_id = "microsoft_work"
+    return REVOKE_PAGES.get(
+        page_id, (provider_id, "your account's connected-apps page")
+    )
+
+
+def unreadable_sign_in(
+    provider_id: str, *, account_type: Optional[str] = None
+) -> Dict[str, Any]:
+    """The revoke outcome when the slot holds a sign-in GAIA cannot read.
+
+    ``peek_connection`` returns ``None`` for a corrupt blob while the entry
+    stays in place, so this is not an empty slot: the local copy is removed,
+    but there is no token to revoke, and the user must revoke GAIA's access
+    at the provider by hand (#8713).
+    """
+    label, page = revoke_page_for(provider_id, account_type=account_type)
+    return {
+        "revoke_supported": HAS_REVOKE_ENDPOINT[provider_id],
+        "revoked_remotely": False,
+        "nothing_stored": False,
+        "revoke_error": (
+            "GAIA could not read the stored sign-in, so it removed the local "
+            f"copy without revoking GAIA's access at {label}. To revoke it, "
+            f"remove GAIA at {page}"
+        ),
+    }
+
+
 def not_revoked_on_weak_keyring(
     provider_id: str,
     *,
@@ -853,14 +905,7 @@ def not_revoked_on_weak_keyring(
     chain GAIA could not check, which may well be secure; ``account_type``
     sends a work account saved under ``microsoft`` to the work page.
     """
-    from gaia.connectors.providers.microsoft import ACCOUNT_TYPE_WORK
-
-    page_id = provider_id
-    if provider_id == "microsoft" and account_type == ACCOUNT_TYPE_WORK:
-        page_id = "microsoft_work"
-    label, page = REVOKE_PAGES.get(
-        page_id, (provider_id, "your account's connected-apps page")
-    )
+    label, page = revoke_page_for(provider_id, account_type=account_type)
     if uninspectable:
         why = "GAIA could not confirm the keyring on this PC is secure"
         fix = "use a single system credential store"
