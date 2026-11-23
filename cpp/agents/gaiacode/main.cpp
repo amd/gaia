@@ -248,6 +248,15 @@ int run(const Cli& cli) {
 }  // namespace
 
 int main(int argc, char** argv) {
+    // git must never stop for a password: no terminal prompt (it would corrupt the TUI) and no
+    // credential dialog behind the agent. A push without saved credentials fails with git's message.
+#ifdef _WIN32
+    _putenv_s("GIT_TERMINAL_PROMPT", "0");
+    _putenv_s("GCM_INTERACTIVE", "never");
+#else
+    setenv("GIT_TERMINAL_PROMPT", "0", 1);
+    setenv("GCM_INTERACTIVE", "never", 1);
+#endif
     const Cli cli = parse(argc, argv);
     std::signal(SIGINT, onSignal);
     std::signal(SIGTERM, onSignal);

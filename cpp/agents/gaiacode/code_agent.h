@@ -65,6 +65,8 @@ protected:
 private:
     /// `tool` with its callback reporting what it did to the turn's events.
     ToolInfo observed(ToolInfo tool);
+    /// Why a shell command or file write must not run, by the checks gaiacpp shares; "" when it may.
+    std::string guardRefusal(const std::string& tool, const json& args) const;
 
     Options options_;
     /// The folders the tools are confined to; null with full access.
