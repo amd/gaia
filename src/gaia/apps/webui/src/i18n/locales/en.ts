@@ -343,6 +343,12 @@ export const enMessages = {
     'question.send': 'Send',
     'question.sendFailed': 'Failed to send the answer.',
     'question.timeLeft': 'GAIA waits {time} more for an answer.',
+
+    // A step an out-of-date agent stopped at instead of asking
+    'confirmCard.badge': 'Not run',
+    'confirmCard.agentTooOld': "This step needs your OK, but the installed GAIA agent is too old to ask for it here, so nothing ran. Update GAIA to the latest version, then ask again.",
+    'confirmCard.dismiss': 'Dismiss',
+    'confirmCard.dismissed': 'Not run: {step}',
     'composer.private': 'Private',
     'composer.research': 'Research',
     'composer.researchOnTitle': 'Research is on: GAIA searches the web, reads the sources and writes a report citing each one. Click to turn it off.',

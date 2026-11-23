@@ -1939,6 +1939,44 @@ for (const locale of ['en', 'ar']) {
     });
 }
 
+const UNANSWERABLE_CONFIRMATION = [
+    { type: 'needs_confirmation', action: 'write_file', summary: 'Write notes.txt in /home/you/projects/gaia' },
+];
+
+for (const locale of ['en', 'ar']) {
+    test(`a step an old agent stopped at says it did not run and offers nothing to approve (${locale})`, async ({ page }) => {
+        await page.addInitScript((events) => {
+            const real = window.fetch;
+            window.fetch = (input, init) => {
+                if (!String(input).includes('/chat/send')) return real(input, init);
+                const body = new ReadableStream({
+                    start(controller) {
+                        for (const event of events) controller.enqueue(new TextEncoder().encode(`data: ${JSON.stringify(event)}\n\n`));
+                    },
+                });
+                return Promise.resolve(new Response(body, { headers: { 'Content-Type': 'text/event-stream' } }));
+            };
+        }, UNANSWERABLE_CONFIRMATION);
+        await open(page, `#${ANSWER_SESSION}`, locale);
+        const box = page.getByRole('textbox').first();
+        await box.fill('Save my notes');
+        await box.press('Enter');
+        const card = page.locator('.render-confirmation');
+        await expect(card).toBeVisible();
+        await expect(card.getByRole('button')).toHaveCount(1);
+        await expect(card).not.toContainText('write_file');
+        await expect(card.locator('.render-confirmation__label')).toContainText(locale === 'ar' ? 'كتابة ملف' : 'Writing file');
+        const footer = await card.locator('.render-confirmation__footer').evaluate((row) => {
+            const box = row.getBoundingClientRect();
+            const button = row.querySelector('button')!.getBoundingClientRect();
+            return { inside: button.left >= box.left - 1 && button.right <= box.right + 1, atEnd: getComputedStyle(row).direction === 'rtl' ? button.left - box.left < 2 : box.right - button.right < 2 };
+        });
+        expect(footer, 'Dismiss sits at the end of the footer, inside the card').toEqual({ inside: true, atEnd: true });
+        await shot(page, `confirmation-not-run-${locale}`);
+        expect(await audit(page)).toEqual([]);
+    });
+}
+
 /** A multi-step turn that reasons before every call, then keeps thinking. */
 function holdOnThoughtfulSteps(): void {
     const realFetch = window.fetch.bind(window);

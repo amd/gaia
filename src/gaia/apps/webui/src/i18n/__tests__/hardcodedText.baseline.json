@@ -15,7 +15,6 @@
   "components/SetupScreen.tsx": 2,
   "components/UnsupportedFeature.tsx": 3,
   "components/render/CardErrorBoundary.tsx": 1,
-  "components/render/ConfirmationCard.tsx": 4,
   "components/render/UnsupportedCard.tsx": 3,
   "components/session-panel/ChangesSection.tsx": 23,
   "components/settings/AddCustomModel.tsx": 1,
