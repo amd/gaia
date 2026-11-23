@@ -202,8 +202,9 @@ const CASES: Case[] = [
     // token, which flips too.
     ['--accent-fill-text', '--accent-fill', 'onFill'],
     ['--accent-fill-text', '--accent-fill-hover', 'onFill'],
-    ['--action-fill-text', '--action-fill', 'onFill'],
-    ['--action-fill-text', '--action-fill-hover', 'onFill'],
+    // The primary action is --bg-primary on --text-primary, and on --text-secondary when hovered.
+    ['--bg-primary', '--text-primary', 'onFill'],
+    ['--bg-primary', '--text-secondary', 'onFill'],
     ['--text-inverse', '--danger', 'onFill'],
     ['--text-inverse', '--accent', 'onFill'],
     ['--text-inverse', '--accent-yellow', 'onFill'],

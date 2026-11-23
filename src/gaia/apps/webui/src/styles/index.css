@@ -77,11 +77,13 @@
     --accent-fill-text: #7A5A22;
     --accent-fill-hover: #E6DCCB;
 
-    /* The one action a screen is asking for: ink carrying the canvas colour,
-     * so it reads as a button on a warm ground where a brass wash did not. */
-    --action-fill: #1F1D1A;
-    --action-fill-text: #FFFFFF;
-    --action-fill-hover: #3A3631;
+    /* The one action a screen is asking for: the text colour as a fill,
+     * carrying the canvas colour, so it reads as a button on a warm ground
+     * where a brass wash did not. Named by role, so every palette's ink and
+     * canvas follow; the pairs are the text-on-canvas ones the tests measure. */
+    --action-fill: var(--text-primary);
+    --action-fill-text: var(--bg-primary);
+    --action-fill-hover: var(--text-secondary);
 
     /* Semantic status keeps its conventional hues. Warning amber sits next
      * to brass in hue, so every warning also carries an icon and a word. */
@@ -232,10 +234,6 @@
     --accent-fill: #383227;
     --accent-fill-text: #D4B47E;
     --accent-fill-hover: #443B2C;
-
-    --action-fill: #EFECE6;
-    --action-fill-text: #1A1917;
-    --action-fill-hover: #FFFFFF;
 
     --accent-green: #5CC96E;
     --accent-green-dim: rgba(92, 201, 110, 0.14);
