@@ -114,6 +114,8 @@ export interface SetupCatalogEntry {
     fit_code?: 'memory' | 'npu' | 'backend' | null;
     /** Fits, but leaves other apps less memory than GAIA keeps for them. */
     tight?: boolean;
+    /** Setup lists it as a chat choice: it runs on this PC, or it is the user's chat model already. */
+    setup_offer: boolean;
 }
 
 /** A 409 from a setup choice that asks to be confirmed, then sent again with `acknowledge` true. */
