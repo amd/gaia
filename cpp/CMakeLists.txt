@@ -282,6 +282,7 @@ add_library(gaia_core
     src/api_server.cpp
     src/web_tools.cpp
     src/workspace.cpp
+    src/shell_guards.cpp
     src/document_index.cpp
     src/memory_store.cpp
     src/media_tools.cpp
