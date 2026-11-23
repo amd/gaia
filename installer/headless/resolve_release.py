@@ -360,6 +360,34 @@ def _rate_limit(exc: BaseException) -> Optional[Tuple[float, str]]:
     return max(1.0, wait), detail
 
 
+def _wait_out_rate_limit(
+    exc: BaseException, what: str, deadline: float, minutes: float
+) -> bool:
+    """Sleep until GitHub allows the next read and return True, or return False
+    when that is past ``deadline``. Re-raises ``exc`` when it is not a rate limit.
+    """
+    limit = _rate_limit(exc)
+    if limit is None:
+        raise exc
+    wait, detail = limit
+    if time.monotonic() + wait > deadline:
+        print(
+            f"::error::{what}: the GitHub API is rate-limiting this job's "
+            f"token ({detail}) and allows the next read in {wait:.0f}s, "
+            f"after the {minutes:g} min wait ends. Re-run this "
+            f"workflow once the limit resets. Nothing was tested.",
+            flush=True,
+        )
+        return False
+    print(
+        f"{what}: GitHub API rate limit ({detail}); "
+        f"waiting {wait:.0f}s before checking again",
+        flush=True,
+    )
+    time.sleep(wait)
+    return True
+
+
 def list_releases() -> List[Dict[str, Any]]:
     fixture = _fixture_releases()
     if fixture is not None:
@@ -446,39 +474,41 @@ def main(argv: Optional[List[str]] = None) -> int:
     )
     ap.add_argument("--tag", default="", help="vX.Y.Z or vX.Y.Z-rcN; empty picks one")
     ap.add_argument("--wait-minutes", type=float, default=0)
+    ap.add_argument(
+        "--rate-limit-minutes",
+        type=float,
+        default=0,
+        help="how long a GitHub API rate limit may be waited out; never less "
+        "than --wait-minutes",
+    )
     ap.add_argument("--poll-seconds", type=float, default=60)
     ap.add_argument("--out", required=True)
     args = ap.parse_args(argv)
 
     _retry_limit()
-    releases = list_releases()
+    start = time.monotonic()
+    deadline = start + args.wait_minutes * 60
+    limit_minutes = max(args.wait_minutes, args.rate_limit_minutes)
+    limit_deadline = start + limit_minutes * 60
+
+    releases = None
+    while releases is None:
+        try:
+            releases = list_releases()
+        except (urllib.error.HTTPError, RuntimeError) as exc:
+            if not _wait_out_rate_limit(
+                exc, "the release list", limit_deadline, limit_minutes
+            ):
+                return 1
     tag = args.tag.strip() or pick_default(releases)
     parse_tag(tag)
 
-    deadline = time.monotonic() + args.wait_minutes * 60
     while True:
         try:
             assets = release_assets(tag)
         except (urllib.error.HTTPError, RuntimeError) as exc:
-            limit = _rate_limit(exc)
-            if limit is None:
-                raise
-            wait, detail = limit
-            if time.monotonic() + wait > deadline:
-                print(
-                    f"::error::{tag}: the GitHub API is rate-limiting this job's "
-                    f"token ({detail}) and allows the next read in {wait:.0f}s, "
-                    f"after the {args.wait_minutes:g} min wait ends. Re-run this "
-                    f"workflow once the limit resets. Nothing was tested.",
-                    flush=True,
-                )
+            if not _wait_out_rate_limit(exc, tag, limit_deadline, limit_minutes):
                 return 1
-            print(
-                f"{tag}: GitHub API rate limit ({detail}); "
-                f"waiting {wait:.0f}s before checking again",
-                flush=True,
-            )
-            time.sleep(wait)
             continue
         names = expected_assets(tag, assets or ())
         missing = [

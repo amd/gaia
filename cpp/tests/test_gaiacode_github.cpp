@@ -60,13 +60,13 @@ public:
                     [this, json](const httplib::Request& req, httplib::Response& res) {
                         note(req);
                         json(res, {{"check_runs", gaia::json::array({{{"name", "tests"}, {"status", "completed"},
-                                                                       {"conclusion", "failure"}, {"id", 9}}})}});
+                                                                       {"conclusion", "failure"}, {"id", 45123456789LL}}})}});
                     });
         server_.Get("/repos/o/r/commits/abc1234def/status", [json](const httplib::Request&, httplib::Response& res) {
             json(res, {{"statuses", gaia::json::array({{{"context", "legacy/ci"}, {"state", "error"},
                                                         {"target_url", "https://ci.example/1"}}})}});
         });
-        server_.Get("/repos/o/r/actions/jobs/9/logs", [this](const httplib::Request& req, httplib::Response& res) {
+        server_.Get("/repos/o/r/actions/jobs/45123456789/logs", [this](const httplib::Request& req, httplib::Response& res) {
             note(req);
             res.status = 302;
             res.set_header("Location", "http://127.0.0.1:" + std::to_string(port_) + "/blob/log9");
@@ -240,14 +240,14 @@ TEST(GaiacodeGitHub, ReadsAPullRequestAndItsFailingChecks) {
     const json checks = tools.call("gh_pr_checks", {{"number", 3}});
     ASSERT_EQ(checks.value("status", ""), "success") << checks.dump();
     EXPECT_EQ(checks["failing"], 2) << "a failing check run and a failing commit status";
-    EXPECT_EQ(checks["checks"][0]["job_id"], 9);
+    EXPECT_EQ(checks["checks"][0]["job_id"], 45123456789LL) << "a real job id is 11 digits";
     EXPECT_EQ(checks["checks"][1]["name"], "legacy/ci");
 }
 
 TEST(GaiacodeGitHub, AJobLogIsFetchedWithoutTheTokenAfterARedirect) {
     FakeGitHub gh;
     Tools tools(gh, "o/r");
-    const json out = tools.call("gh_run_log", {{"job_id", 9}});
+    const json out = tools.call("gh_run_log", {{"job_id", 45123456789LL}});
     ASSERT_EQ(out.value("status", ""), "success") << out.dump();
     EXPECT_NE(out["log"].get<std::string>().find("FAILED test_parse"), std::string::npos);
     EXPECT_EQ(gh.blobAuth(), "") << "the blob store never sees the token";

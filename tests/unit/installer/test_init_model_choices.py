@@ -797,3 +797,43 @@ def test_the_setup_screens_show_a_kept_gemma_as_the_users_own(
     assert plan["chat_model"]["id"] == DEFAULT_MODEL_NAME
     assert plan["chat_model"]["user_set"] is True
     assert plan["recommended_model"] == TINY_DEFAULT_MODEL_NAME
+
+
+# ── the read-aloud voice where GAIA hasn't proven it ───────────────────────
+
+KOKORO = ("kokoro-v1", 0.34, ["tts"], "kokoro")
+
+
+def _catalog_ids():
+    return [e["id"] for e in sp.build_plan(skip_chat_model=False)["catalog"]]
+
+
+def test_setup_offers_the_voice_where_it_is_proven(lemonade):
+    lemonade(extra=[KOKORO])
+    assert "kokoro-v1" in _catalog_ids()
+
+
+def test_setup_does_not_offer_the_voice_on_a_mac(lemonade, monkeypatch):
+    monkeypatch.setattr(gaia.config, "_current_platform", lambda: "darwin")
+    fake = lemonade(extra=[KOKORO])
+    assert "kokoro-v1" not in _catalog_ids()
+    for choose in (
+        lambda: sp.check_extra_models(["kokoro-v1"]),
+        lambda: sp.set_model_skipped("kokoro-v1", False),
+        lambda: sp.prepare_download("kokoro-v1"),
+    ):
+        with pytest.raises(sp.CantRunHere, match="aren't offered on macOS"):
+            choose()
+    assert fake.pulls == []
+
+
+def test_a_voice_downloaded_before_it_was_withheld_stays_listed(lemonade, monkeypatch):
+    """So Settings can still show and remove it; nothing re-downloads it."""
+    monkeypatch.setattr(gaia.config, "_current_platform", lambda: "darwin")
+    lemonade(extra=[KOKORO], downloaded=["kokoro-v1"])
+    entry = next(
+        e
+        for e in sp.build_plan(skip_chat_model=False)["catalog"]
+        if e["id"] == "kokoro-v1"
+    )
+    assert entry["downloaded"] is True and entry["planned"] is False

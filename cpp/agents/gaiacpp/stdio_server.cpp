@@ -7,6 +7,7 @@
 #include <cctype>
 #include <chrono>
 #include <cstdio>
+#include <cstring>
 #include <filesystem>
 #include <iostream>
 #include <random>
@@ -244,6 +245,16 @@ constexpr CodeRange kPictographic[] = {
     {0x1F8C2, 0x1F8CF}, {0x1F8D9, 0x1F8FF}, {0x1F90C, 0x1F93A}, {0x1F93C, 0x1F945},
     {0x1F947, 0x1F9FF}, {0x1FA58, 0x1FA5F}, {0x1FA6E, 0x1FAFF}, {0x1FC00, 0x1FFFD},
 };
+// Kept in prose, but coded in a name (Shown::Name): there they only make one name read as another.
+// Tab and line feed, then ZWNJ, ZWJ, LRM and RLM.
+constexpr CodeRange kKeptInProse[] = {
+    {0x0009, 0x000A}, {0x200C, 0x200F},
+};
+constexpr CodeRange kVariationSelectors[] = {
+    {0xFE00, 0xFE0F}, {0xE0100, 0xE01EF},
+};
+// FE0F followed by U+20E3 makes a keycap of one of these.
+constexpr char kKeycapBases[] = "0123456789#*";
 // CJK ideographs, which an ideographic variation selector (E0100-E01EF) may follow.
 constexpr CodeRange kIdeographs[] = {
     {0x3400, 0x4DBF}, {0x4E00, 0x9FFF}, {0xF900, 0xFAFF}, {0x20000, 0x2A6DF},
@@ -282,21 +293,30 @@ bool selectorFits(const std::vector<char32_t>& cps, size_t at) {
     const char32_t cp = cps[at], previous = cps[at - 1];
     if (cp == 0xFE0E || cp == 0xFE0F) {
         if (among(kPictographic, previous)) return true;
-        const bool keycapBase = (previous >= '0' && previous <= '9') || previous == '#' || previous == '*';
+        const bool keycapBase = previous != 0 && previous < 0x80 &&
+                                std::strchr(kKeycapBases, static_cast<char>(previous)) != nullptr;
         return cp == 0xFE0F && keycapBase && at + 1 < cps.size() && cps[at + 1] == 0x20E3;
     }
     if (cp >= 0xE0100 && cp <= 0xE01EF) return among(kIdeographs, previous);
     return false;
 }
 
+// How visible() writes a field. Prose keeps its line breaks; Line codes them.
+// Name (a path, URL, id, program or "always allow" label) codes every character
+// kept in prose and every variation selector too, CR included, as Python's
+// visible_strict does; Command does the same to a command's words but keeps
+// its tabs and line breaks.
+enum class Shown { Prose, Line, Name, Command };
+
 // Characters that hide or reorder text written as [U+XXXX], as the Python agent's
-// approval cards show them, so the card reads as the call; keepNewlines=false also
-// writes a line break as [U+000A]. Bytes that aren't UTF-8 pass through unchanged.
-std::string visible(const std::string& raw, bool keepNewlines = true) {
+// approval cards show them, so the card reads as the call. Bytes that aren't
+// UTF-8 pass through unchanged.
+std::string visible(const std::string& raw, Shown how = Shown::Prose) {
+    const bool strict = how == Shown::Name || how == Shown::Command;
     std::string s;
     s.reserve(raw.size());
     for (size_t i = 0; i < raw.size(); ++i) {
-        if (raw[i] == '\r' && i + 1 < raw.size() && raw[i + 1] == '\n') continue;
+        if (how != Shown::Name && raw[i] == '\r' && i + 1 < raw.size() && raw[i + 1] == '\n') continue;
         s += raw[i];
     }
     std::vector<char32_t> cps;
@@ -313,9 +333,12 @@ std::string visible(const std::string& raw, bool keepNewlines = true) {
     for (size_t k = 0; k < cps.size(); ++k) {
         const char32_t cp = cps[k];
         const bool decoded = !(cp == 0xFFFD && lengths[k] == 1);
-        const bool selector = (cp >= 0xFE00 && cp <= 0xFE0F) || (cp >= 0xE0100 && cp <= 0xE01EF);
-        const bool code = decoded && ((cp == '\n' && !keepNewlines) || among(kHidden, cp) ||
-                                      (selector && !selectorFits(cps, k)));
+        const bool selector = among(kVariationSelectors, cp);
+        const bool layout = cp == '\t' || cp == '\n';
+        const bool code =
+            decoded && ((cp == '\n' && how == Shown::Line) || among(kHidden, cp) ||
+                        (strict && among(kKeptInProse, cp) && !(how == Shown::Command && layout)) ||
+                        (selector && (strict || !selectorFits(cps, k))));
         if (code) {
             char buf[16];
             std::snprintf(buf, sizeof buf, "[U+%04X]", static_cast<unsigned>(cp));
@@ -352,10 +375,11 @@ std::string shownBlock(const std::string& text) {
 
 // The body of an approval prompt: what the call will do, with no tool name or JSON.
 // The command keeps its line breaks; a path, URL or id is one line, so its
-// own text can't add a line that reads as part of the card.
+// own text can't add a line that reads as part of the card, and a joiner or
+// mark in a name can't make it read as another.
 std::string promptSummary(const std::string& tool, const json& args) {
-    const auto one = [&args](const char* key) { return visible(argOf(args, key), false); };
-    if (tool == "bash_execute") return visible(argOf(args, "command"));
+    const auto one = [&args](const char* key) { return visible(argOf(args, key), Shown::Name); };
+    if (tool == "bash_execute") return visible(argOf(args, "command"), Shown::Command);
     if (tool == "file_write") {
         return one("path") + "\n\nWhat will be saved:\n" + shownBlock(argOf(args, "content"));
     }
@@ -369,18 +393,20 @@ std::string promptSummary(const std::string& tool, const json& args) {
         const std::string to = one("output_path");
         return to.empty() ? "The whole screen" : "The whole screen, saved to " + to;
     }
-    if (tool == "generate_image") return clipCounted(one("prompt"), 600) + "\nSaved to " + one("output_path");
+    if (tool == "generate_image") {
+        return clipCounted(visible(argOf(args, "prompt"), Shown::Line), 600) + "\nSaved to " + one("output_path");
+    }
     std::string name = tool;
     std::replace(name.begin(), name.end(), '_', ' ');
     std::string out = "Use " + name;
     if (args.is_object()) {
         for (const auto& [key, value] : args.items()) {
             if (value.is_string() && value.get<std::string>().find('\n') != std::string::npos) {
-                out += "\n" + visible(key, false) + ":\n" + shownBlock(value.get<std::string>());
+                out += "\n" + visible(key, Shown::Name) + ":\n" + shownBlock(value.get<std::string>());
                 continue;
             }
             const std::string text = value.is_string() ? value.get<std::string>() : dumps(value);
-            out += "\n" + visible(key, false) + ": " + clipCounted(visible(text, false), 300);
+            out += "\n" + visible(key, Shown::Name) + ": " + clipCounted(visible(text, Shown::Line), 300);
         }
     }
     return out;
@@ -397,10 +423,10 @@ std::string grantLabel(const std::string& key) {
     const std::string shell = "bash_execute:";
     if (key.rfind(shell, 0) == 0) {
         const std::string scope = key.substr(shell.size());
-        if (scope.rfind("cmd:", 0) == 0) return "Run " + visible(scope.substr(4), false) + " commands";
-        if (scope.rfind("exact:", 0) == 0) return "Run `" + visible(scope.substr(6), false) + "`";
+        if (scope.rfind("cmd:", 0) == 0) return "Run " + visible(scope.substr(4), Shown::Name) + " commands";
+        if (scope.rfind("exact:", 0) == 0) return "Run `" + visible(scope.substr(6), Shown::Name) + "`";
     }
-    return "Use " + visible(key.substr(0, key.find(':')), false);
+    return "Use " + visible(key.substr(0, key.find(':')), Shown::Name);
 }
 
 // The field as a string, "" when absent; a value of another type is a malformed message.

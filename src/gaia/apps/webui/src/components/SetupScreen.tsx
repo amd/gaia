@@ -356,6 +356,28 @@ interface HeldRun {
 
 const AGENT_PICK_KEY = 'gaia.setup.agentPick';
 const HELD_RUN_KEY = 'gaia.setup.heldRun';
+/** Extras added on the Download step, kept across a quit until they are handed to the download. */
+const QUEUED_EXTRAS_KEY = 'gaia.setup.queuedExtras';
+
+function readQueuedExtras(): string[] {
+    try {
+        const raw = localStorage.getItem(QUEUED_EXTRAS_KEY);
+        const ids: unknown = raw ? JSON.parse(raw) : [];
+        return Array.isArray(ids) ? ids.filter((id): id is string => typeof id === 'string') : [];
+    } catch (err) {
+        console.warn('[SetupScreen] could not read the extras added during setup; they show as Add again', err);
+        return [];
+    }
+}
+
+function writeQueuedExtras(ids: string[]): void {
+    try {
+        if (ids.length) localStorage.setItem(QUEUED_EXTRAS_KEY, JSON.stringify(ids));
+        else localStorage.removeItem(QUEUED_EXTRAS_KEY);
+    } catch (err) {
+        console.warn('[SetupScreen] could not save the extras added during setup; a restart will forget them', err);
+    }
+}
 
 /** Kept for this window only, so a reload mid-download keeps the pick and doesn't start over. */
 function readStored<T>(key: string): T | null {
@@ -432,8 +454,9 @@ export function SetupScreen({ onReady, onClose }: SetupScreenProps) {
     const [cloudDefault, setCloudDefault] = useState<string | null>(null);
     const [showKey, setShowKey] = useState(false);
     const [firstTasks, setFirstTasks] = useState<StartCard[]>([]);
-    // Optional models added from the Download step, fetched and tested after the run.
-    const [queued, setQueued] = useState<string[]>([]);
+    // Optional models added from the Download step, downloaded on their own once the run is ready.
+    const [queued, setQueued] = useState<string[]>(readQueuedExtras);
+    useEffect(() => writeQueuedExtras(queued), [queued]);
     /** Extras added during the run that never started, e.g. after a low-disk No. */
     const [notFetched, setNotFetched] = useState<string[]>([]);
     // GAIA uses a Lemonade the user runs, so the Connect step changes nothing there.
@@ -939,7 +962,8 @@ export function SetupScreen({ onReady, onClose }: SetupScreenProps) {
         }
     }, [keepTrying, loadPlan]);
 
-    const skipModel = useCallback(async (id: string) => {
+    /** Leave one model out; false when that failed (the error is shown). */
+    const skipModel = useCallback(async (id: string): Promise<boolean> => {
         setActionError(null);
         setBusy(true);
         try {
@@ -950,12 +974,23 @@ export function SetupScreen({ onReady, onClose }: SetupScreenProps) {
             const { options } = lastRun.current;
             lastRun.current.options = { ...options, extraModels: options.extraModels?.filter((m) => m !== id) };
             setSelection((s) => (s && s.ticked.has(id) ? toggle(s, catalogOf(plan), id, false) : s));
+            return true;
         } catch (err) {
             setActionError(errorText(err));
+            return false;
         } finally {
             setBusy(false);
         }
     }, [plan]);
+
+    /** Stopped with only optional extras left: drop them and check the rest. */
+    const finishWithoutExtras = useCallback(async (ids: string[]) => {
+        for (const id of ids) {
+            if (!(await skipModel(id))) return;
+        }
+        setNotFetched((n) => [...n, ...ids.filter((id) => !n.includes(id))]);
+        retryRun();
+    }, [skipModel, retryRun]);
 
     const restartDownloads = useCallback(async () => {
         await cancel();
@@ -997,18 +1032,30 @@ export function SetupScreen({ onReady, onClose }: SetupScreenProps) {
         setKeyState({ busy: false, error: null, done: false });
     }, [inUseCloud, inUseModel]);
 
-    // Extras added during the run: fetched and tested the same way, once it ends.
+    // Extras added during the run: downloaded one by one once it is ready. A second
+    // `gaia init` run would load-check the chat model again after the extras' downloads.
     useEffect(() => {
         if (!installed || queued.length === 0 || extending.current) return;
         const extras = queued;
         extending.current = true;
-        void start(false, { keepTrying, extraModels: extras }).then((started) => {
+        void (async () => {
+            const missed: string[] = [];
+            for (const id of extras) {
+                try {
+                    setRun(await api.downloadSetupModel(id, { keepTrying }));
+                } catch (err) {
+                    missed.push(id);
+                    const detail = api.setupConfirmFrom(err);
+                    if (detail) setConfirm((c) => c ?? { kind: 'server', detail, then: 'retry', id });
+                    else setStartError(errorText(err));
+                }
+            }
             extending.current = false;
             setQueued((q) => q.filter((id) => !extras.includes(id)));
             // Unstarted, the Ready screen says so rather than dropping them.
-            if (!started) setNotFetched((n) => [...n, ...extras.filter((id) => !n.includes(id))]);
-        });
-    }, [installed, queued, keepTrying, start]);
+            if (missed.length) setNotFetched((n) => [...n, ...missed.filter((id) => !n.includes(id))]);
+        })();
+    }, [installed, queued, keepTrying]);
 
     const canFinish = installed && queued.length === 0;
     const answering = cloud ? cloudModel : fullRun?.chat_model ?? (plan && !plan.decided_after_server ? plan.chat_model.id : null);
@@ -1044,10 +1091,18 @@ export function SetupScreen({ onReady, onClose }: SetupScreenProps) {
     const stepFailed = (run?.state === 'failed') || !!startError || !!planError || !!hardwareError || !!lostContact || !!actionError;
     // A first run has no earlier chat to pick up, so "Check in" waits for one.
     const readyTasks = again ? firstTasks : firstTasks.filter((c) => c.skill !== 'check-in');
+    const onDisk = (m: SetupModelProgress) => m.state === 'ready' || m.state === 'skipped' || m.state === 'verifying' || m.state === 'unchecked';
     const downloadDone = fullRun && (fullRun.state === 'failed' || fullRun.state === 'cancelled')
         && (fullRun.models ?? []).length > 0
-        && (fullRun.models ?? []).every((m) => m.state === 'ready' || m.state === 'skipped' || m.state === 'verifying' || m.state === 'unchecked')
+        && (fullRun.models ?? []).every(onDisk)
         && !moving;
+    const isExtra = (id: string) => !!lastRun.current.options.extraModels?.includes(id)
+        || !!plan?.catalog?.some((e) => e.id === id && isOptional(e));
+    // Every model setup needs is here; only extras the user added are left.
+    const extrasLeft = fullRun && runFailed && !moving && !downloadDone
+        && (fullRun.models ?? []).every((m) => onDisk(m) || isExtra(m.id))
+        ? (fullRun.models ?? []).filter((m) => !onDisk(m)).map((m) => m.id)
+        : [];
     // Its row in the download list says why and offers Retry, so nothing below repeats it.
     const componentFailed = !!fullRun && runFailed && !fullRun.problem
         && Object.values(fullRun.components ?? {}).includes('failed');
@@ -1130,7 +1185,8 @@ export function SetupScreen({ onReady, onClose }: SetupScreenProps) {
         status: i < at ? 'done'
             : i > at ? 'pending'
                 : liveStage === 'ready' ? 'done'
-                    : runFailed && (liveStage === 'download' || liveStage === 'test' || liveStage === 'check') ? 'failed'
+                    // The user's own Stop is not a failure.
+                    : run?.state === 'failed' && (liveStage === 'download' || liveStage === 'test' || liveStage === 'check') ? 'failed'
                         : running && (liveStage === 'download' || liveStage === 'test') ? 'active' : 'current',
         shown: s.id === railOf(stage),
         onOpen: s.id !== railOf(stage) && reachable(s.id, i) ? () => stepTo(s.id === 'plan' ? setupScreen : s.id) : undefined,
@@ -1214,6 +1270,12 @@ export function SetupScreen({ onReady, onClose }: SetupScreenProps) {
         </p>
     ) : null;
 
+    // An extra already in the download list above has its own row there, with Retry or Cancel.
+    const fetching = (fullRun?.models ?? []).filter((m) => m.state !== 'skipped').map((m) => m.id);
+    // Extras handed off once setup was ready; chat needn't wait for them.
+    const stillFetching = installed ? (fullRun?.models ?? []).filter((m) => m.state === 'downloading' || m.state === 'queued').map((m) => m.id) : [];
+    // A handed-off extra whose download failed after Ready must not just drop off the line above.
+    const notDownloaded = [...new Set([...notFetched, ...(installed ? (fullRun?.models ?? []).filter((m) => m.state === 'failed').map((m) => m.id) : [])])];
     const optional = selection && !cloud ? catalog.filter((e) => isOptional(e) && !selection.ticked.has(e.id) && !e.downloaded
         && (canCreateImages(chatEntry) || !e.roles.includes('image_creation'))) : [];
     const biggerOption = catalog.find((e) => e.fit_code === 'memory' && e.chat_choice && e.support === 'verified');
@@ -1557,6 +1619,7 @@ export function SetupScreen({ onReady, onClose }: SetupScreenProps) {
                                         onRetry={(id, kind) => void retryModel(id, kind)}
                                         onResume={(id) => void retryModel(id, null)}
                                         onResumeAll={retryRun}
+                                        onFinishWithout={extrasLeft.length > 0 && !componentFailed ? () => void finishWithoutExtras(extrasLeft) : undefined}
                                         onSkip={(id) => void skipModel(id)}
                                         onRestart={() => void restartDownloads()}
                                         busy={busy || !!lostContact}
@@ -1578,13 +1641,13 @@ export function SetupScreen({ onReady, onClose }: SetupScreenProps) {
                                     <p className="setup-hint">{t('setup.optional.lede')}</p>
                                     <ul className="setup-rows">
                                         {optional.map((e) => {
-                                            const added = queued.includes(e.id);
+                                            const added = queued.includes(e.id) || fetching.includes(e.id);
                                             return (
                                                 <li key={e.id} className="setup-result is-waiting">
                                                     <span className="setup-result-label">{t(`setup.purpose.${e.roles[0]}`)}</span>
                                                     <span className="setup-result-value">
                                                         <bdi dir="ltr">{e.size_gb != null ? formatSize(e.size_gb) : t('setup.contents.sizeOnDownload')}</bdi>
-                                                        <button type="button" className="btn-secondary" aria-pressed={added} onClick={() => setQueued((q) => (added ? q.filter((id) => id !== e.id) : [...q, e.id]))}>
+                                                        <button type="button" className="btn-secondary" aria-pressed={added} disabled={fetching.includes(e.id)} onClick={() => setQueued((q) => (added ? q.filter((id) => id !== e.id) : [...q, e.id]))}>
                                                             {added ? t('setup.optional.added') : t('setup.optional.add')}
                                                         </button>
                                                     </span>
@@ -1624,6 +1687,9 @@ export function SetupScreen({ onReady, onClose }: SetupScreenProps) {
                                         <button type="button" className="btn-primary" onClick={retryRun} disabled={busy}>{t('setup.finish')}</button>
                                     </SetupFooter>
                                 </>
+                            )}
+                            {extrasLeft.length > 0 && !componentFailed && (
+                                <p className="setup-hint">{t('setup.download.extrasLeftNote', { names: extrasLeft.map((id) => names[id] ?? id).join(', ') })}</p>
                             )}
                             {runFailed && !downloadDone && !componentFailed && !(fullRun.models ?? []).some((m) => m.state === 'failed' || m.state === 'cancelled') && (
                                 <>
@@ -1692,9 +1758,14 @@ export function SetupScreen({ onReady, onClose }: SetupScreenProps) {
                                         {t('setup.ready.extraFailed', { job: t(`setup.test.job.${r.job}`) })}
                                     </p>
                                 ))}
-                                {notFetched.length > 0 && !confirm && (
+                                {stillFetching.length > 0 && (
+                                    <p className="setup-hint" role="status">
+                                        {t('setup.ready.extraDownloading', { names: stillFetching.map((id) => names[id] ?? id).join(', ') })}
+                                    </p>
+                                )}
+                                {notDownloaded.length > 0 && !confirm && (
                                     <p className="setup-failed-extra" role="alert">
-                                        {t('setup.ready.extraNotFetched', { names: notFetched.map((id) => names[id] ?? id).join(', ') })}
+                                        {t('setup.ready.extraNotFetched', { names: notDownloaded.map((id) => names[id] ?? id).join(', ') })}
                                     </p>
                                 )}
                                 {readyTasks.length > 0 && (
@@ -1760,7 +1831,10 @@ export function SetupScreen({ onReady, onClose }: SetupScreenProps) {
                             void commit(ackDisk, true);
                         } else if (c.then === 'retry') {
                             void api.downloadSetupModel(c.id, { keepTrying, acknowledgeLowDisk: true })
-                                .then(setRun)
+                                .then((s) => {
+                                    setRun(s);
+                                    setNotFetched((n) => n.filter((id) => id !== c.id));
+                                })
                                 .catch((err) => setActionError(errorText(err)));
                         } else {
                             const { gaiaLemonade, options } = lastRun.current;

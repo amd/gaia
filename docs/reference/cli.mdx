@@ -2097,8 +2097,9 @@ the shell.
 
 Five things hold in every mode, full access included. Tokens in shell and
 Python output, such as the one in a `git remote -v` URL, are masked before the
-model reads it. A call you declined stays declined for the rest of that request.
-A calendar change and an outgoing email still wait for a person. A folder
+model reads it. A call you declined stays declined: that exact call for the rest
+of the chat, another route to it for that request. A calendar change and an
+outgoing email still wait for a person. A folder
 you removed from a chat is not used as the shell's working folder. And the file
 tools open nothing in GAIA's chat data (`~/.gaia/chat`) except what is attached
 to the chat, so one chat can't read another's documents or attachments that
@@ -2111,7 +2112,7 @@ them, and the status bar shows the one that is on:
 |---|---|
 | `ask` (default) | Every shell command except plain reads inside the allowed folders, every Python run and file write |
 | `accept edits` | Shell commands and Python. File edits inside the folder GAIA was started in run unasked, except hidden files and folders (`.git/`, `.bashrc`, `.github/`), folders on `PATH`, and on Windows a file that shadows a program. Never the home folder or a drive root |
-| `full access` | Nothing |
+| `full access` | Nothing. Deletes run only here: in the other modes a delete GAIA would ask about is refused, with no prompt |
 
 Ways to turn full access on — each is deliberate:
 
@@ -2273,7 +2274,7 @@ When that server can't be reached, `gaia download` (with or without `--list` or
 **Available Agents:**
 chat, talk, rag, vlm, minimal, mcp, sd
 
-`gaia download --agent talk` also fetches the Kokoro voice model (`kokoro-v1`), which the GAIA agent's `text_to_speech` and `dictate_document` tools need and never download themselves.
+`gaia download --agent talk` also fetches the Kokoro voice model (`kokoro-v1`), which the GAIA agent's `text_to_speech` and `dictate_document` tools need and never download themselves. On macOS, where GAIA doesn't offer the voice yet, it refuses `kokoro-v1` with the reason and exits 1.
 
 **Examples:**
 

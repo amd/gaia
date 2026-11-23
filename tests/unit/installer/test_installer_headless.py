@@ -392,8 +392,8 @@ def _limit_error(status, headers, message="", url=RETRY_URL):
     return urllib.error.HTTPError(url, status, "error", headers, _Body(body))
 
 
-class TestWaitRidesOutRateLimits:
-    """A rate-limited read during the asset wait is "not ready yet", not a failure."""
+class _LimitClock:
+    """A fake clock and stubbed reads for the rate-limit tests."""
 
     TAG = "v1.0.0"
 
@@ -442,6 +442,10 @@ class TestWaitRidesOutRateLimits:
                 str(tmp_path / "r.json"),
             ]
         )
+
+
+class TestWaitRidesOutRateLimits(_LimitClock):
+    """A rate-limited read during the asset wait is "not ready yet", not a failure."""
 
     def test_secondary_limit_waits_then_succeeds(self, monkeypatch, tmp_path, capsys):
         pending = self._reads(
@@ -543,6 +547,132 @@ class TestWaitRidesOutRateLimits:
         self._reads(monkeypatch, RuntimeError("boom"))
         with pytest.raises(RuntimeError, match="boom"):
             self._run(tmp_path, 300)
+
+
+class TestReleaseListingRidesOutRateLimits(_LimitClock):
+    """The first call, listing releases, waits out a rate limit like the asset wait.
+
+    Other workflows can spend the shared token quota before this job starts, so
+    the listing used to 403 before anything was tested (v0.27.0-rc6..rc8).
+    """
+
+    def _listings(self, monkeypatch, *results):
+        pending = list(results)
+
+        def fake():
+            item = pending.pop(0)
+            if isinstance(item, BaseException):
+                raise item
+            return item
+
+        monkeypatch.setattr(resolve, "list_releases", fake)
+        return pending
+
+    def _run_limited(self, tmp_path, wait_minutes, limit_minutes, tag=None):
+        args = ["--wait-minutes", str(wait_minutes), "--out", str(tmp_path / "r.json")]
+        if limit_minutes is not None:
+            args += ["--rate-limit-minutes", str(limit_minutes)]
+        return resolve.main(["--tag", tag or self.TAG, *args])
+
+    def _exhausted(self, seconds):
+        reset = str(int(time.time()) + seconds)
+        return _limit_error(
+            403,
+            {"X-RateLimit-Remaining": "0", "X-RateLimit-Reset": reset},
+            "API rate limit exceeded for installation.",
+        )
+
+    def test_a_limited_listing_waits_for_the_reset_then_resolves(
+        self, monkeypatch, tmp_path, capsys
+    ):
+        pending = self._listings(monkeypatch, self._exhausted(1800), [])
+        self._reads(monkeypatch, self._complete())
+        assert self._run_limited(tmp_path, 0, 65) == 0
+        assert pending == []
+        assert len(self.sleeps) == 1 and 1790 <= self.sleeps[0] <= 1802
+        assert "the release list: GitHub API rate limit" in capsys.readouterr().out
+
+    def test_a_limit_wrapped_by_get_retries_is_recognised_on_the_listing(
+        self, monkeypatch, tmp_path
+    ):
+        wrapped = RuntimeError("returned HTTP 403 after 2 attempt(s)")
+        wrapped.__cause__ = self._exhausted(600)
+        self._listings(monkeypatch, wrapped, [])
+        self._reads(monkeypatch, self._complete())
+        assert self._run_limited(tmp_path, 0, 65) == 0
+        assert len(self.sleeps) == 1
+
+    def test_repeated_limits_share_one_window(self, monkeypatch, tmp_path, capsys):
+        # Two 40-min resets don't fit a 65-min window: the second fails.
+        self._listings(monkeypatch, self._exhausted(2400), self._exhausted(2400))
+        self._reads(monkeypatch, self._complete())
+        assert self._run_limited(tmp_path, 0, 65) == 1
+        assert len(self.sleeps) == 1
+        out = capsys.readouterr().out
+        assert "::error::the release list" in out and "Nothing was tested" in out
+
+    def test_a_limit_past_the_window_fails_loudly_without_waiting(
+        self, monkeypatch, tmp_path, capsys
+    ):
+        self._listings(monkeypatch, self._exhausted(3600 * 3))
+        assert self._run_limited(tmp_path, 0, 65) == 1
+        out = capsys.readouterr().out
+        assert "::error::the release list" in out
+        assert "API rate limit exceeded for installation" in out
+        assert "X-RateLimit-Remaining=0" in out
+        assert self.sleeps == []
+
+    def test_without_a_window_a_dispatch_still_fails_at_once(
+        self, monkeypatch, tmp_path
+    ):
+        self._listings(monkeypatch, self._exhausted(60))
+        assert self._run_limited(tmp_path, 0, None) == 1
+        assert self.sleeps == []
+
+    def test_a_plain_forbidden_listing_is_not_waited_on(
+        self, monkeypatch, tmp_path, capsys
+    ):
+        error = _limit_error(
+            403,
+            {"X-RateLimit-Remaining": "4000"},
+            "Resource not accessible by integration",
+        )
+        self._listings(monkeypatch, error)
+        with pytest.raises(urllib.error.HTTPError) as caught:
+            self._run_limited(tmp_path, 0, 65)
+        assert caught.value is error
+        assert self.sleeps == []
+        out = capsys.readouterr().out
+        assert "not a GitHub rate limit" in out
+        assert "Resource not accessible by integration" in out
+
+    def test_a_listing_server_error_is_not_waited_on(self, monkeypatch, tmp_path):
+        self._listings(monkeypatch, _limit_error(502, {"Retry-After": "5"}))
+        with pytest.raises(urllib.error.HTTPError):
+            self._run_limited(tmp_path, 0, 65)
+        assert self.sleeps == []
+
+    def test_the_window_also_covers_a_dispatch_asset_read(self, monkeypatch, tmp_path):
+        self._listings(monkeypatch, [])
+        self._reads(monkeypatch, self._exhausted(900), self._complete())
+        assert self._run_limited(tmp_path, 0, 65) == 0
+        assert len(self.sleeps) == 1
+
+    def test_the_window_does_not_extend_the_asset_wait(
+        self, monkeypatch, tmp_path, capsys
+    ):
+        # A dispatch (wait 0) with a missing asset still fails at once.
+        self._listings(monkeypatch, [])
+        self._reads(monkeypatch, None)
+        assert self._run_limited(tmp_path, 0, 65) == 1
+        assert self.sleeps == []
+        assert "has no GitHub release yet" in capsys.readouterr().out
+
+    def test_the_workflow_passes_a_rate_limit_window(self):
+        text = (REPO / ".github/workflows/test_installers_headless.yml").read_text(
+            encoding="utf-8"
+        )
+        assert "--rate-limit-minutes 65" in text
 
 
 # ── checked-in release fixture ────────────────────────────────────────────────

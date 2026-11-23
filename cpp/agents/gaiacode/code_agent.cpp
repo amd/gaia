@@ -8,6 +8,7 @@
 #include <cstring>
 #include <atomic>
 #include <filesystem>
+#include <fstream>
 #include <map>
 #include <random>
 #include <regex>
@@ -46,6 +47,7 @@ void CodeAgent::registerTools() {
         reg.registerTool(observed(BashTools::bashExecute(options_.shell)));
     } else {
         ws = std::make_shared<const Workspace>(options_.workspaceRoots);
+        ws_ = ws;
         reg.registerTool(Workspace::confine(FileIOTools::fileRead(), ws, {"path"}));
         reg.registerTool(observed(Workspace::confine(FileIOTools::fileWrite(), ws, {"path"})));
         reg.registerTool(observed(Workspace::confine(FileIOTools::fileEdit(), ws, {"path"})));
@@ -151,7 +153,8 @@ ToolInfo CodeAgent::observed(ToolInfo tool) {
                 if (!dir.is_absolute()) dir = fs::u8path(folder) / dir;
                 folder = dir.u8string();
             }
-            before = treeFingerprint(folder);
+            // git runs a repository's own filters: never in a folder the tools may not reach.
+            if (!ws_ || ws_->checkPath(folder).empty()) before = treeFingerprint(folder);
         }
         json result = inner(args);
         std::vector<TurnEvent> seen;
@@ -398,7 +401,14 @@ std::optional<std::string> CodeAgent::treeFingerprint(const std::string& folder)
 #else
     const std::string git = "git";
 #endif
-    const ProcessResult dirs = gitIn(git, folder, {}, "rev-parse --absolute-git-dir --git-path objects", 10000);
+#ifdef _WIN32
+    // `-C "D:\"` would read as an escaped quote: git takes forward slashes just as well.
+    std::string dir = folder;
+    std::replace(dir.begin(), dir.end(), '\\', '/');
+#else
+    const std::string& dir = folder;
+#endif
+    const ProcessResult dirs = gitIn(git, dir, {}, "rev-parse --absolute-git-dir --git-path objects", 10000);
     if (dirs.exitCode != 0) return std::nullopt;
     std::istringstream lines(dirs.stdout_output);
     std::string gitDir, objects;
@@ -415,19 +425,25 @@ std::optional<std::string> CodeAgent::treeFingerprint(const std::string& folder)
     static std::atomic<unsigned long long> counter{0};
     const std::string tag = std::to_string(std::random_device{}()) + "-" + std::to_string(++counter);
     const fs::path base = fs::temp_directory_path(ec);
+    // Never fall back to the current folder, which may be the repository itself.
+    if (ec || base.empty()) return std::nullopt;
     const fs::path index = base / ("gaiacode-index-" + tag);
     const fs::path store = base / ("gaiacode-objects-" + tag);
-    fs::create_directories(store, ec);
+    fs::create_directories(store / "info", ec);
     if (ec) return std::nullopt;
+    {
+        // A file, not GIT_ALTERNATE_OBJECT_DIRECTORIES: that splits on ';' or ':', legal in a folder name.
+        std::ofstream alternates(store / "info" / "alternates", std::ios::binary);
+        alternates << objectsDir.generic_u8string() << "\n";
+    }
     fs::copy_file(fs::u8path(gitDir) / "index", index, fs::copy_options::overwrite_existing, ec);
     const std::vector<std::pair<std::string, std::string>> env = {
         {"GIT_INDEX_FILE", index.u8string()},
         {"GIT_OBJECT_DIRECTORY", store.u8string()},
-        {"GIT_ALTERNATE_OBJECT_DIRECTORIES", objectsDir.u8string()},
     };
     std::optional<std::string> tree;
-    if (gitIn(git, folder, env, "add -A", 120000).exitCode == 0) {
-        const ProcessResult write = gitIn(git, folder, env, "write-tree", 30000);
+    if (gitIn(git, dir, env, "add -A", 120000).exitCode == 0) {
+        const ProcessResult write = gitIn(git, dir, env, "write-tree", 30000);
         if (write.exitCode == 0) tree = trimmed(write.stdout_output);
     }
     fs::remove(index, ec);
@@ -466,6 +482,8 @@ bool CodeAgent::claimsTestsPass(const std::string& answer) {
         return std::regex_search(s.substr(from, pos - from + len), negated);
     };
     auto check = [&](const std::string& s) {
+        // A sentence that reports failures is a report, not a claim: "2 tests failed, 10 passed".
+        if (std::regex_search(s, failures)) return false;
         for (const auto& re : claims) {
             for (auto it = std::sregex_iterator(s.begin(), s.end(), re); it != std::sregex_iterator(); ++it) {
                 if (!negatedNear(s, static_cast<size_t>(it->position()), static_cast<size_t>(it->length()))) {

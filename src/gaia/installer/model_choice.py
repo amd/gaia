@@ -136,6 +136,18 @@ def optional_role(model_id: str) -> Optional[str]:
     return next((r for m, r in OPTIONAL_MODELS.items() if ids_match(model_id, m)), None)
 
 
+def withheld_reason(model_id: str) -> Optional[str]:
+    """Why setup doesn't offer *model_id* on this PC, or None when it does.
+
+    Only the read-aloud voice is withheld, where GAIA hasn't proven it.
+    """
+    if optional_role(model_id) != ROLE_VOICE:
+        return None
+    from gaia.config import speech_output_unproven_reason
+
+    return speech_output_unproven_reason()
+
+
 def is_vision_only(model_id: str) -> bool:
     return any(ids_match(model_id, m) for m in VISION_ONLY_MODELS)
 
