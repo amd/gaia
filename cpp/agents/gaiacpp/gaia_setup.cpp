@@ -31,7 +31,12 @@ namespace {
 constexpr const char* kStandardUrl = "http://localhost:13305/api/v1";
 // Hybrid's cheap model when hybrid_cheap_model is unset (gaia.llm.hybrid.DEFAULT_CHEAP_MODEL).
 constexpr const char* kHybridCheapModel = "amd.DeepSeek-V4.1-Flash";
-constexpr const char* kStartGaia = "Open GAIA, or run `gaia daemon start`, then try again.";
+// In the app GAIA is already open, so "Open GAIA" would send the user nowhere.
+std::string startGaia(Surface surface) {
+    return surface == Surface::App
+               ? "Press Start the model server below, then send your message again."
+               : "Open GAIA, or run `gaia daemon start`, then try again.";
+}
 
 std::string trim(const std::string& s) {
     const size_t b = s.find_first_not_of(" \t\r\n");
@@ -143,15 +148,19 @@ bool readsTerminal() {
 }
 
 // Nothing answered at `url`: the only case where starting GAIA is the remedy.
-std::string unreachable(const std::string& url, const ServerOrigin& origin, std::string why) {
+std::string unreachable(const std::string& url, const ServerOrigin& origin, std::string why,
+                        Surface surface = Surface::Terminal) {
     // The transport's generic remedy would contradict the one given here.
     const size_t generic = why.find(". Check that the service is running");
     if (generic != std::string::npos) why.erase(generic);
     switch (origin.source) {
         case ServerSource::GaiaRunning:
-            return "GAIA's model server at " + url + " did not answer (" + why + "). " + kStartGaia;
+            return surface == Surface::App
+                       ? "GAIA's model server stopped: nothing answered at " + url + " (" + why + "). " +
+                             startGaia(surface)
+                       : "GAIA's model server at " + url + " did not answer (" + why + "). " + startGaia(surface);
         case ServerSource::GaiaStopped:
-            return "GAIA's model server isn't running (it last ran at " + url + "). " + kStartGaia;
+            return "GAIA's model server isn't running (it last ran at " + url + "). " + startGaia(surface);
         case ServerSource::Default:
             return "No model server answered at " + url + " (" + why +
                    "), and GAIA's own model server isn't set up for this user (nothing in " + origin.label +
@@ -194,13 +203,13 @@ std::string bodyText(const std::string& body) {
 // Something answered at `url`, so it is running: the key or the address is what to fix.
 // `status` is 0 for a 2xx reply that isn't Lemonade's; `detail` is then what was wrong with it.
 std::string answeredWrong(const std::string& url, const ServerOrigin& origin, int status,
-                          const std::string& detail) {
+                          const std::string& detail, Surface surface = Surface::Terminal) {
     const std::string body = bodyText(detail);
     const std::string said = status ? "HTTP " + std::to_string(status) + (body.empty() ? "" : ": " + body)
                                     : "a reply that is " + body;
     if (origin.source == ServerSource::GaiaStopped) {
         return "GAIA's model server isn't running, and another program answered at its last address " + url +
-               " (" + said + "). " + kStartGaia;
+               " (" + said + "). " + startGaia(surface);
     }
     if (status == 401 || status == 403) {
         const std::string head = "The model server at " + url + " is running but answered " + said + ". ";
@@ -420,15 +429,18 @@ std::string keyForNamedServer(const GaiaServer& own, const std::string& url, con
     return key;
 }
 
-std::string serverDownReason(LemonadeClient& client, const ServerOrigin& origin) {
+std::string serverDownReason(LemonadeClient& client, const ServerOrigin& origin, Surface surface,
+                             bool* nothingAnswered) {
+    if (nothingAnswered) *nothingAnswered = false;
     if (!isLemonadeUrl(client.baseUrl())) return "";
     LemonadeHealth h = client.healthCheck();
     // A server busy with a load can miss one health check; one that answered has not.
     for (int attempt = 1; attempt < 3 && !h.error.empty() && !h.errorStatus; ++attempt) h = client.healthCheck();
     if (h.running) return "";
-    if (h.errorStatus) return answeredWrong(client.baseUrl(), origin, h.errorStatus, h.errorBody);
-    if (h.error.empty()) return answeredWrong(client.baseUrl(), origin, 0, "not JSON");
-    return unreachable(client.baseUrl(), origin, h.error);
+    if (h.errorStatus) return answeredWrong(client.baseUrl(), origin, h.errorStatus, h.errorBody, surface);
+    if (h.error.empty()) return answeredWrong(client.baseUrl(), origin, 0, "not JSON", surface);
+    if (nothingAnswered) *nothingAnswered = true;
+    return unreachable(client.baseUrl(), origin, h.error, surface);
 }
 
 void noteKeySource(ServerOrigin& origin, const AgentConfig& cfg, bool gaiaKey) {

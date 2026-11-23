@@ -295,8 +295,14 @@ struct ModelServer {
 };
 
 struct ServerDown : std::runtime_error {
-    using std::runtime_error::runtime_error;
+    bool nothingAnswered;  // no connection at all, so starting the server is the remedy
+    ServerDown(const std::string& m, bool nothing) : std::runtime_error(m), nothingAnswered(nothing) {}
 };
+
+// What the Agent UI reads to offer its own Start button (contract: final.failure).
+constexpr const char* kModelServerDown = "model_server_down";
+
+Surface surfaceOf(const std::string& name) { return name == "agent_ui" ? Surface::App : Surface::Terminal; }
 
 struct BadRequest : std::runtime_error {
     int status;
@@ -1109,8 +1115,9 @@ private:
                 {
                     LemonadeClient probe(server.baseUrl);
                     probe.setApiKey(server.apiKey);
-                    const std::string down = serverDownReason(probe, server.origin);
-                    if (!down.empty()) throw ServerDown(down);
+                    bool nothing = false;
+                    const std::string down = serverDownReason(probe, server.origin, surfaceOf(run->surface), &nothing);
+                    if (!down.empty()) throw ServerDown(down, nothing);
                 }
                 ensureAgent(*s, server);
                 {
@@ -1154,6 +1161,16 @@ private:
                     if (r.value("status", "success") == "error") {
                         terminal["failed"] = true;
                         terminal["failure"] = r.value("error", r.value("result", "The turn failed"));
+                        // The server may have gone mid-turn: say so, not the transport's generic advice.
+                        LemonadeClient probe(server.baseUrl);
+                        probe.setApiKey(server.apiKey);
+                        bool nothing = false;
+                        const std::string down =
+                            serverDownReason(probe, server.origin, surfaceOf(run->surface), &nothing);
+                        if (!down.empty()) {
+                            terminal["answer"] = down;
+                            terminal["failure"] = nothing ? std::string(kModelServerDown) : down;
+                        }
                     }
                     if (hasTurns) {
                         // Before this turn the history was exactly what the UI sent; the rest is this turn.
@@ -1167,7 +1184,8 @@ private:
                 // Same shape as a turn the model server failed mid-way.
                 terminal = run->cancelled ? json{{"type", "final"}, {"answer", ""}}
                                           : json{{"type", "final"}, {"answer", e.what()}, {"failed", true},
-                                                 {"failure", e.what()}};
+                                                 {"failure", e.nothingAnswered ? std::string(kModelServerDown)
+                                                                               : std::string(e.what())}};
             } catch (const std::exception& e) {
                 terminal = run->cancelled ? json{{"type", "final"}, {"answer", ""}}
                                           : json{{"type", "error"}, {"detail", e.what()}, {"status", 500}};

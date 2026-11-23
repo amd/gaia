@@ -3176,10 +3176,14 @@ def _dispatch_sidecar_query(
             hint or "no hint given",
         )
         if hint:
+            # GAIA is open here, so a "start GAIA" remedy is swapped for the app's.
             sse_handler._emit(
                 {
                     "type": "status",
-                    "message": f"Readiness check reported: {hint} — continuing.",
+                    "message": (
+                        f"Readiness check reported: {_agent_ui_wording(hint)} "
+                        "— continuing."
+                    ),
                 }
             )
 

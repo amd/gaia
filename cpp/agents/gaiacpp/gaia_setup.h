@@ -32,6 +32,12 @@ enum class ServerSource {
     Default,        // nothing found: Lemonade's standard port
 };
 
+/// Where the person reading a remedy is, so it names something they can do there.
+enum class Surface {
+    Terminal,  // a shell, the REPL or the terminal UI
+    App,       // the GAIA desktop app, which is open and has its own Restart
+};
+
 struct ServerOrigin {
     ServerSource source = ServerSource::Default;
     std::string label;  // e.g. "--base-url", "Settings file /x/config.json"
@@ -93,7 +99,8 @@ std::string keyForNamedServer(const GaiaServer& own, const std::string& url, con
 /// chose it: how to start it when nothing answers, or the key or address to
 /// fix when something answers with an error. Endpoints that are not Lemonade
 /// are not asked.
-std::string serverDownReason(LemonadeClient& client, const ServerOrigin& origin);
+std::string serverDownReason(LemonadeClient& client, const ServerOrigin& origin,
+                             Surface surface = Surface::Terminal, bool* nothingAnswered = nullptr);
 
 /// Which key `cfg` sends, recorded in `origin` for an error that has to name it.
 void noteKeySource(ServerOrigin& origin, const AgentConfig& cfg, bool gaiaKey);

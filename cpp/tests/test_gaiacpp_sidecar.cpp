@@ -1496,7 +1496,9 @@ TEST_F(GaiacppSidecar, UnreachableModelServerFailsTheTurnWithAReasonInsteadOfHan
     // Same shape as the Python flagship: a final marked failed, carrying the reason.
     ASSERT_EQ(last.value("type", ""), "final") << t.describe();
     EXPECT_EQ(last.value("failed", false), true) << last.dump();
-    const std::string failure = last.value("failure", "");
+    // `failure` is the kind the apps act on; the reason is the answer.
+    EXPECT_EQ(last.value("failure", ""), "model_server_down") << last.dump();
+    const std::string failure = last.value("answer", "");
     EXPECT_NE(failure.find("LEMONADE_BASE_URL"), std::string::npos) << "names what chose the server: " << failure;
     EXPECT_NE(failure.find(std::to_string(closedPort)), std::string::npos) << "names where it looked: " << failure;
 
@@ -1598,10 +1600,56 @@ TEST_F(GaiacppSidecar, GaiasModelServerStoppedSaysHowToStartIt) {
     json last = t.events().back();
     ASSERT_EQ(last.value("type", ""), "final") << t.describe();
     EXPECT_EQ(last.value("failed", false), true) << last.dump();
-    const std::string failure = last.value("failure", "");
-    EXPECT_NE(failure.find("GAIA's model server isn't running"), std::string::npos) << failure;
-    EXPECT_NE(failure.find("gaia daemon start"), std::string::npos) << failure;
-    EXPECT_EQ(failure.find("13305"), std::string::npos) << failure;
+    // The kind the Agent UI and the terminal UI read to offer their own way to start it.
+    EXPECT_EQ(last.value("failure", ""), "model_server_down") << last.dump();
+    const std::string answer = last.value("answer", "");
+    EXPECT_NE(answer.find("GAIA's model server isn't running"), std::string::npos) << answer;
+    EXPECT_NE(answer.find("gaia daemon start"), std::string::npos) << answer;
+    EXPECT_EQ(answer.find("13305"), std::string::npos) << answer;
+
+    // Inside the open app, "Open GAIA" and a terminal command are no remedy: name the app's button.
+    Turn app(port_, queryBody("run-stopped-app", "hello?", {{"session_id", "chat-app"}, {"surface", "agent_ui"}}));
+    ASSERT_TRUE(app.waitDone()) << app.describe();
+    last = app.events().back();
+    ASSERT_EQ(last.value("type", ""), "final") << app.describe();
+    EXPECT_EQ(last.value("failure", ""), "model_server_down") << last.dump();
+    const std::string inApp = last.value("answer", "");
+    EXPECT_NE(inApp.find("GAIA's model server isn't running"), std::string::npos) << inApp;
+    EXPECT_NE(inApp.find("Press Start the model server below, then send your message again."), std::string::npos)
+        << inApp;
+    EXPECT_EQ(inApp.find("gaia daemon start"), std::string::npos) << inApp;
+    EXPECT_EQ(inApp.find("Open GAIA"), std::string::npos) << inApp;
+}
+
+// The server answers when the turn starts and is gone by the time the model is called again.
+TEST_F(GaiacppSidecar, AModelServerThatDiesMidTurnIsNamedNotTheTransportsAdvice) {
+    auto server = std::make_unique<bench::MockLlmServer>();
+    writeGaiaServer(server->port(), "k");
+    const fs::path note = work_ / "note.txt";
+    server->pushResponse(toolReply("file_write", writeArgs(note, "hi")));
+    ASSERT_NO_FATAL_FAILURE(startSidecar(daemonEnv()));
+
+    const std::string run = "run-dies";
+    Turn t(port_, queryBody(run, "write it",
+                            {{"session_id", "chat-dies"},
+                             {"surface", "agent_ui"},
+                             {"allowed_paths", json::array({work_.string()})}}));
+    auto card = t.waitEvent([&](const json& e) { return isConfirmFor(e, note); });
+    ASSERT_TRUE(card) << t.describe();
+    server.reset();  // the turn is parked on its card; the model server goes away
+    auto allow = decide(run, "allow", (*card)["confirm_id"].get<std::string>());
+    ASSERT_TRUE(allow);
+    ASSERT_EQ(allow->status, 200) << allow->body;
+
+    ASSERT_TRUE(t.waitDone(seconds(120))) << t.describe();
+    const json last = t.events().back();
+    ASSERT_EQ(last.value("type", ""), "final") << t.describe();
+    EXPECT_EQ(last.value("failed", false), true) << last.dump();
+    EXPECT_EQ(last.value("failure", ""), "model_server_down") << last.dump();
+    const std::string answer = last.value("answer", "");
+    EXPECT_EQ(answer.find("Check that the service is running"), std::string::npos) << answer;
+    EXPECT_NE(answer.find("Press Start the model server below"), std::string::npos) << answer;
+    EXPECT_EQ(answer.find("gaia daemon start"), std::string::npos) << answer;
 }
 
 // 0.0.0.0 reaches this PC's listeners on Linux and macOS without being a loopback
