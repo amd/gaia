@@ -11,7 +11,19 @@ import textwrap
 import time
 from pathlib import Path
 
-from tests.unit.real_home_guard import ALLOW_ENV, changes, list_home
+import pytest
+
+from tests.unit.real_home_guard import (
+    ALLOW_ENV,
+    ENFORCE_ENV,
+    FAIL,
+    SKIP,
+    WARN,
+    changes,
+    guard_mode,
+    list_home,
+    settle,
+)
 
 _GUARD_DIR = Path(__file__).resolve().parent
 
@@ -24,7 +36,9 @@ def _seed(home: Path) -> Path:
     return gaia
 
 
-def test_a_session_that_writes_into_the_real_home_fails_and_names_the_paths(tmp_path):
+def test_in_ci_a_session_that_writes_into_the_real_home_fails_and_names_the_paths(
+    tmp_path,
+):
     """One pytest run under a stand-in HOME: a child's write and an edit in place."""
     home = tmp_path / "home"
     _seed(home)
@@ -61,8 +75,9 @@ def test_a_session_that_writes_into_the_real_home_fails_and_names_the_paths(tmp_
             """),
         encoding="utf-8",
     )
-    env = {**os.environ, "HOME": str(home), "USERPROFILE": str(home)}
+    env = {**os.environ, "HOME": str(home), "USERPROFILE": str(home), "CI": "true"}
     env.pop(ALLOW_ENV, None)
+    env.pop(ENFORCE_ENV, None)
     command = [sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider", "."]
 
     run = subprocess.run(
@@ -76,6 +91,48 @@ def test_a_session_that_writes_into_the_real_home_fails_and_names_the_paths(tmp_
     assert f"changed {os.path.join('chat', 'history.db')}" in report
     assert "config.json" not in report
     assert ALLOW_ENV in report
+
+
+@pytest.mark.parametrize(
+    "environ, mode",
+    [
+        ({}, WARN),
+        ({"CI": ""}, WARN),
+        ({"CI": "false"}, WARN),
+        ({"CI": "true"}, FAIL),
+        ({"CI": "1"}, FAIL),
+        ({ENFORCE_ENV: "1"}, FAIL),
+        ({ALLOW_ENV: "1"}, SKIP),
+        ({ALLOW_ENV: "1", "CI": "true", ENFORCE_ENV: "1"}, SKIP),
+    ],
+)
+def test_the_environment_picks_fail_warn_or_skip(environ, mode):
+    assert guard_mode(environ) == mode
+
+
+def test_on_a_developer_machine_a_changed_home_is_one_warning(tmp_path):
+    with pytest.warns(pytest.PytestWarning) as caught:
+        settle(["created gaia.log"], tmp_path / ".gaia", WARN)
+
+    (warning,) = caught
+    text = str(warning.message)
+    assert "created gaia.log" in text
+    assert ALLOW_ENV in text
+    assert ENFORCE_ENV in text
+
+
+def test_enforced_a_changed_home_fails_with_the_same_paths(tmp_path):
+    with pytest.raises(pytest.fail.Exception, match="created gaia.log"):
+        settle(["created gaia.log"], tmp_path / ".gaia", FAIL)
+
+
+@pytest.mark.parametrize("found, mode", [(["created gaia.log"], SKIP), ([], FAIL)])
+def test_allowed_writes_and_an_untouched_home_say_nothing(
+    tmp_path, recwarn, found, mode
+):
+    settle(found, tmp_path / ".gaia", mode)
+
+    assert not recwarn.list
 
 
 def test_a_home_that_is_left_alone_reports_nothing(tmp_path):
