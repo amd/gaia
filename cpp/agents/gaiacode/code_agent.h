@@ -69,6 +69,8 @@ private:
     ToolInfo observed(ToolInfo tool);
     /// index_codebase and search_code over code_.
     void registerCodeTools(std::shared_ptr<const Workspace> ws);
+    /// Why a shell command or file write must not run, by the checks gaiacpp shares; "" when it may.
+    std::string guardRefusal(const std::string& tool, const json& args) const;
 
     Options options_;
     std::unique_ptr<DocumentIndex> code_;

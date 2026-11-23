@@ -74,6 +74,13 @@ Exit codes: 0 when the run finished, 1 when it failed, 2 for a usage error.
 `run_checks` runs the repository's own code, so in a headless run it needs
 `--dangerously-skip-permissions`.
 
+A cloned repository is someone else's text, so some commands are refused before any approval, with
+the same checks gaiacpp makes. A command that uses a file name holding shell syntax (`x;rm -rf ~`)
+unquoted is refused, as is an edit to a file another program holds: one with a process lock beside
+it, or a header saying edits are overwritten. An inline script keeps its own `$name` instead of the
+shell blanking it. git never stops to ask for a password: a push with no saved credentials fails
+with git's own message.
+
 ## Building it
 
 gaiacode builds with the rest of the C++ framework (`GAIA_BUILD_GAIACODE`, on by default):
