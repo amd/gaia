@@ -37,9 +37,6 @@ public:
         // with fullAccess, which lets the tools reach anywhere the user can.
         std::vector<std::string> workspaceRoots;
         bool fullAccess = false;
-        // Asks the user to let the tools use a path outside the folders; true adds it.
-        // Unset = such a call is refused with the terminal's --allow-dir advice.
-        std::function<bool(const std::string& path)> askPathAccess;
         bool documents = true;       // index_document / query_documents
         std::string embeddingModel;  // empty = keyword-only retrieval
         bool memory = true;          // remember / recall across sessions
@@ -62,6 +59,11 @@ public:
         int helperMaxSteps = 30;         // one helper's step budget
         int helperTimeoutSeconds = 600;  // one helper's wall-clock limit
     };
+
+    /// Have a host ask the user before a tool is refused a path outside the
+    /// folders: `ask` returns true to let that path in for the agent's lifetime.
+    /// Never set, such a call is refused with the terminal's --allow-dir advice.
+    void setPathAccessPrompt(std::function<bool(const std::string& path)> ask);
 
     /// delegate_task for this agent: runs read-only helpers on stated tasks.
     ToolInfo delegateTaskTool();
@@ -234,7 +236,8 @@ private:
     std::unique_ptr<LemonadeClient> visionClient_;
 
     json delegateTasks(const json& args);
-    std::shared_ptr<const Workspace> workspace_;  // null with full access
+    std::shared_ptr<Workspace> workspace_;  // null with full access
+    std::function<bool(const std::string& path)> askPathAccess_;
     struct HelperTotals {
         int runs = 0, ok = 0, partial = 0, failed = 0, width = 0;
         UsageStats usage;

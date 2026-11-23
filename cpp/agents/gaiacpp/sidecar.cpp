@@ -484,8 +484,8 @@ private:
         if (!s.shell) s.shell = BashTools::newSession();
         o.shell = s.shell;
         Session* raw = &s;
-        o.askPathAccess = [this, raw](const std::string& path) { return askForPath(*raw, path); };
         auto agent = std::make_unique<GaiaAgent>(cfg, o);
+        agent->setPathAccessPrompt([this, raw](const std::string& path) { return askForPath(*raw, path); });
         auto console = std::make_unique<SidecarConsole>();
         SidecarConsole* consolePtr = console.get();
         agent->setOutputHandler(std::move(console));

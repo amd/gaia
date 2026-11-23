@@ -79,9 +79,6 @@ void GaiaAgent::registerTools() {
         toolRegistry().registerTool(BashTools::envInspect());
     } else {
         ws = std::make_shared<Workspace>(options_.workspaceRoots);
-        if (options_.askPathAccess) {
-            ws->setRemedy("That location can't be opened from this chat: if the user needs it, tell them so.");
-        }
         auto& reg = toolRegistry();
         reg.registerTool(Workspace::confine(FileIOTools::fileRead(), ws, {"path"}));
         reg.registerTool(Workspace::confine(FileIOTools::fileWrite(), ws, {"path"}));
@@ -157,9 +154,9 @@ void GaiaAgent::registerTools() {
             for (;;) {
                 const Workspace::Outside out = judge();
                 if (out.refusal.empty()) return "";
-                if (!options_.askPathAccess || out.askPath.empty() || out.askPath == asked) return out.refusal;
+                if (!askPathAccess_ || out.askPath.empty() || out.askPath == asked) return out.refusal;
                 asked = out.askPath;
-                if (!options_.askPathAccess(asked)) {
+                if (!askPathAccess_(asked)) {
                     return "Refused: the user did not allow GAIA to use " + asked +
                            ". Don't ask again or reach it another way this turn. Tell the user what you "
                            "could not do without it.";
@@ -260,6 +257,13 @@ void GaiaAgent::registerTools() {
                          [ws](const std::string& p) { return ws->checkPath(p); })
                    : std::function<std::string(const std::string&)>()));
         }
+    }
+}
+
+void GaiaAgent::setPathAccessPrompt(std::function<bool(const std::string& path)> ask) {
+    askPathAccess_ = std::move(ask);
+    if (workspace_ && askPathAccess_) {
+        workspace_->setRemedy("That location can't be opened from this chat: if the user needs it, tell them so.");
     }
 }
 

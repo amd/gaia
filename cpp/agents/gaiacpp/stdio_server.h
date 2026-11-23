@@ -21,6 +21,7 @@
 #include <iosfwd>
 #include <memory>
 #include <mutex>
+#include <set>
 #include <string>
 #include <thread>
 #include <vector>
@@ -116,6 +117,8 @@ private:
     json memoryDump();
     json switchableModels();
     ToolConfirmResult confirm(const std::string& tool, const json& args);
+    /// The terminal UI's folder prompt: true when the user let `path` in.
+    bool askForPath(const std::string& path);
     json statusEvent();
     std::ostream& log();
 
@@ -146,6 +149,8 @@ private:
     std::string decision_;
     unsigned long long turnCounter_ = 0;
     std::string runId_;
+    std::set<std::string> declinedPaths_;  // folder prompts answered no in declinedRun_
+    std::string declinedRun_;
 };
 
 }  // namespace gaia
