@@ -23,6 +23,7 @@
 
 #include <atomic>
 #include <filesystem>
+#include <functional>
 
 namespace gaia {
 
@@ -36,6 +37,9 @@ public:
         // with fullAccess, which lets the tools reach anywhere the user can.
         std::vector<std::string> workspaceRoots;
         bool fullAccess = false;
+        // Asks the user to let the tools use a path outside the folders; true adds it.
+        // Unset = such a call is refused with the terminal's --allow-dir advice.
+        std::function<bool(const std::string& path)> askPathAccess;
         bool documents = true;       // index_document / query_documents
         std::string embeddingModel;  // empty = keyword-only retrieval
         bool memory = true;          // remember / recall across sessions

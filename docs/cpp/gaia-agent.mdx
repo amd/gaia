@@ -267,6 +267,7 @@ Each request carries its whole conversation, so the server keeps no state betwee
 
 - Chat over Server-Sent Events: streamed text, tool activity, approvals with "always allow in this chat", Stop, and full access.
 - Per-chat folder scope (`allowed_paths`), working folder, attached documents, memory on, private or off, and internet off. Each can change between turns, and internet and memory also apply mid-turn.
+- A folder card when a tool reaches outside the chat's folders. A file tool given an outside path, or a shell command that names one, raises the flagship's `allow_path_access` prompt ("Let GAIA use this folder?"). Allow opens that path for the rest of the chat and the call goes on. A no, or 10 minutes without an answer, refuses the call, and the same path isn't asked about again in that turn. With full access on, the path opens without asking, as it does on the Python flagship. A network share, a link that leads out of the folders and a shell wildcard are refused without a card. The answer is kept in memory, so the card comes back after the agent restarts.
 - Each chat's tools (`/sessions/{id}/tools`), its "always" answers (`/sessions/{id}/grants`), the skills list (`/skills`) and the memory list (`/memory`).
 
 A few things answer the way an older flagship would, and the UI copes with each:
