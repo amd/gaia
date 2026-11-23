@@ -126,11 +126,6 @@ async def test_unkillable_stale_agent_is_reported_not_raised(monkeypatch):
     manager = TunnelManager(port=4200)
     manager._find_ngrok = lambda: "ngrok"
 
-    async def _no_ip():
-        manager._public_ip = None
-
-    manager._fetch_public_ip = _no_ip
-
     status = await manager.start()
 
     assert status["active"] is False

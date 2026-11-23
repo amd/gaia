@@ -493,7 +493,7 @@ describe('Phone access', () => {
         expect(screen.getByText('Starting…')).toBeInTheDocument();
 
         mocked.getTunnelStatus.mockResolvedValue({
-            active: true, url: 'https://x', token: 't', startedAt: null, error: null, publicIp: null,
+            active: true, url: 'https://x', token: 't', startedAt: null, error: null,
             device: { name: 'iPhone', lastSeen: '2026-10-16T20:00:00+00:00' },
         });
         act(() => announceMobileAccess(true));
@@ -504,7 +504,7 @@ describe('Phone access', () => {
 
     it('shows no error for phone access the user never got running', async () => {
         mocked.getTunnelStatus.mockResolvedValue({
-            active: false, url: null, token: null, startedAt: null, publicIp: null,
+            active: false, url: null, token: null, startedAt: null,
             error: 'ngrok is not installed. Install it from https://ngrok.com/download or run: choco install ngrok',
         });
         render(<EnvironmentSection sessionId={SID} busy={false} />);

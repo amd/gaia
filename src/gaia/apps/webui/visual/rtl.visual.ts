@@ -3560,7 +3560,7 @@ for (const locale of ['ar', 'en']) {
     });
 
     test(`Mobile access without ngrok (${locale})`, async ({ page }) => {
-        const missing = { active: false, url: null, token: null, startedAt: null, publicIp: null, reason: 'ngrok_not_installed', installCommands: ['choco install ngrok'], error: 'ngrok is not installed. Install it from https://ngrok.com/download or run:\n    choco install ngrok' };
+        const missing = { active: false, url: null, token: null, startedAt: null, reason: 'ngrok_not_installed', installCommands: ['choco install ngrok'], error: 'ngrok is not installed. Install it from https://ngrok.com/download or run:\n    choco install ngrok' };
         await open(page, '', locale, (p) => p.route('**/api/tunnel/start', (route) => route.fulfill({ json: missing })));
         await page.locator('.sb-icon-btn').filter({ has: page.locator('.lucide-smartphone') }).click();
         const dialog = page.locator('.mobile-modal');
@@ -3575,7 +3575,7 @@ for (const locale of ['ar', 'en']) {
     });
 
     test(`Mobile access with the tunnel on (${locale})`, async ({ page }) => {
-        const active = { active: true, url: 'https://quiet-otter.ngrok.app', token: 'a1b2c3d4-0000-4000-8000-00000000beef', startedAt: NOW.toISOString(), error: null, reason: null, installCommands: [], publicIp: '203.0.113.77', device: null };
+        const active = { active: true, url: 'https://quiet-otter.ngrok.app', token: 'a1b2c3d4-0000-4000-8000-00000000beef', startedAt: NOW.toISOString(), error: null, reason: null, installCommands: [], device: null };
         await open(page, '', locale, async (p) => {
             await p.route('**/api/tunnel/start', (route) => route.fulfill({ json: active }));
             await p.route('**/api/tunnel/status', (route) => route.fulfill({ json: active }));
@@ -3586,8 +3586,6 @@ for (const locale of ['ar', 'en']) {
         // ngrok is a third party; the dialog must not promise the data stays secure.
         await expect(dialog).toContainText('ngrok');
         await expect(dialog).not.toContainText('stays secure');
-        // ngrok asks for no password, so the public IP is never shown as one.
-        await expect(dialog).not.toContainText('203.0.113.77');
         await shot(page, `mobile-access-active-${locale}`);
         expect(await audit(page)).toEqual([]);
     });

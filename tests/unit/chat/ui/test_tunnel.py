@@ -34,7 +34,7 @@ class TestTunnelManager:
         assert status["error"] is None
         assert status["reason"] is None
         assert status["installCommands"] == []
-        assert status["publicIp"] is None
+        assert "publicIp" not in status
 
     def test_validate_token_inactive(self):
         """validate_token returns False when tunnel is inactive."""
@@ -214,12 +214,6 @@ class TestTunnelManager:
             "_check_ngrok_authtoken_configured",
             lambda: True,
         )
-
-        # Skip public-IP fetch (would hit the network)
-        async def _noop_public_ip(self):
-            self._public_ip = None
-
-        monkeypatch.setattr(TunnelManager, "_fetch_public_ip", _noop_public_ip)
 
         # Skip the stale-ngrok kill
         async def _noop_kill(self):

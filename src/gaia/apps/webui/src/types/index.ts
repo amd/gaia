@@ -873,7 +873,6 @@ export interface TunnelStatus {
     reason?: 'ngrok_not_installed' | null;
     /** This OS's ngrok install commands, set only with that reason. */
     installCommands?: string[];
-    publicIp: string | null;
     /** The device behind the latest authenticated remote request. */
     device?: { name: string; lastSeen: string } | null;
 }
