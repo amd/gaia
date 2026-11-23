@@ -191,7 +191,15 @@
     background: var(--accent-fill-hover);
 }
 
+/* A lasting grant: outlined, so it is never mistaken for Deny beside it. */
+.perm-btn.is-lasting {
+    border-style: dashed;
+    border-color: var(--border);
+    background: transparent;
+}
+
 .perm-btn.is-suggested {
+    border-style: solid;
     border-color: var(--accent-solid);
     color: var(--text-primary);
 }

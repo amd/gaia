@@ -1460,6 +1460,9 @@ export const enMessages = {
     'perm.chipAria': 'Permission mode: {mode}',
     'perm.fullLower': 'full access',
     'perm.askLower': 'ask before acting',
+    'perm.checking': 'Checking…',
+    'perm.unknown': 'Unknown',
+    'perm.chipAriaUnread': 'Permission mode: {state}',
 
     // The permission prompt above the composer
     'prompt.allowOnce': 'Allow once',
@@ -2103,6 +2106,9 @@ export const enMessages = {
     'setup.upgrading.failed': "GAIA couldn't update its local model server, so chats may not answer. Press Try again. If it keeps failing, close GAIA and open it again to retry the update. Details: {error}",
     'setup.upgrading.stopped': 'The update stopped before it finished.',
     'setup.upgrading.slow': 'Updating the local model server is taking longer than usual. Press Check again to keep waiting.',
+    'app.starting': 'Starting GAIA…',
+    'app.startingAria': 'Starting GAIA',
+    'app.loading': 'Loading',
     'setup.upgrading.retry': 'Try again',
     'setup.unknown.failed': 'Could not check whether GAIA is set up: {error}',
     'setup.unknown.modelUnread': 'GAIA could not read which model it uses ({error})',
