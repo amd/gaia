@@ -51,14 +51,14 @@ From download to your first answer takes a few minutes, plus the model download.
   </Step>
 
   <Step title="Ask your first question">
-    Type a question in the message box and press `Enter`. The **Try** row under the box fills in an example if you'd rather start from one.
+    Type a question in the message box and press `Enter`. The starters under the box fill it in if you'd rather start from one; nothing is sent until you press `Enter`.
 
     > *"Give me a recipe for banana bread"*
     >
     > *"Split a $142 dinner four ways with a 20% tip"*
 
     <Frame>
-      <img src="/images/agent-ui/new-chat.png" alt="A new chat with the message box and the Try row of examples" />
+      <img src="/images/agent-ui/new-chat.png" alt="A new chat with the message box and a row of three starters" />
     </Frame>
   </Step>
 
@@ -75,7 +75,7 @@ From download to your first answer takes a few minutes, plus the model download.
   </Step>
 
   <Step title="Look at what the answer used">
-    The panel on the right of a chat shows what the answer read, what the chat made and changed, and what it may touch. See [The session panel](/guides/agent-ui/documents#the-session-panel).
+    The panel on the right of a chat shows what the answer read, what the chat made and changed, and what it may touch. Open it with the panel button at the right of the chat's title bar; it also opens by itself the first time GAIA creates or changes a file in a chat. See [The session panel](/guides/agent-ui/documents#the-session-panel).
 
     <Frame>
       <img src="/images/agent-ui/answer.png" alt="A finished answer with the session panel open on the right" />
@@ -144,8 +144,9 @@ GAIA's own**, recommended because it is the version GAIA is tested with
 and keeps its own copy of each model, or **Use the one I have**, which
 keeps one copy of each model. **Your setup** then offers two cards of equal
 weight: a model on this PC, recommended and picked, with its
-download size and the reasons, and **Use a cloud model**, which downloads
-no chat model, needs an API key and sends each message to the provider.
+download size and the reasons (where gaiacpp is on the PC or can be
+downloaded, it also names the agent, and **Change** opens Customize at the
+agent choice), and **Use a cloud model**, which downloads no chat model, needs an API key and sends each message to the provider.
 **Download and start** takes the local setup; with the cloud card picked,
 **Continue** opens the provider's key. Each step's main action is at the
 bottom right, and the language can be changed from the first screen.
@@ -161,15 +162,15 @@ chat list shows only that device's models. Setup keeps llama.cpp on Vulkan
 when it starts. On an integrated GPU, **Change how memory is split** opens GPU
 memory from there or from Check this PC. It is optional: unless you pick a
 new size, GAIA changes nothing. **Agent** picks the program that runs GAIA,
-each shown with its download size: **gaiapy** (Full-featured, recommended and
+each shown with its download size: **Full-featured** (`gaiapy`, recommended and
 the default) has every tool and feature and is the most tested, but uses more
-memory and starts more slowly; **gaiacpp** (Fast and light, beta) starts in a
+memory and starts more slowly; **Fast and light** (`gaiacpp`, beta) starts in a
 fraction of a second and uses a few megabytes of memory, but is less tested.
-**Compare the two** under the choice lists what changes on gaiacpp: its memory
-is separate from gaiapy's, file changes can't be undone from the chat, document
-search matches words and not meaning, it can't create images, transcribe audio
-or turn a document into speech, and the context meter doesn't show how full the
-conversation is. Your pick is saved when you press **Continue**, before
+**Compare the two** under the choice lists what changes on Fast and light: its
+memory is separate from Full-featured's, file changes can't be undone from the
+chat, document search matches words and not meaning, it can't create images,
+transcribe audio or turn a document into speech, and the context meter doesn't
+show how full the conversation is. Your pick is saved when you press **Continue**, before
 setup's test chat, so that chat talks to the agent you chose. If gaiacpp isn't
 on the PC, the **Download** step gets it first, with its own progress bar,
 while the models wait; then it becomes the agent and the models download. If
@@ -222,10 +223,10 @@ keeps its file: its **Retry** tests it again without downloading it. A
 test that doesn't finish in time stops with an error instead of hanging. Running `gaia init`
 yourself beforehand also works.
 
-The real message is answered by the agent you chose. If you chose **gaiacpp**
-and that message fails after the model passed its own test, the failure names
-gaiacpp instead of the model, shows what the agent said went wrong, and offers
-**Finish setup on the Python agent** beside **Test again**. That button saves
+The real message is answered by the agent you chose. If you chose **Fast and
+light** and that message fails after the model passed its own test, the failure
+names Fast and light instead of the model, shows what the agent said went wrong,
+and offers **Finish setup on Full-featured** beside **Test again**. That button saves
 gaiapy as your agent and runs the tests again on it; setup is ready only when
 they pass. You can switch back in Settings › Agent & model.
 

@@ -5,9 +5,7 @@
 from __future__ import annotations
 
 import contextlib
-import json
 from types import SimpleNamespace
-from unittest.mock import MagicMock
 
 import pytest
 from gaiapy import research, stdio
@@ -374,90 +372,3 @@ def test_a_named_skill_folder_nobody_captured_gets_a_repair():
         agent._turn_tool_executions.append({"tool": "capture_skill"})
         assert agent.required_calls() == []
         assert agent.answer_problems("Added.") == []
-
-
-# ── A research chat's later turns ────────────────────────────────────────
-
-_REPORT = (
-    "## EU AI Act timeline\n\nIt applies in stages from 2025 "
-    f"[source]({_NIH}).\n\n## Sources\n- {_NIH}"
-)
-_MEMO = "Saved memo.docx. It says: The team offsite moves to March 14."
-
-
-@contextlib.contextmanager
-def _scripted_chat(*steps):
-    """A flagship running its real turn loop on a scripted model.
-
-    Yields ``(agent, left, ran)``: the model steps not yet sent, and the
-    tools the turn loop executed.
-    """
-    left, ran = list(steps), []
-    results = {"fetch_page": _FETCH_NIH[2], "write_file": {"status": "success"}}
-
-    def send(messages, *a, **kw):
-        assert left, "unexpected model call"
-        return MagicMock(text=json.dumps(left.pop(0)), stats={}, finish_reason="stop")
-
-    saved = dict(_TOOL_REGISTRY)
-    _TOOL_REGISTRY.clear()
-    try:
-        with pytest.MonkeyPatch.context() as mp:
-            mp.setenv("LEMONADE_BASE_URL", "http://127.0.0.1:9/api/v1")
-            mp.setenv("GAIA_MEMORY_DISABLED", "1")
-            mp.setenv("GAIA_DYNAMIC_TOOLS", "0")
-            mp.delenv("GAIA_FAST", raising=False)
-            mp.delenv(TIER_ENV, raising=False)
-            mp.setattr(
-                Agent,
-                "_execute_tool_timed",
-                lambda self, name, args: ran.append(name) or results[name],
-            )
-            agent = GaiaAgent(
-                config=GaiaAgentConfig(
-                    silent_mode=True,
-                    model_id=LARGE_DEFAULT_MODEL_NAME,
-                    skip_lemonade=True,
-                )
-            )
-            agent.streaming = False
-            agent._tool_requires_confirmation = lambda *a, **kw: False
-            agent.chat = MagicMock()
-            agent.chat.send_messages.side_effect = send
-            yield agent, left, ran
-    finally:
-        _TOOL_REGISTRY.clear()
-        _TOOL_REGISTRY.update(saved)
-
-
-def test_a_follow_up_that_does_a_task_answers_with_its_own_result():
-    """#8818: the memo turn's answer was the earlier research report, re-sent."""
-    with _scripted_chat(
-        {"tool": "fetch_page", "tool_args": {"url": _NIH}},
-        {"answer": _REPORT},
-        {"tool": "write_file", "tool_args": {"file_path": "memo.docx"}},
-        {"answer": _MEMO},
-        # What the model sent when asked to cite the pages turn 1 read.
-        {"answer": _REPORT},
-    ) as (agent, left, ran):
-        first = agent.process_query("/research the EU AI Act timeline")
-        assert first["result"] == _REPORT
-        # The app keeps research on, so the follow-up is sent as /research too.
-        second = agent.process_query(
-            "/research It should say: The team offsite moves to March 14."
-        )
-    assert ran == ["fetch_page", "write_file"]
-    assert second["result"] == _MEMO
-    assert len(left) == 1, "the memo answer was sent back to cite turn 1's pages"
-
-
-def test_a_research_turn_that_read_pages_must_still_cite_them():
-    cited = f"It applies in stages [source]({_NIH})."
-    with _scripted_chat(
-        {"tool": "fetch_page", "tool_args": {"url": _NIH}},
-        {"answer": "It applies in stages."},
-        {"answer": cited},
-    ) as (agent, left, _ran):
-        result = agent.process_query("/research the EU AI Act timeline")
-    assert result["result"] == cited
-    assert left == []

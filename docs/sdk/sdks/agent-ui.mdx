@@ -1389,9 +1389,11 @@ Deleting a chat deletes its copies.
     `{"exact": true, "model"}`. Otherwise (a cloud model, another model
     loaded, or the model server not answering) they are estimates and
     `tokenizer` is `{"exact": false, "reason"}`. Asking never loads or swaps a
-    model. `{"available": false, "reason"}` until an agent has answered in the
-    chat. A streaming turn sends estimates of the same numbers as a
-    `context_usage` event.
+    model. `{"available": false, "reason", "reason_code"?}` until an agent has
+    answered in the chat. `reason_code` (`not_answered_yet`,
+    `remeasure_next_turn`, `agent_too_old`) is set when GAIA wrote the reason,
+    so the UI can translate it; an agent's own error has none. A streaming
+    turn sends estimates of the same numbers as a `context_usage` event.
   </Accordion>
 
   <Accordion title="GET /api/chat/performance/{session_id}">

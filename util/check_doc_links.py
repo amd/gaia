@@ -549,6 +549,26 @@ def check_links(
     return sorted(results, key=lambda r: (r.status != "broken", r.file, r.line))
 
 
+def _github_ref_coverage(results: List[LinkResult]) -> Tuple[int, int]:
+    """Return the total and unverified counts for distinct GitHub references."""
+    refs: Set[Tuple[str, str, str]] = set()
+    conclusive: Set[Tuple[str, str, str]] = set()
+    for result in results:
+        if result.status == "skipped":
+            continue
+        match = GITHUB_ISSUE_PR_RE.match(result.url)
+        if not match:
+            continue
+        owner, repo, number = match.groups()
+        # Issue and PR numbers share a repository's namespace; URL fragments
+        # and repeated mentions should not affect the coverage threshold.
+        key = (owner.lower(), repo.lower(), number.lstrip("0") or "0")
+        refs.add(key)
+        if result.status in ("ok", "broken"):
+            conclusive.add(key)
+    return len(refs), len(refs - conclusive)
+
+
 def main():
     parser = argparse.ArgumentParser(description="Check documentation links")
     parser.add_argument(
@@ -612,20 +632,44 @@ def main():
         print()
 
     print("=" * 80)
-    print(f"Total links checked: {len(ok) + len(broken) + len(warnings)}")
+    print(f"Total links processed: {len(results)}")
     print(f"  OK:       {len(ok)}")
     print(f"  Broken:   {len(broken)}")
     print(f"  Warnings: {len(warnings)}")
     print(f"  Skipped:  {len(skipped)}")
 
+    github_total, github_unverified = _github_ref_coverage(results)
+    github_majority_unverified = github_unverified * 2 > github_total
+    if github_total:
+        coverage = (
+            f"{github_unverified}/{github_total} unique GitHub issue/PR "
+            "references unverified"
+        )
+        print(f"  {coverage}")
+        if github_unverified and os.environ.get("GITHUB_ACTIONS") == "true":
+            level = "error" if github_majority_unverified else "warning"
+            print(f"::{level} title=GitHub link verification incomplete::{coverage}")
+
+    print()
     if broken:
-        print()
         print("FAILED: Found broken links")
+    if github_majority_unverified:
+        print(
+            "FAILED: Could not verify most GitHub issue/PR references. "
+            "GitHub may be down or rate limiting; set GITHUB_TOKEN "
+            "(e.g. `export GITHUB_TOKEN=$(gh auth token)`) or run with "
+            "--internal-only."
+        )
+    if broken or github_majority_unverified:
         sys.exit(1)
-    else:
-        print()
+
+    if warnings:
+        print("PASSED: No broken links found; some links could not be verified")
+    elif ok:
         print("PASSED: All links valid")
-        sys.exit(0)
+    else:
+        print("PASSED: No links to check")
+    sys.exit(0)
 
 
 if __name__ == "__main__":

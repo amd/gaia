@@ -74,7 +74,7 @@ async function openNative() {
 describe('Memory page with gaiacpp selected', () => {
     it('says whose memory it shows, on every tab, and links to the agent setting', async () => {
         await openNative();
-        const line = 'Showing what gaiacpp remembers. The Python agent keeps a separate memory.';
+        const line = 'Showing what Fast and light remembers. Full-featured keeps a separate memory.';
         expect(banner()).toHaveTextContent(line);
 
         for (const name of [/Goals/, /Profile setup/, /Advanced/]) {
@@ -92,8 +92,8 @@ describe('Memory page with gaiacpp selected', () => {
         expect(within(row('Sister Odalys lives in Trondheim')).queryByText(/Picked up in a chat|Saved|You asked GAIA/)).not.toBeInTheDocument();
         // Its store may hold a date-shaped value; without due dates the page shows none.
         expect(within(row('Stand-up moves to nine')).queryByText(/Due /)).not.toBeInTheDocument();
-        expect(screen.getByText("gaiacpp doesn't keep due dates, so reminders can't be added here.")).toBeInTheDocument();
-        expect(screen.getByText("gaiacpp doesn't record where a memory came from.")).toBeInTheDocument();
+        expect(screen.getByText("Fast and light doesn't keep due dates, so reminders can't be added here.")).toBeInTheDocument();
+        expect(screen.getByText("Fast and light doesn't record where a memory came from.")).toBeInTheDocument();
 
         const kinds = within(screen.getByRole('combobox', { name: 'Kind' })).getAllByRole('option').map((o) => o.textContent);
         expect(kinds).not.toContain('Reminder');
@@ -106,15 +106,15 @@ describe('Memory page with gaiacpp selected', () => {
         await openNative();
 
         fireEvent.click(screen.getByRole('tab', { name: /Goals/ }));
-        expect(screen.getByText("Goals work on the Python agent's memory and aren't available while gaiacpp is your agent.")).toBeInTheDocument();
+        expect(screen.getByText("Goals work on Full-featured's memory and aren't available while Fast and light is your agent.")).toBeInTheDocument();
         expect(screen.queryByRole('button', { name: /New goal/i })).not.toBeInTheDocument();
 
         fireEvent.click(screen.getByRole('tab', { name: /Profile setup/ }));
-        expect(screen.getByText("Profile setup works on the Python agent's memory and isn't available while gaiacpp is your agent.")).toBeInTheDocument();
+        expect(screen.getByText("Profile setup works on Full-featured's memory and isn't available while Fast and light is your agent.")).toBeInTheDocument();
         expect(screen.queryByRole('button', { name: /Start Scan/i })).not.toBeInTheDocument();
 
         fireEvent.click(screen.getByRole('tab', { name: /Advanced/ }));
-        expect(screen.getByText("The Advanced tools work on the Python agent's memory and aren't available while gaiacpp is your agent.")).toBeInTheDocument();
+        expect(screen.getByText("The Advanced tools work on Full-featured's memory and aren't available while Fast and light is your agent.")).toBeInTheDocument();
         expect(screen.queryByRole('button', { name: 'Maintenance actions' })).not.toBeInTheDocument();
         expect(screen.queryByText('Knowledge browser')).not.toBeInTheDocument();
         expect(screen.queryByRole('button', { name: 'Delete all' })).not.toBeInTheDocument();
@@ -157,7 +157,7 @@ describe('Memory page with gaiacpp selected', () => {
         render(<MemoryDashboard />);
 
         expect(await screen.findByText(/gaiacpp is not running, so its memory cannot be read\./)).toBeInTheDocument();
-        expect(banner()).toHaveTextContent('Showing what gaiacpp remembers.');
+        expect(banner()).toHaveTextContent('Showing what Fast and light remembers.');
         for (const call of PYTHON_ONLY) expect(mockedApi[call], call).not.toHaveBeenCalled();
     });
 });
@@ -180,14 +180,14 @@ describe('Memory page with the Python agent selected', () => {
 
         fireEvent.click(screen.getByRole('tab', { name: /Advanced/ }));
         expect(await screen.findByRole('button', { name: 'Maintenance actions' })).toBeInTheDocument();
-        expect(screen.queryByText(/aren't available while gaiacpp is your agent/)).not.toBeInTheDocument();
+        expect(screen.queryByText(/aren't available while Fast and light is your agent/)).not.toBeInTheDocument();
     });
 
     it('says gaiacpp keeps a separate memory once gaiacpp has one', async () => {
         mockedApi.getMemoryStore.mockResolvedValue({ ...PYTHON_MEMORY_STORE, other_available: true });
         await openNative();
 
-        expect(banner()).toHaveTextContent('Showing what the Python agent remembers. gaiacpp keeps a separate memory.');
+        expect(banner()).toHaveTextContent('Showing what Full-featured remembers. Fast and light keeps a separate memory.');
         expect(within(banner()).getByRole('button', { name: 'Change agent in Settings › Agent & model' })).toBeInTheDocument();
     });
 
@@ -200,8 +200,8 @@ describe('Memory page with the Python agent selected', () => {
         mockedApi.getMemoryStore.mockResolvedValue(NATIVE_MEMORY_STORE);
         act(() => useChatStore.setState({ settingsSection: null }));
 
-        await waitFor(() => expect(banner()).toHaveTextContent('Showing what gaiacpp remembers.'));
-        await screen.findByText("gaiacpp doesn't record where a memory came from.");
+        await waitFor(() => expect(banner()).toHaveTextContent('Showing what Fast and light remembers.'));
+        await screen.findByText("Fast and light doesn't record where a memory came from.");
         expect(mockedApi.listGoals).toHaveBeenCalledTimes(1);
     });
 });

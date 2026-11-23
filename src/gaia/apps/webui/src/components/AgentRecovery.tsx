@@ -8,7 +8,9 @@ import { useT } from '../i18n/useT';
 import { ref, type Param } from '../i18n/registry';
 import { requestErrorParam } from '../utils/requestErrors';
 import { log } from '../utils/logger';
+import { useActiveAgentStore } from '../stores/activeAgentStore';
 import { AgentDownloadRow, useAgentDownload } from './setup/AgentDownload';
+import { WHY } from './setup/AgentChoice';
 import type { AgentProblem, AgentProgram } from '../types';
 
 const NAME = 'gaiacpp';
@@ -73,6 +75,7 @@ export function AgentRecovery({ problem, onRetry, kept = false }: Props) {
                 return;
             }
             await api.updateSettings({ flagship_agent: 'gaiapy' });
+            useActiveAgentStore.getState().setCurrent('gaiapy');
             if (!live.current) return;
             setRetrying(true);
             onRetry();
@@ -86,7 +89,9 @@ export function AgentRecovery({ problem, onRetry, kept = false }: Props) {
     const downloading = job?.state === 'downloading';
     const busy = downloading || switching || retrying;
     const canDownload = program?.can_download === true;
-    const reason = program && !program.can_download ? program.unavailable_reason : null;
+    const reason: Param | null = !program || program.can_download
+        ? null
+        : program.unavailable_code ? ref(WHY[program.unavailable_code]) : program.unavailable_reason;
 
     return (
         <div className="new-chat-setup-failed agent-recovery" role="alert">

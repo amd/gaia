@@ -18,6 +18,10 @@ Type a question, send it, and watch GAIA work through it. This page covers every
   while GAIA is working. In a chat, the folder chip beside the model names the
   folder GAIA works in; click it to see and manage the chat's folders in the
   session panel.
+- **Fast and light · Beta:** shown beside the model chip while the Fast and
+  light agent (`gaiacpp`) answers, so you know which agent you're talking to.
+  Click it to open **Settings › Agent & model**. The default Full-featured
+  agent shows no chip.
 - **Research:** the telescope chip next to the message box. While it is on,
   each message in that chat is researched: GAIA searches the web, reads the
   sources and writes a report that cites each page it read. Turned on before a
@@ -46,6 +50,8 @@ after the name and send it, and GAIA follows that skill for it:
 
 - **The line under an answer** says how long it took and where it ran
   ("Answered in 40 s on your GPU", or "via Fireworks AI" for a cloud model).
+  Time a permission prompt spent waiting for you is left out of that figure and
+  listed on its own ("Waited 1 min 20 s for you").
   Hover or click it for the rest: when the first word came, how many steps GAIA
   took, and the exact numbers, including the tokens the whole turn read and
   wrote across every model call. "Steps" is the agent's own count, the same
@@ -101,8 +107,12 @@ loading it. Your next message loads the chat's own model again.
 
 Ask for a recipe, a workout, how to fix something, a packing list, a trip plan,
 a tip split or a loan payment, and the answer arrives as a card you can use
-rather than a wall of text. The **Try** row on a new chat fills in an example
-of each, and the first card you get carries a short tip on what it can do.
+rather than a wall of text. A new chat offers up to three starters under the
+message box: up to two tasks for what this PC is set up for, such as asking about
+your indexed documents or working on code in your folder, and an example that
+ends in a card. Picking one fills in the message box for you to edit and send;
+nothing is sent until you do. The first card you get carries a short tip on what
+it can do.
 
 | Card | What you can do with it |
 |------|------------------------|
@@ -214,8 +224,10 @@ calling replays recorded calls and results as text.
 
 ### See how full the context is
 
-The meter beside the model chip shows how much of the model's context window the
-next message carries. Click it for the breakdown: system prompt, tools,
+Once the model's context window is more than half full, a meter beside the
+model chip shows how much of it the next message carries. Until then, and with
+an agent that doesn't report it, the figure is only in the session panel's
+**Context & performance** section. Click the meter for the breakdown: system prompt, tools,
 documents, conversation, and the room kept free for the reply. As the window
 fills, a one-line note above the message box says the oldest turns will soon
 drop out of the model's view; **Details** names them by their question, and you

@@ -8,7 +8,6 @@ import { ContextPanel } from './ContextPanel';
 import { pluralKey } from '../i18n/registry';
 import { useT } from '../i18n/useT';
 import { formatWindow } from './modelMeta';
-import { localizeContextReason } from '../utils/liveStatus';
 import type { ContextUsage } from '../types';
 import './ContextMeter.css';
 
@@ -26,9 +25,11 @@ const PARTS = [
     { key: 'query', label: 'ctx.meter.part.query' },
 ] as const;
 
+/** The composer shows the meter only past this fill; the session panel always has the figure. */
+const METER_SHOWN_ABOVE_PCT = 50;
+
 interface ContextMeterProps {
     usage: ContextUsage | null;
-    unavailable?: string | null;
     /** With a session, the popover links to the full Context & performance panel. */
     sessionId?: string;
     busy?: boolean;
@@ -38,7 +39,7 @@ interface ContextMeterProps {
 }
 
 /** How full the model's context window is, with a breakdown on click. */
-export function ContextMeter({ usage, unavailable, sessionId, busy = false, onUsage, onDetails }: ContextMeterProps) {
+export function ContextMeter({ usage, sessionId, busy = false, onUsage, onDetails }: ContextMeterProps) {
     const t = useT();
     const anchor = useRef<HTMLButtonElement>(null);
     const [open, setOpen] = useState(false);
@@ -46,19 +47,10 @@ export function ContextMeter({ usage, unavailable, sessionId, busy = false, onUs
     const panel = details && sessionId
         ? <ContextPanel sessionId={sessionId} busy={busy} onUsage={onUsage} onClose={() => setDetails(false)} />
         : null;
-    if (!usage) {
-        if (!unavailable) return null;
-        // A dash, not an empty bar: nothing is measured yet, and the title says when it will be.
-        const why = localizeContextReason(t, unavailable);
-        return (
-            <span className="context-meter is-empty" title={why} aria-label={`${t('ctx.context')}: ${why}`}>
-                <span className="context-meter-label">{t('ctx.context')}</span>
-                <span aria-hidden="true">–</span>
-            </span>
-        );
-    }
+    if (!usage) return null;
     const pct = Math.min(100, Math.round((usage.used / usage.window) * 100));
     const warn = usage.at_risk.length > 0;
+    if (pct <= METER_SHOWN_ABOVE_PCT && !warn && !open && !panel) return null;
     const free = Math.max(0, usage.window - usage.used - usage.reply_reserve);
     // The meter fills against GAIA's admitted window, which can be far below a cloud model's own.
     const modelWindow = usage.model_window != null && usage.model_window > usage.window ? usage.model_window : null;

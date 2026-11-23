@@ -142,12 +142,22 @@ describe('AgentInfoSection', () => {
         render(<AgentInfoSection sessionId={SID} busy={false} />);
 
         const line = await screen.findByText(/Runs on/);
-        expect(line).toHaveTextContent('Runs on gaiacpp Beta');
+        expect(line).toHaveTextContent('Runs on Fast and light (gaiacpp) Beta');
         expect(within(line).getByText('Beta')).toHaveClass('setup-choice-tag');
     });
 
-    it.each([['gaiapy' as const], [null]])('shows no Beta label for program %s', async (program) => {
-        mocked.getCapabilities.mockResolvedValue({ session_id: SID, agent_type: 'gaia', tools: TOOLS, program });
+    it('names the Full-featured agent too, without a Beta label', async () => {
+        mocked.getCapabilities.mockResolvedValue({ session_id: SID, agent_type: 'gaia', tools: TOOLS, program: 'gaiapy' });
+        expand();
+        render(<AgentInfoSection sessionId={SID} busy={false} />);
+
+        const line = await screen.findByText(/Runs on/);
+        expect(line).toHaveTextContent(/^Runs on Full-featured \(gaiapy\)$/);
+        expect(screen.queryByText('Beta')).not.toBeInTheDocument();
+    });
+
+    it('says nothing about the program for another agent', async () => {
+        mocked.getCapabilities.mockResolvedValue({ session_id: SID, agent_type: 'gaia', tools: TOOLS, program: null });
         expand();
         render(<AgentInfoSection sessionId={SID} busy={false} />);
 
