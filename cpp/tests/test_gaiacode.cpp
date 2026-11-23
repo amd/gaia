@@ -654,6 +654,8 @@ TEST(GaiacodeUndo, AWriteTheToolRefusesKeepsNoCopy) {
     // A file outside the workspace is refused before anything reads it, copies included.
     const fs::path outside = repo.dir.parent_path() / (repo.dir.filename().u8string() + "-outside.txt");
     writeFile(outside, "private\n");
+    ASSERT_FALSE(fs::exists(store / "chat-r" / "20261122120000-0123abd2"))
+        << "the failed edit's copy and record are gone from disk";
     // Any copy attempt now fails with its own error: the refusal must come before it.
     writeFile(store / "chat-r" / "20261122120000-0123abd2" / "blobs", "not a folder");
     const json away = repo.run("file_write", {{"path", outside.u8string()}, {"content", "x"}});
