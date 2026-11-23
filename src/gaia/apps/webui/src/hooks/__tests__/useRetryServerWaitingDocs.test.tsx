@@ -5,7 +5,7 @@
 
 import { act, render, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { useRetryServerWaitingDocs } from '../useRetryServerWaitingDocs';
+import { MAX_TRIES_WHILE_UP, RETRY_GAP_MS, useRetryServerWaitingDocs } from '../useRetryServerWaitingDocs';
 import { useChatStore } from '../../stores/chatStore';
 import * as api from '../../services/api';
 import type { Document, SystemStatus } from '../../types';
@@ -73,6 +73,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+    vi.restoreAllMocks();
     useChatStore.setState({ systemStatus: null, documents: [] });
 });
 
@@ -217,5 +218,46 @@ describe('useRetryServerWaitingDocs', () => {
 
         expect(mockedApi.reindexDocument).toHaveBeenCalledTimes(1);
         expect(useChatStore.getState().documents[0]?.indexing_status).toBe('failed');
+    });
+
+    it('retries a document that failed in an outage too short for the status poll to see (#8874)', async () => {
+        render(<Harness />);
+        setServer(true);
+        await waitFor(() => expect(mockedApi.listDocuments).toHaveBeenCalled());
+        await act(async () => {});
+        expect(mockedApi.reindexDocument).not.toHaveBeenCalled();
+
+        // The server never reads as down; the library learns the new row failed.
+        rows = [base];
+        act(() => { useChatStore.setState({ documents: [{ ...base }] }); });
+
+        await waitFor(() => expect(useChatStore.getState().documents.find((d) => d.id === 'doc-down')?.indexing_status).toBe('complete'));
+        expect(mockedApi.reindexDocument).toHaveBeenCalledTimes(1);
+    });
+
+    it('while the server reads as up, retries a still-waiting document after a gap, a bounded number of times', async () => {
+        let now = 1_000_000;
+        vi.spyOn(Date, 'now').mockImplementation(() => now);
+        rows = [base];
+        reindexOutcome = async () => 'model_server_down';
+        useChatStore.setState({ documents: [{ ...base }] });
+        render(<Harness />);
+        setServer(true);
+        await waitFor(() => expect(mockedApi.reindexDocument).toHaveBeenCalledTimes(1));
+        await act(async () => {});
+
+        // A status poll before the gap is up does nothing.
+        setServer(true);
+        await act(async () => {});
+        expect(mockedApi.reindexDocument).toHaveBeenCalledTimes(1);
+
+        for (let i = 2; i <= MAX_TRIES_WHILE_UP + 2; i++) {
+            now += RETRY_GAP_MS;
+            setServer(true);
+            await act(async () => {});
+            await act(async () => {});
+        }
+        await waitFor(() => expect(mockedApi.reindexDocument).toHaveBeenCalledTimes(MAX_TRIES_WHILE_UP));
+        expect(mockedApi.reindexDocument).toHaveBeenCalledTimes(MAX_TRIES_WHILE_UP);
     });
 });
