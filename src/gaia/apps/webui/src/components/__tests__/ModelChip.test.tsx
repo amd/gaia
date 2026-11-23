@@ -286,6 +286,40 @@ describe('ModelChip', () => {
         await waitFor(() => expect(mockedApi.selectModel).toHaveBeenCalledWith('Qwen3-8B-GGUF'));
     });
 
+    it('switches to a picked model when its download ends with the window hidden', async () => {
+        let started = false;
+        let listsAfterStart = 0;
+        mockedApi.listProviderModels.mockImplementation(async (id) => {
+            if (id !== 'local') return { provider: id, models: [] };
+            const done = started && listsAfterStart++ > 0;
+            const qwen = done
+                ? model('Qwen3-8B-GGUF')
+                : model('Qwen3-8B-GGUF', {
+                    downloaded: false,
+                    download_progress: started ? { state: 'downloading', percent: 40 } as never : undefined,
+                });
+            return { provider: id, models: [model('Gemma-4-E4B-it-GGUF'), qwen] };
+        });
+        mockedApi.downloadModel.mockImplementation(async () => { started = true; return {} as never; });
+        mockedApi.selectModel.mockResolvedValue({ ...LOCAL_ACTIVE, model: 'Qwen3-8B-GGUF' });
+        const visibility = vi.spyOn(document, 'visibilityState', 'get');
+        vi.useFakeTimers({ shouldAdvanceTime: true });
+        try {
+            render(<ModelChip />);
+            const dialog = await openPicker();
+            fireEvent.click(await rowFor(dialog, /Qwen3/));
+            confirmDownload(dialog);
+            await waitFor(() => expect(listsAfterStart).toBe(1));
+            visibility.mockReturnValue('hidden');
+            document.dispatchEvent(new Event('visibilitychange'));
+            await vi.advanceTimersByTimeAsync(2100);
+            await waitFor(() => expect(mockedApi.selectModel).toHaveBeenCalledWith('Qwen3-8B-GGUF'));
+        } finally {
+            vi.useRealTimers();
+            visibility.mockRestore();
+        }
+    });
+
     it('keeps the pick while the download starts, and when the list lags its finish', async () => {
         // As the server does it: 202 before any progress, then progress, then
         // "complete" one poll before the list says downloaded.
