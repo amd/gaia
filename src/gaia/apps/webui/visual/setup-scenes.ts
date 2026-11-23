@@ -559,6 +559,7 @@ export const SETUP_SCENES: SetupScene[] = [
             await expect(page.locator('.mc-chip.is-untested')).toBeVisible();
             await expect(page.locator('.mc-warn.is-big').first()).toBeVisible();
             await expect(page.locator('.mc-row.is-off')).toBeVisible();
+            await expect(page.getByRole('checkbox', { name: /Keep trying if the connection drops|واصل المحاولة/ })).toBeChecked();
         },
     },
     ...[false, true].flatMap((noGaiacpp) => [false, true].map((expanded): SetupScene => ({
