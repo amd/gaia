@@ -501,6 +501,10 @@ _RAN_CHMOD = [
     [
         "Done, alpha is beta now. It's writable now.",
         "Done. I made the file writable first.",
+        "Done, alpha is beta now. I didn't use the shell.",
+        "Done. No command was run; no commands were run at all.",
+        "Done. I never touched permissions.",
+        "Done. I didn’t change the file's permissions.",
     ],
 )
 def test_saying_only_the_effect_does_not_disclose_the_step(answer):
@@ -533,3 +537,11 @@ def test_ordinary_requests_do_not_trigger_the_check(request_text):
 
     answer = "Done, alpha is beta now."
     assert undisclosed_forbidden_steps(request_text, _RAN_CHMOD, answer) == ""
+
+
+def test_naming_the_step_that_ran_owns_up():
+    from gaia.agents.base.forbidden_steps import undisclosed_forbidden_steps
+
+    request = "Replace alpha with beta in ro.txt. Don't change permissions."
+    answer = "Done, but I ran chmod +x, which you'd ruled out."
+    assert undisclosed_forbidden_steps(request, _RAN_CHMOD, answer) == ""

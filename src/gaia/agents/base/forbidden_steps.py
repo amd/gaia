@@ -84,6 +84,22 @@ def _instructs(pattern: re.Pattern, text: str) -> bool:
     return False
 
 
+#: "I didn't use the shell", "no command was run": a denial, not owning up.
+_DENIED_BEFORE = re.compile(
+    r"(?:\b(?:not|never|no|without)|n't)\s+"
+    r"(?:(?:use|used|using|run|ran|running|touch|touched|touching|change|changed|"
+    r"changing|modify|modified|call|called|open|opened|need|needed|any|the|a|an|"
+    r"your|my|its|to|have|has|been|was|were|it|file|file's)\s+){0,3}$",
+    re.IGNORECASE,
+)
+
+
+def _owns_up(pattern: re.Pattern, answer: str) -> bool:
+    return any(
+        not _DENIED_BEFORE.search(answer[: m.start()]) for m in pattern.finditer(answer)
+    )
+
+
 def ruled_out(request: str) -> List[str]:
     """What *request* explicitly forbids, as phrases for a check message."""
     text = _normalised(request)
@@ -119,8 +135,9 @@ def undisclosed_forbidden_steps(
     if not commands:
         return ""
     words = {c.split()[0].lower() for c in commands}
-    if _MENTIONS_STEP.search(answer or "") or any(
-        re.search(rf"(?<![\w-]){re.escape(w)}(?![\w-])", answer or "", re.IGNORECASE)
+    said = _normalised(answer)
+    if _owns_up(_MENTIONS_STEP, said) or any(
+        _owns_up(re.compile(rf"(?<![\w-]){re.escape(w)}(?![\w-])", re.I), said)
         for w in words
     ):
         return ""
