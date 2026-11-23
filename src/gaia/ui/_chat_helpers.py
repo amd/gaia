@@ -3031,8 +3031,12 @@ def _dispatch_sidecar_query_unheld(
     recording: TurnRecording | None = None,
     max_steps: int | None = None,
     turns: list | None = None,
+    picked_model: str | None = None,
 ) -> None:
     """Relay one chat turn to *agent_type*'s daemon sidecar (#2109, #4161).
+
+    *picked_model* is the model the user chose in the app's picker, if any: a
+    harness with no default model takes only that or the explicit choice.
 
     *record_followup* saves a message the user added mid-turn to the chat. A
     sidecar that takes such messages gets them while it runs; otherwise the
@@ -3131,12 +3135,10 @@ def _dispatch_sidecar_query_unheld(
         else None
     )
     if harness in NO_DEFAULT_MODEL:
-        # A chat's own pick stands; one still on the filled-in default is no choice at all.
+        # The model picked in the app, else the explicit choice; never the chat's filled-in default.
         from gaia.llm.hybrid import start_model
-        from gaia.ui.database import resolved_default_model
 
-        picked = model_id if model_id and model_id != resolved_default_model() else None
-        model_id = start_model(picked) if picked else chosen_model()
+        model_id = start_model(picked_model) if picked_model else chosen_model()
         if model_id and model_id.startswith("claude-"):
             sse_handler._emit(
                 {
@@ -5172,6 +5174,7 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                         ),
                         recording=recording,
                         turns=relay_turns,
+                        picked_model=custom_model,
                     )
                     result_holder["model_messages"] = getattr(
                         sse_handler, "relayed_model_messages", None

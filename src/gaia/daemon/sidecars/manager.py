@@ -427,7 +427,12 @@ class AgentSidecarManager:
                 f"Cannot start the GAIA agent: {harness} is chosen as the agent but "
                 f"it is not installed on this PC (looked in: {looked}). {get_it} "
                 f"to the Python agent in Settings › Agent & model. Sidecar logs: {self.log_dir}.",
-                kind=KIND_HARNESS_MISSING,
+                # Only gaiacpp can be downloaded; for the others the fix is another choice.
+                kind=(
+                    KIND_HARNESS_MISSING
+                    if harness == fetch.NATIVE_FLAGSHIP
+                    else KIND_HARNESS_UNAVAILABLE
+                ),
             )
         try:
             self.installed_binary_version = fetch.native_flagship_version(

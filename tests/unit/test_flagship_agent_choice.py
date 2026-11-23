@@ -299,6 +299,8 @@ def test_a_missing_gaiacode_names_its_variable_and_never_runs_python(
         _flagship_manager().build_spawn_command(port=45123)
     text = str(e.value)
     assert "gaiacode" in text and "GAIA_GAIACODE_PATH" in text and "Settings" in text
+    # Nothing to download: the Agent UI says to choose another, never "download it".
+    assert e.value.kind == KIND_HARNESS_UNAVAILABLE
     from gaia.ui.routers.agent_programs import HARNESS_UNAVAILABLE, chosen_agent_problem
 
     problem = chosen_agent_problem()
@@ -612,7 +614,7 @@ def test_gaiacode_takes_only_a_model_the_user_chose(monkeypatch):
     assert chosen_model() == "Qwen3.6-35B-A3B-GGUF"
 
 
-def _relay_once(monkeypatch, model):
+def _relay_once(monkeypatch, model, picked=None):
     """Run one Agent UI turn for gaia; return (events, the model relay_query was given)."""
     from gaia.ui.sidecar import daemon_client, relay
 
@@ -641,7 +643,9 @@ def _relay_once(monkeypatch, model):
             events.append(event)
 
     request = ChatRequest(session_id="s1", message="hi", agent_type="gaia")
-    _chat_helpers._dispatch_sidecar_query(_Handler(), request, [], model, "gaia")
+    _chat_helpers._dispatch_sidecar_query(
+        _Handler(), request, [], model, "gaia", picked_model=picked
+    )
     return events, sent
 
 
@@ -654,16 +658,13 @@ def test_an_agent_ui_turn_never_sends_gaiacode_a_filled_in_model(monkeypatch):
     assert "model" not in sent, "the turn reached gaiacode"
 
 
-def test_a_chat_on_its_own_model_runs_gaiacode_on_it(monkeypatch):
-    # Two chats on different models: each runs on its own, not on the last one picked.
-    from gaia.ui.database import resolved_default_model
+def test_gaiacode_runs_on_the_model_picked_in_the_app(monkeypatch):
+    # The picker's choice wins over last_model, which another app may have written.
+    from gaia.ui.sidecar import daemon_client
 
     monkeypatch.delenv("GAIA_MODEL_ID", raising=False)
     GaiaConfig.save_key("last_model", "fireworks.glm-5p3")
     _save_raw("gaiacode")
-    picked = "Qwen3.5-4B-GGUF"
-    assert picked != resolved_default_model()
-    from gaia.ui.sidecar import daemon_client
 
     class _Ready:
         base_url = "http://127.0.0.1:1"
@@ -672,9 +673,12 @@ def test_a_chat_on_its_own_model_runs_gaiacode_on_it(monkeypatch):
             return 200, {"model": {"present": True}}
 
     monkeypatch.setattr(daemon_client.SidecarHandle, "proxy", lambda self: _Ready())
-    events, sent = _relay_once(monkeypatch, picked)
+    events, sent = _relay_once(monkeypatch, "Qwen3.5-4B-GGUF", picked="Qwen3.5-4B-GGUF")
     assert not [e for e in events if e["type"] == "agent_error"], events
-    assert sent["model"] == picked
+    assert sent["model"] == "Qwen3.5-4B-GGUF"
+    # Whatever the chat's row holds, with no pick it is the explicit choice.
+    events, sent = _relay_once(monkeypatch, "Qwen3.5-4B-GGUF")
+    assert sent["model"] == "fireworks.glm-5p3"
 
 
 # ---------------------------------------------------------------- a switch made elsewhere
