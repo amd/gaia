@@ -19,6 +19,7 @@
 #include <gaia/git_tools.h>
 #include <gaia/process.h>
 #include <gaia/security.h>
+#include <gaia/shell_guards.h>
 
 #include "../gaiacpp/bash_tools.h"
 #include "check_runner.h"
@@ -86,8 +87,8 @@ void CodeAgent::registerTools() {
     }
     reg.registerTool(observed(runChecksTool(options_.shell, ws)));
     // One pre-check for every tool, before any approval card: what would be refused is never asked about.
-    reg.setPreCheck([ws, off = options_.internetOff, shell = options_.shell](const ToolInfo& tool,
-                                                                            const json& args) -> std::optional<json> {
+    reg.setPreCheck([this, ws, off = options_.internetOff, shell = options_.shell](
+                        const ToolInfo& tool, const json& args) -> std::optional<json> {
         auto refuse = [](const std::string& why) { return std::optional<json>(json{{"status", "error"}, {"error", why}}); };
         const bool shellLike = tool.name == "bash_execute" || tool.name == "run_checks";
         if (off && off->load()) {
@@ -103,7 +104,11 @@ void CodeAgent::registerTools() {
                 if (!why.empty()) return refuse(why);
             }
         }
-        if (!ws || !shellLike) return std::nullopt;
+        if (!ws) return std::nullopt;
+        if (!shellLike) {
+            const std::string guard = guardRefusal(tool.name, args);
+            return guard.empty() ? std::nullopt : refuse(guard);
+        }
         const bool posix = !BashTools::detectShell().empty();
         std::string why;
         if (args.contains("command") && args["command"].is_string()) {
@@ -117,8 +122,27 @@ void CodeAgent::registerTools() {
             }
             why = ws->checkPath(dir.u8string());
         }
+        if (why.empty()) why = guardRefusal(tool.name, args);
         return why.empty() ? std::nullopt : refuse(why);
     });
+    if (ws) {
+        // The model means the script's own $; the shell would blank it and the script would still exit 0.
+        reg.setArgRewrite([this](const ToolInfo& tool, json& args) {
+            if ((tool.name != "bash_execute" && tool.name != "run_checks") || !args.is_object() ||
+                !args.contains("command") || !args["command"].is_string()) {
+                return;
+            }
+            if (BashTools::detectShell().empty()) return;  // cmd doesn't expand $name in quotes this way
+            std::string ran;  // the shell session keeps what earlier commands exported
+            for (const auto& c : turnToolCalls()) {
+                if ((c.name == "bash_execute" || c.name == "run_checks") && c.args.is_object() &&
+                    c.args.contains("command") && c.args["command"].is_string()) {
+                    ran += c.args["command"].get<std::string>() + "\n";
+                }
+            }
+            args["command"] = shellguards::keepScriptDollars(args["command"].get<std::string>(), ran);
+        });
+    }
     if (options_.github) {
         const std::shared_ptr<ShellSession> shell = options_.shell;
         registerGitHubTools(
@@ -126,12 +150,40 @@ void CodeAgent::registerTools() {
             options_.repo, options_.githubWrites, GitHubEnvironment::real(),
             [off = options_.internetOff] { return off && off->load(); });
     }
-    if (skills_ && !skills_->skills().empty()) skills_->registerTools(reg);
+    if (skills_ && !skills_->skills().empty()) {
+        // ~/.gaia/skills holds the Python agent's skills too: offer only those gaiacode can follow.
+        skills_->requireTools([&reg](const std::string& tool) { return reg.hasTool(tool); });
+        skills_->registerTools(reg);
+    }
 }
 
 namespace {
 bool mutatesAfterTests(const std::string& command);
 }  // namespace
+
+std::string CodeAgent::guardRefusal(const std::string& tool, const json& args) const {
+    if (!args.is_object()) return "";
+    if (tool == "bash_execute" || tool == "run_checks") {
+        if (!args.contains("command") || !args["command"].is_string()) return "";
+        const std::string command = args["command"].get<std::string>();
+        // A file name holding `;` or `$(` (a planted one, in a cloned repository) runs if used unquoted.
+        std::string why = shellguards::unquotedHostileName(command, shellguards::hostileNames(options_.workspaceRoots));
+        if (why.empty()) why = shellguards::oneLineBlockRefusal(command);
+        return why;
+    }
+    if ((tool == "file_write" || tool == "file_edit") && args.contains("path") && args["path"].is_string()) {
+        // Whole words: a folder named locked_config is not the user acknowledging a lock.
+        static const std::regex mentionsLock(R"(\b(?:lock|locked|lockfile|managed|generated|anyway)\b)",
+                                             std::regex::icase);
+        if (std::regex_search(turnRequest(), mentionsLock)) return "";
+        const std::string path = args["path"].get<std::string>();
+        const std::string guard = shellguards::guardedFileReason(fs::u8path(path));
+        if (guard.empty()) return "";
+        return path + " is guarded: " + guard +
+               ". Don't edit it or work around the guard. Tell the user what holds it, and ask before changing it.";
+    }
+    return "";
+}
 
 ToolInfo CodeAgent::observed(ToolInfo tool) {
     ToolCallback inner = std::move(tool.callback);

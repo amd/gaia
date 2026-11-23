@@ -556,6 +556,36 @@ TEST(GaiacodeEvents, ARelativePathOutOfTheWorkspaceRunsNothingThere) {
     fs::remove_all(outside);
 }
 
+TEST(GaiacodeGuards, APlantedFileNameAndAGuardedFileAreRefusedBeforeAnyApproval) {
+    if (BashTools::detectShell().empty()) GTEST_SKIP() << "file names with ';' need a POSIX file system";
+    MeasuredRepo repo("gaiacode-guards");
+    writeFile(repo.dir / "x;touch pwned", "");
+    writeFile(repo.dir / "state.json", "{}\n");
+    writeFile(repo.dir / "state.json.lock", "pid 4242\n");
+    bool asked = false;
+    repo.agent->setToolConfirmCallback([&](const std::string&, const json&) {
+        asked = true;
+        return ToolConfirmResult::ALLOW_ONCE;
+    });
+    const json shell = repo.run("bash_execute", {{"command", "cat x;touch pwned"}});
+    EXPECT_EQ(shell.value("status", ""), "error") << shell.dump();
+    EXPECT_NE(shell.value("error", "").find("shell syntax"), std::string::npos) << shell.dump();
+    EXPECT_FALSE(fs::exists(repo.dir / "pwned"));
+    const json write = repo.run("file_write", {{"path", (repo.dir / "state.json").u8string()}, {"content", "{}"}});
+    EXPECT_EQ(write.value("status", ""), "error") << write.dump();
+    EXPECT_NE(write.value("error", "").find("is guarded"), std::string::npos) << write.dump();
+    EXPECT_FALSE(asked) << "both are refused before the user is asked";
+    // Quoted, the name is only text.
+    EXPECT_NE(repo.run("bash_execute", {{"command", "cat 'x;touch pwned'"}}).value("status", ""), "error");
+}
+
+TEST(GaiacodeGuards, AScriptKeepsItsOwnDollars) {
+    if (BashTools::detectShell().empty()) GTEST_SKIP() << "cmd doesn't expand $name in quotes";
+    MeasuredRepo repo("gaiacode-dollars");
+    const json out = repo.run("bash_execute", {{"command", "python3 -c \"print('$total')\""}});
+    EXPECT_NE(out.value("stdout", "").find("$total"), std::string::npos) << out.dump();
+}
+
 TEST(GaiacodeEvents, OutsideARepositoryAnythingButAReadMayHaveEdited) {
     EXPECT_FALSE(CodeAgent::treeFingerprint(fs::temp_directory_path().u8string() + "/no-such-repo-here").has_value());
     EXPECT_EQ(CodeAgent::classify("run_checks", {{"command", "ruff check ."}},

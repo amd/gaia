@@ -91,7 +91,8 @@ const char* kUsage =
     "  --dangerously-skip-permissions  Run tools that would ask (shell, writes, run_checks)\n"
     "  --max-steps N                Step limit for the run\n"
     "  --repo [HOST/]OWNER/NAME     GitHub repository to work on (default: the upstream, else origin, remote)\n"
-    "  --allow-github-writes KINDS  GitHub writes this run may make: comment, pr (comma-separated)\n"
+    "  --allow-github-writes KINDS  GitHub writes this run may make: comment, pr, review, issue, rerun\n"
+    "                               (comma-separated)\n"
     "  --no-github                  No GitHub tools\n"
     "  --no-skills                  Load no skills\n"
     "  --version, -h/--help\n";
@@ -155,8 +156,9 @@ Cli parse(int argc, char** argv) {
         } else if (a == "--allow-github-writes") {
             std::istringstream kinds(need(i, argc, argv, a));
             for (std::string kind; std::getline(kinds, kind, ',');) {
-                if (kind != "comment" && kind != "pr") {
-                    usageError("--allow-github-writes takes comment and pr, got " + kind);
+                static const std::set<std::string> known = {"comment", "pr", "review", "issue", "rerun"};
+                if (!known.count(kind)) {
+                    usageError("--allow-github-writes takes comment, pr, review, issue and rerun, got " + kind);
                 }
                 cli.githubWrites.insert(kind);
             }
@@ -228,7 +230,7 @@ gaia::code::CodeAgent::Options appOptions(const Cli& cli, std::vector<std::strin
     options.github = !cli.noGithub;
     options.repo = cli.repo;
     // The app's approval prompt guards each write; --allow-github-writes narrows which kinds exist.
-    options.githubWrites = cli.githubWrites.empty() ? std::set<std::string>{"comment", "pr"} : cli.githubWrites;
+    options.githubWrites = cli.githubWrites.empty() ? std::set<std::string>{"comment", "pr", "review", "issue", "rerun"} : cli.githubWrites;
     options.skills = !cli.noSkills;
     return options;
 }
@@ -410,6 +412,15 @@ int run(const Cli& cli) {
 }  // namespace
 
 int main(int argc, char** argv) {
+    // git must never stop for a password: no terminal prompt (it would corrupt the TUI) and no
+    // credential dialog behind the agent. A push without saved credentials fails with git's message.
+#ifdef _WIN32
+    _putenv_s("GIT_TERMINAL_PROMPT", "0");
+    _putenv_s("GCM_INTERACTIVE", "never");
+#else
+    setenv("GIT_TERMINAL_PROMPT", "0", 1);
+    setenv("GCM_INTERACTIVE", "never", 1);
+#endif
     const Cli cli = parse(argc, argv);
     try {
         if (!cli.print && !cli.stdio) return runSidecar(cli);

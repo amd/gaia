@@ -62,7 +62,7 @@ gaiacode -p "fix the failing test in stats.py" --model Qwen3.6-35B-A3B-GGUF \
 | `--dangerously-skip-permissions` | Run tools that would ask: shell commands that change things, file writes, `run_checks` |
 | `--max-steps N` | Step limit for the run (default 200) |
 | `--repo [HOST/]OWNER/NAME` | GitHub repository to work on (HOST for GitHub Enterprise); default: the `upstream` remote, else `origin` |
-| `--allow-github-writes KINDS` | GitHub writes this run may make: `comment`, `pr` (comma-separated) |
+| `--allow-github-writes KINDS` | GitHub writes this run may make: `comment`, `pr`, `review`, `issue`, `rerun` (comma-separated) |
 | `--no-github` | No GitHub tools |
 | `--no-skills` | Load no skills |
 
@@ -80,6 +80,13 @@ Exit codes: 0 when the run finished, 1 when it failed, 2 for a usage error.
 `run_checks` runs the repository's own code, so in a headless run it needs
 `--dangerously-skip-permissions`.
 
+A cloned repository is someone else's text, so some commands are refused before any approval, with
+the same checks gaiacpp makes. A command that uses a file name holding shell syntax (`x;rm -rf ~`)
+unquoted is refused, as is an edit to a file another program holds: one with a process lock beside
+it, or a header saying edits are overwritten. An inline script keeps its own `$name` instead of the
+shell blanking it. git never stops to ask for a password: a push with no saved credentials fails
+with git's own message.
+
 ## In GAIA's apps
 
 gaiacode speaks the same two protocols as gaiacpp, so either app can run it as the GAIA agent
@@ -90,8 +97,8 @@ program:
   access off for a chat also turns its GitHub tools off.
 - **Terminal UI:** the TUI starts `gaiacode --stdio --model ID` as its agent program.
 
-In both, the shell, file edits and GitHub writes ask for approval in the app, so a comment or pull
-request is posted only once you approve it, unless you turn approvals off for the session. Starting
+In both, the shell, file edits and GitHub writes ask for approval in the app, so a comment, review, issue, pull
+request or CI re-run happens only once you approve it, unless you turn approvals off for the session. Starting
 it with `--allow-github-writes` limits which kinds of write it has at all. A chat with no model
 chosen is refused rather than run on a default, and attached files are named to the model, which
 reads them with its file tools (gaiacode has no document index).
@@ -109,13 +116,16 @@ gaiacode reads and writes GitHub itself over its REST API; the `gh` CLI isn't ne
 |---|---|
 | `gh_issue_view`, `gh_issue_list`, `gh_search` | Read an issue with its comments, list issues, search issues and pull requests |
 | `gh_pr_view` | A pull request's title, body, branches and changed files, with their patches when asked |
-| `gh_pr_checks` | The CI checks and commit statuses on a pull request's latest commit, each check run with its job id |
+| `gh_pr_checks` | The CI checks and commit statuses on a pull request's latest commit, or on a pushed branch or commit, each check run with its job id |
 | `gh_run_log` | The end of a CI job's log, where the failure usually is |
 | `gh_issue_comment` | Post a comment on an issue or pull request |
 | `gh_pr_create` | Open a pull request from a pushed branch, as a draft unless told otherwise |
+| `gh_pr_review` | Submit a review: approve, comment or request changes, with comments on lines of the change |
+| `gh_issue_create` | Open an issue, with existing labels |
+| `gh_run_rerun` | Re-run one CI job |
 
-The two writes ask first, and a headless run makes them only when `--allow-github-writes`
-names the kind (`comment`, `pr`), even with `--dangerously-skip-permissions`. Text that would
+The writes ask first, and a headless run makes them only when `--allow-github-writes`
+names the kind (`comment`, `pr`, `review`, `issue`, `rerun`), even with `--dangerously-skip-permissions`. Text that would
 be posted is checked for credentials first, and refused if it holds one. Everything the read
 tools return is marked as text written by other people, so the model treats it as data.
 

@@ -162,6 +162,15 @@ void SkillLibrary::refresh() {
     }
 }
 
+std::string SkillLibrary::missingTools(const Skill& skill) const {
+    if (!hasTool_) return "";
+    std::string missing;
+    for (const auto& tool : skill.gaia.toolsRequired) {
+        if (!hasTool_(tool)) missing += (missing.empty() ? "" : ", ") + tool;
+    }
+    return missing;
+}
+
 std::string SkillLibrary::renderPrompt() const {
     std::ostringstream out;
     bool any = false;
@@ -169,7 +178,8 @@ std::string SkillLibrary::renderPrompt() const {
         const bool listed = std::any_of(roots_.begin(), roots_.end(), [&](const SkillRoot& r) {
             return r.label == skill.root && r.listed;
         });
-        if (!listed) continue;
+        // A skill this agent can't follow would send the model after tools it doesn't have.
+        if (!listed || !missingTools(skill).empty()) continue;
         if (!any) out << kCatalogHeader << "\n";
         any = true;
         out << "- " << name << ": " << catalogDescription(skill.description) << "\n";
@@ -213,6 +223,8 @@ void SkillLibrary::registerTools(ToolRegistry& registry) {
                              {"version", s.version ? json(*s.version) : json(nullptr)},
                              {"own_tools", s.toolNames()},
                              {"loaded", isLoaded(name)}});
+            const std::string missing = missingTools(s);
+            if (!missing.empty()) items.back()["needs_missing_tools"] = missing;
         }
         return json{{"status", "success"}, {"skills", items}, {"failed", failures_},
                     {"shadowed", shadowed_}};
@@ -233,6 +245,12 @@ void SkillLibrary::registerTools(ToolRegistry& registry) {
             s = loadFull(name);
         } catch (const std::exception& e) {
             return json{{"status", "error"}, {"error", e.what()}};
+        }
+        const std::string missing = missingTools(s);
+        if (!missing.empty()) {
+            return json{{"status", "error"},
+                        {"error", "The " + s.name + " skill needs tools this agent doesn't have (" + missing +
+                                      "), so it can't be followed here. Do the work with the tools you have."}};
         }
         json out = {{"status", "success"},
                     {"name", s.name},
