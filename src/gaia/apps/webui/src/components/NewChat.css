@@ -214,6 +214,23 @@
     white-space: pre-wrap;
 }
 
+.agent-recovery-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-block-start: 10px;
+}
+
+.agent-recovery-status {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.agent-recovery .agent-download {
+    margin-block-start: 8px;
+}
+
 .new-chat-docs {
     margin-top: 8px;
 }

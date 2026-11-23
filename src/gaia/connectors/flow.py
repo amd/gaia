@@ -58,7 +58,11 @@ from gaia.connectors.events import emit
 from gaia.connectors.pkce import compute_code_challenge, generate_code_verifier
 from gaia.connectors.prior_state import resolve_or_reject_empty_scopes
 from gaia.connectors.providers import get as get_provider
-from gaia.connectors.store import DEFAULT_ACCOUNT, peek_connection
+from gaia.connectors.store import (
+    DEFAULT_ACCOUNT,
+    connection_slot_in_use,
+    peek_connection,
+)
 
 if TYPE_CHECKING:
     from gaia.connectors.accounts import Account
@@ -709,6 +713,14 @@ async def revoke_provider_token(
                 "connected-apps page, to fully revoke access."
             ),
         }
+
+    # An empty slot needs no provider, so an unconfigured OAuth client can't mask it.
+    if (
+        blob is None
+        and provider_id in HAS_REVOKE_ENDPOINT
+        and not connection_slot_in_use(provider_id, slot=slot)
+    ):
+        return nothing_to_revoke(provider_id)
 
     try:
         provider = get_provider(provider_id)

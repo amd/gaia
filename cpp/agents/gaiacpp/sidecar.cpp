@@ -44,6 +44,8 @@ constexpr const char* kService = "gaia-agent-gaia";
 // Every request field and route up to this version is implemented; the Agent
 // UI turns features on by it, so it must never run ahead of the code.
 constexpr const char* kApiVersion = "2.27";
+// Shown by the Agent UI's context meter in place of a measurement.
+constexpr const char* kNoContextMeasure = "Not available yet: gaiacpp doesn't report what fills its context.";
 constexpr auto kKeepalive = std::chrono::seconds(10);
 constexpr int kStreamWorkers = 64;
 // Every open turn's stream holds a worker; the rest stay free for approvals and cancels.
@@ -984,13 +986,16 @@ private:
                 json usage = {{"steps", r.value("steps_taken", 0)}, {"tools_used", s->console->toolsUsed()},
                               {"elapsed", elapsed}};
                 if (r.contains("usage") && r["usage"].is_object()) {
-                    usage["tokens"] = r["usage"].value("total_tokens", 0);
+                    // "tokens" is what the model wrote: the UI prices it at the output rate.
+                    usage["tokens"] = r["usage"].value("completion_tokens", 0);
                     usage["input_tokens"] = r["usage"].value("prompt_tokens", 0);
+                    usage["cached_tokens"] = r["usage"].value("cached_tokens", 0);
                 }
                 if (run->cancelled) {
                     terminal = {{"type", "final"}, {"answer", ""}};
                 } else {
-                    terminal = {{"type", "final"}, {"answer", r.value("result", "")}, {"usage", usage}};
+                    terminal = {{"type", "final"}, {"answer", r.value("result", "")}, {"usage", usage},
+                                {"context_error", kNoContextMeasure}};
                     if (r.value("status", "success") == "error") {
                         terminal["failed"] = true;
                         terminal["failure"] = r.value("error", r.value("result", "The turn failed"));

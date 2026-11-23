@@ -189,7 +189,10 @@ tool or a riskier call gets no hint.
 Pick **Full access** from the shield to stop these questions in a chat
 (you confirm once). It opens the shell too: `run_shell_command` runs any
 command, a delete or `git add` included, without asking, and Python code runs
-as written. A calendar change and an outgoing email still ask.
+as written. Without Full access a delete is not asked about but refused (the
+agent tells you the command to run yourself), so to have GAIA delete something,
+switch the chat to Full access first. A calendar change and an outgoing email
+still ask.
 **Settings → Permissions** lists every chat with full access or "always allow"
 answers and lets you revoke them. Grants end when GAIA restarts.
 

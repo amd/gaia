@@ -222,6 +222,25 @@ TEST_F(GaiacppCli, TheDefaultStepLimitIsABackstopNotABudget) {
     }
 }
 
+TEST_F(GaiacppCli, NoWebRefusesAShellFetchAndTellsTheModelTheRule) {
+    bench::MockLlmServer mock;
+    // A reserved name: a regression shows as a failed lookup, not a page fetched.
+    mock.pushResponse(
+        withUsage(toolCall("bash_execute", R"({"command":"curl -s -L https://example.invalid/page"})"), 100, 0, 5));
+    mock.pushResponse(withUsage(finalAnswer("Web access is off, so I could not read the page."), 120, 0, 9));
+    const gaia::ProcessResult r = run(mock, "", " --dangerously-skip-permissions");
+    ASSERT_EQ(r.exitCode, 0) << r.stderr_output;
+
+    const auto bodies = mock.receivedBodies();
+    ASSERT_EQ(bodies.size(), 2u);
+    EXPECT_NE(bodies[0].find("Web access is off for this run. Do not search the web or fetch pages"),
+              std::string::npos)
+        << "the prompt states the rule";
+    EXPECT_NE(bodies[1].find("Web access is off for this run, so GAIA didn't run"), std::string::npos)
+        << "the command is refused, not run: " << bodies[1];
+    EXPECT_EQ(bodies[1].find("Could not resolve host"), std::string::npos) << "curl ran";
+}
+
 TEST_F(GaiacppCli, ATurnThatRanOutOfStepsWithAnAnswerIsIncompleteAndExitsOne) {
     bench::MockLlmServer mock;
     pushReads(mock, dir_ / "work", 3);
@@ -231,6 +250,20 @@ TEST_F(GaiacppCli, ATurnThatRanOutOfStepsWithAnAnswerIsIncompleteAndExitsOne) {
     EXPECT_EQ(out["status"], "incomplete") << out.dump();
     EXPECT_EQ(out["is_error"], true);
     EXPECT_EQ(out["result"], "all read");
+}
+
+TEST_F(GaiacppCli, ATestsPassClaimNoTestRunBacksIsCaveatedAndTheRunIsIncomplete) {
+    bench::MockLlmServer mock;
+    // The command runs, but it is no test run: what Gemma-4-E4B did with `python test_stats.py`.
+    mock.pushResponse(withUsage(toolCall("bash_execute", R"({"command":"echo checked"})"), 100, 0, 5));
+    mock.pushResponse(withUsage(finalAnswer("Fixed it. All 4 tests pass."), 120, 0, 9));
+    mock.pushResponse(withUsage(finalAnswer("Fixed it. All 4 tests pass."), 140, 0, 9));
+    const gaia::ProcessResult r = run(mock, "", " --dangerously-skip-permissions");
+    EXPECT_EQ(r.exitCode, 1) << r.stderr_output;
+    const json out = json::parse(r.stdout_output);
+    EXPECT_EQ(out["status"], "incomplete") << out.dump();
+    EXPECT_EQ(out["result"], "Fixed it. All 4 tests pass.\n\nI couldn't confirm all of this:\n\n- No tests were run this turn.");
+    ASSERT_EQ(mock.requestCount(), 3) << "sent back once, then caveated";
 }
 
 TEST_F(GaiacppCli, ALoopTheModelThenAnswersFromIsASuccessAndExitsZero) {

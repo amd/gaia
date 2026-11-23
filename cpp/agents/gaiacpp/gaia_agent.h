@@ -30,6 +30,7 @@ class GaiaAgent : public Agent {
 public:
     struct Options {
         bool webTools = true;  // web_fetch (still CONFIRM-gated)
+        bool webOff = false;   // the model is told not to use the web, and shell fetches are refused
         bool skills = true;    // SKILL.md catalog, list_skills, load_skill
         // Folders the tools may touch; empty = the working directory. Ignored
         // with fullAccess, which lets the tools reach anywhere the user can.
@@ -77,6 +78,7 @@ protected:
     /// Sends an answer back once when it says a file was saved that doesn't exist.
     std::optional<std::string> reviewFinalAnswer(const std::string& answer) override;
     std::optional<std::string> unresolvedClaims(const std::string& answer) override;
+    std::optional<std::string> unconfirmedClaims(const std::string& answer) override;
     std::optional<std::string> announcedStepNote(const std::string& answer) override;
 
     /// Lists the working folder once, so every model call of the turn shows it as it began.
@@ -96,7 +98,22 @@ public:
         std::string name;
         json args;
         std::string output;  // what the tool returned, clipped
+        bool succeeded = true;
     };
+
+    /// Why the turn's record doesn't back the answer's report that tests passed: no test
+    /// ran, the latest run of each failed, the latest run of some test command after the
+    /// last code change failed and the answer doesn't plainly say a test still fails (a
+    /// narrower passing rerun doesn't hide it, and neither does "the 2 failing tests now pass"), every passing run came before a code change
+    /// (a file tool or a shell edit), or ran in a folder apart from the changed file. A run
+    /// whose result could be lost (`pytest | head -3`, `pytest || true`, `pytest; echo $?`,
+    /// `pytest > out.txt`, `! pytest`, `pytest &`) counts only by its own summary, and is
+    /// ignored when it has none. `first` is the claim as worded, `second` the reason.
+    /// nullopt when there is no such claim, or the runs after the last change back it. A
+    /// command counts as a test run when it names a runner (not to install it or ask its
+    /// version) or its output holds a runner's summary that the command didn't just print.
+    static std::optional<std::pair<std::string, std::string>> unsupportedTestClaim(
+        const std::string& answer, const std::vector<CallSeen>& calls);
 
     /// A file or page the turn read holds text addressed to an AI assistant, and
     /// the answer doesn't tell the user about it.

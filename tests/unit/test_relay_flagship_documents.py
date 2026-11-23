@@ -125,6 +125,7 @@ def live_gaia_sidecar(monkeypatch, tmp_path):
     LemonadeManager.reset()
     monkeypatch.delenv(caller_auth.TOKEN_FILE_ENV_VAR, raising=False)
     monkeypatch.delenv(caller_auth.TOKEN_ENV_VAR, raising=False)
+    monkeypatch.setenv(caller_auth.ALLOW_NO_TOKEN_ENV_VAR, "1")
     # Context measurement is exercised by the relay after every turn. Keep it
     # local: the document contract does not need a real Lemonade health check.
     monkeypatch.setattr(turn_insights, "_loaded_chat_model", lambda *_args: None)
@@ -388,6 +389,31 @@ def test_a_file_dropped_into_an_earlier_message_stays_searchable(
     assert answer == "UPLOAD-4"
     [agent] = agents
     assert agent.rag.removed == []
+
+
+def test_an_attachment_taken_off_the_chat_leaves_the_relayed_flagship(
+    monkeypatch, live_gaia_sidecar, chat, tmp_path
+):
+    """A composer upload is listed as the chat's document; detaching it ends its use (#8812)."""
+    import gaia.ui.utils as ui_utils
+
+    base_url, agents, api_version = live_gaia_sidecar
+    _point_ui_at(monkeypatch, base_url, api_version)
+    uploads = tmp_path / "uploads"
+    uploads.mkdir()
+    monkeypatch.setattr(ui_utils, "uploads_dir", lambda: uploads)
+    (uploads / "brief.txt").write_text("BRIEF-9", encoding="utf-8")
+    linked = ui_utils.resolve_upload_links(
+        "Read this [brief.txt](/api/files/uploads/brief.txt)"
+    )
+    chat.db.add_message(chat.session_id, "user", linked)
+    assert _answer(chat.send(linked)) == "BRIEF-9"
+    [doc] = chat.db.get_session_documents(chat.session_id)
+
+    chat.db.detach_document(chat.session_id, doc["id"])
+    chat.db.add_message(chat.session_id, "user", "code?")
+
+    assert _answer(chat.send("code?")) == "no documents are indexed"
 
 
 def test_detaching_every_document_empties_the_relayed_flagship(

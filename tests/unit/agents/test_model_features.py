@@ -2,18 +2,22 @@
 # SPDX-License-Identifier: MIT
 """Which features each model tier gets — the table, not an agent."""
 
+import sys
 from dataclasses import fields
 
 import pytest
 
+import gaia.config
 from gaia.agents.base.model_features import (
     COMPACT,
     FEATURE_TOOLS,
     FULL,
+    SPEECH_OUTPUT_TOOLS,
     TIER_ENV,
     TIERS,
     ModelFeatures,
     features_for_model,
+    platform_withheld_tools,
     withheld_tools,
 )
 from gaia.llm.lemonade_client import (
@@ -109,3 +113,24 @@ def test_compact_withholds_every_registered_email_tool():
             "send-email/forward_message",
         }
     )
+
+
+@pytest.mark.parametrize("platform", ["win32", "linux"])
+def test_a_proven_platform_withholds_no_speech_tool(platform, monkeypatch):
+    assert gaia.config.speech_output_unproven_reason(platform) is None
+    monkeypatch.setattr(gaia.config, "_current_platform", lambda: platform)
+    assert platform_withheld_tools() == {}
+
+
+def test_a_mac_withholds_the_speech_tools_saying_why(monkeypatch):
+    reason = gaia.config.speech_output_unproven_reason("darwin")
+    assert "aren't offered on macOS" in reason
+    assert "Windows and Linux" in reason and "issues/8831" in reason
+    monkeypatch.setattr(gaia.config, "_current_platform", lambda: "darwin")
+    assert platform_withheld_tools() == dict.fromkeys(SPEECH_OUTPUT_TOOLS, reason)
+
+
+@pytest.mark.speech_platform_gate
+def test_this_machine_is_judged_by_its_real_platform():
+    proven = sys.platform in gaia.config.GaiaConfig.TESTED_SPEECH_OUTPUT_PLATFORMS
+    assert (gaia.config.speech_output_unproven_reason() is None) == proven

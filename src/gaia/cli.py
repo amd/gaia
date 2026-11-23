@@ -986,6 +986,7 @@ def _launch_agent_ui(port=4200, base_url=None, log=None, debug=False, webui_dist
     try:
         from gaia.ui.server import (
             create_app,
+            launch_url,
             lemonade_is_remote,
             start_model_server_owner,
         )
@@ -1000,13 +1001,20 @@ def _launch_agent_ui(port=4200, base_url=None, log=None, debug=False, webui_dist
         # "localhost" can resolve to IPv6 ::1 and fail against this IPv4 listener.
         log.info(f"Starting GAIA Agent UI on http://127.0.0.1:{port}")
         print(f"Starting GAIA Agent UI on http://127.0.0.1:{port}")
-        print(f"   Open your browser to http://127.0.0.1:{port}")
-        print("   Press Ctrl+C to stop")
-        print()
         import uvicorn
 
         # create_app() refuses an unsafe GAIA_HOME, so nothing is written there first.
         app = create_app(webui_dist=webui_dist)
+        # Only to a terminal: the desktop app logs this process's stdout.
+        if sys.stdout.isatty():
+            print(
+                f"   Open your browser to {launch_url(app, '127.0.0.1', port)}",
+                flush=True,
+            )
+        else:
+            print(f"   Agent UI API on http://127.0.0.1:{port}", flush=True)
+        print("   Press Ctrl+C to stop")
+        print()
         _enable_backend_fault_log(log)
         if not base_url and not lemonade_is_remote():
             # First run is set up in the app; the daemon owns the model server.
@@ -1136,7 +1144,7 @@ def _hide_subcommands(subparsers, names) -> None:
 
 # Kept for scripts, hidden from help: GAIA ships one agent, so browsing and
 # publishing agents is no longer a user-facing feature (#5172).
-HIDDEN_TOP_LEVEL_COMMANDS = ("hub",)
+HIDDEN_TOP_LEVEL_COMMANDS = ("hub", "agent-program")
 HIDDEN_AGENT_COMMANDS = ("init", "version", "pack", "publish", "login")
 
 # Removed commands: old scripts get the replacement instead of "invalid choice".
@@ -3748,6 +3756,11 @@ afterwards (or `swebench <run_dir>` does, later).
 
     custom_models_cli.add_subparser(subparsers)
 
+    # gaiacpp for the terminal UI, which shells out here to download it.
+    from gaia.daemon.sidecars import gaiacpp_fetch_cli
+
+    gaiacpp_fetch_cli.add_subparser(subparsers)
+
     # Persistent CLI config (~/.gaia/config.json) — e.g. a default model so
     # users don't have to pass --model on every chat/llm/prompt (issue #98).
     config_parser = subparsers.add_parser(
@@ -5709,7 +5722,14 @@ Let me know your answer!
             skip_count = 0
             fail_count = 0
 
+            from gaia.installer.model_choice import withheld_reason
+
             for model_id in model_ids:
+                withheld = withheld_reason(model_id)
+                if withheld:
+                    console.print_download_error(withheld, model_id)
+                    fail_count += 1
+                    continue
                 # Check if already available
                 if client.check_model_available(model_id):
                     console.print_download_skipped(model_id)
@@ -6206,6 +6226,13 @@ Let me know your answer!
         from gaia.llm import custom_models_cli  # pylint: disable=reimported
 
         sys.exit(custom_models_cli.handle(args))
+
+    if args.action == "agent-program":
+        from gaia.daemon.sidecars import (  # pylint: disable=reimported
+            gaiacpp_fetch_cli,
+        )
+
+        sys.exit(gaiacpp_fetch_cli.handle(args))
 
     # Handle Config command
     if args.action == "config":

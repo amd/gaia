@@ -14,6 +14,7 @@ import { expect, test, type Page } from '@playwright/test';
 
 import { ANSWER_SESSION, AUTOMATIONS, DISCORD_STATES, MESSAGES, MODEL_LIST, NOW, RESOURCES, SESSIONS, SYSTEM_STATUS, TOOL_STATUS, holdOnToolStatus, mockApi, shownText, useLocale, useTheme, withAutomations, withConnectors, withCrashedBackend, withDesktopBridges, withDiscord, withMemory, withModelPage, withSettingsPanes, withoutFlagship, withAgentPrograms, AGENT_DOWNLOADING, AGENT_DOWNLOAD_FAILED, type AgentProgramsAnswers, type MemoryState } from './fixtures';
 import { ENGINE_FAILED, NARROW_SCENES, PLAN_COLD, SETUP_SCENES, expectSnugTags, scene, withSetup } from './setup-scenes';
+import { translateBare } from '../src/i18n/registry';
 
 test.use({ viewport: { width: 1400, height: 900 } });
 
@@ -519,6 +520,18 @@ for (const [title, locale, name] of [
     });
 }
 
+for (const locale of ['en', 'ar']) {
+    test(`a browser without the API token is told how to sign in (${locale})`, async ({ page }, info) => {
+        await open(page, '', locale, (p) => p.route('**/api/**', (route) =>
+            route.fulfill({ status: 401, json: { detail: 'Sign in with the link gaia chat --ui prints.', code: 'ui_token_required' } })));
+        const notice = page.getByRole('alert');
+        await expect(notice).toContainText(translateBare(locale, 'auth.signIn.title'));
+        await expect(notice).toContainText('gaia chat --ui');
+        expect(await audit(page)).toEqual([]);
+        await page.screenshot({ path: info.outputPath(`sign-in-${locale}.png`) });
+    });
+}
+
 test('new chat', async ({ page }) => {
     await open(page);
     await expect(page.locator('html')).toHaveAttribute('dir', 'rtl');
@@ -675,6 +688,37 @@ for (const locale of ['en', 'ar']) {
         await shot(page, `new-chat-add-folder-${locale}`);
         expect(await audit(page)).toEqual([]);
     });
+}
+
+const GAIACPP_MISSING_START = {
+    cards: [],
+    working_folder: { path: '/home/you/projects/gaia', name: 'gaia', gaia_folder: false, choosable: false },
+    skills_error: "the daemon refused to ensure the 'gaia' sidecar: Cannot start the GAIA agent: gaiacpp is chosen as the agent but it is not installed on this PC",
+    agent_problem: {
+        code: 'gaiacpp_missing',
+        detail: 'gaiacpp is chosen as the agent but it is not installed on this PC (looked in: /home/you/.gaia/bin/gaiacpp).',
+    },
+};
+
+for (const locale of ['en', 'ar']) {
+    for (const gaiacpp of ['downloadable', 'unavailable'] as const) {
+        test(`a chosen gaiacpp that isn't here offers its two fixes (${gaiacpp}, ${locale})`, async ({ page }) => {
+            await open(page, '', locale, async (p) => {
+                await p.route('**/api/onboarding/start', (route) => route.fulfill({ json: GAIACPP_MISSING_START }));
+                await withAgentPrograms(p, { gaiacpp });
+            });
+            const panel = page.locator('.agent-recovery');
+            await expect(panel).toBeVisible();
+            await expect(panel.locator('.agent-recovery-actions button')).toHaveCount(gaiacpp === 'downloadable' ? 2 : 1);
+            await expect(panel.locator('.new-chat-details-text')).toHaveCount(0);
+            await shot(page, `new-chat-gaiacpp-missing-${gaiacpp}-${locale}`);
+            expect(await audit(page)).toEqual([]);
+            await panel.locator('.new-chat-details').click();
+            await expect(panel.locator('.new-chat-details-text')).toBeVisible();
+            await shot(page, `new-chat-gaiacpp-missing-${gaiacpp}-details-${locale}`);
+            expect(await audit(page)).toEqual([]);
+        });
+    }
 }
 
 for (const locale of ['en', 'ar']) {
@@ -1023,6 +1067,58 @@ for (const locale of ['ar', 'en']) {
         await warning.screenshot({ path: info.outputPath(`undo-footer-${locale}.png`) });
         const dir = process.env.GAIA_VISUAL_SHOTS;
         if (dir) await warning.screenshot({ path: `${dir}/undo-footer-${locale}.png` });
+    });
+}
+
+/** The backend's English notice for a call Full access approved without asking. */
+const FULL_ACCESS_NOTICE = "Full access is on, so GAIA didn't ask first. Writing file: notes.txt";
+
+/** A turn that wrote a file in Full access: the notice above the answer, the changed-files row under it. */
+async function withFullAccessWrite(page: Page): Promise<void> {
+    await page.route((url) => url.pathname === `/api/sessions/${ANSWER_SESSION}/messages`, (route) =>
+        route.fulfill({
+            json: {
+                messages: [
+                    { id: 1, session_id: ANSWER_SESSION, role: 'user', content: 'اكتب ملاحظاتي في notes.txt', created_at: NOW.toISOString(), rag_sources: null },
+                    {
+                        id: 2, session_id: ANSWER_SESSION, role: 'assistant', content: 'كتبت ملاحظاتك في الملف.', created_at: NOW.toISOString(), rag_sources: null,
+                        agent_steps: [
+                            { id: 1, type: 'status', label: FULL_ACCESS_NOTICE, active: false, success: false, timestamp: 1 },
+                            { id: 2, type: 'tool', label: 'Write file', tool: 'write_file', narration: 'Writing file: notes.txt', active: false, success: true, timestamp: 2 },
+                        ],
+                    },
+                ],
+                total: 2,
+            },
+        }),
+    );
+    await page.route((url) => url.pathname === `/api/sessions/${ANSWER_SESSION}/changes`, (route) =>
+        route.fulfill({
+            json: {
+                turns: [{
+                    turn_id: 't1', session_id: ANSWER_SESSION, message_id: 2, started_at: NOW.toISOString(),
+                    finished_at: NOW.toISOString(), restored_at: null, incomplete: false, untracked: [],
+                    files: [{ path: 'C:\\Users\\me\\notes.txt', change: 'created', tool: 'write_file' }],
+                }],
+            },
+        }),
+    );
+}
+
+for (const locale of ['ar', 'en']) {
+    test(`the Full access notice and the changed-files row follow the UI language (${locale})`, async ({ page }) => {
+        await open(page, `#${ANSWER_SESSION}`, locale, withFullAccessWrite);
+        const answer = page.locator('.msg-assistant');
+        await expect(answer.locator('.turn-changes-row')).toBeVisible();
+        await expect(answer.locator('.flow-warning')).toBeVisible();
+        await shot(page, `full-access-write-${locale}`);
+        expect(await audit(page)).toEqual([]);
+        if (locale === 'ar') expect(await untranslated(page, '.msg-assistant')).toEqual([]);
+        await page.locator('.turn-changes-btn', { hasText: locale === 'en' ? 'Undo this turn' : 'التراجع عن هذا الدور' }).click();
+        await expect(answer.locator('.turn-changes-confirm')).toBeVisible();
+        await shot(page, `full-access-write-confirm-${locale}`);
+        expect(await audit(page)).toEqual([]);
+        if (locale === 'ar') expect(await untranslated(page, '.msg-assistant')).toEqual([]);
     });
 }
 
@@ -2246,6 +2342,31 @@ for (const [locale, theme] of [['ar', 'light'], ['ar', 'dark'], ['en', 'light']]
         expect(await audit(page)).toEqual([]);
     });
 
+    test(`read aloud where GAIA doesn't offer it (${locale}, ${theme})`, async ({ page }) => {
+        await open(page, `#${ANSWER_SESSION}`, locale, async (p) => {
+            await p.route('**/api/speech/settings', (route) =>
+                route.fulfill({
+                    status: 200,
+                    contentType: 'application/json',
+                    body: JSON.stringify({
+                        voice: 'bf_emma', speed: 125, auto: true, min_speed: 50, max_speed: 200, voices: [],
+                        available: false, unavailable_reason: "Reading aloud and dictation aren't offered on macOS yet.",
+                    }),
+                }),
+            );
+        }, theme);
+        const reply = page.locator('.msg-assistant').last();
+        await reply.hover();
+        await expect(reply.locator('.msg-copy')).toBeVisible();
+        await expect(reply.locator('.msg-read-aloud')).toHaveCount(0);
+        await page.getByRole('button', { name: /Settings/ }).first().click();
+        await page.getByRole('dialog').locator('[data-section="voice"]').click();
+        await expect(page.getByRole('dialog').locator('.settings-pane-lede[role="status"]')).toBeVisible();
+        await expect(page.locator('#read-aloud-voice')).toHaveCount(0);
+        expect(await audit(page)).toEqual([]);
+        await shot(page, `read-aloud-unavailable-${locale}-${theme}`);
+    });
+
     test(`a reply that could not be read aloud (${locale}, ${theme})`, async ({ page }) => {
         await open(page, `#${ANSWER_SESSION}`, locale, async (p) => {
             await p.route('**/api/speech', (route) =>
@@ -2549,6 +2670,7 @@ async function withCommandsPanel(page: Page): Promise<void> {
                         },
                     }),
                     shell(3, 'git clone https://github.com/amd/gaia.git /home/you/Work/gaia', { success: false, declined: true }),
+                    shell(4, 'echo hi\u200bthere'),
                 ],
             },
         ],
@@ -2573,10 +2695,12 @@ for (const useCase of USE_CASES) {
             await expect(panel.locator(`.sp-chip.is-${useCase.chip}`)).toBeVisible();
             await expect(panel.locator('.sp-chip.is-chat')).toHaveCount(0);
             if (useCase.name === 'commands') {
-                // One ran, one failed, one was refused: a saved command is not called failed for how it was stored.
-                for (const state of ['ok', 'failed', 'declined']) {
-                    await expect(panel.locator(`.sp-cmd-icon.is-${state}`)).toHaveCount(1);
+                // Two ran, one failed, one was refused: a saved command is not called failed for how it was stored.
+                for (const [state, count] of [['ok', 2], ['failed', 1], ['declined', 1]] as const) {
+                    await expect(panel.locator(`.sp-cmd-icon.is-${state}`)).toHaveCount(count);
                 }
+                // A character that doesn't show is marked, as on the approval card.
+                await expect(panel.locator('[data-section="commands"] code').first()).toHaveText('echo hi[U+200B]there');
             }
             // Nothing for work this chat isn't doing.
             for (const other of USE_CASES.filter((u) => u !== useCase)) {
@@ -6697,6 +6821,48 @@ for (const locale of ['ar', 'en']) {
         await expect(page.getByText(INDEX_ANSWER)).toBeVisible();
         expect(await audit(page)).toEqual([]);
         await shot(page, `agent-indexed-document-${locale}`);
+    });
+}
+
+const ATTACHED_BRIEF = {
+    id: 'd-brief', filename: 'private-brief.md', filepath: '/home/you/.gaia/chat/uploads/private-brief.md',
+    file_size: 1_536, chunk_count: 0, indexed_at: NOW.toISOString(), last_accessed_at: null, sessions_using: 1,
+    indexing_status: 'complete',
+};
+const ATTACH_REQUEST = 'What does the brief ask for?\n\n[private-brief.md](/api/files/uploads/private-brief.md)';
+const ATTACH_ANSWER = 'The brief asks for a launch plan by Friday.';
+
+/** A turn whose message linked a composer upload: the backend lists it as the chat's document (#8812). */
+const ATTACHED_IN_COMPOSER = [
+    { type: 'tool_start', tool: 'index_documents', detail: 'Indexing 1 document(s) for RAG' },
+    { type: 'tool_result', title: 'Index Documents', summary: 'Indexed 1 document(s) in 0.4s', success: true },
+    { type: 'chunk', content: ATTACH_ANSWER },
+    { type: 'done', message_id: 4, content: ATTACH_ANSWER, documents_added: [ATTACHED_BRIEF] },
+];
+
+async function withAttachedBrief(page: Page): Promise<void> {
+    await page.route(`**/api/sessions/${ANSWER_SESSION}/environment`, json({
+        session_id: ANSWER_SESSION,
+        folders: [
+            { path: '/home/you/.gaia/documents', kind: 'folder', source: 'gaia_documents', removable: false },
+            { path: ATTACHED_BRIEF.filepath, name: ATTACHED_BRIEF.filename, kind: 'file', source: 'document', removable: false },
+        ],
+        removed: [], internet: true, enforced: true, internet_enforced: true,
+    }));
+}
+
+for (const locale of ['ar', 'en']) {
+    test(`a file attached in the message box is listed for its chat (${locale})`, async ({ page }) => {
+        await page.addInitScript(streamThenWait, ATTACHED_IN_COMPOSER);
+        await open(page, `#${ANSWER_SESSION}`, locale, withAttachedBrief);
+        await page.locator('textarea').first().fill(ATTACH_REQUEST);
+        await page.keyboard.press('Enter');
+        await expect(page.locator('.doc-pill-name')).toHaveText('private-brief.md');
+        await expect(page.getByText(ATTACH_ANSWER)).toBeVisible();
+        const panel = page.locator('.session-panel');
+        await expect(panel.locator('[data-section="documents"]')).toContainText('private-brief.md');
+        expect(await audit(page)).toEqual([]);
+        await shot(page, `composer-attachment-listed-${locale}`);
     });
 }
 

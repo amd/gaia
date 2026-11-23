@@ -44,6 +44,9 @@ void parseCheckOutput(const std::string& output, CheckResult& r);
 /// Whether a shell command runs a test suite, for a test run made through bash_execute.
 bool looksLikeTestCommand(const std::string& command);
 
+/// The shell's folder as a native path: Git Bash on Windows reports /c/Users/....
+std::string nativeFolder(const std::string& cwd);
+
 /// The run_checks tool. `session` is the agent's shell (its cwd and environment); `ws`
 /// confines `path` (null = full access).
 ToolInfo runChecksTool(std::shared_ptr<ShellSession> session, std::shared_ptr<const Workspace> ws);

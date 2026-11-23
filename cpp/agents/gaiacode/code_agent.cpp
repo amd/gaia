@@ -6,13 +6,18 @@
 #include <algorithm>
 #include <cctype>
 #include <cstring>
+#include <atomic>
 #include <filesystem>
+#include <fstream>
+#include <map>
+#include <random>
 #include <regex>
 #include <set>
 #include <sstream>
 
 #include <gaia/file_tools.h>
 #include <gaia/git_tools.h>
+#include <gaia/process.h>
 #include <gaia/security.h>
 
 #include "../gaiacpp/bash_tools.h"
@@ -97,6 +102,7 @@ void CodeAgent::registerTools() {
         reg.registerTool(observed(BashTools::bashExecute(options_.shell)));
     } else {
         ws = std::make_shared<const Workspace>(options_.workspaceRoots);
+        ws_ = ws;
         reg.registerTool(Workspace::confine(FileIOTools::fileRead(), ws, {"path"}));
         reg.registerTool(observed(Workspace::confine(FileIOTools::fileWrite(), ws, {"path"})));
         reg.registerTool(observed(Workspace::confine(FileIOTools::fileEdit(), ws, {"path"})));
@@ -135,17 +141,75 @@ void CodeAgent::registerTools() {
     }
     reg.registerTool(observed(runChecksTool(options_.shell, ws)));
     registerCodeTools(ws);
+    if (ws) {
+        // Refused here, the user is never asked to approve something the tool would turn down.
+        const std::shared_ptr<ShellSession> shell = options_.shell;
+        reg.setPreCheck([ws, shell](const ToolInfo& tool, const json& args) -> std::optional<json> {
+            if (tool.name != "bash_execute" && tool.name != "run_checks") return std::nullopt;
+            const bool posix = !BashTools::detectShell().empty();
+            std::string why;
+            if (args.contains("command") && args["command"].is_string()) {
+                why = ws->checkCommand(args["command"].get<std::string>(), posix);
+            }
+            if (why.empty() && tool.name == "run_checks" && args.contains("path") && args["path"].is_string()) {
+                // Relative to the shell's folder, as run_checks reads it: `../elsewhere` is checked too.
+                fs::path dir = fs::u8path(args["path"].get<std::string>());
+                if (!dir.is_absolute()) {
+                    dir = fs::u8path(nativeFolder((shell ? *shell : BashTools::defaultSession()).cwd())) / dir;
+                }
+                why = ws->checkPath(dir.u8string());
+            }
+            if (why.empty()) return std::nullopt;
+            return json{{"status", "error"}, {"error", why}};
+        });
+    }
 }
+
+namespace {
+bool mutatesAfterTests(const std::string& command);
+}  // namespace
 
 ToolInfo CodeAgent::observed(ToolInfo tool) {
     ToolCallback inner = std::move(tool.callback);
     const std::string name = tool.name;
     tool.callback = [this, inner = std::move(inner), name](const json& args) -> json {
-        json result = inner(args);
-        if (const std::optional<TurnEvent> e = classify(name, args, result)) {
-            std::lock_guard<std::mutex> lock(eventsMu_);
-            events_.push_back(*e);
+        const bool shellLike = name == "bash_execute" || name == "run_checks";
+        const std::string command = args.is_object() ? args.value("command", "") : "";
+        // A read can't change files; anything else is measured, not guessed from its words.
+        const bool measure =
+            shellLike && !(name == "bash_execute" &&
+                           isReadOnlyShellCommand(" " + command + " ", !BashTools::detectShell().empty()));
+        std::string folder;
+        std::optional<std::string> before;
+        if (measure) {
+            folder = nativeFolder((options_.shell ? *options_.shell : BashTools::defaultSession()).cwd());
+            // run_checks runs in its `path`, relative to the shell's folder.
+            if (name == "run_checks" && args.is_object() && args.contains("path") && args["path"].is_string()) {
+                fs::path dir = fs::u8path(args["path"].get<std::string>());
+                if (!dir.is_absolute()) dir = fs::u8path(folder) / dir;
+                folder = dir.u8string();
+            }
+            // git runs a repository's own filters: never in a folder the tools may not reach.
+            if (!ws_ || ws_->checkPath(folder).empty()) before = treeFingerprint(folder);
         }
+        json result = inner(args);
+        std::vector<TurnEvent> seen;
+        const std::optional<std::string> after = before ? treeFingerprint(folder) : std::nullopt;
+        const bool failed = !result.is_object() || result.value("status", "") == "error" || result.contains("error");
+        if (before && after && !failed) {
+            const std::optional<TurnEvent> t = testResult(name, args, result);
+            const bool changed = *before != *after;
+            // What a test run writes itself (__pycache__, .coverage) comes before its result; only
+            // a step after the tests (`pytest && black .`) leaves them behind the files.
+            const bool changedAfter = changed && t && name == "bash_execute" && mutatesAfterTests(command);
+            if (changed && !changedAfter) seen.push_back(TurnEvent::Edit);
+            if (t) seen.push_back(*t);
+            if (changedAfter) seen.push_back(TurnEvent::Edit);
+        } else if (const std::optional<TurnEvent> e = classify(name, args, result)) {
+            seen.push_back(*e);
+        }
+        std::lock_guard<std::mutex> lock(eventsMu_);
+        events_.insert(events_.end(), seen.begin(), seen.end());
         return result;
     };
     return tool;
@@ -205,29 +269,241 @@ bool failedResult(const json& result) {
     return !result.is_object() || result.value("status", "") == "error" || result.contains("error");
 }
 
+// git commands that record or share work without changing the files the tests read.
+bool leavesTreeAlone(const std::vector<std::string>& argv) {
+    size_t i = 0;
+    while (i < argv.size() && argv[i].find('=') != std::string::npos && argv[i][0] != '-') ++i;
+    if (i + 1 >= argv.size()) return false;
+    std::string p = fs::u8path(argv[i]).filename().u8string();
+    if (p.size() > 4 && p.compare(p.size() - 4, 4, ".exe") == 0) p.resize(p.size() - 4);
+    if (p != "git") return false;
+    size_t k = i + 1;
+    while (k < argv.size() && argv[k].rfind("-", 0) == 0) k += (argv[k] == "-C" || argv[k] == "-c") ? 2 : 1;
+    if (k >= argv.size()) return false;
+    static const std::set<std::string> recordOnly = {"status", "diff", "log", "show", "rev-parse", "ls-files",
+                                                     "blame", "add", "commit", "push", "fetch", "branch", "tag", "remote",
+                                                     "config", "notes"};
+    if (recordOnly.count(argv[k])) return true;
+    // A new branch at the current commit: same files.
+    if ((argv[k] == "checkout" || argv[k] == "switch") && k + 3 == argv.size()) {
+        return argv[k + 1] == "-b" || argv[k + 1] == "-c";
+    }
+    return false;
+}
+
+// What a shell command did to the turn: a test run (passed or not), an edit, or nothing.
+std::optional<TurnEvent> shellEvent(const std::string& command, const json& result) {
+    const bool posix = !BashTools::detectShell().empty();
+    std::vector<std::vector<std::string>> segments;
+    if (!splitShellCommand(command, posix, segments)) return TurnEvent::Edit;
+    bool tested = false, changedAfter = false, changed = false;
+    for (const auto& seg : segments) {
+        std::string text;
+        for (const auto& w : seg) text += " " + w;
+        const bool test = looksLikeTestCommand(text);
+        const bool mutates = !test && !leavesTreeAlone(seg) && !isReadOnlyShellCommand(text + " ", posix);
+        if (test) tested = true;
+        if (mutates) {
+            changed = true;
+            if (tested) changedAfter = true;
+        }
+    }
+    // `pytest && black .`: whatever the tests saw, the files changed after them.
+    if (changedAfter) return TurnEvent::Edit;
+    if (tested) {
+        const std::string out = result.value("stdout", "") + "\n" + result.value("stderr", "");
+        // A clipped capture lost its summary at the end; the run backs nothing either way.
+        if (result.value("truncated", false) || out.find("[output truncated at") != std::string::npos) {
+            if (changed) return TurnEvent::Edit;
+            if (result.value("exit_code", 0) != 0 || result.value("timed_out", false)) return TurnEvent::TestsFailed;
+            return std::nullopt;
+        }
+        CheckResult r;
+        r.exitCode = result.value("exit_code", -1);
+        r.timedOut = result.value("timed_out", false);
+        parseCheckOutput(out, r);
+        if (r.passed < 0 && r.exitCode == 0 && !r.timedOut) return std::nullopt;  // no summary to read
+        return r.green() ? TurnEvent::TestsPassed : TurnEvent::TestsFailed;
+    }
+    return changed ? std::optional(TurnEvent::Edit) : std::nullopt;
+}
+
+// A step after a test step that may change files, or a command too tangled to tell.
+bool mutatesAfterTests(const std::string& command) {
+    const bool posix = !BashTools::detectShell().empty();
+    std::vector<std::vector<std::string>> segments;
+    if (!splitShellCommand(command, posix, segments)) return true;
+    bool tested = false;
+    for (const auto& seg : segments) {
+        std::string text;
+        for (const auto& w : seg) text += " " + w;
+        if (looksLikeTestCommand(text)) {
+            tested = true;
+        } else if (tested && !leavesTreeAlone(seg) && !isReadOnlyShellCommand(text + " ", posix)) {
+            return true;
+        }
+    }
+    return false;
+}
+
 }  // namespace
 
 std::optional<TurnEvent> CodeAgent::classify(const std::string& tool, const json& args, const json& result) {
     if (failedResult(result)) return std::nullopt;
     if (tool == "file_edit" || tool == "file_write") return TurnEvent::Edit;
     if (tool == "run_checks") {
-        // A command that isn't a test run backs nothing either way.
-        if (!result.value("test_run", false)) return std::nullopt;
+        // A command that isn't a test run backs nothing, but may have written files (a formatter).
+        if (!result.value("test_run", false)) {
+            const std::string command = result.value("command", "");
+            return isReadOnlyShellCommand(" " + command + " ", !BashTools::detectShell().empty())
+                       ? std::nullopt
+                       : std::optional(TurnEvent::Edit);
+        }
+        if (result.value("passed", -1) < 0 && result.value("exit_code", -1) == 0) return std::nullopt;
         return result.value("green", false) ? TurnEvent::TestsPassed : TurnEvent::TestsFailed;
     }
-    if (tool == "bash_execute") {
-        const std::string command = args.value("command", "");
-        if (looksLikeTestCommand(command)) {
-            CheckResult r;
-            r.exitCode = result.value("exit_code", -1);
-            r.timedOut = result.value("timed_out", false);
-            parseCheckOutput(result.value("stdout", "") + "\n" + result.value("stderr", ""), r);
-            return r.green() ? TurnEvent::TestsPassed : TurnEvent::TestsFailed;
-        }
-        // sed -i, git apply, a script that writes files: anything that isn't a read may have edited.
-        if (!isReadOnlyShellCommand(" " + command + " ", !BashTools::detectShell().empty())) return TurnEvent::Edit;
-    }
+    if (tool == "bash_execute") return shellEvent(args.value("command", ""), result);
     return std::nullopt;
+}
+
+std::optional<TurnEvent> CodeAgent::testResult(const std::string& tool, const json& args, const json& result) {
+    if (failedResult(result)) return std::nullopt;
+    if (tool == "run_checks") {
+        if (!result.value("test_run", false)) return std::nullopt;
+        if (result.value("passed", -1) < 0 && result.value("exit_code", -1) == 0) return std::nullopt;
+        return result.value("green", false) ? TurnEvent::TestsPassed : TurnEvent::TestsFailed;
+    }
+    if (tool != "bash_execute") return std::nullopt;
+    const std::string command = args.value("command", "");
+    if (!looksLikeTestCommand(command)) return std::nullopt;
+    const std::string out = result.value("stdout", "") + "\n" + result.value("stderr", "");
+    const bool failedExit = result.value("exit_code", 0) != 0 || result.value("timed_out", false);
+    if (result.value("truncated", false) || out.find("[output truncated at") != std::string::npos) {
+        return failedExit ? std::optional(TurnEvent::TestsFailed) : std::nullopt;
+    }
+    CheckResult r;
+    r.exitCode = result.value("exit_code", -1);
+    r.timedOut = result.value("timed_out", false);
+    parseCheckOutput(out, r);
+    if (r.passed < 0 && !failedExit) return std::nullopt;
+    return r.green() ? TurnEvent::TestsPassed : TurnEvent::TestsFailed;
+}
+
+namespace {
+#ifdef _WIN32
+std::string shellQuoted(const std::string& v) { return "\"" + v + "\""; }
+#else
+std::string shellQuoted(const std::string& v) {
+    std::string out = "'";
+    for (char c : v) out += c == '\'' ? std::string("'\\''") : std::string(1, c);
+    return out + "'";
+}
+#endif
+
+// One git command in *folder*, its environment set for that child alone.
+ProcessResult gitIn(const std::string& git, const std::string& folder,
+                    const std::vector<std::pair<std::string, std::string>>& env, const std::string& args,
+                    int timeoutMs) {
+#ifdef _WIN32
+    // cmd /c strips the outer quotes; each `set` lives only in that cmd.
+    std::string line = "\"";
+    for (const auto& [k, v] : env) line += "set \"" + k + "=" + v + "\"&& ";
+    line += shellQuoted(git) + " -C " + shellQuoted(folder) + " -c core.fsmonitor=false " + args + "\"";
+#else
+    std::string line;
+    for (const auto& [k, v] : env) line += k + "=" + shellQuoted(v) + " ";
+    line += shellQuoted(git) + " -C " + shellQuoted(folder) + " -c core.fsmonitor=false " + args;
+#endif
+    return ProcessRunner::run(line, timeoutMs);
+}
+
+std::string trimmed(std::string s) {
+    while (!s.empty() && std::isspace(static_cast<unsigned char>(s.back()))) s.pop_back();
+    return s;
+}
+}  // namespace
+
+std::optional<std::string> CodeAgent::treeFingerprint(const std::string& folder) {
+#ifdef _WIN32
+    // By full path: cmd.exe would run a git.cmd in the repository first.
+    const std::string git = findProgramOnPath("git");
+    if (git.empty()) return std::nullopt;
+#else
+    const std::string git = "git";
+#endif
+#ifdef _WIN32
+    // `-C "D:\"` would read as an escaped quote: git takes forward slashes just as well.
+    std::string dir = folder;
+    std::replace(dir.begin(), dir.end(), '\\', '/');
+#else
+    const std::string& dir = folder;
+#endif
+    const ProcessResult dirs = gitIn(git, dir, {}, "rev-parse --absolute-git-dir --git-path objects", 10000);
+    if (dirs.exitCode != 0) return std::nullopt;
+    std::istringstream lines(dirs.stdout_output);
+    std::string gitDir, objects;
+    std::getline(lines, gitDir);
+    std::getline(lines, objects);
+    gitDir = trimmed(gitDir);
+    objects = trimmed(objects);
+    if (gitDir.empty() || objects.empty()) return std::nullopt;
+    fs::path objectsDir = fs::u8path(objects);
+    if (!objectsDir.is_absolute()) objectsDir = fs::u8path(folder) / objectsDir;
+    // A throwaway index seeded from the real one, and a throwaway object store that reads the
+    // real one: the user's staging area and .git/objects are never written.
+    std::error_code ec;
+    static std::atomic<unsigned long long> counter{0};
+    const std::string tag = std::to_string(std::random_device{}()) + "-" + std::to_string(++counter);
+    const fs::path base = fs::temp_directory_path(ec);
+    // Never fall back to the current folder, which may be the repository itself.
+    if (ec || base.empty()) return std::nullopt;
+    const fs::path index = base / ("gaiacode-index-" + tag);
+    const fs::path store = base / ("gaiacode-objects-" + tag);
+    fs::create_directories(store / "info", ec);
+    if (ec) return std::nullopt;
+    {
+        // A file, not GIT_ALTERNATE_OBJECT_DIRECTORIES: that splits on ';' or ':', legal in a folder name.
+        std::ofstream alternates(store / "info" / "alternates", std::ios::binary);
+        alternates << objectsDir.generic_u8string() << "\n";
+    }
+    fs::copy_file(fs::u8path(gitDir) / "index", index, fs::copy_options::overwrite_existing, ec);
+    const std::vector<std::pair<std::string, std::string>> env = {
+        {"GIT_INDEX_FILE", index.u8string()},
+        {"GIT_OBJECT_DIRECTORY", store.u8string()},
+    };
+    std::optional<std::string> tree;
+    if (gitIn(git, dir, env, "add -A", 120000).exitCode == 0) {
+        const ProcessResult write = gitIn(git, dir, env, "write-tree", 30000);
+        if (write.exitCode == 0) tree = trimmed(write.stdout_output);
+    }
+    fs::remove(index, ec);
+    fs::remove(fs::path(index.native() + fs::path(".lock").native()), ec);
+    // git writes objects read-only, which Windows won't delete.
+    for (fs::recursive_directory_iterator it(store, ec), end; !ec && it != end; it.increment(ec)) {
+        std::error_code permEc;
+        fs::permissions(it->path(), fs::perms::owner_write, fs::perm_options::add, permEc);
+    }
+    ec.clear();
+    fs::remove_all(store, ec);
+    // The outer tree records only a submodule's commit; its files are measured as their own repository.
+    static thread_local int depth = 0;
+    if (tree && depth < 3) {
+        const ProcessResult subs = gitIn(git, dir, {}, "config --file .gitmodules --get-regexp path", 10000);
+        std::istringstream entries(subs.exitCode == 0 ? subs.stdout_output : "");
+        ++depth;
+        for (std::string line; std::getline(entries, line);) {
+            const size_t space = line.find(' ');
+            if (space == std::string::npos) continue;
+            const fs::path rel = fs::u8path(trimmed(line.substr(space + 1))).lexically_normal();
+            if (rel.empty() || rel.is_absolute() || *rel.begin() == "..") continue;
+            const fs::path sub = fs::u8path(folder) / rel;
+            if (!fs::exists(sub / ".git", ec)) continue;  // not checked out
+            const std::optional<std::string> inner = treeFingerprint(sub.u8string());
+            *tree += "\n" + rel.generic_u8string() + " " + (inner ? *inner : "?");
+        }
+        --depth;
+    }
+    return tree;
 }
 
 bool CodeAgent::claimsTestsPass(const std::string& answer) {
@@ -236,6 +512,10 @@ bool CodeAgent::claimsTestsPass(const std::string& answer) {
     static const std::vector<std::regex> claims = {
         std::regex(R"(\b(tests?|test suite|specs?)\b[^.!?;\n]{0,40}?\b(pass|passes|passed|passing|are green|is green|all green)\b)" +
                    noObject),
+        // "the bounds check passes control to", "the CI config passes --cov": a verb that goes on is no claim.
+        std::regex(R"((\b(checks?|run_checks|ci)\b|\btest_[\w.]*\w|\w+_test(\.\w+)?\b|[\w-]+\.(test|spec)\.\w+)[^.!?;\n]{0,40}?\b(pass|passes|passed|passing|are green|is green|all green)\b)"
+                   R"((?!\s+((a|an|the|its|my|our|your|this|that|control|through|to|over|along|into)\b|-)))"),
+        std::regex(R"(\bci\b[^.!?;\n]{0,15}\b(is green|green|succeeds|succeeded)\b)"),
         std::regex(R"(\b(everything|it all)\b[^.!?;\n]{0,15}\b(passes|passed|is green)\b)" + noObject),
         std::regex(R"(\bbuild\b[^.!?;\n]{0,20}\b(succeeds|succeeded|passes|passed|is green)\b)"),
     };
@@ -250,6 +530,8 @@ bool CodeAgent::claimsTestsPass(const std::string& answer) {
         return std::regex_search(s.substr(from, pos - from + len), negated);
     };
     auto check = [&](const std::string& s) {
+        // A sentence that reports failures is a report, not a claim: "2 tests failed, 10 passed".
+        if (std::regex_search(s, failures)) return false;
         for (const auto& re : claims) {
             for (auto it = std::sregex_iterator(s.begin(), s.end(), re); it != std::sregex_iterator(); ++it) {
                 if (!negatedNear(s, static_cast<size_t>(it->position()), static_cast<size_t>(it->length()))) {
@@ -261,11 +543,15 @@ bool CodeAgent::claimsTestsPass(const std::string& answer) {
         return std::regex_search(s, m, counted) && !std::regex_search(s, failures) &&
                !negatedNear(s, static_cast<size_t>(m.position()), static_cast<size_t>(m.length()));
     };
+    const std::string text = lower(answer);
     std::string sentence;
-    std::istringstream in(lower(answer));
-    for (char ch; in.get(ch);) {
+    for (size_t i = 0; i < text.size(); ++i) {
+        const char ch = text[i];
         sentence += ch;
-        if (ch == '.' || ch == '!' || ch == '?' || ch == ';' || ch == '\n' || in.peek() == EOF) {
+        const bool last = i + 1 == text.size();
+        const bool stop = ch == '\n' || ((ch == '.' || ch == '!' || ch == '?' || ch == ';') &&
+                                         (last || std::isspace(static_cast<unsigned char>(text[i + 1]))));
+        if (stop || last) {
             if (check(sentence)) return true;
             sentence.clear();
         }

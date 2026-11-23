@@ -86,6 +86,7 @@ from gaia.utils.file_lock import (
     write_bytes_atomic,
     write_text_atomic,
 )
+from gaia.utils.image_alpha import flatten_transparency
 from gaia.utils.image_formats import IMAGE_EXTENSIONS
 from gaia.utils.text_decoding import TRIED_ENCODINGS, decode_text
 
@@ -290,15 +291,9 @@ def _flatten_for_vlm(img):
     Image files only. PDF-embedded images are shown as the PDF places them, so
     the PDF path must not rotate them by their own EXIF tag.
     """
-    from PIL import Image, ImageOps  # pylint: disable=import-outside-toplevel
+    from PIL import ImageOps  # pylint: disable=import-outside-toplevel
 
-    img = ImageOps.exif_transpose(img)
-    if img.mode in ("RGBA", "LA", "PA") or "transparency" in img.info:
-        # The VLM drops alpha, so a transparent background would read as black.
-        rgba = img.convert("RGBA")
-        white = Image.new("RGBA", rgba.size, (255, 255, 255, 255))
-        img = Image.alpha_composite(white, rgba).convert("RGB")
-    return img
+    return flatten_transparency(ImageOps.exif_transpose(img))
 
 
 def _image_pages_for_vlm(img, file_name: str) -> list:
