@@ -11,7 +11,8 @@ Requires the `gaia` Python CLI 0.27.0+ on `PATH`.
 - **A call the user denied is not asked about again in that chat.** Retrying
   the exact call, even one that changes nothing such as `echo`, is refused
   without a new approval prompt, and the agent says it was declined. It is
-  asked about again once the user asks for it ("run it again", or naming the
+  asked about again once the user asks for it ("run it again", "try it once
+  more", "I changed my mind", the same in another language, or naming the
   command) or clears the conversation.
 - **A follow-up in a research chat answers with its own result.** With
   research on, a later turn that did a task — writing a memo with
