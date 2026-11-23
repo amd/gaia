@@ -910,6 +910,30 @@ def test_one_agents_restart_never_holds_up_anothers_relay(monkeypatch):
         other.release()
 
 
+def test_a_background_relay_runs_gaiacode_on_the_model_it_names(monkeypatch):
+    # Setup's agent check names its model; last_model may be another app's pick.
+    seen = {}
+    monkeypatch.setattr(
+        _chat_helpers,
+        "_dispatch_sidecar_query",
+        lambda *a, **k: seen.update(k),
+    )
+    import queue
+
+    class _Handler:
+        event_queue = queue.Queue()
+
+    _chat_helpers.relay_one_prompt(
+        _Handler(),
+        "hi",
+        agent_type="gaia",
+        model_id="Qwen3.5-4B-GGUF",
+        memory="off",
+        max_steps=None,
+    )
+    assert seen["picked_model"] == "Qwen3.5-4B-GGUF"
+
+
 def test_a_relay_is_counted_until_its_dispatch_returns(monkeypatch):
     _choose("gaiapy")
     seen = []

@@ -2897,6 +2897,8 @@ def relay_one_prompt(
         agent_type=agent_type,
         memory=memory,
         max_steps=max_steps,
+        # Setup's check, the agent loop and schedules name their model on purpose.
+        picked_model=model_id,
     )
     # Drained only after the turn ends: safe because event_queue is unbounded.
     answer = None
