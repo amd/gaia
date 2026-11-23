@@ -22,6 +22,7 @@
 #include <httplib.h>
 
 #include <gaia/console.h>
+#include <gaia/document_index.h>
 #include <gaia/lemonade_client.h>
 #include <gaia/memory_store.h>
 #include <gaia/security.h>
@@ -297,6 +298,11 @@ struct ModelServer {
 struct ServerDown : std::runtime_error {
     bool nothingAnswered;  // no connection at all, so starting the server is the remedy
     ServerDown(const std::string& m, bool nothing) : std::runtime_error(m), nothingAnswered(nothing) {}
+};
+
+// An attached file this PC has no program to read: the turn ends with how to fix that.
+struct UnreadableAttachment : std::runtime_error {
+    using std::runtime_error::runtime_error;
 };
 
 // What the Agent UI reads to offer its own Start button (contract: final.failure).
@@ -1205,7 +1211,8 @@ private:
                     s->console->emit({{"type", "status"},
                                       {"message", "Undo may not work for this turn: gaiacpp doesn't record file changes yet."}});
                 }
-                indexDocuments(*s, documents);
+                const std::string unreadable = indexDocuments(*s, documents);
+                if (!unreadable.empty()) throw UnreadableAttachment(unreadable);
                 AgentConfig cfg = s->agent->config();
                 if (!model.empty()) cfg.modelId = model;
                 // Cloud models behind Lemonade speak native tool calls.
@@ -1253,6 +1260,10 @@ private:
                         terminal["model_messages"] = msgs;
                     }
                 }
+            } catch (const UnreadableAttachment& e) {
+                terminal = run->cancelled ? json{{"type", "final"}, {"answer", ""}}
+                                          : json{{"type", "final"}, {"answer", e.what()}, {"failed", true},
+                                                 {"failure", e.what()}};
             } catch (const ServerDown& e) {
                 // Same shape as a turn the model server failed mid-way.
                 terminal = run->cancelled ? json{{"type", "final"}, {"answer", ""}}
@@ -1368,13 +1379,15 @@ private:
         return "";
     }
 
-    // Attached documents are indexed before the turn, each once per agent.
-    void indexDocuments(Session& s, const std::vector<std::string>& documents) {
+    // Attached documents are indexed before the turn, each once per agent. Returns what to tell the
+    // user when one can't be read on this PC at all; the model would only guess its way around that.
+    std::string indexDocuments(Session& s, const std::vector<std::string>& documents) {
         std::vector<std::string> pending;
         for (const auto& d : documents) {
             if (!s.indexed.count(d)) pending.push_back(d);
         }
-        if (pending.empty()) return;
+        if (pending.empty()) return "";
+        std::string unreadable;
         json names = json::array();
         for (const auto& d : pending) names.push_back(fs::path(d).filename().string());
         s.console->emit({{"type", "tool_call"}, {"tool", "index_documents"}, {"args", {{"documents", names}}}});
@@ -1383,8 +1396,17 @@ private:
             json r = s.agent->toolRegistry().executeTool("index_document", {{"path", d}});
             results.push_back({{"document", fs::path(d).filename().string()}, {"result", r}});
             if (r.value("status", "") != "error" && !r.contains("error")) s.indexed.insert(d);
+            if (!unreadable.empty() || !r.contains("failed") || !r["failed"].is_array()) continue;
+            for (const auto& f : r["failed"]) {
+                if (f.is_object() && f.contains("missing_program")) {
+                    unreadable = MissingDocumentReader::remedy(fs::path(d).filename().string(),
+                                                               f.value("missing_program", ""));
+                    break;
+                }
+            }
         }
         s.console->emit({{"type", "tool_result"}, {"tool", "index_documents"}, {"data", results}});
+        return unreadable;
     }
 
     SidecarOptions opts_;

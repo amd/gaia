@@ -51,8 +51,21 @@ std::vector<std::vector<float>> letterEmbed(const std::vector<std::string>& text
 }
 
 bool havePdftotext() {
+#ifdef __APPLE__
+    return true;  // a Mac reads PDFs with or without it
+#else
     return ProcessRunner::run("pdftotext -v", 5000).exitCode == 0;
+#endif
 }
+
+#ifndef _WIN32
+// Runs with a PATH that holds no pdftotext, as on a PC where poppler was never installed.
+struct NoPdftotextOnPath {
+    std::string saved = std::getenv("PATH") ? std::getenv("PATH") : "";
+    NoPdftotextOnPath() { setenv("PATH", "/nonexistent-gaia-test", 1); }
+    ~NoPdftotextOnPath() { setenv("PATH", saved.c_str(), 1); }
+};
+#endif
 
 const fs::path kNorthwind =
     fs::path(GAIA_REPO_FIXTURES_DIR) / "gaia" / "tiers_documents" / "northwind_annual_report.pdf";
@@ -193,6 +206,59 @@ TEST(DocumentIndexTest, PdfChunksCarryPageNumbers) {
     ASSERT_FALSE(hits.empty());
     EXPECT_EQ(hits[0].chunk.page, 7);
     EXPECT_NE(hits[0].chunk.text.find("18.4"), std::string::npos);
+}
+
+#ifndef _WIN32
+TEST(DocumentIndexTest, APdfWithoutPdftotextIsReadOnAMacAndExplainedElsewhere) {
+    ASSERT_TRUE(fs::exists(kNorthwind)) << kNorthwind;
+    NoPdftotextOnPath path;
+#ifdef __APPLE__
+    const auto pages = DocumentIndex::extractPages(kNorthwind.string());
+    ASSERT_GE(pages.size(), 7u);
+    const auto seven = std::find_if(pages.begin(), pages.end(), [](const auto& p) { return p.first == 7; });
+    ASSERT_NE(seven, pages.end());
+    EXPECT_NE(seven->second.find("18.4"), std::string::npos) << seven->second.substr(0, 400);
+    TempDir d;
+    try {
+        DocumentIndex::extractPages(d.write("broken.pdf", "not a pdf"));
+        FAIL() << "a broken PDF was read";
+    } catch (const MissingDocumentReader&) {
+        FAIL() << "a Mac needs no extra program";
+    } catch (const std::runtime_error& e) {
+        EXPECT_NE(std::string(e.what()).find("Can't read PDF"), std::string::npos) << e.what();
+    }
+#else
+    try {
+        DocumentIndex::extractPages(kNorthwind.string());
+        FAIL() << "read a PDF with no reader";
+    } catch (const MissingDocumentReader& e) {
+        const std::string why = e.what();
+        EXPECT_EQ(e.program, "pdftotext");
+        for (const char* part : {"pdftotext", "not installed", "poppler", "Python agent", "Agent & model"}) {
+            EXPECT_NE(why.find(part), std::string::npos) << part << " in: " << why;
+        }
+    }
+    // The tool's own error is the reason, not "see failed".
+    DocumentIndex idx;
+    ToolRegistry registry;
+    idx.registerTools(registry);
+    const json r = registry.executeTool("index_document", {{"path", kNorthwind.string()}});
+    EXPECT_EQ(r.value("status", ""), "error");
+    EXPECT_NE(r.value("error", "").find("Python agent"), std::string::npos) << r.dump();
+    EXPECT_EQ(r["failed"][0].value("missing_program", ""), "pdftotext");
+#endif
+}
+#endif
+
+TEST(DocumentIndexTest, AMissingPdfReaderSaysWhatToInstallOrUseInstead) {
+    const MissingDocumentReader missing("C:/docs/report.pdf", "pdftotext");
+    const std::string user = MissingDocumentReader::remedy("report.pdf", "pdftotext");
+    for (const char* part : {"report.pdf", "pdftotext", "not installed", "poppler", "Python agent", "Agent & model",
+                             "--agent-program gaiapy"}) {
+        EXPECT_NE(user.find(part), std::string::npos) << part << " in: " << user;
+    }
+    EXPECT_EQ(user.find("Tell the user"), std::string::npos);
+    EXPECT_NE(std::string(missing.what()).find("Tell the user"), std::string::npos) << "the model must not improvise";
 }
 
 TEST(DocumentIndexTest, UnreadableFilesFailLoudly) {

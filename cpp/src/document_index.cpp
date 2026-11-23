@@ -43,6 +43,20 @@ std::string shellQuote(const std::string& s) {
 #endif
 }
 
+#ifdef __APPLE__
+constexpr const char* kPdfKitScript = R"JS(ObjC.import('PDFKit');
+function run(argv) {
+  var doc = $.PDFDocument.alloc.initWithURL($.NSURL.fileURLWithPath(argv[0]));
+  if (doc.isNil()) throw new Error('not a readable PDF');
+  if (doc.isLocked) throw new Error('the PDF is password-protected');
+  var out = $.NSFileHandle.fileHandleWithStandardOutput;
+  for (var i = 0; i < doc.pageCount; i++) {
+    var s = doc.pageAtIndex(i).string;
+    out.writeData($((s.isNil() ? '' : s.js) + '\f').dataUsingEncoding($.NSUTF8StringEncoding));
+  }
+})JS";
+#endif
+
 std::string decodeXmlEntities(std::string s) {
     const std::pair<const char*, const char*> ents[] = {
         {"&lt;", "<"}, {"&gt;", ">"}, {"&quot;", "\""}, {"&apos;", "'"}, {"&amp;", "&"}};
@@ -221,6 +235,19 @@ std::vector<std::string> indexableFiles(const std::string& root, bool withDocume
 
 }  // namespace
 
+std::string MissingDocumentReader::remedy(const std::string& file, const std::string& program) {
+    return "Can't read PDF " + file + ": this agent reads PDFs with " + program +
+           ", which is not installed on this PC. Install poppler (it provides " + program +
+           "; on Debian or Ubuntu: sudo apt install poppler-utils) and attach the file again, or switch to the "
+           "Python agent, which reads PDFs itself (Settings > Agent & model in the GAIA app, "
+           "--agent-program gaiapy in the terminal).";
+}
+
+MissingDocumentReader::MissingDocumentReader(const std::string& path, std::string program_)
+    : std::runtime_error(remedy(path, program_) +
+                         " Tell the user exactly this; other ways of reading the PDF will not work here."),
+      program(std::move(program_)) {}
+
 DocumentIndex::DocumentIndex(EmbedFunction embed, std::string embeddingModel,
                              ChunkingConfig chunking)
     : embed_(std::move(embed)), embeddingModel_(std::move(embeddingModel)), chunking_(chunking) {
@@ -242,25 +269,32 @@ std::vector<std::pair<int, std::string>> DocumentIndex::extractPages(const std::
 #ifdef _WIN32
         // By full path: cmd.exe would run a pdftotext.bat in the working folder first.
         const std::string pdftotext = findProgramOnPath("pdftotext");
-        if (pdftotext.empty()) {
-            throw std::runtime_error("Can't read PDF " + path + ": pdftotext is not installed (install poppler)");
-        }
+        if (pdftotext.empty()) throw MissingDocumentReader(path, "pdftotext");
         // cmd /c drops the first and last quote of a line that starts with one, so the line gets an extra pair.
         const std::string extract = "\"\"" + pdftotext + "\" -layout " + shellQuote(path) + " -\"";
 #else
         const std::string extract = "pdftotext -layout " + shellQuote(path) + " -";
 #endif
         ProcessResult r = ProcessRunner::run(extract, 120000, "", {}, kMaxExtractBytes);
+        const bool noPdftotext = r.exitCode == 127;
+#ifdef __APPLE__
+        // No poppler on a stock Mac: the system's own PDF reader, one form feed after each page.
+        if (noPdftotext) {
+            r = ProcessRunner::run("/usr/bin/osascript -l JavaScript -e " + shellQuote(kPdfKitScript) + " " +
+                                       shellQuote(path),
+                                   120000, "", {}, kMaxExtractBytes);
+        }
+#else
+        if (noPdftotext) throw MissingDocumentReader(path, "pdftotext");
+#endif
         if (r.stdout_output.size() >= kMaxExtractBytes) {
             throw std::runtime_error("PDF " + path + " has more than " +
                                      std::to_string(kMaxExtractBytes >> 20) +
                                      " MB of text; split it before indexing.");
         }
         if (r.exitCode != 0) {
-            throw std::runtime_error(
-                "Can't read PDF " + path + ": pdftotext " +
-                (r.exitCode == 127 ? std::string("is not installed (install poppler-utils)")
-                                   : "failed: " + r.stderr_output.substr(0, 300)));
+            throw std::runtime_error("Can't read PDF " + path + ": " + (noPdftotext ? "macOS" : "pdftotext") +
+                                     " failed: " + r.stderr_output.substr(0, 300));
         }
         size_t start = 0;
         int page = 1;
@@ -498,6 +532,8 @@ void DocumentIndex::registerTools(ToolRegistry& registry,
                 const size_t n = indexFile(t);
                 total += n;
                 done.push_back({{"file", t}, {"chunks", n}});
+            } catch (const MissingDocumentReader& e) {
+                failed.push_back({{"file", t}, {"error", e.what()}, {"missing_program", e.program}});
             } catch (const std::exception& e) {
                 failed.push_back({{"file", t}, {"error", e.what()}});
             }
@@ -510,8 +546,11 @@ void DocumentIndex::registerTools(ToolRegistry& registry,
             out["skipped"] = skipped.toJson();
         }
         if (done.empty()) {
-            std::string error = targets.empty() ? "No supported files were indexed at " + path
-                                                : "Nothing could be indexed (see failed)";
+            // One file: its own reason, which says what the user can do.
+            std::string error = targets.empty()      ? "No supported files were indexed at " + path
+                                : failed.size() == 1 ? failed[0].value("error", "")
+                                                     : "Nothing could be indexed (see failed)";
+            while (!error.empty() && error.back() == '.') error.pop_back();
             if (skipped.total() != 0) {
                 error += ": " + std::to_string(skipped.total()) + " skipped - " + skipped.summary() +
                          ". To index one of them, call index_document with that file's own path";

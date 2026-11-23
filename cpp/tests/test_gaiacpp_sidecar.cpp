@@ -1436,6 +1436,40 @@ TEST_F(GaiacppSidecar, FileInsideTheChatsFoldersRaisesNoFolderCard) {
 }
 
 #ifndef _WIN32
+// A PC with no pdftotext: a Mac reads the PDF itself; elsewhere the turn ends with what to do.
+TEST_F(GaiacppSidecar, AnAttachedPdfIsReadOrTheTurnSaysWhyNot) {
+    const fs::path pdf = fs::path(GAIA_REPO_FIXTURES_DIR) / "gaia" / "tiers_documents" / "northwind_annual_report.pdf";
+    ASSERT_TRUE(fs::exists(pdf)) << pdf;
+    fs::create_directories(root_ / "home" / "chat" / "uploads");
+    const fs::path attached = root_ / "home" / "chat" / "uploads" / "report.pdf";
+    fs::copy_file(pdf, attached);
+    mock().pushResponse(answerReply("Reservoir B holds 18.4."));
+    ASSERT_NO_FATAL_FAILURE(startSidecar({{"PATH", std::string("/nonexistent-gaia-test")}}));
+
+    Turn t(port_, queryBody("run-pdf", "what does the report say?",
+                            {{"session_id", "chat-pdf"}, {"documents", json::array({attached.string()})},
+                             {"allowed_paths", json::array({work_.string()})}}));
+    ASSERT_TRUE(t.waitDone()) << t.describe();
+    auto events = t.events();
+    ASSERT_NO_FATAL_FAILURE(expectSingleTerminal(events, "final")) << t.describe();
+    const json& final = events.back();
+#ifdef __APPLE__
+    EXPECT_FALSE(final.value("failed", false)) << t.describe();
+    const int indexed = indexOf(events, "tool_result");
+    ASSERT_GE(indexed, 0) << t.describe();
+    EXPECT_EQ(events[indexed]["data"][0]["result"].value("status", ""), "success") << t.describe();
+    EXPECT_GT(events[indexed]["data"][0]["result"].value("chunks", 0), 20) << t.describe();
+#else
+    EXPECT_TRUE(final.value("failed", false)) << t.describe();
+    const std::string answer = final.value("answer", "");
+    for (const char* part : {"report.pdf", "pdftotext", "not installed", "Python agent", "Agent & model"}) {
+        EXPECT_NE(answer.find(part), std::string::npos) << part << " in: " << answer;
+    }
+    EXPECT_EQ(answer.find("Tell the user"), std::string::npos) << "a note for the model, not the user";
+    EXPECT_EQ(mock().requestCount(), 0) << "the model was asked to guess";
+#endif
+}
+
 TEST_F(GaiacppSidecar, ShellCommandNamingAnOutsideFolderRaisesTheFolderCard) {
     // Not under the temp folder: commands may always read system folders.
     struct Scratch {
