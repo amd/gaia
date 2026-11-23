@@ -973,7 +973,7 @@ giving up on something you never saw.
 |---|---|
 | `ask` (default) | Every shell command except plain reads inside the allowed folders, every Python run and file write |
 | `accept edits` | Shell commands and Python still ask. File edits inside the folder you started GAIA in run without asking. Hidden files and folders (`.git/`, `.bashrc`, `.github/`), folders on your `PATH`, and a file that would stand in for a real program on Windows (`git.bat`) still ask. Started from your home folder or a drive root, nothing is auto-accepted |
-| `full access` | Nothing — see below |
+| `full access` | Nothing — see below. Deletes run only here: in the other modes they are refused, not asked |
 
 Full access is never switched on by a stray keypress. The first time `Shift+Tab`
 reaches it in a session, GAIA explains what it does and stays in `ask`; type
