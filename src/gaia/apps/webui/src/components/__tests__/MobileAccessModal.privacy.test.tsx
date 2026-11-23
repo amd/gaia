@@ -59,16 +59,23 @@ describe('MobileAccessModal privacy', () => {
     it('names ngrok as a third party and says who can use the link', async () => {
         render(<MobileAccessModal isOpen onClose={vi.fn()} />);
         expect(await screen.findByText(
-            'Your phone reaches this PC through ngrok, a third-party service. Anyone with this link and password can use GAIA until you turn this off.',
+            'Your phone reaches this PC through ngrok, a third-party service. Anyone with this link can use GAIA until you turn this off.',
         )).toBeInTheDocument();
         expect(screen.queryByText(/stays secure/)).toBeNull();
+    });
+
+    it('asks for no password: ngrok never prompts for one, the link alone gets in', async () => {
+        render(<MobileAccessModal isOpen onClose={vi.fn()} />);
+        await screen.findByText(/a third-party service/);
+        expect(screen.queryByText(/password/i)).toBeNull();
+        expect(screen.queryByText(PASSWORD)).toBeNull();
     });
 
     it('shows every line of the active dialog in Arabic', async () => {
         useChatStore.setState({ locale: 'ar' });
         render(<MobileAccessModal isOpen onClose={vi.fn()} onStop={vi.fn()} />);
         expect(await screen.findByText(/وهي خدمة تابعة لجهة خارجية/)).toBeInTheDocument();
-        for (const ar of ['النفق يعمل', 'رابط الهاتف', 'كلمة مرور النفق', 'امسح رمز QR بكاميرا هاتفك', 'إيقاف النفق']) {
+        for (const ar of ['النفق يعمل', 'رابط الهاتف', 'امسح رمز QR بكاميرا هاتفك', 'إيقاف النفق']) {
             expect(screen.getAllByText(new RegExp(ar)).length).toBeGreaterThan(0);
         }
     });

@@ -240,18 +240,6 @@ export function MobileAccessModal({ isOpen, onClose, onStop, error, setupCommand
                         </div>
                     )}
 
-                    {/* Tunnel password hint (for random ngrok URLs with interstitial) */}
-                    {status?.active && status?.publicIp && status?.url &&
-                     !status.url.includes('ngrok-free.app') && (
-                        <div className="tunnel-password-hint">
-                            <label>{t('mobile.password')}</label>
-                            <div className="tunnel-password-value">{status.publicIp}</div>
-                            <span className="tunnel-password-note">
-                                {t('mobile.passwordNote')}
-                            </span>
-                        </div>
-                    )}
-
                     {/* Instructions */}
                     {!halted && (
                         <div className="mobile-instructions">
@@ -261,9 +249,6 @@ export function MobileAccessModal({ isOpen, onClose, onStop, error, setupCommand
                                         ? t('mobile.stepOpenUrl')
                                         : t('mobile.stepScan')}
                                 </li>
-                                {status?.url && !status.url.includes('ngrok-free.app') && (
-                                    <li>{t('mobile.stepPassword')}</li>
-                                )}
                                 <li>{t('mobile.stepChat')}</li>
                                 <li>{t('mobile.thirdParty')}</li>
                             </ol>

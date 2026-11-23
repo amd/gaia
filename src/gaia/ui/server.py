@@ -98,7 +98,7 @@ from .security import (
     require_local_pc,
     via_tunnel,
 )
-from .tunnel import TunnelManager
+from .tunnel import TunnelManager, redact_tunnel_token_in_access_log
 from .utils import UploadStaticFiles
 from .utils import sanitize_static_path as _sanitize_static_path
 from .utils import uploads_dir
@@ -857,6 +857,7 @@ def create_app(db_path: str = None, webui_dist: str = None) -> FastAPI:
     # Initialize tunnel manager for mobile access
     tunnel = TunnelManager(port=DEFAULT_PORT)
     app.state.tunnel = tunnel
+    redact_tunnel_token_in_access_log()
 
     # Per-session locks prevent the same session from having multiple
     # concurrent requests, which would corrupt conversation state.

@@ -30,6 +30,27 @@ from gaia.utils.terminal import windows_hidden_popen_kwargs
 
 logger = logging.getLogger(__name__)
 
+_TOKEN_QUERY = re.compile(r"(?<=[?&])token=[^&#\s]*")
+
+
+class _RedactTunnelToken(logging.Filter):
+    """Masks the tunnel token a phone's first request carries in its query string."""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        if isinstance(record.args, tuple):
+            record.args = tuple(
+                _TOKEN_QUERY.sub("token=REDACTED", a) if isinstance(a, str) else a
+                for a in record.args
+            )
+        return True
+
+
+def redact_tunnel_token_in_access_log() -> None:
+    """Keep the tunnel token out of uvicorn's access log, which ``--debug`` turns on."""
+    access = logging.getLogger("uvicorn.access")
+    if not any(isinstance(f, _RedactTunnelToken) for f in access.filters):
+        access.addFilter(_RedactTunnelToken())
+
 
 # ── Error helpers ──────────────────────────────────────────────────────────
 

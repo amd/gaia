@@ -3548,6 +3548,8 @@ for (const locale of ['ar', 'en']) {
         // ngrok is a third party; the dialog must not promise the data stays secure.
         await expect(dialog).toContainText('ngrok');
         await expect(dialog).not.toContainText('stays secure');
+        // ngrok asks for no password, so the public IP is never shown as one.
+        await expect(dialog).not.toContainText('203.0.113.77');
         await shot(page, `mobile-access-active-${locale}`);
         expect(await audit(page)).toEqual([]);
     });
