@@ -76,6 +76,17 @@ const nextFrames = (page: Page) =>
 
 const audit = async (page: Page): Promise<string[]> => {
     await nextFrames(page);
+    // A state that just landed (a fetch resolving) is mid-transition, and an inherited
+    // colour starts a second one on the child; audit where they all end.
+    await page.evaluate(async () => {
+        for (let round = 0; round < 10; round++) {
+            const moving = document.getAnimations().filter((a) => a instanceof CSSTransition);
+            if (!moving.length) return;
+            await Promise.all(moving.map((a) => a.finished.catch(() => undefined)));
+            await new Promise((done) => requestAnimationFrame(done));
+        }
+        throw new Error('audit: CSS transitions still starting after 10 rounds');
+    });
     return page.evaluate(() => {
         const problems: string[] = [];
         const label = (el: Element) =>
