@@ -55,18 +55,18 @@ export function ltrIn(locale: string, text: string): string {
     return getLocale(locale).meta.dir === 'rtl' ? isolate(text, 'ltr') : text;
 }
 
-/** "about 40 sec", "about 13 min", "over 2 hours"; `t` is a translator or a compose `say`. */
+/** "about 40 sec", "about 13 min", "about 16 hours"; `t` is a translator or a compose `say`. */
 export function formatEta(seconds: number, t: Say): string {
     if (seconds < 90) return t('setup.eta.sec', { n: String(Math.max(1, Math.round(seconds))) });
     if (seconds <= 2 * 3600) return t('setup.eta.min', { n: String(Math.round(seconds / 60)) });
-    return t('setup.eta.long');
+    return t('setup.eta.hours', { n: String(Math.round(seconds / 3600)) });
 }
 
 /** Spoken ETA for `aria-valuetext`, never abbreviated. */
 export function spokenEta(seconds: number, t: Say): string {
     if (seconds < 90) return t('setup.eta.secSpoken', { n: String(Math.max(1, Math.round(seconds))) });
     if (seconds <= 2 * 3600) return t('setup.eta.minSpoken', { n: String(Math.round(seconds / 60)) });
-    return t('setup.eta.long');
+    return t('setup.eta.hoursSpoken', { n: String(Math.round(seconds / 3600)) });
 }
 
 /** Seconds of data before a speed or ETA is shown. */

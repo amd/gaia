@@ -3,7 +3,7 @@
 
 import { describe, expect, it } from 'vitest';
 import { tEn } from '../../../i18n/useT';
-import { DownloadMeter, formatEta, formatSize, formatSpeed } from '../format';
+import { DownloadMeter, formatEta, formatSize, formatSpeed, spokenEta } from '../format';
 import { copyableCommand } from '../GpuMemoryPanel';
 import { driveName } from '../ModelChecklist';
 
@@ -23,7 +23,10 @@ describe('sizes, speeds and times', () => {
     it('rounds the ETA as the spec says', () => {
         expect(formatEta(40, tEn)).toBe('about 40 sec');
         expect(formatEta(13 * 60, tEn)).toBe('about 13 min');
-        expect(formatEta(3 * 3600, tEn)).toBe('over 2 hours');
+        expect(formatEta(2 * 3600, tEn)).toBe('about 120 min');
+        expect(formatEta(3 * 3600, tEn)).toBe('about 3 hours');
+        expect(formatEta(16 * 3600, tEn)).toBe('about 16 hours');
+        expect(spokenEta(16 * 3600, tEn)).toBe('about 16 hours left');
     });
 
     it('names the drive, or the folder when there is no drive letter', () => {
