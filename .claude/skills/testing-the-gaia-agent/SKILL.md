@@ -211,7 +211,7 @@ or the TUI cannot find `gaia-agent`.
 
 ### 1c. The flagship ships with NO skills
 
-`gaia_agent/skills/` holds only `.gitkeep`, nothing stages `hub/skills/` into it, and
+`gaiapy/skills/` holds only `.gitkeep`, nothing stages `hub/skills/` into it, and
 every `skills:` / `skill_sets:` / `default_skill_set:` key in `gaia-agent.yaml` is
 commented out. So **L5–L7 cannot pass on a clean checkout** — not because the agent is
 broken, but because it has nothing to load.

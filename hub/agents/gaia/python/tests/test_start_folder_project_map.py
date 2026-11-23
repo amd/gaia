@@ -12,12 +12,12 @@ from __future__ import annotations
 
 import pytest
 
-pytest.importorskip("gaia_agent")
+pytest.importorskip("gaiapy")
 
 
 @pytest.fixture
 def build(monkeypatch, tmp_path):
-    from gaia_agent.agent import GaiaAgent, GaiaAgentConfig
+    from gaiapy.agent import GaiaAgent, GaiaAgentConfig
 
     from gaia.agents.base.tools import _TOOL_REGISTRY
 

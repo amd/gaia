@@ -4,14 +4,14 @@
 /** A queued message's "can't add to this reply" note holds only while that reply runs. */
 
 import { render, screen } from '@testing-library/react';
-import { afterEach, describe, expect, it } from 'vitest';
-import { useChatStore } from '../../stores/chatStore';
+import { describe, expect, it } from 'vitest';
 import { QueuedMessages } from '../QueuedMessages';
-import type { QueuedMessage } from '../../utils/messageQueue';
+import { STEER_REFUSED_NOTE, type QueuedMessage } from '../../utils/messageQueue';
+import type { MessageKey } from '../../i18n/types';
 
-const STEER_REFUSED_NOTE = "Can't add to this reply; it will send when the reply ends.";
+const NOTE_TEXT = "Can't add to this reply; it will send when the reply ends.";
 
-const refused: QueuedMessage = { id: 1, text: 'second', state: 'queued', refused: true };
+const refused: QueuedMessage = { id: 1, text: 'second', state: 'queued', note: STEER_REFUSED_NOTE };
 
 function show(items: QueuedMessage[], replying: boolean, busyRetry = false) {
     render(<QueuedMessages items={items} onRemove={() => {}} onRetry={() => {}} replying={replying} busyRetry={busyRetry} />);
@@ -20,18 +20,18 @@ function show(items: QueuedMessage[], replying: boolean, busyRetry = false) {
 describe('a queued message the running reply refused', () => {
     it('says so while that reply runs', () => {
         show([refused], true);
-        expect(screen.getByText(STEER_REFUSED_NOTE)).toBeTruthy();
+        expect(screen.getByText(NOTE_TEXT)).toBeTruthy();
     });
 
     it('drops the note once the reply has ended and it is next to send', () => {
         show([refused], false);
-        expect(screen.queryByText(STEER_REFUSED_NOTE)).toBeNull();
+        expect(screen.queryByText(NOTE_TEXT)).toBeNull();
         expect(screen.getByText('Sending next.')).toBeTruthy();
     });
 
     it('shows the busy wait, not the stale note, when the chat is still busy', () => {
         show([refused], false, true);
-        expect(screen.queryByText(STEER_REFUSED_NOTE)).toBeNull();
+        expect(screen.queryByText(NOTE_TEXT)).toBeNull();
         expect(screen.getByText(/still busy in this chat/)).toBeTruthy();
     });
 
@@ -40,36 +40,8 @@ describe('a queued message the running reply refused', () => {
         expect(screen.getByText('Queued. Sends when this reply ends.')).toBeTruthy();
     });
 
-    it('treats refused: false as not refused', () => {
-        show([{ id: 3, text: 'fourth', state: 'queued', refused: false }], true);
+    it('treats an empty note as no note', () => {
+        show([{ id: 3, text: 'fourth', state: 'queued', note: '' as MessageKey }], true);
         expect(screen.getByText('Queued. Sends when this reply ends.')).toBeTruthy();
-    });
-});
-
-describe('the queued-message strip in Arabic (#7629)', () => {
-    afterEach(() => useChatStore.setState({ locale: 'en' }));
-
-    it('is translated, and the typed text keeps its own direction', () => {
-        useChatStore.setState({ locale: 'ar' });
-        render(<QueuedMessages items={[{ id: 4, text: 'And what if the rate were 5%?', state: 'queued' }]}
-            onRemove={() => {}} onSteer={() => {}} onRetry={() => {}} replying />);
-        expect(screen.getByText(/في قائمة الانتظار/)).toBeTruthy();
-        expect(screen.getByRole('button', { name: /أضفها إلى هذا الرد/ })).toBeTruthy();
-        expect(screen.getByText('And what if the rate were 5%?').getAttribute('dir')).toBe('auto');
-    });
-
-    it('translates the refused and not-sent states too', () => {
-        useChatStore.setState({ locale: 'ar' });
-        render(<QueuedMessages items={[
-            { id: 5, text: 'refused one', state: 'queued', refused: true },
-            { id: 6, text: 'failed one', state: 'failed', error: 'boom' },
-            { id: 7, text: 'failed bare', state: 'failed' },
-        ]} onRemove={() => {}} onRetry={() => {}} replying />);
-        const states = [...document.querySelectorAll('.queued-message-state')].map((el) => el.textContent ?? '');
-        expect(states[0]).toContain('تعذّرت الإضافة إلى هذا الرد');
-        expect(states[1]).toContain('لم تُرسل.');
-        expect(states[1]).toContain('boom');
-        expect(states[2]).toContain('لم تُرسل.');
-        expect(screen.getAllByRole('button', { name: /أعد الإرسال/ })).toHaveLength(2);
     });
 });

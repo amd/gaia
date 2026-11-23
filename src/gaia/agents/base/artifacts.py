@@ -230,9 +230,10 @@ class ArtifactStore:
         start, first_length = self._entry_span(handle, first)
         if last < first:
             raise ValueError(f"to_entry {last} is before entry {first}.")
-        self._entry_span(handle, last)
         with self._lock:
             spans = self._indexes[handle]
+        # A to_entry past the index reads to its last entry.
+        last = min(last, len(spans))
         end, reached = start + first_length, first
         for n in range(first + 1, last + 1):
             offset, length = spans[n - 1]

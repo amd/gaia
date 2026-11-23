@@ -56,7 +56,7 @@ inside the publish.
 | `hub/agents/gaia/npm/binaries.lock.json` | two lanes (sidecar + terminal-hub) → artifact + **sha256** + size + `baseUrl` |
 | `hub/agents/gaia/npm/{README,SPEC,SKILL,CHANGELOG,SCORECARD}.md` | integrator docs, kept in sync per CLAUDE.md |
 | `.github/workflows/release_agent_gaia.yml` | the tag-triggered release |
-| `.github/workflows/build_flagship_sidecar.yml` | the per-platform freeze matrix, shared with `publish.yml` |
+| `.github/workflows/build_gaiapy.yml` | the per-platform freeze matrix, shared with `publish.yml` |
 
 Notes:
 - **Manifest validation:** validate `gaia-agent.yaml` with `gaia agent test
@@ -106,7 +106,9 @@ If any file can't be moved, the command fails and names it. The lock's hashes ar
 5. **Gates:** `tests` (Python suite + npm vitest) and `scorecard-gate` (parses
    `hub/agents/gaia/npm/SCORECARD.md`, bar from
    `tests/fixtures/gaia/quality_gate_thresholds.json`, regression vs the previous
-   `agent-pkg-gaia-*` tag) block publish. `gaia-eval` runs a judged subset on
+   `agent-pkg-gaia-*` tag, and — when the card changed since that tag — its
+   `agent.version` must equal the release version) block publish. A card carried
+   over unchanged only gets a "stale scorecard" warning. `gaia-eval` runs a judged subset on
    self-hosted hardware and only reports.
 6. **Approve the gate.** `publish` pauses on the `agent-publish` environment until
    a maintainer approves; the publish secrets aren't readable until then.
@@ -175,7 +177,7 @@ release:
 
 - `.github/workflows/release_agent_gaia.yml` — the release workflow (its header
   comments document the whole contract).
-- `.github/workflows/build_flagship_sidecar.yml` — the freeze matrix.
+- `.github/workflows/build_gaiapy.yml` — the freeze matrix.
 - `hub/agents/gaia/python/gaia-agent.yaml` — manifest.
 - `hub/agents/gaia/npm/{package.json,binaries.lock.json,SPEC.md}` — launcher
   package and the lock schema (SPEC §2).

@@ -513,20 +513,29 @@ Every other path serves the Agent UI page, except paths under `/api`: an unknown
   </Accordion>
 
   <Accordion title="GET /api/health">
-    Health check with database statistics.
+    Liveness probe. The one route that needs no [API token](#api-token), so it
+    returns nothing about the user.
 
     **Response:**
     ```json
     {
       "status": "ok",
-      "service": "gaia-agent-ui",
-      "stats": {
-        "sessions": 12,
-        "messages": 245,
-        "documents": 5,
-        "total_chunks": 320,
-        "total_size_bytes": 15234567
-      }
+      "service": "gaia-agent-ui"
+    }
+    ```
+  </Accordion>
+
+  <Accordion title="POST /api/auth/launch-code">
+    A link that signs a browser in to this Agent UI, for a launcher that holds
+    the [API token](#api-token) and opens a browser. Needs the token and
+    `X-Gaia-UI: 1`. Opening the link sets the `gaia_ui_token` cookie and
+    redirects to the same page without the code. The code works once.
+
+    **Response:**
+    ```json
+    {
+      "path": "/?launch=3q2-Xo...",
+      "expires_in": 600
     }
     ```
   </Accordion>
@@ -678,7 +687,7 @@ Every other path serves the Agent UI page, except paths under `/api`: an unknown
     }
     ```
 
-    **Response (400):** the model cannot be pulled — it is hosted on a gateway (no weights to download), it is a `user.` model GAIA has no checkpoint and recipe for and Lemonade doesn't list either, or Lemonade's model list couldn't be read to check such a model (`detail` asks the user to try again). A `user.` model Lemonade already lists is pulled by name instead. `detail` says which case applies, and for an unknown model tells the user to add it from its Hugging Face link: **Settings > Model > Add a model from Hugging Face** in the Agent UI, or `/provider` → **Local** → `ctrl+a` in the terminal app. The Agent UI shows `detail` next to the Download button that was pressed.
+    **Response (400):** the model cannot be pulled — it is hosted on a gateway (no weights to download), it is a `user.` model GAIA has no checkpoint and recipe for and Lemonade doesn't list either, or Lemonade's model list couldn't be read to check such a model (`detail` asks the user to try again). A `user.` model Lemonade already lists is pulled by name instead. `detail` says which case applies, and for an unknown model tells the user to add it from its Hugging Face link: **Settings > Agent & model > Add a model from Hugging Face** in the Agent UI, or `/provider` → **Local** → `ctrl+a` in the terminal app. The Agent UI shows `detail` next to the Download button that was pressed.
   </Accordion>
 
   <Accordion title="POST /api/system/download-progress/dismiss">
@@ -784,8 +793,40 @@ Every other path serves the Agent UI page, except paths under `/api`: an unknown
     | Field | Type | Required | Description |
     |-------|------|----------|-------------|
     | `custom_model` | string or null | No | Model ID to use instead of the default. An empty string clears the override; `null` leaves it unchanged. |
+    | `flagship_agent` | string or null | No | Which program is the GAIA agent: `gaiapy` (the Python agent) or `gaiacpp` (the native C++ agent, beta). Saved as `flagship_agent` in `~/.gaia/config.json`, which the terminal UI reads too, and applied from the next message. Refused with `422` when `gaiacpp` isn't installed, `409` while a chat is answering, and `403` unless the request comes from the PC running GAIA. `GET /api/settings` returns the saved one as `flagship_agent` (which can be a name a newer GAIA saved that this version can't run, until another is chosen), and `gaiacpp_available`. |
 
     **Response:** Same shape as `GET /api/settings`.
+  </Accordion>
+
+  <Accordion title="GET /api/agent-programs">
+    List the two programs that can be the GAIA agent, with whether each is on this PC and its download size.
+
+    **Response:**
+    ```json
+    {
+      "current": "gaiapy",
+      "programs": [
+        { "id": "gaiapy", "installed": true, "size_bytes": 163381945, "can_download": false, "update_available": false, "unavailable_reason": null, "unavailable_code": null },
+        { "id": "gaiacpp", "installed": false, "size_bytes": 43909632, "can_download": true, "update_available": false, "unavailable_reason": null, "unavailable_code": null }
+      ],
+      "download": { "state": "idle", "bytes_done": 0, "bytes_total": null, "error": null }
+    }
+    ```
+
+    | Field | Type | Description |
+    |-------|------|-------------|
+    | `current` | string | The saved agent choice: `gaiapy` or `gaiacpp`, or a name a newer GAIA saved that this version can't run (it matches no entry in `programs`; choosing another in Settings fixes it). |
+    | `programs[].size_bytes` | number or null | Download size for this PC; `null` when it could not be read. |
+    | `programs[].can_download` | boolean | `true` for a `gaiacpp` this release offers that is not installed, or is from another release. |
+    | `programs[].unavailable_reason` | string or null | Why `gaiacpp` can be neither used nor downloaded here, for example a development build. |
+    | `programs[].unavailable_code` | string or null | `no_release`, `unreachable` or `unverifiable` when the reason is one of those, so a client can show it in the user's language; `null` for any other reason. |
+    | `download` | object | The `gaiacpp` download: `state` is `idle`, `downloading`, `done` or `failed`, with `bytes_done`, `bytes_total` and `error`. |
+  </Accordion>
+
+  <Accordion title="POST /api/agent-programs/{program_id}/download">
+    Start downloading `gaiacpp` in the background (`program_id` must be `gaiacpp`). The file is checked against the release's SHA-256 list and the version it prints before it is installed in `~/.gaia/bin`. Answers `202` with the `download` object above; a second call while one is running returns the running one. `409` when it is already installed, or when it would replace the agent in use while a chat is answering or setup is still running; `404` for any other id; `403` unless the request comes from the PC running GAIA. A copy from another GAIA release can be downloaded again, and a download that fails leaves the copy in use and its record as they were.
+
+    `GET /api/agent-programs/{program_id}/download` returns the same `download` object; poll it for the progress bar. Choosing the agent afterwards is `PUT /api/settings`.
   </Accordion>
 </AccordionGroup>
 
@@ -1072,7 +1113,9 @@ Deleting a chat deletes its copies.
     "accent": "american", "gender": "female", "quality": "A-"}, ...]}`.
     `speed` is a percentage of normal speed. Stored as `read_aloud_voice`,
     `read_aloud_speed` and `read_aloud_auto` in `~/.gaia/config.json`, which
-    the TUI reads too.
+    the TUI reads too. `available` is false where GAIA doesn't offer its voice
+    (macOS for now), with `unavailable_reason` saying why; the app then hides
+    Read aloud and doesn't auto-read, and the saved settings still load.
   </Accordion>
 
   <Accordion title="PUT /api/speech/settings">
@@ -1085,7 +1128,8 @@ Deleting a chat deletes its copies.
     Whether Lemonade has the `kokoro-v1` voice model on disk:
     `{"downloaded": bool, "size_gb": float | null}`. The app checks it before
     its first read so it can say the model is downloading. **503** when
-    Lemonade is unreachable, **502** when Lemonade doesn't list the model.
+    Lemonade is unreachable, **502** when Lemonade doesn't list the model,
+    **409** where GAIA doesn't offer its voice.
   </Accordion>
 
   <Accordion title="POST /api/speech">
@@ -1094,9 +1138,36 @@ Deleting a chat deletes its copies.
     body names `voice` or `speed`. Downloads the model on first use, which the
     app announces after `GET /api/speech/model`. **422** for
     empty or over-long text or a bad voice or speed, **503** when Lemonade is
-    unreachable, **502** when Lemonade can't make the speech; each `detail`
-    says why. The app splits a long reply into pieces and plays them back to
+    unreachable, **502** when Lemonade can't make the speech or returns far
+    less audio than the text needs (cut-off speech is refused, never sent),
+    **409** where GAIA doesn't offer its voice; each `detail` says why. The app splits a long reply into pieces and plays them back to
     back.
+  </Accordion>
+</AccordionGroup>
+
+### Image creation
+
+<AccordionGroup>
+  <Accordion title="GET /api/images/settings">
+    The saved image model, size and steps, and the models this Lemonade
+    offers: `{"model": "SDXL-Turbo", "size": null, "steps": null,
+    "max_steps": 100, "models": [{"id": "Z-Image-Turbo", "downloaded": true,
+    "downloads_on_first_use": false, "default_size": "1024x1024",
+    "default_steps": 9, "sizes": ["512x512", "1024x1024", ...]}, ...],
+    "model_available": true, "chat_model": "Qwen3.6-35B-A3B-GGUF",
+    "chat_model_creates_images": true}`. `null` size or steps is the model's
+    own default. Models are the downloaded image models plus the legacy SD
+    models that download on first use; sizes stay under each model's
+    `soft_pixel_cap`. Stored as `image_model`, `image_size` and `image_steps`
+    in `~/.gaia/config.json`, which the TUI reads too. **503** when Lemonade's
+    catalog can't be read.
+  </Accordion>
+
+  <Accordion title="PUT /api/images/settings">
+    Save any of `model`, `size` (`WIDTHxHEIGHT`, or `null` for automatic) and
+    `steps` (1–100, or `null`). A new model resets size and steps to automatic
+    unless the request sets them. **422** names a model that isn't on this
+    Lemonade or a size it doesn't take, and nothing is saved.
   </Accordion>
 </AccordionGroup>
 
@@ -1492,9 +1563,13 @@ Deleting a chat deletes its copies.
   </Accordion>
 
   <Accordion title="POST /api/files/upload">
-    Upload an arbitrary file for use as a chat attachment (not added to the
-    RAG library). Use `POST /api/documents/upload` instead if you want the
-    file indexed for Q&A.
+    Upload an arbitrary file for use as a chat attachment. Nothing is added to
+    the library on upload; when a chat message links a document uploaded here,
+    that turn adds it to the library and attaches it to the chat (images and
+    recordings are not added), and the turn's `done` event lists it in
+    `documents_added`. Detaching it from the chat takes the upload away from
+    that chat too. Use `POST /api/documents/upload` to add a file to the
+    library without a chat.
 
     A refused upload returns HTTP 400 (or 413) with `detail` as an object:
     `{"status", "message"}`, where `message` is an English sentence. `status` is
@@ -1854,7 +1929,7 @@ Used to reach the UI from a phone.
 
   <Accordion title="PUT /api/chat/permissions/{session_id}">
     Switch the chat between `ask` (every gated tool prompts) and `full_access`
-    (gated tools run unasked and shell guardrails are lifted, as the TUI's
+    (gated tools run unasked and the shell runs any command, as the TUI's
     `/full-access`). Takes effect on the next gated tool, including mid-turn.
 
     **Request:** `{"mode": "full_access"}` — any value other than `ask` or
@@ -1884,16 +1959,20 @@ Used to reach the UI from a phone.
 
 <AccordionGroup>
   <Accordion title="POST /api/documents/upload">
-    Multipart drag-and-drop upload. Stores the file in the library and
-    enqueues it for indexing. Content already in the library returns the
+    Multipart drag-and-drop upload. Stores a copy of the file in the library
+    (under `$GAIA_HOME/chat/documents/`) and enqueues it for indexing. A chat's
+    agent can read the copy only once it is attached to that chat; other chats
+    can't list or open it. Content already in the library returns the
     existing document; if that document's stored file is gone, the new copy
     takes its place. A file that can't be read is a **422** whose
     `detail.status` is one of the `error_kind` values listed under
     `upload-path` and whose
     `detail.message` says what to do. When the model server didn't answer,
-    it is a **503** with `detail.status` `model_server_down` or
-    `model_server_busy`: the file is fine, and sending it again works once
-    the server is back.
+    the copy is kept and the document comes back with `indexing_status`
+    `failed` and `error_kind` `model_server_down` or `model_server_busy`: the
+    file is fine. The Agent UI re-indexes a `model_server_down` document by
+    itself (`POST /api/documents/{doc_id}/reindex`) once the server is back; a
+    `model_server_busy` one waits for the user's Retry.
   </Accordion>
 
   <Accordion title="GET /api/documents/{doc_id}/status">
@@ -3428,12 +3507,57 @@ these to install the GAIA agent when it is missing.
 ## Security
 
 <Note>
-  The backend binds loopback and has no authentication while the tunnel is
-  off, so any web page the user's browser visits could otherwise drive it.
-  Three layers close that off — see
+  Every `/api/*` and `/v1/*` request needs the Agent UI API token, including
+  requests from this PC: binding loopback is not access control. Three more
+  layers stop a web page the user visits from driving the backend through
+  their own browser. See
   [`src/gaia/ui/security.py`](https://github.com/amd/gaia/blob/main/src/gaia/ui/security.py)
+  and [`src/gaia/ui/api_token.py`](https://github.com/amd/gaia/blob/main/src/gaia/ui/api_token.py)
   for the enforcing code.
 </Note>
+
+### API token
+
+The token is per install: the backend creates it on first start as
+`agent-ui-token` in GAIA's home folder (`~/.gaia`, or `GAIA_HOME`), readable
+only by you, and reuses it after that. Present it as
+`Authorization: Bearer <token>` or as the `gaia_ui_token` cookie. A missing or
+wrong token is a **401** with `"code": "ui_token_required"`.
+
+| Client | How it gets the token |
+|--------|-----------------------|
+| Desktop app | The main process adds the header to its own requests to the backend it started; the token never reaches the page or a URL |
+| Browser (`gaia chat --ui`) | Open the link it prints, `http://127.0.0.1:4200/?launch=<code>`. The code works once, for 10 minutes, and sets an HttpOnly, `SameSite=Strict` cookie so the browser stays signed in across restarts |
+| Scripts, MCP server, eval harness | Read the file; in Python, `gaia.ui.api_token.auth_headers()` |
+| Phone over mobile access | The tunnel's own token, from the QR code; it stops working when mobile access is off |
+
+Only `GET /api/health` and CORS preflights need no token; health returns no
+user data. `GAIA_UI_TOKEN_FILE` points the backend and its clients at another
+file, which must exist. To rotate the token, stop the Agent UI, delete the
+file and start it again; browsers then need a new launch link.
+
+<Warning>
+  Anything that holds the token speaks for you, so a few things deserve care:
+
+  - **Browsers send a cookie to every port on the same host.** A browser
+    signed in at `127.0.0.1:4200` also sends `gaia_ui_token` to any other
+    page it opens at `http://127.0.0.1:<port>`. Use the desktop app, which
+    keeps the token out of the browser, on a PC where you open untrusted
+    local web pages.
+  - **Front-ends that add the token answer for it.** The Agent UI MCP server
+    over HTTP and the Vite dev server (`npm run dev`) attach the token to
+    what they forward, so while one runs, whatever can reach its port can
+    use the Agent UI.
+  - **The launch code works for 10 minutes.** `gaia chat --ui` prints it
+    only to a terminal; the desktop app's backend never prints one.
+</Warning>
+
+```bash
+curl -H "Authorization: Bearer $(cat ~/.gaia/agent-ui-token)" \
+  http://localhost:4200/api/sessions
+```
+
+### Browser defenses
 
 1. **CSRF header.** Every mutating (non-GET/HEAD/OPTIONS) request to `/api/*`
    or `/v1/*` must carry `X-Gaia-UI: 1`. A cross-origin page cannot set a
@@ -3647,7 +3771,7 @@ def test_message_ordering():
 The Agent UI server delegates to the GAIA [Agent](/sdk/core/agent-system) for LLM communication and tool execution:
 
 ```python
-from gaia_agent.chat_agent import ChatAgent, ChatAgentConfig
+from gaiapy.chat_agent import ChatAgent, ChatAgentConfig
 
 # The server creates a ChatAgent instance per request. ChatAgent derives its
 # system prompt from `prompt_profile` ("chat" | "doc" | "file" | "data" |

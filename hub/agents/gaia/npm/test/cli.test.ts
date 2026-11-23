@@ -111,13 +111,13 @@ describe("contract constants", () => {
     // Derived from the Python source, not restated, so a bump on one side
     // without the other fails here instead of silently drifting.
     const serverPy = fs.readFileSync(
-      path.join(__dirname, "..", "..", "python", "gaia_agent", "server.py"),
+      path.join(__dirname, "..", "..", "python", "gaiapy", "server.py"),
       "utf8",
     );
     const match = serverPy.match(/^API_VERSION = "([^"]+)"/m);
     if (!match) {
       throw new Error(
-        "could not find `API_VERSION = \"...\"` in gaia_agent/server.py — " +
+        "could not find `API_VERSION = \"...\"` in gaiapy/server.py — " +
           "update this test's regex if the sidecar's declaration moved",
       );
     }

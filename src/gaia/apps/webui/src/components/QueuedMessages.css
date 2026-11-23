@@ -12,9 +12,8 @@
 
 .queued-message {
     display: flex;
-    flex-wrap: wrap;
     align-items: center;
-    gap: 4px 8px;
+    gap: 8px;
     min-width: 0;
     padding: 6px 8px 6px 10px;
     background: var(--bg-card);
@@ -42,7 +41,7 @@
 }
 
 .queued-message-text {
-    flex: 1 1 8em;
+    flex: 1;
     min-width: 0;
     overflow: hidden;
     color: var(--text-primary);
@@ -52,15 +51,8 @@
     white-space: nowrap;
 }
 
-/* Typed text keeps its own direction; in an rtl window it still starts at the reading edge. */
-.queued-message:dir(rtl) .queued-message-text {
-    text-align: right;
-}
-
-/* A longer translation wraps the buttons to a second line instead of pushing them out of the box. */
 .queued-message-state {
-    flex: 0 1 auto;
-    min-width: 0;
+    flex-shrink: 0;
     color: var(--text-muted);
     font-size: 12px;
 }

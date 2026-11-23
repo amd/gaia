@@ -151,15 +151,15 @@ def test_a_per_query_limit_overrides_the_agents(monkeypatch):
 
 
 def test_the_flagship_limit_follows_the_same_rules(monkeypatch):
-    gaia_agent = pytest.importorskip("gaia_agent.agent")
-    assert gaia_agent.flagship_max_steps() == 1000
-    assert gaia_agent.GaiaAgentConfig().max_steps == 1000
-    assert gaia_agent.GaiaAgentConfig(max_steps=9).max_steps == 9
+    gaiapy = pytest.importorskip("gaiapy.agent")
+    assert gaiapy.flagship_max_steps() == 1000
+    assert gaiapy.GaiaAgentConfig().max_steps == 1000
+    assert gaiapy.GaiaAgentConfig(max_steps=9).max_steps == 9
     monkeypatch.setenv("GAIA_AGENT_MAX_STEPS", "33")
-    assert gaia_agent.GaiaAgentConfig().max_steps == 33
+    assert gaiapy.GaiaAgentConfig().max_steps == 33
     monkeypatch.setenv("GAIA_AGENT_MAX_STEPS", "lots")
     with pytest.raises(ValueError, match=r"default \(1000\)"):
-        gaia_agent.GaiaAgentConfig()
+        gaiapy.GaiaAgentConfig()
 
 
 # ------------------------------------------- running out never yields nothing

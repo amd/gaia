@@ -27,11 +27,14 @@ STARTER = frozenset(
 
 
 @pytest.fixture(autouse=True)
-def in_process_agent(monkeypatch):
+def in_process_agent(monkeypatch, tmp_path):
     """No agent registry in unit tests; the flagship runs in-process, as from source."""
+    import gaia.config as config_mod
     from gaia.ui import session_environment
 
     monkeypatch.setattr(session_environment, "relayed", lambda _session: False)
+    # Which agent was chosen is read from config; never this PC's.
+    monkeypatch.setattr(config_mod, "GAIA_CONFIG_FILE", tmp_path / "config.json")
 
 
 def _ctx(skills=STARTER, docs=0, mail=False):
@@ -159,6 +162,64 @@ def test_a_flagship_that_cannot_start_says_why_and_offers_no_folder(
     assert body["working_folder"]["choosable"] is False
     assert body["cards"] == []
     assert "couldn't start" in body["skills_error"]
+    assert body["agent_problem"] is None
+
+
+@pytest.fixture
+def gaiacpp_chosen(tmp_path, monkeypatch, relayed_gaia):
+    """gaiacpp is the saved agent, and the daemon refuses to start it."""
+    import gaia.config as config_mod
+    from gaia.daemon.sidecars import fetch
+    from gaia.daemon.sidecars.errors import SidecarError
+    from gaia.ui.sidecar import daemon_client
+
+    monkeypatch.setenv("GAIA_HOME", str(tmp_path / "home"))
+    monkeypatch.delenv(fetch.NATIVE_FLAGSHIP_PATH_ENV, raising=False)
+    config_mod.GaiaConfig.save_key("flagship_agent", fetch.NATIVE_FLAGSHIP)
+
+    def refuse(_agent_id):
+        raise SidecarError("the daemon refused to ensure the 'gaia' sidecar")
+
+    monkeypatch.setattr(daemon_client, "acquire_handle", refuse)
+    return tmp_path / "home" / "bin" / fetch.native_flagship_executable_name()
+
+
+def test_a_chosen_gaiacpp_that_is_not_here_is_named_as_the_reason(
+    tmp_path, monkeypatch, gaiacpp_chosen
+):
+    body = _start(tmp_path, monkeypatch)
+    assert body["skills_error"]
+    assert body["agent_problem"]["code"] == "gaiacpp_missing"
+    assert str(gaiacpp_chosen) in body["agent_problem"]["detail"]
+
+
+def test_a_chosen_gaiacpp_that_fails_its_check_is_named_as_the_reason(
+    tmp_path, monkeypatch, gaiacpp_chosen
+):
+    import json
+
+    from gaia.daemon.sidecars import fetch
+
+    gaiacpp_chosen.parent.mkdir(parents=True)
+    gaiacpp_chosen.write_bytes(b"changed after download")
+    gaiacpp_chosen.chmod(0o755)
+    (gaiacpp_chosen.parent / fetch.NATIVE_INSTALL_RECORD_NAME).write_text(
+        json.dumps({"version": "0.26.1", "sha256": "0" * 64}), encoding="utf-8"
+    )
+    body = _start(tmp_path, monkeypatch)
+    assert body["agent_problem"]["code"] == "gaiacpp_invalid"
+    assert "does not match" in body["agent_problem"]["detail"]
+
+
+def test_the_python_agent_failing_to_start_is_not_blamed_on_gaiacpp(
+    tmp_path, monkeypatch, gaiacpp_chosen
+):
+    import gaia.config as config_mod
+
+    config_mod.GaiaConfig.save_key("flagship_agent", "gaiapy")
+    body = _start(tmp_path, monkeypatch)
+    assert body["skills_error"]
+    assert body["agent_problem"] is None
 
 
 def test_working_folder_falls_back_to_gaias_folder_when_cwd_is_home(

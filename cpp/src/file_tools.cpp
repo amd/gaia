@@ -5,17 +5,25 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
+#include <cctype>
+#include <chrono>
+#include <cmath>
+#include <cstdio>
+#include <cstdlib>
 #include <cstdint>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <map>
 #include <mutex>
+#include <set>
 #include <sstream>
 #include <string>
 #include <vector>
 
 #include "gaia/ignore.h"
+#include "gaia/secrets.h"
 
 namespace fs = std::filesystem;
 
@@ -160,22 +168,223 @@ std::string shortHash(const std::string& full) {
 /// Canonical map key so "./a.txt", "a.txt" and "/abs/a.txt" share a record.
 std::string trackerKey(const std::string& path) {
     std::error_code ec;
-    fs::path p = fs::weakly_canonical(fs::path(path), ec);
+    fs::path p = fs::weakly_canonical(fs::u8path(path), ec);
     if (ec || p.empty()) {
-        p = fs::absolute(fs::path(path), ec);
-        if (ec) p = fs::path(path);
+        p = fs::absolute(fs::u8path(path), ec);
+        if (ec) p = fs::u8path(path);
     }
-    return p.generic_string();
+    return p.generic_u8string();
 }
 
 /// Read a whole file as raw bytes. Returns false when it cannot be opened.
 bool readWholeFile(const std::string& path, std::string& out) {
-    std::ifstream file(path, std::ios::binary);
+    std::ifstream file(fs::u8path(path), std::ios::binary);
     if (!file.is_open()) return false;
     std::ostringstream buffer;
     buffer << file.rdbuf();
     out = buffer.str();
     return true;
+}
+
+struct LineBreaks {
+    size_t crlf = 0;
+    size_t loneLf = 0;
+    char previous = 0;
+
+    void add(char c) {
+        if (c == '\n') ++(previous == '\r' ? crlf : loneLf);
+        previous = c;
+    }
+    void add(const char* data, size_t len) {
+        for (size_t i = 0; i < len; ++i) add(data[i]);
+    }
+    bool crlfFile() const { return crlf > loneLf; }
+    bool mixed() const { return crlf > 0 && loneLf > 0; }
+};
+
+LineBreaks lineBreaksOf(const std::string& text) {
+    LineBreaks breaks;
+    breaks.add(text.data(), text.size());
+    return breaks;
+}
+
+/// False when the file cannot be read to the end.
+bool lineBreaksOfFile(const std::string& path, LineBreaks& breaks) {
+    std::ifstream file(fs::u8path(path), std::ios::binary);
+    if (!file.is_open()) return false;
+    std::array<char, 64 * 1024> buffer{};
+    while (file.good()) {
+        file.read(buffer.data(), static_cast<std::streamsize>(buffer.size()));
+        const std::streamsize got = file.gcount();
+        if (got <= 0) break;
+        breaks.add(buffer.data(), static_cast<size_t>(got));
+    }
+    return !file.bad();
+}
+
+std::string crlfToLf(const std::string& text) {
+    std::string out;
+    out.reserve(text.size());
+    for (size_t i = 0; i < text.size(); ++i) {
+        if (text[i] == '\r' && i + 1 < text.size() && text[i + 1] == '\n') continue;
+        out.push_back(text[i]);
+    }
+    return out;
+}
+
+std::string lfToCrlf(const std::string& text) {
+    std::string out;
+    out.reserve(text.size() + text.size() / 16);
+    for (size_t i = 0; i < text.size(); ++i) {
+        if (text[i] == '\n' && (i == 0 || text[i - 1] != '\r')) out.push_back('\r');
+        out.push_back(text[i]);
+    }
+    return out;
+}
+
+/// Where byte `lfOffset` of crlfToLf(raw) sits in `raw`; a "\n" that was "\r\n" maps to its "\r".
+size_t rawOffset(const std::string& raw, size_t lfOffset) {
+    size_t at = 0;
+    for (size_t seen = 0; seen < lfOffset && at < raw.size(); ++seen) {
+        at += (raw[at] == '\r' && at + 1 < raw.size() && raw[at + 1] == '\n') ? 2 : 1;
+    }
+    return at;
+}
+
+/// "" when `path` can be opened as a file; else why not. A device name is
+/// refused by its spelling: asking Windows about CON or COM1 can itself block.
+std::string notAFileReason(const std::string& path) {
+#ifdef _WIN32
+    const bool devicePath = path.size() >= 4 && (path[0] == '\\' || path[0] == '/') &&
+                            (path[1] == '\\' || path[1] == '/') && path[2] == '.' &&
+                            (path[3] == '\\' || path[3] == '/');
+    // Windows ignores an extension, a stream name and trailing spaces on a device name.
+    std::string stem = path.substr(path.find_last_of("/\\") + 1);
+    stem = stem.substr(0, stem.find_first_of(".:"));
+    while (!stem.empty() && stem.back() == ' ') stem.pop_back();
+    std::transform(stem.begin(), stem.end(), stem.begin(),
+                   [](unsigned char c) { return static_cast<char>(std::toupper(c)); });
+    static const std::set<std::string> devices = {
+        "CON", "PRN", "AUX", "NUL", "CONIN$", "CONOUT$",
+        "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8", "COM9",
+        "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9"};
+    if (devicePath || devices.count(stem)) {
+        return path + " names a Windows device, not a file, and was not opened. Use a different file name.";
+    }
+#endif
+    std::error_code ec;
+    const fs::file_status status = fs::status(fs::u8path(path), ec);
+    if (ec || !fs::exists(status) || fs::is_regular_file(status)) return "";
+    if (fs::is_directory(status)) {
+        return path + " is a folder, not a file. Use file_search with this path to list what is in it.";
+    }
+    return path + " is not a regular file (a device, pipe or socket) and was not opened.";
+}
+
+/// "" when the agent may open `path`; else why a credential file stays closed.
+/// Judged by the real file's name, so a link called notes.txt to .env is refused too.
+std::string credentialFileReason(const std::string& path) {
+    const fs::path given = fs::u8path(path);
+    std::error_code ec;
+    const fs::path real = fs::weakly_canonical(given, ec);
+    const std::string name = (ec ? given : real).filename().u8string();
+    if (!isCredentialFileName(name)) return "";
+    return "'" + name + "' holds credentials, keys or secrets, so the agent may not read or change it. "
+           "Open it yourself if you need its contents.";
+}
+
+size_t countOf(const std::string& text, const std::string& what) {
+    size_t count = 0;
+    for (size_t at = text.find(what); at != std::string::npos; at = text.find(what, at + what.size())) ++count;
+    return count;
+}
+
+/// "" unless the write would put "[redacted]" where `current` holds a secret a read showed masked.
+std::string maskedSecretReason(const std::string& path, const std::string& current,
+                               const std::string& oldText, const std::string& newText) {
+    static const std::string marker = "[redacted]";
+    const size_t inOld = countOf(oldText, marker);
+    const bool addsMarker = countOf(newText, marker) > inOld;
+    if (inOld == 0 && !addsMarker) return "";
+    std::string what;
+    if (inOld > 0 && crlfToLf(current).find(crlfToLf(oldText)) == std::string::npos) {
+        what = "old_string";
+    } else if (addsMarker && holdsCredentials(current)) {
+        what = "The new text";
+    } else {
+        return "";
+    }
+    return what + " contains " + marker + ", which stands in for a secret hidden from what you read; it is not "
+           "text in " + path + ". Nothing was written. Leave the lines that hold the secret out of old_string "
+           "and the new text, or ask the user to change them.";
+}
+
+/// Replace the file at `path` with `content` through a temporary file beside
+/// it, so a write that fails leaves the original intact. "" on success, else
+/// what went wrong.
+std::string writeInPlace(const fs::path& target, const std::string& path, const std::string& content) {
+    std::ofstream out(target, std::ios::binary | std::ios::trunc);
+    if (!out.is_open()) return "Cannot open file for writing: " + path;
+    out.write(content.data(), static_cast<std::streamsize>(content.size()));
+    out.close();
+    if (out.fail()) return "Write failed for: " + path + " (the disk may be full).";
+    return "";
+}
+
+std::string replaceFileContents(const std::string& path, const std::string& content) {
+    fs::path target = fs::u8path(path);
+    std::error_code ec;
+    if (fs::is_symlink(target, ec)) {
+        // Written through the link, as opening it would: renaming over it would replace the link itself.
+        const fs::path resolved = fs::canonical(target, ec);
+        if (ec) return writeInPlace(target, path, content);  // a link to a file not there yet
+        target = resolved;
+    }
+    const bool existed = fs::exists(target, ec);
+    // A rename would detach the other names of a hard-linked file.
+    if (existed && fs::hard_link_count(target, ec) > 1 && !ec) return writeInPlace(target, path, content);
+    if (existed) {
+        // A rename would replace a file this process may not write to.
+        std::ofstream probe(target, std::ios::binary | std::ios::app);
+        if (!probe.is_open()) return "Cannot open file for writing: " + path;
+    }
+
+    static std::atomic<unsigned> counter{0};
+    fs::path temp = target;
+    temp += ".gaia-tmp-" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()) + "-" +
+            std::to_string(counter.fetch_add(1));
+    const auto discard = [&temp] {
+        std::error_code removeEc;
+        fs::remove(temp, removeEc);
+    };
+    {
+        std::ofstream out(temp, std::ios::binary | std::ios::trunc);
+        // No new file can be made beside it (a folder that only lets this file be written).
+        if (!out.is_open()) return writeInPlace(target, path, content);
+        out.write(content.data(), static_cast<std::streamsize>(content.size()));
+        out.close();
+        if (out.fail()) {
+            discard();
+            return "Write failed for: " + path + " (the disk may be full). The file is unchanged.";
+        }
+    }
+    if (existed) {
+        const fs::perms mode = fs::status(target, ec).permissions();
+        if (!ec) fs::permissions(temp, mode, ec);
+        if (ec) {
+            const std::string why = ec.message();
+            discard();
+            return "Write failed for: " + path + " (could not keep its permissions: " + why +
+                   "). The file is unchanged.";
+        }
+    }
+    fs::rename(temp, target, ec);
+    if (ec) {
+        // Another program holds the file open, or it is a mount point: it can still be written.
+        discard();
+        return writeInPlace(target, path, content);
+    }
+    return "";
 }
 
 /// Locate a whitespace-insensitive near-match for `needle`, so a failed edit
@@ -196,6 +405,45 @@ std::string collapseWhitespace(const std::string& s) {
         out.push_back(c);
     }
     return out;
+}
+
+/// A file in the same folder whose name is within two edits of the missing one, or "".
+std::string nearNamedFile(const std::string& path) {
+    std::error_code ec;
+    const fs::path asked = fs::u8path(path);
+    const fs::path dir = asked.has_parent_path() ? asked.parent_path() : fs::path(".");
+    if (fs::exists(asked, ec) || !fs::is_directory(dir, ec)) return "";
+    auto lower = [](std::string s) {
+        for (char& c : s) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+        return s;
+    };
+    const std::string want = lower(asked.filename().u8string());
+    if (want.size() < 4) return "";
+    std::string best;
+    size_t bestDistance = 3, seen = 0;
+    for (const auto& entry : fs::directory_iterator(dir, ec)) {
+        if (++seen > 2000) break;
+        if (!entry.is_regular_file(ec)) continue;
+        const std::string have = lower(entry.path().filename().u8string());
+        const size_t gap = have.size() > want.size() ? have.size() - want.size() : want.size() - have.size();
+        if (gap > 2) continue;
+        std::vector<size_t> row(have.size() + 1);
+        for (size_t j = 0; j <= have.size(); ++j) row[j] = j;
+        for (size_t i = 1; i <= want.size(); ++i) {
+            size_t diagonal = row[0];
+            row[0] = i;
+            for (size_t j = 1; j <= have.size(); ++j) {
+                const size_t above = row[j];
+                row[j] = std::min({row[j] + 1, row[j - 1] + 1, diagonal + (want[i - 1] != have[j - 1])});
+                diagonal = above;
+            }
+        }
+        if (row[have.size()] < bestDistance) {
+            bestDistance = row[have.size()];
+            best = entry.path().generic_u8string();
+        }
+    }
+    return best;
 }
 
 } // namespace
@@ -230,7 +478,7 @@ std::string FileStateTracker::hashContent(const std::string& contents) {
 }
 
 std::string FileStateTracker::hashFile(const std::string& path) {
-    std::ifstream file(path, std::ios::binary);
+    std::ifstream file(fs::u8path(path), std::ios::binary);
     if (!file.is_open()) return "";
 
     Sha256 sha;
@@ -279,7 +527,7 @@ std::string FileStateTracker::recordFromDisk(const std::string& path) {
     if (hash.empty()) return "";
 
     std::error_code ec;
-    const auto size = fs::file_size(fs::path(path), ec);
+    const auto size = fs::file_size(fs::u8path(path), ec);
 
     Impl& storage = impl();
     std::lock_guard<std::mutex> lock(storage.mutex);
@@ -346,7 +594,7 @@ FileStateTracker::Divergence FileStateTracker::checkFile(
     }
 
     std::error_code ec;
-    const auto sizeNow = fs::file_size(fs::path(path), ec);
+    const auto sizeNow = fs::file_size(fs::u8path(path), ec);
     result.sizeNow = ec ? 0 : static_cast<std::uint64_t>(sizeNow);
     result.hashNow = shortHash(hashNow);
 
@@ -515,6 +763,272 @@ ToolInfo FileIOTools::fileRead() {
     return info;
 }
 
+/// UTF-16 text as UTF-8; the byte order comes from the mark, else from which bytes are NUL.
+static std::string utf16ToUtf8(const std::string& raw) {
+    const auto byte = [&raw](size_t i) { return static_cast<unsigned char>(raw[i]); };
+    size_t at = 0;
+    bool little = true;
+    if (raw.size() >= 2 && byte(0) == 0xFF && byte(1) == 0xFE) at = 2;
+    else if (raw.size() >= 2 && byte(0) == 0xFE && byte(1) == 0xFF) { at = 2; little = false; }
+    else {
+        size_t evenNul = 0, oddNul = 0;
+        for (size_t i = 0; i < raw.size() && i < 4096; ++i) (i % 2 ? oddNul : evenNul) += raw[i] == '\0';
+        little = oddNul >= evenNul;
+    }
+    auto unit = [&](size_t i) -> std::uint32_t {
+        return little ? byte(i) | (byte(i + 1) << 8) : (byte(i) << 8) | byte(i + 1);
+    };
+    std::string out;
+    for (; at + 1 < raw.size(); at += 2) {
+        std::uint32_t cp = unit(at);
+        if (cp >= 0xD800 && cp < 0xDC00 && at + 3 < raw.size()) {
+            const std::uint32_t low = unit(at + 2);
+            if (low >= 0xDC00 && low < 0xE000) {
+                cp = 0x10000 + ((cp - 0xD800) << 10) + (low - 0xDC00);
+                at += 2;
+            }
+        }
+        if (cp >= 0xD800 && cp < 0xE000) cp = 0xFFFD;  // half of a pair on its own
+        if (cp < 0x80) out.push_back(static_cast<char>(cp));
+        else if (cp < 0x800) {
+            out.push_back(static_cast<char>(0xC0 | (cp >> 6)));
+            out.push_back(static_cast<char>(0x80 | (cp & 0x3F)));
+        } else if (cp < 0x10000) {
+            out.push_back(static_cast<char>(0xE0 | (cp >> 12)));
+            out.push_back(static_cast<char>(0x80 | ((cp >> 6) & 0x3F)));
+            out.push_back(static_cast<char>(0x80 | (cp & 0x3F)));
+        } else {
+            out.push_back(static_cast<char>(0xF0 | (cp >> 18)));
+            out.push_back(static_cast<char>(0x80 | ((cp >> 12) & 0x3F)));
+            out.push_back(static_cast<char>(0x80 | ((cp >> 6) & 0x3F)));
+            out.push_back(static_cast<char>(0x80 | (cp & 0x3F)));
+        }
+    }
+    return out;
+}
+
+/// Rewrites bytes that are not UTF-8 as the Windows-1252 characters they most likely are.
+static size_t repairLegacyBytes(std::string& text) {
+    static const std::uint16_t kHigh[32] = {0x20AC, 0x0081, 0x201A, 0x0192, 0x201E, 0x2026, 0x2020, 0x2021,
+                                            0x02C6, 0x2030, 0x0160, 0x2039, 0x0152, 0x008D, 0x017D, 0x008F,
+                                            0x0090, 0x2018, 0x2019, 0x201C, 0x201D, 0x2022, 0x2013, 0x2014,
+                                            0x02DC, 0x2122, 0x0161, 0x203A, 0x0153, 0x009D, 0x017E, 0x0178};
+    std::string out;
+    size_t repaired = 0;
+    for (size_t i = 0; i < text.size();) {
+        const unsigned char c = static_cast<unsigned char>(text[i]);
+        const size_t len = c < 0x80 ? 1 : (c >> 5) == 0x6 ? 2 : (c >> 4) == 0xE ? 3 : (c >> 3) == 0x1E ? 4 : 0;
+        bool ok = len > 0;
+        for (size_t k = 1; ok && k < len; ++k) {
+            ok = i + k < text.size() && (static_cast<unsigned char>(text[i + k]) & 0xC0) == 0x80;
+        }
+        if (ok) {
+            out.append(text, i, len);
+            i += len;
+            continue;
+        }
+        const std::uint32_t cp = c < 0xA0 ? kHigh[c - 0x80] : c;
+        if (cp < 0x800) {
+            out.push_back(static_cast<char>(0xC0 | (cp >> 6)));
+        } else {
+            out.push_back(static_cast<char>(0xE0 | (cp >> 12)));
+            out.push_back(static_cast<char>(0x80 | ((cp >> 6) & 0x3F)));
+        }
+        out.push_back(static_cast<char>(0x80 | (cp & 0x3F)));
+        ++repaired;
+        ++i;
+    }
+    if (repaired) text.swap(out);
+    return repaired;
+}
+
+/// Totals a small model otherwise adds up wrongly: each numeric column, split by each
+/// short label column and by month.
+static std::string tableSummary(const std::vector<std::string>& names,
+                                const std::vector<std::vector<std::string>>& data) {
+    if (data.size() < 2 || names.size() < 2 || names.size() > 12) return "";
+    auto trim = [](std::string v) {
+        while (!v.empty() && std::isspace(static_cast<unsigned char>(v.back()))) v.pop_back();
+        size_t lead = 0;
+        while (lead < v.size() && std::isspace(static_cast<unsigned char>(v[lead]))) ++lead;
+        return v.substr(lead);
+    };
+    auto lower = [](std::string v) {
+        for (auto& c : v) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+        return v;
+    };
+    auto number = [&trim](const std::string& raw, double& value) {
+        std::string v;
+        bool negative = false;
+        std::string cell = trim(raw);
+        // 1200,50 is a decimal comma; a thousands comma is followed by three digits.
+        const size_t lastComma = cell.rfind(','), lastDot = cell.rfind('.');
+        if (lastComma != std::string::npos && lastDot != std::string::npos && lastDot < lastComma) {
+            cell.erase(std::remove(cell.begin(), cell.end(), '.'), cell.end());
+        }
+        const size_t comma = cell.find(',');
+        if (comma != std::string::npos && cell.find(',', comma + 1) == std::string::npos &&
+            cell.find('.') == std::string::npos && cell.size() - comma - 1 <= 2 && comma + 1 < cell.size()) {
+            cell[comma] = '.';
+        }
+        for (char c : cell) {
+            if (c == '(') negative = true;
+            else if (c != ')' && c != ',' && c != '$' && c != '%' && c != ' ') v.push_back(c);
+        }
+        if (v.empty()) return false;
+        char* end = nullptr;
+        value = std::strtod(v.c_str(), &end);
+        if (end != v.c_str() + v.size() || !std::isfinite(value)) return false;
+        if (negative) value = -value;
+        return true;
+    };
+    auto month = [&trim](const std::string& raw) -> std::string {
+        const std::string v = trim(raw);
+        auto digits = [&v](size_t from, size_t count) {
+            for (size_t i = from; i < from + count; ++i) {
+                if (i >= v.size() || !std::isdigit(static_cast<unsigned char>(v[i]))) return false;
+            }
+            return true;
+        };
+        if (v.size() < 10 || !digits(0, 4) || (v[4] != '-' && v[4] != '/') || !digits(5, 2) || v[7] != v[4] ||
+            !digits(8, 2)) {
+            return "";
+        }
+        return v.substr(0, 4) + "-" + v.substr(5, 2);
+    };
+
+    enum class Kind { Other, Number, Label, Month };
+    struct Column {
+        Kind kind{};  // Other
+        bool whole = true;
+        size_t notNumbers = 0;
+        std::vector<std::string> keys;         // per row; empty when the cell is
+        std::map<std::string, std::string> shown;  // key -> first spelling seen
+    };
+    std::vector<Column> cols(names.size());
+    for (size_t c = 0; c < names.size(); ++c) {
+        size_t filled = 0, numeric = 0, dated = 0;
+        bool shortText = true;
+        Column& col = cols[c];
+        for (const auto& row : data) {
+            const std::string cell = c < row.size() ? trim(row[c]) : "";
+            std::string key = lower(cell);
+            if (!cell.empty()) {
+                ++filled;
+                double v = 0;
+                if (number(cell, v)) {
+                    ++numeric;
+                    if (v != std::floor(v)) col.whole = false;
+                }
+                const std::string m = month(cell);
+                if (!m.empty()) {
+                    ++dated;
+                    key = m;
+                }
+                if (cell.size() > 30) shortText = false;
+                col.shown.emplace(key, m.empty() ? cell : m);
+            }
+            col.keys.push_back(key);
+        }
+        const std::string name = lower(trim(names[c]));
+        const bool identifier = name == "id" || name == "year" || name == "zip" ||
+                                (name.size() > 2 && (name.compare(name.size() - 2, 2, "id") == 0));
+        if (!filled) continue;
+        if (dated == filled) col.kind = Kind::Month;
+        else if (numeric * 5 >= filled * 4 && !identifier) {
+            col.kind = Kind::Number;
+            col.notNumbers = filled - numeric;
+        } else if (numeric == 0 && shortText && col.shown.size() <= 12) col.kind = Kind::Label;
+    }
+
+    auto shown = [](double v, bool whole) {
+        char buf[64];
+        std::snprintf(buf, sizeof(buf), whole ? "%.0f" : "%.2f", v);
+        return std::string(buf);
+    };
+    static constexpr size_t kMaxBytes = 2400;
+    std::string out = "Computed from all " + std::to_string(data.size()) + " data rows:";
+    const size_t headerBytes = out.size();
+    auto add = [&out](const std::string& line) {
+        if (out.size() + line.size() <= kMaxBytes) out += "\n" + line;
+    };
+    std::vector<size_t> numbers, groups;
+    for (size_t c = 0; c < cols.size(); ++c) {
+        if (cols[c].kind == Kind::Number && numbers.size() < 4) numbers.push_back(c);
+        if ((cols[c].kind == Kind::Label || cols[c].kind == Kind::Month) && groups.size() < 4) groups.push_back(c);
+    }
+    for (size_t n : numbers) {
+        double total = 0, low = 0, high = 0;
+        size_t count = 0;
+        for (const auto& row : data) {
+            double v = 0;
+            if (n >= row.size() || !number(row[n], v)) continue;
+            low = count ? std::min(low, v) : v;
+            high = count ? std::max(high, v) : v;
+            total += v;
+            ++count;
+        }
+        std::string line = trim(names[n]) + ": total " + shown(total, cols[n].whole) + " over " +
+                           std::to_string(count) + " rows (average " +
+                           shown(count ? total / static_cast<double>(count) : 0, false) + ", lowest " +
+                           shown(low, cols[n].whole) + ", highest " +
+                           shown(high, cols[n].whole) + ")";
+        if (cols[n].notNumbers) line += "; " + std::to_string(cols[n].notNumbers) + " cells are not numbers and are left out";
+        add(line);
+    }
+    for (size_t g : groups) {
+        const Column& group = cols[g];
+        std::map<std::string, size_t> counts;
+        for (const auto& key : group.keys) {
+            if (!key.empty()) ++counts[key];
+        }
+        if (numbers.empty() && counts.size() == data.size()) continue;  // every row its own label
+        std::string line = "rows by " + trim(names[g]) + ":";
+        for (const auto& [key, count] : counts) line += " " + group.shown.at(key) + " " + std::to_string(count) + ",";
+        line.pop_back();
+        add(line);
+        for (size_t n : numbers) {
+            std::map<std::string, double> sums;
+            std::map<std::string, size_t> cells;
+            double total = 0;
+            bool signedValues = false;
+            for (size_t r = 0; r < data.size(); ++r) {
+                double v = 0;
+                if (group.keys[r].empty() || n >= data[r].size() || !number(data[r][n], v)) continue;
+                sums[group.keys[r]] += v;
+                ++cells[group.keys[r]];
+                total += v;
+                if (v < 0) signedValues = true;
+            }
+            std::vector<std::pair<std::string, double>> order(sums.begin(), sums.end());
+            if (group.kind == Kind::Label) {
+                std::stable_sort(order.begin(), order.end(),
+                                 [](const auto& a, const auto& b) { return a.second > b.second; });
+            }
+            line = trim(names[n]) + " by " + trim(names[g]) + ":";
+            for (const auto& [key, sum] : order) {
+                line += " " + group.shown.at(key) + " " + shown(sum, cols[n].whole);
+                if (!signedValues && total > 0) {
+                    char pct[32];
+                    std::snprintf(pct, sizeof(pct), " (%.1f%%)", 100.0 * sum / total);
+                    line += pct;
+                }
+                line += ",";
+            }
+            line.pop_back();
+            add(line);
+            if (group.kind != Kind::Label || sums.size() == data.size()) continue;  // one row each: nothing to average
+            for (auto& entry : order) entry.second /= static_cast<double>(cells[entry.first]);
+            std::stable_sort(order.begin(), order.end(), [](const auto& a, const auto& b) { return a.second > b.second; });
+            line = "average " + trim(names[n]) + " by " + trim(names[g]) + ":";
+            for (const auto& [key, mean] : order) line += " " + group.shown.at(key) + " " + shown(mean, false) + ",";
+            line.pop_back();
+            add(line);
+        }
+    }
+    return out.size() == headerBytes ? "" : out;
+}
+
 json FileIOTools::doFileRead(const json& args) {
     static constexpr size_t kMaxReadBytes = 32 * 1024;
     static constexpr size_t kChunkBytes = 64 * 1024;
@@ -525,12 +1039,22 @@ json FileIOTools::doFileRead(const json& args) {
             return json{{"error", "path is required"}};
         }
 
-        // Binary, so what the model is shown is byte-for-byte what file_edit
-        // will search: a CRLF file must not read back as LF and then fail to
-        // match. One pass, so the hash anchors exactly the bytes returned —
-        // a second read could hash a version the model never saw.
-        std::ifstream file(path, std::ios::binary);
+        const std::string notAFile = notAFileReason(path);
+        if (!notAFile.empty()) return json{{"error", notAFile}};
+
+        const std::string credential = credentialFileReason(path);
+        if (!credential.empty()) return json{{"error", credential}};
+
+        // One pass, so the hash anchors exactly the bytes on disk that were
+        // shown — a second read could hash a version the model never saw.
+        std::ifstream file(fs::u8path(path), std::ios::binary);
         if (!file.is_open()) {
+            const std::string near = nearNamedFile(path);
+            if (!near.empty()) {
+                return json{{"error", path + " does not exist. " + near + " is in the same folder and has nearly the "
+                                      "same name. If you read that one, tell the user the name they gave does not "
+                                      "exist and which file you used instead."}};
+            }
             return json{{"error", "Cannot open file: " + path}};
         }
 
@@ -539,12 +1063,15 @@ json FileIOTools::doFileRead(const json& args) {
 
         Sha256 sha;
         std::string content;
+        std::string head;  // the first bytes, to tell text from binary
         std::vector<char> buffer(kChunkBytes);
         int lineNumber = 1;        // line the next byte belongs to
         int emittedLines = 0;      // in-range lines started so far
         bool lineOpen = false;     // a line's first in-range byte was seen
         bool truncated = false;
         bool lastByteWasNewline = false;
+        bool shownEndsWithCrlfBreak = false;
+        LineBreaks breaks;
         std::uint64_t totalBytes = 0;
 
         while (file.good()) {
@@ -554,9 +1081,12 @@ json FileIOTools::doFileRead(const json& args) {
 
             sha.update(buffer.data(), static_cast<size_t>(got));
             totalBytes += static_cast<std::uint64_t>(got);
+            if (head.size() < 8192) head.append(buffer.data(), std::min<size_t>(static_cast<size_t>(got), 8192 - head.size()));
 
             for (std::streamsize i = 0; i < got; ++i) {
                 const char c = buffer[static_cast<size_t>(i)];
+                const bool afterCr = breaks.previous == '\r';
+                breaks.add(c);
                 lastByteWasNewline = (c == '\n');
 
                 const bool inRange =
@@ -569,7 +1099,9 @@ json FileIOTools::doFileRead(const json& args) {
                         if (emittedLines > 0) content.push_back('\n');
                         ++emittedLines;
                         lineOpen = true;
+                        shownEndsWithCrlfBreak = false;
                     }
+                    if (c == '\n') shownEndsWithCrlfBreak = afterCr;
                     if (c != '\n') {
                         if (content.size() < kMaxReadBytes) {
                             content.push_back(c);
@@ -594,6 +1126,12 @@ json FileIOTools::doFileRead(const json& args) {
         int totalLines = lineNumber - 1;
         if (totalBytes > 0 && !lastByteWasNewline) ++totalLines;
 
+        const bool crlfFile = breaks.crlfFile();
+        if (crlfFile) {
+            if (shownEndsWithCrlfBreak && !content.empty() && content.back() == '\r') content.pop_back();
+            content = crlfToLf(content);
+        }
+
         if (truncated) {
             content += "\n... [output truncated at 32 KB]";
         }
@@ -601,17 +1139,323 @@ json FileIOTools::doFileRead(const json& args) {
         const std::string hash = sha.hex();
         FileStateTracker::instance().recordHash(path, hash, totalBytes);
 
-        return json{
+        // Binary bytes shown as text are noise a small model can loop on.
+        const TextKind kind = textKind(head);
+        bool decodedUtf16 = false;
+        if (kind == TextKind::Utf16) {
+            constexpr std::uint64_t kMaxDecoded = 256 * 1024;
+            if (totalBytes > kMaxDecoded) {
+                return json{{"error", path + " is UTF-16 text too large for file_read to decode. Read it with a "
+                                          "program, for example Python's open(path, encoding='utf-16')."},
+                            {"path", path}};
+            }
+            std::ifstream again(fs::u8path(path), std::ios::binary);
+            const std::string raw((std::istreambuf_iterator<char>(again)), std::istreambuf_iterator<char>());
+            std::istringstream lines(utf16ToUtf8(raw));
+            content.clear();
+            truncated = false;
+            totalLines = 0;
+            int emitted = 0;
+            for (std::string line; std::getline(lines, line);) {
+                ++totalLines;
+                if (!line.empty() && line.back() == '\r') line.pop_back();
+                if ((startLine > 0 && totalLines < startLine) || (endLine > 0 && totalLines > endLine) || truncated) continue;
+                if (content.size() + line.size() > kMaxReadBytes) {
+                    truncated = true;
+                    continue;
+                }
+                if (emitted++) content.push_back('\n');
+                content += line;
+            }
+            if (truncated) content += "\n... [output truncated at 32 KB]";
+            decodedUtf16 = true;
+        }
+        if (kind == TextKind::LegacyEncoding) {
+            return json{{"error", path + " is text in a legacy encoding, not UTF-8 (for example Windows-1252, "
+                                      "CP1251 or Shift-JIS). Read it with a program that names the encoding, for "
+                                      "example Python's open(path, encoding='cp1252')."},
+                        {"path", path}};
+        }
+        if (kind == TextKind::Binary) {
+            return json{{"error", path + " is not a text file (" + std::to_string(totalBytes) +
+                                      " bytes of binary data). Don't guess what it says: inspect it with a program "
+                                      "suited to its format (a PDF, Office or image library, or `file`), or tell the "
+                                      "user it can't be read as text."},
+                        {"path", path}};
+        }
+        if (totalBytes == 0) {
+            return json{{"content", ""},
+                        {"lines", 0},
+                        {"path", path},
+                        {"truncated", false},
+                        {"content_hash", shortHash(hash)},
+                        {"note", "The file is empty (0 bytes). Its data is missing, not zero: look for a log or "
+                                 "error beside it that says why, and report the figure as unknown."}};
+        }
+
+        // Thousands of one repeated character send a small model into a runaway reply.
+        // Long lines only: a column of one value per line is data.
+        if (startLine <= 0 && endLine <= 0) {
+            static const std::string kCut = "\n... [output truncated at 32 KB]";
+            std::string dense;
+            const size_t shown = truncated && content.size() >= kCut.size() ? content.size() - kCut.size() : content.size();
+            for (size_t i = 0; i < shown; ++i) {
+                if (!std::isspace(static_cast<unsigned char>(content[i]))) dense.push_back(content[i]);
+            }
+            constexpr size_t kMinRepeated = 1000, kMaxUnit = 4, kMinLine = 200;
+            const bool longLines = dense.size() / static_cast<size_t>(std::max(1, totalLines)) >= kMinLine;
+            for (size_t unit = 1; unit <= kMaxUnit && longLines && dense.size() >= kMinRepeated; ++unit) {
+                bool repeats = true;
+                for (size_t i = unit; i < dense.size() && repeats; ++i) repeats = dense[i] == dense[i - unit];
+                if (!repeats) continue;
+                const std::string span = truncated ? "the first 32 KB of its " + std::to_string(totalBytes) + " bytes are"
+                                                   : "its " + std::to_string(totalBytes) + " bytes are";
+                return json{{"content", dense.substr(0, unit * 8) + "..."},
+                            {"lines", totalLines},
+                            {"path", path},
+                            {"truncated", true},
+                            {"content_hash", shortHash(hash)},
+                            {"note", "This file holds no real content: " + span + " \"" + dense.substr(0, unit) +
+                                         "\" repeated, with nothing else but whitespace. Tell the user that; "
+                                         "there is nothing in it to summarize or quote."}};
+            }
+        }
+
+        // Read to the end, so a character cut by the size limit is not taken for a stray byte.
+        const size_t legacyBytes = truncated ? 0 : repairLegacyBytes(content);
+        json out{
             {"content", content},
             {"lines", totalLines},
             {"path", path},
             {"truncated", truncated},
             {"content_hash", shortHash(hash)},
         };
+        if (crlfFile && !decodedUtf16) out["line_endings"] = "crlf";
+        if (decodedUtf16) {
+            out["note"] = "This file is UTF-16; the content shown is decoded. A program that opens it must name "
+                          "the encoding (Python: encoding='utf-16'), and file_edit cannot change it.";
+        }
+        if (legacyBytes) {
+            out["note"] = std::to_string(legacyBytes) + " byte" + (legacyBytes == 1 ? " is" : "s are") +
+                          " not UTF-8 and " + (legacyBytes == 1 ? "is" : "are") +
+                          " shown as the Windows-1252 character (a euro sign, an accented letter). "
+                          "Quote them as shown.";
+        }
+        // Small models copy rows into a script and get them wrong; point at the file instead.
+        std::string ext = fs::u8path(path).extension().u8string();
+        for (auto& c : ext) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+        if ((ext == ".csv" || ext == ".tsv") && totalLines > 20) {
+            out["note"] = (out.contains("note") ? out["note"].get<std::string>() + " " : std::string()) + "To total, count or compare this data, read the file by its path in a script "
+                          "(pandas.read_csv or the csv module). Don't paste its rows into a command.";
+        }
+        // Rows that are not data, and labels that differ only by case or spacing, are what a
+        // small model's script totals wrongly.
+        if ((ext == ".csv" || ext == ".tsv") && !truncated && startLine <= 0 && endLine <= 0) {
+            std::vector<std::string> rows;
+            {
+                std::istringstream in(content);
+                for (std::string line; std::getline(in, line);) {
+                    if (!line.empty() && line.back() == '\r') line.pop_back();
+                    rows.push_back(line);
+                }
+            }
+            auto blank = [](const std::string& r) {
+                return std::all_of(r.begin(), r.end(), [](unsigned char c) { return std::isspace(c) || c == ',' || c == ';'; });
+            };
+            auto folded = [](std::string v) {
+                while (!v.empty() && std::isspace(static_cast<unsigned char>(v.back()))) v.pop_back();
+                size_t lead = 0;
+                while (lead < v.size() && std::isspace(static_cast<unsigned char>(v[lead]))) ++lead;
+                v.erase(0, lead);
+                for (auto& c : v) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+                return v;
+            };
+            if (!rows.empty() && !blank(rows[0])) {
+                const std::string& header = rows[0];
+                const char sep = ext == ".tsv" ? '\t'
+                                 : (header.find(';') != std::string::npos && header.find(',') == std::string::npos) ? ';' : ',';
+                auto cells = [sep](const std::string& r) {
+                    std::vector<std::string> out;
+                    std::string cell;
+                    bool quoted = false;
+                    for (char c : r) {
+                        if (c == '"') quoted = !quoted;
+                        else if (c == sep && !quoted) { out.push_back(cell); cell.clear(); }
+                        else cell.push_back(c);
+                    }
+                    out.push_back(cell);
+                    return out;
+                };
+                const std::vector<std::string> names = cells(header);
+                std::vector<std::string> found;
+                size_t dataRows = 0, blanks = 0;
+                std::vector<std::vector<std::string>> data;
+                std::vector<std::map<std::string, std::set<std::string>>> spellings(names.size());
+                for (size_t i = 1; i < rows.size(); ++i) {
+                    if (blank(rows[i])) {
+                        if (i + 1 < rows.size()) ++blanks;
+                        continue;
+                    }
+                    const std::string line = std::to_string(i + 1);
+                    if (rows[i] == header) {
+                        found.push_back("line " + line + " repeats the header");
+                        continue;
+                    }
+                    const std::vector<std::string> row = cells(rows[i]);
+                    const std::string first = folded(row[0]);
+                    if (first == "total" || first == "totals" || first == "grand total" || first == "subtotal" ||
+                        first == "sum") {
+                        found.push_back("line " + line + " is a totals row, not data");
+                        continue;
+                    }
+                    ++dataRows;
+                    data.push_back(row);
+                    for (size_t c = 0; c < row.size() && c < names.size(); ++c) {
+                        const std::string key = folded(row[c]);
+                        const bool text = std::any_of(key.begin(), key.end(), [](unsigned char ch) { return std::isalpha(ch); });
+                        if (text && key.size() <= 40) spellings[c][key].insert(row[c]);
+                    }
+                }
+                if (blanks) found.push_back(std::to_string(blanks) + " blank line" + (blanks == 1 ? "" : "s") + " among the rows");
+                for (size_t c = 0; c < names.size(); ++c) {
+                    for (const auto& [key, raw] : spellings[c]) {
+                        if (raw.size() < 2) continue;
+                        std::string list;
+                        for (const auto& r : raw) list += (list.empty() ? "\"" : ", \"") + r + "\"";
+                        found.push_back("column " + folded(names[c]) + " spells one value several ways (" + list + ")");
+                        break;
+                    }
+                }
+                std::string note;
+                if (dataRows == 0) {
+                    note = "This file has a header row and no data rows. Its data is missing, not zero: say that, "
+                           "report the figure as unknown, and look for a log or error beside it that says why.";
+                    std::string logs;
+                    std::error_code ec;
+                    int budget = 200, named = 0;
+                    for (fs::directory_iterator it(fs::u8path(path).parent_path(), ec), end;
+                         it != end && !ec && budget-- > 0 && named < 3; it.increment(ec)) {
+                        std::string e = it->path().extension().u8string();
+                        for (auto& c : e) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+                        if (!it->is_regular_file(ec) || (e != ".log" && e != ".txt" && e != ".err")) continue;
+                        logs += (named++ ? ", " : "") + it->path().filename().u8string();
+                    }
+                    if (named) note += " In the same folder: " + logs + ". Read it and tell the user what it says.";
+                } else if (!found.empty() || sep == ';') {
+                    if (sep == ';') found.insert(found.begin(), "fields are separated by semicolons (sep=';')");
+                    if (found.size() > 6) found.resize(6);
+                    for (const auto& f : found) note += (note.empty() ? "Before totalling, note: " : "; ") + f;
+                    note += ". Handle these in the script (skip those lines, strip and lower-case that column), "
+                            "and tell the user what you cleaned.";
+                }
+                const std::string summary = tableSummary(names, data);
+                if (!summary.empty()) {
+                    out["summary"] = summary;
+                    note += std::string(note.empty() ? "" : " ") +
+                            "The summary field was computed from every data row, with header repeats, blank lines "
+                            "and totals rows left out and labels matched ignoring case and spacing. Take totals, "
+                            "counts, averages and shares from it. A label or month it doesn't list is not in the file: "
+                            "say it is absent instead of reporting 0 for it.";
+                }
+                if (!note.empty()) out["note"] = out.contains("note") ? out["note"].get<std::string>() + " " + note : note;
+            }
+        }
+        // policy_v1.md beside policy_v2.md, or terms_2024.md beside terms_2026.txt: a small
+        // model answers from whichever it opened first.
+        static const std::set<std::string> kDocuments = {".md", ".txt", ".pdf", ".docx", ".html", ".htm", ".rst"};
+        auto series = [](const fs::path& file, long& number) -> std::string {
+            std::string ext = file.extension().u8string();
+            for (auto& c : ext) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+            if (!kDocuments.count(ext)) return "";
+            std::string stem = file.stem().u8string();
+            for (auto& c : stem) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+            size_t digits = stem.size();
+            while (digits && std::isdigit(static_cast<unsigned char>(stem[digits - 1]))) --digits;
+            const std::string num = stem.substr(digits);
+            if (num.empty() || num.size() > 6) return "";
+            const bool versioned = digits && stem[digits - 1] == 'v';
+            const bool year = num.size() == 4 && (num.compare(0, 2, "19") == 0 || num.compare(0, 2, "20") == 0);
+            if (!versioned && !year) return "";
+            const std::string key = stem.substr(0, versioned ? digits - 1 : digits);
+            if (key.empty() || std::isalnum(static_cast<unsigned char>(key.back()))) return "";
+            number = std::stol(num);
+            return key;
+        };
+        long mine = 0;
+        const fs::path self = fs::u8path(path);
+        const std::string key = series(self, mine);
+        if (!key.empty()) {
+            std::error_code ec;
+            long latest = mine, previous = -1;
+            std::string later, earlier;
+            int budget = 500;
+            for (fs::directory_iterator it(self.parent_path(), ec), end; it != end && !ec && budget-- > 0;
+                 it.increment(ec)) {
+                long theirs = 0;
+                if (!it->is_regular_file(ec) || series(it->path(), theirs) != key) continue;
+                if (theirs > latest) {
+                    latest = theirs;
+                    later = it->path().filename().u8string();
+                } else if (theirs < mine && theirs > previous) {
+                    previous = theirs;
+                    earlier = it->path().filename().u8string();
+                }
+            }
+            if (later.empty() && !earlier.empty()) {
+                const std::string note = earlier + " in the same folder looks like an earlier version of this "
+                                         "document. Read it too: if the two give different figures, give the user "
+                                         "both, the old figure and this one, and say this version replaces the "
+                                         "earlier one, since they may be relying on the old figure.";
+                out["note"] = out.contains("note") ? out["note"].get<std::string>() + " " + note : note;
+            }
+            if (!later.empty()) {
+                const std::string note = later + " in the same folder looks like a later version of this document. "
+                                         "Read it too: where the two disagree, the later one applies unless the "
+                                         "user asked about this one. Give the user both figures, the old and the "
+                                         "new, and say that this one is superseded.";
+                out["note"] = out.contains("note") ? out["note"].get<std::string>() + " " + note : note;
+            }
+        }
+        return out;
     } catch (const std::exception& e) {
         return json{{"error", std::string("file_read failed: ") + e.what()}};
     }
 }
+
+TextKind textKind(const std::string& head) {
+    if (head.empty()) return TextKind::Utf8;
+    const auto byte = [&head](size_t i) { return static_cast<unsigned char>(head[i]); };
+    if (head.size() >= 2 && ((byte(0) == 0xFF && byte(1) == 0xFE) || (byte(0) == 0xFE && byte(1) == 0xFF))) {
+        return TextKind::Utf16;
+    }
+    // UTF-16 without a mark: every other byte is NUL.
+    size_t evenNul = 0, oddNul = 0;
+    for (size_t i = 0; i < head.size(); ++i) (i % 2 ? oddNul : evenNul) += head[i] == '\0';
+    const size_t half = head.size() / 2;
+    if (half >= 8 && (evenNul * 10 > half * 8 || oddNul * 10 > half * 8)) return TextKind::Utf16;
+    if (evenNul + oddNul > 0) return TextKind::Binary;
+    size_t invalid = 0, control = 0;
+    for (size_t i = 0; i < head.size();) {
+        const unsigned char c = byte(i);
+        const size_t len = c < 0x80 ? 1 : (c >> 5) == 0x6 ? 2 : (c >> 4) == 0xE ? 3 : (c >> 3) == 0x1E ? 4 : 0;
+        if (len > 1 && i + len > head.size()) break;  // a character cut at the end of the sample
+        bool ok = len > 0;
+        for (size_t k = 1; ok && k < len; ++k) ok = (byte(i + k) & 0xC0) == 0x80;
+        if (!ok) {
+            ++invalid;
+            ++i;
+            continue;
+        }
+        if (len == 1 && c < 0x20 && c != '\t' && c != '\n' && c != '\r' && c != '\f') ++control;
+        i += len;
+    }
+    if (control * 20 > head.size()) return TextKind::Binary;
+    if (invalid * 10 > head.size()) return control * 100 > head.size() ? TextKind::Binary : TextKind::LegacyEncoding;
+    // A sprinkling of legacy bytes (an accented name in Windows-1252) still reads mostly fine.
+    return TextKind::Utf8;
+}
+
+bool looksBinary(const std::string& head) { return textKind(head) == TextKind::Binary; }
 
 // ---------------------------------------------------------------------------
 // fileWrite
@@ -645,15 +1489,40 @@ json FileIOTools::doFileWrite(const json& args) {
         if (!args.contains("content") || !args["content"].is_string()) {
             return json{{"error", "content is required and must be a string"}};
         }
-        const std::string& content = args["content"].get_ref<const std::string&>();
+        const std::string& given = args["content"].get_ref<const std::string&>();
+
+        const std::string notAFile = notAFileReason(path);
+        if (!notAFile.empty()) return json{{"error", notAFile}};
+
+        const std::string credential = credentialFileReason(path);
+        if (!credential.empty()) return json{{"error", credential}};
 
         FileStateTracker& tracker = FileStateTracker::instance();
         bool recreated = false;
+        bool keepCrlf = false;
         std::error_code existsEc;
-        if (fs::exists(fs::path(path), existsEc) && !existsEc) {
+        if (fs::exists(fs::u8path(path), existsEc) && !existsEc) {
             const auto divergence = tracker.checkFile(path);
             if (divergence.diverged) {
                 return staleRejection(path, "file_write", divergence);
+            }
+            if (given.find("[redacted]") != std::string::npos) {
+                std::string current;
+                if (!readWholeFile(path, current)) {
+                    return json{{"error", "Cannot read " + path +
+                                          " to check what the write would replace. Nothing was written."}};
+                }
+                const std::string masked = maskedSecretReason(path, current, "", given);
+                if (!masked.empty()) {
+                    return json{{"error", masked}, {"error_type", "redacted_secret"}, {"path", path}};
+                }
+            }
+            if (given.find('\n') != std::string::npos && given.find('\r') == std::string::npos) {
+                LineBreaks existing;
+                if (!lineBreaksOfFile(path, existing)) {
+                    return json{{"error", "Cannot read " + path + " to keep its line endings. Nothing was written."}};
+                }
+                keepCrlf = existing.crlfFile();
             }
         } else if (tracker.hasRecord(path)) {
             // Read, then deleted, now written again. There is no content to
@@ -665,7 +1534,7 @@ json FileIOTools::doFileWrite(const json& args) {
         }
 
         // Create parent directories if needed
-        fs::path filePath(path);
+        const fs::path filePath = fs::u8path(path);
         if (filePath.has_parent_path()) {
             std::error_code ec;
             fs::create_directories(filePath.parent_path(), ec);
@@ -674,16 +1543,11 @@ json FileIOTools::doFileWrite(const json& args) {
             }
         }
 
-        std::ofstream file(path, std::ios::binary);
-        if (!file.is_open()) {
-            return json{{"error", "Cannot open file for writing: " + path}};
-        }
+        const std::string converted = keepCrlf ? lfToCrlf(given) : std::string();
+        const std::string& content = keepCrlf ? converted : given;
 
-        file.write(content.data(), static_cast<std::streamsize>(content.size()));
-        if (!file.good()) {
-            return json{{"error", "Write failed for: " + path}};
-        }
-        file.close();
+        const std::string writeError = replaceFileContents(path, content);
+        if (!writeError.empty()) return json{{"error", writeError}};
 
         tracker.recordWrite(path, content);
 
@@ -693,6 +1557,7 @@ json FileIOTools::doFileWrite(const json& args) {
             {"bytes_written", static_cast<int>(content.size())},
             {"content_hash", shortHash(FileStateTracker::hashContent(content))},
         };
+        if (keepCrlf) result["line_endings"] = "crlf";
         if (recreated) result["recreated"] = true;
         return result;
     } catch (const std::exception& e) {
@@ -740,16 +1605,34 @@ json FileIOTools::doFileEdit(const json& args) {
 
         std::string newStr = args.value("new_string", "");
 
+        const std::string notAFile = notAFileReason(path);
+        if (!notAFile.empty()) return json{{"error", notAFile}};
+
+        const std::string credential = credentialFileReason(path);
+        if (!credential.empty()) return json{{"error", credential}};
+
         std::string content;
         if (!readWholeFile(path, content)) {
             return json{{"error", "Cannot open file: " + path}};
+        }
+
+        const LineBreaks breaks = lineBreaksOf(content);
+        const bool crlfFile = breaks.crlfFile();
+        const std::string contentLf = breaks.crlf > 0 ? crlfToLf(content) : std::string();
+        const std::string& shown = crlfFile ? contentLf : content;
+        const std::string oldLf = crlfToLf(oldStr);
+        const std::string newLf = crlfToLf(newStr);
+
+        const std::string masked = maskedSecretReason(path, content, oldStr, newStr);
+        if (!masked.empty()) {
+            return json{{"error", masked}, {"error_type", "redacted_secret"}, {"path", path}};
         }
 
         FileStateTracker& tracker = FileStateTracker::instance();
         const auto divergence = tracker.check(path, content);
         if (divergence.diverged) {
             json rejection = staleRejection(path, "file_edit", divergence);
-            rejection.update(excerptAround(content, anchorLineFor(content, oldStr)));
+            rejection.update(excerptAround(shown, anchorLineFor(shown, oldLf)));
             // Handing the content back is a read, so re-anchor — otherwise the
             // ledger keeps the superseded hash and the corrected retry is
             // rejected as stale too. file_write stays strict: it names no
@@ -761,13 +1644,21 @@ json FileIOTools::doFileEdit(const json& args) {
         // old_string must identify exactly one place. Replacing the first of
         // several edits the wrong region; replacing all of them edits regions
         // the model never named. Both report success, so ambiguity is an error.
-        const auto offsets = matchOffsets(content, oldStr);
+        // Mixed endings: the bytes as given first, so an exact edit touches nothing else.
+        bool matchedLf = breaks.crlf > 0 && !breaks.mixed();
+        auto offsets = matchedLf ? matchOffsets(contentLf, oldLf)
+                                 : matchOffsets(content, breaks.mixed() ? oldStr : oldLf);
+        if (offsets.empty() && breaks.mixed()) {
+            offsets = matchOffsets(contentLf, oldLf);
+            matchedLf = !offsets.empty();
+        }
+        const std::string& searched = matchedLf ? contentLf : content;
 
         if (offsets.empty()) {
             // A silent no-op is the failure mode this tool exists to avoid:
             // say what did not match and what to do about it.
             std::string hint;
-            if (collapseWhitespace(content).find(collapseWhitespace(oldStr)) !=
+            if (collapseWhitespace(content).find(collapseWhitespace(oldLf)) !=
                 std::string::npos) {
                 hint = " A whitespace-insensitive match does exist, so the "
                        "indentation, tabs-vs-spaces, or line endings in "
@@ -783,7 +1674,7 @@ json FileIOTools::doFileEdit(const json& args) {
                 {"path", path},
                 {"replacements", 0},
             };
-            result.update(excerptAround(content, anchorLineFor(content, oldStr)));
+            result.update(excerptAround(shown, anchorLineFor(shown, oldLf)));
             return result;
         }
 
@@ -791,7 +1682,7 @@ json FileIOTools::doFileEdit(const json& args) {
             std::string lineList;
             json matchLines = json::array();
             for (const auto offset : offsets) {
-                const int lineNo = lineOfOffset(content, offset);
+                const int lineNo = lineOfOffset(searched, offset);
                 matchLines.push_back(lineNo);
                 if (!lineList.empty()) lineList += ", ";
                 lineList += std::to_string(lineNo);
@@ -809,33 +1700,34 @@ json FileIOTools::doFileEdit(const json& args) {
                 {"replacements", 0},
                 {"match_lines", matchLines},
             };
-            result.update(excerptAround(content, lineOfOffset(content, offsets[0])));
+            result.update(excerptAround(shown, lineOfOffset(searched, offsets[0])));
             return result;
         }
 
-        content.replace(offsets[0], oldStr.size(), newStr);
+        if (matchedLf) {
+            const size_t from = rawOffset(content, offsets[0]);
+            const size_t to = rawOffset(content, offsets[0] + oldLf.size());
+            content.replace(from, to - from, crlfFile ? lfToCrlf(newLf) : newLf);
+        } else if (breaks.mixed()) {
+            content.replace(offsets[0], oldStr.size(), newStr);
+        } else {
+            content.replace(offsets[0], oldLf.size(), newLf);
+        }
         const int replacements = 1;
 
-        // Write back
-        std::ofstream outFile(path, std::ios::binary);
-        if (!outFile.is_open()) {
-            return json{{"error", "Cannot open file for writing: " + path}};
-        }
-
-        outFile.write(content.data(), static_cast<std::streamsize>(content.size()));
-        if (!outFile.good()) {
-            return json{{"error", "Write failed for: " + path}};
-        }
-        outFile.close();
+        const std::string writeError = replaceFileContents(path, content);
+        if (!writeError.empty()) return json{{"error", writeError}};
 
         tracker.recordWrite(path, content);
 
-        return json{
+        json result{
             {"success", true},
             {"path", path},
             {"replacements", replacements},
             {"content_hash", shortHash(FileStateTracker::hashContent(content))},
         };
+        if (crlfFile) result["line_endings"] = "crlf";
+        return result;
     } catch (const std::exception& e) {
         return json{{"error", std::string("file_edit failed: ") + e.what()}};
     }
@@ -895,11 +1787,12 @@ json FileIOTools::doFileSearch(const json& args) {
         int maxResults = args.value("max_results", 50);
         if (maxResults <= 0) maxResults = 50;
 
-        if (!fs::exists(searchPath)) {
+        const fs::path searchDir = fs::u8path(searchPath);
+        if (!fs::exists(searchDir)) {
             return json{{"error", "Search path does not exist: " + searchPath}};
         }
 
-        if (!fs::is_directory(searchPath)) {
+        if (!fs::is_directory(searchDir)) {
             return json{{"error", "Search path is not a directory: " + searchPath}};
         }
 
@@ -909,8 +1802,18 @@ json FileIOTools::doFileSearch(const json& args) {
         GitignoreMatcher ignore = GitignoreMatcher::forDirectory(searchPath);
 
         std::error_code rootEc;
-        fs::path root = fs::weakly_canonical(fs::path(searchPath), rootEc);
-        if (rootEc) root = fs::path(searchPath);
+        const fs::path root = fs::canonical(searchDir, rootEc);
+        if (rootEc) {
+            return json{{"error", "Cannot resolve search path " + searchPath + ": " + rootEc.message()}};
+        }
+        // By resolved path, not by is_symlink: a Windows junction is not a symlink.
+        const auto resolvesInsideRoot = [&root](const fs::path& entry) {
+            std::error_code linkEc;
+            const fs::path target = fs::canonical(entry, linkEc);
+            if (linkEc) return false;
+            const fs::path fromRoot = target.lexically_relative(root);
+            return !fromRoot.empty() && *fromRoot.begin() != fs::path("..");
+        };
 
         // A pattern with a separator addresses a path; otherwise a file name.
         const bool pathPattern = pattern.find('/') != std::string::npos;
@@ -920,9 +1823,13 @@ json FileIOTools::doFileSearch(const json& args) {
         json matches = json::array();
         int total = 0;
         int ignoredSkipped = 0;
+        int credentialSkipped = 0;
+        int tooLargeSkipped = 0;
+        // getline reads a file with no line breaks into one string.
+        constexpr std::uintmax_t kMaxSearchedFileBytes = 64u * 1024u * 1024u;
 
         std::error_code ec;
-        for (auto it = fs::recursive_directory_iterator(searchPath, fs::directory_options::skip_permission_denied, ec);
+        for (auto it = fs::recursive_directory_iterator(searchDir, fs::directory_options::skip_permission_denied, ec);
              it != fs::recursive_directory_iterator(); it.increment(ec)) {
             if (ec) {
                 ec.clear();
@@ -930,9 +1837,20 @@ json FileIOTools::doFileSearch(const json& args) {
             }
 
             const fs::path& entryPath = it->path();
-            const std::string filename = entryPath.filename().string();
+            const std::string filename = entryPath.filename().u8string();
 
             if (it->is_directory(ec) && !ec) {
+                // A folder link is never walked, even one that stays inside: it can loop back on itself.
+                const fs::file_status linkStatus = it->symlink_status(ec);
+                bool folderLink = ec || fs::is_symlink(linkStatus);
+#ifdef _MSC_VER
+                folderLink = folderLink || linkStatus.type() == fs::file_type::junction;
+#endif
+                ec.clear();
+                if (folderLink || !resolvesInsideRoot(entryPath)) {
+                    it.disable_recursion_pending();
+                    continue;
+                }
                 // .git is never interesting and is huge; it is pruned always
                 // and is not counted as an ignore-rule skip, or the counter
                 // would be non-zero on every repository and say nothing.
@@ -940,12 +1858,12 @@ json FileIOTools::doFileSearch(const json& args) {
                     it.disable_recursion_pending();
                     continue;
                 }
-                if (ignore.isIgnored(entryPath.string(), /*isDirectory=*/true)) {
+                if (ignore.isIgnored(entryPath.u8string(), /*isDirectory=*/true)) {
                     it.disable_recursion_pending();
                     ++ignoredSkipped;
                     continue;
                 }
-                ignore.addFile((entryPath / ".gitignore").string());
+                ignore.addFile((entryPath / ".gitignore").u8string());
                 continue;
             }
             ec.clear();
@@ -953,7 +1871,12 @@ json FileIOTools::doFileSearch(const json& args) {
             if (!it->is_regular_file(ec)) continue;
             if (ec) { ec.clear(); continue; }
 
-            if (ignore.isIgnored(entryPath.string(), /*isDirectory=*/false)) {
+            // A file's own folder was checked on the way in, so only a link can lead out.
+            const bool fileLink = it->is_symlink(ec) || ec;
+            ec.clear();
+            if (fileLink && !resolvesInsideRoot(entryPath)) continue;
+
+            if (ignore.isIgnored(entryPath.u8string(), /*isDirectory=*/false)) {
                 ++ignoredSkipped;
                 continue;
             }
@@ -963,7 +1886,7 @@ json FileIOTools::doFileSearch(const json& args) {
                 std::error_code relEc;
                 fs::path rel = fs::relative(entryPath, root, relEc);
                 const std::string relStr =
-                    relEc ? entryPath.generic_string() : rel.generic_string();
+                    relEc ? entryPath.generic_u8string() : rel.generic_u8string();
                 nameMatches = globMatch(pattern, relStr, globOpts);
             } else {
                 nameMatches = globMatch(pattern, filename, globOpts);
@@ -972,6 +1895,16 @@ json FileIOTools::doFileSearch(const json& args) {
 
             // If content_pattern is specified, search within file
             if (!contentPattern.empty()) {
+                // A match line would hand over what file_read refuses to show.
+                if (isCredentialFileName(filename)) {
+                    ++credentialSkipped;
+                    continue;
+                }
+                std::error_code sizeEc;
+                if (fs::file_size(entryPath, sizeEc) > kMaxSearchedFileBytes && !sizeEc) {
+                    ++tooLargeSkipped;
+                    continue;
+                }
                 std::ifstream file(entryPath);
                 if (!file.is_open()) continue;
 
@@ -983,7 +1916,7 @@ json FileIOTools::doFileSearch(const json& args) {
                         ++total;
                         if (static_cast<int>(matches.size()) < maxResults) {
                             json match;
-                            match["path"] = entryPath.generic_string();
+                            match["path"] = entryPath.generic_u8string();
                             match["line"] = lineNum;
                             // Trim context to reasonable length
                             std::string context = line;
@@ -1000,17 +1933,20 @@ json FileIOTools::doFileSearch(const json& args) {
                 ++total;
                 if (static_cast<int>(matches.size()) < maxResults) {
                     json match;
-                    match["path"] = entryPath.generic_string();
+                    match["path"] = entryPath.generic_u8string();
                     matches.push_back(std::move(match));
                 }
             }
         }
 
-        return json{
+        json result{
             {"matches", matches},
             {"total", total},
             {"ignored_skipped", ignoredSkipped},
         };
+        if (credentialSkipped > 0) result["credential_files_skipped"] = credentialSkipped;
+        if (tooLargeSkipped > 0) result["files_over_64mb_skipped"] = tooLargeSkipped;
+        return result;
     } catch (const std::exception& e) {
         return json{{"error", std::string("file_search failed: ") + e.what()}};
     }

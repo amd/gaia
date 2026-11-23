@@ -13,18 +13,21 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import tempfile
 import threading
 from unittest.mock import MagicMock, patch
 
 import pytest
 
-from gaia.agents.base.agent import Agent
+from gaia.agents.base import denied_effects
+from gaia.agents.base.agent import DECLINED_HINT, Agent
 from gaia.agents.base.console import AgentConsole
 from gaia.agents.base.denied_effects import (
     COMMAND,
     NETWORK,
     PATH,
+    PERMISSION_CHECK_FAILED,
     SCRIPT,
     TEST_SUITE,
     DeniedEffects,
@@ -864,6 +867,27 @@ def test_a_preflight_refusal_is_a_step_not_a_denial(tmp_path):
     assert not agent._denied_effects
 
 
+def test_a_permission_check_that_crashed_is_not_a_denial(tmp_path, monkeypatch):
+    """A crash is not a "no": other routes to the same host stay open."""
+    agent = _agent(_DenyShellConsole(), tmp_path)
+
+    def _broken_check(_args):
+        raise LookupError("no state for this chat")
+
+    monkeypatch.setitem(
+        agent._tools_registry["run_shell_command"], "preflight", _broken_check
+    )
+
+    result = agent._execute_tool(
+        "run_shell_command", {"command": "curl https://api.github.com/x"}
+    )
+
+    assert not agent._denied_effects
+    assert agent.ran == []
+    assert result["status"] == "error"
+    assert result[PERMISSION_CHECK_FAILED] is True
+
+
 def test_a_refused_call_is_never_offered_as_allow_once(tmp_path, script):
     """The policy gate runs before the reroute question (validate, then ask)."""
     console = _AskingConsole(Agent.ALLOW_DENIED_EFFECT)
@@ -1284,7 +1308,8 @@ def test_a_refusal_gets_a_recovery_prompt_that_does_not_invite_a_reroute(
     ]
     assert recovery, "the refusal should still reach the recovery step"
     assert "Create a NEW corrected plan" not in recovery[-1]
-    assert "do not reach the same result" in recovery[-1]
+    assert "do not do the same thing through another tool" in recovery[-1]
+    assert "not a no to the task" in recovery[-1]
 
 
 def test_an_ordinary_error_keeps_the_fix_it_prompt():
@@ -1490,3 +1515,447 @@ def test_with_no_way_to_ask_the_policy_every_delete_is_kept(tmp_path):
 
     assert ledger.conflict("run_shell_command", _shell("mv c.txt d.txt"))
     assert not ledger.conflict("run_shell_command", _shell("cp a.txt b.txt"))
+
+
+# ---------------------------------------------------------------------------
+# A no is to one action, not to the tool or the task
+# ---------------------------------------------------------------------------
+
+
+_ANOTHER_ACTION = [
+    ("pip install pandas", "pip install openpyxl"),
+    ("gh issue close 3", "gh issue close 4"),
+    ("git push origin main", "git push upstream dev"),
+    (
+        "powershell -Command \"Expand-Archive -Path 'a.zip' -DestinationPath out\"",
+        "powershell -Command \"Expand-Archive -Path 'b.zip' -DestinationPath tmp\"",
+    ),
+    ("dir /s reports", "dir invoices"),
+    ("pip install ./pkg-a", "pip install ./pkg-b"),
+    ("pip install ./a/pkg[x]", "pip install ./b/pkg[x]"),
+    ("pip install dist/a.whl", "pip install dist/b.whl"),
+    ("pip install a/x.whl", "pip install b/x.whl"),
+]
+
+
+@pytest.mark.parametrize("declined, later", _ANOTHER_ACTION)
+def test_the_same_program_on_something_else_is_another_action(
+    declined, later, tmp_path
+):
+    assert not _overlaps(
+        "run_shell_command",
+        _shell(declined),
+        "run_shell_command",
+        _shell(later),
+        tmp_path,
+    )
+
+
+_SAME_ACTION = [
+    ("pip install pandas", "pip install --upgrade pandas"),
+    ("pip install pandas", "python -m pip install pandas"),
+    ("pip install pandas", "pip install pandas openpyxl"),
+    ("git push origin main", "git push --force origin main"),
+    ("git push origin main", "git push"),
+    ("git push", "git push origin main"),
+    ("gh issue close 3", 'bash -c "gh issue close 3"'),
+    ("git add a.txt", "git add ."),
+    ("git add src", "git add src/app.py"),
+    ('git commit -m "fix bug"', 'git commit -m "Fix the bug"'),
+    ('gh pr create --title "Fix" --body "one"', 'gh pr create -t "A fix" -b "two"'),
+    ("pip install pandas", "pip install pandas==2.2"),
+    ("pip install pandas>=2", "pip install 'pandas[excel]<3'"),
+    ('git commit -am "fix bug"', 'git commit -m "Fix the bug"'),
+    ('git commit -sam "fix bug"', 'git commit -m "Fix the bug"'),
+    ('git commit -qam "fix bug"', 'git commit -m "Fix the bug"'),
+    ("npm install @scope/pkg@1.0", "npm install @scope/pkg"),
+    ("pip install ./pkg[excel]", "pip install ./pkg"),
+    (r'pip install "C:\My Wheels\pkg[x]"', r'pip install "C:\My Wheels\pkg"'),
+    ('git tag -am "v1" v1', 'git tag -m "Release one" v1'),
+    ('pip install "./My Wheels/a.whl"', 'pip install "My Wheels/a.whl"'),
+    ('pip install "My Wheels/a.whl"', 'pip install "./My Wheels/a.whl"'),
+    ("pip install ./w@1/a.whl", "pip install w@1/a.whl"),
+    ('pip install "My Wheels/a.whl[x]"', 'pip install "./My Wheels/a.whl"'),
+    ("npm install ./w@1/pkg", "npm install w@1/pkg"),
+    ("pip install ./dist/a.whl", "pip install dist/a.whl"),
+    ("pip install git+https://h/r@v1", "pip install git+https://h/r@v2"),
+    (
+        "conda install conda-forge/label/dev::numpy=1.26",
+        "conda install conda-forge/label/dev::numpy=1.25",
+    ),
+    (
+        "conda install conda-forge/label/dev::numpy=1.26",
+        "conda install conda-forge/label/dev::numpy",
+    ),
+    ("npm install alias@npm:@scope/pkg@1", "npm install alias@npm:@scope/pkg@2"),
+    ("pip install dist/a.whl", "pip install ./dist/a.whl"),
+    ("pip install git+ssh://git@h/r@v1", "pip install git+ssh://git@h/r@v2"),
+    ("pip install pkg@https://h/a.whl", "pip install pkg@https://h/b.whl"),
+    ("npm install file:./w@1/a.zip", "npm install file:./w@2/a.zip"),
+]
+
+#: Two different local package files stay one action once either is declined.
+#: A file name can hold spaces, ``@`` and version-like text, so telling two
+#: files apart reliably also lets the same file through under another spelling.
+_DIFFERENT_FILES_STILL_ONE_ACTION = [
+    (r'pip install "C:\My Wheels\a.whl"', r'pip install "C:\My Wheels\b.whl"'),
+    ('pip install "My Wheels/a.whl"', 'pip install "My Wheels/b.whl"'),
+    ("pip install w@1/a.whl", "pip install w@1/b.whl"),
+    ("pip install w@1/a.whl", "pip install w@2/a.whl"),
+    ("npm install foo@./foo-1.0.0.tar.gz", "npm install foo@./foo-2.0.0.tar.gz"),
+    ("yarn add foo@./foo-1.tar.gz", "yarn add foo@./foo-2.tar.gz"),
+    ("pip install pkg@dist/pkg-1.0.tar.gz", "pip install pkg@dist/pkg-2.0.tar.gz"),
+]
+
+
+@pytest.mark.parametrize("declined, later", _DIFFERENT_FILES_STILL_ONE_ACTION)
+def test_a_declined_package_file_also_covers_another_file(declined, later, tmp_path):
+    args = ("run_shell_command", _shell(declined), "run_shell_command", _shell(later))
+    assert _overlaps(*args, tmp_path)
+
+
+#: Review probes: other spellings of one file, ``name @ path`` references,
+#: extras, markers, archive-looking pins, channel labels, aliases, and ``-m``
+#: switches that are not a commit message.
+_PROBES = [
+    ('pip install "./w@1/a.whl"', 'pip install "w@1/a.whl"'),
+    ("pip install ./a/../a/pkg.whl", "pip install ./a/pkg.whl"),
+    (r"pip install .\A\PKG.whl", "pip install ./a/pkg.whl"),
+    (r'pip install "C:\My Wheels\a.whl"', 'pip install "c:/my wheels/x/../a.whl"'),
+    (r'pip install "C:\My Wheels\a.whl"', r'pip install "C:\My Wheels\a.WHL"'),
+    (
+        'pip install "./My Wheels/a.whl"',
+        'python -m pip install --force-reinstall "My Wheels/a.whl"',
+    ),
+    (r'pip install ".\My Wheels\a.whl"', 'pip install "My Wheels/a.whl"'),
+    ("pip install dist/./a.whl", "pip install dist/../dist/a.whl"),
+    ("pip install w@1/a.whl", r"pip install .\w@1\a.whl"),
+    ("pip install -e .[dev]", "pip install -e ."),
+    ("pip install a.whl[x]", "pip install a.whl"),
+    (
+        'uv pip install "pkg @ ./dist/pkg.whl"',
+        'uv pip install "pkg[cli] @ ./dist/pkg.whl"',
+    ),
+    (
+        'pip install "pkg @ ./dist/pkg.whl"',
+        "pip install \"pkg @ ./dist/pkg.whl ; python_version>'3'\"",
+    ),
+    ('pip install "pkg @ ./dist/pkg.whl"', "pip install pkg"),
+    ("pip install pkg@./dist/pkg.whl", "pip install pkg"),
+    ("npm install foo@./foo-1.0.0.tar.gz", "npm install foo"),
+    ("pnpm add foo@./foo-1.zip", "pnpm add foo"),
+    ("pip install 'dist/a 1.whl'", "pip install dist/a"),
+    ("pip install numpy==1.0.zip", "pip install numpy"),
+    ("pip install pkg==1.0.tar.gz", "pip install pkg"),
+    ("pip install numpy>=1.whl", "pip install numpy<2.whl"),
+    ("npm install pkg@latest.zip", "npm install pkg"),
+    ("conda install numpy=1.2=py_0.tar.bz2", "conda install numpy"),
+    ("conda install conda-forge::numpy=1.26", "conda install conda-forge::numpy"),
+    ("pip install pkg@git+https://h/r@v1", "pip install pkg@git+https://h/r@v2"),
+    ('pip install "pkg @ https://h/a.whl"', 'pip install "pkg @ https://h/b.whl"'),
+    ("npm install file:./pkg", "npm install file:../pkg"),
+    ("npm install git@github.com:org/repo", "npm install git@github.com:other/repo"),
+    ("npm install github:org/repo@v1", "npm install github:org/repo@v2"),
+    ("npm install @scope/pkg@1.0", "npm install @scope/other"),
+    ('git commit -am "fix bug"', 'git commit -a -m "Fix the bug"'),
+    ('git commit -AM "fix bug"', 'git commit -m "Fix the bug"'),
+    ('git commit -sam "fix bug"', 'git commit --message "Fix the bug"'),
+    ('git commit -am "fix bug"', "git push"),
+    # A value-taking flag first swallows the rest of its word: no message follows.
+    ("git commit -F custom a.py", "git commit -Fcustom a.py b.py"),
+    ("git commit -Cupstream a.py b.py", "git commit -C upstream a.py"),
+    ("git commit -Fm a.py b.py", "git commit --file=m a.py"),
+    ("git commit -Sm a.py b.py", "git commit -S a.py"),
+    ("git commit -um a.py b.py", "git commit -u a.py"),
+    # After a bare ``--`` every word is a path, ``-am`` included.
+    ("git commit -- -am a.py b.py", "git commit a.py"),
+    ("git commit -- -am a.py b.py", "git commit --am a.py -m b.py"),
+    ("git checkout -qm main -- src", "git checkout main"),
+    ("git branch -fm old new", "git branch old"),
+]
+
+
+_MAIN_TEXT_FLAGS = frozenset({"--message", "--title", "--body", "--comment", "--notes"})
+_MAIN_SHORT_TEXT_FLAGS = {"git": frozenset({"-m"}), "gh": frozenset({"-m", "-b", "-t"})}
+_MAIN_VERSION_PIN = re.compile(r"[\[<>=!~;@ ]")
+
+
+def _without_text_values_on_main(family, rest):
+    flags = _MAIN_TEXT_FLAGS | _MAIN_SHORT_TEXT_FLAGS.get(
+        family.split(" ")[0], frozenset()
+    )
+    kept = []
+    skip = False
+    for word in rest:
+        if skip:
+            skip = False
+        elif word.lower() in flags:
+            skip = True
+        else:
+            kept.append(word)
+    return kept
+
+
+def _unpinned_on_main(word):
+    return word[:1] + _MAIN_VERSION_PIN.split(word[1:], maxsplit=1)[0]
+
+
+def _blocked_on_main(*args):
+    """The matcher as main had it (cca639f8e4), the bar no pair may fall below."""
+    with (
+        patch.object(
+            denied_effects, "_without_text_values", _without_text_values_on_main
+        ),
+        patch.object(denied_effects, "_unpinned", _unpinned_on_main),
+    ):
+        return _overlaps(*args)
+
+
+_EVERY_PAIR = (
+    _SAME_ACTION + _ANOTHER_ACTION + _DIFFERENT_FILES_STILL_ONE_ACTION + _PROBES
+)
+
+
+@pytest.mark.parametrize(
+    "declined, later",
+    _EVERY_PAIR + [(later, declined) for declined, later in _EVERY_PAIR],
+)
+def test_nothing_main_blocked_now_slips_through(declined, later, tmp_path):
+    args = ("run_shell_command", _shell(declined), "run_shell_command", _shell(later))
+    if _blocked_on_main(*args, tmp_path):
+        assert _overlaps(*args, tmp_path)
+
+
+@pytest.mark.parametrize(
+    "declined, later",
+    [
+        ("git checkout -qm main -- src", "git checkout main"),
+        ("git checkout main", "git checkout -qm main -- src"),
+        ("git branch -fm old new", "git branch old"),
+        ("git branch old", "git branch -fm old new"),
+        ("git checkout -qm main -- src", "git checkout dev"),
+        ("git branch -fm old new", "git branch other"),
+    ],
+)
+def test_a_dash_m_that_is_not_a_commit_message_reads_as_on_main(
+    declined, later, tmp_path
+):
+    """``checkout -m`` merges and ``branch -m`` moves: the next word is a branch."""
+    args = ("run_shell_command", _shell(declined), "run_shell_command", _shell(later))
+    assert _overlaps(*args, tmp_path) == _blocked_on_main(*args, tmp_path)
+
+
+@pytest.mark.parametrize("declined, later", _SAME_ACTION)
+def test_a_reworded_command_is_the_same_action(declined, later, tmp_path):
+    assert _overlaps(
+        "run_shell_command",
+        _shell(declined),
+        "run_shell_command",
+        _shell(later),
+        tmp_path,
+    )
+
+
+def _anywhere(path):
+    return True
+
+
+def _declined_program(tmp_path, code, may_create=_anywhere):
+    ledger = DeniedEffects(str(tmp_path))
+    ledger.record(
+        "run_python",
+        {"code": code},
+        "Tool 'run_python' was denied by the user.",
+        may_create=may_create,
+    )
+    return ledger
+
+
+_BUILDS_A_REPORT = (
+    "import os\n"
+    "os.makedirs('out', exist_ok=True)\n"
+    "with open('out/report.csv', 'w') as fh:\n"
+    "    fh.write('a,b\\n')\n"
+)
+
+
+def test_a_declined_programs_new_output_can_be_made_another_way(tmp_path):
+    ledger = _declined_program(tmp_path, _BUILDS_A_REPORT)
+    report = {"file_path": "out/report.csv", "content": "a,b\n"}
+    assert ledger.conflict("write_file", report) is None
+    other = "open('out/report.csv', 'w').write('a,b\\n')"
+    assert ledger.conflict("run_python", {"code": other}) is None
+
+
+def test_a_declined_program_that_only_made_new_files_records_nothing(tmp_path):
+    ledger = _declined_program(tmp_path, _BUILDS_A_REPORT)
+    assert not ledger
+    assert ledger.conflict("run_python", {"code": _BUILDS_A_REPORT}) is None
+
+
+def test_a_folder_that_is_already_there_is_not_what_was_declined(tmp_path):
+    (tmp_path / "out").mkdir()
+    ledger = _declined_program(tmp_path, _BUILDS_A_REPORT)
+    assert (
+        ledger.conflict("write_file", {"file_path": "out/notes.md", "content": "x"})
+        is None
+    )
+
+
+def test_without_a_write_scope_every_path_is_still_recorded(tmp_path):
+    ledger = DeniedEffects(str(tmp_path))
+    ledger.record("run_python", {"code": _BUILDS_A_REPORT}, "denied by the user")
+    assert ledger.conflict(
+        "write_file", {"file_path": "out/report.csv", "content": "x"}
+    )
+
+
+def test_a_new_file_outside_the_chats_folders_stays_declined(tmp_path):
+    ledger = _declined_program(
+        tmp_path, _BUILDS_A_REPORT, may_create=lambda path: False
+    )
+    assert ledger.conflict(
+        "write_file", {"file_path": "out/report.csv", "content": "x"}
+    )
+
+
+def test_a_declined_overwrite_is_not_smuggled_through_another_tool(tmp_path):
+    (tmp_path / "out").mkdir()
+    (tmp_path / "out" / "report.csv").write_text("kept\n")
+    ledger = _declined_program(tmp_path, _BUILDS_A_REPORT)
+    assert ledger.conflict(
+        "write_file", {"file_path": "out/report.csv", "content": "x"}
+    )
+    assert ledger.conflict("run_shell_command", _shell("echo x > out/report.csv"))
+    # The folder was only ensured, so its other files are not swept up.
+    assert (
+        ledger.conflict("write_file", {"file_path": "out/other.csv", "content": "x"})
+        is None
+    )
+
+
+@pytest.mark.parametrize(
+    "code",
+    [
+        "import shutil\nshutil.rmtree('archive')",
+        "import os\nos.makedirs('archive', exist_ok=True)\nos.rename('archive', 'old')",
+        "from pathlib import Path\nPath('archive/ledger.csv').unlink()",
+        "import shutil\nshutil.move('archive/ledger.csv', 'elsewhere.csv')",
+    ],
+)
+def test_a_declined_delete_or_move_is_not_smuggled_through_another_tool(code, tmp_path):
+    (tmp_path / "archive").mkdir()
+    (tmp_path / "archive" / "ledger.csv").write_text("kept\n")
+    ledger = _declined_program(tmp_path, code)
+    assert ledger.conflict("run_shell_command", _shell("rm -rf archive"))
+    assert ledger.conflict(
+        "write_file", {"file_path": "archive/ledger.csv", "content": ""}
+    )
+
+
+def test_a_declined_script_is_the_same_script_through_any_tool(tmp_path):
+    script = tmp_path / "build_report.py"
+    script.write_text(_BUILDS_A_REPORT)
+    wrapper = (
+        f"import subprocess, sys\nsubprocess.run([sys.executable, {str(script)!r}])"
+    )
+    ledger = _declined_program(tmp_path, wrapper)
+    assert ledger.conflict("run_shell_command", _shell(f'python "{script}"'))
+    assert ledger.conflict("execute_python_file", {"file_path": str(script)})
+    # What the script was for is still open to a different route.
+    assert (
+        ledger.conflict("write_file", {"file_path": "out/report.csv", "content": "x"})
+        is None
+    )
+
+
+class _DenyPythonConsole(AgentConsole):
+    """Declines run_python, approves everything else."""
+
+    def __init__(self):
+        super().__init__()
+        self.prompted = []
+
+    def confirm_tool_execution(self, tool_name, tool_args):
+        self.prompted.append(tool_name)
+        return tool_name != "run_python"
+
+
+class _Worker(_Probe):
+    def _register_tools(self):
+        super()._register_tools()
+        agent = self
+
+        @tool
+        def run_python(code: str) -> dict:
+            """Probe python."""
+            agent.ran.append(("run_python", code))
+            return {"status": "success", "return_code": 0}
+
+        @tool
+        def write_file(file_path: str, content: str) -> dict:
+            """Probe writer."""
+            agent.ran.append(("write_file", file_path))
+            return {"status": "success", "file_path": file_path}
+
+
+def _worker(console, cwd):
+    with patch("gaia.agents.base.agent.AgentSDK"):
+        _Worker._console_override = console
+        agent = _Worker(silent_mode=True, skip_lemonade=True)
+    agent._denied_effects = DeniedEffects(str(cwd))
+    root = os.path.normcase(os.path.realpath(str(cwd)))
+
+    def inside(path, prompt_user=True):
+        return os.path.normcase(os.path.realpath(path)).startswith(root)
+
+    agent.path_validator = MagicMock(
+        is_path_allowed=inside, is_write_blocked=lambda path: (False, "")
+    )
+    return agent
+
+
+def test_one_declined_script_does_not_close_the_task(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    console = _DenyPythonConsole()
+    agent = _worker(console, tmp_path)
+
+    declined = agent._execute_tool("run_python", {"code": _BUILDS_A_REPORT})
+    again = agent._execute_tool("run_python", {"code": _BUILDS_A_REPORT})
+    written = agent._execute_tool(
+        "write_file", {"file_path": "out/report.csv", "content": "a,b\n"}
+    )
+
+    assert declined["status"] == "denied"
+    assert declined["hint"] == DECLINED_HINT
+    assert again["status"] == "denied"
+    assert written["status"] == "success"
+    assert agent.ran == [("write_file", "out/report.csv")]
+
+
+def test_a_declined_delete_is_still_stopped_at_the_next_tool(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "archive").mkdir()
+    console = _DenyPythonConsole()
+    agent = _worker(console, tmp_path)
+
+    agent._execute_tool(
+        "run_python", {"code": "import shutil\nshutil.rmtree('archive')"}
+    )
+    rerouted = agent._execute_tool("run_shell_command", {"command": "rm -rf archive"})
+
+    assert rerouted["status"] == "denied"
+    assert rerouted["executed"] is False
+    assert "do not reach it with another tool" in rerouted["error"]
+    assert "steps that do something else are still open" in rerouted["error"]
+    assert agent.ran == []
+    # Stopped by the ledger: nobody is prompted to approve the reroute.
+    assert console.prompted == ["run_python"]
+
+
+def test_the_hint_closes_the_call_not_the_task():
+    assert "not the tool and not the task" in DECLINED_HINT
+    assert "Do not repeat it or reword it" in DECLINED_HINT
+    assert "Carry on with the task" in DECLINED_HINT
+    assert "say in your answer what you could not do" in DECLINED_HINT
+    assert "then stop" not in DECLINED_HINT

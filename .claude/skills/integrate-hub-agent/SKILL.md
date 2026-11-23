@@ -36,7 +36,7 @@ Pin down a single `<name>/<runtime>` before integrating:
 - If the developer named an agent ("the GAIA agent", "the flagship"), match it against the
   listing. Several names can diverge — watch for it: the friendly name, the
   **directory** (`<name>`), the registry **`id`** in `gaia-agent.yaml`, and the
-  package/module names (the flagship's python module is `gaia_agent`, not
+  package/module names (the flagship's python module is `gaiapy`, not
   `gaia_agent_gaia`; its npm package is `@amd-gaia/gaia`). The directory is how you find the
   package; the **`id`** is what you pass when invoking a python agent (Step 3).
 - The same capability can ship in more than one runtime (the flagship is npm
@@ -122,7 +122,7 @@ integration steps from them (don't just list the files back to the developer):
    `package.json` for npm: the canonical `id`/package name, declared `models`,
    exposed `interfaces`, dependencies, and entry points.
 3. **Source entry point** — the package's entry module (python: `entry_module` /
-   `entry_class` in `gaia-agent.yaml`, e.g. `gaia_agent` / `GaiaAgent`; the
+   `entry_class` in `gaia-agent.yaml`, e.g. `gaiapy` / `GaiaAgent`; the
    class usually lives in `<entry_module>/agent.py`; npm: the `main`/`exports` entry in
    `package.json`): the ground truth when README and manifest leave a gap.
 

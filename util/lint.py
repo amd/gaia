@@ -539,8 +539,8 @@ def check_imports() -> CheckResult:
         # Specialized Agents — optional so a framework-only env (no
         # gaia-agent-<id> installed) skips rather than fails. CI installs them
         # and sets GAIA_REQUIRE_HUB_AGENTS=1 so a broken import fails.
-        ("from", "gaia_agent.agent", "GaiaAgent", "Flagship agent", hub_optional),
-        ("from", "gaia_agent.chat_agent", "ChatAgent", "Chat agent", hub_optional),
+        ("from", "gaiapy.agent", "GaiaAgent", "Flagship agent", hub_optional),
+        ("from", "gaiapy.chat_agent", "ChatAgent", "Chat agent", hub_optional),
         # Database
         ("from", "gaia.database", "DatabaseAgent", "Database agent", False),
         ("from", "gaia.database", "DatabaseMixin", "Database mixin", False),

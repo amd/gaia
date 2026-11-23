@@ -63,6 +63,12 @@ from gaia.connectors.grants import (
     load_grants,
     revoke_agent_grant,
 )
+from gaia.connectors.store import (
+    UninspectableKeyringError,
+    WeakKeyringError,
+    connection_slot_in_use,
+    keyring_read_refusal,
+)
 from gaia.connectors.store import list_connections as _store_list
 from gaia.connectors.store import (
     peek_connection,
@@ -521,19 +527,37 @@ def get_connection(
     return None
 
 
-async def _revoke_one(provider: str, acct: Account) -> Dict[str, Any]:
-    from gaia.connectors.flow import revoke_provider_token
+async def _revoke_one(
+    provider: str, acct: Account, *, refusal: Optional[WeakKeyringError] = None
+) -> Dict[str, Any]:
+    from gaia.connectors.flow import (
+        not_revoked_on_weak_keyring,
+        nothing_to_revoke,
+        revoke_provider_token,
+    )
 
-    result = await revoke_provider_token(provider, slot=acct.slot)
+    if refusal is not None and connection_slot_in_use(provider, slot=acct.slot):
+        result = not_revoked_on_weak_keyring(
+            provider,
+            uninspectable=isinstance(refusal, UninspectableKeyringError),
+            account_type=acct.account_type,
+        )
+    elif refusal is not None:
+        result = nothing_to_revoke(provider)
+    else:
+        result = await revoke_provider_token(
+            provider, slot=acct.slot, account_type=acct.account_type
+        )
     remaining = await locked_write(
         provider, _accounts.remove_account, provider, acct.slot
     )
     logger.info(
         "api: revoked one %s account revoke_supported=%s revoked_remotely=%s "
-        "remaining=%d",
+        "nothing_stored=%s remaining=%d",
         provider,
         result["revoke_supported"],
         result["revoked_remotely"],
+        result.get("nothing_stored", False),
         remaining,
     )
     return {
@@ -553,7 +577,7 @@ async def revoke_connection_async(
     """
     Revoke one of ``provider``'s accounts with the provider (when it exposes a
     public revoke endpoint), then remove its stored token. Idempotent: with
-    nothing stored it reports a revoke with nothing to revoke.
+    nothing stored it says so instead of claiming a revoke.
 
     ``account`` (account id or address; ``None`` = the default account) picks
     the account. Revoking one Google account cancels only that account's
@@ -562,28 +586,38 @@ async def revoke_connection_async(
     ``accounts`` list of each one's result.
 
     Returns ``{"revoke_supported": bool, "revoked_remotely": bool,
-    "revoke_error": str | None, "account_id", "account_email",
-    "remaining_accounts": int}`` (see ``flow.revoke_provider_token``) —
-    never bare success for what was only a local keyring delete. Reporting
+    "revoke_attempted": bool, "nothing_stored": bool, "revoke_error": str | None,
+    "account_id", "account_email", "remaining_accounts": int}`` (see
+    ``flow.revoke_provider_token``). Never bare success for what was only a
+    local keyring delete. Reporting
     a full revoke when the provider-side grant is still live was the
-    literal #2591 bug this replaces. Per-agent grants are not touched here;
+    literal #2591 bug this replaces. On a keyring that refuses reads (weak
+    or uninspectable) the provider revoke is skipped, since it needs the
+    token, and the account is still removed locally; ``revoke_error`` says
+    where to revoke by hand. Per-agent grants are not touched here;
     disconnecting through the connector handler clears them once the last
     account is gone. Call this directly from async code already on an event
     loop; use ``revoke_connection`` (sync) otherwise.
     """
+    if all_accounts and account is not None:
+        raise ConnectorsError(
+            "revoke_connection: name one account or pass all_accounts=True, "
+            "not both."
+        )
+    # Revoking reads the token, which a weak keyring refuses; delete anyway.
+    refusal = keyring_read_refusal()
     if all_accounts:
-        if account is not None:
-            raise ConnectorsError(
-                "revoke_connection: name one account or pass all_accounts=True, "
-                "not both."
-            )
-        stored = _accounts.list_accounts(provider) or [_nothing_stored(provider)]
-        results = [await _revoke_one(provider, acct) for acct in stored]
+        stored = _accounts.accounts_for_delete(provider) or [_nothing_stored(provider)]
+        results = [
+            await _revoke_one(provider, acct, refusal=refusal) for acct in stored
+        ]
         await locked_write(provider, _accounts.remove_all_accounts, provider)
         return _combine_revokes(results)
     slot = _accounts.resolve_slot(provider, account)
-    match = [a for a in _accounts.list_accounts(provider) if a.slot == slot]
-    return await _revoke_one(provider, match[0] if match else _nothing_stored(provider))
+    match = [a for a in _accounts.accounts_for_delete(provider) if a.slot == slot]
+    return await _revoke_one(
+        provider, match[0] if match else _nothing_stored(provider), refusal=refusal
+    )
 
 
 def _nothing_stored(provider: str) -> Account:
@@ -599,12 +633,20 @@ def _nothing_stored(provider: str) -> Account:
 
 
 def _combine_revokes(results: List[Dict[str, Any]]) -> Dict[str, Any]:
-    """One outcome for several revokes: supported and revoked only if every
-    account was, and the first error any of them hit."""
+    """One outcome for several revokes: supported only if every account was,
+    revoked only if a remote revoke succeeded and every account is either
+    revoked or had nothing stored, and the first error any of them hit."""
     errors = [r["revoke_error"] for r in results if r.get("revoke_error")]
+    any_revoked = any(r["revoked_remotely"] for r in results)
+    all_resolved = all(
+        r["revoked_remotely"] or r.get("nothing_stored", False) for r in results
+    )
     return {
         "revoke_supported": all(r["revoke_supported"] for r in results),
-        "revoked_remotely": all(r["revoked_remotely"] for r in results),
+        "revoked_remotely": any_revoked and all_resolved,
+        "revoke_attempted": any(r.get("revoke_attempted", False) for r in results),
+        "nothing_stored": bool(results)
+        and all(r.get("nothing_stored", False) for r in results),
         "revoke_error": errors[0] if errors else None,
         "remaining_accounts": 0,
         "accounts": results,

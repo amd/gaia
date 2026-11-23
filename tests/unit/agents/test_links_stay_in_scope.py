@@ -12,7 +12,9 @@ covers every link to it. Classification only: no link is created here, and
 from __future__ import annotations
 
 import os
+import shutil
 import tempfile
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import pytest
@@ -263,6 +265,34 @@ def test_a_read_outside_the_allowed_folders_points_to_the_readers_not_python(lay
     assert "run_python" not in error
 
 
+@pytest.mark.parametrize(
+    "command",
+    [
+        "python convert_units.py 72 --from f",
+        # Only Windows Python ships the py launcher.
+        pytest.param(
+            "py tools/report.py",
+            marks=pytest.mark.skipif(
+                shutil.which("py") is None, reason="no py launcher on PATH"
+            ),
+        ),
+    ],
+)
+def test_a_python_script_refusal_points_to_execute_python_file(layout, command):
+    agent = _agent(layout)
+    admitted = []
+    agent.tool_loader = SimpleNamespace(
+        admit_tools=lambda names, registry: admitted.extend(names)
+    )
+
+    error = _shell(agent, command)["error"]
+
+    assert "execute_python_file" in error and "full path" in error
+    assert "read_file" not in error
+    # Named in the refusal, so it must be on the list the model can call.
+    assert admitted == ["execute_python_file"]
+
+
 def test_a_computation_refusal_still_offers_run_python(layout):
     agent = _agent(layout)
 
@@ -400,7 +430,7 @@ def test_reading_through_a_link_to_a_protected_folder_is_refused(
 
     assert refused["status"] == "error", refused
     assert refused["executed"] is False
-    assert "no approval or full access lifts this" in refused["error"]
+    assert "no approval lifts this" in refused["error"]
     # Final: no tool is offered as another way in.
     assert "read_file" not in refused["error"]
     assert agent.ran == []
@@ -529,14 +559,12 @@ def test_a_watched_protected_folder_is_never_asked_about(layout, monkeypatch):
     refused = _python(agent, "print(open('sys/hosts').read())")
 
     assert refused["status"] == "error", refused
-    assert "no approval or full access lifts this" in refused["error"]
+    assert "no approval lifts this" in refused["error"]
     assert console.asked == []
     assert agent.ran == []
 
 
-def test_full_access_reaches_elsewhere_but_never_a_protected_folder(
-    layout, monkeypatch
-):
+def test_full_access_reaches_elsewhere_and_a_protected_folder(layout, monkeypatch):
     _links(
         monkeypatch,
         {
@@ -547,11 +575,11 @@ def test_full_access_reaches_elsewhere_but_never_a_protected_folder(
     agent = _agent(layout, full_access=True)
 
     allowed = _python(agent, "print(open('link/notes.txt').read())")
-    refused = _python(agent, "print(open('sys/hosts').read())")
+    protected = _python(agent, "print(open('sys/hosts').read())")
 
     assert allowed["status"] == "success", allowed
-    assert refused["status"] == "error", refused
-    assert len(agent.ran) == 1
+    assert protected["status"] == "success", protected
+    assert len(agent.ran) == 2
 
 
 def test_a_path_that_cannot_be_resolved_is_refused(layout, monkeypatch):

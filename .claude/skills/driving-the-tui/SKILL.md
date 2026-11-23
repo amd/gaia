@@ -46,7 +46,7 @@ export GAIA_MEMORY_DB=/tmp/gaia-drive/memory.db  # see above
 
 With those set, `ps aux | grep gaia-cli` before and after should show the user's
 processes untouched. The readiness gate still needs `gaia-agent` on `PATH`; a
-one-line shim that execs `python -m gaia_agent.server` from the checkout under
+one-line shim that execs `python -m gaiapy.server` from the checkout under
 test is enough, and is how you pin *which* source the drive exercises.
 
 ## Start it
@@ -274,9 +274,10 @@ you get the exact URL, and no browser windows.
 
 - `GAIA_AGENT_LOG=<path>` — the agent's own log for the session.
 - `--trace=<path.jsonl>` — what the agent actually did, step by step.
-- `--dev` — puts the model chip, step count and the per-turn footnote
-  (`elapsed · ttft · tokens · tok/s · steps`) on screen, and routes agent
-  logging to DEBUG.
+- `--dev` — turns the control API on and logs its own diagnostics to the TUI
+  log. It changes nothing on screen. `Ctrl+O` shows each call's command, the
+  per-turn footnote (`elapsed · ttft · tokens · tok/s · steps`) and the turn's
+  metrics; `--trace` also puts agent logging at DEBUG.
 - A failed action surfaces as a status line in the transcript rather than a
   crash, so `screen?format=plain` is where an error shows up. Read it before
   concluding a keystroke did nothing.

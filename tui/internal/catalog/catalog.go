@@ -89,11 +89,11 @@ const ArtifactKindBinary = "binary"
 // gaia.hub.installer.default_install_root() exactly — a client that looked
 // somewhere else would report an agent as missing that is sitting on disk.
 func InstallRoot() string {
-	home, err := os.UserHomeDir()
-	if err != nil {
+	home := gaiaHome()
+	if home == "" {
 		return ""
 	}
-	return filepath.Join(home, ".gaia", "agents")
+	return filepath.Join(home, "agents")
 }
 
 // executableNames returns the candidate file names for a binary on this OS.
@@ -384,6 +384,7 @@ func (c *Catalog) SetMockBinary(binaryPath string) {
 		c.agents[i].BinaryArgs = nil
 		c.agents[i].DevArgs = nil
 		c.agents[i].CanonicalEvents = false
+		c.agents[i].Native = false
 		c.agents[i].Status = StatusInstalled
 	}
 }
@@ -581,12 +582,12 @@ func seedAgents() []Agent {
 			Category: "General", Tags: []string{"general", "chat", "rag", "memory", "skills"},
 			Icon: "✨", Status: StatusInstalled,
 			Transport:       TransportSubprocess,
-			BinaryPath:      "gaia-agent",
+			BinaryPath:      PythonAgentBinary,
 			CanonicalEvents: true,
-			// `gaia-cli --dev` also puts the child at DEBUG in
-			// ~/.gaia/logs/gaia-agent.log. Without this the TUI would go verbose
-			// while the agent kept logging errors only — and the log is where the
-			// answer usually is.
+			// `gaia-cli --dev` or `--trace` also puts the child at DEBUG in
+			// ~/.gaia/logs/gaia-agent.log: a run recorded for debugging should
+			// have the agent's side of it too, and the log is where the answer
+			// usually is.
 			DevArgs: []string{"--dev"},
 		},
 	}

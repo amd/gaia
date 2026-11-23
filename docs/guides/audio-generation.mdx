@@ -30,8 +30,10 @@ and [model registry](https://github.com/lemonade-sdk/lemonade/blob/main/src/cpp/
 3. Ask for instrumental music or a sound effect, specifying the style or sound.
 4. In the Agent UI, the track appears in the chat with a player, its file name
    and its length. The terminal UI shows the saved path and length instead.
-5. Use the WAV path returned by the tool. For a game, copy it into the project's
-   asset directory before referencing it from scripts.
+5. To save into a project, say where: *"save it in C:\Users\me\game\audio"*.
+   GAIA passes that folder (or a new `.wav` path) as `save_to` and writes a copy
+   there, never replacing a file that already exists. The original stays in
+   `~/.gaia/cache/audio/generations/`, where the chat plays it from.
 
 GAIA lists downloaded audio models and refuses unavailable models; it does not
 silently download a large model when a user requests audio. ACE-Step accepts
@@ -43,6 +45,21 @@ Loading an audio generator can evict the chat model from GPU memory. GAIA
 should run audio generation only when explicitly requested, and chat may need
 to reload its model afterwards.
 </Warning>
+
+## Saving into a project
+
+`save_to` takes an absolute folder (the file gets a generated name) or a new
+`.wav` path. GAIA refuses, before generating anything:
+
+- a relative path, a non-`.wav` file name, or a folder that doesn't exist;
+- a file that already exists (pick a new name instead of overwriting);
+- a location the agent's write policy doesn't allow.
+
+The saved copy is the one listed under **Outputs** in the session panel. If the
+copy can't be written once the track is made (the folder was removed, or a file
+of that name appeared meanwhile), the track still plays in the chat and is listed
+under **Outputs** from GAIA's own audio folder, and GAIA says why the copy is
+missing.
 
 ## Development verification
 

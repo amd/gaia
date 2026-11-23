@@ -32,7 +32,8 @@ from gaia.config import (
     UnsafeGaiaHomeError,
     unsafe_gaia_home_reason,
 )
-from gaia.llm.lemonade_embedded import gaia_home
+from gaia.home import DOCUMENT_COPIES_SUBDIR
+from gaia.llm import lemonade_embedded
 from gaia.utils.image_formats import IMAGE_EXTENSIONS
 from gaia.utils.user_folders import documents_dir
 
@@ -502,7 +503,8 @@ def _ui_gaia_home() -> Path:
             ``uploads_dir()`` is called from ``create_app()``, where one would
             surface as a raw traceback rather than something a user can act on.
     """
-    home = gaia_home()
+    # Looked up on the module each call, so a relocated home is always seen.
+    home = lemonade_embedded.gaia_home()
     resolved = home.resolve()
     user_home = Path.home().resolve()
 
@@ -526,6 +528,15 @@ def _ui_gaia_home() -> Path:
 def managed_documents_dir() -> Path:
     """Where the Agent UI stores documents it owns (``<GAIA_HOME>/documents``)."""
     return _ui_gaia_home() / "documents"
+
+
+def document_copies_dir() -> Path:
+    """Where the Agent UI keeps its copy of each document dragged into a chat.
+
+    Outside GAIA's documents folder, which every chat may use: a chat is
+    granted only the copies attached to it.
+    """
+    return _ui_gaia_home() / DOCUMENT_COPIES_SUBDIR
 
 
 def uploads_dir() -> Path:
@@ -658,8 +669,9 @@ def attached_upload_paths(message: str) -> List[str]:
 def document_roots() -> List[Path]:
     """Return the directories documents may be read from.
 
-    Always includes the user's home directory, plus GAIA's own managed
-    documents folder when ``GAIA_HOME`` moves it outside every other root.
+    Always includes the user's home directory, plus GAIA's own documents
+    folder, its document copies and chat uploads when ``GAIA_HOME`` moves
+    them outside every other root.
     Each entry of ``GAIA_DOCUMENT_ROOTS`` adds another root; a relative or
     non-existent entry is a server misconfiguration and raises HTTP 500 rather than being
     skipped, so a typo can never silently narrow access back to home.
@@ -695,9 +707,10 @@ def document_roots() -> List[Path]:
             )
         declared.append(candidate)
 
-    managed = managed_documents_dir().resolve()
-    if not any(managed.is_relative_to(root.resolve()) for root in declared):
-        declared.append(managed)
+    for owned in (managed_documents_dir(), document_copies_dir(), uploads_dir()):
+        owned = owned.resolve()
+        if not any(owned.is_relative_to(root.resolve()) for root in declared):
+            declared.append(owned)
 
     roots: List[Path] = []
     for candidate in declared:

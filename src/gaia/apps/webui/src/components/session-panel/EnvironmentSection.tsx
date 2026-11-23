@@ -27,7 +27,7 @@ import { useTurnEnd } from '../../hooks/useTurnEnd';
 import { announcePermissionMode, usePermissionModeEvents } from '../../utils/permissionModeEvents';
 import { requestMobileAccess, useMobileAccessState } from '../../utils/mobileAccessEvents';
 import { MODES } from '../PermissionModeChip';
-import { ctxLabel } from '../modelMeta';
+import { formatWindow } from '../modelMeta';
 import { LocalStatusError } from '../LocalStatusError';
 import { PanelSection } from './PanelSection';
 import { Switch } from './Switch';
@@ -36,6 +36,7 @@ import type { ContextUsage, LocalModelStatus, PermissionMode, TunnelStatus } fro
 import type { ScopeEntry, ScopeSource, SessionGit } from '../../types/sessionPanel';
 import type { MessageKey } from '../../i18n/registry';
 import { useT } from '../../i18n/useT';
+import { visibleName } from '../CalendarApproval';
 
 const MODEL_STATE: Record<Exclude<LocalModelStatus['state'], 'loaded'>, MessageKey> = {
     warming: 'modelStatus.state.warming',
@@ -85,7 +86,7 @@ export function EnvironmentSection({ sessionId, busy, usage, hideDocuments = fal
     return (
         <PanelSection id="environment" title={t('env.title')} summary={summary}>
             <div className="sp-rows">
-                <RunsOn sessionId={sessionId} busy={busy} />
+                <RunsOn sessionId={sessionId} busy={busy} usage={usage ?? null} />
                 <ContextRow usage={usage ?? null} />
                 <Mailbox sessionId={sessionId} />
                 <Project sessionId={sessionId} busy={busy} />
@@ -242,7 +243,7 @@ function sameModel(a: string, b: string): boolean {
 }
 
 /** Where the model answering this chat runs, from the same data as the model status popover. */
-function RunsOn({ sessionId, busy }: { sessionId: string; busy: boolean }) {
+function RunsOn({ sessionId, busy, usage }: { sessionId: string; busy: boolean; usage: ContextUsage | null }) {
     const t = useT();
     const place = useInferencePlace();
     const active = useModelStore((s) => s.active);
@@ -250,6 +251,8 @@ function RunsOn({ sessionId, busy }: { sessionId: string; busy: boolean }) {
     const [status, setStatus] = useState<LocalModelStatus | null>(null);
     const [error, setError] = useState<string | null>(null);
     const remote = place?.remote === true;
+    // The window this chat gets, as the context meter shows; the server's own load can be larger.
+    const window = usage && usage.window > 0 ? usage.window : status?.ctx_size ?? null;
 
     const load = useCallback(() => {
         if (remote) return;
@@ -325,9 +328,9 @@ function RunsOn({ sessionId, busy }: { sessionId: string; busy: boolean }) {
                     )}
                     title={memoryText}
                 >
-                    {status.ctx_size != null && (
+                    {window != null && (
                         <span className="sp-quiet" title={t('modelStatus.context')}>
-                            {t('settings.ctx.tokens', { size: ctxLabel(status.ctx_size) })}
+                            {t('settings.ctx.tokens', { size: formatWindow(window) })}
                         </span>
                     )}
                 </Row>
@@ -379,18 +382,18 @@ function Folders({ sessionId, hideDocuments }: { sessionId: string; hideDocument
             <span className="sp-row-icon" aria-hidden="true">
                 {entry.kind === 'folder' ? <Folder size={ICON} /> : <File size={ICON} />}
             </span>
-            <span className="sp-item-name" dir="ltr" title={entry.path}>{entry.name || baseName(entry.path)}</span>
+            <span className="sp-item-name" dir="ltr" title={visibleName(entry.path)}>{visibleName(entry.name || baseName(entry.path))}</span>
             {/* A folder's path says which one it is; a file's shows on hover. Where each came from is on hover too. */}
             {entry.kind === 'folder'
-                ? <span className="sp-item-path sp-quiet" dir="ltr" title={t(SOURCE_LABEL[entry.source])}>{entry.path}</span>
-                : <span className="sp-item-source sp-quiet" title={entry.path}>{t(SOURCE_LABEL[entry.source])}</span>}
+                ? <span className="sp-item-path sp-quiet" dir="ltr" title={t(SOURCE_LABEL[entry.source])}>{visibleName(entry.path)}</span>
+                : <span className="sp-item-source sp-quiet" title={visibleName(entry.path)}>{t(SOURCE_LABEL[entry.source])}</span>}
             {entry.removable && !locked && (
                 <button
                     type="button"
                     className="btn-icon-sm sp-info sp-item-remove"
                     onClick={() => void remove(entry)}
                     disabled={busyPath !== null}
-                    aria-label={t('env.remove', { path: entry.path })}
+                    aria-label={t('env.remove', { path: visibleName(entry.path) })}
                     title={t('env.removeShort')}
                 >
                     <X size={12} />

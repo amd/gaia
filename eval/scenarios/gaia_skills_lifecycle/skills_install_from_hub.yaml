@@ -14,6 +14,7 @@ persona: power_user
 
 setup:
   index_documents: []
+  skills_absent: [date-format]
   notes: "Fixture server running; GAIA_HUB_URL points at the fixture hub; date-format NOT pre-installed."
 
 turns:

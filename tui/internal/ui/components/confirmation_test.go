@@ -258,7 +258,7 @@ func TestRiskTierBadgeWords(t *testing.T) {
 func TestConfirmationViewShowsActionSummaryAndBadge(t *testing.T) {
 	m := NewConfirmationModel("run-1", "share_engineering_context", `Share build.log with reviewer@example.com — "nightly failure"?`, "")
 	view := stripANSI(m.View())
-	for _, want := range []string{"share_engineering_context", "reviewer@example.com", "WRITE"} {
+	for _, want := range []string{"Allow share engineering context?", "reviewer@example.com", "WRITE"} {
 		if !strings.Contains(view, want) {
 			t.Errorf("view missing %q:\n%s", want, view)
 		}
@@ -345,6 +345,13 @@ func TestEachOutcomeIsDistinct(t *testing.T) {
 			m := NewConfirmationModel("run-1", "run_shell_command", "x", "").
 				WithLiveChannel("cid-1", "gh issue list")
 			updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(tc.key)})
+			if tc.key == "a" {
+				// "Always" is only highlighted by its letter; Enter grants it.
+				if cmd != nil || !updated.Pending() {
+					t.Fatal("a alone granted always")
+				}
+				updated, cmd = updated.Update(tea.KeyMsg{Type: tea.KeyEnter})
+			}
 			if cmd == nil {
 				t.Fatalf("%q did not resolve the confirmation", tc.key)
 			}
@@ -465,7 +472,8 @@ func TestAlwaysPromisesOnlyTheScopeTheAgentNamed(t *testing.T) {
 		}
 	}
 
-	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("a")})
+	chosen, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("a")})
+	_, cmd := chosen.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	msg := cmd().(ConfirmationDecidedMsg)
 	if msg.AlwaysScope != "gh issue list" {
 		t.Errorf("the decision carried scope %q, want the one shown", msg.AlwaysScope)
@@ -713,6 +721,30 @@ func TestDestructiveWarningForCodeRunnersPointsAtTheCode(t *testing.T) {
 	}
 }
 
+// The long-turn check-in is a plain question, never a generic tool prompt, and
+// a check-in in a shape this build does not know is still shown as sent.
+func TestTheLongTurnCheckInReadsAsAQuestion(t *testing.T) {
+	m := NewConfirmationModel("r", "continue_long_turn", `{"steps":200,"model":"DeepSeek-V4.1-Flash"}`, "")
+	m.SetWidth(80)
+	view := ansi.Strip(m.View())
+	for _, want := range []string{"Keep going?", "200 steps so far on DeepSeek-V4.1-Flash"} {
+		if !strings.Contains(view, want) {
+			t.Errorf("the check-in lost %q:\n%s", want, view)
+		}
+	}
+	if strings.Contains(view, "Allow continue_long_turn") || strings.Contains(view, `"steps"`) {
+		t.Errorf("the check-in reads as a raw tool prompt:\n%s", view)
+	}
+	for _, odd := range []string{"", "steps=200", `{"model":"x"}`, "not json"} {
+		if got := longTurnSummary(odd); got != odd {
+			t.Errorf("longTurnSummary(%q) = %q; an unknown shape must pass through", odd, got)
+		}
+	}
+	if got := longTurnSummary(`{"steps":400}`); got != "400 steps so far" {
+		t.Errorf("a check-in without a model = %q", got)
+	}
+}
+
 // Every prompt carries its own number, so one run's earlier timer cannot
 // resolve a later prompt on the same run.
 func TestATimerOnlyResolvesThePromptItWasArmedFor(t *testing.T) {
@@ -891,7 +923,7 @@ func TestTheFlagshipSkillsMailPromptsMustBeReadToTheEnd(t *testing.T) {
 		"send-email/discard_draft",
 		"send-email/update_draft",
 	} {
-		if ActionTitle(action) == "Allow "+action+"?" {
+		if strings.HasPrefix(ActionTitle(action), "Allow ") {
 			t.Errorf("%s has no plain-language title", action)
 		}
 		if _, ok := confirmationRiskTiers[action]; !ok {
@@ -933,6 +965,55 @@ func TestCalendarApprovalNamesTheAccountUnderTheTitle(t *testing.T) {
 	for _, other := range []string{`{"command": "ls"}`, "Send this email to jane@example.com", ""} {
 		if strings.Contains(ansi.Strip(NewConfirmationModel("r2", "x", other, "").View()), "Calendar:") {
 			t.Errorf("no calendar line without a calendar_account: %q", other)
+		}
+	}
+}
+
+// A highlighted answer says so in words, and Enter is what confirms it.
+func TestAHighlightedChoiceIsMarkedAndNeedsEnter(t *testing.T) {
+	m := NewConfirmationModel("run-1", "run_shell_command", "x", "").
+		WithLiveChannel("cid-1", "gh issue list")
+	if strings.Contains(stripANSI(m.View()), "enter to confirm") {
+		t.Fatal("nothing is highlighted on a fresh prompt")
+	}
+	if _, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter}); cmd != nil {
+		t.Fatal("Enter answered a prompt with nothing highlighted")
+	}
+
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("a")})
+	view := stripANSI(m.View())
+	if !strings.Contains(view, "▸ a always: gh issue list (this session) — enter to confirm") {
+		t.Errorf("the highlighted choice is not marked:\n%s", view)
+	}
+
+	m.ClearChoice()
+	if m.Chosen() || strings.Contains(stripANSI(m.View()), "enter to confirm") {
+		t.Error("ClearChoice left the highlight up")
+	}
+}
+
+// Tab walks every answer on offer, in the order shown, and wraps.
+func TestTabWalksTheChoices(t *testing.T) {
+	tab := tea.KeyMsg{Type: tea.KeyTab}
+	enter := tea.KeyMsg{Type: tea.KeyEnter}
+
+	scoped := NewConfirmationModel("r", "run_shell_command", "x", "").WithLiveChannel("c", "pwd")
+	unscoped := NewConfirmationModel("r", "run_shell_command", "x", "")
+	for _, tc := range []struct {
+		name string
+		m    ConfirmationModel
+		want []ConfirmState
+	}{
+		{"scoped", scoped, []ConfirmState{ConfirmationApproved, ConfirmationAlways, ConfirmationDenied, ConfirmationApproved}},
+		{"unscoped", unscoped, []ConfirmState{ConfirmationApproved, ConfirmationDenied, ConfirmationApproved}},
+	} {
+		m := tc.m
+		for i, want := range tc.want {
+			m, _ = m.Update(tab)
+			decided, cmd := m.Update(enter)
+			if cmd == nil || decided.State() != want {
+				t.Errorf("%s: tab %d then Enter -> %v, want %v", tc.name, i+1, decided.State(), want)
+			}
 		}
 	}
 }

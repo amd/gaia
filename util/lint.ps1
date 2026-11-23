@@ -348,8 +348,8 @@ function Invoke-ImportTests {
 
         # Specialized Agents — optional so a framework-only env (no
         # gaia-agent-<id> installed) skips rather than fails.
-        @{Import="from gaia_agent.agent import GaiaAgent"; Desc="Flagship agent"; Optional=$true},
-        @{Import="from gaia_agent.chat_agent import ChatAgent"; Desc="Chat agent"; Optional=$true},
+        @{Import="from gaiapy.agent import GaiaAgent"; Desc="Flagship agent"; Optional=$true},
+        @{Import="from gaiapy.chat_agent import ChatAgent"; Desc="Chat agent"; Optional=$true},
 
         # Database
         @{Import="from gaia.database import DatabaseAgent"; Desc="Database agent"; Optional=$false},

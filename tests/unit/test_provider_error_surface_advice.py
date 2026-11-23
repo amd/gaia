@@ -78,7 +78,7 @@ def test_auth_rejection_names_each_surfaces_own_fix(status):
     ui = surface_wording(tui, "agent_ui")
     assert ui.startswith(f"Cloud authentication or access was denied (HTTP {status})")
     assert ui.endswith(AGENT_UI_PROVIDER_AUTH_HINT)
-    assert "Settings > Model" in ui
+    assert "Settings > Agent & model" in ui
     assert not _tui_only(ui), ui
     # A hosted-provider 403 is not a Lemonade key problem; the UI doesn't say so.
     assert "LEMONADE_API_KEY" not in ui
@@ -95,7 +95,7 @@ def test_other_cloud_failures_point_at_the_surfaces_settings(status):
     ui = surface_wording(tui, "agent_ui")
     assert AGENT_UI_PROVIDER_SETTINGS in ui and not _tui_only(ui), ui
     cli = surface_wording(tui, "cli")
-    assert TUI_PROVIDER_SETTINGS not in cli and "Settings > Model" in cli
+    assert TUI_PROVIDER_SETTINGS not in cli and "Settings > Agent & model" in cli
 
 
 def test_the_tui_keeps_its_own_wording_and_rewording_is_idempotent():
@@ -130,7 +130,7 @@ def test_the_model_switch_hint_has_a_cli_form():
 def test_a_headless_caller_gets_no_front_end_advice(status):
     service = surface_wording(str(_cloud_request_error(status, "amd")), "service")
     assert not _tui_only(service), service
-    assert "Settings > Model" not in service
+    assert "Settings > Agent & model" not in service
     assert surface_wording(TUI_MODEL_SWITCH_HINT, "service") == (
         SERVICE_MODEL_SWITCH_HINT
     )
@@ -213,7 +213,7 @@ def test_a_429_is_never_called_an_auth_rejection():
 
 def test_an_agent_ui_reworded_message_is_not_reclassified_as_tui_text():
     """The Agent UI copy drops LEMONADE_API_KEY; it must not fake an auth match
-    for unrelated text that merely mentions Settings > Model."""
+    for unrelated text that merely mentions Settings > Agent & model."""
     assert (
         classify_lemonade_exception(RuntimeError(AGENT_UI_PROVIDER_AUTH_HINT)) is None
     )

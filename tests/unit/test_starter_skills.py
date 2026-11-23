@@ -60,6 +60,7 @@ STARTER_PACK = frozenset(
         "coding",
         "daily-brief",
         "data-explore",
+        "dictation",
         "document-brief",
         "file-ops",
         "github-triage",
@@ -76,6 +77,7 @@ STARTER_PACK = frozenset(
         "research-report",
         "rss-digest",
         "send-email",
+        "slide-decks",
         "source-watch",
         "summarize",
         "transcribe-meeting",
@@ -206,6 +208,7 @@ def registry_tool_names(tmp_path_factory) -> frozenset[str]:
     from gaia.agents.tools.audio_tools import AudioToolsMixin
     from gaia.agents.tools.browser_tools import BrowserToolsMixin
     from gaia.agents.tools.code_index_tools import CodeIndexToolsMixin
+    from gaia.agents.tools.dictation_tools import DictationToolsMixin
     from gaia.agents.tools.email_tools import EmailToolsMixin
     from gaia.agents.tools.file_io_tools import FileIOToolsMixin
     from gaia.agents.tools.file_tools import FileSearchToolsMixin
@@ -242,6 +245,7 @@ def registry_tool_names(tmp_path_factory) -> frozenset[str]:
         (MemoryMixin, "register_memory_tools"),
         (EmailToolsMixin, "register_email_tools"),
         (WaitToolsMixin, "register_wait_tools"),
+        (DictationToolsMixin, "register_dictation_tools"),
     ]
 
     before = dict(_TOOL_REGISTRY)
@@ -284,12 +288,18 @@ def _chat_agent_inline_tools() -> frozenset[str]:
     """
     # Ships with the flagship gaia-agent-gaia wheel, which the core-only test
     # job does not install; skip rather than judge the list against nothing.
-    gaia_agent = pytest.importorskip("gaia_agent")
+    gaiapy = pytest.importorskip("gaiapy")
 
-    source = (Path(gaia_agent.__file__).parent / "chat_agent.py").read_text(
+    source = (Path(gaiapy.__file__).parent / "chat_agent.py").read_text(
         encoding="utf-8"
     )
-    inline = {"execute_python_file", "run_python", "list_files", "request_user_input"}
+    inline = {
+        "execute_python_file",
+        "run_python",
+        "list_files",
+        "request_user_input",
+        "text_to_speech",
+    }
     return frozenset(t for t in inline if f"def {t}(" in source)
 
 
@@ -999,13 +1009,13 @@ def test_daily_brief_and_guide_do_not_underclaim_tts_or_scheduling():
     """#4252: daily-brief and the guide once said TTS doesn't exist — it does.
 
     ``text_to_speech`` is a real, always-registered ChatAgent tool
-    (``gaia_agent/chat_agent.py``), so a doc listing it as a missing capability
+    (``gaiapy/chat_agent.py``), so a doc listing it as a missing capability
     tells the model to under-promise. Skill-aware scheduling genuinely is still
     missing (``gaia schedule add --skill`` is rejected, #6470), so that claim
     must stay.
     """
-    gaia_agent = pytest.importorskip("gaia_agent")
-    source = (Path(gaia_agent.__file__).parent / "chat_agent.py").read_text(
+    gaiapy = pytest.importorskip("gaiapy")
+    source = (Path(gaiapy.__file__).parent / "chat_agent.py").read_text(
         encoding="utf-8"
     )
     assert "def text_to_speech(" in source
@@ -1045,7 +1055,7 @@ def test_the_guides_run_a_skill_snippet_still_type_checks():
     followed by ``process_query``. Renaming any of those would leave the guide
     quietly wrong, which is worse than no guide at all.
     """
-    chat_agent = pytest.importorskip("gaia_agent.chat_agent")
+    chat_agent = pytest.importorskip("gaiapy.chat_agent")
 
     assert hasattr(chat_agent.ChatAgent, "load_skill")
     assert hasattr(chat_agent.ChatAgent, "unload_skill")

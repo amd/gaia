@@ -39,6 +39,13 @@ describe('localizeLiveStatus', () => {
         expect(ar('The model server stopped. GAIA is restarting it…')).toContain('توقف خادم النموذج');
     });
 
+    it('localizes the skill reload warning while keeping the skill name', () => {
+        const label = "Skill 'broken' was not restored after settings changed: its files could not be found. Reload it if needed.";
+        expect(localizeLiveStatus(tEn, label)).toBe(label);
+        expect(ar(label)).toContain('لم تُستعد المهارة broken');
+        expect(ar(label)).toContain('تعذّر العثور على ملفاتها');
+    });
+
     it('keeps counts, attempts and model names in the Arabic line', () => {
         expect(ar('Reasoning — 1,234 words so far')).toContain('الكلمات حتى الآن: 1,234');
         expect(ar('Connection lost. Reconnecting (attempt 2 of 3)…')).toContain('المحاولة 2 من 3');
@@ -88,6 +95,21 @@ describe('localizeLiveStatus', () => {
         expect(ar(npu)).toContain('0.7');
         // No percent to show for the NPU part, so it says why instead of a bare timer.
         expect(ar(npu)).toContain('دون عرض للتقدّم');
+    });
+
+    it('says a call Full access or Accept edits ran without asking in the chosen language, keeping the action', () => {
+        const full = "Full access is on, so GAIA didn't ask first. Writing file: notes.txt";
+        const edits = "Accept edits is on, so GAIA didn't ask first. Editing file: notes.txt";
+        const unknown = "Full access is on, so GAIA didn't ask first. Frobbing the widget";
+        for (const label of [full, edits, unknown]) expect(localizeLiveStatus(tEn, label)).toBe(label);
+        expect(ar(full)).toBe(
+            "الوصول الكامل مفعّل، لذا لم يسأل GAIA أولًا. كتابة ملف: notes.txt (Full access is on, so GAIA didn't ask first. Writing file: notes.txt)",
+        );
+        expect(ar(edits)).toBe(
+            "قبول التعديلات مفعّل، لذا لم يسأل GAIA أولًا. تحرير ملف: notes.txt (Accept edits is on, so GAIA didn't ask first. Editing file: notes.txt)",
+        );
+        // A narration with no tool label keeps its own words, inside the translated line.
+        expect(ar(unknown)).toContain('الوصول الكامل مفعّل، لذا لم يسأل GAIA أولًا. Frobbing the widget');
     });
 
     it('shows a line it does not know as written', () => {

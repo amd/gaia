@@ -75,8 +75,12 @@ var runCmd = &cobra.Command{
 			return err
 		}
 		defer closeTrace(trace)
+		program, err := agentProgramFor(args[0])
+		if err != nil {
+			return err
+		}
 		code, err := ui.RunAgent(args[0], runQuery, runModel, dev, runTimeout, ctrl,
-			fullAccessFlag, useClaude, claudeModelArg(), mockAgent, trace)
+			fullAccessFlag, useClaude, claudeModelArg(), mockAgent, program, trace)
 		if err != nil {
 			return err
 		}

@@ -428,7 +428,7 @@ def test_the_lemonade_provider_loads_through_the_turns_own_preflight(monkeypatch
 # ── ChatAgent: core on slot 0, full list on slot 2 ────────────────────────
 
 
-pytest.importorskip("gaia_agent")
+pytest.importorskip("gaiapy")
 
 from gaia.eval.tool_cost import build_doc_agent_skeleton  # noqa: E402
 

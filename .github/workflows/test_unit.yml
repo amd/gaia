@@ -27,7 +27,6 @@
 name: Unit Tests
 
 on:
-  workflow_call:
   push:
     branches: [ main ]
     paths:
@@ -43,6 +42,12 @@ on:
       - '.github/actions/**'
       # test_check_dependabot.py checks the real config against the tracked lockfiles.
       - '.github/dependabot.yml'
+      # C++ files the gaiacpp release, model-table, hidden-text and CI-coverage tests read.
+      - 'cpp/CMakeLists.txt'
+      - 'cpp/agents/gaiacpp/main.cpp'
+      - 'cpp/agents/gaiacpp/stdio_server.cpp'
+      - 'cpp/src/model_registry.cpp'
+      - 'cpp/tests/chaos/chaos_gaiacpp.py'
       # Hub agent code, skills and component manifests that tests/unit imports or reads.
       - 'hub/agents/*/python/**'
       # The flagship's npm package files and lock, read by the installer and version tests.
@@ -63,6 +68,7 @@ on:
       - 'scripts/audit/**'
       - 'examples/skill_references_example.py'
       - 'examples/mcp_windows_system_health_agent.py'
+      - 'cpp/packaging/package_lemonade.py'
       - 'eval/ci_lanes.json'
       - 'eval/ci_tiers.json'
       - 'eval/tasks/tasks.json'
@@ -96,6 +102,7 @@ on:
       - 'docs/plans/desktop-installer.mdx'
       - 'docs/reference/cli.mdx'
       - 'docs/runbooks/google-oauth-client.md'
+      - 'docs/sdk/mixins/tool-mixins.mdx'
       - 'docs/sdk/sdks/agent-ui.mdx'
       - 'docs/sdk/sdks/rag.mdx'
       - 'docs/sdk/sdks/skills.mdx'
@@ -120,6 +127,12 @@ on:
       - '.github/actions/**'
       # test_check_dependabot.py checks the real config against the tracked lockfiles.
       - '.github/dependabot.yml'
+      # C++ files the gaiacpp release, model-table, hidden-text and CI-coverage tests read.
+      - 'cpp/CMakeLists.txt'
+      - 'cpp/agents/gaiacpp/main.cpp'
+      - 'cpp/agents/gaiacpp/stdio_server.cpp'
+      - 'cpp/src/model_registry.cpp'
+      - 'cpp/tests/chaos/chaos_gaiacpp.py'
       # Hub agent code, skills and component manifests that tests/unit imports or reads.
       - 'hub/agents/*/python/**'
       # The flagship's npm package files and lock, read by the installer and version tests.
@@ -140,6 +153,7 @@ on:
       - 'scripts/audit/**'
       - 'examples/skill_references_example.py'
       - 'examples/mcp_windows_system_health_agent.py'
+      - 'cpp/packaging/package_lemonade.py'
       - 'eval/ci_lanes.json'
       - 'eval/ci_tiers.json'
       - 'eval/tasks/tasks.json'
@@ -173,6 +187,7 @@ on:
       - 'docs/plans/desktop-installer.mdx'
       - 'docs/reference/cli.mdx'
       - 'docs/runbooks/google-oauth-client.md'
+      - 'docs/sdk/mixins/tool-mixins.mdx'
       - 'docs/sdk/sdks/agent-ui.mdx'
       - 'docs/sdk/sdks/rag.mdx'
       - 'docs/sdk/sdks/skills.mdx'

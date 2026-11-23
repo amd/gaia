@@ -220,6 +220,17 @@ def refuse_unstreamed_sidecar_chat(agent_type: str) -> None:
     )
 
 
+def _native_flagship_chosen() -> bool:
+    """Whether the saved harness is anything but the Python one.
+
+    A harness this version can't run still relays, so the daemon's spawn reports
+    why instead of the Python agent quietly answering in its place.
+    """
+    from gaia.daemon.sidecars import fetch
+
+    return fetch.saved_flagship() != fetch.PYTHON_FLAGSHIP
+
+
 def _should_relay_to_sidecar(agent_type: str, registry) -> bool:
     """Whether *agent_type* must be served by its daemon sidecar this turn.
 
@@ -241,6 +252,9 @@ def _should_relay_to_sidecar(agent_type: str, registry) -> bool:
     profile = profile_for(agent_type)
     if profile is None:
         return False
+    if agent_type == FLAGSHIP_AGENT_ID and _native_flagship_chosen():
+        # A native harness is a program of its own: it only ever runs behind the daemon.
+        return True
     if registry is None:
         return True
     reg = registry.get(agent_type)
@@ -542,7 +556,7 @@ def _refuse_unrunnable_model(model_id: str) -> None:
     raise LemonadeModelUnavailableError(
         user_message=(
             f"{display_name(model_id)} can't run on this PC: {reason.rstrip('.')}. "
-            "Open Settings › Model to fix it on the model's card, or switch to "
+            "Open Settings › Agent & model to fix it on the model's card, or switch to "
             "another model there."
         )
     )
@@ -697,6 +711,10 @@ _TITLE_INSTRUCTION_WORDS = frozenset(
 _QUESTION_TITLE_MAX_CHARS = 60
 #: A link or image the user typed: ``[text](target)`` / ``![alt](target)``.
 _MARKDOWN_LINK_RE = _re.compile(r"!?\[([^\]]*)\]\([^)]*\)")
+#: The Research switch sends ``/research <topic>``; the topic is the title.
+_RESEARCH_COMMAND_RE = _re.compile(
+    r"\A\s*/research(?:-report)?(?=\s|\Z)", _re.IGNORECASE
+)
 #: A cloud model may reason before it answers, and only some providers let a
 #: request turn that off; this leaves room for the reasoning and the title.
 _CLOUD_TITLE_MAX_TOKENS = 512
@@ -798,7 +816,7 @@ def _title_from_question(user_msg: str) -> Optional[str]:
     Only the user's own words count: the attachment links the composer appends
     are dropped, and a message of attachments alone is named by its first file.
     """
-    user_msg = user_msg or ""
+    user_msg = _RESEARCH_COMMAND_RE.sub("", user_msg or "", count=1)
     words = UPLOAD_LINK_RE.sub(" ", user_msg)
     text = " ".join(_MARKDOWN_LINK_RE.sub(r"\1", words).split())
     if not text and (first := UPLOAD_LINK_RE.search(user_msg)):
@@ -2225,12 +2243,8 @@ def _relayed_documents(rag_file_paths: list, attached: list) -> list:
     return list(rag_file_paths) + extra
 
 
-def _chat_upload_paths(db: ChatDatabase, session_id: str, attached: list) -> list:
-    """Every upload the chat's messages have linked so far, *attached* included.
-
-    A relayed flagship drops a document a turn leaves out, so a file dropped
-    into an earlier message must keep going with every later turn.
-    """
+def _linked_upload_paths(db: ChatDatabase, session_id: str, attached: list) -> list:
+    """Every upload the chat's messages have linked so far, *attached* included."""
     found = set(attached)
     for message in db.get_messages(session_id, limit=-1):
         if message["role"] == "user" and message.get("content"):
@@ -2238,6 +2252,36 @@ def _chat_upload_paths(db: ChatDatabase, session_id: str, attached: list) -> lis
                 attached_upload_paths(resolve_upload_links(message["content"]))
             )
     return sorted(found)
+
+
+def _chat_upload_paths(db: ChatDatabase, session_id: str, attached: list) -> list:
+    """The chat's uploads it may read: every one linked, less those taken off it.
+
+    A relayed flagship drops a document a turn leaves out, so a file dropped
+    into an earlier message must keep going with every later turn.
+    """
+    removed = db.removed_session_uploads(session_id)
+    return [
+        p for p in _linked_upload_paths(db, session_id, attached) if p not in removed
+    ]
+
+
+def _list_chat_uploads(
+    db: ChatDatabase, session_id: str, document_ids: list, attached: list
+) -> Tuple[list, list]:
+    """Put the chat's composer documents in its document list, before its scope is read.
+
+    Returns *document_ids* with the new ones added, and the library rows newly
+    attached, for the turn's ``documents_added``.
+    """
+    from .agent_documents import add_chat_uploads
+
+    added = add_chat_uploads(
+        db, session_id, _linked_upload_paths(db, session_id, attached), attached
+    )
+    ids = list(document_ids)
+    ids += [d["id"] for d in added if d["id"] not in ids]
+    return ids, added
 
 
 def _extend_cached_scope(agent, allowed: list) -> None:
@@ -2758,23 +2802,23 @@ def _missing_local_model_text(init_body: dict) -> str:
         if cloud_blocked():
             return (
                 f"Local only is on, so {name} can't answer. Pick a local model "
-                "under Settings > Model, or turn off Local only under Settings > "
+                "under Settings > Agent & model, or turn off Local only under Settings > "
                 "Privacy."
             )
         return (
             f"{name} isn't connected, so GAIA can't answer. Reconnect {provider} "
-            "under Settings > Model, or pick another model."
+            "under Settings > Agent & model, or pick another model."
         )
     name = friendly_name(model_id)
     if cloud_blocked():
         return (
             f"Local only is on and {name} isn't downloaded yet, so GAIA can't "
-            "answer. Get a local model under Settings > Model, or turn off Local "
+            "answer. Get a local model under Settings > Agent & model, or turn off Local "
             "only under Settings > Privacy to use a cloud model."
         )
     return (
         f"{name} isn't downloaded yet, so GAIA can't answer. Get it, or pick "
-        "another model, under Settings > Model."
+        "another model, under Settings > Agent & model."
     )
 
 
@@ -2806,7 +2850,7 @@ def _replay_cloud_key_for_relay(sse_handler, model_id: str | None) -> None:
                 "type": "status",
                 "message": _agent_ui_wording(
                     f"Could not reconnect {provider}: {exc}. If the answer says "
-                    "the model is unavailable, reconnect it in Settings > Model."
+                    "the model is unavailable, reconnect it in Settings > Agent & model."
                 ),
             }
         )
@@ -3714,7 +3758,12 @@ def _turn_summary(
             location=(
                 _agent_location(agent) if agent is not None else relayed_location
             ),
-            written_files=evidence.written_files() if evidence is not None else (),
+            # The ledger's keys are case-folded on Windows; realpath restores the name on disk.
+            written_files=(
+                [os.path.realpath(key) for key in evidence.written_files()]
+                if evidence is not None
+                else ()
+            ),
             display_names=upload_display_names(message),
             usage=answer_event,
         )
@@ -3887,23 +3936,32 @@ def _done_event(
 
 
 async def _add_indexed_documents_to_library(
-    db: ChatDatabase, session_id: str, sse_handler
+    db: ChatDatabase,
+    session_id: str,
+    sse_handler,
+    listed_uploads: Optional[list] = None,
 ) -> Tuple[list, list]:
-    """Library rows for the files the agent indexed this turn, and notices.
+    """Library rows the turn attached to the chat, and notices.
 
-    Each file is recorded in the Document library and attached to the chat, as
-    if the user had added it there.
+    Each file the agent indexed is recorded in the Document library and
+    attached to the chat, as if the user had added it there. *listed_uploads*
+    are the composer attachments already put there when the turn began; they
+    are read again for what indexing them recorded.
     """
-    indexed = sse_handler.turn_ledger.indexed_documents()
-    if not indexed:
-        return [], []
     from .agent_documents import add_indexed_documents
     from .utils import doc_to_response
 
-    added = await asyncio.to_thread(add_indexed_documents, db, session_id, indexed)
+    indexed = sse_handler.turn_ledger.indexed_documents()
+    rows = [db.get_document(doc["id"]) for doc in listed_uploads or []]
+    notices: list = []
+    if indexed:
+        added = await asyncio.to_thread(add_indexed_documents, db, session_id, indexed)
+        rows += added.documents
+        notices = added.notices
+    unique = {doc["id"]: doc for doc in rows if doc}
     return (
-        [doc_to_response(doc).model_dump(mode="json") for doc in added.documents],
-        added.notices,
+        [doc_to_response(doc).model_dump(mode="json") for doc in unique.values()],
+        notices,
     )
 
 
@@ -4318,8 +4376,10 @@ async def _get_chat_response(
     activity_box: dict = {}
 
     def _do_chat():
-        # Resolve document IDs to file paths.
-        document_ids = session.get("document_ids", [])
+        attached = attached_upload_paths(request.message)
+        document_ids, _listed = _list_chat_uploads(
+            db, request.session_id, session.get("document_ids", []), attached
+        )
         rag_file_paths, library_paths = _resolve_rag_paths(db, document_ids)
 
         all_doc_paths = rag_file_paths + library_paths
@@ -4330,8 +4390,11 @@ async def _get_chat_response(
                 len(library_paths),
             )
 
-        attached = attached_upload_paths(request.message)
-        allowed = _with_attachments(_compute_allowed_paths(all_doc_paths), attached)
+        # Every upload in the chat, not just this turn's: no prompt opens them later.
+        allowed = _with_attachments(
+            _compute_allowed_paths(all_doc_paths),
+            _chat_upload_paths(db, request.session_id, attached),
+        )
 
         model_id = session.get("model")
         custom_model = db.get_setting("custom_model")
@@ -4379,6 +4442,7 @@ async def _get_chat_response(
         refusal = spending.limit_refusal(db, model_id)
         if refusal:
             return refusal
+        _refuse_turn_on_stopped_users_server()
 
         # ── Agent cache ──────────────────────────────────────────────────────
         # Reuse what a running warm-up is caching rather than read it twice.
@@ -4769,10 +4833,16 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
         history_pairs = _build_history_pairs(relay_messages)
         relay_turns = transcript_turns(relay_messages)
 
-        # Resolve document IDs to file paths.
         # Session-specific docs get auto-indexed; library docs are available
         # for on-demand indexing by the agent based on user's query.
-        document_ids = session.get("document_ids", [])
+        attached = attached_upload_paths(request.message)
+        document_ids, listed_uploads = await asyncio.to_thread(
+            _list_chat_uploads,
+            db,
+            request.session_id,
+            session.get("document_ids", []),
+            attached,
+        )
         rag_file_paths, library_paths = _resolve_rag_paths(db, document_ids)
 
         all_doc_paths = rag_file_paths + library_paths
@@ -4783,8 +4853,11 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                 len(library_paths),
             )
 
-        attached = attached_upload_paths(request.message)
-        allowed = _with_attachments(_compute_allowed_paths(all_doc_paths), attached)
+        # Every upload in the chat, not just this turn's: no prompt opens them later.
+        allowed = _with_attachments(
+            _compute_allowed_paths(all_doc_paths),
+            _chat_upload_paths(db, request.session_id, attached),
+        )
         model_id = session.get("model")
 
         # Use custom model override if set in user settings
@@ -5736,7 +5809,7 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
             full_response = result_holder.get("answer", "") or ""
 
         documents_added, library_notices = await _add_indexed_documents_to_library(
-            db, request.session_id, sse_handler
+            db, request.session_id, sse_handler, listed_uploads
         )
         if library_notices:
             # Live status makes the outcome visible before the turn closes; the
@@ -5862,7 +5935,7 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                     for k, v in route.items()
                 }
                 inference_stats = {**(inference_stats or {}), "route": shown}
-            # Settings › Model shows each model's speed measured on this PC.
+            # Settings › Agent & model shows each model's speed measured on this PC.
             if inference_stats is not None and ran_on:
                 inference_stats["measured_model"] = ran_on
             # The model that wrote this answer, so a later model switch can't relabel it.
@@ -6536,8 +6609,9 @@ async def _index_document(
             pages["total"] = _page_total(filepath)
             _report("reading", 0, pages["total"])
         # Allow access to the file's directory (and user home) since the UI
-        # explicitly selected this file via the file browser.
-        allowed = [str(filepath.parent), str(Path.home())]
+        # explicitly selected this file via the file browser. The file itself
+        # too: no folder grant opens a copy in GAIA's chat data.
+        allowed = [str(filepath), str(filepath.parent), str(Path.home())]
         # The embedder chat searches with, so the upload's vectors are reused.
         config = RAGConfig(
             allowed_paths=allowed, embedding_model=machine_embedding_model()

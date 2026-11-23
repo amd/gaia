@@ -83,7 +83,7 @@ describe('classifyChatError (#599)', () => {
 
     it('every kind tells the user what to do next', () => {
         for (const message of ['context size exceeded', 'Lemonade down', 'Failed to fetch', 'timed out', 'boom']) {
-            expect(classifyChatError(new Error(message)).text).toMatch(/try again|ask again|Settings → Model|Start a new chat/i);
+            expect(classifyChatError(new Error(message)).text).toMatch(/try again|ask again|Settings → Agent & model|Start a new chat/i);
         }
     });
 });

@@ -24,9 +24,9 @@ import pytest
 
 # DOC_BUNDLES ships in the flagship gaia-agent-gaia wheel (#6099); skip the
 # whole module when a framework-only env lacks it.
-pytest.importorskip("gaia_agent")
+pytest.importorskip("gaiapy")
 
-from gaia_agent.tool_bundles import (  # noqa: E402
+from gaiapy.tool_bundles import (  # noqa: E402
     DOC_BUNDLES,
     DOC_CORE_TOOLS,
     PROFILE_TOOL_CONFIGS,
@@ -57,7 +57,7 @@ def test_core_and_bundles_cover_doc_registry_exactly():
     assert not uncovered, (
         f"doc-profile tools not covered by CORE or any bundle: {uncovered}. "
         "Add each to a bundle (or CORE) in "
-        "hub/agents/gaia/python/gaia_agent/tool_bundles.py "
+        "hub/agents/gaia/python/gaiapy/tool_bundles.py "
         "— every registered tool must be accounted for."
     )
     assert not dangling, (

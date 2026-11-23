@@ -18,8 +18,8 @@ import contextlib
 
 import numpy as np
 import pytest
-from gaia_agent.agent import GaiaAgent, GaiaAgentConfig
-from gaia_agent.tool_bundles import FULL_CORE_TOOLS
+from gaiapy.agent import GaiaAgent, GaiaAgentConfig
+from gaiapy.tool_bundles import FULL_CORE_TOOLS
 
 from gaia.agents.base.tools import _TOOL_REGISTRY
 

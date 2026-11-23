@@ -452,6 +452,9 @@ async function cmdServe(args: ParsedArgs): Promise<number> {
   try {
     process.stdout.write(`\n  ▸ GAIA agent: ${sidecar.baseUrl}/v1/gaia/query\n`);
     process.stdout.write(`    Health:     ${sidecar.baseUrl}/health\n`);
+    process.stdout.write(
+      `    Token:      send "Authorization: Bearer <token>"; the token is in ${sidecar.tokenFile}\n`,
+    );
     process.stdout.write("    Lemonade must be running for live queries. Ctrl+C to stop.\n\n");
     let stop!: () => void;
     const stopped = new Promise<Error | undefined>((resolve) => {

@@ -71,11 +71,19 @@
      * with no blur, so it is a ring and never a glow. */
     --accent-ring: rgba(176, 141, 87, 0.40);
 
-    /* Accent as a button. Buttons are soft tinted: a brass wash carrying
-     * brass text, judged against itself. */
+    /* The brass wash: a chosen option or a pressed toggle, carrying brass
+     * text, judged against itself. */
     --accent-fill: #EEE8DD;
     --accent-fill-text: #7A5A22;
     --accent-fill-hover: #E6DCCB;
+
+    /* The one action a screen is asking for: the text colour as a fill,
+     * carrying the canvas colour, so it reads as a button on a warm ground
+     * where a brass wash did not. Named by role, so every palette's ink and
+     * canvas follow; the pairs are the text-on-canvas ones the tests measure. */
+    --action-fill: var(--text-primary);
+    --action-fill-text: var(--bg-primary);
+    --action-fill-hover: var(--text-secondary);
 
     /* Semantic status keeps its conventional hues. Warning amber sits next
      * to brass in hue, so every warning also carries an icon and a word. */
@@ -106,6 +114,14 @@
     --code-success: #5CC96E;
     --code-warning: #E5B567;
     --code-danger: #F2787C;
+    /* The live slide preview draws the deck's light theme in both app themes. */
+    --slide-paper: #FFFFFF;
+    --slide-ink: #1F2937;
+    --slide-ink-dim: #4B5563;
+    --slide-accent: #0072B2;
+    --slide-on-accent: #FFFFFF;
+    --slide-panel: #F3F4F6;
+    --slide-rule: #D1D5DB;
 
     --bg-primary: #FAF9F7;           /* canvas */
     --bg-secondary: #F6F4F1;         /* header / composer band */
@@ -170,6 +186,9 @@
     --fs-body: 14px;      /* UI emphasis, card titles */
     --fs-prose: 15px;     /* answers and your messages */
     --fs-title: 18px;     /* dialog titles */
+
+    /* The smallest height a text button takes. */
+    --hit-min: 28px;
 
     --sidebar-w: 260px;
     --content-w: 760px;
@@ -396,9 +415,9 @@ textarea:focus-visible {
 
 /* ── Shared Button Utilities ──────────────────────────────────────── */
 
-/* Soft tinted, and they answer the hand: a hover lifts 1px onto the resting
- * shadow, a press settles below rest faster than it rose. Brass marks the
- * action you would most likely take; neutral marks the rest. */
+/* They answer the hand: a hover lifts 1px onto the resting shadow, a press
+ * settles below rest faster than it rose. Ink marks the action a screen is
+ * asking for; a neutral wash marks the rest. */
 .btn-primary,
 .btn-secondary,
 .btn-danger {
@@ -413,10 +432,12 @@ textarea:focus-visible {
         box-shadow var(--duration) var(--ease),
         transform var(--duration) var(--ease-spring);
 }
-.btn-primary { background: var(--accent-fill); color: var(--accent-fill-text); }
-.btn-primary:hover { background: var(--accent-fill-hover); }
-/* Lightened, the English fell to 4.46:1 on the hover fill. */
-.btn-primary .i18n-gloss.i18n-gloss { color: inherit; }
+.btn-primary { background: var(--action-fill); color: var(--action-fill-text); }
+.btn-primary:hover { background: var(--action-fill-hover); }
+/* On an ink fill the gloss's own lightened colour would vanish into the button, so it takes the label's. */
+:is(.btn-primary, .perm-btn.is-primary, .compare-keep, .vp-btn-confirm, .fb-action-btn.primary, .composer-send,
+    .render-needs-input__free-text-submit, .render-connect__button, .render-guide__start, .email-connect-cta__button)
+    .i18n-gloss.i18n-gloss { color: inherit; }
 .btn-secondary { background: var(--bg-tertiary); color: var(--text-primary); }
 .btn-secondary:hover { background: var(--bg-active); }
 .btn-danger { background: var(--danger-dim); color: var(--danger); }
@@ -533,28 +554,20 @@ textarea:focus-visible {
 *:dir(rtl) {
     --fade-to: left;
 }
-@keyframes fade-cut-inline {
-    from, to {
-        -webkit-mask-image: linear-gradient(to var(--fade-to), #000 calc(100% - var(--fade-size)), transparent);
-        mask-image: linear-gradient(to var(--fade-to), #000 calc(100% - var(--fade-size)), transparent);
+/* Without scroll timelines the animation would run on the clock and fade text that fits. */
+@supports (animation-timeline: scroll()) {
+    @keyframes fade-cut-inline {
+        from, to {
+            -webkit-mask-image: linear-gradient(to var(--fade-to), #000 calc(100% - var(--fade-size)), transparent);
+            mask-image: linear-gradient(to var(--fade-to), #000 calc(100% - var(--fade-size)), transparent);
+        }
     }
-}
-@keyframes fade-cut-block {
-    from, to {
-        -webkit-mask-image: linear-gradient(to bottom, #000 calc(100% - 1.4em), transparent);
-        mask-image: linear-gradient(to bottom, #000 calc(100% - 1.4em), transparent);
+    @keyframes fade-cut-block {
+        from, to {
+            -webkit-mask-image: linear-gradient(to bottom, #000 calc(100% - 1.4em), transparent);
+            mask-image: linear-gradient(to bottom, #000 calc(100% - 1.4em), transparent);
+        }
     }
-}
-
-/* ── AnimatedPresence exit animations ──────────────────────────── */
-
-@keyframes modalOverlayOut {
-    from { opacity: 1; }
-    to { opacity: 0; }
-}
-@keyframes modalPanelOut {
-    from { opacity: 1; transform: translateY(0); }
-    to { opacity: 0; transform: translateY(12px); }
 }
 
 /* ── Sidebar Overlay (Mobile) ────────────────────────────────────── */
@@ -631,6 +644,17 @@ textarea:focus-visible {
     animation: toastIn var(--duration-spring) var(--ease-spring), toastOut var(--duration) var(--ease) var(--toast-hold) forwards;
     pointer-events: none;
 }
+/* "Restored your last model": long enough to read, gone before it's in the way.
+   Up top, so it never sits on the message box in an open chat. */
+.app-restore-toast {
+    --toast-hold: 3.4s;
+    top: 16px;
+    bottom: auto;
+}
+:root[data-titlebar] .app-restore-toast {
+    top: calc(var(--titlebar-h) + 8px);
+}
+
 /* Right to left the pane takes the window's left, so the chat's centre moves right. */
 :root[dir="rtl"] .toast {
     left: calc(50% + var(--browser-pane-inset) / 2);
@@ -670,17 +694,12 @@ textarea:focus-visible {
 /* ── Animations ──────────────────────────────────────────────────── */
 
 @keyframes toastIn { from { opacity: 0; transform: translateX(-50%) translateY(8px); } to { opacity: 1; transform: translateX(-50%) translateY(0); } }
-@keyframes toastOut { from { opacity: 1; transform: translateY(0); } to { opacity: 0; transform: translateY(8px); } }
+/* Keeps the toast's centring: a bare translateY would jump it sideways as it leaves. */
+@keyframes toastOut { from { opacity: 1; transform: translateX(-50%) translateY(0); } to { opacity: 0; transform: translateX(-50%) translateY(8px); } }
 @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
-@keyframes fadeOut { from { opacity: 1; } to { opacity: 0; } }
 @keyframes slideUp { from { opacity: 0; transform: translateY(12px); } to { opacity: 1; transform: translateY(0); } }
-@keyframes slideDown { from { opacity: 1; transform: translateY(0); } to { opacity: 0; transform: translateY(12px); } }
 @keyframes blink { 0%, 100% { opacity: 1; } 50% { opacity: 0; } }
 @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.5; } }
-@keyframes bounce {
-    0%, 100% { transform: translateY(0); }
-    50% { transform: translateY(-3px); }
-}
 @keyframes spin { to { transform: rotate(360deg); } }
 /* Terminal cursor blink -- block style */
 @keyframes cursorBlink {
@@ -702,12 +721,6 @@ textarea:focus-visible {
     25%     { opacity: 1; }
     40%, 100% { opacity: 0.15; }
 }
-/* Scroll reveal animation */
-@keyframes revealUp {
-    from { opacity: 0; transform: translateY(20px); }
-    to { opacity: 1; transform: translateY(0); }
-}
-
 /* ── Theme transition smoothing ─────────────────────────────────── */
 
 /* ── Reduced Motion ──────────────────────────────────────────────── */
@@ -785,7 +798,7 @@ textarea:focus-visible {
     display: inline-flex;
     padding: 4px;
     border-radius: var(--radius-sm);
-    color: var(--text-muted);
+    color: var(--text-secondary);
 }
 
 .app-notice-close:hover {

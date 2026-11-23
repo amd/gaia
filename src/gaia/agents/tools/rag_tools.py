@@ -14,7 +14,7 @@ import threading
 import time
 import weakref
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Literal, Optional, Tuple, get_args
 
 from gaia.agents.base.errors import require_host_attr
 from gaia.agents.base.file_snapshots import before_change
@@ -41,6 +41,9 @@ from gaia.tool_cancellation import raise_if_cancelled
 from gaia.upload_names import display_file_name
 
 logger = get_logger(__name__)
+
+SummaryType = Literal["brief", "detailed", "bullets"]
+SUMMARY_TYPES: Tuple[str, ...] = get_args(SummaryType)
 
 _RAG_HINT = "Set self.rag = <RAGSDK instance, or None to disable RAG>."
 _RAG_DOC_ANCHOR = "docs/spec/rag-tools-mixin.mdx#host-agent-contract"
@@ -709,6 +712,97 @@ def _file_positions(rag: Any, file_path: str) -> Dict[str, int]:
         return positions
 
 
+def _adaptive_max(total_chunks: int, max_chunks: int) -> int:
+    """How many chunks a search may return for a library of this size.
+
+    With 32K context, larger libraries can afford more chunks for coverage.
+    """
+    if total_chunks > 200:
+        return min(25, max_chunks * 5)  # Up to 25 chunks for very large docs
+    if total_chunks > 100:
+        return min(20, max_chunks * 4)  # Up to 20 chunks for large docs
+    if total_chunks > 50:
+        return min(10, max_chunks * 2)  # Up to 10 chunks for medium docs
+    return max_chunks  # Default (5) for small docs
+
+
+#: Reciprocal-rank-fusion constant: each list contributes 1 / (k + rank).
+_RRF_K = 60
+
+#: Rescale for fused scores: a chunk ranked first by both lists scores
+#: 1 / (k + 1) from each, so multiplying by (k + 1) / 2 puts the fused
+#: score on a 0-1 scale (a chunk first in both lists scores 1.0). The
+#: factor is positive, so the ordering is unchanged; only the reported
+#: ``relevance_score`` stops reading near zero.
+_RRF_RESCALE = (_RRF_K + 1) / 2
+
+
+def _keyword_ranks(keyword: List[str]) -> Dict[str, int]:
+    """1-based rank of each chunk in a keyword ranking, best first."""
+    return {chunk: rank for rank, chunk in enumerate(keyword, start=1)}
+
+
+def _fuse_dense_and_keyword(
+    dense: List[Tuple[str, float]],
+    keyword: List[str],
+) -> List[Tuple[str, float]]:
+    """Fuse a dense ranking and a keyword ranking by rank, not raw score.
+
+    *dense* is (chunk, dense_score) pairs, best first; *keyword* is chunk
+    texts in keyword-rank order. A chunk scores 1 / (k + rank) from each
+    ranking it appears in, so the top of each list competes on equal terms
+    and a chunk both rankings like wins outright. That replaces the old
+    fixed 0.6-0.8 keyword boost, which outranked every dense score
+    (typically 0.3-0.6), so any keyword hit filled the slots ahead of the
+    semantic matches.
+
+    Returns (chunk, fused_score) pairs, best first, with fused scores on
+    a 0-1 scale (a chunk ranked first by both lists scores 1.0). Ties
+    break toward the better dense score, then the better keyword rank.
+    """
+    fused: Dict[str, float] = {}
+    dense_scores: Dict[str, float] = {}
+    for rank, (chunk, score) in enumerate(dense, start=1):
+        fused[chunk] = fused.get(chunk, 0.0) + 1.0 / (_RRF_K + rank)
+        dense_scores[chunk] = max(score, dense_scores.get(chunk, 0.0))
+    ranks = _keyword_ranks(keyword)
+    for chunk, rank in ranks.items():
+        fused[chunk] = fused.get(chunk, 0.0) + 1.0 / (_RRF_K + rank)
+    return sorted(
+        ((chunk, score * _RRF_RESCALE) for chunk, score in fused.items()),
+        key=lambda item: (
+            -item[1],
+            -dense_scores.get(item[0], 0.0),
+            ranks.get(item[0], len(keyword) + 1),
+        ),
+    )
+
+
+def _fuse_extra_scores(
+    dense_count: int,
+    keyword: List[str],
+    extra: List[Tuple[str, float]],
+) -> List[Tuple[str, float]]:
+    """Per-file best chunks on the same fused scale as :func:`_fuse_dense_and_keyword`.
+
+    *extra* is (chunk, dense_score) pairs from per-file searches, best first.
+    Each keeps its dense order, ranked just after the global dense list, plus
+    its keyword term when the keyword ranking likes it too. They are scored,
+    not ranked against the main list: the caller adds them after the top, so
+    a document the search leaves out still gets its best passage in.
+    Scores are rescaled to the same 0-1 scale as
+    :func:`_fuse_dense_and_keyword`.
+    """
+    ranks = _keyword_ranks(keyword)
+    scored = []
+    for position, (chunk, _score) in enumerate(extra):
+        fused = 1.0 / (_RRF_K + dense_count + 1 + position)
+        if chunk in ranks:
+            fused += 1.0 / (_RRF_K + ranks[chunk])
+        scored.append((chunk, fused * _RRF_RESCALE))
+    return sorted(scored, key=lambda item: item[1], reverse=True)
+
+
 def _left_out_note(left_out: Dict[str, Dict[str, Any]]) -> str:
     """Instruction prefix naming documents a partial search left out."""
     messages = " ".join(entry["message"] for entry in left_out.values())
@@ -1284,6 +1378,13 @@ class RAGToolsMixin:
                     if hasattr(self, "debug") and self.debug
                     else None
                 )
+                # Debug paths used rag.chunks.index(chunk) (O(n)) for every
+                # chunk they reported; one pass builds the same first-index
+                # lookup up front, so debug mode stays fast on big libraries.
+                chunk_index = {}
+                if debug_info:
+                    for _i, _text in enumerate(rag.chunks):
+                        chunk_index.setdefault(_text, _i)
 
                 # First, use embedding-based retrieval
                 embedding_errors: List[EmbeddingUnavailableError] = []
@@ -1303,13 +1404,9 @@ class RAGToolsMixin:
                             # Capture debug info with full chunk content and indices
                             if debug_info:
                                 # Get global indices for these chunks
-                                chunk_global_indices = []
-                                for chunk in chunks[:5]:
-                                    try:
-                                        idx = rag.chunks.index(chunk)
-                                        chunk_global_indices.append(idx)
-                                    except ValueError:
-                                        chunk_global_indices.append(-1)
+                                chunk_global_indices = [
+                                    chunk_index.get(chunk, -1) for chunk in chunks[:5]
+                                ]
 
                                 debug_info["embedding_retrieval"].append(
                                     {
@@ -1375,16 +1472,23 @@ class RAGToolsMixin:
                     rag, query, left_out
                 )
 
-                # HYBRID SEARCH: add the chunks that best match the query's words
+                # HYBRID SEARCH: the chunks that best match the query's words.
+                # Their ranking is fused with the dense ranking by rank below
+                # (reciprocal rank fusion), not by raw score: the old fixed
+                # 0.6-0.8 keyword boost outranked every dense score, so any
+                # keyword hit filled the slots ahead of the semantic matches.
+                # The pool covers every slot instead of stopping at 5.
                 keyword_boost_info = []
+                keyword_chunks = []
                 keywords = keyword_index(rag)
                 owners = dict(rag.chunk_to_file) if left_out else {}
-                for chunk_idx, boost_score, matching_terms in keywords.rank(query):
+                for chunk_idx, boost_score, matching_terms in keywords.rank(
+                    query,
+                    limit=_adaptive_max(len(rag.chunks), self.max_chunks),
+                ):
                     if owners.get(chunk_idx) in left_out:
                         continue
-                    # Deduplication below keeps a chunk's higher score.
-                    all_chunks.append(keywords.texts[chunk_idx])
-                    all_scores.append(boost_score)
+                    keyword_chunks.append(keywords.texts[chunk_idx])
 
                     # Get source file for this chunk
                     source_file = rag.chunk_to_file.get(chunk_idx, "Unknown")
@@ -1416,23 +1520,23 @@ class RAGToolsMixin:
 
                 # Update debug info before deduplication - track which chunks before dedup
                 if debug_info:
-                    debug_info["total_chunks_before_dedup"] = len(all_chunks)
+                    debug_info["total_chunks_before_dedup"] = len(all_chunks) + len(
+                        keyword_chunks
+                    )
                     # Show which chunks were found before deduplication
-                    all_chunk_indices = []
-                    for chunk in all_chunks:
-                        try:
-                            idx = rag.chunks.index(chunk)
-                            all_chunk_indices.append(idx)
-                        except ValueError:
-                            all_chunk_indices.append(
-                                "keyword_context"
-                            )  # Keyword match, not a full chunk
+                    # (dense and keyword alike, matching the count above)
+                    all_chunk_indices = [
+                        chunk_index.get(chunk, "keyword_context")
+                        for chunk in list(all_chunks) + list(keyword_chunks)
+                    ]
                     debug_info["chunks_before_dedup_indices"] = all_chunk_indices
                     debug_info["deduplication_note"] = (
-                        "Removes chunks that appear in both embedding and keyword results, keeping the one with higher score"
+                        "Merges the embedding and keyword rankings by rank "
+                        "(reciprocal rank fusion); a chunk both rankings like "
+                        "scores from both"
                     )
 
-                if not all_chunks:
+                if not all_chunks and not keyword_chunks:
                     result = {
                         "status": "success",
                         "message": "No relevant information found in indexed documents.",
@@ -1451,64 +1555,52 @@ class RAGToolsMixin:
                         result["debug_info"] = debug_info
                     return result
 
-                # Remove duplicate chunks and keep best scores
-                # OPTIMIZED: Use hash-based deduplication instead of full text comparison
-                unique_chunks = {}  # {chunk_hash: (chunk_text, score)}
-
+                # Fuse the dense and keyword rankings by rank (reciprocal
+                # rank fusion). A chunk keeps its best dense score across
+                # search keys; keyword hits score from their rank alone, so
+                # they compete with the semantic matches instead of
+                # outranking all of them on a fixed 0.6-0.8 boost.
+                dense_best: Dict[str, float] = {}
                 for chunk, score in zip(all_chunks, all_scores):
-                    # Use hash for O(1) lookup instead of O(N) string comparison
-                    chunk_hash = hash(chunk)
-
-                    if (
-                        chunk_hash not in unique_chunks
-                        or unique_chunks[chunk_hash][1] < score
-                    ):
-                        unique_chunks[chunk_hash] = (chunk, score)
+                    if score > dense_best.get(chunk, -1.0):
+                        dense_best[chunk] = score
+                dense_ranked = sorted(
+                    dense_best.items(), key=lambda item: item[1], reverse=True
+                )
+                sorted_items = _fuse_dense_and_keyword(dense_ranked, keyword_chunks)
 
                 # Update debug info after deduplication - track which chunks remain
                 if debug_info:
-                    debug_info["total_chunks_after_dedup"] = len(unique_chunks)
+                    debug_info["total_chunks_after_dedup"] = len(sorted_items)
                     debug_info["duplicates_removed"] = debug_info[
                         "total_chunks_before_dedup"
-                    ] - len(unique_chunks)
+                    ] - len(sorted_items)
                     # Show which chunks remain after deduplication
-                    dedup_chunk_indices = []
-                    for chunk_text, score in unique_chunks.values():
-                        try:
-                            idx = rag.chunks.index(chunk_text)
-                            dedup_chunk_indices.append(idx)
-                        except ValueError:
-                            dedup_chunk_indices.append("keyword_context")
+                    dedup_chunk_indices = [
+                        chunk_index.get(chunk_text, "keyword_context")
+                        for chunk_text, _score in sorted_items
+                    ]
                     debug_info["chunks_after_dedup_indices"] = dedup_chunk_indices
 
-                # Sort by score and take top chunks
-                sorted_items = sorted(
-                    unique_chunks.values(), key=lambda x: x[1], reverse=True
-                )
-
                 # Adaptive max_chunks: use more chunks for larger documents
-                # With 32K context, we can afford to retrieve more chunks for better coverage
-                total_chunks = len(rag.chunks)
-                if total_chunks > 200:
-                    adaptive_max = min(
-                        25, self.max_chunks * 5
-                    )  # Up to 25 chunks for very large docs (200+ pages)
-                elif total_chunks > 100:
-                    adaptive_max = min(
-                        20, self.max_chunks * 4
-                    )  # Up to 20 chunks for large docs (100+ pages)
-                elif total_chunks > 50:
-                    adaptive_max = min(
-                        10, self.max_chunks * 2
-                    )  # Up to 10 chunks for medium docs
-                else:
-                    adaptive_max = self.max_chunks  # Default (5) for small docs
+                adaptive_max = _adaptive_max(len(rag.chunks), self.max_chunks)
 
                 # A twin chunk in a left-out file must not be cited.
                 positions = _chunk_positions(rag, left_out)
+                # Per-document best passages, on the same fused scale, added
+                # after the top so no document the search ranked is pushed out.
+                extra_fused = _fuse_extra_scores(
+                    len(dense_ranked),
+                    keyword_chunks,
+                    sorted(
+                        zip(per_doc_chunks, per_doc_scores),
+                        key=lambda item: item[1],
+                        reverse=True,
+                    ),
+                )
                 spread, keep = _spread_over_documents(
                     sorted_items,
-                    list(zip(per_doc_chunks, per_doc_scores)),
+                    extra_fused,
                     positions,
                     rag,
                     adaptive_max,
@@ -1681,6 +1773,13 @@ class RAGToolsMixin:
                     if hasattr(self, "debug") and self.debug
                     else None
                 )
+                # Debug paths used rag.chunks.index(chunk) (O(n)) for every
+                # chunk they reported; one pass builds the same first-index
+                # lookup up front, so debug mode stays fast on big libraries.
+                chunk_index = {}
+                if debug_info:
+                    for _i, _text in enumerate(rag.chunks):
+                        chunk_index.setdefault(_text, _i)
 
                 auto_indexed = False
                 save_warning = ""
@@ -1830,13 +1929,9 @@ class RAGToolsMixin:
                             # Capture debug info with full chunk content and indices
                             if debug_info:
                                 # Get global indices for these chunks
-                                chunk_global_indices = []
-                                for chunk in chunks[:5]:
-                                    try:
-                                        idx = rag.chunks.index(chunk)
-                                        chunk_global_indices.append(idx)
-                                    except ValueError:
-                                        chunk_global_indices.append(-1)
+                                chunk_global_indices = [
+                                    chunk_index.get(chunk, -1) for chunk in chunks[:5]
+                                ]
 
                                 debug_info["embedding_retrieval"].append(
                                     {
@@ -1891,7 +1986,14 @@ class RAGToolsMixin:
                         return _embedding_error(embedding_errors[-1])
                     raise key_failures[-1]
 
-                # HYBRID SEARCH: add the chunks that best match the query's words
+                # HYBRID SEARCH: the chunks that best match the query's words.
+                # Their ranking is fused with the dense ranking by rank below
+                # (reciprocal rank fusion), not by raw score: the old fixed
+                # 0.6-0.8 keyword boost outranked every dense score, so any
+                # keyword hit filled the slots ahead of the semantic matches.
+                # The pool covers every slot instead of stopping at 5.
+                file_keyword_info = []
+                keyword_chunks = []
                 if (
                     str(target_file) in rag.file_metadata
                     and "full_text" in rag.file_metadata[str(target_file)]
@@ -1899,15 +2001,13 @@ class RAGToolsMixin:
                     file_chunk_indices = rag.file_to_chunk_indices.get(
                         str(target_file), []
                     )
-                    file_keyword_info = []
                     keywords = keyword_index(rag)
                     for chunk_idx, boost_score, matching_terms in keywords.rank(
                         query,
                         [i for i in file_chunk_indices if i < len(keywords)],
+                        limit=_adaptive_max(len(rag.chunks), self.max_chunks),
                     ):
-                        # Deduplication below keeps a chunk's higher score.
-                        all_chunks.append(keywords.texts[chunk_idx])
-                        all_scores.append(boost_score)
+                        keyword_chunks.append(keywords.texts[chunk_idx])
                         file_keyword_info.append(
                             {
                                 "chunk_index": chunk_idx,
@@ -1931,23 +2031,23 @@ class RAGToolsMixin:
 
                 # Update debug info before deduplication - track which chunks before dedup
                 if debug_info:
-                    debug_info["total_chunks_before_dedup"] = len(all_chunks)
+                    debug_info["total_chunks_before_dedup"] = len(all_chunks) + len(
+                        keyword_chunks
+                    )
                     # Show which chunks were found before deduplication
-                    all_chunk_indices = []
-                    for chunk in all_chunks:
-                        try:
-                            idx = rag.chunks.index(chunk)
-                            all_chunk_indices.append(idx)
-                        except ValueError:
-                            all_chunk_indices.append(
-                                "keyword_context"
-                            )  # Keyword match context, not a full indexed chunk
+                    # (dense and keyword alike, matching the count above)
+                    all_chunk_indices = [
+                        chunk_index.get(chunk, "keyword_context")
+                        for chunk in list(all_chunks) + list(keyword_chunks)
+                    ]
                     debug_info["chunks_before_dedup_indices"] = all_chunk_indices
                     debug_info["deduplication_note"] = (
-                        "Removes duplicate chunks found by both embedding and keyword search, keeping the version with higher score"
+                        "Merges the embedding and keyword rankings by rank "
+                        "(reciprocal rank fusion); a chunk both rankings like "
+                        "scores from both"
                     )
 
-                if not all_chunks:
+                if not all_chunks and not keyword_chunks:
                     result = {
                         "status": "success",
                         "message": (
@@ -1961,54 +2061,35 @@ class RAGToolsMixin:
                         result["debug_info"] = debug_info
                     return result
 
-                # Remove duplicates and sort using hash-based deduplication
-                unique_chunks = {}  # {chunk_hash: (chunk_text, score)}
-
+                # Fuse the dense and keyword rankings by rank (reciprocal
+                # rank fusion). A chunk keeps its best dense score across
+                # search keys; keyword hits score from their rank alone, so
+                # they compete with the semantic matches instead of
+                # outranking all of them on a fixed 0.6-0.8 boost.
+                dense_best: Dict[str, float] = {}
                 for chunk, score in zip(all_chunks, all_scores):
-                    chunk_hash = hash(chunk)
-                    if (
-                        chunk_hash not in unique_chunks
-                        or unique_chunks[chunk_hash][1] < score
-                    ):
-                        unique_chunks[chunk_hash] = (chunk, score)
+                    if score > dense_best.get(chunk, -1.0):
+                        dense_best[chunk] = score
+                dense_ranked = sorted(
+                    dense_best.items(), key=lambda item: item[1], reverse=True
+                )
+                sorted_items = _fuse_dense_and_keyword(dense_ranked, keyword_chunks)
 
                 # Update debug info after deduplication - track which chunks remain
                 if debug_info:
-                    debug_info["total_chunks_after_dedup"] = len(unique_chunks)
+                    debug_info["total_chunks_after_dedup"] = len(sorted_items)
                     debug_info["duplicates_removed"] = debug_info[
                         "total_chunks_before_dedup"
-                    ] - len(unique_chunks)
+                    ] - len(sorted_items)
                     # Show which chunks remain after deduplication
-                    dedup_chunk_indices = []
-                    for chunk_text, score in unique_chunks.values():
-                        try:
-                            idx = rag.chunks.index(chunk_text)
-                            dedup_chunk_indices.append(idx)
-                        except ValueError:
-                            dedup_chunk_indices.append("keyword_context")
+                    dedup_chunk_indices = [
+                        chunk_index.get(chunk_text, "keyword_context")
+                        for chunk_text, _score in sorted_items
+                    ]
                     debug_info["chunks_after_dedup_indices"] = dedup_chunk_indices
 
-                sorted_items = sorted(
-                    unique_chunks.values(), key=lambda x: x[1], reverse=True
-                )
-
                 # Adaptive max_chunks: use more chunks for larger documents
-                # With 32K context, we can afford to retrieve more chunks for better coverage
-                total_chunks = len(rag.chunks)
-                if total_chunks > 200:
-                    adaptive_max = min(
-                        25, self.max_chunks * 5
-                    )  # Up to 25 chunks for very large docs (200+ pages)
-                elif total_chunks > 100:
-                    adaptive_max = min(
-                        20, self.max_chunks * 4
-                    )  # Up to 20 chunks for large docs (100+ pages)
-                elif total_chunks > 50:
-                    adaptive_max = min(
-                        10, self.max_chunks * 2
-                    )  # Up to 10 chunks for medium docs
-                else:
-                    adaptive_max = self.max_chunks  # Default (5) for small docs
+                adaptive_max = _adaptive_max(len(rag.chunks), self.max_chunks)
 
                 kept = top_or_whole_index(
                     sorted_items,
@@ -2634,7 +2715,7 @@ class RAGToolsMixin:
         )
         def summarize_document(
             file_path: str,
-            summary_type: str = "detailed",
+            summary_type: SummaryType = "detailed",
             max_words_per_section: int = 20000,
         ) -> Dict[str, Any]:
             """
@@ -2645,6 +2726,11 @@ class RAGToolsMixin:
             2. Split into manageable sections based on word count
             3. Summarize each section with the LLM
             4. Combine section summaries into a final comprehensive summary
+
+            Args:
+                file_path: Name or path of an indexed document to summarize
+                summary_type: Only 'brief', 'detailed', or 'bullets'
+                max_words_per_section: Maximum words per section (default: 20000)
             """
             try:
                 if not self.rag:
@@ -2666,11 +2752,10 @@ class RAGToolsMixin:
                 target_file = matching_files[0]
 
                 # Validate summary type
-                valid_types = ["brief", "detailed", "bullets"]
-                if summary_type not in valid_types:
+                if summary_type not in SUMMARY_TYPES:
                     return {
                         "status": "error",
-                        "error": f"Invalid summary_type '{summary_type}'. Valid types: {', '.join(valid_types)}",
+                        "error": f"Invalid summary_type '{summary_type}'. Valid types: {', '.join(SUMMARY_TYPES)}",
                     }
 
                 # Keep the tool's real styles aligned with summarize/SKILL.md.

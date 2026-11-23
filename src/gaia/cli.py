@@ -31,6 +31,7 @@ from gaia.llm.lemonade_client import (
     LemonadeClientError,
     _get_lemonade_config,
     resolve_lemonade_base_url,
+    resolve_local_chat_model,
 )
 from gaia.llm.lemonade_launcher import describe_start_hint
 from gaia.llm.providers.claude import DEFAULT_CLAUDE_MODEL as DEFAULT_CLAUDE_CHAT_MODEL
@@ -592,8 +593,8 @@ async def async_main(action, **kwargs):
         # package, or, where the agent ships as its own binary (as the apps
         # ship it), on that binary through the daemon, as the Agent UI does.
         try:
-            from gaia_agent.agent import GaiaAgent, GaiaAgentConfig
-            from gaia_agent.interactive import interactive_mode
+            from gaiapy.agent import GaiaAgent, GaiaAgentConfig
+            from gaiapy.interactive import interactive_mode
         except ImportError:
             return _gaia_chat_relay(kwargs)
 
@@ -778,7 +779,7 @@ async def async_main(action, **kwargs):
                 "logging_level", "INFO"
             ),  # Back to INFO now that issues are fixed
             # LLM backend selection (#124)
-            model=kwargs.get("model") or DEFAULT_MODEL_NAME,
+            model=kwargs.get("model") or resolve_local_chat_model(),
             max_tokens=kwargs.get("max_tokens", 512),
             use_claude=kwargs.get("use_claude", False),
             claude_model=kwargs.get("claude_model", DEFAULT_CLAUDE_CHAT_MODEL),
@@ -985,6 +986,7 @@ def _launch_agent_ui(port=4200, base_url=None, log=None, debug=False, webui_dist
     try:
         from gaia.ui.server import (
             create_app,
+            launch_url,
             lemonade_is_remote,
             start_model_server_owner,
         )
@@ -999,13 +1001,20 @@ def _launch_agent_ui(port=4200, base_url=None, log=None, debug=False, webui_dist
         # "localhost" can resolve to IPv6 ::1 and fail against this IPv4 listener.
         log.info(f"Starting GAIA Agent UI on http://127.0.0.1:{port}")
         print(f"Starting GAIA Agent UI on http://127.0.0.1:{port}")
-        print(f"   Open your browser to http://127.0.0.1:{port}")
-        print("   Press Ctrl+C to stop")
-        print()
         import uvicorn
 
         # create_app() refuses an unsafe GAIA_HOME, so nothing is written there first.
         app = create_app(webui_dist=webui_dist)
+        # Only to a terminal: the desktop app logs this process's stdout.
+        if sys.stdout.isatty():
+            print(
+                f"   Open your browser to {launch_url(app, '127.0.0.1', port)}",
+                flush=True,
+            )
+        else:
+            print(f"   Agent UI API on http://127.0.0.1:{port}", flush=True)
+        print("   Press Ctrl+C to stop")
+        print()
         _enable_backend_fault_log(log)
         if not base_url and not lemonade_is_remote():
             # First run is set up in the app; the daemon owns the model server.
@@ -1080,8 +1089,8 @@ def _launch_interactive_cli(log=None):
             sys.exit(1)
 
         try:
-            from gaia_agent.agent import GaiaAgent, GaiaAgentConfig
-            from gaia_agent.interactive import interactive_mode
+            from gaiapy.agent import GaiaAgent, GaiaAgentConfig
+            from gaiapy.interactive import interactive_mode
         except ImportError:
             # The agent ships as its own binary: chat with it through the daemon.
             sys.exit(_gaia_chat_relay({}))
@@ -1135,7 +1144,7 @@ def _hide_subcommands(subparsers, names) -> None:
 
 # Kept for scripts, hidden from help: GAIA ships one agent, so browsing and
 # publishing agents is no longer a user-facing feature (#5172).
-HIDDEN_TOP_LEVEL_COMMANDS = ("hub",)
+HIDDEN_TOP_LEVEL_COMMANDS = ("hub", "agent-program")
 HIDDEN_AGENT_COMMANDS = ("init", "version", "pack", "publish", "login")
 
 # Removed commands: old scripts get the replacement instead of "invalid choice".
@@ -1280,6 +1289,14 @@ def build_parser():
         default=None,
         help="Model id for -p, or 'hybrid' to pick a cheap or strong model for "
         "the turn (default: config default_model, else the agent's)",
+    )
+    parser.add_argument(
+        "--yes",
+        "-y",
+        dest="print_yes",
+        action="store_true",
+        help="With -p: download the run's model without asking when it is not "
+        "downloaded yet (non-interactive/CI use)",
     )
     parser.add_argument(
         "--output-format",
@@ -2105,59 +2122,11 @@ def build_parser():
 
     schedule_parser.set_defaults(action="schedule")
 
-    # Knowledge command — web research via the Tavily wrapper
-    knowledge_parser = subparsers.add_parser(
-        "knowledge",
-        help="Web research via Tavily (search|extract|usage), with caching and a credit budget",
-    )
-    knowledge_subparsers = knowledge_parser.add_subparsers(
-        dest="knowledge_action", help="knowledge action to perform"
-    )
+    # Knowledge command — web research via the Tavily wrapper. Lives in
+    # gaia.knowledge_cli to keep this file lean.
+    from gaia import knowledge_cli
 
-    k_search = knowledge_subparsers.add_parser("search", help="Run a web search")
-    k_search.add_argument("query", help="Search query")
-    k_search.add_argument(
-        "--max-results", type=int, default=5, help="Max results (default: 5)"
-    )
-    k_search.add_argument(
-        "--depth",
-        choices=("basic", "advanced"),
-        default="basic",
-        help="Search depth — advanced costs more credits (default: basic)",
-    )
-    k_search.add_argument(
-        "--budget",
-        type=int,
-        default=None,
-        help="Credit cap for this session; omit for unlimited",
-    )
-    k_search.add_argument(
-        "--no-block",
-        action="store_true",
-        help="Warn instead of blocking when the budget cap is exceeded",
-    )
-
-    k_extract = knowledge_subparsers.add_parser(
-        "extract", help="Extract clean content from one or more URLs (requires Tavily)"
-    )
-    k_extract.add_argument("urls", nargs="+", help="One or more URLs to extract")
-    k_extract.add_argument(
-        "--depth",
-        choices=("basic", "advanced"),
-        default="basic",
-        help="Extract depth (default: basic)",
-    )
-    k_extract.add_argument(
-        "--budget", type=int, default=None, help="Credit cap for this session"
-    )
-    k_extract.add_argument(
-        "--no-block",
-        action="store_true",
-        help="Warn instead of blocking when the budget cap is exceeded",
-    )
-
-    knowledge_subparsers.add_parser("usage", help="Show cached credit-usage totals")
-    knowledge_parser.set_defaults(action="knowledge")
+    knowledge_cli.add_subparser(subparsers)
 
     # Add model download command
     download_parser = subparsers.add_parser(
@@ -2179,7 +2148,7 @@ Examples:
   # Delete all downloaded GAIA models (free up disk space)
   gaia download --clear-cache
 
-Available agents: chat, bash, talk, rag, vlm, minimal, mcp, sd
+Available agents: chat, talk, rag, vlm, minimal, mcp, sd
 
 Use `gaia download --agent talk` to download the local Kokoro TTS model.
         """,
@@ -3025,6 +2994,12 @@ afterwards (or `swebench <run_dir>` does, later).
         "Claude Code has with its permissions skipped",
     )
     tasks_run_parser.add_argument(
+        "--research-command",
+        action="store_true",
+        help="Send each research task as `/research <prompt>`, GAIA's research "
+        "mode (gaia harness only)",
+    )
+    tasks_run_parser.add_argument(
         "--meter",
         choices=["fireworks"],
         default=None,
@@ -3614,26 +3589,10 @@ afterwards (or `swebench <run_dir>` does, later).
     hub_uninstall_parser.add_argument("agent_id", help="Agent to uninstall")
     hub_parser.set_defaults(action="hub")
 
-    # Cache command (for Context7 cache management)
-    cache_parser = subparsers.add_parser(
-        "cache",
-        help="Show GAIA's caches and their sizes, or clear the Context7 cache",
-    )
-    cache_subparsers = cache_parser.add_subparsers(
-        dest="cache_action", help="Cache action to perform"
-    )
+    # Cache command. Lives in gaia.cache_cli to keep this file lean.
+    from gaia import cache_cli
 
-    # Cache status command
-    _ = cache_subparsers.add_parser("status", help="Show cache and rate limiter status")
-
-    # Cache clear command
-    cache_clear_parser = cache_subparsers.add_parser("clear", help="Clear cached data")
-    cache_clear_parser.add_argument(
-        "--context7", action="store_true", help="Clear Context7 cache"
-    )
-    cache_clear_parser.add_argument(
-        "--all", action="store_true", help="Clear all caches"
-    )
+    cache_cli.add_subparser(subparsers)
 
     # Memory command (agent memory management)
     memory_parser = subparsers.add_parser(
@@ -3796,6 +3755,11 @@ afterwards (or `swebench <run_dir>` does, later).
     from gaia.llm import custom_models_cli
 
     custom_models_cli.add_subparser(subparsers)
+
+    # gaiacpp for the terminal UI, which shells out here to download it.
+    from gaia.daemon.sidecars import gaiacpp_fetch_cli
+
+    gaiacpp_fetch_cli.add_subparser(subparsers)
 
     # Persistent CLI config (~/.gaia/config.json) — e.g. a default model so
     # users don't have to pass --model on every chat/llm/prompt (issue #98).
@@ -4295,7 +4259,7 @@ def _handle_eval_retrieval(args):
     print((opts.out_dir / "report.md").read_text(encoding="utf-8"))
     print(f"[OUTPUT] {(opts.out_dir / 'results.json').resolve()}")
 
-    failed = bool(opts.errors)
+    failed = bool(opts.errors or opts.label_errors)
     if args.gate:
         baseline = json.loads(Path(args.gate).read_text(encoding="utf-8"))
         passed, lines = runner.compare(baseline, results, args.tolerance)
@@ -4306,6 +4270,12 @@ def _handle_eval_retrieval(args):
         failed |= not passed
     if opts.errors:
         print(f"[ERROR] {len(opts.errors)} hard case(s) crashed: {opts.errors}")
+    if opts.label_errors:
+        print(
+            f"[ERROR] {len(opts.label_errors)} question label(s) do not match the "
+            "extracted text, so those questions were not scored. Fix them in "
+            f"eval/retrieval/datasets/: {opts.label_errors}"
+        )
     if failed:
         sys.exit(1)
 
@@ -4416,7 +4386,10 @@ def _handle_eval_tasks(args):
             if "error" in grade:
                 print(f"  {task_id}: judge failed - {grade['error']}")
             else:
-                scores = " ".join(f"{a}={grade[a]}" for a in ft.AXES)
+                shown = ft.AXES + tuple(
+                    k for k in ft.RESEARCH_AXES + ft.RESEARCH_VERDICTS if k in grade
+                )
+                scores = " ".join(f"{a}={grade[a]}" for a in shown)
                 print(f"  {task_id}: {scores} | {grade['one_line']}")
 
         print(f"[JUDGE] {judge_model}")
@@ -4497,6 +4470,7 @@ def _handle_eval_tasks(args):
                 therock_url=args.therock_url,
                 fence=args.fence,
                 full_access=args.full_access,
+                research_command=args.research_command,
                 repeats=args.repeats,
                 meter=args.meter,
                 fireworks_account=args.fireworks_account,
@@ -4998,6 +4972,10 @@ def _init_model_choices(args, profile: str):
 
 
 def main():
+    from gaia.platform_guard import avoid_wmi
+
+    # Before anything asks `platform`: a timed-out WMI query crashes the process.
+    avoid_wmi()
     from gaia.logger import configure
 
     log_manager = configure()
@@ -5038,6 +5016,7 @@ def main():
         "--disallowed-tools": bool(args.print_disallowed_tools),
         "--no-web": args.print_no_web,
         "--no-skills": args.print_no_skills,
+        "--yes": args.print_yes,
     }
     if args.print_prompt is None and any(print_only.values()):
         used = ", ".join(flag for flag, given in print_only.items() if given)
@@ -5087,6 +5066,7 @@ def main():
                 disallowed_tools=args.print_disallowed_tools or (),
                 no_web=args.print_no_web,
                 no_skills=args.print_no_skills,
+                yes=args.print_yes,
             )
         )
 
@@ -5314,7 +5294,7 @@ def main():
                                 + (f": {detail}" if detail else "")
                             )
                     else:
-                        os.kill(pid, signal.SIGKILL)
+                        os.kill(pid, signal.SIGKILL)  # pylint: disable=no-member
                     print(f"Force-stopped Telegram adapter (pid {pid}).")
                     # A hard-killed adapter cannot clean up its PID file.
                     with contextlib.suppress(FileNotFoundError):
@@ -5742,7 +5722,14 @@ Let me know your answer!
             skip_count = 0
             fail_count = 0
 
+            from gaia.installer.model_choice import withheld_reason
+
             for model_id in model_ids:
+                withheld = withheld_reason(model_id)
+                if withheld:
+                    console.print_download_error(withheld, model_id)
+                    fail_count += 1
+                    continue
                 # Check if already available
                 if client.check_model_available(model_id):
                     console.print_download_skipped(model_id)
@@ -6240,6 +6227,13 @@ Let me know your answer!
 
         sys.exit(custom_models_cli.handle(args))
 
+    if args.action == "agent-program":
+        from gaia.daemon.sidecars import (  # pylint: disable=reimported
+            gaiacpp_fetch_cli,
+        )
+
+        sys.exit(gaiacpp_fetch_cli.handle(args))
+
     # Handle Config command
     if args.action == "config":
         handle_config_command(args)
@@ -6252,12 +6246,16 @@ Let me know your answer!
 
     # Handle Cache command
     if args.action == "cache":
-        handle_cache_command(args)
+        from gaia import cache_cli
+
+        cache_cli.handle(args)
         return
 
-    # Handle Knowledge command (Tavily web research)
+    # Handle Knowledge command — see gaia.knowledge_cli
     if args.action == "knowledge":
-        handle_knowledge_command(args)
+        from gaia import knowledge_cli
+
+        knowledge_cli.handle(args)
         return
 
     # Handle Memory command
@@ -6852,105 +6850,6 @@ def handle_perf_vis_command(args):
 
     if exit_code != 0:
         sys.exit(exit_code)
-
-
-def _print_knowledge_usage(client, show_session=True):
-    """Print a one-line credit-usage summary for a Tavily client."""
-    usage = client.usage()
-    cap = usage["cap"]
-    cap_str = "unlimited" if cap is None else str(cap)
-    # A bare `usage` run spends nothing, so its session figure would always be 0.
-    session = f", {usage['session_credits']} this session" if show_session else ""
-    print(
-        f"\n💳 Credits used: {usage['total_credits']} total{session} (cap: {cap_str})"
-    )
-
-
-def handle_knowledge_command(args):
-    """Handle `gaia knowledge` — Tavily web research with caching + budget.
-
-    Args:
-        args: Parsed command-line arguments
-    """
-    action = getattr(args, "knowledge_action", None)
-    if action is None:
-        print("❌ Error: No knowledge action specified")
-        print("Available actions: search, extract, usage")
-        print("Run 'gaia knowledge --help' for more information")
-        return
-
-    import requests
-
-    from gaia.web.client import SearchStatusError, SearchUnavailableError
-    from gaia.web.tavily import (
-        BudgetConfig,
-        TavilyBudgetExceeded,
-        TavilyClient,
-        TavilyConfigError,
-    )
-
-    budget = BudgetConfig(
-        cap=getattr(args, "budget", None),
-        block=not getattr(args, "no_block", False),
-    )
-    client = TavilyClient(budget=budget)
-    try:
-        if action == "search":
-            result = client.search(
-                args.query, search_depth=args.depth, max_results=args.max_results
-            )
-            source = result.get("source", "tavily")
-            print(f"\n=== Results for {args.query!r} (source: {source}) ===")
-            for i, r in enumerate(result.get("results", []), 1):
-                print(f"{i}. {r.get('title', '')}")
-                print(f"   {r.get('url', '')}")
-                content = r.get("content") or r.get("snippet") or ""
-                if content:
-                    print(f"   {content[:200]}")
-            _print_knowledge_usage(client)
-        elif action == "extract":
-            result = client.extract(args.urls, extract_depth=args.depth)
-            print(json.dumps(result, indent=2))
-            _print_knowledge_usage(client)
-        elif action == "usage":
-            _print_knowledge_usage(client, show_session=False)
-    except TavilyBudgetExceeded as e:
-        print(f"🛑 {e}")
-        sys.exit(1)
-    except (TavilyConfigError, SearchUnavailableError, SearchStatusError) as e:
-        print(f"❌ {e}")
-        sys.exit(1)
-    except (
-        requests.exceptions.ConnectionError,
-        requests.exceptions.Timeout,
-        requests.exceptions.ChunkedEncodingError,  # dropped mid-response
-    ) as e:
-        service = "Tavily" if client.configured else "DuckDuckGo"
-        print(
-            f"❌ Web {action} failed: {service} could not be reached ({e}). "
-            "Check your internet connection or proxy settings and try again."
-        )
-        sys.exit(1)
-    except requests.exceptions.HTTPError as e:
-        # The service answered with an error, so the user's network is fine.
-        service = "Tavily" if client.configured else "DuckDuckGo"
-        status = getattr(e.response, "status_code", None) or "an error"
-        hint = (
-            "It rejected the request; check the query or URL and try again."
-            if isinstance(status, int) and status < 500
-            else "It may be down for a moment; try again later."
-        )
-        print(f"❌ Web {action} failed: {service} answered with {status}. {hint}")
-        sys.exit(1)
-    except requests.exceptions.RequestException as e:
-        # Redirect loops, a malformed URL and the like: still an error, not a crash.
-        service = "Tavily" if client.configured else "DuckDuckGo"
-        print(
-            f"❌ Web {action} failed: the {service} request could not complete ({e})."
-        )
-        sys.exit(1)
-    finally:
-        client.close()
 
 
 def handle_config_command(args):
@@ -7723,170 +7622,6 @@ def handle_gateway_command(args):
             f"   Fix or delete ~/.gaia/config.json and try again.",
             file=sys.stderr,
         )
-        sys.exit(1)
-
-
-def _is_link(path) -> bool:
-    """True for a symlink or a Windows junction, which ``is_symlink`` misses."""
-    path = str(path)
-    if os.path.islink(path):
-        return True
-    isjunction = getattr(os.path, "isjunction", None)  # Python 3.12+
-    if isjunction is not None:
-        return isjunction(path)
-    import stat as stat_mod
-
-    try:
-        tag = getattr(os.lstat(path), "st_reparse_tag", 0)
-    except OSError:  # gone; the size walk reports it as unreadable
-        return False
-    # Only junctions: OneDrive placeholders are reparse points too, and hold real data.
-    return tag == getattr(stat_mod, "IO_REPARSE_TAG_MOUNT_POINT", -1)
-
-
-def _cache_folder_usage(folder: Path) -> tuple:
-    """Bytes, file count and unreadable entries under *folder*, without following links."""
-    size = files = 0
-    # Files and folders that couldn't be read, so the size never quietly comes up short.
-    unreadable: list = []
-    for dirpath, dirnames, filenames in os.walk(folder, onerror=unreadable.append):
-        dirnames[:] = [d for d in dirnames if not _is_link(os.path.join(dirpath, d))]
-        for name in filenames:
-            try:
-                stat = os.lstat(os.path.join(dirpath, name))
-            except OSError as e:
-                unreadable.append(e)
-                continue
-            size += stat.st_size
-            files += 1
-    return size, files, len(unreadable)
-
-
-def _print_cache_folders() -> None:
-    """Print each folder under GAIA's cache root, largest first, with its size."""
-    from gaia.home import gaia_home
-    from gaia.security import _format_size
-
-    root = gaia_home() / "cache"
-    print(f"\n=== GAIA caches ({root}) ===")
-    if not root.is_dir():
-        print("No caches yet.")
-        return
-    rows = []
-    for entry in root.iterdir():
-        if _is_link(entry):
-            continue
-        if entry.is_dir():
-            rows.append((entry.name, *_cache_folder_usage(entry)))
-        elif entry.is_file():
-            try:
-                rows.append((entry.name, entry.lstat().st_size, 1, 0))
-            except OSError:  # removed or locked while listing
-                rows.append((entry.name, 0, 0, 1))
-    if not rows:
-        print("No caches yet.")
-        return
-    rows.sort(key=lambda row: (-row[1], row[0]))
-    width = max(len(row[0]) for row in rows + [("Total",)])
-
-    def count(files: int) -> str:
-        return f"{files:>7,} {'file' if files == 1 else 'files'}"
-
-    for name, size, files, unreadable in rows:
-        note = f"  ({unreadable} unreadable)" if unreadable else ""
-        print(f"  {name:<{width}}  {_format_size(size):>10}  {count(files)}{note}")
-    total_size = sum(row[1] for row in rows)
-    total_files = sum(row[2] for row in rows)
-    print(f"  {'Total':<{width}}  {_format_size(total_size):>10}  {count(total_files)}")
-
-
-def handle_cache_command(args):
-    """Handle the cache management command.
-
-    Args:
-        args: Parsed command-line arguments
-    """
-    if not hasattr(args, "cache_action") or args.cache_action is None:
-        print("❌ Error: No cache action specified")
-        print("Available actions: status, clear")
-        print("Run 'gaia cache --help' for more information")
-        return
-
-    from gaia.mcp.context7_cache import Context7Cache, Context7RateLimiter
-    from gaia.mcp.external_services import Context7Service
-
-    try:
-        if args.cache_action == "status":
-            _print_cache_folders()
-
-            is_available = Context7Service.check_availability()
-
-            print("\n=== Context7 Service Status ===")
-            if is_available:
-                print("✓ Context7 is AVAILABLE (npx found, service working)")
-            else:
-                print(
-                    "- Context7 (optional) is not available: npx not found or "
-                    "the service failed"
-                )
-                print(
-                    "  Library documentation search is off; nothing else is affected."
-                )
-
-            # Show cache and rate limiter status
-            cache = Context7Cache()
-            rate_limiter = Context7RateLimiter()
-
-            status = rate_limiter.get_status()
-
-            print("\n=== Context7 Cache Status ===")
-            print(f"Cache directory: {cache.cache_dir}")
-            # Use glob to count library ID files since _load_json is protected
-            library_id_count = (
-                len(list(cache.cache_dir.glob("library_*.json")))
-                if hasattr(cache, "cache_dir")
-                else 0
-            )
-            print(f"Library IDs cached: {library_id_count}")
-
-            # Count documentation files
-            doc_count = len(list(cache.docs_dir.glob("*.json")))
-            print(f"Documentation entries: {doc_count}")
-
-            print("\n=== Rate Limiter Status ===")
-            print(
-                f"Tokens available: {status['tokens_available']}/{status['max_tokens']}"
-            )
-            print(f"Circuit breaker: {'OPEN' if status['circuit_open'] else 'CLOSED'}")
-            print(f"Consecutive failures: {status['consecutive_failures']}")
-
-            if status["tokens_available"] < 5:
-                print("\n⚠️  Warning: Low token count. Rate limiting may occur soon.")
-
-            if not is_available:
-                print("\n💡 To enable Context7:")
-                print("   1. Install Node.js and npm")
-                print("   2. Ensure 'npx' is in your PATH")
-                print(
-                    "   3. Optionally add CONTEXT7_API_KEY to .env for higher rate limits"
-                )
-
-        elif args.cache_action == "clear":
-            # Clear caches
-            if args.all or args.context7:
-                cache = Context7Cache()
-                cache.clear()
-                print("✓ Context7 cache cleared")
-            else:
-                # Same refusal-must-not-report-success rule as `gaia kill`.
-                print("❌ Specify --context7 or --all to clear caches")
-                print("Run 'gaia cache clear --help' for more information")
-                sys.exit(1)
-
-    except Exception as e:
-        cache_log = get_logger(__name__)
-        cache_log.error(f"Error managing cache: {e}")
-        print(f"❌ Error: {e}")
         sys.exit(1)
 
 
@@ -9008,13 +8743,19 @@ def _diag_gaia_processes(gaia_dir):
     except (OSError, ValueError, AttributeError) as e:
         notes.append(f"lemonade: unreadable {state_path}: {type(e).__name__}")
 
-    pid_path = gaia_dir / "backend.pid"
-    try:
-        found.append(("ui backend", int(pid_path.read_text().strip()), None))
-    except FileNotFoundError:
-        pass
-    except (OSError, ValueError) as e:
-        notes.append(f"ui backend: unreadable {pid_path}: {type(e).__name__}")
+    # One record per desktop app (backend-pids/<app pid>.pid); backend.pid is
+    # what older apps wrote.
+    pid_dir = gaia_dir / "backend-pids"
+    pid_paths = [gaia_dir / "backend.pid"]
+    if pid_dir.is_dir():
+        pid_paths += sorted(pid_dir.glob("*.pid"))
+    for pid_path in pid_paths:
+        try:
+            found.append(("ui backend", int(pid_path.read_text().strip()), None))
+        except FileNotFoundError:
+            pass
+        except (OSError, ValueError) as e:
+            notes.append(f"ui backend: unreadable {pid_path}: {type(e).__name__}")
     return found, notes
 
 
@@ -9545,13 +9286,9 @@ def _handle_daemon_status():
 
 def _daemon_http_detail(response) -> str:
     """The actionable `detail` from a daemon error response (or the raw status)."""
-    try:
-        body = response.json()
-    except ValueError:
-        return f"HTTP {response.status_code}"
-    if isinstance(body, dict) and body.get("detail"):
-        return str(body["detail"])
-    return f"HTTP {response.status_code}"
+    from gaia.daemon.client import error_detail
+
+    return error_detail(response)
 
 
 def _fetch_daemon_agents(inst) -> list:

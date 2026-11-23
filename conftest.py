@@ -46,7 +46,7 @@ def _source_roots():
 
     For a hub agent the importable root is the directory CONTAINING the package
     (``hub/agents/gaia/python``), not the package itself — putting the package
-    dir on sys.path makes ``import gaia_agent`` miss it entirely.
+    dir on sys.path makes ``import gaiapy`` miss it entirely.
 
     A hub agent is included ONLY when its package already resolves somewhere.
     This redirects an existing install to this checkout; it must not *create*
@@ -66,8 +66,8 @@ _SOURCE_ROOTS = _source_roots()
 
 #: Modules whose origin proves which checkout is under test. The hub agents are
 #: listed too: they are separately editable-installed, so ``gaia`` can resolve
-#: here while ``gaia_agent`` quietly comes from another worktree.
-_ANCHOR_MODULES = ("gaia", "gaia_agent")
+#: here while ``gaiapy`` quietly comes from another worktree.
+_ANCHOR_MODULES = ("gaia", "gaiapy")
 
 
 def _prepend_source_roots() -> None:
@@ -277,6 +277,11 @@ def pytest_configure(config):  # noqa: D103 — pytest hook
     )
     config.addinivalue_line(
         "markers",
+        "speech_platform_gate: judge whether GAIA offers its voice by this "
+        "machine's real platform",
+    )
+    config.addinivalue_line(
+        "markers",
         "real_path_refresh: let gaia.program_lookup read PATH from the registry "
         "or the login shell (its sources must be mocked)",
     )
@@ -395,6 +400,37 @@ def _no_npu_host_probe(request, monkeypatch):
     if request.node.get_closest_marker("npu_host_probe"):
         return
     monkeypatch.setattr(npu_linux, "problems", lambda: [])
+
+
+_REAL_CURRENT_PLATFORM = {}
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _speech_offered_on_any_platform():
+    """Run speech tests as on a platform where GAIA offers its voice.
+
+    Otherwise every read-aloud and dictation test fails on a Mac, where the
+    voice is withheld. Session scope also covers module-scoped fixtures that
+    build agents. Opt a test in to the real platform with
+    @pytest.mark.speech_platform_gate.
+    """
+    import gaia.config
+
+    _REAL_CURRENT_PLATFORM["function"] = gaia.config._current_platform
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(gaia.config, "_current_platform", lambda: "linux")
+        yield
+
+
+@pytest.fixture(autouse=True)
+def _real_speech_platform(request, monkeypatch):
+    if not request.node.get_closest_marker("speech_platform_gate"):
+        return
+    import gaia.config
+
+    monkeypatch.setattr(
+        gaia.config, "_current_platform", _REAL_CURRENT_PLATFORM["function"]
+    )
 
 
 @pytest.fixture(autouse=True)

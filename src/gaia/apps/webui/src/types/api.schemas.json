@@ -2296,6 +2296,174 @@
     "title": "HTTPValidationError",
     "type": "object"
   },
+  "ImageModel": {
+    "properties": {
+      "default_size": {
+        "title": "Default Size",
+        "type": "string"
+      },
+      "default_steps": {
+        "title": "Default Steps",
+        "type": "integer"
+      },
+      "downloaded": {
+        "title": "Downloaded",
+        "type": "boolean"
+      },
+      "downloads_on_first_use": {
+        "title": "Downloads On First Use",
+        "type": "boolean"
+      },
+      "id": {
+        "title": "Id",
+        "type": "string"
+      },
+      "recipe": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Recipe"
+      },
+      "size_gb": {
+        "anyOf": [
+          {
+            "type": "number"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Size Gb"
+      },
+      "sizes": {
+        "items": {
+          "type": "string"
+        },
+        "title": "Sizes",
+        "type": "array"
+      }
+    },
+    "required": [
+      "id",
+      "downloaded",
+      "downloads_on_first_use",
+      "default_size",
+      "default_steps",
+      "sizes"
+    ],
+    "title": "ImageModel",
+    "type": "object"
+  },
+  "ImageSettings": {
+    "properties": {
+      "chat_model": {
+        "title": "Chat Model",
+        "type": "string"
+      },
+      "chat_model_creates_images": {
+        "title": "Chat Model Creates Images",
+        "type": "boolean"
+      },
+      "max_steps": {
+        "default": 100,
+        "title": "Max Steps",
+        "type": "integer"
+      },
+      "model": {
+        "title": "Model",
+        "type": "string"
+      },
+      "model_available": {
+        "title": "Model Available",
+        "type": "boolean"
+      },
+      "models": {
+        "items": {
+          "$ref": "#/components/schemas/ImageModel"
+        },
+        "title": "Models",
+        "type": "array"
+      },
+      "size": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Size"
+      },
+      "steps": {
+        "anyOf": [
+          {
+            "type": "integer"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Steps"
+      }
+    },
+    "required": [
+      "model",
+      "size",
+      "steps",
+      "models",
+      "model_available",
+      "chat_model",
+      "chat_model_creates_images"
+    ],
+    "title": "ImageSettings",
+    "type": "object"
+  },
+  "ImageSettingsUpdate": {
+    "description": "Fields left out keep their value; ``null`` size or steps means automatic.",
+    "properties": {
+      "model": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Model"
+      },
+      "size": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Size"
+      },
+      "steps": {
+        "anyOf": [
+          {
+            "type": "integer"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Steps"
+      }
+    },
+    "title": "ImageSettingsUpdate",
+    "type": "object"
+  },
   "IndexFolderRequest": {
     "description": "Request to index all supported documents in a folder.",
     "properties": {
@@ -5021,6 +5189,16 @@
         "title": "Dynamic Tools Locked",
         "type": "boolean"
       },
+      "flagship_agent": {
+        "default": "gaiapy",
+        "title": "Flagship Agent",
+        "type": "string"
+      },
+      "gaiacpp_available": {
+        "default": false,
+        "title": "Gaiacpp Available",
+        "type": "boolean"
+      },
       "model_status": {
         "anyOf": [
           {
@@ -5110,6 +5288,22 @@
         ],
         "description": "Dynamic tool loading: send the tool list in short form and full docs only as needed, to cut first-turn TTFT without breaking the prompt cache. Applies to new chats. GAIA_DYNAMIC_TOOLS overrides this at runtime when set. Omit the field to leave the persisted value unchanged.",
         "title": "Dynamic Tools"
+      },
+      "flagship_agent": {
+        "anyOf": [
+          {
+            "enum": [
+              "gaiapy",
+              "gaiacpp"
+            ],
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "description": "Which program is the GAIA agent: gaiapy (the Python agent) or gaiacpp (the native C++ agent, beta). Applies from the next message. Choosing gaiacpp where it is not installed is refused. Omit the field to leave the choice unchanged.",
+        "title": "Flagship Agent"
       },
       "network_policy": {
         "anyOf": [
@@ -5378,6 +5572,11 @@
         "title": "Auto",
         "type": "boolean"
       },
+      "available": {
+        "default": true,
+        "title": "Available",
+        "type": "boolean"
+      },
       "max_speed": {
         "default": 200,
         "title": "Max Speed",
@@ -5391,6 +5590,17 @@
       "speed": {
         "title": "Speed",
         "type": "integer"
+      },
+      "unavailable_reason": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Unavailable Reason"
       },
       "voice": {
         "title": "Voice",

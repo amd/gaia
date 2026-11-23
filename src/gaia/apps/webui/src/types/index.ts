@@ -559,6 +559,40 @@ export interface ModelStatus {
     checked: boolean;
 }
 
+/** The Python agent (every tool, the default) or the native C++ one (fast, fewer tools). */
+export type FlagshipAgent = 'gaiapy' | 'gaiacpp';
+
+/** A download of gaiacpp, polled while `state` is downloading. */
+export interface AgentDownload {
+    state: 'idle' | 'downloading' | 'done' | 'failed';
+    bytes_done: number;
+    bytes_total: number | null;
+    error: string | null;
+}
+
+export interface AgentProgram {
+    id: FlagshipAgent;
+    installed: boolean;
+    /** Null when the size couldn't be read. */
+    size_bytes: number | null;
+    /** gaiacpp isn't on this PC and this release offers it. */
+    can_download: boolean;
+    /** Why gaiacpp can't be had here, when it isn't installed and can't be downloaded. */
+    unavailable_reason: string | null;
+    /** Set when the reason is one the UI has its own words for; any other reason is shown as it is. */
+    unavailable_code?: 'no_release' | 'unreachable' | 'unverifiable' | null;
+    /** A newer build is offered; not shown yet. */
+    update_available?: boolean;
+}
+
+/** `GET /api/agent-programs`: both agent programs and any running download. */
+export interface AgentPrograms {
+    /** The saved choice as written; may name a harness this version can't run (none of `programs`). */
+    current: string;
+    programs: AgentProgram[];
+    download: AgentDownload;
+}
+
 export interface Settings {
     custom_model: string | null;
     model_status: ModelStatus | null;
@@ -572,6 +606,11 @@ export interface Settings {
     agent_mode: 'manual' | 'goal_driven';
     /** Shared network policy controlling cloud AI use. */
     network_policy: 'cloud_allowed' | 'local_ai_only';
+    /** The program that runs the GAIA agent; "gaiapy" when the user never chose. May name a
+     *  harness a newer GAIA saved that this one can't run, until the user picks another. */
+    flagship_agent: string;
+    /** False when the gaiacpp program isn't installed on this PC, so it can't be chosen. */
+    gaiacpp_available: boolean;
     policy_warnings?: string[];
     policy_notices?: Array<{ code: string; severity: 'info' | 'warning'; url?: string; reason?: string; cause?: string | null; models?: string[] | null }>;
 }
@@ -1028,6 +1067,8 @@ export interface ProviderModel {
     size_gb?: number | null;
     /** Fits this PC's memory; null when GAIA can't tell. */
     fits?: boolean | null;
+    /** Fits, but would leave other apps less memory than GAIA keeps for them. */
+    tight?: boolean;
     available?: boolean;
     unavailable_reason?: string | null;
     /** What stops this NPU model on this PC's NPU (Linux setup), in place of the reason. */

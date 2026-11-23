@@ -75,6 +75,7 @@ KNOWN_TOOLS: Dict[str, tuple] = {
         "AudioGenerationToolsMixin",
     ),
     "wait": ("gaia.agents.tools.wait_tools", "WaitToolsMixin"),
+    "dictation": ("gaia.agents.tools.dictation_tools", "DictationToolsMixin"),
     "reasoning_effort": (
         "gaia.agents.tools.reasoning_tools",
         "ReasoningEffortToolsMixin",
@@ -885,7 +886,7 @@ class AgentRegistry:
 
         # Spec form (docs/spec/agent-hub-restructure.mdx): the entry point may
         # target the Agent subclass directly, e.g.
-        # ``gaia = "gaia_agent.agent:GaiaAgent"``. Build a registration
+        # ``gaia = "gaiapy.agent:GaiaAgent"``. Build a registration
         # from its class attributes in that case.
         from gaia.agents.base.agent import Agent as BaseAgent
 

@@ -16,16 +16,18 @@ from types import SimpleNamespace
 
 import pytest
 
-pytest.importorskip("gaia_agent")
+pytest.importorskip("gaiapy")
 
 from fastapi.testclient import TestClient  # noqa: E402
-from gaia_agent import caller_auth  # noqa: E402
-from gaia_agent import server as server_mod  # noqa: E402
-from gaia_agent import session_registry as sr  # noqa: E402
+from gaiapy import caller_auth  # noqa: E402
+from gaiapy import server as server_mod  # noqa: E402
+from gaiapy import session_registry as sr  # noqa: E402
 
 from gaia.security import PathValidator  # noqa: E402
 
 _BASE_URL = "http://127.0.0.1:8141"
+_TOKEN = "test-caller-token"
+_AUTH = {"Authorization": f"Bearer {_TOKEN}"}
 
 
 class _ScopeAgent:
@@ -61,7 +63,8 @@ class _ScopeAgent:
 def built(monkeypatch, tmp_path):
     caller_auth.reset()
     monkeypatch.delenv(caller_auth.TOKEN_FILE_ENV_VAR, raising=False)
-    monkeypatch.delenv(caller_auth.TOKEN_ENV_VAR, raising=False)
+    # Full access over HTTP needs caller auth, as the shipped sidecar has.
+    monkeypatch.setenv(caller_auth.TOKEN_ENV_VAR, _TOKEN)
     home = tmp_path / "home"
     home.mkdir()
     agents: list = []
@@ -75,7 +78,9 @@ def built(monkeypatch, tmp_path):
     sr.registry.clear()
     server_mod._registry = server_mod._RunRegistry()
     try:
-        yield TestClient(server_mod.build_app(), base_url=_BASE_URL), agents
+        yield TestClient(
+            server_mod.build_app(), base_url=_BASE_URL, headers=_AUTH
+        ), agents
     finally:
         sr.registry.clear()
         server_mod._registry = server_mod._RunRegistry()
@@ -228,7 +233,7 @@ def test_a_relative_scope_entry_is_refused(built):
 
 
 def test_full_access_over_http_grants_paths_on_a_watched_session(built):
-    """Full access widens the file scope; the shell gates stay on."""
+    """Full access widens the file scope and opens the shell."""
     client, agents = built
     assert _query(client, session_id="s1").status_code == 200
     r = client.post("/v1/gaia/sessions/s1/bypass", json={"enabled": True})
@@ -236,7 +241,7 @@ def test_full_access_over_http_grants_paths_on_a_watched_session(built):
 
     assert _query(client, session_id="s1").status_code == 200
 
-    assert agents[0].seen[-1] == (True, False, True, True)
+    assert agents[0].seen[-1] == (True, True, True, True)
 
 
 def test_ask_mode_grants_nothing_without_a_prompt(built):

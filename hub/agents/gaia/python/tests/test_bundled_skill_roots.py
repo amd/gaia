@@ -3,7 +3,7 @@
 
 """The flagship must be able to find the starter pack in a source checkout.
 
-Packaging stages hub/skills into ``gaia_agent/skills``; a checkout has only a
+Packaging stages hub/skills into ``gaiapy/skills``; a checkout has only a
 ``.gitkeep`` there. Before this, ``SKILL_DIRS`` named that empty directory and
 nothing else, so a developer running from the tree discovered zero bundled
 skills and "load the github-triage skill" failed on a repo that visibly
@@ -19,7 +19,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
-from gaia_agent.agent import (
+from gaiapy.agent import (
     _HUB_SKILLS_DIR,
     _SKILLS_DIR,
     GaiaAgent,
@@ -60,7 +60,7 @@ def test_roots_are_ordered_packaged_first():
 
 def test_frozen_build_discovers_a_skill_once(monkeypatch, tmp_path):
     """The frozen package root must not shadow itself during discovery."""
-    import gaia_agent.agent as agent_module
+    import gaiapy.agent as agent_module
 
     from gaia.skills.manager import SkillManager
 
@@ -97,7 +97,7 @@ def test_missing_roots_are_skipped_not_listed(monkeypatch, tmp_path):
     SkillManager treats a listed root as a place to scan, so handing it a path
     that cannot exist turns a clean start into per-scan noise.
     """
-    import gaia_agent.agent as agent_module
+    import gaiapy.agent as agent_module
 
     monkeypatch.setattr(agent_module, "_SKILLS_DIR", tmp_path / "nope")
     monkeypatch.setattr(agent_module, "_HUB_SKILLS_DIR", tmp_path / "also-nope")
@@ -127,7 +127,7 @@ def test_default_skill_set_stays_opt_in():
 @pytest.fixture(scope="module")
 def flagship():
     """One real flagship agent — constructing it is expensive, so share it."""
-    from gaia_agent.agent import GaiaAgent, GaiaAgentConfig
+    from gaiapy.agent import GaiaAgent, GaiaAgentConfig
 
     return GaiaAgent(config=GaiaAgentConfig(silent_mode=True))
 
@@ -170,14 +170,14 @@ class TestTheFlagshipCanSearchCode:
 
 
 def _agent_file(base: Path, *parts: str) -> Path:
-    path = base.joinpath(*parts, "gaia_agent", "agent.py")
+    path = base.joinpath(*parts, "gaiapy", "agent.py")
     path.parent.mkdir(parents=True)
     path.write_text("", encoding="utf-8")
     return path
 
 
 def test_a_checkout_layout_resolves_to_hub_skills(tmp_path):
-    from gaia_agent.agent import _checkout_skills_dir
+    from gaiapy.agent import _checkout_skills_dir
 
     agent_file = _agent_file(tmp_path / "repo", "hub", "agents", "gaia", "python")
 
@@ -202,7 +202,7 @@ def test_a_checkout_layout_resolves_to_hub_skills(tmp_path):
     ],
 )
 def test_an_installed_package_never_names_a_skills_folder_beside_it(tmp_path, parts):
-    from gaia_agent.agent import _checkout_skills_dir
+    from gaiapy.agent import _checkout_skills_dir
 
     agent_file = _agent_file(tmp_path, *parts)
     # Plant the folder the old parents[4] arithmetic would have trusted.
@@ -216,7 +216,7 @@ def test_an_installed_package_never_names_a_skills_folder_beside_it(tmp_path, pa
 def test_bundled_roots_skip_the_checkout_root_when_not_in_a_checkout(
     monkeypatch, tmp_path
 ):
-    import gaia_agent.agent as agent_module
+    import gaiapy.agent as agent_module
 
     packaged = tmp_path / "pkg" / "skills"
     packaged.mkdir(parents=True)

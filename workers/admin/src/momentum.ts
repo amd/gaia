@@ -17,6 +17,8 @@ export interface ItemRow {
   merged_at: string | null;
   assoc: string;
   author?: string | null;
+  /** 1 while a pull request is a draft, as of its last collection. */
+  draft?: number | null;
 }
 export interface CommitRow {
   day: string;

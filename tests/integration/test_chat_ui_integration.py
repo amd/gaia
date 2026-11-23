@@ -769,29 +769,24 @@ class TestSystemStatus:
         assert data["lemonade_running"] is False
 
 
-# ── Health Endpoint Integration ─────────────────────────────────────────────
+# ── Database Stats Integration ──────────────────────────────────────────────
 
 
-class TestHealthIntegration:
-    """Health endpoint reflects real database state."""
+class TestStatsIntegration:
+    """Database stats reflect real mutations."""
 
-    def test_health_stats_track_all_operations(self, client, db):
-        """Health stats accurately reflect database mutations."""
-        # Initial state
-        resp = client.get("/api/health")
-        stats = resp.json()["stats"]
+    def test_stats_track_all_operations(self, db):
+        stats = db.get_stats()
         assert stats["sessions"] == 0
         assert stats["messages"] == 0
         assert stats["documents"] == 0
 
-        # Create session + messages + documents
-        sess = db.create_session(title="Health Test")
+        sess = db.create_session(title="Stats Test")
         db.add_message(sess["id"], "user", "Hello")
         db.add_message(sess["id"], "assistant", "Hi!")
         db.add_document("test.pdf", "/test.pdf", "health_hash", 1024, 5)
 
-        resp2 = client.get("/api/health")
-        stats2 = resp2.json()["stats"]
+        stats2 = db.get_stats()
         assert stats2["sessions"] == 1
         assert stats2["messages"] == 2
         assert stats2["documents"] == 1
@@ -801,8 +796,7 @@ class TestHealthIntegration:
         # Delete session - messages cascade, doc remains
         db.delete_session(sess["id"])
 
-        resp3 = client.get("/api/health")
-        stats3 = resp3.json()["stats"]
+        stats3 = db.get_stats()
         assert stats3["sessions"] == 0
         assert stats3["messages"] == 0
         assert stats3["documents"] == 1  # doc not cascade-deleted

@@ -21,6 +21,7 @@ import { useScheduleStore } from '../../stores/scheduleStore';
 import { useSessionPanelStore } from '../../stores/sessionPanelStore';
 import { describeSchedule, formatNextRun } from '../../utils/scheduleText';
 import type { PlanItemStatus } from '../AgentActivity';
+import { visibleText } from '../CalendarApproval';
 import { PanelSection } from './PanelSection';
 import { useAppear } from './appear';
 import { sameFile, type ChatDocument, type CommandState, type FocusFacet, type FocusKind, type LivePlan, type RanCommand } from './sessionFocus';
@@ -243,12 +244,14 @@ export function CommandsSection({ commands, onJumpToMessage }: CommandsSectionPr
             <ul className="sp-list" aria-label={t('cmd.listLabel')}>
                 {shown.map((c) => {
                     const { label, Icon } = COMMAND_STATE[c.state];
+                    // Marked as the approval card marks it, so a hidden character shows here too.
+                    const text = visibleText(c.command, true);
                     const line = (
                         <>
                             <span className={`sp-row-icon sp-cmd-icon is-${c.state}`} title={t(label)}>
                                 <Icon size={ICON} className={c.state === 'running' ? 'spin' : undefined} aria-label={t(label)} />
                             </span>
-                            <code className="sp-row-label sp-mono" dir="ltr" title={c.command}>{c.command}</code>
+                            <code className="sp-row-label sp-mono" dir="ltr" title={text}>{text}</code>
                         </>
                     );
                     return (

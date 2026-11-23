@@ -1,6 +1,7 @@
 // Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 // SPDX-License-Identifier: MIT
 
+#include "support/unique_temp.h"
 #include <gtest/gtest.h>
 #include <gaia/agent.h>
 #include <gaia/session.h>
@@ -8,7 +9,10 @@
 
 #include <filesystem>
 #include <fstream>
+#include <set>
 #include <string>
+#include <thread>
+#include <vector>
 
 #include <nlohmann/json.hpp>
 
@@ -29,7 +33,7 @@ protected:
     std::unique_ptr<SessionStore> store;
 
     void SetUp() override {
-        storeDir = fs::temp_directory_path() / "gaia_session_test";
+        storeDir = fs::temp_directory_path() / testsupport::perProcess("gaia_session_test");
         fs::remove_all(storeDir);
         store = std::make_unique<SessionStore>(storeDir.string());
     }
@@ -427,4 +431,53 @@ TEST_F(SessionStoreTest, RejectMalformedContentParts) {
         }
         EXPECT_THROW(store->load("malformed"), std::runtime_error) << part.dump();
     }
+}
+
+TEST_F(SessionStoreTest, InvalidUtf8InAMessageIsSavedAndLoadsBack) {
+    Message user;
+    user.role = MessageRole::USER;
+    user.content = "bad byte \xFF here";
+    ASSERT_NO_THROW(store->save("bad-bytes", {user}));
+    const auto loaded = store->load("bad-bytes");
+    ASSERT_EQ(loaded.size(), 1u);
+    EXPECT_EQ(loaded[0].content, "bad byte \xEF\xBF\xBD here");
+}
+
+TEST_F(SessionStoreTest, ListShowsAnUnreadableSessionInsteadOfHidingIt) {
+    store->save("good", makeSampleHistory());
+    {
+        std::ofstream file(storeDir / "broken.json");
+        file << "{\"messages\": [";
+    }
+    const auto sessions = store->list();
+    ASSERT_EQ(sessions.size(), 2u);
+    EXPECT_EQ(sessions[0].id, "good");
+    EXPECT_TRUE(sessions[0].problem.empty());
+    EXPECT_EQ(sessions[1].id, "broken");
+    EXPECT_FALSE(sessions[1].problem.empty());
+    EXPECT_NE(sessions[1].preview.find("broken.json"), std::string::npos) << sessions[1].preview;
+}
+
+TEST_F(SessionStoreTest, GenerateIdIsUniqueAcrossThreads) {
+    std::vector<std::vector<std::string>> perThread(4);
+    std::vector<std::thread> threads;
+    for (auto& ids : perThread) {
+        threads.emplace_back([&ids] {
+            for (int i = 0; i < 200; ++i) ids.push_back(SessionStore::generateId());
+        });
+    }
+    for (auto& t : threads) t.join();
+    std::set<std::string> unique;
+    for (const auto& ids : perThread) unique.insert(ids.begin(), ids.end());
+    EXPECT_EQ(unique.size(), 800u);
+}
+
+TEST_F(SessionStoreTest, SaveLeavesOnlyTheSessionFileBehind) {
+    store->save("atomic", makeSampleHistory());
+    store->save("atomic", makeSampleHistory());
+    std::vector<std::string> names;
+    for (const auto& entry : fs::directory_iterator(storeDir)) names.push_back(entry.path().filename().string());
+    ASSERT_EQ(names.size(), 1u);
+    EXPECT_EQ(names[0], "atomic.json");
+    EXPECT_EQ(store->load("atomic").size(), makeSampleHistory().size());
 }

@@ -41,8 +41,8 @@ class TestAgentShim:
     def test_shim_runs_the_source_agent(self, name):
         """It must invoke the agent's stdio entry point, not any built binary."""
         body = (DEV_BIN / name).read_text(encoding="utf-8")
-        assert "gaia_agent.server" in body, (
-            f"{name} must exec `python -m gaia_agent.server` so the TUI gets "
+        assert "gaiapy.server" in body, (
+            f"{name} must exec `python -m gaiapy.server` so the TUI gets "
             "this checkout's source."
         )
 

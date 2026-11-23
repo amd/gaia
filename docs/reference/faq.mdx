@@ -8,7 +8,7 @@ icon: "circle-question"
 
 <AccordionGroup>
   <Accordion title="Where are my chats stored?" icon="database">
-    Your chat database is at `~/.gaia/chat/gaia_chat.db` (a SQLite file). It is never sent off your machine. Documents you upload through the Document Library are at `~/.gaia/documents/`; files you attach directly in a chat are at `~/.gaia/chat/uploads/`. If you set `GAIA_HOME`, those two folders live under it instead.
+    Your chat database is at `~/.gaia/chat/gaia_chat.db` (a SQLite file). It is never sent off your machine. Documents you upload through the Document Library are at `~/.gaia/chat/documents/`; files you attach directly in a chat are at `~/.gaia/chat/uploads/`. GAIA's file tools let a chat read only the documents and files attached to it, never another chat's. If you set `GAIA_HOME`, those two folders live under it instead.
 
     See the [installation guide](/guides/install#where-things-live) for the full list of where GAIA stores data on your machine.
   </Accordion>
@@ -94,7 +94,7 @@ icon: "circle-question"
     | **Processor** | AMD Ryzen AI 300-series (for optimal performance) |
     | **RAM** | 16GB minimum, 64GB recommended |
     | **Storage** | 20GB free space |
-    | **OS** | Windows 11 Pro 24H2 or Ubuntu 24.04+ |
+    | **OS** | Windows 10/11, macOS 14+ (Apple Silicon), or Linux with glibc 2.38+ (e.g. Ubuntu 24.04+) |
 
     On a 16GB PC, close other large apps before starting GAIA: the default model
     needs about 8GB free to load, and about 11GB for its full context window.
@@ -107,8 +107,9 @@ icon: "circle-question"
   </Accordion>
 
   <Accordion title="What platforms does GAIA support?" icon="desktop">
-    - **Windows 11:** ✅ Fully supported with complete UI and CLI functionality
-    - **Linux (Ubuntu/Debian):** ✅ Fully supported with complete UI and CLI functionality
+    - **Windows 10/11:** ✅ Fully supported with complete UI and CLI functionality
+    - **Linux (glibc 2.38+, e.g. Ubuntu 24.04+):** ✅ Fully supported with complete UI and CLI functionality
+    - **macOS 14+ (Apple Silicon):** ✅ The desktop app and the terminal. See [Install GAIA](/guides/install)
   </Accordion>
 
   <Accordion title="How do I install additional models?" icon="download">
@@ -159,7 +160,7 @@ Discover the capabilities of Ryzen AI with GAIA - an innovative generative AI ap
   <Accordion title="What LLMs are supported?" icon="list">
     GAIA runs models locally through [Lemonade Server](https://lemonade-server.ai), so any model in the Lemonade catalog works — GGUF models via llama.cpp on GPU/CPU, and FLM models on the Ryzen AI NPU. The models GAIA agents use by default:
 
-    - **Gemma-4-E4B-it-GGUF** — default chat/coding/vision model (multimodal)
+    - **The default chat model follows the PC's memory:** `Qwen3.5-2B-GGUF` on PCs with 16 GB of RAM or less, `Qwen3.5-4B-GGUF` on an 8 GB GPU, `Gemma-4-E4B-it-GGUF` on 24 GB+ PCs and 10 GB+ GPUs, and `Qwen3.6-35B-A3B-GGUF` on a 64 GB+ Strix Halo or a 32 GB GPU. All four read images. See [Choosing models](/reference/cli#choosing-models)
     - **Qwen3-VL-4B-Instruct-GGUF** — alternate vision model for RAG/document extraction when configured explicitly
     - **embeddinggemma-300m-GGUF** — embeddings for RAG/document Q&A
     - **NPU (FLM):** `gemma4-it-e4b-FLM`, with documents and memory embedded on the GPU (via `gaia init --profile npu`)
@@ -239,7 +240,7 @@ The GAIA demo consists of two main components working together to provide powerf
 Powered by the Ryzen AI platform through Lemonade Server:
 
 - **NPU/iGPU Acceleration:** Leverages Ryzen AI hardware
-- **Multiple Models:** Supports various LLMs including Qwen3.6-35B-A3B-GGUF and Gemma-4-E4B-it-GGUF
+- **Multiple Models:** Supports various LLMs including Qwen3.6-35B-A3B-GGUF, Gemma-4-E4B-it-GGUF, and Qwen3.5-4B-GGUF and Qwen3.5-2B-GGUF for PCs with 16 GB of RAM or less
 - **Agent System:** Specialized tasks and workflows
 - **WebSocket Streaming:** Real-time response delivery
 - **Dual Interfaces:** Both CLI and GUI available

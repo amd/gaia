@@ -12,11 +12,13 @@ forgotten trip included, from past conversations. Runs against a real
 
 from __future__ import annotations
 
+import sqlite3
 from datetime import datetime, timedelta
 from unittest.mock import MagicMock
 
 import pytest
 
+from gaia.agents.base import memory_store
 from gaia.agents.base.agent import TOOLS_REQUIRING_CONFIRMATION
 from gaia.agents.base.memory import EMBEDDING_DIM
 from gaia.agents.base.memory_store import MemoryStore
@@ -143,6 +145,12 @@ def _on_disk(tmp_path) -> bytes:
     return b"".join(p.read_bytes().lower() for p in tmp_path.glob("memory.db*"))
 
 
+# Letters no timestamp, UUID or row id can spell. A digits-only PIN matched the
+# kept schema timestamp's microseconds ("...13.774821") and failed on CI.
+_PIN = "ZQVPIN"
+_GONE = (b"lisbon", b"qqzhotel", _PIN.lower().encode())
+
+
 def test_forget_everything_leaves_nothing_readable_on_disk(store, tmp_path):
     _Host(store, [])
     other = MemoryStore(db_path=tmp_path / "memory.db")  # the UI's own connection
@@ -151,17 +159,97 @@ def test_forget_everything_leaves_nothing_readable_on_disk(store, tmp_path):
             category="fact", content=f"Trip to Lisbon number {i} at QQZHOTEL{i}"
         )
         store.store_turn("s-old", "user", f"My trip to Lisbon {i} is in December " * 5)
-    store.store(category="fact", content="User's bank PIN is 4821", sensitive=True)
+    store.store(category="fact", content=f"User's bank PIN is {_PIN}", sensitive=True)
     other.get_all_knowledge(limit=5)
-    assert b"lisbon" in _on_disk(tmp_path)
+    raw = _on_disk(tmp_path)
+    assert all(gone in raw for gone in _GONE)
 
     _tool("forget_everything")()
 
     raw = _on_disk(tmp_path)
-    for gone in (b"lisbon", b"qqzhotel", b"4821"):
+    for gone in _GONE:
         assert gone not in raw, f"{gone!r} still readable in the database files"
     assert other.get_all_knowledge(limit=5)["total"] == 0
     other.close()
+
+
+# What forget-everything keeps: schema bookkeeping, the erase counter, and the
+# empty FTS index skeletons. Anything else surviving is retained user data.
+_KEPT_TABLES = {
+    "schema_version",
+    "sqlite_sequence",
+    "meta",
+    "knowledge_fts_data",
+    "knowledge_fts_config",
+    "conversations_fts_data",
+    "conversations_fts_config",
+}
+
+
+def test_forget_everything_keeps_only_bookkeeping(tmp_path, monkeypatch):
+    # A kept timestamp whose digits once matched a digits-only PIN needle.
+    monkeypatch.setattr(
+        memory_store, "_now_iso", lambda: "2026-11-20T10:56:13.774821+00:00"
+    )
+    store = MemoryStore(db_path=tmp_path / "memory.db")
+    monkeypatch.undo()
+    _Host(store, [])
+    for i in range(10):
+        store.store(category="fact", content=f"Trip to Lisbon number {i}")
+        store.store_turn("s-old", "user", f"My trip to Lisbon {i} is in December")
+    store.store(category="fact", content=f"User's bank PIN is {_PIN}", sensitive=True)
+
+    _tool("forget_everything")()
+    store.close()
+
+    raw = _on_disk(tmp_path)
+    assert b"774821" in raw, "the scan must see the kept schema timestamp"
+    for gone in _GONE:
+        assert gone not in raw, f"{gone!r} still readable in the database files"
+    conn = sqlite3.connect(tmp_path / "memory.db")
+    try:
+        tables = [
+            name
+            for (name,) in conn.execute(
+                "SELECT name FROM sqlite_master WHERE type = 'table'"
+            )
+        ]
+        left = {
+            t
+            for t in tables
+            if conn.execute(f'SELECT COUNT(*) FROM "{t}"').fetchone()[0]
+        }
+        meta = conn.execute("SELECT key FROM meta").fetchall()
+    finally:
+        conn.close()
+    assert left <= _KEPT_TABLES, f"rows survive in {sorted(left - _KEPT_TABLES)}"
+    assert meta == [("erase_count",)]
+
+
+def test_forget_everything_scrubs_what_another_open_connection_wrote(store, tmp_path):
+    _Host(store, [])
+    other = MemoryStore(db_path=tmp_path / "memory.db")  # the UI's own connection
+    idle = sqlite3.connect(tmp_path / "memory.db")  # a handle that only read once
+    try:
+        for i in range(20):
+            other.store(category="fact", content=f"Trip to Lisbon number {i}")
+            other.store_turn("s-ui", "user", f"Lisbon hotel QQZHOTEL{i} booked")
+        other.store(
+            category="fact", content=f"User's bank PIN is {_PIN}", sensitive=True
+        )
+        assert idle.execute("SELECT COUNT(*) FROM knowledge").fetchone()[0] == 21
+        assert all(gone in _on_disk(tmp_path) for gone in _GONE)
+
+        assert _tool("forget_everything")()["status"] == "cleared"
+
+        raw = _on_disk(tmp_path)
+        for gone in _GONE:
+            assert gone not in raw, f"{gone!r} still readable in the database files"
+        assert other.get_all_knowledge(limit=5)["total"] == 0
+        assert idle.execute("SELECT COUNT(*) FROM knowledge").fetchone()[0] == 0
+    finally:
+        idle.close()
+        other.close()
 
 
 def test_forget_everything_says_so_when_another_reader_blocks_the_scrub(
@@ -216,7 +304,7 @@ def test_erasing_again_after_a_blocked_scrub_clears_the_file(store, tmp_path):
     for i in range(20):
         store.store(category="fact", content=f"Trip to Lisbon number {i}")
         store.store_turn("s-old", "user", f"My trip to Lisbon {i} is in December")
-    store.store(category="fact", content="User's bank PIN is 4821", sensitive=True)
+    store.store(category="fact", content=f"User's bank PIN is {_PIN}", sensitive=True)
     reader = MemoryStore(db_path=tmp_path / "memory.db")
     reader._conn.execute("PRAGMA busy_timeout=0")
     store._conn.execute("PRAGMA busy_timeout=0")
@@ -230,7 +318,7 @@ def test_erasing_again_after_a_blocked_scrub_clears_the_file(store, tmp_path):
 
     assert retry["status"] == "cleared"
     raw = _on_disk(tmp_path)
-    for gone in (b"lisbon", b"4821"):
+    for gone in _GONE:
         assert gone not in raw, f"{gone!r} still readable after erasing again"
 
 

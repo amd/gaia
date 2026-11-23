@@ -205,7 +205,7 @@ class FileChangeHandler(FileSystemEventHandler):
 
 ### Unit Tests
 
-**File:** `tests/sdk/test_file_change_handler.py`
+**File:** `tests/unit/test_file_watcher.py`
 
 ```python
 import pytest
@@ -451,7 +451,7 @@ class AutoIndexAgent(Agent):
 
 ### Extraction from ChatAgent (Completed)
 
-`FileChangeHandler` was originally embedded in `hub/agents/gaia/python/gaia_agent/chat_agent.py` as a tightly-coupled inner class. It has been extracted to `src/gaia/utils/file_watcher.py` as a generic, callback-based implementation. ChatAgent now imports it from there:
+`FileChangeHandler` was originally embedded in `hub/agents/gaia/python/gaiapy/chat_agent.py` as a tightly-coupled inner class. It has been extracted to `src/gaia/utils/file_watcher.py` as a generic, callback-based implementation. ChatAgent now imports it from there:
 
 ```python
 from gaia.utils.file_watcher import FileChangeHandler
@@ -592,7 +592,7 @@ Add new section after Tool Mixins:
 - [ ] Logging
 
 ### Step 4: Write Tests
-- [ ] Create `tests/sdk/test_file_change_handler.py`
+- [ ] Create `tests/unit/test_file_watcher.py`
 - [ ] Test imports
 - [ ] Test callbacks
 - [ ] Test filtering

@@ -240,6 +240,7 @@ def cmd_start(a) -> None:
         "GAIA_HOME_OVERRIDE",
         "GAIA_MEMORY_DB",
         "GAIA_DAEMON_HOME",
+        "GAIA_UI_TOKEN_FILE",
     ):
         env.pop(var, None)
     if a.lemonade:
@@ -323,11 +324,10 @@ def cmd_port(a) -> None:
 
 
 def backend_up(port: int) -> bool:
-    req = urllib.request.Request(
-        f"http://127.0.0.1:{port}/api/health", headers={"X-Gaia-UI": "1"}
-    )
     try:
-        with urllib.request.urlopen(req, timeout=2) as r:
+        with urllib.request.urlopen(
+            f"http://127.0.0.1:{port}/api/health", timeout=2
+        ) as r:
             return r.status == 200
     except OSError:
         return False

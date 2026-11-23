@@ -139,6 +139,11 @@
     color: var(--accent-green);
 }
 
+.model-badge.is-tight {
+    background: var(--accent-yellow-dim);
+    color: var(--accent-yellow);
+}
+
 .model-badge.is-loaded {
     background: var(--accent-green-dim);
     color: var(--accent-green);

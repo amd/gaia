@@ -86,7 +86,8 @@ class ConnectorHandler(Protocol):
         """Remove stored credentials for this connector.
 
         OAuth handlers return a revoke-outcome dict (``revoke_supported``,
-        ``revoked_remotely``, ``revoke_error`` — see
+        ``revoked_remotely``, ``revoke_attempted``, ``nothing_stored``,
+        ``revoke_error`` (see
         ``oauth_pkce.OAuthPkceHandler.disconnect``) so callers can report the
         provider-side outcome honestly; handlers with no remote-revoke
         concept (e.g. ``mcp_server``) may return ``None``.
@@ -274,9 +275,9 @@ async def disconnect(
     """
     spec = REGISTRY.get(connector_id)
     if spec.type == "oauth_pkce" and account_id is None and not all_accounts:
-        from gaia.connectors.accounts import list_accounts
+        from gaia.connectors.accounts import accounts_for_delete
 
-        stored = list_accounts(spec.oauth_provider_ref or spec.id)
+        stored = accounts_for_delete(spec.oauth_provider_ref or spec.id)
         if len(stored) > 1:
             raise AccountChoiceRequiredError(
                 connector_id,

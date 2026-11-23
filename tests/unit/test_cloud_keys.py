@@ -28,6 +28,7 @@ def vault(monkeypatch):
     monkeypatch.setattr(
         "gaia.connectors.store.delete_secret", lambda n: store.pop(n, None)
     )
+    monkeypatch.setattr("gaia.connectors.store.secret_in_use", store.__contains__)
     return store
 
 

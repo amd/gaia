@@ -141,6 +141,66 @@ export function visibleWith(kept: ReadonlySet<string>, value: string, multiline:
     return multiline ? shown : shown.replace(/\n/g, '[U+000A]');
 }
 
+/** Prose, marked the way the approval card marks it. */
+export function visibleText(value: string, multiline: boolean): string {
+    return visibleWith(KEPT_AS_WRITTEN, value, multiline);
+}
+
+const KEPT_IN_NAMES: ReadonlySet<string> = new Set();
+const KEPT_IN_COMMANDS: ReadonlySet<string> = new Set(['\u0009', '\u000A']);
+const codeOf = (char: string) => `[U+${char.codePointAt(0)!.toString(16).toUpperCase().padStart(4, '0')}]`;
+const strictly = (char: string, kept: ReadonlySet<string>) => variationSelector(char) || hidden(char, kept);
+
+/**
+ * A path, URL, id, program or "always allow" label on an approval card, as
+ * `visible_strict` (`person_approval.py`) writes it: joiners, direction marks,
+ * tab, CR, LF and every variation selector are codes too, since in a name they
+ * can only make it read as another.
+ */
+export function visibleStrict(value: string): string {
+    return [...value].map((char) => (strictly(char, KEPT_IN_NAMES) ? codeOf(char) : char)).join('');
+}
+
+/** A command on an approval card: the name rule for its words, its tabs and line breaks kept. */
+export function visibleCommand(value: string): string {
+    return [...value.replace(/\r\n/g, '\n')].map((char) => (strictly(char, KEPT_IN_COMMANDS) ? codeOf(char) : char)).join('');
+}
+
+/** Whether `visibleStrict` would show a code. */
+export function unseenStrict(value: unknown): boolean {
+    return typeof value === 'string' && [...value].some((char) => strictly(char, KEPT_IN_NAMES));
+}
+
+/** Whether `visibleCommand` would show a code. */
+export function unseenCommand(value: unknown): boolean {
+    return typeof value === 'string' && [...value.replace(/\r\n/g, '\n')].some((char) => strictly(char, KEPT_IN_COMMANDS));
+}
+
+/** A file name or path from a tool, marked the way the approval card marks it. */
+export function visibleName(value: string): string {
+    return visibleText(value, false);
+}
+
+const OVERRIDES = /[\u202A-\u202E]/;
+const ISOLATE_OPEN = /[\u2066-\u2068]/;
+const ISOLATE_CLOSE = '\u2069';
+
+/** Marks overrides and unpaired isolates, which nobody types on purpose; paired isolates, marks and joiners stay. */
+export function markStrayDirection(text: string): string {
+    return text.split('\n').map((line) => {
+        const chars = [...line];
+        const stray = new Set<number>();
+        const open: number[] = [];
+        chars.forEach((char, at) => {
+            if (OVERRIDES.test(char)) stray.add(at);
+            else if (ISOLATE_OPEN.test(char)) open.push(at);
+            else if (char === ISOLATE_CLOSE && open.pop() === undefined) stray.add(at);
+        });
+        open.forEach((at) => stray.add(at));
+        return chars.map((char, at) => (stray.has(at) ? visibleText(char, false) : char)).join('');
+    }).join('\n');
+}
+
 /** `HIDDEN_NOTE` plus what `calendar_tools.py` adds to it; a Python test keeps them equal. */
 const UNSEEN_NOTE = "This text holds characters that don't show. Those that hide or reorder text " +
     'appear as [U+XXXX]; ideograph variant marks are kept as written. They are saved as written.';
@@ -154,6 +214,11 @@ export function unseenWith(kept: ReadonlySet<string>, value: unknown): boolean {
         if (point >= 0xE0100 && point <= 0xE01EF) return true;
         return variationSelector(char) ? !selectorFits(chars, at) : hidden(char, kept);
     });
+}
+
+/** Whether prose would show a code on the approval card. */
+export function unseen(value: unknown): boolean {
+    return unseenWith(KEPT_AS_WRITTEN, value);
 }
 
 const FENCE_OPEN = '<<<UNTRUSTED_TEXT>>>';

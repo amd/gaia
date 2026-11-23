@@ -51,3 +51,27 @@ describe('ModelRow recommendation', () => {
         expect(seen(document.querySelectorAll('.model-row-meta')[0])).toContain('القياس: run on 3 suites');
     });
 });
+
+describe('ModelRow memory badge', () => {
+    afterEach(() => useChatStore.setState({ locale: 'en' }));
+    const LOCAL: ProviderModel = { id: 'Gemma-4-E4B-it-GGUF', context_length: null, downloaded: false, labels: [], rank: null, note: null, evidence: null, fits: true, available: true };
+
+    it('says a model fits when it leaves other apps their room', () => {
+        renderRow(LOCAL);
+        expect(screen.getByText('Fits this PC')).toBeInTheDocument();
+        expect(screen.queryByText('Tight on memory')).not.toBeInTheDocument();
+    });
+
+    it('says a tight model is tight, not that it fits, and why on hover', () => {
+        renderRow({ ...LOCAL, tight: true });
+        const badge = screen.getByText('Tight on memory');
+        expect(badge).toHaveAttribute('title', 'Leaves your other apps little memory, so your PC may slow down while it runs.');
+        expect(screen.queryByText('Fits this PC')).not.toBeInTheDocument();
+    });
+
+    it('translates the tight badge in Arabic', () => {
+        useChatStore.setState({ locale: 'ar' });
+        renderRow({ ...LOCAL, tight: true });
+        expect(document.querySelector('.model-badge.is-tight')!.textContent).toContain('ذاكرة محدودة');
+    });
+});
