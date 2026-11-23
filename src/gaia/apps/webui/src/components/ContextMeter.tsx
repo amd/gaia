@@ -8,6 +8,7 @@ import { ContextPanel } from './ContextPanel';
 import { pluralKey } from '../i18n/registry';
 import { useT } from '../i18n/useT';
 import { formatWindow } from './modelMeta';
+import { localizeContextReason } from '../utils/liveStatus';
 import type { ContextUsage } from '../types';
 import './ContextMeter.css';
 
@@ -48,8 +49,9 @@ export function ContextMeter({ usage, unavailable, sessionId, busy = false, onUs
     if (!usage) {
         if (!unavailable) return null;
         // A dash, not an empty bar: nothing is measured yet, and the title says when it will be.
+        const why = localizeContextReason(t, unavailable);
         return (
-            <span className="context-meter is-empty" title={unavailable} aria-label={`${t('ctx.context')}: ${unavailable}`}>
+            <span className="context-meter is-empty" title={why} aria-label={`${t('ctx.context')}: ${why}`}>
                 <span className="context-meter-label">{t('ctx.context')}</span>
                 <span aria-hidden="true">–</span>
             </span>

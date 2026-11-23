@@ -118,3 +118,12 @@
 .undo-history-input {
     max-width: 120px;
 }
+
+/* Where Undo would be, on an agent that keeps no record to undo from. */
+.turn-changes.is-unavailable {
+    display: flex;
+    gap: 6px;
+    align-items: flex-start;
+    color: var(--text-muted);
+}
+.turn-changes.is-unavailable svg { flex-shrink: 0; margin-top: 2px; }

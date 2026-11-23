@@ -6,10 +6,32 @@
 import { describe, expect, it } from 'vitest';
 import { stripIsolates } from '../../i18n/registry';
 import { tEn, translator } from '../../i18n/useT';
-import { localizeLiveStatus } from '../liveStatus';
+import { localizeContextReason, localizeLiveStatus } from '../liveStatus';
 import { SEND_WAITING_NOTICE_TEXT } from '../../services/api';
 
 const ar = (label: string) => stripIsolates(localizeLiveStatus(translator('ar'), label));
+
+describe('localizeContextReason', () => {
+    const NATIVE = "Not available yet: gaiacpp doesn't report what fills its context.";
+
+    it('keeps gaiacpp\u2019s reason as sent in English and translates it in Arabic', () => {
+        expect(localizeContextReason(tEn, NATIVE)).toBe(NATIVE);
+        expect(stripIsolates(localizeContextReason(translator('ar'), NATIVE))).toContain('غير متاح بعد: gaiacpp لا يذكر ما يملأ سياقه.');
+    });
+
+    it('shows a reason it does not know as the backend sent it', () => {
+        const other = 'Measured once GAIA has answered in this chat.';
+        expect(localizeContextReason(translator('ar'), other)).toBe(other);
+    });
+});
+
+describe('gaiacpp\u2019s undo line', () => {
+    it('reads in the chosen language and names the agent that can undo', () => {
+        const sent = "Undo may not work for this turn: gaiacpp doesn't record file changes yet.";
+        expect(localizeLiveStatus(tEn, sent)).toBe("Undo isn't available on gaiacpp: it doesn't record file changes yet. The Python agent does.");
+        expect(stripIsolates(localizeLiveStatus(translator('ar'), sent))).toContain('التراجع غير متاح مع gaiacpp');
+    });
+});
 
 describe('localizeLiveStatus', () => {
     it('leaves every known line unchanged in English', () => {

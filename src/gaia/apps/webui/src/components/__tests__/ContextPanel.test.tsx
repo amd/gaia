@@ -404,6 +404,15 @@ describe('ContextMeter entry point', () => {
         afterEach(() => act(() => useChatStore.getState().setLocale('en')));
         const text = (el: HTMLElement) => stripIsolates(el.textContent ?? '');
 
+        it('says in Arabic why gaiacpp has no measurement', () => {
+            const { container } = render(
+                <ContextMeter usage={null} unavailable="Not available yet: gaiacpp doesn't report what fills its context." />,
+            );
+            const meter = container.querySelector('.context-meter.is-empty')!;
+            expect(stripIsolates(meter.getAttribute('title') ?? '')).toContain('غير متاح بعد: gaiacpp لا يذكر ما يملأ سياقه.');
+            expect(stripIsolates(meter.getAttribute('aria-label') ?? '')).toContain('gaiacpp لا يذكر ما يملأ سياقه');
+        });
+
         it('translates the label shown before usage is measured', () => {
             const { container } = render(<ContextMeter usage={null} unavailable="Not measured yet" />);
             expect(text(container)).toContain('السياق');

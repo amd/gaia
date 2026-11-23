@@ -1122,6 +1122,65 @@ for (const locale of ['ar', 'en']) {
     });
 }
 
+/** A gaiacpp turn that wrote a file: no record to undo from, and no context measurement. */
+async function withNativeWrite(page: Page): Promise<void> {
+    await page.route((url) => url.pathname === `/api/sessions/${ANSWER_SESSION}/messages`, (route) =>
+        route.fulfill({
+            json: {
+                messages: [
+                    { id: 1, session_id: ANSWER_SESSION, role: 'user', content: 'اكتب ملاحظاتي في notes.txt', created_at: NOW.toISOString(), rag_sources: null },
+                    {
+                        id: 2, session_id: ANSWER_SESSION, role: 'assistant', content: 'كتبت ملاحظاتك في الملف.', created_at: NOW.toISOString(), rag_sources: null,
+                        agent_steps: [
+                            { id: 1, type: 'tool', label: 'Write file', tool: 'write_file', narration: 'Writing file: notes.txt', active: false, success: true, timestamp: 1 },
+                        ],
+                    },
+                ],
+                total: 2,
+            },
+        }),
+    );
+    await page.route((url) => url.pathname === `/api/sessions/${ANSWER_SESSION}/capabilities`, (route) =>
+        route.fulfill({ json: { session_id: ANSWER_SESSION, agent_type: 'gaia', skills: null, program: 'gaiacpp', tools: [{ name: 'write_file', description: 'Write a file.', category: 'file_io' }] } }));
+    await page.route(`**/api/chat/context/${ANSWER_SESSION}`, (route) => route.fulfill({
+        json: { available: false, reason: "Not available yet: gaiacpp doesn't report what fills its context." },
+    }));
+}
+
+for (const locale of ['ar', 'en']) {
+    test(`a gaiacpp turn that wrote a file says undo is not available, and why the meter is empty (${locale})`, async ({ page }) => {
+        await open(page, `#${ANSWER_SESSION}`, locale, withNativeWrite);
+        const note = page.locator('.msg-assistant .turn-changes.is-unavailable');
+        await expect(note).toBeVisible();
+        await expect(note).toContainText('gaiacpp');
+        await expect(page.locator('.msg-assistant .turn-changes-btn')).toHaveCount(0);
+        const meter = page.locator('.context-meter.is-empty');
+        await expect(meter).toBeVisible();
+        const why = await meter.getAttribute('title');
+        expect(why).toContain('gaiacpp');
+        if (locale === 'ar') {
+            expect(why).toMatch(/[\u0600-\u06ff]/);
+            expect(await untranslated(page, '.turn-changes')).toEqual([]);
+        }
+        await shot(page, `native-no-undo-${locale}`);
+        expect(await audit(page)).toEqual([]);
+    });
+
+    test(`the same turn on the Python agent has no such line (${locale})`, async ({ page }) => {
+        // The line waits on this answer, so its absence is only checked once it has arrived.
+        const asked = page.waitForResponse((res) => new URL(res.url()).pathname === `/api/sessions/${ANSWER_SESSION}/capabilities`);
+        await open(page, `#${ANSWER_SESSION}`, locale, async (p) => {
+            await withNativeWrite(p);
+            await p.route((url) => url.pathname === `/api/sessions/${ANSWER_SESSION}/capabilities`, (route) =>
+                route.fulfill({ json: { session_id: ANSWER_SESSION, agent_type: 'gaia', skills: [], program: 'gaiapy', tools: [] } }));
+        });
+        await expect(page.locator('.msg-assistant')).toBeVisible();
+        await asked;
+        await nextFrames(page);
+        await expect(page.locator('.turn-changes.is-unavailable')).toHaveCount(0);
+    });
+}
+
 /** The server's crash notice is English; it ends a partial answer and repeats as the last error step. */
 const CRASH_NOTICE = 'GAIA stopped unexpectedly while answering. Anything it had already written is kept above. Send your message again.';
 
@@ -6877,6 +6936,65 @@ for (const locale of ['ar', 'en']) {
             }
             await learned.scrollIntoViewIfNeeded();
             await checkMemory(page, locale, 'advanced-errors');
+        });
+
+        test('gaiacpp: whose memory this is, and only what its store keeps', async ({ page }) => {
+            const refused: string[] = [];
+            page.on('response', (res) => { if (res.status() === 409) refused.push(new URL(res.url()).pathname); });
+            await openMemory(page, locale, { agent: 'gaiacpp' });
+            const banner = page.locator('.mem-store-banner');
+            await expect(banner).toContainText('gaiacpp');
+            await expect(page.getByText('Sister Odalys lives in Trondheim')).toBeVisible();
+            // The line sits under the tabs and above the page, never over either.
+            const [tabs, line, body] = await Promise.all(['.mem-tab-bar', '.mem-store-banner', '.memory-dashboard-body'].map((s) => page.locator(s).boundingBox()));
+            expect(line!.y).toBeGreaterThanOrEqual(tabs!.y + tabs!.height - 1);
+            expect(body!.y).toBeGreaterThanOrEqual(line!.y + line!.height - 1);
+            await expect(page.locator('.mem-about-limits')).toBeVisible();
+            await expect(page.locator('.mem-about-add option')).toHaveCount(3);
+            await expect(page.locator('.mem-about-due')).toHaveCount(0);
+            await checkMemory(page, locale, 'native-about');
+
+            for (const [tab, name] of [[/Goals/, 'goals'], [/Profile setup/, 'profile'], [/Advanced/, 'advanced']] as const) {
+                await memoryTab(page, tab);
+                await expect(page.locator('.mem-store-only')).toBeVisible();
+                await expect(banner).toBeVisible();
+                // The tab's underline fades in; a shot taken mid-fade shows the previous tab lit.
+                await page.waitForFunction(() => [...document.querySelectorAll('.mem-tab-btn')].every((tab) => tab.getAnimations().length === 0));
+                await checkMemory(page, locale, `native-${name}`);
+            }
+            await expect(page.locator('.mem-toggle')).toHaveCount(1);
+            await expect(page.locator('.mem-maintenance-wrap, .mem-knowledge-table, .mem-btn-danger')).toHaveCount(0);
+            expect(refused).toEqual([]);
+        });
+
+        test('the Python agent, once gaiacpp has a memory too', async ({ page }) => {
+            await openMemory(page, locale, { otherAvailable: true });
+            await expect(page.locator('.mem-store-banner')).toContainText('gaiacpp');
+            await expect(page.getByText('Lives in Calgary and works at a hospital')).toBeVisible();
+            await checkMemory(page, locale, 'python-banner');
+        });
+
+        test('no line about agents while there is one memory', async ({ page }) => {
+            await openMemory(page, locale);
+            await expect(page.getByText('Lives in Calgary and works at a hospital')).toBeVisible();
+            await expect(page.locator('.mem-store-banner')).toHaveCount(0);
+        });
+
+        test('the page cannot tell whose memory this is', async ({ page }) => {
+            await openMemory(page, locale, { storeFailed: true });
+            await expect(page.getByRole('alert')).toContainText('gaiacpp is not running');
+            await expect(page.locator('.mem-about, .mem-store-banner')).toHaveCount(0);
+            await checkMemory(page, locale, 'store-failed');
+        });
+
+        test('gaiacpp at phone width', async ({ page }) => {
+            await page.setViewportSize({ width: 390, height: 844 });
+            await openMemory(page, locale, { agent: 'gaiacpp' });
+            // The closed drawer waits off screen by design; this test is about the dashboard.
+            await page.addStyleTag({ content: '.sb:not(.is-open) { display: none; }' });
+            await expect(page.locator('.mem-store-banner')).toBeVisible();
+            await expect(page.getByText('Sister Odalys lives in Trondheim')).toBeVisible();
+            await checkMemory(page, locale, 'native-about-phone');
         });
 
         test('advanced, a row open and the add form', async ({ page }) => {

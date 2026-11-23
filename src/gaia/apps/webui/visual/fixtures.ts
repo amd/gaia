@@ -732,12 +732,31 @@ export interface MemoryState {
     failed?: boolean;
     /** More memories than the first page holds. */
     more?: boolean;
+    /** Whose memory the page shows; gaiacpp's store keeps the text and little else. */
+    agent?: 'gaiapy' | 'gaiacpp';
+    /** The other agent has a memory of its own, so the page says which one this is. */
+    otherAvailable?: boolean;
+    /** The backend cannot say whose memory this is. */
+    storeFailed?: boolean;
 }
 
+/** What gaiacpp's store serves: the text of each memory, null where it keeps nothing. */
+const NATIVE_MEMORY_ITEMS = [
+    { ...memoryItem('n1', 'fact', 'Sister Odalys lives in Trondheim'), source: null, confidence: null, use_count: null },
+    { ...memoryItem('n2', 'preference', 'Prefers short answers with the numbers first'), source: null, confidence: null, use_count: null },
+    { ...memoryItem('n3', 'note', 'يفضّل الاجتماعات الصباحية'), source: null, confidence: null, use_count: null },
+];
+
 /** The Memory dashboard's endpoints: a few memories, goals and tools, or empty, off or failing. */
-export async function withMemory(page: Page, { enabled = true, empty = false, failed = false, more = false }: MemoryState = {}): Promise<void> {
-    const items = empty ? [] : MEMORY_ITEMS;
+export async function withMemory(page: Page, { enabled = true, empty = false, failed = false, more = false, agent = 'gaiapy', otherAvailable = agent === 'gaiacpp', storeFailed = false }: MemoryState = {}): Promise<void> {
+    const native = agent === 'gaiacpp';
+    const items = empty ? [] : native ? NATIVE_MEMORY_ITEMS : MEMORY_ITEMS;
+    const can = !native;
     const answers: Record<string, unknown> = {
+        'GET /memory/store': {
+            agent, other_available: otherAvailable,
+            supports: { due_dates: can, sources: can, sensitive_toggle: can, recategorize: can, goals: can, profile: can, advanced: can },
+        },
         'GET /memory/settings': { memory_enabled: enabled, mcp_memory_enabled: false, system_discovery_consent: false },
         'GET /memory/stats': {
             knowledge: {
@@ -780,8 +799,13 @@ export async function withMemory(page: Page, { enabled = true, empty = false, fa
         if (key === 'GET /memory/stream-discovery') {
             const body = DISCOVERY_EVENTS.map((e) => `data: ${JSON.stringify(e)}\n\n`).join('');
             await route.fulfill({ status: 200, contentType: 'text/event-stream', body });
-        } else if (failed && key.startsWith('GET /memory/') && key !== 'GET /memory/settings') {
+        } else if (storeFailed && key === 'GET /memory/store') {
+            await route.fulfill({ status: 503, json: { detail: 'gaiacpp is not running, so its memory cannot be read.' } });
+        } else if (failed && key.startsWith('GET /memory/') && key !== 'GET /memory/settings' && key !== 'GET /memory/store') {
             await route.fulfill({ status: 500, json: { detail: 'Memory store is locked by another process' } });
+        } else if (native && (['GET /goals', 'GET /goals/stats'].includes(key) || (key.startsWith('GET /memory/') && !['GET /memory/store', 'GET /memory/settings', 'GET /memory/knowledge', 'GET /memory/stats'].includes(key)))) {
+            // gaiacpp's store has none of these; a page that asks anyway shows this.
+            await route.fulfill({ status: 409, json: { detail: 'Not available while gaiacpp is the agent.' } });
         } else if (key in answers) {
             await route.fulfill({ json: answers[key] });
         } else {
