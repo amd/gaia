@@ -196,6 +196,9 @@ type CanonicalNeedsConfirmationEvent struct {
 	// Empty means this call has no scope narrow enough to grant, so the client
 	// must not offer the choice — the agent decides that, not the renderer.
 	AlwaysScope string `json:"always_scope,omitempty"`
+	// AlwaysLabel is the grant in words ("Run `gh issue list`"), from an agent
+	// whose AlwaysScope is its own key (bash_execute:exact:…). Empty otherwise.
+	AlwaysLabel string `json:"always_label,omitempty"`
 	// Risk is what the agent read the call as doing: read, write, execute or
 	// destructive. Empty from an older agent; the client then labels by tool.
 	Risk       string `json:"risk,omitempty"`

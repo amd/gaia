@@ -233,7 +233,7 @@ func (m ChatModel) handleCanonicalEvent(evt interface{}) (ChatModel, tea.Cmd, bo
 		cm := components.NewConfirmationModel(e.RunID, e.Action, e.Summary, e.ConfirmURL).
 			WithRisk(e.Risk)
 		if m.canRespondToPermission() {
-			cm = cm.WithLiveChannel(e.ConfirmID, e.AlwaysScope)
+			cm = cm.WithLiveChannel(e.ConfirmID, grantShown(e.AlwaysLabel, e.AlwaysScope))
 		}
 		cm.SetModeHint(m.permissionModeHint())
 		cm.SetWidth(m.cardWidth())
@@ -555,6 +555,22 @@ func (m ChatModel) respondToolPermission(msg components.ConfirmationDecidedMsg) 
 		err := responder.RespondToolPermission(msg.ConfirmID, decision)
 		return confirmActionResultMsg{Action: msg.Action, Approved: msg.Approved, err: err}
 	}
+}
+
+// grantShown is what an "always" answer grants, for one line of the card: the
+// agent's wording when it sent one, and a multi-line command by its first line
+// and "…", as the card above it already shows every line. gaiacpp writes a
+// line break in a grant as [U+000A].
+func grantShown(label, scope string) string {
+	shown := label
+	if shown == "" {
+		shown = scope
+	}
+	shown = strings.ReplaceAll(shown, "[U+000A]", "\n")
+	if first, _, multi := strings.Cut(shown, "\n"); multi {
+		return strings.TrimRight(first, " \t\r") + " …"
+	}
+	return shown
 }
 
 // confirmationOutcomeText is the outcome recorded on a confirmed step — a word
