@@ -30,6 +30,27 @@ from gaia.utils.terminal import windows_hidden_popen_kwargs
 
 logger = logging.getLogger(__name__)
 
+_TOKEN_QUERY = re.compile(r"(?<=[?&])token=[^&#\s]*")
+
+
+class _RedactTunnelToken(logging.Filter):
+    """Masks the tunnel token a phone's first request carries in its query string."""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        if isinstance(record.args, tuple):
+            record.args = tuple(
+                _TOKEN_QUERY.sub("token=REDACTED", a) if isinstance(a, str) else a
+                for a in record.args
+            )
+        return True
+
+
+def redact_tunnel_token_in_access_log() -> None:
+    """Keep the tunnel token out of uvicorn's access log, which ``--debug`` turns on."""
+    access = logging.getLogger("uvicorn.access")
+    if not any(isinstance(f, _RedactTunnelToken) for f in access.filters):
+        access.addFilter(_RedactTunnelToken())
+
 
 # ── Error helpers ──────────────────────────────────────────────────────────
 
@@ -608,9 +629,8 @@ class TunnelManager:
             if self._url:
                 self._started_at = datetime.now(timezone.utc).isoformat()
                 self._error = None
-                logger.info(
-                    "Tunnel started: %s (token: %s...)", self._url, self._token[:8]
-                )
+                # The URL is the host only; the token and password stay out of logs.
+                logger.info("Tunnel started: %s", self._url)
             else:
                 # _poll_ngrok_api already sets self._error with a friendly
                 # message; keep a sensible fallback if it somehow didn't.
@@ -801,7 +821,7 @@ class TunnelManager:
                 resp = await client.get("https://api.ipify.org")
                 if resp.status_code == 200:
                     self._public_ip = resp.text.strip()
-                    logger.info("Public IP: %s", self._public_ip)
+                    logger.info("Public IP fetched for the tunnel password")
         except Exception as e:
             logger.debug("Could not fetch public IP: %s", e)
             self._public_ip = None

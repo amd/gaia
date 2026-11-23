@@ -9,7 +9,6 @@
   "components/FolderChip.tsx": 2,
   "components/MemoryDashboard.tsx": 1,
   "components/MessageBubble.tsx": 3,
-  "components/MobileAccessModal.tsx": 17,
   "components/ModelChip.tsx": 5,
   "components/RetryWithMenu.tsx": 1,
   "components/SetupScreen.tsx": 2,

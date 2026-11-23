@@ -65,7 +65,7 @@ describe('MobileAccessModal home-screen hint', () => {
     it('stays hidden while the tunnel is still starting, with no link to install yet', async () => {
         vi.mocked(api.getTunnelStatus).mockResolvedValue(STARTING);
         render(<MobileAccessModal isOpen onClose={vi.fn()} />);
-        expect(await screen.findByText('Starting tunnel...')).toBeInTheDocument();
+        expect(await screen.findByText('Starting tunnel…')).toBeInTheDocument();
         expect(screen.queryByText('Keep GAIA on your phone')).toBeNull();
     });
 
@@ -79,7 +79,7 @@ describe('MobileAccessModal home-screen hint', () => {
         vi.mocked(api.getTunnelStatus).mockRejectedValue(new Error('offline'));
         render(<MobileAccessModal isOpen onClose={vi.fn()} />);
         await waitFor(() => expect(api.getTunnelStatus).toHaveBeenCalled());
-        expect(screen.getByText('Starting tunnel...')).toBeInTheDocument();
+        expect(screen.getByText('Starting tunnel…')).toBeInTheDocument();
         expect(screen.queryByText('Keep GAIA on your phone')).toBeNull();
     });
 });
