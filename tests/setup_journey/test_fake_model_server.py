@@ -341,3 +341,121 @@ class TestWithoutCatalog:
         finally:
             proc.kill()
             proc.wait()
+
+
+def _chat(url: str, messages: list, key: str = "", stream: bool = False):
+    """One chat request; the reply's message, or its HTTP status when refused."""
+    headers = {"Content-Type": "application/json"}
+    if key:
+        headers["Authorization"] = f"Bearer {key}"
+    body = {"model": GEMMA, "messages": messages, "stream": stream}
+    request = urllib.request.Request(
+        f"{url}/chat/completions", data=json.dumps(body).encode(), headers=headers
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=10) as reply:
+            raw = reply.read().decode()
+    except urllib.error.HTTPError as e:
+        return e.code
+    if not stream:
+        return json.loads(raw)["choices"][0]["message"]
+    deltas = [
+        json.loads(line[6:])["choices"][0]["delta"]
+        for line in raw.splitlines()
+        if line.startswith("data: {")
+    ]
+    called = next((d for d in deltas if d.get("tool_calls")), None)
+    if called:
+        return called
+    return {"content": "".join(d.get("content") or "" for d in deltas)}
+
+
+class TestAsGaiasOwnServer:
+    """--api-key and --script: what the harness contract suite builds on."""
+
+    def test_a_request_without_the_key_is_refused_and_logged_as_such(self, tmp_path):
+        log = tmp_path / "requests.jsonl"
+        proc, url = _start(tmp_path, "--api-key", "the-key", "--log", str(log))
+        try:
+            ask = [{"role": "user", "content": "hi"}]
+            assert _chat(url, ask) == 401
+            assert _chat(url, ask, key="another-key") == 401
+            assert _chat(url, ask, key="the-key")["content"]
+        finally:
+            proc.kill()
+            proc.wait()
+        seen = [json.loads(line) for line in log.read_text().splitlines()]
+        assert [(r["status"], r["auth"]) for r in seen] == [
+            (401, "missing"),
+            (401, "wrong"),
+            (200, "ok"),
+        ]
+        assert "the-key" not in log.read_text()
+
+    @pytest.mark.parametrize("stream", [False, True])
+    def test_a_scripted_turn_calls_the_tool_then_reports_its_result(
+        self, tmp_path, stream
+    ):
+        script = tmp_path / "script.json"
+        call = {"name": "write_file", "arguments": {"file_path": "a.txt"}}
+        script.write_text(
+            json.dumps(
+                [
+                    {
+                        "when": "write-it",
+                        "tool_calls": [call],
+                        "then": "The tool said:",
+                        "echo_results": True,
+                    }
+                ]
+            )
+        )
+        proc, url = _start(tmp_path, "--script", str(script))
+        try:
+            asked = [{"role": "user", "content": "please write-it now"}]
+            first = _chat(url, asked, stream=stream)
+            function = first["tool_calls"][0]["function"]
+            assert function["name"] == "write_file"
+            assert json.loads(function["arguments"]) == {"file_path": "a.txt"}
+
+            # Agents add a user-role note after a failed tool that quotes the request.
+            after = asked + [
+                {
+                    "role": "assistant",
+                    "content": None,
+                    "tool_calls": first["tool_calls"],
+                },
+                {"role": "tool", "content": '{"status": "denied"}'},
+                {
+                    "role": "user",
+                    "content": "TOOL FAILED while doing: please write-it now",
+                },
+            ]
+            answer = _chat(url, after, stream=stream)["content"]
+            assert answer.startswith("The tool said:") and "denied" in answer
+            assert (
+                "{" not in answer
+            ), "braces in an answer read as a tool call to an agent"
+
+            unscripted = _chat(
+                url, [{"role": "user", "content": "hello"}], stream=stream
+            )
+            assert "tool_calls" not in unscripted
+        finally:
+            proc.kill()
+            proc.wait()
+
+    def test_a_scripted_delay_holds_the_reply(self, tmp_path):
+        script = tmp_path / "script.json"
+        script.write_text(json.dumps([{"when": "slow", "then": "Late.", "delay": 0.6}]))
+        proc, url = _start(tmp_path, "--script", str(script))
+        try:
+            started = time.monotonic()
+            assert (
+                _chat(url, [{"role": "user", "content": "slow one"}])["content"]
+                == "Late."
+            )
+            assert time.monotonic() - started >= 0.6
+        finally:
+            proc.kill()
+            proc.wait()
