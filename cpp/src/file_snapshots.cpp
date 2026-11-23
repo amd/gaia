@@ -175,15 +175,25 @@ void TurnRecorder::discard(const std::string& path) {
     const fs::path target = fs::weakly_canonical(fs::absolute(fs::u8path(path), ec), ec);
     json& files = manifest_["files"];
     if (files.empty() || key(fs::u8path(files.back()["path"].get<std::string>())) != key(target)) return;
-    if (files.back()["before_blob"].is_string()) {
-        fs::remove(dir_ / "blobs" / files.back()["before_blob"].get<std::string>(), ec);
-    }
+    const json entry = files.back();
     files.erase(files.size() - 1);
+    if (entry["before_blob"].is_string()) {
+        const fs::path blob = dir_ / "blobs" / entry["before_blob"].get<std::string>();
+        fs::remove(blob, ec);
+        if (ec) throw SnapshotError("Could not remove the copy at " + blob.u8string() + ": " + ec.message());
+    }
+    // Folders the tool made before it failed: undo would have removed them, so remove them now.
+    const json& made = entry["created_dirs"];
+    for (auto it = made.rbegin(); it != made.rend(); ++it) {
+        const fs::path dir = fs::u8path(it->get<std::string>());
+        if (fs::is_directory(dir, ec) && fs::is_empty(dir, ec)) fs::remove(dir, ec);
+    }
     if (hasChanges()) {
         save();
     } else {
         // Nothing left to undo: no record, as for a turn that changed nothing.
         fs::remove_all(dir_, ec);
+        if (ec) throw SnapshotError("Could not remove the empty undo record at " + dir_.u8string() + ": " + ec.message());
     }
 }
 
