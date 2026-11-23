@@ -86,7 +86,7 @@ void CleanConsole::printPlan(const json& plan, int /*currentStep*/) {
         if (i > 0) std::cout << color::GRAY << " -> " << color::RESET;
         if (plan[i].is_object() && plan[i].contains("tool") && plan[i]["tool"].is_string()) {
             std::cout << color::CYAN
-                      << plan[i]["tool"].get<std::string>()
+                      << sanitizeTerminalText(plan[i]["tool"].get<std::string>())
                       << color::RESET;
         }
     }
@@ -115,7 +115,7 @@ void CleanConsole::prettyPrintJson(const json& data,
             if (!first) argsStr += ", ";
             argsStr += key + "=";
             if (val.is_string()) argsStr += val.get<std::string>();
-            else argsStr += val.dump();
+            else argsStr += val.dump(-1, ' ', false, json::error_handler_t::replace);
             first = false;
         }
         std::cout << color::GRAY << "      Args: ";
@@ -139,7 +139,7 @@ void CleanConsole::prettyPrintJson(const json& data,
     if (data.contains("error") && data["error"].is_string()) {
         std::cout << color::RED << color::BOLD << "      Error: "
                   << color::RESET << color::RED
-                  << data["error"].get<std::string>()
+                  << sanitizeTerminalText(data["error"].get<std::string>())
                   << color::RESET << std::endl;
         return;
     }
@@ -184,7 +184,7 @@ void CleanConsole::prettyPrintJson(const json& data,
         auto status = data["status"].get<std::string>();
         const char* statusColor = (status == "completed")
             ? color::GREEN : color::YELLOW;
-        std::cout << statusColor << "      Status: " << status
+        std::cout << statusColor << "      Status: " << sanitizeTerminalText(status)
                   << color::RESET << std::endl;
     }
 }
@@ -285,18 +285,6 @@ void CleanConsole::printFinalAnswer(const std::string& answer,
         cleanAnswer = answer;
     }
 
-    // 4. Replace literal \n with actual newlines (LLM sometimes returns escaped newlines)
-    std::string processed;
-    for (size_t i = 0; i < cleanAnswer.size(); ++i) {
-        if (i + 1 < cleanAnswer.size() && cleanAnswer[i] == '\\' && cleanAnswer[i + 1] == 'n') {
-            processed += '\n';
-            ++i;
-        } else {
-            processed += cleanAnswer[i];
-        }
-    }
-    cleanAnswer = processed;
-
     std::cout << std::endl;
     std::cout << color::GREEN
               << "  ========================================================================================"
@@ -377,7 +365,7 @@ void CleanConsole::printStyledWord(const std::string& word, const char* prevColo
 void CleanConsole::printWrapped(const std::string& text, size_t width, size_t indent,
                                 const char* prevColor) {
     std::string indentStr(indent, ' ');
-    std::istringstream words(text);
+    std::istringstream words(sanitizeTerminalText(text));
     std::string word;
     size_t col = 0;
     bool firstWord = true;
@@ -402,8 +390,9 @@ void CleanConsole::printWrapped(const std::string& text, size_t width, size_t in
     std::cout << color::RESET << std::endl;
 }
 
-void CleanConsole::printOutputPreview(const std::string& output) {
+void CleanConsole::printOutputPreview(const std::string& rawOutput) {
     constexpr int kMaxPreviewLines = 10;
+    const std::string output = sanitizeTerminalText(rawOutput);
     std::istringstream stream(output);
     std::string line;
     int lineCount = 0;
@@ -443,7 +432,7 @@ void CleanConsole::printOutputPreview(const std::string& output) {
 }
 
 void CleanConsole::printStreamToken(const std::string& token) {
-    std::cout << token << std::flush;
+    std::cout << sanitizeTerminalText(token) << std::flush;
 }
 
 void CleanConsole::printStreamEnd() {

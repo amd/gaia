@@ -26,10 +26,10 @@ def client():
 
 
 def _fake_agent_module(monkeypatch, skill_dirs):
-    mod = types.ModuleType("gaia_agent.agent")
+    mod = types.ModuleType("gaiapy.agent")
     mod.ENGINEERING_SKILL = "gaia-harness-engineering"
     mod.GaiaAgent = type("GaiaAgent", (), {"SKILL_DIRS": skill_dirs})
-    monkeypatch.setitem(sys.modules, "gaia_agent.agent", mod)
+    monkeypatch.setitem(sys.modules, "gaiapy.agent", mod)
 
 
 def _skill(name, **kw):
@@ -104,7 +104,7 @@ def test_a_manifest_marks_always_on_skills_without_changing_discovery(
     manifest = tmp_path / "gaia-agent.yaml"
     manifest.write_text("skills:\n  - gaia-voice\n", encoding="utf-8")
     _fake_agent_module(monkeypatch, [str(tmp_path)])
-    from gaia_agent.agent import GaiaAgent
+    from gaiapy.agent import GaiaAgent
 
     GaiaAgent.SKILL_MANIFEST = str(manifest)
 
@@ -149,10 +149,10 @@ class _FakeHandle:
 
 
 def _no_agent_package(monkeypatch, handle=None, acquire_error=None):
-    """The Hub-binary install: no ``gaia_agent`` package beside the UI."""
-    from gaia.ui.email_sidecar import daemon_client
+    """The Hub-binary install: no ``gaiapy`` package beside the UI."""
+    from gaia.ui.sidecar import daemon_client
 
-    monkeypatch.setitem(sys.modules, "gaia_agent.agent", None)
+    monkeypatch.setitem(sys.modules, "gaiapy.agent", None)
     calls = []
 
     def acquire(agent_id):
@@ -231,7 +231,7 @@ def test_an_agent_that_fails_to_list_is_a_502_with_its_reason(client, monkeypatc
 
 def test_the_proxy_asks_the_flagships_skills_route():
     """Pin the outgoing call, not just that one was made."""
-    from gaia.ui.email_sidecar.proxy import SidecarProxy
+    from gaia.ui.sidecar.proxy import SidecarProxy
 
     seen = {}
 
@@ -278,9 +278,160 @@ def test_real_discovery_hides_the_engineering_skill(client, mock_home, monkeypat
     """Against the real GaiaAgent roots: bundled skills listed, dev skill not."""
     monkeypatch.setenv("GAIA_CONFIG_DIR", str(mock_home / ".gaia"))
     monkeypatch.chdir(mock_home)
-    pytest.importorskip("gaia_agent.agent")
+    pytest.importorskip("gaiapy.agent")
     resp = client.get("/api/skills")
     assert resp.status_code == 200, resp.text
     names = {s["name"] for s in resp.json()["skills"]}
     assert names, "the flagship's bundled skills were not discovered"
     assert "gaia-harness-engineering" not in names
+
+
+# --- Adding skills from a pasted link ----------------------------------------
+
+
+def test_preview_returns_the_skills_and_warning(client, monkeypatch):
+    from gaia.skills import link
+
+    preview = link.LinkPreview(
+        link="acme/skills",
+        source="acme/skills",
+        skills=[link.LinkSkill(name="deslop", description="d", path="skills/deslop")],
+    )
+    monkeypatch.setattr(link, "preview_link", lambda url: preview)
+
+    body = client.post("/api/skills/link/preview", json={"url": "acme/skills"}).json()
+
+    assert body["skills"][0]["name"] == "deslop"
+    assert body["warning"] == link.SECURITY_WARNING
+
+
+def test_a_bad_link_is_a_400_naming_why(client, monkeypatch):
+    from gaia.skills import link
+
+    def refuse(url):
+        raise link.SkillLinkError("only https links are accepted")
+
+    monkeypatch.setattr(link, "preview_link", refuse)
+    r = client.post("/api/skills/link/preview", json={"url": "http://x"})
+    assert r.status_code == 400
+    assert "https" in r.json()["detail"]
+
+
+@pytest.mark.parametrize("route", ["preview", "add"])
+def test_a_link_with_nothing_behind_it_names_no_terminal_command(
+    client, monkeypatch, route
+):
+    """The desktop app put no `gaia` on PATH, so a command is no remedy (#7973)."""
+    from gaia.skills import link
+
+    def missing(*args, **kwargs):
+        raise link.SkillLinkNotFoundError("Nothing found at https://x/y.")
+
+    monkeypatch.setattr(link, "preview_link", missing)
+    monkeypatch.setattr(link, "add_from_link", missing)
+    body = {"url": "https://github.com/acme/none"}
+    if route == "add":
+        body.update(names=["a"], pin="sha256:" + "0" * 64)
+    r = client.post(f"/api/skills/link/{route}", json=body)
+
+    assert r.status_code == 400
+    detail = r.json()["detail"]
+    assert "gaia skill" not in detail
+    assert "skills folder inside .gaia" in detail
+
+
+def test_add_passes_the_chosen_names_and_code_opt_in(client, monkeypatch):
+    from gaia.skills import link
+
+    seen = {}
+
+    def fake_add(url, names, *, allow_code, force, pin):
+        seen.update(url=url, names=names, allow_code=allow_code, force=force, pin=pin)
+        return link.LinkAddResult(added=[{"name": "deslop"}], failed={"x": "why"})
+
+    monkeypatch.setattr(link, "add_from_link", fake_add)
+    body = client.post(
+        "/api/skills/link/add",
+        json={
+            "url": "acme/skills",
+            "names": ["deslop"],
+            "allow_code": True,
+            "pin": "commit:" + "a" * 40,
+        },
+    ).json()
+
+    assert seen == {
+        "url": "acme/skills",
+        "names": ["deslop"],
+        "allow_code": True,
+        "force": False,
+        "pin": "commit:" + "a" * 40,
+    }
+    assert body == {"added": [{"name": "deslop"}], "failed": {"x": "why"}}
+
+
+def test_featured_libraries_include_pstack(client):
+    body = client.get("/api/skills/featured").json()
+    assert [lib["id"] for lib in body["libraries"]] == ["pstack"]
+
+
+def test_preview_carries_each_skills_permissions(client, monkeypatch):
+    from gaia.skills import link
+
+    grant = {"grant": "network:read", "text": "Read pages and data from any website"}
+    preview = link.LinkPreview(
+        link="acme/skills",
+        source="acme/skills",
+        skills=[
+            link.LinkSkill(
+                name="fetch", description="d", path="s/fetch", permissions=[grant]
+            )
+        ],
+    )
+    monkeypatch.setattr(link, "preview_link", lambda url: preview)
+
+    body = client.post("/api/skills/link/preview", json={"url": "acme/skills"}).json()
+
+    assert body["skills"][0]["permissions"] == [grant]
+
+
+@pytest.mark.parametrize("extra", [{}, {"pin": None}], ids=["pin-missing", "pin-null"])
+def test_add_without_the_previews_pin_is_refused(client, monkeypatch, extra):
+    from gaia.skills import link
+
+    monkeypatch.setattr(
+        link, "add_from_link", lambda *a, **k: pytest.fail("added without a pin")
+    )
+    r = client.post(
+        "/api/skills/link/add", json={"url": "acme/skills", "names": ["x"], **extra}
+    )
+    assert r.status_code == 422
+
+
+@pytest.mark.parametrize("pin", ["", "HEAD", "commit:short"])
+def test_add_with_a_malformed_pin_is_a_400_and_downloads_nothing(
+    client, monkeypatch, pin
+):
+    from gaia.skills import link
+
+    monkeypatch.setattr(
+        link, "_download", lambda *a: pytest.fail("downloaded for an unpinned add")
+    )
+    r = client.post("/api/skills/link/add", json={"url": "acme/skills", "pin": pin})
+    assert r.status_code == 400
+    assert "Preview the link first" in r.json()["detail"]
+
+
+def test_add_is_a_409_when_the_link_changed_since_the_preview(client, monkeypatch):
+    from gaia.skills import link
+
+    def changed(*a, **k):
+        raise link.SkillLinkChangedError("acme/skills changed since you previewed it")
+
+    monkeypatch.setattr(link, "add_from_link", changed)
+    r = client.post(
+        "/api/skills/link/add",
+        json={"url": "acme/skills", "pin": "sha256:" + "0" * 64},
+    )
+    assert r.status_code == 409
+    assert "changed since you previewed" in r.json()["detail"]

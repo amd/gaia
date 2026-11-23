@@ -13,10 +13,10 @@ from unittest.mock import patch
 
 import pytest
 
-pytest.importorskip("gaia_agent")
+pytest.importorskip("gaiapy")
 
-from gaia_agent.chat_agent import ChatAgent, ChatAgentConfig  # noqa: E402
-from gaia_agent.python_jobs import (  # noqa: E402
+from gaiapy.chat_agent import ChatAgent, ChatAgentConfig  # noqa: E402
+from gaiapy.python_jobs import (  # noqa: E402
     describe_code,
     may_write_files,
 )
@@ -321,8 +321,8 @@ def tools(project):
         mp.delenv(PROJECT_ROOT_ENV, raising=False)
         mp.chdir(project)
         with (
-            patch("gaia_agent.chat_agent.RAGSDK"),
-            patch("gaia_agent.chat_agent.RAGConfig"),
+            patch("gaiapy.chat_agent.RAGSDK"),
+            patch("gaiapy.chat_agent.RAGConfig"),
         ):
             ChatAgent(ChatAgentConfig(silent_mode=True, allowed_paths=[str(project)]))
         try:
@@ -374,14 +374,14 @@ def test_a_write_the_check_misses_is_caught_by_the_folder_scan(
     target = project / "sneaky.txt"
     code = f"open(r'{target}', 'w').write('x')"
     # Stands in for a write no static check could see.
-    with patch("gaia_agent.chat_agent.may_write_files", return_value=False):
+    with patch("gaiapy.chat_agent.may_write_files", return_value=False):
         (turn,) = _run(tools, tmp_path, "run_python", code=code)
     assert turn["incomplete"] is True
     assert str(target) in turn["untracked"][0]["paths"]
 
 
 def test_a_scan_cut_short_counts_as_a_possible_write(tools, tmp_path):
-    with patch("gaia_agent.python_jobs.files_written_since", return_value=([], False)):
+    with patch("gaiapy.python_jobs.files_written_since", return_value=([], False)):
         (turn,) = _run(tools, tmp_path, "run_python", code="print(1)")
     assert turn["incomplete"] is True
     assert turn["untracked"][0]["may_write"] is True
@@ -390,7 +390,7 @@ def test_a_scan_cut_short_counts_as_a_possible_write(tools, tmp_path):
 def test_a_run_that_fails_part_way_counts_as_a_possible_write(tools, tmp_path):
     with (
         patch(
-            "gaia_agent.chat_agent.run_python_job",
+            "gaiapy.chat_agent.run_python_job",
             side_effect=RuntimeError("interrupted"),
         ),
         fs.recording_turn(SID, root=tmp_path),
@@ -407,3 +407,41 @@ def test_a_read_only_script_leaves_no_warning(tools, tmp_path, project):
         "lines = open('incidents.log').read().splitlines()\nprint(len(lines))\n"
     )
     assert _run(tools, tmp_path, "execute_python_file", file_path=str(script)) == []
+
+
+def test_files_a_snippet_moves_and_renames_come_back_on_undo(tools, tmp_path, project):
+    inbox = project / "inbox"
+    inbox.mkdir()
+    for i in range(5):
+        (inbox / f"scan_{i}.txt").write_text(f"invoice {i}")
+    before = sorted(p.name for p in inbox.iterdir())
+    code = textwrap.dedent(f"""
+        # file the invoices by year
+        from pathlib import Path
+        inbox = Path(r"{inbox}")
+        year = inbox / "invoices" / "2024"
+        year.mkdir(parents=True)
+        for p in inbox.glob("scan_*.txt"):
+            p.rename(year / ("invoice-" + p.stem[5:] + ".txt"))
+        """)
+    (turn,) = _run(tools, tmp_path, "run_python", code=code)
+    assert not list(inbox.glob("scan_*.txt"))
+
+    fs.restore_turn(SID, turn["turn_id"], root=tmp_path)
+
+    assert sorted(p.name for p in inbox.iterdir()) == before
+    assert (inbox / "scan_3.txt").read_text() == "invoice 3"
+
+
+def test_a_folder_with_a_locked_file_still_runs_the_snippet(tools, tmp_path, project):
+    folder = project / "locked"
+    folder.mkdir()
+    (folder / "busy.txt").write_text("in use")
+    code = f"open(r'{folder / 'out.txt'}', 'w').write('x')"
+    with patch.object(
+        fs.TurnRecorder, "capture_folder_files", return_value=False
+    ) as capture:
+        (turn,) = _run(tools, tmp_path, "run_python", code=code)
+    capture.assert_called()
+    assert (folder / "out.txt").read_text() == "x"
+    assert turn["incomplete"] is True

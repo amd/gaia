@@ -13,6 +13,7 @@ import subprocess
 import sys
 import threading
 import time
+from types import SimpleNamespace
 
 import pytest
 from fastapi import FastAPI
@@ -1076,6 +1077,29 @@ def test_an_env_server_that_does_not_answer_says_so_plainly(users_server):
     assert "lemonade-server serve" not in str(problem)
 
 
+def test_a_chosen_server_on_this_pc_is_named_not_the_tray(users_server, monkeypatch):
+    """The tray starts the default server, not the one at the chosen address."""
+    real_hint = lemonade_launcher.describe_start_hint
+    users_server("http://127.0.0.1:4328/api/v1", "config")
+    tray = r"C:\lemonade_server\bin\LemonadeServer.exe"
+    monkeypatch.setattr(lemonade_launcher, "describe_start_hint", real_hint)
+    monkeypatch.setattr(
+        lemonade_launcher,
+        "resolve_lemonade",
+        lambda: lemonade_launcher.LemonadeTooling(
+            found=True, kind="modern", client_path=tray, server_launcher=tray
+        ),
+    )
+
+    problem = _REAL_SERVER_PROBLEM()
+
+    assert problem["start"] == (
+        "The model server GAIA uses is at 127.0.0.1:4328. "
+        f"{lemonade_launcher.OTHER_SERVER_START_HINT}"
+    )
+    assert "tray" not in problem["start"]
+
+
 def test_a_saved_server_that_does_not_answer_offers_gaias_own(users_server):
     users_server("http://localhost:13305/api/v1", "config")
     problem = _REAL_SERVER_PROBLEM()
@@ -1203,6 +1227,20 @@ def test_check_route_also_returns_the_cloud_steps(client, monkeypatch):
     assert body["steps"] == sr.step_labels(False)
     assert body["cloud_steps"] == sr.step_labels(True)
     assert body["cloud_steps"] != body["steps"]
+
+
+@pytest.mark.parametrize("seen_ready", [True, False])
+def test_check_route_says_whether_setup_was_ever_seen_ready(
+    client, monkeypatch, seen_ready
+):
+    """A set-up PC whose model server is down must not read as a first run."""
+    test_client, _ = client
+    down = {"ready": False, "stage": "server", "reasons": ["not reachable"]}
+    monkeypatch.setattr(setup_router, "check", lambda **_k: dict(down))
+    monkeypatch.setattr(setup_router, "is_initialized", lambda: seen_ready)
+    body = test_client.get("/api/setup/check").json()
+    assert body["stage"] == "server"
+    assert body["initialized"] is seen_ready
 
 
 def test_check_route_needs_the_ui_header(client, monkeypatch):
@@ -1954,7 +1992,12 @@ def test_report_route_bundles_setups_record(client, gaia_home, monkeypatch):
     run = sr.SetupRun(skip_chat_model=False)
     runner._run = run
     runner._consume(run, "something went wrong")
-    monkeypatch.setattr(setup_router, "build_plan", lambda: {"profile": "gaia"})
+    asked = []
+    monkeypatch.setattr(
+        setup_router,
+        "build_plan",
+        lambda **k: asked.append(k) or {"profile": "gaia"},
+    )
     written = {}
 
     def fake_diagnostics(argv, **_kw):
@@ -1971,6 +2014,8 @@ def test_report_route_bundles_setups_record(client, gaia_home, monkeypatch):
     assert sr.REPORT_NAME_RE.fullmatch(body["name"])
     assert written["record"]["logs"]["download"] == ["something went wrong"]
     assert written["record"]["plan"] == {"profile": "gaia"}
+    # The report records what setup downloads, even while chat runs on a cloud model.
+    assert asked == [{"skip_chat_model": False}]
 
     got = http.get(f"/api/setup/report/{body['name']}")
     assert got.status_code == 200
@@ -1987,7 +2032,7 @@ def test_report_route_serves_nothing_but_a_report(client, gaia_home, name):
 
 def test_report_route_names_a_failed_bundle(client, monkeypatch):
     http, _ = client
-    monkeypatch.setattr(setup_router, "build_plan", lambda: {})
+    monkeypatch.setattr(setup_router, "build_plan", lambda **_: {})
     monkeypatch.setattr(
         sr.subprocess,
         "run",
@@ -2105,6 +2150,51 @@ def test_the_where_to_look_hint_stays_with_the_failed_download():
         "Failed: boom",
         "Read /home/you/.gaia/lemonade/lemonade.log for the server's own error.",
     ]
+
+
+@pytest.mark.parametrize("has_bundle", [True, False])
+def test_a_missing_ca_file_reaches_the_failed_download_row(
+    monkeypatch, tmp_path, has_bundle
+):
+    """#7226: the remedy shows on the row, not only in gaia.log."""
+    from gaia.installer.init_command import InitCommand
+    from gaia.llm import lemonade_tls
+
+    monkeypatch.setenv("GAIA_HOME", str(tmp_path))
+    files = {lemonade_tls.SYSTEM_CA_BUNDLES[2]} if has_bundle else set()
+    real_problem = lemonade_tls.ca_store_problem
+    monkeypatch.setattr(
+        lemonade_tls,
+        "ca_store_problem",
+        lambda **_: real_problem(platform="linux", exists=files.__contains__),
+    )
+    hint = InitCommand._server_problem_hint(SimpleNamespace(_lemonade_base_url=None))
+    assert hint.startswith("This PC")
+    assert hint.endswith("for the server's own error.")
+
+    runner = sr.SetupRunner()
+    run = sr.SetupRun(skip_chat_model=False)
+    runner._run = run
+    runner._on_event({"event": "plan", "models": [{"id": "a-GGUF"}]})
+    runner._consume(run, "Downloading: a-GGUF")
+    runner._on_event({"event": "error", "model": "a-GGUF", "message": "boom"})
+    runner._consume(run, f"   {hint}")
+    runner._consume(run, "Testing chat model inference...")
+    assert runner._models["a-GGUF"].log[-1] == hint
+
+
+def test_the_hint_names_no_ca_problem_once_lemond_was_given_the_file(
+    monkeypatch, tmp_path
+):
+    from gaia.installer.init_command import InitCommand
+    from gaia.llm import lemonade_tls
+    from gaia.llm.lemonade_embedded import EmbeddedLemonade
+
+    monkeypatch.setenv("GAIA_HOME", str(tmp_path))
+    monkeypatch.setattr(lemonade_tls, "ca_store_problem", lambda **_: "no CA file")
+    EmbeddedLemonade()._write_state({"pid": 1, "port": 2, "ca_supplied": True})
+    hint = InitCommand._server_problem_hint(SimpleNamespace(_lemonade_base_url=None))
+    assert hint.startswith("Read ") and "no CA file" not in hint
 
 
 def test_gaias_own_console_bar_collapses_too():

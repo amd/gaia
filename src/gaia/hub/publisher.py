@@ -84,15 +84,19 @@ class PublishResult:
 
 
 def _keyring():
+    """The checked keyring access; every read and write verifies the backend."""
+    from gaia.connectors.errors import ConnectorsError
+
     try:
-        import keyring  # local import: keyring is in [ui]/[dev], not core
-    except ImportError as exc:
+        # local import: keyring is in [ui]/[dev], not core
+        from gaia.connectors import keyring_access
+    except ConnectorsError as exc:
         raise PublisherError(
             "the 'keyring' package is required to store/read publisher tokens. "
             "Install it with 'uv pip install \"amd-gaia[dev]\"', or pass tokens via "
             f"the {HUB_TOKEN_ENV} / {PYPI_TOKEN_ENV} environment variables."
         ) from exc
-    return keyring
+    return keyring_access
 
 
 def store_token(kind: str, token: str) -> None:
@@ -112,7 +116,7 @@ def store_token(kind: str, token: str) -> None:
         )
     username = _username_for(kind)
     try:
-        _keyring().set_password(KEYRING_SERVICE, username, token.strip())
+        _keyring().write(KEYRING_SERVICE, username, token.strip())
     except Exception as exc:  # pylint: disable=broad-exception-caught
         raise PublisherError(
             f"could not store the {kind} token in the OS keyring: {exc}. On a "
@@ -149,14 +153,24 @@ def _resolve_token(kind: str) -> Optional[str]:
     env_val = os.environ.get(_env_for(kind))
     if env_val and env_val.strip():
         return env_val.strip()
+    from gaia.connectors.errors import ConnectorsError
+
     try:
-        stored = _keyring().get_password(KEYRING_SERVICE, _username_for(kind))
+        stored = _keyring().read(KEYRING_SERVICE, _username_for(kind))
     except PublisherError:
         # keyring not installed — env was the only option and it's unset.
         return None
-    except Exception as exc:  # pylint: disable=broad-exception-caught
-        log.warning("publisher: keyring read failed for %s token: %s", kind, exc)
-        return None
+    except ConnectorsError as exc:
+        raise PublisherError(
+            f"could not read the {kind} token from the OS keyring: {exc} Or set "
+            f"the {_env_for(kind)} environment variable instead."
+        ) from exc
+    except Exception as exc:  # noqa: BLE001 - keyring backends raise anything
+        raise PublisherError(
+            f"could not read the {kind} token from the OS keyring: {exc}. "
+            "Unlock or fix the OS credential store and retry, or set the "
+            f"{_env_for(kind)} environment variable instead."
+        ) from exc
     return stored.strip() if stored and stored.strip() else None
 
 

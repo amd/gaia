@@ -4,6 +4,7 @@
 /** Pure helpers ChatView uses to turn the chat stream into messages. */
 
 import type { AgentStep, Message, RenderCardData, StreamEvent } from '../types';
+import { addCard } from './connectCards';
 
 /**
  * Safety-net regex to strip raw tool-call JSON from streaming content.
@@ -69,7 +70,7 @@ export function isEchoOfFailedTool(event: StreamEvent, steps: AgentStep[]): bool
 function cardsFromSteps(steps: AgentStep[] | undefined): RenderCardData[] | undefined {
     const cards = (steps || [])
         .filter((s) => typeof s.render === 'string' && s.render.length > 0)
-        .map((s) => ({ render: s.render as string, data: s.data }));
+        .reduce<RenderCardData[]>((acc, s) => addCard(acc, { render: s.render as string, data: s.data }), []);
     return cards.length > 0 ? cards : undefined;
 }
 
@@ -129,6 +130,24 @@ export function onlyFailureAfter(server: Message[], question: Message, reply: Me
     const after = server.slice(server.findIndex((m) => m.id === question.id) + 1);
     return after.length === 0
         || (after.length === 1 && (after[0].id === reply.id || isSavedFailure(after[0], reply)));
+}
+
+/**
+ * Give each server row that replaces a shown message under a new id (a sent
+ * message's temporary id) that message's render key, so its bubble is kept
+ * instead of drawn again.
+ */
+export function carryMessageKeys(shown: Message[], server: Message[], keys: Map<number, number>): void {
+    const serverIds = new Set(server.map((m) => m.id));
+    const shownIds = new Set(shown.map((m) => m.id));
+    const replaced = shown.filter((m) => !serverIds.has(m.id));
+    for (const row of server) {
+        if (shownIds.has(row.id) || keys.has(row.id)) continue;
+        const at = replaced.findIndex((m) => m.role === row.role && m.content.trim() === row.content.trim());
+        if (at < 0) continue;
+        const [twin] = replaced.splice(at, 1);
+        keys.set(row.id, keys.get(twin.id) ?? twin.id);
+    }
 }
 
 /** The server's rows, keeping Try again only on the server's copy of a failed reply. */

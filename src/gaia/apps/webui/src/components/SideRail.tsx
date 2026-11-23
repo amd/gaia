@@ -11,8 +11,8 @@
 
 import { useEffect, useState, type ReactNode } from 'react';
 import {
-    AlertTriangle, ChevronRight, Cloud, ExternalLink, FileText, FolderOpen,
-    Globe, Monitor,
+    AlertTriangle, Cloud, ExternalLink, FileText, FolderOpen,
+    Globe,
 } from 'lucide-react';
 import * as api from '../services/api';
 import { displayModelName, useModelNames } from '../stores/modelStore';
@@ -22,6 +22,7 @@ import type { Message, TurnSummary } from '../types';
 import { pluralKey, type Say } from '../i18n/registry';
 import { tEn, useT, type Translate } from '../i18n/useT';
 import './SideRail.css';
+import { visibleName } from './CalendarApproval';
 
 /** What the rail shows: the latest answer's summary, a turn in progress, or nothing. */
 export type RailState = { kind: 'turn'; turn: Message } | { kind: 'busy' } | null;
@@ -59,10 +60,12 @@ function documentMeta(say: Say, pages: number[] | undefined, passages: number): 
 function costText(summary: TurnSummary, t: Translate = tEn, stopped = false): string {
     const { cost } = summary;
     if (cost.kind === 'local') return t('rail.costLocal');
+    if (cost.kind === 'no_reply') return t('rail.costNoReply');
     if (cost.kind === 'unreported') return t(stopped ? 'rail.costUnreportedStopped' : 'rail.costUnreported');
     if (cost.kind === 'estimate' && typeof cost.usd === 'number') {
         const usd = cost.usd < 0.01 ? cost.usd.toFixed(4) : cost.usd.toFixed(2);
-        return t('rail.costAbout', { usd });
+        // The "$" rides inside the value so the bidi isolate keeps it left of the digits in Arabic.
+        return t('rail.costAbout', { usd: `$${usd}` });
     }
     return t(summary.model ? 'rail.costUnknownModel' : 'rail.costUnknown');
 }
@@ -83,15 +86,12 @@ export function ThisAnswer({ messages, busy = false }: ThisAnswerProps) {
     const t = useT();
     const state = railState(messages, busy);
     if (!state) return null;
+    // A running turn shows nothing here: the previous answer's facts are not its own.
     const summary = state.kind === 'turn' ? state.turn.turnSummary ?? null : null;
-    const noLiveData = summary ? liveDataFailed(summary) : false;
+    if (!summary) return null;
+    const noLiveData = liveDataFailed(summary);
     return (
         <div className="side-rail-body">
-            {!summary && (
-                <p className="side-rail-pending" role="status">
-                    {t('rail.pending')}
-                </p>
-            )}
             {noLiveData && (
                 <div className="side-rail-warn" role="status">
                     <AlertTriangle size={14} aria-hidden="true" />
@@ -109,7 +109,11 @@ export function ThisAnswer({ messages, busy = false }: ThisAnswerProps) {
                 <>
                     <SourcesSection summary={summary} />
                     <FilesSection summary={summary} />
-                    <ThisTurnSection summary={summary} stopped={state.kind === 'turn' && !!state.turn.stopState} />
+                    <ThisTurnSection
+                        summary={summary}
+                        stopped={state.kind === 'turn' && !!state.turn.stopState}
+                        alone={(summary.pages ?? []).length === 0 && (summary.documents ?? []).length === 0 && (summary.files ?? []).length === 0}
+                    />
                 </>
             ))}
         </div>
@@ -117,19 +121,11 @@ export function ThisAnswer({ messages, busy = false }: ThisAnswerProps) {
 }
 
 function Section({ title, children }: { title: string; children: ReactNode }) {
-    const [open, setOpen] = useState(true);
+    // A plain label: the panel section around it is the one thing that collapses.
     return (
         <section className="side-rail-section">
-            <button
-                type="button"
-                className="side-rail-section-head"
-                onClick={() => setOpen(!open)}
-                aria-expanded={open}
-            >
-                <ChevronRight size={12} className={`side-rail-chevron${open ? ' open' : ''}`} aria-hidden="true" />
-                {title}
-            </button>
-            {open && <div className="side-rail-section-body">{children}</div>}
+            <h4 className="side-rail-section-head">{title}</h4>
+            <div className="side-rail-section-body">{children}</div>
         </section>
     );
 }
@@ -162,7 +158,7 @@ function SourcesSection({ summary }: { summary: TurnSummary }) {
                         <li key={d.path} className="side-rail-item">
                             <FileText size={13} className="side-rail-item-icon" aria-hidden="true" />
                             <div className="side-rail-item-text">
-                                <span className="side-rail-name" title={d.name} dir="auto">{d.name}</span>
+                                <span className="side-rail-name" title={visibleName(d.name)} dir="ltr">{visibleName(d.name)}</span>
                                 <span className="side-rail-meta">
                                     {t.compose((say) => documentMeta(say, d.pages, count))}
                                 </span>
@@ -244,7 +240,7 @@ function FilesSection({ summary }: { summary: TurnSummary }) {
                             <li key={f.path} className="side-rail-item side-rail-item-gone">
                                 <FileText size={13} className="side-rail-item-icon" aria-hidden="true" />
                                 <div className="side-rail-item-text">
-                                    <span className="side-rail-name" title={f.path}>{f.name}</span>
+                                    <span className="side-rail-name" title={visibleName(f.path)}>{visibleName(f.name)}</span>
                                     <span className="side-rail-meta">{t('sp.gone')}</span>
                                 </div>
                             </li>
@@ -256,15 +252,15 @@ function FilesSection({ summary }: { summary: TurnSummary }) {
                         <li key={f.path} className="side-rail-item">
                             <FileText size={13} className="side-rail-item-icon" aria-hidden="true" />
                             <div className="side-rail-item-text">
-                                <span className="side-rail-name" title={f.path}>{f.name}</span>
+                                <span className="side-rail-name" title={visibleName(f.path)}>{visibleName(f.name)}</span>
                                 {changed && <span className="side-rail-meta">{t('rail.changedSince')}</span>}
                                 <span className="side-rail-actions">
                                     {f.openable && (
-                                        <button type="button" className="side-rail-action" onClick={() => run(api.openFileInApp(f.path), f.name)}>
+                                        <button type="button" className="side-rail-action" onClick={() => run(api.openFileInApp(f.path), visibleName(f.name))}>
                                             {t('sp.open')}
                                         </button>
                                     )}
-                                    <button type="button" className="side-rail-action" onClick={() => run(api.openFileOrFolder(f.path, true), f.name)}>
+                                    <button type="button" className="side-rail-action" onClick={() => run(api.openFileOrFolder(f.path, true), visibleName(f.name))}>
                                         <FolderOpen size={11} aria-hidden="true" />
                                         {t('sp.showInFolder')}
                                     </button>
@@ -282,42 +278,72 @@ function FilesSection({ summary }: { summary: TurnSummary }) {
     );
 }
 
-function ThisTurnSection({ summary, stopped }: { summary: TurnSummary; stopped: boolean }) {
+/** Whether the turn left anything worth a line: a local turn with no sources, files or sites did not. */
+export function turnHasDetails(summary: TurnSummary): boolean {
+    return !!summary.error
+        || liveDataFailed(summary)
+        || (summary.pages ?? []).length > 0
+        || (summary.documents ?? []).length > 0
+        || (summary.files ?? []).length > 0
+        || (summary.sites ?? []).length > 0
+        || summary.model?.remote !== false
+        || summary.cost.kind !== 'local';
+}
+
+/** Where the turn's data went. Only what happened gets a row: no cost for a model on this PC, no sites when none were contacted. */
+function ThisTurnSection({ summary, stopped, alone }: { summary: TurnSummary; stopped: boolean; alone: boolean }) {
     const t = useT();
     useModelNames();
     const { model } = summary;
     const sites = summary.sites ?? [];
     const usedDocs = (summary.documents ?? []).length > 0;
-    return (
-        <Section title={t('rail.thisTurn')}>
-            <dl className="side-rail-facts">
-                <dt>{t('rail.model')}</dt>
-                <dd>
-                    {model ? (
-                        <span className={`side-rail-where${model.remote ? ' remote' : ''}`}>
-                            {model.remote ? <Cloud size={12} aria-hidden="true" /> : <Monitor size={12} aria-hidden="true" />}
-                            {model.remote ? t('rail.cloudModel', { name: model.provider_name }) : t('rail.thisPc')}
+    const remote = model?.remote === true;
+    const priced = summary.cost.kind !== 'local';
+    if (model && !remote && !usedDocs && sites.length === 0 && !priced) return null;
+    const facts = (
+        <dl className="side-rail-facts">
+            {remote && (
+                <>
+                    <dt>{t('rail.model')}</dt>
+                    <dd>
+                        <span className="side-rail-where remote">
+                            <Cloud size={12} aria-hidden="true" />
+                            {t('rail.cloudModel', { name: model.provider_name })}
                         </span>
-                    ) : (
-                        <span className="side-rail-where">{t('rail.notReported')}</span>
-                    )}
-                    {model?.name && <span className="side-rail-meta" title={model.name} dir="ltr">{displayModelName(model.name)}</span>}
-                </dd>
-                {usedDocs && (
-                    <>
-                        <dt>{t('rail.documents')}</dt>
-                        <dd>
-                            {model?.remote
-                                ? t('rail.docsSent', { provider: model.provider_name })
-                                : t(model ? 'rail.docsLocal' : 'rail.docsSearched')}
-                        </dd>
-                    </>
-                )}
-                <dt>{t('rail.websites')}</dt>
-                <dd>{sites.length > 0 ? <span dir="ltr">{sites.join(', ')}</span> : t('rail.noSites')}</dd>
-                <dt>{t('rail.cost')}</dt>
-                <dd>{costText(summary, t, stopped)}</dd>
-            </dl>
-        </Section>
+                        {model.name && <span className="side-rail-meta" title={model.name} dir="ltr">{displayModelName(model.name)}</span>}
+                    </dd>
+                </>
+            )}
+            {!model && (
+                <>
+                    <dt>{t('rail.model')}</dt>
+                    <dd><span className="side-rail-where">{t('rail.notReported')}</span></dd>
+                </>
+            )}
+            {usedDocs && (
+                <>
+                    <dt>{t('rail.documents')}</dt>
+                    <dd>
+                        {remote
+                            ? t('rail.docsSent', { provider: model.provider_name })
+                            : t(model ? 'rail.docsLocal' : 'rail.docsSearched')}
+                    </dd>
+                </>
+            )}
+            {sites.length > 0 && (
+                <>
+                    <dt>{t('rail.websites')}</dt>
+                    <dd><span dir="ltr">{sites.join(', ')}</span></dd>
+                </>
+            )}
+            {priced && (
+                <>
+                    <dt>{t('rail.cost')}</dt>
+                    <dd>{costText(summary, t, stopped)}</dd>
+                </>
+            )}
+        </dl>
     );
+    // Alone under "This answer", a second heading only repeats it.
+    return alone ? facts : <Section title={t('rail.thisTurn')}>{facts}</Section>;
 }

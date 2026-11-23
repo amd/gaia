@@ -37,7 +37,7 @@ logger = logging.getLogger(__name__)
 # longer a routing decision a caller has to make up front.
 AGENT_MODELS = {
     "gaia": {
-        "class_name": "gaia_agent.agent.GaiaAgent",
+        "class_name": "gaiapy.agent.GaiaAgent",
         "init_params": {
             "silent_mode": True,
             "streaming": False,
@@ -105,7 +105,7 @@ class AgentRegistry:
         Dynamically load agent class from module path.
 
         Args:
-            class_path: Full module path (e.g., "gaia_agent_email.agent.EmailTriageAgent")
+            class_path: Full module path (e.g., "gaiapy.agent.GaiaAgent")
 
         Returns:
             Agent class

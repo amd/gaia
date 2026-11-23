@@ -18,22 +18,22 @@ from types import SimpleNamespace
 
 import pytest
 
-from gaia.agents.base.call_risk import RISK_NOTE_ARG
+from gaia.agents.base.call_risk import RISK_NOTE_ARG, SCRIPT_ARG
 from gaia.agents.base.memory import MemoryMixin
 from gaia.agents.base.tool_grants import SCRATCH_ARG
 from gaia.llm.inference_location import InferenceLocation
 from gaia.ui import _chat_helpers as helpers
-from gaia.ui.email_sidecar import daemon_client as daemon_client_module
-from gaia.ui.email_sidecar import relay
-from gaia.ui.email_sidecar.profiles import (
-    EMAIL_PROFILE,
+from gaia.ui.models import ChatRequest
+from gaia.ui.sidecar import daemon_client as daemon_client_module
+from gaia.ui.sidecar import relay
+from gaia.ui.sidecar.profiles import (
+    _NO_PROFILE,
     GAIA_PROFILE,
     SIDECAR_AGENT_IDS,
     memory_supported,
     profile_for,
     surface_supported,
 )
-from gaia.ui.models import ChatRequest
 from gaia.ui.sse_handler import SSEOutputHandler
 from gaia.ui.sse_translation import (
     PROMPT_ARG_VALUE_CHARS,
@@ -85,6 +85,165 @@ def test_a_final_without_usage_still_answers():
     handler = SSEOutputHandler()
     relay._dispatch_one(handler, {"type": "final", "answer": "hi"}, GAIA_PROFILE)
     assert _drain(handler) == [{"type": "answer", "content": "hi"}]
+
+
+# ── session_created drops stale approved paths (#8083) ─────────────────────
+#
+# The sidecar flags a terminal event ``session_created: true`` whenever it had
+# to build a fresh agent for this session_id — eviction, a restart that lost
+# all memory of the id, or first use. The relay must drop the chat's own
+# record of paths approved at a prompt for the agent instance that no longer
+# exists, or the session panel keeps listing a withheld file as approved —
+# but only what predates this turn: a path THIS turn's own prompt approved,
+# before the terminal event arrives, must survive (#8398 review finding).
+
+
+def test_session_created_final_drops_only_the_given_snapshot(monkeypatch):
+    dropped = []
+    monkeypatch.setattr(
+        "gaia.ui.session_environment.forget_approved_before",
+        lambda session_id, before: dropped.append((session_id, before)),
+    )
+    handler = SSEOutputHandler()
+    final = {"type": "final", "answer": "done", "session_created": True}
+    relay._dispatch_one(
+        handler, final, GAIA_PROFILE, session_id="chat-1", approved_before=["/old"]
+    )
+    assert dropped == [("chat-1", ["/old"])]
+
+
+def test_a_final_with_no_session_created_leaves_approved_paths_alone(monkeypatch):
+    dropped = []
+    monkeypatch.setattr(
+        "gaia.ui.session_environment.forget_approved_before",
+        lambda session_id, before: dropped.append((session_id, before)),
+    )
+    handler = SSEOutputHandler()
+    relay._dispatch_one(
+        handler,
+        {"type": "final", "answer": "done"},
+        GAIA_PROFILE,
+        session_id="chat-1",
+        approved_before=["/old"],
+    )
+    assert dropped == []
+
+
+def test_session_created_on_an_error_terminal_also_drops_stale_paths(monkeypatch):
+    """The agent was still built fresh this turn, whether or not it answered."""
+    dropped = []
+    monkeypatch.setattr(
+        "gaia.ui.session_environment.forget_approved_before",
+        lambda session_id, before: dropped.append((session_id, before)),
+    )
+    handler = SSEOutputHandler()
+    error = {"type": "error", "detail": "boom", "session_created": True}
+    relay._dispatch_one(
+        handler, error, GAIA_PROFILE, session_id="chat-1", approved_before=["/old"]
+    )
+    assert dropped == [("chat-1", ["/old"])]
+
+
+def test_a_mid_turn_approval_survives_its_own_turns_session_created():
+    """The exact regression the #8398 review caught: an approval granted
+    during a freshly-built turn must not be erased by that same turn's own
+    `session_created` terminal event — only what predates the turn should go.
+    """
+    from gaia.ui import session_environment
+
+    session_id = "chat-mid-turn-survival"
+    session_environment.forget_session(session_id)  # clean slate
+    try:
+        session_environment.note_approved_path(session_id, "/old/stale.txt")
+        # Snapshot taken at the turn's start, as relay_query does.
+        before = session_environment.begin_turn(session_id)
+        # This turn's own prompt approves a new path before the turn ends.
+        session_environment.note_approved_path(session_id, "/new/this-turn.txt")
+
+        handler = SSEOutputHandler()
+        final = {"type": "final", "answer": "done", "session_created": True}
+        relay._dispatch_one(
+            handler, final, GAIA_PROFILE, session_id=session_id, approved_before=before
+        )
+
+        remaining = session_environment.approved_paths(session_id)
+        assert remaining == ["/new/this-turn.txt"]
+    finally:
+        session_environment.forget_session(session_id)
+
+
+def _rebuilt_turn_ends(session_id, before):
+    final = {"type": "final", "answer": "done", "session_created": True}
+    relay._dispatch_one(
+        SSEOutputHandler(),
+        final,
+        GAIA_PROFILE,
+        session_id=session_id,
+        approved_before=before,
+    )
+
+
+@pytest.fixture
+def approvals():
+    from gaia.ui import session_environment
+
+    session_id = "chat-reapproval"
+    session_environment.forget_session(session_id)
+    yield session_environment, session_id
+    session_environment.forget_session(session_id)
+
+
+def test_a_file_approved_again_after_a_rebuild_stays_listed(approvals):
+    env, sid = approvals
+    env.note_approved_path(sid, "/a")
+    before = env.begin_turn(sid)
+    env.note_approved_path(sid, "/a")  # the rebuilt agent asks again
+    _rebuilt_turn_ends(sid, before)
+    assert env.approved_paths(sid) == ["/a"]
+
+
+def test_only_the_reapproved_file_survives_a_rebuild(approvals):
+    env, sid = approvals
+    for path in ("/a", "/b", "/c"):
+        env.note_approved_path(sid, path)
+    before = env.begin_turn(sid)
+    env.note_approved_path(sid, "/b")
+    env.note_approved_path(sid, "/d")
+    _rebuilt_turn_ends(sid, before)
+    assert env.approved_paths(sid) == ["/b", "/d"]
+
+
+def test_an_approval_from_an_earlier_turn_does_not_count_as_this_turns(approvals):
+    env, sid = approvals
+    env.begin_turn(sid)
+    env.note_approved_path(sid, "/a")  # approved last turn, by the old agent
+    before = env.begin_turn(sid)  # this turn; the agent is rebuilt
+    _rebuilt_turn_ends(sid, before)
+    assert env.approved_paths(sid) == []
+
+
+def test_forgetting_a_session_also_forgets_this_turns_approvals(approvals):
+    env, sid = approvals
+    env.begin_turn(sid)
+    env.note_approved_path(sid, "/a")
+    env.forget_session(sid)
+    assert env.approved_paths(sid) == []
+    assert sid not in env._approved_this_turn
+
+
+def test_another_chats_reapproval_does_not_shield_this_chats_stale_file(approvals):
+    env, sid = approvals
+    other = sid + "-other"
+    try:
+        env.note_approved_path(sid, "/a")
+        before = env.begin_turn(sid)
+        env.begin_turn(other)
+        env.note_approved_path(other, "/a")
+        _rebuilt_turn_ends(sid, before)
+        assert env.approved_paths(sid) == []
+        assert env.approved_paths(other) == ["/a"]
+    finally:
+        env.forget_session(other)
 
 
 def test_relayed_usage_becomes_the_messages_token_counts():
@@ -161,7 +320,7 @@ def test_prompt_args_are_made_json_safe():
 
 def test_the_relay_hands_the_ui_prompt_its_args_and_label():
     handler = SSEOutputHandler()
-    handler.set_relay_confirmation = lambda _cid, _scope=None: None
+    handler.set_relay_confirmation = lambda _cid, _scope=None, _path=None: None
     relay._dispatch_one(
         handler,
         {
@@ -261,7 +420,7 @@ def test_a_noted_call_matching_the_prompt_is_not_sent_twice():
 
 def test_the_relay_puts_gaias_context_back_on_the_ui_prompt():
     handler = SSEOutputHandler()
-    handler.set_relay_confirmation = lambda _cid, _scope=None: None
+    handler.set_relay_confirmation = lambda _cid, _scope=None, _path=None: None
     relay._dispatch_one(
         handler,
         {
@@ -306,7 +465,7 @@ def test_a_resolved_write_path_is_context_not_an_argument():
 
 def test_the_relay_shows_the_ui_prompt_where_a_write_lands():
     handler = SSEOutputHandler()
-    handler.set_relay_confirmation = lambda _cid, _scope=None: None
+    handler.set_relay_confirmation = lambda _cid, _scope=None, _path=None: None
     relay._dispatch_one(
         handler,
         {
@@ -338,7 +497,7 @@ def test_a_relative_write_reaches_the_ui_prompt_as_its_full_path():
     wire["confirm_id"] = "c-3"
 
     ui_side = SSEOutputHandler()
-    ui_side.set_relay_confirmation = lambda _cid, _scope=None: None
+    ui_side.set_relay_confirmation = lambda _cid, _scope=None, _path=None: None
     relay._dispatch_one(ui_side, wire, GAIA_PROFILE, answers_confirmations=True)
     (shown,) = _drain(ui_side)
     assert wire["args"]["file_path"] == "shop2.txt"
@@ -353,14 +512,6 @@ def test_a_relative_write_reaches_the_ui_prompt_as_its_full_path():
 )
 def test_flagship_memory_floor_is_2_18(version, expected):
     assert memory_supported(GAIA_PROFILE, version) is expected
-
-
-@pytest.mark.parametrize(
-    "version, expected",
-    [("2.16", True), ("2.18", True), ("2.15", False), (None, False)],
-)
-def test_email_memory_floor_is_2_16(version, expected):
-    assert memory_supported(EMAIL_PROFILE, version) is expected
 
 
 @pytest.mark.parametrize(
@@ -475,38 +626,6 @@ def test_every_profile_without_a_memory_floor_explains_the_refusal():
             assert profile.memory_upgrade_message.strip(), agent_id
 
 
-@pytest.mark.parametrize("version", ["2.4", "2.15"])
-@pytest.mark.parametrize("memory", ["private", "off"])
-def test_email_refuses_private_turns_before_init_or_query(monkeypatch, version, memory):
-    init_calls = []
-    proxy = SimpleNamespace(init=lambda: (init_calls.append(True) or (200, {})))
-    events, calls = _dispatch(monkeypatch, version, memory, "email", proxy)
-
-    assert init_calls == []
-    assert calls == []
-    assert len(events) == 1 and events[0]["type"] == "agent_error"
-    message = events[0]["content"]
-    assert "email agent" in message
-    assert "private" in message and "memory" in message
-    assert "not sent" in message
-
-
-@pytest.mark.parametrize(
-    "version, expected_memory",
-    [("2.4", None), ("2.15", None), ("2.16", "on"), ("2.18", "on"), ("9.9", "on")],
-)
-def test_email_memory_mode_is_relayed_only_after_the_contract_floor(
-    monkeypatch, version, expected_memory
-):
-    init_calls = []
-    proxy = SimpleNamespace(init=lambda: (init_calls.append(True) or (200, {})))
-    events, calls = _dispatch(monkeypatch, version, "on", "email", proxy)
-
-    assert init_calls == [True]
-    assert len(calls) == 1 and calls[0]["memory"] == expected_memory
-    assert not [event for event in events if event["type"] == "agent_error"]
-
-
 # ── provider-error wording (#5295) ─────────────────────────────────────────
 
 
@@ -515,7 +634,7 @@ def test_email_memory_mode_is_relayed_only_after_the_contract_floor(
 )
 def test_only_a_flagship_at_2_20_takes_the_surface(version, expected):
     assert surface_supported(GAIA_PROFILE, version) is expected
-    assert surface_supported(EMAIL_PROFILE, "9.9") is False
+    assert surface_supported(_NO_PROFILE, "9.9") is False
 
 
 @pytest.mark.parametrize("version, surface", [("2.20", "agent_ui"), ("2.19", None)])
@@ -969,3 +1088,21 @@ def test_a_failed_relayed_write_is_not_listed(tmp_path):
         {"status": "error", "error": "Permission denied", "file_path": str(target)},
     )
     assert _relayed_files(events) == []
+
+
+def test_a_script_gaia_read_is_context_and_reaches_the_ui_prompt():
+    script = {"text": "import os\nos.remove('a')", "hidden_lines": 0}
+    event = _permission(
+        "execute_python_file",
+        {"file_path": "C:\\w\\job.py", SCRIPT_ARG: script},
+        confirm_id="c-7",
+    )
+    assert event["args"] == {"file_path": "C:\\w\\job.py"}
+    assert event["prompt_context"] == {"script": script}
+    assert "os.remove('a')" in event["summary"]
+
+    handler = SSEOutputHandler()
+    handler.set_relay_confirmation = lambda _cid, _scope=None, _path=None: None
+    relay._dispatch_one(handler, event, GAIA_PROFILE, answers_confirmations=True)
+    (prompt,) = _drain(handler)
+    assert prompt["args"] == {"file_path": "C:\\w\\job.py", SCRIPT_ARG: script}

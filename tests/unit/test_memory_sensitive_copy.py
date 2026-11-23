@@ -253,3 +253,220 @@ def test_forgetting_an_unflagged_fact_keeps_its_words(store):
 
     kept = store._conn.execute("SELECT content, sensitive FROM forgotten").fetchall()
     assert kept == [("User likes green tea", 0)]
+
+
+# The phrasings round 2 of the rc18 test saw: (said to remember, tool's entity,
+# what extraction stored, extraction's entity).
+MANGO_PAIR = ("I am allergic to mango.", None, "User is allergic to mango.", None)
+BLOOD_PAIR = (
+    "My blood type is O negative.",
+    "person:user",
+    "User's blood type is O negative (sensitive medical info).",
+    "user",
+)
+
+
+def _extract_as(host: _Host, content: str, entity, category: str) -> None:
+    host._execute_extraction_operations(
+        [
+            {
+                "op": "add",
+                "category": category,
+                "content": content,
+                "entity": entity,
+                "grounded": "user",
+            }
+        ],
+        [],
+        context="global",
+    )
+
+
+@pytest.mark.parametrize("pair", [MANGO_PAIR, BLOOD_PAIR])
+@pytest.mark.parametrize("extracted_as", ["fact", "preference", "note"])
+@pytest.mark.parametrize("extraction_first", [False, True])
+def test_a_reworded_extraction_leaves_one_sensitive_row(
+    store, pair, extracted_as, extraction_first
+):
+    said, tool_entity, extracted, extract_entity = pair
+    host = _Host(store)
+    with _tools(host) as tools:
+        if extraction_first:
+            _extract_as(host, extracted, extract_entity, extracted_as)
+        saved = tools["remember"](fact=said, sensitive="true", entity=tool_entity or "")
+        assert saved["status"] == "stored"
+        if not extraction_first:
+            _extract_as(host, extracted, extract_entity, extracted_as)
+
+    rows = _rows(store)
+    assert len(rows) == 1, rows
+    assert rows[0][2] == 1, "a copy of the sensitive fact is stored unflagged"
+
+
+def test_a_sensitive_fact_is_found_among_many_memories(store):
+    """The copy check must not depend on a ranked search that can miss the row."""
+    for n in range(60):
+        store.store(category="fact", content=f"User is allergic to pollen type {n}")
+    host = _Host(store)
+    with _tools(host) as tools:
+        tools["remember"](fact=MANGO_PAIR[0], sensitive="true")
+        _extract_as(host, MANGO_PAIR[2], None, "preference")
+
+    mango = [r for r in _rows(store) if "mango" in r[1]]
+    assert len(mango) == 1 and mango[0][2] == 1, mango
+
+
+def test_a_copy_in_another_context_is_stored_sensitive(store):
+    """Each context keeps its own row, but none of them unflagged."""
+    store.store(category="fact", content=MANGO_PAIR[0], sensitive=True, source="tool")
+    store.store(
+        category="fact",
+        content=MANGO_PAIR[2],
+        context="work",
+        source="llm_extract",
+    )
+    assert [r[2] for r in _rows(store)] == [1, 1]
+
+
+def test_saving_as_sensitive_flags_copies_in_other_contexts(store):
+    store.store(category="fact", content=MANGO_PAIR[2], context="work")
+    store.store(category="note", content=MANGO_PAIR[2])
+    store.store(category="fact", content=MANGO_PAIR[0], sensitive=True, source="tool")
+
+    rows = store._conn.execute(
+        "SELECT context, sensitive FROM knowledge ORDER BY context"
+    ).fetchall()
+    assert rows == [("global", 1), ("work", 1)]
+
+
+def test_a_different_fact_is_not_folded_into_a_sensitive_one(store):
+    store.store(category="fact", content=MANGO_PAIR[0], sensitive=True)
+    store.store(category="fact", content="User is not allergic to mango.")
+    store.store(category="fact", content="User is allergic to kiwi.")
+    store.store(category="fact", content="Allergic to mango", entity="person:Sam")
+
+    flags = {content: flag for _, content, flag, _ in _rows(store)}
+    assert flags == {
+        MANGO_PAIR[0]: 1,
+        # Its own row, but it restates the sensitive one, so it is flagged too.
+        "User is not allergic to mango.": 1,
+        "User is allergic to kiwi.": 0,
+        "Allergic to mango": 0,
+    }
+
+
+@pytest.mark.parametrize("extraction_first", [False, True])
+def test_a_loose_rewording_is_stored_sensitive_and_forgotten_with_it(
+    store, extraction_first
+):
+    """Too reworded to merge, so two rows: neither unflagged, both forgotten."""
+    reworded = "User has a mango allergy."
+    host = _Host(store)
+    with _tools(host) as tools:
+        if extraction_first:
+            _extract_as(host, reworded, None, "fact")
+        tools["remember"](fact=MANGO_PAIR[0], sensitive="true")
+        if not extraction_first:
+            _extract_as(host, reworded, None, "fact")
+
+    rows = _rows(store)
+    assert [r[2] for r in rows] == [1] * len(rows), rows
+
+    visible = next(r[0] for r in rows if r[1] == reworded)
+    store.forget_with_copies(visible)
+    assert _rows(store) == []
+
+
+@pytest.mark.parametrize("entity", ["person:user", "Person:User", "person:me"])
+def test_a_tag_naming_the_user_is_the_user(store, entity):
+    first = store.store(category="fact", content=MANGO, entity=entity)
+    assert store.store(category="fact", content=MANGO) == first
+    assert store.store(category="fact", content=MANGO, entity="user") == first
+
+
+@pytest.mark.parametrize("pair", [MANGO_PAIR, BLOOD_PAIR])
+@pytest.mark.parametrize("forget_visible", [True, False])
+def test_forgetting_either_copy_of_an_rc18_pair_erases_both(
+    store, pair, forget_visible
+):
+    """Pairs a build before this fix left behind still go together."""
+    said, tool_entity, extracted, extract_entity = pair
+    host = _Host(store)
+    hidden = store.store(
+        category="fact", content=said, sensitive=True, entity=tool_entity
+    )
+    visible = _plant_twin(store, extracted, entity=extract_entity)
+    store._conn.execute("UPDATE knowledge SET sensitive = 0 WHERE id = ?", (visible,))
+    store._conn.commit()
+    assert len(_rows(store)) == 2
+
+    erased = store.forget_with_copies(visible if forget_visible else hidden)
+
+    assert set(erased) == {hidden, visible}
+    assert _rows(store) == []
+    kept = store._conn.execute("SELECT content, sensitive FROM forgotten").fetchall()
+    assert all(flag == 1 for _, flag in kept), kept
+    with _tools(host) as tools:
+        recalled = tools["recall"](query=said)
+    assert "mango" not in str(recalled).lower()
+    assert "negative" not in str(recalled).lower()
+
+
+def test_folding_keeps_the_fuller_wording_of_a_dropped_copy(store):
+    """A sensitive save must not erase detail an older copy had."""
+    store.store(category="fact", content="User is allergic to mango")
+    store.store(
+        category="note",
+        content="User is allergic to mango since childhood, carries an EpiPen",
+    )
+    store.store(category="fact", content=MANGO_PAIR[0], sensitive=True, source="tool")
+
+    rows = _rows(store)
+    assert len(rows) == 1, rows
+    assert "EpiPen" in rows[0][1] and rows[0][2] == 1
+
+
+def test_forgetting_a_sensitive_fact_keeps_its_negation(store):
+    """ "Is not allergic" is the user's correction, not a copy to forget."""
+    sensitive = store.store(
+        category="fact", content=MANGO_PAIR[0], sensitive=True, source="tool"
+    )
+    store.store(category="fact", content="User is not allergic to mango.")
+
+    erased = store.forget_with_copies(sensitive)
+
+    assert erased == [sensitive]
+    assert [r[1] for r in _rows(store)] == ["User is not allergic to mango."]
+
+
+@pytest.mark.parametrize(
+    "said, unrelated",
+    [
+        ("I have diabetes", "User is writing a work report on diabetes research"),
+        ("I take insulin", "User reads about the history of insulin at work"),
+    ],
+)
+@pytest.mark.parametrize("sensitive_first", [True, False])
+def test_one_shared_word_does_not_flag_an_unrelated_memory(
+    store, said, unrelated, sensitive_first
+):
+    if sensitive_first:
+        store.store(category="fact", content=said, sensitive=True, source="tool")
+        store.store(category="note", content=unrelated)
+    else:
+        store.store(category="note", content=unrelated)
+        store.store(category="fact", content=said, sensitive=True, source="tool")
+
+    flags = {content: flag for _, content, flag, _ in _rows(store)}
+    assert flags[unrelated] == 0, flags
+    assert flags[said] == 1
+
+
+@pytest.mark.parametrize(
+    "reworded", ["User has diabetes (health)", "User has diabetes, diagnosed 2019"]
+)
+def test_a_one_word_sensitive_fact_still_flags_its_rewording(store, reworded):
+    store.store(category="fact", content="I have diabetes", sensitive=True)
+    store.store(category="note", content=reworded, context="work")
+
+    assert [r[2] for r in _rows(store)] == [1, 1]

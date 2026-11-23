@@ -11,43 +11,32 @@ from typing import Iterable, Iterator, Optional, Union
 
 from gaia.llm import create_client
 from gaia.llm.lemonade_client import no_thinking_kwargs, resolve_default_chat_model
+from gaia.llm.reasoning import ReasoningStreamFilter
 from gaia.logger import get_logger
-
-_THINK_OPEN = "<think>"
-_THINK_CLOSE = "</think>"
 
 
 class _ReasoningFilter:
-    """Yield streamed text with ``<think>...</think>`` reasoning left out.
+    """Yield streamed text with the reply's leading ``<think>`` block left out.
 
-    The Lemonade provider wraps a cloud model's reasoning in these tags as whole
-    chunks; this command prints only the answer. ``saw_reasoning`` records
-    whether any was dropped.
+    Only a block the reply opens with is reasoning; a tag the answer mentions
+    is prose and is printed. ``saw_reasoning`` records whether any was dropped.
     """
 
     def __init__(self) -> None:
-        self.saw_reasoning = False
+        self._answer = ReasoningStreamFilter()
+
+    @property
+    def saw_reasoning(self) -> bool:
+        return self._answer.saw_reasoning
 
     def __call__(self, chunks: Iterable[str]) -> Iterator[str]:
-        in_think = False
         for chunk in chunks:
-            while chunk:
-                if in_think:
-                    end = chunk.find(_THINK_CLOSE)
-                    if end < 0:
-                        break
-                    chunk = chunk[end + len(_THINK_CLOSE) :]
-                    in_think = False
-                else:
-                    start = chunk.find(_THINK_OPEN)
-                    if start < 0:
-                        yield chunk
-                        break
-                    if start:
-                        yield chunk[:start]
-                    chunk = chunk[start + len(_THINK_OPEN) :]
-                    in_think = True
-                    self.saw_reasoning = True
+            shown = self._answer.feed(chunk)
+            if shown:
+                yield shown
+        shown = self._answer.flush()
+        if shown:
+            yield shown
 
 
 def _without_reasoning(chunks: Iterable[str]) -> Iterator[str]:

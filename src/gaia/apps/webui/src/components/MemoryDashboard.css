@@ -9,7 +9,15 @@
     height: 100%;
     background: var(--bg-primary);
     overflow: hidden;
+    font-variant-numeric: tabular-nums;
 }
+/* Every tab sits in the same centred column, so switching tabs never moves the edges. */
+.memory-dashboard-body > * {
+    max-width: 1080px;
+    margin-inline: auto;
+}
+/* Tool names are code, so they stay monospace. */
+.mem-tool-name { font-family: var(--font-mono); }
 .mem-beta { letter-spacing: 0.5px; }
 /* Headers and badges here run at 10 px; the gloss's 11 px floor would set the English above the Arabic. */
 .memory-dashboard-page .i18n-gloss.i18n-gloss {
@@ -32,7 +40,7 @@
     display: flex; align-items: center; gap: 12px;
 }
 .memory-dashboard-header h1 {
-    font-size: 15px; font-weight: 600; font-family: var(--font-sans);
+    font-size: 15px; font-weight: 500; font-family: var(--font-sans);
     color: var(--text-primary);
 }
 .memory-dashboard-header-actions {
@@ -59,12 +67,11 @@
 .mem-section:last-child { margin-bottom: 0; }
 
 .mem-section-title {
-    font-size: 11px;
-    font-weight: 600;
-    font-family: var(--font-mono);
-    text-transform: uppercase;
-    letter-spacing: 2px;
-    color: var(--text-muted);
+    font-size: 13px;
+    font-weight: 500;
+    font-family: var(--font-sans);
+    letter-spacing: 0;
+    color: var(--text-secondary);
     margin-bottom: 14px;
     display: flex; align-items: center; gap: 8px;
 }
@@ -95,18 +102,17 @@
     border: 1px solid var(--border);
     border-radius: var(--radius-full);
     font-size: 10px;
-    font-weight: 700;
-    color: var(--text-muted);
+    font-weight: 500;
+    color: var(--text-secondary);
     letter-spacing: 0;
-    font-family: var(--font-mono);
+    font-family: var(--font-sans);
 }
 .mem-section-add-btn {
     display: inline-flex; align-items: center; gap: 5px;
     padding: 4px 10px;
     font-size: 11px;
-    font-weight: 600;
-    font-family: var(--font-mono);
-    text-transform: uppercase;
+    font-weight: 500;
+    font-family: var(--font-sans);
     letter-spacing: 0.5px;
     border-radius: var(--radius-md);
     border: 1px solid var(--border);
@@ -131,8 +137,8 @@
 .mem-range-tab {
     padding: 3px 10px;
     font-size: 10px;
-    font-weight: 700;
-    font-family: var(--font-mono);
+    font-weight: 500;
+    font-family: var(--font-sans);
     letter-spacing: 0.5px;
     border: none;
     background: transparent;
@@ -149,7 +155,7 @@
 /* ── 1. Header Stat Cards ────────────────────────────────────── */
 .mem-stat-cards {
     display: grid;
-    grid-template-columns: repeat(4, minmax(0, 1fr));
+    grid-template-columns: repeat(5, minmax(0, 1fr));
     gap: 14px;
     margin-bottom: 28px;
 }
@@ -168,7 +174,7 @@
 
 .mem-stat-value {
     font-size: 28px;
-    font-weight: 700;
+    font-weight: 500;
     font-family: var(--font-display);
     color: var(--text-primary);
     line-height: 1.1;
@@ -184,15 +190,9 @@
     font-size: 11px;
     color: var(--text-muted);
     margin-top: 2px;
-    font-family: var(--font-mono);
+    font-family: var(--font-sans);
 }
 
-/* Color accents for stat cards */
-.mem-stat-card[data-accent="purple"] .mem-stat-value { color: var(--accent-purple); }
-.mem-stat-card[data-accent="blue"] .mem-stat-value { color: var(--accent-blue); }
-.mem-stat-card[data-accent="green"] .mem-stat-value { color: var(--accent-green); }
-.mem-stat-card[data-accent="red"] .mem-stat-value { color: var(--accent); }
-.mem-stat-card[data-accent="gold"] .mem-stat-value { color: var(--accent-yellow); }
 
 /* ── 2. Activity Timeline (CSS bar chart) ────────────────────── */
 .mem-activity-chart {
@@ -239,7 +239,7 @@
     bottom: -22px;
     font-size: 9px;
     color: var(--text-muted);
-    font-family: var(--font-mono);
+    font-family: var(--font-sans);
     white-space: nowrap;
 }
 
@@ -248,7 +248,7 @@
     gap: 16px;
     margin-top: 10px;
     font-size: 11px;
-    font-family: var(--font-mono);
+    font-family: var(--font-sans);
     color: var(--text-secondary);
 }
 .mem-activity-legend-item {
@@ -272,7 +272,7 @@
     border-radius: var(--radius-sm);
     padding: 6px 10px;
     font-size: 11px;
-    font-family: var(--font-mono);
+    font-family: var(--font-sans);
     color: var(--text-primary);
     white-space: nowrap;
     pointer-events: none;
@@ -292,7 +292,7 @@
 .mem-filter-select {
     padding: 7px 12px;
     font-size: 12px;
-    font-family: var(--font-mono);
+    font-family: var(--font-sans);
     border: 1px solid var(--border);
     border-radius: var(--radius-md);
     background: var(--bg-input);
@@ -321,9 +321,8 @@
 .mem-category-pill {
     padding: 4px 11px;
     font-size: 11px;
-    font-weight: 600;
-    font-family: var(--font-mono);
-    text-transform: uppercase;
+    font-weight: 500;
+    font-family: var(--font-sans);
     letter-spacing: 0.5px;
     border-radius: var(--radius-full);
     border: 1px solid var(--border);
@@ -371,7 +370,7 @@
     padding-block: 7px;
     padding-inline: 32px 12px;
     font-size: 12px;
-    font-family: var(--font-mono);
+    font-family: var(--font-sans);
     border: 1px solid var(--border);
     border-radius: var(--radius-md);
     background: var(--bg-input);
@@ -408,10 +407,9 @@
     text-align: start;
     padding: 8px 12px;
     font-size: 10px;
-    font-weight: 600;
-    font-family: var(--font-mono);
-    text-transform: uppercase;
-    letter-spacing: 1.5px;
+    font-weight: 500;
+    font-family: var(--font-sans);
+    letter-spacing: 0;
     color: var(--text-muted);
     border-bottom: 1px solid var(--border);
     white-space: nowrap;
@@ -442,9 +440,8 @@
     display: inline-block;
     padding: 2px 8px;
     font-size: 10px;
-    font-weight: 600;
-    font-family: var(--font-mono);
-    text-transform: uppercase;
+    font-weight: 500;
+    font-family: var(--font-sans);
     letter-spacing: 0.5px;
     border-radius: var(--radius-full);
     white-space: nowrap;
@@ -457,7 +454,7 @@
 /* Confidence bar */
 .mem-confidence {
     display: flex; align-items: center; gap: 6px;
-    font-family: var(--font-mono); font-size: 12px;
+    font-family: var(--font-sans); font-size: 12px;
     color: var(--text-secondary);
 }
 .mem-confidence-bar {
@@ -479,19 +476,10 @@
 .mem-content-cell {
     max-width: 320px;
     overflow: hidden;
-    text-overflow: ellipsis;
+    text-overflow: clip;
+    animation: fade-cut-inline both;
+    animation-timeline: scroll(self inline);
     white-space: nowrap;
-}
-
-.mem-sensitive-blur {
-    filter: blur(4px);
-    cursor: pointer;
-    transition: filter var(--duration) var(--ease);
-    user-select: none;
-}
-.mem-sensitive-blur:hover,
-.mem-sensitive-blur.revealed {
-    filter: none;
 }
 
 .mem-sensitive-badge {
@@ -509,13 +497,13 @@
     font-size: 11px;
     color: var(--accent-blue);
     cursor: pointer;
-    font-family: var(--font-mono);
+    font-family: var(--font-sans);
 }
 .mem-entity-link:hover { text-decoration: underline; }
 
 .mem-due-badge {
     font-size: 11px;
-    font-family: var(--font-mono);
+    font-family: var(--font-sans);
     white-space: nowrap;
 }
 .mem-due-badge.overdue { color: var(--danger); }
@@ -524,7 +512,7 @@
 
 .mem-date-cell {
     font-size: 12px;
-    font-family: var(--font-mono);
+    font-family: var(--font-sans);
     color: var(--text-secondary);
     white-space: nowrap;
 }
@@ -559,10 +547,11 @@
     transition: all var(--duration-fast) var(--ease);
 }
 .mem-row-action-btn:hover { background: var(--bg-hover); color: var(--text-primary); }
+.mem-row-action-btn:disabled { opacity: 0.45; cursor: not-allowed; background: none; color: var(--text-muted); }
 .mem-row-action-btn.delete:hover,
 .mem-row-action-btn.delete.is-confirm { color: var(--danger); }
 .mem-row-action-btn.is-confirm { width: auto; padding: 0 6px; }
-.mem-row-delete-label { font-size: 11px; font-weight: 600; }
+.mem-row-delete-label { font-size: 11px; font-weight: 500; }
 
 /* Pagination */
 .mem-pagination {
@@ -571,7 +560,7 @@
     justify-content: space-between;
     margin-top: 12px;
     font-size: 12px;
-    font-family: var(--font-mono);
+    font-family: var(--font-sans);
     color: var(--text-muted);
 }
 .mem-pagination-btns {
@@ -582,7 +571,7 @@
     border: 1px solid var(--border);
     border-radius: var(--radius-sm);
     font-size: 12px;
-    font-family: var(--font-mono);
+    font-family: var(--font-sans);
     color: var(--text-secondary);
     transition: all var(--duration) var(--ease);
 }
@@ -607,10 +596,9 @@
     text-align: start;
     padding: 8px 12px;
     font-size: 10px;
-    font-weight: 600;
-    font-family: var(--font-mono);
-    text-transform: uppercase;
-    letter-spacing: 1.5px;
+    font-weight: 500;
+    font-family: var(--font-sans);
+    letter-spacing: 0;
     color: var(--text-muted);
     border-bottom: 1px solid var(--border);
     white-space: nowrap;
@@ -619,7 +607,7 @@
 .mem-tool-table td {
     padding: 10px 12px;
     border-bottom: 1px solid var(--border-light);
-    font-family: var(--font-mono);
+    font-family: var(--font-sans);
     font-size: 12px;
 }
 
@@ -637,7 +625,7 @@
 }
 
 .mem-success-rate {
-    font-weight: 600;
+    font-weight: 500;
 }
 .mem-success-rate.high { color: var(--accent-green); }
 .mem-success-rate.medium { color: var(--accent-yellow); }
@@ -648,7 +636,9 @@
     vertical-align: top;
     max-width: 260px;
     overflow: hidden;
-    text-overflow: ellipsis;
+    text-overflow: clip;
+    animation: fade-cut-inline both;
+    animation-timeline: scroll(self inline);
     white-space: nowrap;
     color: var(--text-muted);
     font-size: 11px;
@@ -672,7 +662,7 @@
     padding-block: 8px;
     padding-inline: 32px 12px;
     font-size: 12px;
-    font-family: var(--font-mono);
+    font-family: var(--font-sans);
     border: 1px solid var(--border);
     border-radius: var(--radius-md);
     background: var(--bg-input);
@@ -693,7 +683,7 @@
     border-radius: var(--radius-full);
     border: none;
     background: var(--bg-tertiary);
-    color: var(--text-muted);
+    color: var(--text-secondary);
     cursor: pointer;
     transition: all var(--duration) var(--ease);
 }
@@ -708,9 +698,9 @@
 }
 .mem-delete-confirm-label {
     font-size: 12px;
-    font-weight: 600;
+    font-weight: 500;
     color: var(--danger);
-    font-family: var(--font-mono);
+    font-family: var(--font-sans);
     white-space: nowrap;
 }
 
@@ -742,14 +732,18 @@
     font-weight: 500;
     color: var(--text-primary);
     overflow: hidden;
-    text-overflow: ellipsis;
+    text-overflow: clip;
+    animation: fade-cut-inline both;
+    animation-timeline: scroll(self inline);
     white-space: nowrap;
 }
 .mem-conv-preview {
     font-size: 12px;
     color: var(--text-muted);
     overflow: hidden;
-    text-overflow: ellipsis;
+    text-overflow: clip;
+    animation: fade-cut-inline both;
+    animation-timeline: scroll(self inline);
     white-space: nowrap;
     margin-top: 2px;
 }
@@ -757,7 +751,7 @@
     display: flex;
     gap: 12px;
     font-size: 11px;
-    font-family: var(--font-mono);
+    font-family: var(--font-sans);
     color: var(--text-muted);
     flex-shrink: 0;
     margin-inline-start: 12px;
@@ -809,15 +803,14 @@
 .mem-conv-turn-time {
     font-size: 10px;
     color: var(--text-muted);
-    font-family: var(--font-mono);
+    font-family: var(--font-sans);
     flex-shrink: 0;
 }
 .mem-conv-turn-role {
     font-size: 10px;
-    font-weight: 600;
-    font-family: var(--font-mono);
-    text-transform: uppercase;
-    letter-spacing: 1px;
+    font-weight: 500;
+    font-family: var(--font-sans);
+    letter-spacing: 0;
     margin-bottom: 4px;
 }
 .mem-conv-turn-role.user { color: var(--accent-blue); }
@@ -870,7 +863,7 @@
 }
 .mem-temporal-date {
     font-size: 11px;
-    font-family: var(--font-mono);
+    font-family: var(--font-sans);
     color: var(--text-muted);
     margin-top: 2px;
 }
@@ -887,6 +880,7 @@
 
 @container (max-width: 860px) {
     .mem-two-col { grid-template-columns: minmax(0, 1fr); }
+    .mem-stat-cards { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 }
 @container (max-width: 640px) {
     .mem-stat-cards { grid-template-columns: repeat(2, minmax(0, 1fr)); }
@@ -914,7 +908,7 @@
     padding: 40px;
     color: var(--text-muted);
     font-size: 13px;
-    font-family: var(--font-mono);
+    font-family: var(--font-sans);
     gap: 10px;
 }
 .mem-spinner {
@@ -943,10 +937,9 @@
 }
 .mem-inline-form-row label {
     font-size: 11px;
-    font-weight: 600;
-    font-family: var(--font-mono);
-    text-transform: uppercase;
-    letter-spacing: 1px;
+    font-weight: 500;
+    font-family: var(--font-sans);
+    letter-spacing: 0;
     color: var(--text-muted);
     width: 80px;
     flex-shrink: 0;
@@ -957,7 +950,7 @@
     flex: 1;
     padding: 7px 12px;
     font-size: 12px;
-    font-family: var(--font-mono);
+    font-family: var(--font-sans);
     border: 1px solid var(--border);
     border-radius: var(--radius-md);
     background: var(--bg-input);
@@ -1014,15 +1007,14 @@
 }
 .mem-detail-label {
     font-size: 10px;
-    font-weight: 600;
-    font-family: var(--font-mono);
-    text-transform: uppercase;
-    letter-spacing: 1px;
+    font-weight: 500;
+    font-family: var(--font-sans);
+    letter-spacing: 0;
     color: var(--text-muted);
 }
 .mem-detail-value {
     font-size: 12px;
-    font-family: var(--font-mono);
+    font-family: var(--font-sans);
     color: var(--text-primary);
     word-break: break-all;
 }
@@ -1067,7 +1059,7 @@
 }
 .mem-embedding-label {
     font-size: 11px;
-    font-family: var(--font-mono);
+    font-family: var(--font-sans);
     color: var(--text-secondary);
     white-space: nowrap;
 }
@@ -1099,7 +1091,7 @@
     width: 100%;
     padding: 9px 14px;
     font-size: 12px;
-    font-family: var(--font-mono);
+    font-family: var(--font-sans);
     color: var(--text-primary);
     border-radius: var(--radius-md);
     transition: background var(--duration-fast) var(--ease);
@@ -1151,7 +1143,7 @@
     align-items: center;
     gap: 5px;
     font-size: 11px;
-    font-family: var(--font-mono);
+    font-family: var(--font-sans);
     color: var(--text-secondary);
     cursor: pointer;
     white-space: nowrap;
@@ -1198,16 +1190,16 @@
     border-radius: var(--radius-lg);
     box-shadow: var(--shadow-lg);
     font-size: 12px;
-    font-family: var(--font-mono);
+    font-family: var(--font-sans);
     color: var(--text-primary);
-    animation: toastIn var(--duration) var(--ease);
+    animation: memToastIn var(--duration) var(--ease);
     pointer-events: auto;
 }
 .mem-toast-success { border-inline-start: 3px solid var(--accent-green); }
 .mem-toast-error { border-inline-start: 3px solid var(--danger); }
 .mem-toast-info { border-inline-start: 3px solid var(--accent-blue); }
 
-@keyframes toastIn {
+@keyframes memToastIn {
     from { opacity: 0; transform: translateY(10px) scale(0.96); }
     to { opacity: 1; transform: none; }
 }
@@ -1218,17 +1210,29 @@
 .mem-toggle {
     position: relative;
     flex-shrink: 0;
-    min-inline-size: 40px;
-    height: 22px;
-    border-radius: 11px;
+    width: 36px;
+    height: 20px;
+    border-radius: var(--radius-full);
     border: none;
     background: var(--border);
     cursor: pointer;
-    padding: 0 8px;
-    transition: background var(--duration) var(--ease);
+    padding: 0;
+    transition: background var(--duration-fast) var(--ease);
 }
 .mem-toggle:disabled { opacity: 0.5; cursor: not-allowed; }
-.mem-toggle-on { background: var(--accent-green); }
+.mem-toggle-on { background: var(--accent); }
+.mem-toggle-knob {
+    position: absolute;
+    top: 2px;
+    inset-inline-start: 2px;
+    width: 16px;
+    height: 16px;
+    border-radius: 50%;
+    background: var(--switch-knob);
+    transition: transform var(--duration-fast) var(--ease);
+}
+.mem-toggle-on .mem-toggle-knob { transform: translateX(16px); }
+.mem-toggle-on:dir(rtl) .mem-toggle-knob { transform: translateX(-16px); }
 
 /* New-style setting rows (memory-enabled, delete-all) */
 .mem-setting-row {
@@ -1249,7 +1253,7 @@
 }
 .mem-setting-label {
     font-size: 12px;
-    font-weight: 600;
+    font-weight: 500;
     color: var(--text-primary);
 }
 .mem-setting-desc {
@@ -1264,7 +1268,7 @@
     padding: 5px 12px;
     border-radius: 6px;
     font-size: 11px;
-    font-weight: 600;
+    font-weight: 500;
     border: 1px solid var(--danger);
     color: var(--danger);
     background: transparent;
@@ -1283,7 +1287,7 @@
     padding-top: 14px;
     border-top: 1px solid var(--border-light);
     font-size: 11px;
-    font-family: var(--font-mono);
+    font-family: var(--font-sans);
     color: var(--text-muted);
     display: flex;
     align-items: center;
@@ -1306,10 +1310,9 @@
     padding: 10px 18px;
     border: none;
     background: none;
-    font-size: 12px;
+    font-size: 13px;
     font-weight: 500;
-    font-family: var(--font-mono);
-    letter-spacing: 0.5px;
+    font-family: var(--font-sans);
     color: var(--text-muted);
     cursor: pointer;
     border-bottom: 2px solid transparent;
@@ -1341,8 +1344,8 @@
 }
 .mem-profile-card-title {
     font-size: 13px;
-    font-weight: 600;
-    font-family: var(--font-mono);
+    font-weight: 500;
+    font-family: var(--font-sans);
     color: var(--text-primary);
     display: flex;
     align-items: center;
@@ -1355,17 +1358,25 @@
     margin: 0;
 }
 .mem-profile-note {
-    font-size: 11px;
+    font-size: 12px;
     color: var(--text-muted);
-    font-style: italic;
     margin: 0;
+}
+/* One plain sentence on what a tab is for, above its controls. */
+.mem-tab-intro {
+    grid-column: 1 / -1;
+    max-width: 72ch;
+    margin: 0;
+    font-size: 14px;
+    line-height: 1.5;
+    color: var(--text-secondary);
 }
 .mem-profile-checkbox {
     display: flex;
     align-items: center;
     gap: 6px;
     font-size: 12px;
-    font-family: var(--font-mono);
+    font-family: var(--font-sans);
     color: var(--text-secondary);
     cursor: pointer;
 }
@@ -1388,7 +1399,7 @@
     padding: 8px;
     max-height: 200px;
     overflow-y: auto;
-    font-family: var(--font-mono);
+    font-family: var(--font-sans);
     font-size: 12px;
     line-height: 1.6;
     scrollbar-width: thin;
@@ -1421,10 +1432,9 @@
 }
 .mem-review-header {
     font-size: 11px;
-    font-weight: 600;
-    font-family: var(--font-mono);
-    text-transform: uppercase;
-    letter-spacing: 1.5px;
+    font-weight: 500;
+    font-family: var(--font-sans);
+    letter-spacing: 0;
     color: var(--text-muted);
 }
 .mem-review-list {
@@ -1459,7 +1469,9 @@
     font-size: 12px;
     color: var(--text-primary);
     overflow: hidden;
-    text-overflow: ellipsis;
+    text-overflow: clip;
+    animation: fade-cut-inline both;
+    animation-timeline: scroll(self inline);
     white-space: nowrap;
 }
 
@@ -1467,7 +1479,7 @@
 .mem-conf-badge {
     flex-shrink: 0;
     font-size: 10px;
-    font-family: var(--font-mono);
+    font-family: var(--font-sans);
     padding: 2px 6px;
     border-radius: var(--radius-sm);
     background: color-mix(in srgb, var(--text-muted) 12%, transparent);
@@ -1476,7 +1488,7 @@
 .mem-source-badge {
     flex-shrink: 0;
     font-size: 10px;
-    font-family: var(--font-mono);
+    font-family: var(--font-sans);
     padding: 2px 6px;
     border-radius: var(--radius-sm);
     background: color-mix(in srgb, var(--text-muted) 12%, transparent);
@@ -1485,8 +1497,8 @@
 .mem-domain-badge {
     flex-shrink: 0;
     font-size: 10px;
-    font-family: var(--font-mono);
-    font-weight: 600;
+    font-family: var(--font-sans);
+    font-weight: 500;
     padding: 2px 8px;
     border-radius: var(--radius-sm);
 }
@@ -1511,7 +1523,7 @@
 }
 .mem-review-select-links {
     font-size: 11px;
-    font-family: var(--font-mono);
+    font-family: var(--font-sans);
     color: var(--text-muted);
 }
 .mem-link-btn {
@@ -1537,7 +1549,7 @@
     border: 1px solid color-mix(in srgb, var(--accent-green) 25%, transparent);
     border-radius: var(--radius-md);
     font-size: 12px;
-    font-family: var(--font-mono);
+    font-family: var(--font-sans);
     color: var(--accent-green);
 }
 .mem-profile-empty {
@@ -1545,7 +1557,7 @@
     text-align: center;
     font-size: 12px;
     color: var(--text-muted);
-    font-family: var(--font-mono);
+    font-family: var(--font-sans);
 }
 
 /* ── Responsive ──────────────────────────────────────────────── */
@@ -1605,7 +1617,7 @@
     font-size: 12px; font-weight: 500;
     background: var(--bg-hover); border: 1px solid var(--border);
 }
-.mem-goals-stat-n { font-size: 16px; font-weight: 700; }
+.mem-goals-stat-n { font-size: 16px; font-weight: 500; }
 .mem-goals-stat-label { opacity: 0.7; text-transform: capitalize; }
 
 /* Status colors */
@@ -1625,7 +1637,7 @@
 }
 .mem-goals-approval-title {
     display: flex; align-items: center; gap: 6px;
-    font-size: 12px; font-weight: 600; opacity: 0.85;
+    font-size: 12px; font-weight: 500; opacity: 0.85;
 }
 .mem-goals-approval-item {
     display: flex; align-items: flex-start; justify-content: space-between; gap: 12px;
@@ -1635,7 +1647,7 @@
     border-radius: var(--radius-md);
 }
 .mem-goals-approval-text { display: flex; flex-direction: column; gap: 3px; font-size: 13px; }
-.mem-goals-approval-text strong { font-weight: 600; }
+.mem-goals-approval-text strong { font-weight: 500; }
 .mem-goals-approval-text span { opacity: 0.7; font-size: 12px; }
 .mem-goals-approval-actions { display: flex; gap: 6px; flex-shrink: 0; }
 
@@ -1651,6 +1663,12 @@
 .mem-goals-toolbar { display: flex; gap: 8px; }
 
 /* Add form */
+.mem-form-error {
+    margin: 8px 0 0;
+    color: var(--danger);
+    font-size: 13px;
+}
+
 .mem-goals-add-form {
     display: flex; flex-direction: column; gap: 8px;
     padding: 12px; background: var(--bg-hover);
@@ -1662,6 +1680,22 @@
     background: var(--bg-card); border: 1px solid var(--border);
     color: var(--text-primary); font-size: 13px; cursor: pointer;
 }
+/* The page's text fields, matching the app's other inputs. */
+.mem-input {
+    min-height: 34px;
+    padding: 7px 12px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+    background: var(--bg-card);
+    color: var(--text-primary);
+    font-family: var(--font-sans);
+    font-size: 14px;
+    line-height: 1.45;
+    transition: border-color var(--duration-fast) var(--ease);
+}
+.mem-input::placeholder { color: var(--text-muted); }
+.mem-input:focus { border-color: var(--accent); }
+textarea.mem-input { resize: vertical; }
 
 /* Goal cards */
 .mem-goals-list { display: flex; flex-direction: column; gap: 8px; }
@@ -1690,8 +1724,8 @@
 .mem-goal-status-dot.status-failed      { background: var(--danger); }
 
 .mem-goal-title {
-    font-size: 13px; font-weight: 600;
-    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    font-size: 13px; font-weight: 500;
+    white-space: nowrap; overflow: hidden; text-overflow: clip; animation: fade-cut-inline both; animation-timeline: scroll(self inline);
 }
 .mem-goal-priority {
     font-size: 11px; padding: 1px 6px; border-radius: 10px; font-weight: 500; flex-shrink: 0;
@@ -1699,6 +1733,7 @@
 .mem-priority-high   { background: color-mix(in srgb, var(--danger) 15%, transparent); }
 .mem-priority-medium { background: color-mix(in srgb, var(--accent-yellow) 15%, transparent); }
 .mem-priority-low    { background: color-mix(in srgb, var(--accent-blue) 15%, transparent); }
+.mem-goal-cancelled-label { background: var(--bg-hover); border: 1px solid var(--border); }
 
 .mem-goal-source-badge {
     display: flex; align-items: center; gap: 3px;
@@ -1755,13 +1790,13 @@
 .mem-task-dot.status-blocked     { background: var(--accent-purple); }
 .mem-task-desc { flex: 1; }
 .mem-task-status-label { font-size: 10px; opacity: 0.5; flex-shrink: 0; text-transform: capitalize; }
-.mem-task-result { font-size: 11px; opacity: 0.6; flex-shrink: 0; max-width: 200px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mem-task-result { font-size: 11px; opacity: 0.6; flex-shrink: 0; max-width: 200px; overflow: hidden; text-overflow: clip; animation: fade-cut-inline both; animation-timeline: scroll(self inline); white-space: nowrap; }
 
 /* Tab badge (pending approval count) */
 .mem-tab-badge {
     display: inline-flex; align-items: center; justify-content: center;
     min-width: 16px; height: 16px; padding: 0 4px;
-    border-radius: 8px; font-size: 10px; font-weight: 700;
+    border-radius: 8px; font-size: 10px; font-weight: 500;
     background: var(--accent-yellow); color: var(--text-inverse);
     margin-inline-start: 2px;
 }
@@ -1788,13 +1823,9 @@
 }
 
 /* ── About you: what GAIA knows about the user ─────────────────────── */
-.mem-about {
-    max-width: 760px;
-    margin: 0 auto;
-}
 .mem-about-title {
     font-size: 20px;
-    font-weight: 600;
+    font-weight: 500;
     color: var(--text-primary);
     margin: 4px 0 6px;
 }
@@ -1805,20 +1836,26 @@
 }
 .mem-about-add {
     display: flex;
+    flex-wrap: wrap;
     gap: 8px;
     margin-bottom: 20px;
 }
 .mem-about-add .mem-input {
-    flex: 1;
+    flex: 1 1 360px;
     min-width: 0;
+}
+.mem-about-add .mem-about-when {
+    flex: 0 0 auto;
+}
+.mem-about-edit .mem-about-when {
+    align-self: flex-start;
 }
 .mem-about-group {
     margin-bottom: 22px;
 }
 .mem-about-group-title {
     font-size: 12px;
-    font-weight: 600;
-    text-transform: uppercase;
+    font-weight: 500;
     letter-spacing: 0.5px;
     color: var(--text-muted);
     margin: 0 0 8px;
@@ -1879,10 +1916,14 @@
     font-size: 12px;
     cursor: pointer;
 }
-.mem-about-btn:hover,
+.mem-about-btn:not(:disabled):hover,
 .mem-about-btn:focus-visible {
     color: var(--text-primary);
     background: var(--bg-hover);
+}
+.mem-about-btn:disabled {
+    opacity: 0.45;
+    cursor: not-allowed;
 }
 .mem-about-btn-remove:hover,
 .mem-about-btn-remove:focus-visible {
@@ -1919,9 +1960,14 @@
     border: none;
     padding: 0;
     font: inherit;
-    color: var(--accent-blue);
+    font-weight: 500;
+    color: var(--accent);
     cursor: pointer;
     white-space: nowrap;
+}
+.mem-about-forgotten > span {
+    flex: 1;
+    min-width: 0;
 }
 .mem-about-link:hover,
 .mem-about-link:focus-visible {

@@ -110,8 +110,8 @@ function among(ranges: ReadonlyArray<readonly [number, number]>, char: string): 
 
 const variationSelector = (char: string) => among(VARIATION_SELECTORS, char);
 
-function hidden(char: string): boolean {
-    if (KEPT_AS_WRITTEN.has(char) || variationSelector(char)) return false;
+function hidden(char: string, kept: ReadonlySet<string>): boolean {
+    if (kept.has(char) || variationSelector(char)) return false;
     return BLANK_LOOKING.has(char) || HIDDEN_CATEGORY.test(char) || among(DEFAULT_IGNORABLE, char);
 }
 
@@ -128,14 +128,77 @@ function selectorFits(chars: string[], at: number): boolean {
     return point >= 0xE0100 && point <= 0xE01EF && among(CJK_IDEOGRAPHS, previous);
 }
 
-/** `[U+202E]` in place of each, so what is approved reads as what is saved. */
-function visibleText(value: string, multiline: boolean): string {
+/**
+ * `[U+202E]` in place of each, so what is approved reads as what is saved. `kept` is what
+ * stays as written: prose keeps `KEPT_AS_WRITTEN`, a file preview keeps less.
+ */
+export function visibleWith(kept: ReadonlySet<string>, value: string, multiline: boolean): string {
     const chars = [...value.replace(/\r\n/g, '\n')];
     const shown = chars.map((char, at) => {
-        const isHidden = variationSelector(char) ? !selectorFits(chars, at) : hidden(char);
+        const isHidden = variationSelector(char) ? !selectorFits(chars, at) : hidden(char, kept);
         return isHidden ? `[U+${char.codePointAt(0)!.toString(16).toUpperCase().padStart(4, '0')}]` : char;
     }).join('');
     return multiline ? shown : shown.replace(/\n/g, '[U+000A]');
+}
+
+/** Prose, marked the way the approval card marks it. */
+export function visibleText(value: string, multiline: boolean): string {
+    return visibleWith(KEPT_AS_WRITTEN, value, multiline);
+}
+
+const KEPT_IN_NAMES: ReadonlySet<string> = new Set();
+const KEPT_IN_COMMANDS: ReadonlySet<string> = new Set(['\u0009', '\u000A']);
+const codeOf = (char: string) => `[U+${char.codePointAt(0)!.toString(16).toUpperCase().padStart(4, '0')}]`;
+const strictly = (char: string, kept: ReadonlySet<string>) => variationSelector(char) || hidden(char, kept);
+
+/**
+ * A path, URL, id, program or "always allow" label on an approval card, as
+ * `visible_strict` (`person_approval.py`) writes it: joiners, direction marks,
+ * tab, CR, LF and every variation selector are codes too, since in a name they
+ * can only make it read as another.
+ */
+export function visibleStrict(value: string): string {
+    return [...value].map((char) => (strictly(char, KEPT_IN_NAMES) ? codeOf(char) : char)).join('');
+}
+
+/** A command on an approval card: the name rule for its words, its tabs and line breaks kept. */
+export function visibleCommand(value: string): string {
+    return [...value.replace(/\r\n/g, '\n')].map((char) => (strictly(char, KEPT_IN_COMMANDS) ? codeOf(char) : char)).join('');
+}
+
+/** Whether `visibleStrict` would show a code. */
+export function unseenStrict(value: unknown): boolean {
+    return typeof value === 'string' && [...value].some((char) => strictly(char, KEPT_IN_NAMES));
+}
+
+/** Whether `visibleCommand` would show a code. */
+export function unseenCommand(value: unknown): boolean {
+    return typeof value === 'string' && [...value.replace(/\r\n/g, '\n')].some((char) => strictly(char, KEPT_IN_COMMANDS));
+}
+
+/** A file name or path from a tool, marked the way the approval card marks it. */
+export function visibleName(value: string): string {
+    return visibleText(value, false);
+}
+
+const OVERRIDES = /[\u202A-\u202E]/;
+const ISOLATE_OPEN = /[\u2066-\u2068]/;
+const ISOLATE_CLOSE = '\u2069';
+
+/** Marks overrides and unpaired isolates, which nobody types on purpose; paired isolates, marks and joiners stay. */
+export function markStrayDirection(text: string): string {
+    return text.split('\n').map((line) => {
+        const chars = [...line];
+        const stray = new Set<number>();
+        const open: number[] = [];
+        chars.forEach((char, at) => {
+            if (OVERRIDES.test(char)) stray.add(at);
+            else if (ISOLATE_OPEN.test(char)) open.push(at);
+            else if (char === ISOLATE_CLOSE && open.pop() === undefined) stray.add(at);
+        });
+        open.forEach((at) => stray.add(at));
+        return chars.map((char, at) => (stray.has(at) ? visibleText(char, false) : char)).join('');
+    }).join('\n');
 }
 
 /** `HIDDEN_NOTE` plus what `calendar_tools.py` adds to it; a Python test keeps them equal. */
@@ -143,14 +206,19 @@ const UNSEEN_NOTE = "This text holds characters that don't show. Those that hide
     'appear as [U+XXXX]; ideograph variant marks are kept as written. They are saved as written.';
 
 /** Mirrors `has_unseen`: a code would show, or an ideograph variant mark is kept as written. */
-function unseen(value: unknown): boolean {
+export function unseenWith(kept: ReadonlySet<string>, value: unknown): boolean {
     if (typeof value !== 'string') return false;
     const chars = [...value.replace(/\r\n/g, '\n')];
     return chars.some((char, at) => {
         const point = char.codePointAt(0) ?? 0;
         if (point >= 0xE0100 && point <= 0xE01EF) return true;
-        return variationSelector(char) ? !selectorFits(chars, at) : hidden(char);
+        return variationSelector(char) ? !selectorFits(chars, at) : hidden(char, kept);
     });
+}
+
+/** Whether prose would show a code on the approval card. */
+export function unseen(value: unknown): boolean {
+    return unseenWith(KEPT_AS_WRITTEN, value);
 }
 
 const FENCE_OPEN = '<<<UNTRUSTED_TEXT>>>';
@@ -187,7 +255,7 @@ function plain(value: unknown): string {
             if (fenceSide(chars[at]) === side) {
                 count += 1;
                 last = at;
-            } else if (!hidden(chars[at])) break;
+            } else if (!hidden(chars[at], KEPT_AS_WRITTEN)) break;
         }
         out += count >= 3 ? side + side : chars.slice(start, last + 1).join('');
         start = last + 1;
@@ -197,7 +265,7 @@ function plain(value: unknown): string {
 
 /** GAIA sends the checked values (addresses as notified), so this only makes them visible. */
 function text(value: unknown, multiline = false): string {
-    return visibleText(plain(value), multiline);
+    return visibleWith(KEPT_AS_WRITTEN, plain(value), multiline);
 }
 
 /** Local midnight, so an all-day date can't slide to a neighbouring day. */
@@ -241,17 +309,22 @@ export function CalendarApproval({ tool, args }: { tool: string; args: Record<st
         const shown = text(value, multiline);
         if (shown) rows.push([label, <Name value={shown} />]);
     };
+    // An address reads left to right in any language.
+    const account = () => {
+        const shown = text(args.calendar_account);
+        if (shown) rows.push([t('permission.calendar.account'), <bdi dir="ltr">{shown}</bdi>]);
+    };
 
     if (tool === 'calendar/create_calendar_event') {
         named(t('permission.calendar.title'), args.title);
         rows.push([t('permission.calendar.when'), <When start={text(args.start)} end={text(args.end)} />]);
-        named(t('permission.calendar.account'), args.calendar_account);
+        account();
         named(t('permission.calendar.location'), args.location);
         named(t('permission.calendar.description'), args.description, true);
     } else {
         named(t('permission.calendar.event'), args.expected_title);
         rows.push([t('permission.calendar.when'), <When start={text(args.expected_start)} end="" />]);
-        named(t('permission.calendar.account'), args.calendar_account);
+        account();
         named(t('permission.calendar.newTitle'), args.new_title);
         if (text(args.new_start)) {
             rows.push([t('permission.calendar.newTime'), <When start={text(args.new_start)} end={text(args.new_end)} />]);
@@ -262,7 +335,7 @@ export function CalendarApproval({ tool, args }: { tool: string; args: Record<st
 
     // GAIA's own note covers this when it sent one; otherwise the card says it.
     const values = [...Object.values(args), ...(Array.isArray(args.notify_attendees) ? args.notify_attendees : [])];
-    const note = typeof args._risk_note !== 'string' && values.some(unseen) ? UNSEEN_NOTE : '';
+    const note = typeof args._risk_note !== 'string' && values.some((value) => unseenWith(KEPT_AS_WRITTEN, value)) ? UNSEEN_NOTE : '';
 
     return (
         <>

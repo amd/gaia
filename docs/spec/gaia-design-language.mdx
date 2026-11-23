@@ -106,7 +106,8 @@ are the shared ones, and so is every status hue.
 | App primary text | `#EFECE6` | `#1F1D1A` | Answers, labels, values |
 | App secondary text | `#B3ADA5` | `#5C5650` | Hints, descriptions, previews |
 | App brass | `#D4B47E` | `#7A5A22` | Actions, links, focus, an on switch, a chosen option |
-| App brass wash | `#383227` | `#EEE8DD` | The soft-tinted button behind brass text |
+| App brass wash | `#383227` | `#EEE8DD` | A chosen option or a pressed toggle, behind brass text |
+| App action fill | App primary text | App primary text | The one action a screen is asking for; carries the canvas colour |
 
 **Brass marks only what can be acted on.** Status keeps its own hues and nothing
 decorative is brass, so the eye learns that brass means "you can do this". The
@@ -115,9 +116,16 @@ on the light canvas; that raw value is kept as `--accent-solid` for marks that
 carry no text (a switch track, a native checkbox) and are held to the chrome
 floor.
 
-**Buttons are soft tinted.** A brass wash with brass text for the action you
-would most likely take, a neutral wash for the rest. Brass text holds 5.2:1 on
-its light wash and 6.43:1 on its dark one.
+**The primary action is ink, the rest are soft tinted.** The one action a
+screen is asking for is filled with the primary text colour and carries the
+canvas colour: near-black on light, ivory on dark, 15.98:1 and 14.9:1, and the
+secondary text colour when hovered. It is named by role, so each colour palette's
+own ink and canvas follow. A neutral
+wash marks every other button. The brass wash with brass text, which used to
+mark the primary action, read as disabled on the warm light canvas, where wash,
+text and ground are neighbours in one hue family; it now marks a chosen option
+or a pressed toggle, and holds 5.2:1 on its light wash and 6.43:1 on its dark
+one.
 
 **Warning amber and brass are neighbours.** In dark mode they measure 1.05:1
 apart, which breaks the "never let two roles share a hue family" rule if colour

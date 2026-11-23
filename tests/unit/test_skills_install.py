@@ -41,6 +41,8 @@ from tests.unit.skills_helpers import (
     write_audit_report,
 )
 
+pytestmark = pytest.mark.usefixtures("user_terminal")
+
 SKILL_BODY = """# Web Research
 
 1. Call `web-research/search_web` with the user's question.
@@ -346,7 +348,7 @@ def test_audit_gate_uses_the_engine_when_it_is_installed(
     module = types.ModuleType("gaia.skills.audit")
 
     def audit_skill(directory):
-        calls.append(directory)
+        calls.append((directory, sorted(p.name for p in directory.iterdir())))
         return {
             "verdict": "ALLOW",
             "engine": "gaia-skill-audit/0.1.0",
@@ -359,9 +361,14 @@ def test_audit_gate_uses_the_engine_when_it_is_installed(
 
     marketplace.keygen()
     source = _write_source(tmp_path)
+    (source / "__pycache__").mkdir()
+    (source / "__pycache__" / "x.cpython-312.pyc").write_bytes(b"\x00")
     result = marketplace.publish(source, audit_report=None)
 
-    assert calls == [source]
+    # The gate reads the staged copy that gets signed, not the working folder.
+    ((audited, contents),) = calls
+    assert audited != source and audited.name == source.name
+    assert contents == ["SKILL.md"]
     assert result.audit.engine == "gaia-skill-audit/0.1.0"
     assert json.loads(marketplace.hub.publishes[-1].audit_json)["engine"] == (
         "gaia-skill-audit/0.1.0"
@@ -890,19 +897,6 @@ def test_remove_refuses_a_read_only_root(tmp_path):
     with pytest.raises(SkillInstallError, match="agent-bundled"):
         remove_skill("incident-review", manager=manager)
     assert (bundled / "incident-review").is_dir()
-
-
-def test_installed_provenance_reads_from_the_lock(marketplace, tmp_path):
-    from gaia.skills.install import installed_provenance
-
-    key = marketplace.keygen()
-    marketplace.trust(key)
-    marketplace.publish(_write_source(tmp_path))
-    marketplace.install("web-research@^1.0")
-
-    provenance = installed_provenance(marketplace.manager)
-    assert provenance["web-research"]["requested"] == "^1.0"
-    assert provenance["web-research"]["installed_tier"] == "community"
 
 
 # ---------------------------------------------------------------------------

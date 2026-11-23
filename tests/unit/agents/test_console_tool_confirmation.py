@@ -498,8 +498,8 @@ class TestSilentModeStillAsks:
 
     def test_chat_agents_console_can_be_asked(self, tty, monkeypatch):
         """Pins the real console the real entry point builds."""
-        pytest.importorskip("gaia_agent")
-        from gaia_agent.chat_agent import ChatAgent, ChatAgentConfig
+        pytest.importorskip("gaiapy")
+        from gaiapy.chat_agent import ChatAgent, ChatAgentConfig
 
         stub = _StubChatAgent(ChatAgentConfig(silent_mode=True))
         console = ChatAgent._create_console(stub)
@@ -871,3 +871,58 @@ class TestPromptDoesNotAlterWhatRuns:
             "write_file", {"path": "/tmp/x.txt", "content": "y" * 5_000}
         )
         assert received["len"] == 5_000
+
+
+class TestTerminalCardShowsHiddenCharacters:
+    """The terminal card codes look-alike names the way the other cards do."""
+
+    def test_a_joiner_in_a_path_reads_as_its_code(self):
+        rendered = format_confirmation_args({"file_path": "inv\u200doice.txt"})
+        assert "inv[U+200D]oice.txt" in rendered
+        assert "\u200d" not in rendered
+
+    @pytest.mark.parametrize("mark", ["\u200c", "\u200e", "\u200f", "\ufe0f", "\u2060"])
+    def test_marks_and_selectors_in_a_url_read_as_codes(self, mark):
+        rendered = format_confirmation_args({"url": f"https://exa{mark}mple.com"})
+        assert f"[U+{ord(mark):04X}]" in rendered
+        assert mark not in rendered
+
+    def test_a_bidi_override_in_any_value_reads_as_its_code(self):
+        rendered = format_confirmation_args({"content": "a\u202etxt.exe"})
+        assert "a[U+202E]txt.exe" in rendered
+
+    def test_a_bidi_override_nested_in_a_list_reads_as_its_code(self):
+        rendered = format_confirmation_args({"files": ["a\u202etxt.exe"]})
+        assert "[U+202E]" in rendered and "\u202e" not in rendered
+
+    def test_a_joiner_in_a_command_word_reads_as_its_code(self):
+        rendered = format_confirmation_args(
+            {"command": "r\u200dm -rf build", "_risk_note": "deletes files"}
+        )
+        assert "r[U+200D]m -rf build" in rendered
+
+    def test_a_joiner_in_an_argument_name_reads_as_its_code(self):
+        rendered = format_confirmation_args({"pa\u200dth": "a"})
+        assert "pa[U+200D]th" in rendered
+
+    def test_a_malformed_argument_list_never_shows_a_raw_override(self):
+        rendered = format_confirmation_args(["a\u202eb"])
+        assert "\u202e" not in rendered
+
+    def test_written_text_keeps_emoji_accents_cjk_and_persian(self):
+        text = (
+            "\U0001f468\u200d\U0001f469\u200d\U0001f467 \u2764\ufe0f 1\ufe0f\u20e3 "
+            "cafe\u0301 caf\u00e9 \u6f22\u5b57 "
+            "\u0645\u06cc\u200c\u062e\u0648\u0627\u0647\u0645"
+        )
+        rendered = format_confirmation_args({"content": text})
+        assert text in rendered
+        assert "[U+" not in rendered
+
+    def test_an_accented_cjk_or_arabic_path_is_untouched(self):
+        for name in (
+            "r\u00e9sum\u00e9.pdf",
+            "\u6f22\u5b57.txt",
+            "\u0645\u0644\u0641.txt",
+        ):
+            assert name in format_confirmation_args({"file_path": name})

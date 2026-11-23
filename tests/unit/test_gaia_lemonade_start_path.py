@@ -5,7 +5,7 @@
 The state under test is the one ``gaia init`` leaves a new user in: GAIA's
 embedded server installed, currently stopped, and no system Lemonade anywhere.
 Every start path used to resolve the *system* launcher here — the CLI, the
-Agent base preflight, ``initialize_lemonade``, ``create_lemonade_client`` and
+Agent base preflight, ``create_lemonade_client`` and
 the daemon's ``/lemonade/start`` — and then told the user to run the
 ``gaia init`` they had just run.
 
@@ -288,14 +288,6 @@ def test_agent_base_talks_to_the_port_gaias_server_bound(machine):
 
 
 class TestClientAutoStart:
-    def test_initialize_lemonade_starts_gaias_own_server(self, machine):
-        status = lc.initialize_lemonade(agent="chat", quiet=True)
-
-        assert status.running is True
-        assert machine.daemon_starts == 1
-        assert machine.system_supervisor_calls == []
-        assert machine.spawned == []
-
     def test_create_lemonade_client_points_at_gaias_own_server(self, machine):
         client = lc.create_lemonade_client(auto_start=True, auto_load=False)
 

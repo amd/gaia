@@ -1853,7 +1853,13 @@ function isBackendCurrent() {
     // The core is always current; an app version is done once it refreshed the agent.
     if (!bundledGaiaBin()) return false;
     const prev = getState();
-    if (!prev) return !fs.existsSync(FLAGSHIP_SENTINEL);
+    if (!prev) {
+      if (fs.existsSync(FLAGSHIP_SENTINEL)) return false;
+      // Record this version now, or the agent first-run setup installs reads as an update next launch.
+      const version = appVersion();
+      setState(STATES.READY, { version, installedVersion: toPep440(version) });
+      return true;
+    }
     return prev.state === STATES.READY && toPep440(prev.version || "") === toPep440(appVersion());
   }
   const bin = findGaiaBin();

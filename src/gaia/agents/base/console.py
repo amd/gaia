@@ -13,7 +13,9 @@ from abc import ABC, abstractmethod
 from typing import Any, Callable, Dict, List, NamedTuple, Optional, Set, Tuple
 
 from gaia.agents.base.call_risk import EXACT_TEXT_ARG, RISK_NOTE_ARG
+from gaia.agents.base.person_approval import visible, visible_strict
 from gaia.agents.base.tool_grants import (
+    NAME_ARGS,
     PATH_TOOLS,
     GrantScope,
     grant_scope,
@@ -133,6 +135,8 @@ class Denial(NamedTuple):
     reason: str
     #: Nobody answered in time: not a refusal, so the call may be offered again.
     timed_out: bool = False
+    #: Nothing could put the call to a person: not a refusal either.
+    unattended: bool = False
 
 
 def user_denial_message(tool_name: str) -> str:
@@ -150,7 +154,9 @@ def timeout_denial_message(tool_name: str, waited: str) -> str:
     return (
         f"Nobody answered the confirmation for '{tool_name}' within {waited}, "
         "so it did not run. The prompt timed out — the user did NOT refuse it. "
-        "Tell the user the approval request expired and ask whether to try again."
+        "Tell the user the approval request expired and ask whether to try again. "
+        "Don't ask again in this request for approval: nobody is there to "
+        "answer."
     )
 
 
@@ -276,22 +282,37 @@ def format_confirmation_args(tool_args: Any) -> str:
     if not tool_args:
         return "(no arguments)"
     if not isinstance(tool_args, dict):
-        return _shorten(str(tool_args))
+        return visible(_shorten(str(tool_args)))
     if isinstance(tool_args.get(EXACT_TEXT_ARG), str):
         return tool_args[EXACT_TEXT_ARG]
     # A one-time call is approved on its exact text, so that is never cut.
     verbatim = {"command"} if tool_args.get(RISK_NOTE_ARG) else set()
     shortened = {
-        key: (
-            _shorten(value) if isinstance(value, str) and key not in verbatim else value
+        visible_strict(str(key)): _shown_value(
+            key,
+            (
+                _shorten(value)
+                if isinstance(value, str) and key not in verbatim
+                else value
+            ),
         )
         for key, value in tool_args.items()
     }
     # ensure_ascii=False: the shortening marker (…) and any non-ASCII content in
     # the arguments must stay readable in the prompt, not appear as \uXXXX.
-    return json.dumps(
-        shortened, indent=2, default=str, sort_keys=True, ensure_ascii=False
+    # visible(): a hidden or reordering character anywhere reads as its code.
+    return visible(
+        json.dumps(shortened, indent=2, default=str, sort_keys=True, ensure_ascii=False)
     )
+
+
+def _shown_value(key: Any, value: Any) -> Any:
+    """A name or command argument with every joiner, mark and selector coded."""
+    if not isinstance(value, str):
+        return value
+    if key in NAME_ARGS or key == "command":
+        return "\n".join(visible_strict(line) for line in value.split("\n"))
+    return value
 
 
 class OutputHandler(ABC):
@@ -341,9 +362,9 @@ class OutputHandler(ABC):
     pre-approval: an unattended harness that merely pre-approves prompts must
     not also get an unguarded shell. In
     exchange it lifts the shell guardrails too: the operator block, the
-    read-only binary policy (replaced by ``DEVELOPER_COMMANDS``) and the rate
-    limit, and it runs commands outside ``run_shell_command``'s no-prompt list
-    without asking. See
+    command policy, the path checks and the rate limit. ``run_shell_command``
+    runs any program without asking, and the Python tools run their code
+    unchecked. See
     ``gaia.agents.tools.shell_tools.ShellToolsMixin.full_access_active``.
 
     Mutable for the life of the session: the host can toggle it mid-run over the
@@ -491,11 +512,21 @@ class OutputHandler(ABC):
         the same thing in words for clients that only show text. Optional.
         """
 
+    def report_draft(self, tool: str, text: str) -> None:
+        """The text a tool call is being written with, so far. Optional."""
+
     def restart_answer(self, message: str) -> None:
         """The reply streamed so far was cut off and the step starts over.
 
         A front-end that drew the partial reply drops it and shows *message*
         in its place, so the new reply never silently replaces it. Optional.
+        """
+
+    def supersede_answer(self, message: str) -> None:
+        """The reply streamed so far was a draft; an answer check replaces it.
+
+        A front-end that drew the draft drops it when the next reply or tool
+        call starts, so a turn never shows two answers. Optional.
         """
 
     def pause_progress(self):
@@ -559,7 +590,8 @@ class OutputHandler(ABC):
         *loaded* is every skill now loaded in this chat, in load order. *how*
         is ``"model"`` when the model called ``load_skill``, ``"auto"`` when
         GAIA loaded it because the model called one of its ``loads_with``
-        tools, and ``"loaded"`` when it was already loaded.
+        tools, ``"user"`` when the user typed ``/<name>``, and ``"loaded"``
+        when it was already loaded.
         """
         ...
 
@@ -641,7 +673,9 @@ class OutputHandler(ABC):
         if self.auto_approve_confirmations_enabled():
             self.log_auto_approval(tool_name)
             return True
-        return self.deny_tool_execution(tool_name, unattended_denial_message(tool_name))
+        return self.deny_tool_execution(
+            tool_name, unattended_denial_message(tool_name), unattended=True
+        )
 
     def auto_approve_confirmations_enabled(self) -> bool:
         """True when this handler may approve gated tools without asking."""
@@ -751,10 +785,14 @@ class OutputHandler(ABC):
         )
 
     def deny_tool_execution(
-        self, tool_name: str, reason: str, timed_out: bool = False
+        self,
+        tool_name: str,
+        reason: str,
+        timed_out: bool = False,
+        unattended: bool = False,
     ) -> bool:
         """Record and log a denial, then return False for the caller to return."""
-        self._last_denial = Denial(tool_name, reason, timed_out)
+        self._last_denial = Denial(tool_name, reason, timed_out, unattended)
         logger.warning("Denied confirmation-gated tool '%s': %s", tool_name, reason)
         return False
 
@@ -775,6 +813,11 @@ class OutputHandler(ABC):
         """True when this tool's most recent denial was a prompt nobody answered."""
         recorded = self._last_denial
         return bool(recorded and recorded.tool == tool_name and recorded.timed_out)
+
+    def confirmation_unattended(self, tool_name: str) -> bool:
+        """True when this tool's most recent denial had no person to ask."""
+        recorded = self._last_denial
+        return bool(recorded and recorded.tool == tool_name and recorded.unattended)
 
     def print_policy_alert(
         self,
@@ -989,7 +1032,7 @@ class TerminalConfirmationMixin:
             if tool_name not in self._notified_denials():
                 self._notified_denials().add(tool_name)
                 self._display("denial notice", self._show_denial_notice, reason)
-            return self.deny_tool_execution(tool_name, reason)
+            return self.deny_tool_execution(tool_name, reason, unattended=True)
 
         # "Always" is offered only when this call has a scope narrow enough to
         # name — never for the bare tool. See tool_grants.
@@ -1006,7 +1049,7 @@ class TerminalConfirmationMixin:
             if not shown:
                 # The user never saw what they would be approving.
                 return self.deny_tool_execution(
-                    tool_name, unaskable_denial_message(tool_name)
+                    tool_name, unaskable_denial_message(tool_name), unattended=True
                 )
             answer = self._read_confirmation_answer(
                 scope is not None, scope.label if scope else ""
@@ -1016,7 +1059,7 @@ class TerminalConfirmationMixin:
 
         if answer is None:
             return self.deny_tool_execution(
-                tool_name, unaskable_denial_message(tool_name)
+                tool_name, unaskable_denial_message(tool_name), unattended=True
             )
         self.note_prompt_answered(tool_name)
 
@@ -2043,6 +2086,11 @@ class AgentConsole(TerminalConfirmationMixin, OutputHandler):
                 logger.debug("Pausing file preview failed: %s", e)
 
         self.progress.start(message, show_timer=show_timer)
+
+    def report_phase(self, phase: str, message: str, **counts: int) -> None:
+        """A terminal shows a phase as its spinner line."""
+        if message:
+            self.start_progress(message)
 
     def stop_progress(self) -> None:
         """Stop the progress indicator."""

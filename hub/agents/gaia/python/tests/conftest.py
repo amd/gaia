@@ -30,11 +30,36 @@ def _empty_hub_skill_catalog(monkeypatch):
 
 
 @pytest.fixture
-def flagship(monkeypatch, tmp_path):
-    """Build a network-isolated flagship for the prompt-prefix contract tests.
+def user_terminal(monkeypatch):
+    """Run the test as the user's terminal, not an agent tool or its child.
 
-    Imports are intentionally local: most hub tests do not build this agent and
-    should not need its optional runtime dependencies merely to collect.
+    Trust-changing skill calls refuse under an agent's marker, and pytest
+    inherits it when GAIA runs this suite. Opt in per module with
+    ``pytestmark = pytest.mark.usefixtures("user_terminal")``.
+    """
+    from gaia.skills import human_only
+
+    monkeypatch.delenv(human_only.AGENT_CHILD_ENV, raising=False)
+    token = human_only._IN_AGENT_TOOL.set(False)
+    yield
+    human_only._IN_AGENT_TOOL.reset(token)
+
+
+@pytest.fixture
+def flagship(make_flagship):
+    """A network-isolated flagship for the prompt-prefix contract tests."""
+    return make_flagship()
+
+
+@pytest.fixture
+def make_flagship(monkeypatch, tmp_path):
+    """Build network-isolated flagships, one fresh session per call.
+
+    Every session shares one GAIA home (one profile). ``build(work)`` starts a
+    session in *work* (default ``tmp_path / "work"``) and returns ``(agent,
+    model, doc)``. Imports are intentionally local: most hub tests do not build
+    this agent and should not need its optional runtime dependencies merely to
+    collect.
     """
     import contextlib
     import hashlib
@@ -42,8 +67,8 @@ def flagship(monkeypatch, tmp_path):
     import json
 
     import numpy as np
-    from gaia_agent.agent import GaiaAgent
-    from gaia_agent.chat_agent import ChatAgent
+    from gaiapy.agent import GaiaAgent
+    from gaiapy.chat_agent import ChatAgent
 
     from gaia.agents.base.history import SessionHistory
     from gaia.agents.base.memory import MemoryMixin
@@ -122,13 +147,16 @@ def flagship(monkeypatch, tmp_path):
         "_embed_texts_batch",
         lambda self, texts: np.stack([fake_embedding(t) for t in texts]),
     )
-    work = tmp_path / "work"
-    work.mkdir()
-    monkeypatch.chdir(work)
-    doc = work / "handbook.md"
-    doc.write_text("# Safety handbook\n\nWear goggles in the lab.\n", encoding="utf-8")
+    built = []
 
-    with isolated_registry():
+    def build(work=None):
+        work = work or tmp_path / "work"
+        work.mkdir(parents=True, exist_ok=True)
+        monkeypatch.chdir(work)
+        doc = work / "handbook.md"
+        doc.write_text(
+            "# Safety handbook\n\nWear goggles in the lab.\n", encoding="utf-8"
+        )
         agent_config = importlib.import_module(
             "test_prompt_prefix_stability"
         ).GaiaAgentConfig
@@ -142,7 +170,9 @@ def flagship(monkeypatch, tmp_path):
             )
         )
         assert agent._memory_store is not None, "memory must be on for this test"
-        agent.conversation_history = SessionHistory(str(tmp_path / "history.sqlite3"))
+        agent.conversation_history = SessionHistory(
+            str(tmp_path / f"history-{len(built)}.sqlite3")
+        )
 
         class FakeRag:
             def __init__(self):
@@ -193,7 +223,123 @@ def flagship(monkeypatch, tmp_path):
         monkeypatch.setattr(
             agent.chat.llm_client._backend, "slot_count", lambda _model: 3
         )
+        built.append(agent)
+        return agent, model, doc
+
+    with isolated_registry():
         try:
-            yield agent, model, doc
+            yield build
         finally:
-            agent.close()
+            for agent in built:
+                agent.close()
+
+
+class ScriptedApprover:
+    """Answers a chat's approval cards from a script and records each one.
+
+    Answers the way a person at ``AgentConsole`` does, so the agent files a
+    deny as the user's own no. A card past the end of the script is denied and
+    still recorded, so ``asked`` shows it.
+    """
+
+    def __init__(self, console):
+        self.console = console
+        self.answers = []
+        self.asked = []
+        console.confirm_tool_execution = self._confirm
+
+    def _confirm(self, tool_name, tool_args):
+        from gaia.agents.base.console import user_denial_message
+
+        self.asked.append((tool_name, dict(tool_args or {})))
+        self.console.note_prompt_answered(tool_name)
+        if self.answers and self.answers.pop(0) == "allow":
+            self.console._last_denial = None
+            return True
+        return self.console.deny_tool_execution(
+            tool_name, user_denial_message(tool_name)
+        )
+
+
+class ScriptedChat:
+    """One chat on the real turn loop: a scripted model and a scripted approver.
+
+    ``say`` runs a turn the way the stdio host does and returns the answer.
+    A model step is ``(tool_name, args)`` for a tool call or a string for
+    text. ``results`` then holds what each call of that turn fed back to the
+    model, in order, and ``offered`` the tool names of its last request.
+    """
+
+    def __init__(self, agent, model, work):
+        self.agent = agent
+        self.model = model
+        self.work = work
+        self.approver = ScriptedApprover(agent.console)
+        self._calls = 0
+        self._turn_ids = []
+        self._turn_start = 0
+
+    def say(self, query, model, approvals=()):
+        from gaiapy import stdio
+
+        steps = []
+        self._turn_ids = []
+        for step in model:
+            if isinstance(step, tuple):
+                self._calls += 1
+                call_id = f"call-{id(self):x}-{self._calls}"
+                self._turn_ids.append(call_id)
+                step = {"id": call_id, "name": step[0], "args": step[1]}
+            steps.append(step)
+        self.model.script[:] = steps
+        self.approver.answers[:] = list(approvals)
+        self.approver.asked.clear()
+        self._turn_start = len(self.model.requests)
+        self.agent.conversation_history.prepare(self.agent, query)
+        result = self.agent.process_query(query)
+        stdio._record_turn(self.agent, query, result["result"], result)
+        return result["result"]
+
+    @property
+    def unused_steps(self):
+        """Model steps the turn ended without asking for."""
+        return list(self.model.script)
+
+    @property
+    def requests(self):
+        """This turn's model requests, as ``(messages, tools)`` pairs."""
+        return self.model.requests[self._turn_start :]
+
+    @property
+    def offered(self):
+        return {tool["function"]["name"] for tool in self.requests[-1][1]}
+
+    @property
+    def results(self):
+        import json
+
+        fed = {}
+        for messages, _tools in self.requests:
+            for message in messages:
+                call_id = message.get("tool_call_id")
+                if message.get("role") == "tool" and call_id in self._turn_ids:
+                    content = message.get("content")
+                    try:
+                        fed[call_id] = json.loads(content)
+                    except (TypeError, ValueError):
+                        fed[call_id] = content
+        return [fed[i] for i in self._turn_ids if i in fed]
+
+
+@pytest.fixture
+def open_chat(make_flagship, tmp_path):
+    """Open chats in ONE process and one profile, each with its own folder."""
+    opened = []
+
+    def open_one():
+        work = tmp_path / f"chat-{len(opened)}"
+        agent, model, _doc = make_flagship(work)
+        opened.append(ScriptedChat(agent, model, work))
+        return opened[-1]
+
+    return open_one

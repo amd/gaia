@@ -23,7 +23,7 @@ from gaia.agents.registry import AgentRegistry
 from gaia.hub.installer import register_installed_sidecars
 from gaia.ui import server
 from gaia.ui.database import ChatDatabase
-from gaia.ui.email_sidecar import daemon_client as daemon_client_module
+from gaia.ui.sidecar import daemon_client as daemon_client_module
 from gaia.ui.sse_handler import SSEOutputHandler
 
 
@@ -62,8 +62,8 @@ def sidecar_flagship(tmp_path, monkeypatch):
     assert registry.get("gaia").is_sidecar is True
     monkeypatch.setattr(chat_helpers_module, "_agent_registry", registry)
     # The in-process package is absent, as on a desktop install.
-    monkeypatch.setitem(sys.modules, "gaia_agent", None)
-    monkeypatch.setitem(sys.modules, "gaia_agent.agent", None)
+    monkeypatch.setitem(sys.modules, "gaiapy", None)
+    monkeypatch.setitem(sys.modules, "gaiapy.agent", None)
     return registry
 
 
@@ -175,11 +175,14 @@ def test_an_in_process_scheduled_run_uses_the_model_the_user_picked(monkeypatch,
         def process_query(self, prompt):
             return {"result": "ok"}
 
-    fake_mod = types.ModuleType("gaia_agent.agent")
+        def close(self):
+            pass
+
+    fake_mod = types.ModuleType("gaiapy.agent")
     fake_mod.GaiaAgent = _Agent
     fake_mod.GaiaAgentConfig = SimpleNamespace
-    monkeypatch.setitem(sys.modules, "gaia_agent", types.ModuleType("gaia_agent"))
-    monkeypatch.setitem(sys.modules, "gaia_agent.agent", fake_mod)
+    monkeypatch.setitem(sys.modules, "gaiapy", types.ModuleType("gaiapy"))
+    monkeypatch.setitem(sys.modules, "gaiapy.agent", fake_mod)
 
     server._run_scheduled_prompt(db, "hi")
 
@@ -317,6 +320,7 @@ def test_a_wheel_install_still_runs_in_process(monkeypatch, db):
         raise AssertionError("an in-process flagship was relayed")
 
     monkeypatch.setattr(daemon_client_module, "acquire_handle", _no_relay)
+    closed = []
 
     class _Agent:
         def __init__(self, config):
@@ -325,17 +329,23 @@ def test_a_wheel_install_still_runs_in_process(monkeypatch, db):
         def process_query(self, prompt):
             return {"result": f"in-process: {prompt}"}
 
-    fake_mod = types.ModuleType("gaia_agent.agent")
+        def close(self):
+            closed.append(self)
+
+    fake_mod = types.ModuleType("gaiapy.agent")
     fake_mod.GaiaAgent = _Agent
     fake_mod.GaiaAgentConfig = SimpleNamespace
-    monkeypatch.setitem(sys.modules, "gaia_agent", types.ModuleType("gaia_agent"))
-    monkeypatch.setitem(sys.modules, "gaia_agent.agent", fake_mod)
+    monkeypatch.setitem(sys.modules, "gaiapy", types.ModuleType("gaiapy"))
+    monkeypatch.setitem(sys.modules, "gaiapy.agent", fake_mod)
 
     assert server._run_scheduled_prompt(db, "hi") == "in-process: hi"
+    # Nothing caches it, so its MCP servers would outlive the run.
+    assert len(closed) == 1
 
 
 def test_an_in_process_run_whose_model_failed_is_a_failed_run(monkeypatch, db):
     """Same rule as the relay: a model failure is a failed run, not an answer."""
+    closed = []
     registry = SimpleNamespace(
         get=lambda _id: SimpleNamespace(is_sidecar=False),
         get_load_error=lambda _id: None,
@@ -349,13 +359,44 @@ def test_an_in_process_run_whose_model_failed_is_a_failed_run(monkeypatch, db):
         def process_query(self, prompt):
             return {"result": "Couldn't reach the local LLM.", "model_failed": True}
 
-    fake_mod = types.ModuleType("gaia_agent.agent")
+        def close(self):
+            closed.append(self)
+
+    fake_mod = types.ModuleType("gaiapy.agent")
     fake_mod.GaiaAgent = _Agent
     fake_mod.GaiaAgentConfig = SimpleNamespace
-    monkeypatch.setitem(sys.modules, "gaia_agent", types.ModuleType("gaia_agent"))
-    monkeypatch.setitem(sys.modules, "gaia_agent.agent", fake_mod)
+    monkeypatch.setitem(sys.modules, "gaiapy", types.ModuleType("gaiapy"))
+    monkeypatch.setitem(sys.modules, "gaiapy.agent", fake_mod)
 
     with pytest.raises(RuntimeError, match="Couldn't reach the local LLM"):
+        server._run_scheduled_prompt(db, "hi")
+    assert len(closed) == 1
+
+
+def test_a_failed_close_does_not_replace_the_runs_own_error(monkeypatch, db):
+    registry = SimpleNamespace(
+        get=lambda _id: SimpleNamespace(is_sidecar=False),
+        get_load_error=lambda _id: None,
+    )
+    monkeypatch.setattr(chat_helpers_module, "_agent_registry", registry)
+
+    class _Agent:
+        def __init__(self, config):
+            self.config = config
+
+        def process_query(self, prompt):
+            raise ValueError("the run's own failure")
+
+        def close(self):
+            raise OSError("server already gone")
+
+    fake_mod = types.ModuleType("gaiapy.agent")
+    fake_mod.GaiaAgent = _Agent
+    fake_mod.GaiaAgentConfig = SimpleNamespace
+    monkeypatch.setitem(sys.modules, "gaiapy", types.ModuleType("gaiapy"))
+    monkeypatch.setitem(sys.modules, "gaiapy.agent", fake_mod)
+
+    with pytest.raises(ValueError, match="the run's own failure"):
         server._run_scheduled_prompt(db, "hi")
 
 
@@ -384,8 +425,8 @@ def test_a_registered_flagship_whose_package_is_gone_says_to_run_setup_again(
         get_load_error=lambda _id: None,
     )
     monkeypatch.setattr(chat_helpers_module, "_agent_registry", registry)
-    monkeypatch.setitem(sys.modules, "gaia_agent", None)
-    monkeypatch.setitem(sys.modules, "gaia_agent.agent", None)
+    monkeypatch.setitem(sys.modules, "gaiapy", None)
+    monkeypatch.setitem(sys.modules, "gaiapy.agent", None)
 
     with pytest.raises(RuntimeError) as exc:
         server._run_scheduled_prompt(db, "hi")
@@ -445,3 +486,36 @@ async def test_a_failed_run_exposes_its_error_until_a_run_succeeds(db):
         assert db.list_scheduled_tasks()[0]["last_error"] is None
     finally:
         await scheduler.shutdown()
+
+
+def test_an_in_process_run_saves_its_memories_before_closing(monkeypatch, db):
+    """A save still queued at close kept the whole closed agent alive."""
+    registry = SimpleNamespace(
+        get=lambda _id: SimpleNamespace(is_sidecar=False),
+        get_load_error=lambda _id: None,
+    )
+    monkeypatch.setattr(chat_helpers_module, "_agent_registry", registry)
+    order = []
+
+    class _Agent:
+        def __init__(self, config):
+            self.config = config
+
+        def process_query(self, prompt):
+            return {"result": "ok"}
+
+        def wait_for_memory_extraction(self, timeout):
+            order.append("drained")
+            return True
+
+        def close(self):
+            order.append("closed")
+
+    fake_mod = types.ModuleType("gaiapy.agent")
+    fake_mod.GaiaAgent = _Agent
+    fake_mod.GaiaAgentConfig = SimpleNamespace
+    monkeypatch.setitem(sys.modules, "gaiapy", types.ModuleType("gaiapy"))
+    monkeypatch.setitem(sys.modules, "gaiapy.agent", fake_mod)
+
+    server._run_scheduled_prompt(db, "hi")
+    assert order == ["drained", "closed"]

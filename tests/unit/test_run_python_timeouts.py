@@ -16,10 +16,10 @@ from unittest.mock import patch
 import psutil
 import pytest
 
-pytest.importorskip("gaia_agent")
+pytest.importorskip("gaiapy")
 
-from gaia_agent.chat_agent import ChatAgent, ChatAgentConfig  # noqa: E402
-from gaia_agent.python_jobs import (  # noqa: E402
+from gaiapy.chat_agent import ChatAgent, ChatAgentConfig  # noqa: E402
+from gaiapy.python_jobs import (  # noqa: E402
     DEFAULT_PYTHON_TIMEOUT,
     MAX_PYTHON_TIMEOUT,
     files_written_since,
@@ -58,8 +58,8 @@ def agent_tools(project):
         mp.delenv(PROJECT_ROOT_ENV, raising=False)
         mp.chdir(project)
         with (
-            patch("gaia_agent.chat_agent.RAGSDK"),
-            patch("gaia_agent.chat_agent.RAGConfig"),
+            patch("gaiapy.chat_agent.RAGSDK"),
+            patch("gaiapy.chat_agent.RAGConfig"),
         ):
             agent = ChatAgent(
                 ChatAgentConfig(silent_mode=True, allowed_paths=[str(project)])
@@ -325,7 +325,7 @@ def test_files_written_since_ignores_older_and_excluded_files(tmp_path):
 
 
 def test_a_bounded_search_says_it_is_incomplete(tmp_path, monkeypatch):
-    monkeypatch.setattr("gaia_agent.python_jobs._REPORT_MAX_FILES", 1)
+    monkeypatch.setattr("gaiapy.python_jobs._REPORT_MAX_FILES", 1)
     since = time.time()
     (tmp_path / "a.txt").write_text("a")
     (tmp_path / "b.txt").write_text("b")
@@ -343,12 +343,12 @@ def test_the_home_folder_is_never_searched():
 
 def test_a_frozen_launch_is_killed_the_same_way(tmp_path):
     """The frozen agent runs scripts through its own runner mode (#5093)."""
-    from gaia_agent import python_runner
+    from gaiapy import python_runner
 
     script, pid_file = _spawner(tmp_path, "time.sleep(60)")
     launcher = (
         "import sys\nsys.frozen = True\n"
-        "from gaia_agent.python_runner import run_python_file\n"
+        "from gaiapy.python_runner import run_python_file\n"
         "sys.exit(run_python_file(sys.argv[2:]))\n"
     )
     env = dict(os.environ)
@@ -374,7 +374,7 @@ def test_a_frozen_launch_is_killed_the_same_way(tmp_path):
 
 @pytest.mark.skipif(os.name != "nt", reason="Job Objects are Windows-only")
 def test_without_a_job_object_the_live_tree_is_still_killed(tmp_path, monkeypatch):
-    monkeypatch.setattr("gaia_agent.python_jobs._assign_job_object", lambda _pid: None)
+    monkeypatch.setattr("gaiapy.python_jobs._assign_job_object", lambda _pid: None)
     script, pid_file = _spawner(tmp_path, "time.sleep(60)")
 
     job = run_python_job(
@@ -387,3 +387,62 @@ def test_without_a_job_object_the_live_tree_is_still_killed(tmp_path, monkeypatc
 
     assert job.stopped == "timeout"
     assert _wait_gone(int(pid_file.read_text()))
+
+
+@pytest.mark.parametrize("tool_name", ["run_python", "execute_python_file"])
+def test_a_python_run_is_refused_once_the_turn_time_limit_is_nearly_up(
+    agent_tools, project, tool_name
+):
+    """A snippet started with no time left would be killed with nothing written."""
+    from gaia.agents.base.verification import OUT_OF_TIME
+
+    agent, tools = agent_tools
+    script = project / "never_runs.py"
+    script.write_text("open('ran.txt', 'w').write('x')\n")
+    args = (
+        {"code": script.read_text()}
+        if tool_name == "run_python"
+        else {"file_path": str(script)}
+    )
+    agent.time_limit_s = 600
+    agent._turn_started_at = time.monotonic() - 599
+    try:
+        result = tools[tool_name]["function"](**args)
+    finally:
+        agent.time_limit_s = None
+    assert result == OUT_OF_TIME
+    assert not (project / "ran.txt").exists()
+
+
+def test_a_python_run_is_cut_to_the_time_the_turn_has_left(agent_tools):
+    """A 120 s default must not outlast a turn with 3 s before its stop point."""
+    agent, tools = agent_tools
+    agent.time_limit_s = 100
+    agent._turn_started_at = time.monotonic() - 82  # 90 - 82 = 8 s to the stop
+    started = time.monotonic()
+    try:
+        result = tools["run_python"]["function"](code="import time; time.sleep(60)")
+    finally:
+        agent.time_limit_s = None
+    assert time.monotonic() - started < 30
+    assert result["status"] == "error"
+    assert "timed out" in str(result).lower()
+    # The limit ended it, so asking for a larger timeout is not on offer.
+    assert "time limit cut this run short" in result["error"]
+    assert "larger timeout" not in result["error"]
+
+
+def test_a_timed_out_run_is_offered_only_the_time_the_turn_has_left(agent_tools):
+    """In a 60 s turn, "pass a larger timeout (max 1800)" can't be followed."""
+    agent, tools = agent_tools
+    agent.time_limit_s = 60
+    agent._turn_started_at = time.monotonic()
+    try:
+        result = tools["run_python"]["function"](
+            code="import time; time.sleep(30)", timeout=2
+        )
+    finally:
+        agent.time_limit_s = None
+    assert result["status"] == "error"
+    assert "max 1800" not in result["error"]
+    assert "what this turn has left" in result["error"]

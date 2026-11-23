@@ -15,12 +15,12 @@ import uuid
 
 import pytest
 
-pytest.importorskip("gaia_agent")
+pytest.importorskip("gaiapy")
 
-import gaia_agent.session_registry as registry_mod  # noqa: E402
+import gaiapy.session_registry as registry_mod  # noqa: E402
 from fastapi.testclient import TestClient  # noqa: E402
-from gaia_agent import caller_auth  # noqa: E402
-from gaia_agent import server as server_mod  # noqa: E402
+from gaiapy import caller_auth  # noqa: E402
+from gaiapy import server as server_mod  # noqa: E402
 
 import gaia.llm.lemonade_client as lc  # noqa: E402
 import gaia.ui.warmup as ui_warmup  # noqa: E402
@@ -38,6 +38,7 @@ class _ModelServer:
     def __init__(self):
         self.idle = threading.Event()
         self.idle.set()
+        self.turn_arrived = threading.Event()
 
 
 class _WarmUpAgent:
@@ -74,6 +75,7 @@ class _TurnAgent:
 
     def process_query(self, query, max_steps=None):
         self.waited_for_server = not self.server.idle.is_set()
+        self.server.turn_arrived.set()
         if not self.server.idle.wait(WAIT_S):
             raise TimeoutError("the turn waited on the warm-up")
         return {"answer": "ok"}
@@ -95,6 +97,7 @@ def sidecar(monkeypatch):
     caller_auth.reset()
     monkeypatch.delenv(caller_auth.TOKEN_FILE_ENV_VAR, raising=False)
     monkeypatch.delenv(caller_auth.TOKEN_ENV_VAR, raising=False)
+    monkeypatch.setenv(caller_auth.ALLOW_NO_TOKEN_ENV_VAR, "1")
     server = _ModelServer()
     warm_agent = _WarmUpAgent(server)
     turns = []
@@ -152,8 +155,9 @@ def test_a_turn_on_the_warmed_model_lets_the_warm_up_finish(sidecar):
 
     t = threading.Thread(target=turn, daemon=True)
     t.start()
+    assert warm_agent.server.turn_arrived.wait(WAIT_S), "no turn reached the model"
     # The turn queues behind the warm-up instead of stopping it.
-    assert not server_mod._startup_warm_up.cancel.wait(0.3)
+    assert not server_mod._startup_warm_up.cancel.is_set()
     warm_agent.finish.set()
     t.join(WAIT_S)
     assert warm_agent.outcome == "warmed"
@@ -166,7 +170,8 @@ def test_a_turn_with_no_model_runs_the_default_and_keeps_the_warm_up(sidecar):
     done = {}
     t = threading.Thread(target=lambda: done.setdefault("t", _turn(client, None)))
     t.start()
-    assert not server_mod._startup_warm_up.cancel.wait(0.3)
+    assert warm_agent.server.turn_arrived.wait(WAIT_S), "no turn reached the model"
+    assert not server_mod._startup_warm_up.cancel.is_set()
     warm_agent.finish.set()
     t.join(WAIT_S)
     assert warm_agent.outcome == "warmed"

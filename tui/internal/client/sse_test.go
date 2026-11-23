@@ -66,6 +66,9 @@ type fakeRelay struct {
 	// memoryBody is the raw JSON body GET /v1/<agent>/memory returns on
 	// success (memoryStatus == 0, defaulting to 200).
 	memoryBody string
+	// skillsStatus and skillsBody are the same for GET /v1/<agent>/skills.
+	skillsStatus int
+	skillsBody   string
 	// strictBody replicates the sidecar's pydantic `extra="forbid"`: an unknown
 	// request field is a 422, not an ignored key. This is what makes a published
 	// older sidecar reject a field a newer TUI invented.
@@ -73,12 +76,6 @@ type fakeRelay struct {
 	// onEnsure runs after a successful ensure — used to simulate a daemon
 	// restart (and therefore a token rotation) mid-Send.
 	onEnsure func()
-	// prescanStatus, when non-zero, is the HTTP status POST /v1/<agent>/prescan
-	// returns instead of prescanBody (e.g. 503 for "no mailbox connected").
-	prescanStatus int
-	// prescanBody is the raw JSON body POST /v1/<agent>/prescan returns on
-	// success (prescanStatus == 0, defaulting to 200).
-	prescanBody string
 	// lockSession, when true, makes /query behave like the real daemon's
 	// per-session run_lock (query_routes.py): a second concurrent /query
 	// while one is already "in flight" (sessionBusy) gets 409 with the same
@@ -260,7 +257,7 @@ func (f *fakeRelay) handle(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
-		fmt.Fprintf(w, `{"apiVersion":%q,"version":%q,"agent":"email"}`,
+		fmt.Fprintf(w, `{"apiVersion":%q,"version":%q,"agent":"notes"}`,
 			f.contractVersion, f.agentReleaseVersion)
 
 	case strings.HasSuffix(r.URL.Path, "/memory"):
@@ -279,21 +276,17 @@ func (f *fakeRelay) handle(w http.ResponseWriter, r *http.Request) {
 		}
 		_, _ = w.Write([]byte(body))
 
-	case strings.HasSuffix(r.URL.Path, "/prescan"):
-		if r.Method != http.MethodPost {
-			f.t.Errorf("prescan request method = %q, want POST", r.Method)
+	case strings.HasSuffix(r.URL.Path, "/skills"):
+		if r.Method != http.MethodGet {
+			f.t.Errorf("skills request method = %q, want GET", r.Method)
 		}
-		if f.prescanStatus != 0 {
-			w.WriteHeader(f.prescanStatus)
-			_, _ = w.Write([]byte(`{"detail":"no mailbox connected"}`))
+		if f.skillsStatus != 0 {
+			w.WriteHeader(f.skillsStatus)
+			_, _ = w.Write([]byte(`{"detail":"Not Found"}`))
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
-		body := f.prescanBody
-		if body == "" {
-			body = `{"schema_version":"2.11","result":{"kind":"email_pre_scan","urgent":[],"actionable":[],"informational_count":0,"suggested_archives":[],"suggested_drafts":[],"needs_review":[],"scanned":0,"needs_you":[],"needs_you_total":0,"bulk":{"count":0,"filter_tests":[]}}}`
-		}
-		_, _ = w.Write([]byte(body))
+		_, _ = w.Write([]byte(f.skillsBody))
 
 	case strings.HasSuffix(r.URL.Path, "/cancel"):
 		parts := strings.Split(r.URL.Path, "/")
@@ -434,6 +427,20 @@ func (f *fakeRelay) handle(w http.ResponseWriter, r *http.Request) {
 			dec.DisallowUnknownFields()
 			var derr error
 			switch {
+			case contractAtLeast(f.contractVersion, 2, 24):
+				var strict struct {
+					Query              string   `json:"query"`
+					RunID              string   `json:"run_id"`
+					Context            []Turn   `json:"context"`
+					Model              string   `json:"model"`
+					MaxSteps           int      `json:"max_steps"`
+					CanAnswerQuestions *bool    `json:"can_answer_questions"`
+					SessionID          string   `json:"session_id"`
+					Surface            string   `json:"surface"`
+					WorkingDirectory   string   `json:"working_directory"`
+					AllowedPaths       []string `json:"allowed_paths"`
+				}
+				derr = dec.Decode(&strict)
 			case contractAtLeast(f.contractVersion, 2, 20):
 				var strict struct {
 					Query              string `json:"query"`
@@ -489,7 +496,7 @@ func (f *fakeRelay) handle(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(f.queryStatus)
 			body := f.queryBody
 			if body == "" {
-				body = `{"detail":"the email sidecar is not running"}`
+				body = `{"detail":"the notes sidecar is not running"}`
 			}
 			_, _ = w.Write([]byte(body))
 			return
@@ -560,13 +567,13 @@ func (f *fakeRelay) lastQuery() queryRequest {
 	return f.queries[len(f.queries)-1]
 }
 
-// client builds a relay-backed client for the `email` agent, which is what
+// client builds a relay-backed client for the `notes` agent, which is what
 // most of this file's tests exercise. Memory tests must use clientFor with the
-// flagship id instead — memory is gaia-only, so a relay client named `email`
+// flagship id instead — memory is gaia-only, so a relay client named `notes`
 // is refused before any request is made.
 func (f *fakeRelay) client(t *testing.T) *SSEClient {
 	t.Helper()
-	return f.clientFor(t, "email")
+	return f.clientFor(t, "notes")
 }
 
 func (f *fakeRelay) clientFor(t *testing.T, agentID string) *SSEClient {
@@ -642,8 +649,8 @@ func TestSSEClientFullRun(t *testing.T) {
 	f := newFakeRelay(t)
 	f.stream = func(w http.ResponseWriter, flush func(), _ queryRequest) {
 		frame(w, `{"type":"status","message":"Scanning inbox"}`)
-		frame(w, `{"type":"tool_call","tool":"pre_scan_inbox","args":{"max":50}}`)
-		frame(w, `{"type":"tool_result","tool":"pre_scan_inbox","render":"email_pre_scan","data":{"urgent":[]}}`)
+		frame(w, `{"type":"tool_call","tool":"list_inbox","args":{"max":50}}`)
+		frame(w, `{"type":"tool_result","tool":"list_inbox","render":"table","data":{"urgent":[]}}`)
 		frame(w, `{"type":"token","delta":"You have "}`)
 		frame(w, `{"type":"token","delta":"3 urgent emails."}`)
 		frame(w, `{"type":"final","answer":"You have 3 urgent emails.","usage":{"steps":2,"tools_used":1}}`)
@@ -672,7 +679,7 @@ func TestSSEClientFullRun(t *testing.T) {
 	}
 
 	tr := got[2].(event.CanonicalToolResultEvent)
-	if tr.Render != "email_pre_scan" {
+	if tr.Render != "table" {
 		t.Errorf("render hint lost: %+v", tr)
 	}
 	if !strings.Contains(string(tr.Data), "urgent") {
@@ -777,6 +784,119 @@ func TestSSEClientTranscriptFallsBackToStreamedTokens(t *testing.T) {
 }
 
 // --- terminal-event contract -------------------------------------------------
+
+// A connection cut mid-answer (the daemon was killed) reads as GAIA stopping,
+// not as a raw socket error; the socket error stays in RawDetail for the log.
+func TestSSEClientConnectionCutMidStreamSaysGaiaStopped(t *testing.T) {
+	f := newFakeRelay(t)
+	f.stream = func(w http.ResponseWriter, flush func(), _ queryRequest) {
+		frame(w, `{"type":"token","delta":"half an ans"}`)
+		flush()
+		conn, _, err := w.(http.Hijacker).Hijack()
+		if err != nil {
+			t.Errorf("hijack the stream: %v", err)
+			return
+		}
+		// Unterminated chunked body: the client's read fails, as on a reset.
+		_ = conn.Close()
+	}
+
+	c := f.client(t)
+	defer c.Close()
+
+	ch, err := c.Send(context.Background(), "triage")
+	if err != nil {
+		t.Fatalf("Send: %v", err)
+	}
+	got := collect(t, ch)
+	if len(got) == 0 {
+		t.Fatal("expected events")
+	}
+	last, ok := got[len(got)-1].(event.CanonicalErrorEvent)
+	if !ok {
+		t.Fatalf("last event = %T, want a CanonicalErrorEvent (%v)", got[len(got)-1], typeNames(got))
+	}
+	if last.Detail != event.AgentStoppedDetail {
+		t.Errorf("detail = %q, want the plain stopped message", last.Detail)
+	}
+	if !strings.Contains(last.RawDetail, "failed mid-run") {
+		t.Errorf("RawDetail must keep the socket error for the log: %q", last.RawDetail)
+	}
+	if last.Source != "tui" {
+		t.Errorf("synthesized errors must be attributed to the tui, got %q", last.Source)
+	}
+}
+
+// Cut before any answer text (mid tool call): nothing is "kept above".
+func TestSSEClientConnectionCutBeforeAnyTextSaysSoBeforeAnswering(t *testing.T) {
+	f := newFakeRelay(t)
+	f.stream = func(w http.ResponseWriter, flush func(), _ queryRequest) {
+		frame(w, `{"type":"status","message":"working"}`)
+		flush()
+		conn, _, err := w.(http.Hijacker).Hijack()
+		if err != nil {
+			t.Errorf("hijack the stream: %v", err)
+			return
+		}
+		_ = conn.Close()
+	}
+
+	c := f.client(t)
+	defer c.Close()
+
+	ch, err := c.Send(context.Background(), "triage")
+	if err != nil {
+		t.Fatalf("Send: %v", err)
+	}
+	got := collect(t, ch)
+	if len(got) == 0 {
+		t.Fatal("expected events")
+	}
+	last, ok := got[len(got)-1].(event.CanonicalErrorEvent)
+	if !ok {
+		t.Fatalf("last event = %T, want a CanonicalErrorEvent (%v)", got[len(got)-1], typeNames(got))
+	}
+	if last.Detail != event.AgentStoppedBeforeAnswerDetail {
+		t.Errorf("detail = %q, want the stopped-before-answering message", last.Detail)
+	}
+}
+
+// The daemon's "agent crashed" frame keeps "kept above" only when text came first.
+func TestSSEClientDaemonCrashFrameMatchesWhatWasStreamed(t *testing.T) {
+	crash := `{"type":"error","source":"daemon_relay","detail":"agent 'gaia' stream ended unexpectedly"}`
+	for _, tc := range []struct {
+		name   string
+		frames []string
+		want   string
+	}{
+		{"before any text", []string{`{"type":"status","message":"working"}`, crash}, event.AgentStoppedBeforeAnswerDetail},
+		{"after some text", []string{`{"type":"token","delta":"half"}`, crash}, event.AgentStoppedDetail},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newFakeRelay(t)
+			f.stream = func(w http.ResponseWriter, flush func(), _ queryRequest) {
+				for _, fr := range tc.frames {
+					frame(w, fr)
+				}
+				flush()
+			}
+			c := f.client(t)
+			defer c.Close()
+			ch, err := c.Send(context.Background(), "triage")
+			if err != nil {
+				t.Fatalf("Send: %v", err)
+			}
+			got := collect(t, ch)
+			last, ok := got[len(got)-1].(event.CanonicalErrorEvent)
+			if !ok {
+				t.Fatalf("last event = %T, want a CanonicalErrorEvent (%v)", got[len(got)-1], typeNames(got))
+			}
+			if last.Detail != tc.want {
+				t.Errorf("detail = %q, want %q", last.Detail, tc.want)
+			}
+		})
+	}
+}
 
 // A stream that ends without final/error is a FAILURE, not an empty success.
 func TestSSEClientStreamWithoutTerminalEventIsAnError(t *testing.T) {
@@ -1219,7 +1339,7 @@ func TestSSEClientFailsLoudlyWithNoDaemon(t *testing.T) {
 			return nil, fmt.Errorf("no launcher in this test")
 		},
 	})
-	c := NewSSEClient("email", dc, SSEOptions{})
+	c := NewSSEClient("notes", dc, SSEOptions{})
 	defer c.Close()
 
 	_, err := c.Send(context.Background(), "triage")
@@ -1403,7 +1523,7 @@ func TestSSEClientReadIdleTimeout(t *testing.T) {
 			return nil, fmt.Errorf("unused")
 		},
 	})
-	c := NewSSEClient("email", dc, SSEOptions{ReadTimeout: 300 * time.Millisecond})
+	c := NewSSEClient("notes", dc, SSEOptions{ReadTimeout: 300 * time.Millisecond})
 	defer c.Close()
 
 	ch, err := c.Send(context.Background(), "triage")

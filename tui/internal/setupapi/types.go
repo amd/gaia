@@ -33,6 +33,35 @@ type Plan struct {
 	// VisionModel is the model the user chose to read images; nil is GAIA's
 	// choice.
 	VisionModel *string `json:"vision_model"`
+	// NPU is whether this PC has a Ryzen AI NPU and whether it can run a model
+	// yet, as the backend's own checks in npu_linux.py see it. It is nil when
+	// the plan omits the field, as daemons before v0.25.4 do; that is unknown,
+	// not evidence that the PC has no NPU.
+	NPU *NPU `json:"npu"`
+	// LeftForAppsGB is the RAM other apps keep with the recommended model
+	// loaded; nil when the model has its own GPU memory, or from daemons that
+	// predate it.
+	LeftForAppsGB *float64 `json:"left_for_apps_gb"`
+}
+
+// NPU is the plan's "npu" field: present is whether Lemonade reports one on
+// this PC at all, ready whether it can load a model today, and Problems what
+// stops it when it can't (an empty list when nothing does).
+//
+// A model that needs the NPU and finds it present but not ready is not a model
+// to drop: it is one to set the NPU up for. Only absent is "this PC has none".
+type NPU struct {
+	Present  bool         `json:"present"`
+	Ready    bool         `json:"ready"`
+	Problems []NPUProblem `json:"problems"`
+}
+
+// NPUProblem is one reason the NPU can't load a model yet, in words to show:
+// npu_linux.NpuProblem as the plan sends it.
+type NPUProblem struct {
+	Code  string `json:"code"`
+	Title string `json:"title"`
+	Fix   string `json:"fix"`
 }
 
 // Component is something setup fetches that isn't a model. SizeGB is nil when
@@ -132,6 +161,8 @@ type CatalogEntry struct {
 	FitReason  *string  `json:"fit_reason"`
 	// FitCode is why it doesn't fit: "memory", "npu" or "backend"; nil when it fits.
 	FitCode *string `json:"fit_code"`
+	// Tight: it fits, but leaves other apps less memory than GAIA keeps for them.
+	Tight bool `json:"tight"`
 	// Role is set on Plan.Models only: "chat" or "embedding".
 	Role string `json:"role,omitempty"`
 }

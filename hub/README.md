@@ -1,6 +1,9 @@
-# GAIA Agent Hub
+# Packages GAIA ships
 
-Production agents for the GAIA Agent Hub. Each agent is a standalone package that depends on the published `amd-gaia` PyPI package.
+The packages GAIA builds and ships beside the `amd-gaia` core: the GAIA agent's Python
+harness, the front ends' release manifests, and the skills. There is no user-facing
+agent catalog; `hub.amd-gaia.ai` is the download server `gaia init`, the daemon and the
+installers fetch from.
 
 ## Structure
 

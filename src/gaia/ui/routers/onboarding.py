@@ -236,8 +236,11 @@ def new_chat_start(db: ChatDatabase = Depends(get_db)) -> Dict[str, Any]:
 
     When the agent can't list its skills, or be asked whether it takes
     folders, it can't run a task either, so there are no cards, the folder
-    can't be changed, and ``skills_error`` carries why.
+    can't be changed, and ``skills_error`` carries why. ``agent_problem`` is
+    ``{"code", "detail"}`` when the agent the user chose is the reason (see
+    ``agent_programs.chosen_agent_problem``), so the screen can offer its fix.
     """
+    from gaia.ui.routers.agent_programs import chosen_agent_problem
     from gaia.ui.routers.skills import list_skills
     from gaia.ui.security import FLAGSHIP_AGENT_ID
     from gaia.ui.session_environment import EnvironmentChangeError, takes_folders
@@ -253,5 +256,10 @@ def new_chat_start(db: ChatDatabase = Depends(get_db)) -> Dict[str, Any]:
             "cards": [],
             "working_folder": working_folder(choosable=False),
             "skills_error": detail,
+            "agent_problem": chosen_agent_problem(),
         }
-    return {**start_screen(db, skills, choosable), "skills_error": None}
+    return {
+        **start_screen(db, skills, choosable),
+        "skills_error": None,
+        "agent_problem": None,
+    }

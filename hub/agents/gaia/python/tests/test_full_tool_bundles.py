@@ -23,8 +23,8 @@ import contextlib
 import json
 
 import pytest
-from gaia_agent.agent import GaiaAgent, GaiaAgentConfig
-from gaia_agent.tool_bundles import (
+from gaiapy.agent import GaiaAgent, GaiaAgentConfig
+from gaiapy.tool_bundles import (
     FULL_BUNDLES,
     FULL_CORE_TOOLS,
     FULL_OPTIONAL_TOOLS,
@@ -33,6 +33,7 @@ from gaia_agent.tool_bundles import (
 
 from gaia.agents.base.tool_loader import thin_tool_schema
 from gaia.agents.base.tools import _TOOL_REGISTRY
+from gaia.agents.tools.browser_use_tools import BrowserUseToolsMixin
 from gaia.llm.lemonade_client import GPT_OSS_20B_MODEL_NAME
 
 
@@ -55,10 +56,13 @@ def flagship_registry():
     Memory is forced off during construction (no embedder in CI) and the store
     is then faked so ``register_memory_tools`` runs — the same pinning
     ``test_gaia_agent.py`` uses, for the same reason: an environment-dependent
-    count made the drift guard pass locally and fail in CI.
+    count made the drift guard pass locally and fail in CI. The chat is
+    pinned open in GAIA desktop's browser pane for the same reason: there the
+    browser tools register, Playwright or not.
     """
     with _isolated_registry(), pytest.MonkeyPatch.context() as mp:
         mp.setenv("GAIA_MEMORY_DISABLED", "1")
+        mp.setattr(BrowserUseToolsMixin, "_pane_at_startup", lambda self: (True, True))
         # Opt-in (GAIA_DYNAMIC_TOOLS=1 / the UI toggle), and the bundles must
         # still cover the registry whenever someone turns it on.
         # On gpt-oss, the one model family that also registers set_reasoning_effort.
@@ -94,7 +98,7 @@ def test_core_and_bundles_cover_the_flagship_registry_exactly(flagship_registry)
     assert not uncovered, (
         f"flagship tools covered by neither FULL_CORE_TOOLS nor a bundle: "
         f"{uncovered}. Add each to a bundle (or CORE) in "
-        "hub/agents/gaia/python/gaia_agent/tool_bundles.py — every registered "
+        "hub/agents/gaia/python/gaiapy/tool_bundles.py — every registered "
         "tool must be accounted for."
     )
     assert not dangling, (
@@ -110,10 +114,18 @@ def test_core_and_bundles_cover_the_flagship_registry_exactly(flagship_registry)
 )
 def test_asking_for_the_shell_stays_on_the_short_list(message):
     """The shell tool is core, so asking for it must not cost the one jump."""
-    from gaia_agent.tool_requests import requested_tools
+    from gaiapy.tool_requests import requested_tools
 
     registry = FULL_CORE_TOOLS | {"get_shell_state", "reset_shell_session"}
     assert set(requested_tools(message, registry)) <= FULL_CORE_TOOLS
+
+
+def test_skill_request_tools_exist_and_cost_the_jump(flagship_registry):
+    """A renamed skill tool would silently stop being requested."""
+    from gaiapy.tool_requests import SKILL_REQUEST_TOOLS
+
+    assert set(SKILL_REQUEST_TOOLS) <= flagship_registry
+    assert not set(SKILL_REQUEST_TOOLS) & FULL_CORE_TOOLS
 
 
 def test_core_is_the_list_every_session_starts_on():

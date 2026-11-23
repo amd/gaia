@@ -977,6 +977,20 @@ def test_nothing_connected_names_the_remedy_before_any_prompt(mailbox, agent_for
     assert drafted["success"] is False
 
 
+def test_in_the_agent_ui_a_send_with_nothing_connected_asks_to_send(mailbox, agent_for):
+    """The Connect card a failed send brings asks for what sending needs."""
+    from types import SimpleNamespace
+
+    mailbox["google"] = None
+    agent = agent_for(_Asked(), _Gmail())
+    agent.config = SimpleNamespace(surface="agent_ui")
+    result = agent._execute_tool("send_now", SEND_NOW)
+    assert result["connect_card"]["scopes"] == {
+        "google": [SCOPE_GMAIL_READONLY, SCOPE_GMAIL_COMPOSE],
+        "microsoft": [SCOPE_MAIL_READWRITE, SCOPE_MAIL_SEND],
+    }
+
+
 def test_read_only_connection_still_reads_but_write_says_reconnect(mailbox, agent_for):
     mailbox["google"] = {
         "scopes": [SCOPE_GMAIL_READONLY],
@@ -1620,9 +1634,11 @@ def test_declined_message_cannot_be_sent_afterwards_by_a_direct_call(
     assert gmail.calls == []
 
 
-def test_retry_and_edit_after_a_no_each_ask_with_their_own_text(mailbox, agent_for):
+def test_a_retry_after_a_no_is_not_asked_and_an_edit_asks_with_its_own_text(
+    mailbox, agent_for
+):
     gmail = _Gmail()
-    answers = iter([False, False, True])
+    answers = iter([False, True])
 
     class _Answers(_Asked):
         def confirm_tool_execution(self, tool_name, tool_args):
@@ -1632,12 +1648,13 @@ def test_retry_and_edit_after_a_no_each_ask_with_their_own_text(mailbox, agent_f
     console = _Answers()
     agent = agent_for(console, gmail)
     agent._execute_tool("send_now", SEND_NOW)
-    agent._execute_tool("send_now", SEND_NOW)
+    retried = agent._execute_tool("send_now", SEND_NOW)
     edited = {**SEND_NOW, "body": "Edited text"}
     out = json.loads(agent._execute_tool("send_now", edited))
     shown = [args[EXACT_TEXT_ARG] for _, args in console.shown]
-    assert len(shown) == 3
-    assert shown[0] == shown[1] and shown[2].endswith("\n\nEdited text")
+    assert retried["status"] == "denied" and retried["already_declined"] is True
+    assert len(shown) == 2
+    assert shown[0] != shown[1] and shown[1].endswith("\n\nEdited text")
     assert out["sent"] is True
     sent = gmail.writes("/users/me/messages/send")
     assert len(sent) == 1

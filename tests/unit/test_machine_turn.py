@@ -206,3 +206,138 @@ def test_a_command_that_ignores_sigterm_is_killed(turn, tmp_path, monkeypatch):
         turn.main(["--", sys.executable, "-c", stubborn, str(pid_file)])
     assert not _alive(int(pid_file.read_text()))
     assert _lock_is_free(turn)
+
+
+def _stop_lands_inside_popen(turn, monkeypatch, stop):
+    """Popen that gets *stop* after the child exists but before Popen returns.
+
+    That is where a stop lands when the runner deschedules this process right
+    after creating the child.
+    """
+    started = []
+    real_popen = subprocess.Popen
+
+    def popen(*args, **kwargs):
+        proc = real_popen(*args, **kwargs)
+        started.append(proc)
+        stop()
+        for _ in range(100_000):  # let a pending handler run here, if it would
+            pass
+        return proc
+
+    monkeypatch.setattr(turn.subprocess, "Popen", popen)
+    return started
+
+
+def _reap(started):
+    for proc in started:
+        if proc.poll() is None:
+            proc.kill()
+            proc.wait(10)
+
+
+def test_ctrl_c_while_the_command_is_being_started_still_stops_it(
+    turn, tmp_path, monkeypatch
+):
+    started = _stop_lands_inside_popen(turn, monkeypatch, _thread.interrupt_main)
+    try:
+        with pytest.raises(KeyboardInterrupt):
+            turn.main(["--", sys.executable, "-c", _SLEEPER, str(tmp_path / "p")])
+        assert len(started) == 1
+        assert started[0].poll() is not None, "the command outlived its Ctrl-C"
+        assert _lock_is_free(turn)
+        assert not turn.HOLDER_FILE.exists()
+    finally:
+        _reap(started)
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="SIGTERM is a hard kill on Windows")
+def test_sigterm_while_the_command_is_being_started_still_stops_it(
+    turn, tmp_path, monkeypatch
+):
+    started = _stop_lands_inside_popen(
+        turn, monkeypatch, lambda: os.kill(os.getpid(), signal.SIGTERM)
+    )
+    try:
+        with pytest.raises(SystemExit) as stopped:
+            turn.main(["--", sys.executable, "-c", _SLEEPER, str(tmp_path / "p")])
+        assert stopped.value.code == 128 + signal.SIGTERM
+        assert started[0].poll() is not None, "the command outlived its SIGTERM"
+        assert _lock_is_free(turn)
+    finally:
+        _reap(started)
+
+
+def test_stop_handlers_are_restored_after_every_outcome(turn, tmp_path, monkeypatch):
+    before = (signal.getsignal(signal.SIGINT), signal.getsignal(signal.SIGTERM))
+
+    assert turn.main(["--", sys.executable, "-c", "pass"]) == 0
+    assert (signal.getsignal(signal.SIGINT), signal.getsignal(signal.SIGTERM)) == before
+
+    with pytest.raises(OSError):
+        turn.main(["--", str(tmp_path / "no-such-program")])
+    assert (signal.getsignal(signal.SIGINT), signal.getsignal(signal.SIGTERM)) == before
+
+    started = _stop_lands_inside_popen(turn, monkeypatch, _thread.interrupt_main)
+    try:
+        with pytest.raises(KeyboardInterrupt):
+            turn.main(["--", sys.executable, "-c", _SLEEPER, str(tmp_path / "p")])
+    finally:
+        _reap(started)
+    assert (signal.getsignal(signal.SIGINT), signal.getsignal(signal.SIGTERM)) == before
+
+
+def test_a_held_ctrl_c_is_still_ignored_when_ctrl_c_is_ignored(turn, monkeypatch):
+    started = _stop_lands_inside_popen(turn, monkeypatch, _thread.interrupt_main)
+    previous = signal.signal(signal.SIGINT, signal.SIG_IGN)
+    try:
+        assert turn.main(["--", sys.executable, "-c", "pass"]) == 0
+        assert signal.getsignal(signal.SIGINT) is signal.SIG_IGN
+    finally:
+        signal.signal(signal.SIGINT, previous)
+        _reap(started)
+
+
+def _old_handlers_came_from_c(turn, monkeypatch):
+    """signal.signal() returns None when the old handler was installed from C."""
+    real_signal = signal.signal
+    seen = set()
+
+    def signal_from_c(signum, handler):
+        previous = real_signal(signum, handler)
+        if signum not in seen:
+            seen.add(signum)
+            return None
+        return previous
+
+    monkeypatch.setattr(turn.signal, "signal", signal_from_c)
+    return signal.getsignal(signal.SIGINT), signal.getsignal(signal.SIGTERM)
+
+
+def test_a_handler_installed_outside_python_does_not_break_the_restore(
+    turn, monkeypatch
+):
+    before = _old_handlers_came_from_c(turn, monkeypatch)
+    try:
+        assert turn.main(["--", sys.executable, "-c", "pass"]) == 0
+        assert signal.getsignal(signal.SIGINT) is signal.default_int_handler
+        assert signal.getsignal(signal.SIGTERM) == signal.SIG_DFL
+    finally:
+        signal.signal(signal.SIGINT, before[0])
+        signal.signal(signal.SIGTERM, before[1])
+
+
+def test_a_held_ctrl_c_still_stops_the_command_when_the_old_handler_came_from_c(
+    turn, tmp_path, monkeypatch
+):
+    started = _stop_lands_inside_popen(turn, monkeypatch, _thread.interrupt_main)
+    before = _old_handlers_came_from_c(turn, monkeypatch)
+    try:
+        with pytest.raises(KeyboardInterrupt):
+            turn.main(["--", sys.executable, "-c", _SLEEPER, str(tmp_path / "p")])
+        assert started[0].poll() is not None, "the command outlived its Ctrl-C"
+        assert _lock_is_free(turn)
+    finally:
+        signal.signal(signal.SIGINT, before[0])
+        signal.signal(signal.SIGTERM, before[1])
+        _reap(started)

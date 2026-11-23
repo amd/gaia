@@ -38,6 +38,7 @@ Design commitments
 
 from __future__ import annotations
 
+import math
 import re
 from pathlib import PureWindowsPath
 from typing import Any, Mapping, Optional
@@ -182,6 +183,44 @@ _NARRATION_OVERRIDES = {
     "refine_transcript": "Preparing transcript",
     "analyze_transcript": "Analyzing transcript",
     "export_transcript": "Exporting transcript",
+    # The flagship's tools whose names don't open with a verb.
+    "answer_question_about_image": "Looking at the image",
+    "analyze_image": "Looking at the image",
+    "request_user_input": "Asking you a question",
+    "run_python": "Running Python",
+    "execute_python_file": "Running a Python file",
+    "bookmark": "Bookmarking a folder",
+    "tree": "Listing folder tree",
+    "file_info": "Getting file info",
+    "browser_back": "Going back in the browser",
+    "browser_click": "Clicking in the browser",
+    "browser_find": "Finding on the page",
+    "browser_login": "Signing in on a website",
+    "browser_open": "Opening a page in the browser",
+    "browser_sessions": "Checking browser sign-ins",
+    "browser_snapshot": "Reading the page in the browser",
+    "browser_type": "Typing in the browser",
+    "capture_skill": "Saving a skill",
+    "dictate_document": "Turning a document into audio",
+    "drop_table": "Deleting a table",
+    "dump_document": "Extracting text",
+    "evaluate_retrieval": "Checking search results",
+    "forget": "Deleting from memory",
+    "forget_everything": "Erasing all memory",
+    "notify_desktop": "Showing a notification",
+    "rag_status": "Checking your documents",
+    "recall": "Recalling memory",
+    "remember": "Saving to memory",
+    "remember_skill_lesson": "Saving a lesson for a skill",
+    "reset_shell_session": "Resetting the terminal",
+    "get_shell_state": "Checking the terminal",
+    "sign_in_cli": "Signing in to a tool",
+    "skill_status": "Checking skills",
+    "sleep": "Waiting",
+    "take_screenshot": "Taking a screenshot",
+    "text_to_speech": "Reading aloud",
+    "unload_skill": "Putting away skill",
+    "wait_for_condition": "Waiting for a condition",
 }
 
 #: Substrings marking a tool that shells out. The narration for these MUST
@@ -261,6 +300,36 @@ def _is_shell_tool(tool: str) -> bool:
     return any(marker in lowered for marker in _SHELL_TOOL_MARKERS)
 
 
+def _seconds_phrase(value: Any) -> Optional[str]:
+    """``12`` -> "12 s", ``2.5`` -> "2.5 s"; None for a missing or bogus duration."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    if not math.isfinite(value) or value <= 0 or value > 24 * 3600:
+        return None
+    return f"{value:g} s" if float(value).is_integer() else f"{value:.1f} s"
+
+
+def _audio_narration(tool: str, args: Mapping[str, Any]) -> Optional[str]:
+    """Music/SFX generation reads as what is being made and how long."""
+    if tool == "list_audio_generation_models":
+        return "Checking which audio models are downloaded"
+    if tool not in ("generate_music", "generate_sound_effect"):
+        return None
+    seconds = _seconds_phrase(args.get("duration"))
+    if tool == "generate_music":
+        base = f"Composing {seconds} of music" if seconds else "Composing music"
+    else:
+        base = (
+            f"Generating a {seconds} sound effect"
+            if seconds
+            else "Generating a sound effect"
+        )
+    prompt = args.get("prompt")
+    if isinstance(prompt, str) and _collapse(prompt):
+        return f"{base}: {_clip(_collapse(prompt), _ARG_MAX_CHARS)}"
+    return base
+
+
 def derive_narration(tool: str, args: Optional[Mapping[str, Any]] = None) -> str:
     """Return the present-tense phrase for a ``tool_call``.
 
@@ -279,16 +348,21 @@ def derive_narration(tool: str, args: Optional[Mapping[str, Any]] = None) -> str
     if not isinstance(args, Mapping):
         args = {}
 
+    audio = _audio_narration(name, args)
+    if audio is not None:
+        return audio
+
     detail = _salient_arg(args)
     if detail and name in _FILE_NAME_TOOLS and "://" not in detail:
         detail = PureWindowsPath(detail).name or detail
 
+    override = _NARRATION_OVERRIDES.get(name)
     # A shell tool without its command is worse than useless — it hides the one
     # thing the user needs to see. Say so rather than narrating a bare verb.
-    if _is_shell_tool(name):
+    if override is None and _is_shell_tool(name):
         return f"Running command: {detail}" if detail else "Running a shell command"
 
-    base = _NARRATION_OVERRIDES.get(name) or _humanize_tool(name)
+    base = override or _humanize_tool(name)
     return f"{base}: {detail}" if detail else base
 
 

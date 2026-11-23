@@ -44,6 +44,8 @@ def install(tmp_path, monkeypatch):
     sidecar = gaia_dir / "agents" / "gaia" / "logs" / "sidecar-51003.log"
     sidecar.write_bytes(b"sidecar\n")
     (gaia_dir / "backend.pid").write_text("4242\n", encoding="utf-8")
+    (gaia_dir / "backend-pids").mkdir()
+    (gaia_dir / "backend-pids" / "777.pid").write_text("4343", encoding="utf-8")
 
     calls = []
 
@@ -114,6 +116,7 @@ def test_macos_uses_macos_tools_and_gaias_real_ports(install, monkeypatch):
     assert "daemon: pid=" in info and "port=51001" in info
     assert "lemonade: pid=" in info and "port=51002" in info
     assert "ui backend: pid=4242" in info
+    assert "ui backend: pid=4343" in info
 
 
 def test_linux_keeps_its_tools(install, monkeypatch):

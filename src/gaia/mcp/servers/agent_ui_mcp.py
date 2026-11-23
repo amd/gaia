@@ -23,6 +23,7 @@ from typing import TYPE_CHECKING, Any, Dict, Optional
 
 import requests
 
+from gaia.credential_shapes import redact_file_content
 from gaia.logger import route_console_logging_to_stderr
 from gaia.mcp.ports import AGENT_UI_MCP_PORT
 from gaia.mcp.servers.agent_ui_control import (
@@ -33,6 +34,7 @@ from gaia.mcp.servers.agent_ui_control import (
     remote_token,
     transport_security_settings,
 )
+from gaia.ui.api_token import UITokenError, auth_headers
 from gaia.ui.sse_handler import (
     _RAG_RESULT_JSON_SUB_RE,
     _THINK_TAG_SUB_RE,
@@ -49,11 +51,9 @@ logger = logging.getLogger(__name__)
 # Default GAIA Agent UI backend URL
 DEFAULT_BACKEND = "http://localhost:4200"
 
-# The backend refuses any mutating /api request that does not carry this
-# header — it is what stops a web page the user visits from driving the
-# Agent UI (see gaia/ui/security.py). Sent on reads too so no call site
-# has to decide.
-UI_HEADER = {"X-Gaia-UI": "1"}
+# Every /api request carries the X-Gaia-UI CSRF header and the Agent UI API
+# token (see gaia/ui/security.py and gaia/ui/api_token.py). ``auth_headers``
+# reads the token per request, since the backend may create it after we start.
 MCP_DEFAULT_PORT = AGENT_UI_MCP_PORT
 MCP_DEFAULT_HOST = "localhost"
 
@@ -65,6 +65,9 @@ def _normalize_error(
 
     Returns {"status": "error", "detail": "<clean message>"}.
     """
+    if isinstance(e, UITokenError):
+        return {"status": "error", "detail": str(e)}
+
     if isinstance(e, requests.exceptions.ConnectionError):
         return {
             "status": "error",
@@ -95,8 +98,9 @@ def _api(
 ) -> Dict[str, Any]:
     """Make an API request to the GAIA Agent UI backend."""
     url = f"{base_url}/api{path}"
-    headers = {**UI_HEADER, **kwargs.pop("headers", {})}
+    extra_headers = kwargs.pop("headers", {})
     try:
+        headers = {**auth_headers(), **extra_headers}
         r = getattr(requests, method)(url, timeout=timeout, headers=headers, **kwargs)
         r.raise_for_status()
         return r.json()
@@ -150,6 +154,60 @@ def _model_pin() -> Dict[str, Any]:
     return {"model": DEFAULT_MODEL_NAME}
 
 
+#: Longest card text a transcript carries; a full 100-item list fits.
+CARD_TEXT_MAX_CHARS = 8000
+
+_GUIDE_SECTIONS = {
+    "recipe": ("Ingredients", "Steps"),
+    "workout": ("Equipment", "Exercises"),
+    "howto": ("Materials", "Steps"),
+    "checklist": ("Items", "Steps"),
+    "itinerary": ("Packing", "Days"),
+}
+
+
+def _lines(value: Any) -> list:
+    return [str(v) for v in value] if isinstance(value, list) else []
+
+
+def card_text(render: Any, data: Any) -> Optional[str]:
+    """Plain text of a card a tool step showed the user, or ``None`` if none.
+
+    The reply beside a card is often just a tip, so whoever reads the
+    transcript instead of the screen needs the card's own content.
+    """
+    if not render:
+        return None
+    if render == "guide" and isinstance(data, dict):
+        guide_type = str(data.get("guideType") or "guide")
+        items_label, steps_label = _GUIDE_SECTIONS.get(guide_type, ("Items", "Steps"))
+        out = [f"[{guide_type} card shown to the user] {data.get('title') or ''}"]
+        for key in ("description", "notes"):
+            if data.get(key):
+                out.append(f"{key.capitalize()}: {data[key]}")
+        if data.get("servings") is not None:
+            out.append(f"Servings: {data['servings']}")
+        if _lines(data.get("items")):
+            out.append(f"{items_label}:")
+            out.extend(f"- {line}" for line in _lines(data.get("items")))
+        if _lines(data.get("steps")):
+            out.append(f"{steps_label}:")
+            out.extend(
+                f"{n}. {line}" for n, line in enumerate(_lines(data.get("steps")), 1)
+            )
+        text = "\n".join(out)
+    else:
+        text = f"[{render} card shown to the user] " + json.dumps(
+            data, ensure_ascii=False, default=str
+        )
+    if len(text) > CARD_TEXT_MAX_CHARS:
+        text = (
+            text[:CARD_TEXT_MAX_CHARS]
+            + f"\n... (card text cut at {CARD_TEXT_MAX_CHARS} characters)"
+        )
+    return text
+
+
 def _stream_chat(base_url: str, session_id: str, message: str) -> Dict[str, Any]:
     """Send a message via SSE stream and collect the full response."""
     url = f"{base_url}/api/chat/send"
@@ -162,7 +220,7 @@ def _stream_chat(base_url: str, session_id: str, message: str) -> Dict[str, Any]
 
     try:
         r = requests.post(
-            url, json=payload, stream=True, timeout=180, headers=UI_HEADER
+            url, json=payload, stream=True, timeout=180, headers=auth_headers()
         )
         r.raise_for_status()
     except requests.exceptions.ConnectionError as e:
@@ -230,6 +288,9 @@ def _stream_chat(base_url: str, session_id: str, message: str) -> Dict[str, Any]
                     step_info["stderr"] = cmd["stderr"][:300]
                 if cmd.get("return_code", 0) != 0:
                     step_info["exit_code"] = cmd["return_code"]
+            card = card_text(event.get("render"), event.get("data"))
+            if card:
+                step_info["card"] = card
             agent_steps.append(step_info)
             icon = "OK" if success else "ERR"
             event_log.append(f"  result [{icon}]: {summary[:150]}")
@@ -380,7 +441,7 @@ def create_agent_ui_mcp(backend_url: str = DEFAULT_BACKEND) -> "MCPServer":
             r = requests.delete(
                 f"{backend_url}/api/sessions/{session_id}",
                 timeout=30,
-                headers=UI_HEADER,
+                headers=auth_headers(),
             )
             r.raise_for_status()
             return {"deleted": True, "session_id": session_id}
@@ -439,16 +500,19 @@ def create_agent_ui_mcp(backend_url: str = DEFAULT_BACKEND) -> "MCPServer":
             }
             steps = m.get("agent_steps") or []
             if steps:
-                msg["agent_steps"] = [
-                    {
+                msg["agent_steps"] = []
+                for s in steps:
+                    step = {
                         "type": s.get("type"),
                         "tool": s.get("tool"),
                         "label": s.get("label"),
                         "result": (s.get("result") or "")[:300],
                         "success": s.get("success"),
                     }
-                    for s in steps
-                ]
+                    card = card_text(s.get("render"), s.get("data"))
+                    if card:
+                        step["card"] = card
+                    msg["agent_steps"].append(step)
             stats = m.get("stats")
             if stats:
                 msg["stats"] = stats
@@ -469,7 +533,7 @@ def create_agent_ui_mcp(backend_url: str = DEFAULT_BACKEND) -> "MCPServer":
 
     # ── Turn control (drive a turn without blocking) ───────────────
 
-    turns = TurnRegistry(backend_url, UI_HEADER)
+    turns = TurnRegistry(backend_url, auth_headers)
 
     @mcp.tool()
     def start_message(session_id: str, message: str) -> Dict[str, Any]:
@@ -719,7 +783,8 @@ def create_agent_ui_mcp(backend_url: str = DEFAULT_BACKEND) -> "MCPServer":
     @mcp.tool()
     def preview_file(filepath: str) -> Dict[str, Any]:
         """Preview the contents of a file (first lines for text, metadata for binary)."""
-        return _api(backend_url, "get", "/files/preview", params={"path": filepath})
+        preview = _api(backend_url, "get", "/files/preview", params={"path": filepath})
+        return redact_file_content(preview)
 
     # ── Screenshot ──────────────────────────────────────────────
 
@@ -799,8 +864,9 @@ def create_agent_ui_mcp(backend_url: str = DEFAULT_BACKEND) -> "MCPServer":
                     # Bring window to front so it's not occluded
                     try:
                         win32gui.SetForegroundWindow(hwnd)
-                    except Exception:
-                        pass  # May fail if window is minimized
+                    except Exception as e:
+                        # Fails when the window is minimized; the capture still runs.
+                        logger.debug("Could not bring browser window forward: %s", e)
 
                     rect = win32gui.GetWindowRect(hwnd)
                     # rect = (left, top, right, bottom)
@@ -1098,8 +1164,21 @@ def create_agent_ui_mcp(backend_url: str = DEFAULT_BACKEND) -> "MCPServer":
                 "detail": activate.get("detail", "activate failed"),
             }
 
+        open_url = target_url
+        if base == backend_url:
+            # A browser without the token cookie signs in through a single-use link.
+            launch = _api(backend_url, "post", "/auth/launch-code")
+            if launch.get("status") == "error" or "path" not in launch:
+                return {
+                    "opened": False,
+                    "url": target_url,
+                    "status": "error",
+                    "detail": launch.get("detail", "could not mint a sign-in link"),
+                }
+            open_url = f"{base}{launch['path']}#{session_id}"
+
         try:
-            webbrowser.open(target_url)
+            webbrowser.open(open_url)
             _last_opened_url["url"] = target_url
             return {"opened": True, "url": target_url}
         except Exception as e:

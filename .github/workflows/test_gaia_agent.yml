@@ -10,12 +10,11 @@
 name: Gaia Agent Tests
 
 on:
-  workflow_call:
   push:
     branches: [ main ]
     paths:
       - '.github/workflows/test_gaia_agent.yml'
-      - '.github/workflows/build_flagship_sidecar.yml'
+      - '.github/workflows/build_gaiapy.yml'
       - 'setup.py'
       - 'pyproject.toml'
       - 'conftest.py'
@@ -38,6 +37,8 @@ on:
       - 'src/gaia/**'
       # Frontend-only trees: no Python test here imports them.
       - '!src/gaia/apps/webui/**'
+      # test_flagship_tool_labels.py reads the UI's tool labels.
+      - 'src/gaia/apps/webui/src/i18n/locales/**'
       - 'docs/guides/building-skills.mdx'
       - 'docs/guides/starter-skills.mdx'
       # The tests this workflow names, and their conftests.
@@ -45,6 +46,11 @@ on:
       - 'tests/integration/conftest.py'
       - 'tests/integration/test_gaia_sidecar_relay_live.py'
       - 'tests/unit/agents/test_binary_install_dispatch.py'
+      - 'tests/unit/test_starting_state_matrix.py'
+      - 'tests/fixtures/fake_lemonade.py'
+      - 'installer/headless/fake_model_server.py'
+      - 'tests/unit/agents/test_answer_check_corpus.py'
+      - 'tests/fixtures/answer_check_corpus/**'
       - 'tests/unit/agents/test_model_history.py'
       - 'tests/unit/agents/test_sidecar_card_drift.py'
       - 'tests/unit/chat/ui/test_sidecar_dispatch_coverage.py'
@@ -54,6 +60,7 @@ on:
       - 'tests/unit/test_execute_python_file_cwd.py'
       - 'tests/unit/test_flagship_ci.py'
       - 'tests/unit/test_flagship_code_index_scope.py'
+      - 'tests/unit/test_logger_import_purity.py'
       - 'tests/unit/test_powershell_command_injection.py'
       - 'tests/unit/test_skill_loader.py'
       - 'tests/unit/test_skill_sets.py'
@@ -62,10 +69,15 @@ on:
       - 'tests/unit/agents/test_engine_down_query_start.py'
       - 'tests/unit/test_tool_loader_token_budget.py'
       - 'tests/unit/test_tool_list_invariants.py'
+      - 'tests/unit/test_skill_tools_pinned.py'
       - 'tests/unit/test_warm_up.py'
+      - 'tests/unit/test_flagship_tool_labels.py'
       - 'tests/unit/eval/test_harness_flagship_target.py'
+      - 'tests/unit/eval/test_mcp_tool_cost.py'
       - 'tests/unit/eval/conftest.py'
       - 'src/gaia/eval/tool_cost.py'
+      - 'src/gaia/eval/tool_recall.py'
+      - 'src/gaia/eval/mcp_fixture.py'
       - 'src/gaia/eval/retrieval/harness.py'
       - 'tests/fixtures/**'
       - 'tests/unit/__init__.py'
@@ -77,7 +89,7 @@ on:
     types: [opened, synchronize, reopened, ready_for_review, labeled]
     paths:
       - '.github/workflows/test_gaia_agent.yml'
-      - '.github/workflows/build_flagship_sidecar.yml'
+      - '.github/workflows/build_gaiapy.yml'
       - 'setup.py'
       - 'pyproject.toml'
       - 'conftest.py'
@@ -100,6 +112,8 @@ on:
       - 'src/gaia/**'
       # Frontend-only trees: no Python test here imports them.
       - '!src/gaia/apps/webui/**'
+      # test_flagship_tool_labels.py reads the UI's tool labels.
+      - 'src/gaia/apps/webui/src/i18n/locales/**'
       - 'docs/guides/building-skills.mdx'
       - 'docs/guides/starter-skills.mdx'
       # The tests this workflow names, and their conftests.
@@ -107,6 +121,11 @@ on:
       - 'tests/integration/conftest.py'
       - 'tests/integration/test_gaia_sidecar_relay_live.py'
       - 'tests/unit/agents/test_binary_install_dispatch.py'
+      - 'tests/unit/test_starting_state_matrix.py'
+      - 'tests/fixtures/fake_lemonade.py'
+      - 'installer/headless/fake_model_server.py'
+      - 'tests/unit/agents/test_answer_check_corpus.py'
+      - 'tests/fixtures/answer_check_corpus/**'
       - 'tests/unit/agents/test_model_history.py'
       - 'tests/unit/agents/test_sidecar_card_drift.py'
       - 'tests/unit/chat/ui/test_sidecar_dispatch_coverage.py'
@@ -116,6 +135,7 @@ on:
       - 'tests/unit/test_execute_python_file_cwd.py'
       - 'tests/unit/test_flagship_ci.py'
       - 'tests/unit/test_flagship_code_index_scope.py'
+      - 'tests/unit/test_logger_import_purity.py'
       - 'tests/unit/test_powershell_command_injection.py'
       - 'tests/unit/test_skill_loader.py'
       - 'tests/unit/test_skill_sets.py'
@@ -124,10 +144,15 @@ on:
       - 'tests/unit/agents/test_engine_down_query_start.py'
       - 'tests/unit/test_tool_loader_token_budget.py'
       - 'tests/unit/test_tool_list_invariants.py'
+      - 'tests/unit/test_skill_tools_pinned.py'
       - 'tests/unit/test_warm_up.py'
+      - 'tests/unit/test_flagship_tool_labels.py'
       - 'tests/unit/eval/test_harness_flagship_target.py'
+      - 'tests/unit/eval/test_mcp_tool_cost.py'
       - 'tests/unit/eval/conftest.py'
       - 'src/gaia/eval/tool_cost.py'
+      - 'src/gaia/eval/tool_recall.py'
+      - 'src/gaia/eval/mcp_fixture.py'
       - 'src/gaia/eval/retrieval/harness.py'
       - 'tests/fixtures/**'
       - 'tests/unit/__init__.py'
@@ -233,14 +258,17 @@ jobs:
           echo "================================================================"
           echo "                  TOOL-PROMPT BUDGET TESTS"
           echo "================================================================"
-          # The file opens with importorskip("gaia_agent"), so it silently
+          # The file opens with importorskip("gaiapy"), so it silently
           # skipped in test_unit.yml and ran in no lane at all (#3294). This is
           # the cheapest lane that installs that wheel.
           python -m pytest \
             tests/unit/test_tool_loader_token_budget.py \
             tests/unit/test_tool_list_invariants.py \
+            tests/unit/test_skill_tools_pinned.py \
             tests/unit/test_warm_up.py \
+            tests/unit/test_flagship_tool_labels.py \
             tests/unit/eval/test_harness_flagship_target.py \
+            tests/unit/eval/test_mcp_tool_cost.py \
             -v --tb=short
 
       - name: Run Sidecar Contract Tests
@@ -269,7 +297,7 @@ jobs:
         env:
           GAIA_MEMORY_DISABLED: "1"
         run: |
-          # Each of these importorskips gaia_agent, at module level or per
+          # Each of these importorskips gaiapy, at module level or per
           # test, so test_unit.yml collects them and runs none of it (#4206).
           python -m pytest \
             tests/unit/messaging/test_bridge_contract.py \
@@ -278,6 +306,9 @@ jobs:
             tests/unit/test_flagship_code_index_scope.py \
             tests/unit/test_stdio_permission_control.py \
             tests/unit/agents/test_engine_down_query_start.py \
+            tests/unit/test_starting_state_matrix.py \
+            tests/unit/agents/test_answer_check_corpus.py \
+            tests/unit/test_logger_import_purity.py \
             -v --tb=short
 
       - name: Run Command-Injection Regression Tests

@@ -88,6 +88,7 @@ describe('readAloudStore', () => {
     it.each([
         [503, 'unreachable'],
         [502, 'speech'],
+        [409, 'unavailable'],
         [500, 'other'],
     ] as const)('a %i from the server is reported as %s with its detail', async (status, kind) => {
         speak.mockRejectedValue(new api.ApiError('friendly', status, 'Lemonade said no', null));
@@ -124,9 +125,10 @@ describe('readAloudStore', () => {
         expect(speak).not.toHaveBeenCalled();
     });
 
-    it('a reply with nothing to say requests nothing', async () => {
+    it('a reply with nothing to say requests nothing and says so', async () => {
         await useReadAloudStore.getState().read('s:1', '```\ncode only\n```');
         expect(speak).not.toHaveBeenCalled();
         expect(useReadAloudStore.getState().messageId).toBeNull();
+        expect(useReadAloudStore.getState().error).toEqual({ messageId: 's:1', kind: 'nothing', detail: '' });
     });
 });

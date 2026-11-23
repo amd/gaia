@@ -65,7 +65,7 @@ def test_a_range_is_capped_in_lines_and_chars(read_file, tmp_path):
 
 @pytest.mark.parametrize(
     "start,end,message",
-    [(0, 5, "1-based"), (50, None, "past the end"), (8, 3, "before start_line")],
+    [(-1, 5, "1-based"), (50, None, "past the end"), (8, 3, "before start_line")],
 )
 def test_a_bad_range_says_what_is_wrong(read_file, tmp_path, start, end, message):
     result = read_file(str(_code(tmp_path, 20)), start_line=start, end_line=end)
@@ -74,7 +74,7 @@ def test_a_bad_range_says_what_is_wrong(read_file, tmp_path, start, end, message
 
 def test_lines_and_characters_are_not_mixed(read_file, tmp_path):
     result = read_file(str(_code(tmp_path, 20)), offset=10, start_line=1)
-    assert result["status"] == "error" and "not both" in result["error"]
+    assert result["status"] == "error" and "use one or the other" in result["error"]
 
 
 def test_a_small_file_still_comes_back_whole(read_file, tmp_path):
@@ -84,12 +84,18 @@ def test_a_small_file_still_comes_back_whole(read_file, tmp_path):
     assert "start_line" not in result
 
 
-def test_a_large_file_still_comes_back_whole_for_the_chunk_index(read_file, tmp_path):
-    """Whole-file reads are unchanged: the chunk index pages large results."""
+def test_a_large_file_comes_back_as_its_outline_and_head(read_file, tmp_path):
+    """Too large for one result: line-numbered head, outline, and how to go on."""
     path = _code(tmp_path, 400)
     result = read_file(str(path))
-    assert result["content"] == path.read_text(encoding="utf-8")
-    assert "start_line" not in result
+    assert result["start_line"] == 1
+    assert result["content"].startswith("     1\tdef f0():")
+    # Too many for the budget: a sample that still reaches the end of the file.
+    assert "     1: def f0" in result["outline"]
+    assert "of 200 entries shown" in result["outline"]
+    last = result["outline"].splitlines()[-2]
+    assert int(last.split(":")[0]) > 300
+    assert "start_line/end_line" in result["note"]
 
 
 def test_a_line_window_is_never_a_full_readback(tmp_path):

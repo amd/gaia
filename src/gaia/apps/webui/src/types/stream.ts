@@ -23,7 +23,7 @@ export type StreamEventType =
     | 'answer'       // Final answer from agent
     | 'agent_error'  // Agent-level error (non-fatal)
     | 'permission_request' // Tool confirmation request
-    | 'needs_confirmation' // Stateless confirmation card (email /query, #2109) — informational, non-blocking
+    | 'needs_confirmation' // Stateless confirmation card (sidecar relay, #2109) — informational, non-blocking
     | 'needs_input' // Mid-run question (#2595) — answerable; the run blocks until POST /chat/user-input
     | 'policy_alert' // Governance policy blocked a tool
     | 'mcp_status'   // MCP server connection status update
@@ -31,7 +31,8 @@ export type StreamEventType =
     | 'followup_taken'    // The running turn took a message sent mid-turn
     | 'followup_returned' // The turn ended without taking these mid-turn messages
     | 'followup_unavailable' // The running turn can't take a message mid-turn
-    | 'context_usage';    // What this turn's model call holds, by kind
+    | 'context_usage'     // What this turn's model call holds, by kind
+    | 'draft';            // A tool call's text so far, while the model writes it
 
 /** One thing found in a recording section, before the whole recording is read. */
 export interface FoundItem {
@@ -60,6 +61,8 @@ export interface StreamEvent {
     message?: string;
     /** Model phase on a status event: reading, loading_tools, loading_model, reasoning, tool_call, … */
     phase?: string;
+    /** On a `model_queue` phase: where the turn stands in line for the model. */
+    queue?: { event?: string; scope?: string; position?: number; queue_length?: number; holder?: string | null; waited_s?: number };
     /** On a `recording` phase: which stage, and how it stands. */
     stage?: number;
     state?: number;
@@ -79,6 +82,12 @@ export interface StreamEvent {
     tool?: string;
     summary?: string;
     success?: boolean;
+    /** On a `tool_result`: no answer came in time, so a "denied" status is not the user's no. */
+    timed_out?: boolean;
+    /** On a `tool_result`: "policy" when GAIA's own rule stopped the call, so "denied" is not the user's no. */
+    denied_by?: string;
+    /** On a `tool_result`: "agent" when GAIA turned the call down itself and showed no prompt. */
+    declined_by?: string;
     steps?: string[];
     /** One plain line per plan step, parallel to `steps` (for plan events). */
     step_narrations?: string[];
@@ -87,8 +96,8 @@ export interface StreamEvent {
     narration?: string;
     /** The skill a turn runs on (skill_use). */
     skill?: string;
-    /** How that skill came to be loaded (skill_use): 'model', 'auto' or 'loaded'. */
-    how?: 'model' | 'auto' | 'loaded';
+    /** How that skill came to be loaded (skill_use): 'model', 'user' (typed /name), 'auto' or 'loaded'. */
+    how?: 'model' | 'user' | 'auto' | 'loaded';
     /** Every skill now loaded in the chat (skill_use). */
     loaded?: string[];
     title?: string;
@@ -144,6 +153,8 @@ export interface StreamEvent {
     sensitive?: boolean;
     /** Timeout in seconds (for tool_confirm events). */
     timeout_seconds?: number;
+    /** When that timeout ends, in Unix seconds, so a replayed prompt keeps counting from it. */
+    expires_at?: number;
     /** MCP server name (for tool_start of MCP tools). */
     mcp_server?: string;
     /** The connector's display name (for tool_start of MCP tools). */
@@ -191,4 +202,6 @@ export interface StreamEvent {
     render?: string;
     /** Card payload for `render` (issue #2108, additive on `tool_result`). */
     data?: unknown;
+    /** On a `tool_result`: a model the call needed and didn't find, e.g. "vision". */
+    needs_model?: string;
 }

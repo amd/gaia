@@ -1961,9 +1961,18 @@ class TestHelperFunctions:
         """Partial overlap returns correct Szymkiewicz-Simpson coefficient."""
         from gaia.agents.base.memory_store import _word_overlap
 
-        # intersection = {"the", "quick"} = 2, min(4, 4) = 4 → 0.5
-        result = _word_overlap("the quick brown fox", "the quick red cat")
+        # intersection = {"one", "quick"} = 2, min(4, 4) = 4 → 0.5
+        result = _word_overlap("one quick brown fox", "one quick red cat")
         assert result == pytest.approx(0.5)
+
+    def test_word_overlap_ignores_filler(self):
+        """ "I am" and "User is" say nothing, so they don't lower the overlap."""
+        from gaia.agents.base.memory_store import _word_overlap
+
+        assert (
+            _word_overlap("I am allergic to mango.", "User is allergic to mango.")
+            == 1.0
+        )
 
     def test_word_overlap_empty(self):
         """Empty strings return 0.0."""
@@ -5503,6 +5512,31 @@ class TestIterSessions:
             executed=False,
         )
         assert store.iter_sessions(min_steps=3)[0]["declined_count"] == 0
+
+    def test_a_refused_folder_access_counts_as_declined(self, store):
+        """Denying "Let GAIA use this folder?" leaves an Access denied error, not
+        a "denied" status; the run is still not a success to learn from."""
+        error = (
+            "Access denied: '/home/u/Documents/snap' is not in allowed paths. "
+            "To use it, ask again and approve access when prompted."
+        )
+        refusal = {"executed": False, "status": "error", "error": error}
+        store.store_turn("sessPath", "user", "daily status snapshot")
+        for i in range(3):
+            store.log_tool_call("sessPath", f"good{i}", {}, "ok", True)
+        store.log_tool_call(
+            "sessPath",
+            "list_directory",
+            {},
+            str(refusal),
+            False,
+            error=error,
+            executed=False,
+        )
+
+        s = store.iter_sessions(min_steps=3)[0]
+        assert s["declined_count"] == 1
+        assert s["attempt_count"] == 3
 
     def test_since_watermark_excludes_older_rows(self, store):
         """since= counts only tool calls strictly newer than the watermark."""

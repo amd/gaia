@@ -28,7 +28,8 @@ type rowEntry struct {
 	leftGB      *float64 // still to download; nil when unknown
 	fullGB      float64
 	fits        *bool
-	fitCode     *string // "npu" hard-blocks: nothing can download it
+	fitCode     *string // "npu" and "backend" hard-block: nothing can run it
+	tight       bool    // fits, but leaves other apps little memory
 	fitReason   *string // the backend's words, for display
 	needGB      *float64
 	haveGB      *float64
@@ -65,6 +66,7 @@ func entryFrom(e setupapi.CatalogEntry) rowEntry {
 		leftGB:      e.SizeGB,
 		fits:        e.Fits,
 		fitCode:     e.FitCode,
+		tight:       e.Tight,
 		fitReason:   e.FitReason,
 		needGB:      e.NeedGB,
 		haveGB:      e.CapacityGB,
@@ -255,7 +257,7 @@ func (s *selection) applyVision() {
 // can't take image creation. A model nothing here can run is refused.
 func (s *selection) pickChat(id string) {
 	r, ok := s.find(id)
-	if !ok || r.npuBlocked() {
+	if !ok || r.cantRunHere() {
 		return
 	}
 	if prev, ok := s.find(s.chat); ok && !prev.downloaded && !sameID(prev.id, r.id) {
@@ -327,7 +329,7 @@ func (s selection) find(id string) (rowEntry, bool) {
 // that is ticked, or one already in Lemonade.
 func (s selection) canChat(id string) bool {
 	r, ok := s.find(id)
-	if !ok || !r.chatable || r.npuBlocked() {
+	if !ok || !r.chatable || r.cantRunHere() {
 		return false
 	}
 	return r.installed || s.ticked[r.id]
@@ -373,10 +375,14 @@ func (s selection) fallbackChat() string {
 // skip to save for it, so its tick can't change anything.
 func (r rowEntry) kept() bool { return r.downloaded && !r.planned && !r.installed }
 
-// npuBlocked is a model the NPU can't run yet, so nothing on this PC can
-// download it: ensure_npu_backend refuses before the pull starts.
-func (r rowEntry) npuBlocked() bool {
-	return r.fits != nil && !*r.fits && r.fitCode != nil && *r.fitCode == "npu"
+// cantRunHere is a model whose backend can't run on this PC (the NPU isn't
+// ready, or Lemonade has no runtime for its recipe), so no download helps:
+// it is blocked rather than offered behind a memory warning.
+func (r rowEntry) cantRunHere() bool {
+	if r.fits == nil || *r.fits || r.fitCode == nil {
+		return false
+	}
+	return *r.fitCode == "npu" || *r.fitCode == "backend"
 }
 
 // toggle ticks or unticks a row, moving the chat model if it was unticked.
@@ -388,7 +394,7 @@ func (s *selection) toggle(id string) bool {
 		return false
 	}
 	if r.installed {
-		if r.chatable && !r.npuBlocked() {
+		if r.chatable && !r.cantRunHere() {
 			s.chat = r.id
 			s.chatChosen = true
 		}
@@ -399,7 +405,7 @@ func (s *selection) toggle(id string) bool {
 	}
 	// Nothing on this PC can download it, so its tick can only queue a pull
 	// that fails; leaving it ticked would keep it in the pending set.
-	if r.npuBlocked() {
+	if r.cantRunHere() {
 		return false
 	}
 	s.ticked[r.id] = !s.ticked[r.id]
@@ -446,7 +452,7 @@ func (s *selection) resetToRecommended(chat string) {
 func (s selection) pending() []rowEntry {
 	var out []rowEntry
 	for _, r := range s.rows {
-		if !r.installed && s.ticked[r.id] && r.needsDownload() && !r.npuBlocked() {
+		if !r.installed && s.ticked[r.id] && r.needsDownload() && !r.cantRunHere() {
 			out = append(out, r)
 		}
 	}

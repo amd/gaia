@@ -15,13 +15,13 @@ import os
 import threading
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Any, Dict, Iterator, List, Optional
+from typing import Any, Dict, Iterator, List, Optional, Set
 
 from gaia.logger import get_logger
 from gaia.security import AllowedPathsEnvError, env_allowed_paths
 
 from .database import ChatDatabase
-from .email_sidecar.profiles import profile_for
+from .sidecar.profiles import profile_for
 
 logger = get_logger(__name__)
 
@@ -32,6 +32,15 @@ class EnvironmentChangeError(ValueError):
 
 class RelayedSwitchError(RuntimeError):
     """The Internet switch is saved, but the relayed turn running now wasn't told."""
+
+
+def _shorten(path: str) -> str:
+    return path if len(path) <= 120 else path[:120] + "…"
+
+
+def path_error_reason(error: Exception) -> str:
+    """Why a path failed, without the path: POSIX errors repeat it in full."""
+    return getattr(error, "strerror", None) or str(error)
 
 
 def _norm(path: str) -> str:
@@ -130,8 +139,8 @@ def takes_folders(agent_type: Optional[str]) -> bool:
     """
     from gaia.daemon.sidecars.errors import SidecarError
 
-    from .email_sidecar import daemon_client
-    from .email_sidecar.profiles import profile_for, scope_supported
+    from .sidecar import daemon_client
+    from .sidecar.profiles import profile_for, scope_supported
 
     agent_type = agent_type or "chat"
     if not relayed({"agent_type": agent_type}):
@@ -149,7 +158,7 @@ def takes_folders(agent_type: Optional[str]) -> bool:
 
 def folders_refusal(agent_type: Optional[str]) -> str:
     """What to tell the user when *agent_type* can't be given folders."""
-    from .email_sidecar.profiles import profile_for
+    from .sidecar.profiles import profile_for
 
     profile = profile_for(agent_type or "chat")
     if profile is not None and profile.min_scope_api_version is not None:
@@ -241,6 +250,70 @@ def _computed_scope(db: ChatDatabase, session: Dict[str, Any]) -> List[str]:
     return _compute_allowed_paths(rag + library)
 
 
+# Paths approved at a relayed agent's prompt; its sidecar holds the grant itself.
+_approved_paths: Dict[str, List[str]] = {}
+# Paths approved since the current turn began, including re-approvals.
+_approved_this_turn: Dict[str, Set[str]] = {}
+_approved_guard = threading.Lock()
+
+
+def note_approved_path(session_id: str, path: str) -> None:
+    """Record that the user let *session_id*'s relayed agent open *path*."""
+    with _approved_guard:
+        paths = _approved_paths.setdefault(session_id, [])
+        if path not in paths:
+            paths.append(path)
+        _approved_this_turn.setdefault(session_id, set()).add(path)
+
+
+def forget_session(session_id: str) -> None:
+    """Drop what *session_id*'s relayed agent was allowed at its prompts."""
+    with _approved_guard:
+        _approved_paths.pop(session_id, None)
+        _approved_this_turn.pop(session_id, None)
+
+
+def begin_turn(session_id: str) -> List[str]:
+    """Start tracking a new turn's approvals; returns what was approved before it."""
+    with _approved_guard:
+        _approved_this_turn.pop(session_id, None)
+        return list(_approved_paths.get(session_id, []))
+
+
+def approved_paths(session_id: str) -> List[str]:
+    """What *session_id*'s relayed agent was allowed at its prompts, right now."""
+    return _approved(session_id)
+
+
+def forget_approved_before(session_id: str, before: List[str]) -> None:
+    """Drop *session_id*'s approved paths that were already approved in
+    *before* (the :func:`begin_turn` snapshot), keeping any approved
+    since, or approved again, in this turn.
+
+    Used when the agent was rebuilt partway through a turn: *before* is
+    stale — it belongs to the agent instance that is now gone — but a path
+    the live turn just approved is not, and must not be dropped with it.
+    """
+    if not before:
+        return
+    with _approved_guard:
+        # A path approved again this turn belongs to the new agent too.
+        stale = set(before) - _approved_this_turn.get(session_id, set())
+        paths = _approved_paths.get(session_id)
+        if not paths:
+            return
+        remaining = [p for p in paths if p not in stale]
+        if remaining:
+            _approved_paths[session_id] = remaining
+        else:
+            _approved_paths.pop(session_id, None)
+
+
+def _approved(session_id: str) -> List[str]:
+    with _approved_guard:
+        return list(_approved_paths.get(session_id, []))
+
+
 def _env_scope_entries() -> List[Path]:
     """The ``GAIA_ALLOWED_PATHS`` entries, or none when it is unset or invalid."""
     try:
@@ -267,6 +340,7 @@ def describe(db: ChatDatabase, session: Dict[str, Any]) -> Dict[str, Any]:
     else:
         # What a new agent's validator would hold, GAIA_ALLOWED_PATHS applied.
         scope = _effective_scope(_computed_scope(db, session) + list(env["folders"]))
+        scope += _approved(session_id)
         scratch = None
 
     added = {_norm(p) for p in env["folders"]}
@@ -280,6 +354,7 @@ def describe(db: ChatDatabase, session: Dict[str, Any]) -> Dict[str, Any]:
     doc_paths = set(doc_names)
     cwd = _norm(os.getcwd())
     from_env = {_norm(str(p)) for p in _env_scope_entries()}
+    approved = {_norm(p) for p in _approved(session_id)}
     entries: Dict[str, Dict[str, Any]] = {}
     for path in scope:
         key = _norm(path)
@@ -297,7 +372,7 @@ def describe(db: ChatDatabase, session: Dict[str, Any]) -> Dict[str, Any]:
             source = "working_folder"
         elif key in from_env:
             source = "allowed_paths"
-        elif validator is not None:
+        elif validator is not None or key in approved:
             source = "approved"
         else:
             source = "document"
@@ -335,9 +410,18 @@ def check_folder(path: str) -> Path:
     """
     from ._chat_helpers import _unsafe_directory_grant_reason
 
-    target = Path(os.path.expanduser(path)).resolve()
-    if not target.is_dir():
-        raise EnvironmentChangeError(f"{target} is not a folder on this PC.")
+    try:
+        target = Path(os.path.expanduser(path)).resolve()
+        is_dir = target.is_dir()
+    except (ValueError, OSError) as e:  # a null byte, or a path too long for the OS
+        raise EnvironmentChangeError(
+            f"{_shorten(path)!r} is not a path this PC can open: "
+            f"{path_error_reason(e)}."
+        ) from e
+    if not is_dir:
+        raise EnvironmentChangeError(
+            f"{_shorten(str(target))} is not a folder on this PC."
+        )
     reason = _unsafe_directory_grant_reason(target)
     if reason:
         raise EnvironmentChangeError(

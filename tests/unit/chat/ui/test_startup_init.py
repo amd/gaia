@@ -4,6 +4,7 @@
 """Integration tests for boot-time initialization and system status init_state."""
 
 import logging
+from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
@@ -76,24 +77,45 @@ def test_status_init_tasks_has_no_error_field(client):
     resp = client.get("/api/system/status")
     data = resp.json()
     for task in data.get("init_tasks", []):
-        # InitTaskInfo has only name + status — no error field
+        # InitTaskInfo has only name + step + status — no error field
         assert "error" not in task
 
 
 # ── Startup Tasks ─────────────────────────────────────────────────────────
 
+_EN_LOCALE = (
+    Path(__file__).resolve().parents[4] / "src/gaia/apps/webui/src/i18n/locales/en.ts"
+)
+
 
 def test_startup_dispatches_visible_tasks(app):
-    """The lifespan dispatches at least 3 visible startup tasks."""
+    """The lifespan dispatches the three visible startup steps."""
     with TestClient(app):
         queue = app.state.dispatch_queue
-        visible = queue.get_visible_jobs()
-        assert len(visible) >= 3
+        steps = {j.step for j in queue.get_visible_jobs()}
+        assert {"check_server", "load_libraries", "load_model"} <= steps
 
-        names = {j.name for j in visible}
-        assert "Checking LLM server" in names
-        assert "Loading ML libraries" in names
-        assert "Loading AI model" in names
+
+def test_status_names_each_startup_step(client):
+    """The status payload carries each task's step, which the UI translates."""
+    tasks = client.get("/api/system/status").json()["init_tasks"]
+    assert {t["step"] for t in tasks} >= {
+        "check_server",
+        "load_libraries",
+        "load_model",
+    }
+
+
+def test_every_visible_startup_step_has_a_ui_string(app):
+    """A visible step without banner.boot.<step> would read as the generic line."""
+    english = _EN_LOCALE.read_text(encoding="utf-8")
+    with TestClient(app):
+        for job in app.state.dispatch_queue.get_visible_jobs():
+            assert job.step, f"visible startup job {job.name!r} has no step id"
+            assert f"'banner.boot.{job.step}':" in english, (
+                f"add 'banner.boot.{job.step}' to every locale in "
+                "src/gaia/apps/webui/src/i18n/locales/"
+            )
 
 
 # ── Boot never seeds a local model for a cloud selection ──────────────────

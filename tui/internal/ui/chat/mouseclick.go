@@ -151,6 +151,10 @@ func (m ChatModel) handleTranscriptMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) 
 	case tea.MouseActionMotion:
 		return m.handleSelectionMotion(msg)
 	case tea.MouseActionRelease:
+		// The status bar sits outside the transcript, so no press of ours started it.
+		if !m.sel.dragging && msg.Button == tea.MouseButtonLeft && m.clickedConnectorsHint(msg.X, msg.Y) {
+			return m.startConnectorsList()
+		}
 		if !m.sel.dragging {
 			// No press of ours started this (it landed outside the transcript).
 			return m, nil
@@ -171,6 +175,10 @@ func (m ChatModel) handleClick(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 			m.lastClickRow, m.lastClickAt = -1, time.Time{}
 			return m, openURL(u)
 		}
+	}
+	if idx := m.messageAt(msg.Y); idx >= 0 && idx < len(m.messages) && m.messages[idx].ImagePath != "" {
+		m.lastClickRow, m.lastClickAt = -1, time.Time{}
+		return m, openImage(m.messages[idx].ImagePath)
 	}
 
 	double := msg.Y == m.lastClickRow && time.Since(m.lastClickAt) <= doubleClickWindow

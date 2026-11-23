@@ -1,6 +1,7 @@
 // Copyright(C) 2026 Advanced Micro Devices, Inc. All rights reserved.
 // SPDX-License-Identifier: MIT
 
+import { RadioGroup } from '../RadioGroup';
 import { useT } from '../../i18n/useT';
 import * as api from '../../services/api';
 import type { SetupPlan } from '../../types';
@@ -68,7 +69,7 @@ export function BackendChoice({ plan, selection, onSelection, disabled = false, 
     return (
         <section className="setup-backend" aria-labelledby="setup-backend-title">
             <h3 className="mc-job-title" id="setup-backend-title">{t('setup.backend.title')}</h3>
-            <div className="segmented" role="radiogroup" aria-labelledby="setup-backend-title">
+            <RadioGroup className="segmented" aria-labelledby="setup-backend-title">
                 {choices.map((c) => (
                     <button
                         key={c.id}
@@ -83,7 +84,7 @@ export function BackendChoice({ plan, selection, onSelection, disabled = false, 
                         <bdi>{c.label}</bdi>
                     </button>
                 ))}
-            </div>
+            </RadioGroup>
             {npuProblems.length > 0 ? (
                 <NpuNotReady problems={npuProblems} disabled={disabled} onRecheck={onRecheck} />
             ) : (

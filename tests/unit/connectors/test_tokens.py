@@ -344,6 +344,7 @@ def seeded_microsoft_connection(microsoft_provider):
         scopes=["https://graph.microsoft.com/Mail.Read"],
         client_id_hash=microsoft_provider.client_id_hash,
         tenant="consumers",
+        account_id="alice-oid",
     )
     yield microsoft_provider
 
@@ -594,12 +595,19 @@ class TestSplitLanguageFailureTaxonomy:
                 access="a1", expires_in=3600, refresh="ROTATED-1"
             )
         )
+        respx.get(url__startswith="https://graph.microsoft.com/v1.0/me").mock(
+            return_value=httpx.Response(
+                200, json={"id": "alice-oid", "mail": "alice@example.com"}
+            )
+        )
         await get_or_refresh("microsoft")
         loaded = load_connection(
             "microsoft",
             current_client_id_hash=legacy_microsoft_connection.client_id_hash,
         )
         assert loaded["tenant"] == "consumers"
+        # The pre-multi-account blob learns its stable id on the same refresh.
+        assert loaded["account_id"] == "alice-oid"
 
         # Second refresh: the blob is no longer legacy, so a subsequent
         # invalid_grant must NOT take the split-language enrichment path.

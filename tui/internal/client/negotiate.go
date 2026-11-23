@@ -41,17 +41,6 @@ const (
 	questionsContractMinor = 6
 )
 
-// preScanContract is the contract version that introduced the needs_you
-// worklist (#2743, schema 2.11). A peer below it omits needs_you/bulk from
-// its /prescan response entirely -- decoded as a zero-value empty slice,
-// which reads as a confident "nothing needs you" indistinguishable from a
-// genuinely clear inbox. FetchPreScan gates on this before trusting the
-// field at all.
-const (
-	preScanContractMajor = 2
-	preScanContractMinor = 11
-)
-
 // sessionContract is the contract version that let /query resolve a
 // conversation's agent by session_id instead of building a throwaway one per
 // call (#2829, schema 2.12). A peer below it 422s the field, exactly like
@@ -83,15 +72,15 @@ const (
 	toolDecisionContractMinor = 14
 )
 
-// toolDecisionAgentID is the only agent that serves those routes. `email` also
-// reports 2.14 and has neither, so a version-only gate would offer them there
-// and then 404 — the same reason memoryAgentID exists.
+// toolDecisionAgentID is the only agent that serves those routes. Every sidecar
+// numbers its own contract, so a version-only gate could offer them to another
+// agent reporting 2.14 and then 404 — the same reason memoryAgentID exists.
 const toolDecisionAgentID = "gaia"
 
 // memoryAgentID is the only agent that serves a memory dump. The flagship owns
-// the memory store; `email` reports a numerically HIGHER contract (2.14) and
-// has no such route, so a version-only gate would offer /memory there and then
-// 404 — the advertised-then-refused shape #3978 exists to remove. Mirrors
+// the memory store; another sidecar can report a numerically HIGHER contract
+// and have no such route, so a version-only gate would offer /memory there and
+// then 404 — the advertised-then-refused shape #3978 exists to remove. Mirrors
 // modelSwitchAgentID's reasoning in ui/chat/modelcmd.go: the feature lives
 // agent-side, so it is gated by WHICH agent.
 const memoryAgentID = "gaia"
@@ -106,15 +95,14 @@ const (
 	followUpContractMinor = 15
 )
 
-// followUpAgentID is the only agent that serves the follow-up route. The email
-// sidecar also reports schema 2.15 because it published its stateful routes,
-// but it does not accept mid-turn follow-ups.
+// followUpAgentID is the only agent that serves the follow-up route. Another
+// sidecar can report schema 2.15 without accepting mid-turn follow-ups.
 const followUpAgentID = "gaia"
 
 // surfaceContract is the contract version from which the flagship's `/query`
 // takes `surface` (schema 2.20). Without it the agent words provider errors for
 // a headless caller instead of pointing at the TUI's own settings. Gaia only:
-// email numbers its own contract and has no such field.
+// every other sidecar numbers its own contract and has no such field.
 const (
 	surfaceContractMajor = 2
 	surfaceContractMinor = 20
@@ -122,6 +110,15 @@ const (
 
 // surfaceAgentID is the only agent whose `/query` takes `surface`.
 const surfaceAgentID = "gaia"
+
+// workingDirectoryContract is the contract version from which the flagship's
+// `/query` takes `working_directory` (schema 2.24). Without it the
+// daemon-spawned sidecar resolves relative paths and the project map against
+// the daemon's folder. Gaia only, like surface.
+const (
+	workingDirectoryContractMajor = 2
+	workingDirectoryContractMinor = 24
+)
 
 // versionProbeTimeout bounds the negotiation round-trip. Short: it is a local
 // daemon relay, and the probe must never be the reason a turn feels slow. On
@@ -148,6 +145,8 @@ type peerContract struct {
 	supportsToolDecision bool
 	// supportsSurface is true only when the peer is the gaia agent at >= 2.20.
 	supportsSurface bool
+	// supportsWorkingDirectory is true only when the peer is the gaia agent at >= 2.24.
+	supportsWorkingDirectory bool
 	// answered is true only when the /version probe actually heard from the
 	// peer: a parsed 200 body, or a 404 (no such route -- which is itself a
 	// definitive "old enough to predate every contract this file tracks").
@@ -245,9 +244,8 @@ func (s *SSEClient) probeContract(ctx context.Context, inst *daemon.Instance) pe
 		return peerContract{}
 	}
 	// Both spellings: the flagship's /v1/gaia/version calls it "version",
-	// while email's /v1/email/version and BOTH agents' top-level /version call
-	// it "agentVersion". Decoding one leaves the release version permanently
-	// empty for the other.
+	// while the top-level /version calls it "agentVersion". Decoding one leaves
+	// the release version permanently empty for the other.
 	var payload struct {
 		APIVersion   string `json:"apiVersion"`
 		Version      string `json:"version"`
@@ -266,21 +264,25 @@ func (s *SSEClient) probeContract(ctx context.Context, inst *daemon.Instance) pe
 		contractAtLeast(payload.APIVersion, toolDecisionContractMajor, toolDecisionContractMinor)
 	supportsSurface := s.agentID == surfaceAgentID &&
 		contractAtLeast(payload.APIVersion, surfaceContractMajor, surfaceContractMinor)
-	s.opts.Logf("sse: '%s' speaks contract %s (mid-run questions: %t, session: %t, mid-run follow-ups: %t, tool decisions: %t)",
-		s.agentID, payload.APIVersion, supports, supportsSession, supportsFollowUp, supportsDecision)
+	supportsWorkingDirectory := s.agentID == surfaceAgentID &&
+		contractAtLeast(payload.APIVersion, workingDirectoryContractMajor, workingDirectoryContractMinor)
+	s.opts.Logf("sse: '%s' speaks contract %s (mid-run questions: %t, session: %t, mid-run follow-ups: %t, tool decisions: %t, surface: %t, start folder: %t)",
+		s.agentID, payload.APIVersion, supports, supportsSession, supportsFollowUp, supportsDecision,
+		supportsSurface, supportsWorkingDirectory)
 	agentVersion := payload.Version
 	if agentVersion == "" {
 		agentVersion = payload.AgentVersion
 	}
 	return peerContract{
-		version:              payload.APIVersion,
-		agentVersion:         agentVersion,
-		canAnswerQuestions:   supports,
-		supportsSession:      supportsSession,
-		supportsFollowUp:     supportsFollowUp,
-		supportsToolDecision: supportsDecision,
-		supportsSurface:      supportsSurface,
-		answered:             true,
+		version:                  payload.APIVersion,
+		agentVersion:             agentVersion,
+		canAnswerQuestions:       supports,
+		supportsSession:          supportsSession,
+		supportsFollowUp:         supportsFollowUp,
+		supportsToolDecision:     supportsDecision,
+		supportsSurface:          supportsSurface,
+		answered:                 true,
+		supportsWorkingDirectory: supportsWorkingDirectory,
 	}
 }
 
@@ -318,10 +320,9 @@ func contractAtLeast(version string, major, minor int) bool {
 // noticeForMissingCapability is what the user is told when they are sitting at
 // an interactive session whose agent is too old to be asked anything.
 //
-// It matters because the feature that needs it is the one that fixes a broken
-// mailbox in-conversation: without it the agent falls back to reporting the
-// connector error, and the user deserves to know why the offer never came rather
-// than concluding the feature is broken.
+// Without it the agent falls back to reporting what went wrong instead of
+// asking, and the user deserves to know why the question never came rather than
+// concluding the feature is broken.
 func noticeForMissingCapability(agentID, version string) string {
 	have := "an older contract"
 	if version != "" {
@@ -329,26 +330,9 @@ func noticeForMissingCapability(agentID, version string) string {
 	}
 	return fmt.Sprintf(
 		"the installed '%s' agent speaks %s, so it cannot ask questions mid-task — "+
-			"in-conversation mailbox setup needs %d.%d or newer. "+
+			"that needs %d.%d or newer. "+
 			"Update it with `%s` then `%s`.",
 		agentID, have, questionsContractMajor, questionsContractMinor,
-		updateCommand("uninstall", agentID), updateCommand("install", agentID))
-}
-
-// noticeForMissingPreScan is what the user is told when the installed email
-// sidecar predates the needs_you worklist (#2743). Mirrors
-// noticeForMissingCapability's shape: name what's missing, name the floor,
-// name the fix -- never a silent degrade to an empty-looking card.
-func noticeForMissingPreScan(agentID, version string) string {
-	have := "an older contract"
-	if version != "" {
-		have = "contract " + version
-	}
-	return fmt.Sprintf(
-		"the installed '%s' agent speaks %s, so it cannot build the one-card "+
-			"inbox worklist yet — that needs %d.%d or newer. "+
-			"Update it with `%s` then `%s`.",
-		agentID, have, preScanContractMajor, preScanContractMinor,
 		updateCommand("uninstall", agentID), updateCommand("install", agentID))
 }
 
@@ -371,7 +355,7 @@ func noticeForMissingFollowUp(agentID, version string) string {
 
 // noticeForMissingMemory is what the user is told when the installed sidecar
 // predates GET /v1/<agent>/memory (#3978, schema 2.13). Mirrors
-// noticeForMissingPreScan's shape: name what's missing, name the floor, name
+// noticeForMissingFollowUp's shape: name what's missing, name the floor, name
 // the fix -- never a silent degrade to an empty-looking memory view.
 func noticeForMissingMemory(agentID, version string) string {
 	have := "an older contract"
@@ -396,7 +380,7 @@ func noticeForMissingMemory(agentID, version string) string {
 // `gaia uninstall` also exists and looks right, which is the trap: it is
 // GAIA-wide — the tiered cleanup of the GAIA install itself, one flag away from
 // `--purge`. It rejects a trailing agent id, so a user handed `gaia uninstall
-// email` sees an argparse error and may reasonably retry without the argument,
+// gaia` sees an argparse error and may reasonably retry without the argument,
 // straight at the wrong tool. `gaia hub
 // <verb> <id>` takes the agent id and is the same command whether the TUI was
 // launched standalone or through the Python CLI.

@@ -101,22 +101,28 @@ test('Customize picks another chat model, vision follows it, and the labels say 
     expect(pulled.find((r) => r.model === UNTESTED_CHAT_MODEL)?.body_keys).toEqual(expect.arrayContaining(['checkpoint', 'recipe']));
 });
 
-test('the cloud path greys the gateway with its reason, and offers it once the host answers', async ({ page, journey, say, shot, open }) => {
+test('the cloud path hides an unreachable gateway, and offers it once the host answers', async ({ page, journey, say, shot, open }) => {
     const gatewayPort = await journey.closedPort();
     await journey.startFake();
     await journey.startBackend({ GAIA_GATEWAY_BASE_URL: `http://127.0.0.1:${gatewayPort}/Unified/v1` });
-    await open();
-    await pastChecks(page, say);
-    await page.getByRole('button', { name: say('setup.plan.cloud') }).click();
-    await expect(stepTitle(page)).toHaveText(say('setup.key.title'));
+    const toKey = async () => {
+        await open();
+        await pastChecks(page, say);
+        await page.getByRole('radio', { name: say('setup.plan.cloud') }).check();
+        await page.getByRole('button', { name: say('setup.continue') }).click();
+        await expect(stepTitle(page)).toHaveText(say('setup.key.title'));
+    };
+    await toKey();
 
     const gateway = page.getByRole('radio', { name: /AMD LLM Gateway/ });
-    await expect(gateway).toBeDisabled();
-    await expect(gateway).toContainText(say('setup.key.gatewayOff'));
+    await expect(page.getByRole('radio', { name: /Fireworks/ })).toBeVisible();
+    await expect(gateway).toHaveCount(0);
+    await expect(page.getByRole('button', { name: say('setup.key.checkAgain') })).toHaveCount(0);
     await shot('gateway-unreachable');
 
+    // The gateway is checked as setup opens: once the host answers, the next visit offers it.
     await journey.listen(gatewayPort);
-    await page.getByRole('button', { name: say('setup.key.checkAgain') }).click();
+    await toKey();
     await expect(gateway).toBeEnabled();
     await expect(gateway).toContainText(say('setup.where.amdNote'));
     await gateway.click();

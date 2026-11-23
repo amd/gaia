@@ -145,13 +145,15 @@ async def test_background_tick_uses_latest_completed_exchanges(transcript):
 
     loop = AgentLoop()
     loop._db = db
+    goal = SimpleNamespace(priority="high", title="t", description="")
     module = SimpleNamespace(ChatAgent=Agent, ChatAgentConfig=object)
     with (
-        patch.dict(sys.modules, {"gaia_agent.chat_agent": module}),
+        patch.dict(sys.modules, {"gaiapy.chat_agent": module}),
         patch.object(helpers, "_get_cached_agent", return_value=Agent()),
         patch.object(loop, "_get_actionable_goals", return_value=[]),
+        patch.object(loop, "_settle_goal"),
     ):
-        await loop._execute_tick(session["id"], session, [])
+        await loop._execute_tick(session["id"], session, [goal])
     assert [entry["content"] for entry in captured] == [
         content for i in range(12) for content in (f"USER_{i}", f"ASST_{i}")
     ]
@@ -159,7 +161,7 @@ async def test_background_tick_uses_latest_completed_exchanges(transcript):
 
 @pytest.mark.asyncio
 @pytest.mark.allow_network
-async def test_switching_to_email_preserves_prior_pairs(transcript):
+async def test_a_relayed_turn_gets_the_latest_pairs(transcript):
     db, session = transcript
     captured = []
 
@@ -168,10 +170,12 @@ async def test_switching_to_email_preserves_prior_pairs(transcript):
         handler._emit({"type": "agent_done"})
 
     request = ChatRequest(
-        session_id=session["id"], message="follow-up", agent_type="email", stream=True
+        session_id=session["id"], message="follow-up", agent_type="gaia", stream=True
     )
     with (
         patch.object(helpers, "_get_cached_agent", return_value=None),
+        patch.object(helpers, "_agent_type_unknown", return_value=False),
+        patch.object(helpers, "_should_relay_to_sidecar", return_value=True),
         patch.object(helpers, "_dispatch_sidecar_query", side_effect=dispatch),
         patch.object(helpers, "_maybe_update_session_title", new_callable=AsyncMock),
     ):

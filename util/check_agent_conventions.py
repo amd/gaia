@@ -42,8 +42,6 @@ _NON_AGENT_DIRS = {"__pycache__", "base", "tools"}
 
 # Agent classes scanned under src/gaia/agents/ that are documented as
 # "not-a-subclass-of-Agent-directly" — accepted without the Agent base.
-# RoutingAgent (the canonical example) now ships as the standalone
-# gaia-agent-routing wheel (#1102) and is no longer scanned here.
 _STANDALONE_ALLOWED: set = set()
 
 

@@ -11,7 +11,15 @@
 // unrelated user process (issue #782 TOCTOU mitigation).
 
 const realFs = require("fs");
+const path = require("path");
 const { spawnSync: realSpawnSync } = require("child_process");
+
+// One record per running app, named for the app's pid: two copies of the app
+// sharing ~/.gaia (an installed app and a dev build) must not see each other's
+// live backend as an orphan (issue #7062).
+const PIDFILE_DIR = "backend-pids";
+// Written by versions before per-app records; read only to clean up after them.
+const LEGACY_PIDFILE = "backend.pid";
 
 // Legitimate backend invocation is `gaia chat --ui --ui-port <port>`. Match on
 // "gaia" plus one of the backend-specific flags so unrelated Python/Node
@@ -80,4 +88,157 @@ function isGaiaBackendProcess(pid, deps = {}) {
   return false;
 }
 
-module.exports = { isGaiaBackendProcess, commandLooksLikeBackend };
+function pidAlive(pid) {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (err) {
+    // EPERM: it exists but belongs to someone else.
+    return err.code === "EPERM";
+  }
+}
+
+function backendRecordPath(gaiaDir, ownerPid) {
+  return path.join(gaiaDir, PIDFILE_DIR, `${ownerPid}.pid`);
+}
+
+/** Record that app `ownerPid` started backend `backendPid`. Returns the file written. */
+function recordBackend({ gaiaDir, ownerPid, backendPid, fs = realFs }) {
+  const file = backendRecordPath(gaiaDir, ownerPid);
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(file, String(backendPid), { mode: 0o600 });
+  return file;
+}
+
+/** Remove app `ownerPid`'s record, but only while it still names `backendPid`. */
+function forgetBackend({ gaiaDir, ownerPid, backendPid, fs = realFs }) {
+  const file = backendRecordPath(gaiaDir, ownerPid);
+  let recorded;
+  try {
+    recorded = parseInt(fs.readFileSync(file, "utf8").trim(), 10);
+  } catch (err) {
+    if (err.code === "ENOENT") return false;
+    throw err;
+  }
+  if (recorded !== backendPid) return false;
+  fs.unlinkSync(file);
+  return true;
+}
+
+/**
+ * Stop every recorded backend whose app is gone, and delete its record.
+ * A backend whose app is still running is left alone, record and all: it
+ * belongs to another copy of the app sharing this ~/.gaia.
+ *
+ * @returns {Promise<{ killed: number[], kept: number[] }>} backend pids
+ */
+async function cleanupOrphanedBackends({
+  gaiaDir,
+  selfPid = process.pid,
+  killBackend,
+  isBackend = isGaiaBackendProcess,
+  isAlive = pidAlive,
+  fs = realFs,
+  logger = console,
+}) {
+  const killed = [];
+  const kept = [];
+
+  async function stopIfBackend(backendPid, source) {
+    let confirmed = false;
+    try {
+      confirmed = isBackend(backendPid);
+    } catch (err) {
+      logger.warn(`[main] Could not verify pid ${backendPid} from ${source}: ${err.message}`);
+    }
+    if (!confirmed) {
+      logger.log(`[main] PID ${backendPid} from ${source} is not a GAIA backend; skipping kill`);
+      return;
+    }
+    try {
+      await killBackend(backendPid);
+      killed.push(backendPid);
+      logger.log(`[main] Stopped orphaned backend pid ${backendPid} (from ${source})`);
+    } catch (err) {
+      logger.warn(`[main] Could not stop orphaned backend pid ${backendPid}: ${err.message}`);
+    }
+  }
+
+  function readPid(file) {
+    return parseInt(fs.readFileSync(file, "utf8").trim(), 10);
+  }
+
+  function remove(file) {
+    try {
+      fs.unlinkSync(file);
+    } catch (err) {
+      if (err.code !== "ENOENT") logger.warn(`[main] Could not remove ${file}: ${err.message}`);
+    }
+  }
+
+  const legacy = path.join(gaiaDir, LEGACY_PIDFILE);
+  if (fs.existsSync(legacy)) {
+    try {
+      const backendPid = readPid(legacy);
+      if (!Number.isNaN(backendPid)) await stopIfBackend(backendPid, LEGACY_PIDFILE);
+    } catch (err) {
+      logger.warn(`[main] Failed reading ${legacy}: ${err.message}`);
+    }
+    remove(legacy);
+  }
+
+  const dir = path.join(gaiaDir, PIDFILE_DIR);
+  let names = [];
+  try {
+    names = fs.readdirSync(dir);
+  } catch (err) {
+    if (err.code !== "ENOENT") logger.warn(`[main] Could not list ${dir}: ${err.message}`);
+  }
+  for (const name of names) {
+    const m = /^(\d+)\.pid$/.exec(name);
+    if (!m) continue;
+    const ownerPid = Number(m[1]);
+    const file = path.join(dir, name);
+    let backendPid;
+    try {
+      backendPid = readPid(file);
+    } catch (err) {
+      logger.warn(`[main] Failed reading ${file}: ${err.message}`);
+      continue;
+    }
+    if (ownerPid !== selfPid && isAlive(ownerPid)) {
+      // A record whose backend is gone is stale, even if its app's pid is now
+      // someone else's; it can never protect a live backend, so drop it.
+      let stale = false;
+      if (!Number.isNaN(backendPid)) {
+        try {
+          stale = !isBackend(backendPid);
+        } catch (err) {
+          logger.warn(`[main] Could not verify pid ${backendPid} from ${PIDFILE_DIR}/${name}: ${err.message}`);
+        }
+      }
+      if (stale) {
+        logger.log(`[main] Backend pid ${backendPid} of app pid ${ownerPid} is gone; removing its record`);
+        remove(file);
+        continue;
+      }
+      if (!Number.isNaN(backendPid)) kept.push(backendPid);
+      logger.log(`[main] Backend pid ${backendPid} belongs to running GAIA app pid ${ownerPid}; leaving it`);
+      continue;
+    }
+    if (!Number.isNaN(backendPid)) await stopIfBackend(backendPid, `${PIDFILE_DIR}/${name}`);
+    remove(file);
+  }
+  return { killed, kept };
+}
+
+module.exports = {
+  isGaiaBackendProcess,
+  commandLooksLikeBackend,
+  cleanupOrphanedBackends,
+  recordBackend,
+  forgetBackend,
+  backendRecordPath,
+  PIDFILE_DIR,
+  LEGACY_PIDFILE,
+};

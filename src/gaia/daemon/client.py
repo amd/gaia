@@ -103,7 +103,7 @@ _REQUIRED_RECONFIGURE_MINOR = 5
 _CLIENTS_TIMEOUT = (2.0, 10.0)
 
 # Ensure: connect fast; read generously — a first-run ensure may lazily fetch the
-# sidecar binary before answering (mirrors gaia.ui.email_sidecar.daemon_client).
+# sidecar binary before answering (mirrors gaia.ui.sidecar.daemon_client).
 _ENSURE_TIMEOUT = (5.0, 900.0)
 # A cold start's health wait (60s) plus a start already in flight. Keep
 # gaiainit.CheckTimeout in the TUI above this plus daemon start (60s).
@@ -460,7 +460,7 @@ def outdated_daemon_busy(inst: DaemonInstance) -> Optional[str]:
     except requests.exceptions.RequestException as e:
         return f"GAIA could not check whether it is busy ({e})"
     if status.status_code != 200:
-        return f"GAIA could not check whether it is busy ({_error_detail(status)})"
+        return f"GAIA could not check whether it is busy ({error_detail(status)})"
     relayed = status.json().get("relayed_turns") or 0
     if relayed:
         return f"{relayed} agent turn(s) are still running on it"
@@ -475,7 +475,7 @@ def outdated_daemon_busy(inst: DaemonInstance) -> Optional[str]:
     owned_sidecars = set()
     if agents.status_code != 404:
         if agents.status_code != 200:
-            return f"GAIA could not check whether it is busy ({_error_detail(agents)})"
+            return f"GAIA could not check whether it is busy ({error_detail(agents)})"
         import psutil
 
         for agent in agents.json().get("agents") or []:
@@ -502,7 +502,7 @@ def outdated_daemon_busy(inst: DaemonInstance) -> Optional[str]:
     if clients.status_code == 404:
         return None
     if clients.status_code != 200:
-        return f"GAIA could not check whether it is busy ({_error_detail(clients)})"
+        return f"GAIA could not check whether it is busy ({error_detail(clients)})"
     snapshot = clients.json()
     ours = {os.getpid(), os.getppid()}
     users = [
@@ -740,7 +740,7 @@ def _check_agents_floor(inst: DaemonInstance) -> None:
         )
 
 
-def _error_detail(response) -> str:
+def error_detail(response) -> str:
     """The actionable ``detail`` from a daemon error response (or raw status)."""
     try:
         body = response.json()
@@ -793,7 +793,7 @@ def ensure_agent(
     if r.status_code != 200:
         raise DaemonError(
             f"the daemon refused to ensure the '{agent_id}' sidecar: "
-            f"{_error_detail(r)}"
+            f"{error_detail(r)}"
         )
     # Deliberately DO NOT read/return the response body — it carries the sidecar
     # bearer token, which a thin client must never learn or hold.
@@ -820,7 +820,7 @@ def stop_running_agent(agent_id: str, timeout: float = 30.0) -> bool:
         if r.status_code != 200:
             raise DaemonError(
                 f"the daemon at {inst.base_url} could not list its agents: "
-                f"{_error_detail(r)}"
+                f"{error_detail(r)}"
             )
         running = any(
             a.get("agent_id") == agent_id and a.get("state") == "running"
@@ -842,7 +842,7 @@ def stop_running_agent(agent_id: str, timeout: float = 30.0) -> bool:
     if r.status_code != 200:
         raise DaemonError(
             f"the daemon could not stop the '{agent_id}' agent, so it is still "
-            f"running its previous version: {_error_detail(r)}. Run `gaia daemon "
+            f"running its previous version: {error_detail(r)}. Run `gaia daemon "
             f"stop-agent {agent_id}`; the next chat starts the new version."
         )
     return True
@@ -900,14 +900,14 @@ def ensure_lemonade(
             f"{paths.log_path()}."
         ) from e
     if r.status_code == 503 and r.headers.get("Retry-After"):
-        raise LemonadeNotAnsweringError(_error_detail(r))
+        raise LemonadeNotAnsweringError(error_detail(r))
     if r.status_code == 409:
         raise DaemonError(
             f"the daemon has no Lemonade Server of its own to start: "
-            f"{_error_detail(r)}"
+            f"{error_detail(r)}"
         )
     if r.status_code != 200:
-        reason = _error_detail(r)
+        reason = error_detail(r)
         raise LemonadeStartFailedError(
             f"the daemon could not start Lemonade Server: {reason}", reason=reason
         )
@@ -931,7 +931,7 @@ def _post_reconfigure(inst: DaemonInstance, timeout) -> dict:
         ) from e
     if r.status_code != 200:
         raise DaemonError(
-            f"the daemon could not switch Lemonade Server: {_error_detail(r)}"
+            f"the daemon could not switch Lemonade Server: {error_detail(r)}"
         )
     return r.json()
 
@@ -994,6 +994,90 @@ def reconfigure_lemonade(timeout=_LEMONADE_ENSURE_TIMEOUT) -> Optional[dict]:
             f"not the one GAIA is set to use. Check `gaia daemon logs`."
         )
     return {**applied, "restarted": True}
+
+
+def _daemon_lemonade_target(inst: DaemonInstance) -> Optional[dict]:
+    """The Lemonade *inst* uses, or None for a daemon too old to say."""
+    import requests
+
+    if _minor(inst) < _REQUIRED_RECONFIGURE_MINOR:
+        return None
+    url = f"{inst.base_url}{API_PREFIX}/lemonade/target"
+    try:
+        r = requests.get(
+            url,
+            headers={"Authorization": f"{AUTH_SCHEME} {inst.token}"},
+            timeout=_CLIENTS_TIMEOUT,
+        )
+    except requests.exceptions.RequestException as e:
+        raise DaemonError(
+            f"could not ask the daemon at {inst.base_url} which Lemonade Server it "
+            f"uses: {e}. Check `gaia daemon status`."
+        ) from e
+    if r.status_code != 200:
+        raise DaemonError(
+            "the daemon could not say which Lemonade Server it uses: "
+            f"{error_detail(r)}"
+        )
+    return r.json()
+
+
+def match_launch_lemonade() -> Optional[str]:
+    """Restart a running daemon that uses another Lemonade than this process.
+
+    A daemon this process started would inherit its environment, so an adopted
+    one left over from a launch with another ``LEMONADE_BASE_URL`` (or from
+    before that variable was dropped) answers chats through a server this
+    process does not use. A daemon still at work is left running.
+
+    Returns:
+        Why it was restarted, or None when it matched or none runs.
+
+    Raises:
+        DaemonError: It differs and is busy, could not be read, or did not
+            restart onto this process's server.
+    """
+    from gaia.llm.lemonade_choice import describe
+
+    inst = attach()
+    if inst is None:
+        return None
+    mine = describe()
+    wanted = (mine["mode"], mine["base_url"])
+    theirs = _daemon_lemonade_target(inst)
+    if theirs is not None and (theirs.get("mode"), theirs.get("base_url")) == wanted:
+        return None
+    own = "GAIA's own server"
+    used = (
+        "a server it is too old to name"
+        if theirs is None
+        else theirs.get("base_url") or own
+    )
+    why = f"it uses Lemonade at {used}, and this launch uses {mine['base_url'] or own}"
+    busy = outdated_daemon_busy(inst)
+    if busy is not None:
+        raise DaemonError(
+            f"the GAIA daemon (pid {inst.pid}) was left running though {why}, "
+            f"because {busy}. Chats may reach a different model server until it "
+            "restarts; run `gaia daemon restart` once that work is done."
+        )
+    logger.info("daemon: pid %s: %s; restarting it", inst.pid, why)
+    if not request_shutdown(inst) or not wait_until_gone(
+        inst, timeout=STOP_WAIT_TIMEOUT
+    ):
+        raise DaemonError(
+            f"the GAIA daemon (pid {inst.pid}) did not stop to follow this launch's "
+            f"model server ({why}). Run `gaia daemon restart`. Where to look: "
+            f"`gaia daemon logs` ({paths.log_path()})."
+        )
+    fresh = start_or_attach()
+    applied = _daemon_lemonade_target(fresh)
+    if applied is None or (applied.get("mode"), applied.get("base_url")) != wanted:
+        raise DaemonError(
+            "the restarted GAIA daemon still uses another Lemonade Server than "
+            "this launch. Check `gaia daemon logs`."
+        )
+    return why
 
 
 def register_lemonade_client(
@@ -1059,7 +1143,7 @@ def register_lemonade_client(
         ) from e
     if r.status_code != 200:
         raise DaemonError(
-            f"the daemon refused to register this {kind}: {_error_detail(r)}"
+            f"the daemon refused to register this {kind}: {error_detail(r)}"
         )
     return r.json()["client_id"]
 
@@ -1098,7 +1182,7 @@ def release_lemonade_client(
     if r.status_code == 404:
         return None
     if r.status_code != 200:
-        raise DaemonError(f"the daemon refused the release: {_error_detail(r)}")
+        raise DaemonError(f"the daemon refused the release: {error_detail(r)}")
     return r.json()
 
 

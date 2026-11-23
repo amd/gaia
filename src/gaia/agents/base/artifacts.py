@@ -10,6 +10,8 @@ from uuid import uuid4
 
 #: Most characters one ``read`` returns; a longer span continues at ``next_offset``.
 PAGE_CHARS = 8000
+#: Most expired handles remembered, so a long session's list stays bounded.
+EXPIRED_HANDLES_KEPT = 4096
 
 
 def _encode(text: str) -> bytes:
@@ -28,16 +30,29 @@ class ArtifactStore:
         self._indexes = {}
         #: Handles holding one whole tool result, which a bare ``read`` pages from 0.
         self._whole = set()
+        #: Handles dropped by the TTL, so a late use can say "expired", not "unknown".
+        self._expired = {}
         self._lock = threading.Lock()
+
+    def _sweep(self, now: float) -> None:
+        """Drop handles past the TTL; caller holds the lock."""
+        stale = [k for k, v in self._items.items() if now - v[0] >= self.ttl]
+        for k in stale:
+            del self._items[k]
+            self._mark_expired(k)
+        self._indexes = {k: v for k, v in self._indexes.items() if k in self._items}
+
+    def _mark_expired(self, handle: str) -> None:
+        """Remember ``handle`` as expired, dropping the oldest past the cap."""
+        self._expired[handle] = None
+        while len(self._expired) > EXPIRED_HANDLES_KEPT:
+            del self._expired[next(iter(self._expired))]
 
     def put(self, text: str) -> str:
         size = len(text.encode("utf-8"))
         with self._lock:
             now = time.monotonic()
-            self._items = {
-                k: v for k, v in self._items.items() if now - v[0] < self.ttl
-            }
-            self._indexes = {k: v for k, v in self._indexes.items() if k in self._items}
+            self._sweep(now)
             if size + sum(v[2] for v in self._items.values()) > self.max_bytes:
                 raise ValueError(
                     "Tool output archive is full (64 MiB default); request smaller output or start a new session."
@@ -56,10 +71,7 @@ class ArtifactStore:
         handle = "output_" + hashlib.sha256(data).hexdigest()[:32]
         with self._lock:
             now = time.monotonic()
-            self._items = {
-                k: v for k, v in self._items.items() if now - v[0] < self.ttl
-            }
-            self._indexes = {k: v for k, v in self._indexes.items() if k in self._items}
+            self._sweep(now)
             self._whole &= self._items.keys()
             if (
                 handle not in self._items
@@ -94,6 +106,23 @@ class ArtifactStore:
             item = self._items.get(handle) if isinstance(handle, str) else None
             return item is not None and time.monotonic() - item[0] < self.ttl
 
+    def resolve(self, handle: str) -> str:
+        """The whole text behind ``handle``, for a tool given it as an argument."""
+        with self._lock:
+            item = self._items.get(handle)
+            if item is not None and time.monotonic() - item[0] < self.ttl:
+                return item[1]
+            expired = item is not None or handle in self._expired
+        if expired:
+            raise ValueError(
+                f"Expired output handle {handle}; rerun the tool that produced it "
+                "and pass the new handle."
+            )
+        raise ValueError(
+            f"Unknown output handle {handle}; pass a handle from a result in this "
+            "session, copied exactly."
+        )
+
     def text(self, handle: str) -> str:
         """The whole archived text, for indexing it; the model pages via ``read``."""
         with self._lock:
@@ -108,13 +137,24 @@ class ArtifactStore:
         offset: int = 0,
         limit: Optional[int] = None,
         entry: Optional[int] = None,
+        to_entry: Optional[int] = None,
+        max_chars: int = PAGE_CHARS,
     ) -> dict:
         """A page of archived text: index entry ``entry``, or ``offset``/``limit``.
 
         ``limit`` defaults to the entry's length, or 2000 without an entry. A
         page holds at most ``PAGE_CHARS``; ``remaining`` and ``next_offset``
-        say where the rest of the requested span continues.
+        say where the rest of the requested span continues. With ``to_entry``,
+        entries ``entry``..``to_entry`` come back as one span of up to
+        ``max_chars``; ``next_entry`` names the first one that did not fit.
         """
+        if to_entry is not None:
+            if entry is None or offset or limit is not None:
+                raise ValueError(
+                    "to_entry reads a run of entries: pass it with entry, "
+                    "without offset or limit."
+                )
+            return self._read_entries(handle, entry, to_entry, max_chars)
         with self._lock:
             whole = handle in self._whole
         if entry is None and not offset and limit is None and whole:
@@ -127,6 +167,11 @@ class ArtifactStore:
             limit = length if limit is None else limit
         elif limit is None:
             limit = 2000
+        return self._page(handle, offset, limit, entry, PAGE_CHARS)
+
+    def _page(
+        self, handle: str, offset, limit, entry: Optional[int], page_chars: int
+    ) -> dict:
         if (
             not isinstance(offset, int)
             or isinstance(offset, bool)
@@ -148,12 +193,13 @@ class ArtifactStore:
             created, text, _ = item
             if time.monotonic() - created >= self.ttl:
                 del self._items[handle]
+                self._mark_expired(handle)
                 raise ValueError(
                     f"Expired output handle {handle}; rerun the source tool to refresh it."
                 )
             if offset > len(text):
                 raise ValueError(f"offset exceeds output length {len(text)}")
-            end = min(len(text), offset + min(limit, PAGE_CHARS))
+            end = min(len(text), offset + min(limit, page_chars))
             page = {
                 "artifact": handle,
                 "content": text[offset:end],
@@ -167,6 +213,39 @@ class ArtifactStore:
             if entry is not None:
                 page["entry"] = entry
             return page
+
+    def _read_entries(self, handle: str, first, last, max_chars: int) -> dict:
+        """Entries *first*..*last* as one verbatim span, whole entries only.
+
+        The span runs from *first*'s start to the end of the last entry that
+        fits in *max_chars*, so it can include text between entries that the
+        condensed result already showed. A first entry longer than
+        *max_chars* comes back as a page that continues at ``next_offset``,
+        with no ``next_entry`` until it is read to its end.
+        """
+        if not isinstance(last, int) or isinstance(last, bool):
+            raise ValueError(f"to_entry must be an index entry number, got {last!r}.")
+        if not isinstance(max_chars, int) or max_chars < 1:
+            raise ValueError(f"max_chars must be a positive count, got {max_chars!r}.")
+        start, first_length = self._entry_span(handle, first)
+        if last < first:
+            raise ValueError(f"to_entry {last} is before entry {first}.")
+        with self._lock:
+            spans = self._indexes[handle]
+        # A to_entry past the index reads to its last entry.
+        last = min(last, len(spans))
+        end, reached = start + first_length, first
+        for n in range(first + 1, last + 1):
+            offset, length = spans[n - 1]
+            if offset < start or offset + length - start > max_chars:
+                break
+            end, reached = max(end, offset + length), n
+        page = self._page(handle, start, end - start, first, max_chars)
+        page["to_entry"] = reached
+        # A part still paging continues at next_offset first.
+        if reached < last and "remaining" not in page:
+            page["next_entry"] = reached + 1
+        return page
 
     def _entry_span(self, handle: str, entry) -> Tuple[int, int]:
         if not isinstance(entry, int) or isinstance(entry, bool):

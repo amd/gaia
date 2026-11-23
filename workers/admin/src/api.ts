@@ -31,6 +31,7 @@ import {
   type EvalScenarioRow,
 } from "./evalstats";
 import { activity, isExternal, downloadPeriods, downloadWindows, growthPeriods, growthWindow, newcomerRetention, per30, RETURN_DAYS, type DownloadDay } from "./growth";
+import { pendingContributors } from "./pending";
 import { ciStats, dailyDeltas, releaseDownloads, type AssetRow, type ReleaseRow, type RunRow } from "./stats";
 
 const json = (body: unknown, status = 200): Response =>
@@ -97,12 +98,34 @@ export async function handleApi(db: D1Database, path: string, url: URL): Promise
     );
     const firstDay = (await db.prepare("SELECT MIN(day) AS day FROM asset_snapshots").first<{ day: string }>())?.day;
     const { points, negativeDays } = dailyDeltas(hist);
+    const perRelease = releaseDownloads(releases, assets);
+    // Daily installs of the newest final release since it shipped, from the snapshot before it on.
+    const last = perRelease.filter((r) => r.main && !r.rc).at(-1);
+    let latestDaily: { tag: string; daily: { day: string; install: number }[] } | null = null;
+    if (last) {
+      const from = new Date(Date.parse(last.publishedAt.slice(0, 10)) - 86_400_000).toISOString().slice(0, 10);
+      const rows = await all<{ day: string; tag: string; asset: string; downloads: number }>(
+        "SELECT day, tag, asset, downloads FROM asset_snapshots WHERE tag = ? AND day >= ?",
+        last.tag,
+        from,
+      );
+      // Only days before the release's first snapshot count from zero. A later day that lacks it is a gap:
+      // counting it as zero would turn the next day into its whole total.
+      const firstSeen = rows.reduce((m, r) => (r.day < m ? r.day : m), "9999-12-31");
+      const snapDays = (await all<{ day: string }>("SELECT DISTINCT day FROM asset_snapshots WHERE day >= ? AND day < ?", from, firstSeen)).map((r) => r.day);
+      const rel = dailyDeltas(rows, snapDays);
+      latestDaily = {
+        tag: last.tag,
+        daily: rel.points.filter((p) => !rel.negativeDays.includes(p.day)).map((p) => ({ day: p.day, install: p.install })),
+      };
+    }
     return json({
       snapshotDay: latest.day,
       firstSnapshotDay: firstDay,
-      releases: releaseDownloads(releases, assets),
+      releases: perRelease,
       daily: points,
       negativeDays,
+      latestDaily,
     });
   }
 
@@ -181,7 +204,7 @@ export async function handleApi(db: D1Database, path: string, url: URL): Promise
   if (path === "/api/momentum") {
     const people = parsePeople(url.searchParams);
     const keep = keepAuthor(people);
-    const allItems = await all<ItemRow>("SELECT kind, created_at, closed_at, merged_at, assoc, author FROM items");
+    const allItems = await all<ItemRow>("SELECT kind, created_at, closed_at, merged_at, assoc, author, draft FROM items");
     const allCommits = await all<CommitRow>("SELECT day, at, author FROM commits");
     const weekly = await all<{ author: string; week: string; commits: number; additions: number; deletions: number }>(
       "SELECT author, week, commits, additions, deletions FROM contributor_weekly",
@@ -205,7 +228,10 @@ export async function handleApi(db: D1Database, path: string, url: URL): Promise
         }, new Map<string, { week: string; additions: number; deletions: number }>()).values()].sort((x, y) => x.week.localeCompare(y.week))
       : await all<{ week: string; additions: number; deletions: number }>("SELECT week, additions, deletions FROM loc_weekly ORDER BY week");
     // Core team against outside contributors, people only and whatever the people filter hides.
-    const maintainers = new Set((url.searchParams.get("core") ?? "").split(/[,+]/).map((x) => x.trim().toLowerCase()).filter(Boolean));
+    // core=alice+alice-work,bob: one entry per person, + joining one person's accounts.
+    const groups = (url.searchParams.get("core") ?? "").split(",").map((g) => g.split("+").map((x) => x.trim()).filter(Boolean)).filter((g) => g.length);
+    const maintainers = new Set(groups.flat().map((x) => x.toLowerCase()));
+    const alias = new Map(groups.flatMap((g) => g.map((l) => [l.toLowerCase(), g[0]!] as [string, string])));
     const humans = allItems.filter((i) => i.author && !isBot(i.author));
     const outside = humans.filter((i) => isExternal(i, maintainers));
     const core = humans.filter((i) => !isExternal(i, maintainers));
@@ -219,6 +245,7 @@ export async function handleApi(db: D1Database, path: string, url: URL): Promise
     };
     return json({
       split,
+      pending: pendingContributors(allItems, maintainers, alias, until, today),
       botOpenIssues: allItems.filter((i) => i.kind === "issue" && !i.closed_at && isBot(i.author)).length,
       daily: momentumDaily(items, commits, today),
       summary: rangeSummary(items, commits, since, until),

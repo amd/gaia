@@ -26,19 +26,20 @@ from gaia.agents.base.agent import Agent
 from gaia.agents.registry import AgentRegistry
 from gaia.daemon.sidecars.errors import SidecarError, SidecarHTTPError
 from gaia.hub.installer import register_installed_sidecars
+from gaia.security import PathValidator
 from gaia.ui import followups
 from gaia.ui import permissions as session_permissions
 from gaia.ui._chat_helpers import _stream_chat_impl
 from gaia.ui.database import ChatDatabase
-from gaia.ui.email_sidecar import daemon_client as daemon_client_module
-from gaia.ui.email_sidecar.profiles import (
-    EMAIL_PROFILE,
+from gaia.ui.models import ChatRequest
+from gaia.ui.routers import chat as chat_router
+from gaia.ui.sidecar import daemon_client as daemon_client_module
+from gaia.ui.sidecar.profiles import (
+    _NO_PROFILE,
     GAIA_PROFILE,
     followups_supported,
 )
-from gaia.ui.email_sidecar.proxy import SidecarProxy
-from gaia.ui.models import ChatRequest
-from gaia.ui.routers import chat as chat_router
+from gaia.ui.sidecar.proxy import SidecarProxy
 
 pytestmark = pytest.mark.allow_network
 
@@ -51,8 +52,8 @@ def test_only_a_flagship_at_2_15_takes_followups(version, expected):
     assert followups_supported(GAIA_PROFILE, version) is expected
 
 
-def test_email_never_takes_followups():
-    assert followups_supported(EMAIL_PROFILE, "9.9") is False
+def test_a_profile_without_the_floor_never_takes_followups():
+    assert followups_supported(_NO_PROFILE, "9.9") is False
 
 
 # ── Proxy: the request the sidecar receives ────────────────────────────────
@@ -206,6 +207,10 @@ class _FollowUpAgent:
         self.conversation_history = []
         self._cancel_event = None
         self._followup_queue = None
+        # The sidecar syncs attached documents against these every turn.
+        self.indexed_files: set = set()
+        self.rag = None
+        self.path_validator = PathValidator([])
 
     def process_query(self, query, max_steps=None):
         deadline = time.monotonic() + 10
@@ -223,17 +228,18 @@ class _FollowUpAgent:
 @pytest.fixture
 def live_gaia_sidecar(monkeypatch):
     uvicorn = pytest.importorskip("uvicorn")
-    pytest.importorskip("gaia_agent")
+    pytest.importorskip("gaiapy")
     import requests
-    from gaia_agent import caller_auth
-    from gaia_agent import server as server_mod
-    from gaia_agent import session_registry as sr
+    from gaiapy import caller_auth
+    from gaiapy import server as server_mod
+    from gaiapy import session_registry as sr
 
     from gaia.daemon.sidecars.manager import find_free_port
 
     caller_auth.reset()
     monkeypatch.delenv(caller_auth.TOKEN_FILE_ENV_VAR, raising=False)
     monkeypatch.delenv(caller_auth.TOKEN_ENV_VAR, raising=False)
+    monkeypatch.setenv(caller_auth.ALLOW_NO_TOKEN_ENV_VAR, "1")
     monkeypatch.setattr(server_mod, "build_query_agent", _FollowUpAgent)
     monkeypatch.setattr(sr, "build_session_agent", _FollowUpAgent)
     monkeypatch.setattr(server_mod, "_warmup_blocking", lambda: None)
@@ -369,7 +375,7 @@ def _deliver_once_running(session_id, text, timeout=10):
 def test_a_followup_reaches_the_running_sidecar_turn(
     monkeypatch, live_gaia_sidecar, chat
 ):
-    from gaia_agent.server import API_VERSION
+    from gaiapy.server import API_VERSION
 
     _point_ui_at(monkeypatch, live_gaia_sidecar, API_VERSION)
     result: dict = {}

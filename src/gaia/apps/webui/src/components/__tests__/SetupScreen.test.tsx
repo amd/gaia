@@ -2,16 +2,17 @@
 // SPDX-License-Identifier: MIT
 
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { useChatStore } from '../../stores/chatStore';
+import { INITIAL_STATE as INITIAL_UPDATE_STATE } from '../../hooks/useUpdateStatus';
 import { SetupScreen } from '../SetupScreen';
 import { useModelStore } from '../../stores/modelStore';
 import * as api from '../../services/api';
-import type { LemonadeFound, LemonadeTarget, PreflightReport, SetupPlan, SetupRunStatus, SetupStep, SetupTest, StartScreen } from '../../types';
+import type { AgentDownload, LemonadeFound, LemonadeTarget, PreflightReport, SetupPlan, SetupRunStatus, SetupStep, SetupTest, StartScreen } from '../../types';
 import {
     COLD_BIG, COMPONENTS, EMBED, FLM, GEMMA, GEMMA_CHAT, QWEN, QWEN_READS, WHISPER, gpuStatus, plan, progress, runStatus,
 } from '../setup/__tests__/fixtures';
-import { NO_BACKENDS, NO_GPU_SPLIT } from '../../test/setupApiMocks';
+import { AGENT_PROGRAMS, NO_BACKENDS, NO_GPU_SPLIT, SETTINGS, withoutGaiacpp } from '../../test/setupApiMocks';
 
 vi.mock('../../services/api', async (importOriginal) => {
     const real = await importOriginal<typeof api>();
@@ -61,7 +62,10 @@ const HARDWARE = {
 } as unknown as PreflightReport;
 
 const START: StartScreen = {
-    cards: [{ skill: 'check-in', title: 'Check in', note: 'Pick up where you left off', prompt: 'Good morning.', needs_input: false }],
+    cards: [
+        { skill: 'research-report', title: 'Research a topic', note: 'A cited report from the web', prompt: 'Research: ', needs_input: true },
+        { skill: 'check-in', title: 'Check in', note: 'Pick up where you left off', prompt: 'Good morning.', needs_input: false },
+    ],
     working_folder: { path: '/w', name: 'w', gaia_folder: false, choosable: true },
 };
 
@@ -81,6 +85,8 @@ beforeEach(() => {
     mockedApi.getSetupPlan.mockResolvedValue(COLD_BIG());
     mockedApi.getGpuMemory.mockResolvedValue(NO_GPU_SPLIT);
     mockedApi.getModelServer.mockResolvedValue(NO_BACKENDS);
+    mockedApi.getSettings.mockResolvedValue(SETTINGS);
+    mockedApi.getAgentPrograms.mockResolvedValue(AGENT_PROGRAMS);
     mockedApi.getStartScreen.mockResolvedValue(START);
     mockedApi.listProviders.mockResolvedValue({ providers: [], active: null, lemonade_error: null } as unknown as Awaited<ReturnType<typeof api.listProviders>>);
     mockedApi.getActiveModel.mockResolvedValue({ provider: 'local', model: QWEN.id, label: 'Qwen', remote: false, is_default: true });
@@ -125,11 +131,12 @@ async function startLocal() {
 
 async function toModels() {
     fireEvent.click(screen.getByRole('button', { name: 'Customize' }));
-    await screen.findByRole('heading', { name: 'Choose your models' });
+    await screen.findByRole('heading', { name: 'Choose your agent and models' });
 }
 
 async function toKey() {
-    fireEvent.click(screen.getByRole('button', { name: 'Use a cloud model' }));
+    fireEvent.click(screen.getByRole('radio', { name: 'Use a cloud model' }));
+    clickContinue();
     await screen.findByRole('heading', { name: 'Connect a cloud provider' });
 }
 
@@ -148,9 +155,9 @@ describe('SetupScreen: checking this PC', () => {
         renderSetup();
         expect(await screen.findByRole('heading', { name: /^(Checking this PC|This PC is checked)$/ })).toBeInTheDocument();
         await waitFor(() => expect(mockedApi.getSetupPlan).toHaveBeenCalled());
-        // While it checks, only its log and the troubleshooting report can be pressed.
+        // While it checks, only "Having trouble?" can be pressed; the logs and report wait behind it.
         const enabled = () => screen.queryAllByRole('button').filter((b) => !(b as HTMLButtonElement).disabled).map((b) => b.textContent?.trim());
-        expect(enabled()).toEqual(['Checks log', 'Save a troubleshooting report']);
+        expect(enabled()).toEqual(['Having trouble?']);
         expect(railStep('Check this PC')).toHaveAttribute('aria-current', 'step');
         answer(HARDWARE);
         expect(await screen.findByRole('region', { name: 'What setup found' })).toBeInTheDocument();
@@ -271,6 +278,24 @@ describe('SetupScreen: a cold PC (no model server yet)', () => {
         expect(mockedApi.startSetup).toHaveBeenCalledTimes(1);
     });
 
+    it("says it is getting GAIA's model server ready, with Cancel in the bottom bar that stops it", async () => {
+        mockedApi.getSetupPlan.mockResolvedValue(COLD_SERVER);
+        mockedApi.startSetup.mockResolvedValue({ ...SERVER_RUNNING, percent: 40 });
+        mockedApi.getSetupStatus.mockResolvedValueOnce({ state: 'idle' })
+            .mockResolvedValue({ state: 'cancelled', server_only: true, steps: [] });
+        mockedApi.cancelSetup.mockResolvedValue({ cancelled: true });
+        renderSetup();
+        expect(await screen.findByText("Getting GAIA's model server ready…")).toBeInTheDocument();
+        // One bar on the screen, the checks' own; the server's progress is a number on its line (#7711).
+        expect(screen.getByText('40%')).toBeInTheDocument();
+        expect(screen.queryByRole('progressbar', { name: "Getting GAIA's model server ready…" })).toBeNull();
+        expect(screen.getAllByRole('progressbar')).toHaveLength(1);
+        const bar = document.querySelector('.setup-footer') as HTMLElement;
+        fireEvent.click(within(bar).getByRole('button', { name: 'Cancel' }));
+        await waitFor(() => expect(mockedApi.cancelSetup).toHaveBeenCalledWith());
+        expect(await screen.findByRole('button', { name: 'Try again' })).toBeInTheDocument();
+    });
+
     // Product bug: the auto-start reads "no run yet" before the status read answers, and starts a second one.
     it('waits for the status read before starting the server, so a reopen attaches to the run under way', async () => {
         let answer!: (s: SetupRunStatus) => void;
@@ -303,24 +328,94 @@ describe('SetupScreen: a cold PC (no model server yet)', () => {
         expect(mockedApi.startSetup).toHaveBeenLastCalledWith(false, false, { serverOnly: true });
     });
 
+    describe("when GAIA's own engine won't start (a broken build)", () => {
+        const ENGINE_FAILED: SetupRunStatus = {
+            state: 'failed', server_only: true, steps: [], components: { server: 'failed' },
+            error: 'lemond: /tmp/_MEI/libstdc++.so.6: version `GLIBCXX_3.4.32` not found',
+        };
+        const updater = (lastWorking: { version: string; at: string } | null) => {
+            const state = { ...INITIAL_UPDATE_STATE, currentVersion: '0.26.0-rc.13', lastWorking };
+            return {
+                getStatus: vi.fn(async () => state),
+                onStatusChange: vi.fn(() => () => {}),
+                revertToLastWorking: vi.fn(async () => state),
+            };
+        };
+        afterEach(() => { vi.unstubAllGlobals(); });
+
+        it('offers the version setup last finished on, beside Try again', async () => {
+            const bridge = updater({ version: '0.26.0-rc.12', at: '2026-11-02T09:30:00.000Z' });
+            vi.stubGlobal('gaiaUpdater', bridge);
+            mockedApi.getSetupPlan.mockResolvedValue(COLD_SERVER);
+            mockedApi.startSetup.mockResolvedValue(ENGINE_FAILED);
+            renderSetup();
+            expect(await screen.findByText("GAIA couldn't download or start its AI engine. Check your internet connection, then try again.")).toBeInTheDocument();
+            expect(screen.getByRole('button', { name: 'Try again' })).toBeInTheDocument();
+            const goBack = await screen.findByRole('button', { name: 'Go back to GAIA 0.26.0-rc.12' });
+            expect(bridge.revertToLastWorking).not.toHaveBeenCalled();
+            fireEvent.click(goBack);
+            await waitFor(() => expect(bridge.revertToLastWorking).toHaveBeenCalledTimes(1));
+        });
+
+        it('offers only Try again when no older version finished setup here', async () => {
+            const bridge = updater(null);
+            vi.stubGlobal('gaiaUpdater', bridge);
+            mockedApi.getSetupPlan.mockResolvedValue(COLD_SERVER);
+            mockedApi.startSetup.mockResolvedValue(ENGINE_FAILED);
+            renderSetup();
+            await screen.findByRole('button', { name: 'Try again' });
+            await waitFor(() => expect(bridge.getStatus).toHaveBeenCalled());
+            expect(screen.queryByRole('button', { name: /Go back/ })).toBeNull();
+        });
+    });
+
     it("gives the user's server its own remedy, and can switch to GAIA's own", async () => {
         mockedApi.getSetupPlan.mockResolvedValue(COLD_SERVER);
         mockedApi.startSetup.mockResolvedValueOnce({
             state: 'failed', server_only: true, steps: [], error: "Your Lemonade Server at 127.0.0.1:9 isn't answering.",
-            problem: { kind: 'server_unreachable', message: "Your Lemonade Server at 127.0.0.1:9 isn't answering.", start: 'Start Lemonade Server from the Lemonade tray icon.', use_gaia: true },
+            problem: { kind: 'server_unreachable', message: "Your Lemonade Server at 127.0.0.1:9 isn't answering.", start: "The model server GAIA uses is at 127.0.0.1:9. GAIA doesn't run this model server, so it can't start it. Start it the way you usually do.", use_gaia: true },
         }).mockResolvedValueOnce(SERVER_RUNNING);
         renderSetup();
-        expect(await screen.findByText('Start Lemonade Server from the Lemonade tray icon.')).toBeInTheDocument();
+        expect(await screen.findByText("The model server GAIA uses is at 127.0.0.1:9. GAIA doesn't run this model server, so it can't start it. Start it the way you usually do.")).toBeInTheDocument();
         fireEvent.click(screen.getByRole('button', { name: /Use GAIA.s own instead/ }));
         await waitFor(() => expect(mockedApi.startSetup).toHaveBeenLastCalledWith(false, true, { serverOnly: true }));
     });
 });
 
 describe('SetupScreen: the recommendation', () => {
+    it('offers this PC and the cloud as two equal choices, this PC recommended and picked', async () => {
+        await open();
+        const local = screen.getByRole('radio', { name: /^Run .* on this PC$/ });
+        const cloud = screen.getByRole('radio', { name: 'Use a cloud model' });
+        expect(local).toBeChecked();
+        expect(cloud).not.toBeChecked();
+        expect(screen.getByRole('region', { name: 'Recommended setup' })).toHaveTextContent('Recommended for this PC');
+        const cloudCard = screen.getByRole('region', { name: 'Cloud model' });
+        expect(cloudCard).toHaveTextContent('GAIA still sets up graphics support and a small model on this PC');
+        expect(cloudCard).not.toHaveTextContent('Nothing to download');
+        expect(cloudCard).toHaveTextContent('Each message and the chat history are sent to the provider.');
+        expect(cloudCard).not.toHaveTextContent('Recommended');
+        // Customize is its own button in the bottom bar, not a link beside the cloud choice.
+        const bar = within(document.querySelector('.setup-footer') as HTMLElement);
+        expect(bar.getByRole('button', { name: 'Customize' })).toHaveClass('btn-secondary');
+        expect(bar.getByRole('button', { name: /Download and start/ })).toHaveClass('btn-primary');
+        // Picking the cloud card makes the main action go there, and starts nothing.
+        fireEvent.click(cloudCard);
+        expect(cloud).toBeChecked();
+        expect(bar.queryByRole('button', { name: /Download and start/ })).toBeNull();
+        // Nothing local is chosen or downloaded on the cloud path, so neither control is offered (#7711).
+        expect(bar.queryByRole('button', { name: 'Customize' })).toBeNull();
+        expect(screen.queryByText('See everything that will be downloaded')).toBeNull();
+        clickContinue();
+        await screen.findByRole('heading', { name: 'Connect a cloud provider' });
+        expect(mockedApi.startSetup).not.toHaveBeenCalled();
+    });
+
     it('shows what it will do before anything starts, with no stale error', async () => {
         mockedApi.getOnboardingPreflight.mockResolvedValue(HARDWARE);
         await open();
         const hero = within(await planScreen());
+        expect(hero.getByText(/You can cancel the download at any time/)).toBeInTheDocument();
         expect(hero.getByText('Recommended for this PC')).toBeInTheDocument();
         expect(hero.getByText('Run Qwen3.6-35B-A3B on this PC')).toBeInTheDocument();
         expect(hero.getByText('29.6 GB')).toBeInTheDocument();
@@ -365,6 +460,41 @@ describe('SetupScreen: the recommendation', () => {
         expect(await planScreen()).toHaveTextContent(`${QWEN.name} is a bigger model that answers better, but it needs about 27.1 GB of memory and this PC has 16.0 GB.`);
     });
 
+    it('says how much memory the pick leaves for other apps', async () => {
+        const small = { ...GEMMA_CHAT, chat_choice: true };
+        mockedApi.getSetupPlan.mockResolvedValue(plan([small, EMBED], { left_for_apps_gb: 13.1, chat_model: { id: GEMMA.id, user_set: false, size_gb: 5.97, downloaded: false } }));
+        await open();
+        expect(await planScreen()).toHaveTextContent('Leaves 13.1 GB of memory for your other apps, so your PC stays quick while GAIA runs.');
+    });
+
+    it('gives no headroom reason on a discrete GPU or for a pick the user made', async () => {
+        mockedApi.getSetupPlan.mockResolvedValue(plan([QWEN, GEMMA, EMBED], { left_for_apps_gb: null }));
+        await open();
+        expect(await planScreen()).not.toHaveTextContent('for your other apps');
+        cleanup();
+        mockedApi.getSetupPlan.mockResolvedValue(plan([QWEN, GEMMA, EMBED], { left_for_apps_gb: 13.1, chat_model: { id: QWEN.id, user_set: true, size_gb: 23.3, downloaded: false } }));
+        await open();
+        expect(await planScreen()).not.toHaveTextContent('for your other apps');
+    });
+
+    it('warns about a kept model that leaves other apps little memory, instead of calling it a fit', async () => {
+        const big = { ...QWEN, fits: false as const, fit_code: 'memory' as const, need_gb: 27.1, capacity_gb: 9.7, planned: false, selected: false, recommended: false };
+        const tight = { ...GEMMA_CHAT, chat_choice: true, fits: true as const, tight: true, need_gb: 8.5, capacity_gb: 9.7 };
+        mockedApi.getSetupPlan.mockResolvedValue(plan([tight, big, EMBED], { chat_model: { id: GEMMA.id, user_set: true, size_gb: 0, downloaded: true } }));
+        await open();
+        const card = await planScreen();
+        expect(card).toHaveTextContent('Leaves your other apps little memory, so your PC may slow down while it runs.');
+        expect(card).not.toHaveTextContent('Fits this PC');
+        expect(card).not.toHaveTextContent('is a bigger model');
+    });
+
+    it("says a chosen model that doesn't fit may fail to load", async () => {
+        const noFit = { ...GEMMA_CHAT, chat_choice: true, fits: false as const, fit_code: 'memory' as const, need_gb: 8.5, capacity_gb: 4.3 };
+        mockedApi.getSetupPlan.mockResolvedValue(plan([noFit, EMBED], { chat_model: { id: GEMMA.id, user_set: true, size_gb: 0, downloaded: true } }));
+        await open();
+        expect(await planScreen()).toHaveTextContent('Needs about 8.5 GB; this PC has 4.3 GB. It may be very slow or fail to load.');
+    });
+
     it("calls no model this PC can't run a bigger model", async () => {
         const npu = { ...QWEN, fits: false as const, fit_code: 'npu' as const, need_gb: 27.1, capacity_gb: 16, planned: false, selected: false, recommended: false };
         const small = { ...GEMMA_CHAT, chat_choice: true };
@@ -379,6 +509,33 @@ describe('SetupScreen: the recommendation', () => {
         const list = screen.getByText('See everything that will be downloaded').closest('details') as HTMLElement;
         expect(within(list).getByText('Graphics support')).toBeInTheDocument();
         expect(within(list).getByText(QWEN.name)).toBeInTheDocument();
+    });
+
+    it('says the models are already on this PC when they are, not that none downloaded', async () => {
+        const on = (e: typeof QWEN) => ({ ...e, downloaded: true, size_gb: 0 });
+        mockedApi.getSetupPlan.mockResolvedValue(plan([on(QWEN), on(GEMMA), on(EMBED)]));
+        renderSetup();
+        expect(await screen.findByText(/Your models are already on this PC\./)).toBeInTheDocument();
+        expect(screen.queryByText(/No models have downloaded yet/)).not.toBeInTheDocument();
+    });
+
+    it('says some models are on this PC when only part of the plan is downloaded', async () => {
+        mockedApi.getSetupPlan.mockResolvedValue(plan([{ ...QWEN, downloaded: true, size_gb: 0 }, GEMMA, EMBED]));
+        renderSetup();
+        expect(await screen.findByText(/Some of your models are already on this PC\./)).toBeInTheDocument();
+    });
+
+    it('says models are on this PC when the only ones downloaded are outside the plan', async () => {
+        mockedApi.getSetupPlan.mockResolvedValue(plan([QWEN, GEMMA, EMBED, FLM]));
+        renderSetup();
+        expect(await screen.findByText(/Some models are already on this PC, but none of them are in your plan yet\./)).toBeInTheDocument();
+        expect(screen.queryByText(/No models have downloaded yet/)).not.toBeInTheDocument();
+    });
+
+    it('says no models have downloaded when nothing is on this PC', async () => {
+        mockedApi.getSetupPlan.mockResolvedValue(plan([QWEN, GEMMA, EMBED]));
+        renderSetup();
+        expect(await screen.findByText(/No models have downloaded yet\./)).toBeInTheDocument();
     });
 
     it('offers Test and start when there is nothing to download', async () => {
@@ -450,7 +607,7 @@ describe('SetupScreen: first run, local', () => {
         fireEvent.click(screen.getByRole('checkbox', { name: /embeddinggemma/ }));
         fireEvent.click(screen.getByRole('checkbox', { name: /Speech to text/ }));
         clickContinue();
-        await waitFor(() => expect(mockedApi.skipSetupModel).toHaveBeenCalledExactlyOnceWith(EMBED.id, true));
+        await waitFor(() => expect(mockedApi.skipSetupModel).toHaveBeenCalledExactlyOnceWith(EMBED.id, true, false));
         await waitFor(() => expect(mockedApi.startSetup).toHaveBeenCalledWith(false, false, expect.objectContaining({ extraModels: [WHISPER.id] })));
     });
 
@@ -463,7 +620,7 @@ describe('SetupScreen: first run, local', () => {
         fireEvent.click(screen.getByRole('button', { name: 'Choose a different model for images' }));
         fireEvent.click(visionRadio(/Gemma-4-E4B-it/));
         clickContinue();
-        await waitFor(() => expect(mockedApi.chooseSetupVisionModel).toHaveBeenCalledExactlyOnceWith(GEMMA.id));
+        await waitFor(() => expect(mockedApi.chooseSetupVisionModel).toHaveBeenCalledExactlyOnceWith(GEMMA.id, false));
         await waitFor(() => expect(mockedApi.startSetup).toHaveBeenCalledWith(false, false, expect.objectContaining({ extraModels: [GEMMA.id] })));
         expect(mockedApi.chooseSetupChatModel).not.toHaveBeenCalled();
     });
@@ -501,11 +658,14 @@ describe('SetupScreen: first run, local', () => {
         const onReady = await startLocal();
         expect(await screen.findByRole('heading', { name: 'GAIA is ready' })).toBeInTheDocument();
         // Said once, by the heading; the card says what answers.
-        expect(screen.getByText('Qwen3.6-35B-A3B answers on this PC.')).toBeInTheDocument();
+        expect(screen.getByText('Answers come from Qwen3.6-35B-A3B, on this PC.')).toBeInTheDocument();
         expect(screen.queryByText(/GAIA is ready\./)).toBeNull();
         const summary = await screen.findByText('Reading images');
         expect(summary.closest('dl')).toHaveTextContent('ChatQwen3.6-35B-A3BReading imagesGemma-4-E4B-itDocuments and memoryembeddinggemma-300m');
-        fireEvent.click(await screen.findByRole('button', { name: /Check in/ }));
+        expect(await screen.findByText('Start with one of these, or just start chatting.')).toBeInTheDocument();
+        // Nothing to pick up on a first run.
+        expect(screen.queryByRole('button', { name: /Check in/ })).toBeNull();
+        fireEvent.click(await screen.findByRole('button', { name: /Research a topic/ }));
         await waitFor(() => expect(onReady).toHaveBeenCalledExactlyOnceWith(START.cards[0]));
     });
 
@@ -629,7 +789,7 @@ describe('SetupScreen: the rail', () => {
         fireEvent.click(rail().getByRole('button', { name: /Check this PC/ }));
         await screen.findByRole('heading', { name: /^(Checking this PC|This PC is checked)$/ });
         fireEvent.click(rail().getByRole('button', { name: /Your setup/ }));
-        expect(await screen.findByRole('heading', { name: 'Choose your models' })).toBeInTheDocument();
+        expect(await screen.findByRole('heading', { name: 'Choose your agent and models' })).toBeInTheDocument();
     });
 
     it('Back and Next walk the steps setup has reached', async () => {
@@ -721,7 +881,7 @@ describe('SetupScreen: warnings and confirmations', () => {
         const sheet = await screen.findByRole('alertdialog', { name: 'This model may not run on this PC' });
         expect(sheet).toHaveTextContent('too little free memory right now');
         fireEvent.click(within(sheet).getByRole('button', { name: 'Use it anyway' }));
-        await waitFor(() => expect(mockedApi.chooseSetupChatModel).toHaveBeenLastCalledWith(GEMMA.id, true));
+        await waitFor(() => expect(mockedApi.chooseSetupChatModel).toHaveBeenLastCalledWith(GEMMA.id, true, false));
         await waitFor(() => expect(mockedApi.startSetup).toHaveBeenCalled());
     });
 
@@ -769,7 +929,7 @@ describe('SetupScreen: warnings and confirmations', () => {
         await startLocal();
         const sheet = await screen.findByRole('alertdialog', { name: 'Not enough free disk space' });
         fireEvent.click(within(sheet).getByRole('button', { name: 'Change models' }));
-        expect(await screen.findByRole('heading', { name: 'Choose your models' })).toBeInTheDocument();
+        expect(await screen.findByRole('heading', { name: 'Choose your agent and models' })).toBeInTheDocument();
         expect(mockedApi.startSetup).toHaveBeenCalledTimes(1);
     });
 
@@ -788,9 +948,12 @@ describe('SetupScreen: warnings and confirmations', () => {
         expect(screen.getByText(/runs on the NPU, which doesn't read images, so reading images is off/)).toBeInTheDocument();
         expect(screen.queryByRole('radio', { name: /Skip for now/ })).not.toBeInTheDocument();
         clickContinue();
-        await waitFor(() => expect(mockedApi.chooseSetupChatModel).toHaveBeenCalledWith(FLM.id, false));
-        await waitFor(() => expect(mockedApi.skipSetupModel).toHaveBeenCalledWith(GEMMA.id, true));
+        await waitFor(() => expect(mockedApi.chooseSetupChatModel).toHaveBeenCalledWith(FLM.id, false, false));
+        await waitFor(() => expect(mockedApi.skipSetupModel).toHaveBeenCalledWith(GEMMA.id, true, false));
         await waitFor(() => expect(mockedApi.startSetup).toHaveBeenCalledWith(false, false, expect.objectContaining({ extraModels: [] })));
+        // Setup reads its own local plan, even when chat ran on a cloud model before.
+        expect(mockedApi.getSetupPlan).toHaveBeenCalled();
+        for (const call of mockedApi.getSetupPlan.mock.calls) expect(call).toEqual([false]);
     });
 
     it('says everything is already here on the models screen, and finishes from there', async () => {
@@ -805,6 +968,134 @@ describe('SetupScreen: warnings and confirmations', () => {
     });
 });
 
+describe('SetupScreen: agent', () => {
+    const running = runStatus([progress({ id: QWEN.id, state: 'downloading', bytes_done: 7.6e9, bytes_total: 23.3e9 })]);
+    const job = (over: Partial<AgentDownload>): AgentDownload => ({ state: 'downloading', bytes_done: 2_720_000, bytes_total: 6_800_000, error: null, ...over });
+    const order = (fn: { mock: { invocationCallOrder: number[] } }) => fn.mock.invocationCallOrder[0];
+
+    beforeEach(() => {
+        mockedApi.startSetup.mockResolvedValue(running);
+        mockedApi.getSetupStatus.mockResolvedValueOnce({ state: 'idle' }).mockResolvedValue(running);
+    });
+
+    async function pick(name: RegExp) {
+        await open();
+        await toModels();
+        const agent = within(await screen.findByRole('region', { name: 'Agent' }));
+        fireEvent.click(await agent.findByRole('radio', { name }));
+        expect(agent.getByRole('radio', { name })).toHaveAttribute('aria-checked', 'true');
+    }
+
+    it('gaiapy: nothing about the agent is saved, and the run starts as before', async () => {
+        await open();
+        await toModels();
+        await screen.findByRole('region', { name: 'Agent' });
+        clickContinue();
+        await waitFor(() => expect(mockedApi.startSetup).toHaveBeenCalledTimes(1));
+        expect(mockedApi.updateSettings).not.toHaveBeenCalled();
+        expect(mockedApi.startAgentDownload).not.toHaveBeenCalled();
+    });
+
+    it('stays out of the plain path, which keeps the default', async () => {
+        await startLocal();
+        await waitFor(() => expect(mockedApi.startSetup).toHaveBeenCalled());
+        expect(screen.queryByRole('region', { name: 'Agent' })).toBeNull();
+        expect(mockedApi.updateSettings).not.toHaveBeenCalled();
+    });
+
+    it('gaiacpp already here: picked on Customize, saved on Continue, then the run starts', async () => {
+        mockedApi.updateSettings.mockResolvedValue({ ...SETTINGS, flagship_agent: 'gaiacpp' });
+        await pick(/gaiacpp/);
+        expect(mockedApi.updateSettings).not.toHaveBeenCalled();
+        clickContinue();
+        await waitFor(() => expect(mockedApi.startSetup).toHaveBeenCalledTimes(1));
+        expect(mockedApi.updateSettings).toHaveBeenCalledWith({ flagship_agent: 'gaiacpp' });
+        expect(order(mockedApi.updateSettings)).toBeLessThan(order(mockedApi.startSetup));
+        expect(mockedApi.startAgentDownload).not.toHaveBeenCalled();
+    });
+
+    it('a refused save (busy, 409) starts no run, says why, and offers Try again or carry on', async () => {
+        const busy = 'GAIA is still setting up and testing the agent. Switch once setup has finished.';
+        mockedApi.updateSettings.mockRejectedValue(new api.ApiError(busy, 409, busy, null));
+        await pick(/gaiacpp/);
+        clickContinue();
+        expect(await screen.findByText(`Couldn't switch the agent: ${busy}`)).toBeInTheDocument();
+        expect(mockedApi.startSetup).not.toHaveBeenCalled();
+        expect(screen.getByRole('button', { name: 'Try again' })).toBeInTheDocument();
+        fireEvent.click(screen.getByRole('button', { name: 'Carry on with gaiapy' }));
+        await waitFor(() => expect(mockedApi.startSetup).toHaveBeenCalledTimes(1));
+        expect(mockedApi.updateSettings).toHaveBeenCalledTimes(1);
+    });
+
+    describe('gaiacpp not on this PC', () => {
+        beforeEach(() => {
+            mockedApi.getAgentPrograms.mockResolvedValue(withoutGaiacpp());
+        });
+
+        it('downloads first with the rest waiting, then saves it, then starts the run', async () => {
+            mockedApi.startAgentDownload.mockResolvedValue(job({}));
+            mockedApi.getAgentDownload.mockResolvedValueOnce(job({})).mockResolvedValue(job({ state: 'done', bytes_done: 6_800_000 }));
+            mockedApi.updateSettings.mockResolvedValue({ ...SETTINGS, flagship_agent: 'gaiacpp' });
+            await pick(/gaiacpp/);
+            expect(mockedApi.startAgentDownload).not.toHaveBeenCalled();
+            clickContinue();
+            const bar = await screen.findByRole('progressbar', { name: /gaiacpp/ });
+            expect(bar).toHaveAttribute('aria-valuenow', '40');
+            expect(mockedApi.startAgentDownload).toHaveBeenCalledTimes(1);
+            expect(mockedApi.startSetup).not.toHaveBeenCalled();
+            // The rest of the step waits on the agent: its rows show as not started.
+            expect(document.querySelectorAll('.setup-contents .setup-content.is-waiting').length).toBeGreaterThan(0);
+            expect(screen.queryByRole('progressbar', { name: 'Overall download' })).toBeNull();
+            await waitFor(() => expect(mockedApi.startSetup).toHaveBeenCalledTimes(1), { timeout: 4000 });
+            expect(mockedApi.updateSettings).toHaveBeenCalledWith({ flagship_agent: 'gaiacpp' });
+            expect(order(mockedApi.startAgentDownload)).toBeLessThan(order(mockedApi.updateSettings));
+            expect(order(mockedApi.updateSettings)).toBeLessThan(order(mockedApi.startSetup));
+        });
+
+        it('a failed download offers Retry and carrying on with gaiapy, which starts the run without saving gaiacpp', async () => {
+            mockedApi.startAgentDownload.mockResolvedValue(job({ state: 'failed', error: 'Connection reset.' }));
+            await pick(/gaiacpp/);
+            clickContinue();
+            const failed = (await screen.findByText("gaiacpp didn't download.")).closest('[role="alert"]') as HTMLElement;
+            expect(failed).toHaveTextContent('Try again, or carry on with gaiapy');
+            expect(mockedApi.startSetup).not.toHaveBeenCalled();
+            fireEvent.click(within(failed).getByRole('button', { name: /Retry/ }));
+            await waitFor(() => expect(mockedApi.startAgentDownload).toHaveBeenCalledTimes(2));
+            fireEvent.click(await screen.findByRole('button', { name: 'Carry on with gaiapy' }));
+            await waitFor(() => expect(mockedApi.startSetup).toHaveBeenCalledTimes(1));
+            expect(mockedApi.updateSettings).not.toHaveBeenCalled();
+        });
+
+        it('Cancel goes back to Customize with the pick kept, and starts no run', async () => {
+            mockedApi.startAgentDownload.mockResolvedValue(job({}));
+            mockedApi.getAgentDownload.mockResolvedValue(job({}));
+            await pick(/gaiacpp/);
+            clickContinue();
+            await screen.findByRole('progressbar', { name: /gaiacpp/ });
+            fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+            expect(await screen.findByRole('heading', { name: 'Choose your agent and models' })).toBeInTheDocument();
+            const agent = within(await screen.findByRole('region', { name: 'Agent' }));
+            expect(await agent.findByRole('radio', { name: /gaiacpp/ })).toHaveAttribute('aria-checked', 'true');
+            expect(mockedApi.startSetup).not.toHaveBeenCalled();
+            expect(mockedApi.cancelSetup).not.toHaveBeenCalled();
+        });
+
+        it('a reload mid-download follows it, keeps the pick, and starts one run once it is in', async () => {
+            sessionStorage.setItem('gaia.setup.agentPick', JSON.stringify({ id: 'gaiacpp', download: true, current: 'gaiapy' }));
+            sessionStorage.setItem('gaia.setup.heldRun', JSON.stringify({ acknowledgeLowDisk: false }));
+            mockedApi.getAgentPrograms.mockResolvedValue({ ...withoutGaiacpp(), download: job({}) });
+            mockedApi.getAgentDownload.mockResolvedValueOnce(job({})).mockResolvedValue(job({ state: 'done', bytes_done: 6_800_000 }));
+            mockedApi.updateSettings.mockResolvedValue({ ...SETTINGS, flagship_agent: 'gaiacpp' });
+            renderSetup();
+            expect(await screen.findByRole('progressbar', { name: /gaiacpp/ })).toBeInTheDocument();
+            await waitFor(() => expect(mockedApi.startSetup).toHaveBeenCalledTimes(1), { timeout: 4000 });
+            expect(mockedApi.startAgentDownload).not.toHaveBeenCalled();
+            expect(mockedApi.updateSettings).toHaveBeenCalledWith({ flagship_agent: 'gaiacpp' });
+            expect(order(mockedApi.updateSettings)).toBeLessThan(order(mockedApi.startSetup));
+        });
+    });
+});
+
 describe('SetupScreen: GPU memory', () => {
     it('is an option on Customize, not a step, and goes back to the models', async () => {
         mockedApi.getGpuMemory.mockResolvedValue(gpuStatus());
@@ -816,7 +1107,7 @@ describe('SetupScreen: GPU memory', () => {
         expect(await screen.findByText('With 64.0 GB for the GPU, Qwen3.6-35B-A3B fits.')).toBeInTheDocument();
         expect(railStep('Your setup')).toHaveAttribute('aria-current', 'step');
         fireEvent.click(screen.getByRole('button', { name: 'Skip for now' }));
-        expect(await screen.findByRole('heading', { name: 'Choose your models' })).toBeInTheDocument();
+        expect(await screen.findByRole('heading', { name: 'Choose your agent and models' })).toBeInTheDocument();
         expect(mockedApi.startSetup).not.toHaveBeenCalled();
     });
 
@@ -857,6 +1148,20 @@ describe('SetupScreen: downloading', () => {
         expect(mockedApi.cancelSetup).not.toHaveBeenCalled();
     });
 
+    it('names the part being set up before any model row, with its download and Cancel', async () => {
+        const run: SetupRunStatus = { state: 'running', steps: [], models: [], components: { server: 'done', backend: 'active' }, percent: 45 };
+        mockedApi.getSetupPlan.mockResolvedValue({ ...COLD_BIG(), components: COMPONENTS });
+        mockedApi.startSetup.mockResolvedValue(run);
+        mockedApi.getSetupStatus.mockResolvedValueOnce({ state: 'idle' }).mockResolvedValue(run);
+        mockedApi.cancelSetup.mockResolvedValue({ cancelled: true });
+        await startLocal();
+        const line = (await screen.findByText('Now: Graphics support')).closest('p') as HTMLElement;
+        expect(line).toHaveTextContent('Now: Graphics support · 45% · 2 of 3 parts ready');
+        expect(screen.queryByText('Setting things up…')).toBeNull();
+        fireEvent.click(within(document.querySelector('.setup-footer') as HTMLElement).getByRole('button', { name: 'Cancel' }));
+        await waitFor(() => expect(mockedApi.cancelSetup).toHaveBeenCalledWith());
+    });
+
     it('lists every component coming to this PC, with its state from the run', async () => {
         const run: SetupRunStatus = { ...running, components: { server: 'done', backend: 'active' } };
         mockedApi.getSetupPlan.mockResolvedValue({ ...COLD_BIG(), components: COMPONENTS });
@@ -866,7 +1171,7 @@ describe('SetupScreen: downloading', () => {
         const list = within(await screen.findByRole('region', { name: 'Everything being set up' }));
         expect(list.getByText('Graphics support').closest('li')).toHaveTextContent('From github.com/ggml-org/llama.cpp');
         expect(list.getByText('Graphics support').closest('li')).toHaveTextContent('In progress');
-        expect(list.getByText("AI engine").closest('li')).toHaveTextContent('Ready');
+        expect(list.getByText("Model server").closest('li')).toHaveTextContent('Ready');
     });
 
     it('says why a component failed on its row and reruns setup from a Retry there', async () => {
@@ -958,12 +1263,12 @@ describe('SetupScreen: downloading', () => {
         ], {
             state: 'failed',
             error: "Your Lemonade Server at 127.0.0.1:9 isn't answering.",
-            problem: { kind: 'server_unreachable', message: "Your Lemonade Server at 127.0.0.1:9 isn't answering.", start: 'Start Lemonade Server from the Lemonade tray icon.', use_gaia: true },
+            problem: { kind: 'server_unreachable', message: "Your Lemonade Server at 127.0.0.1:9 isn't answering.", start: "The model server GAIA uses is at 127.0.0.1:9. GAIA doesn't run this model server, so it can't start it. Start it the way you usually do.", use_gaia: true },
         });
         mockedApi.startSetup.mockResolvedValue(stopped);
         await startLocal();
         expect(await screen.findByRole('button', { name: /Finish setup/ })).toBeInTheDocument();
-        expect(screen.getByText('Start Lemonade Server from the Lemonade tray icon.')).toBeInTheDocument();
+        expect(screen.getByText("The model server GAIA uses is at 127.0.0.1:9. GAIA doesn't run this model server, so it can't start it. Start it the way you usually do.")).toBeInTheDocument();
     });
 
     it('deletes and re-downloads a model that failed its load check only after the user confirms', async () => {
@@ -1096,7 +1401,7 @@ describe('SetupScreen: optional extras added during the download', () => {
         status = { state: 'idle' };
         mockedApi.getSetupStatus.mockImplementation(async () => status);
         mockedApi.getSetupPlan.mockResolvedValue(plan([QWEN, GEMMA, EMBED, WHISPER]));
-        mockedApi.startSetup.mockResolvedValueOnce(first).mockResolvedValueOnce(second);
+        mockedApi.startSetup.mockResolvedValueOnce(first);
     });
 
     async function downloading() {
@@ -1106,20 +1411,19 @@ describe('SetupScreen: optional extras added during the download', () => {
         return within(await screen.findByRole('region', { name: 'Optional' }));
     }
 
-    it('fetches a queued extra in a follow-up run, and is not ready until that ends', async () => {
+    it('downloads a queued extra on its own once the run is ready, without holding up Ready', async () => {
         const optional = await downloading();
         expect(optional.getByText('Turns speech and recordings into text').closest('li')).toHaveTextContent('1.6 GB');
         fireEvent.click(optional.getByRole('button', { name: 'Add' }));
         expect(optional.getByRole('button', { name: 'Added' })).toHaveAttribute('aria-pressed', 'true');
         expect(mockedApi.startSetup).toHaveBeenCalledTimes(1);
 
-        status = READY;
-        await waitFor(() => expect(mockedApi.startSetup).toHaveBeenCalledTimes(2), { timeout: 4000 });
-        expect(mockedApi.startSetup).toHaveBeenLastCalledWith(false, false, { keepTrying: false, extraModels: [WHISPER.id] });
-        expect(screen.queryByRole('button', { name: 'Start chatting' })).not.toBeInTheDocument();
-
+        const pulling: SetupRunStatus = { ...READY, models: [...(READY.models ?? []), ...(second.models ?? [])] };
+        mockedApi.downloadSetupModel.mockImplementation(async () => { status = pulling; return pulling; });
         status = READY;
         expect(await startChatting(4000)).toBeInTheDocument();
+        expect(mockedApi.downloadSetupModel).toHaveBeenCalledWith(WHISPER.id, { keepTrying: false });
+        expect(mockedApi.startSetup).toHaveBeenCalledTimes(1);
     });
 
     it('runs nothing more for an extra taken back before the run ended', async () => {
@@ -1180,7 +1484,7 @@ describe('SetupScreen: testing', () => {
         mockedApi.startSetup.mockResolvedValue(failedRun('memory'));
         await startLocal();
         fireEvent.click(await screen.findByRole('button', { name: 'Choose another model' }));
-        expect(await screen.findByRole('heading', { name: 'Choose your models' })).toBeInTheDocument();
+        expect(await screen.findByRole('heading', { name: 'Choose your agent and models' })).toBeInTheDocument();
     });
 
     it('deletes a broken model and downloads it again', async () => {
@@ -1234,7 +1538,110 @@ describe('SetupScreen: cloud', () => {
         expect(screen.getByRole('radio', { name: /Fireworks AI/ })).toHaveAttribute('aria-checked', 'true');
         expect(screen.getByRole('link', { name: /Open Fireworks API keys/ })).toHaveAttribute('href', 'https://app.fireworks.ai/settings/users/api-keys');
         expect(screen.getByText('Create a new API key and copy it.')).toBeInTheDocument();
-        expect(screen.getByLabelText('API key')).toHaveAttribute('type', 'password');
+        expect(screen.getByLabelText('Fireworks AI API key')).toHaveAttribute('type', 'password');
+    });
+
+    it('labels the key field, mentions a saved key only when there is one, and can show the key', async () => {
+        await open();
+        await toKey();
+        const field = screen.getByLabelText('Fireworks AI API key');
+        expect(field).toHaveAttribute('placeholder', 'Paste your API key');
+        fireEvent.change(field, { target: { value: 'fw-secret' } });
+        const show = screen.getByRole('button', { name: 'Show key' });
+        fireEvent.click(show);
+        expect(field).toHaveAttribute('type', 'text');
+        fireEvent.click(screen.getByRole('button', { name: 'Hide key' }));
+        expect(field).toHaveAttribute('type', 'password');
+    });
+
+    it('offers to leave the key blank only when one is saved', async () => {
+        mockedApi.listProviders.mockResolvedValue({
+            providers: [{ id: 'fireworks', name: 'Fireworks AI', remote: true, privacy_notice: '', key_source: 'stored', key_hint: '1234' }],
+            active: null,
+            lemonade_error: null,
+        } as unknown as Awaited<ReturnType<typeof api.listProviders>>);
+        await open();
+        await toKey();
+        await waitFor(() => expect(screen.getByLabelText('Fireworks AI API key')).toHaveAttribute('placeholder', 'Paste your API key (leave blank to use one you saved before)'));
+    });
+
+    it('lists the models as a choice with the default picked, and connects the one picked', async () => {
+        connects('fireworks');
+        mockedApi.getCloudPrices.mockResolvedValue({
+            provider: 'fireworks', source: 'Fireworks AI list price', note: null,
+            models: [
+                { model: 'fireworks.m1', name: 'm1', rank: 1, note: 'best overall', price: null },
+                { model: 'fireworks.m2', name: 'm2', rank: 2, note: 'cheapest', price: null },
+            ],
+        });
+        mockedApi.startSetup.mockResolvedValue({ state: 'running', skip_chat_model: true, steps: [], models: [] });
+        await open();
+        await toKey();
+        const group = await screen.findByRole('radiogroup', { name: 'The model GAIA uses' });
+        const first = within(group).getByRole('radio', { name: /^m1/ });
+        expect(first).toBeChecked();
+        expect(first.closest('label')).toHaveTextContent('m1 · Default · best overall');
+        fireEvent.click(within(group).getByRole('radio', { name: /^m2/ }));
+        fireEvent.change(screen.getByLabelText('Fireworks AI API key'), { target: { value: 'fw-key' } });
+        fireEvent.click(screen.getByRole('button', { name: /Test and connect/ }));
+        await waitFor(() => expect(mockedApi.selectModel).toHaveBeenCalledWith('fireworks.m2'));
+        // Moving on says the key worked and which model answers.
+        expect(await screen.findByText('Key accepted. Answers will come from m2.')).toBeInTheDocument();
+    });
+
+    it('fails loudly when the picked model is not offered to the key', async () => {
+        connects('fireworks');
+        mockedApi.getCloudPrices.mockResolvedValue({
+            provider: 'fireworks', source: 'Fireworks AI list price', note: null,
+            models: [
+                { model: 'fireworks.m1', name: 'm1', rank: 1, note: null, price: null },
+                { model: 'fireworks.gone', name: 'gone', rank: 2, note: null, price: null },
+            ],
+        });
+        await open();
+        await toKey();
+        fireEvent.click(await screen.findByRole('radio', { name: /^gone/ }));
+        fireEvent.click(screen.getByRole('button', { name: /Test and connect/ }));
+        expect(await screen.findByRole('alert')).toHaveTextContent("gone isn't offered to this key. Pick another model.");
+        expect(mockedApi.selectModel).not.toHaveBeenCalled();
+        expect(mockedApi.startSetup).not.toHaveBeenCalled();
+    });
+
+    it('connects the row shown as Default when nothing is clicked, and fails loudly if the key lacks it', async () => {
+        connects('fireworks');
+        // The live list ranks another model first and lacks the Default row: setup must not switch to it.
+        mockedApi.listProviderModels.mockResolvedValue({
+            provider: 'fireworks',
+            models: [{ id: 'fireworks.other', context_length: null, downloaded: true, labels: [], rank: 1, note: null, evidence: null }],
+        });
+        mockedApi.getCloudPrices.mockResolvedValue({
+            provider: 'fireworks', source: 'Fireworks AI list price', note: null,
+            models: [{ model: 'fireworks.m1', name: 'm1', rank: 1, note: null, price: null }],
+        });
+        await open();
+        await toKey();
+        expect(await screen.findByRole('radio', { name: /^m1/ })).toBeChecked();
+        fireEvent.change(screen.getByLabelText('Fireworks AI API key'), { target: { value: 'fw-key' } });
+        fireEvent.click(screen.getByRole('button', { name: /Test and connect/ }));
+        expect(await screen.findByRole('alert')).toHaveTextContent("m1 isn't offered to this key. Pick another model.");
+        expect(mockedApi.selectModel).not.toHaveBeenCalled();
+    });
+
+    it('connects the Default row by its id, not by the live list order', async () => {
+        connects('fireworks');
+        mockedApi.getCloudPrices.mockResolvedValue({
+            provider: 'fireworks', source: 'Fireworks AI list price', note: null,
+            models: [
+                { model: 'fireworks.m2', name: 'm2', rank: 1, note: null, price: null },
+                { model: 'fireworks.m1', name: 'm1', rank: 2, note: null, price: null },
+            ],
+        });
+        await open();
+        await toKey();
+        expect(await screen.findByRole('radio', { name: /^m2/ })).toBeChecked();
+        fireEvent.change(screen.getByLabelText('Fireworks AI API key'), { target: { value: 'fw-key' } });
+        fireEvent.click(screen.getByRole('button', { name: /Test and connect/ }));
+        await waitFor(() => expect(mockedApi.selectModel).toHaveBeenCalledWith('fireworks.m2'));
     });
 
     it('blocks cloud setup choices under Local only without loading their prices', async () => {
@@ -1273,7 +1680,7 @@ describe('SetupScreen: cloud', () => {
         expect(await screen.findByText(
             'Found a Fireworks AI key in your environment (ends …0000). Test and connect to use it.',
         )).toBeInTheDocument();
-        fireEvent.change(screen.getByLabelText('API key'), { target: { value: 'fw_test_000' } });
+        fireEvent.change(screen.getByLabelText('Fireworks AI API key'), { target: { value: 'fw_test_000' } });
         expect(screen.queryByText(/Found a Fireworks AI key/)).not.toBeInTheDocument();
     });
 
@@ -1296,7 +1703,7 @@ describe('SetupScreen: cloud', () => {
         await open();
         await toKey();
         expect(railLabels()).toEqual(['Check this PC', 'Your setup', 'Download', 'Test', 'Ready']);
-        fireEvent.change(screen.getByLabelText('API key'), { target: { value: 'fw-key' } });
+        fireEvent.change(screen.getByLabelText('Fireworks AI API key'), { target: { value: 'fw-key' } });
         expect(mockedApi.startSetup).not.toHaveBeenCalled();
         fireEvent.click(screen.getByRole('button', { name: /Test and connect/ }));
         await waitFor(() => expect(mockedApi.selectModel).toHaveBeenCalledWith('fireworks.m1'));
@@ -1305,7 +1712,7 @@ describe('SetupScreen: cloud', () => {
         expect(mockedApi.chooseSetupChatModel).not.toHaveBeenCalled();
         expect(mockedApi.skipSetupModel).not.toHaveBeenCalled();
         expect(await startChatting()).toBeInTheDocument();
-        expect(screen.getByText(/answers in the cloud\./)).toBeInTheDocument();
+        expect(screen.getByText(/, in the cloud\./)).toBeInTheDocument();
         expect(localStorage.getItem('gaia-setup-choice')).toBe('fireworks');
     });
 
@@ -1359,7 +1766,7 @@ describe('SetupScreen: cloud', () => {
         await toKey();
         fireEvent.click(screen.getByRole('radio', { name: /AMD LLM Gateway/ }));
         expect(await screen.findByText(/doesn.t send your server a key or change its setup/)).toBeInTheDocument();
-        expect(screen.queryByLabelText('API key')).not.toBeInTheDocument();
+        expect(screen.queryByLabelText(/API key/)).not.toBeInTheDocument();
         fireEvent.click(screen.getByRole('button', { name: /Test and connect/ }));
         await waitFor(() => expect(mockedApi.selectModel).toHaveBeenCalledWith('amd.m1'));
         expect(mockedApi.connectProviderWaitingForOs).toHaveBeenCalledWith('amd', { api_key: undefined }, expect.any(Function), expect.any(Function));
@@ -1380,7 +1787,7 @@ describe('SetupScreen: cloud', () => {
         localStorage.setItem('gaia-setup-choice', 'fireworks');
         mockedApi.getSetupStatus.mockResolvedValue({ ...READY, skip_chat_model: true });
         renderSetup();
-        expect(await screen.findByLabelText('API key').catch(() => startChatting())).toBeInTheDocument();
+        expect(await screen.findByLabelText('Fireworks AI API key').catch(() => startChatting())).toBeInTheDocument();
     });
 
     // Product bug: a saved cloud choice survives to the plan screen, whose button then starts a cloud run with no key.
@@ -1393,6 +1800,13 @@ describe('SetupScreen: cloud', () => {
 });
 
 describe('SetupScreen: a Lemonade the user already runs', () => {
+    const FORM = 'Which model server GAIA uses';
+    const pickMine = () => fireEvent.click(screen.getByRole('radio', { name: /^Use the one I have/ }));
+    const proceed = () => fireEvent.click(screen.getByRole('button', { name: 'Continue' }));
+    const useMine = () => {
+        pickMine();
+        proceed();
+    };
     async function offer(found: LemonadeFound | null) {
         mockedApi.getLemonadeTarget.mockResolvedValue(TARGET);
         mockedApi.detectLemonade.mockResolvedValue({ found });
@@ -1401,39 +1815,54 @@ describe('SetupScreen: a Lemonade the user already runs', () => {
         await screen.findByRole('region', { name: 'What setup found' });
     }
 
-    it('offers it with what GAIA does there, and saves the URL on Use mine', async () => {
+    it('asks with two choices, each saying what it means, and keeps the address in the details', async () => {
         await offer(FOUND);
-        expect(await screen.findByRole('form', { name: 'Use your Lemonade Server' }))
-            .toHaveTextContent("GAIA found an AI engine already running on this PC. Use it, or install GAIA's own?Lemonade 10.3.0 · http://localhost:13305/api/v1");
-        // The detail waits behind its own chevron; the choice is what shows.
+        const form = await screen.findByRole('form', { name: FORM });
+        expect(within(form).getByRole('group', { name: 'This PC already runs a model server. Which one should GAIA use?' })).toBeInTheDocument();
+        const own = screen.getByRole('radio', { name: /^Install GAIA's own/ });
+        const mine = screen.getByRole('radio', { name: /^Use the one I have/ });
+        expect(own).toBeChecked();
+        expect(own.closest('label')).toHaveTextContent("Install GAIA's ownRecommendedThe version GAIA is tested with");
+        expect(mine.closest('label')).toHaveTextContent('Keeps one copy of each model.');
+        expect(mine.closest('label')).not.toHaveTextContent('Recommended');
+        // One name in setup: no "AI engine", and the address waits behind the chevron.
+        expect(document.body.textContent).not.toMatch(/AI engine/);
+        expect(form).not.toHaveTextContent('http://localhost:13305');
         const plain = "GAIA downloads and runs its models on your server. It leaves your server's settings and your own models as they are.";
-        expect(screen.queryByText(plain)).toBeNull();
-        const more = screen.getByRole('button', { name: 'What GAIA does on your server' });
+        const more = screen.getByRole('button', { name: 'About your model server' });
         expect(more).toHaveAttribute('aria-expanded', 'false');
         fireEvent.click(more);
         expect(screen.getByText(plain)).toBeInTheDocument();
-        fireEvent.click(screen.getByRole('button', { name: 'Use the one I have' }));
+        expect(form).toHaveTextContent('Lemonade 10.3.0 · http://localhost:13305/api/v1');
+    });
+
+    it('saves the URL when the user picks theirs', async () => {
+        await offer(FOUND);
+        await screen.findByRole('form', { name: FORM });
+        useMine();
         await waitFor(() => expect(mockedApi.setLemonadeTarget).toHaveBeenCalledExactlyOnceWith(
             { mode: 'external', base_url: FOUND.url, api_key: undefined },
         ));
-        expect(await screen.findByText(/GAIA will use the AI engine at http:\/\/localhost:13305\/api\/v1/)).toBeInTheDocument();
+        expect(await screen.findByText(/GAIA will use your model server at http:\/\/localhost:13305\/api\/v1/)).toBeInTheDocument();
     });
 
-    it('puts the server choice in the bottom bar, GAIA\'s own last and primary, with Continue back once it is made', async () => {
+    it('says the checks wait on the choice, and keeps one Continue in the bottom bar', async () => {
         await offer(FOUND);
-        await screen.findByRole('form', { name: 'Use your Lemonade Server' });
+        await screen.findByRole('form', { name: FORM });
+        expect(await screen.findByText('Waiting for your choice below')).toBeInTheDocument();
         const bar = () => [...(document.querySelector('.setup-footer') as HTMLElement).querySelectorAll('button')].map((b) => b.textContent?.trim());
-        await waitFor(() => expect(bar()).toEqual(['Use the one I have', "Install GAIA's own"]));
-        expect(screen.getByRole('button', { name: "Install GAIA's own" })).toHaveClass('btn-primary');
-        expect(screen.getByRole('button', { name: 'Use the one I have' })).toHaveClass('btn-secondary');
-        fireEvent.click(screen.getByRole('button', { name: "Install GAIA's own" }));
+        await waitFor(() => expect(bar()).toEqual(['Continue']));
+        expect(screen.getByRole('button', { name: 'Continue' })).toHaveClass('btn-primary');
+        proceed();
+        await waitFor(() => expect(mockedApi.setLemonadeTarget).toHaveBeenCalledExactlyOnceWith({ mode: 'gaia' }));
         await waitFor(() => expect(bar()).toEqual(['Continue']));
     });
 
     it('keeps the Checks log free of unknown values and of a server verdict before the choice', async () => {
         mockedApi.getOnboardingPreflight.mockResolvedValue(HARDWARE);
         await offer(FOUND);
-        await screen.findByRole('form', { name: 'Use your Lemonade Server' });
+        await screen.findByRole('form', { name: FORM });
+        fireEvent.click(screen.getByRole('button', { name: 'Having trouble?' }));
         fireEvent.click(screen.getByRole('button', { name: 'Checks log' }));
         await screen.findByText(/Waiting for you to choose which Lemonade GAIA uses/);
         const text = document.querySelector('.setup-log-pre')?.textContent ?? '';
@@ -1445,8 +1874,9 @@ describe('SetupScreen: a Lemonade the user already runs', () => {
     it('reads the device and the models again from their server', async () => {
         await offer(FOUND);
         const plans = mockedApi.getSetupPlan.mock.calls.length;
-        fireEvent.click(await screen.findByRole('button', { name: 'Use the one I have' }));
-        await screen.findByText(/GAIA will use the AI engine at/);
+        await screen.findByRole('form', { name: FORM });
+        useMine();
+        await screen.findByText(/GAIA will use your model server at/);
         await waitFor(() => expect(mockedApi.getSetupPlan.mock.calls.length).toBeGreaterThan(plans));
         expect(mockedApi.getOnboardingPreflight).toHaveBeenCalledTimes(2);
         expect(mockedApi.startSetup).not.toHaveBeenCalled();
@@ -1478,22 +1908,27 @@ describe('SetupScreen: a Lemonade the user already runs', () => {
 
     it("saves GAIA's own when declined", async () => {
         await offer(FOUND);
-        fireEvent.click(await screen.findByRole('button', { name: /Install GAIA.s own/ }));
+        await screen.findByRole('form', { name: FORM });
+        proceed();
         await waitFor(() => expect(mockedApi.setLemonadeTarget).toHaveBeenCalledExactlyOnceWith({ mode: 'gaia' }));
-        expect(await screen.findByText('GAIA will install its own AI engine.')).toBeInTheDocument();
+        expect(await screen.findByText('GAIA will install its own model server.')).toBeInTheDocument();
     });
 
     it('asks for the key a protected server needs, and never shows it back', async () => {
         await offer({ ...FOUND, status: 'needs_key' });
-        const key = await screen.findByLabelText('Lemonade API key');
+        await screen.findByRole('form', { name: FORM });
+        // The key belongs to their server: asked for once it is the one picked.
+        expect(screen.queryByLabelText('Model server API key')).toBeNull();
+        pickMine();
+        const key = screen.getByLabelText('Model server API key');
         expect(key).toHaveAttribute('type', 'password');
-        expect(screen.getByRole('button', { name: 'Use the one I have' })).toBeDisabled();
+        expect(screen.getByRole('button', { name: 'Continue' })).toBeDisabled();
         fireEvent.change(key, { target: { value: 'sk-secret' } });
-        fireEvent.click(screen.getByRole('button', { name: 'Use the one I have' }));
+        proceed();
         await waitFor(() => expect(mockedApi.setLemonadeTarget).toHaveBeenCalledExactlyOnceWith(
             { mode: 'external', base_url: FOUND.url, api_key: 'sk-secret' },
         ));
-        await screen.findByText(/GAIA will use the AI engine at/);
+        await screen.findByText(/GAIA will use your model server at/);
         expect(document.body.textContent).not.toContain('sk-secret');
     });
 
@@ -1501,10 +1936,11 @@ describe('SetupScreen: a Lemonade the user already runs', () => {
         await offer(FOUND);
         const message = 'The Lemonade Server at http://localhost:13305/api/v1 rejected the API key. Check the key it was started with (its LEMONADE_API_KEY).';
         mockedApi.setLemonadeTarget.mockRejectedValue(Object.assign(new Error(message), { reason: 'bad_key' }));
-        fireEvent.click(await screen.findByRole('button', { name: 'Use the one I have' }));
+        await screen.findByRole('form', { name: FORM });
+        useMine();
         expect(await screen.findByRole('alert')).toHaveTextContent("That key wasn't accepted.");
         expect(screen.queryByText(/LEMONADE_API_KEY/)).toBeNull();
-        expect(screen.getByLabelText('Lemonade API key')).toBeInTheDocument();
+        expect(screen.getByLabelText('Model server API key')).toBeInTheDocument();
     });
 
     it("says it couldn't check a server that didn't answer in time, and checks again", async () => {
@@ -1514,9 +1950,9 @@ describe('SetupScreen: a Lemonade the user already runs', () => {
             .mockResolvedValueOnce({ found: FOUND, unchecked: [] });
         renderSetup();
         await screen.findByRole('region', { name: 'What setup found' });
-        expect(await screen.findByText(/Couldn.t check whether your Lemonade Server at http:\/\/localhost:13305\/api\/v1 is running/)).toBeInTheDocument();
+        expect(await screen.findByText(/Couldn.t check whether your model server at http:\/\/localhost:13305\/api\/v1 is running/)).toBeInTheDocument();
         fireEvent.click(screen.getByRole('button', { name: /Check again/ }));
-        expect(await screen.findByRole('button', { name: 'Use the one I have' })).toBeInTheDocument();
+        expect(await screen.findByRole('radio', { name: /^Use the one I have/ })).toBeInTheDocument();
     });
 
     it('says plainly that a too-old server is left alone and GAIA installs its own, with nothing to do', async () => {
@@ -1525,7 +1961,7 @@ describe('SetupScreen: a Lemonade the user already runs', () => {
         expect(await screen.findByText(/older than GAIA needs, so GAIA installs its own\. Yours stays as it is\./)).toBeInTheDocument();
         // The backend's English sentence, with its upgrade instruction, never reaches the screen.
         expect(screen.queryByText(/Upgrade it/)).not.toBeInTheDocument();
-        expect(screen.queryByRole('button', { name: 'Use the one I have' })).not.toBeInTheDocument();
+        expect(screen.queryByRole('radio', { name: /^Use the one I have/ })).not.toBeInTheDocument();
         await waitFor(() => expect(screen.getByRole('button', { name: 'Continue' })).toBeInTheDocument());
     });
 
@@ -1546,7 +1982,7 @@ describe("SetupScreen: the user's server isn't answering", () => {
         problem: {
             kind: 'server_unreachable',
             message: "Your Lemonade Server at 127.0.0.1:9 isn't answering.",
-            start: 'Start Lemonade Server from the Lemonade tray icon.',
+            start: "The model server GAIA uses is at 127.0.0.1:9. GAIA doesn't run this model server, so it can't start it. Start it the way you usually do.",
             use_gaia: true,
         },
         command: 'gaia init --profile gaia',
@@ -1562,8 +1998,10 @@ describe("SetupScreen: the user's server isn't answering", () => {
         expect(await screen.findByRole('button', { name: /Use GAIA.s own instead/ })).toBeInTheDocument();
         expect(screen.queryByText(/set outside the app/)).not.toBeInTheDocument();
         expect(await screen.findByRole('alert')).toHaveTextContent("Your Lemonade Server at 127.0.0.1:9 isn't answering.");
-        expect(screen.getByText('Start Lemonade Server from the Lemonade tray icon.')).toBeInTheDocument();
+        expect(screen.getByText("The model server GAIA uses is at 127.0.0.1:9. GAIA doesn't run this model server, so it can't start it. Start it the way you usually do.")).toBeInTheDocument();
         expect(screen.queryByText(/HTTPConnectionPool/)).not.toBeInTheDocument();
+        // A failed step opens "Having trouble?" by itself.
+        expect(screen.getByRole('button', { name: 'Having trouble?' })).toHaveAttribute('aria-expanded', 'true');
         fireEvent.click(screen.getByRole('button', { name: 'Checks log' }));
         expect(screen.getByText(/HTTPConnectionPool/)).toBeInTheDocument();
     });
@@ -1623,16 +2061,26 @@ describe('SetupScreen: an unreachable AMD gateway (#5604)', () => {
     });
     const amd = () => screen.getByRole('radio', { name: /AMD LLM Gateway/ });
 
-    it("greys out the gateway choice and says it needs AMD's network", async () => {
+    it("hides the gateway from a PC that can't reach it, so only AMD's network sees it", async () => {
+        mockedApi.listProviders.mockResolvedValue(gateway(false));
+        await open();
+        await toKey();
+        await waitFor(() => expect(screen.queryByRole('radio', { name: /AMD LLM Gateway/ })).toBeNull());
+        expect(screen.queryByRole('button', { name: 'Check the AMD gateway again' })).toBeNull();
+        expect(screen.getByRole('radio', { name: /Fireworks AI/ })).toBeEnabled();
+    });
+
+    it("greys out a gateway the user chose before and says it needs AMD's network", async () => {
+        localStorage.setItem('gaia-setup-choice', 'amd');
         mockedApi.listProviders.mockResolvedValue(gateway(false));
         await open();
         await toKey();
         await waitFor(() => expect(amd()).toBeDisabled());
         expect(amd()).toHaveTextContent("Unavailable: needs AMD's network or VPN.");
-        expect(screen.getByRole('radio', { name: /Fireworks AI/ })).toBeEnabled();
     });
 
     it('enables the gateway after Check again, once it answers', async () => {
+        localStorage.setItem('gaia-setup-choice', 'amd');
         mockedApi.listProviders.mockResolvedValue(gateway(false));
         await open();
         await toKey();
@@ -1657,6 +2105,7 @@ describe('SetupScreen: an unreachable AMD gateway (#5604)', () => {
     });
 
     it('keeps the gateway unavailable when Check again still finds no network', async () => {
+        localStorage.setItem('gaia-setup-choice', 'amd');
         mockedApi.listProviders.mockResolvedValue(gateway(false));
         await open();
         await toKey();

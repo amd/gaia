@@ -35,6 +35,30 @@ beforeEach(() => {
     URL.revokeObjectURL = vi.fn();
 });
 
+describe('Composer with an Arabic-named file', () => {
+    it('reads the name left to right so the extension stays last', async () => {
+        const name = 'ملاحظات الاجتماع.txt';
+        mockedApi.uploadFile.mockResolvedValue({ filename: 'n-ab.txt', original_name: name, url: '/api/files/uploads/n-ab.txt', size: 5, content_type: 'text/plain', is_image: false });
+        render(<Harness />);
+        fireEvent.change(document.querySelector('input[type="file"]') as HTMLInputElement, { target: { files: [new File(['x'], name, { type: 'text/plain' })] } });
+
+        expect(await screen.findByText(name)).toHaveAttribute('dir', 'ltr');
+    });
+
+    it('links the Arabic name to its encoded file', async () => {
+        const name = 'ملاحظات الاجتماع.txt';
+        mockedApi.uploadFile.mockResolvedValue({ filename: name, original_name: name, url: `/api/files/uploads/${encodeURIComponent(name)}`, size: 5, content_type: 'text/plain', is_image: false });
+        const { result } = renderHook(() => useAttachments());
+
+        act(() => result.current.addFiles([new File(['x'], name, { type: 'text/plain' })]));
+        await waitFor(() => expect(result.current.hasUploaded).toBe(true));
+
+        expect(result.current.compose('go')).toBe(
+            `go\n\n[${name}](/api/files/uploads/${encodeURIComponent(name)})`,
+        );
+    });
+});
+
 describe('Composer with a recording', () => {
     const video = new File(['media'], 'class.mp4', { type: 'video/mp4' });
     const uploaded = { filename: 'class-ab.mp4', original_name: 'class.mp4', url: '/api/files/uploads/class-ab.mp4', size: 5, content_type: 'video/mp4', is_image: false };
@@ -332,5 +356,22 @@ describe('Composer message length (#5716)', () => {
         expect(screen.queryByRole('alert')).not.toBeInTheDocument();
         fireEvent.keyDown(screen.getByLabelText('Message'), { key: 'Enter' });
         expect(onSubmit).toHaveBeenCalledTimes(1);
+    });
+});
+
+describe('Composer with a refused file', () => {
+    it('does not send until the refused file is removed, and says which one', async () => {
+        mockedApi.uploadFile.mockRejectedValue(new Error('GAIA can\'t read .exe files.'));
+        const onSubmit = vi.fn();
+        render(<Harness initial="Compare them" onSubmit={onSubmit} />);
+        fireEvent.change(document.querySelector('input[type="file"]') as HTMLInputElement, { target: { files: [new File(['x'], 'thing.exe')] } });
+
+        expect(await screen.findByRole('alert', { name: '' })).toHaveTextContent('Remove thing.exe before sending');
+        expect(screen.getByRole('button', { name: 'Send' })).toBeDisabled();
+        fireEvent.keyDown(screen.getByRole('textbox', { name: 'Message' }), { key: 'Enter' });
+        expect(onSubmit).not.toHaveBeenCalled();
+
+        fireEvent.click(screen.getByRole('button', { name: 'Remove thing.exe' }));
+        expect(screen.getByRole('button', { name: 'Send' })).toBeEnabled();
     });
 });

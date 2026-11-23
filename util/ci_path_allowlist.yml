@@ -31,6 +31,12 @@ dependencies:
     docs/guides/index.mdx: >-
       Same file, same reason: a path inside synthetic audit-key markers.
 
+  test_scale.yml:
+    src/gaia/**: >-
+      The scale run takes minutes, so it runs on every release tag instead of
+      on every PR that touches src/gaia. The same code is tested at small size
+      per PR by test_unit.yml (folder indexing, memory store, memory search).
+
   build_tui.yml:
     setup.py: >-
       The installer jobs freeze the gaia core from the package build_core.yml
@@ -38,6 +44,10 @@ dependencies:
       build-installers.yml, which triggers on setup.py and pyproject.toml.
     pyproject.toml: >-
       Same reason as setup.py.
+    .github/workflows/test_unit.yml: >-
+      util/select_tests.py names it in FULL_RUN_FILES for the unit-test
+      selection. This workflow runs only its lane-scope command, which reads
+      build_tui.yml's own paths filter, never test_unit.yml.
 
   build-installers.yml:
     src/gaia/apps/webui/**: >-

@@ -18,7 +18,7 @@
 .render-guide__title {
     margin: 0;
     font-size: var(--fs-title);
-    font-weight: 600;
+    font-weight: 500;
     line-height: 1.3;
 }
 
@@ -98,16 +98,16 @@
     height: 34px;
     padding: 0 16px;
     border-radius: var(--radius-full);
-    background: var(--accent-fill);
-    color: var(--accent-fill-text);
+    background: var(--action-fill);
+    color: var(--action-fill-text);
     font-size: var(--fs-ui);
-    font-weight: 600;
+    font-weight: 500;
     box-shadow: var(--shadow-sm);
     transition: background var(--duration-fast) var(--ease), transform var(--duration-fast) var(--ease);
 }
 
 .render-guide__start:hover {
-    background: var(--accent-fill-hover);
+    background: var(--action-fill-hover);
     transform: translateY(-1px);
 }
 
@@ -133,7 +133,7 @@
 .render-guide__label {
     margin: 0 0 8px;
     font-size: var(--fs-body);
-    font-weight: 600;
+    font-weight: 500;
 }
 
 .render-guide__items {
@@ -165,7 +165,7 @@
 .render-guide__item:has(.render-guide__check)::before { content: none; }
 
 .render-guide__qty {
-    font-weight: 600;
+    font-weight: 500;
     font-variant-numeric: tabular-nums;
 }
 
@@ -209,7 +209,7 @@
     background: var(--bg-tertiary);
     color: var(--text-secondary);
     font-size: var(--fs-caption);
-    font-weight: 600;
+    font-weight: 500;
     display: inline-flex;
     align-items: center;
     justify-content: center;
@@ -258,7 +258,7 @@
 
 .render-guide__step-title {
     display: block;
-    font-weight: 600;
+    font-weight: 500;
 }
 
 .render-guide__notes {
@@ -310,7 +310,7 @@
     background: var(--accent-fill);
     color: var(--accent-fill-text);
     font-size: var(--fs-caption);
-    font-weight: 600;
+    font-weight: 500;
     line-height: 1;
     transition: background var(--duration-fast) var(--ease);
 }
@@ -401,7 +401,7 @@
 .render-guided__step-title {
     margin: 0;
     font-size: 26px;
-    font-weight: 600;
+    font-weight: 500;
     line-height: 1.25;
 }
 

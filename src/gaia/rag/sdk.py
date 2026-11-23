@@ -7,11 +7,13 @@ GAIA RAG SDK - Simple PDF document retrieval and Q&A
 """
 
 import codecs
+import contextlib
 import errno
 import hashlib
 import hmac
 import io
 import json
+import math
 import os
 import re
 import secrets
@@ -47,17 +49,29 @@ from gaia.chat.sdk import AgentConfig, AgentSDK
 from gaia.daemon.broker_client import LeaseWaitCancelled
 from gaia.llm.lemonade_client import (
     DEFAULT_EMBEDDING_MODEL,
-    DEFAULT_MODEL_NAME,
     EMBED_MAX_CHARS,
     EMBEDDER_LLAMACPP_ARGS,
     EMBEDDER_UBATCH_TOKENS,
+    RERANK_QUERY_MAX_CHARS,
+    RERANKER_LLAMACPP_ARGS,
     resident_vision_model,
     resolve_default_vision_model,
+    resolve_local_chat_model,
     vision_off_reason,
 )
 from gaia.llm.vlm_client import VLMExtractionError
 from gaia.logger import get_logger
 from gaia.rag.arabic_text import extract_pdf_page_text, normalize_arabic_pdf_text
+from gaia.rag.html_utils import HTML_EXTENSIONS, extract_html_text
+from gaia.rag.normalize import search_form
+from gaia.rag.pdf_tables import looks_tabular, tables_as_rows
+from gaia.rag.pdf_utils import pdf_parse_limits
+from gaia.rag.text_units import (
+    SENTENCE_BREAK,
+    estimate_tokens,
+    join_pieces,
+    last_tokens,
+)
 from gaia.security import PathValidator
 from gaia.utils.document_formats import (
     UNSUPPORTED_DOCUMENTS,
@@ -72,7 +86,9 @@ from gaia.utils.file_lock import (
     write_bytes_atomic,
     write_text_atomic,
 )
+from gaia.utils.image_alpha import flatten_transparency
 from gaia.utils.image_formats import IMAGE_EXTENSIONS
+from gaia.utils.text_decoding import TRIED_ENCODINGS, decode_text
 
 _TEXT_BOM_ENCODINGS = (
     (codecs.BOM_UTF8, "utf-8-sig"),
@@ -80,10 +96,6 @@ _TEXT_BOM_ENCODINGS = (
     (codecs.BOM_UTF32_BE, "utf-32"),
     (codecs.BOM_UTF16_LE, "utf-16"),
     (codecs.BOM_UTF16_BE, "utf-16"),
-)
-_TEXT_FALLBACK_ENCODINGS = ("utf-8", "cp1252", "latin-1")
-_TEXT_TRIED_ENCODINGS = ", ".join(
-    dict.fromkeys([e for _, e in _TEXT_BOM_ENCODINGS] + list(_TEXT_FALLBACK_ENCODINGS))
 )
 
 
@@ -187,22 +199,6 @@ def folder_index_skip_reason(file_path) -> Optional[str]:
     return f"{ext} files are not a supported document type"
 
 
-def _decode_text_bytes(data: bytes) -> str:
-    """Decode text bytes without letting latin-1 hide Windows encodings."""
-    for bom, encoding in _TEXT_BOM_ENCODINGS:
-        if data.startswith(bom):
-            return data.decode(encoding)
-
-    for encoding in _TEXT_FALLBACK_ENCODINGS:
-        try:
-            return data.decode(encoding)
-        except UnicodeDecodeError:
-            continue
-
-    # latin-1 never fails; only a corrupt BOM-tagged file raises (above).
-    raise UnicodeDecodeError("text", data, 0, len(data), "unsupported encoding")
-
-
 # --- PDF extraction errors ---------------------------------------------------
 # These inherit from ValueError so existing `except ValueError` blocks in
 # callers (and the index_document error path) keep working, while allowing
@@ -295,15 +291,9 @@ def _flatten_for_vlm(img):
     Image files only. PDF-embedded images are shown as the PDF places them, so
     the PDF path must not rotate them by their own EXIF tag.
     """
-    from PIL import Image, ImageOps  # pylint: disable=import-outside-toplevel
+    from PIL import ImageOps  # pylint: disable=import-outside-toplevel
 
-    img = ImageOps.exif_transpose(img)
-    if img.mode in ("RGBA", "LA", "PA") or "transparency" in img.info:
-        # The VLM drops alpha, so a transparent background would read as black.
-        rgba = img.convert("RGBA")
-        white = Image.new("RGBA", rgba.size, (255, 255, 255, 255))
-        img = Image.alpha_composite(white, rgba).convert("RGB")
-    return img
+    return flatten_transparency(ImageOps.exif_transpose(img))
 
 
 def _image_pages_for_vlm(img, file_name: str) -> list:
@@ -336,6 +326,12 @@ class SpreadsheetReadError(ValueError):
     def __init__(self, message: str, status: str):
         super().__init__(message)
         self.status = status
+
+
+class PresentationReadError(ValueError):
+    """A .pptx that is damaged or not a real presentation."""
+
+    status = "corrupted"
 
 
 # Legacy .xls and password-protected .xlsx are both OLE2 compound files.
@@ -462,6 +458,51 @@ class _EmbedderWarmingUp(Exception):
     """The embedder answered with no vectors: it is still loading."""
 
 
+class _EmbedderSwapLock:
+    """Embedding requests share the embedder; reloading it waits for them all.
+
+    Every ``RAGSDK`` in this process (one per upload, one per chat) unloads and
+    reloads the embedder on its first embed. Without this, that swap dropped
+    the requests other instances had in flight. A waiting reload also holds
+    back new requests, so it is not starved by a busy chat.
+    """
+
+    def __init__(self):
+        self._cond = threading.Condition()
+        self._requests = 0
+        self._swapping = False
+        self._swaps_waiting = 0
+
+    @contextlib.contextmanager
+    def request(self):
+        with self._cond:
+            self._cond.wait_for(lambda: not self._swapping and not self._swaps_waiting)
+            self._requests += 1
+        try:
+            yield
+        finally:
+            with self._cond:
+                self._requests -= 1
+                self._cond.notify_all()
+
+    @contextlib.contextmanager
+    def swap(self):
+        with self._cond:
+            self._swaps_waiting += 1
+            self._cond.wait_for(lambda: not self._swapping and not self._requests)
+            self._swaps_waiting -= 1
+            self._swapping = True
+        try:
+            yield
+        finally:
+            with self._cond:
+                self._swapping = False
+                self._cond.notify_all()
+
+
+_EMBEDDER_SWAP = _EmbedderSwapLock()
+
+
 class EmbeddingUnavailableError(RuntimeError):
     """The embedding model could not run, so nothing was embedded or searched.
 
@@ -572,9 +613,31 @@ EMBED_WAIT_REPORT_S = 15
 #: Tries for a batch the embedder answers with no vectors (still loading).
 EMBED_WARMUP_ATTEMPTS = 3
 EMBED_WARMUP_PAUSE_S = 2
+#: Lemonade catalog reranker named when none is downloaded.
+_SUGGESTED_RERANKER = "bge-reranker-v2-m3-GGUF"
+#: llama-server's error when an input is longer than the loaded ubatch.
+_RERANK_BATCH_TOO_SMALL = "increase the physical batch size"
+
+# Windows' sharing and lock violations: another program has the file open.
+_SHARING_WINERRORS = frozenset({32, 33})
 
 
-def split_for_embedding(text: str, max_chars: int = EMBED_MAX_CHARS) -> List[str]:
+def _open_state(file_path: str) -> Optional[str]:
+    """Why *file_path* can't be opened for reading now, or None when it can."""
+    try:
+        with open(file_path, "rb"):
+            return None
+    except FileNotFoundError:
+        return "missing"
+    except PermissionError as e:
+        if getattr(e, "winerror", None) in _SHARING_WINERRORS:
+            return "locked"
+        return "denied"
+    except OSError:
+        return "unreadable"
+
+
+def _split_at_whitespace(text: str, max_chars: int) -> List[str]:
     """Split *text* into pieces of at most *max_chars*, dropping nothing but whitespace.
 
     Breaks at the last newline, else the last space, in the back half of each
@@ -599,6 +662,23 @@ def split_for_embedding(text: str, max_chars: int = EMBED_MAX_CHARS) -> List[str
     if rest:
         pieces.append(rest)
     return pieces
+
+
+def split_for_embedding(text: str, max_chars: int = EMBED_MAX_CHARS) -> List[str]:
+    """Split *text* into pieces whose embedded form is at most *max_chars* long.
+
+    The embedder reads :func:`search_form`, which a ligature such as U+FDFA
+    lengthens, so a piece that grows past the limit is cut finer.
+    """
+    fitted = []
+    for piece in _split_at_whitespace(text, max_chars):
+        size = max_chars
+        parts = [piece]
+        while size > 1 and any(len(search_form(p)) > max_chars for p in parts):
+            size = max(1, size * 3 // 4)
+            parts = _split_at_whitespace(piece, size)
+        fitted.extend(parts)
+    return fitted
 
 
 def default_rag_cache_dir() -> str:
@@ -715,7 +795,8 @@ def _json_records(data, loader: JsonLoaderConfig, source: str) -> List[dict]:
 class RAGConfig:
     """Configuration for RAG SDK."""
 
-    model: str = DEFAULT_MODEL_NAME
+    # The PC's default from setup: a small PC never downloads Gemma.
+    model: str = field(default_factory=resolve_local_chat_model)
     max_tokens: int = 1024
     chunk_size: int = 500
     chunk_overlap: int = 100  # Increased to 20% overlap for better context preservation
@@ -744,6 +825,11 @@ class RAGConfig:
     vlm_model: Optional[str] = field(default_factory=resolve_default_vision_model)
     # False skips image text extraction even when the VLM is installed
     use_vlm: bool = True
+    # Optional second-stage retrieval: off unless set, never downloads a reranker.
+    enable_reranking: bool = False
+    reranking_model: Optional[str] = None
+    reranking_candidate_multiplier: int = 3
+    reranking_timeout: int = 30
     # Security settings
     allowed_paths: Optional[List[str]] = None
     # Index each object of a JSON array as its own record (None: whole file)
@@ -853,6 +939,8 @@ class RAGSDK:
         self.llm_client = None
         self.use_lemonade_embeddings = False
         self._embedding_cache = None  # content-keyed query-embed cache (lazy)
+        self._reranking_model: Optional[str] = None
+        self._reranking_checked = False
         self.index = None
         self.chunks = []
         self.indexed_files = set()
@@ -882,6 +970,8 @@ class RAGSDK:
         self.file_content_keys = {}
         # {file_path: (_stat_key, ns it was taken)} of those same bytes
         self.file_stat_keys = {}
+        # A load pushed a document out to fit under max_total_chunks.
+        self._evicted_for_size = False
         self._state_lock = threading.RLock()
 
         # Create cache directory
@@ -1411,7 +1501,10 @@ class RAGSDK:
         # priority so a warm-up never makes an interactive turn wait.
         from gaia.daemon.broker_client import model_lease
 
-        with model_lease(self.config.embedding_model, priority="background"):
+        with (
+            model_lease(self.config.embedding_model, priority="background"),
+            _EMBEDDER_SWAP.swap(),
+        ):
             # Scoped unload of the embedder ONLY — a global /unload would evict
             # the co-resident chat model and trigger a ~100s cold reload (#1544).
             # ignore_if_not_loaded: on a cold start the embedder slot is empty
@@ -1459,17 +1552,18 @@ class RAGSDK:
             numpy array of embeddings with shape (num_texts, embedding_dim)
         """
 
+        # Documents and queries are embedded in one search form; NFKC also turns
+        # no-break spaces, which can exceed one token per character, into spaces.
+        safe_texts = [search_form(text) for text in texts]
         # Chunks are cut to fit, so a longer text here is a caller bug that
         # the embedder would answer with a 500.
-        oversized = [len(t) for t in texts if len(t) > EMBED_MAX_CHARS]
+        oversized = [len(t) for t in safe_texts if len(t) > EMBED_MAX_CHARS]
         if oversized:
             raise ValueError(
                 f"{len(oversized)}/{len(texts)} texts exceed the embedder's "
                 f"{EMBED_MAX_CHARS}-char input limit (longest: {max(oversized)} "
                 "chars). Split them with gaia.rag.sdk.split_for_embedding first."
             )
-        # No-break spaces in extracted tables can exceed one token per character.
-        safe_texts = [text.replace("\u00a0", " ") for text in texts]
 
         all_embeddings = []
 
@@ -1526,7 +1620,8 @@ class RAGSDK:
         reloaded = False
         while True:
             try:
-                response = self._request_embeddings(batch_texts, wait_callback)
+                with _EMBEDDER_SWAP.request():
+                    response = self._request_embeddings(batch_texts, wait_callback)
             except Exception as e:  # noqa: BLE001 — classified, then re-raised
                 stop = _stop_behind(e)
                 if stop is not None:
@@ -1686,6 +1781,7 @@ class RAGSDK:
         Falls back to ``_encode_texts`` on a miss. Stored/doc-chunk vectors
         are persisted elsewhere; this targets repeated *query* embeds only.
         """
+        query = search_form(query)
         if len(query) > EMBED_MAX_CHARS:
             self.log.warning(
                 f"Search query is {len(query)} chars; only the first "
@@ -1710,7 +1806,49 @@ class RAGSDK:
         ext = Path(file_path).suffix.lower()
         return ext if ext else ".unknown"
 
+    def _page_tables_as_rows(self, page, page_num: int, text: str, header):
+        """``text`` with the page's tables as header-named rows (see pdf_tables)."""
+        try:
+            layout = page.extract_text(extraction_mode="layout") or ""
+        except Exception as e:  # pylint: disable=broad-exception-caught
+            # pypdf's layout mode fails on some fonts; the plain text is still whole.
+            self.log.warning(
+                "Page %d: table rows not rebuilt, layout extraction failed: %s",
+                page_num,
+                e,
+            )
+            return text, header
+        return tables_as_rows(text, layout, header)
+
     def _extract_text_from_pdf(self, pdf_path: str) -> tuple:
+        """:meth:`_read_pdf_text` under :func:`pdf_parse_limits`.
+
+        pypdf parses lazily, so the whole read, not just the open, runs under them.
+        """
+        try:
+            from pypdf.errors import (  # pylint: disable=import-outside-toplevel
+                LimitReachedError,
+            )
+        except ImportError:  # pragma: no cover - PyPDF2 has no such limit
+            LimitReachedError = ()  # type: ignore[assignment,misc]
+
+        try:
+            with pdf_parse_limits():
+                return self._read_pdf_text(pdf_path)
+        except LimitReachedError as e:
+            file_name = Path(pdf_path).name
+            self.log.error(f"PDF past GAIA's parsing limits {pdf_path}: {e}")
+            raise PDFExtractionError(
+                f"Could not read PDF: {file_name}\n"
+                "Reason: the file is too complex for GAIA to read safely "
+                f"(pypdf: {e}).\n"
+                "Suggestions:\n"
+                "  1. Print it to a new PDF (Print, then 'Save as PDF' or "
+                "'Microsoft Print to PDF') and index the new file\n"
+                "  2. Or split it into smaller PDFs and index those"
+            ) from e
+
+    def _read_pdf_text(self, pdf_path: str) -> tuple:
         """
         Extract text from PDF file with VLM for images (always enabled if available).
 
@@ -1849,6 +1987,7 @@ class RAGSDK:
             unavailable = self._vision_unavailable(vlm_available)
             degraded_pages = []
             page_warnings = {}
+            table_header = None
             attempts = _VisionAttempts(
                 file_name, vlm.vlm_model if vlm else self.config.vlm_model
             )
@@ -1859,6 +1998,10 @@ class RAGSDK:
 
                 # Step 1: Extract text with pypdf
                 pypdf_text = normalize_arabic_pdf_text(extract_pdf_page_text(page))
+                if looks_tabular(pypdf_text):
+                    pypdf_text, table_header = self._page_tables_as_rows(
+                        page, i, pypdf_text, table_header
+                    )
 
                 # Step 2: Check for images
                 has_imgs = False
@@ -2106,7 +2249,7 @@ class RAGSDK:
             self._log_read_failure(
                 e, pptx_path, f"Corrupted PPTX (bad zip): {pptx_path}: {e}"
             )
-            raise ValueError(msg) from e
+            raise PresentationReadError(msg) from e
 
         try:
             # A stream, not the path: given a path, python-pptx's is_zipfile
@@ -2124,7 +2267,7 @@ class RAGSDK:
                 "  3. Save as PDF and index the PDF instead"
             )
             self._log_read_failure(e, pptx_path, f"Corrupted PPTX {pptx_path}: {e}")
-            raise ValueError(msg) from e
+            raise PresentationReadError(msg) from e
 
         try:
             extract_start = time_module.time()
@@ -2613,11 +2756,11 @@ These positions indicate where to split the text."""
                 data = f.read()
 
             try:
-                text = _decode_text_bytes(data)
+                text = decode_text(data)[0]
             except UnicodeDecodeError as exc:
                 raise ValueError(
                     f"Failed to decode file: {file_path}\n"
-                    f"Tried encodings: {_TEXT_TRIED_ENCODINGS}\n"
+                    f"Tried encodings: {TRIED_ENCODINGS}\n"
                     "Suggestions:\n"
                     "  1. Convert the file to UTF-8 encoding\n"
                     "  2. Check if the file is corrupted\n"
@@ -2648,11 +2791,11 @@ These positions indicate where to split the text."""
                 data = f.read()
 
             try:
-                decoded = _decode_text_bytes(data)
+                decoded = decode_text(data)[0]
             except UnicodeDecodeError as exc:
                 raise ValueError(
                     f"Failed to decode CSV file: {csv_path}\n"
-                    f"Tried encodings: {_TEXT_TRIED_ENCODINGS}\n"
+                    f"Tried encodings: {TRIED_ENCODINGS}\n"
                     "Suggestions:\n"
                     "  1. Save the CSV file with UTF-8 encoding in Excel/LibreOffice\n"
                     "  2. Check if the file is a valid CSV (not corrupted)\n"
@@ -3097,6 +3240,23 @@ These positions indicate where to split the text."""
         )
         return text, num_chapters
 
+    def _extract_text_from_html(self, html_path: str) -> str:
+        """A web page's readable text, without its markup, scripts or embedded JSON."""
+        try:
+            with self._safe_open(html_path, "rb") as f:
+                markup = f.read()
+            text = extract_html_text(html_path, markup)
+        except Exception as e:
+            self._log_read_failure(
+                e, html_path, f"Error reading HTML file {html_path}: {e}"
+            )
+            raise
+        self.log.info(
+            f"🌐 Extracted {len(text):,} characters of text from "
+            f"{len(markup):,} bytes of HTML"
+        )
+        return text
+
     def _extract_text_from_file(self, file_path: str) -> tuple:
         """
         Extract text from file based on type.
@@ -3166,6 +3326,10 @@ These positions indicate where to split the text."""
 
         elif file_type in UNSUPPORTED_DOCUMENTS:
             raise ValueError(unsupported_document_message(file_path, file_type))
+
+        elif file_type in HTML_EXTENSIONS:
+            metadata["html_text"] = True
+            return self._extract_text_from_html(file_path), metadata
 
         # Code files (treat as text for Q&A purposes)
         elif file_type in CODE_EXTENSIONS:
@@ -3336,7 +3500,7 @@ These positions indicate where to split the text."""
                 continue
 
             # Estimate tokens (rough: 1 token ≈ 4 characters)
-            para_tokens = len(para) // 4
+            para_tokens = estimate_tokens(para)
 
             # Check if this is VLM content - if so, keep it atomic
             is_vlm_content = idx in vlm_paragraphs
@@ -3347,18 +3511,18 @@ These positions indicate where to split the text."""
                 sentences = self._split_into_sentences(para)
 
                 for sentence in sentences:
-                    sentence_tokens = len(sentence) // 4
+                    sentence_tokens = estimate_tokens(sentence)
 
                     # If adding this sentence exceeds chunk size, save current chunk
                     if (
                         current_size + sentence_tokens > chunk_size_tokens
                         and current_chunk
                     ):
-                        chunks.append(" ".join(current_chunk))
+                        chunks.append(join_pieces(current_chunk))
 
                         # Keep overlap (last few sentences)
-                        overlap_text = " ".join(current_chunk)
-                        overlap_actual = len(overlap_text) // 4
+                        overlap_text = join_pieces(current_chunk)
+                        overlap_actual = estimate_tokens(overlap_text)
                         if overlap_actual > overlap_tokens:
                             # Trim to overlap size
                             current_chunk = self._get_last_n_tokens(
@@ -3377,7 +3541,7 @@ These positions indicate where to split the text."""
                 if is_vlm_content:
                     if current_chunk:
                         # Save current chunk before adding VLM content
-                        chunks.append(" ".join(current_chunk))
+                        chunks.append(join_pieces(current_chunk))
                         current_chunk = []
                         current_size = 0
 
@@ -3389,14 +3553,14 @@ These positions indicate where to split the text."""
 
                 elif current_size + para_tokens > chunk_size_tokens and current_chunk:
                     # Save current chunk
-                    chunks.append(" ".join(current_chunk))
+                    chunks.append(join_pieces(current_chunk))
 
                     # Keep overlap
-                    overlap_text = " ".join(current_chunk)
+                    overlap_text = join_pieces(current_chunk)
                     current_chunk = self._get_last_n_tokens(
                         overlap_text, overlap_tokens
                     ).split()
-                    current_size = len(" ".join(current_chunk)) // 4
+                    current_size = estimate_tokens(join_pieces(current_chunk))
 
                     current_chunk.append(para)
                     current_size += para_tokens
@@ -3406,7 +3570,7 @@ These positions indicate where to split the text."""
 
         # Add final chunk
         if current_chunk:
-            chunks.append(" ".join(current_chunk))
+            chunks.append(join_pieces(current_chunk))
 
         # STEP 4: Restore VLM blocks from placeholders
         if vlm_blocks:
@@ -3440,7 +3604,7 @@ These positions indicate where to split the text."""
         fitted = []
         split = pieces = 0
         for chunk in chunks:
-            if len(chunk) <= EMBED_MAX_CHARS:
+            if len(search_form(chunk)) <= EMBED_MAX_CHARS:
                 fitted.append(chunk)
                 continue
             parts = split_for_embedding(chunk)
@@ -3460,8 +3624,6 @@ These positions indicate where to split the text."""
 
         Better than word splitting, doesn't require NLTK dependency.
         """
-        # Split on sentence endings followed by space and capital letter
-
         # Handle common abbreviations that shouldn't split
         text = text.replace("Dr.", "Dr<DOT>")
         text = text.replace("Mr.", "Mr<DOT>")
@@ -3476,7 +3638,7 @@ These positions indicate where to split the text."""
         text = text.replace("etc.", "etc<DOT>")
 
         # Split on sentence boundaries
-        sentences = re.split(r"(?<=[.!?])\s+(?=[A-Z])", text)
+        sentences = SENTENCE_BREAK.split(text)
 
         # Restore abbreviations
         sentences = [s.replace("<DOT>", ".") for s in sentences]
@@ -3485,17 +3647,7 @@ These positions indicate where to split the text."""
 
     def _get_last_n_tokens(self, text: str, n_tokens: int) -> str:
         """Get approximately the last n tokens from text."""
-        # Rough estimate: 1 token ≈ 4 characters
-        target_chars = n_tokens * 4
-        if len(text) <= target_chars:
-            return text
-
-        # Try to break on word boundary
-        trimmed = text[-target_chars:]
-        first_space = trimmed.find(" ")
-        if first_space > 0:
-            return trimmed[first_space + 1 :]
-        return trimmed
+        return last_tokens(text, n_tokens)
 
     def _create_faiss_index(self, embeddings: "np.ndarray"):
         """Build a FAISS L2 index from precomputed embeddings."""
@@ -3508,13 +3660,13 @@ These positions indicate where to split the text."""
     def _vectors_path(self, chunks: List[str]) -> str:
         """Where the embeddings of *chunks* under the current embedder are kept.
 
-        The name binds the vectors to the embedding model and the exact chunk
-        text, so different text never reads them and the same text, indexed
+        The name binds the vectors to the embedding model and the chunk text as
+        embedded, so different text never reads them and the same text, indexed
         again from a new temp copy, adds no second file.
         """
         digest = hashlib.sha256(self.config.embedding_model.encode("utf-8"))
         for chunk in chunks:
-            digest.update(b"\x1e" + chunk.encode("utf-8"))
+            digest.update(b"\x1e" + search_form(chunk).encode("utf-8"))
         return os.path.join(
             self.config.cache_dir, f"vectors_{digest.hexdigest()[:24]}.npy"
         )
@@ -3744,6 +3896,7 @@ These positions indicate where to split the text."""
 
                 # Remove from indexed files
                 self.indexed_files.discard(file_path)
+                self._evicted_for_size = False
 
                 # Clean up LRU tracking
                 if file_path in self.file_access_times:
@@ -3831,7 +3984,8 @@ These positions indicate where to split the text."""
         """How *file_path* compares to the bytes it was indexed from; cheap to call.
 
         Returns ``"current"``, ``"changed"``, ``"missing"``, ``"locked"`` (another
-        program holds it), ``"unreadable"`` or ``"not_indexed"``. Hashes only
+        program holds it), ``"denied"`` (the user may no longer read it),
+        ``"unreadable"`` or ``"not_indexed"``. Hashes only
         when the file's size, mtime, inode or (POSIX) ctime moved since it was
         indexed, or when it was written within 2s of that stat. On Windows, an
         edit that later restores both size and mtime is caught by
@@ -3856,7 +4010,8 @@ These positions indicate where to split the text."""
             and recorded[0] == stat_key
             and recorded[1] - stat_key[1] >= _RACY_STAT_NS
         ):
-            return "current"
+            # A permission change moves no stat field on Windows.
+            return _open_state(file_path) or "current"
         if indexed_key is None:
             return "changed"
         try:
@@ -3956,6 +4111,8 @@ These positions indicate where to split the text."""
                 )
                 break
             evicted_files.append(path)
+        if evicted_files:
+            self._evicted_for_size = True
 
         # Check indexed files limit
         while (
@@ -3981,6 +4138,27 @@ These positions indicate where to split the text."""
             or len(self.indexed_files) <= self.config.max_indexed_files
         )
         return chunks_ok and files_ok, evicted_files
+
+    def full_by(self) -> Optional[str]:
+        """Which limit stops the index taking one more document without pushing one out.
+
+        ``"size"`` once its passages reach ``max_total_chunks``, or a load had
+        to push a document out to fit under it; ``"files"`` at
+        ``max_indexed_files`` documents; None while there is room.
+        """
+        with self._state_lock:
+            files = len(self.indexed_files)
+            chunks = len(self.chunks)
+            evicted_for_size = self._evicted_for_size
+        if evicted_for_size or 0 < self.config.max_total_chunks <= chunks:
+            return "size"
+        if 0 < self.config.max_indexed_files <= files:
+            return "files"
+        return None
+
+    def is_full(self) -> bool:
+        """True when indexing one more document would push out one already held."""
+        return self.full_by() is not None
 
     def _has_indexing_capacity(self, replacing: Optional[str] = None) -> bool:
         """Check if there is capacity to index another document.
@@ -4092,7 +4270,8 @@ These positions indicate where to split the text."""
                 "error_type": str (some failures: "file_locked",
                     "cache_busy" or "embedding_unavailable"),
                 "xlsx_status": str (an unreadable workbook: "corrupted",
-                    "unsupported_workbook" or "empty_file")
+                    "unsupported_workbook" or "empty_file"),
+                "pptx_status": str ("readable", or "corrupted" for a damaged file)
             }
 
         Raises:
@@ -4125,6 +4304,16 @@ These positions indicate where to split the text."""
                 print(f"❌ File not found: {file_path}")
                 print("   Please check the file path and try again")
             stats["error"] = f"File not found: {file_path}"
+            return stats
+
+        # A folder's size reads as 0 on Windows, which would say "empty".
+        if os.path.isdir(file_path):
+            self.log.error(f"Not a file: {file_path}")
+            stats["error"] = (
+                f"'{file_path}' is a folder, not a file. Index a folder's "
+                "documents with index_directory."
+            )
+            stats["is_folder"] = True
             return stats
 
         # Check if file is empty (early validation to save time)
@@ -4251,6 +4440,10 @@ These positions indicate where to split the text."""
 
                 if self._images_readable_now(cached_metadata):
                     raise _ImagesReadableNow()
+                if file_type in HTML_EXTENSIONS and not cached_metadata.get(
+                    "html_text"
+                ):
+                    raise ValueError("cached HTML was indexed as raw markup")
 
                 # Check if cache might be missing VLM content
                 # If metadata doesn't have VLM info, it's an old cache
@@ -4650,6 +4843,13 @@ These positions indicate where to split the text."""
             stats["error"] = str(e)
             stats["xlsx_status"] = e.status
             return stats
+        except PresentationReadError as e:
+            if self.config.show_stats:
+                print(f"❌ Failed to index {Path(file_path).name}: {e}")
+            self.log.error(f"PowerPoint extraction failed for {file_path}: {e.status}")
+            stats["error"] = str(e)
+            stats["pptx_status"] = e.status
+            return stats
         except VisionModelFailedError as e:
             if self.config.show_stats:
                 print(f"❌ Failed to index {Path(file_path).name}: {e}")
@@ -4887,13 +5087,187 @@ These positions indicate where to split the text."""
         snapshot = self._search_chunks(query)
         return snapshot["retrieved_chunks"], snapshot["scores"]
 
+    def _resolve_reranking_model(self) -> Optional[str]:
+        if not self.config.enable_reranking:
+            return None
+        if self._reranking_checked:
+            return self._reranking_model
+        try:
+            if self.llm_client is None:
+                from gaia.llm.lemonade_client import LemonadeClient
+
+                self.llm_client = LemonadeClient(base_url=self.config.base_url)
+            models = self.llm_client.list_models(show_all=False).get("data", [])
+        except Exception as error:
+            raise RuntimeError(
+                "Reranking is enabled, but GAIA could not list Lemonade's "
+                f"downloaded models: {error}\n"
+                "Make sure Lemonade Server is running and reachable, or set "
+                "enable_reranking=False."
+            ) from error
+        requested = self.config.reranking_model
+        candidates = [item for item in models if self._is_downloaded_reranker(item)]
+        if requested:
+            model = next(
+                (item.get("id") for item in candidates if item.get("id") == requested),
+                None,
+            )
+            if not model:
+                raise RuntimeError(
+                    f"Reranking is enabled, but reranker {requested!r} is not "
+                    "downloaded in Lemonade.\n"
+                    f"{self._reranker_download_hint(requested)}\n"
+                    "Or clear reranking_model, or set enable_reranking=False."
+                )
+        elif candidates:
+            model = candidates[0].get("id")
+        else:
+            raise RuntimeError(
+                "Reranking is enabled, but no downloaded Lemonade model has the "
+                "reranking label.\n"
+                f"{self._reranker_download_hint(_SUGGESTED_RERANKER)}\n"
+                "Or set enable_reranking=False."
+            )
+        self._load_reranker(model)
+        self._reranking_model = model
+        self._reranking_checked = True
+        return model
+
+    @staticmethod
+    def _is_downloaded_reranker(item: Any) -> bool:
+        if isinstance(item, dict):
+            labels = item.get("labels")
+            labels = [] if labels is None else labels
+            if isinstance(labels, list):
+                return item.get("downloaded") is not False and "reranking" in {
+                    str(label).lower() for label in labels
+                }
+        raise RuntimeError(
+            "Reranking is enabled, but Lemonade's model list has an entry "
+            f"GAIA cannot read: {item!r}\n"
+            "Update Lemonade Server, or set enable_reranking=False."
+        )
+
+    def _load_reranker(self, model: str) -> None:
+        # llama-server rejects an input longer than its ubatch (default 512).
+        try:
+            self.llm_client.load_model(
+                model,
+                llamacpp_args=RERANKER_LLAMACPP_ARGS,
+                # Saved so Lemonade's own reload after an eviction keeps it too.
+                save_options=not self.llm_client.is_users_server(),
+            )
+        except Exception as error:
+            stop = _stop_behind(error)
+            if stop is not None:
+                raise stop from error
+            raise RuntimeError(
+                f"Reranking is enabled, but Lemonade could not load reranker "
+                f"{model!r} with {RERANKER_LLAMACPP_ARGS}: {error}\n"
+                "Check the Lemonade Server log, or set enable_reranking=False."
+            ) from error
+
+    def _reranker_download_hint(self, model: str) -> str:
+        from gaia.llm.lemonade_launcher import (  # pylint: disable=import-outside-toplevel
+            describe_client_hint,
+        )
+
+        server = getattr(self.llm_client, "base_url", None) or "your Lemonade Server"
+        return (
+            f"Download {model}. {describe_client_hint('pull', model).instruction}\n"
+            f"Or download it in the Lemonade Model Manager ({server})."
+        )
+
+    def _send_rerank(
+        self, query: str, candidate_chunks: List[str], model: str
+    ) -> Dict[str, Any]:
+        try:
+            return self.llm_client.rerank(
+                query,
+                candidate_chunks,
+                model=model,
+                timeout=self.config.reranking_timeout,
+            )
+        except Exception as error:
+            # A user-run Lemonade keeps no saved options, so its own reload
+            # after an eviction brings the reranker back at the default batch.
+            batch_too_small = _RERANK_BATCH_TOO_SMALL in str(error).lower()
+            if not batch_too_small or not self.llm_client.is_users_server():
+                raise
+            self.log.warning(
+                f"Reranker {model} came back without {RERANKER_LLAMACPP_ARGS}; "
+                "reloading it with them and retrying once."
+            )
+        self._load_reranker(model)
+        return self.llm_client.rerank(
+            query,
+            candidate_chunks,
+            model=model,
+            timeout=self.config.reranking_timeout,
+        )
+
+    def _rerank_candidates(
+        self, query: str, candidate_chunks: List[str], model: str
+    ) -> Tuple[List[int], List[float]]:
+        if len(candidate_chunks) < 2:
+            return list(range(len(candidate_chunks))), [1.0] * len(candidate_chunks)
+        if len(query) > RERANK_QUERY_MAX_CHARS:
+            self.log.warning(
+                f"Search query is {len(query)} chars; only the first "
+                f"{RERANK_QUERY_MAX_CHARS} are used to rerank results."
+            )
+            query = query[:RERANK_QUERY_MAX_CHARS]
+        try:
+            response = self._send_rerank(query, candidate_chunks, model)
+            results = response.get("results")
+            if not isinstance(results, list):
+                raise ValueError("response has no results list")
+            ranked: List[Tuple[int, float]] = []
+            seen = set()
+            for item in results:
+                index = item.get("index") if isinstance(item, dict) else None
+                score = item.get("relevance_score") if isinstance(item, dict) else None
+                if (
+                    isinstance(index, bool)
+                    or not isinstance(index, int)
+                    or index < 0
+                    or index >= len(candidate_chunks)
+                    or index in seen
+                    or isinstance(score, bool)
+                    or not isinstance(score, (int, float))
+                    or not math.isfinite(float(score))
+                ):
+                    raise ValueError("response contains an invalid rerank result")
+                seen.add(index)
+                ranked.append((index, float(score)))
+            if len(ranked) != len(candidate_chunks):
+                raise ValueError("response does not score every candidate")
+            ranked.sort(key=lambda result: result[1], reverse=True)
+            order = [index for index, _ in ranked]
+            scores = []
+            for _, logit in ranked:
+                # Stable sigmoid: math.exp overflows on large negative logits.
+                if logit >= 0:
+                    scores.append(1.0 / (1.0 + math.exp(-logit)))
+                else:
+                    scores.append(math.exp(logit) / (1.0 + math.exp(logit)))
+            return order, scores
+        except Exception as error:
+            stop = _stop_behind(error)
+            if stop is not None:
+                raise stop from error
+            raise RuntimeError(
+                f"Lemonade rerank failed for model {model}: {error}"
+            ) from error
+
     def _search_chunks(self, query: str) -> Dict[str, Any]:
-        """Retrieve relevant chunks and indices from a consistent snapshot."""
+        """Retrieve chunks from a snapshot, optionally reranking FAISS candidates."""
         snapshot = self._snapshot_query_state()
         chunks_snapshot = snapshot["chunks"]
         index_snapshot = snapshot["index"]
 
         self._load_embedder()
+        reranking_model = self._resolve_reranking_model()
 
         # Generate query embedding
         if self.config.show_stats:
@@ -4901,13 +5275,21 @@ These positions indicate where to split the text."""
         self.log.debug(f"Encoding query: {query[:50]}...")
         query_embedding = self._encode_query(query)
 
-        # Search for similar chunks
-        k = min(self.config.max_chunks, len(chunks_snapshot))
+        # Search for similar chunks; reranking widens the candidate pool.
+        result_limit = min(self.config.max_chunks, len(chunks_snapshot))
+        multiplier = max(1, int(self.config.reranking_candidate_multiplier))
+        candidate_limit = (
+            min(len(chunks_snapshot), result_limit * multiplier)
+            if reranking_model
+            else result_limit
+        )
         if self.config.show_stats:
-            print(f"  🎯 Finding {k} most relevant chunks...")
-        # A document indexed under two names would fill the top k with copies,
-        # so identical chunks count once: fetch more until k distinct remain.
-        fetch = k
+            print(f"  🎯 Finding {candidate_limit} most relevant chunks...")
+
+        # Fetch enough candidates to keep candidate_limit distinct chunks. This
+        # prevents identical indexed copies from consuming reranker slots or
+        # hiding a different chunk from the model.
+        fetch = candidate_limit
         while True:
             # pylint: disable=no-value-for-parameter
             distances, indices = index_snapshot.search(
@@ -4928,16 +5310,33 @@ These positions indicate where to split the text."""
                 if chunk in position:
                     duplicate_indices[position[chunk]].append(idx)
                     continue
-                if len(retrieved_chunks) == k:
+                if len(retrieved_chunks) == candidate_limit:
                     continue
                 position[chunk] = len(retrieved_chunks)
                 retrieved_indices.append(idx)
                 retrieved_chunks.append(chunk)
                 scores.append(1.0 / (1.0 + float(dist)))
                 duplicate_indices.append([])
-            if len(retrieved_chunks) == k or fetch >= len(chunks_snapshot):
+
+            if len(retrieved_chunks) == candidate_limit or fetch >= len(
+                chunks_snapshot
+            ):
                 break
             fetch = min(len(chunks_snapshot), fetch * 2)
+
+        # A lone candidate keeps its vector score; there is nothing to reorder.
+        if reranking_model and len(retrieved_chunks) > 1:
+            order, rerank_scores = self._rerank_candidates(
+                query, retrieved_chunks, reranking_model
+            )
+            retrieved_indices = [retrieved_indices[i] for i in order]
+            retrieved_chunks = [retrieved_chunks[i] for i in order]
+            duplicate_indices = [duplicate_indices[i] for i in order]
+            scores = rerank_scores
+        retrieved_indices = retrieved_indices[:result_limit]
+        retrieved_chunks = retrieved_chunks[:result_limit]
+        duplicate_indices = duplicate_indices[:result_limit]
+        scores = scores[:result_limit]
 
         if self.config.show_stats:
             avg_relevance = sum(scores) / len(scores) if scores else 0.0

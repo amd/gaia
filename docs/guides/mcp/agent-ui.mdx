@@ -52,14 +52,18 @@ Conversations initiated via MCP appear in the browser UI in real time, so you ca
 | `memory_get_conversation_turns` | Raw turn history for a session |
 | `memory_seed` | Seed knowledge rows directly (for tests/setup) |
 | `memory_clear` | Clear memory rows |
-| `open_session_in_browser` | Open a session in the default browser |
+| `open_session_in_browser` | Open a session in the default browser, signed in through a single-use launch link |
 
 `get_messages` retrieves every page up to the message count reported at the
 start of the call. Messages added during retrieval are available on the next
 call. A failed or prematurely empty page returns an explicit error rather than
 a partial transcript. Message text is cut to 2,000 characters and tool results to
 300; pass `full_replies=True` to get assistant replies whole (the eval judge does,
-so a long answer isn't judged on a clipped copy).
+so a long answer isn't judged on a clipped copy). A tool step that showed the
+user a card (a checklist, recipe, itinerary, calculator or table) also carries
+a `card` field with the card's text, up to 8,000 characters, so a reader that
+can't see the screen still sees the list the user got. `send_message` adds the
+same field to its tool steps.
 
 <Note>
   The `memory_*` tools are **conditional**. The read tools (`memory_stats`, `memory_list`,
@@ -114,7 +118,7 @@ so a long answer isn't judged on a clipped copy).
 </Steps>
 
 <Note>
-  The MCP server connects to the Agent UI backend at `http://localhost:4200` by default. If your backend runs on a different port, pass `--backend http://localhost:YOUR_PORT` after `--stdio`.
+  The MCP server connects to the Agent UI backend at `http://localhost:4200` by default. If your backend runs on a different port, pass `--backend http://localhost:YOUR_PORT` after `--stdio`. It sends the backend's [API token](/sdk/sdks/agent-ui#api-token), read from `agent-ui-token` in GAIA's home folder (or `GAIA_UI_TOKEN_FILE`), so start the backend once before calling a tool.
 </Note>
 
 ---

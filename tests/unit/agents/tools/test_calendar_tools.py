@@ -13,6 +13,7 @@ inferred. No network, no real calendar, no keychain.
 import json
 import re
 import sys
+import types
 import unicodedata
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -40,8 +41,10 @@ from gaia.agents.base.person_approval import (
     is_hidden,
     is_variation_selector,
     sendable_address,
+    strict_hidden,
     visible,
     visible_line,
+    visible_strict,
 )
 from gaia.agents.base.tool_grants import grant_scope
 from gaia.agents.base.tools import _TOOL_REGISTRY
@@ -1095,6 +1098,74 @@ class TestConnectionErrors:
         union = " ".join(sorted([mail, SCOPE_GRAPH_CALENDARS_READWRITE]))
         assert f"grants grant microsoft installed:gaia --scopes {union}" in error
 
+    @staticmethod
+    def _from(agent, surface):
+        config = getattr(agent, "config", None)
+        if config is None:
+            agent.config = types.SimpleNamespace(surface=surface)
+        else:
+            config.surface = surface
+
+    def test_in_the_agent_ui_not_connected_shows_the_connect_button(
+        self, monkeypatch, agent
+    ):
+        self._state(monkeypatch, {}, {})
+        self._from(agent, "agent_ui")
+        result = _run(agent, "list_calendar_events")
+        assert result["connect_card"] == {
+            "kind": "connect_account",
+            "providers": ["google", "microsoft"],
+            "agent_id": "installed:gaia",
+            # The calendar asks for calendar access, not mail.
+            "scopes": {
+                "google": ["https://www.googleapis.com/auth/calendar.events"],
+                "microsoft": ["https://graph.microsoft.com/Calendars.ReadWrite"],
+            },
+        }
+        assert "Connect button" in result["error"]
+        assert "never give or run a terminal command" in result["error"]
+        assert "gaia connectors" not in result["error"]
+
+    def test_in_the_agent_ui_a_missing_scope_is_a_reconnect(self, monkeypatch, agent):
+        self._state(
+            monkeypatch,
+            {"google": {"scopes": [GMAIL_READ, "openid"]}},
+            {"google": {"installed:gaia": [GMAIL_READ]}},
+        )
+        self._from(agent, "agent_ui")
+        result = _run(agent, "list_calendar_events")
+        assert "mail keeps working" in result["error"]
+        assert "gaia connectors" not in result["error"]
+        assert "--scopes" not in result["error"]
+        assert result["connect_card"]["providers"] == ["google", "microsoft"]
+
+    def test_in_the_agent_ui_a_missing_grant_is_a_setting_not_a_button(
+        self, monkeypatch, agent
+    ):
+        mail = "https://graph.microsoft.com/Mail.ReadWrite"
+        self._state(
+            monkeypatch,
+            {"microsoft": {"scopes": [mail, SCOPE_GRAPH_CALENDARS_READWRITE]}},
+            {"microsoft": {"installed:gaia": [mail]}},
+        )
+        self._from(agent, "agent_ui")
+        result = _run(agent, "list_calendar_events")
+        assert "Settings > Connectors" in result["error"]
+        assert "gaia connectors" not in result["error"]
+        # A button for Google would point away from the Microsoft fix.
+        assert "connect_card" not in result
+        assert "Connect button" not in result["error"]
+
+    def test_in_the_terminal_ui_there_is_no_button_and_no_command(
+        self, monkeypatch, agent
+    ):
+        self._state(monkeypatch, {}, {})
+        self._from(agent, "tui")
+        result = _run(agent, "list_calendar_events")
+        assert "GAIA desktop app, under Settings > Connectors" in result["error"]
+        assert "gaia connectors" not in result["error"]
+        assert "connect_card" not in result
+
     def test_a_busy_connection_says_busy_and_recovers(self, monkeypatch, agent):
         connections = {"google": {"scopes": [], "error": "busy"}}
         grants = {"google": {"installed:gaia": [SCOPE_GOOGLE_CALENDAR_EVENTS]}}
@@ -2137,8 +2208,8 @@ class TestThePromptShowsTheRealEvent:
         assert shown["calendar_account"] == ACCOUNT
 
     def test_a_relayed_card_gets_the_checked_values(self, make_agent):
-        from gaia.ui.email_sidecar import relay
-        from gaia.ui.email_sidecar.profiles import GAIA_PROFILE
+        from gaia.ui.sidecar import relay
+        from gaia.ui.sidecar.profiles import GAIA_PROFILE
         from gaia.ui.sse_translation import CanonicalTranslator
 
         lookalike = "ceo@\u0430pple.com"
@@ -2161,7 +2232,7 @@ class TestThePromptShowsTheRealEvent:
         (wire,) = CanonicalTranslator("r1", agent_id="gaia").translate(request)
         assert wire["args"]["notify_attendees"] == [lookalike]  # the model's own call
         ui = SSEOutputHandler()
-        ui.set_relay_confirmation = lambda _cid, _scope=None: None
+        ui.set_relay_confirmation = lambda _cid, _scope=None, _path=None: None
         relay._dispatch_one(ui, wire, GAIA_PROFILE, answers_confirmations=True)
         card = next(e for e in _events(ui) if e["type"] == "permission_request")
         assert card["args"]["notify_attendees"] == ["ceo@xn--pple-43d.com"]
@@ -2225,6 +2296,77 @@ def test_the_browser_parity_fixture_matches_python():
     """
     stored = json.loads(_PARITY_FIXTURE.read_text(encoding="utf-8"))
     assert stored == _parity_cases()
+
+
+_NAME_PARITY_FIXTURE = _PARITY_FIXTURE.with_name("approval-name-parity.json")
+
+
+def _name_parity_cases():
+    names = [
+        "inv\u200doice.txt",
+        "inv\u200coice.txt",
+        "report\u200e.txt",
+        "report\u200f.txt",
+        "\U0001f4c1\ufe0fnotes.txt",
+        "\u845b\U000e0100.txt",
+        "a\r\nb.txt",
+        "a\tb.txt",
+        "gi\u200dt status",
+    ]
+    return [
+        {"input": text, "shown": visible_strict(text)}
+        for text in _parity_inputs() + names
+    ]
+
+
+def test_the_browser_name_parity_fixture_matches_python():
+    """``visibleStrict`` in the UI test expects these exact strings.
+
+    After changing the rule, write ``_name_parity_cases()`` to the fixture as JSON.
+    """
+    stored = json.loads(_NAME_PARITY_FIXTURE.read_text(encoding="utf-8"))
+    assert stored == _name_parity_cases()
+
+
+class TestANameShowsEveryLookAlikeCharacter:
+    @pytest.mark.parametrize(
+        "name, shown",
+        [
+            ("inv\u200doice.txt", "inv[U+200D]oice.txt"),
+            ("inv\u200coice.txt", "inv[U+200C]oice.txt"),
+            ("C:/w/report\u200e.txt", "C:/w/report[U+200E].txt"),
+            ("C:/w/report\u200f.txt", "C:/w/report[U+200F].txt"),
+            ("\U0001f4c1\ufe0fnotes.txt", "\U0001f4c1[U+FE0F]notes.txt"),
+            ("\u845b\U000e0100.txt", "\u845b[U+E0100].txt"),
+            ("1\ufe0f\u20e3.txt", "1[U+FE0F]\u20e3.txt"),
+            ("a\r\nb.txt", "a[U+000D][U+000A]b.txt"),
+            ("a\tb.txt", "a[U+0009]b.txt"),
+            ("https://exa\u200dmple.com", "https://exa[U+200D]mple.com"),
+        ],
+    )
+    def test_each_shows_as_a_code(self, name, shown):
+        assert visible_strict(name) == shown
+
+    def test_ordinary_names_are_untouched(self):
+        for name in (
+            "notes.txt",
+            "C:\\Users\\me\\caf\u00e9.md",
+            "\u845b\u98fe\u533a.txt",
+        ):
+            assert visible_strict(name) == name
+
+    def test_an_address_is_refused_for_the_same_characters(self):
+        for char in ("\u200d", "\u200e", "\ufe0f", "\t"):
+            assert strict_hidden(char)
+            with pytest.raises(ValueError, match="invisible or control"):
+                sendable_address(f"da{char}na@example.com", "to")
+
+    def test_multi_line_content_keeps_emoji_joiners_as_written(self):
+        family = "\U0001f468\u200d\U0001f469\u200d\U0001f467"
+        body = (
+            f"family {family}\n\u2764\ufe0f and 1\ufe0f\u20e3\n\u0645\u06cc\u200c\u062e"
+        )
+        assert visible(body) == body and not has_hidden(body)
 
 
 @pytest.mark.usefixtures("no_env_preapproval")

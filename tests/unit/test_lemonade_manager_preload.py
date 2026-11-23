@@ -259,6 +259,9 @@ def test_preload_failure_raises_actionable_and_does_not_poison_singleton(mock_cl
                 server_launcher="/usr/bin/lemond",
             ),
         ),
+        # The install here is the server in use: none other was chosen.
+        patch("gaia.llm.lemonade_client.configured_lemonade_url", return_value=None),
+        patch("gaia.llm.lemonade_launcher.gaia_runs_lemonade", return_value=False),
         pytest.raises(LemonadeClientError) as exc_info,
     ):
         LemonadeManager.ensure_ready(min_context_size=32768, quiet=True)

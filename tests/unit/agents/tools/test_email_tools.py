@@ -327,7 +327,9 @@ def test_401_names_the_fix():
     backend = make_backend(lambda r: httpx.Response(401, text="expired"))
     with pytest.raises(MailboxAuthError) as err:
         backend.list_inbox()
-    assert "gaia connectors" in str(err.value)
+    assert "needs reconnecting" in str(err.value)
+    # The tool adds how to reconnect, worded for the front-end asking.
+    assert err.value.connect == ("microsoft",)
 
 
 def test_403_names_the_missing_scope():
@@ -902,14 +904,14 @@ def test_email_tools_are_bundled_for_the_loader():
     """An unbundled tool can never be pulled in with its cohort."""
     # The chat agent is a separate hub package; the core unit-test job does not
     # install it. "Test Chat Agent" and "Test Gaia Agent" do, and run this there.
-    pytest.importorskip("gaia_agent")
-    from gaia_agent.tool_bundles import PROFILE_TOOL_CONFIGS
+    pytest.importorskip("gaiapy")
+    from gaiapy.tool_bundles import PROFILE_TOOL_CONFIGS
 
     bundles = {b.name: b for b in PROFILE_TOOL_CONFIGS["full"].bundles}
     missing = {"email", "email_threads"} - set(bundles)
     assert not missing, (
         f"bundle(s) {missing} missing from the full profile: add them to "
-        "gaia_agent.tool_bundles.FULL_BUNDLES or the loader can never "
+        "gaiapy.tool_bundles.FULL_BUNDLES or the loader can never "
         "pull the email tools in as a cohort"
     )
     members = bundles["email"].members | bundles["email_threads"].members

@@ -29,16 +29,16 @@ FREEZE_SCRIPTS = [
 ]
 
 #: Every module a GAIA process starts from: console scripts, ``python -m``
-#: targets, and the flagship sidecar's transports. ``gaia_agent.entry`` imports
+#: targets, and the flagship sidecar's transports. ``gaiapy.entry`` imports
 #: nothing at module scope, so its ``main`` is run too.
 ENTRY_MODULES = [
     ("gaia.cli", False),
     ("gaia.ui.server", False),
     ("gaia.daemon.server", False),
     ("gaia.mcp.mcp_bridge", False),
-    ("gaia_agent.entry", True),
-    ("gaia_agent.stdio", False),
-    ("gaia_agent.server", False),
+    ("gaiapy.entry", True),
+    ("gaiapy.stdio", False),
+    ("gaiapy.server", False),
 ]
 
 # Records the environment at the moment numpy or faiss is first looked up, then
@@ -99,8 +99,8 @@ def test_a_user_set_pool_size_is_left_alone(name):
 def test_entry_point_caps_before_numpy_loads(module, run_main):
     if importlib.util.find_spec(module.split(".")[0]) is None:
         pytest.skip(f"{module} is not installed")
-    if module == "gaia_agent.server" and importlib.util.find_spec("fastapi") is None:
-        pytest.skip("gaia_agent.server needs the [ui] extra")
+    if module == "gaiapy.server" and importlib.util.find_spec("fastapi") is None:
+        pytest.skip("gaiapy.server needs the [ui] extra")
     result = subprocess.run(
         [sys.executable, "-c", _PROBE, module] + (["run-main"] if run_main else []),
         env=_clean_env(),

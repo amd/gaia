@@ -187,7 +187,7 @@ explains how to copy or download the credentials.
 2. Click **Settings** (gear) → **Connectors**.
 3. Click the **Google** tile to expand it.
 4. Paste the **Client ID** and **Client Secret** from Step 4.
-5. Click **Save & Connect**.
+5. Click **Save and connect**.
 
 Already past first-time setup (client came from env vars, or you need to
 rotate it)? Expand the tile's collapsible **OAuth client** section — it
@@ -224,6 +224,22 @@ completes.
   setup](/guides/email#setup) for the exact commands.
 </Note>
 
+### Remote and headless sign-in (SSH)
+
+When GAIA runs on a remote workstation, virtual machine, or headless server over SSH, a local browser cannot open automatically.
+
+To authorize from your local desktop browser:
+
+1. Run connect with an explicit callback port:
+   ```bash
+   gaia connectors connect google --callback-port 8085
+   ```
+2. Forward the chosen callback port from your local machine:
+   ```bash
+   ssh -L 8085:127.0.0.1:8085 <user>@<remote-host>
+   ```
+3. Open the printed authorization URL in your local browser. Once consent is granted, Google redirects to `http://127.0.0.1:8085/callback`, which forwards across the SSH tunnel to GAIA's listener.
+
 <Note>
   **`gaia connectors list` will still say `not configured` after the `configure`
   step — that is expected, not a failure.** For an OAuth connector, "configured"
@@ -235,12 +251,13 @@ completes.
 ## Step 6 — Grant scopes to specific agents
 
 Each agent must be granted the specific scopes it needs — a connection
-alone is not enough. In the Agent UI this happens **during connect**: the
-Google tile's connect panel shows **"Grant access to these agents when
-you connect"** with a default-on checkbox per installed agent that
-declares Google access, and checked agents receive their declared scopes
-the moment the OAuth flow completes. Uncheck an agent to withhold its
-grant, and adjust or revoke any grant later under the tile's
+alone is not enough. In the Agent UI this happens **during connect**:
+every installed agent that declares Google access receives its declared
+scopes the moment the OAuth flow completes. When more than one such agent
+is installed, the connect panel shows **"Grant access to these agents when
+you connect"** with a default-on checkbox per agent; uncheck one to
+withhold its grant. With GAIA the only agent, there is nothing to choose and
+the list is hidden. Adjust or revoke any grant later under the tile's
 **Per-agent grants** section.
 
 On the CLI, lead with `--grant-agent` — GAIA reads the scopes the agent
@@ -345,9 +362,10 @@ Google's own opaque failure page, shown **after** you complete the
 consent screen — not the "Google hasn't verified this app" interstitial
 from Step 5. GAIA never sees why: the browser lands on Google's error
 page instead of coming back to GAIA's loopback callback, so the callback
-handler never runs and the CLI/UI just times out once the sign-in window
-closes after 15 minutes (`Sign-in to google was not finished within 15
-minutes ...`) — that message will not name the real cause.
+handler never runs and the sign-in just times out once its window
+closes after 15 minutes: the CLI prints `Sign-in to google was not
+finished within 15 minutes ...` and the app says sign-in did not finish.
+Neither names the real cause.
 
 Nothing found while researching this guide ties this error page
 authoritatively to one cause for a loopback (Desktop-app) OAuth flow.
@@ -385,13 +403,43 @@ You either skipped pasting the Client Secret in Step 5, or the
 connection blob in your keyring predates a GAIA upgrade. Disconnect
 and reconnect from the UI to reset.
 
+## More than one Google account
+
+You can connect several Google accounts at once, for example a personal
+Gmail and a work one. In the Agent UI, open Settings → Connectors → Google
+and choose **Add another Google account**. With two or more, the card lists
+each account with its own state, **Make default** and **Disconnect**, and an
+account whose sign-in expired shows **Reconnect**. From the CLI:
+
+```bash
+gaia connectors connect google --add      # Google asks which account
+gaia connectors list google               # one line per account
+gaia connectors set-default google work@example.com
+```
+
+The first account you connect is the default, and agents use it unless they
+name another. Signing in again as an account you already connected updates
+it; it never replaces a different account. While your OAuth app is in
+Testing, add each account as a test user first.
+
+Agents you granted Google scopes can use every connected Google account.
+To remove one account, run `gaia connectors disconnect google --account
+<address>`; its token is revoked with Google and the others keep working.
+On a keyring GAIA won't read from (a plaintext or weakly encrypted backend,
+or a chain it can't inspect), the account is removed from this PC only and
+GAIA tells you to remove its access at
+[Google's permissions page](https://myaccount.google.com/permissions); see
+[Connectors security model](/security/connections).
+
 ## Revoking access
 
 Two places — both work:
 
 - **From GAIA**: Settings → Connectors → Google → **Disconnect**.
-  Removes the refresh token from the keyring; the next API call
-  errors with `NOT_CONNECTED`.
+  With one account, removes its refresh token from the keyring; the next API
+  call errors with `NOT_CONNECTED`. With several, each account has its own
+  **Disconnect** and the others keep working. If a **Disconnect** would remove
+  several accounts, GAIA lists them and asks first.
 - **From Google**: Follow Google's
   [instructions for removing an app's access](https://support.google.com/accounts/answer/13533235)
   for your OAuth client. Useful if you've lost the laptop the keyring

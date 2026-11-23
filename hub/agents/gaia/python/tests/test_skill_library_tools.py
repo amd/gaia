@@ -4,9 +4,9 @@
 
 Two things these tests refuse to take on faith.
 
-**Activation is asserted on the composed system prompt, never on a flag.**
+**Activation is asserted on the composed prompt, never on a flag.**
 ``load_skill`` returning ``{"status": "success"}`` proves a dict was built; only
-the skill's body appearing in ``agent.system_prompt`` — and disappearing again
+the skill's body appearing in ``agent._prompt_text()`` — and disappearing again
 on unload — proves the model will actually see it.
 
 **The install path is exercised, not mocked.** ``install_skill`` runs against a
@@ -41,17 +41,23 @@ _REPO_ROOT = Path(__file__).resolve().parents[5]
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
-pytest.importorskip("gaia_agent")
+pytest.importorskip("gaiapy")
 
-from gaia_agent.agent import GaiaAgent, GaiaAgentConfig  # noqa: E402
-from gaia_agent.skill_tools import SKILL_LIBRARY_TOOL_NAMES  # noqa: E402
+from gaiapy.agent import GaiaAgent, GaiaAgentConfig  # noqa: E402
 
+from gaia.agents.base.history import (  # noqa: E402
+    MEMORY_CONTEXT_FOOTER,
+    MEMORY_CONTEXT_HEADER,
+)
+from gaia.agents.tools.skill_library_tools import SKILL_LIBRARY_TOOL_NAMES  # noqa: E402
 from gaia.skills.capture import (  # noqa: E402
     published_skill_names as _REAL_PUBLISHED_SKILL_NAMES,
 )
 from gaia.skills.manager import SkillManager  # noqa: E402
 from gaia.skills.signing import TrustStore  # noqa: E402
 from tests.unit.skills_helpers import fake_hub, write_audit_report  # noqa: E402
+
+pytestmark = pytest.mark.usefixtures("user_terminal")
 
 SKILLS_PROMPT_HEADER = "==== LOADED SKILLS ===="
 
@@ -222,11 +228,11 @@ def session(library):
     )
     agent.rebuild_system_prompt()
 
-    from gaia_agent.skill_tools import estimate_prompt_tokens
+    from gaia.agents.tools.skill_library_tools import estimate_prompt_tokens
 
     return SimpleNamespace(
         agent=agent,
-        baseline_prompt=agent.system_prompt,
+        baseline_prompt=agent._prompt_text(),
         # The always-on set (gaia-voice, per gaia-agent.yaml) loads during
         # construction, so "clean" is this set — not an empty one.
         baseline_skills=frozenset(agent.loaded_skills),
@@ -404,7 +410,7 @@ def test_load_injects_the_skill_body_into_the_system_prompt(session):
 
     assert result["status"] == "success", result
     assert result["already_loaded"] is False
-    prompt = session.agent.system_prompt
+    prompt = session.agent._prompt_text()
     assert SKILLS_PROMPT_HEADER in prompt
     assert NOTE_TAKER_MARKER in prompt, (
         "load_skill reported success but the body never reached the composed "
@@ -415,12 +421,12 @@ def test_load_injects_the_skill_body_into_the_system_prompt(session):
 
 def test_unload_removes_the_body_from_the_system_prompt(session):
     call(session, "load_skill", name="note-taker")
-    assert NOTE_TAKER_MARKER in session.agent.system_prompt
+    assert NOTE_TAKER_MARKER in session.agent._prompt_text()
 
     result = call(session, "unload_skill", name="note-taker")
 
     assert result["status"] == "success", result
-    prompt = session.agent.system_prompt
+    prompt = session.agent._prompt_text()
     assert NOTE_TAKER_MARKER not in prompt, (
         "unload_skill reported success but the body is still in the prompt — the "
         "skill was un-flagged, not unloaded."
@@ -438,7 +444,7 @@ def test_loading_twice_is_idempotent(session):
     second = call(session, "load_skill", name="note-taker")
 
     assert second["already_loaded"] is True
-    assert session.agent.system_prompt.count(NOTE_TAKER_MARKER) == 1
+    assert session.agent._prompt_text().count(NOTE_TAKER_MARKER) == 1
 
 
 def test_load_names_companions_that_are_not_loaded_yet(session):
@@ -511,7 +517,7 @@ def test_load_refuses_a_skill_that_asks_for_shell_execute(session):
     assert "shell" in result["error"]
     # gaia-voice is always-on, so the claim is that no TASK skill loaded.
     assert set(session.agent.loaded_skills) == session.baseline_skills
-    assert SHELL_RUNNER_MARKER not in session.agent.system_prompt
+    assert SHELL_RUNNER_MARKER not in session.agent._prompt_text()
 
 
 @pytest.mark.parametrize(
@@ -578,7 +584,7 @@ def test_load_refuses_code_from_an_ungated_claude_import(session):
     assert Path(parsed.source) == session.library.claude / "imported-code"
     # gaia-voice is always-on, so the claim is that no TASK skill loaded.
     assert set(session.agent.loaded_skills) == session.baseline_skills
-    assert IMPORTED_CODE_MARKER not in session.agent.system_prompt
+    assert IMPORTED_CODE_MARKER not in session.agent._prompt_text()
     assert "imported-code/imported_probe" not in session.agent._tools_registry
 
 
@@ -636,7 +642,7 @@ def test_instruction_only_imports_still_load(session):
     result = call(session, "load_skill", name="imported-prose")
 
     assert result["status"] == "success", result
-    assert IMPORTED_PROSE_MARKER in session.agent.system_prompt
+    assert IMPORTED_PROSE_MARKER in session.agent._prompt_text()
 
 
 def test_install_refuses_an_unsigned_skill(session, hub, tmp_path):
@@ -714,19 +720,19 @@ def test_install_then_load_a_signed_community_skill(session, hub, tmp_path):
     assert "load_skill('trusted-brief')" in installed["next_step"]
     assert (session.library.user / "trusted-brief" / "SKILL.md").is_file()
     # Installing is not activating.
-    assert PUBLISHED_MARKER not in session.agent.system_prompt
+    assert PUBLISHED_MARKER not in session.agent._prompt_text()
 
     loaded = call(session, "load_skill", name="trusted-brief")
 
     assert loaded["status"] == "success", loaded
-    assert PUBLISHED_MARKER in session.agent.system_prompt
+    assert PUBLISHED_MARKER in session.agent._prompt_text()
 
     removed = call(session, "remove_skill", name="trusted-brief")
 
     assert removed["status"] == "success", removed
     assert removed["unloaded_from_session"] is True
     assert not (session.library.user / "trusted-brief").exists()
-    assert PUBLISHED_MARKER not in session.agent.system_prompt
+    assert PUBLISHED_MARKER not in session.agent._prompt_text()
 
 
 def test_install_honours_a_version_pin(session, hub, tmp_path):
@@ -797,8 +803,8 @@ def test_installing_a_skill_the_agent_bundles_says_the_bundled_copy_loads(
 
         loaded = call(session, "load_skill", name="note-taker")
         assert loaded["status"] == "success", loaded
-        assert NOTE_TAKER_MARKER in session.agent.system_prompt
-        assert PUBLISHED_MARKER not in session.agent.system_prompt
+        assert NOTE_TAKER_MARKER in session.agent._prompt_text()
+        assert PUBLISHED_MARKER not in session.agent._prompt_text()
     finally:
         call(session, "remove_skill", name="note-taker")
 
@@ -964,6 +970,135 @@ def test_other_install_failures_keep_their_message_and_do_not_block_capture(
     call(session, "remove_skill", name="plain-refusal")
 
 
+class _WebClient:
+    """Stands in for WebClient; serves one body for every URL and records them."""
+
+    calls: list = []
+    body = b""
+
+    def __init__(self, *_args, **_kwargs):
+        pass
+
+    def get(self, url: str, **_kwargs):
+        type(self).calls.append(url)
+        return SimpleNamespace(
+            content=type(self).body, headers={"Content-Type": "text/plain"}, url=url
+        )
+
+
+@pytest.fixture
+def web(monkeypatch):
+    _WebClient.calls = []
+    _WebClient.body = b""
+    monkeypatch.setattr("gaia.web.client.WebClient", _WebClient)
+    return _WebClient
+
+
+def test_after_a_tampered_install_no_guessed_url_or_path_is_even_fetched(
+    session, hub, web, tmp_path
+):
+    """The bypass: a tampered install, then capture from wherever it might live."""
+    from gaia.skills.capture import failed_verification_message
+
+    _publish_signed(hub, tmp_path, "sealed-notes")
+    _repack_with_extra_file(hub, tmp_path, "sealed-notes")
+    installed = call(session, "install_skill", name="sealed-notes")
+    assert installed["error_type"] == "SkillSignatureError"
+
+    # Served content renamed, so only the source itself can give the skill away.
+    web.body = _pasted("innocent-name").encode("utf-8")
+    local = tmp_path / "downloads" / "sealed-notes"
+    local.mkdir(parents=True)
+    (local / "SKILL.md").write_text(_pasted("innocent-name"), encoding="utf-8")
+    sources = [
+        "https://raw.githubusercontent.com/amd/gaia/main/hub/skills/sealed-notes/SKILL.md",
+        "https://github.com/someone/skills/archive/sealed-notes-1.0.0.zip",
+        "https://mirror.example/download?skill=sealed-notes",
+        "https://mirror.example/SEALED-NOTES/SKILL.md",
+        "https://mirror.example/sealed%2Dnotes/SKILL.md",
+        "https://mirror.example/sealed%252Dnotes/SKILL.md",
+        "https://mirror.example/sealed_notes/SKILL.md",
+        "https://mirror.example/x\\sealed-notes\\SKILL.md",
+        f"{hub.store.BASE_URL}/skills/sealed-notes/1.0.0/sealed-notes-1.0.0.zip",
+        str(local),
+    ]
+    for source in sources:
+        captured = call(session, "capture_skill", source=source)
+        assert captured["status"] == "error", source
+        assert captured["error"] == failed_verification_message("sealed-notes")
+    assert web.calls == [], "a refused source must never be fetched"
+    assert not (session.library.user / "innocent-name").exists()
+    assert not (session.library.user / "sealed-notes").exists()
+
+
+def test_a_redirect_to_the_refused_skill_is_refused(
+    session, hub, web, tmp_path, monkeypatch
+):
+    from gaia.skills.capture import failed_verification_message
+
+    _publish_signed(hub, tmp_path, "sealed-notes")
+    _repack_with_extra_file(hub, tmp_path, "sealed-notes")
+    call(session, "install_skill", name="sealed-notes")
+
+    def _redirected(self, url, **_kwargs):
+        type(self).calls.append(url)
+        return SimpleNamespace(
+            content=_pasted("innocent-name").encode("utf-8"),
+            headers={"Content-Type": "text/plain"},
+            url="https://mirror.example/sealed-notes/SKILL.md",
+        )
+
+    monkeypatch.setattr(_WebClient, "get", _redirected)
+    captured = call(session, "capture_skill", source="https://short.example/r/1")
+
+    assert captured["error"] == failed_verification_message("sealed-notes")
+    assert not (session.library.user / "innocent-name").exists()
+
+
+def test_an_unrelated_capture_still_works_after_a_tampered_install(
+    session, hub, web, tmp_path
+):
+    _publish_signed(hub, tmp_path, "sealed-notes")
+    _repack_with_extra_file(hub, tmp_path, "sealed-notes")
+    call(session, "install_skill", name="sealed-notes")
+
+    # Near misses share text with the refused name but name a different skill.
+    landed = []
+    for name, url in (
+        ("meeting-notes", "https://mirror.example/meeting-notes/SKILL.md"),
+        ("unsealed-notes", "https://mirror.example/unsealed-notes/SKILL.md"),
+        ("sealed-notes-extra", "https://mirror.example/sealed-notes-extra/SKILL.md"),
+    ):
+        web.body = _pasted(name).encode("utf-8")
+        captured = call(session, "capture_skill", source=url)
+        assert captured["status"] == "success", (url, captured)
+        landed.append(name)
+    pasted = call(session, "capture_skill", source=_pasted("my-own-notes"))
+    assert pasted["status"] == "success", pasted
+    landed.append("my-own-notes")
+    for name in landed:
+        call(session, "remove_skill", name=name)
+
+
+def test_a_network_failure_on_install_does_not_block_capture(
+    session, hub, web, monkeypatch
+):
+    def _offline(url: str) -> bytes:
+        raise OSError(f"network unreachable: {url}")
+
+    monkeypatch.setattr("gaia.skills.hub.fetch_bytes", _offline)
+    installed = call(session, "install_skill", name="flaky-notes")
+    assert installed["status"] == "error"
+    assert FINAL_SENTENCE not in installed["error"]
+
+    web.body = _pasted("flaky-notes").encode("utf-8")
+    captured = call(
+        session, "capture_skill", source="https://mirror.example/flaky-notes/SKILL.md"
+    )
+    assert captured["status"] == "success", captured
+    call(session, "remove_skill", name="flaky-notes")
+
+
 def test_capture_refuses_what_the_configured_hub_publishes(
     session, hub, tmp_path, monkeypatch
 ):
@@ -1011,7 +1146,7 @@ def test_load_surfaces_a_tools_required_gap(session):
     assert result["status"] == "success"
     assert result["unmet_tools_required"] == ["launch_the_missiles"]
     assert "launch_the_missiles" in result["warning"]
-    assert NEEDS_TOOLS_MARKER in session.agent.system_prompt
+    assert NEEDS_TOOLS_MARKER in session.agent._prompt_text()
 
 
 def test_load_surfaces_a_missing_command_that_has_a_substitute(session, monkeypatch):
@@ -1151,7 +1286,10 @@ class TestTheListViewNeverLosesASkill:
     """
 
     def test_a_long_description_is_summarised(self):
-        from gaia_agent.skill_tools import _LIST_DESCRIPTION_CHARS, _summarize
+        from gaia.agents.tools.skill_library_tools import (
+            _LIST_DESCRIPTION_CHARS,
+            _summarize,
+        )
 
         summary = _summarize("x" * 5000)
         assert len(summary) < 5000
@@ -1162,12 +1300,12 @@ class TestTheListViewNeverLosesASkill:
         )
 
     def test_a_short_description_is_untouched(self):
-        from gaia_agent.skill_tools import _summarize
+        from gaia.agents.tools.skill_library_tools import _summarize
 
         assert _summarize("Triage GitHub issues.") == "Triage GitHub issues."
 
     def test_missing_description_does_not_explode(self):
-        from gaia_agent.skill_tools import _summarize
+        from gaia.agents.tools.skill_library_tools import _summarize
 
         assert _summarize("") == ""
         assert _summarize(None) == ""
@@ -1176,8 +1314,7 @@ class TestTheListViewNeverLosesASkill:
         """36 skills with 1KB descriptions each must still fit the NPU."""
         import json
 
-        from gaia_agent.skill_tools import _summarize
-
+        from gaia.agents.tools.skill_library_tools import _summarize
         from gaia.llm.lemonade_client import truncation_budget
 
         entries = [
@@ -1325,7 +1462,8 @@ class TestCaptureSkillTool:
 
         loaded = call(session, "load_skill", name="captured-notes")
         assert loaded["status"] == "success"
-        assert CAPTURED_MARKER in session.agent.system_prompt
+        assert CAPTURED_MARKER in session.agent._prompt_text()
+        call(session, "remove_skill", name="captured-notes")
 
     def test_captured_code_is_inert_until_promoted(self, session, tmp_path):
         """The full lifecycle: capture → load (tools deferred, said honestly)
@@ -1341,7 +1479,7 @@ class TestCaptureSkillTool:
         loaded = call(session, "load_skill", name="shouter")
         assert loaded["status"] == "success"
         # Instructions in, code out — and the payload says so.
-        assert CAPTURED_MARKER in session.agent.system_prompt
+        assert CAPTURED_MARKER in session.agent._prompt_text()
         assert "shouter/shout" not in session.agent._tools_registry
         assert loaded["registered_tools"] == []
         assert loaded["deferred_tools"] == ["shout"]
@@ -1359,6 +1497,7 @@ class TestCaptureSkillTool:
             session.agent._tools_registry["shouter/shout"]["function"](text="hi")
             == "HI"
         )
+        call(session, "remove_skill", name="shouter")
 
     def test_capture_block_refuses_and_writes_nothing(self, session):
         hostile = "\n".join(
@@ -1382,3 +1521,103 @@ class TestCaptureSkillTool:
         result = call(session, "capture_skill", source="whatever", name="../evil")
         assert result["status"] == "error"
         assert "not a skill name" in result["error"]
+
+
+# ---------------------------------------------------------------------------
+# /<skill-name> typed by the user
+# ---------------------------------------------------------------------------
+
+
+def test_a_typed_skill_command_loads_the_skill_and_frames_the_request(session):
+    agent = session.agent
+    sent = agent._expand_skill_command("/note-taker summarize this chat")
+
+    assert "note-taker" in agent.loaded_skills
+    assert NOTE_TAKER_MARKER in agent._prompt_text()
+    assert sent.startswith("[GAIA: the user typed /note-taker")
+    assert sent.endswith("\n\nsummarize this chat")
+    assert agent.describe_skills()[-1] == {"name": "note-taker", "how": "user"}
+
+
+def test_the_skill_body_survives_the_turns_skill_selection(session):
+    """The per-turn selector must not hide the body the user just asked for."""
+    agent = session.agent
+    sent = agent._expand_skill_command("/note-taker")
+
+    agent._refresh_active_skill_filter(sent)
+
+    assert NOTE_TAKER_MARKER in agent._prompt_text()
+    assert "No request was typed after the command" in sent
+
+
+def test_process_query_sends_the_framed_request(session, monkeypatch):
+    seen = []
+    monkeypatch.setattr(
+        session.agent,
+        "_process_query_impl",
+        lambda user_input, *a, **k: seen.append(user_input) or {"result": ""},
+    )
+    monkeypatch.setattr(
+        session.agent, "get_memory_dynamic_context", lambda: "Current time: noon"
+    )
+    session.agent.process_query("/note-taker take notes")
+
+    memory, _, sent = seen[0].partition(MEMORY_CONTEXT_FOOTER + "\n\n")
+    assert memory.startswith(MEMORY_CONTEXT_HEADER)
+    assert sent.startswith("[GAIA: the user typed /note-taker")
+    assert sent.endswith("take notes")
+    assert "note-taker" in session.agent.loaded_skills
+
+
+@pytest.mark.parametrize(
+    "text",
+    ["/tmp/report.txt summarize it", "/not-installed hi", "/etc", "hi /note-taker"],
+)
+def test_text_that_names_no_installed_skill_passes_through(session, text):
+    assert session.agent._expand_skill_command(text) == text
+    assert "note-taker" not in session.agent.loaded_skills
+
+
+def test_a_refused_skill_is_reported_not_run(session):
+    sent = session.agent._expand_skill_command("/imported-code do the thing")
+
+    assert "imported-code" not in session.agent.loaded_skills
+    assert "could not be turned on" in sent
+    assert "Do not attempt their request without the skill" in sent
+    assert "gaia skill import" in sent
+
+
+@pytest.mark.parametrize("pattern", ["load_skill", "load_*"])
+def test_a_typed_command_is_refused_while_load_skill_is_withheld(
+    session, monkeypatch, pattern
+):
+    monkeypatch.setattr(session.agent, "_denied_tool_patterns", (pattern,))
+
+    sent = session.agent._expand_skill_command("/note-taker take notes")
+
+    assert "note-taker" not in session.agent.loaded_skills
+    assert NOTE_TAKER_MARKER not in session.agent._prompt_text()
+    assert "could not be turned on" in sent
+    assert "load_skill tool is withheld" in sent
+    assert "Do not attempt their request without the skill" in sent
+    assert sent.endswith("Their request was: take notes")
+
+
+def test_a_typed_command_for_a_loaded_skill_still_runs_while_withheld(
+    session, monkeypatch
+):
+    session.agent._expand_skill_command("/note-taker")
+    monkeypatch.setattr(session.agent, "_denied_tool_patterns", ("load_skill",))
+
+    sent = session.agent._expand_skill_command("/note-taker take notes")
+
+    assert "It is loaded" in sent
+    assert sent.endswith("\n\ntake notes")
+
+
+def test_a_folder_note_in_front_of_the_command_is_kept(session):
+    note = "[This chat is working in the folder C:\\work. When the user says it.]"
+    sent = session.agent._expand_skill_command(f"{note}\n\n/note-taker go")
+
+    assert sent.startswith(note + "\n\n[GAIA: the user typed /note-taker")
+    assert "note-taker" in session.agent.loaded_skills

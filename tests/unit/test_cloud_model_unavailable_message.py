@@ -117,6 +117,20 @@ def test_agent_ui_wording_replaces_only_the_tui_hint():
     assert _agent_ui_wording(shown) == shown
 
 
+def test_agent_ui_wording_points_a_local_only_refusal_at_the_app_setting():
+    from gaia.llm.local_only import SETTINGS_HINT
+
+    blocked = (
+        "Local only is on, so 'othercloud.big-model' was blocked: it is a cloud "
+        f"model. Pick a local model. {SETTINGS_HINT}"
+    )
+    shown = _agent_ui_wording(blocked)
+    assert "gaia config" not in shown
+    assert shown.endswith("turn off Local only under Settings > Privacy.")
+    # The CLI keeps its command.
+    assert "gaia config set network_policy cloud_allowed" in SETTINGS_HINT
+
+
 @pytest.mark.parametrize("text", ["", "All done.", "Use /model in the TUI to pick"])
 def test_agent_ui_wording_leaves_other_text_alone(text):
     assert _agent_ui_wording(text) == text

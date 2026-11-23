@@ -7,6 +7,7 @@
 // default are optional here even though the server always sends them.
 
 export interface ApiSchemas {
+  AccountUpdateRequest: AccountUpdateRequest;
   ActivationRequest: ActivationRequest;
   AdminClearRequest: AdminClearRequest;
   AdminSeedItem: AdminSeedItem;
@@ -26,6 +27,7 @@ export interface ApiSchemas {
   ChatRequest: ChatRequest;
   CommandOutputResponse: CommandOutputResponse;
   CommitRequest: CommitRequest;
+  Component: Component;
   ConfigureRequest: ConfigureRequest;
   ConnectRequest: ConnectRequest;
   ContextRequest: ContextRequest;
@@ -34,12 +36,17 @@ export interface ApiSchemas {
   CreateSessionRequest: CreateSessionRequest;
   CustomModelRequest: CustomModelRequest;
   DeviceUsage: DeviceUsage;
+  DiscordConnectRequest: DiscordConnectRequest;
+  DiscordStartRequest: DiscordStartRequest;
   DiscoveryCommit: DiscoveryCommit;
   DiscoveryCommitItem: DiscoveryCommitItem;
+  DismissDownloadRequest: DismissDownloadRequest;
   DocumentListResponse: DocumentListResponse;
   DocumentResponse: DocumentResponse;
   DocumentUploadRequest: DocumentUploadRequest;
   DownloadProgress: DownloadProgress;
+  EditScheduleRequest: EditScheduleRequest;
+  EmbedderBody: EmbedderBody;
   EvalMailboxRequest: EvalMailboxRequest;
   FileEntry: FileEntry;
   FileListResponse: FileListResponse;
@@ -60,6 +67,9 @@ export interface ApiSchemas {
   GpuMemoryRevertRequest: GpuMemoryRevertRequest;
   GrantRequest: GrantRequest;
   HTTPValidationError: HTTPValidationError;
+  ImageModel: ImageModel;
+  ImageSettings: ImageSettings;
+  ImageSettingsUpdate: ImageSettingsUpdate;
   IndexFolderRequest: IndexFolderRequest;
   IndexFolderResponse: IndexFolderResponse;
   InferenceCommit: InferenceCommit;
@@ -88,9 +98,11 @@ export interface ApiSchemas {
   ModelStatus: ModelStatus;
   NetworkUsage: NetworkUsage;
   OpenFileRequest: OpenFileRequest;
+  PageElement: PageElement;
   ParseScheduleRequest: ParseScheduleRequest;
   ParseScheduleResponse: ParseScheduleResponse;
   PermissionModeRequest: PermissionModeRequest;
+  PickedRect: PickedRect;
   PolicyNotice: PolicyNotice;
   PreflightReport: PreflightReport;
   PullRequestRequest: PullRequestRequest;
@@ -117,8 +129,11 @@ export interface ApiSchemas {
   SettingsResponse: SettingsResponse;
   SettingsUpdateRequest: SettingsUpdateRequest;
   SetupRunRequest: SetupRunRequest;
+  SkillLinkAddRequest: SkillLinkAddRequest;
+  SkillLinkRequest: SkillLinkRequest;
   SkipModelRequest: SkipModelRequest;
   SourceInfo: SourceInfo;
+  SourceLoc: SourceLoc;
   SpeakRequest: SpeakRequest;
   SpeechModel: SpeechModel;
   SpeechSettings: SpeechSettings;
@@ -128,6 +143,7 @@ export interface ApiSchemas {
   TaskCreate: TaskCreate;
   TaskStatusUpdate: TaskStatusUpdate;
   ToolConfirmRequest: ToolConfirmRequest;
+  TurnRouteResponse: TurnRouteResponse;
   TurnSummaryCost: TurnSummaryCost;
   TurnSummaryDocument: TurnSummaryDocument;
   TurnSummaryFile: TurnSummaryFile;
@@ -150,6 +166,13 @@ export interface ApiSchemas {
   WorkInProgress: WorkInProgress;
   gaia__ui__routers__setup__DownloadModelRequest: Gaia_Ui_Routers_Setup__DownloadModelRequest;
   gaia__ui__routers__system__DownloadModelRequest: Gaia_Ui_Routers_System__DownloadModelRequest;
+}
+/**
+ * Body for ``PATCH /api/connectors/{id}/accounts/{account_id}``. Only
+ * ``true`` is accepted: to change the default, make another account it.
+ */
+export interface AccountUpdateRequest {
+  is_default: boolean;
 }
 /**
  * Body for ``PUT /api/connectors/{id}/activations/{agent_id}``.
@@ -233,13 +256,16 @@ export interface AgentListResponse {
  */
 export interface AgentStepResponse {
   active?: boolean;
+  autoDeclined?: boolean | null;
   commandOutput?: CommandOutputResponse | null;
   currentStep?: number | null;
   data?: unknown;
   decision?: string | null;
+  declined?: boolean | null;
   detail?: string | null;
   fileList?: FileListResponse | null;
   id: number;
+  kept?: boolean | null;
   label: string;
   latencyMs?: number | null;
   mcpOutput?: McpOutputResponse | null;
@@ -247,15 +273,18 @@ export interface AgentStepResponse {
   mcpServerLabel?: string | null;
   mcpTool?: string | null;
   narration?: string | null;
+  needsModel?: string | null;
   planNarrations?: string[] | null;
   planSteps?: string[] | null;
   policyVersion?: string | null;
   reason?: string | null;
   receiptId?: string | null;
+  refused?: boolean | null;
   render?: string | null;
   result?: string | null;
   ruleIds?: string[] | null;
   success?: boolean | null;
+  timedOut?: boolean | null;
   timestamp?: number;
   tool?: string | null;
   type: string;
@@ -295,6 +324,8 @@ export interface AttachDocumentRequest {
   document_id: string;
 }
 export interface AuthorizeRequest {
+  account?: string | null;
+  add_account?: boolean;
   grant_agents?: string[];
   scopes?: string[];
 }
@@ -317,6 +348,7 @@ export interface BodyUploadFileApiFilesUploadPost {
 export interface BrowseResponse {
   current_path: string;
   entries: FileEntry[];
+  folder_refusal?: string | null;
   parent_path?: string | null;
   quick_links?: QuickLink[];
 }
@@ -362,8 +394,54 @@ export interface ChatRequest {
   agent_type?: string | null;
   document_ids?: string[] | null;
   message: string;
+  page_elements?:
+    | []
+    | [PageElement]
+    | [PageElement, PageElement]
+    | [PageElement, PageElement, PageElement]
+    | [PageElement, PageElement, PageElement, PageElement]
+    | [PageElement, PageElement, PageElement, PageElement, PageElement]
+    | [PageElement, PageElement, PageElement, PageElement, PageElement, PageElement]
+    | [PageElement, PageElement, PageElement, PageElement, PageElement, PageElement, PageElement]
+    | [PageElement, PageElement, PageElement, PageElement, PageElement, PageElement, PageElement, PageElement]
+    | null;
   session_id: string;
   stream?: boolean;
+}
+/**
+ * One composer chip as the renderer sends it. A toggle that is off sends null.
+ */
+export interface PageElement {
+  component?: Component | null;
+  cropUrl?: string | null;
+  label: string;
+  name: string;
+  outerHTML?: string | null;
+  rect: PickedRect;
+  ref: string;
+  role: string;
+  selector: string;
+  styles?: {
+    [k: string]: string | undefined;
+  } | null;
+  tag: string;
+  text: string;
+  title: string;
+  url: string;
+}
+export interface Component {
+  name: string;
+  source?: SourceLoc | null;
+}
+export interface SourceLoc {
+  file: string;
+  line: number;
+}
+export interface PickedRect {
+  height: number;
+  width: number;
+  x: number;
+  y: number;
 }
 export interface CommitRequest {
   /**
@@ -464,6 +542,14 @@ export interface DeviceUsage {
    */
   percent: number;
 }
+export interface DiscordConnectRequest {
+  model?: string | null;
+  token: string;
+}
+export interface DiscordStartRequest {
+  model?: string | null;
+  take_over?: boolean;
+}
 export interface DiscoveryCommit {
   items: DiscoveryCommitItem[];
 }
@@ -479,6 +565,9 @@ export interface DiscoveryCommitItem {
   due_at?: string | null;
   entity?: string | null;
   sensitive?: boolean;
+}
+export interface DismissDownloadRequest {
+  model_name: string;
 }
 /**
  * List of documents.
@@ -534,6 +623,29 @@ export interface DownloadProgress {
   state: string;
   total_bytes?: number;
   total_files?: number;
+}
+/**
+ * Request to change when a scheduled task runs and what it asks.
+ */
+export interface EditScheduleRequest {
+  /**
+   * New schedule, in the words the create form accepts
+   */
+  interval: string;
+  /**
+   * New prompt to execute on each run
+   */
+  prompt: string;
+  /**
+   * IANA time zone the schedule's times are in. Defaults to the server machine's zone.
+   */
+  timezone?: string | null;
+}
+/**
+ * ``npu`` or ``gpu``; None is the default (the GPU).
+ */
+export interface EmbedderBody {
+  device?: ("npu" | "gpu") | null;
 }
 export interface EvalMailboxRequest {
   attached: boolean;
@@ -630,8 +742,9 @@ export interface FollowUpRequest {
  * OAuth, no consent step.
  *
  * ``refresh_token`` / ``client_secret`` are secret INPUTS — they are never
- * echoed back in any response. ``account_email`` is display-only in v1
- * (the keyring slot is single-account per provider). ``grant_agents`` is
+ * echoed back in any response. ``account_email`` picks which stored account
+ * the forward replaces (the one with that address); with other accounts
+ * stored and no match, the forward is refused. ``grant_agents`` is
  * the list of namespaced agent ids (e.g. ``installed:email``) to grant the
  * forwarded scopes so they can resolve the connection ambiently.
  */
@@ -682,6 +795,34 @@ export interface ValidationError {
   msg: string;
   type: string;
 }
+export interface ImageModel {
+  default_size: string;
+  default_steps: number;
+  downloaded: boolean;
+  downloads_on_first_use: boolean;
+  id: string;
+  recipe?: string | null;
+  size_gb?: number | null;
+  sizes: string[];
+}
+export interface ImageSettings {
+  chat_model: string;
+  chat_model_creates_images: boolean;
+  max_steps?: number;
+  model: string;
+  model_available: boolean;
+  models: ImageModel[];
+  size: string | null;
+  steps: number | null;
+}
+/**
+ * Fields left out keep their value; ``null`` size or steps means automatic.
+ */
+export interface ImageSettingsUpdate {
+  model?: string | null;
+  size?: string | null;
+  steps?: number | null;
+}
 /**
  * Request to index all supported documents in a folder.
  */
@@ -698,6 +839,7 @@ export interface IndexFolderResponse {
   failed?: number;
   indexed?: number;
   skipped?: number;
+  skipped_images?: number;
 }
 export interface InferenceCommit {
   insights: InferenceCommitItem[];
@@ -724,10 +866,20 @@ export interface InferenceStatsResponse {
   output_tokens?: number;
   place?: string | null;
   retried?: boolean | null;
+  route?: TurnRouteResponse | null;
   seconds?: number | null;
   steps?: number | null;
   time_to_first_token?: number;
   tokens_per_second?: number;
+}
+/**
+ * The model a ``hybrid`` turn was routed to, and why.
+ */
+export interface TurnRouteResponse {
+  degraded?: boolean;
+  model: string;
+  notice?: string;
+  reason?: string;
 }
 /**
  * Summary of a boot-time initialization task (embedded in SystemStatus).
@@ -735,6 +887,7 @@ export interface InferenceStatsResponse {
 export interface InitTaskInfo {
   name: string;
   status: string;
+  step?: string | null;
 }
 /**
  * Body for ``POST /api/agents/install``.
@@ -864,8 +1017,10 @@ export interface MessageResponse {
   agent_steps?: AgentStepResponse[] | null;
   content: string;
   created_at: string;
+  failed?: boolean;
   id: number;
   library_notices?: string[] | null;
+  page_elements?: PageElement[] | null;
   rag_sources?: SourceInfo[] | null;
   role: string;
   session_id: string;
@@ -986,6 +1141,7 @@ export interface ModelServerInfo {
  * Status of a custom model on the Lemonade server.
  */
 export interface ModelStatus {
+  checked?: boolean;
   downloaded?: boolean;
   found?: boolean;
   loaded?: boolean;
@@ -1085,7 +1241,9 @@ export interface PermissionModeRequest {
  * Structured Local only notice translated by the Agent UI.
  */
 export interface PolicyNotice {
+  cause?: string | null;
   code: string;
+  models?: string[] | null;
   reason?: string | null;
   severity: "info" | "warning";
   url?: string | null;
@@ -1296,6 +1454,8 @@ export interface SettingsResponse {
   custom_model?: string | null;
   dynamic_tools?: boolean;
   dynamic_tools_locked?: boolean;
+  flagship_agent?: string;
+  gaiacpp_available?: boolean;
   model_status?: ModelStatus | null;
   network_policy?: "cloud_allowed" | "local_ai_only";
   policy_notices?: PolicyNotice[];
@@ -1322,6 +1482,10 @@ export interface SettingsUpdateRequest {
    */
   dynamic_tools?: boolean | null;
   /**
+   * Which program is the GAIA agent: gaiapy (the Python agent) or gaiacpp (the native C++ agent, beta). Applies from the next message. Choosing gaiacpp where it is not installed is refused. Omit the field to leave the choice unchanged.
+   */
+  flagship_agent?: ("gaiapy" | "gaiacpp") | null;
+  /**
    * Whether GAIA may use cloud AI models. Setting local_ai_only blocks cloud models, clears saved cloud model choices, and removes cloud keys from GAIA's running Lemonade server. Omit to leave the policy unchanged.
    */
   network_policy?: ("cloud_allowed" | "local_ai_only") | null;
@@ -1346,6 +1510,16 @@ export interface SetupRunRequest {
   skip_chat_model?: boolean;
   upgrade_embedded?: boolean;
 }
+export interface SkillLinkAddRequest {
+  allow_code?: boolean;
+  force?: boolean;
+  names?: string[] | null;
+  pin: string;
+  url: string;
+}
+export interface SkillLinkRequest {
+  url: string;
+}
 export interface SkipModelRequest {
   model_id: string;
   skipped?: boolean;
@@ -1364,9 +1538,11 @@ export interface SpeechModel {
 }
 export interface SpeechSettings {
   auto: boolean;
+  available?: boolean;
   max_speed?: number;
   min_speed?: number;
   speed: number;
+  unavailable_reason?: string | null;
   voice: string;
   voices: Voice[];
 }

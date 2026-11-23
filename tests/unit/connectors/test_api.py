@@ -212,8 +212,21 @@ class TestPublicSurface:
         assert result == {
             "revoke_supported": True,
             "revoked_remotely": True,
+            "revoke_attempted": True,
+            "nothing_stored": False,
             "revoke_error": None,
+            "account_id": "default",
+            "account_email": "alice@example.com",
+            "remaining_accounts": 0,
         }
+
+    def test_revoke_connection_with_nothing_stored_reports_it(self, google_provider):
+        result = revoke_connection("google")
+        assert list_connections() == []
+        assert result["revoke_supported"] is True
+        assert result["revoked_remotely"] is False
+        assert result["nothing_stored"] is True
+        assert result["revoke_error"] is None
 
     @respx.mock
     def test_revoke_connection_reports_remote_failure_honestly(self, seeded):
@@ -357,7 +370,7 @@ class TestTenantMismatchThreading:
                 provider="microsoft",
                 scopes=["https://graph.microsoft.com/Mail.ReadWrite"],
                 agent_id=None,
-                account_email="default",
+                slot="default",
             )
         assert exc.value.reason is AuthRequiredError.Reason.TENANT_MISMATCH
 

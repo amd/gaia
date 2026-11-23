@@ -192,7 +192,7 @@ def test_run_python_offers_always_for_snippets(folders):
     )
     again, more = _drive(agent, handler, "run_python", {"code": "print(2)"})
 
-    assert prompts[0]["always_scope"] == "Python snippets (run_python)"
+    assert prompts[0]["always_scope"] == "Python snippets"
     assert more == []
     assert again["status"] == "success"
 
@@ -236,6 +236,7 @@ def test_the_wire_args_are_only_what_the_model_sent(folders):
     assert wire["prompt_context"] == {
         "working_directory": str(project),
         "risk_note": risk_note,
+        "script": {"unreadable": "missing"},
     }
 
 

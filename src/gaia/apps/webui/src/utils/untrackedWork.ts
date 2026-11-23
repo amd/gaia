@@ -3,33 +3,31 @@
 
 /** Wording for work a turn ran that GAIA could not copy for undo (#5225). */
 
+import { tEn, type Translate } from '../i18n/useT';
+import type { MessageKey, PluralKey } from '../i18n/types';
 import type { UntrackedWork } from '../types/changes';
 
-interface KindWords {
-    one: string;
-    many: string;
-    /** Prefix for a single entry's label. */
-    prefix: string;
+interface KindKeys {
+    /** "{n} command" / "{n} commands". */
+    count: PluralKey;
+    /** "Command: {label}", for a single entry. */
+    one: MessageKey;
+    /** "Command", for a single entry with no description. */
+    bare: MessageKey;
+    /** "Commands", the heading over several entries. */
+    many: MessageKey;
 }
 
-const KINDS: Record<string, KindWords> = {
-    shell: { one: 'command', many: 'commands', prefix: 'Command' },
-    run_python: { one: 'Python snippet', many: 'Python snippets', prefix: 'Python' },
-    execute_python_file: { one: 'Python script', many: 'Python scripts', prefix: 'Python script' },
-    mcp: { one: 'connected tool call', many: 'connected tool calls', prefix: 'Connected tool' },
-    install_cli: { one: 'install command', many: 'install commands', prefix: 'Install' },
-    late_write: { one: 'late file write', many: 'late file writes', prefix: 'File write' },
+const KINDS: Record<string, KindKeys> = {
+    shell: { count: 'untracked.count.shell', one: 'untracked.one.shell', bare: 'untracked.bare.shell', many: 'untracked.many.shell' },
+    run_python: { count: 'untracked.count.python', one: 'untracked.one.python', bare: 'untracked.bare.python', many: 'untracked.many.python' },
+    execute_python_file: { count: 'untracked.count.script', one: 'untracked.one.script', bare: 'untracked.bare.script', many: 'untracked.many.script' },
+    mcp: { count: 'untracked.count.mcp', one: 'untracked.one.mcp', bare: 'untracked.bare.mcp', many: 'untracked.many.mcp' },
+    install_cli: { count: 'untracked.count.install', one: 'untracked.one.install', bare: 'untracked.bare.install', many: 'untracked.many.install' },
+    late_write: { count: 'untracked.count.lateWrite', one: 'untracked.one.lateWrite', bare: 'untracked.bare.lateWrite', many: 'untracked.many.lateWrite' },
 };
 
 const MAX_LABEL = 120;
-
-function words(kind: string): KindWords {
-    return KINDS[kind] ?? { one: kind, many: kind, prefix: kind };
-}
-
-function capitalize(text: string): string {
-    return text.charAt(0).toUpperCase() + text.slice(1);
-}
 
 function truncate(text: string): string {
     const flat = text.replace(/\s+/g, ' ').trim();
@@ -53,12 +51,24 @@ export interface UntrackedGroup {
     entries: UntrackedEntry[];
 }
 
-function countOf(n: number, w: KindWords): string {
-    return `${n} ${n === 1 ? w.one : w.many}`;
+/** A kind GAIA has no words for is shown by its own name. */
+function countOf(kind: string, n: number, t: Translate): string {
+    const keys = KINDS[kind];
+    return keys ? t.plural(keys.count, n) : `${n} ${kind}`;
+}
+
+function titleOf(kind: string, count: number, entries: UntrackedEntry[], t: Translate): string {
+    const keys = KINDS[kind];
+    if (entries.length !== 1) return `${keys ? t(keys.many) : kind} ×${count}`;
+    const only = entries[0];
+    let title: string;
+    if (!keys) title = only.label ? `${kind}: ${only.label}` : kind;
+    else title = only.label ? t(keys.one, { label: only.label }) : t(keys.bare);
+    return only.count > 1 ? `${title} ×${only.count}` : title;
 }
 
 /** Untracked work by kind, in the order it ran, identical entries merged. */
-export function groupUntracked(list: UntrackedWork[]): UntrackedGroup[] {
+export function groupUntracked(list: UntrackedWork[], t: Translate = tEn): UntrackedGroup[] {
     const groups = new Map<string, { kind: string; count: number; entries: Map<string, UntrackedEntry> }>();
     for (const u of list) {
         let group = groups.get(u.kind);
@@ -73,26 +83,17 @@ export function groupUntracked(list: UntrackedWork[]): UntrackedGroup[] {
         else group.entries.set(detail, { label: truncate(detail), detail, count: 1 });
     }
     return [...groups.values()].map(({ kind, count, entries }) => {
-        const w = words(kind);
         const distinct = [...entries.values()];
-        let title: string;
-        if (distinct.length === 1) {
-            const only = distinct[0];
-            title = only.label ? `${w.prefix}: ${only.label}` : capitalize(w.one);
-            if (only.count > 1) title += ` ×${only.count}`;
-        } else {
-            title = `${capitalize(w.many)} ×${count}`;
-        }
-        return { kind, title, count, entries: distinct };
+        return { kind, title: titleOf(kind, count, distinct, t), count, entries: distinct };
     });
 }
 
 /** "7 Python snippets", "2 commands and 3 Python snippets". */
-export function describeUntracked(list: UntrackedWork[]): string {
-    const parts = groupUntracked(list).map((g) => countOf(g.count, words(g.kind)));
-    if (parts.length === 0) return 'work';
+export function describeUntracked(list: UntrackedWork[], t: Translate = tEn): string {
+    const parts = groupUntracked(list, t).map((g) => countOf(g.kind, g.count, t));
+    if (parts.length === 0) return t('untracked.work');
     if (parts.length === 1) return parts[0];
-    return `${parts.slice(0, -1).join(', ')} and ${parts[parts.length - 1]}`;
+    return t('untracked.and', { list: parts.slice(0, -1).join(t('untracked.sep')), last: parts[parts.length - 1] });
 }
 
 /**
@@ -100,15 +101,12 @@ export function describeUntracked(list: UntrackedWork[]): string {
  *
  * @param also   the turn changed tracked files too, so this is in addition.
  * @param inChat the warning covers the whole chat, not one turn.
- * @param undo   the button the sentence refers to.
  */
 export function untrackedWarning(
     list: UntrackedWork[],
-    { also = false, inChat = false, undo = 'Undo' }: { also?: boolean; inChat?: boolean; undo?: string } = {},
+    { also = false, inChat = false }: { also?: boolean; inChat?: boolean } = {},
+    t: Translate = tEn,
 ): string {
-    const one = list.length === 1;
-    return (
-        `${inChat ? 'In this chat, GAIA' : 'GAIA'} ${also ? 'also ran' : 'ran'} ${describeUntracked(list)} it can't track. ` +
-        `If ${one ? 'it' : 'they'} changed any files, ${undo} won't restore them.`
-    );
+    const base: PluralKey = inChat ? 'untracked.warningChat' : also ? 'untracked.warningAlso' : 'untracked.warning';
+    return t.plural(base, list.length, { work: describeUntracked(list, t) });
 }

@@ -676,7 +676,8 @@ _DOWNLOADING_RE = re.compile(
 _BAR_RE = re.compile(r"^\s*\[[=#>\-. ━─]*\]")
 #: What gaia init prints after a failed download: where to look next.
 _HINT_RE = re.compile(
-    r"^\s*(?:Read .* for the server's own error|Check the Lemonade Server at )"
+    r"^\s*(?:Read .* for the server's own error|Check the Lemonade Server at "
+    r"|This PC(?:'s certificate store has no | has no system certificate store))"
 )
 _MODEL_LOG_KEPT = 300
 #: Lines each row shows; the troubleshooting report keeps them all.
@@ -1433,6 +1434,9 @@ class SetupRunner:
                 component, state = event.get("component"), event.get("state")
                 if self._run is not None and component and state:
                     self._run.components[component] = state
+                    # The last download figure belongs to the part before this one.
+                    if state == "active":
+                        self._run.percent = self._run.size = None
                     failure = event.get("kind") if state == "failed" else None
                     if failure:
                         self._run.component_kinds[component] = failure

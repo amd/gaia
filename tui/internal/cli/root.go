@@ -17,15 +17,13 @@ import (
 	"github.com/amd/gaia/tui/internal/update"
 )
 
-// dev is developer mode: rich in-TUI output (per-turn timings, step and turn
-// boundaries, tool arguments and truncated tool output, raw harness statuses)
-// and DEBUG-level file logging in the agent it spawns.
+// dev is developer mode: the loopback control API is on (auto-assigned port
+// unless --control-port picks one), diagnostics go to the session log, and an
+// agent the TUI spawns logs at DEBUG. The screen is the same one every user
+// sees: debug detail lives in --trace, the logs, and behind Ctrl+O.
 //
-// One flag, not two. `--debug` already meant exactly this in the TUI, and the
-// agent half of the same feature shipped as `--dev`; keeping both names as
-// separate switches would give one idea two spellings that could disagree. So
-// `--dev` is the name and `--debug` is a hidden alias onto this same variable
-// (see init) — old scripts and docs keep working, help lists one flag.
+// `--debug` is a hidden alias onto this same variable (see init), so old
+// scripts and docs keep working and help lists one flag.
 var dev bool
 
 // developerMode enables harness engineering, independently of diagnostic output.
@@ -34,7 +32,7 @@ var developerMode bool
 // fullAccessFlag backs --full-access: the agent runs every gated tool — shell
 // commands, file writes — without asking, and the shell's own guardrails come
 // off with them (redirection and the other shell-only operators parse, the
-// read-only binary allowlist is replaced by a developer set, the rate limit is
+// shell runs any program, the rate limit is
 // lifted).
 //
 // Off unless passed, or saved as the default with /full-access always or
@@ -70,10 +68,10 @@ func claudeModelArg() string {
 	return claudeModel
 }
 
-const defaultBinaryName = "gaia-tui"
+const defaultBinaryName = "gaia-cli"
 
 // binaryName derives the command name from argv[0]. The installer ships this as
-// `gaia-tui` because the Python CLI owns `gaia`, so a hardcoded name would print
+// `gaia-cli` because the Python CLI owns `gaia`, so a hardcoded name would print
 // usage lines for a command the user does not have.
 func binaryName(argv0 string) string {
 	name := filepath.Base(strings.TrimSpace(argv0))
@@ -97,6 +95,46 @@ func binaryName(argv0 string) string {
 // point that honours it reads the same variable.
 var mockAgent string
 
+// agentProgram backs --agent-program: which agent program the flagship runs.
+var agentProgram string
+
+// agentChoice is the agent program asked for: the flag, else GAIA_TUI_AGENT,
+// else the saved flagship_agent, else none, which leaves it to the catalog.
+// A saved value GAIA does not know is an error, never read as no choice.
+func agentChoice() (ui.AgentChoice, error) {
+	if strings.TrimSpace(agentProgram) != "" {
+		return ui.AgentChoice{Program: agentProgram, Pin: "--agent-program"}, nil
+	}
+	if env := os.Getenv(catalog.AgentEnv); strings.TrimSpace(env) != "" {
+		return ui.AgentChoice{Program: env, Pin: catalog.AgentEnv}, nil
+	}
+	if mockAgent != "" {
+		// The stand-in replaces whichever program would have run.
+		return ui.AgentChoice{Pin: "--mock"}, nil
+	}
+	saved, err := preflight.ReadFlagshipAgent()
+	if err != nil {
+		return ui.AgentChoice{}, fmt.Errorf("could not read the saved agent program: %w. "+
+			"Or pass --agent-program to choose one for this launch", err)
+	}
+	// Never run another program in place of one this build can't start.
+	if why := preflight.FlagshipAgentUnavailable(saved.Choice); why != "" {
+		return ui.AgentChoice{}, fmt.Errorf("%s: %s: %s. Pass --agent-program %s or %s for this launch, "+
+			"or choose another agent program in the Agent UI's Settings", saved.Path, preflight.FlagshipAgentKey,
+			why, preflight.FlagshipAgentPython, preflight.FlagshipAgentNative)
+	}
+	return ui.AgentChoice{Program: saved.Program()}, nil
+}
+
+// agentProgramFor is the agent program for a launch of agentID alone. Only
+// the flagship has two programs, so nothing is read for any other agent.
+func agentProgramFor(agentID string) (ui.AgentChoice, error) {
+	if agentID != catalog.FlagshipID {
+		return ui.AgentChoice{}, nil
+	}
+	return agentChoice()
+}
+
 // tracePath is --trace's raw value: "" (off), traceAutoPath (bare --trace), or
 // the path the user gave. Resolved by openTrace.
 var tracePath string
@@ -109,6 +147,35 @@ var tracePath string
 // `--trace=auto` is the same as bare `--trace`, which is what it reads like.
 // A file genuinely named "auto" is still reachable as `--trace=./auto`.
 const traceAutoPath = "auto"
+
+// resumeArg is --resume's raw value: "" (off), resumePick (bare --resume:
+// choose from the list), or a session id or id prefix.
+var resumeArg string
+
+const resumePick = "pick"
+
+// resumeFromFlag turns --resume into a request. An empty --resume= (a script's
+// unset variable) is refused rather than read as "start a new session".
+func resumeFromFlag(changed bool, arg string) (ui.Resume, error) {
+	switch {
+	case changed && arg == "":
+		return ui.Resume{}, fmt.Errorf("--resume= was given an empty session id: pass " +
+			"--resume=<id>, or --resume alone to choose from the list")
+	case arg == resumePick:
+		return ui.Resume{Pick: true}, nil
+	}
+	return ui.Resume{ID: arg}, nil
+}
+
+// resumeArgAdvice catches `--resume <id>` written with a space: pflag reads
+// that as a bare --resume plus a stray argument.
+func resumeArgAdvice(args []string) error {
+	if resumeArg != resumePick || len(args) == 0 {
+		return nil
+	}
+	return fmt.Errorf("--resume takes its session id attached: write --resume=%s, "+
+		"or --resume alone to choose from the list", args[0])
+}
 
 // traceArgAdvice explains a stray positional that is really a spaced --trace
 // path, and returns nil when --trace does not explain it.
@@ -192,10 +259,18 @@ var rootCmd = &cobra.Command{
 		if cmd.Flags().Changed("full-access") {
 			fullAccess, fromSaved = fullAccessFlag, false
 		}
+		resume, err := resumeFromFlag(cmd.Flags().Changed("resume"), resumeArg)
+		if err != nil {
+			return err
+		}
 		if err := update.RemoveLeftover(); err != nil {
 			fmt.Fprintln(os.Stderr, err)
 		}
-		if err := ui.RunFlagship(dev, mockAgent, ctrl, fullAccess, fromSaved, useClaude, claudeModelArg(), trace); err != nil {
+		choice, err := agentChoice()
+		if err != nil {
+			return err
+		}
+		if err := ui.RunFlagship(dev, mockAgent, choice, ctrl, fullAccess, fromSaved, useClaude, claudeModelArg(), trace, resume); err != nil {
 			return err
 		}
 		// An install the user asked for in /update runs now, after the TUI
@@ -230,12 +305,17 @@ func init() {
 	// not a mistake. root_test.go pins this.
 	cobra.MousetrapHelpText = ""
 
+	rootCmd.Flags().StringVar(&resumeArg, "resume", "",
+		"reopen a past session: bare --resume lists recent sessions (ones waiting "+
+			"on you first) to pick from; --resume=<id> reopens that one directly")
+	rootCmd.Flags().Lookup("resume").NoOptDefVal = resumePick
 	rootCmd.Flags().BoolVar(&developerMode, "developer-mode", false,
 		"enable the developer skill and consent-based Claude Code/Codex handoff")
 	rootCmd.PersistentFlags().BoolVar(&dev, "dev", false,
-		"developer mode: show per-turn timings, steps, and tool arguments and output "+
-			"(agents the TUI spawns itself also log at DEBUG to ~/.gaia/logs/). "+
-			"This is what is on SCREEN; --trace writes the same events to a file")
+		"developer mode: turn on the loopback control API (same as --control) so a "+
+			"script or assistant can drive this session, with diagnostics in "+
+			"~/.gaia/logs/. The screen does not change; for debug detail use --trace, "+
+			"the logs, or Ctrl+O")
 	// Same variable as --dev, hidden: the previous name for this mode. Kept so
 	// existing scripts and docs do not break, out of --help so the two spellings
 	// never read as two features.
@@ -296,12 +376,17 @@ func init() {
 	// substituted a stand-in.
 	rootCmd.PersistentFlags().StringVar(&mockAgent, "mock", "",
 		"path to a stand-in agent binary, for tests (overrides the agent being launched)")
+	rootCmd.PersistentFlags().StringVar(&agentProgram, "agent-program", "",
+		"which agent program GAIA runs on: "+catalog.NativeAgentBinary+" (the native agent), "+
+			catalog.PythonAgentBinary+" or "+catalog.PythonAgentChoice+" (the Python agent), or a path to either. Unset runs "+
+			"the one saved with /agent ("+preflight.FlagshipAgentKey+" in config.json), else "+
+			catalog.PythonAgentBinary+"; a named one that is missing is an error. Overrides "+catalog.AgentEnv)
 	rootCmd.PersistentFlags().StringVar(&tracePath, "trace", "",
 		"record every agent event — tool calls WITH their arguments, results, errors "+
 			"and timings — to a JSONL file, one event per line, for later inspection. "+
 			"Bare --trace writes ~/.gaia/traces/<timestamp>-<agent>.jsonl; --trace=<path> "+
-			"picks the file (the path must be attached with =, not spaced). Independent "+
-			"of --dev, which shows the same events on screen instead. The file holds "+
+			"picks the file (the path must be attached with =, not spaced). Agents the "+
+			"TUI spawns itself also log at DEBUG to ~/.gaia/logs/. The file holds "+
 			"whatever the agent read — file contents, shell output, email — so review "+
 			"it before sharing. Does NOT capture prompt size or token accounting — "+
 			"those live only in the agent's own recorder (GAIA_TURN_LOG)")
@@ -322,9 +407,12 @@ func init() {
 		// replaced it, so it owes the same help for an ordinary typo.
 		near := cmd.SuggestionsFor(args[0])
 		// A near-miss is a misspelled COMMAND, not a misplaced path: with
-		// --trace on, `gaia-tui --trace chatt` still has to suggest `chat`.
+		// --trace on, `gaia-cli --trace chatt` still has to suggest `chat`.
 		if len(near) == 0 {
 			if err := traceArgAdvice(args, 0); err != nil {
+				return err
+			}
+			if err := resumeArgAdvice(args); err != nil {
 				return err
 			}
 		}
@@ -338,9 +426,9 @@ func init() {
 
 // Execute runs the CLI.
 //
-// A leading `tui` word is accepted and dropped. The binary is `gaia-tui` (the
+// A leading `tui` word is accepted and dropped. The binary is `gaia-cli` (the
 // Python `gaia` CLI has no `tui` subcommand), but older docs and scripts spell
-// it `gaia tui …`, so `gaia-tui tui run email` would otherwise fail with
+// it `gaia tui …`, so `gaia-cli tui run gaia` would otherwise fail with
 // "unknown command". Both spellings work; only the first argument is
 // considered, so an agent named "tui" is unaffected.
 func Execute() error {

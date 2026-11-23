@@ -111,7 +111,7 @@ var Binary = func() (string, error) {
 	bin, err := ResolveCLI()
 	if err != nil {
 		return "", fmt.Errorf(
-			"%w: the `gaia` CLI is not beside gaia-tui, on PATH or in ~/.gaia/bin, so setup cannot run. "+
+			"%w: the `gaia` CLI is not beside gaia-cli, on PATH or in ~/.gaia/bin, so setup cannot run. "+
 				"Reinstall GAIA from https://amd-gaia.ai/#install, or run `"+InstallCommand+"` "+
 				"(on Windows: `"+InstallPowerShellCommand+"`), then retry",
 			ErrNoCLI)
@@ -124,7 +124,7 @@ var Binary = func() (string, error) {
 // claudeMode mirrors --use-claude onto --skip-chat-model: a Claude-backed
 // session never calls the local chat LLM, only Lemonade's embedder for
 // RAG/memory (Anthropic has no embeddings API — see
-// hub/agents/gaia/python/gaia_agent/stdio.py). Downloading several GB of a chat
+// hub/agents/gaia/python/gaiapy/stdio.py). Downloading several GB of a chat
 // model that session will never touch is the bug this avoids.
 func CheckArgs(claudeMode bool) []string {
 	args := []string{"init", "--check", "--profile", Profile}

@@ -10,7 +10,19 @@
 import { create } from 'zustand';
 import { log } from '../utils/logger';
 
-export type PanelSectionId = 'answer' | 'environment' | 'context' | 'outputs' | 'changes' | 'skills' | 'tools';
+export type PanelSectionId =
+    | 'slide' | 'answer' | 'environment' | 'context' | 'outputs' | 'changes' | 'skills' | 'tools' | 'session'
+    | 'plan' | 'schedule' | 'documents' | 'commands';
+
+/** What a chat's sections found, shared so the panel can tell what the chat is about without reading twice. */
+export interface PanelSignals {
+    /** Files the chat has changed on disk. */
+    changedFiles?: number;
+    /** How many of those are source code or project files. */
+    changedCode?: number;
+    /** Names of the skills it has loaded. */
+    skills?: string[];
+}
 
 export const PANEL_MIN_WIDTH = 280;
 export const PANEL_MAX_WIDTH = 640;
@@ -21,6 +33,7 @@ const WIDTH_KEY = 'gaia.sessionPanel.width';
 const SECTIONS_KEY = 'gaia.sessionPanel.sections';
 
 const DEFAULT_SECTIONS: Record<PanelSectionId, boolean> = {
+    slide: true,
     answer: true,
     environment: true,
     context: false,
@@ -28,6 +41,11 @@ const DEFAULT_SECTIONS: Record<PanelSectionId, boolean> = {
     changes: true,
     skills: true,
     tools: false,
+    session: false,
+    plan: true,
+    schedule: true,
+    documents: true,
+    commands: true,
 };
 
 function read<T>(key: string, parse: (raw: string) => T, fallback: T): T {
@@ -62,6 +80,8 @@ interface SessionPanelState {
     sections: Record<PanelSectionId, boolean>;
     /** A section someone asked to see, e.g. the context meter's "Details". */
     focus: { section: PanelSectionId; nonce: number } | null;
+    signals: Record<string, PanelSignals>;
+    setSignals: (sessionId: string, patch: PanelSignals) => void;
     setOpen: (open: boolean) => void;
     setOverlayOpen: (open: boolean) => void;
     setWidth: (width: number) => void;
@@ -86,6 +106,8 @@ export const useSessionPanelStore = create<SessionPanelState>((set, get) => ({
     ...loadPersisted(),
     overlayOpen: false,
     focus: null,
+    signals: {},
+    setSignals: (sessionId, patch) => set((s) => ({ signals: { ...s.signals, [sessionId]: { ...s.signals[sessionId], ...patch } } })),
     setOpen: (open) => {
         write(OPEN_KEY, open ? '1' : '0');
         set({ open });
@@ -107,5 +129,13 @@ export const useSessionPanelStore = create<SessionPanelState>((set, get) => ({
         write(OPEN_KEY, '1');
         set({ sections, open: true, overlayOpen: true, focus: { section: id, nonce: Date.now() } });
     },
-    reload: () => set({ ...loadPersisted(), overlayOpen: false, focus: null }),
+    reload: () => set({ ...loadPersisted(), overlayOpen: false, focus: null, signals: {} }),
 }));
+
+/** How long a request to show a section stays one: long enough for the panel to open, not to haunt a later render. */
+export const FOCUS_FRESH_MS = 2000;
+
+/** Whether *focus* was just asked for, as opposed to left over from an earlier click. */
+export function isFreshFocus(focus: { nonce: number } | null): boolean {
+    return focus !== null && Date.now() - focus.nonce < FOCUS_FRESH_MS;
+}

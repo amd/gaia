@@ -9,6 +9,7 @@ It returns WAV bytes. Never pass the response to the JSON-only client helper.
 from __future__ import annotations
 
 import os
+import shutil
 import tempfile
 from datetime import datetime
 from pathlib import Path
@@ -20,6 +21,11 @@ from gaia.llm.lemonade_client import LemonadeClient, LemonadeClientError
 from gaia.logger import get_logger
 
 logger = get_logger(__name__)
+
+_SAVE_TO_HELP = (
+    "Pass an absolute folder (the file gets a generated name) or a new .wav "
+    "file path, e.g. the user's project folder."
+)
 
 
 class AudioGenerationToolsMixin:
@@ -64,6 +70,7 @@ class AudioGenerationToolsMixin:
             duration: Optional[float] = None,
             steps: Optional[int] = None,
             seed: Optional[int] = None,
+            save_to: Optional[str] = None,
         ) -> Dict[str, Any]:
             """Generate and save WAV music. Empty lyrics mean instrumental music.
 
@@ -75,6 +82,7 @@ class AudioGenerationToolsMixin:
                 duration: Desired seconds.
                 steps: Optional generation steps; omit for backend defaults.
                 seed: Optional reproducibility seed.
+                save_to: Absolute folder or new .wav path for a copy of the file.
             """
             return self._generate_lemonade_audio(
                 "music",
@@ -85,6 +93,7 @@ class AudioGenerationToolsMixin:
                 duration=duration,
                 steps=steps,
                 seed=seed,
+                save_to=save_to,
             )
 
         @tool(atomic=True, timeout=3600)
@@ -95,6 +104,7 @@ class AudioGenerationToolsMixin:
             steps: Optional[int] = None,
             cfg: Optional[float] = None,
             seed: Optional[int] = None,
+            save_to: Optional[str] = None,
         ) -> Dict[str, Any]:
             """Generate and save a WAV sound effect using ThinkSound or OpenMOSS.
 
@@ -105,6 +115,7 @@ class AudioGenerationToolsMixin:
                 steps: Optional generation steps, if supported by the backend.
                 cfg: Optional guidance for ThinkSound; omit for other recipes.
                 seed: Optional reproducibility seed.
+                save_to: Absolute folder or new .wav path for a copy of the file.
             """
             return self._generate_lemonade_audio(
                 "sfx",
@@ -114,6 +125,7 @@ class AudioGenerationToolsMixin:
                 steps=steps,
                 cfg=cfg,
                 seed=seed,
+                save_to=save_to,
             )
 
     def _audio_generation_models(self):
@@ -136,6 +148,7 @@ class AudioGenerationToolsMixin:
         steps: Optional[int] = None,
         cfg: Optional[float] = None,
         seed: Optional[int] = None,
+        save_to: Optional[str] = None,
     ) -> Dict[str, Any]:
         if not prompt or not prompt.strip():
             return {"status": "error", "error": "A nonempty prompt is required."}
@@ -185,10 +198,15 @@ class AudioGenerationToolsMixin:
             if value is not None:
                 payload[key] = value
 
+        file_name = f"{kind}_{datetime.now():%Y%m%d_%H%M%S}_{uuid4().hex[:10]}.wav"
+        copy_to = None
+        if save_to is not None:
+            copy_to, refusal = self._audio_save_target(save_to, file_name)
+            if refusal is not None:
+                return refusal
+
         client = self.audio_gen_client
-        destination = self.audio_gen_output_dir / (
-            f"{kind}_{datetime.now():%Y%m%d_%H%M%S}_{uuid4().hex[:10]}.wav"
-        )
+        destination = self.audio_gen_output_dir / file_name
         staging = None
         try:
             with tempfile.NamedTemporaryFile(
@@ -211,7 +229,7 @@ class AudioGenerationToolsMixin:
             os.replace(staging, destination)
             staging = None
             logger.info("Generated %s via %s: %s", kind, model, destination)
-            return {
+            result = {
                 "status": "success",
                 "audio_path": str(destination.resolve()),
                 "model": model,
@@ -219,8 +237,105 @@ class AudioGenerationToolsMixin:
                 "format": "wav",
                 "duration_requested": duration,
             }
+            if copy_to is not None:
+                not_saved = _copy_for_user(destination, copy_to, kind)
+                if not_saved is None:
+                    result["saved_to"] = str(copy_to)
+                else:
+                    # Still a success: the track exists and plays from audio_path.
+                    result["copy_not_saved"] = not_saved
+            return result
         except (LemonadeClientError, OSError, SnapshotError) as exc:
             return {"status": "error", "error": f"Audio generation failed: {exc}"}
         finally:
             if staging is not None:
                 staging.unlink(missing_ok=True)
+
+    def _audio_save_target(self, save_to: str, file_name: str):
+        """Resolve *save_to* to a new .wav path the host's write policy allows.
+
+        The policy is checked before anything about the path is reported, so a
+        refused location never learns what exists there.
+        Returns ``(path, None)`` or ``(None, error_result)``.
+        """
+        if not isinstance(save_to, str) or not save_to.strip() or "\x00" in save_to:
+            return None, {
+                "status": "error",
+                "error": f"Invalid save_to. {_SAVE_TO_HELP}",
+            }
+        target = Path(save_to.strip()).expanduser()
+        if not target.is_absolute():
+            return None, {
+                "status": "error",
+                "error": (
+                    f"save_to must be an absolute path, got '{save_to}'. "
+                    f"{_SAVE_TO_HELP}"
+                ),
+            }
+        target = target.resolve()
+        if target.suffix.lower() != ".wav":
+            target = target / file_name
+        validator = getattr(self, "path_validator", None)
+        if validator is None:
+            return None, {
+                "status": "error",
+                "error": (
+                    "This agent has no write policy, so it cannot save outside "
+                    "GAIA's audio folder. Omit save_to to keep the file in "
+                    f"{self.audio_gen_output_dir}."
+                ),
+            }
+        if not validator.is_path_allowed(str(target)):
+            return None, {
+                "status": "error",
+                "error": validator.access_denied_message(str(target)),
+            }
+        if not target.parent.is_dir():
+            return None, {
+                "status": "error",
+                "error": (
+                    f"Folder {target.parent} does not exist. Create it first "
+                    "or pick an existing folder."
+                ),
+            }
+        if target.exists():
+            return None, {
+                "status": "error",
+                "error": (
+                    f"{target} already exists; choose a new file name so the "
+                    "existing audio is not replaced."
+                ),
+            }
+        # The write cap guards model-written text; audio size follows duration.
+        allowed, reason = validator.validate_write(str(target), content_size=0)
+        if not allowed:
+            return None, {"status": "error", "error": reason}
+        return target, None
+
+
+def _copy_for_user(source: Path, destination: Path, kind: str):
+    """Copy the finished WAV to *destination*, which must not exist yet.
+
+    Exclusive create closes the minutes-long window between the save_to check
+    and the copy; a failed copy removes its partial file. Returns ``None`` on
+    success, or why the copy is missing and where the original is.
+    """
+    try:
+        before_change(destination, f"generate_{kind}")
+        with source.open("rb") as src, destination.open("xb") as dst:
+            try:
+                shutil.copyfileobj(src, dst, 1024 * 1024)
+            except BaseException:
+                dst.close()
+                destination.unlink(missing_ok=True)
+                raise
+    except FileExistsError:
+        reason = f"{destination} appeared while the audio was generating; it was kept"
+    except (OSError, SnapshotError) as exc:
+        reason = f"the copy to {destination} could not be saved: {exc}"
+    else:
+        return None
+    return (
+        f"The audio was made and is kept at {source}, but {reason}. Tell the "
+        "user where it is and ask for a new file name or folder for the copy."
+    )

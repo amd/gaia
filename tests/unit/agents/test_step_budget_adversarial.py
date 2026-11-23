@@ -151,15 +151,15 @@ def test_a_per_query_limit_overrides_the_agents(monkeypatch):
 
 
 def test_the_flagship_limit_follows_the_same_rules(monkeypatch):
-    gaia_agent = pytest.importorskip("gaia_agent.agent")
-    assert gaia_agent.flagship_max_steps() == 1000
-    assert gaia_agent.GaiaAgentConfig().max_steps == 1000
-    assert gaia_agent.GaiaAgentConfig(max_steps=9).max_steps == 9
+    gaiapy = pytest.importorskip("gaiapy.agent")
+    assert gaiapy.flagship_max_steps() == 1000
+    assert gaiapy.GaiaAgentConfig().max_steps == 1000
+    assert gaiapy.GaiaAgentConfig(max_steps=9).max_steps == 9
     monkeypatch.setenv("GAIA_AGENT_MAX_STEPS", "33")
-    assert gaia_agent.GaiaAgentConfig().max_steps == 33
+    assert gaiapy.GaiaAgentConfig().max_steps == 33
     monkeypatch.setenv("GAIA_AGENT_MAX_STEPS", "lots")
     with pytest.raises(ValueError, match=r"default \(1000\)"):
-        gaia_agent.GaiaAgentConfig()
+        gaiapy.GaiaAgentConfig()
 
 
 # ------------------------------------------- running out never yields nothing
@@ -218,12 +218,13 @@ def test_a_raw_tool_call_envelope_is_not_mistaken_for_findings():
 # ------------------------------------------------------------ the plan cap
 
 
-@pytest.mark.parametrize("limit", [8, 9, 10, 50, 51, 150])
-def test_the_plan_cap_binds_exactly_from_half_the_budget(limit):
+@pytest.mark.parametrize("limit", [8, 9, 10, 40, 50, 51, 150, 1000])
+def test_the_plan_cap_binds_with_the_first_budget_notice(limit):
+    """Twenty steps left, or half a budget too small to hold twenty."""
     agent = _make_agent(streaming=False)
     agent.plan_iterations = agent.max_plan_iterations = 3
     fired = [t for t in range(limit + 1) if agent._plan_cap_reached(t, limit)]
-    assert fired[0] == limit - limit // 2
+    assert fired[0] == limit - min(20, limit // 2)
     assert fired == list(range(fired[0], limit + 1))
 
 
