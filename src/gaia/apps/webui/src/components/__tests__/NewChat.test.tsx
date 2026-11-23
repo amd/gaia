@@ -3,7 +3,7 @@
 
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { NewChat, START_RETRY_MS, greeting, warmUpLine } from '../NewChat';
+import { NewChat, START_RETRY_MS, STARTERS_WAIT_MS, greeting, warmUpLine } from '../NewChat';
 import { useBrowserPaneStore } from '../../stores/browserPaneStore';
 import { useChatStore } from '../../stores/chatStore';
 import { useModelStore } from '../../stores/modelStore';
@@ -198,6 +198,21 @@ describe('NewChat starters', () => {
         await act(async () => { answer(START); });
         expect(await starters()).toEqual(['Ask about your documents', 'Research a topic', 'Recipe']);
         expect(container.querySelector('.try-chips')).not.toHaveClass('is-pending');
+    });
+
+    it('shows the examples if the start screen has not answered after a short wait', async () => {
+        vi.useFakeTimers();
+        try {
+            vi.mocked(api.getStartScreen).mockReturnValue(new Promise(() => {}));
+            const { container } = render(<NewChat onSend={vi.fn()} />);
+            expect(container.querySelector('.try-chips')).toHaveClass('is-pending');
+            await act(async () => { vi.advanceTimersByTime(STARTERS_WAIT_MS); });
+            expect(container.querySelector('.try-chips')).not.toHaveClass('is-pending');
+            const group = screen.getByRole('group', { name: 'Things to try' });
+            expect(Array.from(group.querySelectorAll('button')).map((b) => b.textContent)).toEqual(['Recipe', 'Checklist', 'Split a bill']);
+        } finally {
+            vi.useRealTimers();
+        }
     });
 
     it('offers three examples when this PC has no tasks to offer', async () => {
