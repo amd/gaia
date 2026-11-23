@@ -1628,3 +1628,107 @@ TEST(NativeToolCallsTest, ACompactModelOnThePromptJsonPathKeepsTheToolList) {
               std::string::npos)
         << "without tool schemas the list is the only description of the tools";
 }
+
+// ---------------------------------------------------------------------------
+// A "no" at the approval prompt ends the turn (#8883)
+// ---------------------------------------------------------------------------
+
+namespace {
+
+void registerGatedRemove(ToolAgent& agent, int& ran) {
+    agent.toolRegistry().registerTool(
+        "remove_file", "Delete a file",
+        [&ran](const json&) -> json {
+            ++ran;
+            return json{{"removed", true}};
+        },
+        {{"path", ToolParamType::STRING, true, "File to delete"}}, false, ToolPolicy::CONFIRM);
+}
+
+} // namespace
+
+TEST(DeclinedToolTest, ADeclinedNativeCallEndsTheTurnAndSkipsTheRestOfTheBatch) {
+    bench::MockLlmServer mock;
+    // Two gated calls in one reply, then a model that would keep trying other routes.
+    mock.pushResponse(toolCallsResponse(
+        R"([{"id":"c1","type":"function","function":{"name":"remove_file","arguments":"{\"path\":\"a.exe\"}"}},)"
+        R"({"id":"c2","type":"function","function":{"name":"remove_file","arguments":"{\"path\":\"b.exe\"}"}}])"));
+    mock.pushResponses(toolCallsResponse(
+        R"([{"id":"c3","type":"function","function":{"name":"echo","arguments":"{\"message\":\"rm a.exe\"}"}}])"), 5);
+
+    AgentConfig cfg = makeCfg(mock.baseUrl(), kToolCallingModel);
+    cfg.maxSteps = 6;
+    ToolAgent agent(cfg);
+    agent.initForTest();
+    int ran = 0;
+    registerGatedRemove(agent, ran);
+    int prompts = 0;
+    agent.setToolConfirmCallback([&prompts](const std::string&, const json&) {
+        ++prompts;
+        return ToolConfirmResult::DENY;
+    });
+
+    json result = agent.processQuery("delete the installers");
+
+    EXPECT_EQ(prompts, 1) << "one 'no' is one prompt";
+    EXPECT_EQ(ran, 0);
+    EXPECT_TRUE(agent.executed.empty()) << "no other route was tried";
+    EXPECT_EQ(mock.receivedBodies().size(), 1u) << "the model is not asked again after a decline";
+    EXPECT_EQ(result["stop_reason"], "declined");
+    EXPECT_EQ(result["status"], "incomplete");
+    EXPECT_NE(result["result"].get<std::string>().find("remove_file was not approved"), std::string::npos)
+        << result.dump();
+
+    // The saved history pairs every advertised call with a reply, so the next turn replays cleanly.
+    std::set<std::string> answered;
+    for (const auto& m : agent.history()) {
+        if (m.role == MessageRole::TOOL && m.toolCallId) answered.insert(*m.toolCallId);
+    }
+    EXPECT_EQ(answered, (std::set<std::string>{"c1", "c2"}));
+}
+
+TEST(DeclinedToolTest, ADeclinedTextProtocolCallEndsTheTurn) {
+    bench::MockLlmServer mock;
+    const json call = {{"choices", json::array({{{"message",
+        {{"role", "assistant"},
+         {"content", R"({"tool": "remove_file", "tool_args": {"path": "a.exe"}})"}}}}})}};
+    mock.pushResponses(call.dump(), 5);
+
+    AgentConfig cfg = makeCfg(mock.baseUrl(), kNonToolCallingModel);
+    cfg.maxSteps = 5;
+    ToolAgent agent(cfg);
+    agent.initForTest();
+    int ran = 0;
+    registerGatedRemove(agent, ran);
+    int prompts = 0;
+    agent.setToolConfirmCallback([&prompts](const std::string&, const json&) {
+        ++prompts;
+        return ToolConfirmResult::DENY;
+    });
+
+    json result = agent.processQuery("delete the installer");
+
+    EXPECT_EQ(prompts, 1);
+    EXPECT_EQ(ran, 0);
+    EXPECT_EQ(mock.receivedBodies().size(), 1u);
+    EXPECT_EQ(result["stop_reason"], "declined");
+}
+
+TEST(DeclinedToolTest, AnAllowedCallLetsTheTurnGoOn) {
+    bench::MockLlmServer mock;
+    mock.pushResponse(toolCallsResponse(
+        R"([{"id":"c1","type":"function","function":{"name":"remove_file","arguments":"{\"path\":\"a.exe\"}"}}])"));
+    mock.pushResponse(kPlainAnswer);
+
+    ToolAgent agent(makeCfg(mock.baseUrl(), kToolCallingModel));
+    agent.initForTest();
+    int ran = 0;
+    registerGatedRemove(agent, ran);
+    agent.setToolConfirmCallback([](const std::string&, const json&) { return ToolConfirmResult::ALLOW_ONCE; });
+
+    json result = agent.processQuery("delete the installer");
+
+    EXPECT_EQ(ran, 1);
+    EXPECT_EQ(result["result"], "All done.");
+    EXPECT_FALSE(result.contains("stop_reason")) << result.dump();
+}

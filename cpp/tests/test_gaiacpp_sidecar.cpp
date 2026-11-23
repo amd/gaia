@@ -711,7 +711,6 @@ TEST_F(GaiacppSidecar, ApprovalAllowRunsDenySkipsAndStaleOrUnknownIdsAreRejected
     const fs::path denied = work_ / "denied.txt";
     mock().pushResponse(toolReply("file_write", writeArgs(allowed, "AAA")));
     mock().pushResponse(toolReply("file_write", writeArgs(denied, "DDD")));
-    mock().pushResponse(answerReply("Wrote one file."));
     ASSERT_NO_FATAL_FAILURE(startSidecar());
 
     const std::string run = "run-approve";
@@ -784,7 +783,8 @@ TEST_F(GaiacppSidecar, ApprovalAllowRunsDenySkipsAndStaleOrUnknownIdsAreRejected
     ASSERT_TRUE(t.waitDone()) << t.describe();
     auto events = t.events();
     ASSERT_NO_FATAL_FAILURE(expectSingleTerminal(events, "final")) << t.describe();
-    EXPECT_EQ(events.back()["answer"], "Wrote one file.");
+    EXPECT_NE(events.back()["answer"].get<std::string>().find("file_write was not approved"), std::string::npos)
+        << "a decline ends the turn";
     EXPECT_FALSE(fs::exists(denied)) << "deny must not run the tool";
 
     int results = 0;
@@ -796,8 +796,7 @@ TEST_F(GaiacppSidecar, ApprovalAllowRunsDenySkipsAndStaleOrUnknownIdsAreRejected
     }
     EXPECT_EQ(results, 2) << t.describe();
     auto sent = modelRequests();
-    ASSERT_EQ(sent.size(), 3u);
-    EXPECT_NE(sent[2]["messages"].dump().find("denied"), std::string::npos) << "the model is told it was denied";
+    EXPECT_EQ(sent.size(), 2u) << "the model is not asked again after a decline";
 
     auto afterRun = decide(run, "allow", id2);
     ASSERT_TRUE(afterRun);
@@ -861,9 +860,12 @@ TEST_F(GaiacppSidecar, AlwaysOnAFileWriteAllowsOnlyThatWrite) {
 
 TEST_F(GaiacppSidecar, AlwaysOnAShellCommandCoversThatScopeInThatChatOnly) {
     // mkdir changes the disk, so it asks on every shell (bash, Git Bash, cmd.exe), and its grant is "mkdir commands".
+    // A denied call ends its turn, so only the two that run get a closing answer.
     for (const char* command : {"mkdir sub1", "mkdir sub2", "rmdir sub1", "mkdir sub3", "mkdir sub4"}) {
         mock().pushResponse(toolReply("bash_execute", {{"command", command}}));
-        mock().pushResponse(answerReply("ok"));
+        if (std::string(command) == "mkdir sub1" || std::string(command) == "mkdir sub2") {
+            mock().pushResponse(answerReply("ok"));
+        }
     }
     ASSERT_NO_FATAL_FAILURE(startSidecar());
     const json allowed = json::array({work_.string()});

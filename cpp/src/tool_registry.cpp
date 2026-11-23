@@ -264,6 +264,7 @@ json ToolRegistry::executeTool(const std::string& name, const json& args) {
                     allowedStore_->addAlwaysAllowed(grantKey);
                 }
             } else if (decision == ToolConfirmResult::DENY) {
+                ++userDenials_;
                 return json{{"status", "error"}, {"error", "Tool '" + resolvedName + "' execution denied by user"}};
             }
             // ALLOW_ONCE falls through

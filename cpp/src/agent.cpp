@@ -1222,6 +1222,7 @@ json Agent::executeTool(const std::string& toolName, const json& toolArgs) {
     const auto started = std::chrono::steady_clock::now();
     const auto startedOnDisk = std::filesystem::file_time_type::clock::now();
     json result;
+    const size_t denialsBefore = tools_.userDenials();
     // Whatever a tool or its checks throw is the tool's result, so the model
     // hears about it and the turn goes on.
     try {
@@ -1229,6 +1230,8 @@ json Agent::executeTool(const std::string& toolName, const json& toolArgs) {
     } catch (const std::exception& e) {
         result = json{{"status", "error"}, {"error", std::string("Tool '") + toolName + "' failed: " + e.what()}};
     }
+    // A Stop also answers an open prompt with "no"; the cancel path ends that turn.
+    lastCallDeclined_ = tools_.userDenials() > denialsBefore && !cancelRequested();
     const double wall =
         std::chrono::duration<double>(std::chrono::steady_clock::now() - started).count();
     const std::string resolved = tools_.resolveName(toolName);
@@ -2004,7 +2007,20 @@ json Agent::processQueryInternal(const std::vector<Message>& userMessages, int m
     std::string llmError;       // the model call failure that ended the loop
     constexpr size_t kMaxToolCallsPerReply = 24;
     int malformedStreak = 0;
-    std::string stopReason;  // why the loop ended without an answer: loop | empty
+    std::string stopReason;  // why the loop ended early: loop | empty | error | declined
+    // A "no" ends the turn; otherwise the model reads it as a failed route and tries the next one.
+    const auto stopOnDecline = [&](const std::string& tool) {
+        stopReason = "declined";
+        incomplete = true;
+        finalAnswer = tool + " was not approved, so I stopped here and did not try another way "
+                             "to do it. Tell me if you want to go about it differently.";
+        Message reply;
+        reply.role = MessageRole::ASSISTANT;
+        reply.content = finalAnswer;
+        messages.push_back(reply);
+        console_->printWarning("Tool call not approved; ending the turn.");
+        console_->printFinalAnswer(finalAnswer, totalUsage);  // never streamed: the model did not write it
+    };
     // A reply that stopped at the length limit is the answer so far, not the whole of it.
     const auto markCutOff = [&](const std::string& finishReason) {
         if (finishReason != "length") return;
@@ -2305,6 +2321,7 @@ json Agent::processQueryInternal(const std::vector<Message>& userMessages, int m
             }
 
             bool loopDetected = false;
+            std::string declinedTool;
             for (size_t i = 0; i < llmResult.toolCalls.size(); ++i) {
                 const auto& tc = llmResult.toolCalls[i];
                 if (cancelRequested()) break;
@@ -2362,10 +2379,15 @@ json Agent::processQueryInternal(const std::vector<Message>& userMessages, int m
                 } else {
                     toolSucceeded(tc.name, toolArgs);
                 }
+                if (lastCallDeclined_) {
+                    declinedTool = tc.name;
+                    break;
+                }
             }
 
-            // A loop stop is followed by a closing call, so every advertised call needs a reply.
-            for (size_t j = 0; loopDetected && j < llmResult.toolCalls.size(); ++j) {
+            // A loop or decline stop leaves calls unrun, and every advertised call needs a reply.
+            const bool stoppedEarly = loopDetected || !declinedTool.empty();
+            for (size_t j = 0; stoppedEarly && j < llmResult.toolCalls.size(); ++j) {
                 const auto& tc = llmResult.toolCalls[j];
                 const bool answered = std::any_of(
                     messages.begin(), messages.end(), [&tc](const Message& m) {
@@ -2382,6 +2404,10 @@ json Agent::processQueryInternal(const std::vector<Message>& userMessages, int m
             }
 
             if (loopDetected) break;
+            if (!declinedTool.empty()) {
+                stopOnDecline(declinedTool);
+                break;
+            }
             if (!batchNote.empty()) {
                 Message note;
                 note.role = MessageRole::USER;
@@ -2585,6 +2611,10 @@ json Agent::processQueryInternal(const std::vector<Message>& userMessages, int m
                 lastToolFailed = true;
             } else {
                 toolSucceeded(toolName, toolArgs);
+            }
+            if (lastCallDeclined_) {
+                stopOnDecline(toolName);
+                break;
             }
 
             if (parsed.droppedToolCalls > 0) {

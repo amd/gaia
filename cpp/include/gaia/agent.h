@@ -502,6 +502,7 @@ private:
     std::string turnRequest_;
     std::map<std::string, bool> serverToolCalling_;  // base URL + model id -> label seen
     int turnStep_ = 0;
+    bool lastCallDeclined_ = false;  // the user said no to the last executeTool() call
     std::vector<Message> conversationHistory_;
 
     // Full text of recent tool outputs, by id, for read_tool_output.

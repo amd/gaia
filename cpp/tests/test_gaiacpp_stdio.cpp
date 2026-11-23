@@ -857,7 +857,6 @@ TEST_F(GaiacppStdio, LookAlikeCharactersInAPathShowAsCodes) {
     };
     for (const auto& [name, shown] : cases) {
         mock_.pushResponse(toolCall("file_write", {{"path", base + name}, {"content", "hi"}}));
-        mock_.pushResponse(answer("Not written."));
         if (!agent_) start();
         ask("write it");
         const json prompt = waitFor("needs_confirmation", queries_);
@@ -946,7 +945,6 @@ TEST_F(GaiacppStdio, DenyAndTimeoutLeaveTheToolUnrun) {
     for (const std::string decision : {"deny", "timeout"}) {
         const fs::path out = work_ / (decision + ".txt");
         mock_.pushResponse(toolCall("file_write", {{"path", out.string()}, {"content", "hi"}}));
-        mock_.pushResponse(answer("Not written."));
         if (!agent_) start();
         ask("write it");
         const json prompt = waitFor("needs_confirmation", queries_);
@@ -954,7 +952,8 @@ TEST_F(GaiacppStdio, DenyAndTimeoutLeaveTheToolUnrun) {
         decide(decision, prompt["confirm_id"]);
         const json final = waitTerminal(queries_);
         ASSERT_TRUE(final.is_object());
-        EXPECT_EQ(final["answer"], "Not written.");
+        EXPECT_NE(final["answer"].get<std::string>().find("file_write was not approved"), std::string::npos)
+            << decision << ": " << final.dump();
         EXPECT_FALSE(fs::exists(out)) << decision;
         const json result = waitFor("tool_result", queries_);
         EXPECT_NE(result["data"].dump().find("denied"), std::string::npos) << result.dump();
@@ -1082,9 +1081,7 @@ TEST_F(GaiacppStdio, AcceptEditsCoversEditsInTheFolderButNotHiddenOnes) {
     mock_.pushResponse(toolCall("file_write", {{"path", plain.string()}, {"content", "1"}}));
     mock_.pushResponse(answer("Plain."));
     mock_.pushResponse(toolCall("file_write", {{"path", hidden.string()}, {"content", "2"}}));
-    mock_.pushResponse(answer("Hidden."));
     mock_.pushResponse(toolCall("bash_execute", {{"command", "mkdir made"}}));
-    mock_.pushResponse(answer("Shell."));
     Start s;
     s.shell = true;
     start(s);

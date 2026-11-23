@@ -129,6 +129,9 @@ public:
     /// Get the current default policy.
     ToolPolicy defaultPolicy() const;
 
+    /// How many calls the user has declined at the approval prompt so far.
+    size_t userDenials() const { return userDenials_; }
+
     /// Inject a shared AllowedToolsStore.
     /// The store is checked before calling the confirm callback.
     void setAllowedToolsStore(std::shared_ptr<AllowedToolsStore> store);
@@ -140,6 +143,7 @@ private:
     ToolConfirmCallback confirmCallback_;
     ToolPolicy defaultPolicy_ = ToolPolicy::ALLOW;
     std::shared_ptr<AllowedToolsStore> allowedStore_;
+    size_t userDenials_ = 0;
 
     /// Convert string to lowercase for case-insensitive matching.
     static std::string toLower(const std::string& s);
