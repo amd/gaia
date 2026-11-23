@@ -867,14 +867,63 @@ func TestMailThatFitsApprovesAtOnce(t *testing.T) {
 	}
 }
 
-func TestOtherToolsStillApproveWithoutScrolling(t *testing.T) {
-	m := NewConfirmationModel("r", "run_shell_command", longMail(40), "")
-	m.SetMaxRows(8)
-	if !strings.Contains(m.View(), "line-40-end") {
-		t.Error("a shell prompt should still render whole for the caller to clip")
+func TestLongCommandScrollsSoAllOfItCanBeRead(t *testing.T) {
+	m := NewConfirmationModel("r", "run_shell_command", longMail(45), "").WithLiveChannel("c", "")
+	m.SetWidth(130)
+	m.SetMaxRows(12)
+	shown := strings.Builder{}
+	for guard := 0; guard < 100; guard++ {
+		view := m.View()
+		if h := lipgloss.Height(view); h > 12 {
+			t.Fatalf("view is %d rows, over the 12 it was given", h)
+		}
+		for _, want := range []string{"once", "deny"} {
+			if !strings.Contains(view, want) {
+				t.Fatalf("the %q key is off screen:\n%s", want, view)
+			}
+		}
+		shown.WriteString(view)
+		if strings.Contains(view, "line-45-end") {
+			break
+		}
+		m = pressKey(m, "pgdown")
 	}
+	for i := 1; i <= 45; i++ {
+		if want := "line-" + strconv.Itoa(i) + "-end"; !strings.Contains(shown.String(), want) {
+			t.Errorf("%s could not be scrolled into view", want)
+		}
+	}
+	if !strings.Contains(NewConfirmationModelRows(t, 12).View(), "lines 1-") {
+		t.Error("the card does not say how much of the command is showing")
+	}
+}
+
+// NewConfirmationModelRows is a 45-line command prompt given rows rows.
+func NewConfirmationModelRows(t *testing.T, rows int) ConfirmationModel {
+	t.Helper()
+	m := NewConfirmationModel("r", "run_shell_command", longMail(45), "")
+	m.SetWidth(130)
+	m.SetMaxRows(rows)
+	return m
+}
+
+func TestLongCommandCanBeAnsweredWithoutScrolling(t *testing.T) {
+	m := NewConfirmationModelRows(t, 8)
 	if m = pressKey(m, "y"); m.State() != ConfirmationApproved {
 		t.Fatalf("state = %v, want Approved", m.State())
+	}
+}
+
+func TestLongDestructiveCommandKeepsItsWarningWhileScrolling(t *testing.T) {
+	full := NewConfirmationModel("r", "delete_file", longMail(45), "")
+	full.SetWidth(130)
+	warning := destructiveWarning("delete_file", false)
+	if !strings.Contains(full.View(), warning) {
+		t.Skipf("delete_file shows no warning to keep: %q", warning)
+	}
+	full.SetMaxRows(12)
+	if !strings.Contains(full.View(), warning) {
+		t.Errorf("the warning is gone from the scrolling card:\n%s", full.View())
 	}
 }
 

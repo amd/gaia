@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/amd/gaia/tui/internal/ui/components"
 )
@@ -179,5 +180,46 @@ func TestAVeryShortTerminalStillShowsTheCommand(t *testing.T) {
 	}
 	if rows := strings.Count(m.View(), "\n") + 1; rows > m.height {
 		t.Errorf("the frame is %d rows on a %d-row terminal", rows, m.height)
+	}
+}
+
+// A command taller than the screen is read by scrolling the card, with the
+// answer keys on screen the whole time.
+func TestALongCommandIsReadableOnTheCardByScrolling(t *testing.T) {
+	m, _ := liveModel(t)
+	m.width, m.height = 130, 40
+	m.resize()
+	m.streaming = true
+	var script strings.Builder
+	script.WriteString("python3 -c \"\n")
+	for i := 1; i <= 45; i++ {
+		fmt.Fprintf(&script, "step_%d = compute(%d)\n", i, i)
+	}
+	script.WriteString("\"")
+	call := gatedShellCall()
+	call.Summary = script.String()
+	m = feed(t, m, call)
+
+	seen := ""
+	for guard := 0; guard < 20; guard++ {
+		frame := visibleFrame(m)
+		if strings.Contains(frame, "more lines hidden") {
+			t.Fatalf("part of the command cannot be reached:\n%s", frame)
+		}
+		for _, want := range []string{"y once", "n/esc deny"} {
+			if !strings.Contains(frame, want) {
+				t.Fatalf("%q is off screen:\n%s", want, frame)
+			}
+		}
+		seen += frame
+		if strings.Contains(frame, "step_45 = compute(45)") {
+			break
+		}
+		m = pressKey(t, m, tea.KeyMsg{Type: tea.KeyPgDown})
+	}
+	for i := 1; i <= 45; i++ {
+		if want := fmt.Sprintf("step_%d = compute(%d)", i, i); !strings.Contains(seen, want) {
+			t.Errorf("%s never reached the screen", want)
+		}
 	}
 }

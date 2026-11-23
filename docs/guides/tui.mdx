@@ -971,9 +971,11 @@ With the box empty, a `y` or `n` that starts a word is typed too; pressed on its
 own it answers a moment later, or at once with `Enter`. Send the message once
 you have answered.
 
-An email prompt too long for the screen scrolls with `↑`/`↓`/`PgUp`/`PgDn`, and
-`y` only works once its last line has been on screen, because you are approving
-exactly what goes out. `n` and `Esc` work throughout.
+A prompt too long for the screen, such as a multi-line script, scrolls with
+`↑`/`↓`/`PgUp`/`PgDn`: it shows which lines are on screen and keeps the answer
+keys in view. For an email, `y` only works once its last line has been on
+screen, because you are approving exactly what goes out. `n` and `Esc` work
+throughout.
 
 A prompt nobody answers expires after 10 minutes. The agent is told it **timed
 out**, not that you refused, so it asks whether you still want it rather than

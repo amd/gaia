@@ -543,8 +543,8 @@ func (m *ConfirmationModel) SetWidth(w int) {
 	m.markSeen()
 }
 
-// SetMaxRows tells the prompt how many rows it may use. A prompt that must be
-// read whole scrolls inside them; any other is left to the caller to clip.
+// SetMaxRows tells the prompt how many rows it may use. A prompt taller than
+// that scrolls inside them, so all of what is being approved can be read.
 func (m *ConfirmationModel) SetMaxRows(rows int) {
 	if rows < 1 {
 		rows = 1
@@ -566,14 +566,28 @@ func (m ConfirmationModel) innerWidth() int {
 
 // scrolls reports whether this prompt is shown as a window over its text.
 func (m ConfirmationModel) scrolls() bool {
-	return m.state == ConfirmationPending && wholeTextActions[m.action] &&
+	return m.state == ConfirmationPending &&
 		m.maxRows > 0 && lipgloss.Height(m.fullView()) > m.maxRows
 }
 
-// unread reports whether part of the text has not been on screen yet, which is
-// what keeps y from approving.
+// unread reports whether part of a text that must be read whole has not been
+// on screen yet, which is what keeps y from approving.
 func (m ConfirmationModel) unread() bool {
-	return m.scrolls() && m.seen < len(m.textLines())
+	return wholeTextActions[m.action] && m.scrolls() && m.seen < len(m.textLines())
+}
+
+// windowWarning is the risk sentence a scrolling prompt keeps under its text.
+func (m ConfirmationModel) windowWarning() string {
+	if m.tier != RiskDestructive {
+		return ""
+	}
+	inner := m.innerWidth()
+	warning := WrapText(destructiveWarning(m.action, m.riskFromAgent), inner)
+	// The warning yields before the text does.
+	if m.maxRows-lipgloss.Height(WrapText(m.styledKeyHint(), inner))-lipgloss.Height(warning) < 4 {
+		return ""
+	}
+	return warning
 }
 
 // windowLayout is the pieces of a scrolling prompt that fit in maxRows: the rows
@@ -582,6 +596,9 @@ func (m ConfirmationModel) unread() bool {
 func (m ConfirmationModel) windowLayout() (rows int, title, position bool) {
 	inner := m.innerWidth()
 	rows = m.maxRows - lipgloss.Height(WrapText(m.styledKeyHint(), inner))
+	if w := m.windowWarning(); w != "" {
+		rows -= lipgloss.Height(w)
+	}
 	title, position = true, true
 	titleRows := lipgloss.Height(WrapText(m.titleLine(), inner))
 	if rows-titleRows-1 >= 1 {
@@ -823,6 +840,9 @@ func (m ConfirmationModel) windowView() string {
 	if position {
 		lines = append(lines, confirmationHintStyle.Render(ansi.Truncate(m.positionLine(rows, len(text)), inner, "…")))
 	}
+	if w := m.windowWarning(); w != "" {
+		lines = append(lines, confirmationWarnStyle.Render(w))
+	}
 	lines = append(lines, lipgloss.PlaceVertical(
 		lipgloss.Height(WrapText(m.styledKeyHint(), inner)), lipgloss.Bottom,
 		WrapText(m.windowKeyHint(), inner)))
@@ -835,8 +855,11 @@ func (m ConfirmationModel) positionLine(rows, total int) string {
 		end = total
 	}
 	where := "lines " + strconv.Itoa(m.scroll+1) + "-" + strconv.Itoa(end) + " of " + strconv.Itoa(total)
-	if m.unread() {
+	if end < total || m.unread() {
 		return where + " · ↓ to read the rest"
+	}
+	if !wholeTextActions[m.action] && m.scroll > 0 {
+		return where + " · ↑ to go back"
 	}
 	return where + " · read to the end"
 }
