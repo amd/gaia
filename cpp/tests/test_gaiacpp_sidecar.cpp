@@ -974,6 +974,37 @@ TEST_F(GaiacppSidecar, AlwaysOnAShellCommandCoversThatScopeInThatChatOnly) {
 
 // ---- 6. cancel ----
 
+#ifndef _WIN32
+// "Always allow mkdir commands" holds for the way a coding turn writes them: cd first, 2>&1 last.
+TEST_F(GaiacppSidecar, AlwaysOnACommandHoldsWhenTheNextOneStartsWithCdAndStillAsksForAChain) {
+    const std::string cd = "cd " + work_.string() + " && ";
+    for (const std::string& command : {cd + "mkdir one", cd + "mkdir two 2>&1", std::string("mkdir three 2>&1"),
+                                       cd + "mkdir four && rmdir one"}) {
+        mock().pushResponse(toolReply("bash_execute", {{"command", command}}));
+        mock().pushResponse(answerReply("ok"));
+    }
+    ASSERT_NO_FATAL_FAILURE(startSidecar());
+    const json allowed = json::array({work_.string()});
+
+    auto card = runTurn(*this, port_, "run-cd1", "chat-cd", allowed, "always");
+    ASSERT_TRUE(card);
+    EXPECT_EQ((*card)["always_scope"], "bash_execute:cmd:mkdir") << card->dump();
+    EXPECT_EQ((*card)["always_label"], "Run mkdir commands") << card->dump();
+    EXPECT_TRUE(fs::is_directory(work_ / "one"));
+
+    EXPECT_FALSE(runTurn(*this, port_, "run-cd2", "chat-cd", allowed, "")) << "asked again for mkdir";
+    EXPECT_TRUE(fs::is_directory(work_ / "two"));
+    EXPECT_FALSE(runTurn(*this, port_, "run-cd3", "chat-cd", allowed, "")) << "asked again for mkdir";
+    EXPECT_TRUE(fs::is_directory(work_ / "three"));
+
+    auto chain = runTurn(*this, port_, "run-cd4", "chat-cd", allowed, "deny");
+    ASSERT_TRUE(chain) << "a chain of two commands ran on a grant for one";
+    EXPECT_EQ((*chain)["always_scope"].get<std::string>().rfind("bash_execute:exact:", 0), 0u) << chain->dump();
+    EXPECT_FALSE(fs::exists(work_ / "four"));
+    EXPECT_TRUE(fs::is_directory(work_ / "one"));
+}
+#endif
+
 TEST_F(GaiacppSidecar, CancelWhileWaitingForApprovalEndsTheTurnAndTheChatGoesOn) {
     const fs::path target = work_ / "never.txt";
     mock().pushResponse(toolReply("file_write", writeArgs(target, "x")));
