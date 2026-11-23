@@ -21,6 +21,7 @@
 
 #include <httplib.h>
 
+#include <gaia/file_snapshots.h>
 #include <gaia/console.h>
 #include <gaia/lemonade_client.h>
 #include <gaia/memory_store.h>
@@ -862,6 +863,7 @@ private:
         }
         const bool undoRequested = body.contains("changes_turn_id") && body["changes_turn_id"].is_string();
         if (undoRequested && sid.empty()) throw BadRequest(422, "changes_turn_id needs a session_id");
+        const std::string undoTurn = undoRequested ? body["changes_turn_id"].get<std::string>() : "";
         const bool reasoning = body.value("reasoning", false);
         const std::string model = body.value("model", "");
         const int maxSteps = body.value("max_steps", 0);
@@ -930,7 +932,7 @@ private:
 
         try {
         std::thread([this, s, run, history = std::move(history), text, model, maxSteps, documents, reasoning,
-                     undoRequested, hasTurns]() mutable {
+                     undoRequested, undoTurn, hasTurns]() mutable {
             // One chat works at a time: the working folder is process-wide. A
             // chat waiting on its user lets go of it (see confirm()).
             std::unique_lock<std::timed_mutex> turnLock(turnsMu_, std::defer_lock);
@@ -948,6 +950,7 @@ private:
             if (started) s->turnLock = &turnLock;
             const auto t0 = std::chrono::steady_clock::now();
             json terminal;
+            std::shared_ptr<TurnRecorder> recorder;
             if (!started) {
                 terminal = {{"type", "final"}, {"answer", ""}};
             } else try {
@@ -966,9 +969,18 @@ private:
                 if (run->cancelled) throw std::runtime_error("cancelled");
                 const std::string folderProblem = enterWorkingDirectory(*s);
                 if (!folderProblem.empty()) throw std::runtime_error(folderProblem);
-                if (undoRequested) {
+                if (undoRequested && s->agent->recordsChanges()) {
+                    try {
+                        recorder = std::make_shared<TurnRecorder>(s->id, undoTurn);
+                        s->agent->setChangeRecorder(recorder);
+                    } catch (const SnapshotError& e) {
+                        s->console->emit({{"type", "status"},
+                                          {"message", std::string("Undo may not work for this turn: ") + e.what()}});
+                    }
+                } else if (undoRequested) {
                     s->console->emit({{"type", "status"},
-                                      {"message", "Undo may not work for this turn: gaiacpp doesn't record file changes yet."}});
+                                      {"message", "Undo may not work for this turn: this agent doesn't "
+                                                  "record file changes yet."}});
                 }
                 indexDocuments(*s, documents);
                 AgentConfig cfg = s->agent->config();
@@ -1014,6 +1026,18 @@ private:
             } catch (...) {
                 // Anything else would end the process and every other chat with it.
                 terminal = {{"type", "error"}, {"detail", "The turn failed with an unknown error"}, {"status", 500}};
+            }
+            if (recorder) {
+                // Whatever ended the turn, what it changed is saved for the Changes view and undo.
+                s->agent->setChangeRecorder(nullptr);
+                try {
+                    recorder->finish();
+                } catch (const std::exception& e) {
+                    if (s->console) {
+                        s->console->emit({{"type", "status"},
+                                          {"message", std::string("Undo may not work for this turn: ") + e.what()}});
+                    }
+                }
             }
             if (s->console) s->console->detach();
             {

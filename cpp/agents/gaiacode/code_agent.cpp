@@ -225,6 +225,20 @@ ToolInfo CodeAgent::observed(ToolInfo tool) {
         const bool measure =
             shellLike && !(name == "bash_execute" &&
                            isReadOnlyShellCommand(" " + command + " ", !BashTools::detectShell().empty()));
+        std::shared_ptr<TurnRecorder> recorder;
+        {
+            std::lock_guard<std::mutex> lock(recorderMu_);
+            recorder = recorder_;
+        }
+        // A copy before the first change to each file, or no change at all.
+        if (recorder && (name == "file_write" || name == "file_edit") && args.is_object() &&
+            args.contains("path") && args["path"].is_string()) {
+            try {
+                recorder->capture(args["path"].get<std::string>(), name);
+            } catch (const SnapshotError& e) {
+                return json{{"status", "error"}, {"error", e.what()}};
+            }
+        }
         std::string folder;
         std::optional<std::string> before;
         if (measure) {
@@ -242,6 +256,12 @@ ToolInfo CodeAgent::observed(ToolInfo tool) {
         std::vector<TurnEvent> seen;
         const std::optional<std::string> after = before ? treeFingerprint(folder) : std::nullopt;
         const bool failed = !result.is_object() || result.value("status", "") == "error" || result.contains("error");
+        if (recorder && measure) {
+            // No copies of what a shell command writes: the Changes view says undo may be incomplete,
+            // unless the working tree shows it wrote nothing.
+            const bool wroteNothing = before && after && *before == *after;
+            recorder->noteUntracked("shell", command, !wroteNothing);
+        }
         if (before && after && !failed) {
             const std::optional<TurnEvent> t = testResult(name, args, result);
             const bool changed = *before != *after;
@@ -259,6 +279,11 @@ ToolInfo CodeAgent::observed(ToolInfo tool) {
         return result;
     };
     return tool;
+}
+
+void CodeAgent::setChangeRecorder(std::shared_ptr<TurnRecorder> recorder) {
+    std::lock_guard<std::mutex> lock(recorderMu_);
+    recorder_ = std::move(recorder);
 }
 
 void CodeAgent::onTurnStart() {

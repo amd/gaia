@@ -612,6 +612,33 @@ TEST(GaiacodeGuards, AScriptKeepsItsOwnDollars) {
     EXPECT_NE(out.value("stdout", "").find("$total"), std::string::npos) << out.dump();
 }
 
+TEST(GaiacodeUndo, AFileEditIsSavedFirstAndAShellWriteMarksUndoIncomplete) {
+    if (BashTools::detectShell().empty()) GTEST_SKIP() << "needs a POSIX shell for the commands below";
+    MeasuredRepo repo("gaiacode-undo");
+    const fs::path store = repo.dir.parent_path() / (repo.dir.filename().u8string() + "-store");
+    ASSERT_TRUE(repo.agent->recordsChanges());
+    auto recorder = std::make_shared<TurnRecorder>("chat-undo", "20261122120000-0123abcd", store);
+    repo.agent->setChangeRecorder(recorder);
+    const json wrote = repo.run("file_write", {{"path", (repo.dir / "calc.py").u8string()}, {"content", "x = 2\n"}});
+    ASSERT_NE(wrote.value("status", ""), "error") << wrote.dump();
+    repo.run("bash_execute", {{"command", "git status --short"}});  // measured, and it wrote nothing
+    repo.run("run_checks", {{"command", "printf 'y\n' >> calc.py"}});
+    repo.agent->setChangeRecorder(nullptr);
+    recorder->finish();
+    std::ifstream in(store / "chat-undo" / "20261122120000-0123abcd" / "manifest.json");
+    const json m = json::parse(in);
+    ASSERT_EQ(m["files"].size(), 1u);
+    EXPECT_EQ(m["files"][0]["tool"], "file_write");
+    EXPECT_EQ(m["files"][0]["existed"], true);
+    ASSERT_EQ(m["untracked"].size(), 2u) << m.dump();
+    EXPECT_EQ(m["untracked"][0]["may_write"], false) << "the tree didn't change: undo stays complete";
+    EXPECT_EQ(m["untracked"][1]["may_write"], true) << "the tree changed, so undo may be incomplete";
+    // With no recorder, the tools change files as before.
+    EXPECT_NE(repo.run("file_write", {{"path", (repo.dir / "b.py").u8string()}, {"content", ""}}).value("status", ""),
+              "error");
+    fs::remove_all(store);
+}
+
 TEST(GaiacodeEvents, OutsideARepositoryAnythingButAReadMayHaveEdited) {
     EXPECT_FALSE(CodeAgent::treeFingerprint(fs::temp_directory_path().u8string() + "/no-such-repo-here").has_value());
     EXPECT_EQ(CodeAgent::classify("run_checks", {{"command", "ruff check ."}},
