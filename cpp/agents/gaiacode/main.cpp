@@ -28,9 +28,9 @@
 #include <gaia/clean_console.h>
 #include <gaia/types.h>
 
-#include "../gaiacpp/bash_tools.h"
-#include "../gaiacpp/sidecar.h"
-#include "../gaiacpp/stdio_server.h"
+#include "../../apps/bash_tools.h"
+#include "../../apps/sidecar.h"
+#include "../../apps/stdio_server.h"
 #include "code_agent.h"
 
 #ifndef GAIACODE_VERSION

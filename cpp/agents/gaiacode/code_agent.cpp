@@ -21,7 +21,7 @@
 #include <gaia/security.h>
 #include <gaia/shell_guards.h>
 
-#include "../gaiacpp/bash_tools.h"
+#include "../../apps/bash_tools.h"
 #include "check_runner.h"
 #include "github.h"
 

@@ -410,9 +410,9 @@ if(GAIA_BUILD_GAIA_AGENT)
         agents/gaiacpp/main.cpp
         agents/gaiacpp/gaia_agent.cpp
         agents/gaiacpp/delegation.cpp
-        agents/gaiacpp/sidecar.cpp
-        agents/gaiacpp/stdio_server.cpp
-        agents/gaiacpp/bash_tools.cpp
+        apps/sidecar.cpp
+        apps/stdio_server.cpp
+        apps/bash_tools.cpp
     )
     # A GAIA release stamps its own version (0.25.4, 0.25.4-rc.1); the daemon
     # and the release checks read it back from `gaiacpp --version`.
@@ -459,9 +459,9 @@ if(GAIA_BUILD_GAIACODE)
         agents/gaiacode/code_agent.cpp
         agents/gaiacode/check_runner.cpp
         agents/gaiacode/github.cpp
-        agents/gaiacpp/bash_tools.cpp
-        agents/gaiacpp/sidecar.cpp
-        agents/gaiacpp/stdio_server.cpp
+        apps/bash_tools.cpp
+        apps/sidecar.cpp
+        apps/stdio_server.cpp
     )
     # Bundled skills sit beside the binary, where SkillLibrary looks first.
     add_custom_command(TARGET gaiacode POST_BUILD
@@ -548,7 +548,7 @@ if(GAIA_BUILD_TESTS)
         tests/test_media_tools.cpp
         agents/gaiacpp/gaia_agent.cpp
         agents/gaiacpp/delegation.cpp
-        agents/gaiacpp/bash_tools.cpp
+        apps/bash_tools.cpp
         tests/test_console.cpp
         tests/test_http_client.cpp
         tests/test_lemonade_client.cpp
@@ -607,7 +607,7 @@ if(GAIA_BUILD_TESTS)
     # the CLI, and the sidecar HTTP + SSE API the Agent UI and the TUI use.
     if(GAIA_BUILD_GAIA_AGENT)
         target_sources(tests_mock PRIVATE tests/test_gaiacpp_cli.cpp tests/test_gaiacpp_sidecar.cpp)
-        target_sources(tests_mock PRIVATE tests/test_gaiacpp_stdio.cpp agents/gaiacpp/stdio_server.cpp)
+        target_sources(tests_mock PRIVATE tests/test_gaiacpp_stdio.cpp apps/stdio_server.cpp)
         target_compile_definitions(tests_mock PRIVATE GAIACPP_BIN="$<TARGET_FILE:gaiacpp>")
         add_dependencies(tests_mock gaiacpp)
     endif()
@@ -623,7 +623,7 @@ if(GAIA_BUILD_TESTS)
             agents/gaiacode/github.cpp
         )
         if(NOT GAIA_BUILD_GAIA_AGENT)
-            target_sources(tests_mock PRIVATE agents/gaiacpp/stdio_server.cpp)
+            target_sources(tests_mock PRIVATE apps/stdio_server.cpp)
         endif()
         target_compile_definitions(tests_mock PRIVATE GAIACODE_BIN="$<TARGET_FILE:gaiacode>")
         add_dependencies(tests_mock gaiacode)

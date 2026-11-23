@@ -32,8 +32,8 @@
 #include <gaia/session.h>
 
 #include "gaia_agent.h"
-#include "sidecar.h"
-#include "stdio_server.h"
+#include "../../apps/sidecar.h"
+#include "../../apps/stdio_server.h"
 
 #ifdef _WIN32
 #include <windows.h>

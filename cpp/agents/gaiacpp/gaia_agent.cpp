@@ -25,7 +25,7 @@
 #include <gaia/web_tools.h>
 #include <gaia/workspace.h>
 
-#include "bash_tools.h"
+#include "../../apps/bash_tools.h"
 
 namespace gaia {
 

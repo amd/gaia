@@ -15,7 +15,7 @@
 
 #include <gaia/security.h>
 
-#include "../gaiacpp/bash_tools.h"
+#include "../../apps/bash_tools.h"
 
 namespace gaia::code {
 

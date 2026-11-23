@@ -22,8 +22,8 @@
 #include <vector>
 
 #include "../agents/gaiacode/code_agent.h"
-#include "../agents/gaiacpp/bash_tools.h"
-#include "../agents/gaiacpp/stdio_server.h"
+#include "../apps/bash_tools.h"
+#include "../apps/stdio_server.h"
 #include "gaia/types.h"
 #include "support/child_process.h"
 #include "support/mock_llm_server.h"

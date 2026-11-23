@@ -9,7 +9,7 @@
 
 #include "../agents/gaiacode/check_runner.h"
 #include "../agents/gaiacode/code_agent.h"
-#include "../agents/gaiacpp/bash_tools.h"
+#include "../apps/bash_tools.h"
 
 using namespace gaia;
 using namespace gaia::code;

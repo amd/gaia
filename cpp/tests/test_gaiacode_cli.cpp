@@ -14,7 +14,7 @@
 #include "gaia/process.h"
 #include "gaia/types.h"
 #include "support/mock_llm_server.h"
-#include "../agents/gaiacpp/bash_tools.h"
+#include "../apps/bash_tools.h"
 
 using gaia::json;
 namespace fs = std::filesystem;
