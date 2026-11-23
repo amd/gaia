@@ -257,6 +257,14 @@ int main(int argc, char** argv) {
     setenv("GIT_TERMINAL_PROMPT", "0", 1);
     setenv("GCM_INTERACTIVE", "never", 1);
 #endif
+    // Nor for an SSH key's passphrase; a user's own ssh command is left as it is.
+    if (std::getenv("GIT_SSH_COMMAND") == nullptr) {
+#ifdef _WIN32
+        _putenv_s("GIT_SSH_COMMAND", "ssh -o BatchMode=yes");
+#else
+        setenv("GIT_SSH_COMMAND", "ssh -o BatchMode=yes", 0);
+#endif
+    }
     const Cli cli = parse(argc, argv);
     std::signal(SIGINT, onSignal);
     std::signal(SIGTERM, onSignal);

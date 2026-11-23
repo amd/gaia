@@ -33,9 +33,13 @@ public:
     /// <gaia_home>/snapshots.
     static std::filesystem::path defaultRoot();
 
-    /// Save `path` as it is now, the first time this turn changes it. Throws SnapshotError
-    /// when the copy can't be saved: the caller must then leave the file alone.
-    void capture(const std::string& path, const std::string& tool);
+    /// Save `path` as it is now, the first time this turn changes it; true when this call
+    /// added it. Throws SnapshotError when the copy can't be saved: the caller must then leave
+    /// the file alone. After finish(), the write is noted as one undo can't cover.
+    bool capture(const std::string& path, const std::string& tool);
+
+    /// Forget a copy capture() just added, for a change the tool then didn't make.
+    void discard(const std::string& path);
 
     /// Work done without a copy (a shell command). may_write false records work known
     /// not to have written files; true marks the turn's undo as possibly incomplete.
@@ -49,6 +53,8 @@ public:
 
 private:
     void save();
+    /// A tool that outlived the turn wrote after finish(): mark the saved record incomplete.
+    void noteLate(const std::string& kind, const std::string& detail);
     bool hasChanges() const;
 
     std::filesystem::path dir_;
