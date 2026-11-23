@@ -124,6 +124,23 @@ def platform_withheld_tools() -> Dict[str, str]:
     return dict.fromkeys(sorted(SPEECH_OUTPUT_TOOLS), reason) if reason else {}
 
 
+def platform_withheld_prompt() -> str:
+    """The system-prompt block naming what this PC withholds; empty when nothing is.
+
+    A request with no matching tool and no stated reason gets improvised from
+    the shell, so the model is told the capability is off and to say so.
+    """
+    reason = platform_withheld_tools().get("text_to_speech")
+    if not reason:
+        return ""
+    return (
+        f"\n**NO SPEECH OUTPUT ON THIS PC:** {reason} Asked to read aloud, dictate, "
+        "or turn text into spoken audio (MP3/WAV) → reply with that and stop. Never "
+        "make speech another way: no shell commands (`say`, ffmpeg), scripts, other "
+        "tools, installs or downloads.\n"
+    )
+
+
 def withheld_tools(features: ModelFeatures) -> FrozenSet[str]:
     """Every tool of every feature *features* turns off."""
     return frozenset().union(

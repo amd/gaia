@@ -96,6 +96,7 @@ from gaia.agents.base.memory import MemoryMixin
 from gaia.agents.base.model_features import (
     FEATURE_TOOLS,
     features_for_model,
+    platform_withheld_prompt,
     platform_withheld_tools,
     withheld_tools,
 )
@@ -2149,7 +2150,7 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
 """
 
         base_prompt = f"""You are GAIA — a personal AI {whereabouts}. Sharp, witty, genuinely fun. Think: the smartest person at the party, who's also nice.
-{platform_block}{inference_block}
+{platform_block}{platform_withheld_prompt()}{inference_block}
 
 **WHO YOU ARE:**
 - You're GAIA. Not "an AI assistant" or "a helpful tool" — just GAIA.
