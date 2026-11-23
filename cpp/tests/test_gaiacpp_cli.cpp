@@ -617,6 +617,50 @@ TEST_F(GaiacppCli, AStaleEnvShFollowsGaiasLiveServer) {
     EXPECT_EQ(mock.receivedAuthorization()[0], "Bearer live-key");
 }
 
+// GAIA's server is up and the user's own LEMONADE_API_KEY wins over GAIA's key:
+// the refusal names that variable, and never says to start a daemon that is running.
+TEST_F(GaiacppCli, ARefusedKeyIsNotReportedAsAServerThatIsDown) {
+    httplib::Server srv;
+    std::string sent;
+    srv.Get("/api/v1/models", [&](const httplib::Request& req, httplib::Response& res) {
+        sent = req.get_header_value("Authorization");
+        res.status = 401;
+        res.set_content(R"({"error":"invalid api key"})", "application/json");
+    });
+    const int port = srv.bind_to_any_port("127.0.0.1");
+    std::thread t([&srv] { srv.listen_after_bind(); });
+    while (!srv.is_running()) std::this_thread::sleep_for(std::chrono::milliseconds(5));
+
+    const fs::path home = dir_ / "gaia-home";
+    fs::create_directories(home / "lemonade");
+#ifdef _WIN32
+    const long long pid = _getpid();
+#else
+    const long long pid = getpid();
+#endif
+    std::ofstream(home / "lemonade" / "state.json")
+        << json{{"pid", pid}, {"port", port}, {"api_key", "gaia-own-key"}}.dump();
+    auto env = isolated();
+    env["LEMONADE_API_KEY"] = "users-other-key";
+
+    std::string bin = GAIACPP_BIN;
+    if (bin.find(' ') != std::string::npos) bin = "\"" + bin + "\"";
+    const gaia::ProcessResult r = gaia::ProcessRunner::run(
+        bin + " -p hi -m mock-model --no-memory --no-skills --no-web", 60000, (dir_ / "work").string(), env);
+    srv.stop();
+    t.join();
+
+    EXPECT_EQ(r.exitCode, 1);
+    EXPECT_EQ(sent, "Bearer users-other-key");
+    const std::string& e = r.stderr_output;
+    EXPECT_NE(e.find("HTTP 401"), std::string::npos) << e;
+    EXPECT_NE(e.find("unset LEMONADE_API_KEY"), std::string::npos) << e;
+    EXPECT_EQ(e.find("gaia daemon start"), std::string::npos) << e;
+    EXPECT_EQ(e.find("did not answer"), std::string::npos) << e;
+    EXPECT_EQ(e.find("users-other-key"), std::string::npos) << "a key is never printed";
+    EXPECT_EQ(e.find("gaia-own-key"), std::string::npos) << "a key is never printed";
+}
+
 TEST_F(GaiacppCli, FlagsStillBeatGaiasSetup) {
     bench::MockLlmServer mock;
     mock.pushResponse(withUsage(finalAnswer("ok"), 50, 0, 5));

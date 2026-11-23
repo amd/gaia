@@ -335,6 +335,122 @@ TEST_F(ModelCheck, UnreachableGaiaServerSaysHowToStartGaia) {
     }
 }
 
+// A server whose model list is `status` and `body`, for replies Lemonade never sends.
+std::string checkAgainstReply(int status, const std::string& body, const ServerOrigin& origin) {
+    httplib::Server srv;
+    srv.Get("/api/v1/models", [&](const httplib::Request&, httplib::Response& res) {
+        res.status = status;
+        res.set_content(body, "application/json");
+    });
+    const int port = srv.bind_to_any_port("127.0.0.1");
+    std::thread t([&srv] { srv.listen_after_bind(); });
+    while (!srv.is_running()) std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    std::string msg;
+    {
+        LemonadeClient client("http://127.0.0.1:" + std::to_string(port) + "/api/v1");
+        std::istringstream in;
+        std::ostringstream err;
+        try {
+            checkServerAndModel(client, "Have-GGUF", origin, false, DownloadPrompt{false, &in, &err});
+        } catch (const std::exception& e) {
+            msg = e.what();
+        }
+    }  // the client's open connection would hold stop() up
+    srv.stop();
+    t.join();
+    return msg;
+}
+
+bool has(const std::string& text, const std::string& part) { return text.find(part) != std::string::npos; }
+
+// A server that answers is running: telling the user to start it sends them nowhere.
+TEST(ServerAnswersWithAnError, ARefusedKeyOfTheUsersNamesItsVariableNotTheDaemon) {
+    ServerOrigin origin{ServerSource::GaiaRunning, "/h/.gaia/lemonade"};
+    origin.keyVar = "LEMONADE_API_KEY";
+    const std::string e = checkAgainstReply(401, R"({"error":"bad key"})", origin);
+    EXPECT_TRUE(has(e, "HTTP 401")) << e;
+    EXPECT_TRUE(has(e, "refused the key in LEMONADE_API_KEY")) << e;
+    EXPECT_TRUE(has(e, "unset LEMONADE_API_KEY")) << e;
+    EXPECT_FALSE(has(e, "did not answer")) << e;
+    EXPECT_FALSE(has(e, "gaia daemon start")) << e;
+}
+
+TEST(ServerAnswersWithAnError, ARefusedKeyOnANamedServerSaysWhereTheAddressCameFrom) {
+    ServerOrigin origin{ServerSource::Flag, "--base-url"};
+    origin.keyVar = "MY_KEY";
+    const std::string e = checkAgainstReply(403, "", origin);
+    EXPECT_TRUE(has(e, "HTTP 403")) << e;
+    EXPECT_TRUE(has(e, "Set MY_KEY to the key that server expects")) << e;
+    EXPECT_TRUE(has(e, "came from --base-url")) << e;
+    EXPECT_FALSE(has(e, "gaia daemon")) << e;
+}
+
+TEST(ServerAnswersWithAnError, ARefusalWithNoKeySentSaysHowToSendOne) {
+    const std::string e = checkAgainstReply(401, "", {ServerSource::LemonadeEnv, "LEMONADE_BASE_URL"});
+    EXPECT_TRUE(has(e, "needs a key and none was sent")) << e;
+    EXPECT_TRUE(has(e, "GAIA_API_KEY")) << e;
+    EXPECT_TRUE(has(e, "--api-key-env")) << e;
+    EXPECT_TRUE(has(e, "came from LEMONADE_BASE_URL")) << e;
+}
+
+TEST(ServerAnswersWithAnError, GaiasOwnKeyRefusedMeansItsRecordIsStale) {
+    ServerOrigin origin{ServerSource::GaiaRunning, "/h/.gaia/lemonade"};
+    origin.gaiaKey = true;
+    const std::string e = checkAgainstReply(401, "", origin);
+    EXPECT_TRUE(has(e, "refused GAIA's own key")) << e;
+    EXPECT_TRUE(has(e, "gaia daemon restart")) << e;
+}
+
+TEST(ServerAnswersWithAnError, AServerErrorIsReportedWithItsStatusAndTheAddressesSource) {
+    const std::string e =
+        checkAgainstReply(500, "boom\nline two", {ServerSource::GaiaBaseUrlEnv, "GAIA_BASE_URL"});
+    EXPECT_TRUE(has(e, "answered, but not the way GAIA's model server (Lemonade) does: HTTP 500: boom line two")) << e;
+    EXPECT_TRUE(has(e, "came from GAIA_BASE_URL")) << e;
+    EXPECT_FALSE(has(e, "did not answer")) << e;
+    EXPECT_FALSE(has(e, "gaia daemon start")) << e;
+}
+
+TEST(ServerAnswersWithAnError, AReplyThatIsNotJsonOrNotAModelListIsNotAServerThatIsDown) {
+    for (const char* body : {"<html>router login</html>", R"({"hello":"world"})"}) {
+        const std::string e = checkAgainstReply(200, body, {ServerSource::Default, "/h/.gaia/lemonade"});
+        EXPECT_TRUE(has(e, "answered, but not the way GAIA's model server (Lemonade) does")) << e;
+        EXPECT_TRUE(has(e, "Lemonade's standard port")) << e;
+        EXPECT_TRUE(has(e, "gaia init")) << e;
+        EXPECT_FALSE(has(e, "No model server answered")) << e;
+    }
+}
+
+// Another program on GAIA's last port: GAIA is still the thing to start, and the reply is shown.
+TEST(ServerAnswersWithAnError, AnotherProgramOnGaiasLastPortIsNamed) {
+    const std::string e = checkAgainstReply(404, "nope", {ServerSource::GaiaStopped, "/h/.gaia/lemonade"});
+    EXPECT_TRUE(has(e, "another program answered at its last address")) << e;
+    EXPECT_TRUE(has(e, "HTTP 404: nope")) << e;
+    EXPECT_TRUE(has(e, "gaia daemon start")) << e;
+}
+
+TEST_F(GaiaSetup, TheKeySourceIsNamedTheWayTheKeyIsChosen) {
+    AgentConfig cfg;
+    cfg.baseUrl = "http://127.0.0.1:9/api/v1";
+    ServerOrigin o;
+    noteKeySource(o, cfg, false);
+    EXPECT_EQ(o.keyVar, "") << "no key set";
+    env_.set("LEMONADE_API_KEY", "local");
+    noteKeySource(o, cfg, false);
+    EXPECT_EQ(o.keyVar, "LEMONADE_API_KEY");
+    cfg.baseUrl = "http://example.com/api/v1";
+    noteKeySource(o, cfg, false);
+    EXPECT_EQ(o.keyVar, "") << "the local Lemonade key is never sent to another host";
+    env_.set("GAIA_API_KEY", "mine");
+    noteKeySource(o, cfg, false);
+    EXPECT_EQ(o.keyVar, "GAIA_API_KEY");
+    cfg.apiKeyEnv = "MY_KEY";
+    noteKeySource(o, cfg, false);
+    EXPECT_EQ(o.keyVar, "MY_KEY");
+    noteKeySource(o, cfg, true);
+    EXPECT_TRUE(o.gaiaKey);
+    EXPECT_EQ(o.keyVar, "");
+}
+
 TEST_F(ModelCheck, NothingFoundNeverSaysToStartAServerOnTheStandardPort) {
     LemonadeClient client("http://127.0.0.1:1/api/v1");
     std::istringstream in;
