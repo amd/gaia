@@ -106,7 +106,9 @@ If any file can't be moved, the command fails and names it. The lock's hashes ar
 5. **Gates:** `tests` (Python suite + npm vitest) and `scorecard-gate` (parses
    `hub/agents/gaia/npm/SCORECARD.md`, bar from
    `tests/fixtures/gaia/quality_gate_thresholds.json`, regression vs the previous
-   `agent-pkg-gaia-*` tag) block publish. `gaia-eval` runs a judged subset on
+   `agent-pkg-gaia-*` tag, and — when the card changed since that tag — its
+   `agent.version` must equal the release version) block publish. A card carried
+   over unchanged only gets a "stale scorecard" warning. `gaia-eval` runs a judged subset on
    self-hosted hardware and only reports.
 6. **Approve the gate.** `publish` pauses on the `agent-publish` environment until
    a maintainer approves; the publish secrets aren't readable until then.

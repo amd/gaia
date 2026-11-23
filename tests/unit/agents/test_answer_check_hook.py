@@ -8,6 +8,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from gaia.agents.base.agent import Agent
+from gaia.agents.base.memory import MemoryMixin
 from gaia.agents.base.tools import _TOOL_REGISTRY
 
 
@@ -175,6 +176,54 @@ def test_a_required_call_is_made_at_most_once_per_turn(monkeypatch, tmp_path):
     assert agent.kept == ["x y"]
     assert len(sent) == 3
     assert "Nothing was kept." in result["result"]
+
+
+class _RememberingAgent(MemoryMixin, Agent):
+    """Has remember, and records every call made to it."""
+
+    def _get_system_prompt(self):
+        return "Answer."
+
+    def _register_tools(self):
+        from gaia.agents.base.tools import tool
+
+        agent = self
+
+        @tool
+        def remember(fact: str) -> dict:
+            """Keep a fact."""
+            agent.saved.append(fact)
+            return {"status": "stored", "knowledge_id": "k1"}
+
+
+@pytest.mark.parametrize(
+    "request_text",
+    [
+        "Remember that my dog's name is Rex.",
+        "My birthday is March 3. Please remember that.",
+    ],
+)
+def test_gaia_never_calls_remember_for_the_model(monkeypatch, tmp_path, request_text):
+    agent = _make(_RememberingAgent, monkeypatch, tmp_path)
+    agent.saved = []
+    agent.console.background_mode = False
+    sent = _script(agent, "Got it.", "Got it, noted.", "Okay.")
+    agent.process_query(request_text)
+    assert agent.saved == []
+    # The completion nudge and the answer check each ask once; GAIA calls nothing.
+    assert len(sent) == 3
+    (repair,) = _repairs(sent)
+    assert "Call remember now" in repair
+
+
+def test_a_declined_detail_is_never_pushed_back_for_a_save(monkeypatch, tmp_path):
+    agent = _make(_RememberingAgent, monkeypatch, tmp_path)
+    agent.saved = []
+    agent.console.background_mode = False
+    sent = _script(agent, "Okay, I left your phone number out.")
+    agent.process_query("Remember my phone is 555-1234 leave it out")
+    assert agent.saved == []
+    assert len(sent) == 1
 
 
 _PAGE = "https://www.example.org/report/page-one"

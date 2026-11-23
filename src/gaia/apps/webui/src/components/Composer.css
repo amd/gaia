@@ -131,14 +131,14 @@
     width: 32px;
     height: 32px;
     border-radius: var(--radius-full);
-    background: var(--accent-fill);
-    color: var(--accent-fill-text);
+    background: var(--action-fill);
+    color: var(--action-fill-text);
     flex-shrink: 0;
     transition: background var(--duration-fast) var(--ease), transform var(--duration) var(--ease-spring);
 }
 
 .composer-send:hover:not(:disabled) {
-    background: var(--accent-fill-hover);
+    background: var(--action-fill-hover);
     transform: translateY(-1px);
 }
 
@@ -262,7 +262,7 @@
 }
 
 .composer-attachment-state {
-    color: var(--text-muted);
+    color: var(--text-secondary);
     white-space: nowrap;
 }
 

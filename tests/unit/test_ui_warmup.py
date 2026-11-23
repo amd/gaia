@@ -607,6 +607,8 @@ def ui_flagship(monkeypatch, tmp_path):
     monkeypatch.setenv("GAIA_PROJECT_MAP_AUTO_INDEX", "0")
     monkeypatch.setenv("LEMONADE_BASE_URL", "http://127.0.0.1:9/api/v1")
     monkeypatch.delenv("GAIA_DYNAMIC_TOOLS", raising=False)
+    # The unit lanes disable memory, which turns dynamic tools off; embeddings are faked below.
+    monkeypatch.delenv("GAIA_MEMORY_DISABLED", raising=False)
     monkeypatch.setattr(MemoryMixin, "_embed_text", lambda self, t: _fake_embedding(t))
     monkeypatch.setattr(
         ChatAgent,

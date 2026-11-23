@@ -51,9 +51,15 @@ def _isolate_auth():
     caller_auth.reset()
 
 
-def _client(monkeypatch, *, token: str | None) -> TestClient:
+def _client(
+    monkeypatch, *, token: str | None, allow_no_token: bool = False
+) -> TestClient:
     """Build the real sidecar app with (or without) a token in the environment."""
     monkeypatch.delenv(caller_auth.TOKEN_FILE_ENV_VAR, raising=False)
+    if allow_no_token:
+        monkeypatch.setenv(caller_auth.ALLOW_NO_TOKEN_ENV_VAR, "1")
+    else:
+        monkeypatch.delenv(caller_auth.ALLOW_NO_TOKEN_ENV_VAR, raising=False)
     if token is None:
         monkeypatch.delenv(caller_auth.TOKEN_ENV_VAR, raising=False)
     else:
@@ -201,15 +207,48 @@ def test_a_loopback_origin_is_allowed(monkeypatch):
 # -- dev mode: no token configured -------------------------------------------
 
 
-def test_without_a_configured_token_requests_pass_but_browsers_still_cannot(
+def test_without_a_token_every_gated_request_is_refused(monkeypatch):
+    """No token and no developer opt-in never means "anyone may call"."""
+    client = _client(monkeypatch, token=None)
+    assert client.get("/health").status_code == 200
+    assert client.post("/v1/gaia/query", json=_QUERY_BODY).status_code == 401
+
+
+def test_without_a_token_the_sidecar_refuses_to_start(monkeypatch):
+    client = _client(monkeypatch, token=None)
+    with pytest.raises(RuntimeError) as exc:
+        with client:
+            pass
+    message = str(exc.value)
+    assert "refuses to start without a caller-auth token" in message
+    assert caller_auth.TOKEN_FILE_ENV_VAR in message
+    assert "GAIA_SIDECAR_ALLOW_NO_TOKEN=1" in message
+
+
+def test_serve_refuses_to_start_without_a_token(monkeypatch, capsys):
+    from gaia_agent import server
+
+    monkeypatch.delenv(caller_auth.TOKEN_FILE_ENV_VAR, raising=False)
+    monkeypatch.delenv(caller_auth.TOKEN_ENV_VAR, raising=False)
+    monkeypatch.delenv(caller_auth.ALLOW_NO_TOKEN_ENV_VAR, raising=False)
+    monkeypatch.delenv("GAIA_SKILL_SET", raising=False)
+    monkeypatch.delenv("GAIA_ALLOWED_PATHS", raising=False)
+    started = []
+    monkeypatch.setattr("uvicorn.run", lambda *a, **kw: started.append(a))
+    assert server.serve_http(["--serve", "--port", "8139"]) == 2
+    assert not started
+    assert "GAIA_SIDECAR_ALLOW_NO_TOKEN=1" in capsys.readouterr().err
+
+
+def test_the_developer_opt_in_lets_requests_pass_but_browsers_still_cannot(
     monkeypatch,
 ):
     """A hand-run dev sidecar stays usable, and still refuses a web page.
 
-    This is the deliberate trade in the shared module: the token check goes off
-    (and is warned about at startup), the transport controls do not.
+    ``GAIA_SIDECAR_ALLOW_NO_TOKEN=1`` turns the token check off (warned about at
+    startup); the transport controls stay on.
     """
-    client = _client(monkeypatch, token=None)
+    client = _client(monkeypatch, token=None, allow_no_token=True)
     assert client.get("/health").status_code == 200
     assert client.post("/v1/gaia/query", json=_QUERY_BODY).status_code != 401
     assert (

@@ -452,6 +452,13 @@ describe('commands', () => {
         expect(onJump).toHaveBeenCalledWith(2);
     });
 
+    it('marks a character that does not show, as the approval card does', () => {
+        render(<CommandsSection commands={[{ key: 'k', command: 'echo hi​there', state: 'declined', messageId: 2 }]} onJumpToMessage={() => true} />);
+        const code = screen.getByRole('listitem').querySelector('code');
+        expect(code).toHaveTextContent('echo hi[U+200B]there');
+        expect(code).toHaveAttribute('title', 'echo hi[U+200B]there');
+    });
+
     it('keeps the latest five in view and the rest behind Show more', () => {
         const many = Array.from({ length: 7 }, (_, i) => ({ key: `k${i}`, command: `echo ${i}`, state: 'ok' as const, messageId: 2 }));
         render(<CommandsSection commands={many} onJumpToMessage={() => true} />);

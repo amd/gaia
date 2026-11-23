@@ -3,19 +3,25 @@
 
 # C++ performance benchmark workflow.
 # Measures binary size, startup time, loop latency, and memory footprint.
-# Called from build_cpp.yml after the build job passes.
+# Called from build_cpp.yml: in full after the build job passes on main, and
+# with sizes_only on pull requests, where only the binary-size budget gates.
 
 name: C++ Benchmarks
 
 on:
   workflow_call:
+    inputs:
+      sizes_only:
+        description: Linux only, and compare only the binary_size_* metrics, which are deterministic enough to block a PR.
+        type: boolean
+        default: false
 
 permissions:
   contents: read
 
 jobs:
   benchmark:
-    name: C++ Benchmarks (${{ matrix.os }})
+    name: ${{ inputs.sizes_only && 'C++ Binary Size' || 'C++ Benchmarks' }} (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     # Windows MSVC does two cold builds (static + shared) of gaia_core from an
     # unpopulated FetchContent cache (PR runs don't restore the main-only cache),
@@ -25,7 +31,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest]
+        os: ${{ fromJSON(inputs.sizes_only && '["ubuntu-latest"]' || '["ubuntu-latest", "windows-latest"]') }}
 
     steps:
       - uses: actions/checkout@v7
@@ -127,6 +133,8 @@ jobs:
       # metrics: 50%, memory_per_step_growth: 75%, all others: 15%)
       - name: Compare against baseline
         shell: bash
+        env:
+          SIZES_ONLY: ${{ inputs.sizes_only }}
         run: |
           if [ -f cpp/benchmark-baseline.json ]; then
             echo "Baseline found — running regression check"
@@ -135,12 +143,26 @@ jobs:
             else
               BENCH_EXE="cpp/build-bench/gaia_benchmarks"
             fi
+            BASELINE=cpp/benchmark-baseline.json
+            CURRENT=cpp/benchmark-results.json
+            if [ "$SIZES_ONLY" = "true" ]; then
+              only_sizes='.results |= map(select(.name | startswith("binary_size_")))'
+              jq "$only_sizes" "$BASELINE" > cpp/benchmark-baseline-sizes.json
+              jq "$only_sizes" "$CURRENT" > cpp/benchmark-results-sizes.json
+              [ "$(jq '.results | length' cpp/benchmark-results-sizes.json)" = 3 ] || {
+                echo "::error::expected 3 binary_size_* metrics in cpp/benchmark-results.json"; exit 1; }
+              BASELINE=cpp/benchmark-baseline-sizes.json
+              CURRENT=cpp/benchmark-results-sizes.json
+            fi
             "$BENCH_EXE" \
               --compare \
-              --baseline cpp/benchmark-baseline.json \
-              --current  cpp/benchmark-results.json
+              --baseline "$BASELINE" \
+              --current  "$CURRENT"
+          elif [ "$SIZES_ONLY" = "true" ]; then
+            echo "::error::No benchmark baseline from main to compare binary sizes against (cache benchmark-baseline-${{ matrix.os }}-* missing or expired). The next push to main that touches cpp/ and passes C++ Benchmarks saves one; re-run this job after that."
+            exit 1
           else
-            echo "No baseline found — first run establishes the baseline"
+            echo "::warning::No benchmark baseline found — this run establishes the baseline"
           fi
 
       # Save new baseline only on pushes to main (immutable cache: unique key per run)

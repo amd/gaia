@@ -24,6 +24,7 @@ import { FlagshipAgentNotice } from './components/FlagshipAgentNotice';
 import { BrowserPane } from './components/browser-pane/BrowserPane';
 import { browserPaneApi, useBrowserPaneStore } from './stores/browserPaneStore';
 import { useChatStore } from './stores/chatStore';
+import { useUiAuthStore } from './stores/uiAuthStore';
 import { useModelStore } from './stores/modelStore';
 import { useNotificationStore } from './stores/notificationStore';
 import { useScheduleStore } from './stores/scheduleStore';
@@ -32,6 +33,7 @@ import { useTrayBridge } from './hooks/useTrayBridge';
 import { useChatAlerts } from './hooks/useChatAlerts';
 import { useRetryServerWaitingDocs } from './hooks/useRetryServerWaitingDocs';
 import { useWindowTitle } from './hooks/useWindowTitle';
+import { isModalOpen } from './hooks/useEscapeToClose';
 import { useMediaQuery } from './hooks/useMediaQuery';
 import { startActiveRunsPoll } from './services/activeRuns';
 import { startQueueDispatcher } from './services/queueDispatch';
@@ -111,7 +113,8 @@ async function waitForEmbeddedUpgrade(): Promise<void> {
 }
 
 function Loading() {
-    return <div className="loading-spinner" role="status" aria-label="Loading" />;
+    const t = useT();
+    return <div className="loading-spinner" role="status" aria-label={t('app.loading')} />;
 }
 
 // First failure, then every 10th (~5 min at the 30 s cap), so a stuck read stays in the log.
@@ -128,6 +131,7 @@ function noteSetupWorked() {
 
 function App() {
     const t = useT();
+    const signInRequired = useUiAuthStore((s) => s.signInRequired);
     useWindowTitle();
     const currentSessionId = useChatStore((s) => s.currentSessionId);
     const setSessions = useChatStore((s) => s.setSessions);
@@ -339,6 +343,15 @@ function App() {
     }, [checkSetup]);
     const onBackendBackRef = useRef(onBackendBack);
     onBackendBackRef.current = onBackendBack;
+    // Signed in again: what was refused meanwhile is read now, like after an outage.
+    const wasSignedOut = useRef(false);
+    useEffect(() => {
+        if (signInRequired) wasSignedOut.current = true;
+        else if (wasSignedOut.current) {
+            wasSignedOut.current = false;
+            onBackendBack();
+        }
+    }, [signInRequired, onBackendBack]);
 
     // ── Backend and model-server health ─────────────────────────────────
     const failCount = useRef(0);
@@ -752,6 +765,11 @@ function App() {
         const onKey = (e: KeyboardEvent) => {
             const mod = e.ctrlKey || e.metaKey;
             if (!mod) return;
+            // Behind a dialog these would act on a screen the user can't see; only the sheet's own key still closes it.
+            if (isModalOpen()) {
+                if (e.key === '/') { e.preventDefault(); setShowShortcuts(false); }
+                return;
+            }
             if (e.shiftKey && e.key.toLowerCase() === 'o') { e.preventDefault(); newChat(); }
             else if (!e.shiftKey && e.key.toLowerCase() === 'k') { e.preventDefault(); window.dispatchEvent(new CustomEvent('gaia:focus-search')); }
             else if (!e.shiftKey && e.key.toLowerCase() === 'b') { e.preventDefault(); useChatStore.getState().toggleSidebarCollapsed(); }
@@ -833,14 +851,26 @@ function App() {
     );
     if (!showStartup && setup.state !== 'needed') mainUiShownRef.current = true;
 
+    // Nothing works without the API token; the status poll clears this once the browser signs in.
+    if (signInRequired) {
+        return (
+            <div className="app">
+                <main className="startup" role="alert">
+                    <p className="startup-text" dir="auto">{t('auth.signIn.title')}</p>
+                    <p className="startup-text" dir="auto">{t('auth.signIn.hint', { command: 'gaia chat --ui' })}</p>
+                </main>
+            </div>
+        );
+    }
+
     // A PC set up before can chat while the check runs; a new one waits, so
     // the chat screen never appears and is then replaced by setup.
     if (showStartup) {
         return (
             <div className="app">
-                <main className="startup" role="status" aria-label="Starting GAIA">
+                <main className="startup" role="status" aria-label={t('app.startingAria')}>
                     <div className="loading-spinner" aria-hidden="true" />
-                    <p className="startup-text">Starting GAIA…</p>
+                    <p className="startup-text" dir="auto">{t('app.starting')}</p>
                 </main>
             </div>
         );

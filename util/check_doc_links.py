@@ -229,6 +229,100 @@ def github_api_equivalent(url: str) -> Optional[str]:
     return f"https://api.github.com/repos/{owner}/{repo}/issues/{number}"
 
 
+GITHUB_GRAPHQL_URL = "https://api.github.com/graphql"
+# Issue/PR numbers looked up per GraphQL query (one aliased field each).
+GITHUB_BATCH_SIZE = 100
+
+
+def _graphql_batch(
+    owner: str, repo: str, numbers: List[int], token: str, timeout: int = 30
+) -> Set[int]:
+    """The numbers in ``numbers`` that are an issue or PR of owner/repo.
+
+    One query for the whole batch; raises on an HTTP or GraphQL-level failure.
+    """
+    fields = " ".join(
+        f"n{n}: issueOrPullRequest(number: {n}) {{ __typename }}" for n in numbers
+    )
+    query = (
+        "query($owner: String!, $name: String!) "
+        f"{{ repository(owner: $owner, name: $name) {{ {fields} }} }}"
+    )
+    body = json.dumps(
+        {"query": query, "variables": {"owner": owner, "name": repo}}
+    ).encode()
+    req = urllib.request.Request(
+        GITHUB_GRAPHQL_URL,
+        data=body,
+        method="POST",
+        headers={
+            "Authorization": f"Bearer {token}",
+            "Content-Type": "application/json",
+            "User-Agent": "GAIA-DocLinkChecker/1.0 (+https://github.com/amd/gaia)",
+        },
+    )
+    with urllib.request.urlopen(req, timeout=timeout) as resp:
+        payload = json.load(resp)
+    data = payload.get("data")
+    errors = payload.get("errors") or []
+    # A missing number comes back as a NOT_FOUND error next to the data; any
+    # other error means the answer can't be trusted.
+    other = [e for e in errors if e.get("type") != "NOT_FOUND"]
+    if other or data is None:
+        reason = "; ".join(str(e.get("message", e)) for e in other) or "no data"
+        raise RuntimeError(f"GitHub GraphQL query failed: {reason}")
+    found = data.get("repository") or {}
+    return {n for n in numbers if found.get(f"n{n}") is not None}
+
+
+def prefetch_github_refs(
+    urls: List[str], token: Optional[str]
+) -> Dict[str, Tuple[str, str]]:
+    """Answer github.com issue/PR links ~100 per GraphQL query.
+
+    One REST call per link spent the workflow token's shared hourly quota.
+    Only links that exist are answered; one GraphQL can't find (transferred,
+    inaccessible repo, typo) is left to the per-link REST check, which follows
+    redirects. A failed batch marks its links "warning" rather than falling
+    back to one REST call each.
+    """
+    if not token:
+        return {}
+    by_repo: Dict[Tuple[str, str], Dict[int, List[str]]] = {}
+    for url in urls:
+        m = GITHUB_ISSUE_PR_RE.match(url)
+        if not m:
+            continue
+        owner, repo, number = m.groups()
+        # GraphQL's Int is 32-bit; a larger number would fail its whole batch.
+        if int(number) > 2**31 - 1:
+            continue
+        by_repo.setdefault((owner, repo), {}).setdefault(int(number), []).append(url)
+
+    answers: Dict[str, Tuple[str, str]] = {}
+    for (owner, repo), refs in by_repo.items():
+        numbers = sorted(refs)
+        for start in range(0, len(numbers), GITHUB_BATCH_SIZE):
+            batch = numbers[start : start + GITHUB_BATCH_SIZE]
+            try:
+                found = _graphql_batch(owner, repo, batch, token)
+            except urllib.error.HTTPError as e:
+                detail = f"GitHub GraphQL HTTP {e.code} (may be rate limited)"
+                for n in batch:
+                    for url in refs[n]:
+                        answers[url] = ("warning", detail)
+                continue
+            except (OSError, http.client.HTTPException, RuntimeError, ValueError) as e:
+                for n in batch:
+                    for url in refs[n]:
+                        answers[url] = ("warning", f"GitHub GraphQL: {e}")
+                continue
+            for n in found:
+                for url in refs[n]:
+                    answers[url] = ("ok", "exists (GitHub GraphQL)")
+    return answers
+
+
 def _request_headers(effective_url: str) -> Dict[str, str]:
     headers = {
         "User-Agent": "GAIA-DocLinkChecker/1.0 (+https://github.com/amd/gaia)",
@@ -429,15 +523,18 @@ def check_links(
 
     # Check external links (parallel with rate limiting)
     if external_urls:
-        checked: Dict[str, Tuple[str, str]] = {}
+        checked = prefetch_github_refs(
+            list(external_urls), os.environ.get("GITHUB_TOKEN")
+        )
 
         def _check(url: str) -> Tuple[str, str, str]:
             time.sleep(0.1)  # Basic rate limiting
             status, detail = check_external_link_with_retries(url)
             return url, status, detail
 
+        pending = [url for url in external_urls if url not in checked]
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
-            futures = {executor.submit(_check, url): url for url in external_urls}
+            futures = {executor.submit(_check, url): url for url in pending}
             for future in as_completed(futures):
                 url, status, detail = future.result()
                 checked[url] = (status, detail)
@@ -450,6 +547,26 @@ def check_links(
                 results.append(LinkResult(str(rel), line_num, url, status, detail))
 
     return sorted(results, key=lambda r: (r.status != "broken", r.file, r.line))
+
+
+def _github_ref_coverage(results: List[LinkResult]) -> Tuple[int, int]:
+    """Return the total and unverified counts for distinct GitHub references."""
+    refs: Set[Tuple[str, str, str]] = set()
+    conclusive: Set[Tuple[str, str, str]] = set()
+    for result in results:
+        if result.status == "skipped":
+            continue
+        match = GITHUB_ISSUE_PR_RE.match(result.url)
+        if not match:
+            continue
+        owner, repo, number = match.groups()
+        # Issue and PR numbers share a repository's namespace; URL fragments
+        # and repeated mentions should not affect the coverage threshold.
+        key = (owner.lower(), repo.lower(), number.lstrip("0") or "0")
+        refs.add(key)
+        if result.status in ("ok", "broken"):
+            conclusive.add(key)
+    return len(refs), len(refs - conclusive)
 
 
 def main():
@@ -515,20 +632,44 @@ def main():
         print()
 
     print("=" * 80)
-    print(f"Total links checked: {len(ok) + len(broken) + len(warnings)}")
+    print(f"Total links processed: {len(results)}")
     print(f"  OK:       {len(ok)}")
     print(f"  Broken:   {len(broken)}")
     print(f"  Warnings: {len(warnings)}")
     print(f"  Skipped:  {len(skipped)}")
 
+    github_total, github_unverified = _github_ref_coverage(results)
+    github_majority_unverified = github_unverified * 2 > github_total
+    if github_total:
+        coverage = (
+            f"{github_unverified}/{github_total} unique GitHub issue/PR "
+            "references unverified"
+        )
+        print(f"  {coverage}")
+        if github_unverified and os.environ.get("GITHUB_ACTIONS") == "true":
+            level = "error" if github_majority_unverified else "warning"
+            print(f"::{level} title=GitHub link verification incomplete::{coverage}")
+
+    print()
     if broken:
-        print()
         print("FAILED: Found broken links")
+    if github_majority_unverified:
+        print(
+            "FAILED: Could not verify most GitHub issue/PR references. "
+            "GitHub may be down or rate limiting; set GITHUB_TOKEN "
+            "(e.g. `export GITHUB_TOKEN=$(gh auth token)`) or run with "
+            "--internal-only."
+        )
+    if broken or github_majority_unverified:
         sys.exit(1)
-    else:
-        print()
+
+    if warnings:
+        print("PASSED: No broken links found; some links could not be verified")
+    elif ok:
         print("PASSED: All links valid")
-        sys.exit(0)
+    else:
+        print("PASSED: No links to check")
+    sys.exit(0)
 
 
 if __name__ == "__main__":

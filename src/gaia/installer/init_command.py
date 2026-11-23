@@ -411,7 +411,12 @@ def resolve_init_chat_model(
         return ChatModelChoice(model_id=in_use, user_set=True, skipped=[])
     recommend = recommend_npu_chat_model if on_npu else recommend_default_chat_model
     model_id, skipped, capacity = recommend(client)
-    if not on_npu and below_gemma(model_id) and _gemma_downloaded(client):
+    if (
+        not on_npu
+        and below_gemma(model_id)
+        and _gemma_downloaded(client)
+        and _gemma_fits(capacity)
+    ):
         # Gemma was every PC's default before the ladder went below it, and
         # those installs saved no choice: an update must not take it away.
         return ChatModelChoice(
@@ -440,6 +445,23 @@ def _gemma_downloaded(client) -> bool:
     from gaia.llm.lemonade_client import DEFAULT_MODEL_NAME
 
     return bool(client.check_model_available(DEFAULT_MODEL_NAME))
+
+
+def _gemma_fits(capacity) -> bool:
+    """Whether Gemma fits this PC at all, tightly included; unknown memory keeps it.
+
+    A kept Gemma that cannot load is worse than the smaller default, so an
+    update keeps it only where the setup plan would also call it a fit.
+    """
+    from gaia.llm.lemonade_client import DEFAULT_MODEL_NAME, find_model_requirement
+
+    if capacity is None:
+        return True
+    mr = find_model_requirement(DEFAULT_MODEL_NAME)
+    fit = model_choice.memory_fit(
+        DEFAULT_MODEL_NAME, mr.size_gb if mr else None, capacity
+    )
+    return fit["fits"] is not False
 
 
 def _floor_without_room(client, choice: "ChatModelChoice") -> bool:

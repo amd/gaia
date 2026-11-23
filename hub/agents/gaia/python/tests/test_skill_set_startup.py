@@ -50,6 +50,9 @@ def manifest_with_sets(tmp_path, monkeypatch):
 @pytest.fixture
 def served(monkeypatch):
     calls = []
+    # Every real launcher passes a caller token; the sidecar refuses to start without.
+    monkeypatch.delenv("GAIA_GAIA_SIDECAR_TOKEN_FILE", raising=False)
+    monkeypatch.setenv("GAIA_GAIA_SIDECAR_TOKEN", "launch-test-token")
     monkeypatch.setattr(
         uvicorn, "run", lambda app, **kwargs: calls.append((app, kwargs))
     )

@@ -13,12 +13,14 @@ import json
 import logging
 import os
 import re
+import sys
 from contextlib import contextmanager
 from dataclasses import dataclass, field, fields
 from pathlib import Path
 from typing import Any, Callable, ClassVar, Dict, Iterator, List, Optional, Tuple
 
 # Re-exported: the resolver lives in a leaf module so gaia.logger can use it.
+from gaia.harnesses import HARNESSES
 from gaia.home import (  # noqa: F401  pylint: disable=unused-import
     default_gaia_home,
     gaia_home,
@@ -67,6 +69,32 @@ def generated_images_dir() -> Path:
 # Read-aloud speed, as a percentage of Kokoro's normal speed.
 READ_ALOUD_MIN_SPEED = 50
 READ_ALOUD_MAX_SPEED = 200
+
+_PLATFORM_NAMES = {"darwin": "macOS", "win32": "Windows", "linux": "Linux"}
+
+
+def _current_platform() -> str:
+    return sys.platform
+
+
+def speech_output_unproven_reason(platform: Optional[str] = None) -> Optional[str]:
+    """Why GAIA doesn't offer its local voice on this platform, or None where it does.
+
+    The voice is read-aloud, dictation and ``text_to_speech``; *platform* is a
+    ``sys.platform`` value and defaults to this PC's.
+    """
+    platform = platform or _current_platform()
+    if platform in GaiaConfig.TESTED_SPEECH_OUTPUT_PLATFORMS:
+        return None
+    name = _PLATFORM_NAMES.get(platform, platform)
+    proven = " and ".join(
+        _PLATFORM_NAMES[p] for p in GaiaConfig.TESTED_SPEECH_OUTPUT_PLATFORMS
+    )
+    return (
+        f"Reading aloud and dictation aren't offered on {name} yet, because GAIA "
+        f"hasn't verified its local voice there. They work on {proven}; follow "
+        f"https://github.com/amd/gaia/issues/8831 for {name}."
+    )
 
 
 class GaiaConfigError(Exception):
@@ -484,6 +512,9 @@ class GaiaConfig:
     #: The ones GAIA's evals cover, and so the only ones a user may newly choose.
     #: A file saved with another still loads, so no install stops starting.
     TESTED_LLAMACPP_BACKENDS = ("vulkan",)
+    #: ``sys.platform`` values where the Kokoro voice is proven to speak whole
+    #: replies; elsewhere read-aloud, dictation and its setup offer are withheld.
+    TESTED_SPEECH_OUTPUT_PLATFORMS = ("win32", "linux")
 
     @classmethod
     def _check_llamacpp_backend(cls, value: Any, where: str) -> Optional[str]:
@@ -501,16 +532,32 @@ class GaiaConfig:
             )
         return word
 
-    #: Values ``flagship_agent`` accepts: the Python agent and the native C++ one.
-    FLAGSHIP_AGENT_CHOICES = ("gaiapy", "gaiacpp")
+    #: Values ``flagship_agent`` can be set to: the harnesses this version can run.
+    FLAGSHIP_AGENT_CHOICES = tuple(h.name for h in HARNESSES if h.runnable)
+
+    #: The shape of a harness name, so a name a newer GAIA saved still loads.
+    _HARNESS_NAME = re.compile(r"[a-z][a-z0-9_-]{0,31}")
 
     @classmethod
-    def _check_flagship_agent(cls, value: Any, where: str) -> Optional[str]:
-        """Normalise a ``flagship_agent`` value, raising on anything else."""
+    def _check_flagship_agent(
+        cls, value: Any, where: str, *, setting: bool = False
+    ) -> Optional[str]:
+        """Normalise a ``flagship_agent`` value.
+
+        Loading keeps any well-formed name, even one this version can't run, so a
+        config a newer GAIA wrote never stops this one from starting; launching it
+        raises instead (``gaia.harnesses.require_runnable``). Setting accepts only
+        the harnesses this version can run.
+        """
         if value is None:
             return None
-        word = str(value).strip().lower() if isinstance(value, str) else value
-        if word not in cls.FLAGSHIP_AGENT_CHOICES:
+        word = value.strip().lower() if isinstance(value, str) else value
+        if setting and word not in cls.FLAGSHIP_AGENT_CHOICES:
+            raise GaiaConfigError(
+                f"{where}: 'flagship_agent' must be one of "
+                f"{', '.join(cls.FLAGSHIP_AGENT_CHOICES)}, but it is {value!r}."
+            )
+        if not isinstance(word, str) or not cls._HARNESS_NAME.fullmatch(word):
             raise GaiaConfigError(
                 f"{where}: 'flagship_agent' must be one of "
                 f"{', '.join(cls.FLAGSHIP_AGENT_CHOICES)}, but it is {value!r}. "
@@ -946,7 +993,11 @@ class GaiaConfig:
             setattr(self, key, self._check_cloud_reasoning_effort(value, "gaia config"))
             return
         if key == "flagship_agent":
-            setattr(self, key, self._check_flagship_agent(value, "gaia config"))
+            setattr(
+                self,
+                key,
+                self._check_flagship_agent(value, "gaia config", setting=True),
+            )
             return
         if key == "embedding_device":
             setattr(

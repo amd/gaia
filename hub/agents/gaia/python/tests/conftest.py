@@ -232,3 +232,114 @@ def make_flagship(monkeypatch, tmp_path):
         finally:
             for agent in built:
                 agent.close()
+
+
+class ScriptedApprover:
+    """Answers a chat's approval cards from a script and records each one.
+
+    Answers the way a person at ``AgentConsole`` does, so the agent files a
+    deny as the user's own no. A card past the end of the script is denied and
+    still recorded, so ``asked`` shows it.
+    """
+
+    def __init__(self, console):
+        self.console = console
+        self.answers = []
+        self.asked = []
+        console.confirm_tool_execution = self._confirm
+
+    def _confirm(self, tool_name, tool_args):
+        from gaia.agents.base.console import user_denial_message
+
+        self.asked.append((tool_name, dict(tool_args or {})))
+        self.console.note_prompt_answered(tool_name)
+        if self.answers and self.answers.pop(0) == "allow":
+            self.console._last_denial = None
+            return True
+        return self.console.deny_tool_execution(
+            tool_name, user_denial_message(tool_name)
+        )
+
+
+class ScriptedChat:
+    """One chat on the real turn loop: a scripted model and a scripted approver.
+
+    ``say`` runs a turn the way the stdio host does and returns the answer.
+    A model step is ``(tool_name, args)`` for a tool call or a string for
+    text. ``results`` then holds what each call of that turn fed back to the
+    model, in order, and ``offered`` the tool names of its last request.
+    """
+
+    def __init__(self, agent, model, work):
+        self.agent = agent
+        self.model = model
+        self.work = work
+        self.approver = ScriptedApprover(agent.console)
+        self._calls = 0
+        self._turn_ids = []
+        self._turn_start = 0
+
+    def say(self, query, model, approvals=()):
+        from gaiapy import stdio
+
+        steps = []
+        self._turn_ids = []
+        for step in model:
+            if isinstance(step, tuple):
+                self._calls += 1
+                call_id = f"call-{id(self):x}-{self._calls}"
+                self._turn_ids.append(call_id)
+                step = {"id": call_id, "name": step[0], "args": step[1]}
+            steps.append(step)
+        self.model.script[:] = steps
+        self.approver.answers[:] = list(approvals)
+        self.approver.asked.clear()
+        self._turn_start = len(self.model.requests)
+        self.agent.conversation_history.prepare(self.agent, query)
+        result = self.agent.process_query(query)
+        stdio._record_turn(self.agent, query, result["result"], result)
+        return result["result"]
+
+    @property
+    def unused_steps(self):
+        """Model steps the turn ended without asking for."""
+        return list(self.model.script)
+
+    @property
+    def requests(self):
+        """This turn's model requests, as ``(messages, tools)`` pairs."""
+        return self.model.requests[self._turn_start :]
+
+    @property
+    def offered(self):
+        return {tool["function"]["name"] for tool in self.requests[-1][1]}
+
+    @property
+    def results(self):
+        import json
+
+        fed = {}
+        for messages, _tools in self.requests:
+            for message in messages:
+                call_id = message.get("tool_call_id")
+                if message.get("role") == "tool" and call_id in self._turn_ids:
+                    content = message.get("content")
+                    try:
+                        fed[call_id] = json.loads(content)
+                    except (TypeError, ValueError):
+                        fed[call_id] = content
+        return [fed[i] for i in self._turn_ids if i in fed]
+
+
+@pytest.fixture
+def open_chat(make_flagship, tmp_path):
+    """Open chats in ONE process and one profile, each with its own folder."""
+    opened = []
+
+    def open_one():
+        work = tmp_path / f"chat-{len(opened)}"
+        agent, model, _doc = make_flagship(work)
+        opened.append(ScriptedChat(agent, model, work))
+        return opened[-1]
+
+    return open_one
