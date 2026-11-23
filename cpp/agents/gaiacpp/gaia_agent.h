@@ -238,6 +238,9 @@ private:
     json delegateTasks(const json& args);
     std::shared_ptr<Workspace> workspace_;  // null with full access
     std::function<bool(const std::string& path)> askPathAccess_;
+    std::vector<std::string> openedFolders_;  // opened by the user since the start; guarded by turnListingMu_
+    /// The folders the agent started with, then those the user opened since.
+    std::vector<std::string> foldersInUse() const;
     struct HelperTotals {
         int runs = 0, ok = 0, partial = 0, failed = 0, width = 0;
         UsageStats usage;

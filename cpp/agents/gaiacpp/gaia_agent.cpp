@@ -162,6 +162,8 @@ void GaiaAgent::registerTools() {
                            "could not do without it.";
                 }
                 ws->addRoot(asked);
+                std::lock_guard<std::mutex> lock(turnListingMu_);
+                openedFolders_.push_back(asked);
             }
         };
         // Refused here, the user is never asked to approve a location the tool would turn down.
@@ -179,12 +181,12 @@ void GaiaAgent::registerTools() {
                     }
                     why = unquotedHostileName(args["command"].get<std::string>(), names);
                 }
-                if (why.empty()) why = pastedDataRefusal(args["command"].get<std::string>(), options_.workspaceRoots);
+                if (why.empty()) why = pastedDataRefusal(args["command"].get<std::string>(), foldersInUse());
                 if (why.empty()) why = oneLineBlockRefusal(args["command"].get<std::string>());
                 if (why.empty()) {
                     std::vector<CallSeen> seen;
                     for (const auto& c : turnToolCalls()) seen.push_back({c.name, c.args, c.output});
-                    std::vector<std::string> places = options_.workspaceRoots;
+                    std::vector<std::string> places = foldersInUse();
                     std::error_code ec;
                     places.push_back(fs::current_path(ec).u8string());
                     const std::string table = unreadTable(args["command"].get<std::string>(), seen, places);
@@ -258,6 +260,13 @@ void GaiaAgent::registerTools() {
                    : std::function<std::string(const std::string&)>()));
         }
     }
+}
+
+std::vector<std::string> GaiaAgent::foldersInUse() const {
+    std::vector<std::string> folders = options_.workspaceRoots;
+    std::lock_guard<std::mutex> lock(turnListingMu_);
+    folders.insert(folders.end(), openedFolders_.begin(), openedFolders_.end());
+    return folders;
 }
 
 void GaiaAgent::setPathAccessPrompt(std::function<bool(const std::string& path)> ask) {
@@ -527,7 +536,7 @@ void GaiaAgent::onTurnStart() {
     std::string size = toolRegistry().hasTool("delegate_task") && toolRegistry().isEnabled("delegate_task")
                            ? textSizeOf(fs::current_path(ec))
                            : std::string();
-    std::vector<std::string> hostile = hostileNames(options_.workspaceRoots);
+    std::vector<std::string> hostile = hostileNames(foldersInUse());
     std::lock_guard<std::mutex> lock(turnListingMu_);
     turnListing_ = std::move(listing);
     turnTextSize_ = std::move(size);
@@ -2497,7 +2506,7 @@ std::optional<std::string> GaiaAgent::announcedStepNote(const std::string& answe
 std::optional<std::string> GaiaAgent::reviewAnswer(const std::string& answer, bool factsOnly) {
     std::error_code ec;
     std::vector<fs::path> roots;
-    for (const auto& r : options_.workspaceRoots) roots.emplace_back(fs::u8path(r));
+    for (const auto& r : foldersInUse()) roots.emplace_back(fs::u8path(r));
     if (roots.empty()) roots.push_back(fs::current_path(ec));
 
     const auto& calls = turnToolCalls();

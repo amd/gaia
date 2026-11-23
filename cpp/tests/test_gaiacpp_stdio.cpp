@@ -8,6 +8,7 @@
 #include <gtest/gtest.h>
 
 #include <algorithm>
+#include <cctype>
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
@@ -1314,6 +1315,42 @@ TEST_F(GaiacppStdio, FullAccessStillAsksBeforeOpeningAnotherFolder) {
     EXPECT_EQ(count("needs_confirmation"), 1u) << "the write itself needs no prompt under full access";
     EXPECT_TRUE(fs::exists(target));
 }
+
+#ifndef _WIN32
+// The checks on a command look in the folders the chat has now, not only the ones it started with.
+TEST_F(GaiacppStdio, AFolderTheUserOpensIsSeenByTheCommandChecksAtOnce) {
+    // Not under the temp folder: commands may always read system folders.
+    struct Scratch {
+        fs::path dir = fs::canonical(fs::current_path()) / ("gaiacpp-stdio-out-" + std::to_string(std::random_device{}()));
+        ~Scratch() {
+            std::error_code ec;
+            fs::remove_all(dir, ec);
+        }
+    } scratch;
+    fs::create_directories(scratch.dir);
+    std::ofstream(scratch.dir / "sales.csv") << "region,amount\nNorth,5\nSouth,7\n";
+    mock_.pushResponse(toolCall("bash_execute", {{"command", "ls " + scratch.dir.string()}}));
+    mock_.pushResponse(toolCall(
+        "bash_execute", {{"command", "python -c \"import pandas as pd; print(pd.read_csv('sales.csv').sum())\""}}));
+    mock_.pushResponse(answer("Done."));
+    Start s;
+    s.fullAccess = true;
+    start(s);
+    ask("total the sales");
+    const json folder = waitFor("needs_confirmation", 1);
+    ASSERT_TRUE(isFolderPrompt(folder)) << folder.dump();
+    decide("allow", folder["confirm_id"]);
+    ASSERT_TRUE(waitTerminal(1).is_object());
+
+    std::vector<std::string> results;
+    for (const auto& e : events()) {
+        if (e.is_object() && e.value("type", "") == "tool_result") results.push_back(e.dump());
+    }
+    ASSERT_EQ(results.size(), 2u);
+    EXPECT_NE(results[1].find("sales.csv is a small table: read it with file_read first"), std::string::npos)
+        << "the table in the folder just opened was not seen: " << results[1];
+}
+#endif
 
 TEST_F(GaiacppStdio, AFileInsideTheFolderRaisesNoFolderPrompt) {
     std::ofstream(work_ / "note.txt") << "inside";
@@ -2639,7 +2676,12 @@ TEST_F(GaiacppStdioBinary, ARefusalNamesTheRealWorkingFolder) {
     }
     ASSERT_NE(refusal.find("Refused"), std::string::npos) << r.stdout_output;
     EXPECT_EQ(refusal.find("(.)"), std::string::npos) << refusal;
-    const std::string work = fs::canonical(dir_ / "work").generic_u8string();
+    std::string work = fs::canonical(dir_ / "work").generic_u8string();
+#ifdef _WIN32
+    // Workspace spells a Windows folder in lower case, as the file system ignores case.
+    std::transform(work.begin(), work.end(), work.begin(),
+                   [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+#endif
     EXPECT_NE(refusal.find(work), std::string::npos) << "the folder list names " << work << ": " << refusal;
     EXPECT_EQ(refusal.find("--allow-dir"), std::string::npos) << "gaia-cli has no such flag: " << refusal;
 }
