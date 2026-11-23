@@ -583,8 +583,12 @@ export interface AgentProgram {
     unavailable_reason: string | null;
     /** Set when the reason is one the UI has its own words for; any other reason is shown as it is. */
     unavailable_code?: 'no_release' | 'unreachable' | 'unverifiable' | null;
-    /** A newer build is offered; not shown yet. */
+    /** The gaiacpp on this PC is from another GAIA release than this one; `can_download` then offers this release's. */
     update_available?: boolean;
+    /** The version of the copy on this PC; null when it couldn't be read. */
+    version?: string | null;
+    /** The version this GAIA release's copy has; null on a development build. */
+    release_version?: string | null;
 }
 
 /** `GET /api/agent-programs`: both agent programs and any running download. */

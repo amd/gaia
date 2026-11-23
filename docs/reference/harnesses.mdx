@@ -49,6 +49,10 @@ A saved choice whose program is missing, or no longer matches its recorded
 checksum, is an error that names the file. Neither app runs the other harness
 in its place.
 
+A `gaiacpp` from another GAIA release than the app, such as one an older
+installer left on `PATH`, still runs. The Agent UI's Agent card tags it
+**Out of date** and offers **Update**, which downloads this release's copy.
+
 ## What the two share
 
 - **The wire contract.** The terminal UI talks to its agent over stdio, one JSON

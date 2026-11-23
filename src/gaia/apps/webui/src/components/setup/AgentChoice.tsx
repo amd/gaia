@@ -65,6 +65,7 @@ export function AgentChoice({ inSettings = false, disabled = false, pending = nu
     const titleId = `${ids}-title`;
     const moreId = `${ids}-more`;
     const offId = `${ids}-off`;
+    const oldId = `${ids}-old`;
     const [listing, setListing] = useState<AgentPrograms | null>(null);
     const [loadError, setLoadError] = useState<string | null>(null);
     const [saveError, setSaveError] = useState<string | null>(null);
@@ -93,13 +94,18 @@ export function AgentChoice({ inSettings = false, disabled = false, pending = nu
 
     const currentRef = useRef<string>('gaiapy');
     currentRef.current = listing?.current ?? 'gaiapy';
-    // Switch only after a download the user started here with Download; one followed in is just shown.
+    // Switch only after a first download the user started here with Download; an update, or one followed in, never switches.
+    const switchAfter = useRef(false);
     const { job, start, follow, interrupted } = useAgentDownload((startedHere) => {
         const before = currentRef.current;
         void api.getAgentPrograms()
             .then((l) => { if (mounted.current) setListing(l); }, (err: unknown) => console.warn('[AgentChoice] could not re-read the agents after the download', err))
-            .then(() => { if (mounted.current && startedHere) void save('gaiacpp', before); });
+            .then(() => { if (mounted.current && startedHere && switchAfter.current) void save('gaiacpp', before); });
     });
+    const download = (thenSwitch: boolean) => {
+        switchAfter.current = thenSwitch;
+        void start();
+    };
 
     useEffect(() => {
         mounted.current = true;
@@ -119,6 +125,8 @@ export function AgentChoice({ inSettings = false, disabled = false, pending = nu
     const off = (p: AgentProgram | undefined) => !!p && !installed(p) && !p.can_download;
     // In Settings a gaiacpp that isn't here is had through its Download button, never by selecting it.
     const needsDownload = (p: AgentProgram | undefined) => !!p && inSettings && !installed(p) && p.can_download;
+    // A copy from another GAIA release still runs and can still be picked; Update replaces it with this release's.
+    const outdated = (p: AgentProgram | undefined) => !!p && p.id === 'gaiacpp' && p.installed && p.update_available === true && p.can_download;
     const downloading = job?.state === 'downloading';
     const selected = pending ?? listing?.current;
 
@@ -135,6 +143,9 @@ export function AgentChoice({ inSettings = false, disabled = false, pending = nu
     };
 
     const cpp = program('gaiacpp');
+    const oldNote = !outdated(cpp) ? null
+        : cpp?.version && cpp.release_version ? t('setup.agent.outdated', { name: 'gaiacpp', found: cpp.version, expected: cpp.release_version })
+            : t('setup.agent.outdatedNoVersion', { name: 'gaiacpp' });
     const why = cpp?.unavailable_code ? t(WHY[cpp.unavailable_code]) : cpp?.unavailable_reason;
     const cppNote: string | null = !cpp || installed(cpp) ? null
         : cpp.can_download ? t(inSettings ? 'setup.agent.downloadsOnButton' : 'setup.agent.downloadsLater')
@@ -155,6 +166,7 @@ export function AgentChoice({ inSettings = false, disabled = false, pending = nu
                             const p = program(o.id);
                             const unavailable = off(p);
                             const getIt = needsDownload(p);
+                            const old = outdated(p);
                             const row = (
                                 <button
                                     key={o.id}
@@ -162,7 +174,7 @@ export function AgentChoice({ inSettings = false, disabled = false, pending = nu
                                     role="radio"
                                     aria-checked={selected === o.id}
                                     aria-disabled={unavailable || getIt || disabled || undefined}
-                                    aria-describedby={unavailable || getIt ? offId : undefined}
+                                    aria-describedby={unavailable || getIt ? offId : old ? oldId : undefined}
                                     className={`setup-choice agent-choice-row${selected === o.id ? ' is-active' : ''}${unavailable ? ' is-disabled' : ''}${getIt ? ' is-pending' : ''}`}
                                     onClick={() => choose(o.id)}
                                 >
@@ -173,6 +185,7 @@ export function AgentChoice({ inSettings = false, disabled = false, pending = nu
                                     </span>
                                     <span className="setup-choice-tag">{t(o.tag)}</span>
                                     {unavailable && <span className="setup-choice-tag agent-choice-off">{t('setup.agent.notInstalled')}</span>}
+                                    {old && <span className="setup-choice-tag agent-choice-off">{t('setup.agent.outOfDate')}</span>}
                                     {p && !installed(p) && !unavailable && !inSettings && (
                                         <span className="setup-choice-tag agent-choice-off is-quiet">{t('settings.model.notDownloaded')}</span>
                                     )}
@@ -187,6 +200,29 @@ export function AgentChoice({ inSettings = false, disabled = false, pending = nu
                                     </div>
                                 );
                             }
+                            // Out of date: said under the row, with Update beside it; the row itself still picks the agent.
+                            if (old) {
+                                const idle = !downloading && job?.state !== 'failed';
+                                return (
+                                    <div key={o.id} className="agent-choice-blocked">
+                                        <div className={idle ? 'agent-choice-item' : undefined}>
+                                            {row}
+                                            {idle && (
+                                                <button
+                                                    type="button"
+                                                    className="btn-secondary agent-choice-download"
+                                                    onClick={() => download(false)}
+                                                    disabled={saving || disabled}
+                                                    aria-label={t('setup.agent.updateNamed', { name: o.id })}
+                                                >
+                                                    <Download size={13} aria-hidden="true" /> {t('setup.agent.update')}
+                                                </button>
+                                            )}
+                                        </div>
+                                        <p id={oldId} className="agent-choice-why">{oldNote}</p>
+                                    </div>
+                                );
+                            }
                             // While its download runs, or after it failed, the card below has the bar or Retry instead.
                             if (!getIt || downloading || job?.state === 'failed') return row;
                             // Beside the radio, not inside it: a control inside a radio can't be reached.
@@ -196,7 +232,7 @@ export function AgentChoice({ inSettings = false, disabled = false, pending = nu
                                     <button
                                         type="button"
                                         className="btn-secondary agent-choice-download"
-                                        onClick={() => void start()}
+                                        onClick={() => download(true)}
                                         disabled={saving || disabled}
                                         aria-label={t('setup.agent.downloadNamed', { name: o.id })}
                                     >

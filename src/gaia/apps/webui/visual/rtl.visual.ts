@@ -3145,6 +3145,41 @@ for (const locale of ['ar', 'en']) {
             expect(await audit(page)).toEqual([]);
         });
 
+        test('a gaiacpp from another GAIA release is marked out of date, with Update on its row', async ({ page }) => {
+            await openModelPage(page, locale, { agent: { gaiacpp: 'outdated', poll: AGENT_DOWNLOADING } });
+            const agent = page.locator('.agent-choice');
+            const row = agent.locator('[role="radio"]').nth(1);
+            // Still pickable: an older copy is flagged, not blocked.
+            await expect(row).not.toHaveAttribute('aria-disabled', 'true');
+            await expect(row.locator('.agent-choice-off')).toHaveCount(1);
+            const note = agent.locator('.agent-choice-why');
+            await expect(note).toBeVisible();
+            await expect(note).toContainText('0.27.0-rc.8');
+            await expect(note).toContainText('0.27.0-rc.10');
+            const button = agent.locator('.agent-choice-download');
+            await expect(button).toBeVisible();
+            // The button stays inside its row, clear of the row's text and tags.
+            const [rowBox, btn] = await Promise.all([row.boundingBox(), button.boundingBox()]);
+            expect(btn!.x).toBeGreaterThanOrEqual(rowBox!.x);
+            expect(btn!.x + btn!.width).toBeLessThanOrEqual(rowBox!.x + rowBox!.width);
+            for (const part of await row.locator('.agent-choice-what, .setup-choice-tag').all()) {
+                const box = (await part.boundingBox())!;
+                expect(btn!.x >= box.x + box.width || btn!.x + btn!.width <= box.x, 'Update overlaps the row').toBe(true);
+            }
+            expect(rowBox!.height).toBeLessThan(48);
+            await expectSnugTags(agent);
+            await shot(page, `model-${locale}-agent-outdated`);
+            expect(await audit(page)).toEqual([]);
+
+            await button.click();
+            await expect(agent.getByRole('progressbar', { name: /gaiacpp/ })).toHaveAttribute('aria-valuenow', '40');
+            await expect(button).toHaveCount(0);
+            // Updating never switches the agent in use.
+            await expect(agent.locator('[role="radio"]').first()).toHaveAttribute('aria-checked', 'true');
+            await shot(page, `model-${locale}-agent-updating`);
+            expect(await audit(page)).toEqual([]);
+        });
+
         test('a failed gaiacpp download says so in the card, with Retry', async ({ page }) => {
             await openModelPage(page, locale, { agent: { gaiacpp: 'downloadable', download: AGENT_DOWNLOADING, poll: AGENT_DOWNLOAD_FAILED } });
             const failed = page.locator('.agent-choice .dl-fail');

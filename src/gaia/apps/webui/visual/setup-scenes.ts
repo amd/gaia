@@ -609,6 +609,19 @@ export const SETUP_SCENES: SetupScene[] = [
         },
     },
     {
+        // An older installer's gaiacpp under a newer app: flagged on Customize, with Update, and still pickable.
+        name: 'models-agent-outdated',
+        answers: { agent: { gaiacpp: 'outdated' } },
+        reach: async (page) => {
+            await toModels(page);
+            const agent = page.locator('.agent-choice');
+            await expect(agent.locator('.agent-choice-why')).toBeVisible();
+            await expect(agent.locator('.agent-choice-download')).toBeVisible();
+            await expect(agent.locator('[role="radio"]').nth(1)).not.toHaveAttribute('aria-disabled', 'true');
+            await agent.scrollIntoViewIfNeeded();
+        },
+    },
+    {
         name: 'models-npu',
         reach: async (page) => {
             await toModels(page);
@@ -857,7 +870,7 @@ export const SETUP_SCENES: SetupScene[] = [
 ];
 
 /** The screens whose rows wrap: each must hold together in a narrow window too. */
-export const NARROW_SCENES = ['check-failed', 'plan', 'check-details', 'models', 'models-agent-unavailable-collapsed', 'models-agent-unavailable-expanded', 'download-gaiacpp-failed', 'models-npu-not-ready', 'models-long', 'key', 'plan-local-only', 'download-running', 'download-failed', 'download-agent-failed', 'test-failed-agent-gaiacpp', 'test-long', 'ready'];
+export const NARROW_SCENES = ['check-failed', 'plan', 'check-details', 'models', 'models-agent-unavailable-collapsed', 'models-agent-unavailable-expanded', 'models-agent-outdated', 'download-gaiacpp-failed', 'models-npu-not-ready', 'models-long', 'key', 'plan-local-only', 'download-running', 'download-failed', 'download-agent-failed', 'test-failed-agent-gaiacpp', 'test-long', 'ready'];
 
 export const scene = (name: string): SetupScene => {
     const found = SETUP_SCENES.find((s) => s.name === name);

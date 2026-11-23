@@ -184,7 +184,7 @@ export const AGENT_DOWNLOAD_FAILED = {
 
 export interface AgentProgramsAnswers {
     /** Installed; not here but downloadable; or not here and not offered. */
-    gaiacpp?: 'installed' | 'downloadable' | 'unavailable';
+    gaiacpp?: 'installed' | 'downloadable' | 'unavailable' | 'outdated';
     /** The download as the listing reports it when the page opens. */
     download?: object;
     /** What each poll of the download answers. */
@@ -195,6 +195,8 @@ export interface AgentProgramsAnswers {
 export async function withAgentPrograms(page: Page, { gaiacpp = 'installed', download = IDLE_AGENT_DOWNLOAD, poll }: AgentProgramsAnswers = {}): Promise<void> {
     const cpp = gaiacpp === 'installed' ? AGENT_PROGRAMS.programs[1]
         : gaiacpp === 'downloadable' ? { ...AGENT_PROGRAMS.programs[1], installed: false, can_download: true }
+            // A copy an older installer left on PATH, under a newer app.
+            : gaiacpp === 'outdated' ? { ...AGENT_PROGRAMS.programs[1], can_download: true, update_available: true, version: '0.27.0-rc.8', release_version: '0.27.0-rc.10' }
             : { ...AGENT_PROGRAMS.programs[1], installed: false, size_bytes: null, unavailable_reason: 'this GAIA release has no gaiacpp to download. Use the Python agent, or update GAIA.', unavailable_code: 'no_release' };
     const listing = { ...AGENT_PROGRAMS, programs: [AGENT_PROGRAMS.programs[0], cpp], download };
     await page.route((url) => url.pathname.startsWith('/api/agent-programs'), async (route) => {
