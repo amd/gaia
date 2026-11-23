@@ -340,6 +340,37 @@ std::map<int, std::string> noticesBySteps(const std::vector<std::string>& bodies
 
 }  // namespace
 
+namespace {
+// Flags every answer it is asked about, and counts the asks.
+class NotingAgent : public ResilienceAgent {
+public:
+    using ResilienceAgent::ResilienceAgent;
+    int asked = 0;
+
+protected:
+    std::optional<std::string> unresolvedClaims(const std::string&) override {
+        ++asked;
+        return std::string("NOTE: not checked.");
+    }
+};
+}  // namespace
+
+TEST(AgentResilience, AnAnswerAtTheStepLimitIsCheckedBeforeItStands) {
+    // The review never ran on it, so what it still gets wrong is told to the user.
+    bench::MockLlmServer mock;
+    for (int i = 0; i < 3; ++i) {
+        mock.pushResponse(call("c" + std::to_string(i), "add", R"({"a":)" + std::to_string(i) + R"(,"b":1})"));
+    }
+    mock.pushResponse(answer("Did what fit; the rest is unfinished."));
+    AgentConfig cfg = cfgFor(mock);
+    cfg.maxSteps = 3;
+    NotingAgent agent(cfg);
+    agent.initForTest();
+    const json r = agent.processQuery("go");
+    EXPECT_EQ(r["result"], "Did what fit; the rest is unfinished.\n\nNOTE: not checked.");
+    EXPECT_EQ(agent.asked, 1);
+}
+
 TEST(AgentResilience, StepBudgetNoticesAndClosingAnswer) {
     json r;
     const auto bodies = runToTheLimit(10, &r);

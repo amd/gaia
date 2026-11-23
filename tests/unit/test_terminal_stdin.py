@@ -8,6 +8,7 @@ benchmark's ``write_file`` over an existing file returned "EOF when reading a
 line" instead of writing.
 """
 
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -15,10 +16,13 @@ from pathlib import Path
 SRC = str(Path(__file__).resolve().parents[2] / "src")
 
 
-def _run_with_null_stdin(code: str) -> str:
+def _run_with_null_stdin(code: str, home: Path) -> str:
+    # The child writes its file-audit log under ~/.gaia: give it a tmp home.
+    env = {**os.environ, "HOME": str(home), "USERPROFILE": str(home)}
     done = subprocess.run(
         [sys.executable, "-c", f"import sys; sys.path.insert(0, {SRC!r}); {code}"],
         stdin=subprocess.DEVNULL,
+        env=env,
         capture_output=True,
         text=True,
         timeout=60,
@@ -27,9 +31,10 @@ def _run_with_null_stdin(code: str) -> str:
     return done.stdout.strip()
 
 
-def test_null_stdin_is_not_interactive():
+def test_null_stdin_is_not_interactive(tmp_path):
     out = _run_with_null_stdin(
-        "from gaia.utils.terminal import stdin_is_interactive as f; print(f())"
+        "from gaia.utils.terminal import stdin_is_interactive as f; print(f())",
+        tmp_path,
     )
     assert out == "False"
 
@@ -40,7 +45,8 @@ def test_overwriting_a_file_with_null_stdin_needs_no_answer(tmp_path):
     out = _run_with_null_stdin(
         "from gaia.security import PathValidator; "
         f"v = PathValidator(allowed_paths=[{str(tmp_path)!r}]); "
-        f"print(v.validate_write({str(target)!r}, content_size=3))"
+        f"print(v.validate_write({str(target)!r}, content_size=3))",
+        tmp_path / "home",
     )
     assert out.splitlines()[-1] == "(True, '')"
 

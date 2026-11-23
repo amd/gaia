@@ -9,6 +9,7 @@ import { TurnChanges } from '../TurnChanges';
 import { DiffCard } from '../render/DiffCard';
 import { UndoHistorySettings } from '../settings/UndoHistorySettings';
 import { resetTurnChangesCache } from '../../hooks/useTurnChanges';
+import { stripIsolates } from '../../i18n/registry';
 import * as api from '../../services/api';
 import { useChatStore } from '../../stores/chatStore';
 import type { TurnChanges as Turn } from '../../types/changes';
@@ -80,7 +81,7 @@ describe('TurnChanges', () => {
         fireEvent.click(screen.getByRole('button', { name: 'Undo' }));
         await waitFor(() => expect(undo).toHaveBeenCalledWith('s1', 't1', false));
         expect(await screen.findByRole('status')).toHaveTextContent('restored 1 file, removed 1 new file');
-        expect(await screen.findByText(/undone/)).toBeInTheDocument();
+        expect(await screen.findByText('Changed 2 files · undone')).toBeInTheDocument();
         expect(screen.queryByRole('button', { name: /Undo this turn/ })).not.toBeInTheDocument();
     });
 
@@ -170,6 +171,32 @@ describe('TurnChanges', () => {
             const note = await screen.findByRole('note');
             expect(note).toHaveTextContent('تعذّر التحقق من تغييرات الملفات في هذا الدور: تعذّر الوصول إلى GAIA حاليًا.');
             expect(note).not.toHaveTextContent('Failed to fetch');
+        } finally {
+            useChatStore.setState({ locale: 'en' });
+        }
+    });
+
+    it('words the row, its confirm and its result in the chosen language (#8828)', async () => {
+        vi.spyOn(api, 'listTurnChanges')
+            .mockResolvedValueOnce({ turns: [turn()] })
+            .mockResolvedValueOnce({ turns: [turn({ restored_at: '2026-10-16T01:00:00+00:00' })] });
+        vi.spyOn(api, 'undoTurn').mockResolvedValue({
+            turn_id: 't1', restored: ['C:\\work\\a.txt'], removed: ['C:\\work\\b.txt'],
+            kept_folders: [], untracked: [], incomplete: false,
+        });
+        useChatStore.setState({ locale: 'ar' });
+        try {
+            render(<TurnChanges sessionId="s1" messageId={7} />);
+            expect(await screen.findByText(/الملفات المُغيَّرة: 2/)).toBeInTheDocument();
+            expect(screen.getByRole('button', { name: /مراجعة التغييرات/ })).toBeInTheDocument();
+            fireEvent.click(screen.getByRole('button', { name: /التراجع عن هذا الدور/ }));
+            expect(screen.getByRole('group')).toHaveTextContent('إعادة الملفات إلى ما كانت عليه قبل هذا الدور؟');
+            fireEvent.click(screen.getByRole('button', { name: /\(Undo\)/ }));
+            const status = await screen.findByRole('status');
+            expect(stripIsolates(status.textContent ?? '')).toBe(
+                'تم التراجع: استُعيد ملف واحد، حُذف ملف جديد واحد. (Undone: restored 1 file, removed 1 new file.)',
+            );
+            expect(await screen.findByText(/· تم التراجع/)).toBeInTheDocument();
         } finally {
             useChatStore.setState({ locale: 'en' });
         }
