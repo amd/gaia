@@ -103,6 +103,11 @@ it with `--allow-github-writes` limits which kinds of write it has at all. A cha
 chosen is refused rather than run on a default, and attached files are named to the model, which
 reads them with its file tools (gaiacode has no document index).
 
+Each file gaiacode edits or creates is copied first, so the Agent UI's Changes view shows the turn's
+diff and Undo puts the files back. A shell command it runs is listed too, and the turn's undo is
+marked as possibly incomplete when the working tree shows the command changed something gaiacode
+kept no copy of.
+
 Until it is offered, only an eval run can choose it: the eval lanes set `GAIA_UNPROVEN_HARNESS=gaiacode`
 and point `GAIA_GAIACODE_PATH` at a build (`python util/run_eval_lane.py --harness gaiacode
 --harness-binary <path>`). A saved `flagship_agent: gaiacode` without that override is refused at

@@ -223,6 +223,38 @@ TEST_F(GaiacodeSidecar, AChatRunsGaiacodesToolsInItsFolder) {
     }
 }
 
+TEST_F(GaiacodeSidecar, AnEditIsRecordedForTheChangesViewAndUndo) {
+    const fs::path file = work_ / "calc.py";
+    mock_.pushResponse(answerReply("Ready."));
+    mock_.pushResponse(toolReply("file_write", {{"path", file.string()}, {"content", "def add(a, b):\n    return a + b\n"}}));
+    mock_.pushResponse(answerReply("Fixed add."));
+    ASSERT_NO_FATAL_FAILURE(start());
+    // Full access is set on a chat that exists: a first turn makes it.
+    turn({{"query", "hi"}, {"run_id", "run-first"}, {"context", json::array()}, {"session_id", "chat-undo"},
+          {"allowed_paths", json::array({work_.string()})}});
+    auto bypass = client().Post("/v1/gaia/sessions/chat-undo/bypass", bearer(), R"({"enabled":true})",
+                                "application/json");
+    ASSERT_TRUE(bypass);
+    ASSERT_EQ(bypass->status, 200) << bypass->body;
+    const std::string turnId = "20261122120000-0123abcd";
+    const auto events = turn({{"query", "Fix add."},
+                              {"run_id", "run-undo"},
+                              {"context", json::array()},
+                              {"session_id", "chat-undo"},
+                              {"changes_turn_id", turnId},
+                              {"allowed_paths", json::array({work_.string()})}});
+    ASSERT_FALSE(events.empty());
+    EXPECT_EQ(events.back().value("type", ""), "final") << dumpAll(events);
+    EXPECT_EQ(dumpAll(events).find("Undo may not work"), std::string::npos) << dumpAll(events);
+    const fs::path manifest = root_ / "home" / "snapshots" / "chat-undo" / turnId / "manifest.json";
+    ASSERT_TRUE(fs::exists(manifest)) << dumpAll(events);
+    const json m = json::parse(readFile(manifest));
+    ASSERT_EQ(m["files"].size(), 1u) << m.dump();
+    EXPECT_EQ(m["files"][0]["tool"], "file_write");
+    EXPECT_FALSE(m["finished_at"].is_null()) << "the end state is saved when the turn ends";
+    EXPECT_EQ(readFile(manifest.parent_path() / "blobs" / "0000.before"), "def add(a, b):\n    return a - b\n");
+}
+
 TEST_F(GaiacodeSidecar, InternetOffKeepsGitHubAway) {
     mock_.pushResponse(toolReply("gh_issue_view", {{"number", 7}}));
     mock_.pushResponse(answerReply("GitHub is off."));

@@ -15,6 +15,7 @@
 #include <vector>
 
 #include <gaia/agent.h>
+#include <gaia/file_snapshots.h>
 #include <gaia/process.h>
 #include <gaia/skill_library.h>
 #include <gaia/workspace.h>
@@ -76,6 +77,12 @@ protected:
     std::optional<std::string> reviewFinalAnswer(const std::string& answer) override;
     std::optional<std::string> unresolvedClaims(const std::string& answer) override;
 
+public:
+    bool recordsChanges() const override { return true; }
+    void setChangeRecorder(std::shared_ptr<TurnRecorder> recorder) override;
+
+protected:
+
 private:
     /// `tool` with its callback reporting what it did to the turn's events.
     ToolInfo observed(ToolInfo tool);
@@ -86,6 +93,8 @@ private:
     std::unique_ptr<SkillLibrary> skills_;
     /// The folders the tools are confined to; null with full access.
     std::shared_ptr<const Workspace> ws_;
+    mutable std::mutex recorderMu_;
+    std::shared_ptr<TurnRecorder> recorder_;
     mutable std::mutex eventsMu_;
     std::vector<TurnEvent> events_;
 };
