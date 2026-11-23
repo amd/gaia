@@ -16,8 +16,8 @@
  *                                       outcome from #2591, not just "local
  *                                       credential cleared"; nothing_stored is
  *                                       separate from a failed revoke, #8607)
- *                                       revoke_attempted is False when no revoke
- *                                       was sent and True when one was attempted
+ *                                       revoke_attempted is False when no revoke was sent
+ *                                       and True when one was attempted
  *   - ``connector.tested``            ({connector_id, ok, detail})
  *   - ``connector.enabled``           ({connector_id})
  *   - ``connector.disabled``          ({connector_id})
