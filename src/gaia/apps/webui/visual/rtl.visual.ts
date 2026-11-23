@@ -843,6 +843,41 @@ test('finished answer', async ({ page }) => {
     expect(await audit(page)).toEqual([]);
 });
 
+test('a finished answer gets the full width until the session panel is asked for', async ({ page }) => {
+    await page.setViewportSize({ width: 1200, height: 900 });
+    await open(page, `#${ANSWER_SESSION}`, 'en');
+    await expect(page.getByText('Action items from Aug 28')).toBeVisible();
+    await expect(page.locator('.session-panel')).toHaveCount(0);
+    await page.getByRole('button', { name: 'Show session panel' }).click();
+    await expect(page.locator('.session-panel.is-docked')).toBeVisible();
+    expect(await audit(page)).toEqual([]);
+});
+
+test("a reply that makes the chat's first file opens the session panel beside it", async ({ page }) => {
+    const path = 'C:\\Users\\me\\Documents\\packing-list.md';
+    const summary = { pages: [], documents: [], sites: [], cost: { kind: 'local' }, files: [{ path, name: 'packing-list.md', openable: true }] };
+    await page.addInitScript(streamThenWait, [{ type: 'done', content: 'I wrote your packing list.', message_id: 9, turn_summary: summary }]);
+    await open(page, `#${ANSWER_SESSION}`, 'en', async (p) => {
+        await p.route(`**/api/sessions/${ANSWER_SESSION}/outputs`, json({
+            session_id: ANSWER_SESSION,
+            items: [{
+                id: 'o1', kind: 'file', name: 'packing-list.md', path, detail: null,
+                message_id: 9, created_at: null, change: 'created', state: 'present', openable: true, revealable: true,
+            }],
+        }));
+        await p.route('**/api/files/status', json({ files: [{ path, exists: true, mtime: null }] }));
+    });
+    await expect(page.locator('.session-panel')).toHaveCount(0);
+    const box = page.getByRole('textbox').first();
+    await box.fill('Write me a packing list');
+    await box.press('Enter');
+    await expect(page.getByText('I wrote your packing list.')).toBeVisible();
+    const panel = page.locator('.session-panel.is-docked');
+    await expect(panel.locator('[data-section="outputs"]')).toContainText('packing-list.md');
+    expect(await page.evaluate(() => document.activeElement?.closest('.session-panel') ?? null)).toBeNull();
+    expect(await audit(page)).toEqual([]);
+});
+
 const RECIPE_CARD = {
     kind: 'guide', guideType: 'recipe', title: 'خبز الموز', description: 'رطب وسهل التحضير.',
     notes: 'يحفظ ثلاثة أيام.', servings: 8,
@@ -1867,6 +1902,9 @@ for (const locale of ['ar', 'en'] as const) {
     });
 }
 
+/** The user opened the session panel before, so it starts open; it is closed on a fresh profile. */
+const withPanelOpen = (page: Page) => page.addInitScript(() => window.localStorage.setItem('gaia.sessionPanel.open', '1'));
+
 /** Every tile and the close button sit beside the docked session panel, not under it. */
 async function expectClearOfPanel(page: Page): Promise<void> {
     const panel = (await page.locator('.session-panel.is-docked').boundingBox())!;
@@ -1878,6 +1916,7 @@ async function expectClearOfPanel(page: Page): Promise<void> {
 }
 
 test('resource usage strip', async ({ page }) => {
+    await withPanelOpen(page);
     await open(page, `#${ANSWER_SESSION}`);
     const strip = page.getByRole('region', { name: 'استخدام الموارد على هذا الجهاز' });
     await expect(strip.locator('li')).toHaveCount(5);
@@ -1894,6 +1933,7 @@ test('resource usage strip', async ({ page }) => {
 });
 
 test('closing the resource usage strip says how to bring it back', async ({ page }) => {
+    await withPanelOpen(page);
     await open(page, `#${ANSWER_SESSION}`);
     await page.getByRole('region', { name: 'استخدام الموارد على هذا الجهاز' }).getByRole('button').click();
     const note = page.locator('.resource-hidden-note');
@@ -1905,6 +1945,7 @@ test('closing the resource usage strip says how to bring it back', async ({ page
 });
 
 test('resource usage strip with no GPU counters keeps CPU and memory', async ({ page }) => {
+    await withPanelOpen(page);
     await open(page, `#${ANSWER_SESSION}`, 'ar', async (p) => {
         await p.route('**/api/system/resources', (route) =>
             route.fulfill({
@@ -2305,6 +2346,7 @@ for (const locale of ['ar', 'en']) {
     });
 
     test(`an answer's timestamp and outputs read in the interface language (${locale})`, async ({ page }) => {
+        await withPanelOpen(page);
         const month = locale === 'ar' ? ARABIC_MONTH : /Mar/;
         await open(page, `#${ANSWER_SESSION}`, locale, async (p) => {
             await p.route((url) => url.pathname === `/api/sessions/${ANSWER_SESSION}/messages`, (route) => route.fulfill({
@@ -2477,6 +2519,7 @@ const arabicNameGaps = (page: Page) =>
     );
 
 test('session panel with Arabic names', async ({ page }) => {
+    await withPanelOpen(page);
     await open(page, `#${ANSWER_SESSION}`, 'ar', withArabicEnvironment);
     await expect(page.locator('.sp-item-name', { hasText: 'تقارير' })).toBeVisible();
     const gaps = await arabicNameGaps(page);
@@ -2487,6 +2530,7 @@ test('session panel with Arabic names', async ({ page }) => {
 
 for (const locale of ['ar', 'en'] as const) {
     test(`the session panel leads with the environment, details last (${locale})`, async ({ page }) => {
+        await withPanelOpen(page);
         await open(page, `#${ANSWER_SESSION}`, locale);
         const panel = page.locator('.session-panel');
         await expect(panel.locator('.sp-group-title')).toBeVisible();
@@ -2501,6 +2545,7 @@ for (const locale of ['ar', 'en'] as const) {
 }
 
 test('a long folder path stays on its row and gives way to the folder name', async ({ page }) => {
+    await withPanelOpen(page);
     const path = `C:\\gtest\\h-r6\\${'a-long-folder-name\\'.repeat(4)}.gaia\\documents`;
     await open(page, `#${ANSWER_SESSION}`, 'ar', async (p) => {
         await p.route(`**/api/sessions/${ANSWER_SESSION}/environment`, (route) =>
@@ -2583,6 +2628,7 @@ async function withBusyPanel(page: Page): Promise<void> {
 
 for (const locale of ['ar', 'en'] as const) {
     test(`the session panel with outputs, a skill and internet off (${locale})`, async ({ page }) => {
+        await withPanelOpen(page);
         await open(page, `#${ANSWER_SESSION}`, locale, withBusyPanel);
         const panel = page.locator('.session-panel');
         await expect(panel.locator('.sp-item-name', { hasText: 'action-items.md' })).toBeVisible();
@@ -2731,6 +2777,7 @@ const USE_CASES: Array<{ name: string; setup: (page: Page) => Promise<void>; chi
 for (const useCase of USE_CASES) {
     for (const locale of ['ar', 'en'] as const) {
         test(`the session panel for a ${useCase.name} chat brings that work's rows (${locale})`, async ({ page }) => {
+            await withPanelOpen(page);
             await open(page, `#${ANSWER_SESSION}`, locale, useCase.setup);
             const panel = page.locator('.session-panel');
             await expect(panel.locator(`[data-section="${useCase.section}"]`)).toBeVisible();
@@ -2789,6 +2836,7 @@ async function holdOnPlan(page: Page, narrations: string[]): Promise<void> {
 
 for (const locale of ['ar', 'en'] as const) {
     test(`the session panel shows the plan a running turn is working through (${locale})`, async ({ page }) => {
+        await withPanelOpen(page);
         await open(page, `#${ANSWER_SESSION}`, locale, (p) => holdOnPlan(p, PLAN_LINES[locale]));
         const panel = page.locator('.session-panel');
         await expect(panel.locator('[data-section="plan"]')).toHaveCount(0);
@@ -2809,6 +2857,7 @@ expect(await forcedLeftToRight(page)).toEqual([]);
 
 for (const locale of ['ar', 'en'] as const) {
     test(`the session panel keeps a finished plan, all ticked, after the reply ends (${locale})`, async ({ page }) => {
+        await withPanelOpen(page);
         await open(page, `#${ANSWER_SESSION}`, locale, async (p) => {
             await p.route((url) => url.pathname === `/api/sessions/${ANSWER_SESSION}/messages`, json({
                 messages: [
@@ -2845,6 +2894,7 @@ expect(await forcedLeftToRight(page)).toEqual([]);
 }
 
 test('a plain chat keeps the panel to its environment, with one quiet chip', async ({ page }) => {
+    await withPanelOpen(page);
     await open(page, `#${ANSWER_SESSION}`, 'en');
     const panel = page.locator('.session-panel');
     await expect(panel.locator('.sp-chip')).toHaveText(['Chat']);
@@ -2854,6 +2904,7 @@ test('a plain chat keeps the panel to its environment, with one quiet chip', asy
 });
 
 test('a section that turns up later eases in; one there from the start does not', async ({ page }) => {
+    await withPanelOpen(page);
     let made = false;
     await open(page, `#${ANSWER_SESSION}`, 'en', async (p) => {
         await p.route(`**/api/sessions/${ANSWER_SESSION}/outputs`, (route) =>
@@ -2895,6 +2946,7 @@ test.describe('English', () => {
     });
 
     test('resource usage strip', async ({ page }) => {
+        await withPanelOpen(page);
         await open(page, `#${ANSWER_SESSION}`, 'en');
         const strip = page.getByRole('region', { name: 'Resource usage on this PC' });
         await expect(strip.getByText('S: 0 R: 8.0 Kbps')).toBeVisible();
@@ -2908,6 +2960,7 @@ test.describe('English', () => {
     });
 
     test('closing the resource usage strip says how to bring it back', async ({ page }) => {
+        await withPanelOpen(page);
         await open(page, `#${ANSWER_SESSION}`, 'en');
         await page.getByRole('button', { name: 'Hide resource usage' }).click();
         const note = page.locator('.resource-hidden-note');
@@ -2921,6 +2974,7 @@ test.describe('English', () => {
 
     test('resource usage strip on a wide window is one row', async ({ page }) => {
         await page.setViewportSize({ width: 1920, height: 1000 });
+        await withPanelOpen(page);
         await open(page, `#${ANSWER_SESSION}`, 'en');
         const tiles = page.getByRole('region', { name: 'Resource usage on this PC' }).locator('li');
         await expect(tiles).toHaveCount(5);
@@ -2953,6 +3007,7 @@ test.describe('English', () => {
     });
 
     test('an Arabic name in the session panel stays on the left', async ({ page }) => {
+        await withPanelOpen(page);
         await open(page, `#${ANSWER_SESSION}`, 'en', withArabicEnvironment);
         await expect(page.locator('.sp-item-name', { hasText: 'تقارير' })).toBeVisible();
         const gaps = await arabicNameGaps(page);
@@ -4087,6 +4142,7 @@ for (const locale of ['ar', 'en']) {
         });
 
         test(`session panel Runs on: server not answering, ${owner}'s server (${locale})`, async ({ page }) => {
+            await withPanelOpen(page);
             await open(page, `#${ANSWER_SESSION}`, locale, async (p) => { await p.route('**/api/providers/local/status', (route) => route.fulfill({ json: SERVER_DOWN(owner) })); });
             const row = page.locator('.session-panel .sp-row').filter({ has: page.locator('.sp-error') });
             await row.scrollIntoViewIfNeeded();
@@ -4163,6 +4219,7 @@ async function withCloudSpending(page: Page): Promise<void> {
 for (const locale of ['ar', 'en']) {
     // Fonts differ by OS, so a row that fits on one PC runs past the panel's edge on another. Narrowest panel, longest row.
     test(`a cloud chat's rows stay inside the session panel at its narrowest (${locale})`, async ({ page }) => {
+        await withPanelOpen(page);
         await open(page, `#${ANSWER_SESSION}`, locale, async (p) => {
             await withCloudSpending(p);
             await p.addInitScript(() => window.localStorage.setItem('gaia.sessionPanel.width', '280'));
@@ -4713,6 +4770,8 @@ async function expectVisibleTryAgain(page: Page, locale: string): Promise<void> 
     const retry = page.getByRole('button', { name: /Try again/ });
     await expect(retry).toHaveCount(1);
     await expect(retry).toHaveText(locale === 'ar' ? /حاول مجددًا/ : /Try again/);
+    // The answer fades in; judge it once it has arrived.
+    await retry.evaluate((el) => Promise.all(el.closest('.msg')!.getAnimations().map((a) => a.finished)));
     const opacity = await retry.evaluate((el) => {
         let o = 1;
         for (let at: Element | null = el; at; at = at.parentElement) o *= Number(getComputedStyle(at).opacity);
@@ -6896,6 +6955,7 @@ async function withAttachedBrief(page: Page): Promise<void> {
 
 for (const locale of ['ar', 'en']) {
     test(`a file attached in the message box is listed for its chat (${locale})`, async ({ page }) => {
+        await withPanelOpen(page);
         await page.addInitScript(streamThenWait, ATTACHED_IN_COMPOSER);
         await open(page, `#${ANSWER_SESSION}`, locale, withAttachedBrief);
         await page.locator('textarea').first().fill(ATTACH_REQUEST);
