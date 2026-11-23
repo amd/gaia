@@ -424,6 +424,7 @@ def test_failed_github_batch_fails_cli_without_rest_fallback(
     assert "2/2 unique GitHub issue/PR references unverified" in output
     assert "FAILED: Could not verify most GitHub issue/PR references" in output
     assert "PASSED:" not in output
+    assert "set GITHUB_TOKEN" in output and "--internal-only" in output
     assert len(fake.graphql) == 1
     assert fake.rest == []
 
@@ -448,6 +449,21 @@ def test_exactly_half_unverified_counts_github_aliases_once(monkeypatch, capsys)
     assert "::warning title=GitHub link verification incomplete::" in output
     assert "PASSED: No broken links found; some links could not be verified" in output
     assert "All links valid" not in output
+
+
+def test_tokenless_rate_limited_run_fails_with_remedy(monkeypatch, capsys):
+    results = [
+        cdl.LinkResult("a.md", i, _gaia(i), "warning", "HTTP 403 (rate limited)")
+        for i in range(1, 4)
+    ]
+    monkeypatch.setattr(cdl, "check_links", lambda *args, **kwargs: results)
+    monkeypatch.delenv("GITHUB_TOKEN", raising=False)
+    monkeypatch.delenv("GITHUB_ACTIONS", raising=False)
+    code, output = _run_checker(monkeypatch, capsys)
+    assert code == 1
+    assert "3/3 unique GitHub issue/PR references unverified" in output
+    assert "set GITHUB_TOKEN" in output and "--internal-only" in output
+    assert "::error" not in output
 
 
 @pytest.mark.parametrize(

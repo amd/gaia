@@ -654,7 +654,12 @@ def main():
     if broken:
         print("FAILED: Found broken links")
     if github_majority_unverified:
-        print("FAILED: Could not verify most GitHub issue/PR references")
+        print(
+            "FAILED: Could not verify most GitHub issue/PR references. "
+            "GitHub may be down or rate limiting; set GITHUB_TOKEN "
+            "(e.g. `export GITHUB_TOKEN=$(gh auth token)`) or run with "
+            "--internal-only."
+        )
     if broken or github_majority_unverified:
         sys.exit(1)
 
