@@ -629,6 +629,18 @@ class TestFailedTurnProgram:
         monkeypatch.setattr(fetch, "saved_flagship", lambda: saved)
         assert _failed_turn_program(agent_type) == expected
 
+    @pytest.mark.parametrize(
+        "failure",
+        ["model_server_down", "The model server at http://127.0.0.1:13305 is busy."],
+    )
+    def test_a_model_server_failure_is_not_put_on_gaiacpp(self, monkeypatch, failure):
+        """The Python agent talks to the same model server, so switching fixes nothing."""
+        from gaia.daemon.sidecars import fetch
+        from gaia.ui._chat_helpers import _failed_turn_program
+
+        monkeypatch.setattr(fetch, "saved_flagship", lambda: "gaiacpp")
+        assert _failed_turn_program("gaia", failure) is None
+
 
 # ── _canonical_agent_type ─────────────────────────────────────────────────
 

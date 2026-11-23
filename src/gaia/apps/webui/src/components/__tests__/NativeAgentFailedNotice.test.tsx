@@ -10,6 +10,7 @@ import { NativeAgentFailedNotice } from '../NativeAgentFailedNotice';
 import { useChatStore } from '../../stores/chatStore';
 import * as api from '../../services/api';
 import { stripIsolates } from '../../i18n/registry';
+import type { SystemStatus } from '../../types';
 import { AGENT_PROGRAMS, SETTINGS } from '../../test/setupApiMocks';
 
 vi.mock('../../services/api');
@@ -19,12 +20,31 @@ const usePython = () => screen.getByRole('button', { name: 'Use the Python agent
 
 beforeEach(() => {
     vi.resetAllMocks();
-    useChatStore.setState({ locale: 'en', settingsSection: null });
+    useChatStore.setState({ locale: 'en', settingsSection: null, systemStatus: null });
     vi.mocked(api.getAgentPrograms).mockResolvedValue({ ...AGENT_PROGRAMS, current: 'gaiacpp' });
     vi.mocked(api.updateSettings).mockResolvedValue({ ...SETTINGS, flagship_agent: 'gaiapy' });
 });
 
 describe('NativeAgentFailedNotice', () => {
+    it('stays out of it when the model server is down: the Python agent would fail the same way', () => {
+        useChatStore.setState({ systemStatus: { lemonade_running: false, lemonade_probe: 'down' } as SystemStatus });
+        render(<NativeAgentFailedNotice />);
+        expect(screen.queryByRole('note')).not.toBeInTheDocument();
+        expect(screen.queryByRole('button', { name: 'Use the Python agent' })).not.toBeInTheDocument();
+    });
+
+    it('still speaks up when the model server is down but the chat runs on a cloud model', () => {
+        useChatStore.setState({ systemStatus: { lemonade_running: false, default_model_is_cloud: true } as SystemStatus });
+        render(<NativeAgentFailedNotice />);
+        expect(usePython()).toBeInTheDocument();
+    });
+
+    it('speaks up while the model server is running', () => {
+        useChatStore.setState({ systemStatus: { lemonade_running: true } as SystemStatus });
+        render(<NativeAgentFailedNotice />);
+        expect(usePython()).toBeInTheDocument();
+    });
+
     it('says the chat runs on gaiacpp (Beta) and changes nothing by itself', () => {
         render(<NativeAgentFailedNotice />);
         expect(text(screen.getByRole('note'))).toContain('This chat is running on gaiacpp (Beta), the native agent.');

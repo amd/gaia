@@ -18,6 +18,9 @@ const NAME = 'gaiacpp';
 export function NativeAgentFailedNotice() {
     const t = useT();
     const openSettings = useChatStore((s) => s.openSettings);
+    // A stopped model server fails the Python agent too, and the panel beside the chat already says so.
+    const serverDown = useChatStore((s) => s.systemStatus?.lemonade_running === false
+        && !s.systemStatus.default_model_is_cloud);
     const [switching, setSwitching] = useState(false);
     const [switched, setSwitched] = useState(false);
     const [error, setError] = useState<Param | null>(null);
@@ -47,6 +50,7 @@ export function NativeAgentFailedNotice() {
         }
     };
 
+    if (serverDown && !switched) return null;
     if (switched) {
         return (
             <div className="server-down-notice server-down-notice--ok native-agent-notice" role="status">
