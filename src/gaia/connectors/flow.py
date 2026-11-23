@@ -683,7 +683,7 @@ async def revoke_provider_token(
       could not be resolved. ``revoke_error`` names which, so callers don't
       conflate "can't be revoked" with "wasn't tried".
     - ``revoke_supported=True, revoked_remotely=True`` — the provider's
-      revoke endpoint accepted the request.
+      revoke endpoint accepted the request (``revoke_attempted=True``).
     - ``revoke_supported=True, revoked_remotely=False,
       nothing_stored=True``: the slot was empty, so there was no refresh
       token to revoke and no provider call was made. This is distinct from a
@@ -693,9 +693,15 @@ async def revoke_provider_token(
       GAIA cannot read (#8713), so there was no token to send. The local copy
       is still removed and ``revoke_error`` says where to revoke by hand. The
       slot is not empty, so this must never be reported as nothing stored.
-    - ``revoke_supported=True, revoked_remotely=False`` — the endpoint call
-      failed; ``revoke_error`` carries why. The provider-side grant is still
-      live and the caller must say so.
+    - ``revoke_supported=True, revoked_remotely=False,
+      revoke_attempted=True`` — the endpoint call failed; ``revoke_error``
+      carries why. The provider-side grant is still live and the caller must
+      say so.
+
+    ``revoke_attempted`` is True only when a revoke request was actually sent.
+    It is False for an empty slot, an unreadable sign-in, a forwarded
+    connection, an unresolvable provider, and a provider with no revoke
+    endpoint, so callers can say "not attempted" instead of "failed".
 
     **Forwarded connections are never revoked remotely (#2591 review).** A
     connection imported via ``api.import_forwarded_connection`` stores a
@@ -713,6 +719,7 @@ async def revoke_provider_token(
         return {
             "revoke_supported": False,
             "revoked_remotely": False,
+            "revoke_attempted": False,
             "nothing_stored": False,
             "revoke_error": (
                 "this connection was forwarded to GAIA by another application "
@@ -723,10 +730,7 @@ async def revoke_provider_token(
             ),
         }
 
-    # ``peek_connection`` returns None both for an empty slot and for a value
-    # it cannot read (a corrupt blob). An empty slot needs no provider, so an
-    # unconfigured OAuth client can't mask it; a slot that is in use but
-    # unreadable is NOT empty and must say so, not "nothing stored" (#8713).
+    # A corrupt blob also reads as None; the slot check tells them apart (#8713).
     if blob is None and provider_id in HAS_REVOKE_ENDPOINT:
         if not connection_slot_in_use(provider_id, slot=slot):
             return nothing_to_revoke(provider_id)
@@ -743,6 +747,7 @@ async def revoke_provider_token(
         return {
             "revoke_supported": False,
             "revoked_remotely": False,
+            "revoke_attempted": False,
             "nothing_stored": False,
             "revoke_error": f"provider {provider_id!r} could not be resolved: {exc}",
         }
@@ -753,6 +758,7 @@ async def revoke_provider_token(
     result: Dict[str, Any] = {
         "revoke_supported": bool(revoke_url),
         "revoked_remotely": False,
+        "revoke_attempted": False,
         "nothing_stored": False,
         "revoke_error": None,
     }
@@ -767,6 +773,7 @@ async def revoke_provider_token(
     # ``spec.oauth_provider_ref``, which every credential-name heuristic reads
     # as secret material, and the host identifies the provider just as exactly.
     revoke_host = urlsplit(revoke_url).netloc
+    result["revoke_attempted"] = True
 
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
@@ -830,12 +837,14 @@ def nothing_to_revoke(provider_id: str) -> Dict[str, Any]:
         return {
             "revoke_supported": False,
             "revoked_remotely": False,
+            "revoke_attempted": False,
             "nothing_stored": False,
             "revoke_error": f"provider {provider_id!r} could not be resolved",
         }
     return {
         "revoke_supported": HAS_REVOKE_ENDPOINT[provider_id],
         "revoked_remotely": False,
+        "revoke_attempted": False,
         "nothing_stored": True,
         "revoke_error": None,
     }
@@ -882,6 +891,7 @@ def unreadable_sign_in(
     return {
         "revoke_supported": HAS_REVOKE_ENDPOINT[provider_id],
         "revoked_remotely": False,
+        "revoke_attempted": False,
         "nothing_stored": False,
         "revoke_error": (
             "GAIA could not read the stored sign-in, so it removed the local "
@@ -915,6 +925,7 @@ def not_revoked_on_weak_keyring(
     return {
         "revoke_supported": False,
         "revoked_remotely": False,
+        "revoke_attempted": False,
         "nothing_stored": False,
         "revoke_error": (
             f"{why}, so GAIA removed the sign-in without reading it and did "

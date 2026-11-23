@@ -586,8 +586,8 @@ async def revoke_connection_async(
     ``accounts`` list of each one's result.
 
     Returns ``{"revoke_supported": bool, "revoked_remotely": bool,
-    "nothing_stored": bool, "revoke_error": str | None, "account_id",
-    "account_email", "remaining_accounts": int}`` (see
+    "revoke_attempted": bool, "nothing_stored": bool, "revoke_error": str | None,
+    "account_id", "account_email", "remaining_accounts": int}`` (see
     ``flow.revoke_provider_token``). Never bare success for what was only a
     local keyring delete. Reporting
     a full revoke when the provider-side grant is still live was the
@@ -644,6 +644,7 @@ def _combine_revokes(results: List[Dict[str, Any]]) -> Dict[str, Any]:
     return {
         "revoke_supported": all(r["revoke_supported"] for r in results),
         "revoked_remotely": any_revoked and all_resolved,
+        "revoke_attempted": any(r.get("revoke_attempted", False) for r in results),
         "nothing_stored": bool(results)
         and all(r.get("nothing_stored", False) for r in results),
         "revoke_error": errors[0] if errors else None,

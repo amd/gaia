@@ -85,6 +85,7 @@ class TestRevokeProviderToken:
         assert result == {
             "revoke_supported": True,
             "revoked_remotely": True,
+            "revoke_attempted": True,
             "nothing_stored": False,
             "revoke_error": None,
         }
@@ -140,6 +141,7 @@ class TestRevokeProviderToken:
         assert result == {
             "revoke_supported": True,
             "revoked_remotely": False,
+            "revoke_attempted": False,
             "nothing_stored": True,
             "revoke_error": None,
         }
@@ -193,6 +195,7 @@ class TestRevokeProviderToken:
         assert result == {
             "revoke_supported": False,
             "revoked_remotely": False,
+            "revoke_attempted": False,
             "nothing_stored": False,
             "revoke_error": None,
         }
@@ -208,6 +211,7 @@ class TestRevokeProviderToken:
         assert result == {
             "revoke_supported": False,
             "revoked_remotely": False,
+            "revoke_attempted": False,
             "nothing_stored": True,
             "revoke_error": None,
         }
