@@ -296,6 +296,8 @@ Each request carries its whole conversation, so the server keeps no state betwee
 
 Behind the Agent UI, `gaiacpp` finds the model server and its key as in [Using what GAIA set up](#using-what-gaia-set-up), and looks again on every message, so it follows GAIA's own server to a new port after a restart. The model is the one the chat sends, else the one GAIA set up. An address named with `GAIA_BASE_URL` gets `GAIA_API_KEY` when that is set; `LEMONADE_API_KEY` and GAIA's own server's key are sent only to an address on this PC, never to another machine. A model server that doesn't answer fails the turn at once with how to start it, and one that answers with an error fails it with the HTTP status and the key or address to fix.
 
+A turn that nobody can answer for never waits on an approval. A request with no `session_id` (as `gaia -p` sends through the daemon), or one that sets `can_answer_questions` to `false`, ends at the first tool that needs approval with a failed `final` that names the tool; nothing is run and no `needs_confirmation` is sent. For a `surface: "cli"` caller the answer says that `gaia -p` can't pass `--dangerously-skip-permissions` or `--full-access` to `gaiacpp`, and to run `gaiacpp -p "<request>" --dangerously-skip-permissions` or switch to the Python agent. Full access turned on for that run (`/sessions/{run_id}/bypass`) still lets the tool run.
+
 A few things answer the way an older flagship would, and the UI copes with each:
 
 - A message sent mid-turn gets 409, so the UI sends it as the next message.

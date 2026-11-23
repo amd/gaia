@@ -1128,6 +1128,48 @@ TEST_F(GaiacppSidecar, RunIdEqualToAChatsIdDoesNotTakeOverThatChat) {
     EXPECT_EQ(still->status, 200) << "the chat was dropped with the one-off turn: " << still->body;
 }
 
+// `gaia -p` through the daemon: no chat, nobody to answer. It must end, not wait ten minutes.
+TEST_F(GaiacppSidecar, AGatedToolWithNobodyToAskEndsTheTurnAtOnce) {
+    const fs::path target = work_ / "unapproved.txt";
+    mock().pushResponse(toolReply("file_write", writeArgs(target, "x")));
+    mock().pushResponse(answerReply("Done."));
+    ASSERT_NO_FATAL_FAILURE(startSidecar());
+
+    Turn t(port_, queryBody("run-headless", "write it",
+                            {{"surface", "cli"}, {"allowed_paths", json::array({work_.string()})}}));
+    ASSERT_TRUE(t.waitDone(seconds(20))) << "the turn is waiting on an approval nobody can give: " << t.describe();
+
+    const auto final = t.waitType("final");
+    ASSERT_TRUE(final) << t.describe();
+    EXPECT_EQ((*final)["failed"], true);
+    const std::string answer = (*final)["answer"].get<std::string>();
+    EXPECT_NE(answer.find("I stopped before running 'file_write'"), std::string::npos) << answer;
+    EXPECT_NE(answer.find("gaia -p has nobody to ask"), std::string::npos) << answer;
+    EXPECT_NE(answer.find("--dangerously-skip-permissions"), std::string::npos) << answer;
+    EXPECT_FALSE(fs::exists(target));
+    for (const auto& e : t.events()) EXPECT_NE(e.value("type", ""), "needs_confirmation") << e.dump();
+}
+
+TEST_F(GaiacppSidecar, AChatThatSaysItCantAnswerIsRefusedInServiceWords) {
+    const fs::path target = work_ / "unapproved.txt";
+    mock().pushResponse(toolReply("file_write", writeArgs(target, "x")));
+    mock().pushResponse(answerReply("Done."));
+    ASSERT_NO_FATAL_FAILURE(startSidecar());
+
+    Turn t(port_, queryBody("run-mute", "write it",
+                            {{"session_id", "chat-mute"},
+                             {"can_answer_questions", false},
+                             {"allowed_paths", json::array({work_.string()})}}));
+    ASSERT_TRUE(t.waitDone(seconds(20))) << t.describe();
+    const auto final = t.waitType("final");
+    ASSERT_TRUE(final) << t.describe();
+    EXPECT_EQ((*final)["failed"], true);
+    const std::string answer = (*final)["answer"].get<std::string>();
+    EXPECT_NE(answer.find("this request has nobody to ask"), std::string::npos) << answer;
+    EXPECT_EQ(answer.find("gaia -p"), std::string::npos) << "only a cli caller is told about gaia -p: " << answer;
+    EXPECT_FALSE(fs::exists(target));
+}
+
 TEST_F(GaiacppSidecar, ATurnWithoutASessionIsAddressedByItsRunIdWhileItRuns) {
     Hold& held = hold();
     ASSERT_NO_FATAL_FAILURE(startSidecar());

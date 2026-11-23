@@ -1527,6 +1527,21 @@ def test_a_relayed_answer_reporting_a_failed_model_call_is_an_error(relay, capsy
     assert "Couldn't reach the local LLM" in capsys.readouterr().err
 
 
+def test_a_relayed_refusal_of_a_gated_tool_exits_1_and_keeps_the_remedy(relay, capsys):
+    """gaiacpp ends an unattended turn at a gated tool with a failed final (never a wait)."""
+    refusal = (
+        "I stopped before running 'file_write' because it needs your approval, and "
+        "gaia -p has nobody to ask. gaia -p can't pass --dangerously-skip-permissions "
+        "or --full-access to gaiacpp, the agent this PC is set to use."
+    )
+    relay.outcome = _Outcome("final", final_answer=refusal, failed=True)
+    assert print_mode.run("write x", model="m", output_format="json") == 1
+    out, err = capsys.readouterr()
+    record = json.loads(out)
+    assert record["is_error"] and record["error"] == refusal
+    assert "--dangerously-skip-permissions" in err
+
+
 def test_a_relayed_turn_that_errors_exits_1_with_the_reason(relay, capsys):
     relay.outcome = _Outcome("error", error_detail="model failed to load")
     assert print_mode.run("q", model="m") == 1

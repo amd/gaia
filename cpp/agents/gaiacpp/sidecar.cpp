@@ -82,6 +82,9 @@ struct Run {
     bool finished = false;
     std::atomic<bool> cancelled{false};
     std::map<std::string, std::string> decisions;  // confirm_id -> decision ("" while waiting)
+    bool unattended = false;     // nobody can answer an approval on this turn
+    std::string surface;         // the caller's front-end, "" when it named none
+    std::string refusedAction;   // the gated tool an unattended turn stopped at
 
     // Under the lock, so a waiter between its check and its sleep can't miss it.
     void cancel() {
@@ -586,6 +589,12 @@ private:
             run = s.current;
         }
         if (!run) return ToolConfirmResult::UNATTENDED;
+        if (run->unattended) {
+            // Parking here would wait on a card nobody will ever see: end the turn instead.
+            if (run->refusedAction.empty()) run->refusedAction = tool;
+            run->cancel();
+            return ToolConfirmResult::UNATTENDED;
+        }
         const std::string confirmId = randomHex(16);
         {
             std::lock_guard<std::mutex> lock(run->mu);
@@ -870,6 +879,28 @@ private:
         });
     }
 
+    // The turn's last word when it stopped at a gated tool nobody could approve.
+    static json unattendedRefusal(const Run& run) {
+        const bool path = run.refusedAction == kPathAccessPrompt;
+        std::string answer;
+        if (run.surface == "cli") {
+            // gaia -p can't pass its permission flags to gaiacpp, so name what does work.
+            answer = "I stopped before running '" + run.refusedAction +
+                     "' because it needs your approval, and gaia -p has nobody to ask. gaia -p can't pass "
+                     "--dangerously-skip-permissions or --full-access to gaiacpp, the agent this PC is set to "
+                     "use. Run the request with gaiacpp itself (gaiacpp -p \"<your request>\" " +
+                     std::string(path ? "--allow-dir <folder>" : "--dangerously-skip-permissions") +
+                     "), or switch to the Python agent with `gaia config set flagship_agent gaiapy` and run "
+                     "gaia -p again with the flag.";
+        } else {
+            answer = "I stopped before running '" + run.refusedAction +
+                     "' because it needs your explicit approval, and this request has nobody to ask: it "
+                     "named no session, or said it can't answer questions. Send it with a session_id from a "
+                     "caller that answers needs_confirmation, or perform the action directly.";
+        }
+        return {{"type", "final"}, {"failed", true}, {"answer", answer}, {"failure", answer}};
+    }
+
     void memoryDump(httplib::Response& res) {
         try {
             const std::string path = MemoryStore::defaultPath();
@@ -1000,6 +1031,11 @@ private:
 
         auto run = std::make_shared<Run>();
         run->id = runId;
+        // As on the Python agent: a card needs a chat to hold the answer and a caller who can give one.
+        run->unattended = sid.empty() || (body.contains("can_answer_questions") &&
+                                          body["can_answer_questions"].is_boolean() &&
+                                          !body["can_answer_questions"].get<bool>());
+        if (body.contains("surface") && body["surface"].is_string()) run->surface = body["surface"].get<std::string>();
         {
             std::lock_guard<std::mutex> lock(runsMu_);
             if (runs_.count(runId)) throw BadRequest(409, "Duplicate run_id " + runId);
@@ -1139,6 +1175,7 @@ private:
                 // Anything else would end the process and every other chat with it.
                 terminal = {{"type", "error"}, {"detail", "The turn failed with an unknown error"}, {"status", 500}};
             }
+            if (!run->refusedAction.empty()) terminal = unattendedRefusal(*run);
             if (s->console) s->console->detach();
             {
                 std::lock_guard<std::mutex> lock(s->currentMu);
