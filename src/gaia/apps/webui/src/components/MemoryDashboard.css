@@ -1295,6 +1295,18 @@
 }
 
 /* ── Tab Bar ─────────────────────────────────────────────────── */
+.mem-agent-notice {
+    display: flex;
+    align-items: flex-start;
+    gap: 8px;
+    flex-shrink: 0;
+    padding: 10px 24px;
+    font-size: 13px;
+    color: var(--text-secondary);
+    background: color-mix(in srgb, var(--accent-yellow) 10%, transparent);
+    border-bottom: 1px solid color-mix(in srgb, var(--accent-yellow) 40%, transparent);
+}
+.mem-agent-notice svg { flex-shrink: 0; margin-top: 2px; }
 .mem-tab-bar {
     display: flex;
     gap: 0;

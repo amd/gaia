@@ -3516,6 +3516,7 @@ const messages: Messages = {
     'mem.back': 'رجوع',
     'mem.refresh': 'تحديث',
     'mem.refreshAria': 'تحديث لوحة الذاكرة',
+    'mem.cppNotice': 'يحتفظ gaiacpp بذاكرته الخاصة، ولا يمكن لهذه الصفحة عرضها بعد. ما تراه هنا هو ما يتذكّره وكيل Python.',
     'mem.tab.about': 'عنك',
     'mem.tab.goals': 'الأهداف',
     'mem.tab.profile': 'إعداد الملف الشخصي',

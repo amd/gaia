@@ -3516,6 +3516,7 @@ export const enMessages = {
     'mem.back': 'Back',
     'mem.refresh': 'Refresh',
     'mem.refreshAria': 'Refresh dashboard',
+    'mem.cppNotice': 'gaiacpp keeps its own memory, and this page can’t show it yet. What you see here is what the Python agent remembers.',
     'mem.tab.about': 'About you',
     'mem.tab.goals': 'Goals',
     'mem.tab.profile': 'Profile setup',

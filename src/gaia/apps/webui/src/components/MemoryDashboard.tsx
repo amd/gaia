@@ -6,12 +6,13 @@ import {
     X, Search, RefreshCw, Plus, Trash2, Pencil, Copy, Clock, ArrowLeft,
     Brain, MessageSquare, Wrench, TrendingUp, ChevronLeft, ChevronRight,
     AlertTriangle, CheckCircle, Shield, ShieldOff, ChevronDown, Database,
-    Zap, GitMerge, Circle, User, Cpu, Sparkles, Target, ListChecks, Eye,
+    Zap, GitMerge, Circle, User, Cpu, Sparkles, Target, ListChecks, Eye, Info,
 } from 'lucide-react';
 import { useChatStore } from '../stores/chatStore';
 import { useGoalHealthStore } from '../stores/goalHealthStore';
 import { useEscapeToClose } from '../hooks/useEscapeToClose';
 import { useFocusTrap } from '../hooks/useFocusTrap';
+import * as api from '../services/api';
 import * as memoryApi from '../services/memoryApi';
 import { log } from '../utils/logger';
 import { formatSize } from '../utils/format';
@@ -394,6 +395,16 @@ export function MemoryDashboard() {
 
     // Tab state
     const [activeTab, setActiveTab] = useState<DashboardTab>('about');
+    const [agentProgram, setAgentProgram] = useState<string | null>(null);
+
+    // This page reads only the Python agent's store; gaiacpp keeps its own.
+    useEffect(() => {
+        let active = true;
+        void api.getSettings()
+            .then((settings) => { if (active) setAgentProgram(settings.flagship_agent); })
+            .catch((err) => log.system.warn('Failed to load the selected agent program', err));
+        return () => { active = false; };
+    }, []);
     const [aboutReloadKey, setAboutReloadKey] = useState(0);
 
     // Goals tab state
@@ -1291,6 +1302,13 @@ export function MemoryDashboard() {
                         </button>
                     </div>
                 </div>
+
+                {agentProgram === 'gaiacpp' && (
+                    <div className="mem-agent-notice" role="note">
+                        <Info size={14} aria-hidden="true" />
+                        <span>{t('mem.cppNotice')}</span>
+                    </div>
+                )}
 
                 {/* Tab bar */}
                 <div className="mem-tab-bar" role="tablist">
