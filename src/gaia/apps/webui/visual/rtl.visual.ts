@@ -730,6 +730,22 @@ for (const locale of ['en', 'ar']) {
             expect(await audit(page)).toEqual([]);
         });
     }
+
+    test(`an open chat whose gaiacpp went missing offers the same two fixes under the turn (${locale})`, async ({ page }) => {
+        await open(page, `#${ANSWER_SESSION}`, locale, async (p) => {
+            await p.route('**/api/onboarding/start', (route) => route.fulfill({ json: GAIACPP_MISSING_START }));
+            await p.route((url) => url.pathname === `/api/sessions/${ANSWER_SESSION}/messages`, (route) => route.fulfill({
+                json: { messages: GAIACPP_MISSING_TURN, total: GAIACPP_MISSING_TURN.length },
+            }));
+            await withAgentPrograms(p, { gaiacpp: 'downloadable' });
+        });
+        const turn = page.locator('[data-message-id="2"]');
+        const panel = turn.locator('.agent-recovery');
+        await expect(panel).toBeVisible();
+        await expect(panel.locator('.agent-recovery-actions button')).toHaveCount(2);
+        await shot(page, `chat-gaiacpp-missing-${locale}`);
+        expect(await audit(page)).toEqual([]);
+    });
 }
 
 const uncut = (el: Element) => el.scrollWidth <= el.clientWidth + 1;
@@ -759,6 +775,14 @@ for (const locale of ['en', 'ar']) {
         });
     }
 }
+
+const GAIACPP_MISSING_TURN = [
+    { id: 1, session_id: ANSWER_SESSION, role: 'user', content: 'Plan three days in Lisbon.', created_at: NOW.toISOString(), rag_sources: null },
+    {
+        id: 2, session_id: ANSWER_SESSION, role: 'assistant', content: '', created_at: NOW.toISOString(), rag_sources: null, failed: true,
+        agent_steps: [{ id: 1, type: 'error', label: 'Error', detail: "GAIA couldn't start its agent. Send your message again.", active: false, success: false, timestamp: 1 }],
+    },
+];
 
 for (const locale of ['en', 'ar']) {
     test(`chat titles in the sidebar use the whole row (${locale})`, async ({ page }) => {
