@@ -732,6 +732,34 @@ for (const locale of ['en', 'ar']) {
     }
 }
 
+const uncut = (el: Element) => el.scrollWidth <= el.clientWidth + 1;
+
+for (const locale of ['en', 'ar']) {
+    const name = locale === 'ar' ? 'سريع وخفيف · تجريبي' : 'Fast and light · Beta';
+    for (const [where, hash, width] of [['new chat', '', 1440], ['new chat', '', 390], ['chat', `#${ANSWER_SESSION}`, 1440]] as const) {
+        test(`a ${where} on Fast and light says so beside the model (${locale}, ${width}px)`, async ({ page }) => {
+            await page.setViewportSize({ width, height: 900 });
+            await open(page, hash, locale, async (p) => {
+                await withModelPage(p, MODEL_LIST, SETUP_PLAN);
+                await withAgentPrograms(p, { current: 'gaiacpp' });
+            });
+            const chip = page.locator('main .composer-chip-agent');
+            await expect(chip).toContainText(name);
+            await expect(chip).toHaveAttribute('title', locale === 'ar' ? /سريع وخفيف/ : /^Fast and light \(Beta\)/);
+            // Under the box in a new chat it has room; in a busier chat row it fades before the model name does.
+            if (!hash) expect(await chip.locator('.composer-chip-label').evaluate(uncut)).toBe(true);
+            const model = page.locator('main .composer-row-right .composer-chip-wrap .composer-chip-label').last();
+            if (width > 480) expect(await model.evaluate(uncut)).toBe(true);
+            await shot(page, `${hash ? 'chat' : 'new-chat'}-agent-chip-${width}-${locale}`);
+            // The closed sidebar drawer waits off screen on a phone; judge the rest there.
+            const problems = await audit(page);
+            expect(width > 480 ? problems : problems.filter((p) => /composer|new-chat|scrolls sideways/.test(p))).toEqual([]);
+            await chip.click();
+            await expect(page.locator('.settings-pane-title')).toHaveText(locale === 'ar' ? /الوكيل والنموذج/ : /^Agent & model$/);
+        });
+    }
+}
+
 for (const locale of ['en', 'ar']) {
     test(`chat titles in the sidebar use the whole row (${locale})`, async ({ page }) => {
         await open(page, '', locale);

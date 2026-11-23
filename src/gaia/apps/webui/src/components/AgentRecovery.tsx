@@ -8,6 +8,7 @@ import { useT } from '../i18n/useT';
 import { ref, type Param } from '../i18n/registry';
 import { requestErrorParam } from '../utils/requestErrors';
 import { log } from '../utils/logger';
+import { useActiveAgentStore } from '../stores/activeAgentStore';
 import { AgentDownloadRow, useAgentDownload } from './setup/AgentDownload';
 import type { AgentProblem, AgentProgram } from '../types';
 
@@ -73,6 +74,7 @@ export function AgentRecovery({ problem, onRetry, kept = false }: Props) {
                 return;
             }
             await api.updateSettings({ flagship_agent: 'gaiapy' });
+            useActiveAgentStore.getState().setCurrent('gaiapy');
             if (!live.current) return;
             setRetrying(true);
             onRetry();

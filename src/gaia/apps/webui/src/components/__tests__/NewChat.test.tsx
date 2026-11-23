@@ -734,7 +734,7 @@ describe('NewChat when the chosen gaiacpp cannot start', () => {
         expect(screen.getByText(MISSING.agent_problem.detail)).toBeInTheDocument();
 
         expect(await screen.findByRole('button', { name: 'Download gaiacpp again' })).toBeInTheDocument();
-        expect(screen.getByRole('button', { name: 'Use the Python agent' })).toBeInTheDocument();
+        expect(screen.getByRole('button', { name: 'Use Full-featured' })).toBeInTheDocument();
         // Nothing is switched until the user picks it.
         expect(api.updateSettings).not.toHaveBeenCalled();
     });
@@ -768,46 +768,48 @@ describe('NewChat when the chosen gaiacpp cannot start', () => {
 
         expect(await screen.findByText("gaiacpp can't be downloaded here: gaiacpp is not built for this kind of PC")).toBeInTheDocument();
         expect(screen.queryByRole('button', { name: /Download gaiacpp/ })).not.toBeInTheDocument();
-        expect(screen.getByRole('button', { name: 'Use the Python agent' })).toBeInTheDocument();
+        expect(screen.getByRole('button', { name: 'Use Full-featured' })).toBeInTheDocument();
     });
 
-    it('switches to the Python agent only when asked, then asks for the agent again', async () => {
+    it('switches to Full-featured only when asked, then asks for the agent again', async () => {
         vi.mocked(api.updateSettings).mockResolvedValue({ flagship_agent: 'gaiapy' } as Settings);
         render(<NewChat onSend={vi.fn()} />);
         await screen.findByText(/isn't on this PC/);
+        expect(await screen.findByRole('button', { name: 'Fast and light · Beta' })).toBeInTheDocument();
         expect(api.updateSettings).not.toHaveBeenCalled();
         vi.mocked(api.getStartScreen).mockResolvedValue(START);
 
-        fireEvent.click(screen.getByRole('button', { name: 'Use the Python agent' }));
+        fireEvent.click(screen.getByRole('button', { name: 'Use Full-featured' }));
 
         await waitFor(() => expect(api.updateSettings).toHaveBeenCalledWith({ flagship_agent: 'gaiapy' }));
         expect(api.updateSettings).toHaveBeenCalledTimes(1);
         await waitFor(() => expect(screen.queryByText(/isn't on this PC/)).not.toBeInTheDocument());
+        expect(screen.queryByRole('button', { name: 'Fast and light · Beta' })).not.toBeInTheDocument();
     });
 
-    it("keeps gaiacpp chosen, and says why, when the Python agent isn't installed either", async () => {
+    it("keeps gaiacpp chosen, and says why, when Full-featured isn't installed either", async () => {
         const missing = programs();
         missing.programs[0] = { ...missing.programs[0], installed: false };
         vi.mocked(api.getAgentPrograms).mockResolvedValue(missing);
         render(<NewChat onSend={vi.fn()} />);
         await screen.findByText(/isn't on this PC/);
 
-        fireEvent.click(screen.getByRole('button', { name: 'Use the Python agent' }));
+        fireEvent.click(screen.getByRole('button', { name: 'Use Full-featured' }));
 
-        expect(await screen.findByText(/Couldn't switch to the Python agent: it isn’t installed on this PC, so gaiacpp stays your agent/)).toBeInTheDocument();
+        expect(await screen.findByText(/Couldn't switch to Full-featured: it isn’t installed on this PC, so gaiacpp stays your agent/)).toBeInTheDocument();
         expect(api.updateSettings).not.toHaveBeenCalled();
         expect(screen.getByText(/isn't on this PC/)).toBeInTheDocument();
-        expect(screen.getByRole('button', { name: 'Use the Python agent' })).toBeEnabled();
+        expect(screen.getByRole('button', { name: 'Use Full-featured' })).toBeEnabled();
     });
 
-    it('saves nothing when it cannot check the Python agent', async () => {
+    it('saves nothing when it cannot check Full-featured', async () => {
         render(<NewChat onSend={vi.fn()} />);
         await screen.findByText(/isn't on this PC/);
         vi.mocked(api.getAgentPrograms).mockRejectedValue(new Error('the server is not answering'));
 
-        fireEvent.click(screen.getByRole('button', { name: 'Use the Python agent' }));
+        fireEvent.click(screen.getByRole('button', { name: 'Use Full-featured' }));
 
-        expect(await screen.findByText(/Couldn't switch to the Python agent: the server is not answering/)).toBeInTheDocument();
+        expect(await screen.findByText(/Couldn't switch to Full-featured: the server is not answering/)).toBeInTheDocument();
         expect(api.updateSettings).not.toHaveBeenCalled();
     });
 
@@ -816,9 +818,9 @@ describe('NewChat when the chosen gaiacpp cannot start', () => {
         render(<NewChat onSend={vi.fn()} />);
         await screen.findByText(/isn't on this PC/);
 
-        fireEvent.click(screen.getByRole('button', { name: 'Use the Python agent' }));
+        fireEvent.click(screen.getByRole('button', { name: 'Use Full-featured' }));
 
-        expect(await screen.findByText(/Couldn't switch to the Python agent: GAIA is answering in a chat/)).toBeInTheDocument();
+        expect(await screen.findByText(/Couldn't switch to Full-featured: GAIA is answering in a chat/)).toBeInTheDocument();
         expect(screen.getByText(/isn't on this PC/)).toBeInTheDocument();
     });
 
