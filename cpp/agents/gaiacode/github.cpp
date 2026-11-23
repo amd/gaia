@@ -677,6 +677,8 @@ void registerGitHubTools(ToolRegistry& registry, std::function<std::string()> fo
         "gh_pr_review", "Submit a review on a pull request: a verdict, a summary, and comments on lines of the "
         "change. The user approves it first unless approvals are off.",
         {{"number", ToolParamType::INTEGER, true, "Pull request number."},
+         {"commit_id", ToolParamType::STRING, true,
+          "The head_sha gh_pr_view returned: the commit the review read, which its line numbers refer to."},
          {"event", ToolParamType::STRING, false, "COMMENT (default), APPROVE or REQUEST_CHANGES."},
          {"body", ToolParamType::STRING, true, "The review's summary, in Markdown."},
          {"comments", ToolParamType::ARRAY, false,
@@ -705,11 +707,21 @@ void registerGitHubTools(ToolRegistry& registry, std::function<std::string()> fo
                     text += "\n" + note;
                 }
             }
+            // The commit the review read: its line numbers mean nothing on a later push.
+            const std::string sha = str(a, "commit_id");
+            static const std::regex hex(R"([0-9a-f]{7,64})");
+            if (!std::regex_match(sha, hex)) {
+                throw std::invalid_argument("commit_id must be the head_sha gh_pr_view returned, got " + sha);
+            }
             mayWrite("review", access, text);
-            // Pinned to the commit the review read, so a later push can't move the comments.
-            const std::string sha =
+            const std::string head =
                 str(obj(api.get("/repos/" + r.slug() + "/pulls/" + std::to_string(n)), "head"), "sha");
-            json review = {{"event", event}, {"body", body}, {"commit_id", sha}};
+            if (head.empty() || head.rfind(sha, 0) != 0) {
+                throw std::runtime_error("Not posted: pull request " + std::to_string(n) + " has new commits since the "
+                                         "review read it (" + sha.substr(0, 7) + ", now " + head.substr(0, 7) +
+                                         "). Read it again with gh_pr_view and review what changed.");
+            }
+            json review = {{"event", event}, {"body", body}, {"commit_id", head}};
             if (!comments.empty()) review["comments"] = comments;
             const json out = api.post("/repos/" + r.slug() + "/pulls/" + std::to_string(n) + "/reviews", review);
             return json{{"status", "success"}, {"event", event}, {"comments", comments.size()},

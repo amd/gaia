@@ -34,6 +34,6 @@ metadata:
 5. **Write the review.** Lead with the verdict in one sentence. Then each finding: what goes
    wrong, for whom, where (file and line), and the fix. Say plainly when you found nothing.
 6. **Post only after the user approves it.** Show the exact text first. Submit it with
-   `gh_pr_review`: the summary as `body`, each finding on a changed line as a comment on that
-   `path` and `line`, and `event` REQUEST_CHANGES when a finding blocks the merge, else COMMENT.
+   `gh_pr_review`: `commit_id` set to the `head_sha` `gh_pr_view` returned, the summary as
+   `body`, each finding on a line the change touches as a comment on that `path` and `line`, and `event` REQUEST_CHANGES when a finding blocks the merge, else COMMENT.
    Approve only when the user asks you to.
