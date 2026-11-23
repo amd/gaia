@@ -16,6 +16,7 @@ import { InfoBubble } from './InfoBubble';
 import { formatPrice } from './settings/cloudPrice';
 import { useT } from '../i18n/useT';
 import { providerName, providerNotice } from '../utils/providerText';
+import { setVisibleInterval } from '../utils/visibleInterval';
 import { MarkedText, markLtr } from './MarkedText';
 import type { ProviderInfo, ProviderModel } from '../types';
 
@@ -258,8 +259,13 @@ export function ModelChip() {
     const awaitingPermission = !!groups?.some((g) => g.provider.key_state === KEY_WAITING);
     useEffect(() => {
         if (!(open || pickAfterDownload) || !(anyDownloading || pickAfterDownload || awaitingPermission)) return;
-        const t = setInterval(() => { void load(true); }, DOWNLOAD_POLL_MS);
-        return () => clearInterval(t);
+        const poll = () => { void load(true); };
+        // A download picked to switch to must switch when it ends, even with the window hidden.
+        if (pickAfterDownload) {
+            const t = setInterval(poll, DOWNLOAD_POLL_MS);
+            return () => clearInterval(t);
+        }
+        return setVisibleInterval(poll, DOWNLOAD_POLL_MS);
     }, [open, anyDownloading, pickAfterDownload, awaitingPermission, load]);
 
     const download = useCallback(async (model: string) => {

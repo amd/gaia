@@ -5,11 +5,12 @@ import { useCallback, useEffect, useState } from 'react';
 import * as api from '../services/api';
 import { log } from '../utils/logger';
 import type { ContextUsage } from '../types';
+import type { ContextUnavailable } from '../utils/contextReason';
 
 /** How full the chat's context window is, for the composer's meter. */
 export function useContextUsage(sessionId: string, isStale: () => boolean) {
     const [contextUsage, setContextUsage] = useState<ContextUsage | null>(null);
-    const [contextUnavailable, setContextUnavailable] = useState<string | null>(null);
+    const [contextUnavailable, setContextUnavailable] = useState<ContextUnavailable | null>(null);
 
     useEffect(() => {
         setContextUsage(null);
@@ -25,7 +26,7 @@ export function useContextUsage(sessionId: string, isStale: () => boolean) {
                     setContextUnavailable(null);
                 } else {
                     setContextUsage(null);
-                    setContextUnavailable(r.reason);
+                    setContextUnavailable({ reason: r.reason, code: r.reason_code });
                 }
             })
             .catch((err) => log.chat.error(`Could not measure the context for session=${sessionId}`, err));

@@ -7,6 +7,7 @@ import { TurnAnnouncer } from './TurnAnnouncer';
 import { MessageBubble, cleanToolCallContent, isErrorContent, turnEnding } from './MessageBubble';
 import { toolRowText } from './AgentActivity';
 import { agentEventToStep } from '../utils/streamSteps';
+import { contextReason } from '../utils/contextReason';
 import { applyStatusEvent, selectToolStatus } from '../utils/statusEvents';
 import { TOOL_CALL_JSON_SAFETY_RE, carryMessageKeys, fromApiMessages, isEchoOfFailedTool, keepFailedReply, onlyFailureAfter, persistedQuestion, policyReceiptAnchor, stripStreamingEnvelope } from '../utils/chatStream';
 import { useChatStore } from '../stores/chatStore';
@@ -1926,7 +1927,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
                             <>
                                 <ContextMeter
                                     usage={contextUsage}
-                                    unavailable={contextUnavailable}
+                                    unavailable={contextUnavailable && contextReason(t, contextUnavailable)}
                                     sessionId={sessionId}
                                     busy={busy}
                                     onUsage={showContextUsage}

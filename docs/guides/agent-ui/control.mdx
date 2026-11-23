@@ -148,7 +148,7 @@ this PC, or a cloud model with no known price, nothing is shown.
 
 ## Watch your PC's resources
 
-A strip under the chat's title shows this PC's CPU, memory, GPU, NPU and
+A strip under the chat's title can show this PC's CPU, memory, GPU, NPU and
 network use, each with a graph of the last minute, so you can see the model
 working while it answers. The numbers match Windows Task Manager: CPU with its
 clock speed, memory in use out of the total, for a GPU or NPU the load of its
@@ -157,10 +157,11 @@ what it sends (S, the dashed line) and receives (R). A PC with several GPUs
 numbers them from 0. Virtual adapters, such as Hyper-V, WSL and VPN ones, are
 left out, as Task Manager leaves them out.
 
-The strip is on in every chat. Close it with **✕**, and bring it back with the
-pulse button in the chat's header or **Settings › General › Show resource
-usage in chats**. GAIA remembers the choice. While the strip is closed or the
-window is hidden, GAIA stops measuring about 15 seconds later.
+The strip is off until you turn it on, with the pulse button in the chat's
+header or **Settings › General › Show resource usage in chats**. It then shows
+in every chat. Close it with **✕** or the same pulse button. GAIA remembers the
+choice. While the strip is off or the window is hidden, GAIA doesn't measure
+(it stops about 15 seconds after the strip closes).
 
 On Linux the GPU tile appears for AMD GPUs, and macOS shows CPU, memory and
 network only. When usage can't be read, the strip says so and dims the last readings

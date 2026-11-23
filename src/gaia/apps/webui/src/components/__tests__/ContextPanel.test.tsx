@@ -404,6 +404,30 @@ describe('ContextMeter entry point', () => {
         afterEach(() => act(() => useChatStore.getState().setLocale('en')));
         const text = (el: HTMLElement) => stripIsolates(el.textContent ?? '');
 
+        it('translates a reason the backend sent with a known code', async () => {
+            mockedApi.getContextUsage.mockResolvedValue({
+                available: false,
+                reason: 'Measured once GAIA has answered in this chat.',
+                reason_code: 'not_answered_yet',
+            });
+            render(<ContextPanel sessionId="s1" busy={false} onClose={() => {}} />);
+            await waitFor(() => expect(text(document.body)).toContain('سيُقاس بعد أن يجيب GAIA في هذه المحادثة.'));
+        });
+
+        it("shows a reason as sent when its code is unknown or its English changed", async () => {
+            mockedApi.getContextUsage.mockResolvedValue({
+                available: false,
+                reason: 'Measured once GAIA has answered — reworded.',
+                reason_code: 'not_answered_yet',
+            });
+            const { unmount } = render(<ContextPanel sessionId="s1" busy={false} onClose={() => {}} />);
+            await screen.findByText('Measured once GAIA has answered — reworded.');
+            unmount();
+            mockedApi.getContextUsage.mockResolvedValue({ available: false, reason: 'tokenizer exploded' });
+            render(<ContextPanel sessionId="s1" busy={false} onClose={() => {}} />);
+            await screen.findByText('tokenizer exploded');
+        });
+
         it('translates the label shown before usage is measured', () => {
             const { container } = render(<ContextMeter usage={null} unavailable="Not measured yet" />);
             expect(text(container)).toContain('السياق');
