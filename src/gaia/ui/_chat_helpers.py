@@ -2935,6 +2935,19 @@ def _agent_lock(agent_type: str) -> threading.Lock:
         return _AGENT_LOCKS.setdefault(agent_type, threading.Lock())
 
 
+# The contract each harness added /activity in; an older sidecar can't say.
+_ACTIVITY_SINCE = {"gaiapy": (2, 32), "gaiacpp": (2, 28), "gaiacode": (2, 28)}
+
+
+def _reports_activity(handle) -> bool:
+    since = _ACTIVITY_SINCE.get(getattr(handle, "harness", None) or "gaiapy")
+    try:
+        major, minor = (int(p) for p in str(handle.api_version).split(".")[:2])
+    except (TypeError, ValueError):
+        return False
+    return since is not None and (major, minor) >= since
+
+
 _TAKES_OVER_LATER = (
     "The agent program was changed in another GAIA app. "
     "It takes over once the chats answering now finish."
@@ -2959,7 +2972,8 @@ def _acquire_for_relay(daemon_client, agent_type: str, session_id, sse_handler):
                 busy_here = _relays_in_flight
             others = [s for s in run_manager.active_sessions() if s != session_id]
             elsewhere = 0
-            if not others and not busy_here:
+            # A sidecar from before /activity: only this app's answers can be seen.
+            if not others and not busy_here and _reports_activity(handle):
                 try:
                     elsewhere = daemon_client.active_runs(handle)
                 except SidecarError as exc:

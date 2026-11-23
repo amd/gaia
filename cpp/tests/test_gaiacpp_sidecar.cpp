@@ -461,6 +461,17 @@ TEST_F(GaiacppSidecar, ActivityCountsNoAnswersWhenIdle) {
     ASSERT_TRUE(r);
     ASSERT_EQ(r->status, 200) << r->body;
     EXPECT_EQ(json::parse(r->body)["active_runs"], 0);
+    // A delivered answer stops counting once its stream is done.
+    Turn t(port_, queryBody("run-activity", "hi", {{"session_id", "chat-activity"}}));
+    ASSERT_TRUE(t.waitDone()) << t.describe();
+    long long left = -1;
+    for (int i = 0; i < 50 && left != 0; ++i) {
+        auto again = client().Get("/v1/gaia/activity", bearer());
+        ASSERT_TRUE(again);
+        left = json::parse(again->body)["active_runs"].get<long long>();
+        if (left != 0) std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    }
+    EXPECT_EQ(left, 0);
 }
 
 TEST_F(GaiacppSidecar, HealthAndVersionNeedNoTokenButStillCheckHostAndOrigin) {

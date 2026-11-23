@@ -774,6 +774,47 @@ def test_a_sidecar_that_cant_say_is_never_restarted_on_a_guess(monkeypatch):
     assert any("takes over once" in e.get("message", "") for e in events), events
 
 
+def test_a_sidecar_from_before_activity_restarts_on_this_apps_idle_check(monkeypatch):
+    # An old binary has no /activity; waiting on it would leave the switch pending forever.
+    from gaia.ui.sidecar import daemon_client
+
+    _choose("gaiapy")
+    real = daemon_client.SidecarHandle
+    monkeypatch.setattr(
+        daemon_client,
+        "SidecarHandle",
+        lambda **kw: real(**{**kw, "api_version": "2.31", "harness": "gaiapy"}),
+    )
+    # It would report a busy agent if asked: the restart shows it never was.
+    events, acquired, stopped = _stale_dispatch(monkeypatch, busy=False, elsewhere=1)
+    assert stopped == ["gaia"] and len(acquired) == 2, events
+
+
+def test_activity_is_read_only_from_a_sidecar_that_serves_it():
+    from gaia.ui.sidecar import daemon_client
+
+    def handle(version, harness):
+        return daemon_client.SidecarHandle(
+            base_url="http://127.0.0.1:1",
+            token="t",
+            api_version=version,
+            agent_version="0.1.0",
+            mode="user",
+            pid=1,
+            agent_id="gaia",
+            harness=harness,
+        )
+
+    assert _chat_helpers._reports_activity(handle("2.32", "gaiapy"))
+    assert not _chat_helpers._reports_activity(handle("2.31", "gaiapy"))
+    assert _chat_helpers._reports_activity(handle("2.28", "gaiacpp"))
+    assert not _chat_helpers._reports_activity(handle("2.27", "gaiacode"))
+    assert _chat_helpers._reports_activity(
+        handle("3.0", None)
+    ), "an unnamed harness is the Python one"
+    assert not _chat_helpers._reports_activity(handle("garbage", "gaiapy"))
+
+
 def test_active_runs_reads_the_sidecar_and_refuses_an_older_one(monkeypatch):
     from gaia.daemon.sidecars.errors import SidecarError
     from gaia.ui.sidecar import daemon_client

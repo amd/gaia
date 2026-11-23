@@ -640,8 +640,7 @@ private:
         // The answers running now, from any caller, so a restart can wait for them.
         server_.Get("/v1/gaia/activity", [this](const httplib::Request& req, httplib::Response& res) {
             if (!admit(req, res, true)) return;
-            std::lock_guard<std::mutex> lock(runsMu_);
-            sendJson(res, 200, {{"active_runs", runs_.size()}});
+            sendJson(res, 200, {{"active_runs", undelivered_.load()}});
         });
         server_.Post("/v1/gaia/query", [this](const httplib::Request& req, httplib::Response& res) {
             if (!admit(req, res, true)) return;
@@ -913,6 +912,9 @@ private:
 
         auto run = std::make_shared<Run>();
         run->id = runId;
+        // Held until the stream's last event is written (or the request is refused): /activity's count.
+        ++undelivered_;
+        const std::shared_ptr<void> delivering(nullptr, [this](void*) { --undelivered_; });
         {
             std::lock_guard<std::mutex> lock(runsMu_);
             if (runs_.count(runId)) throw BadRequest(409, "Duplicate run_id " + runId);
@@ -1079,7 +1081,7 @@ private:
 
         res.set_header("Cache-Control", "no-cache");
         res.set_chunked_content_provider(
-            "text/event-stream; charset=utf-8", [this, run, s](size_t, httplib::DataSink& sink) {
+            "text/event-stream; charset=utf-8", [this, run, s, delivering](size_t, httplib::DataSink& sink) {
                 auto last = std::chrono::steady_clock::now();
                 auto stopRun = [&] { run->cancel(); };  // the client went away: stop the run
                 for (;;) {
@@ -1180,6 +1182,8 @@ private:
     std::map<std::string, std::shared_ptr<Session>> sessions_;
     std::string lemonadeKey_;
     std::mutex runsMu_;
+    /// Runs whose answer hasn't been fully sent yet.
+    std::atomic<long long> undelivered_{0};
     std::map<std::string, std::shared_ptr<Run>> runs_;
     std::set<std::string> earlyCancels_;
     std::deque<std::string> earlyCancelOrder_;
