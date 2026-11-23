@@ -190,7 +190,9 @@ ToolInfo CodeAgent::observed(ToolInfo tool) {
     const std::string name = tool.name;
     tool.callback = [this, inner = std::move(inner), name](const json& args) -> json {
         const bool shellLike = name == "bash_execute" || name == "run_checks";
-        const std::string command = args.is_object() ? args.value("command", "") : "";
+        const std::string command = args.is_object() && args.contains("command") && args["command"].is_string()
+                                        ? args["command"].get<std::string>()
+                                        : "";
         // A read can't change files; anything else is measured, not guessed from its words.
         const bool measure =
             shellLike && !(name == "bash_execute" &&

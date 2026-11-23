@@ -170,8 +170,15 @@ bool TurnRecorder::capture(const std::string& path, const std::string& tool) {
     try {
         save();
     } catch (const SnapshotError& e) {
+        // The change won't be made: forget it, so a retry is captured again and nothing lists it.
+        manifest_["files"].erase(manifest_["files"].size() - 1);
+        std::error_code rm;
+        if (entry["before_blob"].is_string()) fs::remove(dir_ / "blobs" / entry["before_blob"].get<std::string>(), rm);
         throw SnapshotError("Could not save the undo record for " + target.u8string() +
-                            ", so it was left unchanged: " + e.what());
+                            ", so it was left unchanged: " + e.what() +
+                            (rm ? " The copy made for it at " + dir_.u8string() + " couldn't be removed either: " +
+                                      rm.message() + "."
+                                : ""));
     }
     return true;
 }
