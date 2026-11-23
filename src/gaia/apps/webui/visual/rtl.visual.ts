@@ -7128,6 +7128,8 @@ for (const locale of ['ar', 'en']) {
         expect(cut).toEqual([]);
         await shot(page, `queued-chat-notes-${locale}`);
         expect(await audit(page)).toEqual([]);
+    });
+}
 
 /** A dictation saved to the user's folder: the card names the copy and the script. */
 const DICTATION_CARD = {
