@@ -86,8 +86,14 @@
     .composer-chip-research:not(.is-on) { display: none; }
 }
 
-/* The run mode is one short word, so it is never the chip that is cut. */
+/* The run mode is one short word, so it is the last chip to be cut: only a
+   phone-width row, with nothing else left to give, fades it. */
 .composer-row .run-mode-chip-wrap { flex-shrink: 0; }
+
+@container composer-row (max-width: 480px) {
+    .composer-row .run-mode-chip-wrap,
+    .composer-row .run-mode-chip-wrap > .composer-chip { flex-shrink: 1; min-width: 0; }
+}
 
 /* In a narrow row the run mode's customize button gives way: its menu still ends in Customize. */
 @container composer-row (max-width: 540px) {
@@ -339,6 +345,8 @@
 }
 
 .composer-chip-label {
+    /* A crowded row cuts a label inside its chip instead of spilling it out. */
+    min-width: 0;
     overflow: hidden;
     text-overflow: clip;
     animation: fade-cut-inline both;

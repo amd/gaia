@@ -1213,9 +1213,10 @@ class TestCustomModelIsTheChosenModel:
         from gaia.config import GaiaConfigError
 
         db.set_setting("custom_model", "Qwen3.6-35B-A3B-GGUF")
-        with patch(
-            "gaia.config.GaiaConfig.save_keys",
-            side_effect=GaiaConfigError("config.json is read-only."),
+        read_only = GaiaConfigError("config.json is read-only.")
+        with (
+            patch("gaia.config.GaiaConfig.save_keys", side_effect=read_only),
+            patch("gaia.config.GaiaConfig.edit_doc", side_effect=read_only),
         ):
             resp = client.put(
                 "/api/settings", json={"custom_model": "opencode.big-model"}

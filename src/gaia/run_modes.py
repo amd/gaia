@@ -26,7 +26,7 @@ the model it already runs.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 LOCAL = "local"
 CLOUD = "cloud"
@@ -216,8 +216,11 @@ def capability_rows(mode: str, chat_model: str) -> List[Dict[str, Any]]:
     return rows
 
 
-def apply_from_cli(mode: str) -> str:
-    """Switch to *mode* from the command line; returns the chat model now set.
+def apply_from_cli(mode: str) -> Tuple[str, bool]:
+    """Switch to *mode* from the command line.
+
+    Returns the chat model now set, and whether anything changed: already in
+    *mode*, the model in use is kept, as the Agent UI and the TUI keep it.
 
     Writes ``last_model``, which ``gaia -p``, schedules, the TUI and the next
     Agent UI start reopen on. Cloud is refused under Local only and, for a
@@ -229,6 +232,10 @@ def apply_from_cli(mode: str) -> str:
     from gaia.llm.lemonade_client import cloud_model_provider, resolve_chat_model
 
     check_mode(mode)
+    leaving = resolve_chat_model()
+    left = mode_for(_is_cloud_id(leaving))
+    if left == mode:
+        return leaving, False
     model = chat_for(GaiaConfig.load().run_profiles, mode)
     provider = cloud_model_provider(model) or LOCAL
     if mode == CLOUD:
@@ -246,21 +253,20 @@ def apply_from_cli(mode: str) -> str:
                     "Add one in the Agent UI under Settings › Agent & model, in "
                     "the TUI with /provider, or set FIREWORKS_API_KEY."
                 )
-    leaving = resolve_chat_model()
-    left = mode_for(_is_cloud_id(leaving))
 
     def _apply(doc: dict) -> None:
-        if left != mode:
-            # Coming back to the mode being left reopens on the model it runs now.
-            doc["run_profiles"] = with_chat(
-                doc.get("run_profiles") or {}, left, leaving
-            )
+        # Coming back to the mode being left reopens on the model it runs now.
+        profiles = with_chat(doc.get("run_profiles") or {}, left, leaving)
+        if profiles:
+            doc["run_profiles"] = profiles
+        else:
+            doc.pop("run_profiles", None)
         doc["last_provider"] = provider
         doc["last_model"] = model
         record_pick(doc, model, mode == CLOUD)
 
     GaiaConfig.edit_doc(_apply)
-    return model
+    return model, True
 
 
 def _is_cloud_id(model: str) -> bool:

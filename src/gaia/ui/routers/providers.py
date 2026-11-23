@@ -1651,12 +1651,26 @@ def _save_pick(model_id: str, leaving: Optional[str]) -> None:
     from gaia.run_modes import mode_for, record_pick, with_chat
 
     try:
-        remote = _is_cloud_model(model_id)
-        left = None if not leaving else _is_cloud_model(leaving)
+        try:
+            remote: Optional[bool] = _is_cloud_model(model_id)
+        except ProviderError as e:
+            # A Custom model ID saves with no model server up; the mode is read
+            # off the model in use, so only its bookkeeping waits.
+            logger.info("Saving %s without its run mode: %s", model_id, e)
+            remote = None
+        left = None
+        if leaving and remote is not None:
+            try:
+                left = _is_cloud_model(leaving)
+            except ProviderError as e:
+                # Bookkeeping for the mode being left; never a reason to refuse the pick.
+                logger.info("Not remembering %s for its run mode: %s", leaving, e)
 
         def _apply(doc: dict) -> None:
             doc["last_provider"] = provider_of(model_id)
             doc["last_model"] = model_id
+            if remote is None:
+                return
             if left is not None and left != remote:
                 doc["run_profiles"] = with_chat(
                     doc.get("run_profiles") or {}, mode_for(left), leaving

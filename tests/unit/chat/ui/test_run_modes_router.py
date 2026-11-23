@@ -393,3 +393,39 @@ def test_a_pick_under_settings_model_moves_the_mode_with_it(client, db):
     # Local keeps the model it was on, exactly as a switch from the composer does.
     assert _config()["run_profiles"]["local"] == {"chat": QWEN}
     assert client.get("/api/run-modes").json()["active"] == "cloud"
+
+
+def test_a_custom_model_id_moves_the_mode_like_a_pick(client, db, monkeypatch):
+    from gaia.ui.routers import system
+
+    monkeypatch.setattr(system, "_load_newly_selected_model", lambda db: None)
+    app = FastAPI()
+    app.include_router(system.router)
+    app.include_router(run_modes.router)
+    app.state.db = db
+    settings = TestClient(app, headers={"X-Gaia-UI": "1"})
+    db.set_setting("custom_model", QWEN)
+    resp = settings.put("/api/settings", json={"custom_model": GLM})
+    assert resp.status_code == 200, resp.text
+    saved = _config()
+    assert saved["last_model"] == GLM and saved["run_mode"] == "cloud"
+    # Local keeps the model it was on, as a switch from the composer does.
+    assert saved["run_profiles"]["local"] == {"chat": QWEN}
+
+
+def test_a_pick_is_not_refused_when_the_model_being_left_cannot_be_checked(
+    client, db, monkeypatch
+):
+    db.set_setting("custom_model", "opencode.big-model")
+    real = providers._is_cloud_model
+
+    def is_cloud(model_id):
+        if model_id == "opencode.big-model":
+            raise providers.ProviderError("Lemonade's model list can't be read", 503)
+        return real(model_id)
+
+    monkeypatch.setattr(providers, "_is_cloud_model", is_cloud)
+    resp = client.post("/api/providers/select", json={"model": QWEN})
+    assert resp.status_code == 200, resp.text
+    assert _config()["last_model"] == QWEN
+    assert _config()["run_mode"] == "local"

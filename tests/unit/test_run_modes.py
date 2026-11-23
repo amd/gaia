@@ -193,3 +193,16 @@ def test_the_tui_mirrors_the_run_mode_rules():
     assert consts["DefaultLocalModel"] == DEFAULT_MODEL_NAME
     assert re.search(r"RunModes = \[\]string\{LocalMode, CloudMode\}", go)
     assert list(run_modes.MODES) == [run_modes.LOCAL, run_modes.CLOUD]
+
+
+@pytest.mark.parametrize(
+    "last_model, mode",
+    [("Qwen3.5-4B-GGUF", "local"), ("fireworks.kimi-k3", "cloud")],
+)
+def test_cli_switch_to_the_mode_in_use_keeps_the_model(last_model, mode, capsys):
+    # An install from before run modes: a last_model and no run_profiles.
+    before = {"default_model": "Gemma-4-E4B-it-GGUF", "last_model": last_model}
+    _write(before)
+    _set("run_mode", mode)
+    assert _read() == before
+    assert f"Already in {mode}: chat runs {last_model}" in capsys.readouterr().out

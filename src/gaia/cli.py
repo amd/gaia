@@ -6941,10 +6941,13 @@ def _set_run_mode(value, config_file) -> None:
     from gaia.llm.hybrid import HybridConfigError
 
     try:
-        model = run_modes.apply_from_cli(value)
+        model, changed = run_modes.apply_from_cli(value)
     except (run_modes.RunModeError, GaiaConfigError, HybridConfigError) as e:
         print(f"❌ {e}", file=sys.stderr)
         sys.exit(1)
+    if not changed:
+        print(f"✅ Already in {value}: chat runs {model}. Nothing changed.")
+        return
     print(f"✅ Set run_mode = {value}")
     print(f"   Chat now runs {model}. Saved to {config_file}")
     print("   An Agent UI that is open now picks this up the next time it starts.")
