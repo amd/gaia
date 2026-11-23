@@ -12,7 +12,7 @@
 
 import { expect, test, type Page } from '@playwright/test';
 
-import { ANSWER_SESSION, AUTOMATIONS, DISCORD_STATES, MESSAGES, MODEL_LIST, NOW, RESOURCES, SESSIONS, SYSTEM_STATUS, TOOL_STATUS, holdOnToolStatus, mockApi, shownText, useLocale, useTheme, withAutomations, withConnectors, withCrashedBackend, withDesktopBridges, withDiscord, withMemory, withModelPage, withSettingsPanes, withoutFlagship, withAgentPrograms, AGENT_DOWNLOADING, AGENT_DOWNLOAD_FAILED, type AgentProgramsAnswers, type MemoryState } from './fixtures';
+import { ANSWER_SESSION, AUTOMATIONS, DISCORD_STATES, MESSAGES, MODEL_LIST, NOW, RESOURCES, SESSIONS, SYSTEM_STATUS, TOOL_STATUS, holdOnToolStatus, mockApi, shownText, useLocale, useTheme, withAutomations, withConnectors, withCrashedBackend, withDesktopBridges, withDiscord, withMemory, withModelPage, withSettingsPanes, withoutFlagship, withAgentPrograms, withResourceStrip, AGENT_DOWNLOADING, AGENT_DOWNLOAD_FAILED, type AgentProgramsAnswers, type MemoryState } from './fixtures';
 import { ENGINE_FAILED, NARROW_SCENES, PLAN_COLD, SETUP_SCENES, expectSnugTags, scene, withSetup } from './setup-scenes';
 import { translateBare } from '../src/i18n/registry';
 
@@ -840,7 +840,17 @@ for (const locale of ['ar', 'en']) {
 test('finished answer', async ({ page }) => {
     await open(page, `#${ANSWER_SESSION}`);
     await expect(page.getByText('Action items from Aug 28')).toBeVisible();
+    await expect(page.locator('.resource-strip')).toHaveCount(0);
     expect(await audit(page)).toEqual([]);
+});
+
+test('a chat at phone width goes straight from the header to the conversation', async ({ page }) => {
+    await page.setViewportSize({ width: 390, height: 844 });
+    await open(page, `#${ANSWER_SESSION}`);
+    await expect(page.getByText('Action items from Aug 28')).toBeVisible();
+    await expect(page.locator('.resource-strip')).toHaveCount(0);
+    await expect(page.getByRole('button', { name: 'استخدام الموارد' })).toHaveAttribute('aria-pressed', 'false');
+    await page.screenshot({ path: 'visual/test-results/chat-ar-phone-no-strip.png' });
 });
 
 const RECIPE_CARD = {
@@ -1878,7 +1888,7 @@ async function expectClearOfPanel(page: Page): Promise<void> {
 }
 
 test('resource usage strip', async ({ page }) => {
-    await open(page, `#${ANSWER_SESSION}`);
+    await open(page, `#${ANSWER_SESSION}`, 'ar', withResourceStrip);
     const strip = page.getByRole('region', { name: 'استخدام الموارد على هذا الجهاز' });
     await expect(strip.locator('li')).toHaveCount(5);
     await expect(strip.getByText('45.0/63.6 GB')).toBeVisible();
@@ -1894,7 +1904,7 @@ test('resource usage strip', async ({ page }) => {
 });
 
 test('closing the resource usage strip says how to bring it back', async ({ page }) => {
-    await open(page, `#${ANSWER_SESSION}`);
+    await open(page, `#${ANSWER_SESSION}`, 'ar', withResourceStrip);
     await page.getByRole('region', { name: 'استخدام الموارد على هذا الجهاز' }).getByRole('button').click();
     const note = page.locator('.resource-hidden-note');
     await expect(note).toContainText('أيقونة النبض');
@@ -1906,6 +1916,7 @@ test('closing the resource usage strip says how to bring it back', async ({ page
 
 test('resource usage strip with no GPU counters keeps CPU and memory', async ({ page }) => {
     await open(page, `#${ANSWER_SESSION}`, 'ar', async (p) => {
+        await withResourceStrip(p);
         await p.route('**/api/system/resources', (route) =>
             route.fulfill({
                 json: { ...RESOURCES, devices: [], networks: [], devices_error: "function 'D3DKMTEnumAdapters3' not found", networks_error: null },
@@ -1922,7 +1933,7 @@ test('resource usage strip with no GPU counters keeps CPU and memory', async ({ 
 
 test('resource usage strip at phone width', async ({ page }) => {
     await page.setViewportSize({ width: 390, height: 844 });
-    await open(page, `#${ANSWER_SESSION}`);
+    await open(page, `#${ANSWER_SESSION}`, 'ar', withResourceStrip);
     const strip = page.getByRole('region', { name: 'استخدام الموارد على هذا الجهاز' });
     await expect(strip.locator('li')).toHaveCount(5);
     await expect(strip.locator('.resource-spark').first()).toBeHidden();
@@ -2891,11 +2902,13 @@ test.describe('English', () => {
     test('finished answer', async ({ page }) => {
         await open(page, `#${ANSWER_SESSION}`, 'en');
         await expect(page.getByText('Action items from Aug 28')).toBeVisible();
+        await expect(page.locator('.resource-strip')).toHaveCount(0);
+        await expect(page.getByRole('button', { name: 'Resource usage' })).toHaveAttribute('aria-pressed', 'false');
         expect(await audit(page)).toEqual([]);
     });
 
     test('resource usage strip', async ({ page }) => {
-        await open(page, `#${ANSWER_SESSION}`, 'en');
+        await open(page, `#${ANSWER_SESSION}`, 'en', withResourceStrip);
         const strip = page.getByRole('region', { name: 'Resource usage on this PC' });
         await expect(strip.getByText('S: 0 R: 8.0 Kbps')).toBeVisible();
         await expect(strip.locator('li')).toHaveCount(5);
@@ -2908,7 +2921,7 @@ test.describe('English', () => {
     });
 
     test('closing the resource usage strip says how to bring it back', async ({ page }) => {
-        await open(page, `#${ANSWER_SESSION}`, 'en');
+        await open(page, `#${ANSWER_SESSION}`, 'en', withResourceStrip);
         await page.getByRole('button', { name: 'Hide resource usage' }).click();
         const note = page.locator('.resource-hidden-note');
         await expect(note).toContainText('pulse icon');
@@ -2921,7 +2934,7 @@ test.describe('English', () => {
 
     test('resource usage strip on a wide window is one row', async ({ page }) => {
         await page.setViewportSize({ width: 1920, height: 1000 });
-        await open(page, `#${ANSWER_SESSION}`, 'en');
+        await open(page, `#${ANSWER_SESSION}`, 'en', withResourceStrip);
         const tiles = page.getByRole('region', { name: 'Resource usage on this PC' }).locator('li');
         await expect(tiles).toHaveCount(5);
         const tops = await tiles.evaluateAll((els) => els.map((el) => Math.round(el.getBoundingClientRect().top)));
@@ -2932,7 +2945,7 @@ test.describe('English', () => {
     });
 
     test('resource usage strip in the dark theme', async ({ page }) => {
-        await open(page, `#${ANSWER_SESSION}`, 'en', undefined, 'dark');
+        await open(page, `#${ANSWER_SESSION}`, 'en', withResourceStrip, 'dark');
         await expect(page.getByRole('region', { name: 'Resource usage on this PC' }).locator('li')).toHaveCount(5);
         expect(await audit(page)).toEqual([]);
         await page.screenshot({ path: 'visual/test-results/resource-strip-en-dark.png' });

@@ -659,6 +659,13 @@ export async function useLocale(page: Page, locale: string): Promise<void> {
     }, locale);
 }
 
+/** A user who turned the resource usage strip on. */
+export async function withResourceStrip(page: Page): Promise<void> {
+    await page.addInitScript(() => {
+        window.localStorage.setItem('gaia.resourceMonitor.visible', '1');
+    });
+}
+
 /** A status the running extraction tool's own model calls send, as the backend writes it. */
 export const TOOL_STATUS = [
     { name: 'page', phase: 'reading', message: 'Reading page 3 of 12…', en: 'Reading page 3 of 12…', ar: 'جارٍ قراءة الصفحة 3 من 12…' },
