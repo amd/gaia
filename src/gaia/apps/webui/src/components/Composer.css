@@ -61,8 +61,13 @@
 }
 
 /* A narrow row gives way in this order before the run mode is cut: the Research
-   label, the day's spend, then the chat's spend, then the context bar (its % stays),
-   then the folder's name (its icon stays). */
+   label, the folder's name (its icon stays), the day's spend, then the chat's
+   spend, then the context bar (its % stays). */
+@container composer-row (max-width: 640px) {
+    .composer-row .folder-chip { flex-shrink: 0; }
+    .folder-chip .composer-chip-label { display: none; }
+}
+
 @container composer-row (max-width: 600px) {
     .spend-meter-today { display: none; }
 }
@@ -73,7 +78,6 @@
 
 @container composer-row (max-width: 540px) {
     .context-meter .context-meter-bar { display: none; }
-    .folder-chip .composer-chip-label { display: none; }
 }
 
 /* The Research chip goes first: its telescope and tooltip still say what it is.
