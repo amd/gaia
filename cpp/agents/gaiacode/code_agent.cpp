@@ -205,7 +205,8 @@ ToolInfo CodeAgent::observed(ToolInfo tool) {
         std::string captured;
         if (recorder && (name == "file_write" || name == "file_edit") && args.is_object() &&
             args.contains("path") && args["path"].is_string() &&
-            FileIOTools::refusesPath(args["path"].get<std::string>()).empty()) {
+            FileIOTools::refusesPath(args["path"].get<std::string>()).empty() &&
+            (!ws_ || ws_->checkPath(args["path"].get<std::string>()).empty())) {
             try {
                 if (recorder->capture(args["path"].get<std::string>(), name)) captured = args["path"].get<std::string>();
             } catch (const SnapshotError& e) {
