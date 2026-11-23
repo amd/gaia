@@ -184,15 +184,21 @@ void TurnRecorder::discard(const std::string& path) {
         if (keepRecord) {
             save();
         } else {
-            // Nothing left to undo: no record, as for a turn that changed nothing.
-            fs::remove_all(dir_, ec);
-            if (ec) throw SnapshotError("Could not remove the empty undo record at " + dir_.u8string() + ": " + ec.message());
+            // Nothing left to undo: no record, as for a turn that changed nothing. The manifest goes
+            // first, so a removal that stops part-way never leaves a record without its copies.
+            fs::remove(dir_ / "manifest.json", ec);
+            if (ec) throw SnapshotError("Could not remove the undo record at " + dir_.u8string() + ": " + ec.message());
         }
     } catch (...) {
         files.push_back(entry);
         throw;
     }
     std::string failure;
+    if (!keepRecord) {
+        // No record lists them now: leftovers are unused, but say so rather than leave them silently.
+        fs::remove_all(dir_, ec);
+        if (ec) failure = "Could not remove the undo copies at " + dir_.u8string() + ": " + ec.message();
+    }
     if (keepRecord && entry["before_blob"].is_string()) {
         const fs::path blob = dir_ / "blobs" / entry["before_blob"].get<std::string>();
         fs::remove(blob, ec);
