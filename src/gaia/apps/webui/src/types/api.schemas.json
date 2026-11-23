@@ -5779,6 +5779,15 @@
         ],
         "title": "Gpu Vram Gb"
       },
+      "host_os": {
+        "enum": [
+          "windows",
+          "macos",
+          "linux"
+        ],
+        "title": "Host Os",
+        "type": "string"
+      },
       "init_state": {
         "default": "ready",
         "title": "Init State",

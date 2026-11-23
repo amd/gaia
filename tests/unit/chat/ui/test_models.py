@@ -6,6 +6,10 @@
 Tests model validation, defaults, and serialization.
 """
 
+import sys
+
+import pytest
+
 from gaia.ui.models import (
     AgentStepResponse,
     AttachDocumentRequest,
@@ -39,6 +43,17 @@ class TestSystemStatus:
         from gaia.version import __version__
 
         assert status.version == __version__
+
+    @pytest.mark.parametrize(
+        "platform, host_os",
+        [("win32", "windows"), ("darwin", "macos"), ("linux", "linux")],
+    )
+    def test_names_the_system_the_backend_runs_on(
+        self, monkeypatch, platform, host_os
+    ):
+        """An approval card words a command for where it runs, not for Windows."""
+        monkeypatch.setattr(sys, "platform", platform)
+        assert SystemStatus().model_dump()["host_os"] == host_os
 
     def test_custom_values(self):
         status = SystemStatus(

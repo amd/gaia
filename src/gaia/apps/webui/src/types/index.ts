@@ -717,6 +717,8 @@ export interface SystemStatus {
     probe_warnings?: string[];
     /** The folder that holds the chat database. */
     data_dir?: string | null;
+    /** The system the backend runs on, which is where a command runs. */
+    host_os?: 'windows' | 'macos' | 'linux';
 }
 
 /**

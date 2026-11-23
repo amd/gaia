@@ -14,6 +14,7 @@ import {
     alwaysScopeText,
     type PermissionDecision,
 } from '../stores/notificationStore';
+import { useChatStore } from '../stores/chatStore';
 import type { GaiaNotification } from '../types/agent';
 import { isEscapeClaimed } from '../hooks/useEscapeToClose';
 import {
@@ -278,6 +279,10 @@ export function formatCountdown(seconds: number): string {
 function PromptCard({ notification }: { notification: GaiaNotification }) {
     const t = useT();
     const respond = useNotificationStore((s) => s.respondToPermission);
+    // Where the command runs; until the backend has said, this device, which the desktop app shares with it.
+    const onWindows = useChatStore((s) => (s.systemStatus?.host_os
+        ? s.systemStatus.host_os === 'windows'
+        : /Win/i.test(navigator.platform)));
     const [busy, setBusy] = useState(false);
     const [error, setError] = useState<string | null>(null);
     const [showArgs, setShowArgs] = useState(false);
@@ -331,7 +336,7 @@ function PromptCard({ notification }: { notification: GaiaNotification }) {
     const command = typeof args.command === 'string' ? args.command : relayed?.command ?? '';
     // What the command runs when its own text hides it: base64 PowerShell, cmd's ^ escapes.
     const decoded = command ? decodedPowerShell(command) : '';
-    const reading = command.includes('^') ? cmdReading(command) : '';
+    const reading = onWindows && command.includes('^') ? cmdReading(command) : '';
     const hidden = detailCoded || [code, relayed?.extras].some(unseen) || [command, decoded].some(unseenCommand)
         || [args.path, folder, relayed?.folder].some(unseenStrict);
 
