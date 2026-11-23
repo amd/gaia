@@ -45,6 +45,29 @@ public:
             posted_ = req.body;
             json(res, {{"html_url", "https://github.com/o/r/issues/7#c1"}}, 201);
         });
+        server_.Post("/repos/o/r/pulls/3/reviews", [this, json](const httplib::Request& req, httplib::Response& res) {
+            note(req);
+            std::lock_guard<std::mutex> lock(mu_);
+            posted_ = req.body;
+            json(res, {{"id", 1}, {"html_url", "https://github.com/o/r/pull/3#pullrequestreview-1"}}, 200);
+        });
+        server_.Post("/repos/o/r/issues", [this, json](const httplib::Request& req, httplib::Response& res) {
+            note(req);
+            std::lock_guard<std::mutex> lock(mu_);
+            posted_ = req.body;
+            json(res, {{"number", 12}, {"html_url", "https://github.com/o/r/issues/12"}}, 201);
+        });
+        server_.Post("/repos/o/r/actions/jobs/45123456789/rerun",
+                     [this](const httplib::Request& req, httplib::Response& res) {
+                         note(req);
+                         std::lock_guard<std::mutex> lock(mu_);
+                         posted_ = "rerun 45123456789";
+                         res.status = 201;
+                     });
+        server_.Get("/repos/o/r/commits/fix-parse", [this, json](const httplib::Request& req, httplib::Response& res) {
+            note(req);
+            json(res, {{"sha", "abc1234def"}});
+        });
         server_.Get("/repos/o/r/pulls/3", [this, json](const httplib::Request& req, httplib::Response& res) {
             note(req);
             json(res, {{"number", 3}, {"title", "fix"}, {"state", "open"}, {"draft", false},
@@ -351,4 +374,61 @@ TEST(GaiacodeGitHub, TheApprovalCardNamesTheRepository) {
     EXPECT_EQ(shown["repository"], "o/r");
     EXPECT_EQ(shown["number"], 3) << "arguments are still coerced to their types";
     EXPECT_THROW((*t->validateArgs)("gh_issue_comment", {{"body", "hi"}}), std::invalid_argument);
+}
+
+// ---------------------------------------------------------------- reviews, issues, reruns, branch CI
+
+TEST(GaiacodeGitHub, AReviewIsSubmittedWithLineCommentsPinnedToTheCommitItRead) {
+    FakeGitHub gh;
+    EXPECT_EQ(Tools(gh, "o/r").call("gh_pr_review", {{"number", 3}, {"body", "x"}}).value("status", ""), "error")
+        << "a run that wasn't allowed to review doesn't";
+    Tools t(gh, "o/r", {"review"});
+    const json out = t.call("gh_pr_review", {{"number", 3},
+                                             {"event", "REQUEST_CHANGES"},
+                                             {"body", "One blocking bug."},
+                                             {"comments", json::array({{{"path", "parse.py"}, {"line", 2},
+                                                                        {"body", "Off by one."}}})}});
+    ASSERT_EQ(out.value("status", ""), "success") << out.dump();
+    const json sent = json::parse(gh.posted());
+    EXPECT_EQ(sent["event"], "REQUEST_CHANGES");
+    EXPECT_EQ(sent["commit_id"], "abc1234def");
+    ASSERT_EQ(sent["comments"].size(), 1u);
+    EXPECT_EQ(sent["comments"][0]["path"], "parse.py");
+    EXPECT_EQ(sent["comments"][0]["line"], 2);
+    EXPECT_EQ(t.call("gh_pr_review", {{"number", 3}, {"event", "MERGE"}, {"body", "x"}}).value("status", ""), "error");
+    EXPECT_EQ(t.call("gh_pr_review", {{"number", 3}, {"body", "x"}, {"comments", json::array({{{"path", "a"}}})}})
+                  .value("status", ""),
+              "error")
+        << "a comment with no line or body";
+}
+
+TEST(GaiacodeGitHub, AnIssueIsOpenedAndAJobRerunOnlyWhenAllowed) {
+    FakeGitHub gh;
+    Tools none(gh, "o/r");
+    EXPECT_NE(none.call("gh_issue_create", {{"title", "t"}, {"body", "b"}}).value("error", "").find(
+                  "--allow-github-writes issue"),
+              std::string::npos);
+    EXPECT_NE(none.call("gh_run_rerun", {{"job_id", 45123456789LL}}).value("error", "").find(
+                  "--allow-github-writes rerun"),
+              std::string::npos);
+    EXPECT_EQ(gh.posted(), "") << "nothing reached GitHub";
+    Tools t(gh, "o/r", {"issue", "rerun"});
+    const json issue = t.call("gh_issue_create", {{"title", "Parser drops the last row"}, {"body", "Steps..."},
+                                                  {"labels", json::array({"bug"})}});
+    ASSERT_EQ(issue.value("status", ""), "success") << issue.dump();
+    EXPECT_EQ(issue["number"], 12);
+    EXPECT_EQ(json::parse(gh.posted())["labels"], json::array({"bug"}));
+    const json rerun = t.call("gh_run_rerun", {{"job_id", 45123456789LL}});
+    ASSERT_EQ(rerun.value("status", ""), "success") << rerun.dump();
+    EXPECT_EQ(gh.posted(), "rerun 45123456789");
+}
+
+TEST(GaiacodeGitHub, ChecksAreReadForABranchWithNoPullRequest) {
+    FakeGitHub gh;
+    Tools t(gh, "o/r");
+    const json out = t.call("gh_pr_checks", {{"ref", "fix-parse"}});
+    ASSERT_EQ(out.value("status", ""), "success") << out.dump();
+    EXPECT_FALSE(out["checks"].empty());
+    EXPECT_EQ(t.call("gh_pr_checks", {{"ref", "../../etc"}}).value("status", ""), "error");
+    EXPECT_EQ(t.call("gh_pr_checks", json::object()).value("status", ""), "error") << "neither number nor ref";
 }

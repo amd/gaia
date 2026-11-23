@@ -144,7 +144,7 @@ TEST_F(GaiacodeCli, OffersItsSkillsAndGitHubTools) {
         EXPECT_NE(request.find(skill), std::string::npos) << skill << " is not in the request";
     }
     for (const char* tool : {"gh_issue_view", "gh_pr_view", "gh_pr_checks", "gh_run_log", "gh_issue_comment",
-                             "gh_pr_create", "run_checks"}) {
+                             "gh_pr_create", "gh_pr_review", "gh_issue_create", "gh_run_rerun", "run_checks"}) {
         EXPECT_NE(request.find(tool), std::string::npos) << tool << " is not offered";
     }
 }

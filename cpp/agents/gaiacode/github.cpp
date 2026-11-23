@@ -523,14 +523,30 @@ void registerGitHubTools(ToolRegistry& registry, std::function<std::string()> fo
         }));
 
     registry.registerTool(make(
-        "gh_pr_checks", "The CI checks on a pull request's latest commit: each check's name, status and conclusion.",
-        {{"number", ToolParamType::INTEGER, true, "Pull request number."}}, ToolPolicy::ALLOW,
+        "gh_pr_checks", "The CI checks on a pull request's latest commit, or on a branch or commit with no pull "
+        "request yet: each check's name, status and conclusion.",
+        {{"number", ToolParamType::INTEGER, false, "Pull request number."},
+         {"ref", ToolParamType::STRING, false, "Instead of number: a pushed branch, tag or commit sha."}},
+        ToolPolicy::ALLOW,
         [](const GitHubRepo& r, Api& api, GitHubAccess&, const json& a) {
-            const int n = positive(a, "number");
-            const json pr = api.get("/repos/" + r.slug() + "/pulls/" + std::to_string(n));
-            const std::string sha = str(obj(pr, "head"), "sha");
             static const std::regex hex(R"([0-9a-f]{7,64})");
-            if (!std::regex_match(sha, hex)) throw std::runtime_error("GitHub gave no commit for pull request " + std::to_string(n));
+            static const std::regex refName(R"([A-Za-z0-9._/-]{1,200})");
+            const std::string ref = str(a, "ref");
+            int n = 0;
+            std::string sha, what;
+            if (!ref.empty()) {
+                if (!std::regex_match(ref, refName) || ref.find("..") != std::string::npos) {
+                    throw std::invalid_argument("ref must be a branch, tag or commit name, got " + ref);
+                }
+                sha = str(api.get("/repos/" + r.slug() + "/commits/" + ref), "sha");
+                what = ref;
+            } else {
+                n = positive(a, "number");
+                const json pr = api.get("/repos/" + r.slug() + "/pulls/" + std::to_string(n));
+                sha = str(obj(pr, "head"), "sha");
+                what = "pull request " + std::to_string(n);
+            }
+            if (!std::regex_match(sha, hex)) throw std::runtime_error("GitHub gave no commit for " + what);
             json checks = json::array();
             int failing = 0;
             static const std::set<std::string> bad = {"failure", "timed_out", "cancelled", "startup_failure",
@@ -562,7 +578,7 @@ void registerGitHubTools(ToolRegistry& registry, std::function<std::string()> fo
                 statusesUnavailable = "the commit statuses couldn't be read: " + why;
                 // With no check runs either, "nothing failing" would be a guess.
                 if (checks.empty()) {
-                    throw std::runtime_error("No CI results could be read for pull request " + std::to_string(n) +
+                    throw std::runtime_error("No CI results could be read for " + what +
                                              ": it has no check runs, and " + statusesUnavailable +
                                              ". Use a token that can read this repository's commit statuses.");
                 }
@@ -655,6 +671,81 @@ void registerGitHubTools(ToolRegistry& registry, std::function<std::string()> fo
                                      {{"title", title}, {"body", body}, {"head", head}, {"base", base},
                                       {"draft", a.value("draft", true)}});
             return json{{"status", "success"}, {"number", pr.value("number", 0)}, {"url", str(pr, "html_url")}};
+        }));
+
+    registry.registerTool(make(
+        "gh_pr_review", "Submit a review on a pull request: a verdict, a summary, and comments on lines of the "
+        "change. The user approves it first unless approvals are off.",
+        {{"number", ToolParamType::INTEGER, true, "Pull request number."},
+         {"event", ToolParamType::STRING, false, "COMMENT (default), APPROVE or REQUEST_CHANGES."},
+         {"body", ToolParamType::STRING, true, "The review's summary, in Markdown."},
+         {"comments", ToolParamType::ARRAY, false,
+          "Line comments: objects with path (as in the diff), line (in the new file) and body."}},
+        ToolPolicy::CONFIRM, [mayWrite](const GitHubRepo& r, Api& api, GitHubAccess& access, const json& a) {
+            const int n = positive(a, "number");
+            const std::string body = str(a, "body");
+            std::string event = str(a, "event");
+            if (event.empty()) event = "COMMENT";
+            if (event != "COMMENT" && event != "APPROVE" && event != "REQUEST_CHANGES") {
+                throw std::invalid_argument("event must be COMMENT, APPROVE or REQUEST_CHANGES, got " + event);
+            }
+            if (body.empty()) throw std::invalid_argument("body is empty");
+            std::string text = body;
+            json comments = json::array();
+            if (a.contains("comments") && !a["comments"].is_null()) {
+                if (!a["comments"].is_array()) throw std::invalid_argument("comments must be a list");
+                for (const auto& c : a["comments"]) {
+                    const std::string path = str(c, "path"), note = str(c, "body");
+                    const long long line = c.is_object() && c.contains("line") && c["line"].is_number_integer()
+                                               ? c["line"].get<long long>() : 0;
+                    if (path.empty() || note.empty() || line < 1) {
+                        throw std::invalid_argument("each comment needs path, a line of 1 or more, and body");
+                    }
+                    comments.push_back({{"path", path}, {"line", line}, {"side", "RIGHT"}, {"body", note}});
+                    text += "\n" + note;
+                }
+            }
+            mayWrite("review", access, text);
+            // Pinned to the commit the review read, so a later push can't move the comments.
+            const std::string sha =
+                str(obj(api.get("/repos/" + r.slug() + "/pulls/" + std::to_string(n)), "head"), "sha");
+            json review = {{"event", event}, {"body", body}, {"commit_id", sha}};
+            if (!comments.empty()) review["comments"] = comments;
+            const json out = api.post("/repos/" + r.slug() + "/pulls/" + std::to_string(n) + "/reviews", review);
+            return json{{"status", "success"}, {"event", event}, {"comments", comments.size()},
+                        {"url", str(out, "html_url")}};
+        }));
+
+    registry.registerTool(make(
+        "gh_issue_create", "Open an issue. The user approves it first unless approvals are off.",
+        {{"title", ToolParamType::STRING, true, "Title."},
+         {"body", ToolParamType::STRING, true, "Description, in Markdown."},
+         {"labels", ToolParamType::ARRAY, false, "Label names that already exist in the repository."}},
+        ToolPolicy::CONFIRM, [mayWrite](const GitHubRepo& r, Api& api, GitHubAccess& access, const json& a) {
+            const std::string title = str(a, "title"), body = str(a, "body");
+            if (title.empty()) throw std::invalid_argument("title is required");
+            mayWrite("issue", access, title + "\n" + body);
+            json issue = {{"title", title}, {"body", body}};
+            if (a.contains("labels") && a["labels"].is_array() && !a["labels"].empty()) {
+                for (const auto& l : a["labels"]) {
+                    if (!l.is_string()) throw std::invalid_argument("labels must be names");
+                }
+                issue["labels"] = a["labels"];
+            }
+            const json out = api.post("/repos/" + r.slug() + "/issues", issue);
+            return json{{"status", "success"}, {"number", out.value("number", 0)}, {"url", str(out, "html_url")}};
+        }));
+
+    registry.registerTool(make(
+        "gh_run_rerun", "Re-run one CI job (a job_id from gh_pr_checks), for a failure that looks flaky or was "
+        "fixed elsewhere. The user approves it first unless approvals are off.",
+        {{"job_id", ToolParamType::INTEGER, true, "The job's id."}},
+        ToolPolicy::CONFIRM, [mayWrite](const GitHubRepo& r, Api& api, GitHubAccess& access, const json& a) {
+            const long long job = positiveId(a, "job_id");
+            mayWrite("rerun", access, "");
+            api.post("/repos/" + r.slug() + "/actions/jobs/" + std::to_string(job) + "/rerun", json::object());
+            return json{{"status", "success"}, {"job_id", job},
+                        {"note", "Queued. Read its result with gh_pr_checks once it finishes."}};
         }));
 }
 

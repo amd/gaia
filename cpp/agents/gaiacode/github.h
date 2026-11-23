@@ -60,7 +60,8 @@ struct GitHubEnvironment {
 /// honored only on loopback. Throws std::runtime_error naming the fix otherwise.
 GitHubAccess resolveGitHubAccess(const GitHubRepo& repo, const GitHubEnvironment& env);
 
-/// Which writes a headless run may make: "comment", "pr". Anything else is refused.
+/// Which writes a headless run may make: "comment", "pr", "review", "issue", "rerun". Anything else
+/// is refused.
 using GitHubWriteKinds = std::set<std::string>;
 
 /// The repository the shell's folder works on: the `upstream` remote when there is

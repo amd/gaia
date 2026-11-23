@@ -78,7 +78,8 @@ const char* kUsage =
     "  --dangerously-skip-permissions  Run tools that would ask (shell, writes, run_checks)\n"
     "  --max-steps N                Step limit for the run\n"
     "  --repo OWNER/NAME            GitHub repository to work on (default: the upstream, else origin, remote)\n"
-    "  --allow-github-writes KINDS  GitHub writes this run may make: comment, pr (comma-separated)\n"
+    "  --allow-github-writes KINDS  GitHub writes this run may make: comment, pr, review, issue, rerun\n"
+    "                               (comma-separated)\n"
     "  --no-github                  No GitHub tools\n"
     "  --no-skills                  Load no skills\n"
     "  --version, -h/--help\n";
@@ -120,8 +121,9 @@ Cli parse(int argc, char** argv) {
         } else if (a == "--allow-github-writes") {
             std::istringstream kinds(need(i, argc, argv, a));
             for (std::string kind; std::getline(kinds, kind, ',');) {
-                if (kind != "comment" && kind != "pr") {
-                    usageError("--allow-github-writes takes comment and pr, got " + kind);
+                static const std::set<std::string> known = {"comment", "pr", "review", "issue", "rerun"};
+                if (!known.count(kind)) {
+                    usageError("--allow-github-writes takes comment, pr, review, issue and rerun, got " + kind);
                 }
                 cli.githubWrites.insert(kind);
             }
