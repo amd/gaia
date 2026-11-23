@@ -5,7 +5,7 @@
 # Generate the Windows resource objects the Go linker embeds into the TUI.
 #
 # Go links no Windows resource unless a .syso sits next to the main package, so
-# without this the shipped gaia-tui.exe has no icon and no version metadata --
+# without this the shipped gaia-cli.exe has no icon and no version metadata --
 # Explorer draws it with the generic console glyph and the file's Details tab is
 # blank. The linker picks a .syso up by its GOOS_GOARCH filename suffix, so both
 # targets are generated here and each build links only its own.

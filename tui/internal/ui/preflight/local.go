@@ -89,6 +89,9 @@ type LocalOptions struct {
 	// should chat run?", so the chat-model download is never chosen by default.
 	// Set by the interactive gate only: a headless run has nobody to ask.
 	AskWhereChatRuns bool
+	// Native marks the C++ agent (gaiacpp). It needs no Python setup and no
+	// embedding model, so the model row is answered by the model server alone.
+	Native bool
 }
 
 // NewLocalRunner builds the runner for an agent the TUI spawns itself.
@@ -134,6 +137,7 @@ func (l localRunner) Rows(cfg Config) []Row {
 	switch {
 	case l.unconnectedCloud() != "":
 		modelLabel = lemonade.Label(l.unconnectedCloud())
+	case l.opts.Native:
 	case l.skipChatModel() && l.pickedLocalModel() == "":
 		modelLabel = "Embeddings"
 	}
@@ -338,7 +342,7 @@ func (l localRunner) checkBinary(_ context.Context, cfg Config) Row {
 		// The URL rides in the action, not in Command: that field renders under
 		// `run:` and means "type this", and a URL is not a command.
 		Action: "Re-run the GAIA installer — it ships " + program +
-			" alongside gaia-tui: " + catalog.InstallerURL,
+			" alongside gaia-cli: " + catalog.InstallerURL,
 		Where: catalog.AgentDocsURL,
 	}
 	// No one-key fix: a TUI quietly fetching a ~90 MB binary over a path
@@ -655,6 +659,9 @@ var listedCloudModels = func(ctx context.Context, provider string) ([]lemonade.M
 // another one — the system server, before setup installed GAIA's own — is unknown
 // here, and the first turn would fail.
 func checkCloudModel(ctx context.Context, chosen string, row Row) (Row, bool) {
+	if lemonade.IsHybridID(chosen) {
+		return checkHybridModels(ctx, row)
+	}
 	provider, _, _ := strings.Cut(chosen, ".")
 	listed, err := cloudModelListed(ctx, provider, chosen)
 	var (
@@ -698,6 +705,48 @@ func checkCloudModel(ctx context.Context, chosen string, row Row) (Row, bool) {
 			" key: " + replayErr.Error()
 	}
 	return row, false
+}
+
+// readHybridModels is hybrid's concrete models. A var so tests need no config.
+var readHybridModels = lemonade.ReadHybridModels
+
+// checkHybridModels confirms every concrete model hybrid routes to can answer;
+// `hybrid` itself is never downloaded or loaded.
+func checkHybridModels(ctx context.Context, row Row) (Row, bool) {
+	models, err := readHybridModels()
+	if err != nil {
+		row.State = StateFailed
+		row.Disposition = status.DispositionHalt
+		row.Line = "hybrid's models can't be read"
+		row.Detail = err.Error()
+		row.Raw = err.Error()
+		row.Fix = FixNone
+		row.Remedy = Remedy{Action: "Fix the hybrid_* keys in GAIA's config.json, then press r to check again."}
+		return row, false
+	}
+	for _, r := range models.Roles() {
+		var (
+			got Row
+			ok  bool
+		)
+		if lemonade.IsCloudID(r.Model) {
+			got, ok = checkCloudModel(ctx, r.Model, row)
+		} else {
+			got = checkLocalModelDownloaded(ctx, r.Model, row)
+			ok = got.State == StateOK
+		}
+		if ok {
+			continue
+		}
+		got.Line = "hybrid's " + r.Role + " model: " + got.Line
+		if got.State == StateFailed {
+			got.Remedy.Action = strings.TrimSpace(got.Remedy.Action + " Or choose another " + r.Role +
+				" model with `gaia config set " + r.Key + " <id>` — `gaia gateway models` lists the gateway's.")
+			got.Remedy.Command = "gaia config set " + r.Key + " <id>"
+		}
+		return got, false
+	}
+	return row, true
 }
 
 func cloudModelListed(ctx context.Context, provider, chosen string) (bool, error) {
@@ -758,10 +807,62 @@ func (l localRunner) verifyModels(ctx context.Context, cfg Config) (Row, string,
 // verifyModelsStatus is verifyModels plus what setup reported about each model,
 // which sizes the local option of the "where should chat run?" step.
 func (l localRunner) verifyModelsStatus(ctx context.Context, _ Config) (Row, string, string, gaiainit.Status) {
+	if l.opts.Native {
+		row, chat, chatID := l.verifyNativeModel(ctx)
+		return row, chat, chatID, gaiainit.Status{}
+	}
 	if provider := l.unconnectedCloud(); provider != "" {
 		return connectProviderRow(provider), "", "", gaiainit.Status{}
 	}
 	return l.verifyModelsWith(ctx)
+}
+
+// nativeDefaultModel is the model gaiacpp runs when neither the launch nor
+// GAIA's config names one.
+const nativeDefaultModel = "Gemma-4-E4B-it-GGUF"
+
+// nativeStartModel is the local model gaiacpp is started on when the launch
+// names none: GAIA's local chat model (setup saves a small PC's pick), else
+// Gemma. The client factory passes the same model.
+func nativeStartModel() string {
+	if m := lemonade.LocalChatModel(); m != "" {
+		return m
+	}
+	return nativeDefaultModel
+}
+
+// verifyNativeModel answers the model row for gaiacpp from the model server
+// alone: the chat model it will be started on is one the server can run.
+// Nothing is loaded here; the agent loads its model on the first message.
+func (l localRunner) verifyNativeModel(ctx context.Context) (Row, string, string) {
+	row := Row{Key: KeyModel}
+	if provider := l.unconnectedCloud(); provider != "" {
+		row = connectProviderRow(provider)
+		row.Detail = "Paste your " + lemonade.Label(provider) + " key and pick a model."
+		return row, "", ""
+	}
+	if lemonade.IsCloudID(l.opts.Model) {
+		checked, ok := checkCloudModel(ctx, l.opts.Model, row)
+		if !ok {
+			return checked, "", ""
+		}
+		checked.State = StateOK
+		checked.Line = "chat uses " + l.opts.Model
+		return checked, l.opts.Model + " (in the cloud)", ""
+	}
+	model, picked := l.opts.Model, true
+	if model == "" {
+		model, picked = nativeStartModel(), false
+	}
+	row = checkLocalModelDownloaded(ctx, model, row)
+	switch {
+	case row.State == StateOK:
+		return row, model + " (on this machine)", model
+	case row.State == StateFailed && !picked:
+		row.Detail = "It is the model GAIA starts on when none is chosen."
+		row.Remedy = Remedy{Action: "Press p and choose where chat runs: a model on this PC, or a cloud provider."}
+	}
+	return row, "", ""
 }
 
 func (l localRunner) verifyModelsWith(ctx context.Context) (Row, string, string, gaiainit.Status) {
@@ -857,15 +958,24 @@ func (l localRunner) verifyModelsRow(ctx context.Context) (Row, string, string, 
 		// Installed and not answering is a fault, not a step still to do.
 		row.State = StateFailed
 		row.Disposition = status.DispositionHalt
-		row.Line = "model server not answering"
 		row.Detail = strings.Join(st.Reasons, "\n")
+		row.Raw = row.Detail
+		if st.ModelListUnread {
+			row.Line = "model server's model list can't be read"
+			row.Remedy = Remedy{
+				Action: "The model server answers, but not with a list of models. Check that GAIA " +
+					"points at Lemonade Server, then press r to check again.",
+				Where: installDocs,
+			}
+			return row, "", "", st
+		}
+		row.Line = "model server not answering"
 		row.Fix = FixRunSetup
 		row.Remedy = Remedy{
 			Action:  "Press f and setup starts it again, then checks the models.",
 			Command: gaiainit.RunCommand(l.skipChatModel()),
 			Where:   installDocs,
 		}
-		row.Raw = row.Detail
 		return row, "", "", st
 	}
 

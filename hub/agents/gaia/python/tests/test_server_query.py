@@ -35,14 +35,16 @@ from unittest import mock
 
 import pytest
 
-pytest.importorskip("gaia_agent")
+pytest.importorskip("gaiapy")
 
 from fastapi.testclient import TestClient  # noqa: E402
-from gaia_agent import caller_auth  # noqa: E402
-from gaia_agent import server as server_mod  # noqa: E402
-from gaia_agent import session_registry as sr  # noqa: E402
+from gaiapy import caller_auth  # noqa: E402
+from gaiapy import server as server_mod  # noqa: E402
+from gaiapy import session_registry as sr  # noqa: E402
 
 _BASE_URL = "http://127.0.0.1:8141"
+_TOKEN = "test-caller-token"
+_AUTH = {"Authorization": f"Bearer {_TOKEN}"}
 
 
 class _ScriptedAgent:
@@ -53,6 +55,7 @@ class _ScriptedAgent:
         self.closed = 0
         self.console = None
         self.conversation_history = []
+        self.loaded_skills = {}
         self._cancel_event = None
         self.saw_cancelled = None
         self.raise_on_query = False
@@ -139,7 +142,8 @@ def built(monkeypatch):
     """
     caller_auth.reset()
     monkeypatch.delenv(caller_auth.TOKEN_FILE_ENV_VAR, raising=False)
-    monkeypatch.delenv(caller_auth.TOKEN_ENV_VAR, raising=False)
+    # Full access over HTTP needs caller auth, as the shipped sidecar has.
+    monkeypatch.setenv(caller_auth.TOKEN_ENV_VAR, _TOKEN)
 
     agents: list[_ScriptedAgent] = []
 
@@ -154,7 +158,7 @@ def built(monkeypatch):
     sr.registry.clear()
     server_mod._registry = server_mod._RunRegistry()
 
-    client = TestClient(server_mod.build_app(), base_url=_BASE_URL)
+    client = TestClient(server_mod.build_app(), base_url=_BASE_URL, headers=_AUTH)
     try:
         yield client, agents
     finally:
@@ -180,6 +184,61 @@ def _events(response):
         if line.startswith("data: "):
             out.append(json.loads(line[len("data: ") :]))
     return out
+
+
+@pytest.mark.parametrize("early_cancel", [False, True])
+def test_failed_skill_reload_is_reported_once_in_chat(built, monkeypatch, early_cancel):
+    from gaia.skills.errors import SkillNotFoundError
+
+    client, agents = built
+    changed = False
+
+    def load_skill(self, name):
+        if name == "broken":
+            raise SkillNotFoundError("synthetic private path /example/private/SKILL.md")
+        self.loaded_skills[name] = object()
+
+    monkeypatch.setattr(
+        _ScriptedAgent, "built_settings_changed", lambda self: changed, raising=False
+    )
+    monkeypatch.setattr(_ScriptedAgent, "load_skill", load_skill, raising=False)
+
+    def turn(**kwargs):
+        response = client.post(
+            "/v1/gaia/query", json=_body(session_id="loaded", **kwargs)
+        )
+        assert response.status_code == 200, response.text
+        return _events(response)
+
+    def warnings(events):
+        return [e for e in events if e.get("level") == "warning"]
+
+    assert not warnings(turn())
+    agents[0].loaded_skills.update({"coding": object(), "broken": object()})
+    changed = True
+    if early_cancel:
+        run_id = str(uuid.uuid4())
+        client.post(f"/v1/gaia/query/{run_id}/cancel")
+        assert not warnings(turn(run_id=run_id))
+        assert agents[-1].saw_cancelled is True
+        assert len(agents) == 2
+        changed = False
+
+    events = turn()
+    assert len(agents) == 2
+    assert set(agents[-1].loaded_skills) == {"coding"}
+    assert warnings(events) == [
+        {
+            "type": "status",
+            "level": "warning",
+            "message": "Skill 'broken' was not restored after settings changed: "
+            "its files could not be found. Reload it if needed.",
+        }
+    ]
+    assert events[-1]["type"] == "final"
+    assert events[-1]["answer"] == "answered: hello"
+    changed = False
+    assert not warnings(turn())
 
 
 def _terminals(response):
@@ -233,14 +292,12 @@ def test_the_request_body_cannot_ask_for_bypass(built):
     assert r.status_code == 422, r.text
 
 
-def test_session_bypass_stops_the_prompts_without_lifting_the_shell_gates(built):
-    """``/sessions/{id}/bypass`` grants unattended approval, not a free shell.
+def test_session_bypass_is_full_access_shell_included(built):
+    """``/sessions/{id}/bypass`` is full access, as over stdio.
 
-    The two grants ride the same ``PermissionState``, and ``attach`` writes it
-    onto each turn's fresh handler — so a session that turned bypass on would
-    otherwise overwrite the ``full_access = False`` the query path pins,
-    handing a bound socket the operator block, the read-only binary policy and
-    the rate limit. Approval is answerable over HTTP; arbitrary shell is not.
+    It rides the session's ``PermissionState``, and ``attach`` writes it onto
+    each turn's fresh handler: prompts stop and the shell runs any command.
+    Turning it off takes both away again.
     """
     client, agents = built
     session_id = f"s-{uuid.uuid4()}"
@@ -249,6 +306,7 @@ def test_session_bypass_stops_the_prompts_without_lifting_the_shell_gates(built)
         client.post("/v1/gaia/query", json=_body(session_id=session_id)).status_code
         == 200
     )
+    assert agents[0].console.full_access is False, "a session starts in ask"
 
     r = client.post(f"/v1/gaia/sessions/{session_id}/bypass", json={"enabled": True})
     assert r.status_code == 200, r.text
@@ -260,7 +318,27 @@ def test_session_bypass_stops_the_prompts_without_lifting_the_shell_gates(built)
 
     console = agents[0].console
     assert console.auto_approve_gated_tools is True, "bypass must stop the prompts"
-    assert console.full_access is False, "shell gates must stay on over HTTP"
+    assert console.full_access is True, "bypass must open the shell too"
+
+    r = client.post(f"/v1/gaia/sessions/{session_id}/bypass", json={"enabled": False})
+    assert r.status_code == 200, r.text
+    assert (
+        client.post("/v1/gaia/query", json=_body(session_id=session_id)).status_code
+        == 200
+    )
+
+    console = agents[0].console
+    assert console.auto_approve_gated_tools is False
+    assert console.full_access is False
+
+
+def test_a_query_with_no_session_never_runs_with_full_access(built):
+    """Full access belongs to a session; the query body cannot ask for it."""
+    client, agents = built
+
+    assert client.post("/v1/gaia/query", json=_body()).status_code == 200
+
+    assert agents[0].console.full_access is False
 
 
 def _served_paths(app) -> set:
@@ -907,7 +985,7 @@ def switched_backend(monkeypatch):
     ``switched`` replaces ``_AgentSession.switch_model`` wholesale, which also
     skips the provider it records — the thing the tests below are about.
     """
-    from gaia_agent import stdio
+    from gaiapy import stdio
 
     calls: list = []
 
@@ -943,7 +1021,7 @@ def test_a_local_session_asked_for_claude_switches_to_claude(built, switched_bac
     # The symbol `_default_model_for` actually reads. Identical to
     # ChatAgentConfig's today by inheritance, but naming that one instead would
     # fail confusingly the day the flagship overrides the default.
-    from gaia_agent.agent import GaiaAgentConfig
+    from gaiapy.agent import GaiaAgentConfig
 
     client, _ = built
     client.post("/v1/gaia/query", json=_body(session_id="s-1", model="model-a"))
@@ -1136,7 +1214,7 @@ def test_a_decision_for_a_finished_run_is_refused_rather_than_dropped(built):
 @pytest.mark.parametrize("decision", ["allow", "deny", "always"])
 def test_every_decision_the_stdio_channel_accepts_is_accepted_here(decision):
     """The two transports must not disagree about the vocabulary."""
-    from gaia_agent import stdio
+    from gaiapy import stdio
 
     assert decision in {
         stdio.DECISION_ALLOW,
@@ -1167,6 +1245,29 @@ def test_a_decision_for_an_unknown_run_is_a_404(built):
 # ---------------------------------------------------------------------------
 # Bypass
 # ---------------------------------------------------------------------------
+
+
+def test_full_access_is_refused_on_a_sidecar_without_caller_auth(built, monkeypatch):
+    """Without a token any local process could turn on an unrestricted shell.
+
+    Turning it off still works, and the session stays in ask.
+    """
+    client, agents = built
+    client.post("/v1/gaia/query", json=_body(session_id="s-1"))
+    monkeypatch.delenv(caller_auth.TOKEN_ENV_VAR)
+    monkeypatch.setenv(caller_auth.ALLOW_NO_TOKEN_ENV_VAR, "1")
+    caller_auth.reset()
+    open_client = TestClient(server_mod.build_app(), base_url=_BASE_URL)
+
+    on = open_client.post("/v1/gaia/sessions/s-1/bypass", json={"enabled": True})
+    off = open_client.post("/v1/gaia/sessions/s-1/bypass", json={"enabled": False})
+
+    assert on.status_code == 403, on.text
+    assert caller_auth.TOKEN_FILE_ENV_VAR in on.json()["detail"]
+    assert off.status_code == 200, off.text
+    assert sr.registry.get("s-1").permissions.full_access is False
+    open_client.post("/v1/gaia/query", json=_body(session_id="s-1"))
+    assert agents[0].console.full_access is False
 
 
 def test_full_access_applies_to_the_session_and_survives_the_turn(built):
@@ -1340,6 +1441,30 @@ def test_a_one_shot_still_refuses_a_gated_tool(built):
     final = [e for e in events if e.get("type") == "final"]
     assert final, events
     assert "needs your explicit approval" in final[-1].get("answer", "")
+
+
+def test_a_refused_gated_tool_ends_failed_with_what_the_turn_spent(built):
+    """`gaia -p` read the stop as a free, zero-step success (#8034)."""
+    client, _ = built
+
+    class _Spent(_ScriptedAgent):
+        def process_query(self, query, max_steps=None):
+            self.console.confirm_tool_execution("allow_path_access", {"path": "x"})
+            return {
+                "status": "cancelled",
+                "result": "",
+                "steps_taken": 1,
+                "input_tokens": 5120,
+                "output_tokens": 48,
+            }
+
+    with mock.patch.object(server_mod, "build_query_agent", _Spent):
+        response = client.post("/v1/gaia/query", json=_body(can_answer_questions=False))
+
+    [final] = [e for e in _events(response) if e.get("type") == "final"]
+    assert final["failed"] is True
+    assert final["usage"] == {"steps": 1, "input_tokens": 5120, "tokens": 48}
+    assert "needs your explicit approval" in final["answer"]
 
 
 def test_a_caller_that_cannot_answer_is_never_asked(built):
@@ -1580,7 +1705,10 @@ def test_a_headless_caller_is_pointed_at_the_endpoint_not_the_tui(built, monkeyp
 
 @pytest.mark.parametrize(
     "surface,expected",
-    [("tui", "in the TUI provider settings"), ("agent_ui", "under Settings > Model")],
+    [
+        ("tui", "in the TUI provider settings"),
+        ("agent_ui", "under Settings > Agent & model"),
+    ],
 )
 def test_a_front_end_that_names_itself_gets_its_own_advice(
     built, monkeypatch, surface, expected

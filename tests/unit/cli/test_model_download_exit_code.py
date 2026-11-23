@@ -6,6 +6,7 @@ A script or CI step branches on the exit code, so a printed error with a
 zero exit reads as success and the pipeline moves on without the models.
 """
 
+import re
 import sys
 
 import pytest
@@ -42,7 +43,7 @@ def test_download_exits_nonzero_when_the_server_is_unreachable(
     code = _run_main(argv, monkeypatch)
 
     assert code == 1
-    assert "not running or not accessible" in capsys.readouterr().err
+    assert "not reachable" in capsys.readouterr().err
 
 
 @pytest.mark.parametrize(
@@ -61,7 +62,8 @@ def test_download_list_exits_nonzero_when_the_server_is_unreachable(
 
     captured = capsys.readouterr()
     assert code == 1
-    assert "not running or not accessible" in captured.err
+    assert "not reachable" in captured.err
+    assert "gaia init" not in captured.err
     assert "⬜" not in captured.out
 
 
@@ -73,3 +75,28 @@ def test_download_list_names_an_unknown_agent_before_the_server_check(
 
     assert code == 1
     assert "Unknown agent: nope" in capsys.readouterr().out
+
+
+def test_download_refuses_the_voice_on_a_mac_with_why(gaia_home, monkeypatch, capsys):
+    import gaia.config
+
+    monkeypatch.setattr(gaia.config, "_current_platform", lambda: "darwin")
+    monkeypatch.setattr(cli, "check_lemonade_health", lambda *a, **k: True)
+    monkeypatch.setattr(
+        cli.LemonadeClient,
+        "get_required_models",
+        lambda self, agent: ["Gemma-4-E4B-it-GGUF", "kokoro-v1"],
+    )
+    monkeypatch.setattr(cli.LemonadeClient, "check_model_available", lambda *a: True)
+
+    def never_pull(self, model_name, **_):
+        raise AssertionError(f"pulled {model_name}")
+
+    monkeypatch.setattr(cli.LemonadeClient, "pull_model_stream", never_pull)
+    code = _run_main(["download", "--agent", "talk"], monkeypatch)
+
+    captured = capsys.readouterr()
+    # The console wraps the message inside a box; read it back as one line.
+    said = " ".join(re.sub("[│╭╮╰╯─]", " ", captured.out + captured.err).split())
+    assert code == 1
+    assert "aren't offered on macOS" in said

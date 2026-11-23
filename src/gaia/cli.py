@@ -15,7 +15,6 @@ from typing import Optional
 
 from gaia.agents.base.console import AgentConsole
 from gaia.agents.install_hints import (
-    agent_import_error_message,
     gaia_extras_install_args,
     missing_extra_hint,
     pip_install_hint,
@@ -32,6 +31,7 @@ from gaia.llm.lemonade_client import (
     LemonadeClientError,
     _get_lemonade_config,
     resolve_lemonade_base_url,
+    resolve_local_chat_model,
 )
 from gaia.llm.lemonade_launcher import describe_start_hint
 from gaia.llm.providers.claude import DEFAULT_CLAUDE_MODEL as DEFAULT_CLAUDE_CHAT_MODEL
@@ -124,6 +124,7 @@ def initialize_lemonade_for_agent(
     port: int | None = None,
     base_url: str | None = None,
     model: str | None = None,
+    preload: bool = True,
 ):
     """
     Initialize Lemonade Server for a specific GAIA agent.
@@ -142,6 +143,7 @@ def initialize_lemonade_for_agent(
                   When provided, takes priority over host/port.
         model: Chat model the command will run (e.g. ``--model``); unset means
                this machine's default. A cloud model is never preloaded locally.
+        preload: False only reaches the server: nothing is loaded or downloaded.
 
     Returns:
         Tuple of (success: bool, base_url: str | None)
@@ -193,11 +195,11 @@ def initialize_lemonade_for_agent(
         # seeds an idle server with the default model at its own window.
         if base_url:
             success = LemonadeManager.ensure_ready(
-                quiet=quiet, base_url=base_url, model=model
+                quiet=quiet, base_url=base_url, model=model, preload=preload
             )
         else:
             success = LemonadeManager.ensure_ready(
-                quiet=quiet, host=host, port=port, model=model
+                quiet=quiet, host=host, port=port, model=model, preload=preload
             )
     except LemonadeClientError as e:
         print(f"❌ Error: {_cli_wording(e)}", file=sys.stderr)
@@ -276,6 +278,8 @@ class GaiaCliClient:
     # Where a failure record looks: Lemonade, unless this client talks to Claude.
     calls_lemonade = True
     lemonade_url: Optional[str] = None
+    # Set when a reply failed, so `gaia prompt` exits non-zero.
+    failed = False
 
     def __init__(
         self,
@@ -309,6 +313,8 @@ class GaiaCliClient:
         self.log.debug(f"model: {self.model}\n max_tokens: {self.max_tokens}")
 
     async def send_message(self, message):
+        from gaia.apps.llm.app import _reasoning_only_error, _ReasoningFilter
+
         try:
             # Use LLMClient.generate with streaming
             response_generator = self.llm_client.generate(
@@ -318,9 +324,18 @@ class GaiaCliClient:
                 max_tokens=self.max_tokens,
             )
 
-            for chunk in response_generator:
+            reasoning = _ReasoningFilter()
+            answered = False
+            for chunk in reasoning(response_generator):
+                if not answered:
+                    chunk = chunk.lstrip()
+                    if not chunk:
+                        continue
+                    answered = True
                 print(chunk, end="", flush=True)
                 yield chunk
+            if reasoning.saw_reasoning and not answered:
+                raise _reasoning_only_error(self.max_tokens)
 
         except Exception as e:
             # A backend string like "Max length reached!" tells the user
@@ -328,6 +343,7 @@ class GaiaCliClient:
             error_message = _cli_error_text(e, self.calls_lemonade, self.lemonade_url)
             self.log.error(error_message)
             print(error_message)
+            self.failed = True
             yield error_message
 
     def get_stats(self):
@@ -569,7 +585,7 @@ async def async_main(action, **kwargs):
             if stats:
                 for key, value in stats.items():
                     print(f"{key}: {value}")
-        return None
+        return 1 if client.failed else None
     elif action == "chat":
         if agent_registry is not None:
             return _run_registered_agent(kwargs["agent"], kwargs, agent_registry)
@@ -577,8 +593,8 @@ async def async_main(action, **kwargs):
         # package, or, where the agent ships as its own binary (as the apps
         # ship it), on that binary through the daemon, as the Agent UI does.
         try:
-            from gaia_agent.agent import GaiaAgent, GaiaAgentConfig
-            from gaia_agent.interactive import interactive_mode
+            from gaiapy.agent import GaiaAgent, GaiaAgentConfig
+            from gaiapy.interactive import interactive_mode
         except ImportError:
             return _gaia_chat_relay(kwargs)
 
@@ -763,7 +779,7 @@ async def async_main(action, **kwargs):
                 "logging_level", "INFO"
             ),  # Back to INFO now that issues are fixed
             # LLM backend selection (#124)
-            model=kwargs.get("model") or DEFAULT_MODEL_NAME,
+            model=kwargs.get("model") or resolve_local_chat_model(),
             max_tokens=kwargs.get("max_tokens", 512),
             use_claude=kwargs.get("use_claude", False),
             claude_model=kwargs.get("claude_model", DEFAULT_CLAUDE_CHAT_MODEL),
@@ -970,6 +986,7 @@ def _launch_agent_ui(port=4200, base_url=None, log=None, debug=False, webui_dist
     try:
         from gaia.ui.server import (
             create_app,
+            launch_url,
             lemonade_is_remote,
             start_model_server_owner,
         )
@@ -984,13 +1001,20 @@ def _launch_agent_ui(port=4200, base_url=None, log=None, debug=False, webui_dist
         # "localhost" can resolve to IPv6 ::1 and fail against this IPv4 listener.
         log.info(f"Starting GAIA Agent UI on http://127.0.0.1:{port}")
         print(f"Starting GAIA Agent UI on http://127.0.0.1:{port}")
-        print(f"   Open your browser to http://127.0.0.1:{port}")
-        print("   Press Ctrl+C to stop")
-        print()
         import uvicorn
 
         # create_app() refuses an unsafe GAIA_HOME, so nothing is written there first.
         app = create_app(webui_dist=webui_dist)
+        # Only to a terminal: the desktop app logs this process's stdout.
+        if sys.stdout.isatty():
+            print(
+                f"   Open your browser to {launch_url(app, '127.0.0.1', port)}",
+                flush=True,
+            )
+        else:
+            print(f"   Agent UI API on http://127.0.0.1:{port}", flush=True)
+        print("   Press Ctrl+C to stop")
+        print()
         _enable_backend_fault_log(log)
         if not base_url and not lemonade_is_remote():
             # First run is set up in the app; the daemon owns the model server.
@@ -1065,8 +1089,8 @@ def _launch_interactive_cli(log=None):
             sys.exit(1)
 
         try:
-            from gaia_agent.agent import GaiaAgent, GaiaAgentConfig
-            from gaia_agent.interactive import interactive_mode
+            from gaiapy.agent import GaiaAgent, GaiaAgentConfig
+            from gaiapy.interactive import interactive_mode
         except ImportError:
             # The agent ships as its own binary: chat with it through the daemon.
             sys.exit(_gaia_chat_relay({}))
@@ -1098,41 +1122,6 @@ def _launch_interactive_cli(log=None):
                 log.warning("Could not finish memory extraction before exit: %s", exc)
 
 
-def _compare_benchmark_ctx(current_ctx, baseline, baseline_path):
-    """Guard ``gaia eval benchmark --compare`` against cross-ctx comparisons (#1892).
-
-    A throughput/quality baseline measured at one context window is not
-    comparable to a run measured at another. Raises ``SystemExit`` when both
-    sides record a ``ctx_size`` and they differ; prints a single loud legacy
-    warning (and proceeds) when either side lacks the field.
-    """
-    baseline_ctx = baseline.get("ctx_size")
-    if baseline_ctx is None:
-        print(
-            f"[COMPARE] WARNING: baseline {baseline_path} records no ctx_size "
-            "(legacy pre-#1892 card, measured at an unpinned window — "
-            "implicitly the model's 64K registry floor). The comparison "
-            "proceeds but is NOT ctx-verified; re-record the baseline with "
-            "--ctx-size to make it comparable."
-        )
-        return
-    if current_ctx is None:
-        print(
-            f"[COMPARE] WARNING: this run records no ctx_size but baseline "
-            f"{baseline_path} was measured at ctx={baseline_ctx}; the "
-            "comparison proceeds but is NOT ctx-verified."
-        )
-        return
-    if int(baseline_ctx) != int(current_ctx):
-        raise SystemExit(
-            f"[ERROR] ctx mismatch: this run measured ctx_size={current_ctx} "
-            f"but the baseline at {baseline_path} records "
-            f"ctx_size={baseline_ctx}. Comparing runs across different "
-            f"context windows is invalid — rerun with --ctx-size "
-            f"{baseline_ctx}, or record a new baseline at {current_ctx}."
-        )
-
-
 def _hide_subcommands(subparsers, names) -> None:
     """Drop subcommands from ``-h`` while they keep parsing and dispatching.
 
@@ -1155,8 +1144,56 @@ def _hide_subcommands(subparsers, names) -> None:
 
 # Kept for scripts, hidden from help: GAIA ships one agent, so browsing and
 # publishing agents is no longer a user-facing feature (#5172).
-HIDDEN_TOP_LEVEL_COMMANDS = ("hub",)
+HIDDEN_TOP_LEVEL_COMMANDS = ("hub", "agent-program")
 HIDDEN_AGENT_COMMANDS = ("init", "version", "pack", "publish", "login")
+
+# Removed commands: old scripts get the replacement instead of "invalid choice".
+RETIRED_TOP_LEVEL_COMMANDS = {
+    "email": (
+        "`gaia email` was removed along with the standalone email agent. The "
+        "flagship agent reads, drafts and sends Gmail or Outlook mail now: run "
+        '`gaia chat` and ask it, e.g. "what\'s waiting on me in my inbox?". '
+        "To connect a mailbox and grant it to the flagship, follow "
+        "https://amd-gaia.ai/docs/guides/email#setup"
+    ),
+}
+
+
+RETIRED_AGENT_LIST_MESSAGE = (
+    "`gaia agent list` was removed: GAIA ships one agent, the flagship, so "
+    "there is nothing to list. Run `gaia chat` to use it, or `gaia agent "
+    "status` to see whether it is running."
+)
+
+
+def _command_tokens(argv, parser) -> list:
+    """*argv* from the command on, with the top-level flags before it dropped."""
+    takes_value = {
+        flag: action.nargs != 0
+        for action in parser._actions
+        for flag in action.option_strings
+    }
+    i = 0
+    while i < len(argv):
+        token = argv[i]
+        if not token.startswith("-"):
+            return list(argv[i:])
+        name = token.split("=", 1)[0]
+        if name not in takes_value:
+            return []
+        i += 2 if takes_value[name] and "=" not in token else 1
+    return []
+
+
+def _retired_command_message(argv, parser=None) -> Optional[str]:
+    """The replacement for a removed command, or ``None``."""
+    tokens = _command_tokens(argv, parser or build_parser())
+    if not tokens:
+        return None
+    if tokens[0] == "agent":
+        rest = [t for t in tokens[1:] if not t.startswith("-")]
+        return RETIRED_AGENT_LIST_MESSAGE if rest[:1] == ["list"] else None
+    return RETIRED_TOP_LEVEL_COMMANDS.get(tokens[0])
 
 
 def _positive_int(value: str) -> int:
@@ -1172,6 +1209,17 @@ def _positive_int(value: str) -> int:
     if number < 1:
         raise argparse.ArgumentTypeError(f"must be at least 1, got {number}")
     return number
+
+
+def _tool_patterns(value: str) -> list[str]:
+    """argparse type: comma- or space-separated tool names or globs."""
+    import argparse
+    import re
+
+    names = [n for n in re.split(r"[,\s]+", value) if n]
+    if not names:
+        raise argparse.ArgumentTypeError("expected at least one tool name")
+    return names
 
 
 def build_parser():
@@ -1239,7 +1287,16 @@ def build_parser():
         "--model",
         dest="print_model",
         default=None,
-        help="Model id for -p (default: config default_model, else the agent's)",
+        help="Model id for -p, or 'hybrid' to pick a cheap or strong model for "
+        "the turn (default: config default_model, else the agent's)",
+    )
+    parser.add_argument(
+        "--yes",
+        "-y",
+        dest="print_yes",
+        action="store_true",
+        help="With -p: download the run's model without asking when it is not "
+        "downloaded yet (non-interactive/CI use)",
     )
     parser.add_argument(
         "--output-format",
@@ -1261,6 +1318,16 @@ def build_parser():
         type=_positive_int,
         default=None,
         help="With -p: cap on agent steps (default: the agent's own limit)",
+    )
+    parser.add_argument(
+        "--time-limit",
+        dest="print_time_limit",
+        type=_positive_int,
+        default=None,
+        metavar="SECONDS",
+        help="With -p: wall-clock seconds the turn may take. The agent is told "
+        "when time is running short, wraps up before the limit, and is stopped "
+        "at it, so the answer is still printed (default: no limit)",
     )
     parser.add_argument(
         "--attempts",
@@ -1287,9 +1354,32 @@ def build_parser():
         "guardrails (test runners, build tools run) and grants paths outside the "
         "current folder without asking. Implies --dangerously-skip-permissions",
     )
+    parser.add_argument(
+        "--disallowed-tools",
+        dest="print_disallowed_tools",
+        type=_tool_patterns,
+        action="extend",
+        default=None,
+        metavar="TOOLS",
+        help="With -p: tools the agent may not see or call, comma- or "
+        "space-separated, with * globs (e.g. 'search_web,browser_*'). A name "
+        "that matches no tool is an error",
+    )
+    parser.add_argument(
+        "--no-web",
+        dest="print_no_web",
+        action="store_true",
+        help="With -p: withhold every tool that searches, reads or downloads from "
+        "the internet. The shell stays available",
+    )
+    parser.add_argument(
+        "--no-skills",
+        dest="print_no_skills",
+        action="store_true",
+        help="With -p: no skill catalogue in the prompt and no tools to find, "
+        "load or learn skills, so the turn runs on the core tools alone",
+    )
 
-    # --stats is split out so a command whose handler never reads it (email)
-    # can take the rest without accepting a silent no-op.
     base_flags_parser = argparse.ArgumentParser(add_help=False)
     base_flags_parser.add_argument(
         "--logging-level",
@@ -1577,147 +1667,6 @@ def build_parser():
         "--index", "-i", type=str, help="Index a PDF document for voice Q&A"
     )
     talk_parser.set_defaults(action="talk")
-
-    # Add Email Triage Agent command (#962)
-    email_parser = subparsers.add_parser(
-        "email",
-        help=(
-            "Email Triage Agent — read, organize, and reply to Gmail or "
-            "Outlook with all body inference running locally on Lemonade. "
-            "Requires the Google or Microsoft connector to be configured "
-            "(Settings → Connectors)."
-        ),
-        parents=[
-            base_flags_parser,
-            model_parser,
-            base_url_parser,
-            trace_parser,
-            removed_provider_parser,
-        ],
-    )
-    email_parser.add_argument(
-        "-q",
-        "--query",
-        type=str,
-        default=None,
-        help="One-shot query to send to the agent (non-interactive).",
-    )
-    email_parser.add_argument(
-        "-i",
-        "--interactive",
-        action="store_true",
-        help="Run in interactive mode (loop reading queries from stdin).",
-    )
-    email_parser.add_argument(
-        "-v",
-        "--verbose",
-        action="store_true",
-        help=(
-            "Verbose mode — emit structured logs for every triage decision "
-            "and tool call (recommended when benchmarking against other "
-            "email agents)."
-        ),
-    )
-    email_parser.add_argument(
-        "--spec",
-        action="store_true",
-        help=(
-            "Generate the HTML endpoint spec page, write it to disk, and open "
-            "it in a browser. No LLM or Lemonade required."
-        ),
-    )
-    email_parser.add_argument(
-        "--output",
-        type=str,
-        default=None,
-        metavar="PATH",
-        help=(
-            "Path to write the HTML spec (default: ~/.gaia/email/endpoint-spec.html). "
-            "Only used with --spec."
-        ),
-    )
-
-    # Autonomy control surface (#2516) — thin client over the sidecar's
-    # session-scoped /v1/email/agent/autonomy* REST routes, relayed through
-    # the daemon like every other `gaia email` command.
-    email_subparsers = email_parser.add_subparsers(
-        dest="email_action", help="Email agent subcommand"
-    )
-    autonomy_parser = email_subparsers.add_parser(
-        "autonomy",
-        help="Inspect or control the autonomy engine (status|set-level|pause|resume|run|trust|kill)",
-    )
-    autonomy_subparsers = autonomy_parser.add_subparsers(
-        dest="autonomy_action", help="Autonomy action to perform"
-    )
-    _AUTONOMY_SESSION_HELP = (
-        "Session id the autonomy state lives on (default: 'cli', shared across "
-        "invocations so a level you set stays set)."
-    )
-
-    autonomy_status_parser = autonomy_subparsers.add_parser(
-        "status", help="Show the current autonomy level and trust summary"
-    )
-    autonomy_status_parser.add_argument(
-        "--session-id", default="cli", help=_AUTONOMY_SESSION_HELP
-    )
-
-    autonomy_trust_parser = autonomy_subparsers.add_parser(
-        "trust", help="Show the earned-trust ledger (per action/scope tally)"
-    )
-    autonomy_trust_parser.add_argument(
-        "--session-id", default="cli", help=_AUTONOMY_SESSION_HELP
-    )
-
-    autonomy_set_level_parser = autonomy_subparsers.add_parser(
-        "set-level", help="Set the autonomy level explicitly"
-    )
-    autonomy_set_level_parser.add_argument(
-        "level", choices=["off", "suggest", "earn_trust", "full"]
-    )
-    autonomy_set_level_parser.add_argument(
-        "--session-id", default="cli", help=_AUTONOMY_SESSION_HELP
-    )
-
-    autonomy_pause_parser = autonomy_subparsers.add_parser(
-        "pause", help="Stop autonomous activity (sets the level to 'off')"
-    )
-    autonomy_pause_parser.add_argument(
-        "--session-id", default="cli", help=_AUTONOMY_SESSION_HELP
-    )
-
-    autonomy_resume_parser = autonomy_subparsers.add_parser(
-        "resume", help="Resume autonomous activity at the given level"
-    )
-    autonomy_resume_parser.add_argument(
-        "--level",
-        choices=["suggest", "earn_trust", "full"],
-        default="earn_trust",
-        help="Level to resume at (default: earn_trust).",
-    )
-    autonomy_resume_parser.add_argument(
-        "--session-id", default="cli", help=_AUTONOMY_SESSION_HELP
-    )
-
-    autonomy_kill_parser = autonomy_subparsers.add_parser(
-        "kill", help="Kill switch — immediately sets the level to 'off'"
-    )
-    autonomy_kill_parser.add_argument(
-        "--session-id", default="cli", help=_AUTONOMY_SESSION_HELP
-    )
-
-    autonomy_run_parser = autonomy_subparsers.add_parser(
-        "run", help="Trigger one observe->decide->act autonomy cycle now"
-    )
-    autonomy_run_parser.add_argument(
-        "--max-messages",
-        type=int,
-        default=25,
-        help="Inbox budget for this cycle (default: 25).",
-    )
-    autonomy_run_parser.add_argument(
-        "--session-id", default="cli", help=_AUTONOMY_SESSION_HELP
-    )
 
     # Add API server command
     api_parser = subparsers.add_parser(
@@ -2173,59 +2122,11 @@ def build_parser():
 
     schedule_parser.set_defaults(action="schedule")
 
-    # Knowledge command — web research via the Tavily wrapper
-    knowledge_parser = subparsers.add_parser(
-        "knowledge",
-        help="Web research via Tavily (search|extract|usage), with caching and a credit budget",
-    )
-    knowledge_subparsers = knowledge_parser.add_subparsers(
-        dest="knowledge_action", help="knowledge action to perform"
-    )
+    # Knowledge command — web research via the Tavily wrapper. Lives in
+    # gaia.knowledge_cli to keep this file lean.
+    from gaia import knowledge_cli
 
-    k_search = knowledge_subparsers.add_parser("search", help="Run a web search")
-    k_search.add_argument("query", help="Search query")
-    k_search.add_argument(
-        "--max-results", type=int, default=5, help="Max results (default: 5)"
-    )
-    k_search.add_argument(
-        "--depth",
-        choices=("basic", "advanced"),
-        default="basic",
-        help="Search depth — advanced costs more credits (default: basic)",
-    )
-    k_search.add_argument(
-        "--budget",
-        type=int,
-        default=None,
-        help="Credit cap for this session; omit for unlimited",
-    )
-    k_search.add_argument(
-        "--no-block",
-        action="store_true",
-        help="Warn instead of blocking when the budget cap is exceeded",
-    )
-
-    k_extract = knowledge_subparsers.add_parser(
-        "extract", help="Extract clean content from one or more URLs (requires Tavily)"
-    )
-    k_extract.add_argument("urls", nargs="+", help="One or more URLs to extract")
-    k_extract.add_argument(
-        "--depth",
-        choices=("basic", "advanced"),
-        default="basic",
-        help="Extract depth (default: basic)",
-    )
-    k_extract.add_argument(
-        "--budget", type=int, default=None, help="Credit cap for this session"
-    )
-    k_extract.add_argument(
-        "--no-block",
-        action="store_true",
-        help="Warn instead of blocking when the budget cap is exceeded",
-    )
-
-    knowledge_subparsers.add_parser("usage", help="Show cached credit-usage totals")
-    knowledge_parser.set_defaults(action="knowledge")
+    knowledge_cli.add_subparser(subparsers)
 
     # Add model download command
     download_parser = subparsers.add_parser(
@@ -2247,7 +2148,7 @@ Examples:
   # Delete all downloaded GAIA models (free up disk space)
   gaia download --clear-cache
 
-Available agents: chat, bash, talk, rag, vlm, minimal, mcp, sd
+Available agents: chat, talk, rag, vlm, minimal, mcp, sd
 
 Use `gaia download --agent talk` to download the local Kokoro TTS model.
         """,
@@ -2674,84 +2575,6 @@ Examples:
         "Results are tagged with the device for cross-device comparison.",
     )
 
-    # Email-triage throughput benchmark subcommand: gaia eval benchmark [OPTIONS] (#1233)
-    benchmark_eval_parser = eval_subparsers.add_parser(
-        "benchmark",
-        help="Email-triage throughput benchmark (TTFT / tok-per-sec / latency)",
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog="""
-Examples:
-  # Benchmark the primary on-device model over the committed corpus
-  gaia eval benchmark --model Gemma-4-E4B-it-GGUF --limit 50
-
-  # Repeat 3 times for variance + compare against a saved baseline
-  gaia eval benchmark --experiments 3 --compare eval/results/bench_baseline.json
-
-  # Save this run as the throughput baseline
-  gaia eval benchmark --save-baseline
-        """,
-    )
-    benchmark_eval_parser.add_argument(
-        "--model",
-        default="Gemma-4-E4B-it-GGUF",
-        help="Lemonade model id to benchmark (default: Gemma-4-E4B-it-GGUF).",
-    )
-    benchmark_eval_parser.add_argument(
-        "--limit",
-        type=int,
-        default=50,
-        help="Target message count steered to the agent's triage call "
-        "(default: 50). The committed stub corpus is smaller, so the "
-        "effective count is min(limit, corpus size).",
-    )
-    benchmark_eval_parser.add_argument(
-        "--experiments",
-        type=int,
-        default=1,
-        help="Repeat count per model for variance analysis (default: 1).",
-    )
-    benchmark_eval_parser.add_argument(
-        "--mbox-path",
-        default=None,
-        help="MBOX corpus to triage (default: the committed stub fixture).",
-    )
-    benchmark_eval_parser.add_argument(
-        "--ground-truth",
-        default=None,
-        help="Ground-truth JSON for quality scoring (default: the fixture's).",
-    )
-    benchmark_eval_parser.add_argument(
-        "--backend",
-        default=None,
-        help="Lemonade base URL (default: the agent's configured base URL).",
-    )
-    benchmark_eval_parser.add_argument(
-        "--output-dir",
-        default=None,
-        help="Directory to write scorecard.json / summary.md (optional).",
-    )
-    benchmark_eval_parser.add_argument(
-        "--compare",
-        metavar="PATH",
-        default=None,
-        help="Compare this run's throughput against a saved baseline scorecard.",
-    )
-    benchmark_eval_parser.add_argument(
-        "--save-baseline",
-        action="store_true",
-        help="Save this run's scorecard as the throughput baseline.",
-    )
-    benchmark_eval_parser.add_argument(
-        "--ctx-size",
-        type=int,
-        default=None,
-        help="Exact ctx window to pin the model load to (#1892 envelope: "
-        "16384 target / 32768 max; default: the target). The run verifies "
-        "the pin by readback and stamps it into scorecard.json/quality.json. "
-        "Values above the envelope max are allowed for deliberate sweeps "
-        "but warned loudly.",
-    )
-
     # Replay real Claude Code sessions against the live agent: gaia eval sessions
     sessions_eval_parser = eval_subparsers.add_parser(
         "sessions",
@@ -3171,6 +2994,12 @@ afterwards (or `swebench <run_dir>` does, later).
         "Claude Code has with its permissions skipped",
     )
     tasks_run_parser.add_argument(
+        "--research-command",
+        action="store_true",
+        help="Send each research task as `/research <prompt>`, GAIA's research "
+        "mode (gaia harness only)",
+    )
+    tasks_run_parser.add_argument(
         "--meter",
         choices=["fireworks"],
         default=None,
@@ -3506,7 +3335,7 @@ afterwards (or `swebench <run_dir>` does, later).
 
     mcp_tui_parser = mcp_subparsers.add_parser(
         "tui",
-        help="Start TUI control MCP server (drives a running `gaia-tui --control`)",
+        help="Start TUI control MCP server (drives a running `gaia-cli --control`)",
     )
     mcp_tui_parser.add_argument(
         "--host", default="localhost", help="Host to bind to (default: localhost)"
@@ -3663,7 +3492,7 @@ afterwards (or `swebench <run_dir>` does, later).
         help="Start (or attach to) one agent's sidecar under the daemon",
     )
     daemon_start_agent_parser.add_argument(
-        "agent_id", help="Agent to start (e.g. email)"
+        "agent_id", help="Agent to start (e.g. gaia)"
     )
     daemon_start_agent_parser.add_argument(
         "--mode",
@@ -3678,7 +3507,7 @@ afterwards (or `swebench <run_dir>` does, later).
             "Explicit dev-mode source directory (escape hatch for --mode dev "
             "when this shell isn't inside a git work tree). Must be an "
             "absolute path ending in hub/agents/<agent_id>/python (e.g. "
-            "/path/to/gaia/hub/agents/email/python) — not the checkout root. "
+            "/path/to/gaia/hub/agents/gaia/python) — not the checkout root. "
             "Default: resolved from this checkout via "
             "`git rev-parse --show-toplevel`."
         ),
@@ -3710,7 +3539,7 @@ afterwards (or `swebench <run_dir>` does, later).
         help=(
             "Show the named sidecar agent's log (the rich agent-loop activity — "
             "tool calls, triage decisions) instead of the host daemon log. "
-            "E.g. `gaia daemon logs --agent email -f`."
+            "E.g. `gaia daemon logs --agent gaia -f`."
         ),
     )
     daemon_parser.set_defaults(action="daemon")
@@ -3739,7 +3568,7 @@ afterwards (or `swebench <run_dir>` does, later).
     hub_install_parser = hub_subparsers.add_parser(
         "install", help="Install an agent from the Agent Hub"
     )
-    hub_install_parser.add_argument("agent_id", help="Agent to install (e.g. email)")
+    hub_install_parser.add_argument("agent_id", help="Agent to install (e.g. gaia)")
     hub_install_parser.add_argument(
         "--version",
         default=None,
@@ -3760,26 +3589,10 @@ afterwards (or `swebench <run_dir>` does, later).
     hub_uninstall_parser.add_argument("agent_id", help="Agent to uninstall")
     hub_parser.set_defaults(action="hub")
 
-    # Cache command (for Context7 cache management)
-    cache_parser = subparsers.add_parser(
-        "cache",
-        help="Show GAIA's caches and their sizes, or clear the Context7 cache",
-    )
-    cache_subparsers = cache_parser.add_subparsers(
-        dest="cache_action", help="Cache action to perform"
-    )
+    # Cache command. Lives in gaia.cache_cli to keep this file lean.
+    from gaia import cache_cli
 
-    # Cache status command
-    _ = cache_subparsers.add_parser("status", help="Show cache and rate limiter status")
-
-    # Cache clear command
-    cache_clear_parser = cache_subparsers.add_parser("clear", help="Clear cached data")
-    cache_clear_parser.add_argument(
-        "--context7", action="store_true", help="Clear Context7 cache"
-    )
-    cache_clear_parser.add_argument(
-        "--all", action="store_true", help="Clear all caches"
-    )
+    cache_cli.add_subparser(subparsers)
 
     # Memory command (agent memory management)
     memory_parser = subparsers.add_parser(
@@ -3901,7 +3714,7 @@ afterwards (or `swebench <run_dir>` does, later).
     )
     agent_install_parser.add_argument(
         "agent_id",
-        help="Hub agent id to install (e.g. 'email').",
+        help="Hub agent id to install (e.g. 'gaia').",
     )
     agent_install_parser.add_argument(
         "--version",
@@ -3918,13 +3731,6 @@ afterwards (or `swebench <run_dir>` does, later).
         ),
     )
 
-    # Agent list command — show installed agents + what the Agent Hub offers, so
-    # `gaia agent install <id>` is discoverable (and the id referenced in install
-    # errors resolves to a real command).
-    agent_subparsers.add_parser(
-        "list",
-        help="List installed agents and the agents available to install",
-    )
     _hide_subcommands(agent_subparsers, HIDDEN_AGENT_COMMANDS)
 
     # Connectors framework (issue #927, parent of #915) — manage OAuth +
@@ -3940,10 +3746,20 @@ afterwards (or `swebench <run_dir>` does, later).
 
     skills_cli.add_subparser(subparsers)
 
+    # gaia project trust {list|add|decline|forget}, alias gaia trust
+    from gaia import project_trust_cli
+
+    project_trust_cli.add_subparser(subparsers)
+
     # Local models added from a Hugging Face link (shared with the Agent UI and TUI).
     from gaia.llm import custom_models_cli
 
     custom_models_cli.add_subparser(subparsers)
+
+    # gaiacpp for the terminal UI, which shells out here to download it.
+    from gaia.daemon.sidecars import gaiacpp_fetch_cli
+
+    gaiacpp_fetch_cli.add_subparser(subparsers)
 
     # Persistent CLI config (~/.gaia/config.json) — e.g. a default model so
     # users don't have to pass --model on every chat/llm/prompt (issue #98).
@@ -4062,7 +3878,11 @@ afterwards (or `swebench <run_dir>` does, later).
     gateway_use_parser = gateway_subparsers.add_parser(
         "use", help="Make a gateway model the default for gaia chat/llm/prompt"
     )
-    gateway_use_parser.add_argument("model", help="Model id to make active")
+    gateway_use_parser.add_argument(
+        "model",
+        help="Model id to make active, or 'hybrid' to pick a cheap or strong "
+        "model per turn",
+    )
     gateway_test_parser = gateway_subparsers.add_parser(
         "test", help="Send a prompt through the gateway end to end"
     )
@@ -4109,12 +3929,11 @@ afterwards (or `swebench <run_dir>` does, later).
             "rag",
             "mcp",
             "vlm",
-            "email",
             "npu",
             "all",
         ],
         help="Profile to initialize: gaia (the flagship agent), minimal, sd (image gen), "
-        "chat, rag, mcp, vlm (vision), email (Gmail/Outlook triage), npu (Ryzen AI NPU), "
+        "chat, rag, mcp, vlm (vision), npu (Ryzen AI NPU), "
         "all (default: gaia)",
     )
     init_parser.add_argument(
@@ -4440,7 +4259,7 @@ def _handle_eval_retrieval(args):
     print((opts.out_dir / "report.md").read_text(encoding="utf-8"))
     print(f"[OUTPUT] {(opts.out_dir / 'results.json').resolve()}")
 
-    failed = bool(opts.errors)
+    failed = bool(opts.errors or opts.label_errors)
     if args.gate:
         baseline = json.loads(Path(args.gate).read_text(encoding="utf-8"))
         passed, lines = runner.compare(baseline, results, args.tolerance)
@@ -4451,6 +4270,12 @@ def _handle_eval_retrieval(args):
         failed |= not passed
     if opts.errors:
         print(f"[ERROR] {len(opts.errors)} hard case(s) crashed: {opts.errors}")
+    if opts.label_errors:
+        print(
+            f"[ERROR] {len(opts.label_errors)} question label(s) do not match the "
+            "extracted text, so those questions were not scored. Fix them in "
+            f"eval/retrieval/datasets/: {opts.label_errors}"
+        )
     if failed:
         sys.exit(1)
 
@@ -4561,7 +4386,10 @@ def _handle_eval_tasks(args):
             if "error" in grade:
                 print(f"  {task_id}: judge failed - {grade['error']}")
             else:
-                scores = " ".join(f"{a}={grade[a]}" for a in ft.AXES)
+                shown = ft.AXES + tuple(
+                    k for k in ft.RESEARCH_AXES + ft.RESEARCH_VERDICTS if k in grade
+                )
+                scores = " ".join(f"{a}={grade[a]}" for a in shown)
                 print(f"  {task_id}: {scores} | {grade['one_line']}")
 
         print(f"[JUDGE] {judge_model}")
@@ -4642,6 +4470,7 @@ def _handle_eval_tasks(args):
                 therock_url=args.therock_url,
                 fence=args.fence,
                 full_access=args.full_access,
+                research_command=args.research_command,
                 repeats=args.repeats,
                 meter=args.meter,
                 fireworks_account=args.fireworks_account,
@@ -4851,7 +4680,7 @@ def _handle_schedule(args):
                 f"  gaia schedule add --name {args.name} "
                 + (f'--at "{args.at}"' if args.at else f'--cron "{args.cron}"')
                 + ' --prompt "<text>"\n'
-                "Track progress: https://github.com/amd/gaia/issues/1019",
+                "Track progress: https://github.com/amd/gaia/issues/6470",
                 file=sys.stderr,
             )
             sys.exit(1)
@@ -4897,7 +4726,11 @@ def _handle_schedule(args):
             sink=args.sink,
             sink_args=sink_args,
         )
-        store.add(schedule)
+        try:
+            store.add(schedule)
+        except ValueError as exc:
+            print(f"❌ Cannot add schedule {args.name!r}: {exc}", file=sys.stderr)
+            sys.exit(1)
         if schedule.one_shot:
             print(
                 f"✅ Added one-time schedule {schedule.name!r} "
@@ -4920,6 +4753,7 @@ def _handle_schedule(args):
                 f"{s.name}  [{state}]  {when}  sink={s.sink}"
                 + (f"  next={nxt}" if nxt else "")
                 + (f"  missed={s.missed_count}" if s.missed_count else "")
+                + (f"  failing={s.failed_runs}" if s.failed_runs else "")
             )
         return
 
@@ -4946,6 +4780,8 @@ def _handle_schedule(args):
         print(f"created_at: {_local(s.created_at) if s.created_at else ''}")
         if s.one_shot and s.last_run:
             print(f"ran_at:     {_local(s.last_run)}")
+        elif s.last_run:
+            print(f"last_run:   {_local(s.last_run)}")
         nxt = (
             schedule_daemon.next_fire(s)
             if s.one_shot
@@ -4961,6 +4797,13 @@ def _handle_schedule(args):
                 f"missed:     {count} {runs} in all while the PC was off or "
                 "asleep, or the schedule daemon wasn't running "
                 f"(latest due {_local(s.last_missed)})"
+            )
+        if s.failed_runs:
+            runs = "run" if s.failed_runs == 1 else "runs"
+            when = f" (latest {_local(s.last_failed)})" if s.last_failed else ""
+            print(
+                f"failing:    {s.failed_runs} {runs} in a row failed since the "
+                f"last successful one{when}: {s.last_error or 'no error recorded'}"
             )
         return
 
@@ -4988,6 +4831,7 @@ def _handle_schedule(args):
             schedule = store.get(args.name)
         except KeyError as exc:
             _exit_unknown_schedule(exc)
+        cannot_run = (schedule_runner.ScheduleModelError, LemonadeClientError)
         if schedule.one_shot:
             claimed = store.claim_one_shot(
                 schedule.name, datetime.now(timezone.utc), due_only=False
@@ -5000,9 +4844,19 @@ def _handle_schedule(args):
                     file=sys.stderr,
                 )
                 sys.exit(1)
-            schedule_daemon.run_one_shot(claimed, store)
+            try:
+                schedule_daemon.run_one_shot(claimed, store)
+            except cannot_run as exc:
+                print(
+                    f"❌ Schedule {schedule.name!r} did not run: {exc}", file=sys.stderr
+                )
+                sys.exit(1)
             return
-        schedule_runner.fire(schedule)
+        try:
+            schedule_runner.fire(schedule)
+        except cannot_run as exc:
+            print(f"❌ Schedule {schedule.name!r} did not run: {exc}", file=sys.stderr)
+            sys.exit(1)
         store.mark_run(
             schedule.name,
             datetime.now(timezone.utc).isoformat(),
@@ -5086,9 +4940,10 @@ def _init_model_choices(args, profile: str):
 
     try:
         for model_id in args.skip_model:
-            setup_plan.set_model_skipped(model_id, True, profile)
+            # Checked against everything init can download, wherever chat runs.
+            setup_plan.set_model_skipped(model_id, True, profile, False)
         for model_id in args.download_model:
-            setup_plan.set_model_skipped(model_id, False, profile)
+            setup_plan.set_model_skipped(model_id, False, profile, False)
         if args.use_model:
             setup_plan.choose_chat_model(args.use_model, args.acknowledge_no_fit)
         if not args.plan:
@@ -5117,6 +4972,10 @@ def _init_model_choices(args, profile: str):
 
 
 def main():
+    from gaia.platform_guard import avoid_wmi
+
+    # Before anything asks `platform`: a timed-out WMI query crashes the process.
+    avoid_wmi()
     from gaia.logger import configure
 
     log_manager = configure()
@@ -5124,6 +4983,10 @@ def main():
     use_os_trust_store()
     parser = build_parser()
     log = get_logger(__name__)
+
+    retired = _retired_command_message(sys.argv[1:], parser)
+    if retired:
+        parser.exit(2, f"gaia: error: {retired}\n")
 
     args = parser.parse_args()
     apply_login_path()  # after parsing, so --version and -h skip the shell
@@ -5146,9 +5009,14 @@ def main():
         "--output-format": args.print_output_format is not None,
         "--verbose": args.print_verbose,
         "--max-steps": args.print_max_steps is not None,
+        "--time-limit": args.print_time_limit is not None,
         "--attempts": args.print_attempts is not None,
         "--dangerously-skip-permissions": args.print_skip_permissions,
         "--full-access": args.print_full_access,
+        "--disallowed-tools": bool(args.print_disallowed_tools),
+        "--no-web": args.print_no_web,
+        "--no-skills": args.print_no_skills,
+        "--yes": args.print_yes,
     }
     if args.print_prompt is None and any(print_only.values()):
         used = ", ".join(flag for flag, given in print_only.items() if given)
@@ -5178,6 +5046,9 @@ def main():
 
             if args.print_attempts > MAX_ATTEMPTS:
                 parser.error(f"--attempts takes 1 to {MAX_ATTEMPTS}.")
+        # Hardware, health and embedder clients read the server from the environment.
+        if args.base_url:
+            os.environ["LEMONADE_BASE_URL"] = args.base_url
         from gaia.print_mode import run as run_print_mode
 
         sys.exit(
@@ -5191,6 +5062,11 @@ def main():
                 skip_permissions=args.print_skip_permissions,
                 full_access=args.print_full_access,
                 base_url=args.base_url,
+                time_limit=args.print_time_limit,
+                disallowed_tools=args.print_disallowed_tools or (),
+                no_web=args.print_no_web,
+                no_skills=args.print_no_skills,
+                yes=args.print_yes,
             )
         )
 
@@ -5271,6 +5147,9 @@ def main():
 
     if args.action == "chat":
         _reject_flagship_only_flags(args)
+        # Hardware, health and embedder clients read the server from the environment.
+        if getattr(args, "base_url", None):
+            os.environ["LEMONADE_BASE_URL"] = args.base_url
 
     # Handle chat --ui: launch Agent UI server (backward compat)
     if args.action == "chat" and getattr(args, "ui", False):
@@ -5415,7 +5294,7 @@ def main():
                                 + (f": {detail}" if detail else "")
                             )
                     else:
-                        os.kill(pid, signal.SIGKILL)
+                        os.kill(pid, signal.SIGKILL)  # pylint: disable=no-member
                     print(f"Force-stopped Telegram adapter (pid {pid}).")
                     # A hard-killed adapter cannot clean up its PID file.
                     with contextlib.suppress(FileNotFoundError):
@@ -5759,7 +5638,7 @@ Let me know your answer!
                     print("   To delete them, restart Lemonade Server and try again:")
                     print()
                     print(
-                        "   1. Close any running GAIA commands (gaia chat, gaia email, etc.)"
+                        "   1. Close any running GAIA commands (gaia chat, gaia talk, etc.)"
                     )
                     print(
                         f"   2. Restart Lemonade Server "
@@ -5843,7 +5722,14 @@ Let me know your answer!
             skip_count = 0
             fail_count = 0
 
+            from gaia.installer.model_choice import withheld_reason
+
             for model_id in model_ids:
+                withheld = withheld_reason(model_id)
+                if withheld:
+                    console.print_download_error(withheld, model_id)
+                    fail_count += 1
+                    continue
                 # Check if already available
                 if client.check_model_available(model_id):
                     console.print_download_skipped(model_id)
@@ -6313,175 +6199,6 @@ Let me know your answer!
             print(f"[OUTPUT] {report_path.resolve()}")
             return
 
-        # Email-triage throughput benchmark: gaia eval benchmark (#1233)
-        if getattr(args, "eval_command", None) == "benchmark":
-            import tempfile
-
-            from gaia.eval.benchmark import (
-                THROUGHPUT_BAR_TPS,
-                THROUGHPUT_STRETCH_TPS,
-                load_ground_truth,
-                run_benchmark,
-                summarize_benchmark,
-            )
-            from gaia.eval.runner import REPO_ROOT, RESULTS_DIR
-
-            fixtures = REPO_ROOT / "tests" / "fixtures" / "email"
-            mbox_path = args.mbox_path or str(fixtures / "_stub_inbox.mbox")
-            gt_path = args.ground_truth or str(fixtures / "ground_truth.json")
-            ground_truth = (
-                load_ground_truth(gt_path) if Path(gt_path).exists() else None
-            )
-            if ground_truth is None:
-                print(
-                    f"[WARN] ground truth not found at {gt_path}; "
-                    "quality scoring skipped"
-                )
-
-            if args.ctx_size is not None and args.ctx_size <= 0:
-                print(
-                    f"[ERROR] --ctx-size must be a positive token count, got "
-                    f"{args.ctx_size}. Use e.g. 16384 (the #1892 envelope "
-                    "target) or omit the flag for the default."
-                )
-                sys.exit(1)
-
-            # ignore_cleanup_errors: the benchmark's per-email SQLite state.db can
-            # still hold a Windows file lock when the block exits (WinError 32 on
-            # rmtree). `results` is already captured, and the temp dir is a
-            # throwaway in the OS temp space, so a failed cleanup must not fail an
-            # otherwise-successful eval.
-            with tempfile.TemporaryDirectory(
-                prefix="gaia-bench-", ignore_cleanup_errors=True
-            ) as tmp:
-                results = run_benchmark(
-                    args.model,
-                    mbox_path=mbox_path,
-                    limit=args.limit,
-                    experiments=args.experiments,
-                    base_url=args.backend,
-                    ground_truth=ground_truth,
-                    db_path=str(Path(tmp) / "state.db"),
-                    ctx_size=args.ctx_size,
-                )
-
-            # An overflowed run measured nothing; summarizing it would print a
-            # 0.0 accuracy that reads like a quality collapse.
-            overflowed = [
-                r for r in results if r.get("error_kind") == "context_overflow"
-            ]
-            if overflowed:
-                print(
-                    f"[ERROR] {len(overflowed)} of {len(results)} experiment(s) hit "
-                    "the context window, so no scorecard was written for any of "
-                    f"them. {overflowed[0]['remedy']}",
-                    file=sys.stderr,
-                )
-                sys.exit(1)
-
-            run_id = f"bench-{args.model.replace('/', '-').lower()}"
-            summary = summarize_benchmark(results, run_id=run_id)
-            perf = summary["scorecard"]["performance"]
-            tps = perf.get("avg_tokens_per_second")
-            ttft = perf.get("avg_time_to_first_token")
-            bar_ok = isinstance(tps, (int, float)) and tps >= THROUGHPUT_BAR_TPS
-
-            print(f"\n{'=' * 60}")
-            print(f"  Email-Triage Throughput Benchmark — {args.model}")
-            print(f"{'=' * 60}")
-            print(
-                f"  Experiments:  {args.experiments}  " f"(limit {args.limit} emails)"
-            )
-            print(
-                f"  Throughput:   {tps} tok/s  "
-                f"(bar ≥{THROUGHPUT_BAR_TPS}, stretch {THROUGHPUT_STRETCH_TPS})"
-            )
-            print(f"  TTFT:         {ttft} s")
-            print(
-                f"  Ctx window:   "
-                f"{summary['scorecard'].get('ctx_size', 'unpinned (legacy)')}"
-            )
-            if results and isinstance(results[0].get("quality"), dict):
-                print(f"  Category acc: {results[0]['quality']['category_accuracy']}")
-            print(
-                f"  Committed bar (≥{THROUGHPUT_BAR_TPS} tok/s): "
-                f"{'PASS' if bar_ok else 'MISS'} (non-gating demo)"
-            )
-            print(f"{'=' * 60}\n")
-
-            # Variance report across repeated experiments.
-            if args.experiments > 1:
-                from gaia.eval.statistics import (
-                    compare_runs_by_model,
-                    print_comparison_report,
-                )
-
-                for report in compare_runs_by_model(results).values():
-                    print_comparison_report(report)
-
-            if args.output_dir:
-                from gaia.eval.scorecard import write_summary_md
-
-                outdir = Path(args.output_dir)
-                outdir.mkdir(parents=True, exist_ok=True)
-                (outdir / "scorecard.json").write_text(
-                    json.dumps(summary["scorecard"], indent=2, ensure_ascii=False),
-                    encoding="utf-8",
-                )
-                (outdir / "summary.md").write_text(
-                    write_summary_md(summary["scorecard"]), encoding="utf-8"
-                )
-                (outdir / "variance.json").write_text(
-                    json.dumps(summary["variance"], indent=2, ensure_ascii=False),
-                    encoding="utf-8",
-                )
-                wrote_quality = ""
-                if isinstance(summary.get("quality"), dict):
-                    # Aggregate acceptance metrics + run-to-run variance/CI (#1437,
-                    # #1894). The scorecard adapter reads this (never the harness),
-                    # preserving the harness→file→adapter loose coupling.
-                    (outdir / "quality.json").write_text(
-                        json.dumps(summary["quality"], indent=2, ensure_ascii=False),
-                        encoding="utf-8",
-                    )
-                    wrote_quality = " / quality.json"
-                print(
-                    f"[OUT] wrote scorecard.json / summary.md / variance.json"
-                    f"{wrote_quality} → {outdir}"
-                )
-
-            if getattr(args, "save_baseline", False):
-                RESULTS_DIR.mkdir(parents=True, exist_ok=True)
-                baseline_path = RESULTS_DIR / "bench_baseline.json"
-                baseline_path.write_text(
-                    json.dumps(summary["scorecard"], indent=2, ensure_ascii=False),
-                    encoding="utf-8",
-                )
-                print(f"[BASELINE] saved throughput baseline → {baseline_path}")
-
-            if args.compare:
-                cmp_path = Path(args.compare)
-                if not cmp_path.exists():
-                    print(f"[ERROR] baseline not found: {cmp_path}")
-                    sys.exit(1)
-                base = json.loads(cmp_path.read_text(encoding="utf-8"))
-                # Ctx envelope guard (#1892): a baseline measured at a
-                # different window is not comparable — hard error.
-                _compare_benchmark_ctx(
-                    current_ctx=summary["scorecard"].get("ctx_size"),
-                    baseline=base,
-                    baseline_path=str(cmp_path),
-                )
-                base_tps = base.get("performance", {}).get("avg_tokens_per_second")
-                if isinstance(base_tps, (int, float)) and isinstance(tps, (int, float)):
-                    print(
-                        f"[COMPARE] throughput {tps} vs baseline {base_tps} "
-                        f"tok/s (Δ{round(tps - base_tps, 1):+})  [non-gating]"
-                    )
-                else:
-                    print("[COMPARE] insufficient throughput data to compare")
-            return
-
         # Bare "gaia eval" without subcommand - show help
         print("Usage: gaia eval agent [OPTIONS]")
         print("")
@@ -6510,6 +6227,13 @@ Let me know your answer!
 
         sys.exit(custom_models_cli.handle(args))
 
+    if args.action == "agent-program":
+        from gaia.daemon.sidecars import (  # pylint: disable=reimported
+            gaiacpp_fetch_cli,
+        )
+
+        sys.exit(gaiacpp_fetch_cli.handle(args))
+
     # Handle Config command
     if args.action == "config":
         handle_config_command(args)
@@ -6522,12 +6246,16 @@ Let me know your answer!
 
     # Handle Cache command
     if args.action == "cache":
-        handle_cache_command(args)
+        from gaia import cache_cli
+
+        cache_cli.handle(args)
         return
 
-    # Handle Knowledge command (Tavily web research)
+    # Handle Knowledge command — see gaia.knowledge_cli
     if args.action == "knowledge":
-        handle_knowledge_command(args)
+        from gaia import knowledge_cli
+
+        knowledge_cli.handle(args)
         return
 
     # Handle Memory command
@@ -6549,6 +6277,13 @@ Let me know your answer!
         rc = skills_cli.handle(args)
         sys.exit(rc)
 
+    # Handle Project trust command
+    if args.action in ("project", "trust"):
+        from gaia import project_trust_cli
+
+        rc = project_trust_cli.handle(args)
+        sys.exit(rc)
+
     # Handle Diagnostics command
     if args.action == "diagnostics":
         handle_diagnostics_command(args)
@@ -6557,10 +6292,6 @@ Let me know your answer!
     # Handle Agent (export/import) command
     if args.action == "agent":
         handle_agent_command(args)
-        return
-
-    if args.action == "email":
-        handle_email_command(args)
         return
 
     # Handle API server command
@@ -6669,6 +6400,11 @@ Let me know your answer!
                 sys.exit(0)
             if status.stage == "load":
                 print(f"NOT READY: profile '{profile}' is downloaded but will not load")
+            elif status.model_list_unread:
+                print(
+                    f"NOT READY: profile '{profile}': the model server's model list "
+                    "can't be read"
+                )
             else:
                 print(f"NOT READY: profile '{profile}' needs setup")
             for reason in status.reasons:
@@ -6916,127 +6652,6 @@ def kill_process_by_port(port, lemonade_only=False):
     }
 
 
-def handle_email_command(args):
-    """
-    Handle the ``gaia email`` command — a thin client over the GAIA daemon (V2-8).
-
-    The query path (``-q`` / ``-i``) no longer runs the email agent in-process:
-    it ensures/attaches to the always-on daemon, ensures the ``email`` sidecar,
-    and streams ``POST /v1/email/query`` through the daemon relay, presenting ONLY
-    the daemon client token — the CLI never learns the sidecar's port or bearer
-    (design §0.0 "one contract, many front-doors", #2152). Local-LLM only (AC3):
-    no ``--use-claude`` — the sidecar rejects any non-local
-    provider.
-
-    ``--spec`` stays a fixed-function local operation (no daemon, no Lemonade).
-
-    Args:
-        args: Parsed command line arguments for the email command
-    """
-    log = get_logger(__name__)
-
-    # The query contract has no server field, so the sidecar would ignore it.
-    base_url = getattr(args, "base_url", None)
-    if base_url:
-        print(
-            "❌ gaia email does not accept --base-url: the email agent runs "
-            "inside the GAIA daemon and uses the daemon's LEMONADE_BASE_URL.\n"
-            "   To use another Lemonade server, run `gaia daemon stop`, set\n"
-            f"   LEMONADE_BASE_URL={base_url} in this shell, and re-run\n"
-            "   `gaia email` — the daemon restarts with that server.\n"
-            "   See https://amd-gaia.ai/docs/guides/email",
-            file=sys.stderr,
-        )
-        sys.exit(2)
-
-    # --spec: generate the HTML endpoint spec and open it in a browser.
-    # No LLM, no Lemonade, no daemon — short-circuit before any server check.
-    if getattr(args, "spec", False):
-        try:
-            from gaia_agent_email.spec_html import write_and_open_spec
-        except ImportError as e:
-            raise RuntimeError(
-                agent_import_error_message(
-                    e,
-                    "The email agent is not installed",
-                    "gaia-agent-email",
-                    next_step="Then re-run `gaia email --spec`.",
-                )
-            ) from e
-
-        dest = write_and_open_spec(getattr(args, "output", None))
-        print(dest)
-        sys.exit(0)
-
-    # Every email route relays through the daemon, including autonomy controls.
-    # Check its runtime dependencies before probing Lemonade or making a relay
-    # request, so a base install gets the actionable [api] remedy instead of
-    # "daemon exited early".
-    _check_daemon_deps()
-
-    # autonomy: a REST thin client over the daemon relay (#2516) — status/
-    # trust/set-level/pause/resume/kill need no LLM at all, and `run` does its
-    # own Lemonade check inside the sidecar call, so short-circuit here too.
-    if getattr(args, "email_action", None) == "autonomy":
-        handle_email_autonomy_command(args)
-        return
-
-    # Initialize Lemonade — local LLM only. The daemon spawns the sidecar, but the
-    # sidecar's inference runs on Lemonade; this upfront check gives a friendlier
-    # "start Lemonade first" message than a mid-stream error event (AC: Lemonade
-    # down → loud actionable error).
-    if not getattr(args, "no_lemonade_check", False):
-        success, _ = initialize_lemonade_for_agent(
-            agent="email",
-            skip_if_external=True,
-            # Deliberately omitted: use_claude — see AC3.
-        )
-        if not success:
-            sys.exit(1)
-
-    verbose = bool(getattr(args, "verbose", False))
-    query = getattr(args, "query", None)
-    interactive = getattr(args, "interactive", False)
-
-    if not query and not interactive:
-        # No query and not interactive — print a helpful usage hint (parity with
-        # the retired in-process CLI).
-        print(
-            "Usage: gaia email -q '<your question>' OR gaia email -i\n"
-            "Examples:\n"
-            "  gaia email -q 'Triage my inbox'\n"
-            "  gaia email -q 'Summarize my unread emails from this week'\n"
-            "  gaia email -i\n"
-        )
-        sys.exit(0)
-
-    from gaia.daemon.agent_query import ConsoleRenderer, run_query
-    from gaia.daemon.errors import DaemonError
-
-    model = getattr(args, "model", None)
-    trace = bool(getattr(args, "trace", False))
-
-    try:
-        if interactive:
-            sys.exit(_email_interactive(model=model, verbose=verbose, trace=trace))
-        renderer = ConsoleRenderer(verbose=verbose)
-        outcome = run_query(
-            "email",
-            query,
-            model=model,
-            renderer=renderer,
-            verbose=verbose,
-            trace=trace,
-        )
-        sys.exit(outcome.exit_code)
-    except DaemonError as e:
-        # Daemon unreachable / relay refusal / sidecar dead → loud, actionable,
-        # no silent in-process fallback (CLAUDE.md fail-loudly rule).
-        log.error("email thin client failed: %s", e)
-        print(f"❌ {e}", file=sys.stderr)
-        sys.exit(1)
-
-
 def _gaia_chat_relay(kwargs: dict) -> int:
     """`gaia chat` on the GAIA agent's own binary, through the daemon relay.
 
@@ -7099,235 +6714,6 @@ def _gaia_chat_relay(kwargs: dict) -> int:
         get_logger(__name__).error("gaia chat relay failed: %s", e)
         print(f"❌ {e}", file=sys.stderr)
         return 1
-
-
-def _email_interactive(*, model, verbose: bool, trace: bool = False) -> int:
-    """REPL over the daemon relay — reads queries from stdin until EOF / ``/quit``.
-
-    Maintains the transcript locally and pushes it as ``context`` on each turn
-    (the host owns the transcript; the stateless sidecar is fed the relevant
-    slice per request, spec §2.4). ``trace`` writes one trace file per turn.
-    """
-    from gaia.daemon.agent_query import ConsoleRenderer, run_query
-
-    print("Email Triage Agent — interactive. Enter a query, or '/quit' to exit.\n")
-    transcript: list = []
-    while True:
-        try:
-            query = input("email> ").strip()
-        except (EOFError, KeyboardInterrupt):
-            print()
-            return 0
-        if not query:
-            continue
-        if query in ("/quit", "/exit", "/q"):
-            return 0
-        renderer = ConsoleRenderer(verbose=verbose)
-        outcome = run_query(
-            "email",
-            query,
-            context=list(transcript),
-            model=model,
-            renderer=renderer,
-            verbose=verbose,
-            trace=trace,
-        )
-        # Only extend the transcript on a successful turn — a failed run must not
-        # poison the context of the next one.
-        if outcome.terminal_type == "final":
-            transcript.append({"role": "user", "content": query})
-            transcript.append(
-                {"role": "assistant", "content": outcome.final_answer or ""}
-            )
-
-
-def _print_autonomy_status(body: dict) -> None:
-    # Whitelisted fields only, coerced to known-safe scalars — never format a
-    # relay response verbatim, so it can't echo back anything unexpected.
-    # The scope-count key is read indirectly (not `.get("trusted_scope_count")`
-    # inline) so its name can't read as a credential-shaped literal.
-    scope_count_key = "trusted_scope_count"
-    level = str(body.get("level"))
-    enabled = bool(body.get("enabled"))
-    min_samples = int(body.get("trust_min_samples") or 0)
-    threshold = float(body.get("trust_threshold") or 0.0)
-    scope_count = int(body.get(scope_count_key) or 0)
-    print(f"level: {level}  enabled: {enabled}")
-    print(
-        f"trust: min_samples={min_samples} "
-        f"threshold={threshold} "
-        f"trusted_scopes={scope_count}"
-    )
-    _print_last_autonomy_cycle(body.get("last_cycle"))
-
-
-def _print_last_autonomy_cycle(last) -> None:
-    # Same whitelist contract as _print_autonomy_status.
-    if not isinstance(last, dict):
-        print("last cycle: none has run yet")
-        return
-    from datetime import datetime
-
-    finished = float(last.get("finished_at") or 0.0)
-    started = float(last.get("started_at") or finished)
-    when = datetime.fromtimestamp(finished).strftime("%Y-%m-%d %H:%M:%S")
-    took = max(0.0, finished - started)
-    level = str(last.get("level"))
-    if last.get("outcome") != "completed":
-        print(f"last cycle: FAILED at {when} after {took:.0f}s (level {level})")
-        print(f"  error: {str(last.get('error'))}")
-        return
-    print(f"last cycle: completed at {when} in {took:.0f}s (level {level})")
-    print(
-        f"  executed={int(last.get('executed') or 0)} "
-        f"proposals={int(last.get('proposals') or 0)} "
-        f"skipped={int(last.get('skipped') or 0)} "
-        f"already_proposed={int(last.get('already_proposed') or 0)} "
-        f"errors={int(last.get('errors') or 0)}"
-    )
-    stopped = last.get("stopped")
-    if stopped:
-        print(f"  stopped early: {str(stopped)}")
-
-
-def _print_autonomy_trust(body: dict) -> None:
-    scopes = body.get("scopes") or []
-    if not scopes:
-        print("No trust ledger entries yet.")
-        return
-    # Same whitelist contract as _print_autonomy_status.
-    for s in scopes:
-        action_type = str(s.get("action_type"))
-        scope = str(s.get("scope"))
-        positive = int(s.get("positive") or 0)
-        total = int(s.get("total") or 0)
-        mark = "trusted" if s.get("trusted") else "not trusted"
-        print(f"{action_type} / {scope}: {positive}/{total} ({mark})")
-
-
-def _print_autonomy_run(body: dict) -> None:
-    # Same whitelist contract as _print_autonomy_status.
-    executed = len(body.get("executed") or [])
-    proposals = len(body.get("proposals") or [])
-    skipped = int(body.get("skipped") or 0)
-    already_proposed = int(body.get("already_proposed") or 0)
-    errors = len(body.get("errors") or [])
-    stopped = body.get("stopped")
-    print(
-        f"executed={executed} proposals={proposals} "
-        f"skipped={skipped} already_proposed={already_proposed} errors={errors}"
-    )
-    if stopped:
-        print(f"stopped early: {stopped}")
-
-
-def handle_email_autonomy_command(args) -> None:
-    """``gaia email autonomy ...`` — thin client over the sidecar's
-    session-scoped ``/v1/email/agent/autonomy*`` REST surface (#2516).
-
-    Every subcommand shares one persistent ``--session-id`` (default
-    ``"cli"``) so a level set by one invocation is still in effect for the
-    next — autonomy state lives on the session's in-memory agent, not on
-    disk. A session is created (idempotently) before each call. Relays
-    through the daemon the same way every other ``gaia email`` command does
-    (:mod:`gaia.daemon.agent_control`) — no second auth scheme.
-    """
-    from gaia.daemon.agent_control import may_still_be_running, relay_json
-    from gaia.daemon.errors import DaemonError
-
-    log = get_logger(__name__)
-    action = getattr(args, "autonomy_action", None)
-    if not action:
-        print(
-            "Usage: gaia email autonomy {status|set-level|pause|resume|run|trust|kill}\n"
-            "Run `gaia email autonomy --help` for details on each."
-        )
-        sys.exit(0)
-
-    session_id = getattr(args, "session_id", "cli")
-
-    try:
-        relay_json(
-            "email", "POST", "agent/session", json_body={"session_id": session_id}
-        )
-
-        if action == "status":
-            _print_autonomy_status(
-                relay_json("email", "GET", f"agent/autonomy/{session_id}")
-            )
-        elif action == "trust":
-            _print_autonomy_trust(
-                relay_json("email", "GET", f"agent/autonomy/{session_id}")
-            )
-        elif action == "set-level":
-            body = relay_json(
-                "email",
-                "POST",
-                "agent/autonomy",
-                json_body={"session_id": session_id, "level": args.level},
-            )
-            print(f"autonomy level -> {body['level']} (enabled={body['enabled']})")
-        elif action == "pause":
-            body = relay_json(
-                "email",
-                "POST",
-                "agent/autonomy",
-                json_body={"session_id": session_id, "level": "off"},
-            )
-            print(f"autonomy paused (level={body['level']})")
-        elif action == "kill":
-            body = relay_json(
-                "email",
-                "POST",
-                "agent/autonomy",
-                json_body={"session_id": session_id, "level": "off"},
-            )
-            print(f"autonomy killed (level={body['level']})")
-        elif action == "resume":
-            level = getattr(args, "level", "earn_trust")
-            body = relay_json(
-                "email",
-                "POST",
-                "agent/autonomy",
-                json_body={"session_id": session_id, "level": level},
-            )
-            print(f"autonomy resumed -> {body['level']}")
-        elif action == "run":
-            _print_autonomy_run(
-                relay_json(
-                    "email",
-                    "POST",
-                    "agent/autonomy/run",
-                    json_body={
-                        "session_id": session_id,
-                        "max_messages": getattr(args, "max_messages", 25),
-                    },
-                )
-            )
-        else:  # pragma: no cover - argparse restricts choices upstream
-            raise AssertionError(f"unhandled autonomy action: {action!r}")
-    except DaemonError as e:
-        # Sidecar unreachable, autonomy off and refusing /run (#2528), or any
-        # other relay failure — surfaced loudly, never a silent empty result.
-        # #2617: this does print the same text twice (log.error to stderr,
-        # then the stderr print below) -- kept deliberately. log.error is the
-        # durable record `gaia diagnostics` bundles from ~/.gaia/gaia.log;
-        # dropping it would make a reported failure invisible to a bug
-        # report. The stderr print matches the ❌ convention every other
-        # `except DaemonError` handler in this file uses. The duplicate line
-        # is cosmetic; a missing log record is not.
-        log.error("email autonomy %s failed: %s", action, e)
-        print(f"❌ {e}", file=sys.stderr)
-        if action == "run" and may_still_be_running(e):
-            print(
-                "   If the cycle started, it keeps running on the agent. Run "
-                f"`gaia email autonomy status --session-id {session_id}` to "
-                "see its result once it finishes.",
-                file=sys.stderr,
-            )
-        sys.exit(1)
-
-    sys.exit(0)
 
 
 def handle_api_command(args):
@@ -7464,73 +6850,6 @@ def handle_perf_vis_command(args):
 
     if exit_code != 0:
         sys.exit(exit_code)
-
-
-def _print_knowledge_usage(client, show_session=True):
-    """Print a one-line credit-usage summary for a Tavily client."""
-    usage = client.usage()
-    cap = usage["cap"]
-    cap_str = "unlimited" if cap is None else str(cap)
-    # A bare `usage` run spends nothing, so its session figure would always be 0.
-    session = f", {usage['session_credits']} this session" if show_session else ""
-    print(
-        f"\n💳 Credits used: {usage['total_credits']} total{session} (cap: {cap_str})"
-    )
-
-
-def handle_knowledge_command(args):
-    """Handle `gaia knowledge` — Tavily web research with caching + budget.
-
-    Args:
-        args: Parsed command-line arguments
-    """
-    action = getattr(args, "knowledge_action", None)
-    if action is None:
-        print("❌ Error: No knowledge action specified")
-        print("Available actions: search, extract, usage")
-        print("Run 'gaia knowledge --help' for more information")
-        return
-
-    from gaia.web.tavily import (
-        BudgetConfig,
-        TavilyBudgetExceeded,
-        TavilyClient,
-        TavilyConfigError,
-    )
-
-    budget = BudgetConfig(
-        cap=getattr(args, "budget", None),
-        block=not getattr(args, "no_block", False),
-    )
-    client = TavilyClient(budget=budget)
-    try:
-        if action == "search":
-            result = client.search(
-                args.query, search_depth=args.depth, max_results=args.max_results
-            )
-            source = result.get("source", "tavily")
-            print(f"\n=== Results for {args.query!r} (source: {source}) ===")
-            for i, r in enumerate(result.get("results", []), 1):
-                print(f"{i}. {r.get('title', '')}")
-                print(f"   {r.get('url', '')}")
-                content = r.get("content") or r.get("snippet") or ""
-                if content:
-                    print(f"   {content[:200]}")
-            _print_knowledge_usage(client)
-        elif action == "extract":
-            result = client.extract(args.urls, extract_depth=args.depth)
-            print(json.dumps(result, indent=2))
-            _print_knowledge_usage(client)
-        elif action == "usage":
-            _print_knowledge_usage(client, show_session=False)
-    except TavilyBudgetExceeded as e:
-        print(f"🛑 {e}")
-        sys.exit(1)
-    except TavilyConfigError as e:
-        print(f"❌ {e}")
-        sys.exit(1)
-    finally:
-        client.close()
 
 
 def handle_config_command(args):
@@ -7722,6 +7041,42 @@ def _print_gateway_models(models, state):
         print(f"\n⚠️  {describe_unavailable(state.active_model, active_failure)}")
 
 
+def _use_hybrid(manager) -> None:
+    """``gaia gateway use hybrid``: route each turn between two gateway models."""
+    from gaia.config import GaiaConfig
+    from gaia.llm.hybrid import HYBRID_MODEL_ID, HybridConfigError, HybridSettings
+
+    cfg = GaiaConfig.load()
+    try:
+        settings = HybridSettings.load(cfg)
+    except HybridConfigError as e:
+        print(f"❌ {_cli_wording(e)}", file=sys.stderr)
+        sys.exit(1)
+    discovered = {m.id for m in manager.list_models()}
+    missing = [
+        m
+        for m in dict.fromkeys(
+            (settings.cheap_model, settings.strong_model, settings.classifier_model)
+        )
+        if discovered and m not in discovered
+    ]
+    if missing:
+        print(
+            f"❌ hybrid needs {', '.join(missing)}, which the gateway doesn't list.\n"
+            "   Run `gaia gateway models` to see what is available, then set "
+            "hybrid_cheap_model / hybrid_strong_model with `gaia config set`.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+    cfg.set("default_model", HYBRID_MODEL_ID)
+    cfg.save()
+    print(
+        f"✅ hybrid is now the default model: each turn runs on "
+        f"{settings.cheap_model} or {settings.strong_model}, picked by "
+        f"{settings.classifier_model}."
+    )
+
+
 def _warn_if_default_model_unavailable(model_id: str) -> None:
     """One stderr line when the saved default last failed with a 404.
 
@@ -7887,6 +7242,7 @@ def handle_gateway_command(args):
         recall_token,
         remember_token,
     )
+    from gaia.llm.hybrid import is_hybrid_model
     from gaia.llm.lemonade_client import CloudModelUnavailableError
 
     action = getattr(args, "gateway_action", None)
@@ -8135,6 +7491,10 @@ def handle_gateway_command(args):
             print(f"   Active model is now: {updated.active_model or '(none)'}")
             return
 
+        if action == "use" and is_hybrid_model(args.model):
+            _use_hybrid(manager)
+            return
+
         if action == "use":
             discovered = {m.id for m in manager.list_models()}
             if discovered and args.model not in discovered:
@@ -8262,170 +7622,6 @@ def handle_gateway_command(args):
             f"   Fix or delete ~/.gaia/config.json and try again.",
             file=sys.stderr,
         )
-        sys.exit(1)
-
-
-def _is_link(path) -> bool:
-    """True for a symlink or a Windows junction, which ``is_symlink`` misses."""
-    path = str(path)
-    if os.path.islink(path):
-        return True
-    isjunction = getattr(os.path, "isjunction", None)  # Python 3.12+
-    if isjunction is not None:
-        return isjunction(path)
-    import stat as stat_mod
-
-    try:
-        tag = getattr(os.lstat(path), "st_reparse_tag", 0)
-    except OSError:  # gone; the size walk reports it as unreadable
-        return False
-    # Only junctions: OneDrive placeholders are reparse points too, and hold real data.
-    return tag == getattr(stat_mod, "IO_REPARSE_TAG_MOUNT_POINT", -1)
-
-
-def _cache_folder_usage(folder: Path) -> tuple:
-    """Bytes, file count and unreadable entries under *folder*, without following links."""
-    size = files = 0
-    # Files and folders that couldn't be read, so the size never quietly comes up short.
-    unreadable: list = []
-    for dirpath, dirnames, filenames in os.walk(folder, onerror=unreadable.append):
-        dirnames[:] = [d for d in dirnames if not _is_link(os.path.join(dirpath, d))]
-        for name in filenames:
-            try:
-                stat = os.lstat(os.path.join(dirpath, name))
-            except OSError as e:
-                unreadable.append(e)
-                continue
-            size += stat.st_size
-            files += 1
-    return size, files, len(unreadable)
-
-
-def _print_cache_folders() -> None:
-    """Print each folder under GAIA's cache root, largest first, with its size."""
-    from gaia.home import gaia_home
-    from gaia.security import _format_size
-
-    root = gaia_home() / "cache"
-    print(f"\n=== GAIA caches ({root}) ===")
-    if not root.is_dir():
-        print("No caches yet.")
-        return
-    rows = []
-    for entry in root.iterdir():
-        if _is_link(entry):
-            continue
-        if entry.is_dir():
-            rows.append((entry.name, *_cache_folder_usage(entry)))
-        elif entry.is_file():
-            try:
-                rows.append((entry.name, entry.lstat().st_size, 1, 0))
-            except OSError:  # removed or locked while listing
-                rows.append((entry.name, 0, 0, 1))
-    if not rows:
-        print("No caches yet.")
-        return
-    rows.sort(key=lambda row: (-row[1], row[0]))
-    width = max(len(row[0]) for row in rows + [("Total",)])
-
-    def count(files: int) -> str:
-        return f"{files:>7,} {'file' if files == 1 else 'files'}"
-
-    for name, size, files, unreadable in rows:
-        note = f"  ({unreadable} unreadable)" if unreadable else ""
-        print(f"  {name:<{width}}  {_format_size(size):>10}  {count(files)}{note}")
-    total_size = sum(row[1] for row in rows)
-    total_files = sum(row[2] for row in rows)
-    print(f"  {'Total':<{width}}  {_format_size(total_size):>10}  {count(total_files)}")
-
-
-def handle_cache_command(args):
-    """Handle the cache management command.
-
-    Args:
-        args: Parsed command-line arguments
-    """
-    if not hasattr(args, "cache_action") or args.cache_action is None:
-        print("❌ Error: No cache action specified")
-        print("Available actions: status, clear")
-        print("Run 'gaia cache --help' for more information")
-        return
-
-    from gaia.mcp.context7_cache import Context7Cache, Context7RateLimiter
-    from gaia.mcp.external_services import Context7Service
-
-    try:
-        if args.cache_action == "status":
-            _print_cache_folders()
-
-            is_available = Context7Service.check_availability()
-
-            print("\n=== Context7 Service Status ===")
-            if is_available:
-                print("✓ Context7 is AVAILABLE (npx found, service working)")
-            else:
-                print(
-                    "- Context7 (optional) is not available: npx not found or "
-                    "the service failed"
-                )
-                print(
-                    "  Library documentation search is off; nothing else is affected."
-                )
-
-            # Show cache and rate limiter status
-            cache = Context7Cache()
-            rate_limiter = Context7RateLimiter()
-
-            status = rate_limiter.get_status()
-
-            print("\n=== Context7 Cache Status ===")
-            print(f"Cache directory: {cache.cache_dir}")
-            # Use glob to count library ID files since _load_json is protected
-            library_id_count = (
-                len(list(cache.cache_dir.glob("library_*.json")))
-                if hasattr(cache, "cache_dir")
-                else 0
-            )
-            print(f"Library IDs cached: {library_id_count}")
-
-            # Count documentation files
-            doc_count = len(list(cache.docs_dir.glob("*.json")))
-            print(f"Documentation entries: {doc_count}")
-
-            print("\n=== Rate Limiter Status ===")
-            print(
-                f"Tokens available: {status['tokens_available']}/{status['max_tokens']}"
-            )
-            print(f"Circuit breaker: {'OPEN' if status['circuit_open'] else 'CLOSED'}")
-            print(f"Consecutive failures: {status['consecutive_failures']}")
-
-            if status["tokens_available"] < 5:
-                print("\n⚠️  Warning: Low token count. Rate limiting may occur soon.")
-
-            if not is_available:
-                print("\n💡 To enable Context7:")
-                print("   1. Install Node.js and npm")
-                print("   2. Ensure 'npx' is in your PATH")
-                print(
-                    "   3. Optionally add CONTEXT7_API_KEY to .env for higher rate limits"
-                )
-
-        elif args.cache_action == "clear":
-            # Clear caches
-            if args.all or args.context7:
-                cache = Context7Cache()
-                cache.clear()
-                print("✓ Context7 cache cleared")
-            else:
-                # Same refusal-must-not-report-success rule as `gaia kill`.
-                print("❌ Specify --context7 or --all to clear caches")
-                print("Run 'gaia cache clear --help' for more information")
-                sys.exit(1)
-
-    except Exception as e:
-        cache_log = get_logger(__name__)
-        cache_log.error(f"Error managing cache: {e}")
-        print(f"❌ Error: {e}")
         sys.exit(1)
 
 
@@ -9465,6 +8661,7 @@ def _diag_log_files(gaia_dir):
     files += [(p, "logs/") for p in sorted((gaia_dir / "logs").glob("*.log"))]
     files.append((daemon_paths.log_path(), "host/"))
     files.append((lemonade_home() / "lemonade" / "lemond.log", "lemonade/"))
+    files.append((gaia_dir / "discord" / "bridge.log", "discord/"))
     files += [
         (p, f"agents/{p.parent.parent.name}/logs/")
         for p in sorted(gaia_agents_dir().glob("*/logs/*.log"))
@@ -9546,13 +8743,19 @@ def _diag_gaia_processes(gaia_dir):
     except (OSError, ValueError, AttributeError) as e:
         notes.append(f"lemonade: unreadable {state_path}: {type(e).__name__}")
 
-    pid_path = gaia_dir / "backend.pid"
-    try:
-        found.append(("ui backend", int(pid_path.read_text().strip()), None))
-    except FileNotFoundError:
-        pass
-    except (OSError, ValueError) as e:
-        notes.append(f"ui backend: unreadable {pid_path}: {type(e).__name__}")
+    # One record per desktop app (backend-pids/<app pid>.pid); backend.pid is
+    # what older apps wrote.
+    pid_dir = gaia_dir / "backend-pids"
+    pid_paths = [gaia_dir / "backend.pid"]
+    if pid_dir.is_dir():
+        pid_paths += sorted(pid_dir.glob("*.pid"))
+    for pid_path in pid_paths:
+        try:
+            found.append(("ui backend", int(pid_path.read_text().strip()), None))
+        except FileNotFoundError:
+            pass
+        except (OSError, ValueError) as e:
+            notes.append(f"ui backend: unreadable {pid_path}: {type(e).__name__}")
     return found, notes
 
 
@@ -9750,6 +8953,15 @@ def handle_agent_command(args):
     Args:
         args: Parsed command-line arguments
     """
+    # A removed agent is refused before any verb prints or writes anything.
+    from gaia.retired_agents import RETIRED_AGENT_IDS, retired_agent_message
+
+    for field in ("agent_id", "id", "name"):
+        named = getattr(args, field, None)
+        if named in RETIRED_AGENT_IDS:
+            print(f"❌ {retired_agent_message(named)}", file=sys.stderr)
+            sys.exit(1)
+
     # Developer-workflow actions (init / version / test) handled in cli_agent.
     from gaia import cli_agent
 
@@ -9760,7 +8972,7 @@ def handle_agent_command(args):
         print("❌ Error: No agent action specified")
         print(
             "Available actions: test, configure, health, status, export, import, "
-            "install, list"
+            "install"
         )
         print("Run 'gaia agent --help' for more information")
         sys.exit(1)
@@ -9771,78 +8983,9 @@ def handle_agent_command(args):
         handle_agent_import(args)
     elif args.agent_action == "install":
         handle_agent_install(args)
-    elif args.agent_action == "list":
-        handle_agent_list(args)
     else:
         print(f"❌ Unknown agent action: {args.agent_action}")
         sys.exit(1)
-
-
-def handle_agent_list(_args):
-    """List installed agents and the agents available to install.
-
-    Read-only discovery for ``gaia agent install`` — degrades to an
-    installed-only listing (with a loud note) if the hub catalog is unreachable,
-    never a silent empty result.
-    """
-    from gaia.hub import catalog, installer
-
-    installed = installer.list_installed()
-
-    available = []
-    offline = False
-    try:
-        result = catalog.load_index()
-        available = result.agents
-        offline = result.offline
-    except Exception as exc:  # noqa: BLE001 - CLI boundary: degrade loudly
-        print(f"⚠ Could not reach the agent catalog: {exc}", file=sys.stderr)
-
-    available_ids = {e.get("id") for e in available}
-    if available:
-        suffix = " (offline cache)" if offline else ""
-        print(f"Available to install{suffix}:")
-        for entry in sorted(available, key=lambda a: a.get("id", "")):
-            aid = entry.get("id", "?")
-            ver = entry.get("latest_version", "?")
-            mark = ""
-            if aid in installed:
-                # Show what is on disk; build metadata (+...) doesn't change the release.
-                local = installed[aid].version
-                if ver == "?" or local.split("+", 1)[0] == str(ver).split("+", 1)[0]:
-                    mark = "  [installed]"
-                else:
-                    mark = f"  [installed; catalog latest {ver}]"
-                ver = local
-            gate, gate_error = catalog.listing_core_gate(entry)
-            if gate_error:
-                mark += f"  [unreadable min_gaia_version: {gate_error}]"
-            if gate.requires_gaia_version:
-                mark += f"  [needs GAIA {gate.requires_gaia_version}+"
-                mark += (
-                    f"; installs {gate.installable_version}]"
-                    if gate.installable_version
-                    else "]"
-                )
-            print(f"  {aid:<24} {ver}{mark}")
-
-    extra = [aid for aid in sorted(installed) if aid not in available_ids]
-    if extra:
-        print("\nInstalled (not in the catalog):")
-        for aid in extra:
-            print(f"  {aid:<24} {installed[aid].version}")
-
-    if not available and not installed:
-        print("No agents installed, and the agent catalog is unavailable.")
-    else:
-        print("\nInstall one with: gaia agent install <id>")
-        if any(
-            catalog.listing_core_gate(e)[0].requires_gaia_version for e in available
-        ):
-            print(
-                f"A version marked 'needs GAIA' installs after upgrading the core: "
-                f"{catalog.core_upgrade_hint()}"
-            )
 
 
 def handle_agent_install(args):
@@ -9850,7 +8993,7 @@ def handle_agent_install(args):
 
     Thin CLI wrapper over :func:`gaia.hub.installer.install` — the headless
     equivalent of the Agent UI's Install button, so a machine with no UI can
-    provision a sidecar agent (e.g. ``email``) instead of resorting to a raw
+    provision a sidecar agent (e.g. ``gaia``) instead of resorting to a raw
     ``python -c`` one-liner.
     """
     from gaia.hub import installer
@@ -9877,10 +9020,6 @@ def handle_agent_install(args):
         sys.exit(1)
     except Exception as exc:  # noqa: BLE001 - CLI boundary: surface loudly, exit 1
         print(f"❌ Could not install '{agent_id}': {exc}", file=sys.stderr)
-        print(
-            "   If the id is wrong, run `gaia agent list` to see available agents.",
-            file=sys.stderr,
-        )
         sys.exit(1)
 
     print(f"✅ Installed '{result.id}' v{result.version} to {result.path}")
@@ -10147,13 +9286,9 @@ def _handle_daemon_status():
 
 def _daemon_http_detail(response) -> str:
     """The actionable `detail` from a daemon error response (or the raw status)."""
-    try:
-        body = response.json()
-    except ValueError:
-        return f"HTTP {response.status_code}"
-    if isinstance(body, dict) and body.get("detail"):
-        return str(body["detail"])
-    return f"HTTP {response.status_code}"
+    from gaia.daemon.client import error_detail
+
+    return error_detail(response)
 
 
 def _fetch_daemon_agents(inst) -> list:
@@ -11800,7 +10935,7 @@ def handle_mcp_serve(args):
 
 
 def handle_mcp_tui(args):
-    """Start the TUI control MCP server (drives a running `gaia-tui --control`)."""
+    """Start the TUI control MCP server (drives a running `gaia-cli --control`)."""
     log = get_logger(__name__)
 
     try:
@@ -11820,7 +10955,7 @@ def handle_mcp_tui(args):
             print("=" * 60)
             print("🖥️  GAIA TUI Control MCP Server")
             print("=" * 60)
-            print("   Target  : the running `gaia-tui --control` session")
+            print("   Target  : the running `gaia-cli --control` session")
             print(f"   MCP     : http://{args.host}:{args.port}/mcp")
             try:
                 tool_count = len(

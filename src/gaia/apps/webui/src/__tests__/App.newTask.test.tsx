@@ -10,13 +10,16 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('../services/api');
 vi.mock('../services/memoryApi');
+vi.mock('../services/scheduleApi');
 
 import App from '../App';
 import * as api from '../services/api';
 import * as memoryApi from '../services/memoryApi';
-import { useChatStore } from '../stores/chatStore';
+import * as scheduleApi from '../services/scheduleApi';
+import { NEW_CHAT_RESEARCH, researchOn, useChatStore } from '../stores/chatStore';
 import { useModelStore } from '../stores/modelStore';
 import type { Session, SetupCheck, StartCard } from '../types';
+import { AGENT_PROGRAMS } from '../test/setupApiMocks';
 
 const mocked = vi.mocked(api);
 
@@ -64,6 +67,7 @@ beforeEach(() => {
         model_loaded: 'Gemma-4-E4B-it-GGUF',
     } as never);
     mocked.listAgents.mockResolvedValue({ agents: [], total: 0 });
+    mocked.listSkills.mockResolvedValue({ skills: [], invalid: {} });
     mocked.listSessions.mockResolvedValue({ sessions: [], total: 0 });
     mocked.getActiveRuns.mockResolvedValue({ session_ids: [], queued: [], awaiting_user: {} });
     mocked.getContextUsage.mockResolvedValue({ available: false, reason: 'No answer yet.' });
@@ -78,6 +82,7 @@ beforeEach(() => {
         compatible: true, blockers: [], warnings: [], ram_gb: 32, gpu_name: null, npu_detected: false, disk_free_gb: 100,
     } as never);
     mocked.getSetupStatus.mockResolvedValue({ state: 'idle' });
+    mocked.getAgentPrograms.mockResolvedValue(AGENT_PROGRAMS);
     mocked.getLemonadeTarget.mockResolvedValue({
         mode: 'gaia', saved_mode: null, source: 'gaia', base_url: null, saved_base_url: null,
         api_key_stored: false, gaia_installed: false, offer: false, what_gaia_does: '',
@@ -93,7 +98,7 @@ beforeEach(() => {
     useChatStore.setState({
         sessions: [], currentSessionId: null, messages: [], agents: [], pendingPrompt: null,
         draftPermissionMode: 'ask', defaultPermissionMode: 'ask', showMemoryDashboard: false, showSchedules: false, settingsSection: null,
-        draftDocumentIds: [], draftPrivate: false, locale: 'en',
+        draftDocumentIds: [], draftPrivate: false, research: {}, locale: 'en',
     });
 });
 
@@ -227,6 +232,18 @@ describe('a new chat', () => {
         await waitFor(() => expect(mocked.createSession).toHaveBeenCalledOnce());
         expect(mocked.createSession.mock.calls[0][0]).toMatchObject({ folders: ['/home/u/site'] });
         expect(useChatStore.getState().draftFolder).toBeNull();
+    });
+
+    it('researches the first message when Research was on, and keeps it on for that chat only', async () => {
+        useChatStore.setState({ research: { [NEW_CHAT_RESEARCH]: true } });
+        render(<App />);
+        await sendFirstMessage('the history of RISC-V');
+
+        await waitFor(() => expect(mocked.sendMessageStream).toHaveBeenCalled());
+        expect(mocked.sendMessageStream.mock.calls[0].slice(0, 2)).toEqual(['sess-new-0001', '/research the history of RISC-V']);
+        const state = useChatStore.getState();
+        expect(researchOn(state, 'sess-new-0001')).toBe(true);
+        expect(researchOn(state, null)).toBe(false);
     });
 
     it('sends "ask" too, so a full-access default in config cannot hide behind the chip', async () => {
@@ -387,9 +404,10 @@ describe('a private new chat', () => {
             id: 'sess-new-0001', title: 'New Task', message_count: 0, agent_type: 'gaia', private: !!data?.private,
         }));
         render(<App />);
-        const chip = await screen.findByRole('button', { name: 'Turn on private chat' });
+        const chip = await screen.findByRole('button', { name: 'Memory for this chat: Remember across chats: on' });
         await userEvent.click(chip);
-        expect(chip).toHaveAccessibleName('Turn off private chat');
+        await userEvent.click(screen.getByRole('button', { name: /Private chat/ }));
+        expect(chip).toHaveAccessibleName('Memory for this chat: Private');
         await sendFirstMessage('Please remember: my bank PIN hint is the dog');
 
         await waitFor(() => expect(mocked.sendMessageStream).toHaveBeenCalled());
@@ -639,7 +657,7 @@ describe('opening the app on a chat link', () => {
 
 describe('sidebar destinations', () => {
     it('opens Scheduled tasks over the chat, and Documents in its place', async () => {
-        mocked.listSchedules.mockResolvedValue({ schedules: [], total: 0 });
+        vi.mocked(scheduleApi).listSchedules.mockResolvedValue({ schedules: [], total: 0 });
         render(<App />);
         await userEvent.click(await screen.findByRole('button', { name: 'Scheduled tasks' }));
 
@@ -688,5 +706,38 @@ describe('New chat right after sending a first message', () => {
 
         expect(useChatStore.getState().pendingPrompt).toEqual({ sessionId: 'elsewhere', text: 'NOT-MINE' });
         expect(await screen.findByLabelText('Message')).toHaveValue('');
+    });
+});
+
+describe('the keyboard shortcuts sheet', () => {
+    // An earlier test leaves the document library open; a shortcut is ignored behind any dialog.
+    beforeEach(() => useChatStore.setState({ showDocLibrary: false, showFileBrowser: false }));
+
+    it('opens with Ctrl+/ and closes with it again', async () => {
+        render(<App />);
+        await screen.findByLabelText('Message');
+        fireEvent.keyDown(window, { key: '/', ctrlKey: true });
+        expect(await screen.findByRole('dialog', { name: 'Keyboard shortcuts' })).toBeInTheDocument();
+        fireEvent.keyDown(window, { key: '/', ctrlKey: true });
+        await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Keyboard shortcuts' })).not.toBeInTheDocument());
+    });
+
+    it('keeps the other shortcuts from acting behind an open dialog', async () => {
+        render(<App />);
+        await screen.findByLabelText('Message');
+        const collapsed = () => useChatStore.getState().sidebarCollapsed;
+        const before = collapsed();
+        fireEvent.keyDown(window, { key: '/', ctrlKey: true });
+        await screen.findByRole('dialog', { name: 'Keyboard shortcuts' });
+
+        fireEvent.keyDown(window, { key: 'b', ctrlKey: true });
+        fireEvent.keyDown(window, { key: ',', ctrlKey: true });
+        expect(collapsed()).toBe(before);
+        expect(screen.queryByRole('dialog', { name: 'Settings' })).not.toBeInTheDocument();
+
+        fireEvent.keyDown(window, { key: '/', ctrlKey: true });
+        await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Keyboard shortcuts' })).not.toBeInTheDocument());
+        fireEvent.keyDown(window, { key: 'b', ctrlKey: true });
+        expect(collapsed()).toBe(!before);
     });
 });

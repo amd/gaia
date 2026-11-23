@@ -41,6 +41,8 @@ class Job:
 
     id: str = field(default_factory=lambda: uuid4().hex[:12])
     name: str = ""
+    # Stable id the Agent UI translates; ``name`` is a log label only.
+    step: Optional[str] = None
     status: JobStatus = JobStatus.PENDING
     visible: bool = False
     error: Optional[str] = None
@@ -48,6 +50,10 @@ class Job:
     created_at: float = field(default_factory=time.monotonic)
     started_at: Optional[float] = None
     completed_at: Optional[float] = None
+
+
+#: The running server's boot queue, so request handlers can wait on a boot step.
+BOOT_QUEUE: Optional["DispatchQueue"] = None
 
 
 class DispatchQueue:
@@ -73,13 +79,14 @@ class DispatchQueue:
         *args: Any,
         visible: bool = False,
         depends_on: Optional[str] = None,
+        step: Optional[str] = None,
     ) -> str:
         """Submit *fn* for execution on the thread-pool.
 
         Returns the job ID immediately (non-blocking).  Must be called from
         the running event-loop thread.
         """
-        job = Job(name=name, visible=visible, depends_on=depends_on)
+        job = Job(name=name, step=step, visible=visible, depends_on=depends_on)
         self._jobs[job.id] = job
         loop = asyncio.get_running_loop()
         loop.create_task(self._run(job, fn, *args))
@@ -87,6 +94,30 @@ class DispatchQueue:
 
     def get_job(self, job_id: str) -> Optional[Job]:
         return self._jobs.get(job_id)
+
+    def step_pending(self, step: str) -> bool:
+        """Whether the job for *step* is still pending or running."""
+        return any(
+            j.step == step and j.status in (JobStatus.PENDING, JobStatus.RUNNING)
+            for j in self._jobs.values()
+        )
+
+    async def wait_for_step(self, step: str, timeout: float) -> Optional[JobStatus]:
+        """Wait while the job for *step* is pending or running; its status, or None.
+
+        None when no job has that step. A job still unfinished at *timeout*
+        returns its status as is; the caller's own work then reports what fails.
+        """
+        deadline = time.monotonic() + timeout
+        while True:
+            job = next((j for j in self._jobs.values() if j.step == step), None)
+            if job is None:
+                return None
+            if job.status in (JobStatus.DONE, JobStatus.FAILED):
+                return job.status
+            if time.monotonic() >= deadline:
+                return job.status
+            await asyncio.sleep(_DEPENDENCY_POLL_INTERVAL)
 
     def get_visible_jobs(self) -> List[Job]:
         return [j for j in self._jobs.values() if j.visible]

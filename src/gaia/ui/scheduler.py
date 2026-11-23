@@ -827,6 +827,10 @@ def _parse_due(task: "ScheduledTask") -> datetime:
     return due if due.tzinfo else due.replace(tzinfo=timezone.utc)
 
 
+# MessageBubble.tsx shows these in the UI's language; a test keeps them in step.
+RUN_STOPPED_SCHEDULE_DELETED = "This run was stopped because its schedule was deleted."
+RUN_STOPPED_SCHEDULE_PAUSED = "This run was stopped because its schedule was paused."
+
 # ── ScheduledTask ────────────────────────────────────────────────────────────
 
 
@@ -869,6 +873,8 @@ class ScheduledTask:
         # A run is in flight, timed or Run now; a second one waits for the next.
         self._executing = False
         self._manual_run: Optional[asyncio.Task] = None
+        # The reply a run cut short by the user's change to its schedule ends on.
+        self._stopped_notice: Optional[str] = None
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary for API responses."""
@@ -1118,6 +1124,7 @@ class Scheduler:
             if task.status != "active":
                 raise ValueError(f"Task '{name}' is not active (status: {task.status})")
 
+            task._stopped_notice = RUN_STOPPED_SCHEDULE_PAUSED
             # Cancel timer
             if task._timer_task and not task._timer_task.done():
                 task._timer_task.cancel()
@@ -1182,6 +1189,72 @@ class Scheduler:
         logger.info("Resumed scheduled task '%s'", name)
         return task.to_dict()
 
+    async def edit_task(
+        self,
+        name: str,
+        interval: str,
+        prompt: str,
+        tz: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Change when a task runs and what it asks, keeping its name, chat and history.
+
+        An active task's next run is worked out again from the new schedule;
+        a paused one stays paused.
+
+        Raises:
+            KeyError: If task not found.
+            ValueError: If the schedule is invalid, the prompt is empty,
+                ``tz`` is not a known time zone, or a run is in flight.
+        """
+        if not prompt.strip():
+            raise ValueError(
+                "The prompt is empty. Say what GAIA should do on each run."
+            )
+        config = parse_schedule_input(interval)
+        if config.interval_seconds <= 0:
+            raise ValueError(config.description)
+        config.timezone = resolve_zone(tz).key
+
+        async with self._lock:
+            task = self._tasks.get(name)
+            if not task:
+                raise KeyError(f"Task '{name}' not found")
+            if task._executing:
+                raise ValueError(
+                    f"'{name}' is running now. Edit it once this run finishes."
+                )
+
+            if task._timer_task and not task._timer_task.done():
+                task._timer_task.cancel()
+                try:
+                    await task._timer_task
+                except asyncio.CancelledError:
+                    pass
+                task._timer_task = None
+
+            task.prompt = prompt
+            task.interval_seconds = config.interval_seconds
+            task.schedule_config = config.to_json()
+            if task.status == "active":
+                task.next_run_at = compute_next_run(
+                    config, after=datetime.now(timezone.utc)
+                ).isoformat()
+            self._db.edit_scheduled_task(
+                task.id,
+                prompt=task.prompt,
+                interval_seconds=task.interval_seconds,
+                schedule_config=task.schedule_config,
+                next_run_at=task.next_run_at,
+            )
+
+            if task.status == "active" and self._running:
+                task._timer_task = asyncio.create_task(
+                    self._run_loop(task), name=f"sched:{name}"
+                )
+
+        logger.info("Edited scheduled task '%s'", name)
+        return task.to_dict()
+
     async def delete_task(self, name: str) -> bool:
         """Delete a scheduled task entirely.
 
@@ -1199,6 +1272,7 @@ class Scheduler:
             if not task:
                 raise KeyError(f"Task '{name}' not found")
 
+            task._stopped_notice = RUN_STOPPED_SCHEDULE_DELETED
             # Cancel timer
             if task._timer_task and not task._timer_task.done():
                 task._timer_task.cancel()
@@ -1338,8 +1412,8 @@ class Scheduler:
         plan = self._plan(task, due, now)
         claimed = self._following(task, now).isoformat()
         if not self._db.claim_scheduled_run(task.id, task.next_run_at, claimed):
-            # Another server sharing this database took this run, or paused it.
-            stored = self._db.scheduled_task_timing(task.id)
+            # Another server sharing this database took this run, paused or edited it.
+            stored = self._db.scheduled_task_state(task.id)
             logger.info(
                 "Scheduled task '%s': run due %s was taken by another GAIA "
                 "server, or the task is now %s",
@@ -1347,9 +1421,12 @@ class Scheduler:
                 due.isoformat(),
                 stored["status"],
             )
-            # A pause elsewhere stops this timer too.
+            # A pause or an edit elsewhere applies to this timer too.
             task.status = stored["status"]
             task.next_run_at = stored["next_run_at"]
+            task.prompt = stored["prompt"]
+            task.interval_seconds = stored["interval_seconds"]
+            task.schedule_config = stored["schedule_config"]
             return
         task.next_run_at = claimed
         if plan.missed:
@@ -1552,12 +1629,10 @@ class Scheduler:
         and see the full history of scheduled runs.
         """
         now = datetime.now(timezone.utc)
-        task.last_run_at = now.isoformat()
-        task.run_count += 1
+        run_number = task.run_count + 1
+        task._stopped_notice = None
 
-        logger.info(
-            "Executing scheduled task '%s' (run #%d)", task.name, task.run_count
-        )
+        logger.info("Executing scheduled task '%s' (run #%d)", task.name, run_number)
 
         # ── Create / reuse chat session for this schedule ────────────
         has_sessions = hasattr(self._db, "create_session")
@@ -1603,7 +1678,7 @@ class Scheduler:
                 self._db.add_message(
                     task.session_id,
                     "system",
-                    f"[schedule-run] Run #{task.run_count} \u00b7 {ts}",
+                    f"[schedule-run] Run #{run_number} \u00b7 {ts}",
                 )
                 # Marked as an unfinished turn until its reply is saved, so a
                 # restart mid-run says the run was interrupted.
@@ -1622,13 +1697,26 @@ class Scheduler:
         try:
             async with self._run_semaphore:
                 result = await self._executor(task.prompt)
+        except asyncio.CancelledError:
+            # A shutdown leaves the turn open: the next start says it was cut off.
+            if task._stopped_notice and task.session_id and has_sessions:
+                self._db.add_message(
+                    task.session_id, "assistant", task._stopped_notice, ends_turn=True
+                )
+                logger.info(
+                    "Scheduled task '%s' run #%d stopped: %s",
+                    task.name,
+                    run_number,
+                    task._stopped_notice,
+                )
+            raise
         except Exception as e:
             error = str(e)
             task.error_count += 1
             logger.error(
                 "Scheduled task '%s' failed (run #%d): %s",
                 task.name,
-                task.run_count,
+                run_number,
                 e,
                 exc_info=True,
             )
@@ -1638,7 +1726,11 @@ class Scheduler:
             try:
                 content = f"Error: {error}" if error else (result or "(no output)")
                 self._db.add_message(
-                    task.session_id, "assistant", content, ends_turn=True
+                    task.session_id,
+                    "assistant",
+                    content,
+                    ends_turn=True,
+                    failed=error is not None,
                 )
             except Exception as exc:
                 logger.error(
@@ -1661,6 +1753,8 @@ class Scheduler:
                     seconds=task.interval_seconds
                 )
             task.next_run_at = next_run.isoformat()
+        task.last_run_at = datetime.now(timezone.utc).isoformat()
+        task.run_count = run_number
         task.last_result = error if error else (result or "completed")
         task.last_error = error
 

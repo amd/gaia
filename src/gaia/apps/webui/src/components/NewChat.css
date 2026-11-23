@@ -9,6 +9,19 @@
     flex: 1;
     min-height: 0;
     padding: 24px 16px 18vh;
+    position: relative;
+}
+
+/* Same spot as the chat header's buttons. */
+.new-chat-actions {
+    position: absolute;
+    top: 0;
+    right: 0;
+    min-height: 52px;
+    padding-right: 12px;
+    display: flex;
+    align-items: center;
+    gap: 6px;
 }
 
 /* Sending drops the composer to the bottom, where the chat will continue. */
@@ -51,7 +64,7 @@
 
 .new-chat-setup-failed-title {
     color: var(--danger);
-    font-weight: 600;
+    font-weight: 500;
 }
 
 .new-chat-setup-failed-error {
@@ -62,6 +75,28 @@
     margin-top: 10px;
     color: var(--text-muted);
     font-size: 13px;
+    animation: fadeIn var(--duration-slow) var(--ease);
+}
+
+/* The start screen arrives in reading order: greeting, then the box, then the
+   rest. Short and close by, so it reads as settling, not as a show. */
+.new-chat-inner > * {
+    /* backwards, not both: a held end state keeps a stacking context, and the
+       composer's popovers would open under the sections that follow it. */
+    animation: newChatRise var(--duration-slow) var(--ease) backwards;
+}
+.new-chat-inner > :nth-child(2) { animation-delay: var(--stagger); }
+.new-chat-inner > :nth-child(n + 3) { animation-delay: calc(var(--stagger) * 2); }
+/* The box only fades: someone typing the moment the screen opens must not chase it. */
+.new-chat-inner > :has(> .composer) { animation-name: newChatFade; }
+
+@keyframes newChatRise {
+    from { opacity: 0; transform: translateY(6px); }
+    to { opacity: 1; transform: none; }
+}
+@keyframes newChatFade {
+    from { opacity: 0; }
+    to { opacity: 1; }
 }
 
 .new-chat-greeting {
@@ -75,6 +110,12 @@
     line-height: 1.2;
     text-align: center;
     text-wrap: balance;
+}
+
+/* The serif has no Arabic, so the Arabic line renders small and the default gloss would out-size it. */
+.new-chat-greeting .i18n-gloss.i18n-gloss {
+    display: block;
+    font-size: 0.55em;
 }
 
 /* Holds its height before the folder arrives, so nothing below jumps. */
@@ -130,7 +171,9 @@
 
 .new-chat-folder-name {
     overflow: hidden;
-    text-overflow: ellipsis;
+    text-overflow: clip;
+    animation: fade-cut-inline both;
+    animation-timeline: scroll(self inline);
     white-space: nowrap;
 }
 
@@ -171,6 +214,23 @@
     white-space: pre-wrap;
 }
 
+.agent-recovery-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-block-start: 10px;
+}
+
+.agent-recovery-status {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.agent-recovery .agent-download {
+    margin-block-start: 8px;
+}
+
 .new-chat-docs {
     margin-top: 8px;
 }
@@ -182,6 +242,19 @@
     margin: 0;
     padding: 0;
     list-style: none;
+}
+
+/* Opened in full, the list scrolls in its own box so the composer stays on screen. */
+.new-chat-doc-list.is-expanded {
+    max-height: min(30vh, 220px);
+    overflow-y: auto;
+    overscroll-behavior: contain;
+}
+
+.new-chat-doc-toggle {
+    display: block;
+    margin-top: 6px;
+    font-size: 12px;
 }
 
 .new-chat-doc {
@@ -199,7 +272,9 @@
 
 .new-chat-doc span {
     overflow: hidden;
-    text-overflow: ellipsis;
+    text-overflow: clip;
+    animation: fade-cut-inline both;
+    animation-timeline: scroll(self inline);
     white-space: nowrap;
 }
 

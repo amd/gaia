@@ -17,12 +17,12 @@ import uuid
 
 import pytest
 
-pytest.importorskip("gaia_agent")
+pytest.importorskip("gaiapy")
 
 from fastapi.testclient import TestClient  # noqa: E402
-from gaia_agent import caller_auth  # noqa: E402
-from gaia_agent import server as server_mod  # noqa: E402
-from gaia_agent import session_registry as sr  # noqa: E402
+from gaiapy import caller_auth  # noqa: E402
+from gaiapy import server as server_mod  # noqa: E402
+from gaiapy import session_registry as sr  # noqa: E402
 
 from gaia.security import PathValidator  # noqa: E402
 
@@ -41,6 +41,9 @@ class _Rag:
             return {"success": False, "error": f"Access denied: {path}"}
         self.indexed.append(path)
         return {"success": True, "num_chunks": 3}
+
+    def is_full(self):
+        return False
 
 
 class _DocAgent:
@@ -85,6 +88,7 @@ def built(monkeypatch, tmp_path):
     caller_auth.reset()
     monkeypatch.delenv(caller_auth.TOKEN_FILE_ENV_VAR, raising=False)
     monkeypatch.delenv(caller_auth.TOKEN_ENV_VAR, raising=False)
+    monkeypatch.setenv(caller_auth.ALLOW_NO_TOKEN_ENV_VAR, "1")
     # The agent's own scope, deliberately NOT containing the documents.
     scope = tmp_path / "scope"
     scope.mkdir()
@@ -240,7 +244,7 @@ def test_agents_are_never_built_at_the_same_time(monkeypatch):
     import threading
     import time
 
-    from gaia_agent import agent as agent_mod
+    from gaiapy import agent as agent_mod
 
     active = []
     peak = []
@@ -300,3 +304,78 @@ def test_stop_ends_the_loading_of_attached_documents(built, docs, monkeypatch):
     assert agent.rag.indexed == paths
     assert sorted(agent.indexed_files) == sorted(paths)
     assert _index_step(r)["success"] is True
+
+
+def test_cancel_reports_how_many_documents_it_left_unloaded(built, docs, monkeypatch):
+    """A host that closes the stream on Stop never reads the loading step's
+    result, so the cancel call itself carries the count."""
+    client, agents = built
+    folder, _, _ = docs
+    paths = []
+    for n in range(5):
+        path = folder / f"doc{n}.txt"
+        path.write_text(f"document {n}", encoding="utf-8")
+        paths.append(str(path))
+    run_id = str(uuid.uuid4())
+    load = _Rag.index_document
+    while_loading = []
+
+    def cancel_during_the_second(self, path):
+        if len(self.indexed) == 1:
+            # What POST /query/{run_id}/cancel does, with document 2 in hand.
+            assert server_mod._registry.cancel(run_id) is True
+            while_loading.append(server_mod._registry.documents_left(run_id))
+        return load(self, path)
+
+    monkeypatch.setattr(_Rag, "index_document", cancel_during_the_second)
+
+    r = client.post(
+        "/v1/gaia/query",
+        json={"query": "q", "run_id": run_id, "context": [], "documents": paths},
+    )
+
+    assert agents[0].rag.indexed == paths[:2]
+    assert while_loading == [3]
+    assert "3 documents were not loaded" in _index_step(r)["message"]
+    # A cancel that lands after the run ended still knows the count.
+    late = client.post(f"/v1/gaia/query/{run_id}/cancel").json()
+    assert late == {"run_id": run_id, "cancelled": False, "documents_left": 3}
+
+
+def test_cancel_reports_no_documents_when_all_were_loaded(built, docs):
+    client, _ = built
+    _, doc, _ = docs
+    run_id = str(uuid.uuid4())
+
+    client.post(
+        "/v1/gaia/query",
+        json={"query": "q", "run_id": run_id, "context": [], "documents": [str(doc)]},
+    )
+
+    late = client.post(f"/v1/gaia/query/{run_id}/cancel").json()
+    assert late["documents_left"] is None
+
+
+def test_a_full_index_is_not_reported_as_documents_stop_left(built, docs, monkeypatch):
+    """Documents a full index left out load on request; a Stop after that must
+    not claim it left them for the next message."""
+    client, _ = built
+    folder, _, _ = docs
+    paths = []
+    for n in range(5):
+        path = folder / f"doc{n}.txt"
+        path.write_text(f"document {n}", encoding="utf-8")
+        paths.append(str(path))
+    monkeypatch.setattr(_Rag, "is_full", lambda self: len(self.indexed) >= 2)
+    monkeypatch.setattr(
+        _Rag, "indexed_files", property(lambda self: self.indexed), raising=False
+    )
+    run_id = str(uuid.uuid4())
+
+    client.post(
+        "/v1/gaia/query",
+        json={"query": "q", "run_id": run_id, "context": [], "documents": paths},
+    )
+
+    late = client.post(f"/v1/gaia/query/{run_id}/cancel").json()
+    assert late["documents_left"] is None

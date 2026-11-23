@@ -265,7 +265,7 @@ class _Console:
 
 def _replay_question(case: dict) -> None:
     # The unit job has no flagship package; test_gaia_agent.yml runs this.
-    chat_agent = pytest.importorskip("gaia_agent.chat_agent")
+    chat_agent = pytest.importorskip("gaiapy.chat_agent")
     ChatAgent = chat_agent.ChatAgent
 
     stub = object.__new__(ChatAgent)

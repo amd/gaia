@@ -13,9 +13,9 @@ from types import SimpleNamespace
 
 import pytest
 
-pytest.importorskip("gaia_agent")
+pytest.importorskip("gaiapy")
 
-from gaia_agent.chat_agent import ChatAgent  # noqa: E402
+from gaiapy.chat_agent import ChatAgent  # noqa: E402
 
 from gaia.security import PathValidator  # noqa: E402
 
@@ -32,6 +32,9 @@ class _Rag:
             raise PermissionError(f"Access denied: {path} is not in allowed paths")
         self.indexed.append(path)
         return {"success": True, "num_chunks": 1}
+
+    def is_full(self):
+        return False
 
 
 def _agent(scope):

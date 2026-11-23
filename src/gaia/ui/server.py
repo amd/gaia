@@ -31,15 +31,18 @@ from pathlib import Path
 from typing import Optional
 from urllib.parse import urlencode
 
-from fastapi import FastAPI, Request
+from fastapi import Depends, FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from starlette.convertors import PathConvertor, register_url_convertor
-from starlette.middleware.base import BaseHTTPMiddleware
 
 from gaia.agents.install_hints import agent_wheel_failed_message
+from gaia.client_hangups import quiet_client_hangups
 from gaia.config import UnsafeGaiaHomeError
+from gaia.listener_guard import keep_listening_after_client_resets
 from gaia.security import AllowedPathsEnvError, env_allowed_paths
+
+from . import api_token
 
 # ── Backward-compatible re-exports ──────────────────────────────────────────
 # Tests use @patch("gaia.ui.server._get_chat_response") etc., so we must
@@ -55,10 +58,13 @@ from .agent_loop import agent_loop
 
 # pylint: enable=unused-import
 from .database import ChatDatabase
+from .document_copies import move_library_files_out_of_shared_folder
 from .document_monitor import DocumentMonitor
 from .memory_settings import memory_enabled
 from .restart_recovery import recover_interrupted_work, sweep_interrupted_work
+from .routers import agent_programs as agent_programs_router_mod
 from .routers import agents as agents_router_mod
+from .routers import automations as automations_router_mod
 from .routers import changes as changes_router_mod
 from .routers import chat as chat_router_mod
 from .routers import connectors as connectors_router_mod
@@ -68,6 +74,7 @@ from .routers import files as files_router_mod
 from .routers import goals as goals_router_mod
 from .routers import gpu_memory as gpu_memory_router_mod
 from .routers import hub as hub_router_mod
+from .routers import images as images_router_mod
 from .routers import lemonade as lemonade_router_mod
 from .routers import logs as logs_router_mod
 from .routers import mcp as mcp_router_mod
@@ -84,7 +91,13 @@ from .routers import speech as speech_router_mod
 from .routers import spending as spending_router_mod
 from .routers import system as system_router_mod
 from .routers import tunnel as tunnel_router_mod
-from .security import UIRequestGuardMiddleware
+from .security import (
+    TUNNEL_COOKIE_NAME,
+    ApiTokenMiddleware,
+    UIRequestGuardMiddleware,
+    require_local_pc,
+    via_tunnel,
+)
 from .tunnel import TunnelManager
 from .utils import UploadStaticFiles
 from .utils import sanitize_static_path as _sanitize_static_path
@@ -94,19 +107,6 @@ logger = logging.getLogger(__name__)
 
 # Default port for agent UI server
 DEFAULT_PORT = 4200
-
-# Localhost addresses that bypass tunnel authentication (Electron app)
-_LOCAL_HOSTS = {"127.0.0.1", "localhost", "::1"}
-
-# API paths that bypass tunnel authentication (monitoring / preflight)
-_AUTH_EXEMPT_PATHS = {"/api/health"}
-
-# HttpOnly cookie name used to bootstrap tunnel auth from the QR-code URL.
-# When a mobile browser opens ``https://<tunnel>/?token=<uuid>`` the SPA
-# handler (``serve_spa``) sets this cookie on the response, so the React
-# app's subsequent ``fetch('/api/...')`` calls carry it automatically
-# (same-origin fetches include cookies by default).
-_TUNNEL_COOKIE_NAME = "gaia_tunnel_token"
 
 
 class _SpaPathConvertor(PathConvertor):
@@ -154,101 +154,6 @@ class Utf8JsonMiddleware:
             await send(message)
 
         await self.app(scope, receive, send_with_charset)
-
-
-# ── Tunnel Auth Middleware ──────────────────────────────────────────────────
-
-
-class TunnelAuthMiddleware(BaseHTTPMiddleware):
-    """Validate tunnel auth token on API requests arriving through the ngrok tunnel.
-
-    When the tunnel is active, every ``/api/*`` request whose source is
-    *not* localhost must carry a valid token, provided via either:
-
-    1. ``Authorization: Bearer <token>`` header (scriptable clients, curl)
-    2. ``gaia_tunnel_token`` cookie (set by ``serve_spa`` when a mobile
-       browser first opens the QR-code URL containing ``?token=<uuid>``)
-
-    Local requests (from the Electron desktop app) and the ``/api/health``
-    monitoring endpoint are always allowed through.
-    """
-
-    async def dispatch(self, request: Request, call_next):
-        path = request.url.path
-
-        # Gate /api/* routes and the /v1/connections forwarded-grant surface
-        # (#1292) — the latter carries OAuth secrets, so remote/tunnel access
-        # must present a valid token just like /api/*.
-        if not (path.startswith("/api/") or path.startswith("/v1/")):
-            return await call_next(request)
-
-        # Always allow exempt paths (health check, etc.)
-        if path in _AUTH_EXEMPT_PATHS:
-            return await call_next(request)
-
-        # Check whether the tunnel is active
-        tunnel: TunnelManager = getattr(request.app.state, "tunnel", None)
-        if tunnel is None or not tunnel.active:
-            return await call_next(request)
-
-        # ── Localhost bypass (Electron desktop app) ────────────────────
-        # The bypass requires BOTH the raw TCP peer to be on localhost
-        # AND the request to lack any ``X-Forwarded-*`` headers. The
-        # second clause is what makes the bypass spoof-resistant: ngrok
-        # always *adds* ``X-Forwarded-For`` / ``X-Forwarded-Host`` /
-        # ``X-Forwarded-Proto`` to tunnelled requests, so if any of those
-        # are present the request came in over the wire and must
-        # authenticate — even if a remote attacker tried to set
-        # ``X-Forwarded-For: 127.0.0.1`` to fake a localhost source.
-        #
-        # Note: ``request.client.host`` reflects the raw TCP peer because
-        # the standalone runner in ``main()`` passes
-        # ``forwarded_allow_ips=""`` to uvicorn, disabling the proxy-header
-        # rewrite that would otherwise let the ``X-Forwarded-For`` value
-        # take precedence.
-        client_host = request.client.host if request.client else None
-        has_forwarded_marker = any(
-            h in request.headers
-            for h in ("x-forwarded-for", "x-forwarded-host", "x-forwarded-proto")
-        )
-        if client_host in _LOCAL_HOSTS and not has_forwarded_marker:
-            return await call_next(request)
-
-        # ── Remote request through tunnel -- require valid token ─────────
-        # Extract token from Authorization header OR cookie.
-        token = None
-        auth_header = request.headers.get("authorization", "")
-        if auth_header.lower().startswith("bearer "):
-            token = auth_header[len("bearer ") :].strip()  # noqa: E203
-        if not token:
-            token = request.cookies.get(_TUNNEL_COOKIE_NAME)
-
-        if not token:
-            logger.warning(
-                "Tunnel auth: rejecting %s %s from %s (no header/cookie)",
-                request.method,
-                path,
-                client_host,
-            )
-            return JSONResponse(
-                status_code=401,
-                content={"detail": "Missing or invalid Authorization header"},
-            )
-
-        if not tunnel.validate_token(token):
-            logger.warning(
-                "Tunnel auth: rejecting %s %s from %s (invalid token)",
-                request.method,
-                path,
-                client_host,
-            )
-            return JSONResponse(
-                status_code=401,
-                content={"detail": "Invalid tunnel authentication token"},
-            )
-
-        tunnel.note_device(request.headers.get("user-agent", ""))
-        return await call_next(request)
 
 
 def start_model_server_owner() -> threading.Thread:
@@ -331,9 +236,9 @@ def _run_scheduled_prompt(
         return _relay_scheduled_prompt(db, prompt, cancel_event, console)
 
     try:
-        from gaia_agent.agent import GaiaAgent, GaiaAgentConfig
+        from gaiapy.agent import GaiaAgent, GaiaAgentConfig
     except ModuleNotFoundError as e:
-        if (e.name or "").partition(".")[0] != "gaia_agent":
+        if (e.name or "").partition(".")[0] != "gaiapy":
             raise RuntimeError(_scheduled_import_error(e)) from e
         raise RuntimeError(_flagship_missing_message(registry)) from e
     except ImportError as e:
@@ -355,7 +260,17 @@ def _run_scheduled_prompt(
     agent._cancel_event = cancel_event
     if console is not None:
         agent.console = console
-    result = agent.process_query(prompt)
+    try:
+        result = agent.process_query(prompt)
+    finally:
+        from gaia.agents.base.memory import drain_memory_extraction
+
+        # Save the run's memories now: a queued save would keep the agent alive.
+        drain_memory_extraction(agent)
+        try:
+            agent.close()
+        except Exception as exc:  # noqa: BLE001 — logged; the run's own result stands
+            logger.warning("Scheduled run: closing its agent failed: %s", exc)
     if isinstance(result, dict):
         val = result.get("result")
         answer = val if val is not None else result.get("answer", "")
@@ -469,9 +384,14 @@ class _ScheduledRuns:
                     "freeing the model while its thread winds down",
                     self._timeout,
                 )
+            limit = (
+                f"{self._timeout / 60:g} minutes"
+                if self._timeout >= 120
+                else f"{self._timeout:g} seconds"
+            )
             raise asyncio.TimeoutError(
-                f"Scheduled run did not finish within {self._timeout:g}s and was "
-                "stopped. Raise GAIA_SCHEDULE_TIMEOUT if the task needs longer."
+                f"This scheduled task took longer than {limit} and was stopped. "
+                "Try a shorter or simpler task, or run it again."
             )
         finally:
             turn_queue.release()
@@ -513,6 +433,8 @@ def create_app(db_path: str = None, webui_dist: str = None) -> FastAPI:
     db = ChatDatabase(db_path)
     # What a crashed or closed server left mid-way, before anything new starts.
     recover_interrupted_work(db)
+    # Chats must not reach each other's documents through the folder they share.
+    move_library_files_out_of_shared_folder(db)
 
     # Background indexing: track running tasks by document ID
     # so we can report status and cancel them.
@@ -526,6 +448,10 @@ def create_app(db_path: str = None, webui_dist: str = None) -> FastAPI:
         from gaia.ui._chat_helpers import _eval_provider_kwargs
         from gaia.ui.dispatch import DispatchQueue
 
+        # A client quitting mid-connection is not an error here.
+        quiet_client_hangups(asyncio.get_running_loop())
+        # A client resetting a queued connection must not close the listener.
+        keep_listening_after_client_resets(asyncio.get_running_loop())
         _eval_provider_kwargs()
 
         # ── Boot-time initialization via DispatchQueue ──────────────────
@@ -534,6 +460,9 @@ def create_app(db_path: str = None, webui_dist: str = None) -> FastAPI:
 
         queue = DispatchQueue(max_workers=4)
         app.state.dispatch_queue = queue
+        from gaia.ui import dispatch as dispatch_mod
+
+        dispatch_mod.BOOT_QUEUE = queue
 
         # ── Model-slot broker (#2248) ───────────────────────────────────
         # The daemon exports the broker URL into its own environment, so only
@@ -643,6 +572,17 @@ def create_app(db_path: str = None, webui_dist: str = None) -> FastAPI:
                 logger.info("Model preload skipped: %s", low_memory)
                 return
 
+            # The TUI may have picked another model since this app last ran.
+            from gaia.ui.routers.providers import restore_last_model
+
+            try:
+                restore_last_model(db, load=False)
+            except Exception as exc:  # noqa: BLE001 - the model list reports it
+                # /api/providers/active runs the restore again and shows why.
+                logger.warning(
+                    "Could not restore the last model before the preload: %s", exc
+                )
+
             # Check if a chat model is already loaded.
             # Let exceptions propagate so the DispatchQueue marks the job as
             # FAILED (not DONE) — the frontend will show "degraded" state.
@@ -704,15 +644,22 @@ def create_app(db_path: str = None, webui_dist: str = None) -> FastAPI:
 
         # Dispatch startup tasks.  Jobs A and B run in parallel; Job C
         # waits for A (needs Lemonade reachable) before loading the model.
+        # A visible job's `step` needs banner.boot.<step> in every UI locale.
         lemonade_id = queue.dispatch(
-            "Checking LLM server", _check_lemonade, visible=True
+            "Checking LLM server", _check_lemonade, visible=True, step="check_server"
         )
-        queue.dispatch("Loading ML libraries", _import_modules, visible=True)
+        queue.dispatch(
+            "Loading ML libraries",
+            _import_modules,
+            visible=True,
+            step="load_libraries",
+        )
         model_job = queue.dispatch(
             "Loading AI model",
             _load_model,
             visible=True,
             depends_on=lemonade_id,
+            step="load_model",
         )
         from gaia.ui import warmup
         from gaia.ui.dispatch import JobStatus
@@ -838,6 +785,8 @@ def create_app(db_path: str = None, webui_dist: str = None) -> FastAPI:
         await agent_loop.stop()
         logger.info("AgentLoop stopped")
         await queue.shutdown()
+        if dispatch_mod.BOOT_QUEUE is queue:
+            dispatch_mod.BOOT_QUEUE = None
         await monitor.stop()
         logger.info("Document file monitor stopped")
         from gaia.connectors.activation_watcher import stop_watcher
@@ -885,23 +834,23 @@ def create_app(db_path: str = None, webui_dist: str = None) -> FastAPI:
         allow_headers=["*"],
     )
 
-    # Tunnel authentication -- reject unauthenticated remote requests when
-    # the ngrok tunnel is active.  Must be added *after* CORSMiddleware so
-    # that CORS preflight (OPTIONS) responses are handled first.
-    app.add_middleware(TunnelAuthMiddleware)
+    # Every /api and /v1 caller presents the API token (or, over mobile
+    # access, the tunnel token). Outside CORS so a refusal carries no CORS
+    # headers.
+    app.add_middleware(ApiTokenMiddleware)
 
-    # Host / Origin / X-Gaia-UI guard. Added after tunnel auth so it wraps
-    # it: it runs before tunnel auth (which passes everything
-    # through while the tunnel is off) and its rejections carry no CORS
-    # headers, so a cross-site page cannot read why it failed.
+    # Host / Origin / X-Gaia-UI guard. Outside the token check, so a
+    # rebinding or cross-site request is refused before anything else.
     app.add_middleware(UIRequestGuardMiddleware)
 
-    # Outermost, so the guard's and tunnel auth's own rejections get the
+    # Outermost, so the guard's and the token check's own rejections get the
     # charset too. It only rewrites a header, so the guard still runs first.
     app.add_middleware(Utf8JsonMiddleware)
 
     # Store shared state on app.state so routers can access via Depends
     app.state.db = db
+    app.state.ui_api_token = api_token.load_or_create_token()
+    app.state.launch_codes = api_token.LaunchCodes()
     app.state.indexing_tasks = indexing_tasks
     app.state.max_indexed_files = int(os.environ.get("GAIA_MAX_INDEXED_FILES", "0"))
 
@@ -946,6 +895,7 @@ def create_app(db_path: str = None, webui_dist: str = None) -> FastAPI:
 
     # ── Include Routers ──────────────────────────────────────────────────
     app.include_router(system_router_mod.router)
+    app.include_router(agent_programs_router_mod.router)
     app.include_router(onboarding_router_mod.router)
     app.include_router(setup_router_mod.router)
     app.include_router(gpu_memory_router_mod.router)
@@ -957,6 +907,7 @@ def create_app(db_path: str = None, webui_dist: str = None) -> FastAPI:
     app.include_router(spending_router_mod.router)
     app.include_router(skills_router_mod.router)
     app.include_router(hub_router_mod.router)
+    app.include_router(images_router_mod.router)
     app.include_router(agents_router_mod.router)
     app.include_router(sessions_router_mod.router)
     app.include_router(chat_router_mod.router)
@@ -970,27 +921,11 @@ def create_app(db_path: str = None, webui_dist: str = None) -> FastAPI:
     app.include_router(schedules_router_mod.router)
     app.include_router(mcp_router_mod.router)
     app.include_router(messaging_router_mod.router)
+    app.include_router(automations_router_mod.router)
     # Issue #915 — OAuth connections (Settings page + agent grants).
     app.include_router(connectors_router_mod.router)
     # Issue #1292 — forwarded pre-authenticated connections (/v1/connections).
     app.include_router(connectors_router_mod.forwarded_router)
-    # Email REST surface (/v1/email/*) — out-of-process sidecar ONLY (#1767
-    # cutover / design decision 4). The core backend never imports the email
-    # wheel: it stays lightweight, crash-isolated, and dogfoods the exact binary
-    # we ship. Since #2142 the GAIA daemon supervises the sidecar; each request
-    # acquires a handle via gaia.ui.email_sidecar.daemon_client (lazy — users
-    # who never use email never pay for a daemon or sidecar). The sidecar is
-    # the SOLE /v1/email surface — there is no in-process fallback (a missing/
-    # unpublished binary fails loudly with a remedy, never silently re-mounts
-    # the wheel).
-    from gaia.ui.email_sidecar.router import router as email_sidecar_router
-
-    app.include_router(email_sidecar_router)
-    logger.info(
-        "Email REST surface served by the daemon-supervised sidecar "
-        "(GAIA_EMAIL_AGENT_MODE=%s).",
-        os.environ.get("GAIA_EMAIL_AGENT_MODE", "user"),
-    )
 
     # ── Serve Uploaded Files ─────────────────────────────────────────────
     # Mount the uploads directory so uploaded files can be served by URL.
@@ -1149,7 +1084,7 @@ def create_app(db_path: str = None, webui_dist: str = None) -> FastAPI:
 
         redirect = RedirectResponse(url=target, status_code=303)
         redirect.set_cookie(
-            key=_TUNNEL_COOKIE_NAME,
+            key=TUNNEL_COOKIE_NAME,
             value=qs_token,
             httponly=True,
             secure=is_https,
@@ -1163,6 +1098,55 @@ def create_app(db_path: str = None, webui_dist: str = None) -> FastAPI:
             request.url.path,
         )
         return redirect
+
+    def _maybe_redeem_launch_code(request: Request):
+        """Sign a browser in from a ``?launch=<code>`` link.
+
+        A valid single-use code sets the API-token cookie and 303-redirects to
+        the same URL without the code. ``SameSite=Strict`` keeps a cross-site
+        page from riding the cookie; ``HttpOnly`` keeps page scripts from
+        reading it.
+        """
+        code = request.query_params.get(api_token.LAUNCH_PARAM)
+        if not code or via_tunnel(request):
+            return None
+        if not request.app.state.launch_codes.redeem(code):
+            logger.warning("Ignoring an expired or already used launch link")
+            return None
+        rest = urlencode(
+            [
+                (k, v)
+                for k, v in request.query_params.multi_items()
+                if k != api_token.LAUNCH_PARAM
+            ]
+        )
+        redirect = RedirectResponse(
+            url=request.url.path + (f"?{rest}" if rest else ""), status_code=303
+        )
+        redirect.set_cookie(
+            key=api_token.COOKIE_NAME,
+            value=request.app.state.ui_api_token,
+            max_age=api_token.COOKIE_MAX_AGE,
+            httponly=True,
+            samesite="strict",
+            path="/",
+        )
+        return redirect
+
+    @app.post("/api/auth/launch-code", dependencies=[Depends(require_local_pc)])
+    async def mint_launch_code(request: Request):
+        """A single-use link that signs a browser in to this Agent UI.
+
+        Callers already hold the token (the route is gated like every other),
+        so this only lets a launcher open a browser without putting the token
+        itself in the URL. Never over mobile access, which must not become
+        the install's token.
+        """
+        codes = request.app.state.launch_codes
+        return {
+            "path": f"/?{api_token.LAUNCH_PARAM}={codes.mint()}",
+            "expires_in": int(codes.ttl_s),
+        }
 
     @app.get("/{full_path:spa_path}")
     async def serve_spa(request: Request, full_path: str):
@@ -1202,10 +1186,11 @@ def create_app(db_path: str = None, webui_dist: str = None) -> FastAPI:
         if full_path.startswith("assets/"):
             return HTMLResponse(content="Not Found", status_code=404)
 
-        # SPA fallback: serve index.html. Bootstrap the auth cookie
-        # if a valid ?token= is present (returns a 303 redirect that
-        # strips the token from the URL).
-        redirect = _maybe_bootstrap_tunnel_cookie(request)
+        # SPA fallback: serve index.html. A valid launch code or tunnel
+        # ?token= sets its cookie and 303-redirects without it in the URL.
+        redirect = _maybe_redeem_launch_code(request) or _maybe_bootstrap_tunnel_cookie(
+            request
+        )
         if redirect is not None:
             return redirect
         return FileResponse(str(index_html), headers=_NO_CACHE)
@@ -1214,6 +1199,18 @@ def create_app(db_path: str = None, webui_dist: str = None) -> FastAPI:
 
 
 # ── Standalone runner ───────────────────────────────────────────────────────
+
+
+def launch_url(app: FastAPI, host: str, port: int) -> str:
+    """A single-use link that opens this Agent UI signed in.
+
+    Only for a terminal: a launcher that pipes stdout into a log file mints
+    its own code through ``POST /api/auth/launch-code`` instead.
+    """
+    if host in ("0.0.0.0", "::", ""):
+        host = "127.0.0.1"
+    code = app.state.launch_codes.mint()
+    return f"http://{host}:{port}/?{api_token.LAUNCH_PARAM}={code}"
 
 
 def main():
@@ -1245,8 +1242,14 @@ def main():
     print(f"Starting GAIA Agent UI server on http://{args.host}:{args.port}")
     try:
         server_app = create_app(webui_dist=args.ui_dist)
-    except (UnsafeGaiaHomeError, AllowedPathsEnvError) as exc:
-        # A misconfigured GAIA_HOME or GAIA_ALLOWED_PATHS is the user's to fix,
+        if sys.stdout.isatty():
+            print(
+                f"   Open (link works once): "
+                f"{launch_url(server_app, args.host, args.port)}",
+                flush=True,
+            )
+    except (UnsafeGaiaHomeError, AllowedPathsEnvError, api_token.UITokenError) as exc:
+        # A bad GAIA_HOME, GAIA_ALLOWED_PATHS or token file is the user's to fix,
         # so print the remedy rather than a traceback. 64 is EX_USAGE, as gaia
         # uninstall uses.
         print(f"Error: {exc}", file=sys.stderr)
@@ -1264,10 +1267,8 @@ def main():
         # local agent (127.0.0.1), so uvicorn's default of trusting
         # forwarded headers from 127.0.0.1 would let a remote attacker
         # send ``X-Forwarded-For: 127.0.0.1`` through the tunnel and
-        # impersonate the Electron app. The localhost-bypass check in
-        # ``TunnelAuthMiddleware`` separately requires the request to
-        # carry no ``X-Forwarded-*`` headers, giving us a spoof-resistant
-        # distinction between Electron-direct and ngrok-tunnelled traffic.
+        # impersonate the Electron app. ``require_local_pc`` separately
+        # refuses any request carrying ``X-Forwarded-*`` headers.
         proxy_headers=False,
         forwarded_allow_ips="",
     )

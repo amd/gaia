@@ -75,6 +75,7 @@ KNOWN_TOOLS: Dict[str, tuple] = {
         "AudioGenerationToolsMixin",
     ),
     "wait": ("gaia.agents.tools.wait_tools", "WaitToolsMixin"),
+    "dictation": ("gaia.agents.tools.dictation_tools", "DictationToolsMixin"),
     "reasoning_effort": (
         "gaia.agents.tools.reasoning_tools",
         "ReasoningEffortToolsMixin",
@@ -309,9 +310,7 @@ def _compute_custom_origin_hash(py_file: Path) -> str:
     return hashlib.sha256(py_file.read_bytes()).hexdigest()[:16]
 
 
-# Default embedder (GPU/CPU) — the one `gaia init` downloads. The NPU device
-# overrides it with the FLM-native embedder so chat + embeddings stay
-# co-resident on the NPU backend (#1744).
+# The embedder `gaia init` downloads, and every PC's, an NPU PC's too.
 DEFAULT_EMBEDDING_MODEL = LEMONADE_DEFAULT_EMBEDDING_MODEL
 
 
@@ -374,8 +373,8 @@ DEFAULT_DEVICE_CONFIGS: List[DeviceConfig] = [
         backend="flm:npu",
         verified=True,
         ctx_size=npu_default_ctx(NPU_DEFAULT_MODEL_NAME),
-        # FLM-native embedder so chat + embeddings stay co-resident on the NPU
-        # backend and don't thrash NPU<->Vulkan every turn (#1744).
+        # Used only where embedding_device is saved as npu: its search isn't
+        # proven (GaiaConfig.TESTED_EMBEDDING_DEVICES).
         embedding_model="embed-gemma-300m-FLM",
     ),
 ]
@@ -386,14 +385,49 @@ def get_embedding_model_for_device(device: Optional[str]) -> str:
 
     Single source of truth: reads ``DEFAULT_DEVICE_CONFIGS`` so the embedder
     choice lives next to the chat model/recipe/backend for each device. The NPU
-    profile uses the FLM-native embedder (see ``DeviceConfig.embedding_model``);
-    GPU/CPU and an unspecified device default to the GGUF embedder `gaia init`
-    downloads, which matches the GPU-default policy elsewhere in the CLI.
+    entry names the FLM embedder, used only for a saved ``embedding_device`` of
+    ``npu``; GPU/CPU and an unspecified device get the GGUF embedder `gaia init`
+    downloads.
     """
     for dc in DEFAULT_DEVICE_CONFIGS:
         if dc.device == device:
             return dc.embedding_model
     return DEFAULT_EMBEDDING_MODEL
+
+
+def machine_embedding_device() -> str:
+    """``gpu`` or ``npu``: where every chat on this PC embeds.
+
+    The saved ``embedding_device``, else the GPU, on an NPU PC too: the NPU
+    embedder's search isn't proven (``GaiaConfig.TESTED_EMBEDDING_DEVICES``).
+
+    Raises:
+        GaiaConfigError: ``~/.gaia/config.json`` can't be read.
+    """
+    from gaia.config import GaiaConfig, GaiaConfigError
+
+    try:
+        config = GaiaConfig.load()
+    except GaiaConfigError as e:
+        raise GaiaConfigError(
+            f"Cannot tell which embedder this PC uses for documents and memory: "
+            f"{e}. Fix or delete {GaiaConfig.config_path()}."
+        ) from e
+    return config.embedding_device or "gpu"
+
+
+def machine_embedding_model() -> str:
+    """The embedder every chat on this PC uses (:func:`machine_embedding_device`).
+
+    One per machine, never per chat or per model switch. Memory is one store
+    whose vectors belong to one embedder; changing it clears them all, so an
+    embedder that followed the chat model would wipe Memory on every NPU/GPU
+    switch.
+
+    Raises:
+        GaiaConfigError: ``~/.gaia/config.json`` can't be read.
+    """
+    return get_embedding_model_for_device(machine_embedding_device())
 
 
 @dataclass
@@ -852,7 +886,7 @@ class AgentRegistry:
 
         # Spec form (docs/spec/agent-hub-restructure.mdx): the entry point may
         # target the Agent subclass directly, e.g.
-        # ``gaia = "gaia_agent.agent:GaiaAgent"``. Build a registration
+        # ``gaia = "gaiapy.agent:GaiaAgent"``. Build a registration
         # from its class attributes in that case.
         from gaia.agents.base.agent import Agent as BaseAgent
 
@@ -1264,7 +1298,7 @@ class AgentRegistry:
         icon: str = "",
         consumes_mcp_servers: bool = False,
     ) -> None:
-        """Register a daemon-supervised sidecar agent (e.g. email) (#2408).
+        """Register a daemon-supervised sidecar agent (e.g. gaia) (#2408).
 
         A sidecar install (frozen binary + ``.installed`` sentinel under
         ``~/.gaia/agents/<id>/``) ships no ``agent.py``, so ``discover()``'s

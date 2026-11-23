@@ -4,7 +4,7 @@
 Keyring-backed persistent storage for OAuth connection records.
 
 Single-blob design (plan amendment A5):
-    Each ``(provider, account_email)`` tuple maps to ONE keyring entry that
+    Each ``(provider, slot)`` pair maps to ONE keyring entry that
     stores a JSON blob containing ``refresh_token``, ``account_email``,
     ``scopes``, ``connected_at``, and ``client_id_hash``. A single
     ``set_password`` call atomically replaces the entry, so a partial-write
@@ -13,7 +13,8 @@ Single-blob design (plan amendment A5):
 Backend allowlist (plan amendment A4):
     Plaintext or weak file-backed keyring backends (e.g. ``keyrings.alt``'s
     ``PlaintextKeyring``, ``EncryptedKeyring``, ``Win32CryptoKeyring``) are
-    explicitly refused BEFORE any write. Linux machines without
+    explicitly refused BEFORE any write — including when one sits anywhere
+    inside a chained keyring. Linux machines without
     SecretService produce an actionable error pointing at the runbook
     instead of silently writing tokens to disk in plaintext.
 
@@ -38,6 +39,7 @@ import time
 import zlib
 from typing import List, Optional
 
+from gaia.connectors import keyring_access
 from gaia.connectors._keyring import (  # actionable error if missing (#1621)
     _KEYRING_BACKEND_ENV_VAR,
     _NULL_KEYRING_ALIASES,
@@ -60,9 +62,9 @@ logger = logging.getLogger(__name__)
 # Python module name.
 SERVICE_NAME = "gaia.connections"
 
-# v1 default account name used by callers that don't yet plumb a real
-# email through. Multi-account support (forward-compat per A10) writes
-# the real account_email here.
+# The keyring slot every connection used before several accounts were
+# supported. Its account keeps it; later accounts get ``id:<stable id>`` slots
+# (see ``accounts.py``).
 DEFAULT_ACCOUNT = "default"
 
 # Backend class names we refuse outright. These are the ``keyrings.alt``
@@ -75,16 +77,96 @@ _REFUSED_BACKEND_CLASS_NAMES: frozenset[str] = frozenset(
     }
 )
 
+# Nesting limit when expanding chained backends; deeper is refused, not trusted.
+_MAX_CHAIN_DEPTH = 8
 
-def _connection_username(provider: str, account_email: str) -> str:
-    """Build the keyring username key for ``(provider, account_email)``.
 
-    Multi-account forward-compat (A10): the key shape is
-    ``"<provider>:<account_email>"``. v1 always writes
-    ``account_email = "default"`` so the schema can absorb a real email
-    without migration.
+class WeakKeyringError(ConnectorsError):
+    """The keyring backend is, or may be, plaintext or weak.
+
+    Reads and writes refuse it. Deletes go ahead with a warning, since removing
+    a secret only reduces exposure (see ``keyring_access.check_delete``).
     """
-    return f"{provider}:{account_email}"
+
+
+class UninspectableKeyringError(WeakKeyringError):
+    """A chained keyring GAIA cannot fully inspect; it may be secure, or not."""
+
+
+def _refused_class_name(backend: object) -> Optional[str]:
+    """Name of the refused class ``backend`` is or derives from, else ``None``."""
+    for klass in type(backend).__mro__:
+        if klass.__name__ in _REFUSED_BACKEND_CLASS_NAMES:
+            return klass.__name__
+    return None
+
+
+def _is_chain(backend: object) -> bool:
+    from keyring.backends.chainer import ChainerBackend
+
+    if isinstance(backend, ChainerBackend):
+        return True
+    if "backends" in getattr(backend, "__dict__", {}):
+        return True
+    return any("backends" in vars(klass) for klass in type(backend).__mro__)
+
+
+def _chain_error(detail: str) -> ConnectorsError:
+    return UninspectableKeyringError(
+        f"{detail} GAIA will not store credentials until it can confirm every "
+        "backend in the chain is secure. Configure a single system credential "
+        f"store (set {_KEYRING_BACKEND_ENV_VAR} to it) and restart GAIA. See "
+        "docs/security/connections.mdx."
+    )
+
+
+def _write_targets(
+    backend: object, depth: int = 0, expanded: Optional[set] = None
+) -> List[object]:
+    """``backend`` plus every backend a chain under it can write to.
+
+    ``expanded`` holds the ids of chains already walked, so a chain repeated
+    across the tree is expanded once rather than once per path to it.
+    """
+    if not _is_chain(backend):
+        return [backend]
+    if expanded is None:
+        expanded = set()
+    if id(backend) in expanded:
+        return []
+    if depth >= _MAX_CHAIN_DEPTH:
+        raise UninspectableKeyringError(
+            f"The chained keyring backend is nested more than {_MAX_CHAIN_DEPTH} "
+            "levels deep, so GAIA cannot confirm every store it writes to is "
+            "secure. Configure a single system credential store (set "
+            f"{_KEYRING_BACKEND_ENV_VAR} to it) and restart GAIA. See "
+            "docs/security/connections.mdx."
+        )
+    try:
+        members = list(backend.backends)
+    except Exception as e:  # noqa: BLE001 - fail closed with context below
+        raise _chain_error(
+            f"Could not inspect the chained keyring backend "
+            f"{type(backend).__name__!r}: {e}."
+        ) from e
+    from keyring.backend import KeyringBackend
+
+    targets: List[object] = [backend]
+    for member in members:
+        if not isinstance(member, KeyringBackend):
+            raise _chain_error(
+                f"Could not inspect the chained keyring backend "
+                f"{type(backend).__name__!r}: it holds "
+                f"{type(member).__name__!r}, which is not a keyring backend."
+            )
+        targets.extend(_write_targets(member, depth + 1, expanded))
+    expanded.add(id(backend))
+    return targets
+
+
+def _connection_username(provider: str, slot: str) -> str:
+    """Keyring username of one stored account: ``"<provider>:<slot>"``."""
+    return f"{provider}:{slot}"
 
 
 def _provider_credentials_username(provider: str) -> str:
@@ -99,9 +181,13 @@ def _provider_credentials_username(provider: str) -> str:
 
 def verify_keyring_backend() -> None:
     """
-    Raise ``ConnectorsError`` if the active keyring is one of the refused
-    backends. Called eagerly at every save and at every load — cheap, and
-    closes the silent-plaintext-fallback path (A4).
+    Raise ``ConnectorsError`` if the active keyring is, or derives from, one of
+    the refused backends. A chained keyring is expanded and every backend it
+    can write to is checked; a chain that cannot be inspected is refused.
+    Runs before every keyring read and write through ``keyring_access`` —
+    cheap, and closes the silent-plaintext-fallback path (A4). Deletes run it
+    through ``keyring_access.check_delete``, which warns instead of refusing
+    a ``WeakKeyringError``.
 
     Also the single eager choke point where an unresolvable
     ``PYTHON_KEYRING_BACKEND`` first surfaces (#2441): keyring resolves the var
@@ -129,15 +215,30 @@ def verify_keyring_backend() -> None:
             f"Could not initialize the keyring backend: {e}.{hint} "
             "See docs/security/connections.mdx."
         ) from e
-    cls_name = type(backend).__name__
-    if cls_name in _REFUSED_BACKEND_CLASS_NAMES:
-        raise ConnectorsError(
+    for target in _write_targets(backend):
+        cls_name = _refused_class_name(target)
+        if cls_name is None:
+            continue
+        raise WeakKeyringError(
             f"Insecure keyring backend {cls_name!r} is in use. GAIA refuses "
             "to store OAuth refresh tokens in plaintext. Install a secure "
             "system credential store (gnome-keyring or kwallet on Linux; "
             "macOS Keychain and Windows Credential Locker are built-in) "
             "and restart GAIA. See docs/security/connections.mdx."
         )
+
+
+def keyring_read_refusal() -> Optional[WeakKeyringError]:
+    """Why keyring reads are refused (a weak or uninspectable backend), else None.
+
+    For delete paths that must still work there. Any other backend failure
+    raises, as :func:`verify_keyring_backend` does.
+    """
+    try:
+        verify_keyring_backend()
+    except WeakKeyringError as e:
+        return e
+    return None
 
 
 def _wrap_keyring_call(operation: str):
@@ -203,7 +304,7 @@ def _chunk_username(username: str, idx: int) -> str:
 def _kr_raw_set(username: str, value: str) -> None:
     @_wrap_keyring_call("set_password")
     def _set():
-        keyring.set_password(SERVICE_NAME, username, value)
+        keyring_access.write(SERVICE_NAME, username, value)
 
     _set()
 
@@ -249,7 +350,7 @@ def _refuse(error: Exception) -> KeyringRefused:
     message = (
         "The OS credential store is locked: its unlock prompt was closed "
         f"({error}). GAIA won't ask again for {minutes} minutes; to unlock it "
-        "now, choose Try again under Settings → Model, or connect or test a "
+        "now, choose Try again under Settings → Agent & model, or connect or test a "
         "connector."
     )
     with _refusal_lock:
@@ -262,7 +363,7 @@ def _refuse(error: Exception) -> KeyringRefused:
     return KeyringRefused(message)
 
 
-def _kr_raw_get(username: str) -> Optional[str]:
+def _kr_raw_get(username: str, *, for_delete: bool = False) -> Optional[str]:
     global _probing
     # Every read after a dismissed prompt would open a new one at once.
     with _refusal_lock:
@@ -272,7 +373,8 @@ def _kr_raw_get(username: str) -> Optional[str]:
         if probe:
             _probing = True
     try:
-        value = keyring.get_password(SERVICE_NAME, username)
+        read = keyring_access.read_for_delete if for_delete else keyring_access.read
+        value = read(SERVICE_NAME, username)
     except (keyring.errors.KeyringLocked, keyring.errors.InitError) as e:
         raise _refuse(e) from e
     except keyring.errors.KeyringError as e:
@@ -296,7 +398,7 @@ def _kr_raw_get(username: str) -> Optional[str]:
 
 def _kr_raw_delete(username: str) -> None:
     try:
-        keyring.delete_password(SERVICE_NAME, username)
+        keyring_access.delete(SERVICE_NAME, username)
     except keyring.errors.PasswordDeleteError:
         pass
     except keyring.errors.KeyringError as e:
@@ -306,10 +408,12 @@ def _kr_raw_delete(username: str) -> None:
         ) from e
 
 
-def _kr_clear_chunks(username: str) -> None:
+def _kr_clear_chunks(username: str, *, for_delete: bool = False) -> None:
     """Best-effort removal of any leftover chunk slots for ``username``."""
     idx = 0
-    while _kr_raw_get(_chunk_username(username, idx)) is not None:
+    while (
+        _kr_raw_get(_chunk_username(username, idx), for_delete=for_delete) is not None
+    ):
         _kr_raw_delete(_chunk_username(username, idx))
         idx += 1
 
@@ -354,13 +458,14 @@ def _parse_manifest(raw: str) -> Optional[tuple[int, Optional[str]]]:
         return None
 
 
-def _kr_get(username: str) -> Optional[str]:
+def _kr_get(username: str, *, for_delete: bool = False) -> Optional[str]:
     """Read a (possibly chunked) value stored via :func:`_kr_set`.
 
     Any partial/torn state (missing slot, or a CRC mismatch from a crashed
     mid-rewrite) resolves to ``None`` — never a truncated-but-valid-looking
-    value."""
-    raw = _kr_raw_get(username)
+    value. ``for_delete`` reads the way a delete is checked; only a delete path
+    may pass it."""
+    raw = _kr_raw_get(username, for_delete=for_delete)
     if raw == "":
         # An earlier release's manifest as macOS kept it; nothing stores an empty value.
         logger.warning(
@@ -377,7 +482,7 @@ def _kr_get(username: str) -> Optional[str]:
     count, crc = parsed
     parts: list[str] = []
     for idx in range(count):
-        part = _kr_raw_get(_chunk_username(username, idx))
+        part = _kr_raw_get(_chunk_username(username, idx), for_delete=for_delete)
         if part is None:
             # Missing slot — torn entry; treat as "not configured".
             return None
@@ -393,14 +498,14 @@ def _kr_get(username: str) -> Optional[str]:
 def _kr_delete(username: str) -> None:
     """Delete a (possibly chunked) value and all its chunk slots. Idempotent."""
     retry_keyring()
-    raw = _kr_raw_get(username)
+    raw = _kr_raw_get(username, for_delete=True)
     _kr_raw_delete(username)
     if raw is not None and raw.startswith(_CHUNK_SENTINELS):
         parsed = _parse_manifest(raw)
         count = parsed[0] if parsed else 0
         for idx in range(count):
             _kr_raw_delete(_chunk_username(username, idx))
-    _kr_clear_chunks(username)
+    _kr_clear_chunks(username, for_delete=True)
 
 
 def save_connection(
@@ -408,6 +513,8 @@ def save_connection(
     provider: str,
     account_email: str,
     refresh_token: str,
+    slot: str = DEFAULT_ACCOUNT,
+    account_id: Optional[str] = None,
     scopes: List[str],
     client_id_hash: str,
     connected_at: Optional[float] = None,
@@ -423,15 +530,11 @@ def save_connection(
     full-value overwrite at the slot. This is the rotation-safety
     guarantee (per Iteration 1 fix C5).
 
-    v1 single-account-per-provider scope (per plan amendment A10): the
-    keyring slot is ALWAYS keyed by ``DEFAULT_ACCOUNT``, regardless of
-    the ``account_email`` argument. ``account_email`` is stored inside
-    the JSON blob for display purposes only. **A second
-    ``save_connection`` for the same provider — even with a different
-    email — will overwrite the first.** Multi-account support (separate
-    keyring slots per email) is a v2 follow-up; the username-key shape
-    ``"<provider>:<account_email>"`` is forward-compatible for that
-    migration.
+    ``slot`` picks the keyring entry (``accounts.py`` decides it: the
+    connector's first account uses ``default``). ``account_email`` is the
+    display label and ``account_id`` the provider's stable id for the account;
+    the id is omitted from the blob when unknown (a connection saved before it
+    was recorded) and filled in by the next refresh.
 
     ``tenant`` (D8, #2628): the OAuth authority that minted this
     connection's refresh token, e.g. ``"organizations"`` or a specific
@@ -468,6 +571,8 @@ def save_connection(
         "connected_at": connected_at if connected_at is not None else time.time(),
         "client_id_hash": client_id_hash,
     }
+    if account_id:
+        blob["account_id"] = account_id
     if tenant is not None:
         blob["tenant"] = tenant
     if account_type:
@@ -475,15 +580,11 @@ def save_connection(
     if forwarded:
         blob["forwarded"] = True
     payload = json.dumps(blob, sort_keys=True)
-    # v1 single-account per provider (per A10): the keyring KEY is always
-    # built with DEFAULT_ACCOUNT; ``account_email`` lives in the metadata
-    # blob for display. v2 will key by real email without a schema
-    # migration since the username shape already accommodates it.
-    username = _connection_username(provider, DEFAULT_ACCOUNT)
+    username = _connection_username(provider, slot)
 
     _kr_set(username, payload)
     # A completed write supersedes an interrupted forward's recovery record.
-    _kr_delete(_forward_recovery_username(provider))
+    _drop_forward_recovery_for(provider, slot)
 
 
 def load_connection(
@@ -491,7 +592,7 @@ def load_connection(
     *,
     current_client_id_hash: str,
     current_tenant: Optional[str] = None,
-    account_email: str = DEFAULT_ACCOUNT,
+    slot: str = DEFAULT_ACCOUNT,
 ) -> Optional[dict]:
     """
     Return the stored connection record, or ``None`` if no entry / tripwire fired.
@@ -512,7 +613,7 @@ def load_connection(
     "we don't know" is not the same as "we know they disagree".
     """
     verify_keyring_backend()
-    username = _connection_username(provider, account_email)
+    username = _connection_username(provider, slot)
 
     raw = _kr_get(username)
     if raw is None:
@@ -523,7 +624,7 @@ def load_connection(
     except json.JSONDecodeError as e:
         # Should not happen unless the keyring backend was corrupted by
         # an external writer — clear the entry and surface a useful error.
-        delete_connection(provider, account_email=account_email)
+        delete_connection(provider, slot=slot)
         raise ConnectorsError(
             f"Stored connection blob for provider={provider!r} is not valid "
             "JSON. Cleared the entry; reconnect via Settings → Connectors "
@@ -537,7 +638,7 @@ def load_connection(
         # "user never connected". The unit test in test_store.py asserts
         # the entry is cleared; the unit test in test_tokens.py asserts
         # the right Reason flows to the caller.
-        delete_connection(provider, account_email=account_email)
+        delete_connection(provider, slot=slot)
         raise AuthRequiredError(
             AuthRequiredError.Reason.REAUTH_REQUIRED, provider=provider
         )
@@ -548,7 +649,7 @@ def load_connection(
         and stored_tenant is not None
         and stored_tenant != current_tenant
     ):
-        delete_connection(provider, account_email=account_email)
+        delete_connection(provider, slot=slot)
         raise AuthRequiredError(
             AuthRequiredError.Reason.TENANT_MISMATCH,
             provider=provider,
@@ -570,7 +671,7 @@ def load_connection(
 def peek_connection(
     provider: str,
     *,
-    account_email: str = DEFAULT_ACCOUNT,
+    slot: str = DEFAULT_ACCOUNT,
 ) -> Optional[dict]:
     """
     Return the stored connection blob for display, or ``None`` if absent.
@@ -596,7 +697,7 @@ def peek_connection(
     don't here for the same side-effect-free reason.
     """
     verify_keyring_backend()
-    username = _connection_username(provider, account_email)
+    username = _connection_username(provider, slot)
 
     raw = _kr_get(username)
     if raw is None:
@@ -622,20 +723,39 @@ def has_forward_recovery(provider: str) -> bool:
     return _kr_get(_forward_recovery_username(provider)) is not None
 
 
-def write_forward_recovery(provider: str, snapshot: dict) -> None:
+def forward_recovery_slot(provider: str) -> Optional[str]:
+    """The account slot an interrupted forward left a marker for, or None."""
+    verify_keyring_backend()
+    raw = _kr_get(_forward_recovery_username(provider))
+    if raw is None:
+        return None
+    try:
+        slot = json.loads(raw).get("account_slot", DEFAULT_ACCOUNT)
+    except (json.JSONDecodeError, AttributeError):
+        # recover_forward_recovery reports the corrupt marker loudly.
+        return DEFAULT_ACCOUNT
+    return slot if isinstance(slot, str) else DEFAULT_ACCOUNT
+
+
+def write_forward_recovery(
+    provider: str, snapshot: dict, *, slot: str = DEFAULT_ACCOUNT
+) -> None:
     """Record the old pair before a forwarded save changes either slot.
 
-    The marker is itself stored through the torn-write-safe keyring helper. It
-    contains encrypted credential values and is never logged.
+    ``slot`` names the account the forward writes. The marker is itself stored
+    through the torn-write-safe keyring helper. It contains encrypted credential
+    values and is never logged.
     """
     verify_keyring_backend()
-    payload = json.dumps({"version": 1, "slots": snapshot}, sort_keys=True)
+    payload = json.dumps(
+        {"version": 2, "account_slot": slot, "slots": snapshot}, sort_keys=True
+    )
     _kr_set(_forward_recovery_username(provider), payload)
 
 
 def clear_forward_recovery(provider: str) -> None:
     """Remove the recovery marker after a forwarded save is complete."""
-    verify_keyring_backend()
+    keyring_access.check_delete()
     _kr_delete(_forward_recovery_username(provider))
 
 
@@ -646,14 +766,20 @@ def recover_forward_recovery(provider: str) -> bool:
     raw = _kr_get(username)
     if raw is None:
         return False
-    expected = {
-        _provider_credentials_username(provider),
-        _connection_username(provider, DEFAULT_ACCOUNT),
-    }
     try:
         marker = json.loads(raw)
-        if marker.get("version") != 1 or not isinstance(marker.get("slots"), dict):
+        if marker.get("version") not in (1, 2) or not isinstance(
+            marker.get("slots"), dict
+        ):
             raise ValueError("unsupported marker")
+        # Version 1 markers predate several accounts and always named "default".
+        account_slot = marker.get("account_slot", DEFAULT_ACCOUNT)
+        if not isinstance(account_slot, str):
+            raise ValueError("unsupported marker")
+        expected = {
+            _provider_credentials_username(provider),
+            _connection_username(provider, account_slot),
+        }
         slots = marker["slots"]
         # Restore only this provider's two slots, never a slot the marker names.
         if set(slots) != expected or not all(
@@ -670,8 +796,8 @@ def recover_forward_recovery(provider: str) -> bool:
     return True
 
 
-def snapshot_connection_slots(provider: str) -> dict:
-    """The stored client config and connection values for ``provider``.
+def snapshot_connection_slots(provider: str, *, slot: str = DEFAULT_ACCOUNT) -> dict:
+    """The stored client config and one account's connection for ``provider``.
 
     For :func:`restore_connection_slots`, to undo a multi-slot write that
     failed partway. A torn chunked value reads as absent. Holds secrets:
@@ -682,7 +808,7 @@ def snapshot_connection_slots(provider: str) -> dict:
         username: _kr_get(username)
         for username in (
             _provider_credentials_username(provider),
-            _connection_username(provider, DEFAULT_ACCOUNT),
+            _connection_username(provider, slot),
         )
     }
 
@@ -698,13 +824,38 @@ def restore_connection_slots(snapshot: dict) -> None:
             _kr_set(username, raw)
 
 
-def delete_connection(provider: str, *, account_email: str = DEFAULT_ACCOUNT) -> None:
-    """Remove the keyring entry for ``provider`` if present. Idempotent."""
-    verify_keyring_backend()
-    username = _connection_username(provider, account_email)
+def delete_connection(provider: str, *, slot: str = DEFAULT_ACCOUNT) -> None:
+    """Remove one stored account's keyring entry if present. Idempotent."""
+    keyring_access.check_delete()
+    username = _connection_username(provider, slot)
     _kr_delete(username)
     # Otherwise the next read would restore the connection just removed.
-    _kr_delete(_forward_recovery_username(provider))
+    _drop_forward_recovery_for(provider, slot)
+
+
+def connection_slot_in_use(provider: str, *, slot: str = DEFAULT_ACCOUNT) -> bool:
+    """Whether a stored account's slot holds anything, for a delete path.
+
+    Checked like a delete, so it answers on a weak backend; it never returns
+    the stored value.
+    """
+    keyring_access.check_delete()
+    return (
+        _kr_raw_get(_connection_username(provider, slot), for_delete=True) is not None
+    )
+
+
+def _drop_forward_recovery_for(provider: str, slot: str) -> None:
+    """Delete an interrupted forward's marker if it covers ``slot``."""
+    raw = _kr_get(_forward_recovery_username(provider), for_delete=True)
+    if raw is None:
+        return
+    try:
+        marked = json.loads(raw).get("account_slot", DEFAULT_ACCOUNT)
+    except (json.JSONDecodeError, AttributeError):
+        marked = slot
+    if marked == slot:
+        _kr_delete(_forward_recovery_username(provider))
 
 
 def _secret_username(name: str) -> str:
@@ -736,9 +887,19 @@ def peek_secret(name: str) -> Optional[str]:
     return _kr_get(_secret_username(name))
 
 
+def secret_in_use(name: str) -> bool:
+    """Whether :func:`save_secret` kept something under ``name``, for a delete path.
+
+    Checked like a delete, so it answers on a weak backend; it never returns
+    the stored value.
+    """
+    keyring_access.check_delete()
+    return _kr_raw_get(_secret_username(name), for_delete=True) is not None
+
+
 def delete_secret(name: str) -> None:
     """Remove a secret saved by :func:`save_secret`. Absent is not an error."""
-    verify_keyring_backend()
+    keyring_access.check_delete()
     _kr_delete(_secret_username(name))
 
 
@@ -797,36 +958,34 @@ def peek_provider_credentials(provider: str) -> Optional[dict]:
 
 def clear_provider_credentials(provider: str) -> None:
     """Remove the stored OAuth client credentials for *provider*. Idempotent."""
-    verify_keyring_backend()
+    keyring_access.check_delete()
     username = _provider_credentials_username(provider)
     _kr_delete(username)
 
 
 def list_connections() -> List[str]:
     """
-    Best-effort enumeration of stored providers.
+    Best-effort enumeration of providers with at least one stored account.
 
     The ``keyring`` API does not expose a portable "list all entries for
-    service" call, so we probe each registered OAuth provider for a stored
-    connection blob. The provider set is registry-driven (every ``oauth_pkce``
-    spec), so a newly added provider is enumerated without editing this
-    function — and generic consumers (``api.list_connections`` /
-    ``get_connection`` / the REST endpoint / ``tripwire_check``) see every
-    connected mailbox, not just Google.
+    service" call, so each registered OAuth provider's accounts are probed
+    (``accounts.list_accounts``). The provider set is registry-driven (every
+    ``oauth_pkce`` spec), so a newly added provider is enumerated without
+    editing this function.
     """
     # Function-local import: keep this module free of a module-level registry
     # dependency (mirrors ``api._require_mcp_server_for_activation``). Importing
     # the catalog registers the built-in specs; the module cache makes repeats a
     # no-op.
     import gaia.connectors.catalog  # noqa: F401  # pylint: disable=unused-import
+    from gaia.connectors.accounts import list_accounts
     from gaia.connectors.registry import REGISTRY
 
     known = tuple(spec.id for spec in REGISTRY.all() if spec.type == "oauth_pkce")
     found: list[str] = []
     for provider in known:
-        username = _connection_username(provider, DEFAULT_ACCOUNT)
         try:
-            if _kr_raw_get(username) is not None:
+            if any(a.status == "ok" for a in list_accounts(provider)):
                 found.append(provider)
         except ConnectorsError:
             # Translate-and-skip is OK for an enumeration call: a single

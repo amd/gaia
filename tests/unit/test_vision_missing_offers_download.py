@@ -11,6 +11,7 @@ so the Agent UI can offer the download, and tells the model to stop there.
 No Lemonade server required.
 """
 
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -20,6 +21,7 @@ from gaia.llm.vlm_client import VisionModelMissingError, VLMClient, VLMExtractio
 from gaia.ui.sse_handler import SSEOutputHandler
 from gaia.ui.sse_translation import SUMMARY_VIEW_KEYS
 from gaia.vlm.mixin import VLMToolsMixin
+from tests.unit.image_bytes import PNG
 
 GEMMA = lc.DEFAULT_MODEL_NAME
 
@@ -27,7 +29,7 @@ GEMMA = lc.DEFAULT_MODEL_NAME
 @pytest.fixture
 def host(tmp_path):
     image = tmp_path / "red_square.png"
-    image.write_bytes(b"png")
+    image.write_bytes(PNG)
     with patch("gaia.llm.lemonade_client.LemonadeClient"):
         client = VLMClient(vlm_model=GEMMA, base_url="http://127.0.0.1:59993/api/v1")
     client.client = MagicMock()
@@ -85,3 +87,39 @@ def test_the_ui_hears_which_model_is_needed():
 
     assert event["needs_model"] == "vision"
     assert "needs_model" in SUMMARY_VIEW_KEYS
+
+
+def test_in_the_app_the_model_is_pointed_at_the_button(host):
+    tools, image = host
+    tools.config = SimpleNamespace(surface="agent_ui")
+
+    result = tools._answer_question_about_image(image, "What colour is it?")
+
+    assert result["needs_model"] == "vision"
+    assert "'Get the vision model' button" in result["hint"]
+    assert "Do not try to read the image another way" in result["hint"]
+    # The answer is written from these: no model file, size or other app to repeat.
+    said = f"{result['error']} {result['hint']}"
+    assert GEMMA not in said
+    assert "TUI" not in said and "/setup" not in said
+
+
+@pytest.mark.parametrize(
+    "event",
+    [
+        {"type": "tool_result", "needs_model": "vision"},
+        # A relayed result carries it inside ``data``.
+        {"type": "tool_result", "data": {"needs_model": "vision"}},
+    ],
+)
+def test_the_saved_step_keeps_which_model_is_needed(event):
+    from gaia.ui._chat_helpers import _needed_model
+
+    assert _needed_model(event) == "vision"
+
+
+def test_a_step_that_needed_no_model_saves_none():
+    from gaia.ui._chat_helpers import _needed_model
+
+    assert _needed_model({"type": "tool_result", "data": {"status": "error"}}) is None
+    assert _needed_model({"type": "tool_result", "data": "text"}) is None

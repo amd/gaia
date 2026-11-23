@@ -89,6 +89,12 @@ gaia chat --stats
   </Accordion>
 </AccordionGroup>
 
+`/reset` also forgets every "always" you answered in the conversation, so the next
+action that asks will ask again. So does `/resume`: the conversation you switch to
+starts with no "always" answers, including one you resume after leaving it. If
+the session can't be found or read, you stay in the current conversation and keep
+its answers.
+
 `/quit` and `/reset` save the current session first. If saving fails, the
 conversation stays open and unchanged so you can fix the storage problem and
 retry `/save`, then `/quit` or `/reset`. To exit without saving, press `Ctrl-C`;
@@ -163,7 +169,7 @@ RAG (Retrieval-Augmented Generation) enables chatting with documents — includi
 </Tabs>
 
 <Note>
-  **Document Indexing Requirements:** Text in images and scans is read by a Vision Language Model (VLM): a tested vision model that is already loaded, then your default chat model when it can read images, which `Gemma-4-E4B-it-GGUF` and `Qwen3.6-35B-A3B-GGUF` both can, and otherwise `Gemma-4-E4B-it-GGUF`. If that model isn't downloaded but another tested one is, such as `Qwen3.6-35B-A3B-GGUF`, GAIA reads images with the one on disk instead of asking you to download it. While chat runs on the NPU, images are not read at all: the NPU model doesn't read them, and GAIA says so instead of loading a second model. `gaia init` already downloads these, unless you set a `default_model` that can't read images: then `gaia init` skips Gemma, so download it yourself:
+  **Document Indexing Requirements:** Text in images and scans is read by a Vision Language Model (VLM): a tested vision model that is already loaded, then your default chat model when it can read images, which `Gemma-4-E4B-it-GGUF`, `Qwen3.6-35B-A3B-GGUF`, `Qwen3.5-4B-GGUF` and `Qwen3.5-2B-GGUF` all can, and otherwise `Gemma-4-E4B-it-GGUF`. If that model isn't downloaded but another tested one is, such as `Qwen3.6-35B-A3B-GGUF`, GAIA reads images with the one on disk instead of asking you to download it. While chat runs on the NPU, images are not read at all: the NPU model doesn't read them, and GAIA says so instead of loading a second model. `gaia init` already downloads these. It skips Gemma on a PC whose default is a Qwen3.5 model, which reads images itself, and when you set a `default_model`; if that model can't read images, download Gemma yourself:
   ```bash
   lemonade pull Gemma-4-E4B-it-GGUF
   ```
@@ -217,7 +223,7 @@ gaia chat --index document.pdf --debug
 
 ```python Python Debug
 # Python SDK with debug — ChatAgent takes a single ChatAgentConfig
-from gaia_agent.chat_agent import ChatAgent, ChatAgentConfig
+from gaiapy.chat_agent import ChatAgent, ChatAgentConfig
 
 config = ChatAgentConfig(
     rag_documents=['document.pdf'],
@@ -307,7 +313,7 @@ print(result)
 ## Dynamic Tool Loading
 
 <Note>
-**On by default.** Turn it off under **Settings → Advanced → Dynamic Tools**, or with
+**On by default.** Turn it off under **Settings → Advanced → Dynamic tools**, or with
 `gaia config set dynamic_tools false`. Either applies to new chats.
 </Note>
 
@@ -320,7 +326,8 @@ Qwen3.6-35B-A3B that cut what a cold first turn reads from about 21,300 tokens t
 When a turn needs something else, the session moves to the full list once, and the list
 then stays put. The full list is kept ready beside the short one, so a first task starts
 as quickly as a first "hello". That move happens before the model is asked, when your
-message names a tool, a picture or a recording, when a recalled procedure needs a tool, or
+message names a tool, a picture or a recording, when you paste a skill or ask to save,
+install, or correct one, when a recalled procedure needs a tool, or
 when a tool outside the list is
 a clearly better match than every tool on it. If the agent still lacks something, it calls
 `search_tools`, which finds tools and installed skills by what they do.

@@ -88,6 +88,7 @@ from dataclasses import dataclass, field, replace
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Iterable, Mapping, Sequence
 
+from gaia import program_lookup
 from gaia.skills.errors import FORMAT_DOCS_URL, SkillPermissionError
 
 logger = logging.getLogger(__name__)
@@ -197,6 +198,10 @@ class Subcommand:
             it refuses — ``--omit dev`` and ``--omit left-pad`` parse the same
             here. Attached, the value is unambiguous, so ``npm ci --omit=dev``
             works without the value-flag that would swallow a package name.
+        optional_value_flags: Short options whose value is optional and only
+            ever attached (git's ``-M50%``). In a short cluster the rest of the
+            token is their value; a spaced next token is never consumed, because
+            the CLI reads it as a word of its own.
         path_value_flags: Value-taking flags whose value is a FILE this
             command reads or writes (``go test -coverprofile=cover.out``). The
             value must stay inside the checkout, by the same lexical test that
@@ -244,6 +249,15 @@ class Subcommand:
             this binary's (``python util/lint.py --all --fix``). Flag
             validation stops there; what still holds is containment — no
             argument, nor a path attached to one, may leave the checkout.
+        exact_options: Long options THIS subcommand defines that are a strict
+            prefix of a denied flag (``git diff --text`` vs ``--textconv``).
+            The CLI takes an exact match over an abbreviation, so these are not
+            read as one. Per subcommand, never per binary: where a subcommand
+            lacks the option, the same token IS the abbreviation (``git blame
+            --text`` is ``--textconv``). List an option only if every supported
+            version of the CLI defines it on this subcommand — an option a
+            newer release added still abbreviates the denied one on an older
+            release.
     """
 
     actions: frozenset[str] = frozenset()
@@ -260,6 +274,7 @@ class Subcommand:
     denied_flag_reasons: Mapping[str, str] = field(default_factory=dict)
     strict_flags: bool = False
     inline_value_flags: frozenset[str] = frozenset()
+    optional_value_flags: frozenset[str] = frozenset()
     path_value_flags: frozenset[str] = frozenset()
     no_operands: bool = False
     confirm: bool = False
@@ -267,10 +282,25 @@ class Subcommand:
     denied_operand_prefixes: Mapping[str, str] = field(default_factory=dict)
     delegate_flag: str = ""
     script_args: bool = False
+    exact_options: frozenset[str] = frozenset()
     #: The first operand is an API path on the CLI's own host, never a URL.
     relative_endpoint: bool = False
 
     def __post_init__(self) -> None:
+        idle = sorted(
+            option
+            for option in self.exact_options
+            if not option.startswith("--")
+            or not any(
+                flag != option and flag.startswith(option) for flag in self.denied_flags
+            )
+        )
+        if idle:
+            raise ValueError(
+                f"Subcommand exact_options {idle} must each be a long option "
+                "that is a strict prefix of one of its denied_flags; anything "
+                "else exempts nothing and hides what the exemption is for."
+            )
         offered = (self.actions | self.confirm_actions) & set(
             self.never_offered_actions
         )
@@ -387,6 +417,13 @@ class BinaryPolicy:
             flag token must not be read as a short flag carrying an attached
             value. Getting this wrong is a bypass, not a cosmetic difference —
             see :func:`_split_flag`.
+        abbreviated_options: This CLI parses options the way git's
+            ``parse-options`` does: a unique prefix of a long option selects
+            it (``--ext`` is ``--ext-diff``), and boolean short options cluster
+            (``-an`` is ``-a -n``). Denied flags are then matched in both
+            spellings, not by exact name. A real option that is a strict
+            prefix of a denied one is exempted per subcommand, through
+            :attr:`Subcommand.exact_options`.
         confirm_summary: The clause a CONFIRM prompt uses when the rule does
             not override it — "writes to GitHub", "changes this repository".
             One line, and it must be true of every write the policy offers.
@@ -425,6 +462,7 @@ class BinaryPolicy:
     positional: Subcommand | None = None
     substitute: str = ""
     single_dash_long: bool = False
+    abbreviated_options: bool = False
     #: pflag reads ``-ab`` as ``-a -b`` when ``-a`` takes no value, and which
     #: flags take one differs per subcommand. Refuse every single-dash token
     #: longer than a flag, so no table of value flags has to be right.
@@ -818,6 +856,20 @@ _GIT_BRANCH_DENIED_FLAGS = frozenset(
 )
 
 
+#: Short options of git's diff machinery that need a value (``-SOAuth``,
+#: ``-S OAuth``), and those whose value is optional and attached only (``-M50%``).
+#: Either way git reads the rest of a short cluster as the value.
+_GIT_DIFF_VALUE_SHORT = frozenset({"-S", "-G", "-l", "-I"})
+_GIT_DIFF_OPTIONAL_VALUE_SHORT = frozenset({"-U", "-M", "-C", "-B", "-X"})
+_GIT_LOG_VALUE_SHORT = _GIT_DIFF_VALUE_SHORT | {"-n", "-L"}
+
+#: Only the subcommands that define ``--text`` (diff, log, show, grep, stash) exempt
+#: it; on blame or cat-file git reads it as ``--textconv``. ``--filter`` is
+#: exempt on log alone: git releases older than ``cat-file --filter`` read it
+#: there as ``--filters``.
+_GIT_TEXT = frozenset({"--text"})
+
+
 def _git_read(
     *,
     denied_flags: frozenset[str] = frozenset(),
@@ -825,6 +877,8 @@ def _git_read(
     denied_actions: frozenset[str] = frozenset(),
     no_operands: bool = False,
     value_flags: frozenset[str] = frozenset(),
+    optional_value_flags: frozenset[str] = frozenset(),
+    exact_options: frozenset[str] = frozenset(),
 ) -> Subcommand:
     """One read-only git subcommand — free-form, because its operands are
     revisions and pathspecs rather than an action word.
@@ -842,6 +896,8 @@ def _git_read(
         free_form=True,
         no_operands=no_operands,
         value_flags=value_flags,
+        optional_value_flags=optional_value_flags,
+        exact_options=exact_options,
         denied_actions=denied_actions,
         denied_flags=_GIT_READ_DENIED_FLAGS | denied_flags,
         denied_flag_reasons={
@@ -1384,7 +1440,8 @@ def _formatter(
 BINARY_POLICIES: dict[str, BinaryPolicy] = {
     # GAIA's own CLI, for the automations skill only: its automations and the
     # Discord bridge's GitHub watches. Nothing else of `gaia` is reachable from
-    # a skill — no setup, no config, no connectors.
+    # a skill — no setup, no config, no connectors — and `gaia skill` is never
+    # offered at all (HUMAN_ONLY_GAIA_SUBCOMMANDS).
     "gaia": BinaryPolicy(
         binary="gaia",
         confirm_summary="changes what GAIA does on its own and reports to you",
@@ -1575,10 +1632,10 @@ BINARY_POLICIES: dict[str, BinaryPolicy] = {
         # pytest usually lives in a project's virtualenv, not on PATH, and the
         # coding skill is still the right guide without the shortcut.
         substitute=(
-            "`python -m pytest` is judged as `pytest`, so it is refused too. "
-            "Run the suite with execute_python_file and a script that calls "
-            "`import sys, pytest; sys.exit(pytest.main(['-q', 'tests/']))`, "
-            "which works wherever pytest is importable."
+            "`python -m pytest` still runs wherever pytest is importable, once "
+            "the user approves it. So does execute_python_file with a script "
+            "that calls "
+            "`import sys, pytest; sys.exit(pytest.main(['-q', 'tests/']))`."
         ),
         positional=Subcommand(
             path_operands=True,
@@ -1668,6 +1725,7 @@ BINARY_POLICIES: dict[str, BinaryPolicy] = {
         # MORE contained, not less, by taking the configured pager (a program)
         # out of the run entirely.
         bare_flags=frozenset({"--version", "--help", "-h", "-P", "--no-pager"}),
+        abbreviated_options=True,
         # The read-only floor this binary had before it had a policy — see
         # BinaryPolicy.ungranted. Unchanged from the shell tool's old
         # SAFE_GIT_COMMANDS, so an agent with no skill loaded behaves as before.
@@ -1684,22 +1742,43 @@ BINARY_POLICIES: dict[str, BinaryPolicy] = {
                 "describe",
                 "rev-parse",
                 "help",
+                "blame",
             }
         ),
         subcommands={
             "status": _git_read(),
-            "log": _git_read(),
-            "show": _git_read(),
-            "diff": _git_read(),
-            "blame": _git_read(),
-            "shortlog": _git_read(),
+            "log": _git_read(
+                value_flags=_GIT_LOG_VALUE_SHORT,
+                optional_value_flags=_GIT_DIFF_OPTIONAL_VALUE_SHORT,
+                # `--filter` is rev-list's object filter, matched exactly by
+                # the revision parser; log has no `--filters` to abbreviate.
+                exact_options=frozenset({"--text", "--filter"}),
+            ),
+            "show": _git_read(
+                value_flags=_GIT_LOG_VALUE_SHORT,
+                optional_value_flags=_GIT_DIFF_OPTIONAL_VALUE_SHORT,
+                exact_options=_GIT_TEXT,
+            ),
+            "diff": _git_read(
+                value_flags=_GIT_DIFF_VALUE_SHORT,
+                optional_value_flags=_GIT_DIFF_OPTIONAL_VALUE_SHORT,
+                exact_options=_GIT_TEXT,
+            ),
+            "blame": _git_read(
+                value_flags=frozenset({"-L", "-S"}),
+                optional_value_flags=frozenset({"-C", "-M"}),
+            ),
+            "shortlog": _git_read(optional_value_flags=frozenset({"-w"})),
             "describe": _git_read(),
             "rev-parse": _git_read(),
             "merge-base": _git_read(),
-            "ls-files": _git_read(),
+            "ls-files": _git_read(value_flags=frozenset({"-x", "-X"})),
             "ls-tree": _git_read(),
             "cat-file": _git_read(),
-            "grep": _git_read(),
+            "grep": _git_read(
+                value_flags=frozenset({"-e", "-f", "-A", "-B", "-C", "-m"}),
+                exact_options=_GIT_TEXT,
+            ),
             # Flags only: `git branch` lists, and `git branch <name>`
             # CREATES a ref, which free-form would have called the same read.
             "branch": _git_read(
@@ -1810,6 +1889,7 @@ BINARY_POLICIES: dict[str, BinaryPolicy] = {
                 "switches branches or overwrites files in the working tree — "
                 "any uncommitted change to a file it touches is lost, and "
                 "nothing recovers it",
+                value_flags=frozenset({"-b"}),
                 denied_flags=frozenset({"-f", "--force", "-B", "--orphan"}),
                 denied_flag_reasons={
                     "-f": "it discards uncommitted changes without reporting "
@@ -1824,6 +1904,7 @@ BINARY_POLICIES: dict[str, BinaryPolicy] = {
             ),
             "switch": _git_write(
                 "switches branches in this repository",
+                value_flags=frozenset({"-c"}),
                 denied_flags=frozenset(
                     {"-f", "--force", "--discard-changes", "-C", "--orphan"}
                 ),
@@ -1855,6 +1936,8 @@ BINARY_POLICIES: dict[str, BinaryPolicy] = {
                 denied_flags=_GIT_READ_DENIED_FLAGS,
                 denied_flag_reasons=_GIT_READ_DENIED_FLAG_REASONS,
                 value_flags=frozenset({"-m", "--message"}),
+                # `show` and `list` hand their flags to diff and log.
+                exact_options=_GIT_TEXT,
             ),
         },
     ),
@@ -2318,7 +2401,11 @@ def resolve_binary_policies(
     declared = _declared_binaries(permissions)
     for permission in binary_permissions(permissions):
         policy = BINARY_POLICIES[(permission.scope or "").lower()]
-        if require_installed and shutil.which(policy.binary) is None:
+        # At load, a CLI installed since GAIA started must be found.
+        if (
+            require_installed
+            and program_lookup.resolve_refreshing(policy.binary) is None
+        ):
             alias = _installed_alias(policy, declared)
             if alias:
                 logger.warning(
@@ -2353,7 +2440,9 @@ def resolve_binary_policies(
                 f"Skill '{skill_name}' needs the '{policy.binary}' command, which "
                 f"is not on PATH. {policy.summary} {remedy}{policy.install_hint} "
                 "The skill is refused rather than loaded without the tool it "
-                "documents."
+                "documents. Tell the user plainly that you cannot do what they "
+                "asked right now and why; do not stand in another tool, such as "
+                "saving a memory, as if it did the job."
             )
         if policy not in policies:
             policies.append(policy)
@@ -2421,6 +2510,98 @@ def normalize_binary(token: str) -> str:
     return name if BINARY_NAME_RE.match(name) else ""
 
 
+#: ``gaia`` subcommands only a person at their own terminal may run. They decide
+#: which skills and folders GAIA trusts, so no approval lets the agent run them.
+HUMAN_ONLY_GAIA_SUBCOMMANDS = frozenset({"skill", "trust", "project"})
+
+#: How a refusal names the command family only the user may run.
+HUMAN_ONLY_CALL = "gaia skill"
+
+#: How ``gaia`` is spelled as a program: the binary, the legacy alias, the module.
+_GAIA_PROGRAM_NAMES = frozenset({"gaia", "gaia-cli", "gaia.cli"})
+
+
+def human_only_message(spelled: str) -> str:
+    """The refusal for *spelled*, a ``gaia`` command only the user may run."""
+    return (
+        f"'{spelled}' is not permitted for GAIA: promoting, installing or "
+        "trusting a skill, and trusting a folder's guidance, is the user's "
+        "decision, made from their own terminal, and no approval lets the "
+        "agent run it"
+    )
+
+
+#: Shell punctuation and escapes around a word: ``$(gaia``, ``g^aia``, ``"gaia"``.
+_WORD_NOISE = re.compile(r"[\^`]")
+_WORD_EDGES = "\"'$(){}[]&;|,"
+
+#: Launcher extensions a ``gaia`` shim may carry.
+_SHIM_SUFFIXES = (".exe", ".cmd", ".bat", ".ps1")
+
+
+def _bare_word(token: str) -> str:
+    """*token* without escapes, edge punctuation, path or launcher suffix."""
+    word = _WORD_NOISE.sub("", token).strip().strip(_WORD_EDGES).lower()
+    word = re.split(r"[\\/]", word)[-1]
+    if word.startswith("-m") and word[2:] in _GAIA_PROGRAM_NAMES:
+        return word[2:]
+    for suffix in _SHIM_SUFFIXES:
+        if word.endswith(suffix):
+            return word[: -len(suffix)]
+    return word
+
+
+#: Modules that run ``gaia skill`` or change skill or folder trust when imported and called.
+TRUST_MODULES = re.compile(
+    r"^gaia\.(?:cli|__main__|project_trust|project_trust_cli|skills\.(?:cli|capture|"
+    r"install|signing|drift|publish|link|migrate|human_only))(?!\w)"
+)
+
+
+def human_only_in_code_words(words: Sequence[str]) -> str:
+    """What in an inline script's *words* changes skill trust, or ``""``.
+
+    A module that does it in-process, the agent marker, or a ``gaia skill``
+    call among the script's words.
+    """
+    from gaia.skills.human_only import AGENT_CHILD_ENV
+
+    for word in words:
+        bare = _bare_word(word)
+        if TRUST_MODULES.match(bare):
+            return HUMAN_ONLY_CALL
+        if AGENT_CHILD_ENV.lower() in word.lower():
+            return AGENT_CHILD_ENV
+    return human_only_gaia_call(words)
+
+
+def human_only_gaia_call(words: Sequence[str]) -> str:
+    """The ``gaia <subcommand>`` in *words* only a person may run, or ``""``.
+
+    *words* is a flat token list; ``gaia``, a shim or path to it, and
+    ``python -m gaia`` (``-mgaia`` too) all count. Options before the
+    subcommand are skipped with the value one may take. An early check only:
+    the commands themselves refuse an agent (:mod:`gaia.skills.human_only`).
+    """
+    tokens = list(words)
+    for index, token in enumerate(tokens):
+        if _bare_word(token) not in _GAIA_PROGRAM_NAMES:
+            continue
+        takes_value = False
+        for word in tokens[index + 1 :]:
+            first = _bare_word((word.split() or [""])[0])
+            if first in HUMAN_ONLY_GAIA_SUBCOMMANDS:
+                return f"gaia {first}"
+            if word.startswith("-"):
+                takes_value = "=" not in word
+                continue
+            if takes_value:
+                takes_value = False
+                continue
+            break
+    return ""
+
+
 #: Interpreters whose ``-m <module>`` form can stand in for a policy's binary.
 PYTHON_LAUNCHERS = frozenset({"python", "python3", "py"})
 
@@ -2484,20 +2665,95 @@ def _split_flag(
     difference — ``-exec`` splits into an ``-e`` nothing denies, and ``go test
     -exec /bin/sh`` runs a shell. Both spellings normalise to one leading dash
     so a rule need list ``-exec`` only once.
+
+    A token that carries ``=`` returns its attached value even when it is empty
+    (``--jq=`` gives ``""``): the parser has already taken the value from this
+    token, so the next token is a flag or operand of its own, never this
+    flag's value. Only a token with nothing attached returns ``None``.
     """
     if single_dash_long and token.startswith("-"):
-        name, _, attached = token.lstrip("-").partition("=")
-        return f"-{name}", attached or None
+        name, sep, attached = token.lstrip("-").partition("=")
+        return f"-{name}", attached if sep else None
     if token.startswith("--"):
-        name, _, attached = token.partition("=")
-        return name, attached if attached else None
+        name, sep, attached = token.partition("=")
+        return name, attached if sep else None
     name, rest = token[:2], token[2:]
-    return name, rest.lstrip("=") or None
+    if rest.startswith("="):
+        return name, rest[1:]
+    return name, rest or None
 
 
 def _flag_name(token: str, *, single_dash_long: bool = False) -> str:
     """The flag's name, without any value attached to the same token."""
     return _split_flag(token, single_dash_long=single_dash_long)[0]
+
+
+def _long_flag_matches(name: str, full: str) -> bool:
+    """True when *name* is *full* or an abbreviation of it (``--ext`` → ``--ext-diff``)."""
+    return len(name) > 2 and full.startswith(name)
+
+
+def _value_taking_flags(rule: Subcommand) -> frozenset[str]:
+    return (
+        frozenset(rule.value_flags)
+        | frozenset(rule.flag_values)
+        | rule.path_value_flags
+        | rule.inline_value_flags
+        | rule.optional_value_flags
+        | frozenset(rule.flag_value_prefixes)
+    )
+
+
+def _spelled_denied_flag(
+    policy: BinaryPolicy, rule: Subcommand, token: str, name: str
+) -> str | None:
+    """The denied flag *token* spells, or None.
+
+    An exact name always counts. Under :attr:`BinaryPolicy.abbreviated_options`
+    so does a long-option abbreviation, and so does any letter of a short
+    cluster up to the first letter that takes a value (the rest is its value).
+    """
+    denied = rule.denied_flags
+    if name in denied:
+        return name
+    if not policy.abbreviated_options or policy.single_dash_long:
+        return None
+    if token.startswith("--"):
+        if name in rule.exact_options:
+            return None
+        return next(
+            (flag for flag in sorted(denied) if _long_flag_matches(name, flag)), None
+        )
+    value_taking = _value_taking_flags(rule)
+    for letter in token[1:]:
+        if letter == "=":
+            break
+        flag = f"-{letter}"
+        if flag in denied:
+            return flag
+        if flag in value_taking:
+            break
+    return None
+
+
+def _denied_flag_message(
+    policy: BinaryPolicy, prefix: str, token: str, name: str, denied: str, reason: str
+) -> str:
+    """The refusal for a denied flag, naming the flag the CLI reads *token* as."""
+    if denied == name:
+        return f"'{policy.binary} {prefix}{denied}' is not allowed: {reason}."
+    return (
+        f"'{policy.binary} {prefix}{token}' is not allowed "
+        f"({policy.binary} reads it as {denied}): {reason}."
+    )
+
+
+def _empty_value(spelled: str, name: str, *, attached_only: bool = False) -> str:
+    example = f"{name}=<value>" if attached_only else f"{name} <value>"
+    return (
+        f"'{spelled}' is not allowed: {name} needs a value, and nothing follows "
+        f"its '='. Pass the value itself, e.g. '{example}'."
+    )
 
 
 def validate_invocation(policy: BinaryPolicy, argv: Sequence[str]) -> str | None:
@@ -2650,6 +2906,10 @@ def classify_invocation(
         return _ALLOWED  # bare `gh`, `gh --version` — help text only
 
     subcommand = tokens[index].lower()
+    if policy.binary == "gaia" and subcommand in HUMAN_ONLY_GAIA_SUBCOMMANDS:
+        return InvocationDecision(
+            REFUSE, human_only_message(f"gaia {subcommand}") + ".", never_offered=True
+        )
     rule = policy.subcommands.get(subcommand)
     if rule is None:
         # Only mention the write tier when this policy actually has one — a
@@ -2705,8 +2965,6 @@ def classify_invocation(
             "would run something other than what was checked."
         )
 
-    denied_flags = rule.denied_flags
-
     action: str | None = None
     cursor = 0
     while cursor < len(rest):
@@ -2737,13 +2995,16 @@ def classify_invocation(
         # Checked before the action is classified, so a denied flag refuses the
         # call outright — a confirmable write carrying one never reaches a
         # prompt, because the flag is the escalation, not the write.
-        if name in denied_flags:
+        denied = _spelled_denied_flag(policy, rule, token, name)
+        if denied is not None:
             reason = rule.denied_flag_reasons.get(
-                name,
+                denied,
                 "that flag sends a request body, which makes the call a write",
             )
             return _refuse(
-                f"'{policy.binary} {subcommand} {name}' is not allowed: {reason}."
+                _denied_flag_message(
+                    policy, f"{subcommand} ", token, name, denied, reason
+                )
             )
         if (
             policy.refuse_bundled_short_flags
@@ -2775,6 +3036,14 @@ def classify_invocation(
                     f"spaced: write '{name}=<value>'. Spaced, the value cannot "
                     "be told apart from the operand this subcommand refuses."
                 )
+            if inline == "":
+                return _refuse(
+                    _empty_value(
+                        f"{policy.binary} {subcommand} {token}",
+                        name,
+                        attached_only=True,
+                    )
+                )
             denial = _denied_operand(rule, policy.binary, inline)
             if denial is not None:
                 return _refuse(denial)
@@ -2805,6 +3074,8 @@ def classify_invocation(
             or name in rule.value_flags
             or name in rule.path_value_flags
         )
+        if takes_value and inline == "":
+            return _refuse(_empty_value(f"{policy.binary} {subcommand} {token}", name))
         value = inline
         if takes_value and inline is None:
             value = rest[cursor] if cursor < len(rest) else None
@@ -3022,11 +3293,14 @@ def _classify_positional_invocation(
 
         name, inline = _split_flag(token, single_dash_long=policy.single_dash_long)
 
-        if name in rule.denied_flags:
+        denied = _spelled_denied_flag(policy, rule, token, name)
+        if denied is not None:
             reason = rule.denied_flag_reasons.get(
-                name, "it is outside this grant's read-only flag set"
+                denied, "it is outside this grant's read-only flag set"
             )
-            return _refuse(f"'{policy.binary} {name}' is not allowed: {reason}.")
+            return _refuse(
+                _denied_flag_message(policy, "", token, name, denied, reason)
+            )
 
         if name in rule.allowed_flags or name in policy.bare_flags:
             if inline is not None:
@@ -3052,6 +3326,8 @@ def _classify_positional_invocation(
                 f"covers a fixed set of flags: {', '.join(sorted(known_flags))}."
             )
 
+        if inline == "":
+            return _refuse(_empty_value(f"{policy.binary} {token}", name))
         value = inline
         if inline is None:
             value = tokens[cursor] if cursor < len(tokens) else None

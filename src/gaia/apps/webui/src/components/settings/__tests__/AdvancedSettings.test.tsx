@@ -2,10 +2,11 @@
 // SPDX-License-Identifier: MIT
 
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest';
 import { AdvancedSettings } from '../AdvancedSettings';
 import * as api from '../../../services/api';
 import { useChatStore } from '../../../stores/chatStore';
+import { useModelStore } from '../../../stores/modelStore';
 import type { SystemStatus } from '../../../types';
 
 vi.mock('../../../services/api');
@@ -63,7 +64,7 @@ describe('AdvancedSettings', () => {
         await screen.findByText('amd.o1-mini');
 
         expect(screen.queryByText('Wrong model loaded.')).not.toBeInTheDocument();
-        expect(screen.queryByText('Force Re-download')).not.toBeInTheDocument();
+        expect(screen.queryByText('Download again')).not.toBeInTheDocument();
         expect(screen.queryByText('Device')).not.toBeInTheDocument();
         expect(screen.queryByText('Context Size')).not.toBeInTheDocument();
         expect(screen.queryByText(/Expected:/)).not.toBeInTheDocument();
@@ -96,10 +97,30 @@ describe('AdvancedSettings', () => {
         render(<AdvancedSettings />);
         await screen.findByText('Wrong model loaded.');
 
-        expect(screen.getByText('Force Re-download')).toBeInTheDocument();
+        expect(screen.getByText('Download again')).toBeInTheDocument();
         expect(screen.getByText('Device')).toBeInTheDocument();
         // Context size lives in Settings › Model, sized to what fits (#5213).
         expect(screen.queryByText('Context Size')).not.toBeInTheDocument();
+    });
+
+    it('offers no Load for an expected model Lemonade does not have', async () => {
+        mockedApi.getSystemStatus.mockResolvedValue(status({
+            default_model_is_cloud: false, model_loaded: 'Qwen3-4B-GGUF', model_device: 'gpu',
+            default_model_name: 'no-such-model-xyz-123', model_labels: null, model_downloaded: false,
+        }));
+        render(<AdvancedSettings />);
+        await screen.findByText('Qwen3-4B-GGUF');
+
+        expect(screen.queryByText('Wrong model loaded.')).not.toBeInTheDocument();
+        expect(screen.queryByRole('button', { name: 'Load model' })).not.toBeInTheDocument();
+    });
+
+    it('marks Custom model ID as a place Settings can jump to', async () => {
+        mockedApi.getSystemStatus.mockResolvedValue(status({}));
+        const { container } = render(<AdvancedSettings />);
+        await screen.findByText('amd.o1-mini');
+
+        expect(container.querySelector('[data-settings-target="custom-model"]')).not.toBeNull();
     });
 
     it('shows why Force Re-download could not start', async () => {
@@ -109,7 +130,7 @@ describe('AdvancedSettings', () => {
             default_model_name: 'Gemma-4-E4B-it-GGUF', model_labels: null,
         }));
         render(<AdvancedSettings />);
-        await screen.findByText('Force Re-download');
+        await screen.findByText('Download again');
 
         expect(screen.getByText(/Cannot download 'user.x'/)).toHaveAttribute('role', 'alert');
     });
@@ -120,7 +141,7 @@ describe('AdvancedSettings', () => {
             default_model_name: 'Gemma-4-E4B-it-GGUF', model_labels: null,
         }));
         const { unmount } = render(<AdvancedSettings />);
-        fireEvent.click(await screen.findByText('Force Re-download'));
+        fireEvent.click(await screen.findByText('Download again'));
         expect(modelActions.downloadModel).toHaveBeenCalledWith(true, undefined, false);
         unmount();
 
@@ -130,7 +151,7 @@ describe('AdvancedSettings', () => {
             default_model_name: 'Gemma-4-E4B-it-GGUF', model_labels: null,
         }));
         render(<AdvancedSettings />);
-        fireEvent.click(await screen.findByText('Force Re-download'));
+        fireEvent.click(await screen.findByText('Download again'));
         expect(modelActions.downloadModel).toHaveBeenCalledWith(true, undefined, true);
     });
 
@@ -161,6 +182,7 @@ describe('AdvancedSettings', () => {
 
     it('offers setup, not waiting, when no model server is installed', async () => {
         const notInstalled = status({
+            initialized: false,
             lemonade_running: false, model_loaded: null, start_command: 'gaia init',
             start_instruction: 'Lemonade Server is not installed. Run `gaia init` to install it.',
         });
@@ -172,12 +194,41 @@ describe('AdvancedSettings', () => {
         render(<AdvancedSettings />);
 
         expect(await screen.findByText('Not Installed')).toBeInTheDocument();
-        expect(screen.getByText('Set it up to run models on this PC. Cloud providers still work.')).toBeInTheDocument();
+        expect(screen.getByText('GAIA needs it for every chat, cloud ones too. Setup installs it for you.')).toBeInTheDocument();
         expect(screen.queryByText(/normally starts on its own/)).not.toBeInTheDocument();
         // The first sits on the status card; the closed server section carries another.
         fireEvent.click(screen.getAllByRole('button', { name: 'Set up local models' })[0]);
         expect(opened).toHaveBeenCalledOnce();
         window.removeEventListener('gaia:set-up-local', opened);
+    });
+
+    it('a server the user chose that is not answering says so, and never that cloud chats still work', async () => {
+        const down = status({
+            lemonade_running: false, lemonade_probe: 'down', model_loaded: null, start_command: null,
+            start_instruction: "The model server GAIA uses is at 127.0.0.1:4328. GAIA doesn't run this model server, so it can't start it. Start it the way you usually do.",
+        });
+        mockedApi.getSystemStatus.mockResolvedValue(down);
+        useChatStore.getState().setSystemStatus(down);
+        render(<AdvancedSettings />);
+
+        expect(await screen.findByText('Not answering')).toBeInTheDocument();
+        expect(screen.queryByText('Not Installed')).not.toBeInTheDocument();
+        expect(screen.queryByText(/Cloud providers still work/)).not.toBeInTheDocument();
+        expect(screen.getByText("The model server GAIA uses is at 127.0.0.1:4328. GAIA doesn't run this model server, so it can't start it. Start it the way you usually do.")).toBeInTheDocument();
+        expect(screen.queryByRole('button', { name: 'Set up local models' })).not.toBeInTheDocument();
+    });
+
+    it('a set-up PC whose server was removed still offers setup', async () => {
+        const removed = status({
+            initialized: true, lemonade_running: false, model_loaded: null, start_command: null,
+            start_instruction: 'Lemonade Server is not installed. Run `gaia init` to install it.',
+        });
+        mockedApi.getSystemStatus.mockResolvedValue(removed);
+        useChatStore.getState().setSystemStatus(removed);
+        render(<AdvancedSettings />);
+
+        expect(await screen.findByText('Not Installed')).toBeInTheDocument();
+        expect(screen.getAllByRole('button', { name: 'Set up local models' }).length).toBeGreaterThan(0);
     });
 
     it('keeps a stopped server that is installed on its own start hint, with no setup button', async () => {
@@ -188,8 +239,56 @@ describe('AdvancedSettings', () => {
         render(<AdvancedSettings />);
 
         expect(await screen.findByText('Start Lemonade from the tray icon.')).toBeInTheDocument();
-        expect(screen.getByText('Not Running')).toBeInTheDocument();
+        expect(screen.getByText('Not answering')).toBeInTheDocument();
         expect(screen.queryByRole('button', { name: 'Set up local models' })).not.toBeInTheDocument();
+    });
+
+    it("GAIA's own server that is not answering says it starts on its own, with no command", async () => {
+        // The backend sends no start hint for the server GAIA runs.
+        const down = status({
+            lemonade_running: false, lemonade_probe: 'down', model_loaded: null,
+            start_command: null, start_instruction: null,
+        });
+        mockedApi.getSystemStatus.mockResolvedValue(down);
+        useChatStore.getState().setSystemStatus(down);
+        render(<AdvancedSettings />);
+
+        expect(await screen.findByText('Not answering')).toBeInTheDocument();
+        expect(screen.getByText('Chats wait until it is back, cloud ones too. It normally starts on its own.')).toBeInTheDocument();
+        expect(screen.getByText('It loads once the model server is back.')).toBeInTheDocument();
+        expect(screen.queryByText(/first message/)).not.toBeInTheDocument();
+        expect(document.body.textContent).not.toMatch(/gaia lemonade|run:/i);
+    });
+
+    it('says a model loads with the first message only while the server answers', async () => {
+        mockedApi.getSystemStatus.mockResolvedValue(status({ model_loaded: null }));
+        render(<AdvancedSettings />);
+
+        expect(await screen.findByText('None loaded yet — it loads with the first message.')).toBeInTheDocument();
+    });
+
+    it('clearing the custom model ID leaves the field empty and re-reads the model in use', async () => {
+        mockedApi.getSystemStatus.mockResolvedValue(status({ default_model_is_cloud: true }));
+        mockedApi.getSettings.mockResolvedValue(
+            { custom_model: 'fireworks.glm-5p3-flash', dynamic_tools: false, dynamic_tools_locked: false } as never,
+        );
+        // The backend goes back to the model picked under Model, which is not a custom ID.
+        mockedApi.updateSettings.mockResolvedValue(
+            { custom_model: null, dynamic_tools: false, dynamic_tools_locked: false } as never,
+        );
+        mockedApi.getActiveModel.mockResolvedValue({
+            provider: 'fireworks', model: 'fireworks.deepseek-v4p1-flash', label: 'deepseek-v4p1-flash · Fireworks AI',
+            remote: true, is_default: false,
+        } as never);
+        render(<AdvancedSettings />);
+        const field = await screen.findByDisplayValue('fireworks.glm-5p3-flash');
+
+        fireEvent.change(field, { target: { value: '' } });
+        fireEvent.click(screen.getByRole('button', { name: 'Save custom model' }));
+
+        await waitFor(() => expect(mockedApi.updateSettings).toHaveBeenCalledWith({ custom_model: '' }));
+        await waitFor(() => expect(useModelStore.getState().active?.model).toBe('fireworks.deepseek-v4p1-flash'));
+        expect(screen.getByRole('textbox', { name: 'Custom model override' })).toHaveValue('');
     });
 
     describe('Custom model ID', () => {
@@ -206,6 +305,33 @@ describe('AdvancedSettings', () => {
             fireEvent.click(screen.getByRole('button', { name: 'Save custom model' }));
             await waitFor(() => expect(mockedApi.updateSettings).toHaveBeenCalledWith({ custom_model: id }));
         }
+
+        function refusal(): Error {
+            // pydantic's 422 text, as parseErrorDetail joins it.
+            return Object.assign(Object.create(api.ApiError.prototype), {
+                message: 'Value error, A model ID is a single line: remove the line break or control character.',
+                httpStatus: 422, fields: ['custom_model'],
+            });
+        }
+
+        it.each([
+            ['en', 'A model ID is a single line of up to 256 characters.'],
+            ['ar', 'معرّف النموذج سطر واحد لا يتجاوز 256 حرفًا.'],
+        ])('says a refused ID in the UI language, not pydantic English (%s)', async (locale, text) => {
+            useChatStore.setState({ locale } as never);
+            onTestFinished(() => useChatStore.setState({ locale: 'en' } as never));
+            mockedApi.getSystemStatus.mockResolvedValue(status({}));
+            mockedApi.updateSettings.mockRejectedValue(refusal());
+            render(<AdvancedSettings />);
+            const input = await screen.findByRole('textbox');
+            await waitFor(() => expect(input).toBeEnabled());
+            fireEvent.change(input, { target: { value: 'two\nlines' } });
+            fireEvent.keyDown(input, { key: 'Enter' });
+            await waitFor(() => expect(
+                screen.getAllByRole('alert').some((a) => a.textContent?.includes(text)),
+            ).toBe(true));
+            expect(screen.queryByText(/Value error/)).not.toBeInTheDocument();
+        });
 
         it('says when the model server does not list the saved ID', async () => {
             await save('fireworks.no-such-model', { found: false, checked: true });
@@ -260,5 +386,26 @@ describe('AdvancedSettings', () => {
             fireEvent.change(screen.getByRole('textbox', { name: 'Custom model override' }), { target: { value: 'x' } });
             expect(screen.queryByText(/Saved, but/)).not.toBeInTheDocument();
         });
+    });
+});
+
+describe('AdvancedSettings capabilities', () => {
+    afterEach(() => useChatStore.setState({ locale: 'en' }));
+
+    /** The text a reader sees, without the bidi isolate marks around each half. */
+    const seen = (text: string | null) => (text ?? '').replace(/[⁦-⁩]/g, '');
+
+    it('names capabilities in words, not Lemonade ids', async () => {
+        mockedApi.getSystemStatus.mockResolvedValue(status({ model_labels: ['cloud', 'chat', 'vision', 'tool-calling'] }));
+        render(<AdvancedSettings />);
+        expect(await screen.findByText('cloud, chat, vision, tool calling')).toBeInTheDocument();
+    });
+
+    it('names capabilities in Arabic, keeping a label it has no word for', async () => {
+        useChatStore.setState({ locale: 'ar' });
+        mockedApi.getSystemStatus.mockResolvedValue(status({ model_labels: ['chat', 'tool-calling', 'mtp'] }));
+        render(<AdvancedSettings />);
+        const row = await screen.findByText((_, el) => el?.classList.contains('status-value') === true && seen(el.textContent).startsWith('محادثة'));
+        expect(seen(row.textContent)).toBe('محادثة، استدعاء الأدوات، mtp (chat, tool calling, mtp)');
     });
 });

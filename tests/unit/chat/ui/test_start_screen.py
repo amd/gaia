@@ -27,11 +27,14 @@ STARTER = frozenset(
 
 
 @pytest.fixture(autouse=True)
-def in_process_agent(monkeypatch):
+def in_process_agent(monkeypatch, tmp_path):
     """No agent registry in unit tests; the flagship runs in-process, as from source."""
+    import gaia.config as config_mod
     from gaia.ui import session_environment
 
     monkeypatch.setattr(session_environment, "relayed", lambda _session: False)
+    # Which agent was chosen is read from config; never this PC's.
+    monkeypatch.setattr(config_mod, "GAIA_CONFIG_FILE", tmp_path / "config.json")
 
 
 def _ctx(skills=STARTER, docs=0, mail=False):
@@ -103,8 +106,8 @@ def test_working_folder_is_the_project_directory(tmp_path, monkeypatch):
 def relayed_gaia(monkeypatch):
     """The flagship runs as a daemon sidecar, as on an installed GAIA."""
     from gaia.ui import session_environment
-    from gaia.ui.email_sidecar import daemon_client
     from gaia.ui.routers import skills
+    from gaia.ui.sidecar import daemon_client
 
     monkeypatch.setattr(session_environment, "relayed", lambda _session: True)
     monkeypatch.setattr(ss, "_mail_connected", lambda: False)
@@ -149,7 +152,7 @@ def test_a_flagship_that_cannot_start_says_why_and_offers_no_folder(
     tmp_path, monkeypatch, relayed_gaia
 ):
     from gaia.daemon.sidecars.errors import SidecarError
-    from gaia.ui.email_sidecar import daemon_client
+    from gaia.ui.sidecar import daemon_client
 
     def fail(_agent_id):
         raise SidecarError("sidecar crashed")
@@ -159,6 +162,64 @@ def test_a_flagship_that_cannot_start_says_why_and_offers_no_folder(
     assert body["working_folder"]["choosable"] is False
     assert body["cards"] == []
     assert "couldn't start" in body["skills_error"]
+    assert body["agent_problem"] is None
+
+
+@pytest.fixture
+def gaiacpp_chosen(tmp_path, monkeypatch, relayed_gaia):
+    """gaiacpp is the saved agent, and the daemon refuses to start it."""
+    import gaia.config as config_mod
+    from gaia.daemon.sidecars import fetch
+    from gaia.daemon.sidecars.errors import SidecarError
+    from gaia.ui.sidecar import daemon_client
+
+    monkeypatch.setenv("GAIA_HOME", str(tmp_path / "home"))
+    monkeypatch.delenv(fetch.NATIVE_FLAGSHIP_PATH_ENV, raising=False)
+    config_mod.GaiaConfig.save_key("flagship_agent", fetch.NATIVE_FLAGSHIP)
+
+    def refuse(_agent_id):
+        raise SidecarError("the daemon refused to ensure the 'gaia' sidecar")
+
+    monkeypatch.setattr(daemon_client, "acquire_handle", refuse)
+    return tmp_path / "home" / "bin" / fetch.native_flagship_executable_name()
+
+
+def test_a_chosen_gaiacpp_that_is_not_here_is_named_as_the_reason(
+    tmp_path, monkeypatch, gaiacpp_chosen
+):
+    body = _start(tmp_path, monkeypatch)
+    assert body["skills_error"]
+    assert body["agent_problem"]["code"] == "gaiacpp_missing"
+    assert str(gaiacpp_chosen) in body["agent_problem"]["detail"]
+
+
+def test_a_chosen_gaiacpp_that_fails_its_check_is_named_as_the_reason(
+    tmp_path, monkeypatch, gaiacpp_chosen
+):
+    import json
+
+    from gaia.daemon.sidecars import fetch
+
+    gaiacpp_chosen.parent.mkdir(parents=True)
+    gaiacpp_chosen.write_bytes(b"changed after download")
+    gaiacpp_chosen.chmod(0o755)
+    (gaiacpp_chosen.parent / fetch.NATIVE_INSTALL_RECORD_NAME).write_text(
+        json.dumps({"version": "0.26.1", "sha256": "0" * 64}), encoding="utf-8"
+    )
+    body = _start(tmp_path, monkeypatch)
+    assert body["agent_problem"]["code"] == "gaiacpp_invalid"
+    assert "does not match" in body["agent_problem"]["detail"]
+
+
+def test_the_python_agent_failing_to_start_is_not_blamed_on_gaiacpp(
+    tmp_path, monkeypatch, gaiacpp_chosen
+):
+    import gaia.config as config_mod
+
+    config_mod.GaiaConfig.save_key("flagship_agent", "gaiapy")
+    body = _start(tmp_path, monkeypatch)
+    assert body["skills_error"]
+    assert body["agent_problem"] is None
 
 
 def test_working_folder_falls_back_to_gaias_folder_when_cwd_is_home(
@@ -190,27 +251,46 @@ def test_start_screen_counts_only_finished_documents(monkeypatch, tmp_path):
     assert result["working_folder"]["name"] == tmp_path.name
 
 
-def test_mail_counts_as_connected_when_any_account_is(monkeypatch):
+def test_mail_counts_as_connected_when_any_account_is(monkeypatch, mock_home):
+    import gaia.connectors.accounts as store
     import gaia.connectors.catalog  # noqa: F401  # pylint: disable=unused-import
-    import gaia.connectors.store as store
 
     monkeypatch.setattr(
-        store, "peek_connection", lambda ref: {"x": 1} if ref == "microsoft" else None
+        store,
+        "peek_connection",
+        lambda ref, **_kw: {"x": 1} if ref == "microsoft" else None,
     )
     assert ss._mail_connected() is True
-    monkeypatch.setattr(store, "peek_connection", lambda ref: None)
+    monkeypatch.setattr(store, "peek_connection", lambda ref, **_kw: None)
     assert ss._mail_connected() is False
 
 
-def _refused_keyring(ref):
+def test_a_second_account_counts_once_the_first_is_removed(monkeypatch, mock_home):
+    import gaia.connectors.accounts as accounts
+    import gaia.connectors.catalog  # noqa: F401  # pylint: disable=unused-import
+
+    accounts.record_account(
+        "google", "id:bob", account_id="bob", email="bob@example.com", state="ok"
+    )
+    monkeypatch.setattr(
+        accounts,
+        "peek_connection",
+        lambda ref, slot="default", **_kw: {"x": 1} if slot == "id:bob" else None,
+    )
+    assert ss._mail_connected() is True
+
+
+def _refused_keyring(ref, **_kw):
     from gaia.connectors.errors import ConnectorsError
 
     raise ConnectorsError("plaintext keyring backend refused")
 
 
-def test_an_unreadable_keyring_only_drops_the_inbox_card(monkeypatch, caplog):
+def test_an_unreadable_keyring_only_drops_the_inbox_card(
+    monkeypatch, caplog, mock_home
+):
+    import gaia.connectors.accounts as store
     import gaia.connectors.catalog  # noqa: F401  # pylint: disable=unused-import
-    import gaia.connectors.store as store
 
     monkeypatch.setattr(store, "peek_connection", _refused_keyring)
     with caplog.at_level("WARNING"):
@@ -218,10 +298,14 @@ def test_an_unreadable_keyring_only_drops_the_inbox_card(monkeypatch, caplog):
     assert "plaintext keyring backend refused" in caplog.text
 
 
-def test_an_unreadable_keyring_still_serves_the_start_screen(monkeypatch, tmp_path):
-    import gaia.connectors.store as store
+def test_an_unreadable_keyring_still_serves_the_start_screen(
+    monkeypatch, tmp_path, mock_home
+):
+    import gaia.connectors.accounts as store
 
-    monkeypatch.chdir(tmp_path)
+    project = tmp_path / "project"
+    project.mkdir()
+    monkeypatch.chdir(project)
     monkeypatch.setattr(
         "gaia.ui.routers.skills.list_skills",
         lambda: {"skills": [{"name": n} for n in STARTER], "invalid": []},
@@ -234,22 +318,24 @@ def test_an_unreadable_keyring_still_serves_the_start_screen(monkeypatch, tmp_pa
     assert response.status_code == 200
     body = response.json()
     assert len(body["cards"]) == ss.MAX_CARDS
-    assert body["working_folder"]["name"] == tmp_path.name
+    assert body["working_folder"]["name"] == "project"
     assert not body.get("skills_error")
 
 
-def test_a_keychain_prompt_does_not_hold_the_start_screen(monkeypatch, caplog):
+def test_a_keychain_prompt_does_not_hold_the_start_screen(
+    monkeypatch, caplog, mock_home
+):
     import threading
     import time
 
+    import gaia.connectors.accounts as store
     import gaia.connectors.catalog  # noqa: F401  # pylint: disable=unused-import
-    import gaia.connectors.store as store
     from gaia.connectors import credential_wait
 
     answered = threading.Event()
     reads = []
 
-    def prompting(ref):
+    def prompting(ref, **_kw):
         reads.append(ref)
         answered.wait(timeout=30)
         return None
@@ -273,11 +359,11 @@ def test_a_keychain_prompt_does_not_hold_the_start_screen(monkeypatch, caplog):
     assert credential_wait.in_flight_count() == 0
 
 
-def test_a_non_keyring_error_still_fails_loudly(monkeypatch):
+def test_a_non_keyring_error_still_fails_loudly(monkeypatch, mock_home):
+    import gaia.connectors.accounts as store
     import gaia.connectors.catalog  # noqa: F401  # pylint: disable=unused-import
-    import gaia.connectors.store as store
 
-    def boom(ref):
+    def boom(ref, **_kw):
         raise RuntimeError("bug")
 
     monkeypatch.setattr(store, "peek_connection", boom)

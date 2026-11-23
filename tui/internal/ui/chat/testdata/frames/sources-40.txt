@@ -1,0 +1,34 @@
+ GAIA  │ agent gaia
+────────────────────────────────────────
+▶ You: What does it cost to camp in
+       Yosemite this summer?
+
+  ● Search the web for… · 2.0s
+  ● Read 3 web pages · 8.0s
+  ● Search your documents f… · 1.0s
+
+  Campsites are $36 a night;
+  reserve on recreation.gov.
+  ✓ Searched the web once · 15s
+  ran on this PC
+  Sources
+    nps.gov/yose/planyourvisit/fees.h…
+    nps.gov/yose/planyourvisit/campin…
+    recreation.gov/camping/campground…
+    park_guide.pdf
+
+
+
+
+
+
+
+
+
+
+
+
+
+────────────────────────────────────────
+› Ask anything — Enter to send,
+  ● agent gaia connected   Ctrl+C quit

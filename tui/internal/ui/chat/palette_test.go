@@ -4,6 +4,7 @@
 package chat
 
 import (
+	"fmt"
 	"go/ast"
 	"go/parser"
 	"go/token"
@@ -12,7 +13,10 @@ import (
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
+
+	"github.com/amd/gaia/tui/internal/event"
 )
 
 // --- discoverability: "/" opens, mid-word doesn't ---------------------------
@@ -369,6 +373,7 @@ func TestPaletteListsEverySubmitCommand(t *testing.T) {
 	// literal there (see modelcmd.go) — assert it directly, mirroring how
 	// TestChatHelpNamesEveryChatBinding checks it against chatHelpText.
 	seen["/skills"] = true // dispatched by isSkillsCommand, like /model
+	seen["/research"] = true // dispatched by isResearchCommand (research.go)
 	seen["/model"] = true
 	if !known["/model"] {
 		t.Error("paletteCommands does not offer /model")
@@ -384,12 +389,25 @@ func TestPaletteListsEverySubmitCommand(t *testing.T) {
 	if !known["/discord"] {
 		t.Error("paletteCommands does not offer /discord")
 	}
-	// /read-aloud and /voice take arguments too (readaloud.go).
-	for _, cmd := range []string{"/read-aloud", "/voice"} {
+	// /automations and its sub-forms go through handleAutomationsCommand.
+	seen["/automations"] = true
+	if !known["/automations"] {
+		t.Error("paletteCommands does not offer /automations")
+	}
+	// /read-aloud and /voice take arguments too (readaloud.go), and so does
+	// /agent (agentcmd.go).
+	for _, cmd := range []string{"/read-aloud", "/voice", agentCommand} {
 		seen[cmd] = true
 		if !known[cmd] {
 			t.Errorf("paletteCommands does not offer %s", cmd)
 		}
+	}
+
+	// /image takes a model id or size and is dispatched the same way
+	// (isImageCommand, imagecmd.go).
+	seen["/image"] = true
+	if !known["/image"] {
+		t.Error("paletteCommands does not offer /image")
 	}
 
 	// The other direction: an entry nobody dispatches is a stale row that
@@ -479,7 +497,7 @@ func containsAll(haystack []string, want ...string) bool {
 // With room to spare, every description shows whole and starts in one column.
 func TestPaletteShowsDescriptionsWholeAndAligned(t *testing.T) {
 	items := filterPaletteCommands("/", nil)
-	box, ok := buildPaletteBox("/", items, 0, 160, 40)
+	box, _, ok := buildPaletteBox("/", items, 0, 160, 40)
 	if !ok {
 		t.Fatal("palette did not render on a 160x40 window")
 	}
@@ -506,20 +524,73 @@ func TestPaletteShowsDescriptionsWholeAndAligned(t *testing.T) {
 	}
 }
 
-// The borderless palette adds no rows of its own, so the full 7-command list
-// (4 prefix lines + 7 items = 11 lines) must render on any window that can
-// hold those 11 lines. The old bordered-design chrome budget (4 rows, 2 when
-// "tight") made a 14-row window — taller than a 13-row one that worked —
-// silently draw nothing.
+// The borderless palette adds no rows of its own, so the full list renders on
+// any window that can hold its lines. A shorter window shows the rows around
+// the selection instead, down to paletteMinRows, and draws nothing below that.
 func TestPaletteRendersOnEveryWindowTallEnoughForItsLines(t *testing.T) {
 	items := filterPaletteCommands("/", nil)
 	lines := len(paletteBodyLines("/", items, 0, paletteBoxMaxWidth-4))
 	for h := lines; h <= lines+6; h++ {
-		if _, ok := buildPaletteBox("/", items, 0, 100, h); !ok {
-			t.Errorf("buildPaletteBox drew nothing at height %d, body is only %d lines", h, lines)
+		box, start, ok := buildPaletteBox("/", items, 0, 100, h)
+		if !ok || start != 0 || lipgloss.Height(box) != lines {
+			t.Errorf("height %d: drew ok=%v start=%d rows=%d, want the whole %d-line list", h, ok, start, lipgloss.Height(box), lines)
 		}
 	}
-	if _, ok := buildPaletteBox("/", items, 0, 100, lines-1); ok {
-		t.Error("buildPaletteBox drew on a window one row too short — it should decline, not clip")
+	if box, _, ok := buildPaletteBox("/", items, 0, 100, lines-1); !ok || lipgloss.Height(box) != lines-1 {
+		t.Error("a window one row too short should show one item fewer, not nothing")
+	}
+	if _, _, ok := buildPaletteBox("/", items, 0, 100, paletteBodyPrefixRows+paletteMinRows-1); ok {
+		t.Error("a window too short for paletteMinRows rows should draw nothing")
+	}
+}
+
+// Installed skills join the palette as /<name> rows after the built-ins, with
+// a short description, and never shadow a built-in of the same name.
+func TestPaletteListsInstalledSkills(t *testing.T) {
+	skills := []event.SkillCommand{
+		{Name: "pdf", Description: "Make and edit PDF files. Use when the user asks for a PDF report or form."},
+		{Name: "help", Description: "A skill named like a built-in."},
+	}
+	rows := filterSkillCommands("/p", skills, filterPaletteCommands("/p", nil))
+	if len(rows) != 1 || rows[0].Name != "/pdf" {
+		t.Fatalf("rows for /p = %+v, want just /pdf", rows)
+	}
+	if rows[0].Desc != "Skill · Make and edit PDF files." {
+		t.Errorf("desc = %q, want the first sentence", rows[0].Desc)
+	}
+	for _, r := range filterSkillCommands("/", skills, filterPaletteCommands("/", nil)) {
+		if r.Name == "/help" {
+			t.Error("a skill named help must not be listed: /help runs the built-in")
+		}
+	}
+	if rows := filterSkillCommands("/pdf make", skills, nil); rows != nil {
+		t.Errorf("a typed request closes the skill rows, got %+v", rows)
+	}
+}
+
+// A list longer than the window scrolls to keep the selection visible, and a
+// click maps to the row actually under the pointer.
+func TestPaletteScrollsToTheSelectionAndClicksTheShownRow(t *testing.T) {
+	var items []paletteCommand
+	for i := 0; i < 40; i++ {
+		items = append(items, paletteCommand{Name: fmt.Sprintf("/skill-%02d", i), Desc: "Skill"})
+	}
+	const width, height = 100, 20
+	box, start, ok := buildPaletteBox("/", items, 35, width, height)
+	if !ok {
+		t.Fatal("a long list on a short window drew nothing")
+	}
+	shown := lipgloss.Height(box) - paletteBodyPrefixRows
+	if start == 0 || 35 < start || 35 >= start+shown {
+		t.Fatalf("selection 35 not in shown rows [%d,%d)", start, start+shown)
+	}
+	if !strings.Contains(ansi.Strip(box), "/skill-35") || strings.Contains(ansi.Strip(box), "/skill-00 ") {
+		t.Error("the shown rows are not the ones around the selection")
+	}
+	top := centerOffset(height, lipgloss.Height(box))
+	left := centerOffset(width, lipgloss.Width(box))
+	row, inside := paletteHitTest("/", items, 35, width, height, left+3, top+paletteBodyPrefixRows)
+	if !inside || row != start {
+		t.Errorf("click on the first shown row hit %d (inside=%v), want %d", row, inside, start)
 	}
 }

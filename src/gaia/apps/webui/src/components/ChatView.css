@@ -2,6 +2,15 @@
 /* SPDX-License-Identifier: MIT */
 /* Chat View - Refined conversation interface */
 
+.turn-announcer {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+    white-space: nowrap;
+}
+
 .history-notice,
 .library-notices {
     margin: 8px auto;
@@ -70,7 +79,7 @@
     border-radius: var(--radius-md);
     color: var(--text-primary);
     font-size: var(--fs-body);
-    font-weight: 600;
+    font-weight: 500;
 }
 
 /* A long title fades out rather than ending in an ellipsis, so it reads as
@@ -109,7 +118,7 @@
 
 .title-edit {
     font-size: var(--fs-body);
-    font-weight: 600;
+    font-weight: 500;
     font-family: var(--font-sans);
     padding: 4px 10px;
     border: 1px solid var(--accent-solid);
@@ -138,18 +147,33 @@
     background: var(--bg-secondary);
     transition: all var(--duration) var(--ease);
     flex-shrink: 0;
-    width: 100%;
     text-align: start;
 }
-.doc-context-expanded {
+.doc-context-expanded,
+.doc-context-bar:has(> .doc-context-past-cap) {
     flex-wrap: wrap;
+}
+.doc-context-past-cap {
+    flex-basis: 100%;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin: 0;
+    color: var(--text-primary);
+}
+.doc-context-icon-warn {
+    color: var(--danger);
+}
+.doc-context-past-cap-text {
+    min-width: 0;
+    white-space: normal;
 }
 .doc-context-icon {
     flex-shrink: 0;
     color: var(--accent-green);
 }
 .doc-context-label {
-    font-weight: 600;
+    font-weight: 500;
     white-space: nowrap;
     color: var(--text-secondary);
     font-size: var(--fs-label);
@@ -201,7 +225,9 @@
 }
 .doc-pill-name {
     overflow: hidden;
-    text-overflow: ellipsis;
+    text-overflow: clip;
+    animation: fade-cut-inline both;
+    animation-timeline: scroll(self inline);
 }
 .doc-pill-icon {
     flex-shrink: 0;
@@ -344,7 +370,7 @@
     border-radius: var(--radius-lg);
     margin: 8px;
     color: var(--accent);
-    font-weight: 600;
+    font-weight: 500;
     font-size: 15px;
     font-family: var(--font-sans);
     letter-spacing: 0.3px;
@@ -359,9 +385,6 @@
 }
 .streaming-bubble.stream-active {
     animation: streamBubbleIn var(--duration-slow) var(--ease);
-}
-.streaming-bubble.stream-ending {
-    pointer-events: none;
 }
 @keyframes streamBubbleIn {
     from { opacity: 0; transform: translateY(12px); }
@@ -394,6 +417,7 @@
 /* ── Input Area -- refined prompt input ──────────────────────────── */
 
 .input-area {
+    position: relative;
     padding: 0 0 16px;
     flex-shrink: 0;
     background: var(--bg-primary);
@@ -412,12 +436,12 @@
     .task-header-right { margin-inline-start: auto; }
 }
 
-/* Scroll to bottom FAB */
+/* Scroll to bottom: 12px clear of the composer, at the column's end, where a line's
+   last word is least often. */
 .scroll-bottom-btn {
     position: absolute;
-    bottom: 100px;
-    left: 50%;
-    transform: translateX(-50%);
+    bottom: calc(100% + 12px);
+    inset-inline-end: max(12px, calc((100% - var(--content-w)) / 2 + 12px));
     width: 34px;
     height: 34px;
     border-radius: var(--radius-md);
@@ -436,15 +460,15 @@
 }
 
 @keyframes scrollBtnSlideIn {
-    from { opacity: 0; transform: translateX(-50%) translateY(12px); }
-    to { opacity: 1; transform: translateX(-50%) translateY(0); }
+    from { opacity: 0; transform: translateY(12px); }
+    to { opacity: 1; transform: translateY(0); }
 }
 
 .scroll-bottom-btn:hover {
     background: var(--bg-hover);
     color: var(--text-primary);
     border-color: var(--accent);
-    transform: translateX(-50%) translateY(-3px);
+    transform: translateY(-3px);
     box-shadow: 0 4px 16px color-mix(in srgb, var(--accent) 15%, transparent);
 }
 
@@ -464,7 +488,7 @@
     color: var(--accent-yellow);
     cursor: pointer;
     font: inherit;
-    font-weight: 700;
+    font-weight: 500;
     padding: 0;
     text-decoration: underline;
     text-decoration-style: dotted;

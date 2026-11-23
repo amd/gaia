@@ -35,7 +35,7 @@ func (c *followUpClient) SendFollowUp(_ context.Context, text string) error {
 
 func newFollowUpChat(t *testing.T, c *followUpClient) ChatModel {
 	t.Helper()
-	m := NewChatModel(c, "GAIA", "", false)
+	m := NewChatModel(c, "GAIA", "")
 	m.width, m.height = 100, 30
 	m.resize()
 	m.streaming = true

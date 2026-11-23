@@ -91,10 +91,14 @@ void JsonEventOutputHandler::prettyPrintJson(const json& data,
               {"args", data}});
     } else if (title == "Tool Result") {
         // Build a tool_result event from the result JSON.
+        std::string status;
+        if (data.is_object() && data.contains("status") && data["status"].is_string()) {
+            status = data["status"].get<std::string>();
+        }
         json event = {
             {"type", "tool_result"},
             {"title", currentTool_},
-            {"success", data.value("status", "success") != "error"}
+            {"success", status != "error"}
         };
 
         // Include command_output if the tool result has stdout/stderr.
@@ -113,7 +117,7 @@ void JsonEventOutputHandler::prettyPrintJson(const json& data,
             const auto& out = data["stdout"].get_ref<const std::string&>();
             event["summary"] = out.size() > 200 ? out.substr(0, 200) + "..." : out;
         } else {
-            event["summary"] = data.value("status", "completed");
+            event["summary"] = status.empty() ? std::string("completed") : status;
         }
 
         event["result_data"] = data;
@@ -122,7 +126,7 @@ void JsonEventOutputHandler::prettyPrintJson(const json& data,
         // Generic JSON output — emit as status info.
         emit({{"type", "status"},
               {"status", "info"},
-              {"message", data.dump()}});
+              {"message", data.dump(-1, ' ', false, json::error_handler_t::replace)}});
     }
 }
 

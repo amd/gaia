@@ -236,7 +236,10 @@ def test_autonomous_execution_restores_and_persists_real_database(monkeypatch, f
     loop = AgentLoop()
     loop._db = db
     monkeypatch.setattr(loop, "_get_actionable_goals", lambda: [])
-    asyncio.run(loop._execute_tick(session["id"], session, []))
+    monkeypatch.setattr(loop, "_settle_goal", lambda *a: None)
+    monkeypatch.setattr(loop, "_fail_goals", lambda *a: None)
+    goal = SimpleNamespace(priority="high", title="t", description="")
+    asyncio.run(loop._execute_tick(session["id"], session, [goal]))
     assert captured == [_trace()]
     rows = db.get_context_messages(session["id"])
     assert rows[-1]["role"] == "autonomous"
@@ -318,8 +321,8 @@ def test_switching_to_a_smaller_model_streams_the_cut(monkeypatch):
 
 
 def test_a_relayed_chat_says_once_when_older_turns_leave_the_view(monkeypatch):
-    from gaia.ui.email_sidecar import daemon_client, relay
-    from gaia.ui.email_sidecar.profiles import GAIA_PROFILE
+    from gaia.ui.sidecar import daemon_client, relay
+    from gaia.ui.sidecar.profiles import GAIA_PROFILE
 
     proxy = SimpleNamespace(init=lambda: (200, {}))
     handle = SimpleNamespace(api_version="2.17", proxy=lambda: proxy)

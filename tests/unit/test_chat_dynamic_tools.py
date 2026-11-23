@@ -26,7 +26,7 @@ import pytest
 # whole module when a framework-only env lacks it. Must run BEFORE the optional-
 # dep stubbing below — otherwise a skip would leave MagicMock stand-ins for
 # faiss/sentence_transformers in sys.modules and poison later modules in the run.
-pytest.importorskip("gaia_agent")
+pytest.importorskip("gaiapy")
 
 # Stub heavy optional deps only when genuinely absent (mirrors the budget test).
 _stubbed: list[str] = []
@@ -36,7 +36,7 @@ for _mod in ("faiss", "sentence_transformers", "pdfplumber", "pypdf", "pypdfium2
     sys.modules[_mod] = MagicMock()
     _stubbed.append(_mod)
 
-from gaia_agent.chat_agent import (  # noqa: E402
+from gaiapy.chat_agent import (  # noqa: E402
     MAX_TOOL_SEARCH_CHARS,
     MAX_TOOL_SEARCHES,
     ChatAgent,
@@ -110,7 +110,7 @@ def test_env_override_helper_none_when_unset(monkeypatch):
     """``dynamic_tools_env_override`` returns ``None`` so callers fall back to
     the persisted/config value — the single source of truth the UI router and
     the agent resolver both read (#1798)."""
-    from gaia_agent.chat_agent import dynamic_tools_env_override
+    from gaiapy.chat_agent import dynamic_tools_env_override
 
     monkeypatch.delenv("GAIA_DYNAMIC_TOOLS", raising=False)
     assert dynamic_tools_env_override() is None
@@ -133,7 +133,7 @@ def test_env_override_helper_none_when_unset(monkeypatch):
 def test_env_override_helper_parses_truthy_set(monkeypatch, raw, expected):
     """Same truthy set the resolver used to inline — pinned so the UI toggle
     and the agent never disagree on what counts as "on"."""
-    from gaia_agent.chat_agent import dynamic_tools_env_override
+    from gaiapy.chat_agent import dynamic_tools_env_override
 
     monkeypatch.setenv("GAIA_DYNAMIC_TOOLS", raw)
     assert dynamic_tools_env_override() is expected
@@ -320,6 +320,28 @@ class TestSelectToolsForTurn:
     def test_retrieval_jumps(self):
         a = _selecting_agent(self.NAMES, {"spare_tool": 0.9})
         assert a._select_tools_for_turn("anything") == self.NAMES
+
+    def test_a_mail_question_jumps_below_the_retrieval_bar(self):
+        """The reported 0.39 never clears 0.40; the request must carry the jump."""
+        names = [
+            "core_tool",
+            "check_mailbox_access",
+            "list_inbox",
+            "search_email",
+            "read_email",
+        ]
+        a = _selecting_agent(names, {name: 0.39 for name in names[1:]})
+        assert a._select_tools_for_turn("did my landlord email me?") == names
+
+    def test_a_postal_mail_request_stays_on_core_below_the_bar(self):
+        names = ["core_tool", "check_mailbox_access", "list_inbox"]
+        a = _selecting_agent(names, {name: 0.39 for name in names[1:]})
+        assert a._select_tools_for_turn("mail the package") == ["core_tool"]
+
+    def test_a_mail_question_without_mail_tools_stays_on_core(self):
+        """The compact tier withholds mail; there is no tool to request."""
+        a = _selecting_agent(["core_tool", "read_file"], {"read_file": 0.39})
+        assert a._select_tools_for_turn("did my landlord email me?") == ["core_tool"]
 
     def test_the_message_names_tools_by_the_current_turn_only(self):
         a = _selecting_agent(self.NAMES)
@@ -876,3 +898,22 @@ def test_skill_body_filter_runs_before_the_turn_tool_filter(monkeypatch):
         agent._process_query_impl("read me an rss feed")
 
     assert order == ["bodies", "tools"]
+
+
+def test_a_withheld_tool_is_never_found(searching):
+    agent, _ = searching({"analyze_data_file": 0.9, "read_file": 0.5})
+    agent.deny_tools(["analyze_data_file"])
+
+    result = _search(agent)
+
+    assert result["tools"] == ["read_file"]
+    assert "analyze_data_file" not in result.get("docs", "")
+
+
+def test_no_skills_are_found_once_load_skill_is_withheld(searching):
+    agent, _ = searching(
+        {"pdf-tricks": 0.9}, {"pdf-tricks": SimpleNamespace(description="PDFs")}
+    )
+    agent._denied_tool_patterns = ("load_skill",)
+
+    assert _search(agent)["skills"] == []

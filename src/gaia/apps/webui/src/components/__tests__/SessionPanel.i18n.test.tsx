@@ -46,8 +46,8 @@ describe('This answer', () => {
         render(<ThisAnswer messages={turn(SUMMARY)} />);
         for (const text of [
             'Sources', 'pp. 5, 6, 8 · 6 passages', 'This turn', 'Model', 'Fireworks AI (cloud)', 'Documents',
-            'Searched on this PC. The passages used were sent to Fireworks AI.', 'Websites',
-            "None from GAIA's web tools", 'Cost', 'About $0.0023 at list price',
+            'Searched on this PC. The passages used were sent to Fireworks AI.',
+            'Cost', 'About $0.0023 at list price',
         ]) expect(screen.getByText(text)).toBeInTheDocument();
     });
 
@@ -60,9 +60,14 @@ describe('This answer', () => {
             'هذا الدور (This turn)',
             'Fireworks AI (سحابي) (Fireworks AI (cloud))',
             'جرى البحث على هذا الجهاز. وأُرسلت المقاطع المستخدمة إلى Fireworks AI. (Searched on this PC. The passages used were sent to Fireworks AI.)',
-            "لا شيء من أدوات الويب في GAIA (None from GAIA's web tools)",
             'نحو $0.0023 بسعر القائمة (About $0.0023 at list price)',
         ]) expect(screen.getByText(readsAs(text))).toBeInTheDocument();
+    });
+
+    it('keeps the dollar sign inside the isolate around the Arabic cost', () => {
+        act(() => useChatStore.getState().setLocale('ar'));
+        render(<ThisAnswer messages={turn(SUMMARY)} />);
+        expect(screen.getAllByText((text) => text.includes('⁨$0.0023⁩')).length).toBeGreaterThan(0);
     });
 
     it('isolates the provider name inside the Arabic sentence', () => {

@@ -5,7 +5,7 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import {
-    Brain, CalendarClock, CornerDownRight, FileOutput, FileText, FolderOpen, Image as ImageIcon, Library,
+    Brain, CalendarClock, CornerDownRight, FileOutput, FileText, FolderOpen, Image as ImageIcon, Library, Music,
 } from 'lucide-react';
 import * as api from '../../services/api';
 import { expectShape } from '../../utils/responseShape';
@@ -14,9 +14,11 @@ import { log } from '../../utils/logger';
 import { useTurnEnd } from '../../hooks/useTurnEnd';
 import { useUndoEvents } from '../../utils/undoEvents';
 import { PanelSection } from './PanelSection';
+import { useLatestRead } from '../../hooks/useLatestRead';
 import type { OutputItem, OutputKind } from '../../types/sessionPanel';
 import { ref, type MessageKey, type Param, type Params } from '../../i18n/registry';
 import { dateLocale, tEn, useT, type Translate } from '../../i18n/useT';
+import { visibleName } from '../CalendarApproval';
 
 /** Rows shown before "Show more". */
 export const OUTPUTS_SHOWN = 5;
@@ -25,6 +27,7 @@ const KIND: Record<OutputKind, { label: MessageKey; Icon: typeof FileText }> = {
     file: { label: 'out.kind.file', Icon: FileText },
     export: { label: 'out.kind.export', Icon: FileOutput },
     image: { label: 'out.kind.image', Icon: ImageIcon },
+    audio: { label: 'out.kind.audio', Icon: Music },
     document: { label: 'out.kind.document', Icon: Library },
     memory: { label: 'out.kind.memory', Icon: Brain },
     schedule: { label: 'out.kind.schedule', Icon: CalendarClock },
@@ -62,51 +65,52 @@ interface OutputsSectionProps {
     onJumpToMessage: (messageId: number) => boolean;
 }
 
+/** Shown once the chat has made something; an empty list is no section at all. */
 export function OutputsSection({ sessionId, busy, onJumpToMessage }: OutputsSectionProps) {
-    const t = useT();
-    return (
-        <PanelSection id="outputs" title={t('out.title')}>
-            <OutputsList sessionId={sessionId} busy={busy} onJumpToMessage={onJumpToMessage} />
-        </PanelSection>
-    );
-}
-
-function OutputsList({ sessionId, busy, onJumpToMessage }: OutputsSectionProps) {
     const t = useT();
     const [items, setItems] = useState<OutputItem[] | null>(null);
     const [error, setError] = useState<Param | null>(null);
-    const [actionError, setActionError] = useState<string | null>(null);
-    const [all, setAll] = useState(false);
 
+    const begin = useLatestRead();
     const load = useCallback(() => {
-        let live = true;
+        const lands = begin();
         Promise.resolve()
             .then(() => api.getOutputs(sessionId))
             .then((res) => {
-                if (!live) return;
+                if (!lands()) return;
                 setItems(expectShape(res, (r) => Array.isArray(r.items), 'list of outputs').items);
                 setError(null);
             })
             .catch((err) => {
-                if (!live) return;
+                if (!lands()) return;
                 log.ui.warn(`Could not list what session=${sessionId} produced`, err);
                 setError(requestErrorParam(err));
             });
-        return () => { live = false; };
-    }, [sessionId]);
-    useEffect(load, [load]);
+    }, [begin, sessionId]);
+    useEffect(() => { load(); }, [load]);
     useTurnEnd(busy, load);
     // Undo elsewhere (an answer's row, Undo all) changes what is on disk.
     useUndoEvents(sessionId, load);
+
+    if (!error && (!items || items.length === 0)) return null;
+    return (
+        <PanelSection id="outputs" title={t('out.title')} summary={items && items.length > 0 ? String(items.length) : null}>
+            {error
+                ? <p className="sp-error">{t('out.listError', { error })}</p>
+                : <OutputsList items={items ?? []} onJumpToMessage={onJumpToMessage} />}
+        </PanelSection>
+    );
+}
+
+function OutputsList({ items, onJumpToMessage }: { items: OutputItem[]; onJumpToMessage: (messageId: number) => boolean }) {
+    const t = useT();
+    const [actionError, setActionError] = useState<string | null>(null);
+    const [all, setAll] = useState(false);
 
     const act = (op: Promise<unknown>, name: string) => {
         setActionError(null);
         op.catch((err) => setActionError(t('sp.couldntOpen', { name, error: requestErrorParam(err) })));
     };
-
-    if (error) return <p className="sp-error">{t('out.listError', { error })}</p>;
-    if (!items) return <p className="sp-meta">{t('sp.checking')}</p>;
-    if (items.length === 0) return <p className="sp-meta">{t('out.empty')}</p>;
 
     const shown = all ? items : items.slice(0, OUTPUTS_SHOWN);
     return (
@@ -127,7 +131,7 @@ function OutputsList({ sessionId, busy, onJumpToMessage }: OutputsSectionProps) 
                         <li key={item.id} className={`sp-output${item.state !== 'present' ? ' is-inactive' : ''}`}>
                             <Icon size={13} className="sp-item-icon" aria-hidden="true" />
                             <div className="sp-item-text">
-                                <span className="sp-item-name" dir="auto" title={item.path ?? item.name}>{item.name}</span>
+                                <span className="sp-item-name" dir="ltr" title={visibleName(item.path ?? item.name)}>{visibleName(item.name)}</span>
                                 <span className="sp-meta">
                                     {meta}
                                 </span>
@@ -141,18 +145,18 @@ function OutputsList({ sessionId, busy, onJumpToMessage }: OutputsSectionProps) 
                                                     setActionError(t('out.notLoaded'));
                                                 }
                                             }}
-                                            aria-label={t('out.goToAria', { name: item.name })}
+                                            aria-label={t('out.goToAria', { name: visibleName(item.name) })}
                                         >
                                             <CornerDownRight size={11} aria-hidden="true" /> {t('sp.goToTurn')}
                                         </button>
                                     )}
                                     {item.openable && item.path && (
-                                        <button type="button" className="sp-action" onClick={() => act(api.openFileInApp(item.path as string), item.name)}>
+                                        <button type="button" className="sp-action" onClick={() => act(api.openFileInApp(item.path as string), visibleName(item.name))}>
                                             {t('sp.open')}
                                         </button>
                                     )}
                                     {item.revealable && item.path && (
-                                        <button type="button" className="sp-action" onClick={() => act(api.openFileOrFolder(item.path as string, true), item.name)}>
+                                        <button type="button" className="sp-action" onClick={() => act(api.openFileOrFolder(item.path as string, true), visibleName(item.name))}>
                                             <FolderOpen size={11} aria-hidden="true" /> {t('sp.showInFolder')}
                                         </button>
                                     )}

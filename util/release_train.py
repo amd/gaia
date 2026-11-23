@@ -29,7 +29,7 @@ Subcommands::
 
 ``--target`` is a checkout of the commit being released. The tables that name
 the artifacts (installer/tui/artifacts.py, gen_binaries_lock.py,
-util/flagship_rc_assets.py) are read from it, never copied here, so this file
+util/gaiapy_rc_assets.py) are read from it, never copied here, so this file
 cannot drift from the code that builds them.
 """
 
@@ -56,6 +56,10 @@ _UTIL = str(Path(__file__).resolve().parent)
 if _UTIL not in sys.path:
     sys.path.insert(0, _UTIL)
 
+from gh_retry import (  # noqa: E402  pylint: disable=wrong-import-position
+    RateLimitWaitExceeded,
+    run_command,
+)
 from release_tag import (  # noqa: E402  pylint: disable=wrong-import-position
     ReleaseTag,
     parse_tag,
@@ -165,13 +169,13 @@ def core_version(target: Path) -> str:
 
 
 def agent_version(target: Path) -> str:
-    text = (target / "hub/agents/gaia/python/gaia_agent/__init__.py").read_text(
+    text = (target / "hub/agents/gaia/python/gaiapy/__init__.py").read_text(
         encoding="utf-8"
     )
     m = re.search(r'(?m)^__version__\s*=\s*"([^"]+)"', text)
     if not m:
         raise VerifyError(
-            "no __version__ in hub/agents/gaia/python/gaia_agent/__init__.py"
+            "no __version__ in hub/agents/gaia/python/gaiapy/__init__.py"
         )
     return m.group(1)
 
@@ -238,23 +242,20 @@ SHORT_LIVED_ARTIFACTS = (
     "flagship-npm",
 )
 GH_TIMEOUT_S = 300
+# A spent API budget refills within the hour; wait for it at most that long.
+GH_RATE_LIMIT_WAIT_S = 3600
 
 
 def _gh_lines(args: list[str]) -> list[dict]:
     """``gh api --paginate ... --jq`` output, one JSON object per line."""
     try:
-        done = subprocess.run(
-            ["gh", *args],
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            check=False,
-            timeout=GH_TIMEOUT_S,
-        )
+        done = run_command(["gh", *args], GH_RATE_LIMIT_WAIT_S, timeout=GH_TIMEOUT_S)
     except subprocess.TimeoutExpired as e:
         raise VerifyError(
             f"`gh {' '.join(args)}` did not finish in {GH_TIMEOUT_S} s; re-run the job."
         ) from e
+    except RateLimitWaitExceeded as e:
+        raise VerifyError(str(e)) from e
     if done.returncode != 0:
         raise VerifyError(
             f"`gh {' '.join(args)}` failed: {done.stderr.strip()}. A rate limit "
@@ -354,7 +355,7 @@ def tui_metas(tui_dir: Path, names: dict[str, str]) -> list[dict]:
                 "platform": key,
                 "filename": filename,
                 "executable": (
-                    "gaia-tui.exe" if filename.endswith(".exe") else "gaia-tui"
+                    "gaia-cli.exe" if filename.endswith(".exe") else "gaia-cli"
                 ),
                 "sha256": sha256(path),
                 "size": path.stat().st_size,
@@ -369,7 +370,7 @@ def build_lock(
     """binaries.lock.json from this run's own sidecar and terminal builds."""
     packaging = target / "hub/agents/gaia/python/packaging"
     gen = load_module(packaging / "gen_binaries_lock.py", "gen_binaries_lock")
-    rc_assets = load_module(target / "util/flagship_rc_assets.py", "flagship_rc_assets")
+    rc_assets = load_module(target / "util/gaiapy_rc_assets.py", "gaiapy_rc_assets")
 
     # collect() re-hashes every sidecar against the meta its freeze leg wrote.
     found = rc_assets.collect(sidecars)
@@ -633,7 +634,7 @@ def catalog(
         target / "hub/agents/gaia/python/packaging/gen_binaries_lock.py",
         "gen_binaries_lock",
     )
-    rc_assets = load_module(target / "util/flagship_rc_assets.py", "flagship_rc_assets")
+    rc_assets = load_module(target / "util/gaiapy_rc_assets.py", "gaiapy_rc_assets")
     agent_ver = agent_version(target)
     items: list[Artifact] = []
 

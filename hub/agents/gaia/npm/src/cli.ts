@@ -124,7 +124,7 @@ run options:
   --sidecar-dir <dir>  Where to install the agent sidecar
                        (default ~/.gaia/agents/gaia — the daemon's own cache)
   --force              Re-download even when a verified binary is already cached
-  -- <tui args>        Forward everything after \`--\` to gaia-tui verbatim
+  -- <tui args>        Forward everything after \`--\` to gaia-cli verbatim
 
 fetch options:
   --component <name>   Fetch only one of: ${COMPONENTS.join(", ")} (default: both)
@@ -452,6 +452,9 @@ async function cmdServe(args: ParsedArgs): Promise<number> {
   try {
     process.stdout.write(`\n  ▸ GAIA agent: ${sidecar.baseUrl}/v1/gaia/query\n`);
     process.stdout.write(`    Health:     ${sidecar.baseUrl}/health\n`);
+    process.stdout.write(
+      `    Token:      send "Authorization: Bearer <token>"; the token is in ${sidecar.tokenFile}\n`,
+    );
     process.stdout.write("    Lemonade must be running for live queries. Ctrl+C to stop.\n\n");
     let stop!: () => void;
     const stopped = new Promise<Error | undefined>((resolve) => {

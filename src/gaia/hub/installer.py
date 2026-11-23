@@ -58,6 +58,7 @@ from gaia.hub import catalog as catalog_mod
 from gaia.hub import prerelease as prerelease_mod
 from gaia.hub.compatibility import check_compatibility, current_platform_key
 from gaia.logger import get_logger
+from gaia.retired_agents import RETIRED_AGENT_IDS, retired_install_message
 from gaia.utils.archive import ArchiveError, safe_extract
 from gaia.utils.file_lock import (
     FileLockTimeout,
@@ -85,7 +86,7 @@ SITE_PACKAGES_DIRNAME = "site-packages"
 # install --target` install is only importable via an explicit sys.path
 # mutation in the installing process (see _hot_register) -- a later, unrelated
 # process using the SAME interpreter/venv (e.g. the next `gaia chat`
-# invocation, which imports `gaia_agent` directly rather than through
+# invocation, which imports `gaiapy` directly rather than through
 # AgentRegistry) would otherwise never see it. Python's `site` module reads
 # every `.pth` file in site-packages at interpreter startup and appends each
 # line to sys.path, so one shared file with one absolute path per installed
@@ -121,6 +122,16 @@ PipRunner = Callable[[List[str]], None]
 
 class InstallError(RuntimeError):
     """Base class for install-lifecycle failures (actionable message)."""
+
+
+class RetiredAgentError(InstallError):
+    """The requested agent was removed from GAIA."""
+
+
+def refuse_retired_agent(agent_id: str) -> None:
+    """Raise :class:`RetiredAgentError` when *agent_id* was removed from GAIA."""
+    if agent_id in RETIRED_AGENT_IDS:
+        raise RetiredAgentError(retired_install_message(agent_id))
 
 
 class ChecksumError(InstallError):
@@ -203,8 +214,7 @@ def _require_safe_agent_id(agent_id: str) -> str:
         raise InstallError(
             f"Invalid agent id {agent_id!r}: agent ids must start with a letter "
             "or digit and contain only letters, digits, '.', '_' or '-' "
-            "(max 128 chars). Check the id against the hub catalog "
-            "('gaia agent list') or the package's gaia-agent.yaml."
+            "(max 128 chars). Check the id against the package's gaia-agent.yaml."
         )
     return agent_id
 
@@ -513,7 +523,13 @@ def clear_progress(agent_id: Optional[str] = None) -> None:
 def _download_and_verify(
     url: str, expected_sha256: str, fetcher: catalog_mod.Fetcher
 ) -> bytes:
-    data = fetcher(url)
+    if fetcher is catalog_mod.fetch_bytes:
+        try:
+            data = catalog_mod.download_artifact(url)
+        except catalog_mod.ArtifactDownloadError as exc:
+            raise InstallError(str(exc)) from exc
+    else:
+        data = fetcher(url)
     actual = hashlib.sha256(data).hexdigest()
     if actual != (expected_sha256 or "").lower():
         raise ChecksumError(
@@ -1426,7 +1442,7 @@ def _snapshot_backup(agent_id: str, install_root: Path) -> None:
 # _hot_register (below) makes a freshly-installed wheel importable in the
 # CALLING process only, via an in-memory sys.path mutation. Some callers
 # never construct an AgentRegistry at all -- e.g. `gaia chat`'s CLI handler
-# does a bare `from gaia_agent.agent import GaiaAgent` (cli.py) -- so a
+# does a bare `from gaiapy.agent import GaiaAgent` (cli.py) -- so a
 # later, unrelated `gaia` invocation using the SAME interpreter/venv would
 # still fail to import a wheel agent installed by an earlier `gaia init`.
 # Writing one absolute site-packages path per installed wheel agent into a
@@ -1803,6 +1819,7 @@ def install(
         InstallInProgressError, ChecksumError, DiskSpaceError,
         CompatibilityError, TrustRequiredError, InstallError.
     """
+    refuse_retired_agent(agent_id)
     fetcher = fetcher or catalog_mod.fetch_bytes
     run_pip = run_pip or _default_run_pip
     root = install_root or default_install_root()
@@ -1919,7 +1936,7 @@ def install(
                 # later, unrelated `gaia` invocation using the same
                 # interpreter/venv can import this wheel too (#2358) — closes
                 # the gap for call sites that never touch AgentRegistry (e.g.
-                # `gaia chat`'s hardcoded `import gaia_agent`).
+                # `gaia chat`'s hardcoded `import gaiapy`).
                 if artifact_kind == ARTIFACT_KIND_WHEEL:
                     _add_wheel_agent_to_active_env_path(
                         install_dir / SITE_PACKAGES_DIRNAME,

@@ -1,4 +1,4 @@
-"""Pin the bridge's wire literals against the real ``gaia_agent.stdio``.
+"""Pin the bridge's wire literals against the real ``gaiapy.stdio``.
 
 The bridge keeps the protocol constants as its own literals rather than
 importing them, because core must not depend on a hub wheel. That is the right
@@ -19,7 +19,7 @@ import pytest
 from gaia.messaging import bridge
 
 stdio = pytest.importorskip(
-    "gaia_agent.stdio",
+    "gaiapy.stdio",
     reason="the flagship agent package is not installed in this environment",
 )
 
@@ -177,3 +177,17 @@ def test_a_cancel_the_bridge_builds_stops_the_agents_turn():
     channel.cancel()
     stdio.apply_control(json.loads(sent[-1]), RecordingState())
     assert stopped, "the agent must treat the bridge's cancel as a stop"
+
+
+def test_clear_history_verb_matches():
+    assert bridge.CONTROL_CLEAR_HISTORY == stdio.CONTROL_CLEAR_HISTORY
+
+
+def test_the_agent_reads_the_clear_the_bridge_builds_as_a_control():
+    """Validity of the call: the agent's parser sees a control, not a question."""
+    import json
+
+    line = json.dumps({bridge.CONTROL_KEY: bridge.CONTROL_CLEAR_HISTORY})
+    control = stdio.parse_control(line)
+    assert control is not None
+    assert control.get(stdio.CONTROL_KEY) == stdio.CONTROL_CLEAR_HISTORY

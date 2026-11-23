@@ -73,15 +73,15 @@ def stub_chat(monkeypatch, console_logging, tmp_path):
 
     def install(outcome):
         agent_cls = _stub_agent_class(outcome)
-        for pkg, cls, cfg in (("gaia_agent", "GaiaAgent", "GaiaAgentConfig"),):
+        for pkg, cls, cfg in (("gaiapy", "GaiaAgent", "GaiaAgentConfig"),):
             agent_mod = types.ModuleType(f"{pkg}.agent")
             setattr(agent_mod, cls, agent_cls)
             setattr(agent_mod, cfg, _StubConfig)
             monkeypatch.setitem(sys.modules, pkg, types.ModuleType(pkg))
             monkeypatch.setitem(sys.modules, f"{pkg}.agent", agent_mod)
-        app_mod = types.ModuleType("gaia_agent.interactive")
+        app_mod = types.ModuleType("gaiapy.interactive")
         app_mod.interactive_mode = lambda agent: None
-        monkeypatch.setitem(sys.modules, "gaia_agent.interactive", app_mod)
+        monkeypatch.setitem(sys.modules, "gaiapy.interactive", app_mod)
 
     return install
 
@@ -202,6 +202,17 @@ def test_prompt_stats_backend_error_exits_non_zero_after_the_answer(
     captured = capsys.readouterr()
     assert "the answer" in captured.out
     assert "Lemonade not reachable at http://localhost:1" in captured.err
+
+
+def test_prompt_model_call_error_exits_non_zero(monkeypatch, capsys):
+    class _FailingLLM:
+        def generate(self, **kwargs):
+            raise ConnectionError("Lemonade not reachable at http://localhost:1")
+
+    monkeypatch.setattr(cli, "create_client", lambda *args, **kwargs: _FailingLLM())
+
+    assert _run_main(monkeypatch, "prompt", "hi", "--no-lemonade-check") == 1
+    assert "Lemonade not reachable at http://localhost:1" in capsys.readouterr().out
 
 
 def test_stats_with_none_recorded_is_an_empty_state_not_an_error(

@@ -5,7 +5,7 @@ icon: "graduation-cap"
 ---
 
 <Info>
-  **Source Code:** [`hub/agents/gaia/python/gaia_agent/chat_agent.py`](https://github.com/amd/gaia/blob/main/hub/agents/gaia/python/gaia_agent/chat_agent.py) | [`src/gaia/rag/sdk.py`](https://github.com/amd/gaia/blob/main/src/gaia/rag/sdk.py)
+  **Source Code:** [`hub/agents/gaia/python/gaiapy/chat_agent.py`](https://github.com/amd/gaia/blob/main/hub/agents/gaia/python/gaiapy/chat_agent.py) | [`src/gaia/rag/sdk.py`](https://github.com/amd/gaia/blob/main/src/gaia/rag/sdk.py)
 </Info>
 
 <Badge text="development" color="orange" />
@@ -246,11 +246,11 @@ def _generate_search_keys(self, query: str) -> List[str]:
     AGENT_MODELS = {
         # 👇 Your new agent
         "doc-qa": {
-            "class_name": "gaia_agent.chat_agent.ChatAgent",
+            "class_name": "gaiapy.chat_agent.ChatAgent",
             "init_params": {
                 "silent_mode": True,
                 # Only kwargs recognised by ChatAgentConfig will be applied;
-                # see ChatAgentConfig in hub/agents/gaia/python/gaia_agent/chat_agent.py.
+                # see ChatAgentConfig in hub/agents/gaia/python/gaiapy/chat_agent.py.
                 "rag_documents": ["./company_docs"],
             },
             "description": "Document Q&A agent backed by RAG",
@@ -303,7 +303,7 @@ def _generate_search_keys(self, query: str) -> List[str]:
     ```
 
     <Note>
-    **Deployment on AI PCs:** The agent runs entirely locally on Ryzen AI hardware. No cloud dependencies, ensuring data privacy and low latency.
+    **Deployment on AI PCs:** With a local model, the agent runs on Ryzen AI hardware and your documents stay on the device, which keeps data private and latency low.
     </Note>
   </Tab>
 </Tabs>
@@ -317,7 +317,7 @@ def _generate_search_keys(self, query: str) -> List[str]:
     ```python title="cli.py"
     #!/usr/bin/env python3
     import sys
-    from gaia_agent.chat_agent import ChatAgent, ChatAgentConfig
+    from gaiapy.chat_agent import ChatAgent, ChatAgentConfig
 
     def main():
         if len(sys.argv) < 2:
@@ -487,7 +487,7 @@ def _generate_search_keys(self, query: str) -> List[str]:
     - Small PDF (10 pages): ~2-3 seconds
     - Medium PDF (50 pages): ~8-12 seconds
     - Large PDF (200 pages): ~30-45 seconds
-    - Embedding generation: ~50-100 chunks/second on NPU
+    - Embedding generation: ~50-100 chunks/second on the integrated GPU
   </Accordion>
 </AccordionGroup>
 
@@ -581,7 +581,7 @@ def _generate_search_keys(self, query: str) -> List[str]:
     - ~10KB per file watcher event
 
     <Tip>
-    **AI PC Performance:** On Ryzen AI systems, NPU handles embedding generation offloading work from CPU/RAM, improving overall system responsiveness.
+    **AI PC Performance:** On Ryzen AI systems, the integrated GPU handles embedding generation, offloading work from the CPU and improving overall system responsiveness.
     </Tip>
   </Tab>
 
@@ -681,7 +681,7 @@ def _generate_search_keys(self, query: str) -> List[str]:
 ## Source Code Reference
 
 <CardGroup cols={2}>
-  <Card title="ChatAgent" icon="code" href="https://github.com/amd/gaia/blob/main/hub/agents/gaia/python/gaia_agent/chat_agent.py">
+  <Card title="ChatAgent" icon="code" href="https://github.com/amd/gaia/blob/main/hub/agents/gaia/python/gaiapy/chat_agent.py">
     Main agent implementation with session management and file monitoring
   </Card>
 

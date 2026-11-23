@@ -12,10 +12,10 @@ from unittest.mock import patch
 
 import pytest
 
-gaia_agent = pytest.importorskip("gaia_agent.agent")
-chat_agent = pytest.importorskip("gaia_agent.chat_agent")
-GaiaAgent = gaia_agent.GaiaAgent
-GaiaAgentConfig = gaia_agent.GaiaAgentConfig
+gaiapy = pytest.importorskip("gaiapy.agent")
+chat_agent = pytest.importorskip("gaiapy.chat_agent")
+GaiaAgent = gaiapy.GaiaAgent
+GaiaAgentConfig = gaiapy.GaiaAgentConfig
 ChatAgent = chat_agent.ChatAgent
 
 

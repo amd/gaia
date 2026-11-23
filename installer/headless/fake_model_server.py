@@ -5,7 +5,7 @@
 
 It answers the Lemonade and OpenAI-compatible endpoints GAIA's clients call --
 health, the model list, load/unload, chat completions (streamed or not) and
-embeddings -- with fixed, well-formed replies, so an installed gaia-tui and its
+embeddings -- with fixed, well-formed replies, so an installed gaia-cli and its
 gaia-agent can complete one real turn on a hosted runner. Every model id it is
 asked about counts as downloaded and loaded.
 
@@ -32,6 +32,12 @@ labelled vision accepts an image. Environment:
     FAKE_LEMONADE_LOAD_SECONDS     how long each /load takes (default 0)
     FAKE_LEMONADE_GPU              discrete (default) | igpu, what /system-info reports
     FAKE_LEMONADE_DISK_FREE_GB     free space in the model store (default 500)
+    FAKE_LEMONADE_MAX_LLM          chat models kept loaded; a load past it unloads
+                                   the oldest, as Lemonade's one chat slot does
+                                   (default: no limit)
+    FAKE_LEMONADE_NPU              1: /system-info reports a ready NPU
+
+A model whose id ends in -FLM is a FastFlowLM one: recipe flm, on the NPU.
 
 A discrete GPU keeps a run the same on every runner: GAIA reads no free memory
 for one, and it would otherwise refuse a load on a small hosted machine.
@@ -83,6 +89,16 @@ CATALOG: Dict[str, Dict[str, Any]] = {
         "size": 21.7,
         "labels": ["chat", "vision", "tool-calling"],
         "checkpoint": "unsloth/Qwen3.6-35B-A3B-GGUF:Qwen3.6-35B-A3B-UD-Q4_K_XL.gguf",
+    },
+    "Qwen3.5-4B-GGUF": {
+        "size": 3.58,
+        "labels": ["chat", "vision", "tool-calling"],
+        "checkpoint": "unsloth/Qwen3.5-4B-GGUF:Qwen3.5-4B-UD-Q4_K_XL.gguf",
+    },
+    "Qwen3.5-2B-GGUF": {
+        "size": 2.01,
+        "labels": ["chat", "vision", "tool-calling"],
+        "checkpoint": "unsloth/Qwen3.5-2B-GGUF:Qwen3.5-2B-UD-Q4_K_XL.gguf",
     },
     "gpt-oss-120b-mxfp-GGUF": {
         "size": 63.4,
@@ -146,6 +162,13 @@ def _listed_id(model_id: Optional[str]) -> str:
     return (model_id or "").removeprefix("user.")
 
 
+def _recipe(model_id: str) -> str:
+    known = _catalog.get(_listed_id(model_id), {})
+    return known.get("recipe") or (
+        "flm" if model_id.lower().endswith("-flm") else "llamacpp"
+    )
+
+
 def _model_entry(model_id: str) -> Dict[str, Any]:
     embed = "embed" in model_id.lower()
     known = _catalog.get(_listed_id(model_id), {})
@@ -155,7 +178,7 @@ def _model_entry(model_id: str) -> Dict[str, Any]:
         "created": 1700000000,
         "owned_by": "lemonade",
         "checkpoint": known.get("checkpoint", f"fake/{model_id}"),
-        "recipe": known.get("recipe", "llamacpp"),
+        "recipe": _recipe(model_id),
         "downloaded": _is_downloaded(model_id),
         "suggested": True,
         "labels": known.get(
@@ -251,6 +274,7 @@ def _system_info() -> Dict[str, Any]:
         }
 
     free = int(_env_float("FAKE_LEMONADE_DISK_FREE_GB", 500) * 1e9)
+    npu = os.environ.get("FAKE_LEMONADE_NPU") == "1"
     return {
         "OS Version": "fake",
         "Processor": "fake CPU",
@@ -258,6 +282,7 @@ def _system_info() -> Dict[str, Any]:
         "devices": {
             "cpu": {"name": "fake CPU", "available": True},
             **_gpu_devices(),
+            **({"amd_npu": {"name": "fake NPU", "available": True}} if npu else {}),
         },
         "model_storage": {
             "path": str(Path(tempfile.gettempdir()) / "fake-lemonade-store"),
@@ -270,6 +295,22 @@ def _system_info() -> Dict[str, Any]:
             "whispercpp": recipe("whispercpp", "cpu"),
             "kokoro": recipe("kokoro", "cpu"),
             "sd-cpp": recipe("sd-cpp", "cpu"),
+            **(
+                {
+                    "flm": {
+                        "default_backend": "npu",
+                        "backends": {
+                            "npu": {
+                                "devices": ["amd_npu"],
+                                "state": "installed",
+                                "tier": "core",
+                            }
+                        },
+                    }
+                }
+                if npu
+                else {}
+            ),
         },
     }
 
@@ -313,10 +354,19 @@ def _multipart_fields(raw: bytes) -> Dict[str, Any]:
     return fields
 
 
+def _is_chat_model(model_id: str) -> bool:
+    return "embed" not in model_id.lower() and _recipe(model_id) in ("llamacpp", "flm")
+
+
 def _remember(model_id: Optional[str], ctx: Optional[int] = None) -> None:
     if not model_id:
         return
+    cap = int(os.environ.get("FAKE_LEMONADE_MAX_LLM") or 0)
     with _lock:
+        if model_id not in _loaded and cap and _is_chat_model(model_id):
+            chat = [m for m in _loaded if _is_chat_model(m)]
+            for oldest in chat[: max(0, len(chat) - cap + 1)]:
+                del _loaded[oldest]
         _loaded[model_id] = int(ctx or _loaded.get(model_id) or DEFAULT_CTX)
 
 
@@ -382,6 +432,9 @@ class LoopbackServer(ThreadingHTTPServer):
 class Handler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
     server_version = "FakeLemonade/1"
+    #: Set per request; ``send_response`` logs the request once, then clears it.
+    _unrecorded = False
+    _request_body: Optional[Dict[str, Any]] = None
 
     def log_message(self, fmt: str, *args: Any) -> None:  # noqa: A003 - stdlib name
         sys.stderr.write("[fake-lemonade] " + fmt % args + "\n")
@@ -417,8 +470,15 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
     def _refuse(self, status: int, message: str, body: Dict[str, Any]) -> None:
-        self._record(body, status)
         self._json(status, {"error": {"message": message}})
+
+    def send_response(self, code: int, message: Optional[str] = None) -> None:
+        # Log before any reply byte leaves, so a client that has its answer
+        # always finds its request in the log.
+        if self._unrecorded:
+            self._unrecorded = False
+            self._record(self._request_body, code)
+        super().send_response(code, message)
 
     def _record(self, body: Optional[Dict[str, Any]], status: int) -> None:
         _log(
@@ -434,6 +494,7 @@ class Handler(BaseHTTPRequestHandler):
 
     # ── GET ──
     def do_GET(self) -> None:  # noqa: N802 - stdlib name
+        self._request_body, self._unrecorded = None, True
         path = self._path()
         if path == "/health":
             with _lock:
@@ -447,8 +508,8 @@ class Handler(BaseHTTPRequestHandler):
                         "model_name": m,
                         "checkpoint": f"fake/{m}",
                         "type": "embedding" if "embed" in m.lower() else "llm",
-                        "device": "gpu",
-                        "recipe": "llamacpp",
+                        "device": "npu" if _recipe(m) == "flm" else "gpu",
+                        "recipe": _recipe(m),
                         "recipe_options": {"ctx_size": _loaded[m]},
                         "backend_url": "http://127.0.0.1:0",
                     }
@@ -477,17 +538,15 @@ class Handler(BaseHTTPRequestHandler):
         elif path == "/system-info":
             self._json(200, _system_info())
         else:
-            self._record(None, 404)
             self._json(
                 404, {"error": {"message": f"fake server has no GET {self.path}"}}
             )
-            return
-        self._record(None, 200)
 
     # ── POST ──
     def do_POST(self) -> None:  # noqa: N802 - stdlib name
         path = self._path()
         body = self._body()
+        self._request_body, self._unrecorded = body, True
         model = body.get("model") or body.get("model_name")
         if path in _NEEDS_A_DOWNLOADED_MODEL and not _is_downloaded(model):
             self._refuse(404, f"{model} is not downloaded", body)
@@ -497,7 +556,6 @@ class Handler(BaseHTTPRequestHandler):
             if problem:
                 self._refuse(400, problem, body)
                 return
-            self._record(body, 200)
             self._pull(body, str(model))
             return
         if path == "/load":
@@ -584,12 +642,9 @@ class Handler(BaseHTTPRequestHandler):
         elif path in ("/params", "/uninstall"):
             self._json(200, {"status": "success"})
         else:
-            self._record(body, 404)
             self._json(
                 404, {"error": {"message": f"fake server has no POST {self.path}"}}
             )
-            return
-        self._record(body, 200)
 
     def _pcm(self) -> None:
         """A quarter second of a 440 Hz tone, as Lemonade's ``pcm`` format sends it."""

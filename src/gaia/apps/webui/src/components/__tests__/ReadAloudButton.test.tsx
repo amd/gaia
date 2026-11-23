@@ -67,4 +67,22 @@ describe('Read aloud on a reply', () => {
         expect(alert.textContent).toContain("the model server isn't answering");
         expect(alert.textContent).toContain('Lemonade is down');
     });
+
+    it('is not offered where GAIA does not offer its voice', () => {
+        useReadAloudStore.setState({
+            settings: {
+                voice: 'af_bella', speed: 100, auto: false, min_speed: 50, max_speed: 200, voices: [],
+                available: false, unavailable_reason: "Reading aloud and dictation aren't offered on macOS yet",
+            },
+        });
+        render(<MessageBubble message={base} />);
+        expect(screen.queryByRole('button', { name: 'Read aloud' })).toBeNull();
+        useReadAloudStore.setState({ settings: null });
+    });
+
+    it('tells the user a code-only reply has nothing to read', () => {
+        useReadAloudStore.setState({ error: { messageId: 's1:7', kind: 'nothing', detail: '' } });
+        render(<MessageBubble message={base} />);
+        expect(screen.getByRole('alert').textContent).toContain('nothing to read aloud here');
+    });
 });

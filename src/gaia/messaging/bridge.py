@@ -9,7 +9,7 @@ throttle so streamed tokens do not exceed a platform's edit rate, and a terminal
 event for every turn even when the child dies. They live here so a second
 adapter is a renderer and a socket, not a second bridge.
 
-The wire is ``gaia_agent.stdio``'s: newline-delimited JSON, one query per stdin
+The wire is ``gaiapy.stdio``'s: newline-delimited JSON, one query per stdin
 line, canonical ``status`` / ``tool_call`` / ``tool_result`` /
 ``needs_confirmation`` / ``token`` / ``final`` / ``error`` events back, and a
 ``gaia_control`` line carrying an approval decision. The constants below are a
@@ -18,7 +18,7 @@ because core must not depend on a hub wheel; ``tests/unit/messaging/
 test_bridge_contract.py`` pins them against the real definitions.
 
 Security posture: this module exposes no way to turn permission bypass on.
-``gaia_agent.stdio`` accepts a ``bypass`` control verb, and a remote surface must
+``gaiapy.stdio`` accepts a ``bypass`` control verb, and a remote surface must
 never be able to send it — an allowlisted user is trusted to ask for a tool, not
 to silently disarm the gate for every later one. Bypass stays a local decision,
 and ``tests/unit/messaging/test_bridge.py`` pins its absence.
@@ -41,20 +41,23 @@ from gaia.stream_timeout import DEFAULT_STREAM_TIMEOUT_SECONDS, stream_timeout_f
 log = get_logger(__name__)
 
 #: Discriminator marking a stdin line as control rather than a query.
-#: Contract with ``gaia_agent.stdio.CONTROL_KEY``.
+#: Contract with ``gaiapy.stdio.CONTROL_KEY``.
 CONTROL_KEY = "gaia_control"
 
 #: Wrapper for a query whose text contains newlines — stdin is read a line at a
 #: time, so an unwrapped multi-line question becomes several unrelated turns.
-#: Contract with ``gaia_agent.stdio.QUERY_KEY``.
+#: Contract with ``gaiapy.stdio.QUERY_KEY``.
 QUERY_KEY = "gaia_query"
 
 #: Control verb answering the confirmation currently pending.
 CONTROL_TOOL_DECISION = "tool_decision"
 
 #: Control verb stopping the running turn while keeping the agent, its history
-#: and its grants. Contract with ``gaia_agent.stdio.CONTROL_CANCEL``.
+#: and its grants. Contract with ``gaiapy.stdio.CONTROL_CANCEL``.
 CONTROL_CANCEL = "cancel"
+#: Starts a fresh conversation. Contract with
+#: ``gaiapy.stdio.CONTROL_CLEAR_HISTORY``.
+CONTROL_CLEAR_HISTORY = "clear_history"
 
 DECISION_ALLOW = "allow"
 DECISION_DENY = "deny"
@@ -71,7 +74,7 @@ TERMINAL_EVENTS = frozenset({"final", "error"})
 NEEDS_CONFIRMATION = "needs_confirmation"
 
 #: Console script installed by the ``gaia-agent-gaia`` wheel
-#: (``[project.scripts] gaia-agent = "gaia_agent.entry:main"``).
+#: (``[project.scripts] gaia-agent = "gaiapy.entry:main"``).
 DEFAULT_AGENT_BINARY = "gaia-agent"
 
 #: How long a turn may go without progress before it is stopped: the Agent
@@ -164,6 +167,8 @@ class Turn:
     started: bool = False
     #: Set by :meth:`AgentChannel.withdraw`; the queue skips it unrun.
     withdrawn: bool = False
+    #: A control verb sent in this turn's place in the queue, with no question.
+    control: str = ""
 
 
 @dataclass
@@ -342,9 +347,9 @@ class AgentChannel:
         except FileNotFoundError as e:
             raise AgentChannelError(
                 f"The agent binary '{self._argv[0]}' is not on PATH, so no "
-                f"message can be answered. Install it with "
-                f"`gaia init --profile gaia`, or pass --agent-command with the "
-                f"path to it. Docs: https://amd-gaia.ai/docs/guides/install"
+                f"message can be answered. Open the GAIA app and let setup "
+                f"finish; it installs the agent. "
+                f"Docs: https://amd-gaia.ai/docs/guides/install"
             ) from e
         except OSError as e:
             raise AgentChannelError(
@@ -502,6 +507,16 @@ class AgentChannel:
                 skip = turn.withdrawn
                 turn.started = not skip
             if skip:
+                self._finish_turn()
+                continue
+            if turn.control:
+                # The agent answers a control with nothing, so the turn ends here.
+                try:
+                    self._write_line(json.dumps({CONTROL_KEY: turn.control}))
+                    event: Dict[str, Any] = {"type": "final", "answer": ""}
+                except AgentChannelError as e:
+                    event = {"type": "error", "detail": str(e)}
+                self._on_event(event, turn)
                 self._finish_turn()
                 continue
             self._turn_done.clear()

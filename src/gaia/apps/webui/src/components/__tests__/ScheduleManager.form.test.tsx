@@ -1,15 +1,17 @@
 // Copyright(C) 2026 Advanced Micro Devices, Inc. All rights reserved.
 // SPDX-License-Identifier: MIT
 
-import { act, fireEvent, render, screen } from '@testing-library/react';
+import { fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { CONFIRM_DELETE_MS, ScheduleManager } from '../ScheduleManager';
+import { ScheduleManager } from '../ScheduleManager';
 import { useChatStore } from '../../stores/chatStore';
 import { useScheduleStore } from '../../stores/scheduleStore';
-import { ApiError, parseScheduleInput } from '../../services/api';
+import { ApiError } from '../../services/api';
+import { parseScheduleInput } from '../../services/scheduleApi';
 import type { Schedule } from '../../types';
 
 vi.mock('../../services/api');
+vi.mock('../../services/scheduleApi');
 
 const schedule: Schedule = {
     id: 'id-1',
@@ -36,6 +38,7 @@ beforeEach(() => {
     deleteSchedule.mockClear();
     useChatStore.setState({ showSchedules: true });
     useScheduleStore.setState({
+        draft: null,
         schedules: [],
         loading: false,
         error: null,
@@ -54,7 +57,7 @@ describe('New schedule form', () => {
         fireEvent.click(screen.getByRole('button', { name: /New schedule/ }));
         expect(screen.getByLabelText('When to run').tagName).toBe('TEXTAREA');
         expect(screen.getByLabelText('Name').tagName).toBe('INPUT');
-        expect(screen.getByLabelText('Prompt').tagName).toBe('TEXTAREA');
+        expect(screen.getByLabelText('What GAIA does').tagName).toBe('TEXTAREA');
     });
 
     it('ties the reason a schedule was rejected to the schedule field', async () => {
@@ -76,7 +79,7 @@ describe('New schedule form', () => {
         expect(await screen.findByText("25:00 isn't a time — use 0:00–23:59.")).toBeInTheDocument();
         expect(field).toHaveAttribute('aria-invalid', 'true');
         expect(field).toHaveAccessibleDescription(
-            "GAIA didn't understand that schedule. 25:00 isn't a time — use 0:00–23:59. "
+            "That schedule can't be used. 25:00 isn't a time — use 0:00–23:59. "
             + 'Write it in English, like "every 30m", "daily at 9pm" or "every hour from 8am to 6pm on weekdays".',
         );
     });
@@ -94,8 +97,8 @@ describe('Reusing a schedule name', () => {
         fireEvent.click(screen.getByRole('button', { name: /New schedule/ }));
         fireEvent.change(screen.getByLabelText('When to run'), { target: { value: 'every day' } });
         fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'Morning brief' } });
-        fireEvent.change(screen.getByLabelText('Prompt'), { target: { value: 'Hello' } });
-        fireEvent.click(screen.getByRole('button', { name: 'Create Schedule' }));
+        fireEvent.change(screen.getByLabelText('What GAIA does'), { target: { value: 'Hello' } });
+        fireEvent.click(screen.getByRole('button', { name: 'Create schedule' }));
 
         const name = screen.getByLabelText('Name');
         expect(await screen.findByText('A schedule with this name already exists. Choose a different name.')).toBeInTheDocument();
@@ -124,32 +127,63 @@ describe('Schedule card', () => {
 
 describe('Schedule card delete', () => {
     beforeEach(() => {
-        vi.useFakeTimers();
-        useScheduleStore.setState({ schedules: [schedule] });
+        useScheduleStore.setState({ schedules: [schedule], selectedSchedule: null });
     });
 
-    it('still deletes when Confirm? is clicked late in the window', () => {
+    const askToDelete = () => fireEvent.click(screen.getByRole('button', { name: 'Delete' }));
+    const ask = () => screen.getByRole('alertdialog', { name: 'Delete the schedule "morning-brief"?' });
+
+    it('asks in a dialog that names the schedule, with Cancel focused, and deletes nothing yet', () => {
         render(<ScheduleManager />);
-        fireEvent.click(screen.getByTitle('Delete'));
-        act(() => { vi.advanceTimersByTime(CONFIRM_DELETE_MS - 1000); });
-        expect(screen.getByTitle('Delete')).toHaveTextContent('Confirm?');
-        fireEvent.click(screen.getByTitle('Delete'));
-        expect(deleteSchedule).toHaveBeenCalledWith('morning-brief');
+        askToDelete();
+        expect(ask()).toHaveTextContent("It won't run again");
+        expect(screen.getByRole('button', { name: 'Cancel' })).toHaveFocus();
+        // A double-click on Delete no longer deletes.
+        expect(screen.getByRole('button', { name: 'Delete' })).toBeInTheDocument();
+        expect(deleteSchedule).not.toHaveBeenCalled();
     });
 
-    it('re-arming after a reset gets the full window, and unmount clears the timer', () => {
-        expect(CONFIRM_DELETE_MS).toBeGreaterThanOrEqual(6000);
-        const { unmount } = render(<ScheduleManager />);
-        fireEvent.click(screen.getByTitle('Delete'));
-        act(() => { vi.advanceTimersByTime(CONFIRM_DELETE_MS); });
-        expect(screen.getByTitle('Delete')).toHaveTextContent('Delete');
-
-        fireEvent.click(screen.getByTitle('Delete'));
-        act(() => { vi.advanceTimersByTime(CONFIRM_DELETE_MS - 1000); });
-        expect(screen.getByTitle('Delete')).toHaveTextContent('Confirm?');
-
-        unmount();
-        expect(vi.getTimerCount()).toBe(0);
+    it('Cancel keeps the schedule and the panel open', () => {
+        render(<ScheduleManager />);
+        askToDelete();
+        fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+        expect(screen.queryByRole('alertdialog')).toBeNull();
         expect(deleteSchedule).not.toHaveBeenCalled();
+        expect(screen.getByText('morning-brief')).toBeInTheDocument();
+        expect(useChatStore.getState().showSchedules).toBe(true);
+        // The dialog's click doesn't also open the card's run history.
+        expect(useScheduleStore.getState().selectedSchedule).toBeNull();
+    });
+
+    it('Escape cancels only the dialog, not the Scheduled tasks panel', () => {
+        render(<ScheduleManager />);
+        askToDelete();
+        fireEvent.keyDown(document, { key: 'Escape' });
+        expect(screen.queryByRole('alertdialog')).toBeNull();
+        expect(deleteSchedule).not.toHaveBeenCalled();
+        expect(useChatStore.getState().showSchedules).toBe(true);
+    });
+
+    it('deletes the schedule when confirmed', () => {
+        render(<ScheduleManager />);
+        askToDelete();
+        fireEvent.click(screen.getByRole('button', { name: 'Delete schedule' }));
+        expect(deleteSchedule).toHaveBeenCalledWith('morning-brief');
+        expect(screen.queryByRole('alertdialog')).toBeNull();
+    });
+
+    it('says its chat stays, and that a run in progress stops', () => {
+        useScheduleStore.setState({ schedules: [{ ...schedule, session_id: 'chat-1', running: true }] });
+        render(<ScheduleManager />);
+        askToDelete();
+        expect(ask()).toHaveTextContent('Its chat stays, with the answers from past runs.');
+        expect(ask()).toHaveTextContent('The run in progress stops now.');
+    });
+
+    it('does not mention a chat for a schedule that never ran', () => {
+        render(<ScheduleManager />);
+        askToDelete();
+        expect(ask()).not.toHaveTextContent('chat');
+        expect(ask()).not.toHaveTextContent('in progress');
     });
 });

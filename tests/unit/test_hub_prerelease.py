@@ -5,7 +5,7 @@
 The hub has no pre-release channel, so its `gaia` agent can be many commits
 older than the candidate (v0.25.0-rc2 shipped the hub's 0.2.0, which predates
 tool approvals). These tests pin the seam end to end: publish.yml's packager
-(util/flagship_rc_assets.py) writes the release file, gaia.hub.prerelease reads
+(util/gaiapy_rc_assets.py) writes the release file, gaia.hub.prerelease reads
 it, and the real installer installs from it -- never from the hub.
 """
 
@@ -32,7 +32,7 @@ SHA = hashlib.sha256(BINARY).hexdigest()
 
 def _load_packager():
     spec = importlib.util.spec_from_file_location(
-        "flagship_rc_assets", REPO_ROOT / "util" / "flagship_rc_assets.py"
+        "gaiapy_rc_assets", REPO_ROOT / "util" / "gaiapy_rc_assets.py"
     )
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
@@ -524,3 +524,29 @@ def test_the_published_hash_is_what_an_install_would_fetch():
             == SHA
         )
     resolve.assert_called_once_with(manifest, None, platform_key=PLATFORM)
+
+
+# -- Where setup says the flagship comes from (#8350) -------------------------
+
+
+def test_a_final_build_says_the_flagship_comes_from_the_hub(monkeypatch):
+    monkeypatch.delenv(prerelease.ASSETS_URL_ENV, raising=False)
+    assert prerelease.flagship_origin("0.26.0") == "hub.amd-gaia.ai"
+    # The override is only read for a release candidate.
+    monkeypatch.setenv(prerelease.ASSETS_URL_ENV, "file:///C:/elsewhere")
+    assert prerelease.flagship_origin("0.26.0") == "hub.amd-gaia.ai"
+
+
+def test_a_release_candidate_names_its_own_pre_release(monkeypatch):
+    monkeypatch.delenv(prerelease.ASSETS_URL_ENV, raising=False)
+    assert (
+        prerelease.flagship_origin("0.26.0rc32")
+        == "github.com/amd/gaia/releases/tag/v0.26.0-rc32"
+    )
+
+
+def test_a_release_candidate_names_the_override_when_one_is_set(monkeypatch):
+    monkeypatch.setenv(prerelease.ASSETS_URL_ENV, "file:///C:/gaia-test/flagship/")
+    assert prerelease.flagship_origin("0.26.0rc32") == "file:///C:/gaia-test/flagship"
+    monkeypatch.setenv(prerelease.ASSETS_URL_ENV, "https://mirror.example/rc32")
+    assert prerelease.flagship_origin("0.26.0rc32") == "mirror.example/rc32"

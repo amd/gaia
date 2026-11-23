@@ -4,9 +4,11 @@
 #include "gaia/git_tools.h"
 
 #include "gaia/process.h"
+#include "gaia/secrets.h"
 #include "gaia/security.h"
 
 #include <algorithm>
+#include <cstring>
 #include <sstream>
 #include <string>
 
@@ -15,10 +17,35 @@ namespace {
 /// Maximum output size returned to the LLM (32 KiB).
 constexpr std::size_t kMaxOutputBytes = 32u * 1024u;
 
-/// Run `git <command>` via ProcessRunner, capturing stdout+stderr.
-std::string runGit(const std::string& command) {
+/// Run `git <command>` via ProcessRunner, capturing stdout+stderr. `failure`
+/// receives why git did not succeed, or "" when it exited 0.
+std::string runGit(const std::string& command, std::string& failure) {
+#ifdef _WIN32
+    // By full path: cmd.exe would run a git.bat or git.exe in the repository before the real one.
+    const std::string gitPath = gaia::findProgramOnPath("git");
+    if (gitPath.empty()) {
+        failure = "git isn't installed, or isn't on PATH. Install Git for Windows, then try again.";
+        return "";
+    }
+    // cmd /c drops the first and last quote of a line that starts with one, so the line gets an extra pair.
+    const std::string git = "\"\"" + gitPath + "\"";
+    const std::string close = "\"";
+#else
+    const std::string git = "git";
+    const std::string close;
+#endif
+    // These tools run without asking, and a repo's own config can name a program for git to start:
+    // a file-system monitor, an external diff, a textconv filter.
+    std::string guarded = git + " -c core.fsmonitor=false " + command + close;
+    for (const char* sub : {"diff", "show", "log"}) {
+        const size_t n = std::strlen(sub);
+        if (command.compare(0, n, sub) == 0 && (command.size() == n || command[n] == ' ')) {
+            guarded = git + " -c core.fsmonitor=false " + sub + " --no-ext-diff --no-textconv" +
+                      command.substr(n) + close;
+        }
+    }
     auto result = gaia::ProcessRunner::run(
-        "git " + command,
+        guarded,
         /*timeoutMs=*/30000,
         /*cwd=*/"",
         /*env=*/{},
@@ -30,6 +57,15 @@ std::string runGit(const std::string& command) {
             result.stdout_output += "\n";
         }
         result.stdout_output += result.stderr_output;
+    }
+    failure.clear();
+    if (result.timedOut) {
+        failure = "git " + command + " did not finish within 30 seconds and was stopped.";
+    } else if (result.exitCode != 0) {
+        failure = result.stdout_output.empty()
+                      ? "git " + command + " failed with exit code " + std::to_string(result.exitCode) +
+                            ". Check that git is installed and that this folder is a repository."
+                      : result.stdout_output;
     }
     return result.stdout_output;
 }
@@ -100,11 +136,12 @@ ToolInfo GitTools::gitStatus() {
 }
 
 json GitTools::doGitStatus(const json& /*args*/) {
-    std::string output = runGit("status --porcelain");
+    std::string failure;
+    std::string output = runGit("status --porcelain", failure);
 
     // Check for git errors (e.g. not a git repo)
-    if (output.find("fatal:") != std::string::npos) {
-        return json{{"error", output}};
+    if (!failure.empty()) {
+        return json{{"error", failure}};
     }
 
     // Trim trailing whitespace
@@ -165,9 +202,10 @@ json GitTools::doGitDiff(const json& args) {
         cmd += " -- " + path;
     }
 
-    std::string diffOutput = runGit(cmd);
-    if (diffOutput.find("fatal:") != std::string::npos) {
-        return json{{"error", diffOutput}};
+    std::string failure;
+    std::string diffOutput = runGit(cmd, failure);
+    if (!failure.empty()) {
+        return json{{"error", failure}};
     }
 
     // Count files changed via --stat
@@ -182,9 +220,12 @@ json GitTools::doGitDiff(const json& args) {
         statCmd += " -- " + args["path"].get<std::string>();
     }
 
-    std::string statOutput = runGit(statCmd);
+    std::string statOutput = runGit(statCmd, failure);
+    if (!failure.empty()) {
+        return json{{"error", failure}};
+    }
     int filesChanged = 0;
-    if (!statOutput.empty() && statOutput.find("fatal:") == std::string::npos) {
+    if (!statOutput.empty()) {
         // Each changed file has its own line; the last line is the summary.
         // Count lines that are not the summary line (which contains "changed").
         int totalLines = countLines(statOutput);
@@ -237,9 +278,10 @@ json GitTools::doGitLog(const json& args) {
         cmd += " -- " + path;
     }
 
-    std::string output = runGit(cmd);
-    if (output.find("fatal:") != std::string::npos) {
-        return json{{"error", output}};
+    std::string failure;
+    std::string output = runGit(cmd, failure);
+    if (!failure.empty()) {
+        return json{{"error", failure}};
     }
 
     int commits = countLines(output);
@@ -269,10 +311,20 @@ json GitTools::doGitShow(const json& args) {
     if (!isSafeShellArg(ref)) {
         return json{{"error", "Invalid ref argument: contains unsafe characters."}};
     }
+    // HEAD:.env would hand over a committed file that file_read refuses to open.
+    const size_t colon = ref.find(':');
+    if (colon != std::string::npos) {
+        const std::string name = ref.substr(ref.find_last_of(":/\\") + 1);
+        if (isCredentialFileName(name)) {
+            return json{{"error", "'" + name + "' holds credentials, keys or secrets, so the agent may not show it. "
+                                  "Open it yourself if you need its contents."}};
+        }
+    }
 
-    std::string output = runGit("show " + ref);
-    if (output.find("fatal:") != std::string::npos) {
-        return json{{"error", output}};
+    std::string failure;
+    std::string output = runGit("show " + ref, failure);
+    if (!failure.empty()) {
+        return json{{"error", failure}};
     }
 
     return json{{"content", truncateOutput(output)}, {"ref", ref}};

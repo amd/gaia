@@ -21,7 +21,7 @@ from tests.unit.test_profilespec_characterization import chat_agent_build_contex
 @pytest.fixture
 def chat_agent():
     return pytest.importorskip(
-        "gaia_agent.chat_agent", reason="gaia-agent-gaia wheel not installed"
+        "gaiapy.chat_agent", reason="gaia-agent-gaia wheel not installed"
     )
 
 

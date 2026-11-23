@@ -23,4 +23,14 @@ describe('MessageBubble horizontal scroll cue', () => {
         expect(css).toMatch(/scrollbar-width:\s*thin/);
         expect(css).toMatch(/scrollbar-color:\s*var\(--text[\w-]*\)\s+transparent/);
     });
+
+    it('fades the far edge of a wide table until it is scrolled to the end', () => {
+        const css = rule('.md-table-wrap');
+        expect(css).toMatch(/mask-image:\s*linear-gradient\(to right,[^;]*var\(--table-fade\)/);
+        expect(css).toMatch(/animation-timeline:\s*scroll\(self x\)/);
+        expect(rule('.md-table-wrap:dir(rtl)')).toMatch(/to left/);
+        const frames = bubbleCss.slice(bubbleCss.indexOf('@keyframes md-table-fade'));
+        expect(frames).toMatch(/0%,\s*90%\s*\{\s*--table-fade:\s*40px/);
+        expect(frames).toMatch(/100%\s*\{\s*--table-fade:\s*0px/);
+    });
 });

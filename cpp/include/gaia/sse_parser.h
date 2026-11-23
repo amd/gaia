@@ -111,6 +111,8 @@ private:
     // Keyed by the delta's ``index`` so parallel calls stay separate and
     // out-of-order chunks land in the right slot. std::map keeps index order.
     std::map<int, ToolCall> toolCallsByIndex_;
+    // Slot of the last id-carrying delta that had no ``index``; its fragments follow it there.
+    int unindexedSlot_ = -1;
 };
 
 } // namespace gaia

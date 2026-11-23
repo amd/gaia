@@ -122,6 +122,32 @@ def test_document_passages_are_named_by_the_attached_file_not_the_upload_id():
 
 
 @pytest.mark.parametrize(
+    "display_names",
+    [
+        {},
+        {"0123456789ab_Q3%20plan.pdf": "Q3 plan.pdf"},
+    ],
+)
+def test_a_duplicate_spaced_upload_is_named_without_its_id_prefix(display_names):
+    ledger = TurnLedger()
+    upload = "C:/Users/me/.gaia/chat/uploads/0123456789ab_Q3 plan.pdf"
+    _call(
+        ledger,
+        "query_specific_file",
+        {"file_path": upload},
+        json.dumps(
+            {
+                "status": "success",
+                "chunks": [{"source_file": upload, "page": 1, "content": "a"}],
+            }
+        ),
+    )
+    docs = ledger.summary(location=LOCAL, display_names=display_names)["documents"]
+    assert docs[0]["name"] == "Q3 plan.pdf"
+    assert docs[0]["path"] == upload
+
+
+@pytest.mark.parametrize(
     "url",
     [
         "javascript://example.com/%0aalert(1)",
@@ -413,6 +439,19 @@ def test_turn_summary_includes_files_the_completion_evidence_saw(tmp_path):
     )
     summary = _turn_summary(SSEOutputHandler(), agent, "make a csv", {"tokens": 3})
     assert [f["path"] for f in summary["files"]] == [str(out)]
+
+
+def test_a_file_keeps_the_name_it_has_on_disk(tmp_path):
+    out = tmp_path / "Q3 Results.pptx"
+    out.write_bytes(b"x")
+    # The completion ledger keys files by their case-folded path on Windows.
+    key = os.path.normcase(os.path.realpath(out))
+    agent = SimpleNamespace(
+        _inference_location=lambda: LOCAL,
+        _completion_evidence=SimpleNamespace(written_files=lambda: [key]),
+    )
+    summary = _turn_summary(SSEOutputHandler(), agent, "make a deck", {"tokens": 3})
+    assert [f["name"] for f in summary["files"]] == ["Q3 Results.pptx"]
 
 
 def test_a_summary_that_cannot_be_built_says_why_and_keeps_the_turn(caplog):

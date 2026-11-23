@@ -7,12 +7,9 @@ Lemonade v2026.39.1 changed the version format from ``X.Y.Z`` to ``YYYY.WW.N``
 that anything parsing or comparing version strings has to be updated.
 
 GAIA compares Lemonade versions through one core implementation,
-:func:`gaia.version.parse_version`, plus one vendored copy in the frozen email
-sidecar. That copy stays vendored because ``freeze.py`` bundles only what is
-statically reachable, so it is read out of its own source here instead, and
-cannot drift. The flagship agent's readiness server already imports
-``gaia.agents.base.readiness``, so it uses the core gate directly. Two failure
-modes matter and neither raises:
+:func:`gaia.version.parse_version`. The flagship agent's readiness server
+imports ``gaia.agents.base.readiness``, so it uses the core gate directly. Two
+failure modes matter and neither raises:
 
 * a release CalVer that parses wrong would compare wrong, and
 * a dev CalVer that fails to parse makes the gate return "can't tell", so it
@@ -67,59 +64,13 @@ PARSERS = [
 ]
 
 
-def _load_function_from_source(relative_path: str, name: str):
-    """Compile ONE pure function out of a hub agent's module, without importing it.
-
-    The hub agents are separate distributions. The root ``conftest`` only puts
-    one on ``sys.path`` when it already resolves somewhere, so ``gaia_agent`` is
-    absent in the unit-test CI job and a plain import raises
-    ``ModuleNotFoundError``. The usual answer is ``importorskip`` — but that
-    turns this file's whole reason for existing into a silent skip, which is the
-    exact "the gate stopped running and nothing said so" failure these tests
-    guard against.
-
-    Both parsers are self-contained and need only ``re``, so compile the real
-    function out of the real file instead. No package import, no FastAPI, no
-    skip — and it still fails if someone edits the source it reads.
-    """
-    source = (REPO_ROOT / relative_path).read_text(encoding="utf-8")
-    tree = ast.parse(source)
-    for node in tree.body:
-        if isinstance(node, ast.FunctionDef) and node.name == name:
-            module = ast.Module(
-                body=[
-                    ast.ImportFrom(
-                        module="__future__",
-                        names=[ast.alias(name="annotations", asname=None)],
-                        level=0,
-                    ),
-                    ast.Import(names=[ast.alias(name="re", asname=None)]),
-                    node,
-                ],
-                type_ignores=[],
-            )
-            ast.fix_missing_locations(module)
-            namespace: dict = {}
-            exec(compile(module, relative_path, "exec"), namespace)  # noqa: S102
-            return namespace[name]
-    raise AssertionError(f"{name} not found in {relative_path} — did it move?")
-
-
-def _email_parse(version):
-    """The frozen email sidecar keeps its own copy — cover it too."""
-    parse = _load_function_from_source(
-        "hub/agents/email/python/gaia_agent_email/api_routes.py", "_parse_version"
-    )
-    return parse(version)
-
-
-@pytest.mark.parametrize("parser", PARSERS + [pytest.param(_email_parse, id="email")])
+@pytest.mark.parametrize("parser", PARSERS)
 def test_release_calver_parses_to_its_real_components(parser):
     """``2026.39.1`` must compare as (2026, 39, 1), not fail or truncate."""
     assert parser(RELEASE_CALVER) == (2026, 39, 1)
 
 
-@pytest.mark.parametrize("parser", PARSERS + [pytest.param(_email_parse, id="email")])
+@pytest.mark.parametrize("parser", PARSERS)
 def test_dev_calver_parses_instead_of_going_indeterminate(parser):
     """A ``0~12.abc1234`` build must still yield a comparable tuple.
 
@@ -130,13 +81,13 @@ def test_dev_calver_parses_instead_of_going_indeterminate(parser):
     assert parser(DEV_CALVER) == (2026, 39, 0)
 
 
-@pytest.mark.parametrize("parser", PARSERS + [pytest.param(_email_parse, id="email")])
+@pytest.mark.parametrize("parser", PARSERS)
 def test_calver_outranks_the_last_semver_release(parser):
     """The 11.9.0 -> 2026.39.1 switch must read as an upgrade, not a downgrade."""
     assert parser(RELEASE_CALVER) > parser(LAST_SEMVER)
 
 
-@pytest.mark.parametrize("parser", PARSERS + [pytest.param(_email_parse, id="email")])
+@pytest.mark.parametrize("parser", PARSERS)
 def test_garbage_is_still_unparseable(parser):
     """Tolerating CalVer must not turn every string into a fake version."""
     assert parser("not-a-version") is None
@@ -177,7 +128,7 @@ def test_cli_version_regex_extracts_calver(cli_output, expected):
 
 
 def test_flagship_agent_uses_the_core_gate():
-    path = "hub/agents/gaia/python/gaia_agent/server.py"
+    path = "hub/agents/gaia/python/gaiapy/server.py"
     tree = ast.parse((REPO_ROOT / path).read_text(encoding="utf-8"))
     defined = {n.name for n in tree.body if isinstance(n, ast.FunctionDef)}
     imported = {
@@ -231,29 +182,6 @@ def test_client_gate_still_rejects_old_releases():
         _client_gate("9.1.4")
 
 
-# -- the AST loader's blind spot --------------------------------------------
-
-
-@pytest.mark.parametrize(
-    "path",
-    [
-        "hub/agents/email/python/gaia_agent_email/api_routes.py",
-    ],
-)
-def test_the_vendored_copies_import_re_themselves(path):
-    """``_load_function_from_source`` supplies ``re``; the real modules must not rely on that.
-
-    The synthesized module always imports ``re``, so deleting the real
-    ``import re`` leaves every test above green while the running server raises
-    ``NameError`` on the first version check. Assert the import exists.
-    """
-    source = (REPO_ROOT / path).read_text(encoding="utf-8")
-    assert "\nimport re\n" in source, (
-        f"{path} no longer imports re at module scope — the parser there uses "
-        f"re.match, and the AST-loaded copy in these tests would hide it."
-    )
-
-
 def test_the_core_parsers_are_one_implementation():
     """All in-core entry points delegate, so a format change is a one-line fix."""
     from gaia.version import parse_version as canonical
@@ -267,50 +195,108 @@ def test_the_core_parsers_are_one_implementation():
         assert parser(probe) == expected
 
 
-# -- the vendored copies really do match the shared one ---------------------
+# -- PPA build suffix (``2026.48.0~1809.2d1f23e4``) -------------------------
+# The Ubuntu PPA's builds report this from /health while dpkg says 2026.48.0.
+# Every gate must read it as its release: not unknown, not a different version.
+
+PPA_BUILD_SUFFIX = "~1809.2d1f23e4"
 
 
-# Deliberately wider than the hand-written cases above: the claim being tested is
-# equivalence with the core parser, not agreement on a handful of strings.
-DRIFT_CORPUS = [
-    "2026.39.1",
-    "2026.39.0~12.abc1234",
-    "2026.40.0",
-    "11.9.0",
-    "11.8.1",
-    "10.2.0",
-    "9.1.4",
-    "v2026.39.1",
-    " 2026.39.1",
-    # Whitespace INSIDE a component. The leading-space case cannot tell the
-    # parsers apart — str().strip() handles that before the regex sees it — so
-    # without these the equivalence claim goes untested for the exact character
-    # class that differs.
-    "2026. 39.1",
-    "2026.39. 1",
-    "2026.39.1.4",
-    "1.2",
-    "not-a-version",
-    "",
-    None,
-]
+@pytest.mark.parametrize("parser", PARSERS)
+def test_ppa_build_parses_as_its_release(parser):
+    assert parser("2026.48.0" + PPA_BUILD_SUFFIX) == (2026, 48, 0)
 
 
-@pytest.mark.parametrize("version", DRIFT_CORPUS)
-def test_the_email_sidecar_copy_matches_the_core_parser(version):
-    from gaia.version import parse_version as canonical
-
-    assert _email_parse(version) == canonical(version)
+@pytest.mark.parametrize("parser", PARSERS)
+def test_build_suffix_never_becomes_a_version_component(parser):
+    assert parser("2026.48" + PPA_BUILD_SUFFIX) == (2026, 48)
 
 
-def test_the_email_sidecar_floor_matches_the_core_floor():
-    """The frozen sidecar vendors the floor too; it must not drift from core."""
-    path = "hub/agents/email/python/gaia_agent_email/version.py"
-    tree = ast.parse((REPO_ROOT / path).read_text(encoding="utf-8"))
-    values = [
-        node.value.value
-        for node in tree.body
-        if isinstance(node, ast.Assign)
-        and any(getattr(t, "id", None) == "MIN_LEMONADE_VERSION" for t in node.targets)
-    ]
-    assert values == [LEMONADE_MIN_VERSION]
+@pytest.mark.parametrize(
+    "version, expected",
+    [
+        ("2026.48.0~1809.2d1f23e4", "2026.48.0"),
+        ("2026.48.0+5.abc1234", "2026.48.0"),
+        ("v2026.48.0", "2026.48.0"),
+        (" 2026.48.0 ", "2026.48.0"),
+        ("2026.48.0", "2026.48.0"),
+    ],
+)
+def test_base_version_drops_the_build_suffix(version, expected):
+    from gaia.version import base_version
+
+    assert base_version(version) == expected
+
+
+def test_ppa_build_of_the_floor_clears_every_min_version_gate():
+    from gaia.llm.lemonade_client import check_lemonade_version
+
+    suffixed = LEMONADE_MIN_VERSION + PPA_BUILD_SUFFIX
+    assert version_meets_min(suffixed, LEMONADE_MIN_VERSION) is True
+    check_lemonade_version(suffixed, "http://127.0.0.1:1/api/v1")
+    assert _client_gate(suffixed) is True
+
+
+def test_suffix_with_no_release_is_still_refused_with_a_remedy():
+    """Tolerating a suffix must not turn a version-less string into a pass."""
+    from gaia.llm.lemonade_client import check_lemonade_version
+
+    with pytest.raises(LemonadeVersionError) as excinfo:
+        check_lemonade_version(PPA_BUILD_SUFFIX, "http://127.0.0.1:1/api/v1")
+    message = str(excinfo.value)
+    assert PPA_BUILD_SUFFIX in message
+    assert "cannot read" in message
+
+
+def _loud_client_gate(actual):
+    import logging
+
+    client = LemonadeClient.__new__(LemonadeClient)
+    client.log = logging.getLogger("test_lemonade_calver")
+    client.base_url = "http://127.0.0.1:1/api/v1"
+    return LemonadeClient._check_version_compatibility(
+        client, LEMONADE_VERSION, actual_version=actual, quiet=False
+    )
+
+
+def test_ppa_build_of_the_pin_prints_no_version_mismatch(capsys):
+    """Same release, build suffix only: the user must not be told to update."""
+    assert _loud_client_gate(LEMONADE_VERSION + PPA_BUILD_SUFFIX) is True
+    assert "expected" not in capsys.readouterr().out
+
+
+def test_a_different_release_still_warns_and_shows_the_full_build(capsys):
+    newer = "2099.1.0" + PPA_BUILD_SUFFIX
+    assert _loud_client_gate(newer) is True
+    out = capsys.readouterr().out
+    assert f"v{newer} (expected v{LEMONADE_VERSION})" in out
+
+
+def test_external_probe_accepts_a_ppa_build(monkeypatch):
+    """``gaia init``'s "use my own Lemonade" probe must call it OK, not too old."""
+    import requests
+
+    from gaia.llm import lemonade_choice
+
+    version = LEMONADE_MIN_VERSION + PPA_BUILD_SUFFIX
+
+    class _Health:
+        status_code = 200
+        headers = {"content-type": "application/json"}
+
+        @staticmethod
+        def json():
+            return {"status": "ok", "version": version}
+
+    monkeypatch.setattr(requests, "get", lambda *a, **k: _Health())
+    result = lemonade_choice.probe("http://127.0.0.1:1")
+    assert result.status == lemonade_choice.OK
+    assert result.version == version
+
+
+def test_embedded_server_on_a_build_of_its_pin_is_not_a_mismatch(tmp_path):
+    from gaia.llm.lemonade_embedded import EmbeddedLemonade
+
+    embedded = EmbeddedLemonade(version="2026.48.0", home=tmp_path)
+    assert embedded.is_version_mismatch("2026.48.0" + PPA_BUILD_SUFFIX) is False
+    assert embedded.is_version_mismatch("2026.47.0" + PPA_BUILD_SUFFIX) is True

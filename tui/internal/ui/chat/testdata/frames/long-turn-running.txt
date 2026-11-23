@@ -1,0 +1,24 @@
+ GAIA  │ agent gaia
+────────────────────────────────────────────────────────────────────────────────────────────────────
+▶ You: Reconcile the AP ledger against every invoice
+
+
+    … 27 earlier actions · Ctrl+O
+  ● Reconcile batch 27 against its invoices · 10s
+    └ python reconcile.py --batch 27
+  ● Reconcile batch 28 against its invoices · 10s
+    └ python reconcile.py --batch 28
+  ● Reconcile batch 29 against its invoices · 10s
+    └ python reconcile.py --batch 29
+
+
+
+
+
+
+
+  ⣿ Total the reconciled batches… (1h 18m 3s)
+
+────────────────────────────────────────────────────────────────────────────────────────────────────
+›
+  ● agent gaia streaming            ↑↓/wheel scroll · keep typing · Esc to interrupt · Ctrl+C quit

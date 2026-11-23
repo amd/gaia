@@ -54,7 +54,7 @@ from gaia.agents.install_hints import (
 from gaia.frozen import is_frozen
 from gaia.installer import model_choice
 from gaia.installer._stdin import stdin_is_tty
-from gaia.llm.model_fit import MachineCapacity, format_gb
+from gaia.llm.model_fit import MachineCapacity, format_gb, with_app_headroom
 from gaia.logger import get_logger
 from gaia.ui.build import WebuiBuildStatus
 
@@ -148,22 +148,22 @@ def hub_unreachable_message(
 
 
 # Hub agent ids `gaia init` installs for its profile. Everything else
-# (sd/vlm/email/...) owns its own install lifecycle; a generic "install the
+# (sd/vlm/...) owns its own install lifecycle; a generic "install the
 # profile's agent" would hard-fail on agents the hub index doesn't carry.
 #
 # `chat` is NOT here: it is not a catalog agent, so there is nothing for the
 # Hub to install. Its wheel is source-install only (#2240).
 HUB_INSTALL_AGENTS = frozenset({"gaia"})
 
-# The agent the Agent UI and gaia-tui talk to. Profiles that don't install it
+# The agent the Agent UI and gaia-cli talk to. Profiles that don't install it
 # say so in their completion message and name `gaia init`, which installs it.
 FLAGSHIP_AGENT_ID = "gaia"
 
 # Hub agent id -> the module a source/pip install of it makes importable. Every
 # `gaia-agent-<id>` distribution installs `gaia_agent_<id>` except the flagship:
-# `gaia-agent-gaia` ships plain `gaia_agent` (hub/agents/gaia/python's
+# `gaia-agent-gaia` ships plain `gaiapy` (hub/agents/gaia/python's
 # gaia-agent.yaml `entry_module`).
-_AGENT_IMPORT_NAMES = {"gaia": "gaia_agent"}
+_AGENT_IMPORT_NAMES = {"gaia": "gaiapy"}
 
 _NPU_ACTIVE_NOTE = (
     "The NPU model is now the default. To go back to the GPU, run: "
@@ -187,7 +187,7 @@ INIT_PROFILES = {
         "models": ["Gemma-4-E4B-it-GGUF", "user.embeddinggemma-300m-GGUF"],
         "approx_size": "~6 GB",
         "min_context_size": 32768,
-        # [ui] is [rag] plus the daemon, which gaia-tui, `gaia hub install`
+        # [ui] is [rag] plus the daemon, which gaia-cli, `gaia hub install`
         # and `gaia chat --ui` all need.
         "pip_extras": ["ui"],
     },
@@ -234,25 +234,16 @@ INIT_PROFILES = {
         "min_context_size": 32768,
         "pip_extras": [],
     },
-    "email": {
-        "description": "Email triage for Gmail/Outlook (local inference)",
-        "agent": "email",
-        "models": ["Gemma-4-E4B-it-GGUF"],
-        "approx_size": "~6 GB",
-        "min_context_size": 32768,
-        "pip_extras": [],
-    },
     "npu": {
         "description": "Ryzen AI NPU acceleration via FLM backend (requires XDNA2 NPU)",
         # The flagship, from the Agent Hub like the `gaia` profile -- the Agent
         # UI lists no agent without it (#2972). Only the models differ.
         "agent": "gaia",
-        # FLM chat model + FLM-native embedder so chat and embeddings stay
-        # co-resident on the NPU backend. A GGUF embedder would run on Vulkan
-        # and evict the FLM chat model every turn (#1744). Both are built-in
-        # Lemonade *-FLM models, pulled by name only (no recipe — #1655).
+        # FLM chat model, pulled by name only (no recipe — #1655), and the
+        # GPU embedder: the FLM one's search isn't proven. Lemonade holds one
+        # model per type, so the two stay loaded side by side.
         # The chat model is Gemma 4 E4B's NPU twin (``with_chat_model``).
-        "models": ["gemma4-it-e4b-FLM", "embed-gemma-300m-FLM"],
+        "models": ["gemma4-it-e4b-FLM", "user.embeddinggemma-300m-GGUF"],
         "approx_size": "~10 GB",
         # The floor every profile shares (issue #1745); the chat model itself
         # loads at its own window, 64K for the NPU twin.
@@ -311,6 +302,9 @@ class SetupStatus:
     warnings: list = field(default_factory=list)
     #: The hub has no GAIA agent build for this PC, so chat can't run here.
     no_agent_build: bool = False
+    #: The server answers but its model list could not be read, so nothing is
+    #: known about which models are on disk.
+    model_list_unread: bool = False
 
     def to_json(self) -> dict:
         return {
@@ -321,6 +315,7 @@ class SetupStatus:
             "agent_missing": self.agent_missing,
             "warnings": list(self.warnings),
             "no_agent_build": self.no_agent_build,
+            "model_list_unread": self.model_list_unread,
         }
 
 
@@ -353,6 +348,9 @@ class ChatModelChoice:
     capacity: Optional[MachineCapacity] = None
     #: The pick on capacity alone; differs from ``model_id`` when free memory decided.
     capacity_pick: Optional[str] = None
+    #: The smaller default this PC would get now, when an install that already
+    #: had Gemma downloaded keeps it instead.
+    kept_over: Optional[str] = None
 
     @property
     def forced_by_free_memory(self) -> bool:
@@ -365,8 +363,9 @@ def resolve_init_chat_model(
 ) -> ChatModelChoice:
     """The chat model `gaia init` sets up: the user's ``default_model`` when it
     is a local Lemonade model, else the downloaded local model they last
-    chatted on, else the largest default that fits this machine (Qwen3.6 35B
-    A3B wherever a GPU holds it, Gemma 4 E4B everywhere else).
+    chatted on, else the largest default that fits this machine once other
+    apps keep their share of RAM (:func:`~gaia.llm.lemonade_client.ladder_verdict`),
+    unless that is below Gemma and Gemma is already downloaded, which it keeps.
 
     ``--check`` and ``run()`` both go through here so they can never disagree
     about what "set up" means on this machine. ``reset_corrupt`` is run()'s
@@ -376,6 +375,8 @@ def resolve_init_chat_model(
     """
     from gaia.config import GaiaConfig, GaiaConfigError
     from gaia.llm.lemonade_client import (
+        DEFAULT_MODEL_NAME,
+        below_gemma,
         cloud_model_provider,
         recommend_default_chat_model,
         recommend_npu_chat_model,
@@ -410,6 +411,21 @@ def resolve_init_chat_model(
         return ChatModelChoice(model_id=in_use, user_set=True, skipped=[])
     recommend = recommend_npu_chat_model if on_npu else recommend_default_chat_model
     model_id, skipped, capacity = recommend(client)
+    if (
+        not on_npu
+        and below_gemma(model_id)
+        and _gemma_downloaded(client)
+        and _gemma_fits(capacity)
+    ):
+        # Gemma was every PC's default before the ladder went below it, and
+        # those installs saved no choice: an update must not take it away.
+        return ChatModelChoice(
+            model_id=DEFAULT_MODEL_NAME,
+            user_set=False,
+            skipped=[],
+            capacity=capacity,
+            kept_over=model_id,
+        )
     capacity_pick = (
         recommend_default_chat_model(client, judge_free_memory=False)[0]
         if capacity is not None and not on_npu
@@ -422,6 +438,42 @@ def resolve_init_chat_model(
         capacity=capacity,
         capacity_pick=capacity_pick,
     )
+
+
+def _gemma_downloaded(client) -> bool:
+    """Whether this PC's Lemonade already has Gemma, the pre-ladder default."""
+    from gaia.llm.lemonade_client import DEFAULT_MODEL_NAME
+
+    return bool(client.check_model_available(DEFAULT_MODEL_NAME))
+
+
+def _gemma_fits(capacity) -> bool:
+    """Whether Gemma fits this PC at all, tightly included; unknown memory keeps it.
+
+    A kept Gemma that cannot load is worse than the smaller default, so an
+    update keeps it only where the setup plan would also call it a fit.
+    """
+    from gaia.llm.lemonade_client import DEFAULT_MODEL_NAME, find_model_requirement
+
+    if capacity is None:
+        return True
+    mr = find_model_requirement(DEFAULT_MODEL_NAME)
+    fit = model_choice.memory_fit(
+        DEFAULT_MODEL_NAME, mr.size_gb if mr else None, capacity
+    )
+    return fit["fits"] is not False
+
+
+def _floor_without_room(client, choice: "ChatModelChoice") -> bool:
+    """Whether the pick is the ladder's floor on a PC with no room left for it."""
+    from gaia.llm.lemonade_client import DEFAULT_MODEL_LADDER, ladder_verdict
+
+    if choice.model_id != DEFAULT_MODEL_LADDER[-1] or choice.capacity is None:
+        return False
+    fits, _ = ladder_verdict(
+        client, choice.model_id, choice.capacity, judge_free_memory=False
+    )
+    return fits is False
 
 
 def _local_model_in_use(client, config, on_npu: bool) -> Optional[str]:
@@ -604,7 +656,7 @@ def _size_note(size_gb) -> str:
 
 
 # Profiles whose chat model follows the hardware. ``minimal`` promises a small
-# setup, and the vlm, email and sd agents pin Gemma themselves.
+# setup, and the vlm and sd agents pin Gemma themselves.
 HARDWARE_CHAT_PROFILES = frozenset({"gaia", "chat", "rag", "all"})
 
 
@@ -614,13 +666,16 @@ def with_chat_model(profile: str, model_ids, resolve_chat) -> list:
     ``resolve_chat`` returns a :class:`ChatModelChoice`, and is only called for
     hardware-chosen profiles, so the others never probe Lemonade. A chat model
     the hardware picked is added beside Gemma, which the image tools load by
-    name. A ``default_model`` the user chose replaces Gemma: the image tools
-    then ask the user to download Gemma first (:func:`skipped_gemma`).
+    name, except on a PC too small for Gemma, whose own model reads images. A
+    ``default_model`` the user chose replaces Gemma: the image tools then ask
+    the user to download Gemma first (:func:`skipped_gemma`).
     """
     from gaia.llm.lemonade_client import (
         DEFAULT_MODEL_NAME,
         NPU_DEFAULT_MODEL_NAME,
+        VISION_CHAT_MODELS,
         _model_ids_match,
+        below_gemma,
     )
 
     ids = list(model_ids)
@@ -636,7 +691,10 @@ def with_chat_model(profile: str, model_ids, resolve_chat) -> list:
     else:
         choice = resolve_chat()
         chat = choice.model_id
-        if choice.user_set and not _model_ids_match(chat, DEFAULT_MODEL_NAME):
+        reads_images_itself = below_gemma(chat) and chat in VISION_CHAT_MODELS
+        if reads_images_itself or (
+            choice.user_set and not _model_ids_match(chat, DEFAULT_MODEL_NAME)
+        ):
             ids = [m for m in ids if not _model_ids_match(m, DEFAULT_MODEL_NAME)]
     if chat not in ids:
         ids.append(chat)
@@ -715,6 +773,7 @@ def check_setup_status(
     from gaia.llm.lemonade_client import (
         LemonadeClient,
         LemonadeClientError,
+        ModelListShapeError,
         configured_lemonade_url,
         resolve_lemonade_base_url,
     )
@@ -792,6 +851,17 @@ def check_setup_status(
         too_old = configured_server_too_old(health, base_url)
         if too_old:
             return SetupStatus(ready=False, reasons=[too_old], stage="server")
+
+    # Each model check below reads this list and calls an unreadable one "not downloaded".
+    try:
+        client.list_models(show_all=True)
+    except LemonadeClientError as e:
+        return SetupStatus(
+            ready=False,
+            reasons=[f"Could not read the model list from {base_url}: {e}"],
+            stage="server",
+            model_list_unread=isinstance(e, ModelListShapeError),
+        )
 
     if profile_config["models"]:
         model_ids = list(profile_config["models"])
@@ -917,41 +987,35 @@ def check_setup_status(
     )
 
 
-def _terminal_installer_agent() -> Optional[Path]:
-    """The flagship an installer shipped outside the hub, else None.
-
-    install.sh / install.ps1 put it in GAIA's bin dir. The terminal packages
-    ship it with the frozen gaia: beside it (Windows setup) or on PATH (.deb,
-    .rpm, .pkg). None of them write a hub sentinel; the TUI runs it from any
-    of these places. A pip install's PATH is not trusted for it.
-    """
-    from gaia.home import gaia_home
-
-    name = "gaia-agent.exe" if sys.platform == "win32" else "gaia-agent"
-    candidates = [gaia_home() / "bin" / name]
-    if is_frozen():
-        candidates.append(Path(sys.executable).parent / name)
-        on_path = shutil.which("gaia-agent")
-        if on_path:
-            candidates.append(Path(on_path))
-    for path in candidates:
-        if not path.is_file():
-            continue
-        if sys.platform != "win32" and not os.access(path, os.X_OK):
-            continue
-        return path
-    return None
-
-
 def _agent_ready_for_check(agent_id: str) -> bool:
     """Whether the readiness check counts *agent_id* as installed.
 
-    The hub sentinel `gaia init` writes, or for the flagship the terminal
-    installer's copy. Never touches the network.
+    The hub sentinel `gaia init` writes, or for the flagship an installer's
+    copy that verifies against its install record -- the lookup the daemon
+    starts it from. Never touches the network.
     """
     if InitCommand._is_hub_agent_available(agent_id):
         return True
-    return agent_id == FLAGSHIP_AGENT_ID and _terminal_installer_agent() is not None
+    if agent_id != FLAGSHIP_AGENT_ID:
+        return False
+    from gaia.daemon.sidecars import fetch as sidecar_fetch
+    from gaia.daemon.sidecars.errors import IntegrityError
+    from gaia.home import gaia_home
+
+    try:
+        if sidecar_fetch.installer_verified_binary(agent_id) is not None:
+            return True
+    except IntegrityError as e:
+        log.warning("Not counting the installed GAIA agent: %s", e)
+        return False
+    # The terminal packages (.deb, .rpm, .pkg, Windows setup) write no install
+    # record yet, and the TUI runs their copy directly. GAIA's bin dir is the
+    # install scripts', which always record theirs.
+    placed = sidecar_fetch.installer_placed_flagship()
+    return (
+        placed is not None
+        and placed.parent.resolve() != (gaia_home() / "bin").resolve()
+    )
 
 
 def _agent_build_missing(agent_id: str) -> Tuple[Optional[str], Optional[str]]:
@@ -1452,7 +1516,7 @@ class InitCommand:
                 the local backend: the chat model would never be used, but
                 RAG/memory/code-index embeddings have no Claude equivalent and
                 still need Lemonade's embedder (see hub/agents/gaia/python/
-                gaia_agent/stdio.py). Ignored when skip_models is already set.
+                gaiapy/stdio.py). Ignored when skip_models is already set.
             progress_callback: Optional callback for progress updates
             lemonade_url: Use the Lemonade Server the user already runs at
                 this URL, and save that choice; GAIA installs no server.
@@ -1664,23 +1728,32 @@ class InitCommand:
             self.events.line_open = True
 
     @staticmethod
-    def _tui_installed() -> bool:
-        """True if gaia-tui is on PATH or in GAIA's own bin dir."""
-        if shutil.which("gaia-tui") is not None:
-            return True
+    def _tui_command() -> Optional[str]:
+        """The Terminal UI's command if it is on PATH or in GAIA's own bin dir.
+
+        It is ``gaia-cli``; an install from before that name has ``gaia-tui``.
+        """
         from gaia.config import gaia_home
 
-        name = "gaia-tui.exe" if sys.platform == "win32" else "gaia-tui"
-        if (gaia_home() / "bin" / name).is_file():
-            return True
-        if sys.platform != "win32":
-            return False
-        install_dir = InitCommand._nsis_install_dir()
-        return install_dir is not None and (install_dir / name).is_file()
+        suffix = ".exe" if sys.platform == "win32" else ""
+        install_dir = (
+            InitCommand._nsis_install_dir() if sys.platform == "win32" else None
+        )
+        for command in ("gaia-cli", "gaia-tui"):
+            if shutil.which(command) is not None:
+                return command
+            if (gaia_home() / "bin" / f"{command}{suffix}").is_file():
+                return command
+            if (
+                install_dir is not None
+                and (install_dir / f"{command}{suffix}").is_file()
+            ):
+                return command
+        return None
 
     @staticmethod
     def _nsis_install_dir() -> Optional[Path]:
-        """Where the Windows installer put gaia-tui.exe (installer/nsis/gaia.nsi)."""
+        """Where the Windows installer put gaia-cli.exe (installer/nsis/gaia.nsi)."""
         import winreg
 
         try:
@@ -1778,7 +1851,7 @@ class InitCommand:
         )
         # Data-driven scope (#2358): keyed off the declared agent, not a
         # hardcoded profile-name literal, so it never touches profiles for
-        # agents outside the catalog (chat/sd/vlm/email/...), each of which
+        # agents outside the catalog (chat/sd/vlm/...), each of which
         # has its own, separately-owned install lifecycle.
         has_hub_agent_check = profile_config.get("agent") in HUB_INSTALL_AGENTS
 
@@ -1939,16 +2012,11 @@ class InitCommand:
             try:
                 from gaia.config import GaiaConfig
 
-                def _apply_profile(config) -> None:
-                    config.profile = self.profile
-                    config.default_device = "npu" if self.profile == "npu" else "gpu"
-                    self._record_chat_choice(config)
-
                 # Read under the lock, so a default_model another process saved
                 # during this long-running init survives. init is the recovery
                 # path, so a corrupt file is reset rather than left in place.
                 GaiaConfig.update(
-                    _apply_profile,
+                    self._apply_profile_to,
                     on_unreadable=lambda e: self._print_warning(
                         f"Resetting unreadable config: {e}"
                     ),
@@ -2322,7 +2390,10 @@ class InitCommand:
             return f"Check the Lemonade Server at {self._lemonade_base_url}."
         from gaia.llm.lemonade_embedded import EmbeddedLemonade
 
-        return f"Read {EmbeddedLemonade().log_path} for the server's own error."
+        server = EmbeddedLemonade()
+        read_log = f"Read {server.log_path} for the server's own error."
+        ca_problem = server.ca_problem()
+        return f"{ca_problem} {read_log}" if ca_problem else read_log
 
     def _verify_model(self, client, model_id: str) -> tuple:
         """
@@ -2576,18 +2647,31 @@ class InitCommand:
             self._print_error(self._server_problem_hint())
             return False
 
+    def _apply_profile_to(self, config) -> None:
+        """Record this profile, its device and the chat model setup chose."""
+        config.profile = self.profile
+        if self.profile == "npu":
+            config.default_device = "npu"
+        elif not (self.profile == "gaia" and config.default_device == "npu"):
+            # The app runs "gaia" on every PC; the device picks the embedder,
+            # and changing it clears every memory vector.
+            config.default_device = "gpu"
+        self._record_chat_choice(config)
+
     def _record_chat_choice(self, config) -> None:
         """Save a hardware-picked chat model as ``default_model`` so every agent
         resolves to it. Never overwrites a model the user chose, except under
         ``--profile npu``: asking for the NPU is the choice, so its model
         replaces a local ``default_model`` and ``last_model``, the one the Agent
         UI and TUI start on. A Claude or cloud model is left as it is.
-        Records nothing when the pick is the floor model every agent already
-        defaults to (unless free memory forced it) or when setup did not
-        download it (declined, or ``--skip-models``) or could not verify it.
+        Records nothing when the pick is Gemma, which every agent already
+        defaults to (unless free memory forced it), when setup did not
+        download it (declined, or ``--skip-models``), or when setup could not
+        verify it, unless the pick is smaller than Gemma.
         """
         from gaia.llm.lemonade_client import (
             DEFAULT_MODEL_NAME,
+            below_gemma,
             cloud_model_provider,
             runs_on_npu,
         )
@@ -2596,7 +2680,11 @@ class InitCommand:
         if choice is None:
             return
         # An undownloaded default would make every agent's first load fail.
-        if not self._chat_model_ready or not self._setup_verified:
+        if not self._chat_model_ready:
+            return
+        # A failed verify records nothing, except a small PC's downloaded pick:
+        # without it every agent falls back to a Gemma that PC never downloaded.
+        if not self._setup_verified and not below_gemma(choice.model_id):
             return
 
         def replaceable(model_id) -> bool:
@@ -2632,14 +2720,31 @@ class InitCommand:
                 self._print(
                     f"   Chat model: {choice.model_id} (default_model in ~/.gaia/config.json)"
                 )
+            elif choice.kept_over:
+                self._print(
+                    f"   Chat model: {choice.model_id} (already downloaded, kept). "
+                    f"{choice.kept_over} leaves other apps more memory on this PC: "
+                    f"`gaia init --use-model {choice.kept_over}`"
+                )
             else:
-                cap = choice.capacity
+                cap = with_app_headroom(choice.capacity) if choice.capacity else None
+                kept = (
+                    f" once {format_gb(cap.kept_for_apps_gb)} GB is kept for other apps"
+                    if cap and cap.kept_for_apps_gb
+                    else ""
+                )
                 where = (
-                    f" — this PC has {format_gb(cap.memory_gb)} GB for models "
-                    f"({cap.memory_source})"
+                    f" — this PC has {format_gb(cap.memory_gb)} GB for models"
+                    f"{kept} ({cap.memory_source})"
                     if cap
                     else ""
                 )
+                if cap and _floor_without_room(client, choice):
+                    where = (
+                        ", the smallest model GAIA offers. It shares memory with "
+                        f"your other apps: this PC has {format_gb(cap.memory_gb)} "
+                        f"GB for models{kept} ({cap.memory_source})"
+                    )
                 self._print(f"   Chat model: {choice.model_id}{where}")
                 for skipped_id, reason in choice.skipped:
                     self._print(f"   Not using {skipped_id}: {reason}")
@@ -2664,14 +2769,23 @@ class InitCommand:
                 self.profile, model_ids, lambda: self._chat_model_choice(client)
             )
             if skipped_gemma(self.profile, model_ids):
-                from gaia.llm.lemonade_client import DEFAULT_MODEL_NAME
+                from gaia.llm.lemonade_client import (
+                    DEFAULT_MODEL_NAME,
+                    VISION_CHAT_MODELS,
+                )
                 from gaia.llm.surface_hints import CLI_VISION_DOWNLOAD_HINT
 
-                self._print(
-                    f"   Not downloading {DEFAULT_MODEL_NAME}: your "
-                    f"default_model is {self._chat_choice.model_id}. "
-                    f"{CLI_VISION_DOWNLOAD_HINT}"
-                )
+                chat = self._chat_choice.model_id
+                if chat in VISION_CHAT_MODELS:
+                    self._print(
+                        f"   Not downloading {DEFAULT_MODEL_NAME}: {chat} reads "
+                        "images itself on this PC."
+                    )
+                else:
+                    self._print(
+                        f"   Not downloading {DEFAULT_MODEL_NAME}: your "
+                        f"default_model is {chat}. {CLI_VISION_DOWNLOAD_HINT}"
+                    )
 
         # A Claude-backed session never calls the local chat LLM — only
         # RAG/memory/code-index embeddings still need Lemonade (Anthropic has
@@ -3666,7 +3780,7 @@ class InitCommand:
         of them is importable. A wheel agent (``chat``) is there when
         ``gaia_agent_<id>`` imports -- the naming convention
         ``install_hints._AGENT_SOURCE_SUBDIRS`` and every ``gaia-agent-*``
-        wheel share, with the flagship's ``gaia_agent`` spelling read from
+        wheel share, with the flagship's ``gaiapy`` spelling read from
         ``_AGENT_IMPORT_NAMES``. The flagship itself publishes a native
         BINARY, which no import can ever see, so its install sentinel under
         ``~/.gaia/agents`` is the only evidence it is there. Probing the
@@ -3714,7 +3828,7 @@ class InitCommand:
         """What to tell the user when no chat agent is installed, else None.
 
         Every profile gets the same supported remedy, `gaia init`, which
-        installs the flagship when it is missing: the Agent UI and gaia-tui list
+        installs the flagship when it is missing: the Agent UI and gaia-cli list
         no agent without it (#2972).
         """
         if self._is_hub_agent_available(FLAGSHIP_AGENT_ID):
@@ -4002,9 +4116,10 @@ class InitCommand:
         # The flagship is a downloaded BINARY, so the remedy is `gaia init`,
         # never a pip install from a git checkout.
         agent_note = self._agent_install_note()
-        has_tui = self._tui_installed()
+        tui_command = self._tui_command()
+        has_tui = tui_command is not None
         tui_install_note = (
-            f"Terminal UI (gaia-tui) ships with the installer -- run: {_INSTALLER_HINT}"
+            f"Terminal UI (gaia-cli) ships with the installer -- run: {_INSTALLER_HINT}"
         )
         installs_flagship = self._profile_installs_flagship()
         agent_missing = agent_note is not None
@@ -4046,7 +4161,7 @@ class InitCommand:
             elif self.profile in ("gaia", "npu"):
                 if has_tui:
                     self.console.print(
-                        "    [cyan]gaia-tui[/cyan]                             Start the GAIA agent (terminal UI)"
+                        f"    [cyan]{tui_command:<37}[/cyan]Start the GAIA agent (terminal UI)"
                     )
                 self.console.print(
                     "    [cyan]gaia chat --ui[/cyan]                       Launch the Agent UI (browser-based)"
@@ -4124,7 +4239,7 @@ class InitCommand:
             elif self.profile in ("gaia", "npu"):
                 if has_tui:
                     self._print(
-                        "    gaia-tui                             # Start the GAIA agent (terminal UI)"
+                        f"    {tui_command:<37}# Start the GAIA agent (terminal UI)"
                     )
                 self._print(
                     "    gaia chat --ui                       # Launch the Agent UI (browser-based)"

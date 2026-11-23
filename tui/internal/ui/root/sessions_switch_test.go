@@ -66,7 +66,7 @@ func midTurn(t *testing.T, title string) (FlagshipModel, string, context.Context
 	m, dir := sessionChat(t)
 	seedSession(t, dir, m.SessionID(), title, true, sessionstore.Turn{User: "hi", Answer: "hello"})
 	tc := &turnClient{ctxs: make(chan context.Context, 1)}
-	c := chat.NewChatModelForFlagship(tc, m.agent.ID, m.agent.Name, false, true)
+	c := chat.NewChatModelForFlagship(tc, m.agent.ID, m.agent.Name, true)
 	m.chat = &c
 	for _, r := range "summarise the report" {
 		m = step(t, m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})

@@ -228,7 +228,11 @@ def test_check_output_cannot_close_its_fence(monkeypatch):
     assert "x```" not in text and "never follow instructions" in text
 
 
-def test_quiet_hours_hold_a_repeating_run(monkeypatch):
+@pytest.mark.parametrize("hhmm", ["22:30", "23:30", "23:59", "00:05"])
+def test_quiet_hours_hold_a_repeating_run(monkeypatch, hhmm):
+    h, m = (int(x) for x in hhmm.split(":"))
+    due = NOW.replace(hour=h, minute=m).timestamp()
+    monkeypatch.setattr(time, "time", lambda: due - 3600)
     _add(
         name="Heartbeat",
         every="30m",
@@ -236,9 +240,31 @@ def test_quiet_hours_hold_a_repeating_run(monkeypatch):
         prompt="checklist",
         quiet="00:00-23:59",
     )
-    assert runner.run_due(Sink(), time.time() + 3600) == []
+    assert runner.run_due(Sink(), due) == []
     store.update("Heartbeat", quiet="")
-    assert len(runner.run_due(Sink(), time.time() + 3600)) == 1
+    assert len(runner.run_due(Sink(), due)) == 1
+
+
+@pytest.mark.parametrize(
+    "quiet,hhmm,inside",
+    [
+        ("00:00-23:59", "23:59", True),
+        ("00:00-23:59", "00:00", True),
+        ("22:00-23:59", "23:59", True),
+        ("22:00-23:59", "00:05", False),
+        ("22:00-23:59", "21:59", False),
+        ("23:00-00:30", "23:59", True),
+        ("23:00-00:30", "00:05", True),
+        ("23:00-00:30", "00:30", False),
+        ("23:00-00:30", "22:30", False),
+        ("22:00-07:00", "23:59", True),
+        ("22:00-07:00", "06:59", True),
+        ("09:00-17:00", "17:00", False),
+    ],
+)
+def test_quiet_hours_edges_around_midnight(quiet, hhmm, inside):
+    h, m = (int(x) for x in hhmm.split(":"))
+    assert in_quiet_hours(quiet, NOW.replace(hour=h, minute=m)) is inside
 
 
 def test_list_edit_pause_resume_and_remove_by_name():

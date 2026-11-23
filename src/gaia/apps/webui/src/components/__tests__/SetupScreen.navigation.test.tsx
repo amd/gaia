@@ -8,7 +8,7 @@ import { useModelStore } from '../../stores/modelStore';
 import * as api from '../../services/api';
 import type { SetupRunStatus, SetupStep, StartScreen, LemonadeTarget } from '../../types';
 import { COLD_BIG, QWEN, progress, runStatus } from '../setup/__tests__/fixtures';
-import { NO_BACKENDS, NO_GPU_SPLIT } from '../../test/setupApiMocks';
+import { AGENT_PROGRAMS, NO_BACKENDS, NO_GPU_SPLIT, SETTINGS } from '../../test/setupApiMocks';
 
 vi.mock('../../services/api', async (importOriginal) => {
     const real = await importOriginal<typeof api>();
@@ -40,6 +40,8 @@ beforeEach(() => {
     mockedApi.getSetupPlan.mockResolvedValue(COLD_BIG());
     mockedApi.getGpuMemory.mockResolvedValue(NO_GPU_SPLIT);
     mockedApi.getModelServer.mockResolvedValue(NO_BACKENDS);
+    mockedApi.getSettings.mockResolvedValue(SETTINGS);
+    mockedApi.getAgentPrograms.mockResolvedValue(AGENT_PROGRAMS);
     mockedApi.getStartScreen.mockResolvedValue(START);
     mockedApi.listProviders.mockResolvedValue({ providers: [], active: null, lemonade_error: null } as never);
     mockedApi.getActiveModel.mockResolvedValue({ provider: 'local', model: QWEN.id, label: 'Qwen', remote: false, is_default: true });
@@ -100,8 +102,10 @@ describe('moving between steps during a run', () => {
         await screen.findByRole('heading', { name: 'Connect a cloud provider' });
         fireEvent.click(screen.getByRole('button', { name: 'Back' }));
         await screen.findByRole('heading', { name: 'Your setup' });
-        expect(screen.getByRole('button', { name: 'Customize' })).toBeDisabled();
+        // The cloud is picked, so Customize (local models) isn't offered at all.
+        expect(screen.queryByRole('button', { name: 'Customize' })).toBeNull();
         expect(screen.getByRole('radio', { name: 'Use a cloud model' })).toBeDisabled();
+        expect(screen.getByRole('radio', { name: /^Run .* on this PC$/ })).toBeDisabled();
     });
 
     it('going back from the plan before any download stays on the checks', async () => {

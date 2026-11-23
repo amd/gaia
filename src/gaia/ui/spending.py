@@ -78,6 +78,27 @@ def turn_cost(
     return price(model_id, input_tokens, cached_tokens, output_tokens)
 
 
+#: The saved cost of a cloud turn no reply came from: not a stopped answer.
+NO_REPLY_COST_KIND = "no_reply"
+
+
+def never_answered(failed: bool, stats: Optional[Dict[str, Any]]) -> bool:
+    """Whether a turn failed with no tokens reported: no reply, so nothing billed.
+
+    The one rule for a turn left out of spending, in Settings and the composer.
+    """
+    stats = stats or {}
+    inp, out = stats.get("input_tokens"), stats.get("output_tokens")
+    return failed and not (isinstance(inp, int) and isinstance(out, int) and inp + out)
+
+
+def mark_no_reply(summary: Dict[str, Any]) -> None:
+    """Save a cloud turn's cost as none: no reply came from it."""
+    cost = summary.get("cost")
+    if isinstance(cost, dict) and cost.get("kind") in ("unreported", "unknown"):
+        summary["cost"] = {"kind": NO_REPLY_COST_KIND}
+
+
 def record_turn(
     db,
     model_id: Optional[str],
@@ -93,7 +114,7 @@ def record_turn(
         return
     stats = stats or {}
     inp, out = stats.get("input_tokens"), stats.get("output_tokens")
-    if failed and not (isinstance(inp, int) and isinstance(out, int) and inp + out):
+    if never_answered(failed, stats):
         return
     usd = None
     if isinstance(inp, int) and isinstance(out, int):
@@ -128,7 +149,7 @@ def get_limit(db) -> Optional[float]:
     except ValueError as e:
         raise ValueError(
             f"The saved monthly spending limit {raw!r} is not a number. Set it "
-            "again in Settings › Model."
+            "again in Settings › Agent & model."
         ) from e
     return value
 
@@ -213,9 +234,15 @@ def _answered_at(answer: Dict[str, Any]) -> dt.datetime:
 
 
 def _cloud_answers(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    """The answers a cloud model gave; a local answer cost nothing and is left out."""
+    """The answers a cloud model gave; a local answer cost nothing and is left out.
+
+    So is a turn no reply came from, as the month leaves it out.
+    """
     return [
-        r for r in rows if r["cost"].get("kind") == "estimate" or r["remote"] is True
+        r
+        for r in rows
+        if r["cost"].get("kind") == "estimate"
+        or (r["remote"] is True and r["cost"].get("kind") != NO_REPLY_COST_KIND)
     ]
 
 
@@ -235,7 +262,9 @@ def chat_spend(
     """What this chat's cloud answers cost, and every chat's since *since*.
 
     *since* is the start of the viewer's local day as an ISO instant, so "today"
-    follows the user's clock. Costs are the ones each answer's details show.
+    follows the user's clock. This chat's costs are the ones each answer's
+    details show; today's are every turn billed since *since*, the record the
+    month total reads, so an answer edited away or retried still counts.
     ``paid`` says whether *model_id* is a priced cloud model, the only time the
     composer shows spending.
     """
@@ -250,7 +279,11 @@ def chat_spend(
     chat = sorted(
         _cloud_answers(db.answer_costs(session_id=session_id)), key=_answered_at
     )
-    today = [
+    # Billed turns, as the month total counts them: an answer edited away,
+    # retried or deleted was still billed.
+    billed = db.cloud_spend_since(start_utc)
+    priced = [r["usd"] for r in billed if r["usd"] is not None]
+    answered_today = [
         a
         for a in _cloud_answers(db.answer_costs(since_day=start_utc.date().isoformat()))
         if _answered_at(a) >= start_utc
@@ -272,8 +305,10 @@ def chat_spend(
             ],
         },
         "today": {
-            **_totals(today),
-            "chats": len({a["session_id"] for a in today}),
+            "usd": round(sum(priced), 6),
+            "answers": len(billed),
+            "unpriced_answers": len(billed) - len(priced),
+            "chats": len({a["session_id"] for a in answered_today}),
             "since": start_utc.isoformat(),
         },
         "price_source": PRICE_SOURCE,
@@ -282,7 +317,11 @@ def chat_spend(
 
 def limit_refusal(db, model_id: Optional[str]) -> Optional[str]:
     """Why a turn on *model_id* must not start, or None when it may."""
-    provider = cloud_provider(model_id)
+    from gaia.llm.hybrid import candidate_models
+
+    provider = next(
+        filter(None, (cloud_provider(m) for m in candidate_models(model_id))), None
+    )
     if provider is None:
         return None
     report = month_report(db)
@@ -293,7 +332,7 @@ def limit_refusal(db, model_id: Optional[str]) -> Optional[str]:
         f"This month's cloud chats have cost about ${report['total_usd']:.2f} at "
         f"list price, which reaches your ${report['limit_usd']:.2f} monthly limit, "
         f"so GAIA stopped before sending this to {name}. To go on, raise the "
-        "limit or allow more this month in Settings › Model, or pick a model "
+        "limit or allow more this month in Settings › Agent & model, or pick a model "
         "that runs on this PC."
     )
 

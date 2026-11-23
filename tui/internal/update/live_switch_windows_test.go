@@ -36,7 +36,7 @@ func TestLiveVersionSwitch(t *testing.T) {
 	if rel, err := filepath.Rel(realHome, home); err == nil && rel == "." || strings.HasPrefix(rel, ".gaia") {
 		t.Fatalf("%s is the real home; refusing to run", home)
 	}
-	exe := filepath.Join(home, ".gaia", "bin", "gaia-tui.exe")
+	exe := filepath.Join(home, ".gaia", "bin", "gaia-cli.exe")
 	if err := os.MkdirAll(filepath.Dir(exe), 0o755); err != nil {
 		t.Fatal(err)
 	}

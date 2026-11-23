@@ -24,19 +24,36 @@ on:
     tags: [ 'v*' ]
     paths:
       - 'cpp/**'
+      - 'util/check_glibc_floor.py'
       - '.github/workflows/build_agents.yml'
   pull_request:
     # No `branches:` filter: it matches the PR base, so `[ main ]` skipped stacked PRs (#2767).
     types: [opened, synchronize, reopened, ready_for_review, labeled]
     paths:
       - 'cpp/**'
+      - 'util/check_glibc_floor.py'
       - '.github/workflows/build_agents.yml'
   merge_group:
   workflow_dispatch:
+  # publish.yml builds the release's gaiacpp here and attaches it to the GitHub
+  # release, a release candidate's pre-release included.
+  workflow_call:
+    inputs:
+      version:
+        description: Version stamped into gaiacpp (0.25.4, or 0.25.4-rc.1 for an RC)
+        type: string
+        required: true
+      tag:
+        description: Release tag the Lemonade pin file names (v0.25.4-rc1)
+        type: string
+        required: true
 
+# Only a pull request's stale build is cancelled. A release build called from
+# publish.yml must finish: a re-run on the same tag would otherwise cancel the
+# gaiacpp build the first run's release is waiting for.
 concurrency:
   group: ${{ github.workflow }}-${{ github.head_ref || github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
   contents: read
@@ -54,12 +71,24 @@ jobs:
           - os: windows-latest
             platform: win-x64
             triplet: x64-windows-static
-          - os: ubuntu-latest
+            lemonade_os: windows
+            lemonade_arch: x64
+          # The glibc floor. A Linux binary needs the glibc it was linked
+          # against or newer, and ubuntu-latest's (2.43) locked out every
+          # distro the .deb/.rpm ship to. 22.04's 2.35 reaches Ubuntu 22.04,
+          # Debian 12 and current Fedora; glibc_floor must match the image,
+          # and util/check_glibc_floor.py holds the binary to it.
+          - os: ubuntu-22.04
             platform: linux-x64
             triplet: x64-linux-static
+            lemonade_os: linux
+            lemonade_arch: x64
+            glibc_floor: '2.35'
           - os: macos-latest
             platform: darwin-arm64
             triplet: arm64-osx-static
+            lemonade_os: darwin
+            lemonade_arch: arm64
 
     env:
       # vcpkg binary cache so static OpenSSL is built once and reused across runs.
@@ -84,16 +113,18 @@ jobs:
         uses: actions/cache@v6
         with:
           path: ${{ github.workspace }}/.vcpkg-cache
-          key: vcpkg-${{ matrix.triplet }}-${{ hashFiles('cpp/vcpkg.json') }}
+          # Keyed by image: a static library built on a newer one would carry
+          # that image's glibc into the floor build.
+          key: vcpkg-${{ matrix.os }}-${{ matrix.triplet }}-${{ hashFiles('cpp/vcpkg.json') }}
           restore-keys: |
-            vcpkg-${{ matrix.triplet }}-
+            vcpkg-${{ matrix.os }}-${{ matrix.triplet }}-
 
       - name: Restore FetchContent cache
         uses: actions/cache@v6
         with:
           path: cpp/build/_deps
-          key: fetchcontent-agents-${{ matrix.platform }}-${{ hashFiles('cpp/CMakeLists.txt') }}
-          restore-keys: fetchcontent-agents-${{ matrix.platform }}-
+          key: fetchcontent-agents-${{ matrix.os }}-${{ matrix.platform }}-${{ hashFiles('cpp/CMakeLists.txt') }}
+          restore-keys: fetchcontent-agents-${{ matrix.os }}-${{ matrix.platform }}-
 
       - name: Install static OpenSSL via vcpkg (${{ matrix.triplet }})
         shell: bash
@@ -110,15 +141,19 @@ jobs:
 
       - name: Configure CMake (static)
         shell: bash
+        env:
+          GAIACPP_VERSION: ${{ inputs.version }}
         run: |
           set -euo pipefail
-          cmake -B cpp/build -S cpp \
+          # A release stamps its own version; any other build keeps the project's.
+          cmake -B cpp/build -S cpp ${GAIACPP_VERSION:+"-DGAIACPP_VERSION=${GAIACPP_VERSION}"} \
             -DCMAKE_BUILD_TYPE=Release \
             -DBUILD_SHARED_LIBS=OFF \
             -DGAIA_BUILD_TESTS=OFF \
             -DGAIA_BUILD_EXAMPLES=ON \
             -DGAIA_BUILD_INTEGRATION_TESTS=OFF \
             -DGAIA_BUILD_BENCHMARKS=OFF \
+            -DGAIA_STATIC_CXX_RUNTIME=ON \
             -DVCPKG_MANIFEST_MODE=OFF \
             -DVCPKG_TARGET_TRIPLET=${{ matrix.triplet }} \
             -DVCPKG_OVERLAY_TRIPLETS="${GITHUB_WORKSPACE}/cpp/triplets" \
@@ -127,6 +162,50 @@ jobs:
       - name: Build (Release)
         run: cmake --build cpp/build --config Release --parallel
 
+      - name: Check gaiacpp runs on glibc ${{ matrix.glibc_floor }}
+        if: matrix.glibc_floor
+        shell: bash
+        run: |
+          set -euo pipefail
+          bin="$(find cpp/build -type f -name gaiacpp | head -n1)"
+          [ -n "${bin}" ] || { echo "::error::the build produced no gaiacpp binary"; exit 1; }
+          python util/check_glibc_floor.py "${bin}" --max "${{ matrix.glibc_floor }}"
+
+      # The shipped bytes, run on the platform they ship to: a binary that
+      # cannot start, or reports another version, must not reach packaging.
+      - name: Smoke-test gaiacpp
+        shell: bash
+        env:
+          GAIACPP_VERSION: ${{ inputs.version }}
+          GAIA_HOME: ${{ runner.temp }}/gaia-home
+        run: |
+          set -euo pipefail
+          bin="$(find cpp/build -type f \( -name gaiacpp -o -name gaiacpp.exe \) | head -n1)"
+          [ -n "${bin}" ] || { echo "::error::the build produced no gaiacpp binary"; exit 1; }
+          got="$("${bin}" --version | tr -d '\r')"
+          if [ -n "${GAIACPP_VERSION}" ]; then
+            want="gaiacpp ${GAIACPP_VERSION}"
+            [ "${got}" = "${want}" ] || { echo "::error::gaiacpp --version printed '${got}', expected '${want}'"; exit 1; }
+          else
+            case "${got}" in
+              gaiacpp\ [0-9]*) ;;
+              *) echo "::error::gaiacpp --version printed '${got}', expected 'gaiacpp <version>'"; exit 1 ;;
+            esac
+          fi
+          "${bin}" --help > /dev/null
+          # MCP server mode answers a handshake with no model server running.
+          echo '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"ci","version":"0"}}}' > init.json
+          "${bin}" --mcp < init.json | head -n 1 | tee mcp.json
+          grep -q '"serverInfo"' mcp.json
+
+      # The same bytes, against a model server that misbehaves on purpose.
+      - name: Chaos test gaiacpp
+        shell: bash
+        run: |
+          set -euo pipefail
+          bin="$(find cpp/build -type f \( -name gaiacpp -o -name gaiacpp.exe \) | head -n1)"
+          python cpp/tests/chaos/chaos_gaiacpp.py --binary "${bin}" --runs 100 --jobs 4
+
       - name: Package agents for ${{ matrix.platform }}
         run: >-
           python cpp/packaging/package_agents.py
@@ -134,6 +213,15 @@ jobs:
           --build-dir cpp/build
           --agents-dir cpp/agents
           --out dist
+
+      - name: Package gaiacpp for Lemonade (${{ matrix.lemonade_os }}-${{ matrix.lemonade_arch }})
+        run: >-
+          python cpp/packaging/package_lemonade.py
+          --build-dir cpp/build
+          --os ${{ matrix.lemonade_os }}
+          --arch ${{ matrix.lemonade_arch }}
+          --version ${{ inputs.tag || (startsWith(github.ref, 'refs/tags/v') && github.ref_name) || 'v0.0.0-dev' }}
+          --out dist/lemonade
 
       - name: Show packaged artifacts
         shell: bash
@@ -151,6 +239,39 @@ jobs:
           path: dist/
           if-no-files-found: error
 
+  # The shipped Linux archive on the oldest distros the .deb/.rpm reach. The
+  # glibc gate reads symbol versions; this proves the binary actually starts.
+  distro-smoke:
+    name: Smoke-test linux-x64 on ${{ matrix.image }}
+    needs: [build]
+    runs-on: ubuntu-latest
+    container: ${{ matrix.image }}
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        image: ['ubuntu:22.04', 'debian:bookworm']
+    steps:
+      - name: Download the linux-x64 build
+        uses: actions/download-artifact@v8
+        with:
+          name: cpp-agents-linux-x64
+          path: artifact
+
+      - name: gaiacpp --version
+        shell: bash
+        run: |
+          set -euo pipefail
+          ldd --version | sed -n 1p
+          mkdir -p unpacked
+          tar -xzf artifact/lemonade/gaiacpp-linux-x64.tar.gz -C unpacked
+          got="$(./unpacked/gaiacpp --version)"
+          echo "${got}"
+          case "${got}" in
+            gaiacpp\ [0-9]*) ;;
+            *) echo "::error::gaiacpp --version printed '${got}' on ${{ matrix.image }}"; exit 1 ;;
+          esac
+
   # On a version tag, consolidate every platform's dist/ into one bundle so a
   # downstream job (R2 / PyPI — other issues) has a single artifact to publish.
   release-bundle:
@@ -158,11 +279,28 @@ jobs:
     runs-on: ubuntu-latest
     needs: [build]
     if: startsWith(github.ref, 'refs/tags/v')
+    timeout-minutes: 30
     permissions:
       contents: read
     steps:
+      - uses: actions/checkout@v7
+        with:
+          sparse-checkout: cpp/packaging
+
+      # One bounded retry: a stalled download once cancelled a whole release.
       - name: Download all platform artifacts
+        id: download_try_1
         uses: actions/download-artifact@v8
+        continue-on-error: true
+        timeout-minutes: 5
+        with:
+          pattern: cpp-agents-*
+          path: artifacts
+
+      - name: Download all platform artifacts (second try)
+        uses: actions/download-artifact@v8
+        if: steps.download_try_1.outcome == 'failure'
+        timeout-minutes: 5
         with:
           pattern: cpp-agents-*
           path: artifacts
@@ -183,9 +321,18 @@ jobs:
           done
           find bundle -name checksums.sha256 -delete
 
+          # Every leg wrote its own Lemonade pin file at the same path, so the
+          # copy above kept one platform's. Rebuild it from all of them.
+          rm -f bundle/lemonade/agent_versions.gaia.json
+          python3 cpp/packaging/package_lemonade.py --out bundle/lemonade \
+            --merge artifacts/cpp-agents-*/lemonade/agent_versions.gaia.json
+
           : > bundle/CHECKSUMS.sha256
           for agent_dir in bundle/*/; do
             [ -d "$agent_dir" ] || continue
+            agent_id="$(basename "$agent_dir")"
+            # lemonade/ holds release archives, not a hub agent; hashed below.
+            [ "$agent_id" = "lemonade" ] && continue
             ( cd "$agent_dir"
               # Hash every shipped binary (everything except yaml/checksum files).
               : > checksums.sha256
@@ -197,14 +344,26 @@ jobs:
                 sha256sum "$f" >> checksums.sha256
               done
             )
-            agent_id="$(basename "$agent_dir")"
             sed "s|\$| (${agent_id})|" "${agent_dir}checksums.sha256" >> bundle/CHECKSUMS.sha256
           done
+
+          # The pin file is what Lemonade verifies against; this lists the same
+          # archives in sha256sum form so the bundle can be checked by hand.
+          ( cd bundle/lemonade
+            archives=(gaiacpp-*.tar.gz gaiacpp-*.zip)
+            for archive in "${archives[@]}"; do
+              [ -f "$archive" ] || { echo "::error::no Lemonade archive matches $archive"; exit 1; }
+            done
+            sha256sum "${archives[@]}" > checksums.sha256
+          )
+          sed "s|\$| (lemonade)|" bundle/lemonade/checksums.sha256 >> bundle/CHECKSUMS.sha256
 
           echo "=== release bundle ==="
           find bundle -type f | sort
           echo "=== aggregated checksums ==="
           cat bundle/CHECKSUMS.sha256
+          echo "=== Lemonade pins ==="
+          cat bundle/lemonade/agent_versions.gaia.json
 
       - name: Upload release bundle
         uses: actions/upload-artifact@v7
@@ -216,19 +375,24 @@ jobs:
   agents-build-summary:
     name: Agent Binaries Summary
     runs-on: ubuntu-latest
-    needs: [build]
+    needs: [build, distro-smoke]
     if: always() && !cancelled()
     steps:
       - name: Check results
         run: |
           echo "=== Agent Binaries (C++) Summary ==="
           echo "Build/package matrix: ${{ needs.build.result }}"
+          echo "Linux distro smoke: ${{ needs.distro-smoke.result }}"
           if [[ "${{ needs.build.result }}" == "skipped" ]]; then
             echo "Matrix skipped (draft PR — add 'ready_for_ci' label to run)"
             exit 0
           fi
           if [[ "${{ needs.build.result }}" != "success" ]]; then
             echo "One or more matrix legs failed"
+            exit 1
+          fi
+          if [[ "${{ needs.distro-smoke.result }}" != "success" ]]; then
+            echo "gaiacpp did not start on an older Linux distro"
             exit 1
           fi
           echo "All platform legs packaged successfully"

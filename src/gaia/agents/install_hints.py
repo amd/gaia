@@ -30,16 +30,14 @@ from urllib.request import url2pathname
 # hub/agents/<subdir>/python for each wheel this module has a hint for. Keep
 # in sync with the directories under hub/agents/ (ls hub/agents/).
 _AGENT_SOURCE_SUBDIRS = {
-    "gaia-agent-email": "email",
     "gaia-agent-gaia": "gaia",
 }
 
 # Map wheel name -> actual top-level Python package name.
 # Needed because wheel names use hyphens but package directories use underscores,
-# and the mapping isn't always a simple replace (e.g. gaia-agent-gaia -> gaia_agent).
+# and the mapping isn't always a simple replace (e.g. gaia-agent-gaia -> gaiapy).
 _WHEEL_TOP_LEVEL_PACKAGE = {
-    "gaia-agent-email": "gaia_agent_email",
-    "gaia-agent-gaia": "gaia_agent",
+    "gaia-agent-gaia": "gaiapy",
 }
 
 _REPO_URL = "https://github.com/amd/gaia.git"

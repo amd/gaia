@@ -15,9 +15,9 @@ import pytest
 
 import gaia.ui._chat_helpers as helpers
 from gaia.ui import turn_insights
-from gaia.ui.email_sidecar import relay
-from gaia.ui.email_sidecar.profiles import GAIA_PROFILE, context_supported
 from gaia.ui.routers.chat import get_context_usage
+from gaia.ui.sidecar import relay
+from gaia.ui.sidecar.profiles import GAIA_PROFILE, context_supported
 from gaia.ui.sse_handler import SSEOutputHandler
 
 _USAGE = {"window": 65536, "used": 1234, "model": "Qwen3.6-35B-A3B-GGUF"}
@@ -48,6 +48,94 @@ def test_final_context_reaches_the_meter_before_the_answer():
     assert [e["type"] for e in events] == ["context_usage", "answer"]
     assert events[0] == {"type": "context_usage", **_USAGE}
     assert h.relay_context == _USAGE
+
+
+def test_a_live_measurement_reaches_the_meter_before_the_answer():
+    """Contract 2.28: the sidecar measures at turn start; the relay forwards it.
+
+    The relay's own cuts are turns the sidecar never saw, so they are added to
+    its count here, exactly as the ``final`` copy does.
+    """
+    h = SSEOutputHandler()
+    h.relay_hidden_turns = 2
+
+    relay._dispatch_one(
+        h,
+        {
+            "type": "context_usage",
+            "window": 65536,
+            "used": 900,
+            "turns_in_view": 3,
+            "turns_hidden": 0,
+        },
+        GAIA_PROFILE,
+    )
+
+    [meter] = _events(h)
+    assert meter == {
+        "type": "context_usage",
+        "window": 65536,
+        "used": 900,
+        "turns_in_view": 3,
+        "turns_hidden": 2,
+    }
+    assert h.relay_context["turns_hidden"] == 2
+
+
+def test_a_failed_final_does_not_leave_the_live_guess_in_the_meter():
+    """A pre-answer estimate is not the failed turn's usage; ``final`` has none.
+
+    The live event itself stands (it was true when streamed), but the turn's
+    recorded meter must not show the guess as its result.
+    """
+    h = SSEOutputHandler()
+
+    relay._dispatch_one(
+        h,
+        {"type": "context_usage", "window": 65536, "used": 900, "turns_in_view": 3},
+        GAIA_PROFILE,
+    )
+    relay._dispatch_one(
+        h,
+        {"type": "final", "answer": "The model server went away.", "failed": True},
+        GAIA_PROFILE,
+    )
+
+    events = _events(h)
+    assert [e["type"] for e in events] == ["context_usage", "answer"]
+    assert events[1]["failed"] is True
+    assert h.relay_context is None
+
+
+def test_a_live_estimate_does_not_survive_a_context_error():
+    """A live hint is not the turn's result: a failed measurement wins.
+
+    The sequence is the one the reviewer reported: ``context_usage`` first,
+    then ``final`` carrying ``context_error``. The estimate must not outrank
+    the explanation when the turn's meter is recorded.
+    """
+    h = SSEOutputHandler()
+
+    relay._dispatch_one(
+        h,
+        {"type": "context_usage", "window": 65536, "used": 900, "turns_in_view": 3},
+        GAIA_PROFILE,
+    )
+    relay._dispatch_one(
+        h,
+        {"type": "final", "answer": "Paris.", "context_error": "tokenizer exploded"},
+        GAIA_PROFILE,
+    )
+
+    assert [e["type"] for e in _events(h)] == ["context_usage", "answer"]
+    assert h.relay_context is None
+    assert h.relay_context_error == "tokenizer exploded"
+    helpers.record_relayed_context(
+        "s8096",
+        h.relay_context,
+        helpers.relayed_context_reason(GAIA_PROFILE, "2.28", h),
+    )
+    assert helpers.relayed_context("s8096") == {"reason": "tokenizer exploded"}
 
 
 def test_a_context_error_is_kept_not_streamed():
@@ -342,3 +430,42 @@ def test_a_relay_that_left_nothing_out_passes_the_measurement_through():
     )
 
     assert h.relay_context == measured
+
+
+def test_gaiacpps_final_is_priced_on_what_the_model_wrote_and_names_the_missing_meter():
+    """gaiacpp's own ``final``: ``tokens`` is output only, and the meter gets a reason."""
+    h = SSEOutputHandler()
+    reason = "Not available yet: gaiacpp doesn't report what fills its context."
+
+    relay._dispatch_one(
+        h,
+        {
+            "type": "final",
+            "answer": "The launch code is 4471.",
+            "context_error": reason,
+            "usage": {
+                "cached_tokens": 5280,
+                "elapsed": 2.09,
+                "input_tokens": 10938,
+                "steps": 2,
+                "tokens": 221,
+                "tools_used": 1,
+            },
+        },
+        GAIA_PROFILE,
+    )
+
+    [answer] = _events(h)
+    stats = helpers._turn_inference_stats(None, answer)
+    assert stats == {
+        "output_tokens": 221,
+        "input_tokens": 10938,
+        "cached_tokens": 5280,
+        "steps": 2,
+    }
+    helpers.record_relayed_context(
+        "s-cpp",
+        h.relay_context,
+        helpers.relayed_context_reason(GAIA_PROFILE, "2.27", h),
+    )
+    assert _get("s-cpp") == {"available": False, "reason": reason}

@@ -7,6 +7,7 @@
 #include <array>
 #include <atomic>
 #include <cctype>
+#include <cstdint>
 #include <chrono>
 #include <cstdio>
 #include <cstring>
@@ -30,12 +31,15 @@
 #   endif
 #   include <windows.h>
 #   include <direct.h>
+#   include <fcntl.h>
 #   include <io.h>
 #else
 #   include <cerrno>
 #   include <csignal>
 #   include <cstdlib>
 #   include <fcntl.h>
+#   include <sys/file.h>
+#   include <sys/stat.h>
 #   include <sys/types.h>
 #   include <sys/wait.h>
 #   include <unistd.h>
@@ -54,6 +58,31 @@ namespace gaia {
 
 namespace {
 
+// The cancel check of the CommandCancelScope alive on this thread, if any.
+thread_local const std::function<bool()>* t_cancelled = nullptr;
+
+bool cancelRequestedHere() { return t_cancelled && *t_cancelled && (*t_cancelled)(); }
+
+#ifdef _WIN32
+// Commands, folders and file names are UTF-8 strings; Windows takes them wide.
+std::wstring widen(const std::string& utf8) {
+    if (utf8.empty()) return L"";
+    const int n = MultiByteToWideChar(CP_UTF8, 0, utf8.data(), static_cast<int>(utf8.size()), nullptr, 0);
+    std::wstring wide(static_cast<size_t>(n), L'\0');
+    MultiByteToWideChar(CP_UTF8, 0, utf8.data(), static_cast<int>(utf8.size()), wide.data(), n);
+    return wide;
+}
+
+std::string narrow(const std::wstring& wide) {
+    if (wide.empty()) return "";
+    const int n = WideCharToMultiByte(CP_UTF8, 0, wide.data(), static_cast<int>(wide.size()), nullptr, 0,
+                                      nullptr, nullptr);
+    std::string utf8(static_cast<size_t>(n), '\0');
+    WideCharToMultiByte(CP_UTF8, 0, wide.data(), static_cast<int>(wide.size()), utf8.data(), n, nullptr, nullptr);
+    return utf8;
+}
+#endif
+
 /// Read up to maxBytes from a FILE*, returning the captured data.
 std::string readStream(FILE* stream, size_t maxBytes) {
     if (!stream) return "";
@@ -62,18 +91,23 @@ std::string readStream(FILE* stream, size_t maxBytes) {
     std::array<char, 4096> buffer;
     size_t totalRead = 0;
 
+    bool ended = false;
     while (totalRead < maxBytes) {
         size_t toRead = std::min(buffer.size(),
                                  maxBytes - totalRead);
         size_t bytesRead = std::fread(buffer.data(), 1, toRead, stream);
-        if (bytesRead == 0) break;
+        if (bytesRead == 0) {
+            ended = true;
+            break;
+        }
         output.append(buffer.data(), bytesRead);
         totalRead += bytesRead;
     }
 
-    // Drain remaining data so the process doesn't block on a full pipe,
-    // but don't store it.
-    while (std::fread(buffer.data(), 1, buffer.size(), stream) > 0) {
+    // Drain remaining data so the process doesn't block on a full pipe, but don't store it.
+    // Never after the stream ended or a read was cancelled: one more read could wait for good
+    // on a pipe a background process still holds.
+    while (!ended && std::fread(buffer.data(), 1, buffer.size(), stream) > 0) {
         // discard
     }
 
@@ -82,18 +116,29 @@ std::string readStream(FILE* stream, size_t maxBytes) {
 
 #ifdef _WIN32
 
+// Pipes are read binary, because text mode ends a stream at a 0x1A byte; CRLF is folded here instead.
+std::string foldCrLf(std::string text) {
+    size_t out = 0;
+    for (size_t i = 0; i < text.size(); ++i) {
+        if (text[i] == '\r' && i + 1 < text.size() && text[i + 1] == '\n') continue;
+        text[out++] = text[i];
+    }
+    text.resize(out);
+    return text;
+}
+
 /// Save current working directory (Windows).
 std::string saveCwd() {
-    char buf[MAX_PATH];
-    if (_getcwd(buf, sizeof(buf))) {
-        return std::string(buf);
+    wchar_t buf[32768];
+    if (_wgetcwd(buf, static_cast<int>(sizeof(buf) / sizeof(buf[0])))) {
+        return narrow(buf);
     }
     return "";
 }
 
 /// Change working directory (Windows). Returns true on success.
 bool changeCwd(const std::string& dir) {
-    return _chdir(dir.c_str()) == 0;
+    return _wchdir(widen(dir).c_str()) == 0;
 }
 
 #else
@@ -169,7 +214,7 @@ void restoreEnvVars(const std::map<std::string, std::string>& previous,
 // Simple (no-timeout) execution via popen
 // ---------------------------------------------------------------------------
 
-ProcessResult runSimple(const std::string& command, size_t maxOutputBytes) {
+[[maybe_unused]] ProcessResult runSimple(const std::string& command, size_t maxOutputBytes) {
     ProcessResult result;
 
     // Build command that captures stderr to a temp file so we can read it
@@ -193,7 +238,8 @@ ProcessResult runSimple(const std::string& command, size_t maxOutputBytes) {
         close(fd);
         stderrFile = tmpTemplate;
     }
-    fullCmd = command + " 2>\"" + stderrFile + "\"";
+    // Never this process's stdin: it may be a host's control pipe.
+    fullCmd = "exec </dev/null; " + command + " 2>\"" + stderrFile + "\"";
 #endif
 
     struct PipeCloser {
@@ -283,87 +329,194 @@ ProcessResult runWithTimeout(const std::string& command,
     SetHandleInformation(stdoutReadH, HANDLE_FLAG_INHERIT, 0);
     SetHandleInformation(stderrReadH, HANDLE_FLAG_INHERIT, 0);
 
-    STARTUPINFOA si;
-    ZeroMemory(&si, sizeof(si));
-    si.cb = sizeof(si);
+    auto failed = [&](const std::string& what, DWORD code) {
+        CloseHandle(stdoutReadH); CloseHandle(stdoutWriteH);
+        CloseHandle(stderrReadH); CloseHandle(stderrWriteH);
+        result.exitCode = -1;
+        result.stderr_output = what + " (Windows error " + std::to_string(code) + ")";
+        return result;
+    };
+
+    STARTUPINFOEXW six;
+    ZeroMemory(&six, sizeof(six));
+    STARTUPINFOW& si = six.StartupInfo;
+    si.cb = sizeof(six);
     si.dwFlags = STARTF_USESTDHANDLES;
     si.hStdOutput = stdoutWriteH;
     si.hStdError = stderrWriteH;
-    si.hStdInput = GetStdHandle(STD_INPUT_HANDLE);
+    // Never this process's stdin: it may be a host's control pipe, and a child
+    // that reads it would swallow lines meant for us.
+    HANDLE nulIn = CreateFileA("NUL", GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE, &sa,
+                               OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (nulIn == INVALID_HANDLE_VALUE) {
+        return failed("Failed to open NUL as the command's stdin", GetLastError());
+    }
+    si.hStdInput = nulIn;
+
+    // The command gets these three handles and no others: anything else it
+    // inherited (a host's pipes, sockets, another command's output) would stay
+    // open for as long as any process it started lives.
+    HANDLE inherited[3] = {nulIn, stdoutWriteH, stderrWriteH};
+    SIZE_T attrSize = 0;
+    InitializeProcThreadAttributeList(nullptr, 1, 0, &attrSize);
+    std::vector<char> attrBuf(attrSize);
+    six.lpAttributeList = reinterpret_cast<LPPROC_THREAD_ATTRIBUTE_LIST>(attrBuf.data());
+    if (!InitializeProcThreadAttributeList(six.lpAttributeList, 1, 0, &attrSize) ||
+        !UpdateProcThreadAttribute(six.lpAttributeList, 0, PROC_THREAD_ATTRIBUTE_HANDLE_LIST, inherited,
+                                   sizeof(inherited), nullptr, nullptr)) {
+        const DWORD code = GetLastError();
+        CloseHandle(nulIn);
+        return failed("Failed to limit the handles the command inherits", code);
+    }
+
+    // A job holds the command and everything it starts, so a timeout ends the
+    // whole tree, and so does this process dying while the command runs.
+    HANDLE job = CreateJobObjectW(nullptr, nullptr);
+    JOBOBJECT_EXTENDED_LIMIT_INFORMATION limits;
+    ZeroMemory(&limits, sizeof(limits));
+    limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+    if (!job || !SetInformationJobObject(job, JobObjectExtendedLimitInformation, &limits, sizeof(limits))) {
+        const DWORD code = GetLastError();
+        if (job) CloseHandle(job);
+        DeleteProcThreadAttributeList(six.lpAttributeList);
+        CloseHandle(nulIn);
+        return failed("Failed to create a job for the command", code);
+    }
 
     PROCESS_INFORMATION pi;
     ZeroMemory(&pi, sizeof(pi));
 
-    // Build command line: cmd /c <command>
-    std::string cmdLine = "cmd /c " + command;
-    // CreateProcessA needs a mutable char*
-    std::vector<char> cmdBuf(cmdLine.begin(), cmdLine.end());
-    cmdBuf.push_back('\0');
+    // The system's cmd.exe by full path: a bare "cmd" is looked up in the working folder first.
+    wchar_t systemDir[MAX_PATH];
+    const UINT systemDirLen = GetSystemDirectoryW(systemDir, MAX_PATH);
+    if (systemDirLen == 0 || systemDirLen >= MAX_PATH) {
+        const DWORD code = GetLastError();
+        CloseHandle(job);
+        DeleteProcThreadAttributeList(six.lpAttributeList);
+        CloseHandle(nulIn);
+        return failed("Failed to find the Windows system folder for cmd.exe", code);
+    }
+    const std::wstring cmdExe = std::wstring(systemDir, systemDirLen) + L"\\cmd.exe";
 
-    BOOL created = CreateProcessA(
+    // Build command line: cmd /c <command>. CreateProcessW needs a mutable buffer.
+    std::wstring cmdLine = L"cmd /c " + widen(command);
+
+    BOOL created = CreateProcessW(
+        cmdExe.c_str(),
+        cmdLine.data(),
         nullptr,
-        cmdBuf.data(),
         nullptr,
-        nullptr,
-        TRUE,          // inherit handles
-        0,             // creation flags
+        TRUE,          // inherit handles: only the three listed above
+        // Suspended so it joins the job before it runs. Its own hidden console:
+        // a command must not draw on, read from or re-encode the user's terminal.
+        CREATE_SUSPENDED | EXTENDED_STARTUPINFO_PRESENT | CREATE_NO_WINDOW,
         nullptr,       // use parent environment
         nullptr,       // use parent working directory
         &si,
         &pi
     );
+    const DWORD createError = GetLastError();
+    DeleteProcThreadAttributeList(six.lpAttributeList);
 
     // Close the write ends of the pipes — the child owns them now
     CloseHandle(stdoutWriteH);
     CloseHandle(stderrWriteH);
+    CloseHandle(nulIn);
 
     if (!created) {
+        CloseHandle(job);
         CloseHandle(stdoutReadH);
         CloseHandle(stderrReadH);
         result.exitCode = -1;
-        result.stderr_output = "CreateProcess failed for: " + command;
+        result.stderr_output = "CreateProcess failed for: " + command + " (Windows error " +
+                               std::to_string(createError) + ")";
         return result;
     }
 
+    // Nested jobs work from Windows 8 on. A refusal is reported, never worked
+    // around: without the job a timeout could only end the shell, not its tree.
+    if (!AssignProcessToJobObject(job, pi.hProcess)) {
+        const DWORD code = GetLastError();
+        TerminateProcess(pi.hProcess, 1);
+        CloseHandle(pi.hProcess);
+        CloseHandle(pi.hThread);
+        CloseHandle(job);
+        CloseHandle(stdoutReadH);
+        CloseHandle(stderrReadH);
+        result.exitCode = -1;
+        result.stderr_output = "Not run: the command could not be placed in a job, so a timeout could not stop "
+                               "what it starts (AssignProcessToJobObject, Windows error " +
+                               std::to_string(code) + ")";
+        return result;
+    }
+    ResumeThread(pi.hThread);
+
     // Read stdout and stderr from pipes using file descriptors
     // Convert HANDLEs to FILE* for readStream()
-    int stdoutFd = _open_osfhandle(reinterpret_cast<intptr_t>(stdoutReadH), 0);
-    int stderrFd = _open_osfhandle(reinterpret_cast<intptr_t>(stderrReadH), 0);
+    int stdoutFd = _open_osfhandle(reinterpret_cast<intptr_t>(stdoutReadH), _O_RDONLY | _O_BINARY);
+    int stderrFd = _open_osfhandle(reinterpret_cast<intptr_t>(stderrReadH), _O_RDONLY | _O_BINARY);
 
     FILE* stdoutFile = nullptr;
     FILE* stderrFile = nullptr;
 
-    if (stdoutFd >= 0) stdoutFile = _fdopen(stdoutFd, "r");
-    if (stderrFd >= 0) stderrFile = _fdopen(stderrFd, "r");
+    if (stdoutFd >= 0) stdoutFile = _fdopen(stdoutFd, "rb");
+    if (stderrFd >= 0) stderrFile = _fdopen(stderrFd, "rb");
 
     // Read pipes in background threads while waiting for process with timeout.
     // This avoids deadlock: reading before waiting blocks if child keeps stdout
     // open; waiting before reading loses output if pipe buffer fills.
     std::string capturedStdout, capturedStderr;
+    std::atomic<int> readersDone{0};
 
     std::thread convergentStdout([&]() {
-        capturedStdout = readStream(stdoutFile, maxOutputBytes);
+        capturedStdout = foldCrLf(readStream(stdoutFile, maxOutputBytes));
+        ++readersDone;
     });
     std::thread convergentStderr([&]() {
-        capturedStderr = readStream(stderrFile, maxOutputBytes);
+        capturedStderr = foldCrLf(readStream(stderrFile, maxOutputBytes));
+        ++readersDone;
     });
 
-    // Wait for process with timeout
-    DWORD waitResult = WaitForSingleObject(pi.hProcess,
-                                           static_cast<DWORD>(timeoutMs));
+    // Wait for the process in short slices, so a cancel is seen while it runs.
+    const bool limited = timeoutMs >= 0;
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(limited ? timeoutMs : 0);
+    DWORD waitResult = WAIT_TIMEOUT;
+    for (;;) {
+        waitResult = WaitForSingleObject(pi.hProcess, 25);
+        if (waitResult != WAIT_TIMEOUT) break;
+        if (cancelRequestedHere()) {
+            result.cancelled = true;
+            break;
+        }
+        if (limited && std::chrono::steady_clock::now() >= deadline) {
+            result.timedOut = true;
+            break;
+        }
+    }
 
     if (waitResult == WAIT_TIMEOUT) {
-        result.timedOut = true;
-        TerminateProcess(pi.hProcess, 1);
+        TerminateJobObject(job, 1);  // the shell and everything it started
         WaitForSingleObject(pi.hProcess, 5000);  // wait for termination
         result.exitCode = -1;
     } else {
         DWORD exitCodeDw = 0;
         GetExitCodeProcess(pi.hProcess, &exitCodeDw);
         result.exitCode = static_cast<int>(exitCodeDw);
+        // The command ended on its own: what it left running in the background stays.
+        limits.BasicLimitInformation.LimitFlags = 0;
+        SetInformationJobObject(job, JobObjectExtendedLimitInformation, &limits, sizeof(limits));
     }
+    CloseHandle(job);
 
-    // Wait for reader threads to finish (process is dead, pipes will EOF)
+    // The pipes end when the last writer closes them. A background process the
+    // command left behind may still hold them, so the wait for it is bounded.
+    for (int waited = 0; readersDone.load() < 2 && waited < 2000; waited += 10) Sleep(10);
+    // Again until both readers are out: a cancel only ends the read in flight at that moment.
+    while (readersDone.load() < 2) {
+        CancelIoEx(stdoutReadH, nullptr);
+        CancelIoEx(stderrReadH, nullptr);
+        Sleep(10);
+    }
     convergentStdout.join();
     convergentStderr.join();
 
@@ -393,11 +546,24 @@ ProcessResult runWithTimeout(const std::string& command,
     int stdoutPipe[2];
     int stderrPipe[2];
 
-    if (pipe(stdoutPipe) != 0 || pipe(stderrPipe) != 0) {
+    if (pipe(stdoutPipe) != 0) {
         result.exitCode = -1;
-        result.stderr_output = "Failed to create pipes";
+        result.stderr_output = "Failed to create pipes: " + std::string(strerror(errno));
         return result;
     }
+    if (pipe(stderrPipe) != 0) {
+        const std::string why = strerror(errno);
+        close(stdoutPipe[0]); close(stdoutPipe[1]);
+        result.exitCode = -1;
+        result.stderr_output = "Failed to create pipes: " + why;
+        return result;
+    }
+    // A command another thread starts meanwhile must not hold these open.
+    for (int fd : {stdoutPipe[0], stdoutPipe[1], stderrPipe[0], stderrPipe[1]}) fcntl(fd, F_SETFD, FD_CLOEXEC);
+
+    // Read before the fork: the child may only make async-signal-safe calls.
+    long maxFd = sysconf(_SC_OPEN_MAX);
+    if (maxFd < 0 || maxFd > 65536) maxFd = 65536;
 
     pid_t pid = fork();
 
@@ -426,6 +592,15 @@ ProcessResult runWithTimeout(const std::string& command,
         close(stdoutPipe[1]);
         close(stderrPipe[1]);
 
+        // Never this process's stdin: it may be a host's control pipe.
+        const int devNull = open("/dev/null", O_RDONLY);
+        if (devNull < 0) _exit(126);
+        dup2(devNull, STDIN_FILENO);
+        if (devNull != STDIN_FILENO) close(devNull);
+
+        // The command gets stdin, stdout and stderr and nothing else this process has open.
+        for (int fd = 3; fd < maxFd; ++fd) close(fd);
+
         execl("/bin/sh", "sh", "-c", command.c_str(), static_cast<char*>(nullptr));
         _exit(127);  // exec failed
     }
@@ -452,31 +627,37 @@ ProcessResult runWithTimeout(const std::string& command,
         auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
             std::chrono::steady_clock::now() - startTime).count();
 
-        if (elapsed >= timeoutMs) {
-            result.timedOut = true;
+        const bool cancelled = cancelRequestedHere();
+        if (cancelled || elapsed >= timeoutMs) {
+            result.cancelled = cancelled;
+            result.timedOut = !cancelled;
+            result.exitCode = -1;
             kill(-pid, SIGKILL);  // the whole group, not just the shell
             kill(pid, SIGKILL);   // backstop if setpgid did not take
             waitpid(pid, nullptr, 0);
             break;
         }
 
-        // Try reading stdout
-        if (stdoutBuf.size() < maxOutputBytes) {
-            ssize_t n = read(stdoutPipe[0], readBuf.data(),
-                            std::min(readBuf.size(),
-                                     maxOutputBytes - stdoutBuf.size()));
+        // Past the cap the pipes are still read and the bytes dropped, or the child would block on a full pipe.
+        bool readAny = false;
+        {
+            ssize_t n = read(stdoutPipe[0], readBuf.data(), readBuf.size());
             if (n > 0) {
-                stdoutBuf.append(readBuf.data(), static_cast<size_t>(n));
+                readAny = true;
+                if (stdoutBuf.size() < maxOutputBytes) {
+                    stdoutBuf.append(readBuf.data(),
+                                     std::min(static_cast<size_t>(n), maxOutputBytes - stdoutBuf.size()));
+                }
             }
         }
-
-        // Try reading stderr
-        if (stderrBuf.size() < maxOutputBytes) {
-            ssize_t n = read(stderrPipe[0], readBuf.data(),
-                            std::min(readBuf.size(),
-                                     maxOutputBytes - stderrBuf.size()));
+        {
+            ssize_t n = read(stderrPipe[0], readBuf.data(), readBuf.size());
             if (n > 0) {
-                stderrBuf.append(readBuf.data(), static_cast<size_t>(n));
+                readAny = true;
+                if (stderrBuf.size() < maxOutputBytes) {
+                    stderrBuf.append(readBuf.data(),
+                                     std::min(static_cast<size_t>(n), maxOutputBytes - stderrBuf.size()));
+                }
             }
         }
 
@@ -490,7 +671,7 @@ ProcessResult runWithTimeout(const std::string& command,
             } else if (WIFSIGNALED(status)) {
                 result.exitCode = -1;
             }
-        } else {
+        } else if (!readAny) {
             // Brief sleep to avoid busy-waiting
             usleep(1000);  // 1ms
         }
@@ -528,6 +709,13 @@ ProcessResult runWithTimeout(const std::string& command,
 #endif  // _WIN32
 
 }  // anonymous namespace
+
+CommandCancelScope::CommandCancelScope(std::function<bool()> cancelled)
+    : check_(std::move(cancelled)), previous_(t_cancelled) {
+    t_cancelled = &check_;
+}
+
+CommandCancelScope::~CommandCancelScope() { t_cancelled = previous_; }
 
 // ---------------------------------------------------------------------------
 // ProcessRunner public API
@@ -571,7 +759,12 @@ ProcessResult ProcessRunner::run(
     if (timeoutMs > 0) {
         result = runWithTimeout(command, timeoutMs, maxOutputBytes);
     } else {
+#ifdef _WIN32
+        // _popen would hand the command this process's stdin; -1 waits without a limit.
+        result = runWithTimeout(command, -1, maxOutputBytes);
+#else
         result = runSimple(command, maxOutputBytes);
+#endif
     }
 
     // Restore environment variables
@@ -646,16 +839,17 @@ bool isValidEnvName(const std::string& name) {
 std::map<std::string, std::string> captureProcessEnv() {
     std::map<std::string, std::string> out;
 #ifdef _WIN32
-    LPCH block = GetEnvironmentStringsA();
+    LPWCH block = GetEnvironmentStringsW();
     if (!block) return out;
-    for (LPCH entry = block; *entry != '\0';) {
-        const std::string item(entry);
-        entry += item.size() + 1;
+    for (LPWCH entry = block; *entry != L'\0';) {
+        const std::wstring wide(entry);
+        entry += wide.size() + 1;
+        const std::string item = narrow(wide);
         const size_t eq = item.find('=');
         if (eq == std::string::npos || eq == 0) continue;  // "=C:" style entries
         out[item.substr(0, eq)] = item.substr(eq + 1);
     }
-    FreeEnvironmentStringsA(block);
+    FreeEnvironmentStringsW(block);
 #else
 #   ifdef __APPLE__
     char** env = *_NSGetEnviron();
@@ -721,6 +915,13 @@ std::map<std::string, std::string> parseEnvLines(const std::string& text) {
     return out;
 }
 
+const char* const kTempPrefix = "gaia_shell_";
+
+void removeFile(const std::string& path) {
+    std::error_code ec;
+    sfs::remove(sfs::u8path(path), ec);
+}
+
 /// Create a uniquely-named temp file and write `contents` to it.
 /// Exclusive creation on both platforms so a pre-planted symlink or file in a
 /// shared temp directory cannot be written through.
@@ -730,16 +931,15 @@ bool writeTempFile(const std::string& extension,
 #ifdef _WIN32
     static std::atomic<unsigned> counter{0};
 
-    char tmpDir[MAX_PATH];
-    if (GetTempPathA(MAX_PATH, tmpDir) == 0) return false;
+    wchar_t tmpDir[MAX_PATH + 1];
+    if (GetTempPathW(MAX_PATH + 1, tmpDir) == 0) return false;
 
     for (int attempt = 0; attempt < 64; ++attempt) {
         std::ostringstream name;
-        name << tmpDir << "gaia_shell_" << GetCurrentProcessId() << "_"
-             << counter.fetch_add(1) << extension;
-        const std::string candidate = name.str();
+        name << kTempPrefix << GetCurrentProcessId() << "_" << counter.fetch_add(1) << extension;
+        const std::wstring candidate = std::wstring(tmpDir) + widen(name.str());
 
-        HANDLE handle = CreateFileA(candidate.c_str(), GENERIC_WRITE, 0,
+        HANDLE handle = CreateFileW(candidate.c_str(), GENERIC_WRITE, 0,
                                     nullptr, CREATE_NEW,
                                     FILE_ATTRIBUTE_NORMAL, nullptr);
         if (handle == INVALID_HANDLE_VALUE) continue;
@@ -753,10 +953,10 @@ bool writeTempFile(const std::string& extension,
         }
         CloseHandle(handle);
         if (!ok) {
-            std::remove(candidate.c_str());
+            DeleteFileW(candidate.c_str());
             return false;
         }
-        outPath = candidate;
+        outPath = narrow(candidate);
         return true;
     }
     return false;
@@ -766,7 +966,8 @@ bool writeTempFile(const std::string& extension,
     sfs::path dir = sfs::temp_directory_path(ec);
     if (ec) dir = sfs::path("/tmp");
 
-    std::string tmpl = (dir / "gaia_shell_XXXXXX").string();
+    // The pid is in the name so a later run can tell whose leftovers these are.
+    std::string tmpl = (dir / (std::string(kTempPrefix) + std::to_string(getpid()) + "_XXXXXX")).string();
     std::vector<char> buf(tmpl.begin(), tmpl.end());
     buf.push_back('\0');
 
@@ -795,7 +996,7 @@ class TempFileSet {
 public:
     void add(const std::string& path) { paths_.push_back(path); }
     ~TempFileSet() {
-        for (const auto& path : paths_) std::remove(path.c_str());
+        for (const auto& path : paths_) removeFile(path);
     }
 
 private:
@@ -803,7 +1004,7 @@ private:
 };
 
 std::string readFileContents(const std::string& path) {
-    std::ifstream file(path, std::ios::binary);
+    std::ifstream file(sfs::u8path(path), std::ios::binary);
     if (!file.is_open()) return "";
     std::ostringstream buffer;
     buffer << file.rdbuf();
@@ -845,7 +1046,7 @@ std::string batchQuote(const std::string& value) {
 /// Forward-slash form, which every POSIX shell — including a Git Bash or MSYS
 /// shell running on Windows — accepts.
 std::string genericPath(const std::string& path) {
-    return sfs::path(path).generic_string();
+    return sfs::u8path(path).generic_u8string();
 }
 
 const char* kEnvMarker = "---GAIA-ENV---";
@@ -863,6 +1064,11 @@ struct ShellSession::Impl {
     std::map<std::string, std::string> baselineEnv;
     std::map<std::string, std::string> overrides;   ///< set or changed by the session
     std::set<std::string> unset;                    ///< removed by the session
+    /// True once baselineEnv is the environment the shell itself starts with.
+    /// A shell rewrites what it inherits (Git Bash turns PATH into /c/... form),
+    /// and measured against the process's own environment every command would
+    /// seem to have changed those variables.
+    bool baselineFromShell = false;
 
     /// Generate the per-command script that restores state, invokes the
     /// command file, and reports the resulting cwd + environment to
@@ -902,6 +1108,8 @@ struct ShellSession::Impl {
             s << "exit $__gaia_rc\n";
         } else {
             s << "@echo off\r\n";
+            // The lines below, and what cd and set report, are UTF-8.
+            s << "chcp 65001 >nul\r\n";
             s << "cd /d \"" << batchQuote(cwd) << "\"\r\n";
             s << "if errorlevel 1 exit /b 127\r\n";
             for (const auto& name : unset) {
@@ -913,9 +1121,14 @@ struct ShellSession::Impl {
                 s << "set \"" << kv.first << "=" << batchQuote(kv.second)
                   << "\"\r\n";
             }
-            s << "call \"" << commandFile << "\" <nul\r\n";
+            // `call` doubles every ^ in a path it is given, so the command file is called as
+            // .\name from the folder this script is in; its own first line (popd) steps back into
+            // the session's folder before the command runs. A bare name is not enough: cmd.exe can
+            // be set to leave the current folder out of its search.
+            s << "pushd \"%~dp0\"\r\n";
+            s << "call .\\" << sfs::u8path(commandFile).filename().u8string() << " <nul\r\n";
             s << "set __GAIA_RC=%ERRORLEVEL%\r\n";
-            s << "> \"" << stateFile << "\" (\r\n";
+            s << "> \"" << batchQuote(stateFile) << "\" (\r\n";
             s << "  cd\r\n";
             s << "  echo " << kEnvMarker << "\r\n";
             s << "  set\r\n";
@@ -923,6 +1136,23 @@ struct ShellSession::Impl {
             s << "exit /b %__GAIA_RC%\r\n";
         }
         return s.str();
+    }
+
+    /// Forget variables a batch script cannot carry: after a quote or a line
+    /// break, the rest of the value in `set "K=V"` would run as a command.
+    /// Returns the names dropped.
+    std::string dropUnsafeBatchValues() {
+        std::string dropped;
+        if (posixScript) return dropped;
+        for (auto it = overrides.begin(); it != overrides.end();) {
+            if (it->second.find_first_of("\"\r\n") == std::string::npos) {
+                ++it;
+                continue;
+            }
+            dropped += (dropped.empty() ? "" : ", ") + it->first;
+            it = overrides.erase(it);
+        }
+        return dropped;
     }
 
     /// Absorb the cwd and environment the command left behind.
@@ -972,19 +1202,21 @@ struct ShellSession::Impl {
 ShellSession::ShellSession(const std::string& startCwd, const std::string& shell)
     : impl_(new Impl()) {
     std::error_code ec;
+    static std::once_flag swept;
+    std::call_once(swept, [] { removeStaleTempFiles(); });
     sfs::path start = startCwd.empty() ? sfs::current_path(ec)
-                                       : sfs::path(startCwd);
+                                       : sfs::u8path(startCwd);
     if (!startCwd.empty()) {
         sfs::path resolved = sfs::weakly_canonical(start, ec);
         if (!ec) start = resolved;
     }
     if (start.empty()) start = sfs::path(".");
-    impl_->cwd = start.string();
+    impl_->cwd = start.u8string();
     impl_->startCwd = impl_->cwd;
     impl_->baselineEnv = captureProcessEnv();
 
 #ifdef _WIN32
-    // A POSIX shell is used when one was named (the bash agent detects Git
+    // A POSIX shell is used when one was named (gaiacpp detects Git
     // Bash / MSYS / WSL); otherwise commands run as a cmd.exe batch script.
     impl_->shell = shell;
     impl_->posixScript = !shell.empty();
@@ -1003,23 +1235,18 @@ ShellSession& ShellSession::shared() {
     return session;
 }
 
-ProcessResult ShellSession::run(const std::string& command,
-                                int timeoutMs,
-                                size_t maxOutputBytes) {
+namespace {
+
+/// Run `command` as one session script. `stateOut` receives what the script
+/// reported about the folder and environment it ended in.
+ProcessResult runSessionScript(const std::function<std::string(const std::string&, const std::string&)>& buildScript,
+                               bool posixScript, const std::string& shell, const std::string& command,
+                               int timeoutMs, size_t maxOutputBytes, std::string& stateOut) {
     ProcessResult result;
-
-    if (command.empty()) {
-        result.exitCode = -1;
-        result.stderr_output = "Empty command";
-        return result;
-    }
-
-    std::lock_guard<std::mutex> lock(impl_->mutex);
-
     // Removed however this function exits, including on a throw.
     TempFileSet temps;
 
-    const char* scriptExt = impl_->posixScript ? ".sh" : ".cmd";
+    const char* scriptExt = posixScript ? ".sh" : ".cmd";
     const std::string tempError =
         "ShellSession: could not create a temporary file in the system temp "
         "directory. Check that it exists and is writable.";
@@ -1035,7 +1262,9 @@ ProcessResult ShellSession::run(const std::string& command,
     // The command gets its own file so it cannot splice into the script's
     // bookkeeping; on Windows it must be a .cmd for `call` to accept it.
     std::string commandFile;
-    if (!writeTempFile(scriptExt, command + "\n", commandFile)) {
+    // Under cmd.exe the script calls this file from the temp folder: see buildScript.
+    if (!writeTempFile(scriptExt, (posixScript ? std::string() : std::string("@popd\r\n")) + command + "\n",
+                       commandFile)) {
         result.exitCode = -1;
         result.stderr_output = tempError;
         return result;
@@ -1043,26 +1272,160 @@ ProcessResult ShellSession::run(const std::string& command,
     temps.add(commandFile);
 
     std::string scriptFile;
-    if (!writeTempFile(scriptExt, impl_->buildScript(commandFile, stateFile),
-                       scriptFile)) {
+    if (!writeTempFile(scriptExt, buildScript(commandFile, stateFile), scriptFile)) {
         result.exitCode = -1;
         result.stderr_output = tempError;
         return result;
     }
     temps.add(scriptFile);
 
+#ifdef _WIN32
+    // The line goes through cmd /c, which drops the first and last quote of a line holding & or ^
+    // and then splits it there. An outer pair of quotes is the pair it drops, and the path stays whole.
     const std::string invocation =
-        impl_->posixScript
-            ? impl_->shell + " " + posixQuote(genericPath(scriptFile))
-            : "\"" + scriptFile + "\"";
+        "\"" + (posixScript ? shell + " \"" + genericPath(scriptFile) + "\"" : "\"" + scriptFile + "\"") + "\"";
+#else
+    const std::string invocation = shell + " " + posixQuote(genericPath(scriptFile));
+#endif
 
     // No cwd/env arguments: the script applies both inside the child, so the
     // calling process is never mutated and concurrent sessions cannot collide.
     result = ProcessRunner::run(invocation, timeoutMs, "", {}, maxOutputBytes);
+    stateOut = readFileContents(stateFile);
+    return result;
+}
 
-    impl_->absorbState(readFileContents(stateFile));
+}  // namespace
+
+ProcessResult ShellSession::run(const std::string& command,
+                                int timeoutMs,
+                                size_t maxOutputBytes) {
+    ProcessResult result;
+
+    if (command.empty()) {
+        result.exitCode = -1;
+        result.stderr_output = "Empty command";
+        return result;
+    }
+
+    std::lock_guard<std::mutex> lock(impl_->mutex);
+    std::string droppedVars = impl_->dropUnsafeBatchValues();
+    const auto build = [this](const std::string& commandFile, const std::string& stateFile) {
+        return impl_->buildScript(commandFile, stateFile);
+    };
+
+    // The folder the session stands in can be deleted under it; every later command would fail before it starts.
+    std::string movedNote;
+    {
+        std::error_code goneEc;
+        std::string native = impl_->cwd;
+        bool checkable = true;
+#ifdef _WIN32
+        // Git Bash reports /c/Users/...; other /paths (its /tmp, /home) have no Windows form to test.
+        if (!native.empty() && native[0] == '/') {
+            checkable = native.size() >= 3 && std::isalpha(static_cast<unsigned char>(native[1])) && native[2] == '/';
+            if (checkable) native = std::string(1, native[1]) + ":" + native.substr(2);
+        }
+#endif
+        if (checkable && impl_->cwd != impl_->startCwd && !sfs::is_directory(sfs::u8path(native), goneEc)) {
+            movedNote = "ShellSession: the folder this session was in (" + impl_->cwd +
+                        ") no longer exists, so this command ran from " + impl_->startCwd + ".";
+            impl_->cwd = impl_->startCwd;
+        }
+    }
+
+    if (!impl_->baselineFromShell) {
+        // One empty command with nothing of the session's applied, to learn the shell's own environment.
+        std::map<std::string, std::string> overrides;
+        std::set<std::string> unset;
+        overrides.swap(impl_->overrides);
+        unset.swap(impl_->unset);
+        std::string state;
+        runSessionScript(build, impl_->posixScript, impl_->shell, impl_->posixScript ? ":" : "rem", 30000, 4096,
+                         state);
+        overrides.swap(impl_->overrides);
+        unset.swap(impl_->unset);
+        const size_t marker = state.find(kEnvMarker);
+        if (marker != std::string::npos) {
+            size_t envStart = marker + std::strlen(kEnvMarker);
+            while (envStart < state.size() && (state[envStart] == '\n' || state[envStart] == '\r')) ++envStart;
+            const auto own = impl_->posixScript ? parseEnvRecordsNul(state.substr(envStart))
+                                                : parseEnvLines(state.substr(envStart));
+            if (!own.empty()) {
+                impl_->baselineEnv = own;
+                impl_->baselineFromShell = true;
+            }
+        }
+    }
+
+    std::string state;
+    result = runSessionScript(build, impl_->posixScript, impl_->shell, command, timeoutMs, maxOutputBytes, state);
+    impl_->absorbState(state);
+
+    if (!movedNote.empty()) {
+        result.stderr_output += std::string(result.stderr_output.empty() ? "" : "\n") + movedNote;
+    }
+
+    const std::string droppedAfter = impl_->dropUnsafeBatchValues();
+    if (!droppedAfter.empty()) droppedVars += (droppedVars.empty() ? "" : ", ") + droppedAfter;
+    if (!droppedVars.empty()) {
+        result.stderr_output += std::string(result.stderr_output.empty() ? "" : "\n") +
+                                "ShellSession: not kept for later commands: " + droppedVars +
+                                ". A value holding a double quote or a line break cannot be passed to a "
+                                "cmd.exe script; set it inside the command that needs it.";
+    }
 
     return result;
+}
+
+size_t ShellSession::removeStaleTempFiles() {
+    std::error_code ec;
+    const sfs::path dir = sfs::temp_directory_path(ec);
+    if (ec) return 0;
+    size_t removed = 0;
+    for (auto it = sfs::directory_iterator(dir, sfs::directory_options::skip_permission_denied, ec);
+         !ec && it != sfs::directory_iterator(); it.increment(ec)) {
+        // Only this class's own names: gaia_shell_<pid>_<suffix>[.ext].
+        const std::string name = it->path().filename().u8string();
+        const size_t prefix = std::strlen(kTempPrefix);
+        if (name.compare(0, prefix, kTempPrefix) != 0) continue;
+        const size_t pidEnd = name.find('_', prefix);
+        if (pidEnd == std::string::npos || pidEnd == prefix || pidEnd - prefix > 10) continue;
+        const std::string digits = name.substr(prefix, pidEnd - prefix);
+        if (!std::all_of(digits.begin(), digits.end(), [](unsigned char c) { return std::isdigit(c) != 0; })) continue;
+        const std::string rest = name.substr(pidEnd + 1);
+        const size_t dot = rest.find('.');
+        const std::string suffix = rest.substr(0, dot);
+        const std::string ext = dot == std::string::npos ? "" : rest.substr(dot);
+        if (suffix.empty() ||
+            !std::all_of(suffix.begin(), suffix.end(), [](unsigned char c) { return std::isalnum(c) != 0; })) {
+            continue;
+        }
+        if (!ext.empty() && ext != ".state" && ext != ".sh" && ext != ".cmd") continue;
+
+        const unsigned long long pid = std::stoull(digits);
+        if (pid == 0 || pid > 0x7fffffffULL) continue;  // not a process id
+        bool alive = true;
+#ifdef _WIN32
+        if (pid == GetCurrentProcessId()) continue;
+        HANDLE process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, static_cast<DWORD>(pid));
+        if (!process) {
+            // Access denied means it exists and belongs to someone else.
+            alive = GetLastError() != ERROR_INVALID_PARAMETER;
+        } else {
+            DWORD code = 0;
+            alive = !GetExitCodeProcess(process, &code) || code == STILL_ACTIVE;
+            CloseHandle(process);
+        }
+#else
+        if (pid == static_cast<unsigned long long>(getpid())) continue;
+        alive = !(kill(static_cast<pid_t>(pid), 0) != 0 && errno == ESRCH);
+#endif
+        if (alive) continue;
+        std::error_code removeEc;
+        if (sfs::remove(it->path(), removeEc) && !removeEc) ++removed;
+    }
+    return removed;
 }
 
 std::string ShellSession::cwd() const {
@@ -1072,12 +1435,12 @@ std::string ShellSession::cwd() const {
 
 bool ShellSession::setCwd(const std::string& dir) {
     std::error_code ec;
-    sfs::path resolved = sfs::weakly_canonical(sfs::path(dir), ec);
-    if (ec) resolved = sfs::path(dir);
+    sfs::path resolved = sfs::weakly_canonical(sfs::u8path(dir), ec);
+    if (ec) resolved = sfs::u8path(dir);
     if (!sfs::is_directory(resolved, ec)) return false;
 
     std::lock_guard<std::mutex> lock(impl_->mutex);
-    impl_->cwd = resolved.string();
+    impl_->cwd = resolved.u8string();
     return true;
 }
 
@@ -1097,6 +1460,123 @@ void ShellSession::reset() {
     impl_->cwd = impl_->startCwd;
     impl_->overrides.clear();
     impl_->unset.clear();
+}
+
+#ifdef _WIN32
+std::string findProgramOnPath(const std::string& program) {
+    const std::vector<std::string> all = findProgramsOnPath(program);
+    return all.empty() ? std::string() : all.front();
+}
+
+std::vector<std::string> findProgramsOnPath(const std::string& program) {
+    std::vector<std::string> found;
+    if (program.empty() || program.find_first_of("\\/:\"") != std::string::npos) return found;
+    const DWORD size = GetEnvironmentVariableW(L"PATH", nullptr, 0);
+    if (size == 0) return found;
+    std::wstring path(size, L'\0');
+    path.resize(GetEnvironmentVariableW(L"PATH", path.data(), size));
+    std::vector<std::wstring> names;
+    if (program.find('.') != std::string::npos) {
+        names.push_back(widen(program));
+    } else {
+        for (const wchar_t* ext : {L".com", L".exe", L".bat", L".cmd"}) names.push_back(widen(program) + ext);
+    }
+    size_t start = 0;
+    while (start <= path.size()) {
+        size_t end = path.find(L';', start);
+        if (end == std::wstring::npos) end = path.size();
+        std::wstring dir = path.substr(start, end - start);
+        start = end + 1;
+        if (dir.size() >= 2 && dir.front() == L'"' && dir.back() == L'"') dir = dir.substr(1, dir.size() - 2);
+        const std::filesystem::path folder(dir);
+        if (dir.empty() || !folder.is_absolute()) continue;  // "." or a relative entry means the working folder
+        for (const auto& name : names) {
+            // Attributes, not is_regular_file: app execution aliases (WindowsApps\python.exe) are reparse points.
+            const std::filesystem::path candidate = folder / name;
+            const DWORD attrs = GetFileAttributesW(candidate.c_str());
+            if (attrs != INVALID_FILE_ATTRIBUTES && !(attrs & FILE_ATTRIBUTE_DIRECTORY)) {
+                found.push_back(candidate.u8string());
+                break;
+            }
+        }
+    }
+    return found;
+}
+
+std::string systemProgramPath(const std::string& relative) {
+    wchar_t systemDir[MAX_PATH];
+    const UINT len = GetSystemDirectoryW(systemDir, MAX_PATH);
+    if (len == 0 || len >= MAX_PATH) {
+        throw std::runtime_error("Windows didn't report its system folder (error " +
+                                 std::to_string(GetLastError()) + "), so " + relative + " can't be started.");
+    }
+    return (std::filesystem::path(std::wstring(systemDir, len)) / widen(relative)).u8string();
+}
+#else
+std::string findProgramOnPath(const std::string&) { return ""; }
+std::vector<std::string> findProgramsOnPath(const std::string&) { return {}; }
+std::string systemProgramPath(const std::string&) { return ""; }
+#endif
+
+} // namespace gaia
+
+namespace gaia {
+
+MachineLock::MachineLock(const std::string& name) {
+    for (char c : name) {
+        if (!std::isalnum(static_cast<unsigned char>(c)) && c != '-' && c != '_') {
+            throw std::invalid_argument("MachineLock name must use letters, digits, - and _: " + name);
+        }
+    }
+#ifdef _WIN32
+    const std::string full = "Local\\gaia-" + name;
+    HANDLE h = CreateMutexA(nullptr, FALSE, full.c_str());
+    if (!h) {
+        throw std::runtime_error("Could not create the machine lock " + full + " (error " +
+                                 std::to_string(GetLastError()) + ")");
+    }
+    handle_ = h;
+#else
+    const std::string path = (std::filesystem::temp_directory_path() / ("gaia-" + name + ".lock")).string();
+    const int fd = ::open(path.c_str(), O_RDWR | O_CREAT | O_CLOEXEC, 0666);
+    if (fd < 0) {
+        throw std::runtime_error("Could not open the machine lock file " + path + ": " + std::strerror(errno));
+    }
+    // Whoever creates it opens it to every user, or a second user's agent could not lock it.
+    ::fchmod(fd, 0666);
+    handle_ = reinterpret_cast<void*>(static_cast<intptr_t>(fd) + 1);
+#endif
+}
+
+bool MachineLock::acquire(int timeoutMs) {
+    if (held_) return true;
+#ifdef _WIN32
+    const DWORD r = WaitForSingleObject(static_cast<HANDLE>(handle_), static_cast<DWORD>(std::max(0, timeoutMs)));
+    held_ = r == WAIT_OBJECT_0 || r == WAIT_ABANDONED;  // abandoned: the last holder died
+#else
+    const int fd = static_cast<int>(reinterpret_cast<intptr_t>(handle_) - 1);
+    const auto until = std::chrono::steady_clock::now() + std::chrono::milliseconds(std::max(0, timeoutMs));
+    for (;;) {
+        // flock, not fcntl: it also keeps out another agent in this same process.
+        if (::flock(fd, LOCK_EX | LOCK_NB) == 0) {
+            held_ = true;
+            break;
+        }
+        if (std::chrono::steady_clock::now() >= until) break;
+        std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    }
+#endif
+    return held_;
+}
+
+MachineLock::~MachineLock() {
+#ifdef _WIN32
+    if (held_) ReleaseMutex(static_cast<HANDLE>(handle_));
+    if (handle_) CloseHandle(static_cast<HANDLE>(handle_));
+#else
+    // Closing the descriptor drops the lock.
+    if (handle_) ::close(static_cast<int>(reinterpret_cast<intptr_t>(handle_) - 1));
+#endif
 }
 
 } // namespace gaia

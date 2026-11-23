@@ -494,7 +494,7 @@ def test_a_bare_binary_name_matches_the_grant(token):
         "~/bin/gh",
     ],
 )
-def test_a_path_spelled_binary_never_matches_the_grant(token):
+def test_a_path_spelled_binary_never_matches_the_grant(token, gh_on_path):
     """`./gh` is a file the caller chose, not the CLI the skill declared.
 
     Matching it would let a granted skill run any executable it can name `gh`.
@@ -558,30 +558,52 @@ def test_a_binary_that_is_not_installed_is_not_blamed_on_a_missing_skill(monkeyp
     assert BINARY_POLICIES["gh"].install_hint in error["error"]
 
 
-def test_the_python_m_spelling_of_a_missing_binary_is_refused_the_same_way(
-    monkeypatch,
-):
-    """`python -m pytest` is judged as `pytest`, so an absent pytest refuses it
-    too — and the model needs the substitute, not a skill-reload hint."""
-    monkeypatch.setattr("gaia.agents.tools.shell_tools.shutil.which", lambda _n: None)
-
-    error = ShellToolsMixin._validate_command(
-        "python",
-        ["python", "-m", "pytest", "-q", "tests/"],
-        "python -m pytest -q tests/",
-    )
-    assert error is not None
-    assert "not installed here" in error["error"]
-    assert BINARY_POLICIES["pytest"].substitute in error["error"]
-
-
-@pytest.fixture(name="gh_on_path")
-def _gh_on_path(monkeypatch):
-    """The missing-grant answer is what these tests check, so the binary must
-    look installed — otherwise the not-installed refusal answers first."""
+def _shell_finds_only(monkeypatch, *names):
     monkeypatch.setattr(
-        "gaia.agents.tools.shell_tools.shutil.which", lambda name: f"/usr/bin/{name}"
+        "gaia.agents.tools.shell_tools.shutil.which",
+        lambda name: f"/usr/bin/{name}" if name in names else None,
     )
+
+
+@pytest.mark.parametrize("launcher", ["python", "python3", "py"])
+def test_python_m_pytest_is_not_refused_for_a_missing_pytest_executable(
+    monkeypatch, launcher
+):
+    """`python -m pytest` starts python, which is installed; pytest.exe being
+    off PATH (any venv that is not activated) says nothing about it."""
+    _shell_finds_only(monkeypatch, launcher)
+
+    command = f"{launcher} -m pytest -q tests/"
+    error = ShellToolsMixin._validate_command(launcher, shlex.split(command), command)
+    assert error is not None
+    assert error["tier"] == TIER_CONFIRM
+    assert "not installed" not in error["error"]
+
+
+def test_python_m_pytest_names_the_missing_interpreter(monkeypatch):
+    _shell_finds_only(monkeypatch, "python", "pytest")
+
+    command = "python3 -m pytest -q tests/"
+    error = ShellToolsMixin._validate_command("python3", shlex.split(command), command)
+    assert error is not None
+    assert error["tier"] == TIER_REFUSE
+    assert error["error"].startswith("Command 'python3' cannot run:")
+    assert "`python3` is not installed here (not on PATH)" in error["error"]
+    assert "pytest" not in error["error"]
+
+
+def test_python_m_pytest_by_full_path_is_not_refused_as_not_installed(
+    monkeypatch, tmp_path
+):
+    """A path-spelled interpreter is not looked up on PATH at all."""
+    _shell_finds_only(monkeypatch)
+    interpreter = str(tmp_path / "venv" / "python")
+
+    command = f"{interpreter} -m pytest -q tests/"
+    error = ShellToolsMixin._validate_command(
+        interpreter.lower(), [interpreter, "-m", "pytest", "-q", "tests/"], command
+    )
+    assert error is None or "not installed" not in error["error"]
 
 
 #: Grant syntax a user cannot act on. It belongs in the log, never in the text
@@ -1012,7 +1034,11 @@ def test_a_line_the_runner_cannot_parse_is_refused_before_any_prompt():
         "find . -delete",
     ],
 )
-def test_a_confirmable_command_reaches_the_prompt_instead_of_being_refused(command):
+def test_a_confirmable_command_reaches_the_prompt_instead_of_being_refused(
+    command, monkeypatch
+):
+    # A program that is not on this PC is answered "not installed" instead.
+    monkeypatch.setattr("gaia.program_lookup.resolve", lambda name: f"/usr/bin/{name}")
     assert (
         _refusal(_Gated("gh"), command) is None
     ), f"{command!r} was refused before anyone could approve it"
@@ -1072,6 +1098,7 @@ class _ExecutingAgent(_Gated):
     _resolve_tool_name = _Base._resolve_tool_name
     _execution_tool_registry = _Base._execution_tool_registry
     _fold_tool_usage = _Base._fold_tool_usage
+    _prompted_call_key = _Base.__dict__["_prompted_call_key"]
     current_plan = None
     current_step = 0
     debug = False
@@ -1118,7 +1145,7 @@ def test_a_call_outside_the_policy_is_asked_with_its_risk_note():
 def test_a_permitted_ungranted_call_still_reaches_the_prompt():
     """The reordering must not swallow the modal for calls that can run."""
     agent = _ExecutingAgent()
-    agent._execute_tool("run_shell_command", {"command": "pwd"})
+    agent._execute_tool("run_shell_command", {"command": "git status"})
     assert [name for name, _ in agent.console.asked] == ["run_shell_command"]
 
 
@@ -1399,7 +1426,7 @@ def test_a_one_time_call_says_how_it_may_run():
     """Accurate to the model: approved once by the user, or not at all."""
     error, _ = _Gated("gh")._validate_shell_command("gh auth token")
     assert "exact command once" in error["hint"]
-    assert "do not reach the same result another way" in error["hint"]
+    assert "do not run it through another tool or script" in error["hint"]
 
 
 def test_the_always_grant_is_scoped_to_the_command_class_not_the_tool():
@@ -1669,9 +1696,20 @@ def _run_capturing_subprocess(host, command):
         )
         return _FakeProcess()
 
-    def fake_pipeline(segments, modes, envs, cwd, timeout, waiter=None):
+    def fake_pipeline(segments, modes, envs, cwd, timeout, waiter=None, marked=True):
         seen["pipeline"] = segments
         return subprocess_module.CompletedProcess(segments, 0, "", "")
+
+    # A no-shell run on Windows starts the file PATH finds, so the program has
+    # to exist there, though it never starts.
+    import shutil
+    import tempfile
+
+    stubs = tempfile.mkdtemp()
+    program = next(word for word in shlex.split(command) if "=" not in word)
+    Path(stubs, f"{program}.exe").write_bytes(b"")
+    real_path = os.environ.get("PATH", "")
+    os.environ["PATH"] = stubs + os.pathsep + real_path
 
     shell_module.subprocess.Popen = fake_popen
     shell_module._run_pipeline = fake_pipeline
@@ -1680,6 +1718,8 @@ def _run_capturing_subprocess(host, command):
     finally:
         shell_module.subprocess.Popen = real_popen
         shell_module._run_pipeline = real_pipeline
+        os.environ["PATH"] = real_path
+        shutil.rmtree(stubs)
     return seen
 
 
@@ -2030,7 +2070,14 @@ def test_make_has_no_policy_and_that_is_the_decision():
 
 @pytest.mark.parametrize(
     "command",
-    ["git status", "git log --oneline -10", "git diff HEAD", "git show HEAD"],
+    [
+        "git status",
+        "git log --oneline -10",
+        "git diff HEAD",
+        "git show HEAD",
+        "git blame f.py",
+        "git blame -L 1,5 f.py",
+    ],
 )
 def test_the_read_only_git_floor_survives_without_any_skill(command):
     assert (
@@ -2053,7 +2100,7 @@ def test_the_old_whitelist_holes_are_closed(command, why_now):
     assert error is not None, f"still open: {why_now}"
 
 
-@pytest.mark.parametrize("command", ["git commit -m x", "git add .", "git blame f.py"])
+@pytest.mark.parametrize("command", ["git commit -m x", "git add .", "git shortlog -s"])
 def test_a_write_without_the_grant_asks_the_user(command):
     error = ShellToolsMixin._validate_command("git", shlex.split(command), command)
     assert error is not None
@@ -2063,7 +2110,7 @@ def test_a_write_without_the_grant_asks_the_user(command):
 
 def test_the_floor_widens_to_the_full_policy_once_granted():
     granted = frozenset({"git"})
-    for command in ("git blame f.py", "git commit -m x", "git stash push"):
+    for command in ("git shortlog -s", "git commit -m x", "git stash push"):
         assert (
             ShellToolsMixin._validate_command(
                 "git", shlex.split(command), command, granted_binaries=granted
@@ -2206,7 +2253,12 @@ def test_python_m_pytest_runs_under_the_pytest_grant(launcher):
 
     call = _run_capturing_subprocess(_Gated("pytest"), command)
     # The typed spelling runs, not a rewrite: `-m` is what makes imports work.
-    assert call["args"] == [launcher, "-m", "pytest", "-q", "tests"]
+    assert call["args"][1:] == ["-m", "pytest", "-q", "tests"]
+    if os.name == "nt":
+        # Pinned to the file PATH finds, as every no-shell run there is.
+        assert Path(call["args"][0]).name == f"{launcher}.exe"
+    else:
+        assert call["args"][0] == launcher
     assert call["shell"] is False
 
 
@@ -2464,6 +2516,243 @@ def test_python_m_pytest_imports_a_checkout_that_was_never_installed(
 
     assert result.get("return_code") == 0, result
     assert "1 passed" in result["stdout"]
+
+
+# ---------------------------------------------------------------------------
+# A granted command runs the program PATH finds, never one in the working folder
+# ---------------------------------------------------------------------------
+#
+# With no shell, Windows looks for a bare program name in the running
+# program's own folder and in its current folder before PATH.
+
+_windows_only = pytest.mark.skipif(
+    os.name != "nt", reason="only Windows searches the working folder first"
+)
+
+
+def _printing_exe(path: Path, text: str) -> None:
+    """A real console program that prints *text*, in pip's launcher format."""
+    import io
+    import sys
+    import zipfile
+
+    from gaia.eval.bench.ghstub import _launcher_template
+
+    try:
+        launcher = _launcher_template()
+    except FileNotFoundError as exc:
+        pytest.skip(str(exc))
+    stream = io.BytesIO()
+    with zipfile.ZipFile(stream, "w") as zf:
+        zf.writestr("__main__.py", f"print({text!r})\n")
+    python = f'"{sys.executable}"' if " " in sys.executable else sys.executable
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(launcher + f"#!{python} -I\n".encode() + stream.getvalue())
+
+
+@pytest.fixture(name="planted_gh")
+def _planted_gh(tmp_path, monkeypatch):
+    """A working folder holding its own gh.exe, which GAIA was started in."""
+    work = tmp_path / "work"
+    _printing_exe(work / "gh.exe", "gh from the working folder")
+    monkeypatch.chdir(work)
+    # Unset in a default Windows session; when set, Windows skips the folder.
+    monkeypatch.delenv("NoDefaultCurrentDirectoryInExePath", raising=False)
+    return work
+
+
+@_windows_only
+@pytest.mark.parametrize(
+    "command",
+    [
+        "gh issue list --repo amd/gaia",
+        # An assignment runs the step without a shell too, segment by segment.
+        "NO_COLOR=1 gh issue list --repo amd/gaia",
+        "NO_COLOR=1 gh issue list --repo amd/gaia | sort",
+    ],
+)
+def test_a_granted_command_runs_the_program_on_path(
+    tmp_path, monkeypatch, planted_gh, command
+):
+    _printing_exe(tmp_path / "bin" / "gh.exe", "gh from PATH")
+    monkeypatch.setenv(
+        "PATH", str(tmp_path / "bin") + os.pathsep + os.environ.get("PATH", "")
+    )
+
+    result = _captured_shell_tool(_Gated("gh"))(
+        command=command, working_directory=str(planted_gh)
+    )
+
+    assert result.get("return_code") == 0, result
+    assert "gh from PATH" in result["stdout"]
+    assert "working folder" not in result["stdout"]
+
+
+@_windows_only
+def test_a_switch_style_sort_in_a_no_shell_pipe_is_windows_own(
+    tmp_path, monkeypatch, planted_gh
+):
+    """GNU sort earlier on PATH would read /r as a path."""
+    _printing_exe(tmp_path / "bin" / "gh.exe", "gh from PATH")
+    _printing_exe(tmp_path / "bin" / "sort.exe", "sort from PATH")
+    monkeypatch.setenv(
+        "PATH", str(tmp_path / "bin") + os.pathsep + os.environ.get("PATH", "")
+    )
+
+    result = _captured_shell_tool(_Gated("gh"))(
+        command="NO_COLOR=1 gh issue list --repo amd/gaia | sort /r",
+        working_directory=str(planted_gh),
+    )
+
+    assert result.get("return_code") == 0, result
+    assert "gh from PATH" in result["stdout"]
+    assert "sort from PATH" not in result["stdout"]
+
+
+@_windows_only
+def test_a_granted_command_missing_from_path_is_not_run_from_the_working_folder(
+    tmp_path, monkeypatch, planted_gh
+):
+    (tmp_path / "empty").mkdir()
+    monkeypatch.setenv("PATH", str(tmp_path / "empty"))
+
+    result = _captured_shell_tool(_Gated("gh"))(
+        command="gh issue list --repo amd/gaia", working_directory=str(planted_gh)
+    )
+
+    assert result["status"] == "error"
+    assert "'gh' was not found on PATH" in result["error"]
+    assert "working folder" not in result.get("stdout", "")
+
+
+@_windows_only
+def test_a_granted_batch_shim_on_path_is_refused_not_run_through_cmd(
+    tmp_path, monkeypatch, planted_gh
+):
+    """A .cmd needs cmd.exe, which would read the arguments as shell syntax."""
+    shim = tmp_path / "bin" / "gh.cmd"
+    shim.parent.mkdir()
+    shim.write_text("@echo shim ran\r\n")
+    monkeypatch.setenv("PATH", str(shim.parent))
+
+    result = _captured_shell_tool(_Gated("gh"))(
+        command="gh issue list --repo amd/gaia", working_directory=str(planted_gh)
+    )
+
+    assert result["status"] == "error"
+    assert f"{shim}, which Windows starts only through cmd.exe" in result["error"]
+    assert "shim ran" not in result.get("stdout", "")
+
+
+@_windows_only
+def test_a_program_named_with_its_extension_is_found_on_path(tmp_path, monkeypatch):
+    from gaia.agents.tools.shell_tools import _program_on_path
+
+    (tmp_path / "bin").mkdir()
+    (tmp_path / "bin" / "gh.exe").write_bytes(b"")
+    monkeypatch.setenv("PATH", str(tmp_path / "bin"))
+    assert _program_on_path("gh.exe", str(tmp_path)) == str(tmp_path / "bin" / "gh.exe")
+
+
+@pytest.mark.parametrize(
+    "spelled", ["C:gh", "c:gh.exe", "gh:stream", ".\\gh", "./gh", "sub/gh", "..\\gh"]
+)
+def test_a_folder_or_drive_spelling_is_never_looked_up_on_path(
+    tmp_path, monkeypatch, spelled
+):
+    """`C:gh` joined onto a PATH entry drops the entry and lands in a cwd."""
+    from gaia.agents.tools.shell_tools import _pin_argv_program, _program_on_path
+
+    monkeypatch.setattr("os.path.isfile", lambda _p: True)
+    monkeypatch.setenv("PATH", str(tmp_path / "bin"))
+    assert _program_on_path(spelled, str(tmp_path)) is None
+    # Run as typed: no grant matches it, so it reached here through the prompt.
+    assert _pin_argv_program([spelled, "issue"], str(tmp_path)) == [spelled, "issue"]
+
+
+@pytest.mark.parametrize("spelled", ["C:gh", "./gh", "gh.cmd", "gh.bat", "gh.", "gh:x"])
+def test_a_folder_drive_or_batch_spelling_never_inherits_a_grant(spelled):
+    from gaia.agents.tools.shell_tools import _is_lone_granted_segment
+
+    segment = [spelled, "issue", "list", "--repo", "amd/gaia"]
+    assert not _is_lone_granted_segment([segment], frozenset({"gh"}))
+    error = _validation_error(_Gated("gh"), shlex.join(segment))
+    assert error is not None
+
+
+def test_path_lookup_skips_the_working_folder_however_path_spells_it(
+    tmp_path, monkeypatch
+):
+    from gaia.agents.tools.shell_tools import _program_on_path
+
+    work, bin_ = tmp_path / "work", tmp_path / "bin"
+    work.mkdir()
+    bin_.mkdir()
+    (work / "gh.exe").write_bytes(b"")
+    (bin_ / "gh.exe").write_bytes(b"")
+    monkeypatch.setenv("PATHEXT", ".EXE")
+    spellings = [str(work) + os.sep, str(work / "." / ""), str(tmp_path / "x" / "..")]
+    spellings[-1] = os.path.join(spellings[-1], "work")
+    monkeypatch.setenv("PATH", os.pathsep.join([*spellings, str(bin_)]))
+    assert _program_on_path("gh", str(work)) == str(bin_ / "gh.exe")
+
+
+def test_a_batch_shim_earlier_on_path_fails_instead_of_skipping_ahead(
+    tmp_path, monkeypatch
+):
+    """The .cmd is what a terminal would run, so a later .exe must not stand in."""
+    from gaia.agents.tools.shell_tools import _pin_argv_program
+
+    shims, bin_ = tmp_path / "shims", tmp_path / "bin"
+    shims.mkdir()
+    bin_.mkdir()
+    (shims / "gh.cmd").write_text("")
+    (bin_ / "gh.exe").write_bytes(b"")
+    monkeypatch.setenv("PATHEXT", ".EXE;.CMD")
+    monkeypatch.setenv("PATH", os.pathsep.join([str(shims), str(bin_)]))
+    with pytest.raises(FileNotFoundError, match="only through cmd.exe"):
+        _pin_argv_program(["gh", "issue"], str(tmp_path))
+
+
+@pytest.mark.parametrize(
+    "argv",
+    [
+        ["python", "-m", "pytest.__main__", "-q"],
+        ["python", "-mpytest", "-q"],
+        ["python", "-I", "-m", "pytest", "-q"],
+        ["python", "-m", "pytest_evil", "-q"],
+        ["C:python", "-m", "pytest", "-q"],
+        ["python", "-c", "import pytest", "-m", "pytest"],
+    ],
+)
+def test_only_the_exact_python_m_pytest_shape_rides_the_pytest_grant(argv):
+    from gaia.agents.tools.shell_tools import _is_granted_segment
+
+    assert not _is_granted_segment(argv, frozenset({"pytest"}))
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "python -m pytest -p evil_plugin -q",
+        "python -m pytest -o addopts=-pevil -q",
+        "python -m pytest -c ../other.ini -q",
+        "python -m pytest --rootdir=.. -q",
+    ],
+)
+def test_python_m_pytest_keeps_the_pytest_flag_rules(monkeypatch, command):
+    """The interpreter check must not let the flag allowlist be skipped."""
+    _shell_finds_only(monkeypatch, "python")
+    error = _validation_error(_Gated("pytest"), command)
+    assert error is not None
+    assert "not installed" not in error["error"]
+
+
+@pytest.mark.skipif(os.name == "nt", reason="the OS's own PATH lookup elsewhere")
+def test_a_granted_command_keeps_its_bare_name_off_windows():
+    call = _run_capturing_subprocess(_Gated("gh"), "gh issue list --repo amd/gaia")
+    assert call["args"][0] == "gh"
+    assert call["shell"] is False
 
 
 def test_an_inline_env_assignment_is_named_as_one():

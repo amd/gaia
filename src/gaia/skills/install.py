@@ -43,11 +43,15 @@ import tempfile
 import zipfile
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Callable, Optional
+from typing import Callable, Optional
 
 from gaia.hub.catalog import Fetcher, get_hub_base_url
 from gaia.logger import get_logger
-from gaia.skills.audit.findings import content_digest
+from gaia.skills.audit.findings import (
+    AUDIT_ENGINE,
+    content_digest,
+    ignore_bytecode_caches,
+)
 from gaia.skills.errors import SkillError, SkillNotFoundError, SkillValidationError
 from gaia.skills.format import (
     SKILL_FILENAME,
@@ -61,6 +65,7 @@ from gaia.skills.hub import (
     fetch_skill_doc,
     fetch_skill_manifest,
 )
+from gaia.skills.human_only import require_user_terminal
 from gaia.skills.lock import SOURCE_HUB, LockEntry, SkillLock
 from gaia.skills.manager import SkillManager
 from gaia.skills.naming import artifact_path, skill_directory
@@ -191,6 +196,9 @@ def install_skill(
         SkillSignatureError: a present signature does not verify.
         SkillNotFoundError: no published version satisfies the pin.
     """
+    if allow_experimental or assume_yes:
+        # Unsigned code, or a dangerous grant nobody is asked about.
+        require_user_terminal("gaia skill install")
     name, spec = parse_skill_ref(reference)
     resolver = manager if manager is not None else SkillManager()
     destination_root = resolver.user_root
@@ -287,7 +295,7 @@ def install_skill(
         undo_incomplete = False
         try:
             staged = staging / name
-            shutil.copytree(source_dir, staged)
+            shutil.copytree(source_dir, staged, ignore=ignore_bytecode_caches)
 
             # Re-stamp only when the signature did not support the claim, so
             # `gaia skill info` and the loader read the enforced tier rather than the
@@ -338,6 +346,7 @@ def install_skill(
                             artifact_sha256=artifact.sha256,
                             artifact_filename=artifact.filename,
                             content_digest=installed_digest,
+                            digest_engine=AUDIT_ENGINE,
                             claimed_tier=claimed,
                             attested_tier=attested,
                             installed_tier=tier,
@@ -659,20 +668,6 @@ def remove_skill(name: str, *, manager: Optional[SkillManager] = None) -> Remove
     )
 
 
-def installed_provenance(manager: Optional[SkillManager] = None) -> dict[str, Any]:
-    """``{name: lock-entry-dict}`` for every skill the lock tracks.
-
-    Feeds ``gaia skill list --json`` and the (future) ``/api/skills`` router, so
-    both read provenance from the lock rather than re-deriving it. Each entry
-    carries its own ``source`` — ``hub`` for an install, ``local`` for a skill
-    ``gaia skill lock --relock`` started tracking — so a caller that only wants
-    hub provenance filters on it rather than assuming it.
-    """
-    resolver = manager if manager is not None else SkillManager()
-    lock = SkillLock.load(resolver.user_root)
-    return {name: entry.to_dict() for name, entry in lock.entries.items()}
-
-
 __all__ = [
     "Confirmer",
     "InstallResult",
@@ -680,7 +675,6 @@ __all__ = [
     "SkillBundleMismatchError",
     "SkillInstallError",
     "install_skill",
-    "installed_provenance",
     "parse_skill_ref",
     "remove_skill",
 ]

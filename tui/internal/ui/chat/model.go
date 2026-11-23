@@ -3,9 +3,9 @@ package chat
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -17,6 +17,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
 
+	"github.com/amd/gaia/tui/internal/catalog"
 	"github.com/amd/gaia/tui/internal/client"
 	"github.com/amd/gaia/tui/internal/control"
 	"github.com/amd/gaia/tui/internal/event"
@@ -84,20 +85,6 @@ const queuedSendTimeout = 180 * time.Second
 // leaving the spinner to run out the general 300s watchdog with no word.
 type queuedSendStalledMsg struct{ turnSeq int }
 
-// preScanFetchedMsg / preScanFetchFailedMsg / preScanDegradedMsg deliver the
-// result of the on-open inbox pre-scan fetch (#2743, replacing the #2582
-// attention fetch) — a side-channel read, never a chat turn, so it carries
-// no query/answer pair and never touches the host-owned transcript Send()
-// pushes as `context`.
-type preScanFetchedMsg struct{ data json.RawMessage }
-type preScanFetchFailedMsg struct{ err error }
-
-// preScanDegradedMsg is delivered when the peer's contract predates
-// needs_you (client.ErrPreScanContractTooOld) — rendered as an honest
-// status note, never as the confident (and wrong) empty-needs_you card a
-// naive decode of an old sidecar's response would produce.
-type preScanDegradedMsg struct{ notice string }
-
 // ToggleHelpMsg signals the root model to toggle help overlay.
 type ToggleHelpMsg struct{}
 
@@ -118,29 +105,17 @@ var (
 	activityStyle = lipgloss.NewStyle().
 			Foreground(theme.Dim)
 
-	// Developer payload lines sit one rung below the outcome line they hang
-	// under: in --dev they are the most numerous thing on screen, so they are
-	// also the dimmest, keeping the narration readable through them.
+	// Ctrl+O's raw detail — a command's text, a turn's metrics — sits one rung
+	// below the outcome lines it hangs under, so the summary reads through it.
 	devPayloadStyle = lipgloss.NewStyle().
 			Foreground(theme.Dim).
 			Faint(true)
 
-	toolNameStyle = lipgloss.NewStyle().
-			Bold(true).
-			Foreground(theme.Info)
-
 	failStyle = lipgloss.NewStyle().
 			Foreground(theme.Danger)
 
-	// A step error the agent is retrying past: worth seeing, not an alarm.
-	retryStyle = lipgloss.NewStyle().
-			Foreground(theme.Warning)
-
 	dividerStyle = lipgloss.NewStyle().
 			Foreground(theme.Divider)
-
-	thinkingStyle = lipgloss.NewStyle().
-			Foreground(theme.Success)
 
 	statusMsgStyle = lipgloss.NewStyle().
 			Foreground(theme.Dim).
@@ -176,6 +151,9 @@ type ChatModel struct {
 	setupChoices *modelsetup.Choices
 	// gpuApplies is whether /gpu means anything on this PC (an integrated GPU).
 	gpuApplies bool
+	// agentProgramHost is set when the host answers AgentProgramMsg (/agent).
+	agentProgramHost bool
+
 	// agentsPanel is the in-chat "/agents" listing (nil unless open). It only
 	// lists and selects (agents.SelectedMsg's own doc comment); switching to
 	// the picked agent is the root model's job, so a SelectedMsg is left to
@@ -269,7 +247,9 @@ type ChatModel struct {
 	// name a different build than the one answering.
 	agentVersion string
 	gaiaVersion  string
-	dev          bool
+	// skillCommands are the installed skills the agent reported; the "/"
+	// palette lists each as /<name>, which the agent runs on that skill.
+	skillCommands []event.SkillCommand
 
 	width  int
 	height int
@@ -301,6 +281,8 @@ type ChatModel struct {
 	// key except Ctrl+C goes to it (including Esc, which means "deny" here,
 	// not "cancel the turn" — see handleKey).
 	confirmation *components.ConfirmationModel
+	// answer keeps typing meant for the composer from answering it.
+	answer answerGuard
 
 	// fullAccess is true while the agent runs every gated tool without
 	// asking. OFF on a fresh launch, always, and never restored from anywhere:
@@ -345,6 +327,10 @@ type ChatModel struct {
 	// once at launch from the transport's argv — see applyLaunchClaude — and
 	// kept in sync by every model-state ping thereafter (handleCanonicalEvent).
 	claudeMode bool
+
+	// researchMode is on after a bare /research: every message goes out as
+	// `/research <message>` until /research turns it off (research.go).
+	researchMode bool
 
 	// launchClaudeModel is the id --claude-model put on the child's argv, ""
 	// when the launch named none. Kept separate from modelID on purpose:
@@ -403,13 +389,16 @@ type ChatModel struct {
 	palette commandPalette
 
 	// lemonade* carry the local model server's state from the agent's
-	// model-state ping, shown in the --dev header. lemonadeKnown separates
+	// model-state ping; a down server gets a header chip. lemonadeKnown separates
 	// "the agent has not told us" from "it told us Lemonade is down": the
 	// first must render nothing, the second must render a warning.
 	lemonadeKnown   bool
 	lemonadeUp      bool
 	lemonadeVersion string
 	lemonadeBaseURL string
+	// lastImagePath is the newest image the agent created this session, for
+	// /image open.
+	lastImagePath string
 	// lemonadeDownRefused makes the "local server is down" pre-refusal fire
 	// once per down report instead of forever. Nothing refreshes lemonadeUp
 	// between pings, so a sticky refusal would outlive the problem — see
@@ -426,6 +415,17 @@ type ChatModel struct {
 	modelDisplay string
 	modelBackend string
 	modelRemote  bool
+	// plan is the running turn's plan checklist (plan.go).
+	plan livePlan
+	// ctxMeter is how full the model's context is (context.go).
+	ctxMeter contextMeter
+	// starters are the first screen's suggestions (suggestions.go); suggests
+	// says this chat offers them, so the agent's skill report refreshes them.
+	starters []starter
+	suggests bool
+	// readyTail is how the Ready line ended when it was written, so a later
+	// skill report can replace it (refreshReadyLine).
+	readyTail string
 
 	// awaitingModelSwitch is true for the duration of a `/model <id>` turn
 	// this session itself started. A model-state ping that disagrees with
@@ -456,8 +456,16 @@ type ChatModel struct {
 	startup   startupModel
 	saveModel func(provider, model string) error
 
-	connected  bool
-	totalSteps int
+	connected bool
+	// goalFresh says the agent announced a goal since the last tool call, so
+	// the next call is the one it describes (takeGoal).
+	goalFresh bool
+	// clock is time.Now, swappable so a frame test can pin elapsed times.
+	clock func() time.Time
+	// motion is what the animation tick draws — see motion.go.
+	motion motionState
+	// syncedChrome is the chrome height the viewport was last sized against.
+	syncedChrome int
 	// cost accumulates what each turn spent, for /cost and the control API.
 	// Summed from what the backend reported and never estimated — see
 	// sessioncost.go.
@@ -486,17 +494,6 @@ type ChatModel struct {
 	// sending a new message) restores it.
 	followTail bool
 
-	// pendingPreScan buffers a fetch resolved mid-turn until that turn ends, so it never lands between a question and its reply.
-	pendingPreScan json.RawMessage
-	// preScanRenderedThisTurn is true once the CURRENT turn's own typed
-	// tool_result has drawn the pre-scan card (#2743 checkpoint review).
-	// drainPendingPreScan checks it before draining the buffered on-open
-	// snapshot: without this, a "triage my inbox" turn that itself
-	// produces a fresh card would have that fresh data immediately
-	// clobbered by the shallower snapshot the on-open fetch buffered
-	// before the turn started.
-	preScanRenderedThisTurn bool
-
 	// setupChecking is true from construction (applyFirstBootGate) until the
 	// first-boot readiness probe (`gaia init --check`, fired by Init) answers.
 	// Enter queues rather than sends while true, same reasoning as m.streaming
@@ -510,6 +507,11 @@ type ChatModel struct {
 	// panel is on and what it has collected. Non-nil only between /slack setup
 	// and the flow finishing or being cancelled.
 	slackSetup *slackSetupState
+	// signIns is what every /connectors browser sign-in runs under, made on
+	// first use. Retire cancels it, so no CLI keeps waiting on the browser
+	// once the chat is gone.
+	signIns     context.Context
+	stopSignIns context.CancelFunc
 	// slackOffered records that the one-time Slack offer has already been shown
 	// this session, so a second launch-time probe cannot repeat it. The durable
 	// answer lives in `gaia slack decline`; this only stops a duplicate inside
@@ -520,6 +522,11 @@ type ChatModel struct {
 	discordSetup *discordSetupState
 	// discordOffered stops a second launch-time offer within one run.
 	discordOffered bool
+	// automationRefs are the ids /automations last listed, so
+	// "/automations pause 2" changes the one the user saw as 2.
+	automationRefs []string
+	// automationNames maps each listed name, lower-cased, to its id.
+	automationNames map[string]string
 	// setupCancel tears down the in-flight `gaia init` subprocess. Nil unless
 	// setupRunning.
 	setupCancel context.CancelFunc
@@ -553,7 +560,7 @@ type ChatModel struct {
 	memoryCancelFn context.CancelFunc
 }
 
-func NewChatModel(c client.AgentClient, agentName string, initialQuery string, dev bool) ChatModel {
+func NewChatModel(c client.AgentClient, agentName string, initialQuery string) ChatModel {
 	ti := textarea.New()
 	ti.Placeholder = "Ask anything — Enter to send, Alt+Enter for a new line"
 	ti.Focus()
@@ -565,7 +572,7 @@ func NewChatModel(c client.AgentClient, agentName string, initialQuery string, d
 	ti.KeyMap = composerKeyMap(ti.KeyMap)
 
 	sp := spinner.New()
-	sp.Spinner = spinner.Dot
+	sp.Spinner = animSpinner
 	sp.Style = lipgloss.NewStyle().Foreground(theme.Highlight)
 
 	vp := viewport.New(80, 20)
@@ -576,14 +583,16 @@ func NewChatModel(c client.AgentClient, agentName string, initialQuery string, d
 		agentName:    agentName,
 		agentID:      agentName,
 		initialQuery: initialQuery,
-		dev:          dev,
 		input:        ti,
 		spinner:      sp,
 		viewport:     vp,
 		connected:    true,
 		followTail:   true,
 		lastClickRow: -1,
+		clock:        time.Now,
+		motion:       newMotionState(),
 	}
+	m.spinner.Spinner = m.motion.spinnerFor()
 	// Reads the transport, never a saved preference: full access and Claude mode
 	// are off on a fresh launch unless THIS launch asked on the command line.
 	return m.applyLaunchFullAccess().applyLaunchClaude()
@@ -604,17 +613,19 @@ func composerKeyMap(km textarea.KeyMap) textarea.KeyMap {
 // setupVerified says the readiness gate in front of this launch already ran
 // `gaia init --check` and it passed, so the first-boot gate must not ask again
 // — see ChatModel.setupVerified.
-func NewChatModelForFlagship(c client.AgentClient, agentID, agentName string, dev, setupVerified bool) ChatModel {
-	m := NewChatModel(c, agentName, "", dev)
+func NewChatModelForFlagship(c client.AgentClient, agentID, agentName string, setupVerified bool) ChatModel {
+	m := NewChatModel(c, agentName, "")
 	m.agentID = agentID
 	m.setupVerified = setupVerified
+	m.suggests = true
+	m.starters = installedStarters(skillsDir())
 	return m.applyFirstBootGate()
 }
 
 // NewChatModelForCatalogAgent creates a standalone ChatModel for a real catalog
 // agent, so agentID is the catalog id rather than NewChatModel's display name.
-func NewChatModelForCatalogAgent(c client.AgentClient, agentID, agentName string, dev bool) ChatModel {
-	m := NewChatModel(c, agentName, "", dev)
+func NewChatModelForCatalogAgent(c client.AgentClient, agentID, agentName string) ChatModel {
+	m := NewChatModel(c, agentName, "")
 	m.agentID = agentID
 	return m.applyFirstBootGate()
 }
@@ -666,18 +677,6 @@ func (m *ChatModel) CloseAgentsPanel() {
 	m.agentsPanel = nil
 }
 
-// preScanAgentID is the one agent this on-open fetch applies to today.
-// Scoped by id rather than by capability alone so a future agent that
-// happens to reuse the PreScanFetcher interface for something unrelated
-// doesn't unexpectedly get this fetch too.
-const preScanAgentID = "email"
-
-// preScanCardIdentity marks the singular inbox pre-scan card (#2743) so
-// both entry points that can produce one — the on-open fetch below and a
-// typed turn's own tool_result (canonical.go) — update the SAME message in
-// place instead of each appending its own. See Message.Identity.
-const preScanCardIdentity = "email_prescan"
-
 func (m ChatModel) Init() tea.Cmd {
 	cmds := []tea.Cmd{
 		m.spinner.Tick,
@@ -688,6 +687,9 @@ func (m ChatModel) Init() tea.Cmd {
 		// probeCapabilitiesCmd.
 		m.probeCapabilitiesCmd(),
 		loadReadAloudAutoCmd,
+	}
+	if m.suggests {
+		cmds = append(cmds, m.listSkillsCmd())
 	}
 	if m.agentID == setupAgentID {
 		// Whether /gpu applies here: only a PC with an integrated GPU has a
@@ -720,15 +722,6 @@ func (m ChatModel) Init() tea.Cmd {
 		cmds = append(cmds, func() tea.Msg {
 			return sendQueryMsg{query: m.initialQuery}
 		})
-		// The on-open pre-scan card (#2743) is gone: it spent a Gmail scan
-		// before the user asked for anything, and showed a shallower version
-		// of what "triage my inbox" answers properly a moment later. The
-		// card still renders when a turn's own pre_scan_inbox result arrives.
-	} else if m.dev && m.preScanGateMismatch() {
-		// A client that could serve the pre-scan view but an agentID that
-		// doesn't match must not fail with no signal at all.
-		control.DevLogf("pre-scan fetch skipped: agentID %q has a PreScanFetcher client but does not match %q",
-			m.agentID, preScanAgentID)
 	}
 	// Behind the first-boot gate the warm-up waits for it: there may be no
 	// model to load yet (releaseAfterSetupGate starts it then).
@@ -739,96 +732,14 @@ func (m ChatModel) Init() tea.Cmd {
 	return tea.Batch(cmds...)
 }
 
-// preScanGateMismatch reports whether m.client could serve the pre-scan
-// view even though m.agentID didn't earn the fetch.
-func (m ChatModel) preScanGateMismatch() bool {
-	if m.agentID == preScanAgentID {
-		return false
-	}
-	_, hasFetcher := m.client.(client.PreScanFetcher)
-	return hasFetcher
-}
-
-// fetchPreScan builds the Cmd that fetches the email agent's inbox pre-scan
-// (#2743). A transport that doesn't implement client.PreScanFetcher
-// (subprocess mode has no HTTP relay to ask) is skipped silently — this is
-// a best-effort side-channel read, never a requirement for the chat
-// surface to function. A peer whose contract predates needs_you degrades
-// to an honest notice rather than the confident empty card an unguarded
-// decode would produce.
-func (m ChatModel) fetchPreScan() tea.Cmd {
-	fetcher, ok := m.client.(client.PreScanFetcher)
-	if !ok {
-		return nil
-	}
-	return func() tea.Msg {
-		ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
-		defer cancel()
-		data, err := fetcher.FetchPreScan(ctx)
-		if err != nil {
-			var tooOld *client.ErrPreScanContractTooOld
-			if errors.As(err, &tooOld) {
-				return preScanDegradedMsg{notice: tooOld.Error()}
-			}
-			return preScanFetchFailedMsg{err: err}
-		}
-		return preScanFetchedMsg{data: data}
-	}
-}
-
-// upsertCard appends a RoleCard message, or — when identity is non-empty and
-// a message already carries it — replaces that message's payload in place
-// (#2743). Looked up by identity across the CURRENT m.messages slice on
-// every call, never a tracked index: `/clear` sets m.messages to nil
-// (see the "/clear" case below), so a stale index would panic or silently
-// overwrite an unrelated message. The render cache is cleared so an
-// in-place update is never served the stale layout (Message.cardCache is
-// otherwise keyed on width alone).
-func (m *ChatModel) upsertCard(identity, toolName, render string, data json.RawMessage) {
-	if identity != "" {
-		for i := range m.messages {
-			if m.messages[i].Role == RoleCard && m.messages[i].Identity == identity {
-				m.messages[i].ToolName = toolName
-				m.messages[i].Render = render
-				m.messages[i].Data = data
-				m.messages[i].cardCache = ""
-				m.messages[i].cardCacheWidth = 0
-				return
-			}
-		}
-	}
+// appendCard appends a RoleCard message.
+func (m *ChatModel) appendCard(toolName, render string, data json.RawMessage) {
 	m.messages = append(m.messages, Message{
 		Role:     RoleCard,
-		Identity: identity,
 		ToolName: toolName,
 		Render:   render,
 		Data:     data,
 	})
-}
-
-// upsertPreScanCard draws or updates-in-place the one pre-scan card for
-// this session (#2743). Cross-card duplicate items against OTHER card
-// types are resolved at render time (see Message.renderCardDeduped), not
-// here.
-func (m *ChatModel) upsertPreScanCard(data json.RawMessage) {
-	m.upsertCard(preScanCardIdentity, "pre_scan_inbox", "email_pre_scan", data)
-}
-
-// drainPendingPreScan appends the buffered on-open pre-scan card now that
-// its turn has ended, whichever way it ended — UNLESS the turn's own typed
-// tool_result already drew a fresher card this same turn (#2743 checkpoint
-// review): draining the buffered snapshot over it would clobber the
-// fresher data with a shallower one.
-func (m *ChatModel) drainPendingPreScan() {
-	if m.pendingPreScan == nil {
-		return
-	}
-	data := m.pendingPreScan
-	m.pendingPreScan = nil
-	if m.preScanRenderedThisTurn {
-		return
-	}
-	m.upsertPreScanCard(data)
 }
 
 // Update dispatches the message, then releases a queued follow-up if that
@@ -849,7 +760,7 @@ func (m ChatModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	}
 
 	// Once per Update, so every path that opens or closes a prompt is timed.
-	next.trackUserWait(time.Now())
+	next.trackUserWait(next.now())
 
 	// Reconciled once per Update, here rather than at every call site that
 	// can open or close an overlay (a keystroke, a canonical needs_input
@@ -1053,11 +964,23 @@ func (m ChatModel) updateChat(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case discordDeclinedMsg:
 		return m.handleDiscordDeclined(msg)
 
+	case automationsListMsg:
+		return m.handleAutomationsList(msg)
+
 	case connectorsListMsg:
 		return m.handleConnectorsList(msg)
 
 	case connectorsActivatedMsg:
 		return m.handleConnectorsActivated(msg)
+
+	case connectorsRevokedMsg:
+		return m.handleConnectorsRevoked(msg)
+
+	case connectorsSignInMsg:
+		return m.handleConnectorsSignIn(msg)
+
+	case connectorsReportMsg:
+		return m.handleConnectorsReport(msg)
 
 	case updateCheckedMsg:
 		return m.handleUpdateChecked(msg)
@@ -1067,6 +990,9 @@ func (m ChatModel) updateChat(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case updateSavedMsg:
 		return m.handleUpdateSaved(msg)
+
+	case imageResultMsg:
+		return m.handleImageResult(msg)
 
 	case slackDeclinedMsg:
 		return m.handleSlackDeclined(msg)
@@ -1094,39 +1020,6 @@ func (m ChatModel) updateChat(msg tea.Msg) (tea.Model, tea.Cmd) {
 			Role: RoleStatus,
 			Content: fmt.Sprintf("[!] could not deliver the cancel request: %v. "+
 				"Waiting for the run to finish on its own.", msg.err),
-		})
-		m.updateViewport()
-		return m, nil
-
-	case preScanFetchedMsg:
-		if m.streaming {
-			// Buffer -- appending now would land the card between this turn's question and its reply.
-			m.pendingPreScan = msg.data
-			return m, nil
-		}
-		m.upsertPreScanCard(msg.data)
-		m.updateViewport()
-		return m, nil
-
-	case preScanFetchFailedMsg:
-		// Best-effort side-channel read (#2743) — a failure (no mailbox
-		// connected, daemon unreachable, a transient connector error) is
-		// worth telling the user about, but it must never block or clutter
-		// the surface like a turn-ending error would.
-		m.messages = append(m.messages, Message{
-			Role:    RoleStatus,
-			Content: fmt.Sprintf("[!] inbox pre-scan unavailable: %v", msg.err),
-		})
-		m.updateViewport()
-		return m, nil
-
-	case preScanDegradedMsg:
-		// The peer's contract predates needs_you — an honest notice, never
-		// the confident (and wrong) empty card an unguarded decode would
-		// have produced (#2743).
-		m.messages = append(m.messages, Message{
-			Role:    RoleStatus,
-			Content: "[!] " + msg.notice,
 		})
 		m.updateViewport()
 		return m, nil
@@ -1200,7 +1093,6 @@ func (m ChatModel) updateChat(msg tea.Msg) (tea.Model, tea.Cmd) {
 				Content: "Nothing was switched — this session is still on " + m.currentModelName() + ".",
 			})
 		}
-		m.drainPendingPreScan()
 		m.updateViewport()
 		return m, nil
 
@@ -1255,14 +1147,26 @@ func (m ChatModel) updateChat(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case components.ConfirmationTimeoutMsg:
 		if m.confirmation == nil {
-			// Already resolved (the run's own final/error got there first, the
-			// overwhelmingly common case against the current stateless email
-			// sidecar) or the turn moved on. Dropping is correct — nothing to warn.
+			// Already resolved (the run's own final/error got there first) or
+			// the turn moved on. Dropping is correct — nothing to warn.
 			return m, nil
 		}
 		c, cmd := m.confirmation.ResolveTimeout(msg)
 		m.confirmation = &c
+		// No longer pending, so the status rows come back: resync the height.
+		m.updateViewport()
 		return m, cmd
+
+	case confirmHoldMsg:
+		return m.resolveConfirmHold(msg)
+
+	case control.InputBatchEndMsg:
+		// A driver's keys ["y"] is a whole answer; it does not wait out the hold.
+		if m.confirmation != nil && m.confirmation.Pending() && m.answer.held != "" &&
+			m.answer.seq == m.confirmation.Seq() {
+			return m.releaseHeldAnswer()
+		}
+		return m, nil
 
 	case components.ConfirmationDecidedMsg:
 		if m.confirmation == nil || m.confirmation.RunID() != msg.RunID || m.confirmation.Seq() != msg.Seq {
@@ -1356,9 +1260,31 @@ func (m ChatModel) updateChat(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.updateViewport()
 		return m, nil
 
+	case skillsListedMsg:
+		if msg.err != nil {
+			control.Logf("chat: could not list the agent's skills (%v); the first screen suggests only skills found in the skills folder", msg.err)
+			return m, nil
+		}
+		m.setReportedSkills(msg.skills)
+		m.updateViewport()
+		return m, nil
+
+	case skillsCommandListedMsg:
+		return m.showListedSkills(msg)
+
 	case capabilitiesProbedMsg:
-		if msg.err != nil && m.dev {
-			control.DevLogf("capability probe failed (%v) — gated commands stay in their 'unknown' (shown) state", msg.err)
+		if msg.err != nil {
+			control.Logf("chat: capability probe failed (%v); gated commands stay in their 'unknown' (shown) state", msg.err)
+		}
+		return m, nil
+
+	case fileOpenResultMsg:
+		if msg.err != nil {
+			m.messages = append(m.messages, Message{
+				Role:    RoleStatus,
+				Content: fmt.Sprintf("could not open %s: %v — it is at %s", clean(filepath.Base(msg.path)), msg.err, clean(msg.path)),
+			})
+			m.updateViewport()
 		}
 		return m, nil
 
@@ -1397,12 +1323,27 @@ func (m ChatModel) updateChat(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.handleTranscriptMouse(msg)
 
 	case spinner.TickMsg:
-		if m.streaming || m.memoryLoading {
+		now := m.now()
+		sweeping := m.motion.sweeping(now) || m.motion.sweepUnpainted
+		if !m.motion.sweeping(now) {
+			// One more frame after the sweep, to leave the recap still.
+			m.motion.sweepUnpainted = false
+		}
+		if m.streaming || m.memoryLoading || sweeping {
 			var cmd tea.Cmd
 			m.spinner, cmd = m.spinner.Update(msg)
 			cmds = append(cmds, cmd)
-			// Re-render viewport to update elapsed time display
-			m.updateViewport()
+			// The status line, the prompt's pulse and the clock are drawn by
+			// View() outside the viewport, so a tick redraws only those rows.
+			// The transcript is rebuilt only when something in it moves: text
+			// that streamed since the last frame, a spinner drawn inside it
+			// (memory loading, the warm-up stage), or the recap's one sweep.
+			// A path that changed the chrome (the status rows, a prompt) without
+			// a redraw is healed here rather than drawn a row too tall.
+			if m.viewDirty || m.memoryLoading || (m.warming && !m.warmHidden) || sweeping ||
+				m.chatChromeRows() != m.syncedChrome {
+				m.updateViewport()
+			}
 		}
 		return m, tea.Batch(cmds...)
 	}
@@ -1449,10 +1390,7 @@ func (m ChatModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	// belongs to it: the issue's contract is "Esc denies", not "Esc cancels the
 	// turn". Ctrl+C is still the universal way out.
 	if m.confirmation != nil && msg.Type != tea.KeyCtrlC {
-		c, cmd := m.confirmation.Update(msg)
-		m.confirmation = &c
-		m.updateViewport()
-		return m, cmd
+		return m.handleConfirmationKey(msg)
 	}
 
 	// A pending question owns the keyboard: the run is blocked on it, so a
@@ -1518,6 +1456,10 @@ func (m ChatModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	if msg.Type == tea.KeyEsc && m.warming && !m.warmHidden {
 		return m.hideWarmUpStage()
+	}
+
+	if next, cmd, ok := m.pickSuggestion(msg); ok {
+		return next, cmd
 	}
 
 	switch msg.Type {
@@ -1650,6 +1592,10 @@ func (m ChatModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case tea.KeyCtrlF:
+		// The newest thing a turn made: a created document, or generated media.
+		if d, ok := m.newerDeliverable(); ok {
+			return m, openFile(d.Path)
+		}
 		return m, m.mediaActionCmd("open")
 
 	case tea.KeyCtrlG:
@@ -1715,8 +1661,7 @@ func (m ChatModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 // read of the SSE stream, and that local abort is what closed the channel —
 // well before the daemon's session run_lock was actually released by the
 // sidecar's worker thread, which notices a cancel only cooperatively, at the
-// next agent-loop step boundary (see
-// hub/agents/email/python/gaia_agent_email/query_routes.py). Calling
+// next agent-loop step boundary. Calling
 // cancelFn() here reproduced the exact race it was meant to close: 5/5
 // cancel-then-resend attempts still hit a bare-lock 409 downstream.
 //
@@ -1757,7 +1702,6 @@ func (m ChatModel) requestCancel() (tea.Model, tea.Cmd) {
 		Role:    RoleStatus,
 		Content: cancellingNotice + m.cancelHint(),
 	})
-	m.drainPendingPreScan()
 	m.updateViewport()
 
 	if canceler, ok := m.client.(client.AgentCanceler); ok {
@@ -1874,6 +1818,10 @@ func (m ChatModel) submit(query string) (tea.Model, tea.Cmd) {
 	if isUpdateCommand(query) {
 		return m.runUpdateCommand(updateCommandArg(query))
 	}
+	// `/image` takes free-form arguments too: a model id, a size.
+	if isImageCommand(query) {
+		return m.runImageCommand(query)
+	}
 	// Free-form arguments too (a voice id, a speed), so also before the switch.
 	if isReadAloudCommand(query) {
 		return m.runReadAloudCommand(commandArg(query, readAloudCommand))
@@ -1881,14 +1829,20 @@ func (m ChatModel) submit(query string) (tea.Model, tea.Cmd) {
 	if isVoiceCommand(query) {
 		return m.runVoiceCommand(commandArg(query, voiceCommand))
 	}
+	if isAgentCommand(query) {
+		return m.runAgentCommand(commandArg(query, agentCommand))
+	}
 	// `/model` takes a free-form argument (a model id), so it can't join the
 	// exact-match switch below like /full-access's fixed variants — it's dispatched
 	// here instead, still before anything falls through to sendQuery.
 	if isSkillsCommand(query) {
 		return m.submitSkillsCommand(query)
 	}
-	if isConnectorsPersonalize(query) {
-		return m.startConnectorsPersonalize(query)
+	if isResearchCommand(query) {
+		return m.runResearchCommand(query)
+	}
+	if req, ok := parseConnectorsCommand(query); ok {
+		return m.startConnectorsCommand(req)
 	}
 	if isModelCommand(query) {
 		if !m.supportsModelCommand() {
@@ -1927,7 +1881,7 @@ func (m ChatModel) submit(query string) (tea.Model, tea.Cmd) {
 		// refusal) is the only line that belongs in the transcript. Still
 		// rides the real query channel (startTurn/Send), not the
 		// fire-and-forget control one /full-access uses — see
-		// gaia_agent.stdio.run_model_command for why.
+		// gaiapy.stdio.run_model_command for why.
 		m.awaitingModelSwitch = true
 		m.switchTarget = modelCommandArg(query)
 		m.switchedTo = savedChoice{}
@@ -1990,6 +1944,11 @@ func (m ChatModel) submit(query string) (tea.Model, tea.Cmd) {
 			Role:    RoleStatus,
 			Content: m.cost.render(m.costModelName(), lookupPrice(m.modelID)),
 		})
+		m.updateViewport()
+		return m, nil
+
+	case "/context":
+		m.messages = append(m.messages, Message{Role: RoleStatus, Content: m.contextBreakdown()})
 		m.updateViewport()
 		return m, nil
 
@@ -2090,8 +2049,11 @@ func (m ChatModel) submit(query string) (tea.Model, tea.Cmd) {
 	if query == "/discord" || strings.HasPrefix(query, "/discord ") {
 		return m.handleDiscordCommand(query)
 	}
+	if isAutomationsCommand(query) {
+		return m.handleAutomationsCommand(query)
+	}
 
-	return m.sendQuery(query)
+	return m.sendQuery(m.withResearch(query))
 }
 
 func (m ChatModel) sendQuery(query string) (tea.Model, tea.Cmd) {
@@ -2122,11 +2084,8 @@ func (m ChatModel) startTurn(query string) (tea.Model, tea.Cmd) {
 	m.queryStart = time.Now()
 	m.lastEventAt = m.queryStart
 	m.userWait, m.userWaitStart = 0, time.Time{}
-	// Per-turn, like ttft above it. Left standing, a turn whose `final` carries
-	// no usage.steps reported the PREVIOUS turn's count as its own.
-	m.totalSteps = 0
-	// A new turn starts having drawn no card yet -- see drainPendingPreScan.
-	m.preScanRenderedThisTurn = false
+	m.goalFresh = false
+	m.plan = livePlan{}
 	m.updateViewport()
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -2205,6 +2164,7 @@ func (m *ChatModel) settleTurn() {
 	// and when the cancel lost the race it sat directly above the answer that
 	// did arrive, contradicting it.
 	m.dropCancellingNotice()
+	m.flushContextWarning()
 	if m.cancelPending {
 		m.cancelPending = false
 		m.messages = append(m.messages, Message{
@@ -2239,6 +2199,10 @@ func (m *ChatModel) dropCancellingNotice() {
 func (m *ChatModel) Retire() {
 	m.CancelActiveTurn()
 	m.StopReadAloud()
+	if m.stopSignIns != nil {
+		m.stopSignIns()
+		m.signIns, m.stopSignIns = nil, nil
+	}
 }
 
 // CancelActiveTurn stops any in-flight turn. The UI owns the per-turn context, so
@@ -2273,7 +2237,11 @@ func (m ChatModel) handleEvent(evt interface{}) (tea.Model, tea.Cmd) {
 		m.stashNarration()
 		m.activity = append(m.activity, ActivityItem{
 			Kind:    "tool",
+			Tool:    e.Tool,
 			Content: e.Tool,
+			Call:    describeCall(e.Tool, nil, ""),
+			Goal:    m.takeGoal(),
+			At:      m.now(),
 		})
 
 	case event.ToolArgsEvent:
@@ -2285,6 +2253,11 @@ func (m ChatModel) handleEvent(evt interface{}) (tea.Model, tea.Cmd) {
 				if argStr != "" {
 					last.Content = e.Tool + ": " + argStr
 				}
+				tool := e.Tool
+				if tool == "" {
+					tool = last.Tool
+				}
+				last.Call = describeCall(tool, e.Args, "")
 			}
 		}
 
@@ -2307,6 +2280,8 @@ func (m ChatModel) handleEvent(evt interface{}) (tea.Model, tea.Cmd) {
 			if last.Kind == "tool" {
 				last.Done = true
 				last.Success = &e.Success
+				last.End = m.now()
+				m.planToolFinished(last.Tool, e.Success)
 				if summary != "" {
 					last.Content += " → " + summary
 				}
@@ -2319,14 +2294,17 @@ func (m ChatModel) handleEvent(evt interface{}) (tea.Model, tea.Cmd) {
 			if last.Kind == "tool" && !last.Done {
 				last.Done = true
 				last.Success = &e.Success
+				last.End = m.now()
 			}
 		}
 
+	case event.PlanEvent:
+		m.updatePlan(planFromWire(legacyPlanSteps(e), e.CurrentStep))
+
 	case event.StepEvent:
-		// Tracked, not shown. "Step 2/50" is the agent loop's bound, not the
-		// user's progress — it says neither what is happening nor how far along
-		// the work is, and it pushed the informative tool line off the screen.
-		m.totalSteps = e.Step
+		// Not shown. "Step 2/50" is the agent loop's bound, not the user's
+		// progress — it says neither what is happening nor how far along the
+		// work is. With no limit set there is no denominator to show either.
 
 	case event.StatusEvent:
 		if e.Status == "complete" {
@@ -2351,7 +2329,7 @@ func (m ChatModel) handleEvent(evt interface{}) (tea.Model, tea.Cmd) {
 	case event.AnswerEvent:
 		m.commitAnsweredWork()
 		m.flushBuffer()
-		duration := m.turnElapsed(time.Now())
+		duration := m.turnElapsed(m.now())
 		content := StripVerificationScope(e.Content)
 		rendered := components.RenderMarkdown(content)
 		// Off the event, not off m.ttft: nothing on this side measures these
@@ -2368,7 +2346,6 @@ func (m ChatModel) handleEvent(evt interface{}) (tea.Model, tea.Cmd) {
 			ToolsUsed: e.ToolsUsed,
 		})
 		m.streaming = false
-		m.totalSteps = e.Steps
 		readable := !m.cancelPending && !m.awaitingModelSwitch && !m.warming
 		m.settleTurn()
 		m.updateViewport()
@@ -2561,6 +2538,9 @@ func (m ChatModel) chatChromeRows() int {
 	// copy of the old status bar survived.
 	const headerH, dividersH, statusH = 1, 2, 1
 	rows := headerH + dividersH + statusH + m.composerRows()
+	if m.showStatusLine() {
+		rows += statusRows
+	}
 	if banner := m.renderFullAccessBanner(); banner != "" {
 		rows += lipgloss.Height(banner)
 	}
@@ -2576,6 +2556,7 @@ func (m ChatModel) chatChromeRows() int {
 // version that only ran in resize() left the transcript permanently short
 // after the user answered a prompt.
 func (m *ChatModel) syncViewportHeight(chrome int) {
+	m.syncedChrome = chrome
 	budget := m.height - chrome
 	if budget < 1 {
 		budget = 1
@@ -2627,11 +2608,8 @@ func (m ChatModel) copyRegion(msg *Message, span msgSpan) msgSpan {
 		span.gutter = displayWidth(userPrefix)
 	case RoleAssistant:
 		span.gutter = answerGutter
-		if m.answerStats(msg) != "" {
-			span.bodyEnd--
-		}
-		if block := m.turnMetricsBlock(msg); block != "" {
-			span.bodyEnd -= strings.Count(block, "\n") + 1
+		if trailer := m.answerTrailer(msg); trailer != "" {
+			span.bodyEnd -= strings.Count(trailer, "\n") + 1
 		}
 	case RoleStatus:
 		span.gutter = 2
@@ -2663,12 +2641,6 @@ func (m *ChatModel) updateViewport() {
 		sb.WriteString("\n")
 	}
 
-	// seen accumulates message_ids across cards within one turn so a second
-	// card doesn't redraw an item its turn's first card already showed. It
-	// resets at each RoleUser message: a new turn's mail can legitimately
-	// repeat an id an earlier turn's card already rendered (still urgent on
-	// the next scan is not a duplicate), so dedup must not span turns.
-	seen := make(map[string]bool)
 	// Counted as the transcript is written rather than measured afterwards:
 	// re-scanning the buffer per message is quadratic in a long session, and
 	// this runs on every spinner tick of a streaming turn.
@@ -2679,7 +2651,6 @@ func (m *ChatModel) updateViewport() {
 	}
 	for i := range m.messages {
 		if m.messages[i].Role == RoleUser {
-			seen = make(map[string]bool)
 			// A blank line ahead of every turn but the first. Without it the
 			// transcript is one unbroken block and the eye has nothing to
 			// anchor on when scrolling back for "where did I ask that?".
@@ -2689,7 +2660,7 @@ func (m *ChatModel) updateViewport() {
 		}
 		start := line
 		// By index, not by value: rendering a card memoizes onto the message.
-		write(m.renderMessage(&m.messages[i], seen))
+		write(m.renderMessage(&m.messages[i]))
 		write("\n")
 		m.msgSpans = append(m.msgSpans, m.copyRegion(&m.messages[i], msgSpan{start: start, end: line, index: i}))
 		if spacedAfter(m.messages[i].Role) {
@@ -2747,7 +2718,7 @@ func (m *ChatModel) updateViewport() {
 	// The answer as it arrives, laid out exactly where the finished one will be
 	// — same indent, same wrap — so the text does not jump when `final` replaces
 	// the streamed tokens with the authoritative copy.
-	if buf := m.buffer; m.streaming && buf != "" {
+	if buf := withoutThinking(m.buffer); m.streaming && buf != "" {
 		sb.WriteString(answerPanelStyle.Width(m.answerWidth()).Render(buf))
 		sb.WriteString("\n")
 	}
@@ -2773,6 +2744,9 @@ func (m ChatModel) renderWelcome() string {
 	agent := lipgloss.NewStyle().
 		Foreground(theme.Text).
 		Render("Connected to: " + m.agentIdentity() + m.coreVersionSuffix())
+	if list := m.renderSuggestions(); list != "" {
+		return title + "\n" + agent + "\n\n" + list + "\n\n" + hint
+	}
 	return title + "\n" + agent + "\n\n" + hint
 }
 
@@ -2898,22 +2872,17 @@ func (m ChatModel) turnElapsed(now time.Time) time.Duration {
 	return d
 }
 
-// answerStats is the footnote under a finished answer.
-//
-// By default it is one number: how long that took. Everything else —
-// time-to-first-token, token count, tokens/sec, agent-loop step count, tool
-// count — is harness telemetry. It measures the machinery, not the answer, and
-// printing six metrics under every reply trains the eye to skip the whole line,
-// including the one figure a person actually reads. --dev turns the full
-// breakdown back on for the people tuning the machinery.
+// answerStats is the full breakdown under a finished answer, shown with Ctrl+O
+// only. Time-to-first-token, tokens/sec, the step and tool counts and the
+// fixed prefill measure the machinery, not the answer: printed under every
+// reply they train the eye to skip the line, so the default footnote is the
+// recap (recapLine) and this waits until someone asks. The turn's time and
+// token count are left to the recap drawn directly above.
 func (m ChatModel) answerStats(msg *Message) string {
-	if msg.Duration <= 0 {
+	if msg.Duration <= 0 || !m.expandWork {
 		return ""
 	}
-	stats := []string{msg.DurationLabel + fmt.Sprintf("%.1fs", msg.Duration.Seconds())}
-	if !m.dev {
-		return stats[0]
-	}
+	var stats []string
 
 	// Every figure below is the inference backend's own measurement, passed
 	// through untouched. Zero means it reported none — a remote
@@ -2922,9 +2891,6 @@ func (m ChatModel) answerStats(msg *Message) string {
 	// includes tool time and agent overhead.
 	if msg.TTFT > 0 {
 		stats = append(stats, fmt.Sprintf("ttft %.1fs", msg.TTFT.Seconds()))
-	}
-	if msg.Tokens > 0 {
-		stats = append(stats, fmt.Sprintf("%d tokens", msg.Tokens))
 	}
 	if msg.TokPerS > 0 {
 		stats = append(stats, fmt.Sprintf("%.1f tok/s", msg.TokPerS))
@@ -2943,10 +2909,8 @@ func (m ChatModel) answerStats(msg *Message) string {
 	return strings.Join(stats, " · ")
 }
 
-// renderMessage draws one message. seen threads cross-card dedup for the
-// RoleCard case (see Message.renderCardDeduped); pass nil for a standalone
-// render with no dedup.
-func (m ChatModel) renderMessage(msg *Message, seen map[string]bool) string {
+// renderMessage draws one message.
+func (m ChatModel) renderMessage(msg *Message) string {
 	switch msg.Role {
 	case RoleUser:
 		// The WHOLE line is dimmed, prefix and text alike. Styling only the
@@ -2981,17 +2945,13 @@ func (m ChatModel) renderMessage(msg *Message, seen map[string]bool) string {
 			content = trimBlankLines(msg.Rendered)
 		}
 		panel := answerPanelStyle.Width(m.answerWidth()).Render(content)
-
-		if stats := m.answerStats(msg); stats != "" {
-			panel += "\n" + activityStyle.Render("  "+stats)
-		}
-		if block := m.turnMetricsBlock(msg); block != "" {
-			panel += "\n" + block
+		if trailer := m.answerTrailer(msg); trailer != "" {
+			panel += "\n" + trailer
 		}
 		return panel
 
 	case RoleCard:
-		return msg.renderCardDeduped(m.cardWidth(), seen)
+		return msg.renderCard(m.cardWidth())
 
 	case RoleError:
 		panelWidth := m.width - 4
@@ -3011,7 +2971,11 @@ func (m ChatModel) renderMessage(msg *Message, seen map[string]bool) string {
 		if m.width > 0 {
 			body = components.WrapText(body, max(m.cardWidth()-2, 1))
 		}
-		return statusMsgStyle.Render("  " + strings.ReplaceAll(body, "\n", "\n  "))
+		out := statusMsgStyle.Render("  " + strings.ReplaceAll(body, "\n", "\n  "))
+		if msg.ImagePath != "" {
+			out = linkImagePath(out, msg.ImagePath, m.width)
+		}
+		return out
 
 	default:
 		return msg.Content
@@ -3033,11 +2997,6 @@ func trimBlankLines(s string) string {
 	}
 	return strings.Join(lines, "\n")
 }
-
-// workLogLines caps how many ACTIONS the live work log keeps. Bounded so a long
-// turn cannot push the transcript off screen, deep enough that repeated tool
-// calls read as progress.
-const workLogLines = 6
 
 // workLogMaxRows caps the log's rendered HEIGHT. An action can occupy two rows
 // once its outcome lands, so the action cap alone would let the region grow to
@@ -3111,20 +3070,6 @@ func (m ChatModel) logWidth() int {
 // the user's next move is ctrl+c.
 const stillWorkingAfter = 20 * time.Second
 
-// Work-log glyphs, all width-1 and none of them emoji.
-//
-// The first cut used ⚒ (U+2692), which carries Emoji=Yes: a terminal with an
-// emoji font renders it DOUBLE width while ansi.StringWidth still reports 1, so
-// every tool line overruns its budget by a column. ▪ (U+25AA), ✻ (U+273B) and
-// └ carry no emoji presentation and measure 1 everywhere. State is never carried
-// by a glyph or a colour anyway — a failed call says "failed" in words on its
-// own outcome line.
-const (
-	glyphTool   = "▪"
-	glyphStatus = "✻"
-	glyphDetail = "└"
-)
-
 // liveRegionView is the work log at a height that does not go backwards.
 //
 // The region's height moves with what the agent is doing: an outcome lands and
@@ -3166,103 +3111,6 @@ func (m ChatModel) awaitingUser() bool {
 	return (m.confirmation != nil && m.confirmation.Pending()) || m.question != nil
 }
 
-// renderLiveRegion draws the rolling activity log for the running turn: one line
-// per meaningful action, newest last, each closed action followed by a single
-// indented outcome line.
-//
-// The spinner and the elapsed clock ride on the LAST line — the thing happening
-// right now — rather than sitting in a header of their own. A timer with no
-// description next to it is the "Working 0:29 / connecting..." screen this
-// replaced: it proves the process is alive and says nothing about what it is
-// doing (#2804).
-func (m ChatModel) renderLiveRegion() string {
-	// Paused while a prompt waits on the user, so it never jumps back on answering.
-	elapsed := m.turnElapsed(time.Now())
-
-	log := collapseActivity(m.visibleWork(settleFailures(m.activity, false)))
-	if len(log) > workLogLines {
-		log = log[len(log)-workLogLines:]
-	}
-
-	// The live slot is the last still-open action. A finished one cannot be it:
-	// the agent has moved on to something this client has no event for yet.
-	live := -1
-	// A denied step never runs, whether or not its sidecar says so.
-	if n := len(log); n > 0 && !log[n-1].Done && !strings.HasPrefix(log[n-1].Approval, "denied") {
-		live = n - 1
-	}
-
-	// Rendered per action, so the height cap can drop whole actions. Trimming
-	// raw lines instead would leave a `└` outcome line orphaned at the top,
-	// hanging under nothing.
-	groups := make([][]string, 0, len(log)+1)
-	for i, item := range log {
-		groups = append(groups, m.renderActivityItem(item, i == live, elapsed, 0))
-	}
-	if live < 0 {
-		// Measured like every other row. This is the OPENING frame of every
-		// turn — before any tool event exists — so an unmeasured phrase here
-		// shears the frame on the very first thing a narrow window draws.
-		phrase := wrapLog(m.idlePhrase(len(log)), "", m.logWidth()-elapsedReserve, 1)[0]
-		groups = append(groups, []string{m.renderLiveLine(phrase, elapsed)})
-	}
-	// Shown until something has actually COMPLETED. A stage line alone does not
-	// count: a turn that sits on "Working out how to answer" for 1:47 with no
-	// tool result under it is precisely the wait that needs saying is normal.
-	// Measured against the WHOLE turn, not the trimmed window, or the hint
-	// reappears the moment the last finished action scrolls out of view.
-	// Never while the turn is parked on the user: the wait is theirs, and
-	// "still working" would tell them the opposite.
-	hint := ""
-	if !m.awaitingUser() && !anyCompleted(m.activity) && elapsed >= stillWorkingAfter {
-		// Measured like every other row in this region. Its 50 columns fit an
-		// 80-column terminal, but on a narrower one it wrapped to two rows and
-		// broke the single-row assumption the budget below is making.
-		hint = "     " + activityStyle.Render(truncateRunes(
-			glyphDetail+" still working — usually 60-90s", m.logWidth()-1))
-	}
-
-	// The hint is part of the height budget, not an extra row bolted on after
-	// it — counted here so the region can never exceed logRows().
-	budget := m.logRows()
-	if hint != "" {
-		budget--
-	}
-	// Oldest first: the newest action is the one being watched, and the live
-	// line is always last. Trimming from the top is what pays for wrapping —
-	// a wrapped action costs older HISTORY, not extra height.
-	kept, rows := 0, 0
-	for i := len(groups) - 1; i >= 0; i-- {
-		if rows+len(groups[i]) > budget {
-			break
-		}
-		rows += len(groups[i])
-		kept++
-	}
-	if kept > 0 {
-		groups = groups[len(groups)-kept:]
-	} else if n := len(log) - 1; n >= 0 {
-		// One action taller than the entire budget — a wrapped shell command on
-		// a 12-row terminal, where the budget is two rows. Re-render it to fit
-		// rather than drop it: an empty live region is a blank screen, which is
-		// the one thing this whole region exists to prevent. Re-rendered, not
-		// row-sliced, so the ellipsis lands inside the text rather than after
-		// the clock. (The synthetic idle line is one row and always fits, so the
-		// group that overflowed is always the last log entry.)
-		groups = [][]string{m.renderActivityItem(log[n], n == live, elapsed, budget)}
-	}
-
-	var lines []string
-	for _, g := range groups {
-		lines = append(lines, g...)
-	}
-	if hint != "" {
-		lines = append(lines, hint)
-	}
-
-	return strings.Join(lines, "\n")
-}
-
 // anyCompleted reports whether anything in the log has actually finished — the
 // difference between "the agent says it is thinking" and "the agent has done
 // something".
@@ -3273,29 +3121,6 @@ func anyCompleted(log []ActivityItem) bool {
 		}
 	}
 	return false
-}
-
-// idlePhrase describes the turn when no tool call is open. It names only a
-// state something on the wire proved: the agent's phase report, or answer text
-// arriving. Without either (an agent that predates phases) it says no more
-// than that the request is with the model.
-func (m ChatModel) idlePhrase(logLen int) string {
-	switch {
-	case m.cancelPending:
-		// requestCancel clears the activity log but leaves the turn streaming,
-		// so without this the spinner sat under "cancelling…" cheerfully
-		// announcing the turn's opening state.
-		return "Stopping at the next step"
-	case m.buffer != "":
-		return "Writing your answer"
-	}
-	if phrase := m.phasePhrase(); phrase != "" {
-		return phrase
-	}
-	if logLen == 0 {
-		return "Waiting for the model"
-	}
-	return "Thinking about the next step"
 }
 
 // modelPhase is the agent's latest report of what the model is doing.
@@ -3336,10 +3161,15 @@ func (m ChatModel) phasePhrase() string {
 	return m.phase.label
 }
 
-// renderLiveLine draws the one line that owns the spinner and the clock.
-func (m ChatModel) renderLiveLine(content string, elapsed time.Duration) string {
-	return "  " + m.spinner.View() + " " + thinkingStyle.Render(content) + "  " +
-		activityStyle.Render(formatElapsed(elapsed))
+// toolProgress is what the running tool last reported about itself: a phase
+// that is not one of the model's own, in the agent's words. "" when the tool
+// has said nothing.
+func (m ChatModel) toolProgress() string {
+	switch m.phase.name {
+	case "", "loading_model", "downloading_model", "reading", "loading_tools", "reasoning", "tool_call":
+		return ""
+	}
+	return m.phase.label
 }
 
 // collapseActivity drops step markers (the header carries the current one) and
@@ -3358,7 +3188,7 @@ func collapseActivity(items []ActivityItem) []ActivityItem {
 			// Nor does a failed row, retried or not: folded, the next call's
 			// outcome would replace its error line. A failure folds under an
 			// earlier row only when it is a retry of that same call.
-			keep := stepFailed(*last) ||
+			keep := stepFailed(*last) || len(last.Helpers) > 0 || len(item.Helpers) > 0 ||
 				(stepFailed(item) && (item.RetryKey == "" || item.RetryKey != last.RetryKey))
 			if last.Kind == item.Kind && activityKey(*last) == activityKey(item) &&
 				last.Approval == item.Approval && !keep {
@@ -3367,14 +3197,9 @@ func collapseActivity(items []ActivityItem) []ActivityItem {
 				last.Done = item.Done
 				last.Success = item.Success
 				// The newest call's outcome is the one worth showing; an older
-				// repeat's `└` line describes work already superseded. The dev
-				// payloads follow it for the same reason: showing call #1's
-				// arguments under a line reading "x14" would be a lie about
-				// which call they came from.
+				// repeat's `└` line describes work already superseded.
 				last.Detail = item.Detail
 				last.Recovery = item.Recovery
-				last.Args = item.Args
-				last.Output = item.Output
 				continue
 			}
 		}
@@ -3429,153 +3254,6 @@ func formatElapsed(d time.Duration) string {
 	return fmt.Sprintf("%d:%02d", total/60, total%60)
 }
 
-// renderActivityItem renders one work-log entry: the action, then at most one
-// indented outcome line under it. Returns the lines so a caller can budget the
-// live region's height.
-//
-// live marks the entry that is happening RIGHT NOW — it gets the spinner and
-// the elapsed clock instead of a static marker, so the timer is always attached
-// to a description of what it is timing.
-//
-// Failure is never signalled by colour or a glyph alone: a failed call's outcome
-// line begins with the word "failed" (see toolResultDetail / failureDetail) —
-// or "error" / "error, retried" while it is not a standing failure (see
-// settleFailures) — so the state survives a terminal with no colour.
-// maxRows is the height this ONE action may occupy, or 0 for the standard caps.
-// The live region passes a real number only when a single action is taller than
-// the whole region's budget: the cut has to be made HERE, inside the text, or
-// the marker ends up appended to a rendered row — after the elapsed clock on the
-// live line, where it reads as part of the timer rather than as a truncation.
-func (m ChatModel) renderActivityItem(item ActivityItem, live bool, elapsed time.Duration, maxRows int) []string {
-	width := m.logWidth()
-
-	// The counter rides along through the wrap rather than being appended after
-	// it. Appended after, any narration already at the measure — which shell
-	// commands and long paths routinely are, and which are exactly the calls
-	// that repeat — had its "x14" cut straight back off.
-	suffix := ""
-	if item.Repeat > 0 {
-		suffix = fmt.Sprintf(" x%d", item.Repeat+1)
-	}
-	if item.Approval != "" {
-		suffix += " · " + clean(item.Approval)
-	}
-
-	// Folded, a step is one row: what it did. Its wrapped tail is detail.
-	headRows := logHeadRows
-	if !m.expandWork {
-		headRows = 1
-	}
-	if maxRows > 0 && maxRows < headRows {
-		headRows = maxRows
-	}
-	// Only the FIRST row carries the clock, so only the first row pays for it.
-	// Charging every wrapped row 8 columns for a number none of them shows threw
-	// away two words per row of the longest lines in the log.
-	rows := wrapLog(clean(item.Content), suffix, width, headRows)
-	if live {
-		rows = wrapLogLead(clean(item.Content), suffix, width-elapsedReserve, width, headRows)
-	}
-
-	// Glyph and colour differ per kind; the wrap and the continuation indent do
-	// not. Continuations line up under the TEXT, not the glyph, so the marker
-	// column stays a gutter and the eye reads one action as one block.
-	glyph := ""
-	style := activityStyle
-	switch {
-	case live:
-		style = thinkingStyle
-	case item.Kind == "tool" || item.Kind == "confirm":
-		glyph, style = glyphTool, toolNameStyle
-		if item.Success != nil && !*item.Success && item.Recovery == "" {
-			style = failStyle
-		}
-	case item.Kind == "status" || item.Kind == "thinking":
-		glyph, style = glyphStatus, lipgloss.NewStyle().Foreground(theme.Warning)
-	}
-
-	var lines []string
-	switch {
-	case live:
-		lines = append(lines, m.renderLiveLine(rows[0], elapsed))
-	case glyph != "":
-		lines = append(lines, "  "+activityStyle.Render(glyph)+" "+style.Render(rows[0]))
-	default:
-		lines = append(lines, "    "+style.Render(rows[0]))
-	}
-	for _, row := range rows[1:] {
-		lines = append(lines, "    "+style.Render(row))
-	}
-
-	detail := clean(item.Detail)
-	// A sidecar's preview can report the failure its data did not flag; the
-	// word is the signal (markFailed puts it there for every failure we see).
-	failed := stepFailed(item)
-	// A failure the agent is working past, or already did, keeps its error
-	// in words but not in red: red is for what the turn ended on.
-	calm := failed && item.Recovery != ""
-	if calm {
-		detail, failed = calmDetail(detail, item.Recovery), false
-	}
-	detailRows := logDetailRows
-	if !m.expandWork {
-		switch {
-		case strings.HasPrefix(item.Approval, "denied"):
-			// The approval already says why it failed.
-			detail = ""
-		case item.Recovery == recoveryRetried:
-			// Settled: the one-line error is history. A pending one keeps its
-			// rows — if the turn ends on it, its tail is the remedy.
-			detailRows = 1
-		case calm:
-			// Still open: keeps its rows, like the failure it may become.
-		case !failed:
-			// A success earns one row, and only for what it found. A failure
-			// keeps its rows: its tail is the remedy.
-			detail, detailRows = conciseDetail(detail), 1
-		}
-	}
-	if maxRows > 0 {
-		detailRows = maxRows - len(lines) // the call outranks its outcome
-	}
-	if detail != "" && detailRows > 0 {
-		dstyle := activityStyle
-		switch {
-		case failed:
-			dstyle = failStyle
-		case calm:
-			dstyle = retryStyle
-		}
-		drows := wrapLog(detail, "", width-2, detailRows)
-		lines = append(lines, "    "+dstyle.Render(glyphDetail+" "+drows[0]))
-		for _, row := range drows[1:] {
-			lines = append(lines, "      "+dstyle.Render(row))
-		}
-	}
-	// Developer mode only. Args and Output are populated nowhere else, so the
-	// user-mode log is genuinely unchanged rather than merely filtered here.
-	// These stay ONE clipped row each: they are raw JSON, not prose, and the
-	// transcript's render card is where a full payload belongs.
-	for _, extra := range []struct{ label, text string }{
-		{"args", item.Args},
-		{"out", item.Output},
-	} {
-		if extra.text == "" {
-			continue
-		}
-		label := extra.label + " "
-		if body := truncateRunes(extra.text, width-6-len(label)); body != "" {
-			lines = append(lines, "      "+devPayloadStyle.Render(label+body))
-		}
-	}
-	return lines
-}
-
-// elapsedReserve is the room renderLiveLine's trailing clock needs: two spaces
-// and up to "10:05", plus the column the spinner takes beyond a static row's
-// marker — the live row's gutter is one deeper than every other row's.
-const elapsedReserve = 8
-
 // wrapLog lays one work-log string out over at most maxRows rows of width
 // columns, reusing the same wrap the transcript uses (components.WrapText) so
 // there is one wrapping path in this package, not three.
@@ -3605,27 +3283,6 @@ func wrapLog(s, suffix string, width, maxRows int) []string {
 	rows = rows[:maxRows]
 	rows[maxRows-1] = clipTail(strings.TrimRight(rows[maxRows-1], " "), width-displayWidth(suffix)) + suffix
 	return rows
-}
-
-// wrapLogLead wraps like wrapLog, except the FIRST row gets a narrower measure
-// than the rest. The live row's elapsed clock is appended after its text and
-// takes those columns from THAT row only — continuations carry no clock and
-// should not pay for one.
-func wrapLogLead(s, suffix string, lead, width, maxRows int) []string {
-	if lead < 8 {
-		lead = 8
-	}
-	if displayWidth(s+suffix) <= lead {
-		return []string{s + suffix}
-	}
-	first := hardBreak(strings.Split(components.WrapText(s, lead), "\n"), lead)[0]
-	// A prefix of s, not a re-rendering of it: clean() has already collapsed
-	// runs of spaces, so WrapText's rows rejoin to exactly what went in.
-	rest := strings.TrimSpace(strings.TrimPrefix(s, first))
-	if rest == "" || maxRows <= 1 {
-		return wrapLog(s, suffix, lead, maxRows)
-	}
-	return append([]string{first}, wrapLog(rest, suffix, width, maxRows-1)...)
 }
 
 // hardBreak splits any row still wider than the measure. WrapText breaks on
@@ -3751,6 +3408,10 @@ func (m ChatModel) echoRow(prefix, text, hint string) string {
 // genuinely different outcomes — one reaches the agent within a step, the
 // other waits out the whole turn — so the row must not name them alike.
 func (m ChatModel) midTurnEnterHint() string {
+	// Enter belongs to a pending prompt, so the message waits for the answer.
+	if m.confirmation != nil && m.confirmation.Pending() {
+		return "answer the prompt first"
+	}
 	if m.followUpSupported() && !isSlashCommand(m.input.Value()) {
 		return "⏎ sends to the running turn"
 	}
@@ -3826,10 +3487,8 @@ func (m ChatModel) View() string {
 	// Built as ranked items and thinned by dropping whole ones, so a narrow
 	// terminal loses the wheel hint and keeps the way out — see hints.go.
 	//
-	// Steps is deliberately not passed: the bar renders it only when the hint is
-	// empty, which it never is here, and the step count already rides the hint
-	// under --dev. Passing it kept a second renderer for one number alive, one
-	// that would print it in user mode the day the hint did come back empty.
+	// Steps is deliberately not passed: the agent loop's step count is not the
+	// user's progress, and it is never on screen.
 	statusBar := m.renderStatusBar()
 
 	// The full access banner sits OUTSIDE the viewport, directly under the header,
@@ -3840,12 +3499,22 @@ func (m ChatModel) View() string {
 		rows = append(rows, banner)
 	}
 	rows = append(rows, divider, vpView)
+	// The one live row, outside the transcript so its motion never rebuilds
+	// it, and in every frame whatever the transcript is scrolled to.
+	if m.showStatusLine() {
+		now := m.now()
+		rows = append(rows, m.statusLine(now), m.statusTip(now))
+	}
 	// Pinned between the transcript and the composer: the agent is parked on
 	// this question, so it belongs in every frame, above the input the user
 	// would otherwise be typing into. syncViewportHeight already took these
 	// rows out of the transcript's budget, so it displaces no chrome.
 	if m.confirmation != nil && m.confirmRows > 0 {
-		rows = append(rows, clipConfirmation(m.confirmation.View(), m.confirmRows))
+		cm := *m.confirmation
+		if p := m.motion.pulse(m.now().Sub(m.queryStart)); p > 0 && cm.Pending() {
+			cm = cm.WithTitleColour(theme.Blend(theme.Text, theme.Warning, p))
+		}
+		rows = append(rows, clipConfirmation(cm.View(), m.confirmRows))
 	}
 	rows = append(rows, divider, inputView, statusBar)
 	base := lipgloss.JoinVertical(lipgloss.Left, rows...)
@@ -3933,19 +3602,12 @@ func (m ChatModel) renderHeader() string {
 	prefix := headerStyle.Render("GAIA")
 	identity := m.renderIdentityChip()
 
-	// Developer mode is worth stating on every frame: it also redirects the
-	// agent's file logging to DEBUG, so someone reading a log full of detail —
-	// or an empty one — needs to be able to see which mode produced it.
-	//
 	// Names the specific model in use (never a bare "claude") and colors it
 	// when inference is remote — worth stating on every frame so the user can
 	// always tell where inference runs and which model answered.
-	var rest string
-	if m.dev {
-		rest += activityStyle.Render(" │ dev")
-	}
-	rest += m.renderModelChip()
+	rest := m.renderModelChip()
 	rest += m.renderLemonadeChip()
+	rest += m.renderResearchChip()
 
 	title := prefix + identity + rest
 	if m.width > 0 && ansi.StringWidth(title) > m.width {
@@ -3981,6 +3643,10 @@ func (m ChatModel) agentIdentity() string {
 	identity := "agent " + strings.ToLower(m.agentID)
 	if version != "" {
 		identity += " v" + version
+	}
+	if m.nativeAgent() {
+		// Two programs can answer as this agent; say which one is.
+		identity += " (" + catalog.NativeAgentBinary + " · Beta)"
 	}
 	return identity
 }

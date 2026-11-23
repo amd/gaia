@@ -46,6 +46,7 @@ beforeEach(() => {
     callbacks = null;
     mockedApi.getMessages.mockResolvedValue({ messages: [], total: 0 });
     mockedApi.getActiveRuns.mockResolvedValue({ session_ids: [], queued: [], awaiting_user: {} });
+    mockedApi.listTurnChanges.mockResolvedValue({ turns: [] });
     mockedApi.getContextUsage.mockResolvedValue({ available: false, reason: 'No answer yet.' });
     mockedApi.getPermissions.mockResolvedValue({ session_id: 'session', mode: 'ask', grants: [] });
     mockedApi.listDocuments.mockResolvedValue({
@@ -93,7 +94,7 @@ it('shows a document the agent indexed in the chat and the library', async () =>
     const state = useChatStore.getState();
     expect(state.documents.map((d) => d.id)).toEqual(['doc-1']);
     expect(state.sessions[0].document_ids).toEqual(['doc-1']);
-    const bar = screen.getByLabelText('1 indexed document');
+    const bar = screen.getByLabelText('1 document added to this chat');
     expect(within(bar).getByText('plant_manual.md')).toBeInTheDocument();
 });
 
@@ -146,4 +147,28 @@ it('leaves the chat alone when the turn indexed nothing', async () => {
     const state = useChatStore.getState();
     expect(state.documents).toEqual([]);
     expect(state.sessions[0].document_ids).toEqual([]);
+});
+
+// A file attached in the composer is listed for the chat, and Remove takes it off (#8812).
+it('lists a composer attachment for the chat and removes it from there', async () => {
+    const BRIEF: Document = {
+        ...MANUAL,
+        id: 'doc-brief',
+        filename: 'private-brief.md',
+        filepath: '/Users/me/.gaia/chat/uploads/private-brief.md',
+        chunk_count: 0,
+    };
+    mockedApi.detachDocument.mockResolvedValue(undefined);
+    await answerWith({ documents_added: [BRIEF] });
+
+    const bar = screen.getByLabelText('1 document added to this chat');
+    expect(within(bar).getByText('private-brief.md')).toBeInTheDocument();
+
+    await act(async () => {
+        fireEvent.click(within(bar).getByLabelText('Remove private-brief.md from this chat'));
+    });
+
+    expect(mockedApi.detachDocument).toHaveBeenCalledWith(SESSION.id, 'doc-brief');
+    expect(useChatStore.getState().sessions[0].document_ids).toEqual([]);
+    expect(screen.queryByLabelText('1 document added to this chat')).not.toBeInTheDocument();
 });

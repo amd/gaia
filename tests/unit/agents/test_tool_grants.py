@@ -16,6 +16,55 @@ from gaia.agents.base.tool_grants import grant_scope
 PYTEST = "pytest (runs the test code it finds)"
 
 
+@pytest.mark.parametrize(
+    "tool, args, raw",
+    [
+        ("write_file", {"file_path": "invoice\u202etxt.exe", "content": "x"}, "\u202e"),
+        ("edit_file", {"file_path": "C:/w/inv\u200boice.txt"}, "\u200b"),
+        ("install_skill", {"name": "pd\u202ef-tools"}, "\u202e"),
+    ],
+    ids=["bidi override", "zero width", "skill name"],
+)
+def test_the_words_an_always_button_shows_mark_hidden_characters(tool, args, raw):
+    scope = grant_scope(tool, args)
+
+    assert scope is not None
+    code = f"[U+{ord(raw):04X}]"
+    assert raw not in scope.label and code in scope.label
+    assert raw not in scope.subject and code in scope.subject
+    # The grant itself still names the real file.
+    assert any(raw in key for key in scope.keys)
+
+
+@pytest.mark.parametrize(
+    "name, shown",
+    [
+        ("inv\u200doice.txt", "inv[U+200D]oice.txt"),
+        ("inv\u200coice.txt", "inv[U+200C]oice.txt"),
+        ("report\u200e.txt", "report[U+200E].txt"),
+        ("report\u200f.txt", "report[U+200F].txt"),
+        ("\U0001f4c1\ufe0fnotes.txt", "\U0001f4c1[U+FE0F]notes.txt"),
+        ("\u845b\U000e0100.txt", "\u845b[U+E0100].txt"),
+    ],
+    ids=["zwj", "zwnj", "lrm", "rlm", "emoji vs16", "cjk vs17"],
+)
+def test_a_look_alike_file_name_shows_its_joiners_marks_and_selectors(name, shown):
+    scope = grant_scope("write_file", {"file_path": name, "content": "x"})
+
+    assert scope is not None
+    assert scope.subject == shown
+    assert shown in scope.label
+    assert any(name in key for key in scope.keys)
+
+
+def test_a_joiner_in_a_program_name_shows_in_its_always_label():
+    scope = grant_scope("run_shell_command", {"command": "gi\u200dt status"})
+
+    assert scope is not None
+    assert scope.label == "gi[U+200D]t status"
+    assert scope.key == "run_shell_command:gi\u200dt status"
+
+
 class TestShellGrantsAreScopedToTheCommand:
     @pytest.mark.parametrize(
         "command,expected",
@@ -107,7 +156,7 @@ class TestPathGrants:
                 "_resolved_file_path": "/tmp/a/notes.md",
             },
         )
-        assert scope.key == "write_file:/tmp/a/*"
+        assert scope.key == "file_change:/tmp/a/*"
         assert scope.subject == "files in /tmp/a"
 
     def test_a_folder_grant_covers_sibling_files(self):

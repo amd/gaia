@@ -12,6 +12,7 @@ from .browser_tools import BrowserToolsMixin
 from .browser_use_tools import BrowserUseToolsMixin
 from .cli_setup_tools import CliSetupToolsMixin
 from .code_index_tools import CodeIndexToolsMixin
+from .dictation_tools import DictationToolsMixin
 from .file_io_tools import FileIOToolsMixin
 from .file_monitor_tools import FileToolsMixin
 from .file_tools import FileSearchToolsMixin
@@ -40,4 +41,5 @@ __all__ = [
     "ScreenshotToolsMixin",
     "ShellToolsMixin",
     "WaitToolsMixin",
+    "DictationToolsMixin",
 ]

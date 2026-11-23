@@ -738,6 +738,8 @@ class TestStartupExitMessage:
         import gaia.llm.npu_linux as npu_linux
 
         monkeypatch.setattr(npu_linux, "raise_memlock_soft_limit", lambda: None)
+        # The host's own CA layout is not under test here.
+        monkeypatch.setattr(EmbeddedLemonade, "_ca_overlay", lambda self: None)
         monkeypatch.setenv("LD_LIBRARY_PATH", "/home/u/.gaia/app-core/_internal")
         monkeypatch.delenv("LD_LIBRARY_PATH_ORIG", raising=False)
         self._exits_writing(manager, monkeypatch, b"")
@@ -794,3 +796,146 @@ class TestUnload:
         monkeypatch.setattr(urllib.request, "urlopen", _refuse)
         with pytest.raises(EmbeddedLemonadeError, match="did not unload"):
             manager.unload_models()
+
+
+@pytest.mark.allow_network
+class TestRestartKeepsTheKey:
+    """Agents already running hold the server's key; a restart must not change it.
+
+    Driven through ``start`` / ``status``: the crash path clears the state file
+    before the next spawn, which a direct ``_spawn`` test never sees.
+    """
+
+    @staticmethod
+    def _fake_server(manager, monkeypatch):
+        monkeypatch.setattr(manager, "is_installed", lambda: True)
+        monkeypatch.setattr(manager, "write_config", lambda: None)
+        monkeypatch.setattr(manager, "_reap_orphaned_backends", lambda: [])
+        lab = SimpleNamespace(keys=[], ports=[], alive=True, pid=7000)
+
+        def health(port, key, timeout=3.0):
+            state = manager._read_state() or {}
+            live = lab.alive and state.get("port") == port
+            return {"status": "ok"} if live and state.get("api_key") == key else None
+
+        def fake_popen(argv, **kwargs):
+            lab.pid += 1
+            lab.alive = True
+            lab.keys.append(kwargs["env"]["LEMONADE_API_KEY"])
+            lab.ports.append(int(argv[argv.index("--port") + 1]))
+            return SimpleNamespace(
+                pid=lab.pid, poll=lambda: None if lab.alive else 1, returncode=None
+            )
+
+        monkeypatch.setattr(manager, "_health", health)
+        monkeypatch.setattr(embedded_mod.subprocess, "Popen", fake_popen)
+        _processes(monkeypatch, {})  # a crashed pid no longer exists
+        return lab
+
+    @pytest.fixture
+    def server(self, manager, monkeypatch):
+        return self._fake_server(manager, monkeypatch)
+
+    @staticmethod
+    def _crash(manager, lab):
+        lab.alive = False
+        assert manager.status().running is False
+        assert manager._read_state() is None, "the crash must clear the state"
+
+    def test_a_restart_after_a_crash_reuses_the_key(self, manager, server):
+        manager.start(owner_pid=1000)
+        self._crash(manager, server)
+        manager.start(owner_pid=1000)
+
+        assert len(server.keys) == 2 and server.keys[0] == server.keys[1]
+        assert server.ports[0] == server.ports[1]
+        assert manager.current_api_key() == server.keys[0]
+
+    def test_a_restart_after_a_stop_reuses_the_key(self, manager, server):
+        manager.start(owner_pid=1000)
+        manager._clear_state()  # what a successful stop leaves behind
+        manager.start(owner_pid=1000)
+
+        assert server.keys[0] == server.keys[1]
+
+    def test_a_restart_on_another_port_makes_a_new_key(self, manager, server):
+        first = manager.start(owner_pid=1000)
+        self._crash(manager, server)
+        manager.start(port=first.port + 1, owner_pid=1000)
+
+        assert server.keys[0] != server.keys[1]
+
+    def test_a_first_start_makes_a_fresh_key_per_profile(self, tmp_path, monkeypatch):
+        keys = []
+        for home in ("a", "b"):
+            m = EmbeddedLemonade(home=tmp_path / home)
+            lab = self._fake_server(m, monkeypatch)
+            m.start(owner_pid=1000)
+            keys.append(lab.keys[0])
+
+        assert keys[0] != keys[1]
+
+    @pytest.mark.parametrize(
+        "content",
+        [
+            "",
+            "short",
+            "x" * 44,
+            "a" * 36 + '";id;"',
+            "a" * 42 + "$",
+        ],
+        ids=["empty", "short", "long", "shell-quote", "bad-char"],
+    )
+    def test_a_bad_key_file_rotates_loudly(self, manager, server, caplog, content):
+        manager.start(owner_pid=1000)
+        self._crash(manager, server)
+        manager._write_private(manager.last_key_path, content)
+        manager.start(owner_pid=1000)
+
+        assert server.keys[1] != server.keys[0]
+        assert embedded_mod._API_KEY_RE.fullmatch(server.keys[1])
+        assert "last_key" in caplog.text
+        if content:
+            assert content not in manager.env_path.read_text(encoding="utf-8")
+
+    def test_an_undecodable_key_file_rotates_loudly(self, manager, server, caplog):
+        manager.start(owner_pid=1000)
+        self._crash(manager, server)
+        manager.last_key_path.write_bytes(b"\xff\xfe\x00garbage")
+        manager.start(owner_pid=1000)
+
+        assert server.keys[1] != server.keys[0]
+        assert "last_key" in caplog.text
+
+    def test_a_missing_key_file_makes_a_new_key_quietly(self, manager, server, caplog):
+        manager.start(owner_pid=1000)
+        self._crash(manager, server)
+        manager.last_key_path.unlink()
+        manager.start(owner_pid=1000)
+
+        assert server.keys[1] != server.keys[0]
+        assert "last_key" not in caplog.text
+
+    @pytest.mark.skipif(sys.platform == "win32", reason="POSIX file modes")
+    def test_the_key_file_is_owner_only(self, manager, server):
+        manager.start(owner_pid=1000)
+
+        assert manager.last_key_path.stat().st_mode & 0o777 == 0o600
+
+    @pytest.mark.skipif(sys.platform == "win32", reason="POSIX file modes")
+    def test_a_key_file_others_can_read_is_not_reused(self, manager, server, caplog):
+        manager.start(owner_pid=1000)
+        self._crash(manager, server)
+        manager.last_key_path.chmod(0o644)
+        manager.start(owner_pid=1000)
+
+        assert server.keys[1] != server.keys[0]
+        assert "other users can read" in caplog.text
+        assert manager.last_key_path.stat().st_mode & 0o777 == 0o600
+
+    def test_uninstall_removes_the_key(self, manager, server):
+        manager.start(owner_pid=1000)
+        self._crash(manager, server)
+        manager.uninstall()
+
+        assert not manager.last_key_path.exists()

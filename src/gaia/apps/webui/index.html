@@ -12,6 +12,20 @@
     <meta name="apple-mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-title" content="GAIA" />
     <title>GAIA Agent UI</title>
+    <!-- Paints the saved theme before the first frame; must resolve it exactly as
+         main.tsx does (a saved light/dark wins, otherwise the OS, dark if unreadable). -->
+    <script>
+        try {
+            var t = localStorage.getItem('gaia-chat-theme');
+            if (t !== 'light' && t !== 'dark') {
+                t = window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark';
+            }
+            document.documentElement.setAttribute('data-theme', t);
+            document.documentElement.style.colorScheme = t;
+        } catch (e) {
+            // main.tsx applies the theme again and reports why it could not read the saved one.
+        }
+    </script>
 </head>
 <body>
     <div id="root"></div>

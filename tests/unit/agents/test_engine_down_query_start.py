@@ -22,16 +22,23 @@ from gaia.llm import lemonade_client as lc
 from gaia.llm.lemonade_embedded import EmbeddedLemonade
 from gaia.llm.surface_hints import AGENT_UI_SETUP_HINT, TUI_SETUP_HINT
 
-pytest.importorskip("gaia_agent")
+pytest.importorskip("gaiapy")
 
 from fastapi.testclient import TestClient  # noqa: E402
-from gaia_agent import caller_auth  # noqa: E402
-from gaia_agent import server as server_mod  # noqa: E402
+from gaiapy import caller_auth  # noqa: E402
+from gaiapy import server as server_mod  # noqa: E402
 
 _REASON = "GAIA's Lemonade Server install is incomplete: lemond.exe is missing"
 _HEADLINE = "GAIA's AI engine couldn't start"
 _RAW = ("HTTPConnectionPool", "Max retries", "WinError", "Request failed")
 _COMMANDS = ("gaia lemonade", "gaia init", "gaia daemon", "run:", "Run:")
+
+
+@pytest.fixture(autouse=True)
+def _tokenless_dev_sidecar(monkeypatch):
+    monkeypatch.delenv(caller_auth.TOKEN_FILE_ENV_VAR, raising=False)
+    monkeypatch.delenv(caller_auth.TOKEN_ENV_VAR, raising=False)
+    monkeypatch.setenv(caller_auth.ALLOW_NO_TOKEN_ENV_VAR, "1")
 
 
 @pytest.fixture

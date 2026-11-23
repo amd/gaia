@@ -3,7 +3,6 @@
 # Format: <file>:<rule> <count>. Counts may only go down: fix a site, then
 # lower its line (or delete it at zero). Never raise a count to land new code.
 
-hub/agents/email/python/packaging/smoke_test.py:subprocess_no_timeout 1
 hub/agents/gaia/python/packaging/check_glibc.py:subprocess_no_timeout 1
 hub/agents/gaia/python/packaging/eval_csv_export.py:subprocess_no_timeout 1
 hub/agents/gaia/python/packaging/smoke_test.py:subprocess_no_timeout 1
@@ -11,7 +10,7 @@ src/gaia/agents/base/agent.py:swallowed_exception 1
 src/gaia/agents/base/console.py:subprocess_no_timeout 2
 src/gaia/agents/base/console.py:swallowed_exception 1
 src/gaia/agents/base/tools.py:swallowed_exception 1
-src/gaia/browser/driver.py:swallowed_exception 8
+src/gaia/browser/driver.py:swallowed_exception 5
 src/gaia/cli.py:subprocess_no_timeout 2
 src/gaia/cli_agent.py:subprocess_no_timeout 1
 src/gaia/daemon/forward.py:swallowed_exception 1
@@ -28,7 +27,6 @@ src/gaia/hub/publisher.py:subprocess_no_timeout 1
 src/gaia/hub/publisher.py:swallowed_exception 1
 src/gaia/installer/uninstall_command.py:swallowed_exception 1
 src/gaia/mcp/mixin.py:swallowed_exception 1
-src/gaia/mcp/servers/agent_ui_mcp.py:swallowed_exception 2
-src/gaia/security.py:swallowed_exception 2
+src/gaia/mcp/servers/agent_ui_mcp.py:swallowed_exception 1
 src/gaia/skills/capture.py:swallowed_exception 1
 src/gaia/ui/build.py:subprocess_no_timeout 2

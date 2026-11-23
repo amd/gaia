@@ -6,7 +6,7 @@ import {
     X, Search, RefreshCw, Plus, Trash2, Pencil, Copy, Clock, ArrowLeft,
     Brain, MessageSquare, Wrench, TrendingUp, ChevronLeft, ChevronRight,
     AlertTriangle, CheckCircle, Shield, ShieldOff, ChevronDown, Database,
-    Zap, GitMerge, Circle, User, Cpu, Sparkles, Target, ListChecks,
+    Zap, GitMerge, Circle, User, Cpu, Sparkles, Target, ListChecks, Eye,
 } from 'lucide-react';
 import { useChatStore } from '../stores/chatStore';
 import { useGoalHealthStore } from '../stores/goalHealthStore';
@@ -17,7 +17,7 @@ import { log } from '../utils/logger';
 import { formatSize } from '../utils/format';
 import { ref, type MessageKey } from '../i18n/registry';
 import { dateLocale, useT, type Translate } from '../i18n/useT';
-import { MemoryDashboardAboutYou } from './MemoryDashboardAboutYou';
+import { MEMORY_SOURCE_KEYS, MemoryDashboardAboutYou } from './MemoryDashboardAboutYou';
 import './MemoryDashboard.css';
 
 // ── Type definitions ─────────────────────────────────────────────────────
@@ -287,6 +287,8 @@ const DOMAIN_KEYS: Record<string, MessageKey> = {
     work: 'mem.domain.work', technical: 'mem.domain.technical', personal: 'mem.domain.personal', general: 'mem.domain.general',
 };
 
+const CONTEXT_KEYS: Record<string, MessageKey> = { ...DOMAIN_KEYS, global: 'mem.context.global' };
+
 /** A server-side code in the user's language; one the UI has no words for stays as sent. */
 function Code({ value, keys }: { value: string; keys: Record<string, MessageKey> }) {
     const t = useT();
@@ -399,6 +401,10 @@ export function MemoryDashboard() {
     const [goalStats, setGoalStats] = useState<GoalStats | null>(null);
     const [goalsLoading, setGoalsLoading] = useState(false);
     const goalStoreError = useGoalHealthStore((s) => s.error);
+    const goalStoreDamaged = useGoalHealthStore((s) => s.damaged);
+    const [goalsLoadError, setGoalsLoadError] = useState<string | null>(null);
+    const [goalFormError, setGoalFormError] = useState<string | null>(null);
+    const [resettingGoalStore, setResettingGoalStore] = useState(false);
     const [expandedGoalId, setExpandedGoalId] = useState<string | null>(null);
     const [confirmGoalDeleteId, setConfirmGoalDeleteId] = useState<string | null>(null);
     const [showAddGoalForm, setShowAddGoalForm] = useState(false);
@@ -409,6 +415,8 @@ export function MemoryDashboard() {
     const [discLogs, setDiscLogs] = useState<LogLine[]>([]);
     const [discItems, setDiscItems] = useState<CheckedDiscoveryFinding[]>([]);
     const [discSavedCount, setDiscSavedCount] = useState<number | null>(null);
+    // Indexes of sensitive findings the user chose to show; findings have no id yet.
+    const [discRevealed, setDiscRevealed] = useState<Set<number>>(new Set());
     const discLogRef = useRef<HTMLDivElement>(null);
     const discEsRef = useRef<EventSource | null>(null);
 
@@ -600,8 +608,10 @@ export function MemoryDashboard() {
             ]);
             setGoals(goalsRes.goals);
             setGoalStats(statsRes);
+            setGoalsLoadError(null);
         } catch (err) {
             log.system.warn('Failed to load goals', err);
+            setGoalsLoadError(errorText(err));
         } finally {
             setGoalsLoading(false);
         }
@@ -615,6 +625,41 @@ export function MemoryDashboard() {
             log.system.error(`Goal action failed (${failure})`, err);
             showToast(t('mem.goals.failed', { what: ref(failure), error: errorText(err) }), 'error');
             return;
+        }
+        loadGoals();
+    }, [loadGoals, showToast, t]);
+
+    const createGoal = useCallback(async () => {
+        if (!goalForm.title.trim()) return;
+        setGoalFormError(null);
+        try {
+            await memoryApi.createGoal(goalForm);
+        } catch (err) {
+            log.system.error('Goal create failed', err);
+            // Said on the form itself: a toast is gone before anyone reads it.
+            setGoalFormError(t('mem.goals.failed', { what: ref('mem.goals.createFailed'), error: errorText(err) }));
+            return;
+        }
+        setGoalForm({ title: '', description: '', priority: 'medium' });
+        setShowAddGoalForm(false);
+        loadGoals();
+    }, [goalForm, loadGoals, t]);
+
+    // A goal list that reads again makes a "list is damaged" form error stale.
+    useEffect(() => {
+        if (!goalStoreError) setGoalFormError(null);
+    }, [goalStoreError]);
+
+    const startNewGoalList = useCallback(async () => {
+        setResettingGoalStore(true);
+        try {
+            const { kept } = await memoryApi.resetGoalStore();
+            showToast(t('mem.goals.newListStarted', { file: kept }), 'success');
+        } catch (err) {
+            log.system.error('Starting a new goal list failed', err);
+            showToast(t('mem.goals.failed', { what: ref('mem.goals.startNewListFailed'), error: errorText(err) }), 'error');
+        } finally {
+            setResettingGoalStore(false);
         }
         loadGoals();
     }, [loadGoals, showToast, t]);
@@ -768,6 +813,11 @@ export function MemoryDashboard() {
     const handleToggleSensitive = useCallback(async (entry: KnowledgeEntry) => {
         try {
             await memoryApi.editKnowledge(entry.id, { sensitive: !entry.sensitive });
+            // Marking an entry sensitive hides it, so close an editor holding its text.
+            if (!entry.sensitive && editingId === entry.id && !revealedIds.has(entry.id)) {
+                setEditingId(null);
+                setFormData(prev => ({ ...prev, content: '' }));
+            }
             loadKnowledge();
             log.ui.info(`Toggled sensitive for ${entry.id}: ${!entry.sensitive}`);
             showToast(t(entry.sensitive ? 'mem.toast.unmarkedSensitive' : 'mem.toast.markedSensitive'), 'info');
@@ -775,9 +825,10 @@ export function MemoryDashboard() {
             log.system.error('Failed to toggle sensitive', err);
             showToast(t('mem.toast.sensitiveFailed', { error: errorText(err) }), 'error');
         }
-    }, [loadKnowledge, showToast, t]);
+    }, [loadKnowledge, showToast, t, editingId, revealedIds]);
 
     const startEdit = useCallback((entry: KnowledgeEntry) => {
+        if (entry.sensitive && !revealedIds.has(entry.id)) return;
         setEditingId(entry.id);
         setShowAddForm(false);
         setFormData({
@@ -789,7 +840,22 @@ export function MemoryDashboard() {
             sensitive: entry.sensitive,
             due_at: entry.due_at || '',
         });
-    }, []);
+    }, [revealedIds]);
+
+    const toggleReveal = useCallback((entry: KnowledgeEntry) => {
+        const hiding = revealedIds.has(entry.id);
+        setRevealedIds(prev => {
+            const next = new Set(prev);
+            if (hiding) next.delete(entry.id);
+            else next.add(entry.id);
+            return next;
+        });
+        // Re-hiding must also close an open editor, which holds the plain text.
+        if (hiding && editingId === entry.id) {
+            setEditingId(null);
+            setFormData(prev => ({ ...prev, content: '' }));
+        }
+    }, [revealedIds, editingId]);
 
     const copyId = useCallback((id: string) => {
         navigator.clipboard.writeText(id).then(
@@ -954,6 +1020,7 @@ export function MemoryDashboard() {
         setDiscPhase('running');
         setDiscLogs([]);
         setDiscItems([]);
+        setDiscRevealed(new Set());
         setDiscSavedCount(null);
 
         const es = memoryApi.openDiscoveryStream();
@@ -967,7 +1034,10 @@ export function MemoryDashboard() {
                 } else if (data.type === 'finding') {
                     const item = data.item as memoryApi.DiscoveryFinding;
                     // Bare: a bracketed English copy would repeat the whole item on every log line.
-                    setDiscLogs(prev => [...prev, { text: t.bare('mem.log.found', { content: item.content }), kind: 'finding' }]);
+                    const text = item.sensitive
+                        ? t('mem.log.foundSensitive')
+                        : t.bare('mem.log.found', { content: item.content });
+                    setDiscLogs(prev => [...prev, { text, kind: 'finding' }]);
                     setDiscItems(prev => [...prev, { ...item, _checked: true }]);
                 } else if (data.type === 'error') {
                     setDiscLogs(prev => [...prev, { text: t.bare('mem.log.error', { message: data.message }), kind: 'error' }]);
@@ -1127,7 +1197,7 @@ export function MemoryDashboard() {
                         >
                             <ArrowLeft size={18} />
                         </button>
-                        <h1>{t('mem.title')} <span className="mem-beta" style={{ fontSize: 11, fontWeight: 600, color: 'var(--accent-yellow)', background: 'var(--accent-yellow-dim)', padding: '2px 8px', borderRadius: 4, marginInlineStart: 8, verticalAlign: 'middle', whiteSpace: 'nowrap' }}>{t('mem.beta')}</span></h1>
+                        <h1>{t('mem.title')} <span className="mem-beta" style={{ fontSize: 11, fontWeight: 500, color: 'var(--accent-yellow)', background: 'var(--accent-yellow-dim)', padding: '2px 8px', borderRadius: 4, marginInlineStart: 8, verticalAlign: 'middle', whiteSpace: 'nowrap' }}>{t('mem.beta')}</span></h1>
                     </div>
                     <div className="memory-dashboard-header-actions">
                         {activeTab === 'advanced' && <>
@@ -1498,7 +1568,7 @@ export function MemoryDashboard() {
                                         aria-label={t('mem.knowledge.filterContext')}>
                                         <option value="">{t.bare('mem.knowledge.allContexts')}</option>
                                         {contexts.map(c => (
-                                            <option key={c} value={c}>{c}</option>
+                                            <option key={c} value={c}>{CONTEXT_KEYS[c] ? t.bare(CONTEXT_KEYS[c]) : c}</option>
                                         ))}
                                     </select>
                                     <select className="mem-filter-select" value={kEntity}
@@ -1517,7 +1587,7 @@ export function MemoryDashboard() {
                                         )}
                                         <input className="mem-filter-search"
                                             type="text"
-                                            placeholder={t('mem.knowledge.searchPlaceholder')}
+                                            placeholder={t.bare('mem.knowledge.searchPlaceholder')}
                                             value={kSearch}
                                             onChange={e => handleSearchChange(e.target.value)}
                                             aria-label={t('mem.knowledge.search')}
@@ -1630,6 +1700,18 @@ export function MemoryDashboard() {
                                                     {knowledge.items.map(entry => {
                                                         const isExpanded = expandedRowId === entry.id;
                                                         const hasEmbed = entry.has_embedding;
+                                                        // Hidden sensitive text is never rendered — not even blurred or in a tooltip.
+                                                        const hidden = entry.sensitive && !revealedIds.has(entry.id);
+                                                        const revealButton = (
+                                                            <button
+                                                                type="button"
+                                                                className="mem-about-link"
+                                                                onClick={(e) => { e.stopPropagation(); toggleReveal(entry); }}
+                                                                onKeyDown={(e) => e.stopPropagation()}
+                                                            >
+                                                                <Eye size={12} /> {t('mem.about.showSensitive')}
+                                                            </button>
+                                                        );
                                                         return (
                                                         <React.Fragment key={entry.id}>
                                                         <tr
@@ -1649,7 +1731,7 @@ export function MemoryDashboard() {
                                                                 </span>
                                                             </td>
                                                             <td>
-                                                                <div className="mem-content-cell" title={entry.content}>
+                                                                <div className="mem-content-cell" title={hidden ? undefined : entry.content}>
                                                                     {/* Embedding status dot — only show when backend provides the field */}
                                                                     {hasEmbed !== undefined && (
                                                                         <span
@@ -1664,28 +1746,21 @@ export function MemoryDashboard() {
                                                                             <Shield size={11} />
                                                                         </span>
                                                                     )}
-                                                                    <span className={
-                                                                        entry.sensitive && !revealedIds.has(entry.id)
-                                                                            ? 'mem-sensitive-blur'
-                                                                            : entry.superseded_by ? 'mem-superseded-text' : ''
-                                                                    }
-                                                                    onClick={(e) => {
-                                                                        if (entry.sensitive) {
-                                                                            e.stopPropagation();
-                                                                            setRevealedIds(prev => {
-                                                                                const next = new Set(prev);
-                                                                                if (next.has(entry.id)) next.delete(entry.id);
-                                                                                else next.add(entry.id);
-                                                                                return next;
-                                                                            });
-                                                                        }
-                                                                    }}>
-                                                                        <bdi>{entry.content}</bdi>
-                                                                    </span>
+                                                                    {hidden ? revealButton : (
+                                                                        <span className={entry.superseded_by ? 'mem-superseded-text' : ''}
+                                                                            onClick={(e) => {
+                                                                                if (entry.sensitive) {
+                                                                                    e.stopPropagation();
+                                                                                    toggleReveal(entry);
+                                                                                }
+                                                                            }}>
+                                                                            <bdi>{entry.content}</bdi>
+                                                                        </span>
+                                                                    )}
                                                                 </div>
                                                             </td>
                                                             <td>
-                                                                <bdi className="mem-date-cell">{entry.context}</bdi>
+                                                                <span className="mem-date-cell"><Code value={entry.context} keys={CONTEXT_KEYS} /></span>
                                                             </td>
                                                             <td>
                                                                 {entry.entity ? (
@@ -1708,7 +1783,7 @@ export function MemoryDashboard() {
                                                                 </div>
                                                             </td>
                                                             <td>
-                                                                <bdi className="mem-date-cell">{entry.source || '\u2014'}</bdi>
+                                                                <span className="mem-date-cell">{entry.source ? <Code value={entry.source} keys={MEMORY_SOURCE_KEYS} /> : '\u2014'}</span>
                                                             </td>
                                                             <td>
                                                                 <span className="mem-date-cell" title={formatDateFull(entry.updated_at, dateLocale(t))}>
@@ -1732,7 +1807,9 @@ export function MemoryDashboard() {
                                                             </td>
                                                             <td className="mem-actions-cell">
                                                                 <div className="mem-row-actions" onClick={e => e.stopPropagation()}>
-                                                                    <button className="mem-row-action-btn" onClick={() => startEdit(entry)} title={t('mem.row.edit')}>
+                                                                    <button className="mem-row-action-btn" onClick={() => startEdit(entry)}
+                                                                        disabled={hidden}
+                                                                        title={t(hidden ? 'mem.about.editHidden' : 'mem.row.edit')}>
                                                                         <Pencil size={13} />
                                                                     </button>
                                                                     <button className="mem-row-action-btn" onClick={() => handleToggleSensitive(entry)}
@@ -1812,7 +1889,7 @@ export function MemoryDashboard() {
                                                                         </div>
                                                                         <div className="mem-detail-content-full">
                                                                             <span className="mem-detail-label">{t('mem.detail.fullContent')}</span>
-                                                                            <div className="mem-detail-content-text"><bdi>{entry.content}</bdi></div>
+                                                                            <div className="mem-detail-content-text">{hidden ? revealButton : <bdi>{entry.content}</bdi>}</div>
                                                                         </div>
                                                                     </div>
                                                                 </td>
@@ -1934,7 +2011,7 @@ export function MemoryDashboard() {
                                                             <div className="mem-temporal-text"><bdi>{item.content}</bdi></div>
                                                             <div className="mem-temporal-date">
                                                                 {t(overdue ? 'mem.upcoming.overdue' : 'mem.upcoming.due', { when: formatRelativeDate(item.due_at, t) })}
-                                                                {item.context !== 'global' && <> {'\u00B7'} <bdi>{item.context}</bdi></>}
+                                                                {item.context !== 'global' && <> {'\u00B7'} <Code value={item.context} keys={CONTEXT_KEYS} /></>}
                                                             </div>
                                                         </div>
                                                     </div>
@@ -1959,7 +2036,7 @@ export function MemoryDashboard() {
                                     <Search size={13} className="search-icon" />
                                     <input
                                         type="text"
-                                        placeholder={t('mem.conv.searchPlaceholder')}
+                                        placeholder={t.bare('mem.conv.searchPlaceholder')}
                                         value={convSearch}
                                         onChange={e => handleConvSearchChange(e.target.value)}
                                         aria-label={t('mem.conv.search')}
@@ -2078,7 +2155,7 @@ export function MemoryDashboard() {
                             {/* ── Settings ─────────────────────── */}
                             <div className="mem-section">
                                 <div className="mem-section-title">
-                                    <Shield size={14} /> {t('mem.settings.title')} <span className="mem-beta" style={{ fontSize: 10, fontWeight: 600, color: 'var(--accent-yellow)', background: 'var(--accent-yellow-dim)', padding: '1px 6px', borderRadius: 4, marginInlineStart: 6, verticalAlign: 'middle' }}>{t('mem.beta')}</span>
+                                    <Shield size={14} /> {t('mem.settings.title')} <span className="mem-beta" style={{ fontSize: 10, fontWeight: 500, color: 'var(--accent-yellow)', background: 'var(--accent-yellow-dim)', padding: '1px 6px', borderRadius: 4, marginInlineStart: 6, verticalAlign: 'middle' }}>{t('mem.beta')}</span>
                                 </div>
                                 <div className="mem-setting-row">
                                     <div className="mem-setting-info">
@@ -2184,11 +2261,11 @@ export function MemoryDashboard() {
                                         >
                                             <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 16 }}>
                                                 <span className="mem-beta" style={{
-                                                    fontSize: 11, fontWeight: 700, color: 'var(--accent-yellow)',
+                                                    fontSize: 11, fontWeight: 500, color: 'var(--accent-yellow)',
                                                     background: 'var(--accent-yellow-dim)', padding: '3px 10px',
                                                     borderRadius: 4,
                                                 }}>{t('mem.beta')}</span>
-                                                <h2 id="mem-beta-confirm-title" style={{ fontSize: 16, fontWeight: 600, color: 'var(--text-primary)' }}>
+                                                <h2 id="mem-beta-confirm-title" style={{ fontSize: 16, fontWeight: 500, color: 'var(--text-primary)' }}>
                                                     {t(cfg.title)}
                                                 </h2>
                                             </div>
@@ -2221,7 +2298,7 @@ export function MemoryDashboard() {
                                                         }
                                                     }}
                                                     style={{
-                                                        padding: '8px 24px', fontSize: 13, fontWeight: 600,
+                                                        padding: '8px 24px', fontSize: 13, fontWeight: 500,
                                                         borderRadius: 6, border: 'none', cursor: 'pointer',
                                                         background: 'var(--accent-fill)',
                                                         color: 'var(--accent-fill-text)',
@@ -2468,7 +2545,23 @@ export function MemoryDashboard() {
                                                             ));
                                                         }}
                                                     />
-                                                    <bdi className="mem-review-content">{item.content}</bdi>
+                                                    {/* Hidden sensitive text is never rendered, matching saved entries. */}
+                                                    {item.sensitive && !discRevealed.has(i) ? (
+                                                        <span className="mem-review-content">
+                                                            <button
+                                                                type="button"
+                                                                className="mem-about-link"
+                                                                onClick={(e) => {
+                                                                    e.preventDefault();
+                                                                    setDiscRevealed(prev => new Set(prev).add(i));
+                                                                }}
+                                                            >
+                                                                <Eye size={12} /> {t('mem.about.showSensitive')}
+                                                            </button>
+                                                        </span>
+                                                    ) : (
+                                                        <bdi className="mem-review-content">{item.content}</bdi>
+                                                    )}
                                                     <span className="mem-source-badge">
                                                         {item._source_name ? <bdi>{item._source_name}</bdi> : <Code value={item.category} keys={CATEGORY_KEYS} />}
                                                     </span>
@@ -2616,11 +2709,18 @@ export function MemoryDashboard() {
                     {activeTab === 'goals' && (
                         <div className="mem-goals-tab">
                             <p className="mem-tab-intro">{t('mem.goals.intro')}</p>
-                            {goalStoreError && (
+                            {goalStoreError && (goalStoreDamaged ? (
+                                <div className="mem-advanced-error" role="alert">
+                                    <AlertTriangle size={14} /> {t('mem.goals.storeDamaged')}{' '}
+                                    <button type="button" className="link-btn" disabled={resettingGoalStore} onClick={startNewGoalList}>
+                                        {t('mem.goals.startNewList')}
+                                    </button>
+                                </div>
+                            ) : (
                                 <div className="mem-advanced-error" role="alert">
                                     <AlertTriangle size={14} /> {t('mem.goals.storeError')}: <bdi>{goalStoreError}</bdi>
                                 </div>
-                            )}
+                            ))}
                             {/* Header stat row */}
                             <div className="mem-goals-stats-row">
                                 {(['queued','in_progress','completed','failed'] as const).map(s => (
@@ -2658,7 +2758,7 @@ export function MemoryDashboard() {
 
                             {/* Add goal button */}
                             <div className="mem-goals-toolbar">
-                                <button className="btn-primary" onClick={() => setShowAddGoalForm(v => !v)}>
+                                <button className="btn-primary" onClick={() => { setGoalFormError(null); setShowAddGoalForm(v => !v); }}>
                                     <Plus size={14} /> {t('mem.goals.new')}
                                 </button>
                             </div>
@@ -2689,22 +2789,18 @@ export function MemoryDashboard() {
                                             <option value="medium">{t.bare('mem.goals.priorityMedium')}</option>
                                             <option value="high">{t.bare('mem.goals.priorityHigh')}</option>
                                         </select>
-                                        <button className="btn-primary" onClick={() => {
-                                            if (!goalForm.title.trim()) return;
-                                            runGoalAction(async () => {
-                                                await memoryApi.createGoal(goalForm);
-                                                setGoalForm({ title: '', description: '', priority: 'medium' });
-                                                setShowAddGoalForm(false);
-                                            }, 'mem.goals.createFailed');
-                                        }}>{t('mem.goals.create')}</button>
-                                        <button className="btn-secondary" onClick={() => setShowAddGoalForm(false)}>{t('mem.cancel')}</button>
+                                        <button className="btn-primary" disabled={!goalForm.title.trim()} onClick={createGoal}>{t('mem.goals.create')}</button>
+                                        <button className="btn-secondary" onClick={() => { setGoalFormError(null); setShowAddGoalForm(false); }}>{t('mem.cancel')}</button>
                                     </div>
+                                    {goalFormError && <p className="mem-form-error" role="alert"><bdi>{goalFormError}</bdi></p>}
                                 </div>
                             )}
 
                             {/* Goal list */}
                             {goalsLoading ? (
                                 <div className="mem-loading"><div className="mem-spinner" /> {t('mem.goals.loading')}</div>
+                            ) : goalsLoadError ? (
+                                <p className="mem-form-error" role="alert">{t('mem.goals.loadFailed')} <bdi>{goalsLoadError}</bdi></p>
                             ) : goals.filter(g => g.status !== 'pending_approval' && g.status !== 'rejected').length === 0 ? (
                                 <div className="mem-empty">
                                     <div className="mem-empty-icon"><Target size={32} /></div>
@@ -2734,6 +2830,9 @@ export function MemoryDashboard() {
                                                     <span className={`mem-goal-status-dot status-${goal.status.replace('_','-')}`} />
                                                     <bdi className="mem-goal-title">{goal.title}</bdi>
                                                     <span className={`mem-goal-priority mem-priority-${goal.priority}`}><Code value={goal.priority} keys={PRIORITY_KEYS} /></span>
+                                                    {goal.status === 'cancelled' && (
+                                                        <span className="mem-goal-priority mem-goal-cancelled-label">{t(STATUS_KEYS.cancelled)}</span>
+                                                    )}
                                                     {goal.source !== 'user' && (
                                                         <span className="mem-goal-source-badge">
                                                             <Zap size={10} /> <Code value={goal.source} keys={GOAL_SOURCE_KEYS} />
@@ -2795,9 +2894,9 @@ export function MemoryDashboard() {
                                                                 </div>
                                                             ))}
                                                         </div>
-                                                    ) : (
+                                                    ) : goal.status === 'queued' || goal.status === 'in_progress' ? (
                                                         <p className="mem-goal-no-tasks">{t('mem.goals.noTasks')}</p>
-                                                    )}
+                                                    ) : null}
                                                 </div>
                                             )}
                                         </div>

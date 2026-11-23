@@ -151,11 +151,11 @@ class FileSearchToolsMixin:
         File Type Support:
         - Python (.py): AST validation + symbol extraction (functions/classes)
         - Markdown (.md, .mdx): the content only; file_type "markdown"
-        - Word (.docx), PDF, Excel (.xlsx): extracted text in budget-sized
-          parts ("offset", "total_chars", "next_offset"; None at the end).
-          Same contract as FileIOToolsMixin.read_file. .pptx and .epub
-          return an error pointing at index_document; .doc, .ppt, .xls and
-          OpenDocument return an error saying what to re-save them as.
+        - Word (.docx), PDF, Excel (.xlsx), PowerPoint (.pptx): extracted
+          text in budget-sized parts ("offset", "total_chars", "next_offset";
+          None at the end). Same contract as FileIOToolsMixin.read_file.
+          .epub returns an error naming other ways to read it; .doc, .ppt,
+          .xls and OpenDocument return an error saying what to re-save them as.
         - Binary: Detection with size reporting
         - Text: Raw content with line count. A file with a UTF-16, UTF-32,
           or UTF-8 byte-order mark is decoded in that encoding and reports
@@ -485,7 +485,7 @@ if ext == ".py":
 
 ## Testing Requirements
 
-**File:** `tests/agents/tools/test_file_search_mixin.py`
+The block below is an illustrative example, not a file in the repo. The real tests are under `tests/unit/`, for example `tests/unit/test_file_search_scope.py`.
 
 Key tests:
 - 3-phase search progression

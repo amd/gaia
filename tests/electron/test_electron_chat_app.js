@@ -967,7 +967,7 @@ describe('Chat App Integration', () => {
     it('should have keyboard accessibility on session items', () => {
       // Session rows are native buttons, so Tab/Enter/Space work without handlers.
       expect(sidebarContent).toMatch(
-        /<button\s+type="button"\s+id=\{rowId\}\s+className="sb-row-main"\s+onClick=\{\(\) => onSelect\(session\.id\)\}/
+        /<button\s+ref=\{mainRef\}\s+type="button"\s+id=\{rowId\}\s+className="sb-row-main"\s+onClick=\{\(\) => onSelect\(session\.id\)\}/
       );
       expect(sidebarContent).not.toContain('role="button"');
     });
@@ -981,10 +981,10 @@ describe('Chat App Integration', () => {
     });
 
     it('should have ARIA labels on session actions', () => {
-      expectTranslated(sidebarContent, "? t.plural('row.confirmDeleteUnsentAria', unsent, { title: session.title })", 'row.confirmDeleteUnsentAria.one', 'Confirm delete {title} and its {n} unsent message');
+      expectTranslated(sidebarContent, "? t.plural('row.confirmDeleteUnsentAria', unsent, { title: shownTitle })", 'row.confirmDeleteUnsentAria.one', 'Confirm delete {title} and its {n} unsent message');
       expect(EN_MESSAGES['row.confirmDeleteUnsentAria.other']).toBe('Confirm delete {title} and its {n} unsent messages');
-      expectTranslated(sidebarContent, ": t('row.confirmDeleteAria', { title: session.title }))", 'row.confirmDeleteAria', 'Confirm delete {title}');
-      expectTranslated(sidebarContent, ": t('row.deleteAria', { title: session.title })}", 'row.deleteAria', 'Delete {title}');
+      expectTranslated(sidebarContent, ": t('row.confirmDeleteAria', { title: shownTitle }))", 'row.confirmDeleteAria', 'Confirm delete {title}');
+      expectTranslated(sidebarContent, ": t('row.deleteAria', { title: shownTitle })}", 'row.deleteAria', 'Delete {title}');
       expectTranslated(sidebarContent, '<nav className="sb-list" id="sb-chat-list" aria-label={t(\'sidebar.recent\')}>', 'sidebar.recent', 'Recent chats');
     });
 
@@ -1150,7 +1150,7 @@ describe('Chat App Integration', () => {
     it('should have drag-and-drop with visual overlay', () => {
       expect(chatContent).toContain('isDragOver');
       expect(chatContent).toContain('drag-overlay');
-      expect(chatContent).toContain('Drop files to index');
+      expectTranslated(chatContent, "{t('chat.dropOverlay')}", 'chat.dropOverlay', 'Drop files to add them to this chat');
     });
 
     it('should auto-upload dropped files', () => {
@@ -1181,8 +1181,8 @@ describe('Chat App Integration', () => {
       expectTranslated(composerContent, "aria-label={t('composer.stop')}", 'composer.stop', 'Stop');
       expectTranslated(composerContent, "aria-label={t('composer.attach')}", 'composer.attach', 'Attach files');
       expect(chatContent).toContain('aria-label="Chat title"');
-      expect(chatContent).toContain('aria-label="Export chat"');
-      expect(chatContent).toContain('aria-label="Browse files on this PC"');
+      expectTranslated(chatContent, "aria-label={t('chat.exportLabel')}", 'chat.exportLabel', 'Export chat');
+      expectTranslated(chatContent, "aria-label={t('chat.browseFiles')}", 'chat.browseFiles', 'Browse files on this PC');
     });
   });
 
@@ -1231,8 +1231,9 @@ describe('Chat App Integration', () => {
       expect(chatCss).toContain('.drag-active');
     });
 
-    it('should have chat title overflow handling', () => {
-      expect(chatCss).toContain('text-overflow: ellipsis');
+    it('fades a long chat title at its end instead of cutting it with "…"', () => {
+      expect(chatCss).not.toContain('text-overflow: ellipsis');
+      expect(chatCss).toContain('animation: fade-cut-inline');
     });
 
     it('should use the native browser caret instead of a custom block cursor', () => {
@@ -1266,7 +1267,9 @@ describe('Chat App Integration', () => {
     it('should render error banner with AlertTriangle icon', () => {
       expect(msgContent).toContain('AlertTriangle');
       expect(msgContent).toContain('error-banner');
-      expectTranslated(msgContent, "t('msg.error')", 'msg.error', 'Something went wrong');
+      // A failure GAIA can name is headed with its cause; the rest keep the generic line.
+      expectTranslated(msgContent, ": 'msg.error')", 'msg.error', 'Something went wrong');
+      expect(msgContent).toContain('failedTurn.${failedTurn.kind}.title');
     });
 
     it('should apply error CSS class to error messages', () => {
@@ -1344,8 +1347,8 @@ describe('Chat App Integration', () => {
     });
 
     it('should use dynamic version from build constant', () => {
-      expect(advancedContent).toContain('const version = __APP_VERSION__');
-      expect(advancedContent).toContain('GAIA v{version}');
+      const aboutContent = fs.readFileSync(path.join(settingsDir, 'AboutSettings.tsx'), 'utf8');
+      expect(aboutContent).toContain('`GAIA v${__APP_VERSION__}`');
     });
 
     it('should render as a modal settings dialog with section nav', () => {
@@ -1379,9 +1382,11 @@ describe('Chat App Integration', () => {
       expect(privacyContent).toContain('className="btn-danger"');
     });
 
-    it('should have danger zone warning text and two-step confirm', () => {
+    it('should have danger zone warning text and a confirmation sheet', () => {
       expect(privacyContent).toContain("t('settings.privacy.deleteWarning')");
-      expect(privacyContent).toContain("confirm ? t('settings.privacy.deleteConfirm') : t('settings.privacy.delete')");
+      expect(privacyContent).toContain('<ConfirmSheet');
+      expect(privacyContent).toContain("'settings.privacy.deleteYes'");
+      expect(privacyContent).toContain("t('settings.privacy.deleteCancel')");
     });
   });
 
@@ -1443,7 +1448,7 @@ describe('Chat App Integration', () => {
     });
 
     it('should have aria-label on document delete buttons', () => {
-      expectTranslated(docContent, "aria-label={t('docs.removeAria', { name: doc.filename })}", 'docs.removeAria', 'Remove {name}');
+      expectTranslated(docContent, "aria-label={t('docs.removeAria', { name: visibleName(doc.filename) })}", 'docs.removeAria', 'Remove {name}');
     });
   });
 

@@ -127,10 +127,31 @@ public:
     /// Number of POSTs to /api/v1/load seen so far.
     int loadRequestCount() const { return loadCount_.load(); }
 
+    /// Body GET /api/v1/health answers with from now on.
+    void setHealth(const std::string& body) {
+        std::lock_guard<std::mutex> lk(mu_);
+        health_ = body;
+    }
+
+    /// Body GET /api/v1/models answers with from now on (a Lemonade catalog).
+    void setModelsList(const std::string& body) {
+        std::lock_guard<std::mutex> lk(mu_);
+        modelsList_ = body;
+    }
+
+    /// Status every later POST /api/v1/load answers with (200 by default).
+    void setLoadStatus(int status) { loadStatus_ = status; }
+
     /// All captured request bodies posted to /api/v1/chat/completions, in order.
     std::vector<std::string> receivedBodies() const {
         std::lock_guard<std::mutex> lk(mu_);
         return receivedBodies_;
+    }
+
+    /// Authorization header of each /chat/completions request ("" when absent).
+    std::vector<std::string> receivedAuthorization() const {
+        std::lock_guard<std::mutex> lk(mu_);
+        return receivedAuth_;
     }
 
 private:
@@ -142,16 +163,20 @@ private:
 
     void registerHandlers() {
         server_->Get("/api/v1/health", [this](const httplib::Request&, httplib::Response& res) {
-            res.set_content(reportModelLoaded_ ? kHealthOk : kHealthNoModel, "application/json");
+            std::lock_guard<std::mutex> lk(mu_);
+            const std::string& fixed = reportModelLoaded_ ? kHealthOk : kHealthNoModel;
+            res.set_content(health_.empty() ? fixed : health_, "application/json");
         });
 
         server_->Post("/api/v1/load", [this](const httplib::Request&, httplib::Response& res) {
             ++loadCount_;
-            res.set_content(kLoadOk, "application/json");
+            res.status = loadStatus_.load();
+            res.set_content(res.status == 200 ? kLoadOk : R"({"error":"load refused"})", "application/json");
         });
 
-        server_->Get("/api/v1/models", [](const httplib::Request&, httplib::Response& res) {
-            res.set_content(kModelsList, "application/json");
+        server_->Get("/api/v1/models", [this](const httplib::Request&, httplib::Response& res) {
+            std::lock_guard<std::mutex> lk(mu_);
+            res.set_content(modelsList_, "application/json");
         });
 
         server_->Post("/api/v1/chat/completions",
@@ -163,6 +188,7 @@ private:
                           {
                               std::lock_guard<std::mutex> lk(mu_);
                               receivedBodies_.push_back(req.body);
+                              receivedAuth_.push_back(req.get_header_value("Authorization"));
                           }
                           ++requestCount_;
 
@@ -230,6 +256,16 @@ private:
     /// They carry no Lemonade semantics — they exercise headers, bodies,
     /// streaming, slow responses, and error statuses.
     void registerGenericHttpRoutes() {
+        // A 4 MB body — drives response-size-limit tests.
+        server_->Get("/test/big", [](const httplib::Request&, httplib::Response& res) {
+            res.set_content(std::string(4u * 1024u * 1024u, 'x'), "text/plain");
+        });
+        // The same size as an error page.
+        server_->Get("/test/big-error", [](const httplib::Request&, httplib::Response& res) {
+            res.status = 500;
+            res.set_content(std::string(4u * 1024u * 1024u, 'e'), "text/plain");
+        });
+
         // Echoes the X-Gaia-Test request header back as the body.
         server_->Get("/test/echo", [](const httplib::Request& req, httplib::Response& res) {
             res.set_header("X-Gaia-Echo", "pong");
@@ -241,6 +277,19 @@ private:
             res.set_header("X-Gaia-Content-Type", req.get_header_value("Content-Type"));
             res.set_header("X-Gaia-Test-Seen", req.get_header_value("X-Gaia-Test"));
             res.set_content(req.body, "text/plain");
+        });
+
+        // Reports the client's source port, which names the connection used.
+        auto peer = [](const httplib::Request& req, httplib::Response& res) {
+            res.set_content(std::to_string(req.remote_port), "text/plain");
+        };
+        server_->Get("/test/peer", peer);
+        server_->Post("/test/peer", peer);
+
+        // Same, then the server closes the connection.
+        server_->Get("/test/peer-close", [](const httplib::Request& req, httplib::Response& res) {
+            res.set_header("Connection", "close");
+            res.set_content(std::to_string(req.remote_port), "text/plain");
         });
 
         // Responds after a delay — drives read-timeout tests.
@@ -300,10 +349,14 @@ private:
     std::thread thread_;
     int port_ = 0;
     bool reportModelLoaded_ = true;
+    std::atomic<int> loadStatus_{200};
+    std::string modelsList_ = kModelsList;
+    std::string health_;
     mutable std::mutex mu_;
     std::deque<QueuedResponse> responseQueue_;
     std::deque<std::string> sseQueue_;
     std::vector<std::string> receivedBodies_;
+    std::vector<std::string> receivedAuth_;
     std::atomic<int> requestCount_{0};
     std::atomic<int> loadCount_{0};
     std::atomic<bool> sseStreaming_{false};

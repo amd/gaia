@@ -9,12 +9,12 @@ import uuid
 
 import pytest
 
-pytest.importorskip("gaia_agent")
+pytest.importorskip("gaiapy")
 
 from fastapi.testclient import TestClient  # noqa: E402
-from gaia_agent import caller_auth  # noqa: E402
-from gaia_agent import server as server_mod  # noqa: E402
-from gaia_agent import session_registry as sr  # noqa: E402
+from gaiapy import caller_auth  # noqa: E402
+from gaiapy import server as server_mod  # noqa: E402
+from gaiapy import session_registry as sr  # noqa: E402
 
 from gaia.ui import turn_insights  # noqa: E402
 
@@ -42,6 +42,7 @@ def built(monkeypatch):
     caller_auth.reset()
     monkeypatch.delenv(caller_auth.TOKEN_FILE_ENV_VAR, raising=False)
     monkeypatch.delenv(caller_auth.TOKEN_ENV_VAR, raising=False)
+    monkeypatch.setenv(caller_auth.ALLOW_NO_TOKEN_ENV_VAR, "1")
     state = {"result": None}
 
     def build(**kw):
@@ -72,16 +73,20 @@ def measured(monkeypatch):
     return calls
 
 
-def _final(client, **fields):
+def _events(client, **fields):
     body = {"query": "Capital of France?", "run_id": str(uuid.uuid4()), "context": []}
     body.update(fields)
     r = client.post("/v1/gaia/query", json=body)
     assert r.status_code == 200, r.text
-    events = [
+    return [
         json.loads(line[len("data: ") :])
         for line in r.text.splitlines()
         if line.startswith("data: ")
     ]
+
+
+def _final(client, **fields):
+    events = _events(client, **fields)
     finals = [e for e in events if e.get("type") in ("final", "error")]
     assert len(finals) == 1, events
     return finals[0]
@@ -90,6 +95,32 @@ def _final(client, **fields):
 def test_the_contract_advertises_final_context():
     major, minor = (int(x) for x in server_mod.API_VERSION.split(".")[:2])
     assert (major, minor) >= (2, 21)
+
+
+def test_the_contract_advertises_live_context():
+    """Contract 2.28 streams the measurement before the answer, not only on final."""
+    major, minor = (int(x) for x in server_mod.API_VERSION.split(".")[:2])
+    assert (major, minor) >= (2, 28)
+
+
+def test_a_live_measurement_reaches_the_stream_before_the_answer(built):
+    client, _ = built
+    earlier = [
+        [
+            {"role": "user", "content": "Hi"},
+            {"role": "assistant", "content": "Hello!"},
+        ]
+    ]
+
+    events = _events(client, turns=earlier)
+
+    types = [e["type"] for e in events]
+    assert types.count("context_usage") == 1, events
+    assert types.index("context_usage") < types.index("final")
+    live = events[types.index("context_usage")]
+    assert live["window"] > 0
+    assert live["used"] > 0
+    assert live["turns_in_view"] == 1
 
 
 def test_final_carries_the_next_calls_context(built, measured):
@@ -212,8 +243,10 @@ def _timed_result():
     }
 
 
-def test_timings_survive_a_context_measurement_that_overruns(built, monkeypatch):
-    """The answer goes without ``context`` after the wait, but still with its timings."""
+def test_a_measurement_that_overruns_is_named_and_timings_still_ship(
+    built, monkeypatch
+):
+    """A measurement that cannot finish says so; the answer keeps its timings."""
     import threading
 
     client, state = built
@@ -225,7 +258,10 @@ def test_timings_survive_a_context_measurement_that_overruns(built, monkeypatch)
         return {"used": 1}
 
     def answers_live(self, query, max_steps=None):
-        # The real agent prints ``final`` inside process_query, before measuring.
+        # The real agent seals the record and prints ``final`` inside
+        # process_query, before its measurement runs.
+        record = [{"role": "assistant", "content": self.result["answer"]}]
+        self.console.stage_final_model_messages(self.result["answer"], record)
         self.console.print_final_answer(self.result["answer"])
         return self.result
 
@@ -233,13 +269,147 @@ def test_timings_survive_a_context_measurement_that_overruns(built, monkeypatch)
     monkeypatch.setattr(server_mod, "_measure_turn_context", stuck)
     monkeypatch.setattr(server_mod, "_CONTEXT_WAIT_SECONDS", 0.2)
     try:
-        final = _final(client)
+        final = _final(client, turns=[])
     finally:
         release.set()
 
+    assert final["answer"] == "Paris."
     assert "context" not in final
+    assert "did not finish within" in final["context_error"]
     assert final["performance"]["timing_summary"]["llm_seconds"] == 1.5
     assert len(final["performance"]["conversation"]) == 1
+
+
+def test_a_failed_turn_sends_no_measurement_even_with_a_sealed_record(
+    built, measured, monkeypatch
+):
+    """A failure notice is not a turn the next push carries."""
+    client, state = built
+    notice = "The model server went away."
+    state["result"] = {"answer": notice, "model_failed": True}
+
+    def answers_failed(self, query, max_steps=None):
+        self.console.mark_turn_failed()
+        record = [{"role": "assistant", "content": notice}]
+        self.console.stage_final_model_messages(notice, record)
+        self.console.print_final_answer(notice)
+        return self.result
+
+    monkeypatch.setattr(_Agent, "process_query", answers_failed)
+
+    final = _final(client)
+
+    assert final["failed"] is True
+    assert "context" not in final and "context_error" not in final
+    assert measured == []
+
+
+def test_a_slow_tail_cannot_take_the_record_or_measurement_with_it(
+    built, measured, monkeypatch
+):
+    """rc18: a turn still storing memory past the wait lost its meter and record.
+
+    The agent seals both before the answer, so ``final`` reports them even
+    though the loop has not returned when the stream reaches it. Timings are
+    the one thing that still needs the loop, and they are the only thing lost.
+    """
+    import threading
+
+    client, state = built
+    record = [
+        {"role": "user", "content": "Capital of France?"},
+        {"role": "assistant", "content": "Paris."},
+    ]
+    state["result"] = {"answer": "Paris.", "model_messages": record}
+    storing = threading.Event()
+
+    def answers_then_stores(self, query, max_steps=None):
+        self.console.stage_final_model_messages("Paris.", record)
+        self.console.print_final_answer("Paris.")
+        storing.wait(0.6)  # the memory store outlives the wait for the loop
+        return self.result
+
+    monkeypatch.setattr(_Agent, "process_query", answers_then_stores)
+    monkeypatch.setattr(server_mod, "_RUN_RESULT_WAIT_SECONDS", 0.1)
+    try:
+        final = _final(client, turns=[])
+    finally:
+        storing.set()
+
+    assert final["answer"] == "Paris."
+    assert final["model_messages"] == record
+    assert final["context"] == {
+        "window": 65536,
+        "used": 1234,
+        "model": "Qwen3.6-35B-A3B-GGUF",
+    }
+    assert "context_error" not in final
+    [call] = measured
+    assert call["turns"] == [record]
+    assert "performance" not in final
+
+
+def test_a_turns_final_still_waits_for_the_loops_timings(built, measured, monkeypatch):
+    """The asymmetry is deliberate: a caller that sent ``turns`` is owed timings."""
+    import threading
+
+    client, state = built
+    state["result"] = _timed_result()
+    storing = threading.Event()
+
+    def answers_then_stores(self, query, max_steps=None):
+        self.console.stage_final_model_messages("Paris.", [])
+        self.console.print_final_answer("Paris.")
+        storing.wait(0.3)
+        return self.result
+
+    monkeypatch.setattr(_Agent, "process_query", answers_then_stores)
+    monkeypatch.setattr(server_mod, "_RUN_RESULT_WAIT_SECONDS", 5.0)
+    try:
+        final = _final(client, turns=[])
+    finally:
+        storing.set()
+
+    assert final["performance"]["timing_summary"]["llm_seconds"] == 1.5
+
+
+def test_a_no_turns_final_does_not_wait_for_the_run_tail(built, measured, monkeypatch):
+    """The TUI sends no ``turns``; its final must keep its earlier bound.
+
+    Only a caller that sent ``turns`` is owed timings from the loop. Here a
+    slow tail costs ``performance`` and nothing else, so the final is not held
+    behind a wait whose old form was already at the bound this path had.
+    """
+    import threading
+
+    client, state = built
+    record = [{"role": "assistant", "content": "Paris."}]
+    state["result"] = {"answer": "Paris.", "model_messages": record}
+    storing = threading.Event()
+
+    def answers_then_stores(self, query, max_steps=None):
+        self.console.stage_final_model_messages("Paris.", record)
+        self.console.print_final_answer("Paris.")
+        storing.wait(0.6)
+        return self.result
+
+    monkeypatch.setattr(_Agent, "process_query", answers_then_stores)
+    # A join would unblock when the tail finishes and attach its timings; the
+    # assertion below pins that this request shape never waited for that.
+    monkeypatch.setattr(server_mod, "_RUN_RESULT_WAIT_SECONDS", 5.0)
+    try:
+        final = _final(client)
+    finally:
+        storing.set()
+
+    assert final["answer"] == "Paris."
+    assert final["context"] == {
+        "window": 65536,
+        "used": 1234,
+        "model": "Qwen3.6-35B-A3B-GGUF",
+    }
+    assert "model_messages" not in final
+    assert "performance" not in final
 
 
 def test_a_turn_that_timed_nothing_sends_no_performance(built, measured):
@@ -307,3 +477,83 @@ def test_a_relayed_chat_is_measured_in_whole_turns_with_its_tool_results(
     assert final["type"] == "final"
     [call] = measured
     assert call["turns"] == earlier + [newest]
+
+
+# ── final.route (contract 2.29) ──────────────────────────────────────────────
+
+_ROUTE = {"model": "amd.Claude-Strong", "reason": "find_defects", "sticky": False}
+
+
+class _Decision:
+    def __init__(self, record):
+        self.record = record
+
+    def as_record(self):
+        return dict(self.record)
+
+
+def test_the_contract_advertises_final_route():
+    major, minor = (int(x) for x in server_mod.API_VERSION.split(".")[:2])
+    assert (major, minor) >= (2, 29)
+
+
+def test_final_carries_a_hybrid_turns_route(built, measured):
+    client, state = built
+    state["result"] = {"answer": "Paris.", "route": dict(_ROUTE)}
+
+    assert _final(client)["route"] == _ROUTE
+
+
+def test_a_failed_hybrid_turn_still_names_its_route(built, measured):
+    """A failed turn that began answering is billed; its route says to whom."""
+    client, state = built
+    state["result"] = {"answer": "Gone.", "model_failed": True, "route": _ROUTE}
+
+    final = _final(client)
+
+    assert final["failed"] is True and final["route"] == _ROUTE
+
+
+def test_route_is_read_from_the_agent_while_the_run_tail_is_running(built, measured):
+    """``final`` can go out before the loop returns; the route is decided earlier."""
+    client, state = built
+
+    def routed(self, query, max_steps=None):
+        self.hybrid_router = object()
+        self.last_route = _Decision(_ROUTE)
+        return {"answer": "Paris."}
+
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(_Agent, "process_query", routed)
+        final = _final(client)
+
+    assert final["route"] == _ROUTE
+
+
+def test_a_turn_without_routing_sends_no_route(built, measured):
+    client, _state = built
+
+    assert "route" not in _final(client)
+
+
+def test_a_stale_route_after_leaving_hybrid_is_not_sent(built, measured):
+    """``/model <id>`` ends routing; the last hybrid turn's route must not linger."""
+    client, _state = built
+
+    def named(self, query, max_steps=None):
+        self.hybrid_router = None
+        self.last_route = _Decision(_ROUTE)
+        return {"answer": "Paris."}
+
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(_Agent, "process_query", named)
+        final = _final(client)
+
+    assert "route" not in final
+
+
+def test_a_route_that_is_not_an_object_is_not_sent(built, measured):
+    client, state = built
+    state["result"] = {"answer": "Paris.", "route": "amd.Claude-Strong"}
+
+    assert "route" not in _final(client)

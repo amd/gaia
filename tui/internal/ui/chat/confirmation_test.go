@@ -33,14 +33,14 @@ func (c *confirmingClient) Confirm(_ context.Context, runID string, approved boo
 
 func needsConfirmation(confirmURL string) event.CanonicalNeedsConfirmationEvent {
 	return event.CanonicalNeedsConfirmationEvent{
-		Type: "needs_confirmation", RunID: "run-1", Action: "send_draft",
-		Summary: `Send reply to alice@example.com — subject "Re: invoice"?`, ConfirmURL: confirmURL,
+		Type: "needs_confirmation", RunID: "run-1", Action: "share_engineering_context",
+		Summary: `Share build.log with reviewer@example.com — "nightly failure"?`, ConfirmURL: confirmURL,
 	}
 }
 
-// The modal must actually go up, and it must not end the turn on its own — the
-// email sidecar sends its own terminal event right after, but the client does
-// not assume that; it reads whatever the stream sends next.
+// The modal must actually go up, and it must not end the turn on its own — a
+// stateless sidecar sends its own terminal event right after, but the client
+// does not assume that; it reads whatever the stream sends next.
 func TestNeedsConfirmationPutsUpTheModal(t *testing.T) {
 	m, _ := newTestModel(t)
 	m.streaming = true
@@ -53,21 +53,21 @@ func TestNeedsConfirmationPutsUpTheModal(t *testing.T) {
 	if m.confirmation == nil {
 		t.Fatal("the confirmation modal was not put up")
 	}
-	if m.confirmation.RunID() != "run-1" || m.confirmation.Action() != "send_draft" {
+	if m.confirmation.RunID() != "run-1" || m.confirmation.Action() != "share_engineering_context" {
 		t.Errorf("modal lost the event's identity: runID=%q action=%q",
 			m.confirmation.RunID(), m.confirmation.Action())
 	}
 	view := m.View()
-	for _, want := range []string{"Send this email?", "alice@example.com", "WRITE"} {
+	for _, want := range []string{"share_engineering_context", "reviewer@example.com", "WRITE"} {
 		if !strings.Contains(view, want) {
 			t.Errorf("modal not rendered in chat (missing %q):\n%s", want, view)
 		}
 	}
 }
 
-// While the confirmation is pending, keys drive it rather than the composer —
-// mirrors TestKeysRouteToThePendingQuestion for the confirmation modal.
-func TestKeysRouteToThePendingConfirmation(t *testing.T) {
+// A key that is not an answer never resolves the prompt — and it is not thrown
+// away either: it was typed for the composer, so that is where it goes.
+func TestKeysThatAreNotAnAnswerTypeIntoTheComposer(t *testing.T) {
 	m, _ := newTestModel(t)
 	m.streaming = true
 	m = feed(t, m, needsConfirmation(""))
@@ -80,8 +80,8 @@ func TestKeysRouteToThePendingConfirmation(t *testing.T) {
 	if m.confirmation == nil || !m.confirmation.Pending() {
 		t.Fatal("the confirmation must still be pending")
 	}
-	if got := m.input.Value(); got != "" {
-		t.Errorf("the keystroke leaked into the composer: %q", got)
+	if got := m.input.Value(); got != "x" {
+		t.Errorf("the keystroke was dropped: composer = %q", got)
 	}
 }
 
@@ -92,7 +92,7 @@ func TestDenyingClearsTheModalAndRecordsOutcome(t *testing.T) {
 	m.streaming = true
 	m = feed(t, m, needsConfirmation(""))
 
-	updated, cmd := m.handleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("n")})
+	updated, cmd := answerKey(t, m, "n")
 	m = updated.(ChatModel)
 	if cmd == nil {
 		t.Fatal("denying produced no command")
@@ -142,18 +142,18 @@ func TestEscDeniesTheConfirmationRatherThanCancellingTheTurn(t *testing.T) {
 	}
 }
 
-// Approving with no confirm_url (the shipping email sidecar's stateless D1
+// Approving with no confirm_url (a stateless D1 sidecar's
 // contract, always) must not claim delivery it cannot make — see
 // ConfirmationModel's doc comment and ui/oneshot.go's writeWithheld, which
 // draws the identical line for the one-shot surface.
 func TestApprovingWithNoConfirmURLDoesNotClaimDelivery(t *testing.T) {
 	c := &confirmingClient{}
-	m := NewChatModel(c, "email", "", false)
+	m := NewChatModel(c, "notes", "")
 	m.width, m.height = 100, 30
 	m.streaming = true
 	m = feed(t, m, needsConfirmation(""))
 
-	updated, cmd := m.handleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("y")})
+	updated, cmd := answerKey(t, m, "y")
 	m = updated.(ChatModel)
 	msg := cmd().(components.ConfirmationDecidedMsg)
 	updatedModel, cmd2 := m.Update(msg)
@@ -174,12 +174,12 @@ func TestApprovingWithNoConfirmURLDoesNotClaimDelivery(t *testing.T) {
 // carry a confirm_url gets a real delivery attempt through AgentConfirmer.
 func TestApprovingWithConfirmURLDeliversViaConfirmer(t *testing.T) {
 	c := &confirmingClient{}
-	m := NewChatModel(c, "email", "", false)
+	m := NewChatModel(c, "notes", "")
 	m.width, m.height = 100, 30
 	m.streaming = true
-	m = feed(t, m, needsConfirmation("/v1/email/query/run-1/confirm"))
+	m = feed(t, m, needsConfirmation("/v1/notes/query/run-1/confirm"))
 
-	updated, cmd := m.handleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("y")})
+	updated, cmd := answerKey(t, m, "y")
 	m = updated.(ChatModel)
 	msg := cmd().(components.ConfirmationDecidedMsg)
 	if msg.ConfirmURL == "" {
@@ -204,13 +204,13 @@ func TestApprovingWithConfirmURLDeliversViaConfirmer(t *testing.T) {
 
 // A failed delivery is surfaced, never swallowed.
 func TestFailedConfirmDeliveryIsSurfaced(t *testing.T) {
-	c := &confirmingClient{err: errors.New("the 'email' run had already ended")}
-	m := NewChatModel(c, "email", "", false)
+	c := &confirmingClient{err: errors.New("the 'notes' run had already ended")}
+	m := NewChatModel(c, "notes", "")
 	m.width, m.height = 100, 30
 	m.streaming = true
-	m = feed(t, m, needsConfirmation("/v1/email/query/run-1/confirm"))
+	m = feed(t, m, needsConfirmation("/v1/notes/query/run-1/confirm"))
 
-	updated, cmd := m.handleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("y")})
+	updated, cmd := answerKey(t, m, "y")
 	m = updated.(ChatModel)
 	msg := cmd().(components.ConfirmationDecidedMsg)
 	_, cmd2 := m.Update(msg)
@@ -226,7 +226,7 @@ func TestFailedConfirmDeliveryIsSurfaced(t *testing.T) {
 
 // A turn that ends while a confirmation is up must take the modal down with
 // it — mirrors TestTerminalEventClearsThePendingQuestion. This is the ORDINARY
-// case against the current email sidecar: needs_confirmation is immediately
+// case against a stateless sidecar: needs_confirmation is immediately
 // followed by a final refusal in the same stream read.
 func TestTerminalEventClearsThePendingConfirmation(t *testing.T) {
 	for _, tc := range []struct {

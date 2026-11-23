@@ -162,20 +162,6 @@ def render_catalog(skills: Dict[str, "Skill"], list_project: bool = False) -> st
     return CATALOG_HEADER + "\n" + "\n".join(lines)
 
 
-def skills_granting(skills: Dict[str, "Skill"], binary: str) -> List[str]:
-    """Names of the skills that declare ``shell:execute:<binary>``, sorted."""
-    from gaia.skills.binaries import normalize_binary
-
-    return sorted(
-        skill.name
-        for skill in skills.values()
-        if any(
-            grant.is_binary_bridged and normalize_binary(grant.scope) == binary
-            for grant in skill.parsed_permissions()
-        )
-    )
-
-
 __all__ = [
     "CATALOG_DESCRIPTION_CHARS",
     "CATALOG_ENV",
@@ -186,5 +172,4 @@ __all__ = [
     "companions",
     "listed",
     "render_catalog",
-    "skills_granting",
 ]

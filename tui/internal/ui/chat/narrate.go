@@ -51,6 +51,7 @@ const (
 // command IS the narration.
 var shellTools = map[string]bool{
 	"run_shell_command": true,
+	"bash_execute":      true,
 	"run_command":       true,
 	"execute_command":   true,
 	"shell":             true,
@@ -97,6 +98,34 @@ var toolPhrases = map[string]toolPhrase{
 	"list_directory":   {With: "Listing %s", Without: "Listing the current folder", Arg: "directory"},
 	"search_file":      {With: "Looking for files matching %s", Without: "Looking for files", Arg: "pattern"},
 
+	// gaiacpp's names for its tools
+	"bash_execute":       {With: "%s", Without: "Running a command", Arg: "command"},
+	"file_read":          {With: "Reading %s", Without: "Reading a file", Arg: "path"},
+	"file_write":         {With: "Writing %s", Without: "Writing a file", Arg: "path"},
+	"file_edit":          {With: "Editing %s", Without: "Editing a file", Arg: "path"},
+	"file_search":        {With: "Looking for files matching %s", Without: "Looking for files", Arg: "pattern"},
+	"web_fetch":          {With: "Reading %s", Without: "Fetching a page", Arg: "url"},
+	"search_code":        {With: "Searching the code for %s", Without: "Searching the code", Arg: "query"},
+	"git_status":         {Without: "Checking git status"},
+	"git_diff":           {Without: "Reading the changes"},
+	"git_log":            {Without: "Reading the git history"},
+	"git_show":           {With: "Reading commit %s", Without: "Reading a commit", Arg: "ref"},
+	"env_inspect":        {Without: "Checking this machine"},
+	"delegate_task":      {Without: "Handing work to helpers"},
+	"remember":           {Without: "Saving to memory"},
+	"recall":             {With: "Checking memory for %s", Without: "Checking memory", Arg: "query"},
+	"update_memory":      {Without: "Updating memory"},
+	"forget":             {Without: "Deleting from memory"},
+	"take_screenshot":    {Without: "Taking a screenshot"},
+	"generate_image":     {With: "Creating an image of %s", Without: "Creating an image", Arg: "prompt"},
+	"analyze_image":      {With: "Looking at %s", Without: "Looking at an image", Arg: "path"},
+	"transcribe_audio":   {With: "Transcribing %s", Without: "Transcribing a recording", Arg: "path"},
+	"read_tool_output":   {Without: "Re-reading an earlier result"},
+	"list_mcp_prompts":   {Without: "Listing a connector's prompts"},
+	"get_mcp_prompt":     {With: "Reading the connector prompt %s", Without: "Reading a connector's prompt", Arg: "name"},
+	"list_mcp_resources": {Without: "Listing a connector's resources"},
+	"read_mcp_resource":  {With: "Reading the connector resource %s", Without: "Reading a connector's resource", Arg: "uri"},
+
 	// Web
 	"web_search":    {With: "Searching the web for %s", Without: "Searching the web", Arg: "query"},
 	"search_web":    {With: "Searching the web for %s", Without: "Searching the web", Arg: "query"},
@@ -104,16 +133,15 @@ var toolPhrases = map[string]toolPhrase{
 	"fetch_url":     {With: "Reading %s", Without: "Fetching a page", Arg: "url"},
 	"download_file": {With: "Downloading %s", Without: "Downloading a file", Arg: "url"},
 
-	// Email
-	"pre_scan_inbox":  {Without: "Scanning your inbox"},
-	"list_inbox":      {Without: "Reading your inbox"},
-	"triage_inbox":    {Without: "Triaging your inbox"},
-	"get_message":     {With: "Opening message %s", Without: "Opening a message", Arg: "message_id"},
-	"triage_message":  {With: "Triaging message %s", Without: "Triaging a message", Arg: "message_id"},
-	"search_messages": {With: "Searching your mail for %s", Without: "Searching your mail", Arg: "query"},
+	// Mail
+	"list_inbox":   {Without: "Reading your inbox"},
+	"read_email":   {With: "Opening message %s", Without: "Opening a message", Arg: "message_id"},
+	"search_email": {With: "Searching your mail for %s", Without: "Searching your mail", Arg: "query"},
 
-	// Not a tool: the agent asking to reach a path outside the session.
-	"allow_path_access": {With: "Asking for access to %s", Without: "Asking for access to a location", Arg: "path"},
+	// Not tools: the agent checking in on a long turn, and asking to reach a
+	// path outside the session.
+	"continue_long_turn": {Without: "Asking whether to keep going"},
+	"allow_path_access":  {With: "Asking for access to %s", Without: "Asking for access to a location", Arg: "path"},
 
 	// Not a tool: the agent asking whether to read a folder's CLAUDE.md, AGENTS.md and skills.
 	"trust_project_folder": {With: "Asking to trust %s", Without: "Asking to trust this folder", Arg: "folder"},
@@ -159,6 +187,10 @@ func toolNarration(tool string, args json.RawMessage, narration string) string {
 func narrationFor(tool string, args json.RawMessage, narration string) string {
 	if n := clean(narration); n != "" {
 		return truncateRunes(unclipArg(n, args), narrationMax)
+	}
+
+	if line, ok := audioNarration(tool, args); ok {
+		return truncateRunes(line, narrationMax)
 	}
 
 	// The command is the narration — anything wrapped round it is noise.
@@ -221,7 +253,7 @@ func unclipArg(narration string, args json.RawMessage) string {
 
 // derivePhrase builds a phrase from the tool name when the table has no entry.
 // An unrecognised leading verb yields "Running <tool>" rather than a guess:
-// "Pre scan inbox" reads like a bug, "Running pre_scan_inbox" reads like a tool.
+// "Frob widget" reads like a bug, "Running frob_widget" reads like a tool.
 func derivePhrase(tool string) toolPhrase {
 	// The tool name goes into a Sprintf FORMAT string, so a literal "%" in it
 	// would be read as a verb: derivePhrase("get_100%_done") produced
@@ -249,6 +281,25 @@ func toolResultDetail(e event.CanonicalToolResultEvent) string {
 	return shortenPaths(resultDetail(e))
 }
 
+// echoesPayload reports a preview that is the result's own JSON, whole or cut
+// short, and not a line of output that happens to be JSON.
+func echoesPayload(preview string, data json.RawMessage) bool {
+	p := strings.TrimSuffix(strings.TrimSpace(preview), "…")
+	if !strings.HasPrefix(p, "{") || len(data) == 0 {
+		return false
+	}
+	var shown, sent any
+	if json.Unmarshal([]byte(p), &shown) == nil && json.Unmarshal(data, &sent) == nil {
+		if a, err := json.Marshal(shown); err == nil {
+			if b, err := json.Marshal(sent); err == nil && bytes.Equal(a, b) {
+				return true
+			}
+		}
+	}
+	var compact bytes.Buffer
+	return json.Compact(&compact, data) == nil && strings.HasPrefix(compact.String(), p)
+}
+
 func resultDetail(e event.CanonicalToolResultEvent) string {
 	// Classified FIRST, so every return below can carry the word. A preview that
 	// short-circuited ahead of this left a failed call marked in red and nothing
@@ -256,7 +307,8 @@ func resultDetail(e event.CanonicalToolResultEvent) string {
 	// rely on.
 	failed := !toolResultSucceeded(e.Data)
 
-	if p := clean(e.Preview); p != "" {
+	// A preview that is the payload itself is not a line for a person.
+	if p := clean(e.Preview); p != "" && !echoesPayload(e.Preview, e.Data) {
 		return markFailed(p, failed)
 	}
 
@@ -497,6 +549,8 @@ func clean(s string) string {
 	if strings.ContainsRune(s, 0x1b) {
 		s = ansi.Strip(s)
 	}
+	// C1 controls and bidi overrides too: model text reaches every row here.
+	s = scrubDisplayControls(s)
 	s = strings.Map(func(r rune) rune {
 		switch {
 		case r == '\t' || r == '\n' || r == '\r':

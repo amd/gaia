@@ -10,7 +10,7 @@ chat must file them under it. The delete itself is tested in
 from unittest.mock import patch
 
 import pytest
-from gaia_agent.chat_agent import ChatAgent, ChatAgentConfig
+from gaiapy.chat_agent import ChatAgent, ChatAgentConfig
 
 
 def test_the_chat_agent_files_memory_under_the_chat_id():

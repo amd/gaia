@@ -1,84 +1,52 @@
 # Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 # SPDX-License-Identifier: MIT
-"""GAIA — the flagship general-purpose agent, as a standalone hub package.
+"""The old name of :mod:`gaiapy`, kept so code that imports ``gaia_agent`` still runs.
 
-Registers one agent id, ``gaia``, via the ``gaia.agent`` entry-point group.
-Public names are re-exported lazily so registry discovery stays cheap: importing
-this module must not drag in RAG, the browser stack, or a model client.
+``import gaia_agent`` and ``import gaia_agent.anything`` return the very same
+module objects as their ``gaiapy`` spellings, never a second copy, so a class
+imported through either name is one class.
 """
 
-__all__ = ["build_gaia"]
+import importlib
+import importlib.abc
+import importlib.util
+import sys
 
-__version__ = "0.3.5"
+import gaiapy
 
-_LAZY = {
-    "GaiaAgent": "agent",
-    "GaiaAgentConfig": "agent",
-}
-
-
-def __getattr__(name):
-    if name in _LAZY:
-        import importlib
-
-        module = importlib.import_module(f"gaia_agent.{_LAZY[name]}")
-        return getattr(module, name)
-    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+_OLD = __name__
+_NEW = gaiapy.__name__
 
 
-def _factory(**kwargs):
-    """Build a :class:`GaiaAgent`, honouring the registry's ``model_tier`` kwarg."""
-    import dataclasses
+class _OldNameFinder(importlib.abc.MetaPathFinder, importlib.abc.Loader):
+    """Resolve ``gaia_agent.x`` to the already-importable ``gaiapy.x``."""
 
-    from gaia.agents.registry import _select_tier_model, build_model_tiers
+    def __init__(self):
+        self._real_specs = {}
 
-    tier = kwargs.pop("model_tier", None)
-    if tier:
-        preset = _select_tier_model(build_model_tiers("Full"), tier)
-        if preset:
-            kwargs.setdefault("model_id", preset)
+    def find_spec(self, fullname, path=None, target=None):
+        if not fullname.startswith(_OLD + "."):
+            return None
+        real = importlib.util.find_spec(_NEW + fullname[len(_OLD) :])
+        if real is None:
+            return None
+        # The real origin gives ``python -m gaia_agent.x`` a ``__file__``.
+        return importlib.util.spec_from_loader(fullname, self, origin=real.origin)
 
-    from gaia_agent.agent import GaiaAgent, GaiaAgentConfig
+    def create_module(self, spec):
+        module = importlib.import_module(_NEW + spec.name[len(_OLD) :])
+        self._real_specs[spec.name] = module.__spec__
+        return module
 
-    valid = {f.name for f in dataclasses.fields(GaiaAgentConfig)}
-    return GaiaAgent(
-        config=GaiaAgentConfig(**{k: v for k, v in kwargs.items() if k in valid})
-    )
+    def exec_module(self, module):
+        """Nothing to run, but undo the import system's swap of ``__spec__``."""
+        module.__spec__ = self._real_specs.pop(module.__spec__.name)
+
+    def get_code(self, fullname):
+        """``python -m gaia_agent.x`` runs ``gaiapy.x``'s code as ``__main__``."""
+        new = _NEW + fullname[len(_OLD) :]
+        return importlib.util.find_spec(new).loader.get_code(new)
 
 
-def build_gaia():
-    """Return the :class:`AgentRegistration` for the flagship ``gaia`` agent."""
-    from gaia_agent.connectors import MAILBOX_REQUIREMENTS
-
-    from gaia.agents.registry import AgentRegistration, build_model_tiers
-
-    tiers = build_model_tiers("Full")
-    return AgentRegistration(
-        id="gaia",
-        name="GAIA",
-        description=(
-            "The flagship agent — conversation, document Q&A, data analysis, and "
-            "web research, with memory that persists and skills you can add"
-        ),
-        source="installed",
-        conversation_starters=[
-            "What can you do?",
-            "Summarize the documents in this folder",
-            "Research this topic and write me a brief",
-            "What did we talk about last time?",
-        ],
-        factory=_factory,
-        agent_dir=None,
-        models=[],
-        required_connections=list(MAILBOX_REQUIREMENTS),
-        category="general",
-        tags=["general", "chat", "rag", "memory", "skills"],
-        icon="sparkles",
-        # Must equal the real registry size for the default construction, and
-        # the manifest's own tools_count. Drift-guarded by tests/test_gaia_agent.py.
-        tools_count=105,
-        # ChatAgent loads MCP servers dynamically, so the Settings "Active for"
-        # panel must list this agent for MCP-server connectors.
-        consumes_mcp_servers=True,
-        model_tiers=tiers,
-    )
+sys.meta_path.insert(0, _OldNameFinder())
+sys.modules[_OLD] = gaiapy
