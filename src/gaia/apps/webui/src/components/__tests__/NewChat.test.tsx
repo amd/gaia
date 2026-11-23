@@ -771,6 +771,18 @@ describe('NewChat when the chosen gaiacpp cannot start', () => {
         expect(screen.getByRole('button', { name: 'Use Full-featured' })).toBeInTheDocument();
     });
 
+    it("words a known download problem in the UI's own terms, not the server's English", async () => {
+        vi.mocked(api.getAgentPrograms).mockResolvedValue(programs({
+            can_download: false,
+            unavailable_code: 'no_release',
+            unavailable_reason: 'this GAIA release has no gaiacpp to download. Use the Python agent, or update GAIA.',
+        }));
+        render(<NewChat onSend={vi.fn()} />);
+
+        expect(await screen.findByText(/no gaiacpp to download\. Use Full-featured, or update GAIA\./)).toBeInTheDocument();
+        expect(screen.queryByText(/Python agent/)).not.toBeInTheDocument();
+    });
+
     it('switches to Full-featured only when asked, then asks for the agent again', async () => {
         vi.mocked(api.updateSettings).mockResolvedValue({ flagship_agent: 'gaiapy' } as Settings);
         render(<NewChat onSend={vi.fn()} />);

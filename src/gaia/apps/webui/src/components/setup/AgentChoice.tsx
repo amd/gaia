@@ -25,7 +25,8 @@ const OPTIONS: Option[] = [
     { id: 'gaiacpp', label: 'setup.agent.gaiacpp', more: 'setup.agent.gaiacppMore', tag: 'setup.agent.beta' },
 ];
 
-const WHY: Record<NonNullable<AgentProgram['unavailable_code']>, MessageKey> = {
+/** Why gaiacpp can't be downloaded, in the UI's words rather than the server's English. */
+export const WHY: Record<NonNullable<AgentProgram['unavailable_code']>, MessageKey> = {
     no_release: 'setup.agent.why.noRelease',
     unreachable: 'setup.agent.why.unreachable',
     unverifiable: 'setup.agent.why.unverifiable',
