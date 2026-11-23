@@ -307,6 +307,8 @@ export interface InferenceStats {
     seconds?: number | null;
     /** True only for an answer kept from Retry with…. */
     retried?: boolean | null;
+    /** Seconds the turn waited on the user's answer to a permission prompt; absent when it never waited. */
+    waiting_seconds?: number | null;
     /** Where the turn was answered: "on your GPU", "via Fireworks AI". */
     place?: string | null;
     /** Set on a `hybrid` chat's turns: the model the turn was routed to, and why. */
@@ -457,7 +459,9 @@ export interface RetryResult {
 }
 
 /** GET /api/chat/context: the meter's numbers, or why there are none yet. */
-export type ContextUsageResult = ({ available: true } & ContextUsage) | { available: false; reason: string };
+export type ContextUsageResult =
+    | ({ available: true } & ContextUsage)
+    | { available: false; reason: string; reason_code?: string };
 
 /** POST /api/chat/retry-with/choose: which answer the chat now continues from. */
 export type RetryChoice = { kept: 'original' } | {
@@ -1085,6 +1089,8 @@ export interface ProviderModel {
     npu_problems?: SetupNpuProblem[];
     /** Median tokens/s of its recent turns on this PC. */
     tokens_per_second?: number | null;
+    /** Setup's tag: covered by GAIA's evals, or not; null for a model with no such tag. Local models only. */
+    support?: 'verified' | 'untested' | null;
     /** An in-flight (or just-finished) download of this model. */
     download_progress?: DownloadProgress | null;
     /** List price per million tokens; null when unknown (never shown as $0). Cloud models only. */

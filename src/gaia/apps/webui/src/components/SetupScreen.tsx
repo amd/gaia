@@ -7,6 +7,7 @@ import { Check, ChevronLeft, ChevronRight, Cloud, Eye, EyeOff, Info, Loader2 } f
 import * as api from '../services/api';
 import { displayModelName, shortModelName, useModelStore } from '../stores/modelStore';
 import { lemonadeKeyRejected } from '../utils/lemonade';
+import { scrollBehavior } from '../utils/motion';
 import { CloudPrices } from './settings/CloudPrices';
 import './settings/CloudSpending.css';
 import { ModelsStep, ReadySummary } from './SetupSteps';
@@ -37,7 +38,7 @@ import {
     pendingDownloads, resolveVision, savedVision, shortfall, skipChanges, toggle, tooBig, totals, type Selection, onlyTight } from './setup/selection';
 import type {
     GpuMemoryStatus, LemonadeFound, LemonadeTarget, PreflightReport, ProviderId, SetupCatalogEntry,
-    SetupConfirm, SetupModelProgress, SetupPlan, SetupProblem, SetupRunStatus, SetupTest, StartCard, FlagshipAgent,
+    SetupConfirm, SetupModelProgress, SetupPlan, SetupProblem, SetupRunStatus, SetupTest, StartCard, FlagshipAgent, AgentPrograms,
 } from '../types';
 import './SetupScreen.css';
 import './setup/setup.css';
@@ -355,6 +356,7 @@ interface HeldRun {
 }
 
 const AGENT_PICK_KEY = 'gaia.setup.agentPick';
+const AGENT_HEADING = 'setup-agent-title';
 const HELD_RUN_KEY = 'gaia.setup.heldRun';
 /** Extras added on the Download step, kept across a quit until they are handed to the download. */
 const QUEUED_EXTRAS_KEY = 'gaia.setup.queuedExtras';
@@ -889,6 +891,13 @@ export function SetupScreen({ onReady, onClose }: SetupScreenProps) {
         stepTo('models');
     }, [stepTo, running, viewing]);
 
+    // Customize, opened at its agent picker rather than its title.
+    const toAgent = useRef(false);
+    const customizeAgent = useCallback(() => {
+        toAgent.current = true;
+        customize();
+    }, [customize]);
+
     // The plan screen's two ways to run GAIA; this PC is the one recommended.
     const [where, setWhere] = useState<'local' | 'cloud'>('local');
 
@@ -1141,8 +1150,32 @@ export function SetupScreen({ onReady, onClose }: SetupScreenProps) {
         }
         const scroller = document.querySelector('.setup-scroll');
         if (scroller) scroller.scrollTop = 0;
+        const agent = toAgent.current && stage === 'models' ? document.getElementById(AGENT_HEADING) : null;
+        toAgent.current = false;
+        if (agent) {
+            agent.scrollIntoView({ block: 'start', behavior: scrollBehavior() });
+            agent.focus({ preventScroll: true });
+            return;
+        }
         document.getElementById('setup-title')?.focus({ preventScroll: true });
     }, [stage]);
+
+    // The plan names the agent only where Customize offers a second one to pick.
+    const [agents, setAgents] = useState<AgentPrograms | null>(null);
+    useEffect(() => {
+        if (stage !== 'plan') return;
+        let live = true;
+        api.getAgentPrograms()
+            .then((l) => { if (live) setAgents(l); })
+            .catch((err: unknown) => console.warn('[SetupScreen] could not read the agents; the plan leaves out the agent line', err));
+        return () => { live = false; };
+    }, [stage]);
+    const cppProgram = agents?.programs.find((p) => p.id === 'gaiacpp');
+    const agentShown = agentPick?.id ?? agents?.current;
+    const agentLabel: MessageKey | null = !cppProgram || !(cppProgram.installed || cppProgram.can_download) ? null
+        : agentShown === 'gaiapy' ? 'setup.agent.gaiapy'
+            : agentShown === 'gaiacpp' ? 'setup.agent.gaiacpp'
+                : null;
     // One flat line of steps; Customize, the cloud key and GPU memory are screens of the step they open from.
     const trail: Array<{ id: Stage; label: string; key: MessageKey }> = [
         { id: 'check', label: t('setup.check.title'), key: 'setup.check.title' },
@@ -1412,6 +1445,15 @@ export function SetupScreen({ onReady, onClose }: SetupScreenProps) {
                                             <li>{t('setup.plan.why.bigger', { name: biggerOption.name, need: formatFitGb(biggerOption.need_gb), have: formatFitGb(biggerOption.capacity_gb) })}</li>
                                         )}
                                     </ul>
+                                    {agentLabel && (
+                                        <p className="setup-agent-line">
+                                            {t.compose((say) => say('setup.plan.agent', { name: say(agentLabel) }))}
+                                            <span aria-hidden="true"> · </span>
+                                            <button type="button" className="link-btn" onClick={customizeAgent} disabled={busy || runGoing} aria-label={t('setup.plan.agentChangeAria')}>
+                                                {t('setup.plan.agentChange')}
+                                            </button>
+                                        </p>
+                                    )}
                                     {pending.length > 0 && <p className="setup-hint">{t('setup.plan.cancelAnytime')}</p>}
                                 </section>
                                 <section className={`setup-hero setup-where-card${where === 'cloud' ? ' is-active' : ''}${cloudBlocked ? ' is-disabled' : ''}`} aria-label={t('setup.plan.cloudLabel')} onClick={() => !runGoing && !cloudBlocked && setWhere('cloud')}>
@@ -1494,7 +1536,7 @@ export function SetupScreen({ onReady, onClose }: SetupScreenProps) {
                                     <button type="button" className="link-btn" onClick={() => openGpu('models')} disabled={busy || runGoing}>{t('setup.found.changeMemory')}</button>
                                 </p>
                             )}
-                            <AgentChoice disabled={busy || runGoing} pending={agentPick?.id ?? null} onPending={setAgentPick} />
+                            <AgentChoice disabled={busy || runGoing} pending={agentPick?.id ?? null} onPending={setAgentPick} headingId={AGENT_HEADING} />
                             <ModelsStep
                                 plan={plan}
                                 planError={planError}

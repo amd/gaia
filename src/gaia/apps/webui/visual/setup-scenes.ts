@@ -446,6 +446,7 @@ export const SETUP_SCENES: SetupScene[] = [
             // This PC and the cloud are two cards of the same size, not a card and a link.
             const [local, cloud] = await page.locator('.setup-where-card').evaluateAll((cards) => cards.map((c) => c.getBoundingClientRect().width));
             expect(Math.abs(local - cloud)).toBeLessThan(1);
+            await expect(page.locator('.setup-agent-line')).toBeVisible();
             await page.locator('.setup-disclosure summary').click();
             await expect(page.locator('.setup-contents')).toBeVisible();
         },
@@ -601,6 +602,28 @@ export const SETUP_SCENES: SetupScene[] = [
             await agent.scrollIntoViewIfNeeded();
         },
     }))),
+    {
+        // The plan's agent line opens Customize with the agent picker in view and focused.
+        name: 'models-from-agent-line',
+        reach: async (page) => {
+            await toPlan(page);
+            await page.locator('.setup-agent-line .link-btn').click();
+            const title = page.locator('#setup-agent-title');
+            await expect(title).toBeFocused();
+            await expect(title).toBeInViewport();
+        },
+    },
+    {
+        name: 'plan-agent-unavailable',
+        answers: { agent: { gaiacpp: 'unavailable' } },
+        reach: async (page) => {
+            const listed = page.waitForResponse((r) => new URL(r.url()).pathname === '/api/agent-programs');
+            await toPlan(page);
+            await listed;
+            await expect(page.locator('.setup-footer .btn-secondary')).toBeVisible();
+            await expect(page.locator('.setup-agent-line')).toHaveCount(0);
+        },
+    },
     {
         name: 'models-agent-download-picked',
         answers: { agent: { gaiacpp: 'downloadable' } },

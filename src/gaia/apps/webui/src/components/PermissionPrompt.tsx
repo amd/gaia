@@ -476,7 +476,7 @@ function PromptCard({ notification }: { notification: GaiaNotification }) {
                     {scope && (
                         <button
                             type="button"
-                            className={`perm-btn${suggestAlways ? ' is-suggested' : ''}`}
+                            className={`perm-btn is-lasting${suggestAlways ? ' is-suggested' : ''}`}
                             onClick={() => answer('always')}
                             disabled={busy}
                             title={scopeText}

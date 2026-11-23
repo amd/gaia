@@ -7,6 +7,7 @@ import * as api from '../services/api';
 import { useT } from '../i18n/useT';
 import { ref, type Param } from '../i18n/registry';
 import { useChatStore } from '../stores/chatStore';
+import { useActiveAgentStore } from '../stores/activeAgentStore';
 import { requestErrorParam } from '../utils/requestErrors';
 
 const NAME = 'gaiacpp';
@@ -42,6 +43,7 @@ export function NativeAgentFailedNotice() {
                 return;
             }
             await api.updateSettings({ flagship_agent: 'gaiapy' });
+            useActiveAgentStore.getState().setCurrent('gaiapy');
             if (live.current) setSwitched(true);
         } catch (err) {
             if (live.current) setError(requestErrorParam(err));

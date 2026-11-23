@@ -124,3 +124,34 @@ describe('PermissionModeChip in Arabic', () => {
         expect(screen.getByText(readsAs('اسأل (Ask)'))).toBeInTheDocument();
     });
 });
+
+describe('PermissionModeChip before the saved mode is known', () => {
+    it('says it is checking instead of promising to ask', async () => {
+        let answer!: (v: { session_id: string; mode: 'full_access'; grants: [] }) => void;
+        mockedApi.getPermissions.mockReturnValue(new Promise((resolve) => { answer = resolve; }));
+        render(<PermissionModeChip sessionId="chat-1" />);
+
+        expect(screen.getByRole('button', { name: 'Permission mode: Checking…' })).toBeInTheDocument();
+        expect(screen.queryByText('Ask')).not.toBeInTheDocument();
+
+        await act(async () => { answer({ session_id: 'chat-1', mode: 'full_access', grants: [] }); });
+        expect(await screen.findByRole('button', { name: 'Permission mode: full access' })).toBeInTheDocument();
+    });
+
+    it('does not re-read an open chat when the held new-chat choice changes', async () => {
+        render(<PermissionModeChip sessionId="chat-1" />);
+        await screen.findByRole('button', { name: 'Permission mode: ask before acting' });
+        act(() => useChatStore.setState({ draftPermissionMode: 'full_access' }));
+        expect(screen.getByRole('button', { name: 'Permission mode: ask before acting' })).toBeInTheDocument();
+        expect(mockedApi.getPermissions).toHaveBeenCalledTimes(1);
+    });
+
+    it('shows the mode as unknown, with a warning, when it cannot be read', async () => {
+        mockedApi.getPermissions.mockRejectedValue(new Error('backend unreachable'));
+        render(<PermissionModeChip sessionId="chat-1" />);
+
+        const chip = await screen.findByRole('button', { name: 'Permission mode: Unknown' });
+        expect(chip).toHaveClass('is-warning');
+        expect(screen.queryByText('Ask')).not.toBeInTheDocument();
+    });
+});

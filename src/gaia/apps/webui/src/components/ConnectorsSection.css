@@ -91,7 +91,7 @@
 .connector-tile-type {
     font-size: var(--fs-caption);
     font-family: var(--font-sans);
-    color: var(--text-muted);
+    color: var(--text-secondary);
     background: var(--bg-tertiary);
     border: 1px solid var(--border-light);
     border-radius: 999px;
@@ -170,7 +170,7 @@
     gap: 4px;
     font-size: 12px;
     font-family: var(--font-sans);
-    color: var(--text-muted);
+    color: var(--text-secondary);
     background: var(--bg-tertiary);
     border: 1px solid var(--border-light);
     border-radius: 999px;
@@ -428,10 +428,6 @@
     animation: spin var(--duration-spin) var(--ease-linear) infinite;
 }
 
-@keyframes spin {
-    from { transform: rotate(0deg); }
-    to { transform: rotate(360deg); }
-}
 
 /* ── Per-MCP enable/disable toggle (#1004) ───────────────────────── */
 
@@ -623,7 +619,7 @@
 .agent-mcp-readonly-badge {
     font-size: var(--fs-caption);
     font-family: var(--font-sans);
-    color: var(--text-muted);
+    color: var(--text-secondary);
     background: var(--bg-tertiary);
     border: 1px solid var(--border-light);
     border-radius: 999px;

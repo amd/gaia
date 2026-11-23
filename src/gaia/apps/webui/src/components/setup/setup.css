@@ -697,13 +697,15 @@
 .agent-choice { display: grid; gap: 8px; }
 .agent-choice > p { margin: 0; }
 .agent-choice-title { display: flex; align-items: center; gap: 6px; margin: 0; }
+/* Setup scrolls straight to it: keep a gap above rather than butting it on the edge. */
+.agent-choice-title[tabindex] { scroll-margin-block-start: 24px; }
 .agent-choice-row { inline-size: 100%; flex-wrap: wrap; align-items: center; gap: 4px 8px; padding-block: 8px; }
 /* Each piece keeps its own width; a choice card otherwise stretches its spans. */
 .agent-choice .agent-choice-row > span { flex: 0 1 auto; }
 .agent-choice-row > .setup-choice-tag { margin-inline-start: 0; }
 .agent-choice-what { display: inline-flex; flex-wrap: wrap; align-items: baseline; gap: 0 8px; }
-.agent-choice-name { font-family: var(--font-mono); font-size: 13.5px; font-weight: 600; }
-.agent-choice-label { font-size: 14px; }
+.agent-choice-name { color: var(--text-secondary); font-family: var(--font-mono); font-size: 12px; }
+.agent-choice-label { font-size: 14px; font-weight: 600; }
 /* Only the name and label fade, so the "Not installed" tag stays readable. */
 .agent-choice .agent-choice-row.is-disabled { opacity: 1; }
 .agent-choice .agent-choice-row.is-disabled:hover { background: none; }

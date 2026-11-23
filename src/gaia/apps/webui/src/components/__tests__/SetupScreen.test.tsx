@@ -986,6 +986,40 @@ describe('SetupScreen: agent', () => {
         expect(agent.getByRole('radio', { name })).toHaveAttribute('aria-checked', 'true');
     }
 
+    it('the plan names the agent, and Change opens Customize at the agent picker', async () => {
+        const scrolled = vi.spyOn(HTMLElement.prototype, 'scrollIntoView');
+        const plan = within(await open().then(planScreen));
+        expect(await plan.findByText(/^Agent: Full-featured/)).toBeInTheDocument();
+        fireEvent.click(plan.getByRole('button', { name: 'Change the agent' }));
+        expect(await screen.findByRole('heading', { name: 'Choose your agent and models' })).toBeInTheDocument();
+        const title = screen.getByRole('heading', { name: 'Agent' });
+        await waitFor(() => expect(title).toHaveFocus());
+        expect(scrolled.mock.contexts).toContain(title);
+        expect(within(screen.getByRole('region', { name: 'Agent' })).getByRole('heading', { name: 'Agent' })).toBe(title);
+        scrolled.mockRestore();
+    });
+
+    it('names Fast and light when that is the agent already in use', async () => {
+        mockedApi.getAgentPrograms.mockResolvedValue({ ...AGENT_PROGRAMS, current: 'gaiacpp' });
+        const plan = within(await open().then(planScreen));
+        expect(await plan.findByText(/^Agent: Fast and light/)).toBeInTheDocument();
+    });
+
+    it('names the agent a downloadable gaiacpp could replace', async () => {
+        mockedApi.getAgentPrograms.mockResolvedValue(withoutGaiacpp());
+        const plan = within(await open().then(planScreen));
+        expect(await plan.findByText(/^Agent: Full-featured/)).toBeInTheDocument();
+    });
+
+    it("leaves the agent out where gaiacpp can't be had, so there is nothing to change", async () => {
+        mockedApi.getAgentPrograms.mockResolvedValue(withoutGaiacpp('this GAIA release has no gaiacpp to download.'));
+        const plan = within(await open().then(planScreen));
+        await waitFor(() => expect(mockedApi.getAgentPrograms).toHaveBeenCalled());
+        await act(async () => {});
+        expect(plan.queryByText(/^Agent:/)).toBeNull();
+        expect(plan.queryByRole('button', { name: 'Change the agent' })).toBeNull();
+    });
+
     it('gaiapy: nothing about the agent is saved, and the run starts as before', async () => {
         await open();
         await toModels();

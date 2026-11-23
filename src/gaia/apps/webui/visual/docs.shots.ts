@@ -36,6 +36,8 @@ test('new chat', async ({ page }) => {
 });
 
 test('answer', async ({ page }) => {
+    // The guide shows the session panel beside the answer.
+    await page.addInitScript(() => window.localStorage.setItem('gaia.sessionPanel.open', '1'));
     await open(page, `#${ANSWER_SESSION}`);
     await expect(page.getByText('Action items from Aug 28')).toBeVisible();
     await shot(page, 'answer');

@@ -871,6 +871,7 @@ export interface InferenceStatsResponse {
   steps?: number | null;
   time_to_first_token?: number;
   tokens_per_second?: number;
+  waiting_seconds?: number | null;
 }
 /**
  * The model a ``hybrid`` turn was routed to, and why.

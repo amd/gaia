@@ -7,12 +7,12 @@ import * as api from '../services/api';
 import { useEscapeToClose } from '../hooks/useEscapeToClose';
 import { useFocusTrap } from '../hooks/useFocusTrap';
 import { cloudProviderName } from '../stores/modelStore';
+import { contextReason, type ContextUnavailable } from '../utils/contextReason';
 import { log } from '../utils/logger';
 import type { ChatPerformance, ContextUsage, TurnPerformance } from '../types';
 import { ref } from '../i18n/registry';
 import { tEn, useT, type Translate } from '../i18n/useT';
 import { formatWindow } from './modelMeta';
-import { localizeContextReason } from '../utils/liveStatus';
 import './ContextPanel.css';
 
 const exact = (n: number) => n.toLocaleString('en-US');
@@ -281,7 +281,7 @@ interface ContextDetailsProps {
 export function ContextDetails({ sessionId, busy, onUsage }: ContextDetailsProps) {
     const t = useT();
     const [usage, setUsage] = useState<ContextUsage | null>(null);
-    const [unavailable, setUnavailable] = useState<string | null>(null);
+    const [unavailable, setUnavailable] = useState<ContextUnavailable | null>(null);
     const [perf, setPerf] = useState<ChatPerformance | null>(null);
     const [usageError, setUsageError] = useState<string | null>(null);
     const [perfError, setPerfError] = useState<string | null>(null);
@@ -306,7 +306,7 @@ export function ContextDetails({ sessionId, busy, onUsage }: ContextDetailsProps
                     onUsageRef.current?.(ctx);
                 } else {
                     setUsage(null);
-                    setUnavailable(ctx.reason);
+                    setUnavailable({ reason: ctx.reason, code: ctx.reason_code });
                 }
                 setUsageError(null);
             })
@@ -340,7 +340,7 @@ export function ContextDetails({ sessionId, busy, onUsage }: ContextDetailsProps
             <section aria-labelledby="cp-context">
                 <h3 id="cp-context">{t('ctx.context')}</h3>
                 {usageError && <p className="cp-error" role="alert">{usageError}</p>}
-                {!usage && !usageError && <p className="cp-note">{unavailable ? localizeContextReason(t, unavailable) : t('ctx.measuring')}</p>}
+                {!usage && !usageError && <p className="cp-note">{unavailable ? contextReason(t, unavailable) : t('ctx.measuring')}</p>}
                 {usage && (
                     <>
                         <p className="cp-lead">

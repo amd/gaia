@@ -656,7 +656,10 @@ async def _teardown_flow(flow_id: str) -> None:
 
 
 async def revoke_provider_token(
-    provider_id: str, *, slot: str = DEFAULT_ACCOUNT
+    provider_id: str,
+    *,
+    slot: str = DEFAULT_ACCOUNT,
+    account_type: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
     Attempt a provider-side OAuth revoke of the stored refresh token (#2591).
@@ -680,13 +683,25 @@ async def revoke_provider_token(
       could not be resolved. ``revoke_error`` names which, so callers don't
       conflate "can't be revoked" with "wasn't tried".
     - ``revoke_supported=True, revoked_remotely=True`` — the provider's
-      revoke endpoint accepted the request.
+      revoke endpoint accepted the request (``revoke_attempted=True``).
     - ``revoke_supported=True, revoked_remotely=False,
-      nothing_stored=True``: there was no refresh token to revoke, so no
-      provider call was made. This is distinct from a revoke that failed.
-    - ``revoke_supported=True, revoked_remotely=False`` — the endpoint call
-      failed; ``revoke_error`` carries why. The provider-side grant is still
-      live and the caller must say so.
+      nothing_stored=True``: the slot was empty, so there was no refresh
+      token to revoke and no provider call was made. This is distinct from a
+      revoke that failed.
+    - ``revoke_supported=<provider's>, revoked_remotely=False,
+      nothing_stored=False, revoke_error=<why>`` — the slot holds a sign-in
+      GAIA cannot read (#8713), so there was no token to send. The local copy
+      is still removed and ``revoke_error`` says where to revoke by hand. The
+      slot is not empty, so this must never be reported as nothing stored.
+    - ``revoke_supported=True, revoked_remotely=False,
+      revoke_attempted=True`` — the endpoint call failed; ``revoke_error``
+      carries why. The provider-side grant is still live and the caller must
+      say so.
+
+    ``revoke_attempted`` is True only when a revoke request was actually sent.
+    It is False for an empty slot, an unreadable sign-in, a forwarded
+    connection, an unresolvable provider, and a provider with no revoke
+    endpoint, so callers can say "not attempted" instead of "failed".
 
     **Forwarded connections are never revoked remotely (#2591 review).** A
     connection imported via ``api.import_forwarded_connection`` stores a
@@ -704,6 +719,7 @@ async def revoke_provider_token(
         return {
             "revoke_supported": False,
             "revoked_remotely": False,
+            "revoke_attempted": False,
             "nothing_stored": False,
             "revoke_error": (
                 "this connection was forwarded to GAIA by another application "
@@ -714,13 +730,11 @@ async def revoke_provider_token(
             ),
         }
 
-    # An empty slot needs no provider, so an unconfigured OAuth client can't mask it.
-    if (
-        blob is None
-        and provider_id in HAS_REVOKE_ENDPOINT
-        and not connection_slot_in_use(provider_id, slot=slot)
-    ):
-        return nothing_to_revoke(provider_id)
+    # None means empty OR unreadable; only an empty slot is "nothing stored".
+    if blob is None and provider_id in HAS_REVOKE_ENDPOINT:
+        if not connection_slot_in_use(provider_id, slot=slot):
+            return nothing_to_revoke(provider_id)
+        return unreadable_sign_in(provider_id, account_type=account_type)
 
     try:
         provider = get_provider(provider_id)
@@ -733,6 +747,7 @@ async def revoke_provider_token(
         return {
             "revoke_supported": False,
             "revoked_remotely": False,
+            "revoke_attempted": False,
             "nothing_stored": False,
             "revoke_error": f"provider {provider_id!r} could not be resolved: {exc}",
         }
@@ -743,6 +758,7 @@ async def revoke_provider_token(
     result: Dict[str, Any] = {
         "revoke_supported": bool(revoke_url),
         "revoked_remotely": False,
+        "revoke_attempted": False,
         "nothing_stored": False,
         "revoke_error": None,
     }
@@ -757,6 +773,7 @@ async def revoke_provider_token(
     # ``spec.oauth_provider_ref``, which every credential-name heuristic reads
     # as secret material, and the host identifies the provider just as exactly.
     revoke_host = urlsplit(revoke_url).netloc
+    result["revoke_attempted"] = True
 
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
@@ -820,12 +837,14 @@ def nothing_to_revoke(provider_id: str) -> Dict[str, Any]:
         return {
             "revoke_supported": False,
             "revoked_remotely": False,
+            "revoke_attempted": False,
             "nothing_stored": False,
             "revoke_error": f"provider {provider_id!r} could not be resolved",
         }
     return {
         "revoke_supported": HAS_REVOKE_ENDPOINT[provider_id],
         "revoked_remotely": False,
+        "revoke_attempted": False,
         "nothing_stored": True,
         "revoke_error": None,
     }
@@ -837,6 +856,49 @@ REVOKE_PAGES: Dict[str, Tuple[str, str]] = {
     "microsoft": ("Microsoft", "https://account.live.com/consent/Manage"),
     "microsoft_work": ("Microsoft", "https://myapps.microsoft.com"),
 }
+
+
+def revoke_page_for(
+    provider_id: str, *, account_type: Optional[str] = None
+) -> Tuple[str, str]:
+    """The provider label and connected-apps URL where the user revokes GAIA.
+
+    ``account_type`` sends a work account saved under ``microsoft`` to the
+    work page. Shared by every path that has to tell the user to revoke by
+    hand (weak keyring, unreadable sign-in).
+    """
+    from gaia.connectors.providers.microsoft import ACCOUNT_TYPE_WORK
+
+    page_id = provider_id
+    if provider_id == "microsoft" and account_type == ACCOUNT_TYPE_WORK:
+        page_id = "microsoft_work"
+    return REVOKE_PAGES.get(
+        page_id, (provider_id, "your account's connected-apps page")
+    )
+
+
+def unreadable_sign_in(
+    provider_id: str, *, account_type: Optional[str] = None
+) -> Dict[str, Any]:
+    """The revoke outcome when the slot holds a sign-in GAIA cannot read.
+
+    ``peek_connection`` returns ``None`` for a corrupt blob while the entry
+    stays in place, so this is not an empty slot: the local copy is removed,
+    but there is no token to revoke, and the user must revoke GAIA's access
+    at the provider by hand (#8713).
+    """
+    label, page = revoke_page_for(provider_id, account_type=account_type)
+    return {
+        "revoke_supported": HAS_REVOKE_ENDPOINT[provider_id],
+        "revoked_remotely": False,
+        "revoke_attempted": False,
+        "nothing_stored": False,
+        "revoke_error": (
+            "GAIA could not read the stored sign-in, so it removed the local "
+            f"copy without revoking GAIA's access at {label}. To revoke it, "
+            f"remove GAIA at {page}"
+        ),
+    }
 
 
 def not_revoked_on_weak_keyring(
@@ -853,14 +915,7 @@ def not_revoked_on_weak_keyring(
     chain GAIA could not check, which may well be secure; ``account_type``
     sends a work account saved under ``microsoft`` to the work page.
     """
-    from gaia.connectors.providers.microsoft import ACCOUNT_TYPE_WORK
-
-    page_id = provider_id
-    if provider_id == "microsoft" and account_type == ACCOUNT_TYPE_WORK:
-        page_id = "microsoft_work"
-    label, page = REVOKE_PAGES.get(
-        page_id, (provider_id, "your account's connected-apps page")
-    )
+    label, page = revoke_page_for(provider_id, account_type=account_type)
     if uninspectable:
         why = "GAIA could not confirm the keyring on this PC is secure"
         fix = "use a single system credential store"
@@ -870,6 +925,7 @@ def not_revoked_on_weak_keyring(
     return {
         "revoke_supported": False,
         "revoked_remotely": False,
+        "revoke_attempted": False,
         "nothing_stored": False,
         "revoke_error": (
             f"{why}, so GAIA removed the sign-in without reading it and did "

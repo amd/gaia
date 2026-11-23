@@ -99,11 +99,19 @@ In a chat, the folder chip beside the model names the folder GAIA works in; clic
 
 Each chat has a panel on the right that keeps the important facts in view:
 what the latest answer used, where the chat runs and what it may touch, what
-fills the context, what the chat produced, and what it changed. Show or hide it
-with the panel button at the right of the chat's title bar. Drag its left edge
-to resize it (or focus the edge and use the arrow keys); the width, whether it
-is open, and which sections are expanded are remembered. On windows narrower
+fills the context, what the chat produced, and what it changed. It starts
+closed, so a new chat gets the full width. Show or hide it with the panel
+button at the right of the chat's title bar. Drag its left edge to resize it
+(or focus the edge and use the arrow keys); the width, whether you opened or
+closed it, and which sections are expanded are remembered. On windows narrower
 than about 1,100 px it opens on top of the chat instead, and Escape closes it.
+
+Until you have closed it yourself, the panel opens on its own when an answer
+in the chat you are looking at creates or changes the chat's first file, so you
+can see it under **Outputs** and **Changes**. Opening a chat that already made
+files leaves it closed, a narrow window never gets it on top of the chat, and
+the cursor stays in the message box. Once you close it, it stays closed until
+you open it again.
 
 The panel reads when it opens, when you expand a section, and when an answer
 finishes. It never checks on a timer, and a closed panel reads nothing.
@@ -244,11 +252,11 @@ since, GAIA names it and changes nothing; you can then undo anyway and lose
 that later change. Undo the later turn first to keep it. To undo every turn at once, use
 **Undo all** in the session panel's Changes section.
 
-Undo needs the Python agent. gaiacpp (beta) doesn't record file changes yet, so
-under an answer whose turn wrote a file or ran a command it shows one line,
-"Undo isn't available on gaiacpp", in place of the two buttons. Its context
-meter shows a dash for the same kind of reason: hover it, or open **Context &
-performance**, to read that gaiacpp doesn't report what fills its context.
+Undo needs Full-featured. Fast and light (`gaiacpp`, beta) doesn't record file
+changes yet, so under an answer whose turn wrote a file or ran a command it
+shows one line, "Undo isn't available on Fast and light", in place of the two
+buttons. For the same kind of reason, **Context & performance** says that Fast
+and light doesn't report what fills its context.
 
 On macOS, undoing a change in Documents, Desktop or Downloads can need its own
 permission, separate from the one the agent got for making the change. If macOS

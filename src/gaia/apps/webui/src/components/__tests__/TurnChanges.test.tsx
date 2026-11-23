@@ -295,7 +295,7 @@ describe('DiffCard', () => {
 describe('TurnChanges on gaiacpp', () => {
     const capabilities = (program: 'gaiapy' | 'gaiacpp' | null) => vi.spyOn(api, 'getCapabilities')
         .mockResolvedValue({ session_id: 's1', agent_type: 'gaia', tools: [], program });
-    const LINE = "Undo isn't available on gaiacpp: it doesn't record file changes yet. The Python agent does.";
+    const LINE = "Undo isn't available on Fast and light: it doesn't record file changes yet. Full-featured does.";
 
     it('says undo is not available where Undo would be, for a turn that wrote a file', async () => {
         vi.spyOn(api, 'listTurnChanges').mockResolvedValue({ turns: [] });

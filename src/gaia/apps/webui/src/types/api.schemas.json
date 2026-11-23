@@ -2696,6 +2696,17 @@
         "default": 0,
         "title": "Tokens Per Second",
         "type": "number"
+      },
+      "waiting_seconds": {
+        "anyOf": [
+          {
+            "type": "number"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Waiting Seconds"
       }
     },
     "title": "InferenceStatsResponse",

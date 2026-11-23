@@ -748,6 +748,8 @@ class InferenceStatsResponse(BaseModel):
     seconds: Optional[float] = None
     # True only for an answer kept from "Retry with…".
     retried: Optional[bool] = None
+    # Seconds the turn sat on the user's answer to a permission prompt.
+    waiting_seconds: Optional[float] = None
     # Where the turn was answered, as the footer says it: "on your GPU", "via Fireworks AI".
     place: Optional[str] = None
     # Set on a ``hybrid`` session's turns.
