@@ -24,6 +24,8 @@ KIND_SERVICE_UNREACHABLE = "service_unreachable"
 KIND_SERVICE_OUTDATED = "service_outdated"
 KIND_NO_RELEASE = "no_release"
 KIND_HARNESS_UNAVAILABLE = "harness_unavailable"
+#: The chosen agent program can run here but isn't on this PC.
+KIND_HARNESS_MISSING = "harness_missing"
 
 
 class SidecarError(Exception):

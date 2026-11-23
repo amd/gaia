@@ -52,6 +52,7 @@ from gaia.daemon.constants import (
 )
 from gaia.daemon.sidecars import fetch
 from gaia.daemon.sidecars.errors import (
+    KIND_HARNESS_MISSING,
     KIND_HARNESS_UNAVAILABLE,
     HealthTimeoutError,
     IntegrityError,
@@ -425,7 +426,8 @@ class AgentSidecarManager:
             raise SidecarSpawnError(
                 f"Cannot start the GAIA agent: {harness} is chosen as the agent but "
                 f"it is not installed on this PC (looked in: {looked}). {get_it} "
-                f"to the Python agent in Settings › Agent & model. Sidecar logs: {self.log_dir}."
+                f"to the Python agent in Settings › Agent & model. Sidecar logs: {self.log_dir}.",
+                kind=KIND_HARNESS_MISSING,
             )
         try:
             self.installed_binary_version = fetch.native_flagship_version(

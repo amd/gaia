@@ -3131,8 +3131,12 @@ def _dispatch_sidecar_query_unheld(
         else None
     )
     if harness in NO_DEFAULT_MODEL:
-        # The session's model may be a filled-in default; this harness takes none.
-        model_id = chosen_model()
+        # A chat's own pick stands; one still on the filled-in default is no choice at all.
+        from gaia.llm.hybrid import start_model
+        from gaia.ui.database import resolved_default_model
+
+        picked = model_id if model_id and model_id != resolved_default_model() else None
+        model_id = start_model(picked) if picked else chosen_model()
         if model_id and model_id.startswith("claude-"):
             sse_handler._emit(
                 {

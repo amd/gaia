@@ -9,6 +9,7 @@ the daemon starts as the GAIA agent and whether the Agent UI relays to it.
 import dataclasses
 import json
 import sys
+import threading
 from pathlib import Path
 
 import pytest
@@ -19,8 +20,8 @@ from gaia.config import GaiaConfig, GaiaConfigError
 from gaia.daemon.sidecars import fetch
 from gaia.daemon.sidecars import manager as mgr
 from gaia.daemon.sidecars.errors import (
+    KIND_HARNESS_MISSING,
     KIND_HARNESS_UNAVAILABLE,
-    KIND_START_FAILED,
     SidecarError,
     SidecarSpawnError,
 )
@@ -186,6 +187,13 @@ def test_a_chosen_gaiacpp_that_is_missing_fails_and_says_how_to_switch_back(
     text = str(e.value)
     assert "gaiacpp" in text and str(no_gaiacpp) in text
     assert "Settings › Agent & model" in text
+    # The Agent UI says what to do, not that "GAIA couldn't start its agent".
+    from gaia.ui.sidecar.profiles import HARNESS_MISSING_MESSAGE, profile_for
+
+    assert e.value.kind == KIND_HARNESS_MISSING
+    assert (
+        profile_for("gaia").start_failed_text(e.value.kind) == HARNESS_MISSING_MESSAGE
+    )
 
 
 def test_a_gaiacpp_that_cannot_report_its_version_is_not_started(fake_gaiacpp):
@@ -291,6 +299,11 @@ def test_a_missing_gaiacode_names_its_variable_and_never_runs_python(
         _flagship_manager().build_spawn_command(port=45123)
     text = str(e.value)
     assert "gaiacode" in text and "GAIA_GAIACODE_PATH" in text and "Settings" in text
+    from gaia.ui.routers.agent_programs import HARNESS_UNAVAILABLE, chosen_agent_problem
+
+    problem = chosen_agent_problem()
+    assert problem is not None and problem["code"] == HARNESS_UNAVAILABLE, problem
+    assert "GAIA_GAIACODE_PATH" in problem["detail"], "Settings says what is missing"
 
 
 def test_each_native_harness_looks_for_its_own_program(monkeypatch, tmp_path):
@@ -343,7 +356,8 @@ def test_a_missing_gaiacpp_is_not_reported_as_an_unrunnable_harness():
     _choose("gaiacpp")
     with pytest.raises(SidecarSpawnError) as e:
         _flagship_manager().build_spawn_command(port=45123)
-    assert e.value.kind == KIND_START_FAILED
+    # Missing, so the fix is to download it: never "this version can't run it".
+    assert e.value.kind == KIND_HARNESS_MISSING
 
 
 # ---------------------------------------------------------------- settings API
@@ -621,6 +635,8 @@ def _relay_once(monkeypatch, model):
     events = []
 
     class _Handler:
+        cancelled = threading.Event()
+
         def _emit(self, event):
             events.append(event)
 
@@ -636,6 +652,29 @@ def test_an_agent_ui_turn_never_sends_gaiacode_a_filled_in_model(monkeypatch):
     errors = [e["content"] for e in events if e["type"] == "agent_error"]
     assert errors and "No model is chosen for gaiacode" in errors[0], events
     assert "model" not in sent, "the turn reached gaiacode"
+
+
+def test_a_chat_on_its_own_model_runs_gaiacode_on_it(monkeypatch):
+    # Two chats on different models: each runs on its own, not on the last one picked.
+    from gaia.ui.database import resolved_default_model
+
+    monkeypatch.delenv("GAIA_MODEL_ID", raising=False)
+    GaiaConfig.save_key("last_model", "fireworks.glm-5p3")
+    _save_raw("gaiacode")
+    picked = "Qwen3.5-4B-GGUF"
+    assert picked != resolved_default_model()
+    from gaia.ui.sidecar import daemon_client
+
+    class _Ready:
+        base_url = "http://127.0.0.1:1"
+
+        def init(self):
+            return 200, {"model": {"present": True}}
+
+    monkeypatch.setattr(daemon_client.SidecarHandle, "proxy", lambda self: _Ready())
+    events, sent = _relay_once(monkeypatch, picked)
+    assert not [e for e in events if e["type"] == "agent_error"], events
+    assert sent["model"] == picked
 
 
 # ---------------------------------------------------------------- a switch made elsewhere

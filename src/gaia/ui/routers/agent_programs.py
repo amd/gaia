@@ -130,13 +130,25 @@ HARNESS_UNAVAILABLE = "harness_unavailable"
 def chosen_agent_problem() -> Optional[Dict[str, str]]:
     """Why the agent the user chose can't start, as ``{"code", "detail"}``; else ``None``.
 
-    Only gaiacpp has such a reason of its own: it is chosen but not on this
-    PC, or no longer matches what was downloaded.
+    A native agent program has such a reason of its own: it is chosen but not on
+    this PC, or (gaiacpp) no longer matches what was downloaded.
     """
     try:
         chosen = fetch.chosen_flagship()
     except HarnessUnavailableError as e:
         return {"code": HARNESS_UNAVAILABLE, "detail": str(e)}
+    if chosen in fetch.NATIVE_HARNESS_PATH_ENV and chosen != fetch.NATIVE_FLAGSHIP:
+        # No release ships it, so there is nothing to download: only a build of your own runs.
+        if fetch.native_flagship(chosen) is not None:
+            return None
+        looked = ", ".join(str(p) for p in fetch.native_flagship_candidates(chosen))
+        return {
+            "code": HARNESS_UNAVAILABLE,
+            "detail": (
+                f"{chosen} is chosen as the agent but it is not on this PC (looked in: "
+                f"{looked}). Point {fetch.NATIVE_HARNESS_PATH_ENV[chosen]} at a build of it."
+            ),
+        }
     if chosen != fetch.NATIVE_FLAGSHIP:
         return None
     try:
