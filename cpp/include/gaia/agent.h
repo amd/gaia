@@ -35,6 +35,8 @@
 
 namespace gaia {
 
+class TurnRecorder;
+
 /// Base Agent class providing the core conversation loop and tool execution.
 /// Subclass and override registerTools() and getSystemPrompt() for domain agents.
 ///
@@ -351,6 +353,16 @@ protected:
     virtual std::optional<std::string> unconfirmedClaims(const std::string& /*answer*/) {
         return std::nullopt;
     }
+
+public:
+    /// Whether this agent's tools save a copy of each file before changing it (undo).
+    virtual bool recordsChanges() const { return false; }
+
+    /// The recorder for the turn about to run, or null once it ends. Only called when
+    /// recordsChanges() is true.
+    virtual void setChangeRecorder(std::shared_ptr<TurnRecorder> /*recorder*/) {}
+
+protected:
 
     /// Called once as a query starts, before its first model call. Override to
     /// capture what the system prompt should hold fixed for the whole query.
