@@ -517,7 +517,7 @@ so a mid-session toggle takes effect on the next command.
 When on, nothing above applies. `_line_verdict` returns no error for any line
 that has a command on it, so there is no command list, no excluded command
 (`rm`, `rmdir` and `del` run), no path check on the working folder, a `cd` or an
-argument, no credential-file or link check, and no refusal of a package install,
+argument, no credential-file or link check, and no refusal of a delete (outside this mode a delete is refused, never offered for approval), no refusal of a package install,
 a `gaia skill` command or a server. `ALLOWED_COMMANDS` is unchanged: it is the
 no-prompt list of the other modes.
 
