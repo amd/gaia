@@ -546,10 +546,12 @@ Settings buildSettings(const Cli& cli) {
     s.server = server;
     // A key the user chose wins; GAIA's own export (env.sh) may hold a key its restarted server dropped.
     gaia::dropForeignLemonadeKey(gaiaServer);
+    bool gaiaKey = false;
     if (s.cfg.apiKey.empty() && s.cfg.apiKeyEnv.empty() && gaia::getEnvVar("GAIA_API_KEY").empty() &&
         gaia::getEnvVar("LEMONADE_API_KEY").empty()) {
         const std::string key = gaia::embeddedKeyFor(gaiaServer, s.cfg.baseUrl);
         if (!key.empty()) s.cfg.apiKey = key;
+        gaiaKey = !key.empty();
     }
     if (server.source == gaia::ServerSource::SavedExternal && gaiaServer.savedKeyElsewhere &&
         gaia::resolveApiKey(s.cfg).empty()) {
@@ -557,6 +559,7 @@ Settings buildSettings(const Cli& cli) {
                                  " and keeps its key in GAIA's credential store, which gaiacpp can't read. "
                                  "Export LEMONADE_API_KEY with that key, or pass --base-url for another server.");
     }
+    gaia::noteKeySource(s.server, s.cfg, gaiaKey);
     return s;
 }
 

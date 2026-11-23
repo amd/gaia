@@ -142,6 +142,7 @@ bool readsTerminal() {
 #endif
 }
 
+// Nothing answered at `url`: the only case where starting GAIA is the remedy.
 std::string unreachable(const std::string& url, const ServerOrigin& origin, std::string why) {
     // The transport's generic remedy would contradict the one given here.
     const size_t generic = why.find(". Check that the service is running");
@@ -166,6 +167,84 @@ std::string unreachable(const std::string& url, const ServerOrigin& origin, std:
 bool isLemonadeUrl(const std::string& url) {
     const std::string suffix = "/api/v1";
     return url.size() >= suffix.size() && url.compare(url.size() - suffix.size(), suffix.size(), suffix) == 0;
+}
+
+std::string addressFrom(const ServerOrigin& origin) {
+    switch (origin.source) {
+        case ServerSource::GaiaRunning:
+            return "GAIA's record of its running model server in " + origin.label;
+        case ServerSource::Default:
+            return "Lemonade's standard port, used because nothing names a model server and GAIA's own "
+                   "isn't set up in " + origin.label;
+        default:
+            return origin.label;
+    }
+}
+
+// One line of a reply body, short enough for an error.
+std::string bodyText(const std::string& body) {
+    std::string out;
+    for (const char c : trim(body)) {
+        if (out.size() >= 200) return out + "...";
+        out += (c == '\n' || c == '\r' || c == '\t') ? ' ' : c;
+    }
+    return out;
+}
+
+// Something answered at `url`, so it is running: the key or the address is what to fix.
+// `status` is 0 for a 2xx reply that isn't Lemonade's; `detail` is then what was wrong with it.
+std::string answeredWrong(const std::string& url, const ServerOrigin& origin, int status,
+                          const std::string& detail) {
+    const std::string body = bodyText(detail);
+    const std::string said = status ? "HTTP " + std::to_string(status) + (body.empty() ? "" : ": " + body)
+                                    : "a reply that is " + body;
+    if (origin.source == ServerSource::GaiaStopped) {
+        return "GAIA's model server isn't running, and another program answered at its last address " + url +
+               " (" + said + "). " + kStartGaia;
+    }
+    if (status == 401 || status == 403) {
+        const std::string head = "The model server at " + url + " is running but answered " + said + ". ";
+        if (origin.gaiaKey) {
+            return head + "It refused GAIA's own key, so GAIA's record of its running server is out of date. "
+                          "Run `gaia daemon restart`, then try again.";
+        }
+        if (origin.keyVar.empty()) {
+            return head + "It needs a key and none was sent. Export GAIA_API_KEY with that server's key, or name "
+                          "the variable that holds it with --api-key-env. The address came from " +
+                   addressFrom(origin) + ".";
+        }
+        if (origin.source == ServerSource::GaiaRunning) {
+            return head + "It refused the key in " + origin.keyVar +
+                   ". That address is GAIA's own model server, and gaiacpp uses GAIA's key for it when no key "
+                   "of yours is set: unset " + origin.keyVar +
+                   ", or stop naming it with --api-key-env or apiKeyEnv, and try again.";
+        }
+        return head + "It refused the key in " + origin.keyVar + ". Set " + origin.keyVar +
+               " to the key that server expects, or name another variable with --api-key-env. The address "
+               "came from " + addressFrom(origin) + ".";
+    }
+    std::string fix;
+    switch (origin.source) {
+        case ServerSource::GaiaRunning:
+            fix = "Run `gaia daemon restart` to restart GAIA's model server, then try again.";
+            break;
+        case ServerSource::Default:
+            fix = "Run `gaia init` to set GAIA up, or pass --base-url with a Lemonade server's /api/v1 address.";
+            break;
+        default:
+            fix = "Check that " + origin.label + " holds a Lemonade server's /api/v1 address.";
+    }
+    return "The address " + url + " answered, but not the way GAIA's model server (Lemonade) does: " + said +
+           ". It came from " + addressFrom(origin) + ". " + fix;
+}
+
+// A failed request to the model server, told apart by whether anything answered.
+std::string serverFailure(const std::string& url, const ServerOrigin& origin, const std::exception& e) {
+    if (const auto* http = dynamic_cast<const HttpError*>(&e); http && http->status() != 0) {
+        return answeredWrong(url, origin, http->status(), http->body());
+    }
+    if (dynamic_cast<const json::exception*>(&e)) return answeredWrong(url, origin, 0, "not JSON");
+    return unreachable(url, origin, e.what());
 }
 
 std::string sizeText(const json& entry) {
@@ -329,6 +408,16 @@ std::string serverDownReason(LemonadeClient& client, const ServerOrigin& origin)
     return h.error.empty() ? "" : unreachable(client.baseUrl(), origin, h.error);
 }
 
+void noteKeySource(ServerOrigin& origin, const AgentConfig& cfg, bool gaiaKey) {
+    origin.gaiaKey = gaiaKey;
+    origin.keyVar.clear();
+    if (gaiaKey || !cfg.apiKey.empty()) return;
+    if (!cfg.apiKeyEnv.empty()) origin.keyVar = cfg.apiKeyEnv;
+    else if (!getEnvVar("GAIA_API_KEY").empty()) origin.keyVar = "GAIA_API_KEY";
+    // resolveApiKey sends LEMONADE_API_KEY to a loopback address only.
+    else if (!resolveApiKey(cfg).empty()) origin.keyVar = "LEMONADE_API_KEY";
+}
+
 DownloadPrompt terminalPrompt() { return {readsTerminal(), &std::cin, &std::cerr}; }
 
 void checkServerAndModel(LemonadeClient& client, const std::string& model, const ServerOrigin& origin,
@@ -341,17 +430,18 @@ void checkServerAndModel(LemonadeClient& client, const std::string& model, const
         // Without show_all, the catalog leaves out every model that isn't downloaded.
         catalog = client.listModels(true);
     } catch (const std::exception& e) {
-        throw std::runtime_error(unreachable(url, origin, e.what()));
+        throw std::runtime_error(serverFailure(url, origin, e));
+    }
+    if (!catalog.is_object() || !catalog.contains("data") || !catalog["data"].is_array()) {
+        throw std::runtime_error(answeredWrong(url, origin, 0, "not a model list"));
     }
     if (model.empty() || model.rfind("fireworks.", 0) == 0 || model.rfind("amd.", 0) == 0) return;
 
     const json* entry = nullptr;
-    if (catalog.is_object() && catalog.contains("data") && catalog["data"].is_array()) {
-        for (const auto& m : catalog["data"]) {
-            if (m.is_object() && m.value("id", "") == model) {
-                entry = &m;
-                break;
-            }
+    for (const auto& m : catalog["data"]) {
+        if (m.is_object() && m.value("id", "") == model) {
+            entry = &m;
+            break;
         }
     }
     if (!entry) {

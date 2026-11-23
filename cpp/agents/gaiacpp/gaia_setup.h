@@ -35,6 +35,8 @@ enum class ServerSource {
 struct ServerOrigin {
     ServerSource source = ServerSource::Default;
     std::string label;  // e.g. "--base-url", "Settings file /x/config.json"
+    std::string keyVar;  // the variable whose key requests carry, "" when none; never the key
+    bool gaiaKey = false;  // requests carry GAIA's own server's key
 };
 
 /// GAIA's server for this user, and the key its running instance requires.
@@ -84,6 +86,9 @@ void dropForeignLemonadeKey(const GaiaServer& server);
 /// start it, by what chose it. Endpoints that are not Lemonade are not asked.
 std::string serverDownReason(LemonadeClient& client, const ServerOrigin& origin);
 
+/// Which key `cfg` sends, recorded in `origin` for an error that has to name it.
+void noteKeySource(ServerOrigin& origin, const AgentConfig& cfg, bool gaiaKey);
+
 /// The terminal a download question is asked at.
 struct DownloadPrompt {
     bool interactive = false;  // stdin and stderr are both a terminal
@@ -94,10 +99,12 @@ struct DownloadPrompt {
 /// The process's own terminal.
 DownloadPrompt terminalPrompt();
 
-/// Before a run: the server answers, and `model` is on disk. A model that is
-/// not downloaded is downloaded only after a yes (`yes`, or the question
-/// answered y); otherwise this throws and nothing is downloaded. Endpoints that
-/// are not Lemonade, and cloud models, are left to the server.
+/// Before a run: the server answers as Lemonade does, and `model` is on disk.
+/// A server that replies with an error or something else is reported as that
+/// (its status, the key or address to fix), never as a server that is down. A
+/// model that is not downloaded is downloaded only after a yes (`yes`, or the
+/// question answered y); otherwise this throws and nothing is downloaded.
+/// Endpoints that are not Lemonade, and cloud models, are left to the server.
 void checkServerAndModel(LemonadeClient& client, const std::string& model, const ServerOrigin& origin,
                          bool yes, const DownloadPrompt& prompt);
 
