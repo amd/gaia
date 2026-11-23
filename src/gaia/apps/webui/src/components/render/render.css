@@ -610,6 +610,12 @@
     border-color: var(--border-light);
 }
 
+/* Named outright, not inherited: Chromium can leave an inherited gloss on the ink
+   label's colour when the button turns quiet, light text on a light fill. */
+.render-connect .render-connect__button.render-connect__button--quiet .i18n-gloss.i18n-gloss {
+    color: var(--text-primary);
+}
+
 .render-connect__button:focus-visible,
 .render-connect__settings:focus-visible {
     outline: 2px solid var(--accent);
