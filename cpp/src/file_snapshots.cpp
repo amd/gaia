@@ -177,9 +177,23 @@ void TurnRecorder::discard(const std::string& path) {
     if (files.empty() || key(fs::u8path(files.back()["path"].get<std::string>())) != key(target)) return;
     const json entry = files.back();
     files.erase(files.size() - 1);
-    // The record on disk is brought in line first; what couldn't be removed is reported after.
+    // The record first, while what it points to still exists: if it can't be rewritten, the
+    // entry goes back and memory and disk still agree.
+    const bool keepRecord = hasChanges();
+    try {
+        if (keepRecord) {
+            save();
+        } else {
+            // Nothing left to undo: no record, as for a turn that changed nothing.
+            fs::remove_all(dir_, ec);
+            if (ec) throw SnapshotError("Could not remove the empty undo record at " + dir_.u8string() + ": " + ec.message());
+        }
+    } catch (...) {
+        files.push_back(entry);
+        throw;
+    }
     std::string failure;
-    if (entry["before_blob"].is_string()) {
+    if (keepRecord && entry["before_blob"].is_string()) {
         const fs::path blob = dir_ / "blobs" / entry["before_blob"].get<std::string>();
         fs::remove(blob, ec);
         if (ec) failure = "Could not remove the copy at " + blob.u8string() + ": " + ec.message();
@@ -191,13 +205,6 @@ void TurnRecorder::discard(const std::string& path) {
         if (!fs::is_directory(dir, ec) || !fs::is_empty(dir, ec)) continue;
         fs::remove(dir, ec);
         if (ec && failure.empty()) failure = "Could not remove the empty folder " + dir.u8string() + ": " + ec.message();
-    }
-    if (hasChanges()) {
-        save();
-    } else {
-        // Nothing left to undo: no record, as for a turn that changed nothing.
-        fs::remove_all(dir_, ec);
-        if (ec) throw SnapshotError("Could not remove the empty undo record at " + dir_.u8string() + ": " + ec.message());
     }
     if (!failure.empty()) throw SnapshotError(failure);
 }
