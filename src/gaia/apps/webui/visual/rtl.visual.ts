@@ -5873,6 +5873,36 @@ for (const locale of ['ar', 'en'] as const) {
     });
 }
 
+// gaiacpp's grant for a chained command: the whole command, and a caret that is grep's, not cmd.exe's.
+const CHAINED = "cd /Users/you/repo && python3 -m pytest tests/test_requirements.py::TestRequirementBehaviour::test_str_and_repr -x --tb=short 2>&1 | grep -n '^FAILED' | head -80";
+
+for (const locale of ['ar', 'en'] as const) {
+    test(`a command prompt names its always button by the whole command and says nothing about Windows on a Mac (${locale})`, async ({ page }) => {
+        await page.addInitScript(streamThenWait, [{
+            type: 'permission_request', tool: 'run_shell_command', tool_label: 'Running a shell command', confirm_id: 'c-chained',
+            args: { command: CHAINED },
+            always_scope: `bash_execute:exact:${CHAINED}`, always_label: `Run \`${CHAINED}\``,
+        }]);
+        await open(page, `#${ANSWER_SESSION}`, locale, async (p) => {
+            await p.route('**/api/system/status', (route) => route.fulfill({ json: { ...SYSTEM_STATUS, host_os: 'macos' } }));
+        });
+        await page.locator('textarea').first().fill('run the failing test');
+        await page.keyboard.press('Enter');
+        const card = page.locator('.perm-card');
+        await expect(card).toBeVisible();
+        const always = card.locator('.perm-btn').nth(1);
+        await expect(always).toContainText('cd /Users/you/repo && python3 -m pytest tests/test_requirements.py');
+        await expect(card.getByTestId('perm-cmd-reading')).toHaveCount(0);
+        await expect(card).not.toContainText('Windows');
+        // The long label wraps inside the card.
+        const [box, button] = await Promise.all([card.boundingBox(), always.boundingBox()]);
+        expect(button!.x).toBeGreaterThanOrEqual(box!.x);
+        expect(button!.x + button!.width).toBeLessThanOrEqual(box!.x + box!.width + 1);
+        expect(await audit(page)).toEqual([]);
+        await shot(page, `permission-command-always-${locale}`);
+    });
+}
+
 const FOLDER = 'C:\\Users\\you\\Documents\\uxa';
 const STEPS_THEN_PROMPT = [
     ...['expenses_oct.csv', 'expenses_nov.csv', 'notes.txt', 'draft_old.txt', 'a.txt', 'b.txt', 'c.txt', 'd.txt'].flatMap((f) => [
