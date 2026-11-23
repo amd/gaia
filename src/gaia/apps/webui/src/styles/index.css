@@ -71,11 +71,19 @@
      * with no blur, so it is a ring and never a glow. */
     --accent-ring: rgba(176, 141, 87, 0.40);
 
-    /* Accent as a button. Buttons are soft tinted: a brass wash carrying
-     * brass text, judged against itself. */
+    /* The brass wash: a chosen option or a pressed toggle, carrying brass
+     * text, judged against itself. */
     --accent-fill: #EEE8DD;
     --accent-fill-text: #7A5A22;
     --accent-fill-hover: #E6DCCB;
+
+    /* The one action a screen is asking for: the text colour as a fill,
+     * carrying the canvas colour, so it reads as a button on a warm ground
+     * where a brass wash did not. Named by role, so every palette's ink and
+     * canvas follow; the pairs are the text-on-canvas ones the tests measure. */
+    --action-fill: var(--text-primary);
+    --action-fill-text: var(--bg-primary);
+    --action-fill-hover: var(--text-secondary);
 
     /* Semantic status keeps its conventional hues. Warning amber sits next
      * to brass in hue, so every warning also carries an icon and a word. */
@@ -407,9 +415,9 @@ textarea:focus-visible {
 
 /* ── Shared Button Utilities ──────────────────────────────────────── */
 
-/* Soft tinted, and they answer the hand: a hover lifts 1px onto the resting
- * shadow, a press settles below rest faster than it rose. Brass marks the
- * action you would most likely take; neutral marks the rest. */
+/* They answer the hand: a hover lifts 1px onto the resting shadow, a press
+ * settles below rest faster than it rose. Ink marks the action a screen is
+ * asking for; a neutral wash marks the rest. */
 .btn-primary,
 .btn-secondary,
 .btn-danger {
@@ -424,10 +432,12 @@ textarea:focus-visible {
         box-shadow var(--duration) var(--ease),
         transform var(--duration) var(--ease-spring);
 }
-.btn-primary { background: var(--accent-fill); color: var(--accent-fill-text); }
-.btn-primary:hover { background: var(--accent-fill-hover); }
-/* Lightened, the English fell to 4.46:1 on the hover fill. */
-.btn-primary .i18n-gloss.i18n-gloss { color: inherit; }
+.btn-primary { background: var(--action-fill); color: var(--action-fill-text); }
+.btn-primary:hover { background: var(--action-fill-hover); }
+/* On an ink fill the gloss's own lightened colour would vanish into the button, so it takes the label's. */
+:is(.btn-primary, .perm-btn.is-primary, .compare-keep, .vp-btn-confirm, .fb-action-btn.primary, .composer-send,
+    .render-needs-input__free-text-submit, .render-connect__button, .render-guide__start, .email-connect-cta__button)
+    .i18n-gloss.i18n-gloss { color: inherit; }
 .btn-secondary { background: var(--bg-tertiary); color: var(--text-primary); }
 .btn-secondary:hover { background: var(--bg-active); }
 .btn-danger { background: var(--danger-dim); color: var(--danger); }
