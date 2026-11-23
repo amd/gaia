@@ -80,6 +80,10 @@ std::string embeddedKeyFor(const GaiaServer& server, const std::string& url);
 /// request, and no command a tool runs, carries it to a server it wasn't for.
 void dropForeignLemonadeKey(const GaiaServer& server);
 
+/// "" when the model server answers its health check, else why not and how to
+/// start it, by what chose it. Endpoints that are not Lemonade are not asked.
+std::string serverDownReason(LemonadeClient& client, const ServerOrigin& origin);
+
 /// The terminal a download question is asked at.
 struct DownloadPrompt {
     bool interactive = false;  // stdin and stderr are both a terminal

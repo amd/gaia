@@ -162,6 +162,12 @@ std::string unreachable(const std::string& url, const ServerOrigin& origin, std:
     }
 }
 
+// Other OpenAI-compatible servers have no Lemonade catalog or health check to read.
+bool isLemonadeUrl(const std::string& url) {
+    const std::string suffix = "/api/v1";
+    return url.size() >= suffix.size() && url.compare(url.size() - suffix.size(), suffix.size(), suffix) == 0;
+}
+
 std::string sizeText(const json& entry) {
     if (!entry.contains("size") || !entry["size"].is_number()) return "";
     const double gb = entry["size"].get<double>();
@@ -315,14 +321,20 @@ void dropForeignLemonadeKey(const GaiaServer& server) {
 #endif
 }
 
+std::string serverDownReason(LemonadeClient& client, const ServerOrigin& origin) {
+    if (!isLemonadeUrl(client.baseUrl())) return "";
+    LemonadeHealth h = client.healthCheck();
+    // A server busy with a load can miss one health check.
+    for (int attempt = 1; attempt < 3 && !h.error.empty(); ++attempt) h = client.healthCheck();
+    return h.error.empty() ? "" : unreachable(client.baseUrl(), origin, h.error);
+}
+
 DownloadPrompt terminalPrompt() { return {readsTerminal(), &std::cin, &std::cerr}; }
 
 void checkServerAndModel(LemonadeClient& client, const std::string& model, const ServerOrigin& origin,
                          bool yes, const DownloadPrompt& prompt) {
     const std::string url = client.baseUrl();
-    const std::string suffix = "/api/v1";
-    // Other OpenAI-compatible servers have no Lemonade catalog to read.
-    if (url.size() < suffix.size() || url.compare(url.size() - suffix.size(), suffix.size(), suffix) != 0) return;
+    if (!isLemonadeUrl(url)) return;
 
     json catalog;
     try {
