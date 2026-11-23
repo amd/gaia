@@ -117,6 +117,10 @@ TEST(WorkspaceTest, CommandChecks) {
         << "division in inline code is not the root folder";
     EXPECT_NE(ws.checkCommand("sudo find / -name x"), "");
     EXPECT_NE(ws.checkCommand("cd /tmp && rm -rf / "), "");
+    // "Always allow rm" covers `cd folder && rm x`; the folder must still be one this chat may use.
+    EXPECT_NE(ws.checkCommand("cd " + d.other.string() + " && rm notes.txt"), "");
+    EXPECT_NE(ws.checkCommand("cd " + d.other.string() + " && gcc -c a.c 2>&1"), "");
+    EXPECT_EQ(ws.checkCommand("cd " + d.work.string() + " && gcc -c a.c 2>&1"), "");
     // The shell expands an unquoted wildcard in the top folder into real folders.
     for (const char* globbed : {"rm -rf /*", "cat /h*/me/.ssh/id_rsa", "rm -rf /{home,x}/me", "ls /[a-z]*"}) {
         EXPECT_NE(ws.checkCommand(globbed), "") << globbed;
