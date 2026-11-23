@@ -593,6 +593,55 @@ TEST(AgentStreaming, AReplyCutOffInItsReasoningSaysSoAndIsNotRetried) {
     EXPECT_EQ(mock.requestCount(), 1) << "sending the same request again would hit the same limit";
 }
 
+namespace {
+class WorkingAgent : public ResilienceAgent {
+public:
+    using ResilienceAgent::ResilienceAgent;
+
+protected:
+    std::string workSoFar() const override { return "Before it stopped, this turn had already:\n- Run add"; }
+};
+}  // namespace
+
+// A turn that did work and then ran out of reply limit while reasoning: the reason is the
+// limit (not an "LLM error"), the remedy is one this surface has, and the work done is listed.
+TEST(AgentStreaming, AReplyLimitAfterWorkSaysWhatWasDoneAndOffersARemedyTheSurfaceHas) {
+    bench::MockLlmServer mock;
+    mock.enableSseStreaming(true);
+    const json callDelta = {{"tool_calls", json::array({{{"index", 0}, {"id", "c1"}, {"type", "function"},
+                                                         {"function", {{"name", "add"}, {"arguments", R"({"a":1,"b":2})"}}}}})}};
+    mock.pushSseStream(sse({delta(callDelta, "tool_calls")}));
+    const std::string thinking = sse({delta({{"reasoning_content", "Thinking at great length"}}, "length")});
+    mock.pushSseStream(thinking);
+    mock.pushSseStream(thinking);  // the closing answer runs out too
+    AgentConfig cfg = cfgFor(mock);
+    cfg.streaming = true;
+    cfg.modelId = "Qwen3.6-35B-A3B-GGUF";  // a reasoning model keeps its full limit
+    cfg.nativeToolCalls = NativeToolCalls::Always;
+    cfg.maxTokens = 16384;
+    cfg.contextSize = 65536;
+    cfg.replyLimitRemedy = "Break the request into smaller steps";
+    WorkingAgent agent(cfg);
+    agent.initForTest();
+    json r = agent.processQuery("go");
+
+    EXPECT_EQ(r["status"], "error") << r.dump();
+    EXPECT_EQ(r.value("stop_reason", ""), "reply_limit") << r.dump();
+    const std::string why = r["result"].get<std::string>();
+    EXPECT_EQ(why.rfind("The model reached its reply limit of 16384 tokens", 0), 0u) << why;
+    EXPECT_EQ(why.find("LLM error"), std::string::npos) << "the server answered; the model ran out: " << why;
+    EXPECT_NE(why.find("Break the request into smaller steps or ask for a shorter answer."), std::string::npos) << why;
+    EXPECT_EQ(why.find("--max-tokens"), std::string::npos) << why;
+    EXPECT_EQ(why.find("--ctx-size"), std::string::npos) << why;
+    EXPECT_NE(why.find("Before it stopped, this turn had already:\n- Run add"), std::string::npos) << why;
+    ASSERT_EQ(agent.executed.size(), 1u);
+    const auto bodies = mock.receivedBodies();
+    ASSERT_EQ(bodies.size(), 3u);
+    EXPECT_EQ(json::parse(bodies[1])["max_tokens"], 16384);
+    EXPECT_LE(json::parse(bodies[2])["max_tokens"].get<int>(), 4096)
+        << "a second full-size try after the limit costs minutes more";
+}
+
 TEST(AgentStreaming, AStreamWithReasoningButNoAnswerIsRetried) {
     bench::MockLlmServer mock;
     mock.enableSseStreaming(true);

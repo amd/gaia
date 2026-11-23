@@ -352,6 +352,10 @@ protected:
         return std::nullopt;
     }
 
+    /// What the turn already changed, in words for the user: files written, commands run.
+    /// Added under the reason when a turn fails, so the work done is not lost from view.
+    virtual std::string workSoFar() const { return ""; }
+
     /// What the final answer reports that no tool this turn shows, in words for the user,
     /// whether or not the answer was sent back. It is added under the answer and the turn
     /// ends incomplete; nullopt adds nothing.

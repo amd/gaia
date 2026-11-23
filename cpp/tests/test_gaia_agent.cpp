@@ -319,6 +319,32 @@ std::string why(const std::optional<std::pair<std::string, std::string>>& gap) {
 }
 }  // namespace
 
+TEST(GaiaAgentTest, AFailedTurnListsTheFilesItChangedAndTheCommandsItRan) {
+    EXPECT_EQ(GaiaAgent::describeWork({}), "");
+    EXPECT_EQ(GaiaAgent::describeWork({{"file_read", {{"path", "a.py"}}, "{}", true},
+                                       shellRun("grep -n foo a.py", 0, "1:foo")}),
+              "")
+        << "reading and searching change nothing";
+    const GaiaAgent::CallSeen refused = {"bash_execute", {{"command", "rm -rf build"}},
+                                         R"({"error":"Tool 'bash_execute' execution denied by user","status":"error"})",
+                                         false};
+    const GaiaAgent::CallSeen failedEdit = {"file_edit", {{"path", "src/missing.py"}}, R"({"error":"no match"})", false};
+    const std::string work = GaiaAgent::describeWork(
+        {edit("src/click/core.py"), edit("src/click/core.py"), failedEdit,
+         {"file_write", {{"path", "tests/test_core.py"}}, "{}", true},
+         shellRun("python -m pytest tests/test_core.py -x", 1, "1 failed, 3 passed in 0.6s"), refused,
+         shellRun("git diff --stat", 0, " 2 files changed")});
+    EXPECT_EQ(work, "Before it stopped, this turn had already:\n"
+                    "- Changed 2 files: src/click/core.py, tests/test_core.py\n"
+                    "- Run 2 commands: `python -m pytest tests/test_core.py -x` (failed); `git diff --stat`\n"
+                    "Those changes are still in place.");
+    std::vector<GaiaAgent::CallSeen> many;
+    for (int i = 0; i < 9; ++i) many.push_back(shellRun("make step" + std::to_string(i), 0, "ok"));
+    const std::string capped = GaiaAgent::describeWork(many);
+    EXPECT_NE(capped.find("Run 9 commands, the last 6: `make step3`"), std::string::npos) << capped;
+    EXPECT_EQ(capped.find("still in place"), std::string::npos) << "no file was changed: " << capped;
+}
+
 TEST(GaiaAgentTest, ATestsPassClaimNeedsATestRunThatPassedAfterTheLastChange) {
     const std::string none = "no tests were run this turn";
     const std::string failed = "the tests run this turn didn't pass";

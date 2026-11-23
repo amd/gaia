@@ -90,6 +90,15 @@ void SseParser::processData(const std::string& payload) {
             accumulateToolCalls(delta["tool_calls"]);
         }
 
+        if (reasoning_) {
+            for (const char* key : {"reasoning_content", "reasoning"}) {
+                if (delta.contains(key) && delta[key].is_string() && !delta[key].get_ref<const std::string&>().empty()) {
+                    reasoning_(delta[key].get<std::string>());
+                    break;
+                }
+            }
+        }
+
         if (!delta.contains("content") || delta["content"].is_null()) return;
 
         token = delta["content"].get<std::string>();

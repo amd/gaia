@@ -86,6 +86,7 @@ protected:
     std::optional<std::string> unresolvedClaims(const std::string& answer) override;
     std::optional<std::string> unconfirmedClaims(const std::string& answer) override;
     std::optional<std::string> announcedStepNote(const std::string& answer) override;
+    std::string workSoFar() const override;
 
     /// Lists the working folder once, so every model call of the turn shows it as it began.
     void onTurnStart() override;
@@ -99,6 +100,10 @@ public:
     /// Whether the user's own words this turn forbid acting ("use no tools", "plan only").
     static bool asksForNoAction(const std::string& request);
 
+    /// What a chat user can do about a reply cut off at the limit: the app and the terminal UI
+    /// set the limit themselves, so "--max-tokens" names nothing they can reach.
+    static constexpr const char* kChatReplyLimitRemedy = "Break the request into smaller steps";
+
     /// A tool call of the turn, as the answer checks below see it.
     struct CallSeen {
         std::string name;
@@ -106,6 +111,9 @@ public:
         std::string output;  // what the tool returned, clipped
         bool succeeded = true;
     };
+
+    /// The files a turn changed and the commands it ran, for the user, or "" when it did neither.
+    static std::string describeWork(const std::vector<CallSeen>& calls);
 
     /// Why the turn's record doesn't back the answer's report that tests passed: no test
     /// ran, the latest run of each failed, the latest run of some test command after the

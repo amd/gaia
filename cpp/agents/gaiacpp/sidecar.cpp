@@ -172,6 +172,10 @@ public:
     void printToolProgress(const std::string& phase, const std::string& m) override {
         emit({{"type", "status"}, {"message", m}, {"phase", phase}});
     }
+    void printReasoningProgress(size_t words) override {
+        emit({{"type", "status"}, {"phase", "reasoning"}, {"words", words},
+              {"message", "Reasoning - " + std::to_string(words) + " words so far"}});
+    }
     void startProgress(const std::string&) override {}
     void stopProgress() override {}
     void printFinalAnswer(const std::string&, const UsageStats&) override {}
@@ -516,6 +520,7 @@ private:
         cfg.modelId = defaultModel();
         cfg.contextSize = 32768;
         cfg.maxTokens = 16384;
+        cfg.replyLimitRemedy = GaiaAgent::kChatReplyLimitRemedy;
         cfg.temperature = 0.2;
         cfg.silentMode = true;
         cfg.streaming = true;

@@ -1791,6 +1791,51 @@ std::string checkTarget(const std::string& command) {
 }
 }  // namespace
 
+std::string GaiaAgent::describeWork(const std::vector<CallSeen>& calls) {
+    constexpr size_t kMaxFiles = 12, kMaxCommands = 6, kMaxCommandChars = 100;
+    std::vector<std::string> files, commands;
+    for (const CallSeen& c : calls) {
+        if (!c.args.is_object()) continue;
+        if ((c.name == "file_write" || c.name == "file_edit") && c.succeeded && c.args.contains("path") &&
+            c.args["path"].is_string()) {
+            const std::string path = c.args["path"].get<std::string>();
+            if (std::find(files.begin(), files.end(), path) == files.end()) files.push_back(path);
+        } else if (c.name == "bash_execute" && c.args.contains("command") && c.args["command"].is_string()) {
+            const std::string command = c.args["command"].get<std::string>();
+            // Refused or declined commands never ran; ones that only show text changed nothing.
+            if (!readShellRun(c.output).ran || onlyShowsText(command)) continue;
+            std::string shown;
+            for (const char ch : command) shown += (ch == '\n' || ch == '\r' || ch == '`') ? ' ' : ch;
+            if (shown.size() > kMaxCommandChars) {
+                size_t cut = kMaxCommandChars;
+                while (cut > 0 && (static_cast<unsigned char>(shown[cut]) & 0xC0) == 0x80) --cut;
+                shown = shown.substr(0, cut) + "...";
+            }
+            commands.push_back("`" + shown + "`" + (c.succeeded ? "" : " (failed)"));
+        }
+    }
+    if (files.empty() && commands.empty()) return "";
+    std::string out = "Before it stopped, this turn had already:";
+    if (!files.empty()) {
+        out += "\n- Changed " + std::to_string(files.size()) + (files.size() == 1 ? " file: " : " files: ");
+        for (size_t i = 0; i < files.size() && i < kMaxFiles; ++i) out += (i ? ", " : "") + files[i];
+        if (files.size() > kMaxFiles) out += ", and " + std::to_string(files.size() - kMaxFiles) + " more";
+    }
+    if (!commands.empty()) {
+        out += "\n- Run " + std::to_string(commands.size()) + (commands.size() == 1 ? " command" : " commands");
+        const size_t from = commands.size() > kMaxCommands ? commands.size() - kMaxCommands : 0;
+        out += from ? ", the last " + std::to_string(kMaxCommands) + ": " : ": ";
+        for (size_t i = from; i < commands.size(); ++i) out += (i > from ? "; " : "") + commands[i];
+    }
+    return out + (files.empty() ? "" : "\nThose changes are still in place.");
+}
+
+std::string GaiaAgent::workSoFar() const {
+    std::vector<CallSeen> seen;
+    for (const auto& c : turnToolCalls()) seen.push_back({c.name, c.args, c.output, c.succeeded});
+    return describeWork(seen);
+}
+
 std::optional<std::pair<std::string, std::string>> GaiaAgent::unsupportedTestClaim(const std::string& answer,
                                                                                     const std::vector<CallSeen>& calls) {
     const std::string claim = passingTestClaim(answer);

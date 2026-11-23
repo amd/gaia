@@ -560,6 +560,10 @@ public:
     void printToolProgress(const std::string& phase, const std::string& m) override {
         server_.write({{"type", "status"}, {"message", m}, {"phase", phase}});
     }
+    void printReasoningProgress(size_t words) override {
+        server_.write({{"type", "status"}, {"phase", "reasoning"}, {"words", words},
+                       {"message", "Reasoning - " + std::to_string(words) + " words so far"}});
+    }
     void startProgress(const std::string&) override {}
     void stopProgress() override {}
     void printFinalAnswer(const std::string&, const UsageStats&) override {}
@@ -696,6 +700,10 @@ StdioServer::StdioServer(GaiaAgent& agent, std::istream& in, std::ostream& out, 
       fullAccess_(options_.fullAccess),
       acceptEdits_(options_.acceptEdits) {
     if (options_.editRoots.empty()) options_.editRoots.push_back(workingFolderUtf8());
+    // The terminal UI starts this program itself, so its user has no --max-tokens to pass.
+    AgentConfig cfg = agent_.config();
+    cfg.replyLimitRemedy = GaiaAgent::kChatReplyLimitRemedy;
+    agent_.setConfig(cfg);
 }
 
 StdioServer::~StdioServer() {

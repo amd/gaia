@@ -669,6 +669,38 @@ TEST_F(GaiacppStdio, AStreamedAnswerArrivesAsTokensWithReasoningLeftOut) {
     EXPECT_EQ(final["answer"].get<std::string>().find("secret"), std::string::npos) << final.dump();
 }
 
+// The model server answered; the model ran out of reply limit. Not "did not answer", and no
+// flag the terminal UI's user cannot pass.
+TEST_F(GaiacppStdio, AReplyThatRunsOutWhileReasoningIsNotBlamedOnTheModelServer) {
+    mock_.enableSseStreaming(true);
+    mock_.pushSseStream("data: " + json{{"choices", json::array({{{"index", 0},
+                                                                  {"delta", {{"reasoning_content", "thinking for a long time"}}},
+                                                                  {"finish_reason", "length"}}})}}
+                                           .dump() +
+                              "\n\ndata: [DONE]\n\n");
+    Start s;
+    s.streaming = true;
+    start(s);
+    ask("refactor everything");
+    const json terminal = waitTerminal(1);
+    ASSERT_TRUE(terminal.is_object());
+    EXPECT_EQ(terminal["type"], "final") << terminal.dump();
+    const std::string answer = terminal.value("answer", "");
+    EXPECT_NE(answer.find("reply limit of"), std::string::npos) << terminal.dump();
+    EXPECT_NE(answer.find("Break the request into smaller steps"), std::string::npos) << terminal.dump();
+    EXPECT_EQ(terminal.dump().find("--max-tokens"), std::string::npos) << terminal.dump();
+    EXPECT_EQ(terminal.dump().find("did not answer"), std::string::npos) << terminal.dump();
+    // While it reasoned, the terminal UI was told so: how much, never what.
+    bool progress = false;
+    for (const auto& e : events()) {
+        if (e.value("type", "") != "status" || e.value("phase", "") != "reasoning") continue;
+        progress = true;
+        EXPECT_EQ(e.value("words", 0), 5) << e.dump();
+        EXPECT_EQ(e.dump().find("thinking for"), std::string::npos) << e.dump();
+    }
+    EXPECT_TRUE(progress) << "no reasoning progress was reported";
+}
+
 TEST_F(GaiacppStdio, APlainLineAndAJsonLookingLineAreBothQueries) {
     mock_.pushResponse(answer("one"));
     mock_.pushResponse(answer("two"));

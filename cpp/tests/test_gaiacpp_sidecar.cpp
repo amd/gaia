@@ -658,6 +658,34 @@ TEST_F(GaiacppSidecar, PlainQueryStreamsTokensThenFinalWithUsage) {
     EXPECT_EQ(unknown->status, 404);
 }
 
+// The app sets the reply limit itself, so its user is never told to pass --max-tokens.
+TEST_F(GaiacppSidecar, AReplyThatRunsOutWhileReasoningNamesSomethingAnAppUserCanDo) {
+    mock().enableSseStreaming(true);
+    mock().pushSseStream("data: " + json{{"choices", json::array({{{"index", 0},
+                                                                  {"delta", {{"reasoning_content", "thinking for a long time"}}},
+                                                                  {"finish_reason", "length"}}})}}
+                                           .dump() +
+                              "\n\ndata: [DONE]\n\n");
+    ASSERT_NO_FATAL_FAILURE(startSidecar());
+    Turn t(port_, queryBody("run-limit", "refactor everything", {{"session_id", "chat-limit"}}));
+    ASSERT_TRUE(t.waitDone()) << t.describe();
+    auto events = t.events();
+    ASSERT_NO_FATAL_FAILURE(expectSingleTerminal(events, "final")) << t.describe();
+    const json& final = events.back();
+    EXPECT_TRUE(final.value("failed", false)) << t.describe();
+    const std::string answer = final.value("answer", "");
+    EXPECT_NE(answer.find("reply limit of"), std::string::npos) << answer;
+    EXPECT_NE(answer.find("Break the request into smaller steps"), std::string::npos) << answer;
+    EXPECT_EQ(answer.find("--max-tokens"), std::string::npos) << answer;
+    EXPECT_EQ(answer.find("LLM error"), std::string::npos) << answer;
+    bool progress = false;
+    for (const auto& e : events) {
+        progress = progress || (e.value("type", "") == "status" && e.value("phase", "") == "reasoning" &&
+                                e.value("words", 0) == 5);
+    }
+    EXPECT_TRUE(progress) << "no reasoning progress was reported: " << t.describe();
+}
+
 TEST_F(GaiacppSidecar, TheHelperSettingReachesAChatsAgent) {
     ASSERT_NO_FATAL_FAILURE(startSidecar({{"GAIA_MAX_HELPERS", std::string("0")}}));
     mock().pushResponse(answerReply("hi"));

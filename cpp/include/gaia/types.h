@@ -496,6 +496,11 @@ struct AgentConfig {
     /// Resolve featureTier against ``modelId``.
     GAIA_API bool compactFeatures() const;
 
+    /// What the user can do when a reply is cut off at the limit, where they are. Empty: the
+    /// command line's "Raise the limit (--max-tokens; ...)". An app that sets the limit itself
+    /// names something its user can do instead.
+    std::string replyLimitRemedy;
+
     /// The reply limit sent with a request: maxTokens, but never more than half
     /// the context window, so a long reasoning block cannot fill the window, and
     /// at most 4096 for a compact model, whose longer replies are runaway repetition.
