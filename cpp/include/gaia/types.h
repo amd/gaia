@@ -269,12 +269,14 @@ constexpr ToolPolicy stricterPolicy(ToolPolicy a, ToolPolicy b) {
     return a < b ? b : a;
 }
 
-enum class ToolConfirmResult { ALLOW_ONCE, ALWAYS_ALLOW, DENY };
+// DENY is a person's no. UNATTENDED means nobody could be asked or nobody
+// answered: the call is not run, and it is not remembered as declined.
+enum class ToolConfirmResult { ALLOW_ONCE, ALWAYS_ALLOW, DENY, UNATTENDED };
 
 // Returns sanitized args or throws std::invalid_argument to reject the call.
 using ToolValidateCallback = std::function<json(const std::string& toolName, const json& args)>;
 
-// Returns ALLOW_ONCE, ALWAYS_ALLOW, or DENY.
+// Returns ALLOW_ONCE, ALWAYS_ALLOW, DENY, or UNATTENDED.
 using ToolConfirmCallback = std::function<ToolConfirmResult(const std::string& toolName, const json& args)>;
 
 

@@ -151,7 +151,7 @@ ToolConfirmCallback makeStdinConfirmCallback() {
                   << "  Choice: " << std::flush;
 
         std::string input;
-        if (!std::getline(std::cin, input)) return ToolConfirmResult::DENY;
+        if (!std::getline(std::cin, input)) return ToolConfirmResult::UNATTENDED;
         if (input == "1" || input == "o" || input == "O") return ToolConfirmResult::ALLOW_ONCE;
         if (input == "2" || input == "a" || input == "A") return ToolConfirmResult::ALWAYS_ALLOW;
         return ToolConfirmResult::DENY;  // 3, d, D, or anything else

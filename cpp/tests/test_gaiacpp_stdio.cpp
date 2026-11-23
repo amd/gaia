@@ -958,7 +958,10 @@ TEST_F(GaiacppStdio, DenyAndTimeoutLeaveTheToolUnrun) {
         EXPECT_EQ(final["answer"], "Not written.");
         EXPECT_FALSE(fs::exists(out)) << decision;
         const json result = waitFor("tool_result", queries_);
-        EXPECT_NE(result["data"].dump().find("denied"), std::string::npos) << result.dump();
+        // A timeout is nobody's no, and is worded as one.
+        EXPECT_NE(result["data"].dump().find(decision == "deny" ? "denied by user" : "nobody could give it"),
+                  std::string::npos)
+            << result.dump();
     }
 }
 

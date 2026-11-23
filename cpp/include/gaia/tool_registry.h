@@ -133,7 +133,36 @@ public:
     /// The store is checked before calling the confirm callback.
     void setAllowedToolsStore(std::shared_ptr<AllowedToolsStore> store);
 
+    // ---- Calls the user declined ----
+
+    /// The instruction put on a declined call: the Python agent's DECLINED_HINT.
+    static const char* declinedHint();
+
+    /// After this many of the user's own "no" answers in one turn, the rest of
+    /// that turn's calls that need approval are refused without asking.
+    static constexpr int kMaxDeclinesPerTurn = 2;
+
+    /// A new user message. Forgets what was declined last turn, and lets an
+    /// exact call the message asks for again be put to the user again.
+    void beginTurn(const std::string& userMessage);
+
+    /// A cleared chat starts with no declined calls.
+    void forgetDeclinedCalls();
+
+    /// Added to the refusal of a call nobody could approve, e.g. the flag that allows it.
+    void setUnattendedRemedy(std::string remedy) { unattendedRemedy_ = std::move(remedy); }
+
 private:
+    /// The refusal for a call that repeats or reroutes a declined one, else nullopt.
+    std::optional<json> declinedRefusal(const std::string& tool, const json& args) const;
+    void noteDeclined(const std::string& tool, const json& args);
+
+    std::map<std::string, std::string> declinedCalls_;  // call key -> as shown; kept for the chat
+    std::vector<std::string> declinedTargets_;          // what this turn's declined calls named
+    std::string lastDeclined_;                          // this turn's latest declined call, as shown
+    int declinedThisTurn_ = 0;
+    std::string unattendedRemedy_;
+
     ToolPreCheck preCheck_;
     ToolArgRewrite argRewrite_;
     std::map<std::string, ToolInfo> tools_;

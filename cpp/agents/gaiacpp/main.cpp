@@ -664,8 +664,9 @@ int runMcp(const Cli& cli) {
             std::cerr << "[gaiacpp] denied " << tool
                       << " (nobody to ask over MCP; pass --dangerously-skip-permissions to allow)\n";
         }
-        return skip ? gaia::ToolConfirmResult::ALLOW_ONCE : gaia::ToolConfirmResult::DENY;
+        return skip ? gaia::ToolConfirmResult::ALLOW_ONCE : gaia::ToolConfirmResult::UNATTENDED;
     });
+    agent.setUnattendedRemedy("Run gaiacpp again with --dangerously-skip-permissions to allow it.");
     if (!settings.mcpConfig.empty()) connectMcp(agent, settings.mcpConfig);
     gaia::McpStdioServer server(agent, "gaiacpp", GAIACPP_VERSION, std::cin, transport);
     server.run();
@@ -771,8 +772,9 @@ int runPrint(const Cli& cli) {
             std::cerr << "[gaiacpp] denied " << tool
                       << " (headless run; pass --dangerously-skip-permissions to allow)\n";
         }
-        return skip ? gaia::ToolConfirmResult::ALLOW_ONCE : gaia::ToolConfirmResult::DENY;
+        return skip ? gaia::ToolConfirmResult::ALLOW_ONCE : gaia::ToolConfirmResult::UNATTENDED;
     });
+    agent.setUnattendedRemedy("Run gaiacpp again with --dangerously-skip-permissions to allow it.");
     if (!settings.mcpConfig.empty()) {
         std::streambuf* saved = std::cout.rdbuf(std::cerr.rdbuf());
         try { connectMcp(agent, settings.mcpConfig); } catch (...) { std::cout.rdbuf(saved); throw; }

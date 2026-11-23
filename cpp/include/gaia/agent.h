@@ -122,6 +122,9 @@ public:
     /// Get the tool registry (for inspection/testing).
     const ToolRegistry& tools() const { return tools_; }
 
+    /// Added to the refusal of a call nobody could approve, e.g. the flag that allows it.
+    void setUnattendedRemedy(std::string remedy) { tools_.setUnattendedRemedy(std::move(remedy)); }
+
     /// Set the confirmation callback for CONFIRM-policy tools.
     /// Delegates to ToolRegistry::setConfirmCallback().
     void setToolConfirmCallback(ToolConfirmCallback cb);
@@ -155,7 +158,10 @@ public:
     void rebuildSystemPrompt();
 
     /// Clear conversation history (start a fresh topic).
-    void clearHistory() { conversationHistory_.clear(); }
+    void clearHistory() {
+        conversationHistory_.clear();
+        tools_.forgetDeclinedCalls();
+    }
 
     /// Get a snapshot of the current conversation history (for session persistence).
     /// Returns a copy to avoid races with processQuery() on another thread.

@@ -1891,6 +1891,18 @@ json Agent::processQueryInternal(const std::vector<Message>& userMessages, int m
     // Reset cancel flag at the start of each query.
     cancelled_.store(false);  // cancelCheck_ is the caller's and stays
 
+    {
+        std::string asked;
+        for (const auto& m : userMessages) {
+            asked += m.content + " ";
+            if (!m.parts.has_value()) continue;
+            for (const auto& part : *m.parts) {
+                if (part.kind == ContentPart::Kind::TEXT) asked += part.text + " ";
+            }
+        }
+        tools_.beginTurn(asked);
+    }
+
     // Snapshot config at start of query for thread-safe consistency throughout.
     AgentConfig cfg;
     {

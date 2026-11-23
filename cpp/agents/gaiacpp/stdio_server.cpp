@@ -933,7 +933,7 @@ bool StdioServer::askForPath(const std::string& path) {
     std::error_code ec;
     if (fs::is_directory(fs::u8path(path), ec)) args["kind"] = "folder";
     else if (fs::is_regular_file(fs::u8path(path), ec)) args["kind"] = "file";
-    const bool granted = confirm(kPathAccessPrompt, args) != ToolConfirmResult::DENY;
+    const bool granted = confirm(kPathAccessPrompt, args) == ToolConfirmResult::ALLOW_ONCE;
     if (!granted) declinedPaths_.insert(path);
     return granted;
 }
@@ -957,7 +957,7 @@ ToolConfirmResult StdioServer::confirm(const std::string& tool, const json& args
     if (acceptEdits_ && acceptable) return ToolConfirmResult::ALLOW_ONCE;
     if (cancelled_ || inputClosed_ || hostGone_) {
         note("denied " + tool + ": " + (cancelled_ ? "the turn was cancelled" : "nobody is left to approve it"));
-        return ToolConfirmResult::DENY;
+        return ToolConfirmResult::UNATTENDED;
     }
     const std::string confirmId = randomHex(16);
     const std::string summary = promptSummary(tool, args);
@@ -994,7 +994,8 @@ ToolConfirmResult StdioServer::confirm(const std::string& tool, const json& args
     } else if (decision == "timeout") {
         note("denied " + tool + ": the host's approval prompt timed out");
     }
-    return ToolConfirmResult::DENY;
+    // Only an answered "deny" is the user's no.
+    return decision == "deny" ? ToolConfirmResult::DENY : ToolConfirmResult::UNATTENDED;
 }
 
 json StdioServer::switchableModels() {

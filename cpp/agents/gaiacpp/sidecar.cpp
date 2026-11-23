@@ -570,7 +570,7 @@ private:
             std::error_code ec;
             if (fs::is_directory(fs::u8path(path), ec)) args["kind"] = "folder";
             else if (fs::is_regular_file(fs::u8path(path), ec)) args["kind"] = "file";
-            granted = confirm(s, kPathAccessPrompt, args) != ToolConfirmResult::DENY;
+            granted = confirm(s, kPathAccessPrompt, args) == ToolConfirmResult::ALLOW_ONCE;
             if (!granted) s.declined.insert(path);
         }
         if (granted) s.approved.insert(path);
@@ -585,7 +585,7 @@ private:
             std::lock_guard<std::mutex> lock(s.currentMu);
             run = s.current;
         }
-        if (!run) return ToolConfirmResult::DENY;
+        if (!run) return ToolConfirmResult::UNATTENDED;
         const std::string confirmId = randomHex(16);
         {
             std::lock_guard<std::mutex> lock(run->mu);
@@ -638,7 +638,7 @@ private:
             while (!s.turnLock->try_lock_for(std::chrono::milliseconds(100))) {
                 if (run->cancelled) {
                     --approvalsReturning_;
-                    return ToolConfirmResult::DENY;
+                    return ToolConfirmResult::UNATTENDED;
                 }
             }
             --approvalsReturning_;
@@ -655,7 +655,8 @@ private:
             }
             return ToolConfirmResult::ALLOW_ONCE;
         }
-        return ToolConfirmResult::DENY;
+        // Only an answered "deny" is the user's no; a timeout or a stop is nobody's.
+        return d == "deny" ? ToolConfirmResult::DENY : ToolConfirmResult::UNATTENDED;
     }
 
     std::shared_ptr<Run> findRun(const std::string& id) {

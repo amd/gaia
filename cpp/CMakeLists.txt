@@ -490,6 +490,7 @@ if(GAIA_BUILD_TESTS)
         tests/test_secrets.cpp
         tests/test_mcp_http.cpp
         tests/test_agent_resilience.cpp
+        tests/test_declined_calls.cpp
         tests/test_skill_library.cpp
         tests/test_workspace.cpp
         tests/test_document_index.cpp
