@@ -27,6 +27,12 @@
 #include <thread>
 #include <vector>
 
+#ifdef _WIN32
+#include <process.h>
+#else
+#include <unistd.h>
+#endif
+
 #include "gaia/types.h"
 #include "support/child_process.h"
 #include "support/mock_llm_server.h"
@@ -293,6 +299,9 @@ protected:
                 {"GAIA_HOST_KEYCHAIN_SECRET_FILE", std::nullopt},
                 {"LEMONADE_BASE_URL", modelUrl},
                 {"LEMONADE_API_KEY", std::nullopt},
+                {"GAIA_LEMONADE_EMBEDDED", std::nullopt},
+                {"GAIA_CONFIG_FILE", std::nullopt},
+                {"GAIA_CONFIG_DIR", std::nullopt},
                 {"GAIA_BASE_URL", std::nullopt},
                 {"GAIA_CPP_BASE_URL", std::nullopt},
                 {"GAIA_API_KEY", std::nullopt},
@@ -302,6 +311,25 @@ protected:
                 {"HOME", home},
                 {"USERPROFILE", home},
                 {"GAIACPP_CONFIG", (root_ / "no-config.json").string()}};
+    }
+
+    /// GAIA's own model server as its supervisor records it: running on `port`, requiring `key`.
+    void writeGaiaServer(int port, const std::string& key) {
+#ifdef _WIN32
+        const long long pid = _getpid();
+#else
+        const long long pid = getpid();
+#endif
+        fs::create_directories(root_ / "home" / "lemonade");
+        // Written aside and moved in: the sidecar may read it at any moment.
+        const fs::path tmp = root_ / "home" / "lemonade" / "state.json.tmp";
+        std::ofstream(tmp) << json{{"pid", pid}, {"port", port}, {"api_key", key}}.dump();
+        fs::rename(tmp, root_ / "home" / "lemonade" / "state.json");
+    }
+
+    /// The environment the daemon gives the sidecar: nothing names a model server or a model.
+    static testsupport::EnvOverrides daemonEnv() {
+        return {{"LEMONADE_BASE_URL", std::nullopt}, {"GAIA_MODEL_ID", std::nullopt}};
     }
 
     void spawn(const testsupport::EnvOverrides& env) {
@@ -1267,9 +1295,8 @@ TEST_F(GaiacppSidecar, UnreachableModelServerFailsTheTurnWithAReasonInsteadOfHan
     EXPECT_EQ(ij["lemonade"]["reachable"], false);
     EXPECT_NE(ij["hint"].get<std::string>().find(std::to_string(closedPort)), std::string::npos) << ij.dump();
 
-    // The agent retries a connection failure with backoff (2+4+8 s), so allow for that.
     Turn t(port_, queryBody("run-down", "hello?"));
-    ASSERT_TRUE(t.waitDone(seconds(120))) << "the turn hung on a dead model server: " << t.describe();
+    ASSERT_TRUE(t.waitDone()) << "the turn hung on a dead model server: " << t.describe();
     ASSERT_EQ(t.status(), 200) << t.describe();
     auto events = t.events();
     ASSERT_FALSE(events.empty()) << t.describe();
@@ -1278,7 +1305,7 @@ TEST_F(GaiacppSidecar, UnreachableModelServerFailsTheTurnWithAReasonInsteadOfHan
     ASSERT_EQ(last.value("type", ""), "final") << t.describe();
     EXPECT_EQ(last.value("failed", false), true) << last.dump();
     const std::string failure = last.value("failure", "");
-    EXPECT_NE(failure.find("mock-model"), std::string::npos) << "names the model it couldn't reach: " << failure;
+    EXPECT_NE(failure.find("LEMONADE_BASE_URL"), std::string::npos) << "names what chose the server: " << failure;
     EXPECT_NE(failure.find(std::to_string(closedPort)), std::string::npos) << "names where it looked: " << failure;
 
     auto health = client().Get("/health");
@@ -1286,7 +1313,201 @@ TEST_F(GaiacppSidecar, UnreachableModelServerFailsTheTurnWithAReasonInsteadOfHan
     EXPECT_EQ(health->status, 200);
 }
 
-// ---- 10. bad requests ----
+// ---- 10. GAIA's own model server (#8854) ----
+
+TEST_F(GaiacppSidecar, AChatRunsOnGaiasOwnModelServerWithItsKeyAndChosenModel) {
+    writeGaiaServer(mock().port(), "gaia-own-key");
+    std::ofstream(root_ / "home" / "config.json") << json{{"default_model", "chosen-model"}}.dump();
+    mock().pushResponse(answerReply("From GAIA's server."));
+    ASSERT_NO_FATAL_FAILURE(startSidecar(daemonEnv()));
+
+    Turn t(port_, queryBody("run-own", "hello", {{"session_id", "chat-own"}}));
+    ASSERT_TRUE(t.waitDone()) << t.describe();
+    ASSERT_NO_FATAL_FAILURE(expectSingleTerminal(t.events(), "final")) << t.describe();
+    EXPECT_EQ(t.events().back()["answer"], "From GAIA's server.") << t.describe();
+    ASSERT_EQ(mock().requestCount(), 1);
+    EXPECT_EQ(mock().receivedAuthorization()[0], "Bearer gaia-own-key");
+    EXPECT_EQ(modelRequests()[0]["model"], "chosen-model");
+}
+
+TEST_F(GaiacppSidecar, InitReportsGaiasOwnModelServer) {
+    writeGaiaServer(mock().port(), "gaia-own-key");
+    std::ofstream(root_ / "home" / "config.json") << json{{"default_model", "chosen-model"}}.dump();
+    ASSERT_NO_FATAL_FAILURE(startSidecar(daemonEnv()));
+
+    auto init = send("GET", "/v1/gaia/init", bearer());
+    ASSERT_TRUE(init);
+    EXPECT_EQ(init->status, 200) << init->body;
+    const json ij = json::parse(init->body);
+    EXPECT_EQ(ij["ready"], true) << ij.dump();
+    EXPECT_EQ(ij["lemonade"]["base_url"], "http://localhost:" + std::to_string(mock().port()) + "/api/v1");
+    EXPECT_EQ(ij["model"]["id"], "chosen-model");
+    EXPECT_EQ(ij["model"]["present"], true);
+}
+
+TEST_F(GaiacppSidecar, AModelServerRestartedOnANewPortIsFollowedByTheNextTurn) {
+    bench::MockLlmServer restarted;
+    writeGaiaServer(mock().port(), "first-key");
+    mock().pushResponse(answerReply("one"));
+    restarted.pushResponse(answerReply("two"));
+    ASSERT_NO_FATAL_FAILURE(startSidecar(daemonEnv()));
+
+    Turn first(port_, queryBody("run-a", "hello", {{"session_id", "chat-move"}}));
+    ASSERT_TRUE(first.waitDone()) << first.describe();
+    EXPECT_EQ(first.events().back()["answer"], "one") << first.describe();
+
+    writeGaiaServer(restarted.port(), "second-key");
+    auto init = send("GET", "/v1/gaia/init", bearer());
+    ASSERT_TRUE(init);
+    EXPECT_EQ(json::parse(init->body)["lemonade"]["base_url"],
+              "http://localhost:" + std::to_string(restarted.port()) + "/api/v1");
+    Turn second(port_, queryBody("run-b", "hello again", {{"session_id", "chat-move"}}));
+    ASSERT_TRUE(second.waitDone()) << second.describe();
+    EXPECT_EQ(second.events().back()["answer"], "two") << second.describe();
+    EXPECT_EQ(mock().requestCount(), 1);
+    ASSERT_EQ(restarted.requestCount(), 1);
+    EXPECT_EQ(restarted.receivedAuthorization()[0], "Bearer second-key");
+}
+
+TEST_F(GaiacppSidecar, AUsersOwnLemonadeBaseUrlStillWinsAndNeverGetsGaiasKey) {
+    bench::MockLlmServer gaias;
+    writeGaiaServer(gaias.port(), "gaia-own-key");
+    mock().pushResponse(answerReply("From the user's server."));
+    ASSERT_NO_FATAL_FAILURE(startSidecar());  // LEMONADE_BASE_URL names mock()
+
+    Turn t(port_, queryBody("run-user", "hello"));
+    ASSERT_TRUE(t.waitDone()) << t.describe();
+    EXPECT_EQ(t.events().back()["answer"], "From the user's server.") << t.describe();
+    EXPECT_EQ(gaias.requestCount(), 0);
+    ASSERT_EQ(mock().requestCount(), 1);
+    EXPECT_EQ(mock().receivedAuthorization()[0], "");
+}
+
+TEST_F(GaiacppSidecar, GaiasModelServerStoppedSaysHowToStartIt) {
+    int lastPort = 0;
+    {
+        bench::MockLlmServer gone;  // bound, then closed: nothing listens there now
+        lastPort = gone.port();
+    }
+    const fs::path lemonade = root_ / "home" / "lemonade";
+    fs::create_directories(lemonade / "dist" / "10.0.0");
+    std::ofstream(lemonade / "dist" / "10.0.0" / "lemond") << "";
+    std::ofstream(lemonade / "last_port.json") << json{{"port", lastPort}}.dump();
+    ASSERT_NO_FATAL_FAILURE(startSidecar(daemonEnv()));
+
+    auto init = send("GET", "/v1/gaia/init", bearer());
+    ASSERT_TRUE(init);
+    EXPECT_EQ(init->status, 503) << init->body;
+    const std::string hint = json::parse(init->body)["hint"].get<std::string>();
+    EXPECT_NE(hint.find("gaia daemon start"), std::string::npos) << hint;
+
+    Turn t(port_, queryBody("run-stopped", "hello?"));
+    ASSERT_TRUE(t.waitDone()) << t.describe();
+    json last = t.events().back();
+    ASSERT_EQ(last.value("type", ""), "final") << t.describe();
+    EXPECT_EQ(last.value("failed", false), true) << last.dump();
+    const std::string failure = last.value("failure", "");
+    EXPECT_NE(failure.find("GAIA's model server isn't running"), std::string::npos) << failure;
+    EXPECT_NE(failure.find("gaia daemon start"), std::string::npos) << failure;
+    EXPECT_EQ(failure.find("13305"), std::string::npos) << failure;
+}
+
+// 0.0.0.0 reaches this PC's listeners on Linux and macOS without being a loopback
+// name, so it stands in for another machine. Windows refuses to connect to it.
+std::string addressThatIsNotLoopback(int port) { return "http://0.0.0.0:" + std::to_string(port) + "/api/v1"; }
+
+#ifdef _WIN32
+#define SKIP_WITHOUT_A_NON_LOOPBACK_ADDRESS() \
+    GTEST_SKIP() << "no address reaches a local test server on Windows without being loopback; " \
+                    "GaiaSetup.ANamedServersKey covers the rule there"
+#else
+#define SKIP_WITHOUT_A_NON_LOOPBACK_ADDRESS() (void)0
+#endif
+
+// The local Lemonade's key, and GAIA's own, stay on this PC (#8854 review).
+TEST_F(GaiacppSidecar, ANamedAddressOnAnotherMachineGetsNoLocalKey) {
+    SKIP_WITHOUT_A_NON_LOOPBACK_ADDRESS();
+    for (const char* var : {"GAIA_BASE_URL", "GAIA_CPP_BASE_URL"}) {
+        writeGaiaServer(mock().port(), "gaia-own-key");
+        mock().pushResponse(answerReply("From the named server."));
+        ASSERT_NO_FATAL_FAILURE(startSidecar({{"LEMONADE_BASE_URL", std::nullopt},
+                                              {var, addressThatIsNotLoopback(mock().port())},
+                                              {"LEMONADE_API_KEY", std::string("local-lemonade-key")}}));
+        Turn t(port_, queryBody(std::string("run-remote-") + var, "hello"));
+        ASSERT_TRUE(t.waitDone()) << t.describe();
+        EXPECT_EQ(t.events().back()["answer"], "From the named server.") << t.describe();
+        ASSERT_FALSE(mock().receivedAuthorization().empty());
+        EXPECT_EQ(mock().receivedAuthorization().back(), "") << var << ": a local key left this PC";
+        child_.reset();
+        std::error_code ec;
+        fs::remove(root_ / "sidecar.stderr", ec);  // its ready line would be read as the next one's
+    }
+}
+
+TEST_F(GaiacppSidecar, ANamedAddressOnAnotherMachineGetsTheKeyTheUserGaveForIt) {
+    SKIP_WITHOUT_A_NON_LOOPBACK_ADDRESS();
+    mock().pushResponse(answerReply("From the named server."));
+    ASSERT_NO_FATAL_FAILURE(startSidecar({{"LEMONADE_BASE_URL", std::nullopt},
+                                          {"GAIA_BASE_URL", addressThatIsNotLoopback(mock().port())},
+                                          {"LEMONADE_API_KEY", std::string("local-lemonade-key")},
+                                          {"GAIA_API_KEY", std::string("key-for-that-server")}}));
+    Turn t(port_, queryBody("run-remote-key", "hello"));
+    ASSERT_TRUE(t.waitDone()) << t.describe();
+    ASSERT_EQ(mock().requestCount(), 1) << t.describe();
+    EXPECT_EQ(mock().receivedAuthorization()[0], "Bearer key-for-that-server");
+}
+
+TEST_F(GaiacppSidecar, ANamedAddressOnThisPcStillGetsTheLocalLemonadeKey) {
+    mock().pushResponse(answerReply("From the local server."));
+    ASSERT_NO_FATAL_FAILURE(startSidecar({{"LEMONADE_BASE_URL", std::nullopt},
+                                          {"GAIA_BASE_URL", mock().baseUrl() + "/api/v1"},
+                                          {"LEMONADE_API_KEY", std::string("local-lemonade-key")}}));
+    Turn t(port_, queryBody("run-local-key", "hello"));
+    ASSERT_TRUE(t.waitDone()) << t.describe();
+    ASSERT_EQ(mock().requestCount(), 1) << t.describe();
+    EXPECT_EQ(mock().receivedAuthorization()[0], "Bearer local-lemonade-key");
+}
+
+// GAIA's server is up and refuses the key: the turn says which key, not "start the daemon".
+TEST_F(GaiacppSidecar, AModelServerThatRefusesTheKeyIsNotReportedAsStopped) {
+    httplib::Server refusing;
+    refusing.Get("/api/v1/health", [](const httplib::Request&, httplib::Response& res) {
+        res.status = 401;
+        res.set_content(R"({"error":"invalid api key"})", "application/json");
+    });
+    const int refusingPort = refusing.bind_to_any_port("127.0.0.1");
+    std::thread serving([&refusing] { refusing.listen_after_bind(); });
+    while (!refusing.is_running()) std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    struct StopOnExit {
+        httplib::Server& server;
+        std::thread& thread;
+        ~StopOnExit() {
+            server.stop();
+            thread.join();
+        }
+    } stopOnExit{refusing, serving};
+    writeGaiaServer(refusingPort, "gaia-own-key");
+    auto env = daemonEnv();
+    env["LEMONADE_API_KEY"] = std::string("users-other-key");
+    ASSERT_NO_FATAL_FAILURE(startSidecar(env));
+
+    auto init = send("GET", "/v1/gaia/init", bearer());
+    ASSERT_TRUE(init);
+    EXPECT_EQ(init->status, 503) << init->body;
+    const std::string hint = json::parse(init->body).value("hint", "");
+    Turn t(port_, queryBody("run-refused", "hello?"));
+    ASSERT_TRUE(t.waitDone()) << t.describe();
+    const std::string failure = t.events().back().value("failure", "");
+
+    for (const std::string& text : {hint, failure}) {
+        EXPECT_NE(text.find("HTTP 401"), std::string::npos) << text;
+        EXPECT_NE(text.find("unset LEMONADE_API_KEY"), std::string::npos) << text;
+        EXPECT_EQ(text.find("gaia daemon start"), std::string::npos) << text;
+        EXPECT_EQ(text.find("users-other-key"), std::string::npos) << "a key is never printed";
+    }
+}
+
+// ---- 11. bad requests ----
 
 TEST_F(GaiacppSidecar, MalformedBodiesAndUnknownRoutesGet4xxAndTheServerKeepsServing) {
     ASSERT_NO_FATAL_FAILURE(startSidecar());

@@ -254,6 +254,11 @@ LemonadeHealth LemonadeClient::healthCheck() {
         }
     } catch (const json::exception&) {
         h.running = false;
+    } catch (const HttpError& e) {
+        h.running = false;
+        h.error = e.what();
+        h.errorStatus = e.status();
+        h.errorBody = e.body();
     } catch (const std::exception& e) {
         h.running = false;
         h.error = e.what();

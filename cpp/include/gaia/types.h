@@ -527,4 +527,8 @@ struct AgentConfig {
 /// loopback address, else "".
 GAIA_API std::string resolveApiKey(const AgentConfig& config);
 
+/// True for http(s)://localhost, 127.x.x.x or [::1]: the only addresses the
+/// local Lemonade's key is sent to.
+GAIA_API bool isLoopbackUrl(const std::string& url);
+
 } // namespace gaia

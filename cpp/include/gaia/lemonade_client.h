@@ -51,6 +51,8 @@ struct GAIA_API LemonadeHealth {
     int contextSize = 0;   // active n_ctx (0 if unknown)
     json raw;              // full health response JSON
     std::string error;     // why the server could not be reached (empty when it answered)
+    int errorStatus = 0;   // HTTP status of an error reply; 0 when nothing answered
+    std::string errorBody; // that reply's body
 };
 
 /// How many requests a loaded model serves at once.

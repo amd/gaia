@@ -29,6 +29,7 @@
 
 #include "bash_tools.h"
 #include "gaia_agent.h"
+#include "gaia_setup.h"
 
 #ifndef GAIACPP_VERSION
 #define GAIACPP_VERSION "0.0.0-dev"
@@ -264,6 +265,17 @@ Message messageFromJson(const json& m) {
     return msg;
 }
 
+// The model server a turn or a readiness check uses, and the key sent to it.
+struct ModelServer {
+    std::string baseUrl;
+    std::string apiKey;
+    ServerOrigin origin;
+};
+
+struct ServerDown : std::runtime_error {
+    using std::runtime_error::runtime_error;
+};
+
 struct BadRequest : std::runtime_error {
     int status;
     BadRequest(int s, const std::string& m) : std::runtime_error(m), status(s) {}
@@ -429,13 +441,45 @@ private:
         sessions_.erase(id);
     }
 
+    // Read on every use: GAIA's own server takes a new port and key when it restarts.
+    ModelServer modelServer() const {
+        ModelServer m;
+        GaiaServer own;
+        // The Agent constructor honours these too.
+        std::string named = getEnvVar("GAIA_BASE_URL");
+        const char* namedBy = "GAIA_BASE_URL";
+        if (named.empty()) {
+            named = getEnvVar("GAIA_CPP_BASE_URL");
+            namedBy = "GAIA_CPP_BASE_URL";
+        }
+        if (named.empty()) {
+            own = resolveGaiaServer();
+            m.baseUrl = own.baseUrl;
+            m.origin = own.origin;
+        } else {
+            own = runningGaiaServer();  // the named address may still be GAIA's own server
+            m.baseUrl = named;
+            m.origin = {ServerSource::GaiaBaseUrlEnv, namedBy};
+        }
+        m.apiKey = keyForNamedServer(own, m.baseUrl, lemonadeKey_, m.origin);
+        return m;
+    }
+
+    std::string defaultModel() const { return opts_.defaultModel.empty() ? resolveGaiaModel() : opts_.defaultModel; }
+
     // Build (or rebuild, when the chat's folders grew) the session's agent.
     // Only called while the session holds its busy flag.
-    void ensureAgent(Session& s) {
-        if (s.agent && s.builtWith == s.roots) return;
+    void ensureAgent(Session& s, const ModelServer& server) {
+        if (s.agent && s.builtWith == s.roots) {
+            AgentConfig cfg = s.agent->config();
+            cfg.baseUrl = server.baseUrl;
+            cfg.apiKey = server.apiKey;
+            s.agent->setConfig(cfg);
+            return;
+        }
         AgentConfig cfg;
-        cfg.baseUrl = getEnvVar("LEMONADE_BASE_URL", defaultBaseUrl());
-        cfg.modelId = opts_.defaultModel.empty() ? "Gemma-4-E4B-it-GGUF" : opts_.defaultModel;
+        cfg.baseUrl = server.baseUrl;
+        cfg.modelId = defaultModel();
         cfg.contextSize = 32768;
         cfg.maxTokens = 16384;
         cfg.temperature = 0.2;
@@ -443,7 +487,7 @@ private:
         cfg.streaming = true;
         cfg.maxHistoryMessages = 0;  // the UI fits history to the window
         cfg.responseMode = ResponseMode::Conversational;
-        cfg.apiKey = lemonadeKey_;
+        cfg.apiKey = server.apiKey;
         GaiaAgent::Options o;
         o.maxHelpers = opts_.maxHelpers;
         if (s.roots.empty()) {
@@ -600,17 +644,24 @@ private:
         });
         server_.Get("/v1/gaia/init", [this](const httplib::Request& req, httplib::Response& res) {
             if (!admit(req, res, true)) return;
-            const std::string base = getEnvVar("LEMONADE_BASE_URL", defaultBaseUrl());
-            LemonadeClient lc(base);
-            lc.setApiKey(lemonadeKey_);
-            const bool up = lc.isServerRunning();
+            std::string baseUrl, model, down;
+            try {
+                const ModelServer server = modelServer();
+                LemonadeClient lc(server.baseUrl);
+                lc.setApiKey(server.apiKey);
+                baseUrl = lc.baseUrl();
+                model = defaultModel();
+                down = serverDownReason(lc, server.origin);
+            } catch (const std::exception& e) {
+                down = e.what();  // GAIA's settings can't be read
+            }
+            const bool up = down.empty();
             json body = {{"ready", up},
-                         {"lemonade", {{"reachable", up}, {"base_url", lc.baseUrl()}, {"version", nullptr},
+                         {"lemonade", {{"reachable", up}, {"base_url", baseUrl}, {"version", nullptr},
                                        {"min_version", nullptr}, {"compatible", up ? json(true) : json(nullptr)}}},
-                         {"model", {{"id", opts_.defaultModel}, {"present", up}, {"loadable", up ? json(true) : json(nullptr)},
+                         {"model", {{"id", model}, {"present", up}, {"loadable", up ? json(true) : json(nullptr)},
                                     {"ctx_size", nullptr}}},
-                         {"hint", up ? json(nullptr) : json("Lemonade isn't reachable at " + lc.baseUrl() +
-                                                            ". Start GAIA's model server from the GAIA app.")}};
+                         {"hint", up ? json(nullptr) : json(down)}};
             sendJson(res, up ? 200 : 503, body);
         });
         server_.Get("/v1/gaia/memory", [this](const httplib::Request& req, httplib::Response& res) {
@@ -957,7 +1008,14 @@ private:
                     const std::string folder = chatFolder(*s);
                     if (!folder.empty()) fs::current_path(folder, moveEc);
                 }
-                ensureAgent(*s);
+                const ModelServer server = modelServer();
+                {
+                    LemonadeClient probe(server.baseUrl);
+                    probe.setApiKey(server.apiKey);
+                    const std::string down = serverDownReason(probe, server.origin);
+                    if (!down.empty()) throw ServerDown(down);
+                }
+                ensureAgent(*s, server);
                 {
                     std::lock_guard<std::mutex> lock(s->currentMu);
                     s->current = run;
@@ -1008,6 +1066,11 @@ private:
                         terminal["model_messages"] = msgs;
                     }
                 }
+            } catch (const ServerDown& e) {
+                // Same shape as a turn the model server failed mid-way.
+                terminal = run->cancelled ? json{{"type", "final"}, {"answer", ""}}
+                                          : json{{"type", "final"}, {"answer", e.what()}, {"failed", true},
+                                                 {"failure", e.what()}};
             } catch (const std::exception& e) {
                 terminal = run->cancelled ? json{{"type", "final"}, {"answer", ""}}
                                           : json{{"type", "error"}, {"detail", e.what()}, {"status", 500}};
