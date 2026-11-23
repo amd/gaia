@@ -730,7 +730,7 @@ async def revoke_provider_token(
             ),
         }
 
-    # A corrupt blob also reads as None; the slot check tells them apart (#8713).
+    # None means empty OR unreadable; only an empty slot is "nothing stored".
     if blob is None and provider_id in HAS_REVOKE_ENDPOINT:
         if not connection_slot_in_use(provider_id, slot=slot):
             return nothing_to_revoke(provider_id)
