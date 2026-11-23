@@ -640,6 +640,39 @@ and its servers live until it idles out. An unknown session is a `404`; one
 running a turn is a `409` (cancel the run, then delete again). **Call it only on
 a peer at contract ≥ 2.30**; an older one has no such route.
 
+### 5.6 The agent's own memory store (`gaiacpp` only, found by capability)
+
+`gaiacpp` keeps its memory in its own file (`memory-cpp.db`), apart from the
+Python flagship's store, and serves it so a host's Memory page can show the
+memory of the agent the PC is set to use.
+
+- **`GET /v1/gaia/memory[?q=<keywords>&category=<one>&limit=<1..1000>]`** →
+  `{available: true, stats, contexts, shown, total, items, store}`. `limit`
+  defaults to 300; without `q` the newest come first; sensitive entries are
+  included. `total` counts the whole store, `shown` the rows returned. Each
+  item is `{id, category, content, entity, context, confidence: null,
+  sensitive, created_at, updated_at, last_used: null}`. Before anything was
+  remembered: `{available: false, reason, store}`.
+- **`POST /v1/gaia/memory`** `{content, category?, sensitive?, entity?,
+  context?}` → `{status: "created", id}`. `category` is one of `fact`,
+  `preference`, `error`, `skill`, `note`, `reminder` (default `fact`).
+- **`PUT /v1/gaia/memory/{id}`** `{content}` → `{status: "updated", id}`. Only
+  the text can change.
+- **`DELETE /v1/gaia/memory/{id}`** → `{status: "deleted", id}`.
+
+Empty or credential-shaped text, or an unknown category, is a `422`; an unknown
+id is a `404`; both carry the reason in `detail`.
+
+`store` is `{agent: "gaiacpp", path, capabilities: ["search", "create", "edit",
+"delete"]}`. **Detect these routes by `store.capabilities`, never by contract
+version.** The flagship contract is already at 2.31 and `gaiacpp` reports 2.27,
+so no version number could mark the routes that `gaiacpp` could honestly claim.
+A `GET /memory` reply with no `store.capabilities` comes from a peer that can
+only list (an older `gaiacpp`, or the Python flagship's plain memory list): it
+ignores `q`, `category` and `limit`, and a host must not send it a write. The
+Agent UI backend then filters the list itself and answers every edit with a
+`409` that says to update `gaiacpp`.
+
 ---
 
 ## 6. Translation map — in-process handler → canonical contract

@@ -742,7 +742,35 @@ private:
         });
         server_.Get("/v1/gaia/memory", [this](const httplib::Request& req, httplib::Response& res) {
             if (!admit(req, res, true)) return;
-            memoryDump(res);
+            memoryDump(req, res);
+        });
+        // The Memory page's edits to gaiacpp's own store; a caller finds them by `store.capabilities`.
+        server_.Post("/v1/gaia/memory", [this](const httplib::Request& req, httplib::Response& res) {
+            if (!admit(req, res, true)) return;
+            memoryWrite(res, [&](MemoryStore& store) -> json {
+                const json body = memoryBody(req);
+                const std::string id =
+                    store.remember(stringField(body, "content"), body.value("category", "fact"),
+                                   body.value("context", "global") == "global" ? "" : body.value("context", ""),
+                                   stringField(body, "entity"), body.value("sensitive", false));
+                return {{"status", "created"}, {"id", id}};
+            });
+        });
+        server_.Put(R"(/v1/gaia/memory/([^/]+))", [this](const httplib::Request& req, httplib::Response& res) {
+            if (!admit(req, res, true)) return;
+            const std::string id = req.matches[1];
+            memoryWrite(res, [&](MemoryStore& store) -> json {
+                if (!store.update(id, stringField(memoryBody(req), "content"))) throw BadRequest(404, "No memory with id " + id);
+                return {{"status", "updated"}, {"id", id}};
+            });
+        });
+        server_.Delete(R"(/v1/gaia/memory/([^/]+))", [this](const httplib::Request& req, httplib::Response& res) {
+            if (!admit(req, res, true)) return;
+            const std::string id = req.matches[1];
+            memoryWrite(res, [&](MemoryStore& store) -> json {
+                if (!store.forget(id)) throw BadRequest(404, "No memory with id " + id);
+                return {{"status", "deleted"}, {"id", id}};
+            });
         });
         server_.Get("/v1/gaia/skills", [this](const httplib::Request& req, httplib::Response& res) {
             if (!admit(req, res, true)) return;
@@ -907,15 +935,60 @@ private:
         return {{"type", "final"}, {"failed", true}, {"answer", answer}, {"failure", answer}};
     }
 
-    void memoryDump(httplib::Response& res) {
+    // What a caller may do with this store, and whose it is: the Python agent keeps another.
+    static json memoryStoreInfo() {
+        return {{"agent", "gaiacpp"},
+                {"path", MemoryStore::defaultPath()},
+                {"capabilities", json::array({"search", "create", "edit", "delete"})}};
+    }
+
+    static json memoryBody(const httplib::Request& req) {
+        json body = json::parse(req.body, nullptr, false);
+        if (!body.is_object()) throw BadRequest(422, "Body must be a JSON object");
+        return body;
+    }
+
+    static std::string stringField(const json& body, const char* key) {
+        if (!body.contains(key) || body[key].is_null()) return "";
+        if (!body[key].is_string()) throw BadRequest(422, std::string(key) + " must be a string");
+        return body[key].get<std::string>();
+    }
+
+    // One change to the store: the store's own refusal (empty or credential-shaped text, unknown category) is a 422.
+    void memoryWrite(httplib::Response& res, const std::function<json(MemoryStore&)>& change) {
+        try {
+            MemoryStore store(MemoryStore::defaultPath());
+            sendJson(res, 200, change(store));
+        } catch (const BadRequest& e) {
+            sendDetail(res, e.status, e.what());
+        } catch (const std::invalid_argument& e) {
+            sendDetail(res, 422, e.what());
+        } catch (const std::exception& e) {
+            sendDetail(res, 500, std::string("gaiacpp could not change its memory: ") + e.what());
+        }
+    }
+
+    void memoryDump(const httplib::Request& req, httplib::Response& res) {
         try {
             const std::string path = MemoryStore::defaultPath();
             std::error_code ec;
             if (!fs::exists(path, ec)) {
-                return sendJson(res, 200, {{"available", false}, {"reason", "Nothing has been remembered yet."}});
+                return sendJson(res, 200, {{"available", false}, {"reason", "Nothing has been remembered yet."},
+                                           {"store", memoryStoreInfo()}});
             }
             MemoryStore store(path);
-            const auto entries = store.recall("", "", 300, true);
+            int limit = 300;
+            if (req.has_param("limit")) {
+                try {
+                    limit = std::stoi(req.get_param_value("limit"));
+                } catch (const std::exception&) {
+                    return sendDetail(res, 422, "limit must be a whole number from 1 to 1000");
+                }
+                if (limit < 1 || limit > 1000) return sendDetail(res, 422, "limit must be a whole number from 1 to 1000");
+            }
+            // `q` is a keyword search; without it the newest entries come first.
+            const auto entries =
+                store.recall(req.get_param_value("q"), req.get_param_value("category"), limit, true);
             json items = json::array(), byCategory = json::object(), byContext = json::object();
             int sensitive = 0;
             for (const auto& e : entries) {
@@ -937,7 +1010,7 @@ private:
                                            {"by_context", byContext}, {"sensitive_count", sensitive},
                                            {"entity_count", nullptr}, {"avg_confidence", nullptr}}},
                                 {"contexts", contexts}, {"shown", items.size()}, {"total", total},
-                                {"items", items}});
+                                {"items", items}, {"store", memoryStoreInfo()}});
         } catch (const std::exception& e) {
             sendDetail(res, 500, std::string("Failed to build the memory dump: ") + e.what());
         }

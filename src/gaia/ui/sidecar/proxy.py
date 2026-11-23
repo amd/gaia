@@ -19,6 +19,7 @@ from __future__ import annotations
 import json as _json
 import os
 from typing import Any, Callable, Dict, Iterator, Optional
+from urllib.parse import quote
 
 from gaia.daemon.sidecars.errors import SidecarError, SidecarHTTPError
 from gaia.logger import get_logger
@@ -255,6 +256,105 @@ class SidecarProxy:
                 f"could not reach the {self.agent_id} sidecar to list its "
                 f"skills: {exc}"
             ) from exc
+
+    def _memory_call(self, method: str, path: str, doing: str, **kwargs) -> dict:
+        import requests
+
+        try:
+            resp = getattr(self._session, method)(
+                f"{self.base_url}{path}", timeout=self.timeout, **kwargs
+            )
+        except requests.exceptions.RequestException as exc:
+            raise SidecarError(
+                f"could not reach the {self.agent_id} sidecar to {doing}: {exc}"
+            ) from exc
+        self._raise_for_status(resp, path)
+        try:
+            body = resp.json()
+        except ValueError as exc:
+            raise SidecarError(
+                f"the {self.agent_id} sidecar's reply to {method.upper()} {path} "
+                f"(HTTP {resp.status_code}) is not JSON: {exc}"
+            ) from exc
+        if not isinstance(body, dict):
+            raise SidecarError(
+                f"the {self.agent_id} sidecar's reply to {method.upper()} {path} "
+                f"is a {type(body).__name__}, not a JSON object"
+            )
+        return body
+
+    def memory(
+        self,
+        *,
+        q: Optional[str] = None,
+        category: Optional[str] = None,
+        limit: Optional[int] = None,
+    ) -> dict:
+        """The agent's own stored memories (``GET /memory``).
+
+        gaiacpp takes ``q`` (keywords), one ``category`` and ``limit`` (1..1000)
+        and names what else it can do in ``store.capabilities``; a reply
+        without that list comes from a sidecar that can only list.
+        """
+        params: Dict[str, Any] = {}
+        if q:
+            params["q"] = q
+        if category:
+            params["category"] = category
+        if limit is not None:
+            params["limit"] = limit
+        return self._memory_call(
+            "get", f"{self.prefix}/memory", "list its memory", params=params or None
+        )
+
+    def create_memory(
+        self,
+        content: str,
+        *,
+        category: Optional[str] = None,
+        sensitive: Optional[bool] = None,
+        entity: Optional[str] = None,
+        context: Optional[str] = None,
+    ) -> dict:
+        """Save one memory (``POST /memory``, gaiacpp's ``create`` capability).
+
+        A 422 (empty or credential-shaped text, unknown category) raises.
+        """
+        body: Dict[str, Any] = {"content": content}
+        for key, value in (
+            ("category", category),
+            ("sensitive", sensitive),
+            ("entity", entity),
+            ("context", context),
+        ):
+            if value is not None:
+                body[key] = value
+        return self._memory_call(
+            "post", f"{self.prefix}/memory", "save a memory", json=body
+        )
+
+    def update_memory(self, memory_id: str, content: str) -> dict:
+        """Change one memory's text (``PUT /memory/{id}``, the ``edit`` capability).
+
+        A 404 (unknown id) or 422 (refused text) raises.
+        """
+        return self._memory_call(
+            "put",
+            f"{self.prefix}/memory/{quote(memory_id, safe='')}",
+            "change a memory",
+            json={"content": content},
+        )
+
+    def delete_memory(self, memory_id: str) -> dict:
+        """Delete one memory (``DELETE /memory/{id}``, the ``delete`` capability).
+
+        A 404 (unknown id) raises.
+        """
+        return self._memory_call(
+            "delete",
+            f"{self.prefix}/memory/{quote(memory_id, safe='')}",
+            "delete a memory",
+        )
 
     def session_tools(self, session_id: str) -> dict:
         """The tools the sidecar session's agent has (flagship, contract >= 2.27).

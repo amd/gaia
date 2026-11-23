@@ -382,7 +382,7 @@ protected:
         req.method = method;
         req.path = path;
         req.headers = headers;
-        if (method == "POST") {
+        if (method == "POST" || method == "PUT") {
             req.body = body;
             req.set_header("Content-Type", "application/json");
         }
@@ -432,6 +432,9 @@ TEST_F(GaiacppSidecar, EveryTokenRouteRefusesAMissingOrWrongToken) {
     const std::vector<std::pair<std::string, std::string>> routes = {
         {"GET", "/v1/gaia/init"},
         {"GET", "/v1/gaia/memory"},
+        {"POST", "/v1/gaia/memory"},
+        {"PUT", "/v1/gaia/memory/m1"},
+        {"DELETE", "/v1/gaia/memory/m1"},
         {"GET", "/v1/gaia/skills"},
         {"POST", "/v1/gaia/query"},
         {"POST", "/v1/gaia/query/auth-run/cancel"},
@@ -1126,6 +1129,78 @@ TEST_F(GaiacppSidecar, RunIdEqualToAChatsIdDoesNotTakeOverThatChat) {
     auto still = send("POST", "/v1/gaia/sessions/chat-keep/internet", bearer(), R"({"internet_off":true})");
     ASSERT_TRUE(still);
     EXPECT_EQ(still->status, 200) << "the chat was dropped with the one-off turn: " << still->body;
+}
+
+// The Memory page works on gaiacpp's own store: list, search, add, edit, forget.
+TEST_F(GaiacppSidecar, TheMemoryRoutesListSearchAddEditAndForgetInGaiacppsOwnStore) {
+    ASSERT_NO_FATAL_FAILURE(startSidecar());
+
+    auto empty = send("GET", "/v1/gaia/memory", bearer());
+    ASSERT_TRUE(empty);
+    ASSERT_EQ(empty->status, 200) << empty->body;
+    json ej = json::parse(empty->body);
+    EXPECT_EQ(ej["available"], false);
+    EXPECT_EQ(ej["store"]["agent"], "gaiacpp");
+    EXPECT_EQ(ej["store"]["capabilities"], json::array({"search", "create", "edit", "delete"}));
+
+    auto add = send("POST", "/v1/gaia/memory", bearer(),
+                    R"({"content":"My sister's name is Odalys and she lives in Tromso.","category":"fact"})");
+    ASSERT_TRUE(add);
+    ASSERT_EQ(add->status, 200) << add->body;
+    const std::string id = json::parse(add->body)["id"].get<std::string>();
+    ASSERT_FALSE(id.empty());
+    auto pref = send("POST", "/v1/gaia/memory", bearer(), R"({"content":"I prefer metric units.","category":"preference"})");
+    ASSERT_TRUE(pref);
+    ASSERT_EQ(pref->status, 200) << pref->body;
+
+    auto listed = send("GET", "/v1/gaia/memory", bearer());
+    ASSERT_TRUE(listed);
+    json lj = json::parse(listed->body);
+    EXPECT_EQ(lj["available"], true);
+    EXPECT_EQ(lj["total"], 2);
+    EXPECT_EQ(lj["store"]["agent"], "gaiacpp");
+    EXPECT_NE(fs::path(lj["store"]["path"].get<std::string>()).filename().string().find("memory-cpp"),
+              std::string::npos);
+
+    auto found = send("GET", "/v1/gaia/memory?q=Odalys", bearer());
+    ASSERT_TRUE(found);
+    json fj = json::parse(found->body);
+    ASSERT_EQ(fj["items"].size(), 1u) << found->body;
+    EXPECT_EQ(fj["items"][0]["id"], id);
+    auto byKind = send("GET", "/v1/gaia/memory?category=preference", bearer());
+    ASSERT_TRUE(byKind);
+    ASSERT_EQ(json::parse(byKind->body)["items"].size(), 1u) << byKind->body;
+
+    auto edit = send("PUT", "/v1/gaia/memory/" + id, bearer(), R"({"content":"My sister Odalys lives in Bergen."})");
+    ASSERT_TRUE(edit);
+    ASSERT_EQ(edit->status, 200) << edit->body;
+    auto after = send("GET", "/v1/gaia/memory?q=Bergen", bearer());
+    ASSERT_TRUE(after);
+    ASSERT_EQ(json::parse(after->body)["items"].size(), 1u) << after->body;
+
+    // Refusals say why, and nothing is stored.
+    auto blank = send("POST", "/v1/gaia/memory", bearer(), R"({"content":"   "})");
+    ASSERT_TRUE(blank);
+    EXPECT_EQ(blank->status, 422) << blank->body;
+    auto kind = send("POST", "/v1/gaia/memory", bearer(), R"({"content":"x y z","category":"profile"})");
+    ASSERT_TRUE(kind);
+    EXPECT_EQ(kind->status, 422) << kind->body;
+    auto missing = send("PUT", "/v1/gaia/memory/no-such-id", bearer(), R"({"content":"new text"})");
+    ASSERT_TRUE(missing);
+    EXPECT_EQ(missing->status, 404) << missing->body;
+    auto tooMany = send("GET", "/v1/gaia/memory?limit=5000", bearer());
+    ASSERT_TRUE(tooMany);
+    EXPECT_EQ(tooMany->status, 422) << tooMany->body;
+
+    auto forget = send("DELETE", "/v1/gaia/memory/" + id, bearer());
+    ASSERT_TRUE(forget);
+    ASSERT_EQ(forget->status, 200) << forget->body;
+    auto again = send("DELETE", "/v1/gaia/memory/" + id, bearer());
+    ASSERT_TRUE(again);
+    EXPECT_EQ(again->status, 404) << again->body;
+    auto last = send("GET", "/v1/gaia/memory", bearer());
+    ASSERT_TRUE(last);
+    EXPECT_EQ(json::parse(last->body)["total"], 1);
 }
 
 // `gaia -p` through the daemon: no chat, nobody to answer. It must end, not wait ten minutes.

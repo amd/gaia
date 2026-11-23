@@ -431,6 +431,16 @@ The Agent UI has a **Memory** page for seeing and correcting what GAIA knows abo
 gaia chat --ui
 ```
 
+The page shows the memory of the agent chosen under **Settings › Agent & model**. gaiapy (the Python agent) and gaiacpp (the native one, beta) each keep their own, so what one remembered the other doesn't see. A line under the tabs says whose memory you are looking at and links to that setting; with gaiapy it appears once gaiacpp has a memory too. Change the agent and the page reloads with the other memory.
+
+gaiacpp keeps the text of each memory and little else. While it is the agent:
+
+- **About you** still lets you add, edit, forget, undo a forget, and show a sensitive item.
+- Reminders can't be added and no due date is shown, because gaiacpp doesn't keep due dates.
+- Items don't say where they came from, because gaiacpp doesn't record it.
+- **Goals**, **Profile setup** and **Advanced** each show one line saying they work on the Python agent's memory. **Advanced** keeps the switch that turns memory on or off.
+- If gaiacpp can't be reached, the page shows that error. It never shows the Python agent's memory in its place.
+
 ### About you
 
 The page opens on **What GAIA knows about you**: the facts, preferences, reminders and notes GAIA uses in every chat, grouped and in plain words, each with where it came from ("Picked up in a chat", "You added this").
