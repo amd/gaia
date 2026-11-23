@@ -114,6 +114,7 @@ void TurnRecorder::save() {
         std::ofstream out(tmp, std::ios::binary | std::ios::trunc);
         // A command or path that isn't valid UTF-8 is still recorded, with its bad bytes replaced.
         out << manifest_.dump(2, ' ', false, json::error_handler_t::replace);
+        out.close();  // the tail is still buffered until now: a full disk shows up here
         if (!out) throw SnapshotError("can't write " + tmp.u8string());
     }
     fs::rename(tmp, path, ec);
@@ -268,6 +269,7 @@ void TurnRecorder::noteUntracked(const std::string& kind, const std::string& det
                                       {"detail", clip(detail, 500)},
                                       {"paths", json::array()},
                                       {"may_write", mayWrite}});
+    // Kept in memory even if this save fails: finish() still writes it, so undo stays marked incomplete.
     if (mayWrite) save();
 }
 
