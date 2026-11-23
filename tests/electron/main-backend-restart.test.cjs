@@ -222,3 +222,27 @@ test("a crashed window is offered a reload; GAIA keeps running", () => {
   expect(body).toMatch(/app\.quit\(\)/);
   expect(body).not.toMatch(/fatalQuitting = true/);
 });
+
+test("a missing backend program reaches the window as a stopped backend that names the fix", () => {
+  // Launch: no process means no backend, and the supervisor tells the window.
+  const launch = main.slice(main.indexOf("backendProcess = await backendStarting;"));
+  expect(launch.slice(0, 300)).toMatch(
+    /if \(backendProcess\) backendSupervisor\.running\(backendPort\);\s*else backendSupervisor\.failedToStart\(missingBackendMessage\(\)\);/
+  );
+
+  const states = [];
+  const onStopped = jest.fn();
+  const sup = createBackendSupervisor({ start: jest.fn(), onState: (s) => states.push(s), onStopped });
+  const { value: message } = runInMain(`${topLevelFunction("function missingBackendMessage(")}\nmissingBackendMessage()`, {
+    backendInstaller: { BUNDLED_GAIA_BIN: "/Applications/GAIA.app/Contents/Resources/core/gaia", GAIA_BIN: "/Users/you/.gaia/venv/bin/gaia" },
+  });
+  sup.failedToStart(message);
+  const sent = states[states.length - 1];
+  expect(sent).toMatchObject({ status: "stopped", port: null, attempt: 0 });
+  expect(sent.lastError).toMatch(/^GAIA's backend program is missing/);
+  expect(sent.lastError).toMatch(/Reinstall GAIA/);
+  expect(sent.lastError).toContain("/Applications/GAIA.app/Contents/Resources/core/gaia");
+  expect(sent.lastError).toContain("/Users/you/.gaia/venv/bin/gaia");
+  // The window shows it; the backend-crash dialog is for a backend that ran and then stopped.
+  expect(onStopped).not.toHaveBeenCalled();
+});

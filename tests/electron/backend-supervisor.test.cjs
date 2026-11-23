@@ -222,3 +222,14 @@ test("a crash that hits the cap calls onStopped too, and Restart GAIA re-arms it
   expect(h.last().status).toBe("stopped");
   expect(onStopped).toHaveBeenCalledTimes(2);
 });
+
+test("a backend that could not be started at all is stopped until Restart GAIA", () => {
+  const h = harness();
+  const onStopped = jest.fn();
+  const sup = createBackendSupervisor({ start: () => new Promise(() => {}), onState: (s) => h.states.push(s), onStopped });
+  sup.failedToStart("GAIA's backend program is missing");
+  expect(h.last()).toMatchObject({ status: "stopped", lastError: "GAIA's backend program is missing", nextAttemptAt: null });
+  expect(onStopped).not.toHaveBeenCalled();
+  sup.restartNow();
+  expect(h.last()).toMatchObject({ status: "restarting", attempt: 1 });
+});

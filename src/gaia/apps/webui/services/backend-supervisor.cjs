@@ -108,6 +108,12 @@ function createBackendSupervisor({
       emit({ status: "running", port, since: null, attempt: 0, nextAttemptAt: null, lastError: null });
     },
 
+    /** No backend could be started at all (its program is missing): wait for Restart GAIA. */
+    failedToStart(error) {
+      if (stopped) return;
+      emit({ status: "stopped", port: null, since: now(), attempt: 0, nextAttemptAt: null, lastError: error });
+    },
+
     /** The backend exited on its own. Returns what happens next. */
     crashed({ code = null, signal = null } = {}) {
       if (stopped) return "stopped";

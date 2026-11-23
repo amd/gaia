@@ -348,6 +348,15 @@ async function cleanupOrphanedBackend() {
   });
 }
 
+/** What the user reads when GAIA's backend program can't be found: what to do, and where it looked. */
+function missingBackendMessage() {
+  const looked = [backendInstaller.BUNDLED_GAIA_BIN, backendInstaller.GAIA_BIN].filter(Boolean).join(", ");
+  return (
+    "GAIA's backend program is missing, so GAIA can't start: the app's files are incomplete. " +
+    `Reinstall GAIA from https://amd-gaia.ai/#install. Looked for ${looked} and for gaia on PATH.`
+  );
+}
+
 /**
  * Start the GAIA Python backend. Expects the backend installer to have
  * already ensured the venv is populated — callers should await
@@ -496,9 +505,7 @@ async function startBackend() {
 async function restartBackend() {
   backendStarting = startBackend();
   const child = await backendStarting;
-  if (!child) {
-    throw new Error("GAIA's backend program is missing, so it can't restart. Reinstall GAIA.");
-  }
+  if (!child) throw new Error(missingBackendMessage());
   if (quitStarted()) {
     isIntentionalKill = true;
     await portManager.killBackend(child);
@@ -1179,7 +1186,9 @@ app.whenReady().then(async () => {
   if (shutdownStarted) return;
   backendStarting = startBackend();
   backendProcess = await backendStarting;
+  // The window reads this state and shows the failure instead of waiting for a backend.
   if (backendProcess) backendSupervisor.running(backendPort);
+  else backendSupervisor.failedToStart(missingBackendMessage());
   if (shutdownStarted) {
     console.log("[main] Quit during startup — not opening the window");
     return;

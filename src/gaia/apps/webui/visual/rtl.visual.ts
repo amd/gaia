@@ -4719,6 +4719,28 @@ for (const locale of ['ar', 'en']) {
         expect(await audit(page)).toEqual([]);
         if (locale === 'ar') expect(await untranslated(page, '.connection-banner')).toEqual([]);
     });
+
+    test(`a backend that never started: a plain heading, Restart GAIA, and the reason under Details (${locale})`, async ({ page }) => {
+        const missing = "GAIA's backend program is missing, so GAIA can't start: the app's files are incomplete. Reinstall GAIA from https://amd-gaia.ai/#install. Looked for /Applications/GAIA.app/Contents/Resources/core/gaia, /Users/you/.gaia/venv/bin/gaia and for gaia on PATH.";
+        await open(page, '', locale, async (p) => {
+            await withCrashedBackend(p, 'stopped', NOW.getTime());
+            await p.addInitScript((lastError) => {
+                const bridge = (window as unknown as { gaiaAPI: { backend: { getState: () => Promise<Record<string, unknown>> } } }).gaiaAPI.backend;
+                const read = bridge.getState;
+                bridge.getState = async () => ({ ...(await read()), lastExit: null, lastError });
+            }, missing);
+            await p.route('**/api/**', (route) => route.abort('connectionrefused'));
+        });
+        const screen = page.locator('.startup--failed');
+        await expect(screen.getByRole('heading')).toHaveText(locale === 'ar' ? /لم تبدأ خدمة GAIA/ : "GAIA's background service didn't start");
+        await expect(screen.getByRole('button', { name: locale === 'ar' ? /إعادة تشغيل GAIA/ : /Restart GAIA/ })).toBeVisible();
+        await expect(screen.locator('pre')).toBeHidden();
+        await screen.locator('summary').click();
+        await expect(screen.locator('pre')).toContainText('backend program is missing');
+        await shot(page, `backend-never-started-${locale}`);
+        expect(await audit(page)).toEqual([]);
+        if (locale === 'ar') expect(await untranslated(page, '.startup--failed', 'pre')).toEqual([]);
+    });
 }
 
 /** The reply's text asks the user to press Try again, so the button must be on screen, labelled, without a hover. */
