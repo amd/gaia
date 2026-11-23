@@ -324,7 +324,7 @@ class TestGaiaDispatch:
     def test_gaiacpps_start_gaia_remedy_is_reworded_inside_the_open_app(
         self, monkeypatch
     ):
-        """"Open GAIA" is no remedy in the app; the hint names its Start button."""
+        """ "Open GAIA" is no remedy in the app; the hint names its Start button."""
         from pathlib import Path
 
         from gaia.llm.surface_hints import (
