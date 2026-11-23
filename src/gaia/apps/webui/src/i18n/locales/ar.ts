@@ -189,6 +189,10 @@ const messages: Messages = {
     'row.confirmDeleteUnsentAria.other': 'تأكيد حذف {title} ورسائلها غير المُرسلة ({n})',
     'row.clickAgainUnsent.one': 'انقر مرة أخرى لحذف هذه المحادثة ورسائلها غير المُرسلة ({n})',
     'row.clickAgainUnsent.other': 'انقر مرة أخرى لحذف هذه المحادثة ورسائلها غير المُرسلة ({n})',
+    'row.toSend.one': 'بانتظار الإرسال ({n})',
+    'row.toSend.other': 'بانتظار الإرسال ({n})',
+    'row.notSent.one': 'لم تُرسل ({n})',
+    'row.notSent.other': 'لم تُرسل ({n})',
 
     // New-chat screen
     'newChat.label': 'محادثة جديدة',

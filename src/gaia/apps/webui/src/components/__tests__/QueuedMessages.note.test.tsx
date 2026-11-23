@@ -45,3 +45,10 @@ describe('a queued message the running reply refused', () => {
         expect(screen.getByText('Queued. Sends when this reply ends.')).toBeTruthy();
     });
 });
+
+describe('the typed text in the strip (#7629)', () => {
+    it('keeps its own direction, so an English question ends with its ? in an Arabic window', () => {
+        show([{ id: 4, text: 'And what if the rate were 5%?', state: 'queued' }], true);
+        expect(screen.getByText('And what if the rate were 5%?').getAttribute('dir')).toBe('auto');
+    });
+});
