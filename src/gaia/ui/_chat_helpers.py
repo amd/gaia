@@ -2389,17 +2389,25 @@ _relayed_contexts_lock = threading.Lock()
 
 
 def record_relayed_context(
-    session_id: str, usage: Optional[dict], reason: Optional[str]
+    session_id: str,
+    usage: Optional[dict],
+    reason: Optional[str],
+    reason_code: Optional[str] = None,
 ) -> None:
     """Keep what a relayed turn measured, or why it has no measurement.
 
-    A turn with neither (an error, a Stop) keeps the previous measurement.
+    ``reason_code`` lets the Agent UI translate ``reason``; without one it
+    shows the English. A turn with neither (an error, a Stop) keeps the
+    previous measurement.
     """
     with _relayed_contexts_lock:
         if usage is not None:
             _relayed_contexts[session_id] = {"usage": usage}
         elif reason:
-            _relayed_contexts[session_id] = {"reason": reason}
+            entry = {"reason": reason}
+            if reason_code:
+                entry["reason_code"] = reason_code
+            _relayed_contexts[session_id] = entry
 
 
 def relayed_context_reason(profile, api_version, handler) -> Optional[str]:
@@ -2407,6 +2415,11 @@ def relayed_context_reason(profile, api_version, handler) -> Optional[str]:
     if not context_supported(profile, api_version):
         return profile.context_upgrade_message
     return getattr(handler, "relay_context_error", None)
+
+
+def relayed_context_reason_code(profile, api_version) -> Optional[str]:
+    """The stable code for :func:`relayed_context_reason`, when GAIA wrote it."""
+    return None if context_supported(profile, api_version) else "agent_too_old"
 
 
 def forget_relayed_context(session_id: str) -> None:
@@ -3324,6 +3337,7 @@ def _dispatch_sidecar_query(
             session_id,
             getattr(sse_handler, "relay_context", None),
             relayed_context_reason(profile, handle.api_version, sse_handler),
+            relayed_context_reason_code(profile, handle.api_version),
         )
 
 
