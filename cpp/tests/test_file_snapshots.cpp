@@ -110,6 +110,21 @@ TEST(FileSnapshots, AFolderIsNotSavedAndTheChangeMustNotGoAhead) {
     EXPECT_THROW(rec.capture((t.root / "work" / "pkg").u8string(), "file_write"), SnapshotError);
 }
 
+TEST(FileSnapshots, AWriteThatFailedPartWayKeepsItsCopy) {
+    // The tool reported a failure, but the file was already truncated: undo must still restore it.
+    Tree t;
+    write(t.root / "work" / "a.py", "original\n");
+    TurnRecorder rec("chat-6", "20261122120000-0123abd4", t.root / "store");
+    ASSERT_TRUE(rec.capture((t.root / "work" / "a.py").u8string(), "file_write"));
+    write(t.root / "work" / "a.py", "");
+    rec.discard((t.root / "work" / "a.py").u8string());
+    rec.finish();
+    const fs::path dir = t.root / "store" / "chat-6" / "20261122120000-0123abd4";
+    const json m = json::parse(read(dir / "manifest.json"));
+    ASSERT_EQ(m["files"].size(), 1u) << "the change stays listed for undo";
+    EXPECT_EQ(read(dir / "blobs" / "0000.before"), "original\n");
+}
+
 TEST(FileSnapshots, ADiscardedCopyLeavesNoRecordAndALateWriteMarksTheSavedOne) {
     Tree t;
     const fs::path work = t.root / "work";
