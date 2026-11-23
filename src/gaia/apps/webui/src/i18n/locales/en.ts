@@ -190,6 +190,10 @@ export const enMessages = {
     'row.confirmDeleteUnsentAria.other': 'Confirm delete {title} and its {n} unsent messages',
     'row.clickAgainUnsent.one': 'Click again to delete this chat and its {n} unsent message',
     'row.clickAgainUnsent.other': 'Click again to delete this chat and its {n} unsent messages',
+    'row.toSend.one': '{n} to send',
+    'row.toSend.other': '{n} to send',
+    'row.notSent.one': '{n} not sent',
+    'row.notSent.other': '{n} not sent',
 
     // New-chat screen
     'newChat.label': 'New chat',

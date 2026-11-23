@@ -151,7 +151,7 @@ function SessionRow({ session, active, phone, moved, focusPin, status, queuePlac
     const dot = status === 'done' && !unread ? null : status;
     const place = queuePlace > 0 ? placeInLine(t, 'row.queuePlace', queuePlace) : null;
     const label = dot ? [t(STATUS_LABEL[dot]), place].filter(Boolean).join(', ') : undefined;
-    const waiting = failed > 0 ? `${failed} not sent` : unsent > 0 ? `${unsent} to send` : null;
+    const waiting = failed > 0 ? t.plural('row.notSent', failed) : unsent > 0 ? t.plural('row.toSend', unsent) : null;
     const note = [place, waiting].filter(Boolean).join(' · ');
     const snippetText = snippet ? `${snippet.before}${snippet.match}${snippet.after}` : null;
     const shownTitle = markStrayDirection(session.title);
