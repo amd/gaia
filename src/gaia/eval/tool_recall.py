@@ -224,29 +224,6 @@ def parse_session_summaries_from_log(text: str) -> List[Dict]:
     return out
 
 
-def aggregate_escape_hatch(summaries: List[Dict]) -> Dict:
-    """Aggregate per-session ``TOOL_LOADER_SESSION`` summaries into a per-turn rate.
-
-    Only ``gaia chat``/CLI logs carry these summaries (they emit on
-    ``reset_session()``). For the canonical τ-tuning path — eval logs — use
-    :func:`escape_hatch_rate_from_log`, which derives the same rate from the raw
-    per-turn lines that are always present. The rate (free non-tool-calling
-    recovery + native ``load_tools``, per turn) is the tuning signal: rising ⇒ τ
-    too strict; the two component counts are kept separate so the tuner sees
-    which path fired.
-    """
-    turns = sum(int(s.get("turns", 0)) for s in summaries)
-    escape = sum(int(s.get("escape_hatch_count", 0)) for s in summaries)
-    loads = sum(int(s.get("load_tools_count", 0)) for s in summaries)
-    return {
-        "sessions": len(summaries),
-        "turns": turns,
-        "escape_hatch_count": escape,
-        "load_tools_count": loads,
-        "escape_hatch_rate": (escape + loads) / max(turns, 1),
-    }
-
-
 def count_recovery_events_from_log(text: str) -> Tuple[int, int]:
     """Count the two escape-hatch recovery paths from raw per-turn log lines.
 

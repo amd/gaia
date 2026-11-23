@@ -3,6 +3,7 @@
 //
 // Unit tests for gaia::Image and gaia::base64Encode (Ttest2).
 
+#include "support/unique_temp.h"
 #include <gtest/gtest.h>
 #include <gaia/types.h>
 
@@ -60,12 +61,13 @@ static std::vector<std::uint8_t> independentBase64Decode(const std::string& s) {
     for (int i = 0; i < 64; ++i) table[static_cast<unsigned char>(alpha[i])] = i;
 
     std::vector<std::uint8_t> out;
-    int val = 0, bits = -8;
+    unsigned int val = 0;  // unsigned: old bits shift out the top
+    int bits = -8;
     for (unsigned char c : s) {
         if (c == '=') break;
         int d = table[c];
         if (d < 0) continue;
-        val = (val << 6) | d;
+        val = (val << 6) | static_cast<unsigned int>(d);
         bits += 6;
         if (bits >= 0) {
             out.push_back(static_cast<std::uint8_t>((val >> bits) & 0xFF));
@@ -159,7 +161,7 @@ TEST(ImageTest, ImageFromFileMissingThrows) {
 }
 
 TEST(ImageTest, ImageFromFileEmptyThrows) {
-    std::string tmp = (std::filesystem::temp_directory_path() / "gaia_empty.png").string();
+    std::string tmp = (std::filesystem::temp_directory_path() / testsupport::perProcess("gaia_empty.png")).string();
     { std::ofstream f(tmp, std::ios::binary); }
     EXPECT_THROW(Image::fromFile(tmp), std::invalid_argument);
     std::filesystem::remove(tmp);
@@ -167,7 +169,7 @@ TEST(ImageTest, ImageFromFileEmptyThrows) {
 
 TEST(ImageTest, ImageFromFileExceedsMaxThrows) {
     // Create an oversized file (GAIA_MAX_IMAGE_BYTES+1 bytes).
-    std::string tmp = (std::filesystem::temp_directory_path() / "gaia_big.png").string();
+    std::string tmp = (std::filesystem::temp_directory_path() / testsupport::perProcess("gaia_big.png")).string();
     {
         std::ofstream f(tmp, std::ios::binary);
         std::vector<char> chunk(1024 * 1024, 'x');
@@ -186,8 +188,8 @@ TEST(ImageTest, ImageFromFileRejectsDirectory) {
 #ifndef _WIN32
 TEST(ImageTest, ImageFromFileRejectsSymlink) {
     namespace fs = std::filesystem;
-    std::string target = (fs::temp_directory_path() / "gaia_target.png").string();
-    std::string link   = (fs::temp_directory_path() / "gaia_link.png").string();
+    std::string target = (fs::temp_directory_path() / testsupport::perProcess("gaia_target.png")).string();
+    std::string link   = (fs::temp_directory_path() / testsupport::perProcess("gaia_link.png")).string();
     { std::ofstream f(target, std::ios::binary); f.put(static_cast<char>(0x89)); }
     fs::remove(link);
     std::error_code ec;
@@ -209,4 +211,14 @@ TEST(ImageTest, ImageToContentPartDataUri) {
     ContentPart p = img.toContentPart();
     EXPECT_EQ(p.kind, ContentPart::Kind::IMAGE_URL);
     EXPECT_EQ(p.imageUrl.rfind("data:image/png;base64,", 0), 0u);
+}
+
+TEST(ImageTest, ImageFromFileReadsANonAsciiUtf8Name) {
+    namespace fs = std::filesystem;
+    const fs::path copy = fs::temp_directory_path() / fs::u8path("gaia-im\xc3\xa1gen-\xe6\x97\xa5.png");
+    std::error_code ec;
+    fs::remove(copy, ec);
+    fs::copy_file(fixturePath("tiny.png"), copy);
+    EXPECT_EQ(Image::fromFile(copy.u8string()).mimeType(), "image/png");
+    fs::remove(copy, ec);
 }

@@ -9,6 +9,7 @@ import { TurnChanges } from '../TurnChanges';
 import { DiffCard } from '../render/DiffCard';
 import { UndoHistorySettings } from '../settings/UndoHistorySettings';
 import { resetTurnChangesCache } from '../../hooks/useTurnChanges';
+import { stripIsolates } from '../../i18n/registry';
 import * as api from '../../services/api';
 import { useChatStore } from '../../stores/chatStore';
 import type { TurnChanges as Turn } from '../../types/changes';
@@ -80,7 +81,7 @@ describe('TurnChanges', () => {
         fireEvent.click(screen.getByRole('button', { name: 'Undo' }));
         await waitFor(() => expect(undo).toHaveBeenCalledWith('s1', 't1', false));
         expect(await screen.findByRole('status')).toHaveTextContent('restored 1 file, removed 1 new file');
-        expect(await screen.findByText(/undone/)).toBeInTheDocument();
+        expect(await screen.findByText('Changed 2 files · undone')).toBeInTheDocument();
         expect(screen.queryByRole('button', { name: /Undo this turn/ })).not.toBeInTheDocument();
     });
 
@@ -175,6 +176,32 @@ describe('TurnChanges', () => {
         }
     });
 
+    it('words the row, its confirm and its result in the chosen language (#8828)', async () => {
+        vi.spyOn(api, 'listTurnChanges')
+            .mockResolvedValueOnce({ turns: [turn()] })
+            .mockResolvedValueOnce({ turns: [turn({ restored_at: '2026-10-16T01:00:00+00:00' })] });
+        vi.spyOn(api, 'undoTurn').mockResolvedValue({
+            turn_id: 't1', restored: ['C:\\work\\a.txt'], removed: ['C:\\work\\b.txt'],
+            kept_folders: [], untracked: [], incomplete: false,
+        });
+        useChatStore.setState({ locale: 'ar' });
+        try {
+            render(<TurnChanges sessionId="s1" messageId={7} />);
+            expect(await screen.findByText(/الملفات المُغيَّرة: 2/)).toBeInTheDocument();
+            expect(screen.getByRole('button', { name: /مراجعة التغييرات/ })).toBeInTheDocument();
+            fireEvent.click(screen.getByRole('button', { name: /التراجع عن هذا الدور/ }));
+            expect(screen.getByRole('group')).toHaveTextContent('إعادة الملفات إلى ما كانت عليه قبل هذا الدور؟');
+            fireEvent.click(screen.getByRole('button', { name: /\(Undo\)/ }));
+            const status = await screen.findByRole('status');
+            expect(stripIsolates(status.textContent ?? '')).toBe(
+                'تم التراجع: استُعيد ملف واحد، حُذف ملف جديد واحد. (Undone: restored 1 file, removed 1 new file.)',
+            );
+            expect(await screen.findByText(/· تم التراجع/)).toBeInTheDocument();
+        } finally {
+            useChatStore.setState({ locale: 'en' });
+        }
+    });
+
     it('a 409 that is not a conflict offers no undo-anyway', async () => {
         vi.spyOn(api, 'listTurnChanges').mockResolvedValue({ turns: [turn()] });
         vi.spyOn(api, 'undoTurn').mockRejectedValue(
@@ -217,6 +244,16 @@ describe('DiffCard', () => {
         const { container } = render(<DiffCard data={{ unified: '-a\r\n+b\r\n' }} />);
         const lines = Array.from(container.querySelectorAll('.render-diff__line')).map((el) => el.textContent);
         expect(lines).toEqual(['-a', '+b']);
+    });
+
+    it('marks a right-to-left override in the body, the title and the path', () => {
+        const unified = '--- /dev/null\n+++ b/report\u202Etxt.md\n@@ -0,0 +1 @@\n+hi \u202Eolleh\n';
+        const { container } = render(<DiffCard data={{ title: 'report\u202Etxt.md', path: '/d/report\u202Etxt.md', unified }} />);
+        const lines = Array.from(container.querySelectorAll('.render-diff__line')).map((el) => el.textContent);
+        expect(lines).toEqual(['+hi [U+202E]olleh']);
+        expect(container.querySelector('.render-diff__title')).toHaveTextContent('report[U+202E]txt.md');
+        expect(container.querySelector('.render-diff__path')).toHaveTextContent('/d/report[U+202E]txt.md');
+        expect(container.textContent).not.toContain('\u202E');
     });
 
     it('shows only the changed lines of a new file, without the diff headers', () => {

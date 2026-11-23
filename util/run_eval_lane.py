@@ -4,6 +4,7 @@
 
     python util/run_eval_lane.py --lane gaia-signal
     python util/run_eval_lane.py --category gaia_memory --category gaia_honesty
+    python util/run_eval_lane.py --category gaia_skills_tasks --scenario task_rss_digest
 
 A hand-rolled local run drifts from CI in ways that change scores or do harm:
 the backend started from the checkout instead of the staged fixtures, the real
@@ -44,7 +45,11 @@ import urllib.request
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from eval_gaia_home import env_for, write_default_model  # noqa: E402
+from eval_gaia_home import (  # noqa: E402
+    env_for,
+    write_config_keys,
+    write_default_model,
+)
 from eval_lane_matrix import REPO_ROOT, lane_env  # noqa: E402
 
 LANES_FILE = REPO_ROOT / "eval" / "ci_lanes.json"
@@ -75,7 +80,7 @@ SERVE_FIXTURES = REPO_ROOT / "tests" / "fixtures" / "gaia" / "serve_fixtures.py"
 STAGE_TIMEOUT_S = 1800
 MCP_STUB = "tests/fixtures/gaia/mcp_stub/stage_mcp_stub.py"
 #: Modules whose origin proves which checkout the backend and eval run.
-ANCHOR_MODULES = ("gaia", "gaia_agent")
+ANCHOR_MODULES = ("gaia", "gaiapy")
 _ORIGINS_SCRIPT = """
 import importlib, json, sys
 out = {}
@@ -271,12 +276,28 @@ def _get(url: str) -> bool:
         return False
 
 
-def _enable_memory(backend: str) -> None:
+def _ui_headers(env: dict) -> dict:
+    """The CSRF header and the API token the backend started with *env* wrote."""
+    override = env.get("GAIA_UI_TOKEN_FILE", "").strip()
+    path = Path(override) if override else Path(env["GAIA_HOME"]) / "agent-ui-token"
+    try:
+        token = path.read_text(encoding="utf-8").strip()
+    except OSError as e:
+        raise SystemExit(
+            f"Cannot read the Agent UI API token at {path} ({e}); the backend "
+            "writes it on startup, so check its log."
+        ) from e
+    if not token:
+        raise SystemExit(f"The Agent UI API token file {path} is empty.")
+    return {"X-Gaia-UI": "1", "Authorization": f"Bearer {token}"}
+
+
+def _enable_memory(backend: str, env: dict) -> None:
     req = urllib.request.Request(
         f"{backend}/api/memory/settings",
         data=b'{"memory_enabled": true}',
         method="PUT",
-        headers={"X-Gaia-UI": "1", "Content-Type": "application/json"},
+        headers={**_ui_headers(env), "Content-Type": "application/json"},
     )
     with urllib.request.urlopen(req, timeout=30) as resp:
         body = json.loads(resp.read())
@@ -303,11 +324,33 @@ def main() -> int:
         help="Local model the agent runs (written as default_model in each "
         "category's GAIA home). Default: what a fresh home resolves, as in CI.",
     )
+    parser.add_argument(
+        "--harness",
+        help="Program that answers as GAIA (written as flagship_agent in each "
+        "category's GAIA home): gaiapy (the default), gaiacpp, or a harness this "
+        "version doesn't offer yet, which also sets GAIA_UNPROVEN_HARNESS.",
+    )
+    parser.add_argument(
+        "--harness-binary",
+        type=Path,
+        help="The native harness's program; required with a native --harness.",
+    )
+    parser.add_argument(
+        "--scenario",
+        action="append",
+        default=[],
+        metavar="ID[,ID...]",
+        help="Run only these scenario ids (repeatable); each must be in a selected category",
+    )
     parser.add_argument("--out", type=Path, default=REPO_ROOT / "eval-out")
     args = parser.parse_args()
     args.judge_model = args.judge_model or baseline_eval_model()
+    harness_env = harness_setup(args.harness, args.harness_binary)
 
     categories = lane_categories(args.lane) if args.lane else args.category
+    args.scenarios_by_category = scenarios_by_category(categories, args.scenario)
+    if args.scenario:
+        categories = [c for c in categories if args.scenarios_by_category[c]]
     args.out.mkdir(parents=True, exist_ok=True)
     # Absolute: the backend's cwd and the scenario paths are built from it.
     stage_home = (args.out / "eval-root").resolve()
@@ -341,9 +384,15 @@ def main() -> int:
             )
         failed = []
         for category in categories:
-            cat_env = {**env, **category_home(homes / category, staged_home)}
+            cat_env = {
+                **env,
+                **category_home(homes / category, staged_home),
+                **harness_env,
+            }
             if args.agent_model:
                 write_agent_model(Path(cat_env["GAIA_HOME"]), args.agent_model)
+            if args.harness:
+                write_config_keys(Path(cat_env["GAIA_HOME"]), flagship_agent=args.harness)
             code = _run_category(category, cat_env, p, args)
             if code != 0:
                 failed.append(category)
@@ -358,6 +407,26 @@ def main() -> int:
         shutil.rmtree(homes, ignore_errors=True)
 
 
+def scenarios_by_category(categories: list[str], wanted: list[str]) -> dict:
+    """The requested scenario ids in each category; fails on an id in none of them."""
+    import yaml
+
+    ids = [i.strip() for value in wanted for i in value.split(",") if i.strip()]
+    found = {c: [] for c in categories}
+    for category in categories:
+        for path in sorted((REPO_ROOT / "eval" / "scenarios" / category).glob("*.yaml")):
+            sid = yaml.safe_load(path.read_text(encoding="utf-8")).get("id")
+            if sid in ids:
+                found[category].append(sid)
+    missing = sorted(set(ids) - {i for got in found.values() for i in got})
+    if missing:
+        raise SystemExit(
+            f"Scenario id(s) {missing} are not in the selected categories "
+            f"{categories}; add the category that holds them."
+        )
+    return found
+
+
 def category_home(cat_home: Path, staged_home: Path) -> dict[str, str]:
     """Create *cat_home* empty (plus staged skills) and return its environment."""
     if cat_home.exists():
@@ -369,6 +438,46 @@ def category_home(cat_home: Path, staged_home: Path) -> dict[str, str]:
     if (staged_home / "skills").is_dir():
         shutil.copytree(staged_home / "skills", cat_home / "skills")
     return env_for(cat_home)
+
+
+#: The variable each native harness's daemon lookup reads its program from.
+HARNESS_PATH_ENV = {"gaiacpp": "GAIA_GAIACPP_PATH"}
+
+
+def harness_setup(name: str | None, binary: Path | None) -> dict[str, str]:
+    """The environment every category's backend needs to run harness *name*."""
+    if not name:
+        if binary is not None:
+            raise SystemExit("--harness-binary needs --harness naming its harness.")
+        return {}
+    sys.path.insert(0, str(REPO_ROOT / "src"))
+    from gaia.harnesses import HARNESSES, UNPROVEN_HARNESS_ENV, harness
+
+    known = harness(name)
+    if known is None:
+        raise SystemExit(
+            f"--harness {name!r} is not a harness; choose one of "
+            f"{', '.join(h.name for h in HARNESSES)}."
+        )
+    env: dict[str, str] = {}
+    if not known.runnable:
+        env[UNPROVEN_HARNESS_ENV] = name
+    if not known.native:
+        if binary is not None:
+            raise SystemExit(f"{name} is not a native harness; drop --harness-binary.")
+        return env
+    if name not in HARNESS_PATH_ENV:
+        raise SystemExit(
+            f"This checkout can't start {name} yet: the daemon has no way to find its "
+            "program. That comes with the routing for it."
+        )
+    if binary is None or not binary.is_file():
+        raise SystemExit(
+            f"--harness {name} needs --harness-binary pointing at its program"
+            + (f" ({binary} is not a file)." if binary is not None else ".")
+        )
+    env[HARNESS_PATH_ENV[name]] = str(binary.resolve())
+    return env
 
 
 def write_agent_model(cat_home: Path, model: str) -> None:
@@ -428,8 +537,8 @@ def _run_category(category: str, env: dict, p: dict, args) -> int:
                 raise SystemExit(f"Backend not healthy in 10 min; see {log_path}")
             time.sleep(3)
         if p["memory"]:
-            _enable_memory(p["backend"])
-        _require_empty_memory(p["backend"], Path(env["GAIA_MEMORY_DB"]), category)
+            _enable_memory(p["backend"], env)
+        _require_empty_memory(p["backend"], Path(env["GAIA_MEMORY_DB"]), category, env)
 
         print(f"=== {category}  (GAIA_HOME={cat_home})", flush=True)
         with open(args.out / f"{category}.log", "w", encoding="utf-8") as log:
@@ -447,6 +556,11 @@ def _run_category(category: str, env: dict, p: dict, args) -> int:
                     *(
                         ["--agent-model", args.agent_model]
                         if getattr(args, "agent_model", None)
+                        else []
+                    ),
+                    *(
+                        ["--scenario", ",".join(ids)]
+                        if (ids := getattr(args, "scenarios_by_category", {}).get(category))
                         else []
                     ),
                     *p["extra_args"],
@@ -522,10 +636,12 @@ def _keep_home(cat_home: Path, dest: Path) -> Path:
     return dest
 
 
-def _require_empty_memory(backend: str, memory_db: Path, category: str) -> None:
+def _require_empty_memory(
+    backend: str, memory_db: Path, category: str, env: dict
+) -> None:
     """Refuse to run *category* unless the backend's own memory store is empty."""
     req = urllib.request.Request(
-        f"{backend}/api/memory/stats", headers={"X-Gaia-UI": "1"}
+        f"{backend}/api/memory/stats", headers=_ui_headers(env)
     )
     with urllib.request.urlopen(req, timeout=30) as resp:
         stats = json.loads(resp.read())

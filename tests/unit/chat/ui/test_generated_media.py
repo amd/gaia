@@ -138,7 +138,7 @@ def test_an_absolute_path_to_a_real_file_is_refused(gaia_dir, tmp_path):
         ("image", "x.txt"),
         ("image", "x.wav"),
         ("audio", "x.png"),
-        ("audio", "x.mp3"),
+        ("audio", "x.ogg"),
         ("video", "x.png"),
     ],
 )
@@ -304,6 +304,67 @@ def test_relayed_audio_result_becomes_an_audio_card_with_length(gaia_dir):
     assert card["data"]["caption"] == "calm piano"
     assert card["data"]["duration_seconds"] == 1.5
     assert "alt" not in card["data"]
+
+
+def test_an_mp3_recording_is_served_and_takes_its_length_from_the_tool(gaia_dir):
+    mp3 = media_dir("audio") / "dictation_report_1.mp3"
+    mp3.write_bytes(b"ID3")
+    assert resolve_generated_media("audio", mp3.name) == mp3.resolve()
+    assert generated_media.media_type("audio", mp3) == "audio/mpeg"
+    card = media_card(
+        {
+            "type": "tool_result",
+            "success": True,
+            "data": {"audio_path": str(mp3), "duration_seconds": 196.54},
+        }
+    )
+    assert card["render"] == "audio"
+    assert card["data"]["src"] == "/api/media/audio/dictation_report_1.mp3"
+    assert card["data"]["duration_seconds"] == 196.54
+
+
+@pytest.mark.parametrize("reported", [-1, "95", True, float("inf"), None])
+def test_an_mp3_card_ignores_a_length_that_is_not_a_real_one(gaia_dir, reported):
+    mp3 = media_dir("audio") / "speech_1.mp3"
+    mp3.write_bytes(b"ID3")
+    card = media_card(
+        {
+            "type": "tool_result",
+            "success": True,
+            "audio_path": str(mp3),
+            "duration_seconds": reported,
+        }
+    )
+    assert card["render"] == "audio"
+    assert "duration_seconds" not in card["data"]
+
+
+def test_the_audio_card_says_where_the_users_copy_and_script_went(gaia_dir, tmp_path):
+    """The player is GAIA's own copy; the user's folder is named, never served."""
+    wav = _wav(media_dir("audio") / "dictation_report_2.wav")
+    theirs = tmp_path / "Documents" / "report.wav"
+    script = tmp_path / "Documents" / "report.script.md"
+    card = media_card(
+        {
+            "type": "tool_result",
+            "success": True,
+            "data": {
+                "audio_path": str(wav),
+                "saved_to": str(theirs),
+                "script_path": str(script),
+            },
+        }
+    )
+    assert card["data"]["src"] == "/api/media/audio/dictation_report_2.wav"
+    assert card["data"]["path"] == str(wav.resolve())
+    assert card["data"]["saved_to"] == str(theirs)
+    assert card["data"]["script_path"] == str(script)
+
+
+def test_a_recording_saved_only_to_the_users_folder_gets_no_card(gaia_dir, tmp_path):
+    theirs = _wav(tmp_path / "report.wav")
+    result = {"type": "tool_result", "success": True, "audio_path": str(theirs)}
+    assert media_card(result) is None
 
 
 def test_audio_card_omits_a_length_it_cannot_read(gaia_dir):
@@ -503,6 +564,57 @@ def test_handler_and_translation_carry_audio_path(gaia_dir):
     canonical = translator.translate(result)
     relayed = next(e for e in canonical if e["type"] == "tool_result")
     assert relayed["data"]["audio_path"] == wav
+
+
+def test_a_dictation_reaches_the_card_whole_in_process_and_relayed(gaia_dir, tmp_path):
+    """The handler's summary view must keep what the audio card shows."""
+    from gaia.ui.sse_handler import SSEOutputHandler
+    from gaia.ui.sse_translation import CanonicalTranslator
+
+    mp3 = media_dir("audio") / "dictation_report_3.mp3"
+    mp3.write_bytes(b"ID3")
+    theirs = str(tmp_path / "Documents" / "report.mp3")
+    script = str(tmp_path / "Documents" / "report.script.md")
+    handler = SSEOutputHandler()
+    handler._last_tool_name = "dictate_document"
+    handler.pretty_print_json(
+        {
+            "status": "success",
+            "audio_path": str(mp3),
+            "file_path": theirs,
+            "saved_to": theirs,
+            "script_path": script,
+            "duration_seconds": 196.54,
+            "words": 434,
+        },
+        "Result",
+    )
+    events = []
+    while not handler.event_queue.empty():
+        events.append(handler.event_queue.get())
+    result = next(e for e in events if e.get("type") == "tool_result")
+
+    translator = CanonicalTranslator(run_id="r", agent_id="gaia")
+    translator.translate({"type": "tool_start", "tool": "dictate_document"})
+    relayed = next(
+        e for e in translator.translate(result) if e["type"] == "tool_result"
+    )
+    in_process = {k: v for k, v in result.items() if k not in ("render", "data")}
+    over_the_relay = {
+        "type": "tool_result",
+        "success": True,
+        "data": {k: v for k, v in relayed["data"].items() if k != "kind"},
+    }
+    for event in (in_process, over_the_relay):
+        card = media_card(event)
+        assert card["render"] == "audio"
+        assert card["data"] == {
+            "src": "/api/media/audio/dictation_report_3.mp3",
+            "path": str(mp3.resolve()),
+            "duration_seconds": 196.54,
+            "saved_to": theirs,
+            "script_path": script,
+        }
 
 
 def test_a_relayed_flagship_media_result_still_draws_the_inline_card(gaia_dir):

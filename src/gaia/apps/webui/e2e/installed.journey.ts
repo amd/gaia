@@ -6,13 +6,13 @@
  * names the app's backend in GAIA_E2E_BASE_URL.
  */
 
-import { downloadToReady, expect, expectTestsPassed, pastChecks, sayer, test } from './harness';
+import { downloadToReady, expect, expectTestsPassed, installedTokenFile, pastChecks, sayer, signIn, test } from './harness';
 
 const BASE_URL = process.env.GAIA_E2E_BASE_URL as string;
 
 test('the installed app sets itself up from an empty home', async ({ page, shot }) => {
     const say = sayer('en');
-    await page.goto(`${BASE_URL}/`);
+    await signIn(page, BASE_URL, installedTokenFile());
     await pastChecks(page, say, 5 * 60_000);
     await downloadToReady(page, say, shot);
     await shot('ready');

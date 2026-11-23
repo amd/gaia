@@ -9,7 +9,7 @@ editable-checkout command that is wrong for a pip install and contradicts the
 
 import logging
 
-from gaia_agent.chat_agent import _UNSET, ChatAgent
+from gaiapy.chat_agent import _UNSET, ChatAgent
 
 import gaia.rag.sdk as rag_sdk
 from gaia.agents import install_hints

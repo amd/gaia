@@ -645,6 +645,9 @@ class TestStatus:
         monkeypatch.setattr(
             "gaia.llm.lemonade_tls.ca_store_problem", lambda **_: "no CA file"
         )
+        monkeypatch.setattr(
+            "gaia.llm.lemonade_tls.plan_ca_overlay", lambda *a, **k: None
+        )
         monkeypatch.setattr(manager, "is_installed", lambda: True)
         monkeypatch.setattr(manager, "write_config", lambda: None)
         monkeypatch.setattr(manager, "_health", lambda *a, **k: {"status": "ok"})
@@ -661,6 +664,98 @@ class TestStatus:
 
         assert spawned
         assert "no CA file" in caplog.text
+        assert manager.ca_problem() == "no CA file"
+
+    def _start_with_overlay(self, manager, monkeypatch, *, refuse):
+        """Start on a Linux host lacking lemond's CA file; returns each spawn."""
+        from gaia.llm.lemonade_tls import CaOverlay, CaOverlayError
+
+        overlay = CaOverlay("/etc/ssl/certs", "/m", (), "/etc/pki/bundle.pem")
+        monkeypatch.setattr(sys, "platform", "linux")
+        monkeypatch.setattr(
+            "gaia.llm.npu_linux.raise_memlock_soft_limit", lambda *a, **k: None
+        )
+        monkeypatch.setattr(
+            "gaia.llm.lemonade_tls.ca_store_problem", lambda **_: "no CA file"
+        )
+        monkeypatch.setattr(
+            "gaia.llm.lemonade_tls.plan_ca_overlay", lambda root, **_: overlay
+        )
+
+        def enter(o):
+            if refuse == "libc":
+                raise CaOverlayError("this system's C library has no unshare")
+            return ("enter", o)
+
+        monkeypatch.setattr("gaia.llm.lemonade_tls.enter_ca_overlay", enter)
+        monkeypatch.setattr(manager, "is_installed", lambda: True)
+        monkeypatch.setattr(manager, "write_config", lambda: None)
+        monkeypatch.setattr(manager, "_health", lambda *a, **k: {"status": "ok"})
+        spawned = []
+
+        def fake_popen(argv, **kwargs):
+            spawned.append(kwargs)
+            if refuse == "kernel" and "preexec_fn" in kwargs:
+                raise lemonade_embedded.subprocess.SubprocessError(
+                    "Exception occurred in preexec_fn."
+                )
+            return SimpleNamespace(pid=4321, poll=lambda: None, returncode=None)
+
+        monkeypatch.setattr("gaia.llm.lemonade_embedded.subprocess.Popen", fake_popen)
+        manager.start(port=65530)
+        return spawned, overlay
+
+    def test_start_on_linux_shows_lemond_the_system_bundle(
+        self, manager, monkeypatch, caplog
+    ):
+        """#7226: lemond starts in a namespace with the CA file, so cloud models
+        and downloads work and nothing blames the store."""
+        with caplog.at_level("WARNING"):
+            spawned, overlay = self._start_with_overlay(
+                manager, monkeypatch, refuse=False
+            )
+
+        assert len(spawned) == 1
+        assert spawned[0]["preexec_fn"] == ("enter", overlay)
+        assert "no CA file" not in caplog.text
+        assert manager._read_state()["ca_supplied"] is True
+        assert manager.ca_problem() is None
+
+    def test_a_kernel_that_refuses_the_namespace_still_starts_and_says_why(
+        self, manager, monkeypatch, caplog
+    ):
+        with caplog.at_level("WARNING"):
+            spawned, _ = self._start_with_overlay(manager, monkeypatch, refuse="kernel")
+
+        assert len(spawned) == 2
+        assert "preexec_fn" not in spawned[1]
+        assert "no CA file" in caplog.text
+        assert str(manager.log_path) in caplog.text
+        assert manager._read_state()["ca_supplied"] is False
+        assert manager.ca_problem() == "no CA file"
+
+    def test_a_c_library_without_unshare_still_starts_and_says_why(
+        self, manager, monkeypatch, caplog
+    ):
+        with caplog.at_level("WARNING"):
+            spawned, _ = self._start_with_overlay(manager, monkeypatch, refuse="libc")
+
+        assert len(spawned) == 1
+        assert "preexec_fn" not in spawned[0]
+        assert "no unshare" in caplog.text and "no CA file" in caplog.text
+        assert manager._read_state()["ca_supplied"] is False
+        assert manager.ca_problem() == "no CA file"
+
+    def test_a_state_from_an_older_build_is_judged_by_the_host(
+        self, manager, monkeypatch
+    ):
+        monkeypatch.setattr(
+            "gaia.llm.lemonade_tls.ca_store_problem", lambda **_: "no CA file"
+        )
+        manager._write_state({"pid": 1, "port": 2, "api_key": "k"})
+        assert manager.ca_problem() == "no CA file"
+        manager._clear_state()
+        assert manager.ca_problem() == "no CA file"
 
     def test_start_refuses_to_spawn_a_second_daemon(self, manager, monkeypatch):
         manager._write_state(
@@ -1271,3 +1366,27 @@ class TestOrphanedBackends:
 
         manager.status()
         assert manager._read_state()["pid"] == 9999
+
+
+class TestPortProbeOnAFullBacklog:
+    """A listener with a full backlog holds the port. Linux leaves the connect
+    hanging (a timeout); macOS resets it. Both must read as taken (#8789)."""
+
+    @pytest.mark.parametrize("error", [TimeoutError, ConnectionResetError])
+    def test_the_port_answers(self, monkeypatch, error):
+        def full_backlog(*args, **kwargs):
+            raise error()
+
+        monkeypatch.setattr(lemonade_embedded.socket, "create_connection", full_backlog)
+        assert lemonade_embedded._answers(
+            lemonade_embedded.socket.AF_INET, "127.0.0.1", 65000
+        )
+
+    @pytest.mark.parametrize("error", [TimeoutError, ConnectionResetError])
+    def test_the_port_is_not_free(self, monkeypatch, error):
+        def full_backlog(*args, **kwargs):
+            raise error()
+
+        monkeypatch.setattr(lemonade_embedded.sys, "platform", "darwin")
+        monkeypatch.setattr(lemonade_embedded.socket, "create_connection", full_backlog)
+        assert lemonade_embedded._port_free(65000) is False

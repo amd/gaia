@@ -19,6 +19,8 @@ Kept free of the optional ``mcp`` dependency so it is unit-testable on its own.
 
 from __future__ import annotations
 
+import asyncio
+import contextlib
 import hmac
 import ipaddress
 import json
@@ -31,6 +33,8 @@ from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple
 
 import requests
 
+from gaia.listener_guard import keep_listening_after_client_resets
+from gaia.ui.api_token import UITokenError
 from gaia.ui.sse_handler import (
     _RAG_RESULT_JSON_SUB_RE,
     _THINK_TAG_SUB_RE,
@@ -619,9 +623,10 @@ def iter_sse_events(lines: Iterable[str]) -> Iterable[Dict[str, Any]]:
 class TurnRegistry:
     """Tracks this MCP server's turns and every prompt id it has been shown."""
 
-    def __init__(self, backend_url: str, headers: Dict[str, str]) -> None:
+    def __init__(self, backend_url: str, headers: Callable[[], Dict[str, str]]) -> None:
         self.backend_url = backend_url
-        self.headers = dict(headers)
+        # Called per request: the backend may create its token after we start.
+        self.headers = headers
         self._lock = threading.Lock()
         self._turns: Dict[str, TurnTracker] = {}
         self._prompt_owner: Dict[str, str] = {}
@@ -652,7 +657,7 @@ class TurnRegistry:
             r = requests.request(
                 method.upper(),
                 self._url(path),
-                headers=self.headers,
+                headers=self.headers(),
                 timeout=REQUEST_TIMEOUT_S,
                 **kwargs,
             )
@@ -663,6 +668,8 @@ class TurnRegistry:
             return err(self._detail(e), http_status=code)
         except (requests.exceptions.RequestException, ValueError) as e:
             return err(self._detail(e))
+        except UITokenError as e:
+            return err(str(e))
         return body if isinstance(body, dict) else {"result": body}
 
     # ── turns ──
@@ -685,7 +692,7 @@ class TurnRegistry:
             resp = requests.request(
                 method,
                 self._url(path),
-                headers=self.headers,
+                headers=self.headers(),
                 stream=True,
                 timeout=STREAM_TIMEOUT,
                 **kw,
@@ -693,6 +700,10 @@ class TurnRegistry:
             resp.raise_for_status()
         except requests.exceptions.RequestException as e:
             tracker.finish("error", self._detail(e))
+            tracker.opened.set()
+            return
+        except UITokenError as e:
+            tracker.finish("error", str(e))
             tracker.opened.set()
             return
         tracker.opened.set()
@@ -1199,4 +1210,19 @@ def remote_app(mcp, host: str, token: str):
         ),
         host=host,
     )
-    return BearerTokenMiddleware(app, token)
+    return BearerTokenMiddleware(_keep_listening(app), token)
+
+
+def _keep_listening(app):
+    """*app* (a Starlette app) with the listener guard armed at startup."""
+    serve = app.router.lifespan_context
+
+    @contextlib.asynccontextmanager
+    async def lifespan(scope_app):
+        # A client resetting a queued connection must not close the listener.
+        keep_listening_after_client_resets(asyncio.get_running_loop())
+        async with serve(scope_app) as state:
+            yield state
+
+    app.router.lifespan_context = lifespan
+    return app

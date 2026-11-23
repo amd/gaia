@@ -125,7 +125,7 @@ class TalkConfig:
     mode: TalkMode = TalkMode.VOICE_AND_TEXT
 
     # Chat settings (from AgentConfig)
-    model: str = DEFAULT_MODEL_NAME
+    model: str = field(default_factory=resolve_local_chat_model)  # gaia init's local pick, else Gemma
     max_tokens: int = 512
     system_prompt: Optional[str] = None
     max_history_length: int = 4
@@ -581,7 +581,7 @@ await talk.voice_chat()  # Starts interactive session
 
 ### Unit Tests
 
-**File:** `tests/sdk/test_talk_sdk.py`
+The block below is an illustrative example, not a file in the repo. The real tests are under `tests/unit/`, for example `tests/unit/test_talk_config.py`.
 
 ```python
 import pytest

@@ -1,0 +1,397 @@
+---
+title: "gaiacpp: the native GAIA agent"
+description: "gaiacpp: the general-purpose GAIA agent as one small native binary, for headless runs, an OpenAI-compatible server, and Lemonade's agent host"
+icon: "sparkles"
+---
+
+<Info>
+  **First time here?** Complete the [C++ Framework Setup](/cpp/setup) guide first.
+</Info>
+
+`gaiacpp` is the general-purpose GAIA agent as one native binary: it reads and writes files, works through documents and data with the programs on the PC, runs shell commands, edits code and fetches web pages. It needs no Python runtime, starts instantly, and stays around 15 MB of memory through a multi-step task.
+
+It is one of the GAIA agent's [two harnesses](/reference/harnesses); the other, `gaiapy`, is the Python one and the default.
+
+It runs five ways:
+
+| Mode | Command | For |
+|---|---|---|
+| Interactive | `gaiacpp` | A person at a terminal |
+| Headless | `gaiacpp -p "prompt"` | Scripts, CI, eval harnesses: answer on stdout, exit code 0 or 1 |
+| Server | `gaiacpp serve` | Apps and [Lemonade](#lemonade-integration): OpenAI-compatible `/v1/chat/completions` |
+| MCP server | `gaiacpp --mcp` | Another program's agent: the tools over MCP, with no model of its own |
+| Stdio agent | `gaiacpp --stdio` | The [GAIA terminal UI](#running-as-the-agent-of-the-gaia-terminal-ui): queries in, JSON Lines events out |
+
+## Quick start
+
+Every [GAIA release](https://github.com/amd/gaia/releases), release candidates included, carries a prebuilt `gaiacpp` for each platform, stamped with the release's version:
+
+| Platform | Binary | Archive (binary and licenses) |
+|---|---|---|
+| Windows x64 | `gaiacpp-windows-x64.exe` | `gaiacpp-windows-x64.zip` |
+| Linux x64 | `gaiacpp-linux-x64` | `gaiacpp-linux-x64.tar.gz` |
+| macOS, Apple silicon | `gaiacpp-darwin-arm64` | `gaiacpp-darwin-arm64.tar.gz` |
+
+`gaiacpp-SHA256SUMS.txt` lists the checksum of each file. To build it yourself:
+
+```bash
+cd cpp
+cmake -B build -DCMAKE_BUILD_TYPE=Release
+cmake --build build --target gaiacpp
+```
+
+With Lemonade running and a model downloaded:
+
+```bash
+./build/gaiacpp -p "Summarize the CSV files in this folder" -m Qwen3.6-35B-A3B-GGUF
+```
+
+Headless runs deny tools that change things (shell, writes, web) unless you pass `--dangerously-skip-permissions`; each denial is reported on stderr.
+
+## Choosing the model endpoint
+
+`gaiacpp` talks to any OpenAI-compatible endpoint. Settings apply in this order, each overriding the one before:
+
+1. Built-in defaults: Lemonade at `LEMONADE_BASE_URL`, else `http://localhost:13305/api/v1`, `Gemma-4-E4B-it-GGUF`, a 32768-token context window, 16384 output tokens, temperature 0.2 and a 1000-step limit
+2. The settings file: `--config FILE`, else `$GAIACPP_CONFIG`, else `$XDG_CONFIG_HOME/gaiacpp/config.json` or `~/.config/gaiacpp/config.json` (`%APPDATA%\gaiacpp\config.json` on Windows) when it exists
+3. Environment: `GAIA_BASE_URL`, `GAIA_MODEL_ID`, `GAIA_MAX_STEPS`, `GAIA_CONTEXT_SIZE`, `GAIA_MAX_TOKENS`, `GAIA_FEATURE_TIER`, `GAIA_MAX_HELPERS`. `GAIA_AGENT_MAX_STEPS`, the name the Python agent reads, sets the step limit too; when both are set, `GAIA_MAX_STEPS` wins
+4. Flags: `--base-url`, `-m/--model`, `--provider`, `--api-key-env`, `--ctx-size`, `--max-tokens`, `--max-steps`, `--temperature`, `--native-tools`, `--feature-tier`, `--max-helpers`
+
+The key for the endpoint is sent as `Authorization: Bearer`. It comes from the variable named by `--api-key-env` (or `apiKeyEnv` in the settings file), else `GAIA_API_KEY`, else `LEMONADE_API_KEY`, which is only ever sent to a loopback address (the local Lemonade). A key is never read from or written to a settings file. A variable that is named but unset stops the agent with an error instead of sending an anonymous request.
+
+A hosted model reached through Lemonade (a `fireworks.` or `amd.` model id) gets a 131072-token window in place of the 32768 default, unless a settings file, `GAIA_CONTEXT_SIZE` or `--ctx-size` names one.
+
+`gaiacpp` loads the model at `contextSize` only through Lemonade's `/api/v1` endpoints. Through `/v1`, or any other server, the model runs at whatever window the server gives it.
+
+`--provider fireworks` is shorthand for Fireworks' endpoint with `FIREWORKS_API_KEY`, native tool calls and a 131072-token context window. It replaces a `contextSize` from the settings file or `GAIA_CONTEXT_SIZE`; `--ctx-size` still overrides it:
+
+```bash
+gaiacpp -p "…" --provider fireworks -m accounts/fireworks/models/deepseek-v4p1-flash
+```
+
+### Settings file
+
+```json
+{
+  "baseUrl": "http://localhost:13305/api/v1",
+  "modelId": "Qwen3.6-35B-A3B-GGUF",
+  "contextSize": 65536,
+  "apiKeyEnv": "LEMONADE_API_KEY",
+  "nativeToolCalls": "always",
+  "mcpConfig": "mcp.json"
+}
+```
+
+Any [`AgentConfig`](/cpp/api-reference) field is accepted. The extras are `provider` (`lemonade` or `fireworks`), `mcpConfig` (relative to the settings file) and `maxHelpers` (see [Helpers](#helpers)).
+
+### MCP servers
+
+`--mcp-config FILE` connects every server in an `mcp.json` (`mcpServers` object). Both transports work: `command`/`args` for stdio, and `url` (or `"type": "http"`) for Streamable HTTP, such as Lemonade's own MCP server. Each entry of `args` reaches a stdio server exactly as written, whatever spaces, quotes or `$` it holds, and on Windows a `command` that ships as a `.cmd` file, such as `npx`, is found. cmd.exe runs such a file and acts on `& | < > ^ % ! "` in its arguments, so an argument holding one of them is refused there with the reason; start the server's `.exe` or `node` directly instead. Header values may reference variables, for example `"Authorization": "Bearer ${LEMONADE_API_KEY}"`; an unset variable is an error. An env or header value can also be `{"$keyring": "gaia.connections:<connector>:<KEY>"}`, the reference `gaia connectors` writes: `gaiacpp` reads the secret from the OS keyring (Windows Credential Manager, macOS Keychain, or the Secret Service through `secret-tool` on Linux) and keeps it in memory only. A missing secret, or a keyring that can't be reached, stops the agent with the reason. A server that fails to connect stops the agent, unless its entry says `"optional": true`: then the agent starts without that server's tools and says so on stderr. A server's tools become the agent's tools; when it also offers resources or prompts, the agent gets `list_mcp_resources` / `read_mcp_resource` and `list_mcp_prompts` / `get_mcp_prompt`, which name the server.
+
+### Where the agent may work
+
+The file, git and shell tools are confined to the working directory (`--cwd`) and any folder added with `--allow-dir DIR`. A file tool given a path outside them is refused, and so is a shell command that names an existing folder outside them, other than system folders such as `/usr`, `/etc` and `/tmp`. The prompt tells the model which folders it has. A link or Windows junction inside the folder that leads outside it is treated as outside, and so is one that can't be followed (a loop): file search and folder indexing walk into no folder link at all, and a shell command that names one that leads out is refused. A file write is judged by where it would land: every link and junction on the way is followed, including one to a file or folder that doesn't exist yet, and a path whose landing can't be worked out (an unreadable link, a loop) is refused. The shell check reads the command text: it stops an agent from wandering, for example a whole-disk `find` or a path a document planted, but it is not a sandbox. `--full-access` removes the confinement.
+
+Every tool result is masked before the model, the console and the step log see it, and before `POST /v1/tools/:name` returns it, error text included: provider tokens (GitHub, GitLab, AWS, Google, Slack, and `sk-` keys), the `user:password@` part of a URL and secret query values such as `?access_token=` become `[redacted]`, a PEM private key block becomes `[redacted private key]`, and a line a search printed from a credential file (`./.env:3:...`) keeps its file name and loses the rest. `file_read`, `file_write` and `file_edit` refuse a credential file by name (`.env`, `id_rsa`, `*.pem`, `*.key` and the like), `git_show` refuses one named in a `ref:path`, a content search skips those files, and a write that would put `[redacted]` where the file holds the real secret is refused. This is a backstop, not a guarantee: a shell command that prints a credential file is not refused, though a plain read of one (`cat .env`) asks first where other reads don't.
+
+### Documents
+
+`index_document` indexes a file or a folder: PDFs (through `pdftotext`, so each passage keeps its page number), Word `.docx`, text, Markdown and code. `query_documents` returns the passages that answer a question, with file and page. Retrieval ranks passages by keywords (BM25), and also by meaning when an embedding model is set with `--embedding-model` or `embeddingModel` in the settings file (`--provider fireworks` uses `nomic-ai/nomic-embed-text-v1.5`); the two rankings are merged. Every result says which mode produced it. A PDF with no text layer, or a file that can't be read, is reported as a failure instead of being indexed empty.
+
+### Code
+
+`index_codebase` indexes a project (default: the working folder), honoring `.gitignore` and skipping `.git`, `node_modules`, virtual environments, build output and files over 1 MB. `search_code` then finds code by keywords or, with an embedding model, by meaning, and returns file paths and snippets. Code has its own index, so document questions never rank source files.
+
+### Models
+
+With Lemonade, `gaiacpp models list` lists the server's models and `gaiacpp models pull <name>` downloads one. A built-in model is pulled by name alone; `--checkpoint` and `--recipe` register a new model and need a name starting with `user.`. Both commands use the same settings as a run and take `--base-url`, `--provider`, `--api-key-env` and `--config`.
+
+### Images
+
+`analyze_image` sends an image file (PNG, JPEG, GIF, WebP, BMP) to a model that accepts images and returns its answer about it: text, charts, tables, screenshots, photos. It uses the agent's own model unless `--vision-model` names another on the same endpoint. A model that can't read images is reported as an error that says to set `--vision-model`.
+
+### Audio and image generation
+
+`transcribe_audio` turns a recording (wav, mp3, m4a, ogg, flac, webm) into text through the endpoint's `/audio/transcriptions`, and `generate_image` saves a PNG made by `/images/generations`. Lemonade serves both. Each tool exists only when its model is set: `--transcribe-model` (for example `Whisper-Base`) and `--image-model` (for example `SDXL-Turbo`), or `transcribeModel` / `imageModel` in the settings file; `audioBaseUrl` sends transcription to a different host. A failed request is reported with the server's reason.
+
+`--screenshots` adds `take_screenshot`, which saves the screen to a PNG in the working folder (PowerShell on Windows, `screencapture` on macOS, `grim`, `gnome-screenshot`, `scrot` or ImageMagick on Linux) for `analyze_image` to read. It is off by default and asks before each capture, because a screenshot can show anything on screen.
+
+### Memory
+
+`remember`, `recall`, `update_memory` and `forget` keep facts, preferences and notes across sessions in `$GAIA_HOME/memory-cpp.db` (`~/.gaia/memory-cpp.db` by default). Stored preferences are added to the prompt; other facts are found with `recall`, which searches by keyword. Text that looks like a credential is refused: API keys and tokens, a password or PIN stated outright, card numbers and security codes, and US social security numbers. The refusal tells the model that a new chat won't know the secret and that it is still in this chat. The check is a backstop, not a guarantee. `forget` asks for confirmation. `--no-memory` turns memory off. The file is separate from the Python agent's memory database.
+
+### Skills
+
+`gaiacpp` reads the same `SKILL.md` skills as the Python agent. It lists installed skills in its prompt by name and description, and loads a skill's instructions with `load_skill` when the request calls for it. It looks in these folders, and an earlier folder's skill wins over a same-named one later (`list_skills` reports the shadowed copy):
+
+1. `skills/` beside the `gaiacpp` binary
+2. `~/.gaia/skills/` (`$GAIA_HOME/skills` when `GAIA_HOME` is set)
+3. `./.claude/skills/` and `~/.claude/skills/`: loadable by name, not listed
+
+A skill that ships Python tools (`tools.py`) loads as instructions only, and `load_skill` says so. `--no-skills` leaves skills out.
+
+`gaiacpp skills install <name>[@version]` downloads a skill from the hub (`GAIA_HUB_URL`, default `https://hub.amd-gaia.ai`), checks the bundle against the SHA-256 the hub lists, and verifies its `SIGNATURE.json` the same way the Python runtime does: Ed25519 over every file's digest, checked against the built-in AMD key and `~/.gaia/skills/trusted-keys.json`. A signature that doesn't verify, or files that changed after signing, stop the install. The signature sets the skill's tier: AMD-signed skills are `verified`, ones signed by a key you trust are `community`, and unsigned ones or ones signed by an unknown key are `experimental`, which install only with `--allow-experimental`. `gaiacpp skills install <folder>` applies the same checks to a local folder. `gaiacpp skills list` and `gaiacpp skills remove <name>` do the rest. Installing is the user's command, not a tool the agent can call.
+
+Installing from the hub, or from a folder that has a `SIGNATURE.json`, needs a build with OpenSSL: it does the HTTPS download, the SHA-256 check and the signature check. A build without it stops the install and says so. The release binaries include it.
+
+### Helpers
+
+`delegate_task` lets the agent hand parts of a job to helpers: it gives each a task, they work side by side, each in its own context, and only their conclusions come back. That keeps the agent's own context small on jobs with a lot of reading, and finishes them sooner. The agent decides whether to split. Its instructions say to use helpers for independent reading or judgement, such as one question per file, and to do the work itself when one command or script covers it, when the job is small, or when it writes.
+
+A call takes up to 16 tasks the agent writes itself, each `{"task": "<the brief>", "paths": ["<file or folder>"]}`; a list sent as JSON text is read too. More than 16, an empty brief, or a path outside the agent's folders is refused before any helper starts.
+
+**Sizing the job.** The agent's instructions say how much text the working folder holds and how large its context window is, and tell it to size a job first: split when the work is independent pieces of reading or judgement, and above all when reading everything itself would take more than about half its window. When one brief fits many files, the agent sends one task that lists them all and the tool shares them out: the files are grouped by size, about one long file (roughly 8,000 tokens of reading) per helper, each helper gets the same brief and its own group, and a sizeable task is spread across every helper available. A shared-out task may run up to 64 helpers, eight at a time on a cloud model; past that the groups grow. Each helper is told how long its answer may be, so every conclusion reaches the agent whole. The result tells the agent to answer from those conclusions and not read the material again; a helper quotes the words that prove its answer and says which files it read in full. A helper may take a longer file in one read than the agent itself does, since reading is its whole job. The result of a delegation may take up to a quarter of the agent's context window, so that many conclusions still arrive whole. With `GAIA_STEP_LOG` set, each helper's line also holds its task and the start of its conclusion.
+
+**A helper can only read.** It is built with `file_read`, `file_search` and `read_tool_output` and nothing else: no shell, no writes, no web, no memory and no `delegate_task` of its own, so helpers go one level deep. It reads inside the folders the agent itself is confined to. It never asks for approval and inherits none: `--dangerously-skip-permissions` and saved "always allow" answers apply to the agent, not to its helpers. Its instructions are a few hundred tokens, not the agent's full prompt.
+
+**How many run at once** follows the model:
+
+| Model | Helpers at once |
+|---|---|
+| A cloud model (through Lemonade, or `--provider fireworks`) | 8 |
+| A local llama.cpp model | Its slot count (`--parallel`), at most 4 |
+| A model on the NPU | 1, whatever `--max-helpers` says |
+| The server does not report a slot count | 1, and the result says why |
+
+Tasks beyond that number wait their turn. `--max-helpers N` (or `maxHelpers` in the settings file, or `GAIA_MAX_HELPERS`), from 0 to 64, sets the number yourself, and `0` removes the tool. The flag and the variable also apply when `gaiacpp` runs as the Agent UI's agent. `gaiacpp` reads the slot count the model was loaded with; it does not reload a model to get more.
+
+**Limits and failures.** A helper has 30 steps and 10 minutes; a model request still running when the 10 minutes end is cut off there. The result lists every helper with a status:
+
+| Helper `status` | Meaning |
+|---|---|
+| `ok` | It answered. `conclusion` holds the answer, cut at 2,000 characters, or sooner when many helpers share one result; `detail` then names the `read_tool_output` id that returns the rest. |
+| `partial` | It stopped short and gave a closing answer from what it had. `reason` says why it stopped. |
+| `failed` | Nothing usable came back. `reason` says why. |
+
+`reason` is `step_limit` (out of steps), `loop` (stopped for repeating a tool call), `empty` (the model returned no text), `error` (the model server failed, or the helper could not start), `timeout` or `cancelled`.
+
+The result's own `status` is `success` only when every helper is `ok`, `partial` when some are not, and `error` when none returned anything. Its `summary` counts them in one line a person can read ("3 of 4 helpers finished, 1 failed."), and `advice` tells the agent to redo failed parts itself or say they are missing. While helpers run, the agent reports progress ("2 of 4 helpers done") as a `status` with the `helpers` phase, which the terminal UI shows on its status line next to the running step. The Agent UI shows each update as its own status line for now. Stopping the agent stops its helpers: each ends when the model request it has in flight returns.
+
+A compact model is not offered `delegate_task` unless `--max-helpers` names a number above 0.
+
+## Headless runs
+
+```bash
+gaiacpp -p "prompt" --output-format json --cwd ./task
+echo "prompt" | gaiacpp -p
+gaiacpp --prompt-file prompt.txt
+```
+
+`--output-format json` prints one line:
+
+```json
+{"result": "…", "status": "success", "is_error": false, "steps": 3, "tool_errors": 0,
+ "model": "…", "duration_s": 5.2, "peak_rss_mb": 16.7, "cpu_s": 0.03,
+ "num_steps": 3, "num_llm_calls": 3, "num_tool_calls": 2, "error_count": 0,
+ "input_tokens": 14547, "cached_tokens": 8492, "output_tokens": 199,
+ "peak_context_tokens": 5042,
+ "usage": {"prompt_tokens": 14547, "completion_tokens": 199, "total_tokens": 14746,
+           "cached_tokens": 8492, "peak_context_tokens": 5042}}
+```
+
+`status` is one of:
+
+| `status` | Meaning | Exit code |
+|----------|---------|-----------|
+| `success` | The turn finished with an answer. A turn stopped for repeating a tool call counts when the model then answered from what it had. | 0 |
+| `incomplete` | The turn stopped short but `result` holds the model's own closing answer: the step budget ran out, it was stopped for repeating a call that kept failing, or the answer itself was cut off at the reply limit (the answer ends with a line saying so). | 1 |
+| `error` | There is no usable answer: the model server failed, or the turn stopped and the model gave no closing answer. | 1 |
+| `cancelled` | Ctrl+C. | 1 |
+
+`is_error` is true for every status but `success`. These are the same statuses and exit codes as `gaia -p`, which says `failed` where `gaiacpp` says `error`.
+
+A run that cannot start still ends stdout with one record: a settings file that does not parse, a prompt file that cannot be read, an MCP server that does not start and a model server that does not answer all report `status` `error` with the reason in `result`, and exit 1. A mistake on the command line is different: an unknown flag, a missing prompt, or a value that cannot be right (`--ctx-size`, `--max-tokens` and `--max-steps` take a whole number above zero, `--temperature` a number from 0 to 2) exits 2 with the reason on stderr and no record. A request far larger than the model's context window is refused before anything is sent.
+
+`peak_rss_mb` is the agent process's own peak memory; programs it ran are not counted. `cpu_s` is the CPU time that same process used, in seconds. Progress goes to stderr, so stdout carries only the answer. `--debug` turns on verbose logging.
+
+The counters use the same names as `gaia -p --output-format json`, so one script can read both agents:
+
+| Field | Meaning |
+|---|---|
+| `num_steps` | Turns of the agent loop (same as `steps`) |
+| `num_llm_calls` | Requests sent to the model, including a closing answer after the step limit |
+| `num_tool_calls` | Tools run |
+| `error_count` | Tool calls that failed (same as `tool_errors`) |
+| `input_tokens` | Prompt tokens, summed over every model request, the helpers' included |
+| `cached_tokens` | The part of `input_tokens` the provider served from its cache. A local model reports none, so this is 0 |
+| `output_tokens` | Tokens the model wrote, the helpers' included |
+| `peak_context_tokens` | The largest single request, prompt plus reply: how full the context window got |
+
+The token fields are 0 when the server reports no usage. The token totals, here and in `usage`, include the helpers' requests. `num_steps`, `num_llm_calls` and `peak_context_tokens` are the agent's own, and `num_tool_calls` counts a `delegate_task` call once and not the tools its helpers ran.
+
+A run that used helpers adds a `helpers` object: `runs`, `ok`, `partial` and `failed` count them, `width` is the most that ran at once, `input_tokens`, `cached_tokens` and `output_tokens` are their share of the totals, and `wall_s` is the time the agent spent waiting on them.
+
+Set `GAIA_TURN_LOG` to a file path and every `-p` run also appends one JSON line to it: the same counters, plus `llm_calls` (step, seconds, and input, cached and output tokens for each request) and `tool_calls` (step, tool name, seconds, and whether it succeeded). A path that cannot be written stops the run before it starts.
+
+Set `GAIA_STEP_LOG` to a file path to get one line per model call and tool call (with the call's arguments, shortened to 300 characters, so treat the file like the commands it records), written as each one finishes. A run that is killed or times out before the turn ends still leaves those lines, and a failed model call is recorded with its error. A helper's model and tool calls are written too, each with a `helper` number, and a `helper` line records how each one ended.
+
+With `-p` and no prompt argument, the prompt is read from stdin until it closes.
+
+## MCP server mode
+
+`gaiacpp --mcp` serves the agent's tools over the Model Context Protocol on stdin and stdout, so a program that already has its own agent and model can call them. No model is contacted. It answers `initialize`, `ping`, `tools/list` and `tools/call`; logs go to stderr.
+
+```json
+{"mcpServers": {"gaiacpp": {"command": "gaiacpp", "args": ["--mcp", "--cwd", "/path/to/project"]}}}
+```
+
+The folder scope and the other options apply as in a headless run. Nobody can answer an approval card over MCP, so a tool that needs approval (a shell command that changes something, a file write) is refused unless the server was started with `--dangerously-skip-permissions`.
+
+## Server mode
+
+```bash
+SERVE_KEY=$(openssl rand -hex 32) gaiacpp serve --port 0 --server-key-env SERVE_KEY
+```
+
+Once bound, the server prints one JSON line on stdout, so a supervisor learns the port:
+
+```json
+{"event": "ready", "url": "http://127.0.0.1:41733", "model": "…", "version": "0.1.0"}
+```
+
+| Route | Purpose |
+|---|---|
+| `POST /v1/chat/completions` | Run the agent on the conversation. With `stream: true`, steps and tool activity arrive live as empty-delta `chat.completion.chunk`s carrying a `gaia` field, and the answer follows when the run ends |
+| `GET /v1/models` | The agent's model |
+| `GET /v1/tools` | The agent's tools and their parameters |
+| `GET /health` | Status, version, `busy`. Open without a key, for readiness probes |
+| `POST /v1/tools/:name` | Run a tool directly. Off unless `--expose-tool-routes`. The result is masked like a chat tool result, an error like command output, and either is withheld if it can't be masked |
+
+Each request carries its whole conversation, so the server keeps no state between requests. It runs one completion at a time and answers a second with 409. A client that disconnects from a stream cancels the run. A run that fails, runs out of steps or is cancelled comes back as an error (HTTP 500, or an error event on a stream) whose `code` is the run's status, with the agent's own summary as the message; it never ends with `finish_reason: "stop"`.
+
+`--server-key-env` is required: tools run without confirmation in this mode, so a server without a key would run commands for any program on the PC. The server binds `127.0.0.1`. It sends no CORS headers and rejects requests that carry an `Origin` header unless you allow that origin with `--allow-origin`, and it rejects a `Host` header that isn't `localhost` or a loopback address. A web page in the user's browser therefore can't drive the agent. Whoever starts the server and holds its key owns the decision to run tools.
+
+## Running as the GAIA agent in the Agent UI
+
+`gaiacpp` can stand in for the Python flagship behind the GAIA daemon, so the Agent UI chats with it unchanged. The daemon starts an installed agent binary as `<binary> --host 127.0.0.1 --port <P>` with its token in `GAIA_GAIA_SIDECAR_TOKEN_FILE`; when that variable (or `GAIA_GAIA_SIDECAR_TOKEN`) is set, `gaiacpp` serves the flagship's sidecar API, version 2.27:
+
+- Chat over Server-Sent Events: streamed text, tool activity, approvals with "always allow in this chat", Stop, and full access.
+- Per-chat folder scope (`allowed_paths`), working folder, attached documents, memory on, private or off, and internet off. Each can change between turns, and internet and memory also apply mid-turn.
+- Each chat's tools (`/sessions/{id}/tools`), its "always" answers (`/sessions/{id}/grants`), the skills list (`/skills`) and the memory list (`/memory`).
+
+A few things answer the way an older flagship would, and the UI copes with each:
+
+- A message sent mid-turn gets 409, so the UI sends it as the next message.
+- Undo reports "Undo may not work for this turn", because file changes aren't recorded yet.
+- The reply carries no context-window measurement.
+
+"Always allow" is offered only for shell commands, and covers that program (`mkdir`), or program and subcommand (`git status`), or the exact text of a chained or piped command, in that chat only; the answers are kept in memory. A program grant doesn't cover a path that climbs out of the folder (`..`), names home (`~`), puts a wildcard in an absolute path (`/*`), or holds a cmd.exe variable or caret (`%USERPROFILE%`, `^`): `rm -rf ..` asks again after `rm` was always allowed. A file write, web fetch or any other tool asks every time, because a grant for one file would otherwise approve every later write. A shell command that only reads runs without asking: `ls`, `cat`, `grep`, or `find` without `-exec` or `-delete`, chained or piped, with output thrown away by `2>/dev/null`. A read with a wildcard (`cat *`) or a flag that follows links (`grep -R`, `find -L`) asks first when the folder holds a link that leads out of the chat's folders, or is too large to check. Under cmd.exe only the built-ins `dir`, `type`, `cd` and `echo` qualify, because cmd runs a `find.bat` in the current folder before the real `find`. `git` always asks, because a repository's own config can make `git status` run a program. With the internet off, the chat refuses `web_fetch` to other hosts, every MCP tool, and shell commands that go online, before any approval card, so a command allowed "always" earlier in the chat is refused too. Shell commands that go online include package managers and build tools that download (`pip install`, `npm install`, `conda install`, `gem install`, `dotnet restore`, `cargo add`, `winget install`, and every `mvn` or `gradle` run), whether the program is named bare, by a full path, with `.exe` or `.cmd`, in another case, or with quotes, backslashes or cmd.exe carets spliced into the name (`c''onda`, `co^nda`); the Python flagship refuses the same list. A documented offline flag lets one through: `mvn -o` or `--offline`, `mvn -v`, `gradle --offline`, `gradle --version`, `npm ci --offline` or `npm install --offline`, and `pip install --no-index`. Only those exact flags count, so `npm --prefer-offline`, the `mvnw` and `gradlew` wrappers (which download a build tool first), a deploy or publish goal, a requirements file, a URL, and a quoted or expanded word are still refused. That covers a second destination given beside a local one (`curl http://localhost/ example.com`), and a command with a line over 2,048 bytes, which is too long to check, is refused with the internet off. On Windows the shell is Git Bash when Git for Windows is installed, found next to `git.exe` if it isn't on `PATH`, and `cmd.exe` otherwise; the WSL launcher (`System32\bash.exe`) is never used, because it can't see `C:\` paths. The system prompt names the shell in use.
+
+To use it, choose **gaiacpp** in the Agent UI under Settings › Agent & model, or on the Customize screen of first-run setup. The choice is saved as `flagship_agent` in `~/.gaia/config.json`, which the terminal UI reads too, and it applies from the next message; a switch is refused while a chat is still answering. If `gaiacpp` isn't on the PC, Settings offers a Download button and setup fetches it in its Download step: the app downloads this release's build, checks it against the release's SHA-256 list and the version it prints, and puts it in `~/.gaia/bin`. Where this release has no build for the PC, or on a development build, the row says Not installed and gives the reason.
+
+The daemon then starts `gaiacpp` from the file named by `GAIA_GAIACPP_PATH` if that is set, else `~/.gaia/bin`, else beside a packaged `gaia` or on its `PATH`. A copy the app downloaded is checked against its recorded SHA-256 before every start. A saved choice whose program has gone, or no longer matches, fails with a message that says to download it again or switch back; it never falls back to the Python agent on its own.
+
+A hub-style install is separate from that choice and only applies when the Python agent package isn't importable: put the binary in `~/.gaia/agents/gaia/` with an `.installed` file naming it (`"artifact_kind": "binary"`, `"executable"` set to the file's name, `"artifact_sha256"` set to its SHA-256, and `"version"` set to `0.1.0` or later, since the daemon refuses to start a binary whose version it can't read). A local build names the file `gaiacpp.exe` (`gaiacpp` on Linux and macOS); the hub package from `cpp/packaging/package_agents.py` names it `gaia-win-x64.exe`, `gaia-linux-x64` or `gaia-darwin-arm64`. The Agent UI then relays to it whenever the Python `gaiapy` package isn't importable in its environment.
+
+## Running as the agent of the GAIA terminal UI
+
+`gaiacpp --stdio` speaks the protocol the terminal UI uses with its agent child process: one line per message on stdin, one JSON event per line on stdout, and logs on stderr. The process stays up for the whole session, so the conversation, "always" answers and a switched model carry from one turn to the next. Clearing the conversation drops its "always" answers too. The wire names are pinned by `tests/fixtures/stdio/gaia_stdio_wire.json`, which the Python flagship and the terminal UI are tested against too.
+
+```bash
+printf '%s\n' '{"gaia_query": "What is in this folder?"}' | gaiacpp --stdio -m Qwen3.6-35B-A3B-GGUF
+```
+
+```json
+{"type":"status","message":"","model_id":"Qwen3.6-35B-A3B-GGUF","model_display":"Qwen3.6-35B-A3B-GGUF","model_backend":"lemonade","model_remote":false,"lemonade_reachable":true,"lemonade_version":"…","lemonade_base_url":"http://localhost:13305/api/v1","agent_version":"…","gaia_version":"…"}
+{"type":"status","message":"Thinking"}
+{"type":"tool_call","tool":"bash_execute","args":{"command":"ls"},"narration":"Running ls"}
+{"type":"tool_result","tool":"bash_execute","data":{"…":"…"},"preview":"…"}
+{"type":"final","answer":"…","usage":{"steps":2,"input_tokens":2100,"cached_tokens":900,"tokens":60,"tools_used":1}}
+```
+
+**What it reads.** A line is a query: either `{"gaia_query": "text"}`, which keeps a multi-line question as one question, or any other text, taken as written. A line that starts with `{` but is not valid JSON is answered with an `error` event, not asked as a question, so a cut-off control message is never sent to the model. A JSON object with a `gaia_control` key is a control message instead. Controls are read on their own thread, so they take effect while a turn is running, and they never write anything to stdout.
+
+| Control | Fields | Effect |
+|---|---|---|
+| `tool_decision` | `decision` (`allow`, `deny`, `always`, `timeout`), `confirm_id` | Answers the open approval. An answer for another `confirm_id`, or with nothing waiting, is dropped and the tool does not run. Without a `confirm_id`, `deny` and `timeout` answer the open approval, and `allow` and `always` are dropped |
+| `full_access` | `enabled` | Approval prompts off or on, from the next tool call |
+| `accept_edits` | `enabled` | File edits inside the working directory run without asking |
+| `cancel` | | Stops the running turn, which still ends with its one terminal event. A shell command in flight is ended with everything it started, and a streamed reply stops at its next chunk. A query that was read but hasn't started ends at once with an empty `final`. `/model` and the sentinel queries run to completion once started. The process and the conversation stay |
+| `clear_history` | | Forgets the conversation and its "always" answers after the running turn |
+
+A control with a field of the wrong type is rejected with a line on stderr and changes nothing, except that an unreadable `tool_decision` denies the approval it was meant for.
+
+**What it writes.** Only these event types: `status`, `token`, `tool_call`, `tool_result`, `needs_confirmation`, `final` and `error`. Every query ends with exactly one `final` or `error`, and nothing follows it until the next query.
+
+- The first line, and the line before the `final` of a successful `/model <id>`, is a `status` naming the model: `model_id`, `model_display`, `model_backend` (`lemonade`, or `fireworks` / `amd` for a cloud model), `model_remote`, `lemonade_reachable`, `lemonade_base_url`, `lemonade_version` when the server reports one, `agent_version` and `gaia_version`. It is sent even when no model server answers, after waiting a few seconds at most.
+- `token` events carry the answer as it streams, when the model calls tools natively. Otherwise the answer arrives whole in `final`. Reasoning inside `<think>` tags is left out. A `delta` may hold several tokens: they are sent in batches about 30 ms apart.
+- `needs_confirmation` carries `run_id`, `action` (the tool), `summary`, `confirm_id`, `risk` (`read`, `write` or `execute`) and, for a shell command only, `always_scope` (what an `always` answer would cover). Without `always_scope`, "always" isn't on offer, and an `always` answer allows that one call.
+- `final` carries `usage`: `steps`, `input_tokens` with `cached_tokens`, `tokens` (output) and `tools_used`. A count of zero is left out.
+- A turn the model server could not answer ends in `error`. A cancelled turn ends in a `final` with an empty answer.
+
+**Queries it answers itself.** `/model` lists the models the server can run now, and `/model <id>` switches to one, or ends in `error` and keeps the current model. The `model_id` it reports is the server's own spelling, so `Foo` becomes `user.Foo` when that is how the server lists it. Three sentinel queries never reach the model:
+
+| Query | `final` answer |
+|---|---|
+| `"\u0000gaia:clear_conversation\u0000"` | `conversation_cleared`, with the history and "always" answers forgotten |
+| `"\u0000gaia:memory_dump\u0000"` | The stored memories as a JSON string: `available`, `stats`, `contexts`, `shown`, `total`, `items`. The store keeps no confidence score or last-use time, so `confidence`, `avg_confidence` and `last_used` are left out. With `--no-memory`, `available` is false and `reason` says why |
+| `"\u0000gaia:warm_up\u0000"` | `warmed_up` once a local model is loaded, `warm_up_skipped` for a cloud model. A model that can't be loaded ends in `error` |
+
+**Approvals.** A shell command that changes something, a file write or edit, a web fetch and an MCP tool that isn't known to be read-only ask first. `always` is offered for shell commands only and remembered until the conversation is cleared or the process exits: the program for single-purpose commands (`mkdir`), program and subcommand for tools such as `git` and `npm`, and the exact command otherwise. Every other tool asks each time, so approving one file write never approves the next. With "accept edits" on, `file_write` and `file_edit` run without asking when the file is inside the working directory, judged by where the write would land after following every link and junction, even one to a file not there yet. They still ask for anything under `.git`, a dotfile or dot-folder, a folder on `PATH`, and on Windows a file `cmd.exe` would run in place of a program on `PATH`; a home folder or a drive root never counts as the working directory. 
+
+**When the host goes away.** Once stdin closes, queries already read still run while something reads stdout, so `echo '{"gaia_query": "hi"}' | gaiacpp --stdio` prints its answer, and an approval nobody can answer is denied. When stdout has no reader either, or a write to it fails, the process exits at once with code 0, without waiting for a model call or a tool in flight. Commands the agent runs never get its stdin: they read end of input.
+
+**Flags.** Besides the model and run options above, `--stdio` takes the flags the terminal UI passes: `-m/--model`, `--full-access`, `--accept-edits` and `--dev` (step-by-step `status` events, debug lines on stderr). `--accept-edits` and `--dev` are refused without `--stdio`. The endpoint comes from `LEMONADE_BASE_URL`, as in every other mode.
+
+- With `--stdio`, `--full-access` means approval prompts are off. The tools stay inside the working directory; add folders with `--allow-dir`.
+- The startup `status` event carries an empty `skills` list, so the terminal UI offers no skill under `/`: `gaiacpp` doesn't yet start a skill from a message that begins with `/<name>`. Skills still load when the model asks for one.
+- `--use-claude` and `--claude-model` stop the program with exit code 2, because `gaiacpp` has no Claude provider.
+- `GAIA_LEMONADE_EMBEDDED=1` is not acted on: `gaiacpp` keeps the `LEMONADE_BASE_URL` it started with, so if GAIA's own model server restarts on another port, turns end in `error` until the terminal UI restarts the agent.
+
+The terminal UI does not start `gaiacpp` by itself yet: it looks for a program named `gaia-agent` and does not pass `--stdio`.
+
+## Lemonade integration
+
+Lemonade's agent host installs agents from a pinned GitHub release asset, configures them for the local server, and launches them (see Lemonade's `docs/guide/agents.md`). `gaiacpp` provides what that contract needs:
+
+| Lemonade needs | gaiacpp provides |
+|---|---|
+| A release asset per platform, binary at the archive root, pinned by SHA-256 | `cpp/packaging/package_lemonade.py` builds `gaiacpp-<os>-<arch>.tar.gz` (`.zip` on Windows) and writes its checksum entry to `agent_versions.gaia.json`, to copy into Lemonade's `agent_versions.json`. `build_agents.yml` runs it for each platform, and on a release tag joins the three files into one with `--merge` |
+| Point the agent at this server, without writing the key to disk | The settings file (`baseUrl`, `modelId`, `contextSize`). When lemond has a key, the host adds `apiKeyEnv: "LEMONADE_API_KEY"` and passes the key in the environment; without one it leaves `apiKeyEnv` out |
+| Lemonade's tools in the agent | `mcpConfig` naming Lemonade's MCP server by URL |
+| A launch command for a terminal | `gaiacpp -m <model>` (interactive) |
+| A served agent | `gaiacpp serve --port 0 --server-key-env <VAR>`, ready line on stdout, `GET /health` for readiness |
+| No surprise upgrades | `--version`; the binary has no self-update |
+
+The release build links OpenSSL statically on every platform and, on Linux, the C++ runtime too (`GAIA_STATIC_CXX_RUNTIME=ON`), so the Linux binary needs only glibc from the system. A build made without OpenSSL has no HTTPS: it can't reach an `https://` endpoint or install skills from the hub. glibc is the floor of the build host, so build Linux releases on the oldest distribution you support (CI uses `ubuntu-latest`).
+
+## What the agent loop handles
+
+- **Tool protocol:** native tool calls for every model GAIA lists and for any model Lemonade labels `tool-calling` (cloud models included); other models are asked for the call as JSON in text. `--native-tools always` or `never` overrides this.
+- **Small models get a smaller prompt:** a compact model (Gemma 4, the small Qwen, LFM, Nemotron and Granite builds) is not offered the git, code-index, `update_memory`, `forget` and `env_inspect` tools, which the shell and file tools cover, and its prompt leaves out the prose copy of the tool list that the tool schemas already carry. Its replies are capped at 4096 tokens: its real replies stay under about 2,000, and a longer one is a runaway repetition that would otherwise run for many minutes. That cuts the prompt every step re-reads by about a third, which matters most on the NPU, where nothing of the prompt is cached between steps. `--feature-tier full` or `compact` (or `featureTier`, `GAIA_FEATURE_TIER`) overrides the choice.
+- **One agent on the NPU at a time:** a FastFlowLM model's first call in a turn takes a machine-wide lock that is kept until the turn ends, so two agents on the NPU take turns instead of each running several times slower and re-reading its prompt on every call. A waiting agent says so, and may wait for the whole of the other agent's turn, long commands included; the lock is given up while an agent waits for the user to approve a tool.
+- **A model already loaded:** before each request the agent checks that its model is loaded at its context size and loads it if not. Speech, transcription and embedding models loaded beside it don't trigger a reload, and a cloud model is never reloaded.
+- **Knows what is in the folder:** the prompt lists the working folder two levels deep (up to 60 names, hidden files left out) as it was when the turn began, so a small model reads the files that are there in place of guessing names. The home folder and a drive root are not listed.
+- **A reply cut off at its limit:** when the model spends its whole reply limit before answering, the turn ends saying so and naming `--max-tokens` (default 16384). An answer that was cut off part-way is returned with a closing line saying so and the status `incomplete`. A reply may use at most half the context window, so on a small window a long reasoning block can't fill it; the turn warns when this lowers `--max-tokens`.
+- **Transient failures:** connection errors and HTTP 408, 409, 425, 429 and 5xx are retried with exponential backoff (`llmRetries`, default 3). Other errors fail the turn with the server's message.
+- **Full context window:** on an overflow error, older tool outputs are replaced with references and the request is sent once more.
+- **Large tool output:** output beyond `maxToolResultChars` (default 16000, and at most half the context window in characters, so a few reads can't fill a small window) keeps its head and tail in the conversation; the model reads the rest with `read_tool_output`.
+- **Malformed tool calls:** invalid arguments are returned to the model to resend, up to three times in a row. Whole-string numbers and `"true"`/`"false"` are converted to the declared parameter type.
+- **Loops:** the fourth identical call in a row is refused with a note asking the model to change course, and so is the call that would close a cycle of two or three calls (search, read, search, read) for the fourth time; a second loop ends the turn.
+- **Step budget:** `gaiacpp` allows 1000 steps per request, a backstop for a runaway turn rather than a budget (the framework default for other agents is 50). The model is told at 20, 10 and 5 steps left, each once, and sooner on a small limit, where a notice waits until half, a quarter and a tenth of the steps remain; a limit under 8 gets none. The notices are not kept in the conversation. At the limit, one call without tools asks for an honest summary of what was done and what wasn't.
+- **Claims checked against what happened:** an answer is sent back once when it says it saved a file that doesn't exist, that a command ran when no command ran, that tests passed when no test run in the turn shows it, or that something is missing when the agent never looked. A test run is a command that starts a test runner (pytest, `python -m unittest`, `npm test`, `go test`, `cargo test`, ctest and others), or one whose output holds a runner's summary (`4 passed in 0.02s`, `Ran 3 tests … OK`). Installing a runner or asking for its version is not a test run, and neither is a summary a command only prints (`echo "4 passed in 0.02s"`, `cat pytest.log | tail -3`, `python -c "print(...)"`). Each test command counts by its latest run, with output trimming (`| tail -5`) and pytest's report-only flags (`-q`, `-v`, `--tb=short`) ignored. A run whose result could be lost counts only by its own summary: one with `!` before the runner, or after it a pipe (`| head -3`, `| Select-Object -First 5`), `||`, `;`, a newline or a background `&` (`pytest || true`, `pytest; echo $?`, `pytest & echo started`), or with its output sent to a file or `/dev/null` (`pytest > out.txt`). It is a pass only when its captured output holds a passing summary, a failure when that summary shows a failure or the shell still failed, and otherwise it is ignored: it backs no claim and doesn't replace an earlier run. `&&` and `2>&1` leave the runner's exit status as the result. The claim is backed when a test run passed after the last code change, made with a file tool or in the shell (`sed -i`, a patch, a redirect, `git checkout` of other code, `cp`, `mv` or `tee` into a source file, or a recursive copy into a folder; making a branch with `git checkout -b`, a backup copy such as `stats.py.bak`, `stats_backup.py` or `backup/stats.py`, and a copy into a temp folder don't count), in a folder that covers the changed file, and no test command run in such a folder after that change failed on its latest run, unless the answer plainly says a test fails now. Only a short list of statements counts: "still fails", "1 failed" or "2 failing", "is failing" or "are still failing", "doesn't pass" or "don't pass" (not with "anymore", "now", "again" or "no longer"), "not passing", "remains failing", "one test fails", and a named test failing after `;` or "but" ("all tests pass; test_mode fails"). A clause with any other negation ("doesn't fail anymore", "won't fail again", "can't fail"), about the past or a fix ("Fixed the off-by-one that made test_median fail", "2 tests failed, so I fixed them", "took care of the 2 failing tests"), a count of failures the same clause says are over ("the 2 failing tests now pass", "the 2 failures are gone", "2 errors are cleared"; such a sentence is itself read as a claim that tests pass), or about how code behaves ("fails fast on bad input") doesn't count: a narrower rerun that passes, such as `pytest -k 'not median'` or one test file, doesn't hide a wider run that failed. `python test_x.py` that runs no tests, a run of zero tests, a run before the last edit, and a run in a folder apart from the changed file don't back it. "The test passes an empty list" uses "pass" with an object and is not a claim. "Nothing was written to notes.md" and "I would have written totals.csv" are not claims of a save. A file named without a folder is also looked for beside a path the request named, when a command run in this request wrote it there. Four more checks catch what small models get wrong most:
+  - In a turn that looked at the folder, an answer that says a fact is absent while files that could hold it were never opened is sent back with their names. A search that found nothing doesn't count as opening them, since an exact phrase misses a rewording. The check is skipped for a folder of more than 40 documents, and when the request names a file that isn't there (that file is the missing thing).
+  - An answer that offers to read, check or work something out instead of doing it is sent back to do it. So is one whose last line says it will read or check a named file, and one that read a nearly identical file name in place of a missing one without saying so. A finished answer offering an optional extra, or a question before deleting or changing something, is left alone.
+  - Totals or rates from a CSV or spreadsheet that no program read the file to compute are sent back to be computed. Figures taken from the summary `file_read` returns with a CSV count as computed. The first command in a turn that names a small CSV `file_read` has not returned is held back once, with a pointer to read it first.
+  - When the request numbers two or more questions and the answer has fewer lines and sentences than questions, it is sent back to answer each one.
+  - An answer that reports text addressed to an AI assistant and then offers to carry it out is sent back to drop the offer, and one that reports it with no word of caution is sent back to advise against trusting what the text promotes.
+  - A one-line `python -c` script with a `try`, `for`, `if` or other block after a semicolon is refused before it runs, since it can only be a syntax error.
+  - An answer that stops at a script's missing module, with the script and its inputs unread, is sent back to work the result out directly.
+  - Asked what an order comes to, an answer whose every figure is copied from a file that lists quantities ("4 x HM-3") is sent back to multiply quantity by unit price.
+  - After a CSV was totalled by `file_read`, an answer that reports a bare 0 is sent back to say the item is not in the file if that is why.
+  - A `file_write` to a bare file name is held back when the request asked for the file next to one it names in a folder, with the path it should use.
+  - An answer that says it saved a text file and gives two or more figures (three digits or more), none of which is in that file, is sent back to write them into the file or say they aren't there. The file compared is the one a write tool was given this turn, when there was one. Figures the request gave, years in a date or after a word like "in" or "for", counts ("1,240 words"), row and page references, and answers that say something was removed are left out. The check is skipped when a saved file is over 200,000 bytes, is not UTF-8 text, or can't be read.
+
+  All checks share the one send-back a turn gets. If the answer given after it still says a file was saved that isn't there, or still gives figures the saved file lacks, a "Note from GAIA" line saying so is added under the answer, after one more push to call the tool that would make it true (agents built on the framework do the same by overriding `unresolvedClaims()`). An answer that still says tests passed with no test run behind it keeps its words, with "I couldn't confirm all of this:" and the reason under it, as the Python agent writes it, and the turn ends `incomplete` (exit 1 with `-p`); agents built on the framework add such caveats by overriding `unconfirmedClaims()`. A request that says to use no tools, or asks for a plan only, is not sent back for not looking. Agents built on the framework add their own checks by overriding `reviewFinalAnswer()`, using `turnToolCalls()` and `turnRequest()`.
+- **Tool guards:** some calls are refused before they run, with the reason and what to do instead.
+  - `file_write` and `file_edit` refuse a file with a process lock beside it (`sync.toml.lock` naming a pid or owner; a package manager's lock such as `Cargo.lock` doesn't count) or a header saying edits are discarded or not to edit it. They go ahead when the user's request mentions the lock or says "anyway" (paths in the request don't count).
+  - A shell command that uses a file name holding shell syntax (`;`, `&`, `|`, `$`, a backtick, `<`, `>`, parentheses) outside any quotes is refused, since the shell would run part of the name.
+  - A shell command that pastes five or more rows of a CSV in the folder is refused with advice to read the file by path in the script.
+  - A fourth back-to-back shell command that begins like the last three, after they printed the same output, is refused. An edit in between, or a command that waits (`sleep`, `curl`, `tail`), resets this.
+  - An inline script the shell expands (`python -c "..."` in double quotes, or an unquoted heredoc) that uses `${name}` or `$name` runs with a backslash put before that `$` when a POSIX shell runs it: the shell would otherwise replace it, usually with nothing, before the script starts, which is how a report ends up with blank totals. Upper-case names such as `$HOME`, `\$`, shell forms such as `${name:-default}`, single-quoted scripts, quoted heredocs, and variables the command or an earlier command of the turn sets are left alone.
+- **Reading files:** `file_read` names a nearly identical file name beside a missing one and asks the model to tell the user which file it used, refuses binary data, decodes UTF-16 text (up to 256 KB), names legacy-encoded text (Windows-1252, CP1251, Shift-JIS) instead of returning garbled text, says an empty file's data is missing rather than zero (a CSV with a header and no rows included, naming any log or text file beside it), names what in a CSV is not data or will split a total (a repeated header row, a totals row, blank lines, a column that spells one value several ways, semicolon separators), points at a later or an earlier version of a document beside the one read (`policy_v1.md` with `policy_v2.md`, or `terms_2024.md` with `terms_2026.txt`), describes a file of long lines that is one short unit repeated a thousand times or more instead of returning it, and on a CSV of more than 20 lines suggests reading it by path in a script. A CSV read whole also comes with a `summary`: the number of data rows, each numeric column's total, average, lowest and highest, and those totals and averages split by each short label column and by month, with labels matched ignoring case and spacing. A few bytes that are not UTF-8 in otherwise readable text are shown as their Windows-1252 characters, with a note. A file with Windows (CRLF) line endings is shown with plain line breaks and marked `line_endings: crlf`; `file_edit` matches it whichever line ending the model sends, and `file_edit` and `file_write` keep the file CRLF.
+- **"Always allow" is scoped:** in the interactive session, always allowing a shell command covers that program (`pytest`), or program and subcommand (`git status`), or the exact text of a chained or piped command, never every shell command. A path with `..` or `~` in it is approved only as written.
+- **Reasoning text:** `<think>…</think>` blocks never reach the answer. A reply that is empty, for example reasoning cut off by `maxTokens`, is asked for once more. After a compact model's empty reply at the limit, which is a runaway rather than reasoning, that one ask is capped at 1024 tokens.
+- **Cancel:** `requestCancel()` (Ctrl+C, or a server client disconnecting) stops the run at the next step, and at once while it waits on the model server: a model load, the wait for a first token, a streamed reply or document indexing. In the Agent UI a stopped turn that is still queued behind another chat's turn gives its place up. A second Ctrl+C exits at once, in the interactive session too, for a tool that won't return.
+- **A tool call buried in a reply:** a text tool call with words after it does not run, so the reply is sent back once and the model is asked to send the call on its own; a reply that holds only a plan is sent back the same way. An answer that shows a call as an example, in a code block or followed by its explanation, stays an answer. The same holds for a call written in `<tool_call>` tags: followed by a long explanation it is an example and is not run.
+- **Web access:** `web_fetch` follows redirects itself and refuses any hop that resolves to a loopback, private, link-local or metadata address, so a page can't steer the agent at Lemonade or other local services. `GAIA_WEB_FETCH_ALLOW_PRIVATE=1` allows the local network, and `--no-web` leaves the tool out. With `--no-web` the agent is also told not to search or fetch from the web through the shell or a script, and a shell command that fetches from another computer is refused before it runs: `curl`, `wget`, a page fetcher such as `lynx`, a PowerShell web request, a download tool, an encoded PowerShell command (it can't be read), a `/dev/tcp` or `/dev/udp` socket path, a `git` command given a remote repository's address (`git clone https://…`), or interpreter code that makes a network call, whether it is given on the command line, in a heredoc or here-string, or piped in. A wrapper such as `sudo`, `timeout`, `nice` or `uv run` doesn't hide the command it runs, and the string given to `sh -c` or `cmd /c`, or text piped into a shell, is checked as a command too. Importing a network library with no call and no remote address is allowed, and so is asking a fetch program for its `--version` or `--help`. Installing a package and connector (MCP) tools stay available. The check covers the common routes, not every one: cut the network to enforce it. The `--no-web` shell check is best-effort, and OS-level isolation is tracked in [#4609](https://github.com/amd/gaia/issues/4609).

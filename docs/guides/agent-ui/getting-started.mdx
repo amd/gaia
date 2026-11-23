@@ -160,7 +160,19 @@ two GAIA has tested. Picking one picks that device's chat model, and the
 chat list shows only that device's models. Setup keeps llama.cpp on Vulkan
 when it starts. On an integrated GPU, **Change how memory is split** opens GPU
 memory from there or from Check this PC. It is optional: unless you pick a
-new size, GAIA changes nothing. The models are grouped by job, and picking
+new size, GAIA changes nothing. **Agent** picks the program that runs GAIA,
+each shown with its download size: **gaiapy** (Full-featured, recommended and
+the default) has every tool and feature and is the most tested, but uses more
+memory and starts more slowly; **gaiacpp** (Fast and light, beta) starts in a
+fraction of a second and uses a few megabytes of memory, but has fewer tools
+and features so far and is less tested. **Compare the two** under the choice
+says the same. Your pick is saved when you press **Continue**, before
+setup's test chat, so that chat talks to the agent you chose. If gaiacpp isn't
+on the PC, the **Download** step gets it first, with its own progress bar,
+while the models wait; then it becomes the agent and the models download. If
+that download fails, or GAIA can't switch to it, setup stops there and offers
+to try again or carry on with gaiapy. Where this release offers no gaiacpp, its row says
+**Not installed** and the reason is shown under it. You can switch later in Settings › Agent & model. The models are grouped by job, and picking
 a chat model updates the jobs that depend on it:
 
 | Job | What you choose |
@@ -185,7 +197,10 @@ the bottom bar while setup works, including while GAIA's model server
 starts on Check this PC. Cancel keeps what finished, and **Retry** or
 **Resume** continues from there. Tick **Keep trying if the connection
 drops** to wait out a dropped connection for up to two minutes. Optional
-extras can be added here too; they are fetched and tested after the rest.
+extras can be added here too: they download once the rest is ready, so
+setup doesn't wait for them, and the Ready screen names any still coming.
+Extras you add are remembered if you quit setup. If you stop with only
+extras left, **Finish without the extras** checks the rest and finishes.
 
 ### Test
 
@@ -227,7 +242,7 @@ continue**. Your message waits until it's ready.
 you change it, and **Run setup again** goes through it once more. Your
 models, keys and chats stay.
 
-Every choice can be changed later in **Settings → Model**: the default chat
+Every choice can be changed later in **Settings → Agent & model**: the default chat
 model and the models on this PC under **Manage downloads and disk space**
 (tick a skipped model and **Apply** to download it; **Remove** deletes one
 only after you confirm), **GPU memory** on integrated-GPU PCs, and the
@@ -307,7 +322,12 @@ downloads in progress, which also show in the sidebar while they run.
 
     Or equivalently: `gaia chat --ui`
 
-    The Agent UI starts on [http://127.0.0.1:4200](http://127.0.0.1:4200).
+    The Agent UI starts on port 4200 and prints a link to open in your
+    browser, `http://127.0.0.1:4200/?launch=...`. The link signs that browser
+    in and works once, within 10 minutes; after that the browser stays signed
+    in, so `http://127.0.0.1:4200` alone is enough. A browser that isn't
+    signed in shows the page but can't load your chats: restart the Agent UI
+    and open the new link.
 
     | Flag | Description |
     |------|-------------|

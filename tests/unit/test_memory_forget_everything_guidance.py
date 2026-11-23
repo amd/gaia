@@ -24,7 +24,7 @@ from tests.unit.test_memory_forget_sticks import _Host
 
 VOICE_SKILL = (
     Path(__file__).resolve().parents[2]
-    / "hub/agents/gaia/python/gaia_agent/skills/gaia-voice/SKILL.md"
+    / "hub/agents/gaia/python/gaiapy/skills/gaia-voice/SKILL.md"
 )
 
 

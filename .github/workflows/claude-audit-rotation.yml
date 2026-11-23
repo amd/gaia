@@ -50,6 +50,7 @@ jobs:
       # `gh workflow run` with GITHUB_TOKEN: workflow_dispatch is the one event a
       # GITHUB_TOKEN may trigger.
       actions: write
+      issues: write
     steps:
       - uses: actions/checkout@v7
 
@@ -63,6 +64,7 @@ jobs:
             --summary "$GITHUB_STEP_SUMMARY" | tee -a "$GITHUB_OUTPUT"
 
       - name: Start it
+        id: start
         if: github.event.inputs.dry_run != 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -70,6 +72,18 @@ jobs:
           NIGHT: ${{ steps.pick.outputs.night }}
         run: |
           set -euo pipefail
-          gh workflow run "$WORKFLOW" --repo "${{ github.repository }}" --ref main \
-            -f rotation_night="$NIGHT"
-          echo "Started \`$WORKFLOW\` for rotation night $NIGHT: ${{ github.server_url }}/${{ github.repository }}/actions/workflows/$WORKFLOW" >> "$GITHUB_STEP_SUMMARY"
+          python3 scripts/audit/audit_dispatch.py "$GITHUB_REPOSITORY" "$WORKFLOW" "$NIGHT"
+
+      - name: Report missed audit
+        if: failure() && steps.start.outcome == 'failure' && github.event.inputs.dry_run != 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          WORKFLOW: ${{ steps.pick.outputs.workflow }}
+          NIGHT: ${{ steps.pick.outputs.night }}
+        run: |
+          if ! gh issue create --repo "$GITHUB_REPOSITORY" \
+            --title "Nightly audit not confirmed started: $WORKFLOW, rotation night $NIGHT" \
+            --body "The rotation could not dispatch this audit, or could not confirm its run started; the audit may still be running. Rotation run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"; then
+            echo "::error::Failed to open the audit dispatch issue"
+            exit 1
+          fi

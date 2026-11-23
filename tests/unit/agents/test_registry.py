@@ -58,7 +58,7 @@ class TestBuiltinRegistration:
     # gaia.agent entry point. Tests that need it importorskip the wheel so a
     # framework-only env tolerates its absence.
     def test_flagship_registered_when_wheel_installed(self):
-        pytest.importorskip("gaia_agent")
+        pytest.importorskip("gaiapy")
         registry = AgentRegistry()
         registry.discover()
         reg = registry.get("gaia")
@@ -67,7 +67,7 @@ class TestBuiltinRegistration:
         assert len(reg.conversation_starters) > 0
 
     def test_list_returns_the_flagship_and_no_retired_chat_profiles(self):
-        pytest.importorskip("gaia_agent")
+        pytest.importorskip("gaiapy")
         registry = AgentRegistry()
         registry.discover()
         ids = [r.id for r in registry.list()]
@@ -110,7 +110,7 @@ class TestBuiltinRegistration:
             assert legacy not in ids, f"{legacy} must no longer be its own card"
 
     def test_flagship_declares_full_and_lite_tiers(self):
-        pytest.importorskip("gaia_agent")
+        pytest.importorskip("gaiapy")
         registry = AgentRegistry()
         registry.discover()
         reg = registry.get("gaia")
@@ -165,11 +165,11 @@ class TestBuiltinRegistration:
 
     def test_legacy_lite_create_agent_uses_lite_tier(self):
         """``create_agent('chat-lite')`` builds the flagship with the ~4B preset."""
-        pytest.importorskip("gaia_agent")
+        pytest.importorskip("gaiapy")
         registry = AgentRegistry()
         registry.discover()
         for legacy in self._LEGACY_LITE_IDS:
-            with patch("gaia_agent.agent.GaiaAgent") as mock_agent:
+            with patch("gaiapy.agent.GaiaAgent") as mock_agent:
                 registry.create_agent(legacy)
             mock_agent.assert_called_once()
             config = mock_agent.call_args.kwargs["config"]
@@ -177,31 +177,31 @@ class TestBuiltinRegistration:
 
     def test_explicit_model_id_overrides_lite_tier(self):
         """A caller-pinned ``model_id`` wins over the alias's lite preset."""
-        pytest.importorskip("gaia_agent")
+        pytest.importorskip("gaiapy")
         registry = AgentRegistry()
         registry.discover()
-        with patch("gaia_agent.agent.GaiaAgent") as mock_agent:
+        with patch("gaiapy.agent.GaiaAgent") as mock_agent:
             registry.create_agent("chat-lite", model_id="Custom-Model-Override")
         config = mock_agent.call_args.kwargs["config"]
         assert config.model_id == "Custom-Model-Override"
 
     def test_explicit_model_tier_selects_lite_on_a_legacy_id(self):
         """A legacy id + ``model_tier='lite'`` selects the ~4B preset (#1162)."""
-        pytest.importorskip("gaia_agent")
+        pytest.importorskip("gaiapy")
         registry = AgentRegistry()
         registry.discover()
-        with patch("gaia_agent.agent.GaiaAgent") as mock_agent:
+        with patch("gaiapy.agent.GaiaAgent") as mock_agent:
             registry.create_agent("chat", model_tier="lite")
         config = mock_agent.call_args.kwargs["config"]
         assert config.model_id == _EXPECTED_PRIMARY
 
     def test_legacy_ids_create_the_flagship_on_its_default_model(self):
         """Plain ``chat``/``doc``/``file`` (full tier) leave model_id unset."""
-        pytest.importorskip("gaia_agent")
+        pytest.importorskip("gaiapy")
         registry = AgentRegistry()
         registry.discover()
         for legacy in self._LEGACY_IDS:
-            with patch("gaia_agent.agent.GaiaAgent") as mock_agent:
+            with patch("gaiapy.agent.GaiaAgent") as mock_agent:
                 registry.create_agent(legacy)
             config = mock_agent.call_args.kwargs["config"]
             assert config.model_id is None, legacy
@@ -213,7 +213,7 @@ class TestBuiltinRegistration:
         still resolve to the 4B preset even though the flagship carries no
         top-level ``models`` preference (#1162).
         """
-        pytest.importorskip("gaia_agent")
+        pytest.importorskip("gaiapy")
         registry = AgentRegistry()
         registry.discover()
         for legacy in self._LEGACY_LITE_IDS:
@@ -225,7 +225,7 @@ class TestBuiltinRegistration:
 
     def test_legacy_full_tier_resolve_model_returns_none(self):
         """The full tier defers to the agent default — resolve_model is None."""
-        pytest.importorskip("gaia_agent")
+        pytest.importorskip("gaiapy")
         registry = AgentRegistry()
         registry.discover()
         resolved = registry.resolve_model("chat", available_models=[_EXPECTED_PRIMARY])
@@ -244,7 +244,7 @@ class TestBuiltinRegistration:
 
     def test_flagship_has_no_memory_requirement_by_default(self):
         """The full tier leaves min_memory_gb unset — existing behaviour."""
-        pytest.importorskip("gaia_agent")
+        pytest.importorskip("gaiapy")
         registry = AgentRegistry()
         registry.discover()
         reg = registry.get("chat")

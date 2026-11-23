@@ -10,6 +10,7 @@ import os
 import subprocess
 import sys
 import threading
+import time
 
 import pytest
 
@@ -56,17 +57,62 @@ def test_shuts_down_once_the_daemon_dies():
         daemon.kill()
 
 
+def _wait_until_psutil_sees_it_gone(pid, timeout=10.0):
+    # Windows lists a just-killed process for a moment after wait() returns.
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if parent_watch._identity(pid) is None:
+            return
+        time.sleep(0.05)
+    pytest.fail(f"psutil still reports pid {pid} {timeout}s after it was killed")
+
+
 def test_a_daemon_already_gone_at_start_refuses_to_start_in_one_line():
     """A SIGINT before the server is listening surfaced as a bare traceback."""
     daemon = _sleeper()
     daemon.kill()
     daemon.wait()
+    _wait_until_psutil_sees_it_gone(daemon.pid)
     gone = threading.Event()
     with pytest.raises(ValueError, match="already gone"):
         parent_watch.start(
             env={DAEMON_PID_ENV_VAR: str(daemon.pid)}, poll_s=0.1, on_gone=gone.set
         )
     assert not gone.is_set()
+
+
+def test_a_daemon_missing_from_the_process_table_refuses_to_start(monkeypatch):
+    """Same refusal with no real process, so no OS timing is involved."""
+    import psutil
+
+    def no_such(pid):
+        raise psutil.NoSuchProcess(pid)
+
+    monkeypatch.setattr(parent_watch.psutil, "Process", no_such)
+    gone = threading.Event()
+    with pytest.raises(ValueError, match="pid 4242.*already gone"):
+        parent_watch.start(env={DAEMON_PID_ENV_VAR: "4242"}, on_gone=gone.set)
+    assert parent_watch._watcher is None
+    assert not gone.is_set()
+
+
+def test_a_daemon_reported_as_a_zombie_at_start_refuses_to_start(monkeypatch):
+    import psutil
+
+    class _Zombie:
+        def __init__(self, _pid):
+            pass
+
+        def status(self):
+            return psutil.STATUS_ZOMBIE
+
+        def create_time(self):
+            return 1234.0
+
+    monkeypatch.setattr(parent_watch.psutil, "Process", _Zombie)
+    with pytest.raises(ValueError, match="already gone"):
+        parent_watch.start(env={DAEMON_PID_ENV_VAR: "4242"}, on_gone=lambda: None)
+    assert parent_watch._watcher is None
 
 
 def test_the_daemon_hands_its_pid_to_the_sidecars_it_spawns(tmp_path, monkeypatch):
@@ -173,7 +219,7 @@ def test_stop_ends_the_watcher_without_firing():
         daemon.kill()
 
 
-@pytest.mark.parametrize("agent, package", [("gaia", "gaia_agent")])
+@pytest.mark.parametrize("agent, package", [("gaia", "gaiapy")])
 def test_the_dev_mode_module_starts_the_watch_when_imported(
     monkeypatch, agent, package
 ):
@@ -208,7 +254,7 @@ def test_the_dev_mode_module_refuses_a_bad_pid_in_one_line(monkeypatch):
     import importlib.util
     from pathlib import Path
 
-    pytest.importorskip("gaia_agent")
+    pytest.importorskip("gaiapy")
     path = (
         Path(__file__).resolve().parents[2]
         / "hub"

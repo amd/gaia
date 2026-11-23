@@ -39,6 +39,13 @@ into the library and is attached to the chat you asked in, the same as one you
 add from the library. A file outside the folders the library reads from goes in
 as a copy, and the chat says so: edits to the original don't reach the copy.
 
+A document you attach in the message box (**+**, or dropped on it) goes into the
+library too, attached to that chat, once you send the message. It shows in the
+bar above the chat and in the session panel's **Documents**. Remove it there
+(or in the library) and the chat can no longer read it; ask about it and GAIA
+says to attach it again. Images and recordings you attach are read with the
+message but aren't listed.
+
 A chat searches at most 100 documents, or 10,000 passages (about nine long
 books), at once. Attach more and the bar above the chat says so, naming the
 limit the chat reached: the document count, or the passages a few long
@@ -116,7 +123,7 @@ panel is open eases in, so you can see what is new:
 | The chat… | Chip | What the panel adds |
 |---|---|---|
 | only talks | **Chat** | Nothing: just where it runs and what it may touch |
-| changed files, loaded the coding skill, or ran a developer tool such as `git` or `npm` | **Coding** | Once it has changed files: the repository and branch with the uncommitted count, and **Changes** moves up under Environment. Before that, the chip alone |
+| changed code or project files, loaded the coding skill, or ran a developer tool such as `git` or `npm` | **Coding** | Once it has changed files: the repository and branch with the uncommitted count, and **Changes** moves up under Environment. Before that, the chip alone |
 | ran shell commands | **Commands** | A **Commands** section: each command newest first, marked as run, failed, stopped, running or not run, with the failures counted; a command takes you to the turn that ran it |
 | holds documents | **Documents** | A **Documents** section: each file, whether it is still being indexed or failed, how many passages it was split into, and how many the latest answer used |
 | is run by a schedule | **Scheduled** | A **Schedule** section: when it runs, the next run, the run count, the last failure, and **Pause** and **Run now** |
@@ -157,8 +164,10 @@ GAIA's own folders, the same in every chat, wait behind one line.
     path; hover over the path for where it came from. **Add folder** gives it another folder, picked
     the same way as from a new chat's folder;
     **Remove** takes one away. A removed folder is refused by every file and
-    shell tool, even under full access and even inside a wider folder, until
-    you add it back. A document attached to the chat is removed from the
+    shell tool, even inside a wider folder, until you add it back. Under full
+    access the file tools still refuse it, and no command or Python code runs
+    in it, but a command or code that spells out a path inside it is not
+    checked. A document attached to the chat is removed from the
     document bar instead, which also takes it out of the chat's search.
   - **Permissions:** Ask or Full access, the same setting as the shield in
     the message box. It covers this chat only; new chats follow **Settings →
@@ -195,8 +204,9 @@ GAIA's own folders, the same in every chat, wait behind one line.
   [See how full the context is](/guides/agent-ui/chat#see-how-full-the-context-is).
 - **Outputs** appears once the chat has produced something. It lists
   everything, newest first: files created
-  or changed, exports (PDF, Word, Excel, CSV and similar), images, documents
-  indexed, scheduled tasks and memories saved. Each shows when it was made and
+  or changed, exports (PDF, Word, Excel, CSV and similar), images, generated
+  music and sound effects, documents indexed, scheduled tasks and memories
+  saved. Each shows when it was made and
   **Go to turn** scrolls to the answer that made it. Files have **Open** and
   **Show in folder**, with the same rule as above for scripts and web pages.
   Items an undo removed show as **Undone**.

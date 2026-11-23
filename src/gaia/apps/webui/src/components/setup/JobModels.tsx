@@ -46,6 +46,7 @@ function RadioRow({ name, entry: e, checked, recommended, disabled, onPick, chil
                     </span>
                     <span className="mc-status">{statusText(e, t)}</span>
                     {e.fits === false && <span className="mc-warn is-big" role="note"><AlertTriangle size={13} aria-hidden="true" /> {tooBigText(e, t)}</span>}
+                    {e.fits === true && e.tight && <span className="mc-warn" role="note"><AlertTriangle size={13} aria-hidden="true" /> {t('setup.models.warn.tight')}</span>}
                     {children}
                 </span>
             </label>

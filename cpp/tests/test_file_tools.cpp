@@ -1,12 +1,15 @@
 // Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 // SPDX-License-Identifier: MIT
 
+#include "support/unique_temp.h"
 #include <gtest/gtest.h>
 #include <gaia/file_tools.h>
 #include <gaia/tool_registry.h>
 
+#include <cstdlib>
 #include <filesystem>
 #include <fstream>
+#include <sstream>
 #include <string>
 
 namespace fs = std::filesystem;
@@ -17,7 +20,7 @@ protected:
     fs::path tempDir_;
 
     void SetUp() override {
-        tempDir_ = fs::temp_directory_path() / "gaia_file_tools_test";
+        tempDir_ = fs::temp_directory_path() / testsupport::perProcess("gaia_file_tools_test");
         fs::create_directories(tempDir_);
         // The read/write anchor table is process-wide; clear it so these
         // cases are independent of each other and of run order.
@@ -70,6 +73,156 @@ TEST_F(FileToolsTest, FileRead_BasicContent) {
     EXPECT_TRUE(content.find("line1") != std::string::npos);
     EXPECT_TRUE(content.find("line2") != std::string::npos);
     EXPECT_TRUE(content.find("line3") != std::string::npos);
+}
+
+TEST_F(FileToolsTest, FileRead_OneRepeatedCharacterIsDescribedNotReturned) {
+    ToolInfo tool = FileIOTools::fileRead();
+    json result = tool.callback({{"path", writeFile("report.txt", std::string(4000, 'D'))}});
+    EXPECT_FALSE(result.contains("error"));
+    EXPECT_LT(result["content"].get<std::string>().size(), 40u);
+    EXPECT_NE(result["note"].get<std::string>().find("no real content"), std::string::npos);
+
+    json large = tool.callback({{"path", writeFile("big.txt", std::string(40000, 'D'))}});
+    EXPECT_NE(large.value("note", "").find("first 32 KB"), std::string::npos) << large.dump().substr(0, 300);
+    std::string column;
+    for (int i = 0; i < 1500; ++i) column += "0\n";
+    EXPECT_FALSE(tool.callback({{"path", writeFile("column.txt", column)}}).contains("note"));
+
+    // Real text, a short run, and a ranged read come back as they are.
+    json prose = tool.callback({{"path", writeFile("prose.txt", std::string(3000, 'a') + " then a sentence.")}});
+    EXPECT_FALSE(prose.contains("note"));
+    json brief = tool.callback({{"path", writeFile("rule.txt", std::string(200, '-'))}});
+    EXPECT_EQ(brief["content"].get<std::string>().size(), 200u);
+    std::string rows;
+    for (int i = 0; i < 600; ++i) rows += "0,0\n";
+    json ranged = tool.callback({{"path", writeFile("zeros.csv", rows)}, {"start_line", 1}, {"end_line", 5}});
+    EXPECT_EQ(ranged.value("note", "").find("no real content"), std::string::npos);
+}
+
+TEST_F(FileToolsTest, FileRead_AMissingFileNamesTheNearMatchBesideIt) {
+    ToolInfo tool = FileIOTools::fileRead();
+    const std::string real = writeFile("q3_summary.md", "Revenue: 412,000\n");
+    const std::string typo = real.substr(0, real.size() - std::string("q3_summary.md").size()) + "q3_sumary.md";
+    const std::string error = tool.callback({{"path", typo}}).value("error", "");
+    EXPECT_NE(error.find("q3_summary.md"), std::string::npos) << error;
+    EXPECT_NE(error.find("tell the user"), std::string::npos) << error;
+    const std::string other = real.substr(0, real.size() - std::string("q3_summary.md").size()) + "budget.md";
+    EXPECT_EQ(tool.callback({{"path", other}}).value("error", "").find("q3_summary.md"), std::string::npos);
+}
+
+TEST_F(FileToolsTest, FileRead_ALaterVersionBesideTheFileIsPointedOut) {
+    ToolInfo tool = FileIOTools::fileRead();
+    const std::string v1 = writeFile("pricing_policy_v1.md", "Discount limit: 15%\n");
+    writeFile("pricing_policy_v2.md", "Discount limit: 12%\n");
+    const std::string old = writeFile("terms_2024.md", "Net 30\n");
+    const std::string current = writeFile("terms_2026.txt", "Net 45\n");
+    EXPECT_NE(tool.callback({{"path", v1}}).value("note", "").find("pricing_policy_v2.md"), std::string::npos);
+    EXPECT_NE(tool.callback({{"path", old}}).value("note", "").find("terms_2026.txt"), std::string::npos);
+    const std::string newest = tool.callback({{"path", current}}).value("note", "");
+    EXPECT_NE(newest.find("terms_2024.md"), std::string::npos) << newest;
+    EXPECT_NE(newest.find("earlier version"), std::string::npos) << newest;
+
+    // Dated notes, data files and unrelated names are not versions of one document.
+    const std::string roundup = writeFile("news_2026-09.md", "a\n");
+    writeFile("news_2026-10.md", "b\n");
+    const std::string data = writeFile("sales_2024.csv", "a,b\n1,2\n");
+    writeFile("sales_2025.csv", "a,b\n3,4\n");
+    const std::string lone = writeFile("v1.md", "x\n");
+    writeFile("v2.md", "y\n");
+    for (const std::string& p : {roundup, data, lone}) {
+        EXPECT_FALSE(tool.callback({{"path", p}}).contains("note")) << p;
+    }
+}
+
+TEST_F(FileToolsTest, FileRead_Utf16TextIsDecoded) {
+    ToolInfo tool = FileIOTools::fileRead();
+    std::string raw = "\xFF\xFE";
+    for (char c : std::string("team,score\r\nSync,4\r\nCore,9\r\nSync,6\r\n")) {
+        raw.push_back(c);
+        raw.push_back('\0');
+    }
+    raw += std::string("\xE9\x00\n\x00", 4);  // e-acute, then a line end
+    const std::string path = writeFile("survey_utf16.csv", raw);
+    const json read = tool.callback({{"path", path}});
+    EXPECT_EQ(read.value("content", ""), "team,score\nSync,4\nCore,9\nSync,6\n\xC3\xA9") << read.dump();
+    EXPECT_NE(read.value("note", "").find("UTF-16"), std::string::npos);
+    EXPECT_NE(read.value("summary", "").find("score by team: Sync 10"), std::string::npos) << read.dump();
+    EXPECT_EQ(tool.callback({{"path", path}, {"start_line", 2}, {"end_line", 2}}).value("content", ""), "Sync,4");
+}
+
+TEST_F(FileToolsTest, FileRead_AStrayWindows1252ByteIsShownAsItsCharacter) {
+    ToolInfo tool = FileIOTools::fileRead();
+    const std::string menu = writeFile("menu.txt", "Tasting menu for ten: \x80" "1,250\nCaf\xE9 terrace, na\xC3\xAFve art\n");
+    const json read = tool.callback({{"path", menu}});
+    const std::string content = read.value("content", "");
+    EXPECT_NE(content.find("\xE2\x82\xAC" "1,250"), std::string::npos) << content;
+    EXPECT_NE(content.find("Caf\xC3\xA9 terrace, na\xC3\xAFve"), std::string::npos) << content;
+    EXPECT_NE(read.value("note", "").find("2 bytes are not UTF-8"), std::string::npos) << read.dump();
+    const std::string plain = writeFile("plain.txt", "na\xC3\xAFve\n");
+    EXPECT_FALSE(tool.callback({{"path", plain}}).contains("note"));
+}
+
+TEST_F(FileToolsTest, FileRead_ACsvComesWithItsTotals) {
+    ToolInfo tool = FileIOTools::fileRead();
+    const std::string messy = writeFile(
+        "sales_messy.csv",
+        "Date,Region,Rep,Amount\n2026-01-04,North,Priya,\"$1,204.50\"\n2026-01-06,south,Marco,880.00\n"
+        "2026-01-09,North ,Priya,\"$2,310.00\"\n\nDate,Region,Rep,Amount\n2026-02-22,NORTH,Lena,\"$1,480.00\"\n"
+        "TOTAL,,,\"$5,874.50\"\n");
+    const json read = tool.callback({{"path", messy}});
+    const std::string summary = read.value("summary", "");
+    EXPECT_NE(summary.find("all 4 data rows"), std::string::npos) << summary;
+    EXPECT_NE(summary.find("Amount: total 5874.50 over 4 rows (average 1468.6"), std::string::npos) << summary;
+    EXPECT_NE(summary.find("Amount by Region: North 4994.50 (85.0%), south 880.00 (15.0%)"), std::string::npos)
+        << summary;
+    EXPECT_NE(summary.find("Amount by Date: 2026-01 4394.50"), std::string::npos) << summary;
+    EXPECT_NE(summary.find("rows by Rep: Lena 1, Marco 1, Priya 2"), std::string::npos) << summary;
+    EXPECT_NE(read.value("note", "").find("summary field"), std::string::npos);
+
+    // Semicolons, whole numbers, and a cell that is not a number.
+    const std::string ledger = writeFile("ledger.csv", "team;units\nA;3\nB;n/a\nA;4\nB;5\nA;1\n");
+    const std::string units = tool.callback({{"path", ledger}}).value("summary", "");
+    EXPECT_NE(units.find("units: total 13 over 4 rows"), std::string::npos) << units;
+    EXPECT_NE(units.find("1 cells are not numbers"), std::string::npos) << units;
+    EXPECT_NE(units.find("units by team: A 8 (61.5%), B 5 (38.5%)"), std::string::npos) << units;
+    EXPECT_NE(units.find("average units by team: B 5.00, A 2.67"), std::string::npos) << units;
+
+    // A header with no rows points at the log beside it.
+    const std::string empty = writeFile("orders_2026-09.csv", "order_id,amount\n");
+    writeFile("export_run.txt", "ERROR could not connect\n");
+    EXPECT_NE(tool.callback({{"path", empty}}).value("note", "").find("export_run.txt"), std::string::npos);
+
+    const std::string euro = writeFile("konto.csv", "posten;betrag\nMiete;1.200,50\nStrom;80,25\nMiete;1200,50\n");
+    const std::string betrag = tool.callback({{"path", euro}}).value("summary", "");
+    EXPECT_NE(betrag.find("betrag: total 2481.25 over 3 rows"), std::string::npos) << betrag;
+
+    // Nothing to total: no summary.
+    const std::string words = writeFile("words.csv", "term,meaning\nalpha,the first one of a long series of them\n"
+                                                     "beta,the second one of a long series of things\n");
+    EXPECT_FALSE(tool.callback({{"path", words}}).contains("summary"));
+}
+
+TEST_F(FileToolsTest, FileRead_ACsvsRowsThatAreNotDataAreNamed) {
+    ToolInfo tool = FileIOTools::fileRead();
+    const std::string messy = writeFile(
+        "sales_messy.csv",
+        "Date,Region,Rep,Amount\n2026-01-04,North,Priya,\"$1,204.50\"\n2026-01-06,south,Marco,880.00\n"
+        "2026-01-09,North ,Priya,\"$2,310.00\"\n\nDate,Region,Rep,Amount\n2026-01-22,NORTH,Lena,\"$1,480.00\"\n"
+        "TOTAL,,,\"$5,874.50\"\n");
+    const std::string note = tool.callback({{"path", messy}}).value("note", "");
+    EXPECT_NE(note.find("line 6 repeats the header"), std::string::npos) << note;
+    EXPECT_NE(note.find("line 8 is a totals row"), std::string::npos) << note;
+    EXPECT_NE(note.find("1 blank line"), std::string::npos) << note;
+    EXPECT_NE(note.find("column region spells one value several ways"), std::string::npos) << note;
+
+    const std::string headerOnly = writeFile("orders_2026-09.csv", "order_id,customer,amount,placed_at\n");
+    EXPECT_NE(tool.callback({{"path", headerOnly}}).value("note", "").find("no data rows"), std::string::npos);
+    const std::string ledger = writeFile("ledger.csv", "datum;posten;betrag\n2026-01-01;Miete;1200,00\n");
+    EXPECT_NE(tool.callback({{"path", ledger}}).value("note", "").find("semicolons"), std::string::npos);
+
+    // A tidy file gets no such note.
+    const std::string tidy = writeFile("tidy.csv", "region,amount\nNorth,1200\nSouth,340\nNorth,2150\n");
+    EXPECT_EQ(tool.callback({{"path", tidy}}).value("note", "").find("Before totalling"), std::string::npos);
 }
 
 TEST_F(FileToolsTest, FileRead_WithLineRange) {
@@ -458,7 +611,7 @@ protected:
     fs::path tempDir_;
 
     void SetUp() override {
-        tempDir_ = fs::temp_directory_path() / "gaia_file_tools_hardening";
+        tempDir_ = fs::temp_directory_path() / testsupport::perProcess("gaia_file_tools_hardening");
         std::error_code ec;
         fs::remove_all(tempDir_, ec);
         fs::create_directories(tempDir_);
@@ -795,22 +948,117 @@ TEST_F(FileToolsHardeningTest, FileSearch_PathPatternsAndCharacterClasses) {
 
 // --- Regressions found in review --------------------------------------------
 
-TEST_F(FileToolsHardeningTest, FileRead_ReturnsRawBytesSoEditsMatch) {
-    // A CRLF file must read back with its CRLFs intact: the model copies
-    // old_string out of what file_read showed it, and file_edit searches the
-    // bytes on disk. If the two disagree the edit can never match.
-    std::string path = writeFile("crlf.txt", "alpha\r\nbeta\r\n");
+TEST_F(FileToolsHardeningTest, CrlfFile_ReadShowsLfAndAnLfEditKeepsCrlf) {
+    const std::string original = "[server]\r\nhost = local\r\nport = 8080\r\n";
+    std::string path = writeFile("crlf.ini", original);
+
+    json read = FileIOTools::fileRead().callback({{"path", path}});
+    ASSERT_FALSE(read.contains("error")) << read.dump();
+    EXPECT_EQ(read.value("content", ""), "[server]\nhost = local\nport = 8080");
+    EXPECT_EQ(read.value("line_endings", ""), "crlf");
+    EXPECT_EQ(read["lines"], 3);
+    EXPECT_EQ(read["content_hash"], FileStateTracker::hashContent(original).substr(0, 12));
+
+    json ranged = FileIOTools::fileRead().callback({{"path", path}, {"start_line", 2}, {"end_line", 2}});
+    EXPECT_EQ(ranged.value("content", ""), "host = local") << ranged.dump();
+
+    json edit = FileIOTools::fileEdit().callback(
+        {{"path", path}, {"old_string", "host = local\nport = 8080"}, {"new_string", "host = remote\nport = 9090\ntls = on"}});
+    ASSERT_FALSE(edit.contains("error")) << edit.dump();
+    EXPECT_EQ(edit.value("line_endings", ""), "crlf");
+    const std::string after = readFile(path);
+    EXPECT_EQ(after, "[server]\r\nhost = remote\r\nport = 9090\r\ntls = on\r\n");
+    EXPECT_EQ(after.find("\r\r"), std::string::npos);
+    EXPECT_EQ(edit["content_hash"], FileStateTracker::hashContent(after).substr(0, 12));
+
+    json again = FileIOTools::fileEdit().callback({{"path", path}, {"old_string", "tls = on"}, {"new_string", "tls = off"}});
+    ASSERT_FALSE(again.contains("error")) << "an edit after an edit is not stale: " << again.dump();
+    EXPECT_EQ(readFile(path), "[server]\r\nhost = remote\r\nport = 9090\r\ntls = off\r\n");
+}
+
+TEST_F(FileToolsHardeningTest, CrlfFile_AnEditGivenInCrlfWritesTheSameBytes) {
+    const std::string original = "alpha\r\nbeta\r\ngamma";
+    std::string lfPath = writeFile("lf_args.txt", original);
+    std::string crlfPath = writeFile("crlf_args.txt", original);
+
+    json lf = FileIOTools::fileEdit().callback(
+        {{"path", lfPath}, {"old_string", "alpha\nbeta"}, {"new_string", "one\ntwo"}});
+    json crlf = FileIOTools::fileEdit().callback(
+        {{"path", crlfPath}, {"old_string", "alpha\r\nbeta"}, {"new_string", "one\r\ntwo"}});
+    ASSERT_FALSE(lf.contains("error")) << lf.dump();
+    ASSERT_FALSE(crlf.contains("error")) << crlf.dump();
+    EXPECT_EQ(readFile(lfPath), "one\r\ntwo\r\ngamma") << "no final newline before, none after";
+    EXPECT_EQ(readFile(crlfPath), readFile(lfPath));
+}
+
+TEST_F(FileToolsHardeningTest, CrlfFile_EditErrorsShowLfText) {
+    std::string path = writeFile("hints.txt", "one\r\ntwo\r\none\r\n");
+
+    json missing = FileIOTools::fileEdit().callback({{"path", path}, {"old_string", "three"}, {"new_string", "x"}});
+    ASSERT_TRUE(missing.contains("error"));
+    EXPECT_EQ(missing.value("current_content", ""), "one\ntwo\none") << missing.dump();
+
+    json ambiguous = FileIOTools::fileEdit().callback({{"path", path}, {"old_string", "one\n"}, {"new_string", "x\n"}});
+    ASSERT_TRUE(ambiguous.value("ambiguous", false)) << ambiguous.dump();
+    EXPECT_EQ(ambiguous["match_lines"], (json::array({1, 3})));
+    EXPECT_EQ(ambiguous.value("current_content", ""), "one\ntwo\none");
+    EXPECT_EQ(readFile(path), "one\r\ntwo\r\none\r\n");
+}
+
+TEST_F(FileToolsHardeningTest, CrlfFile_WriteKeepsCrlfAndNeverDoublesIt) {
+    std::string path = writeFile("notes.txt", "old\r\ntext\r\n");
+
+    json lf = FileIOTools::fileWrite().callback({{"path", path}, {"content", "new\ntext\nhere\n"}});
+    ASSERT_FALSE(lf.contains("error")) << lf.dump();
+    EXPECT_EQ(lf.value("line_endings", ""), "crlf");
+    std::string after = readFile(path);
+    EXPECT_EQ(after, "new\r\ntext\r\nhere\r\n");
+    EXPECT_EQ(lf["bytes_written"], static_cast<int>(after.size()));
+    EXPECT_EQ(lf["content_hash"], FileStateTracker::hashContent(after).substr(0, 12));
+
+    const std::string given = "a\r\nb\r\nno newline at the end";
+    json crlf = FileIOTools::fileWrite().callback({{"path", path}, {"content", given}});
+    ASSERT_FALSE(crlf.contains("error")) << "a write after a write is not stale: " << crlf.dump();
+    EXPECT_FALSE(crlf.contains("line_endings"));
+    after = readFile(path);
+    EXPECT_EQ(after, given);
+    EXPECT_EQ(after.find("\r\r\n"), std::string::npos);
+
+    std::string fresh = (tempDir_ / "fresh.txt").string();
+    ASSERT_FALSE(FileIOTools::fileWrite().callback({{"path", fresh}, {"content", "a\nb\n"}}).contains("error"));
+    EXPECT_EQ(readFile(fresh), "a\nb\n");
+}
+
+TEST_F(FileToolsHardeningTest, LfFile_IsLeftByteForByteAlone) {
+    std::string path = writeFile("unix.txt", "alpha\nbeta\ngamma\n");
 
     json read = FileIOTools::fileRead().callback({{"path", path}});
     ASSERT_FALSE(read.contains("error"));
-    const std::string shown = read["content"].get<std::string>();
-    EXPECT_NE(shown.find("alpha\r"), std::string::npos);
-    EXPECT_EQ(read["lines"], 2);
+    EXPECT_EQ(read.value("content", ""), "alpha\nbeta\ngamma");
+    EXPECT_FALSE(read.contains("line_endings"));
 
     json edit = FileIOTools::fileEdit().callback(
         {{"path", path}, {"old_string", "alpha\r\nbeta"}, {"new_string", "one\r\ntwo"}});
     ASSERT_FALSE(edit.contains("error")) << edit.dump();
-    EXPECT_EQ(readFile(path), "one\r\ntwo\r\n");
+    EXPECT_FALSE(edit.contains("line_endings"));
+    EXPECT_EQ(readFile(path), "one\ntwo\ngamma\n");
+
+    json write = FileIOTools::fileWrite().callback({{"path", path}, {"content", "x\ny\n"}});
+    ASSERT_FALSE(write.contains("error")) << write.dump();
+    EXPECT_FALSE(write.contains("line_endings"));
+    EXPECT_EQ(readFile(path), "x\ny\n");
+}
+
+TEST_F(FileToolsHardeningTest, MixedEndings_AnExactEditTouchesNothingElse) {
+    std::string path = writeFile("mixed.txt", "one\r\ntwo\nthree\r\nfour\rfive\n");
+
+    json edit = FileIOTools::fileEdit().callback({{"path", path}, {"old_string", "two\nthree\r\n"}, {"new_string", "2\n3\r\n"}});
+    ASSERT_FALSE(edit.contains("error")) << edit.dump();
+    EXPECT_EQ(readFile(path), "one\r\n2\n3\r\nfour\rfive\n");
+
+    json word = FileIOTools::fileEdit().callback({{"path", path}, {"old_string", "one"}, {"new_string", "uno"}});
+    ASSERT_FALSE(word.contains("error")) << word.dump();
+    EXPECT_EQ(readFile(path), "uno\r\n2\n3\r\nfour\rfive\n");
 }
 
 TEST_F(FileToolsHardeningTest, FileRead_HashAnchorsTheBytesItShowed) {
@@ -899,4 +1147,234 @@ TEST_F(FileToolsHardeningTest, FileSearch_OversizedPatternIsRejected) {
     ASSERT_TRUE(result.contains("error"));
     EXPECT_NE(result["error"].get<std::string>().find("limit is 512"),
               std::string::npos);
+}
+
+// ---------------------------------------------------------------------------
+// Non-ASCII names: a model writes paths in UTF-8, whatever the code page
+// ---------------------------------------------------------------------------
+
+TEST_F(FileToolsTest, NonAsciiNamesAreReadAndWrittenAsUtf8) {
+    const std::string name = "r\xc3\xa9sum\xc3\xa9-\xe6\x97\xa5\xe6\x9c\xac.txt";
+    const fs::path onDisk = tempDir_ / fs::u8path("docs \xc3\xb1") / fs::u8path(name);
+    const std::string path = onDisk.u8string();
+    const std::string cafe = "caf\xc3\xa9";
+
+    json written = FileIOTools::fileWrite().callback({{"path", path}, {"content", cafe + " au lait\n"}});
+    ASSERT_FALSE(written.contains("error")) << written.dump();
+    ASSERT_TRUE(fs::exists(onDisk)) << "the file carries the name the model gave";
+    size_t entries = 0;
+    for (const auto& e : fs::directory_iterator(onDisk.parent_path())) {
+        ++entries;
+        EXPECT_EQ(e.path().filename().u8string(), name);
+    }
+    EXPECT_EQ(entries, 1u) << "and no second, mis-spelled copy";
+
+    json read = FileIOTools::fileRead().callback({{"path", path}});
+    ASSERT_FALSE(read.contains("error")) << read.dump();
+    EXPECT_NE(read["content"].get<std::string>().find(cafe), std::string::npos);
+    EXPECT_EQ(read["path"], path);
+
+    json edited = FileIOTools::fileEdit().callback({{"path", path}, {"old_string", cafe}, {"new_string", "tea"}});
+    ASSERT_FALSE(edited.contains("error")) << edited.dump();
+    std::ifstream in(onDisk, std::ios::binary);
+    std::ostringstream now;
+    now << in.rdbuf();
+    EXPECT_EQ(now.str(), "tea au lait\n");
+
+    for (const json& args : {json{{"pattern", "*.txt"}, {"path", tempDir_.u8string()}},
+                             json{{"pattern", "*.txt"}, {"path", tempDir_.u8string()}, {"content_pattern", "tea"}}}) {
+        json found = FileIOTools::fileSearch().callback(args);
+        ASSERT_FALSE(found.contains("error")) << found.dump();
+        ASSERT_EQ(found["matches"].size(), 1u) << found.dump();
+        const std::string match = found["matches"][0]["path"];
+        EXPECT_EQ(fs::u8path(match).filename().u8string(), name);
+        EXPECT_NO_THROW(found.dump()) << "the result is valid UTF-8 JSON";
+    }
+}
+
+TEST_F(FileToolsTest, FileSearch_DoesNotLeaveTheFolderThroughALink) {
+    const fs::path outside = fs::temp_directory_path() / testsupport::perProcess("gaia_file_tools_outside");
+    std::error_code ec;
+    fs::remove_all(outside, ec);
+    fs::create_directories(outside);
+    {
+        std::ofstream secret(outside / "private.txt", std::ios::binary);
+        secret << "ORCHID\n";
+    }
+    writeFile("inside.txt", "ORCHID\n");
+    const fs::path link = tempDir_ / "linked";
+#ifdef _WIN32
+    // A junction, which needs no privilege and is not reported as a symlink.
+    const std::string make = "cmd /c mklink /J \"" + link.string() + "\" \"" + outside.string() + "\" >nul";
+    ASSERT_EQ(std::system(make.c_str()), 0) << make;
+#else
+    fs::create_directory_symlink(outside, link);
+    fs::create_symlink(outside / "private.txt", tempDir_ / "alias.txt");
+#endif
+
+    for (const json& args : {json{{"pattern", "*"}, {"path", tempDir_.u8string()}},
+                             json{{"pattern", "*"}, {"path", tempDir_.u8string()}, {"content_pattern", "ORCHID"}}}) {
+        json found = FileIOTools::fileSearch().callback(args);
+        ASSERT_FALSE(found.contains("error")) << found.dump();
+        ASSERT_EQ(found["matches"].size(), 1u) << found.dump();
+        const std::string match = found["matches"][0]["path"];
+        EXPECT_EQ(fs::u8path(match).filename().u8string(), "inside.txt");
+    }
+
+    // The link first, so cleaning up cannot reach through it.
+    fs::remove(link, ec);
+    fs::remove_all(outside, ec);
+}
+
+// Junctions need no privilege, so on Windows this runs everywhere rather than skipping.
+TEST_F(FileToolsTest, FileSearch_DoesNotWalkIntoAFolderLinkOutOrBackIn) {
+    const fs::path outside = fs::temp_directory_path() / testsupport::perProcess("gaia_file_tools_far");
+    std::error_code ec;
+    fs::remove_all(outside, ec);
+    fs::create_directories(outside / "deeper");
+    std::ofstream(outside / "deeper" / "beyond.txt", std::ios::binary) << "ORCHID\n";
+    writeFile("inside.txt", "ORCHID\n");
+    fs::create_directories(tempDir_ / "sub");
+    const fs::path out = tempDir_ / "sub" / "far";
+    const fs::path back = tempDir_ / "sub" / "circular";
+    for (const auto& [link, target] : {std::pair{out, outside}, std::pair{back, tempDir_}}) {
+#ifdef _WIN32
+        const std::string make = "cmd /c mklink /J \"" + link.string() + "\" \"" + target.string() + "\" >nul";
+        ASSERT_EQ(std::system(make.c_str()), 0) << make;
+#else
+        fs::create_directory_symlink(target, link, ec);
+        ASSERT_FALSE(ec) << ec.message();
+#endif
+    }
+    for (const json& args : {json{{"pattern", "*.txt"}, {"path", tempDir_.u8string()}},
+                             json{{"pattern", "**/*.txt"}, {"path", tempDir_.u8string()}},
+                             json{{"pattern", "*"}, {"path", tempDir_.u8string()}, {"content_pattern", "ORCHID"}}}) {
+        json found = FileIOTools::fileSearch().callback(args);
+        ASSERT_FALSE(found.contains("error")) << found.dump();
+        ASSERT_EQ(found["matches"].size(), 1u) << found.dump();
+        EXPECT_EQ(fs::u8path(found["matches"][0]["path"].get<std::string>()).filename().u8string(), "inside.txt");
+        EXPECT_EQ(found.dump().find("beyond"), std::string::npos) << found.dump();
+        EXPECT_EQ(found.dump().find("circular"), std::string::npos) << found.dump();
+    }
+    // The links first, so cleaning up cannot reach through them.
+    fs::remove(out, ec);
+    fs::remove(back, ec);
+    fs::remove_all(outside, ec);
+}
+
+TEST_F(FileToolsTest, FileWrite_ReplacesTheFileWholeAndLeavesNoTemporaryFile) {
+    const std::string path = writeFile("keep.sh", "old\n");
+#ifndef _WIN32
+    fs::permissions(path, fs::perms::owner_all);
+#endif
+    ASSERT_FALSE(FileIOTools::fileRead().callback({{"path", path}}).contains("error"));
+
+    json written = FileIOTools::fileWrite().callback({{"path", path}, {"content", "new\n"}});
+    ASSERT_FALSE(written.contains("error")) << written.dump();
+    json edited = FileIOTools::fileEdit().callback({{"path", path}, {"old_string", "new"}, {"new_string", "newer"}});
+    ASSERT_FALSE(edited.contains("error")) << edited.dump();
+
+    EXPECT_EQ(readFile(path), "newer\n");
+    size_t entries = 0;
+    for (const auto& e : fs::directory_iterator(tempDir_)) {
+        ++entries;
+        EXPECT_EQ(e.path().filename().string(), "keep.sh");
+    }
+    EXPECT_EQ(entries, 1u);
+#ifndef _WIN32
+    EXPECT_NE(fs::status(path).permissions() & fs::perms::owner_exec, fs::perms::none)
+        << "an edited script stays executable";
+#endif
+}
+
+TEST_F(FileToolsTest, FileRead_RefusesFoldersAndDeviceNames) {
+    json folder = FileIOTools::fileRead().callback({{"path", tempDir_.string()}});
+    ASSERT_TRUE(folder.contains("error")) << folder.dump();
+    EXPECT_NE(folder["error"].get<std::string>().find("is a folder"), std::string::npos) << folder.dump();
+#ifdef _WIN32
+    for (const char* name : {"NUL", "con", "COM1.txt", "aux.log", "lpt9"}) {
+        json device = FileIOTools::fileRead().callback({{"path", (tempDir_ / name).string()}});
+        ASSERT_TRUE(device.contains("error")) << name;
+        EXPECT_NE(device["error"].get<std::string>().find("Windows device"), std::string::npos) << device.dump();
+    }
+#endif
+}
+
+// ---------------------------------------------------------------------------
+// credential files and masked secrets
+// ---------------------------------------------------------------------------
+
+TEST_F(FileToolsTest, FileRead_ACredentialFileIsRefusedByName) {
+    const auto read = FileIOTools::fileRead().callback;
+    const auto edit = FileIOTools::fileEdit().callback;
+    for (const std::string name : {".env", "server.KEY", "sub/id_rsa"}) {
+        const std::string path = writeFile(name, "DB_PASSWORD=hunter2\n");
+        const json shown = read({{"path", path}});
+        ASSERT_TRUE(shown.contains("error")) << name;
+        EXPECT_NE(shown["error"].get<std::string>().find("holds credentials"), std::string::npos) << name;
+        EXPECT_EQ(shown.dump().find("hunter2"), std::string::npos) << name;
+        const json edited = edit({{"path", path}, {"old_string", "absent"}, {"new_string", "x"}});
+        ASSERT_TRUE(edited.contains("error")) << name;
+        EXPECT_EQ(edited.dump().find("hunter2"), std::string::npos) << name;
+    }
+    const std::string example = writeFile(".env.example", "DB_PASSWORD=\n");
+    EXPECT_FALSE(read({{"path", example}}).contains("error"));
+}
+
+TEST_F(FileToolsTest, FileSearch_AContentSearchSkipsCredentialFiles) {
+    writeFile("proj/.env", "DB_PASSWORD=hunter2\n");
+    const json found = FileIOTools::fileSearch().callback(
+        {{"pattern", ".env"}, {"path", (tempDir_ / "proj").string()}, {"content_pattern", "DB_PASSWORD"}});
+    ASSERT_FALSE(found.contains("error")) << found.dump();
+    EXPECT_EQ(found["total"], 0);
+    EXPECT_EQ(found.value("credential_files_skipped", 0), 1);
+    EXPECT_EQ(found.dump().find("hunter2"), std::string::npos);
+}
+
+TEST_F(FileToolsTest, FileEdit_TheRedactedMarkerIsNotWrittenOverASecret) {
+    const std::string token = std::string("ghp_") + "A1b2C3d4E5f6G7h8I9j0K1l2M3n4";
+    const std::string masked = "\turl = https://[redacted]@github.com/amd/gaia.git";
+    const std::string config =
+        "[core]\n\turl = https://user:" + token + "@github.com/amd/gaia.git\n\tremote = origin\n";
+    const std::string path = writeFile("remotes.cfg", config);
+    const auto edit = FileIOTools::fileEdit().callback;
+    ASSERT_FALSE(FileIOTools::fileRead().callback({{"path", path}}).contains("error"));
+
+    json r = edit({{"path", path}, {"old_string", masked}, {"new_string", "\turl = https://github.com/amd/gaia.git"}});
+    EXPECT_EQ(r.value("error_type", ""), "redacted_secret") << r.dump();
+    r = edit({{"path", path}, {"old_string", "[core]"}, {"new_string", "[core]\n" + masked}});
+    EXPECT_EQ(r.value("error_type", ""), "redacted_secret") << r.dump();
+    r = FileIOTools::fileWrite().callback({{"path", path}, {"content", "[core]\n" + masked + "\n"}});
+    EXPECT_EQ(r.value("error_type", ""), "redacted_secret") << r.dump();
+    EXPECT_EQ(readFile(path), config);
+
+    r = edit({{"path", path},
+              {"old_string", "\tremote = origin\n"},
+              {"new_string", "\tremote = origin\n\tmerge = refs/heads/main\n"}});
+    EXPECT_FALSE(r.contains("error")) << r.dump();
+    EXPECT_NE(readFile(path).find(token), std::string::npos);
+    EXPECT_NE(readFile(path).find("merge = refs/heads/main"), std::string::npos);
+}
+
+TEST_F(FileToolsTest, FileEdit_AFileThatHoldsTheMarkerItselfStaysEditable) {
+    const std::string path = writeFile("check_masking.py", "MARKER = \"[redacted]\"\n");
+    ASSERT_FALSE(FileIOTools::fileRead().callback({{"path", path}}).contains("error"));
+    json r = FileIOTools::fileEdit().callback({{"path", path},
+                                               {"old_string", "MARKER = \"[redacted]\""},
+                                               {"new_string", "MARKER = \"[redacted]\"\nOTHER = \"[redacted]\""}});
+    EXPECT_FALSE(r.contains("error")) << r.dump();
+    EXPECT_NE(readFile(path).find("OTHER = \"[redacted]\""), std::string::npos);
+
+    const std::string notes = (tempDir_ / "notes.md").string();
+    r = FileIOTools::fileWrite().callback({{"path", notes}, {"content", "Tokens show as [redacted].\n"}});
+    EXPECT_FALSE(r.contains("error")) << r.dump();
+    EXPECT_EQ(readFile(notes), "Tokens show as [redacted].\n");
+}
+
+TEST_F(FileToolsHardeningTest, FileWrite_ACredentialFileIsRefusedAsAnEditIs) {
+    const fs::path env = tempDir_ / ".env";
+    json result = FileIOTools::fileWrite().callback({{"path", env.string()}, {"content", "KEY=1\n"}});
+    ASSERT_TRUE(result.contains("error")) << result.dump();
+    EXPECT_NE(result["error"].get<std::string>().find("credentials"), std::string::npos) << result.dump();
+    EXPECT_FALSE(fs::exists(env));
 }

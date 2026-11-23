@@ -693,3 +693,42 @@
 .setup-npu-problems ul { padding-inline-start: 20px; display: grid; gap: 4px; }
 .setup-npu-actions { display: flex; flex-wrap: wrap; gap: 8px; }
 .setup-npu-error { color: var(--danger); }
+
+.agent-choice { display: grid; gap: 8px; }
+.agent-choice > p { margin: 0; }
+.agent-choice-title { display: flex; align-items: center; gap: 6px; margin: 0; }
+.agent-choice-row { inline-size: 100%; flex-wrap: wrap; align-items: center; gap: 4px 8px; padding-block: 8px; }
+/* Each piece keeps its own width; a choice card otherwise stretches its spans. */
+.agent-choice .agent-choice-row > span { flex: 0 1 auto; }
+.agent-choice-row > .setup-choice-tag { margin-inline-start: 0; }
+.agent-choice-what { display: inline-flex; flex-wrap: wrap; align-items: baseline; gap: 0 8px; }
+.agent-choice-name { font-family: var(--font-mono); font-size: 13.5px; font-weight: 600; }
+.agent-choice-label { font-size: 14px; }
+/* Only the name and label fade, so the "Not installed" tag stays readable. */
+.agent-choice .agent-choice-row.is-disabled { opacity: 1; }
+.agent-choice .agent-choice-row.is-disabled:hover { background: none; }
+.agent-choice .is-disabled .agent-choice-what,
+.agent-choice .is-disabled .setup-choice-tag:not(.agent-choice-off) { opacity: 0.55; }
+.agent-choice-off { border-color: var(--border-light); color: var(--text-primary); }
+.agent-choice-blocked { display: grid; gap: 4px; }
+.agent-choice-why { margin: 0; padding-inline: 12px; color: var(--text-secondary); font-size: 12.5px; line-height: 1.45; overflow-wrap: anywhere; }
+.agent-choice-off.is-quiet { color: var(--text-secondary); }
+.agent-choice-size { color: var(--text-secondary); font-size: 12.5px; font-variant-numeric: tabular-nums; }
+.agent-choice-more { display: inline-flex; justify-self: start; align-items: center; gap: 4px; min-block-size: 26px; color: var(--text-secondary); font-size: 12.5px; }
+.agent-choice-more:hover { color: var(--text-primary); }
+.agent-choice-chevron { transform: rotate(-90deg); transition: transform var(--duration-fast) var(--ease); }
+[dir="rtl"] .agent-choice-chevron { transform: rotate(90deg); }
+.agent-choice-chevron.is-open,
+[dir="rtl"] .agent-choice-chevron.is-open { transform: none; }
+.agent-choice-detail { display: grid; gap: 4px; color: var(--text-secondary); font-size: 13px; }
+.agent-choice-detail[hidden] { display: none; }
+.agent-choice-detail p { margin: 0; }
+.agent-choice-error { color: var(--danger); font-size: 13px; }
+.setup-agent-download { display: grid; gap: 8px; }
+/* A gaiacpp to download: its Download button sits on the row's end, beside the radio rather than in it. */
+.agent-choice-item { position: relative; }
+.agent-choice-item > .agent-choice-row { padding-inline-end: 132px; }
+.agent-choice .agent-choice-row.is-pending { cursor: default; }
+.agent-choice .agent-choice-row.is-pending:hover { background: none; }
+/* Centred by margins, not a transform: the shared button styles reset transform when pressed or disabled. */
+.agent-choice-download { position: absolute; inset-inline-end: 8px; inset-block: 0; margin-block: auto; block-size: max-content; display: inline-flex; align-items: center; gap: 4px; padding: 4px 10px; font-size: 12.5px; }

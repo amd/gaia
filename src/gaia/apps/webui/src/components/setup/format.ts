@@ -55,18 +55,26 @@ export function ltrIn(locale: string, text: string): string {
     return getLocale(locale).meta.dir === 'rtl' ? isolate(text, 'ltr') : text;
 }
 
-/** "about 40 sec", "about 13 min", "over 2 hours"; `t` is a translator or a compose `say`. */
+const HOUR_S = 3600;
+const DAY_S = 24 * HOUR_S;
+
+/** "about 40 sec", "about 13 min", "about 16 hours", "more than a day"; `t` is a translator or a compose `say`. */
 export function formatEta(seconds: number, t: Say): string {
     if (seconds < 90) return t('setup.eta.sec', { n: String(Math.max(1, Math.round(seconds))) });
-    if (seconds <= 2 * 3600) return t('setup.eta.min', { n: String(Math.round(seconds / 60)) });
-    return t('setup.eta.long');
+    if (seconds <= 2 * HOUR_S) return t('setup.eta.min', { n: String(Math.round(seconds / 60)) });
+    if (seconds <= DAY_S) return t('setup.eta.hours', { n: String(Math.round(seconds / HOUR_S)) });
+    return t('setup.eta.day');
 }
 
 /** Spoken ETA for `aria-valuetext`, never abbreviated. */
 export function spokenEta(seconds: number, t: Say): string {
     if (seconds < 90) return t('setup.eta.secSpoken', { n: String(Math.max(1, Math.round(seconds))) });
-    if (seconds <= 2 * 3600) return t('setup.eta.minSpoken', { n: String(Math.round(seconds / 60)) });
-    return t('setup.eta.long');
+    if (seconds <= 2 * HOUR_S) return t('setup.eta.minSpoken', { n: String(Math.round(seconds / 60)) });
+    if (seconds > DAY_S) return t('setup.eta.daySpoken');
+    // Hours run 2 to 24, so the noun takes one of three forms in languages that count that way.
+    const n = Math.round(seconds / HOUR_S);
+    const form = n === 2 ? 'two' : n <= 10 ? 'few' : 'many';
+    return t(`setup.eta.hoursSpoken.${form}`, { n: String(n) });
 }
 
 /** Seconds of data before a speed or ETA is shown. */

@@ -3,15 +3,15 @@ title: "ChatAgent"
 ---
 
 <Info>
-  **Source Code:** [`hub/agents/gaia/python/gaia_agent/chat_agent.py`](https://github.com/amd/gaia/blob/main/hub/agents/gaia/python/gaia_agent/chat_agent.py)
+  **Source Code:** [`hub/agents/gaia/python/gaiapy/chat_agent.py`](https://github.com/amd/gaia/blob/main/hub/agents/gaia/python/gaiapy/chat_agent.py)
 </Info>
 
 <Note>
 **Component:** ChatAgent - Reference Conversational AI Implementation
-**Module:** `gaia_agent.chat_agent`
+**Module:** `gaiapy.chat_agent`
 **Inherits:** Agent, RAGToolsMixin, FileToolsMixin, ShellToolsMixin, FileSearchToolsMixin, FileIOToolsMixin, VLMToolsMixin, ScreenshotToolsMixin, SDToolsMixin, MCPClientMixin
 
-> **Status:** ChatAgent is the base class [GaiaAgent](/guides/gaia) extends, not an agent you pick. It ships in the flagship package (`gaia-agent-gaia`). Its old `chat` / `doc` / `file` ids resolve to the flagship `gaia` agent, so stored sessions reopen on it. The `gaia_agent_chat` re-export shim was removed in v0.26.0; import from `gaia_agent.chat_agent`. New work should target the flagship.
+> **Status:** ChatAgent is the base class [GaiaAgent](/guides/gaia) extends, not an agent you pick. It ships in the flagship package (`gaia-agent-gaia`). Its old `chat` / `doc` / `file` ids resolve to the flagship `gaia` agent, so stored sessions reopen on it. The `gaia_agent_chat` re-export shim was removed in v0.26.0; import from `gaiapy.chat_agent`. New work should target the flagship.
 </Note>
 
 ---
@@ -151,7 +151,10 @@ class ChatAgent(
         pass
 
     def load_session(self, session_id: str) -> bool:
-        """Load saved session, restoring indexed docs and history."""
+        """Load saved session, restoring indexed docs and history.
+
+        Forgets every "always" answer given so far once the session is found.
+        """
         pass
 
     def save_current_session(self) -> bool:
@@ -322,7 +325,7 @@ def _validate_and_open_file(self, file_path: str, mode: str = "r"):
 ### Unit Tests
 
 ```python
-# tests/agents/test_chat_agent.py
+# tests/test_chat_agent.py
 
 def test_chat_agent_initialization(tmp_path):
     """Test ChatAgent initializes correctly."""
@@ -415,7 +418,7 @@ chat = [
 ### Example 1: Basic Chat with RAG
 
 ```python
-from gaia_agent.chat_agent import ChatAgent, ChatAgentConfig
+from gaiapy.chat_agent import ChatAgent, ChatAgentConfig
 
 # Configure agent
 config = ChatAgentConfig(

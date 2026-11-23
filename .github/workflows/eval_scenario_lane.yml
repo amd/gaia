@@ -266,9 +266,9 @@ jobs:
               exit 1
             }
           }
-          & $env:VENV_PY -c "import gaia, gaia_agent"
+          & $env:VENV_PY -c "import gaia, gaiapy"
           if ($LASTEXITCODE -ne 0) {
-            Write-Host "::error::$env:VENV_PY cannot import gaia / gaia_agent - the editable installs in the Setup Python Environment step are broken."
+            Write-Host "::error::$env:VENV_PY cannot import gaia / gaiapy - the editable installs in the Setup Python Environment step are broken."
             exit 1
           }
 
@@ -639,8 +639,12 @@ jobs:
                 exit 1
               }
 
+              # Every Agent UI request but /api/health needs the API token.
+              $uiTokenFile = if ($env:GAIA_UI_TOKEN_FILE) { $env:GAIA_UI_TOKEN_FILE } elseif ($env:GAIA_HOME) { Join-Path $env:GAIA_HOME 'agent-ui-token' } else { Join-Path $HOME '.gaia\agent-ui-token' }
+              $uiHeaders = @{ "X-Gaia-UI" = "1"; "Authorization" = "Bearer $((Get-Content -Raw $uiTokenFile).Trim())" }
+
               try {
-                $agentList = Invoke-RestMethod -Uri "$env:BACKEND_URL/api/agents" -TimeoutSec 30 -ErrorAction Stop
+                $agentList = Invoke-RestMethod -Uri "$env:BACKEND_URL/api/agents" -Headers $uiHeaders -TimeoutSec 30 -ErrorAction Stop
               } catch {
                 Write-Host "::error::GET $env:BACKEND_URL/api/agents failed after the backend reported healthy: $($_.Exception.Message)."
                 Get-Content $outLog, $errLog -ErrorAction SilentlyContinue
@@ -655,7 +659,7 @@ jobs:
               if ($env:GAIA_MEMORY_DISABLED -eq '0') {
                 try {
                   $memory = Invoke-RestMethod -Method Put -Uri "$env:BACKEND_URL/api/memory/settings" `
-                    -Headers @{ "X-Gaia-UI" = "1" } -ContentType "application/json" `
+                    -Headers $uiHeaders -ContentType "application/json" `
                     -Body '{"memory_enabled": true}' -TimeoutSec 30 -ErrorAction Stop
                 } catch {
                   Write-Host "::error::PUT $env:BACKEND_URL/api/memory/settings failed: $($_.Exception.Message). This lane measures long-term memory and cannot run with it off."
@@ -668,7 +672,7 @@ jobs:
               }
 
               try {
-                $stats = Invoke-RestMethod -Uri "$env:BACKEND_URL/api/memory/stats" -Headers @{ "X-Gaia-UI" = "1" } -TimeoutSec 30 -ErrorAction Stop
+                $stats = Invoke-RestMethod -Uri "$env:BACKEND_URL/api/memory/stats" -Headers $uiHeaders -TimeoutSec 30 -ErrorAction Stop
               } catch {
                 Write-Host "::error::GET $env:BACKEND_URL/api/memory/stats failed: $($_.Exception.Message). Without it there is no proof $category starts with empty memory."
                 exit 1

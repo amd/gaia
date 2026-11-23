@@ -42,9 +42,15 @@ Every agent tool that takes a path checks it with `validate_read` or
 `validate_write`: reading, listing a folder, searching inside one, indexing it,
 watching it, and the files a tool saves (screenshots, transcripts, speech,
 exports). Out-of-scope paths go through the same approval prompt as `read_file`.
-The validator expands `~` and resolves `..` and symlinks before it decides, and a
-folder walk skips any entry that leads outside the scope. Tools build on these
-checks through `gaia.agents.tools.path_access` rather than adding their own.
+The validator judges every path by one canonical spelling
+(`gaia.canonical_path.canonical_path`), and the tools open that same spelling: `~`,
+`..`, symlinks, junctions and 8.3 short names are resolved, and on Windows a
+device-prefixed path or one through this PC's own drive share is the drive path it
+names, so a protected folder is refused however it is spelled. A path that
+is not a file on this PC (another computer's share, a device or volume path, a
+named NTFS stream) is refused outright, never offered for approval. A folder walk
+skips any entry that leads outside the scope. Tools build on these checks through
+`gaia.agents.tools.path_access` rather than adding their own.
 
 Three things are wider on purpose:
 
@@ -56,6 +62,14 @@ Three things are wider on purpose:
   which it skipped.
 - Output a tool writes to GAIA's own folders (`~/.gaia/screenshots`,
   `~/.gaia/transcripts`, `~/.gaia/cache/audio/generations`) is not the user's files and is not checked.
+- The agent can read back what it produced: transcripts in `~/.gaia/transcripts`,
+  and image files saved directly in `~/.gaia/cache/sd/images` (not links or
+  hard links), so a follow-up can summarize a transcript or edit, upscale or
+  describe a generated image. Both are read-only to file tools, and a session
+  confined by `GAIA_ALLOWED_PATHS` does not get them. A shell line that only
+  reads may name a generated image too, quoted or not, including `type` and a
+  single PowerShell read such as `Get-Item '<path>'`; any line that could write
+  to it is refused.
 - `capture_skill` may copy a local skill folder from anywhere, because every
   capture asks the user first with the source shown.
 
@@ -116,6 +130,27 @@ v.is_path_allowed("/home/user/evals/answers.json")   # False, and never prompts
   user account, a container, or a VM.
 </Warning>
 
+### Code that names a protected path
+
+`run_python`, `execute_python_file` (the script and the arguments it is handed) and a
+shell line that hands code to an interpreter (`python -c`, `powershell -Command`,
+`node -e`) are screened before the approval card: code whose text names a credential
+folder, a credential file (`.env`, `id_rsa`, `*.pem`, …) or, when it may write, GAIA's
+own settings is refused outright, and an earlier "Always allow" does not cover it.
+A credential file counts only when the code reads it, which the read checks refuse;
+code that writes or only names one (`load_dotenv(".env")`, creating `.env` from a
+template) runs.
+Paths are judged in the canonical form above, after folding the plain ways of building
+one (`os.path.join`, `Path(...) / x`, `+`, f-strings, `"".join`, `$HOME`).
+`execute_python_file` is also refused, before the card and before the file is opened
+to show on it, when the script's own path is a credential file or a path no approval
+can grant. The screen is
+in `gaia.agents.base.code_path_screen`.
+
+It reads the code's text, so it is not a sandbox: code that works a path out while it
+runs (from characters, base64, a file or the network) is not caught. The card for a
+code tool says so.
+
 ---
 
 ## 18.2 Symlink Detection
@@ -152,6 +187,19 @@ try:
 except ValueError as e:
     print(f"File too large: {e}")
 ```
+
+---
+
+## Local services require a token
+
+Binding loopback is not access control, so GAIA's local HTTP services ask
+every caller for a secret, including callers on the same PC:
+
+- **Agent UI backend** — a per-install token in `~/.gaia/agent-ui-token` on
+  every `/api` and `/v1` route. See [Agent UI security](/sdk/sdks/agent-ui#security).
+- **Agent sidecars** — a per-launch bearer token the launcher writes to an
+  owner-only file and passes by path. A sidecar started without one refuses to
+  start unless `GAIA_SIDECAR_ALLOW_NO_TOKEN=1` is set, for local development only.
 
 ---
 

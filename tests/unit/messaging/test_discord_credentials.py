@@ -16,13 +16,13 @@ class _NoBackend:
         PasswordDeleteError = Exception
 
     @staticmethod
-    def set_password(*_a):
+    def write(*_a):
         raise RuntimeError(
             "No recommended backend was available. Install a recommended 3rd "
             "party backend package"
         )
 
-    get_password = set_password
+    read = write
 
 
 @pytest.fixture

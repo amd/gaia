@@ -440,7 +440,8 @@ class LemonadeProvider(LLMClient):
         Initialize Lemonade provider.
 
         Args:
-            model: Model name (defaults to DEFAULT_MODEL_NAME, currently "Gemma-4-E4B-it-GGUF")
+            model: Model name (defaults to resolve_local_chat_model(): the local
+                   default_model gaia init records, else "Gemma-4-E4B-it-GGUF")
             base_url: Base URL for Lemonade server (overrides LEMONADE_BASE_URL env var)
             host: Server host (alternative to base_url)
             port: Server port (alternative to base_url)
@@ -456,7 +457,9 @@ class LemonadeProvider(LLMClient):
             LEMONADE_MODEL: Default model name if not specified
 
         Note:
-            Default model is DEFAULT_MODEL_NAME (currently "Gemma-4-E4B-it-GGUF").
+            Default model is resolve_local_chat_model(): config default_model,
+            which gaia init sets from the hardware, when it is a local model,
+            else "Gemma-4-E4B-it-GGUF".
             Local models use their model card's sampling, else temperature=0.1; cloud models keep the client default.
         """
 
@@ -796,7 +799,7 @@ agent. Tests must exercise the retained route as well as migration failures.
 
 ### Integration Tests
 
-**File:** `tests/integration/test_llm_providers.py`
+The block below is an illustrative example, not a file in the repo. The live-server tests are under `tests/integration/`, for example `tests/integration/test_lemonade_health_schema.py`.
 
 ```python
 def test_integration_lemonade_generate():

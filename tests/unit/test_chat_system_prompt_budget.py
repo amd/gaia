@@ -29,7 +29,7 @@ import pytest
 
 # ChatAgent ships in the flagship gaia-agent-gaia wheel (#6099); skip the
 # whole module when a framework-only env lacks it.
-pytest.importorskip("gaia_agent")
+pytest.importorskip("gaiapy")
 
 # Stub heavy optional deps so this test can run in a minimal env, but ONLY
 # for modules that can't actually be imported in the current environment.
@@ -59,10 +59,10 @@ for _mod in (
 
 _loaded_before_import = set(sys.modules)
 
-# Import once: ``gaia_agent.chat_agent`` resolves its faiss/numpy/etc.
+# Import once: ``gaiapy.chat_agent`` resolves its faiss/numpy/etc.
 # references at this point, so the cached module keeps working even after
 # we remove the stubs from ``sys.modules`` below.
-from gaia_agent.chat_agent import ChatAgent, ChatAgentConfig  # noqa: E402
+from gaiapy.chat_agent import ChatAgent, ChatAgentConfig  # noqa: E402
 
 # Roll back the temporary stubs AND evict GAIA modules that bound them so
 # subsequent tests get a fresh import that resolves against the real
@@ -72,7 +72,7 @@ for _mod in _stubbed_modules:
 if _stubbed_modules:
     for _gaia_mod in (
         "gaia.rag.sdk",
-        "gaia_agent.chat_agent",
+        "gaiapy.chat_agent",
         "gaia.agents.tools.rag_tools",
     ):
         # Already imported, it bound nothing fake; evicting it would
@@ -157,10 +157,10 @@ def test_chat_system_prompt_within_budget(
     version, machine, home = _PLATFORMS[os_name]
     agent = _make_agent(profile, n_indexed)
     with (
-        patch("gaia_agent.chat_agent.platform.system", return_value=os_name),
-        patch("gaia_agent.chat_agent.platform.version", return_value=version),
-        patch("gaia_agent.chat_agent.platform.machine", return_value=machine),
-        patch("gaia_agent.chat_agent.Path.home", return_value=home),
+        patch("gaiapy.chat_agent.platform.system", return_value=os_name),
+        patch("gaiapy.chat_agent.platform.version", return_value=version),
+        patch("gaiapy.chat_agent.platform.machine", return_value=machine),
+        patch("gaiapy.chat_agent.Path.home", return_value=home),
     ):
         prompt = agent._get_system_prompt()
     budget = _BUDGET_CHARS[(profile, n_indexed)]
@@ -174,6 +174,35 @@ def test_chat_system_prompt_within_budget(
         f"move it behind a conditional, or raise the budget in the same "
         f"commit (only after re-validating live on Gemma)."
     )
+
+
+@pytest.mark.parametrize(
+    ("platform_id", "os_name", "told"),
+    [
+        ("darwin", "Darwin", True),
+        ("win32", "Windows", False),
+        ("linux", "Linux", False),
+    ],
+)
+def test_prompt_says_speech_is_off_only_where_it_is_withheld(
+    platform_id: str, os_name: str, told: bool, monkeypatch
+) -> None:
+    """Where the voice is withheld the prompt says so, and still fits the budget."""
+    import gaia.config
+
+    monkeypatch.setattr(gaia.config, "_current_platform", lambda: platform_id)
+    version, machine, home = _PLATFORMS[os_name]
+    with (
+        patch("gaiapy.chat_agent.platform.system", return_value=os_name),
+        patch("gaiapy.chat_agent.platform.version", return_value=version),
+        patch("gaiapy.chat_agent.platform.machine", return_value=machine),
+        patch("gaiapy.chat_agent.Path.home", return_value=home),
+    ):
+        for (profile, n_indexed), budget in _BUDGET_CHARS.items():
+            prompt = _make_agent(profile, n_indexed)._get_system_prompt()
+            assert ("**NO SPEECH OUTPUT ON THIS PC:**" in prompt) is told
+            assert ("issues/8831" in prompt) is told
+            assert len(prompt) <= budget, (profile, n_indexed, len(prompt))
 
 
 def test_chat_system_prompt_directives_preserved() -> None:

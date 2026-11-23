@@ -52,10 +52,10 @@ class _FakeAgent:
 @pytest.fixture
 def env(monkeypatch, tmp_path):
     # The tick imports GaiaAgent before it checks the cache; a cache hit never uses it.
-    fake_mod = types.ModuleType("gaia_agent.agent")
+    fake_mod = types.ModuleType("gaiapy.agent")
     fake_mod.GaiaAgent = fake_mod.GaiaAgentConfig = object
-    monkeypatch.setitem(sys.modules, "gaia_agent", types.ModuleType("x"))
-    monkeypatch.setitem(sys.modules, "gaia_agent.agent", fake_mod)
+    monkeypatch.setitem(sys.modules, "gaiapy", types.ModuleType("x"))
+    monkeypatch.setitem(sys.modules, "gaiapy.agent", fake_mod)
 
     registry = MagicMock()
     registry.canonical_id.side_effect = lambda t: t
@@ -230,7 +230,7 @@ async def test_tick_without_a_cached_agent_builds_the_flagship(env, monkeypatch)
             super().__init__(config.kwargs["model_id"])
             built.append((config, self))
 
-    fake_mod = sys.modules["gaia_agent.agent"]
+    fake_mod = sys.modules["gaiapy.agent"]
     monkeypatch.setattr(fake_mod, "GaiaAgent", FakeGaiaAgent, raising=False)
     monkeypatch.setattr(fake_mod, "GaiaAgentConfig", FakeConfig, raising=False)
     loop, session, _cached = _make("gaia")

@@ -108,6 +108,8 @@ type PlanEvent struct {
 	Type        string          `json:"type"`
 	Steps       json.RawMessage `json:"steps"`
 	CurrentStep int             `json:"current_step"`
+	// Items is the structured form of Steps, from agents that send it.
+	Items []PlanStep `json:"items,omitempty"`
 }
 
 // DoneEvent — stream complete marker

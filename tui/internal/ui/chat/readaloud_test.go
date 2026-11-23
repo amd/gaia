@@ -33,9 +33,10 @@ func readAloudModel(t *testing.T, config string, play speech.PlayFunc) (ChatMode
 		}
 	}
 	t.Setenv("GAIA_CONFIG_FILE", path)
-	prev := readAloudDeps.findPlayer
+	prev, prevUnproven := readAloudDeps.findPlayer, readAloudDeps.unproven
 	readAloudDeps.findPlayer = func() (speech.PlayFunc, error) { return play, nil }
-	t.Cleanup(func() { readAloudDeps.findPlayer = prev })
+	readAloudDeps.unproven = func() string { return "" }
+	t.Cleanup(func() { readAloudDeps.findPlayer, readAloudDeps.unproven = prev, prevUnproven })
 	return slackModel(t), path
 }
 
@@ -77,6 +78,9 @@ type ttsServer struct {
 	pulls      []string
 	speech     []map[string]any
 	speechFail string
+	// speechSeconds, when set, is how much audio every reply holds; else
+	// each holds what a voice speaking 2.5 words a second would.
+	speechSeconds float64
 }
 
 func (f *ttsServer) start(t *testing.T) string {
@@ -102,8 +106,13 @@ func (f *ttsServer) start(t *testing.T) string {
 			var body map[string]any
 			json.Unmarshal(raw, &body)
 			f.speech = append(f.speech, body)
+			seconds := f.speechSeconds
+			if seconds == 0 {
+				input, _ := body["input"].(string)
+				seconds = float64(len(strings.Fields(input)))/2.5 + 0.1
+			}
 			w.Header().Set("Content-Type", "audio/l16;rate=24000")
-			w.Write([]byte{0, 0, 1, 0})
+			w.Write(make([]byte, 2*int(seconds*24000)))
 		default:
 			http.NotFound(w, r)
 		}
@@ -379,5 +388,60 @@ func TestRetiringTheChatStopsAReadingInProgress(t *testing.T) {
 	case <-killed:
 	case <-time.After(5 * time.Second):
 		t.Fatal("a reading kept playing after its chat was retired")
+	}
+}
+
+func TestReadAloudRefusesClippedSpeech(t *testing.T) {
+	lem := &ttsServer{downloaded: true, speechSeconds: 0.48}
+	plays := 0
+	m, _ := readAloudModel(t, "", func(context.Context, string) error { plays++; return nil })
+	m.lemonadeBaseURL = lem.start(t)
+	m = withReply(m, strings.Repeat("The board approved the new berth and work starts soon. ", 3))
+	next, cmd := m.submit("/read-aloud")
+	m = drive(t, next.(ChatModel), cmd)
+	got := lastError(t, m)
+	for _, want := range []string{"Could not read the reply aloud", "0.5 s of audio for 30 words", "cut off"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("error %q does not say %q", got, want)
+		}
+	}
+	if plays != 0 {
+		t.Errorf("clipped speech was played %d times", plays)
+	}
+}
+
+func TestReadAloudWithheldWhereTheVoiceIsUnproven(t *testing.T) {
+	lem := &ttsServer{downloaded: true}
+	m, path := readAloudModel(t, "", noPlay)
+	readAloudDeps.unproven = func() string { return speech.UnprovenReason("darwin") }
+	m.lemonadeBaseURL = lem.start(t)
+	m = withReply(m, "Hello there.")
+
+	next, cmd := m.submit("/read-aloud")
+	m = drive(t, next.(ChatModel), cmd)
+	if got := lastError(t, m); !strings.Contains(got, "aren't offered on macOS") {
+		t.Errorf("/read-aloud said %q", got)
+	}
+	if len(lem.speech) != 0 {
+		t.Errorf("%d speech requests were sent", len(lem.speech))
+	}
+
+	next, cmd = m.submit("/voice auto on")
+	m = drive(t, next.(ChatModel), cmd)
+	if got := lastError(t, m); !strings.Contains(got, "aren't offered on macOS") {
+		t.Errorf("/voice auto on said %q", got)
+	}
+	if raw, _ := os.ReadFile(path); strings.Contains(string(raw), "read_aloud_auto") {
+		t.Errorf("auto-read was saved: %s", raw)
+	}
+
+	// Saved before the voice was withheld: it still loads, says why, reads nothing.
+	loaded, _, _ := m.handleReadAloudMsg(readAloudAutoMsg{auto: true})
+	m = loaded.(ChatModel)
+	if got := lastError(t, m); !strings.Contains(got, "replies won't be read") {
+		t.Errorf("launch with auto-read on said %q", got)
+	}
+	if after, cmd := m.autoReadAloud("A finished reply."); cmd != nil || after.readAloud != nil {
+		t.Error("a reply was read aloud automatically")
 	}
 }

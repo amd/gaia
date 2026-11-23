@@ -102,6 +102,10 @@ class SkillLoader:
 
         self._turn = 0
         self._disabled_until = 0.0
+        #: Each loaded skill's score from the last :meth:`select`, empty when
+        #: it did not score (nothing to choose, or the embedder failed). The
+        #: skill context budget ranks by it (``gaia.agents.base.skill_budget``).
+        self.last_scores: Dict[str, float] = {}
 
     #: Seconds to wait before retrying after an embedder failure. Wall-clock,
     #: not turns: the host checks ``session_disabled`` and skips ``select()``
@@ -147,6 +151,7 @@ class SkillLoader:
             failure cooldown — the caller must fall back to rendering every
             loaded skill's body.
         """
+        self.last_scores = {}
         if all(name in always_on for name in loaded_skills):
             return []
 
@@ -175,6 +180,7 @@ class SkillLoader:
             scores[name] = score
             if score >= self._threshold:
                 active.append(name)
+        self.last_scores = scores
 
         result = sorted(active)
         logger.info(

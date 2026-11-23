@@ -18,6 +18,11 @@ Type a question, send it, and watch GAIA work through it. This page covers every
   while GAIA is working. In a chat, the folder chip beside the model names the
   folder GAIA works in; click it to see and manage the chat's folders in the
   session panel.
+- **Research:** the telescope chip next to the message box. While it is on,
+  each message in that chat is researched: GAIA searches the web, reads the
+  sources and writes a report that cites each page it read. Turned on before a
+  new chat's first message, it stays on in the chat that starts; other chats
+  are not affected. Typing `/research <topic>` does the same for one message. See [Deep research](/guides/gaia#deep-research).
 
 `Enter` sends and `Shift+Enter` starts a new line. The rest are under [Shortcuts](/guides/agent-ui/documents#shortcuts).
 
@@ -127,15 +132,27 @@ An image the agent generates shows in the answer; click it to see it full size.
 Images you attach show as small tiles in the message; click one to see it full
 size and use the arrows to step through the others in that message.
 Music and sound effects it generates show a player with the file name and
-length (see [Local Music and Sound Effects](/guides/audio-generation)). Both
-still show when you reopen the chat. Only files GAIA saved in its own
-generation folders are shown this way. Speaking to GAIA through a microphone
+length (see [Local Music and Sound Effects](/guides/audio-generation)). So does
+speech the agent records: text it reads aloud, and a document it
+[dictates](/guides/dictation) into an MP3. When you ask for a copy in a folder
+of your own, the card also shows **Saved to** and, for a dictation rewritten for
+listening, **Script saved to**. All of these still show when you reopen the chat. Only files GAIA saved in its own
+generation folders are shown this way. While a track is made, the step reads "Composing 30 s of
+music" or "Generating a 3 s sound effect". Ask GAIA to save it into a folder of
+yours and it puts a copy there too, never replacing a file that already exists;
+each track is listed under **Outputs** in the session panel. Speaking to GAIA through a microphone
 is not part of this; voice input is tracked in
 [#702](https://github.com/amd/gaia/issues/702).
 
 Recordings and video links can be transcribed in a chat too; see [Transcription & Recording Analysis](/guides/transcription#in-the-agent-ui).
 
 ## Read aloud
+
+<Note>
+  Read aloud works on Windows and Linux. On macOS the speaker button isn't shown
+  and Settings → Read aloud says why: GAIA hasn't verified the voice there yet
+  ([#8831](https://github.com/amd/gaia/issues/8831)).
+</Note>
 
 The speaker button on a reply reads it in a voice that runs on
 this PC through Lemonade; press it again to stop. Code blocks and links are
@@ -146,8 +163,11 @@ speak English, so a reply in another language is read with an English accent.
 The first reading after a restart takes longer while Lemonade loads the voice.
 On a PC without the voice model, the first press downloads it once (~350 MB)
 and says so under the reply; reading starts when it finishes. (The agent's own
-`text_to_speech` tool never downloads it in the middle of a chat.)
-The [terminal app](/guides/tui) uses the same voice and speed, and so does GAIA when you ask it to save speech to a file.
+`text_to_speech` and `dictate_document` tools never download it in the middle of
+a chat; using Read aloud once is what makes them work.)
+The [terminal app](/guides/tui) uses the same voice and speed, and so does GAIA
+when you ask it to save speech to a file or to
+[dictate a document](/guides/dictation) into an MP3.
 
 ## Private chat
 

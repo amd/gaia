@@ -38,7 +38,7 @@ describe('formatShortcut', () => {
 
 describe('examplePath', () => {
     it('shows a path in the form this platform uses', () => {
-        expect(examplePath('MacIntel')).toBe('/Users/you/Documents/manual.pdf');
+        expect(examplePath('MacIntel')).toBe('/Users/you/Documents/a.pdf');
         expect(examplePath('Win32')).toBe('C:\\Users\\you\\Documents\\manual.pdf');
         expect(examplePath('Linux x86_64')).toBe('/home/you/Documents/manual.pdf');
     });

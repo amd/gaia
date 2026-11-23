@@ -166,6 +166,35 @@ TEST(ConsoleTest, TerminalConsolePlan) {
     EXPECT_TRUE(output.find("step2") != std::string::npos);
 }
 
+TEST(ConsoleTest, TerminalConsolePlanToleratesOddSteps) {
+    std::ostringstream captured;
+    std::streambuf* oldBuf = std::cout.rdbuf(captured.rdbuf());
+
+    TerminalConsole console;
+    json plan = json::array({{{"tool", 7}}, "read the file", {{"tool", "bad\xff" "name"}}});
+    EXPECT_NO_THROW(console.printPlan(plan, 0));
+    EXPECT_NO_THROW(console.prettyPrintJson({{"output", "bad\xff" "bytes"}}, "Tool Result"));
+
+    std::cout.rdbuf(oldBuf);
+    EXPECT_TRUE(captured.str().find("read the file") != std::string::npos);
+}
+
+TEST(ConsoleTest, ModelTextCannotDriveTheTerminal) {
+    EXPECT_EQ(sanitizeTerminalText("a\x1b[2J\x1b[31mb\x1b]0;title\x07" "c\rd\x7f\xc2\x9b" "e\n\tf"),
+              "abcde\n\tf");
+    EXPECT_EQ(sanitizeTerminalText("caf\xc3\xa9 \xe2\x9c\x93"), "caf\xc3\xa9 \xe2\x9c\x93");
+
+    std::ostringstream captured;
+    std::streambuf* oldBuf = std::cout.rdbuf(captured.rdbuf());
+    TerminalConsole console;
+    console.printStreamToken("to\x1b[2Jken");
+    console.printFinalAnswer("an\x1b[1Aswer");
+    std::cout.rdbuf(oldBuf);
+    EXPECT_TRUE(captured.str().find("token") != std::string::npos);
+    EXPECT_TRUE(captured.str().find("answer") != std::string::npos);
+    EXPECT_TRUE(captured.str().find("[2J") == std::string::npos);
+}
+
 TEST(ConsoleTest, TerminalConsoleSeparator) {
     std::ostringstream captured;
     std::streambuf* oldBuf = std::cout.rdbuf(captured.rdbuf());

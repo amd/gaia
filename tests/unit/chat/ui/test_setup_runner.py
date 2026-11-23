@@ -13,6 +13,7 @@ import subprocess
 import sys
 import threading
 import time
+from types import SimpleNamespace
 
 import pytest
 from fastapi import FastAPI
@@ -1076,6 +1077,29 @@ def test_an_env_server_that_does_not_answer_says_so_plainly(users_server):
     assert "lemonade-server serve" not in str(problem)
 
 
+def test_a_chosen_server_on_this_pc_is_named_not_the_tray(users_server, monkeypatch):
+    """The tray starts the default server, not the one at the chosen address."""
+    real_hint = lemonade_launcher.describe_start_hint
+    users_server("http://127.0.0.1:4328/api/v1", "config")
+    tray = r"C:\lemonade_server\bin\LemonadeServer.exe"
+    monkeypatch.setattr(lemonade_launcher, "describe_start_hint", real_hint)
+    monkeypatch.setattr(
+        lemonade_launcher,
+        "resolve_lemonade",
+        lambda: lemonade_launcher.LemonadeTooling(
+            found=True, kind="modern", client_path=tray, server_launcher=tray
+        ),
+    )
+
+    problem = _REAL_SERVER_PROBLEM()
+
+    assert problem["start"] == (
+        "The model server GAIA uses is at 127.0.0.1:4328. "
+        f"{lemonade_launcher.OTHER_SERVER_START_HINT}"
+    )
+    assert "tray" not in problem["start"]
+
+
 def test_a_saved_server_that_does_not_answer_offers_gaias_own(users_server):
     users_server("http://localhost:13305/api/v1", "config")
     problem = _REAL_SERVER_PROBLEM()
@@ -2126,6 +2150,51 @@ def test_the_where_to_look_hint_stays_with_the_failed_download():
         "Failed: boom",
         "Read /home/you/.gaia/lemonade/lemonade.log for the server's own error.",
     ]
+
+
+@pytest.mark.parametrize("has_bundle", [True, False])
+def test_a_missing_ca_file_reaches_the_failed_download_row(
+    monkeypatch, tmp_path, has_bundle
+):
+    """#7226: the remedy shows on the row, not only in gaia.log."""
+    from gaia.installer.init_command import InitCommand
+    from gaia.llm import lemonade_tls
+
+    monkeypatch.setenv("GAIA_HOME", str(tmp_path))
+    files = {lemonade_tls.SYSTEM_CA_BUNDLES[2]} if has_bundle else set()
+    real_problem = lemonade_tls.ca_store_problem
+    monkeypatch.setattr(
+        lemonade_tls,
+        "ca_store_problem",
+        lambda **_: real_problem(platform="linux", exists=files.__contains__),
+    )
+    hint = InitCommand._server_problem_hint(SimpleNamespace(_lemonade_base_url=None))
+    assert hint.startswith("This PC")
+    assert hint.endswith("for the server's own error.")
+
+    runner = sr.SetupRunner()
+    run = sr.SetupRun(skip_chat_model=False)
+    runner._run = run
+    runner._on_event({"event": "plan", "models": [{"id": "a-GGUF"}]})
+    runner._consume(run, "Downloading: a-GGUF")
+    runner._on_event({"event": "error", "model": "a-GGUF", "message": "boom"})
+    runner._consume(run, f"   {hint}")
+    runner._consume(run, "Testing chat model inference...")
+    assert runner._models["a-GGUF"].log[-1] == hint
+
+
+def test_the_hint_names_no_ca_problem_once_lemond_was_given_the_file(
+    monkeypatch, tmp_path
+):
+    from gaia.installer.init_command import InitCommand
+    from gaia.llm import lemonade_tls
+    from gaia.llm.lemonade_embedded import EmbeddedLemonade
+
+    monkeypatch.setenv("GAIA_HOME", str(tmp_path))
+    monkeypatch.setattr(lemonade_tls, "ca_store_problem", lambda **_: "no CA file")
+    EmbeddedLemonade()._write_state({"pid": 1, "port": 2, "ca_supplied": True})
+    hint = InitCommand._server_problem_hint(SimpleNamespace(_lemonade_base_url=None))
+    assert hint.startswith("Read ") and "no CA file" not in hint
 
 
 def test_gaias_own_console_bar_collapses_too():

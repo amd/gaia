@@ -11,6 +11,7 @@ ends that wait.
 import asyncio
 import json
 import threading
+import time
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
@@ -156,13 +157,48 @@ def test_the_granted_line_says_how_long_the_turn_waited():
     assert line["message"] == "Got the model after waiting 41s"
 
 
+class _TurnClock:
+    """Turn time that moves only when the agent moves it.
+
+    A starved runner can't push a quiet stretch past the idle limit, and the
+    agent can wait until the turn's idle check has seen the new time.
+    """
+
+    def __init__(self):
+        self._now = 1000.0
+        self._loop_thread = threading.get_ident()
+        self._checks = threading.Condition()
+        self._checked = 0
+
+    def __call__(self):
+        with self._checks:
+            if threading.get_ident() == self._loop_thread:
+                self._checked += 1
+                self._checks.notify_all()
+            return self._now
+
+    def advance_until_checked(self, seconds, stopped):
+        with self._checks:
+            seen = self._checked
+            self._now += seconds
+            deadline = time.monotonic() + 10
+            # Short waits: nothing notifies when the turn is stopped.
+            while self._checked <= seen and not stopped.is_set():
+                assert time.monotonic() < deadline, "the turn's idle check never ran"
+                self._checks.wait(0.05)
+
+
 class _LongQueueAgent(_QueuedAgent):
     """Waits for the model longer than the turn's idle limit, then answers."""
+
+    def __init__(self, clock):
+        super().__init__()
+        self.clock = clock
 
     def process_query(self, _message):
         for _ in range(8):
             broker_client.notify_wait(_QUEUED)
-            threading.Event().wait(0.1)
+            self.clock.advance_until_checked(0.1, self._cancel_event)
         return "answer after the queue"
 
 
@@ -170,10 +206,14 @@ class _LongQueueAgent(_QueuedAgent):
 async def test_a_non_streaming_turn_waiting_for_the_model_is_not_idle(runtime):
     db, http_request = runtime
     session = db.create_session(model="M-GGUF", agent_type="chat")
-    agent = _LongQueueAgent()
+    clock = _TurnClock()
+    agent = _LongQueueAgent(clock)
     helpers._store_agent(session["id"], "M-GGUF", [], agent, "chat")
 
-    with patch.object(helpers, "_STREAM_TIMEOUT_SECONDS", 0.3):
+    with (
+        patch.object(helpers, "_STREAM_TIMEOUT_SECONDS", 0.3),
+        patch.object(helpers, "_turn_clock", clock),
+    ):
         response = await asyncio.wait_for(
             chat.send_message(
                 ChatRequest(session_id=session["id"], message="hi", stream=False),

@@ -5,7 +5,7 @@
 The hub has no pre-release channel, so its `gaia` agent can be many commits
 older than the candidate (v0.25.0-rc2 shipped the hub's 0.2.0, which predates
 tool approvals). These tests pin the seam end to end: publish.yml's packager
-(util/flagship_rc_assets.py) writes the release file, gaia.hub.prerelease reads
+(util/gaiapy_rc_assets.py) writes the release file, gaia.hub.prerelease reads
 it, and the real installer installs from it -- never from the hub.
 """
 
@@ -32,7 +32,7 @@ SHA = hashlib.sha256(BINARY).hexdigest()
 
 def _load_packager():
     spec = importlib.util.spec_from_file_location(
-        "flagship_rc_assets", REPO_ROOT / "util" / "flagship_rc_assets.py"
+        "gaiapy_rc_assets", REPO_ROOT / "util" / "gaiapy_rc_assets.py"
     )
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)

@@ -225,10 +225,29 @@ describe('a file the model server could not embed', () => {
             useChatStore.setState({ locale: 'en' });
         }
     });
+
+    // #8814: a file dropped while the server is down is kept as a Waiting row, not lost.
+    it('keeps a file dropped while the server is down as a Waiting row', async () => {
+        const LANTERN: Document = { ...DOWN, id: 'doc-lantern', filename: 'lantern.md', filepath: '/home/you/.gaia/chat/documents/lantern.md' };
+        mockedApi.uploadDocumentBlob.mockResolvedValue(LANTERN);
+        mockedApi.listDocuments
+            .mockResolvedValueOnce({ documents: [], total: 0, total_size_bytes: 0, total_chunks: 0 })
+            .mockResolvedValue({ documents: [LANTERN], total: 1, total_size_bytes: 1024, total_chunks: 0 });
+        const { container } = render(<DocumentLibrary />);
+
+        const dropped = new File(['# Lantern'], 'lantern.md', { type: 'text/markdown' });
+        fireEvent.drop(container.querySelector('.drop-zone')!, { dataTransfer: { files: [dropped] } });
+
+        expect(await screen.findByRole('alert')).toHaveTextContent('GAIA adds it when the server is back');
+        await screen.findByText('lantern.md');
+        const badge = document.querySelector('.doc-failure .doc-status-badge')!;
+        expect(badge).toHaveTextContent('Waiting');
+        expect(mockedApi.attachDocument).not.toHaveBeenCalled();
+    });
 });
 
 describe('a file the model server was too busy to embed', () => {
-    // GAIA retries these only after an outage, so the row must not promise it will.
+    // GAIA never retries these by itself, so the row and the header must not say it waits.
     const BUSY: Document = {
         ...BROKEN,
         id: 'doc-busy',
@@ -249,6 +268,17 @@ describe('a file the model server was too busy to embed', () => {
         const row = document.querySelector('.doc-failure')!;
         expect(row).toHaveTextContent('Retry in a moment');
         expect(row).not.toHaveTextContent('when the server is back');
+    });
+
+    it('is counted as a file to retry, not as waiting for the model server', async () => {
+        mockedApi.listDocuments.mockResolvedValue({ documents: [BUSY, BROKEN], total: 2, total_size_bytes: 2048, total_chunks: 0 });
+        render(<DocumentLibrary />);
+
+        await screen.findByText('busy.md');
+        const stats = document.querySelector('.doc-stats')!;
+        expect(stats).toHaveTextContent('1 to retry');
+        expect(stats).not.toHaveTextContent('waiting for the model server');
+        expect(stats).toHaveTextContent("1 couldn't be read");
     });
 
     it('asks for a Retry when the add fails, instead of promising GAIA adds it later', async () => {

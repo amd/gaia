@@ -195,12 +195,13 @@ it is refused rather than leaving the other accounts unable to refresh.
 
 ### REST: `POST /v1/connections/{provider}`
 
-The same ingestion is exposed over REST by the Agent UI server (which binds
-`localhost` by default and gates remote/tunnel access behind a token).
-Mutating routes require the `X-Gaia-UI: 1` header.
+The same ingestion is exposed over REST by the Agent UI server, which binds
+`localhost` by default.
+Every route needs the Agent UI's [API token](/sdk/sdks/agent-ui#api-token); mutating routes also require the `X-Gaia-UI: 1` header.
 
 ```bash
 curl -X POST http://localhost:4200/v1/connections/google \
+  -H "Authorization: Bearer $(cat ~/.gaia/agent-ui-token)" \
   -H "X-Gaia-UI: 1" -H "Content-Type: application/json" \
   -d '{
         "client_id": "<host-app-client-id>",

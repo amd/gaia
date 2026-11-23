@@ -11,13 +11,15 @@ import { create } from 'zustand';
 import { log } from '../utils/logger';
 
 export type PanelSectionId =
-    | 'answer' | 'environment' | 'context' | 'outputs' | 'changes' | 'skills' | 'tools' | 'session'
+    | 'slide' | 'answer' | 'environment' | 'context' | 'outputs' | 'changes' | 'skills' | 'tools' | 'session'
     | 'plan' | 'schedule' | 'documents' | 'commands';
 
 /** What a chat's sections found, shared so the panel can tell what the chat is about without reading twice. */
 export interface PanelSignals {
     /** Files the chat has changed on disk. */
     changedFiles?: number;
+    /** How many of those are source code or project files. */
+    changedCode?: number;
     /** Names of the skills it has loaded. */
     skills?: string[];
 }
@@ -31,6 +33,7 @@ const WIDTH_KEY = 'gaia.sessionPanel.width';
 const SECTIONS_KEY = 'gaia.sessionPanel.sections';
 
 const DEFAULT_SECTIONS: Record<PanelSectionId, boolean> = {
+    slide: true,
     answer: true,
     environment: true,
     context: false,

@@ -1,0 +1,75 @@
+{
+  "name": "executive_summary",
+  "aliases": [
+    "briefing",
+    "exec_brief",
+    "board_update",
+    "memo_deck"
+  ],
+  "title": "Executive summary / briefing",
+  "description": "Short briefing for senior readers: the answer first (situation, complication, resolution), the evidence behind it, and the decision or next step.",
+  "default_slides": 5,
+  "min_slides": 1,
+  "max_slides": 11,
+  "one_slide": "exec_summary",
+  "storyline": "SCQA: situation, complication, question, answer — the answer goes on the first content slide. Keep body text to about 30 words a slide.",
+  "slots": [
+    {
+      "id": "title",
+      "type": "title",
+      "priority": 1,
+      "title": "<Topic>: <the answer in a few words>",
+      "guidance": "Title, audience and date."
+    },
+    {
+      "id": "exec_summary",
+      "type": "bullets",
+      "priority": 1,
+      "title": "<The answer as one sentence>",
+      "guidance": "Situation, complication, answer, in 3-4 lines with the key numbers.",
+      "kind": "executive_summary"
+    },
+    {
+      "id": "evidence",
+      "type": "chart",
+      "priority": 2,
+      "title": "<The fact that proves the answer>",
+      "guidance": "One chart per supporting fact; source and period on each.",
+      "repeat": 4,
+      "grow": 1.0,
+      "spec": {
+        "chart_type": "auto"
+      }
+    },
+    {
+      "id": "recommendation",
+      "type": "bullets",
+      "priority": 2,
+      "title": "<What we recommend and what it achieves>",
+      "guidance": "The recommendation, its cost and its payoff."
+    },
+    {
+      "id": "next_steps",
+      "type": "table",
+      "title": "Next steps: who does what by when",
+      "guidance": "Columns Action | Owner | Due. One row per commitment; a named owner and a date on every row.",
+      "spec": {
+        "columns": [
+          "Action",
+          "Owner",
+          "Due"
+        ]
+      },
+      "priority": 3
+    },
+    {
+      "id": "appendix_detail",
+      "type": "table",
+      "priority": 6,
+      "title": "<Supporting detail>",
+      "guidance": "Backup tables.",
+      "repeat": 3,
+      "min_deck": 8
+    }
+  ]
+}

@@ -506,7 +506,7 @@ class TestDocumentRoots:
         assert exc_info.value.status_code == 500
         assert "existing" in exc_info.value.detail
 
-    def test_empty_value_is_home_only(self, monkeypatch):
+    def test_empty_value_is_home_only(self, mock_home, monkeypatch):
         # A relocated GAIA_HOME adds its documents dir as a root.
         monkeypatch.delenv("GAIA_HOME", raising=False)
         monkeypatch.setenv(DOCUMENT_ROOTS_ENV, "")

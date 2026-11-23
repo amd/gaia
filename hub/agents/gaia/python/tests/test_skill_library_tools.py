@@ -41,15 +41,15 @@ _REPO_ROOT = Path(__file__).resolve().parents[5]
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
-pytest.importorskip("gaia_agent")
+pytest.importorskip("gaiapy")
 
-from gaia_agent.agent import GaiaAgent, GaiaAgentConfig  # noqa: E402
-from gaia_agent.skill_tools import SKILL_LIBRARY_TOOL_NAMES  # noqa: E402
+from gaiapy.agent import GaiaAgent, GaiaAgentConfig  # noqa: E402
 
 from gaia.agents.base.history import (  # noqa: E402
     MEMORY_CONTEXT_FOOTER,
     MEMORY_CONTEXT_HEADER,
 )
+from gaia.agents.tools.skill_library_tools import SKILL_LIBRARY_TOOL_NAMES  # noqa: E402
 from gaia.skills.capture import (  # noqa: E402
     published_skill_names as _REAL_PUBLISHED_SKILL_NAMES,
 )
@@ -228,7 +228,7 @@ def session(library):
     )
     agent.rebuild_system_prompt()
 
-    from gaia_agent.skill_tools import estimate_prompt_tokens
+    from gaia.agents.tools.skill_library_tools import estimate_prompt_tokens
 
     return SimpleNamespace(
         agent=agent,
@@ -1286,7 +1286,10 @@ class TestTheListViewNeverLosesASkill:
     """
 
     def test_a_long_description_is_summarised(self):
-        from gaia_agent.skill_tools import _LIST_DESCRIPTION_CHARS, _summarize
+        from gaia.agents.tools.skill_library_tools import (
+            _LIST_DESCRIPTION_CHARS,
+            _summarize,
+        )
 
         summary = _summarize("x" * 5000)
         assert len(summary) < 5000
@@ -1297,12 +1300,12 @@ class TestTheListViewNeverLosesASkill:
         )
 
     def test_a_short_description_is_untouched(self):
-        from gaia_agent.skill_tools import _summarize
+        from gaia.agents.tools.skill_library_tools import _summarize
 
         assert _summarize("Triage GitHub issues.") == "Triage GitHub issues."
 
     def test_missing_description_does_not_explode(self):
-        from gaia_agent.skill_tools import _summarize
+        from gaia.agents.tools.skill_library_tools import _summarize
 
         assert _summarize("") == ""
         assert _summarize(None) == ""
@@ -1311,8 +1314,7 @@ class TestTheListViewNeverLosesASkill:
         """36 skills with 1KB descriptions each must still fit the NPU."""
         import json
 
-        from gaia_agent.skill_tools import _summarize
-
+        from gaia.agents.tools.skill_library_tools import _summarize
         from gaia.llm.lemonade_client import truncation_budget
 
         entries = [
@@ -1583,6 +1585,34 @@ def test_a_refused_skill_is_reported_not_run(session):
     assert "could not be turned on" in sent
     assert "Do not attempt their request without the skill" in sent
     assert "gaia skill import" in sent
+
+
+@pytest.mark.parametrize("pattern", ["load_skill", "load_*"])
+def test_a_typed_command_is_refused_while_load_skill_is_withheld(
+    session, monkeypatch, pattern
+):
+    monkeypatch.setattr(session.agent, "_denied_tool_patterns", (pattern,))
+
+    sent = session.agent._expand_skill_command("/note-taker take notes")
+
+    assert "note-taker" not in session.agent.loaded_skills
+    assert NOTE_TAKER_MARKER not in session.agent._prompt_text()
+    assert "could not be turned on" in sent
+    assert "load_skill tool is withheld" in sent
+    assert "Do not attempt their request without the skill" in sent
+    assert sent.endswith("Their request was: take notes")
+
+
+def test_a_typed_command_for_a_loaded_skill_still_runs_while_withheld(
+    session, monkeypatch
+):
+    session.agent._expand_skill_command("/note-taker")
+    monkeypatch.setattr(session.agent, "_denied_tool_patterns", ("load_skill",))
+
+    sent = session.agent._expand_skill_command("/note-taker take notes")
+
+    assert "It is loaded" in sent
+    assert sent.endswith("\n\ntake notes")
 
 
 def test_a_folder_note_in_front_of_the_command_is_kept(session):

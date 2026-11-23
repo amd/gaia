@@ -11,8 +11,8 @@ This is the page to start from if you want to **use** GAIA. GAIA runs AI agents 
 ## What you'll need
 
 - A computer running **Windows 10/11**, **macOS 14+** (Apple Silicon), or **Linux** with glibc 2.38 or newer (Ubuntu 24.04+, Fedora 39 to 44, or a current Arch). Ubuntu 22.04, Debian 12 and RHEL 9 are too old for GAIA's AI engine
-- About **1 GB** of free disk space for the app. A model that runs on this PC needs more: about 6 GB for Gemma 4 E4B, or about 30 GB on PCs that get Qwen3.6. A cloud model (Fireworks AI or the AMD LLM Gateway) downloads under 1 GB
-- **16 GB** of RAM or more to run a model on this PC. On a 16 GB PC, close other large apps first: the model needs about 8 GB free (see [Not enough free memory](/reference/troubleshooting#not-enough-free-memory))
+- About **1 GB** of free disk space for the app. A model that runs on this PC needs more: about 2.5 GB on a PC with 16 GB of RAM or less, about 6 GB for Gemma 4 E4B, or about 30 GB on PCs that get Qwen3.6. A cloud model (Fireworks AI or the AMD LLM Gateway) downloads under 1 GB
+- **8 GB** of RAM or more to run a model on this PC. GAIA keeps at least 10 GB for your other apps where it can, so a PC with 16 GB or less gets Qwen3.5 2B, which needs about 4 GB; 24 GB and up gets Gemma 4 E4B (see [Choosing models](/reference/cli#choosing-models) and [Not enough free memory](/reference/troubleshooting#not-enough-free-memory))
 - An **internet connection** for setup, which downloads GAIA's model server, the GAIA agent, and the model you pick
 
 ## Download
@@ -141,9 +141,11 @@ The app then opens on its setup screen, which asks where chat should run:
 - **On this PC** (local): starts GAIA's local model server first, then names the
   chat model that fits this PC and the whole download size before anything
   large downloads. The pick follows the memory that is **free right now**, not
-  just the memory the PC has: Gemma-4-E4B-it-GGUF (~6 GB) on most PCs, or
-  Qwen3.6-35B-A3B-GGUF (~23 GB, about 30 GB in all) where the GPU holds it and
-  enough memory is free. When a larger model is passed over, the screen says
+  just the memory the PC has, and it leaves room for your other apps:
+  Qwen3.5-2B-GGUF (~2 GB) on a PC with 16 GB of RAM or less; Gemma-4-E4B-it-GGUF
+  (~6 GB) on most larger PCs; or Qwen3.6-35B-A3B-GGUF (~23 GB, about 30 GB in all)
+  where the GPU holds it and enough memory is free. The screen says how much
+  memory the pick leaves for other apps. When a larger model is passed over, the screen says
   why, for example how much memory it needs and how much is free. You can pick
   another model that fits. If the download won't fit the disk, the screen says
   how much space is needed and doesn't start it. While it downloads, the screen
@@ -197,9 +199,10 @@ with no address uses the one `gaia lemonade detect` finds on this PC.
 - **API key:** if your server was started with `LEMONADE_API_KEY`, GAIA asks for it
   (`--api-key-stdin` reads it from a pipe). It's kept in the OS credential store,
   never in GAIA's config file.
-- **Down:** if your server isn't answering, GAIA says so. The terminal also shows
-  how to start it on this PC; the desktop app asks you to start it the way you
-  usually do. GAIA never starts its own instead.
+- **Down:** if your server isn't answering, GAIA says so, names its address, and
+  asks you to start it the way you usually do. A Lemonade Server installed on this
+  PC starts at its own address, which may not be yours, so GAIA doesn't point you
+  at it. GAIA never starts its own instead.
 - **What GAIA does on your server:** registers its embedding model
   (`user.embeddinggemma-300m-GGUF`), downloads the models it needs and loads them.
   Its chat model loads with GAIA's context size for that load.
@@ -342,7 +345,7 @@ installations using that folder will stop working. Silent uninstalls keep it.
 Each part you installed has its own entry in **Settings → Apps → Installed apps**, so you can remove one and keep the other. To remove GAIA completely, uninstall both:
 
 - **GAIA** — the desktop app. Removes the app, its Start Menu / Desktop shortcuts, and the autostart registry entry.
-- **GAIA Terminal UI** — the terminal. Stops GAIA's background service, then removes `gaia-cli`, `gaia-agent`, `gaia`, the PATH entry, the Windows Terminal profile, the font if the installer added it, and its shortcuts.
+- **GAIA Terminal UI** — the terminal. Stops GAIA's background service, then removes `gaia-cli`, `gaia-agent`, `gaiacpp`, `gaia`, the PATH entry, the Windows Terminal profile, the font if the installer added it, and its shortcuts.
 
 Each uninstaller shows the cleanup prompt above; decline it and `~/.gaia/` is left alone. For tiered cleanup instead of deleting the whole shared folder, open PowerShell before you uninstall and run the `gaia` inside the desktop app (with the terminal installed, plain `gaia uninstall --purge` does the same):
 ```powershell
@@ -390,7 +393,8 @@ gaia uninstall --purge --purge-hf-cache     # Also remove ~/.cache/huggingface/
 | Electron app | Platform-specific (Program Files / /Applications / /opt/GAIA) |
 | Backend (`gaia`) | Inside the app, in `resources/core/` |
 | Chat database | `~/.gaia/chat/gaia_chat.db` |
-| Document Library uploads | `~/.gaia/documents/` |
+| Document Library uploads | `~/.gaia/chat/documents/` (each chat reads only the ones attached to it) |
+| Files the agent saves to GAIA's documents folder | `~/.gaia/documents/` |
 | Chat file attachments | `~/.gaia/chat/uploads/` |
 | Configuration | `~/.gaia/electron-config.json` |
 | Logs | `~/.gaia/gaia.log` (`$GAIA_HOME/gaia.log` when `GAIA_HOME` is set), or the path in `GAIA_LOG_FILE` (capped at 10 MB; older logs rotate to `gaia.log.1`–`gaia.log.3`), `~/.gaia/electron-install.log` |
@@ -401,7 +405,7 @@ gaia uninstall --purge --purge-hf-cache     # Also remove ~/.cache/huggingface/
 | Daemon state (token, custody database, logs) | `~/.gaia/host/` (`$GAIA_HOME/host/` when `GAIA_HOME` is set) |
 | Models (managed by Lemonade) | `~/.cache/lemonade/models/` |
 
-Setting `GAIA_HOME` moves Document Library uploads and chat file attachments to `$GAIA_HOME/documents/` and `$GAIA_HOME/chat/uploads/`, the MCP server list to `$GAIA_HOME/mcp_servers.json`, and installed agents to `$GAIA_HOME/agents/`. It must not be your home directory or one of its parents.
+Setting `GAIA_HOME` moves Document Library uploads and chat file attachments to `$GAIA_HOME/chat/documents/` and `$GAIA_HOME/chat/uploads/`, the MCP server list to `$GAIA_HOME/mcp_servers.json`, and installed agents to `$GAIA_HOME/agents/`. It must not be your home directory or one of its parents.
 
 ## Privacy
 

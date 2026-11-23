@@ -220,16 +220,16 @@ the wire; a receiver applies the §7 unknown-type rule to anything else.
 
 | `type` | Payload | UI effect |
 |---|---|---|
-| `status` | `{message, level?, phase?, words?, chars?, queue?, retracts_answer?}` (§4.4; the stdio transport adds model fields, §10.3) | progress line / spinner label. `level: "warning"` means the agent is warning the user (for example, configured MCP servers were dropped): show it as a warning, not only as the live line. `retracts_answer: true` (phase `answer_restart`) means the reply was cut off and the step starts over: drop the `token` text since the last `tool_call` and show `message` in its place |
+| `status` | `{message, level?, phase?, words?, chars?, queue?, retracts_answer?}` (§4.4; the stdio transport adds model fields, §10.3) | progress line / spinner label. `level: "warning"` means the agent is warning the user (for example, configured MCP servers were dropped): show it as a warning, not only as the live line. `retracts_answer: true` (phase `answer_restart`) means the reply was cut off and the step starts over: drop the `token` text since the last `tool_call` and show `message` in its place. With phase `answer_check` it means the end-of-turn check is rewriting the answer: drop that text the same way, so the turn shows one answer |
 | `token` | `{delta}` | stream assistant text |
 | `reasoning` | `{delta, retracts_answer?}` | stream the model's reasoning, apart from the answer. Sent only when the request asked for it (`reasoning: true`, contract ≥ 2.22); pieces keep their own spacing, so a client joins them as they come. `retracts_answer: true` means the `token` text since the last `tool_call` was this reasoning (a model whose template opened the block sends only `</think>`): drop it from the answer shown so far |
 | `tool_call` | `{tool, args}` | "using tool" card |
 | `tool_result` | `{tool, render?, data}` | if `render` set (e.g. `email_pre_scan`), draw the typed card from `data`; else a generic result card |
 | `context_usage` | `{window, used, turns_in_view, turns_hidden, ...}` | update the composer's context meter; **not terminal**. The sidecar streams it before the answer for a caller that sent `turns` (contract ≥ 2.28), in the same shape an in-process turn streams at turn start, so the meter fills during a long turn instead of waiting for `final` |
-| `needs_confirmation` | `{run_id, action, summary, confirm_id?, always_scope?, always_label?, risk?, tool_label?, args?, args_truncated?, prompt_context?, confirm_url?}` | show approve/deny; on approve continue per §0.4. **Terminal** under the stateless model. `risk` is `read`, `write`, `execute` or `destructive` — what the call does, read from its arguments; absent when the agent has no reading, and the client then labels by tool. `args` is the gated call's arguments exactly as the model sent them, each value capped at 64,000 characters (`args_truncated: true` when one was cut): `summary` shortens long code, so a client shows `args` to let the user read all of it, and a policy client matches its rules on `args` alone. What the agent adds to the prompt goes in `prompt_context`, never `args`: `working_directory` (where a shell call runs, when the model's arguments don't say it) and `risk_note` (why the agent's checks don't cover the call) |
+| `needs_confirmation` | `{run_id, action, summary, confirm_id?, always_scope?, always_label?, risk?, tool_label?, args?, args_truncated?, prompt_context?, confirm_url?}` | show approve/deny; on approve continue per §0.4. **Terminal** under the stateless model. `risk` is `read`, `write`, `execute` or `destructive` — what the call does, read from its arguments; absent when the agent has no reading, and the client then labels by tool. `args` is the gated call's arguments exactly as the model sent them, each value capped at 64,000 characters (`args_truncated: true` when one was cut): `summary` shortens long code, so a client shows `args` to let the user read all of it, and a policy client matches its rules on `args` alone. What the agent adds to the prompt goes in `prompt_context`, never `args`: `working_directory` (where a shell call runs, when the model's arguments don't say it) `risk_note` (why the agent's checks don't cover the call), `file_path` (where a relative write lands) and `script` (for `execute_python_file`, the file's content as read when the prompt was built, capped at 400 lines with the rest counted in `hidden_lines`, or `unreadable` saying why there is none) |
 | `needs_input` | `{run_id, request_id, question, options, allow_free_text, sensitive?, respond_url, timeout_seconds?}` | show the question and its options; POST the answer to `respond_url`. **Not terminal** — the run resumes on the same stream (§5.1) |
-| `final` | `{answer, usage?, failed?, failure?, performance?, context?, context_error?, model_messages?, route?}` | finalize the message; terminal. `failed: true` means a model failure ended the turn and `answer` explains what happened and what is unfinished — record the run as failed, not done. `failure: "model_server_down"` means the local model server took no connection (cloud models go through it too), so offer to start it rather than blaming the cloud provider; older binaries never send `failure`. `performance` reports measured turn timings, `context` reports the context-meter payload, `context_error` explains why that measurement was unavailable, `model_messages` carries the model-facing trace when the caller sent `turns` (contract >= 2.25), and `route` is a `hybrid` session's routing decision, whose `model` is the concrete model the turn ran on: bill and label the turn by it (contract >= 2.29) |
-| `error` | `{detail, status}` | surface the actionable error verbatim; terminal |
+| `final` | `{answer, usage?, failed?, failure?, performance?, context?, context_error?, model_messages?, route?, session_created?}` | finalize the message; terminal. `failed: true` means a model failure ended the turn and `answer` explains what happened and what is unfinished — record the run as failed, not done. `failure: "model_server_down"` means the local model server took no connection (cloud models go through it too), so offer to start it rather than blaming the cloud provider; older binaries never send `failure`. `performance` reports measured turn timings, `context` reports the context-meter payload, `context_error` explains why that measurement was unavailable, `model_messages` carries the model-facing trace when the caller sent `turns` (contract >= 2.25), `route` is a `hybrid` session's routing decision, whose `model` is the concrete model the turn ran on: bill and label the turn by it (contract >= 2.29), and `session_created: true` (contract >= 2.31) means the sidecar built a fresh agent for this turn — eviction, a restart, or first use — so a client tracking state that assumed the old agent instance survived (a path approved at a prompt) must drop only what it held *before this turn started*, not what this same turn's own prompt just approved |
+| `error` | `{detail, status, session_created?}` | surface the actionable error verbatim; terminal. `session_created` (contract >= 2.31): same meaning as on `final` — the agent was rebuilt this turn whether or not it produced an answer |
 
 A `:`-prefixed SSE comment may appear at any point as a heartbeat. It carries no
 payload and every conformant reader skips it, but it MUST reset any read-idle
@@ -250,7 +250,7 @@ indistinguishable from a dead one.
     "words":   { "type": "integer" },  // with phase "reasoning"
     "chars":   { "type": "integer" },  // with phase "tool_call"
     "queue":   { "type": "object" },   // with phase "model_queue", §4.4
-    "retracts_answer": { "type": "boolean" }  // with phase "answer_restart", §4.4
+    "retracts_answer": { "type": "boolean" }  // with phase "answer_restart" or "answer_check", §4.4
   } }
 
 // token
@@ -302,7 +302,8 @@ indistinguishable from a dead one.
       "properties": {
         "working_directory": { "type": "string" },
         "risk_note":         { "type": "string" },
-        "file_path":         { "type": "string" }   // where a relative write lands
+        "file_path":         { "type": "string" },  // where a relative write lands
+        "script":            { "type": "object" }   // execute_python_file: {text, hidden_lines} or {unreadable}
       } },
     "confirm_url": { "type": "string" }    // resume-model only (§0.4); omitted under stateless
   } }
@@ -358,26 +359,28 @@ indistinguishable from a dead one.
 { "type": "object", "additionalProperties": false,
   "required": ["type", "answer"],
   "properties": {
-    "type":           { "const": "final" },
-    "answer":         { "type": "string" },
-    "usage":          { "type": "object" },
-    "failed":         { "const": true },
-    "performance":    { "type": "object" },
-    "context":        { "type": "object" },
-    "context_error":  { "type": "string" },
+    "type":             { "const": "final" },
+    "answer":           { "type": "string" },
+    "usage":            { "type": "object" },
+    "failed":           { "const": true },
+    "performance":      { "type": "object" },
+    "context":          { "type": "object" },
+    "context_error":    { "type": "string" },
     "model_messages": {
       "type": "array",
       "items": { "type": "object" }
-    }
+    },
+    "session_created":  { "const": true }  // contract >= 2.31; the agent was rebuilt this turn
   } }
 
 // error
 { "type": "object", "additionalProperties": false,
   "required": ["type", "detail", "status"],
   "properties": {
-    "type":   { "const": "error" },
-    "detail": { "type": "string" },   // actionable message, surfaced verbatim
-    "status": { "type": "integer" }   // HTTP-style status code for the failure class
+    "type":             { "const": "error" },
+    "detail":           { "type": "string" },   // actionable message, surfaced verbatim
+    "status":           { "type": "integer" },  // HTTP-style status code for the failure class
+    "session_created":  { "const": true }       // contract >= 2.31; see `final`
   } }
 ```
 
@@ -467,7 +470,9 @@ is on the wire. It is sent when the phase actually starts, never on a timer, and
 | `model_restart` | GAIA's own Lemonade Server stopped under a model call, the answer's or one a tool makes itself: sent while the step waits to retry and again while the daemon starts it (`message` "The model server stopped. GAIA is restarting it…"), or before the daemon starts a server that was never running ("Starting the model server…") | — |
 | `model_retry` | a model call failed for another reason (the model service was busy, timed out, stopped sending, or the connection dropped) and is retried: once per retry, `message` naming the trouble, the wait and the attempt ("The model service is busy — retrying in 8s (2/4)") | — |
 | `answer_restart` | a reply was cut off part-way (the model server stopped or the connection dropped) and the step starts over; carries `retracts_answer: true` | — |
+| `answer_check` | the end-of-turn check is rewriting the answer already streamed; sent before the new text or the check's next tool call, and carries `retracts_answer: true`. A check that keeps the answer sends none | — |
 | `model_queue` | the turn is queued for the model behind another request, then every ~2 s while it waits, then once when it gets the model | `queue` (below) |
+| `helpers` | a `delegate_task` call is running and one of its helpers has just ended: once per helper, `message` counting those ended and those that failed ("2 of 4 helpers done", "3 of 4 helpers done, 1 failed"). It belongs on the running tool's own row, not on a separate status line, and is not ended by the rule below: it lasts until that tool's `tool_result` | — |
 
 `model_queue` is the one phase sent on a timer: the steady updates are what let a
 receiver tell a queued turn from a dead one. Its `queue` object has `event`
@@ -746,7 +751,7 @@ has since been removed, and the flagship `gaia` sidecar is the one that serves
 it. Per the #1841 "update every doc that describes it" rule, a contract MINOR
 moves these **together**: this spec, the flagship's OpenAPI document
 (`hub/agents/gaia/python/openapi.gaia.json`, regenerated by
-`gaia_agent/export_openapi.py`), its contract version, and the npm
+`gaiapy/export_openapi.py`), its contract version, and the npm
 `SPEC.md` / `README.md` / `SKILL.md` / `CHANGELOG.md` under
 `hub/agents/gaia/npm/`.
 
@@ -780,7 +785,7 @@ same canonical stream and never re-derives the mapping.
 ## 10. The stdio transport (TUI ↔ flagship agent)
 
 Besides its HTTP `/query` surface, the flagship agent has a stdio transport: the
-TUI spawns it as a child process (`gaia_agent/stdio.py`) and talks
+TUI spawns it as a child process (`gaiapy/stdio.py`) and talks
 newline-delimited JSON over its stdin/stdout. Events on stdout use the canonical vocabulary above. stdin and the
 `status` extension are specific to this transport and are defined here.
 
@@ -798,7 +803,7 @@ sides in the same change.
 - `{"gaia_query": "<text>"}` is one query whose text may contain newlines.
 - Three sentinel queries never reach the chat:
   - `"\u0000gaia:clear_conversation\u0000"` clears the agent's conversation
-    history. The agent answers with `{"type": "final", "answer": "conversation_cleared"}`,
+    history and forgets the session's "always" grants (full access stays). The agent answers with `{"type": "final", "answer": "conversation_cleared"}`,
     and the TUI keeps the transcript on screen unless it gets exactly that answer.
   - `"\u0000gaia:memory_dump\u0000"` returns a snapshot of the agent's memory
     as JSON in the `answer` of a `final`.
@@ -822,7 +827,7 @@ turn is running. A control message never writes to stdout.
 | `full_access` | `enabled` | Turns full access on or off for the session: gated tools run unasked and the shell guardrails come off. (`bypass`, the retired name, turns it off.) |
 | `accept_edits` | `enabled` | Turns "accept edits" on or off: file edits inside the agent's starting folder run unasked; everything else still asks. |
 | `cancel` | — | Stops the running turn but keeps the process, so skills, grants and history survive. |
-| `clear_history` | — | Clears history after the current turn. The agent accepts it, but the TUI sends the `clear_conversation` sentinel instead, because only the sentinel gets an acknowledgement. |
+| `clear_history` | — | Clears history and the session's "always" grants after the current turn. The agent accepts it, but the TUI sends the `clear_conversation` sentinel instead, because only the sentinel gets an acknowledgement. |
 
 ### 10.3 `status` extension fields
 
@@ -840,7 +845,7 @@ does not list them. A plain progress `status` omits them.
 | `lemonade_reachable` | bool | Whether the local Lemonade server answered a health check. It is reported even for a remote chat model, because embeddings still run on Lemonade. A receiver must tell a missing field (an older agent) apart from `false`. |
 | `lemonade_version` | string? | The Lemonade version, when the health check reported one. |
 | `lemonade_base_url` | string | The Lemonade URL that was probed. |
-| `agent_version` | string | The running agent's own release version (`gaia_agent.__version__`). The TUI header shows this and no other source, so an agent that omits it gets a header with no version. |
+| `agent_version` | string | The running agent's own release version (`gaiapy.__version__`). The TUI header shows this and no other source, so an agent that omits it gets a header with no version. |
 | `gaia_version` | string | The GAIA core version the running agent has loaded. |
 
 A turn whose history no longer fits the model's context sends one more `status`
@@ -852,6 +857,22 @@ or a smaller model or longer prompt shrank the budget), so a stable cut is
 reported once. The model is told on every such turn, not once: the oldest user
 message it is sent opens with a one-sentence note that earlier turns exist and
 are no longer shown.
+
+A turn that runs a plan sends `plan` on a `status` each time the plan is made or
+its current step moves: `{"steps": [...], "current_step": N}`, where each step is
+`{tool?, description?, args?}` (string arguments clipped to 300 characters) and
+`current_step` is 0-based. `message` is then the plan headline, or empty when it
+repeats the last one. The TUI draws it as a checklist and replaces it when the
+steps change.
+
+Once a turn is recorded, and before its terminal event, the agent sends
+`context_usage`: the same event, in the same shape, the HTTP server streams by
+contract 2.28 (§4), measured for the next message. The TUI's meter reads
+`system + tool_definitions + history_used` against
+`system + tool_definitions + history_budget`, so 100% is where older turns start
+to drop, not the end of the window. `at_risk` previews the turns the next ones
+will push out of view; the TUI warns once each time it grows, and `history_cut`
+still reports the cut once it has happened.
 
 ### 10.4 Session listing
 

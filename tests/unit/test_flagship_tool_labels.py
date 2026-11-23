@@ -17,9 +17,9 @@ from pathlib import Path
 import pytest
 
 # test_unit.yml has no flagship wheel; test_gaia_agent.yml runs this file.
-pytest.importorskip("gaia_agent")
+pytest.importorskip("gaiapy")
 
-from gaia_agent.tool_bundles import (  # noqa: E402
+from gaiapy.tool_bundles import (  # noqa: E402
     FULL_BUNDLES,
     FULL_CORE_TOOLS,
     FULL_OPTIONAL_TOOLS,
