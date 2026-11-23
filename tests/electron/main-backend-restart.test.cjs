@@ -197,6 +197,19 @@ test("an update install stops the supervisor before it can spawn again", () => {
   expect(h.supervisor.stop).toHaveBeenCalledTimes(1);
 });
 
+test("a restart that finds no backend program fails as one no retry can fix", async () => {
+  const { value: restartBackend, context } = runInMain(
+    `${topLevelFunction("function missingBackendMessage(")}
+${topLevelFunction("async function restartBackend(")}
+restartBackend`,
+    { backendInstaller: { BUNDLED_GAIA_BIN: "/opt/gaia/core/gaia", GAIA_BIN: "/home/you/.gaia/venv/bin/gaia" }, backendStarting: null }
+  );
+  context.startBackend = () => Promise.resolve(null);
+  const err = await restartBackend().catch((e) => e);
+  expect(err.terminal).toBe(true);
+  expect(err.message).toMatch(/^GAIA's backend program is missing/);
+});
+
 test("with no quit under way, a restart adopts the new backend", async () => {
   const h = restartHarness({ quitWhileSpawning: () => {} });
   await expect(h.restartBackend()).resolves.toEqual({ port: 4300 });

@@ -233,3 +233,26 @@ test("a backend that could not be started at all is stopped until Restart GAIA",
   sup.restartNow();
   expect(h.last()).toMatchObject({ status: "restarting", attempt: 1 });
 });
+
+test("Restart GAIA with the program still missing stops at once, with no retries and no crash dialog", async () => {
+  const onStopped = jest.fn();
+  const h = harness({
+    onStopped,
+    start: jest.fn(() => Promise.reject(Object.assign(new Error("GAIA's backend program is missing"), { terminal: true }))),
+  });
+  h.sup.failedToStart("GAIA's backend program is missing");
+  h.sup.restartNow();
+  await h.settle();
+  expect(h.last()).toMatchObject({ status: "stopped", nextAttemptAt: null, lastError: "GAIA's backend program is missing" });
+  expect(h.pending()).toHaveLength(0);
+  expect(onStopped).not.toHaveBeenCalled();
+});
+
+test("a start that fails for another reason still retries on the backoff", async () => {
+  const h = harness({ start: jest.fn(() => Promise.reject(new Error("port in use"))) });
+  h.sup.failedToStart("GAIA's backend program is missing");
+  h.sup.restartNow();
+  await h.settle();
+  expect(h.last()).toMatchObject({ status: "restarting", lastError: "port in use" });
+  expect(h.pending()).toHaveLength(1);
+});

@@ -26,7 +26,8 @@ const DEFAULTS = Object.freeze({
 
 /**
  * @param {object} deps
- * @param {() => Promise<{port: number}>} deps.start spawns the backend and resolves once it answers
+ * @param {() => Promise<{port: number}>} deps.start spawns the backend and resolves once it answers;
+ *   it rejects with an error carrying `terminal: true` when no retry can succeed
  * @param {(state: object) => void} deps.onState called with every new state
  * @param {(state: object) => void} [deps.onStopped] called once each time restarts run out
  */
@@ -79,7 +80,13 @@ function createBackendSupervisor({
         (err) => {
           starting = false;
           if (stopped) return;
-          schedule({ lastError: err && err.message ? err.message : String(err) });
+          const lastError = err && err.message ? err.message : String(err);
+          // A retry can't fix it (the program is missing): stop now, with no crash dialog.
+          if (err && err.terminal) {
+            emit({ status: "stopped", nextAttemptAt: null, lastError });
+            return;
+          }
+          schedule({ lastError });
         }
       );
   }

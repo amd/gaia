@@ -505,7 +505,7 @@ async function startBackend() {
 async function restartBackend() {
   backendStarting = startBackend();
   const child = await backendStarting;
-  if (!child) throw new Error(missingBackendMessage());
+  if (!child) throw Object.assign(new Error(missingBackendMessage()), { terminal: true });
   if (quitStarted()) {
     isIntentionalKill = true;
     await portManager.killBackend(child);
