@@ -1738,7 +1738,9 @@ class TestGitCheckoutRestorePathOverwrites:
     uncommitted edit was gone before anyone saw it. Refused forms come back
     as TIER_REFUSE (when the call also counts as destructive) or
     TIER_CONFIRM_ONCE (the user may still run that exact line by hand): in
-    both tiers no grant ever runs them unasked.
+    both tiers no grant ever runs them unasked. The named-file forms are
+    confirm-once, not refused outright (#8825): someone at the keyboard is
+    asked once, with a risk note, while an unattended run refuses them.
     """
 
     @pytest.mark.parametrize(
@@ -1777,6 +1779,76 @@ class TestGitCheckoutRestorePathOverwrites:
         assert error is not None, f"{command} should not reach a prompt"
         assert error["tier"] in (TIER_REFUSE, TIER_CONFIRM_ONCE), error
         assert reason in error["error"], error
+
+    @pytest.mark.parametrize(
+        "command,reason",
+        [
+            (
+                "git checkout --pathspec-from-file=list.txt",
+                "reads the paths to overwrite from a file",
+            ),
+            (
+                "git checkout --pathspec-from-file list.txt",
+                "reads the paths to overwrite from a file",
+            ),
+            ("git checkout -p", "discards hunks interactively"),
+            ("git checkout --patch main", "discards hunks interactively"),
+            ("git restore -p", "discards hunks interactively"),
+            (
+                "git checkout --ours src/gaia/cli.py",
+                "overwrites the file with one side of a merge",
+            ),
+            (
+                "git checkout --theirs src/gaia/cli.py",
+                "overwrites the file with one side of a merge",
+            ),
+        ],
+    )
+    def test_a_patch_or_side_selecting_form_is_refused_not_prompted(
+        self, command, reason
+    ):
+        error = check_granted(command, bypass=False, binaries=("git",))
+        assert error is not None, f"{command} should not reach a prompt"
+        assert error["tier"] == TIER_CONFIRM_ONCE, error
+        assert reason in error["error"], error
+
+    @pytest.mark.parametrize(
+        "command",
+        [
+            "git restore src/gaia/cli.py",
+            "git checkout main -- src/gaia/cli.py",
+            "git checkout HEAD src/gaia/cli.py",
+        ],
+    )
+    def test_a_named_file_restore_asks_once_with_a_risk_note(self, command):
+        # Confirm-once, not refused outright (#8825): someone at the keyboard
+        # is asked once, with a risk note, and an unattended run refuses.
+        error = check_granted(command, bypass=False, binaries=("git",))
+        assert error is not None, f"{command} should not reach a prompt"
+        assert error["tier"] == TIER_CONFIRM_ONCE, error
+
+    @pytest.mark.parametrize(
+        "command",
+        [
+            "git checkout .",
+            "git checkout -- src/gaia/cli.py",
+            "git checkout main -- .",
+            "git restore .",
+        ],
+    )
+    def test_a_whole_tree_restore_is_never_offered(self, command):
+        error = check_granted(command, bypass=False, binaries=("git",))
+        assert error is not None, f"{command} should not reach a prompt"
+        assert error["tier"] == TIER_REFUSE, error
+
+    def test_a_confirm_once_restore_is_refused_when_only_the_env_approves(
+        self, env_pre_approves
+    ):
+        # #8825: an unattended run turns confirm-once into a refusal.
+        error = refusal("git restore src/gaia/cli.py")
+        assert error is not None
+        assert error["tier"] == TIER_REFUSE
+        assert "needs your approval" in error["error"]
 
     @pytest.mark.parametrize(
         "command",

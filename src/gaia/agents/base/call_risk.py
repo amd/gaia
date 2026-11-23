@@ -210,6 +210,63 @@ def _stricter(a: str, b: str) -> str:
 _GIT_VALUE_OPTIONS = frozenset({"-C", "-c", "--git-dir", "--work-tree", "--namespace"})
 
 
+#: `git restore` flags that overwrite the working tree instead of unstaging.
+#: A restore carrying one discards uncommitted work no prompt can bound.
+_RESTORE_WORKTREE_FLAGS = frozenset(
+    {"--worktree", "--ours", "--theirs", "--merge", "--conflict"}
+)
+_RESTORE_WORKTREE_SHORTS = frozenset({"W"})
+#: Short flags on `git restore` that take a value: the rest of the token is
+#: the value, never another flag.
+_RESTORE_VALUE_SHORTS = frozenset({"s"})
+
+
+def _restore_discards_unbounded(args: Tuple[str, ...], words: list[str]) -> bool:
+    """True when a `git restore` discards work no one-time prompt can bound.
+
+    The whole tree (`.`), paths read from a file (`--pathspec-from-file`,
+    any spelling of it — the file list stays hidden whatever the
+    abbreviation), and the flags that restore the working tree instead of
+    unstaging are destructive: even a user at the keyboard may not approve
+    them once. A restore that names its files on the line is a bounded
+    overwrite — the classifier still refuses it, so it comes back as
+    confirm-once: asked once with a risk note, refused when nobody is
+    there to answer.
+    """
+    if "." in words[1:]:
+        return True
+    for token in args[1:]:
+        if not token.startswith("-") or token == "-":
+            continue
+        if token.startswith("--"):
+            name = token.split("=", 1)[0]
+            if name in _RESTORE_WORKTREE_FLAGS or name.startswith("--pathspec"):
+                return True
+            continue
+        for letter in token[1:]:
+            if letter in _RESTORE_VALUE_SHORTS:
+                break
+            if letter in _RESTORE_WORKTREE_SHORTS:
+                return True
+    return False
+
+
+def _checkout_discards_unbounded(args: Tuple[str, ...], words: list[str]) -> bool:
+    """True when a `git checkout` discards work no one-time prompt can bound.
+
+    The whole tree (`.`) and a bare `--` restore with no revision named
+    before it are destructive. Naming the revision bounds the restore to
+    that revision's content, so `checkout <branch> -- <path>` is a bounded
+    overwrite the classifier refuses into confirm-once instead.
+    """
+    if "." in words[1:]:
+        return True
+    if "--" not in args:
+        return False
+    before = args[1 : args.index("--")]
+    return not any(not token.startswith("-") for token in before)
+
+
 def _git_risk(args: Tuple[str, ...]) -> str:
     rest = list(args)
     while rest and rest[0].startswith("-"):
@@ -241,7 +298,9 @@ def _git_risk(args: Tuple[str, ...]) -> str:
         return DESTRUCTIVE
     if sub == "stash" and len(words) > 1 and words[1] in ("drop", "clear"):
         return DESTRUCTIVE
-    if sub == "restore" or (sub == "checkout" and ("--" in args or "." in words[1:])):
+    if sub == "restore" and _restore_discards_unbounded(args, words):
+        return DESTRUCTIVE
+    if sub == "checkout" and _checkout_discards_unbounded(args, words):
         return DESTRUCTIVE
     if sub == "branch" and len(words) == 1:
         return READ

@@ -1974,16 +1974,33 @@ BINARY_POLICIES: dict[str, BinaryPolicy] = {
             ),
             # `checkout` switches branches with one operand. A second operand,
             # a `--` separator, or a path-shaped operand turns it into a
-            # restore that overwrites files, and an unattended run approves a
-            # prompt for that without seeing it, so those forms are refused
-            # outright, not offered. `switch --merge` is the way to carry
-            # uncommitted edits across branches.
+            # restore that overwrites files. Those forms are refused, and the
+            # ones that name their files come back as confirm-once: the user
+            # is asked once, with a risk note, and an unattended run refuses
+            # them. The patch and side-selecting forms (`-p`, `--ours`,
+            # `--theirs`, `--pathspec-from-file`) are refused the same way:
+            # `-p` discards hunks interactively, and the others overwrite
+            # files the prompt cannot show or bound. `switch --merge` is the
+            # way to carry uncommitted edits across branches.
             "checkout": _git_write(
                 "switches branches or overwrites files in the working tree — "
                 "any uncommitted change to a file it touches is lost, and "
                 "nothing recovers it",
                 value_flags=frozenset({"-b"}),
-                denied_flags=frozenset({"-f", "--force", "-B", "--orphan", "--"}),
+                denied_flags=frozenset(
+                    {
+                        "-f",
+                        "--force",
+                        "-B",
+                        "--orphan",
+                        "--",
+                        "--pathspec-from-file",
+                        "-p",
+                        "--patch",
+                        "--ours",
+                        "--theirs",
+                    }
+                ),
                 denied_flag_reasons={
                     "-f": "it discards uncommitted changes without reporting "
                     "which ones. Commit or stash first, then switch",
@@ -1995,6 +2012,22 @@ BINARY_POLICIES: dict[str, BinaryPolicy] = {
                     "a repository-shaped change no per-command prompt conveys",
                     "--": "everything after it is a path to restore, not a "
                     "branch to switch to. Switch branches without naming paths",
+                    "--pathspec-from-file": "it reads the paths to overwrite "
+                    "from a file, so the approval prompt cannot show which "
+                    "files it touches. Name the paths on the command line "
+                    "instead",
+                    "-p": "it discards hunks interactively, so the prompt "
+                    "cannot show which changes it throws away. Name the "
+                    "files to restore instead",
+                    "--patch": "it discards hunks interactively, so the "
+                    "prompt cannot show which changes it throws away. Name "
+                    "the files to restore instead",
+                    "--ours": "it overwrites the file with one side of a "
+                    "merge, discarding the other side. Resolve the conflict "
+                    "by editing the file, or let the user run the command",
+                    "--theirs": "it overwrites the file with one side of a "
+                    "merge, discarding the other side. Resolve the conflict "
+                    "by editing the file, or let the user run the command",
                 },
                 max_operands=1,
                 denied_operand_prefixes=_GIT_CHECKOUT_PATH_PREFIXES,
@@ -2024,17 +2057,27 @@ BINARY_POLICIES: dict[str, BinaryPolicy] = {
             # and refuse every flag that restores the working tree instead
             # (`--worktree`, `--ours`, `--theirs`, `--merge`, `--conflict`).
             # `--pathspec-from-file` names the paths from a file the prompt
-            # cannot show, so it gets no rule at all.
+            # cannot show, and `-p` discards hunks interactively, so both
+            # are refused too. The named-file forms come back as confirm-once
+            # rather than refused outright: the user is asked once, with a
+            # risk note, and an unattended run refuses them.
             "restore": _git_write(
                 "unstages files in this repository: the index only, never "
-                "the working tree. Restoring files is refused outright",
+                "the working tree. Restoring a named file asks once, with a "
+                "risk note; the whole-tree forms are refused outright",
                 value_flags=frozenset({"-s", "--source"}),
-                denied_flags=frozenset({"--pathspec-from-file"}),
+                denied_flags=frozenset({"--pathspec-from-file", "-p", "--patch"}),
                 denied_flag_reasons={
                     "--pathspec-from-file": "it reads the paths to overwrite "
                     "from a file, so the approval prompt cannot show which "
                     "files it touches. Name the paths on the command line "
                     "instead",
+                    "-p": "it discards hunks interactively, so the prompt "
+                    "cannot show which changes it throws away. Name the "
+                    "files to restore instead",
+                    "--patch": "it discards hunks interactively, so the "
+                    "prompt cannot show which changes it throws away. Name "
+                    "the files to restore instead",
                 },
                 operands_require_flags=frozenset({"--staged", "-S"}),
                 operands_refuse_flags=frozenset(

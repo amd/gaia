@@ -45,6 +45,17 @@ from gaia.agents.base.command_facts import read_command
         ("find . -name '*.pyc' -delete", "destructive"),
         ("pytest && rm -rf .pytest_cache", "destructive"),
         ("git -C . clean -fdx", "destructive"),
+        # A restore that names its files is a bounded write, not destruction;
+        # the whole-tree and file-list forms stay destructive (#8825).
+        ("git restore a.py", "write"),
+        ("git checkout main -- a.py", "write"),
+        ("git checkout HEAD a.py", "write"),
+        ("git restore .", "destructive"),
+        ("git checkout .", "destructive"),
+        ("git checkout -- a.py", "destructive"),
+        ("git checkout main -- .", "destructive"),
+        ("git restore --worktree a.py", "destructive"),
+        ("git restore --pathspec-from-file list.txt", "destructive"),
         # git options and subcommands that change state
         ("git remote -v", "read"),
         ("git remote add origin url", "write"),
