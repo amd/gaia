@@ -35,6 +35,7 @@ import { answerQuestion, QuestionGoneError, resolveTypedAnswer, waitingQuestionI
 import type { Message, StreamEvent, AgentStep, RenderCardData, ContextUsage, SystemStatus } from '../types';
 
 import './ChatView.css';
+import { AgentChip } from './AgentChip';
 import { Composer } from './Composer';
 import { ModelChip } from './ModelChip';
 import { SessionFolderChip } from './FolderChip';
@@ -74,6 +75,7 @@ import { MAX_SESSION_TITLE_CHARS, STARTING_REASON } from '../utils/constants';
 import { scrollBehavior } from '../utils/motion';
 import { setVisibleInterval } from '../utils/visibleInterval';
 import { ModelServerDownNotice } from './ModelServerDownNotice';
+import { ChatAgentRecovery } from './ChatAgentRecovery';
 import { useChatDraft } from '../hooks/useSavedDraft';
 import { followSlideEvent, settleSlideDraft, SLIDE_PREVIEW_ENABLED } from '../stores/slideDraftStore';
 import { chatDraftKey, clearSavedDraft } from '../utils/savedDraft';
@@ -1788,6 +1790,9 @@ export function ChatView({ sessionId }: ChatViewProps) {
                                 {msg.failure === 'model_server_down' && idx === messages.length - 1 && !busy && (
                                     <ModelServerDownNotice />
                                 )}
+                                {msg.failed === true && msg.failure !== 'model_server_down' && canTryAgain && (
+                                    <ChatAgentRecovery key={msg.id} onTryAgain={() => handleTryAgain(msg)} />
+                                )}
                                 {comparison?.messageId === msg.id && (
                                     <AnswerComparison
                                         original={msg}
@@ -1935,6 +1940,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
                                 />
                                 <SpendMeter sessionId={sessionId} busy={busy} />
                                 <SessionFolderChip sessionId={sessionId} onOpen={() => revealPanelSection('environment')} />
+                                <AgentChip />
                                 <ModelChip />
                             </>
                         )}

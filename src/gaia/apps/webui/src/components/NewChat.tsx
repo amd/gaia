@@ -3,6 +3,7 @@
 
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { ChevronRight, FileText, X } from 'lucide-react';
+import { AgentChip } from './AgentChip';
 import { AgentRecovery } from './AgentRecovery';
 import { BrowserPaneToggle } from './browser-pane/BrowserPane';
 import { Composer } from './Composer';
@@ -395,6 +396,8 @@ export function NewChat({ onSend, initialText = '', focusRequest = 0, agentMissi
                 </div>
                 <div className="new-chat-meta">
                     {folder && <FolderChip folder={folder} disabled={starting || sending} />}
+                    {/* Under the model chip: the box's own row has no room left beside it. */}
+                    <AgentChip />
                 </div>
                 <LibraryDocuments />
                 {warming !== null && !starting && warming.seconds >= WARM_UP_SHOWN_AFTER_S && (
