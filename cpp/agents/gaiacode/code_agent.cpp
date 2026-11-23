@@ -455,6 +455,24 @@ std::optional<std::string> CodeAgent::treeFingerprint(const std::string& folder)
     }
     ec.clear();
     fs::remove_all(store, ec);
+    // The outer tree records only a submodule's commit; its files are measured as their own repository.
+    static thread_local int depth = 0;
+    if (tree && depth < 3) {
+        const ProcessResult subs = gitIn(git, dir, {}, "config --file .gitmodules --get-regexp path", 10000);
+        std::istringstream entries(subs.exitCode == 0 ? subs.stdout_output : "");
+        ++depth;
+        for (std::string line; std::getline(entries, line);) {
+            const size_t space = line.find(' ');
+            if (space == std::string::npos) continue;
+            const fs::path rel = fs::u8path(trimmed(line.substr(space + 1))).lexically_normal();
+            if (rel.empty() || rel.is_absolute() || *rel.begin() == "..") continue;
+            const fs::path sub = fs::u8path(folder) / rel;
+            if (!fs::exists(sub / ".git", ec)) continue;  // not checked out
+            const std::optional<std::string> inner = treeFingerprint(sub.u8string());
+            *tree += "\n" + rel.generic_u8string() + " " + (inner ? *inner : "?");
+        }
+        --depth;
+    }
     return tree;
 }
 
