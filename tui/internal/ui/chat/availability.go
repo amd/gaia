@@ -93,7 +93,7 @@ func (m ChatModel) availableCommandSet() map[string]bool {
 			if m.agentID != setupAgentID || !m.gpuApplies {
 				continue
 			}
-		case modelCommandPrefix, "/provider", skillsCommandPrefix, researchCommand:
+		case modelCommandPrefix, modeCommandPrefix, "/provider", skillsCommandPrefix, researchCommand:
 			if !m.supportsModelCommand() {
 				continue
 			}

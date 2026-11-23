@@ -170,3 +170,26 @@ def test_cli_refuses_an_unknown_mode_and_hand_edited_profiles(capsys):
     with pytest.raises(SystemExit):
         _set("run_profiles", "{}")
     assert "Settings › Run mode" in capsys.readouterr().err
+
+
+def test_the_tui_mirrors_the_run_mode_rules():
+    """The TUI keeps its own copy of these rules (preflight/runmodes.go)."""
+    import re
+    from pathlib import Path
+
+    from gaia.llm.lemonade_client import DEFAULT_MODEL_NAME
+
+    go = (
+        Path(__file__).resolve().parents[2]
+        / "tui"
+        / "internal"
+        / "ui"
+        / "preflight"
+        / "runmodes.go"
+    ).read_text(encoding="utf-8")
+    consts = dict(re.findall(r'^\s*(\w+)\s*=\s*"([^"]*)"', go, re.MULTILINE))
+    assert consts["LocalMode"] == run_modes.LOCAL
+    assert consts["CloudMode"] == run_modes.CLOUD
+    assert consts["DefaultLocalModel"] == DEFAULT_MODEL_NAME
+    assert re.search(r"RunModes = \[\]string\{LocalMode, CloudMode\}", go)
+    assert list(run_modes.MODES) == [run_modes.LOCAL, run_modes.CLOUD]

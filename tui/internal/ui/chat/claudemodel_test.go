@@ -337,8 +337,8 @@ func TestTheModelPickerDoesNotLeakIntoTheTopLevelPalette(t *testing.T) {
 	m = typeInto(t, m, "/mo")
 
 	names := paletteNames(m.paletteFiltered())
-	if len(names) != 2 || !containsAll(names, "/model", "/models") {
-		t.Errorf(`"/mo" must still narrow to just /model and /models, got %v`, names)
+	if len(names) != 3 || !containsAll(names, "/mode", "/model", "/models") {
+		t.Errorf(`"/mo" must still narrow to just /mode, /model and /models, got %v`, names)
 	}
 }
 

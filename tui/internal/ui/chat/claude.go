@@ -114,11 +114,12 @@ func (m ChatModel) renderModelChip() string {
 	if m.modelDisplay == "" {
 		return m.renderClaudeChip()
 	}
+	// The run mode leads, as the Agent UI's chip says it (runmode.go).
 	if m.modelRemote && m.modelBackend != "claude" {
-		return claudeChipStyle.Render(" │ " + lemonade.Label(m.modelBackend) + " · " + strings.TrimPrefix(m.modelDisplay, m.modelBackend+".") + " (remote)")
+		return claudeChipStyle.Render(" │ Cloud · " + lemonade.Label(m.modelBackend) + " · " + strings.TrimPrefix(m.modelDisplay, m.modelBackend+"."))
 	}
 	if m.modelRemote {
-		return claudeChipStyle.Render(" │ " + claudeChipLabel(m.modelID))
+		return claudeChipStyle.Render(" │ Cloud · " + claudeChipLabel(m.modelID))
 	}
-	return modelChipStyle.Render(" │ " + m.modelDisplay)
+	return modelChipStyle.Render(" │ Local · " + m.modelDisplay)
 }

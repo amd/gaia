@@ -178,7 +178,7 @@ func TestHeaderNamesTheModelTheGateLoaded(t *testing.T) {
 	m.gateChatModel = "Gemma-4-E4B-it-GGUF"
 	updated, _ := m.launchAgent(agent, true)
 	m = updated.(FlagshipModel)
-	if h := headerOf(m); !strings.Contains(h, "│ Gemma-4-E4B-it-GGUF") {
+	if h := headerOf(m); !strings.Contains(h, "│ Local · Gemma-4-E4B-it-GGUF") {
 		t.Fatalf("a local session's header must name its model before the first message: %q", h)
 	}
 }

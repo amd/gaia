@@ -26,6 +26,7 @@ import (
 	"github.com/amd/gaia/tui/internal/ui/components"
 
 	"github.com/amd/gaia/tui/internal/ui/modelsetup"
+	"github.com/amd/gaia/tui/internal/ui/preflight"
 	"github.com/amd/gaia/tui/internal/ui/providers"
 	"github.com/amd/gaia/tui/internal/ui/theme"
 )
@@ -455,6 +456,8 @@ type ChatModel struct {
 	// startupmodel.go. saveModel persists a confirmed switch; nil saves nothing.
 	startup   startupModel
 	saveModel func(provider, model string) error
+	// readRunModes reads the Local/Cloud run modes (runmode.go); nil reads config.json.
+	readRunModes func() (preflight.RunModeState, error)
 
 	connected bool
 	// goalFresh says the agent announced a goal since the last tool call, so
@@ -1843,6 +1846,9 @@ func (m ChatModel) submit(query string) (tea.Model, tea.Cmd) {
 	}
 	if req, ok := parseConnectorsCommand(query); ok {
 		return m.startConnectorsCommand(req)
+	}
+	if isModeCommand(query) {
+		return m.runModeCommand(query)
 	}
 	if isModelCommand(query) {
 		if !m.supportsModelCommand() {

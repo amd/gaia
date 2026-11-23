@@ -182,7 +182,7 @@ func TestRelayedSwitchToACloudModelNamesTheProvider(t *testing.T) {
 	if c.turnModel != gatewayMdl || len(c.sent) != 0 {
 		t.Fatalf("turn model %q, sent %q", c.turnModel, c.sent)
 	}
-	if h := ansi.Strip(m.renderModelChip()); !strings.Contains(h, "AMD LLM Gateway · DeepSeek-V4.1-Flash (remote)") {
+	if h := ansi.Strip(m.renderModelChip()); !strings.Contains(h, "Cloud · AMD LLM Gateway · DeepSeek-V4.1-Flash") {
 		t.Errorf("header = %q", h)
 	}
 	finishTurn(t, m)

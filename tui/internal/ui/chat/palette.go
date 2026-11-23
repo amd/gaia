@@ -42,6 +42,7 @@ var paletteCommands = []paletteCommand{
 	{"/slack", "Connect this agent to Slack, or show the connection's status"},
 	{"/discord", "Message GAIA from a Discord DM: set it up, or show its status"},
 	{"/automations", "List reminders, alerts and triggers; pause, resume or remove one"},
+	{"/mode", "Run chat on this PC or in the cloud: /mode local, /mode cloud; alone, shows both"},
 	{"/model", "Switch the model this session runs on (gaia flagship agent only)"},
 	{"/skills", "List skills, or add one or a library: /skills add <GitHub or skills.sh link>"},
 	{"/research", "Research a topic on the web for a cited report: /research <topic>; alone, switches research mode"},
@@ -171,7 +172,13 @@ func filterPaletteCommands(value string, available map[string]bool) []paletteCom
 			continue
 		}
 		if strings.HasPrefix(c.Name, q) {
-			out = append(out, c)
+			// A name typed in full is what Enter runs, ahead of longer names
+			// listed before it that it starts ("/model" before "/models").
+			if c.Name == q {
+				out = append([]paletteCommand{c}, out...)
+			} else {
+				out = append(out, c)
+			}
 		}
 	}
 	return out

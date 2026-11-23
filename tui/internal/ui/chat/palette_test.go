@@ -101,14 +101,14 @@ func TestPaletteFiltersAsYouType(t *testing.T) {
 
 	m = typeInto(t, m, "/m")
 	names := paletteNames(m.paletteFiltered())
-	if !containsAll(names, "/model", "/memory", "/models") || len(names) != 3 {
-		t.Fatalf("\"/m\" should narrow to /model, /models and /memory, got %v", names)
+	if !containsAll(names, "/mode", "/model", "/memory", "/models") || len(names) != 4 {
+		t.Fatalf("\"/m\" should narrow to /mode, /model, /models and /memory, got %v", names)
 	}
 
 	m = typeInto(t, m, "o")
 	names = paletteNames(m.paletteFiltered())
-	if len(names) != 2 || !containsAll(names, "/model", "/models") {
-		t.Fatalf("\"/mo\" should narrow to just /model and /models, got %v", names)
+	if len(names) != 3 || !containsAll(names, "/mode", "/model", "/models") {
+		t.Fatalf("\"/mo\" should narrow to just /mode, /model and /models, got %v", names)
 	}
 }
 
@@ -372,9 +372,10 @@ func TestPaletteListsEverySubmitCommand(t *testing.T) {
 	// isModelCommand before the switch above and never appears as a case
 	// literal there (see modelcmd.go) — assert it directly, mirroring how
 	// TestChatHelpNamesEveryChatBinding checks it against chatHelpText.
-	seen["/skills"] = true // dispatched by isSkillsCommand, like /model
+	seen["/skills"] = true   // dispatched by isSkillsCommand, like /model
 	seen["/research"] = true // dispatched by isResearchCommand (research.go)
 	seen["/model"] = true
+	seen["/mode"] = true // dispatched by isModeCommand (runmode.go)
 	if !known["/model"] {
 		t.Error("paletteCommands does not offer /model")
 	}
