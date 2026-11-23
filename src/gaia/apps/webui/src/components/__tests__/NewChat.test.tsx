@@ -186,6 +186,20 @@ describe('NewChat starters', () => {
         expect(await starters()).toEqual(['Ask about your documents', 'Research a topic', 'Recipe']);
     });
 
+    it("holds the row's place, unseen and unreachable, until this PC's tasks arrive", async () => {
+        let answer!: (v: typeof START) => void;
+        vi.mocked(api.getStartScreen).mockReturnValue(new Promise((resolve) => { answer = resolve; }));
+        const { container } = render(<NewChat onSend={vi.fn()} />);
+        const held = container.querySelector('.try-chips');
+        expect(held).toHaveClass('is-pending');
+        expect(held).toHaveAttribute('aria-hidden', 'true');
+        expect(screen.queryByRole('group', { name: 'Things to try' })).toBeNull();
+
+        await act(async () => { answer(START); });
+        expect(await starters()).toEqual(['Ask about your documents', 'Research a topic', 'Recipe']);
+        expect(container.querySelector('.try-chips')).not.toHaveClass('is-pending');
+    });
+
     it('offers three examples when this PC has no tasks to offer', async () => {
         vi.mocked(api.getStartScreen).mockResolvedValue({ ...START, cards: [] });
         render(<NewChat onSend={vi.fn()} />);

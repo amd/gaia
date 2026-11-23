@@ -42,15 +42,23 @@ interface TryChipsProps {
     /** Every pick fills the box to edit or send; none sends by itself. */
     onPick: (prompt: string) => void;
     disabled?: boolean;
+    /** The tasks haven't arrived yet: hold the row's space, unseen, so the screen doesn't jump when they do. */
+    pending?: boolean;
 }
 
 /** Up to three starters for an empty chat. */
-export function TryChips({ cards = [], onPick, disabled }: TryChipsProps) {
+export function TryChips({ cards = [], onPick, disabled, pending = false }: TryChipsProps) {
     const t = useT();
     const tasks = cards.slice(0, CARDS_SHOWN);
     const examples = TRY_EXAMPLES.slice(0, STARTERS_SHOWN - tasks.length);
     return (
-        <div className="try-chips" role="group" aria-label={t('newChat.cardsLabel')}>
+        <div
+            className={`try-chips${pending ? ' is-pending' : ''}`}
+            role="group"
+            aria-label={t('newChat.cardsLabel')}
+            aria-hidden={pending || undefined}
+            inert={pending || undefined}
+        >
             {tasks.map((card) => {
                 const Icon = CARD_ICONS[card.skill] ?? ArrowUpRight;
                 const { title, note } = cardText(card, t);

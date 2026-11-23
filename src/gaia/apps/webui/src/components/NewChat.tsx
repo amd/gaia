@@ -393,8 +393,8 @@ export function NewChat({ onSend, initialText = '', focusRequest = 0, agentMissi
                 )}
                 {error && <p className="new-chat-error" role="alert">{error}</p>}
                 {agentRefused && agentMissing && <p className="new-chat-error" role="alert">{t('agentNotice.sendRefused')}</p>}
-                {/* Waits for the start screen, so examples don't flash up before this PC's tasks. */}
-                {(start || startError) && <TryChips cards={start?.cards} onPick={fillPrompt} disabled={starting || sending} />}
+                {/* Held unseen until the start screen answers, so examples don't flash up before this PC's tasks and nothing jumps. */}
+                <TryChips cards={start?.cards} pending={!start && !startError} onPick={fillPrompt} disabled={starting || sending} />
                 {!agentProblem && startError && <AssistantUnavailable detail={startError} onRetry={() => loadStart()} />}
             </div>
         </main>
