@@ -80,6 +80,27 @@ describe('AgentChoice', () => {
         await waitFor(() => expect(py).toHaveAttribute('aria-checked', 'true'));
     });
 
+    it('says when the other agent is answering, and choosing the saved one again switches back', async () => {
+        mockedApi.getAgentPrograms.mockResolvedValue({ ...AGENT_PROGRAMS, current: 'gaiapy', running: 'gaiacpp' });
+        render(<AgentChoice inSettings />);
+        const py = await radio(/gaiapy/);
+        expect(py).toHaveAttribute('aria-checked', 'true');
+        expect(screen.getByRole('status')).toHaveTextContent(
+            'gaiacpp is answering right now: a terminal session started it. Choose gaiapy again to switch back to it.');
+
+        fireEvent.click(py);
+        await waitFor(() => expect(mockedApi.updateSettings).toHaveBeenCalledWith({ flagship_agent: 'gaiapy' }));
+        await waitFor(() => expect(screen.queryByText(/is answering right now/)).not.toBeInTheDocument());
+    });
+
+    it('says nothing about what runs when it is the saved agent, and re-picking it saves nothing', async () => {
+        mockedApi.getAgentPrograms.mockResolvedValue({ ...AGENT_PROGRAMS, current: 'gaiapy', running: 'gaiapy' });
+        render(<AgentChoice inSettings />);
+        fireEvent.click(await radio(/gaiapy/));
+        expect(screen.queryByText(/is answering right now/)).not.toBeInTheDocument();
+        expect(mockedApi.updateSettings).not.toHaveBeenCalled();
+    });
+
     it('shows no size it could not read', async () => {
         mockedApi.getAgentPrograms.mockResolvedValue({ ...AGENT_PROGRAMS, programs: AGENT_PROGRAMS.programs.map((p) => ({ ...p, size_bytes: null })) });
         render(<AgentChoice />);

@@ -81,7 +81,8 @@ export function AgentChoice({ inSettings = false, disabled = false, pending = nu
         setListing((l) => (l ? { ...l, current: id } : l));
         try {
             const updated = await api.updateSettings({ flagship_agent: id });
-            if (mounted.current) setListing((l) => (l ? { ...l, current: updated.flagship_agent } : l));
+            // The switch stopped the running agent; the next message starts the saved one.
+            if (mounted.current) setListing((l) => (l ? { ...l, current: updated.flagship_agent, running: null } : l));
         } catch (err) {
             if (!mounted.current) return;
             setSaveError(messageOf(err));
@@ -131,6 +132,8 @@ export function AgentChoice({ inSettings = false, disabled = false, pending = nu
     const outdated = (p: AgentProgram | undefined) => !!p && p.id === 'gaiacpp' && p.installed && p.update_available === true && p.can_download;
     const downloading = job?.state === 'downloading';
     const selected = pending ?? listing?.current;
+    // A terminal session can start the other program than the one saved here.
+    const otherRuns = !!listing?.running && listing.running !== listing.current;
 
     const choose = (id: FlagshipAgent) => {
         const p = program(id);
@@ -141,7 +144,7 @@ export function AgentChoice({ inSettings = false, disabled = false, pending = nu
             return;
         }
         if (saving || downloading || needsDownload(p)) return;
-        if (id !== listing.current) void save(id, listing.current);
+        if (id !== listing.current || otherRuns) void save(id, listing.current);
     };
 
     const cpp = program('gaiacpp');
@@ -244,6 +247,11 @@ export function AgentChoice({ inSettings = false, disabled = false, pending = nu
                             );
                         })}
                     </RadioGroup>
+                    {inSettings && otherRuns && !saving && (
+                        <p className="agent-choice-why" role="status">
+                            {t('settings.agent.runningOther', { running: listing.running ?? '', current: listing.current })}
+                        </p>
+                    )}
                     {job && (job.state === 'downloading' || job.state === 'failed') && (
                         <AgentDownloadRow
                             job={job}

@@ -3129,6 +3129,22 @@ const groups = (page: Page) => page.locator('.settings-card .settings-disclosure
 
 for (const locale of ['ar', 'en']) {
     test.describe(`settings model page (${locale})`, () => {
+        // A terminal session put the GAIA agent on gaiacpp while gaiapy is saved: the card says which answers.
+        test('the agent choice while the other program answers', async ({ page }) => {
+            await openModelPage(page, locale, { agent: { running: 'gaiacpp' } });
+            const agent = page.locator('.agent-choice');
+            const note = agent.locator('.agent-choice-why[role="status"]');
+            await expect(note).toBeVisible();
+            await expect(note).toContainText('gaiacpp');
+            await expect(note).toContainText('gaiapy');
+            const card = (await agent.boundingBox())!;
+            const box = (await note.boundingBox())!;
+            expect(box.x).toBeGreaterThanOrEqual(card.x - 1);
+            expect(box.x + box.width).toBeLessThanOrEqual(card.x + card.width + 1);
+            await shot(page, `model-${locale}-agent-running-other`);
+            expect(await audit(page)).toEqual([]);
+        });
+
         for (const noGaiacpp of [false, true]) {
             for (const expanded of [false, true]) {
                 const state = `${noGaiacpp ? 'unavailable-' : ''}${expanded ? 'expanded' : 'collapsed'}`;

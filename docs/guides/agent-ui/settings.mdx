@@ -45,6 +45,8 @@ The model in use, context size, the models on this PC, cloud providers and keys,
 
 A gaiacpp from another GAIA release than this one, such as a copy an older installer left on the PC, is tagged **Out of date**, with both versions under its row and an **Update** button that downloads this release's copy into `~/.gaia/bin`. It still runs and can still be picked; updating never switches the agent in use. A development build of GAIA has no release to compare with, so it flags nothing, and a build named by `GAIA_GAIACPP_PATH` is never flagged.
 
+The terminal UI shares the agent with the Agent UI, and a terminal session on the Python agent restarts it on gaiapy. When the program running differs from the one picked here, the card says which one is answering; picking your choice again switches back.
+
 While gaiacpp is the agent, the chat panel's **Agent info** says **Runs on gaiacpp** with a **Beta** tag, the same tag this card shows.
 
 If gaiacpp is the chosen agent and can't start, because its file is missing or fails its check, the new-chat screen says so and offers two buttons: **Download gaiacpp again**, with the same progress bar, and **Use the Python agent**, which saves gaiapy as your choice. GAIA never switches agents by itself, and a message you had typed stays in the box. Where this release has no gaiacpp to download, the screen gives that reason in place of the download button.

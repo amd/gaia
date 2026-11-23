@@ -262,7 +262,8 @@ func (c *Catalog) SelectFlagshipAgent(choice string) (notice string, err error) 
 // gaia-agent) that, on their install, it is reached through the daemon rather
 // than spawned.
 const DaemonPythonNotice = "[!] The Python agent was asked for. On this install it " +
-	"runs through the GAIA background service, so that is what answers. To run one particular " +
+	"runs in the GAIA background service, which is moved onto it if it was running " + NativeAgentBinary +
+	"; the Agent UI's chats then use it too. To run one particular " +
 	PythonAgentBinary + " program instead, give its full path."
 
 // AgentChoiceDocsURL explains which agent program the terminal UI runs.

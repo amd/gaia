@@ -63,7 +63,7 @@ from gaia.daemon.sidecars.errors import (
     VersionMismatchError,
 )
 from gaia.daemon.sidecars.spec import AgentSidecarSpec
-from gaia.harnesses import HarnessUnavailableError
+from gaia.harnesses import HarnessUnavailableError, require_runnable
 from gaia.logger import get_logger
 from gaia.utils.terminal import (
     background_popen_kwargs,
@@ -268,6 +268,10 @@ class AgentSidecarManager:
         # True while the spawned program has no dev/user variant (gaiacpp), so a
         # re-ensure's mode cannot conflict with it.
         self.mode_agnostic = False
+        # The flagship program to start instead of the saved choice; set per ensure.
+        self.requested_program: Optional[str] = None
+        # The flagship program the running process is ("gaiapy"/"gaiacpp"); None for other agents.
+        self.program: Optional[str] = None
         # Per-session caller-auth token handed to the sidecar on spawn (#1706).
         # Generated once per manager instance; the proxy replays it as a bearer
         # token on every request. Delivered via a 0600 file (#2149).
@@ -429,12 +433,17 @@ class AgentSidecarManager:
             raise ValueError(f"port {RESERVED_PORT} is reserved and must never be used")
         if self.spec.agent_id == fetch.FLAGSHIP_AGENT_ID:
             try:
-                harness = fetch.chosen_flagship()
+                harness = (
+                    require_runnable(self.requested_program)
+                    if self.requested_program
+                    else fetch.chosen_flagship()
+                )
             except HarnessUnavailableError as e:
                 raise SidecarSpawnError(
                     f"Cannot start the GAIA agent: {e} Sidecar logs: {self.log_dir}.",
                     kind=KIND_HARNESS_UNAVAILABLE,
                 ) from e
+            self.program = harness
             if harness == fetch.NATIVE_FLAGSHIP:
                 return self._native_flagship_command(port)
             if harness != fetch.PYTHON_FLAGSHIP:

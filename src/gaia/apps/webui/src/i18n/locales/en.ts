@@ -3156,6 +3156,7 @@ export const enMessages = {
     'settings.model.switchPlaceholder': 'Choose a model',
     'settings.model.whereRuns': 'Where GAIA runs',
     'settings.agent.nextMessage': 'A switch applies from the next message in every chat.',
+    'settings.agent.runningOther': '{running} is answering right now: a terminal session started it. Choose {current} again to switch back to it.',
     'settings.model.howItWorks': 'How this works',
     'settings.model.lede': 'GAIA runs on this PC by default. Cloud providers are used only when you pick one of their models.',
     'settings.model.devices': 'Each model runs where it was built to: GGUF models on the GPU, FLM models on the NPU.',

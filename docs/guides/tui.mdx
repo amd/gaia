@@ -1245,6 +1245,13 @@ GAIA_TUI_AGENT=gaia-agent gaia-cli
 That session is then pinned: `/agent gaiacpp` in it saves the choice for later
 launches and says the session keeps running what the flag or variable named.
 
+The Python agent runs in the GAIA background service, which the Agent UI shares.
+When the Agent UI has it on `gaiacpp`, a launch on `gaiapy` (by `/agent`, the
+flag, the variable or the saved choice) restarts it on `gaiapy`, and the Agent
+UI's chats use `gaiapy` too until you choose again in its Settings. If someone
+switches it to `gaiacpp` while your session is open, your next message is
+refused with what runs now, rather than answered by the other program.
+
 Which program a launch runs is decided in this order:
 
 1. `--agent-program`

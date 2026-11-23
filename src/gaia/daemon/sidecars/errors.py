@@ -19,6 +19,7 @@ KIND_START_FAILED = "start_failed"
 KIND_OUT_OF_DATE = "out_of_date"
 KIND_CAPACITY = "capacity"
 KIND_MODE_CONFLICT = "mode_conflict"
+KIND_PROGRAM_CONFLICT = "program_conflict"
 KIND_NOT_INSTALLED = "not_installed"
 KIND_SERVICE_UNREACHABLE = "service_unreachable"
 KIND_SERVICE_OUTDATED = "service_outdated"
@@ -126,6 +127,12 @@ class ModeConflictError(SidecarError):
     """The sidecar is running in a different mode than the ensure requested."""
 
     kind = KIND_MODE_CONFLICT
+
+
+class ProgramConflictError(SidecarError):
+    """The GAIA agent is running on another program than the ensure asked for."""
+
+    kind = KIND_PROGRAM_CONFLICT
 
 
 class DevSrcDirResolutionError(SidecarError):

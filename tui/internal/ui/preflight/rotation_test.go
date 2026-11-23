@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -33,6 +34,8 @@ type fakeHost struct {
 	rotated  bool
 	unauthed int
 	seen     []string
+	ensured  []byte
+	agents   string // the agents listing; agentsRunning when empty
 }
 
 func newFakeHost(t *testing.T) *fakeHost {
@@ -126,10 +129,20 @@ func (h *fakeHost) handle(w http.ResponseWriter, r *http.Request) {
 	case "/daemon/v1/status":
 		fmt.Fprintf(w, `{"service":"gaia-daemon","pid":%d}`, pid)
 	case "/daemon/v1/agents":
-		_, _ = w.Write([]byte(agentsRunning))
+		h.mu.Lock()
+		agents := h.agents
+		h.mu.Unlock()
+		if agents == "" {
+			agents = agentsRunning
+		}
+		_, _ = w.Write([]byte(agents))
 	case "/v1/gaia/init":
 		_, _ = w.Write([]byte(initReady))
 	case "/daemon/v1/agents/gaia/ensure":
+		raw, _ := io.ReadAll(r.Body)
+		h.mu.Lock()
+		h.ensured = raw
+		h.mu.Unlock()
 		// A restarted daemon starts its sidecars again when a relayed call needs one.
 		_, _ = w.Write([]byte(`{"agent_id":"gaia","state":"running"}`))
 	default:
@@ -276,5 +289,39 @@ func TestATransportFailureIsNotSticky(t *testing.T) {
 	if !second.OK {
 		t.Fatalf("the gate never recovered from a daemon that moved: final=%q diag=%s",
 			second.Final, second.Diagnosis)
+	}
+}
+
+// The Agent UI may have the shared GAIA agent on gaiacpp. A session that talks
+// to the Python agent must not attach to it: the gate asks the daemon to put
+// the GAIA agent back on gaiapy.
+func TestTheGatePutsAGaiacppAgentBackOnThePythonAgent(t *testing.T) {
+	h := newFakeHost(t)
+	h.agents = strings.Replace(agentsRunning, `"dev_src_dir":null`, `"dev_src_dir":null,"program":"gaiacpp"`, 1)
+	if rep := Check(context.Background(), h.transport(), testConfig()); !rep.Ready() {
+		t.Fatalf("the gate did not pass:\n%s", rep)
+	}
+	h.mu.Lock()
+	raw := h.ensured
+	h.mu.Unlock()
+	var body map[string]any
+	if err := json.Unmarshal(raw, &body); err != nil {
+		t.Fatalf("decode ensure body %q: %v", raw, err)
+	}
+	if body["program"] != "gaiapy" || body["replace_program"] != true {
+		t.Fatalf("gate ensure body = %v, want program gaiapy with replace_program", body)
+	}
+}
+
+func TestTheGateLeavesAPythonAgentAlone(t *testing.T) {
+	h := newFakeHost(t)
+	h.agents = strings.Replace(agentsRunning, `"dev_src_dir":null`, `"dev_src_dir":null,"program":"gaiapy"`, 1)
+	if rep := Check(context.Background(), h.transport(), testConfig()); !rep.Ready() {
+		t.Fatalf("the gate did not pass:\n%s", rep)
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.ensured != nil {
+		t.Fatalf("the gate restarted a GAIA agent already on gaiapy: %s", h.ensured)
 	}
 }

@@ -1234,12 +1234,15 @@ def _set_flagship_agent(choice: str) -> None:
     from gaia.config import GaiaConfig
     from gaia.daemon.sidecars import fetch
     from gaia.daemon.sidecars.errors import SidecarError
+    from gaia.ui.routers.agent_programs import running_program
     from gaia.ui.run_manager import run_manager
     from gaia.ui.security import FLAGSHIP_AGENT_ID
     from gaia.ui.sidecar import daemon_client
 
     saved = GaiaConfig.load().flagship_agent
-    if choice == saved:
+    # A terminal session may run the other program than the one saved.
+    other_runs = running_program() not in (None, choice)
+    if choice == saved and not other_runs:
         return
     if choice == fetch.NATIVE_FLAGSHIP and fetch.native_flagship() is None:
         looked = ", ".join(str(p) for p in fetch.native_flagship_candidates())
@@ -1250,7 +1253,7 @@ def _set_flagship_agent(choice: str) -> None:
                 f"yet (looked in: {looked}). Download it first."
             ),
         )
-    if saved is None and choice == fetch.PYTHON_FLAGSHIP:
+    if saved is None and choice == fetch.PYTHON_FLAGSHIP and not other_runs:
         # Already what runs here; saving it makes the terminal UI use it too.
         GaiaConfig.save_key("flagship_agent", choice)
         return

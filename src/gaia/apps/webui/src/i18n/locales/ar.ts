@@ -3156,6 +3156,7 @@ const messages: Messages = {
     'settings.model.switchPlaceholder': 'اختر نموذجًا',
     'settings.model.whereRuns': 'مكان تشغيل GAIA',
     'settings.agent.nextMessage': 'يسري التبديل من الرسالة التالية في كل المحادثات.',
+    'settings.agent.runningOther': 'يجيب {running} الآن: بدأته جلسة في الطرفية. اختر {current} مرة أخرى للعودة إليه.',
     'settings.model.howItWorks': 'كيف يعمل هذا',
     'settings.model.lede': 'يعمل GAIA على هذا الجهاز افتراضيًا. ولا تُستخدم مزوّدات السحابة إلا عند اختيار أحد نماذجها.',
     'settings.model.devices': 'يعمل كل نموذج حيث صُمّم للعمل: نماذج GGUF على GPU ونماذج FLM على NPU.',

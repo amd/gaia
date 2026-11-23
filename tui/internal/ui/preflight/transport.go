@@ -150,8 +150,10 @@ func (t *daemonTransport) Start(ctx context.Context) (DaemonInfo, error) {
 	return info(inst), nil
 }
 
+// EnsureAgent is the launch's ensure: it puts a GAIA agent running on another
+// program back on the one this session talks to.
 func (t *daemonTransport) EnsureAgent(ctx context.Context, agentID string) error {
-	inst, err := t.c.EnsureAgent(ctx, agentID)
+	inst, err := t.c.LaunchAgent(ctx, agentID)
 	if err != nil {
 		return err
 	}

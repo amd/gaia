@@ -212,6 +212,8 @@ type agentsBody struct {
 		PID          *int    `json:"pid"`
 		AgentVersion *string `json:"agent_version"`
 		APIVersion   *string `json:"api_version"`
+		// Program is the GAIA agent's program (gaiapy or gaiacpp); nil from a daemon that predates it.
+		Program *string `json:"program"`
 	} `json:"agents"`
 }
 
@@ -261,6 +263,17 @@ func checkSidecar(ctx context.Context, t Transport, cfg Config, rep *Report) Sta
 				conflict.Raw = row.Raw
 				return conflict.commit(rep)
 			}
+			other := otherProgram(cfg, a.Program)
+			if other != "" {
+				// This session talks to the Python agent: put the GAIA agent back on it.
+				if err := t.EnsureAgent(ctx, cfg.AgentID); err != nil {
+					d := l.Error("restart the "+cfg.AgentName+" agent on "+daemon.PythonProgram, err)
+					row.State, row.Line, row.Detail, row.Remedy, row.Raw =
+						StateFailed, "running "+other+", could not switch", d.Cause, d.AsRemedy(), err.Error()
+					row.Disposition = status.DispositionHalt
+					return row.commit(rep)
+				}
+			}
 			live := probeSidecarAnswers(ctx, t, cfg)
 			row.Raw = strings.TrimSpace(row.Raw + "\n\n" + live.trace)
 			if !live.answered {
@@ -275,6 +288,9 @@ func checkSidecar(ctx context.Context, t Transport, cfg Config, rep *Report) Sta
 			}
 			row.State = StateOK
 			row.Line = describeSidecar(a.AgentVersion, a.PID)
+			if other != "" {
+				row.Line = "restarted on " + daemon.PythonProgram + " (was " + other + ")"
+			}
 			return row.commit(rep)
 		}
 		row.State = StateFailed
@@ -297,6 +313,15 @@ func checkSidecar(ctx context.Context, t Transport, cfg Config, rep *Report) Sta
 	row.Detail = fmt.Sprintf("The background service has no agent registered as %q.", cfg.AgentID)
 	row.Remedy = unregisteredAgentRemedy(cfg.AgentID)
 	return row.commit(rep)
+}
+
+// otherProgram is the program the flagship runs when it is not the Python
+// agent this session talks to through the daemon, else "".
+func otherProgram(cfg Config, running *string) string {
+	if cfg.AgentID != "gaia" || running == nil || *running == "" || *running == daemon.PythonProgram {
+		return ""
+	}
+	return *running
 }
 
 // modeConflictRow answers the question the launch is about to ask the daemon:

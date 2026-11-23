@@ -168,6 +168,17 @@ def _installed_version(binary) -> Optional[str]:
         return None
 
 
+def running_program() -> Optional[str]:
+    """The program the GAIA agent runs on right now; ``None`` when it isn't running or can't be asked."""
+    from gaia.ui.sidecar import daemon_client
+
+    try:
+        return daemon_client.running_program(FLAGSHIP_AGENT_ID)
+    except SidecarError as e:
+        logger.warning("agent programs: could not ask which program runs: %s", e)
+        return None
+
+
 def _job_view() -> Dict[str, Any]:
     with _lock:
         return dict(_job)
@@ -197,6 +208,8 @@ def _listing() -> Dict[str, Any]:
         native_size = native_path.stat().st_size
     return {
         "current": fetch.saved_flagship(),
+        # Can differ from the saved choice: a terminal session may have started the other one.
+        "running": running_program(),
         "programs": [
             {
                 "id": fetch.PYTHON_FLAGSHIP,
