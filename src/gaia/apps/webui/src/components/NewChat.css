@@ -127,6 +127,10 @@
     margin-top: 8px;
 }
 
+.new-chat-meta .composer-chip-agent {
+    margin-inline-start: auto;
+}
+
 .new-chat-folder {
     display: inline-flex;
     align-items: center;

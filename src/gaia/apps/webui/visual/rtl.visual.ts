@@ -730,7 +730,59 @@ for (const locale of ['en', 'ar']) {
             expect(await audit(page)).toEqual([]);
         });
     }
+
+    test(`an open chat whose gaiacpp went missing offers the same two fixes under the turn (${locale})`, async ({ page }) => {
+        await open(page, `#${ANSWER_SESSION}`, locale, async (p) => {
+            await p.route('**/api/onboarding/start', (route) => route.fulfill({ json: GAIACPP_MISSING_START }));
+            await p.route((url) => url.pathname === `/api/sessions/${ANSWER_SESSION}/messages`, (route) => route.fulfill({
+                json: { messages: GAIACPP_MISSING_TURN, total: GAIACPP_MISSING_TURN.length },
+            }));
+            await withAgentPrograms(p, { gaiacpp: 'downloadable' });
+        });
+        const turn = page.locator('[data-message-id="2"]');
+        const panel = turn.locator('.agent-recovery');
+        await expect(panel).toBeVisible();
+        await expect(panel.locator('.agent-recovery-actions button')).toHaveCount(2);
+        await shot(page, `chat-gaiacpp-missing-${locale}`);
+        expect(await audit(page)).toEqual([]);
+    });
 }
+
+const uncut = (el: Element) => el.scrollWidth <= el.clientWidth + 1;
+
+for (const locale of ['en', 'ar']) {
+    const name = locale === 'ar' ? 'سريع وخفيف · تجريبي' : 'Fast and light · Beta';
+    for (const [where, hash, width] of [['new chat', '', 1440], ['new chat', '', 390], ['chat', `#${ANSWER_SESSION}`, 1440]] as const) {
+        test(`a ${where} on Fast and light says so beside the model (${locale}, ${width}px)`, async ({ page }) => {
+            await page.setViewportSize({ width, height: 900 });
+            await open(page, hash, locale, async (p) => {
+                await withModelPage(p, MODEL_LIST, SETUP_PLAN);
+                await withAgentPrograms(p, { current: 'gaiacpp' });
+            });
+            const chip = page.locator('main .composer-chip-agent');
+            await expect(chip).toContainText(name);
+            await expect(chip).toHaveAttribute('title', locale === 'ar' ? /سريع وخفيف/ : /^Fast and light \(Beta\)/);
+            // Under the box in a new chat it has room; in a busier chat row it fades before the model name does.
+            if (!hash) expect(await chip.locator('.composer-chip-label').evaluate(uncut)).toBe(true);
+            const model = page.locator('main .composer-row-right .composer-chip-wrap .composer-chip-label').last();
+            if (width > 480) expect(await model.evaluate(uncut)).toBe(true);
+            await shot(page, `${hash ? 'chat' : 'new-chat'}-agent-chip-${width}-${locale}`);
+            // The closed sidebar drawer waits off screen on a phone; judge the rest there.
+            const problems = await audit(page);
+            expect(width > 480 ? problems : problems.filter((p) => /composer|new-chat|scrolls sideways/.test(p))).toEqual([]);
+            await chip.click();
+            await expect(page.locator('.settings-pane-title')).toHaveText(locale === 'ar' ? /الوكيل والنموذج/ : /^Agent & model$/);
+        });
+    }
+}
+
+const GAIACPP_MISSING_TURN = [
+    { id: 1, session_id: ANSWER_SESSION, role: 'user', content: 'Plan three days in Lisbon.', created_at: NOW.toISOString(), rag_sources: null },
+    {
+        id: 2, session_id: ANSWER_SESSION, role: 'assistant', content: '', created_at: NOW.toISOString(), rag_sources: null, failed: true,
+        agent_steps: [{ id: 1, type: 'error', label: 'Error', detail: "GAIA couldn't start its agent. Send your message again.", active: false, success: false, timestamp: 1 }],
+    },
+];
 
 for (const locale of ['en', 'ar']) {
     test(`chat titles in the sidebar use the whole row (${locale})`, async ({ page }) => {
@@ -820,20 +872,36 @@ for (const locale of ['ar', 'en']) {
     }
 }
 
+const START_TASKS = {
+    cards: [
+        { skill: 'document-brief', title: 'Ask about your documents', note: '12 indexed documents', prompt: 'Using my indexed documents, give me the key points and anything I should act on.', needs_input: false },
+        { skill: 'research-report', title: 'Research a topic', note: 'A cited report from the web', prompt: 'Research and write a short cited report on: ', needs_input: true },
+        { skill: 'coding', title: 'Work on code', note: 'In gaia', prompt: 'Look around gaia and tell me what this project does.', needs_input: false },
+    ],
+    working_folder: { path: '/home/you/projects/gaia', name: 'gaia', gaia_folder: false, choosable: true },
+};
+
 for (const locale of ['ar', 'en']) {
-    for (const width of [1440, 390]) {
-        test(`Try chips fit in ${locale} at ${width}px`, async ({ page }) => {
-            await page.setViewportSize({ width, height: 900 });
-            await open(page, '', locale);
-            const chips = page.locator('.try-chip');
-            await expect(chips).toHaveCount(7);
-            await expect(chips.first()).toBeVisible();
-            if (locale === 'ar') await expect(chips.first()).toContainText('وصفة');
-            await shot(page, `try-chips-${locale}-${width}`);
-            // The closed sidebar drawer waits off screen at phone width; judge the chips.
-            const problems = (await audit(page)).filter((p) => p.includes('try-chip') || p.includes('scrolls sideways'));
-            expect(problems).toEqual([]);
-        });
+    for (const tasks of [false, true]) {
+        for (const width of [1200, 390]) {
+            test(`new-chat starters fit in ${locale} at ${width}px${tasks ? ", with this PC's tasks" : ''}`, async ({ page }) => {
+                await page.setViewportSize({ width, height: 900 });
+                await open(page, '', locale, tasks ? (p) => p.route('**/api/onboarding/start', (route) => route.fulfill({ json: START_TASKS })) : undefined);
+                const chips = page.locator('.try-chip');
+                await expect(chips).toHaveCount(3);
+                await expect(chips.first()).toBeVisible();
+                if (locale === 'ar') await expect(chips.first()).toContainText(tasks ? 'اسأل عن مستنداتك' : 'وصفة');
+                if (tasks) await expect(chips.last()).toContainText(locale === 'ar' ? 'وصفة' : 'Recipe');
+                await shot(page, `starters-${locale}-${width}${tasks ? '-tasks' : ''}`);
+                if (width >= 1200) {
+                    const tops = await chips.evaluateAll((els) => els.map((el) => Math.round(el.getBoundingClientRect().top)));
+                    expect(new Set(tops).size, 'the starters sit in one row').toBe(1);
+                }
+                // The closed sidebar drawer waits off screen at phone width; judge the chips.
+                const problems = (await audit(page)).filter((p) => p.includes('try-chip') || p.includes('scrolls sideways'));
+                expect(problems).toEqual([]);
+            });
+        }
     }
 }
 
@@ -841,6 +909,41 @@ test('finished answer', async ({ page }) => {
     await open(page, `#${ANSWER_SESSION}`);
     await expect(page.getByText('Action items from Aug 28')).toBeVisible();
     await expect(page.locator('.resource-strip')).toHaveCount(0);
+    expect(await audit(page)).toEqual([]);
+});
+
+test('a finished answer gets the full width until the session panel is asked for', async ({ page }) => {
+    await page.setViewportSize({ width: 1200, height: 900 });
+    await open(page, `#${ANSWER_SESSION}`, 'en');
+    await expect(page.getByText('Action items from Aug 28')).toBeVisible();
+    await expect(page.locator('.session-panel')).toHaveCount(0);
+    await page.getByRole('button', { name: 'Show session panel' }).click();
+    await expect(page.locator('.session-panel.is-docked')).toBeVisible();
+    expect(await audit(page)).toEqual([]);
+});
+
+test("a reply that makes the chat's first file opens the session panel beside it", async ({ page }) => {
+    const path = 'C:\\Users\\me\\Documents\\packing-list.md';
+    const summary = { pages: [], documents: [], sites: [], cost: { kind: 'local' }, files: [{ path, name: 'packing-list.md', openable: true }] };
+    await page.addInitScript(streamThenWait, [{ type: 'done', content: 'I wrote your packing list.', message_id: 9, turn_summary: summary }]);
+    await open(page, `#${ANSWER_SESSION}`, 'en', async (p) => {
+        await p.route(`**/api/sessions/${ANSWER_SESSION}/outputs`, json({
+            session_id: ANSWER_SESSION,
+            items: [{
+                id: 'o1', kind: 'file', name: 'packing-list.md', path, detail: null,
+                message_id: 9, created_at: null, change: 'created', state: 'present', openable: true, revealable: true,
+            }],
+        }));
+        await p.route('**/api/files/status', json({ files: [{ path, exists: true, mtime: null }] }));
+    });
+    await expect(page.locator('.session-panel')).toHaveCount(0);
+    const box = page.getByRole('textbox').first();
+    await box.fill('Write me a packing list');
+    await box.press('Enter');
+    await expect(page.getByText('I wrote your packing list.')).toBeVisible();
+    const panel = page.locator('.session-panel.is-docked');
+    await expect(panel.locator('[data-section="outputs"]')).toContainText('packing-list.md');
+    expect(await page.evaluate(() => document.activeElement?.closest('.session-panel') ?? null)).toBeNull();
     expect(await audit(page)).toEqual([]);
 });
 
@@ -1877,6 +1980,9 @@ for (const locale of ['ar', 'en'] as const) {
     });
 }
 
+/** The user opened the session panel before, so it starts open; it is closed on a fresh profile. */
+const withPanelOpen = (page: Page) => page.addInitScript(() => window.localStorage.setItem('gaia.sessionPanel.open', '1'));
+
 /** Every tile and the close button sit beside the docked session panel, not under it. */
 async function expectClearOfPanel(page: Page): Promise<void> {
     const panel = (await page.locator('.session-panel.is-docked').boundingBox())!;
@@ -1888,6 +1994,7 @@ async function expectClearOfPanel(page: Page): Promise<void> {
 }
 
 test('resource usage strip', async ({ page }) => {
+    await withPanelOpen(page);
     await open(page, `#${ANSWER_SESSION}`, 'ar', withResourceStrip);
     const strip = page.getByRole('region', { name: 'استخدام الموارد على هذا الجهاز' });
     await expect(strip.locator('li')).toHaveCount(5);
@@ -1904,6 +2011,7 @@ test('resource usage strip', async ({ page }) => {
 });
 
 test('closing the resource usage strip says how to bring it back', async ({ page }) => {
+    await withPanelOpen(page);
     await open(page, `#${ANSWER_SESSION}`, 'ar', withResourceStrip);
     await page.getByRole('region', { name: 'استخدام الموارد على هذا الجهاز' }).getByRole('button').click();
     const note = page.locator('.resource-hidden-note');
@@ -1915,6 +2023,7 @@ test('closing the resource usage strip says how to bring it back', async ({ page
 });
 
 test('resource usage strip with no GPU counters keeps CPU and memory', async ({ page }) => {
+    await withPanelOpen(page);
     await open(page, `#${ANSWER_SESSION}`, 'ar', async (p) => {
         await withResourceStrip(p);
         await p.route('**/api/system/resources', (route) =>
@@ -2316,6 +2425,7 @@ for (const locale of ['ar', 'en']) {
     });
 
     test(`an answer's timestamp and outputs read in the interface language (${locale})`, async ({ page }) => {
+        await withPanelOpen(page);
         const month = locale === 'ar' ? ARABIC_MONTH : /Mar/;
         await open(page, `#${ANSWER_SESSION}`, locale, async (p) => {
             await p.route((url) => url.pathname === `/api/sessions/${ANSWER_SESSION}/messages`, (route) => route.fulfill({
@@ -2488,6 +2598,7 @@ const arabicNameGaps = (page: Page) =>
     );
 
 test('session panel with Arabic names', async ({ page }) => {
+    await withPanelOpen(page);
     await open(page, `#${ANSWER_SESSION}`, 'ar', withArabicEnvironment);
     await expect(page.locator('.sp-item-name', { hasText: 'تقارير' })).toBeVisible();
     const gaps = await arabicNameGaps(page);
@@ -2498,6 +2609,7 @@ test('session panel with Arabic names', async ({ page }) => {
 
 for (const locale of ['ar', 'en'] as const) {
     test(`the session panel leads with the environment, details last (${locale})`, async ({ page }) => {
+        await withPanelOpen(page);
         await open(page, `#${ANSWER_SESSION}`, locale);
         const panel = page.locator('.session-panel');
         await expect(panel.locator('.sp-group-title')).toBeVisible();
@@ -2512,6 +2624,7 @@ for (const locale of ['ar', 'en'] as const) {
 }
 
 test('a long folder path stays on its row and gives way to the folder name', async ({ page }) => {
+    await withPanelOpen(page);
     const path = `C:\\gtest\\h-r6\\${'a-long-folder-name\\'.repeat(4)}.gaia\\documents`;
     await open(page, `#${ANSWER_SESSION}`, 'ar', async (p) => {
         await p.route(`**/api/sessions/${ANSWER_SESSION}/environment`, (route) =>
@@ -2594,6 +2707,7 @@ async function withBusyPanel(page: Page): Promise<void> {
 
 for (const locale of ['ar', 'en'] as const) {
     test(`the session panel with outputs, a skill and internet off (${locale})`, async ({ page }) => {
+        await withPanelOpen(page);
         await open(page, `#${ANSWER_SESSION}`, locale, withBusyPanel);
         const panel = page.locator('.session-panel');
         await expect(panel.locator('.sp-item-name', { hasText: 'action-items.md' })).toBeVisible();
@@ -2742,6 +2856,7 @@ const USE_CASES: Array<{ name: string; setup: (page: Page) => Promise<void>; chi
 for (const useCase of USE_CASES) {
     for (const locale of ['ar', 'en'] as const) {
         test(`the session panel for a ${useCase.name} chat brings that work's rows (${locale})`, async ({ page }) => {
+            await withPanelOpen(page);
             await open(page, `#${ANSWER_SESSION}`, locale, useCase.setup);
             const panel = page.locator('.session-panel');
             await expect(panel.locator(`[data-section="${useCase.section}"]`)).toBeVisible();
@@ -2800,6 +2915,7 @@ async function holdOnPlan(page: Page, narrations: string[]): Promise<void> {
 
 for (const locale of ['ar', 'en'] as const) {
     test(`the session panel shows the plan a running turn is working through (${locale})`, async ({ page }) => {
+        await withPanelOpen(page);
         await open(page, `#${ANSWER_SESSION}`, locale, (p) => holdOnPlan(p, PLAN_LINES[locale]));
         const panel = page.locator('.session-panel');
         await expect(panel.locator('[data-section="plan"]')).toHaveCount(0);
@@ -2820,6 +2936,7 @@ expect(await forcedLeftToRight(page)).toEqual([]);
 
 for (const locale of ['ar', 'en'] as const) {
     test(`the session panel keeps a finished plan, all ticked, after the reply ends (${locale})`, async ({ page }) => {
+        await withPanelOpen(page);
         await open(page, `#${ANSWER_SESSION}`, locale, async (p) => {
             await p.route((url) => url.pathname === `/api/sessions/${ANSWER_SESSION}/messages`, json({
                 messages: [
@@ -2856,6 +2973,7 @@ expect(await forcedLeftToRight(page)).toEqual([]);
 }
 
 test('a plain chat keeps the panel to its environment, with one quiet chip', async ({ page }) => {
+    await withPanelOpen(page);
     await open(page, `#${ANSWER_SESSION}`, 'en');
     const panel = page.locator('.session-panel');
     await expect(panel.locator('.sp-chip')).toHaveText(['Chat']);
@@ -2865,6 +2983,7 @@ test('a plain chat keeps the panel to its environment, with one quiet chip', asy
 });
 
 test('a section that turns up later eases in; one there from the start does not', async ({ page }) => {
+    await withPanelOpen(page);
     let made = false;
     await open(page, `#${ANSWER_SESSION}`, 'en', async (p) => {
         await p.route(`**/api/sessions/${ANSWER_SESSION}/outputs`, (route) =>
@@ -2908,6 +3027,7 @@ test.describe('English', () => {
     });
 
     test('resource usage strip', async ({ page }) => {
+        await withPanelOpen(page);
         await open(page, `#${ANSWER_SESSION}`, 'en', withResourceStrip);
         const strip = page.getByRole('region', { name: 'Resource usage on this PC' });
         await expect(strip.getByText('S: 0 R: 8.0 Kbps')).toBeVisible();
@@ -2921,6 +3041,7 @@ test.describe('English', () => {
     });
 
     test('closing the resource usage strip says how to bring it back', async ({ page }) => {
+        await withPanelOpen(page);
         await open(page, `#${ANSWER_SESSION}`, 'en', withResourceStrip);
         await page.getByRole('button', { name: 'Hide resource usage' }).click();
         const note = page.locator('.resource-hidden-note');
@@ -2934,6 +3055,7 @@ test.describe('English', () => {
 
     test('resource usage strip on a wide window is one row', async ({ page }) => {
         await page.setViewportSize({ width: 1920, height: 1000 });
+        await withPanelOpen(page);
         await open(page, `#${ANSWER_SESSION}`, 'en', withResourceStrip);
         const tiles = page.getByRole('region', { name: 'Resource usage on this PC' }).locator('li');
         await expect(tiles).toHaveCount(5);
@@ -2966,6 +3088,7 @@ test.describe('English', () => {
     });
 
     test('an Arabic name in the session panel stays on the left', async ({ page }) => {
+        await withPanelOpen(page);
         await open(page, `#${ANSWER_SESSION}`, 'en', withArabicEnvironment);
         await expect(page.locator('.sp-item-name', { hasText: 'تقارير' })).toBeVisible();
         const gaps = await arabicNameGaps(page);
@@ -4100,6 +4223,7 @@ for (const locale of ['ar', 'en']) {
         });
 
         test(`session panel Runs on: server not answering, ${owner}'s server (${locale})`, async ({ page }) => {
+            await withPanelOpen(page);
             await open(page, `#${ANSWER_SESSION}`, locale, async (p) => { await p.route('**/api/providers/local/status', (route) => route.fulfill({ json: SERVER_DOWN(owner) })); });
             const row = page.locator('.session-panel .sp-row').filter({ has: page.locator('.sp-error') });
             await row.scrollIntoViewIfNeeded();
@@ -4176,6 +4300,7 @@ async function withCloudSpending(page: Page): Promise<void> {
 for (const locale of ['ar', 'en']) {
     // Fonts differ by OS, so a row that fits on one PC runs past the panel's edge on another. Narrowest panel, longest row.
     test(`a cloud chat's rows stay inside the session panel at its narrowest (${locale})`, async ({ page }) => {
+        await withPanelOpen(page);
         await open(page, `#${ANSWER_SESSION}`, locale, async (p) => {
             await withCloudSpending(p);
             await p.addInitScript(() => window.localStorage.setItem('gaia.sessionPanel.width', '280'));
@@ -4748,6 +4873,8 @@ async function expectVisibleTryAgain(page: Page, locale: string): Promise<void> 
     const retry = page.getByRole('button', { name: /Try again/ });
     await expect(retry).toHaveCount(1);
     await expect(retry).toHaveText(locale === 'ar' ? /حاول مجددًا/ : /Try again/);
+    // The answer fades in; judge it once it has arrived.
+    await retry.evaluate((el) => Promise.all(el.closest('.msg')!.getAnimations().map((a) => a.finished)));
     const opacity = await retry.evaluate((el) => {
         let o = 1;
         for (let at: Element | null = el; at; at = at.parentElement) o *= Number(getComputedStyle(at).opacity);
@@ -6931,6 +7058,7 @@ async function withAttachedBrief(page: Page): Promise<void> {
 
 for (const locale of ['ar', 'en']) {
     test(`a file attached in the message box is listed for its chat (${locale})`, async ({ page }) => {
+        await withPanelOpen(page);
         await page.addInitScript(streamThenWait, ATTACHED_IN_COMPOSER);
         await open(page, `#${ANSWER_SESSION}`, locale, withAttachedBrief);
         await page.locator('textarea').first().fill(ATTACH_REQUEST);
