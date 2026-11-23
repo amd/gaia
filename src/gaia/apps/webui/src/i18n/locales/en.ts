@@ -417,7 +417,7 @@ export const enMessages = {
     'live.answerRestarted': 'The answer so far was cut off, so GAIA is starting it again from the top.',
     'live.answerChecking': 'Checking the answer',
     'live.modelWaitHint': 'Still waiting on the model — nothing has come back yet. A hosted model that stays silent is retried, then stopped with an error. Press Stop to end it now.',
-    'live.localModelWaitHint': 'Still waiting on the model — nothing has come back in over {n} seconds. It is still working on this PC. Press Stop to end it now.',
+    'live.localModelWaitHint': 'Still waiting on the model — nothing has come back in over {n} seconds. It runs on this PC. Press Stop to end it now.',
     'msg.resend': 'Resend message',
     'msg.edit': 'Edit message',
     'msg.editLabel': 'Edit your message',

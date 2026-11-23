@@ -70,7 +70,7 @@ describe('model wait hint', () => {
         renderBubble('Reading your request');
         act(() => { vi.advanceTimersByTime(MODEL_WAIT_HINT_S * 1000); });
         expect(screen.getByRole('status')).toHaveTextContent(
-            'Still waiting on the model — nothing has come back in over 45 seconds. It is still working on this PC. Press Stop to end it now.',
+            'Still waiting on the model — nothing has come back in over 45 seconds. It runs on this PC. Press Stop to end it now.',
         );
         expect(screen.getByRole('status').textContent).not.toMatch(/long prompt/i);
     });
@@ -166,7 +166,8 @@ describe('live status line in Arabic', () => {
         act(() => { vi.advanceTimersByTime(MODEL_WAIT_HINT_S * 1000); });
         const text = stripIsolates(screen.getByRole('status').textContent ?? '');
         expect(text).toContain('منذ أكثر من 45 ثانية');
-        expect(text).toContain('ما زال يعمل');
+        expect(text).toContain('يعمل على هذا الكمبيوتر');
+        expect(text).not.toContain('ما زال يعمل');
         expect(text).not.toContain('طلب طويل');
         expect(text).not.toMatch(/long prompt/i);
     });
