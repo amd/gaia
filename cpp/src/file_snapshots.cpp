@@ -55,6 +55,13 @@ std::string readAll(const fs::path& p) {
 
 std::string sha256File(const fs::path& p) { return skillSha256Hex(readAll(p)); }
 
+// At most `limit` bytes of text, never cutting a UTF-8 character in two.
+std::string clip(const std::string& text, size_t limit) {
+    if (text.size() <= limit) return text;
+    while (limit > 0 && (static_cast<unsigned char>(text[limit]) & 0xC0) == 0x80) --limit;
+    return text.substr(0, limit);
+}
+
 // One file reached by two spellings is one entry: Windows paths compare without case.
 std::string key(const fs::path& p) {
     std::string s = p.u8string();
@@ -105,7 +112,8 @@ void TurnRecorder::save() {
     const fs::path tmp = dir_ / "manifest.json.tmp";
     {
         std::ofstream out(tmp, std::ios::binary | std::ios::trunc);
-        out << manifest_.dump(2);
+        // A command or path that isn't valid UTF-8 is still recorded, with its bad bytes replaced.
+        out << manifest_.dump(2, ' ', false, json::error_handler_t::replace);
         if (!out) throw SnapshotError("can't write " + tmp.u8string());
     }
     fs::rename(tmp, path, ec);
@@ -174,9 +182,11 @@ void TurnRecorder::discard(const std::string& path) {
     std::error_code ec;
     const fs::path target = fs::weakly_canonical(fs::absolute(fs::u8path(path), ec), ec);
     json& files = manifest_["files"];
-    if (files.empty() || key(fs::u8path(files.back()["path"].get<std::string>())) != key(target)) return;
-    const json entry = files.back();
-    files.erase(files.size() - 1);
+    size_t at = files.size();
+    while (at > 0 && key(fs::u8path(files[at - 1]["path"].get<std::string>())) != key(target)) --at;
+    if (at == 0) return;
+    const json entry = files[at - 1];
+    files.erase(at - 1);
     // The record first, while what it points to still exists: if it can't be rewritten, the
     // entry goes back and memory and disk still agree.
     const bool keepRecord = hasChanges();
@@ -190,7 +200,7 @@ void TurnRecorder::discard(const std::string& path) {
             if (ec) throw SnapshotError("Could not remove the undo record at " + dir_.u8string() + ": " + ec.message());
         }
     } catch (...) {
-        files.push_back(entry);
+        files.insert(files.begin() + static_cast<std::ptrdiff_t>(at - 1), entry);
         throw;
     }
     std::string failure;
@@ -227,7 +237,7 @@ void TurnRecorder::noteLate(const std::string& kind, const std::string& detail) 
     }
     // The record on disk, not this copy: an undo may already have been saved there.
     onDisk["untracked"].push_back({{"kind", kind},
-                                   {"detail", "after the turn ended: " + detail.substr(0, 480)},
+                                   {"detail", "after the turn ended: " + clip(detail, 480)},
                                    {"paths", json::array()},
                                    {"may_write", true}});
     const json kept = manifest_;
@@ -248,7 +258,7 @@ void TurnRecorder::noteUntracked(const std::string& kind, const std::string& det
         return;
     }
     manifest_["untracked"].push_back({{"kind", kind},
-                                      {"detail", detail.substr(0, 500)},
+                                      {"detail", clip(detail, 500)},
                                       {"paths", json::array()},
                                       {"may_write", mayWrite}});
     if (mayWrite) save();

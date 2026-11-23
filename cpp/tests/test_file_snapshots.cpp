@@ -137,3 +137,19 @@ TEST(FileSnapshots, ADiscardedCopyLeavesNoRecordAndALateWriteMarksTheSavedOne) {
     EXPECT_EQ(m["untracked"][0]["detail"].get<std::string>().rfind("after the turn ended: ", 0), 0u);
     EXPECT_EQ(m["files"].size(), 1u) << "the finished record keeps its files";
 }
+
+TEST(FileSnapshots, ALongNonAsciiCommandIsCutOnACharacterAndStillSaves) {
+    Tree t;
+    write(t.root / "work" / "a.py", "a\n");
+    TurnRecorder rec("chat-5", "20261122120000-0123abd3", t.root / "store");
+    std::string command = "echo ";
+    while (command.size() < 520) command += "\xc3\xa9";  // é, two bytes each: byte 500 falls inside one
+    command += " \xff";                                   // and a byte that is no UTF-8 at all
+    rec.noteUntracked("shell", command, true);
+    ASSERT_TRUE(rec.capture((t.root / "work" / "a.py").u8string(), "file_edit"));
+    rec.finish();
+    const json m = json::parse(read(t.root / "store" / "chat-5" / "20261122120000-0123abd3" / "manifest.json"));
+    const std::string detail = m["untracked"][0]["detail"].get<std::string>();
+    EXPECT_LE(detail.size(), 500u);
+    EXPECT_EQ(detail.size() % 2, 1u) << "cut between characters: 'echo ' plus whole two-byte characters";
+}
