@@ -417,6 +417,8 @@ Settings buildSettings(const Cli& cli) {
     // The model and server default to what GAIA set up, resolved below only when nothing names them.
     gaia::ServerOrigin server;
     gaia::json merged = {{"contextSize", 32768},
+                         // No message-count cap: history is fitted to the loaded window instead.
+                         {"maxHistoryMessages", 0},
                          {"maxTokens", 16384},
                          {"temperature", 0.2},
                          {"responseMode", "conversational"},

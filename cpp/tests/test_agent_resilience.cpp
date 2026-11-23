@@ -1642,3 +1642,106 @@ TEST(AgentResilience, ATagToolCallShownWithItsExplanationIsNotRun) {
     second.processQuery("add 1 and 2");
     EXPECT_EQ(second.executed, (std::vector<std::string>{"add"})) << "a call that ends the reply still runs";
 }
+
+// ---- History that outgrows the window ----
+
+namespace {
+
+struct NoticeConsole : SilentConsole {
+    std::vector<std::string>* warnings;
+    explicit NoticeConsole(std::vector<std::string>* w) : warnings(w) {}
+    void printWarning(const std::string& m) override { warnings->push_back(m); }
+};
+
+std::string answerUsing(const std::string& text, int promptTokens) {
+    return json{{"choices", json::array({{{"message", {{"role", "assistant"}, {"content", text}}}}})},
+                {"usage", {{"prompt_tokens", promptTokens}, {"completion_tokens", 10}}}}
+        .dump();
+}
+
+size_t userTurns(const Agent& agent) {
+    size_t n = 0;
+    for (const auto& m : agent.history()) n += m.role == MessageRole::USER ? 1 : 0;
+    return n;
+}
+
+}  // namespace
+
+// The terminal modes capped history at 40 messages whatever the window; nothing said so.
+TEST(AgentHistoryWindow, HistoryIsKeptWhileItFitsTheWindowTheModelIsLoadedWith) {
+    bench::MockLlmServer mock;
+    // Another program loaded the model at 256K; this agent is configured for 32K.
+    mock.setHealth(R"({"status":"ok","all_models_loaded":[{"model_name":"Gemma-4-E4B-it-GGUF",)"
+                   R"("recipe_options":{"ctx_size":262144}}]})");
+    AgentConfig cfg = cfgFor(mock);
+    cfg.contextSize = 32768;
+    cfg.maxTokens = 16384;
+    cfg.maxHistoryMessages = 0;
+    ResilienceAgent agent(cfg);
+    agent.initForTest();
+    std::vector<std::string> warnings;
+    agent.setOutputHandler(std::make_unique<NoticeConsole>(&warnings));
+
+    for (int turn = 1; turn <= 30; ++turn) {
+        mock.pushResponse(answerUsing("reply " + std::to_string(turn), 1500 * turn));  // 45K tokens by the end
+        agent.processQuery("question " + std::to_string(turn) + " " + std::string(2000, 'q'));
+    }
+    EXPECT_EQ(userTurns(agent), 30u) << "45K tokens fit a 256K window: nothing may be dropped";
+    EXPECT_TRUE(warnings.empty()) << warnings.front();
+}
+
+TEST(AgentHistoryWindow, DroppingTheOldestTurnsIsSaidOncePerConversation) {
+    bench::MockLlmServer mock;  // reports the model loaded at 16384
+    AgentConfig cfg = cfgFor(mock);
+    cfg.contextSize = 16384;
+    cfg.maxTokens = 4096;
+    cfg.maxHistoryMessages = 0;
+    ResilienceAgent agent(cfg);
+    agent.initForTest();
+    std::vector<std::string> warnings;
+    agent.setOutputHandler(std::make_unique<NoticeConsole>(&warnings));
+
+    size_t kept = 0;
+    for (int turn = 1; turn <= 12; ++turn) {
+        mock.pushResponse(answerUsing("reply " + std::to_string(turn), 2000 * turn));
+        agent.processQuery("question " + std::to_string(turn) + " " + std::string(6000, 'q'));
+        if (turn == 5) {
+            EXPECT_EQ(userTurns(agent), 5u) << "10K tokens still fit";
+            EXPECT_TRUE(warnings.empty());
+        }
+        kept = userTurns(agent);
+    }
+    EXPECT_LT(kept, 12u) << "24K tokens cannot stay in a 16K window";
+    EXPECT_GE(kept, 1u);
+    // The newest turn is never the one dropped, and a turn is dropped whole.
+    const auto history = agent.history();
+    ASSERT_FALSE(history.empty());
+    EXPECT_EQ(history.front().role, MessageRole::USER);
+    EXPECT_EQ(history.back().content, "reply 12");
+    ASSERT_EQ(warnings.size(), 1u) << "said once, not every turn";
+    EXPECT_NE(warnings[0].find("the oldest turns are no longer sent to the model"), std::string::npos) << warnings[0];
+
+    // A cleared chat is a new conversation: it is told again if it happens again.
+    agent.clearHistory();
+    for (int turn = 1; turn <= 12; ++turn) {
+        mock.pushResponse(answerUsing("again " + std::to_string(turn), 2000 * turn));
+        agent.processQuery("question " + std::to_string(turn) + " " + std::string(6000, 'q'));
+    }
+    EXPECT_EQ(warnings.size(), 2u);
+}
+
+TEST(AgentHistoryWindow, AMessageCapStillAppliesAndIsSaidToo) {
+    bench::MockLlmServer mock;
+    AgentConfig cfg = cfgFor(mock);
+    cfg.maxHistoryMessages = 4;
+    ResilienceAgent agent(cfg);
+    agent.initForTest();
+    std::vector<std::string> warnings;
+    agent.setOutputHandler(std::make_unique<NoticeConsole>(&warnings));
+    for (int turn = 1; turn <= 4; ++turn) {
+        mock.pushResponse(answer("reply " + std::to_string(turn)));
+        agent.processQuery("question " + std::to_string(turn));
+    }
+    EXPECT_EQ(agent.history().size(), 4u);
+    EXPECT_EQ(warnings.size(), 1u);
+}

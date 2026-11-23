@@ -922,6 +922,53 @@ bool isPlaceholderRun(const std::string& text) {
     return covered * 10 >= text.size() * 9;
 }
 
+// A turn starts at a message the user typed; a prompt-JSON tool result is stored as a user message too.
+bool startsTurn(const Message& m) {
+    return m.role == MessageRole::USER && m.content.rfind("[Result from ", 0) != 0;
+}
+
+size_t historyBytes(const std::vector<Message>& messages) {
+    size_t bytes = 0;
+    for (const auto& m : messages) {
+        bytes += m.content.size() + 16;
+        for (const auto& call : m.toolCalls) bytes += call.name.size() + call.arguments.size();
+    }
+    return bytes;
+}
+
+// Removes the first `count` messages; returns how many turns began among them.
+int eraseOldest(std::vector<Message>& messages, size_t count) {
+    count = std::min(count, messages.size());
+    int turns = 0;
+    for (size_t i = 0; i < count; ++i) turns += startsTurn(messages[i]) ? 1 : 0;
+    messages.erase(messages.begin(), messages.begin() + static_cast<std::ptrdiff_t>(count));
+    return turns;
+}
+
+// Drops the oldest whole turns until about `keepBytes` are left; the newest turn always stays.
+int dropOldestTurns(std::vector<Message>& messages, size_t keepBytes) {
+    std::vector<size_t> starts;
+    for (size_t i = 0; i < messages.size(); ++i) {
+        if (startsTurn(messages[i])) starts.push_back(i);
+    }
+    if (starts.size() < 2) return 0;
+    size_t bytes = historyBytes(messages), cut = 0;
+    for (size_t t = 1; t < starts.size() && bytes > keepBytes; ++t) {
+        for (size_t i = cut; i < starts[t]; ++i) {
+            const std::vector<Message> one{messages[i]};
+            bytes -= std::min(bytes, historyBytes(one));
+        }
+        cut = starts[t];
+    }
+    return cut == 0 ? 0 : eraseOldest(messages, cut);
+}
+
+// How many tokens of conversation a window holds once room for the reply is kept.
+long historyRoom(int window, int maxTokens) {
+    const int reply = std::min(maxTokens > 0 ? maxTokens : window / 4, window / 4);
+    return static_cast<long>(window - reply) * 9 / 10;
+}
+
 // Shorten the model's own long replies, oldest first, keeping the newest message whole.
 size_t trimLongReplies(std::vector<Message>& messages) {
     constexpr size_t kKeepHead = 600, kKeepTail = 300, kLong = 1500;
@@ -2739,10 +2786,42 @@ json Agent::processQueryInternal(const std::vector<Message>& userMessages, int m
     }
 
     // Prune to maxHistoryMessages
+    int droppedTurns = 0;
     if (cfg.maxHistoryMessages > 0 &&
         static_cast<int>(messages.size()) > cfg.maxHistoryMessages) {
-        messages.erase(messages.begin(),
-                       messages.begin() + (static_cast<int>(messages.size()) - cfg.maxHistoryMessages));
+        droppedTurns += eraseOldest(messages, messages.size() - static_cast<size_t>(cfg.maxHistoryMessages));
+    }
+    // Then fit what is kept to the window the model is really loaded with.
+    {
+        const size_t bytes = historyBytes(messages);
+        long tokens = static_cast<long>(bytes / 3);  // more than any tokenizer makes of it
+        if (!llmCallLog.empty()) {
+            const json& last = llmCallLog.back();
+            const long counted = last.value("input_tokens", 0) + last.value("output_tokens", 0);
+            if (counted > 0) tokens = counted;
+        }
+        int window = cfg.contextSize;
+        // A hosted model has its provider's window, not a local one.
+        if (cfg.modelId.rfind("fireworks.", 0) == 0 || cfg.modelId.rfind("amd.", 0) == 0) {
+            window = std::max(window, 131072);
+        }
+        if (window > 0 && bytes > 0 && tokens > historyRoom(window, cfg.maxTokens)) {
+            // Another program may have loaded the model with a larger window than the configured one.
+            const LemonadeHealth h = lemonade_.healthCheck();
+            if (h.running && h.modelId == cfg.modelId && h.contextSize > window) window = h.contextSize;
+            const long room = historyRoom(window, cfg.maxTokens);
+            if (tokens > room) {
+                // Down to three quarters, so the next turn doesn't drop one again.
+                const size_t keep = static_cast<size_t>(static_cast<double>(bytes) * (room * 3 / 4) / tokens);
+                droppedTurns += dropOldestTurns(messages, keep);
+            }
+        }
+        if (droppedTurns > 0 && !toldHistoryDropped_) {
+            toldHistoryDropped_ = true;
+            console_->printWarning(
+                "This conversation has outgrown the model's context window, so the oldest turns are no longer "
+                "sent to the model. Start a new chat for a new topic, or repeat what it should still know.");
+        }
     }
     repairToolCallPairing(messages);
     const bool stopped = cancelRequested();

@@ -160,6 +160,7 @@ public:
     /// Clear conversation history (start a fresh topic).
     void clearHistory() {
         conversationHistory_.clear();
+        toldHistoryDropped_ = false;
         tools_.forgetDeclinedCalls();
     }
 
@@ -514,6 +515,8 @@ private:
     mutable std::mutex toolOutputsMutex_;
     std::map<int, std::string> toolOutputs_;
     int nextToolOutputId_ = 1;
+    // Said once per conversation: the oldest turns no longer reach the model.
+    bool toldHistoryDropped_ = false;
 
     // Security: persistent allowed-tools store (shared with tools_)
     std::shared_ptr<AllowedToolsStore> allowedToolsStore_;

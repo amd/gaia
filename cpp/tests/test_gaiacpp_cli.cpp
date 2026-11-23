@@ -690,3 +690,27 @@ TEST_F(GaiacppCli, MissingModelIsNotDownloadedWithoutAYes) {
 }
 
 }  // namespace
+
+// The terminal modes dropped everything before the last 40 messages, whatever the model's window.
+TEST_F(GaiacppCli, AStdioSessionKeepsItsFirstTurnPastFortyMessages) {
+    bench::MockLlmServer mock;
+    const int turns = 24;  // 48 messages
+    const fs::path script = dir_ / "turns.jsonl";
+    {
+        std::ofstream in(script);
+        for (int i = 1; i <= turns; ++i) {
+            in << json{{"gaia_query", "question-" + std::to_string(100 + i)}}.dump() << "\n";
+            mock.pushResponse(withUsage(finalAnswer("reply"), 100 * i, 0, 5));
+        }
+    }
+    std::string bin = GAIACPP_BIN;
+    if (bin.find(' ') != std::string::npos) bin = "\"" + bin + "\"";
+    const std::string cmd = bin + " --stdio -m mock-model --base-url " + mock.baseUrl() +
+                            " --native-tools always --no-memory --no-skills --no-web < \"" + script.string() + "\"";
+    const auto r = gaia::ProcessRunner::run(cmd, 120000, (dir_ / "work").string(), isolated());
+    const auto bodies = mock.receivedBodies();
+    ASSERT_EQ(bodies.size(), static_cast<size_t>(turns)) << r.stdout_output << r.stderr_output;
+    EXPECT_NE(bodies.back().find("question-101"), std::string::npos)
+        << "the first turn was dropped from a conversation of about 2.4K tokens";
+    EXPECT_EQ(r.stdout_output.find("no longer sent to the model"), std::string::npos) << "nothing was dropped";
+}

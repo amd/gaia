@@ -83,6 +83,8 @@ The key for the endpoint is sent as `Authorization: Bearer`. It comes from the v
 
 A hosted model reached through Lemonade (a `fireworks.` or `amd.` model id) gets a 131072-token window in place of the 32768 default, unless a settings file, `GAIA_CONTEXT_SIZE` or `--ctx-size` names one.
 
+A conversation in the REPL, the full-screen UI or `--stdio` keeps every turn while it fits the model's window. The window is the one the model server reports the model is loaded with when that is larger than `contextSize` (GAIA's desktop app loads its chat model with a far larger one), and `contextSize` otherwise; a quarter of it, at most `maxTokens`, is kept free for the reply. When the conversation outgrows it, the oldest whole turns stop being sent to the model, and the first time that happens the session says so in one line: "This conversation has outgrown the model's context window, so the oldest turns are no longer sent to the model. Start a new chat for a new topic, or repeat what it should still know." There is no message-count limit unless the settings file sets `maxHistoryMessages`.
+
 `gaiacpp` loads the model at `contextSize` only through Lemonade's `/api/v1` endpoints. Through `/v1`, or any other server, the model runs at whatever window the server gives it.
 
 `--provider fireworks` is shorthand for Fireworks' endpoint with `FIREWORKS_API_KEY`, native tool calls and a 131072-token context window. It replaces a `contextSize` from the settings file or `GAIA_CONTEXT_SIZE`; `--ctx-size` still overrides it:
