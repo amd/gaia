@@ -255,7 +255,7 @@ describe('NewChat while the chat is being created (#5712)', () => {
         await act(async () => created());
 
         expect(useChatStore.getState().messageQueues['chat-1']?.map((m) => [m.text, m.state, m.error]))
-            .toEqual([['second', 'failed', 'The first message was not sent.']]);
+            .toEqual([['second', 'failed', { key: 'queue.errorFirstNotSent' }]]);
     });
 
     it('puts every message back in the box when the chat could not be created', async () => {

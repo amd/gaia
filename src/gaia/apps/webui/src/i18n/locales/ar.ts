@@ -295,6 +295,7 @@ const messages: Messages = {
     'queue.errorRetiredAgent': 'لم يعد وكيل "{agent}" الخاص بهذه المحادثة متاحًا، لذا لا يمكنها استقبال رسائل جديدة.',
     'queue.errorInterrupted': 'أُغلق GAIA أثناء إرسال هذه الرسالة، لذا ربما لم تُرسَل. راجع المحادثة أعلاه قبل إرسالها مرة أخرى.',
     'queue.errorUnconfirmed': 'لم يتمكن GAIA من تأكيد قراءته لهذه الرسالة.',
+    'queue.errorFirstNotSent': 'لم تُرسَل الرسالة الأولى.',
     'queue.sendAgain': 'إعادة الإرسال',
     'queue.sendAgainAria': 'إعادة إرسال: {text}',
     'queue.steer': 'أضِفها إلى هذا الرد',

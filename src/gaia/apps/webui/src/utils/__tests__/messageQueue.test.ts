@@ -159,9 +159,11 @@ describe('restoring queues after a reload', () => {
             { id: 3, text: 'c', state: 'failed', error: 'GAIA closed while this was being sent, so it may not have gone out. Check the chat above before sending it again.' },
             { id: 4, text: 'd', state: 'failed', error: 'GAIA could not confirm it read this message.' },
             { id: 5, text: 'e', state: 'failed', error: 'HTTP 500' },
+            { id: 6, text: 'f', state: 'failed', error: 'The first message was not sent.' },
         ] });
         expect(restored.a.map((m) => m.error)).toEqual([
             q.STOPPED_ERROR, q.retiredAgentError('doc'), q.INTERRUPTED_ERROR, q.UNCONFIRMED_ERROR, 'HTTP 500',
+            q.FIRST_NOT_SENT_ERROR,
         ]);
     });
 

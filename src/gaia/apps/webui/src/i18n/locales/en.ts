@@ -295,6 +295,7 @@ export const enMessages = {
     'queue.errorRetiredAgent': 'This chat\'s "{agent}" agent was retired, so it cannot take new messages.',
     'queue.errorInterrupted': 'GAIA closed while this was being sent, so it may not have gone out. Check the chat above before sending it again.',
     'queue.errorUnconfirmed': 'GAIA could not confirm it read this message.',
+    'queue.errorFirstNotSent': 'The first message was not sent.',
     'queue.sendAgain': 'Send again',
     'queue.sendAgainAria': 'Send again: {text}',
     'queue.steer': 'Add to this reply',

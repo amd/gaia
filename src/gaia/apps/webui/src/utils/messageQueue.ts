@@ -154,6 +154,7 @@ export function nextToSend(items: QueuedMessage[]): QueuedMessage | undefined {
 
 export const INTERRUPTED_ERROR: QueueReason = { key: 'queue.errorInterrupted' };
 export const STOPPED_ERROR: QueueReason = { key: 'queue.errorStopped' };
+export const FIRST_NOT_SENT_ERROR: QueueReason = { key: 'queue.errorFirstNotSent' };
 
 export function retiredAgentError(agent: string): QueueReason {
     return { key: 'queue.errorRetiredAgent', params: { agent } };
@@ -164,6 +165,7 @@ const SAVED_ENGLISH: ReadonlyArray<[RegExp, (m: RegExpMatchArray) => QueueReason
     [/^GAIA could not confirm it read this message\.$/, () => UNCONFIRMED_ERROR],
     [/^GAIA closed while this was being sent, so it may not have gone out\. /, () => INTERRUPTED_ERROR],
     [/^Stopped before GAIA confirmed it got this message\.$/, () => STOPPED_ERROR],
+    [/^The first message was not sent\.$/, () => FIRST_NOT_SENT_ERROR],
     [/^This chat's "(.+)" agent was retired, so it cannot take new messages\.$/, (m) => retiredAgentError(m[1])],
 ];
 
