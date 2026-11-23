@@ -12,7 +12,7 @@
     font-family: var(--font-sans);
     line-height: 1.5;
     flex-shrink: 0;
-    animation: slideDown var(--duration) var(--ease);
+    animation: bannerIn var(--duration) var(--ease);
     z-index: 40;
 }
 
@@ -155,12 +155,8 @@
     white-space: nowrap;
 }
 
-@keyframes spin {
-    from { transform: rotate(0deg); }
-    to { transform: rotate(360deg); }
-}
 
-@keyframes slideDown {
+@keyframes bannerIn {
     from { opacity: 0; transform: translateY(-100%); }
     to { opacity: 1; transform: translateY(0); }
 }

@@ -98,8 +98,8 @@
     height: 34px;
     padding: 0 16px;
     border-radius: var(--radius-full);
-    background: var(--accent-fill);
-    color: var(--accent-fill-text);
+    background: var(--action-fill);
+    color: var(--action-fill-text);
     font-size: var(--fs-ui);
     font-weight: 500;
     box-shadow: var(--shadow-sm);
@@ -107,7 +107,7 @@
 }
 
 .render-guide__start:hover {
-    background: var(--accent-fill-hover);
+    background: var(--action-fill-hover);
     transform: translateY(-1px);
 }
 

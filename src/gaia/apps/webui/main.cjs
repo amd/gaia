@@ -980,19 +980,10 @@ function setupJumpList() {
         items: [
           {
             type: "task",
-            title: "New Task",
-            description: "Start a new agent task",
+            title: "Open GAIA",
+            description: "Show the GAIA window",
             program: process.execPath,
             args: "",
-            iconPath: process.execPath,
-            iconIndex: 0,
-          },
-          {
-            type: "task",
-            title: "Agent Manager",
-            description: "View and manage OS agents",
-            program: process.execPath,
-            args: "--show-agents",
             iconPath: process.execPath,
             iconIndex: 0,
           },

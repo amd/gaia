@@ -142,6 +142,16 @@ describe('restoring queues after a reload', () => {
         expect(q.item('new', 'queued').id).toBeGreaterThan(9_000);
     });
 
+    it('drops a note saved as English text by an older build, keeping the message', () => {
+        const restored = q.restore({ a: [
+            { id: 1, text: 'old', state: 'queued', note: "Can't add to this reply; it will send when the reply ends." },
+            { id: 2, text: 'new', state: 'queued', note: q.STEER_REFUSED_NOTE },
+        ] });
+        expect(states(restored.a)).toEqual([['old', 'queued'], ['new', 'queued']]);
+        expect(restored.a[0].note).toBeUndefined();
+        expect(restored.a[1].note).toBe(q.STEER_REFUSED_NOTE);
+    });
+
     it('skips anything malformed instead of guessing', () => {
         expect(q.restore(null)).toEqual({});
         expect(q.restore('nope')).toEqual({});

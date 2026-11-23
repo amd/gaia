@@ -252,7 +252,8 @@
     display: inline-flex;
     align-items: center;
     gap: 4px;
-    font-size: 11px;
+    min-height: var(--hit-min);
+    font-size: var(--fs-label);
     padding: 3px 10px;
     border-radius: var(--radius-sm);
     border: 1px solid var(--border);
@@ -266,18 +267,10 @@
     background: var(--bg-active);
 }
 
-.schedule-card-actions .btn-sm.chat {
-    color: var(--accent-blue);
-    border-color: var(--accent-blue);
-}
-
-.schedule-card-actions .btn-sm.chat:hover {
-    background: color-mix(in srgb, var(--accent-blue) 10%, transparent);
-}
-
+/* Delete wears the danger hue, not brass: brass marks what you would most likely do. */
 .schedule-card-actions .btn-sm.danger {
-    color: var(--accent);
-    border-color: var(--accent);
+    color: var(--danger);
+    border-color: color-mix(in srgb, var(--danger) 45%, var(--border));
 }
 
 .schedule-card-actions .btn-sm.danger:hover {
