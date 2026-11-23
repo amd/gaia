@@ -8,6 +8,10 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 Requires the `gaia` Python CLI 0.27.0+ on `PATH`.
 
+- **Another app can see whether the sidecar is mid-answer (contract 2.32).**
+  `GET /v1/gaia/activity` returns `{ "active_runs": n }`, counting every
+  caller's runs, so an app switching the agent program waits for answers in
+  progress instead of cutting them off by restarting the sidecar.
 - **The session panel no longer keeps listing a file as approved after its
   agent is gone (contract 2.31).** A chat's "Files GAIA can reach" could
   keep showing a file as approved after the agent that held that approval —

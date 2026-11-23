@@ -56,7 +56,7 @@ namespace {
 constexpr const char* kService = "gaia-agent-gaia";
 // Every request field and route up to this version is implemented; the Agent
 // UI turns features on by it, so it must never run ahead of the code.
-constexpr const char* kApiVersion = "2.27";
+constexpr const char* kApiVersion = "2.28";
 // Shown by the Agent UI's context meter in place of a measurement.
 constexpr const char* kNoContextMeasure = "Not available yet: gaiacpp doesn't report what fills its context.";
 constexpr auto kKeepalive = std::chrono::seconds(10);
@@ -636,6 +636,12 @@ private:
         server_.Get("/v1/gaia/skills", [this](const httplib::Request& req, httplib::Response& res) {
             if (!admit(req, res, true)) return;
             skillsList(res);
+        });
+        // The answers running now, from any caller, so a restart can wait for them.
+        server_.Get("/v1/gaia/activity", [this](const httplib::Request& req, httplib::Response& res) {
+            if (!admit(req, res, true)) return;
+            std::lock_guard<std::mutex> lock(runsMu_);
+            sendJson(res, 200, {{"active_runs", runs_.size()}});
         });
         server_.Post("/v1/gaia/query", [this](const httplib::Request& req, httplib::Response& res) {
             if (!admit(req, res, true)) return;

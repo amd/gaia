@@ -237,6 +237,34 @@ def _ensure(inst: DaemonInstance, agent_id: str) -> SidecarHandle:
     )
 
 
+def active_runs(handle: "SidecarHandle") -> int:
+    """The answers *handle*'s sidecar is running now, from every app that uses it.
+
+    Raises :class:`SidecarError` when the sidecar can't say (unreachable, or a
+    build from before contract 2.32), so a caller never restarts on a guess.
+    """
+    url = f"{handle.base_url}/v1/{handle.agent_id}/activity"
+    try:
+        r = requests.get(
+            url, headers={"Authorization": f"Bearer {handle.token}"}, timeout=5
+        )
+    except requests.exceptions.RequestException as e:
+        raise SidecarError(
+            f"could not ask the '{handle.agent_id}' sidecar whether it is answering: {e}"
+        ) from e
+    if r.status_code != 200:
+        raise SidecarError(
+            f"the '{handle.agent_id}' sidecar can't say whether it is answering "
+            f"(HTTP {r.status_code} from {url})."
+        )
+    try:
+        return int(r.json()["active_runs"])
+    except (ValueError, KeyError, TypeError) as e:
+        raise SidecarError(
+            f"the '{handle.agent_id}' sidecar sent an unreadable activity reply: {e}"
+        ) from e
+
+
 def stop_sidecar(agent_id: str) -> None:
     """Stop *agent_id*'s sidecar via the daemon. Attach-only.
 

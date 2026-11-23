@@ -2896,35 +2896,55 @@ def relay_one_prompt(
 
 
 # Relays between acquiring their agent and finishing, interactive and background alike.
-_RELAY_LOCK = threading.Lock()
+_COUNT_LOCK = threading.Lock()
 _relays_in_flight = 0
 _relay_held = threading.local()
+# One per agent: acquiring and restarting it is serialised, other agents and
+# finishing relays never wait on its daemon calls.
+_AGENT_LOCKS: dict = {}
+
+
+def _agent_lock(agent_type: str) -> threading.Lock:
+    with _COUNT_LOCK:
+        return _AGENT_LOCKS.setdefault(agent_type, threading.Lock())
+
+
+_TAKES_OVER_LATER = (
+    "The agent program was changed in another GAIA app. "
+    "It takes over once the chats answering now finish."
+)
 
 
 def _acquire_for_relay(daemon_client, agent_type: str, session_id, sse_handler):
     """Acquire *agent_type*'s sidecar for one relay, restarting a stale one only when idle.
 
-    Counted as in flight from here until the dispatch returns, under one lock, so
-    no relay can start between the idle check and the restart.
+    Idle means no other chat here, no relay here, and no answer the sidecar is
+    giving any other app (the TUI drives the same one). The relay counts as in
+    flight from here until its dispatch returns.
     """
     global _relays_in_flight
+    from gaia.daemon.sidecars.errors import SidecarError
     from gaia.ui.run_manager import run_manager
 
-    with _RELAY_LOCK:
+    with _agent_lock(agent_type):
         handle = daemon_client.acquire_handle(agent_type)
         if getattr(handle, "stale_harness", False):
+            with _COUNT_LOCK:
+                busy_here = _relays_in_flight
             others = [s for s in run_manager.active_sessions() if s != session_id]
-            if others or _relays_in_flight:
+            elsewhere = 0
+            if not others and not busy_here:
+                try:
+                    elsewhere = daemon_client.active_runs(handle)
+                except SidecarError as exc:
+                    logger.warning(
+                        "chat: kept the %s agent running: %s", agent_type, exc
+                    )
+                    elsewhere = -1
+            if others or busy_here or elsewhere:
                 # Restarting now would cut those answers off.
                 sse_handler._emit(
-                    {
-                        "type": "status",
-                        "status": "info",
-                        "message": (
-                            "The agent program was changed in another GAIA app. "
-                            "It takes over once the chats answering now finish."
-                        ),
-                    }
+                    {"type": "status", "status": "info", "message": _TAKES_OVER_LATER}
                 )
             else:
                 logger.info(
@@ -2933,8 +2953,9 @@ def _acquire_for_relay(daemon_client, agent_type: str, session_id, sse_handler):
                 )
                 daemon_client.stop_sidecar(agent_type)
                 handle = daemon_client.acquire_handle(agent_type)
-        _relays_in_flight += 1
-        _relay_held.count = getattr(_relay_held, "count", 0) + 1
+        with _COUNT_LOCK:
+            _relays_in_flight += 1
+            _relay_held.count = getattr(_relay_held, "count", 0) + 1
     return handle
 
 
@@ -2945,7 +2966,7 @@ def _dispatch_sidecar_query(*args, **kwargs) -> None:
     try:
         _dispatch_sidecar_query_unheld(*args, **kwargs)
     finally:
-        with _RELAY_LOCK:
+        with _COUNT_LOCK:
             released = getattr(_relay_held, "count", 0) - held_before
             _relays_in_flight -= released
             _relay_held.count = held_before

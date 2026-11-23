@@ -678,8 +678,12 @@ def test_the_start_screen_explains_a_saved_harness_it_cannot_run(monkeypatch):
 # ---------------------------------------------------------------- a stale agent restarts only when idle
 
 
-def _stale_dispatch(monkeypatch, busy):
-    """One Agent UI turn whose sidecar runs a harness other than the saved one."""
+def _stale_dispatch(monkeypatch, busy, elsewhere=0):
+    """One Agent UI turn whose sidecar runs a harness other than the saved one.
+
+    *elsewhere* is what the sidecar says other apps are running, or an
+    exception it raises instead.
+    """
     from gaia.ui import run_manager as rm
     from gaia.ui.sidecar import daemon_client, relay
 
@@ -708,6 +712,13 @@ def _stale_dispatch(monkeypatch, busy):
     monkeypatch.setattr(
         rm.run_manager, "active_sessions", lambda: ["s1"] + (["other"] if busy else [])
     )
+
+    def _active_runs(h):
+        if isinstance(elsewhere, Exception):
+            raise elsewhere
+        return elsewhere
+
+    monkeypatch.setattr(daemon_client, "active_runs", _active_runs)
     monkeypatch.setattr(relay, "relay_query", lambda *a, **k: None)
     events = []
 
@@ -742,6 +753,77 @@ def test_a_stale_agent_is_left_running_while_a_background_relay_runs(monkeypatch
     events, acquired, stopped = _stale_dispatch(monkeypatch, busy=False)
     assert stopped == [] and len(acquired) == 1
     assert _chat_helpers._relays_in_flight == 1, "the turn's own count was released"
+
+
+def test_a_stale_agent_is_left_running_while_another_app_is_answering(monkeypatch):
+    # The TUI drives the same sidecar; its turns are invisible to this process.
+    _choose("gaiapy")
+    events, acquired, stopped = _stale_dispatch(monkeypatch, busy=False, elsewhere=1)
+    assert stopped == [] and len(acquired) == 1
+    assert any("takes over once" in e.get("message", "") for e in events), events
+
+
+def test_a_sidecar_that_cant_say_is_never_restarted_on_a_guess(monkeypatch):
+    from gaia.daemon.sidecars.errors import SidecarError
+
+    _choose("gaiapy")
+    events, acquired, stopped = _stale_dispatch(
+        monkeypatch, busy=False, elsewhere=SidecarError("HTTP 404")
+    )
+    assert stopped == [] and len(acquired) == 1
+    assert any("takes over once" in e.get("message", "") for e in events), events
+
+
+def test_active_runs_reads_the_sidecar_and_refuses_an_older_one(monkeypatch):
+    from gaia.daemon.sidecars.errors import SidecarError
+    from gaia.ui.sidecar import daemon_client
+
+    handle = daemon_client.SidecarHandle(
+        base_url="http://127.0.0.1:1",
+        token="tok",
+        api_version="2.32",
+        agent_version="0.1.0",
+        mode="user",
+        pid=1,
+        agent_id="gaia",
+    )
+    seen = {}
+
+    class _Reply:
+        def __init__(self, status, body):
+            self.status_code, self._body = status, body
+
+        def json(self):
+            return self._body
+
+    def _get(url, headers, timeout):
+        seen.update(url=url, auth=headers.get("Authorization"))
+        return reply
+
+    monkeypatch.setattr(daemon_client.requests, "get", _get)
+    reply = _Reply(200, {"active_runs": 2})
+    assert daemon_client.active_runs(handle) == 2
+    assert seen == {"url": "http://127.0.0.1:1/v1/gaia/activity", "auth": "Bearer tok"}
+    reply = _Reply(404, {"detail": "Not Found"})
+    with pytest.raises(SidecarError, match="can't say"):
+        daemon_client.active_runs(handle)
+
+
+def test_one_agents_restart_never_holds_up_anothers_relay(monkeypatch):
+    # The per-agent lock: a held "gaia" lock doesn't block a relay to another agent.
+    import threading
+
+    held = _chat_helpers._agent_lock("gaia")
+    other = _chat_helpers._agent_lock("custom")
+    assert held is not other
+    assert held is _chat_helpers._agent_lock("gaia")
+    with held:
+        got = []
+        t = threading.Thread(target=lambda: got.append(other.acquire(timeout=2)))
+        t.start()
+        t.join(5)
+        assert got == [True]
+        other.release()
 
 
 def test_a_relay_is_counted_until_its_dispatch_returns(monkeypatch):

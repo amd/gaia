@@ -668,7 +668,7 @@
   "info": {
     "description": "REST surface for the GAIA flagship agent sidecar (/v1/gaia/*). Cross-implementation contract for embedders and typed clients.",
     "title": "GAIA Agent API",
-    "version": "2.31"
+    "version": "2.32"
   },
   "openapi": "3.1.0",
   "paths": {
@@ -693,6 +693,37 @@
         },
         "security": [],
         "summary": "Health"
+      }
+    },
+    "/v1/gaia/activity": {
+      "get": {
+        "description": "The answers running now, from any app, so a restart can wait for them.",
+        "operationId": "activity_v1_gaia_activity_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": {
+                    "type": "integer"
+                  },
+                  "title": "Response Activity V1 Gaia Activity Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "summary": "Activity",
+        "tags": [
+          "gaia-query"
+        ]
       }
     },
     "/v1/gaia/init": {
