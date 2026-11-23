@@ -194,6 +194,24 @@ void TurnRecorder::discard(const std::string& path) {
     while (at > 0 && key(fs::u8path(files[at - 1]["path"].get<std::string>())) != key(target)) --at;
     if (at == 0) return;
     const json entry = files[at - 1];
+    // A failed write may still have truncated or half-written the file: drop the copy only when
+    // the file is exactly as it was captured, else keep it so undo can put the original back.
+    {
+        std::error_code probe;
+        const fs::path current = fs::u8path(entry["path"].get<std::string>());
+        bool untouched;
+        if (entry["existed"].get<bool>()) {
+            try {
+                untouched = fs::is_regular_file(current, probe) &&
+                            sha256File(current) == entry["before_sha256"].get<std::string>();
+            } catch (const std::exception&) {
+                untouched = false;  // can't tell: keeping the copy is the safe answer
+            }
+        } else {
+            untouched = !fs::exists(current, probe) && !probe;
+        }
+        if (!untouched) return;
+    }
     files.erase(at - 1);
     // The record first, while what it points to still exists: if it can't be rewritten, the
     // entry goes back and memory and disk still agree.
