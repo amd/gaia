@@ -1398,6 +1398,8 @@ class _Outcome:
         failed=False,
         usage=None,
         model_messages=None,
+        time_limit_reached=False,
+        withheld_tools=None,
     ):
         self.terminal_type = terminal_type
         self.final_answer = final_answer
@@ -1405,6 +1407,8 @@ class _Outcome:
         self.failed = failed
         self.usage = usage
         self.model_messages = model_messages
+        self.time_limit_reached = time_limit_reached
+        self.withheld_tools = withheld_tools
 
 
 @pytest.fixture
@@ -1533,20 +1537,70 @@ def test_a_relayed_turn_that_errors_exits_1_with_the_reason(relay, capsys):
     assert "model failed to load" in capsys.readouterr().err
 
 
+def test_base_url_is_refused_on_the_agent_binary(relay, capsys):
+    # The service always uses the model server GAIA is set up with.
+    assert print_mode.run("q", model="m", base_url="http://h:1/api/v1") == 1
+    err = capsys.readouterr().err
+    assert "--base-url" in err and "gaia lemonade connect" in err
+    assert relay == []
+
+
 @pytest.mark.parametrize(
-    "flags, named",
+    "flags, sent",
     [
-        ({"skip_permissions": True}, "--dangerously-skip-permissions"),
-        ({"full_access": True}, "--full-access"),
-        ({"base_url": "http://h:1/api/v1"}, "--base-url"),
-        # The relay has no way to stop the binary's turn at a deadline.
-        ({"time_limit": 60}, "--time-limit"),
+        ({"time_limit": 60}, {"time_limit": 60}),
+        (
+            {"disallowed_tools": ("write_file", "run_shell_*")},
+            {"disallowed_tools": ["write_file", "run_shell_*"]},
+        ),
+        ({"no_web": True}, {"no_web": True}),
+        ({"no_skills": True}, {"no_skills": True}),
+        ({"skip_permissions": True}, {"skip_permissions": True}),
+        ({"full_access": True}, {"full_access": True}),
     ],
 )
-def test_flags_the_agent_binary_cannot_honour_are_refused(relay, capsys, flags, named):
-    assert print_mode.run("q", model="m", **flags) == 1
-    assert named in capsys.readouterr().err
-    assert relay == []
+def test_each_print_flag_reaches_the_agent_binary(relay, flags, sent):
+    assert print_mode.run("q", model="m", **flags) == 0
+    [(_, _, kwargs)] = relay
+    for key, value in sent.items():
+        assert kwargs[key] == value
+    # A one-shot, so an override can't land on any chat's session.
+    assert "session_id" not in kwargs
+
+
+def test_a_relayed_turn_is_headless_and_worded_for_the_cli(relay):
+    assert print_mode.run("q", model="m") == 0
+    [(_, _, kwargs)] = relay
+    assert kwargs["surface"] == "cli"
+    assert kwargs["can_answer_questions"] is False
+    assert not kwargs["skip_permissions"] and not kwargs["full_access"]
+
+
+def test_a_relayed_full_access_run_warns_on_stderr(relay, capsys):
+    assert print_mode.run("q", model="m", full_access=True) == 0
+    assert "full access is on" in capsys.readouterr().err
+
+
+def test_a_relayed_turn_stopped_by_its_time_limit_is_incomplete(relay, capsys):
+    relay.outcome = _Outcome(
+        "final",
+        final_answer="Stopped at the 60-second time limit (--time-limit).",
+        time_limit_reached=True,
+    )
+    assert print_mode.run("q", model="m", output_format="json", time_limit=60) == 1
+    record = json.loads(capsys.readouterr().out)
+    assert record["time_limit_reached"] is True
+    assert record["status"] == "incomplete" and record["is_error"]
+    assert "time limit" in record["result"]
+
+
+def test_a_relayed_record_lists_the_withheld_tools(relay, capsys):
+    relay.outcome = _Outcome(
+        "final", final_answer="ok", withheld_tools=["search_web", "fetch_page"]
+    )
+    assert print_mode.run("q", model="m", output_format="json", no_web=True) == 0
+    record = json.loads(capsys.readouterr().out)
+    assert record["withheld_tools"] == ["search_web", "fetch_page"]
 
 
 # ---------------------------------------------------------------------------
@@ -2114,20 +2168,6 @@ def test_run_turn_turns_off_the_skill_catalogue_and_withholds(stub_env, capsys):
     config = _agent().config
     assert config.skill_discovery is False and config.skill_suggestions is False
     assert json.loads(capsys.readouterr().out)["withheld_tools"] == ["search_web"]
-
-
-def test_relayed_turn_refuses_tool_restrictions_naming_the_flag():
-    with pytest.raises(RuntimeError, match="--no-web needs the GAIA agent"):
-        print_mode._relay_turn(
-            "q",
-            model=None,
-            verbose=False,
-            max_steps=None,
-            skip_permissions=False,
-            full_access=False,
-            base_url=None,
-            restricted="--no-web",
-        )
 
 
 def test_no_web_tells_the_model_the_shell_is_not_a_way_around(stub_env):
