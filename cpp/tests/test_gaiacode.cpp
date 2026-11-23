@@ -273,7 +273,9 @@ TEST(GaiacodeClaims, LeavesHonestAnswersAlone) {
     for (const char* honest : {"The tests don't pass yet: one still fails.", "I could not run the tests.",
                                "Renamed the function in three files.", "12 passed, 2 failed.",
                                "Added a test that checks parse() succeeds on empty input.",
-                               "The test passes a mock client to the handler."}) {
+                               "The test passes a mock client to the handler.",
+                               "Ran the tests: 2 tests failed, 10 passed.", "Tests: 1 failed, 9 passed.",
+                               "The suite ran; 3 failing, the rest are passing."}) {
         EXPECT_FALSE(CodeAgent::claimsTestsPass(honest)) << honest;
     }
 }
@@ -361,9 +363,6 @@ TEST(GaiacodeChecks, AnOutsideCommandIsRefusedBeforeAnyApproval) {
     cfg.baseUrl = "http://127.0.0.1:1/api/v1";
     CodeAgent::Options o;
     o.workspaceRoots = {dir.u8string()};
-#ifdef GAIACODE_HAS_GITHUB
-    o.github = false;
-#endif
     CodeAgent agent(cfg, o);
     bool asked = false;
     agent.setToolConfirmCallback([&](const std::string&, const json&) {

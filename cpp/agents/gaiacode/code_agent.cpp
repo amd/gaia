@@ -431,6 +431,8 @@ bool CodeAgent::claimsTestsPass(const std::string& answer) {
         return std::regex_search(s.substr(from, pos - from + len), negated);
     };
     auto check = [&](const std::string& s) {
+        // A sentence that reports failures is a report, not a claim: "2 tests failed, 10 passed".
+        if (std::regex_search(s, failures)) return false;
         for (const auto& re : claims) {
             for (auto it = std::sregex_iterator(s.begin(), s.end(), re); it != std::sregex_iterator(); ++it) {
                 if (!negatedNear(s, static_cast<size_t>(it->position()), static_cast<size_t>(it->length()))) {
