@@ -186,7 +186,9 @@ void TurnRecorder::discard(const std::string& path) {
     const json& made = entry["created_dirs"];
     for (auto it = made.rbegin(); it != made.rend(); ++it) {
         const fs::path dir = fs::u8path(it->get<std::string>());
-        if (fs::is_directory(dir, ec) && fs::is_empty(dir, ec)) fs::remove(dir, ec);
+        if (!fs::is_directory(dir, ec) || !fs::is_empty(dir, ec)) continue;
+        fs::remove(dir, ec);
+        if (ec) throw SnapshotError("Could not remove the empty folder " + dir.u8string() + ": " + ec.message());
     }
     if (hasChanges()) {
         save();
