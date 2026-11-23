@@ -17,6 +17,7 @@ const {
   app,
   autoUpdater: electronAutoUpdater,
   BrowserWindow,
+  clipboard,
   Menu,
   dialog,
   ipcMain,
@@ -125,6 +126,7 @@ const {
   describeBlockedUrl,
 } = require("./services/link-policy.cjs");
 const { installWindowKeys } = require("./services/window-keys.cjs");
+const { installContextMenu } = require("./services/context-menu.cjs");
 const { installQuitCleanup } = require("./services/quit-cleanup.cjs");
 const { chromiumSwitches } = require("./services/chromium-switches.cjs");
 const { titleBarKind, titleBarOptions } = require("./services/window-frame.cjs");
@@ -733,6 +735,7 @@ function createWindow() {
     installWindowKeys(mainWindow.webContents, { devTools: !app.isPackaged });
   }
   mainWindow.setMenuBarVisibility(false);
+  installContextMenu(mainWindow, { Menu, clipboard, locale: app.getLocale() });
 
   // Open external links in the default browser. The URL here is already
   // RESOLVED against the file:// document, so a scheme-less markdown link
