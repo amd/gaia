@@ -25,7 +25,8 @@ On this PC, GAIA offers the two ways to run a model it has tested: the GPU, and 
 on, **Switch model** for the models ready to use, and **Context size**. Below
 it, models sit in groups you can open and close: **Downloaded**, **Available to
 download** and **Not available on this PC**, with the reason. A search opens
-every group it matches.
+every group it matches. Models GAIA has verified come first, in the order
+setup lists them.
 
 Each row shows chips for the device (GPU or NPU), whether it's loaded and
 whether it fits this PC. **Details** has where it runs, such as "GPU · Vulkan"
@@ -40,7 +41,9 @@ first, so a size too large fails to load and says so.
 
 ### Switching models
 
-The model chip in the composer opens the same list. While GAIA is answering,
+The model chip in the composer opens the same list, with setup's **Verified**
+or **Untested** tag on each local model and the verified ones first among
+those to download. It fits the window and scrolls inside. While GAIA is answering,
 a model you pick there applies to your next message. On most PCs, a local
 model you pick starts loading right away, and a banner counts the seconds; you
 can type meanwhile, and a message waits for the load. On a PC with under 24 GB

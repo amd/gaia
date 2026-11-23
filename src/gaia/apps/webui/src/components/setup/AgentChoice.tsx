@@ -49,13 +49,15 @@ interface Props {
     /** Setup: the agent picked here, held until Continue; null keeps the one in use. */
     pending?: FlagshipAgent | null;
     onPending?: (pick: AgentPick | null) => void;
+    /** Gives the title this id and lets it take focus, so setup can open Customize at the agent. */
+    headingId?: string;
 }
 
 /** Which program runs the GAIA agent: the Python one or the native C++ one. */
-export function AgentChoice({ inSettings = false, disabled = false, pending = null, onPending }: Props) {
+export function AgentChoice({ inSettings = false, disabled = false, pending = null, onPending, headingId }: Props) {
     const t = useT();
     const ids = useId();
-    const titleId = `${ids}-title`;
+    const titleId = headingId ?? `${ids}-title`;
     const moreId = `${ids}-more`;
     const offId = `${ids}-off`;
     const [listing, setListing] = useState<AgentPrograms | null>(null);
@@ -137,7 +139,7 @@ export function AgentChoice({ inSettings = false, disabled = false, pending = nu
 
     return (
         <section className={`agent-choice${inSettings ? ' settings-card' : ''}`} aria-labelledby={titleId} aria-busy={saving || downloading || (!listing && !loadError)}>
-            <h3 className={`agent-choice-title ${inSettings ? 'settings-label' : 'mc-job-title'}`} id={titleId}>
+            <h3 className={`agent-choice-title ${inSettings ? 'settings-label' : 'mc-job-title'}`} id={titleId} tabIndex={headingId ? -1 : undefined}>
                 {t('setup.agent.title')}
                 {saving && <Loader2 size={13} className="spin" aria-hidden="true" />}
             </h3>

@@ -697,6 +697,8 @@
 .agent-choice { display: grid; gap: 8px; }
 .agent-choice > p { margin: 0; }
 .agent-choice-title { display: flex; align-items: center; gap: 6px; margin: 0; }
+/* Setup scrolls straight to it: keep a gap above rather than butting it on the edge. */
+.agent-choice-title[tabindex] { scroll-margin-block-start: 24px; }
 .agent-choice-row { inline-size: 100%; flex-wrap: wrap; align-items: center; gap: 4px 8px; padding-block: 8px; }
 /* Each piece keeps its own width; a choice card otherwise stretches its spans. */
 .agent-choice .agent-choice-row > span { flex: 0 1 auto; }

@@ -1077,6 +1077,8 @@ export interface ProviderModel {
     npu_problems?: SetupNpuProblem[];
     /** Median tokens/s of its recent turns on this PC. */
     tokens_per_second?: number | null;
+    /** Setup's tag: covered by GAIA's evals, or not; null for a model with no such tag. Local models only. */
+    support?: 'verified' | 'untested' | null;
     /** An in-flight (or just-finished) download of this model. */
     download_progress?: DownloadProgress | null;
     /** List price per million tokens; null when unknown (never shown as $0). Cloud models only. */
