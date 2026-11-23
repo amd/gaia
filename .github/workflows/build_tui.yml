@@ -28,6 +28,8 @@ on:
       # Nothing else runs pre-release on these — the PE check this job invokes,
       # and the installers that package the binaries it builds.
       - 'util/check_pe_resources.py'
+      # Fetches the real gaiacpp the agent-program tests run.
+      - 'util/fetch_ci_gaiacpp.py'
       # installer/tui/fetch_gaiacpp.py imports it to verify the packaged gaiacpp.
       - 'util/gaiacpp_release_assets.py'
       - 'installer/tui/**'
@@ -71,6 +73,8 @@ on:
       # Nothing else runs pre-release on these — the PE check this job invokes,
       # and the installers that package the binaries it builds.
       - 'util/check_pe_resources.py'
+      # Fetches the real gaiacpp the agent-program tests run.
+      - 'util/fetch_ci_gaiacpp.py'
       # installer/tui/fetch_gaiacpp.py imports it to verify the packaged gaiacpp.
       - 'util/gaiacpp_release_assets.py'
       - 'installer/tui/**'
@@ -104,6 +108,8 @@ concurrency:
 
 permissions:
   contents: read
+  # The test job fetches main's gaiacpp from build_agents.yml's artifacts.
+  actions: read
 
 # What runs where:
 #   pull request whose only files in the filter above are under
@@ -197,6 +203,23 @@ jobs:
         with:
           go-version-file: tui/go.mod
           cache-dependency-path: tui/go.sum
+
+      # The agent-program tests used to run a copy of the mock agent under
+      # gaiacpp's name, so nothing here ever started the real one. This is the
+      # gaiacpp main's last green build_agents.yml run produced for this
+      # platform; a pull request's own cpp/ changes are tested there.
+      - name: Fetch main's gaiacpp
+        working-directory: ${{ github.workspace }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          py=python
+          command -v python > /dev/null 2>&1 || py=python3
+          binary="$("${py}" util/fetch_ci_gaiacpp.py --out "${RUNNER_TEMP}/gaiacpp")"
+          echo "GAIA_TEST_GAIACPP=${binary}" >> "${GITHUB_ENV}"
+          # A test that needs the real gaiacpp fails without it, never skips.
+          echo "GAIA_TEST_REQUIRE_GAIACPP=1" >> "${GITHUB_ENV}"
 
       # -race is the point of this job. The TUI is concurrent throughout — SSE
       # streaming, the loopback control API, daemon polling — so this is where

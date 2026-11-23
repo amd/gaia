@@ -51,7 +51,21 @@ class TestPrJourney:
         assert set(self.job["strategy"]["matrix"]["os"]) == OS_MATRIX
         assert self.job["strategy"]["fail-fast"] is False
         assert DRAFT_GATE in self.job["if"]
-        assert self.wf["permissions"] == {"contents": "read"}
+        # Read-only; actions: read is for fetching main's gaiacpp build.
+        assert self.wf["permissions"] == {"contents": "read", "actions": "read"}
+
+    def test_the_gaiacpp_journeys_get_a_real_gaiacpp(self):
+        names = [s.get("name", "") for s in self.job["steps"]]
+        fetch = self.job["steps"][names.index("Fetch main's gaiacpp")]
+        assert names.index("Fetch main's gaiacpp") < names.index("Walk first-run setup")
+        assert "util/fetch_ci_gaiacpp.py" in fetch["run"]
+        assert "GAIA_E2E_GAIACPP=" in fetch["run"]
+        journeys = (
+            REPO / "src" / "gaia" / "apps" / "webui" / "e2e" / "setup.journey.ts"
+        ).read_text(encoding="utf-8")
+        assert "Customize picks gaiacpp" in journeys
+        # On CI a missing gaiacpp fails those journeys; it never skips them.
+        assert "test.skip(!GAIACPP && !process.env.CI" in journeys
 
     def test_nothing_hides_a_failure(self):
         assert "continue-on-error" not in (
