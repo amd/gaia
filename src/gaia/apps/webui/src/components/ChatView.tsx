@@ -8,6 +8,7 @@ import { MessageBubble, cleanToolCallContent, isErrorContent, turnEnding } from 
 import { toolRowText } from './AgentActivity';
 import { agentEventToStep } from '../utils/streamSteps';
 import { contextReason } from '../utils/contextReason';
+import { answerLatencies } from '../utils/answerLatency';
 import { applyStatusEvent, selectToolStatus } from '../utils/statusEvents';
 import { TOOL_CALL_JSON_SAFETY_RE, carryMessageKeys, fromApiMessages, isEchoOfFailedTool, keepFailedReply, onlyFailureAfter, persistedQuestion, policyReceiptAnchor, stripStreamingEnvelope } from '../utils/chatStream';
 import { useChatStore } from '../stores/chatStore';
@@ -1629,22 +1630,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
         // A card speaks for itself: the reply's wording is read only without one.
         && (hasConnectCard(lastMessage) ? lastConnectProviders.length > 0 : isAuthRequiredMessage(lastMessage.content));
 
-    // Pre-compute per-message latency: time from preceding user message to each
-    // assistant message. O(N) single pass, avoids repeated backward scans in render.
-    const latencyByMsgId = useMemo(() => {
-        const map = new Map<number, number>();
-        let lastUserTime: number | undefined;
-        for (const msg of messages) {
-            if (msg.role === 'user' && msg.created_at) {
-                lastUserTime = new Date(msg.created_at).getTime();
-            } else if (msg.role === 'assistant' && msg.created_at && lastUserTime !== undefined) {
-                const assistTime = new Date(msg.created_at).getTime();
-                if (assistTime > lastUserTime) map.set(msg.id, assistTime - lastUserTime);
-                lastUserTime = undefined;
-            }
-        }
-        return map;
-    }, [messages]);
+    const latencyByMsgId = useMemo(() => answerLatencies(messages), [messages]);
 
     const composerBlocked = retiredAgent
         ? `This chat used the retired "${retiredAgent}" agent and is read-only. Start a new chat.`

@@ -307,6 +307,8 @@ export interface InferenceStats {
     seconds?: number | null;
     /** True only for an answer kept from Retry with…. */
     retried?: boolean | null;
+    /** Seconds the turn waited on the user's answer to a permission prompt; absent when it never waited. */
+    waiting_seconds?: number | null;
     /** Where the turn was answered: "on your GPU", "via Fireworks AI". */
     place?: string | null;
     /** Set on a `hybrid` chat's turns: the model the turn was routed to, and why. */

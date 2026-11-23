@@ -592,6 +592,7 @@ export const enMessages = {
     'answer.duration.minSec': '{m} min {s} s',
     'answer.duration.ms': '{n} ms',
     'answer.exact.total': 'Total time {time}',
+    'answer.exact.waited': 'Waited {time} for you',
     'answer.exact.firstToken': 'First token {time}',
     'answer.exact.tokens': '{flow} tokens',
     'answer.exact.rate': '{n} tokens/s',

@@ -592,6 +592,7 @@ const messages: Messages = {
     'answer.duration.minSec': '{m} min {s} s',
     'answer.duration.ms': '{n} ms',
     'answer.exact.total': 'الوقت الإجمالي {time}',
+    'answer.exact.waited': 'انتظر ردّك {time}',
     'answer.exact.firstToken': 'أول رمز بعد {time}',
     'answer.exact.tokens': 'الرموز: {flow}',
     'answer.exact.rate': 'رموز في الثانية: {n}',

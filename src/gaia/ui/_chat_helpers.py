@@ -5930,6 +5930,11 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                         failed=unanswered,
                         stats=inference_stats,
                     )
+                    # The footer's answer time leaves out the user's own thinking time.
+                    perf_time = inference_stats["performance"].get("time") or {}
+                    waited = perf_time.get("waiting_seconds") or 0
+                    if waited > 0:
+                        inference_stats["waiting_seconds"] = waited
                 except (KeyError, TypeError, ValueError, ArithmeticError) as exc:
                     # The answer is still saved; the panel shows the turn as unmeasured.
                     logger.warning(
