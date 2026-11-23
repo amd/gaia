@@ -3,6 +3,7 @@
 
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { ChevronRight, FileText, X } from 'lucide-react';
+import { AgentChip } from './AgentChip';
 import { AgentRecovery } from './AgentRecovery';
 import { BrowserPaneToggle } from './browser-pane/BrowserPane';
 import { Composer } from './Composer';
@@ -53,6 +54,8 @@ interface NewChatProps {
 
 /** How often the start screen is asked for again while the assistant is unavailable. */
 export const START_RETRY_MS = 15_000;
+/** How long the starter row waits, unseen, for this PC's tasks before it shows the examples instead. */
+export const STARTERS_WAIT_MS = 3_000;
 
 /** A warm-up shorter than this finishes unseen, rather than flashing "0s". */
 export const WARM_UP_SHOWN_AFTER_S = 2;
@@ -211,6 +214,8 @@ export function NewChat({ onSend, initialText = '', focusRequest = 0, agentMissi
     const [sending, setSending] = useState(false);
     const [start, setStart] = useState<StartScreen | null>(null);
     const [startError, setStartError] = useState<string | null>(null);
+    // A start screen that never answers must not leave the starter row blank for good.
+    const [startSlow, setStartSlow] = useState(false);
     const [agentProblem, setAgentProblem] = useState<AgentProblem | null>(null);
     // A message sent while the chosen agent can't start: it stays in the box.
     const [keptForAgent, setKeptForAgent] = useState(false);
@@ -244,6 +249,11 @@ export function NewChat({ onSend, initialText = '', focusRequest = 0, agentMissi
         loadStart();
         return () => { live.current = false; };
     }, [loadStart]);
+
+    useEffect(() => {
+        const timer = window.setTimeout(() => setStartSlow(true), STARTERS_WAIT_MS);
+        return () => window.clearTimeout(timer);
+    }, []);
 
     useEffect(() => {
         api.listDocuments()
@@ -386,6 +396,8 @@ export function NewChat({ onSend, initialText = '', focusRequest = 0, agentMissi
                 </div>
                 <div className="new-chat-meta">
                     {folder && <FolderChip folder={folder} disabled={starting || sending} />}
+                    {/* Under the model chip: the box's own row has no room left beside it. */}
+                    <AgentChip />
                 </div>
                 <LibraryDocuments />
                 {warming !== null && !starting && warming.seconds >= WARM_UP_SHOWN_AFTER_S && (
@@ -393,7 +405,8 @@ export function NewChat({ onSend, initialText = '', focusRequest = 0, agentMissi
                 )}
                 {error && <p className="new-chat-error" role="alert">{error}</p>}
                 {agentRefused && agentMissing && <p className="new-chat-error" role="alert">{t('agentNotice.sendRefused')}</p>}
-                <TryChips onPick={fillPrompt} disabled={starting || sending} />
+                {/* Held unseen until the start screen answers, so examples don't flash up before this PC's tasks and nothing jumps. */}
+                <TryChips cards={start?.cards} pending={!start && !startError && !startSlow} onPick={fillPrompt} disabled={starting || sending} />
                 {!agentProblem && startError && <AssistantUnavailable detail={startError} onRetry={() => loadStart()} />}
             </div>
         </main>

@@ -7,6 +7,7 @@ import { HistoryNotice, LibraryNotices } from './ChatNotices';
 import { RetryWithMenu } from './RetryWithMenu';
 import { AnswerComparison } from './AnswerComparison';
 import { ModelServerDownNotice } from './ModelServerDownNotice';
+import { ChatAgentRecovery } from './ChatAgentRecovery';
 import type { Comparison } from '../hooks/useAnswerComparison';
 import type { Message } from '../types';
 
@@ -86,6 +87,9 @@ export const TranscriptRow = memo(function TranscriptRow({
                 latencyMs={latencyMs}
             />
             {msg.failure === 'model_server_down' && isLast && !busy && <ModelServerDownNotice />}
+            {msg.failed === true && msg.failure !== 'model_server_down' && canTryAgain && (
+                <ChatAgentRecovery key={msg.id} onTryAgain={() => onTryAgain(msg)} />
+            )}
             {comparison && (
                 <AnswerComparison
                     original={msg}

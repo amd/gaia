@@ -7,6 +7,7 @@ import { RadioGroup } from '../RadioGroup';
 import { useT } from '../../i18n/useT';
 import type { MessageKey } from '../../i18n/registry';
 import * as api from '../../services/api';
+import { useActiveAgentStore } from '../../stores/activeAgentStore';
 import type { AgentProgram, AgentPrograms, FlagshipAgent } from '../../types';
 import { AgentDownloadRow, useAgentDownload } from './AgentDownload';
 import { formatBytes } from './format';
@@ -24,7 +25,8 @@ const OPTIONS: Option[] = [
     { id: 'gaiacpp', label: 'setup.agent.gaiacpp', more: 'setup.agent.gaiacppMore', tag: 'setup.agent.beta' },
 ];
 
-const WHY: Record<NonNullable<AgentProgram['unavailable_code']>, MessageKey> = {
+/** Why gaiacpp can't be downloaded, in the UI's words rather than the server's English. */
+export const WHY: Record<NonNullable<AgentProgram['unavailable_code']>, MessageKey> = {
     no_release: 'setup.agent.why.noRelease',
     unreachable: 'setup.agent.why.unreachable',
     unverifiable: 'setup.agent.why.unverifiable',
@@ -69,6 +71,7 @@ export function AgentChoice({ inSettings = false, disabled = false, pending = nu
         setListing((l) => (l ? { ...l, current: id } : l));
         try {
             const updated = await api.updateSettings({ flagship_agent: id });
+            useActiveAgentStore.getState().setCurrent(updated.flagship_agent);
             if (mounted.current) setListing((l) => (l ? { ...l, current: updated.flagship_agent } : l));
         } catch (err) {
             if (!mounted.current) return;
@@ -158,8 +161,8 @@ export function AgentChoice({ inSettings = false, disabled = false, pending = nu
                                     onClick={() => choose(o.id)}
                                 >
                                     <span className="agent-choice-what">
-                                        <bdi dir="ltr" className="agent-choice-name">{o.id}</bdi>
                                         <span className="agent-choice-label">{t(o.label)}</span>
+                                        <bdi dir="ltr" className="agent-choice-name">{o.id}</bdi>
                                         {p?.size_bytes != null && <bdi dir="ltr" className="agent-choice-size">{formatBytes(p.size_bytes)}</bdi>}
                                     </span>
                                     <span className="setup-choice-tag">{t(o.tag)}</span>

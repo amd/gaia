@@ -35,6 +35,7 @@ import { answerQuestion, QuestionGoneError, resolveTypedAnswer, waitingQuestionI
 import type { Message, StreamEvent, AgentStep, RenderCardData, ContextUsage, SystemStatus } from '../types';
 
 import './ChatView.css';
+import { AgentChip } from './AgentChip';
 import { Composer } from './Composer';
 import { ModelChip } from './ModelChip';
 import { SessionFolderChip } from './FolderChip';
@@ -1904,6 +1905,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
                                 />
                                 <SpendMeter sessionId={sessionId} busy={busy} />
                                 <SessionFolderChip sessionId={sessionId} onOpen={() => revealPanelSection('environment')} />
+                                <AgentChip />
                                 <ModelChip />
                             </>
                         )}
