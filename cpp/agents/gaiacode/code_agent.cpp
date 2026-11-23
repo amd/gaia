@@ -135,7 +135,11 @@ void CodeAgent::registerTools() {
             reg, [shell] { return nativeFolder((shell ? *shell : BashTools::defaultSession()).cwd()); },
             options_.repo, options_.githubWrites);
     }
-    if (skills_ && !skills_->skills().empty()) skills_->registerTools(reg);
+    if (skills_ && !skills_->skills().empty()) {
+        // ~/.gaia/skills holds the Python agent's skills too: offer only those gaiacode can follow.
+        skills_->requireTools([&reg](const std::string& tool) { return reg.hasTool(tool); });
+        skills_->registerTools(reg);
+    }
 }
 
 namespace {

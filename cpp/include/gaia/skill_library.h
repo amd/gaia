@@ -17,6 +17,7 @@
 
 #pragma once
 
+#include <functional>
 #include <map>
 #include <mutex>
 #include <set>
@@ -68,6 +69,14 @@ public:
     /// list_skills and load_skill.
     void registerTools(ToolRegistry& registry);
 
+    /// Offer only skills whose `tools_required` the agent has: one that needs a tool `has` says
+    /// is missing is left out of the catalog and refused by load_skill, naming what it needs.
+    /// Unset (the default), every skill is offered.
+    void requireTools(std::function<bool(const std::string&)> has) { hasTool_ = std::move(has); }
+
+    /// The tools `skill` needs that the agent lacks, comma-separated; "" when it has them all.
+    std::string missingTools(const Skill& skill) const;
+
     /// The user root (~/.gaia/skills, or $GAIA_HOME/skills).
     static std::string userRoot();
 
@@ -114,6 +123,7 @@ private:
 
     mutable std::mutex loadedMutex_;
     std::map<std::string, Skill> loaded_;  // full skills loaded via the seam
+    std::function<bool(const std::string&)> hasTool_;
 };
 
 } // namespace gaia
