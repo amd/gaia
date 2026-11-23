@@ -508,13 +508,13 @@
 }
 
 .fb-action-btn.primary {
-    border: 1px solid var(--accent-fill);
-    background: var(--accent-fill);
-    color: var(--accent-fill-text);
+    border: 1px solid var(--action-fill);
+    background: var(--action-fill);
+    color: var(--action-fill-text);
 }
 
 .fb-action-btn.primary:hover {
-    background: var(--accent-fill-hover);
+    background: var(--action-fill-hover);
 }
 
 .fb-action-btn:disabled {

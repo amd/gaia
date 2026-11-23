@@ -71,11 +71,17 @@
      * with no blur, so it is a ring and never a glow. */
     --accent-ring: rgba(176, 141, 87, 0.40);
 
-    /* Accent as a button. Buttons are soft tinted: a brass wash carrying
-     * brass text, judged against itself. */
+    /* The brass wash: a chosen option or a pressed toggle, carrying brass
+     * text, judged against itself. */
     --accent-fill: #EEE8DD;
     --accent-fill-text: #7A5A22;
     --accent-fill-hover: #E6DCCB;
+
+    /* The one action a screen is asking for: ink carrying the canvas colour,
+     * so it reads as a button on a warm ground where a brass wash did not. */
+    --action-fill: #1F1D1A;
+    --action-fill-text: #FFFFFF;
+    --action-fill-hover: #3A3631;
 
     /* Semantic status keeps its conventional hues. Warning amber sits next
      * to brass in hue, so every warning also carries an icon and a word. */
@@ -226,6 +232,10 @@
     --accent-fill: #383227;
     --accent-fill-text: #D4B47E;
     --accent-fill-hover: #443B2C;
+
+    --action-fill: #EFECE6;
+    --action-fill-text: #1A1917;
+    --action-fill-hover: #FFFFFF;
 
     --accent-green: #5CC96E;
     --accent-green-dim: rgba(92, 201, 110, 0.14);
@@ -404,9 +414,9 @@ textarea:focus-visible {
 
 /* ── Shared Button Utilities ──────────────────────────────────────── */
 
-/* Soft tinted, and they answer the hand: a hover lifts 1px onto the resting
- * shadow, a press settles below rest faster than it rose. Brass marks the
- * action you would most likely take; neutral marks the rest. */
+/* They answer the hand: a hover lifts 1px onto the resting shadow, a press
+ * settles below rest faster than it rose. Ink marks the action a screen is
+ * asking for; a neutral wash marks the rest. */
 .btn-primary,
 .btn-secondary,
 .btn-danger {
@@ -421,8 +431,8 @@ textarea:focus-visible {
         box-shadow var(--duration) var(--ease),
         transform var(--duration) var(--ease-spring);
 }
-.btn-primary { background: var(--accent-fill); color: var(--accent-fill-text); }
-.btn-primary:hover { background: var(--accent-fill-hover); }
+.btn-primary { background: var(--action-fill); color: var(--action-fill-text); }
+.btn-primary:hover { background: var(--action-fill-hover); }
 /* Lightened, the English fell to 4.46:1 on the hover fill. */
 .btn-primary .i18n-gloss.i18n-gloss { color: inherit; }
 .btn-secondary { background: var(--bg-tertiary); color: var(--text-primary); }

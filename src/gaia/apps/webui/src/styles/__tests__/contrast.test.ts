@@ -202,6 +202,8 @@ const CASES: Case[] = [
     // token, which flips too.
     ['--accent-fill-text', '--accent-fill', 'onFill'],
     ['--accent-fill-text', '--accent-fill-hover', 'onFill'],
+    ['--action-fill-text', '--action-fill', 'onFill'],
+    ['--action-fill-text', '--action-fill-hover', 'onFill'],
     ['--text-inverse', '--danger', 'onFill'],
     ['--text-inverse', '--accent', 'onFill'],
     ['--text-inverse', '--accent-yellow', 'onFill'],
