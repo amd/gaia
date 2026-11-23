@@ -112,14 +112,19 @@ void TurnRecorder::save() {
     if (ec) throw SnapshotError("can't replace " + path.u8string() + ": " + ec.message());
 }
 
-void TurnRecorder::capture(const std::string& path, const std::string& tool) {
+bool TurnRecorder::capture(const std::string& path, const std::string& tool) {
     std::lock_guard<std::mutex> lock(mu_);
     std::error_code ec;
-    const fs::path target = fs::weakly_canonical(fs::absolute(fs::u8path(path), ec), ec);
+    const fs::path absolute = fs::absolute(fs::u8path(path), ec);
     if (ec) throw SnapshotError("Could not resolve " + path + " to save a copy before changing it: " + ec.message());
-    if (closed_) return;  // a tool that outlived the turn; nothing to add to a finished record
+    const fs::path target = fs::weakly_canonical(absolute, ec);
+    if (ec) throw SnapshotError("Could not resolve " + path + " to save a copy before changing it: " + ec.message());
+    if (closed_) {
+        noteLate("late_write", target.u8string());
+        return false;
+    }
     for (const auto& e : manifest_["files"]) {
-        if (key(fs::u8path(e["path"].get<std::string>())) == key(target)) return;
+        if (key(fs::u8path(e["path"].get<std::string>())) == key(target)) return false;
     }
     json entry = newEntry(target, tool);
     try {
@@ -160,11 +165,60 @@ void TurnRecorder::capture(const std::string& path, const std::string& tool) {
         throw SnapshotError("Could not save the undo record for " + target.u8string() +
                             ", so it was left unchanged: " + e.what());
     }
+    return true;
+}
+
+void TurnRecorder::discard(const std::string& path) {
+    std::lock_guard<std::mutex> lock(mu_);
+    if (closed_) return;
+    std::error_code ec;
+    const fs::path target = fs::weakly_canonical(fs::absolute(fs::u8path(path), ec), ec);
+    json& files = manifest_["files"];
+    if (files.empty() || key(fs::u8path(files.back()["path"].get<std::string>())) != key(target)) return;
+    if (files.back()["before_blob"].is_string()) {
+        fs::remove(dir_ / "blobs" / files.back()["before_blob"].get<std::string>(), ec);
+    }
+    files.erase(files.size() - 1);
+    if (hasChanges()) {
+        save();
+    } else {
+        // Nothing left to undo: no record, as for a turn that changed nothing.
+        fs::remove_all(dir_, ec);
+    }
+}
+
+void TurnRecorder::noteLate(const std::string& kind, const std::string& detail) {
+    const fs::path path = dir_ / "manifest.json";
+    std::error_code ec;
+    if (!fs::is_regular_file(path, ec)) return;  // the turn changed nothing and left no record
+    std::ifstream in(path, std::ios::binary);
+    json onDisk = json::parse(in, nullptr, false);
+    in.close();
+    if (onDisk.is_discarded() || !onDisk.is_object()) {
+        throw SnapshotError("The undo record at " + path.u8string() + " can't be read to note a late write.");
+    }
+    // The record on disk, not this copy: an undo may already have been saved there.
+    onDisk["untracked"].push_back({{"kind", kind},
+                                   {"detail", "after the turn ended: " + detail.substr(0, 480)},
+                                   {"paths", json::array()},
+                                   {"may_write", true}});
+    const json kept = manifest_;
+    manifest_ = onDisk;
+    try {
+        save();
+    } catch (...) {
+        manifest_ = kept;
+        throw;
+    }
+    manifest_ = kept;
 }
 
 void TurnRecorder::noteUntracked(const std::string& kind, const std::string& detail, bool mayWrite) {
     std::lock_guard<std::mutex> lock(mu_);
-    if (closed_) return;
+    if (closed_) {
+        if (mayWrite) noteLate(kind, detail);
+        return;
+    }
     manifest_["untracked"].push_back({{"kind", kind},
                                       {"detail", detail.substr(0, 500)},
                                       {"paths", json::array()},

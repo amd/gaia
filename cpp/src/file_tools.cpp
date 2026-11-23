@@ -448,6 +448,11 @@ std::string nearNamedFile(const std::string& path) {
 
 } // namespace
 
+std::string FileIOTools::refusesPath(const std::string& path) {
+    const std::string notAFile = notAFileReason(path);
+    return notAFile.empty() ? credentialFileReason(path) : notAFile;
+}
+
 // ---------------------------------------------------------------------------
 // FileStateTracker
 // ---------------------------------------------------------------------------
