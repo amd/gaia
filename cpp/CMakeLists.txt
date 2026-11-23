@@ -283,6 +283,7 @@ add_library(gaia_core
     src/web_tools.cpp
     src/workspace.cpp
     src/shell_guards.cpp
+    src/file_snapshots.cpp
     src/document_index.cpp
     src/memory_store.cpp
     src/media_tools.cpp
@@ -525,6 +526,7 @@ if(GAIA_BUILD_TESTS)
         tests/test_agent_resilience.cpp
         tests/test_skill_library.cpp
         tests/test_workspace.cpp
+        tests/test_file_snapshots.cpp
         tests/test_document_index.cpp
         tests/test_gaia_agent.cpp
         tests/test_delegation.cpp
