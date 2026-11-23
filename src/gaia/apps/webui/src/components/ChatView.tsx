@@ -1049,7 +1049,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
                     settledIdsRef.current.add(assistantMsg.id);
                     addMessage(assistantMsg);
                     const readAloud = useReadAloudStore.getState();
-                    if (readAloud.settings?.auto && readsAloudWhenDone(assistantMsg)) {
+                    if (readAloud.settings?.auto && readAloud.settings.available !== false && readsAloudWhenDone(assistantMsg)) {
                         void readAloud.read(`${sessionId}:${assistantMsg.id}`, cleanToolCallContent(content));
                     }
                 }

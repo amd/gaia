@@ -273,7 +273,9 @@ TEST(GaiacodeClaims, LeavesHonestAnswersAlone) {
     for (const char* honest : {"The tests don't pass yet: one still fails.", "I could not run the tests.",
                                "Renamed the function in three files.", "12 passed, 2 failed.",
                                "Added a test that checks parse() succeeds on empty input.",
-                               "The test passes a mock client to the handler."}) {
+                               "The test passes a mock client to the handler.",
+                               "Ran the tests: 2 tests failed, 10 passed.", "Tests: 1 failed, 9 passed.",
+                               "The suite ran; 3 failing, the rest are passing."}) {
         EXPECT_FALSE(CodeAgent::claimsTestsPass(honest)) << honest;
     }
 }
@@ -361,9 +363,6 @@ TEST(GaiacodeChecks, AnOutsideCommandIsRefusedBeforeAnyApproval) {
     cfg.baseUrl = "http://127.0.0.1:1/api/v1";
     CodeAgent::Options o;
     o.workspaceRoots = {dir.u8string()};
-#ifdef GAIACODE_HAS_GITHUB
-    o.github = false;
-#endif
     CodeAgent agent(cfg, o);
     bool asked = false;
     agent.setToolConfirmCallback([&](const std::string&, const json&) {
@@ -510,6 +509,27 @@ TEST(GaiacodeEvents, RunChecksIsMeasuredInTheFolderItRunsIn) {
     repo.run("run_checks", {{"command", repo.pytest}});
     repo.run("run_checks", {{"command", "./fmt"}, {"path", "pkg"}});
     EXPECT_EQ(repo.agent->events().back(), kEdit) << "the rewrite happened in pkg's own repository";
+}
+
+TEST(GaiacodeEvents, ARelativePathOutOfTheWorkspaceRunsNothingThere) {
+    if (BashTools::detectShell().empty()) GTEST_SKIP() << "needs a POSIX shell for the commands below";
+    MeasuredRepo repo("gaiacode-measured-inside");
+    // A repository beside the workspace whose own config runs a program on `git add`.
+    const fs::path outside = repo.dir.parent_path() / (repo.dir.filename().u8string() + "-outside");
+    fs::remove_all(outside);
+    fs::create_directories(outside);
+    const fs::path marker = outside / "filter-ran";
+    ASSERT_EQ(ProcessRunner::run("git init -q", 30000, outside.u8string()).exitCode, 0);
+    writeFile(outside / ".gitattributes", "* filter=probe\n");
+    writeFile(outside / "a.txt", "x\n");
+    ASSERT_EQ(ProcessRunner::run("git config filter.probe.clean 'touch " + marker.u8string() + "; cat'", 30000,
+                                 outside.u8string())
+                  .exitCode,
+              0);
+    const json r = repo.run("run_checks", {{"command", repo.pytest}, {"path", "../" + outside.filename().u8string()}});
+    EXPECT_EQ(r.value("status", ""), "error") << r.dump();
+    EXPECT_FALSE(fs::exists(marker)) << "git ran in a folder the tools may not reach";
+    fs::remove_all(outside);
 }
 
 TEST(GaiacodeEvents, OutsideARepositoryAnythingButAReadMayHaveEdited) {
