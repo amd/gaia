@@ -51,8 +51,9 @@ GAIA_API std::optional<bool> knownToolCalling(const std::string& modelId);
 
 /// Whether ``modelId`` runs with thinking on, sent as
 /// ``chat_template_kwargs.enable_thinking`` on every request. Mirrors
-/// ``thinking`` in Python's ``MODELS``. Nothing for a model whose template has
-/// no such switch, so the request carries none.
+/// ``thinking`` in Python's ``MODELS`` and matches ids the way Python does:
+/// case-insensitive, with or without a ``user.`` prefix. Nothing for a model
+/// whose template has no such switch, so the request carries none.
 GAIA_API std::optional<bool> knownThinking(const std::string& modelId);
 
 /// True for a small model that gets the compact feature set: fewer tools and no

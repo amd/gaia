@@ -17,6 +17,8 @@
 
 #include <nlohmann/json.hpp>
 
+#include <fstream>
+#include <optional>
 #include <set>
 #include <string>
 #include <vector>
@@ -324,10 +326,63 @@ TEST(NativeToolCallsTest, ModelWithoutAThinkingSwitchSendsNone) {
     EXPECT_FALSE(json::parse(mock.receivedBodies().back()).contains("chat_template_kwargs"));
 }
 
-TEST(ModelRegistryTest, ThinkingMirrorsPythonsModels) {
-    EXPECT_EQ(knownThinking("Qwen3.5-2B-GGUF"), std::optional<bool>(false));
-    EXPECT_EQ(knownThinking("Qwen3.6-35B-A3B-GGUF"), std::optional<bool>(true));
-    EXPECT_FALSE(knownThinking("Gemma-4-E4B-it-GGUF").has_value());
+TEST(NativeToolCallsTest, ALargeThinkingModelKeepsThinkingOn) {
+    bench::MockLlmServer mock;
+    mock.pushResponse(kPlainAnswer);
+
+    ToolAgent agent(makeCfg(mock.baseUrl(), "Qwen3.6-35B-A3B-GGUF"));
+    agent.initForTest();
+    agent.processQuery("hello", 1);
+
+    ASSERT_GE(mock.receivedBodies().size(), 1u);
+    json body = json::parse(mock.receivedBodies().back());
+    EXPECT_EQ(body["chat_template_kwargs"], (json{{"enable_thinking", true}}));
+}
+
+TEST(NativeToolCallsTest, SwitchingModelMidSessionSwitchesTheThinkingField) {
+    bench::MockLlmServer mock;
+    mock.pushResponse(kPlainAnswer);
+    mock.pushResponse(kPlainAnswer);
+    mock.pushResponse(kPlainAnswer);
+
+    ToolAgent agent(makeCfg(mock.baseUrl(), "Qwen3.5-2B-GGUF"));
+    agent.initForTest();
+    agent.processQuery("first", 1);
+    agent.setModel("Gemma-4-E4B-it-GGUF");
+    agent.processQuery("second", 1);
+    agent.setModel("user.qwen3.5-4b-gguf");
+    agent.processQuery("third", 1);
+
+    const auto& bodies = mock.receivedBodies();
+    ASSERT_EQ(bodies.size(), 3u);
+    EXPECT_EQ(json::parse(bodies[0])["chat_template_kwargs"], (json{{"enable_thinking", false}}));
+    EXPECT_FALSE(json::parse(bodies[1]).contains("chat_template_kwargs"));
+    EXPECT_EQ(json::parse(bodies[2])["chat_template_kwargs"], (json{{"enable_thinking", false}}));
+}
+
+TEST(NativeToolCallsTest, CloudModelSendsNoThinkingField) {
+    bench::MockLlmServer mock;
+    mock.pushResponse(kPlainAnswer);
+
+    ToolAgent agent(makeCfg(mock.baseUrl(), "fireworks.deepseek-v4p1-flash"));
+    agent.initForTest();
+    agent.processQuery("hello", 1);
+
+    ASSERT_GE(mock.receivedBodies().size(), 1u);
+    EXPECT_FALSE(json::parse(mock.receivedBodies().back()).contains("chat_template_kwargs"));
+}
+
+// tests/unit/test_cpp_model_registry_mirror.py checks Python against the same file.
+TEST(ModelRegistryTest, ThinkingMatchesTheSharedProbes) {
+    std::ifstream in(std::string(GAIA_TEST_FIXTURES_DIR) + "/thinking_probes.json");
+    ASSERT_TRUE(in) << "missing cpp/tests/fixtures/thinking_probes.json";
+    const json probes = json::parse(in).at("probes");
+    ASSERT_FALSE(probes.empty());
+    for (auto it = probes.begin(); it != probes.end(); ++it) {
+        const std::optional<bool> want =
+            it.value().is_null() ? std::nullopt : std::optional<bool>(it.value().get<bool>());
+        EXPECT_EQ(knownThinking(it.key()), want) << "model id: \"" << it.key() << "\"";
+    }
 }
 
 TEST(NativeToolCallsTest, NonToolCallingModelKeepsTheResponseFormatTemplate) {

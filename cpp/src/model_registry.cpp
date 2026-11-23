@@ -4,6 +4,7 @@
 #include "gaia/model_registry.h"
 
 #include <algorithm>
+#include <cctype>
 #include <utility>
 
 namespace gaia {
@@ -42,6 +43,21 @@ std::optional<bool> knownToolCalling(const std::string& modelId) {
     return std::nullopt;
 }
 
+namespace {
+
+// Python's _model_ids_match: trimmed, a leading "user." dropped, case ignored.
+std::string normalizedModelId(const std::string& modelId) {
+    const auto first = modelId.find_first_not_of(" \t\r\n");
+    if (first == std::string::npos) return {};
+    std::string id = modelId.substr(first, modelId.find_last_not_of(" \t\r\n") - first + 1);
+    std::transform(id.begin(), id.end(), id.begin(),
+                   [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+    if (id.rfind("user.", 0) == 0) id.erase(0, 5);
+    return id;
+}
+
+} // namespace
+
 std::optional<bool> knownThinking(const std::string& modelId) {
     // Mirrors ``thinking`` in Python's MODELS. Qwen3.5's template thinks unless told
     // not to, and the small ones then spend the whole reply budget reasoning.
@@ -51,8 +67,9 @@ std::optional<bool> knownThinking(const std::string& modelId) {
         {"user.Qwen3.8-Flash-Next-GGUF", true},
         {"Qwen3.6-35B-A3B-GGUF",         true},
     };
+    const std::string wanted = normalizedModelId(modelId);
     for (const auto& [id, thinking] : kThinking) {
-        if (id == modelId) return thinking;
+        if (normalizedModelId(id) == wanted) return thinking;
     }
     return std::nullopt;
 }

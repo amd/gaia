@@ -60,6 +60,32 @@ def test_the_cpp_thinking_table_matches_python():
     )
 
 
+THINKING_PROBES = REPO_ROOT / "cpp" / "tests" / "fixtures" / "thinking_probes.json"
+
+
+def test_python_sends_the_thinking_choice_the_shared_probes_expect(monkeypatch):
+    # The C++ ModelRegistryTest reads the same file, so both sides match ids alike.
+    import json
+
+    from gaia.llm import custom_models
+    from gaia.llm.lemonade_client import requested_thinking
+
+    monkeypatch.setattr(custom_models, "list_custom_models", lambda: [])
+    probes = json.loads(THINKING_PROBES.read_text(encoding="utf-8"))["probes"]
+    assert probes
+    got = {model_id: requested_thinking(model_id) for model_id in probes}
+    assert got == probes
+
+
+def test_the_shared_probes_cover_every_python_thinking_model():
+    import json
+
+    probes = json.loads(THINKING_PROBES.read_text(encoding="utf-8"))["probes"]
+    for r in MODELS.values():
+        if r.thinking is not None:
+            assert probes.get(r.model_id) is r.thinking, r.model_id
+
+
 def test_the_cpp_table_has_no_duplicate_rows():
     ids = [model_id for model_id, _ in _cpp_table()]
     assert len(ids) == len(set(ids))
