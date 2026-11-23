@@ -26,7 +26,8 @@ const DEFAULTS = Object.freeze({
 
 /**
  * @param {object} deps
- * @param {() => Promise<{port: number}>} deps.start spawns the backend and resolves once it answers
+ * @param {() => Promise<{port: number}>} deps.start spawns the backend and resolves once it answers;
+ *   it rejects with an error carrying `terminal: true` when no retry can succeed
  * @param {(state: object) => void} deps.onState called with every new state
  * @param {(state: object) => void} [deps.onStopped] called once each time restarts run out
  */
@@ -79,7 +80,13 @@ function createBackendSupervisor({
         (err) => {
           starting = false;
           if (stopped) return;
-          schedule({ lastError: err && err.message ? err.message : String(err) });
+          const lastError = err && err.message ? err.message : String(err);
+          // A retry can't fix it (the program is missing): stop now, with no crash dialog.
+          if (err && err.terminal) {
+            emit({ status: "stopped", nextAttemptAt: null, lastError });
+            return;
+          }
+          schedule({ lastError });
         }
       );
   }
@@ -106,6 +113,12 @@ function createBackendSupervisor({
     /** The backend is up on `port` (the first start, outside the supervisor). */
     running(port) {
       emit({ status: "running", port, since: null, attempt: 0, nextAttemptAt: null, lastError: null });
+    },
+
+    /** No backend could be started at all (its program is missing): wait for Restart GAIA. */
+    failedToStart(error) {
+      if (stopped) return;
+      emit({ status: "stopped", port: null, since: now(), attempt: 0, nextAttemptAt: null, lastError: error });
     },
 
     /** The backend exited on its own. Returns what happens next. */

@@ -970,3 +970,62 @@ textarea:focus-visible {
     flex: none;
     padding: 0;
 }
+
+.startup-elapsed {
+    color: var(--text-muted);
+    font-size: 13px;
+    font-variant-numeric: tabular-nums;
+}
+
+.startup--failed {
+    padding: 48px 16px;
+}
+
+.startup-failed {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    width: 100%;
+    max-width: 560px;
+}
+
+.startup-failed-title {
+    color: var(--text-primary);
+    font-size: 22px;
+    font-weight: 500;
+}
+
+.startup-failed-hint {
+    color: var(--text-secondary);
+    font-size: 14px;
+}
+
+.startup-failed-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+}
+
+.startup-failed-details {
+    color: var(--text-secondary);
+    font-size: 13px;
+}
+
+.startup-failed-details summary {
+    cursor: pointer;
+}
+
+.startup-failed-log {
+    max-height: 260px;
+    margin-block: 8px;
+    padding: 10px 12px;
+    overflow: auto;
+    background: var(--bg-code);
+    color: var(--text-code);
+    border-radius: var(--radius-md);
+    font-family: var(--font-mono);
+    font-size: 12px;
+    text-align: start;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+}
