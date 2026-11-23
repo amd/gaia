@@ -613,6 +613,24 @@ TEST(GaiacodeUndo, AFileEditIsSavedFirstAndAShellWriteMarksUndoIncomplete) {
     fs::remove_all(store);
 }
 
+TEST(GaiacodeUndo, AWriteTheToolRefusesKeepsNoCopy) {
+    MeasuredRepo repo("gaiacode-undo-refused", false);
+    const fs::path store = repo.dir.parent_path() / (repo.dir.filename().u8string() + "-store");
+    writeFile(repo.dir / ".env", "API_KEY=secret\n");
+    auto recorder = std::make_shared<TurnRecorder>("chat-r", "20261122120000-0123abd2", store);
+    repo.agent->setChangeRecorder(recorder);
+    const json env = repo.run("file_write", {{"path", (repo.dir / ".env").u8string()}, {"content", "x"}});
+    EXPECT_TRUE(env.contains("error")) << env.dump();
+    const json edit = repo.run("file_edit", {{"path", (repo.dir / "calc.py").u8string()},
+                                             {"old_string", "no such text"},
+                                             {"new_string", "y"}});
+    EXPECT_TRUE(edit.contains("error")) << edit.dump();
+    repo.agent->setChangeRecorder(nullptr);
+    recorder->finish();
+    EXPECT_FALSE(fs::exists(store / "chat-r" / "20261122120000-0123abd2")) << "no copy of a credential file, and no record of an edit not made";
+    fs::remove_all(store);
+}
+
 TEST(GaiacodeEvents, OutsideARepositoryAnythingButAReadMayHaveEdited) {
     EXPECT_FALSE(CodeAgent::treeFingerprint(fs::temp_directory_path().u8string() + "/no-such-repo-here").has_value());
     EXPECT_EQ(CodeAgent::classify("run_checks", {{"command", "ruff check ."}},

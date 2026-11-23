@@ -200,11 +200,14 @@ ToolInfo CodeAgent::observed(ToolInfo tool) {
             std::lock_guard<std::mutex> lock(recorderMu_);
             recorder = recorder_;
         }
-        // A copy before the first change to each file, or no change at all.
+        // A copy before the first change to each file, or no change at all. A path the tool
+        // will refuse (a credential file, a device) is never copied.
+        std::string captured;
         if (recorder && (name == "file_write" || name == "file_edit") && args.is_object() &&
-            args.contains("path") && args["path"].is_string()) {
+            args.contains("path") && args["path"].is_string() &&
+            FileIOTools::refusesPath(args["path"].get<std::string>()).empty()) {
             try {
-                recorder->capture(args["path"].get<std::string>(), name);
+                if (recorder->capture(args["path"].get<std::string>(), name)) captured = args["path"].get<std::string>();
             } catch (const SnapshotError& e) {
                 return json{{"status", "error"}, {"error", e.what()}};
             }
@@ -226,11 +229,24 @@ ToolInfo CodeAgent::observed(ToolInfo tool) {
         std::vector<TurnEvent> seen;
         const std::optional<std::string> after = before ? treeFingerprint(folder) : std::nullopt;
         const bool failed = !result.is_object() || result.value("status", "") == "error" || result.contains("error");
+        if (recorder && !captured.empty() && failed) {
+            // The tool turned the change down (old text not found, a stale read): keep no copy.
+            try {
+                recorder->discard(captured);
+            } catch (const SnapshotError& e) {
+                result["undo_warning"] = e.what();
+            }
+        }
         if (recorder && measure) {
             // No copies of what a shell command writes: the Changes view says undo may be incomplete,
             // unless the working tree shows it wrote nothing.
             const bool wroteNothing = before && after && *before == *after;
-            recorder->noteUntracked("shell", command, !wroteNothing);
+            try {
+                recorder->noteUntracked("shell", command, !wroteNothing);
+            } catch (const SnapshotError& e) {
+                // The command already ran: report it as it went, and say undo may miss it.
+                if (result.is_object()) result["undo_warning"] = std::string("Undo may not cover this: ") + e.what();
+            }
         }
         if (before && after && !failed) {
             const std::optional<TurnEvent> t = testResult(name, args, result);

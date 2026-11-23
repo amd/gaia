@@ -109,3 +109,31 @@ TEST(FileSnapshots, AFolderIsNotSavedAndTheChangeMustNotGoAhead) {
     TurnRecorder rec("chat-3", "20261122120000-0123abcf", t.root / "store");
     EXPECT_THROW(rec.capture((t.root / "work" / "pkg").u8string(), "file_write"), SnapshotError);
 }
+
+TEST(FileSnapshots, ADiscardedCopyLeavesNoRecordAndALateWriteMarksTheSavedOne) {
+    Tree t;
+    const fs::path work = t.root / "work";
+    write(work / "a.py", "a\n");
+    write(work / "b.py", "b\n");
+    {
+        TurnRecorder rec("chat-4", "20261122120000-0123abd0", t.root / "store");
+        ASSERT_TRUE(rec.capture((work / "a.py").u8string(), "file_edit"));
+        rec.discard((work / "a.py").u8string());
+        rec.finish();
+        EXPECT_FALSE(fs::exists(t.root / "store" / "chat-4" / "20261122120000-0123abd0"))
+            << "a change the tool didn't make leaves nothing to undo";
+    }
+    TurnRecorder rec("chat-4", "20261122120000-0123abd1", t.root / "store");
+    ASSERT_TRUE(rec.capture((work / "a.py").u8string(), "file_edit"));
+    EXPECT_FALSE(rec.capture((work / "a.py").u8string(), "file_edit")) << "already saved";
+    rec.finish();
+    // A tool abandoned at its time limit writes after the turn ended.
+    EXPECT_FALSE(rec.capture((work / "b.py").u8string(), "file_write"));
+    rec.noteUntracked("shell", "make", true);
+    const json m = json::parse(read(t.root / "store" / "chat-4" / "20261122120000-0123abd1" / "manifest.json"));
+    ASSERT_EQ(m["untracked"].size(), 2u) << m.dump();
+    EXPECT_EQ(m["untracked"][0]["kind"], "late_write");
+    EXPECT_EQ(m["untracked"][0]["may_write"], true);
+    EXPECT_EQ(m["untracked"][0]["detail"].get<std::string>().rfind("after the turn ended: ", 0), 0u);
+    EXPECT_EQ(m["files"].size(), 1u) << "the finished record keeps its files";
+}

@@ -383,7 +383,12 @@ TEST(GaiacodeGitHub, AReviewIsSubmittedWithLineCommentsPinnedToTheCommitItRead) 
     EXPECT_EQ(Tools(gh, "o/r").call("gh_pr_review", {{"number", 3}, {"body", "x"}}).value("status", ""), "error")
         << "a run that wasn't allowed to review doesn't";
     Tools t(gh, "o/r", {"review"});
+    EXPECT_NE(t.call("gh_pr_review", {{"number", 3}, {"commit_id", "0000000"}, {"body", "x"}}).value("error", "")
+                  .find("new commits"),
+              std::string::npos)
+        << "a review of an older commit is not posted onto the new one";
     const json out = t.call("gh_pr_review", {{"number", 3},
+                                             {"commit_id", "abc1234def"},
                                              {"event", "REQUEST_CHANGES"},
                                              {"body", "One blocking bug."},
                                              {"comments", json::array({{{"path", "parse.py"}, {"line", 2},
@@ -395,7 +400,9 @@ TEST(GaiacodeGitHub, AReviewIsSubmittedWithLineCommentsPinnedToTheCommitItRead) 
     ASSERT_EQ(sent["comments"].size(), 1u);
     EXPECT_EQ(sent["comments"][0]["path"], "parse.py");
     EXPECT_EQ(sent["comments"][0]["line"], 2);
-    EXPECT_EQ(t.call("gh_pr_review", {{"number", 3}, {"event", "MERGE"}, {"body", "x"}}).value("status", ""), "error");
+    EXPECT_EQ(t.call("gh_pr_review", {{"number", 3}, {"commit_id", "abc1234def"}, {"event", "MERGE"}, {"body", "x"}})
+                  .value("status", ""),
+              "error");
     EXPECT_EQ(t.call("gh_pr_review", {{"number", 3}, {"body", "x"}, {"comments", json::array({{{"path", "a"}}})}})
                   .value("status", ""),
               "error")
