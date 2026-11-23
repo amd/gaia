@@ -679,6 +679,7 @@ export const enMessages = {
     'modelMenu.keepsModel': 'This reply keeps {model}. A mode or model you pick here is used from your next message.',
     'modelMenu.keepsItsModel': 'This reply keeps its model. A mode or model you pick here is used from your next message.',
     'modelMenu.addKey': 'Add your key',
+    'modelMenu.replaceInSettings': "Check or replace it in Settings",
     'modelMenu.connectInSettings': 'Connect {provider} in Settings',
     'modelMenu.noModels': 'No models yet.',
     'modelMenu.unavailable.one': '{n} model isn’t available on this PC — see why in Settings',

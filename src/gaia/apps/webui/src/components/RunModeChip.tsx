@@ -627,8 +627,8 @@ export function RunModeChip() {
                             >
                                 <span className="popover-item-check"><KeyRound size={13} aria-hidden="true" /></span>
                                 <span className="popover-item-body">
-                                    <span className="popover-item-title">{t('modelMenu.addKey')}</span>
-                                    <span className="popover-item-note">{t('modelMenu.connectInSettings', { provider: provider.name })}</span>
+                                    <span className="popover-item-title">{t(provider.key_source ? 'runMode.settings.checkKey' : 'modelMenu.addKey')}</span>
+                                    <span className="popover-item-note">{t(provider.key_source ? 'modelMenu.replaceInSettings' : 'modelMenu.connectInSettings', { provider: provider.name })}</span>
                                 </span>
                             </button>
                         )}

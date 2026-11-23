@@ -679,6 +679,7 @@ const messages: Messages = {
     'modelMenu.keepsModel': 'يبقى هذا الرد على {model}. يُستخدم الوضع أو النموذج الذي تختاره هنا بدءًا من رسالتك التالية.',
     'modelMenu.keepsItsModel': 'يبقى هذا الرد على نموذجه. يُستخدم الوضع أو النموذج الذي تختاره هنا بدءًا من رسالتك التالية.',
     'modelMenu.addKey': 'أضف مفتاحك',
+    'modelMenu.replaceInSettings': "تحقق منه أو استبدله في الإعدادات",
     'modelMenu.connectInSettings': 'اربط {provider} من الإعدادات',
     'modelMenu.noModels': 'لا توجد نماذج بعد.',
     'modelMenu.unavailable.one': 'نماذج غير متاحة على هذا الجهاز: {n}. اعرف السبب في الإعدادات',

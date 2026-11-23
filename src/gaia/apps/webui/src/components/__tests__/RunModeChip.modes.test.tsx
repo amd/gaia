@@ -147,6 +147,10 @@ describe('RunModeChip modes', () => {
         expect(mode(dialog, /^Cloud/)).toHaveTextContent('The Fireworks AI key found no models. Check or replace it.');
         fireEvent.click(mode(dialog, /^Cloud/));
         expect(mockedApi.selectModel).not.toHaveBeenCalled();
+        // The way forward checks the saved key; it never asks to add one that exists.
+        const row = await within(dialog).findByRole('option', { name: /^Check your key/ });
+        expect(row).toHaveTextContent('Check or replace it in Settings');
+        expect(within(dialog).queryByRole('option', { name: /^Add your key/ })).not.toBeInTheDocument();
     });
 
     it('says Local only blocks Cloud, and does not switch', async () => {
