@@ -71,6 +71,10 @@ export interface SetupTest {
     error: string | null;
     /** Why it failed. Only `broken`, a model file that didn't load, offers a fresh download. */
     kind: 'memory' | 'stuck' | 'broken' | 'answer' | 'window' | 'missing' | 'agent' | null;
+    /** Set on a failed chat test that ran on gaiacpp: that agent, not the model, failed it. */
+    agent?: 'gaiacpp' | null;
+    /** What that agent said went wrong. */
+    agent_error?: string | null;
     seconds: number | null;
 }
 

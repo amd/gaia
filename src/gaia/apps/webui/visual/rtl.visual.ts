@@ -5040,6 +5040,28 @@ for (const locale of ['ar', 'en']) {
     });
 }
 
+for (const locale of ['ar', 'en']) {
+    test(`a chat that failed on gaiacpp names the agent and offers the Python one, not another model (${locale})`, async ({ page }) => {
+        const s = scene('test-failed-agent-gaiacpp');
+        await open(page, '', locale, (p) => withSetup(p, s.answers));
+        await s.reach(page);
+        const failed = page.locator('.setup-result.is-failed');
+        await expect(failed).toContainText('gaiacpp');
+        // The agent's own words are in view, read left to right, inside the row.
+        const said = failed.locator('.setup-result-error-said bdi');
+        await expect(said).toBeVisible();
+        expect(await said.evaluate((el) => getComputedStyle(el).direction)).toBe('ltr');
+        const [rowBox, saidBox] = [await failed.boundingBox(), await said.boundingBox()];
+        expect(saidBox!.x).toBeGreaterThanOrEqual(rowBox!.x - 1);
+        expect(saidBox!.x + saidBox!.width).toBeLessThanOrEqual(rowBox!.x + rowBox!.width + 1);
+        // Two ways on, the Python agent the main one; the model picker is not one of them.
+        await expect(page.locator('.setup-footer-row button')).toHaveCount(2);
+        await expect(page.locator('.setup-footer-row .btn-primary')).toHaveCount(1);
+        await expect(page.locator('.setup-footer-row .btn-primary')).toContainText('Python');
+        if (locale === 'ar') expect(await leftoverEnglish(page)).toEqual([]);
+    });
+}
+
 test.describe('first-run setup in the dark theme', () => {
     for (const s of SETUP_SCENES) {
         test(s.name, async ({ page }) => {

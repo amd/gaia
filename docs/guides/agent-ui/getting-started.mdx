@@ -217,6 +217,13 @@ keeps its file: its **Retry** tests it again without downloading it. A
 test that doesn't finish in time stops with an error instead of hanging. Running `gaia init`
 yourself beforehand also works.
 
+The real message is answered by the agent you chose. If you chose **gaiacpp**
+and that message fails after the model passed its own test, the failure names
+gaiacpp instead of the model, shows what the agent said went wrong, and offers
+**Finish setup on the Python agent** beside **Test again**. That button saves
+gaiapy as your agent and runs the tests again on it; setup is ready only when
+they pass. You can switch back in Settings › Agent & model.
+
 ### If setup has trouble
 
 Each step keeps a log. The logs and **Save a troubleshooting report** sit
