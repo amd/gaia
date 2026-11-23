@@ -338,14 +338,57 @@ Workspace::Outside Workspace::judgeCommand(const std::string& command, bool posi
         }
         return fs::u8path(program).filename().u8string();
     };
+    // The word at `at` is what grep or rg searches for, not where: their first plain argument,
+    // unless an option before it (-e, -f) already gave the pattern.
+    const auto isSearchPattern = [&](size_t at) {
+        const std::string program = programBefore(at);
+        if (program != "grep" && program != "rg") return false;
+        const size_t segStart = command.find_last_of(";|&\n(", at);
+        const size_t from = segStart == std::string::npos ? 0 : segStart + 1;
+        std::istringstream seg(command.substr(from, at - from));
+        std::string w;
+        bool sawProgram = false;
+        while (seg >> w) {
+            if (!sawProgram) {
+                sawProgram = fs::u8path(w).filename().u8string() == program;
+                continue;
+            }
+            if (w == "'" || w == "\"") continue;  // the quote this word opens with
+            if (w[0] != '-') return false;  // an earlier plain argument was the pattern
+            if (w.rfind("--regexp", 0) == 0 || w.rfind("--file", 0) == 0) return false;
+            if (w.rfind("--", 0) != 0 && w.find_first_of("ef") != std::string::npos) return false;
+        }
+        return sawProgram;
+    };
     for (const auto& [tokenAt, tokenText] : pathWords) {
         std::string token = tokenText;
         if (!posixShell && looksLikeCmdSwitch(token)) continue;
         if (token.rfind("//", 0) == 0) {
-            // After a colon it is the tail of a URL (https://…); otherwise a network share.
+            // After a colon it is the tail of a URL (https://…).
             const size_t at = tokenAt;
             if (at > 0 && command[at - 1] == ':') continue;
-            return refused(refusal(token));
+            const size_t name = token.find_first_not_of('/');
+            if (name == std::string::npos) {
+                // Slashes alone are the root only as a whole argument to a file command;
+                // elsewhere they open a comment or divide (`x // y`, sed '…// note…').
+                const char before = at == 0 ? ' ' : command[at - 1];
+                const size_t endAt = at + token.size();
+                const char after = endAt < command.size() ? command[endAt] : ' ';
+                const bool quoted = before == '\'' || before == '"';
+                const bool whole = quoted ? after == before
+                                          : std::isspace(static_cast<unsigned char>(before)) &&
+                                                (std::isspace(static_cast<unsigned char>(after)) ||
+                                                 std::string(";|&>)").find(after) != std::string::npos);
+                if (!whole || !fsCommands.count(programBefore(at)) || isSearchPattern(at)) continue;
+                return refused(refusal(token));
+            }
+            bool share = true;  // //host/share
+#ifndef _WIN32
+            // Outside Windows //name is /name and is judged below as that path: //TODO passes, //Users doesn't.
+            share = token.find('/', name) != std::string::npos;
+#endif
+            if (share) return refused(refusal(token));
+            token.erase(0, name - 1);
         }
         if (token == "/") {
             // The root only as a standalone word (find / …), not a regex

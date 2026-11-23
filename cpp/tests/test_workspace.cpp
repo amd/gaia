@@ -130,6 +130,35 @@ TEST(WorkspaceTest, CommandChecks) {
 #endif
 }
 
+TEST(WorkspaceTest, DoubleSlashInCodeIsNotAPlace) {
+    Dirs d;
+    Workspace ws({d.work.string()});
+    for (const char* fine : {
+             "cat > ipmask.go << 'EOF'\npackage pflag\n\n// -- net.IPMask value\nfunc f() {} // trailing\nEOF",
+             "sed -i '' '3s/$/ \\/\\/ x/; 4a\\\n// Reject pure IPv6 masks' ipmask.go",
+             "python3 -c \"print(7 // 2)  # floor\"",
+             "grep -rn \"// TODO\" src",
+             "grep -c '//' ipmask.go",
+             "grep -rn // src",
+             "echo \"// generated\" > gen.js",
+             "node -e \"fetch('https://example.com//x')\"",
+         }) {
+        EXPECT_EQ(ws.checkCommand(fine), "") << fine;
+    }
+#ifndef _WIN32
+    for (const char* fine : {"cat > a.go <<'EOF'\n//go:build linux\n//TODO later\nEOF", "sed -e '//d' a.txt",
+                             "curl -s \"https://example.com/a?next=//c\""}) {
+        EXPECT_EQ(ws.checkCommand(fine), "") << fine;
+    }
+    EXPECT_NE(ws.checkCommand("cat //Users/Shared/x"), "") << "//Users is /Users";
+#endif
+    // The root, however many slashes spell it.
+    for (const char* root : {"ls //", "find // -name x", "ls \"//\"", "rm -rf ///", "grep -r secret //",
+                             "grep -re secret //", "grep -r -f pats //", "cd /tmp && ls // ; echo done"}) {
+        EXPECT_NE(ws.checkCommand(root), "") << root;
+    }
+}
+
 TEST(WorkspaceTest, NetworkSharesAreOutside) {
     Dirs d;
     Workspace ws({d.work.string()});
