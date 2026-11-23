@@ -33,6 +33,7 @@ import { useTrayBridge } from './hooks/useTrayBridge';
 import { useChatAlerts } from './hooks/useChatAlerts';
 import { useRetryServerWaitingDocs } from './hooks/useRetryServerWaitingDocs';
 import { useWindowTitle } from './hooks/useWindowTitle';
+import { isModalOpen } from './hooks/useEscapeToClose';
 import { useMediaQuery } from './hooks/useMediaQuery';
 import { startActiveRunsPoll } from './services/activeRuns';
 import { startQueueDispatcher } from './services/queueDispatch';
@@ -112,7 +113,8 @@ async function waitForEmbeddedUpgrade(): Promise<void> {
 }
 
 function Loading() {
-    return <div className="loading-spinner" role="status" aria-label="Loading" />;
+    const t = useT();
+    return <div className="loading-spinner" role="status" aria-label={t('app.loading')} />;
 }
 
 // First failure, then every 10th (~5 min at the 30 s cap), so a stuck read stays in the log.
@@ -763,6 +765,11 @@ function App() {
         const onKey = (e: KeyboardEvent) => {
             const mod = e.ctrlKey || e.metaKey;
             if (!mod) return;
+            // Behind a dialog these would act on a screen the user can't see; only the sheet's own key still closes it.
+            if (isModalOpen()) {
+                if (e.key === '/') { e.preventDefault(); setShowShortcuts(false); }
+                return;
+            }
             if (e.shiftKey && e.key.toLowerCase() === 'o') { e.preventDefault(); newChat(); }
             else if (!e.shiftKey && e.key.toLowerCase() === 'k') { e.preventDefault(); window.dispatchEvent(new CustomEvent('gaia:focus-search')); }
             else if (!e.shiftKey && e.key.toLowerCase() === 'b') { e.preventDefault(); useChatStore.getState().toggleSidebarCollapsed(); }
@@ -861,9 +868,9 @@ function App() {
     if (showStartup) {
         return (
             <div className="app">
-                <main className="startup" role="status" aria-label="Starting GAIA">
+                <main className="startup" role="status" aria-label={t('app.startingAria')}>
                     <div className="loading-spinner" aria-hidden="true" />
-                    <p className="startup-text">Starting GAIA…</p>
+                    <p className="startup-text" dir="auto">{t('app.starting')}</p>
                 </main>
             </div>
         );

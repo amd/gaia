@@ -1460,6 +1460,9 @@ const messages: Messages = {
     'perm.chipAria': 'وضع الأذونات: {mode}',
     'perm.fullLower': 'وصول كامل',
     'perm.askLower': 'السؤال قبل التنفيذ',
+    'perm.checking': 'جارٍ التحقق…',
+    'perm.unknown': 'غير معروف',
+    'perm.chipAriaUnread': 'وضع الأذونات: {state}',
 
     // The permission prompt above the composer
     'prompt.allowOnce': 'السماح مرة واحدة',
@@ -2103,6 +2106,9 @@ const messages: Messages = {
     'setup.upgrading.failed': 'تعذّر على GAIA تحديث خادم النماذج المحلي، لذا قد لا تستجيب المحادثات. اضغط «حاول مرة أخرى». وإذا استمر الفشل، فأغلق GAIA وافتحه من جديد لإعادة محاولة التحديث. التفاصيل: {error}',
     'setup.upgrading.stopped': 'توقّف التحديث قبل أن يكتمل.',
     'setup.upgrading.slow': 'يستغرق تحديث خادم النماذج المحلي وقتًا أطول من المعتاد. اضغط «التحقق مرة أخرى» لمواصلة الانتظار.',
+    'app.starting': 'جارٍ بدء GAIA…',
+    'app.startingAria': 'جارٍ بدء GAIA',
+    'app.loading': 'جارٍ التحميل',
     'setup.upgrading.retry': 'حاول مرة أخرى',
     'setup.unknown.failed': 'تعذّر التحقق مما إذا كان GAIA مُعدًّا: {error}',
     'setup.unknown.modelUnread': 'تعذّر على GAIA معرفة النموذج الذي يستخدمه ({error})',

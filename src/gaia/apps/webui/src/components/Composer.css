@@ -262,7 +262,7 @@
 }
 
 .composer-attachment-state {
-    color: var(--text-muted);
+    color: var(--text-secondary);
     white-space: nowrap;
 }
 
