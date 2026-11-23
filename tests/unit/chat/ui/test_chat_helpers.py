@@ -593,6 +593,42 @@ class TestDoneEvent:
         assert event["content"] == "Deleted 3 files."
         assert event["stats"] == {"tokens": 5}
 
+    def test_a_failed_turn_names_the_agent_program_it_ran_on(self):
+        event = _done_event(
+            7, "The model call failed.", False, failed=True, agent_program="gaiacpp"
+        )
+        assert event["failed"] is True
+        assert event["agent_program"] == "gaiacpp"
+
+    @pytest.mark.parametrize(
+        "kwargs", [{"failed": False}, {"turn_cancelled": True, "failed": True}]
+    )
+    def test_only_a_failed_turn_names_its_agent_program(self, kwargs):
+        kwargs.setdefault("turn_cancelled", False)
+        event = _done_event(7, "text", agent_program="gaiacpp", **kwargs)
+        assert "agent_program" not in event
+
+
+class TestFailedTurnProgram:
+    """Only a flagship turn on gaiacpp is named, so the UI never blames it for gaiapy's failures."""
+
+    @pytest.mark.parametrize(
+        "agent_type, saved, expected",
+        [
+            ("gaia", "gaiacpp", "gaiacpp"),
+            ("gaia", "gaiapy", None),
+            ("hello-world", "gaiacpp", None),
+        ],
+    )
+    def test_names_gaiacpp_only_for_the_flagship_on_it(
+        self, monkeypatch, agent_type, saved, expected
+    ):
+        from gaia.daemon.sidecars import fetch
+        from gaia.ui._chat_helpers import _failed_turn_program
+
+        monkeypatch.setattr(fetch, "saved_flagship", lambda: saved)
+        assert _failed_turn_program(agent_type) == expected
+
 
 # ── _canonical_agent_type ─────────────────────────────────────────────────
 

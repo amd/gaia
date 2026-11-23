@@ -492,6 +492,8 @@ export interface Message {
     failureText?: string;
     /** Client-side: the cause a failed turn named (`done.failure`), for its fix. */
     failure?: string;
+    /** Client-side: `gaiacpp` when the failed turn ran on the native agent (`done.agent_program`). */
+    agentProgram?: string;
     /** Set when this turn pushed older turns out of the model's view. */
     historyNotice?: string;
     /** Sources, files and data flow of the turn, for the side rail (#5222). */

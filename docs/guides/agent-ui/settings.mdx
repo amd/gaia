@@ -47,6 +47,8 @@ While gaiacpp is the agent, the chat panel's **Agent info** says **Runs on gaiac
 
 If gaiacpp is the chosen agent and can't start, because its file is missing or fails its check, the new-chat screen says so and offers two buttons: **Download gaiacpp again**, with the same progress bar, and **Use the Python agent**, which saves gaiapy as your choice. GAIA never switches agents by itself, and a message you had typed stays in the box. Where this release has no gaiacpp to download, the screen gives that reason in place of the download button.
 
+When an answer fails while gaiacpp is the agent, a note under the failed answer says the chat is running on gaiacpp (Beta) and offers **Use the Python agent** and **Open Settings › Agent & model**. The switch happens only when you press the button, and is refused while another chat is still answering. A failure on gaiapy gets no such note.
+
 ### Image creation
 
 The model GAIA makes pictures with, the size and the number of steps (more

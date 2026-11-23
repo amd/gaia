@@ -450,6 +450,8 @@ export const enMessages = {
     'chatError.resendStale': 'This chat changed since it was opened, so nothing was sent. Reopen the chat, then try again.',
     'chatError.resendStarting': 'GAIA is still starting, so your question and its answer were left as they are. Try again in a moment.',
     'chatError.savedReport': 'GAIA saved a problem report for this on this PC as {id}; nothing was sent anywhere.',
+    'nativeFailed.body': 'This chat is running on {name} (Beta), the native agent. If it keeps failing, the Python agent may answer where {name} could not.',
+    'nativeFailed.switched': 'Switched to the Python agent. It answers from your next message, so send this one again.',
     'serverDown.title': 'The local model server isn’t answering',
     'serverDown.body': 'Every message goes through it, cloud models included, so this one was not sent.',
     'serverDown.notOurs': 'GAIA doesn’t run this server, so it can’t start it. Start it the way you usually do, then send your message again.',

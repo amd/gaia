@@ -12,7 +12,7 @@
 
 import { expect, test, type Page } from '@playwright/test';
 
-import { ANSWER_SESSION, AUTOMATIONS, DISCORD_STATES, MESSAGES, MODEL_LIST, NOW, RESOURCES, SESSIONS, SYSTEM_STATUS, TOOL_STATUS, holdOnToolStatus, mockApi, shownText, useLocale, useTheme, withAutomations, withConnectors, withCrashedBackend, withDesktopBridges, withDiscord, withMemory, withModelPage, withSettingsPanes, withoutFlagship, withAgentPrograms, AGENT_DOWNLOADING, AGENT_DOWNLOAD_FAILED, type AgentProgramsAnswers, type MemoryState } from './fixtures';
+import { ANSWER_SESSION, AUTOMATIONS, DISCORD_STATES, MESSAGES, MODEL_LIST, NOW, RESOURCES, SESSIONS, SETTINGS, SYSTEM_STATUS, TOOL_STATUS, holdOnToolStatus, mockApi, shownText, useLocale, useTheme, withAutomations, withConnectors, withCrashedBackend, withDesktopBridges, withDiscord, withMemory, withModelPage, withSettingsPanes, withoutFlagship, withAgentPrograms, AGENT_DOWNLOADING, AGENT_DOWNLOAD_FAILED, type AgentProgramsAnswers, type MemoryState } from './fixtures';
 import { ENGINE_FAILED, NARROW_SCENES, PLAN_COLD, SETUP_SCENES, expectSnugTags, scene, withSetup } from './setup-scenes';
 import { translateBare } from '../src/i18n/registry';
 
@@ -4614,6 +4614,88 @@ for (const locale of ['ar', 'en']) {
         await expect(notice).not.toContainText('gaia ');
         await shot(page, `server-down-${locale}`);
         expect(await audit(page)).toEqual([]);
+    });
+}
+
+const NATIVE_FAILED_REPLY = 'The model call failed at step 1, so this request is unfinished. '
+    + 'The model server at http://127.0.0.1:13305/api/v1 did not answer.\n\nNothing had run yet.';
+
+/** The turn fails on gaiacpp; `python` says whether the Python agent is on this PC. */
+const withNativeAgentFailure = (python: boolean) => async (page: Page): Promise<void> => {
+    let sent = false;
+    await page.route('**/api/chat/send', (route) => {
+        sent = true;
+        const done = { type: 'done', message_id: 42, content: NATIVE_FAILED_REPLY, failed: true, agent_program: 'gaiacpp' };
+        return route.fulfill({ status: 200, contentType: 'text/event-stream', body: `data: ${JSON.stringify(done)}\n\n` });
+    });
+    await page.route(new RegExp(`/api/sessions/${ANSWER_SESSION}/messages(\\?|$)`), (route) => (sent
+        ? route.fulfill({
+            json: {
+                messages: [
+                    { id: 41, session_id: ANSWER_SESSION, role: 'user', content: 'Summarize the minutes', created_at: NOW.toISOString(), rag_sources: null },
+                    { id: 42, session_id: ANSWER_SESSION, role: 'assistant', content: NATIVE_FAILED_REPLY, created_at: NOW.toISOString(), rag_sources: null },
+                ],
+                total: 2,
+            },
+        })
+        : route.fallback()));
+    await page.route((url) => url.pathname === '/api/agent-programs', (route) => route.fulfill({
+        json: {
+            current: 'gaiacpp',
+            programs: [
+                { id: 'gaiapy', installed: python, size_bytes: 412_000_000, can_download: false, unavailable_reason: null },
+                { id: 'gaiacpp', installed: true, size_bytes: 6_800_000, can_download: false, unavailable_reason: null },
+            ],
+            download: { state: 'idle', bytes_done: 0, bytes_total: null, error: null },
+        },
+    }));
+};
+
+for (const locale of ['ar', 'en']) {
+    for (const python of [true, false]) {
+        test(`a turn that failed on gaiacpp says so and offers the Python agent, switching only when asked (${python ? 'switch' : 'no Python agent'}, ${locale})`, async ({ page }) => {
+            const saves: unknown[] = [];
+            await open(page, `#${ANSWER_SESSION}`, locale, async (p) => {
+                await withNativeAgentFailure(python)(p);
+                await p.route('**/api/settings', async (route) => {
+                    if (route.request().method() !== 'PUT') return route.fallback();
+                    saves.push(route.request().postDataJSON());
+                    return route.fulfill({ json: { ...SETTINGS, flagship_agent: 'gaiapy' } });
+                });
+            });
+            const box = page.getByRole('textbox').first();
+            await box.fill('Summarize the minutes');
+            await box.press('Enter');
+            const notice = page.locator('.native-agent-notice');
+            await expect(notice).toHaveCount(1);
+            await expect(notice).toContainText('gaiacpp');
+            await expect(notice.getByRole('button')).toHaveCount(2);
+            await notice.scrollIntoViewIfNeeded();
+            // Nothing is switched until the button is pressed.
+            expect(saves).toEqual([]);
+            await shot(page, `native-agent-failed-${locale}`);
+            expect(await audit(page)).toEqual([]);
+
+            await notice.getByRole('button').first().click();
+            if (python) {
+                await expect(notice).toHaveAttribute('role', 'status');
+                expect(saves).toEqual([{ flagship_agent: 'gaiapy' }]);
+            } else {
+                await expect(notice.getByRole('alert')).toBeVisible();
+                expect(saves).toEqual([]);
+            }
+            await shot(page, `native-agent-failed-${python ? 'switched' : 'no-python'}-${locale}`);
+            expect(await audit(page)).toEqual([]);
+        });
+    }
+
+    test(`a turn that failed on the Python agent gets no gaiacpp notice (${locale})`, async ({ page }) => {
+        await open(page, `#${ANSWER_SESSION}`, locale, withServerDown);
+        const box = page.getByRole('textbox').first();
+        await box.fill('Summarize the minutes');
+        await box.press('Enter');
+        await expect(page.locator('.server-down-notice')).toHaveCount(1);
+        await expect(page.locator('.native-agent-notice')).toHaveCount(0);
     });
 }
 

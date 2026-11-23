@@ -72,6 +72,7 @@ import { MAX_SESSION_TITLE_CHARS, STARTING_REASON } from '../utils/constants';
 import { scrollBehavior } from '../utils/motion';
 import { setVisibleInterval } from '../utils/visibleInterval';
 import { ModelServerDownNotice } from './ModelServerDownNotice';
+import { NativeAgentFailedNotice } from './NativeAgentFailedNotice';
 import { useChatDraft } from '../hooks/useSavedDraft';
 import { followSlideEvent, settleSlideDraft, SLIDE_PREVIEW_ENABLED } from '../stores/slideDraftStore';
 import { chatDraftKey, clearSavedDraft } from '../utils/savedDraft';
@@ -1044,6 +1045,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
                         historyNotice,
                         libraryNotices: event.library_notices,
                         failure: event.failed ? event.failure : undefined,
+                        agentProgram: event.failed ? event.agent_program : undefined,
                     };
                     if (historyNotice) historyNotices.set(assistantMsg.id, historyNotice);
                     settledIdsRef.current.add(assistantMsg.id);
@@ -1086,6 +1088,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
                                     cards: prev?.cards ?? m.cards,
                                     stopState: m.stopState ?? prevMsgs.find((p) => p.id === m.id)?.stopState,
                                     failure: m.failure ?? prevMsgs.find((p) => p.id === m.id)?.failure,
+                                    agentProgram: m.agentProgram ?? prevMsgs.find((p) => p.id === m.id)?.agentProgram,
                                 };
                             });
                             carryMessageKeys(prevMsgs, msgs, messageKeysRef.current);
@@ -1762,6 +1765,9 @@ export function ChatView({ sessionId }: ChatViewProps) {
                                 />
                                 {msg.failure === 'model_server_down' && idx === messages.length - 1 && !busy && (
                                     <ModelServerDownNotice />
+                                )}
+                                {msg.agentProgram === 'gaiacpp' && idx === messages.length - 1 && !busy && (
+                                    <NativeAgentFailedNotice />
                                 )}
                                 {comparison?.messageId === msg.id && (
                                     <AnswerComparison
