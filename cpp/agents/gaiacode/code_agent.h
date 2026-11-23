@@ -67,6 +67,8 @@ private:
     ToolInfo observed(ToolInfo tool);
 
     Options options_;
+    /// The folders the tools are confined to; null with full access.
+    std::shared_ptr<const Workspace> ws_;
     mutable std::mutex eventsMu_;
     std::vector<TurnEvent> events_;
 };
