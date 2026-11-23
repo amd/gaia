@@ -1523,7 +1523,7 @@ TEST_F(GaiacppSidecar, AnAttachedPdfIsReadOrTheTurnSaysWhyNot) {
 #else
     EXPECT_TRUE(final.value("failed", false)) << t.describe();
     const std::string answer = final.value("answer", "");
-    for (const char* part : {"report.pdf", "pdftotext", "not installed", "Python agent", "Agent & model"}) {
+    for (const char* part : {"report.pdf", "pdftotext", "not installed", "Full-featured", "Agent & model"}) {
         EXPECT_NE(answer.find(part), std::string::npos) << part << " in: " << answer;
     }
     EXPECT_EQ(answer.find("Tell the user"), std::string::npos) << "a note for the model, not the user";

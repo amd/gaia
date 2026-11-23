@@ -267,7 +267,7 @@ TEST(DocumentIndexTest, APdfWithoutPdftotextIsReadOnAMacAndExplainedElsewhere) {
     } catch (const MissingDocumentReader& e) {
         const std::string why = e.what();
         EXPECT_EQ(e.program, "pdftotext");
-        for (const char* part : {"pdftotext", "not installed", "poppler", "Python agent", "Agent & model"}) {
+        for (const char* part : {"pdftotext", "not installed", "poppler", "Full-featured", "Agent & model"}) {
             EXPECT_NE(why.find(part), std::string::npos) << part << " in: " << why;
         }
     }
@@ -277,7 +277,7 @@ TEST(DocumentIndexTest, APdfWithoutPdftotextIsReadOnAMacAndExplainedElsewhere) {
     idx.registerTools(registry);
     const json r = registry.executeTool("index_document", {{"path", kNorthwind.string()}});
     EXPECT_EQ(r.value("status", ""), "error");
-    EXPECT_NE(r.value("error", "").find("Python agent"), std::string::npos) << r.dump();
+    EXPECT_NE(r.value("error", "").find("Full-featured"), std::string::npos) << r.dump();
     EXPECT_EQ(r["failed"][0].value("missing_program", ""), "pdftotext");
 #endif
 }
@@ -286,7 +286,7 @@ TEST(DocumentIndexTest, APdfWithoutPdftotextIsReadOnAMacAndExplainedElsewhere) {
 TEST(DocumentIndexTest, AMissingPdfReaderSaysWhatToInstallOrUseInstead) {
     const MissingDocumentReader missing("C:/docs/report.pdf", "pdftotext");
     const std::string user = MissingDocumentReader::remedy("report.pdf", "pdftotext");
-    for (const char* part : {"report.pdf", "pdftotext", "not installed", "poppler", "Python agent", "Agent & model",
+    for (const char* part : {"report.pdf", "pdftotext", "not installed", "poppler", "Full-featured", "Agent & model",
                              "--agent-program gaiapy"}) {
         EXPECT_NE(user.find(part), std::string::npos) << part << " in: " << user;
     }
