@@ -467,6 +467,31 @@ TextFormat classify(const std::string& extension) {
     return TextFormat::PlainText;
 }
 
+/// Cut a piece longer than the budget at its line breaks, so a table with no
+/// sentence ends (one row per line) still fits chunk-sized pieces. A single
+/// line stays whole, as in Python.
+std::vector<std::string> withinBudget(const std::vector<std::string>& sentences, std::size_t budget) {
+    std::vector<std::string> out;
+    for (const auto& sentence : sentences) {
+        if (estimateTokens(sentence) <= budget) {
+            out.push_back(sentence);
+            continue;
+        }
+        std::string piece;
+        for (const auto& line : splitLines(sentence)) {
+            const std::string row = strip(line);
+            if (row.empty()) continue;
+            if (!piece.empty() && estimateTokens(piece) + estimateTokens(row) + 1 > budget) {
+                out.push_back(std::move(piece));
+                piece.clear();
+            }
+            piece += piece.empty() ? row : "\n" + row;
+        }
+        if (!piece.empty()) out.push_back(std::move(piece));
+    }
+    return out;
+}
+
 } // namespace
 
 // --------------------------------------------------------------------------
@@ -556,7 +581,8 @@ std::vector<std::string> splitTextIntoChunks(const std::string& text,
         const std::size_t paraTokens = estimateTokens(para);
 
         if (paraTokens > chunkSizeTokens) {
-            for (const auto& sentence : splitIntoSentences(para)) {
+            const auto sentences = withinBudget(splitIntoSentences(para), chunkSizeTokens - overlapTokens);
+            for (const auto& sentence : sentences) {
                 const std::size_t sentenceTokens = estimateTokens(sentence);
 
                 if (currentSize + sentenceTokens > chunkSizeTokens && !currentChunk.empty()) {

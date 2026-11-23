@@ -64,6 +64,10 @@ public:
     /// Split a file into page-tagged text. Throws with the reason a file can't be read.
     static std::vector<std::pair<int, std::string>> extractPages(const std::string& path);
 
+    /// A PDF page's text with each run of unreadable glyphs (U+FFFD, e.g. a
+    /// table's dot leaders) and stray control characters made one space.
+    static std::string tidyPdfText(const std::string& text);
+
     /// Index (or re-index) a file. Returns the number of chunks added.
     size_t indexFile(const std::string& path);
 

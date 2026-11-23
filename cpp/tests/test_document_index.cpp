@@ -7,6 +7,7 @@
 #include <gaia/process.h>
 #include <gaia/tool_registry.h>
 
+#include <algorithm>
 #include <atomic>
 #include <cstdlib>
 #include <filesystem>
@@ -85,6 +86,38 @@ TEST(DocumentIndexTest, KeywordRetrievalFindsTheRightFile) {
     EXPECT_NE(hits[0].chunk.file.find("lease.txt"), std::string::npos);
     EXPECT_EQ(hits[0].chunk.page, 0);
     EXPECT_TRUE(idx.query("zebra quantum", 3).empty()) << "no term overlap, no hits";
+}
+
+// S-DOC-12: the 2023 row of a long bond-yield table, asked for by the column
+// names typed in ASCII, while the page spells them with an en dash and a curly quote.
+TEST(DocumentIndexTest, ATableRowIsFoundByItsColumnNames) {
+    TempDir d;
+    std::string table = "Table B–42. Bond yields and interest rates, 1953–2023\n"
+                        "Corporate bonds (Moody’s)\nYear 3-month 10-year Aaa Baa Prime\n";
+    for (int year = 1953; year <= 2023; ++year) {
+        table += std::to_string(year) + (year == 2023 ? " 5.08 3.96 4.81 5.86 8.20 5.03 4.31 6.81\n"
+                                                      : " 1.93 2.85 3.20 3.74 2.72 3.17 1.99 2.47\n");
+    }
+    d.write("erp.txt", table);
+    for (int i = 0; i < 6; ++i) {
+        d.write("prose" + std::to_string(i) + ".txt",
+                "In 2023 corporate bond yields rose. Moody's spreads between Baa and Aaa issuers are "
+                "discussed in chapter " + std::to_string(i) + " of the report.");
+    }
+    DocumentIndex idx;
+    idx.indexDirectory(d.path.string());
+    const auto hits = idx.query("Table B-42 Moody's Baa Aaa corporate bond yields 2023", 5);
+    const auto row = std::find_if(hits.begin(), hits.end(), [](const DocumentHit& h) {
+        return h.chunk.text.find("2023 5.08 3.96 4.81 5.86") != std::string::npos;
+    });
+    ASSERT_NE(row, hits.end()) << "the 2023 row is not in the top 5";
+    EXPECT_EQ(row->chunk.text.rfind("Table B–42.", 0), 0u) << "the row's chunk carries its column names";
+    EXPECT_LE(row->chunk.text.size(), 3000u);
+}
+
+TEST(DocumentIndexTest, APdfsUnreadableGlyphRunsBecomeOneSpace) {
+    EXPECT_EQ(DocumentIndex::tidyPdfText("2023 \b��� 5.08\b�� 5.08\nnext\f"),
+              "2023 5.08 5.08\nnext\f");
 }
 
 TEST(DocumentIndexTest, ReindexReplacesAFilesChunks) {

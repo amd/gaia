@@ -11,6 +11,7 @@
 #include <filesystem>
 #include <regex>
 #include <set>
+#include <sstream>
 
 #include "gaia/ignore.h"
 #include "gaia/process.h"
@@ -298,7 +299,7 @@ std::vector<std::pair<int, std::string>> DocumentIndex::extractPages(const std::
         }
         size_t start = 0;
         int page = 1;
-        const std::string& t = r.stdout_output;
+        const std::string t = tidyPdfText(r.stdout_output);
         while (start <= t.size()) {
             size_t ff = t.find('\f', start);
             const std::string body = t.substr(start, ff == std::string::npos ? std::string::npos : ff - start);
@@ -323,13 +324,104 @@ std::vector<std::pair<int, std::string>> DocumentIndex::extractPages(const std::
     return pages;
 }
 
+namespace {
+
+// Dashes, curly quotes, no-break spaces and the like split words, as their
+// ASCII look-alikes do: "Moody’s" and "B–42" must match a typed "Moody's", "B-42".
+bool unicodePunctuation(const std::string& s, size_t i) {
+    const auto b = [&](size_t k) { return i + k < s.size() ? static_cast<unsigned char>(s[i + k]) : 0u; };
+    const unsigned c0 = b(0);
+    if (c0 == 0xC2) return b(1) >= 0xA0 && b(1) <= 0xBF;               // U+00A0-00BF
+    if (c0 == 0xE2) return b(1) == 0x80 || b(1) == 0x81 ||              // U+2000-207F
+                           (b(1) == 0x88 && b(2) == 0x92);              // U+2212 minus
+    if (c0 == 0xE3) return b(1) == 0x80;                                // U+3000-303F
+    if (c0 == 0xEF) return b(1) == 0xBF && b(2) == 0xBD;                // U+FFFD
+    return false;
+}
+
+bool numericWord(const std::string& w) {
+    bool digit = false;
+    for (unsigned char c : w) {
+        if (std::isdigit(c)) {
+            digit = true;
+        } else if (!std::strchr(".,-%()$", c) && c < 0x80) {
+            return false;
+        }
+    }
+    return digit;
+}
+
+std::vector<std::string> wordsIn(const std::string& line) {
+    std::vector<std::string> words;
+    std::istringstream in(line);
+    for (std::string w; in >> w;) words.push_back(w);
+    return words;
+}
+
+constexpr size_t kMaxTableHeading = 800;
+
+// A table's title and column names: the lines above its first row of numbers,
+// on a page that is mostly numbers. Empty for prose.
+std::string tableHeading(const std::string& page) {
+    size_t words = 0, numbers = 0;
+    for (const auto& w : wordsIn(page)) {
+        ++words;
+        if (numericWord(w)) ++numbers;
+    }
+    if (words == 0 || numbers * 2 < words) return "";
+    std::istringstream in(page);
+    std::string heading;
+    for (std::string line; std::getline(in, line);) {
+        const auto lineWords = wordsIn(line);
+        size_t n = 0;
+        for (const auto& w : lineWords) n += numericWord(w) ? 1 : 0;
+        if (lineWords.size() >= 3 && n * 5 >= lineWords.size() * 3) break;
+        for (const auto& w : lineWords) heading += (heading.empty() ? "" : " ") + w;
+        if (heading.size() > kMaxTableHeading) return "";
+    }
+    return heading;
+}
+
+}  // namespace
+
+std::string DocumentIndex::tidyPdfText(const std::string& text) {
+    std::string out;
+    out.reserve(text.size());
+    bool junk = false;
+    for (size_t i = 0; i < text.size(); ++i) {
+        const unsigned char c = static_cast<unsigned char>(text[i]);
+        const bool replacement = text.compare(i, 3, "\xEF\xBF\xBD") == 0;
+        const bool control = c < 0x20 && c != '\n' && c != '\t' && c != '\f' && c != '\r';
+        if (replacement || control) {
+            if (replacement) i += 2;
+            if (!junk && !out.empty() && out.back() != ' ' && out.back() != '\n') out.push_back(' ');
+            junk = true;
+            continue;
+        }
+        if (junk && c == ' ' && !out.empty() && out.back() == ' ') continue;
+        junk = false;
+        out.push_back(static_cast<char>(c));
+    }
+    return out;
+}
+
 std::vector<std::string> DocumentIndex::tokens(const std::string& text) const {
     std::vector<std::string> out;
     std::string cur;
-    for (unsigned char c : text) {
-        if (std::isalnum(c) || c >= 0x80) {
-            cur.push_back(static_cast<char>(std::tolower(c)));
-        } else if (!cur.empty()) {
+    for (size_t i = 0; i < text.size(); ++i) {
+        const unsigned char c = static_cast<unsigned char>(text[i]);
+        const size_t len = c < 0x80 ? 1 : c >= 0xF0 ? 4 : c >= 0xE0 ? 3 : c >= 0xC0 ? 2 : 1;
+        if (std::isalnum(c) || (c >= 0x80 && !unicodePunctuation(text, i))) {
+            if (c < 0x80) {
+                cur.push_back(static_cast<char>(std::tolower(c)));
+            } else {
+                cur.append(text, i, len);
+                i += len - 1;
+            }
+            continue;
+        }
+        if (c >= 0x80) i += len - 1;
+        if (!cur.empty()) {
             out.push_back(std::move(cur));
             cur.clear();
         }
@@ -372,7 +464,13 @@ size_t DocumentIndex::indexFile(const std::string& path) {
     const std::string file = fs::absolute(path).lexically_normal().string();
     std::vector<DocumentChunk> fresh;
     for (const auto& [page, text] : extractPages(file)) {
-        for (auto& c : splitTextIntoChunks(text, chunking_)) fresh.push_back({file, page, std::move(c)});
+        auto pieces = splitTextIntoChunks(text, chunking_);
+        // A row cut off from its column names can't be found by them.
+        const std::string heading = pieces.size() > 1 ? tableHeading(text) : "";
+        for (size_t j = 0; j < pieces.size(); ++j) {
+            std::string c = j == 0 || heading.empty() ? std::move(pieces[j]) : heading + "\n" + pieces[j];
+            fresh.push_back({file, page, std::move(c)});
+        }
     }
     std::vector<std::vector<float>> vecs;
     if (embed_ && !fresh.empty()) {
