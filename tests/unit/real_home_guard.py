@@ -5,7 +5,8 @@
 In CI (``CI`` set, as GitHub Actions does) or with
 ``GAIA_ENFORCE_REAL_HOME_GUARD=1`` the session fails. Anywhere else it ends
 with one warning naming the same paths, because a GAIA app left running on a
-developer's machine writes to that folder too. ``GAIA_ALLOW_REAL_HOME_WRITES=1``
+developer's machine writes to that folder too, as do other jobs on a
+self-hosted runner (``RUNNER_ENVIRONMENT=self-hosted``). ``GAIA_ALLOW_REAL_HOME_WRITES=1``
 skips the check.
 
 The per-test guard in ``conftest.py`` sees this process's ``open``, ``mkdir``
@@ -40,8 +41,12 @@ def guard_mode(environ: Mapping[str, str]) -> str:
     """What a changed home does to the session: nothing, a warning, or a failure."""
     if environ.get(ALLOW_ENV) == "1":
         return SKIP
+    if environ.get(ENFORCE_ENV) == "1":
+        return FAIL
     in_ci = environ.get("CI", "").strip().lower() not in _FALSY
-    return FAIL if in_ci or environ.get(ENFORCE_ENV) == "1" else WARN
+    # A self-hosted runner shares its home with other jobs on the machine.
+    shared = environ.get("RUNNER_ENVIRONMENT") == "self-hosted"
+    return FAIL if in_ci and not shared else WARN
 
 
 #: Entries listed at most, so a home holding a model cache still costs well
@@ -85,7 +90,8 @@ def list_home(root: Path, max_entries: int = MAX_ENTRIES) -> Listing:
                 return Listing(entries, complete=False)
             try:
                 is_folder = child.is_dir(follow_symlinks=False)
-                stat = child.stat(follow_symlinks=False)
+                # Not child.stat(): on NTFS that is the parent's lazily updated copy.
+                stat = os.lstat(child.path)
             except OSError:
                 continue
             relative = os.path.relpath(child.path, root)

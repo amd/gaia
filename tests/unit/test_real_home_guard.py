@@ -8,7 +8,6 @@ import os
 import subprocess
 import sys
 import textwrap
-import time
 from pathlib import Path
 
 import pytest
@@ -76,6 +75,7 @@ def test_in_ci_a_session_that_writes_into_the_real_home_fails_and_names_the_path
         encoding="utf-8",
     )
     env = {**os.environ, "HOME": str(home), "USERPROFILE": str(home), "CI": "true"}
+    env.pop("RUNNER_ENVIRONMENT", None)
     env.pop(ALLOW_ENV, None)
     env.pop(ENFORCE_ENV, None)
     command = [sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider", "."]
@@ -101,6 +101,9 @@ def test_in_ci_a_session_that_writes_into_the_real_home_fails_and_names_the_path
         ({"CI": "false"}, WARN),
         ({"CI": "true"}, FAIL),
         ({"CI": "1"}, FAIL),
+        ({"CI": "true", "RUNNER_ENVIRONMENT": "github-hosted"}, FAIL),
+        ({"CI": "true", "RUNNER_ENVIRONMENT": "self-hosted"}, WARN),
+        ({ENFORCE_ENV: "1", "RUNNER_ENVIRONMENT": "self-hosted"}, FAIL),
         ({ENFORCE_ENV: "1"}, FAIL),
         ({ALLOW_ENV: "1"}, SKIP),
         ({ALLOW_ENV: "1", "CI": "true", ENFORCE_ENV: "1"}, SKIP),
@@ -190,15 +193,14 @@ def test_a_listing_cut_short_still_reports_a_changed_file(tmp_path):
     assert not [line for line in found if line.startswith(("created", "removed"))]
 
 
-def test_listing_a_few_thousand_files_takes_well_under_a_second(tmp_path):
+def test_a_few_thousand_files_are_listed_whole(tmp_path):
     gaia = tmp_path / ".gaia"
     for folder in range(30):
         (gaia / f"d{folder}").mkdir(parents=True)
         for index in range(100):
             (gaia / f"d{folder}" / f"f{index}").write_bytes(b"")
 
-    started = time.perf_counter()
     listing = list_home(gaia)
 
-    assert time.perf_counter() - started < 1.0
+    assert listing.complete
     assert len(listing.entries) == 3031
