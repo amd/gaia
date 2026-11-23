@@ -396,5 +396,102 @@ def test_check_links_sends_only_unresolved_links_to_rest(tmp_path, monkeypatch):
     assert len(results) == 4
 
 
+def _run_checker(monkeypatch, capsys, *args):
+    monkeypatch.setattr(sys, "argv", ["check_doc_links.py", *args])
+    with pytest.raises(SystemExit) as exc:
+        cdl.main()
+    return exc.value.code, capsys.readouterr().out
+
+
+def test_failed_github_batch_fails_cli_without_rest_fallback(
+    tmp_path, monkeypatch, capsys
+):
+    docs = tmp_path / "docs"
+    docs.mkdir()
+    (docs / "a.md").write_text(
+        f"[first]({_gaia(1)}) [comment]({_gaia(1, '#issuecomment-2')}) "
+        f"[second]({_gaia(2)})\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(cdl, "__file__", str(tmp_path / "util" / "check_doc_links.py"))
+    monkeypatch.setenv("GITHUB_TOKEN", "tok")
+    monkeypatch.setenv("GITHUB_ACTIONS", "true")
+    fake = _GraphQL(existing=set(), fail=OSError("unavailable"))
+    with patch("urllib.request.urlopen", fake):
+        code, output = _run_checker(monkeypatch, capsys, "--external-only")
+    assert code == 1
+    assert "::error title=GitHub link verification incomplete::" in output
+    assert "2/2 unique GitHub issue/PR references unverified" in output
+    assert "FAILED: Could not verify most GitHub issue/PR references" in output
+    assert "PASSED:" not in output
+    assert "set GITHUB_TOKEN" in output and "--internal-only" in output
+    assert len(fake.graphql) == 1
+    assert fake.rest == []
+
+
+def test_exactly_half_unverified_counts_github_aliases_once(monkeypatch, capsys):
+    results = [
+        cdl.LinkResult("a.md", 1, _gaia(1), "warning", "timeout"),
+        cdl.LinkResult("a.md", 2, _gaia(1, "#issuecomment-2"), "warning", "timeout"),
+        cdl.LinkResult(
+            "b.md", 1, "https://github.com/AMD/GAIA/issues/1", "warning", "timeout"
+        ),
+        cdl.LinkResult("b.md", 2, _gaia(2), "ok", ""),
+        cdl.LinkResult("b.md", 3, _gaia(2, "#issuecomment-3"), "warning", "timeout"),
+        cdl.LinkResult("b.md", 4, _gaia(3), "skipped", ""),
+        cdl.LinkResult("b.md", 5, "https://example.org/page", "warning", "timeout"),
+    ]
+    monkeypatch.setattr(cdl, "check_links", lambda *args, **kwargs: results)
+    monkeypatch.setenv("GITHUB_ACTIONS", "true")
+    code, output = _run_checker(monkeypatch, capsys)
+    assert code == 0
+    assert "1/2 unique GitHub issue/PR references unverified" in output
+    assert "::warning title=GitHub link verification incomplete::" in output
+    assert "PASSED: No broken links found; some links could not be verified" in output
+    assert "All links valid" not in output
+
+
+def test_tokenless_rate_limited_run_fails_with_remedy(monkeypatch, capsys):
+    results = [
+        cdl.LinkResult("a.md", i, _gaia(i), "warning", "HTTP 403 (rate limited)")
+        for i in range(1, 4)
+    ]
+    monkeypatch.setattr(cdl, "check_links", lambda *args, **kwargs: results)
+    monkeypatch.delenv("GITHUB_TOKEN", raising=False)
+    monkeypatch.delenv("GITHUB_ACTIONS", raising=False)
+    code, output = _run_checker(monkeypatch, capsys)
+    assert code == 1
+    assert "3/3 unique GitHub issue/PR references unverified" in output
+    assert "set GITHUB_TOKEN" in output and "--internal-only" in output
+    assert "::error" not in output
+
+
+@pytest.mark.parametrize(
+    ("results", "code", "message"),
+    [
+        ([], 0, "PASSED: No links to check"),
+        ([(_gaia(1), "skipped")], 0, "PASSED: No links to check"),
+        (
+            [("https://example.org/page", "warning")],
+            0,
+            "PASSED: No broken links found; some links could not be verified",
+        ),
+        ([(_gaia(1), "broken")], 1, "FAILED: Found broken links"),
+        ([(_gaia(1), "ok")], 0, "PASSED: All links valid"),
+    ],
+)
+def test_cli_preserves_normal_link_results(results, code, message, monkeypatch, capsys):
+    links = [
+        cdl.LinkResult("a.md", i, url, status, "")
+        for i, (url, status) in enumerate(results, 1)
+    ]
+    monkeypatch.setattr(cdl, "check_links", lambda *args, **kwargs: links)
+    monkeypatch.setenv("GITHUB_ACTIONS", "true")
+    exit_code, output = _run_checker(monkeypatch, capsys)
+    assert exit_code == code
+    assert message in output
+    assert "GitHub link verification incomplete::" not in output
+
+
 if __name__ == "__main__":
     sys.exit(pytest.main([__file__, "-v"]))

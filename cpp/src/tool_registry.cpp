@@ -263,6 +263,9 @@ json ToolRegistry::executeTool(const std::string& name, const json& args) {
             if (auto refused = declinedRefusal(resolvedName, effectiveArgs)) return *refused;
 
             ToolConfirmResult decision = confirmCallback_(resolvedName, effectiveArgs);
+            if (decision == ToolConfirmResult::ALWAYS_ALLOW || decision == ToolConfirmResult::ALLOW_ONCE) {
+                noteApproved(resolvedName, effectiveArgs);
+            }
             if (decision == ToolConfirmResult::ALWAYS_ALLOW) {
                 if (allowedStore_) {
                     allowedStore_->addAlwaysAllowed(grantKey);
@@ -378,11 +381,116 @@ std::vector<std::string> wordsOf(const std::string& s) {
     return words;
 }
 
+// A shell line's commands, split on the unquoted && || ; | and newlines between them.
+std::vector<std::string> shellSegments(const std::string& line) {
+    std::vector<std::string> out;
+    std::string cur;
+    char quote = 0;
+    for (size_t i = 0; i < line.size(); ++i) {
+        const char c = line[i];
+        if (quote) {
+            if (c == quote) quote = 0;
+            cur.push_back(c);
+        } else if (c == '\'' || c == '"') {
+            quote = c;
+            cur.push_back(c);
+        } else if (c == ';' || c == '\n' || c == '|' || (c == '&' && i + 1 < line.size() && line[i + 1] == '&')) {
+            if ((c == '|' || c == '&') && i + 1 < line.size() && line[i + 1] == c) ++i;
+            out.push_back(std::move(cur));
+            cur.clear();
+        } else {
+            cur.push_back(c);
+        }
+    }
+    out.push_back(std::move(cur));
+    return out;
+}
+
+// One command's words, quotes removed.
+std::vector<std::string> shellWords(const std::string& segment) {
+    std::vector<std::string> words;
+    std::string cur;
+    bool inWord = false;
+    char quote = 0;
+    for (char c : segment) {
+        if (quote) {
+            if (c == quote) {
+                quote = 0;
+            } else {
+                cur.push_back(c);
+            }
+        } else if (c == '\'' || c == '"') {
+            quote = c;
+            inWord = true;
+        } else if (std::isspace(static_cast<unsigned char>(c))) {
+            if (inWord) words.push_back(std::move(cur));
+            cur.clear();
+            inWord = false;
+        } else {
+            cur.push_back(c);
+            inWord = true;
+        }
+    }
+    if (inWord) words.push_back(std::move(cur));
+    return words;
+}
+
+bool isRedirection(const std::string& w) {
+    const size_t gt = w.find('>');
+    if (gt == std::string::npos) return false;
+    const size_t other = w.find_first_not_of("0123456789&");
+    return other == std::string::npos || other >= gt;
+}
+
+// What one command runs: its program by name and its arguments, without the
+// folder it runs in (a leading cd, git -C) or where its output goes.
+std::string commandShape(const std::string& segment) {
+    const auto words = shellWords(segment);
+    size_t i = 0;
+    while (i < words.size() && words[i].find('=') != std::string::npos && words[i][0] != '-') ++i;
+    if (i >= words.size()) return "";
+    const std::string program = baseName(words[i]);
+    if (program == "cd" || program == "pushd") return "";
+    std::string shape = program;
+    for (++i; i < words.size(); ++i) {
+        const std::string& w = words[i];
+        if (isRedirection(w)) {
+            if (w.back() == '>') ++i;  // "2> file": the file is where output goes
+            continue;
+        }
+        if (program == "git") {
+            if (w == "-C" || w == "-c") {
+                ++i;
+                continue;
+            }
+            if (w == "--no-pager" || w.rfind("--git-dir=", 0) == 0 || w.rfind("--work-tree=", 0) == 0) continue;
+        }
+        shape += " " + w;
+    }
+    return shape;
+}
+
+std::vector<std::string> commandShapes(const json& args) {
+    std::vector<std::string> shapes;
+    if (!args.is_object() || !args.contains("command") || !args["command"].is_string()) return shapes;
+    for (const auto& segment : shellSegments(args["command"].get<std::string>())) {
+        std::string shape = commandShape(segment);
+        if (!shape.empty()) shapes.push_back(std::move(shape));
+    }
+    return shapes;
+}
+
 // The file names a declined call was aimed at. A command's first word is its
-// program and a bare word may be a subcommand, so neither is a target.
+// program and a bare word may be a subcommand, so neither is a target; nor is
+// the folder a command runs in.
 std::vector<std::string> targetsOf(const json& args) {
+    std::vector<std::string> sources = commandShapes(args);
+    for (const char* key : kTargetKeys) {
+        if (std::string(key) == "command") continue;
+        if (args.is_object() && args.contains(key) && args[key].is_string()) sources.push_back(args[key].get<std::string>());
+    }
     std::vector<std::string> targets;
-    for (const auto& s : targetStrings(args)) {
+    for (const auto& s : sources) {
         const auto words = wordsOf(s);
         for (size_t i = 0; i < words.size(); ++i) {
             const std::string name = baseName(words[i]);
@@ -394,6 +502,19 @@ std::vector<std::string> targetsOf(const json& args) {
         }
     }
     return targets;
+}
+
+// Keys under which an approval is remembered: the exact call, and for a
+// command what it runs wherever it runs.
+std::vector<std::string> approvalKeys(const std::string& tool, const json& args) {
+    std::vector<std::string> keys{callKey(tool, args)};
+    const auto shapes = commandShapes(args);
+    if (!shapes.empty()) {
+        std::string joined = tool;
+        for (const auto& shape : shapes) joined += "\x1f" + shape;
+        keys.push_back(std::move(joined));
+    }
+    return keys;
 }
 
 bool namesTarget(const json& args, const std::vector<std::string>& targets) {
@@ -443,8 +564,8 @@ const char* ToolRegistry::declinedHint() {
 
 void ToolRegistry::beginTurn(const std::string& userMessage) {
     declinedTargets_.clear();
+    declinedCommands_.clear();
     lastDeclined_.clear();
-    declinedThisTurn_ = 0;
     if (declinedCalls_.empty()) return;
     const std::string text = lowered(collapseSpaces(userMessage));
     // "Don't run it again" is not a request to run it.
@@ -468,15 +589,21 @@ void ToolRegistry::beginTurn(const std::string& userMessage) {
 void ToolRegistry::forgetDeclinedCalls() {
     declinedCalls_.clear();
     declinedTargets_.clear();
+    declinedCommands_.clear();
     lastDeclined_.clear();
-    declinedThisTurn_ = 0;
+    approvedCalls_.clear();
 }
 
 void ToolRegistry::noteDeclined(const std::string& tool, const json& args) {
     lastDeclined_ = shownCall(tool, args);
     declinedCalls_[callKey(tool, args)] = lastDeclined_;
     for (auto& t : targetsOf(args)) declinedTargets_.push_back(std::move(t));
-    ++declinedThisTurn_;
+    for (auto& c : commandShapes(args)) declinedCommands_.push_back(std::move(c));
+    for (const auto& key : approvalKeys(tool, args)) approvedCalls_.erase(key);
+}
+
+void ToolRegistry::noteApproved(const std::string& tool, const json& args) {
+    for (auto& key : approvalKeys(tool, args)) approvedCalls_.insert(std::move(key));
 }
 
 std::optional<json> ToolRegistry::declinedRefusal(const std::string& tool, const json& args) const {
@@ -487,24 +614,28 @@ std::optional<json> ToolRegistry::declinedRefusal(const std::string& tool, const
                           "`) earlier in this chat. Do not repeat it or reword it. Tell the user you did not "
                           "run it because they declined it, and that they can ask you to run it again.");
     }
-    if (declinedThisTurn_ == 0) return std::nullopt;
-    if (namesTarget(args, declinedTargets_)) {
-        return notRun(lastDeclined_,
-                      "Not run, and not put to the user again: this reaches what the user declined earlier in "
-                      "this request (`" + lastDeclined_ + "`). That no is to this one action, whichever tool "
-                      "carries it, so do not reach it with another tool, command, or script; steps that do "
-                      "something else are still open. Tell the user what is blocked and what you can do "
-                      "without it.");
+    if (declinedTargets_.empty() && declinedCommands_.empty()) return std::nullopt;
+    // A yes given earlier in this chat is not taken back by a no to something else.
+    for (const auto& key : approvalKeys(tool, args)) {
+        if (approvedCalls_.count(key)) return std::nullopt;
     }
-    if (declinedThisTurn_ >= kMaxDeclinesPerTurn) {
-        return notRun(lastDeclined_,
-                      "Not run, and not put to the user again: the user has already said no " +
-                          std::to_string(declinedThisTurn_) + " times in this request (last: `" + lastDeclined_ +
-                          "`), so nothing else that needs approval is asked for until their next message. "
-                          "Finish what needs no approval, then tell the user what was not done and that they "
-                          "can ask for it again.");
+    bool sameCommand = false;
+    for (const auto& shape : commandShapes(args)) {
+        if (std::find(declinedCommands_.begin(), declinedCommands_.end(), shape) != declinedCommands_.end()) {
+            sameCommand = true;
+        }
     }
-    return std::nullopt;
+    if (!sameCommand && !namesTarget(args, declinedTargets_)) return std::nullopt;
+    std::string offLimits;
+    for (const auto* list : {&declinedCommands_, &declinedTargets_}) {
+        for (const auto& item : *list) offLimits += (offLimits.empty() ? "`" : ", `") + item + "`";
+    }
+    return notRun(lastDeclined_,
+                  "Not run, and not put to the user again: this reaches what the user declined earlier in "
+                  "this request (`" + lastDeclined_ + "`). That no is to this one action, whichever tool "
+                  "carries it, so do not reach it with another tool, command, or script. Off-limits until "
+                  "the user's next message: " + offLimits + ". Every other step is still open and asks as "
+                  "usual. Tell the user what is blocked and what you can do without it.");
 }
 
 void ToolRegistry::setConfirmCallback(ToolConfirmCallback cb) {

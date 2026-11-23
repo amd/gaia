@@ -24,6 +24,11 @@ const NAMED_CATEGORIES: Record<string, MessageKey> = {
     agent: 'tools.cat.agent',
 };
 
+const PROGRAM_NAMES: Record<NonNullable<AgentCapabilities['program']>, MessageKey> = {
+    gaiapy: 'setup.agent.gaiapy',
+    gaiacpp: 'setup.agent.gaiacpp',
+};
+
 /** A category's heading: a mixin name (`file_io`) reads as `file io`. */
 export function categoryLabel(category: string, t: Translate): string {
     const key = NAMED_CATEGORIES[category];
@@ -100,16 +105,17 @@ function ToolList({ sessionId, busy }: AgentInfoSectionProps) {
     if (failure?.notRunning) return <p className="sp-meta" role="status">{t('tools.notRunning')}</p>;
     if (failure) return <p className="sp-error" role="alert">{t('tools.listError', { error: failure.text })}</p>;
     if (!tools) return <p className="sp-meta">{t('sp.checking')}</p>;
-    const beta = program === 'gaiacpp' && (
+    const programLine = program && PROGRAM_NAMES[program] && (
         <p className="sp-meta sp-agent-program">
-            {t('tools.program', { name: 'gaiacpp' })} <span className="setup-choice-tag">{t('setup.agent.beta')}</span>
+            {t('tools.program', { name: t(PROGRAM_NAMES[program]), id: program })}
+            {program === 'gaiacpp' && <> <span className="setup-choice-tag">{t('setup.agent.beta')}</span></>}
         </p>
     );
-    if (tools.length === 0) return <>{beta}<p className="sp-meta">{t('tools.empty')}</p></>;
+    if (tools.length === 0) return <>{programLine}<p className="sp-meta">{t('tools.empty')}</p></>;
 
     return (
         <>
-            {beta}
+            {programLine}
             <div className="sp-tools" aria-label={t('tools.listLabel')} role="group">
                 {groupTools(tools).map(([category, group]) => {
                     const label = categoryLabel(category, t);

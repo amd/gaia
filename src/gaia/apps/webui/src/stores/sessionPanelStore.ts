@@ -4,7 +4,8 @@
 /**
  * The session panel's layout (#5279): docked open or closed, its width, and
  * which sections are expanded — remembered across chats and reloads. The
- * overlay used on narrow windows is never remembered open.
+ * overlay used on narrow windows is never remembered open. Closed until the
+ * user opens it or a chat first makes a file (`autoOpen`).
  */
 
 import { create } from 'zustand';
@@ -74,6 +75,8 @@ export function clampWidth(width: number): number {
 interface SessionPanelState {
     /** Docked panel shown (wide windows). */
     open: boolean;
+    /** The user closed the docked panel and that choice is remembered; nothing opens it for them. */
+    closedByUser: boolean;
     /** Overlay shown (narrow windows); never remembered. */
     overlayOpen: boolean;
     width: number;
@@ -83,6 +86,12 @@ interface SessionPanelState {
     signals: Record<string, PanelSignals>;
     setSignals: (sessionId: string, patch: PanelSignals) => void;
     setOpen: (open: boolean) => void;
+    /** Open the docked panel for the user without remembering it as their choice. */
+    autoOpen: () => void;
+    /** Shown by `autoOpen`, not by the user; giving the side to another pane then remembers nothing. */
+    autoOpened: boolean;
+    /** Give the right side to another pane: an auto-opened panel just hides, a user-opened one closes as before. */
+    yieldSide: () => void;
     setOverlayOpen: (open: boolean) => void;
     setWidth: (width: number) => void;
     setSection: (id: PanelSectionId, open: boolean) => void;
@@ -92,8 +101,10 @@ interface SessionPanelState {
 }
 
 function loadPersisted() {
+    const stored = read<string | null>(OPEN_KEY, (r) => r, null);
     return {
-        open: read(OPEN_KEY, (r) => r !== '0', true),
+        open: stored === '1',
+        closedByUser: stored === '0',
         width: clampWidth(read(WIDTH_KEY, (r) => Number(r) || PANEL_DEFAULT_WIDTH, PANEL_DEFAULT_WIDTH)),
         sections: {
             ...DEFAULT_SECTIONS,
@@ -108,9 +119,18 @@ export const useSessionPanelStore = create<SessionPanelState>((set, get) => ({
     focus: null,
     signals: {},
     setSignals: (sessionId, patch) => set((s) => ({ signals: { ...s.signals, [sessionId]: { ...s.signals[sessionId], ...patch } } })),
+    autoOpened: false,
     setOpen: (open) => {
         write(OPEN_KEY, open ? '1' : '0');
-        set({ open });
+        set({ open, closedByUser: !open, autoOpened: false });
+    },
+    autoOpen: () => {
+        if (get().closedByUser || get().open) return;
+        set({ open: true, autoOpened: true });
+    },
+    yieldSide: () => {
+        if (get().autoOpened) set({ open: false, autoOpened: false });
+        else get().setOpen(false);
     },
     setOverlayOpen: (overlayOpen) => set({ overlayOpen }),
     setWidth: (width) => {
@@ -127,9 +147,9 @@ export const useSessionPanelStore = create<SessionPanelState>((set, get) => ({
         const sections = { ...get().sections, [id]: true };
         write(SECTIONS_KEY, JSON.stringify(sections));
         write(OPEN_KEY, '1');
-        set({ sections, open: true, overlayOpen: true, focus: { section: id, nonce: Date.now() } });
+        set({ sections, open: true, closedByUser: false, autoOpened: false, overlayOpen: true, focus: { section: id, nonce: Date.now() } });
     },
-    reload: () => set({ ...loadPersisted(), overlayOpen: false, focus: null, signals: {} }),
+    reload: () => set({ ...loadPersisted(), autoOpened: false, overlayOpen: false, focus: null, signals: {} }),
 }));
 
 /** How long a request to show a section stays one: long enough for the panel to open, not to haunt a later render. */

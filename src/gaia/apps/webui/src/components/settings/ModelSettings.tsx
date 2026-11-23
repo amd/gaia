@@ -9,6 +9,7 @@ import { useModelStore, displayModelName, distinctModelLabels, sameModelId, sync
 import { useChatStore } from '../../stores/chatStore';
 import { useT, type Translate } from '../../i18n/useT';
 import { providerName, providerNotice } from '../../utils/providerText';
+import { setVisibleInterval } from '../../utils/visibleInterval';
 import { AddCustomModel } from './AddCustomModel';
 import { ErrorNotice, isServerDown } from './ErrorNotice';
 import { LocalModelsSections } from './LocalModelsSections';
@@ -118,8 +119,7 @@ export function ModelSettings() {
     const awaitingPermission = !!providers?.some((p) => p.key_state === 'waiting_for_os_permission');
     useEffect(() => {
         if (!awaitingPermission) return;
-        const timer = setInterval(() => { void loadProviders(); }, DOWNLOAD_POLL_MS);
-        return () => clearInterval(timer);
+        return setVisibleInterval(() => { void loadProviders(); }, DOWNLOAD_POLL_MS);
     }, [awaitingPermission, loadProviders]);
     const activeProvider = active?.provider;
     useEffect(() => { if (activeProvider && !requested) setChosen(activeProvider); }, [activeProvider, requested]);
@@ -250,8 +250,7 @@ export function ModelSettings() {
     }, [anyDownloading, refreshActive]);
     useEffect(() => {
         if (chosen !== 'local' || !anyDownloading) return;
-        const timer = setInterval(() => { void loadModels('local', true); }, DOWNLOAD_POLL_MS);
-        return () => clearInterval(timer);
+        return setVisibleInterval(() => { void loadModels('local', true); }, DOWNLOAD_POLL_MS);
     }, [anyDownloading, chosen, loadModels]);
 
     // Keeps the in-use model's device and size on screen while another provider's tab is open.

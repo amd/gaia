@@ -76,14 +76,14 @@
 .compare-keep {
     align-self: flex-start;
     padding: 5px 10px;
-    background: var(--accent-fill);
+    background: var(--action-fill);
     border-radius: var(--radius-md);
-    color: var(--accent-fill-text);
+    color: var(--action-fill-text);
     font-size: 13px;
 }
 
 .compare-keep:hover:not(:disabled) {
-    background: var(--accent-fill-hover);
+    background: var(--action-fill-hover);
 }
 
 .compare-keep:disabled {

@@ -22,6 +22,11 @@ from pathlib import Path
 
 import pytest
 
+# Session guard: compares the real ~/.gaia before and after the run.
+from tests.unit.real_home_guard import (  # noqa: F401  pylint: disable=unused-import
+    _guard_real_gaia_home_session,
+)
+
 
 @pytest.fixture(scope="session")
 def python_with_pip(tmp_path_factory):

@@ -15,7 +15,7 @@ import { AGENT_PROGRAMS, SETTINGS } from '../../test/setupApiMocks';
 vi.mock('../../services/api');
 
 const text = (el: HTMLElement) => stripIsolates(el.textContent ?? '');
-const usePython = () => screen.getByRole('button', { name: 'Use the Python agent' });
+const usePython = () => screen.getByRole('button', { name: 'Use Full-featured' });
 
 beforeEach(() => {
     vi.resetAllMocks();
@@ -27,7 +27,7 @@ beforeEach(() => {
 describe('NativeAgentFailedNotice', () => {
     it('says the chat runs on gaiacpp (Beta) and changes nothing by itself', () => {
         render(<NativeAgentFailedNotice />);
-        expect(text(screen.getByRole('note'))).toContain('This chat is running on gaiacpp (Beta), the native agent.');
+        expect(text(screen.getByRole('note'))).toContain('This chat is running on Fast and light (Beta).');
         expect(api.getAgentPrograms).not.toHaveBeenCalled();
         expect(api.updateSettings).not.toHaveBeenCalled();
     });
@@ -35,7 +35,7 @@ describe('NativeAgentFailedNotice', () => {
     it('switches to the Python agent through the settings endpoint when asked', async () => {
         render(<NativeAgentFailedNotice />);
         await userEvent.click(usePython());
-        expect(await screen.findByRole('status')).toHaveTextContent('Switched to the Python agent. It answers from your next message, so send this one again.');
+        expect(await screen.findByRole('status')).toHaveTextContent('Switched to Full-featured. It answers from your next message, so send this one again.');
         expect(api.updateSettings).toHaveBeenCalledWith({ flagship_agent: 'gaiapy' });
     });
 
@@ -43,7 +43,7 @@ describe('NativeAgentFailedNotice', () => {
         vi.mocked(api.updateSettings).mockRejectedValue(new Error('GAIA is answering in a chat, and switching agents now would cut that answer off.'));
         render(<NativeAgentFailedNotice />);
         await userEvent.click(usePython());
-        expect(text(await screen.findByRole('alert'))).toContain("Couldn't switch to the Python agent: GAIA is answering in a chat");
+        expect(text(await screen.findByRole('alert'))).toContain("Couldn't switch to Full-featured: GAIA is answering in a chat");
         expect(screen.queryByRole('status')).not.toBeInTheDocument();
         expect(usePython()).toBeEnabled();
     });

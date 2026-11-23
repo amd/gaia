@@ -240,7 +240,7 @@ interface UploadErrorToastProps {
     kind?: string | null;
     /** Called when the user dismisses the toast. */
     onDismiss: () => void;
-    /** Auto-dismiss timeout in ms (default: 15000). 0 = no auto-dismiss. */
+    /** Auto-dismiss after this many ms. Off by default: an error stays until it is read and dismissed. */
     timeout?: number;
 }
 
@@ -248,7 +248,7 @@ interface UploadErrorToastProps {
  * A dismissible error toast for document upload failures.
  * Parses the backend error to show helpful context and a GitHub link.
  */
-export function UploadErrorToast({ filename, error, status, kind, onDismiss, timeout = 15000 }: UploadErrorToastProps) {
+export function UploadErrorToast({ filename, error, status, kind, onDismiss, timeout = 0 }: UploadErrorToastProps) {
     const t = useT();
     const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 

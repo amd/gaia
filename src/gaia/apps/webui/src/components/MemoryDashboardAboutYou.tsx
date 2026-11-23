@@ -104,6 +104,7 @@ interface Props {
 
 export function MemoryDashboardAboutYou({ agent, supports, memoryEnabled, reloadKey, onChanged, onOpenAdvanced, showToast }: Props) {
     const t = useT();
+    const agentName = ref(agent === 'gaiacpp' ? 'setup.agent.gaiacpp' : 'setup.agent.gaiapy');
     const [items, setItems] = useState<AboutYouItem[] | null>(null);
     const [loadError, setLoadError] = useState<string | null>(null);
     const [editingId, setEditingId] = useState<string | null>(null);
@@ -284,9 +285,9 @@ export function MemoryDashboardAboutYou({ agent, supports, memoryEnabled, reload
             <p className="mem-about-intro">{t('mem.about.intro')}</p>
             {(!supports.due_dates || !supports.sources) && (
                 <p className="mem-about-limits" role="note">
-                    {!supports.due_dates && <span>{t('mem.about.limit.dueDates', { name: agent })}</span>}
+                    {!supports.due_dates && <span>{t('mem.about.limit.dueDates', { name: agentName })}</span>}
                     {!supports.due_dates && !supports.sources && ' '}
-                    {!supports.sources && <span>{t('mem.about.limit.sources', { name: agent })}</span>}
+                    {!supports.sources && <span>{t('mem.about.limit.sources', { name: agentName })}</span>}
                 </p>
             )}
 

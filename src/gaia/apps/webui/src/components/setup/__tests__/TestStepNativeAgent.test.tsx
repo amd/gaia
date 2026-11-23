@@ -39,7 +39,7 @@ function show(tests: SetupTest[], state: 'verifying' | 'failed' | 'cancelled' = 
     return handlers;
 }
 
-const finish = () => screen.getByRole('button', { name: 'Finish setup on the Python agent' });
+const finish = () => screen.getByRole('button', { name: 'Finish setup on Full-featured' });
 
 describe('Test step, when the chat failed on gaiacpp', () => {
     beforeEach(() => {
@@ -51,13 +51,13 @@ describe('Test step, when the chat failed on gaiacpp', () => {
     it('names the agent, shows what it said, and does not send the user to another model', () => {
         show([passedModel, failedOnNative]);
         const chat = screen.getByText(/A real chat with GAIA/).closest('li') as HTMLElement;
-        expect(chat).toHaveTextContent("The test chat runs on gaiacpp, the beta agent, and it didn't answer. The model passed its own test.");
-        expect(chat).toHaveTextContent(`gaiacpp said: ${SAID}`);
+        expect(chat).toHaveTextContent("The test chat runs on Fast and light, the beta agent, and it didn't answer. The model passed its own test.");
+        expect(chat).toHaveTextContent(`Fast and light said: ${SAID}`);
         expect(chat).not.toHaveTextContent("GAIA's assistant didn't answer a test message.");
         expect(screen.queryByRole('button', { name: 'Choose another model' })).not.toBeInTheDocument();
         expect(screen.getByRole('button', { name: 'Test again' })).toBeInTheDocument();
         expect(finish()).toBeInTheDocument();
-        expect(screen.getByRole('alert')).toHaveTextContent("gaiacpp, the beta agent, didn't answer the test chat");
+        expect(screen.getByRole('alert')).toHaveTextContent("Fast and light, the beta agent, didn't answer the test chat");
     });
 
     it('switches to the Python agent only on the button, then runs the test again', async () => {
@@ -75,7 +75,7 @@ describe('Test step, when the chat failed on gaiacpp', () => {
         });
         const { onRetry } = show([passedModel, failedOnNative]);
         await userEvent.click(finish());
-        expect(await screen.findByText(/Couldn't switch to the Python agent: it isn’t installed on this PC, so gaiacpp stays your agent\./)).toBeInTheDocument();
+        expect(await screen.findByText(/Couldn't switch to Full-featured: it isn’t installed on this PC, so gaiacpp stays your agent\./)).toBeInTheDocument();
         expect(api.updateSettings).not.toHaveBeenCalled();
         expect(onRetry).not.toHaveBeenCalled();
     });
@@ -84,7 +84,7 @@ describe('Test step, when the chat failed on gaiacpp', () => {
         vi.mocked(api.updateSettings).mockRejectedValue(new Error('GAIA is answering in a chat'));
         const { onRetry } = show([passedModel, failedOnNative]);
         await userEvent.click(finish());
-        expect(await screen.findByText(/Couldn't switch to the Python agent: GAIA is answering in a chat/)).toBeInTheDocument();
+        expect(await screen.findByText(/Couldn't switch to Full-featured: GAIA is answering in a chat/)).toBeInTheDocument();
         expect(onRetry).not.toHaveBeenCalled();
     });
 
@@ -92,11 +92,11 @@ describe('Test step, when the chat failed on gaiacpp', () => {
         show([passedModel, row('agent', 'failed', { subject: QWEN.id, kind: 'agent', error: 'got no answer' })]);
         expect(screen.getByText("GAIA's assistant didn't answer a test message.")).toBeInTheDocument();
         expect(screen.getByRole('button', { name: 'Choose another model' })).toBeInTheDocument();
-        expect(screen.queryByRole('button', { name: 'Finish setup on the Python agent' })).not.toBeInTheDocument();
+        expect(screen.queryByRole('button', { name: 'Finish setup on Full-featured' })).not.toBeInTheDocument();
     });
 
     it('offers no switch while the tests are still running', () => {
         show([passedModel, failedOnNative], 'verifying');
-        expect(screen.queryByRole('button', { name: 'Finish setup on the Python agent' })).not.toBeInTheDocument();
+        expect(screen.queryByRole('button', { name: 'Finish setup on Full-featured' })).not.toBeInTheDocument();
     });
 });

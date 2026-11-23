@@ -24,6 +24,7 @@ const STATUS_LABEL: Record<Schedule['status'], MessageKey> = {
 };
 
 import { describeSchedule, formatClock, formatNextRun, formatTime, formatTimeOfDay, isCountdownRange } from '../utils/scheduleText';
+import { setVisibleInterval } from '../utils/visibleInterval';
 
 // The session panel words a schedule the same way, without loading this dialog.
 export { describeSchedule, formatNextRun };
@@ -304,14 +305,12 @@ export function ScheduleManager() {
     }, [nlInput]);
 
     // Load on mount + poll every 5s so we see updates when tasks fire
-    const pollRef = useRef<number | null>(null);
-
     useEffect(() => {
         log.ui.info('Schedule Manager opened');
         loadSchedules();
-        pollRef.current = window.setInterval(() => loadSchedules(), 5000);
+        const stop = setVisibleInterval(() => loadSchedules(), 5000);
         return () => {
-            if (pollRef.current) clearInterval(pollRef.current);
+            stop();
             dismissActionError();
         };
     }, [loadSchedules, dismissActionError]);

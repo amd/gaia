@@ -311,13 +311,44 @@ def test_the_endpoint_serves_a_relayed_chats_measurement(monkeypatch):
 
 def test_the_endpoint_names_an_old_agent_instead_of_a_restart(monkeypatch):
     monkeypatch.setattr(helpers, "cached_session_agent", lambda sid: None)
-    helpers.record_relayed_context("s1", None, GAIA_PROFILE.context_upgrade_message)
+    helpers.record_relayed_context(
+        "s1",
+        None,
+        helpers.relayed_context_reason(GAIA_PROFILE, "2.20", SSEOutputHandler()),
+        helpers.relayed_context_reason_code(GAIA_PROFILE, "2.20"),
+    )
 
     body = _get("s1")
 
+    assert body == {
+        "available": False,
+        "reason": GAIA_PROFILE.context_upgrade_message,
+        "reason_code": "agent_too_old",
+    }
+
+
+def test_an_agents_own_error_has_no_code_so_it_shows_as_sent(monkeypatch):
+    """The sidecar's text names its exception; the UI cannot translate it."""
+    monkeypatch.setattr(helpers, "cached_session_agent", lambda sid: None)
+    assert helpers.relayed_context_reason_code(GAIA_PROFILE, "2.21") is None
+    helpers.record_relayed_context("s1", None, "tokenizer exploded", None)
+
+    assert _get("s1") == {"available": False, "reason": "tokenizer exploded"}
+
+
+@pytest.mark.parametrize(
+    "answered, code",
+    [(True, "remeasure_next_turn"), (False, "not_answered_yet")],
+)
+def test_the_endpoints_own_reasons_carry_a_code(monkeypatch, answered, code):
+    """Each reason GAIA writes has a stable code the Agent UI translates."""
+    monkeypatch.setattr(helpers, "cached_session_agent", lambda sid: None)
+
+    body = _get("s1", _DB(answered=answered))
+
     assert body["available"] is False
-    assert body["reason"] == GAIA_PROFILE.context_upgrade_message
-    assert "restarted" not in body["reason"]
+    assert body["reason_code"] == code
+    assert body["reason"]
 
 
 def test_the_sidecar_payload_has_every_field_the_panel_reads(monkeypatch):
@@ -430,6 +461,32 @@ def test_a_relay_that_left_nothing_out_passes_the_measurement_through():
     )
 
     assert h.relay_context == measured
+
+
+def test_every_reason_code_matches_its_english_in_the_agent_ui(monkeypatch):
+    """The UI translates a code only while its English matches the backend's."""
+    import re
+    from pathlib import Path
+
+    en = (
+        Path(__file__).resolve().parents[4]
+        / "src/gaia/apps/webui/src/i18n/locales/en.ts"
+    ).read_text(encoding="utf-8")
+    monkeypatch.setattr(helpers, "cached_session_agent", lambda sid: None)
+    helpers.record_relayed_context(
+        "old",
+        None,
+        GAIA_PROFILE.context_upgrade_message,
+        helpers.relayed_context_reason_code(GAIA_PROFILE, "2.20"),
+    )
+    bodies = [_get("old"), _get("s1", _DB(answered=True)), _get("s1", _DB(False))]
+
+    for body in bodies:
+        match = re.search(
+            rf"'ctx\.reason\.{body['reason_code']}': '((?:[^'\\]|\\.)*)'", en
+        )
+        assert match, body["reason_code"]
+        assert match.group(1).replace("\\'", "'") == body["reason"]
 
 
 def test_gaiacpps_final_is_priced_on_what_the_model_wrote_and_names_the_missing_meter():

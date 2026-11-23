@@ -24,11 +24,13 @@ public:
     std::vector<std::string> ran;
     std::vector<std::string> asked;
     ToolConfirmResult reply = ToolConfirmResult::DENY;
+    std::vector<ToolConfirmResult> replies;  // used first, in order, before `reply`
 
     void initForTest() {
         init();
         setToolConfirmCallback([this](const std::string& tool, const json& args) {
             asked.push_back(tool + " " + args.value("command", args.value("path", "")));
+            if (asked.size() <= replies.size()) return replies[asked.size() - 1];
             return reply;
         });
     }
@@ -110,14 +112,67 @@ TEST(DeclinedCalls, ADeniedCommandIsNotAskedAgainByOtherRoutes) {
     agent.processQuery("Run exactly this: rm 'invoice.txt.exe'");
 
     EXPECT_TRUE(agent.ran.empty());
-    // The first card, and one more for the route that names nothing recognisable.
-    ASSERT_EQ(agent.asked.size(), 2u) << "cards shown: " << json(agent.asked).dump();
+    // The first card, and one each for the routes that name nothing recognisable.
+    ASSERT_EQ(agent.asked.size(), 3u) << "cards shown: " << json(agent.asked).dump();
     EXPECT_EQ(agent.asked[0], "shell rm 'invoice.txt.exe'");
     EXPECT_EQ(agent.asked[1], "shell find . -type f -exec unlink {} ;");
     const std::string sent = lastRequest(mock);
     EXPECT_NE(sent.find("they declined this exact call"), std::string::npos);
     EXPECT_NE(sent.find("do not reach it with another tool, command, or script"), std::string::npos);
-    EXPECT_NE(sent.find("already said no 2 times in this request"), std::string::npos);
+    EXPECT_NE(sent.find("Off-limits until the user's next message: `rm invoice.txt.exe`, `invoice.txt.exe`"),
+              std::string::npos);
+}
+
+// S-DEV-29: read-only git commands approved, one `git remote -v` declined. Only
+// that command stays off-limits; other git commands, and the ones the user already
+// approved, still ask as usual.
+TEST(DeclinedCalls, ADeclinedGitCommandLeavesOtherGitCommandsOpen) {
+    bench::MockLlmServer mock;
+    DeclineAgent agent(cfgFor(mock));
+    agent.initForTest();
+    agent.replies = {ToolConfirmResult::ALLOW_ONCE, ToolConfirmResult::ALLOW_ONCE, ToolConfirmResult::DENY};
+    agent.reply = ToolConfirmResult::ALLOW_ONCE;
+    mock.pushResponse(shell("c1", "cd /work/packaging && git log --oneline -5"));
+    mock.pushResponse(shell("c2", "cd /work/packaging && git status"));
+    mock.pushResponse(shell("c3", "cd /work/packaging && git remote -v"));
+    mock.pushResponse(shell("c4", "cd /work/packaging && git status"));
+    mock.pushResponse(shell("c5", "cd /work/packaging && git stash list"));
+    mock.pushResponse(shell("c6", "git log --oneline -50 /work/packaging/src"));
+    mock.pushResponse(shell("c7", "git -C /work/packaging remote -v"));
+    mock.pushResponse(shell("c8", "cd /work/packaging && git remote -v 2>&1 | head"));
+    mock.pushResponse(answer("The test does not exist."));
+
+    agent.processQuery("fix the failing test_vendored_markers test");
+
+    EXPECT_EQ(agent.ran, (std::vector<std::string>{"cd /work/packaging && git log --oneline -5",
+                                                   "cd /work/packaging && git status",
+                                                   "cd /work/packaging && git status",
+                                                   "cd /work/packaging && git stash list",
+                                                   "git log --oneline -50 /work/packaging/src"}));
+    EXPECT_EQ(agent.asked.size(), 6u) << json(agent.asked).dump();
+    const std::string sent = lastRequest(mock);
+    EXPECT_NE(sent.find("Off-limits until the user's next message: `git remote -v`."), std::string::npos) << sent;
+}
+
+// S-DEV-33: two nos in one turn do not shut every other tool.
+TEST(DeclinedCalls, TwoNosLeaveUnrelatedCallsOpen) {
+    bench::MockLlmServer mock;
+    DeclineAgent agent(cfgFor(mock));
+    agent.initForTest();
+    agent.replies = {ToolConfirmResult::DENY, ToolConfirmResult::DENY};
+    agent.reply = ToolConfirmResult::ALLOW_ONCE;
+    mock.pushResponse(shell("c1", "cd /work/cJSON && git remote -v"));
+    mock.pushResponse(shell("c2", "rm build.log"));
+    mock.pushResponse(shell("c3", "curl -s https://api.github.com/repos/DaveGamble/cJSON/commits/deadbeef"));
+    mock.pushResponse(call("c4", "write", {{"path", "notes.md"}, {"content", "x"}}));
+    mock.pushResponse(answer("done"));
+
+    agent.processQuery("check that commit");
+
+    EXPECT_EQ(agent.asked.size(), 4u) << json(agent.asked).dump();
+    EXPECT_EQ(agent.ran, (std::vector<std::string>{
+                             "curl -s https://api.github.com/repos/DaveGamble/cJSON/commits/deadbeef",
+                             "write notes.md"}));
 }
 
 TEST(DeclinedCalls, TheModelGetsThePythonAgentsInstruction) {

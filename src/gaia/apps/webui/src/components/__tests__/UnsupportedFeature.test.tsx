@@ -86,6 +86,18 @@ describe('isExtensionSupported', () => {
 // ── Component render tests ─────────────────────────────────────────────
 
 describe('UploadErrorToast', () => {
+    it('stays on screen until it is dismissed', () => {
+        vi.useFakeTimers();
+        try {
+            const onDismiss = vi.fn();
+            render(<UploadErrorToast filename="notes.pdf" error="The file could not be read" onDismiss={onDismiss} />);
+            vi.advanceTimersByTime(60_000);
+            expect(onDismiss).not.toHaveBeenCalled();
+        } finally {
+            vi.useRealTimers();
+        }
+    });
+
     it('renders file type error with dismiss button', async () => {
         const user = userEvent.setup();
         const onDismiss = vi.fn();

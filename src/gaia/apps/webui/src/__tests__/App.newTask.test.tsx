@@ -710,6 +710,9 @@ describe('New chat right after sending a first message', () => {
 });
 
 describe('the keyboard shortcuts sheet', () => {
+    // An earlier test leaves the document library open; a shortcut is ignored behind any dialog.
+    beforeEach(() => useChatStore.setState({ showDocLibrary: false, showFileBrowser: false }));
+
     it('opens with Ctrl+/ and closes with it again', async () => {
         render(<App />);
         await screen.findByLabelText('Message');
@@ -717,5 +720,24 @@ describe('the keyboard shortcuts sheet', () => {
         expect(await screen.findByRole('dialog', { name: 'Keyboard shortcuts' })).toBeInTheDocument();
         fireEvent.keyDown(window, { key: '/', ctrlKey: true });
         await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Keyboard shortcuts' })).not.toBeInTheDocument());
+    });
+
+    it('keeps the other shortcuts from acting behind an open dialog', async () => {
+        render(<App />);
+        await screen.findByLabelText('Message');
+        const collapsed = () => useChatStore.getState().sidebarCollapsed;
+        const before = collapsed();
+        fireEvent.keyDown(window, { key: '/', ctrlKey: true });
+        await screen.findByRole('dialog', { name: 'Keyboard shortcuts' });
+
+        fireEvent.keyDown(window, { key: 'b', ctrlKey: true });
+        fireEvent.keyDown(window, { key: ',', ctrlKey: true });
+        expect(collapsed()).toBe(before);
+        expect(screen.queryByRole('dialog', { name: 'Settings' })).not.toBeInTheDocument();
+
+        fireEvent.keyDown(window, { key: '/', ctrlKey: true });
+        await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Keyboard shortcuts' })).not.toBeInTheDocument());
+        fireEvent.keyDown(window, { key: 'b', ctrlKey: true });
+        expect(collapsed()).toBe(!before);
     });
 });

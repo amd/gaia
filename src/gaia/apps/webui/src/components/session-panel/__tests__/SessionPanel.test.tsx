@@ -9,6 +9,7 @@ import { SessionPanel, SessionPanelToggle } from '../SessionPanel';
 import { useSessionPanelStore, PANEL_DEFAULT_WIDTH, PANEL_MIN_WIDTH } from '../../../stores/sessionPanelStore';
 import { useChatStore } from '../../../stores/chatStore';
 import { useModelStore } from '../../../stores/modelStore';
+import { useBrowserPaneStore } from '../../../stores/browserPaneStore';
 import type { Message, TurnSummary } from '../../../types';
 import { resetPanelState, SID, stubPanelApi, stubWindowWidth } from './testUtils';
 
@@ -69,7 +70,7 @@ describe('SessionPanel', () => {
         useModelStore.setState({ names: {} });
     });
 
-    it('is docked open by default with every section', async () => {
+    it('is docked with every section once opened', async () => {
         render(<Panel />);
         expect(panel()).toHaveClass('is-docked');
         for (const name of ['This answer', 'Environment', 'Context & performance', 'Session']) {
@@ -87,6 +88,63 @@ describe('SessionPanel', () => {
         expect(at('Environment')).toBeLessThan(at('Details'));
         expect(at('Details')).toBeLessThan(at('Context & performance'));
         expect(screen.getByRole('button', { name: /^Context & performance/ })).toHaveAttribute('aria-expanded', 'false');
+    });
+
+    it('starts closed for someone who never opened or closed it', () => {
+        resetPanelState({ open: false });
+        render(<Panel />);
+        expect(screen.queryByRole('complementary')).not.toBeInTheDocument();
+        fireEvent.click(screen.getByRole('button', { name: /Show session panel/ }));
+        expect(panel()).toHaveClass('is-docked');
+        expect(window.localStorage.getItem('gaia.sessionPanel.open')).toBe('1');
+    });
+
+    it("opens on its own when a reply makes the chat's first file, and not while the browser pane is open", () => {
+        resetPanelState({ open: false });
+        const made: Message[] = [
+            ...ANSWERED,
+            { id: 3, session_id: SID, role: 'user', content: 'save it', created_at: '', rag_sources: null },
+            { id: 4, session_id: SID, role: 'assistant', content: 'saved', created_at: '', rag_sources: null, turnSummary: { ...SUMMARY, outputs: [{ kind: 'image', name: 'chart.png', path: 'C:\\chart.png' }] } },
+        ];
+        useBrowserPaneStore.setState({ openChats: [SID] });
+        const { rerender } = render(<Panel busy messages={ANSWERED} />);
+        rerender(<Panel busy={false} messages={made} />);
+        expect(screen.queryByRole('complementary')).not.toBeInTheDocument();
+
+        useBrowserPaneStore.setState({ openChats: [] });
+        rerender(<Panel busy messages={ANSWERED} />);
+        rerender(<Panel busy={false} messages={made} />);
+        expect(panel()).toHaveClass('is-docked');
+        expect(window.localStorage.getItem('gaia.sessionPanel.open')).toBeNull();
+    });
+
+    it('hides an auto-opened panel for the browser pane without counting it as the user closing it', () => {
+        resetPanelState({ open: false });
+        const made: Message[] = [
+            ...ANSWERED,
+            { id: 3, session_id: SID, role: 'user', content: 'save it', created_at: '', rag_sources: null },
+            { id: 4, session_id: SID, role: 'assistant', content: 'saved', created_at: '', rag_sources: null, turnSummary: { ...SUMMARY, outputs: [{ kind: 'image', name: 'chart.png', path: 'C:\\chart.png' }] } },
+        ];
+        const { rerender } = render(<Panel busy messages={ANSWERED} />);
+        rerender(<Panel busy={false} messages={made} />);
+        expect(panel()).toHaveClass('is-docked');
+
+        act(() => useSessionPanelStore.getState().yieldSide());
+        expect(screen.queryByRole('complementary')).not.toBeInTheDocument();
+        expect(window.localStorage.getItem('gaia.sessionPanel.open')).toBeNull();
+        expect(useSessionPanelStore.getState().closedByUser).toBe(false);
+
+        // The next chat's first file still opens it.
+        rerender(<Panel busy messages={ANSWERED} />);
+        rerender(<Panel busy={false} messages={made} />);
+        expect(panel()).toHaveClass('is-docked');
+    });
+
+    it('closes a panel the user opened, as before, when the browser pane takes the side', () => {
+        render(<Panel />);
+        act(() => useSessionPanelStore.getState().yieldSide());
+        expect(screen.queryByRole('complementary')).not.toBeInTheDocument();
+        expect(window.localStorage.getItem('gaia.sessionPanel.open')).toBe('0');
     });
 
     it('closes, remembers it, and reopens from the header toggle', () => {

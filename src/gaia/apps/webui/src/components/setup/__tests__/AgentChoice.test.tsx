@@ -38,8 +38,11 @@ describe('AgentChoice', () => {
         const cpp = await radio(/gaiacpp/);
         expect(py).toHaveAttribute('aria-checked', 'true');
         expect(cpp).toHaveAttribute('aria-checked', 'false');
-        expect(py).toHaveTextContent(/^gaiapyFull-featured412 MBRecommended$/);
-        expect(cpp).toHaveTextContent(/^gaiacppFast and light7 MBBeta$/);
+        expect(py).toHaveTextContent(/^Full-featuredgaiapy412 MBRecommended$/);
+        expect(cpp).toHaveTextContent(/^Fast and lightgaiacpp7 MBBeta$/);
+        // The friendly name leads; the id is the quiet second label docs and the CLI use.
+        expect(cpp.querySelector('.agent-choice-what')?.firstElementChild).toHaveTextContent('Fast and light');
+        expect(cpp.querySelector('.agent-choice-name')).toHaveTextContent('gaiacpp');
 
         const more = screen.getByRole('button', { name: 'Compare the two' });
         expect(more).toHaveAttribute('aria-expanded', 'false');
@@ -48,8 +51,8 @@ describe('AgentChoice', () => {
 
         fireEvent.click(more);
         expect(more).toHaveAttribute('aria-expanded', 'true');
-        expect(screen.getByText(/gaiapy is the Python agent: every tool and feature, and the most tested/)).toBeVisible();
-        expect(screen.getByText(/gaiacpp is the native C\+\+ agent: it starts in a fraction of a second/)).toBeVisible();
+        expect(screen.getByText(/Full-featured \(gaiapy\) has every tool and feature, and is the most tested/)).toBeVisible();
+        expect(screen.getByText(/Fast and light \(gaiacpp\) starts in a fraction of a second/)).toBeVisible();
         expect(screen.getByText('You can switch later in Settings › Agent & model.')).toBeVisible();
     });
 
@@ -59,7 +62,7 @@ describe('AgentChoice', () => {
         fireEvent.click(screen.getByRole('button', { name: 'Compare the two' }));
         const differences = within(screen.getByRole('list')).getAllByRole('listitem').map((li) => stripIsolates(li.textContent ?? ''));
         expect(differences).toEqual([
-            "Memory is separate: what GAIA remembered with gaiapy isn't seen by gaiacpp, and the other way round.",
+            "Memory is separate: what GAIA remembered with Full-featured isn't seen by Fast and light, and the other way round.",
             "File changes it makes can't be undone from the chat.",
             'Document search matches words, not meaning.',
             "It can't create images, transcribe audio or turn a document into speech.",
@@ -83,7 +86,7 @@ describe('AgentChoice', () => {
     it('shows no size it could not read', async () => {
         mockedApi.getAgentPrograms.mockResolvedValue({ ...AGENT_PROGRAMS, programs: AGENT_PROGRAMS.programs.map((p) => ({ ...p, size_bytes: null })) });
         render(<AgentChoice />);
-        expect(await radio(/gaiapy/)).toHaveTextContent(/^gaiapyFull-featuredRecommended$/);
+        expect(await radio(/gaiapy/)).toHaveTextContent(/^Full-featuredgaiapyRecommended$/);
         expect(document.querySelector('.agent-choice-size')).toBeNull();
     });
 
