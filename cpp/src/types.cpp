@@ -295,7 +295,6 @@ void AgentConfig::validate() const {
             "\" (to disable native tool calling set nativeToolCalls = \"never\")");
 }
 
-namespace {
 // http(s)://localhost, 127.x.x.x or [::1] — where a local Lemonade listens.
 bool isLoopbackUrl(const std::string& url) {
     const size_t scheme = url.find("://");
@@ -321,7 +320,6 @@ bool isLoopbackUrl(const std::string& url) {
     }
     return octets == 4 && first == 127;
 }
-} // namespace
 
 std::string resolveApiKey(const AgentConfig& config) {
     if (!config.apiKey.empty()) return config.apiKey;

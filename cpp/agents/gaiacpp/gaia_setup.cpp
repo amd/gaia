@@ -400,12 +400,35 @@ void dropForeignLemonadeKey(const GaiaServer& server) {
 #endif
 }
 
+std::string keyForNamedServer(const GaiaServer& own, const std::string& url, const std::string& lemonadeKey,
+                              ServerOrigin& origin) {
+    origin.keyVar.clear();
+    origin.gaiaKey = false;
+    const std::string usersKey = getEnvVar("GAIA_API_KEY");
+    if (!usersKey.empty()) {
+        origin.keyVar = "GAIA_API_KEY";
+        return usersKey;
+    }
+    if (!lemonadeKey.empty() && !own.envKeyForeign) {
+        // The local Lemonade's key never goes to another host.
+        if (!isLoopbackUrl(url)) return "";
+        origin.keyVar = "LEMONADE_API_KEY";
+        return lemonadeKey;
+    }
+    const std::string key = embeddedKeyFor(own, url);
+    origin.gaiaKey = !key.empty();
+    return key;
+}
+
 std::string serverDownReason(LemonadeClient& client, const ServerOrigin& origin) {
     if (!isLemonadeUrl(client.baseUrl())) return "";
     LemonadeHealth h = client.healthCheck();
-    // A server busy with a load can miss one health check.
-    for (int attempt = 1; attempt < 3 && !h.error.empty(); ++attempt) h = client.healthCheck();
-    return h.error.empty() ? "" : unreachable(client.baseUrl(), origin, h.error);
+    // A server busy with a load can miss one health check; one that answered has not.
+    for (int attempt = 1; attempt < 3 && !h.error.empty() && !h.errorStatus; ++attempt) h = client.healthCheck();
+    if (h.running) return "";
+    if (h.errorStatus) return answeredWrong(client.baseUrl(), origin, h.errorStatus, h.errorBody);
+    if (h.error.empty()) return answeredWrong(client.baseUrl(), origin, 0, "not JSON");
+    return unreachable(client.baseUrl(), origin, h.error);
 }
 
 void noteKeySource(ServerOrigin& origin, const AgentConfig& cfg, bool gaiaKey) {

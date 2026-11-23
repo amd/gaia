@@ -293,7 +293,7 @@ Each request carries its whole conversation, so the server keeps no state betwee
 - Per-chat folder scope (`allowed_paths`), working folder, attached documents, memory on, private or off, and internet off. Each can change between turns, and internet and memory also apply mid-turn.
 - Each chat's tools (`/sessions/{id}/tools`), its "always" answers (`/sessions/{id}/grants`), the skills list (`/skills`) and the memory list (`/memory`).
 
-Behind the Agent UI, `gaiacpp` finds the model server and its key as in [Using what GAIA set up](#using-what-gaia-set-up), and looks again on every message, so it follows GAIA's own server to a new port after a restart. The model is the one the chat sends, else the one GAIA set up. A model server that doesn't answer fails the turn at once with how to start it.
+Behind the Agent UI, `gaiacpp` finds the model server and its key as in [Using what GAIA set up](#using-what-gaia-set-up), and looks again on every message, so it follows GAIA's own server to a new port after a restart. The model is the one the chat sends, else the one GAIA set up. An address named with `GAIA_BASE_URL` gets `GAIA_API_KEY` when that is set; `LEMONADE_API_KEY` and GAIA's own server's key are sent only to an address on this PC, never to another machine. A model server that doesn't answer fails the turn at once with how to start it, and one that answers with an error fails it with the HTTP status and the key or address to fix.
 
 A few things answer the way an older flagship would, and the UI copes with each:
 

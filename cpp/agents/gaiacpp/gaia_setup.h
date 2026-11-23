@@ -82,8 +82,17 @@ std::string embeddedKeyFor(const GaiaServer& server, const std::string& url);
 /// request, and no command a tool runs, carries it to a server it wasn't for.
 void dropForeignLemonadeKey(const GaiaServer& server);
 
-/// "" when the model server answers its health check, else why not and how to
-/// start it, by what chose it. Endpoints that are not Lemonade are not asked.
+/// The key a request to `url` carries when no flag or settings file names one,
+/// in resolveApiKey's order: GAIA_API_KEY; else `lemonadeKey` (the user's
+/// LEMONADE_API_KEY) to a loopback address only; else, when the user set
+/// neither, GAIA's own key to GAIA's own server. Notes the source in `origin`.
+std::string keyForNamedServer(const GaiaServer& own, const std::string& url, const std::string& lemonadeKey,
+                              ServerOrigin& origin);
+
+/// "" when the model server answers its health check. Else why not, by what
+/// chose it: how to start it when nothing answers, or the key or address to
+/// fix when something answers with an error. Endpoints that are not Lemonade
+/// are not asked.
 std::string serverDownReason(LemonadeClient& client, const ServerOrigin& origin);
 
 /// Which key `cfg` sends, recorded in `origin` for an error that has to name it.

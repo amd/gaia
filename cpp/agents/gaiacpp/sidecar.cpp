@@ -447,7 +447,11 @@ private:
         GaiaServer own;
         // The Agent constructor honours these too.
         std::string named = getEnvVar("GAIA_BASE_URL");
-        if (named.empty()) named = getEnvVar("GAIA_CPP_BASE_URL");
+        const char* namedBy = "GAIA_BASE_URL";
+        if (named.empty()) {
+            named = getEnvVar("GAIA_CPP_BASE_URL");
+            namedBy = "GAIA_CPP_BASE_URL";
+        }
         if (named.empty()) {
             own = resolveGaiaServer();
             m.baseUrl = own.baseUrl;
@@ -455,12 +459,9 @@ private:
         } else {
             own = runningGaiaServer();  // the named address may still be GAIA's own server
             m.baseUrl = named;
-            m.origin = {ServerSource::GaiaBaseUrlEnv, "GAIA_BASE_URL"};
+            m.origin = {ServerSource::GaiaBaseUrlEnv, namedBy};
         }
-        // A key the user chose wins; GAIA's own goes to its own server only.
-        if (!own.envKeyForeign) m.apiKey = lemonadeKey_;
-        if (m.apiKey.empty()) m.apiKey = getEnvVar("GAIA_API_KEY");
-        if (m.apiKey.empty()) m.apiKey = embeddedKeyFor(own, m.baseUrl);
+        m.apiKey = keyForNamedServer(own, m.baseUrl, lemonadeKey_, m.origin);
         return m;
     }
 
