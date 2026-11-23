@@ -216,8 +216,10 @@ calling replays recorded calls and results as text.
 
 ### See how full the context is
 
-The meter beside the model chip shows how much of the model's context window the
-next message carries. Click it for the breakdown: system prompt, tools,
+Once the model's context window is more than half full, a meter beside the
+model chip shows how much of it the next message carries. Until then, and with
+an agent that doesn't report it, the figure is only in the session panel's
+**Context & performance** section. Click the meter for the breakdown: system prompt, tools,
 documents, conversation, and the room kept free for the reply. As the window
 fills, a one-line note above the message box says the oldest turns will soon
 drop out of the model's view; **Details** names them by their question, and you

@@ -6198,10 +6198,10 @@ for (const locale of ['ar', 'en']) {
     });
 }
 
-/** A measured context two turns from overflowing, so the meter, its popover and the warning all show. */
+/** A measured context past half full and two turns from overflowing, so the meter, its popover and the warning all show. */
 const MEASURED_CONTEXT = {
-    available: true, window: 65536, reply_reserve: 4096, system: 3900, tools: 2600, documents: 4000, history: 11350,
-    query: 0, used: 21850, history_budget: 20000, history_used: 11350, turns_in_view: 4, turns_hidden: 2,
+    available: true, window: 65536, reply_reserve: 4096, system: 3900, tools: 2600, documents: 4000, history: 29500,
+    query: 0, used: 40000, history_budget: 30000, history_used: 29500, turns_in_view: 4, turns_hidden: 2,
     at_risk: ['لخّص تقرير الربع الثالث', 'من تأخر من الموردين؟'], at_risk_tokens: 3000,
     tokenizer: { exact: true, model: 'Gemma-4-E4B-it-GGUF' }, model: 'Gemma-4-E4B-it-GGUF',
 };
@@ -6249,8 +6249,8 @@ for (const locale of ['ar', 'en']) {
 }
 
 for (const locale of ['en', 'ar']) {
-    test(`the context meter explains a fresh chat's fill and shows a dash before it is measured (${locale})`, async ({ page }) => {
-        const fresh = { ...MEASURED_CONTEXT, system: 7700, tools: 16000, documents: 0, history: 300, used: 24000, at_risk: [], at_risk_tokens: 0 };
+    test(`the context meter says when most of its fill is GAIA's own set-up (${locale})`, async ({ page }) => {
+        const fresh = { ...MEASURED_CONTEXT, system: 10000, tools: 25000, documents: 0, history: 300, used: 35300, at_risk: [], at_risk_tokens: 0 };
         await open(page, `#${ANSWER_SESSION}`, locale, (p) =>
             p.route(`**/api/chat/context/${ANSWER_SESSION}`, (route) => route.fulfill({ json: fresh })));
         await page.locator('button.context-meter').click();
@@ -6259,17 +6259,36 @@ for (const locale of ['en', 'ar']) {
         expect(await audit(page)).toEqual([]);
     });
 
-    test(`a reopened chat's context meter shows a dash, not an empty bar (${locale})`, async ({ page }) => {
-        await open(page, `#${ANSWER_SESSION}`, locale, (p) =>
-            p.route(`**/api/chat/context/${ANSWER_SESSION}`, (route) => route.fulfill({
-                json: { available: false, reason: "Measured again with your next message: GAIA restarted or switched models since this chat's last answer." },
-            })));
-        const meter = page.locator('.context-meter.is-empty');
-        await expect(meter).toBeVisible();
-        await expect(meter.locator('.context-meter-bar')).toHaveCount(0);
+    test(`a reopened chat's composer shows no context meter, not a dash (${locale})`, async ({ page }) => {
+        const served = await serveContext(page, locale, {
+            available: false, reason: "Measured again with your next message: GAIA restarted or switched models since this chat's last answer.",
+        });
+        await expect.poll(served).toBeGreaterThan(0);
+        await nextFrames(page);
+        await expect(page.locator('.context-meter:not(.spend-meter)')).toHaveCount(0);
         await shot(page, `context-meter-unmeasured-${locale}`);
         expect(await audit(page)).toEqual([]);
     });
+
+    test(`a chat under half full shows no context meter in the composer (${locale})`, async ({ page }) => {
+        const served = await serveContext(page, locale, { ...MEASURED_CONTEXT, history: 3250, used: 13750, history_used: 3250, at_risk: [], at_risk_tokens: 0 });
+        await expect.poll(served).toBeGreaterThan(0);
+        await nextFrames(page);
+        await expect(page.locator('.context-meter:not(.spend-meter)')).toHaveCount(0);
+        await shot(page, `context-meter-under-half-${locale}`);
+        expect(await audit(page)).toEqual([]);
+    });
+}
+
+/** Open the answered chat with its context endpoint answering `json`; returns how many times it was asked. */
+async function serveContext(page: Page, locale: string, json: object): Promise<() => number> {
+    let served = 0;
+    await open(page, `#${ANSWER_SESSION}`, locale, (p) =>
+        p.route(`**/api/chat/context/${ANSWER_SESSION}`, (route) => {
+            served += 1;
+            return route.fulfill({ json });
+        }));
+    return () => served;
 }
 
 test('composer chips stay whole at phone width', async ({ page }) => {

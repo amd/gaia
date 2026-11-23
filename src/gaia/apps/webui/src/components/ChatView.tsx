@@ -7,7 +7,6 @@ import { TurnAnnouncer } from './TurnAnnouncer';
 import { MessageBubble, cleanToolCallContent, isErrorContent, turnEnding } from './MessageBubble';
 import { toolRowText } from './AgentActivity';
 import { agentEventToStep } from '../utils/streamSteps';
-import { contextReason } from '../utils/contextReason';
 import { answerLatencies } from '../utils/answerLatency';
 import { applyStatusEvent, selectToolStatus } from '../utils/statusEvents';
 import { TOOL_CALL_JSON_SAFETY_RE, carryMessageKeys, fromApiMessages, isEchoOfFailedTool, keepFailedReply, onlyFailureAfter, persistedQuestion, policyReceiptAnchor, stripStreamingEnvelope } from '../utils/chatStream';
@@ -370,7 +369,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
 
     useEffect(() => { userStoppedRef.current = false; }, [sessionId]);
 
-    const { contextUsage, contextUnavailable, refreshContext, showContextUsage } = useContextUsage(sessionId, isStale);
+    const { contextUsage, refreshContext, showContextUsage } = useContextUsage(sessionId, isStale);
     const { comparison, comparing, comparingRef, handleRetryWith, handleKeepAnswer, handleCloseComparison, closeForNewTurn } =
         useAnswerComparison({ sessionId, isStreaming, isStale, setMessages, refreshContext });
 
@@ -1913,7 +1912,6 @@ export function ChatView({ sessionId }: ChatViewProps) {
                             <>
                                 <ContextMeter
                                     usage={contextUsage}
-                                    unavailable={contextUnavailable && contextReason(t, contextUnavailable)}
                                     sessionId={sessionId}
                                     busy={busy}
                                     onUsage={showContextUsage}
