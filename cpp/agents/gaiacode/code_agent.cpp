@@ -265,7 +265,7 @@ ToolInfo CodeAgent::observed(ToolInfo tool) {
             try {
                 recorder->discard(captured);
             } catch (const SnapshotError& e) {
-                result["undo_warning"] = e.what();
+                if (result.is_object()) result["undo_warning"] = e.what();
             }
         }
         if (recorder && measure) {
