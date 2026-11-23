@@ -12,6 +12,7 @@
 #pragma once
 
 #include <memory>
+#include <mutex>
 #include <string>
 #include <vector>
 
@@ -33,7 +34,27 @@ public:
     /// directory, which is where the tools open it.
     explicit Workspace(std::vector<std::string> roots);
 
-    const std::vector<std::string>& roots() const { return roots_; }
+    /// What a check found. `refusal` is "" when the call may run. `askPath` is the
+    /// outside location that adding as a root would let through; "" when none
+    /// would (a network share, a link, a path that can't be resolved).
+    struct Outside {
+        std::string refusal;
+        std::string askPath;
+    };
+
+    std::vector<std::string> roots() const;
+
+    /// Let the tools use one more folder or file from now on. Safe while tools run.
+    void addRoot(const std::string& path);
+
+    /// Replace the refusal's closing advice, for a host with no --allow-dir.
+    void setRemedy(std::string remedy);
+
+    /// checkPath(), with the location to ask the user about.
+    Outside judgePath(const std::string& path) const;
+
+    /// checkCommand(), with the location to ask the user about.
+    Outside judgeCommand(const std::string& command, bool posixShell = true) const;
 
     /// True when `path` (relative to the working directory) lies inside a root.
     bool contains(const std::string& path) const;
@@ -67,7 +88,9 @@ public:
 private:
     std::string refusal(const std::string& path) const;
 
+    mutable std::mutex mu_;  // guards roots_ and remedy_
     std::vector<std::string> roots_;
+    std::string remedy_;
 };
 
 } // namespace gaia

@@ -211,6 +211,9 @@ struct Session {
     std::shared_ptr<std::atomic<bool>> memoryPrivate = std::make_shared<std::atomic<bool>>(false);
     std::set<std::string> roots;      // allowed folders and attached files
     std::set<std::string> builtWith;  // roots the agent was built with
+    std::set<std::string> approved;   // outside paths the user let in at a card, or full access opened
+    std::set<std::string> declined;   // paths the user said no to in declinedRun
+    std::string declinedRun;
     std::set<std::string> indexed;    // attached documents already indexed
     std::string workingDirectory;
     std::shared_ptr<ShellSession> shell;  // this chat's folder and exported variables
@@ -240,6 +243,22 @@ std::string toolCategory(const ToolInfo& t) {
         {"take_screenshot", "screenshot"}, {"list_skills", "skills"}, {"load_skill", "skills"}};
     auto it = known.find(t.name);
     return it == known.end() ? "agent" : it->second;
+}
+
+// The Agent UI's own name for the folder card, as the Python agent raises it.
+constexpr const char* kPathAccessPrompt = "allow_path_access";
+
+std::string pathAccessQuestion(const json& args) {
+    const std::string path = args.value("path", "");
+    const std::string kind = args.value("kind", "");
+    if (kind == "folder") return "Allow GAIA to use the folder " + path + " and everything in it for this session?";
+    if (kind == "file") return "Allow GAIA to use the file " + path + " for this session?";
+    return "Allow GAIA to use " + path + " for this session?";
+}
+
+bool sameOrInside(const std::string& path, const std::string& folder) {
+    if (path.rfind(folder, 0) != 0) return false;
+    return path.size() == folder.size() || path[folder.size()] == '/' || path[folder.size()] == '\\';
 }
 
 std::string toolRisk(const std::string& tool) {
@@ -501,17 +520,19 @@ private:
         } else {
             o.workspaceRoots.assign(s.roots.begin(), s.roots.end());
         }
+        o.workspaceRoots.insert(o.workspaceRoots.end(), s.approved.begin(), s.approved.end());
         o.internetOff = s.internetOff;
         o.memoryOff = s.memoryOff;
         o.memoryPrivate = s.memoryPrivate;
         if (!s.shell) s.shell = BashTools::newSession();
         o.shell = s.shell;
+        Session* raw = &s;
         auto agent = std::make_unique<GaiaAgent>(cfg, o);
+        agent->setPathAccessPrompt([this, raw](const std::string& path) { return askForPath(*raw, path); });
         auto console = std::make_unique<SidecarConsole>();
         SidecarConsole* consolePtr = console.get();
         agent->setOutputHandler(std::move(console));
         agent->setAllowedToolsStore(s.grants);
-        Session* raw = &s;
         agent->setToolConfirmCallback(
             [this, raw](const std::string& tool, const json& args) { return confirm(*raw, tool, args); });
         // Stop holds even when it lands before the run resets its own flag.
@@ -524,6 +545,35 @@ private:
         s.console = consolePtr;
         s.builtWith = s.roots;
         s.indexed.clear();  // a new agent has a new document index
+    }
+
+    // The folder card: true when this chat may now use `path`. Runs on the turn's thread.
+    bool askForPath(Session& s, const std::string& path) {
+        // Full access opens outside paths without asking, as it does on the Python agent.
+        bool granted = s.bypass.load();
+        if (!granted) {
+            std::string runId;
+            {
+                std::lock_guard<std::mutex> lock(s.currentMu);
+                if (s.current) runId = s.current->id;
+            }
+            if (runId != s.declinedRun) {
+                s.declinedRun = runId;
+                s.declined.clear();
+            }
+            // One card per place per turn: a no is not asked again for what is inside it.
+            for (const auto& d : s.declined) {
+                if (sameOrInside(path, d)) return false;
+            }
+            json args = {{"path", path}};
+            std::error_code ec;
+            if (fs::is_directory(fs::u8path(path), ec)) args["kind"] = "folder";
+            else if (fs::is_regular_file(fs::u8path(path), ec)) args["kind"] = "file";
+            granted = confirm(s, kPathAccessPrompt, args) != ToolConfirmResult::DENY;
+            if (!granted) s.declined.insert(path);
+        }
+        if (granted) s.approved.insert(path);
+        return granted;
     }
 
     // Park the agent thread until the UI decides.
@@ -541,17 +591,21 @@ private:
             run->decisions[confirmId] = "";
         }
         const bool shell = tool == "bash_execute";
+        const bool pathAccess = tool == kPathAccessPrompt;
         // "Always" only where the grant is narrower than the tool: one file write must not approve every later one.
         const ToolInfo* info = s.agent ? s.agent->tools().findTool(tool) : nullptr;
         const std::string key = info && info->grantScope ? tool + ":" + info->grantScope(args) : "";
         json ev = {{"type", "needs_confirmation"},
                    {"run_id", run->id},
                    {"action", tool},
-                   {"summary", shell ? "Run: " + args.value("command", "") : "Use " + tool},
+                   {"summary", shell ? "Run: " + args.value("command", "")
+                                     : pathAccess ? pathAccessQuestion(args) : "Use " + tool},
                    {"confirm_id", confirmId},
-                   {"risk", toolRisk(tool)},
-                   {"tool_label", tool},
                    {"args", args}};
+        if (!pathAccess) {
+            ev["risk"] = toolRisk(tool);
+            ev["tool_label"] = tool;
+        }
         if (!key.empty()) {
             ev["always_scope"] = key;
             ev["always_label"] = grantLabel(key);
@@ -572,7 +626,10 @@ private:
         }
         if (!answered) {
             run->push({{"type", "status"},
-                       {"message", "No answer to the approval request in 10 minutes, so " + tool + " was not run."}});
+                       {"message", pathAccess ? "No answer to the folder request in 10 minutes, so " +
+                                                    args.value("path", "") + " stays closed."
+                                              : "No answer to the approval request in 10 minutes, so " + tool +
+                                                    " was not run."}});
         }
         if (s.turnLock) {
             // Stopped while other chats hold the sidecar: don't wait a whole turn to find out.
@@ -591,7 +648,10 @@ private:
         if (d == "allow") return ToolConfirmResult::ALLOW_ONCE;
         if (d == "always") {
             if (!key.empty()) return ToolConfirmResult::ALWAYS_ALLOW;
-            run->push({{"type", "status"}, {"message", "'Always' isn't offered for " + tool + ", so only this call was allowed."}});
+            if (!pathAccess) {
+                run->push({{"type", "status"},
+                           {"message", "'Always' isn't offered for " + tool + ", so only this call was allowed."}});
+            }
             return ToolConfirmResult::ALLOW_ONCE;
         }
         return ToolConfirmResult::DENY;

@@ -224,28 +224,58 @@ Workspace::Workspace(std::vector<std::string> roots) {
     for (const auto& r : roots) roots_.push_back(normalized(fs::u8path(expandHome(r))));
 }
 
+std::vector<std::string> Workspace::roots() const {
+    std::lock_guard<std::mutex> lock(mu_);
+    return roots_;
+}
+
+void Workspace::addRoot(const std::string& path) {
+    const std::string root = normalized(fs::u8path(expandHome(path)));
+    std::lock_guard<std::mutex> lock(mu_);
+    if (std::find(roots_.begin(), roots_.end(), root) == roots_.end()) roots_.push_back(root);
+}
+
+void Workspace::setRemedy(std::string remedy) {
+    std::lock_guard<std::mutex> lock(mu_);
+    remedy_ = std::move(remedy);
+}
+
 bool Workspace::contains(const std::string& path) const {
     const std::string expanded = expandHome(path);
-    if (outsideNetworkPath(expanded, roots_)) return false;
+    const std::vector<std::string> roots = this->roots();
+    if (outsideNetworkPath(expanded, roots)) return false;
     // Against the working directory, which is where a tool opens a relative path.
     const std::string target = resolveWriteTarget(expanded);
     if (target.empty()) return false;  // can't tell where it lands
     const std::string abs = spelled(fs::u8path(target));
-    return std::any_of(roots_.begin(), roots_.end(),
+    return std::any_of(roots.begin(), roots.end(),
                        [&](const std::string& r) { return under(abs, r); });
 }
 
 std::string Workspace::refusal(const std::string& path) const {
-    std::string list;
-    for (const auto& r : roots_) list += (list.empty() ? "" : ", ") + r;
+    std::string list, remedy;
+    {
+        std::lock_guard<std::mutex> lock(mu_);
+        for (const auto& r : roots_) list += (list.empty() ? "" : ", ") + r;
+        remedy = remedy_;
+    }
+    if (remedy.empty()) {
+        remedy = "If the user needs another folder, say so: they can start the agent with --allow-dir <folder>.";
+    }
     return "Refused: " + path + " is outside the folders this agent may use (" + list +
-           "). Work inside them. If the user needs another folder, say so: they can start "
-           "the agent with --allow-dir <folder>.";
+           "). Work inside them. " + remedy;
 }
 
-std::string Workspace::checkPath(const std::string& path) const {
-    if (path.empty() || contains(path)) return "";
-    return refusal(path);
+std::string Workspace::checkPath(const std::string& path) const { return judgePath(path).refusal; }
+
+Workspace::Outside Workspace::judgePath(const std::string& path) const {
+    if (path.empty() || contains(path)) return {};
+    Outside out{refusal(path), ""};
+    const std::string expanded = expandHome(path);
+    if (outsideNetworkPath(expanded, roots())) return out;
+    const std::string target = resolveWriteTarget(expanded);
+    out.askPath = target;  // as the system spells it: the user reads this on the card
+    return out;
 }
 
 namespace {
@@ -267,9 +297,15 @@ bool Workspace::isGitBashDevicePath(const std::string& path) {
 }
 
 std::string Workspace::checkCommand(const std::string& command, bool posixShell) const {
+    return judgeCommand(command, posixShell).refusal;
+}
+
+Workspace::Outside Workspace::judgeCommand(const std::string& command, bool posixShell) const {
+    const auto refused = [](std::string why) { return Outside{std::move(why), ""}; };
+    const std::vector<std::string> roots = this->roots();
     if (command.size() > kMaxCommandBytes) {
-        return "Refused: the command is " + std::to_string(command.size()) + " bytes long and the limit is " +
-               std::to_string(kMaxCommandBytes) + ". Write long input to a file and have the command read it.";
+        return refused("Refused: the command is " + std::to_string(command.size()) + " bytes long and the limit is " +
+                       std::to_string(kMaxCommandBytes) + ". Write long input to a file and have the command read it.");
     }
     // Absolute POSIX paths, ~/ paths and Windows drive paths, as standalone words. Found by hand:
     // std::regex recurses once per character, and a 60,000-character word overflows the stack.
@@ -309,7 +345,7 @@ std::string Workspace::checkCommand(const std::string& command, bool posixShell)
             // After a colon it is the tail of a URL (https://…); otherwise a network share.
             const size_t at = tokenAt;
             if (at > 0 && command[at - 1] == ':') continue;
-            return refusal(token);
+            return refused(refusal(token));
         }
         if (token == "/") {
             // The root only as a standalone word (find / …), not a regex
@@ -327,7 +363,7 @@ std::string Workspace::checkCommand(const std::string& command, bool posixShell)
         }
 #ifdef _WIN32
         // Not files: no folder check can place them, and they reach the clipboard and the registry.
-        if (posixShell && isGitBashDevicePath(token)) return refusal(token);
+        if (posixShell && isGitBashDevicePath(token)) return refused(refusal(token));
 #endif
         const std::string expanded = expandHome(fromShellPath(token));
         if (contains(expanded)) continue;
@@ -340,18 +376,20 @@ std::string Workspace::checkCommand(const std::string& command, bool posixShell)
                                 fsCommands.count(programBefore(tokenAt));
         if (inSystemDir(abs) || (!globbedTop && looksLikePattern(abs))) continue;
         if (looksLikeCmdSwitch(token)) {
-            return refusal(token) + " Commands here run in bash, where " + token +
-                   " is a path, not a switch: use bash commands such as ls -R or find "
-                   "instead of cmd.exe switches.";
+            return refused(refusal(token) + " Commands here run in bash, where " + token +
+                           " is a path, not a switch: use bash commands such as ls -R or find "
+                           "instead of cmd.exe switches.");
         }
-        return refusal(token);
+        // A wildcard names no one place to ask about.
+        const bool onePlace = expanded.find_first_of("*?[{") == std::string::npos;
+        return Outside{refusal(token), onePlace ? resolveWriteTarget(expanded) : ""};
     }
     // \\host\share, which the path pattern above does not see.
     for (size_t at = command.find("\\\\"); at != std::string::npos; at = command.find("\\\\", at + 1)) {
         static const std::string kBefore = " \t\n\v\f\r'\"=(,`", kEnds = " \t\n\v\f\r\\'\"";
         if (at > 0 && kBefore.find(command[at - 1]) == std::string::npos) continue;
         const size_t end = (std::min)(command.find_first_of(kEnds, at + 2), command.size());
-        if (end > at + 2) return refusal(command.substr(at, end - at));
+        if (end > at + 2) return refused(refusal(command.substr(at, end - at)));
     }
     // A relative name that exists here but resolves elsewhere is a link out of the folder.
     static const std::string kBreaks = " \t\r\n'\"`;|&()<>=,";
@@ -375,17 +413,18 @@ std::string Workspace::checkCommand(const std::string& command, bool posixShell)
         // Only a name that stays inside as written: `..` is not this check's business.
         std::string written = (fs::u8path(hereResolved) / rel).lexically_normal().generic_u8string();
         while (written.size() > 1 && written.back() == '/') written.pop_back();
-        if (!std::any_of(roots_.begin(), roots_.end(), [&](const std::string& r) { return under(written, r); })) {
+        if (!std::any_of(roots.begin(), roots.end(), [&](const std::string& r) { return under(written, r); })) {
             continue;
         }
         const std::string abs = normalized(here / rel);
-        if (std::any_of(roots_.begin(), roots_.end(), [&](const std::string& r) { return under(abs, r); }) ||
+        if (std::any_of(roots.begin(), roots.end(), [&](const std::string& r) { return under(abs, r); }) ||
             inSystemDir(abs)) {
             continue;
         }
-        return refusal(word) + (abs.empty() ? " It is a link GAIA cannot follow." : " It is a link that leads to " + abs + ".");
+        return refused(refusal(word) +
+                       (abs.empty() ? " It is a link GAIA cannot follow." : " It is a link that leads to " + abs + "."));
     }
-    return "";
+    return {};
 }
 
 namespace {
@@ -452,12 +491,13 @@ bool followsLinks(const std::vector<std::string>& words) {
 
 bool Workspace::readsStayInside(const std::vector<std::vector<std::string>>& segments,
                                 const std::string& cwd) const {
-    const Inside inside = [this](const std::string& abs) {
-        return std::any_of(roots_.begin(), roots_.end(), [&](const std::string& r) { return under(abs, r); });
+    const std::vector<std::string> roots = this->roots();
+    const Inside inside = [&roots](const std::string& abs) {
+        return std::any_of(roots.begin(), roots.end(), [&](const std::string& r) { return under(abs, r); });
     };
     // `cd` in a pipeline changes nothing and `cd` after ; or && does, so a
     // later word is checked against every folder the command could be in.
-    std::vector<std::string> folders = {normalized(fs::u8path(cwd.empty() ? roots_.front() : fromShellPath(cwd)))};
+    std::vector<std::string> folders = {normalized(fs::u8path(cwd.empty() ? roots.front() : fromShellPath(cwd)))};
     if (!inside(folders.front())) return false;
     for (const auto& words : segments) {
         if (words.empty()) return false;
@@ -494,7 +534,7 @@ bool Workspace::readsStayInside(const std::vector<std::vector<std::string>>& seg
                 if (w.empty()) continue;
             }
             if (w[0] == '~' && w != "~" && w.rfind("~/", 0) != 0) return false;  // ~other-user
-            if (outsideNetworkPath(w, roots_)) return false;
+            if (outsideNetworkPath(w, roots)) return false;
             // A component such as .* can match the parent folder.
             for (size_t at = 0; at < w.size(); ++at) {
                 if (w[at] != '.' || (at > 0 && w[at - 1] != '/' && w[at - 1] != '\\')) continue;

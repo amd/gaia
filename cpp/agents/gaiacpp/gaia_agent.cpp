@@ -71,14 +71,14 @@ GaiaAgent::GaiaAgent(const AgentConfig& config, Options options)
 GaiaAgent::~GaiaAgent() = default;
 
 void GaiaAgent::registerTools() {
-    std::shared_ptr<const Workspace> ws;
+    std::shared_ptr<Workspace> ws;
     if (options_.fullAccess) {
         FileIOTools::registerAll(toolRegistry());
         GitTools::registerAll(toolRegistry());
         toolRegistry().registerTool(BashTools::bashExecute(options_.shell));
         toolRegistry().registerTool(BashTools::envInspect());
     } else {
-        ws = std::make_shared<const Workspace>(options_.workspaceRoots);
+        ws = std::make_shared<Workspace>(options_.workspaceRoots);
         auto& reg = toolRegistry();
         reg.registerTool(Workspace::confine(FileIOTools::fileRead(), ws, {"path"}));
         reg.registerTool(Workspace::confine(FileIOTools::fileWrite(), ws, {"path"}));
@@ -148,12 +148,29 @@ void GaiaAgent::registerTools() {
     toolRegistry().setPreCheck([this, ws](const ToolInfo& tool, const json& args) -> std::optional<json> {
         if (auto refusal = switchRefusal(tool, args)) return refusal;
         if (!ws) return std::nullopt;
+        // Asks the user about each outside place the call names; "" once it may run.
+        const auto openOutside = [this, &ws](const std::function<Workspace::Outside()>& judge) -> std::string {
+            std::string asked;
+            for (;;) {
+                const Workspace::Outside out = judge();
+                if (out.refusal.empty()) return "";
+                if (!askPathAccess_ || out.askPath.empty() || out.askPath == asked) return out.refusal;
+                asked = out.askPath;
+                if (!askPathAccess_(asked)) {
+                    return "Refused: the user did not allow GAIA to use " + asked +
+                           ". Don't ask again or reach it another way this turn. Tell the user what you "
+                           "could not do without it.";
+                }
+                ws->addRoot(asked);
+            }
+        };
         // Refused here, the user is never asked to approve a location the tool would turn down.
         std::string why;
         if (tool.name == "bash_execute") {
             if (args.contains("command") && args["command"].is_string()) {
-                why = ws->checkCommand(args["command"].get<std::string>(),
-                                       !BashTools::detectShell().empty());
+                why = openOutside([&] {
+                    return ws->judgeCommand(args["command"].get<std::string>(), !BashTools::detectShell().empty());
+                });
                 if (why.empty()) {
                     std::vector<std::string> names;
                     {
@@ -192,7 +209,7 @@ void GaiaAgent::registerTools() {
                 }
             }
         } else if (args.contains("path") && args["path"].is_string()) {
-            why = ws->checkPath(args["path"].get<std::string>());
+            why = openOutside([&] { return ws->judgePath(args["path"].get<std::string>()); });
             if (why.empty() && tool.name == "file_write") {
                 const std::string beside = besidePath(turnRequest(), args["path"].get<std::string>());
                 if (!beside.empty()) {
@@ -240,6 +257,13 @@ void GaiaAgent::registerTools() {
                          [ws](const std::string& p) { return ws->checkPath(p); })
                    : std::function<std::string(const std::string&)>()));
         }
+    }
+}
+
+void GaiaAgent::setPathAccessPrompt(std::function<bool(const std::string& path)> ask) {
+    askPathAccess_ = std::move(ask);
+    if (workspace_ && askPathAccess_) {
+        workspace_->setRemedy("That location can't be opened from this chat: if the user needs it, tell them so.");
     }
 }
 
