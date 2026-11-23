@@ -55,7 +55,7 @@ export function QueuedMessages({ items, onRemove, onSteer, onRetry, replying = t
                         : item.state === 'queued'
                             ? <Clock size={12} aria-hidden="true" />
                             : <CornerDownRight size={12} aria-hidden="true" />}
-                    <span className="queued-message-text" title={item.text}>{item.text}</span>
+                    <span className="queued-message-text" dir="auto" title={item.text}>{item.text}</span>
                     <span className="queued-message-state" title={item.state === 'failed' ? notSentText(item.error, t) : undefined}>
                         {item.state === 'failed'
                             ? notSentText(item.error, t)
