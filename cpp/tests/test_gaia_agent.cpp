@@ -363,6 +363,46 @@ TEST(GaiaAgentTest, ATestsPassClaimNeedsATestRunThatPassedAfterTheLastChange) {
     EXPECT_FALSE(GaiaAgent::unsupportedTestClaim(
         "All 10 tests pass.", {shellRun("npm test", 0, "Tests:       10 passed, 10 total\n")}));
 
+    // C and C++ projects: a built test program, make tests, ctest, GoogleTest, Catch2.
+    const std::string unityOk = "tests/misc_tests.c:757:cjson_array_foreach_should_loop_over_arrays:PASS\n"
+                                "\n-----------------------\n27 Tests 0 Failures 0 Ignored \nOK\n";
+    EXPECT_FALSE(GaiaAgent::unsupportedTestClaim(
+        "All 27 tests in `misc_tests` pass.",
+        {edit("cJSON.c"), shellRun("cd /repo && gcc -I. tests/misc_tests.c cJSON.c -o tests/misc_tests && "
+                                   "./tests/misc_tests 2>&1",
+                                   0, unityOk)}));
+    EXPECT_FALSE(GaiaAgent::unsupportedTestClaim(
+        "All tests pass.", {edit("cJSON.c"), shellRun("cd /repo && make clean && make tests 2>&1", 0, "gcc ...\n")}));
+    EXPECT_FALSE(GaiaAgent::unsupportedTestClaim(
+        "All tests pass.",
+        {shellRun("cmake --build build && ./build/tests_mock", 0,
+                  "[==========] 12 tests from 3 test suites ran. (4 ms total)\n[  PASSED  ] 12 tests.\n")}));
+    EXPECT_FALSE(GaiaAgent::unsupportedTestClaim(
+        "All tests pass.", {shellRun("ctest --test-dir build", 0,
+                                     "100% tests passed, 0 tests failed out of 9\n\nTotal Test time (real) = 0.31 sec\n")}));
+    EXPECT_FALSE(GaiaAgent::unsupportedTestClaim(
+        "All tests pass.", {shellRun("./run_checks", 0, "All tests passed (41 assertions in 7 test cases)\n")}));
+    EXPECT_FALSE(GaiaAgent::unsupportedTestClaim("The tests pass.", {shellRun("./build/unit_tests", 0, "ok 1\nok 2\n")}))
+        << "an unknown runner's output: not known to be no tests";
+    EXPECT_EQ(why(GaiaAgent::unsupportedTestClaim(
+                  "All tests pass.", {shellRun("./tests/misc_tests", 1, "27 Tests 2 Failures 0 Ignored \nFAIL\n")})),
+              failed);
+    EXPECT_EQ(why(GaiaAgent::unsupportedTestClaim(
+                  "All tests pass.",
+                  {shellRun("./build/tests_mock", 1, "[  PASSED  ] 11 tests.\n[  FAILED  ] 1 test, listed below:\n")})),
+              failed);
+    EXPECT_EQ(why(GaiaAgent::unsupportedTestClaim(
+                  "All tests pass.", {shellRun("ctest", 8, "89% tests passed, 1 tests failed out of 9\n")})),
+              failed);
+    EXPECT_EQ(why(GaiaAgent::unsupportedTestClaim("The tests pass.", {shellRun("./build/unit_tests", 0, "")})), none)
+        << "a test program that printed nothing";
+    EXPECT_EQ(why(GaiaAgent::unsupportedTestClaim("The tests pass.", {shellRun("./test_stats.py", 0, "")})), none);
+    EXPECT_EQ(why(GaiaAgent::unsupportedTestClaim(
+                  "The tests pass.", {shellRun("gcc -c tests/misc_tests.c -o tests/misc_tests.o", 0, "")})),
+              none)
+        << "compiling a test is not running it";
+    EXPECT_EQ(why(GaiaAgent::unsupportedTestClaim("The tests pass.", {shellRun("cat tests/unit_test", 0, "x\n")})), none);
+
     // A failed run, a run of no tests, and a pass that came before the last edit.
     EXPECT_EQ(why(GaiaAgent::unsupportedTestClaim(
                   "All tests pass now.", {shellRun("python -m pytest -q", 1, "F...\n1 failed, 3 passed in 0.64s\n")})),

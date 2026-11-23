@@ -1372,6 +1372,12 @@ RunnerSummary readRunnerSummary(const std::string& text, const std::string& comm
         R"((ok|FAIL)[ \t]+\S+(?:[ \t]+(?:\(cached\)|\d+(?:\.\d+)?s)(?:[ \t]+\[[^\]\n]*\])?|[ \t]+\[[^\]\n]*\])(?:[ \t]+coverage:.*)?[ \t]*)");
     static const std::regex cargo(
         R"(test result: (?:ok|FAILED)\. (\d+) passed; (\d+) failed; \d+ ignored; \d+ measured; \d+ filtered out(?:; finished in \d+(?:\.\d+)?s)?[ \t]*)");
+    // C and C++ runners: Unity, GoogleTest, CTest, Catch2.
+    static const std::regex unity(R"((\d+) Tests (\d+) Failures \d+ Ignored[ \t]*)");
+    static const std::regex gtest(R"(\[  (PASSED|FAILED)  \] (\d+) tests?(?:\.|, listed below:)[ \t]*)");
+    static const std::regex ctest(R"(\d+% tests passed, (\d+) tests failed out of (\d+)[ \t]*)");
+    static const std::regex catch2(
+        R"(All tests passed \(.*\)[ \t]*|test cases:[ \t]*(\d+)(?:[ \t]*\|[ \t]*\d+ \w+)*[ \t]*)");
     static const std::regex counted(R"(\b[1-9]\d* (?:passed|failed|passing|failing)\b)");
     static const std::regex failure(R"(\b[1-9]\d* (?:subtests? )?(?:failed|error|errors|failing)\b|\bFAILED \()");
 
@@ -1416,6 +1422,14 @@ RunnerSummary readRunnerSummary(const std::string& text, const std::string& comm
             note(line.find("[no tests to run]") == std::string::npos, m[1].str() == "FAIL");
         } else if (std::regex_match(line, m, cargo)) {
             note(m[1].str() != "0" || m[2].str() != "0", m[2].str() != "0");
+        } else if (std::regex_match(line, m, unity)) {
+            note(m[1].str() != "0", m[2].str() != "0");
+        } else if (std::regex_match(line, m, gtest)) {
+            note(m[2].str() != "0", m[1].str() == "FAILED" && m[2].str() != "0");
+        } else if (std::regex_match(line, m, ctest)) {
+            note(m[2].str() != "0", m[1].str() != "0");
+        } else if (std::regex_match(line, m, catch2)) {
+            note(!m[1].matched || m[1].str() != "0", line.find(" failed") != std::string::npos);
         }
     }
     // A runner that found nothing to run says so in its own words.
@@ -1426,6 +1440,10 @@ RunnerSummary readRunnerSummary(const std::string& text, const std::string& comm
     return s;
 }
 
+// ./misc_tests, build/tests_mock, tests/unit_test.exe: a program, not a script, with "test" in its name.
+constexpr const char* kTestBinary =
+    R"((?:^|[;&|(])\s*(?:\./|(?:[\w.-]+/)+)[\w-]*tests?[\w-]*(?:\.exe|\.out)?(?=[\s;&|)]|$))";
+
 // A command that starts a test runner: pytest, python -m unittest, npm test, go test, ctest...
 const std::regex& testRunnerWords() {
     static const std::regex runner(
@@ -1433,10 +1451,17 @@ const std::regex& testRunnerWords() {
         R"(|(?:^|[\s;&|(`/\\])(?:python[0-9.]*|py)(?:\.exe)?\s+(?:-\S+\s+)*-m\s*(?:pytest|unittest)\b)"
         R"(|\b(?:npm|yarn|pnpm|bun)(?:\.cmd)?\s+(?:run\s+)?test\b|\bnpx\s+(?:jest|vitest|mocha)\b)"
         R"(|\b(?:go|cargo|dotnet|deno|swift)\s+test\b|\b(?:mvn|mvnw)\s+(?:\S+\s+)*(?:test|verify)\b)"
-        R"(|\bgradlew?(?:\.bat)?\s+(?:\S+\s+)*(?:test|check)\b|\bmake\s+(?:test|check)\b)"
-        R"(|\b(?:uv|poetry|pipenv|hatch|pdm)\s+run\s+(?:\S+\s+)*?(?:pytest|python\s+-m\s+(?:pytest|unittest))\b)",
+        R"(|\bgradlew?(?:\.bat)?\s+(?:\S+\s+)*(?:test|check)\b|\b(?:make|gmake|ninja)\s+(?:\S+\s+)*(?:tests?|check)\b)"
+        R"(|\b(?:uv|poetry|pipenv|hatch|pdm)\s+run\s+(?:\S+\s+)*?(?:pytest|python\s+-m\s+(?:pytest|unittest))\b)"
+        R"(|)" + std::string(kTestBinary),
         std::regex::icase);
     return runner;
+}
+
+// A built test program run by path. Without output it proves nothing: it may have run no test.
+bool runsTestBinary(const std::string& command) {
+    static const std::regex binary(kTestBinary, std::regex::icase);
+    return std::regex_search(command, binary);
 }
 
 bool namesTestRunner(const std::string& command) {
@@ -1807,6 +1832,9 @@ std::optional<std::pair<std::string, std::string>> GaiaAgent::unsupportedTestCla
                 changed = true;
                 changedPath.clear();
             }
+            continue;
+        }
+        if (!summary.found && runsTestBinary(command) && run.text.find_first_not_of(" \t\r\n") == std::string::npos) {
             continue;
         }
         const RunVerdict verdict = testRunVerdict(command, run, c.succeeded, summary);
