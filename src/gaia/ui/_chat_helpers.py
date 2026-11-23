@@ -3897,6 +3897,21 @@ def _turn_failure_kind(answer_event: Optional[dict], result: Any) -> Optional[st
     return None
 
 
+def _failed_turn_program(agent_type: str) -> Optional[str]:
+    """``gaiacpp`` when a failed turn ran on the native agent, else None.
+
+    The UI then says which agent the chat runs on and how to switch; it never
+    switches by itself.
+    """
+    from gaia.daemon.sidecars import fetch
+
+    if agent_type != FLAGSHIP_AGENT_ID:
+        return None
+    if fetch.saved_flagship() != fetch.NATIVE_FLAGSHIP:
+        return None
+    return fetch.NATIVE_FLAGSHIP
+
+
 def _done_event(
     msg_id: int,
     content: str,
@@ -3907,6 +3922,7 @@ def _done_event(
     failure: Optional[str] = None,
     documents_added: Optional[list] = None,
     library_notices: Optional[list[str]] = None,
+    agent_program: Optional[str] = None,
 ) -> dict:
     """Build the closing ``done`` SSE payload for a persisted turn.
 
@@ -3914,7 +3930,8 @@ def _done_event(
     the UI labels the turn from what happened rather than from the click — a
     Stop that lands after the agent already answered stays an ordinary turn.
     ``failed`` marks a turn a model failure ended; its content explains why,
-    and ``failure`` names a cause the UI offers a fix for.
+    and ``failure`` names a cause the UI offers a fix for. ``agent_program``
+    is ``gaiacpp`` when a failed turn ran on it.
     ``documents_added`` are the library documents the turn attached to the chat.
     """
     event: dict = {"type": "done", "message_id": msg_id, "content": content}
@@ -3924,6 +3941,8 @@ def _done_event(
         event["failed"] = True
         if failure:
             event["failure"] = failure
+        if agent_program:
+            event["agent_program"] = agent_program
     if stats:
         event["stats"] = stats
     if turn_summary:
@@ -6019,6 +6038,9 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                 ),
                 documents_added=documents_added,
                 library_notices=library_notices,
+                agent_program=(
+                    _failed_turn_program(agent_type) if turn_failed else None
+                ),
             )
             done_data = json.dumps(done_event)
             yield f"data: {done_data}\n\n"
@@ -6101,6 +6123,7 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                     failed=failed,
                     documents_added=documents_added,
                     library_notices=library_notices,
+                    agent_program=_failed_turn_program(agent_type) if failed else None,
                 )
                 link_warning = (
                     turn_box["recording"].link_message(msg_id)

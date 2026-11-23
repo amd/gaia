@@ -12,7 +12,7 @@
 
 import { expect, test, type Page } from '@playwright/test';
 
-import { ANSWER_SESSION, AUTOMATIONS, DISCORD_STATES, MESSAGES, MODEL_LIST, NOW, RESOURCES, SESSIONS, SYSTEM_STATUS, TOOL_STATUS, holdOnToolStatus, mockApi, shownText, useLocale, useTheme, withAutomations, withConnectors, withCrashedBackend, withDesktopBridges, withDiscord, withMemory, withModelPage, withSettingsPanes, withoutFlagship, withAgentPrograms, AGENT_DOWNLOADING, AGENT_DOWNLOAD_FAILED, type AgentProgramsAnswers, type MemoryState } from './fixtures';
+import { ANSWER_SESSION, AUTOMATIONS, DISCORD_STATES, MESSAGES, MODEL_LIST, NOW, RESOURCES, SESSIONS, SETTINGS, SYSTEM_STATUS, TOOL_STATUS, holdOnToolStatus, mockApi, shownText, useLocale, useTheme, withAutomations, withConnectors, withCrashedBackend, withDesktopBridges, withDiscord, withMemory, withModelPage, withSettingsPanes, withoutFlagship, withAgentPrograms, AGENT_DOWNLOADING, AGENT_DOWNLOAD_FAILED, type AgentProgramsAnswers, type MemoryState } from './fixtures';
 import { ENGINE_FAILED, NARROW_SCENES, PLAN_COLD, SETUP_SCENES, expectSnugTags, scene, withSetup } from './setup-scenes';
 import { translateBare } from '../src/i18n/registry';
 
@@ -3090,6 +3090,17 @@ for (const locale of ['ar', 'en']) {
                     if (expanded) await more.click();
                     await expect(more).toHaveAttribute('aria-expanded', String(expanded));
                     await expect(agent.locator('.agent-choice-detail')).toBeVisible({ visible: expanded });
+                    if (expanded) {
+                        // What changes on gaiacpp is a list of its own, each line inside the card.
+                        const diffs = agent.locator('.agent-choice-diffs li');
+                        await expect(diffs).toHaveCount(5);
+                        const card = (await agent.boundingBox())!;
+                        for (const line of await diffs.all()) {
+                            const box = (await line.boundingBox())!;
+                            expect(box.x).toBeGreaterThanOrEqual(card.x - 1);
+                            expect(box.x + box.width).toBeLessThanOrEqual(card.x + card.width + 1);
+                        }
+                    }
                     for (const row of await agent.locator('[role="radio"]').all()) {
                         expect((await row.boundingBox())!.height).toBeLessThan(48);
                     }
@@ -3131,6 +3142,41 @@ for (const locale of ['ar', 'en']) {
             // The bar replaces the button; a dimmed button once slid out of its row here.
             await expect(button).toHaveCount(0);
             await shot(page, `model-${locale}-agent-downloading`);
+            expect(await audit(page)).toEqual([]);
+        });
+
+        test('a gaiacpp from another GAIA release is marked out of date, with Update on its row', async ({ page }) => {
+            await openModelPage(page, locale, { agent: { gaiacpp: 'outdated', poll: AGENT_DOWNLOADING } });
+            const agent = page.locator('.agent-choice');
+            const row = agent.locator('[role="radio"]').nth(1);
+            // Still pickable: an older copy is flagged, not blocked.
+            await expect(row).not.toHaveAttribute('aria-disabled', 'true');
+            await expect(row.locator('.agent-choice-off')).toHaveCount(1);
+            const note = agent.locator('.agent-choice-why');
+            await expect(note).toBeVisible();
+            await expect(note).toContainText('0.27.0-rc.8');
+            await expect(note).toContainText('0.27.0-rc.10');
+            const button = agent.locator('.agent-choice-download');
+            await expect(button).toBeVisible();
+            // The button stays inside its row, clear of the row's text and tags.
+            const [rowBox, btn] = await Promise.all([row.boundingBox(), button.boundingBox()]);
+            expect(btn!.x).toBeGreaterThanOrEqual(rowBox!.x);
+            expect(btn!.x + btn!.width).toBeLessThanOrEqual(rowBox!.x + rowBox!.width);
+            for (const part of await row.locator('.agent-choice-what, .setup-choice-tag').all()) {
+                const box = (await part.boundingBox())!;
+                expect(btn!.x >= box.x + box.width || btn!.x + btn!.width <= box.x, 'Update overlaps the row').toBe(true);
+            }
+            expect(rowBox!.height).toBeLessThan(48);
+            await expectSnugTags(agent);
+            await shot(page, `model-${locale}-agent-outdated`);
+            expect(await audit(page)).toEqual([]);
+
+            await button.click();
+            await expect(agent.getByRole('progressbar', { name: /gaiacpp/ })).toHaveAttribute('aria-valuenow', '40');
+            await expect(button).toHaveCount(0);
+            // Updating never switches the agent in use.
+            await expect(agent.locator('[role="radio"]').first()).toHaveAttribute('aria-checked', 'true');
+            await shot(page, `model-${locale}-agent-updating`);
             expect(await audit(page)).toEqual([]);
         });
 
@@ -4617,6 +4663,88 @@ for (const locale of ['ar', 'en']) {
     });
 }
 
+const NATIVE_FAILED_REPLY = 'The model call failed at step 1, so this request is unfinished. '
+    + 'The model server at http://127.0.0.1:13305/api/v1 did not answer.\n\nNothing had run yet.';
+
+/** The turn fails on gaiacpp; `python` says whether the Python agent is on this PC. */
+const withNativeAgentFailure = (python: boolean) => async (page: Page): Promise<void> => {
+    let sent = false;
+    await page.route('**/api/chat/send', (route) => {
+        sent = true;
+        const done = { type: 'done', message_id: 42, content: NATIVE_FAILED_REPLY, failed: true, agent_program: 'gaiacpp' };
+        return route.fulfill({ status: 200, contentType: 'text/event-stream', body: `data: ${JSON.stringify(done)}\n\n` });
+    });
+    await page.route(new RegExp(`/api/sessions/${ANSWER_SESSION}/messages(\\?|$)`), (route) => (sent
+        ? route.fulfill({
+            json: {
+                messages: [
+                    { id: 41, session_id: ANSWER_SESSION, role: 'user', content: 'Summarize the minutes', created_at: NOW.toISOString(), rag_sources: null },
+                    { id: 42, session_id: ANSWER_SESSION, role: 'assistant', content: NATIVE_FAILED_REPLY, created_at: NOW.toISOString(), rag_sources: null },
+                ],
+                total: 2,
+            },
+        })
+        : route.fallback()));
+    await page.route((url) => url.pathname === '/api/agent-programs', (route) => route.fulfill({
+        json: {
+            current: 'gaiacpp',
+            programs: [
+                { id: 'gaiapy', installed: python, size_bytes: 412_000_000, can_download: false, unavailable_reason: null },
+                { id: 'gaiacpp', installed: true, size_bytes: 6_800_000, can_download: false, unavailable_reason: null },
+            ],
+            download: { state: 'idle', bytes_done: 0, bytes_total: null, error: null },
+        },
+    }));
+};
+
+for (const locale of ['ar', 'en']) {
+    for (const python of [true, false]) {
+        test(`a turn that failed on gaiacpp says so and offers the Python agent, switching only when asked (${python ? 'switch' : 'no Python agent'}, ${locale})`, async ({ page }) => {
+            const saves: unknown[] = [];
+            await open(page, `#${ANSWER_SESSION}`, locale, async (p) => {
+                await withNativeAgentFailure(python)(p);
+                await p.route('**/api/settings', async (route) => {
+                    if (route.request().method() !== 'PUT') return route.fallback();
+                    saves.push(route.request().postDataJSON());
+                    return route.fulfill({ json: { ...SETTINGS, flagship_agent: 'gaiapy' } });
+                });
+            });
+            const box = page.getByRole('textbox').first();
+            await box.fill('Summarize the minutes');
+            await box.press('Enter');
+            const notice = page.locator('.native-agent-notice');
+            await expect(notice).toHaveCount(1);
+            await expect(notice).toContainText('gaiacpp');
+            await expect(notice.getByRole('button')).toHaveCount(2);
+            await notice.scrollIntoViewIfNeeded();
+            // Nothing is switched until the button is pressed.
+            expect(saves).toEqual([]);
+            await shot(page, `native-agent-failed-${locale}`);
+            expect(await audit(page)).toEqual([]);
+
+            await notice.getByRole('button').first().click();
+            if (python) {
+                await expect(notice).toHaveAttribute('role', 'status');
+                expect(saves).toEqual([{ flagship_agent: 'gaiapy' }]);
+            } else {
+                await expect(notice.getByRole('alert')).toBeVisible();
+                expect(saves).toEqual([]);
+            }
+            await shot(page, `native-agent-failed-${python ? 'switched' : 'no-python'}-${locale}`);
+            expect(await audit(page)).toEqual([]);
+        });
+    }
+
+    test(`a turn that failed on the Python agent gets no gaiacpp notice (${locale})`, async ({ page }) => {
+        await open(page, `#${ANSWER_SESSION}`, locale, withServerDown);
+        const box = page.getByRole('textbox').first();
+        await box.fill('Summarize the minutes');
+        await box.press('Enter');
+        await expect(page.locator('.server-down-notice')).toHaveCount(1);
+        await expect(page.locator('.native-agent-notice')).toHaveCount(0);
+    });
+}
+
 /** GAIA answered once that this chat was running, then stopped listening. */
 async function withGaiaStoppedMidAnswer(page: Page): Promise<void> {
     let polls = 0;
@@ -5037,6 +5165,28 @@ for (const locale of ['ar', 'en']) {
             }).map((b) => b.textContent);
         });
         expect(clipped).toEqual([]);
+    });
+}
+
+for (const locale of ['ar', 'en']) {
+    test(`a chat that failed on gaiacpp names the agent and offers the Python one, not another model (${locale})`, async ({ page }) => {
+        const s = scene('test-failed-agent-gaiacpp');
+        await open(page, '', locale, (p) => withSetup(p, s.answers));
+        await s.reach(page);
+        const failed = page.locator('.setup-result.is-failed');
+        await expect(failed).toContainText('gaiacpp');
+        // The agent's own words are in view, read left to right, inside the row.
+        const said = failed.locator('.setup-result-error-said bdi');
+        await expect(said).toBeVisible();
+        expect(await said.evaluate((el) => getComputedStyle(el).direction)).toBe('ltr');
+        const [rowBox, saidBox] = [await failed.boundingBox(), await said.boundingBox()];
+        expect(saidBox!.x).toBeGreaterThanOrEqual(rowBox!.x - 1);
+        expect(saidBox!.x + saidBox!.width).toBeLessThanOrEqual(rowBox!.x + rowBox!.width + 1);
+        // Two ways on, the Python agent the main one; the model picker is not one of them.
+        await expect(page.locator('.setup-footer-row button')).toHaveCount(2);
+        await expect(page.locator('.setup-footer-row .btn-primary')).toHaveCount(1);
+        await expect(page.locator('.setup-footer-row .btn-primary')).toContainText('Python');
+        if (locale === 'ar') expect(await leftoverEnglish(page)).toEqual([]);
     });
 }
 
