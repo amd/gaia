@@ -209,6 +209,23 @@ const RUN_AGENT_FAILED = {
 };
 const RUN_READY = { ...RUN, state: 'ready', text: 'GAIA is ready', models: DONE_ROWS.map((m) => ({ ...m, state: 'ready' })) };
 
+// Setup is ready; speech-to-text, added on the Download step, is downloading on its own.
+const RUN_READY_EXTRA = {
+    ...RUN_READY,
+    models: [...RUN_READY.models, row(SPEECH.id, ['speech'], 'downloading', 0.56e9, 1.6e9, { speed_bps: 0.5e6, eta_s: 2080 })],
+};
+// Cancel › Stop with the required models on disk and only an extra still coming.
+const RUN_EXTRAS_STOPPED = {
+    ...RUN, state: 'cancelled', text: 'Setup stopped',
+    models: [
+        // Already on disk when this run started, so they report no byte counts (#8797).
+        row(EMBED_ID, ['embedding'], 'unchecked', 0, 0),
+        row(GEMMA_ID, ['chat', 'vision'], 'unchecked', 0, 0),
+        row(SPEECH.id, ['speech'], 'cancelled', 0.56e9, 1.6e9),
+    ],
+    overall: { bytes_done: 0.56e9, bytes_total: 1.6e9, speed_bps: 0, eta_s: null, percent: 35, failed: 0 },
+};
+
 const SERVER_RUNNING = { state: 'running', server_only: true, text: 'Starting the local model server', steps: [], log_tail: [] };
 /** GAIA's own engine won't start: a build that broke it (#7007). */
 export const ENGINE_FAILED = {
@@ -747,6 +764,31 @@ export const SETUP_SCENES: SetupScene[] = [
         reach: (page) => expect(page.locator('.dl-row').first()).toBeVisible(),
     },
     {
+        // An extra still downloading after setup is ready: its Optional row reads Added, not Add.
+        name: 'download-extra-in-flight',
+        answers: { status: RUN_READY_EXTRA, plan: PLAN_DONE },
+        reach: async (page) => {
+            await expect(page.locator('.setup-done')).toBeVisible();
+            await page.locator('.setup-rail-list > li').nth(2).getByRole('button').click();
+            const optional = page.locator('section.setup-card', { has: page.locator('button[aria-pressed]') });
+            await expect(optional.getByRole('button', { pressed: true })).toBeDisabled();
+            await expect(optional.getByRole('button', { pressed: false })).toBeVisible();
+            await optional.scrollIntoViewIfNeeded();
+        },
+    },
+    {
+        name: 'download-extras-stopped',
+        answers: { status: RUN_EXTRAS_STOPPED },
+        reach: async (page) => {
+            await expect(page.locator('.dl-row.is-cancelled')).toBeVisible();
+            // A way to finish without the extra, beside Resume all.
+            await expect(page.locator('.setup-footer .btn-secondary')).toBeVisible();
+            await expect(page.locator('.setup-rail-step.is-failed')).toHaveCount(0);
+            // The overall line counts the kept models whole, as their rows show.
+            await expect(page.locator('.dl-overall-line')).toContainText(/(?:^|\D)[89]\d\D{0,2}%/);
+        },
+    },
+    {
         name: 'test-running',
         answers: { status: RUN_TESTING },
         reach: (page) => expect(page.locator('.setup-result.is-running')).toBeVisible(),
@@ -785,6 +827,14 @@ export const SETUP_SCENES: SetupScene[] = [
             await expect(page.locator('.setup-done')).toBeVisible();
             // A first run has nothing to pick up: the other tasks show, Check in waits.
             await expect(page.locator('.start-card')).toHaveCount(1);
+        },
+    },
+    {
+        name: 'ready-extra-downloading',
+        answers: { status: RUN_READY_EXTRA, plan: PLAN_DONE },
+        reach: async (page) => {
+            await expect(page.locator('.setup-done')).toBeVisible();
+            await expect(page.locator('.setup-hint[role="status"]')).toBeVisible();
         },
     },
 ];

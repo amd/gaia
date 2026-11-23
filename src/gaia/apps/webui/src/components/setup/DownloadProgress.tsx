@@ -109,7 +109,8 @@ function ProgressRow({ model: m, name, estimate, now, freeGb, onRetry, onResume,
     const logId = useId();
     const [showLog, setShowLog] = useState(false);
     const lines = m.log ?? [];
-    const pct = m.bytes_total > 0 ? Math.min(100, (m.bytes_done / m.bytes_total) * 100) : m.state === 'ready' ? 100 : 0;
+    const onDisk = m.state === 'ready' || m.state === 'unchecked';
+    const pct = onDisk ? 100 : m.bytes_total > 0 ? Math.min(100, (m.bytes_done / m.bytes_total) * 100) : 0;
     const state = t(STATE_KEY[m.state]);
     const retryingFor = m.retrying_until ? Math.max(0, Math.round(m.retrying_until - now / 1000)) : 0;
     const stalled = m.state === 'downloading' && !retryingFor ? estimate?.stalledFor ?? 0 : 0;
@@ -240,6 +241,8 @@ export interface DownloadProgressProps {
     onRetry?: (id: string, kind: SetupModelProgress['error_kind']) => void;
     onResume?: (id: string) => void;
     onResumeAll?: () => void;
+    /** Stopped with only optional extras left: finish setup without them, beside Resume all. */
+    onFinishWithout?: () => void;
     onSkip?: (id: string) => void;
     /** Cancel and start again, offered when a download has had no data for a minute. */
     onRestart?: () => void;
@@ -256,7 +259,7 @@ export interface DownloadProgressProps {
  * word; colour and motion only repeat it. The live region speaks milestones,
  * never the per-second percent.
  */
-export function DownloadProgress({ status, names, freeGb = null, onCancel, onRetry, onResume, onResumeAll, onSkip, onRestart, busy = false, retryLater = false, labelledBy }: DownloadProgressProps) {
+export function DownloadProgress({ status, names, freeGb = null, onCancel, onRetry, onResume, onResumeAll, onFinishWithout, onSkip, onRestart, busy = false, retryLater = false, labelledBy }: DownloadProgressProps) {
     const t = useT();
     const visible = usePageVisible();
     const models = useMemo(() => sortedModels(status.models ?? []), [status.models]);
@@ -403,10 +406,13 @@ export function DownloadProgress({ status, names, freeGb = null, onCancel, onRet
             </ul>
             {active && <p className="setup-hint dl-controls">{t('setup.progress.keepsGoing')}</p>}
             {/* In setup, the screen's actions sit in its bottom bar like every other step's. */}
-            {((active && onCancel) || (!active && cancelled.length > 0 && onResumeAll)) && (
+            {((active && onCancel) || (!active && ((cancelled.length > 0 && onResumeAll) || onFinishWithout))) && (
                 <SetupFooter>
                     {active && onCancel && (
                         <button type="button" className="btn-secondary" onClick={cancel} disabled={busy}>{t('setup.progress.cancel')}</button>
+                    )}
+                    {!active && onFinishWithout && (
+                        <button type="button" className="btn-secondary" onClick={onFinishWithout} disabled={busy}>{t('setup.download.finishWithoutExtras')}</button>
                     )}
                     {!active && cancelled.length > 0 && onResumeAll && (
                         <button type="button" className="btn-primary" onClick={onResumeAll} disabled={busy}>{t('setup.progress.resumeAll')}</button>
