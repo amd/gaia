@@ -133,10 +133,10 @@ describe('DownloadProgress', () => {
         vi.setSystemTime(0);
         const at = (done: number): SetupRunStatus => runStatus([
             progress({ id: GEMMA.id, roles: ['vision'], state: 'failed', bytes_done: 2e9, bytes_total: 50e9, error_kind: 'network' }),
-            progress({ id: QWEN.id, state: 'downloading', bytes_done: done, bytes_total: 1e9 + 30 * 20e6 }),
+            progress({ id: QWEN.id, state: 'downloading', bytes_done: done, bytes_total: 1e9 + 40 * 20e6 }),
         ]);
         const { rerender } = render(<DownloadProgress status={at(1e9)} names={NAMES} />);
-        for (let s = 1; s <= 11; s++) {
+        for (let s = 1; s <= 21; s++) {
             vi.setSystemTime(s * 1000);
             rerender(<DownloadProgress status={at(1e9 + s * 20e6)} names={NAMES} />);
         }
@@ -164,16 +164,19 @@ describe('DownloadProgress', () => {
         expect(screen.getByRole('progressbar', { name: 'Overall download' })).toHaveAttribute('aria-valuenow', '32');
     });
 
-    it('says Estimating… until 10 s of data, then shows speed and ETA', () => {
+    it('says Estimating… until 20 s of data, then shows speed and ETA', () => {
         vi.useFakeTimers({ toFake: ['Date'] });
         vi.setSystemTime(0);
         const at = (done: number): SetupRunStatus => runStatus([progress({ id: QWEN.id, state: 'downloading', bytes_done: done, bytes_total: 23.3e9 })]);
         const { rerender } = render(<DownloadProgress status={at(1e9)} names={NAMES} />);
         expect(within(rowOf('Qwen3.6-35B-A3B')).getByText(/Estimating…/)).toBeInTheDocument();
-        for (let s = 1; s <= 11; s++) {
+        for (let s = 1; s <= 19; s++) {
             vi.setSystemTime(s * 1000);
             rerender(<DownloadProgress status={at(1e9 + s * 18e6)} names={NAMES} />);
         }
+        expect(within(rowOf('Qwen3.6-35B-A3B')).getByText(/Estimating…/)).toBeInTheDocument();
+        vi.setSystemTime(20_000);
+        rerender(<DownloadProgress status={at(1e9 + 20 * 18e6)} names={NAMES} />);
         expect(within(rowOf('Qwen3.6-35B-A3B')).getByText(/18 MB\/s · about \d+ min/)).toBeInTheDocument();
     });
 
@@ -183,7 +186,7 @@ describe('DownloadProgress', () => {
         const at = (state: 'downloading' | 'cancelled', done: number): SetupRunStatus =>
             runStatus([progress({ id: QWEN.id, state, bytes_done: done, bytes_total: 23.3e9 })]);
         const { rerender } = render(<DownloadProgress status={at('downloading', 1e9)} names={NAMES} />);
-        for (let s = 1; s <= 11; s++) {
+        for (let s = 1; s <= 21; s++) {
             vi.setSystemTime(s * 1000);
             rerender(<DownloadProgress status={at('downloading', 1e9 + s * 18e6)} names={NAMES} />);
         }
@@ -420,7 +423,7 @@ describe('speed after a resume', () => {
         const { rerender } = render(<DownloadProgress status={at(0)} names={NAMES} />);
         vi.setSystemTime(1000);
         rerender(<DownloadProgress status={at(15e9, 15)} names={NAMES} />);
-        for (let s = 2; s <= 12; s++) {
+        for (let s = 2; s <= 22; s++) {
             vi.setSystemTime(s * 1000);
             rerender(<DownloadProgress status={at(15e9 + (s - 1) * 150e6, 15)} names={NAMES} />);
         }
