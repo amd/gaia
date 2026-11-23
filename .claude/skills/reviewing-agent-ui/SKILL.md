@@ -13,6 +13,10 @@ audit only asked two questions, and the bugs were answers to questions it never 
 Testing a whole release or RC rather than one change? Use the
 `testing-agent-ui-release` skill; it runs this review on every screen it touches.
 
+For a design critique (contrast, hierarchy, motion, interaction, accessibility), check
+what you see against the `ui-ux-pro-max` skill's rules. Where they disagree,
+[`docs/spec/gaia-design-language.mdx`](../../../docs/spec/gaia-design-language.mdx) wins.
+
 ## 1. Run the checks
 
 ```bash
