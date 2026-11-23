@@ -78,7 +78,7 @@ function CheckRow({ label, note, size, checked, disabled, warning, chips, onChan
                         <span className="mc-name"><bdi>{label}</bdi></span>
                         <span className="mc-chips">{chips}</span>
                     </span>
-                    <span className="mc-status"><bdi dir="ltr">{size}</bdi></span>
+                    <span className="mc-status"><bdi>{size}</bdi></span>
                     <span className="mc-note">{note}</span>
                     {warning && <span className="mc-warn" role="note"><AlertTriangle size={13} aria-hidden="true" /> {warning}</span>}
                 </span>
@@ -114,7 +114,11 @@ export function JobModels({ plan, selection, onSelection, disabled }: Props) {
     const visionRows = catalog.filter((e) => isVision(e) && e.id !== chat?.id);
     const embedder = catalog.find(isEmbedding);
     const extra = (role: string) => catalog.find((e) => isOptional(e) && e.roles.includes(role as never));
-    const sizeOf = (e: SetupCatalogEntry) => (e.downloaded ? t('setup.models.status.onPc') : e.size_gb != null ? formatSize(e.size_gb) : t('setup.contents.sizeOnDownload'));
+    const sizeOf = (e: SetupCatalogEntry) => {
+        if (e.downloaded) return t('setup.models.status.onPc');
+        if (e.size_gb === 0) return t('setup.models.status.found');
+        return e.size_gb != null ? formatSize(e.size_gb) : t('setup.contents.sizeOnDownload');
+    };
     const set = (id: string, on: boolean) => onSelection(toggle(selection, catalog, id, on));
     const chooseChat = (id: string) => onSelection(pickChat(selection, catalog, id));
     const chooseVision = (id: string | null) => onSelection(pickVision(selection, catalog, id));
