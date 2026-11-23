@@ -85,6 +85,10 @@ void dropForeignLemonadeKey(const GaiaServer& server);
 /// Which key `cfg` sends, recorded in `origin` for an error that has to name it.
 void noteKeySource(ServerOrigin& origin, const AgentConfig& cfg, bool gaiaKey);
 
+/// "" when the model server answers its health check, else why not and how to
+/// start it, by what chose it. Endpoints that are not Lemonade are not asked.
+std::string serverDownReason(LemonadeClient& client, const ServerOrigin& origin);
+
 /// The terminal a download question is asked at.
 struct DownloadPrompt {
     bool interactive = false;  // stdin and stderr are both a terminal
