@@ -524,7 +524,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
         const notTaken = (outcome: SendOutcome) => { if (fromQueue) options?.onQueuedOutcome?.(outcome); };
         if (!reattach && retiredAgent) {
             log.chat.warn(`Send blocked: chat ${sessionId} belongs to the retired "${retiredAgent}" agent`);
-            notTaken({ kind: 'failed', error: `This chat's "${retiredAgent}" agent was retired, so it cannot take new messages.` });
+            notTaken({ kind: 'failed', error: messageQueue.retiredAgentError(retiredAgent) });
             return false;
         }
         // Waiting messages go first, so a new one joins the end of the line.
@@ -667,7 +667,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
             gaveUpOnRunRef.current = true;
             streamEndedAtRef.current = Date.now();
             endStopWait();
-            settleQueued({ kind: 'failed', error: 'Stopped before GAIA confirmed it got this message.' });
+            settleQueued({ kind: 'failed', error: messageQueue.STOPPED_ERROR });
             abortRef.current?.abort();
             abortRef.current = null;
             if (streamRafRef.current !== null) {
