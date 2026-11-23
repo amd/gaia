@@ -27,6 +27,12 @@
 #include <thread>
 #include <vector>
 
+#ifdef _WIN32
+#include <process.h>
+#else
+#include <unistd.h>
+#endif
+
 #include "gaia/types.h"
 #include "support/child_process.h"
 #include "support/mock_llm_server.h"
@@ -1246,6 +1252,46 @@ TEST_F(GaiacppSidecar, InternetOffRefusesWebFetchBeforeAnyApprovalCard) {
     EXPECT_EQ(deny->status, 200);
     ASSERT_TRUE(t.waitDone()) << t.describe();
     ASSERT_NO_FATAL_FAILURE(expectSingleTerminal(t.events(), "final")) << t.describe();
+}
+
+// The daemon names no server: the sidecar finds GAIA's own (state.json), with its
+// key, and follows it to a new port and key when it restarts between turns (#8854).
+TEST_F(GaiacppSidecar, WithNoServerNamedItFollowsGaiasOwnServerAcrossARestart) {
+#ifdef _WIN32
+    const long long pid = _getpid();
+#else
+    const long long pid = getpid();
+#endif
+    const fs::path lemonadeDir = root_ / "home" / "lemonade";
+    fs::create_directories(lemonadeDir);
+    auto record = [&](int port, const std::string& key) {
+        std::ofstream(lemonadeDir / "state.json") << json{{"pid", pid}, {"port", port}, {"api_key", key}}.dump();
+    };
+    record(mock().port(), "first-key");
+    ASSERT_NO_FATAL_FAILURE(startSidecar({{"LEMONADE_BASE_URL", std::nullopt}}));
+
+    auto init = send("GET", "/v1/gaia/init", bearer());
+    ASSERT_TRUE(init);
+    EXPECT_EQ(init->status, 200) << init->body;
+    EXPECT_NE(json::parse(init->body)["lemonade"]["base_url"].get<std::string>().find(std::to_string(mock().port())),
+              std::string::npos)
+        << init->body;
+
+    mock().pushResponse(answerReply("one"));
+    Turn first(port_, queryBody("run-own-1", "hi", {{"session_id", "chat-own"}}));
+    ASSERT_TRUE(first.waitDone()) << first.describe();
+    EXPECT_EQ(first.events().back().value("answer", ""), "one") << first.describe();
+    ASSERT_FALSE(mock().receivedAuthorization().empty());
+    EXPECT_EQ(mock().receivedAuthorization().back(), "Bearer first-key");
+
+    bench::MockLlmServer restarted;
+    restarted.pushResponse(answerReply("two"));
+    record(restarted.port(), "second-key");
+    Turn second(port_, queryBody("run-own-2", "again", {{"session_id", "chat-own"}}));
+    ASSERT_TRUE(second.waitDone()) << second.describe();
+    EXPECT_EQ(second.events().back().value("answer", ""), "two") << second.describe();
+    ASSERT_FALSE(restarted.receivedAuthorization().empty());
+    EXPECT_EQ(restarted.receivedAuthorization().back(), "Bearer second-key");
 }
 
 // ---- 9. model server unreachable ----

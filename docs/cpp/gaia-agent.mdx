@@ -293,6 +293,8 @@ Each request carries its whole conversation, so the server keeps no state betwee
 - Per-chat folder scope (`allowed_paths`), working folder, attached documents, memory on, private or off, and internet off. Each can change between turns, and internet and memory also apply mid-turn.
 - Each chat's tools (`/sessions/{id}/tools`), its "always" answers (`/sessions/{id}/grants`), the skills list (`/skills`) and the memory list (`/memory`).
 
+It finds the model server the same way a terminal run does ([Using what GAIA set up](#using-what-gaia-set-up)), and looks again at every turn, so a restart of GAIA's own server on a new port with a new key doesn't break the next chat.
+
 A few things answer the way an older flagship would, and the UI copes with each:
 
 - A message sent mid-turn gets 409, so the UI sends it as the next message.

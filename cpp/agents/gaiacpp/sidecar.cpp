@@ -29,6 +29,7 @@
 
 #include "bash_tools.h"
 #include "gaia_agent.h"
+#include "gaia_setup.h"
 
 #ifndef GAIACPP_VERSION
 #define GAIACPP_VERSION "0.0.0-dev"
@@ -429,12 +430,32 @@ private:
         sessions_.erase(id);
     }
 
+    struct LemonadeTarget {
+        std::string baseUrl;
+        std::string apiKey;
+    };
+
+    // The model server the way `gaiacpp -p` finds it: LEMONADE_BASE_URL the user set, GAIA's saved
+    // external server, else GAIA's own (state.json), which picks its port and key at each start.
+    LemonadeTarget lemonadeTarget() const {
+        const gaia::GaiaServer server = gaia::resolveGaiaServer();
+        std::string key = server.envKeyForeign ? std::string() : lemonadeKey_;
+        if (key.empty()) key = gaia::embeddedKeyFor(server, server.baseUrl);
+        if (key.empty() && server.origin.source == gaia::ServerSource::SavedExternal && server.savedKeyElsewhere) {
+            throw std::runtime_error("GAIA is set to use the Lemonade Server at " + server.baseUrl +
+                                     " and keeps its key in GAIA's credential store, which gaiacpp can't read. "
+                                     "Choose the Python harness in Settings, or start GAIA with LEMONADE_API_KEY set.");
+        }
+        return {server.baseUrl, key};
+    }
+
     // Build (or rebuild, when the chat's folders grew) the session's agent.
     // Only called while the session holds its busy flag.
     void ensureAgent(Session& s) {
         if (s.agent && s.builtWith == s.roots) return;
         AgentConfig cfg;
-        cfg.baseUrl = getEnvVar("LEMONADE_BASE_URL", defaultBaseUrl());
+        const LemonadeTarget target = lemonadeTarget();
+        cfg.baseUrl = target.baseUrl;
         cfg.modelId = opts_.defaultModel.empty() ? "Gemma-4-E4B-it-GGUF" : opts_.defaultModel;
         cfg.contextSize = 32768;
         cfg.maxTokens = 16384;
@@ -443,7 +464,7 @@ private:
         cfg.streaming = true;
         cfg.maxHistoryMessages = 0;  // the UI fits history to the window
         cfg.responseMode = ResponseMode::Conversational;
-        cfg.apiKey = lemonadeKey_;
+        cfg.apiKey = target.apiKey;
         GaiaAgent::Options o;
         o.maxHelpers = opts_.maxHelpers;
         if (s.roots.empty()) {
@@ -600,9 +621,15 @@ private:
         });
         server_.Get("/v1/gaia/init", [this](const httplib::Request& req, httplib::Response& res) {
             if (!admit(req, res, true)) return;
-            const std::string base = getEnvVar("LEMONADE_BASE_URL", defaultBaseUrl());
-            LemonadeClient lc(base);
-            lc.setApiKey(lemonadeKey_);
+            LemonadeTarget target;
+            try {
+                target = lemonadeTarget();
+            } catch (const std::exception& e) {
+                sendJson(res, 503, {{"ready", false}, {"hint", e.what()}});
+                return;
+            }
+            LemonadeClient lc(target.baseUrl);
+            lc.setApiKey(target.apiKey);
             const bool up = lc.isServerRunning();
             json body = {{"ready", up},
                          {"lemonade", {{"reachable", up}, {"base_url", lc.baseUrl()}, {"version", nullptr},
@@ -972,6 +999,10 @@ private:
                 }
                 indexDocuments(*s, documents);
                 AgentConfig cfg = s->agent->config();
+                // GAIA's server may have restarted on a new port with a new key since the last turn.
+                const LemonadeTarget target = lemonadeTarget();
+                cfg.baseUrl = target.baseUrl;
+                cfg.apiKey = target.apiKey;
                 if (!model.empty()) cfg.modelId = model;
                 // Cloud models behind Lemonade speak native tool calls.
                 cfg.nativeToolCalls =
