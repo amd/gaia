@@ -611,20 +611,12 @@ def _list_models(provider: str, *, offer_optional: bool = True) -> List[Dict[str
 
 
 def _setup_chat_order() -> List[str]:
-    """GAIA's chat models in the order setup lists them (``setup_plan._known_chat_models``)."""
-    from gaia.llm.lemonade_client import (
-        DEFAULT_MODEL_LADDER,
-        FLASH_OPTION_MODEL_NAME,
-        NPU_MODEL_LADDER,
-        OPTIONAL_CHAT_MODELS,
-    )
+    """GAIA's chat models in the order setup lists them, NPU ones included."""
+    from gaia.llm.lemonade_client import NPU_MODEL_LADDER
+    from gaia.ui.setup_plan import _known_chat_models
 
-    return [
-        *DEFAULT_MODEL_LADDER,
-        *NPU_MODEL_LADDER,
-        *OPTIONAL_CHAT_MODELS,
-        FLASH_OPTION_MODEL_NAME,
-    ]
+    order = _known_chat_models()
+    return [*order, *(m for m in NPU_MODEL_LADDER if m not in order)]
 
 
 def _model_entries(body: Dict[str, Any]) -> List[Dict[str, Any]]:
