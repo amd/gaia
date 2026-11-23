@@ -6903,6 +6903,18 @@ def handle_config_command(args):
         print(value if value is not None else "")
         return
 
+    if action == "set" and args.key == "run_mode":
+        _set_run_mode(args.value, config_file)
+        return
+
+    if action == "set" and args.key == "run_profiles":
+        print(
+            "❌ run_profiles holds each run mode's chat model. Change it in the "
+            "Agent UI under Settings › Run mode, or edit config.json by hand.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
     if action == "set" and args.key in _LEMONADE_CHOICE_KEYS:
         _set_lemonade_config(args.key, args.value, config_file, path)
         return
@@ -6920,6 +6932,22 @@ def handle_config_command(args):
         print(f"✅ Set {args.key} = {cfg.get(args.key)}")
         print(f"   Saved to {config_file}")
         return
+
+
+def _set_run_mode(value, config_file) -> None:
+    """``gaia config set run_mode local|cloud``: switch where chat runs."""
+    from gaia import run_modes
+    from gaia.config import GaiaConfigError
+    from gaia.llm.hybrid import HybridConfigError
+
+    try:
+        model = run_modes.apply_from_cli(value)
+    except (run_modes.RunModeError, GaiaConfigError, HybridConfigError) as e:
+        print(f"❌ {e}", file=sys.stderr)
+        sys.exit(1)
+    print(f"✅ Set run_mode = {value}")
+    print(f"   Chat now runs {model}. Saved to {config_file}")
+    print("   An Agent UI that is open now picks this up the next time it starts.")
 
 
 def _handle_network_policy(action, value) -> None:

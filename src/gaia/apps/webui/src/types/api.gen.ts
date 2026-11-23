@@ -93,6 +93,7 @@ export interface ApiSchemas {
   MemoryUsage: MemoryUsage;
   MessageListResponse: MessageListResponse;
   MessageResponse: MessageResponse;
+  ModeUpdate: ModeUpdate;
   ModelServerBackendRequest: ModelServerBackendRequest;
   ModelServerInfo: ModelServerInfo;
   ModelStatus: ModelStatus;
@@ -120,6 +121,7 @@ export interface ApiSchemas {
   ScheduleResultsResponse: ScheduleResultsResponse;
   ScriptedUserRequest: ScriptedUserRequest;
   SearchSnippet: SearchSnippet;
+  SelectModeRequest: SelectModeRequest;
   SelectModelRequest: SelectModelRequest;
   SessionListResponse: SessionListResponse;
   SessionPinRequest: SessionPinRequest;
@@ -1112,6 +1114,9 @@ export interface TurnSummaryPage {
   title?: string | null;
   url: string;
 }
+export interface ModeUpdate {
+  chat: string;
+}
 /**
  * Choose the llama.cpp backend for chat models: ``auto`` or a backend name.
  */
@@ -1384,6 +1389,10 @@ export interface SearchSnippet {
   after: string;
   before: string;
   match: string;
+}
+export interface SelectModeRequest {
+  chat?: string | null;
+  mode: string;
 }
 export interface SelectModelRequest {
   model: string;

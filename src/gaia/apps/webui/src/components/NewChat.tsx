@@ -7,7 +7,7 @@ import { AgentRecovery } from './AgentRecovery';
 import { BrowserPaneToggle } from './browser-pane/BrowserPane';
 import { Composer } from './Composer';
 import { FolderChip } from './FolderChip';
-import { ModelChip } from './ModelChip';
+import { RunModeChip } from './RunModeChip';
 import { NpuBackdrop } from './NpuBackdrop';
 import { PermissionModeChip } from './PermissionModeChip';
 import { PrivateChip } from './PrivateChip';
@@ -381,7 +381,7 @@ export function NewChat({ onSend, initialText = '', focusRequest = 0, agentMissi
                         inputRef={inputRef}
                         placeholder={researchMode ? t('composer.researchPlaceholder') : undefined}
                         leftControls={<><PermissionModeChip sessionId={null} /><PrivateChip disabled={sending} /><ResearchChip sessionId={null} disabled={sending} compact /></>}
-                        rightControls={<ModelChip />}
+                        rightControls={<RunModeChip />}
                     />
                 </div>
                 <div className="new-chat-meta">

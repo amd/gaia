@@ -1,0 +1,58 @@
+/* Settings › Run mode: one card per mode, a row per capability. */
+.run-mode-card { display: flex; flex-direction: column; gap: 10px; }
+.run-mode-card.is-active { border-color: var(--accent-solid); box-shadow: 0 0 0 1px var(--accent-solid); }
+
+.run-mode-card-head {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px 12px;
+}
+.run-mode-card-title {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin: 0;
+    font-size: 15px;
+    font-weight: 600;
+}
+.run-mode-card-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.run-mode-card-actions button { display: inline-flex; align-items: center; gap: 6px; }
+
+.run-mode-badge {
+    padding: 1px 8px;
+    border-radius: 999px;
+    background: var(--accent-fill);
+    color: var(--accent-fill-text);
+    font-size: 11px;
+    font-weight: 500;
+}
+
+.run-mode-rows { margin: 0; }
+.run-mode-row {
+    display: grid;
+    grid-template-columns: minmax(120px, 180px) minmax(0, 1fr);
+    gap: 4px 12px;
+    align-items: baseline;
+    padding-block: 8px;
+    border-block-start: 1px solid var(--border-light);
+}
+.run-mode-row dt { color: var(--text-secondary); font-size: 13px; }
+.run-mode-row dd {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 4px 10px;
+    margin: 0;
+    min-width: 0;
+    font-size: 13px;
+}
+.run-mode-row dd .settings-input { flex: 1 1 220px; min-width: 0; }
+.run-mode-value.is-off { color: var(--text-secondary); }
+.run-mode-why { flex-basis: 100%; color: var(--text-secondary); font-size: 12px; }
+.run-mode-more { font-size: 12px; }
+
+@media (max-width: 560px) {
+    .run-mode-row { grid-template-columns: minmax(0, 1fr); }
+}

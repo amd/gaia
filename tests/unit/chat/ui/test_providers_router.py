@@ -1939,6 +1939,9 @@ def test_select_remembers_the_model_and_keeps_other_config(client, lemonade, key
         "written_by_tui": {"x": 1},
         "last_provider": "fireworks",
         "last_model": "fireworks.aa-model",
+        # The run mode follows the model, and remembers a non-default pick.
+        "run_mode": "cloud",
+        "run_profiles": {"cloud": {"chat": "fireworks.aa-model"}},
     }
     assert keys["ensure"] == ["fireworks"]
 

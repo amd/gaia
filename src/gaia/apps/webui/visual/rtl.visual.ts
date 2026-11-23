@@ -12,7 +12,7 @@
 
 import { expect, test, type Page } from '@playwright/test';
 
-import { ANSWER_SESSION, AUTOMATIONS, DISCORD_STATES, MESSAGES, MODEL_LIST, NOW, RESOURCES, SESSIONS, SYSTEM_STATUS, TOOL_STATUS, holdOnToolStatus, mockApi, shownText, useLocale, useTheme, withAutomations, withConnectors, withCrashedBackend, withDesktopBridges, withDiscord, withMemory, withModelPage, withSettingsPanes, withoutFlagship, withAgentPrograms, AGENT_DOWNLOADING, AGENT_DOWNLOAD_FAILED, type AgentProgramsAnswers, type MemoryState } from './fixtures';
+import { ANSWER_SESSION, AUTOMATIONS, DISCORD_STATES, MESSAGES, MODEL_LIST, NOW, RESOURCES, SESSIONS, SYSTEM_STATUS, TOOL_STATUS, holdOnToolStatus, mockApi, shownText, useLocale, useTheme, withAutomations, withConnectors, withCrashedBackend, withDesktopBridges, withDiscord, withMemory, withModelPage, runModes, withSettingsPanes, withoutFlagship, withAgentPrograms, AGENT_DOWNLOADING, AGENT_DOWNLOAD_FAILED, type AgentProgramsAnswers, type MemoryState } from './fixtures';
 import { ENGINE_FAILED, NARROW_SCENES, PLAN_COLD, SETUP_SCENES, expectSnugTags, scene, withSetup } from './setup-scenes';
 import { translateBare } from '../src/i18n/registry';
 
@@ -3497,28 +3497,156 @@ test.describe('arrivals ease in (en)', () => {
     });
 });
 
+/** The composer's run-mode chip (its neighbour is the customize button). */
+const modeChip = (page: Page) => page.locator('.run-mode-chip-wrap .composer-chip').first();
+
+/** Cloud in use on GLM, with the model page's providers and lists behind the menu. */
+async function withCloudInUse(page: Page, fireworks: Record<string, unknown> = {}): Promise<void> {
+    await withModelPage(page, MODEL_LIST, null, undefined, fireworks);
+    await page.route('**/api/providers/active', (route) => route.fulfill({
+        json: {
+            provider: 'fireworks', model: 'fireworks.glm-5p3-flash', label: 'glm-5p3-flash', remote: true,
+            provider_name: 'Fireworks AI', is_default: false, restore: { status: 'none', message: null },
+        },
+    }));
+    await page.route('**/api/run-modes', (route) => route.fulfill({ json: runModes('cloud') }));
+    // Every chat reports the model it runs, as the backend does once the pick lands.
+    const sessions = SESSIONS.map((s) => ({
+        ...s, model: 'fireworks.glm-5p3-flash', effective_model: 'fireworks.glm-5p3-flash',
+        inference_remote: true, inference_provider: 'fireworks', inference_provider_name: 'Fireworks AI',
+    }));
+    await page.route((url) => url.pathname === '/api/sessions', (route) => route.fulfill({ json: { sessions, total: sessions.length } }));
+}
+
 for (const locale of ['en', 'ar']) {
-    test(`the model menu leads with the provider in use and asks before a download (${locale})`, async ({ page }) => {
-        await open(page, '', locale, async (p) => {
-            await withModelPage(p, MODEL_LIST, null);
-            await p.route('**/api/providers/active', (route) => route.fulfill({
-                json: {
-                    provider: 'fireworks', model: 'fireworks.glm-5p3-flash', label: 'glm-5p3-flash', remote: true,
-                    provider_name: 'Fireworks AI', is_default: false, restore: { status: 'none', message: null },
-                },
-            }));
-        });
-        await page.locator('.composer-chip').filter({ hasText: 'glm-5p3-flash' }).click();
+    test(`the run-mode menu offers Local and Cloud, opens each mode's models, and asks before a download (${locale})`, async ({ page }) => {
+        await open(page, '', locale, (p) => withCloudInUse(p));
+        await expect(modeChip(page)).toContainText(locale === 'ar' ? 'سحابي' : 'Cloud');
+        await modeChip(page).click();
         const menu = page.getByRole('dialog');
+        // Two choices first: the model lists stay closed until asked for.
+        await expect(menu.getByRole('option')).toHaveCount(2);
+        await expect(menu.getByRole('option').nth(1)).toHaveAttribute('aria-selected', 'true');
+        await expect(menu.getByRole('option').nth(1)).toContainText('glm-5p3-flash');
+        await shot(page, `run-mode-menu-${locale}`);
+        expect(await audit(page)).toEqual([]);
+
+        await menu.locator('.run-mode-expand').nth(1).click();
         await expect(menu.locator('.popover-heading').first()).toHaveText('Fireworks AI');
+        await menu.locator('.run-mode-expand').first().click();
         await expect(menu.locator('.popover-subheading')).toBeVisible();
-        await shot(page, `model-menu-${locale}`);
+        await shot(page, `run-mode-menu-open-${locale}`);
         expect(await audit(page)).toEqual([]);
         await menu.getByRole('option', { name: /gpt-oss 20B/ }).click();
         await expect(menu.locator('.model-download-confirm')).toContainText('3 GB');
-        await shot(page, `model-menu-confirm-${locale}`);
+        await shot(page, `run-mode-menu-confirm-${locale}`);
         // The question scrolls into view under its row, so the list is scrolled on purpose here.
         expect((await audit(page)).filter((p) => !p.startsWith('popover opens scrolled'))).toEqual([]);
+    });
+
+    test(`the run-mode menu says Cloud needs a key (${locale})`, async ({ page }) => {
+        await open(page, '', locale, (p) => withModelPage(p, MODEL_LIST, null, undefined, { models_discovered: false, key_source: null, key_hint: null }));
+        await modeChip(page).click();
+        const menu = page.getByRole('dialog');
+        await expect(menu.getByRole('option').nth(1)).toContainText('Fireworks AI');
+        await menu.getByRole('option').nth(1).click();
+        await expect(menu.locator('.run-mode-models').getByRole('option')).toHaveCount(1);
+        await shot(page, `run-mode-menu-no-key-${locale}`);
+        expect(await audit(page)).toEqual([]);
+    });
+
+    test(`the run-mode menu fits a phone (${locale})`, async ({ page }) => {
+        await page.setViewportSize({ width: 390, height: 780 });
+        await open(page, '', locale, (p) => withCloudInUse(p));
+        // The customize button gives way on a phone; the menu's last item is the way in.
+        await expect(page.locator('.run-mode-customize')).toBeHidden();
+        await modeChip(page).click();
+        await expect(page.getByRole('dialog').getByRole('option')).toHaveCount(2);
+        await shot(page, `run-mode-menu-phone-${locale}`);
+        // The closed sidebar drawer waits off screen at this width; judge the menu and the chips.
+        const problems = (await audit(page)).filter((p) => /popover|run-mode|composer|scrolls sideways/.test(p));
+        expect(problems).toEqual([]);
+    });
+}
+
+/** Settings › Run mode, opened from the run-mode menu's Customize (the way in at every width). */
+async function openRunModes(page: Page, locale: string, before: (page: Page) => Promise<void>, theme: 'light' | 'dark' = 'light'): Promise<void> {
+    await open(page, '', locale, before, theme);
+    await modeChip(page).click();
+    await page.getByRole('dialog').locator('.popover-item').last().click();
+    await expect(page.locator('.run-mode-card')).toHaveCount(2);
+}
+
+const RUN_MODE_STATES: Array<{ name: string; before: (page: Page) => Promise<void>; shows: (page: Page) => Promise<void> }> = [
+    {
+        // Local in use; Cloud moved off its default, so its Reset is live.
+        name: 'customized',
+        before: async (p) => {
+            await withModelPage(p, MODEL_LIST, null);
+            await p.route('**/api/run-modes', (route) => route.fulfill({ json: runModes('local', 'fireworks.deepseek-v4p1') }));
+        },
+        shows: async (page) => {
+            const cards = page.locator('.run-mode-card');
+            await expect(cards.first()).toHaveClass(/is-active/);
+            await expect(cards.first().locator('.btn-secondary').last()).toBeDisabled();
+            await expect(cards.nth(1).locator('.btn-secondary').last()).toBeEnabled();
+            await expect(cards.nth(1).locator('.run-mode-why')).toHaveCount(5);
+        },
+    },
+    {
+        name: 'no-key',
+        before: (p) => withModelPage(p, MODEL_LIST, null, undefined, { models_discovered: false, key_source: null, key_hint: null }),
+        shows: async (page) => {
+            const cloud = page.locator('.run-mode-card').nth(1);
+            await expect(cloud.locator('.settings-notice')).toBeVisible();
+            await expect(cloud.locator('.btn-primary')).toBeDisabled();
+        },
+    },
+    {
+        name: 'local-only',
+        before: (p) => withModelPage(p, MODEL_LIST, null, undefined, {}, true),
+        shows: async (page) => {
+            await expect(page.locator('.run-mode-card').nth(1).locator('.settings-notice')).toBeVisible();
+        },
+    },
+    {
+        name: 'cloud-in-use',
+        before: (p) => withCloudInUse(p),
+        shows: async (page) => {
+            await expect(page.locator('.run-mode-card').nth(1)).toHaveClass(/is-active/);
+        },
+    },
+];
+
+for (const locale of ['en', 'ar']) {
+    for (const state of RUN_MODE_STATES) {
+        test(`settings run mode shows both modes and what serves each capability (${state.name}, ${locale})`, async ({ page }) => {
+            await openRunModes(page, locale, state.before);
+            await state.shows(page);
+            await shot(page, `run-mode-settings-${state.name}-${locale}`);
+            expect(await audit(page)).toEqual([]);
+            await scrollPane(page, 'bottom');
+            await shot(page, `run-mode-settings-${state.name}-bottom-${locale}`);
+            expect(await audit(page)).toEqual([]);
+        });
+    }
+
+    test(`settings run mode reads well in the dark (${locale})`, async ({ page }) => {
+        await openRunModes(page, locale, RUN_MODE_STATES[0].before, 'dark');
+        await shot(page, `run-mode-settings-dark-${locale}`);
+        expect(await audit(page)).toEqual([]);
+    });
+
+    test(`settings run mode fits a phone (${locale})`, async ({ page }) => {
+        await page.setViewportSize({ width: 390, height: 780 });
+        await openRunModes(page, locale, RUN_MODE_STATES[0].before);
+        // The closed sidebar drawer waits off screen at this width; judge the settings window.
+        const problems = async () => (await audit(page)).filter((p) => /run-mode|settings|scrolls sideways/.test(p));
+        await shot(page, `run-mode-settings-phone-${locale}`);
+        expect(await problems()).toEqual([]);
+        await scrollPane(page, 'bottom');
+        await shot(page, `run-mode-settings-phone-bottom-${locale}`);
+        expect(await problems()).toEqual([]);
     });
 }
 
@@ -4075,7 +4203,9 @@ for (const locale of ['ar', 'en']) {
             }));
         });
         await expect(page.getByText(/downloaded yet/)).toHaveCount(0);
-        await expect(page.getByText('big-model · opencode')).toBeVisible();
+        // The chip says where chat runs; the model and who answers it are a hover away.
+        await expect(modeChip(page)).toContainText(locale === 'ar' ? 'سحابي' : 'Cloud');
+        await expect(modeChip(page)).toHaveAttribute('title', /big-model.*opencode/);
         await shot(page, `chip-${locale}-cloud-from-lemonade-list`);
         const sidebar = page.getByRole('button', { name: /Open sidebar/ });
         if (await sidebar.isVisible()) await sidebar.click();
@@ -6245,22 +6375,53 @@ test('composer chips stay whole at phone width', async ({ page }) => {
     expect(sorted.filter((box, i) => i > 0 && box.left < sorted[i - 1].right - 1)).toEqual([]);
 });
 
+/** Composer controls that sit on top of one another, as readable lines. */
+async function composerOverlaps(page: Page): Promise<string[]> {
+    return page.locator('.composer-row-right > *, .composer-row-right .run-mode-customize, .composer-send').evaluateAll((els) => {
+        const boxes = els
+            .map((el) => ({ name: el.className.split(' ').pop() ?? '', box: el.getBoundingClientRect(), el }))
+            .filter(({ box }) => box.width > 0)
+            .sort((a, b) => a.box.left - b.box.left);
+        return boxes
+            .filter((b, i) => i > 0 && !boxes[i - 1].el.contains(b.el) && b.box.left < boxes[i - 1].box.right - 1)
+            .map((b) => `${b.name} starts at ${Math.round(b.box.left)}px, under the control before it`);
+    });
+}
+
 for (const locale of ['en', 'ar']) {
-    test(`a narrow window keeps the model name readable in the composer (${locale})`, async ({ page }) => {
+    test(`a cloud chat with the side panel open keeps the run mode whole and clear of Send (${locale})`, async ({ page }) => {
+        // The row that cut "Cloud" to "Cl" and slid the customize button under Send.
+        await page.setViewportSize({ width: 1280, height: 860 });
+        await open(page, `#${ANSWER_SESSION}`, locale, async (p) => {
+            await withMeasuredContext(p);
+            await withCloudSpending(p);
+        });
+        await expect(page.locator('.spend-meter')).toBeAttached();
+        const label = modeChip(page).locator('.composer-chip-label');
+        await expect(label).toBeVisible();
+        await shot(page, `composer-cloud-side-panel-${locale}`);
+        expect(await label.evaluate((el) => el.scrollWidth <= el.clientWidth + 1), 'the run mode is cut').toBe(true);
+        expect(await composerOverlaps(page)).toEqual([]);
+        expect(await audit(page)).toEqual([]);
+    });
+}
+
+for (const locale of ['en', 'ar']) {
+    test(`a narrow window keeps the run mode readable in the composer (${locale})`, async ({ page }) => {
         await page.setViewportSize({ width: 820, height: 640 });
         await open(page, `#${ANSWER_SESSION}`, locale, withMeasuredContext);
         await expect(page.locator('button.context-meter')).toBeVisible();
         const label = page.locator('.composer-row .composer-chip-label').last();
         await expect(label).toBeVisible();
         await shot(page, `composer-narrow-${locale}`);
-        // The day's spend and the context bar give way before the model name is cut.
+        // The day's spend and the context bar give way before the run mode is cut.
         const shown = await label.evaluate((el) => el.clientWidth);
         const full = await label.evaluate((el) => el.scrollWidth);
-        expect(shown, `model name cut to ${shown}px of ${full}px`).toBeGreaterThanOrEqual(Math.min(full, 140));
+        expect(shown, `run mode cut to ${shown}px of ${full}px`).toBeGreaterThanOrEqual(full);
         expect(await audit(page)).toEqual([]);
     });
 
-    test(`a narrow window hides the chat's spend before it cuts a cloud model's name (${locale})`, async ({ page }) => {
+    test(`a narrow window hides the chat's spend before it cuts the run mode (${locale})`, async ({ page }) => {
         await page.setViewportSize({ width: 820, height: 640 });
         await open(page, `#${ANSWER_SESSION}`, locale, async (p) => {
             await withMeasuredContext(p);
@@ -6273,7 +6434,7 @@ for (const locale of ['en', 'ar']) {
         await shot(page, `composer-narrow-cloud-${locale}`);
         const shown = await label.evaluate((el) => el.clientWidth);
         const full = await label.evaluate((el) => el.scrollWidth);
-        expect(shown, `model name cut to ${shown}px of ${full}px`).toBeGreaterThanOrEqual(Math.min(full, 140));
+        expect(shown, `run mode cut to ${shown}px of ${full}px`).toBeGreaterThanOrEqual(full);
         const icon = label.locator('xpath=preceding-sibling::*[local-name()="svg"][1]');
         expect((await icon.boundingBox())?.width ?? 0, 'the cloud icon was squeezed').toBeGreaterThanOrEqual(12);
         expect(await audit(page)).toEqual([]);
@@ -6900,7 +7061,8 @@ for (const locale of ['ar', 'en']) {
     for (const { name, warmUp, text } of PICK_SCENES) {
         test(`a model picked from the list says how its load goes, with the message box open (${name}, ${locale})`, async ({ page }) => {
             await open(page, '', locale, (p) => withPickedModelLoad(p, warmUp));
-            await page.getByRole('button', { name: /^Gemma-4-E4B-it-GGUF · / }).click();
+            await modeChip(page).click();
+            await page.getByRole('dialog').locator('.run-mode-expand').first().click();
             await page.getByRole('option', { name: new RegExp(PICKED) }).first().click();
             const banner = page.locator('.connection-banner');
             await expect(banner).toContainText(PICKED);
@@ -6908,9 +7070,9 @@ for (const locale of ['ar', 'en']) {
             await expect(page.getByLabel(locale === 'ar' ? /رسالة|Message/ : 'Message').first()).toBeEnabled();
             await shot(page, `pick-load-${locale}-${name}`);
             expect(await audit(page)).toEqual([]);
-            // A long memory-switch label gives way; the model's name is not the chip that is cut.
-            const modelName = page.locator('.composer-row-right .composer-chip-label', { hasText: PICKED });
-            expect(await modelName.evaluate((el) => el.scrollWidth <= el.clientWidth + 1)).toBe(true);
+            // A long memory-switch label gives way; the run mode is not the chip that is cut.
+            const mode = modeChip(page).locator('.composer-chip-label');
+            expect(await mode.evaluate((el) => el.scrollWidth <= el.clientWidth + 1)).toBe(true);
         });
     }
 }

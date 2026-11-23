@@ -83,6 +83,7 @@ from .routers import messaging as messaging_router_mod
 from .routers import onboarding as onboarding_router_mod
 from .routers import providers as providers_router_mod
 from .routers import resources as resources_router_mod
+from .routers import run_modes as run_modes_router_mod
 from .routers import schedules as schedules_router_mod
 from .routers import sessions as sessions_router_mod
 from .routers import setup as setup_router_mod
@@ -903,6 +904,7 @@ def create_app(db_path: str = None, webui_dist: str = None) -> FastAPI:
     app.include_router(lemonade_router_mod.router)
     app.include_router(logs_router_mod.router)
     app.include_router(providers_router_mod.router)
+    app.include_router(run_modes_router_mod.router)
     app.include_router(speech_router_mod.router)
     app.include_router(spending_router_mod.router)
     app.include_router(skills_router_mod.router)

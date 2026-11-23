@@ -7,9 +7,29 @@ icon: "shield-halved"
 
 You choose which model answers, the app tells you where each chat goes, and GAIA asks before it changes anything.
 
+## Choose where GAIA runs
+
+The chip beside Send in the message box says where chat runs, **Local** or **Cloud**. Click it to switch:
+
+| Mode | Chat | Everything else |
+|---|---|---|
+| **Local** | A model on this PC | On this PC |
+| **Cloud** | Fireworks AI, or another provider you connected | On this PC |
+
+Cloud moves chat only. Reading images, transcribing audio, reading aloud, creating images, and searching your documents and memory stay on this PC in both modes: Fireworks AI doesn't offer speech or image creation, and GAIA hasn't tested the rest there yet.
+
+- **Each mode remembers its own chat model.** Open a mode in the menu (the arrow beside it) to pick from its models; picking one under the other mode switches to that mode too.
+- **A switch that can't work is refused, and you stay where you were.** Cloud needs a working key; Local needs its model downloaded. The menu says which, and what to do.
+- **GAIA never changes mode on its own.** If a cloud reply fails, it says so; it doesn't answer from a local model instead.
+- While GAIA is answering, a switch waits for your next message, and the chip shows what comes next.
+
+**Settings → Run mode** (the sliders button beside the chip, or **Customize…** in the menu) shows both modes side by side: the chat model each uses, what serves every other capability, and **Reset to defaults**. Reset puts Local back on the model setup chose for this PC and Cloud back on GAIA's first recommended Fireworks model.
+
+The mode follows the model. If you pick a cloud model under **Settings → Agent & model** or in the terminal UI, the chip says Cloud the next time you look. [Local only](#privacy) blocks Cloud entirely.
+
 ## Choose a model
 
-Open **Settings → Agent & model** (or the model chip in the message box):
+Open **Settings → Agent & model** for every model and provider:
 
 | Provider | What it needs | Where your chat goes |
 |---|---|---|
@@ -40,8 +60,9 @@ first, so a size too large fails to load and says so.
 
 ### Switching models
 
-The model chip in the composer opens the same list. While GAIA is answering,
-a model you pick there applies to your next message. On most PCs, a local
+The run-mode chip in the composer lists the same models under **Local** and
+**Cloud**. While GAIA is answering, a mode or model you pick there applies to
+your next message. On most PCs, a local
 model you pick starts loading right away, and a banner counts the seconds; you
 can type meanwhile, and a message waits for the load. On a PC with under 24 GB
 of RAM, or when the GAIA agent runs as a Hub install, it loads with your first
@@ -99,10 +120,10 @@ nothing changed. Finishing it switches GAIA to the model it installed.
 
 ## Where your chat goes
 
-With a cloud model selected, the model chip and the sidebar's location line name
-the provider (for example **Fireworks AI**) instead of **Local**. They say
-**Local** only when GAIA confirms the chat is answered on this PC, and make no
-claim when it can't tell. Hover either for what is sent: the whole conversation,
+With a cloud model selected, the run-mode chip says **Cloud** and the sidebar's
+location line names the provider (for example **Fireworks AI**) instead of
+**Local**. They say **Local** only when GAIA confirms the chat is answered on
+this PC, and make no claim when it can't tell. Hover either for what is sent: the whole conversation,
 including anything read out of files, documents or memory, which themselves stay
 stored on your machine.
 

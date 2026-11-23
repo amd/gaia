@@ -4,6 +4,7 @@
 /** Shared wording for a local model's state, device, size and speed. */
 
 import type { LocalModelState, ModelPlacement, ProviderModel } from '../types';
+import { sameModelId } from '../stores/modelStore';
 
 export const STATE_LABELS: Record<LocalModelState, string> = {
     loaded: 'Loaded',
@@ -35,6 +36,15 @@ export function modelState(m: ProviderModel): LocalModelState {
 }
 
 /** True while a download of *m* is running. */
+/** `fireworks.x` and `fireworks.accounts/fireworks/models/x` name one model; `user.X` is `X`. */
+export function sameListedModel(a: string | null | undefined, b: string): boolean {
+    if (!a) return false;
+    if (sameModelId(a, b)) return true;
+    const cloud = /^(fireworks|amd)\./;
+    const tail = (id: string) => id.slice(id.lastIndexOf('/') + 1).replace(cloud, '');
+    return cloud.test(a) && cloud.test(b) && a.split('.')[0] === b.split('.')[0] && tail(a) === tail(b);
+}
+
 export function isDownloading(m: ProviderModel): boolean {
     const s = m.download_progress?.state;
     return s === 'starting' || s === 'downloading';

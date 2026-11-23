@@ -1611,18 +1611,8 @@ def _local_report(models: List[Dict[str, Any]], db: ChatDatabase) -> Dict[str, A
     }
 
 
-class SelectModelRequest(BaseModel):
-    model: str
-
-
-@router.post("/api/providers/select")
-def select_model(
-    body: SelectModelRequest, db: ChatDatabase = Depends(get_db)
-) -> Dict[str, Any]:
-    """Make *model* the one new turns run, and remember it across restarts."""
-    model_id = body.model.strip()
-    if not model_id:
-        raise HTTPException(status_code=422, detail="No model given.")
+def require_runnable(model_id: str) -> None:
+    """Raise the HTTP error that says why *model_id* can't run now; else return."""
     refuse_blocked_cloud_model(model_id)
     from gaia.config import GaiaConfigError
     from gaia.connectors.credential_wait import (
@@ -1649,10 +1639,53 @@ def select_model(
             status_code=409,
             detail=f"Can't switch to {model_label(model_id)}: {reason}.",
         )
+
+
+def _save_pick(model_id: str, leaving: Optional[str]) -> None:
+    """Remember *model_id* as the model chat reopens on, and the run mode it sets.
+
+    *leaving* is the model chat ran until now. When the pick changes the run
+    mode, the mode being left keeps *leaving*, so going back reopens on it.
+    """
+    from gaia.config import GaiaConfig, GaiaConfigError
+    from gaia.run_modes import mode_for, record_pick, with_chat
+
     try:
-        _write_config_keys(
-            {"last_provider": provider_of(model_id), "last_model": model_id}
-        )
+        remote = _is_cloud_model(model_id)
+        left = None if not leaving else _is_cloud_model(leaving)
+
+        def _apply(doc: dict) -> None:
+            doc["last_provider"] = provider_of(model_id)
+            doc["last_model"] = model_id
+            if left is not None and left != remote:
+                doc["run_profiles"] = with_chat(
+                    doc.get("run_profiles") or {}, mode_for(left), leaving
+                )
+            record_pick(doc, model_id, remote)
+
+        GaiaConfig.edit_doc(_apply)
+    except (GaiaConfigError, HybridConfigError) as e:
+        raise ProviderError(
+            f"The model choice was not saved: {e} Then pick the model again.",
+            500,
+        ) from e
+
+
+class SelectModelRequest(BaseModel):
+    model: str
+
+
+@router.post("/api/providers/select")
+def select_model(
+    body: SelectModelRequest, db: ChatDatabase = Depends(get_db)
+) -> Dict[str, Any]:
+    """Make *model* the one new turns run, and remember it across restarts."""
+    model_id = body.model.strip()
+    if not model_id:
+        raise HTTPException(status_code=422, detail="No model given.")
+    require_runnable(model_id)
+    try:
+        _save_pick(model_id, _active_view(db)["model"])
     except ProviderError as e:
         _raise(e)
     db.set_setting("custom_model", model_id)

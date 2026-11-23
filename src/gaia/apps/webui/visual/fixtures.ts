@@ -227,6 +227,7 @@ const ROUTES: Record<string, unknown> = {
             { id: 'fireworks', name: 'Fireworks AI', remote: true, privacy_notice: 'Chat history is sent to Fireworks AI.' },
         ],
     },
+    'GET /run-modes': runModes('local'),
     'GET /providers/active': { provider: 'local', model: 'Gemma-4-E4B-it-GGUF', label: 'Gemma-4-E4B-it-GGUF · local', remote: false, is_default: true, restore: { status: 'none', message: null } },
     'GET /providers/local/models': { models: [{ id: 'Gemma-4-E4B-it-GGUF', name: 'Gemma-4-E4B-it-GGUF', downloaded: true, loaded: true, size_gb: 4.9 }] },
     'GET /onboarding/start': { cards: [], working_folder: { path: '/home/you/projects/gaia', name: 'gaia', gaia_folder: false } },
@@ -415,6 +416,43 @@ export const FAILED_LINK_CHECK = {
 };
 
 /** Settings > Model with `models` on the Local tab; every other answer stays as in ROUTES. */
+/** What serves everything but chat; Cloud says why each stays on this PC. */
+function runModeCapabilities(cloud: boolean): unknown[] {
+    const NAMES: Record<string, string> = {
+        'Gemma-4-E4B-it-GGUF': 'Gemma 4 E4B', 'Whisper-Large-v3-Turbo': 'Whisper Large v3 Turbo',
+        'SDXL-Turbo': 'SDXL Turbo', 'user.embeddinggemma-300m-GGUF': 'Embeddinggemma 300m',
+    };
+    const row = (id: string, model: string | null, note: string, settings: string | null = null, unavailable: string | null = null) =>
+        ({ id, place: 'local', model, display_name: model && NAMES[model], unavailable, cloud_note: cloud ? note : null, settings });
+    return [
+        row('vision', 'Gemma-4-E4B-it-GGUF', 'not_tested'),
+        row('speech_to_text', 'Whisper-Large-v3-Turbo', 'not_offered'),
+        row('read_aloud', null, 'not_offered', 'voice', 'platform'),
+        row('images', 'SDXL-Turbo', 'not_offered', 'images'),
+        row('documents', 'user.embeddinggemma-300m-GGUF', 'not_tested'),
+    ];
+}
+
+/** GET /api/run-modes: *active* is in use; a *cloudChat* other than GLM counts as customized. */
+export function runModes(active: 'local' | 'cloud', cloudChat = 'fireworks.glm-5p3-flash', localChat = 'Gemma-4-E4B-it-GGUF'): unknown {
+    const chat = (model: string, cloud: boolean, fallback: string) => ({
+        model,
+        display_name: cloud ? model.split('.').slice(1).join('.') : model,
+        provider: cloud ? 'fireworks' : 'local',
+        provider_name: cloud ? 'Fireworks AI' : null,
+        default_model: fallback,
+        default_display_name: cloud ? fallback.split('.').slice(1).join('.') : fallback,
+        customized: model !== fallback,
+    });
+    return {
+        active,
+        modes: [
+            { id: 'local', active: active === 'local', chat: chat(localChat, false, 'Gemma-4-E4B-it-GGUF'), capabilities: runModeCapabilities(false) },
+            { id: 'cloud', active: active === 'cloud', chat: chat(cloudChat, true, 'fireworks.glm-5p3-flash'), capabilities: runModeCapabilities(true) },
+        ],
+    };
+}
+
 export async function withModelPage(page: Page, models: unknown[], plan: unknown, status: unknown = { state: 'idle' }, fireworks: Record<string, unknown> = {}, localOnly = false): Promise<void> {
     const answers: Record<string, unknown> = {
         'GET /providers/local/models': { provider: 'local', models, memory_gb: 96, memory_source: 'AMD iGPU', capacity_error: null },

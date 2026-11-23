@@ -16,6 +16,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
 from gaia.config import IMAGE_MAX_STEPS, GaiaConfig, GaiaConfigError
+from gaia.sd.settings import DEFAULT_IMAGE_MODEL
 
 from ..database import ChatDatabase
 from ..dependencies import get_db
@@ -23,9 +24,6 @@ from ..dependencies import get_db
 logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["images"])
-
-#: The model the flagship creates images with when none is saved.
-DEFAULT_IMAGE_MODEL = "SDXL-Turbo"
 
 
 class ImageModel(BaseModel):

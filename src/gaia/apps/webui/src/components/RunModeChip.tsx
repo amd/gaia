@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: MIT
 
 import { Fragment, useCallback, useEffect, useId, useRef, useState, type KeyboardEvent } from 'react';
-import { AlertCircle, Check, ChevronDown, Cloud, Cpu, Download, HelpCircle, KeyRound, Link2, Loader2 } from 'lucide-react';
+import { AlertCircle, Check, ChevronDown, ChevronRight, Cloud, Cpu, Download, HelpCircle, KeyRound, Loader2, SlidersHorizontal } from 'lucide-react';
 import { Popover } from './Popover';
 import './ModelPicker.css';
 import * as api from '../services/api';
@@ -11,13 +11,13 @@ import { useChatStore } from '../stores/chatStore';
 import {
     useModelStore, useInferencePlace, selectChipModel, displayModelName, distinctModelLabels, sameModelId, UNKNOWN_PLACE_TITLE,
 } from '../stores/modelStore';
-import { STATE_LABELS, isDownloading, modelState, placementText } from './modelMeta';
+import { STATE_LABELS, isDownloading, modelState, placementText, sameListedModel } from './modelMeta';
 import { InfoBubble } from './InfoBubble';
 import { formatPrice } from './settings/cloudPrice';
-import { useT } from '../i18n/useT';
+import { useT, type Translate } from '../i18n/useT';
 import { providerName, providerNotice } from '../utils/providerText';
 import { MarkedText, markLtr } from './MarkedText';
-import type { ProviderInfo, ProviderModel } from '../types';
+import type { ProviderInfo, ProviderModel, RunModeId, RunModesView } from '../types';
 
 interface ProviderModels {
     provider: ProviderInfo;
@@ -32,15 +32,15 @@ const KEY_LOCKED = 'store_locked';
 const PICK_START_POLLS = 5;
 
 /** What the info bubble lists for *m*: where it runs, size, speed, rank, price. */
-function modelDetails(m: ProviderModel, remote: boolean): string[] {
+function modelDetails(m: ProviderModel, remote: boolean, t: Translate): string[] {
     const rank = m.rank ? `#${m.rank} ${m.note ?? ''}`.trim() : null;
     if (remote) return [rank, formatPrice(m.price)].filter((x): x is string => !!x);
     return [
         placementText(m.placement),
         m.size_gb ? `${m.size_gb} GB` : null,
-        m.tokens_per_second ? `${Math.round(m.tokens_per_second)} tok/s on this PC` : null,
+        m.tokens_per_second ? t('modelMenu.speedHere', { speed: Math.round(m.tokens_per_second) }) : null,
         rank,
-        m.custom ? 'added by you' : null,
+        m.custom ? t('modelMenu.addedByYou') : null,
     ].filter((x): x is string => !!x);
 }
 
@@ -66,7 +66,7 @@ function StateMark({ m, onDownload, busy }: { m: ProviderModel; onDownload: () =
     if (isDownloading(m)) {
         const pct = Math.round(m.download_progress?.percent ?? 0);
         return (
-            <span className="model-state is-downloading" title={`Downloading, ${pct}%`}>
+            <span className="model-state is-downloading" title={t('modelMenu.downloading', { percent: pct })}>
                 <Loader2 size={12} className="spin" aria-hidden="true" /> {pct}%
             </span>
         );
@@ -94,8 +94,10 @@ function StateMark({ m, onDownload, busy }: { m: ProviderModel; onDownload: () =
     return <span className="model-state is-ready" title={STATE_LABELS.downloaded}>{t('modelMenu.ready')}</span>;
 }
 
-/** The model the open chat runs on, where it runs, and a picker to change it. */
-export function ModelChip() {
+const MODES: RunModeId[] = ['local', 'cloud'];
+
+/** Where GAIA runs, Local or Cloud, with a menu to switch and to pick each mode's chat model. */
+export function RunModeChip() {
     const t = useT();
     const active = useModelStore((s) => s.active);
     const select = useModelStore((s) => s.select);
@@ -112,6 +114,9 @@ export function ModelChip() {
     const anchor = useRef<HTMLButtonElement>(null);
     const [open, setOpen] = useState(false);
     const [groups, setGroups] = useState<ProviderModels[] | null>(null);
+    // Each mode's chat model, so a mode can be switched to without opening its list.
+    const [view, setView] = useState<RunModesView | null>(null);
+    const [expanded, setExpanded] = useState<Record<RunModeId, boolean>>({ local: false, cloud: false });
     const [showAllFireworksModels, setShowAllFireworksModels] = useState(false);
     const [unavailable, setUnavailable] = useState(0);
     const [error, setError] = useState<string | null>(null);
@@ -150,8 +155,9 @@ export function ModelChip() {
             setGroups(null);
         }
         try {
-            const { providers, lemonade_error } = await api.listProviders();
+            const [{ providers, lemonade_error }, modes] = await Promise.all([api.listProviders(), api.getRunModes()]);
             if (lemonade_error) throw new Error(lemonade_error);
+            setView(modes);
             // Fireworks is always offered (with "Add your key"); the gateway once registered.
             const shown = providers.filter((p) => !p.remote || p.models_discovered || p.id === 'fireworks' || p.registered);
             const lists = await Promise.all(shown.map(async (provider) => {
@@ -189,6 +195,7 @@ export function ModelChip() {
             setPendingCloud(null);
             setPendingDownload(null);
             setShowAllFireworksModels(false);
+            setExpanded({ local: false, cloud: false });
             setActiveRow(null);
             setInfoRow(null);
             void load();
@@ -239,13 +246,20 @@ export function ModelChip() {
                 const row = at < 0 ? undefined : rows[at].dataset.row;
                 if (!row) return;
                 e.preventDefault();
+                if (row.startsWith('mode:')) {
+                    if (e.key === 'ArrowRight') setExpanded((x) => ({ ...x, [row.slice(5)]: true }));
+                    return;
+                }
                 setInfoRow((r) => (e.key === 'i' && r === row ? null : row));
                 return;
             }
-            case 'ArrowLeft':
+            case 'ArrowLeft': {
                 e.preventDefault();
+                const row = at < 0 ? undefined : rows[at].dataset.row;
+                if (row?.startsWith('mode:')) setExpanded((x) => ({ ...x, [row.slice(5)]: false }));
                 setInfoRow(null);
                 return;
+            }
             default:
                 return;
         }
@@ -333,7 +347,7 @@ export function ModelChip() {
         if (!m) {
             if (!missedPoll()) return;
             setPickAfterDownload(null);
-            setAutoSwitchError(`${displayModelName(model)} is no longer in the model list, so it wasn't switched to.`);
+            setAutoSwitchError(t('modelMenu.autoSwitch.gone', { name: displayModelName(model) }));
             return;
         }
         if (isDownloading(m)) {
@@ -343,42 +357,56 @@ export function ModelChip() {
         const progress = m.download_progress;
         if (progress?.state === 'error') {
             setPickAfterDownload(null);
-            setAutoSwitchError(`Downloading ${displayModelName(model)} failed: ${progress.message ?? 'no reason given'}`);
+            setAutoSwitchError(t('modelMenu.autoSwitch.downloadFailed', { name: displayModelName(model), reason: progress.message ?? t.bare('modelMenu.autoSwitch.noReason') }));
             return;
         }
         // The model list can lag the finished download by a poll; "complete" already means downloaded.
         if (progress?.state !== 'complete' && modelState(m) === 'not_downloaded') {
             if (!missedPoll()) return;
             setPickAfterDownload(null);
-            setAutoSwitchError(`The download of ${displayModelName(model)} never started. Try the download button again.`);
+            setAutoSwitchError(t('modelMenu.autoSwitch.neverStarted', { name: displayModelName(model) }));
             return;
         }
         setPickAfterDownload(null);
         void choose(model, provider).then((failed) => {
-            if (failed) setAutoSwitchError(`${displayModelName(model)} downloaded, but switching to it failed: ${failed}`);
+            if (failed) setAutoSwitchError(t('modelMenu.autoSwitch.switchFailed', { name: displayModelName(model), reason: failed }));
         });
-    }, [groups, pickAfterDownload, requestsPending, choose]);
+    }, [groups, pickAfterDownload, requestsPending, choose, t]);
 
-    // The row Tab lands on: the last one focused, else the current model, else the first.
+    const modeOf = (g: ProviderModels): RunModeId => (g.provider.remote ? 'cloud' : 'local');
+    const chatOf = (mode: RunModeId) => view?.modes.find((m) => m.id === mode)?.chat.model ?? null;
+    const cloudChat = chatOf('cloud');
+    // Rows a collapsed Fireworks list still shows: the model in use and the one Cloud is set to.
+    const kept = (id: string) => sameModelId(currentModel, id) || (!!cloudChat && sameListedModel(cloudChat, id));
     const fireworksCollapsed = (provider: ProviderInfo, models: ProviderModel[]) =>
         provider.id === 'fireworks' && !showAllFireworksModels && models.some((m) => m.rank !== null);
     const fireworksVisibleModels = (provider: ProviderInfo, models: ProviderModel[]) =>
         fireworksCollapsed(provider, models)
-            ? models.filter((m) => m.rank !== null || sameModelId(currentModel, m.id))
+            ? models.filter((m) => m.rank !== null || kept(m.id))
             : models;
     const fireworksHasHiddenModels = (provider: ProviderInfo, models: ProviderModel[]) =>
         fireworksCollapsed(provider, models)
-        && models.some((m) => m.rank === null && !sameModelId(currentModel, m.id));
-    const pickable = groups?.flatMap(({ provider, models }) => [
-        ...(provider.remote && !provider.models_discovered ? [`key:${provider.id}`] : []),
-        ...fireworksVisibleModels(provider, models)
-            .filter((m) => switching === null && !isDownloading(m))
-            .map((m) => m.id),
-        ...(fireworksHasHiddenModels(provider, models) ? [`showall:${provider.id}`] : []),
-    ]) ?? [];
+        && models.some((m) => m.rank === null && !kept(m.id));
+    const shownGroups = groups && orderGroups(groups, active?.provider, currentModel);
+    const groupsIn = (mode: RunModeId) => (shownGroups ?? []).filter((g) => modeOf(g) === mode);
+    const queuedGroup = queued ? groups?.find((g) => g.models.some((m) => sameModelId(queued, m.id))) : undefined;
+    // The mode new messages run in: a queued pick already counts.
+    const currentMode: RunModeId | null = queuedGroup ? modeOf(queuedGroup) : active?.model ? (active.remote ? 'cloud' : 'local') : null;
+    // The row Tab lands on: the last one focused, else the mode in use, else the first.
+    const pickable = MODES.flatMap((mode) => [
+        `mode:${mode}`,
+        ...(expanded[mode] ? groupsIn(mode).flatMap(({ provider, models }) => [
+            ...(provider.key_state === KEY_LOCKED ? [`unlock:${provider.id}`] : []),
+            ...(provider.remote && !provider.models_discovered ? [`key:${provider.id}`] : []),
+            ...fireworksVisibleModels(provider, models)
+                .filter((m) => switching === null && !isDownloading(m))
+                .map((m) => m.id),
+            ...(fireworksHasHiddenModels(provider, models) ? [`showall:${provider.id}`] : []),
+        ]) : []),
+    ]);
     const tabRow = activeRow && pickable.includes(activeRow)
         ? activeRow
-        : currentModel && pickable.includes(currentModel) ? currentModel : pickable[0];
+        : currentMode ? `mode:${currentMode}` : pickable[0];
     const rowProps = (row: string) => ({
         role: 'option' as const,
         tabIndex: row === tabRow ? 0 : -1,
@@ -387,30 +415,100 @@ export function ModelChip() {
         onBlur: () => setInfoRow(null),
     });
 
-    const Icon = place?.remote ? Cloud : place ? Cpu : HelpCircle;
-    const name = chipModel ? displayModelName(chipModel) : 'Model';
-    const label = `${name}${place ? ` · ${place.label}` : ''}`;
+    /** Pick *m*: switch to it, or ask about the download it needs first. */
+    const pickModel = (m: ProviderModel, provider: ProviderInfo) => {
+        if (provider.remote || modelState(m) !== 'not_downloaded') {
+            // A pick made since outranks one waiting on a download.
+            setPickAfterDownload(null);
+            setPendingDownload(null);
+            return void choose(m.id, provider);
+        }
+        // One question open at a time.
+        setPendingCloud(null);
+        setPendingDownload({ model: m.id, provider, pick: true });
+    };
+
+    /** The model *mode* is set to, as its provider lists it. */
+    const listedChat = (mode: RunModeId) => {
+        const target = chatOf(mode);
+        if (!target) return undefined;
+        return groupsIn(mode)
+            .flatMap((g) => g.models.map((m) => ({ m, provider: g.provider })))
+            .find(({ m }) => sameListedModel(target, m.id));
+    };
+
+    /** Switch to *mode* on its chat model. The mode in use opens its model list instead. */
+    const pickMode = (mode: RunModeId) => {
+        if (mode === currentMode) {
+            setExpanded((x) => ({ ...x, [mode]: !x[mode] }));
+            return;
+        }
+        // Whatever stands in the way (a key to add, a download, a question) shows in the open list.
+        setExpanded((x) => ({ ...x, [mode]: true }));
+        const hit = listedChat(mode);
+        const target = chatOf(mode);
+        if (hit) return pickModel(hit.m, hit.provider);
+        if (target && groupsIn(mode).some((g) => g.models.length > 0)) {
+            setError(t(`runMode.modelNotListed.${mode}`, { name: displayModelName(target) }));
+        }
+    };
+
+    /** The line under a mode's name: its chat model, or what stands in the way of using it. */
+    const modeState = (mode: RunModeId): { text: string; warning: boolean } | null => {
+        const inMode = groupsIn(mode);
+        const target = chatOf(mode);
+        const name = target ? displayModelName(target) : null;
+        if (mode === 'cloud') {
+            if (inMode.some((g) => g.provider.blocked)) return { text: t('settings.privacy.localOnlyBlocked'), warning: true };
+            const connected = inMode.filter((g) => g.provider.models_discovered);
+            if (connected.length === 0) {
+                // A key that found no models was rejected, or the provider is listing none.
+                const keyed = inMode.some((g) => g.provider.key_source);
+                return { text: t(keyed ? 'runMode.keyNotWorking' : 'runMode.needsKey'), warning: keyed || currentMode === 'cloud' };
+            }
+            const failed = connected.find((g) => g.error);
+            if (failed && connected.every((g) => g.models.length === 0)) return { text: failed.error!, warning: true };
+            return name ? { text: name, warning: false } : null;
+        }
+        const hit = listedChat(mode);
+        if (name && hit && modelState(hit.m) === 'not_downloaded' && !isDownloading(hit.m)) {
+            return { text: t('runMode.notDownloaded', { name }), warning: true };
+        }
+        if (name && hit?.m.tight) return { text: t('runMode.tight', { name }), warning: true };
+        return name ? { text: name, warning: false } : null;
+    };
+
+    const chipMode: RunModeId | null = place ? (place.remote ? 'cloud' : 'local') : null;
+    const Icon = chipMode === 'cloud' ? Cloud : chipMode ? Cpu : HelpCircle;
+    const name = chipModel ? displayModelName(chipModel) : t('runMode.noModel');
+    const label = chipMode ? t(`runMode.${chipMode}`) : t('runMode.unknown');
     const rowLabels = Object.fromEntries((groups ?? []).map((g) => [g.provider.id, distinctModelLabels(g.models)]));
-    const shownGroups = groups && orderGroups(groups, active?.provider, currentModel);
+    // A queued switch to the other mode is named by the mode; within a mode, by the model.
+    const queuedMode: RunModeId | null = !queued ? null
+        : queuedGroup ? modeOf(queuedGroup)
+        : /^(fireworks|amd)\./.test(queued) ? 'cloud' : null;
+    const queuedLabel = queued && t('runMode.next', {
+        name: queuedMode && queuedMode !== chipMode ? t.bare(`runMode.${queuedMode}`) : displayModelName(queued),
+    });
     const notDownloaded = active?.downloaded === false && chipModel === active.model;
     const title = autoSwitchError
         ? autoSwitchError
         : queueError
         ? queueError
         : queued
-            ? `${displayModelName(queued)} is used from your next message.`
+            ? t('runMode.queuedTitle', { name: displayModelName(queued) })
             : active?.config_error
                 ? active.config_error
                 : notDownloaded
-                    ? `${name} isn't downloaded yet. Open the list to download it.`
+                    ? t('runMode.notDownloadedTitle', { name })
                     : !place
                         ? UNKNOWN_PLACE_TITLE
                         // The server writes the model name as Markdown code; a tooltip shows backticks literally.
                         : place.description?.replace(/`/g, '')
-                            ?? (place.remote ? t('modelStatus.runsRemote', { name: place.label }) : t('modelStatus.runsHere'));
+                            ?? `${name} · ${place.remote ? t('modelStatus.runsRemote', { name: place.label }) : t('modelStatus.runsHere')}`;
 
     return (
-        <div className="composer-chip-wrap">
+        <div className="composer-chip-wrap run-mode-chip-wrap">
             <button
                 ref={anchor}
                 type="button"
@@ -421,13 +519,22 @@ export function ModelChip() {
                 title={title}
             >
                 <Icon size={13} aria-hidden="true" />
-                <span className="composer-chip-label" dir="auto">{label}</span>
-                {queued && <span className="composer-chip-next">→ {displayModelName(queued)} next</span>}
-                {notDownloaded && <Download size={12} aria-label="Not downloaded" />}
-                {autoSwitchError && <AlertCircle size={12} aria-label="Model switch failed" />}
+                <span className="composer-chip-label">{label}</span>
+                {queued && <span className="composer-chip-next">{queuedLabel}</span>}
+                {notDownloaded && <Download size={12} aria-label={t('runMode.notDownloadedMark')} />}
+                {autoSwitchError && <AlertCircle size={12} aria-label={t('runMode.switchFailedMark')} />}
                 <ChevronDown size={12} aria-hidden="true" />
             </button>
-            <Popover open={open} onClose={close} anchor={anchor} label={t('modelMenu.label')} align="end" className="model-menu">
+            <button
+                type="button"
+                className="composer-chip run-mode-customize"
+                onClick={() => openSettings('mode')}
+                aria-label={t('runMode.customize')}
+                title={t('runMode.customize')}
+            >
+                <SlidersHorizontal size={13} aria-hidden="true" />
+            </button>
+            <Popover open={open} onClose={close} anchor={anchor} label={t('runMode.menuLabel')} align="end" className="model-menu run-mode-menu">
                 {turnRunning && (
                     <div className="popover-message" role="status">
                         {chipModel
@@ -442,10 +549,55 @@ export function ModelChip() {
                     <div className="popover-message"><Loader2 size={13} className="spin" /> {t('modelMenu.loading')}</div>
                 )}
                 {groups && (
-                <div ref={list} role="listbox" aria-label={t('modelMenu.models')} onKeyDown={onListKey}>
-                {shownGroups!.map(({ provider, models, error: groupError }) => (
-                    <div key={provider.id} role="group" aria-labelledby={`${listId}-${provider.id}`}>
-                        <div className="popover-heading" id={`${listId}-${provider.id}`}>{providerName(t, provider)}</div>
+                <div ref={list} role="listbox" aria-label={t('runMode.menuLabel')} onKeyDown={onListKey}>
+                {MODES.map((mode) => {
+                    const state = modeState(mode);
+                    const ModeIcon = mode === 'cloud' ? Cloud : Cpu;
+                    const modeName = t(`runMode.${mode}`);
+                    return (
+                    <div key={mode} role="group" aria-label={modeName} className="run-mode-group">
+                    <div className="popover-row">
+                        <button
+                            type="button"
+                            className="popover-item run-mode-item"
+                            {...rowProps(`mode:${mode}`)}
+                            aria-selected={currentMode === mode}
+                            onClick={() => pickMode(mode)}
+                            disabled={switching !== null}
+                        >
+                            <span className="popover-item-check" aria-hidden="true">
+                                {currentMode === mode ? <Check size={13} /> : null}
+                            </span>
+                            <span className="popover-item-body">
+                                <span className="popover-item-title run-mode-name">
+                                    <ModeIcon size={13} aria-hidden="true" /> {modeName}
+                                </span>
+                                <span className="popover-item-note">{t(`runMode.${mode}Note`)}</span>
+                                {state && (
+                                    <span className={`popover-item-note run-mode-state${state.warning ? ' is-warning' : ''}`}>
+                                        {state.text}
+                                    </span>
+                                )}
+                            </span>
+                        </button>
+                        <button
+                            type="button"
+                            className="run-mode-expand"
+                            aria-expanded={expanded[mode]}
+                            aria-label={t(`runMode.showModels.${mode}`)}
+                            title={t(`runMode.showModels.${mode}`)}
+                            // ArrowRight on the mode's row opens it, so the list keeps one Tab stop.
+                            tabIndex={-1}
+                            onClick={() => setExpanded((x) => ({ ...x, [mode]: !x[mode] }))}
+                        >
+                            {expanded[mode]
+                                ? <ChevronDown size={13} aria-hidden="true" />
+                                : <ChevronRight size={13} className="run-mode-chevron" aria-hidden="true" />}
+                        </button>
+                    </div>
+                    {expanded[mode] && groupsIn(mode).map(({ provider, models, error: groupError }) => (
+                    <div key={provider.id} role="group" aria-label={providerName(t, provider)} className="run-mode-models">
+                        {provider.remote && <div className="popover-heading">{providerName(t, provider)}</div>}
                         {groupError && <div className="popover-message is-error">{groupError}</div>}
                         {provider.key_state === KEY_WAITING ? (
                             <div className="popover-message" role="status">
@@ -488,9 +640,8 @@ export function ModelChip() {
                                 && toDownload(m, currentModel)
                                 && i === visible.findIndex((v) => toDownload(v, currentModel));
                             const current = sameModelId(queued ?? active?.model, m.id);
-                            const needsDownload = !provider.remote && modelState(m) === 'not_downloaded';
                             const modelName = rowLabels[provider.id][m.id];
-                            const details = modelDetails(m, provider.remote);
+                            const details = modelDetails(m, provider.remote, t);
                             const infoId = `${listId}-info-${provider.id}-${m.id}`;
                             return (
                                 <Fragment key={m.id}>
@@ -501,17 +652,7 @@ export function ModelChip() {
                                         <button
                                             type="button"
                                             className="popover-item"
-                                            onClick={() => {
-                                                if (!needsDownload) {
-                                                    // A pick made since outranks one waiting on a download.
-                                                    setPickAfterDownload(null);
-                                                    setPendingDownload(null);
-                                                    return void choose(m.id, provider);
-                                                }
-                                                // One question open at a time.
-                                                setPendingCloud(null);
-                                                setPendingDownload({ model: m.id, provider, pick: true });
-                                            }}
+                                            onClick={() => pickModel(m, provider)}
                                             disabled={switching !== null || isDownloading(m)}
                                             {...rowProps(m.id)}
                                             aria-selected={current}
@@ -528,7 +669,7 @@ export function ModelChip() {
                                             </span>
                                         </button>
                                         <InfoBubble
-                                            label={`About ${modelName}`}
+                                            label={t('modelMenu.about', { name: modelName })}
                                             warning={!!m.placement?.warning}
                                             id={infoId}
                                             pinned={infoRow === m.id}
@@ -611,10 +752,13 @@ export function ModelChip() {
                             </button>
                         )}
                     </div>
-                ))}
+                    ))}
+                    </div>
+                    );
+                })}
                 </div>
                 )}
-                {unavailable > 0 && (
+                {unavailable > 0 && expanded.local && (
                     <button
                         type="button"
                         className="popover-item"
@@ -630,21 +774,13 @@ export function ModelChip() {
                 <button
                     type="button"
                     className="popover-item"
-                    onClick={() => { setOpen(false); openSettings('model'); }}
+                    onClick={() => { setOpen(false); openSettings('mode'); }}
                 >
-                    <span className="popover-item-check"><Link2 size={13} aria-hidden="true" /></span>
+                    <span className="popover-item-check"><SlidersHorizontal size={13} aria-hidden="true" /></span>
                     <span className="popover-item-body">
-                        <span className="popover-item-title">{t('modelMenu.addFromLink')}</span>
-                        <span className="popover-item-note">{t('modelMenu.addFromLinkNote')}</span>
+                        <span className="popover-item-title">{t('runMode.customizeMenu')}</span>
+                        <span className="popover-item-note">{t('runMode.customizeNote')}</span>
                     </span>
-                </button>
-                <button
-                    type="button"
-                    className="popover-item"
-                    onClick={() => { setOpen(false); openSettings('model'); }}
-                >
-                    <span className="popover-item-check" />
-                    <span className="popover-item-body"><span className="popover-item-title">{t('modelMenu.providers')}</span></span>
                 </button>
             </Popover>
         </div>

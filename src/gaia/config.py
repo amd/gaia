@@ -333,6 +333,10 @@ class GaiaConfig:
         hybrid_policy: How readily ``hybrid`` uses the cheap model:
             ``quality`` (default) or ``balanced``, which also sends
             medium-difficulty code changes to it.
+        run_mode: Where chat last ran, ``local`` or ``cloud`` (see
+            :mod:`gaia.run_modes`). A record: the running chat model decides.
+        run_profiles: The chat model each run mode uses when it differs from
+            that mode's default (mode -> ``{"chat": model id}``).
         reduced_motion: Turn off the terminal UI's animations — the shimmer on
             the live status line, a pending prompt's pulse, and the spinner.
             ``GAIA_TUI_REDUCED_MOTION=1`` does the same for one launch.
@@ -371,6 +375,8 @@ class GaiaConfig:
     hybrid_classifier_model: Optional[str] = None
     hybrid_classifier_timeout: int = 15
     hybrid_policy: str = "quality"
+    run_mode: Optional[str] = None
+    run_profiles: Dict[str, Dict[str, str]] = field(default_factory=dict)
     reduced_motion: bool = False
 
     #: Field values as last read from or written to the file (not a field).
@@ -670,6 +676,20 @@ class GaiaConfig:
         return word
 
     @staticmethod
+    def _check_run_modes(data: dict, where: str) -> None:
+        from gaia.run_modes import RunModeError, check_mode, check_profiles
+
+        try:
+            if data.get("run_mode") is not None:
+                check_mode(data["run_mode"])
+            if "run_profiles" in data:
+                check_profiles(data["run_profiles"], where)
+        except RunModeError as e:
+            raise GaiaConfigError(
+                str(e) if str(e).startswith(where) else f"{where}: {e}"
+            ) from e
+
+    @staticmethod
     def _check_context_sizes(value: Any, config_file: Path) -> None:
         if not isinstance(value, dict) or not all(
             isinstance(k, str)
@@ -804,6 +824,7 @@ class GaiaConfig:
                     f"list of model ids, but it is {skipped!r}. Fix it by hand, "
                     "or delete the key to download every model setup needs."
                 )
+        cls._check_run_modes(data, f"GAIA config at {config_file}")
         if "custom_models" in data:
             from gaia.llm.custom_models import validate_entries
 
@@ -1005,6 +1026,10 @@ class GaiaConfig:
                 key,
                 self._check_embedding_device(value, "gaia config", offering=True),
             )
+            return
+        if key in ("run_mode", "run_profiles"):
+            self._check_run_modes({key: value}, "gaia config")
+            setattr(self, key, value)
             return
         if key == "context_sizes":
             raise GaiaConfigError(
