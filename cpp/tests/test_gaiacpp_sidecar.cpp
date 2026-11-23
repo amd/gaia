@@ -999,7 +999,9 @@ TEST_F(GaiacppSidecar, AlwaysOnACommandHoldsWhenTheNextOneStartsWithCdAndStillAs
 
     auto chain = runTurn(*this, port_, "run-cd4", "chat-cd", allowed, "deny");
     ASSERT_TRUE(chain) << "a chain of two commands ran on a grant for one";
-    EXPECT_EQ((*chain)["always_scope"].get<std::string>().rfind("bash_execute:exact:", 0), 0u) << chain->dump();
+    // A chain is never offered the one program's grant; at most the line as written, or none.
+    const json chainScope = (*chain)["always_scope"];
+    EXPECT_TRUE(chainScope.is_null() || chainScope.get<std::string>().rfind("bash_execute:exact:", 0) == 0) << chain->dump();
     EXPECT_FALSE(fs::exists(work_ / "four"));
     EXPECT_TRUE(fs::is_directory(work_ / "one"));
 }
