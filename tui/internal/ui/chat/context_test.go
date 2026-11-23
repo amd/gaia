@@ -126,6 +126,33 @@ func TestClearResetsTheMeter(t *testing.T) {
 	}
 }
 
+// The service's HTTP agent sends its measurement on `final`, not as an event.
+func TestContextReportArrivesOnTheFinalOfAnHTTPAgent(t *testing.T) {
+	m, now := frameChat(t, 120, 24)
+	startTurn(m, *now, "hi")
+	final := event.ParseCanonicalEvent([]byte(`{"type":"final","answer":"Hello.","context":{` +
+		`"window":65536,"system":3000,"tools":5000,"tool_definitions":5000,"history":1000,` +
+		`"history_used":1000,"history_budget":24000,"categories":[],"tokenizer":{"exact":true}}}`))
+	at(t, m, now, time.Second, final)
+	if h, ok := m.contextHint(); !ok || h.text != "ctx 28%" {
+		t.Errorf("meter after the final is %+v (shown %v), want ctx 28%%", h, ok)
+	}
+	if got := m.contextBreakdown(); !strings.Contains(got, "9.0k of 32.0k tokens") {
+		t.Errorf("/context printed:\n%s", got)
+	}
+}
+
+func TestContextSaysWhyAFinalCameWithoutAReport(t *testing.T) {
+	m, now := frameChat(t, 120, 24)
+	startTurn(m, *now, "hi")
+	at(t, m, now, time.Second, event.ParseCanonicalEvent([]byte(
+		`{"type":"final","answer":"Hello.","context_error":"GAIA couldn't measure this chat's context: it did not finish within 15s."}`)))
+	got := m.contextBreakdown()
+	if !strings.Contains(got, "did not finish within 15s") || strings.Contains(got, "first answer") {
+		t.Errorf("/context printed %q", got)
+	}
+}
+
 func TestFrameContextWarning(t *testing.T) {
 	for _, tc := range []struct {
 		name string

@@ -57,7 +57,10 @@
         "timeout_seconds"
       ]
     },
-    "final": { "fields": ["answer", "usage"] },
+    "final": {
+      "fields": ["answer", "usage", "context", "context_error"],
+      "not_sent_over_stdio": ["context", "context_error"]
+    },
     "error": { "fields": ["detail", "status", "source"], "not_sent_over_stdio": ["source"] },
     "context_usage": {
       "fields": [

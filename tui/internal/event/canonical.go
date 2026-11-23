@@ -232,10 +232,29 @@ type CanonicalInputOption struct {
 
 // CanonicalFinalEvent — terminal success. Usage is an optional
 // {steps?, tools_used?, elapsed?, tokens?, ttft?} object.
+//
+// Context is the HTTP sidecar's context measurement: it sends no
+// context_usage event to a caller that pushes no turns. ContextError is why
+// it has none.
 type CanonicalFinalEvent struct {
-	Type   string          `json:"type"`
-	Answer string          `json:"answer"`
-	Usage  json.RawMessage `json:"usage,omitempty"`
+	Type         string          `json:"type"`
+	Answer       string          `json:"answer"`
+	Usage        json.RawMessage `json:"usage,omitempty"`
+	Context      json.RawMessage `json:"context,omitempty"`
+	ContextError string          `json:"context_error,omitempty"`
+}
+
+// ContextUsage is the measurement a final carries, when it has one.
+func (e CanonicalFinalEvent) ContextUsage() (CanonicalContextUsageEvent, bool) {
+	var usage CanonicalContextUsageEvent
+	if len(e.Context) == 0 {
+		return usage, false
+	}
+	if err := json.Unmarshal(e.Context, &usage); err != nil || usage.Window <= 0 {
+		return CanonicalContextUsageEvent{}, false
+	}
+	usage.Type = CanonicalTypeContextUsage
+	return usage, true
 }
 
 // CanonicalUsage is the shape the TUI reads out of CanonicalFinalEvent.Usage.

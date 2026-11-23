@@ -258,6 +258,7 @@ func (m ChatModel) handleCanonicalEvent(evt interface{}) (ChatModel, tea.Cmd, bo
 			return m, nil, true
 		}
 		usage := event.CanonicalUsageOf(e)
+		m.takeFinalContext(e)
 		// ttft is the BACKEND's own measurement or nothing — see
 		// CanonicalUsage. The client used to stamp it when the first token
 		// reached the screen, which on a multi-step turn is the time the agent
