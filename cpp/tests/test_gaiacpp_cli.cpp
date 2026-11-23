@@ -13,6 +13,12 @@
 #include <sstream>
 #include <string>
 
+#ifdef _WIN32
+#include <process.h>
+#else
+#include <unistd.h>
+#endif
+
 #include "gaia/process.h"
 #include "gaia/types.h"
 #include "support/mock_llm_server.h"
@@ -68,12 +74,20 @@ protected:
         const std::string cmd = bin + " -p hi -m mock-model --base-url " + mock.baseUrl() +
                                 " --native-tools always --output-format json"
                                 " --no-memory --no-skills --no-web" + extraArgs;
-        // A config path that does not exist keeps the user's own settings out.
-        std::map<std::string, std::string> env = {
-            {"GAIA_TURN_LOG", turnLog},
-            {"GAIACPP_CONFIG", (dir_ / "no-config.json").string()}};
+        std::map<std::string, std::string> env = isolated();
+        env["GAIA_TURN_LOG"] = turnLog;
         env.insert(extraEnv.begin(), extraEnv.end());
         return gaia::ProcessRunner::run(cmd, 60000, (dir_ / "work").string(), env);
+    }
+
+    // No settings file, GAIA install or model server from this machine or shell
+    // (a config path that does not exist keeps the user's own settings out).
+    std::map<std::string, std::string> isolated() const {
+        return {{"GAIACPP_CONFIG", (dir_ / "no-config.json").string()},
+                {"GAIA_HOME", (dir_ / "gaia-home").string()},
+                {"GAIA_CONFIG_FILE", ""}, {"GAIA_CONFIG_DIR", ""},
+                {"LEMONADE_BASE_URL", ""}, {"LEMONADE_API_KEY", ""}, {"GAIA_LEMONADE_EMBEDDED", ""},
+                {"GAIA_BASE_URL", ""}, {"GAIA_API_KEY", ""}, {"GAIA_MODEL_ID", ""}};
     }
 
     fs::path dir_;
@@ -541,6 +555,138 @@ TEST_F(GaiacppCli, MaxHelpersMustBeAWholeNumber) {
     const gaia::ProcessResult r = run(mock, "", " --max-helpers many");
     EXPECT_EQ(r.exitCode, 2);
     EXPECT_NE(r.stderr_output.find("--max-helpers"), std::string::npos) << r.stderr_output;
+}
+
+// A GAIA install records its own server, its key and the chosen model; with
+// no flag or variable naming them, gaiacpp runs on those (#8826).
+TEST_F(GaiacppCli, NoFlagsRunsOnGaiasServerKeyAndModel) {
+    bench::MockLlmServer mock;
+    mock.setModelsList(R"({"data":[{"id":"chosen-model","downloaded":true}]})");
+    mock.pushResponse(withUsage(finalAnswer("ok"), 50, 0, 5));
+    const fs::path home = dir_ / "gaia-home";
+    fs::create_directories(home / "lemonade");
+    const int port = std::stoi(mock.baseUrl().substr(mock.baseUrl().rfind(':') + 1));
+#ifdef _WIN32
+    const long long pid = _getpid();
+#else
+    const long long pid = getpid();
+#endif
+    std::ofstream(home / "lemonade" / "state.json")
+        << json{{"pid", pid}, {"port", port}, {"api_key", "gaia-own-key"}}.dump();
+    std::ofstream(home / "config.json") << json{{"default_model", "chosen-model"}}.dump();
+
+    std::string bin = GAIACPP_BIN;
+    if (bin.find(' ') != std::string::npos) bin = "\"" + bin + "\"";
+    const gaia::ProcessResult r = gaia::ProcessRunner::run(
+        bin + " -p hi --native-tools always --output-format json --no-memory --no-skills --no-web", 60000,
+        (dir_ / "work").string(), isolated());
+    ASSERT_EQ(r.exitCode, 0) << r.stderr_output;
+    EXPECT_EQ(json::parse(r.stdout_output)["model"], "chosen-model");
+    ASSERT_FALSE(mock.receivedAuthorization().empty());
+    EXPECT_EQ(mock.receivedAuthorization()[0], "Bearer gaia-own-key");
+    EXPECT_EQ(json::parse(mock.receivedBodies()[0])["model"], "chosen-model");
+}
+
+// After `source ~/.gaia/lemonade/env.sh` and a restart of GAIA's server, the
+// exported port and key are stale: the live record wins.
+TEST_F(GaiacppCli, AStaleEnvShFollowsGaiasLiveServer) {
+    bench::MockLlmServer mock;
+    mock.pushResponse(withUsage(finalAnswer("ok"), 50, 0, 5));
+    const fs::path home = dir_ / "gaia-home";
+    fs::create_directories(home / "lemonade");
+    const int port = std::stoi(mock.baseUrl().substr(mock.baseUrl().rfind(':') + 1));
+#ifdef _WIN32
+    const long long pid = _getpid();
+#else
+    const long long pid = getpid();
+#endif
+    std::ofstream(home / "lemonade" / "state.json")
+        << json{{"pid", pid}, {"port", port}, {"api_key", "live-key"}}.dump();
+    auto env = isolated();
+    env["LEMONADE_BASE_URL"] = "http://localhost:1/api/v1";
+    env["LEMONADE_API_KEY"] = "stale-key";
+    env["GAIA_LEMONADE_EMBEDDED"] = "1";
+
+    std::string bin = GAIACPP_BIN;
+    if (bin.find(' ') != std::string::npos) bin = "\"" + bin + "\"";
+    const gaia::ProcessResult r = gaia::ProcessRunner::run(
+        bin + " -p hi -m mock-model --native-tools always --no-memory --no-skills --no-web", 60000,
+        (dir_ / "work").string(), env);
+    ASSERT_EQ(r.exitCode, 0) << r.stderr_output;
+    ASSERT_FALSE(mock.receivedAuthorization().empty());
+    EXPECT_EQ(mock.receivedAuthorization()[0], "Bearer live-key");
+}
+
+// GAIA's server is up and the user's own LEMONADE_API_KEY wins over GAIA's key:
+// the refusal names that variable, and never says to start a daemon that is running.
+TEST_F(GaiacppCli, ARefusedKeyIsNotReportedAsAServerThatIsDown) {
+    httplib::Server srv;
+    std::string sent;
+    srv.Get("/api/v1/models", [&](const httplib::Request& req, httplib::Response& res) {
+        sent = req.get_header_value("Authorization");
+        res.status = 401;
+        res.set_content(R"({"error":"invalid api key"})", "application/json");
+    });
+    const int port = srv.bind_to_any_port("127.0.0.1");
+    std::thread t([&srv] { srv.listen_after_bind(); });
+    while (!srv.is_running()) std::this_thread::sleep_for(std::chrono::milliseconds(5));
+
+    const fs::path home = dir_ / "gaia-home";
+    fs::create_directories(home / "lemonade");
+#ifdef _WIN32
+    const long long pid = _getpid();
+#else
+    const long long pid = getpid();
+#endif
+    std::ofstream(home / "lemonade" / "state.json")
+        << json{{"pid", pid}, {"port", port}, {"api_key", "gaia-own-key"}}.dump();
+    auto env = isolated();
+    env["LEMONADE_API_KEY"] = "users-other-key";
+
+    std::string bin = GAIACPP_BIN;
+    if (bin.find(' ') != std::string::npos) bin = "\"" + bin + "\"";
+    const gaia::ProcessResult r = gaia::ProcessRunner::run(
+        bin + " -p hi -m mock-model --no-memory --no-skills --no-web", 60000, (dir_ / "work").string(), env);
+    srv.stop();
+    t.join();
+
+    EXPECT_EQ(r.exitCode, 1);
+    EXPECT_EQ(sent, "Bearer users-other-key");
+    const std::string& e = r.stderr_output;
+    EXPECT_NE(e.find("HTTP 401"), std::string::npos) << e;
+    EXPECT_NE(e.find("unset LEMONADE_API_KEY"), std::string::npos) << e;
+    EXPECT_EQ(e.find("gaia daemon start"), std::string::npos) << e;
+    EXPECT_EQ(e.find("did not answer"), std::string::npos) << e;
+    EXPECT_EQ(e.find("users-other-key"), std::string::npos) << "a key is never printed";
+    EXPECT_EQ(e.find("gaia-own-key"), std::string::npos) << "a key is never printed";
+}
+
+TEST_F(GaiacppCli, FlagsStillBeatGaiasSetup) {
+    bench::MockLlmServer mock;
+    mock.pushResponse(withUsage(finalAnswer("ok"), 50, 0, 5));
+    const fs::path home = dir_ / "gaia-home";
+    fs::create_directories(home);
+    std::ofstream(home / "config.json") << json{{"default_model", "chosen-model"}}.dump();
+    // run() passes -m mock-model --base-url <mock>.
+    const gaia::ProcessResult r = run(mock, "");
+    ASSERT_EQ(r.exitCode, 0) << r.stderr_output;
+    EXPECT_EQ(json::parse(r.stdout_output)["model"], "mock-model");
+
+    // GAIA's config.json is only read when nothing else names the model and server.
+    std::ofstream(home / "config.json") << "{broken";
+    mock.pushResponse(withUsage(finalAnswer("ok"), 50, 0, 5));
+    EXPECT_EQ(run(mock, "").exitCode, 0);
+}
+
+TEST_F(GaiacppCli, MissingModelIsNotDownloadedWithoutAYes) {
+    bench::MockLlmServer mock;
+    mock.setModelsList(R"({"data":[{"id":"mock-model","downloaded":false,"size":6.2}]})");
+    const gaia::ProcessResult r = run(mock, "");
+    EXPECT_EQ(r.exitCode, 1) << r.stderr_output;
+    EXPECT_NE(r.stderr_output.find("mock-model is not downloaded (6.2 GB)"), std::string::npos) << r.stderr_output;
+    EXPECT_NE(r.stderr_output.find("--yes"), std::string::npos) << r.stderr_output;
+    EXPECT_EQ(mock.loadRequestCount(), 0) << "a load would download it";
+    EXPECT_EQ(mock.requestCount(), 0);
 }
 
 }  // namespace

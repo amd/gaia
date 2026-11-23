@@ -40,10 +40,16 @@ cmake -B build -DCMAKE_BUILD_TYPE=Release
 cmake --build build --target gaiacpp
 ```
 
-With Lemonade running and a model downloaded:
+After a GAIA install, no flags are needed: `gaiacpp` runs on GAIA's own model server and the model GAIA set up (see [Using what GAIA set up](#using-what-gaia-set-up)):
 
 ```bash
-./build/gaiacpp -p "Summarize the CSV files in this folder" -m Qwen3.6-35B-A3B-GGUF
+gaiacpp -p "Summarize the CSV files in this folder"
+```
+
+Without GAIA, point it at a Lemonade Server you run and name a model it has:
+
+```bash
+./build/gaiacpp -p "Summarize the CSV files in this folder" -m Qwen3.6-35B-A3B-GGUF --base-url http://localhost:13305/api/v1
 ```
 
 Headless runs deny tools that change things (shell, writes, web) unless you pass `--dangerously-skip-permissions`; each denial is reported on stderr.
@@ -52,10 +58,26 @@ Headless runs deny tools that change things (shell, writes, web) unless you pass
 
 `gaiacpp` talks to any OpenAI-compatible endpoint. Settings apply in this order, each overriding the one before:
 
-1. Built-in defaults: Lemonade at `LEMONADE_BASE_URL`, else `http://localhost:13305/api/v1`, `Gemma-4-E4B-it-GGUF`, a 32768-token context window, 16384 output tokens, temperature 0.2 and a 1000-step limit
+1. Built-in defaults: the model server and model GAIA set up (below), a 32768-token context window, 16384 output tokens, temperature 0.2 and a 1000-step limit
 2. The settings file: `--config FILE`, else `$GAIACPP_CONFIG`, else `$XDG_CONFIG_HOME/gaiacpp/config.json` or `~/.config/gaiacpp/config.json` (`%APPDATA%\gaiacpp\config.json` on Windows) when it exists
 3. Environment: `GAIA_BASE_URL`, `GAIA_MODEL_ID`, `GAIA_MAX_STEPS`, `GAIA_CONTEXT_SIZE`, `GAIA_MAX_TOKENS`, `GAIA_FEATURE_TIER`, `GAIA_MAX_HELPERS`. `GAIA_AGENT_MAX_STEPS`, the name the Python agent reads, sets the step limit too; when both are set, `GAIA_MAX_STEPS` wins
 4. Flags: `--base-url`, `-m/--model`, `--provider`, `--api-key-env`, `--ctx-size`, `--max-tokens`, `--max-steps`, `--temperature`, `--native-tools`, `--feature-tier`, `--max-helpers`
+
+### Using what GAIA set up
+
+With no `--base-url`, `GAIA_BASE_URL` or `baseUrl` in a settings file, `gaiacpp` uses the server GAIA uses, found the way the Python agent finds it (`--mcp`, which contacts no model, reads none of this):
+
+1. `LEMONADE_BASE_URL`, unless it is GAIA's own export (`~/.gaia/lemonade/env.sh` sets `GAIA_LEMONADE_EMBEDDED=1`, and that server's port and key change when it restarts) or a value you chose GAIA's own server over in the app
+2. The server saved with `gaia lemonade connect` (`lemonade_mode: external` in `~/.gaia/config.json`)
+3. GAIA's own server while it runs (`~/.gaia/lemonade/state.json`), with the key it requires
+4. GAIA's own server when it is installed but stopped, on the port it last ran on
+5. Lemonade's standard address, `http://localhost:13305/api/v1`
+
+`GAIA_HOME` moves `~/.gaia`; `GAIA_CONFIG_FILE` and `GAIA_CONFIG_DIR` move `config.json` alone. GAIA's own server's key is sent only to that server's address, and only when no `--api-key-env`, `GAIA_API_KEY` or `LEMONADE_API_KEY` of your own names one. A `LEMONADE_API_KEY` from GAIA's own export, or one beside a `LEMONADE_BASE_URL` you chose GAIA's own server over, isn't yours, so it is sent nowhere. A key saved with `gaia lemonade connect` sits in GAIA's credential store, which `gaiacpp` can't read: export it as `LEMONADE_API_KEY`, or the run stops and says so.
+
+With no `-m`, `GAIA_MODEL_ID` or `modelId` in a settings file, the model is `default_model` from `~/.gaia/config.json` (what `gaia init` and setup chose), else `last_model`, else `Gemma-4-E4B-it-GGUF`. `hybrid` runs on `hybrid_cheap_model`, and a Claude id is passed over, because `gaiacpp` has no Claude provider.
+
+When the server doesn't answer, the error says what to do: open GAIA or run `gaia daemon start` for GAIA's own server, `gaia init` when GAIA isn't set up for this user.
 
 The key for the endpoint is sent as `Authorization: Bearer`. It comes from the variable named by `--api-key-env` (or `apiKeyEnv` in the settings file), else `GAIA_API_KEY`, else `LEMONADE_API_KEY`, which is only ever sent to a loopback address (the local Lemonade). A key is never read from or written to a settings file. A variable that is named but unset stops the agent with an error instead of sending an anonymous request.
 
@@ -105,6 +127,8 @@ Every tool result is masked before the model, the console and the step log see i
 ### Models
 
 With Lemonade, `gaiacpp models list` lists the server's models and `gaiacpp models pull <name>` downloads one. A built-in model is pulled by name alone; `--checkpoint` and `--recipe` register a new model and need a name starting with `user.`. Both commands use the same settings as a run and take `--base-url`, `--provider`, `--api-key-env` and `--config`.
+
+Before a headless or interactive run, `gaiacpp` checks Lemonade's catalog for the run's model, so a load never starts a download nobody agreed to. A model that isn't downloaded stops the run with its size: at a terminal it asks `<model> is not downloaded (6.2 GB). Download it now? [y/N]`, and with no terminal to ask at (a piped prompt, a script) it exits 1 without downloading and names `--yes`. `--yes` (`-y`) downloads it without asking. A model the server doesn't know, and a server that doesn't answer, also stop the run before anything loads. A server that answers with an error is reported as running: a 401 or 403 names the variable whose key it refused (never the key) or says none was sent, and any other error, or a reply that isn't a Lemonade model list, gives the HTTP status and says where the address came from. Only when nothing answers does the message say to open GAIA or run `gaia daemon start`. Cloud models and servers other than Lemonade's `/api/v1` are not checked.
 
 ### Images
 
@@ -331,12 +355,12 @@ A control with a field of the wrong type is rejected with a line on stderr and c
 
 **When the host goes away.** Once stdin closes, queries already read still run while something reads stdout, so `echo '{"gaia_query": "hi"}' | gaiacpp --stdio` prints its answer, and an approval nobody can answer is denied. When stdout has no reader either, or a write to it fails, the process exits at once with code 0, without waiting for a model call or a tool in flight. Commands the agent runs never get its stdin: they read end of input.
 
-**Flags.** Besides the model and run options above, `--stdio` takes the flags the terminal UI passes: `-m/--model`, `--full-access`, `--accept-edits` and `--dev` (step-by-step `status` events, debug lines on stderr). `--accept-edits` and `--dev` are refused without `--stdio`. The endpoint comes from `LEMONADE_BASE_URL`, as in every other mode.
+**Flags.** Besides the model and run options above, `--stdio` takes the flags the terminal UI passes: `-m/--model`, `--full-access`, `--accept-edits` and `--dev` (step-by-step `status` events, debug lines on stderr). `--accept-edits` and `--dev` are refused without `--stdio`. The endpoint is resolved as in every other mode; the terminal UI passes it in `LEMONADE_BASE_URL`.
 
 - With `--stdio`, `--full-access` means approval prompts are off. The tools stay inside the working directory; add folders with `--allow-dir`.
 - The startup `status` event carries an empty `skills` list, so the terminal UI offers no skill under `/`: `gaiacpp` doesn't yet start a skill from a message that begins with `/<name>`. Skills still load when the model asks for one.
 - `--use-claude` and `--claude-model` stop the program with exit code 2, because `gaiacpp` has no Claude provider.
-- `GAIA_LEMONADE_EMBEDDED=1` is not acted on: `gaiacpp` keeps the `LEMONADE_BASE_URL` it started with, so if GAIA's own model server restarts on another port, turns end in `error` until the terminal UI restarts the agent.
+- `gaiacpp` finds GAIA's own model server once, at start: if that server restarts on another port, turns end in `error` until the terminal UI restarts the agent.
 
 The terminal UI does not start `gaiacpp` by itself yet: it looks for a program named `gaia-agent` and does not pass `--stdio`.
 
