@@ -460,6 +460,58 @@ TEST(GaiacodeEvents, ALintRunChangesNothingButAFormatterDoes) {
     EXPECT_EQ(repo.agent->events().back(), kEdit) << "a formatter that rewrote a file is";
 }
 
+TEST(GaiacodeEvents, WhatATestRunWritesItselfIsNoEditAfterIt) {
+    if (BashTools::detectShell().empty()) GTEST_SKIP() << "needs a POSIX shell for the commands below";
+    MeasuredRepo repo("gaiacode-measured-cache");
+    // A stand-in pytest that leaves a cache behind, as the real one does in a repo without .gitignore.
+    writeFile(repo.dir / "pytest", "#!/bin/sh\nmkdir -p __pycache__ && echo x > __pycache__/calc.pyc\n"
+                                   "echo '3 passed in 0.01s'\n");
+    repo.run("bash_execute", {{"command", repo.pytest}});
+    EXPECT_EQ(repo.agent->events().back(), kGreen) << "the cache came before the result";
+    repo.run("run_checks", {{"command", repo.pytest}});
+    EXPECT_EQ(repo.agent->events().back(), kGreen);
+    repo.run("bash_execute", {{"command", repo.pytest + " && printf 'x = 1\\n' >> calc.py"}});
+    EXPECT_EQ(repo.agent->events().back(), kEdit) << "a step after the tests still is one";
+}
+
+TEST(GaiacodeEvents, MeasuringWritesNothingIntoTheRepository) {
+    if (BashTools::detectShell().empty()) GTEST_SKIP() << "needs a POSIX shell for the commands below";
+    MeasuredRepo repo("gaiacode-measured-store");
+    writeFile(repo.dir / "data.bin", std::string(4096, 'd'));
+    const auto count = [&] {
+        size_t n = 0;
+        for (const auto& e : fs::recursive_directory_iterator(repo.dir / ".git" / "objects")) n += e.is_regular_file();
+        return n;
+    };
+    const size_t objects = count();
+    const std::string index = ProcessRunner::run("git ls-files --stage", 30000, repo.dir.u8string()).stdout_output;
+    ASSERT_TRUE(CodeAgent::treeFingerprint(repo.dir.u8string()).has_value());
+    EXPECT_EQ(count(), objects) << "no blobs in the user's object store";
+    EXPECT_EQ(ProcessRunner::run("git ls-files --stage", 30000, repo.dir.u8string()).stdout_output, index)
+        << "and nothing staged";
+}
+
+TEST(GaiacodeEvents, RunChecksIsMeasuredInTheFolderItRunsIn) {
+    if (BashTools::detectShell().empty()) GTEST_SKIP() << "needs a POSIX shell for the commands below";
+    MeasuredRepo repo("gaiacode-measured-path");
+    const fs::path sub = repo.dir / "pkg";
+    fs::create_directories(sub);
+    // A committed repository of its own: the outer one sees only its HEAD, never its files.
+    writeFile(sub / "fmt", "#!/bin/sh\necho y >> mod.py\n");
+    writeFile(sub / "mod.py", "x = 1\n");
+    fs::permissions(sub / "fmt", fs::perms::owner_all, fs::perm_options::add);
+    for (const char* c : {"git init -q", "git -c user.email=t@t -c user.name=t add -A",
+                          "git -c user.email=t@t -c user.name=t commit -qm init"}) {
+        ASSERT_EQ(ProcessRunner::run(c, 30000, sub.u8string()).exitCode, 0) << c;
+    }
+    ProcessRunner::run("git -c user.email=t@t -c user.name=t add -A && git -c user.email=t@t -c user.name=t "
+                       "commit -qm pkg",
+                       30000, repo.dir.u8string());
+    repo.run("run_checks", {{"command", repo.pytest}});
+    repo.run("run_checks", {{"command", "./fmt"}, {"path", "pkg"}});
+    EXPECT_EQ(repo.agent->events().back(), kEdit) << "the rewrite happened in pkg's own repository";
+}
+
 TEST(GaiacodeEvents, OutsideARepositoryAnythingButAReadMayHaveEdited) {
     EXPECT_FALSE(CodeAgent::treeFingerprint(fs::temp_directory_path().u8string() + "/no-such-repo-here").has_value());
     EXPECT_EQ(CodeAgent::classify("run_checks", {{"command", "ruff check ."}},
