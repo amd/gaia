@@ -2112,7 +2112,7 @@ them, and the status bar shows the one that is on:
 |---|---|
 | `ask` (default) | Every shell command except plain reads inside the allowed folders, every Python run and file write |
 | `accept edits` | Shell commands and Python. File edits inside the folder GAIA was started in run unasked, except hidden files and folders (`.git/`, `.bashrc`, `.github/`), folders on `PATH`, and on Windows a file that shadows a program. Never the home folder or a drive root |
-| `full access` | Nothing |
+| `full access` | Nothing. Deletes run only here: in the other modes a delete GAIA would ask about is refused, with no prompt |
 
 Ways to turn full access on — each is deliberate:
 

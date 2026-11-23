@@ -900,7 +900,8 @@ still holds: a call the user declined stays declined (that exact call for the
 rest of the chat, another route to it for that request), calendar
 changes and outgoing mail wait for a person, and a program that is not
 installed fails with the shell's own error. Without full access those commands
-ask the user once, or are refused on a run nobody can answer.
+ask the user once, or are refused on a run nobody can answer; a delete is refused
+even where a person could answer, so only full access runs it.
 
 That is arbitrary code execution with the user's account.
 `POST /v1/gaia/sessions/{id}/bypass` turns the same mode on for an HTTP

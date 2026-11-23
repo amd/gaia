@@ -299,6 +299,9 @@ def test_flagship_entry_runs_on_core_without_configure(unconfigured, monkeypatch
     stdio.main = lambda args: 0
     monkeypatch.setitem(sys.modules, "gaiapy.stdio", stdio)
     monkeypatch.delattr(gaia_logger, "configure")
+    # --serve needs the caller-auth token a GAIA launcher passes.
+    monkeypatch.delenv("GAIA_GAIA_SIDECAR_TOKEN_FILE", raising=False)
+    monkeypatch.setenv("GAIA_GAIA_SIDECAR_TOKEN", "test-sidecar-token")
     with patch("uvicorn.run"):
         assert entry.main(argv) in (0, None)
     assert gaia_logger.log_manager is None
