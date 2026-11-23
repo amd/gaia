@@ -4,7 +4,7 @@
 import { useEffect, useRef, useCallback, useState, useMemo, type CSSProperties } from 'react';
 import { Activity, Edit3, Download, Upload, ArrowDown, FolderSearch, Clock } from 'lucide-react';
 import { TurnAnnouncer } from './TurnAnnouncer';
-import { MessageBubble, cleanToolCallContent, isErrorContent, turnEnding } from './MessageBubble';
+import { MessageBubble, cleanToolCallContent } from './MessageBubble';
 import { toolRowText } from './AgentActivity';
 import { agentEventToStep } from '../utils/streamSteps';
 import { contextReason } from '../utils/contextReason';
@@ -41,13 +41,12 @@ import { ModelChip } from './ModelChip';
 import { SessionFolderChip } from './FolderChip';
 import { PermissionModeChip } from './PermissionModeChip';
 import { ResearchChip, useResearchMode, withResearch } from './ResearchChip';
-import { HistoryNotice, LibraryNotices } from './ChatNotices';
+import { HistoryNotice } from './ChatNotices';
 import { PermissionPrompt } from './PermissionPrompt';
 import { QueuedMessages } from './QueuedMessages';
 import { ContextMeter, ContextWarning } from './ContextMeter';
 import { SpendMeter } from './SpendMeter';
-import { RetryWithMenu } from './RetryWithMenu';
-import { AnswerComparison } from './AnswerComparison';
+import { TranscriptRow } from './TranscriptRow';
 import * as messageQueue from '../utils/messageQueue';
 import type { QueuedMessage } from '../utils/messageQueue';
 import { SessionPanel, SessionPanelToggle } from './session-panel/SessionPanel';
@@ -74,8 +73,6 @@ import { requestErrorParam } from '../utils/requestErrors';
 import { MAX_SESSION_TITLE_CHARS, STARTING_REASON } from '../utils/constants';
 import { scrollBehavior } from '../utils/motion';
 import { setVisibleInterval } from '../utils/visibleInterval';
-import { ModelServerDownNotice } from './ModelServerDownNotice';
-import { ChatAgentRecovery } from './ChatAgentRecovery';
 import { useChatDraft } from '../hooks/useSavedDraft';
 import { followSlideEvent, settleSlideDraft, SLIDE_PREVIEW_ENABLED } from '../stores/slideDraftStore';
 import { chatDraftKey, clearSavedDraft } from '../utils/savedDraft';
@@ -1529,6 +1526,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
         const last = lastSentMessage(messages);
         if (last) startEdit(last.id);
     }, [messages, startEdit]);
+    const handleEditDraft = useCallback((text: string) => { editDraftRef.current = text; }, []);
     const handleEditCancel = useCallback(() => {
         editDraftRef.current = null;
         setEditingId(null);
@@ -1740,71 +1738,38 @@ export function ChatView({ sessionId }: ChatViewProps) {
                     )}
 
                     {rows.map((msg, idx) => {
-                        const notice = msg.role === 'assistant'
-                            ? msg.historyNotice ?? historyNotices.get(msg.id)
-                            : undefined;
-                        const cutOff = msg.role === 'assistant' && turnEnding(msg.content, msg.stopState) === 'interrupted';
-                        const stopped = msg.role === 'assistant' && msg.stopState === 'stopped' && !msg.stopError;
-                        const canTryAgain = (msg.failed === true || cutOff || stopped) && !busy && !retiredAgent
-                            && idx === messages.length - 1;
-                        const canRetry = !canTryAgain && !busy && !comparison && !retiredAgent
-                            && msg.role === 'assistant' && idx === messages.length - 1
-                            && !msg.stopState && !msg.failed && !isErrorContent(msg.content);
-                        const latency = msg.stats?.seconds != null ? msg.stats.seconds * 1000 : latencyByMsgId.get(msg.id);
+                        const rowKey = messageKeysRef.current.get(msg.id) ?? msg.id;
                         const unsent = isUnsent(msg);
                         return (
-                            <div
-                                key={openingKey(msg) ?? messageKeysRef.current.get(msg.id) ?? msg.id}
-                                className={deletingMsgId === msg.id ? 'msg-deleting' : settledIdsRef.current.has(messageKeysRef.current.get(msg.id) ?? msg.id) ? 'msg-settled' : undefined}
-                                data-message-id={msg.id}
-                                data-role={msg.role}
-                            >
-                                {notice && <HistoryNotice text={notice} />}
-                                {msg.libraryNotices && msg.libraryNotices.length > 0 && (
-                                    <LibraryNotices notices={msg.libraryNotices} />
-                                )}
-                                <MessageBubble
-                                    message={msg}
-                                    agentSteps={msg.role === 'assistant' ? msg.agentSteps : undefined}
-                                    onDelete={!busy && !unsent ? handleDeleteMessage : undefined}
-                                    onResend={!busy && !unsent && msg.role === 'user' && !retiredAgent ? handleResendMessage : undefined}
-                                    onEditStart={!busy && !unsent && msg.role === 'user' && !retiredAgent ? () => startEdit(msg.id) : undefined}
-                                    editing={editingId === msg.id && !busy}
-                                    editDraft={editingId === msg.id ? editDraftRef.current : null}
-                                    onEditDraft={(text: string) => { editDraftRef.current = text; }}
-                                    onEdit={handleEdit}
-                                    onEditCancel={handleEditCancel}
-                                    laterCount={msg.role === 'user' ? laterTurns(messages, idx) : 0}
-                                    onRegenerate={canRetry && !unsent ? () => handleRegenerate(msg) : undefined}
-                                    extraActions={canRetry ? (
-                                        <RetryWithMenu
-                                            answeredBy={msg.stats?.model ?? session?.effective_model}
-                                            onPick={(model) => handleRetryWith(msg, model)}
-                                        />
-                                    ) : undefined}
-                                    onTryAgain={canTryAgain ? () => handleTryAgain(msg) : undefined}
-                                    onContinue={canTryAgain && stopped ? handleContinue : undefined}
-                                    latest={msg.role === 'assistant' && idx === messages.length - 1}
-                                    latencyMs={latency}
-                                />
-                                {msg.failure === 'model_server_down' && idx === messages.length - 1 && !busy && (
-                                    <ModelServerDownNotice />
-                                )}
-                                {msg.failed === true && msg.failure !== 'model_server_down' && canTryAgain && (
-                                    <ChatAgentRecovery key={msg.id} onTryAgain={() => handleTryAgain(msg)} />
-                                )}
-                                {comparison?.messageId === msg.id && (
-                                    <AnswerComparison
-                                        original={msg}
-                                        originalModel={msg.stats?.model ?? session?.effective_model}
-                                        originalLatencyMs={latency}
-                                        state={comparison.state}
-                                        keeping={comparison.keeping}
-                                        onKeep={(which) => { void handleKeepAnswer(which); }}
-                                        onClose={handleCloseComparison}
-                                    />
-                                )}
-                            </div>
+                            <TranscriptRow
+                                key={openingKey(msg) ?? rowKey}
+                                message={msg}
+                                className={deletingMsgId === msg.id ? 'msg-deleting' : settledIdsRef.current.has(rowKey) ? 'msg-settled' : undefined}
+                                notice={msg.role === 'assistant' ? msg.historyNotice ?? historyNotices.get(msg.id) : undefined}
+                                busy={busy}
+                                readOnly={!!retiredAgent}
+                                unsent={unsent}
+                                isLast={idx === messages.length - 1}
+                                comparing={!!comparison}
+                                comparison={comparison?.messageId === msg.id ? comparison : null}
+                                laterCount={msg.role === 'user' ? laterTurns(messages, idx) : 0}
+                                latencyMs={msg.stats?.seconds != null ? msg.stats.seconds * 1000 : latencyByMsgId.get(msg.id)}
+                                answeredBy={session?.effective_model}
+                                editing={editingId === msg.id && !busy}
+                                editDraft={editingId === msg.id ? editDraftRef.current : null}
+                                onDelete={handleDeleteMessage}
+                                onResend={handleResendMessage}
+                                onEditStart={startEdit}
+                                onEditDraft={handleEditDraft}
+                                onEdit={handleEdit}
+                                onEditCancel={handleEditCancel}
+                                onRegenerate={handleRegenerate}
+                                onRetryWith={handleRetryWith}
+                                onTryAgain={handleTryAgain}
+                                onContinue={handleContinue}
+                                onKeepAnswer={handleKeepAnswer}
+                                onCloseComparison={handleCloseComparison}
+                            />
                         );
                     })}
 
