@@ -21,7 +21,8 @@ message, issue #2596), compares the caller's ``binaries.lock.json`` digest
 against the daemon's own; a mismatch is a 409 naming both lock files.
 ``program`` (the GAIA agent only, ``gaiapy`` or ``gaiacpp``) names the program
 the caller talks to. With ``replace_program: true`` the agent is started on it,
-restarting one on the other program; without it, an agent running on, or saved
+restarting one on the other program unless it is answering (a 409 of kind
+``program_busy``); without it, an agent running on, or saved
 to start on, the other program is a 409 (kind ``program_conflict``).
 
 The daemon serves no OpenAPI schema, so this table IS the contract:
@@ -61,6 +62,7 @@ from gaia.daemon.sidecars.errors import (
     InstallBusyError,
     InstallFailedError,
     ModeConflictError,
+    ProgramBusyError,
     ProgramConflictError,
     SidecarError,
     SidecarSpawnError,
@@ -197,7 +199,12 @@ def build_agents_router(token: str, registry):
             )
         except UnknownAgentError as e:
             raise _ensure_failed(404, e) from e
-        except (ModeConflictError, ProgramConflictError, CapacityError) as e:
+        except (
+            ModeConflictError,
+            ProgramConflictError,
+            ProgramBusyError,
+            CapacityError,
+        ) as e:
             raise _ensure_failed(409, e) from e
         except DevSrcDirResolutionError as e:
             raise _ensure_failed(400, e) from e

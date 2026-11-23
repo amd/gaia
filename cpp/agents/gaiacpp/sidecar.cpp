@@ -708,7 +708,13 @@ private:
     void routes() {
         server_.Get("/health", [this](const httplib::Request& req, httplib::Response& res) {
             if (!admit(req, res, false)) return;
-            sendJson(res, 200, {{"status", "ok"}, {"service", kService}});
+            size_t active = 0;
+            {
+                std::lock_guard<std::mutex> lock(runsMu_);
+                active = runs_.size();
+            }
+            // active_runs lets the daemon refuse to restart this agent mid-answer.
+            sendJson(res, 200, {{"status", "ok"}, {"service", kService}, {"active_runs", active}});
         });
         server_.Get("/version", [this](const httplib::Request& req, httplib::Response& res) {
             if (!admit(req, res, false)) return;

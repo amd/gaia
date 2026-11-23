@@ -22,6 +22,7 @@ from gaia.daemon.sidecars.errors import (
     CapacityError,
     DevSrcDirResolutionError,
     ModeConflictError,
+    ProgramBusyError,
     ProgramConflictError,
     SidecarInhibitedError,
     SidecarNotRunningError,
@@ -235,6 +236,7 @@ class SidecarRegistry:
             if program and not replace_program:
                 _check_expected_program(program, running)
             if program and running and running != program:
+                _check_idle(manager, running, program)
                 logger.info(
                     "daemon: restarting agent '%s' on %s (was %s)",
                     agent_id,
@@ -709,6 +711,25 @@ def check_program(agent_id: str, program: Optional[str]) -> None:
             f"program must be {fetch.PYTHON_FLAGSHIP} or {fetch.NATIVE_FLAGSHIP}, "
             f"not {program!r}"
         )
+
+
+def _check_idle(manager, running: str, program: str) -> None:
+    """Raise unless the agent on *running* has no turn to cut off."""
+    busy = manager.active_runs()
+    if busy == 0:
+        return
+    if busy is None:
+        raise ProgramBusyError(
+            f"The GAIA agent is running on {running}, which doesn't say whether "
+            f"it is answering, so it was not restarted on {program}. Switch from "
+            "the window using it (Settings in the Agent UI), or stop it with "
+            "`gaia daemon stop-agent gaia` once nothing is answering."
+        )
+    raise ProgramBusyError(
+        f"The GAIA agent is running on {running} and another window is "
+        f"answering with it, so it was not restarted on {program}. Try again "
+        "when that answer finishes, or switch from that window."
+    )
 
 
 def _check_expected_program(program: str, running: Optional[str]) -> None:

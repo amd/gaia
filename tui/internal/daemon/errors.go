@@ -215,6 +215,17 @@ const ErrorKindHeader = "X-GAIA-Error-Kind"
 // KindProgramConflict: the GAIA agent runs on, or is set to start on, another program.
 const KindProgramConflict = "program_conflict"
 
+// KindProgramBusy: the GAIA agent is answering, so it was not restarted on another program.
+const KindProgramBusy = "program_busy"
+
+// ProgramBusyError is the daemon refusing to restart the GAIA agent on the
+// Python agent while another window's answer is still running on it.
+type ProgramBusyError struct {
+	Detail string
+}
+
+func (e *ProgramBusyError) Error() string { return e.Detail }
+
 // ProgramConflictError is the daemon refusing to hand this session gaiacpp
 // when it talks to the Python agent: someone switched the GAIA agent elsewhere.
 type ProgramConflictError struct {

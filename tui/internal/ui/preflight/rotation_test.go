@@ -36,6 +36,7 @@ type fakeHost struct {
 	seen     []string
 	ensured  []byte
 	agents   string // the agents listing; agentsRunning when empty
+	busy     string // when set, ensure answers 409 program_busy with this detail
 }
 
 func newFakeHost(t *testing.T) *fakeHost {
@@ -142,7 +143,14 @@ func (h *fakeHost) handle(w http.ResponseWriter, r *http.Request) {
 		raw, _ := io.ReadAll(r.Body)
 		h.mu.Lock()
 		h.ensured = raw
+		busy := h.busy
 		h.mu.Unlock()
+		if busy != "" {
+			w.Header().Set(daemon.ErrorKindHeader, daemon.KindProgramBusy)
+			w.WriteHeader(http.StatusConflict)
+			_ = json.NewEncoder(w).Encode(map[string]string{"detail": busy})
+			return
+		}
 		// A restarted daemon starts its sidecars again when a relayed call needs one.
 		_, _ = w.Write([]byte(`{"agent_id":"gaia","state":"running"}`))
 	default:
@@ -323,5 +331,29 @@ func TestTheGateLeavesAPythonAgentAlone(t *testing.T) {
 	defer h.mu.Unlock()
 	if h.ensured != nil {
 		t.Fatalf("the gate restarted a GAIA agent already on gaiapy: %s", h.ensured)
+	}
+}
+
+// Another window is mid-answer on gaiacpp: the launch must not restart it, and
+// says so plainly instead of claiming the Python agent answers.
+func TestTheGateDoesNotCutOffAnotherWindowsAnswer(t *testing.T) {
+	h := newFakeHost(t)
+	h.agents = strings.Replace(agentsRunning, `"dev_src_dir":null`, `"dev_src_dir":null,"program":"gaiacpp"`, 1)
+	h.busy = "The GAIA agent is running on gaiacpp and another window is answering with it, " +
+		"so it was not restarted on gaiapy. Try again when that answer finishes, or switch from that window."
+
+	rep := Check(context.Background(), h.transport(), testConfig())
+	if rep.Ready() {
+		t.Fatalf("the gate passed while gaiacpp was answering elsewhere:\n%s", rep)
+	}
+	row, _ := rep.Find(KeySidecar)
+	if row.Line != "gaiacpp is answering in another window" {
+		t.Errorf("sidecar row line = %q", row.Line)
+	}
+	if row.Detail != h.busy {
+		t.Errorf("sidecar row detail = %q, want the service's own sentence", row.Detail)
+	}
+	if !strings.Contains(row.Remedy.Action, "finishes") || strings.Contains(row.Line+row.Detail, "HTTP 409") {
+		t.Errorf("the refusal is not plain: %+v", row)
 	}
 }

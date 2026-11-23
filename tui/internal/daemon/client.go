@@ -851,8 +851,13 @@ func (c *Client) ensureOn(ctx context.Context, inst *Instance, agentID string, r
 	}
 	defer drainAndClose(resp)
 
-	if resp.StatusCode == http.StatusConflict && resp.Header.Get(ErrorKindHeader) == KindProgramConflict {
-		return nil, &ProgramConflictError{Detail: ErrorDetail(resp)}
+	if resp.StatusCode == http.StatusConflict {
+		switch resp.Header.Get(ErrorKindHeader) {
+		case KindProgramConflict:
+			return nil, &ProgramConflictError{Detail: ErrorDetail(resp)}
+		case KindProgramBusy:
+			return nil, &ProgramBusyError{Detail: busyDetail(resp)}
+		}
 	}
 	if resp.StatusCode != http.StatusOK {
 		return nil, &RequestError{
@@ -954,6 +959,11 @@ func ensureRequestBody(agentID string, replace bool) ([]byte, error) {
 // through the same channel. Never pass a raw token.
 func (c *Client) Logf(format string, args ...any) {
 	c.opts.Logf(format, args...)
+}
+
+// busyDetail is the daemon's own sentence for a busy agent, without the status code.
+func busyDetail(resp *http.Response) string {
+	return strings.TrimPrefix(ErrorDetail(resp), fmt.Sprintf("HTTP %d: ", resp.StatusCode))
 }
 
 // ErrorDetail extracts the actionable `detail` from a daemon error response,

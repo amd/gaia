@@ -20,6 +20,7 @@ KIND_OUT_OF_DATE = "out_of_date"
 KIND_CAPACITY = "capacity"
 KIND_MODE_CONFLICT = "mode_conflict"
 KIND_PROGRAM_CONFLICT = "program_conflict"
+KIND_PROGRAM_BUSY = "program_busy"
 KIND_NOT_INSTALLED = "not_installed"
 KIND_SERVICE_UNREACHABLE = "service_unreachable"
 KIND_SERVICE_OUTDATED = "service_outdated"
@@ -133,6 +134,12 @@ class ProgramConflictError(SidecarError):
     """The GAIA agent is running on another program than the ensure asked for."""
 
     kind = KIND_PROGRAM_CONFLICT
+
+
+class ProgramBusyError(SidecarError):
+    """The GAIA agent is answering, so it is not restarted on another program."""
+
+    kind = KIND_PROGRAM_BUSY
 
 
 class DevSrcDirResolutionError(SidecarError):

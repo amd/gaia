@@ -571,6 +571,20 @@ class AgentSidecarManager:
                 f"sidecar log at {self._log_path or self.log_dir}."
             )
 
+    def active_runs(self, timeout: float = _READINESS_TIMEOUT) -> Optional[int]:
+        """Turns the sidecar is running or holding for an answer; ``None`` when it doesn't say.
+
+        Read from ``/health``, so it counts every caller's turns, the Agent
+        UI's direct ones too. Raises as :meth:`check_responsive` does.
+        """
+        self.check_responsive(timeout)
+        r = self._http_get(f"{self.base_url}/health", timeout=timeout)
+        try:
+            count = r.json().get("active_runs")
+        except ValueError:
+            return None
+        return count if isinstance(count, int) else None
+
     def _open_log(self, port: int):
         # Redirect the sidecar's stdout+stderr to a per-port file. A plain PIPE
         # that is never drained deadlocks the child once the OS buffer (~64KB)

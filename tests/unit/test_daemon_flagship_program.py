@@ -46,6 +46,10 @@ class _Manager:
         self._running = False
         self.starts = 0
         self.stops = 0
+        self.busy = 0  # turns in flight, as /health reports them; None = not reported
+
+    def active_runs(self):
+        return self.busy
 
     @property
     def is_running(self):
@@ -132,6 +136,23 @@ def test_replace_restarts_the_agent_on_the_program_asked_for(saved):
     assert manager.starts == 2
 
 
+@pytest.mark.parametrize(
+    "busy, says", [(1, "another window is answering"), (None, "doesn't say")]
+)
+def test_replace_never_cuts_off_an_answer(saved, busy, says):
+    from gaia.daemon.sidecars.errors import KIND_PROGRAM_BUSY, ProgramBusyError
+
+    reg = _registry()
+    reg.ensure("gaia")
+    _manager(reg).busy = busy
+    with pytest.raises(ProgramBusyError) as e:
+        reg.ensure("gaia", program=fetch.PYTHON_FLAGSHIP, replace_program=True)
+    assert e.value.kind == KIND_PROGRAM_BUSY
+    assert says in str(e.value) and "running on gaiacpp" in str(e.value)
+    manager = _manager(reg)
+    assert (manager.stops, manager.starts, manager.program) == (0, 1, "gaiacpp")
+
+
 def test_replace_starts_a_stopped_agent_on_the_program_asked_for(saved):
     reg = _registry()
     entry = reg.ensure("gaia", program=fetch.PYTHON_FLAGSHIP, replace_program=True)
@@ -194,6 +215,21 @@ def test_route_passes_replace_through(saved):
     assert r.json()["program"] == "gaiapy"
 
 
+def test_route_maps_a_busy_agent_to_409_with_its_kind(saved):
+    from gaia.daemon.sidecars.errors import ERROR_KIND_HEADER, KIND_PROGRAM_BUSY
+
+    reg = _registry()
+    reg.ensure("gaia")
+    _manager(reg).busy = 2
+    r = _client(reg).post(
+        "/daemon/v1/agents/gaia/ensure",
+        json={"program": "gaiapy", "replace_program": True},
+        headers=_AUTH,
+    )
+    assert r.status_code == 409
+    assert r.headers[ERROR_KIND_HEADER] == KIND_PROGRAM_BUSY
+
+
 @pytest.mark.parametrize(
     "body",
     [
@@ -207,3 +243,24 @@ def test_route_refuses_a_malformed_program_with_400(saved, body):
         "/daemon/v1/agents/gaia/ensure", json=body, headers=_AUTH
     )
     assert r.status_code == 400
+
+
+@pytest.mark.parametrize(
+    "body, count", [({"status": "ok", "active_runs": 3}, 3), ({"status": "ok"}, None)]
+)
+def test_the_manager_reads_active_runs_from_health(tmp_path, body, count):
+    from gaia.daemon.sidecars import manager as mgr
+
+    class _Resp:
+        status_code = 200
+
+        def json(self):
+            return body
+
+    m = mgr.AgentSidecarManager(
+        builtin_specs()["gaia"], cache_dir=tmp_path, log_dir=tmp_path / "logs"
+    )
+    m.check_responsive = lambda timeout=None: None
+    m.base_url = "http://127.0.0.1:1"
+    m._http_get = lambda url, timeout: _Resp()
+    assert m.active_runs() == count

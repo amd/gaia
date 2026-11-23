@@ -268,7 +268,7 @@ the header.
 
 | Method | Path                             | Purpose                                        |
 | ------ | -------------------------------- | ---------------------------------------------- |
-| `GET`  | `/health`                        | Liveness. `{ "status": "ok", "service": "gaia-agent-gaia" }` |
+| `GET`  | `/health`                        | Liveness. `{ "status": "ok", "service": "gaia-agent-gaia", "active_runs": 0 }`; `active_runs` counts turns running or waiting on an answer |
 | `GET`  | `/version`                       | Contract probe. `{ "apiVersion", "agentVersion" }` |
 | `GET`  | `/v1/gaia/version`               | The TUI's negotiation probe                    |
 | `GET`  | `/v1/gaia/init`                  | Readiness detail (Lemonade, model, connectors) |

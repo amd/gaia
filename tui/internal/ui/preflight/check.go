@@ -267,6 +267,15 @@ func checkSidecar(ctx context.Context, t Transport, cfg Config, rep *Report) Sta
 			if other != "" {
 				// This session talks to the Python agent: put the GAIA agent back on it.
 				if err := t.EnsureAgent(ctx, cfg.AgentID); err != nil {
+					var busy *daemon.ProgramBusyError
+					if errors.As(err, &busy) {
+						// Never cut off another window's answer: this session does not switch.
+						row.State, row.Line, row.Detail = StateFailed, other+" is answering in another window", busy.Detail
+						row.Remedy = Remedy{Action: "Press r once that answer finishes, or switch agents from that window."}
+						row.Raw = err.Error()
+						row.Disposition = status.DispositionHalt
+						return row.commit(rep)
+					}
 					d := l.Error("restart the "+cfg.AgentName+" agent on "+daemon.PythonProgram, err)
 					row.State, row.Line, row.Detail, row.Remedy, row.Raw =
 						StateFailed, "running "+other+", could not switch", d.Cause, d.AsRemedy(), err.Error()
