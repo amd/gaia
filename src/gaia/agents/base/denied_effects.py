@@ -60,6 +60,10 @@ UNATTENDED_REFUSAL = "unattended_refusal"
 #: ledger too: the host the call aimed at was never refused.
 PROGRAM_NOT_FOUND = "program_not_found"
 
+#: Set on a call that did not run because its tool's own permission check
+#: raised. A crash is not a "no", so it is kept off the ledger as well.
+PERMISSION_CHECK_FAILED = "permission_check_failed"
+
 #: A file change whose target the code computes: it could be any denied path.
 COMPUTED_PATH = "a path the code works out when it runs"
 
