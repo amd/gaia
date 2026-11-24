@@ -55,7 +55,7 @@ from gaia.skills.migrate import (
 from gaia.skills.naming import skill_directory, validated_skill_name
 from gaia.skills.signing import ROLE_AMD, ROLE_PUBLISHER
 from gaia.skills.tiers import LOWEST_TIER
-from gaia.utils.archive import ArchiveError, safe_extract
+from gaia.utils.archive import ArchiveError, ArchiveSizeError, safe_extract
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     # Runtime imports of drift stay inside the two verbs that need it, to keep
@@ -1602,8 +1602,21 @@ def _download(url: str, destination: Path) -> Path:
 
 def _unpack(archive: Path, destination: Path) -> Path:
     """Extract a skill .zip, refusing unsafe entries, and return its root."""
+    from gaia.skills import install as skill_install
+
     try:
-        safe_extract(archive, destination, kind="zip")
+        safe_extract(
+            archive,
+            destination,
+            kind="zip",
+            max_member_bytes=skill_install.BUNDLE_MAX_MEMBER_BYTES,
+            max_total_bytes=skill_install.BUNDLE_MAX_TOTAL_BYTES,
+        )
+    except ArchiveSizeError as exc:
+        raise SkillValidationError(
+            f"Refusing to extract {archive}: {exc}. The bundle is larger than "
+            "GAIA allows for a skill; nothing was imported."
+        ) from exc
     except ArchiveError as exc:
         raise SkillValidationError(
             f"Refusing to extract {archive}: {exc}. The bundle is malformed or "
