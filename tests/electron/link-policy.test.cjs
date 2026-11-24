@@ -13,6 +13,7 @@ const {
   isAllowedExternalUrl,
   isInAppNavigation,
   describeBlockedUrl,
+  linkNoticeText,
 } = require("../../src/gaia/apps/webui/services/link-policy.cjs");
 
 const APP_URL =
@@ -81,5 +82,36 @@ describe("describeBlockedUrl", () => {
     expect(msg).toContain("calc.exe");
     expect(msg).toContain("file");
     expect(msg).toMatch(/http, https and mailto/);
+  });
+
+  test("an Arabic OS gets the reason in Arabic with the URL kept left-to-right", () => {
+    const msg = describeBlockedUrl("file:///C:/Windows/System32/calc.exe", "ar-EG");
+    expect(msg).toContain("رفض GAIA فتح");
+    expect(msg).toContain("\u2068file:///C:/Windows/System32/calc.exe\u2069");
+    expect(msg).toContain("\u2068file\u2069");
+    expect(msg).not.toMatch(/refused/);
+  });
+
+  test("a URL with no scheme is labelled in the user's language", () => {
+    expect(describeBlockedUrl("not a url")).toContain("(no scheme)");
+    expect(describeBlockedUrl("not a url", "ar")).toContain("بلا بروتوكول");
+  });
+
+  test("a language without a translation falls back to English", () => {
+    expect(describeBlockedUrl("file:///x.exe", "fr-FR")).toMatch(/http, https and mailto/);
+  });
+});
+
+describe("linkNoticeText", () => {
+  test.each([
+    ["ar", "تم حظر الرابط", "حسنًا"],
+    ["AR_sa", "تم حظر الرابط", "حسنًا"],
+    ["en-US", "Link blocked", "OK"],
+    ["de", "Link blocked", "OK"],
+    ["", "Link blocked", "OK"],
+    [undefined, "Link blocked", "OK"],
+  ])("%s → %s / %s", (locale, title, ok) => {
+    expect(linkNoticeText(locale).blockedTitle).toBe(title);
+    expect(linkNoticeText(locale).ok).toBe(ok);
   });
 });

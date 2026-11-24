@@ -60,26 +60,54 @@ function isInAppNavigation(targetUrl, currentUrl) {
   );
 }
 
+// U+2068/U+2069 keep a URL left-to-right inside Arabic text.
+const isolate = (text) => `\u2068${text}\u2069`;
+
+const NOTICE_TEXT = {
+  en: {
+    blockedTitle: "Link blocked",
+    ok: "OK",
+    noScheme: "no scheme",
+    blocked: (url, scheme) =>
+      `GAIA refused to open "${url}" (${scheme}). ` +
+      "Only http, https and mailto links open outside the app — a link that " +
+      "resolves to a local file or network share is never launched.",
+  },
+  ar: {
+    blockedTitle: "تم حظر الرابط",
+    ok: "حسنًا",
+    noScheme: "بلا بروتوكول",
+    blocked: (url, scheme) =>
+      `رفض GAIA فتح "${isolate(url)}" (${isolate(scheme)}). ` +
+      "لا تُفتح خارج التطبيق إلا روابط http وhttps وmailto، ولا يُشغَّل أبدًا " +
+      "رابط يشير إلى ملف محلي أو مجلد مشترك على الشبكة.",
+  },
+};
+
+/** The link-notice strings for an OS locale such as "ar-EG"; English for any language without them. */
+function linkNoticeText(locale) {
+  const lang = String(locale || "").toLowerCase().split(/[-_]/)[0];
+  return NOTICE_TEXT[lang] || NOTICE_TEXT.en;
+}
+
 /**
  * A one-line, user-facing reason a URL was refused. Never silently dropped —
  * the caller logs this and shows it, so a blocked click is explainable.
  *
  * @param {string} rawUrl
+ * @param {string} [locale] The OS locale, as `app.getLocale()` gives it.
  * @returns {string}
  */
-function describeBlockedUrl(rawUrl) {
+function describeBlockedUrl(rawUrl, locale) {
+  const text = linkNoticeText(locale);
   const shown = typeof rawUrl === "string" && rawUrl ? rawUrl : String(rawUrl);
-  let scheme = "no scheme";
+  let scheme = text.noScheme;
   try {
     scheme = new URL(shown).protocol.replace(/:$/, "");
   } catch {
-    /* keep "no scheme" */
+    /* keep the "no scheme" label */
   }
-  return (
-    `GAIA refused to open "${shown.slice(0, 300)}" (${scheme}). ` +
-    "Only http, https and mailto links open outside the app — a link that " +
-    "resolves to a local file or network share is never launched."
-  );
+  return text.blocked(shown.slice(0, 300), scheme);
 }
 
 module.exports = {
@@ -87,4 +115,5 @@ module.exports = {
   isAllowedExternalUrl,
   isInAppNavigation,
   describeBlockedUrl,
+  linkNoticeText,
 };

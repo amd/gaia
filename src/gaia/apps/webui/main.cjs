@@ -124,6 +124,7 @@ const {
   isAllowedExternalUrl,
   isInAppNavigation,
   describeBlockedUrl,
+  linkNoticeText,
 } = require("./services/link-policy.cjs");
 const { installWindowKeys } = require("./services/window-keys.cjs");
 const { installContextMenu } = require("./services/context-menu.cjs");
@@ -661,16 +662,17 @@ function findDistPath() {
 
 /** Refuse a link loudly — the user clicked it, so they get told why nothing happened. */
 function reportBlockedLink(url) {
-  const message = describeBlockedUrl(url);
-  console.error(`[main] ${message}`);
+  const locale = app.getLocale();
+  const text = linkNoticeText(locale);
+  console.error(`[main] ${describeBlockedUrl(url)}`);
   // Non-blocking and parented: showErrorBox would freeze the main process.
   dialog
     .showMessageBox(mainWindow && !mainWindow.isDestroyed() ? mainWindow : null, {
       type: "warning",
-      title: "Link blocked",
-      message: "Link blocked",
-      detail: message,
-      buttons: ["OK"],
+      title: text.blockedTitle,
+      message: text.blockedTitle,
+      detail: describeBlockedUrl(url, locale),
+      buttons: [text.ok],
       noLink: true,
     })
     .catch((err) =>
