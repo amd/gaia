@@ -3,6 +3,7 @@ package chat
 import (
 	"strings"
 	"testing"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 
@@ -411,6 +412,7 @@ func TestNAfterAHighlightedAlwaysDenies(t *testing.T) {
 // A letter pressed just after a prompt was answered was meant for that prompt,
 // not the start of a message.
 func TestAnswerLetterRightAfterAnAnswerIsDropped(t *testing.T) {
+	holdLongerThanTheTest(t)
 	m, _ := liveModel(t)
 	m.streaming = true
 	m = feed(t, m, gatedShellCall())
@@ -431,6 +433,7 @@ func TestAnswerLetterRightAfterAnAnswerIsDropped(t *testing.T) {
 // A word typed fast right after an answer keeps its first letter: the held
 // letter goes back to the composer once more typing follows it.
 func TestWordTypedRightAfterAnAnswerKeepsItsFirstLetter(t *testing.T) {
+	holdLongerThanTheTest(t)
 	m, _ := liveModel(t)
 	m.streaming = true
 	m = feed(t, m, gatedShellCall())
@@ -448,4 +451,13 @@ func TestWordTypedRightAfterAnAnswerKeepsItsFirstLetter(t *testing.T) {
 	if got := m.input.Value(); got != "now" {
 		t.Errorf("composer = %q, want %q", got, "now")
 	}
+}
+
+// holdLongerThanTheTest keeps "right after" true however slow the runner is;
+// the suite's 1 ms hold is shorter than a Windows runner takes between keys.
+func holdLongerThanTheTest(t *testing.T) {
+	t.Helper()
+	saved := confirmAnswerHold
+	confirmAnswerHold = time.Minute
+	t.Cleanup(func() { confirmAnswerHold = saved })
 }
