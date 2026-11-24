@@ -183,6 +183,8 @@ export function AgentChoice({ inSettings = false, disabled = false, pending = nu
                             const unavailable = off(p);
                             const getIt = needsDownload(p);
                             const old = outdated(p);
+                            // With Update beside it and the reason under it, the row needs no tag of its own.
+                            const updateShown = old && !downloading && job?.state !== 'failed';
                             const row = (
                                 <button
                                     key={o.id}
@@ -201,7 +203,7 @@ export function AgentChoice({ inSettings = false, disabled = false, pending = nu
                                     </span>
                                     <span className="setup-choice-tag">{t(o.tag)}</span>
                                     {unavailable && <span className="setup-choice-tag agent-choice-off">{t('setup.agent.notInstalled')}</span>}
-                                    {old && <span className="setup-choice-tag agent-choice-off">{t('setup.agent.outOfDate')}</span>}
+                                    {old && !updateShown && <span className="setup-choice-tag agent-choice-off">{t('setup.agent.outOfDate')}</span>}
                                     {p && !installed(p) && !unavailable && !inSettings && (
                                         <span className="setup-choice-tag agent-choice-off is-quiet">{t('settings.model.notDownloaded')}</span>
                                     )}

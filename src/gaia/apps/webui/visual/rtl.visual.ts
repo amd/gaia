@@ -3462,7 +3462,8 @@ for (const locale of ['ar', 'en']) {
             const row = agent.locator('[role="radio"]').nth(1);
             // Still pickable: an older copy is flagged, not blocked.
             await expect(row).not.toHaveAttribute('aria-disabled', 'true');
-            await expect(row.locator('.agent-choice-off')).toHaveCount(1);
+            // Update and the sentence under the row say it is out of date; no tag repeats it.
+            await expect(row.locator('.agent-choice-off')).toHaveCount(0);
             const note = agent.locator('.agent-choice-why');
             await expect(note).toBeVisible();
             await expect(note).toContainText('0.27.0-rc.8');

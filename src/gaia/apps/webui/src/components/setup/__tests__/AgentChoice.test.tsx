@@ -376,7 +376,9 @@ describe('AgentChoice: a gaiacpp from another GAIA release', () => {
     it.each([[true], [false]])('says it is out of date, with both versions, in view (in Settings: %s)', async (inSettings) => {
         render(<AgentChoice inSettings={inSettings} />);
         const cpp = await radio(/gaiacpp/);
-        expect(cpp).toHaveTextContent('Out of date');
+        // Update and the sentence under the row say it; the radio is described by that sentence.
+        expect(cpp).not.toHaveTextContent('Out of date');
+        expect(cpp).toHaveAccessibleDescription(/from another GAIA release/);
         const note = "This PC's gaiacpp is version 0.27.0-rc.8, from another GAIA release; this GAIA's is 0.27.0-rc.10. Update downloads this release's copy.";
         expect(stripIsolates(screen.getByText(/from another GAIA release/).textContent ?? '')).toBe(note);
         expect(screen.getByText(/from another GAIA release/)).toBeVisible();
