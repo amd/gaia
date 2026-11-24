@@ -64,3 +64,26 @@ def test_the_mcp_bridge_is_stopped(workdir, spawn):
 
     assert bridge.wait(timeout=10) != 0
     assert not (workdir / "gaia.mcp.pid").exists()
+
+
+def test_unreadable_command_line_keeps_the_file_and_signals_nothing(
+    workdir, spawn, mocker
+):
+    import psutil
+
+    other = spawn()
+    (workdir / "gaia.mcp.pid").write_text(str(other.pid))
+    mocker.patch.object(
+        psutil.Process, "cmdline", side_effect=psutil.AccessDenied(other.pid)
+    )
+    kill = mocker.patch("os.kill")
+    run = mocker.patch("subprocess.run")
+
+    with pytest.raises(SystemExit) as exc:
+        handle_mcp_stop(None)
+
+    assert exc.value.code == 1
+    kill.assert_not_called()
+    run.assert_not_called()
+    assert other.poll() is None
+    assert (workdir / "gaia.mcp.pid").exists()
