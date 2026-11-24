@@ -202,7 +202,7 @@ test("a restart that finds no backend program fails as one no retry can fix", as
     `${topLevelFunction("function missingBackendMessage(")}
 ${topLevelFunction("async function restartBackend(")}
 restartBackend`,
-    { backendInstaller: { BUNDLED_GAIA_BIN: "/opt/gaia/core/gaia", GAIA_BIN: "/home/you/.gaia/venv/bin/gaia" }, backendStarting: null }
+    { backendInstaller: { BUNDLED_GAIA_BIN: "/opt/gaia/core/gaia", GAIA_BIN: "/home/you/.gaia/venv/bin/gaia" }, backendStarting: null, backendProcess: null }
   );
   context.startBackend = () => Promise.resolve(null);
   const err = await restartBackend().catch((e) => e);
@@ -215,6 +215,28 @@ test("with no quit under way, a restart adopts the new backend", async () => {
   await expect(h.restartBackend()).resolves.toEqual({ port: 4300 });
   expect(h.context.backendProcess).toBe(h.child);
   expect(h.portManager.killBackend).not.toHaveBeenCalled();
+});
+
+test("a restart stops the live backend first, so a hung one is not left running beside the new one", async () => {
+  const h = restartHarness({ quitWhileSpawning: () => {} });
+  const hung = { pid: 9999, exitCode: null, signalCode: null };
+  h.context.backendProcess = hung;
+  await expect(h.restartBackend()).resolves.toEqual({ port: 4300 });
+  expect(h.portManager.killBackend).toHaveBeenCalledWith(hung);
+  expect(h.portManager.killBackend).toHaveBeenCalledTimes(1);
+  expect(h.context.backendProcess).toBe(h.child);
+});
+
+test("a backend that never answers at startup is stopped, not left running for a reopen", () => {
+  const startup = main.slice(main.indexOf("backendReady = await waitForBackend(STARTUP_TIMEOUT);"));
+  // The hung process is stopped on purpose, so the exit handler does not
+  // report a crash for it, and the window is told the backend failed.
+  expect(startup).toMatch(/const hung = backendProcess;\s*backendProcess = null;\s*isIntentionalKill = true;\s*await portManager\.killBackend\(hung\);/);
+  expect(startup).toMatch(/backendSupervisor\.failedToAnswer\(`The backend did not answer within \$\{STARTUP_TIMEOUT \/ 1000\} s\.`\);/);
+  // No background wait for a late answer: the hung process is gone, so it
+  // can never answer, and the rollback offer clears when the restart lands.
+  expect(main).not.toMatch(/STARTUP_TIMEOUT \* 10/);
+  expect(main).toMatch(/if \(state\.status === "running"\) autoUpdater\.clearStartFailure\(\);/);
 });
 
 test("a crashed window is offered a reload; GAIA keeps running", () => {

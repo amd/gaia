@@ -4,7 +4,10 @@
 /**
  * Restarts GAIA's backend when it exits on its own: after a growing wait,
  * at most `maxRestarts` times in `windowMs`, then it stops and waits for the
- * user's Restart GAIA (restartNow). No Electron imports, so it unit-tests.
+ * user's Restart GAIA (restartNow). A backend that starts but never answers
+ * is hung, not running: the main process reports it with failedToAnswer, and
+ * restartNow also restarts one still reported running. No Electron imports,
+ * so it unit-tests.
  *
  * State, as sent to the renderer:
  *   status        "running" | "restarting" | "stopped"
@@ -121,6 +124,12 @@ function createBackendSupervisor({
       emit({ status: "stopped", port: null, since: now(), attempt: 0, nextAttemptAt: null, lastError: error });
     },
 
+    /** The backend started but never answered: it is hung, so stop and wait for Restart GAIA. */
+    failedToAnswer(error) {
+      if (stopped) return;
+      emit({ status: "stopped", port: null, since: now(), attempt: 0, nextAttemptAt: null, lastError: error });
+    },
+
     /** The backend exited on its own. Returns what happens next. */
     crashed({ code = null, signal = null } = {}) {
       if (stopped) return "stopped";
@@ -134,7 +143,9 @@ function createBackendSupervisor({
       return schedule({ lastExit: { code, signal } });
     },
 
-    /** The user's Restart GAIA: start now, with a fresh budget. */
+    /** The user's Restart GAIA: start now, with a fresh budget. Also restarts
+     * a backend still reported "running": that is a hung backend the startup
+     * screen offers Restart for, and start() stops the old process first. */
     restartNow() {
       if (stopped || starting) return;
       if (timer) {
@@ -142,8 +153,10 @@ function createBackendSupervisor({
         timer = null;
       }
       history = [];
-      if (state.status === "running") return;
-      emit({ status: "restarting", attempt: 1 });
+      // A restart from running starts a new outage: stamp it so the banner's
+      // timer counts from here, as the crash path does. From stopped, the
+      // outage began when the backend gave up, so keep that time.
+      emit({ status: "restarting", attempt: 1, ...(state.status === "running" ? { since: now() } : {}) });
       attemptStart();
     },
 

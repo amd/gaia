@@ -503,8 +503,16 @@ async function startBackend() {
 /**
  * Start a new backend for the supervisor and resolve once it answers.
  * Rejects when it exits first or never answers, so the supervisor retries.
+ * A backend still alive here is a hung one Restart GAIA was pressed for:
+ * stop it first, or the new backend would run beside it on a new port.
  */
 async function restartBackend() {
+  if (backendProcess) {
+    const hung = backendProcess;
+    backendProcess = null;
+    isIntentionalKill = true;
+    await portManager.killBackend(hung);
+  }
   backendStarting = startBackend();
   const child = await backendStarting;
   if (!child) throw Object.assign(new Error(missingBackendMessage()), { terminal: true });
@@ -549,6 +557,12 @@ const backendSupervisor = createBackendSupervisor({
         (state.status === "restarting" ? ` (try ${state.attempt} of ${state.maxRestarts})` : "") +
         (state.lastError ? `: ${state.lastError}` : "")
     );
+    // A backend that came up after a failed start clears the rollback offer:
+    // the failed start is over, so there is nothing to go back from. This
+    // replaces the old background wait that cleared it when a hung backend
+    // answered late; a hung backend is now stopped instead, so the clear
+    // happens on the restart that brings it back.
+    if (state.status === "running") autoUpdater.clearStartFailure();
     if (mainWindow && !mainWindow.isDestroyed()) {
       mainWindow.webContents.send("backend:state", backendStateForRenderer(state));
     }
@@ -1237,9 +1251,15 @@ app.whenReady().then(async () => {
   if (!backendReady) {
     autoUpdater.reportStartFailure();
     if (backendProcess) {
-      waitForBackend(STARTUP_TIMEOUT * 10).then((ready) => {
-        if (ready) autoUpdater.clearStartFailure();
-      });
+      // Started but never answered: it is hung, not running. Stop it and
+      // tell the window it failed, so the startup screen offers Restart
+      // GAIA instead of telling the user to quit and reopen the app. The
+      // intentional kill keeps the exit handler from reporting a crash.
+      const hung = backendProcess;
+      backendProcess = null;
+      isIntentionalKill = true;
+      await portManager.killBackend(hung);
+      backendSupervisor.failedToAnswer(`The backend did not answer within ${STARTUP_TIMEOUT / 1000} s.`);
     }
   }
 
