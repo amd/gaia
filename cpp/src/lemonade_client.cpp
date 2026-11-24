@@ -243,7 +243,10 @@ LemonadeHealth LemonadeClient::healthCheck() {
         // the chat model, in any order: report this client's model when it is
         // loaded, else the server's current chat model.
         const json* entry = loadedModel(h.raw, model_);
-        if (!entry) entry = loadedModel(h.raw, h.raw.value("model_loaded", ""));
+        // Null until the server's first load.
+        if (!entry && h.raw.contains("model_loaded") && h.raw["model_loaded"].is_string()) {
+            entry = loadedModel(h.raw, h.raw["model_loaded"].get<std::string>());
+        }
         if (!entry && h.raw.contains("all_models_loaded") && h.raw["all_models_loaded"].is_array() &&
             !h.raw["all_models_loaded"].empty()) {
             entry = &h.raw["all_models_loaded"][0];
