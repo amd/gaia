@@ -980,14 +980,20 @@ class SessionHistory(list):
             except FileExistsError:
                 pass  # existing transcript, or another process just created it
         self._db = sqlite3.connect(str(path) if path is not None else ":memory:")
+        # owner: the process running a stand-in turn (gaia.utils.process_owner);
+        # NULL once the turn is recorded.
         self._db.execute(
-            "CREATE TABLE IF NOT EXISTS turns (id INTEGER PRIMARY KEY, messages TEXT NOT NULL, owner TEXT)"
+            "CREATE TABLE IF NOT EXISTS turns "
+            "(id INTEGER PRIMARY KEY, messages TEXT NOT NULL, owner TEXT)"
         )
         columns = {row[1] for row in self._db.execute("PRAGMA table_info(turns)")}
         if "owner" not in columns:
-            # The process running a stand-in turn (gaia.utils.process_owner);
-            # NULL once the turn is recorded.
-            self._db.execute("ALTER TABLE turns ADD COLUMN owner TEXT")
+            try:
+                self._db.execute("ALTER TABLE turns ADD COLUMN owner TEXT")
+            except sqlite3.OperationalError as exc:
+                # Another process migrated the same archive first.
+                if "duplicate column" not in str(exc):
+                    raise
         self._db.commit()
         self._cuts = CutReporter()
         self._pending: Optional[int] = None
