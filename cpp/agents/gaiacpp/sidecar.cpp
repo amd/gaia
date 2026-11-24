@@ -938,7 +938,8 @@ private:
                      "named no session, or said it can't answer questions. Send it with a session_id from a "
                      "caller that answers needs_confirmation, or perform the action directly.";
         }
-        return {{"type", "final"}, {"failed", true}, {"answer", answer}, {"failure", answer}};
+        // No "failure": that field names a model-server cause, and the Python agent would refuse this too.
+        return {{"type", "final"}, {"failed", true}, {"answer", answer}};
     }
 
     // What a caller may do with this store, and whose it is: the Python agent keeps another.
@@ -1239,7 +1240,6 @@ private:
                                 {"context_error", kNoContextMeasure}};
                     if (r.value("status", "success") == "error") {
                         terminal["failed"] = true;
-                        terminal["failure"] = r.value("error", r.value("result", "The turn failed"));
                         // The server may have gone mid-turn: say so, not the transport's generic advice.
                         LemonadeClient probe(server.baseUrl);
                         probe.setApiKey(server.apiKey);

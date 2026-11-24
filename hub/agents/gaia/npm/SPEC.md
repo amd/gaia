@@ -596,8 +596,9 @@ answer (§8). Its `answer` says what was and wasn't done. When the cause is one 
 names it. `"model_server_down"` means the local model server took no
 connection. Cloud models go through that server too, so the provider was never
 reached; the turn fails at once instead of retrying, and its `answer` names the
-server, not the provider. Offer to start the server. Older binaries never send
-`failure`, so read it only when present.
+server, not the provider. Offer to start the server. Only the model server's
+causes are named; the agent's own errors and refusals leave `failure` unset.
+Older binaries never send `failure`, so read it only when present.
 
 #### The "not confirmed" note on `final.answer`
 

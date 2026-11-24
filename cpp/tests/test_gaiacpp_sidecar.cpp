@@ -1242,6 +1242,7 @@ TEST_F(GaiacppSidecar, AChatThatSaysItCantAnswerIsRefusedInServiceWords) {
     const std::string answer = (*final)["answer"].get<std::string>();
     EXPECT_NE(answer.find("this request has nobody to ask"), std::string::npos) << answer;
     EXPECT_EQ(answer.find("gaia -p"), std::string::npos) << "only a cli caller is told about gaia -p: " << answer;
+    EXPECT_FALSE(final->contains("failure")) << "gaiacpp's own refusal is no model-server cause: " << final->dump();
     EXPECT_FALSE(fs::exists(target));
 }
 

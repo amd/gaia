@@ -8,6 +8,10 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 Requires the `gaia` Python CLI 0.27.0+ on `PATH`.
 
+- **`final.failure` names only a model-server cause.** The agent's own errors
+  and refusals no longer set it, so the Agent UI keeps offering the Python agent
+  after a gaiacpp failure, and offers to start the server only when the server
+  is at fault.
 - **`GET /health` reports `active_runs`.** The number of turns running or
   waiting on an answer, so GAIA's background service never restarts the agent
   on another program in the middle of someone's answer.
