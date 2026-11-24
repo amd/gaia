@@ -8,6 +8,7 @@
  */
 
 import { getJson, ghHeaders, insertMany, utcDay, writeAtomic, type CollectEnv, type Fetcher } from "./collector";
+import { isBot } from "./momentum";
 
 /** Counts ISO timestamps per UTC day, ordered by day. */
 export function countByDay(timestamps: string[]): [string, number][] {
@@ -16,14 +17,15 @@ export function countByDay(timestamps: string[]): [string, number][] {
   return [...m.entries()].sort(([a], [b]) => a.localeCompare(b));
 }
 
-async function pagedList<T>(f: Fetcher, env: CollectEnv, base: string, accept: string, maxPages: number): Promise<T[]> {
-  const out: T[] = [];
+/** Every page of a GitHub list; `keep` shrinks each entry as its page arrives, so a large history never sits in memory whole. */
+async function pagedList<T, U = T>(f: Fetcher, env: CollectEnv, base: string, accept: string, maxPages: number, keep?: (t: T) => U): Promise<U[]> {
+  const out: U[] = [];
   for (let page = 1; page <= maxPages; page++) {
     const url = `${base}${base.includes("?") ? "&" : "?"}per_page=100&page=${page}`;
     const headers = { ...(ghHeaders(env) as Record<string, string>), Accept: accept };
     const batch = await getJson<T[]>(f, url, { headers });
     if (!Array.isArray(batch)) throw new Error(`Response from ${url} is not a list.`);
-    out.push(...batch);
+    out.push(...(keep ? batch.map(keep) : (batch as unknown as U[])));
     if (batch.length < 100) return out;
   }
   throw new Error(`Hit the ${maxPages}-page guard fetching ${base}; raise it deliberately if the repo really is this large.`);
@@ -85,6 +87,52 @@ export async function collectItems(env: CollectEnv, f: Fetcher, sinceDay?: strin
       list.map((i) => [i.number, i.pull_request ? "pr" : "issue", i.created_at, i.closed_at, i.pull_request?.merged_at ?? null, i.author_association, i.user?.login ?? null, i.pull_request ? (i.draft ? 1 : 0) : null])),
   );
   return `${list.length} issues and PRs${sinceDay ? ` updated since ${sinceDay}` : " (full history)"}`;
+}
+
+interface GhComment {
+  user: { login: string; type?: string } | null;
+  author_association: string;
+  created_at: string;
+  /** Conversation comments. */
+  issue_url?: string;
+  /** Inline review comments. */
+  pull_request_url?: string;
+}
+
+/**
+ * Each person's earliest comment on each issue or pull request, from the repository-wide comment
+ * lists. `sinceDay` limits the nightly run to comments updated since; omit it for the full history.
+ * A stored row only moves earlier, so a later comment never replaces a person's first.
+ */
+export async function collectComments(env: CollectEnv, f: Fetcher, sinceDay?: string): Promise<string> {
+  const since = sinceDay ? `&since=${sinceDay}T00:00:00Z` : "";
+  const repo = `https://api.github.com/repos/${env.GITHUB_REPO}`;
+  // Comment bodies and diff hunks run to tens of megabytes over the full history; keep four fields.
+  const slim = (c: GhComment) => ({
+    login: c.user?.type === "Bot" ? null : (c.user?.login ?? null),
+    assoc: c.author_association,
+    at: c.created_at,
+    number: Number((c.issue_url ?? c.pull_request_url ?? "").split("/").pop()),
+  });
+  const list = [
+    ...(await pagedList(f, env, `${repo}/issues/comments?sort=created&direction=asc${since}`, "application/vnd.github+json", 600, slim)),
+    ...(await pagedList(f, env, `${repo}/pulls/comments?sort=created&direction=asc${since}`, "application/vnd.github+json", 600, slim)),
+  ];
+  const first = new Map<string, [number, string, string, string]>();
+  for (const c of list) {
+    const { login, number } = c;
+    if (!login || isBot(login)) continue;
+    if (!Number.isInteger(number) || number <= 0) throw new Error(`Comment at ${c.at} by ${login} names no issue or pull request.`);
+    const k = `${number}|${login}`;
+    const cur = first.get(k);
+    if (!cur || c.at < cur[3]) first.set(k, [number, login, c.assoc, c.at]);
+  }
+  await writeAtomic(
+    env.DB,
+    insertMany(env.DB, "item_responses", ["number", "login", "assoc", "at"], [...first.values()], "INSERT",
+      "ON CONFLICT (number, login) DO UPDATE SET assoc = excluded.assoc, at = excluded.at WHERE excluded.at < item_responses.at"),
+  );
+  return `${list.length} comments, ${first.size} first comments by people${sinceDay ? ` updated since ${sinceDay}` : " (full history)"}`;
 }
 
 interface GhCommit {

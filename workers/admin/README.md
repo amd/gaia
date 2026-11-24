@@ -4,7 +4,10 @@ The GAIA admin dashboard at `amd-gaia.ai/admin`, in five pages:
 
 - **Users** (`/admin`): installs per release by OS and product, installs over time, PyPI and npm.
 - **Growth** (`/admin/growth`): how fast stars, forks, contributors and downloads grow,
-  newcomers, retention, the share of merged PRs from outside the core team, and bus factor.
+  newcomers, retention, the share of merged PRs from outside the core team, and bus factor;
+  how fast the core team first answers outside issues and PRs, how far outside newcomers go
+  (first PR, first merge, second merge), and how much of the outside work comes from the top
+  two people.
   Each is scored against a target set a little above GAIA's own recent median, and set
   beside Hermes Agent and other fast-growing AI-agent projects for context (`TARGETS` and
   `BENCHMARKS` in `src/growthpage.ts`).
@@ -37,8 +40,8 @@ curl -X POST -H "x-admin-action: collect" "http://localhost:8787/admin/api/colle
 - `ADMIN_DEV_NO_AUTH=1` skips Cloudflare Access and works for `localhost` only; the
   Worker refuses it on any other host.
 - On a network that inspects TLS, start with `NODE_OPTIONS=--use-system-ca`.
-- `full=1` reads the whole issue, pull request and commit history (a few minutes).
-  Without it, issues and commits are read from one day before their last successful
+- `full=1` reads the whole issue, pull request, comment and commit history (a few minutes).
+  Without it, issues, comments and commits are read from one day before their last successful
   collection, so missed nights are caught up. Stars, forks, line statistics and package
   history are re-read in full every night; evals cover the last 14 days.
 - `days=N` is how many days of workflow runs and test counts to read, newest first
@@ -202,6 +205,9 @@ Source names with a space need `%20` in the URL, for example `only=code%20stats`
   `npx wrangler d1 migrations apply gaia-admin --remote` before `npx wrangler deploy`.
   After `0011_item_draft.sql`, run one collection with `full=1&only=issues` so pull
   requests opened before it get their draft state; until then they count as not drafts.
+  After `0012_item_responses.sql`, run one collection with `only=comments` (no `full=1`
+  needed: a source that has never succeeded reads its whole history). First-response figures
+  stay hidden until it has.
 
 ### If something is wrong
 
