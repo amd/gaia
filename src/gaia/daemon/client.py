@@ -48,7 +48,6 @@ from gaia.daemon.lock import StartLock
 from gaia.env import is_internal_secret
 from gaia.log_rotation import rotate_if_oversized
 from gaia.logger import get_logger
-from gaia.skills.human_only import AGENT_CHILD_ENV
 from gaia.utils.terminal import background_popen_kwargs, popen_outliving_job
 
 logger = get_logger(__name__)
@@ -582,15 +581,13 @@ def _daemon_env(drop: tuple = ()) -> dict:
 
     The daemon mints its own credentials and serves its own custody endpoint, so
     a stale ``GAIA_HOST_CUSTODY_URL`` would reach its sidecars without a secret.
-    ``GAIA_CHILD_ENV_DENY`` is not applied: the daemon is GAIA itself, so it
-    also never carries the agent-child marker, even when an agent's shell
-    started it.
+    ``GAIA_CHILD_ENV_DENY`` is not applied: the daemon is GAIA itself.
     """
     env = {
         name: value
         for name, value in os.environ.items()
         if not is_internal_secret(name)
-        and name not in (CUSTODY_URL_ENV_VAR, AGENT_CHILD_ENV)
+        and name != CUSTODY_URL_ENV_VAR
         and name not in drop
     }
     # The daemon runs from its host dir, so a relative path must not follow it.

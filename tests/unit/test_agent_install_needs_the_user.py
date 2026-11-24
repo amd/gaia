@@ -128,11 +128,3 @@ def test_python_that_installs_agent_code_is_refused_early(code, tmp_path):
 )
 def test_python_that_only_reads_installer_helpers_still_runs(code, tmp_path):
     assert human_only_in_python(code, str(tmp_path)) == ""
-
-
-def test_a_daemon_started_from_an_agent_shell_is_not_an_agent_child(monkeypatch):
-    from gaia.daemon.client import _daemon_env
-
-    monkeypatch.setenv(AGENT_CHILD_ENV, "1")
-
-    assert AGENT_CHILD_ENV not in _daemon_env()
