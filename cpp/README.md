@@ -5,6 +5,8 @@
 
 The [GAIA](https://github.com/amd/gaia) C++ agent framework — a native C++17 port of the Python base agent. Part of AMD's open-source AI agent platform for Ryzen AI hardware. See the [Agent UI guide](../docs/guides/agent-ui.mdx) for the consumer desktop experience.
 
+The framework's main product is **`gaiacpp`** ([`agents/gaiacpp/`](agents/gaiacpp/)): the general-purpose GAIA agent as one native binary, and one of the GAIA agent's two harnesses beside the Python `gaiapy`. See the [gaiacpp guide](../docs/cpp/gaia-agent.mdx) and [The two harnesses](../docs/reference/harnesses.mdx).
+
 Included demos:
 
 - **`health_agent`** — Windows System Health Agent that connects to the [Windows MCP server](https://pypi.org/project/windows-mcp/), gathers memory/disk/CPU metrics via PowerShell, and pastes a formatted report into Notepad — demonstrating the full computer-use (CUA) flow over the MCP client-server interface.
@@ -260,8 +262,7 @@ gaia/                           # repo root
     │   ├── clean_console.cpp
     │   └── database.cpp
     ├── agents/
-    │   ├── gaia/               # gaiacpp — the general-purpose GAIA agent (CLI, headless, server)
-    │   ├── bash/               # gaia-bash — the coding agent
+    │   ├── gaiacpp/            # gaiacpp — the general-purpose GAIA agent (CLI, headless, server)
     │   └── <id>/gaia-agent.yaml  # Packaging manifest per agent (see agents/README.md)
     ├── packaging/
     │   ├── package_agents.py   # Packages each agent's binary for the Agent Hub
@@ -520,9 +521,8 @@ This C++ library implements the core agent from `src/gaia/agents/base/` of the [
 | MCP client (stdio) | ✓ | ✓ |
 | JSON parsing with fallbacks | ✓ | ✓ |
 | OpenAI-compatible LLM backend | ✓ | ✓ |
-| Multiple LLM providers (Claude, OpenAI) | ✓ | planned |
-| Specialized agents (Code, Docker, Jira…) | ✓ | Python-only |
-| REST API server | ✓ | Python-only |
+| Claude provider | ✓ | Python-only |
+| OpenAI-compatible server | ✓ (`gaia api`) | ✓ (`gaiacpp serve`) |
 | Audio / RAG / Stable Diffusion | ✓ | Python-only |
 
 ---

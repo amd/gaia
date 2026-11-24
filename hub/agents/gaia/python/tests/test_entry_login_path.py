@@ -8,7 +8,7 @@ import sys
 import types
 
 import pytest
-from gaia_agent import entry
+from gaiapy import entry
 
 
 def _stop_after_path_repair(monkeypatch):

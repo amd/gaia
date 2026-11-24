@@ -136,6 +136,14 @@ var confirmationRiskTiers = map[string]RiskTier{
 	"remove_skill":        RiskWrite,
 	// Erases every memory and past conversation; nothing brings them back.
 	"forget_everything": RiskDestructive,
+	// gaiacpp's names for its gated tools.
+	"bash_execute":    RiskDestructive,
+	"file_write":      RiskWrite,
+	"file_edit":       RiskWrite,
+	"generate_image":  RiskWrite,
+	"take_screenshot": RiskWrite,
+	"web_fetch":       RiskWrite,
+	"forget":          RiskDestructive,
 	// Not a tool: PathValidator asking to widen this session's scope by one path (reads and changes).
 	"allow_path_access": RiskAccess,
 	// Not a tool: the agent asking whether to read this folder's CLAUDE.md, AGENTS.md and skills.
@@ -172,6 +180,15 @@ var actionTitles = map[string]string{
 	"discard_draft":        "Delete this draft?",
 	"update_draft":         "Change this draft?",
 
+	// gaiacpp's names for its gated tools.
+	"bash_execute":    "Run this command?",
+	"file_write":      "Write this file?",
+	"file_edit":       "Edit this file?",
+	"take_screenshot": "Take a screenshot?",
+	"generate_image":  "Create this image?",
+	"forget":          "Forget this memory?",
+	"web_fetch":       "Open this web page?",
+
 	"send-email/send_now":         "Send this email?",
 	"send-email/send_draft":       "Send this email?",
 	"send-email/reply_to_message": "Send this reply?",
@@ -191,7 +208,11 @@ func ActionTitle(action string) string {
 	if title, ok := actionTitles[action]; ok {
 		return title
 	}
-	return "Allow " + action + "?"
+	// A connector's tools are named at runtime; the body shows the call.
+	if strings.HasPrefix(action, "mcp_") {
+		return "Use this connector tool?"
+	}
+	return "Allow " + strings.ReplaceAll(action, "_", " ") + "?"
 }
 
 // unboundedRiskActions are tiered Destructive because their name does not bound
@@ -200,6 +221,7 @@ func ActionTitle(action string) string {
 // or as code decides which text on screen the warning points at.
 var unboundedRiskActions = map[string]string{
 	"run_shell_command":   "command",
+	"bash_execute":        "command",
 	"wait_for_condition":  "command",
 	"run_python":          "code",
 	"execute_python_file": "code",
@@ -432,6 +454,9 @@ type ConfirmationModel struct {
 	maxRows int
 	scroll  int
 	seen    int
+	// chosen is the answer highlighted and waiting for Enter; ConfirmationPending
+	// means none.
+	chosen ConfirmState
 }
 
 // NewConfirmationModel builds the modal for one needs_confirmation event.
@@ -595,10 +620,11 @@ func (m *ConfirmationModel) scrollBy(delta int) {
 	m.markSeen()
 }
 
-// Update handles one key while the confirmation is pending. Only y/Y (approve
-// once), a/A (approve and stop asking) and n/N/Esc (deny) resolve it; every
-// other key is swallowed so nothing approves — or denies — by accident. Once
-// resolved, further input is a no-op: a decision is made once.
+// Update handles one key while the confirmation is pending. y/Y (approve once)
+// and n/N/Esc (deny) resolve it at once. "Always" is the widest answer, so a/A
+// only highlights it and Enter confirms; Tab walks the highlight through every
+// choice, which is how a prompt is answered without a letter. Every other key
+// is swallowed. Once resolved, further input is a no-op: a decision is made once.
 //
 // "Always" is offered only on a deliverable prompt. Where the answer cannot
 // reach the agent there is no session to grant anything for, so the key would
@@ -619,10 +645,16 @@ func (m ConfirmationModel) Update(msg tea.Msg) (ConfirmationModel, tea.Cmd) {
 		}
 		return m.decide(ConfirmationApproved, false)
 	case "a", "A":
-		if !m.allowAlways() || m.unread() {
+		if m.allowAlways() && !m.unread() {
+			m.chosen = ConfirmationAlways
+		}
+	case "tab":
+		m.chosen = m.nextChoice()
+	case "enter":
+		if m.chosen == ConfirmationPending || (m.chosen != ConfirmationDenied && m.unread()) {
 			return m, nil
 		}
-		return m.decide(ConfirmationAlways, false)
+		return m.decide(m.chosen, false)
 	case "down", "j":
 		if m.scrolls() {
 			m.scrollBy(1)
@@ -644,6 +676,39 @@ func (m ConfirmationModel) Update(msg tea.Msg) (ConfirmationModel, tea.Cmd) {
 	}
 	return m, nil
 }
+
+// choices are the answers this prompt offers right now, in the order shown.
+func (m ConfirmationModel) choices() []ConfirmState {
+	if m.unread() {
+		return []ConfirmState{ConfirmationDenied}
+	}
+	if m.allowAlways() {
+		return []ConfirmState{ConfirmationApproved, ConfirmationAlways, ConfirmationDenied}
+	}
+	return []ConfirmState{ConfirmationApproved, ConfirmationDenied}
+}
+
+func (m ConfirmationModel) nextChoice() ConfirmState {
+	all := m.choices()
+	for i, c := range all {
+		if c == m.chosen {
+			return all[(i+1)%len(all)]
+		}
+	}
+	return all[0]
+}
+
+// Chosen reports whether an answer is highlighted and waiting for Enter.
+func (m ConfirmationModel) Chosen() bool { return m.chosen != ConfirmationPending }
+
+// ClearChoice drops the highlight, leaving the prompt unanswered.
+func (m *ConfirmationModel) ClearChoice() { m.chosen = ConfirmationPending }
+
+// OffersAlways reports whether a/A does anything on this prompt right now.
+func (m ConfirmationModel) OffersAlways() bool { return m.allowAlways() && !m.unread() }
+
+// Scrolls reports whether j, k and space move this prompt's text.
+func (m ConfirmationModel) Scrolls() bool { return m.scrolls() }
 
 // allowAlways reports whether this prompt may be answered with "always".
 //
@@ -782,7 +847,7 @@ func (m ConfirmationModel) windowKeyHint() string {
 	if !m.unread() {
 		return m.styledKeyHint()
 	}
-	return confirmationKeyStyle.Render("n/esc") + " " + confirmationBodyStyle.Render("deny")
+	return m.renderChoices([]confirmChoice{{ConfirmationDenied, "n/esc", "deny"}})
 }
 
 // fullView is the whole prompt, however tall.
@@ -867,19 +932,34 @@ func (m ConfirmationModel) resultOrHint(inner int) string {
 // the tool: that label is the only account of the grant anyone reads, and an
 // empty scope hides the choice entirely.
 func (m ConfirmationModel) styledKeyHint() string {
-	type choice struct{ key, label string }
 	approve, ok := approveLabels[m.action]
 	if !ok {
 		approve = "once"
 	}
-	choices := []choice{{"y", approve}}
+	choices := []confirmChoice{{ConfirmationApproved, "y", approve}}
 	if m.allowAlways() {
-		choices = append(choices, choice{"a", "always: " + m.alwaysScope + " (this session)"})
+		choices = append(choices, confirmChoice{ConfirmationAlways, "a", "always: " + m.alwaysScope + " (this session)"})
 	}
-	choices = append(choices, choice{"n/esc", "deny"})
+	choices = append(choices, confirmChoice{ConfirmationDenied, "n/esc", "deny"})
+	return m.renderChoices(choices)
+}
+
+type confirmChoice struct {
+	state      ConfirmState
+	key, label string
+}
+
+// renderChoices draws the answers. A highlighted one is marked with an arrow and
+// named as waiting for Enter, in words, so it reads without colour.
+func (m ConfirmationModel) renderChoices(choices []confirmChoice) string {
 	parts := make([]string, 0, len(choices))
 	for _, c := range choices {
-		parts = append(parts, confirmationKeyStyle.Render(c.key)+" "+confirmationBodyStyle.Render(c.label))
+		part := confirmationKeyStyle.Render(c.key) + " " + confirmationBodyStyle.Render(c.label)
+		if m.chosen != ConfirmationPending && c.state == m.chosen {
+			part = confirmationTitleStyle.Render("▸") + " " + part + " " +
+				confirmationTitleStyle.Render("— enter to confirm")
+		}
+		parts = append(parts, part)
 	}
 	return strings.Join(parts, confirmationHintStyle.Render(" · "))
 }

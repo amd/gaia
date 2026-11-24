@@ -462,7 +462,7 @@ class TestChatAgentGoesThroughTheRegistry:
         assert registry.create_agent.call_args.args[0] == "chat"
 
     def test_a_missing_chat_registration_is_not_silently_substituted(self):
-        """No direct `from gaia_agent.chat_agent import ChatAgent` left to fall
+        """No direct `from gaiapy.chat_agent import ChatAgent` left to fall
         back on: an unregistered `chat` points the user at Setup instead."""
         registry, _ = _make_registry()
         registry.get.return_value = None

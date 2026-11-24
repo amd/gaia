@@ -205,7 +205,7 @@ describe('AdvancedSettings', () => {
     it('a server the user chose that is not answering says so, and never that cloud chats still work', async () => {
         const down = status({
             lemonade_running: false, lemonade_probe: 'down', model_loaded: null, start_command: null,
-            start_instruction: "GAIA doesn't run this model server, so it can't start it. Start it the way you usually do.",
+            start_instruction: "The model server GAIA uses is at 127.0.0.1:4328. GAIA doesn't run this model server, so it can't start it. Start it the way you usually do.",
         });
         mockedApi.getSystemStatus.mockResolvedValue(down);
         useChatStore.getState().setSystemStatus(down);
@@ -214,7 +214,7 @@ describe('AdvancedSettings', () => {
         expect(await screen.findByText('Not answering')).toBeInTheDocument();
         expect(screen.queryByText('Not Installed')).not.toBeInTheDocument();
         expect(screen.queryByText(/Cloud providers still work/)).not.toBeInTheDocument();
-        expect(screen.getByText("GAIA doesn't run this model server, so it can't start it. Start it the way you usually do.")).toBeInTheDocument();
+        expect(screen.getByText("The model server GAIA uses is at 127.0.0.1:4328. GAIA doesn't run this model server, so it can't start it. Start it the way you usually do.")).toBeInTheDocument();
         expect(screen.queryByRole('button', { name: 'Set up local models' })).not.toBeInTheDocument();
     });
 

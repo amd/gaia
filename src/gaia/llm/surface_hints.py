@@ -184,6 +184,18 @@ AGENT_UI_VISION_DOWNLOAD_STEP = (
     "ask again."
 )
 
+#: How to download the voice a speech tool found missing: reading a reply aloud
+#: downloads it in both apps.
+SPEECH_DOWNLOAD_HINT = (
+    "To download it, read any reply aloud once: press Read aloud under a reply "
+    "in the Agent UI, or type /read-aloud in the TUI. Then ask again."
+)
+#: What to do when the model server does not list the voice at all.
+SPEECH_SETUP_HINT = (
+    "Open Settings > Setup in the Agent UI and press Run setup again, or run "
+    "/setup in the TUI, then ask again."
+)
+
 #: How an Agent UI user lets cloud models back in; the CLI's command is
 #: ``local_only.SETTINGS_HINT``.
 AGENT_UI_LOCAL_ONLY_HINT = (

@@ -48,6 +48,7 @@ from ..lemonade_client import (
     local_sampling_defaults,
     requested_thinking,
     resolve_ctx_size,
+    resolve_local_chat_model,
     runs_on_npu,
 )
 from ..lemonade_launcher import describe_client_hint
@@ -366,16 +367,48 @@ MODEL_SERVER_DOWN = "model_server_down"
 #: How these messages name the local server.
 _LOCAL_SERVER_RE = re.compile(r"\bthe local (?:LLM|model)(?: server)?\b", re.IGNORECASE)
 
+#: The cloud-disconnect messages open with "GAIA's AI engine lost its ...". Only
+#: that phrase is swapped, so "GAIA's AI engine couldn't start" (a server GAIA
+#: runs) is never rewritten.
+_ENGINE_LOST_RE = re.compile(r"\bGAIA's AI engine(?= lost its\b)")
+
 
 def wording_for_model(message: str, model_id: Optional[str]) -> str:
     """*message* as a chat on *model_id* should read it.
 
-    A cloud chat still goes through GAIA's Lemonade, so a failure there is
-    real, but "the local LLM" would tell the user their model runs here.
+    A cloud chat still goes through a Lemonade on this side, so a failure
+    there is real, but "the local LLM" would tell the user their model runs
+    here. The server is named as GAIA's only when GAIA runs it.
     """
     if not message or cloud_model_provider(model_id) is None:
         return message
-    return _LOCAL_SERVER_RE.sub("GAIA's AI engine", message)
+    if not _user_chose_the_server():
+        return _LOCAL_SERVER_RE.sub("GAIA's AI engine", message)
+
+    def _own_server(match: "re.Match[str]") -> str:
+        return (
+            "Your model server" if match.group()[0].isupper() else "your model server"
+        )
+
+    message = _LOCAL_SERVER_RE.sub(_own_server, message)
+    # "GAIA's AI engine lost its cloud provider connection": the user's own
+    # server lost it, so it is not GAIA's engine.
+    return _ENGINE_LOST_RE.sub(
+        lambda m: ("Your model server" if m.start() == 0 else "your model server"),
+        message,
+    )
+
+
+def _user_chose_the_server() -> bool:
+    """True when the model server is the user's own, not one GAIA runs."""
+    from ..lemonade_choice import LemonadeChoiceError
+    from ..lemonade_client import configured_lemonade_url
+
+    try:
+        return configured_lemonade_url() is not None
+    except LemonadeChoiceError:
+        # "Use the one I have" saved without an address: still not GAIA's.
+        return True
 
 
 #: The wording of :class:`LemonadeServerDownError`, once a wrapper flattened it.
@@ -1255,8 +1288,8 @@ class LemonadeProvider(LLMClient):
         self._last_streamed = stream
         request_started = time.perf_counter()
 
-        # Use provided model, instance model, or default CPU model
-        effective_model = model or self._model or DEFAULT_MODEL_NAME
+        # Provided model, instance model, else the PC's default from setup.
+        effective_model = model or self._model or resolve_local_chat_model()
         self._last_model = effective_model
         tool_capable = is_tool_calling_model(effective_model)
 

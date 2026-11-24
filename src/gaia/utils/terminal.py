@@ -106,6 +106,7 @@ def is_windows_console(stream) -> bool:
     import ctypes
     import msvcrt
 
-    mode = ctypes.c_uint32()
+    # pylint infers the macOS ctypes stub, which needs a value
+    mode = ctypes.c_uint32()  # pylint: disable=no-value-for-parameter
     handle = msvcrt.get_osfhandle(stream.fileno())
     return bool(ctypes.windll.kernel32.GetConsoleMode(handle, ctypes.byref(mode)))

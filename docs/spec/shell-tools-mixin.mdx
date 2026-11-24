@@ -28,7 +28,7 @@ ShellToolsMixin provides secure shell command execution with comprehensive rate 
 **Security Model:**
 - `run_shell_command` is confirmation-gated, so interactively every call is shown to the user
 - Read-only list (`ALLOWED_COMMANDS`): what a blanket pre-approval (`GAIA_AUTO_APPROVE_TOOLS`, `auto_approve_gated_tools`) may run
-- Anything else is `TIER_CONFIRM`: it runs once the user approves it (`git commit`, `npm test`, `rm notes.txt`), and is refused under a blanket pre-approval. With the console's `full_access` on, no tier applies: every line runs
+- Anything else is `TIER_CONFIRM`: it runs once the user approves it (`git commit`, `npm test`, `mkdir build`; a delete it would ask about is refused outside Full access), and is refused under a blanket pre-approval. With the console's `full_access` on, no tier applies: every line runs
 - `TIER_CONFIRM_ONCE` for what GAIA's own checks don't cover (`git push`, `git -c`, `python -c`, uninspectable PowerShell, shell operators, a path outside the allowed folders): the prompt shows the exact line and its full folder with a risk note, offers no "always", and an approval runs that line once through the shell. A multi-line command (a heredoc) is one of these too: the prompt shows every line, and each line is checked like the first. It is refused under a blanket pre-approval, and `wait_for_condition` never polls one
 - `TIER_REFUSE` for text a prompt can't show honestly (encoded PowerShell, invisible characters or a carriage return, broken quoting, and on Windows a second line, which cmd.exe never runs), for anything that deletes or discards work on a line GAIA can't fully check (`git push --force`, `git reset --hard`, also inside `$(…)` or behind a `-c`), for a granted CLI's `never_offered_actions` (`gh issue close`, `gh pr merge`), and for any of these run through a launcher such as `sudo`, `env`, `timeout`, `nice` or `xargs` (an unfamiliar launcher option is read both ways, so it can't hide the command), and for folders no approval may open. A command refused on its text ends its hint with `NOT_APPROVABLE`, so the agent doesn't tell the user to approve it
 - Every command on a line validated before any of it runs, and the strictest segment decides the line: one `TIER_REFUSE` segment stops it, one `TIER_CONFIRM_ONCE` segment makes the whole line a one-time approval
@@ -364,13 +364,16 @@ at a limit its caller never chose is a failure with no visible cause.
 
 A command killed at its timeout still returns what it printed: commands run
 with `PYTHONUNBUFFERED=1` unless the command or the user's environment sets it,
-so a Python child's output isn't lost in its buffer. The result's `hint` never
-suggests a larger timeout. For a `test` or `script` command it names the files
-the turn changed and says to run the check on just those, or, with nothing
-changed, to narrow the run to one test file or the edited files: a repo-wide
-lint or test run that blew one budget usually blows a bigger one too. Any other
-class is pointed at a background run polled with `wait_for_condition`, or at
-shorter steps.
+so a Python child's output isn't lost in its buffer. For a `test` command, or
+a `script` command that runs a test or lint check (`python util/lint.py`,
+`python -m flake8`), the result's `hint` names the files the turn changed and
+says to run the check on just those, or, with nothing changed, to narrow the
+run to one test file or the edited files; it never suggests a larger timeout,
+because a repo-wide lint or test run that blew one budget usually blows a
+bigger one too. Any other `script` command (a data job, a seed or training
+script) may just be slow: its hint offers a background run polled with
+`wait_for_condition`, or a re-run with a larger timeout up to the 3600s
+ceiling. Any other class is pointed at a background run, or at shorter steps.
 
 ### Waiting Without Spinning
 
@@ -514,7 +517,7 @@ so a mid-session toggle takes effect on the next command.
 When on, nothing above applies. `_line_verdict` returns no error for any line
 that has a command on it, so there is no command list, no excluded command
 (`rm`, `rmdir` and `del` run), no path check on the working folder, a `cd` or an
-argument, no credential-file or link check, and no refusal of a package install,
+argument, no credential-file or link check, and no refusal of a delete (outside this mode a delete is refused, never offered for approval), no refusal of a package install,
 a `gaia skill` command or a server. `ALLOWED_COMMANDS` is unchanged: it is the
 no-prompt list of the other modes.
 
@@ -633,7 +636,7 @@ for arg in cmd_parts[1:]:
 
 ## Testing Requirements
 
-**File:** `tests/agents/chat/test_shell_tools_mixin.py`
+The block below is an illustrative example, not a file in the repo. The real tests are under `tests/unit/`, for example `tests/unit/test_shell_guardrails.py`.
 
 ```python
 def test_run_shell_command_success(agent):

@@ -129,7 +129,7 @@ In chat, ask the agent to use a skill by name. From code, load it with
 `load_skill`:
 
 ```python
-from gaia_agent import GaiaAgent, GaiaAgentConfig
+from gaiapy import GaiaAgent, GaiaAgentConfig
 
 agent = GaiaAgent(GaiaAgentConfig())
 agent.load_skill("research-report")     # body joins the prompt
@@ -671,8 +671,8 @@ web addresses make sense by ear.
   `dump_document`.
 - **Configure** — a document path or an attached file. The voice and speed are
   the ones chosen for Read aloud, and the Kokoro voice model must be downloaded
-  (press Read aloud on any reply once, or `gaia download --agent talk`). See the
-  [dictation guide](/guides/dictation).
+  (press Read aloud on any reply once, or `gaia download --agent talk`). Not
+  offered on macOS yet. See the [dictation guide](/guides/dictation).
 
 ## Fork one
 

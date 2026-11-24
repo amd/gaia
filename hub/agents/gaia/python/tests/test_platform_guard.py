@@ -14,7 +14,7 @@ import sys
 from pathlib import Path
 
 import pytest
-from gaia_agent import entry
+from gaiapy import entry
 
 from gaia import platform_guard
 
@@ -149,7 +149,7 @@ def test_the_sidecar_module_guards_before_importing_the_agent():
                 order.append("guard")
         elif isinstance(node, ast.ImportFrom) and node.module in (
             "gaia.logger",
-            "gaia_agent.server",
+            "gaiapy.server",
         ):
             order.append(node.module)
-    assert order == ["guard", "gaia.logger", "gaia_agent.server"]
+    assert order == ["guard", "gaia.logger", "gaiapy.server"]

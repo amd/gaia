@@ -3,6 +3,7 @@
 package root
 
 import (
+	"context"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -13,6 +14,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/amd/gaia/tui/internal/catalog"
+	"github.com/amd/gaia/tui/internal/gaiaprogram"
 	"github.com/amd/gaia/tui/internal/ui/chat"
 	"github.com/amd/gaia/tui/internal/ui/preflight"
 )
@@ -130,7 +132,7 @@ func TestAgentProgramSwitchesToNativeAndBack(t *testing.T) {
 	f := installPrograms(t, catalog.PythonAgentBinary, catalog.NativeAgentBinary)
 	m, oldClient := programSession(t, f, preflight.FlagshipAgentPython)
 	m.chat.AppendStatus("earlier line")
-	if strings.Contains(header(t, m), "(gaiacpp)") {
+	if strings.Contains(header(t, m), "(gaiacpp · Beta)") {
 		t.Fatal("test setup: the Python session's header already says gaiacpp")
 	}
 
@@ -176,7 +178,7 @@ func TestAgentProgramSwitchesToNativeAndBack(t *testing.T) {
 	if !strings.Contains(all, "earlier line") || !strings.Contains(all, want) {
 		t.Fatalf("the transcript or its divider did not survive the switch:\n%s", all)
 	}
-	if !strings.Contains(header(t, m), "(gaiacpp)") {
+	if !strings.Contains(header(t, m), "(gaiacpp · Beta)") {
 		t.Fatalf("the header does not mark gaiacpp after the switch:\n%s", header(t, m))
 	}
 
@@ -188,7 +190,7 @@ func TestAgentProgramSwitchesToNativeAndBack(t *testing.T) {
 	if got := f.saved(t); got != preflight.FlagshipAgentPython {
 		t.Fatalf("the saved choice is %q after switching back", got)
 	}
-	if strings.Contains(header(t, m), "(gaiacpp)") {
+	if strings.Contains(header(t, m), "(gaiacpp · Beta)") {
 		t.Fatalf("the header still marks gaiacpp after switching back:\n%s", header(t, m))
 	}
 	texts = nil
@@ -204,13 +206,22 @@ func TestAgentProgramMissingFailsLoudlyAndChangesNothing(t *testing.T) {
 	f := installPrograms(t, catalog.PythonAgentBinary)
 	m, c := programSession(t, f, preflight.FlagshipAgentPython)
 
+	// A release with no gaiacpp for this PC: the missing program stays missing.
+	m.checkProgram = func(context.Context) (gaiaprogram.Status, error) {
+		return gaiaprogram.Status{Reason: "this GAIA release has no gaiacpp to download."}, nil
+	}
 	updated, cmd := m.agentProgram("gaiacpp")
 	m = updated.(FlagshipModel)
-	if cmd != nil || m.activeView != viewChat || c.closed || m.agent.Native || m.programSwitch != nil {
+	if cmd == nil {
+		t.Fatal("a missing gaiacpp did not ask the release for one")
+	}
+	updated, cmd = m.Update(cmd())
+	m = updated.(FlagshipModel)
+	if cmd != nil || m.activeView != viewChat || c.closed || m.agent.Native || m.programSwitch != nil || m.programFetch != nil {
 		t.Fatal("a missing program must leave the live session alone")
 	}
 	got := lastLine(t, m)
-	for _, want := range []string{"Cannot switch to gaiacpp", "not on this machine", "Looked in", f.dir, "still on gaiapy"} {
+	for _, want := range []string{"gaiacpp can't be downloaded here", "this GAIA release has no gaiacpp", "still on gaiapy"} {
 		if !strings.Contains(got, want) {
 			t.Errorf("the refusal does not say %q:\n%s", want, got)
 		}
@@ -411,7 +422,7 @@ func TestAgentProgramListingNamesBothMarksBetaCurrentAndUnavailable(t *testing.T
 	}
 	for _, want := range []string{
 		"Mature and well tested", "Heavier", "Fast and light", "Fewer tools",
-		"Unavailable: not installed. Looked in: your PATH, " + f.dir,
+		"Not on this PC yet: /agent gaiacpp offers to download it.",
 		"No saved choice yet", "/agent gaiapy", "/agent gaiacpp",
 	} {
 		if !strings.Contains(got, want) {
@@ -438,7 +449,16 @@ func TestAgentProgramListingNamesBothMarksBetaCurrentAndUnavailable(t *testing.T
 		t.Fatal(err)
 	}
 	updated, _ = m.agentProgram("")
-	if got = lastLine(t, updated.(FlagshipModel)); !strings.Contains(got, "could not be read") || !strings.Contains(got, f2.configPath) {
+	if got = lastLine(t, updated.(FlagshipModel)); !strings.Contains(got, "can't run here") || !strings.Contains(got, f2.configPath) {
 		t.Errorf("an unknown saved value was not reported:\n%s", got)
+	}
+
+	// A malformed one still says it could not be read.
+	if err := os.WriteFile(f2.configPath, []byte(`{"flagship_agent": 2}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	updated, _ = m.agentProgram("")
+	if got = lastLine(t, updated.(FlagshipModel)); !strings.Contains(got, "could not be read") || !strings.Contains(got, f2.configPath) {
+		t.Errorf("a malformed saved value was not reported:\n%s", got)
 	}
 }

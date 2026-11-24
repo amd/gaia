@@ -29,6 +29,7 @@ acceptable. lemond invalidates stale binaries itself via the
 """
 
 import errno
+import functools
 import hashlib
 import json
 import math
@@ -52,6 +53,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Dict, List, Optional, Tuple
 
+from gaia import home as home_mod
 from gaia.env import child_env
 from gaia.logger import get_logger
 from gaia.utils.archive import ArchiveError, safe_extract
@@ -556,13 +558,16 @@ def vulkan_workarounds() -> Dict[str, str]:
 def gaia_home() -> Path:
     """Return GAIA's state directory.
 
+    The fallback is :func:`gaia.home.default_gaia_home`, so relocating the
+    default moves this lookup too.
+
     Returns:
-        ``$GAIA_HOME`` when set, otherwise ``~/.gaia``.
+        ``$GAIA_HOME`` when set, otherwise the shared ``~/.gaia`` default.
     """
     override = os.environ.get("GAIA_HOME")
     if override:
         return Path(os.path.expandvars(os.path.expanduser(override))).resolve()
-    return Path.home() / ".gaia"
+    return home_mod.default_gaia_home()
 
 
 def is_gaias_to_start(embedded: "EmbeddedLemonade") -> bool:
@@ -735,8 +740,8 @@ def _answers(family: int, host: str, port: int) -> bool:
             return True
     except ConnectionRefusedError:
         return False
-    except TimeoutError:
-        return True  # a listener whose backlog is full
+    except (TimeoutError, ConnectionResetError):
+        return True  # a full backlog: Linux leaves the connect hanging, macOS resets it
     except OSError as e:
         if family == socket.AF_INET6 and e.errno in _NO_FAMILY + (errno.ENETUNREACH,):
             return False
@@ -853,6 +858,8 @@ class EmbeddedLemonade:
         self.progress_callback = progress_callback
         # Where this start's output begins in lemond.log, to quote its error.
         self._spawn_log_offset = 0
+        # Whether the last spawn showed lemond a CA file the host lacks (#7226).
+        self._ca_supplied = False
 
     # -- paths ------------------------------------------------------------
 
@@ -2118,6 +2125,7 @@ class EmbeddedLemonade:
                 "owner_pid": owner_pid,
                 "owner_started": owner_started,
                 "started_at": started_at,
+                "ca_supplied": self._ca_supplied,
             }
         )
         self._write_env_file(port, api_key)
@@ -2165,15 +2173,12 @@ class EmbeddedLemonade:
             str(port),
         ]
         log.info("Starting embedded Lemonade: %s", " ".join(argv))
+        self.root.mkdir(parents=True, exist_ok=True)
+        overlay = None
         if sys.platform.startswith("linux"):
-            from gaia.llm.lemonade_tls import ca_store_problem
             from gaia.llm.npu_linux import raise_memlock_soft_limit
 
-            # Local models still run without it, so warn rather than refuse.
-            ca_problem = ca_store_problem()
-            if ca_problem:
-                log.warning(ca_problem)
-
+            overlay = self._ca_overlay()
             # FastFlowLM pins the model in locked memory, and inherits lemond's limit.
             raise_memlock_soft_limit()
 
@@ -2182,10 +2187,10 @@ class EmbeddedLemonade:
         # inherit it instead of each opening a blank window.
         kwargs = background_popen_kwargs()
 
-        self.root.mkdir(parents=True, exist_ok=True)
         with open(self.log_path, "ab") as logfile:
             self._spawn_log_offset = logfile.tell()
-            process = popen_outliving_job(
+            popen = functools.partial(
+                popen_outliving_job,
                 argv,
                 env=env,
                 stdout=logfile,
@@ -2194,6 +2199,34 @@ class EmbeddedLemonade:
                 cwd=str(self.dist_dir),
                 **kwargs,
             )
+            self._ca_supplied = False
+            if overlay is None:
+                process = popen()
+            else:
+                from gaia.llm.lemonade_tls import (
+                    CaOverlayError,
+                    ca_store_problem,
+                    enter_ca_overlay,
+                )
+
+                try:
+                    process = popen(preexec_fn=enter_ca_overlay(overlay))
+                    self._ca_supplied = True
+                    log.info(
+                        "lemond sees %s at the CA path it reads, in its own "
+                        "mount namespace",
+                        overlay.bundle,
+                    )
+                except (CaOverlayError, subprocess.SubprocessError) as e:
+                    # Local models still run without it, so warn rather than refuse.
+                    log.warning(
+                        "GAIA could not start the model server in its own mount "
+                        "namespace (%s; %s has the reason). %s",
+                        e,
+                        self.log_path,
+                        ca_store_problem(),
+                    )
+                    process = popen()
         _SPAWNED[process.pid] = process
         started_at = time.time()
 
@@ -2208,9 +2241,45 @@ class EmbeddedLemonade:
                 "owner_pid": owner_pid,
                 "owner_started": owner_started,
                 "started_at": started_at,
+                "ca_supplied": self._ca_supplied,
             }
         )
         return process, api_key, started_at
+
+    def _ca_overlay(self):
+        """The CA mirror lemond needs on this host, or None when it needs none.
+
+        Logs the remedy when no mirror can be built: local models still run
+        without one, so that is a warning, not a refusal.
+        """
+        from gaia.llm.lemonade_tls import (
+            CaOverlayError,
+            ca_store_problem,
+            plan_ca_overlay,
+        )
+
+        try:
+            overlay = plan_ca_overlay(self.root)
+        except CaOverlayError as e:
+            log.warning("%s %s", e, ca_store_problem())
+            return None
+        if overlay is None:
+            problem = ca_store_problem()
+            if problem:
+                log.warning(problem)
+        return overlay
+
+    def ca_problem(self) -> Optional[str]:
+        """Why the running lemond cannot verify HTTPS, or None when it can.
+
+        None when the last start showed lemond a CA file the host lacks.
+        """
+        from gaia.llm.lemonade_tls import ca_store_problem
+
+        state = self._read_state() or {}
+        if state.get("ca_supplied"):
+            return None
+        return ca_store_problem()
 
     def _wait_healthy(
         self,

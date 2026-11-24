@@ -668,7 +668,7 @@
   "info": {
     "description": "REST surface for the GAIA flagship agent sidecar (/v1/gaia/*). Cross-implementation contract for embedders and typed clients.",
     "title": "GAIA Agent API",
-    "version": "2.30"
+    "version": "2.31"
   },
   "openapi": "3.1.0",
   "paths": {
@@ -716,8 +716,7 @@
         "security": [
           {
             "bearerAuth": []
-          },
-          {}
+          }
         ],
         "summary": "Init",
         "tags": [
@@ -727,7 +726,7 @@
     },
     "/v1/gaia/memory": {
       "get": {
-        "description": "The ``/memory`` view's snapshot, for the daemon transport.\n\nSame payload as the stdio ``MEMORY_DUMP_QUERY`` sentinel\n(``gaia_agent.stdio._memory_dump_event`` -> ``build_memory_dump``), just\nwithout that path's JSON-in-a-final-event wrapping — this is a plain GET,\nso the dict is the whole response body. ``*SSEClient.FetchMemory`` decodes\nit straight into ``client.MemoryDump`` (``tui/internal/client/memory.go``).\nA one-shot agent is enough: the memory store lives at ``~/.gaia/memory.db``\nregardless of which agent instance opens it.",
+        "description": "The ``/memory`` view's snapshot, for the daemon transport.\n\nSame payload as the stdio ``MEMORY_DUMP_QUERY`` sentinel\n(``gaiapy.stdio._memory_dump_event`` -> ``build_memory_dump``), just\nwithout that path's JSON-in-a-final-event wrapping — this is a plain GET,\nso the dict is the whole response body. ``*SSEClient.FetchMemory`` decodes\nit straight into ``client.MemoryDump`` (``tui/internal/client/memory.go``).\nA one-shot agent is enough: the memory store lives at ``~/.gaia/memory.db``\nregardless of which agent instance opens it.",
         "operationId": "memory_v1_gaia_memory_get",
         "responses": {
           "200": {
@@ -746,8 +745,7 @@
         "security": [
           {
             "bearerAuth": []
-          },
-          {}
+          }
         ],
         "summary": "Memory",
         "tags": [
@@ -795,8 +793,7 @@
         "security": [
           {
             "bearerAuth": []
-          },
-          {}
+          }
         ],
         "summary": "Query",
         "tags": [
@@ -844,8 +841,7 @@
         "security": [
           {
             "bearerAuth": []
-          },
-          {}
+          }
         ],
         "summary": "Cancel Query",
         "tags": [
@@ -903,8 +899,7 @@
         "security": [
           {
             "bearerAuth": []
-          },
-          {}
+          }
         ],
         "summary": "Followup To Query",
         "tags": [
@@ -962,8 +957,7 @@
         "security": [
           {
             "bearerAuth": []
-          },
-          {}
+          }
         ],
         "summary": "Respond To Query",
         "tags": [
@@ -1021,8 +1015,7 @@
         "security": [
           {
             "bearerAuth": []
-          },
-          {}
+          }
         ],
         "summary": "Tool Decision",
         "tags": [
@@ -1070,8 +1063,7 @@
         "security": [
           {
             "bearerAuth": []
-          },
-          {}
+          }
         ],
         "summary": "Delete Session",
         "tags": [
@@ -1129,8 +1121,7 @@
         "security": [
           {
             "bearerAuth": []
-          },
-          {}
+          }
         ],
         "summary": "Set Bypass",
         "tags": [
@@ -1194,8 +1185,7 @@
         "security": [
           {
             "bearerAuth": []
-          },
-          {}
+          }
         ],
         "summary": "Revoke Grants",
         "tags": [
@@ -1241,8 +1231,7 @@
         "security": [
           {
             "bearerAuth": []
-          },
-          {}
+          }
         ],
         "summary": "List Grants",
         "tags": [
@@ -1300,8 +1289,7 @@
         "security": [
           {
             "bearerAuth": []
-          },
-          {}
+          }
         ],
         "summary": "Set Internet",
         "tags": [
@@ -1349,8 +1337,7 @@
         "security": [
           {
             "bearerAuth": []
-          },
-          {}
+          }
         ],
         "summary": "List Tools",
         "tags": [
@@ -1379,8 +1366,7 @@
         "security": [
           {
             "bearerAuth": []
-          },
-          {}
+          }
         ],
         "summary": "Skills",
         "tags": [

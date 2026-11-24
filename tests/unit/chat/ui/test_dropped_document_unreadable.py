@@ -76,7 +76,7 @@ class _Agent(RAGToolsMixin):
 @pytest.fixture
 def chat(tmp_path):
     """A relayed chat with two documents attached, then one taken off."""
-    server = pytest.importorskip("gaia_agent.server")
+    server = pytest.importorskip("gaiapy.server")
     kept = tmp_path / "docs" / "kept.txt"
     gone = tmp_path / "docs" / "gone.txt"
     kept.parent.mkdir()
@@ -141,7 +141,7 @@ def managed(tmp_path, monkeypatch):
 
 def _relayed(tmp_path, folder, scope_extra=()):
     """A relayed chat on documents in *folder*, scoped the way the Agent UI scopes it."""
-    server = pytest.importorskip("gaia_agent.server")
+    server = pytest.importorskip("gaiapy.server")
     from gaia.ui.utils import managed_documents_dir
 
     folder.mkdir(parents=True, exist_ok=True)

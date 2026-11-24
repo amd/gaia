@@ -4,20 +4,26 @@
 package chat
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
+	"github.com/amd/gaia/tui/internal/client"
+	"github.com/amd/gaia/tui/internal/event"
 	"github.com/amd/gaia/tui/internal/ui/theme"
 )
 
-// The first screen suggests up to four things to try, each one a skill that is
-// installed and needs no further setup, picked with its number. They are read
-// from disk, never asked of the model: a local model call costs seconds.
+// The first screen suggests up to four things to try, each one a skill the
+// agent has and that needs no further setup, picked with its number. The list
+// is the agent's own report of its skills, which includes the ones built into
+// it; the skills folder is read only until that report arrives. The model is
+// never asked: a local model call costs seconds.
 
 // suggestionsMax is how many the first screen offers.
 const suggestionsMax = 4
@@ -44,29 +50,42 @@ var starters = []starter{
 		"Good morning. Let's do a quick check-in."},
 }
 
-// skillsDir is where installed skills live, as the agent finds them:
-// GAIA_CONFIG_DIR, else ~/.gaia, then skills/. A variable so tests can point it
-// at a fixture.
-var skillsDir = func() string {
-	base := os.Getenv("GAIA_CONFIG_DIR")
-	if base == "" {
-		home, err := os.UserHomeDir()
-		if err != nil {
-			return ""
+// skillsDir is where the user's own skills live: skills/ under GAIA's home,
+// which is GAIA_HOME, then GAIA_CONFIG_DIR, then ~/.gaia (gaia.home.gaia_home).
+// The skills built into the agent are not here. A variable so tests can point
+// it at a fixture.
+var skillsDir = userSkillsDir
+
+func userSkillsDir() string {
+	for _, name := range []string{"GAIA_HOME", "GAIA_CONFIG_DIR"} {
+		if dir := strings.TrimSpace(os.Getenv(name)); dir != "" {
+			return filepath.Join(os.ExpandEnv(expandHome(dir)), "skills")
 		}
-		base = filepath.Join(home, ".gaia")
 	}
-	return filepath.Join(base, "skills")
+	home, err := os.UserHomeDir()
+	if err != nil || home == "" {
+		return ""
+	}
+	return filepath.Join(home, ".gaia", "skills")
 }
 
-// installedStarters is the starters whose skill is installed, at most four.
-func installedStarters(dir string) []starter {
-	if dir == "" {
-		return nil
+// expandHome replaces a leading ~ with the user's home directory.
+func expandHome(dir string) string {
+	if dir != "~" && !strings.HasPrefix(dir, "~/") && !strings.HasPrefix(dir, `~\`) {
+		return dir
 	}
+	home, err := os.UserHomeDir()
+	if err != nil || home == "" {
+		return dir
+	}
+	return filepath.Join(home, dir[1:])
+}
+
+// startersWhere is the starters whose skill has() reports, at most four.
+func startersWhere(has func(skill string) bool) []starter {
 	var out []starter
 	for _, s := range starters {
-		if _, err := os.Stat(filepath.Join(dir, s.skill, "SKILL.md")); err != nil {
+		if !has(s.skill) {
 			continue
 		}
 		out = append(out, s)
@@ -75,6 +94,94 @@ func installedStarters(dir string) []starter {
 		}
 	}
 	return out
+}
+
+// installedStarters is the starters whose skill is in the folder.
+func installedStarters(dir string) []starter {
+	if dir == "" {
+		return nil
+	}
+	return startersWhere(func(skill string) bool {
+		_, err := os.Stat(filepath.Join(dir, skill, "SKILL.md"))
+		return err == nil
+	})
+}
+
+// reportedStarters is the starters whose skill the agent says it has.
+func reportedStarters(skills []event.SkillCommand) []starter {
+	return startersWhere(func(skill string) bool {
+		for _, s := range skills {
+			if s.Name == skill {
+				return true
+			}
+		}
+		return false
+	})
+}
+
+// skillListTimeout bounds the startup skill list: asking may start the agent.
+const skillListTimeout = 60 * time.Second
+
+// skillsListedMsg is the agent's answer to listSkillsCmd.
+type skillsListedMsg struct {
+	skills []event.SkillCommand
+	err    error
+}
+
+// listSkillsCmd asks the agent which skills it has, on a transport whose agent
+// does not say so by itself (the daemon relay).
+func (m ChatModel) listSkillsCmd() tea.Cmd {
+	lister, ok := m.client.(client.SkillLister)
+	if !ok {
+		return nil
+	}
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), skillListTimeout)
+		defer cancel()
+		skills, err := lister.ListSkills(ctx)
+		return skillsListedMsg{skills: skills, err: err}
+	}
+}
+
+// setReportedSkills takes the agent's own list: the "/" palette's skill rows
+// and the first screen's suggestions. Replaced whole, so a skill removed since
+// the last report does not linger.
+func (m *ChatModel) setReportedSkills(skills []event.SkillCommand) {
+	m.skillCommands = skills
+	if m.suggests {
+		m.starters = reportedStarters(skills)
+		m.refreshReadyLine()
+	}
+}
+
+// readyTail is what the line that says a local model is ready ends with: the
+// suggestions, or the plain hint when there are none.
+func readyTail(ss []starter) string {
+	if list := suggestionsText(ss); list != "" {
+		return "\n\n" + list
+	}
+	return "\n" + firstPromptHint
+}
+
+// refreshReadyLine rewrites the Ready line's ending when the suggestions
+// change after it was written: the agent's skill report can arrive after the
+// warm-up ends, and the line must show the list the numbers pick from.
+func (m *ChatModel) refreshReadyLine() {
+	if m.readyTail == "" || m.hasUserMessage() {
+		return
+	}
+	tail := readyTail(m.starters)
+	if tail == m.readyTail {
+		return
+	}
+	for i := len(m.messages) - 1; i >= 0; i-- {
+		msg := &m.messages[i]
+		if msg.Role == RoleStatus && strings.HasSuffix(msg.Content, m.readyTail) {
+			msg.Content = strings.TrimSuffix(msg.Content, m.readyTail) + tail
+			m.readyTail = tail
+			return
+		}
+	}
 }
 
 var (
@@ -109,11 +216,32 @@ func suggestionsText(ss []starter) string {
 	return strings.Join(rows, "\n")
 }
 
-// suggestionsOpen reports whether the numbers still pick a suggestion: until
-// the user's first message, while nothing else has the screen.
+// suggestionsShown reports whether the list is on screen: on the welcome
+// screen, or in the line that says a local model is ready. A notice that
+// replaces the welcome screen hides the list, and a hidden number must not
+// start anything.
+func (m ChatModel) suggestionsShown() bool {
+	if len(m.starters) == 0 {
+		return false
+	}
+	if len(m.messages) == 0 {
+		return true
+	}
+	list := suggestionsText(m.starters)
+	for _, msg := range m.messages {
+		if msg.Role == RoleStatus && strings.Contains(msg.Content, list) {
+			return true
+		}
+	}
+	return false
+}
+
+// suggestionsOpen reports whether the numbers still pick a suggestion: while
+// the list is shown, until the user's first message, while nothing else has
+// the screen.
 func (m ChatModel) suggestionsOpen() bool {
-	return !m.hasUserMessage() && !m.streaming && !m.memoryLoading && m.memoryView == nil &&
-		!(m.warming && !m.warmHidden)
+	return m.suggestionsShown() && !m.hasUserMessage() && !m.streaming && !m.memoryLoading &&
+		m.memoryView == nil && !(m.warming && !m.warmHidden)
 }
 
 // pickSuggestion starts the numbered suggestion when the key is one and the

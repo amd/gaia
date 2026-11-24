@@ -28,7 +28,7 @@ SKILLS = (
     / "agents"
     / "gaia"
     / "python"
-    / "gaia_agent"
+    / "gaiapy"
     / "skills"
 )
 SKILL_BODY = "Extract every requested item from the source document."

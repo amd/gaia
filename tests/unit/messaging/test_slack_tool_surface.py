@@ -37,7 +37,7 @@ def test_a_gated_tool_pauses_the_turn_rather_than_running():
 
 
 def test_the_bridge_has_no_bypass_control():
-    """``gaia_agent.stdio`` accepts a ``bypass`` verb that disarms the gate for
+    """``gaiapy.stdio`` accepts a ``bypass`` verb that disarms the gate for
     the whole session. A remote surface must not be able to send it: an
     allowlisted user is trusted to approve one tool, not to switch the gate off
     for every later one."""

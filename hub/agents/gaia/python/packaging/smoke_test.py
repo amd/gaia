@@ -77,6 +77,7 @@ import argparse
 import json
 import os
 import queue
+import secrets
 import socket
 import subprocess
 import sys
@@ -105,7 +106,7 @@ STDIO_ARGV: list[str] = []
 #: runner must not read as a broken binary.
 STDIO_HANDSHAKE_DEADLINE_S = 300.0
 
-#: ``gaia_agent.python_runner.RUN_PYTHON_FILE_FLAG``, copied because this
+#: ``gaiapy.python_runner.RUN_PYTHON_FILE_FLAG``, copied because this
 #: harness imports nothing outside the stdlib (a unit test pins the two).
 RUN_PYTHON_FILE_FLAG = "--gaia-run-python-file"
 
@@ -553,6 +554,31 @@ def check_tokenizer(binary: Path) -> bool:
     return True
 
 
+#: The package's old name imports inside the binary and is the same module.
+OLD_NAME_SCRIPT = """import sys
+import gaia_agent.tool_bundles as old
+import gaiapy.tool_bundles as new
+print("OLD_NAME", old is new)
+sys.exit(0 if old is new else 6)
+"""
+
+
+def check_old_name(binary: Path) -> bool:
+    """A script or skill that imports ``gaia_agent`` gets ``gaiapy``'s modules."""
+    with tempfile.TemporaryDirectory(prefix="gaia-smoke-oldname-") as tmp:
+        result = _run_script(binary, Path(tmp), OLD_NAME_SCRIPT)
+    log(f"old name: {result.stdout.strip()[-300:]}")
+    if result.returncode != 0:
+        log(
+            "FAIL: gaia_agent, the package's old name, does not import in the "
+            "binary, so a skill that imports it fails only in the installed app. "
+            f"stderr: {result.stderr[-1500:]!r}"
+        )
+        return False
+    log("old name check PASS -- gaia_agent resolves to gaiapy in the binary")
+    return True
+
+
 #: Prints how many CA certificates a script's default SSL context loaded.
 TLS_TRUST_SCRIPT = """import ssl, sys
 count = ssl.create_default_context().cert_store_stats()["x509_ca"]
@@ -604,6 +630,15 @@ def main(argv=None) -> int:
     cmd = [str(binary), "--host", HOST, "--port", str(PORT)]
     log(f"launching frozen binary: {binary}")
     log(f"command: {' '.join(cmd)}")
+    # The sidecar refuses to start without a caller token; hand it one the way
+    # the daemon does, as a 0600 file.
+    secret_dir = tempfile.TemporaryDirectory(prefix="gaia-smoke-secret-")
+    secret = Path(secret_dir.name) / "launch-secret"
+    fd = os.open(secret, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    with os.fdopen(fd, "w", encoding="utf-8") as fh:
+        fh.write(secrets.token_urlsafe(32))
+    env = {**os.environ, "GAIA_GAIA_SIDECAR_TOKEN_FILE": str(secret)}
+    env.pop("GAIA_GAIA_SIDECAR_TOKEN", None)
     t0 = time.time()
     proc = subprocess.Popen(
         cmd,
@@ -611,6 +646,7 @@ def main(argv=None) -> int:
         stderr=subprocess.STDOUT,
         text=True,
         bufsize=1,
+        env=env,
     )
 
     results: dict[str, bool] = {}
@@ -626,6 +662,7 @@ def main(argv=None) -> int:
         log("shutting down server")
         _kill_tree(proc)
         _drain(proc, "server output tail")
+        secret_dir.cleanup()
 
     # Same binary, other transport. Run second so a broken HTTP surface is
     # reported before the slower agent construction.
@@ -648,7 +685,9 @@ def main(argv=None) -> int:
     results["tokenizer"] = check_tokenizer(binary)
     log("checking the OpenBLAS thread cap")
     results["blas_threads"] = check_blas_threads(binary)
-    expected = 9
+    log("checking the package's old name")
+    results["old_name"] = check_old_name(binary)
+    expected = 10
     if sys.platform.startswith("linux"):
         log("checking a script's TLS trust store")
         results["tls_trust"] = check_tls_trust(binary)

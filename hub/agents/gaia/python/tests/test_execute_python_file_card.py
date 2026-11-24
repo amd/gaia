@@ -3,7 +3,7 @@
 """``execute_python_file`` runs what its approval prompt showed, or not at all."""
 
 import pytest
-from gaia_agent.chat_agent import ChatAgent, ChatAgentConfig
+from gaiapy.chat_agent import ChatAgent, ChatAgentConfig
 
 from gaia.agents.base.call_risk import SCRIPT_ARG
 from gaia.agents.base.console import AgentConsole

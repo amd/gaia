@@ -115,7 +115,17 @@ func TestALongEmailInTheChatViewMustBeReadBeforeYApproves(t *testing.T) {
 		next, _ := m.Update(msg)
 		m = next.(ChatModel)
 	}
-	press(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("y")})
+	// y the way a person presses it: the letter, then its hold running out.
+	answer := func() {
+		t.Helper()
+		next, cmd := answerKey(t, m, "y")
+		m = next.(ChatModel)
+		if cmd != nil {
+			next, _ = m.Update(cmd())
+			m = next.(ChatModel)
+		}
+	}
+	answer()
 	if !m.confirmation.Pending() {
 		t.Fatal("y approved a mail nobody could have read")
 	}
@@ -128,7 +138,7 @@ func TestALongEmailInTheChatViewMustBeReadBeforeYApproves(t *testing.T) {
 	if !strings.Contains(m.View(), "LAST-LINE") {
 		t.Fatal("arrow keys never reached the end of the mail")
 	}
-	press(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("y")})
+	answer()
 	if m.confirmation != nil && m.confirmation.Pending() {
 		t.Fatal("y did not approve once everything was read")
 	}

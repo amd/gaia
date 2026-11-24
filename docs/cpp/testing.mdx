@@ -190,7 +190,7 @@ This produces the `tests_integration` binary alongside the unit test binary.
 
 ## CI Pipeline
 
-The C++ CI workflow (`.github/workflows/build_cpp.yml`) runs five jobs on every PR that touches `cpp/`:
+The C++ CI workflow (`.github/workflows/build_cpp.yml`) runs these jobs when a change touches `cpp/`:
 
 | Job | Runs on | What it validates |
 |-----|---------|-------------------|
@@ -198,7 +198,8 @@ The C++ CI workflow (`.github/workflows/build_cpp.yml`) runs five jobs on every 
 | **Install Test** | Ubuntu + Windows (cloud) | `cmake --install` + `find_package` round-trip |
 | **Shared Library** | Ubuntu + Windows (cloud) | `BUILD_SHARED_LIBS=ON` compiles cleanly |
 | **Integration Tests** | STX hardware (self-hosted) | Full stack: LLM + MCP + WiFi + Health |
-| **Benchmarks** | Ubuntu + Windows (cloud) | Performance benchmarks (`benchmark_cpp.yml`), runs after Build & Test succeeds |
+| **Benchmarks** | Ubuntu + Windows (cloud) | Performance benchmarks (`benchmark_cpp.yml`), runs after Build & Test succeeds on `main` |
+| **Binary Size** | Ubuntu (cloud) | On pull requests: fails when the static library, shared library or example binary grows more than 10% past `main`'s last benchmark |
 
 The integration test job runs on AMD STX hardware with a real Lemonade Server and Qwen3-4B model. It is treated as non-blocking in CI (infrastructure issues on self-hosted runners don't fail the PR).
 

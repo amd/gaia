@@ -17,9 +17,14 @@ from typing import Any, Dict, Optional
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.concurrency import run_in_threadpool
 
-from gaia.daemon.sidecars import fetch, native_fetch
+from gaia.daemon.sidecars import fetch, gaiacpp_fetch
 from gaia.daemon.sidecars import platform as plat
-from gaia.daemon.sidecars.errors import IntegrityError, PlatformError, SidecarError
+from gaia.daemon.sidecars.errors import (
+    KIND_NO_RELEASE,
+    IntegrityError,
+    PlatformError,
+    SidecarError,
+)
 from gaia.logger import get_logger
 from gaia.ui.security import FLAGSHIP_AGENT_ID, require_local_pc, require_ui_header
 
@@ -31,7 +36,17 @@ _lock = threading.Lock()
 # One measurement at a time: each is up to three network calls.
 _measuring = threading.Lock()
 # "at" is None when nothing is cached: 0.0 would read as fresh on a just-booted PC.
-_sizes: Dict[str, Any] = {"at": None, "values": {}, "reasons": {}}
+_sizes: Dict[str, Any] = {"at": None, "values": {}, "reasons": {}, "code": None}
+# Shown under the gaiacpp option; the addresses and error text go to the log.
+# Each has a code the Agent UI translates; a reason with no code is shown as it is.
+_UNREACHABLE = (
+    "GAIA couldn't get gaiacpp's details from the download server. Check your "
+    "internet connection, or try again later."
+)
+_UNVERIFIABLE = (
+    "this GAIA release's gaiacpp can't be verified, so GAIA won't install it. "
+    "Use the Python agent, or update GAIA."
+)
 _job: Dict[str, Any] = {
     "state": "idle",
     "bytes_done": 0,
@@ -51,6 +66,7 @@ def _gaiapy_size() -> Optional[int]:
 def _measure() -> None:
     values: Dict[str, Optional[int]] = {}
     reasons: Dict[str, Optional[str]] = {}
+    code: Optional[str] = None
     lasting = True
     try:
         values[fetch.PYTHON_FLAGSHIP] = _gaiapy_size()
@@ -58,27 +74,37 @@ def _measure() -> None:
         logger.warning("agent programs: no size for gaiapy: %s", e)
         values[fetch.PYTHON_FLAGSHIP] = None
     try:
-        values[fetch.NATIVE_FLAGSHIP] = native_fetch.download_info().size
+        values[fetch.NATIVE_FLAGSHIP] = gaiacpp_fetch.download_info().size
         reasons[fetch.NATIVE_FLAGSHIP] = None
-    except (PlatformError, IntegrityError) as e:
+    except PlatformError as e:
         logger.warning("agent programs: gaiacpp cannot be downloaded: %s", e)
         values[fetch.NATIVE_FLAGSHIP] = None
         reasons[fetch.NATIVE_FLAGSHIP] = str(e)
+        code = KIND_NO_RELEASE if e.kind == KIND_NO_RELEASE else None
+    except IntegrityError as e:
+        logger.warning("agent programs: gaiacpp cannot be verified: %s", e)
+        values[fetch.NATIVE_FLAGSHIP] = None
+        reasons[fetch.NATIVE_FLAGSHIP] = _UNVERIFIABLE
+        code = "unverifiable"
     except (SidecarError, RuntimeError) as e:
         # The network, not the release: asked again on the next request.
         logger.warning("agent programs: gaiacpp release not reachable: %s", e)
         values[fetch.NATIVE_FLAGSHIP] = None
-        reasons[fetch.NATIVE_FLAGSHIP] = str(e)
+        reasons[fetch.NATIVE_FLAGSHIP] = _UNREACHABLE
+        code = "unreachable"
         lasting = False
     with _lock:
         _sizes.update(
-            at=time.monotonic() if lasting else None, values=values, reasons=reasons
+            at=time.monotonic() if lasting else None,
+            values=values,
+            reasons=reasons,
+            code=code,
         )
 
 
 def _gaiapy_installed() -> bool:
     """True when the Python agent can answer: importable, or a binary setup installed."""
-    if importlib.util.find_spec("gaia_agent") is not None:
+    if importlib.util.find_spec("gaiapy") is not None:
         return True
     if fetch.installer_placed_flagship() is not None:
         return True
@@ -92,6 +118,45 @@ def _gaiapy_installed() -> bool:
         )
         return False
     return hub is not None
+
+
+#: ``chosen_agent_problem()`` codes: why the chosen gaiacpp can't be started.
+GAIACPP_MISSING = "gaiacpp_missing"
+GAIACPP_INVALID = "gaiacpp_invalid"
+
+
+def chosen_agent_problem() -> Optional[Dict[str, str]]:
+    """Why the agent the user chose can't start, as ``{"code", "detail"}``; else ``None``.
+
+    Only gaiacpp has such a reason of its own: it is chosen but not on this
+    PC, or no longer matches what was downloaded.
+    """
+    if fetch.chosen_flagship() != fetch.NATIVE_FLAGSHIP:
+        return None
+    try:
+        binary = fetch.verified_native_flagship()
+    except IntegrityError as e:
+        return {"code": GAIACPP_INVALID, "detail": str(e)}
+    if binary is None:
+        looked = ", ".join(str(p) for p in fetch.native_flagship_candidates())
+        return {
+            "code": GAIACPP_MISSING,
+            "detail": (
+                "gaiacpp is chosen as the agent but it is not installed on this "
+                f"PC (looked in: {looked})."
+            ),
+        }
+    return None
+
+
+def _fails_check() -> bool:
+    """True when the gaiacpp on this PC no longer matches what was downloaded."""
+    try:
+        fetch.verified_native_flagship()
+    except IntegrityError as e:
+        logger.warning("agent programs: gaiacpp failed its check: %s", e)
+        return True
+    return False
 
 
 def _job_view() -> Dict[str, Any]:
@@ -112,14 +177,17 @@ def _listing() -> Dict[str, Any]:
                 _measure()
     with _lock:
         values, reasons = dict(_sizes["values"]), dict(_sizes["reasons"])
+        native_code = _sizes["code"]
     native_path = fetch.native_flagship()
     native_size = values.get(fetch.NATIVE_FLAGSHIP)
     native_reason = reasons.get(fetch.NATIVE_FLAGSHIP)
-    update = native_path is not None and native_fetch.update_available(native_path)
+    update = native_path is not None and gaiacpp_fetch.update_available(native_path)
+    # A copy that fails its check is replaced the same way a missing one is had.
+    broken = native_path is not None and _fails_check()
     if native_path is not None and native_size is None:
         native_size = native_path.stat().st_size
     return {
-        "current": fetch.chosen_flagship(),
+        "current": fetch.saved_flagship(),
         "programs": [
             {
                 "id": fetch.PYTHON_FLAGSHIP,
@@ -128,16 +196,20 @@ def _listing() -> Dict[str, Any]:
                 "can_download": False,
                 "update_available": False,
                 "unavailable_reason": None,
+                "unavailable_code": None,
             },
             {
                 "id": fetch.NATIVE_FLAGSHIP,
                 "installed": native_path is not None,
                 "size_bytes": native_size,
-                "can_download": (native_path is None or update)
+                "can_download": (native_path is None or update or broken)
                 and native_reason is None,
                 "update_available": update and native_reason is None,
                 "unavailable_reason": (
-                    None if native_path is not None else native_reason
+                    native_reason if native_path is None or broken else None
+                ),
+                "unavailable_code": (
+                    native_code if native_path is None or broken else None
                 ),
             },
         ],
@@ -158,12 +230,12 @@ def _on_progress(done: int, total: Optional[int]) -> None:
 
 def _run_download() -> None:
     try:
-        if fetch.chosen_flagship() == fetch.NATIVE_FLAGSHIP:
+        if fetch.saved_flagship() == fetch.NATIVE_FLAGSHIP:
             # An update replaces the file the running agent was started from.
             from gaia.ui.sidecar import daemon_client
 
             daemon_client.stop_sidecar(FLAGSHIP_AGENT_ID)
-        native_fetch.download(_on_progress)
+        gaiacpp_fetch.download(_on_progress)
     except Exception as e:  # noqa: BLE001 - reported to the UI through the job
         logger.warning("agent programs: gaiacpp download failed: %s", e)
         with _lock:
@@ -210,11 +282,15 @@ def _refuse_while_agent_is_busy() -> None:
 
 def _start_download() -> Dict[str, Any]:
     installed = fetch.native_flagship()
-    if installed is not None and not native_fetch.update_available(installed):
+    if (
+        installed is not None
+        and not gaiacpp_fetch.update_available(installed)
+        and not _fails_check()
+    ):
         raise HTTPException(
             status_code=409, detail="gaiacpp is already installed on this PC."
         )
-    if installed is not None and fetch.chosen_flagship() == fetch.NATIVE_FLAGSHIP:
+    if installed is not None and fetch.saved_flagship() == fetch.NATIVE_FLAGSHIP:
         _refuse_while_agent_is_busy()
     with _lock:
         if _job["state"] == "downloading":

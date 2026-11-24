@@ -90,6 +90,16 @@ CATALOG: Dict[str, Dict[str, Any]] = {
         "labels": ["chat", "vision", "tool-calling"],
         "checkpoint": "unsloth/Qwen3.6-35B-A3B-GGUF:Qwen3.6-35B-A3B-UD-Q4_K_XL.gguf",
     },
+    "Qwen3.5-4B-GGUF": {
+        "size": 3.58,
+        "labels": ["chat", "vision", "tool-calling"],
+        "checkpoint": "unsloth/Qwen3.5-4B-GGUF:Qwen3.5-4B-UD-Q4_K_XL.gguf",
+    },
+    "Qwen3.5-2B-GGUF": {
+        "size": 2.01,
+        "labels": ["chat", "vision", "tool-calling"],
+        "checkpoint": "unsloth/Qwen3.5-2B-GGUF:Qwen3.5-2B-UD-Q4_K_XL.gguf",
+    },
     "gpt-oss-120b-mxfp-GGUF": {
         "size": 63.4,
         "labels": ["chat", "reasoning", "tool-calling"],

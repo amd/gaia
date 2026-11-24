@@ -34,6 +34,7 @@ from gaia.mcp.servers.agent_ui_control import (
     remote_token,
     transport_security_settings,
 )
+from gaia.ui.api_token import UITokenError, auth_headers
 from gaia.ui.sse_handler import (
     _RAG_RESULT_JSON_SUB_RE,
     _THINK_TAG_SUB_RE,
@@ -50,11 +51,9 @@ logger = logging.getLogger(__name__)
 # Default GAIA Agent UI backend URL
 DEFAULT_BACKEND = "http://localhost:4200"
 
-# The backend refuses any mutating /api request that does not carry this
-# header — it is what stops a web page the user visits from driving the
-# Agent UI (see gaia/ui/security.py). Sent on reads too so no call site
-# has to decide.
-UI_HEADER = {"X-Gaia-UI": "1"}
+# Every /api request carries the X-Gaia-UI CSRF header and the Agent UI API
+# token (see gaia/ui/security.py and gaia/ui/api_token.py). ``auth_headers``
+# reads the token per request, since the backend may create it after we start.
 MCP_DEFAULT_PORT = AGENT_UI_MCP_PORT
 MCP_DEFAULT_HOST = "localhost"
 
@@ -66,6 +65,9 @@ def _normalize_error(
 
     Returns {"status": "error", "detail": "<clean message>"}.
     """
+    if isinstance(e, UITokenError):
+        return {"status": "error", "detail": str(e)}
+
     if isinstance(e, requests.exceptions.ConnectionError):
         return {
             "status": "error",
@@ -96,8 +98,9 @@ def _api(
 ) -> Dict[str, Any]:
     """Make an API request to the GAIA Agent UI backend."""
     url = f"{base_url}/api{path}"
-    headers = {**UI_HEADER, **kwargs.pop("headers", {})}
+    extra_headers = kwargs.pop("headers", {})
     try:
+        headers = {**auth_headers(), **extra_headers}
         r = getattr(requests, method)(url, timeout=timeout, headers=headers, **kwargs)
         r.raise_for_status()
         return r.json()
@@ -217,7 +220,7 @@ def _stream_chat(base_url: str, session_id: str, message: str) -> Dict[str, Any]
 
     try:
         r = requests.post(
-            url, json=payload, stream=True, timeout=180, headers=UI_HEADER
+            url, json=payload, stream=True, timeout=180, headers=auth_headers()
         )
         r.raise_for_status()
     except requests.exceptions.ConnectionError as e:
@@ -438,7 +441,7 @@ def create_agent_ui_mcp(backend_url: str = DEFAULT_BACKEND) -> "MCPServer":
             r = requests.delete(
                 f"{backend_url}/api/sessions/{session_id}",
                 timeout=30,
-                headers=UI_HEADER,
+                headers=auth_headers(),
             )
             r.raise_for_status()
             return {"deleted": True, "session_id": session_id}
@@ -530,7 +533,7 @@ def create_agent_ui_mcp(backend_url: str = DEFAULT_BACKEND) -> "MCPServer":
 
     # ── Turn control (drive a turn without blocking) ───────────────
 
-    turns = TurnRegistry(backend_url, UI_HEADER)
+    turns = TurnRegistry(backend_url, auth_headers)
 
     @mcp.tool()
     def start_message(session_id: str, message: str) -> Dict[str, Any]:
@@ -861,8 +864,9 @@ def create_agent_ui_mcp(backend_url: str = DEFAULT_BACKEND) -> "MCPServer":
                     # Bring window to front so it's not occluded
                     try:
                         win32gui.SetForegroundWindow(hwnd)
-                    except Exception:
-                        pass  # May fail if window is minimized
+                    except Exception as e:
+                        # Fails when the window is minimized; the capture still runs.
+                        logger.debug("Could not bring browser window forward: %s", e)
 
                     rect = win32gui.GetWindowRect(hwnd)
                     # rect = (left, top, right, bottom)
@@ -1160,8 +1164,21 @@ def create_agent_ui_mcp(backend_url: str = DEFAULT_BACKEND) -> "MCPServer":
                 "detail": activate.get("detail", "activate failed"),
             }
 
+        open_url = target_url
+        if base == backend_url:
+            # A browser without the token cookie signs in through a single-use link.
+            launch = _api(backend_url, "post", "/auth/launch-code")
+            if launch.get("status") == "error" or "path" not in launch:
+                return {
+                    "opened": False,
+                    "url": target_url,
+                    "status": "error",
+                    "detail": launch.get("detail", "could not mint a sign-in link"),
+                }
+            open_url = f"{base}{launch['path']}#{session_id}"
+
         try:
-            webbrowser.open(target_url)
+            webbrowser.open(open_url)
             _last_opened_url["url"] = target_url
             return {"opened": True, "url": target_url}
         except Exception as e:

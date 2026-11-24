@@ -345,7 +345,7 @@ def _workspace(
     ws = tmp_path / "ws"
     tui = ws / "installer" / "tui"
     tui.mkdir(parents=True)
-    for f in ("artifacts.py", "fetch_sidecar.py"):
+    for f in ("artifacts.py", "fetch_gaiapy.py"):
         shutil.copy(REPO_ROOT / "installer" / "tui" / f, tui / f)
     # The attach runs gh through the API-budget wrapper.
     (ws / "util").mkdir()

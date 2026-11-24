@@ -25,6 +25,7 @@ from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Set, Tuple
 
 from gaia.canonical_path import UncheckablePathError, canonical_path
+from gaia.home import chat_data_dirs
 from gaia.utils.terminal import stdin_is_interactive
 
 logger = logging.getLogger(__name__)
@@ -530,6 +531,25 @@ def protected_directory_of(path: Any) -> Optional[str]:
     return None
 
 
+#: Added to a refusal of an operating-system file (the hosts file, /etc).
+_ADMIN_ONLY = (
+    " It is an operating-system file, which takes administrator rights that "
+    "GAIA never uses, even when the user says yes. Don't try another way. Tell "
+    "the user exactly what to do and how to do it themselves as administrator."
+)
+
+
+def _is_os_file(path: Path) -> bool:
+    """Whether *path* is in a system folder, not GAIA's state or the user's home."""
+    blocked = protected_directory_of(path)
+    if blocked is None or blocked in SECRET_DIRECTORIES:
+        return False
+    normalized = os.path.normpath(blocked)
+    if normalized in GAIA_STATE_DIRECTORIES:
+        return False
+    return not _path_is_within(Path(normalized), Path.home())
+
+
 def is_credential_file_name(name: str) -> bool:
     """Whether a file called *name* is one the read tools refuse by name.
 
@@ -749,7 +769,10 @@ def sweep_stale_scratch_dirs() -> int:
                 continue
         try:
             info = os.lstat(path)
-            if hasattr(os, "getuid") and info.st_uid != os.getuid():
+            if (
+                hasattr(os, "getuid")
+                and info.st_uid != os.getuid()  # pylint: disable=no-member
+            ):
                 continue
             if _last_activity(path) > cutoff:
                 continue
@@ -1049,6 +1072,15 @@ def read_block(path: str) -> Tuple[bool, str]:
         return (True, f"Read blocked: unable to validate path safety: {e}")
 
 
+def _chat_data_root(real_path: Path) -> Optional[Path]:
+    """The chat data folder an already-resolved *real_path* is in, or None."""
+    for folder in chat_data_dirs():
+        root = Path(_scope_root(folder))
+        if _path_is_within(real_path, root):
+            return root
+    return None
+
+
 class PathValidator:
     """
     Validates file paths against an allowed list, with user prompting for exceptions.
@@ -1113,6 +1145,8 @@ class PathValidator:
             self.read_only_paths.add(Path(_scope_root(gaia_home() / "transcripts")))
         # Folders the user took away from this chat: refused, never prompted for.
         self.withheld_paths: Set[Path] = set()
+        # Those that were files when withheld: a document taken off the chat.
+        self._withheld_files: Set[Path] = set()
         self.scratch_dir: Optional[Path] = None
 
         # A host-supplied scope must not union with the machine-global grants the
@@ -1297,16 +1331,16 @@ class PathValidator:
         if self._on_prompt_start:
             try:
                 self._on_prompt_start()
-            except Exception:  # pragma: no cover – best-effort
-                pass
+            except Exception as e:  # pragma: no cover – best-effort
+                logger.debug("on_prompt_start callback failed: %s", e)
         try:
             yield
         finally:
             if self._on_prompt_end:
                 try:
                     self._on_prompt_end()
-                except Exception:  # pragma: no cover – best-effort
-                    pass
+                except Exception as e:  # pragma: no cover – best-effort
+                    logger.debug("on_prompt_end callback failed: %s", e)
 
     def add_allowed_path(self, path: str) -> None:
         """
@@ -1369,7 +1403,7 @@ class PathValidator:
         """
         self.read_only_paths.discard(Path(_real_path(path)))
 
-    def withhold_path(self, path: str) -> None:
+    def withhold_path(self, path: str, *, document: Optional[bool] = None) -> None:
         """Refuse everything under *path* until :meth:`release_path`.
 
         Wins over every grant, including a wider allowed folder, a read-only
@@ -1377,9 +1411,14 @@ class PathValidator:
 
         Args:
             path: The folder (or file) the user removed.
+            document: Whether *path* is a document taken off the chat, which
+                changes the advice in the refusal. Unset, a path that is a
+                file now counts as one; pass it when the file may be gone.
         """
         real = Path(_real_path(path))
         self.withheld_paths.add(real)
+        if document if document is not None else real.is_file():
+            self._withheld_files.add(real)
         self.allowed_paths = {
             p
             for p in self.allowed_paths
@@ -1393,7 +1432,13 @@ class PathValidator:
         Args:
             path: The folder (or file) that was withheld.
         """
-        self.withheld_paths.discard(Path(_real_path(path)))
+        real = Path(_real_path(path))
+        self.withheld_paths.discard(real)
+        self._withheld_files.discard(real)
+
+    def is_withheld_document(self, path: Any) -> bool:
+        """Whether *path* was withheld as a document rather than a folder."""
+        return Path(_real_path(path)) in self._withheld_files
 
     def withheld_root(self, path: str) -> Optional[Path]:
         """The withheld folder *path* is in, or None."""
@@ -1403,9 +1448,33 @@ class PathValidator:
                 return root
         return None
 
+    @staticmethod
+    def chat_data_root_of(path: Any) -> Optional[Path]:
+        """GAIA's chat data folder when *path* is inside it, else None.
+
+        It holds every chat's database, message attachments and document
+        copies. Only a grant of the exact file, an attached one, opens
+        anything there, and only to read: a folder, a read-only grant, an
+        approval or full access never does, so one chat cannot read what was
+        attached to another.
+
+        Args:
+            path: Any path; ``~``, ``..`` and symlinks are resolved first.
+        """
+        return _chat_data_root(Path(_real_path(path)))
+
+    def _granted_exactly(self, real_path: Path) -> bool:
+        """Whether *real_path* itself, not a folder holding it, was granted."""
+        return any(
+            _path_is_within(real_path, granted) and _path_is_within(granted, real_path)
+            for granted in (Path(_scope_root(p)) for p in self.allowed_paths)
+        )
+
     def _in_read_only_scope(self, path: str) -> bool:
         """Whether *path*, symlinks and ``..`` resolved, is under a read-only grant."""
         real = Path(_real_path(path))
+        if self.chat_data_root_of(real) is not None:
+            return False
         if any(_path_is_within(real, root) for root in self.read_only_paths):
             return True
         return self.is_generated_image(path)
@@ -1505,13 +1574,21 @@ class PathValidator:
             )
         withheld = self.withheld_root(str(path))
         if withheld is not None:
+            if withheld in self._withheld_files:
+                return f"'{path}' was taken off this chat by the user"
             return f"'{path}' is in {withheld}, which the user removed from this chat"
+        if self.chat_data_root_of(path) is not None:
+            return (
+                f"'{path}' is in GAIA's chat data, where a chat opens only what "
+                "is attached to it"
+            )
         read_blocked, reason = self.is_read_blocked(str(path))
         if read_blocked:
             return reason
-        write_blocked, reason = self.is_write_blocked(str(path))
-        if write_blocked:
-            return reason
+        # Said as what the path is: this refuses reads as well as writes.
+        protected = self._write_block(str(path))[0]
+        if protected:
+            return protected
         for root in _system_temp_roots():
             if _path_is_within(path, Path(os.path.realpath(root))):
                 return f"'{path}' is inside the system temp directory '{root}'"
@@ -1642,12 +1719,24 @@ class PathValidator:
         except UncheckablePathError as e:
             return f"Access denied: {e}"
         withheld = self.withheld_root(path)
+        if withheld is not None and withheld in self._withheld_files:
+            return (
+                f"Access denied: the user took '{withheld.name}' off this chat. "
+                "Don't try another way to reach it; tell the user to attach it "
+                "to this chat again if they want it used."
+            )
         if withheld is not None:
             return (
                 f"Access denied: '{path}' is in {withheld}, which the user removed "
                 "from this chat's folders. Don't try another way to reach it; tell "
                 "the user it can be added back under Environment in the session "
                 "panel."
+            )
+        if self.chat_data_root_of(real_path) is not None:
+            return (
+                f"Access denied: '{real_path.name}' is not attached to this chat. "
+                "Don't try another way to reach it; tell the user to attach it to "
+                "this chat if they want it used."
             )
         if self._declined_by_user(path):
             return (
@@ -1661,6 +1750,7 @@ class PathValidator:
         if unaskable:
             remedy = (
                 f" No approval can grant it: {unaskable.rstrip('.')}."
+                f"{_ADMIN_ONLY if _is_os_file(real_path) else ''}"
                 f"{self._folders_inside_home_hint(real_path)}"
             )
         elif self._access_prompt is not None or self._can_prompt():
@@ -1699,6 +1789,8 @@ class PathValidator:
                 return False
             if self.withheld_root(real_path_str) is not None:
                 return False
+            if _chat_data_root(real_path) is not None:
+                return self._granted_exactly(real_path)
 
             # macOS /var symlink handling: normalize by removing /private prefix.
             # Use the module-level helper so is_write_blocked applies the same
@@ -1948,6 +2040,19 @@ class PathValidator:
         Returns:
             Tuple of (is_blocked, reason). If blocked, reason explains why.
         """
+        why, advice = self._write_block(path)
+        if not why:
+            return (False, "")
+        return (True, f"Write blocked: {why}{advice}")
+
+    def _write_block(self, path: str) -> Tuple[str, str]:
+        """Why *path* may not be written, and what to say to a writer.
+
+        Returns:
+            ``(why, advice)``: *why* names what the path is, with no verb, so
+            a refused read can give it too; *advice* is for a writer only.
+            ``("", "")`` when the path may be written.
+        """
         try:
             # Use os.path.realpath exclusively for symlink resolution — do NOT
             # chain Path.resolve(), which re-resolves on Python <3.12 via a
@@ -1959,6 +2064,15 @@ class PathValidator:
             norm_path = os.path.normpath(_normalize_macos_symlinks(real_path_str))
             file_name = real_path.name.lower()
             file_ext = real_path.suffix.lower()
+
+            # Chats share one copy of each attached file; editing it edits theirs.
+            if _chat_data_root(real_path) is not None:
+                return (
+                    f"'{real_path.name}' is GAIA's copy of a file "
+                    "attached to a chat, which other chats may share",
+                    ". Save the changed version as a new file in a folder this "
+                    "chat can write to.",
+                )
 
             # Check blocked directories (case-insensitive on Windows and macOS)
             fold = _case_insensitive_paths()
@@ -1974,62 +2088,61 @@ class PathValidator:
                     ):
                         continue
                     return (
-                        True,
-                        f"Write blocked: '{real_path}' is inside protected "
-                        f"directory '{blocked_dir}'",
+                        f"'{real_path}' is inside protected directory "
+                        f"'{blocked_dir}'",
+                        "",
                     )
 
             # Credential folders also hold config their tools execute.
             for secret_dir in SECRET_DIRECTORIES:
                 if _path_is_within(real_path, Path(secret_dir)):
                     return (
-                        True,
-                        f"Write blocked: '{real_path}' is inside protected "
-                        f"directory '{secret_dir}', which holds credentials and "
-                        f"tool configuration. Edit it yourself if you need to.",
+                        f"'{real_path}' is inside protected directory "
+                        f"'{secret_dir}', which holds credentials and tool "
+                        "configuration",
+                        ". Edit it yourself if you need to.",
                     )
             shared = secret_folder_sharing(real_path)
             if shared:
                 return (
-                    True,
-                    f"Write blocked: '{real_path}' is the same file as one inside "
-                    f"'{shared}', which holds credentials and tool configuration. "
-                    f"Edit it yourself if you need to.",
+                    f"'{real_path}' is the same file as one inside "
+                    f"'{shared}', which holds credentials and tool configuration",
+                    ". Edit it yourself if you need to.",
                 )
 
             # Check sensitive file names
             if file_name in {s.lower() for s in SENSITIVE_FILE_NAMES}:
                 return (
-                    True,
-                    f"Write blocked: '{real_path.name}' is a sensitive file "
-                    f"(credentials/keys/secrets). Writing to it is not allowed.",
+                    f"'{real_path.name}' is a sensitive file "
+                    "(credentials/keys/secrets)",
+                    ". Writing to it is not allowed.",
                 )
 
             # Check sensitive extensions
             if file_ext in SENSITIVE_EXTENSIONS:
                 return (
-                    True,
-                    f"Write blocked: files with extension '{file_ext}' are "
-                    f"sensitive (certificates/keys). Writing is not allowed.",
+                    f"files with extension '{file_ext}' are sensitive "
+                    "(certificates/keys)",
+                    ". Writing is not allowed.",
                 )
 
             startup_reason = _startup_execution_reason(real_path)
             if startup_reason:
                 return (
-                    True,
-                    f"Write blocked: {startup_reason}. Writing to it would make "
-                    f"the agent's content run on your machine without you asking. "
-                    f"Edit it yourself if that is what you intended.",
+                    startup_reason,
+                    ". Writing to it would make the agent's content run on your "
+                    "machine without you asking. Edit it yourself if that is what "
+                    "you intended.",
                 )
 
-            return (False, "")
+            return ("", "")
 
         except UncheckablePathError as e:
-            return (True, f"Write blocked: {e}")
+            return (str(e), "")
         except Exception as e:
             logger.error(f"Error checking write block for {path}: {e}")
             # Fail-closed: block if we can't determine safety
-            return (True, f"Write blocked: unable to validate path safety: {e}")
+            return (f"unable to validate path safety: {e}", "")
 
     def validate_write(
         self,

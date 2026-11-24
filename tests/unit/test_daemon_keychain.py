@@ -481,14 +481,14 @@ def test_an_older_core_still_deletes_the_credential(monkeypatch, tmp_path, capsy
     import sys
     import types
 
-    entry = pytest.importorskip("gaia_agent.entry")
+    entry = pytest.importorskip("gaiapy.entry")
     secret_file = tmp_path / "secret"
     secret_file.write_text("s3cret", encoding="utf-8")
     monkeypatch.setenv(KEYCHAIN_SECRET_FILE_ENV_VAR, str(secret_file))
     monkeypatch.setitem(sys.modules, "gaia.connectors.daemon_keyring", None)
-    fake_server = types.ModuleType("gaia_agent.server")
+    fake_server = types.ModuleType("gaiapy.server")
     fake_server.serve_http = lambda args: 0
-    monkeypatch.setitem(sys.modules, "gaia_agent.server", fake_server)
+    monkeypatch.setitem(sys.modules, "gaiapy.server", fake_server)
     monkeypatch.setattr("gaia.tls.use_os_trust_store", lambda: None)
     monkeypatch.setattr("gaia.login_path.apply_login_path", lambda: None)
     monkeypatch.setattr(entry, "selects_http", lambda args: True)

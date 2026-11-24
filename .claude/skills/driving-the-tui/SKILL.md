@@ -46,7 +46,7 @@ export GAIA_MEMORY_DB=/tmp/gaia-drive/memory.db  # see above
 
 With those set, `ps aux | grep gaia-cli` before and after should show the user's
 processes untouched. The readiness gate still needs `gaia-agent` on `PATH`; a
-one-line shim that execs `python -m gaia_agent.server` from the checkout under
+one-line shim that execs `python -m gaiapy.server` from the checkout under
 test is enough, and is how you pin *which* source the drive exercises.
 
 ## Start it

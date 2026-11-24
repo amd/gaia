@@ -275,7 +275,7 @@ jobs:
       !cancelled() &&
       needs.plan.result == 'success' &&
       needs.plan.outputs.build == 'true'
-    uses: ./.github/workflows/build_flagship_sidecar.yml
+    uses: ./.github/workflows/build_gaiapy.yml
 
   flagship-npm-tests:
     name: Flagship npm tests
@@ -529,7 +529,7 @@ jobs:
       - name: Assemble the candidate's flagship manifest
         run: |
           set -euo pipefail
-          python3 util/flagship_rc_assets.py release --artifacts "${RUNNER_TEMP}/art" \
+          python3 util/gaiapy_rc_assets.py release --artifacts "${RUNNER_TEMP}/art" \
             --tag "${{ needs.plan.outputs.rc_tag }}" --commit "${GITHUB_SHA}" \
             --out "${RUNNER_TEMP}/rc-assets-full"
           mkdir -p "${RUNNER_TEMP}/flagship/rc-assets"

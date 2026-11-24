@@ -587,7 +587,7 @@ def search_codebase(query: str) -> str:
 
 **Cause:** Usually means `max_steps` is too high, or tools return ambiguous results.
 
-**What the user gets:** at `max_consecutive_repeats` identical calls the model gets one correction in place of the call, and a repeat after that ends the turn. If the calls that ran worked, the agent makes one more model call with no tool calls allowed and answers from their results; if they errored or were refused, the answer names that failure.
+**What the user gets:** at `max_consecutive_repeats` identical calls the model gets one correction in place of the call, and a repeat after that ends the turn. The calls need not be back to back: a call that has returned the same result that many times this turn, in any order among other calls, counts the same, while one whose result changed (a file read again after an edit) starts over, and a call to the wait tool resets every count. A turn gets one correction in total; the next repeat of any call ends it. If the calls that ran worked, the agent makes one more model call with no tool calls allowed and answers from their results; if they errored or were refused, the answer names that failure.
 
 Two loops that vary their arguments are stopped the same way:
 
@@ -1093,22 +1093,29 @@ The loop asks once for a tool call or the final answer; a second such reply in
 a row ends the turn with status `incomplete` and an answer saying the request
 is unfinished.
 
-Only a write that is clearly documentation, or the request's own output, leaves
-an earlier test run standing; every other write makes it stale. Documentation
-means prose (`.md`, `.mdx`, `.rst`), a `README`, `CHANGELOG`, `LICENSE` or
-similar file (bare or `.txt`), or a text or image file under a `docs` folder.
-The request's output is any non-code file it asked for (`OUTPUT.md`,
-`result.json`, `report.csv`). Neither applies to a file a test may read, so
-these always count as changes, even when the request named them as its output:
-any source file (`.py`, `.ts`, …, even one named `README.py`); a file under a
-folder, or with a name, that looks like test input (`tests`, `test_data`,
-`__tests__`, `spec`, `fixtures`, `data`, `mocks`, `samples`, `e2e`, `golden`,
-`expected_output.md`, …); a file anywhere below a folder that holds an
-`__init__.py` (a prompt `.md` the code loads); and build, install or test
-configuration (`requirements*.txt`, `pyproject.toml`, `pytest.ini`,
-`package.json`, `CMakeLists.txt`, …). A plain `.txt`, `.csv` or `.json` that the
-request didn't ask for counts too. Folder names are read below the project
-root. The verify-after-change nudge uses the same rule.
+Only a write that is clearly documentation, or a report the request asked for,
+leaves an earlier test run standing; every other write makes it stale.
+Documentation means prose (`.md`, `.mdx`, `.rst`), a `README`, `CHANGELOG`,
+`LICENSE` or similar file (bare or `.txt`), or a text or image file under a
+`docs` folder. A report is a requested file of a report type: prose, plain
+text or a log, a table (`.csv`, `.tsv`, `.xlsx`), a document (`.pdf`, `.docx`,
+`.pptx`) or an image (`OUTPUT.md`, `report.csv`, `summary.pdf`). Any other
+requested file is config or data the code reads, so it counts as a change:
+`settings.yaml`, `app.json`, `conf.toml`, `setup.ini`, `.env`, `schema.sql`,
+`index.html`, `Dockerfile`, and every source file (`.py`, `.ts`, …, even one
+named `README.py`). Neither exemption applies to a file a test or the agent
+may read, so these always count as changes, even when the request named them
+as its output: a file under a folder, or with a name, that looks like test
+input (`tests`, `test_data`, `__tests__`, `spec`, `fixtures`, `data`, `mocks`,
+`samples`, `e2e`, `golden`, `expected_output.md`, …); a skill or prompt file
+(`SKILL.md`, anything under a `skills` or `prompts` folder); a file anywhere
+below a folder that holds an `__init__.py` (a prompt `.md` the code loads); and
+build, install or test configuration (`requirements*.txt`, `pyproject.toml`,
+`pytest.ini`, `package.json`, `CMakeLists.txt`, …). A plain `.txt`, `.csv` or
+`.json` that the request didn't ask for counts too. Folder names are read below
+the project root. Only the file-writing tools (`write_file`, `edit_file`, …)
+are judged; an edit made by a shell command or a script is not. The
+verify-after-change nudge uses the same rule.
 
 A check that ran more than once in the turn is judged by its most recent run. A
 test that failed and then passed after a fix is `verified` and gets no note; one
@@ -1162,14 +1169,23 @@ A subclass can add a check of its own. Override `answer_problems(answer)` to
 return what is wrong with a final answer as plain sentences; the loop sends
 them back once per turn with `answer_repair_prompt(problems)` (override it to
 word the request), and lists any still present after that in the "not
-confirmed" note. The default returns nothing.
+confirmed" note. Call `super().answer_problems(answer)` and add to its list,
+so the built-in checks keep running:
+
+- **Base agent:** an answer that is only leftover tool-call markup, such as
+  `\n\n"}`.
+- **Memory:** an answer that says something was saved when `remember` refused
+  it, or a request to remember something that ended with no `remember` call.
+- **Flagship:** a request to add the skill at a named folder that ended with no
+  `capture_skill` call.
 
 ```python
 class ReportAgent(Agent):
     def answer_problems(self, answer: str) -> list[str]:
+        problems = super().answer_problems(answer)
         if "## Sources" not in answer:
-            return ["The report has no Sources list."]
-        return []
+            problems.append("The report has no Sources list.")
+        return problems
 ```
 
 The flagship uses it on `/research` turns to check that every cited link is a
@@ -1441,7 +1457,7 @@ never needed. A part longer than 8,000 characters comes back in pages: the page 
 `remaining`, and `read_tool_output(artifact, offset=next_offset,
 limit=remaining)` continues it. Without an entry, `offset` and `limit` (default
 2,000) read any span. An entry number outside the index is an error that names
-the valid range. Unicode offsets count characters, not bytes.
+the valid range; a `to_entry` past the last entry reads to the end. Unicode offsets count characters, not bytes.
 
 The archived text is the original string, the field named by
 `archived_field`, or JSON (one record per line) for a structured result. Small

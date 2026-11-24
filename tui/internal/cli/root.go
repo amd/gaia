@@ -117,6 +117,12 @@ func agentChoice() (ui.AgentChoice, error) {
 		return ui.AgentChoice{}, fmt.Errorf("could not read the saved agent program: %w. "+
 			"Or pass --agent-program to choose one for this launch", err)
 	}
+	// Never run another program in place of one this build can't start.
+	if why := preflight.FlagshipAgentUnavailable(saved.Choice); why != "" {
+		return ui.AgentChoice{}, fmt.Errorf("%s: %s: %s. Pass --agent-program %s or %s for this launch, "+
+			"or choose another agent program in the Agent UI's Settings", saved.Path, preflight.FlagshipAgentKey,
+			why, preflight.FlagshipAgentPython, preflight.FlagshipAgentNative)
+	}
 	return ui.AgentChoice{Program: saved.Program()}, nil
 }
 
@@ -372,7 +378,7 @@ func init() {
 		"path to a stand-in agent binary, for tests (overrides the agent being launched)")
 	rootCmd.PersistentFlags().StringVar(&agentProgram, "agent-program", "",
 		"which agent program GAIA runs on: "+catalog.NativeAgentBinary+" (the native agent), "+
-			catalog.PythonAgentBinary+" (the Python agent), or a path to either. Unset runs "+
+			catalog.PythonAgentBinary+" or "+catalog.PythonAgentChoice+" (the Python agent), or a path to either. Unset runs "+
 			"the one saved with /agent ("+preflight.FlagshipAgentKey+" in config.json), else "+
 			catalog.PythonAgentBinary+"; a named one that is missing is an error. Overrides "+catalog.AgentEnv)
 	rootCmd.PersistentFlags().StringVar(&tracePath, "trace", "",

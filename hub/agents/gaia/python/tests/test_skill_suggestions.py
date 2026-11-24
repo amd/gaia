@@ -14,8 +14,8 @@ from types import SimpleNamespace
 
 import numpy as np
 import pytest
-from gaia_agent import agent as agent_module
-from gaia_agent.agent import GaiaAgent, GaiaAgentConfig, _apply_fast_mode
+from gaiapy import agent as agent_module
+from gaiapy.agent import GaiaAgent, GaiaAgentConfig, _apply_fast_mode
 
 from gaia.agents.base import skill_budget
 from gaia.agents.base.agent import Agent
@@ -26,8 +26,10 @@ from gaia.agents.base.skill_suggester import (
     DEFAULT_AUTOLOAD_THRESHOLD,
     DEFAULT_SUGGEST_THRESHOLD,
     DOC_PROMPT,
+    SUGGESTION_LEAD_IN,
     SkillMatches,
     SkillSuggester,
+    render_suggestion,
 )
 from gaia.agents.registry import DEFAULT_EMBEDDING_MODEL, get_embedding_model_for_device
 from gaia.agents.tools.shell_tools import skill_granted_binaries
@@ -146,6 +148,47 @@ def test_scores_the_current_message_against_installed_skills(monkeypatch):
     assert list_project is False
 
 
+def test_a_skill_the_user_typed_counts_as_loaded(monkeypatch):
+    """``/summarize ...`` loads its skill after the context is built."""
+    agent = _wired(monkeypatch, [])
+    agent._select_skill_suggestions_for_turn("/summarize the notes in notes.txt")
+    assert agent.skill_suggester.calls[0][2] == {"coding", "summarize"}
+    agent._select_skill_suggestions_for_turn("/tmp/notes.txt is empty")
+    assert agent.skill_suggester.calls[1][2] == {"coding"}
+
+
+def test_a_typed_skill_is_never_suggested_back(monkeypatch):
+    """rc4: ``/log-triage What went wrong in app.log?`` was told to load
+    log-triage."""
+    agent = _agent(monkeypatch)
+    skills = {
+        name: SimpleNamespace(
+            name=name,
+            description=f"does {name}",
+            root="agent",
+            tool_names=[],
+            gaia=SimpleNamespace(pairs_with=[], tools_required=[]),
+        )
+        for name in ("log-triage", "coding")
+    }
+
+    def embed(text):
+        v = np.zeros(4, dtype=np.float32)
+        v[1 if text.endswith("does coding") else 0] = 1.0
+        return v
+
+    agent.skill_suggester = SkillSuggester(embed)
+    agent._memory_store = object()
+    agent._loaded_skills = {}
+    agent._skill_manager = SimpleNamespace(discover=lambda: skills)
+    request = "/log-triage What went wrong in app.log?"
+    assert agent._select_skill_suggestions_for_turn("What went wrong in app.log?") == [
+        "log-triage"
+    ]
+    assert agent._select_skill_suggestions_for_turn(request) == []
+    assert "log-triage" not in _with_turn_context(monkeypatch, agent, request)
+
+
 def test_skills_the_model_cannot_load_are_never_suggested(monkeypatch):
     # Same pool as the catalogue: a compact model is not offered the mail tools.
     agent = _wired(monkeypatch, [])
@@ -207,8 +250,7 @@ def test_the_line_joins_this_turns_context(monkeypatch):
     context = _with_turn_context(monkeypatch, agent, "sum up this spreadsheet")
     assert context.splitlines() == [
         "Current time: now",
-        "Call load_skill('summarize') before you start: it covers this kind of "
-        "request. Also consider: data-explore.",
+        render_suggestion(["summarize", "data-explore"]),
     ]
     assert agent.skill_suggester.calls[0][0] == "sum up this spreadsheet"
 
@@ -253,7 +295,7 @@ def test_a_real_suggester_reaches_the_turn_context(monkeypatch):
     agent._loaded_skills = {}
     agent._skill_manager = SimpleNamespace(discover=lambda: skills)
     context = _with_turn_context(monkeypatch, agent, "draw a lighthouse")
-    assert "Call load_skill('image-gen') before you start" in context
+    assert "call load_skill('image-gen') before you start" in context
 
 
 # ── auto-load: settings ─────────────────────────────────────────────────────
@@ -528,7 +570,7 @@ def _suggests(context, name):
     """The last line names *name*: as the instruction, or after an auto-load
     as available."""
     line = context.splitlines()[-1]
-    return line.startswith(("Call load_skill(", "Also available: ")) and name in line
+    return line.startswith(SUGGESTION_LEAD_IN) and name in line
 
 
 def test_a_high_confidence_match_is_loaded_and_announced(monkeypatch):
@@ -540,8 +582,7 @@ def test_a_high_confidence_match_is_loaded_and_announced(monkeypatch):
         "Current time: now",
         "Loaded report-from-sources because it matches this request — its "
         "instructions are in the system prompt.",
-        "Also available: office-docs. Call load_skill for one only if this "
-        "request needs it.",
+        render_suggestion(["office-docs"], after_autoload=True),
     ]
     # Pinned, so this turn's body selection cannot hide what it was loaded for.
     assert "report-from-sources" in agent._sticky_skill_turns
@@ -572,10 +613,7 @@ def test_reading_the_context_outside_a_turn_never_loads(monkeypatch):
     agent._memory_turn_query = "sum this up"
     context = agent.get_memory_dynamic_context()
     assert agent.loads == [] and agent._loaded_skills == {}
-    assert context.splitlines()[-1] == (
-        "Call load_skill('summarize') before you start: it covers this kind of "
-        "request. Also consider: pdf."
-    )
+    assert context.splitlines()[-1] == (render_suggestion(["summarize", "pdf"]))
 
 
 def test_a_prepared_turn_is_reported_once(monkeypatch):
@@ -631,7 +669,7 @@ def test_unloading_a_skill_that_is_not_loaded_records_nothing(monkeypatch):
 
 
 def test_a_rebuilt_agent_keeps_what_was_auto_loaded_and_unloaded(monkeypatch):
-    from gaia_agent.session_registry import _carry_session_state
+    from gaiapy.session_registry import _carry_session_state
 
     # A large window, which auto-loads two skills per turn.
     old = _loading(monkeypatch, ["summarize", "pdf"], window=200_000)
@@ -654,7 +692,7 @@ def test_a_rebuilt_agent_keeps_what_was_auto_loaded_and_unloaded(monkeypatch):
 
 
 def test_a_rebuild_from_an_agent_without_the_records_carries_none(monkeypatch):
-    from gaia_agent.session_registry import _carry_session_state
+    from gaiapy.session_registry import _carry_session_state
 
     new = _loading(monkeypatch, ["summarize"])
     _carry_session_state(SimpleNamespace(loaded_skills={}), new, "session-1")
@@ -742,8 +780,7 @@ def test_a_real_suggester_loads_the_best_match_and_names_its_companions(monkeypa
     assert context.splitlines()[-2:] == [
         "Loaded slide-decks because it matches this request — its instructions "
         "are in the system prompt.",
-        "Also available: report-from-sources, office-docs. Call load_skill for "
-        "one only if this request needs it.",
+        render_suggestion(["report-from-sources", "office-docs"], after_autoload=True),
     ]
 
 

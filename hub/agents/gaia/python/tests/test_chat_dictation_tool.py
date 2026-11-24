@@ -14,9 +14,10 @@ from unittest.mock import patch
 
 import pytest
 
-pytest.importorskip("gaia_agent")
+pytest.importorskip("gaiapy")
 
 import gaia.config
+from gaia.audio.lemonade_tts import LemonadeTTSClient as RealTTSClient
 from gaia.audio.lemonade_tts import LemonadeTTSError
 from gaia.security import PathValidator
 from gaia.ui.generated_media import media_card, media_dir
@@ -524,6 +525,28 @@ def test_a_missing_voice_model_is_an_error_not_a_download(dictation):
     dictation.synthesize.assert_not_called()
 
 
+def test_a_missing_voice_is_reported_before_the_listening_rewrite(dictation):
+    dictation.client.return_value.check_model_available.side_effect = LemonadeTTSError(
+        "TTS model 'kokoro-v1' is not downloaded."
+    )
+    result = dictation.tool(str(dictation.allowed / "report.md"), form="listening")
+
+    assert result == {
+        "status": "error",
+        "error": "TTS model 'kokoro-v1' is not downloaded.",
+    }
+    # The rewrite is one chat-model call per part of the document.
+    assert dictation.chat.calls == []
+    assert not any(
+        "listening script" in message for _phase, message in dictation.events
+    )
+
+
+def test_a_document_problem_is_reported_without_asking_for_the_voice(dictation):
+    dictation.tool(str(dictation.allowed / "story.txt"), pages="40-50")
+    dictation.client.return_value.check_model_available.assert_not_called()
+
+
 def test_a_script_cut_off_by_the_reply_limit_fails_instead_of_recording_half(
     dictation,
 ):
@@ -573,3 +596,46 @@ def test_a_document_too_long_for_one_run_is_refused_with_how_to_split(dictation)
     assert result["status"] == "error"
     assert "hours of audio" in result["error"]
     dictation.synthesize.assert_not_called()
+
+
+def test_speech_cut_to_half_a_second_is_an_error_and_saves_nothing(
+    dictation, monkeypatch
+):
+    """The real speech client, with Lemonade answering every piece with 0.48 s."""
+    import json
+
+    import requests
+
+    story = dictation.allowed / "long.txt"
+    story.write_text(
+        "The board approved the new berth. Work starts in spring and ends "
+        "before winter. Traffic rose twelve percent to four thousand three "
+        "hundred ten vessels, the busiest year on record.\n",
+        encoding="utf-8",
+    )
+    frames = (b"\xff\xf3\xe4\xc4" + b"\x00" * 476) * 20  # 0.48 s at 24 kHz
+
+    def send(_session, request, **_kwargs):
+        reply = requests.Response()
+        reply.status_code = 200
+        if request.url.endswith("/audio/speech"):
+            reply.headers["Content-Type"] = "audio/mpeg"
+            reply._content = frames
+        else:
+            reply.headers["Content-Type"] = "application/json"
+            reply._content = json.dumps(
+                {"data": [{"id": "kokoro-v1", "labels": ["tts"], "downloaded": True}]}
+            ).encode()
+        return reply
+
+    monkeypatch.setattr(requests.sessions.Session, "send", send)
+    dictation.client.side_effect = lambda **kwargs: RealTTSClient(
+        base_url="http://127.0.0.1:13305/api/v1", model=kwargs["model"]
+    )
+
+    result = dictation.tool(str(story))
+
+    assert result["status"] == "error"
+    assert "0.5 s of audio for 30 words" in result["error"]
+    assert "audio_path" not in result
+    assert not media_dir("audio").exists() or not list(media_dir("audio").iterdir())

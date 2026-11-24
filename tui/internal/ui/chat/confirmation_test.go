@@ -65,9 +65,9 @@ func TestNeedsConfirmationPutsUpTheModal(t *testing.T) {
 	}
 }
 
-// While the confirmation is pending, keys drive it rather than the composer —
-// mirrors TestKeysRouteToThePendingQuestion for the confirmation modal.
-func TestKeysRouteToThePendingConfirmation(t *testing.T) {
+// A key that is not an answer never resolves the prompt — and it is not thrown
+// away either: it was typed for the composer, so that is where it goes.
+func TestKeysThatAreNotAnAnswerTypeIntoTheComposer(t *testing.T) {
 	m, _ := newTestModel(t)
 	m.streaming = true
 	m = feed(t, m, needsConfirmation(""))
@@ -80,8 +80,8 @@ func TestKeysRouteToThePendingConfirmation(t *testing.T) {
 	if m.confirmation == nil || !m.confirmation.Pending() {
 		t.Fatal("the confirmation must still be pending")
 	}
-	if got := m.input.Value(); got != "" {
-		t.Errorf("the keystroke leaked into the composer: %q", got)
+	if got := m.input.Value(); got != "x" {
+		t.Errorf("the keystroke was dropped: composer = %q", got)
 	}
 }
 
@@ -92,7 +92,7 @@ func TestDenyingClearsTheModalAndRecordsOutcome(t *testing.T) {
 	m.streaming = true
 	m = feed(t, m, needsConfirmation(""))
 
-	updated, cmd := m.handleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("n")})
+	updated, cmd := answerKey(t, m, "n")
 	m = updated.(ChatModel)
 	if cmd == nil {
 		t.Fatal("denying produced no command")
@@ -153,7 +153,7 @@ func TestApprovingWithNoConfirmURLDoesNotClaimDelivery(t *testing.T) {
 	m.streaming = true
 	m = feed(t, m, needsConfirmation(""))
 
-	updated, cmd := m.handleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("y")})
+	updated, cmd := answerKey(t, m, "y")
 	m = updated.(ChatModel)
 	msg := cmd().(components.ConfirmationDecidedMsg)
 	updatedModel, cmd2 := m.Update(msg)
@@ -179,7 +179,7 @@ func TestApprovingWithConfirmURLDeliversViaConfirmer(t *testing.T) {
 	m.streaming = true
 	m = feed(t, m, needsConfirmation("/v1/notes/query/run-1/confirm"))
 
-	updated, cmd := m.handleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("y")})
+	updated, cmd := answerKey(t, m, "y")
 	m = updated.(ChatModel)
 	msg := cmd().(components.ConfirmationDecidedMsg)
 	if msg.ConfirmURL == "" {
@@ -210,7 +210,7 @@ func TestFailedConfirmDeliveryIsSurfaced(t *testing.T) {
 	m.streaming = true
 	m = feed(t, m, needsConfirmation("/v1/notes/query/run-1/confirm"))
 
-	updated, cmd := m.handleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("y")})
+	updated, cmd := answerKey(t, m, "y")
 	m = updated.(ChatModel)
 	msg := cmd().(components.ConfirmationDecidedMsg)
 	_, cmd2 := m.Update(msg)

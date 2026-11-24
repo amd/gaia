@@ -111,6 +111,30 @@ describe('ModelStatusPill', () => {
         expect(within(dialog).getByText('64K tokens')).toBeInTheDocument();
     });
 
+    it('stops reading the status while the window is hidden, and reads it again once shown', async () => {
+        mockedApi.getLocalModelStatus.mockResolvedValue(LOADED);
+        let state: DocumentVisibilityState = 'visible';
+        const visibility = vi.spyOn(document, 'visibilityState', 'get').mockImplementation(() => state);
+        vi.useFakeTimers({ shouldAdvanceTime: true });
+        try {
+            render(<ModelStatusPill />);
+            await open();
+            await act(async () => { await vi.advanceTimersByTimeAsync(3100); });
+            const before = mockedApi.getLocalModelStatus.mock.calls.length;
+            expect(before).toBe(2);
+            state = 'hidden';
+            act(() => { document.dispatchEvent(new Event('visibilitychange')); });
+            await act(async () => { await vi.advanceTimersByTimeAsync(15_000); });
+            expect(mockedApi.getLocalModelStatus).toHaveBeenCalledTimes(before);
+            state = 'visible';
+            await act(async () => { document.dispatchEvent(new Event('visibilitychange')); });
+            expect(mockedApi.getLocalModelStatus).toHaveBeenCalledTimes(before + 1);
+        } finally {
+            vi.useRealTimers();
+            visibility.mockRestore();
+        }
+    });
+
     it('shows a stopped server and restarts it', async () => {
         mockedApi.getLocalModelStatus.mockResolvedValue(STOPPED);
         render(<ModelStatusPill />);

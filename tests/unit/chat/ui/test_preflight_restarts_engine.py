@@ -27,6 +27,7 @@ from gaia.llm.lemonade_client import RECONNECTING_MESSAGE, GaiaLemonadeStartErro
 from gaia.llm.lemonade_embedded import EmbeddedLemonade
 from gaia.llm.lemonade_manager import LemonadeManager
 from gaia.llm.providers.lemonade import (
+    LemonadeCloudDisconnectedError,
     LemonadeNetworkError,
     LemonadeServerUnreachableError,
     classify_lemonade_exception,
@@ -233,11 +234,72 @@ def test_an_engine_that_will_not_start_says_why_and_how_to_repair_it(
 @pytest.mark.parametrize(
     "error", [LemonadeNetworkError(), LemonadeServerUnreachableError()]
 )
-def test_a_cloud_chat_is_never_told_its_llm_is_local(error):
+def test_a_cloud_chat_is_never_told_its_llm_is_local(error, monkeypatch):
+    monkeypatch.setattr(lc, "configured_lemonade_url", lambda: None)
     cloud = wording_for_model(error.user_message, CLOUD)
     assert "local" not in cloud.lower()
     assert "GAIA's AI engine" in cloud
     assert wording_for_model(error.user_message, LOCAL) == error.user_message
+
+
+@pytest.mark.parametrize("source", ["env", "settings", "settings_no_url"])
+def test_a_server_the_user_runs_is_not_called_gaias(source, monkeypatch):
+    """Their own stopped server read as GAIA's own engine failing (#8636)."""
+    monkeypatch.delenv("GAIA_LEMONADE_EMBEDDED", raising=False)
+    if source == "env":
+        monkeypatch.setenv("LEMONADE_BASE_URL", "http://127.0.0.1:13399")
+    else:
+        monkeypatch.delenv("LEMONADE_BASE_URL", raising=False)
+        url = "http://127.0.0.1:13399" if source == "settings" else None
+        cfg = type("Cfg", (), {})()
+        cfg.lemonade_mode = lemonade_choice.MODE_EXTERNAL
+        cfg.lemonade_base_url = url
+        cfg.lemonade_env_url_ignored = None
+        monkeypatch.setattr(lemonade_choice, "_config", lambda: cfg)
+
+    down = lc.LemonadeServerDownError("127.0.0.1:13399", "Fireworks")
+    shown = wording_for_model(str(down), CLOUD)
+
+    assert shown.startswith("Your model server at 127.0.0.1:13399 isn't answering")
+    assert "GAIA's" not in shown and "local" not in shown.lower()
+    mid = wording_for_model(LemonadeNetworkError().user_message, CLOUD)
+    assert "Couldn't reach your model server." in mid
+    assert wording_for_model(str(down), LOCAL) == str(down)
+
+
+def _cloud_lost_messages():
+    return [
+        str(lc.CloudProviderDisconnectedError("fireworks", CLOUD, "no key was saved")),
+        LemonadeCloudDisconnectedError.user_message,
+    ]
+
+
+@pytest.mark.parametrize("message", _cloud_lost_messages())
+def test_a_server_the_user_runs_is_not_called_gaias_when_it_loses_the_cloud_provider(
+    message, monkeypatch
+):
+    """#8683: the cloud-disconnect errors kept the "GAIA's AI engine" wording."""
+    monkeypatch.setattr(lc, "configured_lemonade_url", lambda: "http://127.0.0.1:13399")
+    shown = wording_for_model(message, CLOUD)
+    assert shown.startswith("Your model server lost its")
+    assert "GAIA's" not in shown
+    # The rest of the message (the fix) is untouched.
+    assert shown.split("lost its", 1)[1] == message.split("lost its", 1)[1]
+
+
+@pytest.mark.parametrize("message", _cloud_lost_messages())
+def test_gaias_own_server_keeps_its_name_when_it_loses_the_cloud_provider(
+    message, monkeypatch
+):
+    monkeypatch.setattr(lc, "configured_lemonade_url", lambda: None)
+    assert wording_for_model(message, CLOUD) == message
+    assert message.startswith("GAIA's AI engine lost its")
+
+
+def test_an_engine_start_failure_is_never_renamed_for_a_users_own_server(monkeypatch):
+    monkeypatch.setattr(lc, "configured_lemonade_url", lambda: "http://127.0.0.1:13399")
+    message = "GAIA's AI engine couldn't start: boom."
+    assert wording_for_model(message, CLOUD) == message
 
 
 def test_the_agent_loop_words_a_server_failure_for_a_cloud_model():

@@ -25,6 +25,8 @@ from typing import Any, Dict, Iterable, List, Optional, Set
 
 import requests
 
+from gaia.ui.api_token import auth_headers
+
 logger = logging.getLogger(__name__)
 
 #: Sessions the eval driver creates are titled ``Eval: <scenario_id>``.
@@ -39,7 +41,6 @@ SETTLE_TIMEOUT_S = 180.0
 
 POLL_INTERVAL_S = 0.5
 REQUEST_TIMEOUT_S = 10.0
-_HEADERS = {"X-Gaia-UI": "1"}
 
 ALLOW = "allow_once"
 DENY = "deny"
@@ -95,7 +96,7 @@ class ScenarioBackend:
         resp = requests.get(
             f"{self.backend_url}/api{path}",
             params=params or None,
-            headers=_HEADERS,
+            headers=auth_headers(),
             timeout=REQUEST_TIMEOUT_S,
         )
         resp.raise_for_status()
@@ -130,7 +131,7 @@ class ScenarioBackend:
         from gaia.mcp.servers.agent_ui_control import TurnRegistry
 
         self._sessions_before = {s["id"] for s in self._scenario_sessions()}
-        self._registry = TurnRegistry(self.backend_url, _HEADERS)
+        self._registry = TurnRegistry(self.backend_url, auth_headers)
         self._thread = threading.Thread(
             target=self._watch, name=f"eval-prompts-{self.scenario_id}", daemon=True
         )
@@ -269,7 +270,7 @@ class ScenarioBackend:
                 resp = requests.post(
                     f"{self.backend_url}/api/chat/cancel",
                     json={"session_id": session_id},
-                    headers=_HEADERS,
+                    headers=auth_headers(),
                     timeout=REQUEST_TIMEOUT_S,
                 )
                 if resp.status_code not in (200, 404):  # 404: it just finished

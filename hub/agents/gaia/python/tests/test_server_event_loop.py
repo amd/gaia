@@ -16,13 +16,13 @@ import uuid
 
 import pytest
 
-pytest.importorskip("gaia_agent")
+pytest.importorskip("gaiapy")
 
 import httpx  # noqa: E402
 import uvicorn  # noqa: E402
-from gaia_agent import caller_auth  # noqa: E402
-from gaia_agent import server as server_mod  # noqa: E402
-from gaia_agent import session_registry as sr  # noqa: E402
+from gaiapy import caller_auth  # noqa: E402
+from gaiapy import server as server_mod  # noqa: E402
+from gaiapy import session_registry as sr  # noqa: E402
 
 _HEARTBEAT_S = 0.1
 _SLOW_SETUP_S = 1.5
@@ -49,6 +49,7 @@ def app(monkeypatch):
     caller_auth.reset()
     monkeypatch.delenv(caller_auth.TOKEN_FILE_ENV_VAR, raising=False)
     monkeypatch.delenv(caller_auth.TOKEN_ENV_VAR, raising=False)
+    monkeypatch.setenv(caller_auth.ALLOW_NO_TOKEN_ENV_VAR, "1")
     monkeypatch.setattr(server_mod, "_HEARTBEAT_SECONDS", _HEARTBEAT_S)
 
     agents = {}
@@ -295,6 +296,7 @@ def capped(monkeypatch):
     caller_auth.reset()
     monkeypatch.delenv(caller_auth.TOKEN_FILE_ENV_VAR, raising=False)
     monkeypatch.delenv(caller_auth.TOKEN_ENV_VAR, raising=False)
+    monkeypatch.setenv(caller_auth.ALLOW_NO_TOKEN_ENV_VAR, "1")
     monkeypatch.setattr(sr, "build_session_agent", lambda **kw: _Quiet(**kw))
     monkeypatch.setattr(server_mod, "build_query_agent", lambda **kw: _Quiet(**kw))
     reg = sr._SessionRegistry(max_sessions=1)
@@ -387,6 +389,34 @@ def test_a_cancelled_model_switch_releases_the_session(capped, monkeypatch):
 
     assert not session.run_lock.locked(), "a cancelled switch kept the turn"
     assert client.post("/v1/gaia/query", json=_body("switching")).status_code == 200
+
+
+def test_cancelled_settings_rebuild_keeps_its_skill_warning(capped, monkeypatch):
+    reg, client = capped
+    session = reg.get_or_create("rebuilding")
+    old = session.agent
+    old.loaded_skills = {"broken": object()}
+    old.built_settings_changed = lambda: True
+    reloading = threading.Event()
+    cancelled = threading.Event()
+
+    def slow_skill_load(self, name):
+        assert name == "broken"
+        reloading.set()
+        assert cancelled.wait(10), "the request was never cancelled"
+        raise RuntimeError("synthetic load error")
+
+    monkeypatch.setattr(_Quiet, "load_skill", slow_skill_load, raising=False)
+    _run_query_then_cancel(_body("rebuilding"), reloading, cancelled.set)
+
+    assert not session.run_lock.locked()
+    assert session.agent is not old
+    assert old.closed == 1
+    response = client.post("/v1/gaia/query", json=_body("rebuilding"))
+    assert response.status_code == 200
+    assert response.text.count("Skill 'broken' was not restored") == 1
+    assert '"level": "warning"' in response.text
+    assert "synthetic load error" not in response.text
 
 
 def test_a_cancelled_one_shot_build_closes_the_agent(capped, monkeypatch):

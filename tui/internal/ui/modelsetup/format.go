@@ -33,7 +33,8 @@ func formatSpeed(bps float64) string {
 }
 
 // formatETA is how long is left, rounded the way a person says it: seconds
-// under 90 s, minutes after that, and no number at all past two hours.
+// under 90 s, minutes up to two hours, whole hours up to a day. The Agent
+// UI's formatEta follows the same rule.
 func formatETA(d time.Duration) string {
 	s := d.Seconds()
 	switch {
@@ -43,8 +44,10 @@ func formatETA(d time.Duration) string {
 			n = 1
 		}
 		return fmt.Sprintf("about %d sec", n)
+	case s > 24*3600:
+		return "more than a day"
 	case s > 2*3600:
-		return "over 2 hours"
+		return fmt.Sprintf("about %d hours", int(math.Round(s/3600)))
 	}
 	return fmt.Sprintf("about %d min", int(math.Round(s/60)))
 }

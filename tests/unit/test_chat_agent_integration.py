@@ -9,9 +9,9 @@ import pytest
 
 # ChatAgent ships in the flagship gaia-agent-gaia wheel (#6099); skip the
 # whole module when a framework-only env lacks it.
-pytest.importorskip("gaia_agent")
+pytest.importorskip("gaiapy")
 
-from gaia_agent.chat_agent import ChatAgent, ChatAgentConfig  # noqa: E402
+from gaiapy.chat_agent import ChatAgent, ChatAgentConfig  # noqa: E402
 
 from gaia.agents.base.model_features import TIER_ENV  # noqa: E402
 
@@ -29,8 +29,8 @@ def _full_feature_tier(monkeypatch):
 # All ChatAgent construction in these tests patches RAGSDK and RAGConfig so
 # that no real LLM or RAG backend is needed.
 _RAG_PATCHES = (
-    "gaia_agent.chat_agent.RAGSDK",
-    "gaia_agent.chat_agent.RAGConfig",
+    "gaiapy.chat_agent.RAGSDK",
+    "gaiapy.chat_agent.RAGConfig",
 )
 
 
@@ -100,8 +100,8 @@ class TestFileSystemIndexInit:
     def test_fs_index_graceful_import_error(self):
         """If FileSystemIndexService cannot be imported, _fs_index stays None."""
         with (
-            patch("gaia_agent.chat_agent.RAGSDK"),
-            patch("gaia_agent.chat_agent.RAGConfig"),
+            patch("gaiapy.chat_agent.RAGSDK"),
+            patch("gaiapy.chat_agent.RAGConfig"),
             patch.dict(
                 "sys.modules",
                 {"gaia.filesystem.index": None},

@@ -657,6 +657,28 @@ def test_a_summarized_turn_records_its_performance(lemonade, monkeypatch):
     assert [p["time"] for p in performance] == [{"wall_seconds": 1.0}]
 
 
+def test_a_turn_names_the_time_it_waited_on_the_user(lemonade, monkeypatch):
+    events, answers, _performance = _run_answered_turn(
+        monkeypatch,
+        lambda *_a, **_k: {"time": {"wall_seconds": 90.0, "waiting_seconds": 80.0}},
+    )
+
+    done = next(e for e in events if e.get("type") == "done")
+    assert done["stats"]["waiting_seconds"] == 80.0
+    assert answers[0]["inference_stats"]["waiting_seconds"] == 80.0
+
+
+def test_a_turn_that_never_waited_names_no_wait(lemonade, monkeypatch):
+    events, answers, _performance = _run_answered_turn(
+        monkeypatch,
+        lambda *_a, **_k: {"time": {"wall_seconds": 9.0, "waiting_seconds": 0.0}},
+    )
+
+    done = next(e for e in events if e.get("type") == "done")
+    assert "waiting_seconds" not in done["stats"]
+    assert "waiting_seconds" not in answers[0]["inference_stats"]
+
+
 # ── A restart still knows which models are the Agent UI's own ──────────────
 
 

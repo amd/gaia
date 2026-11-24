@@ -102,7 +102,7 @@ If `gaia-agent` itself is missing, the gate stops there and points you at the
 installer — there is no in-TUI download for the agent binary.
 
 The TUI runs `gaia-agent` unless you choose the native agent, `gaiacpp`, with
-`/agent gaiacpp`; then the header shows `(gaiacpp)`. `GAIA_TUI_AGENT=gaiacpp`
+`/agent gaiacpp`; then the header shows `(gaiacpp · Beta)`. `GAIA_TUI_AGENT=gaiacpp`
 (or `gaia-agent`, or a path) picks one for a launch; see the
 [developer manual](https://amd-gaia.ai/docs/reference/tui-dev#which-agent-program-runs).
 

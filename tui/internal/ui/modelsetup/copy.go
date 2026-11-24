@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/amd/gaia/tui/internal/lemonade"
 	"github.com/amd/gaia/tui/internal/setupapi"
 	"github.com/amd/gaia/tui/internal/textutil"
 )
@@ -479,3 +480,16 @@ func plural(n int, word string) string {
 	}
 	return fmt.Sprintf("%d %ss", n, word)
 }
+
+// leftForAppsLine says how much memory other apps keep with the pick loaded;
+// the Agent UI says the same (setup.plan.why.headroom).
+func leftForAppsLine(gb float64) string {
+	return "Leaves " + formatGBShort(gb) + " of memory for your other apps, so your PC stays quick while GAIA runs."
+}
+
+// tightChip and tightLine mark a model that fits but leaves other apps little
+// memory (setup.models.warn.tight in the Agent UI).
+const (
+	tightChip = "tight"
+	tightLine = lemonade.TightNote
+)

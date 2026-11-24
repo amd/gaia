@@ -37,8 +37,11 @@ describe('AgentChoice', () => {
         const cpp = await radio(/gaiacpp/);
         expect(py).toHaveAttribute('aria-checked', 'true');
         expect(cpp).toHaveAttribute('aria-checked', 'false');
-        expect(py).toHaveTextContent(/^gaiapyFull-featured412 MBRecommended$/);
-        expect(cpp).toHaveTextContent(/^gaiacppFast and light7 MBBeta$/);
+        expect(py).toHaveTextContent(/^Full-featuredgaiapy412 MBRecommended$/);
+        expect(cpp).toHaveTextContent(/^Fast and lightgaiacpp7 MBBeta$/);
+        // The friendly name leads; the id is the quiet second label docs and the CLI use.
+        expect(cpp.querySelector('.agent-choice-what')?.firstElementChild).toHaveTextContent('Fast and light');
+        expect(cpp.querySelector('.agent-choice-name')).toHaveTextContent('gaiacpp');
 
         const more = screen.getByRole('button', { name: 'Compare the two' });
         expect(more).toHaveAttribute('aria-expanded', 'false');
@@ -47,15 +50,27 @@ describe('AgentChoice', () => {
 
         fireEvent.click(more);
         expect(more).toHaveAttribute('aria-expanded', 'true');
-        expect(screen.getByText(/gaiapy is the Python agent: every tool and feature, and the most tested/)).toBeVisible();
-        expect(screen.getByText(/gaiacpp is the native C\+\+ agent: it starts in a fraction of a second/)).toBeVisible();
+        expect(screen.getByText(/Full-featured \(gaiapy\) has every tool and feature, and is the most tested/)).toBeVisible();
+        expect(screen.getByText(/Fast and light \(gaiacpp\) starts in a fraction of a second/)).toBeVisible();
         expect(screen.getByText('You can switch later in Settings › Agent & model.')).toBeVisible();
+    });
+
+    it('selects nothing for a saved agent this version cannot run, and lets the user pick one', async () => {
+        mockedApi.getAgentPrograms.mockResolvedValue({ ...AGENT_PROGRAMS, current: 'gaiacode' });
+        render(<AgentChoice inSettings />);
+        const py = await radio(/gaiapy/);
+        expect(py).toHaveAttribute('aria-checked', 'false');
+        expect(await radio(/gaiacpp/)).toHaveAttribute('aria-checked', 'false');
+
+        fireEvent.click(py);
+        await waitFor(() => expect(mockedApi.updateSettings).toHaveBeenCalledWith({ flagship_agent: 'gaiapy' }));
+        await waitFor(() => expect(py).toHaveAttribute('aria-checked', 'true'));
     });
 
     it('shows no size it could not read', async () => {
         mockedApi.getAgentPrograms.mockResolvedValue({ ...AGENT_PROGRAMS, programs: AGENT_PROGRAMS.programs.map((p) => ({ ...p, size_bytes: null })) });
         render(<AgentChoice />);
-        expect(await radio(/gaiapy/)).toHaveTextContent(/^gaiapyFull-featuredRecommended$/);
+        expect(await radio(/gaiapy/)).toHaveTextContent(/^Full-featuredgaiapyRecommended$/);
         expect(document.querySelector('.agent-choice-size')).toBeNull();
     });
 
@@ -75,14 +90,20 @@ describe('AgentChoice', () => {
         expect(mockedApi.updateSettings).toHaveBeenCalledWith({ flagship_agent: 'gaiacpp' });
     });
 
-    it("can't pick gaiacpp where it can't be had, and says why behind the toggle", async () => {
+    it.each([true, false])("can't pick gaiacpp where it can't be had, and says why in view under its row (inSettings %s)", async (inSettings) => {
         mockedApi.getAgentPrograms.mockResolvedValue(withoutGaiacpp('This is a development build; gaiacpp comes with releases.'));
-        render(<AgentChoice inSettings />);
+        render(<AgentChoice inSettings={inSettings} onPending={vi.fn()} />);
         const cpp = await radio(/gaiacpp/);
         expect(cpp).toHaveAttribute('aria-disabled', 'true');
         expect(within(cpp).getByText('Not installed')).toBeVisible();
         const why = "It isn't on this PC and can't be downloaded here: This is a development build; gaiacpp comes with releases.";
         expect(cpp).toHaveAccessibleDescription(why);
+        // Read without opening anything: the comparison stays shut, and the reason is said once.
+        expect(screen.getByRole('button', { name: 'Compare the two' })).toHaveAttribute('aria-expanded', 'false');
+        expect(screen.getAllByText(why)).toHaveLength(1);
+        expect(screen.getByText(why)).toBeVisible();
+        expect(screen.getByText(why).closest('[hidden]')).toBeNull();
+        expect(cpp.nextElementSibling).toBe(screen.getByText(why));
         fireEvent.click(cpp);
         const py = screen.getByRole('radio', { name: /gaiapy/ });
         py.focus();
@@ -90,7 +111,30 @@ describe('AgentChoice', () => {
         expect(mockedApi.updateSettings).not.toHaveBeenCalled();
         expect(mockedApi.startAgentDownload).not.toHaveBeenCalled();
         fireEvent.click(screen.getByRole('button', { name: 'Compare the two' }));
-        expect(screen.getByText(why)).toBeVisible();
+        expect(screen.getAllByText(why)).toHaveLength(1);
+    });
+
+    it.each([
+        ['no_release', 'this GAIA release has no gaiacpp to download', 'لا يتضمّن gaiacpp للتنزيل'],
+        ['unreachable', 'Check your internet connection, or try again later', 'تحقّق من اتصالك بالإنترنت'],
+        ['unverifiable', "can't be verified, so GAIA won't install it", 'تعذّر التحقّق من gaiacpp'],
+    ] as const)('says a reason the server names by code (%s) in the language in use', async (code, en, ar) => {
+        const listing = withoutGaiacpp('english from the server');
+        mockedApi.getAgentPrograms.mockResolvedValue({
+            ...listing,
+            programs: listing.programs.map((p) => (p.id === 'gaiacpp' ? { ...p, unavailable_code: code } : p)),
+        });
+        const { unmount } = render(<AgentChoice inSettings />);
+        await radio(/gaiacpp/);
+        expect(document.querySelector('.agent-choice-why')).toHaveTextContent(en);
+        unmount();
+
+        useChatStore.setState({ locale: 'ar' });
+        render(<AgentChoice inSettings />);
+        await radio(/gaiacpp/);
+        const why = document.querySelector('.agent-choice-why');
+        expect(why).toHaveTextContent(ar);
+        expect(why).not.toHaveTextContent('english from the server');
     });
 
     it("shows the server's refusal and puts the choice back", async () => {

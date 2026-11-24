@@ -360,8 +360,8 @@ def test_always_allow_does_not_cover_a_snippet_naming_a_protected_path(home):
 @pytest.fixture(scope="module")
 def flagship_tools(tmp_path_factory):
     """The flagship's tools, registered by one ChatAgent (building one takes ~10 s)."""
-    pytest.importorskip("gaia_agent")
-    from gaia_agent.chat_agent import ChatAgent, ChatAgentConfig
+    pytest.importorskip("gaiapy")
+    from gaiapy.chat_agent import ChatAgent, ChatAgentConfig
 
     from gaia.agents.base.tools import _TOOL_REGISTRY
 
@@ -371,8 +371,8 @@ def flagship_tools(tmp_path_factory):
     with pytest.MonkeyPatch.context() as mp:
         mp.chdir(project)
         with (
-            patch("gaia_agent.chat_agent.RAGSDK"),
-            patch("gaia_agent.chat_agent.RAGConfig"),
+            patch("gaiapy.chat_agent.RAGSDK"),
+            patch("gaiapy.chat_agent.RAGConfig"),
         ):
             ChatAgent(ChatAgentConfig(silent_mode=True, allowed_paths=[str(project)]))
         try:

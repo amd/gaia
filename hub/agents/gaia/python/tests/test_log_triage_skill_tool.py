@@ -13,7 +13,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 
 import pytest
-from gaia_agent.agent import GaiaAgent, GaiaAgentConfig
+from gaiapy.agent import GaiaAgent, GaiaAgentConfig
 
 from gaia.agents.base.tools import _TOOL_REGISTRY
 

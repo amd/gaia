@@ -24,7 +24,7 @@ import importlib
 from dataclasses import fields
 
 import pytest
-from gaia_agent.agent import GaiaAgent, GaiaAgentConfig
+from gaiapy.agent import GaiaAgent, GaiaAgentConfig
 
 from gaia.agents.base.tools import _TOOL_REGISTRY
 from gaia.api.agent_registry import AGENT_MODELS, AgentRegistry, _apply_env_overrides
@@ -80,7 +80,7 @@ def test_registry_class_path_resolves_to_this_agent():
 
     assert resolved is GaiaAgent, (
         f"AGENT_MODELS['{MODEL_ID}']['class_name'] is {class_path!r}, which no "
-        "longer resolves to gaia_agent.agent.GaiaAgent."
+        "longer resolves to gaiapy.agent.GaiaAgent."
     )
 
 

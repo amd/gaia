@@ -1918,3 +1918,26 @@ func TestCantRunHereOnlyForRuntimeCodes(t *testing.T) {
 		}
 	}
 }
+
+// A PC whose model shares its RAM says how much it keeps for other apps,
+// behind d with the other machine details; a PC with no reserve never does.
+func TestAPCThatSharesRAMSaysWhatItKeepsForApps(t *testing.T) {
+	h := newHarness(t, ModeFirstRun, &f.Fake{P: smallPC(), G: discreteGPU()})
+	h.expectNot(leftForAppsLine(13.1))
+	h.key("d")
+	h.expect(leftForAppsLine(13.1))
+
+	big := newHarness(t, ModeFirstRun, &f.Fake{P: coldPlan(), G: discreteGPU()})
+	big.key("d")
+	big.expectNot("for your other apps")
+}
+
+// A model that fits but leaves other apps little room is marked and explained.
+func TestATightModelIsMarkedAndSaysWhy(t *testing.T) {
+	h := newHarness(t, ModeFirstRun, &f.Fake{P: smallPC(), G: discreteGPU()})
+	h.focusID(qwen4b)
+	h.expect("[!] " + tightChip)
+	h.expect(tightLine)
+	h.focusID(qwen2b)
+	h.expectNot(tightLine)
+}

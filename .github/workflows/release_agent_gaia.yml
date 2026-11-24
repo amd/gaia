@@ -352,6 +352,7 @@ jobs:
   scorecard-gate:
     name: Scorecard gate
     runs-on: ubuntu-latest
+    needs: [version]
     steps:
       - uses: actions/checkout@v7
         with:
@@ -396,19 +397,38 @@ jobs:
             echo "args=" >> "$GITHUB_OUTPUT"
             echo "Acceptance enforcement OFF (report-only) — presence+regression gate only."
           fi
+      - name: Decide whether the card must match the release version
+        id: version_check
+        shell: bash
+        env:
+          PREV: ${{ steps.prev_tag.outputs.prev_tag }}
+          EXPECTED_VERSION: ${{ needs.version.outputs.version }}
+          CARD: hub/agents/gaia/npm/SCORECARD.md
+        run: |
+          set -euo pipefail
+          # A card carried over unchanged from the previous release is warned
+          # about, not rejected; a newly committed card must match the release.
+          if [ -n "${PREV}" ] && git diff --quiet "${PREV}" -- "${CARD}"; then
+            CARD_VERSION="$(sed -n 's/^  version: *//p' "${CARD}" | head -n1)"
+            echo "::warning title=Flagship scorecard is stale::${CARD} is unchanged since ${PREV} and measures agent ${CARD_VERSION}, not ${EXPECTED_VERSION}. Commit a fresh full-corpus card; once it changes, the release requires it to match."
+            echo "args=" >> "$GITHUB_OUTPUT"
+          else
+            echo "args=--expected-version ${EXPECTED_VERSION}" >> "$GITHUB_OUTPUT"
+          fi
       - name: Run scorecard gate
         shell: bash
         run: |
           set -euo pipefail
           PREV="${{ steps.prev_tag.outputs.prev_tag }}"
           BARS="${{ steps.bars.outputs.args }}"
+          VERSION_ARGS="${{ steps.version_check.outputs.args }}"
           if [ -n "${PREV}" ]; then
             python -m gaia.eval.scorecard_gate \
               --scorecard hub/agents/gaia/npm/SCORECARD.md \
-              --baseline-ref "${PREV}" ${BARS}
+              --baseline-ref "${PREV}" ${VERSION_ARGS} ${BARS}
           else
             python -m gaia.eval.scorecard_gate \
-              --scorecard hub/agents/gaia/npm/SCORECARD.md ${BARS}
+              --scorecard hub/agents/gaia/npm/SCORECARD.md ${VERSION_ARGS} ${BARS}
           fi
 
   # ── Stage 1c: judged gaia eval (report only, self-hosted) ──────────
@@ -538,12 +558,12 @@ jobs:
           note: "The gaia agent release eval passed on `${{ github.event_name == 'push' && github.ref_name || format('agent-pkg-gaia-v{0} (dispatch)', inputs.version) }}` with no regression (run ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}). Closing automatically; reopen if this still needs a look."
 
   # ── Stage 2: native sidecar freeze on every platform ────────────────
-  # The matrix lives in build_flagship_sidecar.yml, shared with publish.yml's
+  # The matrix lives in build_gaiapy.yml, shared with publish.yml's
   # release-candidate build so both freeze the binary the same way.
   freeze:
     name: Freeze sidecar
     needs: [version]
-    uses: ./.github/workflows/build_flagship_sidecar.yml
+    uses: ./.github/workflows/build_gaiapy.yml
 
   # ── Stage 3: verify the pinned terminal-hub component ───────────────
   # The TUI is not built here. This job proves the pinned terminal-hub version is
@@ -1289,7 +1309,7 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
 
   # ── Stage 6: pin the published hashes on main ──────────────────────
-  # installer/tui/fetch_sidecar.py and util/check_flagship_release.py read the
+  # installer/tui/fetch_gaiapy.py and util/check_flagship_release.py read the
   # COMMITTED lock, so without this the installer build and the final core
   # release fail until someone pins the hashes by hand (#3949). Nothing pushes
   # to main directly: this opens a PR that the merge queue lands. Separate from

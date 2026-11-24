@@ -30,7 +30,7 @@ func nativeAgent(t *testing.T) catalog.Agent {
 }
 
 // gaiacppParser is where gaiacpp declares the flags it accepts.
-const gaiacppParser = "cpp/agents/gaia/main.cpp"
+const gaiacppParser = "cpp/agents/gaiacpp/main.cpp"
 
 var gaiacppFlagRe = regexp.MustCompile(`\ba == "(--?[A-Za-z][A-Za-z0-9-]*)"`)
 
@@ -159,6 +159,34 @@ func TestTheNativeAgentIsLaunchedOnStdioWithTheFlagsItAccepts(t *testing.T) {
 	want := []string{"--stdio", "--dev", "--full-access", "--model", "fireworks.deepseek-v4p1-flash"}
 	if !reflect.DeepEqual(sub.args, want) {
 		t.Errorf("argv = %v, want %v", sub.args, want)
+	}
+}
+
+// With no model named, gaiacpp (which reads no GAIA config) is told GAIA's
+// local chat model, so a small PC starts on its Qwen3.5 pick, not Gemma; a
+// Claude default names nothing.
+func TestTheNativeAgentStartsOnGAIAsLocalModel(t *testing.T) {
+	for _, tc := range []struct {
+		config string
+		want   []string
+	}{
+		{`{"default_model":"Qwen3.5-2B-GGUF"}`, []string{"--stdio", "--model", "Qwen3.5-2B-GGUF"}},
+		{`{"default_model":"claude-sonnet-4-6"}`, []string{"--stdio"}},
+	} {
+		path := filepath.Join(t.TempDir(), "config.json")
+		if err := os.WriteFile(path, []byte(tc.config), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		t.Setenv("GAIA_CONFIG_FILE", path)
+		c, err := ForAgent(nativeAgent(t), ForAgentOptions{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		sub := c.(*SubprocessClient)
+		if !reflect.DeepEqual(sub.args, tc.want) {
+			t.Errorf("%s: argv = %v, want %v", tc.config, sub.args, tc.want)
+		}
+		c.Close()
 	}
 }
 

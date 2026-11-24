@@ -55,6 +55,7 @@ Memory is on by default, in the terminal UI and the Agent UI alike. Turning it o
 
 ```bash
 curl -X PUT http://localhost:4200/api/memory/settings \
+  -H "Authorization: Bearer $(cat ~/.gaia/agent-ui-token)" \
   -H "Content-Type: application/json" \
   -H "X-Gaia-UI: 1" \
   -d '{"memory_enabled": false}'
@@ -63,7 +64,7 @@ curl -X PUT http://localhost:4200/api/memory/settings \
 Verify it stuck:
 
 ```bash
-curl http://localhost:4200/api/memory/settings
+curl -H "Authorization: Bearer $(cat ~/.gaia/agent-ui-token)" http://localhost:4200/api/memory/settings
 # → {"memory_enabled": false, ...}
 ```
 
@@ -357,7 +358,9 @@ Agent: "Saved -- I've marked Sarah's email as private and linked it to her profi
 <Warning>
   Sensitive data is still stored in plaintext in `~/.gaia/memory.db`. The `sensitive` flag controls **visibility**, not encryption. Do not store passwords or tokens in agent memory -- use your OS keyring for credentials.
 
-  GAIA refuses to remember anything shaped like a credential: API keys, passwords, PINs and passcodes, card security codes, card numbers and SSNs. The same shapes are replaced with `[secret removed]` before a turn is saved to the conversation log, so past-conversation search can't read them back. Detection is by shape, so a secret with no recognizable form can still slip through.
+  GAIA refuses to remember anything shaped like a credential: API keys, passwords, PINs and passcodes, card security codes, card numbers and SSNs. The same shapes are replaced with `[secret removed]` before a turn is saved to the conversation log, so past-conversation search can't read them back. Detection is by shape, so a secret with no recognizable form can still slip through. If the agent then tells you it saved the secret anyway, GAIA sends the answer back once, and if it still says so, adds a line saying nothing was saved. The same happens when you ask it to remember something and it never saves it.
+
+  To keep one detail out, say so in the same message: "my phone is 555-1234, leave it out" or "… don't save that". GAIA refuses to save that detail, both when the agent tries and in the background memory pass, and the reply says it was left out. The rest of the message is still saved. A decline run straight on after a word ("my name is Sam leave it out") is left to the model, so add a comma before it.
 </Warning>
 
 ---
