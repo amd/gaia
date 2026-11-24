@@ -1378,7 +1378,7 @@ private:
                     std::condition_variable& cv;
                     bool& over;
                     std::thread& t;
-                    ~StopLimiter() {
+                    void stop() {
                         {
                             std::lock_guard<std::mutex> lock(mu);
                             over = true;
@@ -1386,8 +1386,10 @@ private:
                         cv.notify_all();
                         if (t.joinable()) t.join();
                     }
+                    ~StopLimiter() { stop(); }
                 } stopLimiter{limitMu, limitCv, turnOver, limiter};
                 json r = s->agent->processQuery(text, maxSteps);
+                stopLimiter.stop();  // a finished answer is never relabelled as stopped at the limit
                 const double elapsed = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
                 json usage = {{"steps", r.value("steps_taken", 0)}, {"tools_used", s->console->toolsUsed()},
                               {"elapsed", elapsed}};
