@@ -550,6 +550,28 @@ TEST_F(GaiacppCli, AHostedModelThroughLemonadeGetsTheProvidersWindowUnlessOneIsG
     }
 }
 
+TEST_F(GaiacppCli, TheReplyLimitFollowsTheLoadedWindowUnlessOneIsGiven) {
+    auto limitIn = [](const bench::MockLlmServer& mock) {
+        return json::parse(mock.receivedBodies().back()).value("max_tokens", 0);
+    };
+    const std::string at128k =
+        R"({"status":"ok","all_models_loaded":[{"model_name":"mock-model","recipe_options":{"ctx_size":131072}}]})";
+    {
+        bench::MockLlmServer mock;
+        mock.setHealth(at128k);
+        mock.pushResponse(withUsage(finalAnswer("ok"), 50, 0, 5));
+        ASSERT_EQ(run(mock, "").exitCode, 0);
+        EXPECT_EQ(limitIn(mock), 32768) << "a quarter of the 128K window the model is loaded with";
+    }
+    {
+        bench::MockLlmServer mock;
+        mock.setHealth(at128k);
+        mock.pushResponse(withUsage(finalAnswer("ok"), 50, 0, 5));
+        ASSERT_EQ(run(mock, "", " --max-tokens 5000").exitCode, 0);
+        EXPECT_EQ(limitIn(mock), 5000) << "a limit that was asked for is kept";
+    }
+}
+
 TEST_F(GaiacppCli, MaxHelpersMustBeAWholeNumber) {
     bench::MockLlmServer mock;
     const gaia::ProcessResult r = run(mock, "", " --max-helpers many");

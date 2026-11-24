@@ -1472,6 +1472,19 @@ TEST(GaiaAgentTest, ReplyAndOutputLimitsShrinkWithTheContextWindow) {
     EXPECT_EQ(c.toolResultCharLimit(), 16000);
 }
 
+TEST(GaiaAgentTest, TheDefaultReplyLimitIsSizedFromTheWindowLikeThePythonAgent) {
+    for (const auto& [ctx, limit] : std::vector<std::pair<int, int>>{
+             {8192, 4096}, {16384, 8192}, {32768, 8192}, {65536, 16384}, {131072, 32768}, {262144, 32768}}) {
+        EXPECT_EQ(localMaxOutputTokens(ctx), limit) << ctx;
+    }
+    AgentConfig c;
+    c.modelId = "some-unlisted-model";
+    c.contextSize = 32768;
+    c.loadedContextSize = 131072;
+    c.maxTokens = localMaxOutputTokens(c.loadedContextSize);
+    EXPECT_EQ(c.replyTokenLimit(), 32768) << "capped by the loaded window, not the configured one";
+}
+
 TEST(GaiaAgentTest, TheRequestCarriesTheWindowSizedReplyLimit) {
     Workdir w;
     bench::MockLlmServer mock;

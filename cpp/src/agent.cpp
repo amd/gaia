@@ -125,7 +125,10 @@ Agent::Agent(const AgentConfig& config)
     if (!envMaxTokens.empty()) {
         try {
             int val = std::stoi(envMaxTokens);
-            if (val > 0) { config_.maxTokens = val; }
+            if (val > 0) {
+                config_.maxTokens = val;
+                config_.maxTokensFromWindow = false;
+            }
             else { std::cerr << "[GAIA] GAIA_MAX_TOKENS must be > 0; ignoring value " << val << "\n"; }
         } catch (const std::exception&) {
             std::cerr << "[GAIA] GAIA_MAX_TOKENS='" << envMaxTokens << "' is not a valid integer; ignoring\n";
@@ -2008,6 +2011,15 @@ json Agent::processQueryInternal(const std::vector<Message>& userMessages, int m
     // Settled once so the prompt and every request of the turn agree.
     if (cfg.nativeToolCalls == NativeToolCalls::Auto) {
         cfg.nativeToolCalls = autoNativeToolCalls(cfg) ? NativeToolCalls::Always : NativeToolCalls::Never;
+    }
+
+    if (cfg.maxTokensFromWindow) {
+        // Another client may have loaded the model with a larger window than the configured one.
+        const LemonadeHealth h = lemonade_.healthCheck();
+        if (h.running && h.modelId == cfg.modelId && h.contextSize > cfg.contextSize) {
+            cfg.loadedContextSize = h.contextSize;
+        }
+        cfg.maxTokens = localMaxOutputTokens(std::max(cfg.contextSize, cfg.loadedContextSize));
     }
 
     int stepsLimit = (maxSteps > 0) ? maxSteps : cfg.maxSteps;

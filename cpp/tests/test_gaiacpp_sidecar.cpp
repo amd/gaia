@@ -721,6 +721,43 @@ TEST_F(GaiacppSidecar, AChatsAgentHasDelegateTaskByDefault) {
     EXPECT_TRUE(offered);
 }
 
+// A thinking model on a large window must not spend its whole reply reasoning.
+TEST_F(GaiacppSidecar, TheReplyLimitFollowsTheWindowTheModelIsLoadedWith) {
+    const auto loadedAt = [](int ctx) {
+        return R"({"status":"ok","all_models_loaded":[{"model_name":"mock-model","recipe_options":{"ctx_size":)" +
+               std::to_string(ctx) + "}}]}";
+    };
+    mock().setHealth(loadedAt(131072));
+    mock().pushResponse(answerReply("one"));
+    mock().pushResponse(answerReply("two"));
+    ASSERT_NO_FATAL_FAILURE(startSidecar());
+    {
+        Turn t(port_, queryBody("run-window-1", "hi", {{"session_id", "chat-window"}}));
+        ASSERT_TRUE(t.waitDone()) << t.describe();
+    }
+    mock().setHealth(loadedAt(65536));
+    {
+        Turn t(port_, queryBody("run-window-2", "hi again", {{"session_id", "chat-window"}}));
+        ASSERT_TRUE(t.waitDone()) << t.describe();
+    }
+    auto sent = modelRequests();
+    ASSERT_EQ(sent.size(), 2u);
+    EXPECT_EQ(sent[0].value("max_tokens", 0), 32768) << "a quarter of a 128K window";
+    EXPECT_EQ(sent[1].value("max_tokens", 0), 16384) << "a quarter of a 64K window";
+}
+
+TEST_F(GaiacppSidecar, GaiaMaxTokensStillSetsTheReplyLimit) {
+    mock().setHealth(
+        R"({"status":"ok","all_models_loaded":[{"model_name":"mock-model","recipe_options":{"ctx_size":131072}}]})");
+    mock().pushResponse(answerReply("one"));
+    ASSERT_NO_FATAL_FAILURE(startSidecar({{"GAIA_MAX_TOKENS", std::string("5000")}}));
+    Turn t(port_, queryBody("run-window-env", "hi", {{"session_id", "chat-window-env"}}));
+    ASSERT_TRUE(t.waitDone()) << t.describe();
+    auto sent = modelRequests();
+    ASSERT_EQ(sent.size(), 1u);
+    EXPECT_EQ(sent[0].value("max_tokens", 0), 5000);
+}
+
 // ---- 4. a tool turn ----
 
 TEST_F(GaiacppSidecar, ReadOnlyToolStreamsToolCallThenResultThenFinal) {

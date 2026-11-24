@@ -519,7 +519,8 @@ private:
         cfg.baseUrl = server.baseUrl;
         cfg.modelId = defaultModel();
         cfg.contextSize = 32768;
-        cfg.maxTokens = 16384;
+        cfg.maxTokens = localMaxOutputTokens(cfg.contextSize);
+        cfg.maxTokensFromWindow = true;  // GAIA_MAX_TOKENS still sets it
         cfg.replyLimitRemedy = GaiaAgent::kChatReplyLimitRemedy;
         cfg.temperature = 0.2;
         cfg.silentMode = true;
