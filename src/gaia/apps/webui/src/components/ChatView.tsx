@@ -40,7 +40,7 @@ import { Composer } from './Composer';
 import { ModelChip } from './ModelChip';
 import { SessionFolderChip } from './FolderChip';
 import { PermissionModeChip } from './PermissionModeChip';
-import { ResearchChip, useResearchMode, withResearch } from './ResearchChip';
+import { readSkillsForResearch, researchNeedsSkills, ResearchChip, useResearchMode, withResearch } from './ResearchChip';
 import { HistoryNotice } from './ChatNotices';
 import { PermissionPrompt } from './PermissionPrompt';
 import { QueuedMessages } from './QueuedMessages';
@@ -148,6 +148,8 @@ export function ChatView({ sessionId }: ChatViewProps) {
 
     const session = sessions.find((s) => s.id === sessionId);
     const [input, setInput] = useChatDraft(sessionId, session?.private);
+    const inputNowRef = useRef(input);
+    inputNowRef.current = input;
     const [editingTitle, setEditingTitle] = useState(false);
     const [titleDraft, setTitleDraft] = useState('');
     const [isDragOver, setIsDragOver] = useState(false);
@@ -200,6 +202,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
     const toolOccurredRef = useRef(false);
     const sendMessageRef = useRef<(text?: string, options?: SendOptions) => Promise<boolean>>(async () => false);
     const checkingModelRef = useRef(false);
+    const readingSkillsRef = useRef(false);
     // Messages typed while a reply runs, kept per chat in the store, and whether the user stopped that reply.
     const queue = useChatStore((s) => s.messageQueues[sessionId] ?? NO_QUEUE);
     const setQueue = useCallback(
@@ -509,6 +512,23 @@ export function ChatView({ sessionId }: ChatViewProps) {
         const text = (fromComposer ? input : givenText ?? '').trim();
         const hasAttachments = fromComposer && attach.hasUploaded;
         const hasImage = fromComposer && attach.hasImage;
+        if (fromComposer && readingSkillsRef.current) return false;
+        let leftDuringRead = false;
+        if (fromComposer && researchNeedsSkills(text, sessionId)) {
+            readingSkillsRef.current = true;
+            setActionError(null);
+            try {
+                await readSkillsForResearch(text, sessionId);
+            } catch (err) {
+                setActionError(t('composer.researchSkillsUnavailable', { error: requestErrorParam(err) }));
+                return false;
+            } finally {
+                readingSkillsRef.current = false;
+            }
+            // Edited during the wait: the box now holds the message the user means, so it stays unsent.
+            if (inputNowRef.current !== input) return false;
+            leftDuringRead = isStale();
+        }
         const takeDraft = () => {
             if (!fromComposer) return text;
             const composed = attach.compose(withResearch(text, sessionId));
@@ -516,6 +536,12 @@ export function ChatView({ sessionId }: ChatViewProps) {
             attach.clear();
             inputRef.current?.focus();
             return composed;
+        };
+        const queueForLeftChat = () => {
+            const queued = takeDraft();
+            if (fromComposer && !session?.private) clearSavedDraft(chatDraftKey(sessionId));
+            setQueue((q) => messageQueue.enqueue(q, queued, 'queued'));
+            return true;
         };
 
         // User just sent a message — re-pin scroll to the bottom so the
@@ -530,6 +556,8 @@ export function ChatView({ sessionId }: ChatViewProps) {
             notTaken({ kind: 'failed', error: messageQueue.retiredAgentError(retiredAgent) });
             return false;
         }
+        // The user opened another chat during the skill read: this chat's queue sends it.
+        if (leftDuringRead) return queueForLeftChat();
         // Waiting messages go first, so a new one joins the end of the line.
         const waiting = !options?.opening && (useChatStore.getState().messageQueues[sessionId] ?? NO_QUEUE).length > 0;
         if (reattach) {
@@ -560,12 +588,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
                 checkingModelRef.current = false;
             }
             // The user opened another chat during the check: this chat's queue sends it, out of that chat's view.
-            if (isStale()) {
-                const queued = takeDraft();
-                if (fromComposer && !session?.private) clearSavedDraft(chatDraftKey(sessionId));
-                setQueue((q) => messageQueue.enqueue(q, queued, 'queued'));
-                return true;
-            }
+            if (isStale()) return queueForLeftChat();
         }
 
         // Build message text with attachment references
@@ -1237,7 +1260,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
         streamController = controller;
         abortRef.current = controller;
         return true;
-    }, [input, attach, isStreaming, sessionId, session, retiredAgent, addMessage, removeMessage, setMessages, setStreaming, flushStreamBuffer, clearStreamContent, updateSessionInList, addAgentStep, updateLastAgentStep, appendThinkingContent, updateLastToolStep, clearAgentSteps, appendCard, clearCards, addNotification, isStale]);
+    }, [input, attach, isStreaming, sessionId, session, retiredAgent, addMessage, removeMessage, setMessages, setStreaming, flushStreamBuffer, clearStreamContent, updateSessionInList, addAgentStep, updateLastAgentStep, appendThinkingContent, updateLastToolStep, clearAgentSteps, appendCard, clearCards, addNotification, isStale, t]);
 
     // Keep ref in sync so event listeners always call the latest sendMessage
     sendMessageRef.current = sendMessage;

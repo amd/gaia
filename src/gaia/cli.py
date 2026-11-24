@@ -1004,7 +1004,7 @@ def _launch_agent_ui(port=4200, base_url=None, log=None, debug=False, webui_dist
         import uvicorn
 
         # create_app() refuses an unsafe GAIA_HOME, so nothing is written there first.
-        app = create_app(webui_dist=webui_dist)
+        app = create_app(webui_dist=webui_dist, port=port)
         # Only to a terminal: the desktop app logs this process's stdout.
         if sys.stdout.isatty():
             print(

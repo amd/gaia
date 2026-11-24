@@ -9,6 +9,7 @@ import { useChatStore } from '../../stores/chatStore';
 import { useModelStore } from '../../stores/modelStore';
 import * as api from '../../services/api';
 import { FlagshipMissing } from '../../utils/newTask';
+import { forgetInstalledSkills } from '../../utils/research';
 import newChatCss from '../NewChat.css?raw';
 import type { ActiveModel, AgentProgram, AgentPrograms, Document, Settings, StartScreen, SystemStatus } from '../../types';
 
@@ -722,6 +723,65 @@ describe('NewChat research mode', () => {
         fireEvent.change(box, { target: { value: 'hello' } });
         fireEvent.keyDown(box, { key: 'Enter' });
         await waitFor(() => expect(onSend).toHaveBeenCalledWith('hello'));
+    });
+
+    const skillList = (...names: string[]) => ({ skills: names.map((name) => ({ name })), invalid: {} }) as Awaited<ReturnType<typeof api.listSkills>>;
+
+    it('runs a /skill sent before the skill list has loaded, in any case', async () => {
+        forgetInstalledSkills();
+        let loaded: (value: Awaited<ReturnType<typeof api.listSkills>>) => void = () => {};
+        vi.mocked(api.listSkills).mockReturnValue(new Promise((resolve) => { loaded = resolve; }));
+        const onSend = vi.fn().mockResolvedValue(undefined);
+        render(<NewChat onSend={onSend} />);
+        fireEvent.click(await screen.findByRole('button', { name: 'Research' }));
+        const box = screen.getByRole('textbox', { name: 'Message' });
+        fireEvent.change(box, { target: { value: '/Docx draft a memo' } });
+        fireEvent.keyDown(box, { key: 'Enter' });
+        fireEvent.keyDown(box, { key: 'Enter' });
+        await act(async () => {});
+        expect(onSend).not.toHaveBeenCalled();
+        loaded(skillList('docx'));
+        await waitFor(() => expect(onSend).toHaveBeenCalledWith('/docx draft a memo'));
+        expect(onSend).toHaveBeenCalledTimes(1);
+    });
+
+    it('keeps text typed while the skill list loads and sends nothing over it', async () => {
+        forgetInstalledSkills();
+        let loaded: (value: Awaited<ReturnType<typeof api.listSkills>>) => void = () => {};
+        vi.mocked(api.listSkills).mockReturnValue(new Promise((resolve) => { loaded = resolve; }));
+        const onSend = vi.fn().mockResolvedValue(undefined);
+        render(<NewChat onSend={onSend} />);
+        fireEvent.click(await screen.findByRole('button', { name: 'Research' }));
+        const box = screen.getByRole('textbox', { name: 'Message' });
+        fireEvent.change(box, { target: { value: '/docx draft a memo' } });
+        fireEvent.keyDown(box, { key: 'Enter' });
+        await act(async () => {});
+        fireEvent.change(box, { target: { value: '/docx draft a memo to the team' } });
+        loaded(skillList('docx'));
+        await act(async () => {});
+        expect(box).toHaveValue('/docx draft a memo to the team');
+        expect(onSend).not.toHaveBeenCalled();
+
+        fireEvent.keyDown(box, { key: 'Enter' });
+        await waitFor(() => expect(onSend).toHaveBeenCalledWith('/docx draft a memo to the team'));
+    });
+
+    it('keeps a /name message and says why when the skill list cannot be read', async () => {
+        forgetInstalledSkills();
+        vi.mocked(api.listSkills).mockRejectedValue(new Error('GAIA is not running'));
+        const onSend = vi.fn().mockResolvedValue(undefined);
+        render(<NewChat onSend={onSend} />);
+        fireEvent.click(await screen.findByRole('button', { name: 'Research' }));
+        const box = screen.getByRole('textbox', { name: 'Message' });
+        fireEvent.change(box, { target: { value: '/docx draft a memo' } });
+        fireEvent.keyDown(box, { key: 'Enter' });
+        expect(await screen.findByRole('alert')).toHaveTextContent(/Not sent.*could not read your skills \(GAIA is not running\)/);
+        expect(onSend).not.toHaveBeenCalled();
+        expect(box).toHaveValue('/docx draft a memo');
+
+        vi.mocked(api.listSkills).mockResolvedValue(skillList('docx'));
+        fireEvent.keyDown(box, { key: 'Enter' });
+        await waitFor(() => expect(onSend).toHaveBeenCalledWith('/docx draft a memo'));
     });
 });
 
