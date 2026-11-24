@@ -37,6 +37,7 @@ def client(home):
     return TestClient(
         create_app(db_path=":memory:"),
         base_url="http://127.0.0.1",
+        client=("127.0.0.1", 50000),
         headers=UI,
         raise_server_exceptions=True,
     )
