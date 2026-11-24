@@ -71,7 +71,7 @@ func TestTheNativeAgentIsNeverPointedAtClaude(t *testing.T) {
 	}
 }
 
-// Two programs can answer as "agent gaia"; the header says when it is gaiacpp.
+// Two programs can answer as "agent gaia"; the header says which one is.
 func TestTheHeaderNamesTheNativeAgent(t *testing.T) {
 	m := nativeChat(t)
 	m.agentVersion = "0.25.4"
@@ -84,7 +84,7 @@ func TestTheHeaderNamesTheNativeAgent(t *testing.T) {
 
 	python, _ := newTestModel(t)
 	python.agentID, python.agentVersion = setupAgentID, "0.25.4"
-	if got := python.agentIdentity(); got != "agent gaia v0.25.4" {
-		t.Errorf("the Python agent's identity changed: %q", got)
+	if got := python.agentIdentity(); got != "agent gaia v0.25.4 · Full-featured (gaiapy)" {
+		t.Errorf("the Python agent's identity does not name it: %q", got)
 	}
 }

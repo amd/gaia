@@ -114,7 +114,7 @@ func RunFlagship(dev bool, mockAgent string, agentChoice AgentChoice, ctrl *cont
 		WithCatalog(cat).
 		WithAgentPin(agentChoice.Pin).
 		WithFullAccess(fullAccess).
-		WithFullAccessNotice(joinNotices(notice, agentNotice)).
+		WithFullAccessNotice(joinNotices(notice, launchAgentNotice(agentChoice, agentNotice))).
 		WithClaude(useClaude, claudeModel).
 		WithTerminalVersion(update.Current)).
 		WithTrace(trace).
@@ -148,6 +148,15 @@ func loadCatalog(mockAgent, agentChoice, agentID string) (*catalog.Catalog, stri
 		return cat, "", nil
 	}
 	return catalog.ForFlagship(agentChoice)
+}
+
+// launchAgentNotice is what the launch says about how the agent program was
+// chosen. The daemon notice answers a request; a saved choice made none.
+func launchAgentNotice(choice AgentChoice, notice string) string {
+	if choice.Pin == "" && notice == catalog.DaemonPythonNotice {
+		return ""
+	}
+	return notice
 }
 
 func joinNotices(notices ...string) string {

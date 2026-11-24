@@ -1,7 +1,7 @@
- GAIA  │ agent gaia
+ GAIA  │ agent gaia · Full-featured (gaiapy)
 ────────────────────────────────────────────────────────────────────────────────────────────────────
 Welcome to GAIA
-Connected to: agent gaia
+Connected to: agent gaia · Full-featured (gaiapy)
 
 Try one — press its number:
   1  Today's tech news in brief

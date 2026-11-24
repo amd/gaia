@@ -60,6 +60,17 @@ func FlagshipAgentLabel(choice string) string {
 	return choice
 }
 
+// flagshipAgentName is a program's name alone, for a line that has no room for its id.
+func flagshipAgentName(choice string) string {
+	switch choice {
+	case FlagshipAgentPython:
+		return catalog.PythonAgentName
+	case FlagshipAgentNative:
+		return catalog.NativeAgentName
+	}
+	return choice
+}
+
 // CheckFlagshipAgent refuses anything but the two saved values.
 func CheckFlagshipAgent(choice string) error {
 	if FlagshipAgentProgram(choice) == "" {

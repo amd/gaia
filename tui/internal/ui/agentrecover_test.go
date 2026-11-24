@@ -17,6 +17,19 @@ import (
 var missingNative = &catalog.MissingProgramError{Binary: catalog.NativeAgentBinary,
 	Lookup: catalog.Lookup{Looked: []string{"/h/bin"}}}
 
+// The saved choice is not a request: relaunching on Full-featured after /agent
+// must not open with "[!] Full-featured (gaiapy) was asked for".
+func TestASavedPythonChoiceOpensWithoutTheDaemonNotice(t *testing.T) {
+	saved := AgentChoice{Program: catalog.PythonAgentChoice}
+	if got := launchAgentNotice(saved, catalog.DaemonPythonNotice); got != "" {
+		t.Errorf("a saved choice got the notice: %q", got)
+	}
+	pinned := AgentChoice{Program: catalog.PythonAgentChoice, Pin: "--agent-program"}
+	if got := launchAgentNotice(pinned, catalog.DaemonPythonNotice); got != catalog.DaemonPythonNotice {
+		t.Errorf("an --agent-program request lost its notice: %q", got)
+	}
+}
+
 func TestOnlyASavedGaiacppIsRecovered(t *testing.T) {
 	saved := AgentChoice{Program: catalog.NativeAgentBinary}
 	if why, detail, ok := savedNativeBroken(saved, missingNative); !ok || !strings.Contains(why, "is not on this PC") || detail != "Looked in: /h/bin" {

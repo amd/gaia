@@ -1,4 +1,4 @@
- GAIA  │ agent gaia
+ GAIA  │ agent gaia · Full-featured (gaiapy)
 ────────────────────────────────────────────────────────────────────────────────────────────────────
 ▶ You: Review the 8 contracts in ./contracts and build a risk register in contract_review.xlsx
 

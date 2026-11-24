@@ -80,7 +80,7 @@ func TestHeaderFallsBackToABareClaudeChipWithNoModelFlag(t *testing.T) {
 	if !strings.Contains(header, "│ claude") {
 		t.Errorf("a --use-claude launch must still be marked remote: %q", header)
 	}
-	if strings.Contains(header, "·") {
+	if _, chip, _ := strings.Cut(header, "│ claude"); strings.Contains(chip, "·") {
 		t.Errorf("no model was named, so none may be shown: %q", header)
 	}
 }

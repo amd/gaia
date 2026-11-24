@@ -3633,8 +3633,11 @@ func (m ChatModel) renderHeader() string {
 	if m.width > 0 && ansi.StringWidth(title) > m.width {
 		// Which agent is answering matters less than which model is: on a
 		// narrow terminal the identity chip is what gives way, never the model
-		// chip it would otherwise crowd out.
-		title = prefix + rest
+		// chip it would otherwise crowd out. The program's name goes first.
+		title = prefix + m.renderChip(m.bareIdentity()) + rest
+		if ansi.StringWidth(title) > m.width {
+			title = prefix + rest
+		}
 	}
 	if m.width > 0 {
 		// Never let the header wrap: contentHeaderRows budgets it as exactly
@@ -3654,6 +3657,31 @@ func (m ChatModel) renderHeader() string {
 // else the stdio agent's model-state ping. With neither there is no version,
 // never a guess from an install record.
 func (m ChatModel) agentIdentity() string {
+	return m.bareIdentity() + m.programLabel()
+}
+
+// programLabel names which of the flagship's two programs answers, or "".
+func (m ChatModel) programLabel() string {
+	switch {
+	case m.nativeAgent():
+		return " · " + catalog.NativeAgentLabel + " · Beta"
+	case strings.EqualFold(m.agentID, catalog.FlagshipID):
+		return " · " + catalog.PythonAgentLabel
+	}
+	return ""
+}
+
+// barIdentity is agentIdentity for the status bar. Full-featured, the default,
+// is named in the header only: the bar's room goes to the way out.
+func (m ChatModel) barIdentity() string {
+	if m.nativeAgent() {
+		return m.agentIdentity()
+	}
+	return m.bareIdentity()
+}
+
+// bareIdentity is "agent <id> v<version>" with no program label.
+func (m ChatModel) bareIdentity() string {
 	version := m.agentVersion
 	if v, ok := m.client.(interface{ AgentVersion() string }); ok {
 		if live := reportedVersion(v.AgentVersion()); live != "" {
@@ -3663,10 +3691,6 @@ func (m ChatModel) agentIdentity() string {
 	identity := "agent " + strings.ToLower(m.agentID)
 	if version != "" {
 		identity += " v" + version
-	}
-	if m.nativeAgent() {
-		// Two programs can answer as this agent; say which one is.
-		identity += " · " + catalog.NativeAgentLabel + " · Beta"
 	}
 	return identity
 }
@@ -3692,13 +3716,18 @@ func (m ChatModel) coreVersionSuffix() string {
 
 // renderIdentityChip is agentIdentity styled as a header segment.
 func (m ChatModel) renderIdentityChip() string {
-	return lipgloss.NewStyle().Foreground(theme.Text).Render(" │ " + m.agentIdentity())
+	return m.renderChip(m.agentIdentity())
+}
+
+// renderChip styles text as a header segment.
+func (m ChatModel) renderChip(text string) string {
+	return lipgloss.NewStyle().Foreground(theme.Text).Render(" │ " + text)
 }
 
 // renderStatusBar is the one-row bar at the foot of the chat screen.
 func (m ChatModel) renderStatusBar() string {
 	barState := components.StatusBarState{
-		AgentName:        m.agentIdentity(),
+		AgentName:        m.barIdentity(),
 		Connected:        m.connected,
 		Streaming:        m.streaming,
 		AwaitingDecision: m.confirmation != nil && m.confirmation.Pending(),

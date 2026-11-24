@@ -148,7 +148,9 @@ def test_replace_never_cuts_off_an_answer(saved, busy, says):
     with pytest.raises(ProgramBusyError) as e:
         reg.ensure("gaia", program=fetch.PYTHON_FLAGSHIP, replace_program=True)
     assert e.value.kind == KIND_PROGRAM_BUSY
-    assert says in str(e.value) and "running on gaiacpp" in str(e.value)
+    assert says in str(e.value)
+    assert "running on Fast and light (gaiacpp)" in str(e.value)
+    assert "not restarted on Full-featured (gaiapy)" in str(e.value)
     manager = _manager(reg)
     assert (manager.stops, manager.starts, manager.program) == (0, 1, "gaiacpp")
 

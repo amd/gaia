@@ -32,8 +32,9 @@ The flagship has two programs behind it: the Python one, `gaia-agent`, and the
 native one, `gaiacpp`. `gaia-cli` runs `gaia-agent` unless `gaiacpp` is asked
 for, the same default as the Agent UI and the daemon, so an installed `gaiacpp`
 the user never picked can't take away `--use-claude` or `--resume`. The header says
-which is answering: `agent gaia v<x> · Fast and light (gaiacpp) · Beta` for the native agent, plain
-`agent gaia v<x>` for the Python one.
+which is answering: `agent gaia v<x> · Fast and light (gaiacpp) · Beta` for the native agent,
+`agent gaia v<x> · Full-featured (gaiapy)` for the Python one. A narrow terminal drops the
+program's name first, and the status bar names only Fast and light.
 
 When `gaiacpp` is asked for by name, it is looked for in this order, and the
 first match wins:

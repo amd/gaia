@@ -339,15 +339,15 @@ func TestTheGateLeavesAPythonAgentAlone(t *testing.T) {
 func TestTheGateDoesNotCutOffAnotherWindowsAnswer(t *testing.T) {
 	h := newFakeHost(t)
 	h.agents = strings.Replace(agentsRunning, `"dev_src_dir":null`, `"dev_src_dir":null,"program":"gaiacpp"`, 1)
-	h.busy = "The GAIA agent is running on gaiacpp and another window is answering with it, " +
-		"so it was not restarted on gaiapy. Try again when that answer finishes, or switch from that window."
+	h.busy = "The GAIA agent is running on Fast and light (gaiacpp) and another window is answering with it, " +
+		"so it was not restarted on Full-featured (gaiapy). Try again when that answer finishes, or switch from that window."
 
 	rep := Check(context.Background(), h.transport(), testConfig())
 	if rep.Ready() {
 		t.Fatalf("the gate passed while gaiacpp was answering elsewhere:\n%s", rep)
 	}
 	row, _ := rep.Find(KeySidecar)
-	if row.Line != "gaiacpp is answering in another window" {
+	if row.Line != "Fast and light is answering in another window" {
 		t.Errorf("sidecar row line = %q", row.Line)
 	}
 	if row.Detail != h.busy {

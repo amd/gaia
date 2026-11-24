@@ -270,7 +270,7 @@ func checkSidecar(ctx context.Context, t Transport, cfg Config, rep *Report) Sta
 					var busy *daemon.ProgramBusyError
 					if errors.As(err, &busy) {
 						// Never cut off another window's answer: this session does not switch.
-						row.State, row.Line, row.Detail = StateFailed, other+" is answering in another window", busy.Detail
+						row.State, row.Line, row.Detail = StateFailed, flagshipAgentName(other)+" is answering in another window", busy.Detail
 						row.Remedy = Remedy{Action: "Press r once that answer finishes, or switch agents from that window."}
 						row.Raw = err.Error()
 						row.Disposition = status.DispositionHalt

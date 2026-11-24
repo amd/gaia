@@ -713,11 +713,20 @@ def check_program(agent_id: str, program: Optional[str]) -> None:
         )
 
 
+def _program_label(program: str) -> str:
+    """ "Fast and light (gaiacpp)" for a program the apps name; else the program."""
+    from gaia.harnesses import harness
+
+    known = harness(program)
+    return f"{known.label} ({program})" if known else program
+
+
 def _check_idle(manager, running: str, program: str) -> None:
     """Raise unless the agent on *running* has no turn to cut off."""
     busy = manager.active_runs()
     if busy == 0:
         return
+    running, program = _program_label(running), _program_label(program)
     if busy is None:
         raise ProgramBusyError(
             f"The GAIA agent is running on {running}, which doesn't say whether "

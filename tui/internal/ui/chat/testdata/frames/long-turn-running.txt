@@ -1,4 +1,4 @@
- GAIA  │ agent gaia
+ GAIA  │ agent gaia · Full-featured (gaiapy)
 ────────────────────────────────────────────────────────────────────────────────────────────────────
 ▶ You: Reconcile the AP ledger against every invoice
 
