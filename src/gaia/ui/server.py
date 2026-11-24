@@ -55,6 +55,7 @@ from ._chat_helpers import _index_document  # noqa: F401
 from ._chat_helpers import _stream_chat_response  # noqa: F401
 from ._chat_helpers import _ui_cloud_provider, writing_tool_registry
 from .agent_loop import agent_loop
+from .csp import content_security_policy
 
 # pylint: enable=unused-import
 from .database import ChatDatabase
@@ -1182,7 +1183,13 @@ def create_app(
 
         if not index_html.is_file():
             # Frontend build not present yet -- serve the actionable fallback.
-            return HTMLResponse(content=_FALLBACK_HTML, status_code=200)
+            return HTMLResponse(
+                content=_FALLBACK_HTML,
+                status_code=200,
+                headers={
+                    "Content-Security-Policy": content_security_policy(_FALLBACK_HTML)
+                },
+            )
 
         # 1. Token bootstrap path: only fires for the index-html case
         #    (token always lands on ``/`` from the QR code). On any
@@ -1214,7 +1221,15 @@ def create_app(
         )
         if redirect is not None:
             return redirect
-        return FileResponse(str(index_html), headers=_NO_CACHE)
+        return FileResponse(
+            str(index_html),
+            headers={
+                **_NO_CACHE,
+                "Content-Security-Policy": content_security_policy(
+                    index_html.read_text(encoding="utf-8")
+                ),
+            },
+        )
 
     return app
 
