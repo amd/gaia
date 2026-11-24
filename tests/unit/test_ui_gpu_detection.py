@@ -211,6 +211,13 @@ def test_system_status_renders_the_complete_context_remedy(
 ):
     from gaia.llm.lemonade_launcher import LemonadeTooling
 
+    # A system install GAIA doesn't own, with no other server chosen.
+    monkeypatch.setattr(
+        "gaia.llm.lemonade_client.configured_lemonade_url", lambda: None
+    )
+    monkeypatch.setattr(
+        "gaia.llm.lemonade_launcher.gaia_runs_lemonade", lambda base_url=None: False
+    )
     monkeypatch.setattr("platform.system", lambda: "Linux")
     monkeypatch.setattr(
         "gaia.llm.lemonade_launcher.resolve_lemonade",
@@ -237,6 +244,29 @@ def test_system_status_renders_the_complete_context_remedy(
         assert body["start_command"] is None
         assert "32768" in body["start_instruction"]
         assert "reload the model" in body["start_instruction"]
+
+
+@pytest.mark.allow_network
+def test_system_status_names_the_chosen_server_not_the_tray(stub_lemonade, monkeypatch):
+    """The tray starts the default server, not the one GAIA is pointed at."""
+    from gaia.llm.lemonade_launcher import OTHER_SERVER_START_HINT, LemonadeTooling
+
+    monkeypatch.setenv("LEMONADE_BASE_URL", "http://127.0.0.1:4328/api/v1")
+    monkeypatch.setattr("platform.system", lambda: "Windows")
+    tray = r"C:\lemonade_server\bin\LemonadeServer.exe"
+    monkeypatch.setattr(
+        "gaia.llm.lemonade_launcher.resolve_lemonade",
+        lambda: LemonadeTooling(
+            found=True, kind="modern", client_path=tray, server_launcher=tray
+        ),
+    )
+    stub_lemonade({"/health": {}, "/models": {"data": []}, "/system-info": {}})
+    body = TestClient(create_app(db_path=":memory:")).get("/api/system/status").json()
+
+    assert body["start_command"] is None
+    assert body["start_instruction"] == (
+        f"The model server GAIA uses is at 127.0.0.1:4328. {OTHER_SERVER_START_HINT}"
+    )
 
 
 @pytest.mark.allow_network

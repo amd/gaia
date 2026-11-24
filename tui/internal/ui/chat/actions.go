@@ -55,19 +55,19 @@ func categoryOf(tool string) string {
 	switch tool {
 	case "run_python", "execute_python", "python", "execute_python_file", "run_python_file":
 		return catPython
-	case "read_file", "get_file_preview", "read_document", "read_pdf":
+	case "read_file", "file_read", "get_file_preview", "read_document", "read_pdf":
 		return catRead
-	case "write_file", "create_file", "save_file":
+	case "write_file", "file_write", "create_file", "save_file":
 		return catWrite
-	case "edit_file", "replace_in_file", "apply_patch":
+	case "edit_file", "file_edit", "replace_in_file", "apply_patch":
 		return catEdit
 	case "web_search", "search_web":
 		return catWeb
-	case "fetch_page", "fetch_url", "download_file":
+	case "fetch_page", "web_fetch", "fetch_url", "download_file":
 		return catFetch
 	case "query_documents", "search_documents", "query_specific_file", "search_indexed_chunks", "index_document":
 		return catDocs
-	case "list_directory", "search_file", "find_files", "tree", "browse_directory", "list_dir":
+	case "list_directory", "search_file", "file_search", "find_files", "tree", "browse_directory", "list_dir":
 		return catList
 	case "load_skill", "unload_skill", "install_skill", "list_skills", "search_skill_hub", "skill_status", "remove_skill":
 		return catSkill

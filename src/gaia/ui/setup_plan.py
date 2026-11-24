@@ -111,7 +111,8 @@ def _options(client, capacity) -> List[Dict[str, Any]]:
 
     The floor is judged on fit alone, since every PC gets it when nothing larger
     passes; the rest by :func:`~gaia.llm.lemonade_client.ladder_verdict`, as
-    the pick judges them. The size shown is the server's catalog size.
+    the pick judges them. The size shown is the one Settings shows
+    (:func:`model_choice.download_size_gb`).
     """
     from gaia.llm.lemonade_client import (
         DEFAULT_MODEL_LADDER,
@@ -154,7 +155,9 @@ def _options(client, capacity) -> List[Dict[str, Any]]:
         options.append(
             {
                 "id": model_id,
-                "size_gb": catalog.get(model_id, size),
+                "size_gb": model_choice.download_size_gb(
+                    model_id, catalog.get(model_id)
+                ),
                 "fits": fits,
                 "reason": reason,
             }
@@ -409,6 +412,7 @@ def _catalog(
     )
     from gaia.llm.lemonade_client import (
         DEFAULT_MODEL_LADDER,
+        FLASH_OPTION_MODEL_NAME,
         is_cloud_model_entry,
         runs_on_npu,
     )
@@ -425,7 +429,12 @@ def _catalog(
         return any(same(model_id, m) for m in ids)
 
     order: List[str] = []
-    offered = [*model_choice.VISION_ONLY_MODELS, *model_choice.OPTIONAL_MODELS]
+    offered = [
+        m
+        for m in [*model_choice.VISION_ONLY_MODELS, *model_choice.OPTIONAL_MODELS]
+        # One already downloaded stays listed, so Settings can still remove it.
+        if not model_choice.withheld_reason(m) or (entry_for(m) or {}).get("downloaded")
+    ]
     known = [*planned, *_known_chat_models(capacity), *offered]
     # GAIA's own models: a Lemonade-only model the user made the chat model is
     # planned, but stays in the Lemonade list where they found it.
@@ -479,6 +488,9 @@ def _catalog(
         recipe = (entry or {}).get("recipe") or (
             "flm" if runs_on_npu(model_id) else None
         )
+        fit = model_choice.backend_fit(
+            model_choice.memory_fit(model_id, full, capacity), recipe, system_info
+        )
         catalog.append(
             {
                 "id": model_id,
@@ -492,7 +504,8 @@ def _catalog(
                 ),
                 "recipe": recipe,
                 "size_gb": remaining,
-                "full_size_gb": float(full) if full is not None else None,
+                # Shown only: Settings' decimal GB, not the server's GiB figure.
+                "full_size_gb": model_choice.download_size_gb(model_id, full),
                 "partial": partial_gb > 0,
                 "partial_gb": partial_gb,
                 "downloaded": downloaded if client is not None else None,
@@ -514,11 +527,13 @@ def _catalog(
                 "reads_images": model_choice.reads_images(model_id),
                 "feature_tier": model_choice.feature_tier(model_id),
                 "source": _model_source(entry),
-                **model_choice.backend_fit(
-                    model_choice.memory_fit(model_id, full, capacity),
-                    recipe,
-                    system_info,
+                # Only what runs here, never config-only Flash; the user's own stays.
+                "setup_offer": same(model_id, chat_id)
+                or (
+                    fit["fits"] is not False
+                    and not same(model_id, FLASH_OPTION_MODEL_NAME)
                 ),
+                **fit,
             }
         )
     return catalog
@@ -708,10 +723,19 @@ def _refuse_unrunnable(plan: Dict[str, Any]) -> None:
     )
 
 
+def _refuse_withheld(model_id: str) -> None:
+    """Raise :class:`CantRunHere` for a model GAIA doesn't offer on this PC."""
+    reason = model_choice.withheld_reason(model_id)
+    if reason:
+        raise CantRunHere(f"Setup can't download {_display_name(model_id)}. {reason}")
+
+
 def check_extra_models(model_ids: List[str]) -> List[str]:
     """*model_ids* as the catalog names them; raises for one nobody has."""
     if not model_ids:
         return []
+    for model_id in model_ids:
+        _refuse_withheld(model_id)
     catalog = build_plan()["catalog"]
     out = []
     for model_id in model_ids:
@@ -962,6 +986,8 @@ def set_model_skipped(
     """Skip one of *profile*'s models, or take it back; saved in ``skipped_models``."""
     from gaia.config import GaiaConfigError
 
+    if not skipped:
+        _refuse_withheld(model_id)
     if skipped:
         plan = build_plan(profile, skip_chat_model)
         planned = [e["id"] for e in plan["catalog"] if e["planned"]]
@@ -1013,6 +1039,7 @@ def remove_model(model_id: str) -> float:
 
 
 def _download_entry(model_id: str):
+    _refuse_withheld(model_id)
     plan = build_plan()
     entry = next(
         (e for e in plan["catalog"] if model_choice.ids_match(e["id"], model_id)),

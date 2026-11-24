@@ -681,6 +681,68 @@ def test_an_update_keeps_gemma_on_a_small_pc_that_already_has_it(
     assert "default_model" not in _config(home)
 
 
+def test_an_update_does_not_keep_a_gemma_that_cannot_fit(lemonade, home, monkeypatch):
+    """An 8 GB laptop has about 4 GB for models; Gemma needs 8.5, so it gets the 2B."""
+    from gaia.installer.init_command import resolve_init_chat_model
+    from gaia.llm.model_fit import MachineCapacity
+
+    laptop8 = MachineCapacity(
+        memory_gb=4.0,
+        memory_source="AMD iGPU",
+        disk_free_gb=500.0,
+        installed_ram_gb=8.0,
+        carve_out_gb=0.5,
+    )
+    monkeypatch.setattr(
+        lemonade_client,
+        "recommend_default_chat_model",
+        lambda client, judge_free_memory=True: (TINY_DEFAULT_MODEL_NAME, [], laptop8),
+    )
+    fake = lemonade(downloaded=[EMBEDDER, DEFAULT_MODEL_NAME])
+    monkeypatch.setenv("LEMONADE_BASE_URL", URL)
+
+    choice = resolve_init_chat_model(fake, reset_corrupt=False, enforce_fit=False)
+
+    assert choice.model_id == TINY_DEFAULT_MODEL_NAME
+    assert choice.kept_over is None
+
+
+@pytest.mark.parametrize(
+    ("memory_gb", "kept"),
+    [(None, True), (8.0, False), (10.0, True)],
+    ids=["memory-unknown", "8-of-16-gb", "10-of-16-gb"],
+)
+def test_gemma_is_kept_only_where_it_fits_or_memory_is_unknown(
+    lemonade, home, monkeypatch, memory_gb, kept
+):
+    from gaia.installer.init_command import resolve_init_chat_model
+    from gaia.llm.model_fit import MachineCapacity
+
+    capacity = (
+        None
+        if memory_gb is None
+        else MachineCapacity(
+            memory_gb=memory_gb,
+            memory_source="AMD iGPU",
+            disk_free_gb=500.0,
+            installed_ram_gb=16.0,
+            carve_out_gb=4.0,
+        )
+    )
+    monkeypatch.setattr(
+        lemonade_client,
+        "recommend_default_chat_model",
+        lambda client, judge_free_memory=True: (TINY_DEFAULT_MODEL_NAME, [], capacity),
+    )
+    fake = lemonade(downloaded=[EMBEDDER, DEFAULT_MODEL_NAME])
+    monkeypatch.setenv("LEMONADE_BASE_URL", URL)
+
+    choice = resolve_init_chat_model(fake, reset_corrupt=False, enforce_fit=False)
+
+    assert choice.model_id == (DEFAULT_MODEL_NAME if kept else TINY_DEFAULT_MODEL_NAME)
+    assert choice.kept_over == (TINY_DEFAULT_MODEL_NAME if kept else None)
+
+
 def test_a_new_small_pc_gets_the_2b(lemonade, home, monkeypatch):
     from gaia.installer.init_command import check_setup_status, resolve_init_chat_model
 
@@ -735,3 +797,43 @@ def test_the_setup_screens_show_a_kept_gemma_as_the_users_own(
     assert plan["chat_model"]["id"] == DEFAULT_MODEL_NAME
     assert plan["chat_model"]["user_set"] is True
     assert plan["recommended_model"] == TINY_DEFAULT_MODEL_NAME
+
+
+# ── the read-aloud voice where GAIA hasn't proven it ───────────────────────
+
+KOKORO = ("kokoro-v1", 0.34, ["tts"], "kokoro")
+
+
+def _catalog_ids():
+    return [e["id"] for e in sp.build_plan(skip_chat_model=False)["catalog"]]
+
+
+def test_setup_offers_the_voice_where_it_is_proven(lemonade):
+    lemonade(extra=[KOKORO])
+    assert "kokoro-v1" in _catalog_ids()
+
+
+def test_setup_does_not_offer_the_voice_on_a_mac(lemonade, monkeypatch):
+    monkeypatch.setattr(gaia.config, "_current_platform", lambda: "darwin")
+    fake = lemonade(extra=[KOKORO])
+    assert "kokoro-v1" not in _catalog_ids()
+    for choose in (
+        lambda: sp.check_extra_models(["kokoro-v1"]),
+        lambda: sp.set_model_skipped("kokoro-v1", False),
+        lambda: sp.prepare_download("kokoro-v1"),
+    ):
+        with pytest.raises(sp.CantRunHere, match="aren't offered on macOS"):
+            choose()
+    assert fake.pulls == []
+
+
+def test_a_voice_downloaded_before_it_was_withheld_stays_listed(lemonade, monkeypatch):
+    """So Settings can still show and remove it; nothing re-downloads it."""
+    monkeypatch.setattr(gaia.config, "_current_platform", lambda: "darwin")
+    lemonade(extra=[KOKORO], downloaded=["kokoro-v1"])
+    entry = next(
+        e
+        for e in sp.build_plan(skip_chat_model=False)["catalog"]
+        if e["id"] == "kokoro-v1"
+    )
+    assert entry["downloaded"] is True and entry["planned"] is False

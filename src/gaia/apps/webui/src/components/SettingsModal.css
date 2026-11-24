@@ -267,7 +267,6 @@
 
 /* Spinner inside buttons */
 .btn-spinner { animation: spin var(--duration-spin) var(--ease-linear) infinite; flex-shrink: 0; }
-@keyframes spin { to { transform: rotate(360deg); } }
 
 /* ── Toggle switch ────────────────────────────────────────────────── */
 

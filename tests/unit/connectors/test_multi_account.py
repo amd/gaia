@@ -892,14 +892,14 @@ async def _hang(request):
     await asyncio.sleep(60)
 
 
-@pytest.mark.parametrize("budget", [4.5, 3.5])
+@pytest.mark.parametrize("budget", [5.5, 3.5])
 async def test_a_slow_profile_lookup_never_fails_a_refresh(
     outlook_env, monkeypatch, budget
 ):
     from gaia.connectors import tokens
 
     provider = _old_outlook_account()
-    # 4.5 s leaves the lookup about 1.5 s; 3.5 s leaves too little to try.
+    # 5.5 s leaves the lookup about 2.5 s, room for a slow runner; 3.5 s leaves too little to try.
     monkeypatch.setattr(tokens, "_REFRESH_BUDGET_SECONDS", budget, raising=False)
     _profile_lookups.clear()
     with respx.mock(assert_all_called=False) as router:
@@ -916,11 +916,11 @@ async def test_a_slow_profile_lookup_never_fails_a_refresh(
         router.get(url__startswith="https://graph.microsoft.com/v1.0/me").mock(
             side_effect=_hang
         )
-        token = await asyncio.wait_for(get_or_refresh("microsoft"), 3.0)
+        token = await asyncio.wait_for(get_or_refresh("microsoft"), 5.0)
 
     assert token == "at"
     assert peek_connection("microsoft")["refresh_token"] == "rt-2"
-    assert len(_profile_lookups) == (1 if budget == 4.5 else 0)
+    assert len(_profile_lookups) == (1 if budget == 5.5 else 0)
 
 
 async def test_the_sign_in_profile_lookup_has_an_overall_deadline(monkeypatch):

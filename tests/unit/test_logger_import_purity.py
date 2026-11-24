@@ -51,6 +51,8 @@ def _child_env(tmp_path):
     env.pop(gaia_logger.LOG_FILE_ENV, None)
     for key in ("TMP", "TEMP", "TMPDIR"):
         env[key] = str(tmp_path)
+    # So the default log lands in <tmp>/.gaia/gaia.log, not the real ~/.gaia.
+    env["HOME"] = env["USERPROFILE"] = str(tmp_path)
     env["PYTHONPATH"] = os.pathsep.join(
         filter(None, [str(REPO_ROOT / "src"), env.get("PYTHONPATH")])
     )
@@ -297,6 +299,9 @@ def test_flagship_entry_runs_on_core_without_configure(unconfigured, monkeypatch
     stdio.main = lambda args: 0
     monkeypatch.setitem(sys.modules, "gaiapy.stdio", stdio)
     monkeypatch.delattr(gaia_logger, "configure")
+    # --serve needs the caller-auth token a GAIA launcher passes.
+    monkeypatch.delenv("GAIA_GAIA_SIDECAR_TOKEN_FILE", raising=False)
+    monkeypatch.setenv("GAIA_GAIA_SIDECAR_TOKEN", "test-sidecar-token")
     with patch("uvicorn.run"):
         assert entry.main(argv) in (0, None)
     assert gaia_logger.log_manager is None

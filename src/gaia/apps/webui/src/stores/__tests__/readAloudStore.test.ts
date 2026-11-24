@@ -88,6 +88,7 @@ describe('readAloudStore', () => {
     it.each([
         [503, 'unreachable'],
         [502, 'speech'],
+        [409, 'unavailable'],
         [500, 'other'],
     ] as const)('a %i from the server is reported as %s with its detail', async (status, kind) => {
         speak.mockRejectedValue(new api.ApiError('friendly', status, 'Lemonade said no', null));

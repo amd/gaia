@@ -119,6 +119,10 @@ export function exactStats(
             time: mark(say('answer.duration.sec', { n: (latencyMs / 1000).toFixed(1) })),
         })));
     }
+    if (stats?.waiting_seconds != null && stats.waiting_seconds > 0) {
+        const waited = stats.waiting_seconds * 1000;
+        lines.push(t.compose((say) => say('answer.exact.waited', { time: spokenDuration(waited, say, mark) })));
+    }
     if (wroteFirstWord(stats, ended)) {
         const ms = (stats.time_to_first_token * 1000).toFixed(0);
         lines.push(t.compose((say) => say('answer.exact.firstToken', { time: mark(say('answer.duration.ms', { n: ms })) })));

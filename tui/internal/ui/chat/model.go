@@ -3659,7 +3659,7 @@ func (m ChatModel) agentIdentity() string {
 	}
 	if m.nativeAgent() {
 		// Two programs can answer as this agent; say which one is.
-		identity += " (" + catalog.NativeAgentBinary + ")"
+		identity += " (" + catalog.NativeAgentBinary + " · Beta)"
 	}
 	return identity
 }

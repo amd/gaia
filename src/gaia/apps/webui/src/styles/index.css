@@ -71,11 +71,19 @@
      * with no blur, so it is a ring and never a glow. */
     --accent-ring: rgba(176, 141, 87, 0.40);
 
-    /* Accent as a button. Buttons are soft tinted: a brass wash carrying
-     * brass text, judged against itself. */
+    /* The brass wash: a chosen option or a pressed toggle, carrying brass
+     * text, judged against itself. */
     --accent-fill: #EEE8DD;
     --accent-fill-text: #7A5A22;
     --accent-fill-hover: #E6DCCB;
+
+    /* The one action a screen is asking for: the text colour as a fill,
+     * carrying the canvas colour, so it reads as a button on a warm ground
+     * where a brass wash did not. Named by role, so every palette's ink and
+     * canvas follow; the pairs are the text-on-canvas ones the tests measure. */
+    --action-fill: var(--text-primary);
+    --action-fill-text: var(--bg-primary);
+    --action-fill-hover: var(--text-secondary);
 
     /* Semantic status keeps its conventional hues. Warning amber sits next
      * to brass in hue, so every warning also carries an icon and a word. */
@@ -178,6 +186,9 @@
     --fs-body: 14px;      /* UI emphasis, card titles */
     --fs-prose: 15px;     /* answers and your messages */
     --fs-title: 18px;     /* dialog titles */
+
+    /* The smallest height a text button takes. */
+    --hit-min: 28px;
 
     --sidebar-w: 260px;
     --content-w: 760px;
@@ -404,9 +415,9 @@ textarea:focus-visible {
 
 /* ── Shared Button Utilities ──────────────────────────────────────── */
 
-/* Soft tinted, and they answer the hand: a hover lifts 1px onto the resting
- * shadow, a press settles below rest faster than it rose. Brass marks the
- * action you would most likely take; neutral marks the rest. */
+/* They answer the hand: a hover lifts 1px onto the resting shadow, a press
+ * settles below rest faster than it rose. Ink marks the action a screen is
+ * asking for; a neutral wash marks the rest. */
 .btn-primary,
 .btn-secondary,
 .btn-danger {
@@ -421,10 +432,12 @@ textarea:focus-visible {
         box-shadow var(--duration) var(--ease),
         transform var(--duration) var(--ease-spring);
 }
-.btn-primary { background: var(--accent-fill); color: var(--accent-fill-text); }
-.btn-primary:hover { background: var(--accent-fill-hover); }
-/* Lightened, the English fell to 4.46:1 on the hover fill. */
-.btn-primary .i18n-gloss.i18n-gloss { color: inherit; }
+.btn-primary { background: var(--action-fill); color: var(--action-fill-text); }
+.btn-primary:hover { background: var(--action-fill-hover); }
+/* On an ink fill the gloss's own lightened colour would vanish into the button, so it takes the label's. */
+:is(.btn-primary, .perm-btn.is-primary, .compare-keep, .vp-btn-confirm, .fb-action-btn.primary, .composer-send,
+    .render-needs-input__free-text-submit, .render-connect__button, .render-guide__start, .email-connect-cta__button)
+    .i18n-gloss.i18n-gloss { color: inherit; }
 .btn-secondary { background: var(--bg-tertiary); color: var(--text-primary); }
 .btn-secondary:hover { background: var(--bg-active); }
 .btn-danger { background: var(--danger-dim); color: var(--danger); }
@@ -557,17 +570,6 @@ textarea:focus-visible {
     }
 }
 
-/* ── AnimatedPresence exit animations ──────────────────────────── */
-
-@keyframes modalOverlayOut {
-    from { opacity: 1; }
-    to { opacity: 0; }
-}
-@keyframes modalPanelOut {
-    from { opacity: 1; transform: translateY(0); }
-    to { opacity: 0; transform: translateY(12px); }
-}
-
 /* ── Sidebar Overlay (Mobile) ────────────────────────────────────── */
 
 .sidebar-overlay {
@@ -642,6 +644,17 @@ textarea:focus-visible {
     animation: toastIn var(--duration-spring) var(--ease-spring), toastOut var(--duration) var(--ease) var(--toast-hold) forwards;
     pointer-events: none;
 }
+/* "Restored your last model": long enough to read, gone before it's in the way.
+   Up top, so it never sits on the message box in an open chat. */
+.app-restore-toast {
+    --toast-hold: 3.4s;
+    top: 16px;
+    bottom: auto;
+}
+:root[data-titlebar] .app-restore-toast {
+    top: calc(var(--titlebar-h) + 8px);
+}
+
 /* Right to left the pane takes the window's left, so the chat's centre moves right. */
 :root[dir="rtl"] .toast {
     left: calc(50% + var(--browser-pane-inset) / 2);
@@ -681,17 +694,12 @@ textarea:focus-visible {
 /* ── Animations ──────────────────────────────────────────────────── */
 
 @keyframes toastIn { from { opacity: 0; transform: translateX(-50%) translateY(8px); } to { opacity: 1; transform: translateX(-50%) translateY(0); } }
-@keyframes toastOut { from { opacity: 1; transform: translateY(0); } to { opacity: 0; transform: translateY(8px); } }
+/* Keeps the toast's centring: a bare translateY would jump it sideways as it leaves. */
+@keyframes toastOut { from { opacity: 1; transform: translateX(-50%) translateY(0); } to { opacity: 0; transform: translateX(-50%) translateY(8px); } }
 @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
-@keyframes fadeOut { from { opacity: 1; } to { opacity: 0; } }
 @keyframes slideUp { from { opacity: 0; transform: translateY(12px); } to { opacity: 1; transform: translateY(0); } }
-@keyframes slideDown { from { opacity: 1; transform: translateY(0); } to { opacity: 0; transform: translateY(12px); } }
 @keyframes blink { 0%, 100% { opacity: 1; } 50% { opacity: 0; } }
 @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.5; } }
-@keyframes bounce {
-    0%, 100% { transform: translateY(0); }
-    50% { transform: translateY(-3px); }
-}
 @keyframes spin { to { transform: rotate(360deg); } }
 /* Terminal cursor blink -- block style */
 @keyframes cursorBlink {
@@ -713,12 +721,6 @@ textarea:focus-visible {
     25%     { opacity: 1; }
     40%, 100% { opacity: 0.15; }
 }
-/* Scroll reveal animation */
-@keyframes revealUp {
-    from { opacity: 0; transform: translateY(20px); }
-    to { opacity: 1; transform: translateY(0); }
-}
-
 /* ── Theme transition smoothing ─────────────────────────────────── */
 
 /* ── Reduced Motion ──────────────────────────────────────────────── */
@@ -796,7 +798,7 @@ textarea:focus-visible {
     display: inline-flex;
     padding: 4px;
     border-radius: var(--radius-sm);
-    color: var(--text-muted);
+    color: var(--text-secondary);
 }
 
 .app-notice-close:hover {
@@ -967,4 +969,63 @@ textarea:focus-visible {
 .startup .loading-spinner {
     flex: none;
     padding: 0;
+}
+
+.startup-elapsed {
+    color: var(--text-muted);
+    font-size: 13px;
+    font-variant-numeric: tabular-nums;
+}
+
+.startup--failed {
+    padding: 48px 16px;
+}
+
+.startup-failed {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    width: 100%;
+    max-width: 560px;
+}
+
+.startup-failed-title {
+    color: var(--text-primary);
+    font-size: 22px;
+    font-weight: 500;
+}
+
+.startup-failed-hint {
+    color: var(--text-secondary);
+    font-size: 14px;
+}
+
+.startup-failed-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+}
+
+.startup-failed-details {
+    color: var(--text-secondary);
+    font-size: 13px;
+}
+
+.startup-failed-details summary {
+    cursor: pointer;
+}
+
+.startup-failed-log {
+    max-height: 260px;
+    margin-block: 8px;
+    padding: 10px 12px;
+    overflow: auto;
+    background: var(--bg-code);
+    color: var(--text-code);
+    border-radius: var(--radius-md);
+    font-family: var(--font-mono);
+    font-size: 12px;
+    text-align: start;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
 }
