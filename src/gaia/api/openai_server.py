@@ -156,6 +156,23 @@ def _prepare_agent(
         agent.max_output_tokens = request.max_tokens
 
 
+def _close_agent(agent) -> None:
+    """Release the per-request agent's handles now; a failure is logged, not raised."""
+    try:
+        agent.close()
+    except Exception:  # noqa: BLE001 - cleanup must not replace the reply
+        logger.error("Closing the request's agent failed", exc_info=True)
+
+
+def _close_agent_when_done(task, agent) -> None:
+    """Close *agent* once *task*, which is still driving it, has finished."""
+    task.add_done_callback(
+        lambda _t: threading.Thread(
+            target=_close_agent, args=(agent,), daemon=True
+        ).start()
+    )
+
+
 def _prepend_tool_denials(agent, content: str) -> str:
     """Prefix ``content`` with any confirmation refusals the agent hit.
 
@@ -365,7 +382,10 @@ async def create_chat_completion(request: ChatCompletionRequest):
 
         # Keep synchronous agent work from blocking health checks and other
         # requests handled by the event loop.
-        result = await asyncio.to_thread(agent.process_query, user_message)
+        try:
+            result = await asyncio.to_thread(agent.process_query, user_message)
+        finally:
+            await asyncio.to_thread(_close_agent, agent)
 
         # Debug logging: show what agent returned
         if _api_debug_enabled():
@@ -604,6 +624,9 @@ async def create_sse_stream(agent, query: str, model: str) -> AsyncGenerator[str
             handler_cancelled = getattr(output_handler, "cancelled", None)
             if handler_cancelled is not None:
                 handler_cancelled.set()
+            _close_agent_when_done(task, agent)
+        else:
+            await asyncio.to_thread(_close_agent, agent)
 
     if failure is not None:
         # Headers are already sent, so the status can't change; say it in-band.
