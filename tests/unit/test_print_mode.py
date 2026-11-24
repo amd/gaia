@@ -1686,6 +1686,15 @@ def test_a_successful_empty_answer_still_prints_a_line(stub_env, capsys):
     assert capsys.readouterr().out == "\n"
 
 
+def test_a_refusal_that_is_the_answer_prints_once(stub_env, capsys):
+    refusal = "I stopped before running 'file_write' because it needs your approval."
+    _StubAgent.result = {"status": "error", "result": refusal, "error": refusal}
+    assert print_mode.run("q", model="m") == 1
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert captured.err.count(refusal) == 1
+
+
 def test_json_error_record_carries_the_reason(stub_env, capsys):
     _StubAgent.result = {"status": "error", "error": "context overflow"}
     assert print_mode.run("q", model="m", output_format="json") == 1

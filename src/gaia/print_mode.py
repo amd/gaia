@@ -275,8 +275,11 @@ def run(
 
     if output_format == "json":
         print(json.dumps(record, ensure_ascii=False))
-    elif record["result"] or not record["is_error"]:
-        # A failed turn with no answer leaves stdout empty, not one blank line.
+    elif not record["is_error"] or (
+        record["result"] and record["result"] != record.get("error")
+    ):
+        # A failed turn leaves stdout empty, not one blank line, when it has no
+        # answer or its answer is the error, which stderr says once below.
         print(record["result"])
     if record["is_error"]:
         ended = f"the turn ended with status '{record['status']}'"

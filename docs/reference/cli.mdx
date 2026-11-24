@@ -202,7 +202,8 @@ than `success`), when the model server could not be started, or when no prompt w
 given, when the model's download failed, or when a download was needed and not confirmed; `130` when interrupted; `2` for a usage error such as an unknown flag, a
 launcher flag (`--ui`, `--cli`) combined with `-p`, or `--verbose` without
 `--output-format json`. On any failure the reason
-goes to stderr; in json mode stdout still carries one object, with `is_error: true`
+goes to stderr, once: a failed turn whose answer is that reason (a refused gated
+tool, say) leaves stdout empty in text mode; in json mode stdout still carries one object, with `is_error: true`
 and an `error` field, so a script never has to parse a traceback. A failure
 before the turn starts (no prompt, server down) prints only `type`, `is_error`,
 `status` and `error`.
