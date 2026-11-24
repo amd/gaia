@@ -304,9 +304,13 @@ def install_skill(
             # honored the claim is left byte-identical and still verifiable; a
             # downgraded one records its verified provenance in the lock instead.
             if tier != claimed:
-                skill.gaia.security_tier = tier
-                skill.path = target / SKILL_FILENAME
-                skill.write(staged / SKILL_FILENAME)
+                signed_md = staged / SKILL_FILENAME
+                restamped = parse_skill(
+                    signed_md.read_text(encoding="utf-8"), source=str(signed_md)
+                )
+                restamped.gaia.security_tier = tier
+                restamped.path = target / SKILL_FILENAME
+                restamped.write(signed_md)
                 log.info(
                     "Re-stamped '%s' %s from claimed tier '%s' to enforced '%s'; the "
                     "bundled %s no longer matches the rewritten %s (its verified "
