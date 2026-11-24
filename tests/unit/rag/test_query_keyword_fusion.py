@@ -119,7 +119,7 @@ def test_adaptive_max_tiers():
 
 
 def test_extra_scores_rank_after_the_dense_list():
-    scored = _fuse_extra_scores(5, ["x"], [("e1", 0.4), ("e2", 0.3)])
+    scored = _fuse_extra_scores(5, [("e1", 0.4), ("e2", 0.3)])
 
     assert [chunk for chunk, _ in scored] == ["e1", "e2"]
     # Ranked just after the five dense chunks, rescaled to a 0-1 scale:
@@ -132,7 +132,7 @@ def test_extra_scores_do_not_promote_fallback_above_rank_one():
     # Regression (#8751): a per-document fallback that missed global dense
     # search must not receive a synthetic dense+keyword double boost that
     # outscores a rank-1 dense or keyword hit (score = 0.5).
-    scored = _fuse_extra_scores(5, ["e1"], [("e1", 0.4)])
+    scored = _fuse_extra_scores(5, [("e1", 0.4)])
     assert scored[0][1] < 0.5
 
 

@@ -771,14 +771,6 @@ def _keyword_entries(
     return entries
 
 
-def _keyword_ranks(keyword: Sequence[Union[str, Tuple[str, float]]]) -> Dict[str, int]:
-    """1-based rank of each chunk in a keyword ranking, best first."""
-    return {
-        chunk: rank
-        for rank, (chunk, _) in enumerate(_keyword_entries(keyword), start=1)
-    }
-
-
 def _fuse_dense_and_keyword(
     dense: List[Tuple[str, float]],
     keyword: Sequence[Union[str, Tuple[str, float]]],
@@ -832,7 +824,6 @@ def _fuse_dense_and_keyword(
 
 def _fuse_extra_scores(
     dense_count: int,
-    keyword: Sequence[Union[str, Tuple[str, float]]],  # pylint: disable=unused-argument
     extra: List[Tuple[str, float]],
 ) -> List[Tuple[str, float]]:
     """Per-file best chunks on the same fused scale as :func:`_fuse_dense_and_keyword`.
@@ -1645,7 +1636,6 @@ class RAGToolsMixin:
                 # after the top so no document the search ranked is pushed out.
                 extra_fused = _fuse_extra_scores(
                     len(dense_ranked),
-                    keyword_chunks,
                     sorted(
                         zip(per_doc_chunks, per_doc_scores),
                         key=lambda item: item[1],

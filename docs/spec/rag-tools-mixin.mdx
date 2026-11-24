@@ -520,6 +520,7 @@ for search_key in search_keys:
 # k = 1); a chunk both rankings strongly favor scores from both. Fused scores
 # are rescaled to 0-1.
 keywords = keyword_index(self.rag)
+keyword_scored = []
 for chunk_idx, boost_score, _words in keywords.rank(
     query, limit=_adaptive_max(len(self.rag.chunks), self.max_chunks)
 ):
