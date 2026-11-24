@@ -1,12 +1,14 @@
 # Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 # SPDX-License-Identifier: MIT
-"""Changing which skills are trusted is the user's step, never an agent's.
+"""Changing which skills are trusted, and installing agent code, are the user's
+steps, never an agent's.
 
 Every process an agent tool starts carries :data:`AGENT_CHILD_ENV`, and its own
 children inherit it. Code an agent tool runs in-process runs inside
 :func:`agent_tool_running`. The functions that promote, install, import or
-trust a skill call :func:`require_user_terminal` first, so neither route can
-reach them, however the command was spelled.
+trust a skill, install a hub agent or import an agent bundle call
+:func:`require_user_terminal` first, so neither route can reach them, however
+the command was spelled.
 """
 
 from __future__ import annotations
