@@ -22,6 +22,7 @@
 #include <optional>
 #include <random>
 #include <regex>
+#include <set>
 #include <sstream>
 #include <string>
 #include <thread>
@@ -1529,6 +1530,60 @@ TEST_F(GaiacppSidecar, AnAttachedPdfIsReadOrTheTurnSaysWhyNot) {
     EXPECT_EQ(answer.find("Tell the user"), std::string::npos) << "a note for the model, not the user";
     EXPECT_EQ(mock().requestCount(), 0) << "the model was asked to guess";
 #endif
+}
+
+TEST_F(GaiacppSidecar, ReadingAnAttachedFileThroughTheShellAsksNothingButItsNeighboursStillAsk) {
+    // Not under the temp folder: commands may always read system folders.
+    struct Scratch {
+        fs::path dir = fs::canonical(fs::current_path()) / ("gaiacpp-sidecar-up-" + std::to_string(std::random_device{}()));
+        ~Scratch() {
+            std::error_code ec;
+            fs::remove_all(dir, ec);
+        }
+    } scratch;
+    const fs::path uploads = scratch.dir / "uploads";
+    fs::create_directories(uploads);
+    std::ofstream(uploads / "report.txt") << "revenue 4471\n";
+    std::ofstream(uploads / "theirs.txt") << "another chat 9932\n";
+    const fs::path report = uploads / "report.txt";
+    const std::string write = "echo more >> " + report.string();
+    mock().pushResponse(toolReply("bash_execute", {{"command", write}}));
+    const std::string cdAndRead = "cd " + uploads.string() + " && grep -n revenue report.txt";
+    mock().pushResponse(toolReply("bash_execute", {{"command", cdAndRead}}));
+    mock().pushResponse(toolReply("bash_execute", {{"command", "wc -l report.txt"}}));
+    mock().pushResponse(toolReply("bash_execute", {{"command", "cat theirs.txt"}}));
+    mock().pushResponse(toolReply("bash_execute", {{"command", "rm theirs.txt"}}));
+    mock().pushResponse(answerReply("Done."));
+    ASSERT_NO_FATAL_FAILURE(startSidecar());
+
+    Turn t(port_, queryBody("run-attached", "what does the report say?",
+                            {{"session_id", "chat-attached"}, {"documents", json::array({report.string()})},
+                             {"allowed_paths", json::array({work_.string()})}}));
+    // The write asks as it always did; standing in the uploads folder opens nothing else there.
+    std::set<std::string> answered;
+    for (int n = 1; n <= 2; ++n) {
+        auto card = t.waitEvent([&](const json& e) {
+            return e.value("type", "") == "needs_confirmation" && !answered.count(e.value("confirm_id", ""));
+        });
+        ASSERT_TRUE(card) << "card " << n << " missing: " << t.describe();
+        if (n == 1) EXPECT_EQ((*card)["args"].value("command", ""), write) << card->dump();
+        answered.insert((*card)["confirm_id"].get<std::string>());
+        auto deny = decide("run-attached", "deny", (*card)["confirm_id"].get<std::string>());
+        ASSERT_TRUE(deny);
+        ASSERT_EQ(deny->status, 200) << deny->body;
+    }
+    ASSERT_TRUE(t.waitDone()) << t.describe();
+    auto events = t.events();
+    ASSERT_NO_FATAL_FAILURE(expectSingleTerminal(events, "final")) << t.describe();
+    int cards = 0;
+    for (const auto& e : events) cards += e.value("type", "") == "needs_confirmation" ? 1 : 0;
+    EXPECT_EQ(cards, 2) << "the declined folder also refuses the rm: " << t.describe();
+    const std::string all = json(events).dump();
+    EXPECT_NE(all.find("1:revenue 4471"), std::string::npos) << t.describe();
+    EXPECT_NE(all.find("1 report.txt"), std::string::npos) << "wc ran without a card: " << t.describe();
+    EXPECT_TRUE(fs::exists(uploads / "theirs.txt")) << "the denied rm ran";
+    EXPECT_EQ(all.find("9932"), std::string::npos) << "a neighbour was read: " << t.describe();
+    EXPECT_EQ(readFile(report), "revenue 4471\n") << "the denied write ran";
 }
 
 TEST_F(GaiacppSidecar, ShellCommandNamingAnOutsideFolderRaisesTheFolderCard) {

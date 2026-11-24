@@ -11,6 +11,7 @@
 
 #pragma once
 
+#include <functional>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -73,17 +74,24 @@ public:
     /// True when a read-only command, split by splitShellCommand(), reads
     /// nothing outside the roots and the system folders: every argument is
     /// resolved against `cwd` (the shell's folder; "" = the primary root),
-    /// following `..`, `~` and links. False when `cwd` itself is outside.
+    /// following `..`, `~` and links. From a folder outside the roots only
+    /// granted files may be read; nothing there is listed or matched.
     bool readsStayInside(const std::vector<std::vector<std::string>>& segments,
                          const std::string& cwd) const;
+
+    /// `folder` (spelled as the shell reports it) resolved, when it lies outside
+    /// the roots but holds a file root: where an attached file sits. Else "".
+    std::string attachedFileFolder(const std::string& folder) const;
 
     /// Wrap a tool so each named string argument must pass checkPath().
     static ToolInfo confine(ToolInfo tool, std::shared_ptr<const Workspace> ws,
                             std::vector<std::string> pathArgs);
 
-    /// Wrap a shell tool so its command argument must pass checkCommand().
+    /// Wrap a shell tool so its command argument must pass checkCommand(), unless
+    /// `provenInside` says the call only reads what the roots hold.
     static ToolInfo confineShell(ToolInfo tool, std::shared_ptr<const Workspace> ws,
-                                 std::string commandArg = "command", bool posixShell = true);
+                                 std::string commandArg = "command", bool posixShell = true,
+                                 std::function<bool(const json&)> provenInside = nullptr);
 
 private:
     std::string refusal(const std::string& path) const;

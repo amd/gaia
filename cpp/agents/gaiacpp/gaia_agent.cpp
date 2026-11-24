@@ -72,6 +72,9 @@ GaiaAgent::~GaiaAgent() = default;
 
 void GaiaAgent::registerTools() {
     std::shared_ptr<Workspace> ws;
+    // A read-only command whose every path is a granted file or inside a granted folder.
+    std::function<bool(const std::string&)> readStaysInside;
+    std::function<std::string()> shellFolder;
     if (options_.fullAccess) {
         FileIOTools::registerAll(toolRegistry());
         GitTools::registerAll(toolRegistry());
@@ -88,14 +91,12 @@ void GaiaAgent::registerTools() {
         reg.registerTool(Workspace::confine(GitTools::gitDiff(), ws, {"path"}));
         reg.registerTool(Workspace::confine(GitTools::gitLog(), ws, {"path"}));
         reg.registerTool(Workspace::confine(GitTools::gitShow(), ws, {"path"}));
-        ToolInfo sh = Workspace::confineShell(BashTools::bashExecute(options_.shell), ws, "command",
-                                              !BashTools::detectShell().empty());
         const std::shared_ptr<ShellSession> shell = options_.shell;
-        // A read skips the approval card only while it stays in the chat's folders.
-        sh.needsConfirm = [ws, shell](const json& args) {
+        shellFolder = [shell] { return (shell ? *shell : BashTools::defaultSession()).cwd(); };
+        readStaysInside = [ws, shell](const std::string& command) {
             const bool posix = !BashTools::detectShell().empty();
-            std::string cmd = " " + args.value("command", "") + " ";
-            if (!isReadOnlyShellCommand(cmd, posix)) return true;
+            std::string cmd = " " + command + " ";
+            if (!isReadOnlyShellCommand(cmd, posix)) return false;
             ShellSession& session = shell ? *shell : BashTools::defaultSession();
             // An exported PATH or preload decides which program `ls` is.
             for (const auto& [name, value] : session.environment()) {
@@ -105,15 +106,20 @@ void GaiaAgent::registerTools() {
                 std::string upper = name;
                 std::transform(upper.begin(), upper.end(), upper.begin(),
                                [](unsigned char c) { return static_cast<char>(std::toupper(c)); });
-                if (steering.count(upper)) return true;
+                if (steering.count(upper)) return false;
             }
             for (const char* q : {" 2>/dev/null ", " >/dev/null ", " 2>nul ", " >nul ", " 2>&1 "}) {
                 for (size_t at; (at = cmd.find(q)) != std::string::npos;) cmd.replace(at, std::strlen(q), " ");
             }
             std::vector<std::vector<std::string>> segments;
-            if (!splitShellCommand(cmd, posix, segments)) return true;
-            return !ws->readsStayInside(segments, session.cwd());
+            if (!splitShellCommand(cmd, posix, segments)) return false;
+            return ws->readsStayInside(segments, session.cwd());
         };
+        // Such a read runs without a card, and its `cd` to an attached file's folder isn't refused.
+        const auto proven = [check = readStaysInside](const json& args) { return check(args.value("command", "")); };
+        ToolInfo sh = Workspace::confineShell(BashTools::bashExecute(options_.shell), ws, "command",
+                                              !BashTools::detectShell().empty(), proven);
+        sh.needsConfirm = [proven](const json& args) { return !proven(args); };
         reg.registerTool(std::move(sh));
         reg.registerTool(BashTools::envInspect());
     }
@@ -145,7 +151,8 @@ void GaiaAgent::registerTools() {
         }
         args["command"] = keepScriptDollars(args["command"].get<std::string>(), ran);
     });
-    toolRegistry().setPreCheck([this, ws](const ToolInfo& tool, const json& args) -> std::optional<json> {
+    toolRegistry().setPreCheck([this, ws, readStaysInside, shellFolder](const ToolInfo& tool,
+                                                                         const json& args) -> std::optional<json> {
         if (auto refusal = switchRefusal(tool, args)) return refusal;
         if (!ws) return std::nullopt;
         // Asks the user about each outside place the call names; "" once it may run.
@@ -169,10 +176,18 @@ void GaiaAgent::registerTools() {
         // Refused here, the user is never asked to approve a location the tool would turn down.
         std::string why;
         if (tool.name == "bash_execute") {
+            if (args.contains("command") && args["command"].is_string() &&
+                !(readStaysInside && readStaysInside(args["command"].get<std::string>()))) {
+                // A shell left in an attached file's folder opens nothing else there.
+                const std::string beside = ws->attachedFileFolder(shellFolder ? shellFolder() : "");
+                if (!beside.empty()) why = openOutside([&] { return ws->judgePath(beside); });
+                if (why.empty()) {
+                    why = openOutside([&] {
+                        return ws->judgeCommand(args["command"].get<std::string>(), !BashTools::detectShell().empty());
+                    });
+                }
+            }
             if (args.contains("command") && args["command"].is_string()) {
-                why = openOutside([&] {
-                    return ws->judgeCommand(args["command"].get<std::string>(), !BashTools::detectShell().empty());
-                });
                 if (why.empty()) {
                     std::vector<std::string> names;
                     {

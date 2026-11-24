@@ -513,6 +513,21 @@ bool treeStaysInside(const fs::path& root, const Inside& inside) {
     return true;
 }
 
+// Programs that read the folder they run in when given no path, as the read-only check allows them.
+bool readsItsFolder(const std::vector<std::string>& words) {
+    static const std::set<std::string> listers = {"ls", "dir", "find", "du"};
+    if (listers.count(words[0])) return true;
+    if (words[0] != "grep") return false;
+    for (size_t i = 1; i < words.size(); ++i) {
+        const std::string& w = words[i];
+        if (w == "--recursive" || w == "--dereference-recursive" || w == "--directories=recurse" || w == "recurse") {
+            return true;
+        }
+        if (w.size() > 1 && w[0] == '-' && w[1] != '-' && w.find_first_of("rR") != std::string::npos) return true;
+    }
+    return false;
+}
+
 bool followsLinks(const std::vector<std::string>& words) {
     const std::string& program = words[0];
     for (size_t i = 1; i < words.size(); ++i) {
@@ -538,10 +553,15 @@ bool Workspace::readsStayInside(const std::vector<std::vector<std::string>>& seg
     const Inside inside = [&roots](const std::string& abs) {
         return std::any_of(roots.begin(), roots.end(), [&](const std::string& r) { return under(abs, r); });
     };
+    struct Folder {
+        std::string path;
+        bool inside;
+    };
     // `cd` in a pipeline changes nothing and `cd` after ; or && does, so a
     // later word is checked against every folder the command could be in.
-    std::vector<std::string> folders = {normalized(fs::u8path(cwd.empty() ? roots.front() : fromShellPath(cwd)))};
-    if (!inside(folders.front())) return false;
+    const std::string start = normalized(fs::u8path(cwd.empty() ? roots.front() : fromShellPath(cwd)));
+    if (start.empty()) return false;
+    std::vector<Folder> folders = {{start, inside(start)}};
     for (const auto& words : segments) {
         if (words.empty()) return false;
         const bool cd = words[0] == "cd";
@@ -555,7 +575,7 @@ bool Workspace::readsStayInside(const std::vector<std::vector<std::string>>& seg
                 if (words[i].empty() || words[i][0] == '-') continue;
                 for (const auto& folder : folders) {
                     const fs::path p = fs::u8path(expandHome(fromShellPath(words[i])));
-                    const fs::path dir = p.is_absolute() ? p : fs::u8path(folder) / p;
+                    const fs::path dir = p.is_absolute() ? p : fs::u8path(folder.path) / p;
                     std::error_code ec;
                     if (!fs::is_directory(dir, ec)) continue;
                     named = true;
@@ -563,9 +583,11 @@ bool Workspace::readsStayInside(const std::vector<std::vector<std::string>>& seg
                 }
             }
             for (const auto& folder : folders) {
-                if (!named && !treeStaysInside(fs::u8path(folder), inside)) return false;
+                if (!named && !(folder.inside && treeStaysInside(fs::u8path(folder.path), inside))) return false;
             }
         }
+        // Per folder: whether a word named a granted place from it.
+        std::vector<bool> namedInside(folders.size(), false);
         for (size_t i = 1; i < words.size(); ++i) {
             std::string w = words[i];
             if (w.empty()) continue;
@@ -584,26 +606,57 @@ bool Workspace::readsStayInside(const std::vector<std::vector<std::string>>& seg
                 const size_t end = w.find_first_of("/\\", at);
                 if (w.substr(at, end - at).find_first_of("*?[") != std::string::npos) return false;
             }
+            const fs::path p = fs::u8path(expandHome(fromShellPath(w)));
+            const bool relative = !p.has_root_directory() && !p.has_root_name();
             if (w.find_first_of("*?[") != std::string::npos) {
                 for (const auto& folder : folders) {
-                    if (!wildcardStaysInside(fs::u8path(folder), w, inside)) return false;
+                    if (relative && !folder.inside) return false;  // it could match any file there
+                    if (!wildcardStaysInside(fs::u8path(folder.path), w, inside)) return false;
                 }
             }
-            const fs::path p = fs::u8path(expandHome(fromShellPath(w)));
             const size_t known = folders.size();
             for (size_t f = 0; f < known; ++f) {
-                const std::string abs = normalized(p.is_absolute() ? p : fs::u8path(folders[f]) / p);
+                const fs::path at = p.is_absolute() ? p : fs::u8path(folders[f].path) / p;
+                const std::string abs = normalized(at);
                 if (inside(abs)) {
-                    if (cd) folders.push_back(abs);
+                    namedInside[f] = true;
+                    if (cd) folders.push_back({abs, true});
                     continue;
                 }
-                if (cd) return false;
+                // The shell may stand beside an attached file and read it, nothing else there.
+                if (cd) {
+                    if (attachedFileFolder(abs).empty()) return false;
+                    folders.push_back({abs, false});
+                    continue;
+                }
                 if (p.has_root_directory() && (inSystemDir(abs) || looksLikePattern(abs))) continue;
+                // In an outside folder a word that names nothing there is a search term, not a file.
+                std::error_code ec;
+                if (!folders[f].inside && relative && fs::symlink_status(at, ec).type() == fs::file_type::not_found) {
+                    continue;
+                }
                 return false;
             }
         }
+        for (size_t f = 0; f < namedInside.size(); ++f) {
+            if (!folders[f].inside && !namedInside[f] && readsItsFolder(words)) return false;
+        }
     }
     return true;
+}
+
+std::string Workspace::attachedFileFolder(const std::string& folder) const {
+    if (folder.empty()) return "";
+    const std::string abs = normalized(fs::u8path(fromShellPath(folder)));
+    const std::vector<std::string> roots = this->roots();
+    if (abs.empty() || std::any_of(roots.begin(), roots.end(), [&](const std::string& r) { return under(abs, r); })) {
+        return "";
+    }
+    const bool holds = std::any_of(roots.begin(), roots.end(), [&](const std::string& r) {
+        std::error_code ec;
+        return !fs::is_directory(fs::u8path(r), ec) && normalized(fs::u8path(r).parent_path()) == abs;
+    });
+    return holds ? abs : "";
 }
 
 ToolInfo Workspace::confine(ToolInfo tool, std::shared_ptr<const Workspace> ws,
@@ -621,10 +674,11 @@ ToolInfo Workspace::confine(ToolInfo tool, std::shared_ptr<const Workspace> ws,
 }
 
 ToolInfo Workspace::confineShell(ToolInfo tool, std::shared_ptr<const Workspace> ws,
-                                 std::string commandArg, bool posixShell) {
+                                 std::string commandArg, bool posixShell,
+                                 std::function<bool(const json&)> provenInside) {
     ToolCallback inner = std::move(tool.callback);
-    tool.callback = [inner, ws, commandArg, posixShell](const json& args) -> json {
-        if (args.contains(commandArg) && args[commandArg].is_string()) {
+    tool.callback = [inner, ws, commandArg, posixShell, provenInside](const json& args) -> json {
+        if (args.contains(commandArg) && args[commandArg].is_string() && !(provenInside && provenInside(args))) {
             const std::string why =
                 ws->checkCommand(args[commandArg].get<std::string>(), posixShell);
             if (!why.empty()) return json{{"status", "error"}, {"error", why}};
