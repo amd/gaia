@@ -173,6 +173,22 @@ class TestTelegramSink:
         with pytest.raises(RuntimeError, match="HTTP 403"):
             sinks.dispatch("telegram", {"token": "tok", "to": "42"}, "hello")
 
+    def test_network_error_does_not_leak_the_token(self, mocker):
+        import requests as real_requests
+
+        mock_requests = mocker.patch(_REQUESTS)
+        mock_requests.RequestException = real_requests.RequestException
+        mock_requests.post.side_effect = real_requests.ConnectionError(
+            "Max retries exceeded with url: /botSECRET123/sendMessage"
+        )
+
+        with pytest.raises(RuntimeError, match="could not reach") as exc:
+            sinks.dispatch("telegram", {"token": "SECRET123", "to": "42"}, "hello")
+
+        assert "SECRET123" not in str(exc.value)
+        assert exc.value.__cause__ is None
+        assert exc.value.__suppress_context__
+
     def test_request_exception_raises_runtime_error(self, mocker):
         import requests as real_requests
 

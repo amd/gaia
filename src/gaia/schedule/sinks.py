@@ -216,10 +216,11 @@ def _to_telegram(output: str, sink_args: Dict[str, Any]) -> None:
     try:
         resp = requests.post(url, json={"chat_id": to, "text": output}, timeout=30)
     except requests.RequestException as e:
+        detail = str(e).replace(str(token), "***")
         raise RuntimeError(
-            f"telegram sink could not reach {TELEGRAM_API}: {e}. "
+            f"telegram sink could not reach {TELEGRAM_API}: {detail}. "
             f"Check network connectivity."
-        ) from e
+        ) from None
     if resp.status_code != 200:
         raise RuntimeError(
             f"telegram sink got HTTP {resp.status_code} from sendMessage: "
