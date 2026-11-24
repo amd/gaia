@@ -1818,7 +1818,11 @@ def install(
     Raises:
         InstallInProgressError, ChecksumError, DiskSpaceError,
         CompatibilityError, TrustRequiredError, InstallError.
+        SkillHumanOnlyError: an agent tool, not the user, is running it.
     """
+    from gaia.skills.human_only import AGENT_INSTALL_MESSAGE, require_user_terminal
+
+    require_user_terminal("gaia agent install", AGENT_INSTALL_MESSAGE)
     refuse_retired_agent(agent_id)
     fetcher = fetcher or catalog_mod.fetch_bytes
     run_pip = run_pip or _default_run_pip

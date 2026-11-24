@@ -26,6 +26,11 @@ HUMAN_ONLY_MESSAGE = (
     "own terminal."
 )
 
+AGENT_INSTALL_MESSAGE = (
+    "This installs agent code GAIA will run, so only you can run it, from your "
+    "own terminal."
+)
+
 _IN_AGENT_TOOL: contextvars.ContextVar[bool] = contextvars.ContextVar(
     "gaia_in_agent_tool", default=False
 )
@@ -57,11 +62,11 @@ def started_by_agent() -> bool:
     return _IN_AGENT_TOOL.get() or bool(os.environ.get(AGENT_CHILD_ENV))
 
 
-def require_user_terminal(action: str) -> None:
-    """Refuse *action* when an agent tool, not the user, is running it.
+def require_user_terminal(action: str, reason: str = HUMAN_ONLY_MESSAGE) -> None:
+    """Refuse *action*, saying *reason*, when an agent tool is running it.
 
     Raises:
         SkillHumanOnlyError: inside an agent tool or a process one started.
     """
     if started_by_agent():
-        raise SkillHumanOnlyError(f"Refused '{action}': {HUMAN_ONLY_MESSAGE}")
+        raise SkillHumanOnlyError(f"Refused '{action}': {reason}")
