@@ -240,6 +240,16 @@ class TestNotificationSink:
         mocker.patch(_SUBPROCESS_POPEN, return_value=process)
         sinks._to_windows_notification("T", "body")
 
+    def test_windows_message_box_closes_the_stderr_pipe_it_stops_reading(self, mocker):
+        import subprocess
+
+        mocker.patch.dict(sys.modules, {"plyer": None})
+        process = mocker.Mock()
+        process.wait.side_effect = subprocess.TimeoutExpired("powershell", 3)
+        mocker.patch(_SUBPROCESS_POPEN, return_value=process)
+        sinks._to_windows_notification("T", "body")
+        process.stderr.close.assert_called_once_with()
+
     def test_windows_missing_powershell_is_actionable(self, mocker):
         mocker.patch.dict(sys.modules, {"plyer": None})
         mocker.patch(_SUBPROCESS_POPEN, side_effect=FileNotFoundError("powershell"))
@@ -276,7 +286,27 @@ class TestNotificationSink:
 
         mock_run.assert_called_once()
         args = mock_run.call_args.args[0]
-        assert args == ["notify-send", "T", "body"]
+        assert args == ["notify-send", "--", "T", "body"]
+
+    def test_linux_message_starting_with_a_dash_is_not_an_option(self, mocker):
+        mocker.patch(_PLATFORM_SYSTEM, return_value="Linux")
+        mock_run = mocker.patch(_SUBPROCESS_RUN)
+
+        sinks.dispatch("notification", {"title": "T"}, "- first\n- second")
+
+        args = mock_run.call_args.args[0]
+        assert args.index("--") < args.index("- first\n- second")
+
+    def test_masked_sink_args_hide_credentials_only(self):
+        shown = sinks.masked_sink_args(
+            {"to": "42", "token": "123:abc", "API_KEY": "k", "Password": "p"}
+        )
+        assert shown == {
+            "to": "42",
+            "token": "***",
+            "API_KEY": "***",
+            "Password": "***",
+        }
 
     def test_called_process_error_raises_runtime_error(self, mocker):
         import subprocess
