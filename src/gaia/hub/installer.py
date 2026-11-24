@@ -1025,6 +1025,11 @@ def _install_python_artifact(
     return site_packages
 
 
+#: Unpacked-size caps for a C++ agent archive; GAIA's largest agent is ~150 MB.
+CPP_ARCHIVE_MAX_MEMBER_BYTES = 1024 * 1024 * 1024
+CPP_ARCHIVE_MAX_TOTAL_BYTES = 2 * 1024 * 1024 * 1024
+
+
 def _install_cpp_artifact(
     artifact_bytes: bytes, filename: str, install_dir: Path
 ) -> Path:
@@ -1049,7 +1054,13 @@ def _install_cpp_artifact(
         archive_path = Path(tmp) / filename
         archive_path.write_bytes(artifact_bytes)
         try:
-            safe_extract(archive_path, install_dir, kind=kind)
+            safe_extract(
+                archive_path,
+                install_dir,
+                kind=kind,
+                max_member_bytes=CPP_ARCHIVE_MAX_MEMBER_BYTES,
+                max_total_bytes=CPP_ARCHIVE_MAX_TOTAL_BYTES,
+            )
         except ArchiveError as e:
             raise InstallError(
                 f"Refusing to install '{filename}' into {install_dir}: {e}. "

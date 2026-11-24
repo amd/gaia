@@ -570,11 +570,22 @@ def _assert_matches_bundle(
         )
 
 
+#: Unpacked-size caps for a skill bundle; real skills are under 1 MB.
+BUNDLE_MAX_MEMBER_BYTES = 100 * 1024 * 1024
+BUNDLE_MAX_TOTAL_BYTES = 500 * 1024 * 1024
+
+
 def _unpack_bundle(archive: Path, destination: Path, *, name: str) -> Path:
     """Extract a skill bundle, refusing unsafe entries, and return its root."""
     destination = Path(destination)
     try:
-        safe_extract(archive, destination, kind="zip")
+        safe_extract(
+            archive,
+            destination,
+            kind="zip",
+            max_member_bytes=BUNDLE_MAX_MEMBER_BYTES,
+            max_total_bytes=BUNDLE_MAX_TOTAL_BYTES,
+        )
     except ArchiveError as exc:
         raise SkillValidationError(
             f"Refusing to extract the bundle for '{name}': {exc}. The bundle is "
