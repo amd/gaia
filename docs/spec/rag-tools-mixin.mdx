@@ -515,15 +515,18 @@ for search_key in search_keys:
     all_scores.extend(scores)
 
 # 2. Keyword ranking: every keyword hit, ranked by term rarity and
-# proximity, then fused with the semantic ranking by reciprocal rank
-# fusion (each list contributes 1 / (k + rank), k = 60); a chunk both
-# rankings like scores from both. Fused scores are rescaled to 0-1.
+# proximity, then fused with the semantic ranking by score-weighted
+# reciprocal rank fusion (each list contributes relative_score / (k + rank),
+# k = 1); a chunk both rankings strongly favor scores from both. Fused scores
+# are rescaled to 0-1.
 keywords = keyword_index(self.rag)
-for chunk_idx, _boost_score, _words in keywords.rank(
+for chunk_idx, boost_score, _words in keywords.rank(
     query, limit=_adaptive_max(len(self.rag.chunks), self.max_chunks)
 ):
-    keyword_chunks.append(keywords.texts[chunk_idx])
-sorted_items = _fuse_dense_and_keyword(dense_ranked, keyword_chunks)
+    keyword_scored.append(
+        (keywords.texts[chunk_idx], max(0.0, boost_score - _KEYWORD_MIN_SCORE))
+    )
+sorted_items = _fuse_dense_and_keyword(dense_ranked, keyword_scored)
 
 # 3. Deduplication by chunk text (dict key) during fusion
 unique_chunks = {}

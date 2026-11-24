@@ -123,9 +123,106 @@ def test_extra_scores_rank_after_the_dense_list():
 
     assert [chunk for chunk, _ in scored] == ["e1", "e2"]
     # Ranked just after the five dense chunks, rescaled to a 0-1 scale:
-    # (k + 1) / 2 * 1/66, (k + 1) / 2 * 1/67.
-    assert abs(scored[0][1] - (_RRF_K + 1) / 2 / 66) < 1e-9
-    assert abs(scored[1][1] - (_RRF_K + 1) / 2 / 67) < 1e-9
+    # (k + 1) / 2 / (k + 6), (k + 1) / 2 / (k + 7).
+    assert abs(scored[0][1] - (_RRF_K + 1) / 2 / (_RRF_K + 6)) < 1e-9
+    assert abs(scored[1][1] - (_RRF_K + 1) / 2 / (_RRF_K + 7)) < 1e-9
+
+
+def test_extra_scores_do_not_promote_fallback_above_rank_one():
+    # Regression (#8751): a per-document fallback that missed global dense
+    # search must not receive a synthetic dense+keyword double boost that
+    # outscores a rank-1 dense or keyword hit (score = 0.5).
+    scored = _fuse_extra_scores(5, ["e1"], [("e1", 0.4)])
+    assert scored[0][1] < 0.5
+
+
+def test_weak_deep_keyword_overlap_does_not_bury_top_matches():
+    # Regression (#8751): in a widened keyword pool (e.g. PDF pages sharing a
+    # running header/footer), weak tail keyword hits on dense distractors must
+    # not outrank a top-1 keyword match (absent from dense top-5) or a top-1
+    # dense match (absent from keyword).
+    dense = [
+        ("d1_only", 0.65),
+        ("d2_hdr", 0.60),
+        ("d3_hdr", 0.58),
+        ("d4_hdr", 0.56),
+        ("d5_hdr", 0.55),
+    ]
+    keyword = [
+        ("kw1_gold", 0.42),
+        ("kw2", 0.25),
+        ("kw3", 0.22),
+        ("kw4", 0.20),
+        ("kw5", 0.19),
+        ("d2_hdr", 0.15),
+        ("d3_hdr", 0.14),
+        ("d4_hdr", 0.13),
+        ("d5_hdr", 0.12),
+    ]
+
+    ranked = [chunk for chunk, _ in _fuse_dense_and_keyword(dense, keyword)]
+
+    # Top-1 dense and top-1 keyword both stay ahead of weak tail overlaps.
+    assert ranked[:2] == ["d1_only", "kw1_gold"]
+
+
+def test_relative_score_strength_breaks_symmetric_rank_ties():
+    # When two chunks swap ranks (1, 2) vs (2, 1), a tiny dense margin should
+    # yield to a clear lexical lead rather than always defaulting to dense.
+    dense = [("d1_weak_kw", 0.623), ("d2_strong_kw", 0.618)]
+    keyword = [("d2_strong_kw", 0.50), ("d1_weak_kw", 0.35)]
+
+    ranked = [chunk for chunk, _ in _fuse_dense_and_keyword(dense, keyword)]
+
+    assert ranked[0] == "d2_strong_kw"
+
+
+def test_per_document_fallback_stays_after_top_ranked_passages(tmp_path):
+    # Regression (#8751): a fallback passage from another document added by
+    # _spread_over_documents must stay behind the main ranked top even when
+    # that passage also appears in the keyword pool.
+    doc_a = tmp_path / "manual.txt"
+    doc_b = tmp_path / "other.txt"
+    path_a = str(doc_a.resolve())
+    path_b = str(doc_b.resolve())
+    gold_a = (
+        "Professional engineering submissions follow the Professional Governance Act."
+    )
+    dense_a = "General regulatory oversight for operations permits."
+    other_b = "Unrelated paper mentioning operations once."
+    filler_a = [f"Manual section {i} background notes." for i in range(60)]
+    chunks = [gold_a, dense_a, other_b] + filler_a
+
+    rag = MagicMock()
+    rag.index = object()
+    rag.chunks = chunks
+    rag.chunk_to_file = {i: path_a for i in range(len(chunks))}
+    rag.chunk_to_file[2] = path_b
+    rag.indexed_files = {path_a, path_b}
+    rag.file_indices = {path_a: object(), path_b: object()}
+    rag.file_to_chunk_indices = {
+        path_a: [0, 1] + list(range(3, len(chunks))),
+        path_b: [2],
+    }
+    rag.file_metadata = {
+        path_a: {"full_text": "\n".join(chunks[:2] + filler_a)},
+        path_b: {"full_text": other_b},
+    }
+    rag._retrieve_chunks.return_value = ([dense_a], [0.60])
+    rag._retrieve_chunks_from_file.side_effect = lambda _q, p: (
+        ([dense_a], [0.60]) if p == path_a else ([other_b], [0.30])
+    )
+
+    _RagHost(rag).register_rag_tools()
+    search = _TOOL_REGISTRY["query_documents"]["function"]
+    result = search(query="Professional engineering Governance Act operations")
+
+    assert result["status"] == "success", result
+    returned = [c["content"] for c in result["chunks"]]
+    scores = [c["relevance_score"] for c in result["chunks"]]
+    assert scores == sorted(scores, reverse=True)
+    assert returned.index(dense_a) < returned.index(other_b)
+    assert returned.index(gold_a) < returned.index(other_b)
 
 
 def test_relevance_scores_stay_on_a_zero_to_one_scale(tmp_path):
