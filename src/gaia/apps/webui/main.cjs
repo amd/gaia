@@ -124,6 +124,8 @@ const {
   isAllowedExternalUrl,
   isInAppNavigation,
   describeBlockedUrl,
+  describeOpenFailure,
+  openExternalSafely,
 } = require("./services/link-policy.cjs");
 const { installWindowKeys } = require("./services/window-keys.cjs");
 const { installContextMenu } = require("./services/context-menu.cjs");
@@ -503,8 +505,16 @@ async function startBackend() {
 /**
  * Start a new backend for the supervisor and resolve once it answers.
  * Rejects when it exits first or never answers, so the supervisor retries.
+ * A backend still alive here is a hung one Restart GAIA was pressed for:
+ * stop it first, or the new backend would run beside it on a new port.
  */
 async function restartBackend() {
+  if (backendProcess) {
+    const hung = backendProcess;
+    backendProcess = null;
+    isIntentionalKill = true;
+    await portManager.killBackend(hung);
+  }
   backendStarting = startBackend();
   const child = await backendStarting;
   if (!child) throw Object.assign(new Error(missingBackendMessage()), { terminal: true });
@@ -549,6 +559,8 @@ const backendSupervisor = createBackendSupervisor({
         (state.status === "restarting" ? ` (try ${state.attempt} of ${state.maxRestarts})` : "") +
         (state.lastError ? `: ${state.lastError}` : "")
     );
+    // A backend up again after a failed start leaves nothing to roll back from.
+    if (state.status === "running") autoUpdater.clearStartFailure();
     if (mainWindow && !mainWindow.isDestroyed()) {
       mainWindow.webContents.send("backend:state", backendStateForRenderer(state));
     }
@@ -661,21 +673,28 @@ function findDistPath() {
 
 /** Refuse a link loudly — the user clicked it, so they get told why nothing happened. */
 function reportBlockedLink(url) {
-  const message = describeBlockedUrl(url);
+  warnAboutLink("Link blocked", describeBlockedUrl(url));
+}
+
+function reportLinkNotOpened(url, err) {
+  warnAboutLink("Link not opened", describeOpenFailure(url, err));
+}
+
+function warnAboutLink(title, message) {
   console.error(`[main] ${message}`);
   // Non-blocking and parented: showErrorBox would freeze the main process.
   dialog
     .showMessageBox(mainWindow && !mainWindow.isDestroyed() ? mainWindow : null, {
       type: "warning",
-      title: "Link blocked",
-      message: "Link blocked",
+      title,
+      message: title,
       detail: message,
       buttons: ["OK"],
       noLink: true,
     })
     .catch((err) =>
       console.error(
-        `[main] Could not show the link-blocked dialog: ${err && err.message ? err.message : err}`
+        `[main] Could not show the "${title}" dialog: ${err && err.message ? err.message : err}`
       )
     );
 }
@@ -749,7 +768,7 @@ function createWindow() {
   // arrives as file:///C:/… — check the scheme before handing it to the OS.
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
     if (isAllowedExternalUrl(url)) {
-      shell.openExternal(url);
+      openExternalSafely(shell, url, (err) => reportLinkNotOpened(url, err));
     } else {
       reportBlockedLink(url);
     }
@@ -763,7 +782,7 @@ function createWindow() {
     if (isInAppNavigation(url, currentUrl)) return;
     event.preventDefault();
     if (isAllowedExternalUrl(url)) {
-      shell.openExternal(url);
+      openExternalSafely(shell, url, (err) => reportLinkNotOpened(url, err));
       return;
     }
     reportBlockedLink(url);
@@ -871,9 +890,11 @@ async function loadApp() {
           </div>
         </body>
       </html>`;
-    mainWindow.loadURL(
-      "data:text/html;charset=utf-8," + encodeURIComponent(waitingHtml)
-    );
+    mainWindow
+      .loadURL("data:text/html;charset=utf-8," + encodeURIComponent(waitingHtml))
+      .catch((err) =>
+        console.error(`[main] Could not show the waiting page: ${err && err.message ? err.message : err}`)
+      );
   }
 }
 

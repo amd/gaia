@@ -496,9 +496,11 @@ again works in the same request.
   it, so a clone that would ask on the terminal fails at once with git's own
   message. Git Credential Manager's sign-in window still opens.
 
-A call stopped because an earlier one in the request was refused by policy, or
-denied because nobody could be asked, returns `status: "denied"` with
-`denied_by: "policy"`. The Agent UI shows it as
+A call stopped because an earlier one in the request was refused by policy,
+denied because nobody could be asked, or refused outright for what it does
+(`git push --force`, `gh repo delete`: the commands no approval can lift),
+returns `status: "denied"` with `denied_by: "policy"`, its reason kept in
+`error`. The Agent UI shows it as
 "Blocked by GAIA", never as "You declined", since nobody was asked.
 
 `install_cli` and `sign_in_cli` are never answered by pre-approval
