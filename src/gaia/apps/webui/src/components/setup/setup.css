@@ -257,6 +257,7 @@
 .mc-stat-label { display: inline-flex; align-items: center; gap: 4px; color: var(--text-secondary); }
 .mc-stat-value { color: var(--text-primary); font-weight: 500; font-variant-numeric: tabular-nums; white-space: nowrap; }
 .mc-stat-path { overflow-wrap: anywhere; }
+.mc-summary-note { margin: 0; font-size: 12px; color: var(--text-secondary); }
 
 .mc-disk {
     position: relative;

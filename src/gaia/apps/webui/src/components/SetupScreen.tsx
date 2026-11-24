@@ -1160,10 +1160,10 @@ export function SetupScreen({ onReady, onClose }: SetupScreenProps) {
         document.getElementById('setup-title')?.focus({ preventScroll: true });
     }, [stage]);
 
-    // The plan names the agent only where Customize offers a second one to pick.
+    // The plan, Test and Ready name the agent only where Customize offers a second one to pick.
     const [agents, setAgents] = useState<AgentPrograms | null>(null);
     useEffect(() => {
-        if (stage !== 'plan') return;
+        if (stage !== 'plan' && stage !== 'test' && stage !== 'ready') return;
         let live = true;
         api.getAgentPrograms()
             .then((l) => { if (live) setAgents(l); })
@@ -1176,6 +1176,8 @@ export function SetupScreen({ onReady, onClose }: SetupScreenProps) {
         : agentShown === 'gaiapy' ? 'setup.agent.gaiapy'
             : agentShown === 'gaiacpp' ? 'setup.agent.gaiacpp'
                 : null;
+    // Full-featured installs whichever agent is picked, so the total says why it holds more than Fast and light's size.
+    const fallbackGb = agentShown === 'gaiacpp' ? pythonAgentGb : 0;
     // One flat line of steps; Customize, the cloud key and GPU memory are screens of the step they open from.
     const trail: Array<{ id: Stage; label: string; key: MessageKey }> = [
         { id: 'check', label: t('setup.check.title'), key: 'setup.check.title' },
@@ -1445,6 +1447,7 @@ export function SetupScreen({ onReady, onClose }: SetupScreenProps) {
                                             <li>{t('setup.plan.why.bigger', { name: biggerOption.name, need: formatFitGb(biggerOption.need_gb), have: formatFitGb(biggerOption.capacity_gb) })}</li>
                                         )}
                                     </ul>
+                                    {fallbackGb > 0 && <p className="setup-hint">{t('setup.summary.fallback', { size: formatSize(fallbackGb) })}</p>}
                                     {agentLabel && (
                                         <p className="setup-agent-line">
                                             {t.compose((say) => say('setup.plan.agent', { name: say(agentLabel) }))}
@@ -1551,6 +1554,7 @@ export function SetupScreen({ onReady, onClose }: SetupScreenProps) {
                                 onContinue={(ack) => void commit(ack)}
                                 busy={busy || runGoing}
                                 agentGb={agentGb}
+                                fallbackGb={fallbackGb}
                                 error={actionError ?? startError}
                             />
                         </>
@@ -1760,6 +1764,7 @@ export function SetupScreen({ onReady, onClose }: SetupScreenProps) {
                         <>
                             <h1 id="setup-title" className="setup-title" tabIndex={-1}>{t('setup.test.title')}</h1>
                             <p className="setup-lede">{t('setup.test.lede')}</p>
+                            {agentLabel && <p className="setup-agent-line">{t.compose((say) => say('setup.plan.agent', { name: say(agentLabel) }))}</p>}
                             <TestStep
                                 run={fullRun}
                                 expected={expectedTests}
@@ -1795,6 +1800,7 @@ export function SetupScreen({ onReady, onClose }: SetupScreenProps) {
                                         </p>
                                     )}
                                 </div>
+                                {agentLabel && <p className="setup-agent-line">{t.compose((say) => say('setup.plan.agent', { name: say(agentLabel) }))}</p>}
                                 <SetupFooter>
                                     <button type="button" className="btn-primary" onClick={() => void finish()} autoFocus>
                                         {t('setup.ready.start')}

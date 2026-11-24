@@ -153,10 +153,12 @@ interface SummaryProps {
     selection: Selection;
     /** GB of an agent setup downloads first, added to the total. */
     agentGb?: number;
+    /** GB of Full-featured counted in the total while Fast and light is picked; 0 says nothing. */
+    fallbackGb?: number;
 }
 
 /** Download total against the free space on the model drive, live as the user ticks. */
-export function SelectionSummary({ plan, selection, agentGb = 0 }: SummaryProps) {
+export function SelectionSummary({ plan, selection, agentGb = 0, fallbackGb = 0 }: SummaryProps) {
     const t = useT();
     const { downloadGb, freeGb, afterGb } = totals(plan, selection, agentGb);
     const short = shortfall(plan, selection);
@@ -188,6 +190,7 @@ export function SelectionSummary({ plan, selection, agentGb = 0 }: SummaryProps)
                     </span>
                 )}
             </div>
+            {fallbackGb > 0 && <p className="mc-summary-note">{t('setup.summary.fallback', { size: formatSize(fallbackGb) })}</p>}
             {freeGb != null && (
                 <div className="mc-disk" aria-hidden="true">
                     <span className="mc-disk-fill" style={{ inlineSize: `${(fill * 100).toFixed(1)}%` }} />

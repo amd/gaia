@@ -2357,6 +2357,7 @@ export const enMessages = {
     'setup.summary.free': 'Free',
     'setup.summary.freeOn': 'Free on',
     'setup.summary.after': 'After',
+    'setup.summary.fallback': 'Includes Full-featured ({size}), which is always installed as the fallback.',
     'setup.summary.sizeUnknown': 'Size unknown',
     'setup.summary.freeUnknown': 'Free space unknown',
     'setup.summary.theDrive': 'the model drive',

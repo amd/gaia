@@ -34,6 +34,8 @@ interface ModelsStepProps {
     error: string | null;
     /** GB of a picked agent that isn't on this PC yet; setup downloads it first. */
     agentGb?: number;
+    /** GB of Full-featured in the total while Fast and light is picked; the total says why. */
+    fallbackGb?: number;
 }
 
 /**
@@ -42,7 +44,7 @@ interface ModelsStepProps {
  */
 export function ModelsStep({
     plan, planError, onRetryPlan, onUseRecommended, selection, onSelection, cloud, keepTrying, onKeepTrying,
-    onBack, onContinue, busy, error, agentGb = 0,
+    onBack, onContinue, busy, error, agentGb = 0, fallbackGb = 0,
 }: ModelsStepProps) {
     const t = useT();
     const listRef = useRef<HTMLDivElement>(null);
@@ -109,7 +111,7 @@ export function ModelsStep({
                 </button>
             )}
             <div className="setup-models-footer">
-                <SelectionSummary plan={plan} selection={selection} agentGb={agentGb} />
+                <SelectionSummary plan={plan} selection={selection} agentGb={agentGb} fallbackGb={fallbackGb} />
                 <label className="setup-keep-trying">
                     <input type="checkbox" checked={keepTrying} onChange={(e) => onKeepTrying(e.target.checked)} disabled={busy} />
                     <span>{t('setup.keepTrying')}</span>

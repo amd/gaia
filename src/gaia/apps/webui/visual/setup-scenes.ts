@@ -668,6 +668,19 @@ export const SETUP_SCENES: SetupScene[] = [
         },
     },
     {
+        // Fast and light picked on a fresh PC: the total still holds Full-featured, and says so.
+        name: 'models-gaiapy-missing-fastlight',
+        answers: { plan: PLAN_FILE_FOUND, agent: { gaiacpp: 'installed', gaiapy: 'missing' } },
+        reach: async (page) => {
+            await toModels(page);
+            await page.locator('.agent-choice [role="radio"]').nth(1).click();
+            const note = page.locator('.mc-summary-note');
+            await expect(note).toBeVisible();
+            await expect(page.locator('.mc-summary .mc-stat-value').first()).toHaveText('153 MB');
+            await note.scrollIntoViewIfNeeded();
+        },
+    },
+    {
         // An older installer's gaiacpp under a newer app: flagged on Customize, with Update, and still pickable.
         name: 'models-agent-outdated',
         answers: { agent: { gaiacpp: 'outdated' } },
@@ -916,6 +929,22 @@ export const SETUP_SCENES: SetupScene[] = [
             await expect(page.locator('.setup-done')).toBeVisible();
             // A first run has nothing to pick up: the other tasks show, Check in waits.
             await expect(page.locator('.start-card')).toHaveCount(1);
+        },
+    },
+    {
+        name: 'test-running-gaiacpp',
+        answers: { status: RUN_TESTING, agent: { current: 'gaiacpp' } },
+        reach: async (page) => {
+            await expect(page.locator('.setup-result.is-running')).toBeVisible();
+            await expect(page.locator('.setup-agent-line')).toBeVisible();
+        },
+    },
+    {
+        name: 'ready-gaiacpp',
+        answers: { status: RUN_READY, plan: PLAN_DONE, agent: { current: 'gaiacpp' } },
+        reach: async (page) => {
+            await expect(page.locator('.setup-done')).toBeVisible();
+            await expect(page.locator('.setup-done .setup-agent-line')).toBeVisible();
         },
     },
     {

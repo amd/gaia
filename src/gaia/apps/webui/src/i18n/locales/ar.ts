@@ -2357,6 +2357,7 @@ const messages: Messages = {
     'setup.summary.free': 'المساحة الحرة',
     'setup.summary.freeOn': 'المساحة الحرة على',
     'setup.summary.after': 'بعد التنزيل',
+    'setup.summary.fallback': 'يشمل كامل الميزات ({size})، فهو يُثبَّت دائمًا كبديل احتياطي.',
     'setup.summary.sizeUnknown': 'الحجم غير معروف',
     'setup.summary.freeUnknown': 'المساحة الحرة غير معروفة',
     'setup.summary.theDrive': 'قرص النماذج',
