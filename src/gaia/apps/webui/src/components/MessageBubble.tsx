@@ -619,6 +619,9 @@ export function MessageBubble({ message, isStreaming, agentSteps, agentStepsActi
     }, [agentSteps, message.content, message.role, isStreaming]);
     const isError = message.role === 'assistant' && (echo.echoed || message.failed === true || isErrorContent(message.content));
     const covered = isError && Boolean(failureNotice);
+    // An agent that couldn't start leaves an empty answer; its error step is the whole card.
+    const agentFailedStep = isError && !message.content.trim()
+        && Boolean(echo.steps?.some((step) => step.type === 'error' && namesAgentLog(step.detail ?? '')));
     const shownSteps = covered ? echo.steps?.filter((step) => step.type !== 'error') : echo.steps;
     const place = useInferencePlace();
     const showServerLog = useLogsStore((s) => s.show);
@@ -828,7 +831,7 @@ export function MessageBubble({ message, isStreaming, agentSteps, agentStepsActi
                             )}
                         />
                     )}
-                    {isError && !covered && (
+                    {isError && !covered && !agentFailedStep && (
                         <div className="error-banner">
                             <AlertTriangle size={14} />
                             <span>{t(failedTurn && failedTurn.kind !== 'unknown' ? `failedTurn.${failedTurn.kind}.title` : 'msg.error')}</span>
@@ -955,7 +958,7 @@ export function MessageBubble({ message, isStreaming, agentSteps, agentStepsActi
                         </button>
                     ))}
                     {/* The agent itself stopped: its own log says why, not the model server's. */}
-                    {covered ? null : (isError || endedBy) && !isStreaming && namesAgentLog(endedBy ?? message.content) ? (
+                    {covered ? null : (isError || endedBy) && !isStreaming && (agentFailedStep || namesAgentLog(endedBy ?? message.content)) ? (
                         <button type="button" className="msg-try-again" onClick={() => showServerLog('agent')}>
                             <ScrollText size={12} aria-hidden="true" />
                             {t('logs.agentLog')}

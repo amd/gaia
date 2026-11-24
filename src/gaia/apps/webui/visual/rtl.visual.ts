@@ -788,6 +788,11 @@ for (const locale of ['en', 'ar']) {
         const error = page.locator('[data-message-id="2"] .flow-error');
         await expect(error).toContainText(locale === 'ar' ? 'تعذّر على GAIA تشغيل وكيله' : "GAIA couldn't start its agent.");
         await expect(error).toContainText('/home/you/.gaia/agents/gaia/logs');
+        // One card, and the log that says why is the agent's own, not the model server's.
+        const turn = page.locator('[data-message-id="2"]');
+        await expect(turn.locator('.error-banner')).toHaveCount(0);
+        await expect(turn.getByRole('button', { name: locale === 'ar' ? /سجلّ الوكيل/ : 'Agent log' })).toBeVisible();
+        await expect(turn.getByRole('button', { name: /Model server log|سجلّ خادم النماذج/ })).toHaveCount(0);
         await shot(page, `chat-agent-start-failed-${locale}`);
         expect(await audit(page)).toEqual([]);
     });
