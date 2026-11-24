@@ -162,7 +162,7 @@ export function AgentChoice({ inSettings = false, disabled = false, pending = nu
     const oldNote = !outdated(cpp) ? null
         : cpp?.version && cpp.release_version ? t('setup.agent.outdated', { name: 'gaiacpp', found: cpp.version, expected: cpp.release_version })
             : t('setup.agent.outdatedNoVersion', { name: 'gaiacpp' });
-    const why = cpp?.unavailable_code ? t(WHY[cpp.unavailable_code]) : cpp?.unavailable_reason;
+    const why: Param | null | undefined = cpp?.unavailable_code ? ref(WHY[cpp.unavailable_code]) : cpp?.unavailable_reason;
     const cppNote: string | null = !cpp || installed(cpp) ? null
         : cpp.can_download ? t(inSettings ? 'setup.agent.downloadsOnButton' : 'setup.agent.downloadsLater')
             : why ? t('setup.agent.cantDownload', { reason: why })

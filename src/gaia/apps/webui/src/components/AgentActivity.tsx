@@ -45,6 +45,7 @@ import { StepResult } from './LongContent';
 import { isMessageKey, ref, type MessageKey, type MessageRef } from '../i18n/registry';
 import { tEn, useT, type Translate } from '../i18n/useT';
 import { localizeLiveStatus } from '../utils/liveStatus';
+import { agentErrorParam } from '../utils/agentErrors';
 import { ensureModel } from '../stores/modelNeededStore';
 import './AgentActivity.css';
 import { visibleName, markStrayDirection } from './CalendarApproval';
@@ -1120,10 +1121,11 @@ export function PlanChecklist({ step }: { step: ActivityRow }) {
 
 function FlowError({ step }: { step: AgentStep }) {
     const t = useT();
+    const detail = step.detail ? agentErrorParam(step.detail) : null;
     return (
         <div className="flow-error">
             <AlertCircle size={13} />
-            <span>{step.detail || step.label || t('activity.errorOccurred')}</span>
+            <span>{detail ? (typeof detail === 'object' ? say(t, detail) : String(detail)) : step.label || t('activity.errorOccurred')}</span>
         </div>
     );
 }

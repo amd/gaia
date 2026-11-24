@@ -787,6 +787,8 @@ const messages: Messages = {
     'activity.planStatus.stopped': 'توقفت',
     'activity.planStatus.pending': 'لم تبدأ',
     'activity.errorOccurred': 'حدث خطأ',
+    'agentError.startFailed': 'تعذّر على GAIA تشغيل وكيله. أرسل رسالتك مرة أخرى. إذا تكرر ذلك، فأعد تشغيل GAIA. وإذا استمر الفشل، فحدِّث GAIA إلى أحدث إصدار أو أعد تثبيته.',
+    'agentError.withLogFolder': '{message} التفاصيل في مجلد السجلات هذا: {path}',
     'activity.policy.title': 'درع السياسات',
     'activity.policy.tool': 'الأداة',
     'activity.policy.rules': 'القواعد',

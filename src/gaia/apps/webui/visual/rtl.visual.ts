@@ -74,6 +74,33 @@ async function open(page: Page, hash = '', locale = 'ar', before?: (page: Page) 
 const nextFrames = (page: Page) =>
     page.evaluate(() => new Promise<void>((done) => requestAnimationFrame(() => requestAnimationFrame(() => done()))));
 
+/**
+ * Labels translated twice: a translated label passed whole into another one, so the
+ * outer English half holds the inner label in both languages and it prints twice, nested.
+ * Checked by the screens that had it; not in `audit` while a few other screens still do it.
+ */
+const nestedGlosses = (page: Page): Promise<string[]> => page.evaluate(() => {
+    const nested = (text: string): boolean => {
+        for (let at = text.indexOf('\u2066('); at >= 0; at = text.indexOf('\u2066(', at + 1)) {
+            let depth = 0;
+            for (let i = at; i < text.length; i++) {
+                const c = text[i];
+                if (c === '\u2067' && depth > 0) return true;
+                if (c === '\u2066' || c === '\u2067' || c === '\u2068') depth++;
+                else if (c === '\u2069' && --depth === 0) break;
+            }
+        }
+        return false;
+    };
+    const found: string[] = [];
+    const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+    for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+        const el = node.parentElement;
+        if (el && el.checkVisibility() && nested(node.textContent ?? '')) found.push((el.textContent ?? '').trim().slice(0, 60));
+    }
+    return found;
+});
+
 const audit = async (page: Page): Promise<string[]> => {
     await nextFrames(page);
     // A state that just landed (a fetch resolving) is mid-transition, and an inherited
@@ -748,7 +775,27 @@ for (const locale of ['en', 'ar']) {
         await shot(page, `chat-gaiacpp-missing-${locale}`);
         expect(await audit(page)).toEqual([]);
     });
+
+    test(`an agent that couldn't start for another reason says so in the UI language (${locale})`, async ({ page }) => {
+        const failed = GAIACPP_MISSING_TURN.map((m) => (m.role === 'assistant'
+            ? { ...m, agent_steps: [{ ...m.agent_steps![0], detail: `${AGENT_START_FAILED} The details are in this log folder: /home/you/.gaia/agents/gaia/logs` }] }
+            : m));
+        await open(page, `#${ANSWER_SESSION}`, locale, async (p) => {
+            await p.route((url) => url.pathname === `/api/sessions/${ANSWER_SESSION}/messages`, (route) => route.fulfill({
+                json: { messages: failed, total: failed.length },
+            }));
+        });
+        const error = page.locator('[data-message-id="2"] .flow-error');
+        await expect(error).toContainText(locale === 'ar' ? 'تعذّر على GAIA تشغيل وكيله' : "GAIA couldn't start its agent.");
+        await expect(error).toContainText('/home/you/.gaia/agents/gaia/logs');
+        await shot(page, `chat-agent-start-failed-${locale}`);
+        expect(await audit(page)).toEqual([]);
+    });
 }
+
+/** The relay's English for an agent that never started (`start_failed_message` in profiles.py). */
+const AGENT_START_FAILED = "GAIA couldn't start its agent. Send your message again. If this keeps happening, restart GAIA. "
+    + 'If it still fails, update GAIA to the latest version or reinstall it.';
 
 const uncut = (el: Element) => el.scrollWidth <= el.clientWidth + 1;
 
@@ -3342,6 +3389,7 @@ for (const locale of ['ar', 'en']) {
                     if (noGaiacpp) {
                         await expect(why).toBeVisible();
                         expect((await why.boundingBox())!.height, 'the reason takes no room on the screen').toBeGreaterThan(10);
+                        expect(await nestedGlosses(page), 'the reason is printed once').toEqual([]);
                     }
                     await expect(agent.locator('.agent-choice-size')).toHaveCount(noGaiacpp ? 1 : 2);
                     const more = agent.locator('.agent-choice-more');

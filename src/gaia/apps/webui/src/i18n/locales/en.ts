@@ -787,6 +787,8 @@ export const enMessages = {
     'activity.planStatus.stopped': 'Stopped',
     'activity.planStatus.pending': 'Not started',
     'activity.errorOccurred': 'An error occurred',
+    'agentError.startFailed': "GAIA couldn't start its agent. Send your message again. If this keeps happening, restart GAIA. If it still fails, update GAIA to the latest version or reinstall it.",
+    'agentError.withLogFolder': '{message} The details are in this log folder: {path}',
     'activity.policy.title': 'Policy Shield',
     'activity.policy.tool': 'Tool',
     'activity.policy.rules': 'Rules',
