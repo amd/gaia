@@ -243,14 +243,16 @@ async def upload_by_path(
     if "\x00" in request.filepath:
         raise HTTPException(status_code=400, detail="Invalid file path")
 
+    # ``~`` is the user's home, as safe_open_document reads it, so check that path.
+    expanded = os.path.expanduser(request.filepath)
     # Resolve once — used for both the lock key and safe_open validation
     try:
-        resolved = Path(request.filepath).resolve()
+        resolved = Path(expanded).resolve()
     except (ValueError, OSError) as e:  # too long for the OS
         raise HTTPException(
             status_code=400, detail=f"Invalid file path: {path_error_reason(e)}"
         ) from e
-    ensure_document_path_allowed(Path(request.filepath))
+    ensure_document_path_allowed(Path(expanded))
     _refuse_secret(resolved)
     lock = upload_locks.setdefault(str(resolved), asyncio.Lock())
 
