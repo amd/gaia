@@ -234,7 +234,7 @@ type ProgramConflictError struct {
 
 func (e *ProgramConflictError) Error() string {
 	return fmt.Sprintf(
-		"this session talks to the Python agent (%s), but the GAIA background service refused it (%s). "+
+		"this session talks to Full-featured (%s), but the GAIA background service refused it (%s). "+
 			"Nothing was sent. Start the terminal UI again to put the GAIA agent back on %s, "+
 			"or switch this session with /agent gaiacpp",
 		PythonProgram, e.Detail, PythonProgram)

@@ -30,6 +30,15 @@ const (
 	AgentEnv = "GAIA_TUI_AGENT"
 )
 
+// The two programs' names in user-facing text, worded as the Agent UI words
+// them. Commands and flags keep taking gaiapy and gaiacpp.
+const (
+	PythonAgentName  = "Full-featured"
+	NativeAgentName  = "Fast and light"
+	PythonAgentLabel = PythonAgentName + " (" + PythonAgentChoice + ")"
+	NativeAgentLabel = NativeAgentName + " (" + NativeAgentBinary + ")"
+)
+
 // selfExecutable is os.Executable, swapped out by tests.
 var selfExecutable = os.Executable
 
@@ -261,8 +270,8 @@ func (c *Catalog) SelectFlagshipAgent(choice string) (notice string, err error) 
 // DaemonPythonNotice tells a user who named the Python agent (gaiapy or
 // gaia-agent) that, on their install, it is reached through the daemon rather
 // than spawned.
-const DaemonPythonNotice = "[!] The Python agent was asked for. On this install it " +
-	"runs in the GAIA background service, which is moved onto it if it was running " + NativeAgentBinary +
+const DaemonPythonNotice = "[!] " + PythonAgentLabel + " was asked for. On this install it " +
+	"runs in the GAIA background service, which is moved onto it if it was running " + NativeAgentLabel +
 	"; the Agent UI's chats then use it too. To run one particular " +
 	PythonAgentBinary + " program instead, give its full path."
 

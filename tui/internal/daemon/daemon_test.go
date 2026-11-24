@@ -574,7 +574,7 @@ func TestAProgramConflictSaysWhatRunsAndHowToSwitch(t *testing.T) {
 	if !errors.As(err, &conflict) {
 		t.Fatalf("EnsureAgent error = %v (%T), want *ProgramConflictError", err, err)
 	}
-	for _, want := range []string{"running on gaiacpp", "Python agent", "/agent gaiacpp", "Nothing was sent"} {
+	for _, want := range []string{"running on gaiacpp", "Full-featured (gaiapy)", "/agent gaiacpp", "Nothing was sent"} {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("conflict error %q does not say %q", err.Error(), want)
 		}

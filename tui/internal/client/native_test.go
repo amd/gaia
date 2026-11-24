@@ -225,7 +225,7 @@ func TestClaudeIsRefusedForTheNativeAgentBeforeAnythingIsSpawned(t *testing.T) {
 			t.Errorf("the refusal is not the shared message: %q", err)
 		}
 	}
-	for _, want := range []string{"Claude", "native", "gaiacpp", "/provider", "Lemonade"} {
+	for _, want := range []string{"Claude", "Fast and light (gaiacpp)", "/provider", "Lemonade"} {
 		if !strings.Contains(NativeClaudeUnavailable, want) {
 			t.Errorf("the message does not say %q: %s", want, NativeClaudeUnavailable)
 		}

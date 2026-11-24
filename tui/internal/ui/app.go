@@ -167,7 +167,7 @@ func checkClaudeSupported(agent catalog.Agent, useClaude bool) error {
 	if !useClaude || !agent.Native {
 		return nil
 	}
-	return fmt.Errorf("--use-claude cannot be used here. %s Or run the Python agent, which has a "+
+	return fmt.Errorf("--use-claude cannot be used here. %s Or run "+catalog.PythonAgentLabel+", which has a "+
 		"Claude provider, by setting %s=%s. See %s",
 		client.NativeClaudeUnavailable, catalog.AgentEnv, catalog.PythonAgentBinary, catalog.AgentChoiceDocsURL)
 }
@@ -663,7 +663,7 @@ func resumeTarget(agent catalog.Agent, resume Resume) (*resumedSession, error) {
 			"this install runs %q over the %s transport, which keeps no sessions to reopen", agent.ID, agent.Transport)
 	}
 	if agent.Native {
-		return nil, fmt.Errorf("--resume needs the Python agent: gaiacpp, the native agent this launch would run, " +
+		return nil, fmt.Errorf("--resume needs " + catalog.PythonAgentLabel + ": " + catalog.NativeAgentLabel + ", which this launch would run, " +
 			"doesn't keep sessions yet. Start with GAIA_TUI_AGENT=gaia-agent (or --agent-program gaia-agent) to reopen one")
 	}
 	if pinned := os.Getenv(client.HistoryFileEnv); pinned != "" {

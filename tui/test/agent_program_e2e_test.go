@@ -170,7 +170,7 @@ func TestAgentProgramSwitchEndToEnd(t *testing.T) {
 	tui.run("/agent")
 	tui.waitFor(map[string]any{"contains": "Agent programs"})
 	listing := tui.screen()
-	for _, want := range []string{"gaiapy — Python agent", "running now", "gaiacpp — Native C++ agent · Beta",
+	for _, want := range []string{"● Full-featured (gaiapy) · running now", "Fast and light (gaiacpp) · Beta",
 		"Mature and well tested", "Fast and light", "No saved choice yet"} {
 		if !strings.Contains(listing, want) {
 			t.Errorf("the listing does not say %q:\n%s", want, listing)
@@ -190,14 +190,14 @@ func TestAgentProgramSwitchEndToEnd(t *testing.T) {
 	// 2. Switch to gaiacpp: through the gate, back in chat, header marked.
 	tui.run("/agent gaiacpp")
 	tui.waitFor(map[string]any{"state": map[string]any{"view": control.ViewChat},
-		"contains": "(" + catalog.NativeAgentBinary + " · Beta)"})
+		"contains": " · " + catalog.NativeAgentLabel + " · Beta"})
 	// The new agent warms up behind a stage that covers the transcript, and a
 	// command typed meanwhile runs once it is ready: its answer is the wait.
 	tui.run("/agent")
 	tui.waitFor(map[string]any{"contains": "Beta · running now · your saved choice"})
 	onNative := tui.screen()
-	for _, want := range []string{"Agent programs", "Switched the agent program from gaiapy to gaiacpp",
-		"gaiacpp now answers", "agent gaia"} {
+	for _, want := range []string{"Agent programs", "Switched the agent program from Full-featured (gaiapy) to Fast and light (gaiacpp)",
+		"Fast and light now answers", "agent gaia"} {
 		if !strings.Contains(onNative, want) {
 			t.Errorf("after the switch the screen does not say %q:\n%s", want, onNative)
 		}
@@ -210,11 +210,11 @@ func TestAgentProgramSwitchEndToEnd(t *testing.T) {
 	// 3. And back.
 	tui.run("/agent gaiapy")
 	tui.waitFor(map[string]any{"state": map[string]any{"view": control.ViewChat},
-		"absent": "(" + catalog.NativeAgentBinary + " · Beta)"})
+		"absent": " · " + catalog.NativeAgentLabel + " · Beta"})
 	tui.run("/agent")
-	tui.waitFor(map[string]any{"contains": "Python agent (gaia-agent) · running now · your saved choice"})
+	tui.waitFor(map[string]any{"contains": "Full-featured (gaiapy) · running now · your saved choice"})
 	onPython := tui.screen()
-	if !strings.Contains(onPython, "Switched the agent program from gaiacpp to gaiapy") {
+	if !strings.Contains(onPython, "Switched the agent program from Fast and light (gaiacpp) to Full-featured (gaiapy)") {
 		t.Errorf("no divider for the switch back:\n%s", onPython)
 	}
 	if strings.Contains(strings.SplitN(onPython, "\n", 2)[0], catalog.NativeAgentBinary) {
@@ -245,7 +245,7 @@ func TestAgentProgramSwitchEndToEnd(t *testing.T) {
 	tui.run("/agent gaiacpp")
 	tui.waitFor(map[string]any{"contains": "Press Enter to download it and switch, or Esc to cancel"})
 	offer := tui.screen()
-	for _, want := range []string{"gaiacpp (Beta) is not on this PC yet", "12.0 MB", "checksums"} {
+	for _, want := range []string{"Fast and light (gaiacpp) · Beta is not on this PC yet", "12.0 MB", "checksums"} {
 		if !strings.Contains(offer, want) {
 			t.Errorf("the offer does not say %q:\n%s", want, offer)
 		}
@@ -272,14 +272,14 @@ func TestAgentProgramSwitchEndToEnd(t *testing.T) {
 		tui.keys("enter")
 		time.Sleep(100 * time.Millisecond)
 	}
-	tui.waitFor(map[string]any{"state": map[string]any{"view": control.ViewChat}, "contains": "(gaiacpp · Beta)", "timeout_ms": 20000})
+	tui.waitFor(map[string]any{"state": map[string]any{"view": control.ViewChat}, "contains": "Fast and light (gaiacpp) · Beta", "timeout_ms": 20000})
 	// The transcript comes back once the new agent has warmed up.
 	tui.waitFor(map[string]any{"contains": "Downloaded gaiacpp 0.27.0", "timeout_ms": 20000})
 	if n := downloads.Load(); n != 1 {
 		t.Fatalf("gaiacpp was downloaded %d times, want once", n)
 	}
 	downloaded := tui.screen()
-	for _, want := range []string{"Downloaded gaiacpp 0.27.0 and checked it against the release's checksum", "from gaiapy to gaiacpp"} {
+	for _, want := range []string{"Downloaded gaiacpp 0.27.0 and checked it against the release's checksum", "from Full-featured (gaiapy) to Fast and light (gaiacpp)"} {
 		if !strings.Contains(downloaded, want) {
 			t.Errorf("the screen does not say %q:\n%s", want, downloaded)
 		}

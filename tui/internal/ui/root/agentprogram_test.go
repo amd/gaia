@@ -132,7 +132,7 @@ func TestAgentProgramSwitchesToNativeAndBack(t *testing.T) {
 	f := installPrograms(t, catalog.PythonAgentBinary, catalog.NativeAgentBinary)
 	m, oldClient := programSession(t, f, preflight.FlagshipAgentPython)
 	m.chat.AppendStatus("earlier line")
-	if strings.Contains(header(t, m), "(gaiacpp · Beta)") {
+	if strings.Contains(header(t, m), "Fast and light (gaiacpp) · Beta") {
 		t.Fatal("test setup: the Python session's header already says gaiacpp")
 	}
 
@@ -174,11 +174,11 @@ func TestAgentProgramSwitchesToNativeAndBack(t *testing.T) {
 		texts = append(texts, msg.Content)
 	}
 	all := strings.Join(texts, "\n")
-	want := "Switched the agent program from gaiapy to gaiacpp. gaiacpp now answers, and it does not see the conversation above this line."
+	want := "Switched the agent program from Full-featured (gaiapy) to Fast and light (gaiacpp). Fast and light now answers, and it does not see the conversation above this line."
 	if !strings.Contains(all, "earlier line") || !strings.Contains(all, want) {
 		t.Fatalf("the transcript or its divider did not survive the switch:\n%s", all)
 	}
-	if !strings.Contains(header(t, m), "(gaiacpp · Beta)") {
+	if !strings.Contains(header(t, m), "Fast and light (gaiacpp) · Beta") {
 		t.Fatalf("the header does not mark gaiacpp after the switch:\n%s", header(t, m))
 	}
 
@@ -190,14 +190,14 @@ func TestAgentProgramSwitchesToNativeAndBack(t *testing.T) {
 	if got := f.saved(t); got != preflight.FlagshipAgentPython {
 		t.Fatalf("the saved choice is %q after switching back", got)
 	}
-	if strings.Contains(header(t, m), "(gaiacpp · Beta)") {
+	if strings.Contains(header(t, m), "Fast and light (gaiacpp) · Beta") {
 		t.Fatalf("the header still marks gaiacpp after switching back:\n%s", header(t, m))
 	}
 	texts = nil
 	for _, msg := range m.chat.Messages() {
 		texts = append(texts, msg.Content)
 	}
-	if !strings.Contains(strings.Join(texts, "\n"), "from gaiacpp to gaiapy") {
+	if !strings.Contains(strings.Join(texts, "\n"), "from Fast and light (gaiacpp) to Full-featured (gaiapy)") {
 		t.Fatalf("no divider for the switch back:\n%s", strings.Join(texts, "\n"))
 	}
 }
@@ -246,7 +246,7 @@ func TestAgentProgramPinnedSessionSavesButDoesNotSwitch(t *testing.T) {
 			t.Fatalf("%s: the choice was not saved: %q", pin, saved)
 		}
 		got := lastLine(t, m)
-		for _, want := range []string{"Saved gaiacpp", f.configPath, "pinned to gaiapy by " + pin, "without " + pin} {
+		for _, want := range []string{"Saved Fast and light (gaiacpp)", f.configPath, "pinned to Full-featured (gaiapy) by " + pin, "without " + pin} {
 			if !strings.Contains(got, want) {
 				t.Errorf("%s: the note does not say %q:\n%s", pin, want, got)
 			}
@@ -270,7 +270,7 @@ func TestAgentProgramRefusesNativeInClaudeModeAndReopenedSessions(t *testing.T) 
 			t.Fatalf("%s: the session was switched to gaiacpp", want)
 		}
 		got := lastLine(t, m)
-		if !strings.Contains(got, "Cannot switch to gaiacpp") || !strings.Contains(got, want) ||
+		if !strings.Contains(got, "Cannot switch to Fast and light (gaiacpp)") || !strings.Contains(got, want) ||
 			!strings.Contains(got, "Nothing was changed") {
 			t.Errorf("%s: the refusal does not give the reason:\n%s", want, got)
 		}
@@ -306,7 +306,7 @@ func TestAgentProgramAlreadyRunningSavesAndStays(t *testing.T) {
 	if cmd != nil || m.activeView != viewChat || c.closed {
 		t.Fatal("asking for the running program must not relaunch it")
 	}
-	if !strings.Contains(lastLine(t, m), "Already running gaiacpp") || f.saved(t) != preflight.FlagshipAgentNative {
+	if !strings.Contains(lastLine(t, m), "Already running Fast and light (gaiacpp)") || f.saved(t) != preflight.FlagshipAgentNative {
 		t.Fatalf("got %q, saved %q", lastLine(t, m), f.saved(t))
 	}
 }
@@ -390,7 +390,7 @@ func TestAgentProgramSwitchReportsAFailedSave(t *testing.T) {
 		t.Fatal("the switch itself did not happen")
 	}
 	got := lastLine(t, m)
-	if !strings.Contains(got, "now runs gaiacpp") || !strings.Contains(got, "could not be saved") || !strings.Contains(got, f.configPath) {
+	if !strings.Contains(got, "now runs Fast and light (gaiacpp)") || !strings.Contains(got, "could not be saved") || !strings.Contains(got, f.configPath) {
 		t.Fatalf("the failed save was not reported:\n%s", got)
 	}
 }
@@ -408,9 +408,9 @@ func TestAgentProgramListingNamesBothMarksBetaCurrentAndUnavailable(t *testing.T
 	var py, cpp string
 	for _, l := range strings.Split(got, "\n") {
 		switch {
-		case strings.Contains(l, " gaiapy — "):
+		case py == "" && strings.Contains(l, " Full-featured (gaiapy)"):
 			py = l
-		case strings.Contains(l, " gaiacpp — "):
+		case cpp == "" && strings.Contains(l, " Fast and light (gaiacpp)"):
 			cpp = l
 		}
 	}
@@ -421,7 +421,7 @@ func TestAgentProgramListingNamesBothMarksBetaCurrentAndUnavailable(t *testing.T
 		t.Errorf("the native row is wrong: %q", cpp)
 	}
 	for _, want := range []string{
-		"Mature and well tested", "Heavier", "Fast and light", "Fewer tools",
+		"Mature and well tested", "Heavier", "Starts quickly", "Fewer tools",
 		"Not on this PC yet: /agent gaiacpp offers to download it.",
 		"No saved choice yet", "/agent gaiapy", "/agent gaiacpp",
 	} {
@@ -440,7 +440,7 @@ func TestAgentProgramListingNamesBothMarksBetaCurrentAndUnavailable(t *testing.T
 	updated, _ = m.agentProgram("")
 	got = lastLine(t, updated.(FlagshipModel))
 	if strings.Contains(got, "Unavailable") || !strings.Contains(got, "Beta · running now · your saved choice") ||
-		!strings.Contains(got, "pinned to gaiacpp by "+catalog.AgentEnv) {
+		!strings.Contains(got, "pinned to Fast and light (gaiacpp) by "+catalog.AgentEnv) {
 		t.Errorf("the listing for an installed, saved, pinned gaiacpp is wrong:\n%s", got)
 	}
 

@@ -23,7 +23,6 @@ import (
 // programOption is one row of the /agent listing.
 type programOption struct {
 	choice   string // the saved value, and what the user types
-	label    string
 	beta     bool
 	goodAt   string
 	tradeOff string
@@ -32,15 +31,13 @@ type programOption struct {
 var programOptions = []programOption{
 	{
 		choice:   preflight.FlagshipAgentPython,
-		label:    "Python agent (" + catalog.PythonAgentBinary + ")",
 		goodAt:   "Mature and well tested, with every tool and feature.",
 		tradeOff: "Heavier: slower to start and uses more memory.",
 	},
 	{
 		choice:   preflight.FlagshipAgentNative,
-		label:    "Native C++ agent",
 		beta:     true,
-		goodAt:   "Fast and light: starts quickly and uses little memory.",
+		goodAt:   "Starts quickly and uses little memory.",
 		tradeOff: "Fewer tools and features so far, and less tested.",
 	},
 }
@@ -129,14 +126,14 @@ func (m FlagshipModel) switchProgram(choice string) (tea.Model, tea.Cmd) {
 	if err != nil {
 		m.chat.AppendStatus(fmt.Sprintf(
 			"Cannot switch to %s: %v\nNothing was changed: this session is still on %s and your saved choice is as it was.",
-			choice, err, current))
+			programLabel(choice), err, programLabel(current)))
 		return m, nil
 	}
 	next := cat.Get(catalog.FlagshipID)
 	if next == nil {
 		m.chat.AppendStatus(fmt.Sprintf(
 			"Cannot switch to %s: the catalog has no %q entry. Nothing was changed. Report this with GAIA diagnostics.",
-			choice, catalog.FlagshipID))
+			programLabel(choice), catalog.FlagshipID))
 		return m, nil
 	}
 
@@ -149,7 +146,7 @@ func (m FlagshipModel) switchProgram(choice string) (tea.Model, tea.Cmd) {
 		m.chat.AppendStatus(fmt.Sprintf(
 			"Saved %s as your agent program (%s). This session is pinned to %s by %s, so it keeps running that. "+
 				"Start GAIA without %s to use the saved choice.",
-			choice, path, current, m.agentPin, m.agentPin))
+			programLabel(choice), path, programLabel(current), m.agentPin, m.agentPin))
 		return m, nil
 	}
 
@@ -159,19 +156,19 @@ func (m FlagshipModel) switchProgram(choice string) (tea.Model, tea.Cmd) {
 			m.chat.AppendStatus(saveFailed(choice, current, err))
 			return m, nil
 		}
-		m.chat.AppendStatus(fmt.Sprintf("Already running %s. It is saved as your agent program (%s).", choice, path))
+		m.chat.AppendStatus(fmt.Sprintf("Already running %s. It is saved as your agent program (%s).", programLabel(choice), path))
 		return m, nil
 	}
 
 	if reason := m.nativeRefusal(next.Native); reason != "" {
 		m.chat.AppendStatus(reason + fmt.Sprintf(
-			" Nothing was changed: this session is still on %s and your saved choice is as it was.", current))
+			" Nothing was changed: this session is still on %s and your saved choice is as it was.", programLabel(current)))
 		return m, nil
 	}
 	if m.chat.IsStreaming() {
 		m.chat.AppendStatus(fmt.Sprintf(
 			"A turn is still running on %s. Press Esc to stop it, or wait for it, then run /agent %s again. Nothing was changed.",
-			current, choice))
+			programLabel(current), choice))
 		return m, nil
 	}
 
@@ -195,12 +192,12 @@ func (m FlagshipModel) nativeRefusal(native bool) string {
 		return ""
 	}
 	if m.useClaude {
-		return "Cannot switch to " + preflight.FlagshipAgentNative + ": this session was started with --use-claude. " +
+		return "Cannot switch to " + catalog.NativeAgentLabel + ": this session was started with --use-claude. " +
 			client.NativeClaudeUnavailable
 	}
 	if m.reopened {
-		return "Cannot switch to " + preflight.FlagshipAgentNative + ": this is a reopened session (--resume or /sessions), and " +
-			catalog.NativeAgentBinary + " doesn't keep sessions yet, so it could not carry this one on. " +
+		return "Cannot switch to " + catalog.NativeAgentLabel + ": this is a reopened session (--resume or /sessions), and " +
+			catalog.NativeAgentName + " doesn't keep sessions yet, so it could not carry this one on. " +
 			"Switch from a new session instead."
 	}
 	return ""
@@ -208,13 +205,29 @@ func (m FlagshipModel) nativeRefusal(native bool) string {
 
 func saveFailed(choice, current string, err error) string {
 	return fmt.Sprintf("Could not save %s as your agent program: %v. Nothing was switched: this session is still on %s.",
-		choice, err, current)
+		programLabel(choice), err, programLabel(current))
+}
+
+// programLabel names a program choice for the user, with the name /agent takes beside it.
+func programLabel(choice string) string {
+	return preflight.FlagshipAgentLabel(choice)
+}
+
+// programName is a program choice's name alone, for a sentence that already gave its label.
+func programName(choice string) string {
+	switch choice {
+	case preflight.FlagshipAgentPython:
+		return catalog.PythonAgentName
+	case preflight.FlagshipAgentNative:
+		return catalog.NativeAgentName
+	}
+	return choice
 }
 
 // programDivider is the line a switched transcript continues under.
 func programDivider(from, to string) string {
 	return fmt.Sprintf("Switched the agent program from %s to %s. %s now answers, and it does not see the conversation above this line.",
-		from, to, to)
+		programLabel(from), programLabel(to), programName(to))
 }
 
 // commitProgramSwitch finishes a switch whose launch succeeded: the program is
@@ -228,7 +241,7 @@ func (m *FlagshipModel) commitProgramSwitch(agent catalog.Agent) {
 		m.chat.AppendStatus(fmt.Sprintf(
 			"This session now runs %s, but it could not be saved as your agent program: %v. "+
 				"The next launch uses your earlier choice; run /agent %s again once that is fixed.",
-			sw.to, err, sw.to))
+			programLabel(sw.to), err, sw.to))
 	}
 	m.catalog = sw.catalog
 	if m.pfLocal != nil {
@@ -247,13 +260,13 @@ func (m FlagshipModel) programListing() string {
 	saved, savedErr := m.readProgram()
 
 	var b strings.Builder
-	b.WriteString("Agent programs: two programs can answer as GAIA.\n")
+	b.WriteString("Agent programs: two can answer as GAIA.\n")
 	for _, opt := range programOptions {
 		marker := "○"
 		if opt.choice == current {
 			marker = "●"
 		}
-		tags := []string{opt.label}
+		tags := []string{programLabel(opt.choice)}
 		if opt.beta {
 			tags = append(tags, "Beta")
 		}
@@ -263,7 +276,7 @@ func (m FlagshipModel) programListing() string {
 		if savedErr == nil && opt.choice == saved.Choice {
 			tags = append(tags, "your saved choice")
 		}
-		fmt.Fprintf(&b, "\n%s %s — %s\n", marker, opt.choice, strings.Join(tags, " · "))
+		fmt.Fprintf(&b, "\n%s %s\n", marker, strings.Join(tags, " · "))
 		fmt.Fprintf(&b, "    %s\n    %s\n", opt.goodAt, opt.tradeOff)
 		if opt.choice != current {
 			if why := m.programUnavailable(opt.choice); why != "" {
@@ -280,11 +293,11 @@ func (m FlagshipModel) programListing() string {
 		fmt.Fprintf(&b, "Your saved choice can't run here: %s (%s in %s).\n",
 			preflight.FlagshipAgentUnavailable(saved.Choice), preflight.FlagshipAgentKey, saved.Path)
 	case saved.Choice == "":
-		fmt.Fprintf(&b, "No saved choice yet: GAIA runs %s.\n", preflight.FlagshipAgentPython)
+		fmt.Fprintf(&b, "No saved choice yet: GAIA runs %s.\n", programLabel(preflight.FlagshipAgentPython))
 	}
 	if m.agentPin != "" {
 		fmt.Fprintf(&b, "This session is pinned to %s by %s; a switch here is saved for later launches.\n",
-			current, m.agentPin)
+			programLabel(current), m.agentPin)
 	}
 	fmt.Fprintf(&b, "Switch with /agent %s or /agent %s. The choice is saved and shared with the Agent UI.",
 		preflight.FlagshipAgentPython, preflight.FlagshipAgentNative)

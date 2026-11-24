@@ -73,7 +73,7 @@ func TestThePythonAgentRunsOnlyWhenPickedAndIsThenSaved(t *testing.T) {
 	if len(*saved) != 1 || (*saved)[0] != preflight.FlagshipAgentPython || (*asked)[0] != catalog.PythonAgentBinary {
 		t.Fatalf("saved %v, launched %v", *saved, *asked)
 	}
-	for _, want := range []string{"You chose the Python agent", "/h/config.json", "/agent gaiacpp switches back"} {
+	for _, want := range []string{"You chose Full-featured (gaiapy) because Fast and light (gaiacpp) could not start", "/h/config.json", "/agent gaiacpp switches back"} {
 		if !strings.Contains(notice, want) {
 			t.Errorf("the notice does not say %q: %s", want, notice)
 		}

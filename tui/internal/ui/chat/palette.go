@@ -11,6 +11,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
 
+	"github.com/amd/gaia/tui/internal/catalog"
 	"github.com/amd/gaia/tui/internal/client"
 	"github.com/amd/gaia/tui/internal/event"
 	"github.com/amd/gaia/tui/internal/ui/theme"
@@ -53,7 +54,7 @@ var paletteCommands = []paletteCommand{
 	{"/copy all", "Copy the whole conversation as markdown"},
 	{"/read-aloud", "Read the last reply aloud; again (or /read-aloud stop) stops it"},
 	{"/voice", "Pick the read-aloud voice and speed, or read every reply"},
-	{agentCommand, "See or switch the agent program: gaiapy, or gaiacpp (Beta)"},
+	{agentCommand, "See or switch the agent program: " + catalog.PythonAgentLabel + ", or " + catalog.NativeAgentLabel + " · Beta"},
 	{"/agents", "List installed agents and switch this session to one"},
 	{"/image", "Choose the image model, size and steps; /image open shows the last image"},
 	{"/update", "Check for a newer GAIA, install one (/update now, /update v0.25.0), or set auto-update"},
@@ -122,8 +123,8 @@ const agentPalettePrefix = agentCommand + " "
 func agentPaletteCommands() []paletteCommand {
 	return []paletteCommand{
 		{agentCommand, "Show both programs and which one is running"},
-		{agentPalettePrefix + "gaiapy", "Python agent: every tool, well tested, heavier"},
-		{agentPalettePrefix + "gaiacpp", "Native agent (Beta): fast, light, fewer tools"},
+		{agentPalettePrefix + "gaiapy", catalog.PythonAgentName + ": every tool, well tested, heavier"},
+		{agentPalettePrefix + "gaiacpp", catalog.NativeAgentName + " · Beta: quick to start, little memory, fewer tools"},
 	}
 }
 
