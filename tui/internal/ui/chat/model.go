@@ -286,6 +286,10 @@ type ChatModel struct {
 	// answeredAt is when the last prompt was answered. A lone answer letter
 	// pressed within confirmAnswerHold of it was meant for that prompt.
 	answeredAt time.Time
+	// heldLetter is an answer letter held back just after an answer; it goes
+	// back to the composer if more typing follows within confirmAnswerHold.
+	heldLetter   string
+	heldLetterAt time.Time
 
 	// fullAccess is true while the agent runs every gated tool without
 	// asking. OFF on a fresh launch, always, and never restored from anywhere:
@@ -1400,8 +1404,11 @@ func (m ChatModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.handleConfirmationKey(msg)
 	}
 	if m.droppedAfterAnswer(msg) {
+		m.heldLetter, _ = typedText(msg)
+		m.heldLetterAt = m.now()
 		return m, nil
 	}
+	m = m.releaseHeldLetter(msg)
 
 	// A pending question owns the keyboard: the run is blocked on it, so a
 	// keystroke that fell through to the composer would go nowhere. Ctrl+C and

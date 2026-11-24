@@ -427,3 +427,25 @@ func TestAnswerLetterRightAfterAnAnswerIsDropped(t *testing.T) {
 		t.Errorf("composer = %q right after answering, want it empty", got)
 	}
 }
+
+// A word typed fast right after an answer keeps its first letter: the held
+// letter goes back to the composer once more typing follows it.
+func TestWordTypedRightAfterAnAnswerKeepsItsFirstLetter(t *testing.T) {
+	m, _ := liveModel(t)
+	m.streaming = true
+	m = feed(t, m, gatedShellCall())
+
+	updated, cmd := answerKey(t, m, "a")
+	m = updated.(ChatModel)
+	decided := cmd().(components.ConfirmationDecidedMsg)
+	updated, _ = m.Update(decided)
+	m = updated.(ChatModel)
+
+	for _, r := range []string{"n", "o", "w"} {
+		updated, _ = m.handleKey(runeKeyMsg(r))
+		m = updated.(ChatModel)
+	}
+	if got := m.input.Value(); got != "now" {
+		t.Errorf("composer = %q, want %q", got, "now")
+	}
+}

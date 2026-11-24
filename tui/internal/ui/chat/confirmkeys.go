@@ -198,3 +198,17 @@ func (m ChatModel) droppedAfterAnswer(msg tea.KeyMsg) bool {
 func (m ChatModel) answeringByLetter() bool {
 	return m.input.Value() == ""
 }
+
+// releaseHeldLetter gives a held answer letter back to the composer when more
+// typing follows it inside the hold: it was the start of a word, not an answer.
+func (m ChatModel) releaseHeldLetter(msg tea.KeyMsg) ChatModel {
+	held := m.heldLetter
+	m.heldLetter = ""
+	if held == "" || m.now().Sub(m.heldLetterAt) > confirmAnswerHold {
+		return m
+	}
+	if _, ok := typedText(msg); ok {
+		m.input.InsertString(held)
+	}
+	return m
+}
