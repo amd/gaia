@@ -264,6 +264,21 @@
             "title": "Context",
             "type": "array"
           },
+          "disallowed_tools": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Tool-name globs this one-shot run never offers or runs (contract >= 2.32), as `gaia -p --disallowed-tools`. A glob that matches no tool is a 400. `final.withheld_tools` lists what was withheld. Needs a request with no session_id.",
+            "title": "Disallowed Tools"
+          },
           "documents": {
             "anyOf": [
               {
@@ -278,6 +293,12 @@
             ],
             "description": "Absolute paths of the files the user attached to this conversation (contract >= 2.16). Each is granted as that exact file, never its folder, and indexed before the turn runs, up to 100 documents or 10,000 passages; the rest load when the agent is asked about one. Send the full set every turn, an empty list when none are attached: files already indexed in a retained session are skipped, so one attached mid-conversation is picked up on the next turn, and one sent before but left out now is removed from the session's index and can no longer be read.",
             "title": "Documents"
+          },
+          "full_access": {
+            "default": false,
+            "description": "Full access for this one-shot run (contract >= 2.32), as `gaia -p --full-access`: gated tools run without asking, the shell guardrails are off, and paths outside the run's scope are granted. Applies to this run only; needs a request with no session_id. A chat's full access is /sessions/{id}/bypass.",
+            "title": "Full Access",
+            "type": "boolean"
           },
           "internet_off": {
             "anyOf": [
@@ -333,6 +354,18 @@
             "description": "Model id for this turn. A Claude model id implies provider 'claude' when provider is omitted; otherwise it is served by the local Lemonade backend. Omit to keep a retained session's current model, or to use the backend's default on a new session.",
             "title": "Model"
           },
+          "no_skills": {
+            "default": false,
+            "description": "Run this one-shot with no skills: none suggested, found, loaded or learned (contract >= 2.32), as `gaia -p --no-skills`. Needs a request with no session_id.",
+            "title": "No Skills",
+            "type": "boolean"
+          },
+          "no_web": {
+            "default": false,
+            "description": "Withhold GAIA's web search, fetch, browser and download tools for this one-shot run and tell the model web access is off (contract >= 2.32), as `gaia -p --no-web`. Needs a request with no session_id.",
+            "title": "No Web",
+            "type": "boolean"
+          },
           "provider": {
             "anyOf": [
               {
@@ -374,6 +407,12 @@
             "description": "Conversation handle (contract >= 2.12). Threaded to the agent as its UI session so indexed documents survive across turns — without it a document agent forgets what it just indexed.",
             "title": "Session Id"
           },
+          "skip_permissions": {
+            "default": false,
+            "description": "Run confirmation-gated tools in this one-shot run without asking (contract >= 2.32), as `gaia -p --dangerously-skip-permissions`. The shell guardrails stay on and paths outside the run's scope are still refused. Applies to this run only; needs a request with no session_id.",
+            "title": "Skip Permissions",
+            "type": "boolean"
+          },
           "surface": {
             "anyOf": [
               {
@@ -390,6 +429,19 @@
             ],
             "description": "The front-end this turn comes from (contract >= 2.20). 'agent_ui' tells the agent that features like Scheduled tasks are in the caller's sidebar, and each front-end gets model-provider errors worded for its own settings. Fixed when a session is built; omit it for a headless caller, whose provider advice then points at the model server this GAIA host uses.",
             "title": "Surface"
+          },
+          "time_limit": {
+            "anyOf": [
+              {
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Seconds this one-shot run may take (contract >= 2.32), as `gaia -p --time-limit`: the agent wraps up before it, a stop ends the turn at it, and a model call still running a few seconds later is abandoned. `final.time_limit_reached` is true when it stopped the turn. Needs a request with no session_id.",
+            "title": "Time Limit"
           },
           "turns": {
             "anyOf": [
@@ -668,7 +720,7 @@
   "info": {
     "description": "REST surface for the GAIA flagship agent sidecar (/v1/gaia/*). Cross-implementation contract for embedders and typed clients.",
     "title": "GAIA Agent API",
-    "version": "2.31"
+    "version": "2.32"
   },
   "openapi": "3.1.0",
   "paths": {
@@ -777,7 +829,7 @@
                 }
               }
             },
-            "description": "Server-Sent Events stream (text/event-stream). Each `data:` line is one canonical event discriminated on `type`: status {message, level?, phase?, queue?, retracts_answer?} | token {delta} | reasoning {delta, retracts_answer?} | tool_call {tool, args} | tool_result {tool, data, render?} | context_usage {window, used, ...} | needs_confirmation {run_id, action, summary, confirm_id?, always_scope?, risk?, tool_label?, args?, args_truncated?, prompt_context?} | needs_input {run_id, request_id, question, options, allow_free_text, sensitive, respond_url, timeout_seconds?} | final {answer, usage?, failed?, failure?, performance?, context?, context_error?, model_messages?, route?} | error {detail, status}. A needs_confirmation's `args` are exactly the arguments the model sent for the gated call, each value capped at 64,000 characters (`args_truncated: true` when one was cut); what the agent adds to its prompt is in `prompt_context` {working_directory?, risk_note?, file_path?, script?}, never in `args`. The stream ends with exactly one `final` or `error`. `:`-prefixed heartbeat comments carry no payload."
+            "description": "Server-Sent Events stream (text/event-stream). Each `data:` line is one canonical event discriminated on `type`: status {message, level?, phase?, queue?, retracts_answer?} | token {delta} | reasoning {delta, retracts_answer?} | tool_call {tool, args} | tool_result {tool, data, render?} | context_usage {window, used, ...} | needs_confirmation {run_id, action, summary, confirm_id?, always_scope?, risk?, tool_label?, args?, args_truncated?, prompt_context?} | needs_input {run_id, request_id, question, options, allow_free_text, sensitive, respond_url, timeout_seconds?} | final {answer, usage?, failed?, failure?, performance?, context?, context_error?, model_messages?, route?, time_limit_reached?, withheld_tools?} | error {detail, status}. A needs_confirmation's `args` are exactly the arguments the model sent for the gated call, each value capped at 64,000 characters (`args_truncated: true` when one was cut); what the agent adds to its prompt is in `prompt_context` {working_directory?, risk_note?, file_path?, script?}, never in `args`. The stream ends with exactly one `final` or `error`. `:`-prefixed heartbeat comments carry no payload."
           },
           "422": {
             "content": {
