@@ -227,7 +227,9 @@ TEST(WorkspaceTest, ReadsOfAGrantedFileStayInsideFromItsFolder) {
         EXPECT_TRUE(staysInside(ws, ok, up)) << ok;
     }
     EXPECT_TRUE(staysInside(ws, "grep -n revenue " + report, work));
-    EXPECT_TRUE(staysInside(ws, "cd " + up + " && grep -n revenue report.txt && wc -l report.txt", work));
+    // A POSIX shell reads a backslash as an escape, so the cd names the folder with forward slashes.
+    const std::string upSlash = uploads.generic_string();
+    EXPECT_TRUE(staysInside(ws, "cd " + upSlash + " && grep -n revenue report.txt && wc -l report.txt", work));
     for (const std::string& no : std::vector<std::string>{
              "grep -n revenue theirs.txt", "wc -l theirs.txt", "cat " + theirs, "ls", "ls .", "find . -name x",
           "find -name x", "grep -rn revenue", "grep -rn revenue nested", "cat *.txt", "cat report.txt theirs.txt",
