@@ -714,6 +714,11 @@ def terminate_process_tree(process: "subprocess.Popen") -> Tuple[str, str]:
 
     process.kill()
     try:
+        if process.stdout is not None and process.stdout.closed:
+            # An upstream pipeline stage: nothing to read, and Windows'
+            # communicate() would raise in a reader thread.
+            process.wait(timeout=_KILL_GRACE_SECONDS)
+            return "", ""
         return process.communicate(timeout=_KILL_GRACE_SECONDS)
     except subprocess.TimeoutExpired:
         logger.warning(
