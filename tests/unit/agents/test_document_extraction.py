@@ -755,6 +755,7 @@ def test_existing_memory_hook_records_source_summary_and_recall(agent, tmp_path)
     long_answer = "Historical introduction. " * 250 + agent._extraction_ledger.render()
     agent._after_process_query(agent._original_user_input, long_answer)
     agent.register_memory_tools()
+    agent._snapshot_tools()
     found = agent._execute_tool("search_past_conversations", {"query": "BETA"})
     assert any(
         len(r["content"]) > 4000 and "Exercise BETA" in r["content"]

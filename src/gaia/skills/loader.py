@@ -10,8 +10,9 @@ Two invariants drive this module:
   ``metadata.gaia.tools`` must exist in ``tools.py`` with a matching signature
   (parameter names, requiredness, and inferred types). A mismatch is a defect,
   not a warning.
-- **No partial load.** Any failure restores ``_TOOL_REGISTRY`` byte-for-byte to
-  its pre-import state, so a rejected skill never leaves half its tools behind.
+- **No partial load.** Any failure restores every registry key the import
+  wrote to its pre-import state, so a rejected skill never leaves half its
+  tools behind. Keys other threads wrote meanwhile are left alone.
 """
 
 from __future__ import annotations
@@ -33,8 +34,8 @@ from gaia.skills.tiers import enforce_skill_tier_ceiling
 
 log = get_logger(__name__)
 
-# Import + registry mutation must not interleave across threads: the diff-based
-# capture below assumes nothing else writes to _TOOL_REGISTRY mid-import.
+# Serializes skill imports (sys.path, sys.modules). Agents register without it,
+# so a load touches only the registry keys its own import wrote.
 _IMPORT_LOCK = threading.RLock()
 
 _MODULE_NAME_SAFE = re.compile(r"[^0-9a-zA-Z_]")
@@ -94,7 +95,8 @@ def register_skill_tools(skill: Skill) -> dict[str, dict[str, Any]]:
     module_name = f"gaia_skill_{_MODULE_NAME_SAFE.sub('_', skill.name)}_tools"
 
     with _IMPORT_LOCK:
-        before = dict(_TOOL_REGISTRY)
+        written: set[str] = set()
+        before: dict[str, dict[str, Any]] = {}
         previous_module = sys.modules.get(module_name)
         skill_dir = str(tools_path.parent)
         added_syspath = skill_dir not in sys.path
@@ -103,25 +105,18 @@ def register_skill_tools(skill: Skill) -> dict[str, dict[str, Any]]:
             if added_syspath:
                 sys.path.insert(0, skill_dir)
             # Its own scope: the bare names are swapped for namespaced ones below,
-            # so sharing one with the agent's tools is not a collision.
-            with tool_build():
+            # so sharing one with the agent's tools is not a collision. The
+            # decorator overwrites such a key (a skill's ``search_web`` beside
+            # BrowserToolsMixin's), so ``before`` keeps the original to restore.
+            with tool_build() as written:
+                before = dict(_TOOL_REGISTRY)
                 module = _import_tools_module(module_name, tools_path, skill)
-            # A skill tool may share an unqualified name with a registry tool
-            # (a skill providing ``search_web`` alongside BrowserToolsMixin is
-            # exactly what the ``<skill>/<tool>`` namespace exists for), and the
-            # decorator overwrites that key. Compare identity, not presence, so
-            # the overwrite is detected and the original is restored below.
-            discovered = {
-                name: entry
-                for name, entry in _TOOL_REGISTRY.items()
-                if name not in before or entry is not before[name]
-            }
+            discovered = {name: _TOOL_REGISTRY[name] for name in written}
             _validate_declared_tools(skill, discovered, module, tools_path)
             namespaced = _namespace_entries(skill, discovered)
         except BaseException:
-            # No partial load: put the registry (and sys.modules) back untouched.
-            _TOOL_REGISTRY.clear()
-            _TOOL_REGISTRY.update(before)
+            # No partial load: undo this import's writes (and sys.modules).
+            _restore_entries(written, before)
             _restore_module(module_name, previous_module)
             raise
         finally:
@@ -129,8 +124,7 @@ def register_skill_tools(skill: Skill) -> dict[str, dict[str, Any]]:
                 sys.path.remove(skill_dir)
 
         # Swap the unqualified keys the decorator wrote for namespaced ones.
-        _TOOL_REGISTRY.clear()
-        _TOOL_REGISTRY.update(before)
+        _restore_entries(written, before)
         _TOOL_REGISTRY.update(namespaced)
 
     log.info(
@@ -140,6 +134,15 @@ def register_skill_tools(skill: Skill) -> dict[str, dict[str, Any]]:
         ", ".join(sorted(namespaced)),
     )
     return namespaced
+
+
+def _restore_entries(names: set[str], before: dict[str, dict[str, Any]]) -> None:
+    """Put back the registry keys in *names* as *before* had them."""
+    for name in names:
+        if name in before:
+            _TOOL_REGISTRY[name] = before[name]
+        else:
+            _TOOL_REGISTRY.pop(name, None)
 
 
 def unregister_skill_tools(skill_name: str) -> list[str]:

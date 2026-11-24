@@ -29,8 +29,6 @@ _TABS = "browser-pane/browser_tabs"
 class _Chat(Agent, BrowserUseToolsMixin):
     """One chat's agent, freezing its tools at construction like ChatAgent."""
 
-    SNAPSHOT = True
-
     def __init__(self, **kwargs):
         self.config = SimpleNamespace(ui_session_id="chat-1")
         super().__init__(**kwargs)
@@ -40,14 +38,7 @@ class _Chat(Agent, BrowserUseToolsMixin):
 
     def _register_tools(self):
         self.register_browser_use_tools()
-        if self.SNAPSHOT:
-            self._snapshot_tools()
-
-
-class _UnsnapshottedChat(_Chat):
-    """An agent that reads the process-wide registry directly."""
-
-    SNAPSHOT = False
+        self._snapshot_tools()
 
 
 @pytest.fixture(autouse=True)
@@ -93,8 +84,9 @@ def test_a_new_chat_does_not_inherit_another_chats_skill_tools(tmp_path):
 def test_a_skill_tool_whose_skill_this_agent_never_loaded_is_a_tool_error(tmp_path):
     first = _new(_Chat)
     _load_pane_skill(first, tmp_path)
-    second = _new(_UnsnapshottedChat)
-    assert _TABS in second._tools_registry
+    second = _new(_Chat)
+    # A stray entry, as a registry swapped in from outside could carry.
+    second._instance_tools[_TABS] = tools_mod._TOOL_REGISTRY[_TABS]
 
     result = second._execute_tool(_TABS, {})
 

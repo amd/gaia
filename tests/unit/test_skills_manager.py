@@ -854,3 +854,40 @@ def _wait_for(predicate, timeout: float = 10.0) -> None:
             return
         time.sleep(0.1)
     raise AssertionError("Condition not met before the timeout")
+
+
+def test_a_tool_another_agent_registers_during_a_skill_load_is_kept(roots):
+    """Agents build without the loader's lock, so a skill load must not drop
+    a tool another thread registered while the skill's module was importing."""
+    import threading
+
+    from gaia.agents.base.tools import tool, tool_build
+    from gaia.skills import loader
+
+    copy_fixture("web-search", roots["user"])
+    skill = make_manager(roots).load("web-search")
+    real_import = loader._import_tools_module
+
+    def other_agent_build():
+        with tool_build():
+
+            @tool
+            def other_agents_tool() -> str:
+                """Another agent's tool."""
+                return "mine"
+
+    def import_while_another_agent_builds(*args):
+        module = real_import(*args)
+        builder = threading.Thread(target=other_agent_build)
+        builder.start()
+        builder.join()
+        return module
+
+    with patch.object(
+        loader, "_import_tools_module", import_while_another_agent_builds
+    ):
+        registered = register_skill_tools(skill)
+
+    assert set(registered) == {"web-search/search_web"}
+    assert _TOOL_REGISTRY["other_agents_tool"]["function"]() == "mine"
+    assert "search_web" not in _TOOL_REGISTRY

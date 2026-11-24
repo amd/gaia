@@ -9,11 +9,15 @@ Verifies that:
 - Mutations on the global registry after snapshot do not leak into the agent
 - Two agents in the same process have independent tool sets
 - Agents without a snapshot still work (backward compatibility)
+- A custom agent on the base Agent keeps its own tools when another is built
 """
+
+from unittest.mock import patch
 
 import pytest
 
-from gaia.agents.base.tools import _TOOL_REGISTRY
+from gaia.agents.base.agent import Agent
+from gaia.agents.base.tools import _TOOL_REGISTRY, tool
 
 
 @pytest.fixture(autouse=True)
@@ -110,3 +114,42 @@ class TestSnapshotIsolation:
         agent = _FakeAgent()
         agent._snapshot_tools()
         assert agent._instance_tools is not _TOOL_REGISTRY
+
+
+def _folder_agent(folder, model_id=None):
+    """A custom agent on the base Agent whose tool closes over its folder."""
+
+    class FolderAgent(Agent):
+        def _get_system_prompt(self):
+            return "probe"
+
+        def _register_tools(self):
+            @tool
+            def which_folder() -> str:
+                """Name the folder this agent may read."""
+                return str(folder)
+
+            @tool
+            def create_table(name: str) -> str:
+                """Create a scratch table."""
+                return name
+
+    with patch("gaia.agents.base.agent.AgentSDK"):
+        return FolderAgent(silent_mode=True, skip_lemonade=True, model_id=model_id)
+
+
+class TestBaseAgentOwnsItsTools:
+    def test_a_second_agent_does_not_take_over_the_first_agents_tools(self, tmp_path):
+        first = _folder_agent(tmp_path / "first")
+        second = _folder_agent(tmp_path / "second")
+
+        assert first._execute_tool("which_folder", {}) == str(tmp_path / "first")
+        assert second._execute_tool("which_folder", {}) == str(tmp_path / "second")
+
+    def test_a_compact_model_is_not_offered_withheld_tools(self, tmp_path):
+        agent = _folder_agent(tmp_path, model_id="Gemma-4-E4B-it-GGUF")
+
+        agent.apply_model_features("Gemma-4-E4B-it-GGUF")
+
+        assert "create_table" not in agent._tools_registry
+        assert "which_folder" in agent._tools_registry

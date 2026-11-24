@@ -54,15 +54,17 @@ class DuplicateToolError(ValueError):
 
 
 @contextmanager
-def tool_build() -> Iterator[None]:
+def tool_build() -> Iterator[set[str]]:
     """Scope one agent's tool registration, so a name collision inside it raises.
 
     The global registry outlives any one agent: a tool left by an earlier
-    agent's build is replaced, not a collision.
+    agent's build is replaced, not a collision. Yields the names this build
+    writes to the global registry.
     """
-    token = _BUILD_NAMES.set(set())
+    names: set[str] = set()
+    token = _BUILD_NAMES.set(names)
     try:
-        yield
+        yield names
     finally:
         _BUILD_NAMES.reset(token)
 

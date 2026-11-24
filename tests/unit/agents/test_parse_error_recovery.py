@@ -86,6 +86,7 @@ class TestParseLLMResponseRaisesOnMalformed:
         _TOOL_REGISTRY.clear()
         try:
             mixin.register_file_search_tools()
+            agent._snapshot_tools()
             target = tmp_path / "edited.py"
             target.write_text("value = 1\n")
             responses = iter(

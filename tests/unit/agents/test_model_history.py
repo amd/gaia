@@ -477,7 +477,7 @@ def test_next_turn_request_ends_on_the_new_question_without_old_checks(agent):
 
 
 def test_real_agent_returns_only_current_turn_with_tool_evidence(agent):
-    _register_tool("read_fact", lambda: {"fact": "violet-otter-92"})
+    _register_tool(agent, "read_fact", lambda: {"fact": "violet-otter-92"})
     agent.conversation_history = _turn("old")
     _stub_chat(
         agent, _native_envelope(("call-1", "read_fact", {})), "The fact was read."
@@ -493,7 +493,7 @@ def test_real_agent_returns_only_current_turn_with_tool_evidence(agent):
 
 
 def test_real_agent_max_steps_preserves_tool_evidence_and_actual_answer(agent):
-    _register_tool("read_fact", lambda: {"fact": "desk-17C"})
+    _register_tool(agent, "read_fact", lambda: {"fact": "desk-17C"})
     _stub_chat(agent, _native_envelope(("call-1", "read_fact", {})))
     result = agent.process_query("Read the fact", max_steps=1)
     assert "desk-17C" in json.dumps(result["model_messages"])
@@ -501,7 +501,7 @@ def test_real_agent_max_steps_preserves_tool_evidence_and_actual_answer(agent):
 
 
 def test_legacy_tool_evidence_does_not_replay_as_orphan_native_result(agent):
-    _register_tool("read_fact", lambda: {"fact": "legacy-evidence-17C"})
+    _register_tool(agent, "read_fact", lambda: {"fact": "legacy-evidence-17C"})
     _stub_chat(agent, '{"tool": "read_fact", "tool_args": {}}', "Read it.")
     result = agent.process_query("Read fact", max_steps=4)
     messages = result["model_messages"]

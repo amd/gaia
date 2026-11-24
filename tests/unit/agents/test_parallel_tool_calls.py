@@ -41,8 +41,8 @@ from gaia.agents.base.tools import _TOOL_REGISTRY
 
 
 class _DummyAgent(Agent):
-    """Minimal concrete Agent — tools are injected directly into
-    ``_TOOL_REGISTRY`` per-test rather than via decorator."""
+    """Minimal concrete Agent — tools are injected directly into its own
+    registry per-test rather than via decorator."""
 
     def _get_system_prompt(self) -> str:
         return "You are a test agent."
@@ -80,11 +80,11 @@ def agent(clean_registry):  # pylint: disable=unused-argument
         return a
 
 
-def _register_tool(name: str, fn, description: str = "") -> None:
-    """Inject a tool into ``_TOOL_REGISTRY`` without going through
+def _register_tool(agent_obj, name: str, fn, description: str = "") -> None:
+    """Inject a tool into ``agent_obj``'s own tools without going through
     ``@tool`` decorator — keeps the fixture free of decorator side
     effects."""
-    _TOOL_REGISTRY[name] = {
+    agent_obj._tools_registry[name] = {
         "name": name,
         "description": description or f"Test tool {name}.",
         "parameters": {},  # all-optional kwargs path
@@ -164,8 +164,8 @@ class TestParallelCallsExecuteAndCorrelate:
             calls.append(("b", kwargs))
             return {"status": "success", "result": "B_result"}
 
-        _register_tool("tool_a", tool_a)
-        _register_tool("tool_b", tool_b)
+        _register_tool(agent, "tool_a", tool_a)
+        _register_tool(agent, "tool_b", tool_b)
 
         # First LLM response: two parallel calls.
         # Second LLM response: a final answer that ends the loop.
@@ -210,8 +210,8 @@ class TestParallelCallsExecuteAndCorrelate:
         def tool_b(**kwargs):  # pylint: disable=unused-argument
             return {"status": "success", "result": "B"}
 
-        _register_tool("tool_a", tool_a)
-        _register_tool("tool_b", tool_b)
+        _register_tool(agent, "tool_a", tool_a)
+        _register_tool(agent, "tool_b", tool_b)
 
         parallel = _native_envelope(
             ("id-A", "tool_a", {}),
@@ -263,7 +263,7 @@ class TestParallelCallsExecuteAndCorrelate:
         def mark_read(**kwargs):  # pylint: disable=unused-argument
             return {"status": "success"}
 
-        _register_tool("mark_read", mark_read)
+        _register_tool(agent, "mark_read", mark_read)
         first = _native_envelope(("id-1", "mark_read", {"message_id": "same"}))
         second = _native_envelope(("id-2", "mark_read", {"message_id": "same"}))
         final = json.dumps({"thought": "done", "answer": "Done."})
@@ -291,7 +291,7 @@ class TestParallelCallsExecuteAndCorrelate:
         def mark_read(**kwargs):  # pylint: disable=unused-argument
             return {"status": "success"}
 
-        _register_tool("mark_read", mark_read)
+        _register_tool(agent, "mark_read", mark_read)
         parallel = _native_envelope(
             ("id-1", "mark_read", {"message_id": "same"}),
             ("id-2", "mark_read", {"message_id": "same"}),
@@ -339,9 +339,9 @@ class TestParallelCallsWithError:
             executed.append("ok_2")
             return {"status": "success", "result": "2"}
 
-        _register_tool("tool_ok_1", tool_ok_1)
-        _register_tool("tool_bad", tool_bad)
-        _register_tool("tool_ok_2", tool_ok_2)
+        _register_tool(agent, "tool_ok_1", tool_ok_1)
+        _register_tool(agent, "tool_bad", tool_bad)
+        _register_tool(agent, "tool_ok_2", tool_ok_2)
 
         parallel = _native_envelope(
             ("id-1", "tool_ok_1", {}),
@@ -379,8 +379,8 @@ class TestNoMisleadingRecoveryPromptOnParallelCalls:
         def tool_b(**kwargs):  # pylint: disable=unused-argument
             return {"status": "success", "result": "ok"}
 
-        _register_tool("tool_a", tool_a)
-        _register_tool("tool_b", tool_b)
+        _register_tool(agent, "tool_a", tool_a)
+        _register_tool(agent, "tool_b", tool_b)
 
         parallel = _native_envelope(
             ("c1", "tool_a", {}),
@@ -422,7 +422,7 @@ class TestSingleNativeCallStillWorks:
         def tool_a(**kwargs):  # pylint: disable=unused-argument
             return {"status": "success", "result": "ok"}
 
-        _register_tool("tool_a", tool_a)
+        _register_tool(agent, "tool_a", tool_a)
 
         single = _native_envelope(("real-id-xyz", "tool_a", {}))
         final = json.dumps({"thought": "done", "answer": "Done."})
