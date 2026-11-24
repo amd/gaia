@@ -163,9 +163,9 @@ async def send_message(
     # Resolve once so a settings change cannot disagree with the later queue check.
     takes_line = turn_takes_the_line(db, session, request.agent_type)
     if takes_line:
-        from gaia.ui.agent_loop import agent_loop
-
         try:
+            from gaia.ui.agent_loop import agent_loop
+
             agent_loop.yield_to_user()
         except BaseException:
             session_lock.release()
