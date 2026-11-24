@@ -21,8 +21,16 @@ type answerGuard struct {
 	held string
 	id   int
 	// armed is the a or A that highlighted "always", kept so the letter can be
-	// given back to the composer if more typing follows it.
+	// given back to the composer if more typing follows it inside the hold.
+	// Once the hold ends the highlight was deliberate and armed is cleared, so
+	// the next y or n answers the prompt instead of typing "an".
 	armed string
+}
+
+// confirmArmMsg ends the hold on an a that highlighted "always".
+type confirmArmMsg struct {
+	seq uint64
+	id  int
 }
 
 // confirmHoldMsg ends the hold on one answer key.
@@ -71,7 +79,10 @@ func (m ChatModel) handleConfirmationKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		case "a", "A":
 			if m.confirmation.OffersAlways() {
 				m.answer.armed = text
-				return m.forwardToConfirmation(msg)
+				m.answer.id++
+				arm := confirmArmMsg{seq: m.answer.seq, id: m.answer.id}
+				updated, cmd := m.forwardToConfirmation(msg)
+				return updated, tea.Batch(cmd, tea.Tick(confirmAnswerHold, func(time.Time) tea.Msg { return arm }))
 			}
 		case "j", "k", " ":
 			if m.confirmation.Scrolls() {
@@ -153,6 +164,33 @@ func (m ChatModel) resolveConfirmHold(msg confirmHoldMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	return m.releaseHeldAnswer()
+}
+
+// settleArmedAlways keeps an "always" highlight once nothing was typed right
+// after its a: the letter was an answer, not the start of a word.
+func (m ChatModel) settleArmedAlways(msg confirmArmMsg) ChatModel {
+	if m.confirmation != nil && m.confirmation.Pending() && m.answer.armed != "" &&
+		msg.seq == m.confirmation.Seq() && msg.seq == m.answer.seq && msg.id == m.answer.id {
+		m.answer.armed = ""
+	}
+	return m
+}
+
+// droppedAfterAnswer reports whether a key is a lone answer letter pressed
+// just after a prompt was answered, and so meant for the prompt just closed.
+func (m ChatModel) droppedAfterAnswer(msg tea.KeyMsg) bool {
+	if m.answeredAt.IsZero() || m.now().Sub(m.answeredAt) > confirmAnswerHold {
+		return false
+	}
+	text, ok := typedText(msg)
+	if !ok || m.input.Value() != "" {
+		return false
+	}
+	switch text {
+	case "y", "Y", "n", "N", "a", "A":
+		return true
+	}
+	return false
 }
 
 // answeringByLetter reports whether y, a and n answer the pending prompt right

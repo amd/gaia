@@ -283,6 +283,9 @@ type ChatModel struct {
 	confirmation *components.ConfirmationModel
 	// answer keeps typing meant for the composer from answering it.
 	answer answerGuard
+	// answeredAt is when the last prompt was answered. A lone answer letter
+	// pressed within confirmAnswerHold of it was meant for that prompt.
+	answeredAt time.Time
 
 	// fullAccess is true while the agent runs every gated tool without
 	// asking. OFF on a fresh launch, always, and never restored from anywhere:
@@ -1160,6 +1163,9 @@ func (m ChatModel) updateChat(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case confirmHoldMsg:
 		return m.resolveConfirmHold(msg)
 
+	case confirmArmMsg:
+		return m.settleArmedAlways(msg), nil
+
 	case control.InputBatchEndMsg:
 		// A driver's keys ["y"] is a whole answer; it does not wait out the hold.
 		if m.confirmation != nil && m.confirmation.Pending() && m.answer.held != "" &&
@@ -1175,6 +1181,7 @@ func (m ChatModel) updateChat(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// stale question answer.
 			return m, nil
 		}
+		m.answeredAt = m.now()
 		return m.resolveConfirmationDecision(msg)
 
 	case confirmActionResultMsg:
@@ -1391,6 +1398,9 @@ func (m ChatModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	// turn". Ctrl+C is still the universal way out.
 	if m.confirmation != nil && msg.Type != tea.KeyCtrlC {
 		return m.handleConfirmationKey(msg)
+	}
+	if m.droppedAfterAnswer(msg) {
+		return m, nil
 	}
 
 	// A pending question owns the keyboard: the run is blocked on it, so a

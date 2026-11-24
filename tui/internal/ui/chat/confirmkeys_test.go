@@ -242,8 +242,8 @@ func TestAlwaysNeedsEnter(t *testing.T) {
 	m = feed(t, m, gatedShellCall())
 
 	updated, cmd := m.handleKey(runeKeyMsg("a"))
-	m = updated.(ChatModel)
-	if cmd != nil {
+	m, decide := settle(t, updated.(ChatModel), cmd)
+	if decide != nil {
 		t.Fatal("a alone granted always")
 	}
 	promptStillWaiting(t, m)
@@ -370,5 +370,60 @@ func TestPasteOverAPromptGoesToTheComposer(t *testing.T) {
 	promptStillWaiting(t, m)
 	if m.input.Value() != "y" {
 		t.Errorf("composer = %q", m.input.Value())
+	}
+}
+
+// settle runs a key's command and feeds back what it produces, the way time
+// passing does for a lone letter.
+func settle(t *testing.T, m ChatModel, cmd tea.Cmd) (ChatModel, tea.Cmd) {
+	t.Helper()
+	if cmd == nil {
+		return m, nil
+	}
+	updated, next := m.Update(cmd())
+	return updated.(ChatModel), next
+}
+
+// a, a pause, then n: the person changed their mind. The n denies; neither
+// letter lands in the composer.
+func TestNAfterAHighlightedAlwaysDenies(t *testing.T) {
+	m, _ := liveModel(t)
+	m.streaming = true
+	m = feed(t, m, gatedShellCall())
+
+	updated, cmd := m.handleKey(runeKeyMsg("a"))
+	m, _ = settle(t, updated.(ChatModel), cmd)
+	updated, cmd = m.handleKey(runeKeyMsg("n"))
+	m, decide := settle(t, updated.(ChatModel), cmd)
+
+	if got := m.input.Value(); got != "" {
+		t.Errorf("composer = %q, want it empty", got)
+	}
+	if decide == nil {
+		t.Fatal("n after a highlighted always did not answer the prompt")
+	}
+	decided, ok := decide().(components.ConfirmationDecidedMsg)
+	if !ok || decided.Approved {
+		t.Errorf("n after a decided %#v, want a deny", decide())
+	}
+}
+
+// A letter pressed just after a prompt was answered was meant for that prompt,
+// not the start of a message.
+func TestAnswerLetterRightAfterAnAnswerIsDropped(t *testing.T) {
+	m, _ := liveModel(t)
+	m.streaming = true
+	m = feed(t, m, gatedShellCall())
+
+	updated, cmd := answerKey(t, m, "a")
+	m = updated.(ChatModel)
+	decided := cmd().(components.ConfirmationDecidedMsg)
+	updated, _ = m.Update(decided)
+	m = updated.(ChatModel)
+
+	updated, _ = m.handleKey(runeKeyMsg("n"))
+	m = updated.(ChatModel)
+	if got := m.input.Value(); got != "" {
+		t.Errorf("composer = %q right after answering, want it empty", got)
 	}
 }
