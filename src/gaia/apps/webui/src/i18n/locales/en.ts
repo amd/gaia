@@ -354,6 +354,7 @@ export const enMessages = {
     'composer.researchOnTitle': 'Research is on: GAIA searches the web, reads the sources and writes a report citing each one. Click to turn it off.',
     'composer.researchOffTitle': 'Research a topic: GAIA searches the web, reads the sources and writes a report citing each one. You can also start a message with /research.',
     'composer.researchPlaceholder': 'What should GAIA research?',
+    'composer.researchSkillsUnavailable': 'Not sent: with Research on, GAIA has to check whether your message runs a skill, and it could not read your skills ({error}). Send it again, or turn Research off.',
     'composer.memoryOn': 'Remember across chats: on',
     'composer.agentFast': 'Fast and light · Beta',
     'composer.agentFastTitle': 'Fast and light (Beta) is your agent. Change it in Settings › Agent & model.',
