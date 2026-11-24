@@ -505,8 +505,16 @@ async function startBackend() {
 /**
  * Start a new backend for the supervisor and resolve once it answers.
  * Rejects when it exits first or never answers, so the supervisor retries.
+ * A backend still alive here is a hung one Restart GAIA was pressed for:
+ * stop it first, or the new backend would run beside it on a new port.
  */
 async function restartBackend() {
+  if (backendProcess) {
+    const hung = backendProcess;
+    backendProcess = null;
+    isIntentionalKill = true;
+    await portManager.killBackend(hung);
+  }
   backendStarting = startBackend();
   const child = await backendStarting;
   if (!child) throw Object.assign(new Error(missingBackendMessage()), { terminal: true });
@@ -551,6 +559,8 @@ const backendSupervisor = createBackendSupervisor({
         (state.status === "restarting" ? ` (try ${state.attempt} of ${state.maxRestarts})` : "") +
         (state.lastError ? `: ${state.lastError}` : "")
     );
+    // A backend up again after a failed start leaves nothing to roll back from.
+    if (state.status === "running") autoUpdater.clearStartFailure();
     if (mainWindow && !mainWindow.isDestroyed()) {
       mainWindow.webContents.send("backend:state", backendStateForRenderer(state));
     }
