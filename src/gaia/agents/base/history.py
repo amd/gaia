@@ -975,13 +975,10 @@ class SessionHistory(list):
             # Transcripts contain local file contents; keep new archives private.
             import os
 
-            fd = (
-                os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
-                if not path.exists()
-                else None
-            )
-            if fd is not None:
-                os.close(fd)
+            try:
+                os.close(os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600))
+            except FileExistsError:
+                pass  # another process created it first
         self._db = sqlite3.connect(str(path) if path is not None else ":memory:")
         self._db.execute(
             "CREATE TABLE IF NOT EXISTS turns (id INTEGER PRIMARY KEY, messages TEXT NOT NULL)"
