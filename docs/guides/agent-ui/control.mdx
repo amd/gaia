@@ -65,8 +65,11 @@ reloads its model and never starts that server for you.
   on or off in **Settings → Privacy → Local only**; the CLI equivalent is
   `gaia config set network_policy local_ai_only` (or `cloud_allowed`). A saved cloud
   model isn't restored.
-- Keys are masked, go only to GAIA's local model server and your OS credential
-  store, and are refused over mobile access. A saved key shows as a read-only row with
+- Keys are masked and go only to GAIA's local model server and your OS credential
+  store. Adding, replacing or removing a key, and changing the gateway's address or
+  header settings, need the PC running GAIA: they're refused over mobile access and
+  from another computer on the network. Reconnecting with the saved settings works
+  from anywhere. A saved key shows as a read-only row with
   its last four characters and whether it's connected. **Replace** swaps it, and
   the trash button removes it here and for future sessions. A key set in the
   environment shows where it's set and can only be changed there.

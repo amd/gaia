@@ -3232,7 +3232,9 @@ credential store (the slot the TUI uses). A key is never echoed back or logged.
 
     **Errors:** **401** when the provider rejects the key or discovers no
     models (a key that discovers nothing is removed from Lemonade again);
-    **403** when a key is sent through the mobile tunnel; **409** when an
+    **403** when the body carries a key or any gateway setting and the request
+    doesn't come from the PC running GAIA (mobile access or another computer);
+    a blank body (reconnect) is allowed from anywhere; **409** when an
     environment key takes precedence, Lemonade is not on this PC, or the
     user's own server has no working provider.
   </Accordion>
@@ -3240,7 +3242,8 @@ credential store (the slot the TUI uses). A key is never echoed back or logged.
   <Accordion title="DELETE /api/providers/{provider}/key">
     Clear the key from Lemonade and from the OS credential store. Returns
     `{"removed": bool}`. On the user's own Lemonade only GAIA's stored copy is
-    removed; the server keeps its key.
+    removed; the server keeps its key. **403** unless the request comes from
+    the PC running GAIA.
   </Accordion>
 
   <Accordion title="POST /api/providers/key-store/retry">
