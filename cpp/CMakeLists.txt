@@ -412,6 +412,7 @@ if(GAIA_BUILD_GAIA_AGENT)
         agents/gaiacpp/sidecar.cpp
         agents/gaiacpp/stdio_server.cpp
         agents/gaiacpp/bash_tools.cpp
+        agents/gaiacpp/gaia_setup.cpp
     )
     # A GAIA release stamps its own version (0.25.4, 0.25.4-rc.1); the daemon
     # and the release checks read it back from `gaiacpp --version`.
@@ -489,6 +490,7 @@ if(GAIA_BUILD_TESTS)
         tests/test_secrets.cpp
         tests/test_mcp_http.cpp
         tests/test_agent_resilience.cpp
+        tests/test_declined_calls.cpp
         tests/test_skill_library.cpp
         tests/test_workspace.cpp
         tests/test_document_index.cpp
@@ -558,6 +560,7 @@ if(GAIA_BUILD_TESTS)
     # the CLI, and the sidecar HTTP + SSE API the Agent UI and the TUI use.
     if(GAIA_BUILD_GAIA_AGENT)
         target_sources(tests_mock PRIVATE tests/test_gaiacpp_cli.cpp tests/test_gaiacpp_sidecar.cpp)
+        target_sources(tests_mock PRIVATE tests/test_gaia_setup.cpp agents/gaiacpp/gaia_setup.cpp)
         target_sources(tests_mock PRIVATE tests/test_gaiacpp_stdio.cpp agents/gaiacpp/stdio_server.cpp)
         target_compile_definitions(tests_mock PRIVATE GAIACPP_BIN="$<TARGET_FILE:gaiacpp>")
         add_dependencies(tests_mock gaiacpp)

@@ -254,6 +254,11 @@ LemonadeHealth LemonadeClient::healthCheck() {
         }
     } catch (const json::exception&) {
         h.running = false;
+    } catch (const HttpError& e) {
+        h.running = false;
+        h.error = e.what();
+        h.errorStatus = e.status();
+        h.errorBody = e.body();
     } catch (const std::exception& e) {
         h.running = false;
         h.error = e.what();
@@ -604,6 +609,7 @@ std::string LemonadeClient::chatCompletionsStreaming(const json& requestBody,
     if (!body.contains("stream_options")) body["stream_options"] = {{"include_usage", true}};
 
     SseParser parser(onToken);
+    if (reasoningCallback_) parser.setReasoningCallback(reasoningCallback_);
     std::string rawBytes;
 
     httpPostStreaming(

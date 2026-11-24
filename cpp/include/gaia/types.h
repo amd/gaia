@@ -269,12 +269,14 @@ constexpr ToolPolicy stricterPolicy(ToolPolicy a, ToolPolicy b) {
     return a < b ? b : a;
 }
 
-enum class ToolConfirmResult { ALLOW_ONCE, ALWAYS_ALLOW, DENY };
+// DENY is a person's no. UNATTENDED means nobody could be asked or nobody
+// answered: the call is not run, and it is not remembered as declined.
+enum class ToolConfirmResult { ALLOW_ONCE, ALWAYS_ALLOW, DENY, UNATTENDED };
 
 // Returns sanitized args or throws std::invalid_argument to reject the call.
 using ToolValidateCallback = std::function<json(const std::string& toolName, const json& args)>;
 
-// Returns ALLOW_ONCE, ALWAYS_ALLOW, or DENY.
+// Returns ALLOW_ONCE, ALWAYS_ALLOW, DENY, or UNATTENDED.
 using ToolConfirmCallback = std::function<ToolConfirmResult(const std::string& toolName, const json& args)>;
 
 
@@ -494,6 +496,11 @@ struct AgentConfig {
     /// Resolve featureTier against ``modelId``.
     GAIA_API bool compactFeatures() const;
 
+    /// What the user can do when a reply is cut off at the limit, where they are. Empty: the
+    /// command line's "Raise the limit (--max-tokens; ...)". An app that sets the limit itself
+    /// names something its user can do instead.
+    std::string replyLimitRemedy;
+
     /// The reply limit sent with a request: maxTokens, but never more than half
     /// the context window, so a long reasoning block cannot fill the window, and
     /// at most 4096 for a compact model, whose longer replies are runaway repetition.
@@ -526,5 +533,9 @@ struct AgentConfig {
 /// empty throws), else GAIA_API_KEY, else LEMONADE_API_KEY when baseUrl is a
 /// loopback address, else "".
 GAIA_API std::string resolveApiKey(const AgentConfig& config);
+
+/// True for http(s)://localhost, 127.x.x.x or [::1]: the only addresses the
+/// local Lemonade's key is sent to.
+GAIA_API bool isLoopbackUrl(const std::string& url);
 
 } // namespace gaia

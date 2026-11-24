@@ -19,10 +19,12 @@
 #include <gaia/memory_store.h>
 #include <gaia/process.h>
 #include <gaia/skill_library.h>
+#include <gaia/web_tools.h>
 #include <gaia/workspace.h>
 
 #include <atomic>
 #include <filesystem>
+#include <functional>
 
 namespace gaia {
 
@@ -59,6 +61,11 @@ public:
         int helperTimeoutSeconds = 600;  // one helper's wall-clock limit
     };
 
+    /// Have a host ask the user before a tool is refused a path outside the
+    /// folders: `ask` returns true to let that path in for the agent's lifetime.
+    /// Never set, such a call is refused with the terminal's --allow-dir advice.
+    void setPathAccessPrompt(std::function<bool(const std::string& path)> ask);
+
     /// delegate_task for this agent: runs read-only helpers on stated tasks.
     ToolInfo delegateTaskTool();
 
@@ -80,6 +87,7 @@ protected:
     std::optional<std::string> unresolvedClaims(const std::string& answer) override;
     std::optional<std::string> unconfirmedClaims(const std::string& answer) override;
     std::optional<std::string> announcedStepNote(const std::string& answer) override;
+    std::string workSoFar() const override;
 
     /// Lists the working folder once, so every model call of the turn shows it as it began.
     void onTurnStart() override;
@@ -93,6 +101,10 @@ public:
     /// Whether the user's own words this turn forbid acting ("use no tools", "plan only").
     static bool asksForNoAction(const std::string& request);
 
+    /// What a chat user can do about a reply cut off at the limit: the app and the terminal UI
+    /// set the limit themselves, so "--max-tokens" names nothing they can reach.
+    static constexpr const char* kChatReplyLimitRemedy = "Break the request into smaller steps";
+
     /// A tool call of the turn, as the answer checks below see it.
     struct CallSeen {
         std::string name;
@@ -100,6 +112,9 @@ public:
         std::string output;  // what the tool returned, clipped
         bool succeeded = true;
     };
+
+    /// The files a turn changed and the commands it ran, for the user, or "" when it did neither.
+    static std::string describeWork(const std::vector<CallSeen>& calls);
 
     /// Why the turn's record doesn't back the answer's report that tests passed: no test
     /// ran, the latest run of each failed, the latest run of some test command after the
@@ -230,7 +245,12 @@ private:
     std::unique_ptr<LemonadeClient> visionClient_;
 
     json delegateTasks(const json& args);
-    std::shared_ptr<const Workspace> workspace_;  // null with full access
+    std::shared_ptr<Workspace> workspace_;  // null with full access
+    std::shared_ptr<WebPageCache> webPages_ = std::make_shared<WebPageCache>();  // cleared each turn
+    std::function<bool(const std::string& path)> askPathAccess_;
+    std::vector<std::string> openedFolders_;  // opened by the user since the start; guarded by turnListingMu_
+    /// The folders the agent started with, then those the user opened since.
+    std::vector<std::string> foldersInUse() const;
     struct HelperTotals {
         int runs = 0, ok = 0, partial = 0, failed = 0, width = 0;
         UsageStats usage;

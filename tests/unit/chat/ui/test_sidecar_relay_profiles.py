@@ -321,6 +321,31 @@ class TestGaiaDispatch:
         assert "Readiness check reported" in message
         assert "Lemonade is not reachable" in message
 
+    def test_gaiacpps_start_gaia_remedy_is_reworded_inside_the_open_app(
+        self, monkeypatch
+    ):
+        """ "Open GAIA" is no remedy in the app; the hint names its Start button."""
+        from gaia.llm.surface_hints import (
+            AGENT_UI_SERVER_RESTART_HINT,
+            NATIVE_SERVER_START_HINT,
+        )
+
+        hint = (
+            "GAIA's model server isn't running (it last ran at "
+            f"http://localhost:1/api/v1). {NATIVE_SERVER_START_HINT}"
+        )
+        body = self._init_body(reachable=False, hint=hint)
+        self._patch(monkeypatch, _FakeHandle(init_result=(503, body)))
+        handler = _FakeSSEHandler()
+        request = ChatRequest(session_id="s1", message="hi", agent_type="gaia")
+
+        _dispatch_sidecar_query(handler, request, [], "m", "gaia")
+
+        message = handler.events[0]["message"]
+        assert "GAIA's model server isn't running" in message
+        assert AGENT_UI_SERVER_RESTART_HINT in message
+        assert "gaia daemon start" not in message and "Open GAIA" not in message
+
     def test_a_missing_model_still_blocks(self, monkeypatch):
         """Not a false negative: the server answered and said the model is not
         there. Proceeding fails deeper with a worse message than the hint."""

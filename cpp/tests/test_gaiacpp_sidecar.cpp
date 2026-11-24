@@ -27,6 +27,12 @@
 #include <thread>
 #include <vector>
 
+#ifdef _WIN32
+#include <process.h>
+#else
+#include <unistd.h>
+#endif
+
 #include "gaia/types.h"
 #include "support/child_process.h"
 #include "support/mock_llm_server.h"
@@ -293,6 +299,9 @@ protected:
                 {"GAIA_HOST_KEYCHAIN_SECRET_FILE", std::nullopt},
                 {"LEMONADE_BASE_URL", modelUrl},
                 {"LEMONADE_API_KEY", std::nullopt},
+                {"GAIA_LEMONADE_EMBEDDED", std::nullopt},
+                {"GAIA_CONFIG_FILE", std::nullopt},
+                {"GAIA_CONFIG_DIR", std::nullopt},
                 {"GAIA_BASE_URL", std::nullopt},
                 {"GAIA_CPP_BASE_URL", std::nullopt},
                 {"GAIA_API_KEY", std::nullopt},
@@ -302,6 +311,25 @@ protected:
                 {"HOME", home},
                 {"USERPROFILE", home},
                 {"GAIACPP_CONFIG", (root_ / "no-config.json").string()}};
+    }
+
+    /// GAIA's own model server as its supervisor records it: running on `port`, requiring `key`.
+    void writeGaiaServer(int port, const std::string& key) {
+#ifdef _WIN32
+        const long long pid = _getpid();
+#else
+        const long long pid = getpid();
+#endif
+        fs::create_directories(root_ / "home" / "lemonade");
+        // Written aside and moved in: the sidecar may read it at any moment.
+        const fs::path tmp = root_ / "home" / "lemonade" / "state.json.tmp";
+        std::ofstream(tmp) << json{{"pid", pid}, {"port", port}, {"api_key", key}}.dump();
+        fs::rename(tmp, root_ / "home" / "lemonade" / "state.json");
+    }
+
+    /// The environment the daemon gives the sidecar: nothing names a model server or a model.
+    static testsupport::EnvOverrides daemonEnv() {
+        return {{"LEMONADE_BASE_URL", std::nullopt}, {"GAIA_MODEL_ID", std::nullopt}};
     }
 
     void spawn(const testsupport::EnvOverrides& env) {
@@ -354,7 +382,7 @@ protected:
         req.method = method;
         req.path = path;
         req.headers = headers;
-        if (method == "POST") {
+        if (method == "POST" || method == "PUT") {
             req.body = body;
             req.set_header("Content-Type", "application/json");
         }
@@ -404,6 +432,9 @@ TEST_F(GaiacppSidecar, EveryTokenRouteRefusesAMissingOrWrongToken) {
     const std::vector<std::pair<std::string, std::string>> routes = {
         {"GET", "/v1/gaia/init"},
         {"GET", "/v1/gaia/memory"},
+        {"POST", "/v1/gaia/memory"},
+        {"PUT", "/v1/gaia/memory/m1"},
+        {"DELETE", "/v1/gaia/memory/m1"},
         {"GET", "/v1/gaia/skills"},
         {"POST", "/v1/gaia/query"},
         {"POST", "/v1/gaia/query/auth-run/cancel"},
@@ -625,6 +656,34 @@ TEST_F(GaiacppSidecar, PlainQueryStreamsTokensThenFinalWithUsage) {
     auto unknown = send("GET", "/v1/gaia/sessions/never-used/tools", bearer());
     ASSERT_TRUE(unknown);
     EXPECT_EQ(unknown->status, 404);
+}
+
+// The app sets the reply limit itself, so its user is never told to pass --max-tokens.
+TEST_F(GaiacppSidecar, AReplyThatRunsOutWhileReasoningNamesSomethingAnAppUserCanDo) {
+    mock().enableSseStreaming(true);
+    mock().pushSseStream("data: " + json{{"choices", json::array({{{"index", 0},
+                                                                  {"delta", {{"reasoning_content", "thinking for a long time"}}},
+                                                                  {"finish_reason", "length"}}})}}
+                                           .dump() +
+                              "\n\ndata: [DONE]\n\n");
+    ASSERT_NO_FATAL_FAILURE(startSidecar());
+    Turn t(port_, queryBody("run-limit", "refactor everything", {{"session_id", "chat-limit"}}));
+    ASSERT_TRUE(t.waitDone()) << t.describe();
+    auto events = t.events();
+    ASSERT_NO_FATAL_FAILURE(expectSingleTerminal(events, "final")) << t.describe();
+    const json& final = events.back();
+    EXPECT_TRUE(final.value("failed", false)) << t.describe();
+    const std::string answer = final.value("answer", "");
+    EXPECT_NE(answer.find("reply limit of"), std::string::npos) << answer;
+    EXPECT_NE(answer.find("Break the request into smaller steps"), std::string::npos) << answer;
+    EXPECT_EQ(answer.find("--max-tokens"), std::string::npos) << answer;
+    EXPECT_EQ(answer.find("LLM error"), std::string::npos) << answer;
+    bool progress = false;
+    for (const auto& e : events) {
+        progress = progress || (e.value("type", "") == "status" && e.value("phase", "") == "reasoning" &&
+                                e.value("words", 0) == 5);
+    }
+    EXPECT_TRUE(progress) << "no reasoning progress was reported: " << t.describe();
 }
 
 TEST_F(GaiacppSidecar, TheHelperSettingReachesAChatsAgent) {
@@ -915,6 +974,39 @@ TEST_F(GaiacppSidecar, AlwaysOnAShellCommandCoversThatScopeInThatChatOnly) {
 
 // ---- 6. cancel ----
 
+#ifndef _WIN32
+// "Always allow mkdir commands" holds for the way a coding turn writes them: cd first, 2>&1 last.
+TEST_F(GaiacppSidecar, AlwaysOnACommandHoldsWhenTheNextOneStartsWithCdAndStillAsksForAChain) {
+    const std::string cd = "cd " + work_.string() + " && ";
+    for (const std::string& command : {cd + "mkdir one", cd + "mkdir two 2>&1", std::string("mkdir three 2>&1"),
+                                       cd + "mkdir four && rmdir one"}) {
+        mock().pushResponse(toolReply("bash_execute", {{"command", command}}));
+        mock().pushResponse(answerReply("ok"));
+    }
+    ASSERT_NO_FATAL_FAILURE(startSidecar());
+    const json allowed = json::array({work_.string()});
+
+    auto card = runTurn(*this, port_, "run-cd1", "chat-cd", allowed, "always");
+    ASSERT_TRUE(card);
+    EXPECT_EQ((*card)["always_scope"], "bash_execute:cmd:mkdir") << card->dump();
+    EXPECT_EQ((*card)["always_label"], "Run mkdir commands") << card->dump();
+    EXPECT_TRUE(fs::is_directory(work_ / "one"));
+
+    EXPECT_FALSE(runTurn(*this, port_, "run-cd2", "chat-cd", allowed, "")) << "asked again for mkdir";
+    EXPECT_TRUE(fs::is_directory(work_ / "two"));
+    EXPECT_FALSE(runTurn(*this, port_, "run-cd3", "chat-cd", allowed, "")) << "asked again for mkdir";
+    EXPECT_TRUE(fs::is_directory(work_ / "three"));
+
+    auto chain = runTurn(*this, port_, "run-cd4", "chat-cd", allowed, "deny");
+    ASSERT_TRUE(chain) << "a chain of two commands ran on a grant for one";
+    // A chain is never offered the one program's grant; at most the line as written, or none.
+    const json chainScope = (*chain)["always_scope"];
+    EXPECT_TRUE(chainScope.is_null() || chainScope.get<std::string>().rfind("bash_execute:exact:", 0) == 0) << chain->dump();
+    EXPECT_FALSE(fs::exists(work_ / "four"));
+    EXPECT_TRUE(fs::is_directory(work_ / "one"));
+}
+#endif
+
 TEST_F(GaiacppSidecar, CancelWhileWaitingForApprovalEndsTheTurnAndTheChatGoesOn) {
     const fs::path target = work_ / "never.txt";
     mock().pushResponse(toolReply("file_write", writeArgs(target, "x")));
@@ -1100,6 +1192,120 @@ TEST_F(GaiacppSidecar, RunIdEqualToAChatsIdDoesNotTakeOverThatChat) {
     EXPECT_EQ(still->status, 200) << "the chat was dropped with the one-off turn: " << still->body;
 }
 
+// The Memory page works on gaiacpp's own store: list, search, add, edit, forget.
+TEST_F(GaiacppSidecar, TheMemoryRoutesListSearchAddEditAndForgetInGaiacppsOwnStore) {
+    ASSERT_NO_FATAL_FAILURE(startSidecar());
+
+    auto empty = send("GET", "/v1/gaia/memory", bearer());
+    ASSERT_TRUE(empty);
+    ASSERT_EQ(empty->status, 200) << empty->body;
+    json ej = json::parse(empty->body);
+    EXPECT_EQ(ej["available"], false);
+    EXPECT_EQ(ej["store"]["agent"], "gaiacpp");
+    EXPECT_EQ(ej["store"]["capabilities"], json::array({"search", "create", "edit", "delete"}));
+
+    auto add = send("POST", "/v1/gaia/memory", bearer(),
+                    R"({"content":"My sister's name is Odalys and she lives in Tromso.","category":"fact"})");
+    ASSERT_TRUE(add);
+    ASSERT_EQ(add->status, 200) << add->body;
+    const std::string id = json::parse(add->body)["id"].get<std::string>();
+    ASSERT_FALSE(id.empty());
+    auto pref = send("POST", "/v1/gaia/memory", bearer(), R"({"content":"I prefer metric units.","category":"preference"})");
+    ASSERT_TRUE(pref);
+    ASSERT_EQ(pref->status, 200) << pref->body;
+
+    auto listed = send("GET", "/v1/gaia/memory", bearer());
+    ASSERT_TRUE(listed);
+    json lj = json::parse(listed->body);
+    EXPECT_EQ(lj["available"], true);
+    EXPECT_EQ(lj["total"], 2);
+    EXPECT_EQ(lj["store"]["agent"], "gaiacpp");
+    EXPECT_NE(fs::path(lj["store"]["path"].get<std::string>()).filename().string().find("memory-cpp"),
+              std::string::npos);
+
+    auto found = send("GET", "/v1/gaia/memory?q=Odalys", bearer());
+    ASSERT_TRUE(found);
+    json fj = json::parse(found->body);
+    ASSERT_EQ(fj["items"].size(), 1u) << found->body;
+    EXPECT_EQ(fj["items"][0]["id"], id);
+    auto byKind = send("GET", "/v1/gaia/memory?category=preference", bearer());
+    ASSERT_TRUE(byKind);
+    ASSERT_EQ(json::parse(byKind->body)["items"].size(), 1u) << byKind->body;
+
+    auto edit = send("PUT", "/v1/gaia/memory/" + id, bearer(), R"({"content":"My sister Odalys lives in Bergen."})");
+    ASSERT_TRUE(edit);
+    ASSERT_EQ(edit->status, 200) << edit->body;
+    auto after = send("GET", "/v1/gaia/memory?q=Bergen", bearer());
+    ASSERT_TRUE(after);
+    ASSERT_EQ(json::parse(after->body)["items"].size(), 1u) << after->body;
+
+    // Refusals say why, and nothing is stored.
+    auto blank = send("POST", "/v1/gaia/memory", bearer(), R"({"content":"   "})");
+    ASSERT_TRUE(blank);
+    EXPECT_EQ(blank->status, 422) << blank->body;
+    auto kind = send("POST", "/v1/gaia/memory", bearer(), R"({"content":"x y z","category":"profile"})");
+    ASSERT_TRUE(kind);
+    EXPECT_EQ(kind->status, 422) << kind->body;
+    auto missing = send("PUT", "/v1/gaia/memory/no-such-id", bearer(), R"({"content":"new text"})");
+    ASSERT_TRUE(missing);
+    EXPECT_EQ(missing->status, 404) << missing->body;
+    auto tooMany = send("GET", "/v1/gaia/memory?limit=5000", bearer());
+    ASSERT_TRUE(tooMany);
+    EXPECT_EQ(tooMany->status, 422) << tooMany->body;
+
+    auto forget = send("DELETE", "/v1/gaia/memory/" + id, bearer());
+    ASSERT_TRUE(forget);
+    ASSERT_EQ(forget->status, 200) << forget->body;
+    auto again = send("DELETE", "/v1/gaia/memory/" + id, bearer());
+    ASSERT_TRUE(again);
+    EXPECT_EQ(again->status, 404) << again->body;
+    auto last = send("GET", "/v1/gaia/memory", bearer());
+    ASSERT_TRUE(last);
+    EXPECT_EQ(json::parse(last->body)["total"], 1);
+}
+
+// `gaia -p` through the daemon: no chat, nobody to answer. It must end, not wait ten minutes.
+TEST_F(GaiacppSidecar, AGatedToolWithNobodyToAskEndsTheTurnAtOnce) {
+    const fs::path target = work_ / "unapproved.txt";
+    mock().pushResponse(toolReply("file_write", writeArgs(target, "x")));
+    mock().pushResponse(answerReply("Done."));
+    ASSERT_NO_FATAL_FAILURE(startSidecar());
+
+    Turn t(port_, queryBody("run-headless", "write it",
+                            {{"surface", "cli"}, {"allowed_paths", json::array({work_.string()})}}));
+    ASSERT_TRUE(t.waitDone(seconds(20))) << "the turn is waiting on an approval nobody can give: " << t.describe();
+
+    const auto final = t.waitType("final");
+    ASSERT_TRUE(final) << t.describe();
+    EXPECT_EQ((*final)["failed"], true);
+    const std::string answer = (*final)["answer"].get<std::string>();
+    EXPECT_NE(answer.find("I stopped before running 'file_write'"), std::string::npos) << answer;
+    EXPECT_NE(answer.find("gaia -p has nobody to ask"), std::string::npos) << answer;
+    EXPECT_NE(answer.find("--dangerously-skip-permissions"), std::string::npos) << answer;
+    EXPECT_FALSE(fs::exists(target));
+    for (const auto& e : t.events()) EXPECT_NE(e.value("type", ""), "needs_confirmation") << e.dump();
+}
+
+TEST_F(GaiacppSidecar, AChatThatSaysItCantAnswerIsRefusedInServiceWords) {
+    const fs::path target = work_ / "unapproved.txt";
+    mock().pushResponse(toolReply("file_write", writeArgs(target, "x")));
+    mock().pushResponse(answerReply("Done."));
+    ASSERT_NO_FATAL_FAILURE(startSidecar());
+
+    Turn t(port_, queryBody("run-mute", "write it",
+                            {{"session_id", "chat-mute"},
+                             {"can_answer_questions", false},
+                             {"allowed_paths", json::array({work_.string()})}}));
+    ASSERT_TRUE(t.waitDone(seconds(20))) << t.describe();
+    const auto final = t.waitType("final");
+    ASSERT_TRUE(final) << t.describe();
+    EXPECT_EQ((*final)["failed"], true);
+    const std::string answer = (*final)["answer"].get<std::string>();
+    EXPECT_NE(answer.find("this request has nobody to ask"), std::string::npos) << answer;
+    EXPECT_EQ(answer.find("gaia -p"), std::string::npos) << "only a cli caller is told about gaia -p: " << answer;
+    EXPECT_FALSE(fs::exists(target));
+}
+
 TEST_F(GaiacppSidecar, ATurnWithoutASessionIsAddressedByItsRunIdWhileItRuns) {
     Hold& held = hold();
     ASSERT_NO_FATAL_FAILURE(startSidecar());
@@ -1176,29 +1382,213 @@ TEST_F(GaiacppSidecar, TurnsBeyondTheQueueBoundGet503AndApprovalsStillGetThrough
 
 // ---- 8. per-chat scope ----
 
-TEST_F(GaiacppSidecar, FileOutsideTheChatsFoldersIsRefused) {
+bool isFolderCard(const json& e) {
+    return e.value("type", "") == "needs_confirmation" && e.value("action", "") == "allow_path_access";
+}
+
+int countFolderCards(const std::vector<json>& events) {
+    int n = 0;
+    for (const auto& e : events) n += isFolderCard(e) ? 1 : 0;
+    return n;
+}
+
+TEST_F(GaiacppSidecar, OutsideFileRaisesTheFolderCardAndDenyRefusesWithoutLeaking) {
     const fs::path secret = root_ / "outside" / "secret.txt";
+    mock().pushResponse(toolReply("file_read", {{"path", secret.string()}}));
     mock().pushResponse(toolReply("file_read", {{"path", secret.string()}}));
     mock().pushResponse(answerReply("I can't read that."));
     ASSERT_NO_FATAL_FAILURE(startSidecar());
 
-    Turn t(port_, queryBody("run-scope", "read the secret",
+    const std::string run = "run-scope";
+    Turn t(port_, queryBody(run, "read the secret",
                             {{"session_id", "chat-scope"}, {"allowed_paths", json::array({work_.string()})}}));
+    auto card = t.waitEvent(isFolderCard);
+    ASSERT_TRUE(card) << "no folder card: " << t.describe();
+    EXPECT_EQ((*card)["run_id"], run);
+    EXPECT_EQ((*card)["args"].value("path", ""), secret.string()) << card->dump();
+    EXPECT_EQ((*card)["args"].value("kind", ""), "file") << card->dump();
+    EXPECT_NE((*card)["summary"].get<std::string>().find(secret.string()), std::string::npos) << card->dump();
+    EXPECT_FALSE(card->contains("always_scope")) << "a folder card offers no 'always'";
+    auto deny = decide(run, "deny", (*card)["confirm_id"].get<std::string>());
+    ASSERT_TRUE(deny);
+    ASSERT_EQ(deny->status, 200) << deny->body;
+
+    ASSERT_TRUE(t.waitDone()) << t.describe();
+    auto events = t.events();
+    ASSERT_NO_FATAL_FAILURE(expectSingleTerminal(events, "final")) << t.describe();
+    EXPECT_EQ(countFolderCards(events), 1) << "a no is not asked again in the same turn: " << t.describe();
+    int results = 0;
+    for (const auto& e : events) {
+        if (e["type"] != "tool_result") continue;
+        ++results;
+        EXPECT_EQ(e["tool"], "file_read");
+        EXPECT_EQ(e["data"].value("status", ""), "error") << e.dump();
+        const std::string why = e["data"].value("error", "");
+        EXPECT_NE(why.find("did not allow"), std::string::npos) << why;
+        EXPECT_EQ(why.find("--allow-dir"), std::string::npos) << "a desktop user has no command line: " << why;
+    }
+    EXPECT_EQ(results, 2) << t.describe();
+    EXPECT_EQ(t.raw().find("outside secret 4471"), std::string::npos) << "the file's content must not leak";
+    for (const auto& body : mock().receivedBodies()) {
+        EXPECT_EQ(body.find("outside secret 4471"), std::string::npos) << "the model must not see the refused file";
+    }
+}
+
+TEST_F(GaiacppSidecar, ApprovingTheFolderCardOpensThatPathForThatChatOnly) {
+    const fs::path secret = root_ / "outside" / "secret.txt";
+    for (int i = 0; i < 3; ++i) {
+        mock().pushResponse(toolReply("file_read", {{"path", secret.string()}}));
+        mock().pushResponse(answerReply("Done."));
+    }
+    ASSERT_NO_FATAL_FAILURE(startSidecar());
+    const json folders = json::array({work_.string()});
+    auto readResult = [](const std::vector<json>& events) {
+        const int at = indexOf(events, "tool_result");
+        return at < 0 ? json::object() : events[at]["data"];
+    };
+
+    {
+        Turn t(port_, queryBody("run-open-1", "read it", {{"session_id", "chat-open"}, {"allowed_paths", folders}}));
+        auto card = t.waitEvent(isFolderCard);
+        ASSERT_TRUE(card) << "no folder card: " << t.describe();
+        EXPECT_EQ(indexOf(t.events(), "tool_result"), -1) << "nothing is read before the user answers";
+        auto allow = decide("run-open-1", "allow", (*card)["confirm_id"].get<std::string>());
+        ASSERT_TRUE(allow);
+        ASSERT_EQ(allow->status, 200) << allow->body;
+        ASSERT_TRUE(t.waitDone()) << t.describe();
+        ASSERT_NO_FATAL_FAILURE(expectSingleTerminal(t.events(), "final")) << t.describe();
+        EXPECT_NE(readResult(t.events()).dump().find("outside secret 4471"), std::string::npos)
+            << "the approved read goes ahead: " << t.describe();
+        EXPECT_EQ(countFolderCards(t.events()), 1);
+    }
+    {
+        // The same chat keeps the path on its next turn.
+        Turn t(port_, queryBody("run-open-2", "read it", {{"session_id", "chat-open"}, {"allowed_paths", folders}}));
+        ASSERT_TRUE(t.waitDone()) << t.describe();
+        EXPECT_EQ(countFolderCards(t.events()), 0) << t.describe();
+        EXPECT_NE(readResult(t.events()).dump().find("outside secret 4471"), std::string::npos) << t.describe();
+    }
+    {
+        // Another chat was never given it.
+        Turn t(port_, queryBody("run-open-3", "read it", {{"session_id", "chat-other"}, {"allowed_paths", folders}}));
+        auto card = t.waitEvent(isFolderCard);
+        ASSERT_TRUE(card) << "another chat must be asked for itself: " << t.describe();
+        auto deny = decide("run-open-3", "deny", (*card)["confirm_id"].get<std::string>());
+        ASSERT_TRUE(deny);
+        ASSERT_TRUE(t.waitDone()) << t.describe();
+        EXPECT_EQ(readResult(t.events()).value("status", ""), "error") << t.describe();
+    }
+}
+
+TEST_F(GaiacppSidecar, FileInsideTheChatsFoldersRaisesNoFolderCard) {
+    mock().pushResponse(toolReply("file_read", {{"path", (work_ / "note.txt").string()}}));
+    mock().pushResponse(answerReply("Read it."));
+    ASSERT_NO_FATAL_FAILURE(startSidecar());
+
+    Turn t(port_, queryBody("run-inside", "read the note",
+                            {{"session_id", "chat-inside"}, {"allowed_paths", json::array({work_.string()})}}));
+    ASSERT_TRUE(t.waitDone()) << t.describe();
+    auto events = t.events();
+    ASSERT_NO_FATAL_FAILURE(expectSingleTerminal(events, "final")) << t.describe();
+    EXPECT_EQ(indexOf(events, "needs_confirmation"), -1) << t.describe();
+    const int result = indexOf(events, "tool_result");
+    ASSERT_GE(result, 0) << t.describe();
+    EXPECT_NE(events[result]["data"].dump().find("hello from the work folder"), std::string::npos);
+}
+
+#ifndef _WIN32
+// A PC with no pdftotext: a Mac reads the PDF itself; elsewhere the turn ends with what to do.
+TEST_F(GaiacppSidecar, AnAttachedPdfIsReadOrTheTurnSaysWhyNot) {
+    const fs::path pdf = fs::path(GAIA_REPO_FIXTURES_DIR) / "gaia" / "tiers_documents" / "northwind_annual_report.pdf";
+    ASSERT_TRUE(fs::exists(pdf)) << pdf;
+    fs::create_directories(root_ / "home" / "chat" / "uploads");
+    const fs::path attached = root_ / "home" / "chat" / "uploads" / "report.pdf";
+    fs::copy_file(pdf, attached);
+    mock().pushResponse(answerReply("Reservoir B holds 18.4."));
+    ASSERT_NO_FATAL_FAILURE(startSidecar({{"PATH", std::string("/nonexistent-gaia-test")}}));
+
+    Turn t(port_, queryBody("run-pdf", "what does the report say?",
+                            {{"session_id", "chat-pdf"}, {"documents", json::array({attached.string()})},
+                             {"allowed_paths", json::array({work_.string()})}}));
+    ASSERT_TRUE(t.waitDone()) << t.describe();
+    auto events = t.events();
+    ASSERT_NO_FATAL_FAILURE(expectSingleTerminal(events, "final")) << t.describe();
+    const json& final = events.back();
+#ifdef __APPLE__
+    EXPECT_FALSE(final.value("failed", false)) << t.describe();
+    const int indexed = indexOf(events, "tool_result");
+    ASSERT_GE(indexed, 0) << t.describe();
+    EXPECT_EQ(events[indexed]["data"][0]["result"].value("status", ""), "success") << t.describe();
+    EXPECT_GT(events[indexed]["data"][0]["result"].value("chunks", 0), 20) << t.describe();
+#else
+    EXPECT_TRUE(final.value("failed", false)) << t.describe();
+    const std::string answer = final.value("answer", "");
+    for (const char* part : {"report.pdf", "pdftotext", "not installed", "Full-featured", "Agent & model"}) {
+        EXPECT_NE(answer.find(part), std::string::npos) << part << " in: " << answer;
+    }
+    EXPECT_EQ(answer.find("Tell the user"), std::string::npos) << "a note for the model, not the user";
+    EXPECT_EQ(mock().requestCount(), 0) << "the model was asked to guess";
+#endif
+}
+
+TEST_F(GaiacppSidecar, ShellCommandNamingAnOutsideFolderRaisesTheFolderCard) {
+    // Not under the temp folder: commands may always read system folders.
+    struct Scratch {
+        fs::path dir = fs::canonical(fs::current_path()) / ("gaiacpp-sidecar-out-" + std::to_string(std::random_device{}()));
+        ~Scratch() {
+            std::error_code ec;
+            fs::remove_all(dir, ec);
+        }
+    } scratch;
+    const fs::path outside = scratch.dir;
+    fs::create_directories(outside);
+    std::ofstream(outside / "secret.txt") << "outside secret 4471";
+    mock().pushResponse(toolReply("bash_execute", {{"command", "ls " + outside.string()}}));
+    mock().pushResponse(answerReply("Listed."));
+    ASSERT_NO_FATAL_FAILURE(startSidecar());
+
+    Turn t(port_, queryBody("run-shell-out", "list it",
+                            {{"session_id", "chat-shell-out"}, {"allowed_paths", json::array({work_.string()})}}));
+    auto card = t.waitEvent(isFolderCard);
+    ASSERT_TRUE(card) << "no folder card: " << t.describe();
+    EXPECT_EQ((*card)["args"].value("path", ""), outside.string()) << card->dump();
+    EXPECT_EQ((*card)["args"].value("kind", ""), "folder") << card->dump();
+    auto allow = decide("run-shell-out", "allow", (*card)["confirm_id"].get<std::string>());
+    ASSERT_TRUE(allow);
+    ASSERT_EQ(allow->status, 200) << allow->body;
     ASSERT_TRUE(t.waitDone()) << t.describe();
     auto events = t.events();
     ASSERT_NO_FATAL_FAILURE(expectSingleTerminal(events, "final")) << t.describe();
     const int result = indexOf(events, "tool_result");
     ASSERT_GE(result, 0) << t.describe();
-    EXPECT_EQ(events[result]["tool"], "file_read");
-    EXPECT_EQ(events[result]["data"].value("status", ""), "error") << events[result].dump();
-    EXPECT_FALSE(events[result]["data"].value("error", "").empty()) << events[result].dump();
-    EXPECT_EQ(t.raw().find("outside secret 4471"), std::string::npos) << "the file's content must not leak";
-    EXPECT_EQ(indexOf(events, "needs_confirmation"), -1);
+    EXPECT_NE(events[result]["data"].value("stdout", "").find("secret.txt"), std::string::npos)
+        << events[result].dump();
+}
+#endif
 
-    auto sent = modelRequests();
-    ASSERT_EQ(sent.size(), 2u);
-    EXPECT_EQ(mock().receivedBodies()[1].find("outside secret 4471"), std::string::npos)
-        << "the model must not see the refused file";
+TEST_F(GaiacppSidecar, FullAccessOpensAnOutsidePathWithoutAsking) {
+    const fs::path secret = root_ / "outside" / "secret.txt";
+    mock().pushResponse(answerReply("Hello."));
+    mock().pushResponse(toolReply("file_read", {{"path", secret.string()}}));
+    mock().pushResponse(answerReply("Read it."));
+    ASSERT_NO_FATAL_FAILURE(startSidecar());
+    const json chat = {{"session_id", "chat-full"}, {"allowed_paths", json::array({work_.string()})}};
+    {
+        Turn t(port_, queryBody("run-full-1", "hello", chat));
+        ASSERT_TRUE(t.waitDone()) << t.describe();
+    }
+    auto bypass = send("POST", "/v1/gaia/sessions/chat-full/bypass", bearer(), R"({"enabled":true})");
+    ASSERT_TRUE(bypass);
+    ASSERT_EQ(bypass->status, 200) << bypass->body;
+
+    Turn t(port_, queryBody("run-full-2", "read the secret", chat));
+    ASSERT_TRUE(t.waitDone()) << t.describe();
+    auto events = t.events();
+    ASSERT_NO_FATAL_FAILURE(expectSingleTerminal(events, "final")) << t.describe();
+    EXPECT_EQ(indexOf(events, "needs_confirmation"), -1) << "full access asks nothing: " << t.describe();
+    const int result = indexOf(events, "tool_result");
+    ASSERT_GE(result, 0) << t.describe();
+    EXPECT_NE(events[result]["data"].dump().find("outside secret 4471"), std::string::npos) << events[result].dump();
 }
 
 TEST_F(GaiacppSidecar, InternetOffRefusesWebFetchBeforeAnyApprovalCard) {
@@ -1267,9 +1657,8 @@ TEST_F(GaiacppSidecar, UnreachableModelServerFailsTheTurnWithAReasonInsteadOfHan
     EXPECT_EQ(ij["lemonade"]["reachable"], false);
     EXPECT_NE(ij["hint"].get<std::string>().find(std::to_string(closedPort)), std::string::npos) << ij.dump();
 
-    // The agent retries a connection failure with backoff (2+4+8 s), so allow for that.
     Turn t(port_, queryBody("run-down", "hello?"));
-    ASSERT_TRUE(t.waitDone(seconds(120))) << "the turn hung on a dead model server: " << t.describe();
+    ASSERT_TRUE(t.waitDone()) << "the turn hung on a dead model server: " << t.describe();
     ASSERT_EQ(t.status(), 200) << t.describe();
     auto events = t.events();
     ASSERT_FALSE(events.empty()) << t.describe();
@@ -1277,8 +1666,10 @@ TEST_F(GaiacppSidecar, UnreachableModelServerFailsTheTurnWithAReasonInsteadOfHan
     // Same shape as the Python flagship: a final marked failed, carrying the reason.
     ASSERT_EQ(last.value("type", ""), "final") << t.describe();
     EXPECT_EQ(last.value("failed", false), true) << last.dump();
-    const std::string failure = last.value("failure", "");
-    EXPECT_NE(failure.find("mock-model"), std::string::npos) << "names the model it couldn't reach: " << failure;
+    // `failure` is the kind the apps act on; the reason is the answer.
+    EXPECT_EQ(last.value("failure", ""), "model_server_down") << last.dump();
+    const std::string failure = last.value("answer", "");
+    EXPECT_NE(failure.find("LEMONADE_BASE_URL"), std::string::npos) << "names what chose the server: " << failure;
     EXPECT_NE(failure.find(std::to_string(closedPort)), std::string::npos) << "names where it looked: " << failure;
 
     auto health = client().Get("/health");
@@ -1286,7 +1677,247 @@ TEST_F(GaiacppSidecar, UnreachableModelServerFailsTheTurnWithAReasonInsteadOfHan
     EXPECT_EQ(health->status, 200);
 }
 
-// ---- 10. bad requests ----
+// ---- 10. GAIA's own model server (#8854) ----
+
+TEST_F(GaiacppSidecar, AChatRunsOnGaiasOwnModelServerWithItsKeyAndChosenModel) {
+    writeGaiaServer(mock().port(), "gaia-own-key");
+    std::ofstream(root_ / "home" / "config.json") << json{{"default_model", "chosen-model"}}.dump();
+    mock().pushResponse(answerReply("From GAIA's server."));
+    ASSERT_NO_FATAL_FAILURE(startSidecar(daemonEnv()));
+
+    Turn t(port_, queryBody("run-own", "hello", {{"session_id", "chat-own"}}));
+    ASSERT_TRUE(t.waitDone()) << t.describe();
+    ASSERT_NO_FATAL_FAILURE(expectSingleTerminal(t.events(), "final")) << t.describe();
+    EXPECT_EQ(t.events().back()["answer"], "From GAIA's server.") << t.describe();
+    ASSERT_EQ(mock().requestCount(), 1);
+    EXPECT_EQ(mock().receivedAuthorization()[0], "Bearer gaia-own-key");
+    EXPECT_EQ(modelRequests()[0]["model"], "chosen-model");
+}
+
+TEST_F(GaiacppSidecar, InitReportsGaiasOwnModelServer) {
+    writeGaiaServer(mock().port(), "gaia-own-key");
+    std::ofstream(root_ / "home" / "config.json") << json{{"default_model", "chosen-model"}}.dump();
+    ASSERT_NO_FATAL_FAILURE(startSidecar(daemonEnv()));
+
+    auto init = send("GET", "/v1/gaia/init", bearer());
+    ASSERT_TRUE(init);
+    EXPECT_EQ(init->status, 200) << init->body;
+    const json ij = json::parse(init->body);
+    EXPECT_EQ(ij["ready"], true) << ij.dump();
+    EXPECT_EQ(ij["lemonade"]["base_url"], "http://localhost:" + std::to_string(mock().port()) + "/api/v1");
+    EXPECT_EQ(ij["model"]["id"], "chosen-model");
+    EXPECT_EQ(ij["model"]["present"], true);
+}
+
+TEST_F(GaiacppSidecar, AModelServerRestartedOnANewPortIsFollowedByTheNextTurn) {
+    bench::MockLlmServer restarted;
+    writeGaiaServer(mock().port(), "first-key");
+    mock().pushResponse(answerReply("one"));
+    restarted.pushResponse(answerReply("two"));
+    ASSERT_NO_FATAL_FAILURE(startSidecar(daemonEnv()));
+
+    Turn first(port_, queryBody("run-a", "hello", {{"session_id", "chat-move"}}));
+    ASSERT_TRUE(first.waitDone()) << first.describe();
+    EXPECT_EQ(first.events().back()["answer"], "one") << first.describe();
+
+    writeGaiaServer(restarted.port(), "second-key");
+    auto init = send("GET", "/v1/gaia/init", bearer());
+    ASSERT_TRUE(init);
+    EXPECT_EQ(json::parse(init->body)["lemonade"]["base_url"],
+              "http://localhost:" + std::to_string(restarted.port()) + "/api/v1");
+    Turn second(port_, queryBody("run-b", "hello again", {{"session_id", "chat-move"}}));
+    ASSERT_TRUE(second.waitDone()) << second.describe();
+    EXPECT_EQ(second.events().back()["answer"], "two") << second.describe();
+    EXPECT_EQ(mock().requestCount(), 1);
+    ASSERT_EQ(restarted.requestCount(), 1);
+    EXPECT_EQ(restarted.receivedAuthorization()[0], "Bearer second-key");
+}
+
+TEST_F(GaiacppSidecar, AUsersOwnLemonadeBaseUrlStillWinsAndNeverGetsGaiasKey) {
+    bench::MockLlmServer gaias;
+    writeGaiaServer(gaias.port(), "gaia-own-key");
+    mock().pushResponse(answerReply("From the user's server."));
+    ASSERT_NO_FATAL_FAILURE(startSidecar());  // LEMONADE_BASE_URL names mock()
+
+    Turn t(port_, queryBody("run-user", "hello"));
+    ASSERT_TRUE(t.waitDone()) << t.describe();
+    EXPECT_EQ(t.events().back()["answer"], "From the user's server.") << t.describe();
+    EXPECT_EQ(gaias.requestCount(), 0);
+    ASSERT_EQ(mock().requestCount(), 1);
+    EXPECT_EQ(mock().receivedAuthorization()[0], "");
+}
+
+TEST_F(GaiacppSidecar, GaiasModelServerStoppedSaysHowToStartIt) {
+    int lastPort = 0;
+    {
+        bench::MockLlmServer gone;  // bound, then closed: nothing listens there now
+        lastPort = gone.port();
+    }
+    const fs::path lemonade = root_ / "home" / "lemonade";
+    fs::create_directories(lemonade / "dist" / "10.0.0");
+    std::ofstream(lemonade / "dist" / "10.0.0" / "lemond") << "";
+    std::ofstream(lemonade / "last_port.json") << json{{"port", lastPort}}.dump();
+    ASSERT_NO_FATAL_FAILURE(startSidecar(daemonEnv()));
+
+    auto init = send("GET", "/v1/gaia/init", bearer());
+    ASSERT_TRUE(init);
+    EXPECT_EQ(init->status, 503) << init->body;
+    const std::string hint = json::parse(init->body)["hint"].get<std::string>();
+    EXPECT_NE(hint.find("gaia daemon start"), std::string::npos) << hint;
+
+    Turn t(port_, queryBody("run-stopped", "hello?"));
+    ASSERT_TRUE(t.waitDone()) << t.describe();
+    json last = t.events().back();
+    ASSERT_EQ(last.value("type", ""), "final") << t.describe();
+    EXPECT_EQ(last.value("failed", false), true) << last.dump();
+    // The kind the Agent UI and the terminal UI read to offer their own way to start it.
+    EXPECT_EQ(last.value("failure", ""), "model_server_down") << last.dump();
+    const std::string answer = last.value("answer", "");
+    EXPECT_NE(answer.find("GAIA's model server isn't running"), std::string::npos) << answer;
+    EXPECT_NE(answer.find("gaia daemon start"), std::string::npos) << answer;
+    EXPECT_EQ(answer.find("13305"), std::string::npos) << answer;
+
+    // Inside the open app, "Open GAIA" and a terminal command are no remedy: name the app's button.
+    Turn app(port_, queryBody("run-stopped-app", "hello?", {{"session_id", "chat-app"}, {"surface", "agent_ui"}}));
+    ASSERT_TRUE(app.waitDone()) << app.describe();
+    last = app.events().back();
+    ASSERT_EQ(last.value("type", ""), "final") << app.describe();
+    EXPECT_EQ(last.value("failure", ""), "model_server_down") << last.dump();
+    const std::string inApp = last.value("answer", "");
+    EXPECT_NE(inApp.find("GAIA's model server isn't running"), std::string::npos) << inApp;
+    EXPECT_NE(inApp.find("Press Start the model server below, then send your message again."), std::string::npos)
+        << inApp;
+    EXPECT_EQ(inApp.find("gaia daemon start"), std::string::npos) << inApp;
+    EXPECT_EQ(inApp.find("Open GAIA"), std::string::npos) << inApp;
+}
+
+// The server answers when the turn starts and is gone by the time the model is called again.
+TEST_F(GaiacppSidecar, AModelServerThatDiesMidTurnIsNamedNotTheTransportsAdvice) {
+    auto server = std::make_unique<bench::MockLlmServer>();
+    writeGaiaServer(server->port(), "k");
+    const fs::path note = work_ / "note.txt";
+    server->pushResponse(toolReply("file_write", writeArgs(note, "hi")));
+    ASSERT_NO_FATAL_FAILURE(startSidecar(daemonEnv()));
+
+    const std::string run = "run-dies";
+    Turn t(port_, queryBody(run, "write it",
+                            {{"session_id", "chat-dies"},
+                             {"surface", "agent_ui"},
+                             {"allowed_paths", json::array({work_.string()})}}));
+    auto card = t.waitEvent([&](const json& e) { return isConfirmFor(e, note); });
+    ASSERT_TRUE(card) << t.describe();
+    server.reset();  // the turn is parked on its card; the model server goes away
+    auto allow = decide(run, "allow", (*card)["confirm_id"].get<std::string>());
+    ASSERT_TRUE(allow);
+    ASSERT_EQ(allow->status, 200) << allow->body;
+
+    ASSERT_TRUE(t.waitDone(seconds(120))) << t.describe();
+    const json last = t.events().back();
+    ASSERT_EQ(last.value("type", ""), "final") << t.describe();
+    EXPECT_EQ(last.value("failed", false), true) << last.dump();
+    EXPECT_EQ(last.value("failure", ""), "model_server_down") << last.dump();
+    const std::string answer = last.value("answer", "");
+    EXPECT_EQ(answer.find("Check that the service is running"), std::string::npos) << answer;
+    EXPECT_NE(answer.find("Press Start the model server below"), std::string::npos) << answer;
+    EXPECT_EQ(answer.find("gaia daemon start"), std::string::npos) << answer;
+}
+
+// 0.0.0.0 reaches this PC's listeners on Linux and macOS without being a loopback
+// name, so it stands in for another machine. Windows refuses to connect to it.
+std::string addressThatIsNotLoopback(int port) { return "http://0.0.0.0:" + std::to_string(port) + "/api/v1"; }
+
+#ifdef _WIN32
+#define SKIP_WITHOUT_A_NON_LOOPBACK_ADDRESS() \
+    GTEST_SKIP() << "no address reaches a local test server on Windows without being loopback; " \
+                    "GaiaSetup.ANamedServersKey covers the rule there"
+#else
+#define SKIP_WITHOUT_A_NON_LOOPBACK_ADDRESS() (void)0
+#endif
+
+// The local Lemonade's key, and GAIA's own, stay on this PC (#8854 review).
+TEST_F(GaiacppSidecar, ANamedAddressOnAnotherMachineGetsNoLocalKey) {
+    SKIP_WITHOUT_A_NON_LOOPBACK_ADDRESS();
+    for (const char* var : {"GAIA_BASE_URL", "GAIA_CPP_BASE_URL"}) {
+        writeGaiaServer(mock().port(), "gaia-own-key");
+        mock().pushResponse(answerReply("From the named server."));
+        ASSERT_NO_FATAL_FAILURE(startSidecar({{"LEMONADE_BASE_URL", std::nullopt},
+                                              {var, addressThatIsNotLoopback(mock().port())},
+                                              {"LEMONADE_API_KEY", std::string("local-lemonade-key")}}));
+        Turn t(port_, queryBody(std::string("run-remote-") + var, "hello"));
+        ASSERT_TRUE(t.waitDone()) << t.describe();
+        EXPECT_EQ(t.events().back()["answer"], "From the named server.") << t.describe();
+        ASSERT_FALSE(mock().receivedAuthorization().empty());
+        EXPECT_EQ(mock().receivedAuthorization().back(), "") << var << ": a local key left this PC";
+        child_.reset();
+        std::error_code ec;
+        fs::remove(root_ / "sidecar.stderr", ec);  // its ready line would be read as the next one's
+    }
+}
+
+TEST_F(GaiacppSidecar, ANamedAddressOnAnotherMachineGetsTheKeyTheUserGaveForIt) {
+    SKIP_WITHOUT_A_NON_LOOPBACK_ADDRESS();
+    mock().pushResponse(answerReply("From the named server."));
+    ASSERT_NO_FATAL_FAILURE(startSidecar({{"LEMONADE_BASE_URL", std::nullopt},
+                                          {"GAIA_BASE_URL", addressThatIsNotLoopback(mock().port())},
+                                          {"LEMONADE_API_KEY", std::string("local-lemonade-key")},
+                                          {"GAIA_API_KEY", std::string("key-for-that-server")}}));
+    Turn t(port_, queryBody("run-remote-key", "hello"));
+    ASSERT_TRUE(t.waitDone()) << t.describe();
+    ASSERT_EQ(mock().requestCount(), 1) << t.describe();
+    EXPECT_EQ(mock().receivedAuthorization()[0], "Bearer key-for-that-server");
+}
+
+TEST_F(GaiacppSidecar, ANamedAddressOnThisPcStillGetsTheLocalLemonadeKey) {
+    mock().pushResponse(answerReply("From the local server."));
+    ASSERT_NO_FATAL_FAILURE(startSidecar({{"LEMONADE_BASE_URL", std::nullopt},
+                                          {"GAIA_BASE_URL", mock().baseUrl() + "/api/v1"},
+                                          {"LEMONADE_API_KEY", std::string("local-lemonade-key")}}));
+    Turn t(port_, queryBody("run-local-key", "hello"));
+    ASSERT_TRUE(t.waitDone()) << t.describe();
+    ASSERT_EQ(mock().requestCount(), 1) << t.describe();
+    EXPECT_EQ(mock().receivedAuthorization()[0], "Bearer local-lemonade-key");
+}
+
+// GAIA's server is up and refuses the key: the turn says which key, not "start the daemon".
+TEST_F(GaiacppSidecar, AModelServerThatRefusesTheKeyIsNotReportedAsStopped) {
+    httplib::Server refusing;
+    refusing.Get("/api/v1/health", [](const httplib::Request&, httplib::Response& res) {
+        res.status = 401;
+        res.set_content(R"({"error":"invalid api key"})", "application/json");
+    });
+    const int refusingPort = refusing.bind_to_any_port("127.0.0.1");
+    std::thread serving([&refusing] { refusing.listen_after_bind(); });
+    while (!refusing.is_running()) std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    struct StopOnExit {
+        httplib::Server& server;
+        std::thread& thread;
+        ~StopOnExit() {
+            server.stop();
+            thread.join();
+        }
+    } stopOnExit{refusing, serving};
+    writeGaiaServer(refusingPort, "gaia-own-key");
+    auto env = daemonEnv();
+    env["LEMONADE_API_KEY"] = std::string("users-other-key");
+    ASSERT_NO_FATAL_FAILURE(startSidecar(env));
+
+    auto init = send("GET", "/v1/gaia/init", bearer());
+    ASSERT_TRUE(init);
+    EXPECT_EQ(init->status, 503) << init->body;
+    const std::string hint = json::parse(init->body).value("hint", "");
+    Turn t(port_, queryBody("run-refused", "hello?"));
+    ASSERT_TRUE(t.waitDone()) << t.describe();
+    const std::string failure = t.events().back().value("failure", "");
+
+    for (const std::string& text : {hint, failure}) {
+        EXPECT_NE(text.find("HTTP 401"), std::string::npos) << text;
+        EXPECT_NE(text.find("unset LEMONADE_API_KEY"), std::string::npos) << text;
+        EXPECT_EQ(text.find("gaia daemon start"), std::string::npos) << text;
+        EXPECT_EQ(text.find("users-other-key"), std::string::npos) << "a key is never printed";
+    }
+}
+
+// ---- 11. bad requests ----
 
 TEST_F(GaiacppSidecar, MalformedBodiesAndUnknownRoutesGet4xxAndTheServerKeepsServing) {
     ASSERT_NO_FATAL_FAILURE(startSidecar());

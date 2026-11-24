@@ -153,6 +153,7 @@ What changes with `gaiacpp` (`catalog.Agent.Native`):
 |---|---|---|
 | Launched as | `gaiacpp --stdio`, plus `--dev`, `--full-access`, `--accept-edits`, `--model <id>` as needed | `gaia-agent`, plus the same and `--use-claude`, `--claude-model <id>` |
 | Claude | Not available. `--use-claude` is refused before any screen opens, and `/model <claude id>` is refused in the chat; neither reaches the agent, which would exit on the flag | Available |
+| Slash commands | `/sessions`, `/context`, `/skills`, `/research` and `/image` are refused in the chat with a line naming the Python agent, and left out of `/help` and the palette (`nativeLacks` in `chat/commandgate.go`). The rest work | All |
 | Model server address | Passed in its environment: `LEMONADE_BASE_URL`, and `LEMONADE_API_KEY` when the server has a key. Inherited `LEMONADE_BASE_URL`, `LEMONADE_API_KEY`, `GAIA_BASE_URL` and `GAIA_API_KEY` are removed first, so the child only ever gets the address and key `gaia-cli` resolved | Reads GAIA's saved choice itself |
 | Language model row | Lemonade lists the launch model: a cloud model its provider serves, or a local one that is downloaded (`Gemma-4-E4B-it-GGUF` when none was chosen). Nothing is loaded and no embedding model is needed | `gaia init --check --load` |
 
@@ -221,6 +222,10 @@ GAIA_GAIA_AGENT_MODE=dev gaia-cli     # flagship
 Starting a dev sidecar separately while the TUI still defaults to `user` creates
 a mode conflict. `GET /daemon/v1/agents` shows the `api_version` actually in
 use.
+
+The mode applies to the Python agent only. With gaiacpp chosen
+(`flagship_agent: "gaiacpp"`) the daemon starts the same binary either way and
+lists it as `user`; a `dev` launch attaches to it without a conflict.
 
 ### Switching models on the relayed route
 

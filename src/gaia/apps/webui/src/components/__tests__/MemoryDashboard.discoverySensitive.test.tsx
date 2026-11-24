@@ -11,6 +11,7 @@ import { act, fireEvent, render, screen } from '@testing-library/react';
 import { MemoryDashboard } from '../MemoryDashboard';
 import * as memoryApi from '../../services/memoryApi';
 import { useChatStore } from '../../stores/chatStore';
+import { PYTHON_MEMORY_STORE } from '../../test/memoryStore';
 
 vi.mock('../../services/memoryApi');
 
@@ -40,6 +41,7 @@ beforeEach(() => {
     mockedApi.getEntities.mockResolvedValue([]);
     mockedApi.listGoals.mockResolvedValue({ goals: [], total: 0 } as never);
     mockedApi.getGoalStats.mockResolvedValue({ goals: {}, tasks: {} });
+    mockedApi.getMemoryStore.mockResolvedValue(PYTHON_MEMORY_STORE);
     mockedApi.getMemorySettings.mockResolvedValue({
         memory_enabled: true, mcp_memory_enabled: false, system_discovery_consent: false,
     } as never);
@@ -51,7 +53,8 @@ describe('Profile setup discovery review', () => {
         mockedApi.openDiscoveryStream.mockReturnValue(es as never);
         render(<MemoryDashboard />);
         fireEvent.click(screen.getByRole('tab', { name: /Profile Setup/i }));
-        fireEvent.click(screen.getByRole('button', { name: /Start Scan/i }));
+        // The tab's content waits for the page to learn whose memory it shows.
+        fireEvent.click(await screen.findByRole('button', { name: /Start Scan/i }));
         act(() => {
             es.onmessage!({ data: JSON.stringify({ type: 'finding', item: { content: 'Uses VS Code', category: 'fact', context: 'global', confidence: 0.9 } }) });
             es.onmessage!({ data: JSON.stringify({ type: 'finding', item: { content: SECRET, category: 'fact', context: 'global', confidence: 0.9, sensitive: true } }) });

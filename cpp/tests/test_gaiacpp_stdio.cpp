@@ -8,6 +8,7 @@
 #include <gtest/gtest.h>
 
 #include <algorithm>
+#include <cctype>
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
@@ -668,6 +669,38 @@ TEST_F(GaiacppStdio, AStreamedAnswerArrivesAsTokensWithReasoningLeftOut) {
     EXPECT_EQ(final["answer"].get<std::string>().find("secret"), std::string::npos) << final.dump();
 }
 
+// The model server answered; the model ran out of reply limit. Not "did not answer", and no
+// flag the terminal UI's user cannot pass.
+TEST_F(GaiacppStdio, AReplyThatRunsOutWhileReasoningIsNotBlamedOnTheModelServer) {
+    mock_.enableSseStreaming(true);
+    mock_.pushSseStream("data: " + json{{"choices", json::array({{{"index", 0},
+                                                                  {"delta", {{"reasoning_content", "thinking for a long time"}}},
+                                                                  {"finish_reason", "length"}}})}}
+                                           .dump() +
+                              "\n\ndata: [DONE]\n\n");
+    Start s;
+    s.streaming = true;
+    start(s);
+    ask("refactor everything");
+    const json terminal = waitTerminal(1);
+    ASSERT_TRUE(terminal.is_object());
+    EXPECT_EQ(terminal["type"], "final") << terminal.dump();
+    const std::string answer = terminal.value("answer", "");
+    EXPECT_NE(answer.find("reply limit of"), std::string::npos) << terminal.dump();
+    EXPECT_NE(answer.find("Break the request into smaller steps"), std::string::npos) << terminal.dump();
+    EXPECT_EQ(terminal.dump().find("--max-tokens"), std::string::npos) << terminal.dump();
+    EXPECT_EQ(terminal.dump().find("did not answer"), std::string::npos) << terminal.dump();
+    // While it reasoned, the terminal UI was told so: how much, never what.
+    bool progress = false;
+    for (const auto& e : events()) {
+        if (e.value("type", "") != "status" || e.value("phase", "") != "reasoning") continue;
+        progress = true;
+        EXPECT_EQ(e.value("words", 0), 5) << e.dump();
+        EXPECT_EQ(e.dump().find("thinking for"), std::string::npos) << e.dump();
+    }
+    EXPECT_TRUE(progress) << "no reasoning progress was reported";
+}
+
 TEST_F(GaiacppStdio, APlainLineAndAJsonLookingLineAreBothQueries) {
     mock_.pushResponse(answer("one"));
     mock_.pushResponse(answer("two"));
@@ -957,7 +990,10 @@ TEST_F(GaiacppStdio, DenyAndTimeoutLeaveTheToolUnrun) {
         EXPECT_EQ(final["answer"], "Not written.");
         EXPECT_FALSE(fs::exists(out)) << decision;
         const json result = waitFor("tool_result", queries_);
-        EXPECT_NE(result["data"].dump().find("denied"), std::string::npos) << result.dump();
+        // A timeout is nobody's no, and is worded as one.
+        EXPECT_NE(result["data"].dump().find(decision == "deny" ? "denied by user" : "nobody could give it"),
+                  std::string::npos)
+            << result.dump();
     }
 }
 
@@ -1222,6 +1258,145 @@ TEST(GaiacppStdioEdits, AnEditIsJudgedWhereItLandsPastEveryLink) {
     fs::remove_all(base, ec);
 }
 
+// A folder beside the working one, removed when the test ends.
+struct OutsideFolder {
+    fs::path dir;
+    explicit OutsideFolder(const fs::path& work) : dir(work.parent_path() / (work.filename().u8string() + "-out")) {
+        fs::create_directories(dir);
+    }
+    ~OutsideFolder() {
+        std::error_code ec;
+        fs::remove_all(dir, ec);
+    }
+};
+
+bool isFolderPrompt(const json& e) {
+    return e.is_object() && e.value("type", "") == "needs_confirmation" &&
+           e.value("action", "") == "allow_path_access";
+}
+
+TEST_F(GaiacppStdio, AWriteOutsideTheFolderAsksForTheFolderAndAllowOpensItForTheSession) {
+    OutsideFolder outside(work_);
+    const fs::path target = outside.dir / "new.txt";
+    mock_.pushResponse(toolCall("file_write", {{"path", target.string()}, {"content", "one"}}));
+    mock_.pushResponse(answer("Written."));
+    mock_.pushResponse(toolCall("file_write", {{"path", target.string()}, {"content", "two"}}));
+    mock_.pushResponse(answer("Written again."));
+    start();
+    ask("create it");
+    const json folder = waitFor("needs_confirmation", 1);
+    ASSERT_TRUE(isFolderPrompt(folder)) << folder.dump();
+    EXPECT_NE(folder.value("summary", "").find(target.string()), std::string::npos) << folder.dump();
+    EXPECT_FALSE(folder.contains("always_scope")) << "a folder prompt offers no 'always'";
+    EXPECT_FALSE(fs::exists(target)) << "nothing is written before the user answers";
+    decide("allow", folder["confirm_id"]);
+    // The write itself still asks, as any write does.
+    const json write = waitFor("needs_confirmation", 2);
+    ASSERT_TRUE(write.is_object());
+    EXPECT_EQ(write.value("action", ""), "file_write") << write.dump();
+    decide("allow", write["confirm_id"]);
+    ASSERT_TRUE(waitTerminal(1).is_object());
+    EXPECT_TRUE(fs::exists(target));
+
+    // The path stays open for the session: only the write asks next time.
+    ask("again");
+    const json again = waitFor("needs_confirmation", 3);
+    ASSERT_TRUE(again.is_object());
+    EXPECT_EQ(again.value("action", ""), "file_write") << again.dump();
+    decide("allow", again["confirm_id"]);
+    ASSERT_TRUE(waitTerminal(2).is_object());
+    EXPECT_EQ(count("needs_confirmation"), 3u);
+}
+
+TEST_F(GaiacppStdio, DenyingTheFolderPromptRefusesWithoutNamingAFlagTheTerminalUiLacks) {
+    OutsideFolder outside(work_);
+    const fs::path target = outside.dir / "new.txt";
+    mock_.pushResponse(toolCall("file_write", {{"path", target.string()}, {"content", "one"}}));
+    mock_.pushResponse(toolCall("file_write", {{"path", target.string()}, {"content", "one"}}));
+    mock_.pushResponse(answer("I couldn't."));
+    start();
+    ask("create it");
+    const json folder = waitFor("needs_confirmation", 1);
+    ASSERT_TRUE(isFolderPrompt(folder)) << folder.dump();
+    decide("deny", folder["confirm_id"]);
+    ASSERT_TRUE(waitTerminal(1).is_object());
+    EXPECT_EQ(count("needs_confirmation"), 1u) << "a no is not asked again in the same turn";
+    size_t refusals = 0;
+    for (const auto& e : events()) {
+        if (!e.is_object() || e.value("type", "") != "tool_result") continue;
+        const std::string text = e.dump();
+        EXPECT_NE(text.find("did not allow"), std::string::npos) << text;
+        EXPECT_EQ(text.find("--allow-dir"), std::string::npos) << text;
+        ++refusals;
+    }
+    EXPECT_EQ(refusals, 2u);
+    EXPECT_FALSE(fs::exists(target));
+}
+
+TEST_F(GaiacppStdio, FullAccessStillAsksBeforeOpeningAnotherFolder) {
+    OutsideFolder outside(work_);
+    const fs::path target = outside.dir / "new.txt";
+    mock_.pushResponse(toolCall("file_write", {{"path", target.string()}, {"content", "one"}}));
+    mock_.pushResponse(answer("Written."));
+    Start s;
+    s.fullAccess = true;
+    start(s);
+    ask("create it");
+    const json folder = waitFor("needs_confirmation", 1);
+    ASSERT_TRUE(isFolderPrompt(folder)) << "full access must not open a folder unasked: " << folder.dump();
+    EXPECT_FALSE(fs::exists(target));
+    decide("allow", folder["confirm_id"]);
+    ASSERT_TRUE(waitTerminal(1).is_object());
+    EXPECT_EQ(count("needs_confirmation"), 1u) << "the write itself needs no prompt under full access";
+    EXPECT_TRUE(fs::exists(target));
+}
+
+#ifndef _WIN32
+// The checks on a command look in the folders the chat has now, not only the ones it started with.
+TEST_F(GaiacppStdio, AFolderTheUserOpensIsSeenByTheCommandChecksAtOnce) {
+    // Not under the temp folder: commands may always read system folders.
+    struct Scratch {
+        fs::path dir = fs::canonical(fs::current_path()) / ("gaiacpp-stdio-out-" + std::to_string(std::random_device{}()));
+        ~Scratch() {
+            std::error_code ec;
+            fs::remove_all(dir, ec);
+        }
+    } scratch;
+    fs::create_directories(scratch.dir);
+    std::ofstream(scratch.dir / "sales.csv") << "region,amount\nNorth,5\nSouth,7\n";
+    mock_.pushResponse(toolCall("bash_execute", {{"command", "ls " + scratch.dir.string()}}));
+    mock_.pushResponse(toolCall(
+        "bash_execute", {{"command", "python -c \"import pandas as pd; print(pd.read_csv('sales.csv').sum())\""}}));
+    mock_.pushResponse(answer("Done."));
+    Start s;
+    s.fullAccess = true;
+    start(s);
+    ask("total the sales");
+    const json folder = waitFor("needs_confirmation", 1);
+    ASSERT_TRUE(isFolderPrompt(folder)) << folder.dump();
+    decide("allow", folder["confirm_id"]);
+    ASSERT_TRUE(waitTerminal(1).is_object());
+
+    std::vector<std::string> results;
+    for (const auto& e : events()) {
+        if (e.is_object() && e.value("type", "") == "tool_result") results.push_back(e.dump());
+    }
+    ASSERT_EQ(results.size(), 2u);
+    EXPECT_NE(results[1].find("sales.csv is a small table: read it with file_read first"), std::string::npos)
+        << "the table in the folder just opened was not seen: " << results[1];
+}
+#endif
+
+TEST_F(GaiacppStdio, AFileInsideTheFolderRaisesNoFolderPrompt) {
+    std::ofstream(work_ / "note.txt") << "inside";
+    mock_.pushResponse(toolCall("file_read", {{"path", (work_ / "note.txt").string()}}));
+    mock_.pushResponse(answer("Read."));
+    start();
+    ask("read it");
+    ASSERT_TRUE(waitTerminal(1).is_object());
+    EXPECT_EQ(count("needs_confirmation"), 0u);
+}
+
 TEST_F(GaiacppStdio, AcceptEditsDoesNotWriteThroughALinkOutOfTheFolder) {
     const fs::path outside = work_.parent_path() / (work_.filename().u8string() + "-outside");
     makeFolderLink(outside, work_ / "drop");
@@ -1231,9 +1406,14 @@ TEST_F(GaiacppStdio, AcceptEditsDoesNotWriteThroughALinkOutOfTheFolder) {
     start();
     control({{"gaia_control", "accept_edits"}, {"enabled", true}});
     ask("write it");
+    // Accept-edits doesn't cover it: the user is asked about where the write really lands.
+    const json prompt = waitFor("needs_confirmation");
+    ASSERT_TRUE(prompt.is_object());
+    EXPECT_EQ(prompt.value("action", ""), "allow_path_access") << prompt.dump();
+    EXPECT_NE(prompt.value("summary", "").find((outside / "new.txt").string()), std::string::npos) << prompt.dump();
+    decide("deny", prompt["confirm_id"]);
     ASSERT_TRUE(waitTerminal(1).is_object());
-    // Refused outright, before any approval: the landing is outside the agent's folders.
-    EXPECT_EQ(count("needs_confirmation"), 0u);
+    EXPECT_EQ(count("needs_confirmation"), 1u);
     bool refused = false;
     for (const auto& e : events()) {
         refused |= e.is_object() && e.value("type", "") == "tool_result" && e.dump().find("Refused") != std::string::npos;
@@ -2517,4 +2697,26 @@ TEST_F(GaiacppStdioBinary, ATurnInAFolderWithANonAsciiNameRunsShellCommandsAndRe
     EXPECT_NE(results[3].value("cwd", "").find(cafe), std::string::npos) << results[3].dump();
     child->closeStdin();
     EXPECT_TRUE(child->waitExit(kWait));
+}
+
+TEST_F(GaiacppStdioBinary, ARefusalNamesTheRealWorkingFolder) {
+    bench::MockLlmServer mock;
+    mock.pushResponse(toolCall("bash_execute", {{"command", "ls //server/share"}}));
+    mock.pushResponse(answer("can't"));
+    const ProcessResult r = run(mock.baseUrl(), kQuietFlags, {json{{"gaia_query", "list the share"}}.dump()});
+    ASSERT_FALSE(r.timedOut) << r.stderr_output;
+    std::string refusal;
+    for (const auto& e : parseEvents(splitLines(r.stdout_output))) {
+        if (e.is_object() && e.value("type", "") == "tool_result") refusal = e.dump();
+    }
+    ASSERT_NE(refusal.find("Refused"), std::string::npos) << r.stdout_output;
+    EXPECT_EQ(refusal.find("(.)"), std::string::npos) << refusal;
+    std::string work = fs::canonical(dir_ / "work").generic_u8string();
+#ifdef _WIN32
+    // Workspace spells a Windows folder in lower case, as the file system ignores case.
+    std::transform(work.begin(), work.end(), work.begin(),
+                   [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+#endif
+    EXPECT_NE(refusal.find(work), std::string::npos) << "the folder list names " << work << ": " << refusal;
+    EXPECT_EQ(refusal.find("--allow-dir"), std::string::npos) << "gaia-cli has no such flag: " << refusal;
 }

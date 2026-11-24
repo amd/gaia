@@ -119,6 +119,26 @@ describe('an open chat whose agent could not start', () => {
         expect(document.querySelector('.agent-recovery')).toBeNull();
     });
 
+    it('shows only the two fixes, not the ran-on-Fast-and-light note, when gaiacpp is missing', async () => {
+        server = [question, { ...agentDown, agentProgram: 'gaiacpp' }];
+        useChatStore.setState({ messages: [...server] });
+        render(<ChatView sessionId={SESSION.id} />);
+
+        expect(await screen.findByRole('button', { name: 'Download gaiacpp again' })).toBeInTheDocument();
+        expect(document.querySelector('.native-agent-notice')).toBeNull();
+    });
+
+    it('says the turn ran on Fast and light when gaiacpp started but the turn failed', async () => {
+        server = [question, { ...agentDown, agentProgram: 'gaiacpp' }];
+        useChatStore.setState({ messages: [...server] });
+        mockedApi.getStartScreen.mockResolvedValue({ ...MISSING, skills_error: null, agent_problem: null });
+        render(<ChatView sessionId={SESSION.id} />);
+
+        expect(await screen.findByText(/This chat is running on Fast and light \(Beta\)\./)).toBeInTheDocument();
+        expect(document.querySelectorAll('.native-agent-notice')).toHaveLength(1);
+        expect(document.querySelector('.agent-recovery')).toBeNull();
+    });
+
     it('does not ask about the agent for a turn that did not fail', async () => {
         server = [question, { ...agentDown, failed: false, agentSteps: undefined, content: 'Day one: Alfama.' }];
         useChatStore.setState({ messages: [...server] });

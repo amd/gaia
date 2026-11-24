@@ -32,6 +32,7 @@
 #include <gaia/session.h>
 
 #include "gaia_agent.h"
+#include "gaia_setup.h"
 #include "sidecar.h"
 #include "stdio_server.h"
 
@@ -117,6 +118,7 @@ struct Cli {
     int maxHelpers = -1;  // -1 = not given
     std::optional<double> temperature;
     bool skipPermissions = false;
+    bool yes = false;
     bool noWeb = false;
     bool noSkills = false;
     bool noMemory = false;
@@ -146,9 +148,11 @@ void printUsage() {
         "                                        Lemonade models; takes --base-url,\n"
         "                                        --provider, --api-key-env, --config\n\n"
         "Model:\n"
-        "  -m, --model ID            Model id (env GAIA_MODEL_ID)\n"
+        "  -m, --model ID            Model id (env GAIA_MODEL_ID; default the model GAIA\n"
+        "                            set up: default_model, then last_model, in\n"
+        "                            ~/.gaia/config.json)\n"
         "  --base-url URL            OpenAI-compatible endpoint (env GAIA_BASE_URL,\n"
-        "                            LEMONADE_BASE_URL; default Lemonade on :13305)\n"
+        "                            LEMONADE_BASE_URL; default GAIA's own model server)\n"
         "  --provider NAME           lemonade (default) or fireworks\n"
         "  --api-key-env VAR         Variable holding the endpoint key (default\n"
         "                            GAIA_API_KEY, then LEMONADE_API_KEY)\n"
@@ -162,6 +166,8 @@ void printUsage() {
         "  -p, --print [PROMPT]      Headless: answer on stdout, exit 0/1\n"
         "  --prompt-file FILE        Read the prompt from FILE\n"
         "  --output-format FMT       text (default) or json\n"
+        "  -y, --yes                 Download the model without asking when it is not\n"
+        "                            on disk (otherwise asked; refused with no terminal)\n"
         "  --cwd DIR                 Work in DIR\n"
         "  --max-steps N             Step budget (default 1000)\n"
         "  --max-helpers N           Read-only helpers delegate_task runs at once. Default:\n"
@@ -314,6 +320,7 @@ Cli parseArgs(int argc, char** argv) {
         else if (a == "--allow-dir") cli.allowDirs.push_back(need(i, a));
         else if (a == "--full-access") cli.fullAccess = true;
         else if (a == "--dangerously-skip-permissions") cli.skipPermissions = true;
+        else if (a == "--yes" || a == "-y") cli.yes = true;
         else if (a == "--host") cli.host = need(i, a);
         else if (a == "--port") {
             const std::string v = need(i, a);
@@ -403,14 +410,17 @@ struct Settings {
     std::string embeddingModel;  // empty = keyword-only document retrieval
     std::string transcribeModel, audioBaseUrl, imageModel;
     int maxHelpers = -1;  // -1 = sized to the model
+    gaia::ServerOrigin server;  // what chose cfg.baseUrl
 };
 
 Settings buildSettings(const Cli& cli) {
+    // The model and server default to what GAIA set up, resolved below only when nothing names them.
+    gaia::ServerOrigin server;
     gaia::json merged = {{"contextSize", 32768},
+                         // No message-count cap: history is fitted to the loaded window instead.
+                         {"maxHistoryMessages", 0},
                          {"maxTokens", 16384},
                          {"temperature", 0.2},
-                         {"modelId", "Gemma-4-E4B-it-GGUF"},
-                         {"baseUrl", gaia::defaultBaseUrl()},
                          {"responseMode", "conversational"},
                          {"maxSteps", 1000}};
     std::string mcpConfig;
@@ -434,6 +444,7 @@ Settings buildSettings(const Cli& cli) {
         }
         checkSettingsFile(j, "Settings file " + file.string());
         settingsFrom = "Settings file " + file.string();
+        if (j.contains("baseUrl")) server = {gaia::ServerSource::SettingsFile, settingsFrom};
         if (j.contains("mcpConfig")) {
             fs::path m = j["mcpConfig"].get<std::string>();
             if (m.is_relative()) m = file.parent_path() / m;
@@ -443,6 +454,7 @@ Settings buildSettings(const Cli& cli) {
         fileSetsWindow = j.contains("contextSize") || j.contains("provider");
         if (j.contains("provider")) {
             applyProvider(merged, j["provider"].get<std::string>(), "Settings file " + file.string());
+            if (!j.contains("baseUrl")) server = {gaia::ServerSource::Provider, settingsFrom};
             j.erase("provider");
         }
         merged.update(j);
@@ -453,7 +465,10 @@ Settings buildSettings(const Cli& cli) {
     const std::string envTier = gaia::getEnvVar("GAIA_FEATURE_TIER");
     if (!envTier.empty()) merged["featureTier"] = envTier;
     const std::string envUrl = gaia::getEnvVar("GAIA_BASE_URL");
-    if (!envUrl.empty()) merged["baseUrl"] = envUrl;
+    if (!envUrl.empty()) {
+        merged["baseUrl"] = envUrl;
+        server = {gaia::ServerSource::GaiaBaseUrlEnv, "GAIA_BASE_URL"};
+    }
     for (const auto& [var, field] : {std::pair<const char*, const char*>{"GAIA_AGENT_MAX_STEPS", "maxSteps"},
                                      {"GAIA_MAX_STEPS", "maxSteps"},
                                      {"GAIA_CONTEXT_SIZE", "contextSize"},
@@ -465,8 +480,14 @@ Settings buildSettings(const Cli& cli) {
     if (const int n = maxHelpersFromEnv(); n >= 0) merged["maxHelpers"] = n;
     if (cli.maxHelpers >= 0) merged["maxHelpers"] = cli.maxHelpers;
 
-    if (!cli.provider.empty()) applyProvider(merged, cli.provider, "--provider");
-    if (!cli.baseUrl.empty()) merged["baseUrl"] = cli.baseUrl;
+    if (!cli.provider.empty()) {
+        applyProvider(merged, cli.provider, "--provider");
+        server = {gaia::ServerSource::Provider, "--provider"};
+    }
+    if (!cli.baseUrl.empty()) {
+        merged["baseUrl"] = cli.baseUrl;
+        server = {gaia::ServerSource::Flag, "--base-url"};
+    }
     if (!cli.model.empty()) merged["modelId"] = cli.model;
     if (!cli.apiKeyEnv.empty()) merged["apiKeyEnv"] = cli.apiKeyEnv;
     if (!cli.nativeTools.empty()) merged["nativeToolCalls"] = cli.nativeTools;
@@ -479,6 +500,20 @@ Settings buildSettings(const Cli& cli) {
     if (!cli.embeddingModel.empty()) merged["embeddingModel"] = cli.embeddingModel;
     if (!cli.transcribeModel.empty()) merged["transcribeModel"] = cli.transcribeModel;
     if (!cli.imageModel.empty()) merged["imageModel"] = cli.imageModel;
+
+    // --mcp contacts no model, so it reads nothing of GAIA's.
+    const bool reachesModel = cli.mode != Cli::Mode::Mcp;
+    if (!merged.contains("modelId")) {
+        merged["modelId"] = reachesModel ? gaia::resolveGaiaModel() : gaia::kGaiaFallbackModel;
+    }
+    // GAIA's running server is read either way: an explicit URL may still be that server.
+    gaia::GaiaServer gaiaServer = reachesModel ? gaia::runningGaiaServer() : gaia::GaiaServer{};
+    if (!reachesModel && !merged.contains("baseUrl")) merged["baseUrl"] = gaia::defaultBaseUrl();
+    if (!merged.contains("baseUrl")) {
+        gaiaServer = gaia::resolveGaiaServer();
+        merged["baseUrl"] = gaiaServer.baseUrl;
+        server = gaiaServer.origin;
+    }
 
     // A hosted model reached through Lemonade has the provider's window, not a local one.
     const bool windowGiven = fileSetsWindow || !gaia::getEnvVar("GAIA_CONTEXT_SIZE").empty() || cli.ctxSize > 0 ||
@@ -510,6 +545,23 @@ Settings buildSettings(const Cli& cli) {
     }
     s.cfg.debug = cli.debug;
     s.mcpConfig = mcpConfig;
+    s.server = server;
+    // A key the user chose wins; GAIA's own export (env.sh) may hold a key its restarted server dropped.
+    gaia::dropForeignLemonadeKey(gaiaServer);
+    bool gaiaKey = false;
+    if (s.cfg.apiKey.empty() && s.cfg.apiKeyEnv.empty() && gaia::getEnvVar("GAIA_API_KEY").empty() &&
+        gaia::getEnvVar("LEMONADE_API_KEY").empty()) {
+        const std::string key = gaia::embeddedKeyFor(gaiaServer, s.cfg.baseUrl);
+        if (!key.empty()) s.cfg.apiKey = key;
+        gaiaKey = !key.empty();
+    }
+    if (server.source == gaia::ServerSource::SavedExternal && gaiaServer.savedKeyElsewhere &&
+        gaia::resolveApiKey(s.cfg).empty()) {
+        throw std::runtime_error("GAIA is set to use the Lemonade Server at " + s.cfg.baseUrl +
+                                 " and keeps its key in GAIA's credential store, which gaiacpp can't read. "
+                                 "Export LEMONADE_API_KEY with that key, or pass --base-url for another server.");
+    }
+    gaia::noteKeySource(s.server, s.cfg, gaiaKey);
     return s;
 }
 
@@ -579,6 +631,13 @@ gaia::GaiaAgent::Options agentOptions(const Cli& cli, const Settings& settings) 
     return o;
 }
 
+// The server answers and the model is on disk, before a person waits on a load.
+void checkModelOnDisk(const Cli& cli, const Settings& settings) {
+    gaia::LemonadeClient client(gaia::LemonadeClientConfig{settings.cfg.baseUrl});
+    client.setApiKey(gaia::resolveApiKey(settings.cfg));
+    gaia::checkServerAndModel(client, settings.cfg.modelId, settings.server, cli.yes, gaia::terminalPrompt());
+}
+
 std::atomic<gaia::Agent*> g_agent{nullptr};
 std::atomic<gaia::ApiServer*> g_server{nullptr};
 
@@ -607,8 +666,9 @@ int runMcp(const Cli& cli) {
             std::cerr << "[gaiacpp] denied " << tool
                       << " (nobody to ask over MCP; pass --dangerously-skip-permissions to allow)\n";
         }
-        return skip ? gaia::ToolConfirmResult::ALLOW_ONCE : gaia::ToolConfirmResult::DENY;
+        return skip ? gaia::ToolConfirmResult::ALLOW_ONCE : gaia::ToolConfirmResult::UNATTENDED;
     });
+    agent.setUnattendedRemedy("Run gaiacpp again with --dangerously-skip-permissions to allow it.");
     if (!settings.mcpConfig.empty()) connectMcp(agent, settings.mcpConfig);
     gaia::McpStdioServer server(agent, "gaiacpp", GAIACPP_VERSION, std::cin, transport);
     server.run();
@@ -703,6 +763,7 @@ int runPrint(const Cli& cli) {
     }
 
     const Settings settings = buildSettings(cli);
+    checkModelOnDisk(cli, settings);
     gaia::AgentConfig cfg = settings.cfg;
     cfg.silentMode = true;  // stdout carries only the answer
     gaia::GaiaAgent agent(cfg, agentOptions(cli, settings));
@@ -713,8 +774,9 @@ int runPrint(const Cli& cli) {
             std::cerr << "[gaiacpp] denied " << tool
                       << " (headless run; pass --dangerously-skip-permissions to allow)\n";
         }
-        return skip ? gaia::ToolConfirmResult::ALLOW_ONCE : gaia::ToolConfirmResult::DENY;
+        return skip ? gaia::ToolConfirmResult::ALLOW_ONCE : gaia::ToolConfirmResult::UNATTENDED;
     });
+    agent.setUnattendedRemedy("Run gaiacpp again with --dangerously-skip-permissions to allow it.");
     if (!settings.mcpConfig.empty()) {
         std::streambuf* saved = std::cout.rdbuf(std::cerr.rdbuf());
         try { connectMcp(agent, settings.mcpConfig); } catch (...) { std::cout.rdbuf(saved); throw; }
@@ -864,6 +926,7 @@ int runServe(const Cli& cli) {
 
 int runInteractive(const Cli& cli) {
     const Settings settings = buildSettings(cli);
+    checkModelOnDisk(cli, settings);
     gaia::GaiaAgent agent(settings.cfg, agentOptions(cli, settings));
     pinConfig(agent, settings.cfg);
     if (cli.skipPermissions) {

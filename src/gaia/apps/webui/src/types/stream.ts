@@ -52,6 +52,8 @@ export interface StreamEvent {
     failed?: boolean;
     /** On a failed `done`: a cause the UI offers a fix for. */
     failure?: 'model_server_down' | string;
+    /** On a failed `done`: `gaiacpp` when the turn ran on the native agent. */
+    agent_program?: string;
     /** On `followup_taken`: the message the running turn took. */
     text?: string;
     /** On `followup_returned`: messages the turn ended without taking. */

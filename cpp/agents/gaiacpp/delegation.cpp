@@ -80,7 +80,7 @@ HelperAgent::HelperAgent(const AgentConfig& config, std::shared_ptr<const Worksp
     setOutputHandler(std::make_unique<SilentConsole>(true));
     // Nobody can be asked from here, and an "always allow" saved for the parent is not the helper's.
     setAllowedToolsStore(std::make_shared<AllowedToolsStore>(""));
-    setToolConfirmCallback([](const std::string&, const json&) { return ToolConfirmResult::DENY; });
+    setToolConfirmCallback([](const std::string&, const json&) { return ToolConfirmResult::UNATTENDED; });
     init();
 }
 

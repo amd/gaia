@@ -133,6 +133,51 @@ func TestOnlyFilesChangedDuringTheTurnAreDeliverables(t *testing.T) {
 	}
 }
 
+// A file the turn only read is not a result, even when it was saved moments
+// before the turn: read by a tool, or shown by a command that writes nothing.
+func TestAFileThatWasOnlyReadIsNotADeliverable(t *testing.T) {
+	dir := t.TempDir()
+	withPathBase(t, dir)
+	start := time.Now()
+	note := filepath.Join(dir, "Documents", "note.txt")
+	writeFile(t, note, "one two three four")
+	report := filepath.Join(dir, "report.md")
+	writeFile(t, report, "# Report")
+	answer := "Documents/note.txt says: one two three four."
+
+	read := ActivityItem{Kind: "tool", Tool: "file_read", Done: true, Call: callInfo{Category: catRead, Reads: []string{note}}}
+	if got := findDeliverables([]ActivityItem{read}, answer, start); len(got) != 0 {
+		t.Errorf("a file read by a tool is listed as created: %+v", got)
+	}
+	for _, cmd := range []string{"cat Documents/note.txt", "cd Documents && head -5 note.txt 2>/dev/null | wc -l", "grep -n two Documents/note.txt 2>&1"} {
+		shown := ActivityItem{Kind: "tool", Tool: "bash_execute", Done: true, Call: callInfo{Category: catShell, Command: cmd}}
+		if got := findDeliverables([]ActivityItem{shown}, answer, start); len(got) != 0 {
+			t.Errorf("%q: a file a command only showed is listed as created: %+v", cmd, got)
+		}
+	}
+
+	// Read, then changed: it is a result.
+	for _, cmd := range []string{"cat Documents/note.txt > report.md", "python3 fix.py Documents/note.txt", "sed -i '' s/one/1/ Documents/note.txt", "cat x | tee Documents/note.txt"} {
+		ran := ActivityItem{Kind: "tool", Tool: "bash_execute", Done: true, Call: callInfo{Category: catShell, Command: cmd}}
+		got := findDeliverables([]ActivityItem{read, ran}, "", start)
+		want := "note.txt"
+		if strings.Contains(cmd, "> report.md") {
+			want = "report.md"
+		}
+		found := false
+		for _, d := range got {
+			found = found || filepath.Base(d.Path) == want
+		}
+		if !found {
+			t.Errorf("%q: %s is missing from %+v", cmd, want, got)
+		}
+	}
+	edit := ActivityItem{Kind: "tool", Tool: "file_edit", Done: true, Call: callInfo{Category: catEdit, Writes: []string{note}}}
+	if got := findDeliverables([]ActivityItem{read, edit}, answer, start); len(got) != 1 {
+		t.Errorf("a file read and then edited is missing: %+v", got)
+	}
+}
+
 // The block names the file as an OSC 8 link to it, and the link is zero-width:
 // the row still fits the terminal it is drawn on.
 func TestTheDeliverableIsALinkThatFits(t *testing.T) {

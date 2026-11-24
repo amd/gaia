@@ -521,6 +521,17 @@ struct UnreadableLlmReply : std::runtime_error {
     using std::runtime_error::runtime_error;
 };
 
+/// The whole reply limit went by with no answer. Sent again, the request would end the same way.
+struct ReplyLimitReached : std::runtime_error {
+    using std::runtime_error::runtime_error;
+};
+
+std::string raiseLimit(const AgentConfig& cfg) {
+    return cfg.replyLimitRemedy.empty()
+               ? "Raise the limit (--max-tokens; at most half the context window, --ctx-size)"
+               : cfg.replyLimitRemedy;
+}
+
 /// A stream that failed after part of the reply was shown. Sending the request
 /// again would show that text twice, so it is never retried.
 struct PartialStreamError : std::runtime_error {
@@ -726,6 +737,25 @@ Agent::LlmResult Agent::callLlm(const std::vector<Message>& messages, const std:
         std::string accumulated;
         std::vector<ToolCall> streamedToolCalls;
         std::string rawResponse;
+        // A long think shows as progress rather than nothing: how much, never what.
+        size_t reasonedWords = 0;
+        bool inWord = false;
+        auto nextReport = std::chrono::steady_clock::now();  // the first piece says reasoning began
+        lemonade_.setReasoningCallback([&](const std::string& piece) {
+            for (const unsigned char ch : piece) {
+                const bool space = std::isspace(ch) != 0;
+                if (!space && !inWord) ++reasonedWords;
+                inWord = !space;
+            }
+            const auto now = std::chrono::steady_clock::now();
+            if (now < nextReport) return;
+            nextReport = now + std::chrono::seconds(2);
+            console_->printReasoningProgress(reasonedWords);
+        });
+        struct ClearReasoning {
+            LemonadeClient& client;
+            ~ClearReasoning() { client.setReasoningCallback({}); }
+        } clearReasoning{lemonade_};
         try {
             rawResponse = lemonade_.chatCompletionsStreaming(
                 requestBody,
@@ -802,11 +832,11 @@ Agent::LlmResult Agent::callLlm(const std::vector<Message>& messages, const std:
 
         const StreamSummary summary = summarizeStream(rawResponse);
         if (summary.finishReason == "length") {
-            throw std::runtime_error(
+            throw ReplyLimitReached(
                 "The model reached its reply limit of " + std::to_string(cfg.replyTokenLimit()) +
                 " tokens before giving an answer" +
-                (summary.reasoned ? " (its reasoning used the whole limit)" : "") +
-                ". Raise the limit (--max-tokens; at most half the context window, --ctx-size) or ask for a shorter answer.");
+                (summary.reasoned ? " (its reasoning used the whole limit)" : "") + ". " + raiseLimit(cfg) +
+                " or ask for a shorter answer.");
         }
         throw UnreadableLlmReply(summary.reasoned ? "The model sent reasoning but no answer"
                                                   : "Streaming response contained no tokens");
@@ -920,6 +950,53 @@ bool isPlaceholderRun(const std::string& text) {
         covered += static_cast<size_t>(it->length(0));
     }
     return covered * 10 >= text.size() * 9;
+}
+
+// A turn starts at a message the user typed; a prompt-JSON tool result is stored as a user message too.
+bool startsTurn(const Message& m) {
+    return m.role == MessageRole::USER && m.content.rfind("[Result from ", 0) != 0;
+}
+
+size_t historyBytes(const std::vector<Message>& messages) {
+    size_t bytes = 0;
+    for (const auto& m : messages) {
+        bytes += m.content.size() + 16;
+        for (const auto& call : m.toolCalls) bytes += call.name.size() + call.arguments.size();
+    }
+    return bytes;
+}
+
+// Removes the first `count` messages; returns how many turns began among them.
+int eraseOldest(std::vector<Message>& messages, size_t count) {
+    count = std::min(count, messages.size());
+    int turns = 0;
+    for (size_t i = 0; i < count; ++i) turns += startsTurn(messages[i]) ? 1 : 0;
+    messages.erase(messages.begin(), messages.begin() + static_cast<std::ptrdiff_t>(count));
+    return turns;
+}
+
+// Drops the oldest whole turns until about `keepBytes` are left; the newest turn always stays.
+int dropOldestTurns(std::vector<Message>& messages, size_t keepBytes) {
+    std::vector<size_t> starts;
+    for (size_t i = 0; i < messages.size(); ++i) {
+        if (startsTurn(messages[i])) starts.push_back(i);
+    }
+    if (starts.size() < 2) return 0;
+    size_t bytes = historyBytes(messages), cut = 0;
+    for (size_t t = 1; t < starts.size() && bytes > keepBytes; ++t) {
+        for (size_t i = cut; i < starts[t]; ++i) {
+            const std::vector<Message> one{messages[i]};
+            bytes -= std::min(bytes, historyBytes(one));
+        }
+        cut = starts[t];
+    }
+    return cut == 0 ? 0 : eraseOldest(messages, cut);
+}
+
+// How many tokens of conversation a window holds once room for the reply is kept.
+long historyRoom(int window, int maxTokens) {
+    const int reply = std::min(maxTokens > 0 ? maxTokens : window / 4, window / 4);
+    return static_cast<long>(window - reply) * 9 / 10;
 }
 
 // Shorten the model's own long replies, oldest first, keeping the newest message whole.
@@ -1891,6 +1968,18 @@ json Agent::processQueryInternal(const std::vector<Message>& userMessages, int m
     // Reset cancel flag at the start of each query.
     cancelled_.store(false);  // cancelCheck_ is the caller's and stays
 
+    {
+        std::string asked;
+        for (const auto& m : userMessages) {
+            asked += m.content + " ";
+            if (!m.parts.has_value()) continue;
+            for (const auto& part : *m.parts) {
+                if (part.kind == ContentPart::Kind::TEXT) asked += part.text + " ";
+            }
+        }
+        tools_.beginTurn(asked);
+    }
+
     // Snapshot config at start of query for thread-safe consistency throughout.
     AgentConfig cfg;
     {
@@ -2002,6 +2091,11 @@ json Agent::processQueryInternal(const std::vector<Message>& userMessages, int m
     bool shortNext = false;
     int lastLimit = cfg.replyTokenLimit();
     std::string llmError;       // the model call failure that ended the loop
+    bool atReplyLimit = false;  // that failure was the reply limit, not the server
+    // Why a model call failed, for the user: the limit is the model's doing, not an "LLM error".
+    const auto llmFailure = [&] {
+        return atReplyLimit ? llmError : "Unable to complete task due to LLM error: " + llmError;
+    };
     constexpr size_t kMaxToolCallsPerReply = 24;
     int malformedStreak = 0;
     std::string stopReason;  // why the loop ended without an answer: loop | empty
@@ -2152,6 +2246,7 @@ json Agent::processQueryInternal(const std::vector<Message>& userMessages, int m
             }
             console_->printError(std::string("LLM error: ") + e.what());
             llmError = e.what();
+            atReplyLimit = dynamic_cast<const ReplyLimitReached*>(&e) != nullptr;
             if (stepLogger_) {
                 stepLogger_({{"kind", "llm_error"}, {"step", stepsTaken}, {"error", llmError.substr(0, 600)}});
             }
@@ -2166,7 +2261,7 @@ json Agent::processQueryInternal(const std::vector<Message>& userMessages, int m
                 stopReason = "error";
                 break;
             }
-            finalAnswer = "Unable to complete task due to LLM error: " + llmError;
+            finalAnswer = llmFailure();
             failed = true;
             break;
         }
@@ -2215,8 +2310,8 @@ json Agent::processQueryInternal(const std::vector<Message>& userMessages, int m
                 if (++malformedStreak > 2) {
                     finalAnswer = "Unable to complete task: the model's reply was cut off at "
                                   "the length limit of " + std::to_string(cfg.replyTokenLimit()) +
-                                  " tokens in the middle of a tool call three times in a row. "
-                                  "Raise the limit (--max-tokens; at most half the context window, --ctx-size) or ask for a smaller step.";
+                                  " tokens in the middle of a tool call three times in a row. " +
+                                  raiseLimit(cfg) + " or ask for a smaller step.";
                     failed = true;
                     break;
                 }
@@ -2631,8 +2726,10 @@ json Agent::processQueryInternal(const std::vector<Message>& userMessages, int m
             messages.push_back(closing);
             try {
                 const auto closingStarted = std::chrono::steady_clock::now();
-                LlmResult closingResult =
-                    callLlmResilient(messages, composeSystemPromptFor(cfg), shortNext ? shortCfg : cfg, false);
+                // After a reply that used the whole limit, a full-size second try costs minutes more.
+                AgentConfig closingCfg = shortNext ? shortCfg : cfg;
+                if (atReplyLimit) closingCfg.maxTokens = std::min(closingCfg.maxTokens, 4096);
+                LlmResult closingResult = callLlmResilient(messages, composeSystemPromptFor(cfg), closingCfg, false);
                 totalUsage += closingResult.usage;
                 logLlmCall(stepsTaken, closingStarted, closingResult.usage);
                 std::string text = closingResult.content;
@@ -2660,14 +2757,13 @@ json Agent::processQueryInternal(const std::vector<Message>& userMessages, int m
             finalAnswer = stopReason == "loop"
                               ? "Task stopped due to repeated tool call loop."
                           : stopReason == "error"
-                              ? "Unable to complete task due to LLM error: " + llmError
+                              ? llmFailure()
                           : stopReason == "empty"
                               ? (emptyAtLimit
                                      ? "Task stopped: the model used its whole reply limit of " +
                                            std::to_string(lastLimit) +
-                                           " tokens without giving an answer. Raise the limit "
-                                           "(--max-tokens; at most half the context window, "
-                                           "--ctx-size) or pick a model that reasons less."
+                                           " tokens without giving an answer. " + raiseLimit(cfg) +
+                                           " or pick a model that reasons less."
                                      : std::string("Task stopped: the model returned empty replies."))
                               : "Reached maximum steps limit (" + std::to_string(stepsLimit) + " steps).";
             console_->printWarning(finalAnswer);
@@ -2679,6 +2775,12 @@ json Agent::processQueryInternal(const std::vector<Message>& userMessages, int m
     }
     if (finalAnswer.empty() && cancelRequested()) {
         finalAnswer = "[Cancelled after " + std::to_string(stepsTaken) + " step(s)]";
+    }
+
+    // A failed turn still says what it changed: those edits are on disk.
+    if (failed && !cancelRequested()) {
+        const std::string done = workSoFar();
+        if (!done.empty()) finalAnswer += "\n\n" + done;
     }
 
     console_->printCompletion(stepsTaken, stepsLimit);
@@ -2727,10 +2829,42 @@ json Agent::processQueryInternal(const std::vector<Message>& userMessages, int m
     }
 
     // Prune to maxHistoryMessages
+    int droppedTurns = 0;
     if (cfg.maxHistoryMessages > 0 &&
         static_cast<int>(messages.size()) > cfg.maxHistoryMessages) {
-        messages.erase(messages.begin(),
-                       messages.begin() + (static_cast<int>(messages.size()) - cfg.maxHistoryMessages));
+        droppedTurns += eraseOldest(messages, messages.size() - static_cast<size_t>(cfg.maxHistoryMessages));
+    }
+    // Then fit what is kept to the window the model is really loaded with.
+    {
+        const size_t bytes = historyBytes(messages);
+        long tokens = static_cast<long>(bytes / 3);  // more than any tokenizer makes of it
+        if (!llmCallLog.empty()) {
+            const json& last = llmCallLog.back();
+            const long counted = last.value("input_tokens", 0) + last.value("output_tokens", 0);
+            if (counted > 0) tokens = counted;
+        }
+        int window = cfg.contextSize;
+        // A hosted model has its provider's window, not a local one.
+        if (cfg.modelId.rfind("fireworks.", 0) == 0 || cfg.modelId.rfind("amd.", 0) == 0) {
+            window = std::max(window, 131072);
+        }
+        if (window > 0 && bytes > 0 && tokens > historyRoom(window, cfg.maxTokens)) {
+            // Another program may have loaded the model with a larger window than the configured one.
+            const LemonadeHealth h = lemonade_.healthCheck();
+            if (h.running && h.modelId == cfg.modelId && h.contextSize > window) window = h.contextSize;
+            const long room = historyRoom(window, cfg.maxTokens);
+            if (tokens > room) {
+                // Down to three quarters, so the next turn doesn't drop one again.
+                const size_t keep = static_cast<size_t>(static_cast<double>(bytes) * (room * 3 / 4) / tokens);
+                droppedTurns += dropOldestTurns(messages, keep);
+            }
+        }
+        if (droppedTurns > 0 && !toldHistoryDropped_) {
+            toldHistoryDropped_ = true;
+            console_->printWarning(
+                "This conversation has outgrown the model's context window, so the oldest turns are no longer "
+                "sent to the model. Start a new chat for a new topic, or repeat what it should still know.");
+        }
     }
     repairToolCallPairing(messages);
     const bool stopped = cancelRequested();
@@ -2747,6 +2881,7 @@ json Agent::processQueryInternal(const std::vector<Message>& userMessages, int m
         {"llm_calls", llmCallLog.size()}
     };
     if (!stopReason.empty()) result["stop_reason"] = stopReason == "cap" ? "step_limit" : stopReason;
+    if (failed && atReplyLimit) result["stop_reason"] = "reply_limit";
     json toolCallLog = json::array();
     for (const auto& call : turnToolCalls_) {
         // Arguments are what make a trace readable; capped so one huge write can't bloat the log.

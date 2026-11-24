@@ -122,6 +122,9 @@ public:
     /// Get the tool registry (for inspection/testing).
     const ToolRegistry& tools() const { return tools_; }
 
+    /// Added to the refusal of a call nobody could approve, e.g. the flag that allows it.
+    void setUnattendedRemedy(std::string remedy) { tools_.setUnattendedRemedy(std::move(remedy)); }
+
     /// Set the confirmation callback for CONFIRM-policy tools.
     /// Delegates to ToolRegistry::setConfirmCallback().
     void setToolConfirmCallback(ToolConfirmCallback cb);
@@ -155,7 +158,11 @@ public:
     void rebuildSystemPrompt();
 
     /// Clear conversation history (start a fresh topic).
-    void clearHistory() { conversationHistory_.clear(); }
+    void clearHistory() {
+        conversationHistory_.clear();
+        toldHistoryDropped_ = false;
+        tools_.forgetDeclinedCalls();
+    }
 
     /// Get a snapshot of the current conversation history (for session persistence).
     /// Returns a copy to avoid races with processQuery() on another thread.
@@ -345,6 +352,10 @@ protected:
         return std::nullopt;
     }
 
+    /// What the turn already changed, in words for the user: files written, commands run.
+    /// Added under the reason when a turn fails, so the work done is not lost from view.
+    virtual std::string workSoFar() const { return ""; }
+
     /// What the final answer reports that no tool this turn shows, in words for the user,
     /// whether or not the answer was sent back. It is added under the answer and the turn
     /// ends incomplete; nullopt adds nothing.
@@ -508,6 +519,8 @@ private:
     mutable std::mutex toolOutputsMutex_;
     std::map<int, std::string> toolOutputs_;
     int nextToolOutputId_ = 1;
+    // Said once per conversation: the oldest turns no longer reach the model.
+    bool toldHistoryDropped_ = false;
 
     // Security: persistent allowed-tools store (shared with tools_)
     std::shared_ptr<AllowedToolsStore> allowedToolsStore_;
