@@ -103,7 +103,10 @@ from gaia.agents.registry import DEFAULT_EMBEDDING_MODEL
 from gaia.agents.tools.code_index_tools import CodeIndexToolsMixin
 from gaia.agents.tools.email_tools import EmailToolsMixin
 from gaia.agents.tools.skill_learning_tools import SkillLearningToolsMixin
-from gaia.agents.tools.skill_library_tools import SkillLibraryToolsMixin
+from gaia.agents.tools.skill_library_tools import (
+    SkillLibraryToolsMixin,
+    uncaptured_skill_path,
+)
 from gaia.config import GaiaConfig
 from gaia.connectors.providers.base import ConnectorRequirement
 from gaia.llm.hybrid import (
@@ -123,6 +126,9 @@ logger = get_logger(__name__)
 #: Bundled skills ship inside the package so they survive both the wheel and the
 #: frozen sidecar; as ``SKILL_DIRS`` they outrank a same-named user or Claude Code copy.
 _SKILLS_DIR = Path(__file__).resolve().parent / "skills"
+
+#: Answer-check problem when the user named a skill folder and nothing captured it.
+_SKILL_NOT_ADDED = "No skill was added from"
 
 # Rendered in a code repository for a model that gets the full project context
 # (gaia.project_context). General software practice, not any one repo's rules:
@@ -504,6 +510,7 @@ class GaiaAgent(
             )
         self._research_brief: Optional[str] = None
         self._web_calls: deque = deque(maxlen=WEB_CALLS_KEPT)
+        self._turn_web_calls: List[Tuple[str, Any, Any]] = []
         router = None
         requested = resolved.model_id
         if requested is None and not resolved.use_claude:
@@ -534,6 +541,7 @@ class GaiaAgent(
         return result
 
     def _run_turn(self, user_input, *args, **kwargs):
+        self._turn_web_calls = []
         split = split_research_command(user_input)
         if split is None:
             return super().process_query(user_input, *args, **kwargs)
@@ -634,28 +642,59 @@ class GaiaAgent(
     def _execute_tool_timed(self, tool_name, tool_args):
         result = super()._execute_tool_timed(tool_name, tool_args)
         # What a research report's citations are checked against.
-        if tool_name in WEB_RECORD_TOOLS:
-            self._web_calls.append((tool_name, tool_args, result))
-        elif tool_name in DOWNLOAD_READ_TOOLS and any(
-            name == "download_file"
-            and downloaded_path(saved) == file_read_path(tool_args)
-            for name, _args, saved in self._web_calls
+        if tool_name in WEB_RECORD_TOOLS or (
+            tool_name in DOWNLOAD_READ_TOOLS
+            and any(
+                name == "download_file"
+                and downloaded_path(saved) == file_read_path(tool_args)
+                for name, _args, saved in self._web_calls
+            )
         ):
             self._web_calls.append((tool_name, tool_args, result))
+            self._turn_web_calls.append((tool_name, tool_args, result))
         return result
 
     def answer_problems(self, answer):
         problems = super().answer_problems(answer)
-        if self._research_brief != RESEARCH_BRIEF:
-            return problems
         request = getattr(self, "_original_user_input", None) or ""
+        if self._research_brief != RESEARCH_BRIEF:
+            called = {r.get("tool") for r in self._turn_tool_executions}
+            path = (
+                uncaptured_skill_path(str(request), called)
+                if "capture_skill" in self._tools_registry
+                else ""
+            )
+            if path:
+                problems.append(f"{_SKILL_NOT_ADDED} `{path}`.")
+            return problems
         return problems + citation_problems(
-            answer or "", list(self._web_calls), str(request)
+            answer or "",
+            list(self._web_calls),
+            str(request),
+            turn_calls=self._turn_web_calls,
         )
+
+    def required_calls(self):
+        calls = list(super().required_calls())
+        if "capture_skill" not in self._tools_registry:
+            return calls
+        called = {r.get("tool") for r in self._turn_tool_executions}
+        request = str(getattr(self, "_original_user_input", None) or "")
+        path = uncaptured_skill_path(request, called)
+        if path:
+            # capture_skill still asks the user before it copies anything.
+            calls.append(("capture_skill", {"source": path}))
+        return calls
 
     def answer_repair_prompt(self, problems):
         if self._research_brief != RESEARCH_BRIEF:
-            return super().answer_repair_prompt(problems)
+            prompt = super().answer_repair_prompt(problems)
+            if any(p.startswith(_SKILL_NOT_ADDED) for p in problems):
+                prompt += (
+                    " Call capture_skill with source set to that path now; it "
+                    "asks the user and reports whether the skill was added."
+                )
+            return prompt
         return CITATION_REPAIR.format(problems=" ".join(problems))
 
     def _start_research_turn(self) -> None:
@@ -939,9 +978,21 @@ class GaiaAgent(
         return suggester.suggest(
             user_input,
             self._catalog_skills(),
-            loaded=frozenset(self.loaded_skills),
+            loaded=self._skills_in_use(user_input),
             list_project=self._lists_project_skills(),
         )
+
+    def _skills_in_use(self, user_input: str) -> FrozenSet[str]:
+        """Loaded skills, plus one *user_input* runs as ``/<skill-name> ...``.
+
+        The command loads its skill after the turn's context is built, so
+        without it the hint would name the skill the user just typed.
+        """
+        from gaia.skills.command import parse_skill_command
+
+        command = parse_skill_command(user_input or "")
+        typed = {command.name} if command is not None else set()
+        return frozenset(self.loaded_skills) | typed
 
     def _select_skill_matches_for_turn(self, user_input: str) -> SkillMatches:
         """This turn's matches, split into auto-loads and suggestions.
@@ -959,7 +1010,7 @@ class GaiaAgent(
         return suggester.select(
             user_input,
             self._catalog_skills(),
-            loaded=frozenset(self.loaded_skills),
+            loaded=self._skills_in_use(user_input),
             list_project=self._lists_project_skills(),
         )
 

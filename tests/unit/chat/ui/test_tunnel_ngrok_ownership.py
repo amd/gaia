@@ -295,11 +295,6 @@ def _startable(monkeypatch, output: bytes):
     monkeypatch.setattr(tunnel_mod, "_check_ngrok_authtoken_configured", lambda: True)
     manager = TunnelManager(port=4200)
     manager._find_ngrok = lambda: "ngrok"
-
-    async def _no_ip():
-        manager._public_ip = None
-
-    manager._fetch_public_ip = _no_ip
     return manager
 
 

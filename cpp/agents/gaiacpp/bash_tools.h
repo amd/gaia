@@ -66,7 +66,7 @@ private:
     static json doEnvInspect(const json& args);
 
     /// Check if a command is available on PATH.
-    /// Uses "which" on POSIX, "where" on Windows.
+    /// Uses "which" on POSIX; on Windows a PATH scan that never looks in the working folder.
     static bool isToolAvailable(const std::string& toolName);
 
     /// Maximum output size before truncation (32 KB).

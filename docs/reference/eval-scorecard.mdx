@@ -257,6 +257,7 @@ python -m gaia.eval.scorecard_gate \
 ### Gate logic
 
 1. **Presence check**: `--scorecard` path must exist and be a valid scorecard. → exit 1 if not.
+   - `--expected-version <V>` (opt-in): exit 1 if the card's `agent.version` is not `V`. `release_agent_gaia.yml` passes the release version whenever `SCORECARD.md` changed since the previous tag, so a freshly committed card must match the package being released; a card carried over unchanged only gets a "stale scorecard" `::warning::`.
 2. **Absolute bar + anti-gaming floor** (opt-in, applies to *every* path including first adoption):
    - `--min-aggregate <N>`: exit 1 if `aggregate.value < N`.
    - `--min-urgent-recall <r>`: exit 1 if the card's `urgent_recall` secondary is below `r`. Fails loud if the metric is absent, so pass it only for a card that records one.
@@ -273,6 +274,7 @@ python -m gaia.eval.scorecard_gate \
 | Case | Exit code |
 |------|-----------|
 | Missing or invalid candidate scorecard | `1` |
+| `agent.version` differs from `--expected-version` | `1` |
 | Below `--min-aggregate` bar | `1` |
 | Below `--min-urgent-recall` floor (or metric absent) | `1` |
 | Regression beyond the variance band vs baseline | `1` |
@@ -297,7 +299,7 @@ The scorecard must move with the agent: when LLM-affecting code changes, the eva
 
 Two enforcement points work together:
 
-1. **Reject-on-worse (always on, GitHub-hosted).** The `scorecard-gate` job in `release_agent_<id>.yml` runs on every release. It only parses committed files (no eval), so it runs on a standard runner and **fails the build** if the committed scorecard regressed below the prior version or is missing. This is the hard gate.
+1. **Reject-on-worse (always on, GitHub-hosted).** The `scorecard-gate` job in `release_agent_<id>.yml` runs on every release. It only parses committed files (no eval), so it runs on a standard runner and **fails the build** if the committed scorecard regressed below the prior version, is missing, or was newly committed at a version other than the release. This is the hard gate.
 2. **Run-and-refresh (self-hosted AMD, manual dispatch).** The judged eval needs Lemonade on AMD hardware, so it cannot run on GitHub-hosted runners. `gaia_scorecard_refresh.yml` is **`workflow_dispatch`-only** and runs on the self-hosted pool:
    - **all 13 `gaia_*` categories** (the default) is the **only** run allowed to commit a refreshed card;
    - **a subset** of categories is an end-to-end smoke run that exercises every step and then **never commits** (a partial number is not a valid stand-in for the published figure).

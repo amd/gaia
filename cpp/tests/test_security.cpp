@@ -371,6 +371,465 @@ TEST(InternetRefusalTest, ARefusalQuotesTheCommandAsAsked) {
     EXPECT_NE(why.find("mvn -o package && npm install"), std::string::npos) << why;
 }
 
+TEST(WebFetchRefusalTest, RefusesShellFetchesButNotInstallsOrLocalRequests) {
+    ToolInfo sh;
+    sh.name = "bash_execute";
+    for (const char* fetched :
+         {"curl -s -L https://example.com", "curl example.com", "wget https://example.com/a.html",
+          "cu''rl https://example.com", "bash -c \"wget x.com\"", "curl $(cat url)",
+          "Invoke-WebRequest https://example.com", "iwr https://example.com -OutFile a.html",
+          "python -c \"import urllib.request; print(urllib.request.urlopen('https://example.com').read())\"",
+          "node -e \"fetch('https://example.com')\"", "cat < /dev/tcp/203.0.113.5/80",
+          "bitsadmin /transfer j https://example.com/a a", "certutil -urlcache -f https://example.com/a a",
+          "curl -x http://proxy:8080 http://localhost/x",
+          // Wrapped, chained or named by its full path, it is still the program that runs.
+          "bash -c \"curl -s https://example.com\"", "powershell -Command \"iwr https://example.com\"",
+          "cmd /c curl https://example.com", "C:\\Tools\\curl.exe https://example.com",
+          "echo start && curl https://example.com", "sudo wget https://example.com",
+          "py -c \"import requests; print(requests.get('https://example.com').text)\"",
+          "powershell -Command \"(New-Object Net.WebClient).DownloadString('https://example.com')\"",
+          "ruby -e \"require 'net/http'; puts Net::HTTP.get(URI('https://example.com'))\""}) {
+        const std::string why = webFetchRefusal(sh, {{"command", fetched}});
+        EXPECT_NE(why.find("Web access is off"), std::string::npos) << fetched << ": " << why;
+    }
+    // The run may still install what the task needs and talk to this PC.
+    for (const char* allowed :
+         {"ls -la", "git status", "pip install requests", "npm install", "python build.py",
+          "curl http://localhost:13305/api/v1/health", "curl http://127.0.0.1:8000/x", "python -m pytest tests",
+          "grep -r curl docs", "cat curl-notes.txt", "git log --grep wget",
+          "echo see https://example.com for curl",
+          // A library's name outside inline code is a package or a file, not a connection.
+          "python -m pip install requests", "py -m pip install httpx", "python -m pytest tests/test_requests.py",
+          "cat setup.py | grep requests", "python fetch_requests.py", "node build.js --socket-path x"}) {
+        EXPECT_EQ(webFetchRefusal(sh, {{"command", allowed}}), "") << allowed;
+    }
+    EXPECT_NE(webFetchRefusal(sh, {{"command", "echo " + std::string(300000, 'a')}}), "");
+    EXPECT_EQ(webFetchRefusal(sh, {{"command", 7}}), "");
+
+    // Only the shell is judged: the flag withholds web_fetch itself, and connectors stay on.
+    ToolInfo mcp;
+    mcp.name = "search";
+    mcp.mcpServer = "github";
+    EXPECT_EQ(webFetchRefusal(mcp, json::object()), "");
+    ToolInfo write;
+    write.name = "file_write";
+    EXPECT_EQ(webFetchRefusal(write, {{"path", "a.md"}, {"content", "curl https://example.com"}}), "");
+}
+
+// --no-web is the narrower switch: it may never refuse what the internet-off table allows, and
+// every fetch that table refuses through a web-request program or a socket file it refuses too.
+TEST(WebFetchRefusalTest, AgreesWithTheSharedOfflineTable) {
+    std::ifstream in(fs::path(GAIA_REPO_FIXTURES_DIR) / "offline_commands.json");
+    ASSERT_TRUE(in) << "tests/fixtures/offline_commands.json";
+    const json table = json::parse(in);
+    ToolInfo sh;
+    sh.name = "bash_execute";
+    for (const auto& c : table["allowed"]) {
+        EXPECT_EQ(webFetchRefusal(sh, {{"command", c}}), "") << c.get<std::string>();
+    }
+    size_t fetches = 0;
+    for (const auto& c : table["refused"]) {
+        const std::string command = c.get<std::string>();
+        std::string plain;
+        for (const char ch : command) {
+            if (ch != '^') plain.push_back(ch);
+        }
+        if (plain.find("curl") == std::string::npos && plain.find("/dev/tcp/") == std::string::npos &&
+            plain.find("/dev/udp/") == std::string::npos) {
+            continue;
+        }
+        ++fetches;
+        EXPECT_NE(webFetchRefusal(sh, {{"command", command}}), "") << command;
+    }
+    EXPECT_GE(fetches, 8u);
+}
+
+// Routes a model reaches for once curl is refused, and look-alikes that must stay allowed.
+TEST(WebFetchRefusalTest, RefusesOtherRoutesToTheWebAndNotTheirLookAlikes) {
+    ToolInfo sh;
+    sh.name = "bash_execute";
+    for (const char* fetched : {
+             // Library loaded by a flag before the code, or code given without a flag.
+             "perl -MLWP::Simple -e 'getprint \"https://example.com\"'",
+             "ruby -rnet/http -e 'puts Net::HTTP.get(URI(ARGV[0]))' https://example.com",
+             "powershell \"(New-Object Net.WebClient).DownloadString('https://example.com')\"",
+             "powershell -NoProfile -ExecutionPolicy Bypass (New-Object Net.WebClient).DownloadFile($u, 'a')",
+             "python3 -uc \"import urllib.request as u; print(u.urlopen('https://example.com').read())\"",
+             "python -c \"import os; import requests; print(requests.get('https://example.com').text)\"",
+             "node -p \"require('https').get('https://example.com')\"",
+             "php -r \"echo file_get_contents('https://example.com');\"",
+             // Code read from stdin.
+             "python3 - <<'EOF'\nimport urllib.request\nprint(urllib.request.urlopen('https://example.com').read())\nEOF",
+             "echo \"import socket; socket.create_connection(('example.com', 80))\" | python3",
+             "node <<EOF\nfetch('https://example.com').then(r => r.text()).then(console.log)\nEOF",
+             // Destinations read from a file, where the URL scan can't see them.
+             "curl -K urls.txt http://localhost/", "curl --config=urls.txt", "wget -i urls.txt",
+             "wget --input-file=urls.txt",
+             // A host hidden behind credentials or a full path to the program.
+             "curl http://localhost@example.com/", "/usr/bin/curl -s https://example.com",
+             "\"C:\\Program Files\\curl\\curl.exe\" https://example.com",
+             // Other page fetchers.
+             "lynx -dump https://example.com", "w3m -dump https://example.com", "http GET https://example.com",
+             "wget2 https://example.com",
+             // A repository is a page too.
+             "git clone https://github.com/example/repo"}) {
+        const std::string why = webFetchRefusal(sh, {{"command", fetched}});
+        EXPECT_NE(why.find("Web access is off"), std::string::npos) << fetched << ": " << why;
+    }
+    for (const char* allowed : {
+             "python -m pip install -e . requests", "py -m pip install -e \".[httpx]\"",
+             "python -W ignore manage.py test requests", "python -c \"print(1 + 1)\"",
+             "node -e \"console.log(process.version)\"", "perl -ne 'print if /requests/' notes.txt",
+             "powershell -Command \"Get-ChildItem requests\"", "ruby -e 'puts File.read(\"Gemfile\")'",
+             "cat requirements.txt | grep requests", "curl -i http://localhost:13305/api/v1/health",
+             "wget -O out.html http://127.0.0.1:8000/", "git clone ../local-repo copy", "git status",
+             "echo http GET is a verb", "pip install httpie", "npm install axios"}) {
+        EXPECT_EQ(webFetchRefusal(sh, {{"command", allowed}}), "") << allowed;
+    }
+
+    // The internet switch shares the destinations-from-a-file rule, and still allows curl -i.
+    EXPECT_NE(internetRefusal(sh, {{"command", "curl -K urls.txt http://localhost/"}}), "");
+    EXPECT_EQ(internetRefusal(sh, {{"command", "curl -i http://localhost:13305/api/v1/health"}}), "");
+
+    // Long code attached to its flag is read without the pattern matcher recursing through it.
+    std::string longCode = "python -c\"import os";
+    for (int i = 0; i < 40; ++i) longCode += "\n" + std::string(1500, 'x');
+    longCode += "\nimport urllib.request as u; u.urlopen(x)\"";
+    EXPECT_NE(webFetchRefusal(sh, {{"command", longCode}}), "");
+}
+
+// A word after <<, <<- or <<< is stdin for the interpreter, not a script name: its lines are the code.
+TEST(WebFetchRefusalTest, HeredocsAndHereStringsAreReadAsTheInterpretersCode) {
+    ToolInfo sh;
+    sh.name = "bash_execute";
+    const std::string body = "import urllib.request\nprint(urllib.request.urlopen('https://example.com').read())\n";
+    for (const std::string& fetched : std::vector<std::string>{
+             "python3 << EOF\n" + body + "EOF", "python3 <<EOF\n" + body + "EOF",
+             "python3 << 'EOF'\n" + body + "EOF", "python3 <<\"EOF\"\n" + body + "EOF",
+             "python3 - << EOF\n" + body + "EOF", "cd src && python3 << EOF\n" + body + "EOF\necho done",
+             "python3 <<- EOF\n\timport urllib.request as u\n\tu.urlopen('https://example.com')\n\tEOF",
+             "python3 <<-EOF\n\timport urllib.request as u\n\tu.urlopen('https://example.com')\n\tEOF",
+             "node << JS\nfetch('https://example.com').then(r => r.text()).then(console.log)\nJS",
+             "python3 <<< \"import urllib.request as u; u.urlopen('https://example.com')\"",
+             "python3 <<<\"import socket; socket.create_connection(('example.com', 80))\"",
+             "node <<< \"fetch('https://example.com')\"",
+             "ruby <<< \"require 'net/http'; puts Net::HTTP.get(URI('https://example.com'))\"",
+             "bash <<'SH'\npython3 -c \"import urllib.request as u; u.urlopen('https://example.com')\"\nSH",
+             "pwsh -Command - <<'PS'\n(New-Object Net.WebClient).DownloadString('https://example.com')\nPS"}) {
+        const std::string why = webFetchRefusal(sh, {{"command", fetched}});
+        EXPECT_NE(why.find("Web access is off"), std::string::npos) << fetched << ": " << why;
+    }
+    for (const char* allowed : {
+             "python3 << EOF\nprint(1 + 1)\nEOF", "python3 <<< 'print(42)'", "python3 < script.py",
+             "python3 script.py << EOF\nhttps://example.com\nEOF", "cat << EOF > notes.md\nimport requests\nEOF",
+             "node << EOF\nconsole.log(process.version)\nEOF"}) {
+        EXPECT_EQ(webFetchRefusal(sh, {{"command", allowed}}), "") << allowed;
+    }
+}
+
+// PowerShell takes any prefix of -EncodedCommand from -e, and -, --, / or a typographic dash before it.
+TEST(WebFetchRefusalTest, EncodedPowerShellIsRefusedHoweverTheSwitchIsSpelled) {
+    ToolInfo sh;
+    sh.name = "bash_execute";
+    for (const std::string& encoded : std::vector<std::string>{
+             "powershell -e SQBFAFgA", "powershell -en SQBFAFgA", "powershell -enc SQBFAFgA",
+             "powershell -EncodedCommand SQBFAFgA", "powershell -ec SQBFAFgA", "pwsh -EnCoDeD SQBFAFgA",
+             "powershell /enc SQBFAFgA", "powershell /e SQBFAFgA", "pwsh --encodedcommand SQBFAFgA",
+             "powershell \xE2\x80\x93" "enc SQBFAFgA", "powershell -ex bypass -enc SQBFAFgA",
+             "powershell -ExecutionPolicy Bypass -WindowStyle Hidden -e SQBFAFgA",
+             "powershell -NoProfile -ep bypass -en SQBFAFgA", "cmd /c powershell -enc SQBFAFgA",
+             "powershell.exe -NonInteractive -e SQBFAFgA", "pwsh -EncodedCommand:SQBFAFgA"}) {
+        const std::string why = webFetchRefusal(sh, {{"command", encoded}});
+        EXPECT_NE(why.find("Web access is off"), std::string::npos) << encoded << ": " << why;
+    }
+    // -ex and -ep are -ExecutionPolicy; a switch inside the command or after -File is the script's.
+    for (const char* allowed : {
+             "powershell -ex bypass -File build.ps1", "powershell -ExecutionPolicy Bypass -Command Get-Date",
+             "pwsh -ep bypass ./build.ps1", "powershell -Command \"Write-Output -e\"", "pwsh -File build.ps1 -e 1"}) {
+        EXPECT_EQ(webFetchRefusal(sh, {{"command", allowed}}), "") << allowed;
+    }
+}
+
+// The command a wrapper runs is the one judged, in the --no-web check and the internet switch alike.
+TEST(WebFetchRefusalTest, WrappersDoNotHideTheCommandThatRuns) {
+    ToolInfo sh;
+    sh.name = "bash_execute";
+    const std::string code = "\"import urllib.request as u; u.urlopen('https://example.com')\"";
+    for (const std::string& fetched : std::vector<std::string>{
+             "timeout 10 curl https://example.com", "timeout -s KILL 5s wget https://example.com",
+             "nice curl https://example.com", "nice -n 5 wget https://example.com",
+             "if curl -s https://example.com; then echo ok; fi", "while true; do wget -q https://example.com; done",
+             "{ curl https://example.com; }", "! curl https://example.com", "watch -n 5 curl https://example.com",
+             "sudo -u alice curl https://example.com", "uv run curl https://example.com",
+             "timeout 30 python3 -c " + code, "sudo -u alice python3 -c " + code, "nice -n 10 python3 -c " + code,
+             "if python3 -c " + code + "; then echo ok; fi", "{ python3 -c " + code + "; }",
+             "! python3 -c " + code, "watch -n 60 python3 -c " + code, "uv run python -c " + code,
+             "uv run --with requests python -c " + code, "poetry run python -c " + code,
+             "pipenv run node -e \"fetch('https://example.com')\"",
+             "pdm run python3 - <<EOF\nimport urllib.request as u\nu.urlopen('https://example.com')\nEOF"}) {
+        const std::string why = webFetchRefusal(sh, {{"command", fetched}});
+        EXPECT_NE(why.find("Web access is off"), std::string::npos) << fetched << ": " << why;
+    }
+    for (const char* allowed : {
+             "timeout 5 curl http://localhost:13305/api/v1/health", "sudo -u alice ls", "watch -n 5 ls",
+             "uv run pytest tests/test_requests.py", "poetry run python manage.py test", "nice -n 5 make",
+             "if [ -f x ]; then echo ok; fi", "uv pip list"}) {
+        EXPECT_EQ(webFetchRefusal(sh, {{"command", allowed}}), "") << allowed;
+    }
+    EXPECT_NE(internetRefusal(sh, {{"command", "timeout 10 curl https://example.com"}}), "");
+    EXPECT_NE(internetRefusal(sh, {{"command", "sudo -u alice wget https://example.com"}}), "");
+    EXPECT_EQ(internetRefusal(sh, {{"command", "timeout 5 curl http://localhost:13305/api/v1/health"}}), "");
+}
+
+// Library names on the rest of the line count only when the interpreter runs what a pipe feeds it.
+TEST(WebFetchRefusalTest, TheLineIsReadAsCodeOnlyWhenPipedIntoAnInterpreter) {
+    ToolInfo sh;
+    sh.name = "bash_execute";
+    for (const char* allowed : {
+             "python3 --version | grep 'urlopen('", "python3 -V 2>&1 | grep 'urlopen('", "node -v | grep 'fetch('",
+             "python3 -m pip list | grep 'requests.get('", "perl -v | grep getprint",
+             "python3 -c 'print(1)' | grep 'urlopen('", "grep 'urlopen(' notes.md | python3 count.py",
+             "python3 < script.py | grep 'urlopen('", "cat notes.md | python3 summarize.py"}) {
+        EXPECT_EQ(webFetchRefusal(sh, {{"command", allowed}}), "") << allowed;
+    }
+    for (const char* fetched : {
+             "echo \"import urllib.request as u; u.urlopen('https://example.com')\" | python3 -",
+             "echo \"fetch('https://example.com')\" | node", "echo \"iwr https://example.com\" | powershell -Command -",
+             "echo \"(New-Object Net.WebClient).DownloadString('https://example.com')\" | pwsh -"}) {
+        const std::string why = webFetchRefusal(sh, {{"command", fetched}});
+        EXPECT_NE(why.find("Web access is off"), std::string::npos) << fetched << ": " << why;
+    }
+}
+
+// A connection is a call; importing a network library with no remote address in sight is not one.
+TEST(WebFetchRefusalTest, ImportingANetworkLibraryIsNotAConnection) {
+    ToolInfo sh;
+    sh.name = "bash_execute";
+    for (const char* allowed : {
+             "python -c \"import requests; print(requests.__version__)\"",
+             "python3 -c \"from urllib.parse import quote; print(quote('a b'))\"",
+             "python3 -c \"import socket; print(socket.gethostname())\"",
+             "python3 -c \"import urllib.request; print(urllib.request.__file__)\"",
+             "node -e \"const http = require('http'); console.log(http.STATUS_CODES[404])\"",
+             "ruby -e \"require 'net/http'; puts Net::HTTP::VERSION\"", "perl -MLWP -e 'print $LWP::VERSION'"}) {
+        EXPECT_EQ(webFetchRefusal(sh, {{"command", allowed}}), "") << allowed;
+    }
+    for (const char* fetched : {
+             "python3 -c \"import requests as r; r.get('https://example.com')\"",
+             "python3 -c \"from urllib.request import urlopen; urlopen('https://example.com')\"",
+             "python3 -c \"import socket; s = socket.socket(); s.connect(('example.com', 80))\"",
+             "python3 -c \"import requests; requests.get(input())\"",
+             "python3 -c \"import requests, sys; print(requests.post(sys.argv[1]).text)\" https://example.com",
+             "node -e \"require('http').get('http://example.com')\"",
+             "perl -MLWP::Simple -e 'getprint $ARGV[0]' https://example.com"}) {
+        const std::string why = webFetchRefusal(sh, {{"command", fetched}});
+        EXPECT_NE(why.find("Web access is off"), std::string::npos) << fetched << ": " << why;
+    }
+}
+
+// In PowerShell code a web-request command counts where a command starts, not as a search term.
+TEST(WebFetchRefusalTest, PowerShellWebCommandsCountOnlyWhereACommandStarts) {
+    ToolInfo sh;
+    sh.name = "bash_execute";
+    for (const char* allowed : {
+             "powershell -Command \"Select-String -Pattern curl -Path notes.md\"",
+             "powershell -Command \"Get-ChildItem -Recurse -Filter *wget*\"", "pwsh -c \"Get-Help Invoke-WebRequest\"",
+             "powershell \"Get-Content notes.md | Select-String iwr\"", "pwsh -c \"Get-Command curl\""}) {
+        EXPECT_EQ(webFetchRefusal(sh, {{"command", allowed}}), "") << allowed;
+    }
+    for (const char* fetched : {
+             "powershell -Command \"$r = iwr https://example.com; $r.Content\"",
+             "powershell -Command \"Get-Content urls.txt | ForEach-Object { iwr $_ }\"",
+             "pwsh -c \"Get-Date; Invoke-RestMethod https://example.com\"",
+             "powershell -c \"curl.exe -s https://example.com\"",
+             "powershell -Command \"& wget https://example.com -OutFile a.html\"",
+             "pwsh -c \"(Invoke-WebRequest https://example.com).Content\""}) {
+        const std::string why = webFetchRefusal(sh, {{"command", fetched}});
+        EXPECT_NE(why.find("Web access is off"), std::string::npos) << fetched << ": " << why;
+    }
+}
+
+// A switch's value, a command PowerShell runs for another, or a redirect's file never hides the code.
+TEST(WebFetchRefusalTest, PowerShellSwitchValuesAndRedirectsDoNotHideTheCode) {
+    ToolInfo sh;
+    sh.name = "bash_execute";
+    const std::string download = "\"(New-Object Net.WebClient).DownloadString('https://example.com')\"";
+    std::string longLine = "powershell ";
+    for (int i = 0; i < 1000; ++i) longLine += "a;";
+    longLine += "$r=iwr x";
+    for (const std::string& fetched : std::vector<std::string>{
+             "powershell -Version 2 -Command " + download, "pwsh -ExecutionPolicy:Bypass " + download,
+             "powershell -Command \"iex 'iwr https://example.com'\"",
+             "powershell -Command \"Invoke-Expression 'irm https://example.com'\"",
+             "powershell -Command \"Start-Process curl.exe -ArgumentList https://example.com\"",
+             "pwsh -c \"Start-Process -FilePath wget -ArgumentList x\"",
+             "pwsh -File x.ps1; python3 -c \"import urllib.request as u; u.urlopen('https://example.com')\"",
+             "echo " + download + " | pwsh -File -", longLine,
+             "python3 >&log.txt <<EOF\nimport urllib.request as u\nu.urlopen('https://example.com')\nEOF"}) {
+        const std::string why = webFetchRefusal(sh, {{"command", fetched}});
+        EXPECT_NE(why.find("Web access is off"), std::string::npos) << fetched << ": " << why;
+    }
+    // Heredoc data full of << is not nested heredocs; a program's path or a lookup doesn't run curl.
+    std::string cpp = "cat > a.cpp <<'EOF'\n#include <iostream>\nint main() {\n";
+    for (int i = 0; i < 6; ++i) cpp += "    std::cout << \"x\" << std::endl;\n";
+    cpp += "}\nEOF";
+    for (const std::string& allowed : std::vector<std::string>{
+             cpp, "x=$((1<<3)); y=$((1<<4)); echo $x $y", "/usr/bin/grep curl notes.md", "command -v curl",
+             "command -V wget", "powershell -Version 5.1 -File build.ps1"}) {
+        EXPECT_EQ(webFetchRefusal(sh, {{"command", allowed}}), "") << allowed;
+    }
+}
+
+// Many interpreters on one command read the rest of it once, not once each.
+TEST(WebFetchRefusalTest, ManyPipedInterpretersDoNotRereadTheCommand) {
+    ToolInfo sh;
+    sh.name = "bash_execute";
+    std::string many;
+    while (many.size() < 60000) many += "echo hi | python3\n";
+    const auto began = std::chrono::steady_clock::now();
+    EXPECT_EQ(webFetchRefusal(sh, {{"command", many}}), "");
+    EXPECT_LT(std::chrono::steady_clock::now() - began, std::chrono::seconds(5));
+}
+
+// Inside double quotes \" \\ \$ and \` are escapes, so code nested in escaped quotes is read whole.
+TEST(WebFetchRefusalTest, EscapedQuotesNestCodeInAShellString) {
+    ToolInfo sh;
+    sh.name = "bash_execute";
+    for (const char* fetched : {
+             "bash -c \"python3 -c \\\"import urllib.request as u; u.urlopen('https://example.com')\\\"\"",
+             "sh -c \"node -e \\\"fetch('https://example.com')\\\"\"",
+             "bash -c \"python3 -c \\\"import requests; requests.get(\\\\\\\"https://example.com\\\\\\\")\\\"\""}) {
+        const std::string why = webFetchRefusal(sh, {{"command", fetched}});
+        EXPECT_NE(why.find("Web access is off"), std::string::npos) << fetched << ": " << why;
+    }
+    for (const char* allowed : {
+             "bash -c \"python3 -c \\\"print(1 + 1)\\\"\"", "bash -c \"echo \\\"cost: \\$5\\\"\"",
+             "echo \"a \\\\ b\" | wc -c"}) {
+        EXPECT_EQ(webFetchRefusal(sh, {{"command", allowed}}), "") << allowed;
+    }
+}
+
+// -c is a flag: the shell's command string is the first word after its options, however many there are.
+TEST(WebFetchRefusalTest, ShellOptionsBeforeTheCommandStringDoNotHideIt) {
+    ToolInfo sh;
+    sh.name = "bash_execute";
+    const std::string code = "'python3 -c \"import urllib.request as u; u.urlopen(\\\"https://example.com\\\")\"'";
+    for (const std::string& fetched : std::vector<std::string>{
+             "bash -o pipefail -c " + code, "bash -O extglob -c " + code, "bash -c -- " + code,
+             "bash +o history -c " + code, "bash -euo pipefail -c " + code, "sh -e -c " + code,
+             "bash --norc -c " + code, "bash --rcfile x.rc -c " + code, "zsh -c - " + code,
+             "bash -o pipefail -c 'git clone https://github.com/example/repo'"}) {
+        const std::string why = webFetchRefusal(sh, {{"command", fetched}});
+        EXPECT_NE(why.find("Web access is off"), std::string::npos) << fetched << ": " << why;
+    }
+    for (const char* allowed : {
+             "bash -o pipefail -c 'ls | wc -l'", "bash -euo pipefail build.sh", "bash -c -- 'echo hi'",
+             "bash -O extglob script.sh https://example.com"}) {
+        EXPECT_EQ(webFetchRefusal(sh, {{"command", allowed}}), "") << allowed;
+    }
+}
+
+// Text piped into a shell runs as commands, so it gets the same checks as a command line.
+TEST(WebFetchRefusalTest, TextPipedIntoAShellIsReadAsCommands) {
+    ToolInfo sh;
+    sh.name = "bash_execute";
+    for (const char* fetched : {
+             "echo \"curl -s https://example.com\" | sh", "echo 'wget https://example.com/a.html' | bash",
+             "printf '%s\\n' 'curl https://example.com' | bash -s", "echo curl https://example.com | sh",
+             "echo \"python3 -c 'import urllib.request as u; u.urlopen(\\\"https://example.com\\\")'\" | sh",
+             "echo 'git clone https://github.com/example/repo' | zsh", "echo 'wget -i urls.txt' | dash",
+             "echo \"echo 'curl https://example.com' | sh\" | bash",
+             "cat <<EOF | sh\ngit clone https://github.com/example/repo\nEOF"}) {
+        const std::string why = webFetchRefusal(sh, {{"command", fetched}});
+        EXPECT_NE(why.find("Web access is off"), std::string::npos) << fetched << ": " << why;
+    }
+    for (const char* allowed : {
+             "echo 'ls -la' | sh", "cat build.sh | bash", "echo 'curl http://localhost:13305/api/v1/health' | sh",
+             "echo 'echo see https://example.com' | sh", "echo hi | sh -c 'cat'", "echo hi | bash script.sh",
+             "sh < install.sh", "echo 'curl --version' | sh"}) {
+        EXPECT_EQ(webFetchRefusal(sh, {{"command", allowed}}), "") << allowed;
+    }
+    // Many piped shells on one long command read it once per line, not once per shell.
+    std::string many;
+    while (many.size() < 60000) many += "echo hi | sh\n";
+    const auto began = std::chrono::steady_clock::now();
+    EXPECT_EQ(webFetchRefusal(sh, {{"command", many}}), "");
+    EXPECT_LT(std::chrono::steady_clock::now() - began, std::chrono::seconds(5));
+    std::string spaced;
+    while (spaced.size() < 60000) spaced += "echo 'a b c d e f' | bash\n";
+    const auto spacedBegan = std::chrono::steady_clock::now();
+    EXPECT_EQ(webFetchRefusal(sh, {{"command", spaced}}), "");
+    EXPECT_LT(std::chrono::steady_clock::now() - spacedBegan, std::chrono::seconds(5));
+    std::string heredoc = "cat <<'EOF' | sh\n";
+    while (heredoc.size() < 60000) heredoc += "echo 'a b' | sh\n";
+    heredoc += "EOF";
+    const auto heredocBegan = std::chrono::steady_clock::now();
+    EXPECT_EQ(webFetchRefusal(sh, {{"command", heredoc}}), "");
+    EXPECT_LT(std::chrono::steady_clock::now() - heredocBegan, std::chrono::seconds(5));
+}
+
+// cmd /c and /k run the string after them as a command line.
+TEST(WebFetchRefusalTest, CmdReadsTheStringAfterSlashCAsACommandLine) {
+    ToolInfo sh;
+    sh.name = "bash_execute";
+    for (const char* fetched : {
+             "cmd /c \"python -c \\\"import urllib.request as u; u.urlopen('https://example.com')\\\"\"",
+             "cmd /k \"git clone https://github.com/example/repo\"",
+             "cmd /s /c \"node -e \\\"fetch('https://example.com')\\\"\"",
+             "cmd.exe /C \"powershell -Command iwr https://example.com\"",
+             "cmd /d /s /c \"echo x | python3 -c \\\"import requests; requests.get(input())\\\"\""}) {
+        const std::string why = webFetchRefusal(sh, {{"command", fetched}});
+        EXPECT_NE(why.find("Web access is off"), std::string::npos) << fetched << ": " << why;
+    }
+    for (const char* allowed : {"cmd /c \"dir /b\"", "cmd /s /c \"python -c \\\"print(1)\\\"\"", "cmd /c build.bat"}) {
+        EXPECT_EQ(webFetchRefusal(sh, {{"command", allowed}}), "") << allowed;
+    }
+}
+
+// Start-Process takes its program after any switches, and a program may be named by its path.
+TEST(WebFetchRefusalTest, PowerShellLaunchesAndPathQualifiedFetchProgramsAreSeen) {
+    ToolInfo sh;
+    sh.name = "bash_execute";
+    for (const char* fetched : {
+             "powershell -Command \"Start-Process -NoNewWindow -Wait -FilePath curl.exe -ArgumentList x\"",
+             "pwsh -c \"Start-Process -Wait -PassThru -WindowStyle Hidden curl.exe -ArgumentList x\"",
+             "pwsh -c \"Start-Process -FilePath 'C:\\Tools\\wget.exe' -Wait -NoNewWindow\"",
+             "powershell -Command \"Start-Process -WorkingDirectory C:\\tmp -Wait wget\"",
+             "pwsh -c \"saps -FilePath:curl.exe -ArgumentList x\"",
+             "powershell -Command \"Get-Date; Start-Process -Wait -NoNewWindow -FilePath curl\"",
+             "powershell -Command \"& 'C:\\Program Files\\curl\\curl.exe' https://example.com\"",
+             "powershell -Command \".\\curl.exe -s https://example.com\"",
+             "pwsh -c \"./curl -s https://example.com\"", "./curl -s https://example.com",
+             ".\\curl.exe https://example.com", "& 'C:\\Tools\\curl.exe' https://example.com"}) {
+        const std::string why = webFetchRefusal(sh, {{"command", fetched}});
+        EXPECT_NE(why.find("Web access is off"), std::string::npos) << fetched << ": " << why;
+    }
+    for (const char* allowed : {
+             "powershell -Command \"Start-Process -Wait -FilePath notepad.exe -ArgumentList curl\"",
+             "pwsh -c \"Start-Process -Wait -WindowStyle Hidden build.exe\"",
+             "powershell -Command \"Get-Content C:\\logs\\curl.log\"", "./build.sh curl", "cat ./curl/README.md"}) {
+        EXPECT_EQ(webFetchRefusal(sh, {{"command", allowed}}), "") << allowed;
+    }
+}
+
+// Asking a fetch program for its version or help reaches nothing.
+TEST(WebFetchRefusalTest, AFetchProgramsVersionOrHelpIsAllowed) {
+    ToolInfo sh;
+    sh.name = "bash_execute";
+    for (const char* allowed : {
+             "curl --version", "curl -V", "wget --version", "wget -V", "curl --help", "curl -h", "wget -h",
+             "curl.exe --version", "/usr/bin/curl --version", "curl --version | head -1",
+             "wget --version && echo ok"}) {
+        EXPECT_EQ(webFetchRefusal(sh, {{"command", allowed}}), "") << allowed;
+    }
+    for (const char* fetched : {
+             "curl --version https://example.com", "curl -V example.com", "curl --help; curl example.com",
+             "curl --version && wget -i urls.txt", "curl", "curl -v", "wget --help all example.com"}) {
+        const std::string why = webFetchRefusal(sh, {{"command", fetched}});
+        EXPECT_NE(why.find("Web access is off"), std::string::npos) << fetched << ": " << why;
+    }
+}
+
 TEST(SplitShellCommandTest, SegmentsAndWords) {
     std::vector<std::vector<std::string>> s;
     ASSERT_TRUE(splitShellCommand("cd src && cat 'a b.txt' | wc -l; ls", true, s));

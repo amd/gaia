@@ -53,6 +53,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Dict, List, Optional, Tuple
 
+from gaia import home as home_mod
 from gaia.env import child_env
 from gaia.logger import get_logger
 from gaia.utils.archive import ArchiveError, safe_extract
@@ -557,13 +558,16 @@ def vulkan_workarounds() -> Dict[str, str]:
 def gaia_home() -> Path:
     """Return GAIA's state directory.
 
+    The fallback is :func:`gaia.home.default_gaia_home`, so relocating the
+    default moves this lookup too.
+
     Returns:
-        ``$GAIA_HOME`` when set, otherwise ``~/.gaia``.
+        ``$GAIA_HOME`` when set, otherwise the shared ``~/.gaia`` default.
     """
     override = os.environ.get("GAIA_HOME")
     if override:
         return Path(os.path.expandvars(os.path.expanduser(override))).resolve()
-    return Path.home() / ".gaia"
+    return home_mod.default_gaia_home()
 
 
 def is_gaias_to_start(embedded: "EmbeddedLemonade") -> bool:
@@ -736,8 +740,8 @@ def _answers(family: int, host: str, port: int) -> bool:
             return True
     except ConnectionRefusedError:
         return False
-    except TimeoutError:
-        return True  # a listener whose backlog is full
+    except (TimeoutError, ConnectionResetError):
+        return True  # a full backlog: Linux leaves the connect hanging, macOS resets it
     except OSError as e:
         if family == socket.AF_INET6 and e.errno in _NO_FAMILY + (errno.ENETUNREACH,):
             return False

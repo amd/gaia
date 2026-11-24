@@ -83,7 +83,8 @@ export function MessagingSettings() {
     const [token, setToken] = useState('');
     const [botPublic, setBotPublic] = useState(false);
     const [justPaired, setJustPaired] = useState(false);
-    const [copied, setCopied] = useState<'ok' | 'failed' | null>(null);
+    // Keyed by code so a new pairing code drops the old result.
+    const [copied, setCopied] = useState<{ code: string; ok: boolean } | null>(null);
     const [confirmDisconnect, setConfirmDisconnect] = useState(false);
     const wasPairing = useRef(false);
 
@@ -100,7 +101,6 @@ export function MessagingSettings() {
     }, [show]);
 
     useEffect(load, [load]);
-    useEffect(() => setCopied(null), [status?.pairing_code]);
 
     const watching = status !== null && LIVE.has(status.state);
     useEffect(() => {
@@ -138,8 +138,8 @@ export function MessagingSettings() {
 
     const copyCode = (code: string) => {
         navigator.clipboard.writeText(code).then(
-            () => setCopied('ok'),
-            () => setCopied('failed'),
+            () => setCopied({ code, ok: true }),
+            () => setCopied({ code, ok: false }),
         );
     };
 
@@ -165,6 +165,7 @@ export function MessagingSettings() {
     const needsToken = !s.connected || s.state === 'token_invalid' || s.state === 'conflict';
     const pairing = s.connected && !needsToken && (s.state === 'pairing' || (s.state === 'connected' && !s.paired));
     const answering = s.connected && s.paired && s.state === 'connected';
+    const copyResult = copied && copied.code === s.pairing_code ? copied : null;
 
     const tokenSteps = (
         <ol className="messaging-steps">
@@ -221,14 +222,14 @@ export function MessagingSettings() {
                     <div className="messaging-code-row">
                         <bdi dir="ltr" className="messaging-code" data-testid="discord-pairing-code">{formatPairingCode(s.pairing_code)}</bdi>
                         <button type="button" className="btn-secondary" onClick={() => copyCode(s.pairing_code)}>
-                            {copied === 'ok' ? <Check size={13} aria-hidden="true" /> : <Copy size={13} aria-hidden="true" />}
-                            {copied === 'ok' ? t('settings.messaging.copied') : t('settings.messaging.copy')}
+                            {copyResult?.ok ? <Check size={13} aria-hidden="true" /> : <Copy size={13} aria-hidden="true" />}
+                            {copyResult?.ok ? t('settings.messaging.copied') : t('settings.messaging.copy')}
                         </button>
                     </div>
                 ) : (
                     <p className="settings-hint"><Loader2 size={13} className="spin" /> {t('settings.messaging.waitingCode')}</p>
                 )}
-                {copied === 'failed' && <p className="settings-error" role="alert">{t('settings.messaging.copyFailed')}</p>}
+                {copyResult && !copyResult.ok && <p className="settings-error" role="alert">{t('settings.messaging.copyFailed')}</p>}
                 {s.bot_profile_url && (
                     <div className="settings-row">
                         <LinkButton href={s.bot_profile_url}>{t('settings.messaging.openBot')}</LinkButton>

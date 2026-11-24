@@ -467,10 +467,45 @@ def test_a_timeout_the_turn_could_not_extend_does_not_offer_a_longer_one():
     assert "partial.csv" in result["error"]
 
 
-@pytest.mark.parametrize("turn", [object(), _Turn(left=600)])
-def test_a_timeout_with_turn_time_to_spare_still_offers_a_longer_one(turn):
+def test_a_timeout_with_no_turn_limit_offers_the_full_maximum():
     from gaiapy.chat_agent import _stopped_run_result
 
-    result = _stopped_run_result(turn, _TimedOutJob(), 45)
+    result = _stopped_run_result(object(), _TimedOutJob(), 45)
 
     assert f"larger timeout (max {MAX_PYTHON_TIMEOUT})" in result["error"]
+
+
+def test_a_timeout_with_turn_time_to_spare_offers_only_that_time():
+    from gaiapy.chat_agent import _stopped_run_result
+
+    result = _stopped_run_result(_Turn(left=600), _TimedOutJob(), 45)
+
+    assert "larger timeout (max 600, what this turn has left)" in result["error"]
+    assert "partial.csv" in result["error"]
+
+
+def test_a_run_the_turn_limit_stopped_says_the_limit_cut_it():
+    from gaiapy.chat_agent import _stopped_run_result
+
+    from gaia.agents.base.verification import TIME_LIMIT_CUT_RUN
+
+    result = _stopped_run_result(_Turn(left=0), _TimedOutJob(), 45)
+
+    assert TIME_LIMIT_CUT_RUN in result["error"]
+    assert "larger timeout" not in result["error"]
+
+
+def test_a_timed_out_run_is_offered_only_the_time_the_turn_has_left(agent_tools):
+    """In a 60 s turn, "pass a larger timeout (max 1800)" can't be followed."""
+    agent, tools = agent_tools
+    agent.time_limit_s = 60
+    agent._turn_started_at = time.monotonic()
+    try:
+        result = tools["run_python"]["function"](
+            code="import time; time.sleep(30)", timeout=2
+        )
+    finally:
+        agent.time_limit_s = None
+    assert result["status"] == "error"
+    assert "max 1800" not in result["error"]
+    assert "what this turn has left" in result["error"]

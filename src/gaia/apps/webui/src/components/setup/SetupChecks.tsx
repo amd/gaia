@@ -5,7 +5,7 @@ import { useState } from 'react';
 import { Check, ChevronRight, Circle, HelpCircle, Loader2, X } from 'lucide-react';
 import { useT } from '../../i18n/useT';
 import type { PreflightReport, SetupPlan, SetupRunStatus } from '../../types';
-import { formatSize, ltrIn, totalMemory } from './format';
+import { formatSize, formatWholeGb, ltrIn, totalMemory } from './format';
 
 /** `question`: waiting on the user, not on work. */
 type RowState = 'done' | 'active' | 'waiting' | 'failed' | 'question';
@@ -74,7 +74,7 @@ export function SetupChecks({ hardware, hardwareError, plan, serverRun, awaiting
         {
             id: 'disk',
             label: t('setup.checks.disk'),
-            value: hardware?.disk_free_gb != null ? t('setup.checks.diskValue', { size: ltrIn(t.locale, `${Math.round(hardware.disk_free_gb)} GB`) }) : null,
+            value: hardware?.disk_free_gb != null ? t('setup.checks.diskValue', { size: ltrIn(t.locale, formatWholeGb(hardware.disk_free_gb)) }) : null,
             state: hwState,
         },
         {

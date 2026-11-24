@@ -566,7 +566,7 @@ GAIA │ agent gaia v0.2.0 │ Gemma-4-E4B-it-GGUF
 Welcome to GAIA
 Connected to: agent gaia v0.2.0 (GAIA core 0.25.0)
 
-Try one — press its number:
+Try one: Tab to select, Enter to run
   1  Today's tech news in brief
   2  Research a topic, with sources
   3  What fills up this folder
@@ -580,11 +580,12 @@ Ask a question, or type /help for what else this can do.
 
 The first screen suggests up to four things to try, one per skill the agent
 has that works without further setup (no file, link or connected account needed
-first). Press a suggestion's number on an empty composer to send it; once you
-start typing, digits are just text. On a local model the list moves into the
-line that says the model is ready, and the numbers keep working until your
-first message. The list comes from the skills the agent reports when it
-starts, built-in ones included, so it costs no model call.
+first). With an empty composer, press Tab to select a suggestion, then Enter
+to send it. Tab cycles through the list; Esc or typing returns to the composer.
+Digits are always text. On a local model the list moves into the line that says
+the model is ready and remains selectable until your first message. The list
+comes from the skills the agent reports when it starts, built-in ones included,
+so it costs no model call.
 
 The `agent <id>` segment is always the stable id, lowercased — the same string
 `--agent <id>` takes, so you can read it straight off the header and pass it back.
@@ -773,7 +774,7 @@ mouse at all with `Ctrl+Y`, `/copy` or `/copy all`. The status bar shows the
 | `/gpu` | Give the GPU more memory so bigger models fit. Offered only on a PC with an integrated GPU |
 | `/memory` | See what the agent has stored about you — read-only, `Esc` to dismiss |
 | `/model` | Switch the flagship agent's live model. Bare `/model` lists what you can switch to |
-| `/skills` | List installed skills. `/skills add <link>` shows what a GitHub repo, skills.sh page or `.zip` holds and what each skill may do, with a security warning; `/skills add <link> confirm` adds that version (a `confirm` with no preview previews first) (`--allow-code` to include skills that ship scripts) |
+| `/skills` | List installed skills. `/skills add <link>` shows what a GitHub repo, skills.sh page or `.zip` holds and what each skill may do, with a security warning; `/skills add <link> confirm` adds that version (a `confirm` with no preview previews first) (`--allow-code` to include skills that ship scripts). In the default session, where the agent runs behind GAIA's background service, `/skills` lists the skills the chat can run and cannot add one yet: add it in the Agent UI under Settings › Skills, then type `/skills` again to see it |
 | `/research <topic>` | Research a topic: GAIA searches the web, reads the sources and writes a report that cites each page it read. `/research-report <topic>` does the same. Bare `/research` switches research mode on, so every message is researched until you type `/research` again or `/clear` (a `/<skill>` command for an installed skill still runs that skill); the header shows `research` while it is on. A message you type while GAIA is still answering steers that answer and is not researched on its own. See [Deep research](/guides/gaia#deep-research) |
 | `/provider` | Choose where chat runs — Local, Fireworks AI, or the AMD LLM Gateway — and set its key. Under Local, **Ctrl+A** adds a model from a Hugging Face link. With [Local only](/reference/cli#local-only) on, connecting a cloud provider is refused. See [AI providers](/guides/ai-providers) |
 | `/gateway` | Connect the AMD LLM Gateway and pick which of its models GAIA uses. See [LLM gateway](/guides/llm-gateway) |
@@ -791,14 +792,14 @@ mouse at all with `Ctrl+Y`, `/copy` or `/copy all`. The status bar shows the
 | `/full-access always` | Keep it on for every future session (writes `full_access` to `~/.gaia/config.json`) |
 | `/full-access never` | Stop it coming back on future launches |
 | `/image` | Show the model, size and steps GAIA creates images with, and the image models this Lemonade has, each with its sizes. `/image model Z-Image-Turbo`, `/image size 1280x720` (or `auto`) and `/image steps 12` (or `auto`) change them; saved to `~/.gaia/config.json`, shared with the [Agent UI](/guides/agent-ui#settings). A created image prints as a link; `/image open` opens the latest in the PC's image viewer. Flagship only |
-| `/read-aloud` | Read the last reply aloud through Lemonade's voice model, played by the PC's own player. Run it again, or `/read-aloud stop`, to stop. Works while the agent is still answering. To turn a whole document into an MP3, type its path and ask ([Dictate a Document](/guides/dictation)); the audio card appears here and `Ctrl+F` plays it |
-| `/voice` | Show the read-aloud voice, speed and auto-read, and list the voices (American or British English, female or male). `/voice bm_george` picks one, `/voice speed 125` sets the speed in percent (50–200), `/voice auto on` reads each finished reply. Saved to `~/.gaia/config.json`, shared with the [Agent UI](/guides/agent-ui/chat#read-aloud) |
+| `/read-aloud` | Read the last reply aloud through Lemonade's voice model, played by the PC's own player. Run it again, or `/read-aloud stop`, to stop. Works while the agent is still answering. To turn a whole document into an MP3, type its path and ask ([Dictate a Document](/guides/dictation)); the audio card appears here and `Ctrl+F` plays it. Not offered on macOS yet: it says why instead of reading |
+| `/voice` | Show the read-aloud voice, speed and auto-read, and list the voices (American or British English, female or male). `/voice bm_george` picks one, `/voice speed 125` sets the speed in percent (50–200), `/voice auto on` reads each finished reply (refused on macOS, where read aloud isn't offered yet). Saved to `~/.gaia/config.json`, shared with the [Agent UI](/guides/agent-ui/chat#read-aloud) |
 | `/cost` | What this session has spent — time, steps, tool calls, tokens, dollars |
 | `/context` | How full the model's context is, split into instructions, tool definitions, conversation, files and pages, and other tool calls and results |
 | `/cost help` | Where the rates come from, and how to set your own |
 | `/copy` | Pick any message with `↑` / `↓` and copy it with `Enter` (`Esc` cancels) |
 | `/copy all` | Copy the whole conversation as markdown |
-| `/agent` | Show the two programs that can answer as GAIA and which one is running. `/agent gaiapy` or `/agent gaiacpp` saves that choice and switches to it — see [Which agent program answers](#which-agent-program-answers) |
+| `/agent` | Show the two programs that can answer as GAIA and which one is running. `/agent gaiapy` or `/agent gaiacpp` saves that choice and switches to it, offering to download `gaiacpp` (Beta) first when it isn't on this PC — see [Which agent program answers](#which-agent-program-answers) |
 | `/agents` | List agents installed on this machine and switch to one, without quitting |
 | `/update` | Check for a newer GAIA. `/update now` installs the newest, `/update v0.25.0` installs and pins that exact one, `/update back` returns to the version before the last update, `/update auto on` installs new releases when you quit (off by default), `/update rc on` offers release candidates too. See [Updating GAIA](/guides/install#updating-gaia) |
 | `/sessions` | Reopen a past session — see [Reopening a session](#reopening-a-session) |
@@ -858,7 +859,9 @@ open `/help` first:
 Installed skills follow the commands, one `/<skill-name>` row each; when the list is
 taller than the window it scrolls to keep the selection in view. Picking a skill row
 runs it with no request, and the agent asks what it needs; to give the request up
-front, type the name, a space, then the request.
+front, type the name, a space, then the request. The rows are the skills the agent
+itself reports, built-in ones included, on a local or a cloud model alike; `/skills`
+reads the list again.
 
 Keep typing to narrow the list (`/mo` above narrows to `/model`), `↑`/`↓` to move the
 selection, `Enter` to run it, `Esc` to close the palette without touching the composer
@@ -971,7 +974,7 @@ giving up on something you never saw.
 |---|---|
 | `ask` (default) | Every shell command except plain reads inside the allowed folders, every Python run and file write |
 | `accept edits` | Shell commands and Python still ask. File edits inside the folder you started GAIA in run without asking. Hidden files and folders (`.git/`, `.bashrc`, `.github/`), folders on your `PATH`, and a file that would stand in for a real program on Windows (`git.bat`) still ask. Started from your home folder or a drive root, nothing is auto-accepted |
-| `full access` | Nothing — see below |
+| `full access` | Nothing — see below. Deletes run only here: in the other modes they are refused, not asked |
 
 Full access is never switched on by a stray keypress. The first time `Shift+Tab`
 reaches it in a session, GAIA explains what it does and stays in `ask`; type
@@ -1092,7 +1095,9 @@ error — the agent is told you said no to that one action, doesn't do the same
 thing through another tool, and carries on with the task by other means. A no
 covers the command on what it named (`pip install pandas`, not every `pip
 install`), and a declined script's own new output files can still be produced
-another way. When nobody can answer — a
+another way. The exact call you denied isn't asked about again in that chat,
+even one that changes nothing such as `echo`, until you ask for it again or
+`/clear` the conversation. When nobody can answer — a
 scheduled or background run, or a prompt that expires — the command doesn't run.
 A command GAIA's own checks don't cover offers no `a`: it shows the exact line
 and a risk line, and runs once if you say yes (see
@@ -1149,14 +1154,16 @@ the Python one. The terminal installers and the one-line installers put `gaiacpp
 to `gaia-cli` on Windows x64, Linux x64 and Apple silicon, alongside `gaia-agent`. The
 terminal UI runs `gaia-agent` until you choose `gaiacpp`, the same default as the Agent UI,
 so `--use-claude` and `--resume` keep working. Once chosen, `gaiacpp` is looked for in `~/.gaia/bin`
-(where the Agent UI downloads it), next to `gaia-cli`, on your PATH, then in
-`~/.gaia/agents/gaia`. The header says which program is answering:
+(where GAIA downloads it), next to `gaia-cli`, on your PATH, then in
+`~/.gaia/agents/gaia`. With `GAIA_HOME` set, both `~/.gaia` folders are looked for
+under it instead. The header says which program is answering, and that `gaiacpp`
+is a Beta:
 
 ```
- GAIA  │ agent gaia v0.25.4 (gaiacpp) │ Gemma-4-E4B-it-GGUF
+ GAIA  │ agent gaia v0.25.4 (gaiacpp · Beta) │ Gemma-4-E4B-it-GGUF
 ```
 
-Without `(gaiacpp)` the Python agent is answering, as it does on an Intel Mac,
+Without `(gaiacpp · Beta)` the Python agent is answering, as it does on an Intel Mac,
 Windows on Arm or Linux on Arm, where no `gaiacpp` is built.
 
 ### Choosing one
@@ -1179,11 +1186,38 @@ readiness check, or the program does not start, the session stays where it was
 and the saved choice is not changed. Typing `/agent` and a space turns the `/`
 palette into the same two-way picker.
 
-A program that is not installed is listed as unavailable with the places GAIA
-looked for it, and switching to it is refused with nothing changed. `/agent
-gaiacpp` is also refused in a session started with `--use-claude` and in one
+### Getting gaiacpp
+
+If `gaiacpp` is not on this PC, `/agent gaiacpp` offers to download it. GAIA
+checks whether this release has one for your PC and says how large it is; press
+Enter to download it or Esc to leave things as they are. Typing something else
+does not answer the offer. The download shows its progress on one line (Esc
+cancels it), is checked against the release's checksums, and is installed in
+`~/.gaia/bin` only if it passes. Then the switch carries on as above. It is the
+same download the [Agent UI](/guides/agent-ui/settings) does in Settings ›
+Agent & model.
+
+When this GAIA release has no `gaiacpp` for your PC, or the release can't be
+reached, `/agent gaiacpp` says which and changes nothing. A `gaiacpp` that fails
+its checksum check is offered as a fresh download the same way.
+
+`/agent gaiacpp` is refused in a session started with `--use-claude` and in one
 reopened with `--resume` or `/sessions`, since `gaiacpp` has no Claude provider
 and keeps no sessions yet.
+
+### When the saved gaiacpp can't start
+
+If `gaiacpp` is your saved choice and it is missing or fails its check, GAIA
+opens on a short screen instead of stopping with an error. It says why and
+waits for you to pick:
+
+- **Download gaiacpp again**, with a progress bar, then GAIA starts on it
+- **Use the Python agent**, which saves `gaiapy` as your choice (`/agent gaiacpp` switches back)
+- **Quit**
+
+GAIA never moves you to the Python agent by itself. `?` shows the full error,
+including where it looked. When the release has no `gaiacpp` to download, the
+first row says so and can't be picked.
 
 For one launch, set `GAIA_TUI_AGENT` to `gaiacpp`, `gaiapy` (or the program's
 own name, `gaia-agent`), or the path of either, or pass the same value to
@@ -1203,15 +1237,17 @@ Which program a launch runs is decided in this order:
 3. The saved choice, `flagship_agent` (`gaiapy` or `gaiacpp`)
 4. With none of those, `gaia-agent`, even when `gaiacpp` is installed
 
-If the one named by any of the first three is not installed, `gaia-cli` stops
-and lists where it looked; it does not start the other one.
+If the one named by `--agent-program` or `GAIA_TUI_AGENT` is not installed,
+`gaia-cli` stops and lists where it looked; it does not start the other one. A
+saved `gaiacpp` that is not installed opens the screen described in
+[When the saved gaiacpp can't start](#when-the-saved-gaiacpp-cant-start).
 
 A `gaiacpp` the Agent UI downloaded has a record of its checksum next to it
 (`gaiacpp.install.json`), and the terminal UI checks the file against it before
-every run. If the file no longer matches, or the record is damaged, `gaia-cli`
-stops and names the file: download `gaiacpp` again in the Agent UI (Settings ›
-Agent & model), or switch to the Python agent. It does not run another copy or
-the other program instead. A `flagship_agent`
+every run. If the file no longer matches, or the record is damaged, GAIA does
+not run it: a saved choice opens the same screen, offering the download again or
+the Python agent, and a flag or variable stops the launch and names the file. It
+does not run another copy or the other program instead. A `flagship_agent`
 value other than `gaiapy` or `gaiacpp` also stops the launch, naming the file
 and the key.
 

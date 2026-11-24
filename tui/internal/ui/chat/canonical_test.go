@@ -593,3 +593,30 @@ func TestCanonicalSkillListFillsThePalette(t *testing.T) {
 		t.Errorf("a removed skill is still offered: %+v", got)
 	}
 }
+
+func TestCanonicalRetractedAnswerIsNotKeptAsANote(t *testing.T) {
+	m, _ := newTestModel(t)
+	m.streaming = true
+	draft := "The command was declined, so nothing ran."
+	checked := "junk2.txt is still there: the command was declined."
+
+	m = feed(t, m,
+		event.CanonicalTokenEvent{Type: "token", Delta: draft},
+		event.CanonicalStatusEvent{
+			Type: "status", Message: "Checking the answer",
+			Phase: "answer_check", RetractsAnswer: true,
+		},
+		event.CanonicalToolCallEvent{Type: "tool_call", Tool: "read_file", Args: []byte(`{"file_path":"junk2.txt"}`)},
+		event.CanonicalToolResultEvent{Type: "tool_result", Tool: "read_file"},
+		event.CanonicalTokenEvent{Type: "token", Delta: checked},
+	)
+
+	if m.buffer != checked {
+		t.Errorf("streamed answer = %q, want only the checked one", m.buffer)
+	}
+	for _, item := range m.activity {
+		if item.Kind == "note" && strings.Contains(item.Content, "declined, so nothing ran") {
+			t.Errorf("the taken-back draft was kept as a work-log note: %q", item.Content)
+		}
+	}
+}

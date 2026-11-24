@@ -386,15 +386,30 @@
 }
 
 .sb-row-queue {
-    flex-shrink: 0;
-    margin-inline-start: auto;
+    display: flex;
+    flex-wrap: wrap;
+    column-gap: 8px;
+    min-width: 0;
     color: var(--text-muted);
     font-size: 11.5px;
-    white-space: nowrap;
+}
+
+.sb-row-note {
+    max-width: 100%;
+    overflow-wrap: anywhere;
 }
 
 .sb-row-queue.is-failed {
     color: var(--danger);
+}
+
+/* The gloss's own muting drops the already-muted note below 4.5:1 on a selected row. */
+.sb-row-queue .i18n-gloss.i18n-gloss {
+    color: var(--text-secondary);
+}
+
+.sb-row-queue.is-failed .i18n-gloss.i18n-gloss {
+    color: inherit;
 }
 
 .sb-group.is-needs-you .sb-group-label {

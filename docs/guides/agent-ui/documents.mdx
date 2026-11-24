@@ -39,6 +39,13 @@ into the library and is attached to the chat you asked in, the same as one you
 add from the library. A file outside the folders the library reads from goes in
 as a copy, and the chat says so: edits to the original don't reach the copy.
 
+A document you attach in the message box (**+**, or dropped on it) goes into the
+library too, attached to that chat, once you send the message. It shows in the
+bar above the chat and in the session panel's **Documents**. Remove it there
+(or in the library) and the chat can no longer read it; ask about it and GAIA
+says to attach it again. Images and recordings you attach are read with the
+message but aren't listed.
+
 A chat searches at most 100 documents, or 10,000 passages (about nine long
 books), at once. Attach more and the bar above the chat says so, naming the
 limit the chat reached: the document count, or the passages a few long
@@ -92,11 +99,19 @@ In a chat, the folder chip beside the model names the folder GAIA works in; clic
 
 Each chat has a panel on the right that keeps the important facts in view:
 what the latest answer used, where the chat runs and what it may touch, what
-fills the context, what the chat produced, and what it changed. Show or hide it
-with the panel button at the right of the chat's title bar. Drag its left edge
-to resize it (or focus the edge and use the arrow keys); the width, whether it
-is open, and which sections are expanded are remembered. On windows narrower
+fills the context, what the chat produced, and what it changed. It starts
+closed, so a new chat gets the full width. Show or hide it with the panel
+button at the right of the chat's title bar. Drag its left edge to resize it
+(or focus the edge and use the arrow keys); the width, whether you opened or
+closed it, and which sections are expanded are remembered. On windows narrower
 than about 1,100 px it opens on top of the chat instead, and Escape closes it.
+
+Until you have closed it yourself, the panel opens on its own when an answer
+in the chat you are looking at creates or changes the chat's first file, so you
+can see it under **Outputs** and **Changes**. Opening a chat that already made
+files leaves it closed, a narrow window never gets it on top of the chat, and
+the cursor stays in the message box. Once you close it, it stays closed until
+you open it again.
 
 The panel reads when it opens, when you expand a section, and when an answer
 finishes. It never checks on a timer, and a closed panel reads nothing.
@@ -116,7 +131,7 @@ panel is open eases in, so you can see what is new:
 | The chat… | Chip | What the panel adds |
 |---|---|---|
 | only talks | **Chat** | Nothing: just where it runs and what it may touch |
-| changed files, loaded the coding skill, or ran a developer tool such as `git` or `npm` | **Coding** | Once it has changed files: the repository and branch with the uncommitted count, and **Changes** moves up under Environment. Before that, the chip alone |
+| changed code or project files, loaded the coding skill, or ran a developer tool such as `git` or `npm` | **Coding** | Once it has changed files: the repository and branch with the uncommitted count, and **Changes** moves up under Environment. Before that, the chip alone |
 | ran shell commands | **Commands** | A **Commands** section: each command newest first, marked as run, failed, stopped, running or not run, with the failures counted; a command takes you to the turn that ran it |
 | holds documents | **Documents** | A **Documents** section: each file, whether it is still being indexed or failed, how many passages it was split into, and how many the latest answer used |
 | is run by a schedule | **Scheduled** | A **Schedule** section: when it runs, the next run, the run count, the last failure, and **Pause** and **Run now** |

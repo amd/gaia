@@ -16,7 +16,9 @@ import {
 } from '../stores/notificationStore';
 import type { GaiaNotification } from '../types/agent';
 import { isEscapeClaimed } from '../hooks/useEscapeToClose';
-import { CalendarApproval, CALENDAR_WRITE_TOOLS, unseen, visibleText } from './CalendarApproval';
+import {
+    CalendarApproval, CALENDAR_WRITE_TOOLS, unseen, unseenCommand, unseenStrict, visibleCommand, visibleStrict, visibleText,
+} from './CalendarApproval';
 import { cmdReading, decodedPowerShell } from './shownText';
 import { pluralKey, type MessageKey } from '../i18n/registry';
 import { useT } from '../i18n/useT';
@@ -25,13 +27,58 @@ import { ChangePreview, fileChange } from './PermissionChangePreview';
 import './PermissionPrompt.css';
 
 /** One-line description of a tool call, e.g. `run_shell_command · git status`. */
-function summarize(n: GaiaNotification): string {
+function summarize(n: GaiaNotification): { key: string; text: string } {
     const args = n.toolArgs ?? {};
     // _site: the site a browser-pane read would show the model (SITE_ARG in tool_grants.py).
-    const primary = ['command', 'file_path', 'path', 'url', '_site', 'query', 'name']
-        .map((k) => args[k])
-        .find((v) => typeof v === 'string' && v.trim());
-    return typeof primary === 'string' ? primary : '';
+    const key = ['command', 'file_path', 'path', 'url', '_site', 'query', 'name']
+        .find((k) => typeof args[k] === 'string' && (args[k] as string).trim());
+    return key ? { key, text: args[key] as string } : { key: '', text: '' };
+}
+
+/** A command keeps its layout, a search query reads as prose, and anything else is a name. */
+function shownField(key: string, text: string): { shown: string; coded: boolean } {
+    if (COMMAND_ARG.test(key)) return { shown: visibleCommand(text), coded: unseenCommand(text) };
+    if (key === 'query') return { shown: visibleText(text, true), coded: unseen(text) };
+    return { shown: visibleStrict(text), coded: unseenStrict(text) };
+}
+
+/** Keys that hold a command, read with the command rule wherever they show. */
+const COMMAND_ARG = /^(command|cmd|argv)$/;
+
+/**
+ * Keys read as a name or a command: `summarize`'s list less `query` (prose), plus any key
+ * shaped like a path, folder, file, URL, name, id or move end, so a tool's `output_path`
+ * or an MCP server's `destination` gets the name rule without being listed by hand.
+ */
+const NAME_LIKE_ARG = new RegExp(
+    '^(command|cmd|argv|_site|to|from|href)$'
+    + '|(^|_)(files?|urls?|uris?|ids?|guids?|uuids?|cwds?|src|dest|source|destination|target|location|branch|repo)$'
+    + '|(paths?|dirs?|director(y|ies)|folders?|names?)(_hint)?$',
+);
+
+/** Whether a key, snake_case or camelCase (`baseURI`, `HTTPUrl`, `path2`), names a thing rather than holding prose. */
+function nameLikeArg(key: string): boolean {
+    const snake = key
+        .replace(/([a-z0-9])([A-Z])/g, '$1_$2')
+        .replace(/([A-Z])([A-Z][a-z])/g, '$1_$2')
+        .toLowerCase()
+        .replace(/\d+$/, '');
+    return NAME_LIKE_ARG.test(snake);
+}
+
+/**
+ * Argument values as the main field shows them: each name-like string, alone or in a
+ * list, marked with that field's rule, so the expanded view reads like the card above it.
+ * The rest — code, prose, the approved-exact text — stay as written for the prose pass.
+ */
+function shownArgs(args: Record<string, unknown>): Record<string, unknown> {
+    const shown = (key: string, value: unknown): unknown => {
+        if (typeof value === 'string') return nameLikeArg(key) ? shownField(key, value).shown : value;
+        if (Array.isArray(value)) return value.map((item) => shown(key, item));
+        if (value && typeof value === 'object') return shownArgs(value as Record<string, unknown>);
+        return value;
+    };
+    return Object.fromEntries(Object.entries(args).map(([key, value]) => [key, shown(key, value)]));
 }
 
 /** Tools whose relayed summary is a command and its risk note (`COMMAND_SUMMARY_TOOLS` in sse_translation.py). */
@@ -247,12 +294,13 @@ function PromptCard({ notification }: { notification: GaiaNotification }) {
     const scope = freshConsent ? undefined : notification.alwaysScope;
     // Shell scopes are already the command itself, so only file and skill grants carry a label.
     // It names a file or skill the model chose, so its hidden characters show as codes.
-    const markedScope = notification.alwaysScope && visibleText(notification.alwaysScope, false);
+    const markedScope = notification.alwaysScope && visibleStrict(notification.alwaysScope);
     const scopeText = alwaysScopeText({ ...notification, alwaysScope: markedScope }, t)
-        ?? visibleText(notification.alwaysLabel ?? scope ?? '', false);
+        ?? visibleStrict(notification.alwaysLabel ?? scope ?? '');
     const repeats = useNotificationStore((s) => repeatedAllowCount(s.notifications, notification));
     const suggestAlways = !!scope && repeats > 0;
-    const detail = summarize(notification);
+    const field = summarize(notification);
+    const detail = field.text;
     const args = notification.toolArgs ?? {};
     const hasArgs = Object.keys(args).length > 0;
     // A call GAIA's own checks don't cover is approved on its exact text, once:
@@ -278,13 +326,14 @@ function PromptCard({ notification }: { notification: GaiaNotification }) {
     const mail = exactText ? splitMailHeader(exactText) : null;
     const isPath = notification.tool === PATH_ACCESS_TOOL;
     // Characters that don't show are shown as [U+XXXX]: the card is approved as it reads.
-    const { heading, question } = permissionPromptText(notification, t, (s) => markLtr(visibleText(s, true)));
-    const shownDetail = visibleText(detail, true);
+    const { heading, question } = permissionPromptText(notification, t, (s) => markLtr(visibleStrict(s)));
+    const { shown: shownDetail, coded: detailCoded } = shownField(field.key, detail);
     const command = typeof args.command === 'string' ? args.command : relayed?.command ?? '';
     // What the command runs when its own text hides it: base64 PowerShell, cmd's ^ escapes.
     const decoded = command ? decodedPowerShell(command) : '';
     const reading = command.includes('^') ? cmdReading(command) : '';
-    const hidden = [detail, code, command, decoded, args.path, folder, relayed?.folder, relayed?.extras].some(unseen);
+    const hidden = detailCoded || [code, relayed?.extras].some(unseen) || [command, decoded].some(unseenCommand)
+        || [args.path, folder, relayed?.folder].some(unseenStrict);
 
     const calendar = CALENDAR_WRITE_TOOLS.has(notification.tool ?? '');
 
@@ -344,7 +393,7 @@ function PromptCard({ notification }: { notification: GaiaNotification }) {
                     </h2>
                     {detail && riskNote && <pre dir="ltr" className="perm-card-pre perm-card-exact">{shownDetail}</pre>}
                     {detail && !riskNote && <p className="perm-card-detail"><code dir="ltr">{shownDetail}</code></p>}
-                    {folder && <p className="perm-card-detail">{t.bare('prompt.in')} <code dir="ltr">{visibleText(folder, false)}</code></p>}
+                    {folder && <p className="perm-card-detail">{t.bare('prompt.in')} <code dir="ltr">{visibleStrict(folder)}</code></p>}
                     {riskNote && <p className="perm-card-risk" role="note"><bdi>{riskNote}</bdi></p>}
                     {code && <CodeBlock code={visibleText(code, true)} />}
                     {script?.text != null && !script.text.trim() && (
@@ -364,13 +413,13 @@ function PromptCard({ notification }: { notification: GaiaNotification }) {
                     {mail?.before && <pre dir="ltr" className="perm-card-pre perm-card-exact">{mail.before}</pre>}
                     {mail && <MailFacts header={mail} />}
                     {exactText && <pre dir="ltr" className="perm-card-pre perm-card-exact" data-testid="perm-exact-text">{mail ? mail.body : exactText}</pre>}
-                    {relayed && <pre dir="ltr" className="perm-card-pre perm-card-exact">{visibleText(relayed.command, true)}</pre>}
+                    {relayed && <pre dir="ltr" className="perm-card-pre perm-card-exact">{visibleCommand(relayed.command)}</pre>}
                     {decoded && <p className="perm-card-detail">{t('prompt.decodedCommand')}</p>}
-                    {decoded && <pre dir="ltr" className="perm-card-pre perm-card-exact" data-testid="perm-decoded">{visibleText(decoded, true)}</pre>}
+                    {decoded && <pre dir="ltr" className="perm-card-pre perm-card-exact" data-testid="perm-decoded">{visibleCommand(decoded)}</pre>}
                     {reading && reading !== command && <p className="perm-card-detail">{t('prompt.cmdReading')}</p>}
-                    {reading && reading !== command && <pre dir="ltr" className="perm-card-pre perm-card-exact" data-testid="perm-cmd-reading">{visibleText(reading, true)}</pre>}
+                    {reading && reading !== command && <pre dir="ltr" className="perm-card-pre perm-card-exact" data-testid="perm-cmd-reading">{visibleCommand(reading)}</pre>}
                     {hidden && <p className="perm-card-risk" role="note" data-testid="perm-hidden-note"><bdi>{t('prompt.hiddenChars')}</bdi></p>}
-                    {relayed?.folder && <p className="perm-card-detail">{t.bare('prompt.in')} <code dir="ltr">{visibleText(relayed.folder, false)}</code></p>}
+                    {relayed?.folder && <p className="perm-card-detail">{t.bare('prompt.in')} <code dir="ltr">{visibleStrict(relayed.folder)}</code></p>}
                     {relayed?.extras && <p className="perm-card-detail"><bdi>{visibleText(relayed.extras, false)}</bdi></p>}
                     {relayed?.note && <p className="perm-card-risk" role="note"><bdi>{relayed.note}</bdi></p>}
                     {calendar && hasArgs && <CalendarApproval tool={notification.tool!} args={args} />}
@@ -394,7 +443,7 @@ function PromptCard({ notification }: { notification: GaiaNotification }) {
                         <ChevronRight size={13} className={showArgs ? 'is-open' : ''} aria-hidden="true" />
                         {t(fileChange(args) ? 'prompt.technicalDetails' : 'prompt.details')}
                     </button>
-                    {showArgs && <pre dir="ltr" className="perm-card-pre">{visibleText(JSON.stringify(detailArgs, null, 2), true)}</pre>}
+                    {showArgs && <pre dir="ltr" className="perm-card-pre">{visibleText(JSON.stringify(shownArgs(detailArgs), null, 2), true)}</pre>}
                 </div>
             )}
             {suggestAlways && !expired && (
@@ -413,7 +462,7 @@ function PromptCard({ notification }: { notification: GaiaNotification }) {
                     {scope && (
                         <button
                             type="button"
-                            className={`perm-btn${suggestAlways ? ' is-suggested' : ''}`}
+                            className={`perm-btn is-lasting${suggestAlways ? ' is-suggested' : ''}`}
                             onClick={() => answer('always')}
                             disabled={busy}
                             title={scopeText}

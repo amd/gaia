@@ -62,9 +62,16 @@
 
 /* A narrow row gives way in this order before the model name is cut: the Research
    label, the day's spend, then the chat's spend, then the context bar (its % stays),
-   then the folder's name (its icon stays). */
+   then the folder's name (its icon stays). The Fast and light chip's label fades
+   first of all, then goes, then the chip; Settings › Agent & model still says it. */
 @container composer-row (max-width: 600px) {
     .spend-meter-today { display: none; }
+    .composer-chip-agent .composer-chip-label { display: none; }
+    .composer-chip.composer-chip-agent { min-width: 0; }
+}
+
+@container composer-row (max-width: 480px) {
+    .composer-chip.composer-chip-agent { display: none; }
 }
 
 @container composer-row (max-width: 580px) {
@@ -131,14 +138,14 @@
     width: 32px;
     height: 32px;
     border-radius: var(--radius-full);
-    background: var(--accent-fill);
-    color: var(--accent-fill-text);
+    background: var(--action-fill);
+    color: var(--action-fill-text);
     flex-shrink: 0;
     transition: background var(--duration-fast) var(--ease), transform var(--duration) var(--ease-spring);
 }
 
 .composer-send:hover:not(:disabled) {
-    background: var(--accent-fill-hover);
+    background: var(--action-fill-hover);
     transform: translateY(-1px);
 }
 
@@ -262,7 +269,7 @@
 }
 
 .composer-attachment-state {
-    color: var(--text-muted);
+    color: var(--text-secondary);
     white-space: nowrap;
 }
 
@@ -335,6 +342,16 @@
     text-overflow: clip;
     animation: fade-cut-inline both;
     animation-timeline: scroll(self inline);
+}
+
+/* Gives up its label's width before the model name does, but never fades to a speck. */
+.composer-chip-agent {
+    flex-shrink: 100;
+    min-width: 74px;
+}
+
+.composer-chip-agent .composer-chip-label {
+    min-width: 40px;
 }
 
 /* A long memory-switch label is cut before it squeezes the model name; its eye icon carries the state. */

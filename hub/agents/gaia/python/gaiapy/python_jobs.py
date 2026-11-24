@@ -1084,10 +1084,11 @@ def stopped_job_result(
     *advice* replaces the "pass a larger timeout" sentence on a timeout.
     """
     if job.stopped == "timeout":
-        advice = advice or (
-            "If the job legitimately needs longer, pass a larger timeout "
-            f"(max {MAX_PYTHON_TIMEOUT}), or make it do less per run."
-        )
+        if advice is None:
+            advice = (
+                "If the job legitimately needs longer, pass a larger timeout "
+                f"(max {MAX_PYTHON_TIMEOUT}), or make it do less per run."
+            )
         error = (
             f"Timed out after {timeout}s; the script and every process it "
             f"started were stopped. {advice}"

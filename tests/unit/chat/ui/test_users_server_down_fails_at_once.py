@@ -123,3 +123,31 @@ async def test_a_streamed_turn_ends_at_once_with_the_server_named(monkeypatch):
     assert "briefly busy" not in said
     # Nothing was built or probed on the way.
     assert built == []
+
+
+@pytest.mark.asyncio
+async def test_a_non_streamed_turn_ends_at_once_with_the_same_words(monkeypatch):
+    from gaia.ui.database import ChatDatabase
+    from gaia.ui.models import ChatRequest
+
+    monkeypatch.setattr(helpers, "_stopped_users_server", lambda: "127.0.0.1:59999")
+    monkeypatch.setattr(helpers, "_agent_type_unknown", lambda *a: False)
+    waited, built = [], []
+    monkeypatch.setattr(helpers, "wait_for_warm_up", lambda **k: waited.append(k))
+    monkeypatch.setattr(
+        helpers, "_get_cached_agent", lambda *a, **k: built.append(a) or None
+    )
+    db = ChatDatabase(":memory:")
+    turn_box: dict = {}
+    try:
+        session = db.create_session(model="M-GGUF", agent_type="chat")
+        request = ChatRequest(session_id=session["id"], message="hi", stream=False)
+        said = await helpers._get_chat_response(db, session, request, turn_box=turn_box)
+    finally:
+        db.close()
+
+    expected = str(LemonadeServerDownError("127.0.0.1:59999"))
+    assert said.split("\n\n")[0] == helpers._agent_ui_wording(expected)
+    assert "briefly busy" not in said
+    assert turn_box["failed"] is True
+    assert waited == [] and built == []

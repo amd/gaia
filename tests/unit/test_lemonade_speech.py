@@ -26,6 +26,7 @@ from gaia.audio.lemonade_tts import (
     TTS_SAMPLE_RATE,
     LemonadeTTSClient,
     LemonadeTTSError,
+    SpeechUnavailableError,
     mp3_frames,
 )
 
@@ -407,6 +408,108 @@ class TestTTSRequestShape:
             client.synthesize_file(["One."], tmp_path / "a.ogg", audio_format="ogg")
         with pytest.raises(ValueError, match="must not be empty"):
             client.synthesize_file(["  "], tmp_path / "a.wav")
+
+
+#: 30 words: at most 3 words a second, at least 10 s of speech.
+THIRTY_WORDS = (
+    "The board approved the new berth. Work starts in spring and ends before "
+    "winter. Traffic rose twelve percent to four thousand three hundred ten "
+    "vessels, the busiest year on record."
+)
+
+
+class TestClippedSpeech:
+    """A speech runtime that returns half a second for any text is refused."""
+
+    def test_the_fixture_is_thirty_words(self):
+        assert len(THIRTY_WORDS.split()) == 30
+
+    def test_half_a_second_for_thirty_words_is_refused(self, monkeypatch):
+        Wire(monkeypatch, [pcm_response(np.zeros(int(0.48 * TTS_SAMPLE_RATE)))])
+        with pytest.raises(LemonadeTTSError) as caught:
+            LemonadeTTSClient(base_url=BASE).synthesize(THIRTY_WORDS)
+        said = str(caught.value)
+        assert "returned 0.5 s of audio for 30 words" in said
+        assert "at least 10 s" in said
+        assert "update Lemonade Server" in said
+
+    def test_a_clipped_wav_piece_leaves_no_file(self, monkeypatch, tmp_path):
+        Wire(monkeypatch, [pcm_response(np.zeros(int(0.48 * TTS_SAMPLE_RATE)))])
+        out = tmp_path / "report.wav"
+        with pytest.raises(LemonadeTTSError, match="cut off"):
+            LemonadeTTSClient(base_url=BASE).synthesize_file([THIRTY_WORDS], out)
+        assert not out.exists()
+
+    def test_a_clipped_mp3_piece_leaves_no_file(self, monkeypatch, tmp_path):
+        # 20 MPEG-2 frames of 576 samples at 24 kHz: 0.48 s.
+        Wire(monkeypatch, [mp3_response(mp3_bytes(20))])
+        out = tmp_path / "report.mp3"
+        with pytest.raises(LemonadeTTSError, match="0.5 s of audio for 30 words"):
+            LemonadeTTSClient(base_url=BASE).synthesize_file(
+                [THIRTY_WORDS], out, audio_format="mp3"
+            )
+        assert not out.exists()
+
+    def test_a_later_clipped_piece_removes_the_whole_file(self, monkeypatch, tmp_path):
+        Wire(
+            monkeypatch,
+            [
+                pcm_response(np.zeros(12 * TTS_SAMPLE_RATE)),
+                pcm_response(np.zeros(int(0.48 * TTS_SAMPLE_RATE))),
+            ],
+        )
+        out = tmp_path / "report.wav"
+        with pytest.raises(LemonadeTTSError, match="cut off"):
+            LemonadeTTSClient(base_url=BASE).synthesize_file(
+                [THIRTY_WORDS, THIRTY_WORDS], out
+            )
+        assert not out.exists()
+
+    def test_speech_of_a_normal_length_is_saved(self, monkeypatch, tmp_path):
+        Wire(monkeypatch, [pcm_response(np.zeros(12 * TTS_SAMPLE_RATE))])
+        out = tmp_path / "report.wav"
+        seconds = LemonadeTTSClient(base_url=BASE).synthesize_file([THIRTY_WORDS], out)
+        assert seconds == pytest.approx(12)
+        with wave.open(str(out)) as handle:
+            assert handle.getnframes() == 12 * TTS_SAMPLE_RATE
+
+    def test_fast_speech_is_judged_at_its_speed(self, monkeypatch):
+        # At 2x the 30 words need 5 s at most-fast, so 1.5 s is whole speech.
+        Wire(monkeypatch, [pcm_response(np.zeros(int(1.5 * TTS_SAMPLE_RATE)))])
+        samples, _ = LemonadeTTSClient(base_url=BASE).synthesize(
+            THIRTY_WORDS, speed=2.0
+        )
+        assert len(samples) == int(1.5 * TTS_SAMPLE_RATE)
+
+    def test_short_text_is_not_length_checked(self, monkeypatch):
+        Wire(monkeypatch, [pcm_response(np.zeros(100))])
+        samples, _ = LemonadeTTSClient(base_url=BASE).synthesize("GAIA is ready.")
+        assert len(samples) == 100
+
+
+class TestSpeechWithheldOnUnprovenPlatform:
+    """Where GAIA hasn't proven its voice, no speech request is ever sent."""
+
+    @pytest.fixture(autouse=True)
+    def _on_a_mac(self, monkeypatch):
+        import gaia.config
+
+        monkeypatch.setattr(gaia.config, "_current_platform", lambda: "darwin")
+
+    @pytest.mark.parametrize(
+        "call",
+        [
+            lambda c: c.synthesize(THIRTY_WORDS),
+            lambda c: c.synthesize_mp3(THIRTY_WORDS),
+            lambda c: c.check_model_available(),
+            lambda c: c.ensure_model(),
+        ],
+    )
+    def test_every_speech_call_is_refused_before_the_wire(self, monkeypatch, call):
+        wire = Wire(monkeypatch, [])
+        with pytest.raises(SpeechUnavailableError, match="aren't offered on macOS"):
+            call(LemonadeTTSClient(base_url=BASE))
+        assert wire.requests == []
 
 
 class TestEnsureModelPulled:

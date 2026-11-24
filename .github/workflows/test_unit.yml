@@ -42,9 +42,10 @@ on:
       - '.github/actions/**'
       # test_check_dependabot.py checks the real config against the tracked lockfiles.
       - '.github/dependabot.yml'
-      # C++ files the gaiacpp release, model-table and CI-coverage tests read.
+      # C++ files the gaiacpp release, model-table, hidden-text and CI-coverage tests read.
       - 'cpp/CMakeLists.txt'
       - 'cpp/agents/gaiacpp/main.cpp'
+      - 'cpp/agents/gaiacpp/stdio_server.cpp'
       - 'cpp/src/model_registry.cpp'
       - 'cpp/tests/chaos/chaos_gaiacpp.py'
       # Hub agent code, skills and component manifests that tests/unit imports or reads.
@@ -126,9 +127,10 @@ on:
       - '.github/actions/**'
       # test_check_dependabot.py checks the real config against the tracked lockfiles.
       - '.github/dependabot.yml'
-      # C++ files the gaiacpp release, model-table and CI-coverage tests read.
+      # C++ files the gaiacpp release, model-table, hidden-text and CI-coverage tests read.
       - 'cpp/CMakeLists.txt'
       - 'cpp/agents/gaiacpp/main.cpp'
+      - 'cpp/agents/gaiacpp/stdio_server.cpp'
       - 'cpp/src/model_registry.cpp'
       - 'cpp/tests/chaos/chaos_gaiacpp.py'
       # Hub agent code, skills and component manifests that tests/unit imports or reads.

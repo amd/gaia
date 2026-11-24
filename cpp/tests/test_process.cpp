@@ -11,6 +11,7 @@
 #include <string>
 #include <stdexcept>
 #include <thread>
+#include <vector>
 #ifndef _WIN32
 #include <csignal>
 #endif
@@ -292,6 +293,7 @@ TEST(ProcessRunnerTest, NoTimeoutMode) {
 #include <filesystem>
 #include <map>
 #include <thread>
+#include <vector>
 
 #ifndef _WIN32
 #include <csignal>
@@ -951,5 +953,174 @@ TEST_F(ShellSessionTest, AValueWithAQuoteIsNotReplayedIntoTheBatchScript) {
     EXPECT_EQ(result.stdout_output.find("GAIA_INJECTED"), std::string::npos) << result.stdout_output;
     EXPECT_NE(result.stderr_output.find("GAIA_QUOTED_VAR"), std::string::npos) << result.stderr_output;
     EXPECT_EQ(session.environment().count("GAIA_QUOTED_VAR"), 0u);
+}
+
+namespace {
+// A folder holding batch files named after real programs, as a cloned repository could.
+std::filesystem::path plantedFolder(const std::string& name) {
+    namespace tfs = std::filesystem;
+    const tfs::path dir = tfs::temp_directory_path() / testsupport::perProcess(name);
+    tfs::create_directories(dir);
+    for (const char* program : {"cmd.bat", "gaia-planted-probe.bat"}) {
+        std::ofstream(dir / program) << "@echo PLANTED_PROGRAM_RAN\r\n";
+    }
+    return dir;
+}
+}  // namespace
+
+// CreateProcess searches the parent's working folder for a bare name, adding only .exe, so the
+// planted program is a real cmd.exe-named executable there (a copy of hostname.exe).
+TEST(ProcessRunnerTest, RunsTheSystemCmdFromAFolderThatPlantsOne) {
+    namespace tfs = std::filesystem;
+    const auto dir = plantedFolder("gaia-planted-run");
+    tfs::copy_file(tfs::u8path(systemProgramPath("hostname.exe")), dir / "cmd.exe",
+                   tfs::copy_options::overwrite_existing);
+    const tfs::path before = tfs::current_path();
+    tfs::current_path(dir);
+
+    const auto fromParent = ProcessRunner::run("echo gaia_system_cmd_ran", 10000);
+    const auto fromChild = ProcessRunner::run("echo gaia_system_cmd_ran", 10000, dir.string());
+
+    tfs::current_path(before);
+    std::error_code ec;
+    tfs::remove_all(dir, ec);
+    for (const auto& result : {fromParent, fromChild}) {
+        EXPECT_EQ(result.exitCode, 0) << result.stderr_output;
+        EXPECT_NE(result.stdout_output.find("gaia_system_cmd_ran"), std::string::npos) << result.stdout_output;
+        EXPECT_EQ(result.stdout_output.find("PLANTED_PROGRAM_RAN"), std::string::npos) << result.stdout_output;
+    }
+}
+
+namespace {
+// Sets PATH for one test and puts the old value back after.
+class ScopedPath {
+public:
+    explicit ScopedPath(const std::wstring& value) {
+        const DWORD size = GetEnvironmentVariableW(L"PATH", nullptr, 0);
+        had_ = size != 0;
+        if (had_) {
+            old_.resize(size);
+            old_.resize(GetEnvironmentVariableW(L"PATH", old_.data(), size));
+        }
+        SetEnvironmentVariableW(L"PATH", value.c_str());
+    }
+    ~ScopedPath() { SetEnvironmentVariableW(L"PATH", had_ ? old_.c_str() : nullptr); }
+    ScopedPath(const ScopedPath&) = delete;
+    ScopedPath& operator=(const ScopedPath&) = delete;
+
+private:
+    std::wstring old_;
+    bool had_ = false;
+};
+}  // namespace
+
+TEST(FindProgramOnPathTest, SkipsEmptyDotAndRelativePathEntries) {
+    namespace tfs = std::filesystem;
+    const auto dir = plantedFolder("gaia-planted-relative");
+    const tfs::path before = tfs::current_path();
+    tfs::current_path(dir.parent_path());
+    const std::wstring leaf = dir.filename().wstring();
+    std::string found;
+    std::vector<std::string> all;
+    {
+        ScopedPath path(L";.;.\\" + leaf + L";" + leaf + L";\"" + leaf + L"\";..\\" + leaf);
+        tfs::current_path(dir);
+        found = findProgramOnPath("gaia-planted-probe");
+        tfs::current_path(dir.parent_path());
+        all = findProgramsOnPath("gaia-planted-probe");
+    }
+    tfs::current_path(before);
+    std::error_code ec;
+    tfs::remove_all(dir, ec);
+    EXPECT_EQ(found, "");
+    EXPECT_TRUE(all.empty()) << all.front();
+}
+
+TEST(FindProgramOnPathTest, FollowsPathOrderAndExtensionOrderInAbsoluteFolders) {
+    namespace tfs = std::filesystem;
+    const auto first = plantedFolder("gaia-path-first");
+    const auto second = plantedFolder("gaia-path-second");
+    std::ofstream(first / "gaia-planted-probe.cmd") << "@echo FIRST\r\n";
+    std::ofstream(second / "gaia-planted-probe.exe") << "not run";
+    std::string found;
+    std::vector<std::string> all;
+    std::string quoted;
+    {
+        ScopedPath path(first.wstring() + L";" + second.wstring());
+        found = findProgramOnPath("gaia-planted-probe");
+        all = findProgramsOnPath("gaia-planted-probe");
+    }
+    {
+        ScopedPath path(L"\"" + second.wstring() + L"\"");
+        quoted = findProgramOnPath("gaia-planted-probe");
+    }
+    std::error_code ec;
+    tfs::remove_all(first, ec);
+    tfs::remove_all(second, ec);
+    // .bat before .cmd within a folder; the first folder before the second.
+    EXPECT_EQ(found, (first / "gaia-planted-probe.bat").u8string());
+    ASSERT_EQ(all.size(), 2u);
+    EXPECT_EQ(all[1], (second / "gaia-planted-probe.exe").u8string());
+    EXPECT_EQ(quoted, (second / "gaia-planted-probe.exe").u8string());
+}
+
+TEST(FindProgramOnPathTest, RefusesNamesThatAreReallyPaths) {
+    for (const char* name : {"..\\cmd", "./cmd", "C:cmd", "\"cmd\"", "sub/cmd", ""}) {
+        EXPECT_EQ(findProgramOnPath(name), "") << name;
+    }
+}
+
+TEST(SystemProgramPathTest, IsTheSystemFolderNotSystemRoot) {
+    namespace tfs = std::filesystem;
+    wchar_t systemDir[MAX_PATH];
+    const UINT len = GetSystemDirectoryW(systemDir, MAX_PATH);
+    ASSERT_GT(len, 0u);
+    const DWORD size = GetEnvironmentVariableW(L"SystemRoot", nullptr, 0);
+    std::wstring old(size, L'\0');
+    old.resize(GetEnvironmentVariableW(L"SystemRoot", old.data(), size));
+    // A changed SystemRoot can't redirect which tar or PowerShell runs.
+    SetEnvironmentVariableW(L"SystemRoot", tfs::temp_directory_path().wstring().c_str());
+    const std::string tar = systemProgramPath("tar.exe");
+    SetEnvironmentVariableW(L"SystemRoot", size != 0 ? old.c_str() : nullptr);
+    EXPECT_EQ(tar, (tfs::path(std::wstring(systemDir, len)) / L"tar.exe").u8string());
+}
+
+TEST(FindProgramOnPathTest, FindsSystemProgramsAndNeverTheWorkingFolder) {
+    namespace tfs = std::filesystem;
+    const auto dir = plantedFolder("gaia-planted-lookup");
+    const tfs::path before = tfs::current_path();
+    tfs::current_path(dir);
+
+    const std::string cmd = findProgramOnPath("cmd");
+    const std::string probe = findProgramOnPath("gaia-planted-probe");
+    const std::string withExtension = findProgramOnPath("gaia-planted-probe.bat");
+
+    tfs::current_path(before);
+    tfs::remove_all(dir);
+    EXPECT_FALSE(cmd.empty());
+    EXPECT_EQ(tfs::u8path(cmd).filename().u8string(), "cmd.exe") << cmd;
+    EXPECT_TRUE(tfs::u8path(cmd).is_absolute()) << cmd;
+    EXPECT_EQ(probe, "");
+    EXPECT_EQ(withExtension, "");
+    EXPECT_EQ(findProgramOnPath("..\\cmd"), "");
+}
+
+// env_inspect runs without asking, and a cloned repository can carry a systeminfo.bat or bash.bat.
+TEST(BashToolsTest, EnvInspectNeverRunsProgramsPlantedInTheWorkingFolder) {
+    namespace tfs = std::filesystem;
+    const auto dir = plantedFolder("gaia-planted-env-inspect");
+    for (const char* program : {"bash.bat", "sh.bat", "systeminfo.bat", "findstr.bat", "where.bat", "git.bat"}) {
+        std::ofstream(dir / program) << "@echo PLANTED_PROGRAM_RAN\r\n";
+    }
+    const tfs::path before = tfs::current_path();
+    tfs::current_path(dir);
+
+    const nlohmann::json result = BashTools::envInspect().callback(nlohmann::json::object());
+
+    tfs::current_path(before);
+    std::error_code ec;
+    tfs::remove_all(dir, ec);
+    EXPECT_EQ(result.dump().find("PLANTED_PROGRAM_RAN"), std::string::npos) << result.dump();
+    EXPECT_NE(result.value("os", "").find("OS Name"), std::string::npos) << result.dump();
 }
 #endif

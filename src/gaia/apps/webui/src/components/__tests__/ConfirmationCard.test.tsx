@@ -2,73 +2,60 @@
 // SPDX-License-Identifier: MIT
 
 /**
- * Contract tests for `ConfirmationCard` (issue #2109, Increment 2 — stateless
- * D1: `needs_confirmation` wiring).
+ * `ConfirmationCard` — a `needs_confirmation` the chat cannot answer.
  *
- * The module under test does not exist yet:
+ * The relay only sends this card for an agent too old to wait for an answer
+ * (one that can wait gets the permission prompt instead), so the run has
+ * already ended: the card must say the step did not run and how to get the
+ * choice back, never offer an approval it cannot give.
  *
- *   - src/components/render/ConfirmationCard.tsx
- *
- * This import failure is the expected red — see docs/plans (issue #2109,
- * approved plan) for the full design. These tests pin the frozen contract:
- *
- *   - Renders the machine `action` name (code-derived truth) and the literal
- *     `summary` text, with an "approval needed" visual treatment.
- *   - The humanized label is derived from `action` alone — never by parsing
- *     `summary` — and the raw `action` string is displayed prominently and
- *     visually separated from the summary block (anti-spoof layout).
- *   - `summary` renders as plain React text nodes ONLY. It embeds
- *     attacker-influenced (email-derived) content, so it must never flow
- *     through ReactMarkdown/SafeMarkdown or any dangerouslySetInnerHTML path.
- *   - No generic "Approve"/"Confirm" button exists (V2-10 has no generic
- *     approve path — the canonical event omits args and a token).
- *   - Deny/Dismiss is local component state only — clicking it hides the
- *     card; it does not call out to any store or backend.
- *
- * Component surface: `ConfirmationCard({ data: unknown })`, matching the
- * `CardComponent` shape (`ComponentType<{ data: unknown }>`) used by every
- * other entry in `render/registry.tsx` (TableCard, KeyValueCard, ...), so it
- * can be registered under the `needs_confirmation` key without a bespoke
- * adapter.
+ *   - Names the step by its translated tool label, derived from `action` alone.
+ *   - `summary` renders as a plain text node only: it can carry outside content.
+ *   - No Approve/Allow button; Dismiss is local component state only.
  */
 
-import { describe, it, expect } from 'vitest';
+import { afterEach, describe, it, expect } from 'vitest';
 import { render, screen, fireEvent } from '@testing-library/react';
 import { ConfirmationCard } from '../render/ConfirmationCard';
+import { useChatStore } from '../../stores/chatStore';
+import { stripIsolates } from '../../i18n/registry';
 
 const basicData = {
-    action: 'send_now',
-    summary: 'Send the drafted email to alice@example.com now?',
+    action: 'write_file',
+    summary: 'Write notes.txt in /home/you/projects/gaia',
 };
 
-describe('ConfirmationCard — action + summary rendering', () => {
+afterEach(() => useChatStore.setState({ locale: 'en' }));
+
+describe('ConfirmationCard — what it says', () => {
     it('renders the literal summary text', () => {
         render(<ConfirmationCard data={basicData} />);
 
         expect(screen.getByText(basicData.summary)).toBeInTheDocument();
     });
 
-    it('renders the raw machine action name verbatim, prominently and separately from the summary', () => {
+    it('names the step by its friendly label, not the raw tool id', () => {
         const { container } = render(<ConfirmationCard data={basicData} />);
 
-        // The machine action name is code-derived truth and must appear
-        // verbatim somewhere in the card, in an element distinct from the
-        // one carrying the summary text (anti-spoof layout requirement).
-        const actionEl = container.querySelector('.render-confirmation__action');
-        expect(actionEl).not.toBeNull();
-        expect(actionEl?.textContent).toBe('send_now');
-
-        const summaryEl = container.querySelector('.render-confirmation__summary');
-        expect(summaryEl).not.toBeNull();
-        expect(summaryEl).not.toBe(actionEl);
-        expect(summaryEl?.contains(actionEl)).toBe(false);
-        expect(actionEl?.contains(summaryEl as Node)).toBe(false);
+        expect(container.querySelector('.render-confirmation__label')?.textContent).toBe('Writing file');
+        expect(container.textContent).not.toContain('write_file');
     });
 
-    it('shows an "approval needed" visual treatment', () => {
+    it('says the step did not run and that updating GAIA brings the choice back', () => {
         render(<ConfirmationCard data={basicData} />);
 
-        expect(screen.getByText(/approval needed/i)).toBeInTheDocument();
+        expect(screen.getByText('Not run')).toBeInTheDocument();
+        expect(screen.getByText(/too old to ask for it here, so nothing ran\. Update GAIA to the latest version/)).toBeInTheDocument();
+        expect(screen.queryByText(/approval needed|follow the assistant/i)).not.toBeInTheDocument();
+    });
+
+    it('speaks Arabic when the interface is in Arabic', () => {
+        useChatStore.setState({ locale: 'ar' });
+        const { container } = render(<ConfirmationCard data={basicData} />);
+        const shown = stripIsolates(container.textContent ?? '');
+
+        for (const phrase of ['لم تُنفَّذ', 'كتابة ملف', 'حدّث GAIA إلى أحدث إصدار', 'إغلاق']) expect(shown).toContain(phrase);
+        expect(screen.getByRole('button', { name: /إغلاق/ })).toBeInTheDocument();
     });
 
     it('wraps output in a .render-confirmation root, consistent with the render/ card family', () => {
@@ -78,30 +65,18 @@ describe('ConfirmationCard — action + summary rendering', () => {
     });
 });
 
-describe('ConfirmationCard — humanized label derives from action, not summary', () => {
-    it('produces a space-separated (not snake_case) label for a known-shaped action', () => {
-        render(<ConfirmationCard data={basicData} />);
-
-        // "send_now" humanized must read as words separated by whitespace,
-        // never the raw underscored token, in some label distinct from the
-        // verbatim machine-name element.
-        expect(screen.getByText(/send\s+now/i)).toBeInTheDocument();
-    });
-
+describe('ConfirmationCard — the label derives from action, not summary', () => {
     it('does not derive the label from summary content, even when summary names a different action', () => {
-        // A summary that mentions an unrelated action name must not leak
-        // into the humanized label — the label is derived from `action`
-        // alone (anti-spoof requirement).
-        render(
+        const { container } = render(
             <ConfirmationCard
                 data={{
-                    action: 'send_now',
+                    action: 'write_file',
                     summary: 'Consider archive_all_threads before doing anything else.',
                 }}
             />,
         );
 
-        expect(screen.getByText(/send\s+now/i)).toBeInTheDocument();
+        expect(container.querySelector('.render-confirmation__label')?.textContent).toBe('Writing file');
         expect(screen.queryByText(/archive\s+all\s+threads/i)).not.toBeInTheDocument();
     });
 });
@@ -112,23 +87,14 @@ describe('ConfirmationCard — unknown-action safety', () => {
         summary: 'An action GAIA has never seen before.',
     };
 
-    it('renders without throwing for an action absent from any hardcoded lookup', () => {
+    it('renders without throwing for an action absent from any label', () => {
         expect(() => render(<ConfirmationCard data={unknownData} />)).not.toThrow();
     });
 
-    it('still displays the raw action verbatim and a humanized (underscore-free) fallback label', () => {
+    it('reads an unlabelled tool as its own words, with no underscores left over', () => {
         const { container } = render(<ConfirmationCard data={unknownData} />);
 
-        const actionEl = container.querySelector('.render-confirmation__action');
-        expect(actionEl?.textContent).toBe('zzz_unregistered_tool_9000');
-
-        // A generic humanizer must not require a hardcoded per-action entry:
-        // some other element must present a readable form with no
-        // underscores left over from the raw machine name.
-        const labelEl = container.querySelector('.render-confirmation__label');
-        expect(labelEl).not.toBeNull();
-        expect(labelEl?.textContent).not.toMatch(/_/);
-        expect(labelEl?.textContent?.trim().length).toBeGreaterThan(0);
+        expect(container.querySelector('.render-confirmation__label')?.textContent).toBe('Using zzz unregistered tool 9000');
     });
 });
 
@@ -167,8 +133,8 @@ describe('ConfirmationCard — metacharacter-literal rendering (rendering-safety
     });
 });
 
-describe('ConfirmationCard — no generic approve path (V2-10)', () => {
-    it('renders no Approve/Confirm/Allow button — the canonical event has no args or token to act on', () => {
+describe('ConfirmationCard — nothing to approve', () => {
+    it('renders no Approve/Confirm/Allow button — the run has already ended', () => {
         render(<ConfirmationCard data={basicData} />);
 
         expect(screen.queryByRole('button', { name: /approve|confirm|allow/i })).not.toBeInTheDocument();
@@ -176,15 +142,15 @@ describe('ConfirmationCard — no generic approve path (V2-10)', () => {
 });
 
 describe('ConfirmationCard — dismiss behavior (local state only)', () => {
-    it('hides the card content when Deny/Dismiss is clicked, with no confirm-server round trip', () => {
+    it('hides the card content when Dismiss is clicked, with no confirm-server round trip', () => {
         render(<ConfirmationCard data={basicData} />);
 
         expect(screen.getByText(basicData.summary)).toBeInTheDocument();
 
-        const dismissBtn = screen.getByRole('button', { name: /deny|dismiss/i });
-        fireEvent.click(dismissBtn);
+        fireEvent.click(screen.getByRole('button', { name: 'Dismiss' }));
 
         expect(screen.queryByText(basicData.summary)).not.toBeInTheDocument();
+        expect(screen.getByText('Not run: Writing file')).toBeInTheDocument();
     });
 });
 
