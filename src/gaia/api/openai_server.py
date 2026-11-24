@@ -358,7 +358,11 @@ async def create_chat_completion(request: ChatCompletionRequest):
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
 
-    _prepare_agent(agent, request, history, system_text)
+    try:
+        _prepare_agent(agent, request, history, system_text)
+    except BaseException:
+        await asyncio.to_thread(_close_agent, agent)
+        raise
 
     # Handle streaming vs non-streaming
     if request.stream:
