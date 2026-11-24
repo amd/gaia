@@ -60,7 +60,7 @@ export function stubPanelApi() {
         restart_error: null,
     } as never);
     m.getTunnelStatus.mockResolvedValue({
-        active: false, url: null, token: null, startedAt: null, error: null, publicIp: null, device: null,
+        active: false, url: null, token: null, startedAt: null, error: null, device: null,
     });
     m.getPermissions.mockResolvedValue({ session_id: SID, mode: 'ask', grants: [] });
     m.getContextUsage.mockResolvedValue({ available: false, reason: 'No answer yet.' } as never);

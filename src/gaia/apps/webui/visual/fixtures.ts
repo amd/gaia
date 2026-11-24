@@ -264,7 +264,7 @@ const ROUTES: Record<string, unknown> = {
     },
     'GET /chat/permissions': { default_mode: 'ask', sessions: [] },
     [`GET /chat/permissions/${ANSWER_SESSION}`]: { session_id: ANSWER_SESSION, mode: 'ask', grants: [] },
-    'GET /tunnel/status': { active: false, url: null, token: null, startedAt: null, error: null, publicIp: null },
+    'GET /tunnel/status': { active: false, url: null, token: null, startedAt: null, error: null },
     'GET /mcp/status': { servers: [] },
     'GET /schedules': SCHEDULES,
     'GET /goals/health': { error: null },

@@ -17,7 +17,6 @@ const ACTIVE: TunnelStatus = {
     token: 'tok',
     startedAt: null,
     error: null,
-    publicIp: null,
 };
 
 const STARTING: TunnelStatus = { ...ACTIVE, active: false, url: null, token: null };

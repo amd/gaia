@@ -22,14 +22,12 @@ const toCanvas = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
 vi.mock('qrcode', () => ({ default: { toCanvas } }));
 
 const TOKEN = '6f17248d-secret-token-value';
-const PASSWORD = '203.0.113.77';
 const ACTIVE: TunnelStatus = {
     active: true,
     url: 'https://quiet-otter.ngrok.app',
     token: TOKEN,
     startedAt: null,
     error: null,
-    publicIp: PASSWORD,
 };
 
 describe('MobileAccessModal privacy', () => {
@@ -46,14 +44,13 @@ describe('MobileAccessModal privacy', () => {
         useChatStore.setState({ locale: 'en' });
     });
 
-    it('logs the tunnel host but never the token or password in the link', async () => {
+    it('logs the tunnel host but never the token in the link', async () => {
         render(<MobileAccessModal isOpen onClose={vi.fn()} />);
         await waitFor(() => expect(toCanvas).toHaveBeenCalled());
 
         const text = logged.map((args) => args.map(String).join(' ')).join('\n');
         expect(text).toContain('quiet-otter.ngrok.app');
         expect(text).not.toContain(TOKEN);
-        expect(text).not.toContain(PASSWORD);
     });
 
     it('names ngrok as a third party and says who can use the link', async () => {
@@ -68,7 +65,6 @@ describe('MobileAccessModal privacy', () => {
         render(<MobileAccessModal isOpen onClose={vi.fn()} />);
         await screen.findByText(/a third-party service/);
         expect(screen.queryByText(/password/i)).toBeNull();
-        expect(screen.queryByText(PASSWORD)).toBeNull();
     });
 
     it('shows every line of the active dialog in Arabic', async () => {

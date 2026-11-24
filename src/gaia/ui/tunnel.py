@@ -484,7 +484,6 @@ class TunnelManager:
         self._error: Optional[str] = None
         # Set with _error when the failure is a missing prerequisite.
         self._reason: Optional[str] = None
-        self._public_ip: Optional[str] = None
         self._device: Optional[dict] = None
         self._start_lock = asyncio.Lock()
         # ngrok's log lines, read as they arrive: a full pipe would stall it.
@@ -520,7 +519,6 @@ class TunnelManager:
             "installCommands": (
                 _ngrok_install_commands() if self._reason == NGROK_NOT_INSTALLED else []
             ),
-            "publicIp": self._public_ip,
             "device": self._device if self.active else None,
         }
 
@@ -592,9 +590,6 @@ class TunnelManager:
             self._error = _NGROK_AUTHTOKEN_HINT
             logger.error("ngrok authtoken not configured -- aborting tunnel start")
             return self.get_status()
-
-        # Fetch public IP (for ngrok interstitial password hint)
-        await self._fetch_public_ip()
 
         # Kill any stale ngrok processes (free tier only allows 1)
         try:
@@ -811,20 +806,6 @@ class TunnelManager:
             if cmdline[1:] == expected:
                 stale.append(proc)
         return stale
-
-    async def _fetch_public_ip(self) -> None:
-        """Fetch the server's public IP (for ngrok interstitial password)."""
-        try:
-            import httpx
-
-            async with httpx.AsyncClient(timeout=5.0) as client:
-                resp = await client.get("https://api.ipify.org")
-                if resp.status_code == 200:
-                    self._public_ip = resp.text.strip()
-                    logger.info("Public IP fetched for the tunnel password")
-        except Exception as e:
-            logger.debug("Could not fetch public IP: %s", e)
-            self._public_ip = None
 
     def _start_output_readers(self) -> None:
         with self._output_lock:
