@@ -4769,7 +4769,9 @@ def _handle_schedule(args):
         else:
             print(f"cron:       {s.cron}")
         print(f"target:     {'skill=' + s.skill if s.skill else 'prompt=' + s.prompt}")
-        print(f"sink:       {s.sink}  args={s.sink_args}")
+        from gaia.schedule.sinks import masked_sink_args
+
+        print(f"sink:       {s.sink}  args={masked_sink_args(s.sink_args)}")
         print(f"enabled:    {s.enabled}")
         from datetime import datetime as _datetime
 
