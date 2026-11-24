@@ -10430,6 +10430,29 @@ def handle_mcp_start(args):
         sys.exit(1)
 
 
+def _is_mcp_bridge_process(pid: int) -> bool:
+    """True only for a live process started by ``gaia mcp start --background``.
+
+    Raises:
+        PermissionError: the process exists but its command line is unreadable.
+    """
+    import psutil
+
+    try:
+        argv = psutil.Process(pid).cmdline()
+    except (psutil.NoSuchProcess, psutil.ZombieProcess):
+        return False
+    except psutil.AccessDenied as e:
+        raise PermissionError(
+            f"cannot read the command line of pid {pid} to confirm it is the "
+            "GAIA MCP bridge; stop it yourself and delete gaia.mcp.pid"
+        ) from e
+    # The background child is `python -m gaia.cli mcp start ...`.
+    return "gaia.cli" in argv and any(
+        a == "mcp" and b == "start" for a, b in zip(argv, argv[1:])
+    )
+
+
 def handle_mcp_stop(_args):
     """Stop the background MCP bridge server."""
     log = get_logger(__name__)
@@ -10452,27 +10475,32 @@ def handle_mcp_stop(_args):
             print(f"❌ Error reading PID file: {e}")
             sys.exit(1)
 
+        if pid <= 0:
+            print(f"❌ PID file {pid_file_path} holds {pid}, not a process id")
+            os.remove(pid_file_path)
+            print("🧹 Removed the invalid PID file")
+            sys.exit(1)
+
+        # A stale file can name an unrelated process that inherited the id.
+        try:
+            is_bridge = _is_mcp_bridge_process(pid)
+        except PermissionError as e:
+            print(f"❌ {e}")
+            sys.exit(1)
+        if not is_bridge:
+            print(f"⚠️  PID {pid} is not a GAIA MCP bridge; removing stale PID file")
+            os.remove(pid_file_path)
+            return
+
         # Stop the process
         stop_failed = False
         try:
+            print(f"🔄 Stopping MCP bridge process (PID: {pid})")
             if sys.platform.startswith("win"):
-                # Windows - check if process exists first
-                result = subprocess.run(
-                    ["tasklist", "/FI", f"PID eq {pid}"],
-                    capture_output=True,
-                    text=True,
-                    check=False,
-                )
-                if str(pid) in result.stdout:
-                    print(f"🔄 Stopping MCP bridge process (PID: {pid})")
-                    subprocess.run(["taskkill", "/F", "/PID", str(pid)], check=True)
-                    print(f"✅ Stopped MCP bridge (PID: {pid})")
-                else:
-                    print(f"⚠️  Process {pid} was not running")
+                subprocess.run(["taskkill", "/F", "/PID", str(pid)], check=True)
+                print(f"✅ Stopped MCP bridge (PID: {pid})")
             else:
-                # Unix-like systems
                 try:
-                    print(f"🔄 Stopping MCP bridge process (PID: {pid})")
                     os.kill(pid, 15)  # SIGTERM
                     print(f"✅ Stopped MCP bridge (PID: {pid})")
                 except OSError:
