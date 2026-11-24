@@ -186,6 +186,84 @@ class TestTelegramSink:
             sinks.dispatch("telegram", {"token": "tok", "to": "42"}, "hello")
 
 
+# A real-shaped token, and one that does not match the token pattern.
+_TOKENS = ("123456789:AAHk3_secretSecretSecret-xyz09", "plain-secret-value")
+
+
+def _failing_post(mocker, exc):
+    import requests as real_requests
+
+    mock_requests = mocker.patch(_REQUESTS)
+    mock_requests.RequestException = real_requests.RequestException
+    mock_requests.post.side_effect = exc
+    return mock_requests
+
+
+def _assert_token_absent(excinfo, token, caplog):
+    import logging
+    import traceback
+
+    err = excinfo.value
+    assert token not in str(err)
+    assert token not in repr(err)
+    assert err.__cause__ is None
+    assert err.__suppress_context__ is True
+    rendered = "".join(traceback.format_exception(type(err), err, err.__traceback__))
+    assert token not in rendered
+    with caplog.at_level(logging.ERROR):
+        logging.getLogger("test.sinks").exception("send failed", exc_info=err)
+    assert token not in caplog.text
+    assert "REDACTED" in str(err)
+
+
+class TestTelegramSinkKeepsTokenOutOfErrors:
+
+    @pytest.mark.parametrize("token", _TOKENS)
+    def test_token_in_url_of_connection_error(self, mocker, caplog, token):
+        import requests as real_requests
+
+        exc = real_requests.ConnectionError(
+            "HTTPSConnectionPool(host='api.telegram.org', port=443): Max retries "
+            f"exceeded with url: /bot{token}/sendMessage"
+        )
+        _failing_post(mocker, exc)
+        with pytest.raises(RuntimeError, match="could not reach") as excinfo:
+            sinks.dispatch("telegram", {"token": token, "to": "42"}, "hi")
+        _assert_token_absent(excinfo, token, caplog)
+
+    @pytest.mark.parametrize("token", _TOKENS)
+    def test_token_in_exception_message_and_args(self, mocker, caplog, token):
+        import requests as real_requests
+
+        exc = real_requests.Timeout(f"timed out: token={token}", token)
+        _failing_post(mocker, exc)
+        with pytest.raises(RuntimeError) as excinfo:
+            sinks.dispatch("telegram", {"token": token, "to": "42"}, "hi")
+        _assert_token_absent(excinfo, token, caplog)
+
+    @pytest.mark.parametrize("token", _TOKENS)
+    def test_token_in_repr_of_nested_cause(self, mocker, caplog, token):
+        import requests as real_requests
+
+        inner = ValueError(f"<Request [POST] https://api.telegram.org/bot{token}/x>")
+        exc = real_requests.ConnectionError(inner)
+        _failing_post(mocker, exc)
+        with pytest.raises(RuntimeError) as excinfo:
+            sinks.dispatch("telegram", {"token": token, "to": "42"}, "hi")
+        _assert_token_absent(excinfo, token, caplog)
+
+    @pytest.mark.parametrize("token", _TOKENS)
+    def test_token_echoed_in_http_error_body(self, mocker, token):
+        mock_requests = mocker.patch(_REQUESTS)
+        resp = mock_requests.post.return_value
+        resp.status_code = 401
+        resp.text = f"Unauthorized for /bot{token}/sendMessage"
+        with pytest.raises(RuntimeError, match="HTTP 401") as excinfo:
+            sinks.dispatch("telegram", {"token": token, "to": "42"}, "hi")
+        assert token not in str(excinfo.value)
+        assert token not in repr(excinfo.value)
+
+
 # ===========================================================================
 # 4. notification sink
 # ===========================================================================
