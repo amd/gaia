@@ -131,9 +131,11 @@ GAIA's background service in the current folder. `gaia -p` passes
 as they do in a source checkout. A permission flag covers that one run only: it
 never carries over to your Agent UI chats, which share the service. Only
 `--base-url` is refused there, because the service always uses the model server
-GAIA is set up with (`gaia lemonade connect` changes that). If `flagship_agent`
-is `gaiacpp`, or the installed agent predates these flags, `gaia -p` refuses
-them before the run starts rather than running without them.
+GAIA is set up with (`gaia lemonade connect` changes that). They work with
+either agent, the Python one or `gaiacpp`. On `gaiacpp`, `--time-limit` stops
+the run at the limit without warning the model first. If the installed agent
+predates these flags, `gaia -p` refuses them before the run starts rather than
+running without them.
 There the agent is also told that nobody can answer questions during the run, so
 it settles an open choice from the files it has and says what it assumed, rather
 than ending on a question.

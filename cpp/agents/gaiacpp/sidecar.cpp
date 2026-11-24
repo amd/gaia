@@ -23,6 +23,7 @@
 
 #include <gaia/console.h>
 #include <gaia/document_index.h>
+#include <gaia/ignore.h>
 #include <gaia/lemonade_client.h>
 #include <gaia/memory_store.h>
 #include <gaia/security.h>
@@ -46,6 +47,10 @@ constexpr const char* kService = "gaia-agent-gaia";
 // Every request field and route up to this version is implemented; the Agent
 // UI turns features on by it, so it must never run ahead of the code.
 constexpr const char* kApiVersion = "2.27";
+// The one-shot /query fields of contract 2.32 (the gaia -p flags), advertised apart from the
+// version because the contracts between 2.27 and 2.32 are not all implemented.
+const std::vector<std::string> kOneShotFields = {"time_limit", "disallowed_tools", "no_web",
+                                                 "no_skills", "skip_permissions", "full_access"};
 // Shown by the Agent UI's context meter in place of a measurement.
 constexpr const char* kNoContextMeasure = "Not available yet: gaiacpp doesn't report what fills its context.";
 constexpr auto kKeepalive = std::chrono::seconds(10);
@@ -86,6 +91,9 @@ struct Run {
     bool unattended = false;     // nobody can answer an approval on this turn
     std::string surface;         // the caller's front-end, "" when it named none
     std::string refusedAction;   // the gated tool an unattended turn stopped at
+    bool skipPermissions = false;  // gated tools run unasked; a path outside still isn't granted
+    int timeLimit = 0;             // seconds, 0 = none
+    std::atomic<bool> timedOut{false};
 
     // Under the lock, so a waiter between its check and its sleep can't miss it.
     void cancel() {
@@ -224,6 +232,11 @@ struct Session {
     std::string declinedRun;
     std::set<std::string> indexed;    // attached documents already indexed
     std::string workingDirectory;
+    // A one-shot run's gaia -p flags, applied when its agent is built.
+    bool noWeb = false;
+    bool noSkills = false;
+    bool fullAccess = false;
+    std::vector<std::string> disallowedTools;
     std::shared_ptr<ShellSession> shell;  // this chat's folder and exported variables
     std::string shellDir;                 // the working folder the shell was last put in
     std::chrono::steady_clock::time_point lastUsed = std::chrono::steady_clock::now();
@@ -542,6 +555,11 @@ private:
             o.workspaceRoots.assign(s.roots.begin(), s.roots.end());
         }
         o.workspaceRoots.insert(o.workspaceRoots.end(), s.approved.begin(), s.approved.end());
+        // As gaiacpp -p applies the same flags.
+        o.webTools = !s.noWeb;
+        o.webOff = s.noWeb;
+        o.skills = !s.noSkills;
+        o.fullAccess = s.fullAccess;
         o.internetOff = s.internetOff;
         o.memoryOff = s.memoryOff;
         o.memoryPrivate = s.memoryPrivate;
@@ -606,6 +624,7 @@ private:
             run = s.current;
         }
         if (!run) return ToolConfirmResult::UNATTENDED;
+        if (run->skipPermissions && tool != kPathAccessPrompt) return ToolConfirmResult::ALLOW_ONCE;
         if (run->unattended) {
             // Parking here would wait on a card nobody will ever see: end the turn instead.
             if (run->refusedAction.empty()) run->refusedAction = tool;
@@ -723,11 +742,13 @@ private:
         });
         server_.Get("/version", [this](const httplib::Request& req, httplib::Response& res) {
             if (!admit(req, res, false)) return;
-            sendJson(res, 200, {{"apiVersion", kApiVersion}, {"agentVersion", GAIACPP_VERSION}});
+            sendJson(res, 200, {{"apiVersion", kApiVersion}, {"agentVersion", GAIACPP_VERSION},
+                                {"capabilities", capabilities()}});
         });
         server_.Get("/v1/gaia/version", [this](const httplib::Request& req, httplib::Response& res) {
             if (!admit(req, res, false)) return;
-            sendJson(res, 200, {{"apiVersion", kApiVersion}, {"version", GAIACPP_VERSION}, {"agent", "gaia"}});
+            sendJson(res, 200, {{"apiVersion", kApiVersion}, {"version", GAIACPP_VERSION}, {"agent", "gaia"},
+                                {"capabilities", capabilities()}});
         });
         server_.Get("/v1/gaia/init", [this](const httplib::Request& req, httplib::Response& res) {
             if (!admit(req, res, true)) return;
@@ -929,14 +950,14 @@ private:
         const bool path = run.refusedAction == kPathAccessPrompt;
         std::string answer;
         if (run.surface == "cli") {
-            // gaia -p can't pass its permission flags to gaiacpp, so name what does work.
+            // Worded as the Python agent words it: gaia -p passes these flags to either.
+            const std::string remedy =
+                path ? "Re-run with --full-access to grant paths outside the current folder for this run (it "
+                       "also turns the shell guardrails off)."
+                     : "Re-run with --dangerously-skip-permissions to let this run use gated tools without "
+                       "asking, or --full-access to also turn the shell guardrails off.";
             answer = "I stopped before running '" + run.refusedAction +
-                     "' because it needs your approval, and gaia -p has nobody to ask. gaia -p can't pass "
-                     "--dangerously-skip-permissions or --full-access to gaiacpp, the agent this PC is set to "
-                     "use. Run the request with gaiacpp itself (gaiacpp -p \"<your request>\" " +
-                     std::string(path ? "--allow-dir <folder>" : "--dangerously-skip-permissions") +
-                     "), or switch to the Python agent with `gaia config set flagship_agent gaiapy` and run "
-                     "gaia -p again with the flag.";
+                     "' because it needs your approval, and gaia -p has nobody to ask. " + remedy;
         } else {
             answer = "I stopped before running '" + run.refusedAction +
                      "' because it needs your explicit approval, and this request has nobody to ask: it "
@@ -944,6 +965,48 @@ private:
                      "caller that answers needs_confirmation, or perform the action directly.";
         }
         return {{"type", "final"}, {"failed", true}, {"answer", answer}, {"failure", answer}};
+    }
+
+    // The final of a turn its time limit stopped: not a failure, but not the whole answer either.
+    static json timeLimitFinal(const Run& run) {
+        return {{"type", "final"},
+                {"answer", "Stopped at the " + std::to_string(run.timeLimit) +
+                               "-second time limit (--time-limit) before the turn finished."},
+                {"time_limit_reached", true},
+                {"context_error", kNoContextMeasure}};
+    }
+
+    static json capabilities() { return {{"one_shot_fields", kOneShotFields}}; }
+
+    // A one-shot field: absent or null reads as false; anything but a boolean is the caller's mistake.
+    static bool flagField(const json& body, const char* key) {
+        if (!body.contains(key) || body[key].is_null()) return false;
+        if (!body[key].is_boolean()) throw BadRequest(422, std::string(key) + " must be true or false");
+        return body[key].get<bool>();
+    }
+
+    // Withhold the tools a one-shot's disallowed_tools globs match, as the Python agent's deny_tools does.
+    static std::vector<std::string> withholdTools(GaiaAgent& agent, const std::vector<std::string>& patterns) {
+        std::set<std::string> names;
+        for (const auto& [name, info] : agent.tools().allTools()) names.insert(name);
+        std::vector<std::string> unmatched, withheld;
+        for (const auto& p : patterns) {
+            bool any = false;
+            for (const auto& n : names) {
+                if (!globMatch(p, n)) continue;
+                any = true;
+                if (std::find(withheld.begin(), withheld.end(), n) == withheld.end()) withheld.push_back(n);
+            }
+            if (!any) unmatched.push_back(p);
+        }
+        if (!unmatched.empty()) {
+            std::string list, all;
+            for (const auto& u : unmatched) list += (list.empty() ? "" : ", ") + u;
+            for (const auto& n : names) all += (all.empty() ? "" : ", ") + n;
+            throw BadRequest(400, "disallowed_tools: No tool matches " + list + ". This agent's tools: " + all + ".");
+        }
+        for (const auto& n : withheld) agent.toolRegistry().removeTool(n);
+        return withheld;
     }
 
     // What a caller may do with this store, and whose it is: the Python agent keeps another.
@@ -1099,6 +1162,46 @@ private:
         const std::string model = body.value("model", "");
         const int maxSteps = body.value("max_steps", 0);
 
+        // The gaia -p flags: one run only, so a chat can never inherit them.
+        int timeLimit = 0;
+        if (body.contains("time_limit") && !body["time_limit"].is_null()) {
+            const json& t = body["time_limit"];
+            if (!t.is_number_integer() || t.get<long long>() < 1 || t.get<long long>() > 86400LL * 365) {
+                throw BadRequest(422, "time_limit must be a whole number of seconds, 1 or more");
+            }
+            timeLimit = static_cast<int>(t.get<long long>());
+        }
+        std::vector<std::string> disallowed;
+        if (body.contains("disallowed_tools") && !body["disallowed_tools"].is_null()) {
+            if (!body["disallowed_tools"].is_array()) throw BadRequest(422, "disallowed_tools must be a list of tool globs");
+            for (const auto& p : body["disallowed_tools"]) {
+                std::string g = p.is_string() ? p.get<std::string>() : "";
+                const size_t a = g.find_first_not_of(" \t\r\n");
+                g = a == std::string::npos ? "" : g.substr(a, g.find_last_not_of(" \t\r\n") - a + 1);
+                if (g.empty()) throw BadRequest(422, "disallowed_tools entries must be non-empty tool globs.");
+                if (std::find(disallowed.begin(), disallowed.end(), g) == disallowed.end()) disallowed.push_back(g);
+            }
+        }
+        const bool noWeb = flagField(body, "no_web");
+        const bool noSkills = flagField(body, "no_skills");
+        const bool skipPermissions = flagField(body, "skip_permissions");
+        const bool fullAccess = flagField(body, "full_access");
+        {
+            std::vector<std::string> sent;
+            if (!disallowed.empty()) sent.push_back("disallowed_tools");
+            if (fullAccess) sent.push_back("full_access");
+            if (noSkills) sent.push_back("no_skills");
+            if (noWeb) sent.push_back("no_web");
+            if (skipPermissions) sent.push_back("skip_permissions");
+            if (timeLimit) sent.push_back("time_limit");
+            if (!sent.empty() && !sid.empty()) {
+                std::string list;
+                for (const auto& f : sent) list += (list.empty() ? "" : ", ") + f;
+                throw BadRequest(422, list + " apply to one run only, so they need a one-shot request: drop "
+                                             "session_id. A chat's full access is /sessions/{id}/bypass.");
+            }
+        }
+
         // The UI sends the conversation every turn.
         std::vector<Message> history;
         try {
@@ -1126,6 +1229,8 @@ private:
                                           body["can_answer_questions"].is_boolean() &&
                                           !body["can_answer_questions"].get<bool>());
         if (body.contains("surface") && body["surface"].is_string()) run->surface = body["surface"].get<std::string>();
+        run->skipPermissions = skipPermissions || fullAccess;
+        run->timeLimit = timeLimit;
         {
             std::lock_guard<std::mutex> lock(runsMu_);
             if (runs_.count(runId)) throw BadRequest(409, "Duplicate run_id " + runId);
@@ -1147,6 +1252,19 @@ private:
             throw BadRequest(409, "This session is already running a turn");
         }
         s->temporary = sid.empty();
+        if (s->temporary) {
+            s->noWeb = noWeb;
+            s->noSkills = noSkills;
+            s->fullAccess = fullAccess;
+            s->disallowedTools = disallowed;
+            s->bypass = fullAccess;
+            if (skipPermissions || fullAccess) {
+                std::cerr << "turn " << runId << ": "
+                          << (fullAccess ? "full access ENABLED" : "gated tools pre-approved")
+                          << " for this one-shot run (shell gates " << (fullAccess ? "off" : "on") << ")"
+                          << std::endl;
+            }
+        }
         // Folder scope only grows within a chat; an attached file is granted as that file.
         for (const auto& p : allowed) s->roots.insert(p);
         for (const auto& d : documents) s->roots.insert(d);
@@ -1186,6 +1304,7 @@ private:
             if (started) s->turnLock = &turnLock;
             const auto t0 = std::chrono::steady_clock::now();
             json terminal;
+            std::vector<std::string> withheld;
             if (!started) {
                 terminal = {{"type", "final"}, {"answer", ""}};
             } else try {
@@ -1204,6 +1323,17 @@ private:
                     if (!down.empty()) throw ServerDown(down, nothing);
                 }
                 ensureAgent(*s, server);
+                if (s->temporary) {
+                    if (s->noWeb) withheld.push_back("web_fetch");
+                    if (s->noSkills && !SkillLibrary().skills().empty()) {
+                        withheld.insert(withheld.end(), {"list_skills", "load_skill"});
+                    }
+                    if (!s->disallowedTools.empty()) {
+                        for (const auto& n : withholdTools(*s->agent, s->disallowedTools)) {
+                            if (std::find(withheld.begin(), withheld.end(), n) == withheld.end()) withheld.push_back(n);
+                        }
+                    }
+                }
                 {
                     std::lock_guard<std::mutex> lock(s->currentMu);
                     s->current = run;
@@ -1228,6 +1358,34 @@ private:
                 s->agent->setHistory(history);
                 const size_t before = s->agent->history().size();
                 if (run->cancelled) throw std::runtime_error("cancelled");
+                // gaia -p --time-limit: a stop at the limit, which also ends a model call or command in flight.
+                std::mutex limitMu;
+                std::condition_variable limitCv;
+                bool turnOver = false;
+                std::thread limiter;
+                if (run->timeLimit > 0) {
+                    limiter = std::thread([&] {
+                        std::unique_lock<std::mutex> lock(limitMu);
+                        if (!limitCv.wait_for(lock, std::chrono::seconds(run->timeLimit), [&] { return turnOver; })) {
+                            run->timedOut = true;
+                            run->cancel();
+                        }
+                    });
+                }
+                struct StopLimiter {
+                    std::mutex& mu;
+                    std::condition_variable& cv;
+                    bool& over;
+                    std::thread& t;
+                    ~StopLimiter() {
+                        {
+                            std::lock_guard<std::mutex> lock(mu);
+                            over = true;
+                        }
+                        cv.notify_all();
+                        if (t.joinable()) t.join();
+                    }
+                } stopLimiter{limitMu, limitCv, turnOver, limiter};
                 json r = s->agent->processQuery(text, maxSteps);
                 const double elapsed = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
                 json usage = {{"steps", r.value("steps_taken", 0)}, {"tools_used", s->console->toolsUsed()},
@@ -1238,7 +1396,10 @@ private:
                     usage["input_tokens"] = r["usage"].value("prompt_tokens", 0);
                     usage["cached_tokens"] = r["usage"].value("cached_tokens", 0);
                 }
-                if (run->cancelled) {
+                if (run->timedOut) {
+                    terminal = timeLimitFinal(*run);
+                    terminal["usage"] = usage;
+                } else if (run->cancelled) {
                     terminal = {{"type", "final"}, {"answer", ""}};
                 } else {
                     terminal = {{"type", "final"}, {"answer", r.value("result", "")}, {"usage", usage},
@@ -1275,14 +1436,19 @@ private:
                                           : json{{"type", "final"}, {"answer", e.what()}, {"failed", true},
                                                  {"failure", e.nothingAnswered ? std::string(kModelServerDown)
                                                                                : std::string(e.what())}};
+            } catch (const BadRequest& e) {
+                // Found once the agent is built, so it ends the stream rather than refusing the request.
+                terminal = {{"type", "error"}, {"detail", e.what()}, {"status", e.status}};
             } catch (const std::exception& e) {
-                terminal = run->cancelled ? json{{"type", "final"}, {"answer", ""}}
-                                          : json{{"type", "error"}, {"detail", e.what()}, {"status", 500}};
+                terminal = run->timedOut  ? timeLimitFinal(*run)
+                           : run->cancelled ? json{{"type", "final"}, {"answer", ""}}
+                                            : json{{"type", "error"}, {"detail", e.what()}, {"status", 500}};
             } catch (...) {
                 // Anything else would end the process and every other chat with it.
                 terminal = {{"type", "error"}, {"detail", "The turn failed with an unknown error"}, {"status", 500}};
             }
             if (!run->refusedAction.empty()) terminal = unattendedRefusal(*run);
+            if (!withheld.empty() && terminal.value("type", "") == "final") terminal["withheld_tools"] = withheld;
             if (s->console) s->console->detach();
             {
                 std::lock_guard<std::mutex> lock(s->currentMu);

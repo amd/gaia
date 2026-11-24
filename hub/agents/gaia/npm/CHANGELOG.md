@@ -18,6 +18,15 @@ Requires the `gaia` Python CLI 0.27.0+ on `PATH`.
   caller token. `final` adds `time_limit_reached` and `withheld_tools`. A
   gated tool refused on a `surface: "cli"` run now names the flag that allows
   it, not "a surface that supports confirmation".
+- **The same `gaia -p` flags work when the agent is `gaiacpp`.** Before, with
+  `flagship_agent` set to `gaiacpp`, `gaia -p` refused every one of them, and
+  its remedy (switch the setting to `gaiapy`) left the running agent on
+  `gaiacpp`, so the next run was refused again. `gaiacpp`'s `/query` now takes
+  the six fields with the same rules and `final` fields. It still reports
+  contract 2.27 and lists them on `/version` as `capabilities.one_shot_fields`,
+  which `gaia -p` reads. On `gaiacpp` the time limit stops the turn without
+  warning the model first, and an unmatched `disallowed_tools` glob is an
+  in-stream `error` of `status` 400.
 - **Docs: Ask and Accept edits refuse deletes, they don't ask.** A delete the
   shell would otherwise ask about is refused with no approval card; only Full
   access runs it. The SPEC and guides now say so.

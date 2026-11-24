@@ -1976,4 +1976,200 @@ TEST_F(GaiacppSidecar, MalformedBodiesAndUnknownRoutesGet4xxAndTheServerKeepsSer
     EXPECT_EQ(t.events().back()["answer"], "Still here.");
 }
 
+
+// ---- gaia -p's one-shot flags (contract 2.32's fields, advertised by capability) ----
+
+TEST_F(GaiacppSidecar, VersionAdvertisesTheOneShotFieldsWithoutClaimingContract232) {
+    ASSERT_NO_FATAL_FAILURE(startSidecar());
+    const std::vector<std::string> want = {"time_limit", "disallowed_tools", "no_web",
+                                           "no_skills", "skip_permissions", "full_access"};
+    for (const char* path : {"/v1/gaia/version", "/version"}) {
+        auto r = client().Get(path);
+        ASSERT_TRUE(r) << path;
+        ASSERT_EQ(r->status, 200) << path;
+        const json v = json::parse(r->body);
+        EXPECT_EQ(v["apiVersion"], "2.27") << path;
+        ASSERT_TRUE(v.contains("capabilities")) << path << " " << r->body;
+        EXPECT_EQ(v["capabilities"]["one_shot_fields"].get<std::vector<std::string>>(), want) << path;
+    }
+}
+
+TEST_F(GaiacppSidecar, OneShotFieldsBesideASessionOrOfTheWrongTypeAre422) {
+    ASSERT_NO_FATAL_FAILURE(startSidecar());
+    const std::vector<json> withSession = {
+        {{"time_limit", 60}},         {{"disallowed_tools", {"file_write"}}}, {{"no_web", true}},
+        {{"no_skills", true}},        {{"skip_permissions", true}},           {{"full_access", true}},
+    };
+    for (const auto& field : withSession) {
+        json body = queryBody("r-one", "hi", {{"session_id", "chat-one"}});
+        body.update(field);
+        auto r = send("POST", "/v1/gaia/query", bearer(), body.dump());
+        ASSERT_TRUE(r);
+        EXPECT_EQ(r->status, 422) << field.dump() << " -> " << r->body;
+        const std::string detail = json::parse(r->body).value("detail", "");
+        EXPECT_NE(detail.find(field.begin().key()), std::string::npos) << detail;
+        EXPECT_NE(detail.find("session_id"), std::string::npos) << detail;
+    }
+    const std::vector<json> badTypes = {
+        {{"time_limit", 0}},           {{"time_limit", "60"}},   {{"time_limit", 1.5}},
+        {{"disallowed_tools", "x"}},   {{"disallowed_tools", {""}}}, {{"disallowed_tools", {5}}},
+        {{"no_web", "yes"}},           {{"skip_permissions", 1}},    {{"full_access", "true"}},
+    };
+    for (const auto& field : badTypes) {
+        json body = queryBody("r-bad", "hi");
+        body.update(field);
+        auto r = send("POST", "/v1/gaia/query", bearer(), body.dump());
+        ASSERT_TRUE(r);
+        EXPECT_EQ(r->status, 422) << field.dump() << " -> " << r->body;
+    }
+    EXPECT_EQ(mock().requestCount(), 0) << "a refused request never reaches the model";
+}
+
+TEST_F(GaiacppSidecar, SkipPermissionsRunsAGatedToolUnaskedForThatRunOnly) {
+    const fs::path target = work_ / "haiku.md";
+    mock().pushResponse(toolReply("file_write", writeArgs(target, "old pond")));
+    mock().pushResponse(answerReply("Wrote it."));
+    ASSERT_NO_FATAL_FAILURE(startSidecar());
+
+    {
+        Turn t(port_, queryBody("run-skip", "write a haiku",
+                                {{"surface", "cli"},
+                                 {"can_answer_questions", false},
+                                 {"skip_permissions", true},
+                                 {"working_directory", work_.string()},
+                                 {"allowed_paths", json::array({work_.string()})}}));
+        ASSERT_TRUE(t.waitDone(seconds(30))) << t.describe();
+        auto events = t.events();
+        ASSERT_NO_FATAL_FAILURE(expectSingleTerminal(events, "final")) << t.describe();
+        EXPECT_EQ(indexOf(events, "needs_confirmation"), -1) << t.describe();
+        EXPECT_FALSE(events.back().value("failed", false)) << t.describe();
+        EXPECT_EQ(events.back()["answer"], "Wrote it.");
+    }
+    EXPECT_EQ(readFile(target), "old pond");
+
+    // The next one-shot without the flag is refused again, naming it.
+    const fs::path second = work_ / "second.md";
+    mock().pushResponse(toolReply("file_write", writeArgs(second, "x")));
+    Turn again(port_, queryBody("run-noskip", "write another",
+                                {{"surface", "cli"}, {"allowed_paths", json::array({work_.string()})}}));
+    ASSERT_TRUE(again.waitDone(seconds(30))) << again.describe();
+    const auto final = again.waitType("final");
+    ASSERT_TRUE(final) << again.describe();
+    EXPECT_EQ((*final)["failed"], true);
+    EXPECT_NE((*final)["answer"].get<std::string>().find("--dangerously-skip-permissions"), std::string::npos);
+    EXPECT_FALSE(fs::exists(second));
+}
+
+TEST_F(GaiacppSidecar, SkipPermissionsStillRefusesAPathOutsideAndNamesFullAccess) {
+    const fs::path secret = root_ / "outside" / "secret.txt";
+    mock().pushResponse(toolReply("file_read", {{"path", secret.string()}}));
+    mock().pushResponse(answerReply("Read it."));
+    ASSERT_NO_FATAL_FAILURE(startSidecar());
+
+    Turn t(port_, queryBody("run-skip-out", "read the secret",
+                            {{"surface", "cli"},
+                             {"skip_permissions", true},
+                             {"allowed_paths", json::array({work_.string()})}}));
+    ASSERT_TRUE(t.waitDone(seconds(30))) << t.describe();
+    const auto final = t.waitType("final");
+    ASSERT_TRUE(final) << t.describe();
+    EXPECT_EQ((*final)["failed"], true) << t.describe();
+    const std::string answer = (*final)["answer"].get<std::string>();
+    EXPECT_NE(answer.find("--full-access"), std::string::npos) << answer;
+    EXPECT_EQ(answer.find("gaia config set"), std::string::npos) << "the flag works here now: " << answer;
+    EXPECT_EQ(t.raw().find("outside secret 4471"), std::string::npos);
+}
+
+TEST_F(GaiacppSidecar, FullAccessWritesOutsideTheFoldersWithoutAsking) {
+    const fs::path target = root_ / "outside" / "out.md";
+    mock().pushResponse(toolReply("file_write", writeArgs(target, "far away")));
+    mock().pushResponse(answerReply("Done."));
+    ASSERT_NO_FATAL_FAILURE(startSidecar());
+
+    Turn t(port_, queryBody("run-full-shot", "write outside",
+                            {{"surface", "cli"},
+                             {"full_access", true},
+                             {"allowed_paths", json::array({work_.string()})}}));
+    ASSERT_TRUE(t.waitDone(seconds(30))) << t.describe();
+    auto events = t.events();
+    ASSERT_NO_FATAL_FAILURE(expectSingleTerminal(events, "final")) << t.describe();
+    EXPECT_EQ(indexOf(events, "needs_confirmation"), -1) << t.describe();
+    EXPECT_FALSE(events.back().value("failed", false)) << t.describe();
+    EXPECT_EQ(readFile(target), "far away");
+}
+
+TEST_F(GaiacppSidecar, TimeLimitStopsATurnStillRunningAtItsLimit) {
+    hold();  // the model never answers until the test is over
+    ASSERT_NO_FATAL_FAILURE(startSidecar());
+
+    const auto t0 = std::chrono::steady_clock::now();
+    Turn t(port_, queryBody("run-limit", "think forever", {{"surface", "cli"}, {"time_limit", 2}}));
+    ASSERT_TRUE(t.waitDone(seconds(20))) << "the limit didn't stop the turn: " << t.describe();
+    const double took = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
+    EXPECT_LT(took, 15.0);
+    auto events = t.events();
+    ASSERT_NO_FATAL_FAILURE(expectSingleTerminal(events, "final")) << t.describe();
+    EXPECT_EQ(events.back()["time_limit_reached"], true) << t.describe();
+    EXPECT_FALSE(events.back().value("failed", false)) << "stopped by the limit is not a failure";
+    EXPECT_NE(events.back()["answer"].get<std::string>().find("2-second time limit"), std::string::npos);
+}
+
+TEST_F(GaiacppSidecar, ATurnInsideItsTimeLimitAnswersNormally) {
+    mock().pushResponse(answerReply("Quick."));
+    ASSERT_NO_FATAL_FAILURE(startSidecar());
+    Turn t(port_, queryBody("run-quick", "be quick", {{"time_limit", 60}}));
+    ASSERT_TRUE(t.waitDone()) << t.describe();
+    auto events = t.events();
+    ASSERT_NO_FATAL_FAILURE(expectSingleTerminal(events, "final")) << t.describe();
+    EXPECT_EQ(events.back()["answer"], "Quick.");
+    EXPECT_FALSE(events.back().contains("time_limit_reached")) << t.describe();
+}
+
+TEST_F(GaiacppSidecar, DisallowedToolsAreWithheldAndNamedOnTheFinal) {
+    const fs::path target = work_ / "blocked.md";
+    mock().pushResponse(toolReply("file_write", writeArgs(target, "x")));
+    mock().pushResponse(answerReply("Could not write."));
+    ASSERT_NO_FATAL_FAILURE(startSidecar());
+
+    {
+        Turn t(port_, queryBody("run-deny", "write it",
+                                {{"skip_permissions", true},
+                                 {"disallowed_tools", {"file_w*", "bash_execute"}},
+                                 {"allowed_paths", json::array({work_.string()})}}));
+        ASSERT_TRUE(t.waitDone(seconds(30))) << t.describe();
+        auto events = t.events();
+        ASSERT_NO_FATAL_FAILURE(expectSingleTerminal(events, "final")) << t.describe();
+        const auto withheld = events.back()["withheld_tools"].get<std::vector<std::string>>();
+        EXPECT_NE(std::find(withheld.begin(), withheld.end(), "file_write"), withheld.end()) << t.describe();
+        EXPECT_NE(std::find(withheld.begin(), withheld.end(), "bash_execute"), withheld.end()) << t.describe();
+    }
+    EXPECT_FALSE(fs::exists(target)) << "a withheld tool never runs";
+    const auto bodies = mock().receivedBodies();
+    ASSERT_FALSE(bodies.empty());
+    EXPECT_EQ(bodies.front().find("- bash_execute("), std::string::npos) << "the model isn't offered it";
+    EXPECT_NE(bodies.front().find("- file_read("), std::string::npos) << "the rest still are";
+
+    Turn bad(port_, queryBody("run-deny-bad", "hi", {{"disallowed_tools", {"no_such_tool*"}}}));
+    ASSERT_TRUE(bad.waitDone(seconds(30))) << bad.describe();
+    auto events = bad.events();
+    ASSERT_NO_FATAL_FAILURE(expectSingleTerminal(events, "error")) << bad.describe();
+    EXPECT_EQ(events.back()["status"], 400);
+    EXPECT_NE(events.back()["detail"].get<std::string>().find("No tool matches no_such_tool*"), std::string::npos);
+}
+
+TEST_F(GaiacppSidecar, NoWebLeavesOutWebFetchAndTellsTheModel) {
+    mock().pushResponse(answerReply("Offline."));
+    ASSERT_NO_FATAL_FAILURE(startSidecar());
+    Turn t(port_, queryBody("run-noweb", "look it up", {{"no_web", true}, {"no_skills", true}}));
+    ASSERT_TRUE(t.waitDone()) << t.describe();
+    auto events = t.events();
+    ASSERT_NO_FATAL_FAILURE(expectSingleTerminal(events, "final")) << t.describe();
+    const auto withheld = events.back()["withheld_tools"].get<std::vector<std::string>>();
+    EXPECT_NE(std::find(withheld.begin(), withheld.end(), "web_fetch"), withheld.end()) << t.describe();
+    const auto bodies = mock().receivedBodies();
+    ASSERT_FALSE(bodies.empty());
+    EXPECT_EQ(bodies.front().find("- web_fetch("), std::string::npos) << "the model isn't offered it";
+    EXPECT_NE(bodies.front().find("Web access is off for this run"), std::string::npos);
+}
+
 }  // namespace

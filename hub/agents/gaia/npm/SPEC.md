@@ -452,8 +452,14 @@ the shell guardrails still on and out-of-scope paths still refused;
 `full_access` also lifts the guardrails and grants out-of-scope paths. Both need
 an authenticated caller (§5.4, a `403` otherwise), apply to this run's handler
 only, and are logged. A chat's full access is the session bypass route.
-Pre-2.32 binaries `422` the fields; the native harness ignores them, so check
-`/version` and refuse the run on an older one rather than run it unrestricted.
+Pre-2.32 binaries `422` the fields. The native harness (`gaiacpp`) reports an
+older contract but applies them all, and says so on `/version` as
+`capabilities.one_shot_fields`; there `time_limit` stops the turn at the limit
+without warning the model first, and a `disallowed_tools` glob that matches no
+tool ends the stream with an `error` event of `status` 400, because its tools
+are known only once the run starts. So check `/version`, and refuse the run on
+a binary that neither speaks 2.32 nor lists the field rather than run it
+unrestricted.
 
 `turns` (contract ≥ 2.25) is the conversation so far as the model saw it,
 oldest first. Each entry is one earlier turn's `final.model_messages`, which

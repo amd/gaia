@@ -1535,8 +1535,9 @@ def test_a_relayed_refusal_of_a_gated_tool_exits_1_and_keeps_the_remedy(relay, c
     """gaiacpp ends an unattended turn at a gated tool with a failed final (never a wait)."""
     refusal = (
         "I stopped before running 'file_write' because it needs your approval, and "
-        "gaia -p has nobody to ask. gaia -p can't pass --dangerously-skip-permissions "
-        "or --full-access to gaiacpp, the agent this PC is set to use."
+        "gaia -p has nobody to ask. Re-run with --dangerously-skip-permissions to let "
+        "this run use gated tools without asking, or --full-access to also turn the "
+        "shell guardrails off."
     )
     relay.outcome = _Outcome("final", final_answer=refusal, failed=True)
     assert print_mode.run("write x", model="m", output_format="json") == 1
