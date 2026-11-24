@@ -115,9 +115,12 @@ router = APIRouter(tags=["files"])
 
 def _refuse_secret(resolved: Path) -> None:
     """403 when *resolved* holds credentials or keys, before it is opened."""
-    blocked, reason = read_block(str(resolved))
+    blocked, _ = read_block(str(resolved))
     if blocked:
-        raise HTTPException(status_code=403, detail=reason)
+        raise HTTPException(
+            status_code=403,
+            detail="This file holds credentials, so GAIA won't preview it.",
+        )
 
 
 # ── Upload ───────────────────────────────────────────────────────────────────

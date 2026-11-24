@@ -1060,6 +1060,9 @@ class TestFilePreview:
         resp = client.get("/api/files/preview", params={"path": str(secret)})
 
         assert resp.status_code == 403
+        assert resp.json()["detail"] == (
+            "This file holds credentials, so GAIA won't preview it."
+        )
         assert "abc123" not in resp.text
 
     def test_preview_refuses_files_in_credential_folders(

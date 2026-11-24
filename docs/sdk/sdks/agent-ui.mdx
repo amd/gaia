@@ -1543,6 +1543,7 @@ Deleting a chat deletes its copies.
     | Status | Condition |
     |--------|-----------|
     | `400` | Invalid path (empty or contains null bytes), path is a symbolic link, or `launch` was asked for a folder or a file type that could run |
+    | `403` | The request doesn't come from the PC running GAIA (mobile access or another computer) |
     | `404` | Path does not exist |
     | `500` | Failed to launch the system file explorer |
   </Accordion>
@@ -1622,11 +1623,16 @@ Deleting a chat deletes its copies.
   </Accordion>
 
   <Accordion title="GET /api/files/preview">
-    Return a preview (first N bytes / first N lines) of a text file.
+    Return a preview (first N bytes / first N lines) of a text file. **403**
+    for files that hold credentials or keys (`.env`, `id_rsa`, `*.pem` and
+    `*.key` files, the Agent UI token, files in `~/.ssh` or `~/.aws`, and so
+    on), the same files the agent's read tools refuse.
   </Accordion>
 
   <Accordion title="GET /api/files/image">
-    Stream an image file from the filesystem for display in the UI.
+    Stream an image file from the filesystem for display in the UI. **403**
+    for files that hold credentials or keys, the same rule as
+    `GET /api/files/preview`.
   </Accordion>
 
   <Accordion title="GET /api/media/{kind}/{name}">
@@ -1841,11 +1847,13 @@ Used to reach the UI from a phone.
 
 <AccordionGroup>
   <Accordion title="POST /api/tunnel/start">
-    Start a tunnel. Returns the public URL.
+    Start a tunnel. Returns the public URL. **403** unless the request comes
+    from the PC running GAIA (not over mobile access or from another computer).
   </Accordion>
 
   <Accordion title="POST /api/tunnel/stop">
-    Stop the active tunnel.
+    Stop the active tunnel. **403** unless the request comes from the PC
+    running GAIA (not over mobile access or from another computer).
   </Accordion>
 
   <Accordion title="GET /api/tunnel/status">
