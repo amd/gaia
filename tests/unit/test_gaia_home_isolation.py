@@ -5,6 +5,8 @@
 
 import os
 import sqlite3
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -31,6 +33,32 @@ def test_gaia_home_is_not_the_real_one(monkeypatch):
     monkeypatch.delenv("GAIA_HOME", raising=False)
     monkeypatch.delenv("GAIA_CONFIG_DIR", raising=False)
     assert not _under(gaia_home(), _REAL_GAIA_HOME)
+
+
+def test_gaia_home_set_to_real_home_in_env_is_isolated():
+    """#8868: GAIA_HOME in shell must not leak writes into ~/.gaia."""
+    env = dict(os.environ)
+    env["GAIA_HOME"] = str(_REAL_GAIA_HOME)
+    env["GAIA_CONFIG_DIR"] = str(_REAL_GAIA_HOME)
+    cmd = [
+        sys.executable,
+        "-m",
+        "pytest",
+        "-q",
+        "tests/unit/test_gaia_home_isolation.py",
+        "-k",
+        "test_gaia_home_is_not_the_real_one",
+    ]
+    run = subprocess.run(
+        cmd, env=env, capture_output=True, text=True, check=False
+    )
+    assert run.returncode == 0, run.stdout + run.stderr
+    assert "1 passed" in run.stdout
+
+
+def test_mock_home_clears_inherited_gaia_home(mock_home):
+    """mock_home fixture isolates gaia_home() even if GAIA_HOME was set."""
+    assert gaia_home() == mock_home / ".gaia"
 
 
 def test_an_edit_backup_lands_outside_the_real_home(monkeypatch, tmp_path):
