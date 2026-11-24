@@ -958,6 +958,31 @@ def test_install_refuses_a_bundle_that_escapes_the_destination(marketplace):
     assert not (marketplace.skills_root.parent / "escaped.py").exists()
 
 
+@pytest.mark.parametrize(
+    ("cap", "limit"),
+    [("BUNDLE_MAX_MEMBER_BYTES", 1024), ("BUNDLE_MAX_TOTAL_BYTES", 1500)],
+)
+def test_install_refuses_a_bundle_over_the_size_cap(
+    marketplace, monkeypatch, cap, limit
+):
+    from gaia.skills import install as install_mod
+
+    payload = _zip_bytes(
+        {
+            "web-research/SKILL.md": "---\nname: web-research\n---\nbody\n",
+            "web-research/a.bin": "\0" * 1000,
+            "web-research/b.bin": "\0" * 2000,
+        }
+    )
+    _seed_raw_bundle(marketplace, payload)
+    monkeypatch.setattr(install_mod, cap, limit)
+
+    with pytest.raises(SkillValidationError, match="limit of") as exc:
+        marketplace.install("web-research", allow_experimental=True)
+    assert "hostile" not in str(exc.value)
+    assert not (marketplace.skills_root / "web-research").exists()
+
+
 def test_install_refuses_a_bundle_that_is_not_a_zip(marketplace):
     _seed_raw_bundle(marketplace, b"this is not a zip file")
 
