@@ -20,6 +20,7 @@ import sys
 import tempfile
 import webbrowser
 from typing import TYPE_CHECKING, Any, Dict, Optional
+from urllib.parse import quote
 
 import requests
 
@@ -91,6 +92,13 @@ def _normalize_error(
 
     msg = str(e)[:200].replace(base_url, "")
     return {"status": "error", "detail": msg}
+
+
+def _seg(value: str) -> str:
+    """Escape *value* as one URL path segment so it cannot reach another route."""
+    if value in (".", ".."):
+        raise ValueError(f"{value!r} is not a valid id")
+    return quote(value, safe="")
 
 
 def _api(
@@ -432,14 +440,14 @@ def create_agent_ui_mcp(backend_url: str = DEFAULT_BACKEND) -> "MCPServer":
     @mcp.tool()
     def get_session(session_id: str) -> Dict[str, Any]:
         """Get details of a specific chat session."""
-        return _api(backend_url, "get", f"/sessions/{session_id}")
+        return _api(backend_url, "get", f"/sessions/{_seg(session_id)}")
 
     @mcp.tool()
     def delete_session(session_id: str) -> Dict[str, Any]:
         """Delete a chat session and all its messages."""
         try:
             r = requests.delete(
-                f"{backend_url}/api/sessions/{session_id}",
+                f"{backend_url}/api/sessions/{_seg(session_id)}",
                 timeout=30,
                 headers=auth_headers(),
             )
@@ -465,7 +473,7 @@ def create_agent_ui_mcp(backend_url: str = DEFAULT_BACKEND) -> "MCPServer":
             data = _api(
                 backend_url,
                 "get",
-                f"/sessions/{session_id}/messages",
+                f"/sessions/{_seg(session_id)}/messages",
                 params={"limit": limit, "offset": offset},
             )
             if data.get("status") == "error":
@@ -670,9 +678,7 @@ def create_agent_ui_mcp(backend_url: str = DEFAULT_BACKEND) -> "MCPServer":
     @mcp.tool()
     def list_models(provider: str = "local") -> Dict[str, Any]:
         """Chat models a provider offers ("local", "fireworks" or "amd")."""
-        from urllib.parse import quote
-
-        return _api(backend_url, "get", f"/providers/{quote(provider, safe='')}/models")
+        return _api(backend_url, "get", f"/providers/{_seg(provider)}/models")
 
     @mcp.tool()
     def set_model(model: str) -> Dict[str, Any]:
@@ -735,7 +741,7 @@ def create_agent_ui_mcp(backend_url: str = DEFAULT_BACKEND) -> "MCPServer":
                 attach_result = _api(
                     backend_url,
                     "post",
-                    f"/sessions/{session_id}/documents",
+                    f"/sessions/{_seg(session_id)}/documents",
                     json={"document_id": doc_id},
                 )
                 if attach_result.get("status") != "error":
@@ -1013,7 +1019,7 @@ def create_agent_ui_mcp(backend_url: str = DEFAULT_BACKEND) -> "MCPServer":
 
             Returns the full knowledge dict, or ``{"error": "..."}`` on 404.
             """
-            return _api(backend_url, "get", f"/memory/knowledge/{knowledge_id}")
+            return _api(backend_url, "get", f"/memory/knowledge/{_seg(knowledge_id)}")
 
         @mcp.tool()
         def memory_get_by_entity(entity: str, limit: int = 20) -> Dict[str, Any]:
@@ -1031,7 +1037,7 @@ def create_agent_ui_mcp(backend_url: str = DEFAULT_BACKEND) -> "MCPServer":
             return _api(
                 backend_url,
                 "get",
-                f"/memory/entities/{entity}?limit={limit}",
+                f"/memory/entities/{_seg(entity)}?limit={limit}",
             )
 
         @mcp.tool()
@@ -1054,7 +1060,7 @@ def create_agent_ui_mcp(backend_url: str = DEFAULT_BACKEND) -> "MCPServer":
             return _api(
                 backend_url,
                 "get",
-                f"/memory/conversations/{session_id}?limit={limit}",
+                f"/memory/conversations/{_seg(session_id)}?limit={limit}",
             )
 
     if _admin_enabled:
@@ -1155,7 +1161,7 @@ def create_agent_ui_mcp(backend_url: str = DEFAULT_BACKEND) -> "MCPServer":
         # Signal the frontend to switch to this session via the activate endpoint
         # (emits a set_active_session SSE event App.tsx consumes). Surface an
         # activate failure rather than swallowing it.
-        activate = _api(backend_url, "post", f"/sessions/{session_id}/activate")
+        activate = _api(backend_url, "post", f"/sessions/{_seg(session_id)}/activate")
         if isinstance(activate, dict) and activate.get("status") == "error":
             return {
                 "opened": False,
