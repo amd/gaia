@@ -3981,18 +3981,25 @@ async def _add_indexed_documents_to_library(
     sse_handler,
     listed_uploads: Optional[list] = None,
 ) -> Tuple[list, list]:
-    """Library rows the turn attached to the chat, and notices.
+    """Library rows the turn attached to the chat or marked failed, and notices.
 
     Each file the agent indexed is recorded in the Document library and
     attached to the chat, as if the user had added it there. *listed_uploads*
     are the composer attachments already put there when the turn began; they
     are read again for what indexing them recorded.
     """
-    from .agent_documents import add_indexed_documents
+    from .agent_documents import add_indexed_documents, mark_unreadable
     from .utils import doc_to_response
 
     indexed = sse_handler.turn_ledger.indexed_documents()
-    rows = [db.get_document(doc["id"]) for doc in listed_uploads or []]
+    unreadable = sse_handler.turn_ledger.unreadable_documents()
+    # A listed upload the agent couldn't read shows as failed, not ticked.
+    rows = (
+        await asyncio.to_thread(mark_unreadable, db, session_id, unreadable)
+        if unreadable
+        else []
+    )
+    rows += [db.get_document(doc["id"]) for doc in listed_uploads or []]
     notices: list = []
     if indexed:
         added = await asyncio.to_thread(add_indexed_documents, db, session_id, indexed)
