@@ -160,7 +160,8 @@ void printUsage() {
         "  --feature-tier TIER       auto | full | compact: compact offers fewer tools\n"
         "                            for a shorter prompt (env GAIA_FEATURE_TIER)\n"
         "  --ctx-size N              Context window to load the model with\n"
-        "  --max-tokens N            Max tokens per reply\n"
+        "  --max-tokens N            Max tokens per reply (default: sized from the\n"
+        "                            window the model is loaded with)\n"
         "  --temperature T           Sampling temperature\n"
         "Run:\n"
         "  -p, --print [PROMPT]      Headless: answer on stdout, exit 0/1\n"
@@ -419,7 +420,6 @@ Settings buildSettings(const Cli& cli) {
     gaia::json merged = {{"contextSize", 32768},
                          // No message-count cap: history is fitted to the loaded window instead.
                          {"maxHistoryMessages", 0},
-                         {"maxTokens", 16384},
                          {"temperature", 0.2},
                          {"responseMode", "conversational"},
                          {"maxSteps", 1000}};
@@ -542,6 +542,11 @@ Settings buildSettings(const Cli& cli) {
     } catch (const gaia::json::exception& e) {
         throw std::runtime_error(settingsFrom + ": a value has the wrong type (" + e.what() +
                                  "). Fix that value and run again.");
+    }
+    // With no limit given anywhere, the reply limit follows the loaded window.
+    if (!merged.contains("maxTokens")) {
+        s.cfg.maxTokensFromWindow = true;
+        s.cfg.maxTokens = gaia::localMaxOutputTokens(s.cfg.contextSize);
     }
     s.cfg.debug = cli.debug;
     s.mcpConfig = mcpConfig;

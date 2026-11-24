@@ -419,6 +419,11 @@ inline std::string nativeToolCallsToString(NativeToolCalls m) {
 GAIA_API ResponseMode responseModeFromString(const std::string& s);
 GAIA_API NativeToolCalls nativeToolCallsFromString(const std::string& s);
 
+/// The reply limit for a model loaded with a `contextSize`-token window, as the
+/// Python agent sizes it: a quarter of the window up to 32768, never below the
+/// 32K window's 8192, and never more than half a window under 16K.
+GAIA_API int localMaxOutputTokens(int contextSize);
+
 struct AgentConfig {
     std::string baseUrl = defaultBaseUrl();
     std::string modelId = "Qwen3-4B-GGUF";
@@ -428,6 +433,11 @@ struct AgentConfig {
     int maxHistoryMessages = 40; // Max messages kept between processQuery() calls (0 = unlimited)
     int contextSize = 16384;    // LLM context window size in tokens (n_ctx)
     int maxTokens = 4096;       // Max tokens in LLM response
+    /// Size maxTokens each turn from the window the model is loaded with
+    /// (localMaxOutputTokens) instead of using the fixed value.
+    bool maxTokensFromWindow = false;
+    /// The window the model is really loaded with, when larger than contextSize; 0 = unknown.
+    int loadedContextSize = 0;
     bool debug = false;
     bool showPrompts = false;
     bool streaming = defaultStreaming();  // also controlled by GAIA_STREAMING=1

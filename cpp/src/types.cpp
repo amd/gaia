@@ -247,11 +247,16 @@ bool AgentConfig::compactFeatures() const {
     return isCompactModel(modelId);
 }
 
+int localMaxOutputTokens(int contextSize) {
+    const int window = std::max(contextSize, 0);
+    return std::max(std::min(8192, window / 2), std::min(32768, window / 4));
+}
+
 int AgentConfig::replyTokenLimit() const {
     // A compact model's real replies stay under ~2K tokens; a longer one is a runaway
     // repetition that would otherwise run for many minutes.
     constexpr int kCompactReplyTokens = 4096;
-    const int limit = std::min(maxTokens, contextSize / 2);
+    const int limit = std::min(maxTokens, std::max(contextSize, loadedContextSize) / 2);
     return std::max(1, compactFeatures() ? std::min(limit, kCompactReplyTokens) : limit);
 }
 

@@ -210,6 +210,38 @@ TEST(WorkspaceTest, ReadsStayInside) {
 #endif
 }
 
+// An attached file is granted alone: reading it from its folder is fine, its neighbours are not.
+TEST(WorkspaceTest, ReadsOfAGrantedFileStayInsideFromItsFolder) {
+    Dirs d;
+    const fs::path uploads = d.other / "uploads";
+    fs::create_directories(uploads / "nested");
+    std::ofstream(uploads / "report.txt") << "revenue";
+    std::ofstream(uploads / "theirs.txt") << "another chat's upload";
+    const std::string report = fs::canonical(uploads / "report.txt").generic_string();
+    const std::string theirs = fs::canonical(uploads / "theirs.txt").generic_string();
+    Workspace ws({d.work.string(), report});
+    const std::string up = uploads.string(), work = d.work.string();
+    for (const std::string& ok : std::vector<std::string>{
+             "grep -n revenue report.txt", "wc -l report.txt", "head -5 " + report, "grep -rn revenue " + report,
+          "cat report.txt | grep -n revenue | head -3", "grep -c 'net income' report.txt", "pwd"}) {
+        EXPECT_TRUE(staysInside(ws, ok, up)) << ok;
+    }
+    EXPECT_TRUE(staysInside(ws, "grep -n revenue " + report, work));
+    EXPECT_TRUE(staysInside(ws, "cd " + up + " && grep -n revenue report.txt && wc -l report.txt", work));
+    for (const std::string& no : std::vector<std::string>{
+             "grep -n revenue theirs.txt", "wc -l theirs.txt", "cat " + theirs, "ls", "ls .", "find . -name x",
+          "find -name x", "grep -rn revenue", "grep -rn revenue nested", "cat *.txt", "cat report.txt theirs.txt",
+          "du -sh", "cd nested && cat x"}) {
+        EXPECT_FALSE(staysInside(ws, no, up)) << no;
+    }
+    for (const std::string& no : std::vector<std::string>{
+             "cd " + up + " && cat theirs.txt", "cd " + up + " && ls", "cd " + up + " && grep -rn revenue",
+          "cd " + up + " && cat *"}) {
+        EXPECT_FALSE(staysInside(ws, no, work)) << no;
+    }
+    EXPECT_FALSE(staysInside(ws, "ls", d.other.string())) << "an outside folder is not listed";
+}
+
 TEST(WorkspaceTest, TerminalRefusalNamesAllowDir) {
     Dirs d;
     Workspace ws({d.work.string()});
