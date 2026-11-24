@@ -67,7 +67,8 @@ updates:
   # JavaScript - standalone npm packages outside the root workspace: the
   # published flagship hub sidecar, the website, the docs proxy, the Cloudflare workers
   # and the VS Code extension. util/check_dependabot.py fails lint if a tracked
-  # lockfile is missing here (#3525). One grouped PR per directory.
+  # lockfile is missing here (#3525). One grouped PR per directory for minor and
+  # patch bumps; each major bump gets its own PR so one migration can't block the rest.
   - package-ecosystem: "npm"
     directories:
       - "/hub/agents/gaia/npm"
@@ -89,6 +90,9 @@ updates:
       standalone-npm-dependencies:
         patterns:
           - "*"
+        update-types:
+          - "minor"
+          - "patch"
 
   # Go - the TUI module behind the published gaia-* binaries. Its
   # tui/third_party/* forks are wired in by `replace` and stay unwatched.
