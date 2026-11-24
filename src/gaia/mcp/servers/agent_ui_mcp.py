@@ -96,7 +96,8 @@ def _normalize_error(
 
 def _seg(value: str) -> str:
     """Escape *value* as one URL path segment so it cannot reach another route."""
-    if value in (".", ".."):
+    # The server unquotes %2F before routing, so a slash can't be escaped away.
+    if value in (".", "..") or "/" in value:
         raise ValueError(f"{value!r} is not a valid id")
     return quote(value, safe="")
 
@@ -445,9 +446,10 @@ def create_agent_ui_mcp(backend_url: str = DEFAULT_BACKEND) -> "MCPServer":
     @mcp.tool()
     def delete_session(session_id: str) -> Dict[str, Any]:
         """Delete a chat session and all its messages."""
+        url = f"{backend_url}/api/sessions/{_seg(session_id)}"
         try:
             r = requests.delete(
-                f"{backend_url}/api/sessions/{_seg(session_id)}",
+                url,
                 timeout=30,
                 headers=auth_headers(),
             )

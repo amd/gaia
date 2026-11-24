@@ -10,8 +10,8 @@ import pytest
 
 from gaia.mcp.servers.agent_ui_mcp import create_agent_ui_mcp
 
-NASTY = "a/b?x=1#frag"
-ESCAPED = "a%2Fb%3Fx%3D1%23frag"
+NASTY = "a?x=1#frag"
+ESCAPED = "a%3Fx%3D1%23frag"
 
 
 class _RecordingServer:
@@ -57,7 +57,7 @@ def _called_url(verb, tool, *args):
         ("memory_get_conversation_turns", "get"),
     ],
 )
-def test_id_with_slash_and_query_is_escaped(tools, tool_name, verb):
+def test_id_with_query_and_fragment_is_escaped(tools, tool_name, verb):
     url = _called_url(verb, tools[tool_name], NASTY)
 
     assert ESCAPED in url
@@ -67,3 +67,22 @@ def test_id_with_slash_and_query_is_escaped(tools, tool_name, verb):
 def test_dot_segment_id_is_refused(tools):
     with pytest.raises(ValueError, match="not a valid id"):
         tools["get_session"]("..")
+
+
+@pytest.mark.parametrize(
+    "tool_name",
+    [
+        "get_session",
+        "delete_session",
+        "get_messages",
+        "memory_get",
+        "memory_get_by_entity",
+        "memory_get_conversation_turns",
+    ],
+)
+def test_id_with_slash_is_refused(tools, tool_name):
+    with patch("requests.get") as get, patch("requests.delete") as delete:
+        with pytest.raises(ValueError, match="not a valid id"):
+            tools[tool_name]("S/messages/M")
+    get.assert_not_called()
+    delete.assert_not_called()
