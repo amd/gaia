@@ -557,11 +557,7 @@ const backendSupervisor = createBackendSupervisor({
         (state.status === "restarting" ? ` (try ${state.attempt} of ${state.maxRestarts})` : "") +
         (state.lastError ? `: ${state.lastError}` : "")
     );
-    // A backend that came up after a failed start clears the rollback offer:
-    // the failed start is over, so there is nothing to go back from. This
-    // replaces the old background wait that cleared it when a hung backend
-    // answered late; a hung backend is now stopped instead, so the clear
-    // happens on the restart that brings it back.
+    // A backend up again after a failed start leaves nothing to roll back from.
     if (state.status === "running") autoUpdater.clearStartFailure();
     if (mainWindow && !mainWindow.isDestroyed()) {
       mainWindow.webContents.send("backend:state", backendStateForRenderer(state));
@@ -1251,15 +1247,9 @@ app.whenReady().then(async () => {
   if (!backendReady) {
     autoUpdater.reportStartFailure();
     if (backendProcess) {
-      // Started but never answered: it is hung, not running. Stop it and
-      // tell the window it failed, so the startup screen offers Restart
-      // GAIA instead of telling the user to quit and reopen the app. The
-      // intentional kill keeps the exit handler from reporting a crash.
-      const hung = backendProcess;
-      backendProcess = null;
-      isIntentionalKill = true;
-      await portManager.killBackend(hung);
-      backendSupervisor.failedToAnswer(`The backend did not answer within ${STARTUP_TIMEOUT / 1000} s.`);
+      waitForBackend(STARTUP_TIMEOUT * 10).then((ready) => {
+        if (ready) autoUpdater.clearStartFailure();
+      });
     }
   }
 

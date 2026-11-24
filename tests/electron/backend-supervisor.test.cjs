@@ -291,21 +291,3 @@ test("Restart GAIA from running that fails terminally stops at once, with no ret
   expect(onStopped).not.toHaveBeenCalled();
 });
 
-test("a backend that started but never answered is stopped until Restart GAIA", () => {
-  const onStopped = jest.fn();
-  const h = harness({ onStopped });
-  h.sup.running(5000);
-  h.sup.failedToAnswer("The backend did not answer within 30 s.");
-  expect(h.last()).toMatchObject({
-    status: "stopped",
-    port: null,
-    attempt: 0,
-    nextAttemptAt: null,
-    lastError: "The backend did not answer within 30 s.",
-  });
-  // Hung at startup, not crashed while running: no crash dialog.
-  expect(onStopped).not.toHaveBeenCalled();
-  h.sup.restartNow();
-  expect(h.last()).toMatchObject({ status: "restarting", attempt: 1 });
-  expect(h.starts).toHaveLength(1);
-});

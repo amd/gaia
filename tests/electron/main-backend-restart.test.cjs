@@ -227,15 +227,14 @@ test("a restart stops the live backend first, so a hung one is not left running 
   expect(h.context.backendProcess).toBe(h.child);
 });
 
-test("a backend that never answers at startup is stopped, not left running for a reopen", () => {
-  const startup = main.slice(main.indexOf("backendReady = await waitForBackend(STARTUP_TIMEOUT);"));
-  // The hung process is stopped on purpose, so the exit handler does not
-  // report a crash for it, and the window is told the backend failed.
-  expect(startup).toMatch(/const hung = backendProcess;\s*backendProcess = null;\s*isIntentionalKill = true;\s*await portManager\.killBackend\(hung\);/);
-  expect(startup).toMatch(/backendSupervisor\.failedToAnswer\(`The backend did not answer within \$\{STARTUP_TIMEOUT \/ 1000\} s\.`\);/);
-  // No background wait for a late answer: the hung process is gone, so it
-  // can never answer, and the rollback offer clears when the restart lands.
-  expect(main).not.toMatch(/STARTUP_TIMEOUT \* 10/);
+test("a slow first launch is never stopped at the startup timeout", () => {
+  const from = main.indexOf("backendReady = await waitForBackend(STARTUP_TIMEOUT);");
+  const startup = main.slice(from, main.indexOf("if (showingInstallScreen)", from));
+  expect(from).toBeGreaterThan(-1);
+  // The hung case is covered by Restart GAIA; a slow but healthy backend keeps
+  // its chance to answer late and clear the rollback offer.
+  expect(startup).not.toMatch(/killBackend/);
+  expect(startup).toMatch(/waitForBackend\(STARTUP_TIMEOUT \* 10\)\.then\(\(ready\) => \{\s*if \(ready\) autoUpdater\.clearStartFailure\(\);/);
   expect(main).toMatch(/if \(state\.status === "running"\) autoUpdater\.clearStartFailure\(\);/);
 });
 

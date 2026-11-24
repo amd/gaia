@@ -4,10 +4,8 @@
 /**
  * Restarts GAIA's backend when it exits on its own: after a growing wait,
  * at most `maxRestarts` times in `windowMs`, then it stops and waits for the
- * user's Restart GAIA (restartNow). A backend that starts but never answers
- * is hung, not running: the main process reports it with failedToAnswer, and
- * restartNow also restarts one still reported running. No Electron imports,
- * so it unit-tests.
+ * user's Restart GAIA (restartNow), which also restarts a backend still
+ * reported running but hung. No Electron imports, so it unit-tests.
  *
  * State, as sent to the renderer:
  *   status        "running" | "restarting" | "stopped"
@@ -120,12 +118,6 @@ function createBackendSupervisor({
 
     /** No backend could be started at all (its program is missing): wait for Restart GAIA. */
     failedToStart(error) {
-      if (stopped) return;
-      emit({ status: "stopped", port: null, since: now(), attempt: 0, nextAttemptAt: null, lastError: error });
-    },
-
-    /** The backend started but never answered: it is hung, so stop and wait for Restart GAIA. */
-    failedToAnswer(error) {
       if (stopped) return;
       emit({ status: "stopped", port: null, since: now(), attempt: 0, nextAttemptAt: null, lastError: error });
     },
