@@ -19,6 +19,7 @@
 #include <gaia/memory_store.h>
 #include <gaia/process.h>
 #include <gaia/skill_library.h>
+#include <gaia/web_tools.h>
 #include <gaia/workspace.h>
 
 #include <atomic>
@@ -245,6 +246,7 @@ private:
 
     json delegateTasks(const json& args);
     std::shared_ptr<Workspace> workspace_;  // null with full access
+    std::shared_ptr<WebPageCache> webPages_ = std::make_shared<WebPageCache>();  // cleared each turn
     std::function<bool(const std::string& path)> askPathAccess_;
     std::vector<std::string> openedFolders_;  // opened by the user since the start; guarded by turnListingMu_
     /// The folders the agent started with, then those the user opened since.

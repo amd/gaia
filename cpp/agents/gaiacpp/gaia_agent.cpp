@@ -119,7 +119,7 @@ void GaiaAgent::registerTools() {
     }
     workspace_ = ws;
     if (options_.maxHelpers != 0) toolRegistry().registerTool(delegateTaskTool());
-    if (options_.webTools) WebTools::registerAll(toolRegistry());
+    if (options_.webTools) WebTools::registerAll(toolRegistry(), webPages_);
     if (docs_) {
         docs_->registerTools(toolRegistry(), ws ? std::function<std::string(const std::string&)>(
                                                       [ws](const std::string& p) { return ws->checkPath(p); })
@@ -513,6 +513,8 @@ std::string GaiaAgent::textSizeOf(const fs::path& dir) {
 }
 
 void GaiaAgent::onTurnStart() {
+    // A page read last turn may have changed, and fetching it again is the user's call.
+    webPages_->clear();
     // The model can change between turns, so its tier is applied per turn.
     const bool compact = config().compactFeatures();
     for (const auto& name : compactWithheldTools()) {

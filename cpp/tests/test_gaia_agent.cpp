@@ -1791,6 +1791,105 @@ TEST(GaiaAgentTest, AFalseNotFoundIsSentBackOnceThroughTheAgent) {
     EXPECT_NE(mock.receivedBodies()[2].find("you have not opened lease.md"), std::string::npos);
 }
 
+// ---- Long web pages ----
+
+namespace {
+struct LongPageServer {
+    httplib::Server srv;
+    std::thread t;
+    int port = 0;
+    std::atomic<int> hits{0};
+    std::string body;
+    size_t sectionAt = 0;
+    LongPageServer() {
+        while (body.size() < 150000) body += "   This line is filler text from an earlier section of the RFC.\n";
+        sectionAt = body.size();
+        body += "15.5.19.  418 (Unused)\n   [RFC2324] was an April 1 RFC that lampooned the various ways HTTP was "
+                "abused; one such abuse was the definition of an application-specific 418 status code.\n";
+        while (body.size() < 220000) body += "   This line is filler text from a later section of the RFC.\n";
+        srv.Get("/rfc9110.txt", [this](const httplib::Request&, httplib::Response& res) {
+            ++hits;
+            res.set_content(body, "text/plain");
+        });
+        port = srv.bind_to_any_port("127.0.0.1");
+        t = std::thread([this] { srv.listen_after_bind(); });
+        while (!srv.is_running()) std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    }
+    ~LongPageServer() {
+        srv.stop();
+        t.join();
+    }
+    std::string url() const { return "http://127.0.0.1:" + std::to_string(port) + "/rfc9110.txt"; }
+};
+
+struct AllowPrivateFetch {
+    AllowPrivateFetch() { set("1"); }
+    ~AllowPrivateFetch() { set(""); }
+    static void set(const char* v) {
+#ifdef _WIN32
+        _putenv_s("GAIA_WEB_FETCH_ALLOW_PRIVATE", v);
+#else
+        if (*v) setenv("GAIA_WEB_FETCH_ALLOW_PRIVATE", v, 1); else unsetenv("GAIA_WEB_FETCH_ALLOW_PRIVATE");
+#endif
+    }
+};
+}  // namespace
+
+TEST(GaiaAgentTest, AnyPartOfALongPageIsReachableWithoutFetchingItAgain) {
+    Workdir w;
+    bench::MockLlmServer mock;
+    LongPageServer page;
+    AllowPrivateFetch allow;
+    GaiaAgent::Options o = optionsFor(w);
+    o.webTools = true;
+    GaiaAgent agent(cfgFor(mock), o);
+    int asked = 0;
+    agent.toolRegistry().setConfirmCallback([&asked](const std::string&, const json&) {
+        ++asked;
+        return ToolConfirmResult::ALLOW_ONCE;
+    });
+
+    json first = agent.toolRegistry().executeTool("web_fetch", json{{"url", page.url()}});
+    ASSERT_EQ(first["status"], "success") << first.dump().substr(0, 400);
+    EXPECT_EQ(first["total_chars"], page.body.size());
+    EXPECT_TRUE(first["truncated"].get<bool>());
+    EXPECT_LT(first["text"].get<std::string>().size(), 16000u) << "a part must fit the conversation's clip";
+    ASSERT_TRUE(first.contains("next_offset")) << "a cut part names where the next one starts";
+    EXPECT_NE(first.value("note", "").find("offset="), std::string::npos) << first.value("note", "");
+
+    // A #fragment is the same page: the second look is served from this turn's copy.
+    json found = agent.toolRegistry().executeTool(
+        "web_fetch", json{{"url", page.url() + "#section-15.5.19"}, {"find", "15.5.19"}});
+    ASSERT_EQ(found["status"], "success") << found.dump().substr(0, 400);
+    EXPECT_NE(found["text"].get<std::string>().find("418 (Unused)"), std::string::npos)
+        << found["text"].get<std::string>().substr(0, 300);
+    EXPECT_EQ(found["matches"], 1);
+
+    const size_t next = first["next_offset"].get<size_t>();
+    json second = agent.toolRegistry().executeTool("web_fetch", json{{"url", page.url()}, {"offset", next}});
+    ASSERT_EQ(second["status"], "success");
+    EXPECT_EQ(second["text"].get<std::string>().substr(0, 40), page.body.substr(next, 40));
+
+    json missed = agent.toolRegistry().executeTool("web_fetch", json{{"url", page.url()}, {"find", "teapot"}});
+    EXPECT_EQ(missed["matches"], 0);
+    EXPECT_NE(missed.value("note", "").find("Do not infer"), std::string::npos);
+    json past = agent.toolRegistry().executeTool("web_fetch",
+                                                 json{{"url", page.url()}, {"offset", page.body.size() + 10}});
+    EXPECT_EQ(past["status"], "error");
+    EXPECT_NE(past.value("error", "").find("past the end"), std::string::npos) << past.dump().substr(0, 300);
+
+    EXPECT_EQ(page.hits.load(), 1) << "the page was downloaded again";
+    EXPECT_EQ(asked, 1) << "the user was asked again for a page already read this turn";
+
+    // A new turn starts fresh: the page may have changed, and the user is asked again.
+    mock.pushResponse(answer("ok"));
+    agent.processQuery("thanks");
+    json later = agent.toolRegistry().executeTool("web_fetch", json{{"url", page.url()}});
+    EXPECT_EQ(later["status"], "success");
+    EXPECT_EQ(page.hits.load(), 2);
+    EXPECT_EQ(asked, 2);
+}
+
 // ---- NPU ----
 
 TEST(GaiaAgentTest, AMachineLockKeepsOutASecondHolder) {
