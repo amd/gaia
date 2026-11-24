@@ -743,6 +743,8 @@ for (const locale of ['en', 'ar']) {
         const panel = turn.locator('.agent-recovery');
         await expect(panel).toBeVisible();
         await expect(panel.locator('.agent-recovery-actions button')).toHaveCount(2);
+        // One card: the turn's own generic error would only repeat it, in English.
+        await expect(turn.locator('.error-banner, .flow-error, .msg-try-again')).toHaveCount(0);
         await shot(page, `chat-gaiacpp-missing-${locale}`);
         expect(await audit(page)).toEqual([]);
     });

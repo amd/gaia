@@ -7,7 +7,7 @@ import { HistoryNotice, LibraryNotices } from './ChatNotices';
 import { RetryWithMenu } from './RetryWithMenu';
 import { AnswerComparison } from './AnswerComparison';
 import { ModelServerDownNotice } from './ModelServerDownNotice';
-import { ChatAgentRecovery } from './ChatAgentRecovery';
+import { ChatAgentRecovery, useAgentProblem } from './ChatAgentRecovery';
 import { NativeAgentFailedNotice } from './NativeAgentFailedNotice';
 import type { Comparison } from '../hooks/useAnswerComparison';
 import type { Message } from '../types';
@@ -63,6 +63,7 @@ export const TranscriptRow = memo(function TranscriptRow({
     const recovers = msg.failed === true && msg.failure !== 'model_server_down' && canTryAgain;
     // Only when gaiacpp started: a gaiacpp that can't start gets the recovery's two fixes instead.
     const ranOnNative = msg.agentProgram === 'gaiacpp' && isLast && !busy;
+    const agentProblem = useAgentProblem(recovers, msg.id);
     return (
         <div className={className} data-message-id={msg.id} data-role={msg.role}>
             {notice && <HistoryNotice text={notice} />}
@@ -85,15 +86,14 @@ export const TranscriptRow = memo(function TranscriptRow({
                 extraActions={canRetry ? (
                     <RetryWithMenu answeredBy={model} onPick={(picked) => onRetryWith(msg, picked)} />
                 ) : undefined}
-                onTryAgain={canTryAgain ? () => onTryAgain(msg) : undefined}
+                onTryAgain={canTryAgain && !agentProblem ? () => onTryAgain(msg) : undefined}
+                failureNotice={agentProblem ? <ChatAgentRecovery problem={agentProblem} onTryAgain={() => onTryAgain(msg)} /> : undefined}
                 onContinue={canTryAgain && stopped ? onContinue : undefined}
                 latest={msg.role === 'assistant' && isLast}
                 latencyMs={latencyMs}
             />
             {msg.failure === 'model_server_down' && isLast && !busy && <ModelServerDownNotice />}
-            {recovers ? (
-                <ChatAgentRecovery key={msg.id} onTryAgain={() => onTryAgain(msg)} otherwise={ranOnNative ? <NativeAgentFailedNotice /> : null} />
-            ) : ranOnNative && <NativeAgentFailedNotice />}
+            {ranOnNative && (!recovers || agentProblem === null) && <NativeAgentFailedNotice />}
             {comparison && (
                 <AnswerComparison
                     original={msg}

@@ -66,6 +66,8 @@ interface MessageBubbleProps {
     extraActions?: React.ReactNode;
     /** Shows a labelled Try again under a failed, cut-off or stopped reply, which asks the user to press it. */
     onTryAgain?: () => void;
+    /** Says why the turn failed in place of its own error, banner and log buttons, which would only repeat it. */
+    failureNotice?: React.ReactNode;
     /** Asks the same question again with the same model (answers only). */
     onRegenerate?: () => void;
     /** Opens this message for editing (user messages only). */
@@ -607,7 +609,7 @@ function MessageEditor({ original, draft, onDraft, onSend, onCancel, confirming 
 
 const SCHEDULE_RUN_MARKER = /^\[schedule-run\] Run #(\d+) \u00b7 (.+)$/;
 
-export function MessageBubble({ message, isStreaming, agentSteps, agentStepsActive, cards, onDelete, onResend, extraActions, onTryAgain, onContinue, onRegenerate, onEditStart, editing = false, editDraft = null, onEditDraft, onEdit, onEditCancel, laterCount = 0, latest = false, latencyMs, liveStatus, toolStatus, awaitingUser }: MessageBubbleProps) {
+export function MessageBubble({ message, isStreaming, agentSteps, agentStepsActive, cards, onDelete, onResend, extraActions, onTryAgain, failureNotice, onContinue, onRegenerate, onEditStart, editing = false, editDraft = null, onEditDraft, onEdit, onEditCancel, laterCount = 0, latest = false, latencyMs, liveStatus, toolStatus, awaitingUser }: MessageBubbleProps) {
     const t = useT();
     useModelNames();
     const echo = useMemo(() => {
@@ -616,13 +618,15 @@ export function MessageBubble({ message, isStreaming, agentSteps, agentStepsActi
         return isStreaming ? { steps, echoed: false, endedBy: null } : dropErrorsEchoedInAnswer(steps, message.content);
     }, [agentSteps, message.content, message.role, isStreaming]);
     const isError = message.role === 'assistant' && (echo.echoed || message.failed === true || isErrorContent(message.content));
+    const covered = isError && Boolean(failureNotice);
+    const shownSteps = covered ? echo.steps?.filter((step) => step.type !== 'error') : echo.steps;
     const place = useInferencePlace();
     const showServerLog = useLogsStore((s) => s.show);
     const openSettings = useChatStore((s) => s.openSettings);
     const jumpToSetting = useChatStore((s) => s.jumpToSetting);
     const failedTurn = useMemo(
-        () => (isError && !isStreaming ? describeFailedTurn(message.content) : null),
-        [isError, isStreaming, message.content],
+        () => (isError && !isStreaming && !covered ? describeFailedTurn(message.content) : null),
+        [isError, isStreaming, covered, message.content],
     );
     const stopState = message.role === 'assistant'
         ? message.stopState ?? (message.content.trim() === SERVER_CANCELLED_TEXT ? 'stopped' : undefined)
@@ -811,9 +815,9 @@ export function MessageBubble({ message, isStreaming, agentSteps, agentStepsActi
                 </div>
                 <div className="msg-body">
                     {/* The turn as a timeline; the live line sits where the next step will appear */}
-                    {message.role === 'assistant' && ((echo.steps && echo.steps.length > 0) || isStreaming) && (
+                    {message.role === 'assistant' && ((shownSteps && shownSteps.length > 0) || isStreaming) && (
                         <AgentActivity
-                            steps={echo.steps ?? []}
+                            steps={shownSteps ?? []}
                             isActive={agentStepsActive ?? false}
                             running={!!isStreaming}
                             awaitingUser={awaitingUser}
@@ -824,7 +828,7 @@ export function MessageBubble({ message, isStreaming, agentSteps, agentStepsActi
                             )}
                         />
                     )}
-                    {isError && (
+                    {isError && !covered && (
                         <div className="error-banner">
                             <AlertTriangle size={14} />
                             <span>{t(failedTurn && failedTurn.kind !== 'unknown' ? `failedTurn.${failedTurn.kind}.title` : 'msg.error')}</span>
@@ -876,7 +880,7 @@ export function MessageBubble({ message, isStreaming, agentSteps, agentStepsActi
                                 className="msg-expand-toggle"
                             />
                         </>
-                    ) : failedTurn?.raw ? (
+                    ) : covered ? failureNotice : failedTurn?.raw ? (
                         <>
                             <p className="msg-failed-lead">{t(`failedTurn.${failedTurn.kind}.body`)}</p>
                             <details className="msg-failed-details">
@@ -951,7 +955,7 @@ export function MessageBubble({ message, isStreaming, agentSteps, agentStepsActi
                         </button>
                     ))}
                     {/* The agent itself stopped: its own log says why, not the model server's. */}
-                    {(isError || endedBy) && !isStreaming && namesAgentLog(endedBy ?? message.content) ? (
+                    {covered ? null : (isError || endedBy) && !isStreaming && namesAgentLog(endedBy ?? message.content) ? (
                         <button type="button" className="msg-try-again" onClick={() => showServerLog('agent')}>
                             <ScrollText size={12} aria-hidden="true" />
                             {t('logs.agentLog')}
