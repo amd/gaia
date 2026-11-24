@@ -72,6 +72,8 @@ try {
     onRendererGone: (contents, details) => {
       void handleRendererGone(contents, details);
     },
+    // A pane tab's crash is the pane's to report ("Reload to try again"), not GAIA's.
+    isPanePage: (contents) => contents.session === session.fromPartition(PANE_PARTITION),
   }));
 } catch (err) {
   try { process.stderr.write(`[main] safety-net load failed: ${err.message}\n`); } catch { }
