@@ -10445,7 +10445,8 @@ def _is_mcp_bridge_process(pid: int) -> bool:
     except psutil.AccessDenied as e:
         raise PermissionError(
             f"cannot read the command line of pid {pid} to confirm it is the "
-            "GAIA MCP bridge; stop it yourself and delete gaia.mcp.pid"
+            "GAIA MCP bridge; if it is not, delete gaia.mcp.pid; if it is, "
+            "stop it with your OS task manager"
         ) from e
     # The background child is `python -m gaia.cli mcp start ...`.
     return "gaia.cli" in argv and any(
@@ -10497,7 +10498,9 @@ def handle_mcp_stop(_args):
         try:
             print(f"🔄 Stopping MCP bridge process (PID: {pid})")
             if sys.platform.startswith("win"):
-                subprocess.run(["taskkill", "/F", "/PID", str(pid)], check=True)
+                subprocess.run(
+                    ["taskkill", "/F", "/PID", str(pid)], check=True, timeout=30
+                )
                 print(f"✅ Stopped MCP bridge (PID: {pid})")
             else:
                 try:
