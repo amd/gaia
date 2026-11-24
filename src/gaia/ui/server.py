@@ -415,13 +415,16 @@ def _tripwire_sweep() -> None:
         )
 
 
-def create_app(db_path: str = None, webui_dist: str = None) -> FastAPI:
+def create_app(
+    db_path: str = None, webui_dist: str = None, port: int = DEFAULT_PORT
+) -> FastAPI:
     """Create and configure the FastAPI application.
 
     Args:
         db_path: Path to SQLite database. None for default, ":memory:" for testing.
         webui_dist: Path to the pre-built frontend dist directory. When None,
             falls back to the default location relative to this package.
+        port: Port the server listens on; the mobile-access tunnel forwards to it.
 
     Returns:
         Configured FastAPI application.
@@ -780,6 +783,9 @@ def create_app(db_path: str = None, webui_dist: str = None) -> FastAPI:
 
         # Shutdown
         remove_local_work(active_turns_in_flight)
+        # ngrok is its own process: left running, it keeps the public URL open.
+        await tunnel.stop()
+        logger.info("Mobile access tunnel stopped")
         await scheduler.shutdown()
         logger.info("Task scheduler stopped")
         await agent_loop.stop()
@@ -794,6 +800,11 @@ def create_app(db_path: str = None, webui_dist: str = None) -> FastAPI:
         await stop_watcher()
         logger.info("Connector activation watcher stopped")
         recovery_sweep.cancel()
+        # Indexing writes to the database, so it ends before the database closes.
+        pending = list(indexing_tasks.values())
+        for task in pending:
+            task.cancel()
+        await asyncio.gather(*pending, return_exceptions=True)
         db.close()
         logger.info("Database connection closed")
         memory_router_mod.close_store()
@@ -855,7 +866,7 @@ def create_app(db_path: str = None, webui_dist: str = None) -> FastAPI:
     app.state.max_indexed_files = int(os.environ.get("GAIA_MAX_INDEXED_FILES", "0"))
 
     # Initialize tunnel manager for mobile access
-    tunnel = TunnelManager(port=DEFAULT_PORT)
+    tunnel = TunnelManager(port=port)
     app.state.tunnel = tunnel
     redact_tunnel_token_in_access_log()
 
@@ -1242,7 +1253,7 @@ def main():
     log_level = "debug" if args.debug else "info"
     print(f"Starting GAIA Agent UI server on http://{args.host}:{args.port}")
     try:
-        server_app = create_app(webui_dist=args.ui_dist)
+        server_app = create_app(webui_dist=args.ui_dist, port=args.port)
         if sys.stdout.isatty():
             print(
                 f"   Open (link works once): "
