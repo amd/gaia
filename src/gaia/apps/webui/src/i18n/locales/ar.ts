@@ -3061,6 +3061,33 @@ const messages: Messages = {
     'banner.boot.load_libraries': 'جارٍ تجهيز البحث في المستندات',
     'banner.boot.load_model': 'جارٍ تحميل النموذج',
     'banner.boot.generic': 'جارٍ تجهيز GAIA',
+    'banner.retry': 'إعادة المحاولة',
+    'banner.checking': 'جارٍ التحقق…',
+    'banner.backendError': 'ردّت الواجهة الخلفية لـ GAIA بخطأ ({error}).',
+    'banner.backendErrorHint': 'قد تكون مثقلة بالعمل. يواصل GAIA التحقق؛ وإذا استمرّ ذلك، فأعد تشغيل GAIA.',
+    'banner.backendSlow': 'GAIA بطيء في الاستجابة.',
+    'banner.backendSlowHint': 'قد يكون مشغولًا بمحادثة أخرى أو بتطبيق آخر. يواصل GAIA التحقق.',
+    'banner.configError': 'تعذّر تحميل إعدادات GAIA.',
+    'banner.contextTooSmall': 'نافذة السياق للنموذج اللغوي صغيرة جدًا (الرموز: {current}؛ المطلوب: {required}).',
+    'banner.contextTooSmallHint': 'أعد تحميله بنافذة سياق أكبر من الإعدادات ← متقدم.',
+
+    // The "Changes in this turn" review
+    'changes.label': 'مراجعة التغييرات',
+    'changes.title': 'التغييرات في هذه الجولة',
+    'changes.close': 'إغلاق',
+    'changes.loadFailed': 'تعذّر تحميل التغييرات: {error}',
+    'changes.loading': 'جارٍ تحميل التغييرات…',
+    'changes.undone': 'تم التراجع عن هذه الجولة؛ هذه هي التغييرات التي أجرتها.',
+    'changes.edited': 'معدَّل',
+    'changes.created': 'منشأ',
+    'changes.deleted': 'محذوف',
+    'changes.tooLarge': 'أكبر من أن يُعرض: {before} ← {after} بايت.',
+    'changes.binary': 'ملف ثنائي: {before} ← {after} بايت. لا يوجد فرق نصي.',
+    'changes.truncated': 'تم اختصار الفرق: التغيير أطول من أن يُعرض كاملًا.',
+
+    // The model chip's status icons
+    'modelChip.notDownloaded': 'غير منزَّل',
+    'modelChip.switchFailed': 'تعذّر تبديل النموذج',
 
     // The update chip
 
