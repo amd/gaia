@@ -978,10 +978,10 @@ class SessionHistory(list):
             try:
                 os.close(os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600))
             except FileExistsError:
-                pass  # another process created it first
+                pass  # existing transcript, or another process just created it
         self._db = sqlite3.connect(str(path) if path is not None else ":memory:")
         self._db.execute(
-            "CREATE TABLE IF NOT EXISTS turns (id INTEGER PRIMARY KEY, messages TEXT NOT NULL)"
+            "CREATE TABLE IF NOT EXISTS turns (id INTEGER PRIMARY KEY, messages TEXT NOT NULL, owner TEXT)"
         )
         columns = {row[1] for row in self._db.execute("PRAGMA table_info(turns)")}
         if "owner" not in columns:

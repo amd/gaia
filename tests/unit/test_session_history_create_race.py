@@ -26,3 +26,24 @@ def test_a_new_transcript_is_private(tmp_path):
     SessionHistory(path)
 
     assert path.stat().st_mode & 0o077 == 0
+
+
+def test_a_new_transcript_is_created_with_the_owner_column(tmp_path):
+    import sqlite3
+
+    path = tmp_path / "fresh.db"
+    SessionHistory(path)
+
+    columns = [
+        row[1] for row in sqlite3.connect(path).execute("PRAGMA table_info(turns)")
+    ]
+    assert "owner" in columns
+
+
+def test_two_opens_of_a_new_transcript_both_append(tmp_path):
+    path = tmp_path / "shared.db"
+    first = SessionHistory(path)
+    second = SessionHistory(path)
+
+    first.append({"role": "user", "content": "a"})
+    second.append({"role": "user", "content": "b"})
