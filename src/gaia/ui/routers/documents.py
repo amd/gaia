@@ -26,6 +26,7 @@ from typing import List
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from fastapi.responses import FileResponse
 
+from gaia.security import read_block
 from gaia.upload_names import reserve_copy_path
 from gaia.utils.image_formats import IMAGE_EXTENSIONS
 
@@ -75,6 +76,18 @@ UPLOAD_CHUNK_SIZE = 64 * 1024  # 64 KB
 
 # Length of the random hex ID in a partial upload's name.
 MANAGED_ID_LEN = 12
+
+
+_CREDENTIAL_FILE_DETAIL = (
+    "This file holds credentials or keys, so GAIA won't add it to the library "
+    "or serve it. Open it yourself if you need it."
+)
+
+
+def _refuse_secret(path: Path) -> None:
+    """403 when *path* holds credentials or keys, the files the read tools refuse."""
+    if read_block(str(path))[0]:
+        raise HTTPException(status_code=403, detail=_CREDENTIAL_FILE_DETAIL)
 
 
 def _short_id() -> str:
@@ -237,6 +250,8 @@ async def upload_by_path(
         raise HTTPException(
             status_code=400, detail=f"Invalid file path: {path_error_reason(e)}"
         ) from e
+    ensure_document_path_allowed(Path(request.filepath))
+    _refuse_secret(resolved)
     lock = upload_locks.setdefault(str(resolved), asyncio.Lock())
 
     async with lock:
@@ -631,6 +646,8 @@ async def get_document_file(doc_id: str, db: ChatDatabase = Depends(get_db)):
             status_code=404,
             detail=f"{doc.get('filename') or doc_id} is no longer on disk at {path}",
         )
+    if not _is_server_owned(str(real)):
+        _refuse_secret(real)
     # FileResponse opens the file only once headers are out, cutting the reply.
     try:
         with open(real, "rb"):
@@ -694,6 +711,8 @@ async def reindex_document(
             status_code=422,
             detail=f"File not found on disk for document {doc_id!r}",
         )
+    if not _is_server_owned(filepath):
+        _refuse_secret(Path(filepath))
 
     db.update_document_status(doc_id, "indexing", last_error=None)
 
@@ -896,6 +915,9 @@ async def index_folder(request: IndexFolderRequest, db: ChatDatabase = Depends(g
             if item.is_symlink() or not item.is_file():
                 continue
             if item.suffix.lower() in FOLDER_INDEX_EXTENSIONS:
+                if read_block(str(item))[0]:
+                    skipped += 1
+                    continue
                 candidate_files.append(item)
             elif item.suffix.lower() in IMAGE_EXTENSIONS:
                 skipped_images += 1

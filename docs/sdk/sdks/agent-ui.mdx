@@ -1487,7 +1487,8 @@ Deleting a chat deletes its copies.
     **Errors:** 400 with `detail.status: "is_folder"` when the path is a folder
     (index it with `index-folder`); 400 for a file type GAIA doesn't index; 404
     for a missing file inside an allowed root; 403 for any path outside the
-    allowed roots, whether or not it exists.
+    allowed roots, whether or not it exists, and for files that hold
+    credentials or keys (the same files the agent's read tools refuse).
   </Accordion>
 
   <Accordion title="DELETE /api/documents/{doc_id}">
@@ -1995,7 +1996,8 @@ Used to reach the UI from a phone.
   <Accordion title="GET /api/documents/{doc_id}/file">
     The document's original file, served inline so the browser can show it.
     A citation link opens a PDF at its page with `#page=N`. Only files in the
-    document library are served; a file deleted from disk returns 404.
+    document library are served; a file deleted from disk returns 404, and a
+    file that holds credentials or keys returns 403.
   </Accordion>
 
   <Accordion title="POST /api/documents/{doc_id}/cancel">
@@ -2005,7 +2007,8 @@ Used to reach the UI from a phone.
   <Accordion title="POST /api/documents/index-folder">
     Index the supported files in a folder (`recursive`, default `true`, also
     takes subfolders). Returns `indexed`, `failed` with one line per file in
-    `errors`, `skipped`: files of a type GAIA doesn't index, and
+    `errors`, `skipped`: files of a type GAIA doesn't index or that hold
+    credentials or keys, and
     `skipped_images`: images, which GAIA reads only when each is added on its
     own. A file that fails, or yields no text, gets a `failed` library row with
     its `last_error`, so it can be retried with `reindex`; it is not in
@@ -2015,7 +2018,8 @@ Used to reach the UI from a phone.
   <Accordion title="POST /api/documents/{doc_id}/reindex">
     Re-run the RAG indexing pipeline for a document — clears any previous
     failure, then always ends in `complete` or `failed` (never 200 while
-    leaving the document in a bad state).
+    leaving the document in a bad state). 403 for a file that holds
+    credentials or keys.
   </Accordion>
 </AccordionGroup>
 

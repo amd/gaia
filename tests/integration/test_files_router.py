@@ -1597,3 +1597,11 @@ class TestFileBrowseDenialReason:
         resp = client.get("/api/files/browse", params={"path": outside})
         assert resp.status_code == 403
         assert isinstance(resp.json()["detail"], str)
+
+
+def test_ui_token_file_name_is_read_blocked():
+    """Renaming the Agent UI token file must not drop it out of the read guard."""
+    from gaia.security import SENSITIVE_FILE_NAMES
+    from gaia.ui.api_token import TOKEN_FILE_NAME
+
+    assert TOKEN_FILE_NAME in SENSITIVE_FILE_NAMES
