@@ -558,9 +558,8 @@ def vulkan_workarounds() -> Dict[str, str]:
 def gaia_home() -> Path:
     """Return GAIA's state directory.
 
-    The fallback is the one :func:`gaia.home.default_gaia_home` returns, so a
-    test or a launcher that relocates the default moves this lookup too
-    (#8914).
+    The fallback is :func:`gaia.home.default_gaia_home`, so relocating the
+    default moves this lookup too.
 
     Returns:
         ``$GAIA_HOME`` when set, otherwise the shared ``~/.gaia`` default.
