@@ -222,7 +222,7 @@ TEST(WorkspaceTest, ReadsOfAGrantedFileStayInsideFromItsFolder) {
     Workspace ws({d.work.string(), report});
     const std::string up = uploads.string(), work = d.work.string();
     for (const std::string& ok : std::vector<std::string>{
-             "grep -n revenue report.txt", "wc -l report.txt", "head -5 " + report, "grep -rn revenue " + report,
+             "grep -n revenue report.txt", "wc -l report.txt", "head -5 " + report,
           "cat report.txt | grep -n revenue | head -3", "grep -c 'net income' report.txt", "pwd"}) {
         EXPECT_TRUE(staysInside(ws, ok, up)) << ok;
     }
@@ -233,7 +233,8 @@ TEST(WorkspaceTest, ReadsOfAGrantedFileStayInsideFromItsFolder) {
     for (const std::string& no : std::vector<std::string>{
              "grep -n revenue theirs.txt", "wc -l theirs.txt", "cat " + theirs, "ls", "ls .", "find . -name x",
           "find -name x", "grep -rn revenue", "grep -rn revenue nested", "cat *.txt", "cat report.txt theirs.txt",
-          "du -sh", "cd nested && cat x"}) {
+          "du -sh", "cd nested && cat x", "ls --ignore=report.txt", "du -a --exclude=report.txt",
+          "grep -r -f report.txt", "grep -rn revenue " + report}) {
         EXPECT_FALSE(staysInside(ws, no, up)) << no;
     }
     for (const std::string& no : std::vector<std::string>{

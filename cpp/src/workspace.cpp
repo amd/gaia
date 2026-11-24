@@ -586,8 +586,6 @@ bool Workspace::readsStayInside(const std::vector<std::vector<std::string>>& seg
                 if (!named && !(folder.inside && treeStaysInside(fs::u8path(folder.path), inside))) return false;
             }
         }
-        // Per folder: whether a word named a granted place from it.
-        std::vector<bool> namedInside(folders.size(), false);
         for (size_t i = 1; i < words.size(); ++i) {
             std::string w = words[i];
             if (w.empty()) continue;
@@ -619,7 +617,6 @@ bool Workspace::readsStayInside(const std::vector<std::vector<std::string>>& seg
                 const fs::path at = p.is_absolute() ? p : fs::u8path(folders[f].path) / p;
                 const std::string abs = normalized(at);
                 if (inside(abs)) {
-                    namedInside[f] = true;
                     if (cd) folders.push_back({abs, true});
                     continue;
                 }
@@ -638,8 +635,10 @@ bool Workspace::readsStayInside(const std::vector<std::vector<std::string>>& seg
                 return false;
             }
         }
-        for (size_t f = 0; f < namedInside.size(); ++f) {
-            if (!folders[f].inside && !namedInside[f] && readsItsFolder(words)) return false;
+        // From an attached file's folder, a lister or recursive search reads every other upload there,
+        // even one that names the granted file in an option (ls --ignore=it, grep -r -f it).
+        for (const auto& folder : folders) {
+            if (!folder.inside && readsItsFolder(words)) return false;
         }
     }
     return true;
