@@ -560,8 +560,11 @@ TEST_F(GaiacppCli, TheReplyLimitFollowsTheLoadedWindowUnlessOneIsGiven) {
         bench::MockLlmServer mock;
         mock.setHealth(at128k);
         mock.pushResponse(withUsage(finalAnswer("ok"), 50, 0, 5));
-        ASSERT_EQ(run(mock, "").exitCode, 0);
+        const gaia::ProcessResult r = run(mock, "");
+        ASSERT_EQ(r.exitCode, 0);
         EXPECT_EQ(limitIn(mock), 32768) << "a quarter of the 128K window the model is loaded with";
+        EXPECT_EQ((r.stdout_output + r.stderr_output).find("more than half"), std::string::npos)
+            << "the limit fits the loaded window, so no warning: " << r.stdout_output << r.stderr_output;
     }
     {
         bench::MockLlmServer mock;

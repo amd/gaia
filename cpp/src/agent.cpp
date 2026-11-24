@@ -2050,10 +2050,12 @@ json Agent::processQueryInternal(const std::vector<Message>& userMessages, int m
     onTurnStart();
 
     console_->printProcessingStart(userInput, stepsLimit, cfg.modelId);
-    if (cfg.maxTokens > cfg.contextSize / 2) {
+    // Judge the limit against the window the model is loaded with, as replyTokenLimit() does.
+    const int window = std::max(cfg.contextSize, cfg.loadedContextSize);
+    if (cfg.maxTokens > window / 2) {
         console_->printWarning("Reply limit " + std::to_string(cfg.maxTokens) + " is more than half the " +
-                               std::to_string(cfg.contextSize) + "-token context window; replies are capped at " +
-                               std::to_string(cfg.contextSize / 2) + ". Raise --ctx-size to allow more.");
+                               std::to_string(window) + "-token context window; replies are capped at " +
+                               std::to_string(window / 2) + ". Raise --ctx-size to allow more.");
     }
 
     int stepsTaken = 0;
