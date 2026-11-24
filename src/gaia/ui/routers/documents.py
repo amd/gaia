@@ -250,7 +250,7 @@ async def upload_by_path(
         raise HTTPException(
             status_code=400, detail=f"Invalid file path: {path_error_reason(e)}"
         ) from e
-    ensure_document_path_allowed(Path(request.filepath))
+    ensure_document_path_allowed(Path(os.path.expanduser(request.filepath)))
     _refuse_secret(resolved)
     lock = upload_locks.setdefault(str(resolved), asyncio.Lock())
 
