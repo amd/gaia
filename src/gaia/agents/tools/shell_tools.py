@@ -5322,7 +5322,9 @@ def _run_pipeline(
                 proc.wait(timeout=max(deadline - time.monotonic(), 0))
         except subprocess.TimeoutExpired as exc:
             for proc in procs[:-1]:
-                proc.kill()
+                # A reaped stage's pid may already belong to someone else.
+                if proc.poll() is None:
+                    terminate_process_tree(proc, read_output=False)
             # The last stage's reader holds what it printed before the kill.
             out, _ = terminate_process_tree(procs[-1])
             for proc in procs:
@@ -5333,7 +5335,7 @@ def _run_pipeline(
     except BaseException:
         for proc in procs:
             if proc.poll() is None:
-                proc.kill()
+                terminate_process_tree(proc, read_output=False)
                 proc.wait()
             if proc.stdout and not proc.stdout.closed:
                 proc.stdout.close()
