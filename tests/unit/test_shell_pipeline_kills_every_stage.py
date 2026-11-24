@@ -86,6 +86,8 @@ def test_killing_without_reading_never_touches_the_pipe(monkeypatch):
     proc = subprocess.Popen(  # pylint: disable=consider-using-with
         [sys.executable, "-c", "import time; time.sleep(300)"],
         stdout=subprocess.PIPE,
+        # Its own group, as shell_tools starts it: the kill takes the whole group.
+        start_new_session=os.name != "nt",
     )
     proc.stdout.close()
 
