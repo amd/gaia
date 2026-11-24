@@ -4,17 +4,17 @@
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { ResearchChip, withResearch } from '../ResearchChip';
+import { readSkillsForResearch, ResearchChip, withResearch } from '../ResearchChip';
 import { NEW_CHAT_RESEARCH, researchOn, useChatStore } from '../../stores/chatStore';
 import * as api from '../../services/api';
-import { rememberInstalledSkills } from '../../utils/research';
+import { forgetInstalledSkills } from '../../utils/research';
 
 vi.mock('../../services/api', () => ({ listSkills: vi.fn() }));
 const listSkills = vi.mocked(api.listSkills);
 
 beforeEach(() => {
     useChatStore.setState({ research: {} });
-    rememberInstalledSkills([]);
+    forgetInstalledSkills();
     listSkills.mockReset();
     listSkills.mockResolvedValue({ skills: [{ name: 'docx' }] as Awaited<ReturnType<typeof api.listSkills>>['skills'], invalid: {} });
 });
@@ -27,6 +27,31 @@ describe('ResearchChip and skill commands', () => {
         expect(listSkills).toHaveBeenCalled();
         expect(withResearch('draft a memo', null)).toBe('/research draft a memo');
         expect(withResearch('/pptx a deck', null)).toBe('/research /pptx a deck');
+    });
+
+    it('reads the skills before a /name message sent ahead of the list', async () => {
+        useChatStore.setState({ research: { [NEW_CHAT_RESEARCH]: true } });
+        await readSkillsForResearch('/Docx draft a memo', null);
+        expect(listSkills).toHaveBeenCalledTimes(1);
+        expect(withResearch('/Docx draft a memo', null)).toBe('/docx draft a memo');
+        await readSkillsForResearch('/docx again', null);
+        await readSkillsForResearch('plain question', null);
+        expect(listSkills).toHaveBeenCalledTimes(1);
+    });
+
+    it('reads nothing for plain text or while research mode is off', async () => {
+        await readSkillsForResearch('/docx draft a memo', null);
+        useChatStore.setState({ research: { [NEW_CHAT_RESEARCH]: true } });
+        await readSkillsForResearch('what is RISC-V', null);
+        expect(listSkills).not.toHaveBeenCalled();
+    });
+
+    it('rejects when the skills cannot be read, and asks again next time', async () => {
+        useChatStore.setState({ research: { [NEW_CHAT_RESEARCH]: true } });
+        listSkills.mockRejectedValueOnce(new Error('GAIA is not running'));
+        await expect(readSkillsForResearch('/docx draft a memo', null)).rejects.toThrow('GAIA is not running');
+        await readSkillsForResearch('/docx draft a memo', null);
+        expect(withResearch('/docx draft a memo', null)).toBe('/docx draft a memo');
     });
 });
 
