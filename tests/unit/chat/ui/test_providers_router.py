@@ -186,7 +186,7 @@ def client(db):
     app = FastAPI()
     app.include_router(providers.router)
     app.state.db = db
-    return TestClient(app, headers={"X-Gaia-UI": "1"})
+    return TestClient(app, client=("127.0.0.1", 50000), headers={"X-Gaia-UI": "1"})
 
 
 def _config():
@@ -1591,6 +1591,48 @@ def test_connect_without_a_key_over_the_tunnel_is_allowed(client, lemonade, keys
     assert resp.status_code == 200, resp.text
     assert keys["ensure"] == ["fireworks"]
     assert "cloud/auth" not in lemonade.paths()
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        {"base_url": "https://gateway.example.test/v1"},
+        {"auth_header_name": "X-Other"},
+        {"auth_header_prefix": ""},
+    ],
+)
+def test_connect_gateway_settings_need_the_local_pc(client, lemonade, keys, body):
+    resp = client.post(
+        "/api/providers/amd/connect",
+        json=body,
+        headers={"X-Forwarded-For": "203.0.113.9"},
+    )
+    assert resp.status_code == 403
+    assert lemonade.calls == []
+    assert keys["ensure"] == []
+
+
+def test_connect_gateway_settings_from_another_computer_are_refused(db, lemonade, keys):
+    app = FastAPI()
+    app.include_router(providers.router)
+    app.state.db = db
+    remote = TestClient(app, client=("192.168.1.20", 50000))
+    resp = remote.post(
+        "/api/providers/amd/connect",
+        json={"base_url": "https://gateway.example.test/v1"},
+    )
+    assert resp.status_code == 403
+    assert lemonade.calls == []
+
+
+def test_forget_key_needs_the_local_pc(client, lemonade, keys):
+    keys["stored"]["fireworks"] = KEY
+    resp = client.delete(
+        "/api/providers/fireworks/key", headers={"X-Forwarded-Proto": "https"}
+    )
+    assert resp.status_code == 403
+    assert keys["stored"] == {"fireworks": KEY}
+    assert lemonade.calls == []
 
 
 def test_connect_refuses_a_remote_lemonade(client, lemonade, keys, monkeypatch):

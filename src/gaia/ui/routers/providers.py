@@ -47,7 +47,7 @@ from gaia.logger import get_logger
 
 from ..database import ChatDatabase
 from ..dependencies import get_db
-from ..security import require_ui_header, via_tunnel
+from ..security import require_local_pc, require_ui_header
 
 logger = get_logger(__name__)
 
@@ -1213,11 +1213,9 @@ def connect_provider(
             ),
         )
     key = (body.api_key or "").strip()
-    if key and via_tunnel(request):
-        raise HTTPException(
-            status_code=403,
-            detail="Enter provider keys on the PC running GAIA, not over mobile access.",
-        )
+    if key or body.model_dump(exclude_none=True, exclude={"api_key"}):
+        # Keys and gateway settings change only at the PC; a phone may reconnect.
+        require_local_pc(request)
     from gaia.connectors.store import retry_keyring
 
     # Connecting needs the key store, so it may ask the OS again.
@@ -1429,7 +1427,9 @@ def _connect_on_users_server(provider: str) -> Dict[str, Any]:
     }
 
 
-@router.delete("/api/providers/{provider}/key")
+@router.delete(
+    "/api/providers/{provider}/key", dependencies=[Depends(require_local_pc)]
+)
 def forget_provider_key(provider: str) -> Dict[str, Any]:
     """Clear the key from Lemonade and from the OS credential store."""
     from gaia.connectors.credential_wait import discard

@@ -256,7 +256,7 @@ class TestSetupConnect:
         db = mock.Mock()
         db.get_setting.return_value = None
         app.dependency_overrides[get_db] = lambda: db
-        return TestClient(app)
+        return TestClient(app, client=("127.0.0.1", 50000))
 
     def test_connect_uses_the_users_working_provider_and_writes_nothing(
         self, client, users_server, keyring
