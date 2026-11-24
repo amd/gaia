@@ -2454,8 +2454,9 @@ def test_install_cpp_refuses_an_archive_over_the_size_cap(
         zf.writestr("bin/b", b"\0" * 2000)
     monkeypatch.setattr(installer, cap, limit)
 
-    with pytest.raises(InstallError, match="limit of"):
+    with pytest.raises(InstallError, match="limit of") as exc:
         _cpp_install_from_archive(tmp_path, "native.zip", buf.getvalue())
+    assert "malicious" not in str(exc.value)
     assert not (tmp_path / "native" / "bin" / "b").exists()
 
 

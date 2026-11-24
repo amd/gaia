@@ -977,8 +977,9 @@ def test_install_refuses_a_bundle_over_the_size_cap(
     _seed_raw_bundle(marketplace, payload)
     monkeypatch.setattr(install_mod, cap, limit)
 
-    with pytest.raises(SkillValidationError, match="limit of"):
+    with pytest.raises(SkillValidationError, match="limit of") as exc:
         marketplace.install("web-research", allow_experimental=True)
+    assert "hostile" not in str(exc.value)
     assert not (marketplace.skills_root / "web-research").exists()
 
 

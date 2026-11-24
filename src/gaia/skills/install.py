@@ -83,7 +83,7 @@ from gaia.skills.tiers import (
     effective_tier,
     enforce_tier_ceiling,
 )
-from gaia.utils.archive import ArchiveError, safe_extract
+from gaia.utils.archive import ArchiveError, ArchiveSizeError, safe_extract
 from gaia.utils.file_lock import replace_retrying
 
 log = get_logger(__name__)
@@ -586,6 +586,11 @@ def _unpack_bundle(archive: Path, destination: Path, *, name: str) -> Path:
             max_member_bytes=BUNDLE_MAX_MEMBER_BYTES,
             max_total_bytes=BUNDLE_MAX_TOTAL_BYTES,
         )
+    except ArchiveSizeError as exc:
+        raise SkillValidationError(
+            f"Refusing to extract the bundle for '{name}': {exc}. The bundle is "
+            "larger than GAIA allows for a skill; nothing was installed."
+        ) from exc
     except ArchiveError as exc:
         raise SkillValidationError(
             f"Refusing to extract the bundle for '{name}': {exc}. The bundle is "

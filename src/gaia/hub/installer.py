@@ -59,7 +59,7 @@ from gaia.hub import prerelease as prerelease_mod
 from gaia.hub.compatibility import check_compatibility, current_platform_key
 from gaia.logger import get_logger
 from gaia.retired_agents import RETIRED_AGENT_IDS, retired_install_message
-from gaia.utils.archive import ArchiveError, safe_extract
+from gaia.utils.archive import ArchiveError, ArchiveSizeError, safe_extract
 from gaia.utils.file_lock import (
     FileLockTimeout,
     HeldFileLock,
@@ -1061,6 +1061,11 @@ def _install_cpp_artifact(
                 max_member_bytes=CPP_ARCHIVE_MAX_MEMBER_BYTES,
                 max_total_bytes=CPP_ARCHIVE_MAX_TOTAL_BYTES,
             )
+        except ArchiveSizeError as e:
+            raise InstallError(
+                f"Refusing to install '{filename}' into {install_dir}: {e}. "
+                f"The archive is larger than GAIA allows for a C++ agent."
+            ) from e
         except ArchiveError as e:
             raise InstallError(
                 f"Refusing to install '{filename}' into {install_dir}: {e}. "
