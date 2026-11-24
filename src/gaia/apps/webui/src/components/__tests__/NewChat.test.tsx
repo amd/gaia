@@ -745,6 +745,27 @@ describe('NewChat research mode', () => {
         expect(onSend).toHaveBeenCalledTimes(1);
     });
 
+    it('keeps text typed while the skill list loads and sends nothing over it', async () => {
+        forgetInstalledSkills();
+        let loaded: (value: Awaited<ReturnType<typeof api.listSkills>>) => void = () => {};
+        vi.mocked(api.listSkills).mockReturnValue(new Promise((resolve) => { loaded = resolve; }));
+        const onSend = vi.fn().mockResolvedValue(undefined);
+        render(<NewChat onSend={onSend} />);
+        fireEvent.click(await screen.findByRole('button', { name: 'Research' }));
+        const box = screen.getByRole('textbox', { name: 'Message' });
+        fireEvent.change(box, { target: { value: '/docx draft a memo' } });
+        fireEvent.keyDown(box, { key: 'Enter' });
+        await act(async () => {});
+        fireEvent.change(box, { target: { value: '/docx draft a memo to the team' } });
+        loaded(skillList('docx'));
+        await act(async () => {});
+        expect(box).toHaveValue('/docx draft a memo to the team');
+        expect(onSend).not.toHaveBeenCalled();
+
+        fireEvent.keyDown(box, { key: 'Enter' });
+        await waitFor(() => expect(onSend).toHaveBeenCalledWith('/docx draft a memo to the team'));
+    });
+
     it('keeps a /name message and says why when the skill list cannot be read', async () => {
         forgetInstalledSkills();
         vi.mocked(api.listSkills).mockRejectedValue(new Error('GAIA is not running'));

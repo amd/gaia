@@ -209,6 +209,8 @@ export function NewChat({ onSend, initialText = '', focusRequest = 0, agentMissi
     const setupError = useChatStore((s) => (s.systemStatus?.model_loaded ? null : s.systemStatus?.setup_error ?? null));
     const remote = useModelStore((s) => !!s.active?.remote);
     const [text, setText] = useSavedDraft(NEW_CHAT_DRAFT_KEY, initialText);
+    const textNowRef = useRef(text);
+    textNowRef.current = text;
     const [error, setError] = useState<string | null>(null);
     const [agentRefused, setAgentRefused] = useState(heldRefused);
     const [sending, setSending] = useState(false);
@@ -329,6 +331,8 @@ export function NewChat({ onSend, initialText = '', focusRequest = 0, agentMissi
             } finally {
                 readingSkillsRef.current = false;
             }
+            // Edited during the wait: the box now holds the message the user means, so it stays unsent.
+            if (textNowRef.current !== text) return;
         }
         await send(attachments.compose(withResearchCommand(typed, researchOn(useChatStore.getState(), null))), typed);
     }, [agentProblem, attachments, send, text, t]);

@@ -61,14 +61,14 @@ beforeEach(() => {
         messages: [], documents: [], isStreaming: false, streamingContent: '', agentSteps: [],
         isLoadingMessages: false, pendingPrompt: null, runningSessionIds: [],
         systemStatus: { init_state: 'ready', model_loaded: 'qwen' } as unknown as SystemStatus,
-        research: { [session.id]: true },
+        research: { [session.id]: true }, messageQueues: {},
     });
 });
 
 afterEach(() => {
     vi.unstubAllGlobals();
     vi.restoreAllMocks();
-    useChatStore.setState({ research: {} });
+    useChatStore.setState({ research: {}, messageQueues: {} });
 });
 
 describe('a /skill message in a chat with Research on', () => {
@@ -84,6 +84,38 @@ describe('a /skill message in a chat with Research on', () => {
 
         loaded(json({ skills: [{ name: 'docx' }], invalid: {} }));
         await waitFor(() => expect(sent).toEqual(['/docx draft a memo']));
+    });
+
+    it('keeps text typed while the skill list loads and sends nothing over it', async () => {
+        let loaded: (response: Response) => void = () => {};
+        const sent = stubBackend(() => new Promise<Response>((resolve) => { loaded = resolve; }));
+        render(<ChatView sessionId={session.id} />);
+
+        const box = typeAndSend('/docx draft a memo');
+        await act(async () => {});
+        fireEvent.change(box, { target: { value: '/docx draft a memo to the team' } });
+
+        loaded(json({ skills: [{ name: 'docx' }], invalid: {} }));
+        await act(async () => {});
+        expect(box).toHaveValue('/docx draft a memo to the team');
+        expect(sent).toEqual([]);
+
+        fireEvent.keyDown(box, { key: 'Enter' });
+        await waitFor(() => expect(sent).toEqual(['/docx draft a memo to the team']));
+    });
+
+    it('queues the message in its chat when the user opens another chat during the wait', async () => {
+        let loaded: (response: Response) => void = () => {};
+        const sent = stubBackend(() => new Promise<Response>((resolve) => { loaded = resolve; }));
+        render(<ChatView sessionId={session.id} />);
+
+        typeAndSend('/Docx draft a memo');
+        await act(async () => {});
+        act(() => useChatStore.setState({ currentSessionId: 'chat-2' }));
+
+        loaded(json({ skills: [{ name: 'docx' }], invalid: {} }));
+        await waitFor(() => expect(useChatStore.getState().messageQueues[session.id]?.map((m) => m.text)).toEqual(['/docx draft a memo']));
+        expect(sent).toEqual([]);
     });
 
     it('still researches a /name that is no installed skill', async () => {

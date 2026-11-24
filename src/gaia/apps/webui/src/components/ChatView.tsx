@@ -148,6 +148,8 @@ export function ChatView({ sessionId }: ChatViewProps) {
 
     const session = sessions.find((s) => s.id === sessionId);
     const [input, setInput] = useChatDraft(sessionId, session?.private);
+    const inputNowRef = useRef(input);
+    inputNowRef.current = input;
     const [editingTitle, setEditingTitle] = useState(false);
     const [titleDraft, setTitleDraft] = useState('');
     const [isDragOver, setIsDragOver] = useState(false);
@@ -511,6 +513,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
         const hasAttachments = fromComposer && attach.hasUploaded;
         const hasImage = fromComposer && attach.hasImage;
         if (fromComposer && readingSkillsRef.current) return false;
+        let leftDuringRead = false;
         if (fromComposer && researchNeedsSkills(text, sessionId)) {
             readingSkillsRef.current = true;
             setActionError(null);
@@ -522,7 +525,9 @@ export function ChatView({ sessionId }: ChatViewProps) {
             } finally {
                 readingSkillsRef.current = false;
             }
-            if (isStale()) return false;
+            // Edited during the wait: the box now holds the message the user means, so it stays unsent.
+            if (inputNowRef.current !== input) return false;
+            leftDuringRead = isStale();
         }
         const takeDraft = () => {
             if (!fromComposer) return text;
@@ -531,6 +536,12 @@ export function ChatView({ sessionId }: ChatViewProps) {
             attach.clear();
             inputRef.current?.focus();
             return composed;
+        };
+        const queueForLeftChat = () => {
+            const queued = takeDraft();
+            if (fromComposer && !session?.private) clearSavedDraft(chatDraftKey(sessionId));
+            setQueue((q) => messageQueue.enqueue(q, queued, 'queued'));
+            return true;
         };
 
         // User just sent a message — re-pin scroll to the bottom so the
@@ -545,6 +556,8 @@ export function ChatView({ sessionId }: ChatViewProps) {
             notTaken({ kind: 'failed', error: messageQueue.retiredAgentError(retiredAgent) });
             return false;
         }
+        // The user opened another chat during the skill read: this chat's queue sends it.
+        if (leftDuringRead) return queueForLeftChat();
         // Waiting messages go first, so a new one joins the end of the line.
         const waiting = !options?.opening && (useChatStore.getState().messageQueues[sessionId] ?? NO_QUEUE).length > 0;
         if (reattach) {
@@ -575,12 +588,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
                 checkingModelRef.current = false;
             }
             // The user opened another chat during the check: this chat's queue sends it, out of that chat's view.
-            if (isStale()) {
-                const queued = takeDraft();
-                if (fromComposer && !session?.private) clearSavedDraft(chatDraftKey(sessionId));
-                setQueue((q) => messageQueue.enqueue(q, queued, 'queued'));
-                return true;
-            }
+            if (isStale()) return queueForLeftChat();
         }
 
         // Build message text with attachment references
