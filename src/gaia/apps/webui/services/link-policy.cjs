@@ -90,7 +90,10 @@ function describeBlockedUrl(rawUrl) {
  * @returns {string}
  */
 function describeOpenFailure(rawUrl, err) {
-  const reason = err && err.message ? err.message : String(err);
+  const reason = (err && err.message ? err.message : String(err)).replace(
+    /\.+$/,
+    "",
+  );
   return (
     `GAIA couldn't open "${String(rawUrl).slice(0, 300)}": ${reason}. ` +
     "Check that this PC has an app set up for that kind of link."

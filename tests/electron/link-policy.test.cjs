@@ -117,6 +117,12 @@ describe("describeOpenFailure", () => {
     expect(msg).toContain("mailto:someone@example.com");
     expect(msg).toContain("No application");
   });
+
+  test("does not double the period when the OS error already ends in one", () => {
+    const msg = describeOpenFailure("mailto:a@b.c", new Error("No application."));
+    expect(msg).toContain("No application. Check");
+    expect(msg).not.toContain("..");
+  });
 });
 
 test("main.cjs never calls shell.openExternal or the data: loadURL without handling a rejection", () => {
