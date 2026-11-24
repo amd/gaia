@@ -776,6 +776,15 @@ for (const locale of ['en', 'ar']) {
             await expect(page.locator('.settings-pane-title')).toHaveText(locale === 'ar' ? /الوكيل والنموذج/ : /^Agent & model$/);
         });
     }
+
+    test(`a chat on Fast and light that a terminal moved to Full-featured has no Fast and light chip (${locale})`, async ({ page }) => {
+        await open(page, `#${ANSWER_SESSION}`, locale, async (p) => {
+            await withModelPage(p, MODEL_LIST, SETUP_PLAN);
+            await withAgentPrograms(p, { current: 'gaiacpp', running: 'gaiapy' });
+        });
+        await expect(page.locator('main .composer-chip-wrap .composer-chip-label').last()).toBeVisible();
+        await expect(page.locator('main .composer-chip-agent')).toHaveCount(0);
+    });
 }
 
 const GAIACPP_MISSING_TURN = [
