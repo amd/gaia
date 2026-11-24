@@ -681,6 +681,26 @@ def claims_memory_save(answer: str) -> bool:
     return False
 
 
+_COLLECTIVE_WORDS = re.compile(
+    r"\b(?:"
+    r"both"
+    r"|all(?:\s+of\s+(?:them|those|these))?"
+    r"|everything"
+    r"|each(?:\s+of\s+(?:them|those|these))?"
+    r")\b",
+    re.IGNORECASE,
+)
+
+
+def claims_collective_save(answer: str) -> bool:
+    """True when *answer* claims to have saved all or both requested items."""
+    for sentence in re.split(r"(?<=[.!?])\s+|\n+", answer or ""):
+        if _SAVE_CLAIM.search(sentence) and not _NOT_SAVED.search(sentence):
+            if _COLLECTIVE_WORDS.search(sentence):
+                return True
+    return False
+
+
 def _saved_despite(ignored: Dict[str, str], knowledge_id: str) -> str:
     """What remember tells the model after saving without a bad optional argument.
 
@@ -5009,17 +5029,37 @@ class MemoryMixin(ProceduralMemoryMixin):
         call remember; a nudge alone did not stop either.
         """
         problems = super().answer_problems(answer)
-        saves = self._memory_saves_this_turn()
-        if any(s.get("status") in ("stored", "updated") for s in saves):
-            return problems
         request = getattr(self, "_original_user_input", None) or ""
+        saves = self._memory_saves_this_turn()
+        stored = [s for s in saves if s.get("status") in ("stored", "updated")]
+        refused = [s for s in saves if s.get("status") == "skipped"]
+
+        if stored:
+            if refused and claims_collective_save(answer):
+                declined = bool(declined_details(request)) or any(
+                    _DECLINED_NOT_STORED in str(r.get("message") or "")
+                    or "leave this" in str(r.get("message") or "")
+                    for r in refused
+                )
+                secret = any(
+                    _CREDENTIAL_NOT_STORED in str(r.get("message") or "")
+                    for r in refused
+                )
+                if secret:
+                    problems.append(_REFUSED_SECRET)
+                elif declined:
+                    problems.append(_DECLINED_SAVE)
+                else:
+                    problems.append(_REFUSED_SAVE)
+                return problems
+            return problems
+
         if declined_details(request) and claims_memory_save(answer):
             problems.append(_DECLINED_SAVE)
             return problems
         # Only a turn the user asked to remember: "saved" elsewhere is a file.
         if not asks_to_keep_in_memory(request):
             return problems
-        refused = [s for s in saves if s.get("status") == "skipped"]
         if refused and claims_memory_save(answer):
             secret = _CREDENTIAL_NOT_STORED in str(refused[-1].get("message") or "")
             problems.append(_REFUSED_SECRET if secret else _REFUSED_SAVE)
@@ -5031,17 +5071,34 @@ class MemoryMixin(ProceduralMemoryMixin):
 
     def answer_repair_prompt(self, problems):
         prompt = super().answer_repair_prompt(problems)
+        saves = self._memory_saves_this_turn()
+        stored = [s for s in saves if s.get("status") in ("stored", "updated")]
         if _REFUSED_SAVE in problems or _REFUSED_SECRET in problems:
-            prompt += (
-                " Your answer says it was saved; remember refused it. Say plainly "
-                "that it was not saved, and why. Do not call remember again."
-            )
+            if stored:
+                prompt += (
+                    " Your answer says both were saved, but remember refused "
+                    "one. Say plainly what was saved and that the other was not "
+                    "saved, and why. Do not call remember again."
+                )
+            else:
+                prompt += (
+                    " Your answer says it was saved; remember refused it. Say "
+                    "plainly that it was not saved, and why. Do not call "
+                    "remember again."
+                )
         if _DECLINED_SAVE in problems:
-            prompt += (
-                " Your answer says it was saved, but the user said to leave it out "
-                "and nothing was saved. Say plainly that you left it out. Do not "
-                "call remember."
-            )
+            if stored:
+                prompt += (
+                    " Your answer says both were saved, but the user said to "
+                    "leave one out. Say plainly what was saved and that you "
+                    "left the other out. Do not call remember."
+                )
+            else:
+                prompt += (
+                    " Your answer says it was saved, but the user said to leave "
+                    "it out and nothing was saved. Say plainly that you left "
+                    "it out. Do not call remember."
+                )
         if _NOTHING_SAVED in problems:
             prompt += (
                 " Call remember now with what the user asked you to keep, then "

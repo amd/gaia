@@ -204,14 +204,6 @@ def test_a_claim_that_the_declined_detail_was_saved_is_sent_back(open_chat):
     assert answer == left_out
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "On main the memory answer check stops as soon as one fact was saved "
-        "this turn, so 'Stored both.' reaches the user although remember "
-        "refused the declined one (follow-up to #8798)."
-    ),
-)
 def test_a_claim_that_both_were_saved_is_sent_back(open_chat):
     chat = open_chat()
 
