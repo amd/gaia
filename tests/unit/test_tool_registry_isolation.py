@@ -8,14 +8,16 @@ Verifies that:
 - _snapshot_tools() creates an independent copy of the global registry
 - Mutations on the global registry after snapshot do not leak into the agent
 - Two agents in the same process have independent tool sets
-- Agents without a snapshot still work (backward compatibility)
+- An object built without Agent.__init__ reads the global registry
 - A custom agent on the base Agent keeps its own tools when another is built
+- Tools a subclass registers after super().__init__() reach its own set
 """
 
 from unittest.mock import patch
 
 import pytest
 
+from gaia import DatabaseAgent
 from gaia.agents.base.agent import Agent
 from gaia.agents.base.tools import _TOOL_REGISTRY, tool
 
@@ -153,3 +155,43 @@ class TestBaseAgentOwnsItsTools:
 
         assert "create_table" not in agent._tools_registry
         assert "which_folder" in agent._tools_registry
+
+
+class _ItemsAgent(DatabaseAgent):
+    """DatabaseAgent registers its db tools after Agent.__init__ snapshots."""
+
+    def __init__(self, item: str, **kwargs):
+        super().__init__(silent_mode=True, skip_lemonade=True, **kwargs)
+        self.execute("CREATE TABLE items (name TEXT)")
+        self.insert("items", {"name": item})
+
+    def _get_system_prompt(self):
+        return "probe"
+
+    def _register_tools(self):
+        pass
+
+
+def _items_agent(item):
+    with patch("gaia.agents.base.agent.AgentSDK"):
+        return _ItemsAgent(item)
+
+
+class TestToolsRegisteredAfterInit:
+    def test_a_database_agent_subclass_can_call_db_query(self):
+        agent = _items_agent("apple")
+
+        result = agent._execute_tool("db_query", {"sql": "SELECT name FROM items"})
+
+        assert result["rows"] == [{"name": "apple"}]
+        agent.close_db()
+
+    def test_a_second_database_agent_does_not_take_over_the_first(self):
+        first = _items_agent("apple")
+        second = _items_agent("pear")
+
+        sql = {"sql": "SELECT name FROM items"}
+        assert first._execute_tool("db_query", sql)["rows"] == [{"name": "apple"}]
+        assert second._execute_tool("db_query", sql)["rows"] == [{"name": "pear"}]
+        first.close_db()
+        second.close_db()

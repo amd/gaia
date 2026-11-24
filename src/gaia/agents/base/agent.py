@@ -3543,7 +3543,18 @@ def _resolve_output_handles(agent, value):
     return value
 
 
-class Agent(abc.ABC):
+class _AgentMeta(abc.ABCMeta):
+    """Scopes a whole construction, so tools a subclass registers after
+    ``Agent.__init__`` took its snapshot still reach the agent's own set."""
+
+    def __call__(cls, *args, **kwargs):
+        with tool_build() as late:
+            agent = super().__call__(*args, **kwargs)
+        agent._adopt_late_tools(late)
+        return agent
+
+
+class Agent(metaclass=_AgentMeta):
     """
     Base Agent class that provides core functionality for domain-specific agents.
 
@@ -5397,6 +5408,24 @@ Do NOT wrap conversational replies in JSON.
         }
         if hasattr(self, "_tool_overrides"):
             self._instance_tools.update(self._tool_overrides)
+
+    def _adopt_late_tools(self, names: set[str]) -> None:
+        """Add tools registered after the snapshot, e.g. in a subclass's
+        ``__init__`` past ``super().__init__()``. A name already withheld
+        from the model stays withheld."""
+        if self._instance_tools is None or not names:
+            return
+        withheld = self._withheld_tool_entries
+        for name in names:
+            entry = _TOOL_REGISTRY.get(name)
+            if entry is None:  # unregistered again before construction ended
+                continue
+            if name in withheld:
+                withheld[name] = entry
+            else:
+                self._instance_tools[name] = entry
+        if hasattr(self, "_system_prompt_cache"):
+            del self._system_prompt_cache
 
     def apply_context_eviction(self, model_id: Optional[str], cloud: bool) -> None:
         """Turn context eviction on or off for *model_id*, as a new agent on it would."""
