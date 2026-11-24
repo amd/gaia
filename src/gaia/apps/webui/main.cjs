@@ -124,6 +124,8 @@ const {
   isAllowedExternalUrl,
   isInAppNavigation,
   describeBlockedUrl,
+  describeOpenFailure,
+  openExternalSafely,
 } = require("./services/link-policy.cjs");
 const { installWindowKeys } = require("./services/window-keys.cjs");
 const { installContextMenu } = require("./services/context-menu.cjs");
@@ -661,21 +663,28 @@ function findDistPath() {
 
 /** Refuse a link loudly — the user clicked it, so they get told why nothing happened. */
 function reportBlockedLink(url) {
-  const message = describeBlockedUrl(url);
+  warnAboutLink("Link blocked", describeBlockedUrl(url));
+}
+
+function reportLinkNotOpened(url, err) {
+  warnAboutLink("Link not opened", describeOpenFailure(url, err));
+}
+
+function warnAboutLink(title, message) {
   console.error(`[main] ${message}`);
   // Non-blocking and parented: showErrorBox would freeze the main process.
   dialog
     .showMessageBox(mainWindow && !mainWindow.isDestroyed() ? mainWindow : null, {
       type: "warning",
-      title: "Link blocked",
-      message: "Link blocked",
+      title,
+      message: title,
       detail: message,
       buttons: ["OK"],
       noLink: true,
     })
     .catch((err) =>
       console.error(
-        `[main] Could not show the link-blocked dialog: ${err && err.message ? err.message : err}`
+        `[main] Could not show the "${title}" dialog: ${err && err.message ? err.message : err}`
       )
     );
 }
@@ -749,7 +758,7 @@ function createWindow() {
   // arrives as file:///C:/… — check the scheme before handing it to the OS.
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
     if (isAllowedExternalUrl(url)) {
-      shell.openExternal(url);
+      openExternalSafely(shell, url, (err) => reportLinkNotOpened(url, err));
     } else {
       reportBlockedLink(url);
     }
@@ -763,7 +772,7 @@ function createWindow() {
     if (isInAppNavigation(url, currentUrl)) return;
     event.preventDefault();
     if (isAllowedExternalUrl(url)) {
-      shell.openExternal(url);
+      openExternalSafely(shell, url, (err) => reportLinkNotOpened(url, err));
       return;
     }
     reportBlockedLink(url);
@@ -871,9 +880,11 @@ async function loadApp() {
           </div>
         </body>
       </html>`;
-    mainWindow.loadURL(
-      "data:text/html;charset=utf-8," + encodeURIComponent(waitingHtml)
-    );
+    mainWindow
+      .loadURL("data:text/html;charset=utf-8," + encodeURIComponent(waitingHtml))
+      .catch((err) =>
+        console.error(`[main] Could not show the waiting page: ${err && err.message ? err.message : err}`)
+      );
   }
 }
 
