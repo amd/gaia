@@ -61,7 +61,11 @@ from .database import ChatDatabase
 from .document_copies import move_library_files_out_of_shared_folder
 from .document_monitor import DocumentMonitor
 from .memory_settings import memory_enabled
-from .restart_recovery import recover_interrupted_work, sweep_interrupted_work
+from .restart_recovery import (
+    INTERRUPTED_INDEXING_ERROR,
+    recover_interrupted_work,
+    sweep_interrupted_work,
+)
 from .routers import agent_programs as agent_programs_router_mod
 from .routers import agents as agents_router_mod
 from .routers import automations as automations_router_mod
@@ -801,10 +805,15 @@ def create_app(
         logger.info("Connector activation watcher stopped")
         recovery_sweep.cancel()
         # Indexing writes to the database, so it ends before the database closes.
-        pending = list(indexing_tasks.values())
-        for task in pending:
+        pending = dict(indexing_tasks)
+        for task in pending.values():
             task.cancel()
-        await asyncio.gather(*pending, return_exceptions=True)
+        await asyncio.gather(*pending.values(), return_exceptions=True)
+        # Closing GAIA isn't the user's Cancel: keep the interrupted reason and Retry.
+        for doc_id in pending:
+            db.update_document_status(
+                doc_id, "failed", last_error=INTERRUPTED_INDEXING_ERROR
+            )
         db.close()
         logger.info("Database connection closed")
         memory_router_mod.close_store()

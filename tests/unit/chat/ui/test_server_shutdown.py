@@ -13,6 +13,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 from fastapi.testclient import TestClient
 
+from gaia.ui.restart_recovery import INTERRUPTED_INDEXING_ERROR
 from gaia.ui.server import DEFAULT_PORT, create_app
 
 
@@ -61,7 +62,14 @@ def test_indexing_ends_before_the_database_closes():
         app.state.indexing_tasks["doc1"] = asyncio.create_task(indexing())
         await asyncio.sleep(0)
 
-    with TestClient(app) as client:
-        client.portal.call(start_indexing)
+    with patch.object(
+        app.state.db,
+        "update_document_status",
+        wraps=app.state.db.update_document_status,
+    ) as update:
+        with TestClient(app) as client:
+            client.portal.call(start_indexing)
 
     assert seen == {"db_open": True}
+    # Shutdown isn't the user's Cancel: the document keeps its Retry.
+    update.assert_any_call("doc1", "failed", last_error=INTERRUPTED_INDEXING_ERROR)
