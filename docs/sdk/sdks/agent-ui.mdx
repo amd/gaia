@@ -1544,7 +1544,6 @@ Deleting a chat deletes its copies.
     | Status | Condition |
     |--------|-----------|
     | `400` | Invalid path (empty or contains null bytes), path is a symbolic link, or `launch` was asked for a folder or a file type that could run |
-    | `403` | The request doesn't come from the PC running GAIA (mobile access or another computer) |
     | `404` | Path does not exist |
     | `500` | Failed to launch the system file explorer |
   </Accordion>
@@ -1848,13 +1847,11 @@ Used to reach the UI from a phone.
 
 <AccordionGroup>
   <Accordion title="POST /api/tunnel/start">
-    Start a tunnel. Returns the public URL. **403** unless the request comes
-    from the PC running GAIA (not over mobile access or from another computer).
+    Start a tunnel. Returns the public URL.
   </Accordion>
 
   <Accordion title="POST /api/tunnel/stop">
-    Stop the active tunnel. **403** unless the request comes from the PC
-    running GAIA (not over mobile access or from another computer).
+    Stop the active tunnel.
   </Accordion>
 
   <Accordion title="GET /api/tunnel/status">

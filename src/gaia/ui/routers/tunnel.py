@@ -11,7 +11,6 @@ import logging
 from fastapi import APIRouter, Depends, HTTPException
 
 from ..dependencies import get_tunnel
-from ..security import require_local_pc
 from ..tunnel import TunnelManager
 
 logger = logging.getLogger(__name__)
@@ -19,7 +18,7 @@ logger = logging.getLogger(__name__)
 router = APIRouter(tags=["tunnel"])
 
 
-@router.post("/api/tunnel/start", dependencies=[Depends(require_local_pc)])
+@router.post("/api/tunnel/start")
 async def start_tunnel(tunnel: TunnelManager = Depends(get_tunnel)):
     """Start ngrok tunnel for mobile access."""
     try:
@@ -34,7 +33,7 @@ async def start_tunnel(tunnel: TunnelManager = Depends(get_tunnel)):
         )
 
 
-@router.post("/api/tunnel/stop", dependencies=[Depends(require_local_pc)])
+@router.post("/api/tunnel/stop")
 async def stop_tunnel(tunnel: TunnelManager = Depends(get_tunnel)):
     """Stop ngrok tunnel."""
     try:

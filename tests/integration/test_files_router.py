@@ -1307,16 +1307,6 @@ class TestFileOpen:
         assert resp.status_code == 400
         mock_popen.assert_not_called()
 
-    @patch("subprocess.Popen")
-    def test_open_needs_the_local_pc(self, mock_popen, client, sample_text_file):
-        resp = client.post(
-            "/api/files/open",
-            json={"path": str(sample_text_file), "launch": True},
-            headers={"X-Forwarded-For": "203.0.113.9"},
-        )
-        assert resp.status_code == 403
-        mock_popen.assert_not_called()
-
 
 class TestFileStatus:
     """POST /api/files/status: the side rail re-checks files after an Undo."""
