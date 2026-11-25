@@ -82,7 +82,7 @@ def test_the_model_can_load_a_project_skill_by_name(repo, flagship):
 def test_repository_section_follows_the_mapped_project(fast, root, full, shown):
     from types import SimpleNamespace
 
-    from gaia_agent.agent import REPOSITORY_WORK_PROMPT, GaiaAgent
+    from gaiapy.agent import REPOSITORY_WORK_PROMPT, GaiaAgent
 
     fake = SimpleNamespace(
         config=SimpleNamespace(fast=fast),
@@ -94,7 +94,7 @@ def test_repository_section_follows_the_mapped_project(fast, root, full, shown):
 
 
 def test_repository_section_names_no_single_repos_rules():
-    from gaia_agent.agent import REPOSITORY_WORK_PROMPT
+    from gaiapy.agent import REPOSITORY_WORK_PROMPT
 
     for specific in ("GAIA", "Lemonade", "black", "pytest", "REVIEW.md"):
         assert specific not in REPOSITORY_WORK_PROMPT
@@ -174,7 +174,7 @@ HOSTILE = (
 
 
 def _as_model(agent, model, use_claude=False):
-    """What a model switch does to the agent (gaia_agent.stdio._apply_switch)."""
+    """What a model switch does to the agent (gaiapy.stdio._apply_switch)."""
     agent.model_id = model
     agent._use_claude = use_claude
     agent.rebuild_system_prompt()
@@ -272,7 +272,7 @@ def test_a_project_skill_still_loads_by_name_for_other_models(repo, flagship, au
 
 
 def test_a_bad_setting_fails_at_startup(monkeypatch):
-    from gaia_agent.agent import GaiaAgent, GaiaAgentConfig
+    from gaiapy.agent import GaiaAgent, GaiaAgentConfig
 
     monkeypatch.setenv(PROJECT_CONTEXT_ENV, "everything")
     with pytest.raises(ProjectContextError, match=PROJECT_CONTEXT_ENV):

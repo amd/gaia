@@ -27,9 +27,9 @@ from gaia.llm.inference_location import (
     resolve_inference_location,
 )
 
-pytest.importorskip("gaia_agent")
+pytest.importorskip("gaiapy")
 
-from gaia_agent.chat_agent import ChatAgent, ChatAgentConfig  # noqa: E402
+from gaiapy.chat_agent import ChatAgent, ChatAgentConfig  # noqa: E402
 
 # ---------------------------------------------------------------------------
 # The resolver
@@ -324,7 +324,7 @@ def test_a_switch_to_a_discovered_cloud_model_names_its_provider_in_the_prompt(
     model is served by Fireworks. The prompt rebuilt during the switch is what
     the model reads on the next turn, so it must name Fireworks too, not say
     the session runs locally."""
-    from gaia_agent import stdio
+    from gaiapy import stdio
 
     from gaia.llm import lemonade_client
 

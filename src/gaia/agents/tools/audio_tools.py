@@ -1457,14 +1457,17 @@ class AudioToolsMixin:
 
     def _llm_choice(self, prompt: str, max_tokens: int, **options) -> dict:
         """The raw completion choice, on the LLM this agent already uses."""
-        from gaia.llm.lemonade_client import DEFAULT_MODEL_NAME, create_lemonade_client
+        from gaia.llm.lemonade_client import (
+            create_lemonade_client,
+            resolve_local_chat_model,
+        )
 
         client = getattr(self, "_refine_llm", None)
         if client is None:
             client = create_lemonade_client(auto_start=False, verbose=False)
             self._refine_llm = client
 
-        model = getattr(self, "model_id", None) or DEFAULT_MODEL_NAME
+        model = getattr(self, "model_id", None) or resolve_local_chat_model()
         response = client.chat_completions(
             model=model,
             messages=[{"role": "user", "content": prompt}],

@@ -23,6 +23,7 @@ import { untrackedWarning } from '../../utils/untrackedWork';
 import { DiffCard } from '../render/DiffCard';
 import { PanelSection } from './PanelSection';
 import { useSessionPanelStore } from '../../stores/sessionPanelStore';
+import { isCodeFile } from './sessionFocus';
 import type { ChatFileChange, GitRepo, SessionChanges, SessionGit } from '../../types/sessionPanel';
 import { ref, type MessageKey, type Param } from '../../i18n/registry';
 import { tEn, useT, type Translate } from '../../i18n/useT';
@@ -78,7 +79,10 @@ export function ChangesSection({ sessionId, busy, onJumpToMessage }: ChangesSect
             .then((res) => {
                 const loaded = expectShape(res, (r) => Array.isArray(r.files), "list of this chat's changes");
                 setChanges(loaded);
-                useSessionPanelStore.getState().setSignals(sessionId, { changedFiles: loaded.files.length });
+                useSessionPanelStore.getState().setSignals(sessionId, {
+                    changedFiles: loaded.files.length,
+                    changedCode: loaded.files.filter((f) => isCodeFile(f.path)).length,
+                });
                 setError(null);
             })
             .catch((err) => {

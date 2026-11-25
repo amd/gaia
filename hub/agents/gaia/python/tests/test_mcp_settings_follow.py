@@ -72,7 +72,7 @@ def home(tmp_path, monkeypatch):
 @pytest.fixture
 def chat(home):
     """An open chat in the sidecar's session registry, with the toy server on."""
-    from gaia_agent import session_registry as sr
+    from gaiapy import session_registry as sr
 
     from gaia.connectors.activations import activate_agent
 
@@ -138,7 +138,7 @@ def test_an_unchanged_setup_keeps_the_agent(chat):
 
 def test_a_server_not_active_for_gaia_offers_no_tools(home):
     """Every way of building the flagship honours activation, as Settings shows it."""
-    from gaia_agent.session_registry import build_session_agent, close_agent
+    from gaiapy.session_registry import build_session_agent, close_agent
 
     home.set()  # enabled, never activated for GAIA
     agent = build_session_agent(allowed_paths=[home.work])
@@ -151,7 +151,7 @@ def test_a_server_not_active_for_gaia_offers_no_tools(home):
 
 def test_a_new_agent_does_not_inherit_another_agents_mcp_tools(home):
     """MCP tools sit in a process-wide registry; an agent offers only its own."""
-    from gaia_agent.session_registry import build_session_agent, close_agent
+    from gaiapy.session_registry import build_session_agent, close_agent
 
     from gaia.connectors.activations import activate_agent
 
@@ -191,7 +191,7 @@ def test_a_rebuilt_chat_keeps_what_the_user_set_in_it(chat, home, tmp_path):
 def test_a_document_taken_off_after_a_rebuild_is_refused(chat, home, tmp_path):
     """The rebuilt agent knows which documents were attached, so a removed one
     loses its grant on the turn it is removed."""
-    from gaia_agent import server
+    from gaiapy import server
 
     first, _ = chat()
     doc = tmp_path / "notes.txt"
@@ -229,9 +229,9 @@ def test_a_withheld_path_stays_refused_after_a_rebuild(chat, home, tmp_path):
 
 def test_a_terminal_ui_chat_follows_a_connector_change(home, tmp_path):
     """The TUI keeps one agent per session; it is rebuilt with its transcript."""
-    from gaia_agent import stdio
-    from gaia_agent.agent import GaiaAgent, GaiaAgentConfig
-    from gaia_agent.session_registry import close_agent
+    from gaiapy import stdio
+    from gaiapy.agent import GaiaAgent, GaiaAgentConfig
+    from gaiapy.session_registry import close_agent
 
     from gaia.agents.base.history import SessionHistory
     from gaia.connectors.activations import activate_agent
@@ -266,15 +266,16 @@ def test_the_sidecar_query_route_follows_a_connector_change(home, monkeypatch):
     import uuid
 
     from fastapi.testclient import TestClient
-    from gaia_agent import caller_auth
-    from gaia_agent import server as server_mod
-    from gaia_agent import session_registry as sr
+    from gaiapy import caller_auth
+    from gaiapy import server as server_mod
+    from gaiapy import session_registry as sr
 
     from gaia.connectors.activations import activate_agent
 
     caller_auth.reset()
     monkeypatch.delenv(caller_auth.TOKEN_FILE_ENV_VAR, raising=False)
     monkeypatch.delenv(caller_auth.TOKEN_ENV_VAR, raising=False)
+    monkeypatch.setenv(caller_auth.ALLOW_NO_TOKEN_ENV_VAR, "1")
     sr.registry.clear()
     server_mod._registry = server_mod._RunRegistry()
     home.set()
@@ -322,9 +323,9 @@ def test_a_terminal_ui_rebuild_keeps_a_hybrid_session_hybrid(
     """The routed turn's model is not the session's: a hybrid chat stays hybrid."""
     from types import SimpleNamespace
 
-    import gaia_agent.agent as agent_mod
-    import gaia_agent.session_registry as sr
-    from gaia_agent import stdio
+    import gaiapy.agent as agent_mod
+    import gaiapy.session_registry as sr
+    from gaiapy import stdio
 
     built = {}
 

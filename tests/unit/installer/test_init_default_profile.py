@@ -4,7 +4,7 @@
 """`gaia init` with no --profile sets up the FLAGSHIP agent.
 
 The bug these guard against: every init profile installed the ``chat`` wheel,
-but the TUI spawns the flagship (``gaia-agent-gaia`` -> module ``gaia_agent``).
+but the TUI spawns the flagship (``gaia-agent-gaia`` -> module ``gaiapy``).
 So `gaia init` — the one command the installers and the TUI's setup gate both
 tell users to run — never installed the agent the TUI actually launches.
 
@@ -41,9 +41,9 @@ GAIAINIT_GO = REPO_ROOT / "tui" / "internal" / "gaiainit" / "gaiainit.go"
 VERIFY_GO = GAIAINIT_GO.with_name("verify.go")
 
 # The flagship's hub id. Its wheel is gaia-agent-gaia; the module it installs is
-# plain `gaia_agent`, NOT `gaia_agent_gaia` (hub/agents/gaia/python).
+# plain `gaiapy`, NOT `gaia_agent_gaia` (hub/agents/gaia/python).
 FLAGSHIP_AGENT_ID = "gaia"
-FLAGSHIP_IMPORT_NAME = "gaia_agent"
+FLAGSHIP_IMPORT_NAME = "gaiapy"
 
 
 def _go_const(name: str, path: Path = GAIAINIT_GO) -> str:
@@ -99,7 +99,7 @@ class TestBareInitTargetsTheFlagship:
         self, monkeypatch
     ):
         """The apps run the flagship as its binary, so a checkout's importable
-        `gaia_agent` must not stop `gaia init` installing that binary."""
+        `gaiapy` must not stop `gaia init` installing that binary."""
         asked = []
 
         def fake_find_spec(name):
@@ -492,7 +492,7 @@ class TestRuntimeFailureStillInstallsTheFlagship:
     failure skipped it. The desktop app opens after a failed init, and every
     chat then failed with "Unknown agent_type 'gaia'" -- reported on a fresh
     Mac install. Runs from the cold state: an empty GAIA home and no
-    importable ``gaia_agent``.
+    importable ``gaiapy``.
     """
 
     @pytest.fixture

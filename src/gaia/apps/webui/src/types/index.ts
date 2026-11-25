@@ -307,6 +307,8 @@ export interface InferenceStats {
     seconds?: number | null;
     /** True only for an answer kept from Retry with…. */
     retried?: boolean | null;
+    /** Seconds the turn waited on the user's answer to a permission prompt; absent when it never waited. */
+    waiting_seconds?: number | null;
     /** Where the turn was answered: "on your GPU", "via Fireworks AI". */
     place?: string | null;
     /** Set on a `hybrid` chat's turns: the model the turn was routed to, and why. */
@@ -457,7 +459,9 @@ export interface RetryResult {
 }
 
 /** GET /api/chat/context: the meter's numbers, or why there are none yet. */
-export type ContextUsageResult = ({ available: true } & ContextUsage) | { available: false; reason: string };
+export type ContextUsageResult =
+    | ({ available: true } & ContextUsage)
+    | { available: false; reason: string; reason_code?: string };
 
 /** POST /api/chat/retry-with/choose: which answer the chat now continues from. */
 export type RetryChoice = { kept: 'original' } | {
@@ -587,7 +591,8 @@ export interface AgentProgram {
 
 /** `GET /api/agent-programs`: both agent programs and any running download. */
 export interface AgentPrograms {
-    current: FlagshipAgent;
+    /** The saved choice as written; may name a harness this version can't run (none of `programs`). */
+    current: string;
     programs: AgentProgram[];
     download: AgentDownload;
 }
@@ -605,8 +610,9 @@ export interface Settings {
     agent_mode: 'manual' | 'goal_driven';
     /** Shared network policy controlling cloud AI use. */
     network_policy: 'cloud_allowed' | 'local_ai_only';
-    /** The program that runs the GAIA agent; "gaiapy" when the user never chose. */
-    flagship_agent: FlagshipAgent;
+    /** The program that runs the GAIA agent; "gaiapy" when the user never chose. May name a
+     *  harness a newer GAIA saved that this one can't run, until the user picks another. */
+    flagship_agent: string;
     /** False when the gaiacpp program isn't installed on this PC, so it can't be chosen. */
     gaiacpp_available: boolean;
     policy_warnings?: string[];
@@ -867,7 +873,6 @@ export interface TunnelStatus {
     reason?: 'ngrok_not_installed' | null;
     /** This OS's ngrok install commands, set only with that reason. */
     installCommands?: string[];
-    publicIp: string | null;
     /** The device behind the latest authenticated remote request. */
     device?: { name: string; lastSeen: string } | null;
 }
@@ -1065,12 +1070,16 @@ export interface ProviderModel {
     size_gb?: number | null;
     /** Fits this PC's memory; null when GAIA can't tell. */
     fits?: boolean | null;
+    /** Fits, but would leave other apps less memory than GAIA keeps for them. */
+    tight?: boolean;
     available?: boolean;
     unavailable_reason?: string | null;
     /** What stops this NPU model on this PC's NPU (Linux setup), in place of the reason. */
     npu_problems?: SetupNpuProblem[];
     /** Median tokens/s of its recent turns on this PC. */
     tokens_per_second?: number | null;
+    /** Setup's tag: covered by GAIA's evals, or not; null for a model with no such tag. Local models only. */
+    support?: 'verified' | 'untested' | null;
     /** An in-flight (or just-finished) download of this model. */
     download_progress?: DownloadProgress | null;
     /** List price per million tokens; null when unknown (never shown as $0). Cloud models only. */

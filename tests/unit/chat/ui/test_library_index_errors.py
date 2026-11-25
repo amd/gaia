@@ -477,24 +477,100 @@ class TestIndexDocumentKinds:
         assert not isinstance(exc_info.value, UnreadableDocumentError)
 
 
-def test_a_dropped_file_the_model_server_could_not_embed_is_a_503(client):
-    """A drag-and-drop add showed a 500 carrying the raw connection error."""
-    from gaia.ui._chat_helpers import ModelServerIndexError
-
-    async def down(*_args, **_kwargs):
-        raise ModelServerIndexError(
-            "RAG indexing failed for notes.md: HTTPConnectionPool(...) [WinError 10061]",
-            "model_server_down",
-        )
-
-    with patch("gaia.ui.server._index_document", down):
-        resp = client.post(
+def _drop_while(client, index, name="lantern.md", body=b"# Lantern"):
+    with patch("gaia.ui.server._index_document", index):
+        return client.post(
             "/api/documents/upload",
-            files={"file": ("notes.md", b"# Notes")},
+            files={"file": (name, body)},
             headers={"x-gaia-ui": "1", "x-gaia-client": "agent-ui"},
         )
 
-    assert resp.status_code == 503, resp.text
-    detail = resp.json()["detail"]
-    assert detail["status"] == "model_server_down"
-    assert "HTTPConnectionPool" not in detail["message"]
+
+@pytest.mark.parametrize("kind", ["model_server_down", "model_server_busy"])
+def test_a_file_dropped_while_the_model_server_is_out_waits_in_the_library(
+    client, kind
+):
+    """The notice promises GAIA adds it later, so the file must stay (#8814)."""
+    from gaia.ui._chat_helpers import ModelServerIndexError
+
+    async def out(*_args, **_kwargs):
+        raise ModelServerIndexError(
+            "RAG indexing failed for lantern.md: HTTPConnectionPool(...) [Errno 61]",
+            kind,
+        )
+
+    resp = _drop_while(client, out)
+
+    assert resp.status_code == 200, resp.text
+    doc = resp.json()
+    assert doc["indexing_status"] == "failed"
+    assert doc["error_kind"] == kind
+    assert "HTTPConnectionPool" not in (doc["last_error"] or "")
+    assert Path(doc["filepath"]).is_file()
+    listed = client.get("/api/documents").json()["documents"]
+    assert [(d["id"], d["error_kind"]) for d in listed] == [(doc["id"], kind)]
+
+
+def test_a_waiting_file_is_indexed_once_the_model_server_is_back(client):
+    from gaia.ui._chat_helpers import ModelServerIndexError
+
+    async def down(*_args, **_kwargs):
+        raise ModelServerIndexError("not reachable", "model_server_down")
+
+    async def back(*_args, **_kwargs):
+        return 4
+
+    waiting = _drop_while(client, down).json()
+    with patch("gaia.ui.server._index_document", back):
+        resp = client.post(f"/api/documents/{waiting['id']}/reindex")
+
+    assert resp.status_code == 200, resp.text
+    doc = resp.json()
+    assert (doc["indexing_status"], doc["chunk_count"]) == ("complete", 4)
+    assert doc["error_kind"] is None
+
+
+def test_dropping_the_same_file_again_while_down_keeps_one_row(client):
+    from gaia.ui._chat_helpers import ModelServerIndexError
+
+    async def down(*_args, **_kwargs):
+        raise ModelServerIndexError("not reachable", "model_server_down")
+
+    first = _drop_while(client, down).json()
+    second = _drop_while(client, down).json()
+
+    assert second["id"] == first["id"]
+    assert len(client.get("/api/documents").json()["documents"]) == 1
+
+
+class TestTildeFilePath:
+    """``~/file`` is checked as the home path it opens, not as typed."""
+
+    @pytest.fixture
+    def tilde_home(self, home, monkeypatch):
+        monkeypatch.setenv("HOME", str(home))
+        monkeypatch.setenv("USERPROFILE", str(home))
+        return home
+
+    def test_tilde_document_is_added(self, tilde_home, client):
+        (tilde_home / "notes.md").write_text("# Notes")
+
+        async def fake_index(_path):
+            return 1
+
+        with patch("gaia.ui.server._index_document", fake_index):
+            resp = _upload(client, "~/notes.md")
+
+        assert resp.status_code == 200, resp.text
+        assert Path(resp.json()["filepath"]) == (tilde_home / "notes.md").resolve()
+
+    @pytest.mark.parametrize("rel", [".ssh/id_rsa", "secrets.json"])
+    def test_tilde_credential_file_is_refused(self, tilde_home, client, rel):
+        secret = tilde_home / rel
+        secret.parent.mkdir(parents=True, exist_ok=True)
+        secret.write_text("SECRET")
+
+        resp = _upload(client, f"~/{rel}")
+
+        assert resp.status_code == 403
+        assert "credentials" in resp.json()["detail"]

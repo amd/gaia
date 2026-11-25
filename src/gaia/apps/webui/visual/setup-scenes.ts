@@ -13,7 +13,8 @@ const entry = (over: Record<string, unknown> & { id: string }) => ({
     roles: ['chat'], purpose: 'Answers your chats', if_skipped: null, recipe: 'llamacpp', size_gb: 1, full_size_gb: 1,
     partial: false, partial_gb: 0, downloaded: false, in_lemonade: true, recommended: false, planned: false,
     gaia_model: true, selected: false, skipped: false, chat_choice: true, support: 'verified', reads_images: false,
-    feature_tier: 'full', source: 'huggingface.co/amd', fits: true, need_gb: 2, capacity_gb: 16, fit_reason: null, ...over,
+    feature_tier: 'full', source: 'huggingface.co/amd', fits: true, need_gb: 2, capacity_gb: 16, fit_reason: null,
+    setup_offer: over.fits !== false, ...over,
 });
 
 const GEMMA_ID = 'Gemma-4-E4B-it-GGUF';
@@ -72,6 +73,16 @@ const PLAN_PRESENT = {
     catalog: CATALOG.map((e) => (e.planned ? { ...e, downloaded: true, size_gb: 0 } : e)),
 };
 const PLAN_SHORT = { ...PLAN, disk: { ...PLAN.disk, free_gb: 2.1 } };
+// A 16 GB laptop: GAIA keeps 10.7 GB for other apps, so Qwen3.5 2B is the pick (13.1 GB left) and reads
+// images itself; the 4B and Gemma would load but are tight.
+const QWEN_2B = entry({ id: 'Qwen3.5-2B-GGUF', name: 'Qwen3.5 2B (Multimodal)', roles: ['chat'], size_gb: 2.01, full_size_gb: 2.01, recommended: true, planned: true, selected: true, need_gb: 4.1, capacity_gb: 10.7, reads_images: true, feature_tier: 'compact' });
+const QWEN_4B = entry({ id: 'Qwen3.5-4B-GGUF', name: 'Qwen3.5 4B (Multimodal)', roles: ['chat'], size_gb: 3.58, full_size_gb: 3.58, need_gb: 7.4, capacity_gb: 10.7, reads_images: true, feature_tier: 'compact', tight: true });
+const PLAN_SMALL_PC = {
+    ...PLAN,
+    chat_model: { id: 'Qwen3.5-2B-GGUF', user_set: false, size_gb: 2.01, downloaded: false },
+    recommended_model: 'Qwen3.5-2B-GGUF', left_for_apps_gb: 13.1, memory_gb: 10, capacity_gb: 10.7, download_gb: 2.3,
+    catalog: [QWEN_2B, EMBED, QWEN_4B, { ...GEMMA, recommended: false, planned: false, selected: false, capacity_gb: 10.7, tight: true }, { ...QWEN, capacity_gb: 10.7 }],
+};
 // #6632: Linux with an NPU Lemonade reports, but memlock at 8 MB and no access to the device.
 const PLAN_NPU_NOT_READY = {
     ...PLAN,
@@ -89,7 +100,7 @@ const PLAN_NO_VISION = { ...PLAN, chat_model: { id: MINE.id, user_set: true, siz
 const PLAN_TOO_BIG = {
     ...PLAN,
     chat_model: { id: QWEN_ID, user_set: true, size_gb: 23.3, downloaded: false },
-    catalog: CATALOG.map((e) => (e.id === QWEN_ID ? { ...e, planned: true, selected: true } : e)),
+    catalog: CATALOG.map((e) => (e.id === QWEN_ID ? { ...e, planned: true, selected: true, setup_offer: true } : e)),
 };
 // Lemonade sees the NPU, but FastFlowLM can't run on this PC (#6632).
 const NPU_UNUSABLE = { fits: false, fit_code: 'npu', fit_reason: 'needs an AMD Ryzen AI NPU and its driver' };
@@ -98,7 +109,7 @@ const PLAN_LONG = {
     ...PLAN,
     chat_model: { id: QWEN_ID, user_set: true, size_gb: 23.3, downloaded: false },
     catalog: CATALOG.map((e) => (e.id === QWEN_ID
-        ? { ...e, name: LONG_NAME, planned: true, selected: true, fits: true, need_gb: 14.2, purpose: 'Answers your chats, reads your images and works through long documents', source: 'huggingface.co/amd/a-repository-with-a-very-long-name-that-keeps-on-going/resolve/main' }
+        ? { ...e, name: LONG_NAME, planned: true, selected: true, fits: true, setup_offer: true, need_gb: 14.2, purpose: 'Answers your chats, reads your images and works through long documents', source: 'huggingface.co/amd/a-repository-with-a-very-long-name-that-keeps-on-going/resolve/main' }
         : e)),
 };
 const PLAN_DONE = { ...PLAN, catalog: CATALOG.map((e) => (e.gaia_model && !e.support ? e : { ...e, downloaded: true, size_gb: 0 })) };
@@ -199,6 +210,23 @@ const RUN_AGENT_FAILED = {
 };
 const RUN_READY = { ...RUN, state: 'ready', text: 'GAIA is ready', models: DONE_ROWS.map((m) => ({ ...m, state: 'ready' })) };
 
+// Setup is ready; speech-to-text, added on the Download step, is downloading on its own.
+const RUN_READY_EXTRA = {
+    ...RUN_READY,
+    models: [...RUN_READY.models, row(SPEECH.id, ['speech'], 'downloading', 0.56e9, 1.6e9, { speed_bps: 0.5e6, eta_s: 2080 })],
+};
+// Cancel › Stop with the required models on disk and only an extra still coming.
+const RUN_EXTRAS_STOPPED = {
+    ...RUN, state: 'cancelled', text: 'Setup stopped',
+    models: [
+        // Already on disk when this run started, so they report no byte counts (#8797).
+        row(EMBED_ID, ['embedding'], 'unchecked', 0, 0),
+        row(GEMMA_ID, ['chat', 'vision'], 'unchecked', 0, 0),
+        row(SPEECH.id, ['speech'], 'cancelled', 0.56e9, 1.6e9),
+    ],
+    overall: { bytes_done: 0.56e9, bytes_total: 1.6e9, speed_bps: 0, eta_s: null, percent: 35, failed: 0 },
+};
+
 const SERVER_RUNNING = { state: 'running', server_only: true, text: 'Starting the local model server', steps: [], log_tail: [] };
 /** GAIA's own engine won't start: a build that broke it (#7007). */
 export const ENGINE_FAILED = {
@@ -210,7 +238,7 @@ const SERVER_FAILED = {
     error: "Your Lemonade Server at 127.0.0.1:9 isn't answering.",
     problem: {
         kind: 'server_unreachable', message: "Your Lemonade Server at 127.0.0.1:9 isn't answering.",
-        start: 'Start Lemonade Server from the Lemonade tray icon.', use_gaia: true,
+        start: "The model server GAIA uses is at 127.0.0.1:9. GAIA doesn't run this model server, so it can't start it. Start it the way you usually do.", use_gaia: true,
     },
 };
 
@@ -401,6 +429,7 @@ export const SETUP_SCENES: SetupScene[] = [
             // This PC and the cloud are two cards of the same size, not a card and a link.
             const [local, cloud] = await page.locator('.setup-where-card').evaluateAll((cards) => cards.map((c) => c.getBoundingClientRect().width));
             expect(Math.abs(local - cloud)).toBeLessThan(1);
+            await expect(page.locator('.setup-agent-line')).toBeVisible();
             await page.locator('.setup-disclosure summary').click();
             await expect(page.locator('.setup-contents')).toBeVisible();
         },
@@ -425,6 +454,16 @@ export const SETUP_SCENES: SetupScene[] = [
             await page.locator('.setup-where-card').nth(1).click();
             await expect(page.locator('.setup-where-card.is-active')).toHaveCount(1);
             await expect(page.locator('.setup-where-card').nth(1)).toHaveClass(/is-active/);
+        },
+    },
+    {
+        // A 16 GB laptop says why it gets a smaller model.
+        name: 'plan-small-pc',
+        answers: { plan: PLAN_SMALL_PC },
+        reach: async (page) => {
+            await toPlan(page);
+            // Evaluated, small PC, fits, private: the local card's four reasons.
+            await expect(page.locator('.setup-where-card').first().locator('.setup-reasons li')).toHaveCount(4);
         },
     },
     {
@@ -518,9 +557,32 @@ export const SETUP_SCENES: SetupScene[] = [
         name: 'models',
         reach: async (page) => {
             await toModels(page);
-            await expect(page.locator('.mc-chip.is-untested')).toBeVisible();
-            await expect(page.locator('.mc-warn.is-big').first()).toBeVisible();
+            // A model too big for this PC is not offered; untested ones wait behind a closed disclosure.
+            await expect(page.locator('.mc-job .mc-name', { hasText: 'Qwen3.6' })).toHaveCount(0);
+            await expect(page.locator('.mc-job details.mc-more')).not.toHaveAttribute('open');
+            await expect(page.locator('.mc-chip.is-untested')).toBeHidden();
             await expect(page.locator('.mc-row.is-off')).toBeVisible();
+            await expect(page.getByRole('checkbox', { name: /Keep trying if the connection drops|واصل المحاولة/ })).toBeChecked();
+        },
+    },
+    {
+        name: 'models-untested-open',
+        reach: async (page) => {
+            await toModels(page);
+            const more = page.locator('.mc-job details.mc-more');
+            await more.locator('summary').focus();
+            await page.keyboard.press('Enter');
+            await expect(more).toHaveAttribute('open');
+            await expect(more.locator('.mc-chip.is-untested')).toBeVisible();
+        },
+    },
+    {
+        // The user's saved model stays listed, with why it may not run, though it doesn't fit.
+        name: 'models-too-big-kept',
+        answers: { plan: PLAN_TOO_BIG },
+        reach: async (page) => {
+            await toModels(page);
+            await expect(page.locator('.mc-warn.is-big').first()).toBeVisible();
         },
     },
     ...[false, true].flatMap((noGaiacpp) => [false, true].map((expanded): SetupScene => ({
@@ -546,6 +608,28 @@ export const SETUP_SCENES: SetupScene[] = [
             await agent.scrollIntoViewIfNeeded();
         },
     }))),
+    {
+        // The plan's agent line opens Customize with the agent picker in view and focused.
+        name: 'models-from-agent-line',
+        reach: async (page) => {
+            await toPlan(page);
+            await page.locator('.setup-agent-line .link-btn').click();
+            const title = page.locator('#setup-agent-title');
+            await expect(title).toBeFocused();
+            await expect(title).toBeInViewport();
+        },
+    },
+    {
+        name: 'plan-agent-unavailable',
+        answers: { agent: { gaiacpp: 'unavailable' } },
+        reach: async (page) => {
+            const listed = page.waitForResponse((r) => new URL(r.url()).pathname === '/api/agent-programs');
+            await toPlan(page);
+            await listed;
+            await expect(page.locator('.setup-footer .btn-secondary')).toBeVisible();
+            await expect(page.locator('.setup-agent-line')).toHaveCount(0);
+        },
+    },
     {
         name: 'models-agent-download-picked',
         answers: { agent: { gaiacpp: 'downloadable' } },
@@ -582,6 +666,7 @@ export const SETUP_SCENES: SetupScene[] = [
         answers: { plan: PLAN_NO_VISION },
         reach: async (page) => {
             await toModels(page);
+            await expect(page.locator('.mc-job details.mc-more')).toHaveAttribute('open');
             await expect(page.locator('p.mc-warn')).toBeVisible();
         },
     },
@@ -727,6 +812,31 @@ export const SETUP_SCENES: SetupScene[] = [
         reach: (page) => expect(page.locator('.dl-row').first()).toBeVisible(),
     },
     {
+        // An extra still downloading after setup is ready: its Optional row reads Added, not Add.
+        name: 'download-extra-in-flight',
+        answers: { status: RUN_READY_EXTRA, plan: PLAN_DONE },
+        reach: async (page) => {
+            await expect(page.locator('.setup-done')).toBeVisible();
+            await page.locator('.setup-rail-list > li').nth(2).getByRole('button').click();
+            const optional = page.locator('section.setup-card', { has: page.locator('button[aria-pressed]') });
+            await expect(optional.getByRole('button', { pressed: true })).toBeDisabled();
+            await expect(optional.getByRole('button', { pressed: false })).toBeVisible();
+            await optional.scrollIntoViewIfNeeded();
+        },
+    },
+    {
+        name: 'download-extras-stopped',
+        answers: { status: RUN_EXTRAS_STOPPED },
+        reach: async (page) => {
+            await expect(page.locator('.dl-row.is-cancelled')).toBeVisible();
+            // A way to finish without the extra, beside Resume all.
+            await expect(page.locator('.setup-footer .btn-secondary')).toBeVisible();
+            await expect(page.locator('.setup-rail-step.is-failed')).toHaveCount(0);
+            // The overall line counts the kept models whole, as their rows show.
+            await expect(page.locator('.dl-overall-line')).toContainText(/(?:^|\D)[89]\d\D{0,2}%/);
+        },
+    },
+    {
         name: 'test-running',
         answers: { status: RUN_TESTING },
         reach: (page) => expect(page.locator('.setup-result.is-running')).toBeVisible(),
@@ -765,6 +875,14 @@ export const SETUP_SCENES: SetupScene[] = [
             await expect(page.locator('.setup-done')).toBeVisible();
             // A first run has nothing to pick up: the other tasks show, Check in waits.
             await expect(page.locator('.start-card')).toHaveCount(1);
+        },
+    },
+    {
+        name: 'ready-extra-downloading',
+        answers: { status: RUN_READY_EXTRA, plan: PLAN_DONE },
+        reach: async (page) => {
+            await expect(page.locator('.setup-done')).toBeVisible();
+            await expect(page.locator('.setup-hint[role="status"]')).toBeVisible();
         },
     },
 ];

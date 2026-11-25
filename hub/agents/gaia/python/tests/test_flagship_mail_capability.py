@@ -8,7 +8,7 @@ import contextlib
 import json
 
 import pytest
-from gaia_agent.agent import GaiaAgent, GaiaAgentConfig
+from gaiapy.agent import GaiaAgent, GaiaAgentConfig
 
 from gaia.agents.base.tools import _TOOL_REGISTRY
 from gaia.agents.registry import KNOWN_TOOLS

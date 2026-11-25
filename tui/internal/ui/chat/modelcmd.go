@@ -14,7 +14,7 @@ import (
 // Lemonade models are downloaded and validate a Claude id against a live
 // credential. So it is recognized here (so the composer never treats it as a
 // question typed at the LLM) but still dispatched over the query channel —
-// see gaia_agent.stdio.run_model_command for why that channel, not the
+// see gaiapy.stdio.run_model_command for why that channel, not the
 // fire-and-forget control one /full-access uses, is the only one this transport
 // can reliably carry a response back on.
 
@@ -47,7 +47,7 @@ func isModelCommand(query string) bool {
 		strings.HasPrefix(trimmed, modelCommandPrefix+" ")
 }
 
-// modelCommandPrefix must match gaia_agent.stdio.MODEL_COMMAND_PREFIX — the
+// modelCommandPrefix must match gaiapy.stdio.MODEL_COMMAND_PREFIX — the
 // agent dispatches on the same literal.
 const modelCommandPrefix = "/model"
 

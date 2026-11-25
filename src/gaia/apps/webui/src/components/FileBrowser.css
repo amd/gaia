@@ -119,9 +119,9 @@
 .fb-search-btn {
     padding: 8px 14px;
     border-radius: var(--radius-md);
-    border: 1px solid var(--accent-fill);
-    background: var(--accent-fill);
-    color: var(--accent-fill-text);
+    border: 1px solid var(--bg-tertiary);
+    background: var(--bg-tertiary);
+    color: var(--text-primary);
     font-size: var(--fs-label);
     font-weight: 500;
     font-family: var(--font-sans);
@@ -131,7 +131,7 @@
 }
 
 .fb-search-btn:hover {
-    background: var(--accent-fill-hover);
+    background: var(--bg-active);
 }
 
 .fb-search-btn:disabled {
@@ -508,13 +508,13 @@
 }
 
 .fb-action-btn.primary {
-    border: 1px solid var(--accent-fill);
-    background: var(--accent-fill);
-    color: var(--accent-fill-text);
+    border: 1px solid var(--action-fill);
+    background: var(--action-fill);
+    color: var(--action-fill-text);
 }
 
 .fb-action-btn.primary:hover {
-    background: var(--accent-fill-hover);
+    background: var(--action-fill-hover);
 }
 
 .fb-action-btn:disabled {

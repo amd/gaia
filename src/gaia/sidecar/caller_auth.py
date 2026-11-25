@@ -24,13 +24,14 @@ Three controls, keyed on a :class:`CallerAuthConfig` installed at app build:
 3. **Origin rejection** — a request carrying a non-loopback browser ``Origin``
    is refused. Non-browser clients send no ``Origin`` and are unaffected.
 
-Fail-loud: rejections carry an actionable message, never a silent degrade. With
-no token configured the token check is skipped and a loud warning is logged, but
-Host/Origin still apply — so a hand-run developer sidecar keeps the control that
-stops a web page driving it.
+Fail-loud: rejections carry an actionable message, never a silent degrade. A
+sidecar with no token refuses to start (:func:`check_startup`) unless the
+developer sets ``GAIA_SIDECAR_ALLOW_NO_TOKEN=1``; only then is the token check
+skipped, with a loud warning, and Host/Origin still apply — so a hand-run
+developer sidecar keeps the control that stops a web page driving it.
 
 A sidecar binds its own env-var names and exempt paths and inherits everything
-else from here. Only the flagship (``gaia_agent.caller_auth``) does so today —
+else from here. Only the flagship (``gaiapy.caller_auth``) does so today —
 the email sidecar still carries its own copy of this logic, so a change here
 does NOT reach it.
 """
@@ -52,6 +53,10 @@ from gaia.logger import get_logger
 
 logger = get_logger(__name__)
 
+# The explicit developer opt-in to serve with no caller-auth token. Only "1"
+# opts in; GAIA's launchers never set it.
+ALLOW_NO_TOKEN_ENV_VAR = "GAIA_SIDECAR_ALLOW_NO_TOKEN"
+
 # Hosts a sidecar may be reached as. It only ever binds loopback, so any other
 # Host header is a rebinding attempt.
 LOOPBACK_HOSTS: FrozenSet[str] = frozenset({"127.0.0.1", "localhost", "::1"})
@@ -70,10 +75,12 @@ def generate_session_token() -> str:
 class CallerAuthConfig:
     """The active caller-auth policy for one sidecar app.
 
-    ``token`` is the per-session bearer secret; ``None`` disables the token check
-    (dev-only, logged loudly) while leaving Host/Origin in force. ``surface`` names
-    the sidecar in rejection messages. ``exempt_paths`` skip the token check only —
-    Host/Origin still cover them.
+    ``token`` is the per-session bearer secret. ``None`` fails every token check
+    and refuses startup, unless ``allow_no_token`` records the developer opt-in
+    (:data:`ALLOW_NO_TOKEN_ENV_VAR`) — then the token check is skipped while
+    Host/Origin stay in force. ``surface`` names the sidecar in rejection
+    messages; the two env-var names let a refusal say what to set.
+    ``exempt_paths`` skip the token check only — Host/Origin still cover them.
     """
 
     token: Optional[str]
@@ -81,6 +88,9 @@ class CallerAuthConfig:
     allowed_hosts: FrozenSet[str] = LOOPBACK_HOSTS
     allowed_origin_hosts: FrozenSet[str] = LOOPBACK_HOSTS
     exempt_paths: FrozenSet[str] = field(default_factory=frozenset)
+    allow_no_token: bool = False
+    token_file_env_var: str = ""
+    token_env_var: str = ""
 
 
 # Process-wide active config. One sidecar app per process; left None in any
@@ -115,9 +125,17 @@ def config_from_env(
     """Build a policy from the environment.
 
     A set token-file path whose file is missing/unreadable/empty is a LOUD
-    startup error, never a silent auth-off skip. Neither var set → ``token=None``:
-    the token check is skipped (dev) but Host/Origin protection still applies.
+    error, never a silent auth-off skip. Neither var set → ``token=None``, and
+    :func:`check_startup` then refuses to serve unless the developer opted in
+    with :data:`ALLOW_NO_TOKEN_ENV_VAR`. A missing token never raises here, so
+    importing a sidecar module (stdio transport, OpenAPI export) needs none.
     """
+    names = {
+        "surface": surface,
+        "exempt_paths": exempt_paths,
+        "token_file_env_var": token_file_env_var,
+        "token_env_var": token_env_var,
+    }
     token_path = os.environ.get(token_file_env_var) or None
     if token_path:
         if os.environ.get(token_env_var):
@@ -135,19 +153,66 @@ def config_from_env(
                 f"{token_file_env_var} points at '{token_path}' but the "
                 f"launch-secret file cannot be read: {e}. The spawning parent "
                 "creates this file on spawn and removes it on sidecar exit — "
-                "do not set the variable by hand unless the file exists. Unset "
-                "it to run without caller auth (local development only)."
+                "do not set the variable by hand unless the file exists."
             ) from e
         if not token:
             raise RuntimeError(
                 f"{token_file_env_var} points at '{token_path}' but the file "
                 "is empty — refusing to start with an empty caller-auth token. "
-                "Unset the variable to run without caller auth (local "
-                "development only)."
+                "Write the token into the file, or start the sidecar through "
+                "a GAIA launcher, which creates the file for you."
             )
-        return CallerAuthConfig(token=token, surface=surface, exempt_paths=exempt_paths)
+        return CallerAuthConfig(token=token, **names)
     token = os.environ.get(token_env_var) or None
-    return CallerAuthConfig(token=token, surface=surface, exempt_paths=exempt_paths)
+    return CallerAuthConfig(
+        token=token,
+        allow_no_token=token is None and _no_token_opted_in(),
+        **names,
+    )
+
+
+def _no_token_opted_in() -> bool:
+    return os.environ.get(ALLOW_NO_TOKEN_ENV_VAR, "").strip() == "1"
+
+
+def check_startup(config: CallerAuthConfig) -> None:
+    """Refuse to serve without a caller-auth token unless a developer opted in.
+
+    Call it before the sidecar accepts its first request. With a token it does
+    nothing; with no token and :data:`ALLOW_NO_TOKEN_ENV_VAR` set it logs a loud
+    warning; otherwise it raises :class:`RuntimeError` naming the fix.
+    """
+    if config.token:
+        return
+    file_var = config.token_file_env_var or "the token-file variable"
+    env_var = config.token_env_var or "the token variable"
+    if config.allow_no_token:
+        logger.warning(
+            "%s: caller authentication DISABLED — neither %s nor %s is set and "
+            "%s=1 opts out of the token check. Any local process can drive this "
+            "sidecar; use this only for a sidecar you run by hand while "
+            "developing. Host/Origin protection is still enforced.",
+            config.surface,
+            file_var,
+            env_var,
+            ALLOW_NO_TOKEN_ENV_VAR,
+        )
+        return
+    raw_flag = os.environ.get(ALLOW_NO_TOKEN_ENV_VAR, "").strip()
+    flag_note = (
+        f" ({ALLOW_NO_TOKEN_ENV_VAR} is '{raw_flag}'; only '1' opts in.)"
+        if raw_flag
+        else ""
+    )
+    raise RuntimeError(
+        f"The {config.surface} refuses to start without a caller-auth token: "
+        f"neither {file_var} nor {env_var} is set. Start it through a GAIA "
+        "launcher (the GAIA daemon, or the npm package's startSidecar / serve), "
+        f"which mints a per-session token and passes it as {file_var}, a 0600 "
+        "file. For a sidecar you run by hand while developing, set "
+        f"{ALLOW_NO_TOKEN_ENV_VAR}=1 to run without the token check.{flag_note} "
+        "See 'Caller authentication' in the agent's SPEC.md."
+    )
 
 
 def is_exempt_path(path: str) -> bool:
@@ -174,12 +239,13 @@ def _host_only(header_value: str) -> str:
 def token_ok(config: CallerAuthConfig, authorization_header: str) -> bool:
     """Constant-time check of an ``Authorization: Bearer <token>`` header.
 
-    True only when a token is configured AND the presented bearer matches. Uses
+    True when a token is configured AND the presented bearer matches, or when no
+    token is configured and the developer opted out of the check. Uses
     :func:`hmac.compare_digest` so a wrong token can't be timed out character by
     character.
     """
     if config.token is None:
-        return True  # token check disabled (dev)
+        return config.allow_no_token
     header = (authorization_header or "").strip()
     scheme, _, presented = header.partition(" ")
     if scheme.lower() != "bearer" or not presented.strip():
@@ -274,17 +340,16 @@ def openapi_security_extension(
     The token check is a plain ``Request``-typed dependency, by design — it
     must not risk behaviour drift in the live auth path — so FastAPI's schema
     generator never sees it and emits no ``securitySchemes``/``security`` at
-    all. This documents the REAL posture instead: the gate is skipped entirely
-    when a sidecar has no token configured (local dev), so every gated
-    operation declares ``security: [{"bearerAuth": []}, {}]`` — bearer OR
-    none — never a false "always required" claim. ``exempt_paths`` routes get
-    an explicit empty requirement (``security: []``) so they read as
-    deliberately public, not merely undocumented. Mutates and returns ``spec``.
+    all. This documents the real posture instead: a sidecar refuses to start
+    without a token, so every gated operation declares
+    ``security: [{"bearerAuth": []}]``. ``exempt_paths`` routes get an explicit
+    empty requirement (``security: []``) so they read as deliberately public,
+    not merely undocumented. Mutates and returns ``spec``.
     """
     schemes = spec.setdefault("components", {}).setdefault("securitySchemes", {})
     schemes["bearerAuth"] = {"type": "http", "scheme": "bearer"}
     for path, operations in spec.get("paths", {}).items():
-        requirement = [] if path in exempt_paths else [{"bearerAuth": []}, {}]
+        requirement = [] if path in exempt_paths else [{"bearerAuth": []}]
         for method, operation in operations.items():
             if method in _OPENAPI_METHODS:
                 operation["security"] = requirement
@@ -318,6 +383,7 @@ def install_openapi_security(
 
 
 __all__ = [
+    "ALLOW_NO_TOKEN_ENV_VAR",
     "LOOPBACK_HOSTS",
     "CallerAuthConfig",
     "HostOriginMiddleware",
@@ -326,6 +392,7 @@ __all__ = [
     "reset",
     "get_config",
     "config_from_env",
+    "check_startup",
     "is_exempt_path",
     "token_ok",
     "openapi_security_extension",

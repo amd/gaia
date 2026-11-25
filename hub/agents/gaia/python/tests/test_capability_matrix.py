@@ -8,7 +8,7 @@ agent-loop tools, REST verbs, eval coverage) and renders a committed
 
 - AC1: the committed matrix doc is byte-identical to a freshly regenerated one.
 - AC2: ``tools_count`` (68) is identical across ``gaia-agent.yaml``,
-  ``gaia_agent.build_gaia()``, and the AST-derived bundle union.
+  ``gaiapy.build_gaia()``, and the AST-derived bundle union.
 - AC3: every exposed REST functional op is annotated with an eval suite name or
   the "no quality eval" sentinel — closed-set, bidirectional.
 - AC4: the no-MCP scope decision is pinned and matches the manifest.
@@ -30,8 +30,8 @@ from pathlib import Path
 
 import pytest
 
-pytest.importorskip("gaia_agent")
-pytest.importorskip("gaia_agent")
+pytest.importorskip("gaiapy")
+pytest.importorskip("gaiapy")
 
 import yaml  # noqa: E402
 
@@ -156,9 +156,9 @@ def test_committed_capability_matrix_is_up_to_date(matrix):
 def test_tools_count_matches_derived(matrix):
     manifest = yaml.safe_load(_GAIA_AGENT_YAML.read_text(encoding="utf-8"))
 
-    import gaia_agent
+    import gaiapy
 
-    registration_count = gaia_agent.build_gaia().tools_count
+    registration_count = gaiapy.build_gaia().tools_count
 
     assert manifest["tools_count"] == _EXPECTED_TOOLS_TOTAL
     assert registration_count == _EXPECTED_TOOLS_TOTAL

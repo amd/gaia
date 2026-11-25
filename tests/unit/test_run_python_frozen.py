@@ -18,12 +18,12 @@ from unittest.mock import patch
 
 import pytest
 
-pytest.importorskip("gaia_agent")
+pytest.importorskip("gaiapy")
 
-from gaia_agent import python_runner  # noqa: E402
-from gaia_agent.chat_agent import ChatAgent, ChatAgentConfig  # noqa: E402
-from gaia_agent.python_jobs import PythonJob  # noqa: E402
-from gaia_agent.python_runner import (  # noqa: E402
+from gaiapy import python_runner  # noqa: E402
+from gaiapy.chat_agent import ChatAgent, ChatAgentConfig  # noqa: E402
+from gaiapy.python_jobs import PythonJob  # noqa: E402
+from gaiapy.python_runner import (  # noqa: E402
     RUN_PYTHON_FILE_FLAG,
     python_command,
     requests_run_python_file,
@@ -61,8 +61,8 @@ def tools(project, monkeypatch):
     monkeypatch.chdir(project)
     saved = dict(_TOOL_REGISTRY)
     with (
-        patch("gaia_agent.chat_agent.RAGSDK"),
-        patch("gaia_agent.chat_agent.RAGConfig"),
+        patch("gaiapy.chat_agent.RAGSDK"),
+        patch("gaiapy.chat_agent.RAGConfig"),
     ):
         ChatAgent(ChatAgentConfig(silent_mode=True, allowed_paths=[str(project)]))
     try:
@@ -82,7 +82,7 @@ def _completed(argv, returncode=0, stdout="", stderr=""):
 def _spawn(**finished):
     """Stand in for the child: a job that ran to completion."""
     return patch(
-        "gaia_agent.chat_agent.run_python_job",
+        "gaiapy.chat_agent.run_python_job",
         return_value=PythonJob(_completed([], **finished), None, []),
     )
 
@@ -201,7 +201,7 @@ def test_a_start_failure_is_an_error_naming_the_program(tool, frozen, tools, pro
     script = project / "t.py"
     script.write_text("print(1)\n", encoding="utf-8")
     with patch(
-        "gaia_agent.chat_agent.run_python_job",
+        "gaiapy.chat_agent.run_python_job",
         side_effect=FileNotFoundError(2, "not found"),
     ):
         if tool == "run_python":
@@ -237,7 +237,7 @@ def test_the_ui_event_reports_the_failure(tools):
 #: Stand-in for the frozen binary's entry point: the same dispatch call.
 _CHILD = (
     "import sys\n"
-    "from gaia_agent.python_runner import requests_run_python_file, "
+    "from gaiapy.python_runner import requests_run_python_file, "
     "run_python_file\n"
     "assert requests_run_python_file(sys.argv[1:])\n"
     "sys.exit(run_python_file(sys.argv[2:]))\n"
@@ -468,7 +468,7 @@ def test_a_file_a_script_writes_without_an_encoding_is_utf8(
 # A script that starts sys.executable itself reaches the binary too
 # ---------------------------------------------------------------------------
 
-from gaia_agent.python_runner import (  # noqa: E402
+from gaiapy.python_runner import (  # noqa: E402
     BUNDLED_LIBRARIES,
     interpreter_request,
 )
@@ -476,7 +476,7 @@ from gaia_agent.python_runner import (  # noqa: E402
 #: Stand-in for the frozen entry point's ``dispatch`` call; 97 = "not Python".
 _DISPATCH = (
     "import sys\n"
-    "from gaia_agent.python_runner import dispatch\n"
+    "from gaiapy.python_runner import dispatch\n"
     "code = dispatch(sys.argv[1:])\n"
     "sys.exit(97 if code is None else code)\n"
 )
@@ -600,7 +600,7 @@ def _libraries_named(tool):
 @pytest.fixture
 def installed(monkeypatch):
     """Which bundled libraries this interpreter has; all of them by default."""
-    from gaia_agent import chat_agent
+    from gaiapy import chat_agent
 
     have = set(BUNDLED_LIBRARIES.values())
     real_find_spec = chat_agent.importlib.util.find_spec
@@ -645,7 +645,7 @@ def test_a_frozen_build_names_every_bundled_library(without_pandas, frozen, tool
 
 
 def test_a_failed_check_is_logged_and_the_library_left_out(installed, monkeypatch):
-    from gaia_agent import chat_agent
+    from gaiapy import chat_agent
 
     def broken(name, *args):
         raise ValueError(f"{name}.__spec__ is None")
@@ -660,7 +660,7 @@ def test_a_failed_check_is_logged_and_the_library_left_out(installed, monkeypatc
 
 
 def _missing(module):
-    from gaia_agent.chat_agent import _python_run_result
+    from gaiapy.chat_agent import _python_run_result
 
     stderr = (
         'Traceback (most recent call last):\n  File "snippet.py", line 1\n'
@@ -730,8 +730,8 @@ def test_the_hinted_failure_still_teaches_the_fix_once_a_retry_works(tmp_path):
 
 from types import SimpleNamespace  # noqa: E402
 
-from gaia_agent import chat_agent  # noqa: E402
-from gaia_agent.chat_agent import (  # noqa: E402
+from gaiapy import chat_agent  # noqa: E402
+from gaiapy.chat_agent import (  # noqa: E402
     _python_run_result,
     _system_python_hint,
     system_python,
@@ -789,7 +789,7 @@ def test_the_venvs_own_python_is_not_the_system_python(monkeypatch, tmp_path):
 )
 def test_the_hint_needs_a_shell_that_would_run_it(has_shell, full_access, expected):
     """Outside full access the shell refuses a Python that is not on its list."""
-    from gaia_agent.chat_agent import _shell_runs_any_python
+    from gaiapy.chat_agent import _shell_runs_any_python
 
     agent = SimpleNamespace(
         _tools_registry={"run_shell_command": {}} if has_shell else {},
@@ -843,7 +843,7 @@ def test_a_bundled_library_keeps_its_own_hint(monkeypatch):
 
 
 def test_the_description_says_whose_python_this_is():
-    from gaia_agent.chat_agent import _lists_script_libraries
+    from gaiapy.chat_agent import _lists_script_libraries
 
     def sample():
         """Run.

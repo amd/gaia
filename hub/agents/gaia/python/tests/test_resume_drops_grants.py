@@ -14,9 +14,9 @@ from __future__ import annotations
 from unittest.mock import Mock
 
 import pytest
-from gaia_agent.chat_agent import ChatAgent
-from gaia_agent.interactive import interactive_mode
-from gaia_agent.session import SessionManager
+from gaiapy.chat_agent import ChatAgent
+from gaiapy.interactive import interactive_mode
+from gaiapy.session import SessionManager
 
 from gaia.agents.base.console import AgentConsole
 
@@ -201,3 +201,31 @@ def test_a_session_without_a_console_still_loads(sessions):
 
     assert agent.load_session("conv_b")
     assert agent.current_session.session_id == "conv_b"
+
+
+def test_resume_forgets_the_calls_declined_in_the_other_conversation(sessions, console):
+    from gaia.agents.base.agent import Agent
+    from gaia.agents.base.denied_effects import DeclinedCalls
+
+    agent = _in_conversation(sessions, console, "conv_a")
+    agent._declined_calls = DeclinedCalls()
+    agent._declined_calls.record(*_TESTS)
+    agent.forget_declined_calls = lambda: Agent.forget_declined_calls(agent)
+
+    assert agent.load_session("conv_b")
+
+    assert agent._declined_calls.declined(*_TESTS) is None
+
+
+def test_a_failed_resume_keeps_the_calls_declined_here(sessions, console):
+    from gaia.agents.base.agent import Agent
+    from gaia.agents.base.denied_effects import DeclinedCalls
+
+    agent = _in_conversation(sessions, console, "conv_a")
+    agent._declined_calls = DeclinedCalls()
+    agent._declined_calls.record(*_TESTS)
+    agent.forget_declined_calls = lambda: Agent.forget_declined_calls(agent)
+
+    assert agent.load_session("no_such_conversation") is False
+
+    assert agent._declined_calls.declined(*_TESTS) == "pytest -q"

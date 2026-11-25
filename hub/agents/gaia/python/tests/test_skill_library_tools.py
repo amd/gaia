@@ -41,15 +41,15 @@ _REPO_ROOT = Path(__file__).resolve().parents[5]
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
-pytest.importorskip("gaia_agent")
+pytest.importorskip("gaiapy")
 
-from gaia_agent.agent import GaiaAgent, GaiaAgentConfig  # noqa: E402
-from gaia_agent.skill_tools import SKILL_LIBRARY_TOOL_NAMES  # noqa: E402
+from gaiapy.agent import GaiaAgent, GaiaAgentConfig  # noqa: E402
 
 from gaia.agents.base.history import (  # noqa: E402
     MEMORY_CONTEXT_FOOTER,
     MEMORY_CONTEXT_HEADER,
 )
+from gaia.agents.tools.skill_library_tools import SKILL_LIBRARY_TOOL_NAMES  # noqa: E402
 from gaia.skills.capture import (  # noqa: E402
     published_skill_names as _REAL_PUBLISHED_SKILL_NAMES,
 )
@@ -228,7 +228,7 @@ def session(library):
     )
     agent.rebuild_system_prompt()
 
-    from gaia_agent.skill_tools import estimate_prompt_tokens
+    from gaia.agents.tools.skill_library_tools import estimate_prompt_tokens
 
     return SimpleNamespace(
         agent=agent,
@@ -1286,7 +1286,10 @@ class TestTheListViewNeverLosesASkill:
     """
 
     def test_a_long_description_is_summarised(self):
-        from gaia_agent.skill_tools import _LIST_DESCRIPTION_CHARS, _summarize
+        from gaia.agents.tools.skill_library_tools import (
+            _LIST_DESCRIPTION_CHARS,
+            _summarize,
+        )
 
         summary = _summarize("x" * 5000)
         assert len(summary) < 5000
@@ -1297,12 +1300,12 @@ class TestTheListViewNeverLosesASkill:
         )
 
     def test_a_short_description_is_untouched(self):
-        from gaia_agent.skill_tools import _summarize
+        from gaia.agents.tools.skill_library_tools import _summarize
 
         assert _summarize("Triage GitHub issues.") == "Triage GitHub issues."
 
     def test_missing_description_does_not_explode(self):
-        from gaia_agent.skill_tools import _summarize
+        from gaia.agents.tools.skill_library_tools import _summarize
 
         assert _summarize("") == ""
         assert _summarize(None) == ""
@@ -1311,8 +1314,7 @@ class TestTheListViewNeverLosesASkill:
         """36 skills with 1KB descriptions each must still fit the NPU."""
         import json
 
-        from gaia_agent.skill_tools import _summarize
-
+        from gaia.agents.tools.skill_library_tools import _summarize
         from gaia.llm.lemonade_client import truncation_budget
 
         entries = [

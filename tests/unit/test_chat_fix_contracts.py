@@ -35,9 +35,9 @@ import pytest
 
 # ChatAgent ships in the flagship gaia-agent-gaia wheel (#6099); skip the
 # whole module when a framework-only env lacks it.
-pytest.importorskip("gaia_agent")
+pytest.importorskip("gaiapy")
 
-from gaia_agent.chat_agent import ChatAgent, ChatAgentConfig  # noqa: E402
+from gaiapy.chat_agent import ChatAgent, ChatAgentConfig  # noqa: E402
 
 from gaia.agents.base.tools import _TOOL_REGISTRY  # noqa: E402
 from tests.unit.test_profilespec_characterization import (  # noqa: E402
@@ -64,7 +64,7 @@ def test_notify_desktop_windows_real_error_not_masked_as_plyer_missing(caplog):
         agent._register_tools()
         notify_desktop = agent._tools_registry["notify_desktop"]["function"]
 
-    caplog.set_level(logging.DEBUG, logger="gaia_agent.chat_agent")
+    caplog.set_level(logging.DEBUG, logger="gaiapy.chat_agent")
     with (
         patch("platform.system", return_value="Windows"),
         patch("subprocess.Popen", side_effect=RuntimeError("ps blocked")),
@@ -96,7 +96,7 @@ def test_reset_command_tool_loader_failure_is_logged(caplog, monkeypatch):
     Drives ``interactive_mode`` through ``input()`` -> "/reset" -> "/quit"
     with a MagicMock agent. Expected to FAIL on current main.
     """
-    from gaia_agent import interactive as app_module
+    from gaiapy import interactive as app_module
 
     mock_agent = MagicMock()
     mock_agent.tool_loader.reset_session.side_effect = RuntimeError(
@@ -104,7 +104,7 @@ def test_reset_command_tool_loader_failure_is_logged(caplog, monkeypatch):
     )
 
     monkeypatch.setattr("builtins.input", MagicMock(side_effect=["/reset", "/quit"]))
-    caplog.set_level(logging.DEBUG, logger="gaia_agent.interactive")
+    caplog.set_level(logging.DEBUG, logger="gaiapy.interactive")
     app_module.interactive_mode(mock_agent)
 
     assert "reset command tool loader boom" in caplog.text, (
@@ -126,7 +126,7 @@ def test_bootstrap_session_tool_loader_failure_is_logged(caplog):
         "bootstrap tool loader boom"
     )
 
-    caplog.set_level(logging.DEBUG, logger="gaia_agent.chat_agent")
+    caplog.set_level(logging.DEBUG, logger="gaiapy.chat_agent")
     agent._ensure_tool_loader_reset()
 
     assert agent.current_session is agent.session_manager.create_session()
@@ -156,7 +156,7 @@ def test_list_windows_per_window_failure_logged_at_debug(caplog):
     fake_pywinauto = types.ModuleType("pywinauto")
     fake_pywinauto.Desktop = MagicMock(return_value=fake_desktop)
 
-    caplog.set_level(logging.DEBUG, logger="gaia_agent.chat_agent")
+    caplog.set_level(logging.DEBUG, logger="gaiapy.chat_agent")
     with (
         patch.dict(sys.modules, {"pywinauto": fake_pywinauto}),
         patch("platform.system", return_value="Windows"),
@@ -186,9 +186,9 @@ def test_chat_profile_does_not_build_rag_eagerly():
     `prompt_profile`.
     """
     with (
-        patch("gaia_agent.chat_agent.RAGSDK") as rag_sdk_cls,
-        patch("gaia_agent.chat_agent.RAGConfig"),
-        patch("gaia_agent.chat_agent.SessionManager"),
+        patch("gaiapy.chat_agent.RAGSDK") as rag_sdk_cls,
+        patch("gaiapy.chat_agent.RAGConfig"),
+        patch("gaiapy.chat_agent.SessionManager"),
     ):
         ChatAgent(ChatAgentConfig(prompt_profile="chat", silent_mode=True))
 
@@ -243,9 +243,9 @@ def test_allowed_paths_default_none_stays_consistent(tmp_path, monkeypatch):
     # A file tool leaked into the global registry would add a scratch-dir root.
     with (
         patch.dict(_TOOL_REGISTRY, clear=True),
-        patch("gaia_agent.chat_agent.RAGSDK"),
-        patch("gaia_agent.chat_agent.RAGConfig") as rag_config_cls,
-        patch("gaia_agent.chat_agent.SessionManager"),
+        patch("gaiapy.chat_agent.RAGSDK"),
+        patch("gaiapy.chat_agent.RAGConfig") as rag_config_cls,
+        patch("gaiapy.chat_agent.SessionManager"),
     ):
         agent = ChatAgent(
             ChatAgentConfig(prompt_profile="chat", silent_mode=True, allowed_paths=None)
@@ -265,9 +265,9 @@ def test_allowed_paths_explicit_stays_consistent(tmp_path, monkeypatch):
 
     with (
         patch.dict(_TOOL_REGISTRY, clear=True),
-        patch("gaia_agent.chat_agent.RAGSDK"),
-        patch("gaia_agent.chat_agent.RAGConfig") as rag_config_cls,
-        patch("gaia_agent.chat_agent.SessionManager"),
+        patch("gaiapy.chat_agent.RAGSDK"),
+        patch("gaiapy.chat_agent.RAGConfig") as rag_config_cls,
+        patch("gaiapy.chat_agent.SessionManager"),
     ):
         agent = ChatAgent(
             ChatAgentConfig(

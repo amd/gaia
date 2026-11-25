@@ -60,7 +60,7 @@ export function stubPanelApi() {
         restart_error: null,
     } as never);
     m.getTunnelStatus.mockResolvedValue({
-        active: false, url: null, token: null, startedAt: null, error: null, publicIp: null, device: null,
+        active: false, url: null, token: null, startedAt: null, error: null, device: null,
     });
     m.getPermissions.mockResolvedValue({ session_id: SID, mode: 'ask', grants: [] });
     m.getContextUsage.mockResolvedValue({ available: false, reason: 'No answer yet.' } as never);
@@ -76,8 +76,10 @@ export function stubPanelApi() {
     return m;
 }
 
-export function resetPanelState() {
+/** A fresh panel state; *open* remembers the user opened it, as the panel's own tests need. */
+export function resetPanelState({ open = true }: { open?: boolean } = {}) {
     window.localStorage.clear();
+    if (open) window.localStorage.setItem('gaia.sessionPanel.open', '1');
     useSessionPanelStore.getState().reload();
     resetSessionEnvironmentCache();
 }

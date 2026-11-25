@@ -88,7 +88,7 @@ func TestEscAgainstTheReleasedProcessShape(t *testing.T) {
 
 	// 1. One Esc: the turn stops, and the agent — with the session it holds — stays.
 	ask("run the slow tool")
-	tui.waitFor(map[string]any{"contains": "rm -rf ./build", "timeout_ms": 20000})
+	tui.waitFor(map[string]any{"contains": "Delete build", "timeout_ms": 20000})
 	tui.keys("esc")
 	tui.waitFor(map[string]any{"contains": "cancelled", "timeout_ms": 10000})
 	settled()
@@ -102,7 +102,7 @@ func TestEscAgainstTheReleasedProcessShape(t *testing.T) {
 	// 2. A call the agent cannot interrupt: the first Esc asks, the second
 	// stops the whole tree before the call can finish.
 	ask("run the stubborn slow tool")
-	tui.waitFor(map[string]any{"contains": "rm -rf ./dist", "timeout_ms": 20000})
+	tui.waitFor(map[string]any{"contains": "Delete dist", "timeout_ms": 20000})
 	toolStarted := time.Now()
 	tui.keys("esc")
 	tui.waitFor(map[string]any{"contains": "cancelling"})

@@ -31,17 +31,18 @@ from pathlib import Path
 from typing import Optional
 from urllib.parse import urlencode
 
-from fastapi import FastAPI, Request
+from fastapi import Depends, FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from starlette.convertors import PathConvertor, register_url_convertor
-from starlette.middleware.base import BaseHTTPMiddleware
 
 from gaia.agents.install_hints import agent_wheel_failed_message
 from gaia.client_hangups import quiet_client_hangups
 from gaia.config import UnsafeGaiaHomeError
 from gaia.listener_guard import keep_listening_after_client_resets
 from gaia.security import AllowedPathsEnvError, env_allowed_paths
+
+from . import api_token
 
 # ── Backward-compatible re-exports ──────────────────────────────────────────
 # Tests use @patch("gaia.ui.server._get_chat_response") etc., so we must
@@ -54,13 +55,18 @@ from ._chat_helpers import _index_document  # noqa: F401
 from ._chat_helpers import _stream_chat_response  # noqa: F401
 from ._chat_helpers import _ui_cloud_provider, writing_tool_registry
 from .agent_loop import agent_loop
+from .csp import content_security_policy
 
 # pylint: enable=unused-import
 from .database import ChatDatabase
 from .document_copies import move_library_files_out_of_shared_folder
 from .document_monitor import DocumentMonitor
 from .memory_settings import memory_enabled
-from .restart_recovery import recover_interrupted_work, sweep_interrupted_work
+from .restart_recovery import (
+    INTERRUPTED_INDEXING_ERROR,
+    recover_interrupted_work,
+    sweep_interrupted_work,
+)
 from .routers import agent_programs as agent_programs_router_mod
 from .routers import agents as agents_router_mod
 from .routers import automations as automations_router_mod
@@ -90,8 +96,14 @@ from .routers import speech as speech_router_mod
 from .routers import spending as spending_router_mod
 from .routers import system as system_router_mod
 from .routers import tunnel as tunnel_router_mod
-from .security import UIRequestGuardMiddleware
-from .tunnel import TunnelManager
+from .security import (
+    TUNNEL_COOKIE_NAME,
+    ApiTokenMiddleware,
+    UIRequestGuardMiddleware,
+    require_local_pc,
+    via_tunnel,
+)
+from .tunnel import TunnelManager, redact_tunnel_token_in_access_log
 from .utils import UploadStaticFiles
 from .utils import sanitize_static_path as _sanitize_static_path
 from .utils import uploads_dir
@@ -100,19 +112,6 @@ logger = logging.getLogger(__name__)
 
 # Default port for agent UI server
 DEFAULT_PORT = 4200
-
-# Localhost addresses that bypass tunnel authentication (Electron app)
-_LOCAL_HOSTS = {"127.0.0.1", "localhost", "::1"}
-
-# API paths that bypass tunnel authentication (monitoring / preflight)
-_AUTH_EXEMPT_PATHS = {"/api/health"}
-
-# HttpOnly cookie name used to bootstrap tunnel auth from the QR-code URL.
-# When a mobile browser opens ``https://<tunnel>/?token=<uuid>`` the SPA
-# handler (``serve_spa``) sets this cookie on the response, so the React
-# app's subsequent ``fetch('/api/...')`` calls carry it automatically
-# (same-origin fetches include cookies by default).
-_TUNNEL_COOKIE_NAME = "gaia_tunnel_token"
 
 
 class _SpaPathConvertor(PathConvertor):
@@ -160,101 +159,6 @@ class Utf8JsonMiddleware:
             await send(message)
 
         await self.app(scope, receive, send_with_charset)
-
-
-# ── Tunnel Auth Middleware ──────────────────────────────────────────────────
-
-
-class TunnelAuthMiddleware(BaseHTTPMiddleware):
-    """Validate tunnel auth token on API requests arriving through the ngrok tunnel.
-
-    When the tunnel is active, every ``/api/*`` request whose source is
-    *not* localhost must carry a valid token, provided via either:
-
-    1. ``Authorization: Bearer <token>`` header (scriptable clients, curl)
-    2. ``gaia_tunnel_token`` cookie (set by ``serve_spa`` when a mobile
-       browser first opens the QR-code URL containing ``?token=<uuid>``)
-
-    Local requests (from the Electron desktop app) and the ``/api/health``
-    monitoring endpoint are always allowed through.
-    """
-
-    async def dispatch(self, request: Request, call_next):
-        path = request.url.path
-
-        # Gate /api/* routes and the /v1/connections forwarded-grant surface
-        # (#1292) — the latter carries OAuth secrets, so remote/tunnel access
-        # must present a valid token just like /api/*.
-        if not (path.startswith("/api/") or path.startswith("/v1/")):
-            return await call_next(request)
-
-        # Always allow exempt paths (health check, etc.)
-        if path in _AUTH_EXEMPT_PATHS:
-            return await call_next(request)
-
-        # Check whether the tunnel is active
-        tunnel: TunnelManager = getattr(request.app.state, "tunnel", None)
-        if tunnel is None or not tunnel.active:
-            return await call_next(request)
-
-        # ── Localhost bypass (Electron desktop app) ────────────────────
-        # The bypass requires BOTH the raw TCP peer to be on localhost
-        # AND the request to lack any ``X-Forwarded-*`` headers. The
-        # second clause is what makes the bypass spoof-resistant: ngrok
-        # always *adds* ``X-Forwarded-For`` / ``X-Forwarded-Host`` /
-        # ``X-Forwarded-Proto`` to tunnelled requests, so if any of those
-        # are present the request came in over the wire and must
-        # authenticate — even if a remote attacker tried to set
-        # ``X-Forwarded-For: 127.0.0.1`` to fake a localhost source.
-        #
-        # Note: ``request.client.host`` reflects the raw TCP peer because
-        # the standalone runner in ``main()`` passes
-        # ``forwarded_allow_ips=""`` to uvicorn, disabling the proxy-header
-        # rewrite that would otherwise let the ``X-Forwarded-For`` value
-        # take precedence.
-        client_host = request.client.host if request.client else None
-        has_forwarded_marker = any(
-            h in request.headers
-            for h in ("x-forwarded-for", "x-forwarded-host", "x-forwarded-proto")
-        )
-        if client_host in _LOCAL_HOSTS and not has_forwarded_marker:
-            return await call_next(request)
-
-        # ── Remote request through tunnel -- require valid token ─────────
-        # Extract token from Authorization header OR cookie.
-        token = None
-        auth_header = request.headers.get("authorization", "")
-        if auth_header.lower().startswith("bearer "):
-            token = auth_header[len("bearer ") :].strip()  # noqa: E203
-        if not token:
-            token = request.cookies.get(_TUNNEL_COOKIE_NAME)
-
-        if not token:
-            logger.warning(
-                "Tunnel auth: rejecting %s %s from %s (no header/cookie)",
-                request.method,
-                path,
-                client_host,
-            )
-            return JSONResponse(
-                status_code=401,
-                content={"detail": "Missing or invalid Authorization header"},
-            )
-
-        if not tunnel.validate_token(token):
-            logger.warning(
-                "Tunnel auth: rejecting %s %s from %s (invalid token)",
-                request.method,
-                path,
-                client_host,
-            )
-            return JSONResponse(
-                status_code=401,
-                content={"detail": "Invalid tunnel authentication token"},
-            )
-
-        tunnel.note_device(request.headers.get("user-agent", ""))
-        return await call_next(request)
 
 
 def start_model_server_owner() -> threading.Thread:
@@ -337,9 +241,9 @@ def _run_scheduled_prompt(
         return _relay_scheduled_prompt(db, prompt, cancel_event, console)
 
     try:
-        from gaia_agent.agent import GaiaAgent, GaiaAgentConfig
+        from gaiapy.agent import GaiaAgent, GaiaAgentConfig
     except ModuleNotFoundError as e:
-        if (e.name or "").partition(".")[0] != "gaia_agent":
+        if (e.name or "").partition(".")[0] != "gaiapy":
             raise RuntimeError(_scheduled_import_error(e)) from e
         raise RuntimeError(_flagship_missing_message(registry)) from e
     except ImportError as e:
@@ -516,13 +420,16 @@ def _tripwire_sweep() -> None:
         )
 
 
-def create_app(db_path: str = None, webui_dist: str = None) -> FastAPI:
+def create_app(
+    db_path: str = None, webui_dist: str = None, port: int = DEFAULT_PORT
+) -> FastAPI:
     """Create and configure the FastAPI application.
 
     Args:
         db_path: Path to SQLite database. None for default, ":memory:" for testing.
         webui_dist: Path to the pre-built frontend dist directory. When None,
             falls back to the default location relative to this package.
+        port: Port the server listens on; the mobile-access tunnel forwards to it.
 
     Returns:
         Configured FastAPI application.
@@ -881,6 +788,9 @@ def create_app(db_path: str = None, webui_dist: str = None) -> FastAPI:
 
         # Shutdown
         remove_local_work(active_turns_in_flight)
+        # ngrok is its own process: left running, it keeps the public URL open.
+        await tunnel.stop()
+        logger.info("Mobile access tunnel stopped")
         await scheduler.shutdown()
         logger.info("Task scheduler stopped")
         await agent_loop.stop()
@@ -895,6 +805,16 @@ def create_app(db_path: str = None, webui_dist: str = None) -> FastAPI:
         await stop_watcher()
         logger.info("Connector activation watcher stopped")
         recovery_sweep.cancel()
+        # Indexing writes to the database, so it ends before the database closes.
+        pending = dict(indexing_tasks)
+        for task in pending.values():
+            task.cancel()
+        await asyncio.gather(*pending.values(), return_exceptions=True)
+        # Closing GAIA isn't the user's Cancel: keep the interrupted reason and Retry.
+        for doc_id in pending:
+            db.update_document_status(
+                doc_id, "failed", last_error=INTERRUPTED_INDEXING_ERROR
+            )
         db.close()
         logger.info("Database connection closed")
         memory_router_mod.close_store()
@@ -935,29 +855,30 @@ def create_app(db_path: str = None, webui_dist: str = None) -> FastAPI:
         allow_headers=["*"],
     )
 
-    # Tunnel authentication -- reject unauthenticated remote requests when
-    # the ngrok tunnel is active.  Must be added *after* CORSMiddleware so
-    # that CORS preflight (OPTIONS) responses are handled first.
-    app.add_middleware(TunnelAuthMiddleware)
+    # Every /api and /v1 caller presents the API token (or, over mobile
+    # access, the tunnel token). Outside CORS so a refusal carries no CORS
+    # headers.
+    app.add_middleware(ApiTokenMiddleware)
 
-    # Host / Origin / X-Gaia-UI guard. Added after tunnel auth so it wraps
-    # it: it runs before tunnel auth (which passes everything
-    # through while the tunnel is off) and its rejections carry no CORS
-    # headers, so a cross-site page cannot read why it failed.
+    # Host / Origin / X-Gaia-UI guard. Outside the token check, so a
+    # rebinding or cross-site request is refused before anything else.
     app.add_middleware(UIRequestGuardMiddleware)
 
-    # Outermost, so the guard's and tunnel auth's own rejections get the
+    # Outermost, so the guard's and the token check's own rejections get the
     # charset too. It only rewrites a header, so the guard still runs first.
     app.add_middleware(Utf8JsonMiddleware)
 
     # Store shared state on app.state so routers can access via Depends
     app.state.db = db
+    app.state.ui_api_token = api_token.load_or_create_token()
+    app.state.launch_codes = api_token.LaunchCodes()
     app.state.indexing_tasks = indexing_tasks
     app.state.max_indexed_files = int(os.environ.get("GAIA_MAX_INDEXED_FILES", "0"))
 
     # Initialize tunnel manager for mobile access
-    tunnel = TunnelManager(port=DEFAULT_PORT)
+    tunnel = TunnelManager(port=port)
     app.state.tunnel = tunnel
+    redact_tunnel_token_in_access_log()
 
     # Per-session locks prevent the same session from having multiple
     # concurrent requests, which would corrupt conversation state.
@@ -1185,7 +1106,7 @@ def create_app(db_path: str = None, webui_dist: str = None) -> FastAPI:
 
         redirect = RedirectResponse(url=target, status_code=303)
         redirect.set_cookie(
-            key=_TUNNEL_COOKIE_NAME,
+            key=TUNNEL_COOKIE_NAME,
             value=qs_token,
             httponly=True,
             secure=is_https,
@@ -1200,6 +1121,55 @@ def create_app(db_path: str = None, webui_dist: str = None) -> FastAPI:
         )
         return redirect
 
+    def _maybe_redeem_launch_code(request: Request):
+        """Sign a browser in from a ``?launch=<code>`` link.
+
+        A valid single-use code sets the API-token cookie and 303-redirects to
+        the same URL without the code. ``SameSite=Strict`` keeps a cross-site
+        page from riding the cookie; ``HttpOnly`` keeps page scripts from
+        reading it.
+        """
+        code = request.query_params.get(api_token.LAUNCH_PARAM)
+        if not code or via_tunnel(request):
+            return None
+        if not request.app.state.launch_codes.redeem(code):
+            logger.warning("Ignoring an expired or already used launch link")
+            return None
+        rest = urlencode(
+            [
+                (k, v)
+                for k, v in request.query_params.multi_items()
+                if k != api_token.LAUNCH_PARAM
+            ]
+        )
+        redirect = RedirectResponse(
+            url=request.url.path + (f"?{rest}" if rest else ""), status_code=303
+        )
+        redirect.set_cookie(
+            key=api_token.COOKIE_NAME,
+            value=request.app.state.ui_api_token,
+            max_age=api_token.COOKIE_MAX_AGE,
+            httponly=True,
+            samesite="strict",
+            path="/",
+        )
+        return redirect
+
+    @app.post("/api/auth/launch-code", dependencies=[Depends(require_local_pc)])
+    async def mint_launch_code(request: Request):
+        """A single-use link that signs a browser in to this Agent UI.
+
+        Callers already hold the token (the route is gated like every other),
+        so this only lets a launcher open a browser without putting the token
+        itself in the URL. Never over mobile access, which must not become
+        the install's token.
+        """
+        codes = request.app.state.launch_codes
+        return {
+            "path": f"/?{api_token.LAUNCH_PARAM}={codes.mint()}",
+            "expires_in": int(codes.ttl_s),
+        }
+
     @app.get("/{full_path:spa_path}")
     async def serve_spa(request: Request, full_path: str):
         """Serve the React SPA for all non-API routes.
@@ -1213,7 +1183,13 @@ def create_app(db_path: str = None, webui_dist: str = None) -> FastAPI:
 
         if not index_html.is_file():
             # Frontend build not present yet -- serve the actionable fallback.
-            return HTMLResponse(content=_FALLBACK_HTML, status_code=200)
+            return HTMLResponse(
+                content=_FALLBACK_HTML,
+                status_code=200,
+                headers={
+                    "Content-Security-Policy": content_security_policy(_FALLBACK_HTML)
+                },
+            )
 
         # 1. Token bootstrap path: only fires for the index-html case
         #    (token always lands on ``/`` from the QR code). On any
@@ -1238,18 +1214,39 @@ def create_app(db_path: str = None, webui_dist: str = None) -> FastAPI:
         if full_path.startswith("assets/"):
             return HTMLResponse(content="Not Found", status_code=404)
 
-        # SPA fallback: serve index.html. Bootstrap the auth cookie
-        # if a valid ?token= is present (returns a 303 redirect that
-        # strips the token from the URL).
-        redirect = _maybe_bootstrap_tunnel_cookie(request)
+        # SPA fallback: serve index.html. A valid launch code or tunnel
+        # ?token= sets its cookie and 303-redirects without it in the URL.
+        redirect = _maybe_redeem_launch_code(request) or _maybe_bootstrap_tunnel_cookie(
+            request
+        )
         if redirect is not None:
             return redirect
-        return FileResponse(str(index_html), headers=_NO_CACHE)
+        return FileResponse(
+            str(index_html),
+            headers={
+                **_NO_CACHE,
+                "Content-Security-Policy": content_security_policy(
+                    index_html.read_text(encoding="utf-8")
+                ),
+            },
+        )
 
     return app
 
 
 # ── Standalone runner ───────────────────────────────────────────────────────
+
+
+def launch_url(app: FastAPI, host: str, port: int) -> str:
+    """A single-use link that opens this Agent UI signed in.
+
+    Only for a terminal: a launcher that pipes stdout into a log file mints
+    its own code through ``POST /api/auth/launch-code`` instead.
+    """
+    if host in ("0.0.0.0", "::", ""):
+        host = "127.0.0.1"
+    code = app.state.launch_codes.mint()
+    return f"http://{host}:{port}/?{api_token.LAUNCH_PARAM}={code}"
 
 
 def main():
@@ -1280,9 +1277,15 @@ def main():
     log_level = "debug" if args.debug else "info"
     print(f"Starting GAIA Agent UI server on http://{args.host}:{args.port}")
     try:
-        server_app = create_app(webui_dist=args.ui_dist)
-    except (UnsafeGaiaHomeError, AllowedPathsEnvError) as exc:
-        # A misconfigured GAIA_HOME or GAIA_ALLOWED_PATHS is the user's to fix,
+        server_app = create_app(webui_dist=args.ui_dist, port=args.port)
+        if sys.stdout.isatty():
+            print(
+                f"   Open (link works once): "
+                f"{launch_url(server_app, args.host, args.port)}",
+                flush=True,
+            )
+    except (UnsafeGaiaHomeError, AllowedPathsEnvError, api_token.UITokenError) as exc:
+        # A bad GAIA_HOME, GAIA_ALLOWED_PATHS or token file is the user's to fix,
         # so print the remedy rather than a traceback. 64 is EX_USAGE, as gaia
         # uninstall uses.
         print(f"Error: {exc}", file=sys.stderr)
@@ -1300,10 +1303,8 @@ def main():
         # local agent (127.0.0.1), so uvicorn's default of trusting
         # forwarded headers from 127.0.0.1 would let a remote attacker
         # send ``X-Forwarded-For: 127.0.0.1`` through the tunnel and
-        # impersonate the Electron app. The localhost-bypass check in
-        # ``TunnelAuthMiddleware`` separately requires the request to
-        # carry no ``X-Forwarded-*`` headers, giving us a spoof-resistant
-        # distinction between Electron-direct and ngrok-tunnelled traffic.
+        # impersonate the Electron app. ``require_local_pc`` separately
+        # refuses any request carrying ``X-Forwarded-*`` headers.
         proxy_headers=False,
         forwarded_allow_ips="",
     )

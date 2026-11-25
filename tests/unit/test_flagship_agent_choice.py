@@ -18,9 +18,16 @@ import gaia.config as config_mod
 from gaia.config import GaiaConfig, GaiaConfigError
 from gaia.daemon.sidecars import fetch
 from gaia.daemon.sidecars import manager as mgr
-from gaia.daemon.sidecars.errors import SidecarError, SidecarSpawnError
+from gaia.daemon.sidecars.errors import (
+    KIND_HARNESS_UNAVAILABLE,
+    KIND_START_FAILED,
+    SidecarError,
+    SidecarSpawnError,
+)
 from gaia.daemon.sidecars.spec import builtin_specs
+from gaia.harnesses import HarnessUnavailableError
 from gaia.ui import _chat_helpers
+from gaia.ui.models import ChatRequest
 from gaia.ui.server import create_app
 
 
@@ -80,12 +87,48 @@ def test_gaia_config_set_accepts_the_two_names_and_refuses_others():
     assert "gaiapy, gaiacpp" in str(e.value)
 
 
-def test_an_unknown_value_in_the_file_is_an_error_naming_the_key():
+def _save_raw(value) -> Path:
+    """Write flagship_agent straight into the file, as a newer GAIA might."""
     path = _config_file()
     doc = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
-    doc["flagship_agent"] = "rust"
+    doc["flagship_agent"] = value
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(doc), encoding="utf-8")
+    return path
+
+
+@pytest.mark.parametrize("name", ["rust", "gaiacode"])
+def test_a_harness_this_version_cannot_run_still_loads(name):
+    # A config a newer GAIA wrote must never stop this one from starting.
+    _save_raw(name)
+    assert GaiaConfig.load().flagship_agent == name
+    assert fetch.saved_flagship() == name
+
+
+def test_starting_an_unknown_harness_says_to_choose_another_in_settings():
+    _save_raw("rust")
+    with pytest.raises(HarnessUnavailableError) as e:
+        fetch.chosen_flagship()
+    assert "'rust'" in str(e.value) and "Settings" in str(e.value)
+
+
+def test_starting_gaiacode_before_this_version_can_run_it_says_so():
+    _save_raw("gaiacode")
+    with pytest.raises(HarnessUnavailableError) as e:
+        fetch.chosen_flagship()
+    assert "gaiacode" in str(e.value) and "isn't available in this version" in str(
+        e.value
+    )
+
+
+def test_gaiacode_cannot_be_set_until_this_version_can_run_it():
+    with pytest.raises(GaiaConfigError) as e:
+        GaiaConfig.load().set("flagship_agent", "gaiacode")
+    assert "gaiapy, gaiacpp" in str(e.value)
+
+
+def test_a_malformed_value_in_the_file_is_an_error_naming_the_key():
+    path = _save_raw("not a harness!")
     with pytest.raises(GaiaConfigError) as e:
         GaiaConfig.load()
     assert "flagship_agent" in str(e.value) and str(path) in str(e.value)
@@ -189,6 +232,77 @@ def test_gaiacpp_is_always_reached_through_the_daemon():
     assert _chat_helpers._should_relay_to_sidecar("gaia", _InProcessRegistry())
 
 
+def test_a_harness_this_version_cannot_run_is_not_answered_by_the_python_agent():
+    # It relays, so the daemon's start reports why; gaiapy never answers in its place.
+    _save_raw("gaiacode")
+    assert _chat_helpers._should_relay_to_sidecar("gaia", _InProcessRegistry())
+
+
+def test_the_daemon_refuses_to_start_a_harness_it_cannot_run():
+    _save_raw("gaiacode")
+    with pytest.raises(SidecarSpawnError) as e:
+        _flagship_manager().build_spawn_command(port=45123)
+    assert "gaiacode" in str(e.value) and "Settings" in str(e.value)
+    assert e.value.kind == KIND_HARNESS_UNAVAILABLE
+
+
+def test_an_unproven_harness_with_no_launcher_is_not_run_as_the_python_agent(
+    monkeypatch,
+):
+    # The eval override makes gaiacode "runnable", but nothing here can start it.
+    _save_raw("gaiacode")
+    monkeypatch.setenv("GAIA_UNPROVEN_HARNESS", "gaiacode")
+    monkeypatch.setattr(
+        fetch, "fetch_binary", lambda **k: pytest.fail("ran the Python agent")
+    )
+    with pytest.raises(SidecarSpawnError) as e:
+        _flagship_manager().build_spawn_command(port=45123)
+    assert "gaiacode" in str(e.value) and "Settings" in str(e.value)
+    assert e.value.kind == KIND_HARNESS_UNAVAILABLE
+
+
+@pytest.mark.parametrize("saved", ["gaiacode", "gaiazzz"])
+def test_an_unrunnable_harness_tells_the_chat_to_choose_another_in_settings(
+    monkeypatch, saved
+):
+    # Known-but-not-runnable and unknown names both reach the user as "choose another".
+    from gaia.ui.sidecar import daemon_client
+    from gaia.ui.sidecar.profiles import GAIA_PROFILE
+
+    _save_raw(saved)
+
+    def _acquire(agent_id):
+        try:
+            _flagship_manager().build_spawn_command(port=45123)
+        except SidecarSpawnError as e:
+            # What the daemon route forwards in its error-kind header.
+            raise SidecarError(str(e), kind=e.kind) from e
+        pytest.fail("the daemon started an agent")
+
+    monkeypatch.setattr(daemon_client, "acquire_handle", _acquire)
+    events = []
+
+    class _Handler:
+        def _emit(self, event):
+            events.append(event)
+
+    request = ChatRequest(session_id="s1", message="hi", agent_type="gaia")
+    _chat_helpers._dispatch_sidecar_query(_Handler(), request, [], "m", "gaia")
+
+    [error] = [e["content"] for e in events if e["type"] == "agent_error"]
+    assert "Settings" in error and "Choose another" in error
+    for word in ("reinstall", "restart", "send your message again. if"):
+        assert word not in error.lower(), word
+    assert error != GAIA_PROFILE.start_failed_text()
+
+
+def test_a_missing_gaiacpp_is_not_reported_as_an_unrunnable_harness():
+    _choose("gaiacpp")
+    with pytest.raises(SidecarSpawnError) as e:
+        _flagship_manager().build_spawn_command(port=45123)
+    assert e.value.kind == KIND_START_FAILED
+
+
 # ---------------------------------------------------------------- settings API
 
 
@@ -217,6 +331,23 @@ def test_settings_report_the_agent_and_whether_gaiacpp_is_here(client, fake_gaia
     body = client.get("/api/settings").json()
     assert body["flagship_agent"] == "gaiapy"
     assert body["gaiacpp_available"] is True
+
+
+def test_settings_still_load_with_a_harness_this_version_cannot_run(client, no_gaiacpp):
+    # Settings is where the user fixes it, so it must not fail on the value.
+    _save_raw("gaiacode")
+    body = client.get("/api/settings").json()
+    assert body["flagship_agent"] == "gaiacode"
+    assert client.get("/api/agent-programs").json()["current"] == "gaiacode"
+
+
+def test_settings_recover_from_a_harness_this_version_cannot_run(client, stops):
+    # Settings is the remedy every launch error names, so picking gaiapy there must work.
+    _save_raw("gaiacode")
+    r = client.put("/api/settings", json={"flagship_agent": "gaiapy"})
+    assert r.status_code == 200, r.text
+    assert GaiaConfig.load().flagship_agent == "gaiapy"
+    assert fetch.chosen_flagship() == "gaiapy"
 
 
 def test_settings_say_gaiacpp_is_not_installed(client, no_gaiacpp):
@@ -318,7 +449,7 @@ def test_the_agent_cannot_be_switched_from_another_computer(fake_gaiacpp, stops)
 
 def test_a_bad_saved_value_says_to_change_or_delete_the_line():
     with pytest.raises(GaiaConfigError) as e:
-        GaiaConfig._check_flagship_agent("rust", "GAIA config at x.json")
+        GaiaConfig._check_flagship_agent("not a harness!", "GAIA config at x.json")
     assert "delete the 'flagship_agent' line" in str(e.value)
     assert "gaia config set" not in str(e.value), "that command fails the same way"
 
