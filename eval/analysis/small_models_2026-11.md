@@ -105,9 +105,11 @@ not.
 
 The 2B's extra failures were mostly claims about work it never did, so GAIA now checks
 the answer against what ran: a claimed memory save with no successful `remember` is
-named, a garbled answer gets one retry, and a call the user's own words asked for
-(remember a fact, capture a skill from a path) is made by the harness when the repair
-still skips it. Rerun of the 2B's failures on that build:
+named, a request to remember that ended with no save sends the model back to make it, a
+garbled answer gets one retry, and a skill folder the user asked to add is captured by
+the harness when the repair still skips it. GAIA never calls `remember` for the model.
+Rerun of the 2B's failures on that build (which also saved a plain "remember X" itself;
+that forced save was split out of this change):
 
 | Scenario | Before | After |
 |---|---|---|

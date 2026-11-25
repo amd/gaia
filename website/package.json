@@ -21,7 +21,7 @@
     "yaml": "^2.9.0"
   },
   "devDependencies": {
-    "@types/node": "^20.19.42",
+    "@types/node": "^25.9.9",
     "autoprefixer": "^10.4.20",
     "postcss": "^8.4.49",
     "vitest": "^2.1.8"

@@ -1077,6 +1077,29 @@ def test_an_env_server_that_does_not_answer_says_so_plainly(users_server):
     assert "lemonade-server serve" not in str(problem)
 
 
+def test_a_chosen_server_on_this_pc_is_named_not_the_tray(users_server, monkeypatch):
+    """The tray starts the default server, not the one at the chosen address."""
+    real_hint = lemonade_launcher.describe_start_hint
+    users_server("http://127.0.0.1:4328/api/v1", "config")
+    tray = r"C:\lemonade_server\bin\LemonadeServer.exe"
+    monkeypatch.setattr(lemonade_launcher, "describe_start_hint", real_hint)
+    monkeypatch.setattr(
+        lemonade_launcher,
+        "resolve_lemonade",
+        lambda: lemonade_launcher.LemonadeTooling(
+            found=True, kind="modern", client_path=tray, server_launcher=tray
+        ),
+    )
+
+    problem = _REAL_SERVER_PROBLEM()
+
+    assert problem["start"] == (
+        "The model server GAIA uses is at 127.0.0.1:4328. "
+        f"{lemonade_launcher.OTHER_SERVER_START_HINT}"
+    )
+    assert "tray" not in problem["start"]
+
+
 def test_a_saved_server_that_does_not_answer_offers_gaias_own(users_server):
     users_server("http://localhost:13305/api/v1", "config")
     problem = _REAL_SERVER_PROBLEM()

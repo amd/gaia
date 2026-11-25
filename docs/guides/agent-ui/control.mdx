@@ -25,7 +25,8 @@ On this PC, GAIA offers the two ways to run a model it has tested: the GPU, and 
 on, **Switch model** for the models ready to use, and **Context size**. Below
 it, models sit in groups you can open and close: **Downloaded**, **Available to
 download** and **Not available on this PC**, with the reason. A search opens
-every group it matches.
+every group it matches. Models GAIA has verified come first, in the order
+setup lists them.
 
 Each row shows chips for the device (GPU or NPU), whether it's loaded and
 whether it fits this PC. **Details** has where it runs, such as "GPU · Vulkan"
@@ -40,7 +41,9 @@ first, so a size too large fails to load and says so.
 
 ### Switching models
 
-The model chip in the composer opens the same list. While GAIA is answering,
+The model chip in the composer opens the same list, with setup's **Verified**
+or **Untested** tag on each local model and the verified ones first among
+those to download. It fits the window and scrolls inside. While GAIA is answering,
 a model you pick there applies to your next message. On most PCs, a local
 model you pick starts loading right away, and a banner counts the seconds; you
 can type meanwhile, and a message waits for the load. On a PC with under 24 GB
@@ -148,7 +151,7 @@ this PC, or a cloud model with no known price, nothing is shown.
 
 ## Watch your PC's resources
 
-A strip under the chat's title shows this PC's CPU, memory, GPU, NPU and
+A strip under the chat's title can show this PC's CPU, memory, GPU, NPU and
 network use, each with a graph of the last minute, so you can see the model
 working while it answers. The numbers match Windows Task Manager: CPU with its
 clock speed, memory in use out of the total, for a GPU or NPU the load of its
@@ -157,10 +160,11 @@ what it sends (S, the dashed line) and receives (R). A PC with several GPUs
 numbers them from 0. Virtual adapters, such as Hyper-V, WSL and VPN ones, are
 left out, as Task Manager leaves them out.
 
-The strip is on in every chat. Close it with **✕**, and bring it back with the
-pulse button in the chat's header or **Settings › General › Show resource
-usage in chats**. GAIA remembers the choice. While the strip is closed or the
-window is hidden, GAIA stops measuring about 15 seconds later.
+The strip is off until you turn it on, with the pulse button in the chat's
+header or **Settings › General › Show resource usage in chats**. It then shows
+in every chat. Close it with **✕** or the same pulse button. GAIA remembers the
+choice. While the strip is off or the window is hidden, GAIA doesn't measure
+(it stops about 15 seconds after the strip closes).
 
 On Linux the GPU tile appears for AMD GPUs, and macOS shows CPU, memory and
 network only. When usage can't be read, the strip says so and dims the last readings
@@ -189,7 +193,10 @@ tool or a riskier call gets no hint.
 Pick **Full access** from the shield to stop these questions in a chat
 (you confirm once). It opens the shell too: `run_shell_command` runs any
 command, a delete or `git add` included, without asking, and Python code runs
-as written. A calendar change and an outgoing email still ask.
+as written. Without Full access a delete is not asked about but refused (the
+agent tells you the command to run yourself), so to have GAIA delete something,
+switch the chat to Full access first. A calendar change and an outgoing email
+still ask.
 **Settings → Permissions** lists every chat with full access or "always allow"
 answers and lets you revoke them. Grants end when GAIA restarts.
 

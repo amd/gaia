@@ -36,7 +36,7 @@ describe('MobileAccessModal when ngrok is not installed', () => {
         expect(container.querySelector('.tunnel-error')).toBeNull();
         expect(container.querySelector('.status-dot.is-error')).toBeNull();
         expect(screen.queryByText(/Scan the QR code/)).toBeNull();
-        expect(screen.queryByText('Connecting...')).toBeNull();
+        expect(screen.queryByText('Connecting…')).toBeNull();
     });
 
     it('says what the feature is and where to get ngrok, never a command to run', () => {

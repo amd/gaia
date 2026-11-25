@@ -346,9 +346,31 @@ describe('ContextPanel', () => {
     });
 });
 
+/** Past the fill at which the composer shows its meter: 61% of the window. */
+const full = (over: Partial<ContextUsage> = {}) => usage({ history: 29500, used: 40000, ...over });
+
 describe('ContextMeter entry point', () => {
+    it('stays out of the composer until the window is more than half full', () => {
+        const { container, rerender } = render(<ContextMeter usage={usage({ used: 13763 })} sessionId="s1" />);
+        expect(container).toBeEmptyDOMElement();
+        rerender(<ContextMeter usage={usage({ used: 32768 })} sessionId="s1" />);
+        expect(container).toBeEmptyDOMElement();
+        rerender(<ContextMeter usage={usage({ used: 45875 })} sessionId="s1" />);
+        expect(screen.getByRole('button', { name: /^Context 70% full/ })).toBeInTheDocument();
+    });
+
+    it('still shows below half when older turns are about to leave the view', () => {
+        render(<ContextMeter usage={usage({ at_risk: ['first question'] })} sessionId="s1" />);
+        expect(screen.getByRole('button', { name: /^Context 18% full/ })).toHaveClass('is-warning');
+    });
+
+    it('shows nothing, not a dash, when the agent cannot report usage', () => {
+        const { container } = render(<ContextMeter usage={null} sessionId="s1" />);
+        expect(container).toBeEmptyDOMElement();
+    });
+
     it('opens the panel from the meter, and fetches nothing until then', async () => {
-        render(<ContextMeter usage={usage()} sessionId="s1" />);
+        render(<ContextMeter usage={full()} sessionId="s1" />);
         expect(mockedApi.getChatPerformance).not.toHaveBeenCalled();
         fireEvent.click(screen.getByRole('button', { name: /^Context \d+% full/ }));
         fireEvent.click(screen.getByRole('button', { name: /Details: context & performance/ }));
@@ -357,16 +379,16 @@ describe('ContextMeter entry point', () => {
     });
 
     it("says the meter measures GAIA's window when a cloud model allows more", () => {
-        render(<ContextMeter usage={usage({ used: 21850, model_window: 1048576 })} sessionId="s1" />);
-        const meter = screen.getByRole('button', { name: /^Context 33% full/ });
-        expect(meter).toHaveAccessibleName("Context 33% full: 22K of 64K tokens (GAIA uses 64K of the model's 1M)");
+        render(<ContextMeter usage={full({ model_window: 1048576 })} sessionId="s1" />);
+        const meter = screen.getByRole('button', { name: /^Context 61% full/ });
+        expect(meter).toHaveAccessibleName("Context 61% full: 40K of 64K tokens (GAIA uses 64K of the model's 1M)");
         expect(meter).toHaveAttribute('title', expect.stringContaining("GAIA uses 64K of the model's 1M"));
         fireEvent.click(meter);
         expect(screen.getByText(/GAIA uses/)).toHaveTextContent("GAIA uses 64K of the model's 1M");
     });
 
     it('adds no cap note when GAIA uses the whole window', () => {
-        render(<ContextMeter usage={usage()} sessionId="s1" />);
+        render(<ContextMeter usage={full()} sessionId="s1" />);
         const meter = screen.getByRole('button', { name: /^Context \d+% full/ });
         expect(meter).toHaveAttribute('title', "How full the model's context window is");
         fireEvent.click(meter);
@@ -374,24 +396,16 @@ describe('ContextMeter entry point', () => {
     });
 
     it("says when most of a new chat's fill is GAIA's own set-up, without hiding it", () => {
-        render(<ContextMeter usage={usage({ system: 7700, tools: 16000, documents: 0, history: 300, query: 0, used: 24000 })} sessionId="s1" />);
-        const meter = screen.getByRole('button', { name: /^Context 37% full/ });
-        expect(meter.getAttribute('title')).toContain("Most of this (24K) is GAIA's own instructions and tools");
+        render(<ContextMeter usage={usage({ system: 10000, tools: 25000, documents: 0, history: 300, query: 0, used: 35300 })} sessionId="s1" />);
+        const meter = screen.getByRole('button', { name: /^Context 54% full/ });
+        expect(meter.getAttribute('title')).toContain("Most of this (35K) is GAIA's own instructions and tools");
         fireEvent.click(meter);
         expect(screen.getByText(/Your conversation uses 300\./)).toBeInTheDocument();
     });
 
-    it('shows a dash, not an empty bar, before anything is measured', () => {
-        const { container } = render(<ContextMeter usage={null} unavailable="Measured once GAIA has answered in this chat." />);
-        const meter = container.querySelector('.context-meter.is-empty')!;
-        expect(meter.querySelector('.context-meter-bar')).toBeNull();
-        expect(meter).toHaveTextContent('Context–');
-        expect(meter).toHaveAttribute('aria-label', 'Context: Measured once GAIA has answered in this chat.');
-    });
-
     it('hands Details to the session panel when the chat has one, opening no sheet', () => {
         const onDetails = vi.fn();
-        render(<ContextMeter usage={usage()} sessionId="s1" onDetails={onDetails} />);
+        render(<ContextMeter usage={full()} sessionId="s1" onDetails={onDetails} />);
         fireEvent.click(screen.getByRole('button', { name: /^Context \d+% full/ }));
         fireEvent.click(screen.getByRole('button', { name: /Details: context & performance/ }));
         expect(onDetails).toHaveBeenCalledTimes(1);
@@ -404,15 +418,34 @@ describe('ContextMeter entry point', () => {
         afterEach(() => act(() => useChatStore.getState().setLocale('en')));
         const text = (el: HTMLElement) => stripIsolates(el.textContent ?? '');
 
-        it('translates the label shown before usage is measured', () => {
-            const { container } = render(<ContextMeter usage={null} unavailable="Not measured yet" />);
-            expect(text(container)).toContain('السياق');
+        it('translates a reason the backend sent with a known code', async () => {
+            mockedApi.getContextUsage.mockResolvedValue({
+                available: false,
+                reason: 'Measured once GAIA has answered in this chat.',
+                reason_code: 'not_answered_yet',
+            });
+            render(<ContextPanel sessionId="s1" busy={false} onClose={() => {}} />);
+            await waitFor(() => expect(text(document.body)).toContain('سيُقاس بعد أن يجيب GAIA في هذه المحادثة.'));
+        });
+
+        it("shows a reason as sent when its code is unknown or its English changed", async () => {
+            mockedApi.getContextUsage.mockResolvedValue({
+                available: false,
+                reason: 'Measured once GAIA has answered — reworded.',
+                reason_code: 'not_answered_yet',
+            });
+            const { unmount } = render(<ContextPanel sessionId="s1" busy={false} onClose={() => {}} />);
+            await screen.findByText('Measured once GAIA has answered — reworded.');
+            unmount();
+            mockedApi.getContextUsage.mockResolvedValue({ available: false, reason: 'tokenizer exploded' });
+            render(<ContextPanel sessionId="s1" busy={false} onClose={() => {}} />);
+            await screen.findByText('tokenizer exploded');
         });
 
         it('translates the meter and its popover, keeping the counts left to right', () => {
-            render(<ContextMeter usage={usage({ turns_hidden: 3 })} sessionId="s1" />);
-            const meter = screen.getByRole('button', { name: /السياق ممتلئ بنسبة 18%/ });
-            expect(meter.querySelector('bdi[dir="ltr"]')?.textContent).toBe('18%');
+            render(<ContextMeter usage={full({ turns_hidden: 3 })} sessionId="s1" />);
+            const meter = screen.getByRole('button', { name: /السياق ممتلئ بنسبة 61%/ });
+            expect(meter.querySelector('bdi[dir="ltr"]')?.textContent).toBe('61%');
             fireEvent.click(meter);
             const popover = text(document.body);
             for (const ar of ['تعليمات النظام', 'محجوز للرد', 'متاح', 'الأدوار السابقة في نطاق الرؤية: 2', 'والأقدم خارج نطاق الرؤية: 3', 'التفاصيل: السياق والأداء']) {
@@ -429,8 +462,8 @@ describe('ContextMeter entry point', () => {
         });
 
         it("says in Arabic that the meter measures GAIA's window", () => {
-            render(<ContextMeter usage={usage({ used: 21850, model_window: 1048576 })} sessionId="s1" />);
-            const meter = screen.getByRole('button', { name: /السياق ممتلئ بنسبة 33%/ });
+            render(<ContextMeter usage={full({ model_window: 1048576 })} sessionId="s1" />);
+            const meter = screen.getByRole('button', { name: /السياق ممتلئ بنسبة 61%/ });
             expect(stripIsolates(meter.getAttribute('aria-label') ?? '')).toContain('يستخدم GAIA 64K من أصل نافذة النموذج البالغة 1M');
             expect(stripIsolates(meter.getAttribute('title') ?? '')).toContain('يستخدم GAIA 64K من أصل نافذة النموذج البالغة 1M');
             fireEvent.click(meter);

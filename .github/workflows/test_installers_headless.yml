@@ -146,16 +146,17 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           GITHUB_TOKEN: ${{ github.token }}
-          # Bounded, opt-in retries for live releases reads. They ride out a
-          # transient 403 but cannot refill the shared hourly quota that caused
-          # run 44443909497.
+          # Bounded, opt-in retries for live releases reads. A rate limit on any
+          # live read, the first release listing included, is waited out until
+          # GitHub's reset, for up to WAIT or 65 min (one full hourly reset),
+          # whichever is longer; other jobs can spend the shared quota first.
           GITHUB_FETCH_RETRIES: ${{ github.event_name != 'pull_request' && '3' || '' }}
           # PRs read the checked-in fixture so they do not spend that quota.
           # Tag and dispatch runs leave it empty and fetch live.
           GAIA_GITHUB_FIXTURE: ${{ github.event_name == 'pull_request' && format('{0}/tests/fixtures/github/releases.json', github.workspace) || '' }}
           TAG_INPUT: ${{ github.ref_type == 'tag' && github.ref_name || inputs.release_tag || '' }}
           WAIT: ${{ github.ref_type == 'tag' && '300' || '0' }}
-        run: python installer/headless/resolve_release.py --tag "${TAG_INPUT}" --wait-minutes "${WAIT}" --out release.json
+        run: python installer/headless/resolve_release.py --tag "${TAG_INPUT}" --wait-minutes "${WAIT}" --rate-limit-minutes 65 --out release.json
       - uses: actions/upload-artifact@v7
         with:
           name: release-json

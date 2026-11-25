@@ -395,7 +395,11 @@ std::string SkillLibrary::installFromHub(const std::string& name, const std::str
     const fs::path zip = work / filename;
     std::ofstream(zip, std::ios::binary) << bytes;
 #ifdef _WIN32
-    const std::string cmd = "tar -xf \"" + zip.string() + "\" -C \"" + (work / "x").string() + "\"";
+    // Windows' own tar by full path: it reads zip archives (Git's tar earlier on PATH doesn't), and
+    // cmd.exe would run a tar.bat in the working folder first.
+    const std::string tar = systemProgramPath("tar.exe");
+    // cmd /c drops the first and last quote of a line that starts with one, so the line gets an extra pair.
+    const std::string cmd = "\"\"" + tar + "\" -xf \"" + zip.string() + "\" -C \"" + (work / "x").string() + "\"\"";
 #else
     const std::string cmd = "unzip -q -o '" + zip.string() + "' -d '" + (work / "x").string() + "'";
 #endif

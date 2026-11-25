@@ -235,6 +235,17 @@ def test_a_report_that_cites_nothing_it_read_is_flagged():
     assert "cites none of the pages" in problem
 
 
+def test_only_pages_read_this_turn_must_be_cited():
+    memo = "Saved memo.docx."
+    assert research.citation_problems(memo, [_FETCH_NIH], turn_calls=[]) == []
+    (problem,) = research.citation_problems(memo, [_FETCH_NIH], turn_calls=[_FETCH_NIH])
+    assert "cites none of the pages" in problem
+    # A link from an earlier turn's reading still has to be one that was read.
+    altered = f"See [source]({_NIH}x)."
+    (problem,) = research.citation_problems(altered, [_FETCH_NIH], turn_calls=[])
+    assert "may be wrong" in problem
+
+
 _PDF = "https://arxiv.org/pdf/2401.00001"
 _PDF_REFUSED = (
     "fetch_page",

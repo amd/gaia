@@ -7,7 +7,7 @@ import { useT } from '../i18n/useT';
 import * as api from '../services/api';
 import { researchOn, useChatStore } from '../stores/chatStore';
 import { log } from '../utils/logger';
-import { rememberInstalledSkills, withResearchCommand } from '../utils/research';
+import { needsInstalledSkills, rememberInstalledSkills, withResearchCommand } from '../utils/research';
 
 /** Whether research mode is on for *sessionId* (null: the new-chat screen). */
 export function useResearchMode(sessionId: string | null): boolean {
@@ -17,6 +17,21 @@ export function useResearchMode(sessionId: string | null): boolean {
 /** *text* as it is sent from *sessionId*: a `/research` turn while research mode is on. */
 export function withResearch(text: string, sessionId: string | null): string {
     return withResearchCommand(text, researchOn(useChatStore.getState(), sessionId));
+}
+
+/**
+ * Reads the installed skills when sending *text* from *sessionId* needs them:
+ * research mode can't tell `/docx` from a topic until it has the list.
+ * Rejects when the list can't be read, so the caller keeps the message.
+ */
+export async function readSkillsForResearch(text: string, sessionId: string | null): Promise<void> {
+    if (!researchNeedsSkills(text, sessionId)) return;
+    rememberInstalledSkills((await api.listSkills()).skills.map((s) => s.name));
+}
+
+/** True when `readSkillsForResearch` would have to wait: every other send stays in the same tick. */
+export function researchNeedsSkills(text: string, sessionId: string | null): boolean {
+    return needsInstalledSkills(text, researchOn(useChatStore.getState(), sessionId));
 }
 
 /**
@@ -34,13 +49,13 @@ export function ResearchChip({ sessionId, disabled, compact = false }: {
     const on = useResearchMode(sessionId);
     const setResearch = useChatStore((s) => s.setResearch);
     const setOn = (value: boolean) => setResearch(sessionId, value);
-    // A `/<skill>` command runs its skill rather than being researched, so research mode needs the skill names.
+    // Read ahead, so a `/<skill>` command rarely waits at send; a failure here is reported by that send.
     useEffect(() => {
         if (!on) return;
         let live = true;
         api.listSkills().then(
             (r) => { if (live) rememberInstalledSkills(r.skills.map((s) => s.name)); },
-            (e: unknown) => log.chat.warn('Research mode could not read the installed skills; /<skill> commands will be researched', e),
+            (e: unknown) => log.chat.warn('Research mode could not read the installed skills; a /<name> message will ask again', e),
         );
         return () => { live = false; };
     }, [on]);

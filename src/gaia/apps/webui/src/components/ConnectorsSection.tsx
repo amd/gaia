@@ -171,7 +171,8 @@ function PersonalizeButton({ connector, primary, onStarted }: {
  * nothing more to say (#2591 review — the Disconnect button previously
  * always implied a full revoke, even when only the local credential was
  * cleared). A disconnect with nothing stored says so instead of claiming a
- * revoke (#8607). Mirrors the CLI wording in
+ * revoke (#8607). An unreadable stored sign-in says so instead of claiming
+ * nothing was stored (#8713). Mirrors the CLI wording in
  * ``connectors/cli.py::_handle_disconnect``.
  */
 function describeDisconnectOutcome(payload: Record<string, unknown>, t: Translate): string | null {
@@ -185,7 +186,8 @@ function describeDisconnectOutcome(payload: Record<string, unknown>, t: Translat
     if (payload.revoke_supported && payload.revoked_remotely) {
         return null;
     }
-    if (payload.revoke_supported && !payload.revoked_remotely) {
+    if (payload.revoke_attempted) {
+        // The revoke ran and the provider did not confirm it.
         return t('settings.connectors.notRevoked', { reason: String(payload.revoke_error ?? t.bare('settings.advanced.unknown')) });
     }
     if (payload.revoke_error) {

@@ -422,3 +422,23 @@ def test_link_refusing_callers_reject_a_zip_symlink(tmp_path, caller):
     with pytest.raises(_caller_error(caller), match="is a link"):
         caller(archive, tmp_path / "dest")
     assert not (tmp_path / "dest" / "evil").exists()
+
+
+_SIZE_CAPS = {
+    _skills_cli: ("gaia.skills.install", "BUNDLE_MAX"),
+    _skills_install: ("gaia.skills.install", "BUNDLE_MAX"),
+    _hub_cpp: ("gaia.hub.installer", "CPP_ARCHIVE_MAX"),
+}
+
+
+@pytest.mark.parametrize("cap", ["MEMBER_BYTES", "TOTAL_BYTES"])
+@pytest.mark.parametrize("caller", list(_SIZE_CAPS), ids=lambda c: c.__name__)
+def test_untrusted_archive_callers_enforce_a_size_cap(
+    tmp_path, monkeypatch, caller, cap
+):
+    module, prefix = _SIZE_CAPS[caller]
+    monkeypatch.setattr(f"{module}.{prefix}_{cap}", 1500)
+    sizes = [2000] if cap == "MEMBER_BYTES" else [1000, 1000]
+    archive = _sized_archive(tmp_path, "zip", sizes)
+    with pytest.raises(_caller_error(caller), match="larger than GAIA allows"):
+        caller(archive, tmp_path / "dest")

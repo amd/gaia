@@ -225,6 +225,25 @@ describe('a file the model server could not embed', () => {
             useChatStore.setState({ locale: 'en' });
         }
     });
+
+    // #8814: a file dropped while the server is down is kept as a Waiting row, not lost.
+    it('keeps a file dropped while the server is down as a Waiting row', async () => {
+        const LANTERN: Document = { ...DOWN, id: 'doc-lantern', filename: 'lantern.md', filepath: '/home/you/.gaia/chat/documents/lantern.md' };
+        mockedApi.uploadDocumentBlob.mockResolvedValue(LANTERN);
+        mockedApi.listDocuments
+            .mockResolvedValueOnce({ documents: [], total: 0, total_size_bytes: 0, total_chunks: 0 })
+            .mockResolvedValue({ documents: [LANTERN], total: 1, total_size_bytes: 1024, total_chunks: 0 });
+        const { container } = render(<DocumentLibrary />);
+
+        const dropped = new File(['# Lantern'], 'lantern.md', { type: 'text/markdown' });
+        fireEvent.drop(container.querySelector('.drop-zone')!, { dataTransfer: { files: [dropped] } });
+
+        expect(await screen.findByRole('alert')).toHaveTextContent('GAIA adds it when the server is back');
+        await screen.findByText('lantern.md');
+        const badge = document.querySelector('.doc-failure .doc-status-badge')!;
+        expect(badge).toHaveTextContent('Waiting');
+        expect(mockedApi.attachDocument).not.toHaveBeenCalled();
+    });
 });
 
 describe('a file the model server was too busy to embed', () => {

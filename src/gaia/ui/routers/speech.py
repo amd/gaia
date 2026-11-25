@@ -25,6 +25,7 @@ from gaia.config import (
     GaiaConfigError,
     check_read_aloud_speed,
     check_read_aloud_voice,
+    speech_output_unproven_reason,
 )
 
 logger = logging.getLogger(__name__)
@@ -51,6 +52,9 @@ class SpeechSettings(BaseModel):
     min_speed: int = READ_ALOUD_MIN_SPEED
     max_speed: int = READ_ALOUD_MAX_SPEED
     voices: List[Voice]
+    #: False where GAIA doesn't offer its voice; the app hides Read aloud.
+    available: bool = True
+    unavailable_reason: Optional[str] = None
 
 
 class SpeechSettingsUpdate(BaseModel):
@@ -68,11 +72,14 @@ class SpeakRequest(BaseModel):
 def _settings(config: GaiaConfig) -> SpeechSettings:
     from gaia.audio.lemonade_tts import DEFAULT_VOICE, voice_catalog
 
+    unproven = speech_output_unproven_reason()
     return SpeechSettings(
         voice=config.read_aloud_voice or DEFAULT_VOICE,
         speed=config.read_aloud_speed,
         auto=config.read_aloud_auto,
         voices=[Voice(**v) for v in voice_catalog()],
+        available=unproven is None,
+        unavailable_reason=unproven,
     )
 
 
@@ -118,9 +125,14 @@ class SpeechModel(BaseModel):
 
 
 def _speech_model() -> SpeechModel:
-    from gaia.audio.lemonade_tts import LemonadeTTSClient, LemonadeTTSError
+    from gaia.audio.lemonade_tts import (
+        LemonadeTTSClient,
+        LemonadeTTSError,
+        refuse_unless_speech_offered,
+    )
     from gaia.installer.model_choice import download_size_gb
 
+    refuse_unless_speech_offered()
     client = LemonadeTTSClient()
     entry = next((m for m in client.catalog() if m.get("id") == client.model), None)
     if entry is None:
@@ -136,12 +148,14 @@ def _speech_model() -> SpeechModel:
 
 @router.get("/api/speech/model", response_model=SpeechModel)
 async def get_speech_model() -> SpeechModel:
-    from gaia.audio.lemonade_tts import LemonadeTTSError
+    from gaia.audio.lemonade_tts import LemonadeTTSError, SpeechUnavailableError
 
     try:
         return await asyncio.to_thread(_speech_model)
     except ConnectionError as e:
         raise HTTPException(status_code=503, detail=str(e)) from e
+    except SpeechUnavailableError as e:
+        raise HTTPException(status_code=409, detail=str(e)) from e
     except LemonadeTTSError as e:
         raise HTTPException(status_code=502, detail=str(e)) from e
 
@@ -160,7 +174,11 @@ def _speak(text: str, voice: str, speed: int) -> bytes:
 @router.post("/api/speech")
 async def speak(body: SpeakRequest) -> Response:
     """Speak *text* as a 16-bit mono WAV, in the saved voice unless one is named."""
-    from gaia.audio.lemonade_tts import DEFAULT_VOICE, LemonadeTTSError
+    from gaia.audio.lemonade_tts import (
+        DEFAULT_VOICE,
+        LemonadeTTSError,
+        SpeechUnavailableError,
+    )
     from gaia.llm.local_only import CloudDisabledError
 
     if not body.text.strip():
@@ -179,6 +197,8 @@ async def speak(body: SpeakRequest) -> Response:
         )
     except ConnectionError as e:
         raise HTTPException(status_code=503, detail=str(e)) from e
+    except SpeechUnavailableError as e:
+        raise HTTPException(status_code=409, detail=str(e)) from e
     except (LemonadeTTSError, CloudDisabledError) as e:
         logger.error("Read aloud failed: %s", e)
         raise HTTPException(status_code=502, detail=str(e)) from e

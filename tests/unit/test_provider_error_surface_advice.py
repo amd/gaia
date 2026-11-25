@@ -118,6 +118,15 @@ def test_text_without_tui_advice_is_untouched(text):
         assert surface_wording(text, surface) == text
 
 
+def test_a_cloud_404_on_the_command_line_names_only_the_model_flag():
+    """gaia -p --model <unknown cloud id>: no TUI or Agent UI screens."""
+    cli = surface_wording(str(_cloud_request_error(404, "fireworks")), "cli")
+    assert "--model" in cli
+    assert "TUI" not in cli and "Agent UI" not in cli, cli
+    ui = surface_wording(str(_cloud_request_error(404, "fireworks")), "agent_ui")
+    assert AGENT_UI_PROVIDER_SETTINGS in ui
+
+
 def test_the_model_switch_hint_has_a_cli_form():
     assert surface_wording(TUI_MODEL_SWITCH_HINT, "cli") == CLI_MODEL_SWITCH_HINT
     assert "TUI" not in CLI_MODEL_SWITCH_HINT

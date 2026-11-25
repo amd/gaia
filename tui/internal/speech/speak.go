@@ -45,6 +45,9 @@ func LemonadeSynthesizer(c *lemonade.Client, s Settings) Synthesizer {
 		if err != nil {
 			return nil, err
 		}
+		if err := CheckLength(text, float64(len(pcm)/2)/float64(rate), float64(s.Speed)/100); err != nil {
+			return nil, err
+		}
 		return WAV(pcm, rate)
 	}
 }

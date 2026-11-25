@@ -11,7 +11,7 @@ never an empty list, which would read as "this agent can do nothing".
 
 from __future__ import annotations
 
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 from gaia.logger import get_logger
 
@@ -55,11 +55,13 @@ def describe(session: Dict[str, Any]) -> Dict[str, Any]:
     agent_type = session.get("agent_type") or "chat"
     agent = cached_session_agent_of(session_id, agent_type)
     skills = None
+    program = None
     if agent is not None:
         tools = agent.describe_tools()
         skills = agent.describe_skills()
     elif relayed(session):
         tools = _from_sidecar(session_id, agent_type)
+        program = _relayed_program(agent_type)
     else:
         raise CapabilitiesError(409, NOT_RUNNING)
     return {
@@ -67,7 +69,21 @@ def describe(session: Dict[str, Any]) -> Dict[str, Any]:
         "agent_type": agent_type,
         "tools": tools,
         "skills": skills,
+        "program": program,
     }
+
+
+def _relayed_program(agent_type: str) -> Optional[str]:
+    """``gaiapy`` or ``gaiacpp`` for the flagship sidecar; ``None`` for any other agent."""
+    from gaia.daemon.sidecars import fetch
+
+    from .sidecar.profiles import profile_for
+
+    profile = profile_for(agent_type)
+    if profile is None or profile.agent_id != fetch.FLAGSHIP_AGENT_ID:
+        return None
+    # Switching agents stops the running one, so the chosen program is the one answering.
+    return fetch.chosen_flagship()
 
 
 def _from_sidecar(session_id: str, agent_type: str) -> List[Dict[str, str]]:

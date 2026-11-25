@@ -33,15 +33,37 @@ describe('models by job: support labels', () => {
         expect(screen.getByText("Verified models are tested by GAIA on PCs like this one.")).toBeInTheDocument();
     });
 
-    it('keeps untested models apart, under a warning, and warns again once one is picked', () => {
+    it('keeps untested models behind a closed disclosure, under a warning, and warns again once one is picked', () => {
         const mine = entry({ id: 'my-model', name: 'My own model', gaia_model: false, downloaded: true, size_gb: 0, support: 'untested' });
         render(<Harness plan={plan([QWEN_READS, GEMMA_CHAT, EMBED, mine])} />);
+        const more = screen.getByText('Show untested models (1)').closest('details')!;
+        expect(more).not.toHaveAttribute('open');
+        fireEvent.click(screen.getByText('Show untested models (1)'));
+        expect(more).toHaveAttribute('open');
         expect(chat(/My own model/).closest('li')).toHaveTextContent('Untested');
         expect(chat(/My own model/).closest('li')).not.toHaveTextContent('Verified');
         expect(screen.getByText(/Untested models are used at your own risk/)).toBeInTheDocument();
         expect(screen.queryByText(/we haven't tested it/)).not.toBeInTheDocument();
         fireEvent.click(chat(/My own model/));
         expect(screen.getByRole('note')).toHaveTextContent("GAIA will use this model, but we haven't tested it.");
+    });
+
+    it('opens the untested models when the chat model already is one', () => {
+        const mine = entry({ id: 'my-model', name: 'My own model', gaia_model: false, downloaded: true, size_gb: 0, support: 'untested', planned: true });
+        render(<Harness plan={plan([mine, GEMMA_CHAT, EMBED])} />);
+        expect(screen.getByText('Show untested models (1)').closest('details')).toHaveAttribute('open');
+        expect(chat(/My own model/)).toBeChecked();
+    });
+
+    it('lists no chat model setup does not offer on this PC, but keeps the one already chosen', () => {
+        const tooBig = entry({ id: 'gpt-oss-120b-mxfp4-GGUF', name: 'gpt-oss 120B', support: 'untested', fits: false, fit_code: 'memory', need_gb: 75.1, capacity_gb: 55.7 });
+        const flash = entry({ id: 'user.Qwen3.8-Flash-Next-GGUF', name: 'Qwen3.8 Flash Next', support: 'untested', setup_offer: false });
+        const kept = { ...GPT_OSS, fits: false as const, fit_code: 'memory' as const, setup_offer: true, planned: true };
+        render(<Harness plan={plan([kept, QWEN_READS, GEMMA_CHAT, EMBED, tooBig, flash])} />);
+        expect(job('Chat').queryByRole('radio', { name: /gpt-oss 120B/ })).not.toBeInTheDocument();
+        expect(job('Chat').queryByRole('radio', { name: /Flash Next/ })).not.toBeInTheDocument();
+        expect(screen.queryByText(/Show untested models/)).not.toBeInTheDocument();
+        expect(chat(/gpt-oss 20B/)).toBeChecked();
     });
 
     it('shows no support label on an optional extra', () => {

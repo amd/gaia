@@ -81,7 +81,9 @@ from gaia.agents.base.call_risk import (
     SCRIPT_ARG,
     plain_risk_note,
 )
+from gaia.agents.base.person_approval import visible, visible_line, visible_strict
 from gaia.agents.base.tool_grants import (
+    NAME_ARGS,
     PATH_ACCESS_PROMPT_TOOL,
     PATH_TOOLS,
     PROJECT_TRUST_PROMPT_TOOL,
@@ -788,7 +790,7 @@ class CanonicalTranslator:
 
 def _path_access_question(args: Dict[str, Any]) -> str:
     """The question an ``allow_path_access`` prompt asks, worded for its kind."""
-    path = args.get("path")
+    path = visible_strict(args["path"])
     kind = args.get("kind")
     if kind == "folder":
         return f"Allow GAIA to use the folder {path} and everything in it for this session?"
@@ -800,9 +802,13 @@ def _path_access_question(args: Dict[str, Any]) -> str:
 def _project_trust_question(args: Dict[str, Any]) -> str:
     """The question a ``trust_project_folder`` prompt asks, naming what it would read."""
     files = args.get("files")
-    shown = ", ".join(str(f) for f in files) if isinstance(files, list) else "its files"
+    shown = (
+        ", ".join(visible_strict(str(f)) for f in files)
+        if isinstance(files, list)
+        else "its files"
+    )
     return (
-        f"Trust {args['folder']}? GAIA would put {shown} in the model's prompt "
+        f"Trust {visible_strict(args['folder'])}? GAIA would put {shown} in the model's prompt "
         "as that project's instructions, now and every time you work in this "
         "folder. They come from the folder, not from you."
     )
@@ -1106,15 +1112,20 @@ def render_command_summary(
             for key in sorted(args)
             if key not in shown_keys and args[key] not in (None, "")
         ]
-        tail = f"\n({', '.join(others)})" if others else ""
-        return f"{args.get('command') or ''}\nin {folder}{tail}"
+        tail = f"\n({visible_line(', '.join(others))})" if others else ""
+        command = "\n".join(
+            visible_strict(line) for line in str(args.get("command") or "").split("\n")
+        )
+        return f"{command}\nin {visible_strict(folder)}{tail}"
     if tool in CODE_SUMMARY_TOOLS:
         if isinstance(args.get("code"), str):
             body = _code_summary(args["code"])
             script = ""
         else:
             path = str(args.get("file_path") or "")
-            body = _short_location(path, workspace) or os.path.basename(path)
+            body = visible_strict(
+                _short_location(path, workspace) or os.path.basename(path)
+            )
             # A path does not say what the file does: its code follows.
             script = _script_summary(args.get(SCRIPT_ARG), path)
         location = ""
@@ -1128,8 +1139,10 @@ def render_command_summary(
         # Paths are shortened only relative to the folder the command runs in —
         # stripping any other prefix would name a different file.
         command = _strip_base(command, folder or workspace)
-        body = _elide_middle(" ".join(command.split()), SUMMARY_COMMAND_CHARS)
-        location = _short_location(folder, workspace) if folder else ""
+        body = visible_strict(
+            _elide_middle(" ".join(command.split()), SUMMARY_COMMAND_CHARS)
+        )
+        location = visible_strict(_short_location(folder, workspace)) if folder else ""
         script = ""
 
     extras = [
@@ -1139,7 +1152,7 @@ def render_command_summary(
     ]
     out = body
     if extras:
-        out += f"  ({', '.join(extras)})"
+        out += f"  ({visible_line(', '.join(extras))})"
     if script:
         out += f"\n{script}"
     if location:
@@ -1191,17 +1204,21 @@ def render_invocation(args: Dict[str, Any]) -> str:
     blocks = []
     for key in sorted(args):
         value = args[key]
-        if isinstance(value, str) and "\n" in value.strip():
+        name = key in NAME_ARGS
+        # A name stays one line, its tab, CR and LF shown as codes.
+        if not name and isinstance(value, str) and "\n" in value.strip():
             blocks.append(_render_block(key, value))
             continue
         text = value if isinstance(value, str) else json.dumps(value, default=str)
-        text = " ".join(text.split())
+        # A name reads as exactly one name, coded before any whitespace is
+        # squashed; other text keeps emoji and scripts.
+        text = visible_strict(text) if name else visible_line(" ".join(text.split()))
         if len(text) > INVOCATION_VALUE_CHARS:
             hidden = len(text) - INVOCATION_VALUE_CHARS
             # Never a bare "…". A silent cut reads as the whole value, so the
             # user approves text they were never shown and does not know it.
             text = f"{text[:INVOCATION_VALUE_CHARS]}… [+{hidden:,} more characters not shown]"
-        parts.append(f"{key}={_quote_value(text)}")
+        parts.append(f"{visible_strict(key)}={_quote_value(text)}")
     clause = ", ".join(parts)
     if len(clause) > INVOCATION_TOTAL_CHARS:
         hidden = len(clause) - INVOCATION_TOTAL_CHARS
@@ -1215,11 +1232,13 @@ def render_invocation(args: Dict[str, Any]) -> str:
 def _render_block(key: str, value: str) -> str:
     """Render a multi-line value as an indented block, so its lines stay lines."""
     lines = value.strip("\n").splitlines()
+    # A command's words get the name rule; a body keeps its script.
+    shown_as = visible_strict if key == "command" else visible
     shown = []
     for line in lines[:INVOCATION_BLOCK_LINES]:
         # Tabs as spaces so indentation survives; other controls shown, not obeyed.
-        line = _CONTROL_CHARS.sub(
-            lambda c: f"\\x{ord(c.group()):02x}", line.expandtabs(4)
+        line = shown_as(
+            _CONTROL_CHARS.sub(lambda c: f"\\x{ord(c.group()):02x}", line.expandtabs(4))
         )
         if len(line) > INVOCATION_BLOCK_LINE_CHARS:
             hidden = len(line) - INVOCATION_BLOCK_LINE_CHARS
@@ -1228,7 +1247,7 @@ def _render_block(key: str, value: str) -> str:
     if len(lines) > INVOCATION_BLOCK_LINES:
         hidden = len(lines) - INVOCATION_BLOCK_LINES
         shown.append(f"    … [+{hidden:,} more lines not shown]")
-    return f"\n{key}:\n" + "\n".join(shown)
+    return f"\n{visible_strict(key)}:\n" + "\n".join(shown)
 
 
 __all__ = [

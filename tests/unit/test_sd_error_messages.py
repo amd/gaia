@@ -43,6 +43,9 @@ def modern_linux(mocker):
     mocker.patch(
         "gaia.llm.lemonade_launcher.resolve_lemonade", return_value=_MODERN_LINUX
     )
+    # The install here is the server in use: none other was chosen.
+    mocker.patch("gaia.llm.lemonade_client.configured_lemonade_url", return_value=None)
+    mocker.patch("gaia.llm.lemonade_launcher.gaia_runs_lemonade", return_value=False)
 
 
 def test_a_download_timeout_is_not_reported_as_an_unreachable_server(modern_linux):
