@@ -330,6 +330,76 @@ TEST_F(GaiacppEngine, ADuplicateToolNameIsRefused) {
     EXPECT_NE(events[0]["message"].get<std::string>().find("declared twice"), std::string::npos);
 }
 
+TEST_F(GaiacppEngine, AHostThatLeavesMidToolCallEndsTheTurnWithNoFurtherModelCall) {
+    mock_.pushResponse(toolCall("get_order", {{"order_number", "1001"}}));
+    mock_.pushResponse(toolCall("get_order", {{"order_number", "1001"}}));
+    mock_.pushResponse(answer("never asked for"));
+
+    // Input ends right after the turn: the tool request is never answered.
+    const auto events = run({init(), turn("t1", "Where is order 1001?")});
+
+    EXPECT_EQ(ofType(events, "tool_request").size(), 1u);
+    EXPECT_TRUE(ofType(events, "final").empty());
+    EXPECT_TRUE(ofType(events, "error").empty());
+    EXPECT_EQ(mock_.requestCount(), 1);
+    EXPECT_EQ(exitCode_, 0);
+}
+
+TEST_F(GaiacppEngine, AShutdownInPlaceOfAToolResultIsHonoured) {
+    mock_.pushResponse(toolCall("get_order", {{"order_number", "1001"}}));
+    mock_.pushResponse(answer("never asked for"));
+
+    const auto events = run({init(), turn("t1", "Where is order 1001?"), {{"type", "shutdown"}}});
+
+    EXPECT_EQ(ofType(events, "tool_request").size(), 1u);
+    EXPECT_TRUE(ofType(events, "final").empty());
+    EXPECT_EQ(mock_.requestCount(), 1);
+    EXPECT_EQ(exitCode_, 0);
+}
+
+TEST_F(GaiacppEngine, AWrongMessageInPlaceOfAToolResultIsNamedAndTheTurnStops) {
+    mock_.pushResponse(toolCall("get_order", {{"order_number", "1001"}}));
+    mock_.pushResponse(answer("Hello."));
+    const json wrongId = {{"type", "tool_result"}, {"id", "t1:9"}, {"result", {{"status", "shipped"}}}};
+
+    const auto events = run({init(), turn("t1", "Where is order 1001?"), wrongId, turn("t2", "hi")});
+
+    EXPECT_EQ(ofType(events, "tool_request").size(), 1u);
+    const auto errors = ofType(events, "error");
+    ASSERT_EQ(errors.size(), 1u);
+    EXPECT_EQ(errors[0]["code"], "bad_message");
+    // The broken turn has no final; the engine is still serving the next one.
+    const auto finals = ofType(events, "final");
+    ASSERT_EQ(finals.size(), 1u);
+    EXPECT_EQ(finals[0]["turn"], "t2");
+    EXPECT_EQ(finals[0]["text"], "Hello.");
+    EXPECT_EQ(mock_.requestCount(), 2);
+}
+
+TEST_F(GaiacppEngine, WithNoHostToolsThePromptStillGoesOutAsWritten) {
+    mock_.pushResponse(answer("Hello there."));
+    json bare = init();
+    bare.erase("tools");
+
+    run({bare, turn("t1", "hi")});
+
+    EXPECT_EQ(requestBody(0)["messages"][0]["content"], "You answer questions about orders.\n\n");
+}
+
+TEST_F(GaiacppEngine, RetriesAndStepCountsThatAreNotSmallWholeNumbersAreRefused) {
+    for (const auto& [key, value] : std::vector<std::pair<std::string, json>>{
+             {"retries", "3"}, {"retries", -1}, {"max_steps", 3000000000LL}, {"max_steps", 0}}) {
+        json bad = init();
+        bad[key] = value;
+
+        const auto events = run({bad});
+
+        ASSERT_EQ(events.size(), 1u) << key;
+        EXPECT_EQ(events[0]["code"], "bad_init") << key << " = " << value.dump();
+        EXPECT_EQ(exitCode_, 2);
+    }
+}
+
 // The contract both SDKs are written against.
 json wireFixture() {
     std::ifstream in(std::string(GAIA_REPO_FIXTURES_DIR) + "/stdio/gaia_host_wire.json");
