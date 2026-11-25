@@ -15,6 +15,8 @@
 
 #include "gaia/ignore.h"
 #include "gaia/process.h"
+#include "lower_ascii.h"
+#include "shell_quote.h"
 
 namespace fs = std::filesystem;
 
@@ -27,22 +29,7 @@ constexpr double kBm25K1 = 1.2;
 constexpr double kBm25B = 0.75;
 constexpr size_t kMaxExtractBytes = 64u * 1024u * 1024u;
 
-std::string lowerExt(const std::string& path) {
-    std::string e = fs::path(path).extension().string();
-    std::transform(e.begin(), e.end(), e.begin(),
-                   [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
-    return e;
-}
-
-std::string shellQuote(const std::string& s) {
-#ifdef _WIN32
-    return "\"" + s + "\"";
-#else
-    std::string out = "'";
-    for (char c : s) out += (c == '\'') ? std::string("'\\''") : std::string(1, c);
-    return out + "'";
-#endif
-}
+std::string lowerExt(const std::string& path) { return detail::lowerAscii(fs::path(path).extension().string()); }
 
 #ifdef _WIN32
 constexpr bool kShellExpandsPercent = true;
@@ -109,10 +96,10 @@ std::string docxText(const std::string& path) {
     // PATH (Git's) does not read them, and takes C: for a remote host.
     const std::string tar = systemProgramPath("tar.exe");
     // cmd /c drops the first and last quote of a line that starts with one, so the line gets an extra pair.
-    const std::string extract = "\"\"" + tar + "\" -xOf " + shellQuote(safe.str()) + " word/document.xml\"";
+    const std::string extract = "\"\"" + tar + "\" -xOf " + detail::shellQuote(safe.str()) + " word/document.xml\"";
     const char* tool = "tar";
 #else
-    const std::string extract = "unzip -p " + shellQuote(safe.str()) + " word/document.xml";
+    const std::string extract = "unzip -p " + detail::shellQuote(safe.str()) + " word/document.xml";
     const char* tool = "unzip";
 #endif
     ProcessResult r = ProcessRunner::run(extract, 60000, "", {}, kMaxExtractBytes);
@@ -293,9 +280,9 @@ std::vector<std::pair<int, std::string>> DocumentIndex::extractPages(const std::
             throw std::runtime_error("Can't read PDF " + path + ": pdftotext is not installed (install poppler)");
         }
         // cmd /c drops the first and last quote of a line that starts with one, so the line gets an extra pair.
-        const std::string extract = "\"\"" + pdftotext + "\" -layout " + shellQuote(safe.str()) + " -\"";
+        const std::string extract = "\"\"" + pdftotext + "\" -layout " + detail::shellQuote(safe.str()) + " -\"";
 #else
-        const std::string extract = "pdftotext -layout " + shellQuote(safe.str()) + " -";
+        const std::string extract = "pdftotext -layout " + detail::shellQuote(safe.str()) + " -";
 #endif
         ProcessResult r = ProcessRunner::run(extract, 120000, "", {}, kMaxExtractBytes);
         if (r.stdout_output.size() >= kMaxExtractBytes) {
