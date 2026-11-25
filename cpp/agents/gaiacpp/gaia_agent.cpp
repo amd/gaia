@@ -941,8 +941,7 @@ std::vector<std::string> GaiaAgent::claimedFiles(const std::string& answer) {
         R"((md|csv|tsv|xlsx|xls|docx|pptx|txt|json|html|py|pdf|png|jpg|svg|yaml|yml|sh|ics|xml))\b)",
         std::regex::icase);
     static const std::regex verbEnd(kWriteVerbs, std::regex::icase);
-    // Bounded like the other answer checks: MSVC's std::regex refuses a search that long.
-    const std::string prose = dropCounterfactual(plainPunctuation(textForChecks(answer), ";"));
+    const std::string prose = dropCounterfactual(plainPunctuation(answer, ";"));
     std::vector<std::string> out;
     size_t pos = 0;
     std::smatch m;
@@ -964,9 +963,10 @@ std::vector<std::string> GaiaAgent::claimedFiles(const std::string& answer) {
         if (std::find(out.begin(), out.end(), p) == out.end()) out.push_back(p);
         pos = verb + static_cast<size_t>(m.length(0));
     }
-    // "`summary.md` has been created": the file comes before the verb.
+    // "`summary.md` has been created": the file comes before the verb. The name starts after a
+    // character that can't be in one, so a long word is tried once, not at every letter.
     static const std::regex passive(
-        R"(([A-Za-z]:[\\/][^\s`'"*<>|]+|[A-Za-z0-9_~./\\-]*[A-Za-z0-9_-]\.)"
+        R"((?:^|[^A-Za-z0-9_~./\\:-])([A-Za-z]:[\\/][^\s`'"*<>|]+|[A-Za-z0-9_~./\\-]*[A-Za-z0-9_-]\.)"
         R"((?:md|csv|tsv|xlsx|xls|docx|pptx|txt|json|html|py|pdf|png|jpg|svg|yaml|yml|sh|ics|xml))[`'"*]*\s+)"
         R"((?:has been|have been|has now been|is now|was)\s+(?:successfully\s+)?)" + kWriteVerbs + R"(\b)",
         std::regex::icase);

@@ -1131,6 +1131,19 @@ TEST(GaiaAgentTest, AWriteThatWouldHaveHappenedNamesNoFile) {
     }
 }
 
+TEST(GaiaAgentTest, AFileNamedBeforeItsVerbIsFoundWhereverItSits) {
+    using Files = std::vector<std::string>;
+    EXPECT_EQ(GaiaAgent::claimedFiles("out/report.csv was saved."), Files{"out/report.csv"});
+    EXPECT_EQ(GaiaAgent::claimedFiles("Done: C:\\work\\x.md has been written."), Files{"C:\\work\\x.md"});
+    Files both = GaiaAgent::claimedFiles("a.md was saved and (b.txt) was created.");
+    std::sort(both.begin(), both.end());
+    EXPECT_EQ(both, (Files{"a.md", "b.txt"}));
+    // Long words around the claim: the name is tried once per word, not at every letter.
+    std::string text;
+    for (int i = 0; i < 32; ++i) text += std::string(255, 'A') + " ";
+    EXPECT_EQ(GaiaAgent::claimedFiles(text + "`summary.md` has been created."), Files{"summary.md"});
+}
+
 TEST(GaiaAgentTest, ASaveBesideADenialOrACounterfactualIsStillAClaim) {
     using Files = std::vector<std::string>;
     EXPECT_EQ(GaiaAgent::claimedFiles("I wrote no files except `summary.md`."), Files{"summary.md"});
