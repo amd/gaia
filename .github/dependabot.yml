@@ -93,6 +93,10 @@ updates:
         update-types:
           - "minor"
           - "patch"
+    # @types/vscode must not pass the extension's engines.vscode, or vsce
+    # refuses to package it; raise both together by hand.
+    ignore:
+      - dependency-name: "@types/vscode"
 
   # Go - the TUI module behind the published gaia-* binaries. Its
   # tui/third_party/* forks are wired in by `replace` and stay unwatched.
