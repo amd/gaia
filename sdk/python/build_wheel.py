@@ -85,6 +85,7 @@ def build(engine: Path, out: Path, tag: str) -> Path:
                 str(out),
             ],
             check=True,
+            timeout=600,
         )
     finally:
         # The source tree stays binary-free; only the wheel carries the engine.
