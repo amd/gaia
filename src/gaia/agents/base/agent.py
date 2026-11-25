@@ -204,6 +204,14 @@ from gaia.agents.base.tools import (
     tool_build,
     tool_call_progress_message,
 )
+from gaia.agents.base.turn_outcome import (
+    STOP_CANCELLED,
+    STOP_OUTPUT_CAP,
+    STOP_REPROMPT_BUDGET,
+    STOP_TOOL_CALL_FORMAT,
+    stop_reason,
+    tool_call_record,
+)
 from gaia.agents.base.turn_scope import (
     ANSWERED_MARKER,
     POST_ANSWER_CLOSING_PROMPT,
@@ -244,6 +252,7 @@ from gaia.llm.lemonade_client import (
     runs_on_npu,
     truncation_budget,
 )
+from gaia.llm.pricing import price as _list_price
 from gaia.llm.providers.lemonade import (
     CONNECTION_FAILURE_RE,
     MODEL_SERVER_DOWN,
@@ -4062,6 +4071,12 @@ Do NOT wrap conversational replies in JSON.
         self._tool_reported_usage: List[Dict[str, Any]] = []
         # Same rationale for the verification-scope log.
         self._turn_tool_executions: List[Dict[str, Any]] = []
+        # The same calls with their results, for the result's tool_calls.
+        self._turn_tool_calls: List[Dict[str, Any]] = []
+        # Each corrective message a check sent the model this turn.
+        self._turn_reprompts: List[Dict[str, Any]] = []
+        # Why the turn stopped, where the exit itself knows best.
+        self._turn_stop_hint: Optional[str] = None
         # (source, tool-log index) per result that carried planted instructions.
         self._turn_planted_sources: List[Tuple[str, int]] = []
         # Whether a project root has tests, walked once per root per turn.
@@ -10576,7 +10591,8 @@ Do NOT wrap conversational replies in JSON.
 
         # Write JSON data to file
         with open(file_path, "w", encoding="utf-8") as f:
-            json.dump(data, f, indent=2)
+            # default=str: a tool may return an object JSON cannot encode.
+            json.dump(data, f, indent=2, default=str)
 
         return os.path.abspath(file_path)
 
@@ -12342,6 +12358,17 @@ Do NOT wrap conversational replies in JSON.
         record["output"] = check_output(tool_name, result)
         record["observed"] = observed_excerpt(observed_text(result))
         log.append(record)
+        calls = getattr(self, "_turn_tool_calls", None)
+        if calls is not None:
+            calls.append(
+                tool_call_record(
+                    tool_name,
+                    tool_args,
+                    result,
+                    ran=record["ran"],
+                    failed=record["failed"],
+                )
+            )
         if evidence is not None:
             evidence.record(
                 tool_name,
@@ -12482,6 +12509,23 @@ Do NOT wrap conversational replies in JSON.
         if changed is None or not self._project_has_tests(root):
             return None
         return verify_after_change_correction(changed)
+
+    def _note_reprompt(self, guard: str, step: int) -> None:
+        """Record that *guard* sent the model back for another reply."""
+        reprompts = getattr(self, "_turn_reprompts", None)
+        if reprompts is not None:
+            reprompts.append({"guard": guard, "step": step})
+
+    def _turn_cost_usd(
+        self, input_tokens: int, cached_tokens: int, output_tokens: int
+    ) -> Optional[float]:
+        """This turn's tokens at the model's list price; None when it has none."""
+        model = getattr(getattr(self, "chat", None), "effective_model", None)
+        if not isinstance(model, str) or not model:
+            model = getattr(self, "model_id", None)
+        if not isinstance(model, str) or not model:
+            return None
+        return _list_price(model, input_tokens, cached_tokens, output_tokens)
 
     def _request_text(self, query: Optional[str]) -> str:
         """The user's own words this turn, without the memory context prepended.
@@ -13727,11 +13771,17 @@ Do NOT wrap conversational replies in JSON.
         )
         if isinstance(parse_exc, MalformedToolMarkup):
             if markup_retries >= _MAX_MARKUP_RETRIES:
+                self._turn_stop_hint = STOP_TOOL_CALL_FORMAT
                 return _TOOL_MARKUP_FAILURE_ANSWER, markup_retries
             markup_retries += 1
         # If we've already retried several times, give up gracefully and
         # answer in plain text rather than spamming the user.
         if parse_failures >= 3:
+            self._turn_stop_hint = (
+                STOP_OUTPUT_CAP
+                if isinstance(parse_exc, ToolCallTruncated)
+                else STOP_TOOL_CALL_FORMAT
+            )
             if _last_image_path:
                 return (
                     f"I generated your image at `{_last_image_path}`, "
@@ -13989,6 +14039,12 @@ Do NOT wrap conversational replies in JSON.
         # Executed tool calls this turn, classified for the verification-scope
         # statement. Per-turn: an instance persists across queries.
         self._turn_tool_executions: List[Dict[str, Any]] = []
+        # The same calls with their results, for the result's tool_calls.
+        self._turn_tool_calls: List[Dict[str, Any]] = []
+        # Each corrective message a check sent the model this turn.
+        self._turn_reprompts: List[Dict[str, Any]] = []
+        # Why the turn stopped, where the exit itself knows best.
+        self._turn_stop_hint: Optional[str] = None
         # (source, tool-log index) per result that carried planted instructions.
         self._turn_planted_sources: List[Tuple[str, int]] = []
         self._has_tests_cache = {}
@@ -14109,6 +14165,7 @@ Do NOT wrap conversational replies in JSON.
                     "The request was stopped before it finished. Try again, or "
                     "break it into smaller steps if it was taking too long."
                 )
+                self._turn_stop_hint = STOP_CANCELLED
                 time_limit_reached = self._time_limit_passed()
                 if time_limit_reached:
                     # No closing call fits past the deadline; keep what was found.
@@ -15047,6 +15104,7 @@ Do NOT wrap conversational replies in JSON.
                         steps_limit,
                     )
                     self._turn_model_retries["failed"] = True
+                    self._turn_stop_hint = STOP_OUTPUT_CAP
                     final_answer = self._cut_off_failure_answer(conversation)
                     # Printed like the other give-ups, so it carries the turn's
                     # token counts and the UI can price it.
@@ -16103,6 +16161,7 @@ Do NOT wrap conversational replies in JSON.
                     )
                     and steps_taken < steps_limit - 1
                 ):
+                    self._note_reprompt("post_index", steps_taken)
                     logger.debug(
                         "[WORKFLOW] Post-index answer without query — forcing query tool call: %s",
                         answer_candidate[:80],
@@ -16213,6 +16272,7 @@ Do NOT wrap conversational replies in JSON.
                     answer_candidate = _unfinished_step_answer(answer_candidate)
                 if unfinished_kind == "tool_markup" and can_reprompt_unfinished:
                     unfinished_answer_reprompts += 1
+                    self._note_reprompt("tool_markup", steps_taken)
                     logger.debug(
                         "[WORKFLOW] Blocking tool-call markup as final answer: %s",
                         answer_candidate[:120],
@@ -16249,6 +16309,7 @@ Do NOT wrap conversational replies in JSON.
                         look_first_reprompted = True
                         # Grounding's look gate would ask the same thing again.
                         grounding_fired.add(LOOK)
+                        self._note_reprompt("look_first", steps_taken)
                         logger.info(
                             "[WORKFLOW] Answer named %s without a tool call; asking "
                             "the agent to look first",
@@ -16270,6 +16331,7 @@ Do NOT wrap conversational replies in JSON.
                     nudge = unsaved(called)
                     if nudge:
                         save_reprompted = True
+                        self._note_reprompt("unsaved_memory", steps_taken)
                         logger.info(
                             "[WORKFLOW] Asked to remember, nothing saved; asking "
                             "the agent to save it"
@@ -16300,6 +16362,7 @@ Do NOT wrap conversational replies in JSON.
                         # Same budget as the narration re-prompt, so the turn can end.
                         unfinished_answer_reprompts += 1
                     # Inject a correction message and continue the loop to force the answer
+                    self._note_reprompt("planning", steps_taken)
                     logger.debug(
                         "[WORKFLOW] Blocking planning-only response as final answer: %s",
                         answer_candidate[:80],
@@ -16327,6 +16390,7 @@ Do NOT wrap conversational replies in JSON.
 
                 if unfinished_kind == "narration" and can_reprompt_unfinished:
                     unfinished_answer_reprompts += 1
+                    self._note_reprompt("narration", steps_taken)
                     logger.debug(
                         "[WORKFLOW] Blocking narrated next step as final answer: %s",
                         answer_candidate[-120:],
@@ -16349,6 +16413,7 @@ Do NOT wrap conversational replies in JSON.
                     _TOOL_ARTIFACT_PATTERN.match(answer_candidate.strip())
                     and steps_taken < steps_limit - 1
                 ):
+                    self._note_reprompt("tool_label", steps_taken)
                     logger.debug(
                         "[WORKFLOW] Blocking tool-syntax artifact as final answer: %s",
                         answer_candidate[:80],
@@ -16381,6 +16446,7 @@ Do NOT wrap conversational replies in JSON.
                     for p in _RAW_JSON_PATTERNS
                 )
                 if is_raw_json and steps_taken < steps_limit - 1:
+                    self._note_reprompt("fake_json", steps_taken)
                     logger.debug(
                         "[WORKFLOW] Blocking raw-JSON hallucination as final answer: %s",
                         answer_candidate[:120],
@@ -16450,6 +16516,7 @@ Do NOT wrap conversational replies in JSON.
                         if capability_tool_last_succeeded
                         else "generate_image returned an error"
                     )
+                    self._note_reprompt("image_outcome", steps_taken)
                     logger.debug(
                         "[WORKFLOW] Answer ignores the recorded outcome (%s): %s",
                         _outcome,
@@ -16483,6 +16550,7 @@ Do NOT wrap conversational replies in JSON.
                 )
                 if fresh and steps_taken < steps_limit - 1:
                     grounding_fired.update(f.gate for f in fresh)
+                    self._note_reprompt("grounding", steps_taken)
                     logger.info(
                         "[check:grounding] %s fired at step %d",
                         ",".join(sorted({f.gate for f in fresh})),
@@ -16514,6 +16582,7 @@ Do NOT wrap conversational replies in JSON.
                     _correction = self._verify_after_change_prompt()
                     if _correction:
                         verify_after_change_reprompted = True
+                        self._note_reprompt("verify_after_change", steps_taken)
                         logger.info(
                             "%s fired at step %d", VERIFY_AFTER_CHANGE_TAG, steps_taken
                         )
@@ -16550,6 +16619,7 @@ Do NOT wrap conversational replies in JSON.
                     else:
                         test_claim_corrections += 1
                         corrected_test_claims.add(claim.lower())
+                        self._note_reprompt("test_claim", steps_taken)
                         logger.debug(
                             "[WORKFLOW] Correcting unsupported test claim %r (%s)",
                             claim,
@@ -16610,6 +16680,7 @@ Do NOT wrap conversational replies in JSON.
                             }
                             messages.append(repair)
                             conversation.append(dict(repair))
+                            self._note_reprompt("edit_verification", steps_taken)
                             logger.info(
                                 "Post-edit verification found %d problem(s); "
                                 "granted %d repair step(s) (limit now %d)",
@@ -16677,6 +16748,7 @@ Do NOT wrap conversational replies in JSON.
                         )
                     ):
                         completion_corrections += 1
+                        self._note_reprompt("completion", steps_taken)
                         answer_before_completion_check = unfinalized_answer
                         correction = (
                             (
@@ -16741,6 +16813,7 @@ Do NOT wrap conversational replies in JSON.
                     self_check_sent = True
                     check = self._self_check_message(steps_taken, steps_limit)
                     if check:
+                        self._note_reprompt("self_check", steps_taken)
                         self_check_open = {
                             "answer": unfinalized_answer,
                             "at": time.monotonic(),
@@ -16765,6 +16838,7 @@ Do NOT wrap conversational replies in JSON.
                         self._reopen_turn_scope(conversation)
                         messages.append({"role": "user", "content": repair})
                         conversation.append({"role": "user", "content": repair})
+                        self._note_reprompt("answer_check", steps_taken)
                         logger.info(
                             "Answer check found %d problem(s); asked once for a "
                             "repair (step limit now %d)",
@@ -16865,6 +16939,7 @@ Do NOT wrap conversational replies in JSON.
                     conversation, self._tool_reported_usage
                 )
                 if stopped_on_announced_step:
+                    self._turn_stop_hint = STOP_REPROMPT_BUDGET
                     self._announce_turn_failed()
                 # Sealed before the answer prints: total_s must mean "until it
                 # was on screen", and the console folds the record into that
@@ -17113,6 +17188,9 @@ Do NOT wrap conversational replies in JSON.
                 "duration": time.time() - start_time,
                 "error_count": len(self._turn_errors()),
                 "error_history": self._turn_errors(),
+                "stop_reason": STOP_CANCELLED,
+                "tool_calls": list(self._turn_tool_calls),
+                "reprompts": list(self._turn_reprompts),
             }
             self.last_result["model_messages"] = messages.finish("")
             # Returns before the tail seal below. A front-end that ends the turn
@@ -17258,7 +17336,27 @@ Do NOT wrap conversational replies in JSON.
             "model_failed": self._turn_model_retries["failed"],
             "extraction_sources": sorted(self._extraction_ledger.results),
             "verification": self.verification_state(),
+            # Every tool call this turn, in order, with what it returned.
+            "tool_calls": list(self._turn_tool_calls),
+            # Each time a check sent the model back for another reply.
+            "reprompts": list(self._turn_reprompts),
         }
+        # Why the turn ended, for callers that must not read the answer text.
+        result["stop_reason"] = stop_reason(
+            status=result["status"],
+            hint=self._turn_stop_hint,
+            cancelled=user_stopped,
+            time_limit_reached=time_limit_reached,
+            max_steps_reached=max_steps_reached,
+            model_failed=self._turn_model_retries["failed"],
+            failing_repeats=getattr(self, "_stopped_on_failing_repeats", False),
+            blocking_gaps=result["completion_gaps"],
+            has_answer=bool(has_valid_answer),
+        )
+        # None for a model with no list price: never a guess.
+        result["cost_usd"] = self._turn_cost_usd(
+            total_input_tokens, result["cached_tokens"], total_output_tokens
+        )
 
         result["model_messages"] = (
             model_messages

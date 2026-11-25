@@ -219,6 +219,18 @@ def process_query(
             "input_tokens": int,     # Total input tokens across all steps
             "output_tokens": int,    # Total output tokens across all steps
             "total_tokens": int,     # Combined token count
+            "cost_usd": float | None,  # Those tokens at the model's list price
+                                     # (gaia.llm.pricing); None when it has none
+            "stop_reason": str,      # Why the turn ended: "answered",
+                                     # "max_steps", "deadline", "model_call",
+                                     # "output_cap", "tool_call_format",
+                                     # "reprompt_budget", "repeated_calls",
+                                     # "tool_error", "completion_gaps",
+                                     # "cancelled" or "no_answer"
+            "tool_calls": list,      # Every tool call, in order:
+                                     # {"name", "args", "result", "ran", "failed"}
+            "reprompts": list,       # Each time a check sent the model back:
+                                     # {"guard", "step"}
             "error_count": int,      # Errors recorded during this query only
             "error_history": list,   # This query's errors (a snapshot — a later
                                      # query never changes it; the agent's
