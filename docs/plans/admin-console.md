@@ -42,9 +42,8 @@ listed at the top of the page.
 
 ## Next
 
-1. **Time to first human reply** on issues and pull requests, the one benchmarked
-   growth metric not collected yet: it needs each item's first comment or review by
-   someone other than the author or a bot, read nightly for new items.
+1. **Review verdicts in first-reply time:** an approval or change request with no
+   inline comment does not count as a reply yet; it needs each pull request's reviews.
 2. **Release quality:** issues filed within 7 days of a release, regressions per
    release, RC-to-final lead time.
 3. **Alerts and a weekly digest:** notify on a sharp drop in CI pass rate, eval score or

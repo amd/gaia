@@ -192,7 +192,7 @@ export async function handleApi(db: D1Database, path: string, url: URL): Promise
     // Comments arrive from their own source; until it has run once, nobody would look answered except by a close.
     const commented = (await collectedAt("comments")) != null;
     const until = new Date((commented ? await collectedAt("comments", "issues") : asOf) ?? Date.now()).toISOString();
-    const answered = commented ? firstResponses(allItems, await all<ResponseRow>("SELECT number, login, assoc, at FROM item_responses"), maintainers) : null;
+    const answered = commented ? firstResponses(allItems, await all<ResponseRow>("SELECT number, login, assoc, at FROM item_responses"), maintainers, alias) : null;
     return json({
       from,
       days: span,

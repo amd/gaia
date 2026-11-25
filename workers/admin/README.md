@@ -206,7 +206,8 @@ Source names with a space need `%20` in the URL, for example `only=code%20stats`
   After `0011_item_draft.sql`, run one collection with `full=1&only=issues` so pull
   requests opened before it get their draft state; until then they count as not drafts.
   After `0012_item_responses.sql`, run one collection with `only=comments` (no `full=1`
-  needed: a source that has never succeeded reads its whole history). First-response figures
+  needed: a source that has never succeeded reads its whole history). It is about 170 GitHub
+  pages, so run it on its own rather than with `full=1`. First-response figures
   stay hidden until it has.
 
 ### If something is wrong

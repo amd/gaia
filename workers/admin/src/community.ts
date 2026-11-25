@@ -24,8 +24,9 @@ export interface ResponseRow {
  * When the core team first answered each item: their earliest comment, or the item being closed
  * or merged, whichever came first. The author's own comments do not count. Absent while nobody has.
  */
-export function firstResponses(items: NumberedItem[], comments: ResponseRow[], maintainers: Set<string>): Map<number, string> {
-  const author = new Map(items.map((i) => [i.number, (i.author ?? "").toLowerCase()]));
+export function firstResponses(items: NumberedItem[], comments: ResponseRow[], maintainers: Set<string>, alias: Aliases = new Map()): Map<number, string> {
+  const who = (login: string) => (alias.get(login.toLowerCase()) ?? login).toLowerCase();
+  const author = new Map(items.map((i) => [i.number, who(i.author ?? "")]));
   const out = new Map<number, string>();
   const earlier = (n: number, at: string) => {
     const cur = out.get(n);
@@ -33,7 +34,7 @@ export function firstResponses(items: NumberedItem[], comments: ResponseRow[], m
   };
   for (const c of comments) {
     const login = c.login.toLowerCase();
-    if (isBot(c.login) || login === author.get(c.number)) continue;
+    if (isBot(c.login) || who(c.login) === author.get(c.number)) continue;
     if (maintainers.has(login) || CORE_ASSOC.has(c.assoc)) earlier(c.number, c.at);
   }
   for (const i of items) {

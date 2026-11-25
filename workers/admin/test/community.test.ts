@@ -41,6 +41,12 @@ describe("firstResponses", () => {
     expect(first.has(c.number)).toBe(false);
   });
 
+  it("treats a core author's other account as the author", () => {
+    const i = item("issue", "kalin", 0);
+    const first = firstResponses([i], [said(i.number, "Kalin-Work", 2), said(i.number, "gina", 6, "MEMBER")], core, new Map([["kalin", "kalin"], ["kalin-work", "kalin"]]));
+    expect(first.get(i.number)).toBe(at(6));
+  });
+
   it("counts a merge as the answer when nobody commented first", () => {
     const p = item("pr", "dave", 0, { merged: 30 });
     expect(firstResponses([p], [said(p.number, "kalin", 40)], core).get(p.number)).toBe(at(30));
