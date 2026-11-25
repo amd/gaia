@@ -1665,6 +1665,8 @@ export function ChatView({ sessionId }: ChatViewProps) {
             className={`task-view ${isDragOver ? 'drag-active' : ''}`}
             style={{ '--session-panel-w': `${panelWidth}px` } as CSSProperties}
             onDrop={handleDrop}
+            // The composer handles its own drops and stops them, so clear the overlay on the way down.
+            onDropCapture={() => setIsDragOver(false)}
             onDragOver={handleDragOver}
             onDragLeave={handleDragLeave}
             aria-label={shownTitle(session?.title) || 'Chat'}

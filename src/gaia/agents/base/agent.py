@@ -1811,6 +1811,48 @@ _INDEX_QUESTION_NEEDS_USER_PATTERN = re.compile(
 )
 _SENTENCE_END_PATTERN = re.compile(r"[.!?](?=\s|$)|\n")
 _INDEX_TOOL_NAMES = ("index_directory", "index_document")
+# "Just index it and say done": every sentence must be an index command or one
+# of these closers, so any other request keeps the forced search.
+_INDEX_ONLY_TAIL = (
+    r"(?:(?:say|reply|respond)\s+(?:with\s+)?[\"'“]?done[\"'”]?"
+    r"|nothing\s+else"
+    r"|(?:so\s+)?(?:that\s+)?(?:i|we)\s*(?:can|could|will|['’]ll|may|might)\s+"
+    r"ask(?:\s+(?:you|about\s+it|about\s+them|questions(?:\s+about\s+it)?))*"
+    r"\s+later"
+    r"|for\s+later)"
+)
+# What "index" may take: a pronoun, a path or filename, or a file-type noun.
+_INDEX_ONLY_PATH = (
+    r"(?:\"[^\"]+\"|'[^']+'|(?=\S*\w)\S*[\\/~*]\S*|[\w-]+\.[A-Za-z0-9]{1,5})"
+)
+_INDEX_ONLY_OBJECT = (
+    r"(?:(?:all|all\s+of|everything\s+in|the|my|this|that|these|those|our|every)\s+)*"
+    r"(?:it|this|that|these|those|them|" + _INDEX_ONLY_PATH + r"|(?:[\w-]+\s+){0,2}"
+    r"(?:files?|documents?|docs|folders?|director(?:y|ies)|reports?|pdfs?)"
+    r"(?:\s+" + _INDEX_ONLY_PATH + r")?)"
+    r"(?:\s+(?:in|from)\s+" + _INDEX_ONLY_PATH + r")?"
+)
+_INDEX_ONLY_SENTENCE_PATTERN = re.compile(
+    r"(?:(?:please|kindly|just|only|simply|now|go\s+ahead\s+and)\s+)*"
+    r"(?:re-?)?index\s+"
+    + _INDEX_ONLY_OBJECT
+    + r"(?:[,;]?\s*(?:(?:and|then|and\s+then)\s+)?"
+    + _INDEX_ONLY_TAIL
+    + r")?"
+    r"|" + _INDEX_ONLY_TAIL,
+    re.IGNORECASE,
+)
+_INDEX_ONLY_MARKER_PATTERN = re.compile(
+    r"\b(?:just|only|simply)\s+(?:re-?)?index\b|" + _INDEX_ONLY_TAIL, re.IGNORECASE
+)
+# Anything that asks about the content, so indexing alone doesn't finish the turn.
+_ASKS_ABOUT_CONTENT_PATTERN = re.compile(
+    r"\?|\b(?:what|who|whom|whose|when|where|why|how|which|tell me|summari[sz]e"
+    r"|summary|explain|describe|find|list|show me|compare|extract|look up"
+    r"|answer|quote|give me|read|analy[sz]e|analysis|search|check|review|need"
+    r"|count|calculate|verify)\b",
+    re.IGNORECASE,
+)
 
 
 def _requests_indexing(text: str) -> bool:
@@ -1825,6 +1867,23 @@ def _requests_indexing(text: str) -> bool:
         if not _NEGATED_BEFORE_PATTERN.search(text[sentence_start:verb]):
             return True
     return False
+
+
+def _requests_indexing_only(text: str) -> bool:
+    """Whether *text* explicitly asks only to index, and nothing about the content."""
+    text = (text or "").strip()
+    if (
+        not _requests_indexing(text)
+        or _ASKS_ABOUT_CONTENT_PATTERN.search(text)
+        or not _INDEX_ONLY_MARKER_PATTERN.search(text)
+    ):
+        return False
+    sentences = (
+        part.strip(" .!")
+        for part in _SENTENCE_END_PATTERN.split(text)
+        if part.strip(" .!")
+    )
+    return all(_INDEX_ONLY_SENTENCE_PATTERN.fullmatch(s) for s in sentences)
 
 
 def _asks_permission_to_index(answer: str) -> bool:
@@ -12219,7 +12278,7 @@ Do NOT wrap conversational replies in JSON.
         did not fix. The loop then makes each call itself, through the same
         approval gates as any call, once per turn, and has the model answer from
         the result. A call goes here only when its arguments come straight from
-        the request ("add the skill at <path>"). Empty by default.
+        the request ("remember X", "add the skill at <path>"). Empty by default.
         """
         return []
 
@@ -16029,6 +16088,9 @@ Do NOT wrap conversational replies in JSON.
                 if (
                     last_index_pos >= 0
                     and not query_after_index
+                    and not _requests_indexing_only(
+                        getattr(self, "_original_user_input", None) or user_input
+                    )
                     and steps_taken < steps_limit - 1
                 ):
                     logger.debug(

@@ -551,6 +551,44 @@ def _source_paths(text: str) -> set[str]:
     }
 
 
+# "covering the errors in app.log", "found in app.log": a path the answer
+# cites as where content sits, not where it saved anything.
+_CITED_NOUN = re.compile(
+    r"\b(?P<intro>with|covering|about|regarding|describing|summari[sz]ing|"
+    r"explaining|following)\s+"
+    r"(?P<noun>(?:(?!(?:and|or|but|then|to|into|as|in|at)\b)[\w'-]+\s+){1,6}?)"
+    r"(?:in|inside|within)\s+",
+    re.I,
+)
+_CITED_PLACE = re.compile(
+    r"\b(?:found|seen|listed|logged|reported|recorded|mentioned|described|"
+    r"shown|noted|flagged|raised|contained|present|appearing|occurring)\s+"
+    r"(?:in|inside|within)\s+",
+    re.I,
+)
+# "with the fix in config.py" may claim the edit itself: never a citation.
+_EDIT_NOUN = re.compile(
+    r"\b(?:fix|fixe[sd]|change[sd]?|edit(?:s|ed)?|patch(?:es|ed)?|update[sd]?|"
+    r"correct(?:ed|ions?)|modifi(?:ed|cations?)|rewrit(?:e|ten)|new|added)\b",
+    re.I,
+)
+
+
+def _cited_paths(sentence: str) -> set[str]:
+    """Paths *sentence* names once, and only as where its content sits."""
+    named = [
+        path for match in _TARGET.finditer(sentence) if (path := _path_token(match))
+    ]
+    cited = []
+    for match in _CITED_NOUN.finditer(sentence):
+        if match["intro"].lower() == "with" and _EDIT_NOUN.search(match["noun"]):
+            continue
+        cited += _scan_paths(sentence[match.end() :], immediate=True)
+    for match in _CITED_PLACE.finditer(sentence):
+        cited += _scan_paths(sentence[match.end() :], immediate=True)
+    return {path for path in cited if named.count(path) == 1}
+
+
 def _instructions(query: str):
     """(verb, text after it) for each non-negated storage instruction."""
     asked = _FENCES.sub("", instruction_part(query))
@@ -1334,6 +1372,26 @@ class CompletionEvidence:
                 ):
                     self._written_by_executor(path)
 
+    def _wrote(self, path: str) -> bool:
+        """Whether this turn wrote *path* (a bare name: any file so named)."""
+        key = self.request_key(path)
+        name = os.path.normcase(path) if ntpath.basename(path) == path else None
+
+        def hit() -> bool:
+            return any(
+                item.written
+                and not (self.scratch and _inside(found, self.scratch))
+                and (
+                    found == key
+                    or (name and os.path.normcase(os.path.basename(found)) == name)
+                )
+                for found, item in self.files.items()
+            )
+
+        if not hit():
+            self._find_executor_writes(key)
+        return hit()
+
     def _find_bare_outputs(self, bare: set[str]) -> None:
         """Look for a script-written bare output in the folders the turn named.
 
@@ -1472,6 +1530,17 @@ class CompletionEvidence:
             paths = [path for path in named if not self._is_backup(path)]
             if named and not paths:
                 continue
+            # "Saved report.json with the errors in app.log": the log it read,
+            # but only beside a save this run really made.
+            cited = _cited_paths(sentence) & set(paths)
+            if cited:
+                saved = [
+                    path
+                    for path in mentioned_paths(sentence)
+                    if path not in cited and self._wrote(path)
+                ]
+                if saved:
+                    paths = [p for p in paths if p not in cited] or saved
             if not checkable and not _FIRST_PERSON.search(sentence):
                 if soft is not None:
                     soft.extend(

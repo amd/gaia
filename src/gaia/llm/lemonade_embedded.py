@@ -1397,6 +1397,10 @@ class EmbeddedLemonade:
         try:
             proc = psutil.Process(pid)
             cmdline = proc.cmdline()
+            # The kernel's path for the running binary, not argv[0]: argv[0]
+            # is whatever path the launcher typed, and through a symlinked
+            # GAIA home that later changed it no longer leads into dist/.
+            exe = proc.exe() or (cmdline[0] if cmdline else "")
         except psutil.NoSuchProcess:
             return OTHER
         except psutil.AccessDenied:
@@ -1407,7 +1411,7 @@ class EmbeddedLemonade:
             except psutil.AccessDenied:
                 return UNKNOWN
             return UNKNOWN if Path(name).stem.lower() == "lemond" else OTHER
-        if not self._is_own_cmdline(cmdline, port):
+        if not self._is_own_cmdline(exe, cmdline, port):
             return OTHER
         try:
             env = proc.environ()
@@ -1417,21 +1421,11 @@ class EmbeddedLemonade:
             return OTHER
         return OWN if env.get("LEMONADE_API_KEY") == api_key else OTHER
 
-    def _is_own_cmdline(self, cmdline: List[str], port: int) -> bool:
-        """Whether *cmdline* runs this install's lemond on *port*."""
-        if not cmdline:
+    def _is_own_cmdline(self, exe: str, cmdline: List[str], port: int) -> bool:
+        """Whether *exe*, run as *cmdline*, is this install's lemond on *port*."""
+        if not exe or Path(exe).stem.lower() != "lemond":
             return False
-        exe = Path(cmdline[0])
-        if exe.stem.lower() != "lemond":
-            return False
-        dist_root = os.path.normcase(str((self.root / "dist").resolve()))
-        try:
-            exe_dir = os.path.normcase(str(exe.resolve().parent))
-            inside = os.path.commonpath([dist_root, exe_dir]) == dist_root
-        except (OSError, ValueError):
-            # ValueError: different drives on Windows -- not under dist/.
-            return False
-        if not inside:
+        if not _inside(exe, os.path.normcase(str((self.root / "dist").resolve()))):
             return False
         args = cmdline[1:]
         return any(

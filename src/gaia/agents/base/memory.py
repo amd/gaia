@@ -649,7 +649,10 @@ _SAVE_CLAIM = re.compile(
     r"(?:saved|stored|remembered|noted|save|store|remember|note)\b"
     r"|\b(?:is|was|has\s+been|have\s+been)\s+(?:now\s+)?"
     r"(?:saved|stored|remembered|noted)\b"
-    r"|^\W*(?:saved|stored|remembered|noted)\b",
+    r"|^\W*(?:saved|stored|remembered|noted)\b"
+    r"|\b(?:tucked|filed|locked)\s+away\b"
+    r"|\bnow\s+(?:in|part\s+of)\s+(?:your|my)\s+memory\b"
+    r"|\badded\s+(?:\S+\s+){0,3}?to\s+(?:your|my)\s+memory\b",
     re.IGNORECASE | re.MULTILINE,
 )
 _NOT_SAVED = re.compile(
@@ -671,6 +674,122 @@ _DECLINED_NOT_STORED = (
     "Not stored: the user said to leave this out of memory. Tell them you left "
     "it out. Do not save it another way."
 )
+
+
+#: Status words: "password is expired" names no password, so a later fact
+#: that merely uses one ("the meeting is long") is not blocked by it.
+_STATUS_WORDS = frozenset(
+    "expired required wrong optional long short weak strong new old same reset "
+    "changed empty blank correct incorrect invalid valid missing locked falsch "
+    "richtig abgelaufen erforderlich obligatoria obligatorio incorrecta "
+    "incorrecto caducada caducado obligatoire expiré expirée "
+    "the and his her its our your their".split()
+)
+#: A password word, an optional aside (", by the way,") and "is", ":" or "=".
+#: Any value after it is refused: a false refusal is fine, a leak is not.
+_PASSWORD_IS = (
+    r"\b(?:password|passphrase|passcode|contrase(?:ñ|n)a|passwort|kennwort"
+    r"|mot de passe|senha|wachtwoord|has(?:ł|l)o|api[_ -]?key|secret"
+    r"|access[_ -]?token|auth[_ -]?token|credential)s?\b"
+    r"(?:\s*,[^,\n]{1,40},)?\s*"
+    r"(?:(?:is|es|era|ist|war|est|é|e|jest|was)\b|[:=])"
+)
+#: The value itself: "is 'secret'", "is: blue42", "is the word falcon".
+_PASSWORD_VALUE_RE = re.compile(
+    _PASSWORD_IS + r"\s*[:=]?\s*(?:(?:the|a|an)\s+)?(?:(?:word|phrase)\s+)?"
+    r"[\"'`‘’“”]?(?P<value>[^\s\"'`‘’“”,;!?()]+)",
+    re.IGNORECASE,
+)
+#: A fact that is just a value with a label: "WiFi: sunshine".
+_LABELLED_VALUE = re.compile(r"^[^:\n]{1,30}:\s*\S+\s*$")
+
+#: Any word that may name a secret: a forced save never fires near one, so a
+#: model that declined to save "the alarm code is 9090" is not overruled.
+_CREDENTIAL_WORD = re.compile(
+    r"\b(?:pass(?:word|wd|code|phrase)?|pw|pwd|pin|code|login|key"
+    r"|token|secret|credential|contrase(?:ñ|n)a|clave|passwort"
+    r"|kennwort|mot de passe|c(?:ó|o)digo)s?\b",
+    re.IGNORECASE,
+)
+#: The longest message a forced save reads; anything longer is left to the model.
+_FORCED_SAVE_MAX_CHARS = 300
+#: Characters a forced fact may hold. No comma: one starts a second clause
+#: ("..., maar niet opslaan"), so a fact with one is left to the model.
+_FACT = r"(?P<fact>[A-Za-z0-9 '\"/:%$.\-]+?)"
+#: The only messages GAIA saves on its own, the whole message and nothing more:
+#: "(Please) remember (that) X." / "(Please) keep in mind (that) X.",
+#: "Remember this (for later): X." and
+#: "X. Please remember that." / "X. Please remember this."
+_FORCED_SAVE_SHAPES = (
+    re.compile(
+        r"(?:please\s+)?(?:remember|keep\s+in\s+mind)"
+        r"(?:\s+that|\s+this(?:\s+for\s+later)?\s*:)?\s+" + _FACT + r"[.!]?",
+        re.IGNORECASE,
+    ),
+    re.compile(_FACT + r"\.?\s+please\s+remember\s+(?:that|this)[.!]?", re.IGNORECASE),
+)
+#: A second sentence inside the fact: a stop, "!" or "?" before a space or the end.
+_SECOND_SENTENCE = re.compile(r"[.!?](?:\s|$)|[!?]")
+#: A second clause that may change or take back the first.
+_SECOND_CLAUSE = re.compile(
+    r"\b(?:but|then|except|unless|though|although|however|instead|actually|wait"
+    r"|also|jk|kidding|abort|strike|scrap|scratch|stop|cancel\w*|undo|forget\w*)\b",
+    re.IGNORECASE,
+)
+#: The words that ask to keep something in memory. A forced save needs exactly one.
+_MEMORY_ASK = re.compile(
+    r"\bremember\w*|\bmemori[sz]\w*|\bin\s+mind\b|\bmemor(?:y|ies)\b", re.IGNORECASE
+)
+#: A negation or decline anywhere in the message leaves the save to the model.
+#: Deliberately blunt: "remember that I'm not vegan" is left to the model too.
+_DECLINE_SIGNAL = re.compile(
+    r"\b(?:not|never|no|nah|nope|nevermind|cannot|forget\w*|skip\w*|cancel\w*"
+    r"|ignore|disregard|undo|delete|erase|remove|except|unless"
+    r"|nicht|nein|kein\w*|nunca|jamais|nada|non|niet|nie|inte|ikke|nej|ne|pas"
+    r"|nao|nem|nu)\b"
+    r"|n\s*'+\s*t\b"
+    r"|\b(?:do|does|did|wo|ca|could|would|should|must|need|is|are|was|were"
+    r"|has|have|had|ai|might)\s*n\s*t\b"
+    r"|\brather\s+(?:you|u)\b|\bprefer\s+(?:you|u|that\s+you)\b"
+    r"|\bhold\s+off\b|\bscratch\s+that\b|\bsecond\s+thoughts?\b"
+    r"|\bchanged?\s+my\s+mind\b",
+    re.IGNORECASE,
+)
+
+
+def fact_to_keep(request: str) -> str:
+    """The fact in *request* the user asked to remember, or "".
+
+    GAIA saves this itself when the model skips the save, so it only reads one
+    fixed shape: the whole message is a single plain-ASCII sentence such as
+    "Remember that my dog's name is Rex." or "My birthday is March 3. Please
+    remember that.", with no comma, no negation, no second clause and at most
+    300 characters. Every other request is left to the model.
+    """
+    text = _straight_apostrophes(request or "").strip()
+    if (
+        len(text) > _FORCED_SAVE_MAX_CHARS
+        or not all(" " <= ch <= "~" for ch in text)
+        or len(_MEMORY_ASK.findall(text)) != 1
+        or _DECLINE_SIGNAL.search(text)
+        or not asks_to_keep_in_memory(text)
+        or MemoryMixin._looks_like_credential(text)
+        or _CREDENTIAL_WORD.search(text)
+    ):
+        return ""
+    for shape in _FORCED_SAVE_SHAPES:
+        match = shape.fullmatch(text)
+        if match is None:
+            continue
+        fact = match.group("fact").strip()
+        if (
+            _SECOND_SENTENCE.search(fact)
+            or _SECOND_CLAUSE.search(fact)
+            or len(fact.split()) < 2
+        ):
+            return ""
+        return fact
+    return ""
 
 
 def claims_memory_save(answer: str) -> bool:
@@ -4805,6 +4924,19 @@ class MemoryMixin(ProceduralMemoryMixin):
             # keyword directly adjacent to a value: "password is X", "secret: X"
             r"\b(?:password|passphrase|api[_ -]?key|secret|access[_ -]?token"
             r"|auth[_ -]?token|credential)s?\b\s*(?:is|:|=)\s*\S+",
+            # the same in other languages or with an aside: "contraseña es X",
+            # "password, by the way, is X"
+            _PASSWORD_IS + r"\s*\S+",
+            # short forms need a value shaped like one: "pw is hunter2", never
+            # "pw editor is vim" or "pwd is /home/me"
+            r"\b(?:pw|pwd)\b"
+            r"\s*(?:(?:is|es|era|ist|war|est|é|e|jest|was)\b|[:=])\s*"
+            r"(?![/~])(?=\S*[0-9!@#$%^&*])\S{4,}",
+            # a password word right before a value with letters and a digit or
+            # symbol: "password hunter2", never "password manager" or "pw 2024"
+            r"\b(?:password|passphrase|passcode|pw|pwd|contrase(?:ñ|n)a"
+            r"|passwort|kennwort|senha|wachtwoord)\b\s+"
+            r"(?![/~])(?=\S*[A-Za-z])(?=\S*[0-9!@#$%^&*])\S{4,}",
             # dash/underscore-joined token in any case, e.g. HALIBUT-4417-ZULU
             # or tango-9921-delta; a file extension right after it
             # (sales_2024_report.pdf) marks a filename, not a secret.
@@ -5027,6 +5159,19 @@ class MemoryMixin(ProceduralMemoryMixin):
             problems.append(_NOTHING_SAVED)
         return problems
 
+    def required_calls(self):
+        calls = list(super().required_calls())
+        saves = self._memory_saves_this_turn()
+        if saves:
+            return calls
+        called = {r.get("tool") for r in getattr(self, "_turn_tool_executions", [])}
+        if not self._unsaved_memory_request(called):
+            return calls
+        fact = fact_to_keep(getattr(self, "_original_user_input", None) or "")
+        if fact:
+            calls.append(("remember", {"fact": fact}))
+        return calls
+
     def answer_repair_prompt(self, problems):
         prompt = super().answer_repair_prompt(problems)
         if _REFUSED_SAVE in problems or _REFUSED_SECRET in problems:
@@ -5058,6 +5203,30 @@ class MemoryMixin(ProceduralMemoryMixin):
         mean a leaked secret, so this errs conservative on what it flags.
         """
         return bool(text and cls._credential_spans(text))
+
+    def _holds_request_secret(self, text: str) -> bool:
+        """True when *text* keeps a secret value from this turn's request.
+
+        A small model saves the bare value ("Tr0ub4dor&3") of "my wifi
+        password is Tr0ub4dor&3", which no shape on its own reveals.
+        """
+        request = getattr(self, "_original_user_input", None) or ""
+        values = [m.group("value") for m in _PASSWORD_VALUE_RE.finditer(request)]
+        for start, end in self._credential_spans(request):
+            words = re.split(r"[\s:=]+", request[start:end].strip())
+            if words and re.search(r"[0-9!@#$%^&*]", words[-1]):
+                values.append(words[-1])
+        text = text or ""
+        bare = len(text.split()) <= 3 or bool(_LABELLED_VALUE.match(text.strip()))
+        for value in values:
+            value = value.strip(".,;!?\"'`()[]‘’“”")
+            if len(value) < 3:
+                continue
+            if not bare and value.lower() in _STATUS_WORDS:
+                continue
+            if re.search(rf"(?<!\w){re.escape(value)}(?!\w)", text, re.IGNORECASE):
+                return True
+        return False
 
     #: Argument keys naming what a call acted on, in priority order. A shell
     #: command is keyed by its binary, so ``pytest -q`` working again retires
@@ -6221,7 +6390,9 @@ class MemoryMixin(ProceduralMemoryMixin):
             # a local-first memory that quietly accumulates secrets is the
             # Microsoft Recall failure mode. See _looks_like_credential for
             # what this detector can and cannot catch.
-            if MemoryMixin._looks_like_credential(fact):
+            if MemoryMixin._looks_like_credential(fact) or mixin._holds_request_secret(
+                fact
+            ):
                 logger.info(
                     "[MemoryMixin] remember(): refusing credential-shaped content"
                 )
@@ -6530,7 +6701,9 @@ class MemoryMixin(ProceduralMemoryMixin):
                         "status": "error",
                         "message": "content must not be empty or whitespace-only.",
                     }
-                if MemoryMixin._looks_like_credential(content):
+                if MemoryMixin._looks_like_credential(
+                    content
+                ) or mixin._holds_request_secret(content):
                     logger.info(
                         "[MemoryMixin] update_memory(): refusing "
                         "credential-shaped content"
