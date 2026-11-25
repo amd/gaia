@@ -256,6 +256,8 @@
                       "sdk/packaging",
                       "sdk/configuration",
                       "sdk/testing",
+                      "sdk/embedding",
+                      "sdk/host-protocol",
                       "sdk/performance-analysis-plotter",
                       "sdk/security",
                       "sdk/best-practices"

@@ -9,23 +9,21 @@ without requiring real LLM/VLM services or databases.
 
 Example:
     from gaia.testing import (
-        MockLLMProvider,
-        MockVLMClient,
+        ScriptedLLMClient,
         create_test_agent,
-        temp_directory,
         assert_llm_called,
     )
 
     def test_my_agent():
-        agent = create_test_agent(
-            MyAgent,
-            mock_responses=["I'll search for that", "Found results"],
-        )
+        model = ScriptedLLMClient()
+        model.push(call="search", query="data")
+        model.push(say="Found results")
+        agent = create_test_agent(MyAgent, llm_client=model)
 
         result = agent.process_query("Find data")
 
-        assert_llm_called(agent._mock_llm)
-        assert "results" in result["answer"].lower()
+        assert_llm_called(model, times=2)
+        assert "results" in result["result"].lower()
 """
 
 # Assertions
@@ -55,6 +53,7 @@ from gaia.testing.mocks import (
     MockToolExecutor,
     MockVLMClient,
 )
+from gaia.testing.scripted import ScriptedLLMClient, ScriptExhausted
 
 # Re-export temp_db from database.testing for convenience
 try:
@@ -68,6 +67,8 @@ __all__ = [
     "MockLLMProvider",
     "MockVLMClient",
     "MockToolExecutor",
+    "ScriptedLLMClient",
+    "ScriptExhausted",
     # Fixtures
     "create_test_agent",
     "temp_directory",

@@ -1,0 +1,70 @@
+{
+  "_comment": "The wire `gaiacpp --engine` speaks with a host program: JSON Lines on stdin and stdout. The engine's tests and both SDKs' tests are checked against this file, so a change here is a protocol change.",
+  "protocol": 1,
+  "host_to_engine": {
+    "init": {
+      "required": ["type", "protocol", "model", "base_url"],
+      "optional": [
+        "api_key_env",
+        "system_prompt",
+        "tools",
+        "max_steps",
+        "max_output_tokens",
+        "context_size",
+        "temperature",
+        "native_tools",
+        "retries"
+      ]
+    },
+    "turn": {
+      "required": ["type", "id", "messages"],
+      "optional": ["budget"]
+    },
+    "tool_result": {
+      "required": ["type", "id"],
+      "one_of": ["result", "error"]
+    },
+    "shutdown": {
+      "required": ["type"]
+    }
+  },
+  "tool": {
+    "required": ["name"],
+    "optional": ["description", "parameters"]
+  },
+  "budget": ["model_calls", "output_tokens", "seconds"],
+  "engine_to_host": {
+    "ready": ["type", "protocol", "version"],
+    "tool_request": ["type", "id", "turn", "name", "arguments"],
+    "model_call": ["type", "turn", "step", "seconds", "usage"],
+    "final": [
+      "type",
+      "turn",
+      "status",
+      "stop_reason",
+      "text",
+      "tool_calls",
+      "usage",
+      "seconds",
+      "failure"
+    ],
+    "error": ["type", "code", "message"]
+  },
+  "tool_call": ["name", "arguments", "result", "failed"],
+  "usage": ["model_calls", "input_tokens", "cached_tokens", "output_tokens"],
+  "model_call_usage": ["input_tokens", "cached_tokens", "output_tokens"],
+  "status": ["success", "incomplete", "failed", "cancelled"],
+  "stop_reason": [
+    "answered",
+    "max_steps",
+    "model_calls",
+    "output_tokens",
+    "deadline",
+    "model_call",
+    "repeated_calls",
+    "no_answer",
+    "incomplete",
+    "cancelled"
+  ],
+  "error_code": ["bad_init", "bad_message", "bad_turn", "engine_error"]
+}

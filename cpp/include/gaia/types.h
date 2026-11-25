@@ -487,6 +487,10 @@ struct AgentConfig {
     /// for a tool-free closing answer when it runs out.
     bool stepBudgetNotices = true;
 
+    /// False leaves the prose tool list out of the system prompt when the request
+    /// carries a `tools` array, so the prompt goes out exactly as the agent wrote it.
+    bool proseToolList = true;
+
     /// "auto" (by model: isCompactModel), "full" or "compact". A compact model
     /// is offered fewer tools and no prose copy of the tool list.
     std::string featureTier = "auto";

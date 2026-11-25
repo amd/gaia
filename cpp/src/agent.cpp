@@ -499,7 +499,9 @@ std::string Agent::composeSystemPromptFor(const AgentConfig& cfg) const {
 
     // The prose list helps a full model weigh tools before calling one (Python
     // keeps it too); a compact model re-reads it every step for little gain.
-    std::string toolsDesc = willSendTools && cfg.compactFeatures() ? std::string() : tools_.formatForPrompt();
+    std::string toolsDesc = willSendTools && (cfg.compactFeatures() || !cfg.proseToolList)
+                                ? std::string()
+                                : tools_.formatForPrompt();
     if (!toolsDesc.empty()) {
         oss << "==== AVAILABLE TOOLS ====\n" << toolsDesc << "\n";
     }

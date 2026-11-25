@@ -7,9 +7,9 @@ title: "Test Utilities"
 </Info>
 
 <Note>
-**Component:** Test Utilities (MockLLMProvider, MockVLMClient, fixtures)
+**Component:** Test Utilities (ScriptedLLMClient, MockVLMClient, fixtures)
 **Module:** `gaia.testing`
-**Import:** `from gaia.testing import MockLLMProvider, MockVLMClient, create_test_agent, temp_db`
+**Import:** `from gaia.testing import ScriptedLLMClient, MockVLMClient, create_test_agent, temp_db`
 </Note>
 ---
 
@@ -229,6 +229,7 @@ class MockVLMClient:
 def create_test_agent(
     agent_class: Type,
     mock_responses: Optional[List[str]] = None,
+    llm_client: Optional[ScriptedLLMClient] = None,
     **agent_kwargs
 ):
     """
@@ -252,19 +253,16 @@ def create_test_agent(
         result = agent.process_query("Test")
         # Uses mock LLM instead of real one
     """
-    # Create mock LLM
-    mock_llm = MockLLMProvider(responses=mock_responses)
+    # A scripted model: text replies from mock_responses, or the
+    # ScriptedLLMClient passed as llm_client= when the test scripts tool calls.
+    model = llm_client or ScriptedLLMClient(mock_responses)
 
-    # Create agent with silent mode
-    agent = agent_class(silent_mode=True, **agent_kwargs)
+    # Create agent with silent mode and no Lemonade start-up
+    agent = agent_class(silent_mode=True, skip_lemonade=True, **agent_kwargs)
 
-    # Inject mock LLM
-    # Note: This requires agent to have llm_provider attribute
-    # or similar. Adjust based on actual Agent implementation.
-    if hasattr(agent, 'chat'):
-        agent.chat = mock_llm
-    elif hasattr(agent, 'llm_provider'):
-        agent.llm_provider = mock_llm
+    # Put it where the real model client sits, so process_query runs the loop
+    agent._mock_llm = model
+    agent.chat.llm_client = model
 
     return agent
 
@@ -498,7 +496,9 @@ def test_create_test_agent():
 
     assert agent is not None
     assert isinstance(agent, TestAgent)
-    # Should have mocked LLM (verify based on implementation)
+    # The scripted model sits where the real client would
+    assert agent.chat.llm_client is agent._mock_llm
+    assert agent.process_query("hi")["result"] == "Response from mock"
 ```
 
 ---
@@ -509,23 +509,21 @@ def test_create_test_agent():
 
 ```python
 import pytest
-from gaia.testing import create_test_agent, MockLLMProvider
+from gaia.testing import ScriptedLLMClient, create_test_agent
 from my_agent import MyAgent
 
 def test_agent_processes_query():
-    """Test agent with mocked LLM."""
-    agent = create_test_agent(
-        MyAgent,
-        mock_responses=[
-            '{"tool": "search", "args": {"query": "test"}}',
-            "Found results from search."
-        ]
-    )
+    """Test agent with a scripted model."""
+    model = ScriptedLLMClient()
+    model.push(call="search", query="test")
+    model.push(say="Found results from search.")
+    agent = create_test_agent(MyAgent, llm_client=model)
 
     result = agent.process_query("Find test data")
 
-    assert "answer" in result
-    # LLM mock was used instead of real API
+    assert result["status"] == "success"
+    assert result["result"] == "Found results from search."
+    assert result["tool_calls"][0]["name"] == "search"
 ```
 
 ### Example 2: Testing Database Agent
