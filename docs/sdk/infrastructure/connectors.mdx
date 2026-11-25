@@ -478,7 +478,37 @@ grant exists for (connector_id, agent_id)  AND  is_agent_active(...)
 
 Activations default to **inactive** when absent — least-privilege opt-in.
 The ledger stores explicit `true`/`false` entries; an unknown pair returns
-`is_agent_active == False`.
+`is_agent_active == False`. Deactivating stores `false` rather than removing
+the entry.
+
+### Servers you added yourself
+
+An MCP server you wrote into `mcp_servers.json` yourself, whose name is not a
+catalog connector id, is **on for the flagship (`installed:gaia`) until you
+turn it off**. Writing the entry was your opt-in, so a server set up before
+an upgrade keeps working, and a project-local `./mcp_servers.json` works
+without a second step. Other agents still need an explicit activation.
+
+| | Catalog connector (`mcp-github`, …) | Server you added |
+|---|---|---|
+| Flagship sees its tools | After you activate it | Until you deactivate it |
+| Other agents see its tools | After you activate it | After you activate it |
+| Grant needed | Yes (auto-created on activate) | No — GAIA holds no credential for it |
+| Setup form and Disconnect | Settings → Connectors | Edit `mcp_servers.json` |
+
+A server in the global `mcp_servers.json` is listed beside the catalog in
+Settings → Connectors, `gaia connectors list` (its row has `"custom": true`)
+and the TUI's `/connectors`, and is switched with the same calls:
+
+```bash
+gaia connectors activations deactivate my-server installed:gaia
+gaia connectors activations activate my-server installed:gaia
+```
+
+`is_mcp_server_active(server_id, agent_id)` in `gaia.connectors.activations`
+is the check agents use; it applies this default on top of the ledger.
+A server only in a project-local file has no off switch here: set
+`"disabled": true` on its entry instead.
 
 The flagship checks activation as `installed:gaia` in every app: the Agent
 UI, the terminal UI and `gaia -p`. Turning a connector on or off, or

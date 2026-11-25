@@ -183,14 +183,14 @@ describe("collectAll", () => {
       if (new URL(u).host === "api.npmjs.org") return ok({ downloads: 3 });
       if (new URL(u).host === "pypistats.org" && u.includes("/overall")) return ok({ data: [{ category: "without_mirrors", date: "2026-10-25", downloads: 2 }] });
       if (new URL(u).host === "pypistats.org") return ok({ data: { last_week: 4 } });
-      if (u.includes("/stargazers") || u.includes("/forks") || u.includes("/issues") || u.includes("/commits")) return ok([]);
+      if (u.includes("/stargazers") || u.includes("/forks") || u.includes("/issues") || u.includes("/comments") || u.includes("/commits")) return ok([]);
       if (u.includes("/actions/workflows/")) return ok({ workflow_runs: [] });
       if (u.includes("/stats/")) return ok([]);
       return ok({ stargazers_count: 1, forks_count: 2, open_issues_count: 3 });
     };
     await expect(collectAll(env(db), { runDays: 1, fetcher: f, now: new Date("2026-10-26T12:00:00Z") })).rejects.toThrow(/collector:releases/);
     const logs = stmts.filter((s) => s.sql.includes("collect_log")).map((s) => [s.args[1], s.args[2]]);
-    expect(logs).toEqual([["releases", 0], ["repo", 1], ["stars", 1], ["forks", 1], ["issues", 1], ["commits", 1], ["code stats", 1], ["package history", 1], ["runs", 1], ["tests", 1], ["evals", 1]]);
+    expect(logs).toEqual([["releases", 0], ["repo", 1], ["stars", 1], ["forks", 1], ["issues", 1], ["comments", 1], ["commits", 1], ["code stats", 1], ["package history", 1], ["runs", 1], ["tests", 1], ["evals", 1]]);
     // SOURCES is what `only=` is validated against; it must name exactly the sources collected.
     expect(logs.map((l) => l[0])).toEqual([...SOURCES]);
   });

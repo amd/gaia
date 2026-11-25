@@ -15,6 +15,7 @@ const {
   describeBlockedUrl,
   describeOpenFailure,
   openExternalSafely,
+  linkNoticeText,
 } = require("../../src/gaia/apps/webui/services/link-policy.cjs");
 
 const APP_URL =
@@ -84,6 +85,74 @@ describe("describeBlockedUrl", () => {
     expect(msg).toContain("file");
     expect(msg).toMatch(/http, https and mailto/);
   });
+});
+
+describe("describeBlockedUrl in the OS language", () => {
+  test("an Arabic OS gets the reason in Arabic with the URL kept left-to-right", () => {
+    const msg = describeBlockedUrl("file:///C:/Windows/System32/calc.exe", "ar-EG");
+    expect(msg).toContain("رفض GAIA فتح");
+    expect(msg).toContain("\u2068file:///C:/Windows/System32/calc.exe\u2069");
+    expect(msg).toContain("\u2068file\u2069");
+    expect(msg).not.toMatch(/refused/);
+  });
+
+  test("a URL with no scheme is labelled in the user's language", () => {
+    expect(describeBlockedUrl("not a url")).toContain("(no scheme)");
+    expect(describeBlockedUrl("not a url", "ar")).toContain("بلا بروتوكول");
+  });
+
+  test("a language without a translation falls back to English", () => {
+    expect(describeBlockedUrl("file:///x.exe", "fr-FR")).toMatch(/http, https and mailto/);
+  });
+});
+
+describe("linkNoticeText", () => {
+  test.each([
+    ["ar", "تم حظر الرابط", "لم يُفتح الرابط", "حسنًا"],
+    ["AR_sa", "تم حظر الرابط", "لم يُفتح الرابط", "حسنًا"],
+    ["en-US", "Link blocked", "Link not opened", "OK"],
+    ["de", "Link blocked", "Link not opened", "OK"],
+    ["", "Link blocked", "Link not opened", "OK"],
+    [undefined, "Link blocked", "Link not opened", "OK"],
+  ])("%s → %s / %s / %s", (locale, blocked, notOpened, ok) => {
+    const text = linkNoticeText(locale);
+    expect(text.blockedTitle).toBe(blocked);
+    expect(text.notOpenedTitle).toBe(notOpened);
+    expect(text.ok).toBe(ok);
+  });
+
+  test("every language has every string the English table has", () => {
+    const en = linkNoticeText("en");
+    const ar = linkNoticeText("ar");
+    expect(Object.keys(ar).sort()).toEqual(Object.keys(en).sort());
+    for (const key of Object.keys(en)) expect(typeof ar[key]).toBe(typeof en[key]);
+  });
+});
+
+describe("describeOpenFailure in the OS language", () => {
+  test("an Arabic OS gets the reason in Arabic with the link and OS error isolated", () => {
+    const msg = describeOpenFailure("mailto:a@b.c", new Error("No application."), "ar-EG");
+    expect(msg).toContain("تعذّر على GAIA فتح");
+    expect(msg).toContain("\u2068mailto:a@b.c\u2069");
+    expect(msg).toContain("\u2068No application\u2069");
+    expect(msg).not.toContain("..");
+    expect(msg).not.toMatch(/Check that/);
+  });
+
+  test("defaults to English", () => {
+    expect(describeOpenFailure("mailto:a@b.c", new Error("x"), "fr")).toMatch(/Check that this PC/);
+  });
+});
+
+test("main.cjs shows both link notices in the OS language and logs them in English", () => {
+  const main = require("fs")
+    .readFileSync(require("path").join(__dirname, "..", "..", "src", "gaia", "apps", "webui", "main.cjs"), "utf8")
+    .replace(/\r\n/g, "\n");
+  expect(main).not.toMatch(/warnAboutLink\("Link (blocked|not opened)"/);
+  expect(main).toMatch(/linkNoticeText\(locale\)\.blockedTitle/);
+  expect(main).toMatch(/linkNoticeText\(locale\)\.notOpenedTitle/);
+  expect(main).toMatch(/buttons: \[linkNoticeText\(locale\)\.ok\]/);
+  expect(main).toMatch(/console\.error\(`\[main\] \$\{logMessage\}`\)/);
 });
 
 describe("openExternalSafely", () => {

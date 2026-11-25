@@ -9,7 +9,7 @@
 
 import { collectEvals, EVAL_ARTIFACT_DAYS } from "./evals";
 import { collectTests } from "./tests";
-import { collectCodeStats, collectCommits, collectForks, collectItems, collectPackageHistory, collectStars } from "./history";
+import { collectCodeStats, collectComments, collectCommits, collectForks, collectItems, collectPackageHistory, collectStars } from "./history";
 
 export interface CollectEnv {
   DB: D1Database;
@@ -105,9 +105,10 @@ const MAX_JSON_BYTES = 1_000_000;
  * thousands of rows cost one statement. That keeps a nightly run to a few dozen
  * statements, far below D1's per-invocation query limit.
  */
-export function insertMany(db: D1Database, table: string, cols: string[], rows: unknown[][], verb = "INSERT OR REPLACE"): D1PreparedStatement[] {
+export function insertMany(db: D1Database, table: string, cols: string[], rows: unknown[][], verb = "INSERT OR REPLACE", upsert = ""): D1PreparedStatement[] {
   const select = cols.map((_, i) => `json_extract(value, '$[${i}]')`).join(", ");
-  const sql = `${verb} INTO ${table} (${cols.join(", ")}) SELECT ${select} FROM json_each(?)`;
+  // SQLite needs the WHERE before an ON CONFLICT clause on INSERT ... SELECT.
+  const sql = `${verb} INTO ${table} (${cols.join(", ")}) SELECT ${select} FROM json_each(?)${upsert ? ` WHERE true ${upsert}` : ""}`;
   const out: D1PreparedStatement[] = [];
   let chunk: string[] = [];
   let size = 2;
@@ -253,7 +254,7 @@ export async function collectRuns(
   return `${total} runs over ${days} day(s)`;
 }
 
-export const SOURCES = ["releases", "repo", "stars", "forks", "issues", "commits", "code stats", "package history", "runs", "tests", "evals"] as const;
+export const SOURCES = ["releases", "repo", "stars", "forks", "issues", "comments", "commits", "code stats", "package history", "runs", "tests", "evals"] as const;
 
 /** Names in `only` that are not a known source; the caller should reject them before collecting. */
 export function unknownSources(only: string[] | undefined): string[] {
@@ -274,6 +275,7 @@ export async function collectAll(
     ["stars", () => collectStars(env, f)],
     ["forks", () => collectForks(env, f)],
     ["issues", async () => collectItems(env, f, opts.fullHistory ? undefined : await sinceLastSuccess(env.DB, "issues"))],
+    ["comments", async () => collectComments(env, f, opts.fullHistory ? undefined : await sinceLastSuccess(env.DB, "comments"))],
     ["commits", async () => collectCommits(env, f, opts.fullHistory ? undefined : await sinceLastSuccess(env.DB, "commits"))],
     ["code stats", () => collectCodeStats(env, f)],
     ["package history", () => collectPackageHistory(env, f, now)],

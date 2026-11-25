@@ -62,35 +62,47 @@ func researchTopic(query string) string {
 }
 
 // withResearch is the line to send: prefixed while research mode is on,
-// unless the line already runs research or an installed skill.
+// unless the line already runs research or an installed skill. A skill
+// command typed in any case is sent with its name in lowercase.
 func (m ChatModel) withResearch(query string) string {
-	if !m.researchMode || strings.TrimSpace(query) == "" || isResearchCommand(query) || m.isSkillCommand(query) {
+	if strings.TrimSpace(query) == "" || isResearchCommand(query) {
+		return query
+	}
+	if line, ok := m.asSkillCommand(query); ok {
+		return line
+	}
+	if !m.researchMode {
 		return query
 	}
 	return researchCommand + " " + query
 }
 
 // skillCommandRE is the shape the agent reads as a skill command: /<name>
-// followed by space or the end of the line.
-var skillCommandRE = regexp.MustCompile(`^/([a-z0-9]+(?:-[a-z0-9]+)*)(?:\s|$)`)
+// followed by space or the end of the line. The agent reads lowercase names
+// only, so a match in another case is lowercased before it is sent.
+var skillCommandRE = regexp.MustCompile(`^/([a-zA-Z0-9]+(?:-[a-zA-Z0-9]+)*)(?:\s|$)`)
 
-// isSkillCommand reports whether a line starts with /<name> for an installed
-// skill. A mistyped name or a path such as /tmp/notes.txt is not one.
-func (m ChatModel) isSkillCommand(query string) bool {
-	match := skillCommandRE.FindStringSubmatch(strings.TrimLeftFunc(query, unicode.IsSpace))
+// asSkillCommand is query with its /<name> lowercased, and true, when name is
+// an installed skill in any case. A mistyped name or a path such as
+// /tmp/notes.txt is not one. Before the agent has reported its skills the
+// line is sent as typed: the agent decides, as it would with research mode off.
+func (m ChatModel) asSkillCommand(query string) (string, bool) {
+	trimmed := strings.TrimLeftFunc(query, unicode.IsSpace)
+	match := skillCommandRE.FindStringSubmatchIndex(trimmed)
 	if match == nil {
-		return false
+		return "", false
 	}
-	// Not reported yet: the agent decides, as it would with research mode off.
 	if m.skillCommands == nil {
-		return true
+		return query, true
 	}
+	name := strings.ToLower(trimmed[match[2]:match[3]])
 	for _, s := range m.skillCommands {
-		if s.Name == match[1] {
-			return true
+		if strings.ToLower(s.Name) == name {
+			lead := query[:len(query)-len(trimmed)]
+			return lead + "/" + name + trimmed[match[3]:], true
 		}
 	}
-	return false
+	return "", false
 }
 
 // runResearchCommand handles a line that starts with /research.

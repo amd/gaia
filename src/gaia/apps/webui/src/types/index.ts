@@ -166,6 +166,11 @@ export interface ConnectorRow {
     docs_url: string | null;
     configured: boolean;
     /**
+     * An MCP server the user added to ``mcp_servers.json`` themselves. It can
+     * be switched on or off, but has no setup form and is removed in that file.
+     */
+    custom?: boolean;
+    /**
      * ``false`` when the connector cannot be instantiated as configured —
      * for example, an ``oauth_pkce`` provider whose required environment
      * variables (``GAIA_GOOGLE_CLIENT_ID`` etc.) aren't set. The UI uses
@@ -197,9 +202,10 @@ export interface ConnectorRow {
     /**
      * Per-agent MCP-tool-visibility activation snapshot (issue #1005).
      * Keys are namespaced agent ids (``builtin:chat``,
-     * ``custom:<hash>:<id>``, …), values are ``true`` when the agent is
-     * explicitly activated. Absence means inactive — activations are
-     * opt-in. Populated only for ``type === 'mcp_server'`` connectors;
+     * ``custom:<hash>:<id>``, …), values are ``true`` when the agent can
+     * see the server's tools and ``false`` once turned off. Absence means
+     * inactive, except that a ``custom`` server reports ``installed:gaia``
+     * as ``true`` until turned off. Populated only for ``type === 'mcp_server'`` connectors;
      * OAuth connectors always return ``{}`` because activation writes
      * are rejected for them at the API layer.
      */

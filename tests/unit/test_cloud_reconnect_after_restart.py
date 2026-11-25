@@ -54,6 +54,11 @@ class _Lemond:
         self.registered = True
         self.key = SAVED_KEY
         self.deployed = True
+        # False while Lemonade's read of the provider's model list fails.
+        self.online = True
+        self.discovered = True
+        # The gateway's own state, when registered: None means not registered.
+        self.gateway = None
         monkeypatch.setattr(
             "gaia.llm.lemonade_embedded.pid_exists", lambda pid: pid in self.live_pids
         )
@@ -82,7 +87,17 @@ class _Lemond:
                     {
                         "name": "fireworks",
                         "runtime_key_set": bool(self.key),
-                        "models_discovered": 40 if self.key else 0,
+                        "models_discovered": (
+                            40 if self.key and self.discovered else 0
+                        ),
+                    }
+                )
+            if self.gateway is not None:
+                providers.append(
+                    {
+                        "name": "amd",
+                        "runtime_key_set": True,
+                        "models_discovered": 40 if self.gateway["discovered"] else 0,
                     }
                 )
             return _Reply(200, {"cloud": {"providers": providers}})
@@ -92,13 +107,23 @@ class _Lemond:
             self.registered = True
             return _Reply(200, {})
         assert route == "cloud/auth", route
+        if json["provider"] == "amd":
+            assert self.gateway is not None, "a token went to an unregistered gateway"
+            self.gateway["discovered"] = self.gateway["online"]
+            return _Reply(
+                200, {"models_discovered": 40 if self.gateway["online"] else 0}
+            )
         assert self.registered, "a key was handed to an unregistered provider"
         self.key = json["api_key"]
-        return _Reply(200, {"models_discovered": 40})
+        self.discovered = self.online
+        return _Reply(200, {"models_discovered": 40 if self.online else 0})
 
     def post(self, url, json=None, headers=None, timeout=None, **_):
         self.calls.append(("POST", url.rsplit("/api/v1/", 1)[1], None))
-        if not (self.registered and self.key and self.deployed):
+        if (json or {}).get("model", "").startswith("amd."):
+            if not (self.gateway and self.gateway["discovered"]):
+                return _Reply(404, {"error": {"message": "model not found"}})
+        elif not (self.registered and self.key and self.deployed and self.discovered):
             return _Reply(404, {"error": {"message": "model not found"}})
         return _Reply(
             200,
@@ -360,3 +385,134 @@ def test_the_tuis_reconnect_registers_fireworks_after_a_restart(lemond):
 
     assert resp.json() == {"authenticated": True}
     assert lemond.routes() == ["system-info", "install", "system-info", "cloud/auth"]
+
+
+# -- A keyed provider whose model list Lemonade could not read (#8397) --------
+
+
+def _started_offline(lemond):
+    """Lemonade started with no route to Fireworks: key held, no models listed."""
+    lemond.online = lemond.discovered = False
+
+
+def test_a_404_while_the_provider_is_unreachable_is_not_blamed_on_the_model(lemond):
+    _started_offline(lemond)
+
+    with pytest.raises(Exception) as caught:
+        _say(_chat())
+
+    classified = classify_lemonade_exception(caught.value)
+    assert isinstance(classified, LemonadeCloudDisconnectedError)
+    message = classified.user_message
+    assert "internet connection" in message and "Fireworks AI" in message
+    assert "send it again" in message
+    for wrong in ("deployed", "renamed", "won't help", "restarted"):
+        assert wrong not in message
+    assert lemond.routes().count("chat/completions") == 1
+
+
+def test_the_model_list_is_read_again_once_the_provider_is_back(lemond):
+    _started_offline(lemond)
+    chat = _chat()
+    with pytest.raises(Exception):
+        _say(chat)
+    lemond.calls.clear()
+
+    lemond.online = True
+    assert _say(chat) == "hi"
+
+    assert ("POST", "cloud/auth", {"provider": "fireworks", "api_key": SAVED_KEY}) in (
+        lemond.calls
+    )
+    assert lemond.routes().count("chat/completions") == 2
+    assert "install" not in lemond.routes()
+
+
+def test_an_unreachable_provider_does_not_mark_the_model_unavailable(lemond):
+    from gaia.llm.gateway import GatewayState
+
+    _started_offline(lemond)
+    with pytest.raises(Exception):
+        _say(_chat())
+
+    assert MODEL not in GatewayState.load().unavailable_models
+
+
+def test_the_users_own_server_is_not_handed_the_key_to_read_models_again(
+    lemond, monkeypatch
+):
+    _started_offline(lemond)
+    monkeypatch.setattr(
+        "gaia.llm.lemonade_launcher.gaia_runs_lemonade", lambda base_url: False
+    )
+
+    with pytest.raises(Exception) as caught:
+        _say(_chat())
+
+    assert "cloud/auth" not in lemond.routes()
+    assert isinstance(
+        classify_lemonade_exception(caught.value), LemonadeCloudDisconnectedError
+    )
+
+
+def test_the_unreachable_provider_ends_the_turn_with_the_agent_ui_fix(lemond):
+    from gaia.agents.base.agent import Agent
+    from gaia.llm.surface_hints import AGENT_UI_PROVIDER_SETTINGS, surface_wording
+
+    _started_offline(lemond)
+    with pytest.raises(Exception) as caught:
+        _say(_chat())
+
+    message = Agent._cloud_account_refusal(None, caught.value)
+    assert message and "internet connection" in message
+    assert AGENT_UI_PROVIDER_SETTINGS in surface_wording(message, "agent_ui")
+
+
+def _gateway_started_offline(lemond, monkeypatch):
+    """GAIA's Lemonade holds a gateway token but could not read its model list."""
+    lemond.gateway = {"online": False, "discovered": False}
+    monkeypatch.setattr("gaia.llm.gateway.recall_token", lambda: "kept-amd-key")
+    return LemonadeProvider(
+        model="amd.DeepSeek-V4.1-Flash", base_url=lc.resolve_lemonade_base_url()
+    )
+
+
+def test_an_unreachable_gateway_is_not_blamed_on_the_model(lemond, monkeypatch):
+    chat = _gateway_started_offline(lemond, monkeypatch)
+
+    with pytest.raises(Exception) as caught:
+        _say(chat)
+
+    message = classify_lemonade_exception(caught.value).user_message
+    assert "internet connection" in message and "AMD LLM Gateway" in message
+    for wrong in ("deployed", "renamed", "won't help", "restarted"):
+        assert wrong not in message
+
+
+def test_sending_again_recovers_once_the_gateway_is_back(lemond, monkeypatch):
+    chat = _gateway_started_offline(lemond, monkeypatch)
+    with pytest.raises(Exception):
+        _say(chat)
+    lemond.calls.clear()
+
+    lemond.gateway["online"] = True
+    assert _say(chat) == "hi"
+
+    assert ("POST", "cloud/auth") in [(m, r) for m, r, _ in lemond.calls]
+    assert lemond.routes().count("chat/completions") == 2
+
+
+def test_a_failed_model_list_reread_still_reads_as_unreachable(lemond, monkeypatch):
+    import requests
+
+    _started_offline(lemond)
+
+    def offline(*_a, **_k):
+        raise requests.ConnectionError("no route to host")
+
+    monkeypatch.setattr("gaia.llm.cloud_keys.rediscover_models", offline)
+    with pytest.raises(Exception) as caught:
+        _say(_chat())
+
+    message = classify_lemonade_exception(caught.value).user_message
+    assert "internet connection" in message and "restarted" not in message

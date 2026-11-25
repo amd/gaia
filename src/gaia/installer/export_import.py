@@ -313,7 +313,11 @@ def import_agent_bundle(bundle_path: Path) -> ImportResult:
 
     Raises:
         ValueError: On malformed bundle or security-policy violation.
+        SkillHumanOnlyError: an agent tool, not the user, is running it.
     """
+    from gaia.skills.human_only import AGENT_INSTALL_MESSAGE, require_user_terminal
+
+    require_user_terminal("gaia agent import", AGENT_INSTALL_MESSAGE)
     bundle_path = Path(bundle_path)
     agents_root = _agents_root()
     agents_root.mkdir(parents=True, exist_ok=True)
