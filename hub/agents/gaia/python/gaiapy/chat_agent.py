@@ -538,6 +538,16 @@ _USAGE_ERROR = re.compile(r"^(?:\S+\.py: error: |Error: (?:Missing|No such|Inval
 _PATH_IN_TEXT = re.compile(
     r"""(?:[A-Za-z]:[\\/]|~[\\/]|/)[^\s"'`<>|]+|["'`][A-Za-z]:[\\/][^"'`]+["'`]"""
 )
+
+
+def _with_next_step(result: Any, hint: str) -> Any:
+    """*result* with *hint* added to its ``next_step``, after any hint already there."""
+    if not isinstance(result, dict):
+        return result
+    earlier = str(result.get("next_step") or "").strip()
+    return {**result, "next_step": f"{earlier} {hint}" if earlier else hint}
+
+
 _TEXT_READS_OF_TABLES = frozenset(
     {
         "read_file",
@@ -1940,25 +1950,21 @@ class ChatAgent(
         ):
             result = {**result, "tool_docs": self._tool_docs([tool_name])}
         table = self._table_read_by_hand(tool_name, tool_args)
-        if table and isinstance(result, dict):
-            result = {
-                **result,
-                "next_step": (
-                    f"{table} is a table. For totals, averages, counts or rankings, "
-                    f"call analyze_data_file with file_path={table!r} (group_by "
-                    "and date_range narrow it): it computes them exactly. Don't "
-                    "add up rows yourself."
-                ),
-            }
+        if table:
+            result = _with_next_step(
+                result,
+                f"{table} is a table. For totals, averages, counts or rankings, "
+                f"call analyze_data_file with file_path={table!r} (group_by "
+                "and date_range narrow it): it computes them exactly. Don't "
+                "add up rows yourself.",
+            )
         repo = self._repo_the_command_missed(tool_name, tool_args, result)
         if repo:
-            result = {
-                **result,
-                "next_step": (
-                    "That ran outside the repository the user named. Run it again "
-                    f"with working_directory={repo!r}."
-                ),
-            }
+            result = _with_next_step(
+                result,
+                "That ran outside the repository the user named. Run it again "
+                f"with working_directory={repo!r}.",
+            )
         return result
 
     def _repo_the_command_missed(

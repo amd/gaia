@@ -141,49 +141,84 @@ _FETCHES = frozenset(
 #: Simple arithmetic in a request, worked out exactly: a 2B model answered
 #: 17 × 23 = 411 and 15% of 240 = 120.
 _NUM = r"(-?\d+(?:,\d{3})*(?:\.\d+)?)"
+#: (pattern, compute, ambiguous). An ambiguous sign also writes dates, ratios and
+#: sizes ("9/11", "50/50", "1920 x 1080"), so it counts only in a bare request.
 _ARITHMETIC = (
-    (re.compile(_NUM + r"\s*%\s*of\s*" + _NUM, re.I), lambda a, b: a * b / 100),
+    (re.compile(_NUM + r"\s*%\s*of\s*" + _NUM, re.I), lambda a, b: a * b / 100, False),
     (
-        re.compile(_NUM + r"\s*(?:[x×*]|times|multiplied by)\s*" + _NUM, re.I),
+        re.compile(_NUM + r"\s*(?:[×*]|times|multiplied by)\s*" + _NUM, re.I),
         lambda a, b: a * b,
+        False,
     ),
-    (re.compile(_NUM + r"\s*(?:/|÷|divided by)\s*" + _NUM, re.I), lambda a, b: a / b),
-    (re.compile(_NUM + r"\s*(?:\+|plus)\s*" + _NUM, re.I), lambda a, b: a + b),
+    (re.compile(_NUM + r"\s*x\s*" + _NUM, re.I), lambda a, b: a * b, True),
+    (
+        re.compile(_NUM + r"\s*(?:÷|divided by)\s*" + _NUM, re.I),
+        lambda a, b: a / b,
+        False,
+    ),
+    (re.compile(_NUM + r"\s*/\s*" + _NUM), lambda a, b: a / b, True),
+    (re.compile(_NUM + r"\s*(?:\+|plus)\s*" + _NUM, re.I), lambda a, b: a + b, False),
 )
 #: Only a request that asks for a result: "3 - 5 days" is a range, not a sum.
 _ASKS_TO_COMPUTE = re.compile(
     r"\?|=|\b(?:what(?:'s| is)|calculate|compute|how (?:much|many)|work out)\b", re.I
 )
+#: Another operation or operand next to the one found: "2 + 3 + 4", "10 + 5 * 2".
+_MORE_MATH = re.compile(r"[-+*/×÷x^%]\s*\d|\d\s*[-+*/×÷x^%]|\b(?:plus|minus|times)\b")
+#: Words a bare request may hold besides its one calculation.
+_BARE_REQUEST_WORDS = frozenset(
+    "what what's is calculate compute work out please the result answer of "
+    "equals how much as a decimal".split()
+)
+_ANSWER_NUMBER = re.compile(r"-?\d+(?:,\d{3})*(?:\.\d+)?")
 
 
-def _number_forms(value: float) -> List[str]:
-    """How *value* may appear in an answer: 391, 391.0, 1,234, 0.5."""
-    if abs(value - round(value)) < 1e-9:
-        whole = int(round(value))
-        return [str(whole), f"{whole:,}", f"{whole}.0"]
-    return [f"{value:g}", f"{value:.2f}".rstrip("0").rstrip("."), f"{value:,.2f}"]
+def _says_value(answer: str, value: float) -> bool:
+    """True when *answer* gives *value*, exactly or rounded or cut to the
+    decimals it shows (0.333 and 0.33 for 1/3; 391 only for 17 × 23)."""
+    whole = abs(value - round(value)) < 1e-9
+    for found in _ANSWER_NUMBER.finditer(answer):
+        number = float(found.group(0).replace(",", ""))
+        decimals = len(found.group(0).partition(".")[2])
+        if whole and decimals == 0:
+            if number == round(value):
+                return True
+        elif abs(number - value) < 10.0**-decimals:
+            return True
+    return False
 
 
 def _wrong_arithmetic(request: str, answer: str) -> str:
-    """The correction for one simple calculation the answer got wrong, or ""."""
+    """The correction for the one simple calculation a request asks for, when the
+    answer got it wrong, or "". Requests with more than one operation are left
+    alone: only the first two operands would be checked."""
     if not answer or len(request) > 200 or not _ASKS_TO_COMPUTE.search(request):
         return ""
-    for pattern, compute in _ARITHMETIC:
-        for match in pattern.finditer(request):
-            a, b = (float(g.replace(",", "")) for g in match.groups())
-            try:
-                value = compute(a, b)
-            except ZeroDivisionError:
-                continue
-            forms = _number_forms(value)
-            if not any(
-                re.search(rf"(?<![\d.]){re.escape(f)}(?![\d])", answer) for f in forms
-            ):
-                return (
-                    f"{match.group(0).strip()} is {forms[1]}, which the answer "
-                    "does not say; give that exact result."
-                )
-    return ""
+    found = [
+        (match, compute, ambiguous)
+        for pattern, compute, ambiguous in _ARITHMETIC
+        for match in pattern.finditer(request)
+    ]
+    if len(found) != 1:
+        return ""
+    match, compute, ambiguous = found[0]
+    rest = request[: match.start()] + " " + request[match.end() :]
+    if _MORE_MATH.search(rest):
+        return ""
+    if ambiguous and set(re.findall(r"[a-z']+", rest.lower())) - _BARE_REQUEST_WORDS:
+        return ""
+    a, b = (float(g.replace(",", "")) for g in match.groups())
+    try:
+        value = compute(a, b)
+    except ZeroDivisionError:
+        return ""
+    if _says_value(answer, value):
+        return ""
+    shown = f"{value:,.0f}" if abs(value - round(value)) < 1e-9 else f"{value:,.6g}"
+    return (
+        f"{match.group(0).strip()} is {shown}, which the answer does not say; "
+        "give that exact result."
+    )
 
 
 #: "load the rss-digest skill", "use the research-report skill".
@@ -233,6 +268,36 @@ _QUESTION = re.compile(
     r"can|could|list|summari[sz]e|explain|compare|tell me|according to)\b",
     re.IGNORECASE,
 )
+#: Words that point a question at the attached documents, not general knowledge.
+_DOCUMENT_WORDS = re.compile(
+    r"\b(?:documents?|docs?|files?|attach(?:ed|ment)s?|pdfs?|papers?|reports?|"
+    r"datasheets?|spreadsheets?|sheets?|manuals?|specs?|specifications?|rfcs?|"
+    r"contracts?|articles?|slides?|deck|memo|notes|transcripts?|sections?|"
+    r"chapters?|figures?|does\b[^?.]{0,60}\bsay|"
+    r"(?:it|this|that) (?:says?|said|mentions?|states?)|does it say|"
+    r"according to|in (?:it|this|that|there)|the (?:text|page|section|chapter|table))\b",
+    re.IGNORECASE,
+)
+
+
+_COMMON_NAME_WORDS = frozenset("the and for with from new old copy draft final".split())
+
+
+def _points_at_documents(request: str, documents) -> bool:
+    """True when *request* refers to the attached documents: a word like "the
+    file" or "it says", or a document's name ("rfc7231", "pi4 datasheet")."""
+    if _DOCUMENT_WORDS.search(request):
+        return True
+    words = set(re.findall(r"[a-z0-9]+", request.lower()))
+    for document in documents:
+        stem = re.findall(r"[a-z0-9]+", Path(document).stem.lower())
+        if any(
+            len(part) >= 3 and part not in _COMMON_NAME_WORDS and part in words
+            for part in stem
+        ):
+            return True
+    return False
+
 
 # Rendered in a code repository for a model that gets the full project context
 # (gaia.project_context). General software practice, not any one repo's rules:
@@ -797,11 +862,13 @@ class GaiaAgent(
 
     def required_calls(self):
         calls = list(super().required_calls())
-        if "capture_skill" not in self._tools_registry:
-            return calls
         called = {r.get("tool") for r in self._turn_tool_executions}
         request = str(getattr(self, "_original_user_input", None) or "")
-        path = uncaptured_skill_path(request, called)
+        path = (
+            uncaptured_skill_path(request, called)
+            if "capture_skill" in self._tools_registry
+            else ""
+        )
         if path:
             # capture_skill still asks the user before it copies anything.
             calls.append(("capture_skill", {"source": path}))
@@ -856,6 +923,8 @@ class GaiaAgent(
         if not documents or not _QUESTION.search(request or ""):
             return []
         if called & _READS_DOCUMENTS:
+            return []
+        if not _points_at_documents(request, documents):
             return []
         return documents
 

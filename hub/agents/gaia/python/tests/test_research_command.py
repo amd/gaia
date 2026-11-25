@@ -403,6 +403,9 @@ def test_a_question_about_an_attached_document_must_read_it():
         ("What is the capital of France?", set()),  # nothing attached
         ("Thanks, that helps.", {"C:/docs/a.pdf"}),  # not a question
         ("Index this folder for me.", {"C:/docs/a.pdf"}),
+        # Attached, but the question is about something else.
+        ("What is the capital of France?", {"C:/docs/rfc7231.txt"}),
+        ("How do I boil an egg?", {"C:/docs/q3_report.pdf"}),
     ],
 )
 def test_no_document_check_where_it_does_not_apply(request_text, docs):
@@ -508,9 +511,17 @@ def test_no_skill_check_for_a_skill_that_is_not_installed(request_text):
         ("What's 15% of 240?", "36", False),
         ("How much is 1,200 / 3?", "Each gets $400.", False),
         ("what is 2.5 x 4?", "10", False),
+        ("What is 1/3 as a decimal?", "0.333", False),
+        ("What is 1/3 as a decimal?", "0.5", True),
+        # More than one operation: only the first two operands would be checked.
+        ("What is 2 + 3 + 4?", "9", False),
+        ("What is 10 + 5 * 2?", "20", False),
         # Not a calculation request.
         ("Remind me in 3 - 5 days", "ok", False),
         ("call me at 555-1234", "ok", False),
+        ("What happened on 9/11?", "Attacks on the US in 2001.", False),
+        ("Is a 50/50 split fair?", "Yes.", False),
+        ("What is 1920 x 1080 resolution called?", "Full HD.", False),
     ],
 )
 def test_simple_arithmetic_is_checked(request_text, answer, wrong):
@@ -535,3 +546,47 @@ def test_a_web_address_nothing_fetched_is_fetched_as_given():
         assert ("fetch_page", {"url": url}) in agent.required_calls()
         agent._turn_tool_executions = [{"tool": "fetch_page"}]
         assert not [p for p in agent.answer_problems("At 9pm.") if "web address" in p]
+
+
+def test_a_question_that_names_a_document_must_read_it():
+    with _agent() as (agent, _seen):
+        agent.indexed_files = {"C:/docs/pi4_datasheet.pdf"}
+        agent._original_user_input = "What GPIO voltage does the Pi4 use?"
+        agent._turn_tool_executions = []
+        (problem,) = agent.answer_problems("3.3 V.")
+        assert problem.startswith("The answer did not read the documents")
+
+
+def test_hints_keep_an_earlier_next_step_and_skip_text_results():
+    from gaiapy.chat_agent import _with_next_step
+
+    assert _with_next_step("not a git repository", "Run it again.") == (
+        "not a git repository"
+    )
+    assert _with_next_step({"next_step": "Check the path."}, "Run it again.") == {
+        "next_step": "Check the path. Run it again."
+    }
+    assert _with_next_step({"ok": True}, "Run it again.") == {
+        "ok": True,
+        "next_step": "Run it again.",
+    }
+
+
+@pytest.mark.parametrize(
+    "request_text",
+    [
+        "What does the policy say about refunds?",
+        "According to it, when is the deadline?",
+        "Summarize the attached file.",
+    ],
+)
+def test_a_question_that_points_at_the_document_must_read_it(request_text):
+    with _agent() as (agent, _seen):
+        agent.indexed_files = {"C:/docs/q3_report.pdf"}
+        agent._original_user_input = request_text
+        agent._turn_tool_executions = []
+        assert [
+            p
+            for p in agent.answer_problems("Sure.")
+            if p.startswith("The answer did not read the documents")
+        ]
