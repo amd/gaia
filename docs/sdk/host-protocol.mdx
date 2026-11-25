@@ -1,0 +1,123 @@
+---
+title: "Engine Protocol"
+description: "The JSON Lines wire between gaiacpp --engine and a host program"
+icon: "plug"
+---
+
+<Warning>
+**Beta.** `gaiacpp --engine` runs the agent loop for another program. It has unit
+tests against a scripted model server, and has not yet been evaluated on a hosted
+model. The protocol version is `1` and may change before it is called stable.
+</Warning>
+
+`gaiacpp --engine` is the agent loop with nothing of its own. The host sends the
+system prompt, the tools, the conversation and the limits; the engine calls the model,
+asks the host to run each tool, and reports how the turn ended. It has no file, shell
+or web tools, reads no settings file, keeps no memory and asks no approval.
+
+Most hosts should use an SDK instead of this page: the SDKs start the binary and speak
+this protocol for you.
+
+## The exchange
+
+One JSON object per line. The host writes to the engine's stdin and reads its stdout.
+Anything the engine logs goes to stderr.
+
+```text
+host   -> {"type":"init","protocol":1,"model":"...","base_url":"...","tools":[...]}
+engine -> {"type":"ready","protocol":1,"version":"0.27.0"}
+
+host   -> {"type":"turn","id":"t1","messages":[{"role":"user","content":"Where is order 1001?"}]}
+engine -> {"type":"model_call","turn":"t1","step":1,"seconds":0.8,"usage":{...}}
+engine -> {"type":"tool_request","id":"t1:1","turn":"t1","name":"get_order","arguments":{"order_number":"1001"}}
+host   -> {"type":"tool_result","id":"t1:1","result":{"status":"shipped"}}
+engine -> {"type":"model_call","turn":"t1","step":2,"seconds":0.6,"usage":{...}}
+engine -> {"type":"final","turn":"t1","status":"success","stop_reason":"answered","text":"It has shipped.",...}
+
+host   -> {"type":"shutdown"}
+```
+
+## Host to engine
+
+### `init`
+
+Sent once, first.
+
+| Field | Required | Meaning |
+|---|---|---|
+| `protocol` | yes | `1` |
+| `model` | yes | The model id sent to the provider, unchanged |
+| `base_url` | yes | An OpenAI-compatible endpoint, such as `https://api.example.com/v1` |
+| `api_key_env` | no | **Name** of an environment variable of the engine process that holds the key. The key itself never goes on the wire; `api_key` is refused |
+| `system_prompt` | no | Sent to the model exactly as written |
+| `tools` | no | Each `{"name", "description", "parameters"}`, where `parameters` is a JSON Schema object |
+| `max_steps` | no | Tool-using steps a turn may take (default 20) |
+| `max_output_tokens` | no | Cap on each model reply (default 4096) |
+| `context_size` | no | The model's window in tokens (default 32768) |
+| `temperature` | no | Default 0.2 |
+| `native_tools` | no | `true` (default) sends tools as `tools=`; `false` describes them in the prompt |
+| `retries` | no | Retries of a failed model request (default 0) |
+
+### `turn`
+
+| Field | Required | Meaning |
+|---|---|---|
+| `id` | yes | Your id for the turn; echoed on every event |
+| `messages` | yes | The conversation so far as `{"role": "user" \| "assistant", "content": "..."}`, ending with the user's new message. The engine keeps no history between turns |
+| `budget` | no | `{"model_calls", "output_tokens", "seconds"}`; any subset |
+
+### `tool_result`
+
+Answer every `tool_request` before sending anything else.
+
+| Field | Meaning |
+|---|---|
+| `id` | The `id` of the `tool_request` |
+| `result` | What the tool returned, any JSON value |
+| `error` | Instead of `result`: a string, when the tool itself broke |
+
+A tool that ran and said no should send a `result`, such as
+`{"status": "refused", "message": "..."}`. `error` is for a call that failed.
+
+### `shutdown`
+
+Ends the process. Closing stdin does the same.
+
+## Engine to host
+
+| Event | Fields |
+|---|---|
+| `ready` | `protocol`, `version` |
+| `tool_request` | `id`, `turn`, `name`, `arguments` |
+| `model_call` | `turn`, `step`, `seconds`, `usage` (`input_tokens`, `cached_tokens`, `output_tokens`) — one per model request |
+| `final` | `turn`, `status`, `stop_reason`, `text`, `tool_calls`, `usage`, `seconds`, `failure` — exactly one per turn |
+| `error` | `code`, `message` |
+
+### `final`
+
+| `status` | `stop_reason` | Meaning |
+|---|---|---|
+| `success` | `answered` | `text` is the model's answer |
+| `incomplete` | `max_steps` | The step limit ran out |
+| `incomplete` | `model_calls`, `output_tokens`, `deadline` | A `budget` limit was reached. Nothing more was sent to the model, and `text` is empty |
+| `incomplete` | `repeated_calls`, `no_answer` | The loop stopped itself |
+| `failed` | `model_call` | A model request failed; `failure` is `{"kind": "model_call", "message": "..."}` |
+
+Show `text` to an end user only when `status` is `success`.
+
+`tool_calls` lists every call the host answered: `name`, `arguments`, `result`,
+`failed`. `usage` adds `model_calls` to the three token counts.
+
+A budget is checked when the model asks for a tool, before the tool runs. An answer
+that arrives on the last allowed request is still an answer.
+
+### `error`
+
+| `code` | When | What happens next |
+|---|---|---|
+| `bad_init` | `init` was missing, malformed or the wrong version | The engine exits with code 2 |
+| `bad_turn` | A `turn` could not be run as sent | The engine keeps serving |
+| `bad_message` | A line was not a JSON object with a `type`, or arrived out of order | The engine keeps serving |
+| `engine_error` | The engine itself failed | The engine keeps serving |
+
+The contract is pinned by `tests/fixtures/stdio/gaia_host_wire.json`.

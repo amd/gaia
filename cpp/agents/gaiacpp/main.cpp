@@ -7,6 +7,7 @@
 //   gaiacpp -p "prompt" [--output-format json]   One headless run (prompt from stdin when omitted)
 //   gaiacpp serve [--host H] [--port N]      OpenAI-compatible server (for Lemonade / apps)
 //   gaiacpp --stdio                          The GAIA terminal UI's agent child (JSON Lines)
+//   gaiacpp --engine                         The loop for another program: its prompt and tools
 
 #include <atomic>
 #include <chrono>
@@ -33,6 +34,7 @@
 
 #include "gaia_agent.h"
 #include "sidecar.h"
+#include "host_server.h"
 #include "stdio_server.h"
 
 #ifdef _WIN32
@@ -90,7 +92,7 @@ double selfPeakRssMb() {
 constexpr const char* kFireworksUrl = "https://api.fireworks.ai/inference/v1";
 
 struct Cli {
-    enum class Mode { Interactive, Print, Serve, Mcp, Stdio } mode = Mode::Interactive;
+    enum class Mode { Interactive, Print, Serve, Mcp, Stdio, Engine } mode = Mode::Interactive;
     std::optional<std::string> prompt;
     std::string promptFile;
     std::string outputFormat = "text";
@@ -140,6 +142,9 @@ void printUsage() {
         "                                        for another program's agent to call\n"
         "  gaiacpp --stdio [options]            Agent child of the GAIA terminal UI:\n"
         "                                        queries in, JSON Lines events out\n"
+        "  gaiacpp --engine                     The agent loop for another program (beta):\n"
+        "                                        it sends the prompt, tools and history as\n"
+        "                                        JSON Lines; no other option applies\n"
         "  gaiacpp skills list|install DIR|NAME[@VER] [--allow-experimental]|remove NAME\n"
         "                                        Manage installed skills (hub or folder)\n"
         "  gaiacpp models list|pull NAME [--checkpoint C --recipe R]\n"
@@ -280,6 +285,7 @@ Cli parseArgs(int argc, char** argv) {
         }
         else if (a == "--mcp") setMode(Cli::Mode::Mcp, a);
         else if (a == "--stdio") setMode(Cli::Mode::Stdio, a);
+        else if (a == "--engine") setMode(Cli::Mode::Engine, a);
         else if (a == "--accept-edits") cli.acceptEdits = true;
         else if (a == "--dev") cli.dev = true;
         else if (a == "--use-claude" || a == "--claude-model") {
@@ -688,6 +694,16 @@ int runStdio(const Cli& cli) {
     }
 }
 
+int runEngine() {
+#ifndef _WIN32
+    std::signal(SIGPIPE, SIG_IGN);
+#endif
+    // stdout is the wire; anything else printed goes to stderr.
+    std::ostream wire(std::cout.rdbuf());
+    std::cout.rdbuf(std::cerr.rdbuf());
+    return gaia::runHostServer(std::cin, wire, gaia::HostOptions{GAIACPP_VERSION});
+}
+
 int runPrint(const Cli& cli) {
     std::string prompt;
     if (cli.prompt) prompt = *cli.prompt;
@@ -1041,6 +1057,7 @@ int main(int argc, char** argv) {
             case Cli::Mode::Serve: return runServe(cli);
             case Cli::Mode::Mcp: return runMcp(cli);
             case Cli::Mode::Stdio: return runStdio(cli);
+            case Cli::Mode::Engine: return runEngine();
             case Cli::Mode::Interactive: return runInteractive(cli);
         }
     } catch (const std::exception& e) {
