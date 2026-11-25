@@ -769,7 +769,7 @@ TheRock's upstream fix — are only read afterwards.
 
 ### The gate
 
-Expectations live in `eval/tasks/expectations/<model>.<suite>.json`. Each file holds two things:
+Expectations go in `eval/tasks/expectations/<model>.<suite>.json`; none are committed yet. Each file holds two things:
 
 - **Main's measured results**, overall (`measured`) and per task (`tasks`), with the commit and runner they came from. The report puts them beside the current run, so every PR shows main and itself side by side.
 - **The limits** the gate enforces. They are tied to the model, the suite and the judge model, because a different judge grades on a different scale.

@@ -44,7 +44,7 @@ Before filing, follow CLAUDE.md "Filing issues": search open *and* closed issues
 - [ ] <test added / coverage target>
 
 ## Pattern to follow
-Reference existing: `hub/agents/<sibling>/python/gaia_agent_<sibling>/agent.py`
+Reference existing: `hub/agents/gaia/python/gaiapy/agent.py`, or the scaffold in `tests/fixtures/agents/hello-world/`
 
 ## Out of scope
 - <thing the agent should not touch>
