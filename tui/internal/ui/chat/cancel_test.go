@@ -240,7 +240,7 @@ func TestSecondCancelThenResendDoesNotQuitTheApp(t *testing.T) {
 	updated, _ := m.Update(sendQueryMsg{query: "triage my inbox"})
 	m = updated.(ChatModel)
 	ch1 := make(chan interface{})
-	updated, _ = m.Update(channelReadyMsg{ch: ch1})
+	updated, _ = m.Update(channelReadyMsg{ch: ch1, turnSeq: m.turnSeq})
 	m = updated.(ChatModel)
 
 	updated, cmd := m.handleKey(tea.KeyMsg{Type: tea.KeyEsc})
@@ -404,7 +404,7 @@ func TestSecondCtrlCThenResendDoesNotQuitTheApp(t *testing.T) {
 	updated, _ := m.Update(sendQueryMsg{query: "triage my inbox"})
 	m = updated.(ChatModel)
 	ch1 := make(chan interface{})
-	updated, _ = m.Update(channelReadyMsg{ch: ch1})
+	updated, _ = m.Update(channelReadyMsg{ch: ch1, turnSeq: m.turnSeq})
 	m = updated.(ChatModel)
 
 	updated, cmd := m.handleKey(tea.KeyMsg{Type: tea.KeyCtrlC})

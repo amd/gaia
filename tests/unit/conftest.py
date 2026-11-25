@@ -111,6 +111,8 @@ def mock_home(tmp_path, monkeypatch):
     monkeypatch.setenv("USERPROFILE", str(tmp_path))
     monkeypatch.setattr(Path, "home", staticmethod(lambda: tmp_path))
     monkeypatch.setattr(os.path, "expanduser", fake_expanduser)
+    monkeypatch.delenv("GAIA_HOME", raising=False)
+    monkeypatch.delenv("GAIA_CONFIG_DIR", raising=False)
     return tmp_path
 
 
@@ -314,8 +316,9 @@ def _session_gaia_home(tmp_path_factory):
     """Keep ``gaia_home()`` -- edit backups, the audit log, databases -- off the
     developer's real ``~/.gaia``.
 
-    Only the ``~/.gaia`` fallback moves. GAIA_HOME and GAIA_CONFIG_DIR still win,
-    and a test that patches ``Path.home`` or sets HOME/USERPROFILE still gets
+    Only the ``~/.gaia`` fallback moves. GAIA_HOME and GAIA_CONFIG_DIR still win
+    unless they point into the real ``~/.gaia``, which is dropped for the session.
+    A test that patches ``Path.home`` or sets HOME/USERPROFILE still gets
     ``<that home>/.gaia``: setting GAIA_HOME here would override both.
     """
     isolated = tmp_path_factory.mktemp("home") / ".gaia"
@@ -326,6 +329,12 @@ def _session_gaia_home(tmp_path_factory):
 
     with pytest.MonkeyPatch.context() as mp:
         _patch_default_gaia_home(mp, default_gaia_home)
+        for env_var in ("GAIA_HOME", "GAIA_CONFIG_DIR"):
+            raw = os.environ.get(env_var, "").strip()
+            if raw:
+                resolved = os.path.expandvars(os.path.expanduser(raw))
+                if _in_real_gaia_home(resolved):
+                    mp.delenv(env_var, raising=False)
         yield default_gaia_home
 
 

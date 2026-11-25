@@ -126,6 +126,8 @@ SENSITIVE_FILE_NAMES: Set[str] = {
     "keystore.jks",
     ".npmrc",
     ".pypirc",
+    # gaia.ui.api_token.TOKEN_FILE_NAME: the Agent UI's API token.
+    "agent-ui-token",
 }
 
 # Sensitive file extensions

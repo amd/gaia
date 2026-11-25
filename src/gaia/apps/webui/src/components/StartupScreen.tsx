@@ -37,8 +37,11 @@ export function StartupFailed({ error, onCheckAgain }: { error: string; onCheckA
     const lifecycle = useBackendStore((s) => s.lifecycle);
     const restart = useBackendStore((s) => s.restart);
     const restartError = useBackendStore((s) => s.restartError);
-    // The desktop app can only restart a backend it has given up on.
-    const canRestart = lifecycle?.status === 'stopped' || lifecycle?.status === 'restarting';
+    // The desktop app can restart a backend it has given up on, or one still
+    // reported running: this screen only shows once the backend never
+    // answered, so a running backend here is a hung one, and Restart GAIA
+    // stops it before starting a fresh one.
+    const canRestart = lifecycle?.status === 'stopped' || lifecycle?.status === 'restarting' || lifecycle?.status === 'running';
     const restarting = lifecycle?.status === 'restarting';
     const reasons = [...new Set([restartError, lifecycle?.lastError, error].filter((r): r is string => !!r))];
     return (

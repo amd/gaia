@@ -4,7 +4,8 @@
 /**
  * Restarts GAIA's backend when it exits on its own: after a growing wait,
  * at most `maxRestarts` times in `windowMs`, then it stops and waits for the
- * user's Restart GAIA (restartNow). No Electron imports, so it unit-tests.
+ * user's Restart GAIA (restartNow), which also restarts a backend still
+ * reported running but hung. No Electron imports, so it unit-tests.
  *
  * State, as sent to the renderer:
  *   status        "running" | "restarting" | "stopped"
@@ -134,7 +135,9 @@ function createBackendSupervisor({
       return schedule({ lastExit: { code, signal } });
     },
 
-    /** The user's Restart GAIA: start now, with a fresh budget. */
+    /** The user's Restart GAIA: start now, with a fresh budget. Also restarts
+     * a backend still reported "running": that is a hung backend the startup
+     * screen offers Restart for, and start() stops the old process first. */
     restartNow() {
       if (stopped || starting) return;
       if (timer) {
@@ -142,8 +145,10 @@ function createBackendSupervisor({
         timer = null;
       }
       history = [];
-      if (state.status === "running") return;
-      emit({ status: "restarting", attempt: 1 });
+      // A restart from running starts a new outage: stamp it so the banner's
+      // timer counts from here, as the crash path does. From stopped, the
+      // outage began when the backend gave up, so keep that time.
+      emit({ status: "restarting", attempt: 1, ...(state.status === "running" ? { since: now() } : {}) });
       attemptStart();
     },
 
