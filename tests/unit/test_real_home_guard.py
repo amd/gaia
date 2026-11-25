@@ -7,19 +7,25 @@ from __future__ import annotations
 import os
 import subprocess
 import sys
+import tempfile
 import textwrap
+import types
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
+from tests.unit import real_home_guard as real_home_guard_module
 from tests.unit.real_home_guard import (
     ALLOW_ENV,
     ENFORCE_ENV,
     FAIL,
     SKIP,
     WARN,
+    account_home,
     changes,
     guard_mode,
+    is_within,
     list_home,
     settle,
 )
@@ -191,6 +197,199 @@ def test_a_listing_cut_short_still_reports_a_changed_file(tmp_path):
     found = changes(before, list_home(gaia, max_entries=5))
     assert "changed config.json" in found
     assert not [line for line in found if line.startswith(("created", "removed"))]
+
+
+def test_on_windows_a_missing_registry_value_does_not_trust_the_overridden_home(
+    monkeypatch, tmp_path
+):
+    """#9021: on Windows, if the registry cannot be read, the (possibly
+    tampered) USERPROFILE is not trusted and no account home is returned."""
+    fake = types.ModuleType("winreg")
+    fake.HKEY_CURRENT_USER = 0x80000001
+    fake.OpenKey = lambda *a, **k: (_ for _ in ()).throw(OSError("no"))
+    fake.QueryValueEx = lambda *a, **k: (_ for _ in ()).throw(OSError("no"))
+    monkeypatch.setitem(sys.modules, "winreg", fake)
+    monkeypatch.setattr(
+        real_home_guard_module,
+        "os",
+        SimpleNamespace(name="nt", environ=os.environ, getuid=lambda: 0),
+    )
+    try:
+        import pwd
+
+        monkeypatch.setattr(
+            pwd, "getpwuid", lambda *a, **k: (_ for _ in ()).throw(OSError("no"))
+        )
+    except ImportError:
+        pass
+    monkeypatch.setenv("USERPROFILE", str(tmp_path))
+
+    assert real_home_guard_module.account_home() is None
+
+
+def test_is_within_still_catches_a_protected_path_when_realpath_is_broken(monkeypatch):
+    """#9021: a broken realpath must not silently allow a write into the
+    protected home; the normalised path is still checked."""
+
+    def _broken(_path, *_args, **_kwargs):
+        raise OSError("broken")
+
+    monkeypatch.setattr(os.path, "realpath", _broken)
+    home = account_home()
+    assert home is not None
+    assert is_within(home / ".gaia" / "cache" / "x", home / ".gaia") is True
+    assert is_within(Path(tempfile.gettempdir()) / "scratch", home / ".gaia") is False
+
+
+def test_is_within_refuses_a_symlink_alias_when_realpath_is_broken(
+    monkeypatch, tmp_path
+):
+    """#9021: when realpath cannot be resolved, a symlink that aliases the
+    protected home must not slip through the lexical fallback."""
+    home = account_home()
+    assert home is not None
+    protected = home / ".gaia"
+    link = tmp_path / "alias"
+    try:
+        link.symlink_to(protected, target_is_directory=True)
+    except (OSError, NotImplementedError):
+        pytest.skip("symlinks are not available on this filesystem")
+
+    def _broken(_path, *_args, **_kwargs):
+        raise OSError("broken")
+
+    monkeypatch.setattr(os.path, "realpath", _broken)
+    assert is_within(link / "cache" / "x", protected) is True
+    # A plain (non-symlink) path under the temp folder is still allowed.
+    assert is_within(tmp_path / "scratch", protected) is False
+
+
+def test_is_within_refuses_a_relative_path_inside_the_protected_home(monkeypatch):
+    """#9021: a relative target resolved against a working directory inside the
+    protected home must still be caught when realpath() fails."""
+    home = account_home()
+    assert home is not None
+    protected = home / ".gaia"
+    if not protected.is_dir():
+        pytest.skip("the real GAIA home is not present on this machine")
+    monkeypatch.chdir(protected)
+
+    def _broken(_path, *_args, **_kwargs):
+        raise OSError("broken")
+
+    monkeypatch.setattr(os.path, "realpath", _broken)
+    assert is_within("cache/x", protected) is True
+
+
+def test_is_within_refuses_when_the_root_is_a_symlink_alias(monkeypatch, tmp_path):
+    """#9021: when realpath() fails, a root that is a symlink alias to the
+    protected home must not slip through the lexical fallback."""
+    home = account_home()
+    assert home is not None
+    protected = home / ".gaia"
+    if not protected.is_dir():
+        pytest.skip("the real GAIA home is not present on this machine")
+    alias = tmp_path / "gaia-alias"
+    try:
+        alias.symlink_to(protected, target_is_directory=True)
+    except (OSError, NotImplementedError):
+        pytest.skip("symlinks are not available on this filesystem")
+
+    def _broken(_path, *_args, **_kwargs):
+        raise OSError("broken")
+
+    monkeypatch.setattr(os.path, "realpath", _broken)
+    # A path under the real root, compared against the alias root.
+    assert is_within(protected / "cache" / "x", alias) is True
+
+
+def test_is_within_refuses_when_an_ancestor_cannot_be_statted(monkeypatch, tmp_path):
+    """#9021: an ancestor that cannot be stat()ed is not treated as having no
+    symlink; the guard refuses rather than allowing the write."""
+    if not hasattr(os, "geteuid") or os.geteuid() == 0:
+        pytest.skip("permission checks are bypassed when running as root")
+
+    parent = tmp_path / "locked"
+    parent.mkdir()
+    child = parent / "child" / "x"
+    parent.chmod(0)
+    try:
+
+        def _broken(_path, *_args, **_kwargs):
+            raise OSError("broken")
+
+        monkeypatch.setattr(os.path, "realpath", _broken)
+        home = account_home()
+        assert home is not None
+        protected = home / ".gaia"
+        assert is_within(child, protected) is True
+    finally:
+        parent.chmod(0o755)
+
+
+def test_a_missing_account_home_fails_closed(monkeypatch):
+    """#9021: when the real account home cannot be identified on a temporary
+    run, the guard refuses rather than allowing the write."""
+    import tests.unit.conftest as unit_conftest
+
+    monkeypatch.setattr(unit_conftest, "_RUN_HOME_IS_TEMPORARY", True)
+    monkeypatch.setattr(unit_conftest, "account_home", lambda: None)
+    assert unit_conftest._in_real_gaia_home(Path("/tmp/anything")) is True
+
+
+class _FakeWinregKey:
+    def __init__(self, values):
+        self.values = values
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *args):
+        return False
+
+    def QueryValueEx(self, name, _index):
+        if name in self.values:
+            return self.values[name], 1
+        raise KeyError(name)
+
+
+def _fake_winreg_module(profile_image_path) -> types.ModuleType:
+    module = types.ModuleType("winreg")
+    module.HKEY_CURRENT_USER = 0x80000001
+    module.OpenKey = lambda root, subkey: _FakeWinregKey(
+        {"USERPROFILE": str(profile_image_path)}
+    )
+    module.QueryValueEx = lambda key, name, index: key.QueryValueEx(name, index)
+    return module
+
+
+def test_the_windows_account_home_is_the_profile_list_not_the_overridden_home(
+    monkeypatch, tmp_path
+):
+    """#9021: on Windows the account home comes from the profile list, not from a
+    ``USERPROFILE`` the test run overwrote with a temporary home."""
+    fake_winreg = _fake_winreg_module(tmp_path / "the-account")
+    monkeypatch.setitem(sys.modules, "winreg", fake_winreg)
+    monkeypatch.setattr(
+        real_home_guard_module,
+        "os",
+        SimpleNamespace(name="nt", environ=os.environ, getuid=lambda: 0),
+    )
+    try:
+        import pwd
+
+        monkeypatch.setattr(
+            pwd,
+            "getpwuid",
+            lambda *args, **kwargs: (_ for _ in ()).throw(OSError("no")),
+        )
+    except ImportError:
+        pass
+
+    monkeypatch.setenv("USERPROFILE", str(tmp_path))
+    monkeypatch.setenv("HOME", str(tmp_path))
+
+    assert real_home_guard_module.account_home() == tmp_path / "the-account"
 
 
 def test_a_few_thousand_files_are_listed_whole(tmp_path):

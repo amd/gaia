@@ -22,6 +22,8 @@ loads it into a pytest session of its own.
 from __future__ import annotations
 
 import os
+import stat
+import tempfile
 import warnings
 from pathlib import Path
 from typing import Dict, List, Mapping, Optional, Tuple
@@ -68,6 +70,124 @@ class Listing:
 
 def real_gaia_home() -> Path:
     return Path.home() / ".gaia"
+
+
+# Only these well-known system symlinks are treated as benign: an unexpected
+# symlink in a home or temp ancestor must not be trusted automatically when
+# realpath() cannot be resolved.
+_BENIGN_SYSTEM_SYMLINKS = frozenset(
+    {
+        "/var",
+        "/tmp",
+        "/etc",
+        "/private/var",
+        "/private/tmp",
+        "/private/etc",
+    }
+)
+
+
+def _is_benign_symlink(path) -> bool:
+    return os.path.normpath(path) in _BENIGN_SYSTEM_SYMLINKS
+
+
+def _contains_symlink(path) -> bool:
+    """Whether *path* or any existing ancestor of it is a symbolic link.
+
+    ``os.lstat`` is used instead of ``os.path.lexists`` so that an
+    inaccessible ancestor is not mistaken for a missing one: a stat failure
+    (other than ``FileNotFoundError``) is treated as suspicious.
+    """
+    current = os.path.abspath(os.fspath(path))
+    while True:
+        try:
+            mode = os.lstat(current).st_mode
+        except FileNotFoundError:
+            # The path (or this ancestor) does not exist: not a symlink here.
+            pass
+        except OSError:
+            # Cannot stat the path (for example permission denied): treat as
+            # suspicious rather than assuming there is no symlink.
+            return True
+        else:
+            if stat.S_ISLNK(mode) and not _is_benign_symlink(current):
+                return True
+        parent = os.path.dirname(current)
+        if not parent or parent == current:
+            break
+        current = parent
+    return False
+
+
+def is_within(path, root) -> bool:
+    """Whether *path* is *root* or sits underneath it, on the resolved forms.
+
+    A temporary folder reached through the ``/var`` symlink on macOS still
+    matches its ``/private/var`` spelling, and the case rules of a Windows or
+    macOS home folder decide.
+    """
+    try:
+        target = os.path.normcase(os.path.realpath(os.fspath(path)))
+        parent = os.path.normcase(os.path.realpath(os.fspath(root)))
+    except (OSError, ValueError):
+        if _contains_symlink(path) or _contains_symlink(root):
+            return True
+        target = os.path.normcase(os.path.normpath(os.path.abspath(os.fspath(path))))
+        parent = os.path.normcase(os.path.normpath(os.path.abspath(os.fspath(root))))
+    prefix = parent if parent.endswith(os.sep) else parent + os.sep
+    return target == parent or target.startswith(prefix)
+
+
+def is_temporary_home(path) -> bool:
+    """Whether *path* is the system temporary folder or sits inside it.
+
+    A run started with a temporary HOME has no developer install to protect:
+    ``<that HOME>/.gaia`` belongs to the test run, not to the person.
+    """
+    return is_within(path, tempfile.gettempdir())
+
+
+def account_home() -> Optional[Path]:
+    """The user account's own home directory, whatever a process's ``HOME`` says.
+
+    A run given a temporary ``HOME`` is a test run; this is the folder that holds
+    the person's real GAIA state, and it is the one a guard still protects.
+    """
+    try:
+        import pwd
+
+        return Path(pwd.getpwuid(os.getuid()).pw_dir)
+    except (ImportError, KeyError, OSError):
+        pass
+    if os.name == "nt":
+        home = _windows_account_home()
+        if home is not None:
+            return home
+        # Do not fall back to USERPROFILE here: a test run may have overwritten
+        # it with a temporary folder, which would leave the real account home
+        # unprotected. Failing to find a home makes the guards refuse rather
+        # than trust a (possibly tampered) value.
+        return None
+    user_home = os.environ.get("HOME")
+    return Path(user_home) if user_home else None
+
+
+def _windows_account_home() -> Optional[Path]:
+    """The account home on Windows, from the registry rather than the env.
+
+    ``USERPROFILE`` is the account home on Windows, but a test run overwrites it
+    with a temporary folder, so the volatile environment key is read instead.
+    Without it, a run given a temporary ``HOME`` and ``USERPROFILE`` would find
+    its own folder where the real account's state lives.
+    """
+    try:
+        import winreg
+
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, "Volatile Environment") as key:
+            image, _type = winreg.QueryValueEx(key, "USERPROFILE", 0)
+        return Path(image) if image else None
+    except (ImportError, KeyError, OSError, ValueError):
+        return None
 
 
 def list_home(root: Path, max_entries: int = MAX_ENTRIES) -> Listing:

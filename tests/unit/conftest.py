@@ -25,6 +25,9 @@ import pytest
 # Session guard: compares the real ~/.gaia before and after the run.
 from tests.unit.real_home_guard import (  # noqa: F401  pylint: disable=unused-import
     _guard_real_gaia_home_session,
+    account_home,
+    is_within,
+    is_temporary_home,
 )
 
 
@@ -223,6 +226,10 @@ def _forget_agent_registry():
 #: The home this run started with; a test that moves it keeps ``<its home>/.gaia``.
 _RUN_HOME = Path.home()
 
+#: A run started with a temporary ``HOME`` has no developer install to protect;
+#: ``<that HOME>/.gaia`` is a test folder, not the person's own.
+_RUN_HOME_IS_TEMPORARY = is_temporary_home(_RUN_HOME)
+
 #: The real ``~/.gaia``, which no unit test may create or write into.
 _REAL_GAIA_HOME = _RUN_HOME / ".gaia"
 _REAL_GAIA_PREFIXES = tuple({str(_REAL_GAIA_HOME), os.path.realpath(_REAL_GAIA_HOME)})
@@ -245,10 +252,24 @@ def _exists(path) -> bool:
 
 def _in_real_gaia_home(path) -> bool:
     try:
-        path = os.fsdecode(path)
+        candidate = os.fsdecode(path)
     except TypeError:  # a file descriptor
         return False
-    return any(path == p or path.startswith(p + os.sep) for p in _REAL_GAIA_PREFIXES)
+    if _RUN_HOME_IS_TEMPORARY:
+        # The run's own home is a test folder, but the person's real GAIA state
+        # is still their own, and stays protected however the test reached it.
+        real_home = account_home()
+        if real_home is None:
+            return True
+        try:
+            return is_within(path, real_home / ".gaia")
+        except (OSError, ValueError):
+            # Cannot verify the path (e.g. realpath broken): refuse rather than
+            # allow a write into the protected home.
+            return True
+    return any(
+        candidate == p or candidate.startswith(p + os.sep) for p in _REAL_GAIA_PREFIXES
+    )
 
 
 def _audit_real_gaia_home(event, args):
@@ -281,7 +302,11 @@ def _guard_real_gaia_home_writes():
     yield
     problems = list(dict.fromkeys(_real_home_writes))
     _real_home_writes.clear()
-    if not _real_gaia_home_existed[0] and _exists(_REAL_GAIA_HOME):
+    if (
+        not _RUN_HOME_IS_TEMPORARY
+        and not _real_gaia_home_existed[0]
+        and _exists(_REAL_GAIA_HOME)
+    ):
         _real_gaia_home_existed[0] = True  # report it once, not after every test
         problems.append(
             f"created {_REAL_GAIA_HOME} (a subprocess, or a test running in "
@@ -318,6 +343,8 @@ def _session_gaia_home(tmp_path_factory):
 
     Only the ``~/.gaia`` fallback moves. GAIA_HOME and GAIA_CONFIG_DIR still win
     unless they point into the real ``~/.gaia``, which is dropped for the session.
+    A run started with a temporary ``HOME`` carries no developer install, so a
+    GAIA_HOME it points at there is kept, not dropped.
     A test that patches ``Path.home`` or sets HOME/USERPROFILE still gets
     ``<that home>/.gaia``: setting GAIA_HOME here would override both.
     """
