@@ -4901,12 +4901,13 @@ class MemoryMixin(ProceduralMemoryMixin):
             # the same in other languages or short forms: "contraseña es X"
             r"\b(?:passcode|pw|pwd|contrase(?:ñ|n)a|passwort|kennwort"
             r"|mot de passe|senha|wachtwoord|has(?:ł|l)o)\b"
-            r"\s*(?:is|es|era|ist|war|est|é|e|jest|was|:|=)\s*\S+",
-            # a password word right before a value holding a digit or symbol:
-            # "password hunter2", never "password manager" or "password reset"
+            r"\s*(?:(?:is|es|era|ist|war|est|é|e|jest|was)\b|[:=])\s*"
+            r"(?![/~])(?=\S*[0-9!@#$%^&*])\S{4,}",
+            # a password word right before a value with letters and a digit or
+            # symbol: "password hunter2", never "password manager" or "pw 2024"
             r"\b(?:password|passphrase|passcode|pw|pwd|contrase(?:ñ|n)a"
             r"|passwort|kennwort|senha|wachtwoord)\b\s+"
-            r"(?=\S*[0-9!@#$%^&*])\S{4,}",
+            r"(?![/~])(?=\S*[A-Za-z])(?=\S*[0-9!@#$%^&*])\S{4,}",
             # dash/underscore-joined token in any case, e.g. HALIBUT-4417-ZULU
             # or tango-9921-delta; a file extension right after it
             # (sales_2024_report.pdf) marks a filename, not a secret.
@@ -5184,7 +5185,10 @@ class MemoryMixin(ProceduralMemoryMixin):
         for start, end in self._credential_spans(request):
             words = re.split(r"[\s:=]+", request[start:end].strip())
             value = words[-1].strip(".,;!?\"'()[]") if words else ""
-            if len(value) >= 4 and value in (text or ""):
+            # Only a value shaped like a secret: "changed" or "vim" is a word.
+            if len(value) < 4 or not re.search(r"[0-9!@#$%^&*]", value):
+                continue
+            if re.search(rf"(?<!\w){re.escape(value)}(?!\w)", text or ""):
                 return True
         return False
 

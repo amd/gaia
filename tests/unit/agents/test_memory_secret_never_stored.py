@@ -51,6 +51,40 @@ ORDINARY_SAVES = [
     ),
     ("remember my password manager is 1Password", "Password manager is 1Password"),
     ("recuerda que mi cumpleaños es el 3 de marzo", "cumpleaños el 3 de marzo"),
+    (
+        "The pw editor is vim at work; remember my home editor is emacs",
+        "User's home editor is emacs",
+    ),
+    (
+        "remember my pwd estimate for the job is 3 weeks",
+        "pwd estimate for the job is 3 weeks",
+    ),
+    ("Remember: PW = Pacific Wharf office", "PW = Pacific Wharf office"),
+    (
+        "My password is changed monthly. Remember I changed jobs in May",
+        "User changed jobs in May",
+    ),
+]
+
+#: Text that names a password word but holds no secret: never masked.
+NOT_SECRETS = [
+    "pw editor is vim",
+    "pwd error in bash",
+    "pw expires friday",
+    "my pw expired",
+    "passcode entry screen",
+    "PW editorial board meets Monday",
+    "pw eng sync",
+    "the PWD estimate",
+    "PW est. 2010",
+    "PW = Pacific Wharf office",
+    "PW: Pacific Wharf",
+    "the PW is in Seattle",
+    "pwd is /home/me",
+    "pwd = current directory",
+    "contraseña es importante para mí",
+    "my wifi is called Passwort ist geheim",
+    "pw 2024 review",
 ]
 
 
@@ -216,3 +250,18 @@ def test_a_forced_save_still_stores_an_ordinary_fact(store, monkeypatch, tmp_pat
     _script(agent, *[{"answer": "Got it."}] * 2, {"answer": "Saved."})
     agent.process_query("Remember that my dog's name is Rex.")
     assert _contents(store) == ["my dog's name is Rex"]
+
+
+@pytest.mark.parametrize("text", NOT_SECRETS)
+def test_a_password_word_with_no_secret_is_not_a_credential(text):
+    assert not MemoryMixin._looks_like_credential(text)
+    assert MemoryMixin._mask_credentials(text) == text
+
+
+@pytest.mark.parametrize("text", NOT_SECRETS)
+def test_a_password_word_with_no_secret_still_saves(store, monkeypatch, tmp_path, text):
+    agent = _agent(store, monkeypatch, tmp_path)
+    agent._original_user_input = f"remember {text}"
+    result = _tools(agent)["remember"](fact=text)
+    assert result["status"] == "stored", result
+    assert _contents(store) == [text]
