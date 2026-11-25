@@ -338,3 +338,20 @@ def test_a_script_hint_without_the_command_offers_the_longer_run(tmp_path):
     hint = _Bare()._timeout_hint("script", str(tmp_path))
 
     assert "larger timeout" in hint and "wait_for_condition" in hint
+
+
+def test_terminate_process_tree_skips_reading_a_closed_pipe():
+    import subprocess
+    import sys
+
+    from gaia.agents.tools.command_timeouts import terminate_process_tree
+
+    proc = subprocess.Popen(
+        [sys.executable, "-c", "import time; time.sleep(60)"],
+        stdout=subprocess.PIPE,
+        start_new_session=True,
+    )
+    proc.stdout.close()
+
+    assert terminate_process_tree(proc, read_output=False) == ("", "")
+    assert proc.poll() is not None

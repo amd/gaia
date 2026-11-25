@@ -21,11 +21,11 @@ A companion workflow at [`.github/workflows/dependabot-automerge.yml`](https://g
 | `/` | pip | 5 | `python-dependencies` | weekly / monday |
 | `/` | npm | 5 | `root-npm-dependencies` | weekly / monday |
 | `/src/gaia/apps/webui` | npm | 5 | `agent-ui-dependencies` | weekly / monday |
-| `/hub/agents/gaia/npm`, `/website`, `/docs`, `/workers/agent-hub`, `/workers/admin`, `/workers/website-router`, `/src/vscode/gaia` | npm | 5 | `standalone-npm-dependencies` (one PR per directory) | weekly / monday |
+| `/hub/agents/gaia/npm`, `/website`, `/docs`, `/workers/agent-hub`, `/workers/admin`, `/workers/website-router`, `/src/vscode/gaia` | npm | 5 | `standalone-npm-dependencies` (minor + patch, one PR per directory; each major bump opens its own PR) | weekly / monday |
 | `/tui` | gomod | 5 | `go-dependencies` | weekly / monday |
 | `/` | github-actions | 5 | `github-actions` | weekly / monday |
 
-**Why grouping matters.** Each ecosystem uses a wildcard `groups:` stanza so that a week's worth of updates collapse into a single grouped PR per ecosystem. Without grouping, the `limit: 5` would be hit by five individual single-package PRs and the rest would queue — defeating the point of the cap.
+**Why grouping matters.** Each ecosystem uses a wildcard `groups:` stanza so that a week's worth of updates collapse into a single grouped PR per ecosystem. The standalone npm entry groups only minor and patch bumps, so one breaking major can't block the rest; its majors arrive as separate PRs and count against the cap. Without grouping, the `limit: 5` would be hit by five individual single-package PRs and the rest would queue — defeating the point of the cap.
 
 **Root package.** The root npm entry covers only the root `package.json`, which declares no workspaces. The flagship Agent UI at `src/gaia/apps/webui` has its own lockfile, so it has its own entry above.
 
