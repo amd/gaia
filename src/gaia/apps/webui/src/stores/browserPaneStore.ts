@@ -111,7 +111,7 @@ export const useBrowserPaneStore = create<BrowserPaneStore>((set, get) => {
             const chat = currentChat();
             if (chat === null) set({ draftOpen: open });
             else saveOpenChats([...(open ? [chat] : []), ...get().openChats.filter((id) => id !== chat)]);
-            if (open && useSessionPanelStore.getState().open) useSessionPanelStore.getState().setOpen(false);
+            if (open && useSessionPanelStore.getState().open) useSessionPanelStore.getState().yieldSide();
         },
         toggle: () => get().setOpen(!isPaneOpen(get(), currentChat())),
         claimDraft: (sessionId) => {
@@ -143,7 +143,7 @@ onSessionRemoved((id) => useBrowserPaneStore.getState().forgetChat(id));
 // Switching to a chat whose pane is open takes the right side back from the session panel.
 useChatStore.subscribe((now, before) => {
     if (now.currentSessionId !== before.currentSessionId && isPaneOpen(useBrowserPaneStore.getState(), now.currentSessionId)) {
-        if (useSessionPanelStore.getState().open) useSessionPanelStore.getState().setOpen(false);
+        if (useSessionPanelStore.getState().open) useSessionPanelStore.getState().yieldSide();
     }
 });
 

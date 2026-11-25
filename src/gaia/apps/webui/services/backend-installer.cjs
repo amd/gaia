@@ -2157,6 +2157,7 @@ module.exports = {
   GAIA_HOME,
   GAIA_VENV,
   GAIA_BIN,
+  BUNDLED_GAIA_BIN,
   MIN_DISK_SPACE_BYTES,
 
   // Error

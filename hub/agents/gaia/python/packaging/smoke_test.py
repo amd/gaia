@@ -77,6 +77,7 @@ import argparse
 import json
 import os
 import queue
+import secrets
 import socket
 import subprocess
 import sys
@@ -629,6 +630,15 @@ def main(argv=None) -> int:
     cmd = [str(binary), "--host", HOST, "--port", str(PORT)]
     log(f"launching frozen binary: {binary}")
     log(f"command: {' '.join(cmd)}")
+    # The sidecar refuses to start without a caller token; hand it one the way
+    # the daemon does, as a 0600 file.
+    secret_dir = tempfile.TemporaryDirectory(prefix="gaia-smoke-secret-")
+    secret = Path(secret_dir.name) / "launch-secret"
+    fd = os.open(secret, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    with os.fdopen(fd, "w", encoding="utf-8") as fh:
+        fh.write(secrets.token_urlsafe(32))
+    env = {**os.environ, "GAIA_GAIA_SIDECAR_TOKEN_FILE": str(secret)}
+    env.pop("GAIA_GAIA_SIDECAR_TOKEN", None)
     t0 = time.time()
     proc = subprocess.Popen(
         cmd,
@@ -636,6 +646,7 @@ def main(argv=None) -> int:
         stderr=subprocess.STDOUT,
         text=True,
         bufsize=1,
+        env=env,
     )
 
     results: dict[str, bool] = {}
@@ -651,6 +662,7 @@ def main(argv=None) -> int:
         log("shutting down server")
         _kill_tree(proc)
         _drain(proc, "server output tail")
+        secret_dir.cleanup()
 
     # Same binary, other transport. Run second so a broken HTTP surface is
     # reported before the slower agent construction.

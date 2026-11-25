@@ -26,6 +26,8 @@ describe('localizeLiveStatus', () => {
             'The model server stopped. GAIA is restarting it…',
             'Starting the model server…',
             'Reading page 4 of 12…',
+            'Waiting for the GPU — 3rd in line',
+            'Waiting for the GPU — 11th in line',
         ]) {
             expect(localizeLiveStatus(tEn, label)).toBe(label);
         }
@@ -39,6 +41,13 @@ describe('localizeLiveStatus', () => {
         expect(ar('The model server stopped. GAIA is restarting it…')).toContain('توقف خادم النموذج');
     });
 
+    it('localizes the skill reload warning while keeping the skill name', () => {
+        const label = "Skill 'broken' was not restored after settings changed: its files could not be found. Reload it if needed.";
+        expect(localizeLiveStatus(tEn, label)).toBe(label);
+        expect(ar(label)).toContain('لم تُستعد المهارة broken');
+        expect(ar(label)).toContain('تعذّر العثور على ملفاتها');
+    });
+
     it('keeps counts, attempts and model names in the Arabic line', () => {
         expect(ar('Reasoning — 1,234 words so far')).toContain('الكلمات حتى الآن: 1,234');
         expect(ar('Connection lost. Reconnecting (attempt 2 of 3)…')).toContain('المحاولة 2 من 3');
@@ -49,6 +58,10 @@ describe('localizeLiveStatus', () => {
         expect(ar('Reading page 4 of 12…')).toContain('4');
         expect(ar('Reading page 4 of 12…')).toContain('12');
         expect(ar('Reading page 4 of 12…')).not.toBe('Reading page 4 of 12…');
+    });
+
+    it('translates the GPU queue line for Arabic, with a plain number', () => {
+        expect(ar('Waiting for the GPU — 3rd in line')).toBe('بانتظار معالج الرسومات — رقم 3 في الدور (Waiting for the GPU — 3rd in line)');
     });
 
     it('says the speech model download in the chosen language, with its percent and size', () => {
@@ -88,6 +101,21 @@ describe('localizeLiveStatus', () => {
         expect(ar(npu)).toContain('0.7');
         // No percent to show for the NPU part, so it says why instead of a bare timer.
         expect(ar(npu)).toContain('دون عرض للتقدّم');
+    });
+
+    it('says a call Full access or Accept edits ran without asking in the chosen language, keeping the action', () => {
+        const full = "Full access is on, so GAIA didn't ask first. Writing file: notes.txt";
+        const edits = "Accept edits is on, so GAIA didn't ask first. Editing file: notes.txt";
+        const unknown = "Full access is on, so GAIA didn't ask first. Frobbing the widget";
+        for (const label of [full, edits, unknown]) expect(localizeLiveStatus(tEn, label)).toBe(label);
+        expect(ar(full)).toBe(
+            "الوصول الكامل مفعّل، لذا لم يسأل GAIA أولًا. كتابة ملف: notes.txt (Full access is on, so GAIA didn't ask first. Writing file: notes.txt)",
+        );
+        expect(ar(edits)).toBe(
+            "قبول التعديلات مفعّل، لذا لم يسأل GAIA أولًا. تحرير ملف: notes.txt (Accept edits is on, so GAIA didn't ask first. Editing file: notes.txt)",
+        );
+        // A narration with no tool label keeps its own words, inside the translated line.
+        expect(ar(unknown)).toContain('الوصول الكامل مفعّل، لذا لم يسأل GAIA أولًا. Frobbing the widget');
     });
 
     it('shows a line it does not know as written', () => {

@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"runtime"
 	"strconv"
 	"strings"
 	"time"
@@ -56,8 +57,11 @@ func commandArg(query, name string) string {
 var readAloudDeps = struct {
 	settings   func() (preflight.ReadAloud, error)
 	findPlayer func() (speech.PlayFunc, error)
+	// unproven is why read-aloud isn't offered on this PC, or "".
+	unproven func() string
 }{
 	settings: preflight.ReadReadAloud,
+	unproven: func() string { return speech.UnprovenReason(runtime.GOOS) },
 	findPlayer: func() (speech.PlayFunc, error) {
 		p, err := speech.FindPlayer()
 		if err != nil {
@@ -135,6 +139,9 @@ func (m ChatModel) runReadAloudCommand(arg string) (tea.Model, tea.Cmd) {
 		if m.readAloud != nil {
 			m.stopReadAloud()
 			return m.statusNote("Stopped reading aloud."), nil
+		}
+		if reason := readAloudDeps.unproven(); reason != "" {
+			return m.errorNote(reason), nil
 		}
 		reply := m.lastAnswer()
 		if strings.TrimSpace(reply) == "" {
@@ -228,7 +235,8 @@ func (m *ChatModel) StopReadAloud() {
 
 // autoReadAloud reads a reply that has just finished, when auto-read is on.
 func (m ChatModel) autoReadAloud(reply string) (ChatModel, tea.Cmd) {
-	if !m.readAloudAuto {
+	// Where read-aloud isn't offered, launch already said so once.
+	if !m.readAloudAuto || readAloudDeps.unproven() != "" {
 		return m, nil
 	}
 	pieces := speech.Pieces(reply, speech.MaxPieceChars)
@@ -274,6 +282,9 @@ func (m ChatModel) handleReadAloudMsg(msg tea.Msg) (tea.Model, tea.Cmd, bool) {
 			return m.errorNote("Could not read the read-aloud settings: " + msg.err.Error()), nil, true
 		}
 		m.readAloudAuto = msg.auto
+		if reason := readAloudDeps.unproven(); msg.auto && reason != "" {
+			return m.errorNote("Auto-read is on, but replies won't be read: " + reason), nil, true
+		}
 		return m, nil, true
 	}
 	return m, nil, false
@@ -300,6 +311,9 @@ func (m ChatModel) runVoiceCommand(arg string) (tea.Model, tea.Cmd) {
 			return m.errorNote("Use /voice auto on or /voice auto off."), nil
 		}
 		on := fields[1] == "on"
+		if reason := readAloudDeps.unproven(); on && reason != "" {
+			return m.errorNote(reason), nil
+		}
 		text := "Auto-read is off: /read-aloud reads a reply when you ask."
 		if on {
 			text = "Auto-read is on: every finished reply is read aloud. /read-aloud stops one; /voice auto off turns this off."

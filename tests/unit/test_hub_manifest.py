@@ -621,3 +621,29 @@ def test_flagship_agent_installs_without_a_trust_opt_in():
 
     assert requires_trust_ack(raw) is False
     ensure_trust_ack("gaia", raw, trusted=False)  # must not raise
+
+
+@pytest.mark.parametrize(
+    "bin_path",
+    [
+        "../outside/agent",
+        "bin/../../agent",
+        "..\\agent.exe",
+        "/usr/bin/agent",
+        "\\\\server\\share\\agent.exe",
+        "C:\\tools\\agent.exe",
+        "C:agent.exe",
+    ],
+)
+def test_cpp_binary_paths_must_stay_in_the_agent_folder(tmp_path, bin_path):
+    data = {**VALID_CPP_MANIFEST, "cpp": {"binaries": {"linux-x64": bin_path}}}
+
+    with pytest.raises(ManifestError, match="inside the agent folder"):
+        parse(write_manifest(tmp_path, data))
+
+
+@pytest.mark.parametrize("bin_path", ["bin/agent", "agent", "./bin/agent.exe"])
+def test_cpp_binary_paths_inside_the_agent_folder_parse(tmp_path, bin_path):
+    data = {**VALID_CPP_MANIFEST, "cpp": {"binaries": {"linux-x64": bin_path}}}
+
+    assert parse(write_manifest(tmp_path, data)).cpp.binaries["linux-x64"] == bin_path

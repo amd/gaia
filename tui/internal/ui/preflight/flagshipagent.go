@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"regexp"
 	"strings"
 
 	"github.com/amd/gaia/tui/internal/catalog"
@@ -57,7 +58,8 @@ func CheckFlagshipAgent(choice string) error {
 }
 
 // ReadFlagshipAgent returns the saved agent program. A missing file or key is
-// no choice; a value GAIA does not know is an error naming the file.
+// no choice; a malformed value is an error naming the file. A well-formed name
+// this build can't run is returned as is, for FlagshipAgentUnavailable to report.
 func ReadFlagshipAgent() (FlagshipAgent, error) {
 	return readFlagshipAgent(realHostProbe())
 }
@@ -95,11 +97,31 @@ func readFlagshipAgent(p hostProbe) (FlagshipAgent, error) {
 	}
 	// Python's GaiaConfig trims and lowercases this value before checking it.
 	choice = strings.ToLower(strings.TrimSpace(choice))
-	if err := CheckFlagshipAgent(choice); err != nil {
-		return out, fmt.Errorf("%s: %w. Fix the value or remove the key", out.Path, err)
+	// Any well-formed name loads, even one this build can't run: a newer GAIA may have
+	// saved it. Launching it is the error (FlagshipAgentUnavailable), never reading it.
+	if !harnessName.MatchString(choice) {
+		return out, fmt.Errorf("%s: %s must be %q or %q, got %q. Fix the value or remove the key",
+			out.Path, FlagshipAgentKey, FlagshipAgentPython, FlagshipAgentNative, choice)
 	}
 	out.Choice = choice
 	return out, nil
+}
+
+// harnessName is the shape of a harness name, matching Python's GaiaConfig check.
+var harnessName = regexp.MustCompile(`^[a-z][a-z0-9_-]{0,31}$`)
+
+// FlagshipAgentUnavailable says why a saved choice this build can't run won't start,
+// or "" when it can run (or nothing was chosen).
+func FlagshipAgentUnavailable(choice string) string {
+	if choice == "" || FlagshipAgentProgram(choice) != "" {
+		return ""
+	}
+	if _, known := catalog.HarnessNamed(choice); known {
+		return fmt.Sprintf("the GAIA agent is set to run %s, which isn't available in this version "+
+			"of the GAIA TUI yet", choice)
+	}
+	return fmt.Sprintf("the GAIA agent is set to run %q, which this version of the GAIA TUI doesn't "+
+		"know; a newer GAIA may have saved it", choice)
 }
 
 // WriteFlagshipAgent saves the agent program, leaving every other key alone.

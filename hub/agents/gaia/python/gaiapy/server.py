@@ -59,6 +59,7 @@ from gaiapy.session_registry import (
     PROVIDER_LOCAL,
     SessionCapacityError,
     close_agent,
+    pop_skill_reload_warning,
 )
 from gaiapy.session_registry import registry as session_registry
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
@@ -109,7 +110,9 @@ AGENT_ID = "gaia"
 #: ``turns``: the turn's first call is measured before the answer streams.
 #: 2.29 added ``final.route``: the model a ``hybrid`` session's turn ran on.
 #: 2.30 added ``DELETE /sessions/{id}``: end a session and stop its MCP servers.
-API_VERSION = "2.30"
+#: 2.31 added ``session_created`` on ``final``/``error``: the sidecar rebuilt
+#: this turn's agent (eviction, restart, or first use).
+API_VERSION = "2.31"
 
 #: How long the stream allows the turn's context measurement before naming the
 #: failure on ``final``, and how long the loop's own fallback measurement waits.
@@ -1290,9 +1293,9 @@ def _probe_lemonade() -> Dict[str, Any]:
 async def require_caller_token(request: Request) -> None:
     """Reject a request that does not carry this session's bearer token.
 
-    No-ops when auth was never configured (the product server and the OpenAPI
-    export mount this router without it) or when no token is set (dev mode,
-    warned about at startup) — Host/Origin still apply in both cases.
+    No-ops when auth was never configured in this process. With no token,
+    every request is refused unless the developer set
+    ``GAIA_SIDECAR_ALLOW_NO_TOKEN=1``; Host/Origin always apply.
     """
     config = caller_auth.get_config()
     if config is None or caller_auth.is_exempt_path(request.url.path):
@@ -1803,6 +1806,10 @@ async def query(request: QueryRequest):
     # that, so a query with no session never runs with it.
     handler.full_access = False
     session = None
+    #: Whether this turn's session handle was just built fresh (eviction,
+    #: restart, or first use) rather than found live. Carried on ``final``
+    #: so the client drops any state it kept past the old agent's lifetime.
+    session_created = False
     #: Set only on the one-shot path. A session agent belongs to the registry
     #: and must never be closed here.
     one_shot_agent: Optional[Any] = None
@@ -1930,6 +1937,10 @@ async def query(request: QueryRequest):
             # fresh per turn, so without this both reset at every turn boundary
             # and the user is re-asked for a call they already approved.
             session.permissions.attach(handler)
+            if session.freshly_built:
+                # Consume once, same reason as reclaimed_after_eviction below.
+                session.freshly_built = False
+                session_created = True
             if session.reclaimed_after_eviction:
                 # Consume once: reset before the warning reaches the caller so
                 # a later turn on this same still-live session isn't re-warned.
@@ -2170,6 +2181,10 @@ async def query(request: QueryRequest):
 
     async def _with_context(final: Dict[str, Any]) -> Dict[str, Any]:
         """``final`` carrying the turn's context measurement (>= 2.21), timings and route."""
+        if session_created:
+            # On every terminal type, not just a successful final: the agent
+            # was built fresh for this turn regardless of how the turn ended.
+            final = {**final, "session_created": True}
         if final.get("type") != "final":
             return final
         if run.result is None and thread.is_alive() and run.received_turns is not None:
@@ -2204,6 +2219,13 @@ async def query(request: QueryRequest):
         terminated = False
         last_write = time.monotonic()
         try:
+            # A rebuild can finish before a cancelled request has a stream.
+            # Keep its notice pending for the next live turn in that session.
+            while session is not None and not run.cancel_event.is_set():
+                warning = pop_skill_reload_warning(agent)
+                if warning is None:
+                    break
+                yield _emit(warning)
             while True:
                 try:
                     event = handler.event_queue.get_nowait()
@@ -2609,33 +2631,26 @@ async def revoke_grants(session_id: str, key: Optional[str] = None) -> GrantsRes
 
 
 def _log_caller_auth_state(auth_config: Any) -> None:
-    """Report which caller-auth channel this server came up on.
+    """Refuse to serve without a token, else report the caller-auth channel.
 
-    Emitted from the app's LIFESPAN, not from ``build_app``: importing this
-    module is also how the frozen binary reaches the stdio transport, whose
-    stdout is the event wire — a line logged at import time lands in the middle
-    of the JSON stream and the reader renders it as a malformed event.
+    Runs from the app's LIFESPAN, not from ``build_app``: importing this module
+    is also how the frozen binary reaches the stdio transport, which needs no
+    token and whose stdout is the event wire — a line logged at import time
+    lands in the middle of the JSON stream as a malformed event.
     """
-    if auth_config.token:
-        channel = (
-            f"0600 secret file ({caller_auth.TOKEN_FILE_ENV_VAR})"
-            if os.environ.get(caller_auth.TOKEN_FILE_ENV_VAR)
-            else f"{caller_auth.TOKEN_ENV_VAR} env var (legacy delivery)"
-        )
-        logger.info(
-            "GAIA sidecar: caller authentication ENABLED via %s "
-            "(per-session bearer token required on /v1/%s/* requests).",
-            channel,
-            AGENT_ID,
-        )
+    caller_auth.check_startup(auth_config)
+    if not auth_config.token:
         return
-    logger.warning(
-        "GAIA sidecar: caller authentication DISABLED — neither %s nor %s "
-        "is in the environment. This is intended for LOCAL DEVELOPMENT "
-        "only; the shipped product spawns the sidecar with a per-session "
-        "token. Host/Origin protection is still enforced.",
-        caller_auth.TOKEN_FILE_ENV_VAR,
-        caller_auth.TOKEN_ENV_VAR,
+    channel = (
+        f"0600 secret file ({caller_auth.TOKEN_FILE_ENV_VAR})"
+        if os.environ.get(caller_auth.TOKEN_FILE_ENV_VAR)
+        else f"{caller_auth.TOKEN_ENV_VAR} env var (legacy delivery)"
+    )
+    logger.info(
+        "GAIA sidecar: caller authentication ENABLED via %s "
+        "(per-session bearer token required on /v1/%s/* requests).",
+        channel,
+        AGENT_ID,
     )
 
 
@@ -2938,6 +2953,15 @@ def serve_http(argv: List[str]) -> int:
     except (SkillSetError, AllowedPathsEnvError) as exc:
         print(f"gaia-agent: {exc}", file=sys.stderr)
         return 2
+
+    # The lifespan refuses too; checking here gives a clean message, not a trace.
+    auth_config = caller_auth.config_from_environment()
+    if not auth_config.token and not auth_config.allow_no_token:
+        try:
+            caller_auth.check_startup(auth_config)
+        except RuntimeError as exc:
+            print(f"gaia-agent: {exc}", file=sys.stderr)
+            return 2
 
     try:
         from gaia.sidecar import parent_watch

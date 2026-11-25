@@ -260,18 +260,28 @@ pre-commit gate. It exits 2 if a baseline scenario is missing or produced no
 measurement, as well as for measured regressions. Without this opt-in, incomplete
 measurements remain visible as warnings and the comparison judges measured results.
 
-### Compare only the same model
+### Compare only the same model and harness
 
-A scorecard records the local model the agent ran (`config.agent_model`) beside the
-Claude model that drove and judged it (`config.model`). `--compare` refuses to diff two
-scorecards that differ in either, because every delta would partly be the model swap. It
-reads the baseline's from the `meta.json` in its directory when there is one.
+A scorecard records the local model the agent ran (`config.agent_model`), the Claude
+model that drove and judged it (`config.model`), and the harness that answered as GAIA
+(`config.harness`: `gaiapy`, or `gaiacpp` when the backend's `flagship_agent` chose it).
+`--compare` refuses to diff two scorecards that differ in any of the three, because
+every delta would partly be the swap. It reads the baseline's from the `meta.json` in its
+directory when there is one; a baseline or scorecard that records no harness ran
+`gaiapy`, and one whose harness the backend couldn't report (`unknown`) compares with
+nothing.
+
+To score gaiacpp, run a lane on it; each category's GAIA home then runs it:
+
+```bash
+python util/run_eval_lane.py --lane <lane> --harness gaiacpp --harness-binary path/to/gaiacpp
+```
 
 | `--compare` exit | Meaning |
 |---|---|
 | 0 | No regression |
 | 2 | A regression (or, with `--require-complete`, a missing or unmeasured scenario) |
-| 3 | Not comparable: the baseline was measured with a different agent model or eval model (or, with `--require-same-fixtures`, on different fixtures or a different Lemonade build) |
+| 3 | Not comparable: the baseline was measured with a different agent model, eval model or harness (or, with `--require-same-fixtures`, on different fixtures or a different Lemonade build) |
 
 ### Same fixtures, same Lemonade
 
@@ -346,7 +356,7 @@ every image as blank.
 |---|---|
 | Retrieval recall@1/3/5/10/20, MRR | A retrieved chunk is a hit when it covers at least half of the labelled evidence quote, or, for evidence labelled by page alone (the scanned-PDF hard case), lies on that page. Chunks are mapped back to the extracted text after whitespace normalization, and to pages via the `[Page N]` markers. |
 | Document recall@5 | Whether the right document appears in the top 5, regardless of the passage. |
-| Two retrieval pipelines | `sdk` is `RAGSDK` dense search (what `RAGSDK.query` gives the model). `agent` is `query_documents` as the chat agents run it, with search-key expansion, keyword boost and the adaptive chunk cutoff; it is scored on the list it actually returns (`R@returned`). |
+| Two retrieval pipelines | `sdk` is `RAGSDK` dense search (what `RAGSDK.query` gives the model). `agent` is `query_documents` as the chat agents run it, with search-key expansion, dense and keyword rankings merged by reciprocal rank fusion, and the adaptive chunk cutoff; it is scored on the list it actually returns (`R@returned`). |
 | Answer accuracy | `RAGSDK.query` end to end with the default model. Numeric answers match within 1% (unit scale such as millions/billions, and percent/fraction, are accepted). Short answers must appear in the reply. Free-form answers are graded by the Claude judge only with `--judge`; without it they are counted as unscored, never guessed. |
 | Retrieval vs generation miss | Each wrong answer is a *retrieval miss* (the evidence never reached the model) or a *generation miss* (it did, and the answer was still wrong). |
 | Scale | The 10 most-questioned repo documents plus Wikipedia distractors at 10, 100 and 1,000 documents: indexing time, chunks/s, peak RSS, vector and cache size, query latency p50/p95 for both pipelines, and recall as distractors are added. |
@@ -360,6 +370,10 @@ every image as blank.
 
 Narrow a run with `--datasets`, `--retrieval-only`, `--no-scale`, `--scale-tiers 10,100,1000,5000`,
 `--no-hard-cases` or `--xquad-languages`.
+
+A question whose evidence quote is not in the text as GAIA extracts it is listed under
+**Label errors** in the report and left unscored; the run carries on with the other
+questions, then exits non-zero.
 
 ### Hard cases
 
@@ -674,13 +688,15 @@ for both harnesses, and reports it as a compliance finding.
 
 ### SWE-bench suite
 
-Nothing of SWE-bench is committed here either. `--suite swebench` is built when
-the run starts:
+Only the split's 500 instance ids are committed
+(`src/gaia/eval/bench/swebench_verified_ids.json`), so a seeded sample is drawn
+without the network. `--suite swebench` is built when the run starts:
 
 - Each instance named by `--instances` (the pilot when it is omitted) is read
   from the Hugging Face dataset `SWE-bench/SWE-bench_Verified` — the `datasets`
-  package when it is installed, the datasets-server REST API otherwise — and
-  cached as `<work root>/swebench/<instance_id>.json`. The judge and the grader
+  package when it is installed, the datasets-server REST API otherwise, where a
+  5xx or dropped connection is retried three times, each retry printed, before
+  the run fails — and cached as `<work root>/swebench/<instance_id>.json`. The judge and the grader
   read the same cache. The cache holds the gold patch, so the fence denies it
   along with the rest of the work root.
 - The agent gets the repository at `base_commit`, built as the TheRock checkout

@@ -19,11 +19,6 @@ button.context-meter:hover {
     color: var(--text-primary);
 }
 
-.context-meter.is-empty {
-    color: var(--text-muted);
-    cursor: default;
-}
-
 .context-meter-bar {
     position: relative;
     width: 40px;

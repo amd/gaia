@@ -75,7 +75,7 @@ ONLINE_SERVICE_TOOLS = frozenset(
 )
 
 #: Commands that go online with no URL in sight: a remote, a package index, an API.
-#: Kept in step with the ``online`` pattern in cpp/src/security.cpp. Build tools
+#: Kept in step with the ``online`` pattern in cpp/src/internet_refusal.cpp. Build tools
 #: that resolve dependencies from a remote repository on nearly every run (mvn,
 #: gradle) count whatever their arguments, unless ``_explicitly_offline`` lets one through.
 _ONLINE_COMMAND_RE = re.compile(
@@ -389,7 +389,7 @@ def _explicitly_offline(segment: str) -> bool:
     exact flags count. Still checked: anything quoted or expanded, a URL, a
     requirements file, a wrapper (mvnw and gradlew download a build tool
     first), and a goal that publishes. Kept in step with ``explicitlyOffline``
-    in cpp/src/security.cpp.
+    in cpp/src/internet_refusal.cpp.
     """
     if _OFFLINE_UNSAFE_RE.search(segment):
         return False

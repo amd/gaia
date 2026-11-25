@@ -33,7 +33,10 @@ same whichever is answering.
 
 The choice is saved as `flagship_agent` in `~/.gaia/config.json`, with the
 value `gaiapy` or `gaiacpp`. Both apps read the same key. With nothing saved,
-the Python harness runs, even when `gaiacpp` is installed.
+the Python harness runs, even when `gaiacpp` is installed. A name this version
+can't run (one a newer GAIA saved) still loads, so the Agent UI and its
+Settings open; starting the agent fails with a message saying to choose
+another, and no other harness runs in its place.
 
 | Where | How |
 |---|---|

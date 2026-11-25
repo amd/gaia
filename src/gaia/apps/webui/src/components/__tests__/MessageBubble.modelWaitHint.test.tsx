@@ -8,13 +8,14 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { MessageBubble } from '../MessageBubble';
 import { MODEL_WAIT_HINT_S, isModelWaitLabel } from '../../utils/modelWait';
 import { tEn } from '../../i18n/useT';
+import { stripIsolates } from '../../i18n/registry';
 import { useModelStore } from '../../stores/modelStore';
 import { useChatStore } from '../../stores/chatStore';
 import type { ActiveModel } from '../../types';
 import type { Message } from '../../types';
 
 const MODEL_WAIT_HINT = tEn('live.modelWaitHint');
-const LOCAL_MODEL_WAIT_HINT = tEn('live.localModelWaitHint');
+const LOCAL_MODEL_WAIT_HINT = tEn('live.localModelWaitHint', { n: String(MODEL_WAIT_HINT_S) });
 
 const streaming: Message = {
     id: -1,
@@ -56,12 +57,22 @@ describe('model wait hint', () => {
         expect(screen.getByText(MODEL_WAIT_HINT)).toBeInTheDocument();
     });
 
-    it('on a model on this PC, says a long prompt is slow instead of promising a retry', () => {
+    it('on a model on this PC, says how long it has waited instead of promising a retry', () => {
         useModelStore.setState({ active: { inference_remote: false } as ActiveModel });
         renderBubble('Reading your request');
         act(() => { vi.advanceTimersByTime(MODEL_WAIT_HINT_S * 1000); });
         expect(screen.getByText(LOCAL_MODEL_WAIT_HINT)).toBeInTheDocument();
         expect(screen.queryByText(MODEL_WAIT_HINT)).not.toBeInTheDocument();
+    });
+
+    it('on a model on this PC, states only what is known: the wait, that it is working, and Stop', () => {
+        useModelStore.setState({ active: { inference_remote: false } as ActiveModel });
+        renderBubble('Reading your request');
+        act(() => { vi.advanceTimersByTime(MODEL_WAIT_HINT_S * 1000); });
+        expect(screen.getByRole('status')).toHaveTextContent(
+            'Still waiting on the model — nothing has come back in over 45 seconds. It runs on this PC. Press Stop to end it now.',
+        );
+        expect(screen.getByRole('status').textContent).not.toMatch(/long prompt/i);
     });
 
     function rerenderWith(rerender: ReturnType<typeof render>['rerender'], liveStatus: string) {
@@ -146,5 +157,18 @@ describe('live status line in Arabic', () => {
         renderBubble('Reading your request');
         act(() => { vi.advanceTimersByTime(MODEL_WAIT_HINT_S * 1000); });
         expect(screen.getByRole('status').textContent).toContain('ما زلنا بانتظار النموذج');
+    });
+
+    it('says how long a model on this PC has been silent in Arabic, without guessing why', () => {
+        act(() => useChatStore.getState().setLocale('ar'));
+        useModelStore.setState({ active: { inference_remote: false } as ActiveModel });
+        renderBubble('Reading your request');
+        act(() => { vi.advanceTimersByTime(MODEL_WAIT_HINT_S * 1000); });
+        const text = stripIsolates(screen.getByRole('status').textContent ?? '');
+        expect(text).toContain('منذ أكثر من 45 ثانية');
+        expect(text).toContain('يعمل على هذا الكمبيوتر');
+        expect(text).not.toContain('ما زال يعمل');
+        expect(text).not.toContain('طلب طويل');
+        expect(text).not.toMatch(/long prompt/i);
     });
 });

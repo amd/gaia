@@ -208,11 +208,25 @@ PYTHON_FLAGSHIP = "gaiapy"
 NATIVE_FLAGSHIP = "gaiacpp"
 
 
-def chosen_flagship() -> str:
-    """The program the user chose as the GAIA agent; the Python one if never chosen."""
+def saved_flagship() -> str:
+    """The saved ``flagship_agent`` as written, even one this version can't run; the Python one if never chosen.
+
+    For showing the choice (Settings, the program list), never for starting it.
+    """
     from gaia.config import GaiaConfig
 
     return GaiaConfig.load().flagship_agent or PYTHON_FLAGSHIP
+
+
+def chosen_flagship() -> str:
+    """The program to start as the GAIA agent.
+
+    Raises ``HarnessUnavailableError`` when the saved one can't run here, so it is
+    never quietly replaced by another.
+    """
+    from gaia.harnesses import require_runnable
+
+    return require_runnable(saved_flagship())
 
 
 def native_flagship_executable_name() -> str:

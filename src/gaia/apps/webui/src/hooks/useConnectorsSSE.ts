@@ -10,12 +10,14 @@
  *
  *   - ``connector.configured``        ({connector_id, account_id})
  *   - ``connector.disconnected``      ({connector_id, revoke_supported,
- *                                       revoked_remotely, nothing_stored,
- *                                       revoke_error}. These are the honest
- *                                       provider-side revoke outcome from
- *                                       #2591, not just "local credential
- *                                       cleared"; nothing_stored is separate
- *                                       from a failed revoke, #8607)
+ *                                       revoked_remotely, revoke_attempted,
+ *                                       nothing_stored, revoke_error}. These
+ *                                       are the honest provider-side revoke
+ *                                       outcome from #2591, not just "local
+ *                                       credential cleared"; nothing_stored is
+ *                                       separate from a failed revoke, #8607)
+ *                                       revoke_attempted is False when no revoke was sent
+ *                                       and True when one was attempted
  *   - ``connector.tested``            ({connector_id, ok, detail})
  *   - ``connector.enabled``           ({connector_id})
  *   - ``connector.disabled``          ({connector_id})

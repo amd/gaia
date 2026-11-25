@@ -3,7 +3,7 @@
 Welcome to GAIA
 Connected to: agent gaia
 
-Try one — press its number:
+Try one: Tab to select, Enter to run
   1  Today's tech news in brief
   2  Research a topic, with sources
   3  What fills up this folder

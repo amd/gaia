@@ -894,6 +894,40 @@ def test_create_a_project_is_not_a_file(tmp_path):
     )
 
 
+@pytest.mark.parametrize("ext", ["txt", "md", "csv"])
+@pytest.mark.parametrize("in_folder", [True, False])
+def test_a_file_type_is_not_a_file_name(tmp_path, ext, in_folder):
+    folder = tmp_path / "notes"
+    folder.mkdir()
+    where = f" in `{folder}`" if in_folder else ""
+    ledger = CompletionEvidence(
+        f"Write a haiku and save it as a .{ext} file{where}", str(tmp_path)
+    )
+    saved = str(folder / f"rain.{ext}")
+    write(ledger, saved)
+    read(ledger, saved)
+    assert gaps(ledger, f"Saved to `{saved}`.") == []
+
+
+def test_a_dotfile_on_its_own_is_still_a_file_name():
+    assert save_obligations("Save it to .env") == ([".env"], True)
+    assert save_obligations("Save them as .txt files")[0] == []
+
+
+@pytest.mark.parametrize(
+    "query, path",
+    [
+        ("Save it to the .env file", ".env"),
+        ("Write it to the .gitignore file", ".gitignore"),
+        ("Save it to my .bashrc file", ".bashrc"),
+        ("Save notes.txt file", "notes.txt"),
+        ("Save it as file.txt", "file.txt"),
+    ],
+)
+def test_a_named_file_is_still_required(query, path):
+    assert save_obligations(query) == ([path], True)
+
+
 @pytest.mark.parametrize(
     "code",
     [

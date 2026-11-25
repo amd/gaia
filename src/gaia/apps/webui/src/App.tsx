@@ -24,6 +24,7 @@ import { FlagshipAgentNotice } from './components/FlagshipAgentNotice';
 import { BrowserPane } from './components/browser-pane/BrowserPane';
 import { browserPaneApi, useBrowserPaneStore } from './stores/browserPaneStore';
 import { useChatStore } from './stores/chatStore';
+import { useUiAuthStore } from './stores/uiAuthStore';
 import { useModelStore } from './stores/modelStore';
 import { useNotificationStore } from './stores/notificationStore';
 import { useScheduleStore } from './stores/scheduleStore';
@@ -32,6 +33,7 @@ import { useTrayBridge } from './hooks/useTrayBridge';
 import { useChatAlerts } from './hooks/useChatAlerts';
 import { useRetryServerWaitingDocs } from './hooks/useRetryServerWaitingDocs';
 import { useWindowTitle } from './hooks/useWindowTitle';
+import { isModalOpen } from './hooks/useEscapeToClose';
 import { useMediaQuery } from './hooks/useMediaQuery';
 import { startActiveRunsPoll } from './services/activeRuns';
 import { startQueueDispatcher } from './services/queueDispatch';
@@ -43,12 +45,13 @@ import { getSessionHash } from './utils/format';
 import { lastSessionTarget, readUrlTarget, rememberLastSession, resolveUrlNavTarget } from './utils/sessionNav';
 import { NEW_CHAT_DRAFT_KEY, chatDraftKey, clearSavedDraft, readSavedDraft, writeSavedDraft } from './utils/savedDraft';
 import { getApiBase } from './utils/apiBase';
-import { followBackendLifecycle, resyncBackend } from './stores/backendStore';
+import { followBackendLifecycle, resyncBackend, useBackendStore } from './stores/backendStore';
 import { cleanupAbandonedDraft, isAbandonedDraft } from './utils/sessionCleanup';
 import { FLAGSHIP_AGENT_ID, FlagshipMissing, hasFlagshipAgent, isFlagshipMissingError } from './utils/newTask';
 import { runWhileVisible } from './utils/visibleInterval';
 import { RETRY_INITIAL_MS, retryUntilOk, type Retrier } from './utils/retry';
 import { shouldShowStartupScreen } from './utils/startupGate';
+import { StartupFailed, StartupWaiting } from './components/StartupScreen';
 import { getT, useT } from './i18n/useT';
 import type { SetupCheck, StartCard } from './types';
 
@@ -70,12 +73,15 @@ type SetupGate =
     | { state: 'serverDown'; modelListUnread?: boolean }
     | { state: 'addingLocal' }
     /** `upgradeFailed`: the check answered, but updating GAIA's own model server failed. */
-    | { state: 'unknown'; error: string; upgradeFailed?: boolean };
+    | { state: 'unknown'; error: string; upgradeFailed?: boolean }
+    /** GAIA's backend never answered at launch, or the desktop app gave up starting it. */
+    | { state: 'backendDown'; error: string };
 
 const LEMONADE_FAIL_THRESHOLD = 3;
 /** A backend that has answered no status request for this long is treated as gone. */
 const BACKEND_SILENT_LOST_MS = 5 * 60_000;
-const RESTORE_NOTICE_MS = 6000;
+/** Outlasts the restore toast's own fade-out (`.app-restore-toast` hold + exit). */
+const RESTORE_NOTICE_MS = 4000;
 /** How long a refused setup check counts as "still starting"; about twice the desktop app's own startup limit. */
 const BACKEND_START_WAIT_MS = 60_000;
 
@@ -86,6 +92,13 @@ const UPGRADE_WAIT_MS = 5 * 60_000;
 
 /** The embedded server's update ended in failure, as opposed to still running. */
 class UpgradeFailed extends Error {}
+
+/** The setup check found nothing listening: GAIA's backend never started. */
+class BackendNotStarted extends Error {
+    constructor(readonly refusal: Error) {
+        super(refusal.message);
+    }
+}
 
 /** The model in use could not be read, so a setup check can't be trusted to say "not set up". */
 class ModelUnread extends Error {
@@ -110,7 +123,8 @@ async function waitForEmbeddedUpgrade(): Promise<void> {
 }
 
 function Loading() {
-    return <div className="loading-spinner" role="status" aria-label="Loading" />;
+    const t = useT();
+    return <div className="loading-spinner" role="status" aria-label={t('app.loading')} />;
 }
 
 // First failure, then every 10th (~5 min at the 30 s cap), so a stuck read stays in the log.
@@ -127,6 +141,7 @@ function noteSetupWorked() {
 
 function App() {
     const t = useT();
+    const signInRequired = useUiAuthStore((s) => s.signInRequired);
     useWindowTitle();
     const currentSessionId = useChatStore((s) => s.currentSessionId);
     const setSessions = useChatStore((s) => s.setSessions);
@@ -215,7 +230,13 @@ function App() {
                     }
                 } catch (err) {
                     const starting = isRefused(err) || err instanceof ModelUnread;
-                    if (!waitForStart || !starting || waited >= BACKEND_START_WAIT_MS) throw err;
+                    // The desktop app gave up on its backend (missing, or crashed on every try): stop waiting.
+                    const gaveUp = useBackendStore.getState().lifecycle?.status === 'stopped';
+                    if (!waitForStart || !starting || gaveUp || waited >= BACKEND_START_WAIT_MS) {
+                        // Nothing listening at launch, or still nothing on a re-check from that screen.
+                        const noBackend = isRefused(err) && (waitForStart || setupRef.current.state === 'backendDown');
+                        throw noBackend ? new BackendNotStarted(err as Error) : err;
+                    }
                     // A refused local connection is cheap; poll steadily so the app opens as soon as it listens.
                     await sleep(RETRY_INITIAL_MS);
                     waited += RETRY_INITIAL_MS;
@@ -232,7 +253,7 @@ function App() {
                     check = await api.checkSetup(remote);
                 }
                 // Read status and chats before showing the app, so it never flashes "lost connection" or "no chats".
-                if (waited > 0) await Promise.all([refreshStatus.current(), reloadSessions.current()]);
+                if (waited > 0 || setupRef.current.state === 'backendDown') await Promise.all([refreshStatus.current(), reloadSessions.current()]);
                 setNoAgentBuild(!!check.no_agent_build);
                 if (check.ready) noteSetupWorked();
                 // Seen ready before: an unreachable server is an outage, not a first run.
@@ -248,6 +269,11 @@ function App() {
             if (err instanceof UpgradeFailed) {
                 log.system.warn('Updating the local model server failed', err);
                 setSetup({ state: 'unknown', error, upgradeFailed: true });
+                return;
+            }
+            if (err instanceof BackendNotStarted) {
+                log.system.error("GAIA's backend did not start", err.refusal);
+                setSetup({ state: 'backendDown', error });
                 return;
             }
             log.system.warn('Setup check could not be answered', err);
@@ -334,10 +360,19 @@ function App() {
         void reloadSessions.current();
         // Not after a failed update: reconnecting must not start another one unasked.
         const gate = setupRef.current;
-        if (gate.state === 'unknown' && !gate.upgradeFailed) void checkSetup(true);
+        if ((gate.state === 'unknown' && !gate.upgradeFailed) || gate.state === 'backendDown') void checkSetup(true);
     }, [checkSetup]);
     const onBackendBackRef = useRef(onBackendBack);
     onBackendBackRef.current = onBackendBack;
+    // Signed in again: what was refused meanwhile is read now, like after an outage.
+    const wasSignedOut = useRef(false);
+    useEffect(() => {
+        if (signInRequired) wasSignedOut.current = true;
+        else if (wasSignedOut.current) {
+            wasSignedOut.current = false;
+            onBackendBack();
+        }
+    }, [signInRequired, onBackendBack]);
 
     // ── Backend and model-server health ─────────────────────────────────
     const failCount = useRef(0);
@@ -751,6 +786,11 @@ function App() {
         const onKey = (e: KeyboardEvent) => {
             const mod = e.ctrlKey || e.metaKey;
             if (!mod) return;
+            // Behind a dialog these would act on a screen the user can't see; only the sheet's own key still closes it.
+            if (isModalOpen()) {
+                if (e.key === '/') { e.preventDefault(); setShowShortcuts(false); }
+                return;
+            }
             if (e.shiftKey && e.key.toLowerCase() === 'o') { e.preventDefault(); newChat(); }
             else if (!e.shiftKey && e.key.toLowerCase() === 'k') { e.preventDefault(); window.dispatchEvent(new CustomEvent('gaia:focus-search')); }
             else if (!e.shiftKey && e.key.toLowerCase() === 'b') { e.preventDefault(); useChatStore.getState().toggleSidebarCollapsed(); }
@@ -830,17 +870,34 @@ function App() {
         initialized,
         mainUiShownRef.current,
     );
-    if (!showStartup && setup.state !== 'needed') mainUiShownRef.current = true;
+    if (!showStartup && setup.state !== 'needed' && setup.state !== 'backendDown') mainUiShownRef.current = true;
+
+    // Nothing works without the API token; the status poll clears this once the browser signs in.
+    if (signInRequired) {
+        return (
+            <div className="app">
+                <main className="startup" role="alert">
+                    <p className="startup-text" dir="auto">{t('auth.signIn.title')}</p>
+                    <p className="startup-text" dir="auto">{t('auth.signIn.hint', { command: 'gaia chat --ui' })}</p>
+                </main>
+            </div>
+        );
+    }
 
     // A PC set up before can chat while the check runs; a new one waits, so
     // the chat screen never appears and is then replaced by setup.
     if (showStartup) {
         return (
             <div className="app">
-                <main className="startup" role="status" aria-label="Starting GAIA">
-                    <div className="loading-spinner" aria-hidden="true" />
-                    <p className="startup-text">Starting GAIA…</p>
-                </main>
+                <StartupWaiting />
+            </div>
+        );
+    }
+
+    if (setup.state === 'backendDown') {
+        return (
+            <div className="app">
+                <StartupFailed error={setup.error} onCheckAgain={() => void checkSetup(true)} />
             </div>
         );
     }
@@ -932,15 +989,17 @@ function App() {
                 {/* Model downloads, here when the sidebar that usually shows them is closed or collapsed. */}
                 {(!sidebarOpen || sidebarCollapsed) && <DownloadChip placement="main" />}
                 {flagshipMissing && <FlagshipAgentNotice onInstalled={loadAgents} noBuild={noAgentBuild} />}
-                {restoreNotice && (
-                    <div className={`app-notice${restoreNotice.ok ? '' : ' is-warning'}`} role="status">
+                {/* A restore that worked is passing news: a toast, so the page doesn't shift twice. */}
+                {restoreNotice?.ok && (
+                    <div className="toast app-restore-toast" role="status">{t('model.restore.done')}</div>
+                )}
+                {restoreNotice && !restoreNotice.ok && (
+                    <div className="app-notice is-warning" role="status">
                         <span>{restoreNotice.message}</span>
-                        {!restoreNotice.ok && (
-                            <button type="button" className="link-btn" onClick={() => { dismissRestoreNotice(); openSettings('model'); }}>
-                                Pick a model
-                            </button>
-                        )}
-                        <button type="button" className="app-notice-close" onClick={dismissRestoreNotice} aria-label="Dismiss">
+                        <button type="button" className="link-btn" onClick={() => { dismissRestoreNotice(); openSettings('model'); }}>
+                            {t('model.restore.pick')}
+                        </button>
+                        <button type="button" className="app-notice-close" onClick={dismissRestoreNotice} aria-label={t('banner.dismiss')}>
                             <X size={14} />
                         </button>
                     </div>

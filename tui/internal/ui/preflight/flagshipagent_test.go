@@ -53,9 +53,29 @@ func TestFlagshipAgentRoundTripKeepsOtherKeys(t *testing.T) {
 	}
 }
 
+// A well-formed name this build can't run loads, so a config a newer GAIA wrote never
+// stops the TUI starting; launching it is the error.
+func TestFlagshipAgentThisBuildCannotRunLoadsAndSaysWhy(t *testing.T) {
+	for _, name := range []string{"gaiacode", "gaia-agent"} {
+		useConfig(t, `{"flagship_agent": "`+name+`"}`)
+		got, err := ReadFlagshipAgent()
+		if err != nil {
+			t.Fatalf("%s did not load: %v", name, err)
+		}
+		if got.Choice != name || got.Program() != "" {
+			t.Errorf("%s loaded as %+v", name, got)
+		}
+		if why := FlagshipAgentUnavailable(got.Choice); !strings.Contains(why, name) {
+			t.Errorf("%s: no reason it can't run: %q", name, why)
+		}
+	}
+	if why := FlagshipAgentUnavailable(FlagshipAgentNative); why != "" {
+		t.Errorf("gaiacpp was reported as unavailable: %q", why)
+	}
+}
+
 func TestFlagshipAgentBadValueIsAnErrorNamingFileKeyAndValues(t *testing.T) {
 	for _, body := range []string{
-		`{"flagship_agent": "gaia-agent"}`,
 		`{"flagship_agent": ""}`,
 		`{"flagship_agent": "gaia cpp"}`,
 		`{"flagship_agent": 2}`,

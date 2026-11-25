@@ -23,11 +23,12 @@ from gaia.mcp.servers.agent_ui_control import (
     TurnTracker,
     parse_timeout_ms,
 )
+from gaia.ui.api_token import UITokenError
 
 # The fake backend is a loopback HTTP server.
 pytestmark = pytest.mark.allow_network
 
-UI = {"X-Gaia-UI": "1"}
+UI = {"X-Gaia-UI": "1", "Authorization": "Bearer test-agent-ui-token"}
 SCOPE = "writing files in C:/work"
 
 
@@ -269,6 +270,8 @@ class FakeBackend:
                 backend.headers_seen.append(dict(self.headers))
                 if self.headers.get("X-Gaia-UI") != "1":
                     return self._json(403, {"detail": "missing X-Gaia-UI header"})
+                if self.headers.get("Authorization") != UI["Authorization"]:
+                    return self._json(401, {"detail": "API token required"})
                 body = self._body()
                 sid = body.get("session_id")
                 if url.path == "/api/chat/send":
@@ -355,7 +358,7 @@ def backend():
 
 @pytest.fixture
 def turns(backend):
-    return TurnRegistry(backend.url, UI)
+    return TurnRegistry(backend.url, lambda: dict(UI))
 
 
 def _prompt(turns, sid):
@@ -418,8 +421,24 @@ def test_full_turn_prompt_approve_read_back(backend, turns):
         40,
     )
     assert m["agent_elapsed_s"] == 1.5 and m["wall_s"] > 0
-    # Every request carried the CSRF header the backend requires.
+    # Every request carried the CSRF header and token the backend requires.
     assert all(h.get("X-Gaia-UI") == "1" for h in backend.headers_seen)
+    assert all(
+        h.get("Authorization") == UI["Authorization"] for h in backend.headers_seen
+    )
+
+
+def test_a_missing_api_token_is_named_not_hung(backend):
+    def no_token():
+        raise UITokenError("Cannot read the Agent UI API token at /x/agent-ui-token")
+
+    turns = TurnRegistry(backend.url, no_token)
+    backend.sessions["s1"] = "write"
+
+    started = turns.start("s1", "go")
+    assert started["status"] == "error"
+    assert "/x/agent-ui-token" in started["detail"]
+    assert "/x/agent-ui-token" in turns._call("GET", "/chat/active")["detail"]
 
 
 def test_always_grants_only_the_scope_shown(backend, turns):
@@ -911,7 +930,9 @@ def test_settings_tools_hit_the_ui_endpoints(monkeypatch):
     with patch("gaia.mcp.servers.agent_ui_mcp._api", return_value={"ok": 1}) as api:
         tools["set_model"].fn(model="Gemma-4-E4B-it-GGUF")
         tools["set_model_server"].fn(mode="external", base_url="http://localhost:13305")
-        tools["list_models"].fn(provider="../sessions")
+        tools["list_models"].fn(provider="a?b#c")
+        with pytest.raises(ValueError, match="not a valid id"):
+            tools["list_models"].fn(provider="../sessions")
         tools["get_settings"].fn()
     calls = [(c.args[1], c.args[2], c.kwargs.get("json")) for c in api.call_args_list]
     assert calls == [
@@ -921,7 +942,7 @@ def test_settings_tools_hit_the_ui_endpoints(monkeypatch):
             "/lemonade/target",
             {"mode": "external", "base_url": "http://localhost:13305"},
         ),
-        ("get", "/providers/..%2Fsessions/models", None),
+        ("get", "/providers/a%3Fb%23c/models", None),
         ("get", "/providers/active", None),
         ("get", "/lemonade/target", None),
     ]

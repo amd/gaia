@@ -18,6 +18,7 @@
 #include <gaia/git_tools.h>
 #include <gaia/media_tools.h>
 #include <gaia/model_registry.h>
+#include <gaia/process.h>
 #include <gaia/security.h>
 #include <gaia/web_tools.h>
 #include <gaia/workspace.h>
@@ -294,6 +295,10 @@ std::optional<json> GaiaAgent::switchRefusal(const ToolInfo& tool, const json& a
         const std::string why = internetRefusal(tool, args);
         if (!why.empty()) return refuse(why);
     }
+    if (options_.webOff) {
+        const std::string why = webFetchRefusal(tool, args);
+        if (!why.empty()) return refuse(why);
+    }
     static const std::set<std::string> reads = {"recall"};
     static const std::set<std::string> writes = {"remember", "update_memory", "forget"};
     if (memoryOff() && (reads.count(tool.name) || writes.count(tool.name))) {
@@ -392,8 +397,17 @@ const std::string& pythonCommand() {
         const char* const candidates[] = {"python"};
 #endif
         for (const char* candidate : candidates) {
+#ifdef _WIN32
+            // By full path: cmd.exe would run a python3.bat in the working folder first.
+            const std::string program = findProgramOnPath(candidate);
+            if (program.empty()) continue;
+            // cmd /c drops the first and last quote of a line that starts with one, so the line gets an extra pair.
+            const std::string probe = "\"\"" + program + "\" --version\"";
+#else
+            const std::string probe = std::string(candidate) + " --version";
+#endif
             try {
-                const ProcessResult r = ProcessRunner::run(std::string(candidate) + " --version", 5000);
+                const ProcessResult r = ProcessRunner::run(probe, 5000);
                 if (r.exitCode == 0 && (r.stdout_output + r.stderr_output).find("Python 3") != std::string::npos) {
                     return std::string(candidate);
                 }
@@ -530,6 +544,10 @@ std::string GaiaAgent::systemContext() const {
         for (const auto& r : options_.workspaceRoots) out << " " << r;
         out << ". Tools refuse other locations, so don't search the whole disk or the home "
                "folder. If a file the user needs isn't in these folders, say so.\n";
+    }
+    if (options_.webOff) {
+        out << "- Web access is off for this run. Do not search the web or fetch pages, repositories or "
+               "answers through the shell or a script either. Installing a package the task needs is fine.\n";
     }
     if (pythonCommand().empty()) {
         out << "- Python: none found on PATH. Don't plan around it; say so if a task needs it.\n";
@@ -1060,6 +1078,747 @@ std::optional<std::string> GaiaAgent::announcedStepNote(const std::string& answe
         return "Your answer ends by saying you will " + lowered(m[1].str()) +
                " something, but the turn ends with your answer, so that never happens. Do it now, then give your "
                "whole answer again: keep everything you already told the user and add what you find.";
+    }
+    return std::nullopt;
+}
+
+namespace {
+// "52 passed, 0 failed" and "no failures" belong to a pass report; "without errors" is "cleanly".
+std::string withoutZeroFailures(const std::string& text) {
+    static const std::regex zero(
+        R"(\b(?:0|no|zero|none|nothing)\s+(?:[\w-]+\s+)?(?:fail(?:s|ed|ures?)?|errors?|errored)\b)"
+        R"(|\bnone\s+of\s+(?:the\s+)?(?:[\w-]+\s+){0,2}?fail(?:s|ed|ing)?\b)",
+        std::regex::icase);
+    static const std::regex without(R"(\bwithout\s+(?:any\s+)?(?:failures?|errors?)\b)", std::regex::icase);
+    return std::regex_replace(std::regex_replace(text, zero, " "), without, "cleanly");
+}
+
+// "The 2 failing tests now pass", "2 errors are cleared": a count of failures the same clause says
+// are over is the tests, not a failure now. "2 failing tests remain, the rest pass" keeps its count.
+std::string withoutResolvedFailures(const std::string& text) {
+#define GAIA_NUM R"((?:[1-9]\d*|one|two|three|four|five|six|seven|eight|nine|ten))"
+    static const std::regex counted(
+        R"(\b(?:(?:the|both|all|these|those)\s+(?:)" GAIA_NUM R"(\s+)?|)" GAIA_NUM R"(\s+)(?:[\w-]+\s+)?)"
+        R"((?:(?:failing|failed|broken)\s+(?:[\w-]+\s+)?(?:tests?|cases?|specs?|checks?)|failures?|errors?)\b)",
+        std::regex::icase);
+    static const std::regex stop(
+        R"([;,:\n]|[.!?](?:\s|$)|\s(?:—|–|-)\s)"
+        R"(|\b(?:but|however|though|although|except|whereas|while|still|remains?|yet|with|versus|vs|out\s+of)\b)"
+        R"(|\band\s+(?:the\s+)?(?:)" GAIA_NUM R"(|rest|others?|remaining|everything|all)\b)",
+        std::regex::icase);
+#undef GAIA_NUM
+    static const std::regex resolved(
+        R"(\b(?:pass(?:es|ed|ing)?|green|succeed(?:s|ed)?|gone|cleared|fixed|resolved|work(?:s|ing)?\b(?!\s+on\b))\b)",
+        std::regex::icase);
+    static const std::regex negation(R"(n't\b|n’t\b|\b(?:not|never|no|nor)\b)", std::regex::icase);
+    std::string out;
+    auto from = text.cbegin();
+    for (std::sregex_iterator it(text.begin(), text.end(), counted), end; it != end; ++it) {
+        const std::smatch& m = *it;
+        std::string after = m.suffix().str();
+        std::smatch s;
+        if (std::regex_search(after, s, stop)) after = s.prefix().str();
+        out.append(from, m[0].first);
+        out += std::regex_search(after, resolved) && !std::regex_search(after, negation) ? "the tests" : m.str(0);
+        from = m[0].second;
+    }
+    out.append(from, text.cend());
+    return out;
+}
+
+// Without what was fixed or what made a test fail, which is history and not a failure now:
+// "Fixed the 2 failing tests", "the off-by-one that made test_median fail", "was failing".
+std::string withoutFixedFailures(const std::string& text) {
+    static const std::regex history(
+        R"(\b(?:fix(?:ed|es|ing)?|resolv(?:ed|es|ing)|repair(?:ed|s)?|address(?:ed|es)?|correct(?:ed|s)?)"
+        R"(|handled|dealt\s+with|(?:took|taken|take|takes|taking)\s+care\s+of)\s+)"
+        R"((?:(?:the|all|both|a|an|these|those|this|that)\s+)?(?:\d+\s+)?(?:[\w-]+\s+){0,2}?)"
+        R"((?:failing|failed|broken|failures?|errors?)\b)"
+        R"(|\b(?:made|make|makes|making|caused?|causes|causing|let|lets)\s+(?:\S+\s+){0,4}?(?:to\s+)?fail\b)"
+        R"(|\b(?:was|were|had\s+been|used\s+to)\s+(?:\w+\s+)?(?:fail(?:ing)?|broken|erroring)\b)",
+        std::regex::icase);
+    return std::regex_replace(withoutResolvedFailures(withoutZeroFailures(text)), history, " ");
+}
+
+// Whether the text plainly says a test fails now. Only a short list of statements counts:
+// "test_median still fails", "1 failed", "2 tests are failing", "test_mode doesn't pass yet",
+// "not passing", "remains failing", "one test fails". A clause with a negation or about the
+// past or a fix says nothing about now, and neither does behaviour ("fails fast on bad input").
+bool reportsOutstandingFailure(const std::string& text) {
+#define GAIA_COUNT R"(\b(?:[1-9]\d*|one|two|three|four|five|six|seven|eight|nine|ten)\s+(?:[\w-]+\s+){0,2}?)"
+    static const std::regex present(
+        R"(\bstill\s+(?:[\w-]+\s+)?(?:fail(?:s|ing)?|broken|erroring|red)\b(?!-))"
+        R"(|\b(?:is|are|'s|'re)\s+(?:still\s+)?(?:failing|broken|erroring)\b)"
+        R"(|\bremains?\s+(?:failing|broken|red)\b)"
+        R"(|)" GAIA_COUNT R"((?:fail(?:s|ing|ures?)?|errors?)\b(?!-))",
+        std::regex::icase);
+    // "2 tests failed" is a runner's count, but also how a fixed failure is told: not beside a fix.
+    static const std::regex pastCount(GAIA_COUNT R"((?:failed|errored)\b)", std::regex::icase);
+#undef GAIA_COUNT
+    static const std::regex notPassing(
+        R"(\b(?:do|does|is|are)(?:\s+not|n't|n’t)\s+(?:(?:yet|still|all|even)\s+)*pass(?:es|ing)?\b)"
+        R"(|\bnot\s+(?:(?:yet|all)\s+)?passing\b)",
+        std::regex::icase);
+    static const std::regex negation(
+        R"(n't\b|n’t\b|\b(?:not|never|no|neither|nor|none|nothing|without|cannot|anymore)\b|\bany\s+more\b)",
+        std::regex::icase);
+    static const std::regex notNow(R"(\b(?:now|again|anymore|longer)\b|\bany\s+more\b)", std::regex::icase);
+    static const std::regex pastOrFixed(
+        R"(\b(?:previously|before|earlier|originally|initially|at\s+first|used\s+to|was|were|had|)"
+        R"(fixed|resolved|repaired|addressed|corrected)\b)",
+        std::regex::icase);
+    static const std::regex behaviour(
+        R"(\bfail(?:s|ed|ing)?\s+(?:fast|early|loudly|gracefully|safely|closed|open|over|quickly|cleanly)\b)",
+        std::regex::icase);
+    static const std::regex asBefore(R"(\b(?:as|like)\s+before\b)", std::regex::icase);
+    // "All tests pass; test_mode fails", "the rest pass but the median tests fail". Only a bare "fails"
+    // ending its clause: "the regression test fails on the old code" describes the test, not a result.
+    static const std::regex namedFails(
+        R"((?:;|\bbut\b)\s*(?:the\s+)?(?:[\w-]+\s+)?[\w.:/\[\]-]*test[\w.:/\[\]-]*\s+(?:still\s+)?fails?)"
+        R"((?:\s+(?:still|now))?(?=\s*(?:$|[.!?;,:)\n]|(?:—|–|-)\s|\bbut\b)))",
+        std::regex::icase);
+    static const std::regex sentenceBreak(R"((?:[.!?](?:\s+|$))|\n+)");
+    static const std::regex clauseBreak(
+        R"([.!?;,:\n]|\s(?:—|–|-)\s|\b(?:but|and|so|although|though|because|since|while|whereas|after|which)\b)",
+        std::regex::icase);
+    const std::string cleaned =
+        std::regex_replace(std::regex_replace(withoutFixedFailures(text), behaviour, " "), asBefore, " ");
+    for (std::sregex_token_iterator s(cleaned.begin(), cleaned.end(), sentenceBreak, -1), end; s != end; ++s) {
+        const std::string sentence = *s;
+        std::smatch named;
+        if (std::regex_search(sentence, named, namedFails) && !std::regex_search(named.str(0), negation) &&
+            !std::regex_search(named.suffix().str(), negation)) {
+            return true;
+        }
+        const bool pastSentence = std::regex_search(sentence, pastOrFixed);
+        for (std::sregex_token_iterator c(sentence.begin(), sentence.end(), clauseBreak, -1); c != end; ++c) {
+            const std::string clause = *c;
+            if (std::regex_search(clause, pastOrFixed)) continue;
+            std::smatch m;
+            if ((std::regex_search(clause, present) || (!pastSentence && std::regex_search(clause, pastCount))) &&
+                !std::regex_search(clause, negation)) {
+                return true;
+            }
+            if (std::regex_search(clause, m, notPassing)) {
+                // The statement's own "not" is allowed; any other negation, or "now"/"again", is not.
+                const std::string rest = m.prefix().str() + " " + m.suffix().str();
+                if (!std::regex_search(rest, negation) && !std::regex_search(rest, notNow)) return true;
+            }
+        }
+    }
+    return false;
+}
+
+// The words of the answer's first report that tests ran and passed, or "" when it makes none.
+// Sentence by sentence and clause by clause, as the Python agent reads it: a negation or a
+// piece of advice ("run pytest to confirm the tests pass") only covers its own clause, and a
+// sentence that also reports a failure still standing is an honest mixed report.
+std::string passingTestClaim(const std::string& answer) {
+    // "Pass" with an object is the verb of a call, not a result: "the test passes an empty list".
+#define GAIA_PASS                                                                                              \
+    R"(pass(?:es|ed|ing)?\b(?!\s+(?:a|an|the|to|into|through|along|none|null|nil|true|false|it|them|this|that|)" \
+    R"(these|those|its|their|his|her|my|our|your|some|every|one|two|three|several)\b|\s+[`'"]))"
+    static const std::regex claim(
+        R"(\b(?:\d+\s+(?:(?:sub)?tests?\s+)" GAIA_PASS R"(|pass(?:ed|ing)\b))"
+        R"(|(?:sub)?tests?:?(?:\s+(?:in|for|of)\s+\S+)?\s+(?:suite\s+)?)"
+        R"((?:(?:are|is|all|now|still|were|have|has|both|each|successfully)\s+)*(?:)" GAIA_PASS
+        R"(|green|succeed(?:s|ed)?))"
+        R"(|tests?\s+(?:run|ran)\s+(?:clean|green)\b)"
+        R"(|(?:tests?|suite)\s+(?:(?:all|now|have|has|were|was|both|each)\s+)*(?:ran|runs?|completed|finished|executed))"
+        R"(\s+(?:successfully|cleanly|clean|green)\b)"
+        R"(|test\s+results?:?\s+(?:(?:are|is|all|now)\s+)*(?:green\b|)" GAIA_PASS R"())"
+        R"(|confirmed\s+(?:[\w-]+\s+){0,3}?by\s+(?:re-?)?running\s+the\s+(?:unit\s+)?tests?)"
+        R"(|(?:test\s+)?suite\s+(?:is\s+)?(?:green|)" GAIA_PASS R"())"
+        R"(|everything\s+(?:is\s+)?(?:green\b|)" GAIA_PASS R"())"
+        R"(|all\s+green\b)"
+        R"(|tests?\s+(?:were|was)\s+(?:run|executed)\b(?:[^.!?\n]|[.](?!\s)){0,80}?\band\s+(?:(?:they|all|both|each)\s+)*pass(?:ed)?)"
+        R"(|\b(?:ran|run|running)\s+(?:the\s+)?(?:(?:unit|whole|full|entire)\s+)?(?:tests?|test\s+suite|suite))"
+        R"((?:[^.!?\n]|[.](?!\s)){0,80}?(?:\band|\s(?:—|–|-))\s+(?:and\s+)?(?:it|they|all|both|each|everything)\s+)"
+        R"((?:(?:all|now)\s+)*)" GAIA_PASS
+        R"(|(?:ran|running|run)\s+the\s+tests?\s+successfully))"
+        R"(\b)",
+        std::regex::icase);
+#undef GAIA_PASS
+    static const std::regex negation(
+        R"(n't\b|n’t\b|\b(?:not|never|unable|could ?not|fail(?:s|ed|ing)?|except|unverified|did ?not|without running|but)\b)",
+        std::regex::icase);
+    static const std::regex advice(
+        R"(\b(?:should|would|could|must|please|recommend|suggests?|consider|expect|try|once|if|before|need to|)"
+        R"(make sure|ensure|to (?:confirm|verify|check|ensure|see))\b)",
+        std::regex::icase);
+    static const std::regex sentenceBreak(R"((?:[.!?](?:\s+|$))|\n+)");
+    // A dash that only leads to the result ("ran the tests — they pass") doesn't split the claim.
+    static const std::regex contrast(
+        R"(;|\s(?:—|–|-)\s(?!(?:and\s+)?(?:it|they|all|both|each|everything)\s+(?:(?:all|now)\s+)*pass))"
+        R"(|\b(?:but|however|though|whereas)\b)",
+        std::regex::icase);
+    for (std::sregex_token_iterator s(answer.begin(), answer.end(), sentenceBreak, -1), end; s != end; ++s) {
+        const std::string sentence = *s;
+        if (reportsOutstandingFailure(sentence)) continue;
+        const std::string cleaned = withoutFixedFailures(sentence);
+        for (std::sregex_token_iterator c(cleaned.begin(), cleaned.end(), contrast, -1); c != end; ++c) {
+            const std::string clause = *c;
+            std::smatch m;
+            if (!std::regex_search(clause, m, claim) || std::regex_search(clause, negation)) continue;
+            // Advice is judged on the part of the clause the claim sits in: "Ensure the suite is green: all tests pass".
+            const std::string before = clause.substr(0, static_cast<size_t>(m.position(0)));
+            std::string part = clause.substr(static_cast<size_t>(m.position(0)));
+            const size_t brk = before.find_last_of(":;");
+            const std::string lead = brk == std::string::npos ? before : before.substr(brk + 1);
+            const size_t tail = part.find_first_of(":;");
+            if (tail != std::string::npos) part.resize(tail);
+            if (std::regex_search(lead + part, advice)) continue;
+            return m.str(0);
+        }
+    }
+    return "";
+}
+
+struct ShellRun {
+    std::optional<int> exitCode;
+    bool timedOut = false;
+    bool ran = false;  // false: refused or denied before it started
+    std::string text;  // stdout then stderr
+    std::string cwd;   // the shell's folder after the command, "" when unknown
+};
+
+ShellRun readShellRun(const std::string& output) {
+    ShellRun r;
+    const json j = json::parse(output, nullptr, false);
+    if (j.is_object()) {
+        if (j.contains("exit_code") && j["exit_code"].is_number_integer()) r.exitCode = j["exit_code"].get<int>();
+        if (j.contains("cwd") && j["cwd"].is_string()) r.cwd = j["cwd"].get<std::string>();
+        r.timedOut = j.value("timed_out", false) == true || j.value("cancelled", false) == true;
+        // A call refused or denied before it started has no exit code.
+        r.ran = r.exitCode.has_value() && !(j.contains("executed") && j["executed"] == false);
+        for (const char* key : {"stdout", "stderr", "output", "error"}) {
+            if (j.contains(key) && j[key].is_string()) r.text += j[key].get<std::string>() + "\n";
+        }
+        return r;
+    }
+    // Clipped past the end of the JSON: the sorted keys put exit_code before the output.
+    static const std::regex exitCode(R"("exit_code":(-?\d+))");
+    std::smatch m;
+    if (std::regex_search(output, m, exitCode)) r.exitCode = std::stoi(m[1].str());
+    // "cwd" sorts first, so it survives the clip; its JSON escaping is undone for a Windows path.
+    static const std::regex cwd(R"rx("cwd":"((?:[^"\\]|\\.)*)")rx");
+    static const std::regex escaped(R"(\\(.))");
+    if (std::regex_search(output, m, cwd)) r.cwd = std::regex_replace(m[1].str(), escaped, "$1");
+    r.timedOut = output.find("\"timed_out\":true") != std::string::npos;
+    r.ran = r.exitCode.has_value() && output.find("\"executed\":false") == std::string::npos;
+    for (size_t i = 0; i < output.size(); ++i) {
+        if (output[i] == '\\' && i + 1 < output.size() && output[i + 1] == 'n') {
+            r.text += '\n';
+            ++i;
+        } else {
+            r.text += output[i];
+        }
+    }
+    return r;
+}
+
+// What a test runner's own summary lines say: whether any test ran, and whether any failed.
+struct RunnerSummary {
+    bool found = false;
+    bool ran = false;
+    bool failed = false;
+};
+
+// `command` is what ran: a summary line spelled out in it was printed, not reported by a runner.
+RunnerSummary readRunnerSummary(const std::string& text, const std::string& command = "") {
+    static const std::regex ansi("\x1b\\[[0-9;]*m");
+    static const std::regex pytest(
+        R"(=*[ \t]*(?:\d+ (?:subtests? )?(?:passed|failed|error|errors|skipped|deselected|xfailed|xpassed|warning|warnings)(?:, )?)+ in \d+(?:\.\d+)?s(?: \(.*\))?[ \t]*=*)");
+    static const std::regex pytestRan(R"(\b[1-9]\d* (?:subtests? )?(?:passed|failed|error|errors|xfailed|xpassed)\b)");
+    static const std::regex unittestRan(R"(Ran (\d+) tests? in \d+(?:\.\d+)?s)");
+    static const std::regex unittestVerdict(R"((?:OK(?: \(.*\))?|FAILED \(.*\)))");
+    static const std::regex jest(R"([ \t]*Tests:[ \t]+(?:\d+ (?:failed|passed|skipped|todo|total)(?:, )?)+[ \t]*)");
+    static const std::regex vitest(R"([ \t]*Tests[ \t]+(?:\d+ (?:failed|passed|skipped|todo)(?: \| )?)+ \(\d+\)[ \t]*)");
+    static const std::regex mocha(R"([ \t]*(\d+) (passing|failing)(?: \(\d+(?:\.\d+)?m?s\))?[ \t]*)");
+    static const std::regex go(
+        R"((ok|FAIL)[ \t]+\S+(?:[ \t]+(?:\(cached\)|\d+(?:\.\d+)?s)(?:[ \t]+\[[^\]\n]*\])?|[ \t]+\[[^\]\n]*\])(?:[ \t]+coverage:.*)?[ \t]*)");
+    static const std::regex cargo(
+        R"(test result: (?:ok|FAILED)\. (\d+) passed; (\d+) failed; \d+ ignored; \d+ measured; \d+ filtered out(?:; finished in \d+(?:\.\d+)?s)?[ \t]*)");
+    static const std::regex counted(R"(\b[1-9]\d* (?:passed|failed|passing|failing)\b)");
+    static const std::regex failure(R"(\b[1-9]\d* (?:subtests? )?(?:failed|error|errors|failing)\b|\bFAILED \()");
+
+    std::vector<std::string> lines;
+    {
+        std::istringstream in(std::regex_replace(text, ansi, ""));
+        for (std::string l; std::getline(in, l);) {
+            if (!l.empty() && l.back() == '\r') l.pop_back();
+            lines.push_back(l);
+        }
+    }
+    RunnerSummary s;
+    auto note = [&s](bool ran, bool failed) {
+        s.found = true;
+        s.ran = s.ran || ran;
+        s.failed = s.failed || failed;
+    };
+    std::smatch m;
+    for (size_t i = 0; i < lines.size(); ++i) {
+        const std::string& line = lines[i];
+        if (line.size() > 2000) continue;  // a summary is one short line
+        const size_t from = line.find_first_not_of(" \t=");
+        if (from != std::string::npos && !command.empty()) {
+            const std::string core = line.substr(from, line.find_last_not_of(" \t=") - from + 1);
+            if (core.size() >= 4 && command.find(core) != std::string::npos) continue;
+        }
+        if (std::regex_match(line, pytest)) {
+            note(std::regex_search(line, pytestRan), std::regex_search(line, failure));
+        } else if (std::regex_match(line, m, unittestRan)) {
+            size_t next = i + 1;
+            while (next < lines.size() && lines[next].find_first_not_of(" \t") == std::string::npos) ++next;
+            if (next < lines.size() && std::regex_match(lines[next], unittestVerdict)) {
+                note(m[1].str() != "0", lines[next].rfind("FAILED", 0) == 0);
+            } else if (m[1].str() == "0") {
+                note(false, false);
+            }
+        } else if (std::regex_match(line, jest) || std::regex_match(line, vitest)) {
+            note(std::regex_search(line, counted), std::regex_search(line, failure));
+        } else if (std::regex_match(line, m, mocha)) {
+            note(m[1].str() != "0", m[2].str() == "failing" && m[1].str() != "0");
+        } else if (std::regex_match(line, m, go)) {
+            note(line.find("[no tests to run]") == std::string::npos, m[1].str() == "FAIL");
+        } else if (std::regex_match(line, m, cargo)) {
+            note(m[1].str() != "0" || m[2].str() != "0", m[2].str() != "0");
+        }
+    }
+    // A runner that found nothing to run says so in its own words.
+    static const std::regex nothing(
+        R"(no tests ran|collected 0 items|Ran 0 tests|\[no test files\]|No tests found|no test specified|0 passing)",
+        std::regex::icase);
+    if (!s.ran && std::regex_search(text, nothing)) s.found = true;
+    return s;
+}
+
+// A command that starts a test runner: pytest, python -m unittest, npm test, go test, ctest...
+const std::regex& testRunnerWords() {
+    static const std::regex runner(
+        R"((?:^|[\s;&|(`/\\])(?:pytest|py\.test|tox|nox|ctest|jest|vitest|mocha|nose2|phpunit|rspec)(?:\.exe|\.cmd)?(?=[\s;&|)`]|$))"
+        R"(|(?:^|[\s;&|(`/\\])(?:python[0-9.]*|py)(?:\.exe)?\s+(?:-\S+\s+)*-m\s*(?:pytest|unittest)\b)"
+        R"(|\b(?:npm|yarn|pnpm|bun)(?:\.cmd)?\s+(?:run\s+)?test\b|\bnpx\s+(?:jest|vitest|mocha)\b)"
+        R"(|\b(?:go|cargo|dotnet|deno|swift)\s+test\b|\b(?:mvn|mvnw)\s+(?:\S+\s+)*(?:test|verify)\b)"
+        R"(|\bgradlew?(?:\.bat)?\s+(?:\S+\s+)*(?:test|check)\b|\bmake\s+(?:test|check)\b)"
+        R"(|\b(?:uv|poetry|pipenv|hatch|pdm)\s+run\s+(?:\S+\s+)*?(?:pytest|python\s+-m\s+(?:pytest|unittest))\b)",
+        std::regex::icase);
+    return runner;
+}
+
+bool namesTestRunner(const std::string& command) {
+    return std::regex_search(command, testRunnerWords());
+}
+
+// Whether the runner's own result can be lost on the way back: `!` before it, or after it a pipe,
+// `||`, `;`, a newline or a background `&` (another command decides the exit status), or its
+// output sent to a file or /dev/null (its summary isn't in what came back). `&&` and `2>&1` keep it.
+bool runnerResultMasked(const std::string& command) {
+    std::smatch m;
+    if (!std::regex_search(command, m, testRunnerWords())) return false;
+    const size_t at = static_cast<size_t>(m.position(0));
+    const std::string matched = m.str(0);
+    std::string before = command.substr(0, at);
+    if (!matched.empty() && !std::isalnum(static_cast<unsigned char>(matched[0]))) before += matched[0];
+    const size_t last = before.find_last_not_of(" \t");
+    if (last != std::string::npos && before[last] == '!' &&
+        (last == 0 || std::string(" \t;&|(").find(before[last - 1]) != std::string::npos)) {
+        return true;
+    }
+    const size_t from = at + matched.size();
+    char quote = 0;
+    for (size_t i = 0; i < command.size(); ++i) {
+        const char ch = command[i];
+        if (quote) {
+            if (ch == quote) quote = 0;
+            continue;
+        }
+        if (ch == '"' || ch == '\'') {
+            quote = ch;
+            continue;
+        }
+        if (i < from) continue;
+        const char next = i + 1 < command.size() ? command[i + 1] : '\0';
+        if (ch == '|') return true;
+        if (ch == ';' || ch == '\n') {
+            if (command.find_first_not_of(" \t\r\n;", i) != std::string::npos) return true;
+        } else if (ch == '&') {
+            if (next == '&') {
+                ++i;
+            } else if (next != '>' && command[i - 1] != '>') {
+                return true;
+            }
+        } else if (ch == '>') {
+            size_t j = i + 1;
+            if (j < command.size() && command[j] == '>') ++j;
+            while (j < command.size() && (command[j] == ' ' || command[j] == '\t')) ++j;
+            if (j >= command.size() || command[j] != '&') return true;  // `2>&1` and `>&2` stay captured
+        }
+    }
+    return false;
+}
+
+enum class RunVerdict { Passed, Failed, Ignored };
+
+// How one test run counts. A run whose result could be lost (runnerResultMasked) counts by its
+// own summary: a pass only when that shows one, a failure when it shows a failure or the shell
+// still failed, and otherwise not at all.
+RunVerdict testRunVerdict(const std::string& command, const ShellRun& run, bool succeeded,
+                          const RunnerSummary& summary) {
+    if (run.timedOut) return RunVerdict::Failed;
+    const bool exitedClean = succeeded && run.exitCode.value_or(0) == 0;
+    if (runnerResultMasked(command)) {
+        if (summary.found) return exitedClean && summary.ran && !summary.failed ? RunVerdict::Passed : RunVerdict::Failed;
+        return exitedClean ? RunVerdict::Ignored : RunVerdict::Failed;
+    }
+    return exitedClean && !summary.failed && (!summary.found || summary.ran) ? RunVerdict::Passed : RunVerdict::Failed;
+}
+
+// Installing, locating or asking a runner its version names it without running a test.
+bool onlySetsUpRunner(const std::string& command) {
+    static const std::regex setup(
+        R"((?:^|[\s;&|(])(?:pip[0-9.]*|pipx|conda|mamba|uv|poetry|pdm|npm|yarn|pnpm|bun|gem|cargo|go|dotnet)(?:\.exe|\.cmd)?)"
+        R"(\s+(?:pip\s+)?(?:install|add|i|show|list|get|update|upgrade|uninstall|remove)\b)"
+        R"(|\s--(?:version|help|collect-only|co)\b|\s-h\b)"
+        R"(|(?:^|[\s;&|(])(?:which|where|whereis|type|command\s+-v|Get-Command|gcm)\s)",
+        std::regex::icase);
+    static const std::regex version(R"(\s-V\b)");
+    return std::regex_search(command, setup) || std::regex_search(command, version);
+}
+
+// The pieces of a shell command between `;`, `&&`, `||`, `|` and newlines, quotes kept whole.
+std::vector<std::string> shellSegments(const std::string& command) {
+    std::vector<std::string> segments(1);
+    char quote = 0;
+    for (const char ch : command) {
+        if (quote) {
+            if (ch == quote) quote = 0;
+        } else if (ch == '"' || ch == '\'') {
+            quote = ch;
+        } else if (ch == '&' && !segments.back().empty() && segments.back().back() == '>') {
+            // `2>&1` is a redirect, not a separator.
+        } else if (ch == ';' || ch == '&' || ch == '|' || ch == '\n') {
+            if (!segments.back().empty()) segments.emplace_back();
+            continue;
+        }
+        segments.back() += ch;
+    }
+    return segments;
+}
+
+// Printing text or an old log shows a summary without running anything: `echo "4 passed in 0.1s"`,
+// `cat pytest.log | tail -3`, `echo done && echo "4 passed"`, `python -c "print('4 passed')"`.
+bool onlyShowsText(const std::string& command) {
+    static const std::regex show(
+        R"(^\s*(?:echo|printf|cat|type|more|less|head|tail|grep|egrep|findstr|sort|wc|true|false|:|cd|pwd|ls|dir|)"
+        R"(Get-Content|gc|Write-Output|Write-Host|Select-String|Select-Object|Out-String|sleep|Start-Sleep)(?:\s|$))",
+        std::regex::icase);
+    static const std::regex inlineCode(R"(^\s*(?:python[0-9.]*|py|node)(?:\.exe)?\s+(?:-\S+\s+)*-[ce]\s)",
+                                       std::regex::icase);
+    static const std::regex runsTests(R"(\b(?:pytest|unittest|jest|vitest|mocha)\b)", std::regex::icase);
+    bool any = false;
+    for (const std::string& segment : shellSegments(command)) {
+        if (segment.find_first_not_of(" \t\r") == std::string::npos) continue;
+        any = true;
+        const bool printsCode = std::regex_search(segment, inlineCode) && !std::regex_search(segment, runsTests);
+        if (!printsCode && !std::regex_search(segment, show)) return false;
+    }
+    return any;
+}
+
+#define GAIA_SOURCE_EXT R"(\.(?:py|pyi|js|jsx|ts|tsx|mjs|cjs|go|rs|c|cc|cpp|cxx|h|hpp|java|kt|rb|php|cs|swift))"
+// A copy or move onto a source file, or a recursive copy into a folder. A backup (`*.bak`,
+// `x_backup.py`, a `backup/` folder) or a copy into a temp folder leaves the code as it was.
+bool copiesOverCode(const std::string& segment) {
+    static const std::regex word(R"((?:"[^"]*"|'[^']*'|\S)+)");
+    static const std::regex verb(R"(^(?:cp|mv|copy|move|Copy-Item|Move-Item|cpi|mi)$)", std::regex::icase);
+    static const std::regex copyVerb(R"(^(?:cp|copy|Copy-Item|cpi)$)", std::regex::icase);
+    static const std::regex source(GAIA_SOURCE_EXT R"($)", std::regex::icase);
+    static const std::regex backup(R"((?:^|[/\\._-])(?:backups?|bak|orig)(?:[/\\._-]|$))", std::regex::icase);
+    static const std::regex scratch(R"(^(?:/tmp|/var/tmp|\$TMPDIR|\$env:TE?MP|%TE?MP%)(?:[/\\]|$))",
+                                    std::regex::icase);
+    static const std::regex shortFlags(R"(-[A-Za-z]{1,4})");
+    std::vector<std::string> words;
+    for (std::sregex_iterator it(segment.begin(), segment.end(), word), end; it != end; ++it) {
+        std::string w = it->str();
+        w.erase(std::remove_if(w.begin(), w.end(), [](char ch) { return ch == '"' || ch == '\''; }), w.end());
+        words.push_back(w);
+    }
+    if (words.empty() || !std::regex_match(words[0], verb)) return false;
+    std::vector<std::string> args;
+    std::string dest;
+    bool recursive = false;
+    for (size_t i = 1; i < words.size(); ++i) {
+        const std::string& w = words[i];
+        if (w.size() < 2 || w[0] != '-') {
+            args.push_back(w);
+            continue;
+        }
+        std::string flag = w;
+        std::transform(flag.begin(), flag.end(), flag.begin(), [](unsigned char ch) { return std::tolower(ch); });
+        if (flag == "-destination" && i + 1 < words.size()) {
+            dest = words[++i];
+        } else if ((flag == "-path" || flag == "-literalpath") && i + 1 < words.size()) {
+            args.push_back(words[++i]);
+        } else if (flag == "-recurse" || flag == "--recursive" || flag == "--archive" ||
+                   (std::regex_match(w, shortFlags) && w.find_first_of("rRa") != std::string::npos)) {
+            recursive = true;
+        }
+    }
+    if (dest.empty()) {
+        if (args.size() < 2) return false;
+        dest = args.back();
+    }
+    if (std::regex_search(dest, backup) || std::regex_search(dest, scratch)) return false;
+    return std::regex_search(dest, source) || (recursive && std::regex_match(words[0], copyVerb));
+}
+
+// A shell command that rewrites code in place: sed -i, a patch, a git checkout, a redirect, a copy,
+// move or tee into a source file. `git checkout -b name` only makes a branch at the current commit.
+bool shellChangesCode(const std::string& command) {
+    static const std::regex edit(
+        R"(\bsed\s+(?:-[^\s]*\s+)*-[a-zA-Z]*i|\bperl\s+-[a-zA-Z]*i)"
+        R"(|\bgit\s+(?:apply|am|checkout(?!\s+-[bB]\s+[^\s;&|]+\s*(?:$|[;&|\n]))|restore|revert|cherry-pick|)"
+        R"(stash\s+(?:pop|apply))\b|(?:^|[\s;&|(])patch\s)"
+        R"(|(?:(?:^|[^>&0-9])>>?\s*["']?|\b(?:Set-Content|Add-Content|Out-File)\b[^|;&]*?)[^\s|;&>"']+)" GAIA_SOURCE_EXT
+        R"(\b)",
+        std::regex::icase);
+    // tee writes every file it names.
+    static const std::regex tee(R"(^\s*tee\s+(?:-\S+\s+)*.*)" GAIA_SOURCE_EXT R"(\b)", std::regex::icase);
+    if (std::regex_search(command, edit)) return true;
+    for (const std::string& segment : shellSegments(command)) {
+        if (std::regex_search(segment, tee) || copiesOverCode(segment)) return true;
+    }
+    return false;
+}
+#undef GAIA_SOURCE_EXT
+
+// A write a test run could depend on; docs and notes leave an earlier run standing.
+bool changesCode(const GaiaAgent::CallSeen& c) {
+    if ((c.name != "file_write" && c.name != "file_edit") || !c.succeeded) return false;
+    if (!c.args.is_object() || !c.args.contains("path") || !c.args["path"].is_string()) return true;
+    static const std::regex doc(R"((?:^|[/\\])(?:README|CHANGELOG|LICENSE)[^/\\]*$|\.(?:md|mdx|rst|txt)$)",
+                                std::regex::icase);
+    return !std::regex_search(c.args["path"].get<std::string>(), doc);
+}
+
+std::string comparablePath(std::string p) {
+    std::replace(p.begin(), p.end(), '\\', '/');
+    while (p.size() > 1 && p.back() == '/') p.pop_back();
+#ifdef _WIN32
+    std::transform(p.begin(), p.end(), p.begin(), [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
+#endif
+    return p;
+}
+
+bool isAbsolutePath(const std::string& p) {
+    return (!p.empty() && (p[0] == '/' || p[0] == '\\')) ||
+           (p.size() > 2 && std::isalpha(static_cast<unsigned char>(p[0])) && p[1] == ':' && (p[2] == '/' || p[2] == '\\'));
+}
+
+bool isUnder(const std::string& path, const std::string& folder) {
+    if (folder.empty()) return false;
+    if (path == folder) return true;
+    const std::string prefix = folder.back() == '/' ? folder : folder + "/";
+    return path.compare(0, prefix.size(), prefix) == 0;
+}
+
+std::string parentOf(const std::string& p) {
+    const size_t slash = p.find_last_of('/');
+    if (slash == std::string::npos) return "";
+    return slash == 0 ? "/" : p.substr(0, slash);
+}
+
+// Whether a run in `cwd` could have tested `changed`: the file is under the run's folder, or
+// in the project a tests folder (or a folder inside one) the run was in sits in, or the run is
+// under the file's folder. Unknown: yes.
+bool runCovers(const std::string& cwd, const std::string& changed) {
+    if (cwd.empty() || changed.empty() || !isAbsolutePath(changed) || !isAbsolutePath(cwd)) return true;
+    const std::string file = comparablePath(changed);
+    const std::string dir = comparablePath(cwd);
+    if (isUnder(file, dir) || isUnder(dir, parentOf(file))) return true;
+    static const std::regex testsFolder(R"(^(.*)/(?:tests?|specs?|__tests__|testing)(?:/|$))", std::regex::icase);
+    std::smatch m;
+    return std::regex_search(dir, m, testsFolder) && isUnder(file, m[1].str().empty() ? "/" : m[1].str());
+}
+
+// What a test command ran, as the Python agent's `command_check_target` reads it: without
+// trailing output trimming (`| tail -5`, `2>&1`) or pytest flags that only change the report
+// (`-q`, `-v`, `--tb=short`), so `pytest -q` and `python -m pytest` are one check and `pytest -k x` another.
+std::string checkTarget(const std::string& command) {
+    static const std::regex trim(
+        R"((?:\s*\|\s*(?:tail|head|tee|more|less|out-string|out-host|select-object\s+-(?:first|last))(?:\s+[^|;&<>]*)?)"
+        R"(|\s+\d?>>?\s*(?:&\d|[^\s|;&<>]+))\s*$)",
+        std::regex::icase);
+    static const std::regex word(R"((?:"[^"]*"|'[^']*'|\S)+)");
+    static const std::regex pythonPytest(R"((?:^|\s)(?:python[0-9.]*|py)(?:\.exe)?\s+-m\s+pytest\b)", std::regex::icase);
+    static const std::regex pytestWord(R"((?:^|[/\\])(?:pytest|py\.test)(?:\.exe)?$)", std::regex::icase);
+    static const std::regex shortFlags(R"(-[A-Za-z]+)");
+    static const std::set<std::string> reportFlags = {
+        "--quiet",          "--verbose",       "--no-header",        "--no-summary", "--showlocals",
+        "--no-showlocals",  "--full-trace",    "--disable-warnings", "--disable-pytest-warnings"};
+    static const std::set<std::string> reportValueFlags = {"--tb",        "--color",        "--durations",
+                                                           "--durations-min", "--verbosity", "--show-capture",
+                                                           "--code-highlight"};
+    static const std::set<std::string> valueFlags = {"-k", "-m", "-o", "-c", "-n", "-W", "--deselect", "--ignore",
+                                                     "--rootdir"};
+
+    std::string text;
+    {
+        std::istringstream in(command);
+        for (std::string w; in >> w;) text += (text.empty() ? "" : " ") + w;
+    }
+    for (std::string trimmed; !(trimmed = std::regex_replace(text, trim, "")).empty() && trimmed != text;) {
+        text = trimmed;
+    }
+    text = std::regex_replace(text, pythonPytest, " pytest");
+    std::vector<std::string> words;
+    for (std::sregex_iterator it(text.begin(), text.end(), word), end; it != end; ++it) words.push_back(it->str());
+    std::string kept;
+    auto keep = [&kept](const std::string& w) { kept += (kept.empty() ? "" : " ") + w; };
+    bool inPytest = false;
+    for (size_t i = 0; i < words.size(); ++i) {
+        const std::string& w = words[i];
+        if (!inPytest) {
+            inPytest = std::regex_search(w, pytestWord);
+            keep(w);
+            continue;
+        }
+        if (w.find_first_not_of("|&;") == std::string::npos || w.back() == ';' || w == "--") {
+            inPytest = false;
+            keep(w);
+            continue;
+        }
+        if (valueFlags.count(w)) {
+            keep(w);
+            if (i + 1 < words.size()) keep(words[++i]);
+            continue;
+        }
+        if (w == "-p" && i + 1 < words.size() && words[i + 1] == "no:cacheprovider") {
+            ++i;
+            continue;
+        }
+        if (w == "-pno:cacheprovider" || reportFlags.count(w)) continue;
+        const size_t eq = w.find('=');
+        if (reportValueFlags.count(w.substr(0, eq))) {
+            if (eq == std::string::npos) ++i;
+            continue;
+        }
+        if (std::regex_match(w, shortFlags)) {
+            std::string letters;
+            for (size_t j = 1; j < w.size(); ++j) {
+                const char letter = w[j];
+                if (letter == 'q' || letter == 'v' || letter == 'l') continue;
+                if (letter == 'r') {  // -rA: the rest of the cluster says what to report
+                    if (j == w.size() - 1) ++i;
+                    break;
+                }
+                if (letter != 'x' && letter != 's') {
+                    letters += w.substr(j);
+                    if (j == w.size() - 1 && valueFlags.count(std::string("-") + letter) && i + 1 < words.size()) {
+                        keep("-" + letters);
+                        letters.clear();
+                        keep(words[++i]);
+                    }
+                    break;
+                }
+                letters += letter;
+            }
+            if (!letters.empty()) keep("-" + letters);
+            continue;
+        }
+        keep(w);
+    }
+    return kept;
+}
+}  // namespace
+
+std::optional<std::pair<std::string, std::string>> GaiaAgent::unsupportedTestClaim(const std::string& answer,
+                                                                                    const std::vector<CallSeen>& calls) {
+    const std::string claim = passingTestClaim(answer);
+    if (claim.empty()) return std::nullopt;
+    struct Run {
+        size_t at;
+        bool passed;
+        std::string cwd;
+        std::string command;
+        bool ignored = false;  // its result was masked and its output shows none
+    };
+    std::vector<std::pair<std::string, Run>> latest;  // by folder and check: a rerun replaces the run before it
+    size_t lastChange = 0;
+    bool changed = false;
+    std::string changedPath;  // "" when the change names no file (a shell edit)
+    for (size_t i = 0; i < calls.size(); ++i) {
+        const CallSeen& c = calls[i];
+        if (changesCode(c)) {
+            lastChange = i;
+            changed = true;
+            changedPath = c.args.is_object() && c.args.contains("path") && c.args["path"].is_string()
+                              ? c.args["path"].get<std::string>()
+                              : "";
+        }
+        if (c.name != "bash_execute" || !c.args.is_object() || !c.args.contains("command") ||
+            !c.args["command"].is_string()) {
+            continue;
+        }
+        const ShellRun run = readShellRun(c.output);
+        if (!run.ran) continue;
+        const std::string command = c.args["command"].get<std::string>();
+        const RunnerSummary summary = readRunnerSummary(run.text, command);
+        const bool ranTests = summary.found && summary.ran && !onlyShowsText(command);
+        // `python test_x.py` with no main block exits 0 and prints nothing: not a test run.
+        // Nor is installing pytest, asking its version, or printing a summary.
+        if (!ranTests && (!namesTestRunner(command) || onlySetsUpRunner(command) || onlyShowsText(command))) {
+            if (c.succeeded && shellChangesCode(command)) {
+                lastChange = i;
+                changed = true;
+                changedPath.clear();
+            }
+            continue;
+        }
+        const RunVerdict verdict = testRunVerdict(command, run, c.succeeded, summary);
+        const bool ignored = verdict == RunVerdict::Ignored;
+        const bool passed = verdict == RunVerdict::Passed;
+        const std::string key = run.cwd + "\n" + checkTarget(command);
+        auto same = std::find_if(latest.begin(), latest.end(), [&](const auto& e) { return e.first == key; });
+        if (same == latest.end()) latest.push_back({key, {i, passed, run.cwd, command, ignored}});
+        else if (!ignored) same->second = {i, passed, run.cwd, command, false};
+    }
+    if (latest.empty()) return std::make_pair(claim, std::string("no tests were run this turn"));
+    // "52 tests pass. 3 fail." after a failed run is the run reported honestly.
+    const bool failureReported = reportsOutstandingFailure(answer);
+    bool anyPassed = false, anyCounted = false, passedAfterChange = false, passedElsewhere = false;
+    const Run* hiddenFailure = nullptr;
+    for (const auto& [key, run] : latest) {
+        if (run.ignored) continue;
+        anyCounted = true;
+        const bool current = !changed || run.at > lastChange;
+        // A narrower rerun that passes does not hide a wider run that failed, as on the Python agent.
+        if (!run.passed && current && !hiddenFailure && runCovers(run.cwd, changedPath)) hiddenFailure = &run;
+        if (!run.passed) continue;
+        anyPassed = true;
+        if (!current) continue;
+        if (runCovers(run.cwd, changedPath)) passedAfterChange = true;
+        else passedElsewhere = true;
+    }
+    if (!anyPassed) {
+        if (failureReported) return std::nullopt;
+        if (!anyCounted) {
+            return std::make_pair(claim, std::string("the test command hid the runner's exit status and its output "
+                                                     "has no summary, so it doesn't show a pass"));
+        }
+        return std::make_pair(claim, std::string("the tests run this turn didn't pass"));
+    }
+    if (hiddenFailure && !failureReported) {
+        std::string shown = hiddenFailure->command;
+        if (shown.size() > 80) shown = shown.substr(0, 77) + "...";
+        return std::make_pair(claim, "`" + shown + "` didn't pass when it last ran");
+    }
+    if (!passedAfterChange && passedElsewhere) {
+        return std::make_pair(claim, std::string("the tests that passed ran in a different folder from the last change"));
+    }
+    if (!passedAfterChange) {
+        return std::make_pair(claim, std::string("the tests ran before the last change, so they don't cover it"));
     }
     return std::nullopt;
 }
@@ -1694,6 +2453,16 @@ std::optional<std::string> GaiaAgent::unresolvedClaims(const std::string& answer
     return reviewAnswer(reviewedPart(answer), true);
 }
 
+std::optional<std::string> GaiaAgent::unconfirmedClaims(const std::string& answer) {
+    std::vector<CallSeen> seen;
+    for (const auto& c : turnToolCalls()) seen.push_back({c.name, c.args, c.output, c.succeeded});
+    const auto test = unsupportedTestClaim(reviewedPart(answer), seen);
+    if (!test) return std::nullopt;
+    std::string why = test->second;
+    why[0] = static_cast<char>(std::toupper(static_cast<unsigned char>(why[0])));
+    return "I couldn't confirm all of this:\n\n- " + why + ".";
+}
+
 std::optional<std::string> GaiaAgent::announcedStepNote(const std::string& answer) {
     if (asksForNoAction(turnRequest())) return std::nullopt;
     std::vector<CallSeen> seen;
@@ -1845,11 +2614,19 @@ std::optional<std::string> GaiaAgent::reviewAnswer(const std::string& answer, bo
         });
     };
 
+    std::vector<CallSeen> seen;
+    for (const auto& c : calls) seen.push_back({c.name, c.args, c.output, c.succeeded});
+    const auto testClaim = unsupportedTestClaim(answer, seen);
+    if (testClaim) {
+        notes.push_back("Your answer says \"" + testClaim->first + "\", but " + testClaim->second +
+                        ". Either run the tests now with the project's test runner (for example `python -m "
+                        "pytest`), or drop the claim. Then give your complete answer again: it replaces the one "
+                        "above, which the user will not see.");
+    }
     static const std::regex ranClaim(
-        R"(\b(I ran|I've run|I have run|ran the (tests?|script|command|program|code)|executed the|)"
-        R"(tests? (all )?pass(ed|es)?|all \d+ tests pass))",
+        R"(\b(I ran|I've run|I have run|ran the (tests?|script|command|program|code)|executed the))",
         std::regex::icase);
-    if (std::regex_search(answer, ranClaim) && !called({"bash_execute"}, true)) {
+    if (!testClaim && std::regex_search(answer, ranClaim) && !called({"bash_execute"}, true)) {
         notes.push_back("Your answer says a command or the tests ran, but no command ran "
                         "successfully in this request. Run it, or say it wasn't run.");
     }

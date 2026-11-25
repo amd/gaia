@@ -30,6 +30,27 @@ from gaia.utils.terminal import windows_hidden_popen_kwargs
 
 logger = logging.getLogger(__name__)
 
+_TOKEN_QUERY = re.compile(r"(?<=[?&])token=[^&#\s]*")
+
+
+class _RedactTunnelToken(logging.Filter):
+    """Masks the tunnel token a phone's first request carries in its query string."""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        if isinstance(record.args, tuple):
+            record.args = tuple(
+                _TOKEN_QUERY.sub("token=REDACTED", a) if isinstance(a, str) else a
+                for a in record.args
+            )
+        return True
+
+
+def redact_tunnel_token_in_access_log() -> None:
+    """Keep the tunnel token out of uvicorn's access log, which ``--debug`` turns on."""
+    access = logging.getLogger("uvicorn.access")
+    if not any(isinstance(f, _RedactTunnelToken) for f in access.filters):
+        access.addFilter(_RedactTunnelToken())
+
 
 # ── Error helpers ──────────────────────────────────────────────────────────
 
@@ -463,7 +484,6 @@ class TunnelManager:
         self._error: Optional[str] = None
         # Set with _error when the failure is a missing prerequisite.
         self._reason: Optional[str] = None
-        self._public_ip: Optional[str] = None
         self._device: Optional[dict] = None
         self._start_lock = asyncio.Lock()
         # ngrok's log lines, read as they arrive: a full pipe would stall it.
@@ -499,7 +519,6 @@ class TunnelManager:
             "installCommands": (
                 _ngrok_install_commands() if self._reason == NGROK_NOT_INSTALLED else []
             ),
-            "publicIp": self._public_ip,
             "device": self._device if self.active else None,
         }
 
@@ -572,9 +591,6 @@ class TunnelManager:
             logger.error("ngrok authtoken not configured -- aborting tunnel start")
             return self.get_status()
 
-        # Fetch public IP (for ngrok interstitial password hint)
-        await self._fetch_public_ip()
-
         # Kill any stale ngrok processes (free tier only allows 1)
         try:
             await self._kill_stale_ngrok()
@@ -608,9 +624,8 @@ class TunnelManager:
             if self._url:
                 self._started_at = datetime.now(timezone.utc).isoformat()
                 self._error = None
-                logger.info(
-                    "Tunnel started: %s (token: %s...)", self._url, self._token[:8]
-                )
+                # The URL is the host only; the token and password stay out of logs.
+                logger.info("Tunnel started: %s", self._url)
             else:
                 # _poll_ngrok_api already sets self._error with a friendly
                 # message; keep a sensible fallback if it somehow didn't.
@@ -791,20 +806,6 @@ class TunnelManager:
             if cmdline[1:] == expected:
                 stale.append(proc)
         return stale
-
-    async def _fetch_public_ip(self) -> None:
-        """Fetch the server's public IP (for ngrok interstitial password)."""
-        try:
-            import httpx
-
-            async with httpx.AsyncClient(timeout=5.0) as client:
-                resp = await client.get("https://api.ipify.org")
-                if resp.status_code == 200:
-                    self._public_ip = resp.text.strip()
-                    logger.info("Public IP: %s", self._public_ip)
-        except Exception as e:
-            logger.debug("Could not fetch public IP: %s", e)
-            self._public_ip = None
 
     def _start_output_readers(self) -> None:
         with self._output_lock:
