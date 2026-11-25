@@ -442,7 +442,7 @@ TEST(ShellConfinement, JudgementSeparatesCheckedOpaqueAndOutside) {
     for (const char* checked : {"ls -la", "cat in.txt | wc -l", "cd sub && ls ..", "mkdir -p a/b && touch a/b/c",
                                 "grep -rn x . > found.txt", "for f in *.txt; do head -1 \"$f\"; done",
                                 "sed -i.bak 's/a/b/g' in.txt", "awk -F, '{print $2}' in.txt", "echo \"$HOME\"",
-                                "find . -name '*.txt' -exec wc -l {} +", "git branch", "git rev-list --count HEAD",
+                                "find . -name '*.txt' -exec wc -l {} +", "git branch", "sort --output=sorted.txt in.txt", "git rev-list --count HEAD",
                                 "test -f in.txt && echo yes", "X=in.txt; cat \"$X\"", "cat /etc/hosts"}) {
         const gaia::ShellJudgement j = judge(checked);
         EXPECT_TRUE(j.inside()) << checked << ": outside '" << j.outsideWord << "', opaque '" << j.opaque << "'";
@@ -457,7 +457,7 @@ TEST(ShellConfinement, JudgementSeparatesCheckedOpaqueAndOutside) {
         EXPECT_TRUE(j.outsideWord.empty()) << opaque << ": " << j.outsideWord;
         EXPECT_FALSE(j.opaque.empty()) << opaque << " was taken as checked";
     }
-    for (const char* outside : {"cat ../outside/x", "cd ..", "echo x > ../outside/y", "ls ~", "cp in.txt ..",
+    for (const char* outside : {"cat ../outside/x", "sort --output=../outside/y in.txt", "cd ..", "echo x > ../outside/y", "ls ~", "cp in.txt ..",
                                 "python3 ../outside/tool.py", "ln -s ../outside l"}) {
         EXPECT_FALSE(judge(outside).outsideWord.empty()) << outside;
     }

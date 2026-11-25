@@ -188,6 +188,7 @@ TEST_F(LongInputCli, AHeadlessRunAnswersEveryPathologicalShapeQuickly) {
             ASSERT_FALSE(r.stdout_output.empty()) << name << ": " << r.stderr_output;
             const json out = json::parse(r.stdout_output, nullptr, false);
             ASSERT_TRUE(out.is_object()) << name << ": " << r.stdout_output.substr(0, 300);
+            ASSERT_FALSE(out.value("is_error", false)) << name << ": " << out.value("result", "").substr(0, 300);
             EXPECT_LT(out.value("cpu_s", 99.0), 2.0) << name << ", " << bytes << " bytes";
         }
     }
@@ -204,6 +205,7 @@ TEST_F(LongInputCli, ALongRunInTheModelsAnswerIsAsCheap) {
         EXPECT_LT(secondsSince(start), 10.0) << name;
         const json out = json::parse(r.stdout_output, nullptr, false);
         ASSERT_TRUE(out.is_object()) << name << ": " << r.stderr_output.substr(0, 300);
+        ASSERT_FALSE(out.value("is_error", false)) << name << ": " << out.value("result", "").substr(0, 300);
         EXPECT_LT(out.value("cpu_s", 99.0), 2.0) << name;
     }
 }

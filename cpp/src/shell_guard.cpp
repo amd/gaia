@@ -2174,6 +2174,9 @@ private:
             for (size_t i = first; i + 1 < fields.size(); ++i) {
                 if (text(i) == "-o" || text(i) == "--output") path(fields[i + 1], st, true);
             }
+            for (size_t i = first; i < fields.size(); ++i) {
+                if (text(i).rfind("--output=", 0) == 0) path({escaped(text(i).substr(9)), false, false}, st, true);
+            }
         }
         if (name == "cp" || name == "install") {
             // Copying over a file writes into it, so the last word is checked as a write.
