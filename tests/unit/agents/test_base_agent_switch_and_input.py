@@ -8,6 +8,7 @@ question needs a person" rule, and ``on_cut`` for a history that outgrew the
 window. No Lemonade or LLM: the chat client and the model list are stubs.
 """
 
+import dataclasses
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
@@ -343,3 +344,89 @@ def test_no_on_cut_is_fine():
     agent.process_query("second?")
 
     assert len(agent.conversation_history.turns(agent)) == 2
+
+
+# ---------------------------------------------------------------------------
+# A subclass's own ``config`` is never written by a switch
+# ---------------------------------------------------------------------------
+
+
+@dataclasses.dataclass(frozen=True)
+class _Settings:
+    model_id: str = "mine"
+    use_claude: bool = False
+    claude_model: str = "mine"
+
+
+def test_a_switch_leaves_a_subclass_config_alone(lemonade):
+    agent = _agent()
+    agent.config = _Settings()
+
+    agent.switch_model(OTHER)
+
+    assert agent.model_id == OTHER
+    assert agent.config == _Settings()
+
+
+def test_a_rollback_with_a_frozen_config_still_raises_the_documented_error(lemonade):
+    agent = _agent()
+    agent.config = _Settings()
+    agent.rebuild_system_prompt = MagicMock(side_effect=ValueError("bad prompt"))
+
+    with pytest.raises(RuntimeError, match="rolled back to the previous model"):
+        agent.switch_model(OTHER)
+
+    assert agent.model_id == DEFAULT_MODEL_NAME
+
+
+def test_a_failed_claude_switch_puts_the_claude_model_back(lemonade):
+    agent = _agent()
+    agent._claude_model = "claude-haiku-4-5"
+    agent.rebuild_system_prompt = MagicMock(side_effect=ValueError("bad prompt"))
+
+    with pytest.raises(RuntimeError):
+        agent.switch_model("claude-opus-5")
+
+    assert agent._claude_model == "claude-haiku-4-5"
+    assert agent._use_claude is False
+
+
+# ---------------------------------------------------------------------------
+# request_user_input where nobody can type
+# ---------------------------------------------------------------------------
+
+
+def test_a_console_with_no_question_hook_and_no_terminal_does_not_wait(monkeypatch):
+    agent = _agent(_AskingAgent)
+    agent.console = SimpleNamespace()  # no request_user_input_blocking
+    monkeypatch.setattr(
+        "gaia.agents.tools.user_input_tools.stdin_is_interactive", lambda: False
+    )
+    monkeypatch.setattr(
+        "builtins.input", lambda *_: pytest.fail("input() would hang on a pipe")
+    )
+
+    assert _ask(message="Which repo?") == NO_QUESTION_CHANNEL
+    assert agent._unanswered_question == "Which repo?"
+
+
+def test_at_a_terminal_the_answer_is_read_from_it(monkeypatch):
+    agent = _agent(_AskingAgent)
+    agent.console = SimpleNamespace()
+    monkeypatch.setattr(
+        "gaia.agents.tools.user_input_tools.stdin_is_interactive", lambda: True
+    )
+    monkeypatch.setattr("builtins.input", lambda *_: " the red one ")
+
+    assert _ask(message="Which one?") == "the red one"
+
+
+def test_the_tool_is_grouped_under_its_mixin_like_every_other():
+    from gaia.agents.base.tools import tool_category
+
+    _agent(_AskingAgent)
+
+    assert (
+        tool_category("request_user_input", _TOOL_REGISTRY["request_user_input"])
+        == "user_input"
+    )

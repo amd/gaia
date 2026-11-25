@@ -1386,6 +1386,9 @@ class ChatAgent(
         )
         return [h for h in holders if hasattr(h, "model")]
 
+    def _model_switch_config(self) -> Any:
+        return self.config
+
     def _snapshot_model_followers(self) -> Dict[str, Any]:
         """Also what ``follow_model_switch`` moves: image reading and documents."""
         state = super()._snapshot_model_followers()

@@ -448,3 +448,111 @@ def test_cancel_event_stops_the_turn_with_its_message():
     assert agent.cancel_event is stop
     assert "Stopped at your request." in result["result"]
     assert agent.sent.call_count == 0
+
+
+# ---------------------------------------------------------------------------
+# Review findings: each of these was a bug in the first version
+# ---------------------------------------------------------------------------
+
+
+def test_close_runs_the_close_of_a_mixin_listed_after_agent(tmp_path):
+    from gaia.database.mixin import DatabaseMixin
+
+    class _NotesAgent(_PlainAgent, DatabaseMixin):
+        pass
+
+    with patch("gaia.agents.base.agent.AgentSDK"):
+        agent = _NotesAgent(silent_mode=True, skip_lemonade=True)
+    agent.init_db(str(tmp_path / "notes.db"))
+    assert agent.db_ready
+
+    agent.close()
+
+    assert not agent.db_ready
+
+
+def test_a_claude_id_given_as_model_id_is_the_model_that_runs():
+    with patch("gaia.agents.base.agent.AgentSDK") as sdk:
+        agent = _PlainAgent(
+            silent_mode=True,
+            skip_lemonade=True,
+            provider="claude",
+            model_id="claude-opus-5",
+        )
+    assert sdk.call_args.args[0].claude_model == "claude-opus-5"
+    assert agent._claude_model == "claude-opus-5"
+
+
+def test_two_different_claude_models_are_refused():
+    with pytest.raises(ValueError, match="name two Claude models"):
+        _PlainAgent(
+            silent_mode=True,
+            skip_lemonade=True,
+            provider="claude",
+            model_id="claude-opus-5",
+            claude_model="claude-haiku-4-5",
+        )
+
+
+def test_a_local_model_id_beside_claude_keeps_the_claude_default():
+    with patch("gaia.agents.base.agent.AgentSDK") as sdk:
+        _PlainAgent(
+            silent_mode=True,
+            skip_lemonade=True,
+            provider="claude",
+            model_id=DEFAULT_MODEL_NAME,
+        )
+    assert sdk.call_args.args[0].claude_model == "claude-sonnet-5"
+
+
+def test_lemonade_with_a_cloud_model_id_is_refused():
+    with pytest.raises(ValueError, match="Pass provider='fireworks'"):
+        resolve_agent_provider("lemonade", False, "fireworks.glm-4p6")
+
+
+def test_a_gateway_error_is_reported_as_a_provider_error(monkeypatch):
+    from gaia.llm.gateway import GatewayError
+
+    def refuse(provider, client):
+        raise GatewayError("Your Lemonade Server has no working AMD gateway.")
+
+    monkeypatch.setattr("gaia.llm.cloud_keys.reconnect_provider", refuse)
+    with pytest.raises(HostedProviderError, match="no working AMD gateway"):
+        connect_hosted_provider("amd", "amd.Llama-3.3-70B", object())
+
+
+def test_a_stand_in_chat_client_cannot_break_the_failure_label(monkeypatch):
+    monkeypatch.setattr(
+        lemonade_client, "configured_lemonade_url", lambda: "http://10.0.0.5:8000"
+    )
+    monkeypatch.setattr(
+        lemonade_client, "resolve_lemonade_base_url", lambda *a: "http://10.0.0.5:8000"
+    )
+    agent = _agent()
+    agent.chat = MagicMock()  # every attribute is another mock
+
+    assert agent._model_service_label() == "The model server at 10.0.0.5:8000"
+
+
+def test_the_history_shows_a_turn_as_soon_as_it_ends():
+    agent = _agent(["Paris."])
+    agent.start_session_history()
+
+    agent.process_query("Capital of France?")
+
+    assert [m["content"] for m in agent.conversation_history] == [
+        "Capital of France?",
+        "Paris.",
+    ]
+
+
+def test_a_turn_that_cannot_be_saved_says_so_and_leaves_no_stand_in():
+    agent = _agent(["Paris."])
+    history = agent.start_session_history()
+    history.record = MagicMock(side_effect=OSError("disk full"))
+
+    with pytest.raises(RuntimeError, match="could not be saved.*disk full"):
+        agent.process_query("Capital of France?")
+
+    assert history.turns(agent) == []
+    assert history._pending is None

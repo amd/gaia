@@ -29,14 +29,7 @@ from gaia.logger import get_logger
 
 logger = get_logger(__name__)
 
-#: Curated Claude 5-family ids the TUI's ``/model`` picker offers, mapped to a
-#: short display name for the header chip. Sourced from
-#: ``src/gaia/eval/config.py`` MODEL_PRICING's "Claude 5 family" — the current,
-#: non-deprecated generation. An older id (e.g. ``claude-opus-4-8``) still
-#: works if the caller knows it (ClaudeProvider accepts any ``claude-*``
-#: string), but ``/model`` only ever offers and validates against this list —
-#: an unlisted id is refused rather than silently accepted (see
-#: ``_apply_claude_switch``).
+#: Claude ids a switch accepts, with the name to show. An unlisted id is refused.
 CLAUDE_MODELS: Dict[str, str] = {
     "claude-opus-5": "Opus 5",
     "claude-sonnet-5": "Sonnet 5",
@@ -111,16 +104,29 @@ def _lemonade_models(base_url: Optional[str]) -> Dict[str, Dict[str, Any]]:
 _SwitchState = Dict[str, Any]
 
 
+_ABSENT = object()
+
+
+def _switch_config(agent: Any) -> Any:
+    """The settings object whose model fields follow a switch, or None.
+
+    An ``Agent`` says which through ``_model_switch_config``; a ``config``
+    attribute on some other subclass is its own and is never written.
+    """
+    hook = getattr(type(agent), "_model_switch_config", None)
+    return hook(agent) if callable(hook) else getattr(agent, "config", None)
+
+
 def _snapshot_switch_state(agent: Any) -> _SwitchState:
     chat = agent.chat
-    cfg = getattr(agent, "config", None)
+    cfg = _switch_config(agent)
     return {
         "llm_client": chat.llm_client,
         "chat_use_claude": chat.config.use_claude,
         "chat_model": chat.config.model,
         "chat_claude_model": chat.config.claude_model,
         "use_claude": agent._use_claude,
-        "claude_model": getattr(agent, "_claude_model", None),
+        "claude_model": vars(agent).get("_claude_model", _ABSENT),
         "model_id": agent.model_id,
         "cfg_use_claude": getattr(cfg, "use_claude", None) if cfg is not None else None,
         "cfg_model_id": getattr(cfg, "model_id", None) if cfg is not None else None,
@@ -175,10 +181,12 @@ def _restore_switch_state(agent: Any, snapshot: _SwitchState) -> None:
     chat.config.model = snapshot["chat_model"]
     chat.config.claude_model = snapshot["chat_claude_model"]
     agent._use_claude = snapshot["use_claude"]
-    if snapshot["claude_model"] is not None:
+    if snapshot["claude_model"] is not _ABSENT:
         agent._claude_model = snapshot["claude_model"]
+    elif "_claude_model" in vars(agent):
+        del agent._claude_model
     agent.model_id = snapshot["model_id"]
-    cfg = getattr(agent, "config", None)
+    cfg = _switch_config(agent)
     if cfg is not None:
         cfg.use_claude = snapshot["cfg_use_claude"]
         cfg.model_id = snapshot["cfg_model_id"]
@@ -228,7 +236,7 @@ def _apply_switch(
         if claude_model is not None:
             agent._claude_model = claude_model
         agent.model_id = model_id if model_id is not None else claude_model
-        cfg = getattr(agent, "config", None)
+        cfg = _switch_config(agent)
         if cfg is not None:
             cfg.use_claude = use_claude
             if model_id is not None:

@@ -11,6 +11,7 @@ console reads a line from stdin; a console that says it cannot answer
 from typing import Any, Dict, List, Optional
 
 from gaia.agents.base.call_risk import NEEDS_PERSON_ARG, READ, call_risk
+from gaia.utils.terminal import stdin_is_interactive
 
 #: Longest request_user_input waits for an answer, in seconds.
 USER_INPUT_MAX_WAIT_S = 600
@@ -104,6 +105,10 @@ class UserInputToolsMixin:
                     timeout_seconds=timeout_seconds,
                     continue_if_no_response=continue_if_no_response,
                 )
+            elif not stdin_is_interactive():
+                # Nobody is typing: input() would wait on an open pipe.
+                _agent._unanswered_question = message
+                return NO_QUESTION_CHANNEL
             else:
                 # Non-SSE consoles (interactive sessions)
                 try:

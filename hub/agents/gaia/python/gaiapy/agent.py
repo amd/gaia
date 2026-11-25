@@ -730,8 +730,8 @@ class GaiaAgent(
         """Release this agent's watchers, HTTP session and SQLite handles now.
 
         ``ChatAgent.close`` runs that teardown, which otherwise waits for
-        ``__del__``: for an instance whose tool registry holds bound methods
-        that runs only when the cyclic collector gets to it — far too late for
+        ``__del__``. An instance whose tool registry holds bound methods is
+        only finalized when the cyclic collector gets to it, far too late for
         a sidecar that builds an agent per one-shot request. Every step is individually guarded and idempotent,
         so the later ``__del__`` is harmless. MCP servers are stopped here and
         waited for, so they are gone when ``close()`` returns; with

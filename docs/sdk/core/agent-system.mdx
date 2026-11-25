@@ -468,6 +468,10 @@ on), the constructor raises `HostedProviderError` saying what to set. It never
 falls back to a local model. An unknown provider, or one that contradicts
 `use_claude=True`, raises `ValueError`.
 
+With `provider="claude"`, a Claude id passed as `model_id`
+(`model_id="claude-opus-5"`) is the model that runs, the same as passing it as
+`claude_model`. Naming two different Claude models raises `ValueError`.
+
 When a hosted turn fails, the answer names the provider (`Fireworks AI: ...`),
 or the server address when you pointed GAIA at your own server, so the user
 knows which service to check.
@@ -1021,17 +1025,19 @@ class SetupAgent(Agent, UserInputToolsMixin):
 ```
 
 The answer comes through the output handler: the Agent UI and TUI handlers
-show the question and wait, and a terminal console reads a line. If nobody
-answers in time, the model is told so. It never receives its own default as if
+show the question and wait, and a terminal console reads a line. Where nobody
+can type (a service, a pipe) the model is told to put the question in its
+reply. If nobody answers in time, the model is told so. It never receives its own default as if
 the user chose it, and until the next turn any confirmation-gated change is
 marked as needing a person, even when tools were pre-approved.
 
 ### Releasing resources
 
 `close()` releases what the agent holds, including the history file. Call it
-when a conversation ends, or use the agent as a context manager. A subclass that
-owns more (watchers, database handles, MCP servers) extends `close()` and calls
-`super().close()`.
+when a conversation ends, or use the agent as a context manager. It also runs
+the `close()` of any mixin listed after `Agent` (`DatabaseMixin` closes its
+database this way). A subclass that owns more (watchers, MCP servers) extends
+`close()` and calls `super().close()`.
 
 ```python
 with MyAgent() as agent:

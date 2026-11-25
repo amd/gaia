@@ -87,6 +87,7 @@ from gaia.agents.base.model_switch import (  # noqa: F401
     _apply_switch,
     _lemonade_models,
     _lemonade_url,
+    _reachable_lemonade_models,
     _wait_for_gaia_lemonade,
     is_claude_model,
     switch_concrete_model,

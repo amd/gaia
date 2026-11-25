@@ -156,7 +156,8 @@ def __init__(
         provider: Who serves the model (default: None keeps use_claude). "lemonade",
             "claude" (same as use_claude=True), or a Lemonade cloud provider
             ("fireworks", "amd") that runs model_id through Lemonade's cloud routing;
-            the id gets the "<provider>." prefix when it lacks one
+            the id gets the "<provider>." prefix when it lacks one. With "claude", a
+            Claude id passed as model_id is used as claude_model
 
     Raises:
         ValueError: Unknown provider, provider contradicting use_claude=True, or a
@@ -315,9 +316,10 @@ def switch_model(self, target: str, on_status: Optional[Callable[[str], None]] =
 
 def close(self) -> None:
     """
-    Release what the agent holds (the history start_session_history opened).
-    Idempotent; the agent is also a context manager that calls it on exit.
-    Subclasses that own more extend it and call super().close().
+    Release what the agent holds (the history start_session_history opened),
+    then run the close() of any mixin listed after Agent. Idempotent; the
+    agent is also a context manager that calls it on exit. Subclasses that own
+    more extend it and call super().close().
     """
     pass
 

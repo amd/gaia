@@ -3545,6 +3545,8 @@ def _resolve_output_handles(agent, value):
     return value
 
 
+DEFAULT_CLAUDE_MODEL = "claude-sonnet-5"
+
 HOSTED_MODELS_DOCS = "https://amd-gaia.ai/docs/sdk/core/agent-system#hosted-models"
 
 _HOSTED_PROVIDER_REMEDY = {
@@ -3591,15 +3593,21 @@ def resolve_agent_provider(
             f"provider={provider!r} contradicts use_claude=True. Pass "
             "provider='claude' (or use_claude=True alone) for the Claude API."
         )
+    prefix, dot, rest = (model_id or "").partition(".")
+    names_cloud = bool(dot and rest and prefix in CLOUD_PROVIDERS)
     if name == "lemonade":
+        if names_cloud:
+            raise ValueError(
+                f"provider='lemonade' is a local model, but model_id {model_id!r} "
+                f"runs on {prefix}. Pass provider={prefix!r}."
+            )
         return False, model_id, None
     if not model_id:
         raise ValueError(
             f"provider={name!r} needs model_id, the model to run on {name} "
             f"(for example model_id='{name}.<model>'). See {HOSTED_MODELS_DOCS}"
         )
-    prefix, dot, rest = model_id.partition(".")
-    if dot and rest and prefix in CLOUD_PROVIDERS:
+    if names_cloud:
         if prefix != name:
             raise ValueError(
                 f"model_id {model_id!r} names provider {prefix!r}, but "
@@ -3607,6 +3615,28 @@ def resolve_agent_provider(
             )
         return False, model_id, name
     return False, f"{name}.{model_id}", name
+
+
+def claude_model_for(
+    provider: Optional[str], model_id: Optional[str], claude_model: str
+) -> str:
+    """The Claude model for ``Agent(provider="claude", model_id="claude-...")``.
+
+    A Claude id passed as *model_id* is the model the caller asked for, so it
+    is used. Any other *model_id* stays the local id it has always been.
+    """
+    if (
+        provider is None
+        or str(provider).strip().lower() != "claude"
+        or not (model_id or "").startswith("claude-")
+    ):
+        return claude_model
+    if claude_model not in (DEFAULT_CLAUDE_MODEL, model_id):
+        raise ValueError(
+            f"model_id={model_id!r} and claude_model={claude_model!r} name two "
+            "Claude models. Pass one of them."
+        )
+    return model_id
 
 
 def connect_hosted_provider(provider: str, model_id: str, client: Any) -> None:
@@ -3617,11 +3647,12 @@ def connect_hosted_provider(provider: str, model_id: str, client: Any) -> None:
     ``HostedProviderError`` naming the provider, the server and the fix.
     """
     from gaia.llm.cloud_keys import CloudKeyError, reconnect_provider
+    from gaia.llm.gateway import GatewayError
 
     remedy = _HOSTED_PROVIDER_REMEDY.get(provider, "Connect the provider in Lemonade")
     try:
         usable = reconnect_provider(provider, client)
-    except CloudKeyError as e:
+    except (CloudKeyError, GatewayError) as e:
         raise HostedProviderError(
             f"Could not connect {provider} to run {model_id!r}: {e} "
             f"See {HOSTED_MODELS_DOCS}"
@@ -3969,7 +4000,7 @@ Do NOT wrap conversational replies in JSON.
     def __init__(
         self,
         use_claude: bool = False,
-        claude_model: str = "claude-sonnet-5",
+        claude_model: str = DEFAULT_CLAUDE_MODEL,
         base_url: Optional[str] = None,
         model_id: str = None,
         max_steps: Optional[int] = None,
@@ -4076,6 +4107,7 @@ Do NOT wrap conversational replies in JSON.
         use_claude, model_id, hosted_provider = resolve_agent_provider(
             provider, use_claude, model_id
         )
+        claude_model = claude_model_for(provider, model_id, claude_model)
         if max_output_tokens is not None and (
             isinstance(max_output_tokens, bool)
             or not isinstance(max_output_tokens, int)
@@ -11541,13 +11573,16 @@ Do NOT wrap conversational replies in JSON.
         from gaia.llm.inference_location import resolve_inference_location
 
         chat = getattr(self, "chat", None)
-        if chat is not None:
+        live_model = getattr(chat, "effective_model", None)
+        chat_config = getattr(chat, "config", None)
+        # A stand-in chat with no model of its own: the agent's choice stands.
+        if isinstance(live_model, str) and chat_config is not None:
             lookup = getattr(
                 getattr(chat, "llm_client", None), "cloud_model_provider", None
             )
             return resolve_inference_location(
-                chat.effective_model,
-                use_claude=bool(chat.config.use_claude),
+                live_model,
+                use_claude=bool(chat_config.use_claude),
                 cloud_provider_lookup=lookup if callable(lookup) else None,
             )
         use_claude = bool(getattr(self, "_use_claude", False))
@@ -11577,9 +11612,11 @@ Do NOT wrap conversational replies in JSON.
             "current_base_url",
             None,
         )
-        label = _endpoint_label(
-            live() if callable(live) else resolve_lemonade_base_url()
-        )
+        url = live() if callable(live) else None
+        # A stand-in client answers with something that is not an address.
+        if not isinstance(url, str):
+            url = resolve_lemonade_base_url()
+        label = _endpoint_label(url)
         if not label:
             return "The configured model server"
         return f"The model server at {label}"
@@ -13405,7 +13442,17 @@ Do NOT wrap conversational replies in JSON.
                             {"role": "user", "content": str(user_input)},
                             {"role": "assistant", "content": str(answer or "")},
                         ]
-                    history.record(messages)
+                    try:
+                        history.record(messages)
+                    except Exception as e:
+                        history.discard_pending()
+                        raise RuntimeError(
+                            "The turn finished but could not be saved to this "
+                            f"agent's session history ({type(e).__name__}: {e}). "
+                            "Its answer is not in later turns' context."
+                        ) from e
+                    # The list itself shows the turn just recorded.
+                    history.prepare(self, "")
                 return result
         finally:
             # The impl re-raises on purpose (the wrong-ctx reload its caller
@@ -13437,6 +13484,9 @@ Do NOT wrap conversational replies in JSON.
         *on_cut* is called with a ``HistoryCut(turns, tokens)`` whenever more
         earlier turns drop out of the model's view than before, so a host can
         tell the user. The file still holds every turn.
+
+        Not re-entrant: a tool must not call ``process_query`` on the agent
+        that is running it.
         """
         from gaia.agents.base.history import SessionHistory
 
@@ -13472,6 +13522,11 @@ Do NOT wrap conversational replies in JSON.
                 "or a model your Lemonade server lists."
             )
         return switch_concrete_model(self, target.strip(), on_status)
+
+    def _model_switch_config(self) -> Any:
+        """A settings object with ``use_claude``/``model_id``/``claude_model``
+        that a switch must keep in step, or None. Default: None."""
+        return None
 
     def follow_model_switch(self) -> None:
         """Hook run after a model switch, before the prompt is rebuilt.
@@ -13518,17 +13573,21 @@ Do NOT wrap conversational replies in JSON.
     def close(self) -> None:
         """Release what this agent holds. Safe to call more than once.
 
-        The base closes the history ``start_session_history`` opened.
-        Subclasses that hold more (watchers, database handles, MCP servers)
-        extend this and call ``super().close()``.
+        The base closes the history ``start_session_history`` opened, then
+        runs the ``close()`` of any mixin listed after it. Subclasses that
+        hold more (watchers, database handles, MCP servers) extend this and
+        call ``super().close()``.
         """
         history = getattr(self, "_owned_history", None)
-        if history is None:
-            return
-        self._owned_history = None
-        if self.conversation_history is history:
-            self.conversation_history = []
-        history.close()
+        if history is not None:
+            self._owned_history = None
+            if self.conversation_history is history:
+                self.conversation_history = []
+            history.close()
+        # A mixin listed after Agent may hold resources of its own.
+        parent = getattr(super(), "close", None)
+        if callable(parent):
+            parent()
 
     def __enter__(self):
         return self
