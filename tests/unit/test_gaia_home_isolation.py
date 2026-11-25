@@ -193,6 +193,7 @@ import sys
 sys.path.insert(0, {str(repo)!r})
 sys.path.insert(0, {str(src)!r})
 from tests.unit.conftest import (  # noqa: F401
+    _guard_real_gaia_home_session,
     _guard_real_gaia_home_writes,
     _isolate_gaia_home,
     _restore_environ,
@@ -249,9 +250,16 @@ def test_a_gaia_home_inside_a_temporary_home_is_kept(tmp_path):
     """#9021: a GAIA_HOME inside a temporary HOME is a test home, and stays writable."""
     home = tmp_path / "home"
     home.mkdir()
-    env = {**os.environ, "HOME": str(home), "USERPROFILE": str(home)}
+    env = {
+        **os.environ,
+        "HOME": str(home),
+        "USERPROFILE": str(home),
+        # The session guard must judge the account's home, not the temp one.
+        "GAIA_ENFORCE_REAL_HOME_GUARD": "1",
+    }
     env.pop("GAIA_HOME", None)
     env.pop("GAIA_CONFIG_DIR", None)
+    env.pop("GAIA_ALLOW_REAL_HOME_WRITES", None)
     run = _run_child_suite(tmp_path, env)
     assert run.returncode == 0, run.stdout + run.stderr
     assert "2 passed" in run.stdout

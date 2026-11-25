@@ -38,7 +38,7 @@ from pathlib import Path
 
 import pytest
 
-from tests.unit.real_home_guard import account_home, is_within, is_temporary_home
+from tests.unit.real_home_guard import account_home, is_temporary_home, is_within
 
 REPO_ROOT = Path(__file__).resolve().parent
 
@@ -193,6 +193,8 @@ _REAL_GAIA_HOME = Path.home() / ".gaia"
 #: A run started with a temporary ``HOME`` has no developer install to protect:
 #: its ``<HOME>/.gaia`` is a test folder, not the person's.
 _REAL_HOME_IS_TEMPORARY = is_temporary_home(_REAL_GAIA_HOME.parent)
+#: Under a temporary ``HOME``, the account's own home; ``None`` if unknown.
+_ACCOUNT_HOME = account_home() if _REAL_HOME_IS_TEMPORARY else None
 
 #: Bound before any test patches ``os.path.realpath``: a test that breaks it
 #: must not break the guards, which coverage also reaches via sqlite3.connect.
@@ -219,12 +221,11 @@ def _is_real_gaia_home(path: Path) -> bool:
     if _REAL_HOME_IS_TEMPORARY:
         # The run's own home is a test folder, but the person's real GAIA state
         # is still their own, and stays protected however they got there.
-        real_home = account_home()
-        if real_home is None:
+        if _ACCOUNT_HOME is None:
             # Cannot identify the real account home: refuse rather than allow.
             return True
         try:
-            return is_within(path, real_home / ".gaia")
+            return is_within(path, _ACCOUNT_HOME / ".gaia")
         except (OSError, ValueError):
             # Cannot verify the path (e.g. realpath broken): refuse rather than
             # allow a write into the protected home.

@@ -184,10 +184,24 @@ def _windows_account_home() -> Optional[Path]:
         import winreg
 
         with winreg.OpenKey(winreg.HKEY_CURRENT_USER, "Volatile Environment") as key:
-            image, _type = winreg.QueryValueEx(key, "USERPROFILE", 0)
+            image, _type = winreg.QueryValueEx(key, "USERPROFILE")
         return Path(image) if image else None
     except (ImportError, KeyError, OSError, ValueError):
         return None
+
+
+def protected_gaia_home() -> Optional[Path]:
+    """The GAIA home this run must leave alone.
+
+    ``~/.gaia`` normally; under a temporary ``HOME`` it is the account's own
+    ``.gaia``, since ``<temp HOME>/.gaia`` is a test folder. ``None`` when the
+    account home cannot be identified.
+    """
+    home = Path.home()
+    if not is_temporary_home(home):
+        return home / ".gaia"
+    account = account_home()
+    return account / ".gaia" if account is not None else None
 
 
 def list_home(root: Path, max_entries: int = MAX_ENTRIES) -> Listing:
@@ -280,7 +294,16 @@ def _guard_real_gaia_home_session():
     if mode == SKIP:
         yield
         return
-    root = real_gaia_home()
+    root = protected_gaia_home()
+    if root is None:
+        warnings.warn(
+            pytest.PytestWarning(
+                "HOME is a temporary folder and the account's own home could "
+                "not be identified, so its GAIA home was not checked."
+            )
+        )
+        yield
+        return
     before = list_home(root)
     yield
     settle(changes(before, list_home(root)), root, mode)

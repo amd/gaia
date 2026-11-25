@@ -25,9 +25,9 @@ import pytest
 # Session guard: compares the real ~/.gaia before and after the run.
 from tests.unit.real_home_guard import (  # noqa: F401  pylint: disable=unused-import
     _guard_real_gaia_home_session,
-    account_home,
-    is_within,
     is_temporary_home,
+    is_within,
+    protected_gaia_home,
 )
 
 
@@ -230,11 +230,16 @@ _RUN_HOME = Path.home()
 #: ``<that HOME>/.gaia`` is a test folder, not the person's own.
 _RUN_HOME_IS_TEMPORARY = is_temporary_home(_RUN_HOME)
 
-#: The real ``~/.gaia``, which no unit test may create or write into.
-_REAL_GAIA_HOME = _RUN_HOME / ".gaia"
-_REAL_GAIA_PREFIXES = tuple({str(_REAL_GAIA_HOME), os.path.realpath(_REAL_GAIA_HOME)})
+#: The real ``~/.gaia``, which no unit test may create or write into. Under a
+#: temporary ``HOME`` it is the account's own ``.gaia``; ``None`` if unknown.
+_REAL_GAIA_HOME = protected_gaia_home()
+_REAL_GAIA_PREFIXES = (
+    tuple({str(_REAL_GAIA_HOME), os.path.realpath(_REAL_GAIA_HOME)})
+    if _REAL_GAIA_HOME is not None
+    else ()
+)
 #: Whether it existed, updated once a test is failed for creating it.
-_real_gaia_home_existed = [os.path.exists(_REAL_GAIA_HOME)]
+_real_gaia_home_existed = [_REAL_GAIA_HOME is None or os.path.exists(_REAL_GAIA_HOME)]
 #: Bound now: a test may still have ``os.stat`` patched when the guard runs.
 _STAT = os.stat
 _WRITE_FLAGS = os.O_WRONLY | os.O_RDWR | os.O_CREAT | os.O_APPEND
@@ -258,11 +263,10 @@ def _in_real_gaia_home(path) -> bool:
     if _RUN_HOME_IS_TEMPORARY:
         # The run's own home is a test folder, but the person's real GAIA state
         # is still their own, and stays protected however the test reached it.
-        real_home = account_home()
-        if real_home is None:
+        if _REAL_GAIA_HOME is None:
             return True
         try:
-            return is_within(path, real_home / ".gaia")
+            return is_within(candidate, _REAL_GAIA_HOME)
         except (OSError, ValueError):
             # Cannot verify the path (e.g. realpath broken): refuse rather than
             # allow a write into the protected home.
@@ -302,11 +306,7 @@ def _guard_real_gaia_home_writes():
     yield
     problems = list(dict.fromkeys(_real_home_writes))
     _real_home_writes.clear()
-    if (
-        not _RUN_HOME_IS_TEMPORARY
-        and not _real_gaia_home_existed[0]
-        and _exists(_REAL_GAIA_HOME)
-    ):
+    if not _real_gaia_home_existed[0] and _exists(_REAL_GAIA_HOME):
         _real_gaia_home_existed[0] = True  # report it once, not after every test
         problems.append(
             f"created {_REAL_GAIA_HOME} (a subprocess, or a test running in "

@@ -54,7 +54,11 @@ def test_in_ci_a_session_that_writes_into_the_real_home_fails_and_names_the_path
             import sys
 
             sys.path.insert(0, {str(_GUARD_DIR)!r})
+            import real_home_guard
             from real_home_guard import _guard_real_gaia_home_session  # noqa: F401
+
+            # The stand-in HOME plays the real home, though it sits in tmp.
+            real_home_guard.protected_gaia_home = real_home_guard.real_gaia_home
             """),
         encoding="utf-8",
     )
@@ -333,8 +337,31 @@ def test_a_missing_account_home_fails_closed(monkeypatch):
     import tests.unit.conftest as unit_conftest
 
     monkeypatch.setattr(unit_conftest, "_RUN_HOME_IS_TEMPORARY", True)
-    monkeypatch.setattr(unit_conftest, "account_home", lambda: None)
+    monkeypatch.setattr(unit_conftest, "_REAL_GAIA_HOME", None)
     assert unit_conftest._in_real_gaia_home(Path("/tmp/anything")) is True
+
+
+def test_a_bytes_path_under_a_temporary_home_is_checked_not_raised(monkeypatch):
+    """A bytes path from an audited write must be judged, not crash the hook."""
+    import tests.unit.conftest as unit_conftest
+
+    protected = Path(tempfile.gettempdir()).parent / "account" / ".gaia"
+    monkeypatch.setattr(unit_conftest, "_RUN_HOME_IS_TEMPORARY", True)
+    monkeypatch.setattr(unit_conftest, "_REAL_GAIA_HOME", protected)
+    inside = os.fsencode(str(protected / "cache" / "x"))
+    outside = os.fsencode(str(Path(tempfile.gettempdir()) / "scratch"))
+    assert unit_conftest._in_real_gaia_home(inside) is True
+    assert unit_conftest._in_real_gaia_home(outside) is False
+
+
+@pytest.mark.skipif(os.name != "nt", reason="reads the real Windows registry")
+def test_the_real_windows_registry_yields_the_account_home():
+    """Unfaked: the registry call must match winreg's real signature."""
+    from tests.unit.real_home_guard import _windows_account_home
+
+    home = _windows_account_home()
+    assert home is not None
+    assert not real_home_guard_module.is_temporary_home(home)
 
 
 class _FakeWinregKey:
@@ -347,7 +374,7 @@ class _FakeWinregKey:
     def __exit__(self, *args):
         return False
 
-    def QueryValueEx(self, name, _index):
+    def QueryValueEx(self, name):
         if name in self.values:
             return self.values[name], 1
         raise KeyError(name)
@@ -359,15 +386,16 @@ def _fake_winreg_module(profile_image_path) -> types.ModuleType:
     module.OpenKey = lambda root, subkey: _FakeWinregKey(
         {"USERPROFILE": str(profile_image_path)}
     )
-    module.QueryValueEx = lambda key, name, index: key.QueryValueEx(name, index)
+    # Same arity as the real winreg.QueryValueEx(key, name).
+    module.QueryValueEx = lambda key, name: key.QueryValueEx(name)
     return module
 
 
-def test_the_windows_account_home_is_the_profile_list_not_the_overridden_home(
+def test_the_windows_account_home_is_the_registry_not_the_overridden_home(
     monkeypatch, tmp_path
 ):
-    """#9021: on Windows the account home comes from the profile list, not from a
-    ``USERPROFILE`` the test run overwrote with a temporary home."""
+    """#9021: on Windows the account home comes from the registry's Volatile Environment,
+    not from a ``USERPROFILE`` the test run overwrote with a temporary home."""
     fake_winreg = _fake_winreg_module(tmp_path / "the-account")
     monkeypatch.setitem(sys.modules, "winreg", fake_winreg)
     monkeypatch.setattr(
