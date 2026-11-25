@@ -1699,7 +1699,9 @@ _MAX_CUT_OFF_CONTINUATIONS = 2
 _MAX_STREAM_CUT_OFF_RETRIES = 2
 STREAM_CUT_OFF_ERROR = "stream_cut_off"
 # Errors the loop recovered from once a later reply parsed: not a failed turn.
-_RECOVERABLE_ERROR_TYPES = frozenset({"tool_call_parse_error", STREAM_CUT_OFF_ERROR})
+_RECOVERABLE_ERROR_TYPES = frozenset(
+    {"tool_call_parse_error", STREAM_CUT_OFF_ERROR, "output_truncated"}
+)
 _CUT_OFF_CONTINUE_PROMPT = (
     "Your last reply was cut off at the output-token limit before it finished, "
     "so nothing in it was carried out. Continue from where you stopped: keep "
