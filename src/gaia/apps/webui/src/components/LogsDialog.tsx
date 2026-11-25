@@ -14,6 +14,7 @@ import { LOG_SOURCES, useLogsStore, type LogSource } from '../stores/logsStore';
 import type { LogFileInfo, LogLineInfo, LogReadResponse } from '../types/api.gen';
 import { formatBytes } from './setup/format';
 import { formatSize } from '../utils/format';
+import { setVisibleInterval } from '../utils/visibleInterval';
 import './LogsDialog.css';
 
 const POLL_MS = 2000;
@@ -112,8 +113,7 @@ export function LogView({ source, file }: { source: LogSource; file: string | nu
     }, [load]);
     useEffect(() => {
         if (!follow) return;
-        const id = setInterval(() => { void load(false); }, POLL_MS);
-        return () => clearInterval(id);
+        return setVisibleInterval(() => { void load(false); }, POLL_MS);
     }, [follow, load]);
 
     const shown = problemsOnly ? lines.filter(isProblem) : lines;

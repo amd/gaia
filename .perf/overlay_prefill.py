@@ -99,7 +99,7 @@ def main() -> None:
         patch.object(requests, "get", _no_network),
         patch.object(requests.Session, "request", _no_network),
     ):
-        from gaia_agent.agent import GaiaAgent, GaiaAgentConfig
+        from gaiapy.agent import GaiaAgent, GaiaAgentConfig
 
         from gaia.agents.base.memory_store import MemoryStore
         from gaia.agents.base.skill_deltas import (

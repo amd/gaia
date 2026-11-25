@@ -20,7 +20,7 @@ import (
 // message can still name the flag the user got wrong.
 //
 // This list MUST stay identical to CLAUDE_MODELS in
-// hub/agents/gaia/python/gaia_agent/stdio.py — the agent validates `/model`
+// hub/agents/gaia/python/gaiapy/stdio.py — the agent validates `/model`
 // against its own copy, and two lists that disagree means an id the launch
 // flag accepts and `/model` refuses (or worse, the reverse). TestGoAndPython
 // ClaudeModelListsAgree (claudemodels_test.go) reads that file and fails the

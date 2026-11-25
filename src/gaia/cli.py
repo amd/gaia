@@ -31,6 +31,7 @@ from gaia.llm.lemonade_client import (
     LemonadeClientError,
     _get_lemonade_config,
     resolve_lemonade_base_url,
+    resolve_local_chat_model,
 )
 from gaia.llm.lemonade_launcher import describe_start_hint
 from gaia.llm.providers.claude import DEFAULT_CLAUDE_MODEL as DEFAULT_CLAUDE_CHAT_MODEL
@@ -592,8 +593,8 @@ async def async_main(action, **kwargs):
         # package, or, where the agent ships as its own binary (as the apps
         # ship it), on that binary through the daemon, as the Agent UI does.
         try:
-            from gaia_agent.agent import GaiaAgent, GaiaAgentConfig
-            from gaia_agent.interactive import interactive_mode
+            from gaiapy.agent import GaiaAgent, GaiaAgentConfig
+            from gaiapy.interactive import interactive_mode
         except ImportError:
             return _gaia_chat_relay(kwargs)
 
@@ -778,7 +779,7 @@ async def async_main(action, **kwargs):
                 "logging_level", "INFO"
             ),  # Back to INFO now that issues are fixed
             # LLM backend selection (#124)
-            model=kwargs.get("model") or DEFAULT_MODEL_NAME,
+            model=kwargs.get("model") or resolve_local_chat_model(),
             max_tokens=kwargs.get("max_tokens", 512),
             use_claude=kwargs.get("use_claude", False),
             claude_model=kwargs.get("claude_model", DEFAULT_CLAUDE_CHAT_MODEL),
@@ -985,6 +986,7 @@ def _launch_agent_ui(port=4200, base_url=None, log=None, debug=False, webui_dist
     try:
         from gaia.ui.server import (
             create_app,
+            launch_url,
             lemonade_is_remote,
             start_model_server_owner,
         )
@@ -999,13 +1001,20 @@ def _launch_agent_ui(port=4200, base_url=None, log=None, debug=False, webui_dist
         # "localhost" can resolve to IPv6 ::1 and fail against this IPv4 listener.
         log.info(f"Starting GAIA Agent UI on http://127.0.0.1:{port}")
         print(f"Starting GAIA Agent UI on http://127.0.0.1:{port}")
-        print(f"   Open your browser to http://127.0.0.1:{port}")
-        print("   Press Ctrl+C to stop")
-        print()
         import uvicorn
 
         # create_app() refuses an unsafe GAIA_HOME, so nothing is written there first.
-        app = create_app(webui_dist=webui_dist)
+        app = create_app(webui_dist=webui_dist, port=port)
+        # Only to a terminal: the desktop app logs this process's stdout.
+        if sys.stdout.isatty():
+            print(
+                f"   Open your browser to {launch_url(app, '127.0.0.1', port)}",
+                flush=True,
+            )
+        else:
+            print(f"   Agent UI API on http://127.0.0.1:{port}", flush=True)
+        print("   Press Ctrl+C to stop")
+        print()
         _enable_backend_fault_log(log)
         if not base_url and not lemonade_is_remote():
             # First run is set up in the app; the daemon owns the model server.
@@ -1080,8 +1089,8 @@ def _launch_interactive_cli(log=None):
             sys.exit(1)
 
         try:
-            from gaia_agent.agent import GaiaAgent, GaiaAgentConfig
-            from gaia_agent.interactive import interactive_mode
+            from gaiapy.agent import GaiaAgent, GaiaAgentConfig
+            from gaiapy.interactive import interactive_mode
         except ImportError:
             # The agent ships as its own binary: chat with it through the daemon.
             sys.exit(_gaia_chat_relay({}))
@@ -1135,7 +1144,7 @@ def _hide_subcommands(subparsers, names) -> None:
 
 # Kept for scripts, hidden from help: GAIA ships one agent, so browsing and
 # publishing agents is no longer a user-facing feature (#5172).
-HIDDEN_TOP_LEVEL_COMMANDS = ("hub",)
+HIDDEN_TOP_LEVEL_COMMANDS = ("hub", "agent-program")
 HIDDEN_AGENT_COMMANDS = ("init", "version", "pack", "publish", "login")
 
 # Removed commands: old scripts get the replacement instead of "invalid choice".
@@ -2139,7 +2148,7 @@ Examples:
   # Delete all downloaded GAIA models (free up disk space)
   gaia download --clear-cache
 
-Available agents: chat, bash, talk, rag, vlm, minimal, mcp, sd
+Available agents: chat, talk, rag, vlm, minimal, mcp, sd
 
 Use `gaia download --agent talk` to download the local Kokoro TTS model.
         """,
@@ -3747,6 +3756,11 @@ afterwards (or `swebench <run_dir>` does, later).
 
     custom_models_cli.add_subparser(subparsers)
 
+    # gaiacpp for the terminal UI, which shells out here to download it.
+    from gaia.daemon.sidecars import gaiacpp_fetch_cli
+
+    gaiacpp_fetch_cli.add_subparser(subparsers)
+
     # Persistent CLI config (~/.gaia/config.json) — e.g. a default model so
     # users don't have to pass --model on every chat/llm/prompt (issue #98).
     config_parser = subparsers.add_parser(
@@ -4245,7 +4259,7 @@ def _handle_eval_retrieval(args):
     print((opts.out_dir / "report.md").read_text(encoding="utf-8"))
     print(f"[OUTPUT] {(opts.out_dir / 'results.json').resolve()}")
 
-    failed = bool(opts.errors)
+    failed = bool(opts.errors or opts.label_errors)
     if args.gate:
         baseline = json.loads(Path(args.gate).read_text(encoding="utf-8"))
         passed, lines = runner.compare(baseline, results, args.tolerance)
@@ -4256,6 +4270,12 @@ def _handle_eval_retrieval(args):
         failed |= not passed
     if opts.errors:
         print(f"[ERROR] {len(opts.errors)} hard case(s) crashed: {opts.errors}")
+    if opts.label_errors:
+        print(
+            f"[ERROR] {len(opts.label_errors)} question label(s) do not match the "
+            "extracted text, so those questions were not scored. Fix them in "
+            f"eval/retrieval/datasets/: {opts.label_errors}"
+        )
     if failed:
         sys.exit(1)
 
@@ -4749,7 +4769,9 @@ def _handle_schedule(args):
         else:
             print(f"cron:       {s.cron}")
         print(f"target:     {'skill=' + s.skill if s.skill else 'prompt=' + s.prompt}")
-        print(f"sink:       {s.sink}  args={s.sink_args}")
+        from gaia.schedule.sinks import masked_sink_args
+
+        print(f"sink:       {s.sink}  args={masked_sink_args(s.sink_args)}")
         print(f"enabled:    {s.enabled}")
         from datetime import datetime as _datetime
 
@@ -5702,7 +5724,14 @@ Let me know your answer!
             skip_count = 0
             fail_count = 0
 
+            from gaia.installer.model_choice import withheld_reason
+
             for model_id in model_ids:
+                withheld = withheld_reason(model_id)
+                if withheld:
+                    console.print_download_error(withheld, model_id)
+                    fail_count += 1
+                    continue
                 # Check if already available
                 if client.check_model_available(model_id):
                     console.print_download_skipped(model_id)
@@ -6199,6 +6228,13 @@ Let me know your answer!
         from gaia.llm import custom_models_cli  # pylint: disable=reimported
 
         sys.exit(custom_models_cli.handle(args))
+
+    if args.action == "agent-program":
+        from gaia.daemon.sidecars import (  # pylint: disable=reimported
+            gaiacpp_fetch_cli,
+        )
+
+        sys.exit(gaiacpp_fetch_cli.handle(args))
 
     # Handle Config command
     if args.action == "config":
@@ -10396,6 +10432,30 @@ def handle_mcp_start(args):
         sys.exit(1)
 
 
+def _is_mcp_bridge_process(pid: int) -> bool:
+    """True only for a live process started by ``gaia mcp start --background``.
+
+    Raises:
+        PermissionError: the process exists but its command line is unreadable.
+    """
+    import psutil
+
+    try:
+        argv = psutil.Process(pid).cmdline()
+    except (psutil.NoSuchProcess, psutil.ZombieProcess):
+        return False
+    except psutil.AccessDenied as e:
+        raise PermissionError(
+            f"cannot read the command line of pid {pid} to confirm it is the "
+            "GAIA MCP bridge; if it is not the bridge, delete gaia.mcp.pid "
+            "and leave the process alone"
+        ) from e
+    # The background child is `python -m gaia.cli mcp start ...`.
+    return "gaia.cli" in argv and any(
+        a == "mcp" and b == "start" for a, b in zip(argv, argv[1:])
+    )
+
+
 def handle_mcp_stop(_args):
     """Stop the background MCP bridge server."""
     log = get_logger(__name__)
@@ -10418,27 +10478,34 @@ def handle_mcp_stop(_args):
             print(f"❌ Error reading PID file: {e}")
             sys.exit(1)
 
+        if pid <= 0:
+            print(f"❌ PID file {pid_file_path} holds {pid}, not a process id")
+            os.remove(pid_file_path)
+            print("🧹 Removed the invalid PID file")
+            sys.exit(1)
+
+        # A stale file can name an unrelated process that inherited the id.
+        try:
+            is_bridge = _is_mcp_bridge_process(pid)
+        except PermissionError as e:
+            print(f"❌ {e}")
+            sys.exit(1)
+        if not is_bridge:
+            print(f"⚠️  PID {pid} is not a GAIA MCP bridge; removing stale PID file")
+            os.remove(pid_file_path)
+            return
+
         # Stop the process
         stop_failed = False
         try:
+            print(f"🔄 Stopping MCP bridge process (PID: {pid})")
             if sys.platform.startswith("win"):
-                # Windows - check if process exists first
-                result = subprocess.run(
-                    ["tasklist", "/FI", f"PID eq {pid}"],
-                    capture_output=True,
-                    text=True,
-                    check=False,
+                subprocess.run(
+                    ["taskkill", "/F", "/PID", str(pid)], check=True, timeout=30
                 )
-                if str(pid) in result.stdout:
-                    print(f"🔄 Stopping MCP bridge process (PID: {pid})")
-                    subprocess.run(["taskkill", "/F", "/PID", str(pid)], check=True)
-                    print(f"✅ Stopped MCP bridge (PID: {pid})")
-                else:
-                    print(f"⚠️  Process {pid} was not running")
+                print(f"✅ Stopped MCP bridge (PID: {pid})")
             else:
-                # Unix-like systems
                 try:
-                    print(f"🔄 Stopping MCP bridge process (PID: {pid})")
                     os.kill(pid, 15)  # SIGTERM
                     print(f"✅ Stopped MCP bridge (PID: {pid})")
                 except OSError:

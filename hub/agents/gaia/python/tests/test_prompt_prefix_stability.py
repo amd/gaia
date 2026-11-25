@@ -23,9 +23,9 @@ import time
 
 import numpy as np
 import pytest
-from gaia_agent import stdio
-from gaia_agent.agent import GaiaAgent, GaiaAgentConfig
-from gaia_agent.chat_agent import ChatAgent
+from gaiapy import stdio
+from gaiapy.agent import GaiaAgent, GaiaAgentConfig
+from gaiapy.chat_agent import ChatAgent
 
 from gaia.agents.base import project_map
 from gaia.agents.base.history import (

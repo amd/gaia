@@ -7,6 +7,7 @@ import { Check, ChevronLeft, ChevronRight, Cloud, Eye, EyeOff, Info, Loader2 } f
 import * as api from '../services/api';
 import { displayModelName, shortModelName, useModelStore } from '../stores/modelStore';
 import { lemonadeKeyRejected } from '../utils/lemonade';
+import { scrollBehavior } from '../utils/motion';
 import { CloudPrices } from './settings/CloudPrices';
 import './settings/CloudSpending.css';
 import { ModelsStep, ReadySummary } from './SetupSteps';
@@ -34,11 +35,10 @@ import { SetupRail, type RailStep } from './setup/SetupRail';
 import { TestStep } from './setup/TestStep';
 import {
     canCreateImages, cantRunHere, catalogOf, extraModels, initialSelection, isEmbedding, isNpu, isOptional, overallFromPlan,
-    pendingDownloads, resolveVision, savedVision, shortfall, skipChanges, toggle, tooBig, totals, type Selection,
-} from './setup/selection';
+    pendingDownloads, resolveVision, savedVision, shortfall, skipChanges, toggle, tooBig, totals, type Selection, onlyTight } from './setup/selection';
 import type {
     GpuMemoryStatus, LemonadeFound, LemonadeTarget, PreflightReport, ProviderId, SetupCatalogEntry,
-    SetupConfirm, SetupModelProgress, SetupPlan, SetupProblem, SetupRunStatus, SetupTest, StartCard, FlagshipAgent,
+    SetupConfirm, SetupModelProgress, SetupPlan, SetupProblem, SetupRunStatus, SetupTest, StartCard, FlagshipAgent, AgentPrograms,
 } from '../types';
 import './SetupScreen.css';
 import './setup/setup.css';
@@ -356,7 +356,30 @@ interface HeldRun {
 }
 
 const AGENT_PICK_KEY = 'gaia.setup.agentPick';
+const AGENT_HEADING = 'setup-agent-title';
 const HELD_RUN_KEY = 'gaia.setup.heldRun';
+/** Extras added on the Download step, kept across a quit until they are handed to the download. */
+const QUEUED_EXTRAS_KEY = 'gaia.setup.queuedExtras';
+
+function readQueuedExtras(): string[] {
+    try {
+        const raw = localStorage.getItem(QUEUED_EXTRAS_KEY);
+        const ids: unknown = raw ? JSON.parse(raw) : [];
+        return Array.isArray(ids) ? ids.filter((id): id is string => typeof id === 'string') : [];
+    } catch (err) {
+        console.warn('[SetupScreen] could not read the extras added during setup; they show as Add again', err);
+        return [];
+    }
+}
+
+function writeQueuedExtras(ids: string[]): void {
+    try {
+        if (ids.length) localStorage.setItem(QUEUED_EXTRAS_KEY, JSON.stringify(ids));
+        else localStorage.removeItem(QUEUED_EXTRAS_KEY);
+    } catch (err) {
+        console.warn('[SetupScreen] could not save the extras added during setup; a restart will forget them', err);
+    }
+}
 
 /** Kept for this window only, so a reload mid-download keeps the pick and doesn't start over. */
 function readStored<T>(key: string): T | null {
@@ -420,7 +443,7 @@ export function SetupScreen({ onReady, onClose }: SetupScreenProps) {
     // The plan read after setup finished: what is really on disk, for the summary.
     const [finalPlan, setFinalPlan] = useState<SetupPlan | null>(null);
     const [gpu, setGpu] = useState<GpuMemoryStatus | null>(null);
-    const [keepTrying, setKeepTrying] = useState(false);
+    const [keepTrying, setKeepTrying] = useState(true);
     const [confirm, setConfirm] = useState<Confirm | null>(null);
     const [noFitAcked, setNoFitAcked] = useState(false);
     const [busy, setBusy] = useState(false);
@@ -433,8 +456,9 @@ export function SetupScreen({ onReady, onClose }: SetupScreenProps) {
     const [cloudDefault, setCloudDefault] = useState<string | null>(null);
     const [showKey, setShowKey] = useState(false);
     const [firstTasks, setFirstTasks] = useState<StartCard[]>([]);
-    // Optional models added from the Download step, fetched and tested after the run.
-    const [queued, setQueued] = useState<string[]>([]);
+    // Optional models added from the Download step, downloaded on their own once the run is ready.
+    const [queued, setQueued] = useState<string[]>(readQueuedExtras);
+    useEffect(() => writeQueuedExtras(queued), [queued]);
     /** Extras added during the run that never started, e.g. after a low-disk No. */
     const [notFetched, setNotFetched] = useState<string[]>([]);
     // GAIA uses a Lemonade the user runs, so the Connect step changes nothing there.
@@ -861,6 +885,13 @@ export function SetupScreen({ onReady, onClose }: SetupScreenProps) {
         stepTo('models');
     }, [stepTo, running, viewing]);
 
+    // Customize, opened at its agent picker rather than its title.
+    const toAgent = useRef(false);
+    const customizeAgent = useCallback(() => {
+        toAgent.current = true;
+        customize();
+    }, [customize]);
+
     // The plan screen's two ways to run GAIA; this PC is the one recommended.
     const [where, setWhere] = useState<'local' | 'cloud'>('local');
 
@@ -940,7 +971,8 @@ export function SetupScreen({ onReady, onClose }: SetupScreenProps) {
         }
     }, [keepTrying, loadPlan]);
 
-    const skipModel = useCallback(async (id: string) => {
+    /** Leave one model out; false when that failed (the error is shown). */
+    const skipModel = useCallback(async (id: string): Promise<boolean> => {
         setActionError(null);
         setBusy(true);
         try {
@@ -951,12 +983,23 @@ export function SetupScreen({ onReady, onClose }: SetupScreenProps) {
             const { options } = lastRun.current;
             lastRun.current.options = { ...options, extraModels: options.extraModels?.filter((m) => m !== id) };
             setSelection((s) => (s && s.ticked.has(id) ? toggle(s, catalogOf(plan), id, false) : s));
+            return true;
         } catch (err) {
             setActionError(errorText(err));
+            return false;
         } finally {
             setBusy(false);
         }
     }, [plan]);
+
+    /** Stopped with only optional extras left: drop them and check the rest. */
+    const finishWithoutExtras = useCallback(async (ids: string[]) => {
+        for (const id of ids) {
+            if (!(await skipModel(id))) return;
+        }
+        setNotFetched((n) => [...n, ...ids.filter((id) => !n.includes(id))]);
+        retryRun();
+    }, [skipModel, retryRun]);
 
     const restartDownloads = useCallback(async () => {
         await cancel();
@@ -998,18 +1041,30 @@ export function SetupScreen({ onReady, onClose }: SetupScreenProps) {
         setKeyState({ busy: false, error: null, done: false });
     }, [inUseCloud, inUseModel]);
 
-    // Extras added during the run: fetched and tested the same way, once it ends.
+    // Extras added during the run: downloaded one by one once it is ready. A second
+    // `gaia init` run would load-check the chat model again after the extras' downloads.
     useEffect(() => {
         if (!installed || queued.length === 0 || extending.current) return;
         const extras = queued;
         extending.current = true;
-        void start(false, { keepTrying, extraModels: extras }).then((started) => {
+        void (async () => {
+            const missed: string[] = [];
+            for (const id of extras) {
+                try {
+                    setRun(await api.downloadSetupModel(id, { keepTrying }));
+                } catch (err) {
+                    missed.push(id);
+                    const detail = api.setupConfirmFrom(err);
+                    if (detail) setConfirm((c) => c ?? { kind: 'server', detail, then: 'retry', id });
+                    else setStartError(errorText(err));
+                }
+            }
             extending.current = false;
             setQueued((q) => q.filter((id) => !extras.includes(id)));
             // Unstarted, the Ready screen says so rather than dropping them.
-            if (!started) setNotFetched((n) => [...n, ...extras.filter((id) => !n.includes(id))]);
-        });
-    }, [installed, queued, keepTrying, start]);
+            if (missed.length) setNotFetched((n) => [...n, ...missed.filter((id) => !n.includes(id))]);
+        })();
+    }, [installed, queued, keepTrying]);
 
     const canFinish = installed && queued.length === 0;
     const answering = cloud ? cloudModel : fullRun?.chat_model ?? (plan && !plan.decided_after_server ? plan.chat_model.id : null);
@@ -1045,10 +1100,18 @@ export function SetupScreen({ onReady, onClose }: SetupScreenProps) {
     const stepFailed = (run?.state === 'failed') || !!startError || !!planError || !!hardwareError || !!lostContact || !!actionError;
     // A first run has no earlier chat to pick up, so "Check in" waits for one.
     const readyTasks = again ? firstTasks : firstTasks.filter((c) => c.skill !== 'check-in');
+    const onDisk = (m: SetupModelProgress) => m.state === 'ready' || m.state === 'skipped' || m.state === 'verifying' || m.state === 'unchecked';
     const downloadDone = fullRun && (fullRun.state === 'failed' || fullRun.state === 'cancelled')
         && (fullRun.models ?? []).length > 0
-        && (fullRun.models ?? []).every((m) => m.state === 'ready' || m.state === 'skipped' || m.state === 'verifying' || m.state === 'unchecked')
+        && (fullRun.models ?? []).every(onDisk)
         && !moving;
+    const isExtra = (id: string) => !!lastRun.current.options.extraModels?.includes(id)
+        || !!plan?.catalog?.some((e) => e.id === id && isOptional(e));
+    // Every model setup needs is here; only extras the user added are left.
+    const extrasLeft = fullRun && runFailed && !moving && !downloadDone
+        && (fullRun.models ?? []).every((m) => onDisk(m) || isExtra(m.id))
+        ? (fullRun.models ?? []).filter((m) => !onDisk(m)).map((m) => m.id)
+        : [];
     // Its row in the download list says why and offers Retry, so nothing below repeats it.
     const componentFailed = !!fullRun && runFailed && !fullRun.problem
         && Object.values(fullRun.components ?? {}).includes('failed');
@@ -1081,8 +1144,32 @@ export function SetupScreen({ onReady, onClose }: SetupScreenProps) {
         }
         const scroller = document.querySelector('.setup-scroll');
         if (scroller) scroller.scrollTop = 0;
+        const agent = toAgent.current && stage === 'models' ? document.getElementById(AGENT_HEADING) : null;
+        toAgent.current = false;
+        if (agent) {
+            agent.scrollIntoView({ block: 'start', behavior: scrollBehavior() });
+            agent.focus({ preventScroll: true });
+            return;
+        }
         document.getElementById('setup-title')?.focus({ preventScroll: true });
     }, [stage]);
+
+    // The plan names the agent only where Customize offers a second one to pick.
+    const [agents, setAgents] = useState<AgentPrograms | null>(null);
+    useEffect(() => {
+        if (stage !== 'plan') return;
+        let live = true;
+        api.getAgentPrograms()
+            .then((l) => { if (live) setAgents(l); })
+            .catch((err: unknown) => console.warn('[SetupScreen] could not read the agents; the plan leaves out the agent line', err));
+        return () => { live = false; };
+    }, [stage]);
+    const cppProgram = agents?.programs.find((p) => p.id === 'gaiacpp');
+    const agentShown = agentPick?.id ?? agents?.current;
+    const agentLabel: MessageKey | null = !cppProgram || !(cppProgram.installed || cppProgram.can_download) ? null
+        : agentShown === 'gaiapy' ? 'setup.agent.gaiapy'
+            : agentShown === 'gaiacpp' ? 'setup.agent.gaiacpp'
+                : null;
     // One flat line of steps; Customize, the cloud key and GPU memory are screens of the step they open from.
     const trail: Array<{ id: Stage; label: string; key: MessageKey }> = [
         { id: 'check', label: t('setup.check.title'), key: 'setup.check.title' },
@@ -1131,7 +1218,8 @@ export function SetupScreen({ onReady, onClose }: SetupScreenProps) {
         status: i < at ? 'done'
             : i > at ? 'pending'
                 : liveStage === 'ready' ? 'done'
-                    : runFailed && (liveStage === 'download' || liveStage === 'test' || liveStage === 'check') ? 'failed'
+                    // The user's own Stop is not a failure.
+                    : run?.state === 'failed' && (liveStage === 'download' || liveStage === 'test' || liveStage === 'check') ? 'failed'
                         : running && (liveStage === 'download' || liveStage === 'test') ? 'active' : 'current',
         shown: s.id === railOf(stage),
         onOpen: s.id !== railOf(stage) && reachable(s.id, i) ? () => stepTo(s.id === 'plan' ? setupScreen : s.id) : undefined,
@@ -1215,6 +1303,12 @@ export function SetupScreen({ onReady, onClose }: SetupScreenProps) {
         </p>
     ) : null;
 
+    // An extra already in the download list above has its own row there, with Retry or Cancel.
+    const fetching = (fullRun?.models ?? []).filter((m) => m.state !== 'skipped').map((m) => m.id);
+    // Extras handed off once setup was ready; chat needn't wait for them.
+    const stillFetching = installed ? (fullRun?.models ?? []).filter((m) => m.state === 'downloading' || m.state === 'queued').map((m) => m.id) : [];
+    // A handed-off extra whose download failed after Ready must not just drop off the line above.
+    const notDownloaded = [...new Set([...notFetched, ...(installed ? (fullRun?.models ?? []).filter((m) => m.state === 'failed').map((m) => m.id) : [])])];
     const optional = selection && !cloud ? catalog.filter((e) => isOptional(e) && !selection.ticked.has(e.id) && !e.downloaded
         && (canCreateImages(chatEntry) || !e.roles.includes('image_creation'))) : [];
     const biggerOption = catalog.find((e) => e.fit_code === 'memory' && e.chat_choice && e.support === 'verified');
@@ -1331,15 +1425,29 @@ export function SetupScreen({ onReady, onClose }: SetupScreenProps) {
                                     </dl>
                                     <ul className="setup-reasons">
                                         {!selection.chatChosen && <li>{t('setup.plan.why.evaluated')}</li>}
-                                        {chatEntry?.need_gb != null && chatEntry.capacity_gb != null && chatEntry.fits && (
+                                        {!selection.chatChosen && plan.left_for_apps_gb != null && <li>{t('setup.plan.why.headroom', { left: formatFitGb(plan.left_for_apps_gb) })}</li>}
+                                        {chatEntry && (chatEntry.fits === false || (chatEntry.fits === true && chatEntry.tight)) && (
+                                            <li role="note">{tooBigText(chatEntry, t)}</li>
+                                        )}
+                                        {chatEntry?.need_gb != null && chatEntry.capacity_gb != null && chatEntry.fits && !chatEntry.tight && (
                                             <li>{t('setup.plan.why.fits', { need: formatFitGb(chatEntry.need_gb), have: formatFitGb(chatEntry.capacity_gb) })}</li>
                                         )}
                                         <li>{t('setup.plan.why.private')}</li>
                                         {chatEntry && isNpu(chatEntry) && <li>{t('setup.plan.why.noImagesNpu')}</li>}
-                                        {biggerOption && biggerOption.id !== chatEntry?.id && biggerOption.need_gb != null && biggerOption.capacity_gb != null && (
+                                        {/* A model already short of room is no place to pitch a bigger one. */}
+                                        {biggerOption && biggerOption.id !== chatEntry?.id && biggerOption.need_gb != null && biggerOption.capacity_gb != null && chatEntry?.fits !== false && !chatEntry?.tight && (
                                             <li>{t('setup.plan.why.bigger', { name: biggerOption.name, need: formatFitGb(biggerOption.need_gb), have: formatFitGb(biggerOption.capacity_gb) })}</li>
                                         )}
                                     </ul>
+                                    {agentLabel && (
+                                        <p className="setup-agent-line">
+                                            {t.compose((say) => say('setup.plan.agent', { name: say(agentLabel) }))}
+                                            <span aria-hidden="true"> · </span>
+                                            <button type="button" className="link-btn" onClick={customizeAgent} disabled={busy || runGoing} aria-label={t('setup.plan.agentChangeAria')}>
+                                                {t('setup.plan.agentChange')}
+                                            </button>
+                                        </p>
+                                    )}
                                     {pending.length > 0 && <p className="setup-hint">{t('setup.plan.cancelAnytime')}</p>}
                                 </section>
                                 <section className={`setup-hero setup-where-card${where === 'cloud' ? ' is-active' : ''}${cloudBlocked ? ' is-disabled' : ''}`} aria-label={t('setup.plan.cloudLabel')} onClick={() => !runGoing && !cloudBlocked && setWhere('cloud')}>
@@ -1422,7 +1530,7 @@ export function SetupScreen({ onReady, onClose }: SetupScreenProps) {
                                     <button type="button" className="link-btn" onClick={() => openGpu('models')} disabled={busy || runGoing}>{t('setup.found.changeMemory')}</button>
                                 </p>
                             )}
-                            <AgentChoice disabled={busy || runGoing} pending={agentPick?.id ?? null} onPending={setAgentPick} />
+                            <AgentChoice disabled={busy || runGoing} pending={agentPick?.id ?? null} onPending={setAgentPick} headingId={AGENT_HEADING} />
                             <ModelsStep
                                 plan={plan}
                                 planError={planError}
@@ -1553,6 +1661,7 @@ export function SetupScreen({ onReady, onClose }: SetupScreenProps) {
                                         onRetry={(id, kind) => void retryModel(id, kind)}
                                         onResume={(id) => void retryModel(id, null)}
                                         onResumeAll={retryRun}
+                                        onFinishWithout={extrasLeft.length > 0 && !componentFailed ? () => void finishWithoutExtras(extrasLeft) : undefined}
                                         onSkip={(id) => void skipModel(id)}
                                         onRestart={() => void restartDownloads()}
                                         busy={busy || !!lostContact}
@@ -1574,13 +1683,13 @@ export function SetupScreen({ onReady, onClose }: SetupScreenProps) {
                                     <p className="setup-hint">{t('setup.optional.lede')}</p>
                                     <ul className="setup-rows">
                                         {optional.map((e) => {
-                                            const added = queued.includes(e.id);
+                                            const added = queued.includes(e.id) || fetching.includes(e.id);
                                             return (
                                                 <li key={e.id} className="setup-result is-waiting">
                                                     <span className="setup-result-label">{t(`setup.purpose.${e.roles[0]}`)}</span>
                                                     <span className="setup-result-value">
                                                         <bdi dir="ltr">{e.size_gb != null ? formatSize(e.size_gb) : t('setup.contents.sizeOnDownload')}</bdi>
-                                                        <button type="button" className="btn-secondary" aria-pressed={added} onClick={() => setQueued((q) => (added ? q.filter((id) => id !== e.id) : [...q, e.id]))}>
+                                                        <button type="button" className="btn-secondary" aria-pressed={added} disabled={fetching.includes(e.id)} onClick={() => setQueued((q) => (added ? q.filter((id) => id !== e.id) : [...q, e.id]))}>
                                                             {added ? t('setup.optional.added') : t('setup.optional.add')}
                                                         </button>
                                                     </span>
@@ -1620,6 +1729,9 @@ export function SetupScreen({ onReady, onClose }: SetupScreenProps) {
                                         <button type="button" className="btn-primary" onClick={retryRun} disabled={busy}>{t('setup.finish')}</button>
                                     </SetupFooter>
                                 </>
+                            )}
+                            {extrasLeft.length > 0 && !componentFailed && (
+                                <p className="setup-hint">{t('setup.download.extrasLeftNote', { names: extrasLeft.map((id) => names[id] ?? id).join(', ') })}</p>
                             )}
                             {runFailed && !downloadDone && !componentFailed && !(fullRun.models ?? []).some((m) => m.state === 'failed' || m.state === 'cancelled') && (
                                 <>
@@ -1688,9 +1800,14 @@ export function SetupScreen({ onReady, onClose }: SetupScreenProps) {
                                         {t('setup.ready.extraFailed', { job: t(`setup.test.job.${r.job}`) })}
                                     </p>
                                 ))}
-                                {notFetched.length > 0 && !confirm && (
+                                {stillFetching.length > 0 && (
+                                    <p className="setup-hint" role="status">
+                                        {t('setup.ready.extraDownloading', { names: stillFetching.map((id) => names[id] ?? id).join(', ') })}
+                                    </p>
+                                )}
+                                {notDownloaded.length > 0 && !confirm && (
                                     <p className="setup-failed-extra" role="alert">
-                                        {t('setup.ready.extraNotFetched', { names: notFetched.map((id) => names[id] ?? id).join(', ') })}
+                                        {t('setup.ready.extraNotFetched', { names: notDownloaded.map((id) => names[id] ?? id).join(', ') })}
                                     </p>
                                 )}
                                 {readyTasks.length > 0 && (
@@ -1723,10 +1840,8 @@ export function SetupScreen({ onReady, onClose }: SetupScreenProps) {
 
             {confirm?.kind === 'no_fit' && (
                 <ConfirmSheet
-                    title={confirm.models.length === 1
-                        ? t('setup.confirm.noFitOne', { name: confirm.models[0].name })
-                        : t('setup.confirm.noFitMany')}
-                    confirmLabel={t('setup.confirm.downloadAnyway')}
+                    title={onlyTight(confirm.models) ? t('setup.confirm.tightOne', { name: confirm.models[0].name }) : confirm.models.length === 1 ? t('setup.confirm.noFitOne', { name: confirm.models[0].name }) : t('setup.confirm.noFitMany')}
+                    confirmLabel={onlyTight(confirm.models) ? t('setup.confirm.useAnyway') : t('setup.confirm.downloadAnyway')}
                     cancelLabel={t('setup.confirm.pickSmaller')}
                     onConfirm={() => { setConfirm(null); setNoFitAcked(true); void commit(ackDisk, true); }}
                     onCancel={() => setConfirm(null)}
@@ -1758,7 +1873,10 @@ export function SetupScreen({ onReady, onClose }: SetupScreenProps) {
                             void commit(ackDisk, true);
                         } else if (c.then === 'retry') {
                             void api.downloadSetupModel(c.id, { keepTrying, acknowledgeLowDisk: true })
-                                .then(setRun)
+                                .then((s) => {
+                                    setRun(s);
+                                    setNotFetched((n) => n.filter((id) => id !== c.id));
+                                })
                                 .catch((err) => setActionError(errorText(err)));
                         } else {
                             const { gaiaLemonade, options } = lastRun.current;

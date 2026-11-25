@@ -402,6 +402,25 @@ class TestDefaultPickedByFreeMemory:
 
         return run
 
+    def test_a_busy_32gb_laptop_keeps_gemma(self, recommend):
+        """Open apps never push a PC below Gemma: the pick is saved for good."""
+        laptop = {
+            "Physical Memory": "32 GB",
+            "OS Version": "Windows 11 Pro",
+            "devices": {
+                "amd_gpu": [
+                    {
+                        "available": True,
+                        "integrated": True,
+                        "vram_gb": 2.0,
+                        "virtual_mem_gb": 15.0,
+                    }
+                ]
+            },
+        }
+        model_id, _ = recommend(laptop, _ram(32, 3.0))
+        assert model_id == GEMMA
+
     def test_a_mac_that_holds_qwen_but_has_little_free_gets_gemma(self, recommend):
         model_id, skipped = recommend(MAC_48, _ram(48, 20.4))
         assert model_id == GEMMA
@@ -473,10 +492,41 @@ class TestFinishedSetupKeepsItsPick:
         chosen = resolve_init_chat_model(later, reset_corrupt=False, enforce_fit=False)
         assert chosen.model_id == GEMMA
 
-    def test_a_pc_that_only_holds_the_floor_is_not_pinned_to_it(self, on):
+    def test_gemma_picked_without_free_memory_forcing_it_is_not_pinned(self, on):
+        """Every agent already falls back to Gemma, so there is nothing to save."""
         from gaia.config import GaiaConfig
 
-        assert self._finish_setup(on(CPU_16, _ram(16, 12))) == GEMMA
+        assert self._finish_setup(on(CPU_64, _ram(64, 48))) == GEMMA
+        assert not GaiaConfig.load().default_model
+
+    def test_a_16gb_pc_is_pinned_to_its_small_default(self, on):
+        """Agents fall back to Gemma, so a small PC's pick must be saved."""
+        from gaia.config import GaiaConfig
+        from gaia.llm.lemonade_client import TINY_DEFAULT_MODEL_NAME
+
+        assert self._finish_setup(on(CPU_16, _ram(16, 12))) == TINY_DEFAULT_MODEL_NAME
+        assert GaiaConfig.load().default_model == TINY_DEFAULT_MODEL_NAME
+
+    def test_a_small_pick_is_saved_even_when_verify_fails(self, on):
+        """Agents would otherwise fall back to a Gemma this PC never downloaded."""
+        from gaia.config import GaiaConfig
+        from gaia.installer.init_command import InitCommand
+        from gaia.llm.lemonade_client import TINY_DEFAULT_MODEL_NAME
+
+        cmd = InitCommand(profile="gaia", yes=True)
+        assert cmd._chat_model(on(CPU_16, _ram(16, 12))) == TINY_DEFAULT_MODEL_NAME
+        cmd._chat_model_ready, cmd._setup_verified = True, False
+        GaiaConfig.update(cmd._record_chat_choice)
+        assert GaiaConfig.load().default_model == TINY_DEFAULT_MODEL_NAME
+
+    def test_a_large_pick_is_not_saved_when_verify_fails(self, on):
+        from gaia.config import GaiaConfig
+        from gaia.installer.init_command import InitCommand
+
+        cmd = InitCommand(profile="gaia", yes=True)
+        cmd._chat_model(on(MAC_48, _ram(48, 20.4)))
+        cmd._chat_model_ready, cmd._setup_verified = True, False
+        GaiaConfig.update(cmd._record_chat_choice)
         assert not GaiaConfig.load().default_model
 
     def test_a_pick_that_was_not_forced_is_not_pinned(self, on):

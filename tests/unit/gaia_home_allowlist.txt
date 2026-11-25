@@ -2,7 +2,7 @@
 # Format: <file>:<rule> <count>. Counts may only go DOWN — build new paths from
 # gaia.config.gaia_home(). Enforced by tests/unit/test_gaia_home_ratchet.py.
 
-hub/agents/gaia/python/gaia_agent/stdio.py:home_join 2
+hub/agents/gaia/python/gaiapy/stdio.py:home_join 2
 src/gaia/agents/base/memory.py:home_join 1
 src/gaia/agents/base/memory_store.py:home_join 1
 src/gaia/agents/tools/screenshot_tools.py:home_join 1
@@ -24,7 +24,6 @@ src/gaia/filesystem/index.py:tilde_path 1
 src/gaia/hub/catalog.py:home_join 1
 src/gaia/installer/uninstall_command.py:home_join 5
 src/gaia/llm/lemonade_client.py:home_join 1
-src/gaia/llm/lemonade_embedded.py:home_join 1
 src/gaia/mcp/servers/tui_mcp.py:home_join 1
 src/gaia/messaging/slack/adapter.py:home_join 1
 src/gaia/messaging/slack/cli.py:home_join 1

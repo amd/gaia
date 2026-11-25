@@ -3,7 +3,7 @@
 
 """`gaia chat` where the agent ships as its own binary: through the daemon relay.
 
-The frozen gaia the apps ship carries no gaia_agent package, so `gaia chat`
+The frozen gaia the apps ship carries no gaiapy package, so `gaia chat`
 talks to the agent's binary the way the Agent UI does.
 """
 

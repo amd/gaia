@@ -77,27 +77,27 @@ class TestOpenSessionInBrowser:
         assert expected_hash in f"http://localhost:4200/#{session_id}"
         assert expected_no_query not in f"http://localhost:4200/#{session_id}"
 
-    def test_returns_hash_url_on_open(self):
+    @staticmethod
+    def _open(session_id, launch_reply):
+        """Call the tool with no dev server; POSTs answer activate, then launch-code."""
         pytest.importorskip("mcp")  # constructing the server needs optional mcp
         from gaia.mcp.servers.agent_ui_mcp import create_agent_ui_mcp
 
-        session_id = "abc123"
+        def reply(body):
+            resp = MagicMock()
+            resp.raise_for_status.return_value = None
+            resp.json.return_value = body
+            return resp
 
         with (
             patch("webbrowser.open") as mock_open,
             patch("requests.get") as mock_get,
             patch("requests.post") as mock_post,
         ):
-            # Dev port check fails
             mock_get.side_effect = Exception("not running")
-            # Activate endpoint and any POST succeeds
-            activate_resp = MagicMock()
-            activate_resp.raise_for_status.return_value = None
-            activate_resp.json.return_value = {"activated": True}
-            mock_post.return_value = activate_resp
+            mock_post.side_effect = [reply({"activated": True}), launch_reply]
 
             mcp = create_agent_ui_mcp("http://localhost:4200")
-            # Retrieve the tool function from the tool manager
             tools = mcp._tool_manager._tools  # pylint: disable=protected-access
             open_fn = tools.get("open_session_in_browser")
             if open_fn is None:
@@ -106,10 +106,35 @@ class TestOpenSessionInBrowser:
                 )
 
             result = open_fn.fn(session_id=session_id)
+        return result, mock_open, mock_post
 
-        assert "#" in result.get("url", "")
-        assert "?session=" not in result.get("url", "")
+    def test_returns_hash_url_on_open(self):
+        launch = MagicMock()
+        launch.raise_for_status.return_value = None
+        launch.json.return_value = {"path": "/?launch=CODE", "expires_in": 600}
+
+        result, mock_open, mock_post = self._open("abc123", launch)
+
+        assert result.get("url") == "http://localhost:4200/#abc123"
         assert result.get("opened") is True
+        # The browser signs in through a single-use link, never the token itself.
+        assert mock_post.call_args_list[1].args[0].endswith("/api/auth/launch-code")
+        mock_open.assert_called_once_with("http://localhost:4200/?launch=CODE#abc123")
+
+    def test_a_refused_launch_code_opens_nothing(self):
+        refused = MagicMock()
+        refused.status_code = 403
+        refused.json.return_value = {"detail": "Only on this PC."}
+        refused.raise_for_status.side_effect = requests.exceptions.HTTPError(
+            response=refused
+        )
+
+        result, mock_open, _ = self._open("abc123", refused)
+
+        assert result["opened"] is False
+        assert result["status"] == "error"
+        assert "Only on this PC." in result["detail"]
+        mock_open.assert_not_called()
 
 
 class TestSendMessageDocstring:
@@ -228,7 +253,7 @@ class TestStreamChatModelPin:
     def test_default_payload_pins_the_lemonade_model(self, monkeypatch):
         monkeypatch.delenv("GAIA_EVAL_AGENT_PROVIDER", raising=False)
         from gaia.llm.lemonade_client import DEFAULT_MODEL_NAME
-        from gaia.mcp.servers.agent_ui_mcp import UI_HEADER, _stream_chat
+        from gaia.mcp.servers.agent_ui_mcp import _stream_chat
 
         captured, fake_post = self._capture_payload()
         with patch("gaia.mcp.servers.agent_ui_mcp.requests.post", fake_post):
@@ -240,9 +265,12 @@ class TestStreamChatModelPin:
             "stream": True,
             "model": DEFAULT_MODEL_NAME,
         }
-        # The backend rejects mutating calls without this header; a mock that
-        # does not accept it turns the CSRF contract into a silent pass.
-        assert captured["headers"] == UI_HEADER
+        # The backend refuses a call without the CSRF header or the API token;
+        # a mock that does not check them turns that contract into a silent pass.
+        assert captured["headers"] == {
+            "X-Gaia-UI": "1",
+            "Authorization": "Bearer test-agent-ui-token",
+        }
 
     def test_claude_provider_omits_the_lemonade_pin(self, monkeypatch):
         monkeypatch.setenv("GAIA_EVAL_AGENT_PROVIDER", "claude")

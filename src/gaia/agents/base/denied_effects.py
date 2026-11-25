@@ -30,6 +30,7 @@ from __future__ import annotations
 import ast
 import contextvars
 import ipaddress
+import json
 import logging
 import ntpath
 import os
@@ -58,6 +59,10 @@ UNATTENDED_REFUSAL = "unattended_refusal"
 #: program is not installed. Installing it fixes that, so it is kept off the
 #: ledger too: the host the call aimed at was never refused.
 PROGRAM_NOT_FOUND = "program_not_found"
+
+#: Set on a call that did not run because its tool's own permission check
+#: raised. A crash is not a "no", so it is kept off the ledger as well.
+PERMISSION_CHECK_FAILED = "permission_check_failed"
 
 #: A file change whose target the code computes: it could be any denied path.
 COMPUTED_PATH = "a path the code works out when it runs"
@@ -2358,3 +2363,96 @@ class DeniedEffects:
                         continue
                     return denial, effect
         return None
+
+
+# ------------------------------------------------------------------ exact calls
+
+_ASCII_SPACE = re.compile(r"[ \t\r\n\f\v]+")
+#: A later message that asks for a declined call again.
+_ASKS_AGAIN = re.compile(
+    r"\b(?:again|retry|re-?run|run (?:it|that|this)\b"
+    r"|go ahead|do it\b|allow it|approve"
+    r"|once more|one more (?:time|go|try)|try (?:it|that|this)\b|redo\b"
+    r"|execute (?:it|that|this)\b|proceed|misclick|changed my mind)"
+    r"|^\s*(?:yes|yeah|yep|ok|okay|sure)\b"
+    # Spanish, Portuguese, French, German, Italian, Dutch, Polish, Turkish.
+    r"|\b(?:otra vez|de nuevo|novamente|de novo|encore|r[ée]essa\w*|nochmal"
+    r"|noch einmal|erneut|di nuovo|riprova\w*|opnieuw|nog een keer|ponownie"
+    r"|jeszcze raz|tekrar)\b"
+    # Russian, Chinese, Japanese, Korean, Arabic, Hindi.
+    r"|снова|ещ[её] раз|повтор|再试|再运行|再执行|再来|再一次|重试|重新"
+    r"|もう一度|再実行|再試行|やり直|다시|مرة أخرى|फिर से",
+    re.IGNORECASE,
+)
+_NEGATED_ASK = re.compile(
+    r"\b(?<!why )(?:don['’]?t|do not|never|not)\s+"
+    r"(?:try|retry|re-?run|run|do|allow|approve|go|again)\b",
+    re.IGNORECASE,
+)
+
+
+def _spaced(value: Any) -> Any:
+    """*value* with runs of ASCII whitespace in its one-line strings collapsed.
+
+    ASCII only: a no-break or zero-width space makes another command. A
+    multi-line string keeps its spacing, since indentation can be content.
+    """
+    if isinstance(value, str):
+        text = value.strip(" \t\r\n\f\v")
+        if "\n" in text or "\r" in text:
+            return text
+        return _ASCII_SPACE.sub(" ", text)
+    if isinstance(value, dict):
+        return {str(k): _spaced(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_spaced(v) for v in value]
+    return value
+
+
+def declined_call_key(tool_name: str, tool_args: Any) -> str:
+    """One call's identity: its tool and arguments, whitespace aside."""
+    return json.dumps(
+        [tool_name, _spaced(tool_args)], sort_keys=True, default=str, ensure_ascii=False
+    )
+
+
+class DeclinedCalls:
+    """The exact calls the user declined in this chat.
+
+    A retry of one is refused without asking again, whatever its effects.
+    A call lasts until a later message of the user's asks for it again.
+    """
+
+    def __init__(self) -> None:
+        self._calls: Dict[str, str] = {}
+
+    def __bool__(self) -> bool:
+        return bool(self._calls)
+
+    def record(self, tool_name: str, tool_args: Any) -> None:
+        """Remember that the user said no to this exact call."""
+        self._calls[declined_call_key(tool_name, tool_args)] = render_call(
+            tool_name, tool_args if isinstance(tool_args, dict) else None
+        )
+
+    def declined(self, tool_name: str, tool_args: Any) -> Optional[str]:
+        """The declined call this one repeats, as it was shown, or None."""
+        return self._calls.get(declined_call_key(tool_name, tool_args))
+
+    def lift_for(self, message: str) -> List[str]:
+        """Drop the calls *message* asks for again; returns them as shown.
+
+        A message that names a call, or asks to retry, asks again; one that
+        says not to does not. A wrong guess here only puts the call to the
+        user again, so it never runs anything unasked.
+        """
+        text = _ASCII_SPACE.sub(" ", message or "").strip()
+        if not self._calls or not text or _NEGATED_ASK.search(text):
+            return []
+        retry = _ASKS_AGAIN.search(text) is not None
+        lifted = [
+            key
+            for key, shown in self._calls.items()
+            if retry or (shown and _ASCII_SPACE.sub(" ", shown).strip() in text)
+        ]
+        return [self._calls.pop(key) for key in lifted]

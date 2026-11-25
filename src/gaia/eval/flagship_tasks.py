@@ -1090,7 +1090,7 @@ def _run_agent(
     has with its permissions skipped; *on_agent* sees the agent before it runs.
     """
     try:
-        from gaia_agent.agent import GaiaAgent, GaiaAgentConfig
+        from gaiapy.agent import GaiaAgent, GaiaAgentConfig
     except ImportError as exc:
         raise RuntimeError(
             "The flagship agent is not installed. From the repo root run "

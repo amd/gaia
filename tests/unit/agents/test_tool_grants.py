@@ -36,6 +36,35 @@ def test_the_words_an_always_button_shows_mark_hidden_characters(tool, args, raw
     assert any(raw in key for key in scope.keys)
 
 
+@pytest.mark.parametrize(
+    "name, shown",
+    [
+        ("inv\u200doice.txt", "inv[U+200D]oice.txt"),
+        ("inv\u200coice.txt", "inv[U+200C]oice.txt"),
+        ("report\u200e.txt", "report[U+200E].txt"),
+        ("report\u200f.txt", "report[U+200F].txt"),
+        ("\U0001f4c1\ufe0fnotes.txt", "\U0001f4c1[U+FE0F]notes.txt"),
+        ("\u845b\U000e0100.txt", "\u845b[U+E0100].txt"),
+    ],
+    ids=["zwj", "zwnj", "lrm", "rlm", "emoji vs16", "cjk vs17"],
+)
+def test_a_look_alike_file_name_shows_its_joiners_marks_and_selectors(name, shown):
+    scope = grant_scope("write_file", {"file_path": name, "content": "x"})
+
+    assert scope is not None
+    assert scope.subject == shown
+    assert shown in scope.label
+    assert any(name in key for key in scope.keys)
+
+
+def test_a_joiner_in_a_program_name_shows_in_its_always_label():
+    scope = grant_scope("run_shell_command", {"command": "gi\u200dt status"})
+
+    assert scope is not None
+    assert scope.label == "gi[U+200D]t status"
+    assert scope.key == "run_shell_command:gi\u200dt status"
+
+
 class TestShellGrantsAreScopedToTheCommand:
     @pytest.mark.parametrize(
         "command,expected",

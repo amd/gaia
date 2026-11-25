@@ -117,4 +117,4 @@ def test_the_agent_hub_installer_shares_the_same_rule(hostile):
 
 
 def test_the_agent_hub_installer_accepts_a_wheel_name():
-    _sanitize_artifact_filename("gaia_agent-0.1.0-py3-none-any.whl", "some-agent")
+    _sanitize_artifact_filename("gaiapy-0.1.0-py3-none-any.whl", "some-agent")

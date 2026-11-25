@@ -44,7 +44,7 @@ on:
       # The installer jobs it calls read the flagship's pins and version.
       - 'hub/agents/gaia/npm/binaries.lock.json'
       - 'hub/agents/gaia/python/gaia-agent.yaml'
-      - 'hub/agents/gaia/python/gaia_agent/__init__.py'
+      - 'hub/agents/gaia/python/gaiapy/__init__.py'
       - 'hub/agents/gaia/python/packaging/gen_binaries_lock.py'
       - 'util/gaiapy_rc_assets.py'
       - 'util/release_tag.py'
@@ -87,7 +87,7 @@ on:
       # The installer jobs it calls read the flagship's pins and version.
       - 'hub/agents/gaia/npm/binaries.lock.json'
       - 'hub/agents/gaia/python/gaia-agent.yaml'
-      - 'hub/agents/gaia/python/gaia_agent/__init__.py'
+      - 'hub/agents/gaia/python/gaiapy/__init__.py'
       - 'hub/agents/gaia/python/packaging/gen_binaries_lock.py'
       - 'util/gaiapy_rc_assets.py'
       - 'util/release_tag.py'

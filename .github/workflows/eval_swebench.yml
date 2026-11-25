@@ -42,7 +42,7 @@ on:
       - 'src/gaia/agents/base/**'
       - 'src/gaia/agents/tools/**'
       - 'src/gaia/llm/providers/lemonade.py'
-      - 'hub/agents/gaia/python/gaia_agent/**'
+      - 'hub/agents/gaia/python/gaiapy/**'
       - 'hub/skills/coding/**'
       - 'src/gaia/eval/bench/**'
       - 'src/gaia/eval/flagship_tasks.py'

@@ -27,6 +27,7 @@ from gaia.agents.base.denied_effects import (
     COMMAND,
     NETWORK,
     PATH,
+    PERMISSION_CHECK_FAILED,
     SCRIPT,
     TEST_SUITE,
     DeniedEffects,
@@ -864,6 +865,27 @@ def test_a_preflight_refusal_is_a_step_not_a_denial(tmp_path):
     )
     agent._execute_tool("write_file", {"file_path": "a.py", "content": "x"})
     assert not agent._denied_effects
+
+
+def test_a_permission_check_that_crashed_is_not_a_denial(tmp_path, monkeypatch):
+    """A crash is not a "no": other routes to the same host stay open."""
+    agent = _agent(_DenyShellConsole(), tmp_path)
+
+    def _broken_check(_args):
+        raise LookupError("no state for this chat")
+
+    monkeypatch.setitem(
+        agent._tools_registry["run_shell_command"], "preflight", _broken_check
+    )
+
+    result = agent._execute_tool(
+        "run_shell_command", {"command": "curl https://api.github.com/x"}
+    )
+
+    assert not agent._denied_effects
+    assert agent.ran == []
+    assert result["status"] == "error"
+    assert result[PERMISSION_CHECK_FAILED] is True
 
 
 def test_a_refused_call_is_never_offered_as_allow_once(tmp_path, script):

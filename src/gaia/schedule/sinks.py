@@ -18,6 +18,8 @@ from typing import Any, Dict
 
 import requests
 
+from gaia.messaging.telegram_api import redact_token
+
 TELEGRAM_API = "https://api.telegram.org"
 _NOTIFICATION_SYSTEMS = ("Darwin", "Linux", "Windows")
 _WINDOWS_NOTIFICATION_STARTUP_GRACE_S = 3
@@ -100,6 +102,17 @@ def _to_file(path: str, output: str) -> None:
         ) from e
 
 
+_SECRET_KEY_PARTS = ("token", "api_key", "apikey", "secret", "password")
+
+
+def masked_sink_args(sink_args: Dict[str, Any]) -> Dict[str, Any]:
+    """Copy of *sink_args* with credential-like values hidden, for display."""
+    return {
+        key: "***" if any(p in key.lower() for p in _SECRET_KEY_PARTS) else value
+        for key, value in sink_args.items()
+    }
+
+
 def _to_notification(output: str, sink_args: Dict[str, Any]) -> None:
     title = sink_args.get("title", "GAIA schedule")
     system = platform.system()
@@ -108,7 +121,7 @@ def _to_notification(output: str, sink_args: Dict[str, Any]) -> None:
             script = f"display notification {_osa(output)} with title {_osa(title)}"
             subprocess.run(["osascript", "-e", script], check=True, timeout=30)
         elif system == "Linux":
-            subprocess.run(["notify-send", title, output], check=True, timeout=30)
+            subprocess.run(["notify-send", "--", title, output], check=True, timeout=30)
         elif system == "Windows":
             _to_windows_notification(title, output)
         else:
@@ -170,6 +183,8 @@ def _to_windows_notification(title: str, output: str) -> None:
         # MessageBox::Show remains open until the user dismisses it. Once
         # PowerShell stayed alive through startup, the notification is on
         # screen; do not make a scheduled job wait for user interaction.
+        if process.stderr:
+            process.stderr.close()
         return
     if return_code:
         stderr = (
@@ -203,13 +218,14 @@ def _to_telegram(output: str, sink_args: Dict[str, Any]) -> None:
     try:
         resp = requests.post(url, json={"chat_id": to, "text": output}, timeout=30)
     except requests.RequestException as e:
+        # The request URL holds the token, so the original error is not chained.
         raise RuntimeError(
-            f"telegram sink could not reach {TELEGRAM_API}: {e}. "
-            f"Check network connectivity."
-        ) from e
+            f"telegram sink could not reach {TELEGRAM_API}: "
+            f"{redact_token(str(e), token)}. Check network connectivity."
+        ) from None
     if resp.status_code != 200:
         raise RuntimeError(
             f"telegram sink got HTTP {resp.status_code} from sendMessage: "
-            f"{resp.text[:200]}. Verify the bot token and that chat_id {to!r} "
-            f"has started a conversation with the bot."
+            f"{redact_token(resp.text[:200], token)}. Verify the bot token and "
+            f"that chat_id {to!r} has started a conversation with the bot."
         )

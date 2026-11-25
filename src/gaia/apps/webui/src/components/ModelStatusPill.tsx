@@ -14,6 +14,7 @@ import { useT, type Translate } from '../i18n/useT';
 import { ref, type MessageKey } from '../i18n/registry';
 import './ModelPicker.css';
 import type { LocalModelStatus, ModelPlacement } from '../types';
+import { setVisibleInterval } from '../utils/visibleInterval';
 
 const POLL_MS = 3000;
 
@@ -78,8 +79,7 @@ export function ModelStatusPill() {
     useEffect(() => {
         if (!open) return;
         void load();
-        const t = setInterval(() => { void load(); }, POLL_MS);
-        return () => clearInterval(t);
+        return setVisibleInterval(() => { void load(); }, POLL_MS);
     }, [open, load]);
 
     const restart = useCallback(async (confirm: boolean) => {

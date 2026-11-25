@@ -1,6 +1,6 @@
 # Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 # SPDX-License-Identifier: MIT
-"""Pin ``gaia_agent.stdio`` against the shared TUI wire fixture.
+"""Pin ``gaiapy.stdio`` against the shared TUI wire fixture.
 
 The Go TUI keeps its own copies of these literals, and its end-to-end tests
 drive a Go mock agent, so a rename here would leave every Go test green while
@@ -15,7 +15,7 @@ import sys
 from pathlib import Path
 
 import pytest
-from gaia_agent import stdio
+from gaiapy import stdio
 
 from gaia.ui.sse_translation import TERMINAL_TYPES, CanonicalTranslator
 
@@ -227,6 +227,7 @@ def _translated_events():
     translator = CanonicalTranslator(run_id=None, agent_id=stdio.AGENT_ID, debug=False)
     source = [
         {"type": "status", "message": "Searching files"},
+        {"type": "status", "status": "warning", "message": "A skill did not load"},
         {
             "type": "status",
             "message": "Reasoning — 40 words so far",
@@ -295,6 +296,7 @@ def test_every_field_the_tui_reads_is_emitted():
     assert set(emitted) == set(EVENTS), "an event type has no emitter"
     for etype, spec in EVENTS.items():
         expected = set(spec["fields"]) | set(spec.get("phase_extension", []))
+        expected |= set(spec.get("warning_extension", []))
         expected -= set(spec.get("not_sent_over_stdio", []))
         missing = expected - emitted[etype]
         assert not missing, f"{etype} no longer carries {sorted(missing)}"
@@ -357,6 +359,24 @@ def test_plan_status_matches_the_fixture():
         EVENTS["status"]["plan_extension"]
     )
     assert set(event["plan"]) == {"steps", "current_step"}
+
+
+def test_answer_check_status_matches_the_fixture():
+    from gaia.ui.sse_translation import CanonicalTranslator
+
+    (event,) = CanonicalTranslator(run_id=None, agent_id="gaia").translate(
+        {
+            "type": "status",
+            "status": "working",
+            "phase": "answer_check",
+            "message": "Checking the answer",
+            "retracts_answer": True,
+        }
+    )
+
+    assert set(event) - {"type"} == set(EVENTS["status"]["fields"]) | {"phase"} | set(
+        EVENTS["status"]["retracts_answer_extension"]
+    )
 
 
 def test_context_usage_matches_the_fixture(tmp_path):

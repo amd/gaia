@@ -1,7 +1,7 @@
 // Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 // SPDX-License-Identifier: MIT
 
-import { useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { useLayoutEffect, useRef, useState } from 'react';
 import type { SkillCommands } from '../hooks/useSkillCommands';
 import { useT } from '../i18n/useT';
 
@@ -79,9 +79,10 @@ export function SkillCommandMenu({ menu, onPick }: SkillCommandMenuProps) {
         };
     }, [menu.open, menu.status, rows]);
 
-    useEffect(() => {
+    // Before paint, so the highlighted row is never drawn scrolled out of the list.
+    useLayoutEffect(() => {
         if (rows > 0) document.getElementById(skillOptionId(menu.selected))?.scrollIntoView?.({ block: 'nearest' });
-    }, [menu.selected, rows]);
+    }, [menu.selected, rows, placement]);
 
     if (!menu.open) return null;
     const className = `skill-menu${placement?.below ? ' is-below' : ''}`;

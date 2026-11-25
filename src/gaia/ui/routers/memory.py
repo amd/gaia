@@ -810,7 +810,7 @@ def trigger_reconciliation(max_pairs: int = Query(20, ge=1, le=100)) -> Dict:
         except ImportError:
             raise HTTPException(503, "faiss not installed — run: pip install faiss-cpu")
 
-        from gaia.agents.base.memory import _blob_to_embedding
+        from gaia.agents.base.memory import _blob_to_embedding, assert_faiss_omp_safe
         from gaia.llm import create_client
 
         store = _get_store()
@@ -863,6 +863,7 @@ def trigger_reconciliation(max_pairs: int = Query(20, ge=1, le=100)) -> Dict:
         index.add(mat)
 
         n_neighbors = min(5, len(vectors))
+        assert_faiss_omp_safe("Memory dashboard reconciliation search")
         scores_all, indices_all = index.search(mat, n_neighbors)
 
         # Collect high-similarity pairs

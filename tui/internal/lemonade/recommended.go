@@ -25,6 +25,9 @@ type Recommended struct {
 	// with the other models, never under "Recommended" (Gemma on the NPU is
 	// slower than on the GPU, so it is only ever the user's pick).
 	Option bool `json:"option"`
+	// Floor marks the smallest default (DEFAULT_MODEL_LADDER[-1]): never shown
+	// as tight, since there is no smaller model to suggest instead.
+	Floor bool `json:"floor"`
 
 	// Registration for a model that is not a Lemonade built-in. Empty for
 	// built-ins, which Lemonade pulls by name.
@@ -73,6 +76,10 @@ type fitConstants struct {
 	// WindowsIGPUSharedRAMFraction is the share of RAM WDDM lets an
 	// integrated GPU use beyond its carve-out.
 	WindowsIGPUSharedRAMFraction float64 `json:"windows_igpu_shared_ram_fraction"`
+	// AppReserveMinGB and AppReserveFraction set the RAM kept for the OS and
+	// other apps where a model shares the PC's RAM: the larger of the two.
+	AppReserveMinGB    float64 `json:"app_reserve_min_gb"`
+	AppReserveFraction float64 `json:"app_reserve_fraction"`
 }
 
 //go:embed recommended_models.json
@@ -96,6 +103,9 @@ func init() {
 	}
 	if doc.Fit.WindowsIGPUSharedRAMFraction <= 0 {
 		panic("recommended_models.json: fit.windows_igpu_shared_ram_fraction must be positive")
+	}
+	if doc.Fit.AppReserveMinGB <= 0 || doc.Fit.AppReserveFraction <= 0 {
+		panic("recommended_models.json: fit.app_reserve_min_gb and fit.app_reserve_fraction must be positive")
 	}
 	recommended, fitRule = doc.Models, doc.Fit
 	// The ranked Fireworks list with its Evidence is RecommendedModels in

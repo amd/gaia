@@ -513,20 +513,29 @@ Every other path serves the Agent UI page, except paths under `/api`: an unknown
   </Accordion>
 
   <Accordion title="GET /api/health">
-    Health check with database statistics.
+    Liveness probe. The one route that needs no [API token](#api-token), so it
+    returns nothing about the user.
 
     **Response:**
     ```json
     {
       "status": "ok",
-      "service": "gaia-agent-ui",
-      "stats": {
-        "sessions": 12,
-        "messages": 245,
-        "documents": 5,
-        "total_chunks": 320,
-        "total_size_bytes": 15234567
-      }
+      "service": "gaia-agent-ui"
+    }
+    ```
+  </Accordion>
+
+  <Accordion title="POST /api/auth/launch-code">
+    A link that signs a browser in to this Agent UI, for a launcher that holds
+    the [API token](#api-token) and opens a browser. Needs the token and
+    `X-Gaia-UI: 1`. Opening the link sets the `gaia_ui_token` cookie and
+    redirects to the same page without the code. The code works once.
+
+    **Response:**
+    ```json
+    {
+      "path": "/?launch=3q2-Xo...",
+      "expires_in": 600
     }
     ```
   </Accordion>
@@ -784,7 +793,7 @@ Every other path serves the Agent UI page, except paths under `/api`: an unknown
     | Field | Type | Required | Description |
     |-------|------|----------|-------------|
     | `custom_model` | string or null | No | Model ID to use instead of the default. An empty string clears the override; `null` leaves it unchanged. |
-    | `flagship_agent` | string or null | No | Which program is the GAIA agent: `gaiapy` (the Python agent) or `gaiacpp` (the native C++ agent, beta). Saved as `flagship_agent` in `~/.gaia/config.json`, which the terminal UI reads too, and applied from the next message. Refused with `422` when `gaiacpp` isn't installed, `409` while a chat is answering, and `403` unless the request comes from the PC running GAIA. `GET /api/settings` returns the one in use as `flagship_agent`, and `gaiacpp_available`. |
+    | `flagship_agent` | string or null | No | Which program is the GAIA agent: `gaiapy` (the Python agent) or `gaiacpp` (the native C++ agent, beta). Saved as `flagship_agent` in `~/.gaia/config.json`, which the terminal UI reads too, and applied from the next message. Refused with `422` when `gaiacpp` isn't installed, `409` while a chat is answering, and `403` unless the request comes from the PC running GAIA. `GET /api/settings` returns the saved one as `flagship_agent` (which can be a name a newer GAIA saved that this version can't run, until another is chosen), and `gaiacpp_available`. |
 
     **Response:** Same shape as `GET /api/settings`.
   </Accordion>
@@ -806,7 +815,7 @@ Every other path serves the Agent UI page, except paths under `/api`: an unknown
 
     | Field | Type | Description |
     |-------|------|-------------|
-    | `current` | string | The agent in use, `gaiapy` or `gaiacpp`. |
+    | `current` | string | The saved agent choice: `gaiapy` or `gaiacpp`, or a name a newer GAIA saved that this version can't run (it matches no entry in `programs`; choosing another in Settings fixes it). |
     | `programs[].size_bytes` | number or null | Download size for this PC; `null` when it could not be read. |
     | `programs[].can_download` | boolean | `true` for a `gaiacpp` this release offers that is not installed, or is from another release. |
     | `programs[].unavailable_reason` | string or null | Why `gaiacpp` can be neither used nor downloaded here, for example a development build. |
@@ -1104,7 +1113,9 @@ Deleting a chat deletes its copies.
     "accent": "american", "gender": "female", "quality": "A-"}, ...]}`.
     `speed` is a percentage of normal speed. Stored as `read_aloud_voice`,
     `read_aloud_speed` and `read_aloud_auto` in `~/.gaia/config.json`, which
-    the TUI reads too.
+    the TUI reads too. `available` is false where GAIA doesn't offer its voice
+    (macOS for now), with `unavailable_reason` saying why; the app then hides
+    Read aloud and doesn't auto-read, and the saved settings still load.
   </Accordion>
 
   <Accordion title="PUT /api/speech/settings">
@@ -1117,7 +1128,8 @@ Deleting a chat deletes its copies.
     Whether Lemonade has the `kokoro-v1` voice model on disk:
     `{"downloaded": bool, "size_gb": float | null}`. The app checks it before
     its first read so it can say the model is downloading. **503** when
-    Lemonade is unreachable, **502** when Lemonade doesn't list the model.
+    Lemonade is unreachable, **502** when Lemonade doesn't list the model,
+    **409** where GAIA doesn't offer its voice.
   </Accordion>
 
   <Accordion title="POST /api/speech">
@@ -1126,8 +1138,9 @@ Deleting a chat deletes its copies.
     body names `voice` or `speed`. Downloads the model on first use, which the
     app announces after `GET /api/speech/model`. **422** for
     empty or over-long text or a bad voice or speed, **503** when Lemonade is
-    unreachable, **502** when Lemonade can't make the speech; each `detail`
-    says why. The app splits a long reply into pieces and plays them back to
+    unreachable, **502** when Lemonade can't make the speech or returns far
+    less audio than the text needs (cut-off speech is refused, never sent),
+    **409** where GAIA doesn't offer its voice; each `detail` says why. The app splits a long reply into pieces and plays them back to
     back.
   </Accordion>
 </AccordionGroup>
@@ -1376,9 +1389,11 @@ Deleting a chat deletes its copies.
     `{"exact": true, "model"}`. Otherwise (a cloud model, another model
     loaded, or the model server not answering) they are estimates and
     `tokenizer` is `{"exact": false, "reason"}`. Asking never loads or swaps a
-    model. `{"available": false, "reason"}` until an agent has answered in the
-    chat. A streaming turn sends estimates of the same numbers as a
-    `context_usage` event.
+    model. `{"available": false, "reason", "reason_code"?}` until an agent has
+    answered in the chat. `reason_code` (`not_answered_yet`,
+    `remeasure_next_turn`, `agent_too_old`) is set when GAIA wrote the reason,
+    so the UI can translate it; an agent's own error has none. A streaming
+    turn sends estimates of the same numbers as a `context_usage` event.
   </Accordion>
 
   <Accordion title="GET /api/chat/performance/{session_id}">
@@ -1472,7 +1487,8 @@ Deleting a chat deletes its copies.
     **Errors:** 400 with `detail.status: "is_folder"` when the path is a folder
     (index it with `index-folder`); 400 for a file type GAIA doesn't index; 404
     for a missing file inside an allowed root; 403 for any path outside the
-    allowed roots, whether or not it exists.
+    allowed roots, whether or not it exists, and for files that hold
+    credentials or keys (the same files the agent's read tools refuse).
   </Accordion>
 
   <Accordion title="DELETE /api/documents/{doc_id}">
@@ -1550,9 +1566,13 @@ Deleting a chat deletes its copies.
   </Accordion>
 
   <Accordion title="POST /api/files/upload">
-    Upload an arbitrary file for use as a chat attachment (not added to the
-    RAG library). Use `POST /api/documents/upload` instead if you want the
-    file indexed for Q&A.
+    Upload an arbitrary file for use as a chat attachment. Nothing is added to
+    the library on upload; when a chat message links a document uploaded here,
+    that turn adds it to the library and attaches it to the chat (images and
+    recordings are not added), and the turn's `done` event lists it in
+    `documents_added`. Detaching it from the chat takes the upload away from
+    that chat too. Use `POST /api/documents/upload` to add a file to the
+    library without a chat.
 
     A refused upload returns HTTP 400 (or 413) with `detail` as an object:
     `{"status", "message"}`, where `message` is an English sentence. `status` is
@@ -1603,11 +1623,16 @@ Deleting a chat deletes its copies.
   </Accordion>
 
   <Accordion title="GET /api/files/preview">
-    Return a preview (first N bytes / first N lines) of a text file.
+    Return a preview (first N bytes / first N lines) of a text file. **403**
+    for files that hold credentials or keys (`.env`, `id_rsa`, `*.pem` and
+    `*.key` files, the Agent UI token, files in `~/.ssh` or `~/.aws`, and so
+    on), the same files the agent's read tools refuse.
   </Accordion>
 
   <Accordion title="GET /api/files/image">
-    Stream an image file from the filesystem for display in the UI.
+    Stream an image file from the filesystem for display in the UI. **403**
+    for files that hold credentials or keys, the same rule as
+    `GET /api/files/preview`.
   </Accordion>
 
   <Accordion title="GET /api/media/{kind}/{name}">
@@ -1951,9 +1976,11 @@ Used to reach the UI from a phone.
     `detail.status` is one of the `error_kind` values listed under
     `upload-path` and whose
     `detail.message` says what to do. When the model server didn't answer,
-    it is a **503** with `detail.status` `model_server_down` or
-    `model_server_busy`: the file is fine, and sending it again works once
-    the server is back.
+    the copy is kept and the document comes back with `indexing_status`
+    `failed` and `error_kind` `model_server_down` or `model_server_busy`: the
+    file is fine. The Agent UI re-indexes a `model_server_down` document by
+    itself (`POST /api/documents/{doc_id}/reindex`) once the server is back; a
+    `model_server_busy` one waits for the user's Retry.
   </Accordion>
 
   <Accordion title="GET /api/documents/{doc_id}/status">
@@ -1966,7 +1993,8 @@ Used to reach the UI from a phone.
   <Accordion title="GET /api/documents/{doc_id}/file">
     The document's original file, served inline so the browser can show it.
     A citation link opens a PDF at its page with `#page=N`. Only files in the
-    document library are served; a file deleted from disk returns 404.
+    document library are served; a file deleted from disk returns 404, and a
+    file that holds credentials or keys returns 403.
   </Accordion>
 
   <Accordion title="POST /api/documents/{doc_id}/cancel">
@@ -1976,7 +2004,8 @@ Used to reach the UI from a phone.
   <Accordion title="POST /api/documents/index-folder">
     Index the supported files in a folder (`recursive`, default `true`, also
     takes subfolders). Returns `indexed`, `failed` with one line per file in
-    `errors`, `skipped`: files of a type GAIA doesn't index, and
+    `errors`, `skipped`: files of a type GAIA doesn't index or that hold
+    credentials or keys, and
     `skipped_images`: images, which GAIA reads only when each is added on its
     own. A file that fails, or yields no text, gets a `failed` library row with
     its `last_error`, so it can be retried with `reindex`; it is not in
@@ -1986,7 +2015,8 @@ Used to reach the UI from a phone.
   <Accordion title="POST /api/documents/{doc_id}/reindex">
     Re-run the RAG indexing pipeline for a document — clears any previous
     failure, then always ends in `complete` or `failed` (never 200 while
-    leaving the document in a bad state).
+    leaving the document in a bad state). 403 for a file that holds
+    credentials or keys.
   </Accordion>
 </AccordionGroup>
 
@@ -2838,7 +2868,10 @@ plan and make one set of choices.
     `/models/skip` checks the model against that plan.
 
     Each `catalog` entry says `support` (`verified`, `untested`, or null for an
-    optional model), `reads_images`, `feature_tier` and `source`. `components`
+    optional model), `reads_images`, `feature_tier` and `source`, and
+    `setup_offer`: whether setup lists it as a chat choice, which is false for
+    a model that doesn't fit this PC and for the opt-in Qwen3.8 Flash Next, and
+    always true for the plan's own chat model. `components`
     lists what setup fetches besides the models, `backends` what Lemonade
     reports for this PC, and `vision_model` the user's vision pick.
 
@@ -3488,12 +3521,57 @@ these to install the GAIA agent when it is missing.
 ## Security
 
 <Note>
-  The backend binds loopback and has no authentication while the tunnel is
-  off, so any web page the user's browser visits could otherwise drive it.
-  Three layers close that off — see
+  Every `/api/*` and `/v1/*` request needs the Agent UI API token, including
+  requests from this PC: binding loopback is not access control. Three more
+  layers stop a web page the user visits from driving the backend through
+  their own browser. See
   [`src/gaia/ui/security.py`](https://github.com/amd/gaia/blob/main/src/gaia/ui/security.py)
+  and [`src/gaia/ui/api_token.py`](https://github.com/amd/gaia/blob/main/src/gaia/ui/api_token.py)
   for the enforcing code.
 </Note>
+
+### API token
+
+The token is per install: the backend creates it on first start as
+`agent-ui-token` in GAIA's home folder (`~/.gaia`, or `GAIA_HOME`), readable
+only by you, and reuses it after that. Present it as
+`Authorization: Bearer <token>` or as the `gaia_ui_token` cookie. A missing or
+wrong token is a **401** with `"code": "ui_token_required"`.
+
+| Client | How it gets the token |
+|--------|-----------------------|
+| Desktop app | The main process adds the header to its own requests to the backend it started; the token never reaches the page or a URL |
+| Browser (`gaia chat --ui`) | Open the link it prints, `http://127.0.0.1:4200/?launch=<code>`. The code works once, for 10 minutes, and sets an HttpOnly, `SameSite=Strict` cookie so the browser stays signed in across restarts |
+| Scripts, MCP server, eval harness | Read the file; in Python, `gaia.ui.api_token.auth_headers()` |
+| Phone over mobile access | The tunnel's own token, from the QR code; it stops working when mobile access is off |
+
+Only `GET /api/health` and CORS preflights need no token; health returns no
+user data. `GAIA_UI_TOKEN_FILE` points the backend and its clients at another
+file, which must exist. To rotate the token, stop the Agent UI, delete the
+file and start it again; browsers then need a new launch link.
+
+<Warning>
+  Anything that holds the token speaks for you, so a few things deserve care:
+
+  - **Browsers send a cookie to every port on the same host.** A browser
+    signed in at `127.0.0.1:4200` also sends `gaia_ui_token` to any other
+    page it opens at `http://127.0.0.1:<port>`. Use the desktop app, which
+    keeps the token out of the browser, on a PC where you open untrusted
+    local web pages.
+  - **Front-ends that add the token answer for it.** The Agent UI MCP server
+    over HTTP and the Vite dev server (`npm run dev`) attach the token to
+    what they forward, so while one runs, whatever can reach its port can
+    use the Agent UI.
+  - **The launch code works for 10 minutes.** `gaia chat --ui` prints it
+    only to a terminal; the desktop app's backend never prints one.
+</Warning>
+
+```bash
+curl -H "Authorization: Bearer $(cat ~/.gaia/agent-ui-token)" \
+  http://localhost:4200/api/sessions
+```
+
+### Browser defenses
 
 1. **CSRF header.** Every mutating (non-GET/HEAD/OPTIONS) request to `/api/*`
    or `/v1/*` must carry `X-Gaia-UI: 1`. A cross-origin page cannot set a
@@ -3707,7 +3785,7 @@ def test_message_ordering():
 The Agent UI server delegates to the GAIA [Agent](/sdk/core/agent-system) for LLM communication and tool execution:
 
 ```python
-from gaia_agent.chat_agent import ChatAgent, ChatAgentConfig
+from gaiapy.chat_agent import ChatAgent, ChatAgentConfig
 
 # The server creates a ChatAgent instance per request. ChatAgent derives its
 # system prompt from `prompt_profile` ("chat" | "doc" | "file" | "data" |

@@ -281,7 +281,19 @@ jobs:
         with:
           sparse-checkout: ${{ env.PACKAGING }}
 
+      # One bounded retry: a stalled download once cancelled a whole release.
       - uses: actions/download-artifact@v8
+        id: download_try_1
+        continue-on-error: true
+        timeout-minutes: 5
+        with:
+          name: gaia-agent-linux-x64
+          path: agent
+
+      - name: Download (second try)
+        uses: actions/download-artifact@v8
+        if: steps.download_try_1.outcome == 'failure'
+        timeout-minutes: 5
         with:
           name: gaia-agent-linux-x64
           path: agent

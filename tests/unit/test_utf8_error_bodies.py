@@ -146,20 +146,12 @@ def test_streamed_responses_keep_the_dash(tmp_path, monkeypatch):
     assert events == [{"delta": MESSAGE}]
 
 
-class _RunningTunnel:
-    def poll(self):
-        return None
-
-
-def test_tunnel_auth_rejection_declares_utf8():
+def test_token_rejection_declares_utf8():
     """Responses the other middlewares build get the charset too."""
     app = create_app(db_path=":memory:")
-    tunnel = app.state.tunnel
-    tunnel._url = "https://fake-tunnel.ngrok-free.app"
-    tunnel._token = "valid"
-    tunnel._process = _RunningTunnel()
-    assert tunnel.active
-    r = TestClient(app).get("/api/sessions", headers={"X-Gaia-UI": "1"})
+    client = TestClient(app)
+    client.headers.pop("authorization", None)
+    r = client.get("/api/sessions", headers={"X-Gaia-UI": "1"})
     assert r.status_code == 401
     assert r.headers["content-type"] == "application/json; charset=utf-8"
 

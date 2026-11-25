@@ -870,7 +870,7 @@ def fake_agent(monkeypatch, tmp_path):
     _FakeAgent.error_history = []
     _FakeAgent.conversation = [{"role": "tool", "content": "x"}] * 2
     module = SimpleNamespace(GaiaAgent=_FakeAgent, GaiaAgentConfig=lambda **kw: kw)
-    monkeypatch.setitem(sys.modules, "gaia_agent.agent", module)
+    monkeypatch.setitem(sys.modules, "gaiapy.agent", module)
     tasks = tmp_path / "tasks.json"
     source = json.loads(ft.TASKS_FILE.read_text(encoding="utf-8"))
     source["suites"]["one"] = ["02-bugfix"]

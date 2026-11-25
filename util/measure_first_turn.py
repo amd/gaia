@@ -83,8 +83,8 @@ def _evict_prompt_cache(model: str) -> None:
 
 def _run_session(model: str, out: Path) -> None:
     """One leg, in its own process: run :data:`TASKS` and write what happened."""
-    from gaia_agent import stdio
-    from gaia_agent.agent import GaiaAgent, GaiaAgentConfig
+    from gaiapy import stdio
+    from gaiapy.agent import GaiaAgent, GaiaAgentConfig
 
     from gaia.agents.base.history import SessionHistory
 

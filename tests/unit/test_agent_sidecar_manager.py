@@ -210,7 +210,7 @@ def test_user_mode_spawn_command_uses_fetched_binary(monkeypatch, tmp_path):
 
     # The binary's own `serve` parser must accept every argument the daemon
     # passes; a mismatch exits the sidecar with code 2 at spawn.
-    server = pytest.importorskip("gaia_agent.server")
+    server = pytest.importorskip("gaiapy.server")
     sidecar_parser = argparse.ArgumentParser()
     server._add_serve_args(sidecar_parser)
     parsed = sidecar_parser.parse_args(argv[1:])
@@ -901,7 +901,7 @@ def test_resolved_mode_captures_spawn_time_mode_not_live_env(monkeypatch, tmp_pa
 
 
 def test_builtin_gaia_spec_token_env_vars_match_the_hub_wheel_contract():
-    # Cross-repo literal: must equal gaia_agent.caller_auth's values. The
+    # Cross-repo literal: must equal gaiapy.caller_auth's values. The
     # flagship sidecar exposes shell and file tools, so a drifted
     # literal means the daemon mints a token the sidecar never reads and the
     # port silently falls back to unauthenticated.
@@ -912,7 +912,7 @@ def test_builtin_gaia_spec_token_env_vars_match_the_hub_wheel_contract():
 
 def test_gaia_spec_literals_match_the_installed_caller_auth_module():
     # The real assertion, when the hub wheel is importable.
-    caller_auth = pytest.importorskip("gaia_agent.caller_auth")
+    caller_auth = pytest.importorskip("gaiapy.caller_auth")
     gaia = builtin_specs()["gaia"]
     assert gaia.token_env_var == caller_auth.TOKEN_ENV_VAR
     assert gaia.token_file_env_var == caller_auth.TOKEN_FILE_ENV_VAR
@@ -991,3 +991,33 @@ def test_a_sidecar_spawned_before_the_switch_is_marked_stale(monkeypatch, tmp_pa
     GaiaConfig.save_key("lemonade_env_url_ignored", _DEAD_ENV_URL)
     assert m.uses_ignored_lemonade is True
     m.shutdown()
+
+
+@pytest.mark.parametrize("agent_id", sorted(builtin_specs()))
+def test_every_builtin_sidecar_declares_a_token_file_channel(agent_id):
+    # A sidecar refuses to start without a token, so the daemon must always
+    # have a file leg to hand one over.
+    spec = builtin_specs()[agent_id]
+    assert spec.token_env_var
+    assert spec.token_file_env_var
+    assert spec.secret_file_min_version
+
+
+@pytest.mark.parametrize("agent_id", sorted(builtin_specs()))
+@pytest.mark.parametrize("installed_version", [None, "99.0.0"])
+def test_every_builtin_sidecar_launch_carries_the_token_file(
+    agent_id, installed_version, tmp_path
+):
+    spec = builtin_specs()[agent_id]
+    m = mgr.AgentSidecarManager(spec, cache_dir=tmp_path, log_dir=tmp_path / "logs")
+    m.resolved_mode = "user" if installed_version else "dev"
+    m.installed_binary_version = installed_version
+    env = {spec.token_env_var: "stale-inherited-token"}
+    m._apply_secret_delivery(env)
+    try:
+        assert m.secret_delivery == "file"
+        secret = Path(env[spec.token_file_env_var])
+        assert secret.read_text(encoding="utf-8") == m.auth_token
+        assert spec.token_env_var not in env
+    finally:
+        m._cleanup_secret_file()

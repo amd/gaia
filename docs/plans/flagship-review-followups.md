@@ -12,8 +12,8 @@ Ordered by expected cost-of-delay.
 ## 1. `Agent.record_turn` — one owner for conversation history
 
 `Agent.conversation_history` is a public uncapped list with four external
-writers and three different windows: `gaia_agent/stdio.py` appends and trims to
-12 pairs, `gaia_agent/server.py` replaces it wholesale from pushed context, and
+writers and three different windows: `gaiapy/stdio.py` appends and trims to
+12 pairs, `gaiapy/server.py` replaces it wholesale from pushed context, and
 `gaia/ui/agent_loop.py` / `gaia/ui/_chat_helpers.py` rebuild it per request.
 The same agent therefore remembers differently over stdio than over HTTP.
 
@@ -78,7 +78,7 @@ hold. Composition, not a base class.
 
 ## 8. Session-registry extraction (third copy is the trigger)
 
-`gaia_agent/session_registry.py` mirrors `gaia_agent_email.agent_routes._SessionRegistry`
+`gaiapy/session_registry.py` mirrors `gaia_agent_email.agent_routes._SessionRegistry`
 by declared intent — 252 lines of TTL + LRU + eviction that already bit once
 (505d900c). Extract one shared registry (likely `src/gaia/daemon/sidecars/`)
 before a third agent copies it.
