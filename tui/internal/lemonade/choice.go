@@ -68,22 +68,32 @@ type Choice struct {
 	Path          string
 }
 
-// ConfigPathFrom mirrors gaia.config: GAIA_CONFIG_FILE, then GAIA_CONFIG_DIR,
-// then GAIA_HOME, then ~/.gaia. "" when no home directory resolves.
+// ConfigPathFrom mirrors gaia.config: GAIA_CONFIG_FILE, then config.json in
+// ConfigDirFrom. "" when no home directory resolves.
 func ConfigPathFrom(getenv func(string) string, homeDir func() (string, error)) string {
 	if file := strings.TrimSpace(getenv("GAIA_CONFIG_FILE")); file != "" {
 		return file
 	}
+	dir := ConfigDirFrom(getenv, homeDir)
+	if dir == "" {
+		return ""
+	}
+	return filepath.Join(dir, "config.json")
+}
+
+// ConfigDirFrom mirrors gaia.config.GAIA_CONFIG_DIR: GAIA_CONFIG_DIR, then
+// GAIA_HOME, then ~/.gaia. "" when no home directory resolves.
+func ConfigDirFrom(getenv func(string) string, homeDir func() (string, error)) string {
 	for _, name := range []string{"GAIA_CONFIG_DIR", "GAIA_HOME"} {
 		if dir := strings.TrimSpace(getenv(name)); dir != "" {
-			return filepath.Join(dir, "config.json")
+			return dir
 		}
 	}
 	home, err := homeDir()
 	if err != nil || home == "" {
 		return ""
 	}
-	return filepath.Join(home, ".gaia", "config.json")
+	return filepath.Join(home, ".gaia")
 }
 
 // ReadChoice reads the saved setting. A missing file is not an error; an
