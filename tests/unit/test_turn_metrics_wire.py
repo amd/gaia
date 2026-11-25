@@ -238,7 +238,8 @@ def test_seal_happens_before_the_answer_is_printed():
     import inspect
     import re
 
-    src = inspect.getsource(Agent._process_query_impl)
+    # The answer branch of the step loop lives in _handle_answer.
+    src = inspect.getsource(Agent._handle_answer)
     # Call sites only — the branch also mentions print_final_answer in a comment.
     calls = re.findall(
         r"self\.console\.print_final_answer\(|self\._finish_turn_record\(", src
