@@ -22,6 +22,7 @@ import pytest
 
 from gaia.agents.base.tools import _TOOL_REGISTRY
 from gaia.agents.tools.file_tools import FileSearchToolsMixin
+from gaia.utils.sizes import format_size
 from gaia.utils.text_decoding import decode_text
 
 # ---------------------------------------------------------------------------
@@ -73,16 +74,9 @@ def helpers():
     # tool decorator, then pulling _read_tabular_file from the closure via
     # the analyze_data_file tool that calls it.
 
-    # --- _human_readable_size (exact copy from source) ---
+    # --- _human_readable_size: the real formatter, as file_tools calls it ---
     def _human_readable_size(size_bytes: int) -> str:
-        if size_bytes < 1024:
-            return f"{size_bytes} B"
-        elif size_bytes < 1024 * 1024:
-            return f"{size_bytes / 1024:.1f} KB"
-        elif size_bytes < 1024 * 1024 * 1024:
-            return f"{size_bytes / (1024 * 1024):.1f} MB"
-        else:
-            return f"{size_bytes / (1024 * 1024 * 1024):.2f} GB"
+        return format_size(size_bytes, gb_decimals=2)
 
     # --- _relative_time (exact copy from source) ---
     def _relative_time(dt: datetime) -> str:
