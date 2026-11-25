@@ -52,6 +52,9 @@ from gaia.ui.event_narration import (
     derive_narration,
     format_count,
     grant_phrase,
+    is_sensitive_memory_args,
+    sanitize_memory_args,
+    sanitize_memory_result,
     tool_phrase,
 )
 from gaia.ui.generated_media import is_remote_or_device_path
@@ -744,6 +747,7 @@ class SSEOutputHandler(OutputHandler):
         self._confirm_tool = None
         self._confirm_args = None
         self._tool_start_time: Optional[float] = None
+        self._last_tool_sensitive: bool = False
         # The turn's place on the model (``turn_queue.TurnSlot``); given up
         # while a prompt or question waits on the user. None outside a chat run.
         self.turn_slot = None
@@ -998,6 +1002,7 @@ class SSEOutputHandler(OutputHandler):
 
     def print_tool_usage(self, tool_name: str):
         self.record_tool_started(tool_name)
+        self._last_tool_sensitive = False
         self._pending_diff_card = None
         # Prefer an explicit display label from the tool registry; fall back
         # to the legacy description map in this module when none is provided.
@@ -1017,6 +1022,7 @@ class SSEOutputHandler(OutputHandler):
 
     def print_tool_complete(self):
         self._tool_start_time = None  # Reset in case tool_result was skipped
+        self._last_tool_sensitive = False
         success, self._last_tool_success = self._last_tool_success, True
         self._emit(
             {
@@ -1039,18 +1045,23 @@ class SSEOutputHandler(OutputHandler):
                     data,
                 )
                 data = {}
+            self._last_tool_sensitive = self._last_tool_name in (
+                "remember",
+                "update_memory",
+            ) and is_sensitive_memory_args(data)
+            safe_args = sanitize_memory_args(self._last_tool_name, data)
             # A call with no arguments keeps the tool_start label, not a blank.
             detail = (
-                _format_tool_args(self._last_tool_name, data)
-                if data
+                _format_tool_args(self._last_tool_name, safe_args)
+                if safe_args
                 else self._last_tool_label
             )
-            self.record_tool_args(data)
+            self.record_tool_args(safe_args)
             self._emit(
                 {
                     "type": "tool_args",
                     "tool": self._last_tool_name,
-                    "args": data,
+                    "args": safe_args,
                     "detail": detail,
                     "narration": derive_narration(self._last_tool_name, data),
                 }
@@ -1064,6 +1075,9 @@ class SSEOutputHandler(OutputHandler):
         # depending on the LLM echoing it into the final answer (the former
         # fence-injection hack, #1000, removed here).
         render_card = self._render_card_payload(data)
+
+        if self._last_tool_sensitive:
+            data = sanitize_memory_result(self._last_tool_name, data)
 
         # For tool results, provide a detailed summary
         summary = _summarize_tool_result(data)
@@ -3012,6 +3026,7 @@ def _format_tool_args(  # pylint: disable=unused-argument
     """Format tool arguments into a human-readable string."""
     if not args:
         return ""
+    args = sanitize_memory_args(tool_name, args)
 
     parts = []
     for key, value in args.items():

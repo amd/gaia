@@ -49,7 +49,13 @@ from gaia.agents.base.tool_grants import (
 )
 from gaia.daemon.sidecars.errors import SidecarError, SidecarHTTPError
 from gaia.logger import get_logger
-from gaia.ui.event_narration import derive_narration
+from gaia.ui.event_narration import (
+    MEMORY_WRITE_TOOLS,
+    derive_narration,
+    is_sensitive_memory_args,
+    sanitize_memory_args,
+    sanitize_memory_result,
+)
 from gaia.ui.sidecar.native_tools import (
     NATIVE_TOOL_LABELS,
     as_flagship_call,
@@ -417,21 +423,39 @@ def _dispatch_one(
         label = _tool_label(tool, profile)
         # The turn summary and the heartbeat read this state, not the events.
         handler.record_tool_started(tool)
-        if isinstance(args, dict):
-            handler.record_tool_args(args)
+        args_dict = args if isinstance(args, dict) else {}
+        sensitive_memory = tool in (
+            "remember",
+            "update_memory",
+        ) and is_sensitive_memory_args(args_dict)
+        handler.relay_sensitive_memory = sensitive_memory
+        safe_args = (
+            sanitize_memory_args(tool, args_dict) if isinstance(args, dict) else args
+        )
+        if isinstance(safe_args, dict):
+            handler.record_tool_args(safe_args)
             if tool == "set_loop_state" and hasattr(handler, "loop_state_directive"):
                 # The tool sets this on the console in-process; relayed, here.
-                handler.loop_state_directive = _loop_state_directive(args)
-        # The call in plain words; a sidecar older than the field (or missing a
-        # newly surfaced salient arg) gets enriched here.
+                handler.loop_state_directive = _loop_state_directive(safe_args)
+        # The call in plain words; memory writes also get privacy/UUID normalization
+        # and fact enrichment here when an older sidecar binary omits them.
         raw_narration = str(event.get("narration") or "")
-        derived = derive_narration(tool, args if isinstance(args, dict) else {})
-        if not raw_narration:
-            narration = str(NATIVE_TOOL_LABELS.get(tool) or derived)
-        elif ": " not in raw_narration and derived.startswith(f"{raw_narration}: "):
-            narration = derived
+        derived = derive_narration(tool, args_dict)
+        if tool in MEMORY_WRITE_TOOLS:
+            if sensitive_memory or not raw_narration:
+                narration = derived
+            elif ": " not in raw_narration and derived.startswith(f"{raw_narration}: "):
+                narration = derived
+            elif (
+                tool in ("forget", "update_memory")
+                and ": " in raw_narration
+                and derived == raw_narration.split(": ", 1)[0]
+            ):
+                narration = derived
+            else:
+                narration = raw_narration
         else:
-            narration = raw_narration
+            narration = str(raw_narration or NATIVE_TOOL_LABELS.get(tool) or derived)
         start: Dict[str, Any] = {
             "type": "tool_start",
             "tool": tool,
@@ -444,8 +468,8 @@ def _dispatch_one(
             {
                 "type": "tool_args",
                 "tool": tool,
-                "args": args,
-                "detail": _format_tool_args(tool, args) or label,
+                "args": safe_args,
+                "detail": _format_tool_args(tool, safe_args) or label,
                 "narration": narration,
             }
         )
@@ -465,6 +489,10 @@ def _dispatch_one(
         else:
             tool, _ = as_flagship_call(sent_tool, None)
         data = event.get("data")
+        was_sensitive = getattr(handler, "relay_sensitive_memory", False)
+        handler.relay_sensitive_memory = False
+        if was_sensitive:
+            data = sanitize_memory_result(tool, data)
         success = _derive_success(data)
         handler.record_tool_result(data, success)
         out: Dict[str, Any] = {

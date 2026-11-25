@@ -55,16 +55,48 @@ class TestDeriveNarration:
             ("read_file", {"file_path": "src/app.py"}, "Reading file: src/app.py"),
             ("write_file", {"file_path": "out.md"}, "Writing file: out.md"),
             ("index_document", {"path": "spec.pdf"}, "Indexing document: spec.pdf"),
-            # Memory writes surface the fact or updated content in the narration line.
+            # Memory writes surface non-private facts/content and omit raw UUIDs.
             (
                 "remember",
                 {"fact": "User prefers concise replies", "category": "preference"},
                 "Saving to memory: User prefers concise replies",
             ),
             (
+                "remember",
+                {"fact": "SSN 123-45-6789", "sensitive": "true"},
+                "Saving to memory",
+            ),
+            (
+                "remember",
+                {"fact": "Private health note", "sensitive": True},
+                "Saving to memory",
+            ),
+            (
                 "update_memory",
-                {"knowledge_id": "abc-123", "content": "User's name is Tyler Bea"},
-                "Updating memory: User's name is Tyler Bea",
+                {
+                    "knowledge_id": "6f5bbb83-39c9-4a2b-9b50-0c0260616bd2",
+                    "content": "User's name is Alex",
+                },
+                "Updating memory: User's name is Alex",
+            ),
+            (
+                "update_memory",
+                {
+                    "knowledge_id": "6f5bbb83-39c9-4a2b-9b50-0c0260616bd2",
+                    "content": "Private diagnosis",
+                    "sensitive": "true",
+                },
+                "Updating memory",
+            ),
+            (
+                "update_memory",
+                {"knowledge_id": "6f5bbb83-39c9-4a2b-9b50-0c0260616bd2"},
+                "Updating memory",
+            ),
+            (
+                "forget",
+                {"knowledge_id": "6f5bbb83-39c9-4a2b-9b50-0c0260616bd2"},
+                "Deleting from memory",
             ),
             (
                 "forget",
@@ -815,3 +847,107 @@ def test_relay_keeps_custom_sidecar_narration_verbatim():
     )
     events = _drain(handler)
     assert events[0]["narration"] == "Custom memory label"
+
+
+def test_relay_does_not_rewrite_bare_narration_for_non_memory_tools():
+    from gaia.ui.sidecar import relay
+    from gaia.ui.sidecar.profiles import GAIA_PROFILE
+
+    handler = SSEOutputHandler()
+    relay._dispatch_one(
+        handler,
+        {
+            "type": "tool_call",
+            "tool": "read_file",
+            "args": {"file_path": "/secret/path.txt"},
+            "narration": "Reading file",
+        },
+        GAIA_PROFILE,
+    )
+    events = _drain(handler)
+    assert events[0]["narration"] == "Reading file"
+
+
+def test_relay_strips_uuid_from_sidecar_forget_narration():
+    from gaia.ui.sidecar import relay
+    from gaia.ui.sidecar.profiles import GAIA_PROFILE
+
+    handler = SSEOutputHandler()
+    uid = "6f5bbb83-39c9-4a2b-9b50-0c0260616bd2"
+    relay._dispatch_one(
+        handler,
+        {
+            "type": "tool_call",
+            "tool": "forget",
+            "args": {"knowledge_id": uid},
+            "narration": f"Deleting from memory: {uid}",
+        },
+        GAIA_PROFILE,
+    )
+    events = _drain(handler)
+    assert events[0]["narration"] == "Deleting from memory"
+
+
+def test_relay_masks_sensitive_memory_in_narration_args_and_result():
+    from gaia.ui.sidecar import relay
+    from gaia.ui.sidecar.profiles import GAIA_PROFILE
+
+    handler = SSEOutputHandler()
+    secret_text = "My private medical note"
+    relay._dispatch_one(
+        handler,
+        {
+            "type": "tool_call",
+            "tool": "remember",
+            "args": {"fact": secret_text, "sensitive": "true"},
+            "narration": f"Saving to memory: {secret_text}",
+        },
+        GAIA_PROFILE,
+    )
+    relay._dispatch_one(
+        handler,
+        {
+            "type": "tool_result",
+            "tool": "remember",
+            "data": {
+                "status": "stored",
+                "knowledge_id": "6f5bbb83-39c9-4a2b-9b50-0c0260616bd2",
+                "message": f"Remembered: {secret_text}",
+            },
+        },
+        GAIA_PROFILE,
+    )
+    events = _drain(handler)
+    start, args_ev = events[0], events[1]
+    result_ev = [e for e in events if e["type"] == "tool_result"][0]
+    assert start["narration"] == "Saving to memory"
+    assert args_ev["narration"] == "Saving to memory"
+    assert args_ev["args"]["fact"] == "[private]"
+    assert secret_text not in args_ev["detail"]
+    assert secret_text not in result_ev["summary"]
+    assert secret_text not in str(result_ev["data"])
+
+
+def test_sse_handler_masks_sensitive_memory_in_args_and_result():
+    handler = SSEOutputHandler()
+    secret_text = "My private medical note"
+    handler.print_tool_usage("remember")
+    handler.pretty_print_json(
+        {"fact": secret_text, "sensitive": "true"}, title="Arguments"
+    )
+    handler.pretty_print_json(
+        {
+            "status": "stored",
+            "knowledge_id": "6f5bbb83-39c9-4a2b-9b50-0c0260616bd2",
+            "message": f"Remembered: {secret_text}",
+        },
+        title="Result",
+    )
+    handler.print_tool_complete()
+    events = _drain(handler)
+    args_ev = [e for e in events if e["type"] == "tool_args"][0]
+    result_ev = [e for e in events if e["type"] == "tool_result"][0]
+    assert args_ev["narration"] == "Saving to memory"
+    assert args_ev["args"]["fact"] == "[private]"
+    assert secret_text not in args_ev["detail"]
+    assert secret_text not in result_ev["summary"]
