@@ -812,3 +812,15 @@ describe("crash-loop safe mode", () => {
     expect(app.exit).toHaveBeenCalledWith(1);
   });
 });
+
+describe("main.cjs pane-tab wiring", () => {
+  const webui = path.join(__dirname, "..", "..", "src", "gaia", "apps", "webui");
+  const read = (rel) => fs.readFileSync(path.join(webui, rel), "utf8").replace(/\r\n/g, "\n");
+
+  test("a pane tab is recognised by the same partition the pane creates its tabs on", () => {
+    expect(read("main.cjs")).toMatch(
+      /isPanePage: \(contents\) => contents\.session === session\.fromPartition\(PANE_PARTITION\)/
+    );
+    expect(read("services/browser-pane/pane-host.cjs")).toMatch(/partition: PANE_PARTITION/);
+  });
+});
