@@ -19,6 +19,7 @@ from typing import Any, Callable, Dict, List, Optional
 from gaia.chat.prompts import Prompts
 from gaia.daemon.broker_client import LeaseWaitCancelled, lease_cancel_scope
 from gaia.llm import create_client
+from gaia.llm.base_client import LLMClient
 from gaia.llm.lemonade_client import (
     GPU_CTX_SIZE,
     LemonadeClient,
@@ -145,29 +146,38 @@ class AgentSDK:
         ```
     """
 
-    def __init__(self, config: Optional[AgentConfig] = None):
+    def __init__(
+        self,
+        config: Optional[AgentConfig] = None,
+        llm_client: Optional[LLMClient] = None,
+    ):
         """
         Initialize the AgentSDK.
 
         Args:
             config: Configuration options. If None, uses defaults.
+            llm_client: The model client to use. When given, no other client
+                is built and ``config.model`` is the id sent to it.
         """
         self.config = config or AgentConfig()
         self.log = get_logger(__name__)
         self.log.setLevel(getattr(logging, self.config.logging_level))
 
-        # Initialize LLM client - factory auto-detects provider and validates
-        self.llm_client = create_client(
-            use_claude=self.config.use_claude,
-            model=(
-                self.config.claude_model
-                if self.config.use_claude
-                else self.config.model
-            ),
-            base_url=self.config.base_url,
-            # The SDK supplies per-request prompts, including runtime overrides.
-            system_prompt=None,
-        )
+        if llm_client is not None:
+            self.llm_client = llm_client
+        else:
+            # Initialize LLM client - factory auto-detects provider and validates
+            self.llm_client = create_client(
+                use_claude=self.config.use_claude,
+                model=(
+                    self.config.claude_model
+                    if self.config.use_claude
+                    else self.config.model
+                ),
+                base_url=self.config.base_url,
+                # The SDK supplies per-request prompts, including runtime overrides.
+                system_prompt=None,
+            )
 
         # Store conversation history
         self.chat_history = deque(maxlen=self.config.max_history_length * 2)

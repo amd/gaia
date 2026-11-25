@@ -325,7 +325,30 @@ def get_user(user_id: int) -> dict:
 **LLM receives:** `{"status": "error", "error": "No user found...", "suggestion": "..."}`
 **LLM responds:** "I couldn't find a user with ID 999. Would you like to search by name instead?"
 
-### Pattern 3: Partial Results
+### Pattern 3: Refusal
+
+Sometimes "no" is the right result: a business rule says the caller may not have
+the data yet. That is not an error. Return a refusal, and the model gets it as an
+ordinary result to explain, with no error-recovery prompt and no failed-call count.
+
+```python
+from gaia.agents.base.tool_outcome import tool_refusal
+
+@tool
+def get_order(order_number: str) -> dict:
+    """Get an order's status."""
+    if not session.verified(order_number):
+        return tool_refusal("That order has not been confirmed in this chat.")
+    return {"status": "success", "order": {...}}
+```
+
+**LLM receives:** `{"status": "refused", "message": "That order has not been confirmed in this chat."}`
+**LLM responds:** "I can look that up once you confirm the order in the form above."
+
+Use `{"status": "error", "error": ...}` only when the call itself broke. An `error`
+field tells the agent to recover from a failure, and it will keep trying.
+
+### Pattern 4: Partial Results
 
 ```python
 @tool

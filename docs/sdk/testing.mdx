@@ -56,7 +56,41 @@ def test_silent_mode():
 
 ---
 
-## 17.3 Mocking LLM Responses
+## 17.3 Scripting the Model
+
+`ScriptedLLMClient` stands in for the model and returns exactly the replies you
+queue. The real agent loop runs around it, so the tool executes and the answer
+checks apply.
+
+```python
+from gaia.testing import ScriptedLLMClient, create_test_agent
+
+def test_order_lookup():
+    model = ScriptedLLMClient()
+    model.push(call="get_order", order_number="1001")   # the model calls a tool
+    model.push(say="It shipped on Monday.")             # then answers
+    agent = create_test_agent(MyAgent, llm_client=model)
+
+    result = agent.process_query("Where is order 1001?")
+
+    assert result["status"] == "success"
+    assert result["result"] == "It shipped on Monday."
+    assert result["tool_calls"][0]["name"] == "get_order"
+```
+
+| `push(...)` argument | What the model does |
+|---|---|
+| `say="..."` | Writes text |
+| `call="tool", arg=value` | Calls a tool with those arguments |
+| `finish_reason="length"` | Reply is cut off at the output-token cap |
+| `usage={...}` | Reports these token counts for the reply |
+| `raises=exc` | The model call fails with `exc` |
+
+A model call the script has no reply for raises `ScriptExhausted`, so a loop that
+makes an extra call fails the test. For text-only scripts,
+`create_test_agent(MyAgent, mock_responses=["Hello"])` is the short form.
+
+## 17.4 Mocking AgentSDK directly
 
 ```python
 from unittest.mock import patch
@@ -81,8 +115,8 @@ def test_with_mocked_llm():
 ```
 
 <Tip>
-Consider using the built-in `MockLLMProvider` / `MockVLMClient` helpers in
-`gaia.testing` (`src/gaia/testing/mocks.py`) for richer fixtures. The
+Prefer `ScriptedLLMClient` above: a patched `AgentSDK` skips the loop it
+replaces. `MockVLMClient` in `gaia.testing` covers vision calls. The
 `require_lemonade` pytest fixture in `tests/conftest.py` skips integration
 tests automatically if no Lemonade server is running.
 </Tip>
