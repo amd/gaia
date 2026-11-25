@@ -91,7 +91,8 @@ jobs:
         run: |
           npm ci
           npm test | tee node-test.log
-          grep -q "^ℹ skipped 0$" node-test.log
+          # Node prints "ℹ skipped 0" on a terminal and "# skipped 0" (TAP) in CI.
+          grep -Eq "^(ℹ|#) skipped 0$" node-test.log
 
       # The slim install: a wheel that carries the engine, installed alone with
       # no index and no dependencies, must run a turn. The smoke script fails if
