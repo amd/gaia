@@ -9,12 +9,13 @@ description: "OAuth + MCP server integrations for GAIA agents — per-agent gran
 kinds of connectors:
 
 - **OAuth (type `oauth_pkce`)** — user-authorized flows (Google, etc.).
-  Stores refresh tokens in the OS keyring.
+  Stores refresh tokens in `~/.gaia/connectors/vault.enc`, encrypted under one
+  master key in the OS keyring.
 - **MCP server (type `mcp_server`)** — API-key-based connections to
-  third-party MCP servers (GitHub, Brave Search, etc.). Stores keys in
+  third-party MCP servers (GitHub, Brave Search, etc.). Stores keys directly in
   the OS keyring as `$keyring` references.
 
-Three caller surfaces share the same keyring and grants file:
+Three caller surfaces share the same vault, keyring, and grants file:
 **SDK** (direct Python import), **CLI** (`gaia connectors …`), and
 **Agent UI** (Settings → Connectors page).
 

@@ -292,3 +292,86 @@ class TestConcurrency:
         ]
         for i in range(n_threads):
             assert store.peek_secret(f"slot-{i}") == f"val-{i}"
+
+    def test_put_after_concurrent_delete_of_last_slot_mints_fresh_key(
+        self, _autouse_in_memory_keyring, monkeypatch
+    ):
+        # Seed a vault so put() pre-reads K1 outside the lock, then simulate
+        # another process deleting the last slot (unlinking vault.enc and
+        # removing K1) before put() enters _vault_locked().
+        store.save_secret("first", "v1")
+        real_lock = vault._vault_locked
+        deleted = False
+
+        def delete_before_lock():
+            nonlocal deleted
+            if not deleted:
+                deleted = True
+                vault.vault_path().unlink()
+                _autouse_in_memory_keyring._store.pop(
+                    (vault.SERVICE_NAME, vault.MASTER_KEY_USERNAME), None
+                )
+            return real_lock()
+
+        monkeypatch.setattr(vault, "_vault_locked", delete_before_lock)
+        store.save_secret("second", "v2")
+
+        monkeypatch.undo()
+        assert (
+            vault.SERVICE_NAME,
+            vault.MASTER_KEY_USERNAME,
+        ) in _autouse_in_memory_keyring._store
+        assert store.peek_secret("second") == "v2"
+
+    def test_lazy_migration_does_not_overwrite_newer_value(
+        self, _autouse_in_memory_keyring, monkeypatch
+    ):
+        # A slow legacy Keychain read must not overwrite a fresher token saved
+        # into vault.enc by another process while the prompt was open.
+        slot = store._secret_username("rotated")
+        keyring.set_password(vault.SERVICE_NAME, slot, "stale-legacy-token")
+
+        real_read_legacy = vault._read_legacy_slot
+
+        def interleave_newer_put(username, *, for_delete, keyring_mod=None):
+            value = real_read_legacy(
+                username, for_delete=for_delete, keyring_mod=keyring_mod
+            )
+            if username == slot and value is not None:
+                vault.put(slot, "fresh-rotated-token")
+            return value
+
+        monkeypatch.setattr(vault, "_read_legacy_slot", interleave_newer_put)
+        assert store.peek_secret("rotated") == "fresh-rotated-token"
+
+        monkeypatch.undo()
+        assert store.peek_secret("rotated") == "fresh-rotated-token"
+        assert keyring.get_password(vault.SERVICE_NAME, slot) is None
+
+    def test_read_recovers_from_concurrent_vault_remint(
+        self, _autouse_in_memory_keyring, monkeypatch
+    ):
+        # If the vault is deleted and re-minted under a new key between the
+        # pre-lock key read and the locked file read, get() retries once with
+        # the fresh key instead of raising a destructive corruption error.
+        store.save_secret("demo", "old-val")
+        real_lock = vault._vault_locked
+        reminted = False
+
+        def remint_before_lock():
+            nonlocal reminted
+            if not reminted:
+                reminted = True
+                new_key = os.urandom(32)
+                _autouse_in_memory_keyring._store[
+                    (vault.SERVICE_NAME, vault.MASTER_KEY_USERNAME)
+                ] = new_key.hex()
+                vault.vault_path().write_bytes(
+                    vault.encrypt_envelope(
+                        new_key, {store._secret_username("demo"): "new-val"}
+                    )
+                )
+            return real_lock()
+
+        monkeypatch.setattr(vault, "_vault_locked", remint_before_lock)
+        assert store.peek_secret("demo") == "new-val"

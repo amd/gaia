@@ -380,31 +380,52 @@ def _write_entries_locked(
     value: str,
     *,
     preloaded_key: Optional[bytes] = None,
+    only_if_absent: bool = False,
     keyring_mod=None,
-) -> bool:
+) -> tuple[bool, str]:
     """Persist ``username -> value`` into ``path`` while holding ``_vault_locked``.
 
-    Returns True if written to ``vault.enc``, False if the keyring backend
-    silently discarded the newly minted master key (``NullKeyring``).
+    Returns ``(written, effective_value)``. When ``only_if_absent`` is True and
+    ``username`` is already present in ``path``, the existing value is kept
+    (preventing a slow legacy migration from overwriting a newer token) and
+    ``(False, existing_value)`` is returned. Returns ``(False, value)`` when
+    the keyring backend silently discarded a newly minted master key.
     """
     if path.exists():
+        blob = path.read_bytes()
         key = _load_or_mint_master_key(
             allow_mint=False, preloaded_key=preloaded_key, keyring_mod=keyring_mod
         )
         if key is None:
             raise _missing_master_key_error(path)
-        entries = decrypt_envelope(key, path.read_bytes())
+        try:
+            entries = decrypt_envelope(key, blob)
+        except ConnectorsError:
+            if preloaded_key is None:
+                raise
+            # Another process may have deleted and re-minted the vault under a
+            # fresh master key after our pre-lock read; re-read Keychain once.
+            fresh_key = _load_or_mint_master_key(
+                allow_mint=False, keyring_mod=keyring_mod
+            )
+            if fresh_key is None or fresh_key == key:
+                raise
+            key = fresh_key
+            entries = decrypt_envelope(key, blob)
+        if only_if_absent and username in entries:
+            return False, entries[username]
     else:
-        key = _load_or_mint_master_key(
-            allow_mint=True, preloaded_key=preloaded_key, keyring_mod=keyring_mod
-        )
+        # Never reuse a preloaded key when the vault file is gone: another
+        # process may have deleted both vault.enc and vault-master-key since
+        # the pre-lock read.
+        key = _load_or_mint_master_key(allow_mint=True, keyring_mod=keyring_mod)
         if key is None:
-            return False
+            return False, value
         entries = {}
 
     entries[username] = value
     _write_private(path, encrypt_envelope(key, entries))
-    return True
+    return True, value
 
 
 def _read_vault_entries(
@@ -413,12 +434,12 @@ def _read_vault_entries(
     """Read and decrypt ``path`` without holding ``_vault_locked`` during Keychain I/O.
 
     Returns ``None`` when ``path`` does not exist (or when ``for_delete`` sees
-    no master key so legacy Keychain cleanup can still proceed).
+    no master key so legacy Keychain cleanup can still proceed). Retries once
+    if another process deleted and re-minted the vault between the pre-lock key
+    read and the locked file read.
     """
     if not path.exists():
         return None
-    # Fetch the master key outside the vault lock so an interactive OS Keychain
-    # prompt never stalls other threads or processes waiting on vault.lock.
     raw_key = _raw_get(
         MASTER_KEY_USERNAME, for_delete=for_delete, keyring_mod=keyring_mod
     )
@@ -430,7 +451,19 @@ def _read_vault_entries(
                 return None
             raise _missing_master_key_error(path)
         blob = path.read_bytes()
-    return decrypt_envelope(_parse_master_key(raw_key), blob)
+    try:
+        return decrypt_envelope(_parse_master_key(raw_key), blob)
+    except ConnectorsError:
+        fresh_raw = _raw_get(
+            MASTER_KEY_USERNAME, for_delete=for_delete, keyring_mod=keyring_mod
+        )
+        if not fresh_raw or fresh_raw == raw_key:
+            raise
+        with _vault_locked():
+            if not path.exists():
+                return None
+            fresh_blob = path.read_bytes()
+        return decrypt_envelope(_parse_master_key(fresh_raw), fresh_blob)
 
 
 def put(username: str, value: str, *, keyring_mod=None) -> None:
@@ -455,15 +488,15 @@ def put(username: str, value: str, *, keyring_mod=None) -> None:
             preloaded_key = _parse_master_key(raw_key)
 
     with _vault_locked():
-        written = _write_entries_locked(
+        written, _ = _write_entries_locked(
             path,
             username,
             value,
             preloaded_key=preloaded_key,
             keyring_mod=keyring_mod,
         )
-        if written:
-            _sweep_legacy_slot_no_read(username, keyring_mod=keyring_mod)
+    if written:
+        _sweep_legacy_slot_no_read(username, keyring_mod=keyring_mod)
 
 
 def get(
@@ -475,8 +508,9 @@ def get(
     """Read ``username`` from the encrypted vault, falling back to legacy Keychain.
 
     When a legacy Keychain entry is read and ``migrate`` is True, it is copied
-    into ``vault.enc`` and the legacy Keychain slot is removed so subsequent
-    macOS updates do not re-prompt for it.
+    into ``vault.enc`` only if ``username`` is still absent there, and the
+    legacy Keychain slot is removed so subsequent macOS updates do not
+    re-prompt for it.
     """
     from gaia.connectors import store
 
@@ -493,10 +527,22 @@ def get(
         return None
 
     if migrate:
+        preloaded_key: Optional[bytes] = None
+        if path.exists():
+            raw_key = _raw_get(
+                MASTER_KEY_USERNAME, for_delete=False, keyring_mod=keyring_mod
+            )
+            if raw_key:
+                preloaded_key = _parse_master_key(raw_key)
         try:
             with _vault_locked():
-                written = _write_entries_locked(
-                    path, username, legacy, keyring_mod=keyring_mod
+                written, effective = _write_entries_locked(
+                    path,
+                    username,
+                    legacy,
+                    preloaded_key=preloaded_key,
+                    only_if_absent=True,
+                    keyring_mod=keyring_mod,
                 )
         except (OSError, store.KeyringRefused) as e:
             logger.warning(
@@ -506,9 +552,11 @@ def get(
                 e,
             )
             return legacy
-        if written:
+        # Clean up the legacy slot whenever the value is safely in vault.enc
+        # (either written by us or already populated by a concurrent writer).
+        if written or path.exists():
             try:
-                _delete_legacy_slot(username, keyring_mod=keyring_mod)
+                _sweep_legacy_slot_no_read(username, keyring_mod=keyring_mod)
             except (OSError, ConnectorsError) as e:
                 logger.warning(
                     "Migrated %s into vault but could not remove legacy "
@@ -516,6 +564,7 @@ def get(
                     username,
                     e,
                 )
+        return effective
     return legacy
 
 
@@ -568,7 +617,7 @@ def delete(username: str, *, keyring_mod=None) -> None:
                         path.unlink()
                         _raw_delete(MASTER_KEY_USERNAME, keyring_mod=keyring_mod)
 
-        _delete_legacy_slot(username, keyring_mod=keyring_mod)
+    _sweep_legacy_slot_no_read(username, keyring_mod=keyring_mod)
 
 
 def slot_in_use(username: str, *, keyring_mod=None) -> bool:
