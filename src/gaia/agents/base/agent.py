@@ -1821,10 +1821,24 @@ _INDEX_ONLY_TAIL = (
     r"\s+later"
     r"|for\s+later)"
 )
+# What "index" may take: a pronoun, a path or filename, or a file-type noun.
+_INDEX_ONLY_PATH = (
+    r"(?:\"[^\"]+\"|'[^']+'|(?=\S*\w)\S*[\\/~*]\S*|[\w-]+\.[A-Za-z0-9]{1,5})"
+)
+_INDEX_ONLY_OBJECT = (
+    r"(?:(?:all|all\s+of|everything\s+in|the|my|this|that|these|those|our|every)\s+)*"
+    r"(?:it|this|that|these|those|them|" + _INDEX_ONLY_PATH + r"|(?:[\w-]+\s+){0,2}"
+    r"(?:files?|documents?|docs|folders?|director(?:y|ies)|reports?|pdfs?)"
+    r"(?:\s+" + _INDEX_ONLY_PATH + r")?)"
+    r"(?:\s+(?:in|from)\s+" + _INDEX_ONLY_PATH + r")?"
+)
 _INDEX_ONLY_SENTENCE_PATTERN = re.compile(
     r"(?:(?:please|kindly|just|only|simply|now|go\s+ahead\s+and)\s+)*"
-    r"(?:re-?)?index\s+(?:(?!(?:and|then|also|plus|so|but|or)\b)[^\s,;]+\s*){1,6}?"
-    r"(?:[,;]?\s*(?:(?:and|then|and\s+then)\s+)?" + _INDEX_ONLY_TAIL + r")?"
+    r"(?:re-?)?index\s+"
+    + _INDEX_ONLY_OBJECT
+    + r"(?:[,;]?\s*(?:(?:and|then|and\s+then)\s+)?"
+    + _INDEX_ONLY_TAIL
+    + r")?"
     r"|" + _INDEX_ONLY_TAIL,
     re.IGNORECASE,
 )

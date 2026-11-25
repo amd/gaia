@@ -850,6 +850,17 @@ def test_index_and_question_still_forces_the_query(agent):
         ("Just index notes.txt y dame los puntos de acción", False),
         ("/skill summarize just index notes.txt", False),
         ("Just index notes.txt so I can ask about it", False),
+        ("Just index these files.", True),
+        ("Just index the files in ~/reports, nothing else.", True),
+        # Anything after the object other than a closer keeps the search.
+        ("just index it & pull the action items", False),
+        ("just index it + pull totals", False),
+        ("just index it to get the deadlines", False),
+        ("just index report.pdf for the budget totals", False),
+        ("just index these files i want the totals", False),
+        ("just index it / grab totals", False),
+        ("just index it and grab totals", False),
+        ("Just index the budget totals", False),
     ],
 )
 def test_requests_indexing_only(text, expected):
