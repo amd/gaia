@@ -1004,7 +1004,8 @@ describe('Chat App Integration', () => {
     });
 
     it('should auto-close sidebar on mobile after selection', () => {
-      expect(sidebarContent).toContain('window.innerWidth <= 768');
+      expect(sidebarContent).toContain('window.innerWidth <= MOBILE_MAX_PX');
+      expect(fs.readFileSync(path.join(CHAT_APP_PATH, 'src/utils/constants.ts'), 'utf8')).toContain('export const MOBILE_MAX_PX = 768;');
       expect(sidebarContent).toContain('setSidebarOpen(false)');
     });
 
@@ -1065,7 +1066,8 @@ describe('Chat App Integration', () => {
     });
 
     it('should auto-restore sidebar on resize to desktop', () => {
-      expect(appContent).toContain("window.matchMedia?.('(max-width: 768px)')");
+      expect(appContent).toContain('window.matchMedia?.(`(max-width: ${MOBILE_MAX_PX}px)`)');
+      expect(fs.readFileSync(path.join(CHAT_APP_PATH, 'src/utils/constants.ts'), 'utf8')).toContain('export const MOBILE_MAX_PX = 768;');
       expect(appContent).toContain('setSidebarOpen(!mq.matches)');
       expect(appContent).toContain("mq.addEventListener('change', sync)");
     });
@@ -1106,9 +1108,10 @@ describe('Chat App Integration', () => {
     });
 
     it('should default sidebarOpen based on window width', () => {
-      // sidebarOpen uses responsive default: window.innerWidth > 768
+      // sidebarOpen uses responsive default: window.innerWidth > MOBILE_MAX_PX (768)
       expect(storeContent).toContain('sidebarOpen:');
-      expect(storeContent).toMatch(/sidebarOpen.*window\.innerWidth.*768|sidebarOpen:\s*true/);
+      expect(storeContent).toMatch(/sidebarOpen.*window\.innerWidth\s*>\s*MOBILE_MAX_PX|sidebarOpen:\s*true/);
+      expect(fs.readFileSync(path.join(CHAT_APP_PATH, 'src/utils/constants.ts'), 'utf8')).toContain('export const MOBILE_MAX_PX = 768;');
     });
 
     it('should default isLoadingMessages to false', () => {
