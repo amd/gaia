@@ -185,10 +185,17 @@ def test_no_skill_problem_once_capture_skill_ran():
     assert uncaptured_skill_path(request, {"capture_skill"}) == ""
 
 
-def test_an_os_file_refusal_tells_the_model_to_hand_it_to_the_user(tmp_path):
+def test_an_os_file_refusal_tells_the_model_to_hand_it_to_the_user(
+    tmp_path, monkeypatch
+):
     from gaia.security import PathValidator, _is_os_file, protected_directory_of
 
+    # Building a validator makes <GAIA home>/cache at once, so the test has to
+    # say where GAIA's home is instead of inheriting whichever home the run
+    # started with: a tmp home the developer exported, or none at all.
+    monkeypatch.setenv("GAIA_HOME", str(tmp_path / ".gaia"))
     validator = PathValidator(allowed_paths=[str(tmp_path)])
+    assert validator.cache_dir == tmp_path / ".gaia" / "cache"
     system = sorted(
         d
         for d in ("C:\\Windows", "/etc")
