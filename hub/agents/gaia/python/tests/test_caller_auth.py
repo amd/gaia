@@ -226,7 +226,7 @@ def test_without_a_token_the_sidecar_refuses_to_start(monkeypatch):
 
 
 def test_serve_refuses_to_start_without_a_token(monkeypatch, capsys):
-    from gaia_agent import server
+    from gaiapy import server
 
     monkeypatch.delenv(caller_auth.TOKEN_FILE_ENV_VAR, raising=False)
     monkeypatch.delenv(caller_auth.TOKEN_ENV_VAR, raising=False)

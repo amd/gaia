@@ -457,9 +457,12 @@ def load_docs_json_pages(repo_root: str) -> Set[str]:
         return pages
     try:
         data = json.loads(docs_json.read_text(encoding="utf-8"))
-        _collect_pages(data, pages)
-    except Exception:
-        pass
+    except json.JSONDecodeError as e:
+        raise SystemExit(
+            f"{docs_json} is not valid JSON ({e}), so no page could be checked. "
+            "Fix the file and run the link check again."
+        ) from e
+    _collect_pages(data, pages)
     return pages
 
 
