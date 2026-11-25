@@ -156,7 +156,10 @@ def test_host_client_gets_native_tools_and_its_tool_call_runs(caplog):
     assert result["tool_calls"][0]["result"]["order"]["state"] == "shipped"
     assert result["input_tokens"] == 1700
     assert result["output_tokens"] == 60
-    assert result["cost_usd"] > 0
+    # Priced only when the client says the model runs on Fireworks.
+    assert result["cost_usd"] is None
+    client.provider_name = "fireworks"
+    assert agent._turn_cost_usd(1700, 0, 60) > 0
     assert "Failed to get stats" not in caplog.text
 
 

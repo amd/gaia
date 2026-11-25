@@ -112,6 +112,7 @@ def __init__(
     device: Optional[str] = None,
     resend_reasoning_across_requests: bool = False,
     max_output_tokens: Optional[int] = None,
+    host: str = "workspace",
 ) -> None:
     """
     Initialize the Agent.
@@ -148,6 +149,8 @@ def __init__(
             sent back on its assistant message as `reasoning_content` (default: False)
         max_output_tokens: Output-token cap per LLM reply, thinking included (default: None —
             32768 for a Lemonade cloud model such as fireworks.*, 8192 otherwise)
+        host: "workspace" (default) or "conversation": replies go to an end user,
+            so the request is not read for files and the answer is not edited
     """
 ```
 
@@ -222,6 +225,8 @@ def process_query(
             "cost_usd": float | None,  # Those tokens at Fireworks' list price
                                      # (gaia.llm.pricing); None for any other
                                      # provider and for a model with no card
+            "caveats": list,         # host="conversation": notes kept out of
+                                     # the answer
             "stop_reason": str,      # Why the turn ended: "answered",
                                      # "max_steps", "deadline", "model_call",
                                      # "output_cap", "tool_call_format",
