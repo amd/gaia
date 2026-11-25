@@ -1316,15 +1316,12 @@ async def get_settings(db: ChatDatabase = Depends(get_db)):
     from .providers import custom_model_override
 
     custom_model = custom_model_override(db)
-    context_size_str = db.get_setting("context_size")
-    context_size = int(context_size_str) if context_size_str else None
     agent_mode = resolve_agent_mode(db)
     dynamic_tools, dynamic_tools_locked = _resolve_dynamic_tools_setting()
     logger.debug(
-        "Settings loaded: custom_model=%s, context_size=%s, agent_mode=%s, "
+        "Settings loaded: custom_model=%s, agent_mode=%s, "
         "dynamic_tools=%s (locked=%s)",
         custom_model,
-        context_size,
         agent_mode,
         dynamic_tools,
         dynamic_tools_locked,
@@ -1336,7 +1333,6 @@ async def get_settings(db: ChatDatabase = Depends(get_db)):
     return SettingsResponse(
         custom_model=custom_model or None,
         model_status=model_status,
-        context_size=context_size,
         agent_mode=agent_mode,
         dynamic_tools=dynamic_tools,
         dynamic_tools_locked=dynamic_tools_locked,
@@ -1377,9 +1373,6 @@ async def update_settings(
     Pydantic *can* distinguish an explicit ``null`` from an unset field
     via ``model_fields_set``; we don't lean on that distinction here so
     clients have a single, simple rule (omit to keep, ``""`` to clear).
-
-    Setting ``context_size`` to null resets to the default (32768 tokens).
-    Non-null values must be >= 32768.
 
     Setting ``agent_mode`` controls background behaviour:
     'manual' | 'goal_driven' (default). 'autonomous' is rejected until its
@@ -1428,22 +1421,6 @@ async def update_settings(
         clear_restore_notice()
         if changed:
             _load_newly_selected_model(db)
-
-    # Only touch context_size when the field was explicitly included in the request.
-    if "context_size" in request.model_fields_set:
-        if request.context_size is None:
-            db.set_setting("context_size", None)
-            logger.info("Context size reset to default (%d)", _MIN_CONTEXT_SIZE)
-        else:
-            # Pydantic ge=32768 already rejects values below minimum at validation time,
-            # but guard here too in case the model is bypassed.
-            if request.context_size < _MIN_CONTEXT_SIZE:
-                raise HTTPException(
-                    status_code=400,
-                    detail=f"context_size must be >= {_MIN_CONTEXT_SIZE}",
-                )
-            db.set_setting("context_size", str(request.context_size))
-            logger.info("Context size set: %d tokens", request.context_size)
 
     if "agent_mode" in request.model_fields_set and request.agent_mode is not None:
         mode = request.agent_mode.strip()
@@ -1516,8 +1493,6 @@ async def update_settings(
     from .providers import custom_model_override
 
     custom_model = custom_model_override(db)
-    context_size_str = db.get_setting("context_size")
-    context_size = int(context_size_str) if context_size_str else None
     agent_mode = resolve_agent_mode(db)
     dynamic_tools, dynamic_tools_locked = _resolve_dynamic_tools_setting()
     model_status = await _check_model_status(custom_model) if custom_model else None
@@ -1527,7 +1502,6 @@ async def update_settings(
     return SettingsResponse(
         custom_model=custom_model or None,
         model_status=model_status,
-        context_size=context_size,
         agent_mode=agent_mode,
         dynamic_tools=dynamic_tools,
         dynamic_tools_locked=dynamic_tools_locked,

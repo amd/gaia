@@ -210,16 +210,9 @@ function ConnectorWatcher({ onChange }: { onChange: () => void }) {
 
 export function EmailConnectCta({
     content = '',
-    connectorId,
 }: {
     /** The assistant message content — used to detect which provider to surface. */
     content?: string;
-    /**
-     * Optional explicit connector override. When provided, only this connector's
-     * button is shown regardless of content detection. Kept for back-compat with
-     * callers that hardcode ``connectorId="google"``.
-     */
-    connectorId?: string;
 }) {
     const t = useT();
     const [opened, setOpened] = useState<ReadonlySet<string>>(new Set());
@@ -245,13 +238,8 @@ export function EmailConnectCta({
         [agents],
     );
 
-    // Resolve which provider(s) to surface. Honor an explicit connector
-    // override; any other value (or none) falls back to content detection so we
-    // never render zero connect buttons (no silent dead-end).
-    const provider: EmailProvider | 'all' =
-        connectorId === 'google' || connectorId === 'microsoft'
-            ? connectorId
-            : detectProvider(content);
+    // Content detection answers 'all' when unsure, so there is always a button.
+    const provider: EmailProvider | 'all' = detectProvider(content);
 
     const shown = PROVIDERS.filter(([id]) => provider === id || provider === 'all');
 

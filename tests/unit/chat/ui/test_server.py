@@ -1369,7 +1369,7 @@ class TestDynamicToolsSetting:
 
     def test_omitting_field_leaves_persisted_value_unchanged(self, client, monkeypatch):
         """A PUT that omits dynamic_tools must not clobber the persisted value
-        (model_fields_set guard, mirroring context_size/agent_mode)."""
+        (model_fields_set guard, mirroring agent_mode)."""
         monkeypatch.delenv("GAIA_DYNAMIC_TOOLS", raising=False)
         client.put("/api/settings", json={"dynamic_tools": True})
         client.put("/api/settings", json={"custom_model": ""})  # unrelated field
@@ -1550,6 +1550,25 @@ class TestAgentModeSetting:
         resp = client.put("/api/settings", json={"agent_mode": "bogus"})
         assert resp.status_code == 400
         assert "goal_driven" in resp.json()["detail"]
+
+
+class TestWithdrawnContextSizeSetting:
+    """The old ``context_size`` setting was never applied; a saved one still loads."""
+
+    def test_saved_value_is_ignored_on_read(self, client, db):
+        db.set_setting("context_size", "131072")
+        resp = client.get("/api/settings")
+        assert resp.status_code == 200
+        assert "context_size" not in resp.json()
+
+    def test_old_client_sending_it_is_not_refused(self, client, db):
+        resp = client.put(
+            "/api/settings", json={"context_size": 65536, "agent_mode": "manual"}
+        )
+        assert resp.status_code == 200
+        assert "context_size" not in resp.json()
+        assert resp.json()["agent_mode"] == "manual"
+        assert db.get_setting("context_size") is None
 
 
 class TestSessionEndpoints:
@@ -2211,7 +2230,7 @@ class TestChatSendEndpoint:
 
             mock_stream.return_value = fake_stream()
 
-            resp = client.post(
+            client.post(
                 "/api/chat/send",
                 json={
                     "session_id": session_id,

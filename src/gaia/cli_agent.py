@@ -36,15 +36,14 @@ import sys
 from pathlib import Path
 from typing import List, Optional, Tuple
 
+from gaia.llm.lemonade_client import DEFAULT_MODEL_NAME
 from gaia.logger import get_logger
 from gaia.version import __version__ as GAIA_VERSION
 
 log = get_logger(__name__)
 
-# Default model for a freshly scaffolded agent — matches the framework default
-# (Gemma-4-E4B-it-GGUF, see DEFAULT_MODEL_NAME in lemonade_client). Kept as a
-# literal so the template stays a pure string with no heavy import.
-DEFAULT_MODEL = "Gemma-4-E4B-it-GGUF"
+# Default model for a freshly scaffolded agent: the framework default.
+DEFAULT_MODEL = DEFAULT_MODEL_NAME
 
 # Mirrors gaia.hub.manifest._ID_RE so a bad name fails at init time with the
 # same vocabulary the manifest validator uses later.

@@ -30,12 +30,13 @@ from typing import Any, Dict, Optional
 
 from gaia.agents.tools.connect_card import AGENT_UI, agent_surface
 from gaia.agents.tools.path_access import image_file_error, read_access_error
+from gaia.llm.lemonade_client import DEFAULT_MODEL_NAME
 from gaia.llm.vlm_client import VisionModelMissingError
 from gaia.logger import get_logger
 
 logger = get_logger(__name__)
 
-DEFAULT_VLM_MODEL = "Gemma-4-E4B-it-GGUF"
+DEFAULT_VLM_MODEL = DEFAULT_MODEL_NAME
 
 #: Put on a call that found no vision model, so the model stops instead of reading the pixels with code.
 VISION_MISSING_HINT = (

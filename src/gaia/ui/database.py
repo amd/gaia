@@ -18,6 +18,7 @@ from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Set
 
 from gaia.config import GaiaConfig, gaia_home
+from gaia.llm.lemonade_client import DEFAULT_MODEL_NAME
 from gaia.utils.process_owner import current_owner, owner_is_gone
 from gaia.utils.sqlite_wal import enable_wal
 
@@ -33,11 +34,10 @@ def default_db_path() -> Path:
 
 DEFAULT_DB_PATH = default_db_path
 
-# Hard-coded floor for new sessions — kept in sync with the SQL schema DEFAULT
-# and any code that reads session["model"] and falls back when NULL. Not what a
-# new session necessarily gets: resolved_default_model() checks the user's
-# configured default_model first.
-SESSION_DEFAULT_MODEL = "Gemma-4-E4B-it-GGUF"
+# Floor for new sessions, also the SQL schema DEFAULT. Not what a new session
+# necessarily gets: resolved_default_model() checks the user's configured
+# default_model first.
+SESSION_DEFAULT_MODEL = DEFAULT_MODEL_NAME
 
 
 def resolved_default_model() -> str:
@@ -112,7 +112,7 @@ _UNSET = object()
 # tooltip and a raw traceback/exception string can be very large (#1749 review).
 _MAX_LAST_ERROR_LEN = 500
 
-SCHEMA_SQL = """
+SCHEMA_SQL = f"""
 -- Global document library
 CREATE TABLE IF NOT EXISTS documents (
     id TEXT PRIMARY KEY,
@@ -135,7 +135,7 @@ CREATE TABLE IF NOT EXISTS sessions (
     title_is_custom INTEGER NOT NULL DEFAULT 0,
     created_at TEXT DEFAULT (datetime('now')),
     updated_at TEXT DEFAULT (datetime('now')),
-    model TEXT NOT NULL DEFAULT 'Gemma-4-E4B-it-GGUF',
+    model TEXT NOT NULL DEFAULT '{SESSION_DEFAULT_MODEL}',
     system_prompt TEXT,
     device TEXT DEFAULT 'gpu',
     -- Mailbox FILTER (#1596): NULL = every connected mailbox; the legacy

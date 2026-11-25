@@ -18,8 +18,9 @@ import (
 	"github.com/amd/gaia/tui/internal/filelock"
 )
 
-// defaultChatModel mirrors DEFAULT_MODEL_NAME in gaia.llm.lemonade_client.
-const defaultChatModel = "Gemma-4-E4B-it-GGUF"
+// DefaultChatModel is DEFAULT_MODEL_NAME in gaia.llm.lemonade_client, pinned
+// by tests/unit/test_default_model_drift.py.
+const DefaultChatModel = "Gemma-4-E4B-it-GGUF"
 
 // llamacppBackends are the backends Lemonade's /load accepts, the same list as
 // gaia.llm.model_server_info.LLAMACPP_BACKENDS.
@@ -341,7 +342,7 @@ func GaiaChatModel() string {
 		model = strings.TrimSpace(doc.Default)
 	}
 	if model == "" {
-		return defaultChatModel
+		return DefaultChatModel
 	}
 	if IsHybridID(model) {
 		h, err := ReadHybridModels()

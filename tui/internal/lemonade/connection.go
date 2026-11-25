@@ -18,6 +18,12 @@ import (
 
 const DefaultBaseURL = "http://localhost:13305/api/v1"
 
+// LocalPorts are the ports a locally installed Lemonade listens on, the same
+// list as gaia.llm.lemonade_choice.DETECT_PORTS (pinned by
+// tests/unit/test_default_model_drift.py). A var so tests can point it at a
+// stub server.
+var LocalPorts = []string{"13305"}
+
 // EmbeddedState records the private Lemonade endpoint, whose port and key are
 // chosen when GAIA starts it. Never include this structure in logs or errors.
 type EmbeddedState struct {

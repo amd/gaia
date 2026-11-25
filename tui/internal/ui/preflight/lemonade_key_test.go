@@ -12,6 +12,8 @@ import (
 	"strconv"
 	"sync/atomic"
 	"testing"
+
+	"github.com/amd/gaia/tui/internal/lemonade"
 )
 
 // GAIA's embedded Lemonade generates an API key and writes it to its state
@@ -161,9 +163,9 @@ func TestPreflightDoesNotReplaceFailingEmbeddedEndpointWithAnotherServer(t *test
 	defer fallback.Close()
 	writeProbeEmbeddedState(t, private.URL)
 	u, _ := url.Parse(fallback.URL)
-	oldPorts := lemonadePorts
-	lemonadePorts = []string{u.Port()}
-	t.Cleanup(func() { lemonadePorts = oldPorts })
+	oldPorts := lemonade.LocalPorts
+	lemonade.LocalPorts = []string{u.Port()}
+	t.Cleanup(func() { lemonade.LocalPorts = oldPorts })
 	base, reachable, _ := probeLemonadeHTTP(context.Background())
 	privateURL, _ := url.Parse(private.URL)
 	if reachable || base != "http://localhost:"+privateURL.Port()+"/api/v1" || fallbackCalls.Load() != 0 {
@@ -188,9 +190,9 @@ func TestStaleEmbeddedEndpointDoesNotPassAgainstHealthyDefaultPort(t *testing.T)
 	defer fallback.Close()
 	stale.Close()
 	u, _ := url.Parse(fallback.URL)
-	oldPorts := lemonadePorts
-	lemonadePorts = []string{u.Port()}
-	t.Cleanup(func() { lemonadePorts = oldPorts })
+	oldPorts := lemonade.LocalPorts
+	lemonade.LocalPorts = []string{u.Port()}
+	t.Cleanup(func() { lemonade.LocalPorts = oldPorts })
 	if _, reachable, _ := probeLemonadeHTTP(context.Background()); reachable {
 		t.Fatal("stale embedded endpoint was incorrectly reported ready")
 	}

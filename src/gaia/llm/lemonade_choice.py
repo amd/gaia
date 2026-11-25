@@ -45,8 +45,8 @@ MODES = (MODE_GAIA, MODE_EXTERNAL)
 #: Credential-store slot for the user's Lemonade API key.
 API_KEY_SECRET_NAME = "lemonade_api_key"
 
-#: Ports a locally installed Lemonade listens on. Same list the TUI's
-#: preflight probes.
+#: Ports a locally installed Lemonade listens on. Same list as the TUI's
+#: lemonade.LocalPorts, pinned by tests/unit/test_default_model_drift.py.
 DETECT_PORTS = (13305,)
 
 # A busy server accepts the connection at once but can take seconds to answer.

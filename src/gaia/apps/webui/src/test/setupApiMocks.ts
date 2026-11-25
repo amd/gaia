@@ -43,7 +43,7 @@ export const NO_BACKENDS = { reachable: true, available_backends: [], preferred_
 
 /** Settings as a fresh install reads them: the Python agent, the native one installed too. */
 export const SETTINGS: Settings = {
-    custom_model: null, model_status: null, context_size: null, dynamic_tools: false, dynamic_tools_locked: false,
+    custom_model: null, model_status: null, dynamic_tools: false, dynamic_tools_locked: false,
     agent_mode: 'goal_driven', network_policy: 'cloud_allowed', flagship_agent: 'gaiapy', gaiacpp_available: true,
 };
 

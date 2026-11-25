@@ -38,7 +38,7 @@ var detectRunningLemonade = func(ctx context.Context) (lemonade.ProbeResult, boo
 	if state := lemonade.ReadEmbedded(); state != nil {
 		own = state.Port
 	}
-	for _, port := range lemonadePorts {
+	for _, port := range lemonade.LocalPorts {
 		if fmt.Sprint(own) == port {
 			continue
 		}
