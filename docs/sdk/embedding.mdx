@@ -231,6 +231,46 @@ agent = SupportAgent(..., on_model_call=lambda call: meter.record(call))
 model with no list price, and for a failed request). It fires once per request,
 retries included.
 
+## Regression-testing your agent
+
+`gaia.eval.domain` runs a list of conversations against your agent and prints
+quality, cost and speed in one table. The grader is a function you write, so the
+same run always gives the same table. There is no judge model and no Agent UI.
+
+```python
+from gaia.eval.domain import Case, Verdict, run_cases
+
+cases = [
+    Case("T001", ["Where is order 1001?"], expect="get_order"),
+    Case("T002", ["hi", "I want a refund for order 1001"], expect="handoff_to_human"),
+]
+
+def grade(case, turns):
+    called = [call["name"] for turn in turns for call in turn.tool_calls]
+    return Verdict(case.expect in called, "" if case.expect in called else "tool not called")
+
+report = run_cases(lambda case: SupportAgent(session_for(case), llm_client=client,
+                                             model_id=model), cases, grade)
+print(report.table())
+```
+
+```text
+| Case | Result | Turns | Model calls | Tool calls | Tokens in/out | Cost | Why |
+|---|---|---|---|---|---|---|---|
+| T001 | pass | 1 | 2 | 1 | 2000/200 | $0.0008 |  |
+| T002 | FAIL | 2 | 3 | 0 | 3000/300 | $0.0013 | tool not called |
+
+Passed 1 of 2 (50.0%). Model calls per turn: 1.67. Turns that did not succeed: 0. Re-prompts: 0.
+Cost: $0.0021 total, $0.0021 per passed case.
+Turn time: p50 2.1 s, p95 4.8 s.
+```
+
+Each case gets a fresh agent. Each `turn` has `reply`, `status`, `stop_reason`,
+`tool_calls`, `reprompts`, tokens, `cost_usd`, `seconds`, and the whole result.
+Run it against `ScriptedLLMClient` for a free dry run of the grader, and against
+your real client for the numbers. `report.summary()` returns the totals as a dict
+to gate CI on.
+
 ## What stays your job
 
 - **Credentials.** Read them from the environment in your client. GAIA's OS keyring
