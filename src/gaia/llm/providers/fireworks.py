@@ -1,17 +1,12 @@
 # Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 # SPDX-License-Identifier: MIT
-"""Ask Fireworks what it serves, rather than what a gateway chose to expose.
+"""GAIA's own Fireworks key, and a check that Fireworks accepts it.
 
-GAIA reaches Fireworks through Lemonade's cloud routing, and Lemonade advertises
-a discovered subset — no Gemma at all and a few of the Qwen 3.x variants when
-observed in 2026-09, subject to change (lemonade-sdk/lemonade#3570). A model missing
-from that subset cannot be requested: Lemonade answers ``model_not_found``. So
-"which models could I run" had no answer short of reading a vendor web page.
-
-This module asks the provider directly. It only ever *reads* the catalogue —
-inference still goes through the configured backend — so the two can be compared
-and the gap named instead of guessed at. It is not an ``LLMClient`` provider:
-nothing here routes inference, and ``create_client("fireworks")`` does not exist.
+GAIA reaches Fireworks through Lemonade's cloud routing. Nothing here routes
+inference, and ``create_client("fireworks")`` does not exist. This module
+resolves GAIA's Fireworks key (argument, environment, then keyring) and asks
+Fireworks for its model list, so a rejected key can be told apart from
+Fireworks failing to answer.
 
 Needs a Fireworks key of GAIA's own: the one Lemonade uses lives in its process
 and is not readable from here.
@@ -20,9 +15,9 @@ and is not readable from here.
 from __future__ import annotations
 
 import os
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from enum import Enum
-from typing import Any, Dict, List, Optional
+from typing import Optional
 
 import requests
 
@@ -39,46 +34,16 @@ API_KEY_ENV_VARS = ("FIREWORKS_API_KEY", "LEMONADE_FIREWORKS_API_KEY")
 #: or a file. Written with ``gaia.connectors.store.save_secret``.
 API_KEY_SECRET_NAME = "fireworks_api_key"
 
-#: Fireworks' control plane — the whole model library, most of which is NOT
-#: servable per-token. See :func:`fetch_library`.
-FIREWORKS_CONTROL_URL = "https://api.fireworks.ai/v1/accounts/fireworks/models"
 
 #: Prefix Lemonade's cloud routing expects on a Fireworks model id.
 LEMONADE_PREFIX = "fireworks."
 
 _MODELS_PATH = "/models"
-_DEFAULT_TIMEOUT = 30
 _LIST_CHECK_TIMEOUT = 10
 
 
 class FireworksError(RuntimeError):
     """A Fireworks request failed, with what to do about it."""
-
-
-@dataclass
-class FireworksModel:
-    """One model as Fireworks describes it."""
-
-    id: str
-    context_length: Optional[int] = None
-    owned_by: str = ""
-    serverless: Optional[bool] = None
-    raw: Dict[str, Any] = field(default_factory=dict)
-
-    @property
-    def short_name(self) -> str:
-        """Trailing segment — ``accounts/fireworks/models/x`` becomes ``x``."""
-        return self.id.rsplit("/", 1)[-1]
-
-    @property
-    def lemonade_id(self) -> str:
-        """The id to pass to a Lemonade-routed request.
-
-        Lemonade accepts both the full path and the short name behind its
-        ``fireworks.`` prefix; the short form is what its own listing shows,
-        so it is what a user will recognise.
-        """
-        return LEMONADE_PREFIX + self.short_name
 
 
 def resolve_fireworks_api_key(api_key: Optional[str] = None) -> Optional[str]:
@@ -110,78 +75,6 @@ def resolve_fireworks_api_key(api_key: Optional[str] = None) -> Optional[str]:
             f"{API_KEY_ENV_VARS[0]} to skip the credential store."
         ) from e
     return stored.strip() if stored and stored.strip() else None
-
-
-def _missing_key_error() -> FireworksError:
-    return FireworksError(
-        "No Fireworks API key. The key Lemonade uses for cloud routing lives in "
-        "its own process and cannot be read from here, so GAIA needs its own. "
-        f"Set {API_KEY_ENV_VARS[0]} (or {API_KEY_ENV_VARS[1]}, which Lemonade "
-        "already uses) to a key from https://app.fireworks.ai/settings/users/api-keys"
-    )
-
-
-def fetch_models(
-    api_key: Optional[str] = None,
-    *,
-    base_url: str = FIREWORKS_BASE_URL,
-    timeout: int = _DEFAULT_TIMEOUT,
-) -> List[FireworksModel]:
-    """Every model Fireworks reports for this account.
-
-    Raises :class:`FireworksError` with an actionable message rather than
-    returning an empty list — "no models" and "could not ask" are different
-    answers, and a caller comparing this against a gateway's list would read a
-    silent empty as "the gateway has them all".
-    """
-    key = resolve_fireworks_api_key(api_key)
-    if not key:
-        raise _missing_key_error()
-
-    url = base_url.rstrip("/") + _MODELS_PATH
-    try:
-        response = requests.get(
-            url, headers={"Authorization": f"Bearer {key}"}, timeout=timeout
-        )
-    except requests.RequestException as e:
-        raise FireworksError(f"Could not reach Fireworks at {url}: {e}") from e
-
-    if response.status_code == 401:
-        raise FireworksError(
-            f"Fireworks rejected the API key (401) at {url}. Check the value of "
-            f"{API_KEY_ENV_VARS[0]} against https://app.fireworks.ai/settings/users/api-keys"
-        )
-    if response.status_code != 200:
-        raise FireworksError(
-            f"Fireworks returned HTTP {response.status_code} for {url}: "
-            f"{http_body_text(response)[:300]}"
-        )
-
-    try:
-        payload = response.json()
-    except ValueError as e:
-        raise FireworksError(f"Fireworks returned a non-JSON body for {url}") from e
-
-    entries = payload.get("data") if isinstance(payload, dict) else payload
-    if not isinstance(entries, list):
-        raise FireworksError(
-            f"Unexpected catalogue shape from {url}: expected a list of models"
-        )
-
-    models: List[FireworksModel] = []
-    for entry in entries:
-        if not isinstance(entry, dict) or not entry.get("id"):
-            continue
-        models.append(
-            FireworksModel(
-                id=str(entry["id"]),
-                context_length=entry.get("context_length"),
-                owned_by=str(entry.get("owned_by") or ""),
-                serverless=entry.get("supports_serverless"),
-                raw=entry,
-            )
-        )
-    return sorted(models, key=lambda m: m.id)
 
 
 class ModelListState(Enum):
@@ -221,102 +114,3 @@ def check_model_list(
     return ModelListCheck(
         ModelListState.FAILING, f"HTTP {response.status_code}: {body}"
     )
-
-
-def search(models: List[FireworksModel], term: str) -> List[FireworksModel]:
-    """Case-insensitive substring match on the id."""
-    needle = (term or "").strip().lower()
-    if not needle:
-        return list(models)
-    return [m for m in models if needle in m.id.lower()]
-
-
-@dataclass
-class LibraryModel:
-    """One model in Fireworks' library, servable or not."""
-
-    name: str
-    serverless: bool = False
-    state: str = ""
-    raw: Dict[str, Any] = field(default_factory=dict)
-
-    @property
-    def short_name(self) -> str:
-        return self.name.rsplit("/", 1)[-1]
-
-
-def fetch_library(
-    api_key: Optional[str] = None,
-    *,
-    url: str = FIREWORKS_CONTROL_URL,
-    timeout: int = _DEFAULT_TIMEOUT,
-    page_size: int = 200,
-) -> List[LibraryModel]:
-    """Every model in Fireworks' library, with whether it is servable per-token.
-
-    :func:`fetch_models` answers "what can I call right now"; this answers "what
-    exists". The two differ by roughly an order of magnitude (observed 2026-09,
-    subject to change) because most of the library is
-    ``supports_serverless: false``: real models that need a dedicated
-    deployment, billed by GPU-hour rather than per token.
-
-    That distinction is the whole point of having this. A vendor page lists the
-    library without marking it, so "Fireworks has Gemma 4 31B" is true and
-    "I can call Gemma 4 31B per-token" is false, and nothing short of this flag
-    tells the two apart.
-    """
-    key = resolve_fireworks_api_key(api_key)
-    if not key:
-        raise _missing_key_error()
-
-    headers = {"Authorization": f"Bearer {key}"}
-    models: List[LibraryModel] = []
-    page_token: Optional[str] = None
-    seen_tokens = set()
-    while True:
-        params: Dict[str, Any] = {"pageSize": page_size}
-        if page_token:
-            params["pageToken"] = page_token
-        try:
-            response = requests.get(
-                url, headers=headers, params=params, timeout=timeout
-            )
-        except requests.RequestException as e:
-            raise FireworksError(f"Could not reach Fireworks at {url}: {e}") from e
-        if response.status_code != 200:
-            raise FireworksError(
-                f"Fireworks returned HTTP {response.status_code} for {url}: "
-                f"{http_body_text(response)[:300]}"
-            )
-        try:
-            payload = response.json()
-        except ValueError as e:
-            raise FireworksError(f"Fireworks returned a non-JSON body for {url}") from e
-        if not isinstance(payload, dict) or not isinstance(
-            payload.get("models", []), list
-        ):
-            raise FireworksError(
-                f"Unexpected library shape from {url}: expected an object with "
-                "a 'models' list"
-            )
-        for entry in payload.get("models", []):
-            if not isinstance(entry, dict) or not entry.get("name"):
-                continue
-            models.append(
-                LibraryModel(
-                    name=str(entry["name"]),
-                    serverless=bool(entry.get("supportsServerless")),
-                    state=str(entry.get("state") or ""),
-                    raw=entry,
-                )
-            )
-        page_token = payload.get("nextPageToken")
-        if not page_token:
-            break
-        if page_token in seen_tokens:
-            raise FireworksError(
-                f"Fireworks repeated page token {page_token!r} at {url}; "
-                "refusing to page forever"
-            )
-        seen_tokens.add(page_token)
-    return sorted(models, key=lambda m: m.short_name)
