@@ -649,7 +649,10 @@ _SAVE_CLAIM = re.compile(
     r"(?:saved|stored|remembered|noted|save|store|remember|note)\b"
     r"|\b(?:is|was|has\s+been|have\s+been)\s+(?:now\s+)?"
     r"(?:saved|stored|remembered|noted)\b"
-    r"|^\W*(?:saved|stored|remembered|noted)\b",
+    r"|^\W*(?:saved|stored|remembered|noted)\b"
+    r"|\b(?:tucked|filed|locked)\s+away\b"
+    r"|\bnow\s+(?:in|part\s+of)\s+(?:your|my)\s+memory\b"
+    r"|\badded\s+(?:\S+\s+){0,3}?to\s+(?:your|my)\s+memory\b",
     re.IGNORECASE | re.MULTILINE,
 )
 _NOT_SAVED = re.compile(
@@ -735,6 +738,7 @@ def fact_to_keep(request: str) -> str:
         or len(_MEMORY_ASK.findall(text)) != 1
         or _DECLINE_SIGNAL.search(text)
         or not asks_to_keep_in_memory(text)
+        or MemoryMixin._looks_like_credential(text)
     ):
         return ""
     for shape in _FORCED_SAVE_SHAPES:
@@ -4894,6 +4898,15 @@ class MemoryMixin(ProceduralMemoryMixin):
             # keyword directly adjacent to a value: "password is X", "secret: X"
             r"\b(?:password|passphrase|api[_ -]?key|secret|access[_ -]?token"
             r"|auth[_ -]?token|credential)s?\b\s*(?:is|:|=)\s*\S+",
+            # the same in other languages or short forms: "contraseña es X"
+            r"\b(?:passcode|pw|pwd|contrase(?:ñ|n)a|passwort|kennwort"
+            r"|mot de passe|senha|wachtwoord|has(?:ł|l)o)\b"
+            r"\s*(?:is|es|era|ist|war|est|é|e|jest|was|:|=)\s*\S+",
+            # a password word right before a value holding a digit or symbol:
+            # "password hunter2", never "password manager" or "password reset"
+            r"\b(?:password|passphrase|passcode|pw|pwd|contrase(?:ñ|n)a"
+            r"|passwort|kennwort|senha|wachtwoord)\b\s+"
+            r"(?=\S*[0-9!@#$%^&*])\S{4,}",
             # dash/underscore-joined token in any case, e.g. HALIBUT-4417-ZULU
             # or tango-9921-delta; a file extension right after it
             # (sales_2024_report.pdf) marks a filename, not a secret.
@@ -5160,6 +5173,20 @@ class MemoryMixin(ProceduralMemoryMixin):
         mean a leaked secret, so this errs conservative on what it flags.
         """
         return bool(text and cls._credential_spans(text))
+
+    def _holds_request_secret(self, text: str) -> bool:
+        """True when *text* keeps a secret value from this turn's request.
+
+        A small model saves the bare value ("Tr0ub4dor&3") of "my wifi
+        password is Tr0ub4dor&3", which no shape on its own reveals.
+        """
+        request = getattr(self, "_original_user_input", None) or ""
+        for start, end in self._credential_spans(request):
+            words = re.split(r"[\s:=]+", request[start:end].strip())
+            value = words[-1].strip(".,;!?\"'()[]") if words else ""
+            if len(value) >= 4 and value in (text or ""):
+                return True
+        return False
 
     #: Argument keys naming what a call acted on, in priority order. A shell
     #: command is keyed by its binary, so ``pytest -q`` working again retires
@@ -6323,7 +6350,9 @@ class MemoryMixin(ProceduralMemoryMixin):
             # a local-first memory that quietly accumulates secrets is the
             # Microsoft Recall failure mode. See _looks_like_credential for
             # what this detector can and cannot catch.
-            if MemoryMixin._looks_like_credential(fact):
+            if MemoryMixin._looks_like_credential(fact) or mixin._holds_request_secret(
+                fact
+            ):
                 logger.info(
                     "[MemoryMixin] remember(): refusing credential-shaped content"
                 )
@@ -6632,7 +6661,9 @@ class MemoryMixin(ProceduralMemoryMixin):
                         "status": "error",
                         "message": "content must not be empty or whitespace-only.",
                     }
-                if MemoryMixin._looks_like_credential(content):
+                if MemoryMixin._looks_like_credential(
+                    content
+                ) or mixin._holds_request_secret(content):
                     logger.info(
                         "[MemoryMixin] update_memory(): refusing "
                         "credential-shaped content"

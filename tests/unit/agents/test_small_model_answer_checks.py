@@ -506,7 +506,9 @@ def _placed(fact, decline):
 def test_a_declined_fact_is_never_returned_in_any_shape():
     for fact in _DECLINED_FACTS:
         # Without the decline, the same request is forced: the property bites.
-        assert fact_to_keep(f"Remember that {fact}.") == fact
+        # A secret is never forced, decline or not.
+        expected = "" if MemoryMixin._looks_like_credential(fact) else fact
+        assert fact_to_keep(f"Remember that {fact}.") == expected
     leaked = [
         text
         for fact in _DECLINED_FACTS
