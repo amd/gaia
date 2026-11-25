@@ -3,9 +3,12 @@ package preflight
 import (
 	"context"
 	"errors"
+	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"runtime"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -649,15 +652,29 @@ func TestTheWindowComesFromTheRecordedDeviceProfile(t *testing.T) {
 	}
 }
 
-// These MUST equal lemonade_client.GPU_CTX_SIZE / NPU_CTX_SIZE. Collapsing them
-// to one number would cap GPU doc-Q&A at 32K and re-open the #1030 overflow;
-// swapping them would fail the NPU load outright.
+// These MUST equal lemonade_client.GPU_CTX_SIZE / NPU_CTX_SIZE, read from the
+// Python source. Collapsing them to one number would cap GPU doc-Q&A at 32K and
+// re-open the #1030 overflow; swapping them would fail the NPU load outright.
 func TestTheWindowConstantsMatchTheirPythonSource(t *testing.T) {
-	if gpuCtxSize != 65536 {
-		t.Errorf("gpuCtxSize = %d, want lemonade_client.GPU_CTX_SIZE (65536)", gpuCtxSize)
+	_, self, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatal("cannot locate this test's own source file")
 	}
-	if npuCtxSize != 32768 {
-		t.Errorf("npuCtxSize = %d, want lemonade_client.NPU_CTX_SIZE (32768)", npuCtxSize)
+	path := filepath.Join(filepath.Dir(self), "..", "..", "..", "..",
+		"src", "gaia", "llm", "lemonade_client.py")
+	src, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("cannot read the Python source these constants mirror: %v", err)
+	}
+	for name, goValue := range map[string]int{"GPU_CTX_SIZE": gpuCtxSize, "NPU_CTX_SIZE": npuCtxSize} {
+		m := regexp.MustCompile(`(?m)^` + name + ` = (\d+)\b`).FindSubmatch(src)
+		if m == nil {
+			t.Fatalf("%s not found in lemonade_client.py — has it been renamed?", name)
+		}
+		pyValue, _ := strconv.Atoi(string(m[1]))
+		if goValue != pyValue {
+			t.Errorf("Go copy of %s = %d, Python has %d; change both together", name, goValue, pyValue)
+		}
 	}
 }
 

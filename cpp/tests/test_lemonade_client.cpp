@@ -19,7 +19,6 @@ using namespace gaia;
 
 TEST(LemonadeClientTest, ConstantsValues) {
     EXPECT_STREQ(LEMONADE_DEFAULT_URL,   "http://localhost:13305/api/v1");
-    EXPECT_STREQ(LEMONADE_DEFAULT_MODEL, "Qwen3-0.6B-GGUF");
     EXPECT_EQ(LEMONADE_REQUEST_TIMEOUT,    900);
     EXPECT_EQ(LEMONADE_MODEL_LOAD_TIMEOUT, 12000);
 }

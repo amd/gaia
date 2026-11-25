@@ -2,6 +2,9 @@ package preflight
 
 import (
 	"encoding/json"
+	"errors"
+	"fmt"
+	"io/fs"
 	"os"
 	"strings"
 
@@ -73,12 +76,8 @@ func readDeviceConfig(p hostProbe) deviceConfig {
 	if path == "" {
 		return cfg
 	}
-	read := p.readConfig
-	if read == nil {
-		read = p.readFile
-	}
-	raw, err := read(path)
-	if err != nil {
+	raw, ok, err := readSharedConfig(p, path)
+	if err != nil || !ok {
 		return cfg
 	}
 	if err := json.Unmarshal(raw, &cfg); err != nil {
@@ -89,6 +88,24 @@ func readDeviceConfig(p hostProbe) deviceConfig {
 
 func configPath(p hostProbe) string {
 	return lemonade.ConfigPathFrom(p.getenv, p.homeDir)
+}
+
+// readSharedConfig reads config.json at path through the probe's locked reader.
+// ok is false when the file does not exist, the normal state before `gaia init`;
+// any other failure is an error naming the file.
+func readSharedConfig(p hostProbe, path string) (raw []byte, ok bool, err error) {
+	read := p.readConfig
+	if read == nil {
+		read = p.readFile
+	}
+	raw, err = read(path)
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil, false, nil
+	}
+	if err != nil {
+		return nil, false, fmt.Errorf("cannot read %s: %w", path, err)
+	}
+	return raw, true, nil
 }
 
 // osReadFile is the real file reader for hostProbe.

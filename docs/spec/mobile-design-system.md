@@ -79,16 +79,15 @@ rewrite.
 @media (min-width: 769px) { /* desktop+ */ }
 ```
 
-A matching TS constant lives at
-`src/gaia/apps/webui/src/utils/breakpoints.ts`:
+The matching TS constant is `MOBILE_MAX_PX` in
+`src/gaia/apps/webui/src/utils/constants.ts`:
 
 ```ts
 export const MOBILE_MAX_PX = 768;
-export const isMobileViewport = () => window.innerWidth <= MOBILE_MAX_PX;
 ```
 
-All inline `window.innerWidth <= 768` checks in `App.tsx` migrate to
-`isMobileViewport()` as part of M2.
+`App.tsx`, `Sidebar.tsx` and `chatStore.ts` use it for their mobile checks;
+the CSS media queries still write `768px` directly.
 
 ---
 

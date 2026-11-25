@@ -53,6 +53,7 @@ import { RETRY_INITIAL_MS, retryUntilOk, type Retrier } from './utils/retry';
 import { shouldShowStartupScreen } from './utils/startupGate';
 import { StartupFailed, StartupWaiting } from './components/StartupScreen';
 import { getT, useT } from './i18n/useT';
+import { MOBILE_MAX_PX } from './utils/constants';
 import type { SetupCheck, StartCard } from './types';
 
 // Heavy, occasional screens load on first use.
@@ -804,7 +805,7 @@ function App() {
     // The sidebar is a drawer on narrow windows: closed on load and when a
     // window narrows, open again when it widens (collapse is separate there).
     useEffect(() => {
-        const mq = window.matchMedia?.('(max-width: 768px)');
+        const mq = window.matchMedia?.(`(max-width: ${MOBILE_MAX_PX}px)`);
         if (!mq) return;
         const sync = () => setSidebarOpen(!mq.matches);
         sync();
@@ -862,7 +863,7 @@ function App() {
     useMobileAccessRequests((on) => { void (on ? openMobileAccess() : stopMobileAccess()); });
     useEffect(() => { announceMobileAccess(tunnelActive); }, [tunnelActive]);
 
-    const isMobile = useMediaQuery('(max-width: 768px)');
+    const isMobile = useMediaQuery(`(max-width: ${MOBILE_MAX_PX}px)`);
 
     // A transient status loss must not replace a UI that was already shown.
     const showStartup = shouldShowStartupScreen(

@@ -10,6 +10,7 @@ import type { ActiveRuns, AwaitingUser, Session, Message, Document, AgentStep, S
 import { applyTheme, resolveTheme, syncTitleBar, type ThemePreference } from '../utils/theme';
 import { DEFAULT_CUSTOM, PALETTE_IDS, applyPalette, isHexColor, type CustomColors, type PaletteId } from '../utils/palette';
 import { log } from '../utils/logger';
+import { MOBILE_MAX_PX } from '../utils/constants';
 import { addCard } from '../utils/connectCards';
 import { DEFAULT_LOCALE, applyLocale, isLocaleCode } from '../i18n/registry';
 import { restore as restoreQueues, type QueuedMessage } from '../utils/messageQueue';
@@ -740,7 +741,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
         writePref('gaia-chat-palette', 'custom');
         set({ customColors: colors, palette: 'custom' });
     },
-    sidebarOpen: typeof window !== 'undefined' ? window.innerWidth > 768 : true,
+    sidebarOpen: typeof window !== 'undefined' ? window.innerWidth > MOBILE_MAX_PX : true,
     sidebarCollapsed: readPref('gaia-chat-sidebar-collapsed', 'false') === 'true',
     isLoadingMessages: false,
     pendingPrompt: null,

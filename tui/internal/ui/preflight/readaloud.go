@@ -5,9 +5,7 @@ package preflight
 
 import (
 	"encoding/json"
-	"errors"
 	"fmt"
-	"io/fs"
 	"strings"
 
 	"github.com/amd/gaia/tui/internal/speech"
@@ -40,16 +38,9 @@ func readReadAloud(p hostProbe) (ReadAloud, error) {
 	if out.Path == "" {
 		return out, nil
 	}
-	read := p.readConfig
-	if read == nil {
-		read = p.readFile
-	}
-	raw, err := read(out.Path)
-	if errors.Is(err, fs.ErrNotExist) {
-		return out, nil
-	}
-	if err != nil {
-		return out, fmt.Errorf("cannot read %s: %w", out.Path, err)
+	raw, ok, err := readSharedConfig(p, out.Path)
+	if err != nil || !ok {
+		return out, err
 	}
 	var cfg struct {
 		Voice *string          `json:"read_aloud_voice"`

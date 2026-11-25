@@ -5,9 +5,7 @@ package preflight
 
 import (
 	"encoding/json"
-	"errors"
 	"fmt"
-	"io/fs"
 	"strings"
 
 	"github.com/amd/gaia/tui/internal/lemonade"
@@ -42,16 +40,9 @@ func readLastModel(p hostProbe) (LastModel, error) {
 	if path == "" {
 		return LastModel{}, nil
 	}
-	read := p.readConfig
-	if read == nil {
-		read = p.readFile
-	}
-	raw, err := read(path)
-	if errors.Is(err, fs.ErrNotExist) {
-		return LastModel{Path: path}, nil
-	}
-	if err != nil {
-		return LastModel{Path: path}, fmt.Errorf("cannot read %s: %w", path, err)
+	raw, ok, err := readSharedConfig(p, path)
+	if err != nil || !ok {
+		return LastModel{Path: path}, err
 	}
 	var cfg struct {
 		Provider *string `json:"last_provider"`

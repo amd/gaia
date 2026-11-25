@@ -1910,7 +1910,7 @@ async def rebuild_fts() -> Dict:
 
 ### Dashboard UI
 
-**File:** `src/gaia/apps/webui/src/pages/MemoryDashboard.tsx` (new page)
+**File:** `src/gaia/apps/webui/src/components/MemoryDashboard.tsx`
 
 The dashboard has 6 sections:
 

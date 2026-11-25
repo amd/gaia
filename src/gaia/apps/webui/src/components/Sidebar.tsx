@@ -19,7 +19,7 @@ import {
 import { placeInLine } from '../utils/chatAlerts';
 import { formatShortcut } from '../utils/platform';
 import { cleanupAbandonedDraft } from '../utils/sessionCleanup';
-import { MAX_SESSION_TITLE_CHARS } from '../utils/constants';
+import { MAX_SESSION_TITLE_CHARS, MOBILE_MAX_PX } from '../utils/constants';
 import { CLAIMS_ESCAPE } from '../hooks/useEscapeToClose';
 import { useMediaQuery } from '../hooks/useMediaQuery';
 import { useToday } from '../hooks/useToday';
@@ -359,7 +359,7 @@ export function Sidebar({ onNewChat, onMobileAccess, tunnelActive }: SidebarProp
     const [deleteError, setDeleteError] = useState<string | null>(null);
     const [rowError, setRowError] = useState<string | null>(null);
     const [showAutomated, setShowAutomated] = useState(readShowAutomated);
-    const phone = useMediaQuery('(max-width: 768px)');
+    const phone = useMediaQuery(`(max-width: ${MOBILE_MAX_PX}px)`);
     const searchRef = useRef<HTMLInputElement>(null);
     // What had focus before search took it, so Esc can give it back.
     const beforeSearch = useRef<HTMLElement | null>(null);
@@ -508,7 +508,7 @@ export function Sidebar({ onNewChat, onMobileAccess, tunnelActive }: SidebarProp
     }, [updateSessionInList]);
 
     const closeOnMobile = useCallback(() => {
-        if (window.innerWidth <= 768) setSidebarOpen(false);
+        if (window.innerWidth <= MOBILE_MAX_PX) setSidebarOpen(false);
     }, [setSidebarOpen]);
 
     const select = useCallback((id: string) => {
