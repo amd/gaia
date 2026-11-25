@@ -676,13 +676,24 @@ _DECLINED_NOT_STORED = (
 )
 
 
+#: After "password is": a status or a determiner, never the password itself
+#: ("password is expired", "the same as before", "Passwort ist falsch").
+_NOT_A_SECRET_VALUE = (
+    r"(?!(?:expired|required|wrong|optional|long|short|weak|strong|new|old|same"
+    r"|reset|changed|empty|blank|correct|incorrect|invalid|valid|missing|locked"
+    r"|falsch|richtig|abgelaufen|erforderlich|obligatori[ao]|incorrect[ao]"
+    r"|caducad[ao]|obligatoire|expir[ée]e?"
+    r"|the|a|an|my|your|el|la|los|las|un|una|der|die|das|ein|eine|le|les|une)"
+    r"(?![\w-]))"
+)
 #: A password word, "is" and one word that ends the clause: "password is
 #: sunshine", "contraseña es gatito". "password is changed monthly" is not.
 _CLAUSE_END_SECRET = (
     r"(?<!called )(?<!named )\b(?:password|passphrase|passcode|contrase(?:ñ|n)a"
     r"|passwort|kennwort|mot de passe|senha|wachtwoord|has(?:ł|l)o)s?\b\s*"
     r"(?:(?:is|es|era|ist|war|est|é|e|jest|was)\b|[:=])\s*"
-    r"(?P<value>[^\s,;!?\"'()]+?)\.?"
+    + _NOT_A_SECRET_VALUE
+    + r"(?P<value>[^\s,;!?\"'()]+?)\.?"
     r"(?=\s*$|[,;!?\n]|\.\s|\s+(?:and|so|but|y|pero|und|aber|et|mais|en|e)\b)"
 )
 _CLAUSE_END_SECRET_RE = re.compile(_CLAUSE_END_SECRET, re.IGNORECASE)
@@ -4908,7 +4919,9 @@ class MemoryMixin(ProceduralMemoryMixin):
             r"\bBearer\s+[a-zA-Z0-9._-]{20,}",  # raw Bearer token
             # keyword directly adjacent to a value: "password is X", "secret: X"
             r"\b(?:password|passphrase|api[_ -]?key|secret|access[_ -]?token"
-            r"|auth[_ -]?token|credential)s?\b\s*(?:is|:|=)\s*\S+",
+            r"|auth[_ -]?token|credential)s?\b\s*(?:is|:|=)\s*"
+            + _NOT_A_SECRET_VALUE
+            + r"\S+",
             # the same in other languages or short forms: "contraseña es X"
             r"\b(?:passcode|pw|pwd|contrase(?:ñ|n)a|passwort|kennwort"
             r"|mot de passe|senha|wachtwoord|has(?:ł|l)o)\b"

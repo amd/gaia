@@ -74,6 +74,15 @@ ORDINARY_SAVES = [
         "My password is changed monthly. Remember I changed jobs in May",
         "User changed jobs in May",
     ),
+    ("My passcode is long. Remember the meeting is long", "the meeting is long"),
+    (
+        "My password is wrong. Remember the drive is wrong side",
+        "the drive is wrong side",
+    ),
+    (
+        "My password is expired. Remember my passport expired in May",
+        "User's passport expired in May",
+    ),
 ]
 
 #: Text that names a password word but holds no secret: never masked.
@@ -96,6 +105,16 @@ NOT_SECRETS = [
     "my wifi is called Passwort ist geheim",
     "pw 2024 review",
     "password expires every 90 days",
+    # A status or a determiner after "is" is not the password.
+    "the passcode is long.",
+    "Passwort ist falsch",
+    "contraseña es obligatoria",
+    "my password is expired",
+    "the password is required",
+    "password is optional for guests",
+    "my password is the same as before",
+    "my password is weak",
+    "the password is new.",
 ]
 
 
