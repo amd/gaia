@@ -440,6 +440,7 @@ const messages: Messages = {
     'msg.copy': 'نسخ الرسالة',
     'msg.copied': 'تم النسخ!',
     'msg.copiedAria': 'تم النسخ إلى الحافظة',
+    'msg.copyFailed': 'تعذّر النسخ',
     'msg.delete': 'حذف الرسالة',
     'msg.confirmDelete': 'انقر مرة أخرى للتأكيد',
     'msg.confirmDeleteAria': 'تأكيد حذف الرسالة',

@@ -440,6 +440,7 @@ export const enMessages = {
     'msg.copy': 'Copy message',
     'msg.copied': 'Copied!',
     'msg.copiedAria': 'Copied to clipboard',
+    'msg.copyFailed': "Couldn't copy",
     'msg.delete': 'Delete message',
     'msg.confirmDelete': 'Click again to confirm',
     'msg.confirmDeleteAria': 'Confirm delete message',
