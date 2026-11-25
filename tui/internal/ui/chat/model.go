@@ -58,7 +58,13 @@ type errMsg struct {
 }
 type doneMsg struct{ ch <-chan interface{} }
 type sendQueryMsg struct{ query string }
-type channelReadyMsg struct{ ch <-chan interface{} }
+
+// turnSeq scopes it like errMsg: a channel from an abandoned turn must not
+// replace the live turn's. Always set it from the turn that called Send.
+type channelReadyMsg struct {
+	ch      <-chan interface{}
+	turnSeq int
+}
 
 // cancelRequestFailedMsg carries a failure of the out-of-band Cancel() call
 // (client.AgentCanceler, #2901) — asking the server to stop the run, not the
@@ -941,6 +947,11 @@ func (m ChatModel) updateChat(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.startWarmUp()
 
 	case channelReadyMsg:
+		if msg.turnSeq == 0 || msg.turnSeq != m.turnSeq {
+			// Send for an abandoned turn returned late; drain its channel so
+			// the producer can finish, and leave the live turn alone.
+			return m, drainStale(msg.ch)
+		}
 		m.events = msg.ch
 		return m, waitForEvent(m.events)
 
@@ -2112,9 +2123,22 @@ func (m ChatModel) startTurn(query string) (tea.Model, tea.Cmd) {
 			if err != nil {
 				return errMsg{err: err, turnSeq: seq}
 			}
-			return channelReadyMsg{ch: ch}
+			return channelReadyMsg{ch: ch, turnSeq: seq}
 		},
 	)
+}
+
+// drainStale reads a superseded turn's channel until it closes, dropping its
+// events.
+func drainStale(ch <-chan interface{}) tea.Cmd {
+	if ch == nil {
+		return nil
+	}
+	return func() tea.Msg {
+		for range ch {
+		}
+		return nil
+	}
 }
 
 func waitForEvent(ch <-chan interface{}) tea.Cmd {

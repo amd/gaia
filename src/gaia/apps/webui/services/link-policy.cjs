@@ -82,9 +82,45 @@ function describeBlockedUrl(rawUrl) {
   );
 }
 
+/**
+ * A one-line, user-facing reason the OS could not open an allowed link.
+ *
+ * @param {string} rawUrl
+ * @param {unknown} err
+ * @returns {string}
+ */
+function describeOpenFailure(rawUrl, err) {
+  const reason = (err && err.message ? err.message : String(err)).replace(
+    /\.+$/,
+    "",
+  );
+  return (
+    `GAIA couldn't open "${String(rawUrl).slice(0, 300)}": ${reason}. ` +
+    "Check that this PC has an app set up for that kind of link."
+  );
+}
+
+/**
+ * `shell.openExternal` rejects when the OS has no handler (a mailto: link on a
+ * PC with no mail app). Unhandled, that rejection reaches the process-level
+ * fatal handler and quits the app, so every caller goes through here.
+ *
+ * @param {{ openExternal: (url: string) => Promise<void> }} shell
+ * @param {string} url
+ * @param {(err: unknown) => void} onFailure
+ * @returns {Promise<void>}
+ */
+function openExternalSafely(shell, url, onFailure) {
+  return Promise.resolve()
+    .then(() => shell.openExternal(url))
+    .catch(onFailure);
+}
+
 module.exports = {
   ALLOWED_EXTERNAL_SCHEMES,
   isAllowedExternalUrl,
   isInAppNavigation,
   describeBlockedUrl,
+  describeOpenFailure,
+  openExternalSafely,
 };
