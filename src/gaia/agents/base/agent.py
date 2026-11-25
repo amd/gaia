@@ -12728,6 +12728,10 @@ Do NOT wrap conversational replies in JSON.
 
     def _host_model_error(self, exc: BaseException, step: int) -> None:
         """Keep a failed model call's exception, and re-raise it when asked to."""
+        if isinstance(exc, BudgetNeedsUsage):
+            # The host's setup, never a provider outage: always raised.
+            self.console.stop_progress()
+            raise exc
         if isinstance(
             exc, (TurnBudgetExceeded, _NotAnAnswer, _ClosingOverflow)
         ) or stopped_by_user(exc):
@@ -12759,7 +12763,15 @@ Do NOT wrap conversational replies in JSON.
                 raise TypeError(
                     f"budget must be a TurnBudget, got {type(budget).__name__}."
                 )
-            budget.require_price(self._budget_model())
+            if budget.max_cost_usd is not None and self._priced_model() is None:
+                raise ValueError(
+                    f"TurnBudget.max_cost_usd is set, but {self._budget_model()!r} "
+                    "cannot be priced here: GAIA carries Fireworks' list prices "
+                    "only (gaia/llm/pricing.py). If the model runs on Fireworks, "
+                    'set provider_name = "fireworks" on your client. Otherwise '
+                    "limit the turn with max_output_tokens or max_model_calls."
+                )
+            budget.require_price(self._priced_model())
         self._turn_budget = budget
         self._turn_spend = TurnSpend()
         self._turn_failure = None
@@ -12791,7 +12803,7 @@ Do NOT wrap conversational replies in JSON.
             return
         spent = TurnSpend()
         spent.add_usage(call.get("usage"))
-        report({**call, "cost_usd": spent.cost_usd(self._budget_model())})
+        report({**call, "cost_usd": spent.cost_usd(self._priced_model())})
 
     def _budget_stop_reason(self) -> Optional[str]:
         """The limit this turn has reached, or None while there is room."""
@@ -12800,7 +12812,7 @@ Do NOT wrap conversational replies in JSON.
             return None
         started = getattr(self, "_turn_started_at", None)
         elapsed = time.monotonic() - started if started is not None else 0.0
-        return budget_exhausted(budget, self._turn_spend, elapsed, self._budget_model())
+        return budget_exhausted(budget, self._turn_spend, elapsed, self._priced_model())
 
     def _budget_stop_answer(self, reason: str) -> str:
         self._turn_stop_hint = reason
@@ -12853,12 +12865,31 @@ Do NOT wrap conversational replies in JSON.
         self, input_tokens: int, cached_tokens: int, output_tokens: int
     ) -> Optional[float]:
         """This turn's tokens at the model's list price; None when it has none."""
-        model = getattr(getattr(self, "chat", None), "effective_model", None)
+        model = self._priced_model()
+        if model is None:
+            return None
+        return _list_price(model, input_tokens, cached_tokens, output_tokens)
+
+    def _priced_model(self) -> Optional[str]:
+        """The model id when GAIA carries its provider's list prices, else None.
+
+        The rate card is Fireworks' own, so the same model name served by
+        another provider must not be given its price.
+        """
+        from gaia.llm.lemonade_client import cloud_model_provider
+
+        chat = getattr(self, "chat", None)
+        model = getattr(chat, "effective_model", None)
         if not isinstance(model, str) or not model:
             model = getattr(self, "model_id", None)
         if not isinstance(model, str) or not model:
             return None
-        return _list_price(model, input_tokens, cached_tokens, output_tokens)
+        client_provider = getattr(
+            getattr(chat, "llm_client", None), "provider_name", None
+        )
+        if cloud_model_provider(model) == "fireworks" or client_provider == "fireworks":
+            return model
+        return None
 
     def _request_text(self, query: Optional[str]) -> str:
         """The user's own words this turn, without the memory context prepended.

@@ -18,6 +18,14 @@ class _NativeClient(ScriptedLLMClient):
     supports_native_tools = True
 
 
+class _FireworksClient(_NativeClient):
+    """A host client that says its model runs on Fireworks, so it is priced."""
+
+    @property
+    def provider_name(self) -> str:
+        return "fireworks"
+
+
 class _TextClient(ScriptedLLMClient):
     supports_native_tools = False
 
@@ -240,7 +248,7 @@ def test_answer_checks_must_be_callable():
 def test_on_model_call_fires_once_per_request_with_usage_and_cost():
     seen = []
     usage = {"prompt_tokens": 1000, "completion_tokens": 100}
-    model = _NativeClient()
+    model = _FireworksClient()
     model.push(call="get_order", order_number="1001", usage=usage)
     model.push(say="It has shipped.", usage=usage)
     agent = _SupportAgent(
