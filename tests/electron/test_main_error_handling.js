@@ -453,6 +453,83 @@ describe("installSafetyNet", () => {
     exitSpy.mockRestore();
   });
 
+  // ── Test 9f: a crashed browser-pane tab is the pane's, not a crash of GAIA ──
+  // The pane shows "Reload to try again" in the tab; GAIA keeps running.
+
+  test.each([["crashed"], ["oom"]])(
+    "render-process-gone with %s in a pane tab is logged only: no dialog, no quit, no crash count",
+    (reason) => {
+      const { installSafetyNet, readCount } = require(SAFETY_NET_PATH);
+      const dialog = mockDialog();
+      const app = mockApp(true);
+      app.quit = jest.fn();
+      const exitSpy = jest.spyOn(process, "exit").mockImplementation(() => {});
+      const onRendererGone = jest.fn();
+      const paneTab = { id: 9 };
+      const homedirFn = () => tmpDir;
+
+      installSafetyNet({
+        logPath,
+        dialogModule: dialog,
+        appModule: app,
+        homedirFn,
+        onRendererGone,
+        isPanePage: (contents) => contents === paneTab,
+      });
+      app.emit("render-process-gone", {}, paneTab, { reason, exitCode: 1 });
+
+      expect(onRendererGone).not.toHaveBeenCalled();
+      expect(dialog.showMessageBoxSync).not.toHaveBeenCalled();
+      expect(dialog.showErrorBox).not.toHaveBeenCalled();
+      expect(app.quit).not.toHaveBeenCalled();
+      expect(exitSpy).not.toHaveBeenCalled();
+      expect(readCount(homedirFn)).toBe(0);
+      expect(fs.readFileSync(logPath, "utf8")).toMatch(new RegExp(`PANE_PAGE_GONE reason=${reason} exitCode=1`));
+
+      exitSpy.mockRestore();
+    }
+  );
+
+  test("a page that isn't a pane tab still reaches the window handler and counts", () => {
+    const { installSafetyNet, readCount } = require(SAFETY_NET_PATH);
+    const app = mockApp(true);
+    const onRendererGone = jest.fn();
+    const mainContents = { id: 1 };
+    const homedirFn = () => tmpDir;
+
+    installSafetyNet({
+      logPath,
+      dialogModule: mockDialog(),
+      appModule: app,
+      homedirFn,
+      onRendererGone,
+      isPanePage: () => false,
+    });
+    app.emit("render-process-gone", {}, mainContents, { reason: "crashed", exitCode: 1 });
+
+    expect(onRendererGone).toHaveBeenCalledWith(mainContents, { reason: "crashed", exitCode: 1 });
+    expect(readCount(homedirFn)).toBe(1);
+  });
+
+  test("a pane check that throws is logged and the crash takes the usual path", () => {
+    const { installSafetyNet } = require(SAFETY_NET_PATH);
+    const app = mockApp(true);
+    const onRendererGone = jest.fn();
+
+    installSafetyNet({
+      logPath,
+      dialogModule: mockDialog(),
+      appModule: app,
+      homedirFn: () => tmpDir,
+      onRendererGone,
+      isPanePage: () => { throw new Error("session gone"); },
+    });
+    app.emit("render-process-gone", {}, {}, { reason: "crashed", exitCode: 1 });
+
+    expect(onRendererGone).toHaveBeenCalledTimes(1);
+    expect(fs.readFileSync(logPath, "utf8")).toMatch(/pane check failed: .*session gone/);
+  });
+
   test("a clean exit never reaches the window handler", () => {
     const { installSafetyNet } = require(SAFETY_NET_PATH);
     const app = mockApp(true);
@@ -733,5 +810,17 @@ describe("crash-loop safe mode", () => {
     expect(result).toBe("error");
     expect(app.relaunch).not.toHaveBeenCalled();
     expect(app.exit).toHaveBeenCalledWith(1);
+  });
+});
+
+describe("main.cjs pane-tab wiring", () => {
+  const webui = path.join(__dirname, "..", "..", "src", "gaia", "apps", "webui");
+  const read = (rel) => fs.readFileSync(path.join(webui, rel), "utf8").replace(/\r\n/g, "\n");
+
+  test("a pane tab is recognised by the same partition the pane creates its tabs on", () => {
+    expect(read("main.cjs")).toMatch(
+      /isPanePage: \(contents\) => contents\.session === session\.fromPartition\(PANE_PARTITION\)/
+    );
+    expect(read("services/browser-pane/pane-host.cjs")).toMatch(/partition: PANE_PARTITION/);
   });
 });

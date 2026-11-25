@@ -72,6 +72,8 @@ try {
     onRendererGone: (contents, details) => {
       void handleRendererGone(contents, details);
     },
+    // A pane tab's crash is the pane's to report ("Reload to try again"), not GAIA's.
+    isPanePage: (contents) => contents.session === session.fromPartition(PANE_PARTITION),
   }));
 } catch (err) {
   try { process.stderr.write(`[main] safety-net load failed: ${err.message}\n`); } catch { }
@@ -126,6 +128,7 @@ const {
   describeBlockedUrl,
   describeOpenFailure,
   openExternalSafely,
+  linkNoticeText,
 } = require("./services/link-policy.cjs");
 const { installWindowKeys } = require("./services/window-keys.cjs");
 const { installContextMenu } = require("./services/context-menu.cjs");
@@ -673,15 +676,28 @@ function findDistPath() {
 
 /** Refuse a link loudly — the user clicked it, so they get told why nothing happened. */
 function reportBlockedLink(url) {
-  warnAboutLink("Link blocked", describeBlockedUrl(url));
+  const locale = app.getLocale();
+  warnAboutLink(
+    linkNoticeText(locale).blockedTitle,
+    describeBlockedUrl(url, locale),
+    describeBlockedUrl(url),
+    locale,
+  );
 }
 
 function reportLinkNotOpened(url, err) {
-  warnAboutLink("Link not opened", describeOpenFailure(url, err));
+  const locale = app.getLocale();
+  warnAboutLink(
+    linkNoticeText(locale).notOpenedTitle,
+    describeOpenFailure(url, err, locale),
+    describeOpenFailure(url, err),
+    locale,
+  );
 }
 
-function warnAboutLink(title, message) {
-  console.error(`[main] ${message}`);
+// The log line stays English so bug reports stay readable.
+function warnAboutLink(title, message, logMessage, locale) {
+  console.error(`[main] ${logMessage}`);
   // Non-blocking and parented: showErrorBox would freeze the main process.
   dialog
     .showMessageBox(mainWindow && !mainWindow.isDestroyed() ? mainWindow : null, {
@@ -689,7 +705,7 @@ function warnAboutLink(title, message) {
       title,
       message: title,
       detail: message,
-      buttons: ["OK"],
+      buttons: [linkNoticeText(locale).ok],
       noLink: true,
     })
     .catch((err) =>

@@ -60,26 +60,62 @@ function isInAppNavigation(targetUrl, currentUrl) {
   );
 }
 
+// U+2068/U+2069 keep a URL left-to-right inside Arabic text.
+const isolate = (text) => `⁨${text}⁩`;
+
+const NOTICE_TEXT = {
+  en: {
+    blockedTitle: "Link blocked",
+    notOpenedTitle: "Link not opened",
+    ok: "OK",
+    noScheme: "no scheme",
+    blocked: (url, scheme) =>
+      `GAIA refused to open "${url}" (${scheme}). ` +
+      "Only http, https and mailto links open outside the app — a link that " +
+      "resolves to a local file or network share is never launched.",
+    openFailed: (url, reason) =>
+      `GAIA couldn't open "${url}": ${reason}. ` +
+      "Check that this PC has an app set up for that kind of link.",
+  },
+  ar: {
+    blockedTitle: "تم حظر الرابط",
+    notOpenedTitle: "لم يُفتح الرابط",
+    ok: "حسنًا",
+    noScheme: "بلا بروتوكول",
+    blocked: (url, scheme) =>
+      `رفض GAIA فتح "${isolate(url)}" (${isolate(scheme)}). ` +
+      "لا تُفتح خارج التطبيق إلا روابط http وhttps وmailto، ولا يُشغَّل أبدًا " +
+      "رابط يشير إلى ملف محلي أو مجلد مشترك على الشبكة.",
+    openFailed: (url, reason) =>
+      `تعذّر على GAIA فتح "${isolate(url)}": ${isolate(reason)}. ` +
+      "تأكد من وجود تطبيق على هذا الجهاز مُعدّ لفتح هذا النوع من الروابط.",
+  },
+};
+
+/** The link-notice strings for an OS locale such as "ar-EG"; English for any language without them. */
+function linkNoticeText(locale) {
+  const lang = String(locale || "").toLowerCase().split(/[-_]/)[0];
+  return NOTICE_TEXT[lang] || NOTICE_TEXT.en;
+}
+
 /**
  * A one-line, user-facing reason a URL was refused. Never silently dropped —
  * the caller logs this and shows it, so a blocked click is explainable.
  *
  * @param {string} rawUrl
+ * @param {string} [locale] The OS locale, as `app.getLocale()` gives it.
  * @returns {string}
  */
-function describeBlockedUrl(rawUrl) {
+function describeBlockedUrl(rawUrl, locale) {
+  const text = linkNoticeText(locale);
   const shown = typeof rawUrl === "string" && rawUrl ? rawUrl : String(rawUrl);
-  let scheme = "no scheme";
+  let scheme = text.noScheme;
   try {
     scheme = new URL(shown).protocol.replace(/:$/, "");
   } catch {
-    /* keep "no scheme" */
+    /* keep the "no scheme" label */
   }
-  return (
-    `GAIA refused to open "${shown.slice(0, 300)}" (${scheme}). ` +
-    "Only http, https and mailto links open outside the app — a link that " +
-    "resolves to a local file or network share is never launched."
-  );
+  return text.blocked(shown.slice(0, 300), scheme);
 }
 
 /**
@@ -87,17 +123,15 @@ function describeBlockedUrl(rawUrl) {
  *
  * @param {string} rawUrl
  * @param {unknown} err
+ * @param {string} [locale] The OS locale, as `app.getLocale()` gives it.
  * @returns {string}
  */
-function describeOpenFailure(rawUrl, err) {
+function describeOpenFailure(rawUrl, err, locale) {
   const reason = (err && err.message ? err.message : String(err)).replace(
     /\.+$/,
     "",
   );
-  return (
-    `GAIA couldn't open "${String(rawUrl).slice(0, 300)}": ${reason}. ` +
-    "Check that this PC has an app set up for that kind of link."
-  );
+  return linkNoticeText(locale).openFailed(String(rawUrl).slice(0, 300), reason);
 }
 
 /**
@@ -123,4 +157,5 @@ module.exports = {
   describeBlockedUrl,
   describeOpenFailure,
   openExternalSafely,
+  linkNoticeText,
 };

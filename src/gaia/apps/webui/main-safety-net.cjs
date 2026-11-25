@@ -110,6 +110,9 @@ const FATAL_EXIT_GRACE_MS = 25000;
  *   when a window's page dies while GAIA runs on, e.g. to offer a reload.
  *   Without it, or if it throws synchronously, the crash is fatal; an async
  *   handler must handle its own failures.
+ * @param {Function} [opts.isPanePage] - Called with a webContents whose page
+ *   died; true means it is a browser-pane tab, which shows its own notice, so
+ *   the crash is logged only: no dialog, no quit, no crash count.
  */
 function installSafetyNet({
   logPath,
@@ -120,6 +123,7 @@ function installSafetyNet({
   exitGraceMs = FATAL_EXIT_GRACE_MS,
   holdCrashCount = () => false,
   onRendererGone,
+  isPanePage,
 }) {
   const homedir = homedirFn || (() => os.homedir());
 
@@ -217,6 +221,21 @@ function installSafetyNet({
     if (reason === "clean-exit") {
       appendLog(logPath, `[${new Date().toISOString()}] RENDER_PROCESS_EXITED reason=${reason}`);
       return;
+    }
+    if (typeof isPanePage === "function") {
+      let panePage = false;
+      try {
+        panePage = isPanePage(webContents) === true;
+      } catch (err) {
+        appendLog(logPath, `[${new Date().toISOString()}] RENDER_PROCESS_GONE pane check failed: ${err.stack || err}`);
+      }
+      if (panePage) {
+        appendLog(
+          logPath,
+          `[${new Date().toISOString()}] PANE_PAGE_GONE reason=${reason} exitCode=${details && details.exitCode}`
+        );
+        return;
+      }
     }
     if (typeof onRendererGone === "function") {
       // Only the page died: the backend and agents still run, so the window can come back.
