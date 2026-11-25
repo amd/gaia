@@ -156,3 +156,20 @@ def test_list_says_the_schedule_is_failing(mocker, capsys):
     _handle_schedule(build_parser().parse_args(["schedule", "list"]))
 
     assert "  failing=2" in capsys.readouterr().out
+
+
+def test_show_hides_the_telegram_token(mocker, capsys):
+    store_cls = mocker.patch("gaia.schedule.store.TomlScheduleStore")
+    store_cls.return_value.get.return_value = Schedule(
+        name="brief",
+        cron=HOURLY,
+        prompt="say hello",
+        sink="telegram",
+        sink_args={"to": "42", "token": "123456:SECRET"},
+    )
+
+    _handle_schedule(build_parser().parse_args(["schedule", "show", "brief"]))
+
+    out = capsys.readouterr().out
+    assert "SECRET" not in out
+    assert "'to': '42'" in out

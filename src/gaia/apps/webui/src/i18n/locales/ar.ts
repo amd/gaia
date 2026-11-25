@@ -354,6 +354,7 @@ const messages: Messages = {
     'composer.researchOnTitle': 'البحث مفعّل: يبحث GAIA في الويب ويقرأ المصادر ويكتب تقريرًا يذكر كل مصدر. انقر لإيقافه.',
     'composer.researchOffTitle': 'ابحث في موضوع: يبحث GAIA في الويب ويقرأ المصادر ويكتب تقريرًا يذكر كل مصدر. يمكنك أيضًا بدء رسالتك بـ /research.',
     'composer.researchPlaceholder': 'ما الذي تريد أن يبحث فيه GAIA؟',
+    'composer.researchSkillsUnavailable': 'لم تُرسل الرسالة: عند تشغيل البحث يتحقق GAIA مما إذا كانت رسالتك تشغّل مهارة، وتعذّرت قراءة مهاراتك ({error}). أرسلها مرة أخرى أو أوقف البحث.',
     'composer.memoryOn': 'التذكر عبر المحادثات: مفعّل',
     'composer.agentFast': 'سريع وخفيف · تجريبي',
     'composer.agentFastTitle': 'وكيلك هو «سريع وخفيف» (تجريبي). يمكنك تغييره من الإعدادات › الوكيل والنموذج.',

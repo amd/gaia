@@ -86,6 +86,13 @@ SERVICE_PROVIDER_SETTINGS = (
     "on the model server this GAIA host uses (LEMONADE_BASE_URL)"
 )
 
+#: What to do about a cloud model the provider answers 404 for. A terminal run
+#: picks its model on the command line, so it gets no app screens.
+TUI_CLOUD_MODEL_CHOICE_HINT = (
+    f"Choose a deployed model or router {TUI_PROVIDER_SETTINGS}."
+)
+CLI_CLOUD_MODEL_CHOICE_HINT = "Choose a deployed model or router with --model."
+
 #: What to do when GAIA's own model server stopped and did not come back. The
 #: next request asks the daemon to start it again, on every front-end.
 TUI_SERVER_RESTART_HINT = (
@@ -239,6 +246,7 @@ _SWAPS = {
     "cli": (
         (TUI_MODEL_SWITCH_HINT, CLI_MODEL_SWITCH_HINT),
         (TUI_PROVIDER_AUTH_HINT, CLI_PROVIDER_AUTH_HINT),
+        (TUI_CLOUD_MODEL_CHOICE_HINT, CLI_CLOUD_MODEL_CHOICE_HINT),
         (TUI_PROVIDER_SETTINGS, CLI_PROVIDER_SETTINGS),
         (TUI_SETUP_HINT, CLI_SETUP_HINT),
         (TUI_GATEWAY_KEY_HINT, CLI_GATEWAY_KEY_HINT),

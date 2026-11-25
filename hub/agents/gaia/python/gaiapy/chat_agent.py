@@ -117,6 +117,7 @@ from gaia.agents.base.verification import (
     NOT_EXECUTED,
     OUT_OF_TIME,
     TIME_LIMIT_CUT_RUN,
+    TIME_LIMIT_NO_LONGER_RUN,
     time_capped,
 )
 from gaia.agents.install_hints import missing_package_hint
@@ -509,8 +510,10 @@ def _stopped_run_result(agent: Any, job: Any, timeout: int) -> Dict[str, Any]:
     room = time_capped(agent, MAX_PYTHON_TIMEOUT)
     if room >= MAX_PYTHON_TIMEOUT:
         return stopped_job_result(job, timeout)
-    if room <= timeout:
+    if room == 0:
         return stopped_job_result(job, timeout, advice=TIME_LIMIT_CUT_RUN)
+    if room <= timeout:
+        return stopped_job_result(job, timeout, advice=TIME_LIMIT_NO_LONGER_RUN)
     return stopped_job_result(
         job,
         timeout,

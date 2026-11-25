@@ -90,6 +90,7 @@ from gaia.llm.stream_watchdog import (
 )
 from gaia.llm.surface_hints import (
     APP_RESTART_HINT,
+    TUI_CLOUD_MODEL_CHOICE_HINT,
     TUI_PROVIDER_AUTH_HINT,
     TUI_PROVIDER_SETTINGS,
     TUI_SETUP_HINT,
@@ -4524,8 +4525,8 @@ def _cloud_request_error(
     if status == 404:
         return CloudModelUnavailableError(
             "The selected cloud model is unavailable (HTTP 404). It may need "
-            "deployment or access for your account. Choose a deployed model "
-            f"or router {TUI_PROVIDER_SETTINGS}.",
+            "deployment or access for your account. "
+            f"{TUI_CLOUD_MODEL_CHOICE_HINT}",
             model_id=model,
             provider=provider,
         )

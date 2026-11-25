@@ -202,7 +202,7 @@ test("a restart that finds no backend program fails as one no retry can fix", as
     `${topLevelFunction("function missingBackendMessage(")}
 ${topLevelFunction("async function restartBackend(")}
 restartBackend`,
-    { backendInstaller: { BUNDLED_GAIA_BIN: "/opt/gaia/core/gaia", GAIA_BIN: "/home/you/.gaia/venv/bin/gaia" }, backendStarting: null }
+    { backendInstaller: { BUNDLED_GAIA_BIN: "/opt/gaia/core/gaia", GAIA_BIN: "/home/you/.gaia/venv/bin/gaia" }, backendStarting: null, backendProcess: null }
   );
   context.startBackend = () => Promise.resolve(null);
   const err = await restartBackend().catch((e) => e);
@@ -215,6 +215,27 @@ test("with no quit under way, a restart adopts the new backend", async () => {
   await expect(h.restartBackend()).resolves.toEqual({ port: 4300 });
   expect(h.context.backendProcess).toBe(h.child);
   expect(h.portManager.killBackend).not.toHaveBeenCalled();
+});
+
+test("a restart stops the live backend first, so a hung one is not left running beside the new one", async () => {
+  const h = restartHarness({ quitWhileSpawning: () => {} });
+  const hung = { pid: 9999, exitCode: null, signalCode: null };
+  h.context.backendProcess = hung;
+  await expect(h.restartBackend()).resolves.toEqual({ port: 4300 });
+  expect(h.portManager.killBackend).toHaveBeenCalledWith(hung);
+  expect(h.portManager.killBackend).toHaveBeenCalledTimes(1);
+  expect(h.context.backendProcess).toBe(h.child);
+});
+
+test("a slow first launch is never stopped at the startup timeout", () => {
+  const from = main.indexOf("backendReady = await waitForBackend(STARTUP_TIMEOUT);");
+  const startup = main.slice(from, main.indexOf("if (showingInstallScreen)", from));
+  expect(from).toBeGreaterThan(-1);
+  // The hung case is covered by Restart GAIA; a slow but healthy backend keeps
+  // its chance to answer late and clear the rollback offer.
+  expect(startup).not.toMatch(/killBackend/);
+  expect(startup).toMatch(/waitForBackend\(STARTUP_TIMEOUT \* 10\)\.then\(\(ready\) => \{\s*if \(ready\) autoUpdater\.clearStartFailure\(\);/);
+  expect(main).toMatch(/if \(state\.status === "running"\) autoUpdater\.clearStartFailure\(\);/);
 });
 
 test("a crashed window is offered a reload; GAIA keeps running", () => {

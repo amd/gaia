@@ -34,7 +34,7 @@ describe("external links go through the scheme allow-list", () => {
     const handler = MAIN.slice(start, MAIN.indexOf("});", start));
     expect(handler.indexOf("isAllowedExternalUrl(url)")).toBeGreaterThan(-1);
     expect(handler.indexOf("isAllowedExternalUrl(url)")).toBeLessThan(
-      handler.indexOf("shell.openExternal(url)")
+      handler.indexOf("openExternalSafely(shell, url")
     );
     expect(handler).toContain('return { action: "deny" }');
   });
@@ -45,7 +45,7 @@ describe("external links go through the scheme allow-list", () => {
     const handler = MAIN.slice(start, MAIN.indexOf("\n  });", start));
     expect(handler).toContain("event.preventDefault()");
     expect(handler.indexOf("isAllowedExternalUrl(url)")).toBeLessThan(
-      handler.indexOf("shell.openExternal(url)")
+      handler.indexOf("openExternalSafely(shell, url")
     );
   });
 
