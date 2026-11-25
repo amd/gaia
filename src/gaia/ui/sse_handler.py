@@ -52,7 +52,7 @@ from gaia.ui.event_narration import (
     derive_narration,
     format_count,
     grant_phrase,
-    is_sensitive_memory_args,
+    is_private_memory_write,
     sanitize_memory_args,
     sanitize_memory_result,
     tool_phrase,
@@ -1045,10 +1045,9 @@ class SSEOutputHandler(OutputHandler):
                     data,
                 )
                 data = {}
-            self._last_tool_sensitive = self._last_tool_name in (
-                "remember",
-                "update_memory",
-            ) and is_sensitive_memory_args(data)
+            self._last_tool_sensitive = is_private_memory_write(
+                self._last_tool_name, data
+            )
             safe_args = sanitize_memory_args(self._last_tool_name, data)
             # A call with no arguments keeps the tool_start label, not a blank.
             detail = (

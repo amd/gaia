@@ -10,6 +10,8 @@ fix: ``tool_call.narration`` says what the agent is doing, ``tool_result.preview
 says how it went, and the harness bookkeeping only reaches a debug channel.
 """
 
+import json
+
 import pytest
 
 from gaia.agents.base.agent import Agent
@@ -76,8 +78,43 @@ class TestDeriveNarration:
                 {
                     "knowledge_id": "6f5bbb83-39c9-4a2b-9b50-0c0260616bd2",
                     "content": "User's name is Alex",
+                    "sensitive": "false",
                 },
                 "Updating memory: User's name is Alex",
+            ),
+            # An edit that doesn't say "public" may be editing a private entry.
+            (
+                "update_memory",
+                {
+                    "knowledge_id": "6f5bbb83-39c9-4a2b-9b50-0c0260616bd2",
+                    "content": "User's name is Alex",
+                },
+                "Updating memory",
+            ),
+            # A secret the tool refuses never reaches the activity row.
+            (
+                "remember",
+                {"fact": "my github token is ghp_" + "a" * 36},
+                "Saving to memory",
+            ),
+            (
+                "remember",
+                {"fact": "my wifi password is Tr0ub4dor&3"},
+                "Saving to memory",
+            ),
+            (
+                "update_memory",
+                {
+                    "knowledge_id": "6f5bbb83-39c9-4a2b-9b50-0c0260616bd2",
+                    "content": "api key: sk-" + "b" * 40,
+                    "sensitive": "false",
+                },
+                "Updating memory",
+            ),
+            (
+                "remember",
+                {"fact": "Router admin page is 192.168.1.1"},
+                "Saving to memory: Router admin page is 192.168.1.1",
             ),
             (
                 "update_memory",
@@ -951,3 +988,50 @@ def test_sse_handler_masks_sensitive_memory_in_args_and_result():
     assert args_ev["args"]["fact"] == "[private]"
     assert secret_text not in args_ev["detail"]
     assert secret_text not in result_ev["summary"]
+
+
+@pytest.mark.parametrize(
+    "secret",
+    ["ghp_" + "c" * 36, "Tr0ub4dor&3"],
+)
+def test_refused_credential_never_reaches_memory_events(secret):
+    from gaia.ui.sidecar import relay
+    from gaia.ui.sidecar.profiles import GAIA_PROFILE
+
+    fact = f"my password is {secret}"
+    refusal = {"status": "skipped", "message": "Not stored - looks like a credential."}
+
+    handler = SSEOutputHandler()
+    handler.print_tool_usage("remember")
+    handler.pretty_print_json({"fact": fact}, title="Arguments")
+    handler.pretty_print_json(refusal, title="Result")
+    handler.print_tool_complete()
+    in_process = _drain(handler)
+
+    handler = SSEOutputHandler()
+    for event in (
+        {
+            "type": "tool_call",
+            "tool": "remember",
+            "args": {"fact": fact},
+            "narration": f"Saving to memory: {fact}",
+        },
+        {"type": "tool_result", "tool": "remember", "data": refusal},
+    ):
+        relay._dispatch_one(handler, event, GAIA_PROFILE)
+    relayed = _drain(handler)
+
+    for events in (in_process, relayed):
+        assert events and secret not in json.dumps(events, default=str)
+
+
+def test_public_memory_update_still_shows_its_content_in_args():
+    handler = SSEOutputHandler()
+    handler.print_tool_usage("update_memory")
+    handler.pretty_print_json(
+        {"knowledge_id": "k1", "content": "Prefers tea", "sensitive": "false"},
+        title="Arguments",
+    )
+    args_ev = [e for e in _drain(handler) if e["type"] == "tool_args"][0]
+    assert args_ev["args"]["content"] == "Prefers tea"
+    assert args_ev["narration"] == "Updating memory: Prefers tea"

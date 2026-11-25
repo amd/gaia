@@ -52,7 +52,7 @@ from gaia.logger import get_logger
 from gaia.ui.event_narration import (
     MEMORY_WRITE_TOOLS,
     derive_narration,
-    is_sensitive_memory_args,
+    is_private_memory_write,
     sanitize_memory_args,
     sanitize_memory_result,
 )
@@ -424,10 +424,7 @@ def _dispatch_one(
         # The turn summary and the heartbeat read this state, not the events.
         handler.record_tool_started(tool)
         args_dict = args if isinstance(args, dict) else {}
-        sensitive_memory = tool in (
-            "remember",
-            "update_memory",
-        ) and is_sensitive_memory_args(args_dict)
+        sensitive_memory = is_private_memory_write(tool, args_dict)
         handler.relay_sensitive_memory = sensitive_memory
         safe_args = (
             sanitize_memory_args(tool, args_dict) if isinstance(args, dict) else args

@@ -265,9 +265,41 @@ def is_sensitive_memory_args(args: Optional[Mapping[str, Any]]) -> bool:
     return False
 
 
+def _looks_like_credential(text: str) -> bool:
+    # The same check remember/update_memory use to refuse a secret.
+    from gaia.agents.base.memory import MemoryMixin
+
+    return MemoryMixin._looks_like_credential(text)
+
+
+def is_private_memory_write(
+    tool: Optional[str], args: Optional[Mapping[str, Any]]
+) -> bool:
+    """Return True when a memory write's text must stay off the activity row.
+
+    That is a private entry, a credential the tool refuses, or an
+    update_memory that doesn't say the entry is public: an edit keeps the
+    stored entry's privacy, which the UI can't see from here.
+    """
+    if tool not in ("remember", "update_memory") or not isinstance(args, Mapping):
+        return False
+    if is_sensitive_memory_args(args):
+        return True
+    texts = [args.get(key) for key in ("fact", "content")]
+    if any(isinstance(t, str) and t and _looks_like_credential(t) for t in texts):
+        return True
+    if tool == "update_memory":
+        return str(args.get("sensitive", "")).strip().lower() not in (
+            "false",
+            "0",
+            "no",
+        )
+    return False
+
+
 def sanitize_memory_args(tool: Optional[str], args: Dict[str, Any]) -> Dict[str, Any]:
     """Mask private memory text before args enter UI events or turn logs."""
-    if tool not in ("remember", "update_memory") or not is_sensitive_memory_args(args):
+    if not is_private_memory_write(tool, args):
         return args
     masked = dict(args)
     for key in ("fact", "content"):
@@ -401,7 +433,7 @@ def derive_narration(tool: str, args: Optional[Mapping[str, Any]] = None) -> str
     if audio is not None:
         return audio
 
-    if name in ("remember", "update_memory") and is_sensitive_memory_args(args):
+    if is_private_memory_write(name, args):
         detail = None
     else:
         detail = _salient_arg(args)
@@ -597,6 +629,7 @@ __all__ = [
     "derive_preview",
     "format_count",
     "grant_phrase",
+    "is_private_memory_write",
     "is_sensitive_memory_args",
     "sanitize_memory_args",
     "sanitize_memory_result",
