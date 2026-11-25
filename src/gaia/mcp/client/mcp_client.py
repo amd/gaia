@@ -523,6 +523,13 @@ class MCPClient:
             return self.transport.redact_value(value)
         return value
 
+    def _offsite_blocked(self) -> Optional[str]:
+        """Why Local only refuses this server, or ``None`` when it may run."""
+        # Lazy: the MCP client must not pull in the connectors package at import.
+        from gaia.connectors.offsite import offsite_server_blocked_message
+
+        return offsite_server_blocked_message(self.name)
+
     def connect(self) -> bool:
         """Connect to the MCP server and initialize.
 
@@ -550,6 +557,11 @@ class MCPClient:
 
     def _connect_once(self) -> bool:
         self.last_error = None
+        blocked = self._offsite_blocked()
+        if blocked:
+            self.last_error = blocked
+            logger.debug(blocked)
+            return False
         logger.debug(f"Connecting to MCP server '{self.name}'...")
 
         try:
@@ -732,6 +744,13 @@ class MCPClient:
         """
         if not self.is_connected():
             raise RuntimeError(f"Not connected to MCP server '{self.name}'")
+
+        blocked = self._offsite_blocked()
+        if blocked:
+            logger.warning(
+                "Refusing MCP tool %s on '%s': %s", tool_name, self.name, blocked
+            )
+            return {"error": blocked}
 
         logger.debug(f"Invoking MCP tool: {tool_name} from server '{self.name}'")
 

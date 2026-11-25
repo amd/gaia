@@ -68,6 +68,7 @@ _TAVILY = ConnectorSpec(
     mcp_env_keys=("TAVILY_API_KEY",),
     provides=(WEB_SEARCH,),
     web_search_tool="tavily_search",
+    sends_data_offsite=True,
     config_schema=(
         ConfigField(
             key="TAVILY_API_KEY",
@@ -263,6 +264,7 @@ _BRAVE_SEARCH = ConnectorSpec(
     mcp_env_keys=("BRAVE_API_KEY",),
     provides=(WEB_SEARCH,),
     web_search_tool="brave_web_search",
+    sends_data_offsite=True,
     config_schema=(
         ConfigField(
             key="BRAVE_API_KEY",
@@ -273,6 +275,22 @@ _BRAVE_SEARCH = ConnectorSpec(
             secret=True,
         ),
     ),
+)
+
+_KEENABLE = ConnectorSpec(
+    id="mcp-keenable",
+    display_name="Keenable",
+    icon="🔍",
+    category="search",
+    tier=2,
+    type="mcp_server",
+    description="Web search and page fetch through Keenable's hosted service. No API key.",
+    docs_url="https://amd-gaia.ai/docs/connectors/keenable",
+    mcp_command="npx",
+    mcp_args=("-y", "@keenable/mcp@0.1.1"),
+    provides=(WEB_SEARCH,),
+    web_search_tool="search_web_pages",
+    sends_data_offsite=True,
 )
 
 # ---------------------------------------------------------------------------
@@ -288,6 +306,7 @@ _ALL_SPECS = (
     _DISCORD,
     _NOTION,
     _BRAVE_SEARCH,
+    _KEENABLE,
 )
 
 for _spec in _ALL_SPECS:

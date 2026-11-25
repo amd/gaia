@@ -1067,6 +1067,10 @@ def activate(
     See ``docs/sdk/infrastructure/connectors.mdx`` for the two-axis model.
     """
     _require_mcp_server_for_activation(connector_id)
+    from gaia.connectors.offsite import refuse_offsite_connector
+    from gaia.connectors.registry import REGISTRY
+
+    refuse_offsite_connector(REGISTRY.get(connector_id))
     existing_scopes = list_agent_grants(connector_id).get(agent_id)
     auto_granted = False
     if existing_scopes is None:

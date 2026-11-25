@@ -33,7 +33,11 @@ from typing import Any, Callable, Dict, Iterable, List, Optional
 from gaia.config import mcp_servers_path
 from gaia.connectors import keyring_access
 from gaia.connectors._keyring import keyring  # actionable error if missing (#1621)
-from gaia.connectors.errors import ConnectorsError, InvalidConfigValueError
+from gaia.connectors.errors import (
+    ConfigurationError,
+    ConnectorsError,
+    InvalidConfigValueError,
+)
 from gaia.connectors.handler import register_handler
 from gaia.connectors.spec import ConnectorSpec
 from gaia.connectors.store import SERVICE_NAME
@@ -276,6 +280,9 @@ class McpServerHandler:
         Resolves every key in ``spec.mcp_env_keys`` from the keyring.
         Raises ``ConnectorsError`` if any key is missing (fail-closed).
         """
+        from gaia.connectors.offsite import refuse_offsite_connector
+
+        refuse_offsite_connector(spec)
         env: Dict[str, str] = {}
         missing: List[str] = []
         for env_key in spec.mcp_env_keys:
@@ -313,6 +320,9 @@ class McpServerHandler:
         After writing, calls the reload callback (if registered) so running
         agents pick up new tools without restart.
         """
+        from gaia.connectors.offsite import refuse_offsite_connector
+
+        refuse_offsite_connector(spec)
         # Validate all required env keys are supplied.
         missing_keys = [k for k in spec.mcp_env_keys if k not in config]
         if missing_keys:
@@ -417,6 +427,12 @@ class McpServerHandler:
                 f"Settings → Connectors or `gaia connectors configure {connector_id}`."
             )
 
+        if enabled:
+            from gaia.connectors.offsite import offsite_server_blocked_message
+
+            blocked = offsite_server_blocked_message(connector_id)
+            if blocked:
+                raise ConfigurationError(blocked)
         servers[connector_id]["disabled"] = not enabled
         _write_mcp_servers_json(servers)
 
