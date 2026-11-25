@@ -935,6 +935,56 @@ class TestStatus:
         assert manager.stop() is False
 
 
+class TestIdentify:
+    """Whether a recorded pid is GAIA's own lemond, judged by the real binary."""
+
+    def _proc(self, monkeypatch, exe, argv, key="k"):
+        import psutil
+
+        class Proc:
+            def __init__(self, pid):
+                self.pid = pid
+
+            def exe(self):
+                return exe
+
+            def cmdline(self):
+                return argv
+
+            def environ(self):
+                return {"LEMONADE_API_KEY": key}
+
+        monkeypatch.setattr(psutil, "Process", Proc)
+
+    def test_owns_its_server_launched_through_a_path_that_moved_since(
+        self, manager, monkeypatch, tmp_path
+    ):
+        # GAIA_HOME was a symlink when lemond started; argv[0] kept that path
+        # after the link became a plain folder, but the binary is still ours.
+        real = str(manager.dist_dir / "lemond")
+        stale = str(tmp_path / "old-home" / "lemonade" / "dist" / "v" / "lemond")
+        self._proc(monkeypatch, real, [stale, "--port", "4321"])
+        assert manager._identify(1, 4321, "k") == OWN
+
+    def test_argv0_naming_gaias_dist_does_not_make_another_binary_ours(
+        self, manager, monkeypatch, tmp_path
+    ):
+        claimed = str(manager.dist_dir / "lemond")
+        self._proc(
+            monkeypatch,
+            str(tmp_path / "elsewhere" / "lemond"),
+            [claimed, "--port", "4321"],
+        )
+        assert manager._identify(1, 4321, "k") == "other"
+
+    def test_its_binary_on_another_port_is_not_the_recorded_server(
+        self, manager, monkeypatch
+    ):
+        real = str(manager.dist_dir / "lemond")
+        self._proc(monkeypatch, real, [real, "--port", "9999"])
+        assert manager._identify(1, 4321, "k") == "other"
+
+
 class TestUninstall:
     """Removing the private runtime must be complete and process-safe."""
 
