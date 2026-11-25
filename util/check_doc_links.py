@@ -176,7 +176,7 @@ def is_internal_link(url: str) -> bool:
 
 
 def check_internal_link(
-    url: str, source_file: Path, repo_root: Path, docs_json_pages: Set[str]
+    url: str, source_file: Path, repo_root: Path
 ) -> Tuple[str, str]:
     """
     Check an internal documentation cross-reference.
@@ -449,38 +449,6 @@ def check_external_link_with_retries(
     return status, detail
 
 
-def load_docs_json_pages(repo_root: str) -> Set[str]:
-    """Load page paths from docs.json for internal link validation."""
-    docs_json = Path(repo_root) / "docs" / "docs.json"
-    pages = set()
-    if not docs_json.exists():
-        return pages
-    try:
-        data = json.loads(docs_json.read_text(encoding="utf-8"))
-    except json.JSONDecodeError as e:
-        raise SystemExit(
-            f"{docs_json} is not valid JSON ({e}), so no page could be checked. "
-            "Fix the file and run the link check again."
-        ) from e
-    _collect_pages(data, pages)
-    return pages
-
-
-def _collect_pages(obj, pages: Set[str]):
-    """Recursively collect page paths from docs.json structure."""
-    if isinstance(obj, str):
-        pages.add(obj)
-    elif isinstance(obj, list):
-        for item in obj:
-            _collect_pages(item, pages)
-    elif isinstance(obj, dict):
-        if "pages" in obj:
-            _collect_pages(obj["pages"], pages)
-        for key in ("group", "page"):
-            if key in obj and isinstance(obj[key], str):
-                pages.add(obj[key])
-
-
 def check_links(
     repo_root: str,
     internal_only: bool = False,
@@ -491,7 +459,6 @@ def check_links(
     """Check all documentation links and return results."""
     root = Path(repo_root)
     files = find_doc_files(repo_root)
-    docs_json_pages = load_docs_json_pages(repo_root)
     results: List[LinkResult] = []
 
     # Collect all links
@@ -521,7 +488,7 @@ def check_links(
     # Check internal links (fast, no network)
     for filepath, line_num, url in internal_links:
         rel = filepath.relative_to(root)
-        status, detail = check_internal_link(url, filepath, root, docs_json_pages)
+        status, detail = check_internal_link(url, filepath, root)
         results.append(LinkResult(str(rel), line_num, url, status, detail))
 
     # Check external links (parallel with rate limiting)
