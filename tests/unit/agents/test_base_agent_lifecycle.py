@@ -603,3 +603,78 @@ def test_a_cancel_event_a_subclass_set_before_init_is_kept():
 
 def test_cancel_event_reads_none_on_an_agent_built_without_init():
     assert _PlainAgent.__new__(_PlainAgent).cancel_event is None
+
+
+# ---------------------------------------------------------------------------
+# A host runs turns on worker threads
+# ---------------------------------------------------------------------------
+
+
+def _on_a_thread(work):
+    import threading
+
+    box = {}
+
+    def run():
+        try:
+            box["value"] = work()
+        except BaseException as e:  # noqa: BLE001 - re-raised on the caller
+            box["error"] = e
+
+    thread = threading.Thread(target=run)
+    thread.start()
+    thread.join()
+    if "error" in box:
+        raise box["error"]
+    return box.get("value")
+
+
+def test_turns_run_on_threads_other_than_the_one_that_opened_the_history(tmp_path):
+    agent = _agent(["Paris.", "About 2.1 million."])
+    agent.start_session_history(tmp_path / "chat.sqlite3")
+
+    _on_a_thread(lambda: agent.process_query("Capital of France?"))
+    _on_a_thread(lambda: agent.process_query("Its population?"))
+
+    assert "Capital of France?" in str(agent.sent.call_args_list[1])
+    assert len(agent.conversation_history.turns(agent)) == 2
+    _on_a_thread(agent.close)
+
+
+def test_many_agents_record_their_own_conversations_at_once():
+    import threading
+
+    agents = [_agent([f"answer {i}"]) for i in range(8)]
+    for agent in agents:
+        agent.start_session_history()
+    threads = [
+        threading.Thread(target=agent.process_query, args=(f"question {i}",))
+        for i, agent in enumerate(agents)
+    ]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+
+    for i, agent in enumerate(agents):
+        (turn,) = agent.conversation_history.turns(agent)
+        assert turn[0]["content"] == f"question {i}"
+        assert turn[-1]["content"] == f"answer {i}"
+
+
+def test_a_history_path_that_cannot_be_opened_says_which_and_why(tmp_path):
+    agent = _agent()
+
+    with pytest.raises(RuntimeError, match="Could not open a session history at"):
+        agent.start_session_history(tmp_path)  # a folder, not a file
+
+    assert agent.conversation_history == []
+
+
+def test_a_file_that_is_not_a_history_is_refused(tmp_path):
+    path = tmp_path / "notes.txt"
+    path.write_text("these are not the rows you are looking for " * 50)
+    agent = _agent()
+
+    with pytest.raises(RuntimeError, match="Could not open a session history at"):
+        agent.start_session_history(path)

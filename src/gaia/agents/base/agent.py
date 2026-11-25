@@ -13490,12 +13490,20 @@ Do NOT wrap conversational replies in JSON.
         earlier turns drop out of the model's view than before, so a host can
         tell the user. The file still holds every turn.
 
-        Not re-entrant: a tool must not call ``process_query`` on the agent
-        that is running it.
+        Turns may run on any thread, one at a time: a tool must not call
+        ``process_query`` on the agent that is running it.
         """
+        import sqlite3
+
         from gaia.agents.base.history import SessionHistory
 
-        history = SessionHistory(path)
+        try:
+            history = SessionHistory(path)
+        except (sqlite3.Error, OSError) as e:
+            raise RuntimeError(
+                f"Could not open a session history at {path}: {e}. Pass a file "
+                "path in a folder you can write to, or None to keep it in memory."
+            ) from e
         previous = getattr(self, "_owned_history", None)
         self._owned_history = history
         self._history_closed = False

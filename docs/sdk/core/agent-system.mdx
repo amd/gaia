@@ -986,7 +986,8 @@ Pass `on_cut=callback` to hear when older turns no longer fit the model's
 window: the callback gets a `HistoryCut(turns, tokens)`, so your app can tell
 the user. The file keeps every turn either way.
 
-Use one agent per conversation so they never mix. Passing the same path to a
+Use one agent per conversation so they never mix. A host can run turns on any
+thread, one turn at a time per agent. Passing the same path to a
 new agent resumes that conversation. The file holds tool output, including
 local file contents; delete it to remove the conversation. A host that manages
 history itself can still assign `agent.conversation_history` directly. The agent
