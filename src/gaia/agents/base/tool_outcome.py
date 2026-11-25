@@ -21,6 +21,29 @@ ERROR_STATUSES: Tuple[str, ...] = ("error",)
 #: Statuses where the tool did not do its job, refusals included.
 FAILED_STATUSES: Tuple[str, ...] = ("error", "denied")
 
+#: Status of a call that ran and said no. Not a failure: the loop passes the
+#: result to the model as an ordinary answer, with no error-recovery prompt.
+REFUSED_STATUS = "refused"
+
+
+def tool_refusal(message: str, **fields: Any) -> Dict[str, Any]:
+    """The result of a tool that ran and declined, for the model to relay.
+
+    Use it when "no" is the correct outcome of the call: a business rule, a
+    record the caller may not see. Unlike ``{"error": ...}``, it starts no
+    error recovery and does not count as a failed call.
+    """
+    if not isinstance(message, str) or not message.strip():
+        raise ValueError("tool_refusal() needs the reason as a non-empty string.")
+    clash = {"status", "error"} & set(fields)
+    if clash:
+        raise ValueError(
+            f"tool_refusal() sets {sorted(clash)} itself; an 'error' field would "
+            "turn the refusal back into a failed call."
+        )
+    return {"status": REFUSED_STATUS, "message": message, **fields}
+
+
 # Only the envelope tools build: "Error: ..." or "Error reading file: ...".
 # Anchored and case-sensitive so prose that mentions an error never matches.
 _PLAIN_ERROR_RE = re.compile(r"\AError(?::| [a-z]+ing [^\n:]{1,80}:)\s")
