@@ -12520,12 +12520,31 @@ Do NOT wrap conversational replies in JSON.
         self, input_tokens: int, cached_tokens: int, output_tokens: int
     ) -> Optional[float]:
         """This turn's tokens at the model's list price; None when it has none."""
-        model = getattr(getattr(self, "chat", None), "effective_model", None)
+        model = self._priced_model()
+        if model is None:
+            return None
+        return _list_price(model, input_tokens, cached_tokens, output_tokens)
+
+    def _priced_model(self) -> Optional[str]:
+        """The model id when GAIA carries its provider's list prices, else None.
+
+        The rate card is Fireworks' own, so the same model name served by
+        another provider must not be given its price.
+        """
+        from gaia.llm.lemonade_client import cloud_model_provider
+
+        chat = getattr(self, "chat", None)
+        model = getattr(chat, "effective_model", None)
         if not isinstance(model, str) or not model:
             model = getattr(self, "model_id", None)
         if not isinstance(model, str) or not model:
             return None
-        return _list_price(model, input_tokens, cached_tokens, output_tokens)
+        client_provider = getattr(
+            getattr(chat, "llm_client", None), "provider_name", None
+        )
+        if cloud_model_provider(model) == "fireworks" or client_provider == "fireworks":
+            return model
+        return None
 
     def _request_text(self, query: Optional[str]) -> str:
         """The user's own words this turn, without the memory context prepended.

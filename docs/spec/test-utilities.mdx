@@ -7,9 +7,9 @@ title: "Test Utilities"
 </Info>
 
 <Note>
-**Component:** Test Utilities (MockLLMProvider, MockVLMClient, fixtures)
+**Component:** Test Utilities (ScriptedLLMClient, MockVLMClient, fixtures)
 **Module:** `gaia.testing`
-**Import:** `from gaia.testing import MockLLMProvider, MockVLMClient, create_test_agent, temp_db`
+**Import:** `from gaia.testing import ScriptedLLMClient, MockVLMClient, create_test_agent, temp_db`
 </Note>
 ---
 
@@ -496,7 +496,9 @@ def test_create_test_agent():
 
     assert agent is not None
     assert isinstance(agent, TestAgent)
-    # Should have mocked LLM (verify based on implementation)
+    # The scripted model sits where the real client would
+    assert agent.chat.llm_client is agent._mock_llm
+    assert agent.process_query("hi")["result"] == "Response from mock"
 ```
 
 ---
