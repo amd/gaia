@@ -159,25 +159,6 @@ class TestScanPrefixIsAFolderBoundary:
         assert stats["files_removed"] == 0
         assert index.query_files(name="b")
 
-    def test_directory_stats_count_only_the_folder_itself(self, tmp_path, index):
-        docs = tmp_path / "docs"
-        docs2 = tmp_path / "docs2"
-        docs.mkdir()
-        docs2.mkdir()
-        (docs / "a.txt").write_text("a")
-        (docs2 / "b.txt").write_text("b")
-        (docs2 / "c.txt").write_text("c")
-
-        index.scan_directory(str(docs2))
-        index.scan_directory(str(docs), incremental=False)
-
-        row = index.query(
-            "SELECT file_count FROM directory_stats WHERE path = :path",
-            {"path": str(docs.resolve())},
-            one=True,
-        )
-        assert row["file_count"] == 1
-
     def test_an_underscore_in_the_folder_is_not_a_wildcard(self, tmp_path, index):
         mine = tmp_path / "my_docs"
         other = tmp_path / "myXdocs"

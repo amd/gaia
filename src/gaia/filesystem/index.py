@@ -92,16 +92,6 @@ CREATE TRIGGER IF NOT EXISTS files_au AFTER UPDATE ON files BEGIN
         VALUES (new.id, new.name, new.path, new.extension);
 END;
 
-CREATE TABLE IF NOT EXISTS directory_stats (
-    path TEXT PRIMARY KEY,
-    total_size INTEGER,
-    file_count INTEGER,
-    dir_count INTEGER,
-    deepest_depth INTEGER,
-    common_extensions TEXT,
-    last_scanned TIMESTAMP
-);
-
 CREATE TABLE IF NOT EXISTS bookmarks (
     id INTEGER PRIMARY KEY,
     path TEXT NOT NULL UNIQUE,
@@ -448,9 +438,6 @@ class FileSystemIndexService(DatabaseMixin):
         elapsed_ms = int((time.monotonic() - t0) * 1000)
         stats["duration_ms"] = elapsed_ms
 
-        # Update directory_stats for the root
-        self._update_directory_stats(root_str)
-
         # Log the scan
         completed_at = _now_iso()
         self.insert(
@@ -665,72 +652,6 @@ class FileSystemIndexService(DatabaseMixin):
         for p in paths:
             removed += self.delete("files", "path = :path", {"path": p})
         return removed
-
-    def _update_directory_stats(self, root_path: str) -> None:
-        """Compute and cache directory statistics for *root_path*."""
-        rows = self.query(
-            "SELECT size, extension, depth, is_directory FROM files "
-            "WHERE path = :root OR substr(path, 1, :prefix_len) = :prefix",
-            _under_root_params(root_path),
-        )
-
-        total_size = 0
-        file_count = 0
-        dir_count = 0
-        deepest_depth = 0
-        ext_counter: Dict[str, int] = {}
-
-        for r in rows:
-            if r["is_directory"]:
-                dir_count += 1
-            else:
-                file_count += 1
-                total_size += r["size"] or 0
-            depth = r["depth"] or 0
-            if depth > deepest_depth:
-                deepest_depth = depth
-            ext = r["extension"]
-            if ext:
-                ext_counter[ext] = ext_counter.get(ext, 0) + 1
-
-        # Top 10 most common extensions
-        sorted_exts = sorted(ext_counter.items(), key=lambda x: x[1], reverse=True)
-        common_extensions = ",".join(e for e, _ in sorted_exts[:10])
-
-        # Upsert into directory_stats
-        existing = self.query(
-            "SELECT path FROM directory_stats WHERE path = :path",
-            {"path": root_path},
-            one=True,
-        )
-        now = _now_iso()
-        if existing:
-            self.update(
-                "directory_stats",
-                {
-                    "total_size": total_size,
-                    "file_count": file_count,
-                    "dir_count": dir_count,
-                    "deepest_depth": deepest_depth,
-                    "common_extensions": common_extensions,
-                    "last_scanned": now,
-                },
-                "path = :path",
-                {"path": root_path},
-            )
-        else:
-            self.insert(
-                "directory_stats",
-                {
-                    "path": root_path,
-                    "total_size": total_size,
-                    "file_count": file_count,
-                    "dir_count": dir_count,
-                    "deepest_depth": deepest_depth,
-                    "common_extensions": common_extensions,
-                    "last_scanned": now,
-                },
-            )
 
     def _build_excludes(self, user_patterns: Optional[List[str]] = None) -> set:
         """Merge default and platform-specific excludes with user patterns."""

@@ -293,7 +293,6 @@ setup(
             "tiktoken>=0.7.0,<1.0.0",
         ],
         "eval": [
-            "bs4",
             "numpy>=2.0,<2.3.0",
             "pypdf>=6.21.0",
             "reportlab",

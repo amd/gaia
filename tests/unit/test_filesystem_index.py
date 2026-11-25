@@ -95,7 +95,6 @@ class TestInitialization:
             "files",
             "bookmarks",
             "scan_log",
-            "directory_stats",
             "file_categories",
         ]
         for table_name in expected_tables:
