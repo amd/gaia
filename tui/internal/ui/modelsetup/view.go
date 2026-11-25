@@ -605,7 +605,7 @@ func (m Model) noteLines(w int) []string {
 	width := w - indent - indentW
 	var out []string
 	add := func(s lipgloss.Style, text string) {
-		for _, l := range wrap(text, width) {
+		for _, l := range textutil.Wrap(text, width) {
 			out = append(out, strings.Repeat(" ", indent)+s.Render(l))
 		}
 	}
@@ -994,7 +994,7 @@ func (m Model) guideView(w int) (body, foot []string) {
 	}
 	for i, step := range m.gpu.GuidedSteps {
 		prefix := fmt.Sprintf("%d. ", i+1)
-		lines := wrap(step, width-len(prefix))
+		lines := textutil.Wrap(step, width-len(prefix))
 		for j, l := range lines {
 			if j == 0 {
 				body = append(body, components.Pad(textStyle.Render(prefix+l)))
@@ -1295,7 +1295,7 @@ func (m Model) progressNote(r setupapi.ModelProgress, width int) []string {
 	indent := 8
 	var lines []string
 	add := func(s lipgloss.Style, text string) {
-		for _, l := range wrap(text, width-indent+indentW) {
+		for _, l := range textutil.Wrap(text, width-indent+indentW) {
 			lines = append(lines, strings.Repeat(" ", indent)+s.Render(l))
 		}
 	}
@@ -1792,53 +1792,11 @@ func (m Model) busyText() string {
 }
 
 func wrapStyled(s lipgloss.Style, text string, w int) []string {
-	lines := wrap(text, w)
+	lines := textutil.Wrap(text, w)
 	for i, l := range lines {
 		lines[i] = s.Render(l)
 	}
 	return lines
-}
-
-// wrap breaks text on word boundaries into lines of at most w columns.
-func wrap(s string, w int) []string {
-	if w < 8 {
-		w = 8
-	}
-	var out []string
-	for _, para := range strings.Split(s, "\n") {
-		line := ""
-		for _, word := range strings.Fields(para) {
-			for lipgloss.Width(word) > w {
-				if line != "" {
-					out = append(out, line)
-					line = ""
-				}
-				runes := []rune(word)
-				cut := len(runes)
-				for cut > 0 && lipgloss.Width(string(runes[:cut])) > w {
-					cut--
-				}
-				out = append(out, string(runes[:cut]))
-				word = string(runes[cut:])
-			}
-			switch {
-			case line == "":
-				line = word
-			case lipgloss.Width(line)+1+lipgloss.Width(word) <= w:
-				line += " " + word
-			default:
-				out = append(out, line)
-				line = word
-			}
-		}
-		if line != "" {
-			out = append(out, line)
-		}
-	}
-	if len(out) == 0 {
-		return []string{""}
-	}
-	return out
 }
 
 // clip is the last pass of every frame: no line wider than the terminal and no
