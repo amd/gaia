@@ -7,6 +7,7 @@ import (
 
 	"github.com/charmbracelet/lipgloss"
 
+	"github.com/amd/gaia/tui/internal/textutil"
 	"github.com/amd/gaia/tui/internal/ui/components"
 	"github.com/amd/gaia/tui/internal/ui/theme"
 	"github.com/charmbracelet/x/ansi"
@@ -163,7 +164,7 @@ func (m Model) header(w int) string {
 	}
 	gap := w - 2*indentW - lipgloss.Width(left) - lipgloss.Width(right)
 	if gap < 1 {
-		return components.Pad(titleStyle.Render(truncate(left, w-2*indentW)))
+		return components.Pad(titleStyle.Render(textutil.Truncate(left, w-2*indentW)))
 	}
 	return components.Pad(titleStyle.Render(left) + strings.Repeat(" ", gap) + summaryStyle.Render(right))
 }
@@ -332,8 +333,8 @@ func (m Model) checklistLines(labelW, lineW, w int) (checklist, remedy []string,
 			line = "done"
 		}
 		marker := st.Render(fmt.Sprintf("%-*s", markerW-1, markerText)) + " "
-		label := labelStyle.Render(fmt.Sprintf("%-*s", labelW, truncate(row.Label, labelW)))
-		checklist = append(checklist, components.Pad(cursor+marker+label+bodyStyle.Render(truncate(line, lineW))))
+		label := labelStyle.Render(fmt.Sprintf("%-*s", labelW, textutil.Truncate(row.Label, labelW)))
+		checklist = append(checklist, components.Pad(cursor+marker+label+bodyStyle.Render(textutil.Truncate(line, lineW))))
 
 		if !focused || provisioning || row.State == StateOK || row.State == StatePending {
 			continue
@@ -369,7 +370,7 @@ func (m Model) trailerLines(w int) []string {
 		}
 		return []string{
 			"",
-			components.Pad(noteStyle.Render(truncate(m.spinPrefix()+m.progressLine(), w-2*indentW))),
+			components.Pad(noteStyle.Render(textutil.Truncate(m.spinPrefix()+m.progressLine(), w-2*indentW))),
 			components.Pad(dimStyle.Render(leaving)),
 		}
 	case m.HeldForReview() && m.rep.Ready():
@@ -391,7 +392,7 @@ func (m Model) trailerLines(w int) []string {
 		if m.rep.Chat != "" {
 			msg = "Starting " + m.cfg.AgentName + " — chat runs on " + m.rep.Chat + "…"
 		}
-		return []string{"", components.Pad(dimStyle.Render(truncate(msg, w-2*indentW)))}
+		return []string{"", components.Pad(dimStyle.Render(textutil.Truncate(msg, w-2*indentW)))}
 	}
 	return nil
 }
@@ -521,21 +522,6 @@ func (m Model) detailLines(w, budget int) []string {
 }
 
 // --- text helpers ----------------------------------------------------------
-
-// truncate cuts a plain (ANSI-free) string to w display columns.
-func truncate(s string, w int) string {
-	if w <= 0 {
-		return ""
-	}
-	if lipgloss.Width(s) <= w {
-		return s
-	}
-	runes := []rune(s)
-	for len(runes) > 0 && lipgloss.Width(string(runes))+1 > w {
-		runes = runes[:len(runes)-1]
-	}
-	return string(runes) + "…"
-}
 
 // truncateStyled cuts a string that may already carry ANSI styling. It only
 // drops whole segments, so it never leaves a half-written escape sequence.

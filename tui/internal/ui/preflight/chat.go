@@ -14,6 +14,7 @@ import (
 	"github.com/amd/gaia/tui/internal/gaiainit"
 	"github.com/amd/gaia/tui/internal/lemonade"
 	"github.com/amd/gaia/tui/internal/setupapi"
+	"github.com/amd/gaia/tui/internal/textutil"
 	"github.com/amd/gaia/tui/internal/ui/components"
 	"github.com/amd/gaia/tui/internal/ui/status"
 )
@@ -369,7 +370,7 @@ func (m Model) chooserLines(w, budget int) []string {
 		}
 		out := []string{
 			components.Pad(labelStyle.Render(title)),
-			components.Pad(dimStyle.Render(truncate("Change it any time: p on this screen, /provider in chat.", w-2*indentW))),
+			components.Pad(dimStyle.Render(textutil.Truncate("Change it any time: p on this screen, /provider in chat.", w-2*indentW))),
 		}
 		if tight == 0 {
 			out = append(out, "")
