@@ -679,13 +679,13 @@ _FORCED_SAVE_MAX_CHARS = 300
 #: ("..., maar niet opslaan"), so a fact with one is left to the model.
 _FACT = r"(?P<fact>[A-Za-z0-9 '\"/:%$.\-]+?)"
 #: The only messages GAIA saves on its own, the whole message and nothing more:
-#: "(Please) remember (that) X." / "(Please) keep in mind (that) X." and
+#: "(Please) remember (that) X." / "(Please) keep in mind (that) X.",
+#: "Remember this (for later): X." and
 #: "X. Please remember that." / "X. Please remember this."
 _FORCED_SAVE_SHAPES = (
     re.compile(
-        r"(?:please\s+)?(?:remember|keep\s+in\s+mind)(?:\s+that)?\s+"
-        + _FACT
-        + r"[.!]?",
+        r"(?:please\s+)?(?:remember|keep\s+in\s+mind)"
+        r"(?:\s+that|\s+this(?:\s+for\s+later)?\s*:)?\s+" + _FACT + r"[.!]?",
         re.IGNORECASE,
     ),
     re.compile(_FACT + r"\.?\s+please\s+remember\s+(?:that|this)[.!]?", re.IGNORECASE),

@@ -225,6 +225,9 @@ def test_an_os_file_refusal_tells_the_model_to_hand_it_to_the_user(tmp_path):
         ("  Remember that my rate is 20% or $40/hour.  ", "my rate is 20% or $40/hour"),
         # A phone's curly apostrophe is the one non-ASCII character read as ASCII.
         ("Remember that my daughter\u2019s name is Mia.", "my daughter's name is Mia"),
+        # "this (for later):" is the request, not part of the fact.
+        ("Remember this for later: my car is a blue Civic.", "my car is a blue Civic"),
+        ("Remember this: my locker is 42.", "my locker is 42"),
     ],
 )
 def test_the_fact_a_plain_request_asks_to_keep(request_text, fact):
