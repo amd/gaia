@@ -40,6 +40,16 @@ SECRET_SAVES = [
     ("recuerda mi contraseña es Tr0ub4dor&3", "contraseña es Tr0ub4dor&3"),
     ("merk dir: mein Passwort ist geheim99", "Passwort ist geheim99"),
     ("remember my pw is hunter22", "hunter22"),
+    # An all-letter password that ends the clause is still a password.
+    ("remember my wifi password is sunshine", "sunshine"),
+    ("remember my wifi password is sunshine", "WiFi: sunshine"),
+    ("remember my wifi password is sunshine", "wifi password is sunshine"),
+    (
+        "remember my password is correcthorsebatterystaple",
+        "correcthorsebatterystaple",
+    ),
+    ("recuerda mi contraseña es gatito", "contraseña es gatito"),
+    ("recuerda mi contraseña es gatito", "gatito"),
 ]
 
 ORDINARY_SAVES = [
@@ -85,6 +95,7 @@ NOT_SECRETS = [
     "contraseña es importante para mí",
     "my wifi is called Passwort ist geheim",
     "pw 2024 review",
+    "password expires every 90 days",
 ]
 
 

@@ -676,6 +676,17 @@ _DECLINED_NOT_STORED = (
 )
 
 
+#: A password word, "is" and one word that ends the clause: "password is
+#: sunshine", "contraseña es gatito". "password is changed monthly" is not.
+_CLAUSE_END_SECRET = (
+    r"(?<!called )(?<!named )\b(?:password|passphrase|passcode|contrase(?:ñ|n)a"
+    r"|passwort|kennwort|mot de passe|senha|wachtwoord|has(?:ł|l)o)s?\b\s*"
+    r"(?:(?:is|es|era|ist|war|est|é|e|jest|was)\b|[:=])\s*"
+    r"(?P<value>[^\s,;!?\"'()]+?)\.?"
+    r"(?=\s*$|[,;!?\n]|\.\s|\s+(?:and|so|but|y|pero|und|aber|et|mais|en|e)\b)"
+)
+_CLAUSE_END_SECRET_RE = re.compile(_CLAUSE_END_SECRET, re.IGNORECASE)
+
 #: The longest message a forced save reads; anything longer is left to the model.
 _FORCED_SAVE_MAX_CHARS = 300
 #: Characters a forced fact may hold. No comma: one starts a second clause
@@ -4908,6 +4919,7 @@ class MemoryMixin(ProceduralMemoryMixin):
             r"\b(?:password|passphrase|passcode|pw|pwd|contrase(?:ñ|n)a"
             r"|passwort|kennwort|senha|wachtwoord)\b\s+"
             r"(?![/~])(?=\S*[A-Za-z])(?=\S*[0-9!@#$%^&*])\S{4,}",
+            _CLAUSE_END_SECRET,
             # dash/underscore-joined token in any case, e.g. HALIBUT-4417-ZULU
             # or tango-9921-delta; a file extension right after it
             # (sales_2024_report.pdf) marks a filename, not a secret.
@@ -5182,15 +5194,20 @@ class MemoryMixin(ProceduralMemoryMixin):
         password is Tr0ub4dor&3", which no shape on its own reveals.
         """
         request = getattr(self, "_original_user_input", None) or ""
+        values = [m.group("value") for m in _CLAUSE_END_SECRET_RE.finditer(request)]
         for start, end in self._credential_spans(request):
             words = re.split(r"[\s:=]+", request[start:end].strip())
             value = words[-1].strip(".,;!?\"'()[]") if words else ""
             # Only a value shaped like a secret: "changed" or "vim" is a word.
-            if len(value) < 4 or not re.search(r"[0-9!@#$%^&*]", value):
-                continue
-            if re.search(rf"(?<!\w){re.escape(value)}(?!\w)", text or ""):
-                return True
-        return False
+            if re.search(r"[0-9!@#$%^&*]", value):
+                values.append(value)
+        return any(
+            len(value) >= 4
+            and re.search(
+                rf"(?<!\w){re.escape(value)}(?!\w)", text or "", re.IGNORECASE
+            )
+            for value in values
+        )
 
     #: Argument keys naming what a call acted on, in priority order. A shell
     #: command is keyed by its binary, so ``pytest -q`` working again retires
