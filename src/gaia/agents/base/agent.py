@@ -1811,13 +1811,25 @@ _INDEX_QUESTION_NEEDS_USER_PATTERN = re.compile(
 )
 _SENTENCE_END_PATTERN = re.compile(r"[.!?](?=\s|$)|\n")
 _INDEX_TOOL_NAMES = ("index_directory", "index_document")
-# The few ways people say "just index it"; anything else keeps the forced search.
-_INDEX_ONLY_PATTERN = re.compile(
-    r"\b(?:just|only|simply)\s+(?:re-?)?index\b"
-    r"|\b(?:say|reply|respond)\s+(?:with\s+)?[\"'“]?done\b"
-    r"|\b(?:ask|query|questions?)\b[^.!?\n]*\blater\b|\bfor later\b"
-    r"|\bnothing else\b",
+# "Just index it and say done": every sentence must be an index command or one
+# of these closers, so any other request keeps the forced search.
+_INDEX_ONLY_TAIL = (
+    r"(?:(?:say|reply|respond)\s+(?:with\s+)?[\"'“]?done[\"'”]?"
+    r"|nothing\s+else"
+    r"|(?:so\s+)?(?:that\s+)?(?:i|we)\s*(?:can|could|will|['’]ll|may|might)\s+"
+    r"ask(?:\s+(?:you|about\s+it|about\s+them|questions(?:\s+about\s+it)?))*"
+    r"\s+later"
+    r"|for\s+later)"
+)
+_INDEX_ONLY_SENTENCE_PATTERN = re.compile(
+    r"(?:(?:please|kindly|just|only|simply|now|go\s+ahead\s+and)\s+)*"
+    r"(?:re-?)?index\s+(?:(?!(?:and|then|also|plus|so|but|or)\b)[^\s,;]+\s*){1,6}?"
+    r"(?:[,;]?\s*(?:(?:and|then|and\s+then)\s+)?" + _INDEX_ONLY_TAIL + r")?"
+    r"|" + _INDEX_ONLY_TAIL,
     re.IGNORECASE,
+)
+_INDEX_ONLY_MARKER_PATTERN = re.compile(
+    r"\b(?:just|only|simply)\s+(?:re-?)?index\b|" + _INDEX_ONLY_TAIL, re.IGNORECASE
 )
 # Anything that asks about the content, so indexing alone doesn't finish the turn.
 _ASKS_ABOUT_CONTENT_PATTERN = re.compile(
@@ -1845,12 +1857,19 @@ def _requests_indexing(text: str) -> bool:
 
 def _requests_indexing_only(text: str) -> bool:
     """Whether *text* explicitly asks only to index, and nothing about the content."""
-    text = text or ""
-    return (
-        _requests_indexing(text)
-        and bool(_INDEX_ONLY_PATTERN.search(text))
-        and not _ASKS_ABOUT_CONTENT_PATTERN.search(text)
+    text = (text or "").strip()
+    if (
+        not _requests_indexing(text)
+        or _ASKS_ABOUT_CONTENT_PATTERN.search(text)
+        or not _INDEX_ONLY_MARKER_PATTERN.search(text)
+    ):
+        return False
+    sentences = (
+        part.strip(" .!")
+        for part in _SENTENCE_END_PATTERN.split(text)
+        if part.strip(" .!")
     )
+    return all(_INDEX_ONLY_SENTENCE_PATTERN.fullmatch(s) for s in sentences)
 
 
 def _asks_permission_to_index(answer: str) -> bool:

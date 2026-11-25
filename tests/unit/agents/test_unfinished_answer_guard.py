@@ -827,6 +827,29 @@ def test_index_and_question_still_forces_the_query(agent):
         ("Index report.pdf, I need the revenue numbers", False),
         ("Just index report.pdf and review it", False),
         ("Just index report.pdf and tell me the total", False),
+        (
+            "Index the document /tmp/outside.md so I can ask about it later. "
+            "Just index it and say done.",
+            True,
+        ),
+        ("Just index ~/reports.", True),
+        ("Index my orders folder and say done", True),
+        ("Index ~/reports and I'll ask questions later", True),
+        # rag_quality skill_summarize_action_items, turn 1 as the simulator wrote it
+        (
+            "Load the summarize skill, then give me the action items from the Q3 "
+            "business review meeting notes — I need each item, the owner, and the "
+            "due date.",
+            False,
+        ),
+        ("Just index meeting_notes_q3.txt and pull out the action items", False),
+        ("Just index meeting_notes_q3.txt, then load the summarize skill", False),
+        ("Index the meeting notes and say done. Then pull the action items.", False),
+        ("Just index notes.txt. Action items please.", False),
+        ("Just index notes.txt and say done, then get me the owners", False),
+        ("Just index notes.txt y dame los puntos de acción", False),
+        ("/skill summarize just index notes.txt", False),
+        ("Just index notes.txt so I can ask about it", False),
     ],
 )
 def test_requests_indexing_only(text, expected):
