@@ -252,8 +252,9 @@ def test_cost_is_the_rate_card_arithmetic_for_a_priced_model():
 
     assert result["input_tokens"] == 1000
     assert result["output_tokens"] == 200
+    assert result["cached_tokens"] == 400
     assert result["cost_usd"] == pytest.approx(
-        pricing.price("deepseek-v4p1-flash", 1000, result["cached_tokens"], 200)
+        pricing.price("deepseek-v4p1-flash", 1000, 400, 200)
     )
     assert result["cost_usd"] > 0
 

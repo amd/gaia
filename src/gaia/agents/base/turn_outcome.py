@@ -11,6 +11,12 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Optional
 
+#: The agent acts on files and commands; its answer is checked against them.
+HOST_WORKSPACE = "workspace"
+#: The agent's reply goes to an end user and is returned as the model wrote it.
+HOST_CONVERSATION = "conversation"
+HOSTS = (HOST_WORKSPACE, HOST_CONVERSATION)
+
 #: The model gave its answer.
 STOP_ANSWERED = "answered"
 #: The turn ended with no answer text and nothing else below applies.

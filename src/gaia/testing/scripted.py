@@ -165,13 +165,6 @@ class ScriptedLLMClient(LLMClient):
     def get_last_finish_reason(self) -> Optional[str]:
         return self._last.get("finish_reason")
 
-    def get_performance_stats(self) -> dict:
-        usage = self._last.get("usage") or {}
-        return {
-            "input_tokens": usage.get("prompt_tokens"),
-            "output_tokens": usage.get("completion_tokens"),
-        }
-
     # The MockLLMProvider surface the assertion helpers read.
 
     @property

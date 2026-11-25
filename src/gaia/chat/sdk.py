@@ -20,6 +20,7 @@ from gaia.chat.prompts import Prompts
 from gaia.daemon.broker_client import LeaseWaitCancelled, lease_cancel_scope
 from gaia.llm import create_client
 from gaia.llm.base_client import LLMClient
+from gaia.llm.exceptions import NotSupportedError
 from gaia.llm.lemonade_client import (
     GPU_CTX_SIZE,
     LemonadeClient,
@@ -56,6 +57,19 @@ def _is_tool_call_envelope(chunk: str, tools: Optional[List[Dict]]) -> bool:
 
 class LLMCallCancelled(Exception):
     """The caller cancelled a model call; nothing it produced is returned."""
+
+
+def _usage_as_stats(usage: Any) -> Dict[str, Any]:
+    """An OpenAI-shape ``usage`` dict as per-call stats, cached count lifted out."""
+    if not isinstance(usage, dict):
+        return {}
+    stats = dict(usage)
+    details = usage.get("prompt_tokens_details")
+    if "cached_tokens" not in stats and isinstance(details, dict):
+        cached = details.get("cached_tokens")
+        if cached is not None:
+            stats["cached_tokens"] = cached
+    return stats
 
 
 class RAGContextError(RuntimeError):
@@ -1040,7 +1054,11 @@ class AgentSDK:
             Dictionary of performance stats
         """
         try:
-            return self.llm_client.get_performance_stats() or {}
+            try:
+                return self.llm_client.get_performance_stats() or {}
+            except NotSupportedError:
+                # A client that reports usage only: the same counts, per call.
+                return _usage_as_stats(self.llm_client.get_last_usage())
         except Exception as e:
             self.log.warning(f"Failed to get stats: {e}")
             return {}
