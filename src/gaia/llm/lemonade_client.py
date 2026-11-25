@@ -6984,7 +6984,14 @@ class LemonadeClient:
             if not provider_lost(provider, client=self):
                 if not provider_found_no_models(provider, client=self):
                     return False
-                if not rediscover_models(provider, client=self):
+                try:
+                    found = rediscover_models(provider, client=self)
+                except (CloudKeyError, GatewayError, requests.RequestException) as e:
+                    if isinstance(e, CloudDisabledError):
+                        raise
+                    _remember_cloud_availability(model, ok=True)
+                    raise CloudProviderUnreachableError(provider, model) from e
+                if not found:
                     # The 404 was Lemonade's own; it says nothing about the model.
                     _remember_cloud_availability(model, ok=True)
                     raise CloudProviderUnreachableError(provider, model) from error
