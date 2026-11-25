@@ -44,7 +44,7 @@
     "@types/node": "^25.9.9",
     "@types/vscode": "^1.104.0",
     "@vscode/vsce": "^3.2.1",
-    "typescript": "^5.0.0"
+    "typescript": "^7.0.2"
   },
   "dependencies": {},
   "license": "MIT",
