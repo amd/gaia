@@ -40,6 +40,27 @@ from gaia.stream_timeout import DEFAULT_STREAM_TIMEOUT_SECONDS, stream_timeout_f
 
 log = get_logger(__name__)
 
+#: Tools whose ``tool_call`` args name the file they write. The canonical
+#: ``tool_result`` carries only a summary, so the path is taken from the call.
+WRITE_TOOLS = frozenset(
+    {
+        "write_file",
+        "edit_file",
+        "write_markdown_file",
+        "write_python_file",
+        "edit_python_file",
+    }
+)
+
+
+def written_file_path(tool: str, args: Any) -> Optional[str]:
+    """The path a file-writing tool call names ("" when it names none); None for any other call."""
+    if tool not in WRITE_TOOLS or not isinstance(args, dict):
+        return None
+    raw = args.get("file_path") or args.get("path")
+    return raw if isinstance(raw, str) else ""
+
+
 #: Discriminator marking a stdin line as control rather than a query.
 #: Contract with ``gaiapy.stdio.CONTROL_KEY``.
 CONTROL_KEY = "gaia_control"

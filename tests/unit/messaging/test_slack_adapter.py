@@ -11,7 +11,13 @@ import time
 
 import pytest
 
-from gaia.messaging.bridge import DECISION_ALLOW, DECISION_ALWAYS, DECISION_DENY, Turn
+from gaia.messaging.bridge import (
+    DECISION_ALLOW,
+    DECISION_ALWAYS,
+    DECISION_DENY,
+    WRITE_TOOLS,
+    Turn,
+)
 from gaia.messaging.slack import adapter as ad
 from gaia.messaging.slack.adapter import (
     ReplyTarget,
@@ -497,7 +503,7 @@ def _wrote(a, path, *, success=True, tool="write_file", target=None):
     return target
 
 
-@pytest.mark.parametrize("tool", sorted(ad.WRITE_TOOLS))
+@pytest.mark.parametrize("tool", sorted(WRITE_TOOLS))
 def test_a_file_a_write_tool_produced_is_sent_back(tmp_path, tool):
     a, web = _upload_adapter(tmp_path)
     written = tmp_path / "summary.md"
