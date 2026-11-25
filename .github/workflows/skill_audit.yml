@@ -632,3 +632,4 @@ jobs:
             --max-turns 100
             --model ${{ env.AUDIT_MODEL }}
             --allowedTools Read,Grep,Glob,Bash
+            --permission-mode default
