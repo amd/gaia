@@ -19,6 +19,7 @@ from gaia.agents.base.turn_outcome import (
     STOP_MODEL_CALLS,
     STOP_OUTPUT_TOKENS,
 )
+from gaia.chat.sdk import RequestRefused
 from gaia.llm.pricing import price, rate_card
 
 #: Stop reasons a :class:`TurnBudget` produces.
@@ -27,7 +28,7 @@ BUDGET_STOP_REASONS = frozenset(
 )
 
 
-class TurnBudgetExceeded(Exception):
+class TurnBudgetExceeded(RequestRefused):
     """A model request was refused because the turn's budget has no room for it."""
 
     def __init__(self, reason: str):

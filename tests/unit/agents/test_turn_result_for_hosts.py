@@ -248,7 +248,7 @@ def test_cost_is_the_rate_card_arithmetic_for_a_priced_model():
     model = ScriptedLLMClient()
     model.push(say="Hello there.", usage=usage)
 
-    result = _agent(model, model_id="deepseek-v4p1-flash").process_query("hi")
+    result = _agent(model, model_id="fireworks.deepseek-v4p1-flash").process_query("hi")
 
     assert result["input_tokens"] == 1000
     assert result["output_tokens"] == 200
@@ -267,6 +267,18 @@ def test_cost_is_none_for_a_model_with_no_list_price():
 
     result = _agent(model, model_id="some-unpriced-model").process_query("hi")
 
+    assert result["cost_usd"] is None
+
+
+def test_cost_is_none_when_another_provider_serves_a_model_of_the_same_name():
+    model = ScriptedLLMClient()
+    model.push(
+        say="Hello there.", usage={"prompt_tokens": 1000, "completion_tokens": 200}
+    )
+
+    result = _agent(model, model_id="deepseek-v4p1-flash").process_query("hi")
+
+    assert pricing.rate_card("deepseek-v4p1-flash") is not None
     assert result["cost_usd"] is None
 
 

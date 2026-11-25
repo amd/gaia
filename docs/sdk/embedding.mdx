@@ -91,8 +91,8 @@ name tools, step limits or the raw provider error.
 | `budget_spent` | With a budget: `model_calls`, `input_tokens`, `cached_tokens`, `output_tokens` |
 | `tool_calls` | Every tool call in order: `name`, `args`, `result`, `ran`, `failed`. Check a reply's promises against this before sending it |
 | `reprompts` | Each time a check sent the model back for another reply: `guard`, `step`. More than a few per turn means a guard is fighting your prompt |
-| `caveats` | Everything GAIA would have appended to the answer on a workspace host: a tool result that carried instructions, a problem your own `answer_problems` found and the model did not fix |
-| `input_tokens`, `output_tokens`, `cached_tokens`, `cost_usd` | Usage for the turn. `cost_usd` is the list price from `gaia.llm.pricing`, or `None` for a model that has no card there |
+| `caveats` | Everything GAIA would have appended to the answer on a workspace host: a tool result that carried instructions, a problem your own `answer_problems` found and the model did not fix. On a conversation host read this key; `completion_caveats` is the workspace host's and stays empty |
+| `input_tokens`, `output_tokens`, `cached_tokens`, `cost_usd` | Usage for the turn. `cost_usd` is Fireworks' list price from `gaia.llm.pricing`. It is `None` for a model with no card there and for any other provider; set `provider_name = "fireworks"` on your client when that is where the model runs |
 | `timing_summary` | Model seconds, tool seconds and model calls |
 
 ## Your own model client
@@ -153,8 +153,8 @@ Things to know about this seam:
 - **Return `usage`.** The result's token counts, `cost_usd`, and the token and
   dollar limits below are all summed from `get_last_usage()`, in the OpenAI shape.
   It must describe the most recent call only, or a step's tokens are counted twice.
-  A turn with a token or dollar limit fails with `BudgetNeedsUsage` if a reply
-  comes back without it.
+  A turn with a token or dollar limit raises `BudgetNeedsUsage` if a reply comes
+  back without it: that is a setup mistake, so it is never reported as an outage.
 
 ## Testing
 
@@ -192,7 +192,10 @@ changed.
 | `max_model_calls` | Counts every request, not steps |
 | `max_output_tokens` | Each request's `max_tokens` is lowered to what is left |
 | `deadline_s` | Checked between requests; one in flight is not cut short, so give your client its own timeout |
-| `max_cost_usd` | List price from `gaia.llm.pricing`. A model with no card there is refused with a `ValueError` when the turn starts |
+| `max_cost_usd` | Fireworks' list price from `gaia.llm.pricing`. A model with no card there, or on another provider, is refused with a `ValueError` when the turn starts |
+
+`deadline` is also the stop reason of the agent's own `time_limit_s`. To tell the two
+apart, check for `budget_spent` in the result: it is there only when a budget was set.
 
 Pass `budget=` to the constructor to apply one to every turn. The budget covers the
 agent's own model requests. A tool that calls a model itself, such as a vision or

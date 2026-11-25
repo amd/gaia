@@ -59,6 +59,10 @@ class LLMCallCancelled(Exception):
     """The caller cancelled a model call; nothing it produced is returned."""
 
 
+class RequestRefused(Exception):
+    """``before_llm_call`` declined to send a request. Not an error to log."""
+
+
 def _usage_as_stats(usage: Any) -> Dict[str, Any]:
     """An OpenAI-shape ``usage`` dict as per-call stats, cached count lifted out."""
     if not isinstance(usage, dict):
@@ -662,6 +666,8 @@ class AgentSDK:
             # Re-raise connection errors with additional context
             self.log.error(f"LLM connection error in send_messages: {e}")
             raise ConnectionError(f"Failed to connect to LLM server: {e}") from e
+        except RequestRefused:
+            raise
         except Exception as e:
             if stopped_by_user(e):
                 self.log.info(f"send_messages stopped by the user: {e}")
@@ -821,6 +827,8 @@ class AgentSDK:
             raise ConnectionError(
                 f"Failed to connect to LLM server (streaming): {e}"
             ) from e
+        except RequestRefused:
+            raise
         except Exception as e:
             if stopped_by_user(e):
                 self.log.info(f"send_messages_stream stopped by the user: {e}")

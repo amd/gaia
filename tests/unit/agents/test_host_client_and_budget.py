@@ -11,7 +11,7 @@ import time
 import pytest
 
 from gaia.agents.base.agent import CLOUD_MAX_OUTPUT_TOKENS, Agent
-from gaia.agents.base.budget import TurnBudget
+from gaia.agents.base.budget import BudgetNeedsUsage, TurnBudget
 from gaia.agents.base.tools import tool
 from gaia.agents.base.turn_outcome import (
     STOP_ANSWERED,
@@ -56,6 +56,14 @@ class _SupportAgent(Agent):
 class _NativeClient(ScriptedLLMClient):
     supports_native_tools = True
     context_window = 128_000
+
+
+class _FireworksClient(_NativeClient):
+    """A host client that says its model runs on Fireworks, so it is priced."""
+
+    @property
+    def provider_name(self) -> str:
+        return "fireworks"
 
 
 class _TextClient(ScriptedLLMClient):
@@ -242,7 +250,7 @@ def test_output_token_limit_caps_each_request_and_then_stops():
 
 
 def test_cost_limit_stops_the_turn():
-    model = _lookups(_NativeClient(), 5)
+    model = _lookups(_FireworksClient(), 5)
     agent = _SupportAgent(llm_client=model, model_id=PRICED)
 
     result = agent.process_query(
@@ -255,8 +263,18 @@ def test_cost_limit_stops_the_turn():
     assert result["cost_usd"] == pytest.approx(0.00084)
 
 
-def test_cost_limit_on_an_unpriced_model_is_refused_before_any_call():
+def test_cost_limit_on_another_providers_model_is_refused_before_any_call():
     model = _NativeClient(["Hello."])
+    agent = _SupportAgent(llm_client=model, model_id=PRICED)
+
+    with pytest.raises(ValueError, match="list prices only"):
+        agent.process_query("hi", budget=TurnBudget(max_cost_usd=0.01))
+
+    assert model.call_count == 0
+
+
+def test_cost_limit_on_an_unpriced_model_is_refused_before_any_call():
+    model = _FireworksClient(["Hello."])
     agent = _SupportAgent(llm_client=model, model_id="no-such-model")
 
     with pytest.raises(ValueError, match="no price on the rate card"):
@@ -350,22 +368,21 @@ def test_refused_budget_leaves_nothing_armed_from_the_turn_before():
     agent = _SupportAgent(llm_client=model, model_id="no-such-model")
     agent.process_query("hi", budget=TurnBudget(max_model_calls=5))
 
-    with pytest.raises(ValueError, match="rate card"):
+    with pytest.raises(ValueError, match="cannot be priced"):
         agent.process_query("hi", budget=TurnBudget(max_cost_usd=0.01))
 
     assert agent.chat.before_llm_call is None
     assert agent.process_query("hi")["result"] == "Hello again."
 
 
-def test_token_limit_without_reported_usage_fails_loudly_not_silently():
+def test_token_limit_without_reported_usage_raises_instead_of_looking_like_an_outage():
     model = _NativeClient(["Hello there."])
     agent = _SupportAgent(llm_client=model, model_id="m")
 
-    result = agent.process_query("hi", budget=TurnBudget(max_output_tokens=500))
+    with pytest.raises(BudgetNeedsUsage, match="get_last_usage"):
+        agent.process_query("hi", budget=TurnBudget(max_output_tokens=500))
 
-    assert result["status"] == "failed"
-    assert result["failure"]["type"] == "BudgetNeedsUsage"
-    assert "get_last_usage" in result["failure"]["message"]
+    assert agent.chat.before_llm_call is None
 
 
 def test_call_and_time_limits_need_no_usage():
