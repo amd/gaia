@@ -338,6 +338,8 @@ def test_a_missing_account_home_fails_closed(monkeypatch):
 
     monkeypatch.setattr(unit_conftest, "_RUN_HOME_IS_TEMPORARY", True)
     monkeypatch.setattr(unit_conftest, "_REAL_GAIA_HOME", None)
+    # The guard's teardown skips its exists() check only when this flag says so.
+    monkeypatch.setattr(unit_conftest, "_real_gaia_home_existed", [True])
     assert unit_conftest._in_real_gaia_home(Path("/tmp/anything")) is True
 
 
