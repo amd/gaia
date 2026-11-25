@@ -637,6 +637,7 @@ gaia/
 ├── cpp/                # C++17 agent framework (CMake project gaia-cpp)
 │   ├── agents/gaiacpp/ # gaiacpp: the native harness (binary gaiacpp)
 │   └── examples/       # Single-file demo agents (health, wifi, process, vlm…)
+├── sdk/                # gaia-sdk (python/) and @amd/gaia-sdk (typescript/): thin clients of `gaiacpp --engine`
 ├── tui/                # Go terminal UI (module github.com/amd/gaia/tui)
 ├── eval/               # Eval scenarios, corpus, CI lanes and tiers (the framework is src/gaia/eval/)
 ├── examples/           # Example Python agents built on the SDK

@@ -12,7 +12,7 @@ icon: "sparkles"
 
 It is one of the GAIA agent's [two harnesses](/reference/harnesses); the other, `gaiapy`, is the Python one and the default.
 
-It runs five ways:
+It runs six ways:
 
 | Mode | Command | For |
 |---|---|---|
@@ -21,6 +21,7 @@ It runs five ways:
 | Server | `gaiacpp serve` | Apps and [Lemonade](#lemonade-integration): OpenAI-compatible `/v1/chat/completions` |
 | MCP server | `gaiacpp --mcp` | Another program's agent: the tools over MCP, with no model of its own |
 | Stdio agent | `gaiacpp --stdio` | The [GAIA terminal UI](#running-as-the-agent-of-the-gaia-terminal-ui): queries in, JSON Lines events out |
+| Engine (beta) | `gaiacpp --engine` | Another program's agent loop: it sends the system prompt, tools and conversation, and runs the tools itself. See [GAIA SDK](/sdk/gaia-sdk) and the [Engine Protocol](/sdk/host-protocol) |
 
 ## Quick start
 
