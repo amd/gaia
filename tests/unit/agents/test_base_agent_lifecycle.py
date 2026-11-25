@@ -16,6 +16,7 @@ from gaia.agents.base import agent as agent_module
 from gaia.agents.base.agent import (
     Agent,
     HostedProviderError,
+    TurnCancel,
     connect_hosted_provider,
     resolve_agent_provider,
 )
@@ -317,3 +318,133 @@ def test_the_agent_is_a_context_manager():
         history = agent.start_session_history()
     with pytest.raises(Exception):
         history.turns(agent)
+
+
+# ---------------------------------------------------------------------------
+# The default path: the agent talks to Lemonade while it is built
+# ---------------------------------------------------------------------------
+
+
+def test_the_provider_is_connected_once_before_lemonade_is_probed(monkeypatch):
+    """The probe learns the model's tool calling, which needs the key in place."""
+    order = []
+    probe = MagicMock()
+    probe.base_url = "http://localhost:13305/api/v1"
+    probe.health_check.side_effect = lambda: order.append("health_check")
+    manager = MagicMock()
+    manager.learn_tool_calling.side_effect = lambda *a: order.append("learn")
+    monkeypatch.setattr(lemonade_client, "LemonadeClient", lambda **kw: probe)
+    monkeypatch.setattr("gaia.llm.lemonade_manager.LemonadeManager", manager)
+    monkeypatch.setattr(
+        agent_module,
+        "connect_hosted_provider",
+        lambda provider, model, client: order.append(("connect", model, client)),
+    )
+
+    with patch("gaia.agents.base.agent.AgentSDK"):
+        _PlainAgent(silent_mode=True, provider="fireworks", model_id="glm-4p6")
+
+    assert order == [("connect", "fireworks.glm-4p6", probe), "health_check", "learn"]
+    manager.ensure_ready.assert_not_called()  # a cloud model preloads nothing
+
+
+class _FakeLemonade:
+    """Answers the three requests a provider connect makes, and records them."""
+
+    def __init__(self, models_after_key=26):
+        self.calls = []
+        self.providers = []
+        self.models_after_key = models_after_key
+
+    def request(self, method, url, json=None, **_):
+        path = url.rsplit("/api/v1/", 1)[1]
+        self.calls.append((method, path, json))
+        body = {}
+        if path == "system-info":
+            body = {"cloud": {"providers": self.providers}}
+        elif path == "install":
+            self.providers.append({"name": json["provider"]})
+        elif path == "cloud/auth":
+            self.providers[0]["runtime_key_set"] = True
+            self.providers[0]["models_discovered"] = self.models_after_key
+            body = {"models_discovered": self.models_after_key}
+        response = MagicMock(status_code=200, content=b"{}")
+        response.json.return_value = body
+        return response
+
+
+@pytest.fixture
+def fake_lemonade(monkeypatch):
+    from gaia.llm import cloud_keys
+
+    server = _FakeLemonade()
+    monkeypatch.setattr(cloud_keys.requests, "request", server.request)
+    monkeypatch.setattr(cloud_keys, "cloud_blocked", lambda: False)
+    monkeypatch.setattr(cloud_keys, "recall_key", lambda provider: None)
+    monkeypatch.setattr("gaia.llm.lemonade_choice.is_users_server", lambda url: False)
+    monkeypatch.setattr(
+        "gaia.llm.lemonade_launcher.gaia_runs_lemonade", lambda url=None: True
+    )
+    monkeypatch.setattr(
+        "gaia.llm.lemonade_choice.setup_change_refusal", lambda *a: None
+    )
+    monkeypatch.delenv("LEMONADE_FIREWORKS_API_KEY", raising=False)
+    return server
+
+
+def _client():
+    return SimpleNamespace(credential_base_url=lambda: "http://localhost:13305/api/v1")
+
+
+def test_a_fresh_lemonade_is_sent_a_registration_then_the_key(
+    fake_lemonade, monkeypatch
+):
+    """The requests Lemonade must accept: register Fireworks, then key it."""
+    monkeypatch.setenv("FIREWORKS_API_KEY", "fw_test_key")
+
+    connect_hosted_provider("fireworks", "fireworks.glm-4p6", _client())
+
+    writes = [call for call in fake_lemonade.calls if call[0] == "POST"]
+    assert [path for _, path, _ in writes] == ["install", "cloud/auth"]
+    registration = writes[0][2]
+    assert registration["backend"] == "cloud"
+    assert registration["provider"] == "fireworks"
+    assert registration["wire_format"] == "openai"
+    assert registration["base_url"].startswith("https://api.fireworks.ai/")
+    assert writes[1][2] == {"provider": "fireworks", "api_key": "fw_test_key"}
+
+
+def test_no_key_anywhere_sends_lemonade_nothing_and_raises(fake_lemonade, monkeypatch):
+    monkeypatch.delenv("FIREWORKS_API_KEY", raising=False)
+
+    with pytest.raises(HostedProviderError, match="FIREWORKS_API_KEY"):
+        connect_hosted_provider("fireworks", "fireworks.glm-4p6", _client())
+
+    assert [call for call in fake_lemonade.calls if call[0] != "GET"] == []
+
+
+def test_a_key_the_provider_rejects_raises(fake_lemonade, monkeypatch):
+    """Lemonade stores any key; a rejected one discovers no models."""
+    monkeypatch.setenv("FIREWORKS_API_KEY", "fw_revoked")
+    fake_lemonade.models_after_key = 0
+
+    with pytest.raises(HostedProviderError, match="no working key"):
+        connect_hosted_provider("fireworks", "fireworks.glm-4p6", _client())
+
+
+# ---------------------------------------------------------------------------
+# Stopping a turn
+# ---------------------------------------------------------------------------
+
+
+def test_cancel_event_stops_the_turn_with_its_message():
+    agent = _agent(["never sent"])
+    stop = TurnCancel()
+    stop.cancel("Stopped at your request.")
+    agent.cancel_event = stop
+
+    result = agent.process_query("question")
+
+    assert agent.cancel_event is stop
+    assert "Stopped at your request." in result["result"]
+    assert agent.sent.call_count == 0

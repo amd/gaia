@@ -133,3 +133,32 @@ def test_gaia_agent_init_scaffolds_the_template_layout(tmp_path):
     entry_point = f'hello-world = "{PACKAGE}:build_registration"'
     assert entry_point in (scaffold / "pyproject.toml").read_text(encoding="utf-8")
     assert entry_point in (TEMPLATE_DIR / "pyproject.toml").read_text(encoding="utf-8")
+
+
+def test_the_readme_conversation_example_works(template):
+    """README: ``with`` + ``start_session_history()`` carries turn one into turn two."""
+    from types import SimpleNamespace
+
+    from gaia_agent_hello_world.agent import HelloWorldAgent
+
+    from gaia.agents.base.tools import _TOOL_REGISTRY
+
+    _TOOL_REGISTRY.clear()
+    replies = ["Hello Sam!", "Your name is Sam."]
+    chat = MagicMock()
+    chat.get_stats.return_value = {}
+    chat.send_messages.side_effect = lambda *_, **__: SimpleNamespace(
+        text=replies.pop(0), stats={}
+    )
+    with patch("gaia.agents.base.agent.AgentSDK", return_value=chat):
+        agent = HelloWorldAgent(skip_lemonade=True, silent_mode=True)
+
+    with agent:
+        history = agent.start_session_history()
+        agent.process_query("Hi, I'm Sam.")
+        answer = agent.process_query("What's my name?")["result"]
+
+    assert "Sam" in answer
+    assert "Hi, I'm Sam." in str(chat.send_messages.call_args_list[1])
+    with pytest.raises(Exception):
+        history.turns(agent)
