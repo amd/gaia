@@ -128,19 +128,19 @@ def test_the_fast_chat_profile_has_no_folders_line(gaia_docs):
 def test_the_agent_ui_names_its_scheduled_tasks_page(gaia_docs):
     agent = _build(allowed_paths=[str(gaia_docs)], surface="agent_ui")
     try:
-        prompt = agent._get_system_prompt()
+        context = agent.session_context
     finally:
         agent.__del__()
 
-    assert "**Scheduled tasks** in the sidebar" in prompt
-    assert "never say scheduling is unavailable" in prompt
+    assert "**Scheduled tasks** in the sidebar" in context
+    assert "never say scheduling is unavailable" in context
 
 
 @pytest.mark.parametrize("surface", [None, "tui", "cli"])
 def test_other_front_ends_get_no_scheduled_tasks_line(gaia_docs, surface):
     agent = _build(allowed_paths=[str(gaia_docs)], surface=surface)
     try:
-        assert "Scheduled tasks" not in agent._get_system_prompt()
+        assert "Scheduled tasks" not in agent.system_prompt + agent.session_context
     finally:
         agent.__del__()
 
@@ -151,16 +151,37 @@ def _unsupported_line(prompt: str) -> str:
 
 
 @pytest.mark.parametrize("surface", [None, "tui", "agent_ui"])
-def test_scheduling_is_never_both_unsupported_and_offered(gaia_docs, surface):
+def test_only_the_agent_ui_is_pointed_at_scheduled_tasks(gaia_docs, surface):
     agent = _build(allowed_paths=[str(gaia_docs)], surface=surface)
     try:
-        prompt = agent._get_system_prompt()
+        context = agent.session_context
     finally:
         agent.__del__()
 
-    offered = "Scheduled tasks" in prompt
-    assert offered == (surface == "agent_ui")
-    assert ("scheduling" in _unsupported_line(prompt)) != offered
+    assert ("Scheduled tasks" in context) == (surface == "agent_ui")
+
+
+# A front end's turn can only reuse the prompt the start-up warm-up cached when
+# both send the same system prompt and tools; Gemma re-reads all of it otherwise.
+@pytest.mark.parametrize("surface", ["agent_ui", "tui", "cli"])
+def test_every_front_end_sends_the_prefix_the_warm_up_caches(
+    gaia_docs, tmp_path, surface
+):
+    work = tmp_path / "project"
+    work.mkdir()
+    warm = _build()
+    turn = _build(
+        surface=surface,
+        ui_session_id="chat-1",
+        working_directory=str(work),
+        allowed_paths=[str(work), str(gaia_docs)],
+    )
+    try:
+        assert turn.system_prompt == warm.system_prompt
+        assert turn._openai_tools == warm._openai_tools
+    finally:
+        warm.__del__()
+        turn.__del__()
 
 
 def test_only_sending_email_is_unsupported_when_email_tools_are_registered(

@@ -8,6 +8,14 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 Requires the `gaia` Python CLI 0.27.0+ on `PATH`.
 
+- **The first Agent UI message no longer re-reads the whole prompt.** A `/query`
+  with `surface: "agent_ui"` changed two lines of the system prompt, so the
+  start-up warm-up's read was thrown away and a local model read ~10K tokens
+  again: two minutes for "Hi" on a small GPU. The Scheduled tasks line now
+  travels with the first user message, and every `surface` shares one system
+  prompt. The log's new `PROMPT_PREFIX` lines say, per chat, how much of the
+  prompt the model reused, and warn with what changed when it could not.
+
 - **Docs: Ask and Accept edits refuse deletes, they don't ask.** A delete the
   shell would otherwise ask about is refused with no approval card; only Full
   access runs it. The SPEC and guides now say so.

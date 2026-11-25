@@ -703,11 +703,11 @@ def _start_failure(program: str, run_dir: Path, exc: OSError) -> Dict[str, Any]:
 
 #: Without it the model told Agent UI users it has no scheduler.
 _AGENT_UI_SCHEDULE_LINE = (
-    "\nRecurring tasks: the Agent UI runs a prompt on a schedule from "
+    "Recurring tasks: the Agent UI runs a prompt on a schedule from "
     '**Scheduled tasks** in the sidebar (schedules like "every 6h", "daily at '
     '9am", "every monday at 3pm"). For a recurring request, point the user '
     "there and help them word a valid schedule and prompt; never say scheduling "
-    "is unavailable.\n"
+    "is unavailable."
 )
 
 
@@ -941,9 +941,11 @@ class ChatAgent(
     # Dynamic MCP loader — registry exposes this for the Settings "Active for" panel.
     CONSUMES_MCP_SERVERS: ClassVar[bool] = True
 
-    # This session's folders and scratch directory differ per session.
+    # Folders and scratch directory differ per session, scheduling per front
+    # end; the start-up warm-up knows neither.
     VOLATILE_PROMPT_FRAGMENTS: ClassVar[frozenset] = Agent.VOLATILE_PROMPT_FRAGMENTS | {
-        "get_session_folders_system_prompt"
+        "get_scheduling_system_prompt",
+        "get_session_folders_system_prompt",
     }
 
     # Tool-list bookkeeping for the session; reset by ``_on_task_start`` when the
@@ -2313,7 +2315,8 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
         # Only advertise web and media tools the profile registers.
         # List only what this session lacks; a contradicting line wins on Gemma.
         lacking = ["cloud storage", "file conversion", "live collaboration"]
-        if not (self._offers_scheduling() or self._offers_calendar()):
+        # Never by front end: all of them share this prompt's cached read.
+        if not self._offers_calendar():
             lacking.insert(0, "scheduling")
         # The core email tools only read; sending comes with the send-email skill.
         reads_email = bool(FEATURE_TOOLS["email"] & set(self._tools_registry))
@@ -2370,10 +2373,18 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
             "data_file_rules": data_file_rules,
             "load_tools_menu": load_tools_menu,
         }
-        prompt = base_prompt + "".join(blocks[key] for key in spec.prompt_blocks)
-        if self._offers_scheduling():
-            prompt += _AGENT_UI_SCHEDULE_LINE
-        return prompt
+        return base_prompt + "".join(blocks[key] for key in spec.prompt_blocks)
+
+    def get_scheduling_system_prompt(self) -> str:
+        """What this front end offers for recurring tasks, in ``session_context``.
+
+        Out of the system prompt, so every front end shares the prefix the
+        start-up warm-up caches.
+        """
+        spec = get_profile_spec(getattr(self.config, "prompt_profile", "full"))
+        if spec.early_return:
+            return ""
+        return _AGENT_UI_SCHEDULE_LINE if self._offers_scheduling() else ""
 
     def get_session_folders_system_prompt(self) -> str:
         """This session's folders and scratch directory, in ``session_context``."""
