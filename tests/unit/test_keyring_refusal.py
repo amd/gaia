@@ -64,14 +64,26 @@ def test_after_a_dismissed_prompt_reads_stop_asking(dismissed):
     assert "won't ask again for 5 minutes" in str(e.value)
 
 
+def _seed_vault_secret(fake: FakeKeyring, name: str, value: str) -> None:
+    import os
+
+    from gaia.connectors import vault
+
+    key = os.urandom(32)
+    fake.values[vault.MASTER_KEY_USERNAME] = key.hex()
+    path = vault.vault_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(vault.encrypt_envelope(key, {store._secret_username(name): value}))
+
+
 def test_retry_asks_the_store_once_more(dismissed):
     with pytest.raises(store.KeyringRefused):
         store.peek_secret("provider:fireworks")
     store.retry_keyring()
     dismissed.error = None
-    dismissed.values["secret:provider:fireworks"] = "fw_saved_key_123456"
+    _seed_vault_secret(dismissed, "provider:fireworks", "fw_saved_key_123456")
     assert store.keyring_refusal() is None
-    store.peek_secret("provider:fireworks")
+    assert store.peek_secret("provider:fireworks") == "fw_saved_key_123456"
     assert dismissed.reads == 2
 
 
@@ -197,13 +209,13 @@ def test_an_unlock_elsewhere_lets_reads_through_after_expiry(dismissed):
     with pytest.raises(store.KeyringRefused):
         store.peek_secret("provider:fireworks")
     dismissed.error = None
-    dismissed.values["secret:provider:fireworks"] = "fw_saved_key_123456"
+    _seed_vault_secret(dismissed, "provider:fireworks", "fw_saved_key_123456")
     with pytest.raises(store.KeyringRefused):
         store.peek_secret("provider:fireworks")
     _expire_hold()
-    assert store.peek_secret("provider:fireworks") is not None
+    assert store.peek_secret("provider:fireworks") == "fw_saved_key_123456"
     assert store.keyring_refusal() is None
-    store.peek_secret("provider:fireworks")
+    assert store.peek_secret("provider:fireworks") == "fw_saved_key_123456"
     assert dismissed.reads == 3
 
 

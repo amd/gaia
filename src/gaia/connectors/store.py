@@ -1,14 +1,17 @@
 # Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 # SPDX-License-Identifier: MIT
 """
-Keyring-backed persistent storage for OAuth connection records.
+Vault-backed persistent storage for OAuth connection records and secrets.
 
-Single-blob design (plan amendment A5):
-    Each ``(provider, slot)`` pair maps to ONE keyring entry that
-    stores a JSON blob containing ``refresh_token``, ``account_email``,
-    ``scopes``, ``connected_at``, and ``client_id_hash``. A single
-    ``set_password`` call atomically replaces the entry, so a partial-write
-    failure cannot leave us with a fresh token + stale metadata.
+Single-master-key vault design:
+    One 32-byte AES-256-GCM master key lives in the OS keyring
+    (``gaia.connections`` / ``vault-master-key``) and unlocks
+    ``~/.gaia/connectors/vault.enc``. Each ``(provider, slot)`` pair maps to
+    one JSON blob entry inside the vault (``refresh_token``, ``account_email``,
+    ``scopes``, ``connected_at``, ``client_id_hash``), persisted via atomic
+    temp-file replace under a cross-process lock so a partial write cannot
+    leave a fresh token with stale metadata. Legacy per-slot OS keyring entries
+    are migrated lazily on first read.
 
 Backend allowlist (plan amendment A4):
     Plaintext or weak file-backed keyring backends (e.g. ``keyrings.alt``'s
@@ -418,32 +421,6 @@ def _kr_clear_chunks(username: str, *, for_delete: bool = False) -> None:
         idx += 1
 
 
-def _kr_set(username: str, payload: str) -> None:
-    """Store ``payload`` under ``username``, chunking if it exceeds the
-    single-slot ceiling. Chunks are written BEFORE the manifest so a reader
-    never sees a manifest pointing at not-yet-written parts."""
-    retry_keyring()
-    if len(payload) <= _CHUNK_CHARS:
-        _kr_raw_set(username, payload)
-        # A prior write may have been chunked; sweep stale chunk slots.
-        _kr_clear_chunks(username)
-        return
-    chunks = [
-        payload[i : i + _CHUNK_CHARS] for i in range(0, len(payload), _CHUNK_CHARS)
-    ]
-    for idx, chunk in enumerate(chunks):
-        _kr_raw_set(_chunk_username(username, idx), chunk)
-    # Publish the manifest (count + CRC of the full payload) BEFORE sweeping
-    # stale high slots, so a reader after this point reassembles against the
-    # new count and the CRC guards any partial state.
-    _kr_raw_set(username, f"{_CHUNK_SENTINEL}{len(chunks)}:{_payload_crc(payload)}")
-    # Drop any extra chunk slots left over from a longer previous value.
-    stale = len(chunks)
-    while _kr_raw_get(_chunk_username(username, stale)) is not None:
-        _kr_raw_delete(_chunk_username(username, stale))
-        stale += 1
-
-
 def _parse_manifest(raw: str) -> Optional[tuple[int, Optional[str]]]:
     """Parse ``<SENTINEL><count>[:<crc>]`` → ``(count, crc)``. ``None`` if the
     manifest is malformed. ``crc`` is ``None`` for a legacy count-only manifest."""
@@ -458,8 +435,8 @@ def _parse_manifest(raw: str) -> Optional[tuple[int, Optional[str]]]:
         return None
 
 
-def _kr_get(username: str, *, for_delete: bool = False) -> Optional[str]:
-    """Read a (possibly chunked) value stored via :func:`_kr_set`.
+def _kr_legacy_get(username: str, *, for_delete: bool = False) -> Optional[str]:
+    """Read a legacy (possibly chunked) raw OS keyring entry.
 
     Any partial/torn state (missing slot, or a CRC mismatch from a crashed
     mid-rewrite) resolves to ``None`` — never a truncated-but-valid-looking
@@ -495,9 +472,8 @@ def _kr_get(username: str, *, for_delete: bool = False) -> Optional[str]:
     return value
 
 
-def _kr_delete(username: str) -> None:
-    """Delete a (possibly chunked) value and all its chunk slots. Idempotent."""
-    retry_keyring()
+def _kr_legacy_delete(username: str) -> None:
+    """Delete a legacy (possibly chunked) raw OS keyring entry and its chunks."""
     raw = _kr_raw_get(username, for_delete=True)
     _kr_raw_delete(username)
     if raw is not None and raw.startswith(_CHUNK_SENTINELS):
@@ -506,6 +482,29 @@ def _kr_delete(username: str) -> None:
         for idx in range(count):
             _kr_raw_delete(_chunk_username(username, idx))
     _kr_clear_chunks(username, for_delete=True)
+
+
+def _kr_set(username: str, payload: str) -> None:
+    """Store ``payload`` under ``username`` in the single-master-key vault."""
+    from gaia.connectors import vault
+
+    vault.put(username, payload)
+
+
+def _kr_get(username: str, *, for_delete: bool = False) -> Optional[str]:
+    """Read ``username`` from the vault, migrating any legacy keyring entry."""
+    from gaia.connectors import vault
+
+    if for_delete:
+        return vault._read_for_delete(username)
+    return vault.get(username)
+
+
+def _kr_delete(username: str) -> None:
+    """Delete ``username`` from the vault and any legacy keyring slots."""
+    from gaia.connectors import vault
+
+    vault.delete(username)
 
 
 def save_connection(
@@ -839,10 +838,9 @@ def connection_slot_in_use(provider: str, *, slot: str = DEFAULT_ACCOUNT) -> boo
     Checked like a delete, so it answers on a weak backend; it never returns
     the stored value.
     """
-    keyring_access.check_delete()
-    return (
-        _kr_raw_get(_connection_username(provider, slot), for_delete=True) is not None
-    )
+    from gaia.connectors import vault
+
+    return vault.slot_in_use(_connection_username(provider, slot))
 
 
 def _drop_forward_recovery_for(provider: str, slot: str) -> None:
@@ -893,8 +891,9 @@ def secret_in_use(name: str) -> bool:
     Checked like a delete, so it answers on a weak backend; it never returns
     the stored value.
     """
-    keyring_access.check_delete()
-    return _kr_raw_get(_secret_username(name), for_delete=True) is not None
+    from gaia.connectors import vault
+
+    return vault.slot_in_use(_secret_username(name))
 
 
 def delete_secret(name: str) -> None:

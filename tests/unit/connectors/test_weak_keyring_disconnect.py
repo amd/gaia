@@ -151,8 +151,39 @@ def refused(request, monkeypatch):
     return install
 
 
+def _vault_entries(items) -> dict:
+    """Decrypt ``vault.enc`` using the master key in ``items`` (or return {})."""
+    from gaia.connectors import vault
+
+    raw_key = items.get((SERVICE, vault.MASTER_KEY_USERNAME))
+    path = vault.vault_path()
+    if not raw_key or not path.exists():
+        return {}
+    return vault.decrypt_envelope(bytes.fromhex(raw_key), path.read_bytes())
+
+
 def _connection_keys(provider):
-    return lambda items: [user for _, user in items if user.startswith(f"{provider}:")]
+    return lambda items: [
+        user for user in _vault_entries(items) if user.startswith(f"{provider}:")
+    ]
+
+
+def _drop_vault_slot(items, slot_name: str) -> None:
+    """Remove one slot from ``vault.enc`` while keeping the test's keyring dict."""
+    from gaia.connectors import vault
+
+    raw_key = items.get((SERVICE, vault.MASTER_KEY_USERNAME))
+    path = vault.vault_path()
+    if not raw_key or not path.exists():
+        return
+    key = bytes.fromhex(raw_key)
+    entries = vault.decrypt_envelope(key, path.read_bytes())
+    entries.pop(slot_name, None)
+    if entries:
+        path.write_bytes(vault.encrypt_envelope(key, entries))
+    else:
+        path.unlink()
+        items.pop((SERVICE, vault.MASTER_KEY_USERNAME), None)
 
 
 def _writes(recorder):
@@ -261,7 +292,7 @@ def test_one_account_goes_and_the_other_stays(
 
     left = _connection_keys("google")(recorder.items)
     assert left == ["google:default"]
-    assert ALICE[2] in recorder.items[(SERVICE, "google:default")]
+    assert ALICE[2] in _vault_entries(recorder.items)["google:default"]
     assert result["remaining_accounts"] == 1
     assert result["account_email"] == BOB[1]
     assert BOB[1] not in json.dumps(_index_section("google"))
@@ -347,7 +378,7 @@ def test_an_indexed_account_whose_token_is_gone_asks_for_no_revoke(
     provider, refused, monkeypatch, no_provider_call
 ):
     items = _seed(monkeypatch, provider, ALICE)
-    items.pop((SERVICE, f"{provider}:default"))
+    _drop_vault_slot(items, f"{provider}:default")
     recorder = refused(items)
 
     result = asyncio.run(api.revoke_connection_async(provider, all_accounts=True))
@@ -361,7 +392,7 @@ def test_only_the_account_with_a_token_asks_for_a_revoke(
     refused, monkeypatch, no_provider_call
 ):
     items = _seed(monkeypatch, "google", ALICE, BOB)
-    items.pop((SERVICE, f"google:{accounts.slot_for(BOB[0])}"))
+    _drop_vault_slot(items, f"google:{accounts.slot_for(BOB[0])}")
     refused(items)
 
     result = asyncio.run(api.revoke_connection_async("google", all_accounts=True))
@@ -519,7 +550,7 @@ def test_reads_stay_refused_after_a_disconnect(refused, monkeypatch, no_provider
         store.peek_connection("google")
     with pytest.raises(store.WeakKeyringError):
         accounts.list_accounts("google")
-    assert ALICE[2] in recorder.items[(SERVICE, "google:default")]
+    assert ALICE[2] in _vault_entries(recorder.items)["google:default"]
 
 
 def test_the_cli_tells_the_user_where_to_revoke(

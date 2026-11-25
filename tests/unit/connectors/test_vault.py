@@ -1,0 +1,294 @@
+# Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
+# SPDX-License-Identifier: MIT
+"""Unit tests for the single-master-key encrypted credential vault."""
+
+from __future__ import annotations
+
+import os
+import stat
+import threading
+
+import keyring
+import pytest
+from keyring.backends.null import Keyring as NullKeyring
+
+from gaia.browser import session as browser_session
+from gaia.connectors import store, vault
+from gaia.connectors.errors import ConnectorsError
+from gaia.messaging.discord import credentials as discord_credentials
+from gaia.messaging.slack import credentials as slack_credentials
+
+
+class TestSingleKeychainEntry:
+    """All Python-owned gaia.connections secrets share ONE OS Keychain entry."""
+
+    def test_multiple_secrets_create_only_one_keychain_item(
+        self, _autouse_in_memory_keyring
+    ):
+        store.save_connection(
+            provider="google",
+            account_email="alice@example.com",
+            refresh_token="rt-google",
+            scopes=["openid"],
+            client_id_hash="h1",
+        )
+        store.save_connection(
+            provider="microsoft",
+            account_email="bob@example.com",
+            refresh_token="R" * 3000,
+            scopes=["Mail.Read"],
+            client_id_hash="h2",
+        )
+        store.save_provider_credentials(
+            "google", client_id="cid-1", client_secret="csec-1"
+        )
+        store.save_secret("fireworks_api_key", "fw-key-123")
+        store.save_secret("gateway:amd", "gw-tok-456")
+        slack_credentials.save("xoxb-bot-tok", "xapp-app-tok")
+        discord_credentials.save("discord-bot-tok")
+        browser_key = browser_session._load_key()
+
+        # Exactly ONE entry in the OS keyring: the vault master key.
+        assert list(_autouse_in_memory_keyring._store.keys()) == [
+            (vault.SERVICE_NAME, vault.MASTER_KEY_USERNAME)
+        ]
+
+        # Every stored secret round-trips through its normal API.
+        assert (
+            store.load_connection("google", current_client_id_hash="h1")[
+                "refresh_token"
+            ]
+            == "rt-google"
+        )
+        assert (
+            store.load_connection("microsoft", current_client_id_hash="h2")[
+                "refresh_token"
+            ]
+            == "R" * 3000
+        )
+        assert store.peek_provider_credentials("google")["client_secret"] == "csec-1"
+        assert store.peek_secret("fireworks_api_key") == "fw-key-123"
+        assert store.peek_secret("gateway:amd") == "gw-tok-456"
+        assert slack_credentials.load().bot_token == "xoxb-bot-tok"
+        assert slack_credentials.load().app_token == "xapp-app-tok"
+        assert discord_credentials.load() == "discord-bot-tok"
+        assert browser_session._load_key() == browser_key
+
+        # On-disk vault is ciphertext, not plaintext, and 0600 on POSIX.
+        raw_disk = vault.vault_path().read_bytes()
+        assert raw_disk.startswith(vault.VAULT_MAGIC)
+        for secret in (
+            b"rt-google",
+            b"csec-1",
+            b"fw-key-123",
+            b"gw-tok-456",
+            b"xoxb-bot-tok",
+            b"discord-bot-tok",
+        ):
+            assert secret not in raw_disk
+        if os.name != "nt":
+            mode = stat.S_IMODE(vault.vault_path().stat().st_mode)
+            assert mode == 0o600
+
+    def test_deleting_last_entry_removes_vault_and_master_key(
+        self, _autouse_in_memory_keyring
+    ):
+        store.save_secret("one", "val-1")
+        store.save_secret("two", "val-2")
+        assert vault.vault_path().exists()
+
+        store.delete_secret("one")
+        assert vault.vault_path().exists()
+        assert (
+            vault.SERVICE_NAME,
+            vault.MASTER_KEY_USERNAME,
+        ) in _autouse_in_memory_keyring._store
+        assert store.peek_secret("two") == "val-2"
+
+        store.delete_secret("two")
+        assert not vault.vault_path().exists()
+        assert _autouse_in_memory_keyring._store == {}
+
+
+class TestEnvelopeContract:
+    """Language-neutral AES-256-GCM envelope format and tamper checks (#1899)."""
+
+    def test_deterministic_test_vector(self):
+        key = bytes.fromhex(
+            "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f"
+        )
+        nonce = bytes.fromhex("a0a1a2a3a4a5a6a7a8a9aaab")
+        entries = {"secret:demo": "hello-vault"}
+
+        blob = vault.encrypt_envelope(key, entries, nonce=nonce)
+
+        assert blob[:6] == b"GAIAV1"
+        assert blob[6] == 1
+        assert blob[7:19] == nonce
+        assert blob.hex() == (
+            "474149415631"
+            "01"
+            "a0a1a2a3a4a5a6a7a8a9aaab"
+            "9d3a194331b96bda1147bda82509a5bd02c92d2af6d22f03be3404ee1ac719"
+            "6eff00268ac356714073be72ea334bfe2515f07959e0e10d4697c7c859aa1499"
+        )
+        assert vault.decrypt_envelope(key, blob) == entries
+
+    def test_tampered_ciphertext_fails_loudly(self):
+        key = os.urandom(32)
+        blob = bytearray(vault.encrypt_envelope(key, {"k": "v"}))
+        blob[-1] ^= 0xFF
+        with pytest.raises(ConnectorsError, match="Could not decrypt"):
+            vault.decrypt_envelope(key, bytes(blob))
+
+    def test_wrong_key_fails_loudly(self):
+        blob = vault.encrypt_envelope(os.urandom(32), {"k": "v"})
+        with pytest.raises(ConnectorsError, match="Could not decrypt"):
+            vault.decrypt_envelope(os.urandom(32), blob)
+
+    def test_truncated_or_bad_magic_fails_loudly(self):
+        key = os.urandom(32)
+        with pytest.raises(ConnectorsError, match="corrupt or truncated"):
+            vault.decrypt_envelope(key, b"short")
+        with pytest.raises(ConnectorsError, match="corrupt or truncated"):
+            vault.decrypt_envelope(key, b"BADMGC" + b"\x01" + b"\x00" * 40)
+
+    def test_unsupported_version_fails_loudly(self):
+        key = os.urandom(32)
+        blob = bytearray(vault.encrypt_envelope(key, {"k": "v"}))
+        blob[6] = 99
+        with pytest.raises(
+            ConnectorsError, match="Unsupported credential vault version"
+        ):
+            vault.decrypt_envelope(key, bytes(blob))
+
+    def test_missing_master_key_with_existing_vault_fails_loudly(
+        self, _autouse_in_memory_keyring
+    ):
+        store.save_secret("demo", "value")
+        _autouse_in_memory_keyring._store.clear()
+        with pytest.raises(ConnectorsError, match="master key.*missing"):
+            store.peek_secret("demo")
+
+
+class TestLazyLegacyMigration:
+    """Existing per-slot Keychain items migrate into vault.enc on first read."""
+
+    def test_plain_legacy_slot_migrates_and_is_removed_from_keychain(
+        self, _autouse_in_memory_keyring
+    ):
+        username = store._secret_username("legacy_key")
+        keyring.set_password(vault.SERVICE_NAME, username, "legacy-secret-val")
+
+        assert store.peek_secret("legacy_key") == "legacy-secret-val"
+        # Legacy slot removed; only vault-master-key remains in OS keyring.
+        assert keyring.get_password(vault.SERVICE_NAME, username) is None
+        assert list(_autouse_in_memory_keyring._store.keys()) == [
+            (vault.SERVICE_NAME, vault.MASTER_KEY_USERNAME)
+        ]
+        # Second read comes straight from vault.enc.
+        assert store.peek_secret("legacy_key") == "legacy-secret-val"
+
+    def test_chunked_legacy_slot_migrates_and_cleans_all_chunks(
+        self, _autouse_in_memory_keyring
+    ):
+        import json
+
+        big_token = "M" * (store._CHUNK_CHARS * 2 + 50)
+        payload = json.dumps(
+            {
+                "account_email": "a@example.com",
+                "client_id_hash": "h",
+                "connected_at": 1,
+                "refresh_token": big_token,
+                "scopes": ["s1"],
+            }
+        )
+        username = store._connection_username("microsoft", "default")
+        chunks = [
+            payload[i : i + store._CHUNK_CHARS]
+            for i in range(0, len(payload), store._CHUNK_CHARS)
+        ]
+        for idx, part in enumerate(chunks):
+            keyring.set_password(
+                vault.SERVICE_NAME, store._chunk_username(username, idx), part
+            )
+        keyring.set_password(
+            vault.SERVICE_NAME,
+            username,
+            f"{store._CHUNK_SENTINEL}{len(chunks)}:{store._payload_crc(payload)}",
+        )
+
+        loaded = store.load_connection("microsoft", current_client_id_hash="h")
+        assert loaded is not None
+        assert loaded["refresh_token"] == big_token
+        assert keyring.get_password(vault.SERVICE_NAME, username) is None
+        for idx in range(len(chunks)):
+            assert (
+                keyring.get_password(
+                    vault.SERVICE_NAME, store._chunk_username(username, idx)
+                )
+                is None
+            )
+        assert list(_autouse_in_memory_keyring._store.keys()) == [
+            (vault.SERVICE_NAME, vault.MASTER_KEY_USERNAME)
+        ]
+
+    def test_legacy_browser_session_key_migrates_without_breaking_sessions(
+        self, _autouse_in_memory_keyring, tmp_path, monkeypatch
+    ):
+        monkeypatch.setattr(browser_session, "sessions_dir", lambda: tmp_path)
+        legacy_key = os.urandom(32)
+        keyring.set_password(
+            browser_session.KEYRING_SERVICE,
+            browser_session.KEYRING_USERNAME,
+            legacy_key.hex(),
+        )
+
+        assert browser_session._load_key() == legacy_key
+        assert (
+            keyring.get_password(
+                browser_session.KEYRING_SERVICE, browser_session.KEYRING_USERNAME
+            )
+            is None
+        )
+        assert list(_autouse_in_memory_keyring._store.keys()) == [
+            (vault.SERVICE_NAME, vault.MASTER_KEY_USERNAME)
+        ]
+
+    def test_null_keyring_does_not_create_orphan_vault_file(self, monkeypatch):
+        monkeypatch.setattr(keyring.core, "_keyring_backend", NullKeyring())
+        store.save_secret("discarded", "val")
+        assert not vault.vault_path().exists()
+        assert store.peek_secret("discarded") is None
+
+
+class TestConcurrency:
+    """Concurrent writers racing on first mint and updates keep all entries."""
+
+    def test_concurrent_first_writes_preserve_every_slot(
+        self, _autouse_in_memory_keyring
+    ):
+        n_threads = 12
+        barrier = threading.Barrier(n_threads)
+        errors = []
+
+        def worker(idx: int) -> None:
+            try:
+                barrier.wait()
+                store.save_secret(f"slot-{idx}", f"val-{idx}")
+            except Exception as exc:  # noqa: BLE001
+                errors.append(exc)
+
+        threads = [threading.Thread(target=worker, args=(i,)) for i in range(n_threads)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join(timeout=15)
+
+        assert errors == []
+        assert list(_autouse_in_memory_keyring._store.keys()) == [
+            (vault.SERVICE_NAME, vault.MASTER_KEY_USERNAME)
+        ]
+        for i in range(n_threads):
+            assert store.peek_secret(f"slot-{i}") == f"val-{i}"
