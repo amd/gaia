@@ -7,7 +7,7 @@
  * collector.ts so each file stays readable; they share its fetch helpers.
  */
 
-import { getJson, ghHeaders, insertMany, utcDay, writeAtomic, type CollectEnv, type Fetcher } from "./collector";
+import { getJson, ghHeaders, githubPages, insertMany, utcDay, writeAtomic, type CollectEnv, type Fetcher } from "./collector";
 
 /** Counts ISO timestamps per UTC day, ordered by day. */
 export function countByDay(timestamps: string[]): [string, number][] {
@@ -18,15 +18,12 @@ export function countByDay(timestamps: string[]): [string, number][] {
 
 async function pagedList<T>(f: Fetcher, env: CollectEnv, base: string, accept: string, maxPages: number): Promise<T[]> {
   const out: T[] = [];
-  for (let page = 1; page <= maxPages; page++) {
-    const url = `${base}${base.includes("?") ? "&" : "?"}per_page=100&page=${page}`;
-    const headers = { ...(ghHeaders(env) as Record<string, string>), Accept: accept };
-    const batch = await getJson<T[]>(f, url, { headers });
+  const url = `${base}${base.includes("?") ? "&" : "?"}per_page=100`;
+  for await (const batch of githubPages<T[]>(f, env, url, maxPages, accept)) {
     if (!Array.isArray(batch)) throw new Error(`Response from ${url} is not a list.`);
     out.push(...batch);
-    if (batch.length < 100) return out;
   }
-  throw new Error(`Hit the ${maxPages}-page guard fetching ${base}; raise it deliberately if the repo really is this large.`);
+  return out;
 }
 
 /** Replace a per-day table in one transaction, so readers never see a partial history. */

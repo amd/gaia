@@ -84,7 +84,7 @@ export async function githubDownload(env: CollectEnv, f: Fetcher, url: string): 
   return res;
 }
 
-export async function getJson<T>(f: Fetcher, url: string, init?: RequestInit): Promise<T> {
+async function getOk(f: Fetcher, url: string, init?: RequestInit): Promise<Response> {
   const res = await f(url, init);
   if (!res.ok) {
     throw new Error(
@@ -94,7 +94,36 @@ export async function getJson<T>(f: Fetcher, url: string, init?: RequestInit): P
           : "Check the URL and the token's permissions."),
     );
   }
-  return (await res.json()) as T;
+  return res;
+}
+
+export async function getJson<T>(f: Fetcher, url: string, init?: RequestInit): Promise<T> {
+  return (await (await getOk(f, url, init)).json()) as T;
+}
+
+/** The `rel="next"` URL of a GitHub `Link` header, or null on the last page, where GitHub sends none. */
+export function nextPageUrl(res: Response, from: string): string | null {
+  const next = /<([^>]*)>\s*;\s*rel="next"/.exec(res.headers.get("link") ?? "")?.[1];
+  if (!next) return null;
+  // The token goes with the request, so the link may only lead back to the host that sent it.
+  if (new URL(next).origin !== new URL(from).origin) throw new Error(`The next-page link from ${from} leads to another host: ${next}`);
+  return next;
+}
+
+/**
+ * Every page of a GitHub list, one response body at a time. Pages are followed
+ * by the `Link` header, never by counting entries: GitHub can return a short
+ * page in the middle of a list.
+ */
+export async function* githubPages<T>(f: Fetcher, env: CollectEnv, first: string, maxPages: number, accept?: string): AsyncGenerator<T> {
+  const headers = { ...(ghHeaders(env) as Record<string, string>), ...(accept ? { Accept: accept } : {}) };
+  let url: string | null = first;
+  for (let page = 1; url; page++) {
+    if (page > maxPages) throw new Error(`Hit the ${maxPages}-page guard fetching ${first}; raise it deliberately if the list really is this long.`);
+    const res = await getOk(f, url, { headers });
+    yield (await res.json()) as T;
+    url = nextPageUrl(res, url);
+  }
 }
 
 // One JSON value per statement, kept well under D1's 2 MB limit for a bound value.
@@ -164,13 +193,10 @@ async function step(db: D1Database, source: string, fn: () => Promise<string>): 
 
 export async function collectReleases(env: CollectEnv, f: Fetcher, day: string): Promise<string> {
   const all: GhRelease[] = [];
-  for (let page = 1; page <= MAX_PAGES; page++) {
-    const url = `https://api.github.com/repos/${env.GITHUB_REPO}/releases?per_page=100&page=${page}`;
-    const batch = await getJson<GhRelease[]>(f, url, { headers: ghHeaders(env) });
+  const url = `https://api.github.com/repos/${env.GITHUB_REPO}/releases?per_page=100`;
+  for await (const batch of githubPages<GhRelease[]>(f, env, url, MAX_PAGES)) {
     if (!Array.isArray(batch)) throw new Error(`Response from ${url} is not an array of releases.`);
     all.push(...batch);
-    if (batch.length < 100) break;
-    if (page === MAX_PAGES) throw new Error(`Hit the ${MAX_PAGES}-page guard listing releases.`);
   }
   const live = all.filter((r) => !r.draft && r.published_at);
   const assets = live.flatMap((r) => r.assets.map((a) => [day, r.tag_name, a.name, a.download_count]));
@@ -209,10 +235,10 @@ const isoSec = (ms: number): string => new Date(ms).toISOString().slice(0, 19) +
 async function fetchRunWindow(env: CollectEnv, f: Fetcher, startMs: number, endMs: number): Promise<GhRun[]> {
   const created = encodeURIComponent(`${isoSec(startMs)}..${isoSec(endMs)}`);
   const runs: GhRun[] = [];
-  for (let page = 1; page <= 10; page++) {
-    const url = `https://api.github.com/repos/${env.GITHUB_REPO}/actions/runs?per_page=100&page=${page}&created=${created}`;
-    const res = await getJson<{ total_count: number; workflow_runs: GhRun[] }>(f, url, { headers: ghHeaders(env) });
-    if (page === 1 && res.total_count > 1000) {
+  const url = `https://api.github.com/repos/${env.GITHUB_REPO}/actions/runs?per_page=100&created=${created}`;
+  let first = true;
+  for await (const res of githubPages<{ total_count: number; workflow_runs: GhRun[] }>(f, env, url, 10)) {
+    if (first && res.total_count > 1000) {
       if (endMs - startMs <= MIN_WINDOW_MS) {
         throw new Error(
           `More than 1,000 workflow runs between ${isoSec(startMs)} and ${isoSec(endMs)}; the Actions API would truncate.`,
@@ -221,8 +247,8 @@ async function fetchRunWindow(env: CollectEnv, f: Fetcher, startMs: number, endM
       const mid = Math.floor((startMs + endMs) / 2);
       return [...(await fetchRunWindow(env, f, startMs, mid)), ...(await fetchRunWindow(env, f, mid + 1000, endMs))];
     }
+    first = false;
     runs.push(...res.workflow_runs);
-    if (res.workflow_runs.length < 100) break;
   }
   return runs;
 }
