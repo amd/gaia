@@ -17,6 +17,7 @@ from gaia.agents.base.memory import (
     _CREDENTIAL_NOT_STORED,
     MemoryMixin,
     claims_memory_save,
+    fact_to_keep,
 )
 from gaia.agents.tools.skill_library_tools import uncaptured_skill_path
 
@@ -204,8 +205,8 @@ def test_an_os_file_refusal_tells_the_model_to_hand_it_to_the_user(tmp_path):
     assert not _is_os_file(Path.home() / ".ssh" / "id_rsa")
 
 
-# GAIA never calls remember for the model: a plain request with no save only
-# sends the model back to make the call itself.
+# The only shapes GAIA saves on its own: the whole message is one plain-ASCII
+# sentence asking to remember one fact.
 @pytest.mark.parametrize(
     "request_text, fact",
     [
@@ -226,17 +227,13 @@ def test_an_os_file_refusal_tells_the_model_to_hand_it_to_the_user(tmp_path):
         ("Remember that my daughter\u2019s name is Mia.", "my daughter's name is Mia"),
     ],
 )
-def test_a_plain_request_with_no_save_nudges_the_model_and_saves_nothing(
-    request_text, fact
-):
-    host = _host(request_text)
-    assert host.required_calls() == []
-    problems = host.answer_problems(f"Got it, {fact}.")
-    assert problems == ["Nothing was saved to memory."]
-    assert "Call remember now" in host.answer_repair_prompt(problems)
+def test_the_fact_a_plain_request_asks_to_keep(request_text, fact):
+    assert fact_to_keep(request_text) == fact
+    assert _host(request_text).required_calls() == [("remember", {"fact": fact})]
 
 
-# Longer and mixed requests: GAIA makes no call of its own for any of them.
+# Plain requests GAIA leaves to the model: it is still told to save, but GAIA
+# doesn't save on its own because the message is more than the one shape.
 @pytest.mark.parametrize(
     "request_text",
     [
@@ -265,7 +262,8 @@ def test_a_plain_request_with_no_save_nudges_the_model_and_saves_nothing(
         "What do you remember about me?",
     ],
 )
-def test_no_save_is_made_for_the_model(request_text):
+def test_more_than_the_one_shape_is_left_to_the_model(request_text):
+    assert fact_to_keep(request_text) == ""
     assert _host(request_text).required_calls() == []
 
 
@@ -354,6 +352,7 @@ _PAD = "I had a long day at work and the weather was nice. " * 30
     ],
 )
 def test_a_declined_fact_is_never_force_saved(request_text):
+    assert fact_to_keep(request_text) == ""
     assert _host(request_text).required_calls() == []
 
 
@@ -389,7 +388,7 @@ def test_a_curly_apostrophe_still_declines_the_save(request_text, mark):
     ],
 )
 def test_a_curly_apostrophe_never_forces_a_save(request_text, mark):
-    assert _host(request_text.replace("'", mark)).required_calls() == []
+    assert fact_to_keep(request_text.replace("'", mark)) == ""
 
 
 @pytest.mark.parametrize(
@@ -407,8 +406,8 @@ def test_a_curly_apostrophe_never_forces_a_save(request_text, mark):
         "Remember that my cat is Tom but please don’t keep my SSN in mind",
     ],
 )
-def test_a_later_decline_forces_no_save(request_text):
-    assert _host(request_text).required_calls() == []
+def test_a_later_decline_cancels_the_forced_save(request_text):
+    assert fact_to_keep(request_text) == ""
 
 
 @pytest.mark.parametrize(
@@ -424,6 +423,7 @@ def test_a_later_decline_forces_no_save(request_text):
 def test_any_negation_leaves_the_save_to_the_model(request_text):
     # Not forced, but the model is still told the user asked it to remember.
     host = _host(request_text)
+    assert fact_to_keep(request_text) == ""
     assert host.required_calls() == []
     assert "Nothing was saved to memory." in host.answer_problems("Okay.")
 
@@ -445,11 +445,116 @@ def test_any_negation_leaves_the_save_to_the_model(request_text):
         "Translate this note:\n\nPlease remember that the deadline is Friday.",
     ],
 )
-def test_no_forced_save_for_several_or_quoted_requests(request_text):
+def test_no_forced_save_unless_exactly_one_plain_request(request_text):
+    assert fact_to_keep(request_text) == ""
     assert _host(request_text).required_calls() == []
 
 
-# Every probe reviews used against the earlier forced save; none may save anything.
+def test_a_message_over_300_characters_is_left_to_the_model():
+    head = "Remember that my dog is Rex and "
+    fill = "Rex likes long walks and " * 20
+    text = (head + fill)[:299] + "."
+    assert len(text) == 300 and fact_to_keep(text)
+    assert fact_to_keep(text[:-1] + "a.") == ""
+
+
+_DECLINED_FACTS = (
+    "my phone number is 555-1234",
+    "my SSN is 123-45-6789",
+    "I live at 12 Elm St",
+)
+_DECLINES = (
+    "don't save that",
+    "do not store it",
+    "dont keep it",
+    "do n't remember it",
+    "never mind, forget it",
+    "I'd rather you didn't",
+    "I'd prefer you not retain it",
+    "hold off on that",
+    "skip that one",
+    "no, don't",
+    "nah",
+    "scratch that, it won't be needed",
+    "you shouldn't keep it",
+    "I can't have that stored",
+)
+_INVISIBLE = ("\u200b", "\u200c", "\u200d", "\u2060", "\ufeff", "\u00ad", "\u034f")
+
+
+def _variants(decline):
+    yield decline
+    for mark in _CURLY:
+        yield decline.replace("'", mark)
+    for mark in _INVISIBLE:
+        yield mark.join(decline)
+    yield "".join(chr(ord(c) + 0xFEE0) if "!" <= c <= "~" else c for c in decline)
+    yield decline.upper()
+
+
+def _placed(fact, decline):
+    yield f"{decline}. Remember that {fact}."
+    yield f"Remember that {fact}. {decline}."
+    yield f"Remember that {fact}, {decline}, and thanks for the help."
+    yield f"Remember that {fact}.\n\n{decline}.\n\nThanks!"
+    yield f"Remember that {fact}. {'Some notes about my week. ' * 80} {decline}."
+
+
+def test_a_declined_fact_is_never_returned_in_any_shape():
+    for fact in _DECLINED_FACTS:
+        # Without the decline, the same request is forced: the property bites.
+        assert fact_to_keep(f"Remember that {fact}.") == fact
+    leaked = [
+        text
+        for fact in _DECLINED_FACTS
+        for decline in _DECLINES
+        for variant in _variants(decline)
+        for text in _placed(fact, variant)
+        if fact_to_keep(text)
+    ]
+    assert leaked == []
+
+
+_OPENERS = ("", "Please ", "ok ", "Hi. ", "Translate this: ")
+_ASKS = ("remember ", "remember that ", "keep in mind that ", "note that ")
+_FACTS = ("my dog is Rex", "my phone is 555-1234", "I live at 12 Elm St")
+_TAILS = (
+    "",
+    ".",
+    "!",
+    "..",
+    "?",
+    ", ok",
+    " and then open my notes",
+    ". Thanks",
+    " jk",
+    "; done",
+    "\nAnd one more thing",
+    " maar niet",
+)
+
+
+def test_whatever_is_forced_is_one_bare_fact_from_the_message():
+    forced = 0
+    for opener in _OPENERS:
+        for ask in _ASKS:
+            for fact in _FACTS:
+                for tail in _TAILS:
+                    for text in (opener + ask + fact + tail, fact + tail):
+                        kept = fact_to_keep(text)
+                        if not kept:
+                            continue
+                        forced += 1
+                        assert kept == fact, text
+                        assert opener in ("", "Please "), text
+                        assert ask != "note that ", text
+                        assert tail in ("", ".", "!"), text
+    assert forced  # the plain shapes do force: the check is not vacuous
+
+
+# Every probe the third and fourth reviews used against the old rule. Each has
+# text around the request, a non-ASCII character or a decline, so none matches
+# the one shape GAIA saves on its own.
 @pytest.mark.parametrize(
     "request_text",
     [
@@ -776,6 +881,7 @@ def test_no_forced_save_for_several_or_quoted_requests(request_text):
     ],
 )
 def test_no_review_probe_forces_a_save(request_text):
+    assert fact_to_keep(request_text) == ""
     assert _host(request_text).required_calls() == []
 
 
@@ -795,9 +901,6 @@ def test_a_skill_path_in_pasted_text_or_a_how_to_question_asks_for_nothing(
     assert uncaptured_skill_path(request_text, set()) == ""
 
 
-@pytest.mark.xfail(
-    strict=True, reason="open leak: a decline with no punctuation still saves"
-)
 def test_a_decline_with_no_punctuation_forces_no_save():
     request_text = "Remember my phone is 555-1234 leave it out"
     assert fact_to_keep(request_text) == ""
