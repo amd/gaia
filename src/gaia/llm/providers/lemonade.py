@@ -367,6 +367,11 @@ MODEL_SERVER_DOWN = "model_server_down"
 #: How these messages name the local server.
 _LOCAL_SERVER_RE = re.compile(r"\bthe local (?:LLM|model)(?: server)?\b", re.IGNORECASE)
 
+#: The cloud-disconnect messages open with "GAIA's AI engine lost its ...". Only
+#: that phrase is swapped, so "GAIA's AI engine couldn't start" (a server GAIA
+#: runs) is never rewritten.
+_ENGINE_LOST_RE = re.compile(r"\bGAIA's AI engine(?= lost its\b)")
+
 
 def wording_for_model(message: str, model_id: Optional[str]) -> str:
     """*message* as a chat on *model_id* should read it.
@@ -379,10 +384,17 @@ def wording_for_model(message: str, model_id: Optional[str]) -> str:
         return message
     if not _user_chose_the_server():
         return _LOCAL_SERVER_RE.sub("GAIA's AI engine", message)
-    return _LOCAL_SERVER_RE.sub(
-        lambda m: (
-            "Your model server" if m.group()[0].isupper() else "your model server"
-        ),
+
+    def _own_server(match: "re.Match[str]") -> str:
+        return (
+            "Your model server" if match.group()[0].isupper() else "your model server"
+        )
+
+    message = _LOCAL_SERVER_RE.sub(_own_server, message)
+    # "GAIA's AI engine lost its cloud provider connection": the user's own
+    # server lost it, so it is not GAIA's engine.
+    return _ENGINE_LOST_RE.sub(
+        lambda m: ("Your model server" if m.start() == 0 else "your model server"),
         message,
     )
 

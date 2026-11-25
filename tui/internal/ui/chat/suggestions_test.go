@@ -87,9 +87,9 @@ func TestSkillsBuiltIntoTheAgentAreSuggested(t *testing.T) {
 			t.Fatalf("first screen lacks %q:\n%s", want, got)
 		}
 	}
-	next, _ := m.handleKey(digitKey('3'))
+	next, _ := sendStarter(m, 3)
 	if picked := next.(ChatModel); !picked.streaming || picked.messages[0].Content != starters[2].prompt {
-		t.Errorf("3 did not start the third suggestion: %+v", picked.messages)
+		t.Errorf("selecting the third starter did not send it: %+v", picked.messages)
 	}
 	// They are still there for the next new chat.
 	cleared, _ := m.submit("/clear")
@@ -196,18 +196,77 @@ func suggestingChat(t *testing.T, w, h int) *ChatModel {
 
 func digitKey(r rune) tea.KeyMsg { return tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}} }
 
+func focusStarter(m ChatModel, row int) ChatModel {
+	for range row {
+		next, _ := m.handleKey(tea.KeyMsg{Type: tea.KeyTab})
+		m = next.(ChatModel)
+	}
+	return m
+}
+
+func sendStarter(m ChatModel, row int) (tea.Model, tea.Cmd) {
+	return focusStarter(m, row).handleKey(tea.KeyMsg{Type: tea.KeyEnter})
+}
+
 func TestPickingASuggestionStartsThatTask(t *testing.T) {
-	m := suggestingChat(t, 100, 30)
-	next, cmd := m.handleKey(digitKey('2'))
+	for i, starter := range suggestingChat(t, 100, 30).starters {
+		m := focusStarter(*suggestingChat(t, 100, 30), i+1)
+		if m.streaming || m.starterFocus != i+1 || !strings.Contains(screen(m), "> "+string('1'+rune(i))+"  "+starter.label) {
+			t.Fatalf("Tab should mark row %d without starting a turn", i+1)
+		}
+		next, cmd := m.handleKey(tea.KeyMsg{Type: tea.KeyEnter})
+		got := next.(ChatModel)
+		if cmd == nil || !got.streaming || len(got.messages) != 1 || got.messages[0].Content != starter.prompt {
+			t.Errorf("Enter on row %d sent %+v, want %q", i+1, got.messages, starter.prompt)
+		}
+		if got.input.Value() != "" || got.starterFocus != 0 {
+			t.Errorf("sending kept input %q or starter focus %d", got.input.Value(), got.starterFocus)
+		}
+	}
+
+}
+
+func TestFirstDigitsAreTypedWithVisibleStarters(t *testing.T) {
+	for _, state := range []string{"welcome", "ready"} {
+		t.Run(state, func(t *testing.T) {
+			for digit := '1'; digit <= '4'; digit++ {
+				m := suggestingChat(t, 100, 30)
+				if state == "ready" {
+					m.warming, m.streaming = true, true
+					m.finishWarmUp(client.WarmedUp)
+				}
+				if !m.canFocusStarter() {
+					t.Fatal("fixture has no visible starters")
+				}
+				next, _ := m.handleKey(digitKey(digit))
+				if got := next.(ChatModel); got.streaming || got.hasUserMessage() || got.input.Value() != string(digit) {
+					t.Errorf("%c started a turn instead of being typed: input %q", digit, got.input.Value())
+				}
+			}
+		})
+	}
+}
+
+func TestStarterFocusLeavesTheComposerKeysAlone(t *testing.T) {
+	m := focusStarter(*suggestingChat(t, 100, 30), 2)
+	next, _ := m.handleKey(digitKey('1'))
 	got := next.(ChatModel)
-	if cmd == nil || !got.streaming {
-		t.Fatal("picking a suggestion did not start a turn")
+	if got.starterFocus != 0 || got.input.Value() != "1" || got.streaming {
+		t.Fatal("typing while a starter is focused must return to the composer")
 	}
-	if len(got.messages) == 0 || got.messages[0].Content != starters[1].prompt {
-		t.Errorf("sent %+v, want %q", got.messages, starters[1].prompt)
+	next, _ = got.handleKey(tea.KeyMsg{Type: tea.KeyEnter})
+	if submitted := next.(ChatModel); !submitted.streaming || submitted.messages[0].Content != "1" {
+		t.Errorf("Enter must send the typed text, got %+v", submitted.messages)
 	}
-	if got.input.Value() != "" {
-		t.Errorf("the composer kept the prompt: %q", got.input.Value())
+	for _, key := range []tea.KeyType{tea.KeyEsc, tea.KeyShiftTab} {
+		m = focusStarter(*suggestingChat(t, 100, 30), 1)
+		next, _ = m.handleKey(tea.KeyMsg{Type: key})
+		if dismissed := next.(ChatModel); dismissed.starterFocus != 0 || dismissed.streaming {
+			t.Errorf("%v did not leave starter focus", key)
+		}
+	}
+	if got := focusStarter(*suggestingChat(t, 100, 30), suggestionsMax+1); got.starterFocus != 0 || got.streaming {
+		t.Error("Tab beyond the last starter did not return to the composer")
 	}
 }
 
@@ -232,20 +291,25 @@ func TestSuggestionsLeaveOnceTheConversationStarts(t *testing.T) {
 	if strings.Contains(screen(*m), "Try one") {
 		t.Error("suggestions outlived the first message")
 	}
-	if _, _, ok := m.pickSuggestion(digitKey('1')); ok {
-		t.Error("a number picked a suggestion that is no longer on screen")
+	if got := focusStarter(*m, 1); got.starterFocus != 0 || got.streaming {
+		t.Error("Tab selected a starter after the conversation began")
 	}
 }
 
-// A notice that replaces the welcome screen hides the list; a number the user
-// cannot see must be typed, not run.
+// A notice that replaces the welcome screen hides the list and clears any
+// prior focus; Tab and Enter cannot start a hidden suggestion.
 func TestHiddenSuggestionsAreNotPicked(t *testing.T) {
-	m := suggestingChat(t, 100, 30)
+	m := focusStarter(*suggestingChat(t, 100, 30), 1)
 	m.messages = append(m.messages, Message{Role: RoleStatus, Content: discordOfferText()})
-	if strings.Contains(screen(*m), "Try one") {
+	m.updateViewport()
+	if strings.Contains(screen(m), "Try one") {
 		t.Fatal("the notice was expected to replace the welcome screen")
 	}
-	next, _ := m.handleKey(digitKey('1'))
+	next, cmd := sendStarter(m, 1)
+	if got := next.(ChatModel); cmd != nil || got.streaming || got.starterFocus != 0 {
+		t.Fatal("Tab and Enter must not run a hidden starter")
+	}
+	next, _ = m.handleKey(digitKey('1'))
 	if got := next.(ChatModel); got.streaming || got.input.Value() != "1" {
 		t.Errorf("1 with no list on screen: input %q streaming=%v", got.input.Value(), got.streaming)
 	}
@@ -258,20 +322,24 @@ func TestSuggestionsSurviveTheWarmUp(t *testing.T) {
 	m.warming, m.streaming = true, true
 	m.finishWarmUp(client.WarmedUp)
 	got := screen(*m)
-	if !strings.Contains(got, "Ready") || !strings.Contains(got, "press its number") || !strings.Contains(got, "1 Today's tech news in brief") {
+	if !strings.Contains(got, "Ready") || !strings.Contains(got, starterHint) || !strings.Contains(got, "1 Today's tech news in brief") {
 		t.Fatalf("the Ready line lost the suggestions:\n%s", got)
 	}
 	if strings.Contains(got, firstPromptHint[:20]) {
 		t.Errorf("both the old hint and the suggestions are shown:\n%s", got)
 	}
-	next, _ := m.handleKey(digitKey('1'))
+	focused := focusStarter(*m, 1)
+	if got := screen(focused); !strings.Contains(got, "> 1 Today's tech news in brief") {
+		t.Fatalf("the focused starter wasn't marked in the Ready line:\n%s", got)
+	}
+	next, _ := focused.handleKey(tea.KeyMsg{Type: tea.KeyEnter})
 	if got := next.(ChatModel); !got.streaming || got.messages[len(got.messages)-1].Content != starters[0].prompt {
-		t.Errorf("1 after warm-up did not start the first suggestion")
+		t.Error("Tab and Enter after warm-up did not start the first suggestion")
 	}
 }
 
 // Over the relay the skill list can arrive after the warm-up ends: the Ready
-// line was written without it, and must gain the list the numbers pick from.
+// line was written without it, and must gain the list the user can pick from.
 func TestSkillsReportedAfterTheWarmUpReachTheReadyLine(t *testing.T) {
 	m := NewChatModelForFlagship(&nullClient{}, "gaia", "gaia", true)
 	m.width, m.height = 100, 30
@@ -287,20 +355,25 @@ func TestSkillsReportedAfterTheWarmUpReachTheReadyLine(t *testing.T) {
 	if !strings.Contains(got, "Ready") || !strings.Contains(got, "1 Today's tech news in brief") || strings.Contains(got, firstPromptHint[:20]) {
 		t.Fatalf("the late report did not reach the Ready line:\n%s", got)
 	}
-	picked, _ := m.handleKey(digitKey('1'))
+	picked, _ := sendStarter(m, 1)
 	if p := picked.(ChatModel); !p.streaming || p.messages[len(p.messages)-1].Content != starters[0].prompt {
-		t.Error("1 did not start the first suggestion after a late report")
+		t.Error("Tab and Enter did not start the first suggestion after a late report")
 	}
 
-	// A report that changes the list rewrites it, and the numbers follow.
+	// A report that changes the list clears stale focus, even on the same row.
+	m = focusStarter(m, 1)
 	next, _ = m.Update(skillsListedMsg{skills: reportSkills("check-in").Skills})
 	m = next.(ChatModel)
 	if got := screen(m); !strings.Contains(got, "1 A daily check-in") || strings.Contains(got, "tech news") {
 		t.Fatalf("the Ready line kept a stale list:\n%s", got)
 	}
-	picked, _ = m.handleKey(digitKey('1'))
+	picked, _ = m.handleKey(tea.KeyMsg{Type: tea.KeyEnter})
+	if p := picked.(ChatModel); p.streaming || p.starterFocus != 0 {
+		t.Fatal("Enter after a changed list reused stale focus")
+	}
+	picked, _ = sendStarter(m, 1)
 	if p := picked.(ChatModel); p.messages[len(p.messages)-1].Content != starters[4].prompt {
-		t.Error("1 did not follow the rewritten list")
+		t.Error("Tab and Enter did not follow the rewritten list")
 	}
 
 	// Once the conversation has started, the Ready line is history.

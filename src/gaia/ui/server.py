@@ -55,13 +55,18 @@ from ._chat_helpers import _index_document  # noqa: F401
 from ._chat_helpers import _stream_chat_response  # noqa: F401
 from ._chat_helpers import _ui_cloud_provider, writing_tool_registry
 from .agent_loop import agent_loop
+from .csp import content_security_policy
 
 # pylint: enable=unused-import
 from .database import ChatDatabase
 from .document_copies import move_library_files_out_of_shared_folder
 from .document_monitor import DocumentMonitor
 from .memory_settings import memory_enabled
-from .restart_recovery import recover_interrupted_work, sweep_interrupted_work
+from .restart_recovery import (
+    INTERRUPTED_INDEXING_ERROR,
+    recover_interrupted_work,
+    sweep_interrupted_work,
+)
 from .routers import agent_programs as agent_programs_router_mod
 from .routers import agents as agents_router_mod
 from .routers import automations as automations_router_mod
@@ -98,7 +103,7 @@ from .security import (
     require_local_pc,
     via_tunnel,
 )
-from .tunnel import TunnelManager
+from .tunnel import TunnelManager, redact_tunnel_token_in_access_log
 from .utils import UploadStaticFiles
 from .utils import sanitize_static_path as _sanitize_static_path
 from .utils import uploads_dir
@@ -415,13 +420,16 @@ def _tripwire_sweep() -> None:
         )
 
 
-def create_app(db_path: str = None, webui_dist: str = None) -> FastAPI:
+def create_app(
+    db_path: str = None, webui_dist: str = None, port: int = DEFAULT_PORT
+) -> FastAPI:
     """Create and configure the FastAPI application.
 
     Args:
         db_path: Path to SQLite database. None for default, ":memory:" for testing.
         webui_dist: Path to the pre-built frontend dist directory. When None,
             falls back to the default location relative to this package.
+        port: Port the server listens on; the mobile-access tunnel forwards to it.
 
     Returns:
         Configured FastAPI application.
@@ -780,6 +788,9 @@ def create_app(db_path: str = None, webui_dist: str = None) -> FastAPI:
 
         # Shutdown
         remove_local_work(active_turns_in_flight)
+        # ngrok is its own process: left running, it keeps the public URL open.
+        await tunnel.stop()
+        logger.info("Mobile access tunnel stopped")
         await scheduler.shutdown()
         logger.info("Task scheduler stopped")
         await agent_loop.stop()
@@ -794,6 +805,16 @@ def create_app(db_path: str = None, webui_dist: str = None) -> FastAPI:
         await stop_watcher()
         logger.info("Connector activation watcher stopped")
         recovery_sweep.cancel()
+        # Indexing writes to the database, so it ends before the database closes.
+        pending = dict(indexing_tasks)
+        for task in pending.values():
+            task.cancel()
+        await asyncio.gather(*pending.values(), return_exceptions=True)
+        # Closing GAIA isn't the user's Cancel: keep the interrupted reason and Retry.
+        for doc_id in pending:
+            db.update_document_status(
+                doc_id, "failed", last_error=INTERRUPTED_INDEXING_ERROR
+            )
         db.close()
         logger.info("Database connection closed")
         memory_router_mod.close_store()
@@ -855,8 +876,9 @@ def create_app(db_path: str = None, webui_dist: str = None) -> FastAPI:
     app.state.max_indexed_files = int(os.environ.get("GAIA_MAX_INDEXED_FILES", "0"))
 
     # Initialize tunnel manager for mobile access
-    tunnel = TunnelManager(port=DEFAULT_PORT)
+    tunnel = TunnelManager(port=port)
     app.state.tunnel = tunnel
+    redact_tunnel_token_in_access_log()
 
     # Per-session locks prevent the same session from having multiple
     # concurrent requests, which would corrupt conversation state.
@@ -1161,7 +1183,13 @@ def create_app(db_path: str = None, webui_dist: str = None) -> FastAPI:
 
         if not index_html.is_file():
             # Frontend build not present yet -- serve the actionable fallback.
-            return HTMLResponse(content=_FALLBACK_HTML, status_code=200)
+            return HTMLResponse(
+                content=_FALLBACK_HTML,
+                status_code=200,
+                headers={
+                    "Content-Security-Policy": content_security_policy(_FALLBACK_HTML)
+                },
+            )
 
         # 1. Token bootstrap path: only fires for the index-html case
         #    (token always lands on ``/`` from the QR code). On any
@@ -1193,7 +1221,15 @@ def create_app(db_path: str = None, webui_dist: str = None) -> FastAPI:
         )
         if redirect is not None:
             return redirect
-        return FileResponse(str(index_html), headers=_NO_CACHE)
+        return FileResponse(
+            str(index_html),
+            headers={
+                **_NO_CACHE,
+                "Content-Security-Policy": content_security_policy(
+                    index_html.read_text(encoding="utf-8")
+                ),
+            },
+        )
 
     return app
 
@@ -1241,7 +1277,7 @@ def main():
     log_level = "debug" if args.debug else "info"
     print(f"Starting GAIA Agent UI server on http://{args.host}:{args.port}")
     try:
-        server_app = create_app(webui_dist=args.ui_dist)
+        server_app = create_app(webui_dist=args.ui_dist, port=args.port)
         if sys.stdout.isatty():
             print(
                 f"   Open (link works once): "

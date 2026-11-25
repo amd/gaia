@@ -566,7 +566,7 @@ GAIA │ agent gaia v0.2.0 │ Gemma-4-E4B-it-GGUF
 Welcome to GAIA
 Connected to: agent gaia v0.2.0 (GAIA core 0.25.0)
 
-Try one — press its number:
+Try one: Tab to select, Enter to run
   1  Today's tech news in brief
   2  Research a topic, with sources
   3  What fills up this folder
@@ -580,11 +580,12 @@ Ask a question, or type /help for what else this can do.
 
 The first screen suggests up to four things to try, one per skill the agent
 has that works without further setup (no file, link or connected account needed
-first). Press a suggestion's number on an empty composer to send it; once you
-start typing, digits are just text. On a local model the list moves into the
-line that says the model is ready, and the numbers keep working until your
-first message. The list comes from the skills the agent reports when it
-starts, built-in ones included, so it costs no model call.
+first). With an empty composer, press Tab to select a suggestion, then Enter
+to send it. Tab cycles through the list; Esc or typing returns to the composer.
+Digits are always text. On a local model the list moves into the line that says
+the model is ready and remains selectable until your first message. The list
+comes from the skills the agent reports when it starts, built-in ones included,
+so it costs no model call.
 
 The `agent <id>` segment is always the stable id, lowercased — the same string
 `--agent <id>` takes, so you can read it straight off the header and pass it back.
@@ -973,7 +974,7 @@ giving up on something you never saw.
 |---|---|
 | `ask` (default) | Every shell command except plain reads inside the allowed folders, every Python run and file write |
 | `accept edits` | Shell commands and Python still ask. File edits inside the folder you started GAIA in run without asking. Hidden files and folders (`.git/`, `.bashrc`, `.github/`), folders on your `PATH`, and a file that would stand in for a real program on Windows (`git.bat`) still ask. Started from your home folder or a drive root, nothing is auto-accepted |
-| `full access` | Nothing — see below |
+| `full access` | Nothing — see below. Deletes run only here: in the other modes they are refused, not asked |
 
 Full access is never switched on by a stray keypress. The first time `Shift+Tab`
 reaches it in a session, GAIA explains what it does and stays in `ask`; type

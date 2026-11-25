@@ -59,6 +59,24 @@ describe('Popover placement', () => {
         expect(menu.style.getPropertyValue('--popover-room')).toBe('486px');
     });
 
+    it('measures its room to the end of an ancestor that clips it, not past it to the window', () => {
+        layout(250, 280, 900);
+        vi.spyOn(HTMLDivElement.prototype, 'getBoundingClientRect').mockReturnValue({ top: 40, bottom: 700 } as DOMRect);
+        const anchorRef = { current: null as HTMLButtonElement | null };
+        render(
+            <div style={{ overflow: 'hidden' }}>
+                <button ref={anchorRef} type="button">Anchor</button>
+                <Popover open onClose={() => {}} anchor={anchorRef} label="Menu">
+                    <button type="button">Item</button>
+                </Popover>
+            </div>,
+        );
+        const menu = screen.getByRole('dialog', { name: 'Menu' });
+        expect(menu).toHaveClass('popover-below');
+        // 700 - 280 - 14, where the window alone would allow 666.
+        expect(menu.style.getPropertyValue('--popover-room')).toBe('406px');
+    });
+
     it('re-measures when its content arrives after opening', async () => {
         vi.spyOn(HTMLButtonElement.prototype, 'getBoundingClientRect').mockReturnValue(
             { top: 250, bottom: 280 } as DOMRect,

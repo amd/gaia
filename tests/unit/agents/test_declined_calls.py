@@ -265,6 +265,83 @@ def test_saying_not_to_does_not_lift_it(tmp_path, monkeypatch, not_again):
     assert console.prompted == [ECHO]
 
 
+#: Ordinary ways people ask for a declined call again. Before chat-long
+#: declines, each of these got a fresh approval card; none may get a refusal.
+ORDINARY_REASKS = [
+    "try it once more",
+    "one more time please",
+    "can you try that",
+    "redo it",
+    "please execute it",
+    "ok, proceed",
+    "sorry, I misclicked",
+    "I changed my mind, run it",
+    "Why not run it again?",
+    "No, don’t stop, try it again",
+    "otra vez por favor",
+    "inténtalo de nuevo",
+    "réessaie",
+    "encore une fois",
+    "nochmal bitte",
+    "noch einmal",
+    "di nuovo",
+    "riprova",
+    "tente novamente",
+    "opnieuw",
+    "ещё раз",
+    "попробуй снова",
+    "再试一次",
+    "重新运行",
+    "もう一度",
+    "다시 해줘",
+    "مرة أخرى",
+    "फिर से चलाओ",
+]
+
+#: Ordinary follow-ups that don't ask for the call; the no must still hold.
+ORDINARY_NON_REASKS = [
+    "what does that print?",
+    "Hmm, ok. What did you try to run?",
+    "Why did it fail?",
+    "thanks",
+    "what else can you do?",
+    "No, don’t run it again",
+    "never try that",
+    "summarize what happened",
+]
+
+
+@pytest.mark.parametrize("message", ORDINARY_REASKS)
+def test_ordinary_reasks_lift_the_no(message):
+    declined = DeclinedCalls()
+    declined.record("run_shell_command", _shell(ECHO))
+
+    assert declined.lift_for(message) == [ECHO]
+
+
+@pytest.mark.parametrize("message", ORDINARY_NON_REASKS)
+def test_ordinary_follow_ups_keep_the_no(message):
+    declined = DeclinedCalls()
+    declined.record("run_shell_command", _shell(ECHO))
+
+    assert declined.lift_for(message) == []
+    assert declined.declined("run_shell_command", _shell(ECHO)) == ECHO
+
+
+@pytest.mark.parametrize("message", ["try it once more", "nochmal bitte", "再试一次"])
+def test_an_ordinary_reask_gets_the_approval_card_again(tmp_path, monkeypatch, message):
+    monkeypatch.chdir(tmp_path)
+    console = _DenyShellConsole()
+    agent = _agent(console, tmp_path)
+
+    _stub_chat(agent, _call(ECHO), _answer("You declined it."))
+    agent.process_query(f"Run this exact command: {ECHO}")
+    _stub_chat(agent, _call(ECHO), _answer("Declined again."))
+    agent.process_query(message)
+
+    assert console.prompted == [ECHO, ECHO]
+
+
 def test_naming_one_call_lifts_only_that_one():
     declined = DeclinedCalls()
     declined.record("run_shell_command", _shell(ECHO))

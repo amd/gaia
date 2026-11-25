@@ -189,14 +189,16 @@ export interface AgentProgramsAnswers {
     download?: object;
     /** What each poll of the download answers. */
     poll?: object;
+    /** The agent in use. */
+    current?: 'gaiapy' | 'gaiacpp';
 }
 
 /** The agent programs as this PC would report them, and the gaiacpp download's answers. */
-export async function withAgentPrograms(page: Page, { gaiacpp = 'installed', download = IDLE_AGENT_DOWNLOAD, poll }: AgentProgramsAnswers = {}): Promise<void> {
+export async function withAgentPrograms(page: Page, { gaiacpp = 'installed', download = IDLE_AGENT_DOWNLOAD, poll, current = 'gaiapy' }: AgentProgramsAnswers = {}): Promise<void> {
     const cpp = gaiacpp === 'installed' ? AGENT_PROGRAMS.programs[1]
         : gaiacpp === 'downloadable' ? { ...AGENT_PROGRAMS.programs[1], installed: false, can_download: true }
             : { ...AGENT_PROGRAMS.programs[1], installed: false, size_bytes: null, unavailable_reason: 'this GAIA release has no gaiacpp to download. Use the Python agent, or update GAIA.', unavailable_code: 'no_release' };
-    const listing = { ...AGENT_PROGRAMS, programs: [AGENT_PROGRAMS.programs[0], cpp], download };
+    const listing = { ...AGENT_PROGRAMS, current, programs: [AGENT_PROGRAMS.programs[0], cpp], download };
     await page.route((url) => url.pathname.startsWith('/api/agent-programs'), async (route) => {
         const { pathname } = new URL(route.request().url());
         if (pathname === '/api/agent-programs') await route.fulfill({ json: listing });
@@ -262,7 +264,7 @@ const ROUTES: Record<string, unknown> = {
     },
     'GET /chat/permissions': { default_mode: 'ask', sessions: [] },
     [`GET /chat/permissions/${ANSWER_SESSION}`]: { session_id: ANSWER_SESSION, mode: 'ask', grants: [] },
-    'GET /tunnel/status': { active: false, url: null, token: null, startedAt: null, error: null, publicIp: null },
+    'GET /tunnel/status': { active: false, url: null, token: null, startedAt: null, error: null },
     'GET /mcp/status': { servers: [] },
     'GET /schedules': SCHEDULES,
     'GET /goals/health': { error: null },
@@ -355,7 +357,7 @@ export async function withoutFlagship(page: Page): Promise<void> {
 
 const modelRow = (id: string, over: Record<string, unknown>) => ({
     id, context_length: null, downloaded: true, labels: [], rank: null, note: null, evidence: null, state: 'downloaded',
-    available: true, unavailable_reason: null, fits: true, custom: false,
+    available: true, unavailable_reason: null, fits: true, custom: false, support: 'untested',
     placement: { device: 'gpu', backend: 'vulkan', label: 'GPU · Vulkan', source: 'expected', warning: null },
     ...over,
 });
@@ -364,13 +366,13 @@ const modelRow = (id: string, over: Record<string, unknown>) => ({
  *  other apps little memory, and two it can't run. */
 export const MODEL_LIST = [
     modelRow('Gemma-4-E4B-it-GGUF', {
-        display_name: 'Gemma 4 E4B (Multimodal)', state: 'loaded', size_gb: 4.9, tokens_per_second: 41.2,
+        display_name: 'Gemma 4 E4B (Multimodal)', state: 'loaded', size_gb: 4.9, tokens_per_second: 41.2, support: 'verified',
         placement: { device: 'gpu', backend: 'vulkan', label: 'GPU · Vulkan', source: 'reported', warning: null },
         evidence: 'Eval: 128 of 218 scenarios passed on this model',
     }),
-    modelRow('Qwen3.6-35B-A3B-GGUF', { display_name: 'Qwen3.6 35B A3B (Multimodal)', size_gb: 23.3 }),
+    modelRow('Qwen3.6-35B-A3B-GGUF', { display_name: 'Qwen3.6 35B A3B (Multimodal)', size_gb: 23.3, support: 'verified' }),
     modelRow('gemma4-it-e4b-FLM', {
-        display_name: 'Gemma 4 E4B (NPU)', size_gb: 9.1,
+        display_name: 'Gemma 4 E4B (NPU)', size_gb: 9.1, support: 'verified',
         placement: { device: 'npu', backend: 'flm', label: 'NPU · FLM', source: 'expected', warning: null },
     }),
     modelRow('user.Qwen3-4B-Instruct-2507-Q4_K_M-GGUF', {
@@ -657,6 +659,13 @@ export async function useLocale(page: Page, locale: string): Promise<void> {
     await page.addInitScript((code) => {
         window.localStorage.setItem('gaia-chat-locale', code);
     }, locale);
+}
+
+/** A user who turned the resource usage strip on. */
+export async function withResourceStrip(page: Page): Promise<void> {
+    await page.addInitScript(() => {
+        window.localStorage.setItem('gaia.resourceMonitor.visible', '1');
+    });
 }
 
 /** A status the running extraction tool's own model calls send, as the backend writes it. */

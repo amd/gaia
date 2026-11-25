@@ -102,6 +102,7 @@ from gaia.agents.base.deliverables import (
 from gaia.agents.base.denied_effects import (
     NETWORK,
     PATH,
+    PERMISSION_CHECK_FAILED,
     PROGRAM_NOT_FOUND,
     UNATTENDED_REFUSAL,
     DeclinedCalls,
@@ -8818,6 +8819,7 @@ Do NOT wrap conversational replies in JSON.
                         "not run."
                     ),
                     "tool_name": tool_name,
+                    PERMISSION_CHECK_FAILED: True,
                 }
             if refusal is not None:
                 return refusal
@@ -9646,9 +9648,11 @@ Do NOT wrap conversational replies in JSON.
             # first") is a step to take, not a no. And one refused command
             # shape is not the whole family — the host or file it aimed at is.
             # Nor is "nobody was here to approve it" a no, nor "that program
-            # is not installed".
+            # is not installed", nor a permission check that crashed.
             not_a_no = isinstance(refusal, dict) and (
-                refusal.get(UNATTENDED_REFUSAL) or refusal.get(PROGRAM_NOT_FOUND)
+                refusal.get(UNATTENDED_REFUSAL)
+                or refusal.get(PROGRAM_NOT_FOUND)
+                or refusal.get(PERMISSION_CHECK_FAILED)
             )
             if (
                 ledger is not None

@@ -99,11 +99,19 @@ In a chat, the folder chip beside the model names the folder GAIA works in; clic
 
 Each chat has a panel on the right that keeps the important facts in view:
 what the latest answer used, where the chat runs and what it may touch, what
-fills the context, what the chat produced, and what it changed. Show or hide it
-with the panel button at the right of the chat's title bar. Drag its left edge
-to resize it (or focus the edge and use the arrow keys); the width, whether it
-is open, and which sections are expanded are remembered. On windows narrower
+fills the context, what the chat produced, and what it changed. It starts
+closed, so a new chat gets the full width. Show or hide it with the panel
+button at the right of the chat's title bar. Drag its left edge to resize it
+(or focus the edge and use the arrow keys); the width, whether you opened or
+closed it, and which sections are expanded are remembered. On windows narrower
 than about 1,100 px it opens on top of the chat instead, and Escape closes it.
+
+Until you have closed it yourself, the panel opens on its own when an answer
+in the chat you are looking at creates or changes the chat's first file, so you
+can see it under **Outputs** and **Changes**. Opening a chat that already made
+files leaves it closed, a narrow window never gets it on top of the chat, and
+the cursor stays in the message box. Once you close it, it stays closed until
+you open it again.
 
 The panel reads when it opens, when you expand a section, and when an answer
 finishes. It never checks on a timer, and a closed panel reads nothing.

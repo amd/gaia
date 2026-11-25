@@ -33,7 +33,7 @@ from gaia.config import (
     unsafe_gaia_home_reason,
 )
 from gaia.home import DOCUMENT_COPIES_SUBDIR
-from gaia.llm.lemonade_embedded import gaia_home
+from gaia.llm import lemonade_embedded
 from gaia.utils.image_formats import IMAGE_EXTENSIONS
 from gaia.utils.user_folders import documents_dir
 
@@ -503,7 +503,8 @@ def _ui_gaia_home() -> Path:
             ``uploads_dir()`` is called from ``create_app()``, where one would
             surface as a raw traceback rather than something a user can act on.
     """
-    home = gaia_home()
+    # Looked up on the module each call, so a relocated home is always seen.
+    home = lemonade_embedded.gaia_home()
     resolved = home.resolve()
     user_home = Path.home().resolve()
 

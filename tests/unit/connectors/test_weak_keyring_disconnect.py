@@ -475,7 +475,7 @@ def test_a_pre_index_account_is_named_by_its_slot(
 def test_a_strong_keyring_still_revokes_at_the_provider(monkeypatch):
     calls = []
 
-    async def _revoke(provider_id, *, slot=store.DEFAULT_ACCOUNT):
+    async def _revoke(provider_id, *, slot=store.DEFAULT_ACCOUNT, account_type=None):
         calls.append((provider_id, slot))
         return {
             "revoke_supported": True,
@@ -716,17 +716,80 @@ def test_the_ui_route_says_nothing_stored_without_an_oauth_client(
     assert payload["revoke_error"] is None
 
 
-def test_an_unreadable_sign_in_without_an_oauth_client_is_not_nothing_stored(
-    unconfigured, monkeypatch
-):
-    items = _seed(monkeypatch, "google", ALICE)
-    _activate(monkeypatch, unconfigured)
-    unconfigured.items.update(items)
-    (acct,) = accounts.list_accounts("google")
-    store._kr_set(store._connection_username("google", acct.slot), "{not json")
+# Every OAuth provider's connected-apps page, where a user revokes by hand.
+PAGES = [
+    ("google", "https://myaccount.google.com/permissions"),
+    ("microsoft", "https://account.live.com/consent/Manage"),
+    ("microsoft_work", "https://myapps.microsoft.com"),
+]
 
-    result = asyncio.run(api.revoke_connection_async("google"))
+
+def _corrupt_sign_in(monkeypatch, provider, backend):
+    """Store one account, then replace its blob with an unreadable value."""
+    items = _seed(monkeypatch, provider, ALICE)
+    _activate(monkeypatch, backend)
+    backend.items.update(items)
+    (acct,) = accounts.list_accounts(provider)
+    store._kr_set(store._connection_username(provider, acct.slot), "{not json")
+    return acct
+
+
+@pytest.mark.parametrize("provider,page", PAGES)
+def test_an_unreadable_sign_in_without_an_oauth_client_is_not_nothing_stored(
+    provider, page, unconfigured, monkeypatch
+):
+    _corrupt_sign_in(monkeypatch, provider, unconfigured)
+
+    result = asyncio.run(api.revoke_connection_async(provider, all_accounts=True))
 
     assert result["nothing_stored"] is False
     assert result["revoked_remotely"] is False
-    assert result["revoke_error"]
+    assert "could not read" in result["revoke_error"]
+    assert page in result["revoke_error"]
+
+
+@pytest.mark.parametrize("provider,page", PAGES)
+def test_the_cli_says_an_unreadable_sign_in_could_not_be_read(
+    provider, page, unconfigured, monkeypatch, capsys
+):
+    from gaia.connectors.cli import _handle_disconnect
+
+    _corrupt_sign_in(monkeypatch, provider, unconfigured)
+    args = argparse.Namespace(connector_id=provider, account=None, all_accounts=True)
+
+    assert _handle_disconnect(args) == 0
+
+    out = capsys.readouterr().out
+    assert "could not read" in out
+    assert page in out
+    assert "Nothing stored" not in out
+
+
+@pytest.mark.parametrize("provider,page", PAGES)
+def test_the_ui_route_says_an_unreadable_sign_in_could_not_be_read(
+    provider, page, unconfigured, monkeypatch
+):
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    from gaia.ui.routers import connectors as router_mod
+
+    events = []
+
+    async def _emit(name, payload):
+        events.append((name, payload))
+
+    monkeypatch.setattr(router_mod._emitter, "emit", _emit)
+    _corrupt_sign_in(monkeypatch, provider, unconfigured)
+    app = FastAPI()
+    app.include_router(router_mod.router)
+
+    resp = TestClient(app).delete(f"{router_mod.router.prefix}/{provider}?all=true")
+
+    assert resp.status_code == 204, resp.text
+    (name, payload), *_ = events
+    assert name == "connector.disconnected"
+    assert payload["nothing_stored"] is False
+    assert payload["revoked_remotely"] is False
+    assert "could not read" in payload["revoke_error"]
+    assert page in payload["revoke_error"]

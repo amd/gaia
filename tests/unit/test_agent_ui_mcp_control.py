@@ -930,7 +930,9 @@ def test_settings_tools_hit_the_ui_endpoints(monkeypatch):
     with patch("gaia.mcp.servers.agent_ui_mcp._api", return_value={"ok": 1}) as api:
         tools["set_model"].fn(model="Gemma-4-E4B-it-GGUF")
         tools["set_model_server"].fn(mode="external", base_url="http://localhost:13305")
-        tools["list_models"].fn(provider="../sessions")
+        tools["list_models"].fn(provider="a?b#c")
+        with pytest.raises(ValueError, match="not a valid id"):
+            tools["list_models"].fn(provider="../sessions")
         tools["get_settings"].fn()
     calls = [(c.args[1], c.args[2], c.kwargs.get("json")) for c in api.call_args_list]
     assert calls == [
@@ -940,7 +942,7 @@ def test_settings_tools_hit_the_ui_endpoints(monkeypatch):
             "/lemonade/target",
             {"mode": "external", "base_url": "http://localhost:13305"},
         ),
-        ("get", "/providers/..%2Fsessions/models", None),
+        ("get", "/providers/a%3Fb%23c/models", None),
         ("get", "/providers/active", None),
         ("get", "/lemonade/target", None),
     ]

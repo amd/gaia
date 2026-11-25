@@ -26,6 +26,8 @@ describe('localizeLiveStatus', () => {
             'The model server stopped. GAIA is restarting it…',
             'Starting the model server…',
             'Reading page 4 of 12…',
+            'Waiting for the GPU — 3rd in line',
+            'Waiting for the GPU — 11th in line',
         ]) {
             expect(localizeLiveStatus(tEn, label)).toBe(label);
         }
@@ -56,6 +58,10 @@ describe('localizeLiveStatus', () => {
         expect(ar('Reading page 4 of 12…')).toContain('4');
         expect(ar('Reading page 4 of 12…')).toContain('12');
         expect(ar('Reading page 4 of 12…')).not.toBe('Reading page 4 of 12…');
+    });
+
+    it('translates the GPU queue line for Arabic, with a plain number', () => {
+        expect(ar('Waiting for the GPU — 3rd in line')).toBe('بانتظار معالج الرسومات — رقم 3 في الدور (Waiting for the GPU — 3rd in line)');
     });
 
     it('says the speech model download in the chosen language, with its percent and size', () => {

@@ -517,7 +517,9 @@ has `id`, `roles` (`chat`, `vision`, `embedding`), `purpose`, `if_skipped`,
 `downloaded`, `recommended` (for this PC), `selected` (setup will download it),
 `skipped`, `chat_choice`, and `fits` (`null` when unknown) with `need_gb`,
 `capacity_gb` and `fit_reason` (decimal GB, converted from the GiB Lemonade reports, as
-the GPU memory API does).
+the GPU memory API does). `setup_offer` says whether the setup screen lists it as a chat
+choice: not when it doesn't fit, never for Qwen3.8 Flash Next, always for your current
+chat model.
 `disk` is the model drive's `path` and `free_gb` (decimal GB, like every size);
 `download_gb` and `disk_warning` cover the selected models. A choice that needs
 confirming exits `4` and prints `{"needs_acknowledgement": {...}}` with the `code`
@@ -2112,7 +2114,7 @@ them, and the status bar shows the one that is on:
 |---|---|
 | `ask` (default) | Every shell command except plain reads inside the allowed folders, every Python run and file write |
 | `accept edits` | Shell commands and Python. File edits inside the folder GAIA was started in run unasked, except hidden files and folders (`.git/`, `.bashrc`, `.github/`), folders on `PATH`, and on Windows a file that shadows a program. Never the home folder or a drive root |
-| `full access` | Nothing |
+| `full access` | Nothing. Deletes run only here: in the other modes a delete GAIA would ask about is refused, with no prompt |
 
 Ways to turn full access on — each is deliberate:
 

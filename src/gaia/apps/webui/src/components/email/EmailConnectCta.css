@@ -51,9 +51,9 @@
     align-items: center;
     gap: 6px;
     padding: 6px 12px;
-    background: var(--accent-fill);
-    color: var(--accent-fill-text);
-    border: 1px solid var(--accent-fill);
+    background: var(--action-fill);
+    color: var(--action-fill-text);
+    border: 1px solid var(--action-fill);
     border-radius: 6px;
     font-size: 12.5px;
     font-weight: 500;
@@ -61,8 +61,8 @@
     transition: background-color var(--duration-fast) var(--ease);
 }
 .email-connect-cta__button:hover:not(:disabled) {
-    background: var(--accent-fill-hover);
-    border-color: var(--accent-fill-hover);
+    background: var(--action-fill-hover);
+    border-color: var(--action-fill-hover);
 }
 .email-connect-cta__button:focus-visible {
     outline: 2px solid var(--accent);

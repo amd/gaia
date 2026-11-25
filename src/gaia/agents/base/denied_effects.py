@@ -60,6 +60,10 @@ UNATTENDED_REFUSAL = "unattended_refusal"
 #: ledger too: the host the call aimed at was never refused.
 PROGRAM_NOT_FOUND = "program_not_found"
 
+#: Set on a call that did not run because its tool's own permission check
+#: raised. A crash is not a "no", so it is kept off the ledger as well.
+PERMISSION_CHECK_FAILED = "permission_check_failed"
+
 #: A file change whose target the code computes: it could be any denied path.
 COMPUTED_PATH = "a path the code works out when it runs"
 
@@ -2367,12 +2371,21 @@ _ASCII_SPACE = re.compile(r"[ \t\r\n\f\v]+")
 #: A later message that asks for a declined call again.
 _ASKS_AGAIN = re.compile(
     r"\b(?:again|retry|re-?run|run (?:it|that|this)\b"
-    r"|go ahead|do it\b|allow it|approve)"
-    r"|^\s*(?:yes|yeah|yep|ok|okay|sure)\b",
+    r"|go ahead|do it\b|allow it|approve"
+    r"|once more|one more (?:time|go|try)|try (?:it|that|this)\b|redo\b"
+    r"|execute (?:it|that|this)\b|proceed|misclick|changed my mind)"
+    r"|^\s*(?:yes|yeah|yep|ok|okay|sure)\b"
+    # Spanish, Portuguese, French, German, Italian, Dutch, Polish, Turkish.
+    r"|\b(?:otra vez|de nuevo|novamente|de novo|encore|r[ée]essa\w*|nochmal"
+    r"|noch einmal|erneut|di nuovo|riprova\w*|opnieuw|nog een keer|ponownie"
+    r"|jeszcze raz|tekrar)\b"
+    # Russian, Chinese, Japanese, Korean, Arabic, Hindi.
+    r"|снова|ещ[её] раз|повтор|再试|再运行|再执行|再来|再一次|重试|重新"
+    r"|もう一度|再実行|再試行|やり直|다시|مرة أخرى|फिर से",
     re.IGNORECASE,
 )
 _NEGATED_ASK = re.compile(
-    r"\b(?:don'?t|do not|never|not)\s+"
+    r"\b(?<!why )(?:don['’]?t|do not|never|not)\s+"
     r"(?:try|retry|re-?run|run|do|allow|approve|go|again)\b",
     re.IGNORECASE,
 )
