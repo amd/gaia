@@ -41,7 +41,7 @@ from __future__ import annotations
 import math
 import re
 from pathlib import PureWindowsPath
-from typing import Any, Mapping, Optional
+from typing import Any, Dict, Mapping, Optional
 
 #: ``channel`` value marking an event as harness bookkeeping rather than a
 #: description of the user's work. Lives here because the layer that *tags*
