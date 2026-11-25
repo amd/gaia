@@ -1,0 +1,94 @@
+# Copyright(C) 2026 Advanced Micro Devices, Inc. All rights reserved.
+# SPDX-License-Identifier: MIT
+
+# Builds gaiacpp and runs the Python and TypeScript SDK tests against it.
+#
+# Each SDK has two kinds of test: protocol tests against a stand-in engine, and
+# tests that drive the real `gaiacpp --engine` with a scripted model server.
+# Only the second kind proves the SDKs and the engine agree on the wire, so this
+# lane builds the engine first and fails if those tests are skipped.
+
+name: SDK Tests
+
+on:
+  workflow_call:
+  push:
+    branches: [ main ]
+    paths:
+      - 'sdk/**'
+      - 'cpp/agents/gaiacpp/host_server.*'
+      - 'cpp/agents/gaiacpp/main.cpp'
+      - 'cpp/src/**'
+      - 'cpp/include/**'
+      - 'cpp/CMakeLists.txt'
+      - 'tests/fixtures/stdio/gaia_host_wire.json'
+      - '.github/workflows/test_sdk.yml'
+  pull_request:
+    # No `branches:` filter: it matches the PR base, so `[ main ]` skipped stacked PRs (#2767).
+    types: [opened, synchronize, reopened, ready_for_review, labeled]
+    paths:
+      - 'sdk/**'
+      - 'cpp/agents/gaiacpp/host_server.*'
+      - 'cpp/agents/gaiacpp/main.cpp'
+      - 'cpp/src/**'
+      - 'cpp/include/**'
+      - 'cpp/CMakeLists.txt'
+      - 'tests/fixtures/stdio/gaia_host_wire.json'
+      - '.github/workflows/test_sdk.yml'
+  merge_group:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  test-sdk:
+    name: Build engine & test SDKs
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false || contains(github.event.pull_request.labels.*.name, 'ready_for_ci')
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install OpenSSL dev
+        run: sudo apt-get install -y libssl-dev
+
+      - name: Build gaiacpp
+        run: |
+          cmake -B cpp/build-sdk -S cpp -DCMAKE_BUILD_TYPE=Release \
+            -DGAIA_BUILD_TESTS=OFF -DGAIA_BUILD_EXAMPLES=OFF -DGAIA_BUILD_TUI=OFF
+          cmake --build cpp/build-sdk --target gaiacpp --parallel 4
+          echo "GAIA_ENGINE=$PWD/cpp/build-sdk/gaiacpp" >> "$GITHUB_ENV"
+
+      - name: Setup Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
+      # --confcutdir keeps the repo's own conftest out: the SDK has no
+      # dependency on the gaia package and is tested without it installed.
+      - name: Python SDK tests
+        run: |
+          python -m pip install pytest
+          python -m pytest sdk/python/tests -c sdk/python/pyproject.toml             --rootdir sdk/python --confcutdir sdk/python -q -rs | tee pytest.log
+          # A skip here means the real-engine tests did not run.
+          ! grep -q "skipped" pytest.log
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+          cache: 'npm'
+          cache-dependency-path: sdk/typescript/package-lock.json
+
+      - name: TypeScript SDK tests
+        working-directory: sdk/typescript
+        run: |
+          npm ci
+          npm test | tee node-test.log
+          grep -q "^ℹ skipped 0$" node-test.log

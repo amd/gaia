@@ -1,0 +1,161 @@
+---
+title: "GAIA SDK (Python and TypeScript)"
+description: "Run the GAIA agent loop from your own program, with your tools and your model endpoint"
+icon: "cube"
+---
+
+<Warning>
+**Beta.** The SDKs drive `gaiacpp --engine`. Both are tested against the real engine
+with a scripted model server. Neither has yet been evaluated on a hosted model, and
+the packages are not published: install from `sdk/python` or `sdk/typescript` in the
+repository for now.
+</Warning>
+
+The SDK runs the GAIA agent loop for a program that is not GAIA: a support bot inside
+a web server, a batch job, a Node service. The loop itself runs in the native `gaiacpp`
+engine, a single native binary that the SDK starts as a child process. Your tools,
+system prompt and conversation stay in your process.
+
+The engine has no tools of its own, reads no settings file, keeps no memory and never
+edits the model's answer.
+
+## A first agent
+
+<CodeGroup>
+
+```python Python
+from gaia_sdk import Agent, Budget, ToolRefusal, tool
+
+@tool
+def get_order(order_number: str) -> dict:
+    """Look up an order by its number."""
+    if not verified(order_number):
+        raise ToolRefusal("That order has not been confirmed in this chat.")
+    return {"status": "shipped"}
+
+with Agent(
+    model="my-model",
+    base_url="https://api.example.com/v1",
+    api_key_env="PROVIDER_API_KEY",
+    system_prompt="You answer questions about orders.",
+    tools=[get_order],
+) as agent:
+    turn = agent.run("Where is order 1001?", budget=Budget(model_calls=8, seconds=25))
+    print(turn.text if turn.ok else f"handing off: {turn.stop_reason}")
+```
+
+```ts TypeScript
+import { Agent, ToolRefusal, tool } from "@amd/gaia-sdk";
+
+const getOrder = tool({
+  name: "get_order",
+  description: "Look up an order by its number.",
+  parameters: {
+    type: "object",
+    properties: { order_number: { type: "string" } },
+    required: ["order_number"],
+  },
+  run: async ({ order_number }: { order_number: string }) => {
+    if (!(await verified(order_number))) {
+      throw new ToolRefusal("That order has not been confirmed in this chat.");
+    }
+    return { status: "shipped" };
+  },
+});
+
+const agent = await Agent.start({
+  model: "my-model",
+  baseUrl: "https://api.example.com/v1",
+  apiKeyEnv: "PROVIDER_API_KEY",
+  systemPrompt: "You answer questions about orders.",
+  tools: [getOrder],
+});
+try {
+  const turn = await agent.run("Where is order 1001?", {
+    budget: { modelCalls: 8, seconds: 25 },
+  });
+  console.log(turn.ok ? turn.text : `handing off: ${turn.stopReason}`);
+} finally {
+  await agent.close();
+}
+```
+
+</CodeGroup>
+
+## What you set
+
+| Option (Python / TypeScript) | Meaning |
+|---|---|
+| `model` | The model id sent to the provider, unchanged |
+| `base_url` / `baseUrl` | Any OpenAI-compatible endpoint |
+| `api_key_env` / `apiKeyEnv` | The **name** of the environment variable holding the key. The engine reads it; the key is never passed between processes |
+| `system_prompt` / `systemPrompt` | Sent to the model as written |
+| `tools` | Your functions. In Python the schema comes from type hints and the docstring; in TypeScript you give a JSON Schema |
+| `max_steps` / `maxSteps` | Tool-using steps one turn may take |
+| `max_output_tokens` / `maxOutputTokens` | Cap on each model reply |
+| `budget` | Limits on a turn: model calls, output tokens, seconds |
+| `on_model_call` / `onModelCall` | Called once per model request with its usage and seconds |
+| `engine` | Path to the `gaiacpp` binary, when it is not found otherwise |
+
+## What a turn gives back
+
+`run()` takes the user's message, or the whole conversation ending with it. The engine
+keeps no history between turns, so send what the model should see.
+
+| Field (Python / TypeScript) | Meaning |
+|---|---|
+| `ok` | True when `status` is `success`. Show `text` to an end user only then |
+| `status` | `success`, `incomplete`, `failed` |
+| `stop_reason` / `stopReason` | `answered`, `max_steps`, `model_calls`, `output_tokens`, `deadline`, `model_call`, `repeated_calls`, `no_answer` |
+| `text` | The model's answer, exactly as it wrote it |
+| `tool_calls` / `toolCalls` | Every tool call in order: name, arguments, result, failed |
+| `usage` | Model calls and input, cached and output tokens |
+| `failure` | For a failed model request: its kind and message |
+
+A failed model request, a spent budget and a step limit are not exceptions. They are
+a turn whose `ok` is false, so one `if` handles all three. `EngineError` is raised only
+when the engine itself cannot run the turn.
+
+## Tools
+
+A tool that returns normally gives the model its result. Two other outcomes:
+
+| In the tool | The model is told |
+|---|---|
+| `raise ToolRefusal("...")` / `throw new ToolRefusal("...")` | `{"status": "refused", "message": "..."}` as an ordinary result to explain. Not a failure |
+| Any other exception | The call failed, and why. The turn goes on |
+
+## Budgets
+
+A budget is checked when the model asks for a tool. Once a limit is reached the tool is
+not run, nothing more is sent to the model, and the turn ends `incomplete` with the
+limit as its stop reason. An answer that arrives on the last allowed request is still
+an answer.
+
+## Getting the engine
+
+The SDK looks for `gaiacpp` in this order: the `engine` option, the `GAIA_ENGINE`
+environment variable, a binary packaged with the SDK, then `PATH`. Builds for Windows,
+Linux and Apple Silicon are attached to each
+[GAIA release](https://github.com/amd/gaia/releases), or build it from `cpp/`:
+
+```bash
+cmake -B build -S cpp -DCMAKE_BUILD_TYPE=Release
+cmake --build build --target gaiacpp
+```
+
+## How this differs from the Python agent
+
+GAIA has a second way to embed the loop: importing `gaia.agents.base.agent.Agent` from
+`amd-gaia` ([Embedding GAIA in a Server](/sdk/embedding)). Choose by what you need.
+
+| | `gaia-sdk` / `@amd/gaia-sdk` | `amd-gaia` Python agent |
+|---|---|---|
+| Runs as | A child process, one native binary | In your Python process, with the full package |
+| Languages | Python and TypeScript | Python |
+| Install | No dependencies | The whole `amd-gaia` dependency set |
+| Tool limits, answer checks, dollar budgets | Not yet | Yes |
+| Maturity | Beta | The loop the desktop apps run |
+
+The wire between the SDK and the engine is documented in
+[Engine Protocol](/sdk/host-protocol).

@@ -1,0 +1,32 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "gaia-sdk"
+version = "0.1.0"
+description = "The GAIA agent loop for your own program, run by the native gaiacpp engine"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [{ name = "Advanced Micro Devices, Inc." }]
+dependencies = []
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+]
+
+[project.urls]
+Documentation = "https://amd-gaia.ai/docs/sdk/gaia-sdk"
+Source = "https://github.com/amd/gaia"
+
+[tool.setuptools]
+packages = ["gaia_sdk"]
+
+# A platform wheel carries the engine at gaia_sdk/bin/gaiacpp[.exe].
+[tool.setuptools.package-data]
+gaia_sdk = ["bin/*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

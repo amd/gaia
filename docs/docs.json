@@ -257,6 +257,7 @@
                       "sdk/configuration",
                       "sdk/testing",
                       "sdk/embedding",
+                      "sdk/gaia-sdk",
                       "sdk/host-protocol",
                       "sdk/performance-analysis-plotter",
                       "sdk/security",
