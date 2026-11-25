@@ -28,7 +28,6 @@ class SupportAgent(Agent):
         self.session = session
         super().__init__(
             host="conversation",
-            skip_lemonade=True,
             silent_mode=True,
             max_steps=8,
             max_output_tokens=1200,
@@ -59,6 +58,8 @@ class MyClient(LLMClient):
     """The guide's client, with canned OpenAI-shape responses for ``_post``."""
 
     provider_name = "my-provider"
+    supports_native_tools = True
+    context_window = 128_000
 
     def __init__(self, responses):
         self._responses = list(responses)
@@ -127,9 +128,8 @@ def _call(name, arguments):
 
 
 def _agent(responses, model_id="deepseek-v4p1-flash"):
-    agent = SupportAgent(_Session(), model_id=model_id)
-    agent.chat.llm_client = MyClient(responses)
-    return agent, agent.chat.llm_client
+    client = MyClient(responses)
+    return SupportAgent(_Session(), llm_client=client, model_id=model_id), client
 
 
 def test_host_client_gets_native_tools_and_its_tool_call_runs(caplog):
@@ -189,13 +189,40 @@ def test_provider_error_ends_the_turn_as_a_failed_model_call():
     assert len(client.requests) == 1
 
 
-def test_prefixed_model_id_the_catalogue_does_not_list_gets_tools_as_text():
+def test_prefixed_model_id_still_gets_native_tools_from_a_host_client():
     agent, client = _agent([_text("Hello.")], model_id="fireworks.not-in-catalogue")
 
     agent.process_query("hi")
 
-    assert not client.requests[0]["tools"]
-    assert "get_order" in client.requests[0]["messages"][0]["content"]
+    assert client.requests[0]["model"] == "fireworks.not-in-catalogue"
+    assert client.requests[0]["tools"]
+
+
+def test_guides_budget_snippet_stops_the_turn_at_its_limit():
+    from gaia.agents.base.budget import TurnBudget
+
+    calls = [_call("get_order", '{"order_number": "1001"}')] * 3
+    agent, client = _agent(calls)
+
+    result = agent.process_query("where is it?", budget=TurnBudget(max_model_calls=2))
+
+    assert len(client.requests) == 2
+    assert result["status"] == "incomplete"
+    assert result["stop_reason"] == "model_calls"
+
+
+def test_guides_raise_model_errors_claim():
+    error = ProviderDown("HTTP 503")
+    client = MyClient([error])
+    agent = SupportAgent(
+        _Session(), llm_client=client, model_id="m", raise_model_errors=True
+    )
+
+    with pytest.raises(ProviderDown) as caught:
+        agent.process_query("hi")
+
+    assert caught.value is error
+    assert len(client.requests) == 1
 
 
 @pytest.mark.parametrize("extra", ["temperature", "tool_choice", "stop"])
@@ -211,8 +238,7 @@ def test_guides_testing_snippet_runs():
     model = ScriptedLLMClient()
     model.push(call="get_order", order_number="1001")
     model.push(say="It shipped on Monday.")
-    agent = SupportAgent(_Session())
-    agent.chat.llm_client = model
+    agent = SupportAgent(_Session(), llm_client=model, model_id="any-name")
 
     result = agent.process_query("Where is order 1001?")
 
@@ -220,6 +246,11 @@ def test_guides_testing_snippet_runs():
 
 
 def test_scope_from_the_guide_still_allows_paging_through_a_long_result():
-    agent = SupportAgent(_Session(), tool_scope=["get_order", "read_tool_output"])
+    agent = SupportAgent(
+        _Session(),
+        llm_client=MyClient([]),
+        model_id="m",
+        tool_scope=["get_order", "read_tool_output"],
+    )
 
     assert agent._tool_scope == {"get_order", "read_tool_output"}

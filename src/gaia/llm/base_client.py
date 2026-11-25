@@ -23,6 +23,16 @@ class LLMClient(ABC):
     #: start as a fresh write, so the agent keeps mid-turn changes append-only.
     caches_prompt_prefix: bool = False
 
+    #: Whether the model takes tools as ``tools=`` schemas and answers with
+    #: native tool calls (:func:`gaia.llm.tool_calls.tool_calls_reply`). Read
+    #: only from a client passed to ``Agent(llm_client=...)``; False sends the
+    #: tool list in the system prompt instead.
+    supports_native_tools: bool = False
+
+    #: The model's context window in tokens, when the client knows it. Read
+    #: only from a client passed to ``Agent(llm_client=...)``.
+    context_window: Optional[int] = None
+
     @property
     @abstractmethod
     def provider_name(self) -> str:

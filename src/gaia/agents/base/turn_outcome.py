@@ -23,8 +23,14 @@ STOP_ANSWERED = "answered"
 STOP_NO_ANSWER = "no_answer"
 #: The step limit (``max_steps``) ran out.
 STOP_MAX_STEPS = "max_steps"
-#: The agent's ``time_limit_s`` passed.
+#: The agent's ``time_limit_s`` or ``TurnBudget.deadline_s`` passed.
 STOP_DEADLINE = "deadline"
+#: ``TurnBudget.max_model_calls`` was reached.
+STOP_MODEL_CALLS = "model_calls"
+#: ``TurnBudget.max_output_tokens`` was reached.
+STOP_OUTPUT_TOKENS = "output_tokens"
+#: ``TurnBudget.max_cost_usd`` was reached.
+STOP_COST = "cost"
 #: A model call failed for good.
 STOP_MODEL_CALL = "model_call"
 #: Replies kept being cut off at the output-token cap.

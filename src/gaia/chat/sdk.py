@@ -177,6 +177,7 @@ class AgentSDK:
         self.log = get_logger(__name__)
         self.log.setLevel(getattr(logging, self.config.logging_level))
 
+        self._host_client = llm_client is not None
         if llm_client is not None:
             self.llm_client = llm_client
         else:
@@ -443,6 +444,23 @@ class AgentSDK:
     #: Receives one timing dict per model request; set by the agent loop.
     llm_call_sink: Optional[Callable[[Dict[str, Any]], None]] = None
 
+    #: Called with a request's keyword arguments before it is sent. It may
+    #: lower ``max_tokens``, or raise to refuse the request. Set by the agent
+    #: loop for a turn with a budget.
+    before_llm_call: Optional[Callable[[Dict[str, Any]], None]] = None
+
+    #: Called with each finished request's usage and whether it succeeded.
+    after_llm_call: Optional[Callable[[Any, bool], None]] = None
+
+    #: True when the caller passed its own client: its errors and requests are
+    #: left exactly as it wrote them.
+    _host_client: bool = False
+
+    def _gate_llm_call(self, kwargs: Dict[str, Any]) -> None:
+        gate = self.before_llm_call
+        if gate is not None and not getattr(_SIDE_CALLS, "active", False):
+            gate(kwargs)
+
     @staticmethod
     @contextmanager
     def side_request():
@@ -465,6 +483,9 @@ class AgentSDK:
         """Hand the sink this request's wall time, ttft, finish reason, and
         the tokens from the response's own usage (never ``/stats``)."""
         seconds = time.perf_counter() - started
+        after = self.after_llm_call
+        if after is not None and not getattr(_SIDE_CALLS, "active", False):
+            after(self.llm_client.get_last_usage() if ok else None, ok)
         sink = self.llm_call_sink
         if sink is None or getattr(_SIDE_CALLS, "active", False):
             return
@@ -578,6 +599,9 @@ class AgentSDK:
 
             # Set appropriate stop tokens based on model (safety net)
             model_lower = self.effective_model.lower() if self.effective_model else ""
+            if self._host_client:
+                # Chat-template stop tokens are a local-server matter.
+                model_lower = ""
             if "qwen" in model_lower:
                 kwargs.setdefault("stop", ["<|im_end|>", "<|im_start|>"])
             elif "llama" in model_lower:
@@ -595,6 +619,7 @@ class AgentSDK:
             if tools:
                 kwargs["tools"] = tools
 
+            self._gate_llm_call(kwargs)
             self._recorder_begin(structured, tools)
             call_started = time.perf_counter()
             call_ok = False
@@ -632,6 +657,8 @@ class AgentSDK:
             )
 
         except ConnectionError as e:
+            if self._host_client:
+                raise
             # Re-raise connection errors with additional context
             self.log.error(f"LLM connection error in send_messages: {e}")
             raise ConnectionError(f"Failed to connect to LLM server: {e}") from e
@@ -721,6 +748,9 @@ class AgentSDK:
 
             # Set appropriate stop tokens based on model (safety net)
             model_lower = self.effective_model.lower() if self.effective_model else ""
+            if self._host_client:
+                # Chat-template stop tokens are a local-server matter.
+                model_lower = ""
             if "qwen" in model_lower:
                 kwargs.setdefault("stop", ["<|im_end|>", "<|im_start|>"])
             elif "llama" in model_lower:
@@ -739,6 +769,7 @@ class AgentSDK:
             if tools:
                 kwargs["tools"] = tools
 
+            self._gate_llm_call(kwargs)
             self._recorder_begin(structured, tools)
             call_started = time.perf_counter()
             for chunk in self.llm_client.chat(
@@ -783,6 +814,8 @@ class AgentSDK:
         except LeaseWaitCancelled:
             raise  # the caller stopped waiting: not an error
         except ConnectionError as e:
+            if self._host_client:
+                raise
             # Re-raise connection errors with additional context
             self.log.error(f"LLM connection error in send_messages_stream: {e}")
             raise ConnectionError(

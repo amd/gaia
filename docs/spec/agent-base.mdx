@@ -112,6 +112,10 @@ def __init__(
     device: Optional[str] = None,
     resend_reasoning_across_requests: bool = False,
     max_output_tokens: Optional[int] = None,
+    host: str = "workspace",
+    llm_client: Optional[LLMClient] = None,
+    raise_model_errors: bool = False,
+    budget: Optional[TurnBudget] = None,
 ) -> None:
     """
     Initialize the Agent.
@@ -148,6 +152,13 @@ def __init__(
             sent back on its assistant message as `reasoning_content` (default: False)
         max_output_tokens: Output-token cap per LLM reply, thinking included (default: None —
             32768 for a Lemonade cloud model such as fireworks.*, 8192 otherwise)
+        host: "workspace" (default) or "conversation": replies go to an end user,
+            so the request is not read for files and the answer is not edited
+        llm_client: Your own LLMClient; no other client is built, model_id is required
+        raise_model_errors: Re-raise a failed model call's own exception (default: False)
+        budget: TurnBudget applied to every turn (default: None)
+
+    See /sdk/embedding for the last four.
     """
 ```
 
@@ -195,7 +206,8 @@ def process_query(
     user_input: str,
     max_steps: int = None,
     trace: bool = False,
-    filename: str = None
+    filename: str = None,
+    budget: Optional[TurnBudget] = None,  # this turn's limits; see /sdk/embedding
 ) -> Dict[str, Any]:
     """
     Process a user query through the agent reasoning loop.
@@ -221,12 +233,20 @@ def process_query(
             "total_tokens": int,     # Combined token count
             "cost_usd": float | None,  # Those tokens at the model's list price
                                      # (gaia.llm.pricing); None when it has none
+            "failure": dict | None,  # A failed model call: {"kind", "type",
+                                     # "message", "step"}; the exception is
+                                     # agent.last_model_error
+            "caveats": list,         # host="conversation": notes kept out of
+                                     # the answer
             "stop_reason": str,      # Why the turn ended: "answered",
-                                     # "max_steps", "deadline", "model_call",
+                                     # "max_steps", "deadline", "model_calls",
+                                     # "output_tokens", "cost", "model_call",
                                      # "output_cap", "tool_call_format",
                                      # "reprompt_budget", "repeated_calls",
                                      # "tool_error", "completion_gaps",
                                      # "cancelled" or "no_answer"
+            "budget_spent": dict,    # With a budget: model_calls, input_tokens,
+                                     # cached_tokens, output_tokens
             "tool_calls": list,      # Every tool call, in order:
                                      # {"name", "args", "result", "ran", "failed"}
             "reprompts": list,       # Each time a check sent the model back:
