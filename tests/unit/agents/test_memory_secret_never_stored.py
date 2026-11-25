@@ -50,6 +50,27 @@ SECRET_SAVES = [
     ),
     ("recuerda mi contraseña es gatito", "contraseña es gatito"),
     ("recuerda mi contraseña es gatito", "gatito"),
+    # Quoted, colon, "the word X", an aside, and any case.
+    ("remember my password is Strong", "my password is Strong"),
+    ("remember my password is Strong", "Strong"),
+    (
+        "remember the wifi password is the word falcon",
+        "wifi password is the word falcon",
+    ),
+    ("remember the wifi password is the word falcon", "falcon"),
+    ("remember my password is 'secret'", "my password is 'secret'"),
+    ("remember my password is 'secret'", "'secret'"),
+    ("remember my password is 'secret'", "secret"),
+    ('remember my password is "orange"', "orange"),
+    ('remember my password is "orange"', "WiFi: orange"),
+    ("remember password is: blue42", "password is: blue42"),
+    ("remember password is: blue42", "blue42"),
+    (
+        "remember my bank password, by the way, is tulip",
+        "bank password, by the way, is tulip",
+    ),
+    ("remember my bank password, by the way, is tulip", "tulip"),
+    ("remember my bank password, by the way, is tulip", "Bank: Tulip"),
 ]
 
 ORDINARY_SAVES = [
@@ -101,14 +122,18 @@ NOT_SECRETS = [
     "the PW is in Seattle",
     "pwd is /home/me",
     "pwd = current directory",
-    "contraseña es importante para mí",
-    "my wifi is called Passwort ist geheim",
     "pw 2024 review",
     "password expires every 90 days",
-    # A status or a determiner after "is" is not the password.
+]
+
+#: "password is <anything>" is refused, status words included: a false
+#: refusal is acceptable, a leak is not. main refuses the English ones too.
+PASSWORD_IS_SENTENCES = [
     "the passcode is long.",
     "Passwort ist falsch",
     "contraseña es obligatoria",
+    "contraseña es importante para mí",
+    "my wifi is called Passwort ist geheim",
     "my password is expired",
     "the password is required",
     "password is optional for guests",
@@ -295,3 +320,12 @@ def test_a_password_word_with_no_secret_still_saves(store, monkeypatch, tmp_path
     result = _tools(agent)["remember"](fact=text)
     assert result["status"] == "stored", result
     assert _contents(store) == [text]
+
+
+@pytest.mark.parametrize("text", PASSWORD_IS_SENTENCES)
+def test_any_password_is_sentence_is_refused(store, monkeypatch, tmp_path, text):
+    assert MemoryMixin._looks_like_credential(text)
+    agent = _agent(store, monkeypatch, tmp_path)
+    agent._original_user_input = f"remember {text}"
+    assert _tools(agent)["remember"](fact=text)["status"] == "skipped"
+    assert _contents(store) == []

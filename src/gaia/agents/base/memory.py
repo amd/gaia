@@ -676,27 +676,32 @@ _DECLINED_NOT_STORED = (
 )
 
 
-#: After "password is": a status or a determiner, never the password itself
-#: ("password is expired", "the same as before", "Passwort ist falsch").
-_NOT_A_SECRET_VALUE = (
-    r"(?!(?:expired|required|wrong|optional|long|short|weak|strong|new|old|same"
-    r"|reset|changed|empty|blank|correct|incorrect|invalid|valid|missing|locked"
-    r"|falsch|richtig|abgelaufen|erforderlich|obligatori[ao]|incorrect[ao]"
-    r"|caducad[ao]|obligatoire|expir[ée]e?"
-    r"|the|a|an|my|your|el|la|los|las|un|una|der|die|das|ein|eine|le|les|une)"
-    r"(?![\w-]))"
+#: Status words: "password is expired" names no password, so a later fact
+#: that merely uses one ("the meeting is long") is not blocked by it.
+_STATUS_WORDS = frozenset(
+    "expired required wrong optional long short weak strong new old same reset "
+    "changed empty blank correct incorrect invalid valid missing locked falsch "
+    "richtig abgelaufen erforderlich obligatoria obligatorio incorrecta "
+    "incorrecto caducada caducado obligatoire expiré expirée "
+    "the and his her its our your their".split()
 )
-#: A password word, "is" and one word that ends the clause: "password is
-#: sunshine", "contraseña es gatito". "password is changed monthly" is not.
-_CLAUSE_END_SECRET = (
-    r"(?<!called )(?<!named )\b(?:password|passphrase|passcode|contrase(?:ñ|n)a"
-    r"|passwort|kennwort|mot de passe|senha|wachtwoord|has(?:ł|l)o)s?\b\s*"
-    r"(?:(?:is|es|era|ist|war|est|é|e|jest|was)\b|[:=])\s*"
-    + _NOT_A_SECRET_VALUE
-    + r"(?P<value>[^\s,;!?\"'()]+?)\.?"
-    r"(?=\s*$|[,;!?\n]|\.\s|\s+(?:and|so|but|y|pero|und|aber|et|mais|en|e)\b)"
+#: A password word, an optional aside (", by the way,") and "is", ":" or "=".
+#: Any value after it is refused: a false refusal is fine, a leak is not.
+_PASSWORD_IS = (
+    r"\b(?:password|passphrase|passcode|contrase(?:ñ|n)a|passwort|kennwort"
+    r"|mot de passe|senha|wachtwoord|has(?:ł|l)o|api[_ -]?key|secret"
+    r"|access[_ -]?token|auth[_ -]?token|credential)s?\b"
+    r"(?:\s*,[^,\n]{1,40},)?\s*"
+    r"(?:(?:is|es|era|ist|war|est|é|e|jest|was)\b|[:=])"
 )
-_CLAUSE_END_SECRET_RE = re.compile(_CLAUSE_END_SECRET, re.IGNORECASE)
+#: The value itself: "is 'secret'", "is: blue42", "is the word falcon".
+_PASSWORD_VALUE_RE = re.compile(
+    _PASSWORD_IS + r"\s*[:=]?\s*(?:(?:the|a|an)\s+)?(?:(?:word|phrase)\s+)?"
+    r"[\"'`‘’“”]?(?P<value>[^\s\"'`‘’“”,;!?()]+)",
+    re.IGNORECASE,
+)
+#: A fact that is just a value with a label: "WiFi: sunshine".
+_LABELLED_VALUE = re.compile(r"^[^:\n]{1,30}:\s*\S+\s*$")
 
 #: The longest message a forced save reads; anything longer is left to the model.
 _FORCED_SAVE_MAX_CHARS = 300
@@ -4919,12 +4924,13 @@ class MemoryMixin(ProceduralMemoryMixin):
             r"\bBearer\s+[a-zA-Z0-9._-]{20,}",  # raw Bearer token
             # keyword directly adjacent to a value: "password is X", "secret: X"
             r"\b(?:password|passphrase|api[_ -]?key|secret|access[_ -]?token"
-            r"|auth[_ -]?token|credential)s?\b\s*(?:is|:|=)\s*"
-            + _NOT_A_SECRET_VALUE
-            + r"\S+",
-            # the same in other languages or short forms: "contraseña es X"
-            r"\b(?:passcode|pw|pwd|contrase(?:ñ|n)a|passwort|kennwort"
-            r"|mot de passe|senha|wachtwoord|has(?:ł|l)o)\b"
+            r"|auth[_ -]?token|credential)s?\b\s*(?:is|:|=)\s*\S+",
+            # the same in other languages or with an aside: "contraseña es X",
+            # "password, by the way, is X"
+            _PASSWORD_IS + r"\s*\S+",
+            # short forms need a value shaped like one: "pw is hunter2", never
+            # "pw editor is vim" or "pwd is /home/me"
+            r"\b(?:pw|pwd)\b"
             r"\s*(?:(?:is|es|era|ist|war|est|é|e|jest|was)\b|[:=])\s*"
             r"(?![/~])(?=\S*[0-9!@#$%^&*])\S{4,}",
             # a password word right before a value with letters and a digit or
@@ -4932,7 +4938,6 @@ class MemoryMixin(ProceduralMemoryMixin):
             r"\b(?:password|passphrase|passcode|pw|pwd|contrase(?:ñ|n)a"
             r"|passwort|kennwort|senha|wachtwoord)\b\s+"
             r"(?![/~])(?=\S*[A-Za-z])(?=\S*[0-9!@#$%^&*])\S{4,}",
-            _CLAUSE_END_SECRET,
             # dash/underscore-joined token in any case, e.g. HALIBUT-4417-ZULU
             # or tango-9921-delta; a file extension right after it
             # (sales_2024_report.pdf) marks a filename, not a secret.
@@ -5207,20 +5212,22 @@ class MemoryMixin(ProceduralMemoryMixin):
         password is Tr0ub4dor&3", which no shape on its own reveals.
         """
         request = getattr(self, "_original_user_input", None) or ""
-        values = [m.group("value") for m in _CLAUSE_END_SECRET_RE.finditer(request)]
+        values = [m.group("value") for m in _PASSWORD_VALUE_RE.finditer(request)]
         for start, end in self._credential_spans(request):
             words = re.split(r"[\s:=]+", request[start:end].strip())
-            value = words[-1].strip(".,;!?\"'()[]") if words else ""
-            # Only a value shaped like a secret: "changed" or "vim" is a word.
-            if re.search(r"[0-9!@#$%^&*]", value):
-                values.append(value)
-        return any(
-            len(value) >= 4
-            and re.search(
-                rf"(?<!\w){re.escape(value)}(?!\w)", text or "", re.IGNORECASE
-            )
-            for value in values
-        )
+            if words and re.search(r"[0-9!@#$%^&*]", words[-1]):
+                values.append(words[-1])
+        text = text or ""
+        bare = len(text.split()) <= 3 or bool(_LABELLED_VALUE.match(text.strip()))
+        for value in values:
+            value = value.strip(".,;!?\"'`()[]‘’“”")
+            if len(value) < 3:
+                continue
+            if not bare and value.lower() in _STATUS_WORDS:
+                continue
+            if re.search(rf"(?<!\w){re.escape(value)}(?!\w)", text, re.IGNORECASE):
+                return True
+        return False
 
     #: Argument keys naming what a call acted on, in priority order. A shell
     #: command is keyed by its binary, so ``pytest -q`` working again retires
