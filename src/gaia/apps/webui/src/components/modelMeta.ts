@@ -21,6 +21,14 @@ export function ctxLabel(tokens: number | null | undefined): string {
     return tokens ? `${Math.round(tokens / 1024)}K` : 'unknown';
 }
 
+/** A context window: 65536 is "64K", as Settings lists it; any other size in thousands ("200K", "1M"). */
+export function formatWindow(tokens: number): string {
+    if (tokens >= 1024 && tokens % 1024 === 0 && tokens < 1024 * 1024) return ctxLabel(tokens);
+    if (tokens < 1000) return String(tokens);
+    if (tokens < 1_000_000) return `${(tokens / 1000).toFixed(tokens < 10_000 ? 1 : 0)}K`;
+    return `${(tokens / 1_000_000).toFixed(1).replace(/\.0$/, '')}M`;
+}
+
 /** The model's state, derived from `downloaded` when the backend sent none. */
 export function modelState(m: ProviderModel): LocalModelState {
     return m.state ?? (m.downloaded ? 'downloaded' : 'not_downloaded');

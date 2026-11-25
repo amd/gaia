@@ -136,6 +136,36 @@ describe('AgentInfoSection', () => {
         }
     });
 
+    it('marks gaiacpp as Beta when it is the agent running this chat', async () => {
+        mocked.getCapabilities.mockResolvedValue({ session_id: SID, agent_type: 'gaia', tools: TOOLS, program: 'gaiacpp' });
+        expand();
+        render(<AgentInfoSection sessionId={SID} busy={false} />);
+
+        const line = await screen.findByText(/Runs on/);
+        expect(line).toHaveTextContent('Runs on Fast and light (gaiacpp) Beta');
+        expect(within(line).getByText('Beta')).toHaveClass('setup-choice-tag');
+    });
+
+    it('names the Full-featured agent too, without a Beta label', async () => {
+        mocked.getCapabilities.mockResolvedValue({ session_id: SID, agent_type: 'gaia', tools: TOOLS, program: 'gaiapy' });
+        expand();
+        render(<AgentInfoSection sessionId={SID} busy={false} />);
+
+        const line = await screen.findByText(/Runs on/);
+        expect(line).toHaveTextContent(/^Runs on Full-featured \(gaiapy\)$/);
+        expect(screen.queryByText('Beta')).not.toBeInTheDocument();
+    });
+
+    it('says nothing about the program for another agent', async () => {
+        mocked.getCapabilities.mockResolvedValue({ session_id: SID, agent_type: 'gaia', tools: TOOLS, program: null });
+        expand();
+        render(<AgentInfoSection sessionId={SID} busy={false} />);
+
+        await screen.findByRole('group', { name: "Tools this chat's agent can use" });
+        expect(screen.queryByText('Beta')).not.toBeInTheDocument();
+        expect(screen.queryByText(/Runs on/)).not.toBeInTheDocument();
+    });
+
     it('drops an answer for the chat it has since left', async () => {
         let resolveOld: (v: unknown) => void = () => {};
         mocked.getCapabilities.mockImplementationOnce(() => new Promise((r) => { resolveOld = r; }) as never);

@@ -102,8 +102,10 @@ from gaia.agents.base.deliverables import (
 from gaia.agents.base.denied_effects import (
     NETWORK,
     PATH,
+    PERMISSION_CHECK_FAILED,
     PROGRAM_NOT_FOUND,
     UNATTENDED_REFUSAL,
+    DeclinedCalls,
     Denial,
     DeniedEffects,
     Effect,
@@ -131,6 +133,7 @@ from gaia.agents.base.model_features import (
     FULL,
     ModelFeatures,
     features_for_model,
+    platform_withheld_tools,
     withheld_tools,
 )
 from gaia.agents.base.planted_instructions import (
@@ -315,6 +318,12 @@ def _skill_validation_error(message: str) -> Exception:
 SKILLS_WITHHELD_REASON = (
     "loading skills is turned off for this run (the load_skill tool is "
     "withheld), so no skill can be loaded. Run again with skills on to use it."
+)
+
+#: load_skill's ``name`` hint for a model that is not offered install_skill.
+LOAD_SKILL_NAME_WITHOUT_INSTALL = (
+    "Skill name, as shown by list_skills. If list_skills does not show it, it "
+    "is not installed: tell the user so."
 )
 
 #: Heads every loaded-skills fragment: a skill's text never grants trust.
@@ -637,6 +646,7 @@ SERVER_STARTING_MESSAGE = "Starting the model server…"
 ANSWER_RESTART_MESSAGE = (
     "The answer so far was cut off, so GAIA is starting it again from the top."
 )
+ANSWER_CHECK_MESSAGE = "Checking the answer"
 
 
 def model_step_retries() -> int:
@@ -1329,6 +1339,33 @@ def _repeat_count(history: List[Any], max_period: int = _MAX_LOOP_PERIOD) -> int
     return best
 
 
+def _note_turn_result(seen: Dict[Any, Tuple[int, int]], call: Any, result: Any) -> None:
+    """Record *call*'s result: how many times in a row this turn it came back the same.
+
+    A wait clears every count: the model expects the next result to differ, as
+    when it polls a job's status between waits.
+    """
+    if _call_tool_name(call) in _PACING_TOOLS:
+        seen.clear()
+        return
+    digest = hash(str(result))
+    last, times = seen.get(call, (None, 0))
+    seen[call] = (digest, times + 1 if last == digest else 1)
+
+
+def _same_result_repeats(seen: Dict[Any, Tuple[int, int]], call: Any) -> int:
+    """How many times this turn *call* would repeat a result it already gave.
+
+    Catches a loop with no fixed order — a small model cycling twenty searches
+    in shuffled order ran 314 calls in one turn — while a read after an edit,
+    whose result changed, starts over. The count spans the whole turn, so four
+    re-reads of a file that never changed end it however far apart they were.
+    """
+    if _call_tool_name(call) in _PACING_TOOLS:
+        return 0
+    return seen.get(call, (None, 0))[1]
+
+
 # Tools that mutate external state (mark read, archive, star, …). A small
 # model that loses track of sequential state may re-issue an identical
 # mutation (same tool + same id). Unlike query dedup we key on the *args*,
@@ -1733,6 +1770,12 @@ _ENVELOPE_KEYS = ("thought", "goal", "tool", "tool_args", "plan")
 # Every field the loop reads off a decoded reply. A JSON object carrying none
 # of them is the model's data, not a protocol envelope.
 _PROTOCOL_KEYS = frozenset(_ENVELOPE_KEYS) | {"answer", "tool_calls", "needs_plan"}
+#: Times the model is told its plan is malformed before the turn ends.
+_MAX_PLAN_CORRECTIONS = 2
+_PLAN_FORMAT_FAILURE_ANSWER = (
+    "I had trouble formatting my plan. Could you rephrase or break the request "
+    "into smaller pieces?"
+)
 # "Index my reports folder", "please re-index ~/docs": the verb opens a clause
 # and takes a path or a folder/file object, so "index.html" or "S&P 500 index"
 # never count.
@@ -2484,6 +2527,21 @@ def _answer_after_self_check(
     return rest, "new answer"
 
 
+_GARBLED_ANSWER = "The answer came out garbled, with no words in it."
+
+
+def _is_markup_debris(answer: Optional[str]) -> bool:
+    """Whether *answer* is only quotes, braces and escapes, like ``\\n\\n"}``."""
+    if not answer or not answer.strip():
+        return False
+    try:
+        json.loads(answer)
+        return False  # "[]" or "{}" is a real answer to "list them as JSON".
+    except ValueError:
+        pass
+    return bool(re.fullmatch(r"""[\s"'{}\[\],:\\]*""", re.sub(r"\\[nrt]", "", answer)))
+
+
 #: Any one of these lets the agent look at a file the request names.
 _LOOK_TOOLS = ("read_file", "browse_directory", "search_file", "find_files")
 
@@ -3204,10 +3262,12 @@ def _plan_step_placeholder(
 
 
 def _withheld_skill_tools(agent: Any, skill: Any) -> List[str]:
-    """The tools *skill* consumes or provides that *agent*'s model is not offered."""
+    """The tools *skill* consumes or provides that *agent* is not offered,
+    by its model or on this PC."""
     # getattr: test stubs copy load_skill onto a plain class.
     features = getattr(agent, "model_features", FULL)
-    return sorted(set(_skill_tool_names(skill)) & withheld_tools(features))
+    withheld = withheld_tools(features) | set(platform_withheld_tools())
+    return sorted(set(_skill_tool_names(skill)) & withheld)
 
 
 def _skill_tool_names(skill: Any) -> List[str]:
@@ -3516,6 +3576,7 @@ class _TurnState:
         "cut_off_continuations",
         "dedup_msg",
         "error_count",
+        "error_msg",
         "failed",
         "final_answer",
         "full_response",
@@ -3532,18 +3593,21 @@ class _TurnState:
         "markup_retries",
         "messages",
         "model_call_failed",
+        "model_calls",
         "model_messages",
         "mutation_call_cache",
         "no_action_requested",
         "no_look_requested",
         "parse_failures",
         "parsed",
+        "plan_corrections",
         "previous_outputs",
         "prompt",
         "query_result_cache",
         "reasoning",
         "recent_results",
         "request_text",
+        "required_calls_made",
         "response",
         "response_finish_reason",
         "response_reasoning",
@@ -3571,6 +3635,7 @@ class _TurnState:
         "tool_result",
         "truncated_result",
         "turn_record",
+        "turn_results",
         "unfinished_answer_reprompts",
         "user_stopped",
         "verification_scope_applied",
@@ -3599,6 +3664,7 @@ class _TurnState:
     cut_off_continuations: Any
     dedup_msg: Any
     error_count: Any
+    error_msg: Any
     failed: Any
     final_answer: Any
     full_response: Any
@@ -3615,18 +3681,21 @@ class _TurnState:
     markup_retries: Any
     messages: Any
     model_call_failed: Any
+    model_calls: Any
     model_messages: Any
     mutation_call_cache: Any
     no_action_requested: Any
     no_look_requested: Any
     parse_failures: Any
     parsed: Any
+    plan_corrections: Any
     previous_outputs: Any
     prompt: Any
     query_result_cache: Any
     reasoning: Any
     recent_results: Any
     request_text: Any
+    required_calls_made: Any
     response: Any
     response_finish_reason: Any
     response_reasoning: Any
@@ -3654,6 +3723,7 @@ class _TurnState:
     tool_result: Any
     truncated_result: Any
     turn_record: Any
+    turn_results: Any
     unfinished_answer_reprompts: Any
     user_stopped: Any
     verification_scope_applied: Any
@@ -4193,6 +4263,7 @@ Do NOT wrap conversational replies in JSON.
             )
         self.max_consecutive_repeats = max_consecutive_repeats
         self._turn_scope = TurnScopeGuard(max_consecutive_repeats)
+        self._stopped_on_failing_repeats = False
         self._task_lessons = TaskLessons()
         self._current_query: Optional[str] = (
             None  # Store current query for error context
@@ -4216,6 +4287,8 @@ Do NOT wrap conversational replies in JSON.
         self._followup_queue: Optional["queue.Queue[str]"] = None
         # Effects the user declined this turn; reset per turn.
         self._denied_effects = DeniedEffects()
+        # Exact calls the user declined; kept for the chat, not reset per turn.
+        self._declined_calls = DeclinedCalls()
         # (turn, call) for each approval prompt nobody answered.
         self._expired_calls: set = set()
         # (turn, path) for each access prompt declined or left unanswered.
@@ -5496,9 +5569,17 @@ Do NOT wrap conversational replies in JSON.
 
         After this call, tool lookup, prompt formatting, and execution all
         use the snapshot.  Mutations on this instance's ``_instance_tools``
-        will not affect other agents or the global dict.
+        will not affect other agents or the global dict. Tools of a skill another
+        agent loaded are left out: this one gets them when it loads that skill.
         """
-        self._instance_tools = dict(_TOOL_REGISTRY)
+        loaded = getattr(self, "_loaded_skills", None) or {}
+        self._instance_tools = {
+            name: entry
+            for name, entry in _TOOL_REGISTRY.items()
+            if not isinstance(entry, dict)
+            or not entry.get("skill")
+            or entry["skill"] in loaded
+        }
         if hasattr(self, "_tool_overrides"):
             self._instance_tools.update(self._tool_overrides)
 
@@ -5543,10 +5624,34 @@ Do NOT wrap conversational replies in JSON.
             self._instance_tools.update(getattr(self, "_withheld_tool_entries", {}))
             self._withheld_tool_entries = {
                 name: self._instance_tools.pop(name)
-                for name in sorted(withheld_tools(features))
+                for name in sorted(
+                    withheld_tools(features) | set(platform_withheld_tools())
+                )
                 if name in self._instance_tools
             }
+            self._fit_load_skill_hint()
         self.model_features = features
+
+    def _fit_load_skill_hint(self) -> None:
+        """Point load_skill at install_skill only when this model is offered it."""
+        tools = self._instance_tools
+        entry = tools.get("load_skill")
+        if entry is None:
+            return
+        # Entries are shared with the global registry: swap a copy, never edit.
+        full = entry.get("_full_entry", entry)
+        name = full["parameters"].get("name")
+        if "install_skill" in tools or name is None:
+            tools["load_skill"] = full
+            return
+        tools["load_skill"] = {
+            **full,
+            "parameters": {
+                **full["parameters"],
+                "name": {**name, "description": LOAD_SKILL_NAME_WITHOUT_INSTALL},
+            },
+            "_full_entry": full,
+        }
 
     def _execution_tool_registry(self) -> MutableMapping[str, Any]:
         """Return the registry this agent is permitted to execute.
@@ -6363,6 +6468,13 @@ Do NOT wrap conversational replies in JSON.
         if withheld:
             from gaia.skills.errors import SkillUnavailableError
 
+            on_this_pc = platform_withheld_tools()
+            if all(name in on_this_pc for name in withheld):
+                raise SkillUnavailableError(
+                    f"Skill '{skill.name}' needs {', '.join(withheld)}, which "
+                    f"aren't offered on this PC. {on_this_pc[withheld[0]]} "
+                    "Tell the user this."
+                )
             raise SkillUnavailableError(
                 f"Skill '{skill.name}' needs {', '.join(withheld)}, which "
                 f"{self.model_id} is not offered. Tell the user this needs a "
@@ -7938,7 +8050,16 @@ Do NOT wrap conversational replies in JSON.
     def _parse_llm_response(self, response: str) -> Dict[str, Any]:
         """Decode a reply and reject tool arguments that cannot be executed."""
         parsed = self._decode_llm_response(response)
-        calls = parsed.get("tool_calls") or (
+        raw_calls = parsed.get("tool_calls")
+        if raw_calls and not (
+            isinstance(raw_calls, list)
+            and all(isinstance(c, dict) and "tool_args" in c for c in raw_calls)
+        ):
+            raise ValueError(
+                "Malformed tool_calls: expected a list of calls, each with a "
+                f"name and tool_args, got {type(raw_calls).__name__}."
+            )
+        calls = raw_calls or (
             [{"name": parsed["tool"], "tool_args": parsed.get("tool_args", {})}]
             if parsed.get("tool")
             else []
@@ -7954,9 +8075,30 @@ Do NOT wrap conversational replies in JSON.
     def _decode_llm_response(self, response: str) -> Dict[str, Any]:
         """Decode a reply; a JSON object with no protocol field is the answer."""
         parsed = self._decode_llm_response_fields(response)
-        if isinstance(parsed, dict) and not _PROTOCOL_KEYS.intersection(parsed):
+        if isinstance(parsed, dict) and (
+            not _PROTOCOL_KEYS.intersection(parsed) or self._is_data_not_a_plan(parsed)
+        ):
             return {"thought": "", "goal": "", "answer": (response or "").strip()}
         return parsed
+
+    def _is_data_not_a_plan(self, parsed: Dict[str, Any]) -> bool:
+        """Whether *parsed* only looks like a plan: nothing in it can be run.
+
+        Its ``plan`` is not a list, it has no ``thought`` or ``goal`` (those mark
+        the agent's own reply), and its ``tool``, if any, names no tool this
+        agent has, so the object is the data the user asked for.
+        """
+        if "plan" not in parsed or isinstance(parsed["plan"], list):
+            return False
+        if parsed.get("thought") or parsed.get("goal"):
+            return False
+        if parsed.get("tool_calls") or parsed.get("needs_plan"):
+            return False
+        answer = parsed.get("answer")
+        if isinstance(answer, str) and answer.strip():
+            return False
+        tool = parsed.get("tool")
+        return not (isinstance(tool, str) and tool in self._tools_registry)
 
     def _decode_llm_response_fields(self, response: str) -> Dict[str, Any]:
         """
@@ -8850,8 +8992,22 @@ Do NOT wrap conversational replies in JSON.
         # only to be refused by its own body a moment later.
         preflight = (self._tools_registry.get(tool_name) or {}).get("preflight")
         if preflight is not None:
-            with self._skill_tool_scope(tool_name):
-                refusal = preflight(tool_args or {})
+            try:
+                with self._skill_tool_scope(tool_name):
+                    refusal = preflight(tool_args or {})
+            except Exception as exc:  # pylint: disable=broad-exception-caught
+                # Tool boundary: the model relays it, like an error in the body.
+                logger.exception("Permission check for %s raised", tool_name)
+                return {
+                    "status": "error",
+                    "error": (
+                        f"{tool_name} was not run: its permission check failed "
+                        f"({type(exc).__name__}: {exc}). Tell the user it did "
+                        "not run."
+                    ),
+                    "tool_name": tool_name,
+                    PERMISSION_CHECK_FAILED: True,
+                }
             if refusal is not None:
                 return refusal
         if not tool_args:
@@ -8960,6 +9116,7 @@ Do NOT wrap conversational replies in JSON.
                 f"command you need (`{command}`) and why you need it."
             )
         elif answer is False:
+            Agent._note_declined_call(self, tool_name, tool_args)
             asked = (
                 "The user was asked about this exact call and said no again. "
                 "Tell them what is blocked and what you can do without it."
@@ -8993,6 +9150,47 @@ Do NOT wrap conversational replies in JSON.
             },
             False,
         )
+
+    def _note_declined_call(self, tool_name: str, tool_args: Any) -> None:
+        """Keep this exact call off the approval card for the rest of the chat."""
+        if getattr(self, "_declined_calls", None) is None:
+            self._declined_calls = DeclinedCalls()
+        self._declined_calls.record(tool_name, tool_args)
+
+    def forget_declined_calls(self) -> None:
+        """A cleared chat starts with no declined calls, as a new one would."""
+        self._declined_calls = DeclinedCalls()
+
+    def _lift_declined_calls(self, message: str) -> None:
+        """Let the calls *message* asks for again be put to the user again."""
+        declined = getattr(self, "_declined_calls", None)
+        if not declined:
+            return
+        for shown in declined.lift_for(message):
+            logger.info("The user asked again for declined call %s", shown)
+
+    def _repeat_of_declined_call(
+        self, tool_name: str, tool_args: Any
+    ) -> Optional[Dict[str, Any]]:
+        """The refusal for a call the user already declined in this chat, or None."""
+        declined = getattr(self, "_declined_calls", None)
+        shown = declined.declined(tool_name, tool_args) if declined else None
+        if shown is None:
+            return None
+        logger.info("Refused %s (%s): the user declined it earlier", tool_name, shown)
+        return {
+            **NOT_EXECUTED,
+            "status": "denied",
+            "declined_call": shown,
+            "already_declined": True,
+            "hint": DECLINED_HINT,
+            "error": (
+                f"Not run, and not put to the user again: they declined this "
+                f"exact call (`{shown}`) earlier in this chat. Do not repeat it "
+                "or reword it. Tell the user you did not run it because they "
+                "declined it, and that they can ask you to run it again."
+            ),
+        }
 
     def _ask_to_lift_denial(
         self, denial: Denial, effect: Effect, command: str
@@ -9614,6 +9812,20 @@ Do NOT wrap conversational replies in JSON.
                 ),
             }
 
+        # The registry is process-wide; a skill another chat loaded is not this one's.
+        owner = (self._tools_registry.get(tool_name) or {}).get("skill")
+        if owner and owner not in (getattr(self, "_loaded_skills", None) or {}):
+            logger.warning("%s refused: skill '%s' is not loaded", tool_name, owner)
+            return {
+                **NOT_EXECUTED,
+                "status": "error",
+                "error": (
+                    f"{tool_name} was not run: it belongs to the '{owner}' skill, "
+                    f"which is not loaded in this chat. Load the '{owner}' skill "
+                    "(load_skill), then call the tool again."
+                ),
+            }
+
         # Validate first, confirm second: a call the guardrails already refuse
         # must never reach a prompt.
         refusal = self._policy_refusal(tool_name, tool_args)
@@ -9623,9 +9835,11 @@ Do NOT wrap conversational replies in JSON.
             # first") is a step to take, not a no. And one refused command
             # shape is not the whole family — the host or file it aimed at is.
             # Nor is "nobody was here to approve it" a no, nor "that program
-            # is not installed".
+            # is not installed", nor a permission check that crashed.
             not_a_no = isinstance(refusal, dict) and (
-                refusal.get(UNATTENDED_REFUSAL) or refusal.get(PROGRAM_NOT_FOUND)
+                refusal.get(UNATTENDED_REFUSAL)
+                or refusal.get(PROGRAM_NOT_FOUND)
+                or refusal.get(PERMISSION_CHECK_FAILED)
             )
             if (
                 ledger is not None
@@ -9653,6 +9867,11 @@ Do NOT wrap conversational replies in JSON.
                 )
             _record_refused_write(self, tool_name, tool_args, refusal)
             return {**refusal, **NOT_EXECUTED} if isinstance(refusal, dict) else refusal
+
+        # The very call the user just said no to is not put to them again.
+        repeated = Agent._repeat_of_declined_call(self, tool_name, tool_args)
+        if repeated is not None:
+            return repeated
 
         # A "no" covers the effect, not the tool: another route to it is asked
         # about, never taken silently.
@@ -9826,14 +10045,17 @@ Do NOT wrap conversational replies in JSON.
                     if callable(unasked) and unasked(tool_name) is True:
                         # Nobody was asked, so no surface calls it the user's no.
                         denied["denied_by"] = "policy"
-                    elif ledger is not None:
-                        ledger.record(
-                            tool_name,
-                            tool_args,
-                            denied_error,
-                            by_user=by_user,
-                            may_create=self._may_create_unasked,
-                        )
+                    else:
+                        if by_user:
+                            Agent._note_declined_call(self, tool_name, tool_args)
+                        if ledger is not None:
+                            ledger.record(
+                                tool_name,
+                                tool_args,
+                                denied_error,
+                                by_user=by_user,
+                                may_create=self._may_create_unasked,
+                            )
                 return denied
             # A call approved once runs against this record, and only once.
             noted = getattr(self, "note_confirmed_call", None)
@@ -11246,6 +11468,25 @@ Do NOT wrap conversational replies in JSON.
         if hook is not None:
             hook(ANSWER_RESTART_MESSAGE)
 
+    def _supersede_checked_answer(self, messages: List[Dict[str, Any]]) -> None:
+        """Tell the front end the reply on screen is a draft when an answer check is next.
+
+        The check's reply, or the answer kept after it, takes the draft's place,
+        so a turn never shows two answers.
+        """
+        from gaia.agents.base.history import CHECK_TAG
+
+        last = messages[-1] if messages else {}
+        content = last.get("content")
+        if (
+            last.get("role") == "user"
+            and isinstance(content, str)
+            and content.startswith(CHECK_TAG)
+        ):
+            hook = getattr(self.console, "supersede_answer", None)
+            if hook is not None:
+                hook(ANSWER_CHECK_MESSAGE)
+
     def _server_not_back_answer(
         self,
         conversation: List[Dict[str, Any]],
@@ -12161,7 +12402,21 @@ Do NOT wrap conversational replies in JSON.
         """What a subclass's own check finds wrong with *answer*, or nothing.
 
         The loop sends the problems back once per turn for the model to repair,
-        then names any left over in the answer. Empty by default.
+        then names any left over in the answer. The base check catches an answer
+        that is only leftover tool-call markup.
+        """
+        if _is_markup_debris(answer):
+            return [_GARBLED_ANSWER]
+        return []
+
+    def required_calls(self) -> List[Tuple[str, Dict[str, Any]]]:
+        """Calls the user's own words asked for that this turn never made.
+
+        Asked for only after :meth:`answer_problems` found something the repair
+        did not fix. The loop then makes each call itself, through the same
+        approval gates as any call, once per turn, and has the model answer from
+        the result. A call goes here only when its arguments come straight from
+        the request ("add the skill at <path>"). Empty by default.
         """
         return []
 
@@ -13493,6 +13748,7 @@ Do NOT wrap conversational replies in JSON.
                 text = pending.get_nowait()
             except queue.Empty:
                 break
+            Agent._lift_declined_calls(self, text)
             framed = self.FOLLOWUP_PREAMBLE + text
             # Two dicts, not one shared object: every other append in this loop
             # builds its own, and downstream code edits entries in place.
@@ -13644,106 +13900,6 @@ Do NOT wrap conversational replies in JSON.
         )
         return None, markup_retries
 
-    def _accept_plan(
-        self, parsed: Dict[str, Any], messages: List[Dict[str, Any]], user_input: str
-    ) -> bool:
-        """Validate the plan the model sent and make it the current plan.
-
-        Returns True when the plan was malformed and the model has been asked
-        for a corrected one, so the step loop goes straight to its next turn.
-        """
-        # Validate that plan is actually a list, not a string or other type
-        if not isinstance(parsed["plan"], list):
-            logger.error(
-                f"Invalid plan format: expected list, got {type(parsed['plan']).__name__}. "
-                f"Plan content: {parsed['plan']}"
-            )
-            # The "continue" below asks the LLM to correct itself —
-            # not a fatal top-level failure.
-            self.console.print_error(
-                f"LLM returned invalid plan format (expected array, got {type(parsed['plan']).__name__}). "
-                "Asking for correction...",
-                recoverable=True,
-            )
-
-            # Create error recovery prompt
-            error_msg = (
-                "ERROR: You provided a plan in the wrong format.\n"
-                "Expected: an array of step objects\n"
-                f"You provided: {type(parsed['plan']).__name__}\n\n"
-                "The correct format is:\n"
-                f'{{"plan": [{{"tool": "tool_name", "tool_args": {{...}}, "description": "..."}}]}}\n\n'
-                f"Please create a proper plan as an array of step objects for: {user_input}"
-            )
-            messages.append({"role": "user", "content": error_msg})
-
-            # Continue to next iteration to get corrected plan
-            return True
-
-        # Validate that plan items are dictionaries with required fields
-        invalid_steps = []
-        for i, step in enumerate(parsed["plan"]):
-            if not isinstance(step, dict):
-                invalid_steps.append((i, type(step).__name__, step))
-            elif "tool" not in step or not step["tool"]:
-                invalid_steps.append((i, "missing tool field", step))
-            elif "tool_args" not in step:
-                # Auto-add empty tool_args for convenience
-                # LLMs sometimes omit this for tools with all optional parameters
-                step["tool_args"] = {}
-                logger.debug(
-                    f"Auto-added empty tool_args for step {i+1}: {step['tool']}"
-                )
-
-        if invalid_steps:
-            logger.error(f"Invalid plan steps found: {invalid_steps}")
-            # The "continue" below asks the LLM to correct itself —
-            # not a fatal top-level failure.
-            self.console.print_error(
-                f"Plan contains {len(invalid_steps)} invalid step(s). Asking for correction...",
-                recoverable=True,
-            )
-
-            # Create detailed error message
-            error_details = "\n".join(
-                [
-                    f"Step {i+1}: {issue} - {step}"
-                    for i, issue, step in invalid_steps[:3]  # Show first 3 errors
-                ]
-            )
-
-            error_msg = (
-                f"ERROR: Your plan contains invalid steps:\n{error_details}\n\n"
-                f"Each step must be a dictionary with 'tool' and 'tool_args' fields:\n"
-                f'{{"tool": "tool_name", "tool_args": {{...}}, "description": "..."}}\n\n'
-                f"Please create a corrected plan for: {user_input}"
-            )
-            messages.append({"role": "user", "content": error_msg})
-
-            # Continue to next iteration to get corrected plan
-            return True
-
-        # Plan is valid - proceed with execution
-        plan = parsed["plan"]
-        top_args = parsed.get("tool_args")
-        if (
-            plan
-            and parsed.get("tool") == plan[0]["tool"]
-            and isinstance(top_args, dict)
-            and top_args
-        ):
-            # The direct call is the one the model wrote out in full;
-            # its plan copy is often a stand-in for the same content.
-            plan[0] = {**plan[0], "tool_args": top_args}
-        self.current_plan = plan
-        self.current_step = 0
-        self.total_plan_steps = len(self.current_plan)
-        self.execution_state = self.STATE_EXECUTING_PLAN
-        logger.debug(
-            f"New plan created with {self.total_plan_steps} steps: {self.current_plan}"
-        )
-        return False
-
     def _call_model(self, turn: _TurnState) -> Optional[str]:
         """Ask the model for this step's reply, streamed or not, and record it on the turn.
 
@@ -13774,6 +13930,7 @@ Do NOT wrap conversational replies in JSON.
             while True:
                 try:
                     self._before_model_call(turn.messages)
+                    turn.model_calls += 1
                     response_stream = self.chat.send_messages_stream(
                         messages=self._with_session_context(turn.messages),
                         system_prompt=self.system_prompt,
@@ -13891,14 +14048,16 @@ Do NOT wrap conversational replies in JSON.
                         turn.final_answer = unreachable
                         turn.loop_break_answer_unprinted = True
                         break
-                    error_msg = f"LLM Server Connection Failed (streaming): {str(e)}"
-                    logger.error(error_msg)
-                    self.console.print_error(error_msg)
+                    turn.error_msg = (
+                        f"LLM Server Connection Failed (streaming): {str(e)}"
+                    )
+                    logger.error(turn.error_msg)
+                    self.console.print_error(turn.error_msg)
                     turn.model_call_failed = True
                     self.error_history.append(
                         {
                             "step": turn.steps_taken,
-                            "error": error_msg,
+                            "error": turn.error_msg,
                             "type": "llm_connection_error",
                         }
                     )
@@ -14041,6 +14200,7 @@ Do NOT wrap conversational replies in JSON.
             while True:
                 try:
                     self._before_model_call(turn.messages)
+                    turn.model_calls += 1
                     turn.chat_response = self.chat.send_messages(
                         messages=self._with_session_context(turn.messages),
                         system_prompt=self.system_prompt,
@@ -14078,14 +14238,14 @@ Do NOT wrap conversational replies in JSON.
                         turn.final_answer = unreachable
                         turn.loop_break_answer_unprinted = True
                         break
-                    error_msg = f"LLM Server Connection Failed: {str(e)}"
-                    logger.error(error_msg)
-                    self.console.print_error(error_msg)
+                    turn.error_msg = f"LLM Server Connection Failed: {str(e)}"
+                    logger.error(turn.error_msg)
+                    self.console.print_error(turn.error_msg)
                     turn.model_call_failed = True
                     self.error_history.append(
                         {
                             "step": turn.steps_taken,
-                            "error": error_msg,
+                            "error": turn.error_msg,
                             "type": "llm_connection_error",
                         }
                     )
@@ -14587,6 +14747,9 @@ Do NOT wrap conversational replies in JSON.
         Returns "break" or "continue" when the step loop must do that, else None.
         """
         if "needs_plan" in turn.parsed and turn.parsed["needs_plan"]:
+            if turn.model_calls >= turn.steps_limit:
+                # The plan request is a model call; the budget has none left.
+                return "break"
             # Prepare a special prompt that specifically requests a plan
             deferred_tool = turn.parsed.get("deferred_tool", None)
             deferred_args = turn.parsed.get("deferred_tool_args", {})
@@ -14639,6 +14802,7 @@ Do NOT wrap conversational replies in JSON.
                 turn.messages.append({"role": "user", "content": plan_prompt})
 
                 # Use AgentSDK for streaming plan response
+                turn.model_calls += 1
                 stream_gen = self.chat.send_messages_stream(
                     messages=self._with_session_context(turn.messages),
                     system_prompt=self.system_prompt,
@@ -14683,6 +14847,7 @@ Do NOT wrap conversational replies in JSON.
                 turn.messages.append({"role": "user", "content": plan_prompt})
 
                 # Use AgentSDK for non-streaming plan response
+                turn.model_calls += 1
                 turn.chat_response = self.chat.send_messages(
                     messages=self._with_session_context(turn.messages),
                     system_prompt=self.system_prompt,
@@ -14777,6 +14942,112 @@ Do NOT wrap conversational replies in JSON.
                 self.console.print_goal(goal)
         return None
 
+    def _accept_plan(self, turn: _TurnState, user_input: str) -> Optional[str]:
+        """Check the plan the model sent and make it the current plan.
+
+        Returns "break" or "continue" when the step loop must do that, else None.
+        """
+        if "plan" in turn.parsed:
+            # Validate that plan is actually a list, not a string or other type
+            if not isinstance(turn.parsed["plan"], list):
+                logger.error(
+                    f"Invalid plan format: expected list, got {type(turn.parsed['plan']).__name__}. "
+                    f"Plan content: {turn.parsed['plan']}"
+                )
+                turn.plan_corrections += 1
+                if turn.plan_corrections > _MAX_PLAN_CORRECTIONS:
+                    turn.final_answer = _PLAN_FORMAT_FAILURE_ANSWER
+                    return "break"
+                # The "continue" below asks the LLM to correct itself —
+                # not a fatal top-level failure.
+                self.console.print_error(
+                    f"LLM returned invalid plan format (expected array, got {type(turn.parsed['plan']).__name__}). "
+                    "Asking for correction...",
+                    recoverable=True,
+                )
+
+                # Create error recovery prompt
+                turn.error_msg = (
+                    "ERROR: You provided a plan in the wrong format.\n"
+                    "Expected: an array of step objects\n"
+                    f"You provided: {type(turn.parsed['plan']).__name__}\n\n"
+                    "The correct format is:\n"
+                    f'{{"plan": [{{"tool": "tool_name", "tool_args": {{...}}, "description": "..."}}]}}\n\n'
+                    f"Please create a proper plan as an array of step objects for: {user_input}"
+                )
+                turn.messages.append({"role": "user", "content": turn.error_msg})
+
+                # Continue to next iteration to get corrected plan
+                return "continue"
+
+            # Validate that plan items are dictionaries with required fields
+            invalid_steps = []
+            for i, step in enumerate(turn.parsed["plan"]):
+                if not isinstance(step, dict):
+                    invalid_steps.append((i, type(step).__name__, step))
+                elif "tool" not in step or not step["tool"]:
+                    invalid_steps.append((i, "missing tool field", step))
+                elif "tool_args" not in step:
+                    # Auto-add empty tool_args for convenience
+                    # LLMs sometimes omit this for tools with all optional parameters
+                    step["tool_args"] = {}
+                    logger.debug(
+                        f"Auto-added empty tool_args for step {i+1}: {step['tool']}"
+                    )
+
+            if invalid_steps:
+                logger.error(f"Invalid plan steps found: {invalid_steps}")
+                turn.plan_corrections += 1
+                if turn.plan_corrections > _MAX_PLAN_CORRECTIONS:
+                    turn.final_answer = _PLAN_FORMAT_FAILURE_ANSWER
+                    return "break"
+                # The "continue" below asks the LLM to correct itself —
+                # not a fatal top-level failure.
+                self.console.print_error(
+                    f"Plan contains {len(invalid_steps)} invalid step(s). Asking for correction...",
+                    recoverable=True,
+                )
+
+                # Create detailed error message
+                error_details = "\n".join(
+                    [
+                        f"Step {i+1}: {issue} - {step}"
+                        for i, issue, step in invalid_steps[:3]  # Show first 3 errors
+                    ]
+                )
+
+                turn.error_msg = (
+                    f"ERROR: Your plan contains invalid steps:\n{error_details}\n\n"
+                    f"Each step must be a dictionary with 'tool' and 'tool_args' fields:\n"
+                    f'{{"tool": "tool_name", "tool_args": {{...}}, "description": "..."}}\n\n'
+                    f"Please create a corrected plan for: {user_input}"
+                )
+                turn.messages.append({"role": "user", "content": turn.error_msg})
+
+                # Continue to next iteration to get corrected plan
+                return "continue"
+
+            # Plan is valid - proceed with execution
+            plan = turn.parsed["plan"]
+            top_args = turn.parsed.get("tool_args")
+            if (
+                plan
+                and turn.parsed.get("tool") == plan[0]["tool"]
+                and isinstance(top_args, dict)
+                and top_args
+            ):
+                # The direct call is the one the model wrote out in full;
+                # its plan copy is often a stand-in for the same content.
+                plan[0] = {**plan[0], "tool_args": top_args}
+            self.current_plan = plan
+            self.current_step = 0
+            self.total_plan_steps = len(self.current_plan)
+            self.execution_state = self.STATE_EXECUTING_PLAN
+            logger.debug(
+                f"New plan created with {self.total_plan_steps} steps: {self.current_plan}"
+            )
+        return None
+
     def _run_native_tool_calls(self, turn: _TurnState) -> Optional[str]:
         """Run the native tool calls the model sent, one after another.
 
@@ -14816,7 +15087,10 @@ Do NOT wrap conversational replies in JSON.
                 turn.tool_call_log.append((turn.tool_name, str(turn.tool_args)))
                 if len(turn.tool_call_history) > turn.loop_window:
                     turn.tool_call_history.pop(0)
-                turn.consecutive_count = _repeat_count(turn.tool_call_history)
+                turn.consecutive_count = max(
+                    _repeat_count(turn.tool_call_history),
+                    _same_result_repeats(turn.turn_results, turn.current_call) + 1,
+                )
                 if turn.consecutive_count >= self.max_consecutive_repeats:
                     self.console.stop_progress()
                     self._close_unrun_tool_card()
@@ -14827,7 +15101,7 @@ Do NOT wrap conversational replies in JSON.
                     turn.recent_results = [
                         o.get("result") for o in turn.previous_outputs
                     ]
-                    if turn.current_call not in turn.loop_corrected_calls:
+                    if not turn.loop_corrected_calls:
                         turn.loop_corrected_calls.add(turn.current_call)
                         # Sent as this call's result so tool_call_id pairing holds.
                         turn.messages.append(
@@ -14870,6 +15144,10 @@ Do NOT wrap conversational replies in JSON.
                     # limiter's windows drain within a few capped waits.
                     turn.tool_call_history.pop()
                     self._wait_out_rate_limit(turn.tool_result)
+                else:
+                    _note_turn_result(
+                        turn.turn_results, turn.current_call, turn.tool_result
+                    )
 
                 # Result-based dedup for query family tools
                 turn._QUERY_TOOLS = (
@@ -15090,8 +15368,12 @@ Do NOT wrap conversational replies in JSON.
             if len(turn.tool_call_history) > turn.loop_window:
                 turn.tool_call_history.pop(0)
 
-            # Back-to-back repeats of this call, or of the cycle it closes
-            turn.consecutive_count = _repeat_count(turn.tool_call_history)
+            # Back-to-back repeats of this call, or of the cycle it closes,
+            # or of a result it already gave this turn in any order.
+            turn.consecutive_count = max(
+                _repeat_count(turn.tool_call_history),
+                _same_result_repeats(turn.turn_results, turn.current_call) + 1,
+            )
 
             # Stop after max_consecutive_repeats identical calls
             if turn.consecutive_count >= self.max_consecutive_repeats:
@@ -15101,7 +15383,7 @@ Do NOT wrap conversational replies in JSON.
 
                 # Not ``step_results``: error recovery clears it before each retry.
                 turn.recent_results = [o.get("result") for o in turn.previous_outputs]
-                if turn.current_call not in turn.loop_corrected_calls:
+                if not turn.loop_corrected_calls:
                     turn.loop_corrected_calls.add(turn.current_call)
                     turn.messages.append(
                         self._create_tool_message(
@@ -15140,6 +15422,10 @@ Do NOT wrap conversational replies in JSON.
                 # windows drain within a few capped waits.
                 turn.tool_call_history.pop()
                 self._wait_out_rate_limit(turn.tool_result)
+            else:
+                _note_turn_result(
+                    turn.turn_results, turn.current_call, turn.tool_result
+                )
 
             if _is_image_tool(turn.tool_name):
                 turn.capability_tool_last_succeeded = not tool_result_failed(
@@ -16114,6 +16400,51 @@ Do NOT wrap conversational replies in JSON.
                         turn.steps_limit,
                     )
                     return "continue"
+                required = [] if turn.required_calls_made else self.required_calls()
+                if required:
+                    turn.required_calls_made = True
+                    turn.answer_before_completion_check = None
+                    turn.steps_limit += _ANSWER_REPAIR_STEPS
+                    # The request itself asked for these calls.
+                    self._turn_scope.widen(
+                        " ".join(
+                            f"{n} {json.dumps(a, ensure_ascii=False)}"
+                            for n, a in required
+                        )
+                    )
+                    self._reopen_turn_scope(turn.conversation)
+                    for name, args in required:
+                        logger.info(
+                            "[WORKFLOW] The repair did not make the call the "
+                            "request asked for; running %s itself",
+                            name,
+                        )
+                        turn.conversation.append(
+                            {
+                                "role": "assistant",
+                                "content": {"tool": name, "tool_args": args},
+                            }
+                        )
+                        self.console.print_tool_usage(name)
+                        self.console.pretty_print_json(args, "Arguments")
+                        self.console.start_progress(f"Executing {name}")
+                        try:
+                            result = self._execute_tool_timed(name, args)
+                        finally:
+                            self.console.stop_progress()
+                        self.console.pretty_print_json(result, "Result")
+                        self.console.print_tool_complete()
+                        turn.tool_call_log.append((name, str(args)))
+                        ran = (
+                            f"[check:answer] The user's request needed `{name}`, "
+                            f"so GAIA ran it with "
+                            f"{json.dumps(args, ensure_ascii=False)}. Result: "
+                            f"{result}. Answer the user from this result, "
+                            "without mentioning this check."
+                        )
+                        turn.messages.append({"role": "user", "content": ran})
+                        turn.conversation.append({"role": "user", "content": ran})
+                    return "continue"
                 turn.completion_gaps.extend(
                     p for p in answer_issues if p not in turn.completion_gaps
                 )
@@ -16213,6 +16544,9 @@ Do NOT wrap conversational replies in JSON.
         self._single_tool_done = False
         self._turn_seq += 1
         self._denied_effects = DeniedEffects(os.getcwd())
+        Agent._lift_declined_calls(
+            self, getattr(self, "_original_user_input", None) or user_input
+        )
         self._begin_turn_provenance()
         self._turn_unasked_removals = []
         # Cleared per turn: a trace must never report the previous turn's
@@ -16238,6 +16572,7 @@ Do NOT wrap conversational replies in JSON.
             os.getcwd(),
             scratch=getattr(self._read_validator(), "scratch_dir", None),
         )
+        self._stopped_on_failing_repeats = False
         if getattr(self, "_task_lessons", None) is None:
             self._task_lessons = TaskLessons()
         self._task_lessons.begin_turn()
@@ -16327,13 +16662,19 @@ Do NOT wrap conversational replies in JSON.
         turn.error_count = 0
         # Malformed replies get their own budget: failed tool calls are ordinary work.
         turn.parse_failures = 0
+        turn.plan_corrections = 0
+        # Every request to the model, so no reply stream outruns the step budget.
+        # A turn this stops is reported as a step-limit stop, with fewer tool steps.
+        turn.model_calls = 0
         turn.markup_retries = 0
         turn.tool_call_history = []  # Recent tool calls, for loop detection
         turn.loop_window = max(
             5, _MAX_LOOP_PERIOD * getattr(self, "max_consecutive_repeats", 4)
         )
-        # Repeated calls already sent one correction; the next repeat ends the turn.
+        # One loop correction per turn; the next repeat of any call ends the turn.
         turn.loop_corrected_calls: set = set()
+        # Each call's last result and how many times in a row it came back the same.
+        turn.turn_results: Dict[Any, Tuple[int, int]] = {}
         turn.tool_call_log = (
             []
         )  # Full unbounded log of all tool calls this turn (for workflow guards)
@@ -16350,6 +16691,8 @@ Do NOT wrap conversational replies in JSON.
         turn.stream_cut_offs = 0
         turn.completion_corrections = 0
         turn.answer_repaired = False
+        # Whether this turn already ran the calls required_calls() named.
+        turn.required_calls_made = False
         # The self-check goes out once a turn. While it is open this holds
         # the answer it was sent about, and when and where it went out.
         turn.self_check_sent = False
@@ -16488,7 +16831,11 @@ Do NOT wrap conversational replies in JSON.
         logger.debug(f"Input prompt: {turn.prompt[:200]}...")
 
         # Process the query in steps, allowing for multiple tool usages
-        while turn.steps_taken < turn.steps_limit and turn.final_answer is None:
+        while (
+            turn.steps_taken < turn.steps_limit
+            and turn.model_calls < turn.steps_limit
+            and turn.final_answer is None
+        ):
             # Cooperative cancellation: if a consumer (e.g. the Agent UI's
             # stream-timeout/disconnect cleanup) signalled cancel, stop here so
             # the producer thread is torn down rather than left running. Checked
@@ -16514,6 +16861,8 @@ Do NOT wrap conversational replies in JSON.
                     if latest:
                         turn.final_answer += f"\n\nWhat I had found so far:\n{latest}"
                 break
+
+            self._supersede_checked_answer(turn.messages)
 
             # Anything the user sent mid-turn joins the context here, where the
             # loop is between steps and nothing is half-applied. AFTER the
@@ -16769,9 +17118,10 @@ Do NOT wrap conversational replies in JSON.
                 break
 
             # Process plan if available
-            if "plan" in turn.parsed and self._accept_plan(
-                turn.parsed, turn.messages, user_input
-            ):
+            step_exit = self._accept_plan(turn, user_input)
+            if step_exit == "break":
+                break
+            if step_exit == "continue":
                 continue
 
             # === Native parallel tool_calls fan-out ===
@@ -16796,6 +17146,11 @@ Do NOT wrap conversational replies in JSON.
                 break
             if step_exit == "continue":
                 continue
+
+                # Otherwise fall through to stats / answer / next iter.
+                # The legacy ``if parsed.get("tool")`` branch below is
+                # gated to skip when ``tool_calls`` is set so it won't
+                # double-execute the first call.
 
             # If the response contains a tool call, execute it (legacy
             # embedded-JSON path). Skipped when ``tool_calls`` is set —
@@ -17138,6 +17493,7 @@ Do NOT wrap conversational replies in JSON.
                     "success"
                     if has_valid_answer
                     and not blocking_gaps(completion_gaps)
+                    and not getattr(self, "_stopped_on_failing_repeats", False)
                     and not max_steps_reached
                     and not time_limit_reached
                     else "incomplete"
@@ -17403,6 +17759,10 @@ Do NOT wrap conversational replies in JSON.
             tool_name, executed_count, recent_results
         )
         failed = self._repeats_carry_a_failure(recent_results)
+        # A turn stopped by a call that kept failing did not finish, whatever it says.
+        self._stopped_on_failing_repeats = (
+            getattr(self, "_stopped_on_failing_repeats", False) or failed
+        )
 
         steps_taken = self._write_deliverables_before_stop(
             messages,

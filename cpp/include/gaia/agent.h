@@ -345,6 +345,13 @@ protected:
         return std::nullopt;
     }
 
+    /// What the final answer reports that no tool this turn shows, in words for the user,
+    /// whether or not the answer was sent back. It is added under the answer and the turn
+    /// ends incomplete; nullopt adds nothing.
+    virtual std::optional<std::string> unconfirmedClaims(const std::string& /*answer*/) {
+        return std::nullopt;
+    }
+
     /// Called once as a query starts, before its first model call. Override to
     /// capture what the system prompt should hold fixed for the whole query.
     virtual void onTurnStart() {}

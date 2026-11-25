@@ -18,7 +18,6 @@ import numpy as np
 import pytest
 
 from gaia.agents.base.memory import (
-    EMBEDDING_DIM,
     WRITE_FAILURE_INDEX,
     MemoryMixin,
     _embedding_to_blob,
@@ -137,7 +136,7 @@ def test_iter_rejects_a_non_positive_batch(store):
 
 def test_procedure_rebuild_indexes_every_procedure(store):
     for i in range(150):
-        vec = np.zeros(EMBEDDING_DIM, dtype=np.float32)
+        vec = np.zeros(DIM, dtype=np.float32)
         vec[i] = 1.0
         store.put_skill(
             name=f"procedure-{i}",
@@ -204,10 +203,10 @@ def test_an_unreadable_or_misshapen_procedure_vector_is_counted(store, caplog):
             embedding=blob,
         )
 
-    good = np.zeros(EMBEDDING_DIM, dtype=np.float32)
+    good = np.zeros(DIM, dtype=np.float32)
     good[0] = 1.0
     proc(0, _embedding_to_blob(good))
-    bad = np.ones(EMBEDDING_DIM, dtype=np.float32)
+    bad = np.ones(DIM, dtype=np.float32)
     proc(1, _embedding_to_blob(bad))
     proc(2, _embedding_to_blob(np.ones(8, dtype=np.float32)))
     host = _Host(store, {})
@@ -222,3 +221,56 @@ def test_an_unreadable_or_misshapen_procedure_vector_is_counted(store, caplog):
         for r in caplog.records
         if r.levelname == "WARNING"
     )
+
+
+def test_procedure_rebuild_follows_the_active_embedder_dimension(store):
+    for i in range(3):
+        store.put_skill(
+            name=f"procedure-{i}",
+            when_to_use=f"when case {i} comes up",
+            markdown_body=f"step for case {i}",
+            embedding=_embedding_to_blob(_axis(i)),
+        )
+    host = _Host(store, {})
+
+    host._rebuild_proc_faiss_index()
+
+    assert host._proc_faiss_index.ntotal == 3
+    hits = host._proc_faiss_search(_axis(1), top_k=1)
+    assert [pid for pid, _ in hits] == [host._proc_faiss_id_map[1]]
+
+
+def test_procedure_search_pairs_one_index_with_its_own_ids():
+    import threading
+
+    faiss = pytest.importorskip("faiss")
+    from gaia.agents.base.procedural_memory import (
+        _PROC_INDEX_LOCK,
+        ProceduralMemoryMixin,
+    )
+
+    class Host(ProceduralMemoryMixin):
+        pass
+
+    host = Host()
+    old = faiss.IndexFlatIP(4)
+    old.add(np.eye(4, dtype=np.float32)[[0, 2]])
+    host._proc_faiss_index = old
+    host._proc_faiss_id_map = ["old-0", "old-1"]
+    new = faiss.IndexFlatIP(4)
+    new.add(np.eye(4, dtype=np.float32)[2:])
+    result = []
+
+    with _PROC_INDEX_LOCK:  # a rebuild is mid-swap
+        searcher = threading.Thread(
+            target=lambda: result.extend(
+                host._proc_faiss_search(np.eye(4, dtype=np.float32)[2], 1)
+            )
+        )
+        searcher.start()
+        searcher.join(timeout=0.3)
+        host._proc_faiss_index = new
+        host._proc_faiss_id_map = ["new-0", "new-1"]
+    searcher.join(timeout=5)
+
+    assert result and result[0][0] == "new-0"

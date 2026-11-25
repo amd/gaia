@@ -511,7 +511,7 @@ def resolve_project_root(
     # Walk to the home directory or the filesystem root, the way git does. A
     # fixed depth cap looks safe and silently skips the map on ordinary trees:
     # Maven's `src/main/java/com/acme/svc` is six deep, and this repo's own
-    # `hub/agents/gaia/python/gaia_agent` is five.
+    # `hub/agents/gaia/python/gaiapy` is five.
     for ancestor in [cwd, *cwd.parents]:
         if ancestor == home or ancestor == ancestor.parent:
             break

@@ -17,12 +17,12 @@ import uuid
 
 import pytest
 
-pytest.importorskip("gaia_agent")
+pytest.importorskip("gaiapy")
 
 from fastapi.testclient import TestClient  # noqa: E402
-from gaia_agent import caller_auth  # noqa: E402
-from gaia_agent import server as server_mod  # noqa: E402
-from gaia_agent import session_registry as sr  # noqa: E402
+from gaiapy import caller_auth  # noqa: E402
+from gaiapy import server as server_mod  # noqa: E402
+from gaiapy import session_registry as sr  # noqa: E402
 
 from gaia.security import PathValidator  # noqa: E402
 
@@ -88,6 +88,7 @@ def built(monkeypatch, tmp_path):
     caller_auth.reset()
     monkeypatch.delenv(caller_auth.TOKEN_FILE_ENV_VAR, raising=False)
     monkeypatch.delenv(caller_auth.TOKEN_ENV_VAR, raising=False)
+    monkeypatch.setenv(caller_auth.ALLOW_NO_TOKEN_ENV_VAR, "1")
     # The agent's own scope, deliberately NOT containing the documents.
     scope = tmp_path / "scope"
     scope.mkdir()
@@ -243,7 +244,7 @@ def test_agents_are_never_built_at_the_same_time(monkeypatch):
     import threading
     import time
 
-    from gaia_agent import agent as agent_mod
+    from gaiapy import agent as agent_mod
 
     active = []
     peak = []

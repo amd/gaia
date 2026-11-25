@@ -26,7 +26,6 @@ vi.mock('../../services/api', () => ({
         token: 'tok',
         startedAt: null,
         error: null,
-        publicIp: null,
     }),
 }));
 

@@ -182,16 +182,24 @@
 }
 
 .perm-btn.is-primary {
-    border-color: var(--accent-fill);
-    background: var(--accent-fill);
-    color: var(--accent-fill-text);
+    border-color: var(--action-fill);
+    background: var(--action-fill);
+    color: var(--action-fill-text);
 }
 
 .perm-btn.is-primary:hover:not(:disabled) {
-    background: var(--accent-fill-hover);
+    background: var(--action-fill-hover);
+}
+
+/* A lasting grant: outlined, so it is never mistaken for Deny beside it. */
+.perm-btn.is-lasting {
+    border-style: dashed;
+    border-color: var(--border);
+    background: transparent;
 }
 
 .perm-btn.is-suggested {
+    border-style: solid;
     border-color: var(--accent-solid);
     color: var(--text-primary);
 }

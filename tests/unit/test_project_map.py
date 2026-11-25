@@ -726,7 +726,7 @@ def test_background_index_failure_is_logged_not_swallowed(repo, caplog):
 
 # ── wiring, checked against the source ────────────────────────────────────
 #
-# ``gaia_agent`` resolves through an editable install that can point at a
+# ``gaiapy`` resolves through an editable install that can point at a
 # different checkout, so importing ``GaiaAgent`` here would assert against the
 # wrong tree. These parse this repository's files instead.
 
@@ -744,7 +744,7 @@ def _bases_of(path: pathlib.Path, class_name: str) -> list:
 def test_project_map_mixin_precedes_the_base_agent_in_gaia_agent():
     """Listed after ChatAgent, ``Agent``'s no-op hook would shadow the override."""
     bases = _bases_of(
-        _REPO / "hub" / "agents" / "gaia" / "python" / "gaia_agent" / "agent.py",
+        _REPO / "hub" / "agents" / "gaia" / "python" / "gaiapy" / "agent.py",
         "GaiaAgent",
     )
     assert bases[0] == "ProjectMapMixin"
@@ -843,9 +843,7 @@ def test_a_wrong_base_order_fails_at_class_definition():
 # mixins rather than importing ``GaiaAgent`` (same editable-install reason as
 # above); the AST test keeps the two from drifting apart.
 
-_FLAGSHIP_AGENT = (
-    _REPO / "hub" / "agents" / "gaia" / "python" / "gaia_agent" / "agent.py"
-)
+_FLAGSHIP_AGENT = _REPO / "hub" / "agents" / "gaia" / "python" / "gaiapy" / "agent.py"
 
 
 def _load_code_search_start():
@@ -950,7 +948,7 @@ def test_the_flagship_still_picks_its_index_root_the_way_this_pins():
         # six, and this repo's own flagship package sits at five.
         "a/b/c/d/e",
         "src/main/java/com/acme/svc",
-        "hub/agents/gaia/python/gaia_agent",
+        "hub/agents/gaia/python/gaiapy",
         "a/b/c/d/e/f/g/h/i/j",
     ],
 )

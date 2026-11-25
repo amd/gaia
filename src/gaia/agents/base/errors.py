@@ -21,7 +21,7 @@ FRAMEWORK_PATHS: Set[str] = {
     # Hub-migrated agents: wheel installs land under site-packages
     # (covered below); editable hub checkouts show as hub/agents/<id>/python/.
     "hub/agents/",
-    "gaia_agent/",
+    "gaiapy/",
     "site-packages/",
 }
 

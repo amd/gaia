@@ -212,6 +212,7 @@ class TestPublicSurface:
         assert result == {
             "revoke_supported": True,
             "revoked_remotely": True,
+            "revoke_attempted": True,
             "nothing_stored": False,
             "revoke_error": None,
             "account_id": "default",

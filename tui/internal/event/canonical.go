@@ -35,7 +35,7 @@ const (
 // frozen `/query` HTTP contract other hub agents publish
 // (docs/spec/agent-ui-query-sse-contract.md governs that one; the gaia
 // flagship agent has no such surface). They are a stdio-transport-local
-// extension: a model-state ping gaia_agent/stdio.py sends at startup and
+// extension: a model-state ping gaiapy/stdio.py sends at startup and
 // after a live `/model` switch. Safe to share this Go type with the
 // daemon-relay path anyway — an agent that never sets these fields leaves
 // them at their zero value, which decodes as an ordinary (blank) status
@@ -45,6 +45,7 @@ const (
 type CanonicalStatusEvent struct {
 	Type    string `json:"type"`
 	Message string `json:"message"`
+	Level   string `json:"level,omitempty"` // "warning" is kept as a chat notice.
 	// ModelID is the model actually resolved for chat (e.g. "claude-sonnet-5"
 	// or "Gemma-4-E4B-it-GGUF") — empty means this is a plain status line, not
 	// a model banner.
@@ -77,6 +78,9 @@ type CanonicalStatusEvent struct {
 	Phase string `json:"phase,omitempty"`
 	Words int    `json:"words,omitempty"`
 	Chars int    `json:"chars,omitempty"`
+	// RetractsAnswer takes back the answer text streamed since the last tool
+	// call: it was cut off ("answer_restart") or a check replaces it ("answer_check").
+	RetractsAnswer bool `json:"retracts_answer,omitempty"`
 	// HistoryCut is set when older turns just left the model's view; Message
 	// then carries the line to keep in the transcript.
 	HistoryCut *HistoryCut `json:"history_cut,omitempty"`

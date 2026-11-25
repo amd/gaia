@@ -14,9 +14,9 @@ import textwrap
 
 import pytest
 
-pytest.importorskip("gaia_agent")
+pytest.importorskip("gaiapy")
 
-from gaia_agent.python_runner import (  # noqa: E402
+from gaiapy.python_runner import (  # noqa: E402
     GUARDED_FOLDERS_ENV,
     guarded_open_refusal,
     python_command,
@@ -247,7 +247,7 @@ class TestFileToolsJudgeTheFile:
 
 
 def test_the_open_guard_reads_the_folders_once(home, monkeypatch):
-    from gaia_agent import python_runner
+    from gaiapy import python_runner
 
     calls = []
     real = python_runner._file_ids

@@ -1,7 +1,7 @@
 // Copyright(C) 2026 Advanced Micro Devices, Inc. All rights reserved.
 // SPDX-License-Identifier: MIT
 
-/** The resource strip is on in every chat until closed, and one click brings it back. */
+/** The resource strip is off until turned on, stays as last set, and one click brings it back. */
 
 import { fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -26,6 +26,11 @@ const USAGE: ResourceUsage = {
 };
 
 let resourceReads = 0;
+
+function turnOn() {
+    window.localStorage.setItem('gaia.resourceMonitor.visible', '1');
+    useResourceMonitorStore.getState().reload();
+}
 
 function renderChat() {
     useChatStore.setState({
@@ -68,7 +73,34 @@ afterEach(() => {
 });
 
 describe('resource usage in a chat', () => {
-    it('is on by default, under the header, with a pressed toggle', async () => {
+    it('is off on a fresh profile and reads nothing', async () => {
+        renderChat();
+        const toggle = await screen.findByRole('button', { name: 'Resource usage' });
+        expect(toggle).toHaveAttribute('aria-pressed', 'false');
+        expect(toggle).toHaveAttribute('title', 'Show resource usage');
+        expect(screen.queryByRole('region', { name: 'Resource usage on this PC' })).toBeNull();
+        expect(screen.queryByText(/pulse icon/)).toBeNull();
+        await new Promise((r) => setTimeout(r, 1200));
+        expect(resourceReads).toBe(0);
+        expect(window.localStorage.getItem('gaia.resourceMonitor.visible')).toBeNull();
+    });
+
+    it('turns on from the header toggle and stays on', async () => {
+        const { unmount } = renderChat();
+        fireEvent.click(await screen.findByRole('button', { name: 'Resource usage' }));
+        const region = await screen.findByRole('region', { name: 'Resource usage on this PC' });
+        expect(region.previousElementSibling?.tagName).toBe('HEADER');
+        await screen.findByText('4.70 GHz');
+        expect(window.localStorage.getItem('gaia.resourceMonitor.visible')).toBe('1');
+
+        unmount();
+        useResourceMonitorStore.getState().reload();
+        renderChat();
+        expect(await screen.findByRole('region', { name: 'Resource usage on this PC' })).toBeInTheDocument();
+    });
+
+    it('once turned on, sits under the header with a pressed toggle', async () => {
+        turnOn();
         renderChat();
         const region = await screen.findByRole('region', { name: 'Resource usage on this PC' });
         expect(region.previousElementSibling?.tagName).toBe('HEADER');
@@ -79,6 +111,7 @@ describe('resource usage in a chat', () => {
     });
 
     it('closes with the ✕, keeps focus on the toggle, stops polling, and stays closed', async () => {
+        turnOn();
         const { unmount } = renderChat();
         await screen.findByText('4.70 GHz');
         fireEvent.click(screen.getByRole('button', { name: 'Hide resource usage' }));
@@ -102,6 +135,7 @@ describe('resource usage in a chat', () => {
     });
 
     it('says how to bring it back after the ✕, and brings it back from the note', async () => {
+        turnOn();
         renderChat();
         await screen.findByText('4.70 GHz');
         expect(screen.queryByText(/pulse icon/)).toBeNull();
@@ -116,6 +150,7 @@ describe('resource usage in a chat', () => {
     });
 
     it('says nothing when the header toggle hides it', async () => {
+        turnOn();
         renderChat();
         await screen.findByText('4.70 GHz');
         fireEvent.click(screen.getByRole('button', { name: 'Resource usage' }));
@@ -124,6 +159,7 @@ describe('resource usage in a chat', () => {
     });
 
     it('comes back from the header toggle', async () => {
+        turnOn();
         renderChat();
         await screen.findByText('4.70 GHz');
         fireEvent.click(screen.getByRole('button', { name: 'Hide resource usage' }));
@@ -132,20 +168,30 @@ describe('resource usage in a chat', () => {
         expect(window.localStorage.getItem('gaia.resourceMonitor.visible')).toBe('1');
     });
 
-    it('can be turned off and on in Settings › General', () => {
+    it('can be turned on and off in Settings › General', () => {
         render(<GeneralSettings />);
         const box = screen.getByRole('checkbox', { name: 'Show resource usage in chats' });
-        expect(box).toBeChecked();
+        expect(box).not.toBeChecked();
+        fireEvent.click(box);
+        expect(useResourceMonitorStore.getState().visible).toBe(true);
+        expect(window.localStorage.getItem('gaia.resourceMonitor.visible')).toBe('1');
         fireEvent.click(box);
         expect(useResourceMonitorStore.getState().visible).toBe(false);
-        fireEvent.click(box);
-        expect(useResourceMonitorStore.getState().visible).toBe(true);
+        expect(window.localStorage.getItem('gaia.resourceMonitor.visible')).toBe('0');
     });
 
-    it('starts shown when the browser blocks storage', () => {
+    it('keeps a closed strip closed', () => {
         window.localStorage.setItem('gaia.resourceMonitor.visible', '0');
+        useResourceMonitorStore.getState().reload();
+        expect(useResourceMonitorStore.getState().visible).toBe(false);
+    });
+
+    it('starts hidden, and says why, when the browser blocks storage', () => {
+        window.localStorage.setItem('gaia.resourceMonitor.visible', '1');
+        const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
         vi.spyOn(Storage.prototype, 'getItem').mockImplementation(() => { throw new Error('blocked'); });
         useResourceMonitorStore.getState().reload();
-        expect(useResourceMonitorStore.getState().visible).toBe(true);
+        expect(useResourceMonitorStore.getState().visible).toBe(false);
+        expect(warn.mock.calls.flat().join(' ')).toContain('Resource usage setting unavailable; hiding it');
     });
 });

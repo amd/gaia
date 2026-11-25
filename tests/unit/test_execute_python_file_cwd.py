@@ -20,9 +20,9 @@ from unittest.mock import patch
 
 import pytest
 
-pytest.importorskip("gaia_agent")
+pytest.importorskip("gaiapy")
 
-from gaia_agent.chat_agent import (  # noqa: E402
+from gaiapy.chat_agent import (  # noqa: E402
     ChatAgent,
     ChatAgentConfig,
     _python_script_run_context,
@@ -63,8 +63,8 @@ def project(tmp_path):
 
 def _build_agent(config):
     with (
-        patch("gaia_agent.chat_agent.RAGSDK"),
-        patch("gaia_agent.chat_agent.RAGConfig"),
+        patch("gaiapy.chat_agent.RAGSDK"),
+        patch("gaiapy.chat_agent.RAGConfig"),
     ):
         return ChatAgent(config)
 
@@ -154,14 +154,14 @@ class TestTheFlagshipFollowsItsProjectMap:
     def test_the_script_runs_in_the_mapped_project_after_a_chdir(
         self, project, tmp_path, monkeypatch
     ):
-        gaia_agent = pytest.importorskip("gaia_agent.agent")
+        gaiapy = pytest.importorskip("gaiapy.agent")
         monkeypatch.setenv("GAIA_MEMORY_DISABLED", "1")
         monkeypatch.setenv(AUTO_INDEX_ENV, "0")
         monkeypatch.chdir(project / "tests")
         saved = dict(_TOOL_REGISTRY)
         try:
-            agent = gaia_agent.GaiaAgent(
-                config=gaia_agent.GaiaAgentConfig(
+            agent = gaiapy.GaiaAgent(
+                config=gaiapy.GaiaAgentConfig(
                     silent_mode=True, allowed_paths=[str(tmp_path)]
                 )
             )

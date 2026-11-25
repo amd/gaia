@@ -46,6 +46,7 @@ import sqlite3
 import sys
 import threading
 import time
+import unicodedata
 import weakref
 from collections import deque
 from contextlib import nullcontext
@@ -308,9 +309,9 @@ _FORGET_FILLER = frozenset(
 )
 
 #: Size cap on the stable memory section, instructions included
-#: (4250 chars ≈ 1060 tokens). Grow it with the instructions, so they never
+#: (4460 chars ≈ 1115 tokens). Grow it with the instructions, so they never
 #: take room from the user's memories.
-STABLE_MEMORY_PROMPT_CHARS = 4250
+STABLE_MEMORY_PROMPT_CHARS = 4460
 #: Rows read per category when filling that section; the size cap decides
 #: how many are shown.
 STABLE_MEMORY_FETCH_LIMIT = 200
@@ -461,6 +462,28 @@ def _forget_text(item: Dict) -> Tuple[str, ...]:
     return fact_words(str(item.get("content", "")))
 
 
+#: Phones type "don’t": the memory guards match a straight apostrophe.
+_APOSTROPHES = str.maketrans(
+    dict.fromkeys(
+        "\u2018\u2019\u201b\u02b9\u02bb\u02bc\u02c8\u2032\u2035\uff07`\u00b4", "'"
+    )
+)
+
+
+def _straight_apostrophes(text: str) -> str:
+    """*text* with each apostrophe look-alike made "'", so its length is unchanged."""
+    return text.translate(_APOSTROPHES)
+
+
+def _normalised(text: str) -> str:
+    """*text* in NFKC, with no invisible format characters and straight apostrophes."""
+    # The acute accent first: NFKC turns it into a space and a combining mark.
+    text = unicodedata.normalize("NFKC", _straight_apostrophes(text))
+    return "".join(ch for ch in text if unicodedata.category(ch) != "Cf").translate(
+        _APOSTROPHES
+    )
+
+
 _FORGET_SENTENCE = re.compile(r"[^.!?\n]+[.!?]*")
 _FORGET_VERB = re.compile(r"\b(?:forget|erase|delete|remove)\b", re.IGNORECASE)
 #: "Could you forget X?" asks for it; "Did you forget X?" doesn't.
@@ -485,7 +508,7 @@ _FORGET_WHAT_END = re.compile(
 
 def _forget_requests(user_input: str) -> List[str]:
     """What *user_input* asks to forget, one entry per request."""
-    text = user_input.replace("\u2019", "'")
+    text = _straight_apostrophes(user_input)
     asked = []
     for sentence in _FORGET_SENTENCE.findall(text):
         sentence = sentence.strip()
@@ -620,6 +643,43 @@ SAVE_WHEN_ASKED_PROMPT = (
     "your answer."
 )
 
+#: A sentence telling the user something was kept in memory.
+_SAVE_CLAIM = re.compile(
+    r"\bi(?:'ve|\s+have|'ll|\s+will)?\s+(?:now\s+|also\s+)?"
+    r"(?:saved|stored|remembered|noted|save|store|remember|note)\b"
+    r"|\b(?:is|was|has\s+been|have\s+been)\s+(?:now\s+)?"
+    r"(?:saved|stored|remembered|noted)\b"
+    r"|^\W*(?:saved|stored|remembered|noted)\b",
+    re.IGNORECASE | re.MULTILINE,
+)
+_NOT_SAVED = re.compile(
+    r"\b(?:not|never|no|nothing|none|cannot|unable|refus\w*|block\w*|\w+n't)\b",
+    re.IGNORECASE,
+)
+
+
+#: Answer-check problems, also shown to the user when the repair doesn't take.
+_REFUSED_SAVE = "This was not saved to memory."
+_REFUSED_SECRET = (
+    "This was not saved to memory: GAIA does not keep passwords or other secrets."
+)
+_NOTHING_SAVED = "Nothing was saved to memory."
+_DECLINED_SAVE = "This was not saved to memory: you asked to leave it out."
+#: What remember returns for a detail the user declined. Opens with "Not
+#: stored": the model repeats a tool result's first words to the user.
+_DECLINED_NOT_STORED = (
+    "Not stored: the user said to leave this out of memory. Tell them you left "
+    "it out. Do not save it another way."
+)
+
+
+def claims_memory_save(answer: str) -> bool:
+    """True when *answer* tells the user something was saved, with no denial beside it."""
+    for sentence in re.split(r"(?<=[.!?])\s+|\n+", answer or ""):
+        if _SAVE_CLAIM.search(sentence) and not _NOT_SAVED.search(sentence):
+            return True
+    return False
+
 
 def _saved_despite(ignored: Dict[str, str], knowledge_id: str) -> str:
     """What remember tells the model after saving without a bad optional argument.
@@ -659,6 +719,16 @@ def _own_words(text: str) -> List[str]:
 
 
 _SENTENCE_END = re.compile(r"[.?!\n]|$")
+#: A negation before the verb withholds the request: "I don't want you to remember".
+_HELD_BACK = re.compile(
+    r"\b(?:don'?t|do\s+not|doesn'?t|never|no\s+need|not|shouldn'?t|won'?t)\b",
+    re.IGNORECASE,
+)
+
+
+def _clause_before(part: str, start: int) -> str:
+    """The words of *part*'s clause that come before *start*."""
+    return re.split(r"[.?!,;\n]", part[:start])[-1]
 
 
 def _is_material(part: str, start: int) -> bool:
@@ -673,10 +743,121 @@ def _is_material(part: str, start: int) -> bool:
     )
 
 
+_DECLINED_OBJECT = r"(?:it|that|this|them|those|these|that\s+one)"
+#: Where a decline must end, so "leave it out of the recipe" is not one.
+_DECLINE_END = (
+    r"(?:\s+(?:of|from|in|to)\s+(?:(?:your|my|the)\s+)?memory)?"
+    r"(?=\W*$|\s*[.!?,;:)\n]|\s+(?:and|but|please|thanks|thank|ok|okay|though)\b)"
+)
+#: The user telling the agent not to keep something: "leave it out",
+#: "don't save that", "do not remember my address". The object must be a
+#: pronoun, except after remember/memorize, so "don't save the file" is file work.
+_DECLINE = re.compile(
+    r"\b(?:"
+    rf"(?:leave|keep)\s+{_DECLINED_OBJECT}\s+out{_DECLINE_END}"
+    r"|(?:don'?t|do\s+not|no\s+need\s+to)\s+(?:please\s+)?(?:ever\s+)?(?:"
+    rf"(?:save|store|keep|record|log)\s+(?:any\s+of\s+)?{_DECLINED_OBJECT}{_DECLINE_END}"
+    rf"|(?:remember|memori[sz]e)\s+(?:{_DECLINED_OBJECT}|my|the|any)\b))",
+    re.IGNORECASE,
+)
+#: A word before the phrase that makes it a statement, not an instruction:
+#: "I don't save it", "told her to leave it out", "you can leave it out".
+_DECLINE_SUBJECT = frozenset(
+    "i you we they he she it who which to will would could can should might may "
+    "must shall did does".split()
+)
+#: Words that may sit right before an instruction. Any other word might be its
+#: subject ("my kids don't keep them"), so only a number or code ("555-1234
+#: leave it out"), punctuation or the start of the message may.
+_DECLINE_LEADS = frozenset(
+    "please just but and so actually then ok okay also now oh wait no".split()
+)
+_DECLINE_CLAUSE_BREAK = re.compile(
+    r"[.!?]+(?=\s|$)|[;,\n]+|\b(?:and|but)\b", re.IGNORECASE
+)
+#: Stems of the request words themselves, which say nothing about the detail.
+_DECLINE_NOISE_STEMS = frozenset(
+    {"reme", "memo", "save", "stor", "keep", "reco", "leav", "out", "plea", "actu"}
+)
+
+
+def _detail_stems(text: str) -> set:
+    """Content stems of *text*, less the words of a memory request or decline."""
+    return content_stems(text) - _DECLINE_NOISE_STEMS
+
+
+def _declined_spans(part: str, strict: bool = True) -> List[Tuple[int, int]]:
+    """Where in *part* sits a detail the user said to leave out of memory.
+
+    One (start, end) per decline: its own clause, or, when that clause holds
+    nothing but the decline ("…555-1234, but don't keep it"), the clause before.
+    *strict* also drops a phrase after a word that may be its subject, for the
+    checks that refuse a save; the looser read only stops asking for one.
+    """
+    bounds = [0]
+    for brk in _DECLINE_CLAUSE_BREAK.finditer(part):
+        bounds.extend((brk.start(), brk.end()))
+    bounds.append(len(part))
+    clauses = [(bounds[i], bounds[i + 1]) for i in range(0, len(bounds), 2)]
+    spans = []
+    for decline in _DECLINE.finditer(part):
+        before = re.search(r"([\w']+)\s+$", part[: decline.start()])
+        word = before.group(1).lower() if before else ""
+        if word.split("'")[0] in _DECLINE_SUBJECT:
+            continue
+        if strict and re.search(r"[a-z]", word) and word not in _DECLINE_LEADS:
+            continue
+        if _is_material(part, decline.start()):
+            continue
+        index = next(i for i, (s, e) in enumerate(clauses) if s <= decline.start() <= e)
+        start, end = clauses[index]
+        own = part[start : decline.start()] + part[decline.end() : end]
+        while not _detail_stems(own) and index > 0:
+            index -= 1
+            start, end = clauses[index]
+            own = part[start:end]
+        if _detail_stems(own):
+            spans.append((start, end))
+    return spans
+
+
+def declined_details(text: str) -> List[str]:
+    """The clauses of *text* that hold a detail the user said not to keep."""
+    return [
+        part[start:end]
+        for part in _own_words(_normalised(text or ""))
+        for start, end in _declined_spans(part)
+    ]
+
+
+def _user_declined(content: str, user_text: str) -> bool:
+    """Whether saving *content* would keep a detail *user_text* said to leave out."""
+    stems = _detail_stems(content)
+    if not stems:
+        return False
+    for part in _own_words(_normalised(user_text or "")):
+        spans = _declined_spans(part)
+        kept_stems = _detail_stems(
+            "".join(
+                " " if any(s <= i < e for s, e in spans) else ch
+                for i, ch in enumerate(part)
+            )
+        )
+        for start, end in spans:
+            declined = _detail_stems(part[start:end])
+            # A word the kept facts share ("phone") can't tell the declined one apart.
+            if stems & (declined - kept_stems or declined):
+                return True
+    return False
+
+
 def asks_to_keep_in_memory(text: str) -> bool:
     """True when *text* asks the agent to remember something it says."""
-    for part in _own_words(text or ""):
+    for part in _own_words(_normalised(text or "")):
+        declined = _declined_spans(part, strict=False)
         for request in _STORAGE_REQUEST.finditer(part):
+            if any(s <= request.end() <= e for s, e in declined):
+                continue
             end = _SENTENCE_END.search(part, request.end())
             verb = _KEEP_IN_MEMORY.search(part, request.start())
             if (
@@ -684,6 +865,7 @@ def asks_to_keep_in_memory(text: str) -> bool:
                 and verb.start() < request.end()
                 and not _is_material(part, request.start())
                 and not _NOT_A_FACT.match(part, verb.end())
+                and not _HELD_BACK.search(_clause_before(part, verb.start()))
                 # "Can you remember my dog's name?" asks; "…remember that I…?" tells.
                 and (
                     part[end.start() : end.end()] != "?"
@@ -1556,6 +1738,8 @@ class MemoryMixin(ProceduralMemoryMixin):
                 )
             # Tear down the partially-built state so no later code path tries
             # to use memory.
+            if self._memory_store is not None:
+                self._memory_store.close()
             self._memory_store = None
             self._auto_extract_enabled = False
             self._incognito = True
@@ -2807,6 +2991,15 @@ class MemoryMixin(ProceduralMemoryMixin):
                         str(op.get("content", ""))[:80],
                     )
                     continue
+                if op_type in ("add", "update") and _user_declined(
+                    str(op.get("content", "")), user_input
+                ):
+                    logger.info(
+                        "[MemoryMixin] not stored: proposed memory is a detail the "
+                        "user said to leave out: %s",
+                        str(op.get("content", ""))[:80],
+                    )
+                    continue
                 if op_type in ("add", "update") and _copied_from_material(
                     str(op.get("content", "")), user_input, material, prior
                 ):
@@ -3574,17 +3767,23 @@ class MemoryMixin(ProceduralMemoryMixin):
         # Stack all vectors and compute pairwise similarities
         mat = np.stack(vectors)
         # For efficiency with large sets, check each item against its top-K neighbors
-        try:
-            import faiss
+        import faiss
 
+        assert_faiss_omp_safe("Memory reconciliation search")
+        try:
             temp_index = faiss.IndexFlatIP(self._embedding_dim)
             temp_index.add(mat)
 
             # Search each item for its top-5 neighbors
             n_neighbors = min(5, len(vectors))
             scores_all, indices_all = temp_index.search(mat, n_neighbors)
-        except Exception as e:
-            logger.debug("[MemoryMixin] reconciliation FAISS search failed: %s", e)
+        except (RuntimeError, ValueError) as e:
+            logger.warning(
+                "[MemoryMixin] reconciliation FAISS search over %d memories "
+                "failed, no conflicts were checked this run: %s",
+                len(vectors),
+                e,
+            )
             return result
 
         # Collect high-similarity pairs
@@ -3904,6 +4103,9 @@ class MemoryMixin(ProceduralMemoryMixin):
             "  'remind me', 'add a journal entry', 'log this') → call `remember` FIRST,\n"
             "  even when they say 'just acknowledge'. A verbal 'Got it' WITHOUT a tool\n"
             "  call does NOT persist across sessions.\n"
+            "- A detail the user declines is never saved, even inside a request:\n"
+            "  'remember my address is 4 Elm St leave it out', '…don't save that',\n"
+            "  '…not that one' → no `remember` call for it; say you left it out.\n"
             "- Reminders/deadlines → remember(category='reminder', due_at='YYYY-MM-DD').\n"
             "  This only stores a memory; it does NOT send an alert or run at the due\n"
             "  time. Never promise an automatic notification. Say you will bring it up\n"
@@ -4790,6 +4992,70 @@ class MemoryMixin(ProceduralMemoryMixin):
         if not asks_to_keep_in_memory(text) or self._looks_like_credential(text):
             return None
         return SAVE_WHEN_ASKED_PROMPT
+
+    def _memory_saves_this_turn(self) -> List[Dict[str, Any]]:
+        """This turn's remember / update_memory results, oldest first."""
+        turn = getattr(self, "_turn_tool_executions", None)
+        if getattr(self, "_memory_saves_turn", None) is not turn:
+            self._memory_saves_turn = turn
+            self._memory_saves = []
+        return self._memory_saves
+
+    def _execute_tool_timed(self, tool_name, tool_args):
+        result = super()._execute_tool_timed(tool_name, tool_args)
+        name = str(tool_name or "").strip().removesuffix("()").replace("-", "_")
+        if name.lower() in ("remember", "update_memory"):
+            self._memory_saves_this_turn().append(
+                result if isinstance(result, dict) else {"status": "error"}
+            )
+        return result
+
+    def answer_problems(self, answer):
+        """Adds what the answer says about memory that this turn's saves don't back.
+
+        Small models repeat "Stored" over a refusal, or say "got it" and never
+        call remember; a nudge alone did not stop either.
+        """
+        problems = super().answer_problems(answer)
+        saves = self._memory_saves_this_turn()
+        if any(s.get("status") in ("stored", "updated") for s in saves):
+            return problems
+        request = getattr(self, "_original_user_input", None) or ""
+        if declined_details(request) and claims_memory_save(answer):
+            problems.append(_DECLINED_SAVE)
+            return problems
+        # Only a turn the user asked to remember: "saved" elsewhere is a file.
+        if not asks_to_keep_in_memory(request):
+            return problems
+        refused = [s for s in saves if s.get("status") == "skipped"]
+        if refused and claims_memory_save(answer):
+            secret = _CREDENTIAL_NOT_STORED in str(refused[-1].get("message") or "")
+            problems.append(_REFUSED_SECRET if secret else _REFUSED_SAVE)
+            return problems
+        called = {r.get("tool") for r in getattr(self, "_turn_tool_executions", [])}
+        if self._unsaved_memory_request(called):
+            problems.append(_NOTHING_SAVED)
+        return problems
+
+    def answer_repair_prompt(self, problems):
+        prompt = super().answer_repair_prompt(problems)
+        if _REFUSED_SAVE in problems or _REFUSED_SECRET in problems:
+            prompt += (
+                " Your answer says it was saved; remember refused it. Say plainly "
+                "that it was not saved, and why. Do not call remember again."
+            )
+        if _DECLINED_SAVE in problems:
+            prompt += (
+                " Your answer says it was saved, but the user said to leave it out "
+                "and nothing was saved. Say plainly that you left it out. Do not "
+                "call remember."
+            )
+        if _NOTHING_SAVED in problems:
+            prompt += (
+                " Call remember now with what the user asked you to keep, then "
+                "give your answer."
+            )
+        return prompt
 
     @classmethod
     def _looks_like_credential(cls, text: str) -> bool:
@@ -5873,6 +6139,20 @@ class MemoryMixin(ProceduralMemoryMixin):
                 ),
             }
 
+        def _declined_refusal(text: str) -> Optional[dict]:
+            user_text = getattr(mixin, "_original_user_input", None) or ""
+            if not _user_declined(text, user_text):
+                return None
+            logger.info(
+                "[MemoryMixin] refusing a detail the user said to leave out: %s",
+                text[:80],
+            )
+            return {
+                "status": "skipped",
+                "stored": 0,
+                "message": _DECLINED_NOT_STORED,
+            }
+
         @tool
         def remember(
             fact: str,
@@ -5887,8 +6167,10 @@ class MemoryMixin(ProceduralMemoryMixin):
             Store the user's statement verbatim — summarizing loses the
             attributes a later recall needs ("gateway on port 8080 with basic
             HTTP auth", not "gateway uses 8080"). One call per distinct fact,
-            never a concatenated blob. Credential-shaped content and transient
-            observations are refused.
+            never a concatenated blob. Never store a detail the user says to
+            leave out ("... leave it out", "don't save that", "not that one"):
+            skip it and tell them you left it out. Credential-shaped content
+            and transient observations are refused.
 
             Args:
                 fact: The statement to store, in the user's own words.
@@ -5904,6 +6186,8 @@ class MemoryMixin(ProceduralMemoryMixin):
                 return refused
             if not fact or not fact.strip():
                 return {"status": "error", "message": "fact must not be empty."}
+            if (declined := _declined_refusal(fact)) is not None:
+                return declined
 
             # A bad label must not lose the fact: save without it and say so.
             ignored: Dict[str, str] = {}
@@ -6307,6 +6591,8 @@ class MemoryMixin(ProceduralMemoryMixin):
 
             if not kwargs:
                 return {"status": "error", "message": "No fields to update."}
+            if content and (declined := _declined_refusal(content)) is not None:
+                return declined
 
             # Moving tool text out of "error" makes it read as the user's own.
             existing = mixin._memory_store.get_item(knowledge_id) or {}

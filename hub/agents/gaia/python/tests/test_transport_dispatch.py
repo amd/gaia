@@ -1,6 +1,6 @@
 # Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 # SPDX-License-Identifier: MIT
-"""One binary, two transports: what ``gaia_agent.server.main`` dispatches on.
+"""One binary, two transports: what ``gaiapy.server.main`` dispatches on.
 
 ``gaia-agent`` is spawned two different ways and neither invocation may land in
 the other's parser:
@@ -24,20 +24,23 @@ import sys
 
 import pytest
 
-pytest.importorskip("gaia_agent")
+pytest.importorskip("gaiapy")
 
 import uvicorn  # noqa: E402
 from fastapi import FastAPI  # noqa: E402
 from fastapi.testclient import TestClient  # noqa: E402
-from gaia_agent import entry as entry_mod  # noqa: E402
-from gaia_agent import server as server_mod  # noqa: E402
-from gaia_agent import stdio as stdio_mod  # noqa: E402
+from gaiapy import entry as entry_mod  # noqa: E402
+from gaiapy import server as server_mod  # noqa: E402
+from gaiapy import stdio as stdio_mod  # noqa: E402
 
 
 @pytest.fixture
 def served(monkeypatch):
     """Records ``(app, kwargs)`` for every uvicorn boot main() asks for."""
     calls = []
+    # Every real launcher passes a caller token; the sidecar refuses to start without.
+    monkeypatch.delenv("GAIA_GAIA_SIDECAR_TOKEN_FILE", raising=False)
+    monkeypatch.setenv("GAIA_GAIA_SIDECAR_TOKEN", "launch-test-token")
     monkeypatch.setattr(
         uvicorn, "run", lambda app, **kwargs: calls.append((app, kwargs))
     )
@@ -151,6 +154,7 @@ def test_the_caller_auth_banner_still_reaches_the_http_startup(caplog, monkeypat
     """Moving it to the lifespan must not lose it: it is a security notice."""
     monkeypatch.delenv("GAIA_GAIA_SIDECAR_TOKEN", raising=False)
     monkeypatch.delenv("GAIA_GAIA_SIDECAR_TOKEN_FILE", raising=False)
+    monkeypatch.setenv("GAIA_SIDECAR_ALLOW_NO_TOKEN", "1")
     with caplog.at_level(logging.WARNING):
         with TestClient(server_mod.build_app()):
             pass
@@ -162,7 +166,7 @@ def test_the_stdio_branch_takes_console_logging_off_stdout(monkeypatch, piped):
     calls = []
     import gaia.logger
 
-    # Patched at the SOURCE module: gaia_agent.entry imports this inside the
+    # Patched at the SOURCE module: gaiapy.entry imports this inside the
     # stdio branch (so the HTTP branch never pays for it), and a patch on the
     # importing module would silently miss a function-scope import.
     monkeypatch.setattr(
@@ -203,7 +207,7 @@ def test_the_console_script_points_at_the_dispatcher():
 
     pyproject = Path(__file__).resolve().parents[1] / "pyproject.toml"
     scripts = tomllib.loads(pyproject.read_text(encoding="utf-8"))["project"]["scripts"]
-    assert scripts["gaia-agent"] == "gaia_agent.entry:main", (
+    assert scripts["gaia-agent"] == "gaiapy.entry:main", (
         "the console script must run the transport dispatcher; pointing it at "
         "stdio:main makes --serve unreachable, and at server:main makes the "
         "stdio wire import FastAPI"
@@ -214,7 +218,7 @@ def test_the_dispatcher_does_not_import_fastapi_to_choose():
     """The stdio wire must not need an extras-only dependency to start.
 
     FastAPI ships in ``[ui]``/``[api]``, not the base install, and
-    ``gaia_agent.server`` imports it at module scope and builds the ASGI app on
+    ``gaiapy.server`` imports it at module scope and builds the ASGI app on
     import. A dispatcher that reached for it before deciding would make a plain
     ``gaia-agent`` fail on a machine that never wanted the HTTP transport.
     """
@@ -232,7 +236,7 @@ def test_the_dispatcher_does_not_import_fastapi_to_choose():
         if isinstance(node, ast.Import)
         for alias in node.names
     } | {node.module for node in module_level if isinstance(node, ast.ImportFrom)}
-    for heavy in ("fastapi", "starlette", "uvicorn", "gaia_agent.server"):
+    for heavy in ("fastapi", "starlette", "uvicorn", "gaiapy.server"):
         assert heavy not in names, f"{heavy} must not be imported to pick a transport"
 
 
@@ -253,7 +257,7 @@ def test_every_http_selector_is_recognised_by_the_installed_script(argv):
         [
             sys.executable,
             "-c",
-            "import sys; from gaia_agent.entry import main; sys.exit(main(sys.argv[1:]))",
+            "import sys; from gaiapy.entry import main; sys.exit(main(sys.argv[1:]))",
             *argv,
             "--help",
         ],
@@ -268,7 +272,7 @@ def test_every_http_selector_is_recognised_by_the_installed_script(argv):
 
 
 def test_the_dispatcher_runs_as_a_module_too():
-    """`python -m gaia_agent.entry` must behave like the installed script.
+    """`python -m gaiapy.entry` must behave like the installed script.
 
     That is how the CLI smoke test exercises an entry point without depending
     on PATH — and a module with no __main__ guard runs nothing under -m, which
@@ -277,7 +281,7 @@ def test_the_dispatcher_runs_as_a_module_too():
     import subprocess
 
     result = subprocess.run(
-        [sys.executable, "-m", "gaia_agent.entry", "--help"],
+        [sys.executable, "-m", "gaiapy.entry", "--help"],
         capture_output=True,
         text=True,
         timeout=120,
@@ -299,17 +303,17 @@ def test_the_freeze_entry_runs_a_python_file_before_building_the_agent(tmp_path)
     import subprocess
     from pathlib import Path
 
-    from gaia_agent.python_runner import RUN_PYTHON_FILE_FLAG
+    from gaiapy.python_runner import RUN_PYTHON_FILE_FLAG
 
     entry = Path(__file__).resolve().parents[1] / "packaging" / "server.py"
     script = tmp_path / "snippet.py"
     script.write_text(
         "import sys\n"
-        "print(__name__, sys.argv[1:], 'gaia_agent.server' in sys.modules)\n"
+        "print(__name__, sys.argv[1:], 'gaiapy.server' in sys.modules)\n"
         "sys.exit(5)\n",
         encoding="utf-8",
     )
-    agent_root = Path(__import__("gaia_agent").__file__).resolve().parents[1]
+    agent_root = Path(__import__("gaiapy").__file__).resolve().parents[1]
     env = dict(os.environ)
     env["PYTHONPATH"] = os.pathsep.join(
         [str(agent_root), *filter(None, [env.get("PYTHONPATH")])]

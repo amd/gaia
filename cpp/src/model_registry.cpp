@@ -13,6 +13,8 @@ const std::vector<ModelCapability>& knownModels() {
     static const std::vector<ModelCapability> kModels = {
         {"kokoro-v1",                  true},
         {"Gemma-4-E4B-it-GGUF",        true},
+        {"Qwen3.5-4B-GGUF",            true},
+        {"Qwen3.5-2B-GGUF",            true},
         {"user.Qwen3.8-Flash-Next-GGUF", true},
         {"Qwen3.6-35B-A3B-GGUF",       true},
         {"Muse-Glimmer-30B-GGUF",      true},
@@ -43,6 +45,7 @@ bool isCompactModel(const std::string& modelId) {
     static const std::vector<std::string> kCompact = {
         // feature_tier="compact" in Python's MODELS
         "Gemma-4-E4B-it-GGUF", "gemma4-it-e2b-FLM", "gemma4-it-e4b-FLM",
+        "Qwen3.5-4B-GGUF", "Qwen3.5-2B-GGUF",
         // measured with gaiacpp on the 30-task suite
         "Gemma-4-E2B-it-GGUF", "Qwen3-0.6B-GGUF", "Qwen3-4B-Instruct-2507-GGUF", "qwen3-it-4b-FLM",
         "qwen3.5-2b-FLM", "qwen3.5-4b-FLM", "user.Qwen3.5-2B-GGUF", "user.Qwen3.5-4B-GGUF",

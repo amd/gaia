@@ -144,22 +144,38 @@ async def send_message(
             detail="A chat request is already in progress for this session. "
             "Please wait for it to finish.",
         )
+    # The transcript keeps the browser link; the agent gets the file's path,
+    # and any elements picked in the browser pane as one block of page data.
+    # Built before the lock is taken: a failure here must not leave it held.
+    agent_request = request.model_copy(
+        update={
+            "message": resolve_upload_links(
+                with_page_elements(request.message, request.page_elements)
+            ),
+            "page_elements": None,
+        }
+    )
+    picked = page_elements_json(request.page_elements or [])
+
     await session_lock.acquire()
 
     # Foreground local work takes precedence over autonomous background goals.
     # Resolve once so a settings change cannot disagree with the later queue check.
     takes_line = turn_takes_the_line(db, session, request.agent_type)
     if takes_line:
-        from gaia.ui.agent_loop import agent_loop
+        try:
+            from gaia.ui.agent_loop import agent_loop
 
-        agent_loop.yield_to_user()
+            agent_loop.yield_to_user()
+        except BaseException:
+            session_lock.release()
+            raise
 
     # A streamed turn takes its place in line inside the run, so leaving the
     # chat while it waits doesn't drop it. A non-streamed one is saved first,
     # so a long wait never loses it.
     holds_turn = False
     question_id = None
-    picked = page_elements_json(request.page_elements or [])
     if not request.stream:
         try:
             question_id = db.begin_turn(sid, request.message, picked)
@@ -189,17 +205,6 @@ async def send_message(
     # Resolve the patchable functions through gaia.ui.server so tests
     # that patch("gaia.ui.server._stream_chat_response") work correctly.
     srv = _server_mod()
-
-    # The transcript keeps the browser link; the agent gets the file's path,
-    # and any elements picked in the browser pane as one block of page data.
-    agent_request = request.model_copy(
-        update={
-            "message": resolve_upload_links(
-                with_page_elements(request.message, request.page_elements)
-            ),
-            "page_elements": None,
-        }
-    )
 
     try:
         if request.stream:
@@ -898,17 +903,21 @@ async def get_context_usage(session_id: str, db: ChatDatabase = Depends(get_db))
         if relayed is not None and "usage" in relayed:
             return {"available": True, **relayed["usage"]}
         if relayed is not None:
-            return {"available": False, "reason": relayed["reason"]}
+            return {"available": False, **relayed}
         # Measuring needs the chat's agent, which lives in memory between turns.
-        answered = db.latest_message_id(session_id, role="assistant") is not None
+        if db.latest_message_id(session_id, role="assistant") is not None:
+            return {
+                "available": False,
+                "reason": (
+                    "Measured again with your next message: GAIA restarted or "
+                    "switched models since this chat's last answer."
+                ),
+                "reason_code": "remeasure_next_turn",
+            }
         return {
             "available": False,
-            "reason": (
-                "Measured again with your next message: GAIA restarted or "
-                "switched models since this chat's last answer."
-                if answered
-                else "Measured once GAIA has answered in this chat."
-            ),
+            "reason": "Measured once GAIA has answered in this chat.",
+            "reason_code": "not_answered_yet",
         }
     from gaia.agents.base.skill_budget import skill_budget_report
 

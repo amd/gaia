@@ -1177,6 +1177,20 @@ def _final_even_unattended(command: str) -> bool:
     return creates_a_link(command, cwd) or bool(_hard_target(command))
 
 
+_PYTHON_PROGRAMS = frozenset({"python", "python3", "py", "pythonw"})
+
+
+def _runs_python_script(command: str) -> bool:
+    """Whether *command* is ``python <script>.py ...``: a job for execute_python_file."""
+    words = _command_words(command)
+    if not words:
+        return False
+    program = os.path.basename(words[0]).lower().removesuffix(".exe")
+    return program in _PYTHON_PROGRAMS and any(
+        word.lower().endswith(".py") for word in words[1:3]
+    )
+
+
 def _changes_files(command: str) -> bool:
     """Whether *command* writes, creates, moves, copies or links a path."""
     # ``2>&1`` and ``2>nul`` only route errors; any other ``>`` writes a file.
@@ -1542,6 +1556,15 @@ _PS_BODY_ESCAPES = (
     (re.compile(r"::"), "static .NET member access ([Type]::Member)"),
     (re.compile(r"\.\s*[a-z_][a-z0-9_]*\s*\("), "method invocation (.Method(...))"),
     (re.compile(r"(?:^|\|)\s*\.\s+"), "dot-sourcing (. script.ps1)"),
+    # Anywhere in the body: single-quoted text is hidden from the cmdlet check.
+    (
+        re.compile(r"(?<![\w'\"\\/.])\.\s*['\"({]"),
+        "running a command named by a string (. 'name')",
+    ),
+    (
+        re.compile(r"\.\s*(?:'[^']*'|\"[^\"]*\")\s*\("),
+        "method invocation by a quoted name (.'Method'(...))",
+    ),
     # The two below fire in command position only — start of the body or just
     # after a pipe — so a path OPERAND (Get-Content C:/log.txt) is still a read.
     (
@@ -5299,7 +5322,9 @@ def _run_pipeline(
                 proc.wait(timeout=max(deadline - time.monotonic(), 0))
         except subprocess.TimeoutExpired as exc:
             for proc in procs[:-1]:
-                proc.kill()
+                # A reaped stage's pid may already belong to someone else.
+                if proc.poll() is None:
+                    terminate_process_tree(proc, read_output=False)
             # The last stage's reader holds what it printed before the kill.
             out, _ = terminate_process_tree(procs[-1])
             for proc in procs:
@@ -5310,7 +5335,7 @@ def _run_pipeline(
     except BaseException:
         for proc in procs:
             if proc.poll() is None:
-                proc.kill()
+                terminate_process_tree(proc, read_output=False)
                 proc.wait()
             if proc.stdout and not proc.stdout.closed:
                 proc.stdout.close()
@@ -5413,6 +5438,82 @@ def _posix_pipe_positions(text: str) -> list:
 
 #: The only characters a cmd.exe line may hold and still be classified read-only.
 _CMD_PLAIN_LINE = re.compile(r"[A-Za-z0-9 ._\\/:-]*")
+#: The same, with double-quoted words: cmd.exe and every Windows program split
+#: on them as GAIA does. Single quotes are not quotes to cmd.exe, so none here.
+_CMD_QUOTED_LINE = re.compile(r'(?:[A-Za-z0-9 ._\\/:-]|"[A-Za-z0-9 ._\\/:-]*")*')
+
+#: A PowerShell line that is one cmdlet reading paths given as single-quoted
+#: literals, which PowerShell never expands. A property may follow, never a call.
+_PS_LITERAL = r"'[A-Za-z0-9 ._\\/:-]+'"
+_PS_READ_CALL = (
+    r"(?:Get-Item|gi|Get-ChildItem|gci|Get-FileHash|Get-Content|gc|Test-Path"
+    r"|Get-ItemProperty|gp)"
+    r"(?:\s+(?:-(?:Literal)?Path\s+)?"
+    + _PS_LITERAL
+    + r"|\s+-Algorithm\s+(?:SHA1|SHA256|SHA384|SHA512|MD5)"
+    r"|\s+-(?:Raw|Force))+"
+)
+_POWERSHELL_READ = re.compile(
+    r"\s*(?:powershell|pwsh)(?:\.exe)?"
+    r"(?:\s+-(?:NoProfile|NoLogo|NonInteractive))*"
+    r"\s+-(?:Command|c)\s+"
+    r'(?:"(?:' + _PS_READ_CALL + r"|\(" + _PS_READ_CALL + r'\)\.[A-Za-z]+)"'
+    r"|" + _PS_READ_CALL + r")\s*",
+    re.IGNORECASE,
+)
+
+
+def _ps_code_outside_literals(body: str) -> str:
+    """*body* with each single-quoted PowerShell string blanked to ``''``.
+
+    Such a string is literal text, never a command. A ``'`` inside a
+    double-quoted string opens nothing. A body holding a backtick or any
+    non-ASCII character (PowerShell also takes curly quotes as quotes) comes
+    back unchanged, as does one whose quotes do not close.
+    """
+    if "`" in body or not body.isascii():
+        return body
+    out = []
+    i, in_double = 0, False
+    while i < len(body):
+        char = body[i]
+        if char == '"':
+            in_double = not in_double
+        elif char == "'" and not in_double:
+            end = i + 1
+            while end < len(body):
+                if body[end] == "'":
+                    if body[end + 1 : end + 2] != "'":
+                        break
+                    end += 1  # '' is one quote inside the string
+                end += 1
+            if end >= len(body):
+                return body
+            out.append("''")
+            i = end + 1
+            continue
+        out.append(char)
+        i += 1
+    return body if in_double else "".join(out)
+
+
+#: certutil hashes a file with this verb and nothing else on its line.
+_HASHFILE_ALGORITHMS = frozenset(
+    {"md2", "md4", "md5", "sha1", "sha256", "sha384", "sha512"}
+)
+
+
+def _windows_read_segment(segment: list) -> bool:
+    """Whether *segment* is ``type <file>...`` or ``certutil -hashfile <file> [alg]``."""
+    name = segment[0].lower()
+    if name == "type":
+        return len(segment) > 1 and not any(a.startswith("/") for a in segment[1:])
+    if name not in ("certutil", "certutil.exe") or len(segment) not in (3, 4):
+        return False
+    if segment[1].lower() not in ("-hashfile", "/hashfile"):
+        return False
+    return len(segment) == 3 or segment[3].lower() in _HASHFILE_ALGORITHMS
+
 
 #: What a line run with nobody asked may hold. No quote, caret, %, !, redirect
 #: or bracket, so GAIA and cmd.exe or sh cannot read it two different ways;
@@ -6653,6 +6754,16 @@ class ShellToolsMixin:
             # With no console, a tool that asks can't run either.
             return name in tools and not (nobody and callable(asks) and asks(name))
 
+        if _runs_python_script(command) and runs("execute_python_file"):
+            # Small models otherwise fall back to reading the script and
+            # working the answer out by hand. Named here, so it must be callable.
+            loader = getattr(self, "tool_loader", None)
+            if loader is not None:
+                loader.admit_tools(["execute_python_file"], tools)
+            return (
+                "execute_python_file, passing the script's full path as "
+                "file_path and the rest of the command as args"
+            )
         if _changes_files(command):
             writers = [name for name in ("write_file", "edit_file") if runs(name)]
             if not writers:
@@ -6941,15 +7052,23 @@ class ShellToolsMixin:
         )
         return session.cwd
 
-    def _line_is_read_only(self, command: str, honour_grants: bool = True) -> bool:
+    def _line_is_read_only(
+        self, command: str, honour_grants: bool = True, windows_reads: bool = False
+    ) -> bool:
         """Return whether *command* is read-only under the ordinary policy.
 
         Full access changes whether a command may run, not whether it can write.
         Reparse under the normal policy so redirections and other shell-only
         constructs still count as untracked changes. *honour_grants* False
         judges a skill-granted CLI as ungranted, since its confirmable writes
-        pass the whitelist.
+        pass the whitelist. *windows_reads* also counts the ways a Windows
+        line reads a file: double-quoted paths, ``type``, ``certutil
+        -hashfile`` and one PowerShell read cmdlet (:data:`_POWERSHELL_READ`).
+        It says only that the line reads, not that it may run unasked.
         """
+        cmd = _pipe_dialect() == "cmd"
+        if windows_reads and cmd and _POWERSHELL_READ.fullmatch(command):
+            return True
         # Full access hands the raw line to sh, which expands $ and backticks
         # even inside double quotes; the shell-less parse sees only text.
         if _pipe_dialect() == "posix" and ("$" in command or "`" in command):
@@ -6960,8 +7079,11 @@ class ShellToolsMixin:
             return False
         # cmd.exe strips quotes and rewrites ^, %VAR% and !VAR! before the
         # program runs, so only a line of plain characters can be judged read-only.
-        if _pipe_dialect() == "cmd" and not _CMD_PLAIN_LINE.fullmatch(command):
-            return False
+        if cmd and not _CMD_PLAIN_LINE.fullmatch(command):
+            # A backslash before a quote escapes it for the program, not for GAIA.
+            quoted = windows_reads and '\\"' not in command
+            if not (quoted and _CMD_QUOTED_LINE.fullmatch(command)):
+                return False
         # A PowerShell body can run any cmdlet inside a subexpression; never a read.
         if "powershell" in command.lower() or "pwsh" in command.lower():
             return False
@@ -6973,6 +7095,8 @@ class ShellToolsMixin:
             if step.is_cd:
                 return False
             for segment in step.segments:
+                if windows_reads and cmd and segment and _windows_read_segment(segment):
+                    continue
                 if (
                     not segment
                     or _interpreter_name(segment[0]) == "powershell"
@@ -7523,7 +7647,7 @@ class ShellToolsMixin:
         if not hasattr(self, "path_validator"):
             return None
         media_reads = line is not None and self._line_is_read_only(
-            line, honour_grants=False
+            line, honour_grants=False, windows_reads=True
         )
 
         from gaia.skills.binaries import policy_argv
@@ -7571,17 +7695,20 @@ class ShellToolsMixin:
                 return _credential_refusal("Command", " ".join(argv), path)
             return _search_refusal(" ".join(argv), path, kind)
         for segment in segments:
-            refusal = self._inline_code_refusal(segment, cwd)
+            refusal = self._inline_code_refusal(segment, cwd, media_reads)
             if refusal:
                 return refusal
         return None
 
-    def _inline_code_refusal(self, segment: list, cwd: str) -> Optional[Dict[str, Any]]:
+    def _inline_code_refusal(
+        self, segment: list, cwd: str, reads_only: bool = False
+    ) -> Optional[Dict[str, Any]]:
         """Refuse code handed to an interpreter that names a protected path.
 
         The word-by-word check above sees literal paths; this also reads the
         names a script builds (``os.path.join(home, '.ssh')``, ``$HOME``), the
-        same screen ``run_python`` gets.
+        same screen ``run_python`` gets. *reads_only* says the whole line only
+        reads, so the protections against writing do not apply.
         """
         from gaia.agents.base.code_path_screen import (
             beyond_credential_files,
@@ -7604,6 +7731,7 @@ class ShellToolsMixin:
                 python=program == "python",
                 cwd=cwd,
                 validator=getattr(self, "path_validator", None),
+                may_write=not reads_only,
             )
             mentions = beyond_credential_files(mentions)
             if mentions:
@@ -8110,7 +8238,14 @@ class ShellToolsMixin:
                     "has_errors": True,
                 }
                 if never_approvable:
-                    return {**refusal, "tier": TIER_REFUSE, "hint": REFUSED_HINT}
+                    return {
+                        **refusal,
+                        # GAIA's own rule: the apps show it as blocked, not failed.
+                        "status": "denied",
+                        "denied_by": "policy",
+                        "tier": TIER_REFUSE,
+                        "hint": REFUSED_HINT,
+                    }
                 return _confirm_once(refusal, _policy_note(policy, policy_parts))
             # Only the missing grant is in the way, and a grant is only
             # pre-approval: the user at the prompt can approve it instead.
@@ -8242,8 +8377,11 @@ class ShellToolsMixin:
                     ),
                 }
 
+            # A single-quoted string is literal text, never a command:
+            # 'sunset_SDXL-Turbo.png' names a file, not a cmdlet.
+            code = _ps_code_outside_literals(ps_cmd)
             # Verify each cmdlet is safe
-            for segment in ps_cmd.split("|"):
+            for segment in code.split("|"):
                 head = re.match(r"\s*([a-z]+-[a-z]+)\b", segment)
                 if not head or not head[1].startswith(SAFE_PS_CMDLET_PREFIXES):
                     block = {
@@ -8254,7 +8392,7 @@ class ShellToolsMixin:
                     }
                     # A segment that is not a cmdlet at all runs a file.
                     return block if head else _confirm_once(block, NOTE_UNINSPECTABLE)
-            cmdlets = re.findall(r"[a-z]+-[a-z]+", ps_cmd)
+            cmdlets = re.findall(r"[a-z]+-[a-z]+", code)
             for cmdlet in cmdlets:
                 if not any(
                     cmdlet.startswith(prefix) for prefix in SAFE_PS_CMDLET_PREFIXES

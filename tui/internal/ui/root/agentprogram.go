@@ -123,6 +123,9 @@ func (m FlagshipModel) switchProgram(choice string) (tea.Model, tea.Cmd) {
 	// Found before anything is saved: a choice that cannot run would stop the
 	// next launch.
 	cat, notice, err := m.resolveProgram(choice)
+	if why, ok := downloadable(err); ok && !m.programFetched {
+		return m.offerProgram(why)
+	}
 	if err != nil {
 		m.chat.AppendStatus(fmt.Sprintf(
 			"Cannot switch to %s: %v\nNothing was changed: this session is still on %s and your saved choice is as it was.",
@@ -160,7 +163,7 @@ func (m FlagshipModel) switchProgram(choice string) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 
-	if reason := m.nativeRefusal(*next); reason != "" {
+	if reason := m.nativeRefusal(next.Native); reason != "" {
 		m.chat.AppendStatus(reason + fmt.Sprintf(
 			" Nothing was changed: this session is still on %s and your saved choice is as it was.", current))
 		return m, nil
@@ -187,8 +190,8 @@ func (m FlagshipModel) switchProgram(choice string) (tea.Model, tea.Cmd) {
 
 // nativeRefusal is why this session cannot move to gaiacpp, or "". The same
 // two cases refuse a gaiacpp launch on the command line.
-func (m FlagshipModel) nativeRefusal(next catalog.Agent) string {
-	if !next.Native {
+func (m FlagshipModel) nativeRefusal(native bool) string {
+	if !native {
 		return ""
 	}
 	if m.useClaude {
@@ -273,6 +276,9 @@ func (m FlagshipModel) programListing() string {
 	switch {
 	case savedErr != nil:
 		fmt.Fprintf(&b, "Your saved choice could not be read: %v\n", savedErr)
+	case preflight.FlagshipAgentUnavailable(saved.Choice) != "":
+		fmt.Fprintf(&b, "Your saved choice can't run here: %s (%s in %s).\n",
+			preflight.FlagshipAgentUnavailable(saved.Choice), preflight.FlagshipAgentKey, saved.Path)
 	case saved.Choice == "":
 		fmt.Fprintf(&b, "No saved choice yet: GAIA runs %s.\n", preflight.FlagshipAgentPython)
 	}
@@ -297,6 +303,9 @@ func (m FlagshipModel) programUnavailable(choice string) string {
 		if missing.Lookup.Unverified != "" {
 			return fmt.Sprintf("Unavailable: %s is there but its install is unfinished. Re-run the GAIA installer.",
 				missing.Lookup.Unverified)
+		}
+		if missing.Binary == catalog.NativeAgentBinary {
+			return "Not on this PC yet: /agent " + choice + " offers to download it."
 		}
 		return "Unavailable: not installed. Looked in: " + strings.Join(missing.Lookup.Looked, ", ")
 	}

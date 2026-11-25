@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: MIT
 """Guards the amd-gaia dependency floor against ChatAgent's real core needs.
 
-ChatAgent (``gaia_agent.chat_agent``, moved here from gaia-agent-chat in #6099)
+ChatAgent (``gaiapy.chat_agent``, moved here from gaia-agent-chat in #6099)
 imports ``get_embedding_model_for_device`` from
 ``gaia.agents.registry`` at module load; that symbol first shipped in core
 v0.22.0. With a lower floor a fresh resolver may legally select an older
@@ -54,7 +54,7 @@ def _floor_tuple(version: str) -> tuple[int, ...]:
 
 def test_agent_module_imports_and_registry_symbol_exists():
     """The exact import chain that crashed fresh installs in #2112."""
-    import gaia_agent.chat_agent  # noqa: F401
+    import gaiapy.chat_agent  # noqa: F401
 
     from gaia.agents.registry import get_embedding_model_for_device
 
@@ -64,7 +64,7 @@ def test_agent_module_imports_and_registry_symbol_exists():
 def test_agent_module_imports_and_gaia_home_symbol_exists():
     """#4381: the agent imports gaia.config.gaia_home at module load; a
     core released before that symbol (e.g. 0.24.1) dies here."""
-    import gaia_agent.chat_agent  # noqa: F401
+    import gaiapy.chat_agent  # noqa: F401
 
     from gaia.config import gaia_home
 

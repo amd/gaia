@@ -7,6 +7,7 @@ import { RadioGroup } from '../RadioGroup';
 import { useT } from '../../i18n/useT';
 import type { MessageKey } from '../../i18n/registry';
 import * as api from '../../services/api';
+import { useActiveAgentStore } from '../../stores/activeAgentStore';
 import type { AgentProgram, AgentPrograms, FlagshipAgent } from '../../types';
 import { AgentDownloadRow, useAgentDownload } from './AgentDownload';
 import { formatBytes } from './format';
@@ -24,7 +25,8 @@ const OPTIONS: Option[] = [
     { id: 'gaiacpp', label: 'setup.agent.gaiacpp', more: 'setup.agent.gaiacppMore', tag: 'setup.agent.beta' },
 ];
 
-const WHY: Record<NonNullable<AgentProgram['unavailable_code']>, MessageKey> = {
+/** Why gaiacpp can't be downloaded, in the UI's words rather than the server's English. */
+export const WHY: Record<NonNullable<AgentProgram['unavailable_code']>, MessageKey> = {
     no_release: 'setup.agent.why.noRelease',
     unreachable: 'setup.agent.why.unreachable',
     unverifiable: 'setup.agent.why.unverifiable',
@@ -36,8 +38,8 @@ const messageOf = (err: unknown) => (err instanceof Error ? err.message : String
 export interface AgentPick {
     id: FlagshipAgent;
     download: boolean;
-    /** The agent in use now, which setup carries on with if the pick can't be had. */
-    current: FlagshipAgent;
+    /** The agent saved now (possibly one this version can't run), which setup carries on with if the pick can't be had. */
+    current: string;
 }
 
 interface Props {
@@ -47,13 +49,15 @@ interface Props {
     /** Setup: the agent picked here, held until Continue; null keeps the one in use. */
     pending?: FlagshipAgent | null;
     onPending?: (pick: AgentPick | null) => void;
+    /** Gives the title this id and lets it take focus, so setup can open Customize at the agent. */
+    headingId?: string;
 }
 
 /** Which program runs the GAIA agent: the Python one or the native C++ one. */
-export function AgentChoice({ inSettings = false, disabled = false, pending = null, onPending }: Props) {
+export function AgentChoice({ inSettings = false, disabled = false, pending = null, onPending, headingId }: Props) {
     const t = useT();
     const ids = useId();
-    const titleId = `${ids}-title`;
+    const titleId = headingId ?? `${ids}-title`;
     const moreId = `${ids}-more`;
     const offId = `${ids}-off`;
     const [listing, setListing] = useState<AgentPrograms | null>(null);
@@ -63,12 +67,13 @@ export function AgentChoice({ inSettings = false, disabled = false, pending = nu
     const [open, setOpen] = useState(false);
     const mounted = useRef(true);
 
-    const save = useCallback(async (id: FlagshipAgent, previous: FlagshipAgent) => {
+    const save = useCallback(async (id: FlagshipAgent, previous: string) => {
         setSaving(true);
         setSaveError(null);
         setListing((l) => (l ? { ...l, current: id } : l));
         try {
             const updated = await api.updateSettings({ flagship_agent: id });
+            useActiveAgentStore.getState().setCurrent(updated.flagship_agent);
             if (mounted.current) setListing((l) => (l ? { ...l, current: updated.flagship_agent } : l));
         } catch (err) {
             if (!mounted.current) return;
@@ -82,7 +87,7 @@ export function AgentChoice({ inSettings = false, disabled = false, pending = nu
         }
     }, []);
 
-    const currentRef = useRef<FlagshipAgent>('gaiapy');
+    const currentRef = useRef<string>('gaiapy');
     currentRef.current = listing?.current ?? 'gaiapy';
     // Switch only after a download the user started here with Download; one followed in is just shown.
     const { job, start, follow, interrupted } = useAgentDownload((startedHere) => {
@@ -134,7 +139,7 @@ export function AgentChoice({ inSettings = false, disabled = false, pending = nu
 
     return (
         <section className={`agent-choice${inSettings ? ' settings-card' : ''}`} aria-labelledby={titleId} aria-busy={saving || downloading || (!listing && !loadError)}>
-            <h3 className={`agent-choice-title ${inSettings ? 'settings-label' : 'mc-job-title'}`} id={titleId}>
+            <h3 className={`agent-choice-title ${inSettings ? 'settings-label' : 'mc-job-title'}`} id={titleId} tabIndex={headingId ? -1 : undefined}>
                 {t('setup.agent.title')}
                 {saving && <Loader2 size={13} className="spin" aria-hidden="true" />}
             </h3>
@@ -158,8 +163,8 @@ export function AgentChoice({ inSettings = false, disabled = false, pending = nu
                                     onClick={() => choose(o.id)}
                                 >
                                     <span className="agent-choice-what">
-                                        <bdi dir="ltr" className="agent-choice-name">{o.id}</bdi>
                                         <span className="agent-choice-label">{t(o.label)}</span>
+                                        <bdi dir="ltr" className="agent-choice-name">{o.id}</bdi>
                                         {p?.size_bytes != null && <bdi dir="ltr" className="agent-choice-size">{formatBytes(p.size_bytes)}</bdi>}
                                     </span>
                                     <span className="setup-choice-tag">{t(o.tag)}</span>

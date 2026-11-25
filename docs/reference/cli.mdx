@@ -12,12 +12,15 @@ GAIA provides a comprehensive command-line interface (CLI) for interacting with 
 
 ## Platform Support
 
-<CardGroup cols={2}>
-  <Card title="Windows 11" icon="windows">
+<CardGroup cols={3}>
+  <Card title="Windows 10/11" icon="windows">
     Full GUI and CLI support
   </Card>
   <Card title="Linux" icon="linux">
-    Full GUI and CLI support via source installation (Ubuntu/Debian)
+    Full GUI and CLI support (glibc 2.38+, e.g. Ubuntu 24.04+)
+  </Card>
+  <Card title="macOS 14+" icon="apple">
+    The desktop app and the terminal, on Apple Silicon
   </Card>
 </CardGroup>
 
@@ -87,7 +90,7 @@ gaia --ui --base-url https://your-server:13305/api/v1
 </CodeGroup>
 
 <Note>
-  `gaia chat --ui` continues to work as an alias. The Agent UI does not gate on your processor model — the Settings panel reports your processor, memory and model status for information only.
+  `gaia chat --ui` continues to work as an alias. It prints a link to open, `http://127.0.0.1:4200/?launch=...`, that signs the browser in once ([API token](/sdk/sdks/agent-ui#api-token)). The Agent UI does not gate on your processor model — the Settings panel reports your processor, memory and model status for information only.
 </Note>
 
 ### One-shot headless run (`gaia -p`)
@@ -171,7 +174,7 @@ subcommand instead.
 |-------|---------|
 | `type` | Always `"result"` |
 | `is_error` | `true` when `status` is anything but `"success"` |
-| `status` | The agent's turn status (`"success"` on a completed answer) |
+| `status` | The agent's turn status (`"success"` on a completed answer; `"incomplete"` when the turn stopped short, including when it stopped because the same tool call kept failing) |
 | `result` | The answer text (`""` when there is none) |
 | `model` | The model the agent ran |
 | `num_steps` | Agent steps taken |
@@ -270,7 +273,7 @@ A turn that built a document or data file from other files, or built an office f
 
 A model that writes its tool calls as JSON text can answer with a plan of several calls, which run without a model call between them. When the plan finishes, the agent restates the request and the whole plan before asking for an answer or another plan. Set `GAIA_AGENT_PLAN_RECAP=0` to send a one-line note instead (how many plan steps ran and how many steps are left): the plan and its results are already in the conversation, so this cuts what every later call re-sends. Models that call tools natively never take this path.
 
-The same closing call, and the same write step for a missing requested file, run when an agent is stopped for repeating one tool call with identical arguments (`max_consecutive_repeats`, default **4**): the model gets one correction first, and if it asks for the same call again the turn ends — a run that finished its work and then kept re-checking it reports what it did instead of a "can't confirm" notice. Repeats that failed or were refused get the same closing call, told what failed, and the failure is reported after the answer, so research done before the loop is kept. The same applies to one tool that keeps failing with different arguments, and to an agent that, having answered, starts work the request never asked for: the off-request call is not run, and a second one ends the turn with an answer to what you asked.
+The same closing call, and the same write step for a missing requested file, run when an agent is stopped for repeating one tool call with identical arguments, back to back or in any order as long as it keeps returning the same result (`max_consecutive_repeats`, default **4**; a wait resets the count): the model gets one correction first, and if it asks for the same call again the turn ends — a run that finished its work and then kept re-checking it reports what it did instead of a "can't confirm" notice. Repeats that failed or were refused get the same closing call, told what failed, and the failure is reported after the answer, so research done before the loop is kept. The same applies to one tool that keeps failing with different arguments, and to an agent that, having answered, starts work the request never asked for: the off-request call is not run, and a second one ends the turn with an answer to what you asked.
 
 - **Per-invocation:** pass `--max-steps <n>` to `gaia chat` (e.g. `gaia chat --max-steps 80`).
 - **Fleet-wide:** set the `GAIA_AGENT_MAX_STEPS` environment variable to change the default for every agent at once, without per-command flags.
@@ -514,7 +517,9 @@ has `id`, `roles` (`chat`, `vision`, `embedding`), `purpose`, `if_skipped`,
 `downloaded`, `recommended` (for this PC), `selected` (setup will download it),
 `skipped`, `chat_choice`, and `fits` (`null` when unknown) with `need_gb`,
 `capacity_gb` and `fit_reason` (decimal GB, converted from the GiB Lemonade reports, as
-the GPU memory API does).
+the GPU memory API does). `setup_offer` says whether the setup screen lists it as a chat
+choice: not when it doesn't fit, never for Qwen3.8 Flash Next, always for your current
+chat model.
 `disk` is the model drive's `path` and `free_gb` (decimal GB, like every size);
 `download_gb` and `disk_warning` cover the selected models. A choice that needs
 confirming exits `4` and prints `{"needs_acknowledgement": {...}}` with the `code`
@@ -576,12 +581,12 @@ CPU-only PC — `gaia init` also sets up `Qwen3.6-35B-A3B-GGUF` (a 23 GB Lemonad
 built-in MoE, run with thinking on) as the chat model,
 prints why, and records it as `default_model`. It must also fit the memory free when
 setup runs, so a PC busy with other apps keeps Gemma and says why: close them and
-re-run `gaia init`. If setup's verify step fails, no default model is recorded. It loads with the largest window the
+re-run `gaia init`. Open apps and a full disk never push a PC below Gemma. If setup's verify step fails, no default model is recorded. It loads with the largest window the
 memory holds, up to 262,144 tokens: 256K on a Strix Halo, about 88K on a 32 GB GPU
 (see [Context length follows memory](/guides/ai-providers#context-length-follows-memory)). Gemma is
-still downloaded, since vision and document-image extraction load it by name. Every
-smaller PC gets Gemma alone. A `default_model` you set yourself always wins and is
-downloaded instead of Gemma. With no local `default_model`, a downloaded local
+still downloaded, since vision and document-image extraction load it by name. Smaller
+PCs get one of the tiers in the table below. A `default_model` you set yourself always
+wins and is downloaded instead of Gemma. With no local `default_model`, a downloaded local
 model you last chatted on (for example one picked after setting up on a cloud
 model) counts as set up too, so nothing else is downloaded for chat. If Lemonade explicitly reports the configured
 vision model as missing, image questions ask you to download it first (for the
@@ -589,6 +594,31 @@ built-in VLM, use `gaia download --agent vlm`) instead of silently starting the
 download during image analysis. Gemma is about 6 GB, and `gaia init` also warns
 when it is missing. `--check` asks for the same models `gaia init` would download.
 </Note>
+
+GAIA leaves room for your other apps. Where the model shares the PC's RAM (an
+integrated GPU, a Mac, or no GPU), it first keeps the larger of 10 GB and a quarter of
+the RAM for the OS and other apps, then picks the largest model that fits the rest. A
+discrete GPU is judged on its own memory.
+
+| This PC | Default chat model | Memory it needs |
+|---|---|---|
+| A GPU with about 27 GB for models to spare: a 64 GB+ Strix Halo or a 32 GB GPU | `Qwen3.6-35B-A3B-GGUF` | ~27 GB |
+| 24–32 GB of RAM, or a 10–24 GB GPU | `Gemma-4-E4B-it-GGUF` | ~8.5 GB |
+| An 8 GB GPU | `Qwen3.5-4B-GGUF` | ~7 GB |
+| 16 GB of RAM or less (laptops, Macs, CPU-only PCs) | `Qwen3.5-2B-GGUF` | ~4 GB |
+
+Each needs its weights, vision projector and a 64K context cache. A model's context
+window also grows only into memory other apps can spare. The Qwen3.5 models run with
+thinking off and read images themselves, so on those PCs `gaia init` downloads them
+alone, without Gemma. Any model can still be chosen on a PC it fits, with
+`gaia config set default_model <id>` or in the model pickers; the pickers mark a model
+that would leave other apps little memory, and setup asks before using one. A model on
+a Ryzen AI NPU, chosen with `--profile npu`, is judged against the NPU's own memory.
+
+A PC that set up before these smaller models existed and already has Gemma keeps it
+after an update where Gemma fits its memory: setup does not download a new default. A PC
+too small for Gemma (about 8 GB of RAM) gets Qwen3.5 2B instead. Switch with
+`gaia init --use-model Qwen3.5-2B-GGUF` or in the model picker.
 
 <Note>
 `user.Qwen3.8-Flash-Next-GGUF` (an 82 GB download, multimodal, thinking on) is
@@ -2069,8 +2099,9 @@ the shell.
 
 Five things hold in every mode, full access included. Tokens in shell and
 Python output, such as the one in a `git remote -v` URL, are masked before the
-model reads it. A call you declined stays declined for the rest of that request.
-A calendar change and an outgoing email still wait for a person. A folder
+model reads it. A call you declined stays declined: that exact call for the rest
+of the chat, another route to it for that request. A calendar change and an
+outgoing email still wait for a person. A folder
 you removed from a chat is not used as the shell's working folder. And the file
 tools open nothing in GAIA's chat data (`~/.gaia/chat`) except what is attached
 to the chat, so one chat can't read another's documents or attachments that
@@ -2083,7 +2114,7 @@ them, and the status bar shows the one that is on:
 |---|---|
 | `ask` (default) | Every shell command except plain reads inside the allowed folders, every Python run and file write |
 | `accept edits` | Shell commands and Python. File edits inside the folder GAIA was started in run unasked, except hidden files and folders (`.git/`, `.bashrc`, `.github/`), folders on `PATH`, and on Windows a file that shadows a program. Never the home folder or a drive root |
-| `full access` | Nothing |
+| `full access` | Nothing. Deletes run only here: in the other modes a delete GAIA would ask about is refused, with no prompt |
 
 Ways to turn full access on — each is deliberate:
 
@@ -2243,9 +2274,9 @@ When that server can't be reached, `gaia download` (with or without `--list` or
 `--clear-cache`) says so and exits `1`.
 
 **Available Agents:**
-chat, bash, talk, rag, vlm, minimal, mcp, sd
+chat, talk, rag, vlm, minimal, mcp, sd
 
-`gaia download --agent talk` also fetches the Kokoro voice model (`kokoro-v1`), which the GAIA agent's `text_to_speech` and `dictate_document` tools need and never download themselves.
+`gaia download --agent talk` also fetches the Kokoro voice model (`kokoro-v1`), which the GAIA agent's `text_to_speech` and `dictate_document` tools need and never download themselves. On macOS, where GAIA doesn't offer the voice yet, it refuses `kokoro-v1` with the reason and exits 1.
 
 **Examples:**
 
@@ -2448,8 +2479,9 @@ are fetched separately, and only the ones your hardware needs:
 | `flm:npu` | ~169 MB | Ryzen AI NPU |
 | `llamacpp:rocm` | ~4.3 GB | ROCm, including a per-GPU runtime |
 
-GAIA's default models (`Gemma-4-E4B-it-GGUF`, `embeddinggemma-300m`) run on the
-`llamacpp` backends, so CPU + Vulkan is enough for the common case:
+GAIA's default models (the chat model [setup picks for this PC](#choosing-models)
+and `embeddinggemma-300m`) run on the `llamacpp` backends, so CPU + Vulkan is
+enough for the common case:
 
 ```bash
 gaia lemonade embedded install-backend llamacpp:vulkan
@@ -4018,7 +4050,7 @@ contract; every route needs `Authorization: Bearer <token>` from
 | `GET /daemon/v1/lemonade/target` | Which Lemonade GAIA uses and who chose it, with the saved API key for your own server (for the terminal UI, which can't read the Python credential store). Host API ≥ 1.5 |
 | `POST /daemon/v1/shutdown` | graceful drain + exit |
 | `GET /daemon/v1/agents` | registered sidecars — never the bearer token |
-| `POST /daemon/v1/agents/{id}/ensure` | spawn-or-attach; the body carries the sidecar token. A failure names its cause in the `X-GAIA-Error-Kind` header: `start_failed`, `out_of_date`, `capacity`, `mode_conflict` or `not_installed` |
+| `POST /daemon/v1/agents/{id}/ensure` | spawn-or-attach; the body carries the sidecar token. A failure names its cause in the `X-GAIA-Error-Kind` header: `start_failed`, `out_of_date`, `capacity`, `mode_conflict`, `not_installed` or `harness_unavailable` (the saved `flagship_agent` is one this version can't run) |
 | `POST /daemon/v1/agents/{id}/stop` | tree-kill + verify the pid is gone |
 | `GET /daemon/v1/catalog` | Download-server catalog merged with local install state (`?refresh` / `?installed_only` / `?include_unsupervised`). Each entry carries `installable_version` (the newest version whose `min_gaia_version` this core meets) and `requires_gaia_version` (set when the latest needs a newer core); `update_available` only counts an installable version. An entry whose published floor is unreadable carries `core_gate_error` and offers nothing to install |
 | `POST /daemon/v1/agents/{id}/install` | 202, queue an install (`{"version": "...", "trusted": true}`, both optional; `version` defaults to the newest version this core meets; `trusted` defaults to **false** → 403 for a non-verified agent; 409 when the version needs a newer core) |

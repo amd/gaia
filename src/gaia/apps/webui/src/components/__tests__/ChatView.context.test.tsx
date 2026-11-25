@@ -1,7 +1,7 @@
 // Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 // SPDX-License-Identifier: MIT
 
-/** The context meter tracks each turn, breaks the window down, and names turns before they leave view. */
+/** The context meter shows once the window is past half full, tracks each turn, and names turns before they leave view. */
 
 import { act, fireEvent, render, screen, within } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
@@ -72,15 +72,16 @@ beforeEach(() => {
 });
 
 const meter = () => screen.getByRole('button', { name: /^Context \d+% full/ });
+const noMeter = () => expect(screen.queryByRole('button', { name: /^Context \d+% full/ })).toBeNull();
 
 describe('context meter', () => {
-    it('moves when a turn pulls a long document into the context', async () => {
+    it('appears when a turn pulls a long document past half the window', async () => {
         mockedApi.getContextUsage
             .mockResolvedValueOnce({ available: true, ...usage() })
             .mockResolvedValueOnce({ available: true, ...usage({ documents: 14000, used: 20000 }) });
         render(<ChatView sessionId={SESSION.id} />);
         await act(async () => {});
-        expect(meter().textContent).toContain('18%');
+        noMeter();
 
         await act(async () => {
             fireEvent.change(screen.getByLabelText('Message'), { target: { value: 'summarise report.pdf' } });
@@ -104,9 +105,9 @@ describe('context meter', () => {
             fireEvent.click(screen.getByLabelText('Send'));
         });
         act(() => {
-            callbacks!.onAgentEvent({ type: 'context_usage', ...usage({ query: 3000, used: 9000 }) } as unknown as StreamEvent);
+            callbacks!.onAgentEvent({ type: 'context_usage', ...usage({ query: 14000, used: 20000 }) } as unknown as StreamEvent);
         });
-        expect(meter().textContent).toContain('27%');
+        expect(meter().textContent).toContain('61%');
     });
 
     it('warns before older turns are dropped and names them', async () => {
@@ -129,10 +130,12 @@ describe('context meter', () => {
         expect(document.querySelector('.context-warning')).toBeNull();
     });
 
-    it('says when there is nothing to measure yet', async () => {
+    it('shows no meter, not a dash, when there is nothing to measure', async () => {
         mockedApi.getContextUsage.mockResolvedValue({ available: false, reason: 'Measured once GAIA has answered in this chat.' });
         render(<ChatView sessionId={SESSION.id} />);
         await act(async () => {});
-        expect(screen.getByTitle('Measured once GAIA has answered in this chat.')).toBeTruthy();
+        expect(mockedApi.getContextUsage).toHaveBeenCalled();
+        expect(document.querySelector('.context-meter:not(.spend-meter)')).toBeNull();
+        expect(screen.queryByTitle('Measured once GAIA has answered in this chat.')).toBeNull();
     });
 });

@@ -94,6 +94,15 @@ describe('thought label', () => {
     });
 });
 
+it('renders a failed skill reload in Arabic in the timeline', () => {
+    act(() => useChatStore.getState().setLocale('ar'));
+    const label = "Skill 'meeting-notes' was not restored after settings changed: its files could not be found. Reload it if needed.";
+    const warning: AgentStep = { id: 1, type: 'status', label, success: false, timestamp: 1 };
+    render(<AgentActivity steps={[warning]} isActive={false} />);
+    expect(screen.getByRole('status')).toHaveTextContent('تعذّر العثور على ملفاتها');
+    expect(screen.getByRole('status')).toHaveTextContent('meeting-notes');
+});
+
 describe('tool rows', () => {
     it('says a failed call failed, in one bracket', () => {
         const failed = tool(1, 'query_documents', { success: false, result: 'timeout' });

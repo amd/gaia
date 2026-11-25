@@ -73,9 +73,9 @@ def test_an_mcp_array_keeps_its_items():
 
 
 def test_the_flagship_sends_items_on_every_array(monkeypatch):
-    pytest.importorskip("gaia_agent")
+    pytest.importorskip("gaiapy")
     monkeypatch.setenv("GAIA_MEMORY_DISABLED", "1")
-    from gaia_agent.agent import GaiaAgent, GaiaAgentConfig
+    from gaiapy.agent import GaiaAgent, GaiaAgentConfig
 
     with patch("gaia.agents.base.agent.AgentSDK"):
         agent = GaiaAgent(GaiaAgentConfig(silent_mode=True, streaming=False))

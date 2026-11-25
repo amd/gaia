@@ -37,7 +37,7 @@ def fake_flagship(monkeypatch):
     module = types.SimpleNamespace(
         GaiaAgent=_FakeAgent, GaiaAgentConfig=lambda **kw: kw
     )
-    monkeypatch.setitem(__import__("sys").modules, "gaia_agent.agent", module)
+    monkeypatch.setitem(__import__("sys").modules, "gaiapy.agent", module)
     monkeypatch.setattr(flagship_tasks, "drain_memory_extraction", lambda agent: None)
     return _FakeAgent.built
 

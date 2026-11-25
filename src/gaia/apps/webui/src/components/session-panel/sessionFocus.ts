@@ -49,7 +49,7 @@ export interface SessionFocus {
     plan: LivePlan | null;
     /** Shell commands the chat ran, oldest first. */
     commands: RanCommand[];
-    /** The chat is writing or building code: it changed files, loaded a coding skill, or ran a developer tool. */
+    /** The chat is writing or building code: it changed code files, loaded a coding skill, or ran a developer tool. */
     coding: boolean;
     /** The latest answer has sources, files or data movements to report, and no turn is running. */
     showAnswer: boolean;
@@ -120,7 +120,7 @@ export function useSessionFocus(sessionId: string, messages: Message[], busy: bo
         // A turn that used nothing but the local model has nothing to report.
         const showAnswer = answer?.kind === 'turn' && !!answer.turn.turnSummary && turnHasDetails(answer.turn.turnSummary);
         const changed = signals?.changedFiles ?? 0;
-        const coding = changed > 0
+        const coding = (signals?.changedCode ?? 0) > 0
             || (signals?.skills ?? []).some((name) => CODING_SKILLS.test(name))
             || commands.some((c) => isDevCommand(c.command));
         const sites = sitesContacted(messages);
@@ -211,6 +211,15 @@ export function commandsRun(messages: Message[], live: AgentStep[]): RanCommand[
     for (const m of messages) if (m.role === 'assistant') add(m.agentSteps, m.id);
     add(live, null);
     return ran;
+}
+
+const CODE_EXTENSIONS = /\.(py|pyi|ipynb|ts|tsx|js|jsx|mjs|cjs|go|rs|c|cc|cpp|cxx|h|hpp|cs|java|kt|kts|swift|rb|php|lua|r|scala|sh|bash|zsh|ps1|psm1|bat|cmd|sql|html|htm|css|scss|vue|svelte|json|jsonc|yaml|yml|toml|ini|cfg|xml|gradle|cmake|mk|lock)$/i;
+const CODE_NAMES = /^(makefile|dockerfile|cmakelists\.txt|requirements[\w.-]*\.txt|\.gitignore|\.env\.example)$/i;
+
+/** Whether *path* is source code or a project file: changing a note or a spreadsheet is not coding. */
+export function isCodeFile(path: string): boolean {
+    const name = path.split(/[\\/]/).pop() ?? '';
+    return CODE_EXTENSIONS.test(name) || CODE_NAMES.test(name);
 }
 
 const DEV_TOOLS = /^(git|gh|npm|npx|pnpm|yarn|node|python3?|py|pip3?|uv|pytest|cargo|go|make|cmake|dotnet|mvn|gradle|tsc|docker)$/i;

@@ -16,10 +16,10 @@ from unittest.mock import patch
 import psutil
 import pytest
 
-pytest.importorskip("gaia_agent")
+pytest.importorskip("gaiapy")
 
-from gaia_agent.chat_agent import ChatAgent, ChatAgentConfig  # noqa: E402
-from gaia_agent.python_jobs import (  # noqa: E402
+from gaiapy.chat_agent import ChatAgent, ChatAgentConfig  # noqa: E402
+from gaiapy.python_jobs import (  # noqa: E402
     DEFAULT_PYTHON_TIMEOUT,
     MAX_PYTHON_TIMEOUT,
     files_written_since,
@@ -58,8 +58,8 @@ def agent_tools(project):
         mp.delenv(PROJECT_ROOT_ENV, raising=False)
         mp.chdir(project)
         with (
-            patch("gaia_agent.chat_agent.RAGSDK"),
-            patch("gaia_agent.chat_agent.RAGConfig"),
+            patch("gaiapy.chat_agent.RAGSDK"),
+            patch("gaiapy.chat_agent.RAGConfig"),
         ):
             agent = ChatAgent(
                 ChatAgentConfig(silent_mode=True, allowed_paths=[str(project)])
@@ -325,7 +325,7 @@ def test_files_written_since_ignores_older_and_excluded_files(tmp_path):
 
 
 def test_a_bounded_search_says_it_is_incomplete(tmp_path, monkeypatch):
-    monkeypatch.setattr("gaia_agent.python_jobs._REPORT_MAX_FILES", 1)
+    monkeypatch.setattr("gaiapy.python_jobs._REPORT_MAX_FILES", 1)
     since = time.time()
     (tmp_path / "a.txt").write_text("a")
     (tmp_path / "b.txt").write_text("b")
@@ -343,12 +343,12 @@ def test_the_home_folder_is_never_searched():
 
 def test_a_frozen_launch_is_killed_the_same_way(tmp_path):
     """The frozen agent runs scripts through its own runner mode (#5093)."""
-    from gaia_agent import python_runner
+    from gaiapy import python_runner
 
     script, pid_file = _spawner(tmp_path, "time.sleep(60)")
     launcher = (
         "import sys\nsys.frozen = True\n"
-        "from gaia_agent.python_runner import run_python_file\n"
+        "from gaiapy.python_runner import run_python_file\n"
         "sys.exit(run_python_file(sys.argv[2:]))\n"
     )
     env = dict(os.environ)
@@ -374,7 +374,7 @@ def test_a_frozen_launch_is_killed_the_same_way(tmp_path):
 
 @pytest.mark.skipif(os.name != "nt", reason="Job Objects are Windows-only")
 def test_without_a_job_object_the_live_tree_is_still_killed(tmp_path, monkeypatch):
-    monkeypatch.setattr("gaia_agent.python_jobs._assign_job_object", lambda _pid: None)
+    monkeypatch.setattr("gaiapy.python_jobs._assign_job_object", lambda _pid: None)
     script, pid_file = _spawner(tmp_path, "time.sleep(60)")
 
     job = run_python_job(
@@ -430,3 +430,82 @@ def test_a_python_run_is_cut_to_the_time_the_turn_has_left(agent_tools):
     # The limit ended it, so asking for a larger timeout is not on offer.
     assert "time limit cut this run short" in result["error"]
     assert "larger timeout" not in result["error"]
+
+
+class _TimedOutJob:
+    stopped = "timeout"
+    written = ["C:/out/partial.csv"]
+    written_complete = True
+
+    class run:  # noqa: N801 - mirrors PythonJob.run's shape
+        stdout = ""
+        stderr = ""
+
+
+class _Turn:
+    """A turn with *left* seconds before its stop point."""
+
+    def __init__(self, left):
+        self.left = left
+
+    def time_capped_run_seconds(self, seconds):
+        return 0 if self.left < 5 else min(seconds, self.left)
+
+
+def test_a_timeout_the_turn_could_not_extend_does_not_offer_a_longer_one():
+    """A 45 s run in a 60 s turn: there is no 1800 s to ask for."""
+    from gaiapy.chat_agent import _stopped_run_result
+
+    from gaia.agents.base.verification import TIME_LIMIT_NO_LONGER_RUN
+
+    result = _stopped_run_result(_Turn(left=8), _TimedOutJob(), 45)
+
+    assert "larger timeout" not in result["error"]
+    assert TIME_LIMIT_NO_LONGER_RUN in result["error"]
+    assert "do less per run" in result["error"]
+    # The partial-file warning survives the reworded advice.
+    assert "partial.csv" in result["error"]
+
+
+def test_a_timeout_with_no_turn_limit_offers_the_full_maximum():
+    from gaiapy.chat_agent import _stopped_run_result
+
+    result = _stopped_run_result(object(), _TimedOutJob(), 45)
+
+    assert f"larger timeout (max {MAX_PYTHON_TIMEOUT})" in result["error"]
+
+
+def test_a_timeout_with_turn_time_to_spare_offers_only_that_time():
+    from gaiapy.chat_agent import _stopped_run_result
+
+    result = _stopped_run_result(_Turn(left=600), _TimedOutJob(), 45)
+
+    assert "larger timeout (max 600, what this turn has left)" in result["error"]
+    assert "partial.csv" in result["error"]
+
+
+def test_a_run_the_turn_limit_stopped_says_the_limit_cut_it():
+    from gaiapy.chat_agent import _stopped_run_result
+
+    from gaia.agents.base.verification import TIME_LIMIT_CUT_RUN
+
+    result = _stopped_run_result(_Turn(left=0), _TimedOutJob(), 45)
+
+    assert TIME_LIMIT_CUT_RUN in result["error"]
+    assert "larger timeout" not in result["error"]
+
+
+def test_a_timed_out_run_is_offered_only_the_time_the_turn_has_left(agent_tools):
+    """In a 60 s turn, "pass a larger timeout (max 1800)" can't be followed."""
+    agent, tools = agent_tools
+    agent.time_limit_s = 60
+    agent._turn_started_at = time.monotonic()
+    try:
+        result = tools["run_python"]["function"](
+            code="import time; time.sleep(30)", timeout=2
+        )
+    finally:
+        agent.time_limit_s = None
+    assert result["status"] == "error"
+    assert "max 1800" not in result["error"]
+    assert "what this turn has left" in result["error"]

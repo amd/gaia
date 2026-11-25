@@ -18,6 +18,8 @@ import re
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Sequence, Set, Tuple
 
+from gaia.rag.text_units import close_unspaced_gaps
+
 _PAGE_MARKER = re.compile(r"\[Page (\d+)\]")
 
 #: A chunk "contains" a quote when it covers at least this share of it, so a
@@ -30,7 +32,8 @@ class LabelError(ValueError):
 
 
 def norm(text: str) -> str:
-    return " ".join(text.split())
+    # Chunks join Chinese and Japanese sentences with no gap, across paragraphs too.
+    return close_unspaced_gaps(" ".join(text.split()))
 
 
 @dataclass

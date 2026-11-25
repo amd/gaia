@@ -41,8 +41,7 @@ quality**. Cost is secondary, and it matters only with a premium cloud model.
    it for the UI, and Go computes it for the TUI, pinned by shared golden fixtures.
    Neither client routes.
 
-Builds on [`skill-bound-task-execution.md`](skill-bound-task-execution.md)
-(`requires.class`): the tier is decided at the skill boundary, and Lemonade's own
+The tier is decided at the skill boundary (a skill's `requires.class`), and Lemonade's own
 router is used only as a guardrail, never to pick the tier.
 
 ---
@@ -52,7 +51,7 @@ router is used only as a guardrail, never to pick the tier.
 | Piece | Reality | Consequence |
 |---|---|---|
 | Cloud models | The Agent UI and TUI reach Fireworks (`fireworks.*`) and the AMD gateway (`amd.*`) **through Lemonade**, on the same client as local models. Availability is checked in `ui/routers/providers.py` (registered in `/system-info`, working key, models discovered, model listed) and mirrored in Go in `tui/internal/lemonade/cloud.go`. `ClaudeProvider` is reachable in the UI only through eval env vars | **v1's cloud tier is Lemonade-registered Fireworks/AMD models.** Claude-direct is out of v1. The availability check moves into `gaia.llm` so routing can use it |
-| Model switch | `switch_model` / `_apply_switch` (`hub/agents/gaia/python/gaia_agent/stdio.py`) swap client, config, `model_id` and rebuild the prompt as one unit. The HTTP path reuses them (`session_registry.py`). `AgentSDK.update_config` doesn't rebuild the client. A switch costs `list_models` + `create_client` + catalog refresh + prompt rebuild | Move the rebind into `src/gaia/agents/base/` as the only rebind, with a fast path for a model-id change on the same Lemonade client. Its latency counts toward the p50 bar |
+| Model switch | `switch_model` / `_apply_switch` (`hub/agents/gaia/python/gaiapy/stdio.py`) swap client, config, `model_id` and rebuild the prompt as one unit. The HTTP path reuses them (`session_registry.py`). `AgentSDK.update_config` doesn't rebuild the client. A switch costs `list_models` + `create_client` + catalog refresh + prompt rebuild | Move the rebind into `src/gaia/agents/base/` as the only rebind, with a fast path for a model-id change on the same Lemonade client. Its latency counts toward the p50 bar |
 | Agent loop | The system prompt is re-read every step (`agent.py` steps loop), and orphan tool results are sent as text (`chat/sdk.py`) | A mid-turn rebind takes effect and a cloud request won't fail on local history. **Confirmed safe mechanically**; the remaining risk is quality |
 | Prompt and location | The location appears **twice**, both in `_get_system_prompt`: the "You are GAIA… running locally" opener and the WHERE block (`gaia_agent_chat/agent.py`). The volatile-fragment mechanism skips `_get_system_prompt` by design. Both default local models are `tool_calling=True` | Local and cloud have **separate** caches, and each always sees its own location text. So a flip doesn't break the local prefix. The real cost is the cloud cache **expiring during local turns**. Measure it before changing the prompt (§2.6) |
 | History | `_restore_model_history` trims history to the bound model's `history_budget` **before** the preflight. Cloud admission is capped at `GPU_CTX_SIZE` (64K), the same as local | Route on the **untrimmed** size, then rebind, then trim (§2.3). A context rule is meaningless unless the cloud model's real window is used |

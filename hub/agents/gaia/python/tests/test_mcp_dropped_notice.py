@@ -10,7 +10,7 @@ that the next turn shows through the console, while the agent keeps running.
 from unittest.mock import MagicMock, patch
 
 import pytest
-from gaia_agent.chat_agent import ChatAgent, ChatAgentConfig
+from gaiapy.chat_agent import ChatAgent, ChatAgentConfig
 
 from gaia.agents.base.console import SilentConsole
 from gaia.mcp.client.mcp_client import MCPTool
@@ -71,7 +71,7 @@ class _Manager:
 @pytest.fixture
 def configured_home(tmp_path):
     (tmp_path / "mcp_servers.json").write_text('{"mcpServers": {}}', encoding="utf-8")
-    with patch("gaia_agent.chat_agent.gaia_home", return_value=tmp_path):
+    with patch("gaiapy.chat_agent.gaia_home", return_value=tmp_path):
         yield tmp_path
 
 
@@ -198,7 +198,7 @@ def test_notice_is_shown_once_and_not_through_a_silent_console(configured_home):
 
 
 def test_no_config_file_means_no_notice(tmp_path):
-    with patch("gaia_agent.chat_agent.gaia_home", return_value=tmp_path):
+    with patch("gaiapy.chat_agent.gaia_home", return_value=tmp_path):
         agent = _skeleton(None)
         agent._mcp_unavailable_error = "boom"
         agent._load_mcp_tools()
@@ -257,7 +257,7 @@ def test_a_corrupt_settings_file_reads_as_plain_words(tmp_path):
 
     agent = _skeleton(None)
     agent._mcp_unavailable_error = message
-    with patch("gaia_agent.chat_agent.gaia_home", return_value=tmp_path):
+    with patch("gaiapy.chat_agent.gaia_home", return_value=tmp_path):
         agent._load_mcp_tools()
     assert ").)" not in agent._mcp_dropped_notice
     assert agent._mcp_dropped_notice.startswith("Your MCP servers are unavailable")

@@ -235,13 +235,15 @@ def test_read_back_parses_the_agent_type_from_the_session_endpoint(monkeypatch):
         def json(self):
             return {"id": "sess-1", "agent_type": "gaia"}
 
-    def fake_get(url, timeout=None):
+    def fake_get(url, timeout=None, headers=None):
         calls["url"] = url
+        calls["headers"] = headers
         return _Resp()
 
     monkeypatch.setattr("requests.get", fake_get)
     assert _read_session_agent_type("http://x/", "sess-1") == "gaia"
     assert calls["url"] == "http://x/api/sessions/sess-1"
+    assert calls["headers"]["Authorization"] == "Bearer test-agent-ui-token"
 
 
 def test_read_back_raises_on_an_http_error(monkeypatch):
@@ -251,7 +253,7 @@ def test_read_back_raises_on_an_http_error(monkeypatch):
         def raise_for_status(self):
             raise requests.HTTPError("404 Not Found")
 
-    monkeypatch.setattr("requests.get", lambda url, timeout=None: _Resp())
+    monkeypatch.setattr("requests.get", lambda url, timeout=None, headers=None: _Resp())
     with pytest.raises(requests.HTTPError):
         _read_session_agent_type("http://x", "missing")
 
