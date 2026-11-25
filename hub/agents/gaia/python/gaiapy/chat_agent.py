@@ -136,6 +136,13 @@ from gaia.agents.tools import (  # Web browsing and search; Shared tools
     WaitToolsMixin,
 )
 from gaia.agents.tools.path_access import read_access_error, write_access_error
+from gaia.agents.tools.rag_tools import (
+    _forget_evicted,
+    attached_not_loaded,
+    documents_failed_indexing,
+    documents_still_indexing,
+    not_loaded_note,
+)
 
 # Re-exported: these moved to core with the tool, and callers import them here.
 from gaia.agents.tools.user_input_tools import (  # noqa: F401
@@ -143,13 +150,6 @@ from gaia.agents.tools.user_input_tools import (  # noqa: F401
     USER_INPUT_MAX_WAIT_S,
     UserInputToolsMixin,
     _no_answer_result,
-)
-from gaia.agents.tools.rag_tools import (
-    _forget_evicted,
-    attached_not_loaded,
-    documents_failed_indexing,
-    documents_still_indexing,
-    not_loaded_note,
 )
 from gaia.agents.tools.workspace_paths import (
     _resolve_target,

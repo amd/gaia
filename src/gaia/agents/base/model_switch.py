@@ -68,7 +68,7 @@ _NON_CHAT_LABELS = frozenset(
 def _is_chat_target(entry: Dict[str, Any]) -> bool:
     """``chat`` wins (an omni model also transcribes); unlabeled models count."""
     labels = set(entry.get("labels") or [])
-    return "chat" in labels or not (_NON_CHAT_LABELS & labels)
+    return "chat" in labels or not _NON_CHAT_LABELS & labels
 
 
 def _lemonade_models(base_url: Optional[str]) -> Dict[str, Dict[str, Any]]:
@@ -451,8 +451,7 @@ def is_claude_model(model_id: str) -> bool:
 def switch_concrete_model(
     agent: Any, target: str, on_status: Optional[Callable[[str], None]] = None
 ) -> str:
-    """:func:`switch_model` to a model by name, leaving hybrid routing as it is."""
-    from gaia.llm.lemonade_client import cloud_model_provider
+    """Move *agent* to the model named *target*; see ``Agent.switch_model``."""
     from gaia.llm.local_only import SETTINGS_HINT, cloud_blocked
 
     if cloud_blocked() and (is_claude_model(target) or cloud_model_provider(target)):

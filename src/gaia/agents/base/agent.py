@@ -4165,6 +4165,7 @@ Do NOT wrap conversational replies in JSON.
         )  # Store conversation history for session persistence
         # Set by start_session_history: process_query then records each turn.
         self._owned_history: Optional[SessionHistory] = None
+        self._history_on_cut: Optional[Callable[[Any], None]] = None
         # Tools whose full docs went to the model this turn (thin schemas).
         self._tool_docs_sent: Set[str] = set()
         # User messages and tool results, for skill tools that check facts (note_seen).
