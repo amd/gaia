@@ -235,8 +235,9 @@ def process_query(
             "input_tokens": int,     # Total input tokens across all steps
             "output_tokens": int,    # Total output tokens across all steps
             "total_tokens": int,     # Combined token count
-            "cost_usd": float | None,  # Those tokens at the model's list price
-                                     # (gaia.llm.pricing); None when it has none
+            "cost_usd": float | None,  # Those tokens at Fireworks' list price
+                                     # (gaia.llm.pricing); None for any other
+                                     # provider and for a model with no card
             "failure": dict | None,  # A failed model call: {"kind", "type",
                                      # "message", "step"}; the exception is
                                      # agent.last_model_error

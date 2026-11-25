@@ -13,7 +13,13 @@ USAGE = {"prompt_tokens": 1000, "completion_tokens": 100}
 
 
 class _NativeClient(ScriptedLLMClient):
+    """A host client on Fireworks, the one provider whose prices GAIA carries."""
+
     supports_native_tools = True
+
+    @property
+    def provider_name(self) -> str:
+        return "fireworks"
 
 
 class _SupportAgent(Agent):
