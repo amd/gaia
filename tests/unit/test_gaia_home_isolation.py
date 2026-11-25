@@ -5,6 +5,8 @@
 
 import os
 import sqlite3
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -31,6 +33,50 @@ def test_gaia_home_is_not_the_real_one(monkeypatch):
     monkeypatch.delenv("GAIA_HOME", raising=False)
     monkeypatch.delenv("GAIA_CONFIG_DIR", raising=False)
     assert not _under(gaia_home(), _REAL_GAIA_HOME)
+
+
+def test_session_env_never_points_at_the_real_home():
+    """Leaves the environment alone so a GAIA_HOME inherited from the shell is
+    what the session fixture has to handle."""
+    for var in ("GAIA_HOME", "GAIA_CONFIG_DIR"):
+        value = os.environ.get(var, "").strip()
+        if value:
+            assert not _under(Path(os.path.expanduser(value)), _REAL_GAIA_HOME)
+    assert not _under(gaia_home(), _REAL_GAIA_HOME)
+
+
+@pytest.mark.parametrize("var", ["GAIA_HOME", "GAIA_CONFIG_DIR"])
+def test_real_home_exported_in_the_shell_is_dropped(var):
+    """#8868: a shell export of the real ~/.gaia must not reach the tests."""
+    repo = Path(__file__).resolve().parents[2]
+    env = dict(os.environ)
+    env[var] = str(_REAL_GAIA_HOME)
+    env.pop("PYTEST_ADDOPTS", None)
+    run = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "pytest",
+            "-q",
+            "-p",
+            "no:cacheprovider",
+            "tests/unit/test_gaia_home_isolation.py::"
+            "test_session_env_never_points_at_the_real_home",
+        ],
+        cwd=repo,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=300,
+    )
+    assert run.returncode == 0, run.stdout + run.stderr
+    assert "1 passed" in run.stdout
+
+
+def test_mock_home_clears_inherited_gaia_home(mock_home):
+    """mock_home fixture isolates gaia_home() even if GAIA_HOME was set."""
+    assert gaia_home() == mock_home / ".gaia"
 
 
 def test_an_edit_backup_lands_outside_the_real_home(monkeypatch, tmp_path):

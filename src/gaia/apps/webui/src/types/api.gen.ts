@@ -871,6 +871,7 @@ export interface InferenceStatsResponse {
   steps?: number | null;
   time_to_first_token?: number;
   tokens_per_second?: number;
+  waiting_seconds?: number | null;
 }
 /**
  * The model a ``hybrid`` turn was routed to, and why.
@@ -1454,7 +1455,7 @@ export interface SettingsResponse {
   custom_model?: string | null;
   dynamic_tools?: boolean;
   dynamic_tools_locked?: boolean;
-  flagship_agent?: "gaiapy" | "gaiacpp";
+  flagship_agent?: string;
   gaiacpp_available?: boolean;
   model_status?: ModelStatus | null;
   network_policy?: "cloud_allowed" | "local_ai_only";
@@ -1538,9 +1539,11 @@ export interface SpeechModel {
 }
 export interface SpeechSettings {
   auto: boolean;
+  available?: boolean;
   max_speed?: number;
   min_speed?: number;
   speed: number;
+  unavailable_reason?: string | null;
   voice: string;
   voices: Voice[];
 }

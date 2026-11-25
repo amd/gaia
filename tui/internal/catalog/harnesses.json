@@ -1,0 +1,8 @@
+{
+  "_source": "Mirrors HARNESSES in src/gaia/harnesses.py; tests/unit/test_harnesses.py fails if they drift.",
+  "harnesses": [
+    {"name": "gaiapy", "native": false, "label": "Full-featured", "status": "recommended", "runnable": true},
+    {"name": "gaiacpp", "native": true, "label": "Fast and light", "status": "beta", "runnable": true},
+    {"name": "gaiacode", "native": true, "label": "Coding", "status": "beta", "runnable": false}
+  ]
+}

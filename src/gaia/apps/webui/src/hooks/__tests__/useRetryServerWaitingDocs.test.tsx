@@ -5,7 +5,7 @@
 
 import { act, render, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { useRetryServerWaitingDocs } from '../useRetryServerWaitingDocs';
+import { useRetryServerWaitingDocs, WAITING_RECHECK_MAX_MS, WAITING_RECHECK_MS } from '../useRetryServerWaitingDocs';
 import { useChatStore } from '../../stores/chatStore';
 import * as api from '../../services/api';
 import type { Document, SystemStatus } from '../../types';
@@ -73,6 +73,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+    vi.useRealTimers();
     useChatStore.setState({ systemStatus: null, documents: [] });
 });
 
@@ -115,7 +116,7 @@ describe('useRetryServerWaitingDocs', () => {
         expect(mockedApi.reindexDocument).not.toHaveBeenCalled();
     });
 
-    it('does not retry again while the server stays up, but does after the next outage', async () => {
+    it('a status update with the server still up starts no extra retry, but the next outage does', async () => {
         rows = [base];
         reindexOutcome = async () => 'model_server_down';
         render(<Harness />);
@@ -217,5 +218,128 @@ describe('useRetryServerWaitingDocs', () => {
 
         expect(mockedApi.reindexDocument).toHaveBeenCalledTimes(1);
         expect(useChatStore.getState().documents[0]?.indexing_status).toBe('failed');
+    });
+
+    /** An outage shorter than the status poll: the server never reads as down (#8874). */
+    describe('with the server reading as up throughout', () => {
+        const advance = (ms: number) => act(async () => { await vi.advanceTimersByTimeAsync(ms); });
+        const statusOf = (id: string) => useChatStore.getState().documents.find((d) => d.id === id)?.indexing_status;
+        /** What the library does after a drop: put the fresh list in the store. */
+        const drop = (...docs: Document[]) => act(() => {
+            rows = [...rows, ...docs];
+            useChatStore.setState({ documents: listing().documents });
+        });
+
+        beforeEach(async () => {
+            vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] });
+            useChatStore.setState({ systemStatus: status(true) });
+            render(<Harness />);
+            await advance(0);
+            mockedApi.listDocuments.mockClear();
+        });
+
+        it('indexes a document dropped during a short outage once the server answers', async () => {
+            let serverAnswers = false;
+            reindexOutcome = async () => (serverAnswers ? 'complete' : 'model_server_down');
+            drop(base);
+            await advance(0);
+            expect(mockedApi.reindexDocument).toHaveBeenCalledTimes(1);
+            expect(statusOf('doc-down')).toBe('failed');
+
+            serverAnswers = true;
+            await advance(WAITING_RECHECK_MS - 1);
+            expect(mockedApi.reindexDocument).toHaveBeenCalledTimes(1);
+            await advance(1);
+            expect(statusOf('doc-down')).toBe('complete');
+            expect(mockedApi.reindexDocument).toHaveBeenCalledTimes(2);
+        });
+
+        it('indexes every waiting document, one at a time', async () => {
+            drop(base, alsoDown);
+            await advance(0);
+            expect(statusOf('doc-down')).toBe('complete');
+            expect(statusOf('doc-down-2')).toBe('complete');
+            expect(maxInFlight).toBe(1);
+        });
+
+        it('stops asking once nothing is waiting', async () => {
+            drop(base);
+            await advance(0);
+            expect(statusOf('doc-down')).toBe('complete');
+            mockedApi.listDocuments.mockClear();
+            await advance(10 * WAITING_RECHECK_MAX_MS);
+            expect(mockedApi.listDocuments).not.toHaveBeenCalled();
+            expect(mockedApi.reindexDocument).toHaveBeenCalledTimes(1);
+        });
+
+        it('never polls for a library with no waiting document', async () => {
+            drop(unreadable, busy);
+            await advance(10 * WAITING_RECHECK_MAX_MS);
+            expect(mockedApi.listDocuments).not.toHaveBeenCalled();
+            expect(mockedApi.reindexDocument).not.toHaveBeenCalled();
+        });
+
+        it('backs off while a document keeps waiting, and stops when the server reads as down', async () => {
+            reindexOutcome = async () => 'model_server_down';
+            drop(base);
+            await advance(0);
+            expect(mockedApi.reindexDocument).toHaveBeenCalledTimes(1);
+            await advance(WAITING_RECHECK_MS);
+            expect(mockedApi.reindexDocument).toHaveBeenCalledTimes(2);
+            // The gap doubles: nothing at one more interval, the next try at two.
+            await advance(WAITING_RECHECK_MS);
+            expect(mockedApi.reindexDocument).toHaveBeenCalledTimes(2);
+            await advance(WAITING_RECHECK_MS);
+            expect(mockedApi.reindexDocument).toHaveBeenCalledTimes(3);
+            // Capped: an hour is at most one try per WAITING_RECHECK_MAX_MS.
+            await advance(60 * 60_000);
+            const tries = mockedApi.reindexDocument.mock.calls.length;
+            expect(tries).toBeLessThanOrEqual(3 + (60 * 60_000) / WAITING_RECHECK_MAX_MS);
+            expect(tries).toBeGreaterThan(3);
+
+            setServer(false);
+            await advance(10 * WAITING_RECHECK_MAX_MS);
+            expect(mockedApi.reindexDocument).toHaveBeenCalledTimes(tries);
+        });
+
+        it('leaves a document alone once it fails for another reason', async () => {
+            reindexOutcome = async () => 'corrupt' as never;
+            drop(base);
+            await advance(0);
+            expect(mockedApi.reindexDocument).toHaveBeenCalledTimes(1);
+            await advance(10 * WAITING_RECHECK_MAX_MS);
+            expect(mockedApi.reindexDocument).toHaveBeenCalledTimes(1);
+            expect(useChatStore.getState().documents[0]?.error_kind).toBe('corrupt');
+        });
+
+        it('stops when the waiting document is removed', async () => {
+            reindexOutcome = async () => 'model_server_down';
+            drop(base);
+            await advance(0);
+            expect(mockedApi.reindexDocument).toHaveBeenCalledTimes(1);
+
+            act(() => { rows = []; useChatStore.setState({ documents: [] }); });
+            await advance(10 * WAITING_RECHECK_MAX_MS);
+            expect(mockedApi.reindexDocument).toHaveBeenCalledTimes(1);
+        });
+
+        it('backs off when the document list cannot be read', async () => {
+            drop(base);
+            mockedApi.listDocuments.mockRejectedValue(new Error('backend gone'));
+            await advance(WAITING_RECHECK_MS - 1);
+            expect(mockedApi.listDocuments).toHaveBeenCalledTimes(1);
+            mockedApi.listDocuments.mockImplementation(async () => listing());
+            await advance(1);
+            expect(statusOf('doc-down')).toBe('complete');
+        });
+    });
+
+    it('indexes documents left waiting when the app was closed, once the server is up', async () => {
+        rows = [base, alsoDown];
+        useChatStore.setState({ systemStatus: null, documents: [] });
+        render(<Harness />);
+        setServer(true);
+        await waitFor(() => expect(rows.every((d) => d.indexing_status === 'complete')).toBe(true));
+        expect(mockedApi.reindexDocument).toHaveBeenCalledTimes(2);
     });
 });

@@ -1,7 +1,7 @@
 // Copyright(C) 2026 Advanced Micro Devices, Inc. All rights reserved.
 // SPDX-License-Identifier: MIT
 
-import { useId, useState, type ReactNode } from 'react';
+import { useEffect, useId, useState, type ReactNode } from 'react';
 import { AlertTriangle } from 'lucide-react';
 import { useT } from '../../i18n/useT';
 import type { SetupCatalogEntry, SetupPlan } from '../../types';
@@ -46,6 +46,7 @@ function RadioRow({ name, entry: e, checked, recommended, disabled, onPick, chil
                     </span>
                     <span className="mc-status">{statusText(e, t)}</span>
                     {e.fits === false && <span className="mc-warn is-big" role="note"><AlertTriangle size={13} aria-hidden="true" /> {tooBigText(e, t)}</span>}
+                    {e.fits === true && e.tight && <span className="mc-warn" role="note"><AlertTriangle size={13} aria-hidden="true" /> {t('setup.models.warn.tight')}</span>}
                     {children}
                 </span>
             </label>
@@ -105,7 +106,8 @@ export function JobModels({ plan, selection, onSelection, disabled }: Props) {
     const chat = catalog.find((e) => e.id === selection.defaultChat);
     // Only the models for where the chat model runs, as chosen in Run on above.
     const onNpu = !!chat && isNpu(chat);
-    const chatRows = catalog.filter((e) => e.chat_choice && !isEmbedding(e) && (e.gaia_model || e.downloaded) && isNpu(e) === onNpu);
+    const chatRows = catalog.filter((e) => e.chat_choice && !isEmbedding(e) && (e.gaia_model || e.downloaded) && isNpu(e) === onNpu
+        && (e.setup_offer || e.id === selection.defaultChat));
     const verified = chatRows.filter((e) => e.support === 'verified');
     const untested = chatRows.filter((e) => e.support !== 'verified');
     const visionPick = resolveVision(catalog, selection);
@@ -122,6 +124,10 @@ export function JobModels({ plan, selection, onSelection, disabled }: Props) {
     const images = extra('image_creation');
     const imagesAllowed = canCreateImages(chat);
     const untestedPicked = chat?.support === 'untested';
+    const [showUntested, setShowUntested] = useState(untestedPicked);
+    useEffect(() => {
+        if (untestedPicked) setShowUntested(true);
+    }, [untestedPicked]);
 
     return (
         <div className="mc">
@@ -134,14 +140,15 @@ export function JobModels({ plan, selection, onSelection, disabled }: Props) {
                     ))}
                 </ul>
                 {untested.length > 0 && (
-                    <>
+                    <details className="mc-more" open={showUntested} onToggle={(ev) => setShowUntested(ev.currentTarget.open)}>
+                        <summary>{t('setup.job.showUntested', { n: String(untested.length) })}</summary>
                         <p className="setup-hint">{t('setup.job.untestedNote')}</p>
-                        <ul className="mc-list" role="radiogroup" aria-labelledby={`${groupId}-chat`}>
+                        <ul className="mc-list" role="radiogroup" aria-label={t('setup.job.untestedLabel')}>
                             {untested.map((e) => (
                                 <RadioRow key={e.id} name={`${groupId}-chat-model`} entry={e} checked={e.id === selection.defaultChat} recommended={false} disabled={disabled} onPick={() => chooseChat(e.id)} />
                             ))}
                         </ul>
-                    </>
+                    </details>
                 )}
                 {untestedPicked && <p className="mc-warn" role="note"><AlertTriangle size={13} aria-hidden="true" /> {t('setup.job.untestedPicked')}</p>}
             </section>

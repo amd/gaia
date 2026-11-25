@@ -84,6 +84,7 @@ describe('Disconnect outcome notice', () => {
             revoke_supported: false,
             revoked_remotely: false,
             nothing_stored: false,
+            revoke_attempted: false,
             revoke_error: null,
         });
         const notice = await screen.findByRole('status');
@@ -103,6 +104,46 @@ describe('Disconnect outcome notice', () => {
         });
         const notice = await screen.findByRole('status');
         expect(notice).toHaveTextContent(ar.messages['settings.connectors.nothingStored']);
+    });
+
+    it('says an unreadable sign-in could not be read instead of nothing stored', async () => {
+        await renderSection();
+        const reason =
+            "GAIA could not read the stored sign-in, so it removed the local copy without revoking GAIA's access at Google. To revoke it, remove GAIA at https://myaccount.google.com/permissions.";
+        await disconnected({
+            connector_id: 'google',
+            revoke_supported: true,
+            revoked_remotely: false,
+            nothing_stored: false,
+            revoke_attempted: false,
+            revoke_error: reason,
+        });
+        const notice = await screen.findByRole('status');
+        expect(notice).toHaveTextContent(/could not read/i);
+        expect(notice).toHaveTextContent(
+            'https://myaccount.google.com/permissions',
+        );
+        expect(notice).not.toHaveTextContent(
+            enMessages['settings.connectors.nothingStored'],
+        );
+    });
+
+    it('says the revoke was attempted and failed', async () => {
+        await renderSection();
+        const reason = 'GAIA revoke endpoint rejected the request (status 500)';
+        await disconnected({
+            connector_id: 'google',
+            revoke_supported: true,
+            revoked_remotely: false,
+            revoke_attempted: true,
+            nothing_stored: false,
+            revoke_error: reason,
+        });
+        const notice = await screen.findByRole('status');
+        expect(notice).toHaveTextContent(
+            'Disconnected locally, but the provider did not confirm the revoke',
+        );
+        expect(notice).toHaveTextContent(reason);
     });
 
     it('stays quiet after a confirmed revoke', async () => {

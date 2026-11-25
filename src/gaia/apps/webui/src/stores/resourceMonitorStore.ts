@@ -1,7 +1,7 @@
 // Copyright(C) 2026 Advanced Micro Devices, Inc. All rights reserved.
 // SPDX-License-Identifier: MIT
 
-/** Whether chats show the resource usage strip. On until someone closes it. */
+/** Whether chats show the resource usage strip. Off until someone turns it on. */
 
 import { create } from 'zustand';
 import { log } from '../utils/logger';
@@ -10,10 +10,10 @@ const VISIBLE_KEY = 'gaia.resourceMonitor.visible';
 
 function readVisible(): boolean {
     try {
-        return window.localStorage.getItem(VISIBLE_KEY) !== '0';
+        return window.localStorage.getItem(VISIBLE_KEY) === '1';
     } catch (err) {
-        log.ui.warn('Resource usage setting unavailable; showing it', err);
-        return true;
+        log.ui.warn('Resource usage setting unavailable; hiding it', err);
+        return false;
     }
 }
 

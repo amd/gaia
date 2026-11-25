@@ -926,6 +926,8 @@ class TestSkipChatModel(unittest.TestCase):
             mock_client = MagicMock()
             mock_client.get_system_info.return_value = SMALL_MACHINE
             mock_client.ensure_model_downloaded.return_value = True
+            # A cold cache: a downloaded Gemma would be kept instead.
+            mock_client.check_model_available.return_value = False
             mock_client_class.return_value = mock_client
 
             result = cmd._download_models()
@@ -933,8 +935,9 @@ class TestSkipChatModel(unittest.TestCase):
             pulled = {
                 c.args[0] for c in mock_client.ensure_model_downloaded.call_args_list
             }
+            # A 16 GB machine: its small default reads images, so no Gemma.
             self.assertEqual(
-                pulled, {"Gemma-4-E4B-it-GGUF", "user.embeddinggemma-300m-GGUF"}
+                pulled, {"Qwen3.5-2B-GGUF", "user.embeddinggemma-300m-GGUF"}
             )
 
     def test_skip_chat_model_downloads_only_the_embedder(self):
@@ -3468,7 +3471,8 @@ STRIX_HALO_64 = {
 
 class TestHardwareChatModel(unittest.TestCase):
     """The chat model follows the hardware: Qwen3.6 35B A3B where a GPU holds
-    it, Gemma 4 E4B everywhere else, and a user's default_model always wins."""
+    it, else the largest of Gemma 4 E4B, Qwen3.5 4B and Qwen3.5 2B that leaves
+    other apps their share of RAM, and a user's default_model always wins."""
 
     def setUp(self):
         from gaia.llm.lemonade_embedded import EmbeddedStatus
@@ -3514,14 +3518,19 @@ class TestHardwareChatModel(unittest.TestCase):
         probed = {c.args[0] for c in client.check_model_available.call_args_list}
         self.assertIn(DEFAULT_MODEL_NAME, probed)
 
-    def test_check_keeps_gemma_on_a_small_machine(self):
+    def test_check_asks_for_the_small_default_on_a_16gb_machine(self):
         from gaia.installer.init_command import check_setup_status
-        from gaia.llm.lemonade_client import DEFAULT_MODEL_NAME
+        from gaia.llm.lemonade_client import (
+            DEFAULT_MODEL_NAME,
+            TINY_DEFAULT_MODEL_NAME,
+        )
 
         client = self._client(SMALL_MACHINE)
         with patch("gaia.llm.lemonade_client.LemonadeClient", return_value=client):
             status = check_setup_status(profile="gaia")
-        self.assertTrue(any(DEFAULT_MODEL_NAME in r for r in status.reasons))
+        self.assertTrue(any(TINY_DEFAULT_MODEL_NAME in r for r in status.reasons))
+        # It reads images itself, so Gemma is not needed beside it.
+        self.assertFalse(any(DEFAULT_MODEL_NAME in r for r in status.reasons))
 
     def test_user_default_model_wins_without_probing_hardware(self):
         from gaia.config import GaiaConfig

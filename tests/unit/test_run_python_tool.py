@@ -703,6 +703,35 @@ def test_a_failed_saved_script_says_to_edit_it_and_run_it_again(
     assert "don't send the script again" in result["error"]
 
 
+def test_a_script_given_the_wrong_arguments_is_left_alone(
+    make_run_python, project, monkeypatch
+):
+    # Told "fix it with edit_file", Qwen3.5-2B rewrote a working converter twice.
+    monkeypatch.chdir(project)
+    _agent, _run_python = make_run_python(project)
+    script = project / "convert_units.py"
+    script.write_text(
+        "import argparse\n"
+        "p = argparse.ArgumentParser()\n"
+        "p.add_argument('value', type=float)\n"
+        "p.add_argument('--from', dest='src', required=True)\n"
+        "print(p.parse_args().value)\n",
+        encoding="utf-8",
+    )
+    execute_python_file = _TOOL_REGISTRY["execute_python_file"]["function"]
+
+    result = execute_python_file(file_path=str(script))
+
+    assert result["status"] == "error"
+    assert "the following arguments are required" in result["error"]
+    assert "don't edit it" in result["error"]
+    assert "edit_file" not in result["error"]
+    assert (
+        execute_python_file(file_path=str(script), args="72 --from f")["stdout"].strip()
+        == "72.0"
+    )
+
+
 def test_a_failed_long_snippet_says_how_to_fix_it_without_sending_it_again(
     make_run_python, project, monkeypatch
 ):

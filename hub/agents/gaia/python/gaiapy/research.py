@@ -164,16 +164,27 @@ def _as_page_reads(calls: Iterable[Tuple[str, Any, Any]]) -> List[Tuple[str, Any
 
 
 def citation_problems(
-    report: str, calls: Iterable[Tuple[str, Any, Any]], request: str = ""
+    report: str,
+    calls: Iterable[Tuple[str, Any, Any]],
+    request: str = "",
+    turn_calls: Optional[Iterable[Tuple[str, Any, Any]]] = None,
 ) -> List[str]:
     """What is wrong with a research report's citations, as plain sentences.
 
     *calls* are the conversation's web tool calls as ``(name, args, result)``,
     including ``download_file`` and the reads of the files it saved. A link in
     the user's *request* is not invented, though citing it still needs a read.
+    *turn_calls*, when given, are this turn's share of *calls*: an answer must
+    cite a page only when this turn read one, so a follow-up that drafts a memo
+    is not sent back to repeat an earlier turn's report.
     """
     asked = [("request", {"text": request}, None)] if request else []
     evidence = evidence_from_calls(asked + _as_page_reads(calls))
+    read_now = (
+        evidence.pages
+        if turn_calls is None
+        else evidence_from_calls(_as_page_reads(turn_calls)).pages
+    )
     unread, invented = uncited_reads(report, evidence)
     problems = []
     if invented:
@@ -186,6 +197,6 @@ def citation_problems(
             "These cited pages were never opened, so they may not say what they "
             f"are cited for: {_listed(unread)}."
         )
-    if evidence.pages and not cited_urls(report):
+    if read_now and not cited_urls(report):
         problems.append("The report cites none of the pages that were read.")
     return problems

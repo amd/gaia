@@ -120,7 +120,7 @@ function ThinkingIndicator({ active, label, awaitingUser = false }: { active: bo
                 <span className="thinking-indicator-elapsed"> · <bdi dir="ltr">{elapsed}s</bdi></span>
             )}
             {showModelWaitHint && (
-                <span className="thinking-indicator-hint" role="status">{t(place?.remote === false ? 'live.localModelWaitHint' : 'live.modelWaitHint')}</span>
+                <span className="thinking-indicator-hint" role="status">{place?.remote === false ? t('live.localModelWaitHint', { n: String(MODEL_WAIT_HINT_S) }) : t('live.modelWaitHint')}</span>
             )}
         </span>
     );

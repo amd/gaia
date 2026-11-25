@@ -32,6 +32,7 @@ export function entry(over: Partial<SetupCatalogEntry> & { id: string }): SetupC
         need_gb: 2,
         capacity_gb: 96,
         fit_reason: null,
+        setup_offer: over.fits !== false,
         ...over,
     };
 }

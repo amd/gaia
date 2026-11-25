@@ -139,6 +139,7 @@ The main tables, with foreign key relationships:
 documents          -- Global document library
 sessions           -- Chat conversations
 session_documents  -- Many-to-many attachment relationship
+session_uploads    -- A chat's composer uploads put in the library, by content hash
 messages           -- Conversation messages with optional RAG metadata
 unfinished_turns   -- Turns (chat or scheduled) that have not saved a reply yet
 ```
@@ -262,11 +263,12 @@ All 14 Pydantic models:
 
 ## Security Considerations
 
+- **API token:** Every `/api/*` and `/v1/*` request needs the per-install token in `<GAIA home>/agent-ui-token` (created 0600 on first start), as `Authorization: Bearer` or the HttpOnly, `SameSite=Strict` `gaia_ui_token` cookie, local callers included. Only `GET /api/health` (no user data) and CORS preflights are exempt. A browser is signed in by a single-use, 10-minute `/?launch=<code>` link; over mobile access the tunnel token is accepted instead. Enforced in `ApiTokenMiddleware` (`gaia/ui/security.py`), so a new route is covered on the day it lands. See [Security](/sdk/sdks/agent-ui#api-token)
 - **CSRF:** Every mutating (`POST`/`PUT`/`PATCH`/`DELETE`) request to `/api/*` or `/v1/*` must carry `X-Gaia-UI: 1`. A page cannot set a custom header cross-origin without a CORS preflight, and preflights are approved only from GAIA's own origins — so a site the user visits cannot drive the backend. Enforced in `UIRequestGuardMiddleware` (`gaia/ui/security.py`), not per route, so a new route is covered on the day it lands
 - **Origin:** A mutating request whose `Origin` is neither this server, loopback, nor the live tunnel is refused with 403. Extend with `GAIA_UI_ALLOWED_ORIGINS` (comma-separated) when fronting the backend with a proxy
 - **Host:** A request whose `Host` is a name the server does not know is refused with 400, which blocks DNS rebinding. IP literals and loopback names always pass, so `--host 0.0.0.0` LAN access keeps working; add named hosts with `GAIA_UI_ALLOWED_HOSTS`
 - **CORS:** An allowlist of localhost dev origins. No tunnel origin is listed: the mobile flow serves the SPA *from* the tunnel, so those requests are same-origin and CORS never applies. The standalone server (`python -m gaia.ui.server`) binds to `localhost` by default
-- **No authentication:** Designed for single-user local use. Do not expose to untrusted networks
+- **Single user:** The token stands for the PC's user; there are no per-user accounts. Do not expose the backend to untrusted networks
 - **File path validation:** The `upload-path` endpoint sanitizes all user-provided paths:
   - Null byte rejection (prevents path injection)
   - Path resolution to absolute canonical paths (eliminates `..` traversal)

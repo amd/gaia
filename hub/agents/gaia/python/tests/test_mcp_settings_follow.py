@@ -382,6 +382,7 @@ def test_the_sidecar_query_route_follows_a_connector_change(home, monkeypatch):
     caller_auth.reset()
     monkeypatch.delenv(caller_auth.TOKEN_FILE_ENV_VAR, raising=False)
     monkeypatch.delenv(caller_auth.TOKEN_ENV_VAR, raising=False)
+    monkeypatch.setenv(caller_auth.ALLOW_NO_TOKEN_ENV_VAR, "1")
     sr.registry.clear()
     server_mod._registry = server_mod._RunRegistry()
     home.set()

@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <filesystem>
 #include <sstream>
+#include <stdexcept>
 #include <vector>
 
 #include <gaia/process.h>
@@ -133,15 +134,28 @@ json BashTools::doEnvInspect(const json& /*args*/) {
 
     // --- Shell version ---
     std::string shellVersion;
-    try {
-        shellVersion = ProcessRunner::runOrThrow("bash --version", 5000);
-        // Take only the first line
-        auto nl = shellVersion.find('\n');
-        if (nl != std::string::npos) {
-            shellVersion = shellVersion.substr(0, nl);
+#ifdef _WIN32
+    // The shell bash_execute uses, by full path: cmd.exe would run a bash.bat in the working folder first.
+    const std::string shell = detectShell();
+    // cmd /c drops the first and last quote of a line that starts with one, so the line gets an extra pair.
+    const std::string versionCommand = shell.empty() ? std::string() : "\"" + shell + " --version\"";
+#else
+    const std::string versionCommand = "bash --version";
+#endif
+    if (versionCommand.empty()) {
+        shellVersion = "bash not found on PATH: bash_execute runs commands in cmd.exe. Install Git for Windows "
+                       "(or put its bin folder on PATH) to use bash.";
+    } else {
+        try {
+            shellVersion = ProcessRunner::runOrThrow(versionCommand, 5000);
+            // Take only the first line
+            auto nl = shellVersion.find('\n');
+            if (nl != std::string::npos) {
+                shellVersion = shellVersion.substr(0, nl);
+            }
+        } catch (const std::exception& e) {
+            shellVersion = std::string("bash not available: ") + e.what();
         }
-    } catch (...) {
-        shellVersion = "bash not available";
     }
     result["shell"] = shellVersion;
 
@@ -149,7 +163,16 @@ json BashTools::doEnvInspect(const json& /*args*/) {
     std::string osInfo;
     try {
 #ifdef _WIN32
-        osInfo = ProcessRunner::runOrThrow("systeminfo | findstr /B /C:\"OS Name\" /C:\"OS Version\"", 10000);
+        // Windows' own systeminfo by full path, filtered here rather than by a findstr cmd.exe would look up.
+        const std::string systeminfo =
+            ProcessRunner::runOrThrow("\"\"" + systemProgramPath("systeminfo.exe") + "\"\"", 10000);
+        std::istringstream lines(systeminfo);
+        for (std::string line; std::getline(lines, line);) {
+            if (line.rfind("OS Name", 0) == 0 || line.rfind("OS Version", 0) == 0) {
+                if (!line.empty() && line.back() == '\r') line.pop_back();
+                osInfo += (osInfo.empty() ? "" : "\n") + line;
+            }
+        }
 #else
         osInfo = ProcessRunner::runOrThrow("uname -a", 5000);
 #endif
@@ -157,8 +180,8 @@ json BashTools::doEnvInspect(const json& /*args*/) {
         while (!osInfo.empty() && (osInfo.back() == '\n' || osInfo.back() == '\r')) {
             osInfo.pop_back();
         }
-    } catch (...) {
-        osInfo = "unknown";
+    } catch (const std::exception& e) {
+        osInfo = std::string("unknown: ") + e.what();
     }
     result["os"] = osInfo;
 
@@ -202,22 +225,8 @@ json BashTools::doEnvInspect(const json& /*args*/) {
 
 #ifdef _WIN32
 namespace {
-std::vector<std::string> whereAll(const std::string& name) {
-    std::vector<std::string> out;
-    ProcessResult r;
-    try {
-        r = ProcessRunner::run("where " + name + " 2>nul", 3000);
-    } catch (const std::exception&) {
-        return out;
-    }
-    if (r.exitCode != 0) return out;
-    std::istringstream lines(r.stdout_output);
-    for (std::string line; std::getline(lines, line);) {
-        while (!line.empty() && (line.back() == '\r' || line.back() == ' ')) line.pop_back();
-        if (!line.empty()) out.push_back(line);
-    }
-    return out;
-}
+// A PATH scan, not `where`: cmd.exe would run a where.bat in the working folder first.
+std::vector<std::string> whereAll(const std::string& name) { return findProgramsOnPath(name); }
 
 std::string lowered(std::string s) {
     std::transform(s.begin(), s.end(), s.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
@@ -275,10 +284,9 @@ bool BashTools::isToolAvailable(const std::string& toolName) {
     }
 
 #ifdef _WIN32
-    std::string cmd = "where " + toolName + " >nul 2>&1";
+    return !findProgramOnPath(toolName).empty();
 #else
     std::string cmd = "which " + toolName + " >/dev/null 2>&1";
-#endif
 
     try {
         ProcessResult result = ProcessRunner::run(cmd, 3000);
@@ -286,6 +294,7 @@ bool BashTools::isToolAvailable(const std::string& toolName) {
     } catch (...) {
         return false;
     }
+#endif
 }
 
 } // namespace gaia

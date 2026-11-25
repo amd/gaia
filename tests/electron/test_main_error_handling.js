@@ -154,6 +154,10 @@ describe("installSafetyNet", () => {
 
     expect(dialog.showErrorBox).toHaveBeenCalledTimes(1);
     expect(dialog.showMessageBoxSync).not.toHaveBeenCalled();
+    // One box only: the sentence leads, the trace follows.
+    const [, content] = dialog.showErrorBox.mock.calls[0];
+    expect(content.startsWith("GAIA ran into a problem and needs to restart.")).toBe(true);
+    expect(content).toContain("Error: pre-ready crash\n    at ");
 
     exitSpy.mockRestore();
   });
@@ -171,6 +175,10 @@ describe("installSafetyNet", () => {
     process.emit("uncaughtException", new Error("post-ready crash"));
 
     expect(dialog.showMessageBoxSync).toHaveBeenCalledTimes(1);
+    const opts = dialog.showMessageBoxSync.mock.calls[0][0];
+    expect(opts.message).toBe("GAIA ran into a problem and needs to restart. Your chats are saved.");
+    expect(opts.message).not.toContain("post-ready crash");
+    expect(opts.detail).toContain("Error: post-ready crash\n    at ");
 
     exitSpy.mockRestore();
   });

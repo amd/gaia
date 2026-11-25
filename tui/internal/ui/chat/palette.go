@@ -192,6 +192,13 @@ type commandPalette struct {
 func (m ChatModel) paletteFiltered() []paletteCommand {
 	value := m.input.Value()
 	out := filterPaletteCommands(value, m.availableCommandSet())
+	if m.skillsListOnly() {
+		for i := range out {
+			if out[i].Name == skillsCommandPrefix {
+				out[i].Desc = skillsListOnlyDesc
+			}
+		}
+	}
 	return append(out, filterSkillCommands(value, m.skillCommands, out)...)
 }
 

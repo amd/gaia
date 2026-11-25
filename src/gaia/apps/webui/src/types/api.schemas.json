@@ -2696,6 +2696,17 @@
         "default": 0,
         "title": "Tokens Per Second",
         "type": "number"
+      },
+      "waiting_seconds": {
+        "anyOf": [
+          {
+            "type": "number"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Waiting Seconds"
       }
     },
     "title": "InferenceStatsResponse",
@@ -5191,10 +5202,6 @@
       },
       "flagship_agent": {
         "default": "gaiapy",
-        "enum": [
-          "gaiapy",
-          "gaiacpp"
-        ],
         "title": "Flagship Agent",
         "type": "string"
       },
@@ -5576,6 +5583,11 @@
         "title": "Auto",
         "type": "boolean"
       },
+      "available": {
+        "default": true,
+        "title": "Available",
+        "type": "boolean"
+      },
       "max_speed": {
         "default": 200,
         "title": "Max Speed",
@@ -5589,6 +5601,17 @@
       "speed": {
         "title": "Speed",
         "type": "integer"
+      },
+      "unavailable_reason": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Unavailable Reason"
       },
       "voice": {
         "title": "Voice",

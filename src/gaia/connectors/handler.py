@@ -86,7 +86,8 @@ class ConnectorHandler(Protocol):
         """Remove stored credentials for this connector.
 
         OAuth handlers return a revoke-outcome dict (``revoke_supported``,
-        ``revoked_remotely``, ``nothing_stored``, ``revoke_error`` (see
+        ``revoked_remotely``, ``revoke_attempted``, ``nothing_stored``,
+        ``revoke_error`` (see
         ``oauth_pkce.OAuthPkceHandler.disconnect``) so callers can report the
         provider-side outcome honestly; handlers with no remote-revoke
         concept (e.g. ``mcp_server``) may return ``None``.
