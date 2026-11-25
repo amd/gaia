@@ -275,14 +275,6 @@ class Context7RateLimiter:
             self._save_state()
         return can_proceed, reason
 
-    def consume_token(self):
-        """Consume a token for a request."""
-        with file_lock(self.state_file):
-            self.state = self._load_state()
-            self._refill_tokens()
-            self.state.tokens = max(0, self.state.tokens - 1)
-            self._save_state()
-
     def record_success(self):
         """Record successful request."""
         with file_lock(self.state_file):

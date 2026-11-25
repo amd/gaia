@@ -31,7 +31,7 @@ from gaia.llm.lemonade_client import DEFAULT_MODEL_NAME, LARGE_DEFAULT_MODEL_NAM
     ],
 )
 def test_a_leading_research_command_names_its_topic(text, topic):
-    assert research.parse_research_command(text) == topic
+    assert research.split_research_command(text) == ("", topic)
 
 
 @pytest.mark.parametrize(
@@ -48,7 +48,7 @@ def test_a_leading_research_command_names_its_topic(text, topic):
     ],
 )
 def test_anything_else_is_an_ordinary_turn(text):
-    assert research.parse_research_command(text) is None
+    assert research.split_research_command(text) is None
 
 
 def test_the_brief_carries_the_citation_rules_and_the_message_keeps_the_topic():
@@ -175,7 +175,7 @@ def test_a_folder_name_with_brackets_keeps_the_command():
     from gaia.ui.session_environment import with_folder_note
 
     sent = with_folder_note("/research jwst", ["C:/work/[draft] notes"])
-    assert research.parse_research_command(sent) == "jwst"
+    assert research.split_research_command(sent)[1] == "jwst"
 
 
 def test_a_note_alone_is_not_a_command():

@@ -6820,16 +6820,6 @@ Do NOT wrap conversational replies in JSON.
         legacy = type(self).__name__
         return (current,) if legacy == current else (current, legacy)
 
-    def _effective_skill_body(self, skill) -> str:
-        """This agent's view of *skill* with its approved learned changes applied.
-
-        Thin wrapper over :func:`effective_skill_body` so subclasses can
-        override resolution. The render path calls the module-level function
-        directly, so an agent that composes ``get_skills_system_prompt`` without
-        this method still renders its authored skills.
-        """
-        return effective_skill_body(self, skill)
-
     @property
     def overlaid_skills(self) -> Dict[str, List[str]]:
         """Loaded skills currently running with an overlay -> applied delta ids.

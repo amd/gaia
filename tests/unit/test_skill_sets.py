@@ -130,7 +130,7 @@ def test_manifest_preserves_declaration_order_of_sets():
     assert manifest.skill_sets.set_names == ["work", "personal"]
 
 
-def test_skills_for_prepends_the_always_on_list():
+def test_resolve_prepends_the_always_on_list():
     sets = parse_skill_sets(
         {
             "skills": ["always-on"],
@@ -138,7 +138,8 @@ def test_skills_for_prepends_the_always_on_list():
             "default_skill_set": "work",
         }
     )
-    assert [r.name for r in sets.skills_for("work")] == ["always-on", "inbox-triage"]
+    skills = sets.resolve(requested="work").skills
+    assert [r.name for r in skills] == ["always-on", "inbox-triage"]
 
 
 @pytest.mark.parametrize(

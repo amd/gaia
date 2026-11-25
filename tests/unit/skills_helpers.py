@@ -355,7 +355,6 @@ class LearnedOverlayStubMixin:
     debugged from an ``AttributeError`` rather than found.
     """
 
-    _effective_skill_body = _Agent._effective_skill_body
     learned_skills_enabled = _Agent.learned_skills_enabled
     overlaid_skills = _Agent.overlaid_skills
     learned_skill_scope = _Agent.learned_skill_scope

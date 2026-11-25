@@ -77,10 +77,10 @@ def test_streamed_reasoning_is_not_printed(capsys):
 
 
 def test_reasoning_glued_to_the_answer_is_dropped():
-    from gaia.apps.llm.app import _without_reasoning
+    from gaia.apps.llm.app import _ReasoningFilter
 
     chunks = ["<think>plan", " more</think>Answer", " end"]
-    assert "".join(_without_reasoning(chunks)) == "Answer end"
+    assert "".join(_ReasoningFilter()(chunks)) == "Answer end"
 
 
 @pytest.mark.parametrize("stream", [True, False])
@@ -171,10 +171,10 @@ def test_whitespace_inside_the_answer_is_kept():
 
 
 def test_angle_brackets_that_are_not_think_tags_pass_through():
-    from gaia.apps.llm.app import _without_reasoning
+    from gaia.apps.llm.app import _ReasoningFilter
 
     chunks = ["a < b", " and <thinking> is", " not </think> a tag"]
     assert (
-        "".join(_without_reasoning(chunks))
+        "".join(_ReasoningFilter()(chunks))
         == "a < b and <thinking> is not </think> a tag"
     )

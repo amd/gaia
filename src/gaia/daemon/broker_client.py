@@ -238,11 +238,6 @@ def enable_broker_discovery() -> None:
     _discovery_enabled = True
 
 
-def discovery_enabled() -> bool:
-    """True when this process opted into host-side broker discovery."""
-    return _discovery_enabled
-
-
 def attach_broker_env() -> bool:
     """Point this process at a running daemon's broker. Returns True if attached.
 
@@ -825,11 +820,6 @@ def defer_lease_release() -> Callable[[], None]:
 def _current_hold() -> Optional[_HeldLease]:
     hold = _held.get()
     return hold if hold is not None and hold.live else None
-
-
-def holding_lease() -> bool:
-    """True when this context already owns the model slot (see :func:`model_lease`)."""
-    return _current_hold() is not None
 
 
 @contextmanager

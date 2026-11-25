@@ -60,7 +60,7 @@ on:
       - 'src/gaia/agents/base/tools.py'
       - 'src/gaia/security.py'
       - 'tests/unit/test_read_file_locked.py'
-      - 'tests/unit/test_llm.py'
+      - 'tests/integration/test_llm.py'
       - 'tests/unit/test_asr.py'
       - 'tests/unit/test_lemonade_speech.py'
       - 'tests/test_lemonade_client.py'
@@ -117,7 +117,7 @@ on:
       - 'src/gaia/agents/base/tools.py'
       - 'src/gaia/security.py'
       - 'tests/unit/test_read_file_locked.py'
-      - 'tests/unit/test_llm.py'
+      - 'tests/integration/test_llm.py'
       - 'tests/unit/test_asr.py'
       - 'tests/unit/test_lemonade_speech.py'
       - 'tests/test_lemonade_client.py'
@@ -311,7 +311,7 @@ jobs:
           echo Starting test_llm.py at %TIME%...
           echo.
 
-          python tests\unit\test_llm.py
+          python tests\integration\test_llm.py
           set test_llm_exit=%ERRORLEVEL%
 
           echo.

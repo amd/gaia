@@ -24,7 +24,6 @@ from gaia.llm.providers.fireworks import (
     FireworksModel,
     fetch_library,
     fetch_models,
-    needs_deployment,
     resolve_fireworks_api_key,
     search,
 )
@@ -223,7 +222,7 @@ class TestLibrary:
         assert [m.short_name for m in library] == ["gemma-4-31b-it", "glm-5p3"]
         assert calls == [(FIREWORKS_CONTROL_URL, None), (FIREWORKS_CONTROL_URL, "p2")]
 
-    def test_a_model_without_serverless_needs_a_deployment(self, monkeypatch, no_env):
+    def test_the_library_records_which_models_are_serverless(self, monkeypatch, no_env):
         payload = {
             "models": [
                 _library_entry("glm-5p3", True),
@@ -233,13 +232,11 @@ class TestLibrary:
         }
         monkeypatch.setattr(requests, "get", lambda *a, **k: _Response(200, payload))
         library = fetch_library(api_key="k")
-        assert [m.short_name for m in needs_deployment(library)] == [
-            "gemma-4-31b-it",
-            "qwen3p8-27b",
-        ]
-        assert [m.short_name for m in needs_deployment(library, "GEMMA")] == [
-            "gemma-4-31b-it"
-        ]
+        assert {m.short_name: m.serverless for m in library} == {
+            "gemma-4-31b-it": False,
+            "glm-5p3": True,
+            "qwen3p8-27b": False,
+        }
 
     def test_a_repeated_page_token_raises_instead_of_looping(self, monkeypatch, no_env):
         calls = []

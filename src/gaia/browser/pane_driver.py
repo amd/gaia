@@ -247,10 +247,6 @@ class PaneDriver:
     def current_url(self) -> str:
         return self._call("origin", {"tabId": None})["url"] or ""
 
-    def current_origin(self) -> Optional[str]:
-        """Live from the pane: the user may have browsed since the last call."""
-        return self._call("origin", {"tabId": None})["origin"]
-
     def page_origins(self) -> Tuple[Optional[str], List[str]]:
         """The page's origin and its frames' other origins, live from the pane."""
         res = self._call("origin", {"tabId": None})

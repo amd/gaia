@@ -264,8 +264,8 @@ def test_shell_uses_workspace_only_when_it_is_allowed(tmp_path, monkeypatch):
     host.reset_shell_session()
     assert Path(host.shell_session.cwd) == sidecar.resolve()
 
-    host.close_shell_session()
     host.path_validator = Validator(workspace)
+    host.reset_shell_session()
     assert Path(host.shell_session.cwd) == workspace.resolve()
 
 

@@ -250,29 +250,6 @@ def test_missing_claude_cli_is_an_actionable_error(monkeypatch, no_claude_bin):
     _assert_no_secret(str(excinfo.value))
 
 
-@pytest.mark.parametrize(
-    "env,expected",
-    [
-        ({}, False),
-        ({"ANTHROPIC_API_KEY": "  "}, False),
-        ({"CLAUDE_CODE_OAUTH_TOKEN": ""}, False),
-        ({"ANTHROPIC_API_KEY": ENV_KEY}, True),
-    ],
-)
-def test_judge_credential_present(monkeypatch, no_claude_bin, env, expected):
-    for key, value in env.items():
-        monkeypatch.setenv(key, value)
-    assert judge_client.judge_credential_present() is expected
-
-
-def test_a_logged_in_cli_counts_as_present(claude_login):
-    assert judge_client.judge_credential_present() is True
-
-
-def test_a_logged_out_cli_does_not_count_as_present(logged_out):
-    assert judge_client.judge_credential_present() is False
-
-
 def test_max_tokens_reaches_only_the_sdk_client(monkeypatch, no_claude_bin):
     monkeypatch.setenv("ANTHROPIC_API_KEY", ENV_KEY)
     sentinel = _stub_sdk_client(monkeypatch)

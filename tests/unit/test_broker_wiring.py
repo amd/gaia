@@ -41,6 +41,11 @@ from gaia.daemon.constants import (
 )
 
 
+def _holding_lease() -> bool:
+    """True when this context already owns the model slot."""
+    return broker_client._current_hold() is not None
+
+
 @pytest.fixture(autouse=True)
 def _clean_broker_env(monkeypatch):
     """Every test starts AND ends with no broker configured and no lease held.
@@ -124,13 +129,13 @@ def test_nested_model_lease_does_not_self_deadlock(monkeypatch):
 
     with broker_client.model_lease("m1", priority="background") as outer:
         assert outer is not None
-        assert broker_client.holding_lease()
+        assert _holding_lease()
         with broker_client.model_lease("m1") as inner:
             assert inner is None, "nested lease must be a pass-through no-op"
 
     assert len(local.acquired) == 1
     assert len(local.released) == 1
-    assert not broker_client.holding_lease()
+    assert not _holding_lease()
 
 
 def test_lease_released_and_depth_cleared_on_exception(monkeypatch):
@@ -142,7 +147,7 @@ def test_lease_released_and_depth_cleared_on_exception(monkeypatch):
             raise RuntimeError("boom")
 
     assert len(local.released) == 1
-    assert not broker_client.holding_lease()
+    assert not _holding_lease()
     # The slot is genuinely free again — a fresh acquire returns immediately.
     with broker_client.model_lease("m2") as lease:
         assert lease is not None
@@ -222,9 +227,7 @@ def test_load_model_holds_the_lease_across_the_load(monkeypatch):
     """The lease must span the load, not merely bracket it."""
     local = _LocalBroker(monkeypatch)
     held_during_load: List[bool] = []
-    fake = _FakeClient(
-        on_load=lambda m: held_during_load.append(broker_client.holding_lease())
-    )
+    fake = _FakeClient(on_load=lambda m: held_during_load.append(_holding_lease()))
     client = fake.build(monkeypatch)
 
     client.load_model("m1")
@@ -451,9 +454,7 @@ def test_non_streaming_chat_holds_the_lease_across_the_inference_request(monkeyp
     monkeypatch.setattr(
         client,
         "_ensure_model_loaded",
-        lambda model, auto_download=True: held.__setitem__(
-            "ensure", broker_client.holding_lease()
-        ),
+        lambda model, auto_download=True: held.__setitem__("ensure", _holding_lease()),
     )
 
     class _Resp:
@@ -461,7 +462,7 @@ def test_non_streaming_chat_holds_the_lease_across_the_inference_request(monkeyp
 
         @staticmethod
         def json():
-            held["request"] = broker_client.holding_lease()
+            held["request"] = _holding_lease()
             return {"choices": [{"message": {"content": "hi"}}]}
 
     monkeypatch.setattr(
@@ -476,7 +477,7 @@ def test_non_streaming_chat_holds_the_lease_across_the_inference_request(monkeyp
     assert held == {"ensure": True, "request": True}
     # One lease for the whole load+inference; released after the return.
     assert len(local.acquired) == 1 and len(local.released) == 1
-    assert not broker_client.holding_lease()
+    assert not _holding_lease()
 
 
 def test_streaming_chat_holds_the_lease_across_the_whole_generation(monkeypatch):
@@ -511,7 +512,7 @@ def test_streaming_chat_holds_the_lease_across_the_whole_generation(monkeypatch)
     class _FakeStream:
         def __iter__(self):
             for _ in range(3):
-                held_per_chunk.append(broker_client.holding_lease())
+                held_per_chunk.append(_holding_lease())
                 yield _Chunk()
 
     class _FakeOpenAI:
@@ -537,7 +538,7 @@ def test_streaming_chat_holds_the_lease_across_the_whole_generation(monkeypatch)
     assert len(chunks) == 3
     assert held_per_chunk == [True, True, True]
     assert len(local.acquired) == 1 and len(local.released) == 1
-    assert not broker_client.holding_lease()
+    assert not _holding_lease()
 
 
 # ── Streaming lease under stall, retry, Stop, errors and concurrency ─────────
@@ -608,9 +609,9 @@ class _Stalls:
         self._observed = observed
 
     def __iter__(self):
-        self._observed.append(("stalled", broker_client.holding_lease()))
+        self._observed.append(("stalled", _holding_lease()))
         self.release.wait(10)
-        self._observed.append(("after_release", broker_client.holding_lease()))
+        self._observed.append(("after_release", _holding_lease()))
         return
         yield  # pragma: no cover - makes this a generator
 
@@ -622,7 +623,7 @@ class _Yields:
 
     def __iter__(self):
         for _ in range(self._n):
-            self._observed.append(("chunk", broker_client.holding_lease()))
+            self._observed.append(("chunk", _holding_lease()))
             yield _Chunk()
 
 
@@ -663,7 +664,7 @@ def test_streaming_lease_is_held_through_a_retried_attempt(monkeypatch, first_at
     client = _streaming_client(monkeypatch)
     observed: List[Tuple[str, bool]] = []
     during_backoff: List[bool] = []
-    client._retry_sleep = lambda s: during_backoff.append(broker_client.holding_lease())
+    client._retry_sleep = lambda s: during_backoff.append(_holding_lease())
     # The server is up; only this one attempt's connection failed.
     client._server_accepts_connections = lambda: True
     stall = _Stalls(observed)
@@ -682,7 +683,7 @@ def test_streaming_lease_is_held_through_a_retried_attempt(monkeypatch, first_at
     assert [o for o in observed if o[0] == "chunk"] == [("chunk", True)] * 3
     assert during_backoff and all(during_backoff)
     assert len(local.acquired) == 1 and len(local.released) == 1
-    assert not broker_client.holding_lease()
+    assert not _holding_lease()
 
 
 def test_streaming_lease_is_released_after_a_stall_failure(monkeypatch):
@@ -703,7 +704,7 @@ def test_streaming_lease_is_released_after_a_stall_failure(monkeypatch):
         with pytest.raises(LemonadeClientError, match="no output within"):
             list(_stream(client, timeout=0.3))
         assert len(local.acquired) == 1 and len(local.released) == 1
-        assert not broker_client.holding_lease()
+        assert not _holding_lease()
         # The slot is genuinely free: another holder gets it at once.
         other = local.broker.acquire("m2", holder="other", timeout=1)
         local.broker.release(other.lease_id)
@@ -738,7 +739,7 @@ def test_streaming_lease_is_released_after_stop_during_a_stall(monkeypatch):
 
     assert observed[0] == ("stalled", True)
     assert len(local.acquired) == 1 and len(local.released) == 1
-    assert not broker_client.holding_lease()
+    assert not _holding_lease()
 
 
 def test_streaming_lease_is_released_when_the_consumer_stops_reading(monkeypatch):
@@ -750,12 +751,12 @@ def test_streaming_lease_is_released_when_the_consumer_stops_reading(monkeypatch
 
     gen = _stream(client)
     next(gen)
-    assert broker_client.holding_lease()
+    assert _holding_lease()
     gen.close()
 
     assert observed[0] == ("chunk", True)
     assert len(local.acquired) == 1 and len(local.released) == 1
-    assert not broker_client.holding_lease()
+    assert not _holding_lease()
 
 
 def test_npu_stream_keeps_the_cross_process_lease_until_its_drain_ends(monkeypatch):
@@ -770,11 +771,11 @@ def test_npu_stream_keeps_the_cross_process_lease_until_its_drain_ends(monkeypat
 
     class _Drains:
         def __iter__(self):
-            observed.append(("first", broker_client.holding_lease()))
+            observed.append(("first", _holding_lease()))
             yield _Chunk()
             draining.set()
             finish.wait(5)
-            observed.append(("end", broker_client.holding_lease()))
+            observed.append(("end", _holding_lease()))
             ended.set()
 
     _install_fake_openai(monkeypatch, [_Drains()])
@@ -811,7 +812,7 @@ def test_streaming_lease_is_released_after_an_exception_mid_stream(monkeypatch):
 
     class _Breaks:
         def __iter__(self):
-            observed.append(("chunk", broker_client.holding_lease()))
+            observed.append(("chunk", _holding_lease()))
             yield _Chunk()
             raise RuntimeError("connection reset mid-answer")
 
@@ -825,7 +826,7 @@ def test_streaming_lease_is_released_after_an_exception_mid_stream(monkeypatch):
     assert len(got) == 1
     assert observed == [("chunk", True)]
     assert len(local.acquired) == 1 and len(local.released) == 1
-    assert not broker_client.holding_lease()
+    assert not _holding_lease()
 
 
 def test_streaming_lease_is_held_while_a_slow_consumer_drains(monkeypatch):
@@ -839,12 +840,12 @@ def test_streaming_lease_is_held_while_a_slow_consumer_drains(monkeypatch):
     consumer_view = []
     for _ in _stream(client, timeout=0.3):
         time.sleep(0.15)
-        consumer_view.append((broker_client.holding_lease(), len(local.released)))
+        consumer_view.append((_holding_lease(), len(local.released)))
 
     assert observed == [("chunk", True)] * 4
     assert consumer_view == [(True, 0)] * 4
     assert len(local.acquired) == 1 and len(local.released) == 1
-    assert not broker_client.holding_lease()
+    assert not _holding_lease()
 
 
 def test_two_concurrent_streams_never_hold_the_slot_together(monkeypatch):
@@ -877,7 +878,7 @@ def test_two_concurrent_streams_never_hold_the_slot_together(monkeypatch):
 
         def __iter__(self):
             for _ in range(5):
-                observed[self.model].append(broker_client.holding_lease())
+                observed[self.model].append(_holding_lease())
                 time.sleep(0.02)
                 yield _Chunk()
 
@@ -899,7 +900,7 @@ def test_two_concurrent_streams_never_hold_the_slot_together(monkeypatch):
     def _run(model):
         try:
             results[model] = len(list(_stream(client, model=model)))
-            results[model + "_after"] = broker_client.holding_lease()
+            results[model + "_after"] = _holding_lease()
         except BaseException as e:  # noqa: BLE001 - surfaced by the assert
             errors.append(e)
 
@@ -935,10 +936,10 @@ def test_rag_embedder_warmup_holds_one_lease_across_unload_and_load(monkeypatch)
             return False
 
         def unload_model(self, model, ignore_if_not_loaded=False):
-            held_during.append(("unload", broker_client.holding_lease()))
+            held_during.append(("unload", _holding_lease()))
 
         def load_model(self, model, **kwargs):
-            held_during.append(("load", broker_client.holding_lease()))
+            held_during.append(("load", _holding_lease()))
 
     from gaia.rag.sdk import RAGSDK
 
@@ -1168,7 +1169,7 @@ def test_enable_broker_discovery_does_not_probe(monkeypatch):
 
     broker_client.enable_broker_discovery()
 
-    assert broker_client.discovery_enabled()
+    assert broker_client._discovery_enabled
     assert not broker_client.broker_configured()
 
 

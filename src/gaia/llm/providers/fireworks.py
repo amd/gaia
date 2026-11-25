@@ -320,17 +320,3 @@ def fetch_library(
             )
         seen_tokens.add(page_token)
     return sorted(models, key=lambda m: m.short_name)
-
-
-def needs_deployment(library: List[LibraryModel], term: str = "") -> List[LibraryModel]:
-    """Library models that exist but cannot be called per-token.
-
-    The answer to "why can I not reach this model": not missing, not gated by
-    the local gateway — simply not offered serverless.
-    """
-    needle = (term or "").strip().lower()
-    return [
-        m
-        for m in library
-        if not m.serverless and (not needle or needle in m.short_name.lower())
-    ]
