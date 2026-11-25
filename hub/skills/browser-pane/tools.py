@@ -287,11 +287,10 @@ def dev_server(
 
     Use this, not run_shell_command or a Python script, to start any web
     server: it keeps running after the reply. A folder of plain HTML/CSS/JS
-    needs no setup and no launch.json: browser-pane/dev_server(action="start",
+    needs no setup: browser-pane/dev_server(action="start",
     project="<folder>"). An app with its own dev command needs
-    <project>/.gaia/launch.json (the skill shows its format); its command
-    must listen on 127.0.0.1 only (e.g. --host 127.0.0.1), or GAIA stops it.
-    Starting asks the user first. A server already running is reused.
+    <project>/.gaia/launch.json (the skill shows its format), listening on
+    127.0.0.1 only. Starting asks the user first. A running server is reused.
 
     Args:
         action: 'start' (runs it and opens it in the pane), 'list', 'logs',

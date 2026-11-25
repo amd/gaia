@@ -755,7 +755,6 @@ def server_refusal(what: str, folder: Optional[str], offered: bool) -> str:
 
 def file_url_refusal(url: str, offered: bool) -> str:
     """browser_open's answer to a file:// URL: serve the file's folder instead."""
-    from urllib.parse import urlsplit
     from urllib.request import url2pathname
 
     path = Path(url2pathname(urlsplit(url).path))
