@@ -11,12 +11,16 @@ folder.
 from __future__ import annotations
 
 import json
+import subprocess
+import sys
 import zipfile
 from pathlib import Path
 
 import pytest
 
+import gaia
 from gaia.agents.base.python_human_only import human_only_in_python
+from gaia.daemon.client import _daemon_env
 from gaia.hub import installer
 from gaia.installer.export_import import import_agent_bundle
 from gaia.skills.human_only import (
@@ -128,3 +132,38 @@ def test_python_that_installs_agent_code_is_refused_early(code, tmp_path):
 )
 def test_python_that_only_reads_installer_helpers_still_runs(code, tmp_path):
     assert human_only_in_python(code, str(tmp_path)) == ""
+
+
+def test_a_daemon_an_agent_shell_started_still_installs_for_the_user(
+    agents_root, monkeypatch
+):
+    """The daemon is GAIA itself; the agent-child marker must not reach it."""
+    monkeypatch.setenv(AGENT_CHILD_ENV, "1")
+    monkeypatch.setenv("PYTHONPATH", str(Path(gaia.__file__).resolve().parents[1]))
+
+    env = _daemon_env()
+
+    assert AGENT_CHILD_ENV not in env
+    assert env["GAIA_HOME"] == str(agents_root.parent)
+    seen = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            "from gaia.skills.human_only import started_by_agent as s; print(s())",
+        ],
+        env=env,
+        capture_output=True,
+        text=True,
+        check=True,
+        timeout=120,
+    ).stdout.strip()
+    assert seen == "False"
+
+
+def test_the_agent_shell_itself_still_cannot_install(agents_root, monkeypatch):
+    """Dropping the marker for the daemon leaves the agent's own process refused."""
+    monkeypatch.setenv(AGENT_CHILD_ENV, "1")
+    _daemon_env()
+
+    with pytest.raises(SkillHumanOnlyError, match=AGENT_INSTALL_MESSAGE):
+        installer.install("some-agent", fetcher=_no_hub, install_root=agents_root)
