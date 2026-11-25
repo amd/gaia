@@ -112,12 +112,28 @@ def test_path_like_words_from_the_user_are_not_a_work_order(message):
     assert model.call_count == 2
 
 
-@pytest.mark.parametrize("message", PATH_LIKE_MESSAGES[:2])
-def test_workspace_host_still_reports_the_unwritten_file(message):
-    result, _ = _run(["Sorry about that."], message, "workspace")
+def test_workspace_host_still_reports_the_unwritten_file():
+    result, _ = _run(["Sorry about that."], PATH_LIKE_MESSAGES[1], "workspace")
 
     assert result["status"] == "incomplete"
-    assert "No successful write to" in result["result"]
+    assert "No successful write to `report.txt`" in result["result"]
+
+
+@pytest.mark.parametrize(
+    "message",
+    [
+        PATH_LIKE_MESSAGES[0],
+        "store the 1/2 price offer from 10/15/2026 somewhere I can find it",
+    ],
+)
+def test_date_or_fraction_is_not_a_file_on_the_workspace_host_either(message):
+    reply = "Sorry about that."
+
+    result, model = _run([reply], message, "workspace")
+
+    assert result["status"] == "success"
+    assert result["result"] == reply
+    assert model.call_count == 1
 
 
 @pytest.mark.parametrize(
