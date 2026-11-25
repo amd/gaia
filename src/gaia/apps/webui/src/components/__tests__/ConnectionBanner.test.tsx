@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: MIT
 
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest';
 import * as api from '../../services/api';
 import { ConnectionBanner } from '../ConnectionBanner';
 import { ErrorNotice } from '../settings/ErrorNotice';
@@ -413,6 +413,14 @@ describe('a slow backend', () => {
         render(<ConnectionBanner backendSlow />);
         expect(screen.getByText(/GAIA is slow to answer/)).toBeInTheDocument();
         expect(screen.queryByText(/Can’t reach GAIA’s assistant/)).toBeNull();
+    });
+
+    it('speaks Arabic, its Check again button too', () => {
+        useChatStore.setState({ systemStatus: null, locale: 'ar' });
+        onTestFinished(() => useChatStore.setState({ locale: 'en' }));
+        const { container } = render(<ConnectionBanner backendSlow onRetry={() => {}} />);
+        expect(container).toHaveTextContent('GAIA بطيء في الاستجابة.');
+        expect(screen.getByRole('button', { name: /تحقق مرة أخرى/ })).toBeInTheDocument();
     });
 });
 
