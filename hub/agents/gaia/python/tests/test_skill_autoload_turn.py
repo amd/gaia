@@ -124,7 +124,7 @@ def test_a_matching_skill_is_loaded_before_the_first_model_call(flagship):
     # The body is in what the model read on its very first call of the turn.
     assert _sent(first).count(LEDGER_MARKER) == 1
     assert "Loaded ledger-notes because it matches this request" in _last_user(first)
-    assert "Call load_skill(" not in _last_user(first)
+    assert "load_skill(" not in _last_user(first)
     # Agent.load_skill registered the skill's own tool.
     assert "ledger-notes/tally" in agent._tools_registry
     assert {"name": "ledger-notes", "how": "auto"} in agent.describe_skills()
@@ -160,7 +160,7 @@ def test_a_skill_the_model_unloads_is_not_auto_loaded_again(flagship):
 
     assert "ledger-notes" not in agent.loaded_skills
     asked = _last_user(model.requests[-1])
-    assert "Call load_skill('ledger-notes') before you start" in asked
+    assert "call load_skill('ledger-notes') before you start" in asked
     assert "Loaded ledger-notes" not in asked
 
 
@@ -176,7 +176,7 @@ def test_in_ask_mode_a_skill_that_grants_a_program_is_only_suggested(flagship):
 
     assert "test-runner" not in agent.loaded_skills
     assert "pytest" not in skill_granted_binaries(agent)
-    assert "Call load_skill('test-runner')" in _last_user(model.requests[0])
+    assert "call load_skill('test-runner')" in _last_user(model.requests[0])
     assert _covers(agent, "pytest tests -q") is False
 
 

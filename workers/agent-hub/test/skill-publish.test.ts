@@ -10,6 +10,8 @@
  */
 
 import { readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 
 import { describe, expect, it } from "vitest";
 
@@ -656,7 +658,10 @@ describe("published index.json matches schemas/index.schema.json", () => {
   // against its own contract. These top-level checks complement the full
   // validator run in schema-conformance.test.ts.
   const schema = JSON.parse(
-    readFileSync(new URL("../schemas/index.schema.json", import.meta.url), "utf8")
+    readFileSync(
+      join(dirname(fileURLToPath(import.meta.url)), "..", "schemas", "index.schema.json"),
+      "utf8"
+    )
   ) as {
     definitions: {
       indexEntry: {

@@ -141,10 +141,22 @@ def _local_path(url: str) -> Path:
     return Path(path)
 
 
+def _no_gaiacpp(url: str) -> PlatformError:
+    # The address stays in the log: this message is shown in Settings.
+    logger.warning("gaiacpp: %s is not there", url)
+    return PlatformError(
+        "this GAIA release has no gaiacpp to download. Use the Python "
+        "agent, or update GAIA.",
+        kind=KIND_NO_RELEASE,
+    )
+
+
 def _read_text(url: str, session) -> str:
     if url.startswith("file://"):
         try:
             return _local_path(url).read_text(encoding="utf-8")
+        except FileNotFoundError as e:
+            raise _no_gaiacpp(url) from e
         except OSError as e:
             raise PlatformError(f"could not read {url}: {e}") from e
     import requests
@@ -154,13 +166,7 @@ def _read_text(url: str, session) -> str:
     except requests.RequestException as e:
         raise RuntimeError(f"could not reach {url}: {e}") from e
     if resp.status_code == 404:
-        # The address stays in the log: this message is shown in Settings.
-        logger.warning("gaiacpp: %s is not there (HTTP 404)", url)
-        raise PlatformError(
-            "this GAIA release has no gaiacpp to download. Use the Python "
-            "agent, or update GAIA.",
-            kind=KIND_NO_RELEASE,
-        )
+        raise _no_gaiacpp(url)
     if resp.status_code != 200:
         raise RuntimeError(f"{url} answered HTTP {resp.status_code}")
     return resp.text

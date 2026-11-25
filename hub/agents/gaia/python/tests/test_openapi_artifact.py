@@ -73,11 +73,10 @@ def test_bearer_auth_is_declared(spec):
     assert schemes["bearerAuth"] == {"type": "http", "scheme": "bearer"}
 
 
-def test_query_route_declares_bearer_or_none_security(spec):
-    # Gated route: bearer OR no requirement (no token configured is dev-only,
-    # never a documented "always required" claim).
+def test_query_route_declares_bearer_security(spec):
+    # The sidecar refuses to start without a token, so the bearer is required.
     op = spec["paths"]["/v1/gaia/query"]["post"]
-    assert op["security"] == [{"bearerAuth": []}, {}]
+    assert op["security"] == [{"bearerAuth": []}]
 
 
 def test_probe_routes_declare_no_security_requirement(spec):

@@ -1,6 +1,7 @@
 package test
 
 import (
+	"context"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -8,11 +9,13 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/amd/gaia/tui/internal/catalog"
 	"github.com/amd/gaia/tui/internal/control"
+	"github.com/amd/gaia/tui/internal/gaiaprogram"
 	"github.com/amd/gaia/tui/internal/ui/preflight"
 	"github.com/amd/gaia/tui/internal/ui/root"
 )
@@ -88,7 +91,8 @@ func (l *liveTUI) run(command string) {
 }
 
 // /agent, driven over the control API against a real program: the listing,
-// a switch to gaiacpp, a switch back, and gaiacpp gone from the machine.
+// a switch to gaiacpp, a switch back, and gaiacpp gone from the machine and
+// downloaded again.
 func TestAgentProgramSwitchEndToEnd(t *testing.T) {
 	suffix := ""
 	if runtime.GOOS == "windows" {
@@ -103,6 +107,9 @@ func TestAgentProgramSwitchEndToEnd(t *testing.T) {
 		nativeSource = mock
 	}
 	copyProgram(t, nativeSource, nativePath)
+
+	// The stand-in for the release: counted, so a declined offer can be checked.
+	var downloads atomic.Int32
 
 	// gaiacpp's gate asks the model server whether its default model is on disk.
 	lemonadeStub := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -142,7 +149,17 @@ func TestAgentProgramSwitchEndToEnd(t *testing.T) {
 		agent := cat.Get(catalog.FlagshipID)
 		return root.NewFlagshipModel(*agent, false).WithCatalog(cat).
 			WithLocalPreflight(preflight.LocalOptions{Binary: agent.BinaryPath}).
-			WithPreflight(nil, preflight.Options{ReadyHold: time.Millisecond})
+			WithPreflight(nil, preflight.Options{ReadyHold: time.Millisecond}).
+			WithProgramFetch(
+				func(context.Context) (gaiaprogram.Status, error) {
+					return gaiaprogram.Status{CanDownload: true, SizeBytes: 12 << 20, Version: "0.27.0", Target: nativePath}, nil
+				},
+				func(_ context.Context, progress func(gaiaprogram.Progress)) (string, error) {
+					downloads.Add(1)
+					progress(gaiaprogram.Progress{Done: 12 << 20, Total: 12 << 20})
+					copyProgram(t, nativeSource, nativePath)
+					return nativePath, nil
+				})
 	})
 
 	tui.call(http.MethodPost, "/resize", map[string]any{"cols": 120, "rows": 46})
@@ -173,7 +190,7 @@ func TestAgentProgramSwitchEndToEnd(t *testing.T) {
 	// 2. Switch to gaiacpp: through the gate, back in chat, header marked.
 	tui.run("/agent gaiacpp")
 	tui.waitFor(map[string]any{"state": map[string]any{"view": control.ViewChat},
-		"contains": "(" + catalog.NativeAgentBinary + ")"})
+		"contains": "(" + catalog.NativeAgentBinary + " · Beta)"})
 	// The new agent warms up behind a stage that covers the transcript, and a
 	// command typed meanwhile runs once it is ready: its answer is the wait.
 	tui.run("/agent")
@@ -193,7 +210,7 @@ func TestAgentProgramSwitchEndToEnd(t *testing.T) {
 	// 3. And back.
 	tui.run("/agent gaiapy")
 	tui.waitFor(map[string]any{"state": map[string]any{"view": control.ViewChat},
-		"absent": "(" + catalog.NativeAgentBinary + ")"})
+		"absent": "(" + catalog.NativeAgentBinary + " · Beta)"})
 	tui.run("/agent")
 	tui.waitFor(map[string]any{"contains": "Python agent (gaia-agent) · running now · your saved choice"})
 	onPython := tui.screen()
@@ -221,21 +238,54 @@ func TestAgentProgramSwitchEndToEnd(t *testing.T) {
 		t.Fatalf("could not remove %s: the retired agent still holds it", nativePath)
 	}
 	tui.run("/agent")
-	tui.waitFor(map[string]any{"contains": "Unavailable: not installed. Looked in:"})
+	tui.waitFor(map[string]any{"contains": "Not on this PC yet: /agent gaiacpp offers to download it."})
 	tui.shot("5-gaiacpp-unavailable")
 
+	// 6. Asking for it offers the download; Esc leaves everything as it was.
 	tui.run("/agent gaiacpp")
-	tui.waitFor(map[string]any{"contains": "Cannot switch to gaiacpp"})
-	refused := tui.screen()
-	if !strings.Contains(refused, "Nothing was changed") {
-		t.Errorf("the refusal does not say nothing changed:\n%s", refused)
+	tui.waitFor(map[string]any{"contains": "Press Enter to download it and switch, or Esc to cancel"})
+	offer := tui.screen()
+	for _, want := range []string{"gaiacpp (Beta) is not on this PC yet", "12.0 MB", "checksums"} {
+		if !strings.Contains(offer, want) {
+			t.Errorf("the offer does not say %q:\n%s", want, offer)
+		}
 	}
+	tui.shot("6-gaiacpp-download-offered")
+	tui.keys("esc")
+	tui.waitFor(map[string]any{"contains": "gaiacpp was not downloaded"})
 	_, status := tui.call(http.MethodGet, "/status", nil)
 	if state, _ := status["state"].(map[string]any); state["view"] != control.ViewChat {
-		t.Errorf("a refused switch left the chat: %v", state["view"])
+		t.Errorf("a declined download left the chat: %v", state["view"])
 	}
 	if saved, err := preflight.ReadFlagshipAgent(); err != nil || saved.Choice != preflight.FlagshipAgentPython {
-		t.Errorf("a refused switch changed the saved choice: %+v, %v", saved, err)
+		t.Errorf("a declined download changed the saved choice: %+v, %v", saved, err)
 	}
-	tui.shot("6-switch-to-missing-gaiacpp-refused")
+	if n := downloads.Load(); n != 0 {
+		t.Fatalf("a declined offer downloaded gaiacpp %d time(s)", n)
+	}
+
+	// 7. Enter downloads it, and the session moves to gaiacpp.
+	tui.run("/agent gaiacpp")
+	// The first offer's text is still on screen, so the download itself is
+	// what says the second one was reached; Enter before then does nothing.
+	for i := 0; downloads.Load() == 0 && i < 50; i++ {
+		tui.keys("enter")
+		time.Sleep(100 * time.Millisecond)
+	}
+	tui.waitFor(map[string]any{"state": map[string]any{"view": control.ViewChat}, "contains": "(gaiacpp · Beta)", "timeout_ms": 20000})
+	// The transcript comes back once the new agent has warmed up.
+	tui.waitFor(map[string]any{"contains": "Downloaded gaiacpp 0.27.0", "timeout_ms": 20000})
+	if n := downloads.Load(); n != 1 {
+		t.Fatalf("gaiacpp was downloaded %d times, want once", n)
+	}
+	downloaded := tui.screen()
+	for _, want := range []string{"Downloaded gaiacpp 0.27.0 and checked it against the release's checksum", "from gaiapy to gaiacpp"} {
+		if !strings.Contains(downloaded, want) {
+			t.Errorf("the screen does not say %q:\n%s", want, downloaded)
+		}
+	}
+	if saved, err := preflight.ReadFlagshipAgent(); err != nil || saved.Choice != preflight.FlagshipAgentNative {
+		t.Errorf("the downloaded gaiacpp was not saved as the choice: %+v, %v", saved, err)
+	}
+	tui.shot("7-gaiacpp-downloaded-and-running")
 }

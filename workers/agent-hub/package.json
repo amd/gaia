@@ -16,11 +16,11 @@
   "license": "MIT",
   "devDependencies": {
     "@cloudflare/workers-types": "^4.20250129.0",
-    "@types/node": "^22.10.0",
+    "@types/node": "^25.9.9",
     "ajv": "^8.20.0",
     "ajv-formats": "^3.0.1",
-    "typescript": "^5.7.3",
-    "vitest": "^2.1.8",
+    "typescript": "^7.0.2",
+    "vitest": "^5.1.1",
     "wrangler": "^3.114.14"
   },
   "dependencies": {

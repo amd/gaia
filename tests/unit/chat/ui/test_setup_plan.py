@@ -300,10 +300,23 @@ def test_options_say_which_models_fit(running):
     assert options[DEFAULT_MODEL_NAME]["fits"] is True
 
 
-def test_options_show_the_catalog_size(running):
-    running(BIG_GPU)
+def test_options_show_the_size_settings_shows(running, monkeypatch):
+    """A server that lists GiB (5.56, 21.7) still reads 5.97 and 23.3 GB here."""
+    fake = running(BIG_GPU)
+    gib = {LARGE_DEFAULT_MODEL_NAME: 21.7, DEFAULT_MODEL_NAME: 5.56}
+    listed = fake.list_models
+    monkeypatch.setattr(
+        fake,
+        "list_models",
+        lambda show_all=False: {
+            "data": [
+                {**e, "size": gib.get(e["id"], e["size"])} for e in listed()["data"]
+            ]
+        },
+    )
     options = {o["id"]: o for o in sp.build_plan()["options"]}
-    assert options[DEFAULT_MODEL_NAME]["size_gb"] == 5.6
+    assert options[DEFAULT_MODEL_NAME]["size_gb"] == 5.97
+    assert options[LARGE_DEFAULT_MODEL_NAME]["size_gb"] == 23.3
 
 
 def test_picking_the_smaller_model_saves_it_and_drops_the_large_download(
@@ -898,8 +911,11 @@ def test_catalog_shows_settings_size_for_a_model_outside_setups_own(
     shown = sp.model_choice.download_size_gb(MUSE_GLIMMER_MODEL_NAME, 19.9)
     assert shown == 21.36
     assert _entry(plan, MUSE_GLIMMER_MODEL_NAME)["full_size_gb"] == shown
-    # Setup's own models keep the size the plan's fit checks run on.
-    assert _entry(plan, DEFAULT_MODEL_NAME)["full_size_gb"] == 5.6
+    # Setup's own models show Settings' size too; the download the plan's
+    # disk check sums stays the server's figure.
+    gemma = _entry(plan, DEFAULT_MODEL_NAME)
+    assert gemma["full_size_gb"] == 5.97
+    assert gemma["size_gb"] == 5.6
 
 
 def test_catalog_leaves_out_cloud_models_lemonade_lists_as_downloaded(
@@ -1505,6 +1521,28 @@ def test_a_model_too_big_for_memory_says_memory(flm_box):
     assert qwen["fits"] is False and qwen["fit_code"] == "memory"
 
 
+def test_setup_offers_only_chat_models_that_fit_and_never_flash(running):
+    from gaia.llm.lemonade_client import FLASH_OPTION_MODEL_NAME
+
+    running(SMALL_GPU)
+    plan = sp.build_plan()
+    assert _entry(plan, LARGE_DEFAULT_MODEL_NAME)["setup_offer"] is False
+    assert _entry(plan, DEFAULT_MODEL_NAME)["setup_offer"] is True
+    running(BIG_GPU)
+    plan = sp.build_plan()
+    assert _entry(plan, LARGE_DEFAULT_MODEL_NAME)["setup_offer"] is True
+    assert _entry(plan, FLASH_OPTION_MODEL_NAME)["setup_offer"] is False
+
+
+def test_setup_keeps_offering_the_users_own_chat_model_even_when_it_does_not_fit(
+    running,
+):
+    running(SMALL_GPU)
+    sp.choose_chat_model(LARGE_DEFAULT_MODEL_NAME, acknowledge_no_fit=True)
+    qwen = _entry(sp.build_plan(), LARGE_DEFAULT_MODEL_NAME)
+    assert qwen["fits"] is False and qwen["setup_offer"] is True
+
+
 def test_choosing_an_npu_model_that_cant_run_here_is_refused_not_confirmed(
     client, running
 ):
@@ -1618,5 +1656,5 @@ def test_every_plan_field_is_declared_in_the_agent_ui_and_tui(running):
     for key in ("left_for_apps_gb", "recommended_model"):
         assert key in plan and key in ts_keys and key in go_keys, key
     entry = plan["catalog"][0]
-    for key in ("tight", "fits", "fit_code", "reads_images"):
+    for key in ("tight", "fits", "fit_code", "reads_images", "setup_offer"):
         assert key in entry and key in ts_keys and key in go_keys, key

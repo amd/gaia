@@ -62,21 +62,11 @@ class TestHealthEndpoint:
         data = resp.json()
         assert data["status"] == "ok"
         assert data["service"] == "gaia-agent-ui"
-        assert "stats" in data
 
-    def test_health_includes_stats(self, client):
-        resp = client.get("/api/health")
-        data = resp.json()
-        stats = data["stats"]
-        assert "sessions" in stats
-        assert "messages" in stats
-        assert "documents" in stats
-
-    def test_health_stats_update_after_data(self, client, db):
+    def test_health_reveals_no_user_data(self, client, db):
         db.create_session(title="Test")
         resp = client.get("/api/health")
-        stats = resp.json()["stats"]
-        assert stats["sessions"] == 1
+        assert resp.json() == {"status": "ok", "service": "gaia-agent-ui"}
 
 
 class TestSystemStatus:

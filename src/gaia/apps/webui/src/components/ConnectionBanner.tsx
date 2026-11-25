@@ -22,11 +22,12 @@ import './ConnectionBanner.css';
  * context window is too small. Provides clear messaging and actionable hints.
  */
 /** A retry that says it is checking until the check answers. */
-function RetryButton({ onRetry, label, busyLabel = 'Checking…' }: {
+function RetryButton({ onRetry, label, busyLabel }: {
     onRetry: () => void | Promise<void>;
     label: string;
     busyLabel?: string;
 }) {
+    const t = useT();
     const [checking, setChecking] = useState(false);
     const run = () => {
         setChecking(true);
@@ -34,7 +35,7 @@ function RetryButton({ onRetry, label, busyLabel = 'Checking…' }: {
     };
     return (
         <button className="connection-banner__retry" onClick={run} disabled={checking}>
-            {checking ? busyLabel : label}
+            {checking ? busyLabel ?? t('banner.checking') : label}
         </button>
     );
 }
@@ -316,7 +317,11 @@ export function ConnectionBanner({ onRetry, backendSlow = false, backendError = 
     // Takes priority over all other cases (including dismiss and active-conversation suppression)
     // because the system is not yet ready to serve requests. A status the backend
     // can't refresh (slow or failing) is not proof the boot is still running.
-    if (isStarting(systemStatus) && !backendSlow && !backendError) {
+    // Once the server check is over, a server that isn't answering outranks the later boot steps.
+    const serverCheck = systemStatus?.init_tasks?.find(t => t.step === 'check_server');
+    const serverDownAfterCheck = systemStatus?.lemonade_running === false
+        && !!serverCheck && serverCheck.status !== 'pending' && serverCheck.status !== 'running';
+    if (isStarting(systemStatus) && !backendSlow && !backendError && !serverDownAfterCheck) {
         // The task's English `name` is a log label; only its `step` is shown, translated.
         const step = systemStatus?.init_tasks?.find(t => t.status === 'running')?.step;
         const stepKey = `banner.boot.${step}`;
@@ -350,7 +355,7 @@ export function ConnectionBanner({ onRetry, backendSlow = false, backendError = 
                     {t('banner.unreachable')}{' '}
                     <span className="connection-banner__hint">{t('banner.unreachableHint')}</span>
                 </div>
-                {onRetry && <RetryButton onRetry={onRetry} label="Retry" />}
+                {onRetry && <RetryButton onRetry={onRetry} label={t('banner.retry')} />}
             </div>
         );
     }
@@ -363,12 +368,10 @@ export function ConnectionBanner({ onRetry, backendSlow = false, backendError = 
                     <AlertTriangle size={16} />
                 </div>
                 <div className="connection-banner__text" dir="auto">
-                    GAIA's backend answered with an error ({backendError}).{' '}
-                    <span className="connection-banner__hint">
-                        It may be overloaded. GAIA keeps checking; if it lasts, restart GAIA.
-                    </span>
+                    {t('banner.backendError', { error: backendError })}{' '}
+                    <span className="connection-banner__hint">{t('banner.backendErrorHint')}</span>
                 </div>
-                {onRetry && <RetryButton onRetry={onRetry} label="Check again" />}
+                {onRetry && <RetryButton onRetry={onRetry} label={t('settings.key.checkAgain')} />}
             </div>
         );
     }
@@ -381,12 +384,10 @@ export function ConnectionBanner({ onRetry, backendSlow = false, backendError = 
                     <AlertTriangle size={16} />
                 </div>
                 <div className="connection-banner__text" dir="auto">
-                    GAIA is slow to answer.{' '}
-                    <span className="connection-banner__hint">
-                        It may be busy with another chat or app. GAIA keeps checking.
-                    </span>
+                    {t('banner.backendSlow')}{' '}
+                    <span className="connection-banner__hint">{t('banner.backendSlowHint')}</span>
                 </div>
-                {onRetry && <RetryButton onRetry={onRetry} label="Check again" />}
+                {onRetry && <RetryButton onRetry={onRetry} label={t('settings.key.checkAgain')} />}
             </div>
         );
     }
@@ -400,10 +401,10 @@ export function ConnectionBanner({ onRetry, backendSlow = false, backendError = 
                     <AlertTriangle size={16} />
                 </div>
                 <div className="connection-banner__text" dir="auto">
-                    GAIA settings could not be loaded.{' '}
+                    {t('banner.configError')}{' '}
                     <span className="connection-banner__hint">{systemStatus.config_error}</span>
                 </div>
-                {onRetry && <RetryButton onRetry={onRetry} label="Check again" />}
+                {onRetry && <RetryButton onRetry={onRetry} label={t('settings.key.checkAgain')} />}
             </div>
         );
     }
@@ -439,7 +440,7 @@ export function ConnectionBanner({ onRetry, backendSlow = false, backendError = 
                 <button
                     className="connection-banner__dismiss"
                     onClick={() => setDismissed(true)}
-                    aria-label="Dismiss"
+                    aria-label={t('banner.dismiss')}
                 >
                     <X size={14} />
                 </button>
@@ -461,17 +462,17 @@ export function ConnectionBanner({ onRetry, backendSlow = false, backendError = 
                     <Layers size={16} />
                 </div>
                 <div className="connection-banner__text" dir="auto">
-                    LLM context window is too small ({current.toLocaleString()} tokens;{' '}
-                    {MIN_CONTEXT_SIZE.toLocaleString()} required).{' '}
-                    <span className="connection-banner__hint">
-                        Reload it with a larger context in Settings → Advanced.
-                    </span>
+                    {t('banner.contextTooSmall', {
+                        current: ltrIn(t.locale, current.toLocaleString()),
+                        required: ltrIn(t.locale, MIN_CONTEXT_SIZE.toLocaleString()),
+                    })}{' '}
+                    <span className="connection-banner__hint">{t('banner.contextTooSmallHint')}</span>
                 </div>
-                {onRetry && <RetryButton onRetry={onRetry} label="Check again" />}
+                {onRetry && <RetryButton onRetry={onRetry} label={t('settings.key.checkAgain')} />}
                 <button
                     className="connection-banner__dismiss"
                     onClick={() => setDismissed(true)}
-                    aria-label="Dismiss"
+                    aria-label={t('banner.dismiss')}
                 >
                     <X size={14} />
                 </button>

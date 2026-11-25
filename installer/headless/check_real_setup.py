@@ -58,8 +58,34 @@ def problems_with_setup(
     return problems
 
 
+def ui_token_path() -> Path:
+    """Where the backend keeps its API token; mirrors gaia.ui.api_token.token_path."""
+    override = os.environ.get("GAIA_UI_TOKEN_FILE", "").strip()
+    if override:
+        return Path(os.path.expandvars(os.path.expanduser(override)))
+    for env_var in ("GAIA_HOME", "GAIA_CONFIG_DIR"):
+        raw = os.environ.get(env_var, "").strip()
+        if raw:
+            return Path(os.path.expandvars(os.path.expanduser(raw))) / "agent-ui-token"
+    return Path.home() / ".gaia" / "agent-ui-token"
+
+
+def _ui_headers() -> Dict[str, str]:
+    path = ui_token_path()
+    try:
+        token = path.read_text(encoding="utf-8").strip()
+    except OSError as e:
+        raise SystemExit(
+            f"error: cannot read the Agent UI API token at {path} ({e}); the "
+            "backend writes it on startup, so check that it started from this home"
+        ) from e
+    if not token:
+        raise SystemExit(f"error: the Agent UI API token file {path} is empty")
+    return {"X-Gaia-UI": "1", "Authorization": f"Bearer {token}"}
+
+
 def _get(url: str, timeout: float) -> Dict[str, Any]:
-    request = urllib.request.Request(url, headers={"X-Gaia-UI": "1"})
+    request = urllib.request.Request(url, headers=_ui_headers())
     with urllib.request.urlopen(request, timeout=timeout) as reply:
         return json.load(reply)
 
@@ -68,8 +94,8 @@ def _wait_for(base: str) -> None:
     deadline = time.monotonic() + START_TIMEOUT_S
     while True:
         try:
-            _get(f"{base}/api/health", 5)
-            return
+            with urllib.request.urlopen(f"{base}/api/health", timeout=5):
+                return
         except (urllib.error.URLError, OSError) as e:
             if time.monotonic() > deadline:
                 raise SystemExit(

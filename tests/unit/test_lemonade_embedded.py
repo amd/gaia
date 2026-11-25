@@ -430,9 +430,14 @@ class TestPaths:
         monkeypatch.setenv("GAIA_HOME", str(tmp_path))
         assert gaia_home() == tmp_path.resolve()
 
-    def test_gaia_home_defaults_under_the_user_profile(self, monkeypatch):
+    def test_gaia_home_follows_the_shared_default(self, monkeypatch, tmp_path):
+        """The fallback is gaia.home's, so relocating it moves this lookup (#8914)."""
+        from gaia import home
+
+        relocated = tmp_path / "relocated"
         monkeypatch.delenv("GAIA_HOME", raising=False)
-        assert gaia_home() == Path.home() / ".gaia"
+        monkeypatch.setattr(home, "default_gaia_home", lambda: relocated)
+        assert gaia_home() == relocated
 
     def test_daemon_filename_is_platform_correct(self, monkeypatch, tmp_path):
         _fake_platform(monkeypatch, "Windows", "AMD64")
@@ -1366,3 +1371,27 @@ class TestOrphanedBackends:
 
         manager.status()
         assert manager._read_state()["pid"] == 9999
+
+
+class TestPortProbeOnAFullBacklog:
+    """A listener with a full backlog holds the port. Linux leaves the connect
+    hanging (a timeout); macOS resets it. Both must read as taken (#8789)."""
+
+    @pytest.mark.parametrize("error", [TimeoutError, ConnectionResetError])
+    def test_the_port_answers(self, monkeypatch, error):
+        def full_backlog(*args, **kwargs):
+            raise error()
+
+        monkeypatch.setattr(lemonade_embedded.socket, "create_connection", full_backlog)
+        assert lemonade_embedded._answers(
+            lemonade_embedded.socket.AF_INET, "127.0.0.1", 65000
+        )
+
+    @pytest.mark.parametrize("error", [TimeoutError, ConnectionResetError])
+    def test_the_port_is_not_free(self, monkeypatch, error):
+        def full_backlog(*args, **kwargs):
+            raise error()
+
+        monkeypatch.setattr(lemonade_embedded.sys, "platform", "darwin")
+        monkeypatch.setattr(lemonade_embedded.socket, "create_connection", full_backlog)
+        assert lemonade_embedded._port_free(65000) is False

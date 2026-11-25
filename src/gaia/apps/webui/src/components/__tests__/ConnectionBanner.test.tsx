@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: MIT
 
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest';
 import * as api from '../../services/api';
 import { ConnectionBanner } from '../ConnectionBanner';
 import { ErrorNotice } from '../settings/ErrorNotice';
@@ -132,6 +132,34 @@ describe('the start-up banner', () => {
         expect(container).toHaveTextContent('GAIA is slow to answer');
         expect(container).not.toHaveTextContent('Loading AI model');
     });
+
+    const downAtBoot = (checkStatus: string) => useChatStore.setState({ systemStatus: {
+        lemonade_running: false, init_state: 'initializing',
+        init_tasks: [
+            { name: 'Checking LLM server', step: 'check_server', status: checkStatus },
+            { name: 'Loading AI model', step: 'load_model', status: checkStatus === 'running' ? 'pending' : 'running' },
+        ],
+    } as SystemStatus });
+
+    it('says the server is down, not "Loading the model", once the server check is over', () => {
+        downAtBoot('done');
+        const { container, unmount } = render(<ConnectionBanner />);
+        expect(container).toHaveTextContent("The model server isn't answering");
+        expect(container).not.toHaveTextContent('Loading the model');
+        unmount();
+
+        useChatStore.setState({ locale: 'ar' });
+        const ar = render(<ConnectionBanner />);
+        expect(ar.container).not.toHaveTextContent('جارٍ تحميل النموذج');
+        expect(ar.container.querySelector('.connection-banner--warning')).not.toBeNull();
+    });
+
+    it('keeps "Checking the model server" while that check may still start the server', () => {
+        downAtBoot('running');
+        const { container } = render(<ConnectionBanner />);
+        expect(screen.getByRole('status')).toHaveTextContent('Checking the model server');
+        expect(container).not.toHaveTextContent("The model server isn't answering");
+    });
 });
 
 describe('the model server is down', () => {
@@ -175,6 +203,27 @@ describe('the model server is down', () => {
             // A remedy with a command in it is shown as the backend wrote it.
             useChatStore.setState({ systemStatus: { lemonade_running: false, lemonade_probe: 'down', start_command: null, start_instruction: 'Start the Lemonade app from Applications, then retry.' } as SystemStatus });
             expect(render(<ConnectionBanner />).container).toHaveTextContent('Start the Lemonade app from Applications, then retry.');
+        } finally {
+            useChatStore.setState({ locale: 'en' });
+        }
+    });
+
+    it('names the address of the server the user chose, in Arabic too', () => {
+        const chosen = "The model server GAIA uses is at 127.0.0.1:4328. GAIA doesn't run this model server, so it can't start it. Start it the way you usually do.";
+        useChatStore.setState({ systemStatus: { lemonade_running: false, lemonade_probe: 'down', start_command: null, start_instruction: chosen } as SystemStatus });
+        const english = render(<ConnectionBanner />);
+        expect(english.container).toHaveTextContent(chosen);
+        expect(english.container).not.toHaveTextContent('tray');
+        english.unmount();
+
+        useChatStore.setState({ locale: 'ar' });
+        try {
+            const { container } = render(<ConnectionBanner />);
+            expect(container).toHaveTextContent('127.0.0.1:4328');
+            expect(container).toHaveTextContent('خادم النماذج الذي يستخدمه GAIA موجود على');
+            expect(container).toHaveTextContent('لا يشغّل خادم النماذج هذا');
+            // The English sentence is gone; only the test locale's gloss repeats it.
+            expect(container.textContent).not.toContain(chosen);
         } finally {
             useChatStore.setState({ locale: 'en' });
         }
@@ -364,6 +413,14 @@ describe('a slow backend', () => {
         render(<ConnectionBanner backendSlow />);
         expect(screen.getByText(/GAIA is slow to answer/)).toBeInTheDocument();
         expect(screen.queryByText(/Can’t reach GAIA’s assistant/)).toBeNull();
+    });
+
+    it('speaks Arabic, its Check again button too', () => {
+        useChatStore.setState({ systemStatus: null, locale: 'ar' });
+        onTestFinished(() => useChatStore.setState({ locale: 'en' }));
+        const { container } = render(<ConnectionBanner backendSlow onRetry={() => {}} />);
+        expect(container).toHaveTextContent('GAIA بطيء في الاستجابة.');
+        expect(screen.getByRole('button', { name: /تحقق مرة أخرى/ })).toBeInTheDocument();
     });
 });
 

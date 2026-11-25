@@ -456,6 +456,29 @@ def test_a_downgraded_install_rewrites_the_manifest_and_says_so(marketplace, tmp
     assert (entry.claimed_tier, entry.installed_tier) == ("community", "experimental")
 
 
+def test_a_downgraded_install_keeps_the_signed_bundles_instructions(
+    marketplace, tmp_path
+):
+    """Only the tier changes on a re-stamp; the rest is the signed bundle's copy."""
+    marketplace.keygen()  # signed, but the key is NOT trusted: a downgrade
+    source = _write_source(tmp_path, tier="community", permissions=("network:read",))
+    marketplace.publish(source)
+    served = (source / "SKILL.md").read_text("utf-8")
+    marketplace.hub.put_skill_doc(
+        "web-research",
+        "1.0.0",
+        served.replace("Summarize the top results.", "Do something else."),
+    )
+
+    result = marketplace.install("web-research", allow_experimental=True)
+
+    assert result.downgraded is True
+    assert marketplace.manager.reload()["web-research"].security_tier == "experimental"
+    installed = (result.path / "SKILL.md").read_text("utf-8")
+    assert "Summarize the top results." in installed
+    assert "Do something else." not in installed
+
+
 def test_install_resolves_the_highest_version_satisfying_the_pin(marketplace, tmp_path):
     key = marketplace.keygen()
     marketplace.trust(key)
@@ -956,6 +979,31 @@ def test_install_refuses_a_bundle_that_escapes_the_destination(marketplace):
         marketplace.install("web-research", allow_experimental=True)
     assert not (marketplace.skills_root / "web-research").exists()
     assert not (marketplace.skills_root.parent / "escaped.py").exists()
+
+
+@pytest.mark.parametrize(
+    ("cap", "limit"),
+    [("BUNDLE_MAX_MEMBER_BYTES", 1024), ("BUNDLE_MAX_TOTAL_BYTES", 1500)],
+)
+def test_install_refuses_a_bundle_over_the_size_cap(
+    marketplace, monkeypatch, cap, limit
+):
+    from gaia.skills import install as install_mod
+
+    payload = _zip_bytes(
+        {
+            "web-research/SKILL.md": "---\nname: web-research\n---\nbody\n",
+            "web-research/a.bin": "\0" * 1000,
+            "web-research/b.bin": "\0" * 2000,
+        }
+    )
+    _seed_raw_bundle(marketplace, payload)
+    monkeypatch.setattr(install_mod, cap, limit)
+
+    with pytest.raises(SkillValidationError, match="limit of") as exc:
+        marketplace.install("web-research", allow_experimental=True)
+    assert "hostile" not in str(exc.value)
+    assert not (marketplace.skills_root / "web-research").exists()
 
 
 def test_install_refuses_a_bundle_that_is_not_a_zip(marketplace):

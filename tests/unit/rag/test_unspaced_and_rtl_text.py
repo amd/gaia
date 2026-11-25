@@ -13,7 +13,7 @@ from gaia.agents.base.tools import _TOOL_REGISTRY
 from gaia.agents.tools.rag_tools import RAGToolsMixin, _split_oversized_page
 from gaia.rag.keyword_search import KeywordIndex
 from gaia.rag.sdk import EMBED_MAX_CHARS, RAGSDK, RAGConfig
-from gaia.rag.text_units import join_pieces, last_tokens
+from gaia.rag.text_units import close_unspaced_gaps, join_pieces, last_tokens
 
 ZH_SENTENCES = [
     f"第{n}季度北京办公室的销售额为{n * 37}万元，比去年同期增长了百分之{n % 9 + 1}。"
@@ -99,6 +99,18 @@ def test_joining_keeps_spaces_in_korean_and_drops_them_only_in_chinese():
     assert join_pieces(["서울", "사무소의", "예산"]) == "서울 사무소의 예산"
     assert join_pieces(["今天下雨。", "明天晴天！"]) == "今天下雨。明天晴天！"
     assert join_pieces(["sales", "rose."]) == "sales rose."
+
+
+def test_closing_unspaced_gaps_leaves_spaced_scripts_alone():
+    assert close_unspaced_gaps("서울 사무소의 예산") == "서울 사무소의 예산"
+    assert close_unspaced_gaps("Это первое предложение.") == "Это первое предложение."
+    assert (
+        close_unspaced_gaps("今天下雨。\n\n明天 晴天！ Q3 report")
+        == "今天下雨。明天晴天！Q3 report"
+    )
+    for pieces in (["今天下雨。", "明天晴天！"], ["上海工厂", "Q3 report"]):
+        joined = join_pieces(pieces)
+        assert close_unspaced_gaps(joined) == close_unspaced_gaps(" ".join(pieces))
 
 
 @pytest.mark.parametrize(

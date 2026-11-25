@@ -42,6 +42,7 @@ def _init_body(monkeypatch):
     caller_auth.reset()
     monkeypatch.delenv(caller_auth.TOKEN_FILE_ENV_VAR, raising=False)
     monkeypatch.delenv(caller_auth.TOKEN_ENV_VAR, raising=False)
+    monkeypatch.setenv(caller_auth.ALLOW_NO_TOKEN_ENV_VAR, "1")
     monkeypatch.setattr(
         server_mod,
         "_probe_lemonade",
@@ -83,6 +84,7 @@ def _missing_model_hint(monkeypatch, pull):
     caller_auth.reset()
     monkeypatch.delenv(caller_auth.TOKEN_FILE_ENV_VAR, raising=False)
     monkeypatch.delenv(caller_auth.TOKEN_ENV_VAR, raising=False)
+    monkeypatch.setenv(caller_auth.ALLOW_NO_TOKEN_ENV_VAR, "1")
     try:
         return client.get("/v1/gaia/init").json()["hint"]
     finally:

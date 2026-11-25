@@ -59,7 +59,7 @@ from gaia.hub import prerelease as prerelease_mod
 from gaia.hub.compatibility import check_compatibility, current_platform_key
 from gaia.logger import get_logger
 from gaia.retired_agents import RETIRED_AGENT_IDS, retired_install_message
-from gaia.utils.archive import ArchiveError, safe_extract
+from gaia.utils.archive import ArchiveError, ArchiveSizeError, safe_extract
 from gaia.utils.file_lock import (
     FileLockTimeout,
     HeldFileLock,
@@ -1025,6 +1025,11 @@ def _install_python_artifact(
     return site_packages
 
 
+#: Unpacked-size caps for a C++ agent archive; GAIA's largest agent is ~150 MB.
+CPP_ARCHIVE_MAX_MEMBER_BYTES = 1024 * 1024 * 1024
+CPP_ARCHIVE_MAX_TOTAL_BYTES = 2 * 1024 * 1024 * 1024
+
+
 def _install_cpp_artifact(
     artifact_bytes: bytes, filename: str, install_dir: Path
 ) -> Path:
@@ -1049,7 +1054,18 @@ def _install_cpp_artifact(
         archive_path = Path(tmp) / filename
         archive_path.write_bytes(artifact_bytes)
         try:
-            safe_extract(archive_path, install_dir, kind=kind)
+            safe_extract(
+                archive_path,
+                install_dir,
+                kind=kind,
+                max_member_bytes=CPP_ARCHIVE_MAX_MEMBER_BYTES,
+                max_total_bytes=CPP_ARCHIVE_MAX_TOTAL_BYTES,
+            )
+        except ArchiveSizeError as e:
+            raise InstallError(
+                f"Refusing to install '{filename}' into {install_dir}: {e}. "
+                f"The archive is larger than GAIA allows for a C++ agent."
+            ) from e
         except ArchiveError as e:
             raise InstallError(
                 f"Refusing to install '{filename}' into {install_dir}: {e}. "
@@ -1818,7 +1834,11 @@ def install(
     Raises:
         InstallInProgressError, ChecksumError, DiskSpaceError,
         CompatibilityError, TrustRequiredError, InstallError.
+        SkillHumanOnlyError: an agent tool, not the user, is running it.
     """
+    from gaia.skills.human_only import AGENT_INSTALL_MESSAGE, require_user_terminal
+
+    require_user_terminal("gaia agent install", AGENT_INSTALL_MESSAGE)
     refuse_retired_agent(agent_id)
     fetcher = fetcher or catalog_mod.fetch_bytes
     run_pip = run_pip or _default_run_pip

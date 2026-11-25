@@ -52,6 +52,7 @@ from gaia.eval.fixture_env import localize
 from gaia.eval.scenario_backend import ScenarioBackend, validate_approve_prompts
 from gaia.eval.scorecard import NOT_RUN, SKIPPED_STATUSES
 from gaia.llm.local_only import assert_provider_permitted, cloud_blocked
+from gaia.ui.api_token import UITokenError, auth_headers, read_token, token_path
 from gaia.utils.process_tree import kill_tree as _kill_tree
 
 logger = logging.getLogger(__name__)
@@ -139,6 +140,8 @@ def resolve_mcp_config(run_dir, backend_url: str) -> Path:
             "cannot reach the Agent UI backend."
         )
     server["args"] = [*server.get("args", []), "--backend", backend_url]
+    # The MCP server must present the token of the backend this run targets.
+    server["env"] = {**server.get("env", {}), "GAIA_UI_TOKEN_FILE": str(token_path())}
     resolved = Path(run_dir).resolve() / "mcp-config.resolved.json"
     resolved.parent.mkdir(parents=True, exist_ok=True)
     resolved.write_text(json.dumps(config, indent=2) + "\n", encoding="utf-8")
@@ -217,7 +220,7 @@ def _read_session_agent_type(backend_url: str, session_id: str, timeout: float =
     is worth nothing.
     """
     url = f"{backend_url.rstrip('/')}/api/sessions/{session_id}"
-    response = requests.get(url, timeout=timeout)
+    response = requests.get(url, timeout=timeout, headers=auth_headers())
     response.raise_for_status()
     return response.json().get("agent_type")
 
@@ -490,7 +493,7 @@ def _read_session_model(backend_url: str, session_id: str, timeout: float = 15.0
     one the session was created with. Raises on any transport or parse failure.
     """
     url = f"{backend_url.rstrip('/')}/api/sessions/{session_id}"
-    response = requests.get(url, timeout=timeout)
+    response = requests.get(url, timeout=timeout, headers=auth_headers())
     response.raise_for_status()
     return response.json().get("effective_model")
 
@@ -1749,6 +1752,10 @@ def preflight_check(backend_url, scenarios=None):
         # ConnectionError catches http.client.RemoteDisconnected, which is not a
         # URLError - see urllib.request.AbstractHTTPHandler.do_open.
         errors.append(f"Agent UI not reachable at {backend_url}: {e}")
+    try:
+        read_token()
+    except UITokenError as e:
+        errors.append(str(e))
 
     # Check corpus manifest
     if not MANIFEST.exists():
@@ -1850,15 +1857,17 @@ def _apply_mailbox_fixture(backend_url: str, scenario_data: dict) -> Optional[st
             f"{sorted(_MAILBOX_FIXTURE_STATES)}"
         )
     url = f"{backend_url}/api/connectors/eval-mailbox"
-    req = urllib.request.Request(
-        url,
-        data=json.dumps({"attached": _MAILBOX_FIXTURE_STATES[state]}).encode(),
-        headers={"Content-Type": "application/json", "X-Gaia-UI": "1"},
-        method="POST",
-    )
     try:
+        req = urllib.request.Request(
+            url,
+            data=json.dumps({"attached": _MAILBOX_FIXTURE_STATES[state]}).encode(),
+            headers={"Content-Type": "application/json", **auth_headers()},
+            method="POST",
+        )
         with urllib.request.urlopen(req, timeout=10) as r:
             body = json.loads(r.read().decode("utf-8"))
+    except UITokenError as e:
+        return str(e)
     except (urllib.error.URLError, ConnectionError, TimeoutError) as e:
         return (
             f"could not set the fixture mailbox to {state} via {url}: {e}. Start "
@@ -1964,8 +1973,8 @@ def _probe_eval_mailbox(backend_url: str) -> Optional[str]:
     import urllib.request
 
     url = f"{backend_url}/api/connectors/eval-mailbox"
-    req = urllib.request.Request(url, headers={"X-Gaia-UI": "1"})
     try:
+        req = urllib.request.Request(url, headers=auth_headers())
         with urllib.request.urlopen(req, timeout=5) as r:
             if r.status != 200:
                 return (
@@ -1980,6 +1989,8 @@ def _probe_eval_mailbox(backend_url: str) -> Optional[str]:
                 "with the absolute path."
             )
         return None
+    except UITokenError as e:
+        return str(e)
     except urllib.error.HTTPError as e:
         if e.code in (403, 404):
             return (
@@ -2044,15 +2055,17 @@ def _reset_memory(backend_url: str, scenario_data: dict) -> Optional[str]:
     if not _scenario_clears_memory(scenario_data):
         return None
     url = f"{backend_url}/api/memory/admin/clear"
-    req = urllib.request.Request(
-        url,
-        data=json.dumps({"scope": "all"}).encode("utf-8"),
-        headers={"Content-Type": "application/json", "X-Gaia-UI": "1"},
-        method="POST",
-    )
     try:
+        req = urllib.request.Request(
+            url,
+            data=json.dumps({"scope": "all"}).encode("utf-8"),
+            headers={"Content-Type": "application/json", **auth_headers()},
+            method="POST",
+        )
         with urllib.request.urlopen(req, timeout=30) as r:
             body = json.loads(r.read().decode("utf-8"))
+    except UITokenError as e:
+        return f"could not clear memory before the scenario: {e}"
     except urllib.error.HTTPError as e:
         if e.code == 403:
             return (
@@ -2088,12 +2101,16 @@ def _probe_memory_enabled(backend_url: str) -> Optional[str]:
 
     url = f"{backend_url}/api/memory/settings"
     enable = (
-        f"curl -X PUT {url} -H 'X-Gaia-UI: 1' -H 'Content-Type: application/json' "
-        "-d '{\"memory_enabled\": true}'"
+        f"curl -X PUT {url} -H 'X-Gaia-UI: 1' "
+        f"-H \"Authorization: Bearer $(cat '{token_path()}')\" "
+        "-H 'Content-Type: application/json' -d '{\"memory_enabled\": true}'"
     )
     try:
-        with urllib.request.urlopen(url, timeout=5) as r:
+        req = urllib.request.Request(url, headers=auth_headers())
+        with urllib.request.urlopen(req, timeout=5) as r:
             settings = json.loads(r.read().decode("utf-8"))
+    except UITokenError as e:
+        return str(e)
     except urllib.error.HTTPError as e:
         return f"Memory settings probe failed with HTTP {e.code} from {url}: {e.reason}"
     except (urllib.error.URLError, ConnectionError, TimeoutError) as e:
@@ -2134,13 +2151,13 @@ def _probe_memory_admin(backend_url: str) -> Optional[str]:
     import urllib.error
     import urllib.request
 
-    req = urllib.request.Request(
-        f"{backend_url}/api/memory/admin/seed",
-        data=b'{"items":[]}',
-        headers={"Content-Type": "application/json", "X-Gaia-UI": "1"},
-        method="POST",
-    )
     try:
+        req = urllib.request.Request(
+            f"{backend_url}/api/memory/admin/seed",
+            data=b'{"items":[]}',
+            headers={"Content-Type": "application/json", **auth_headers()},
+            method="POST",
+        )
         with urllib.request.urlopen(req, timeout=5) as r:
             if r.status == 200:
                 return None
@@ -2148,6 +2165,8 @@ def _probe_memory_admin(backend_url: str) -> Optional[str]:
                 f"Memory admin probe returned unexpected HTTP {r.status} "
                 f"from {backend_url}/api/memory/admin/seed"
             )
+    except UITokenError as e:
+        return str(e)
     except urllib.error.HTTPError as e:
         if e.code == 403:
             return (
@@ -2261,17 +2280,19 @@ def _set_scripted_user(backend_url: str, commands: list) -> Optional[str]:
     import urllib.error
     import urllib.request
 
-    req = urllib.request.Request(
-        f"{backend_url}/api/eval/scripted-user",
-        data=json.dumps({"decline_commands": commands}).encode("utf-8"),
-        headers={"Content-Type": "application/json", "X-Gaia-UI": "1"},
-        method="POST",
-    )
     try:
+        req = urllib.request.Request(
+            f"{backend_url}/api/eval/scripted-user",
+            data=json.dumps({"decline_commands": commands}).encode("utf-8"),
+            headers={"Content-Type": "application/json", **auth_headers()},
+            method="POST",
+        )
         with urllib.request.urlopen(req, timeout=5) as r:
             if r.status == 200:
                 return None
             return f"Scripted-user setup returned HTTP {r.status} from {backend_url}"
+    except UITokenError as e:
+        return str(e)
     except urllib.error.HTTPError as e:
         if e.code == 403:
             return (
@@ -2503,7 +2524,7 @@ def run_scenario_subprocess(
     if scenario_backend is not None:
         try:
             scenario_backend.start()
-        except requests.RequestException as e:
+        except (requests.RequestException, UITokenError) as e:
             error = (
                 f"Could not watch {scenario_id}'s sessions on the backend at "
                 f"{backend_url}: {e}. Check the Agent UI backend is running."
@@ -3169,6 +3190,40 @@ class ScorecardMismatchError(ValueError):
     """Two scorecards measured different things, so diffing them means nothing."""
 
 
+#: What a scorecard without a ``harness`` ran: every run before harnesses were
+#: recorded, and every committed baseline, used the default (Python) harness.
+DEFAULT_RUN_HARNESS = "gaiapy"
+#: Recorded when the backend couldn't say; never comparable with anything.
+UNKNOWN_HARNESS = "unknown"
+
+
+def backend_harness(backend_url: str) -> str:
+    """The harness the backend runs as the GAIA agent (``flagship_agent``).
+
+    ``UNKNOWN_HARNESS`` when the backend can't be asked, which makes the
+    scorecard refuse every comparison rather than pass as the default harness.
+    """
+    import urllib.error
+    import urllib.request
+
+    req = urllib.request.Request(
+        f"{backend_url}/api/settings", headers={"X-Gaia-UI": "1"}
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=5) as r:
+            value = json.loads(r.read().decode("utf-8")).get("flagship_agent")
+    except (urllib.error.URLError, OSError, ValueError) as e:
+        logger.warning(
+            "Could not read which harness %s runs (%s); the scorecard records "
+            "it as %r and won't compare with any baseline.",
+            backend_url,
+            e,
+            UNKNOWN_HARNESS,
+        )
+        return UNKNOWN_HARNESS
+    return value if isinstance(value, str) and value else UNKNOWN_HARNESS
+
+
 def baseline_identity(baseline_path, baseline: dict) -> dict:
     """What a baseline was measured with: agent model, driver model, and source.
 
@@ -3190,12 +3245,14 @@ def baseline_identity(baseline_path, baseline: dict) -> dict:
             return {
                 "agent_model": meta.get("model"),
                 "eval_model": meta.get("eval_model"),
+                "harness": meta.get("harness") or DEFAULT_RUN_HARNESS,
                 "source": str(meta_path),
             }
     config = baseline.get("config") or {}
     return {
         "agent_model": config.get("agent_model"),
         "eval_model": config.get("model"),
+        "harness": config.get("harness") or DEFAULT_RUN_HARNESS,
         "source": str(baseline_path),
     }
 
@@ -3224,6 +3281,14 @@ def check_comparable(baseline_path, baseline: dict, current: dict) -> None:
             want["eval_model"],
             config.get("model"),
             "Re-run with --model set to the baseline's eval model.",
+        ),
+        (
+            "harness (the program that answered as GAIA)",
+            want["harness"],
+            config.get("harness") or DEFAULT_RUN_HARNESS,
+            "Run the eval with the backend's flagship_agent set to the baseline's "
+            "harness (util/run_eval_lane.py --harness), or compare against that "
+            "harness's own baseline.",
         ),
     )
     problems = []
@@ -4089,6 +4154,17 @@ class AgentEvalRunner:
             for s in previous
         ]
 
+        started_on = config.get("harness") or DEFAULT_RUN_HARNESS
+        now_on = backend_harness(self.backend_url)
+        if now_on != started_on:
+            print(
+                f"[ERROR] Cannot resume {run_dir}: it started on the {started_on} "
+                f"harness and the backend now runs {now_on}, so the scorecard would "
+                "mix two programs. Set flagship_agent back, or start a new run.",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+
         self._commit = _current_commit()
         earlier = sorted({s.get("commit") for s in kept.values() if s.get("commit")})
         if earlier and earlier != [self._commit]:
@@ -4196,6 +4272,8 @@ class AgentEvalRunner:
             "model": self.model,
             "budget_per_scenario_usd": float(self.budget),
             "agent_type": self.agent_type,
+            # Which program answered; --compare refuses a baseline from another.
+            "harness": backend_harness(self.backend_url),
             # The local model under test, as pinned; _finish replaces it with
             # what the sessions ran when nothing was pinned.
             "agent_model": self.agent_model,

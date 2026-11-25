@@ -260,7 +260,7 @@
     padding: 0 6px;
     border-radius: var(--radius-sm);
     background: var(--bg-tertiary);
-    color: var(--text-muted);
+    color: var(--text-secondary);
     font-size: 11px;
     line-height: 18px;
     white-space: nowrap;

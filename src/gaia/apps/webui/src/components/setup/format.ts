@@ -7,10 +7,20 @@ import { getLocale, isolate, type Say } from '../../i18n/registry';
 
 const GB = 1e9;
 
-/** "23.3 GB", or "300 MB" under 1 GB. */
+/** "1.8 TB" once the GB figure shown would reach 1000; null below that. */
+function asTb(gb: number, shownGb: number): string | null {
+    return shownGb >= 1000 ? `${(gb / 1000).toFixed(1)} TB` : null;
+}
+
+/** "23.3 GB", "300 MB" under 1 GB, "1.8 TB" from 1000 GB. */
 export function formatSize(gb: number): string {
     if (gb > 0 && gb < 1) return `${Math.max(1, Math.round(gb * 1000))} MB`;
-    return `${gb.toFixed(1)} GB`;
+    return asTb(gb, Number(gb.toFixed(1))) ?? `${gb.toFixed(1)} GB`;
+}
+
+/** "251 GB", or "1.8 TB" from 1000 GB. */
+export function formatWholeGb(gb: number): string {
+    return asTb(gb, Math.round(gb)) ?? `${Math.round(gb)} GB`;
 }
 
 /** Lemonade's "GB" of installed memory are binary (GiB); setup shows decimal GB throughout. */
@@ -55,24 +65,34 @@ export function ltrIn(locale: string, text: string): string {
     return getLocale(locale).meta.dir === 'rtl' ? isolate(text, 'ltr') : text;
 }
 
-/** "about 40 sec", "about 13 min", "over 2 hours"; `t` is a translator or a compose `say`. */
+const HOUR_S = 3600;
+const DAY_S = 24 * HOUR_S;
+
+/** "about 40 sec", "about 13 min", "about 16 hours", "more than a day"; `t` is a translator or a compose `say`. */
 export function formatEta(seconds: number, t: Say): string {
     if (seconds < 90) return t('setup.eta.sec', { n: String(Math.max(1, Math.round(seconds))) });
-    if (seconds <= 2 * 3600) return t('setup.eta.min', { n: String(Math.round(seconds / 60)) });
-    return t('setup.eta.long');
+    if (seconds <= 2 * HOUR_S) return t('setup.eta.min', { n: String(Math.round(seconds / 60)) });
+    if (seconds <= DAY_S) return t('setup.eta.hours', { n: String(Math.round(seconds / HOUR_S)) });
+    return t('setup.eta.day');
 }
 
 /** Spoken ETA for `aria-valuetext`, never abbreviated. */
 export function spokenEta(seconds: number, t: Say): string {
     if (seconds < 90) return t('setup.eta.secSpoken', { n: String(Math.max(1, Math.round(seconds))) });
-    if (seconds <= 2 * 3600) return t('setup.eta.minSpoken', { n: String(Math.round(seconds / 60)) });
-    return t('setup.eta.long');
+    if (seconds <= 2 * HOUR_S) return t('setup.eta.minSpoken', { n: String(Math.round(seconds / 60)) });
+    if (seconds > DAY_S) return t('setup.eta.daySpoken');
+    // Hours run 2 to 24, so the noun takes one of three forms in languages that count that way.
+    const n = Math.round(seconds / HOUR_S);
+    const form = n === 2 ? 'two' : n <= 10 ? 'few' : 'many';
+    return t(`setup.eta.hoursSpoken.${form}`, { n: String(n) });
 }
 
 /** Seconds of data before a speed or ETA is shown. */
-export const ESTIMATE_AFTER_S = 10;
-/** The window the speed is averaged over. */
+export const ESTIMATE_AFTER_S = 20;
+/** The window the shown speed is averaged over. */
 const SPEED_TAU_S = 5;
+/** The window the rate behind the ETA is averaged over. */
+const ETA_WINDOW_S = 45;
 
 export interface Estimate {
     /** Smoothed bytes per second; null until there are ESTIMATE_AFTER_S of data. */
@@ -83,12 +103,18 @@ export interface Estimate {
     stalledFor: number;
 }
 
+interface Sample {
+    at: number;
+    bytes: number;
+}
+
 /**
- * Speed as a 5 s exponential moving average of the byte count, and an ETA that
- * eases toward the estimate in both directions, so it never jumps.
+ * Speed as a 5 s exponential moving average of the byte count. The ETA comes from
+ * the average rate over the last 45 s, so one slow or fast poll does not swing it,
+ * and eases toward that estimate in both directions, so it never jumps.
  */
 export class DownloadMeter {
-    private start: number | null = null;
+    private samples: Sample[] = [];
     private lastAt = 0;
     private lastBytes = 0;
     private movedAt = 0;
@@ -96,13 +122,17 @@ export class DownloadMeter {
     private shownEta: number | null = null;
     private shownAt = 0;
 
+    private restart(bytesDone: number, now: number): void {
+        this.samples = [{ at: now, bytes: bytesDone }];
+        this.lastAt = now;
+        this.lastBytes = bytesDone;
+        this.movedAt = now;
+    }
+
     /** Feed the latest byte count at `now` (ms); returns what to show. */
     update(bytesDone: number, bytesTotal: number, now: number): Estimate {
-        if (this.start === null || bytesDone < this.lastBytes) {
-            this.start = now;
-            this.lastAt = now;
-            this.lastBytes = bytesDone;
-            this.movedAt = now;
+        if (this.samples.length === 0 || bytesDone < this.lastBytes) {
+            this.restart(bytesDone, now);
             this.speed = 0;
             this.shownEta = null;
             return { speed: null, eta: null, stalledFor: 0 };
@@ -110,9 +140,7 @@ export class DownloadMeter {
         if (this.lastBytes === 0 && bytesDone > 0) {
             // A resume's first poll can read 0 before the bytes already on disk
             // show up: measure from the first real figure, never the jump to it.
-            this.lastAt = now;
-            this.lastBytes = bytesDone;
-            this.movedAt = now;
+            this.restart(bytesDone, now);
             return { speed: null, eta: null, stalledFor: 0 };
         }
         const dt = (now - this.lastAt) / 1000;
@@ -123,14 +151,19 @@ export class DownloadMeter {
             if (bytesDone > this.lastBytes) this.movedAt = now;
             this.lastAt = now;
             this.lastBytes = bytesDone;
+            this.samples.push({ at: now, bytes: bytesDone });
+            while (this.samples.length > 2 && this.samples[1].at <= now - ETA_WINDOW_S * 1000) this.samples.shift();
         }
         const stalledFor = (now - this.movedAt) / 1000;
-        if ((now - this.start) / 1000 < ESTIMATE_AFTER_S) return { speed: null, eta: null, stalledFor };
-        if (this.speed <= 0) {
+        const first = this.samples[0];
+        const span = (now - first.at) / 1000;
+        if (span < ESTIMATE_AFTER_S) return { speed: null, eta: null, stalledFor };
+        const rate = (bytesDone - first.bytes) / span;
+        if (this.speed <= 0 || rate <= 0) {
             this.shownEta = null;
-            return { speed: 0, eta: null, stalledFor };
+            return { speed: Math.max(0, this.speed), eta: null, stalledFor };
         }
-        const raw = Math.max(0, bytesTotal - bytesDone) / this.speed;
+        const raw = Math.max(0, bytesTotal - bytesDone) / rate;
         if (this.shownEta === null) {
             this.shownEta = raw;
         } else {

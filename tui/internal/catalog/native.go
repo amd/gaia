@@ -46,20 +46,28 @@ func isPythonAgentBinary(path string) bool {
 	return strings.TrimSuffix(name, ".exe") == PythonAgentBinary
 }
 
-// gaiaHomeBin is the bin folder of GAIA's home, where the Agent UI downloads
-// gaiacpp. It mirrors gaia.home.gaia_home: GAIA_HOME, then GAIA_CONFIG_DIR,
-// then ~/.gaia. Empty when no home directory can be found.
-func gaiaHomeBin() string {
+// gaiaHome is GAIA's home folder. It mirrors gaia.home.gaia_home: GAIA_HOME,
+// then GAIA_CONFIG_DIR, then ~/.gaia. Empty when no home directory can be found.
+func gaiaHome() string {
 	for _, name := range []string{"GAIA_HOME", "GAIA_CONFIG_DIR"} {
 		if dir := strings.TrimSpace(os.Getenv(name)); dir != "" {
-			return filepath.Join(expandHome(os.ExpandEnv(dir)), "bin")
+			return expandHome(os.ExpandEnv(dir))
 		}
 	}
 	home, err := os.UserHomeDir()
 	if err != nil || home == "" {
 		return ""
 	}
-	return filepath.Join(home, ".gaia", "bin")
+	return filepath.Join(home, ".gaia")
+}
+
+// gaiaHomeBin is the bin folder of GAIA's home, where gaiacpp is downloaded.
+func gaiaHomeBin() string {
+	home := gaiaHome()
+	if home == "" {
+		return ""
+	}
+	return filepath.Join(home, "bin")
 }
 
 // expandHome replaces a leading ~ with the user's home directory.
@@ -277,9 +285,18 @@ func (e *MissingProgramError) Error() string {
 	}
 	return fmt.Sprintf(
 		"%v: %s was asked for, but it is not on this machine.\nLooked in:  %s\n"+
-			"Fix:        install it in one of those places, or drop the request to run the agent that is installed\n"+
+			"Fix:        %s\n"+
 			"look:       %s",
-		ErrNoExecutable, e.Binary, strings.Join(e.Lookup.Looked, ", "), AgentChoiceDocsURL)
+		ErrNoExecutable, e.Binary, strings.Join(e.Lookup.Looked, ", "), e.fix(), AgentChoiceDocsURL)
+}
+
+// fix is what to do about it. GAIA downloads gaiacpp itself; nothing else is.
+func (e *MissingProgramError) fix() string {
+	if e.Binary == NativeAgentBinary {
+		return "start GAIA without that request and choose " + NativeAgentBinary +
+			" with /agent, which downloads it; or put a build of your own in one of those places"
+	}
+	return "install it in one of those places, or drop the request to run the agent that is installed"
 }
 
 func missingChoiceError(binary string, l Lookup) error {

@@ -181,7 +181,7 @@ def _reset_hybrid_route(agent: Any) -> None:
 
 
 def _forget_conversation_grants(agent: Any, state: Optional["PermissionState"]) -> None:
-    """A cleared conversation forgets its "always" answers, as a new session would.
+    """A cleared conversation forgets its "always" and "no" answers, as a new one would.
 
     Runs before the history is cleared, so a failure here never leaves a
     "cleared" chat still holding its grants.
@@ -191,6 +191,9 @@ def _forget_conversation_grants(agent: Any, state: Optional["PermissionState"]) 
     reset = getattr(getattr(agent, "console", None), "reset_tool_approvals", None)
     if callable(reset):
         reset()
+    forget_declined = getattr(agent, "forget_declined_calls", None)
+    if callable(forget_declined):
+        forget_declined()
 
 
 def _forget_web_calls(agent: Any) -> None:

@@ -121,6 +121,7 @@ Unlike unit tests that check individual functions, Agent Eval tests the **full s
 
     ```bash
     curl -X PUT http://localhost:4200/api/memory/settings \
+      -H "Authorization: Bearer $(cat ~/.gaia/agent-ui-token)" \
       -H 'X-Gaia-UI: 1' -H 'Content-Type: application/json' \
       -d '{"memory_enabled": true}'
     ```
