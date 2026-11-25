@@ -12,9 +12,6 @@ from dataclasses import dataclass
 from typing import Dict, Iterable, List, Optional, Sequence
 
 _NUMBER = re.compile(r"\(?-?\$?\s?(?:\d{1,3}(?:,\d{3})+|\d+)?(?:\.\d+)?\)?\s?%?")
-_GOLD_NUMERIC = re.compile(
-    r"^\(?-?\$?\s?(?:\d{1,3}(?:,\d{3})+|\d+)?(?:\.\d+)?\)?\s?%?$"
-)
 #: Relative tolerance for a numeric answer; covers rounding to the reported precision.
 NUMERIC_REL_TOL = 0.01
 #: A reply may state a figure in another unit scale (1,577 million = 1.577 billion).
@@ -58,10 +55,6 @@ def numbers_in(text: str) -> List[Number]:
         if number is not None:
             found.append(number)
     return found
-
-
-def is_numeric_answer(gold: str) -> bool:
-    return bool(re.search(r"\d", gold)) and bool(_GOLD_NUMERIC.match(gold.strip()))
 
 
 def gold_number(gold: str) -> Number:

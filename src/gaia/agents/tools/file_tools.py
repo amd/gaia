@@ -232,6 +232,32 @@ def _count(n: int, noun: str) -> str:
     return f"{n} {noun}" if n == 1 else f"{n} {noun}s"
 
 
+def _relative_time(dt: datetime) -> str:
+    """Convert a datetime to a human-readable relative time string."""
+    now = datetime.now()
+    diff = now - dt
+    seconds = diff.total_seconds()
+
+    if seconds < 60:
+        return "just now"
+    elif seconds < 3600:
+        minutes = int(seconds / 60)
+        return f"{minutes} minute{'s' if minutes != 1 else ''} ago"
+    elif seconds < 86400:
+        hours = int(seconds / 3600)
+        return f"{hours} hour{'s' if hours != 1 else ''} ago"
+    elif seconds < 172800:
+        return "yesterday"
+    elif seconds < 604800:
+        days = int(seconds / 86400)
+        return f"{days} days ago"
+    elif seconds < 2592000:
+        weeks = int(seconds / 604800)
+        return f"{weeks} week{'s' if weeks != 1 else ''} ago"
+    else:
+        return dt.strftime("%Y-%m-%d")
+
+
 def _header_row_index(rows: List[tuple]) -> int:
     """The row that names a sheet's columns, below any title or note rows.
 
@@ -1780,31 +1806,6 @@ class FileSearchToolsMixin:
                 }
 
         # --- Helper functions for new file browsing/analysis tools ---
-
-        def _relative_time(dt: datetime) -> str:
-            """Convert a datetime to a human-readable relative time string."""
-            now = datetime.now()
-            diff = now - dt
-            seconds = diff.total_seconds()
-
-            if seconds < 60:
-                return "just now"
-            elif seconds < 3600:
-                minutes = int(seconds / 60)
-                return f"{minutes} minute{'s' if minutes != 1 else ''} ago"
-            elif seconds < 86400:
-                hours = int(seconds / 3600)
-                return f"{hours} hour{'s' if hours != 1 else ''} ago"
-            elif seconds < 172800:
-                return "yesterday"
-            elif seconds < 604800:
-                days = int(seconds / 86400)
-                return f"{days} days ago"
-            elif seconds < 2592000:
-                weeks = int(seconds / 604800)
-                return f"{weeks} week{'s' if weeks != 1 else ''} ago"
-            else:
-                return dt.strftime("%Y-%m-%d")
 
         def _read_tabular_file(file_path: str, sheet: Optional[str] = None) -> tuple:
             """
