@@ -123,9 +123,35 @@ func TestResearchModeLeavesSkillCommandsAlone(t *testing.T) {
 	if got := m.withResearch("/docx\nthe memo"); got != "/docx\nthe memo" {
 		t.Fatalf("researched a skill command with its request on the next line: %q", got)
 	}
-	for _, line := range []string{"/docs draft a memo", "/docx.txt notes", "/tmp/notes.txt", "plain question", "/DOCX memo", "/docx-pro memo", "/docx/notes", "see /docx memo"} {
+	for _, line := range []string{"/docs draft a memo", "/docx.txt notes", "/tmp/notes.txt", "plain question", "/docx-pro memo", "/docx/notes", "see /docx memo"} {
 		if got := m.withResearch(line); got != "/research "+line {
 			t.Fatalf("%q was sent as %q, want the research prefix", line, got)
+		}
+	}
+}
+
+// The agent reads skill names in lowercase only, so /Docx is sent as /docx,
+// with research mode on or off.
+func TestSkillCommandInAnyCaseRunsTheSkill(t *testing.T) {
+	m := flagshipModel(t)
+	m.skillCommands = []event.SkillCommand{{Name: "docx", Description: "Word documents."}}
+	for _, research := range []bool{false, true} {
+		m.researchMode = research
+		for line, want := range map[string]string{
+			"/Docx draft a memo":   "/docx draft a memo",
+			"/DOCX":                "/docx",
+			"/DocX\nThe Memo":      "/docx\nThe Memo",
+			"  /Docx keep MY case": "  /docx keep MY case",
+		} {
+			if got := m.withResearch(line); got != want {
+				t.Errorf("research=%v: %q was sent as %q, want %q", research, line, got, want)
+			}
+		}
+	}
+	m.researchMode = false
+	for _, line := range []string{"/Docs memo", "/Tmp/notes.txt", "Plain question"} {
+		if got := m.withResearch(line); got != line {
+			t.Errorf("%q was rewritten to %q", line, got)
 		}
 	}
 }
