@@ -84,6 +84,12 @@ var allowed = []exemption{
 		decl: "lightSyntax",
 		why:  "the light half of the same table, held to the same floor on its own slab",
 	},
+	{
+		file: "internal/ui/components/syntaxline.go",
+		decl: "SyntaxLine",
+		why: "paints a compact diff with the darkSyntax/lightSyntax values above, which " +
+			"markdown_syntax_test.go holds to 4.5:1 on the diff tints as well as on the slab",
+	},
 }
 
 // modeReachAllowed excuses reading a role's .Light/.Dark side directly. A role

@@ -13,7 +13,7 @@
 const fs = require("fs");
 const os = require("os");
 const path = require("path");
-const { notificationIconPath } = require("./app-icon.cjs");
+const { launcherIconPath } = require("./app-icon.cjs");
 
 // The window's app_id / WM_CLASS comes from the same package.json field.
 const DESKTOP_FILE = require("../package.json").desktopName;
@@ -140,7 +140,7 @@ function installAppImageLauncher({
   platform = process.platform,
   env = process.env,
   home = os.homedir(),
-  iconSource = notificationIconPath(),
+  iconSource = launcherIconPath(),
 } = {}) {
   const appImage = env.APPIMAGE;
   if (platform !== "linux" || !appImage) return { status: "not-appimage" };

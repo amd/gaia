@@ -17,8 +17,7 @@ import { GpuMemoryPanel } from '../setup/GpuMemoryPanel';
 import { driveName, ModelChecklist, SelectionSummary, tooBigText } from '../setup/ModelChecklist';
 import {
     catalogOf, chooseChat, initialSelection, isVision, pendingDownloads, shortfall, skipChanges, toggle, tooBig,
-    type Selection,
-} from '../setup/selection';
+    type Selection, onlyTight } from '../setup/selection';
 import { ErrorNotice, isServerDown } from './ErrorNotice';
 import { SettingsDisclosure } from './SettingsDisclosure';
 import '../setup/setup.css';
@@ -137,7 +136,9 @@ export function LocalModelsSections({ downloadsSlot }: { downloadsSlot?: HTMLEle
         setBusy(true);
         try {
             let latest = plan;
+            let defaultChanged = false;
             if (selection.defaultChat && selection.defaultChat !== latest.chat_model.id) {
+                defaultChanged = true;
                 try {
                     latest = await api.chooseSetupChatModel(selection.defaultChat, acknowledgeNoFit || noFitAcked);
                 } catch (err) {
@@ -155,10 +156,24 @@ export function LocalModelsSections({ downloadsSlot }: { downloadsSlot?: HTMLEle
             const ids = pendingDownloads(catalogOf(latest), selection).map((e) => e.id).filter((id) => progress[id]?.state !== 'downloading');
             setPlan(latest);
             setSelection({ ...selection, defaultChat: latest.chat_model.id });
-            // "In use" and the sidebar read the model store; refresh it now, not on reload.
-            void useModelStore.getState().refresh();
+            // The last model picked outranks the default, so a new default that is
+            // on this PC is picked too; otherwise "In use" would never change.
+            let notSwitched: string | null = null;
+            if (defaultChanged && latest.chat_model.downloaded) {
+                try {
+                    await useModelStore.getState().select(latest.chat_model.id);
+                } catch (err) {
+                    // The default is saved; say the switch didn't happen and carry on.
+                    notSwitched = errorText(err);
+                    void useModelStore.getState().refresh();
+                }
+            } else {
+                void useModelStore.getState().refresh();
+            }
             if (ids.length) await enqueue(ids, { acknowledgeLowDisk: true });
-            setNotice({ ok: true, text: t('settings.models.applied') });
+            setNotice(notSwitched === null
+                ? { ok: true, text: t('settings.models.applied') }
+                : { ok: false, text: t('settings.models.appliedNotSwitched', { reason: notSwitched }) });
         } catch (err) {
             setNotice({ ok: false, text: errorText(err) });
         } finally {
@@ -290,8 +305,8 @@ export function LocalModelsSections({ downloadsSlot }: { downloadsSlot?: HTMLEle
             )}
             {sheet?.kind === 'no_fit' && (
                 <ConfirmSheet
-                    title={sheet.models.length === 1 ? t('setup.confirm.noFitOne', { name: sheet.models[0].name }) : t('setup.confirm.noFitMany')}
-                    confirmLabel={t('setup.confirm.downloadAnyway')}
+                    title={onlyTight(sheet.models) ? t('setup.confirm.tightOne', { name: sheet.models[0].name }) : sheet.models.length === 1 ? t('setup.confirm.noFitOne', { name: sheet.models[0].name }) : t('setup.confirm.noFitMany')}
+                    confirmLabel={onlyTight(sheet.models) ? t('setup.confirm.useAnyway') : t('setup.confirm.downloadAnyway')}
                     cancelLabel={t('setup.confirm.pickSmaller')}
                     onConfirm={() => { setSheet(null); setNoFitAcked(true); void apply(true, false); }}
                     onCancel={() => setSheet(null)}

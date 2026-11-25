@@ -8,7 +8,7 @@ import { ModelSettings } from '../ModelSettings';
 import { useModelStore } from '../../../stores/modelStore';
 import { useChatStore } from '../../../stores/chatStore';
 import * as api from '../../../services/api';
-import { mockSetupApis } from '../../../test/setupApiMocks';
+import { mockSetupApis, SETTINGS } from '../../../test/setupApiMocks';
 import type { ActiveModel, ProviderInfo, ProviderModel } from '../../../types';
 
 vi.mock('../../../services/api');
@@ -52,6 +52,19 @@ beforeEach(() => {
     mockedApi.getContextChoice.mockResolvedValue({
         model: 'Gemma-4-E4B-it-GGUF', display_name: 'Gemma 4 E4B', chosen: null, automatic: 65536,
         min: 65536, max_fit: 65536, options: [65536], loaded_ctx: null, memory_source: 'AMD iGPU', note: null,
+    });
+});
+
+describe('ModelSettings agent', () => {
+    it('picks the agent at the top of the page; the comparison says when a switch applies', async () => {
+        mockedApi.updateSettings.mockResolvedValue({ ...SETTINGS, flagship_agent: 'gaiacpp' });
+        render(<ModelSettings />);
+        const card = await screen.findByRole('region', { name: 'Agent' });
+        fireEvent.click(await within(card).findByRole('button', { name: 'Compare the two' }));
+        expect(within(card).getByText('A switch applies from the next message in every chat.')).toBeVisible();
+        fireEvent.click(await within(card).findByRole('radio', { name: /gaiacpp/ }));
+        expect(mockedApi.updateSettings).toHaveBeenCalledWith({ flagship_agent: 'gaiacpp' });
+        await waitFor(() => expect(within(card).getByRole('radio', { name: /gaiacpp/ })).toHaveAttribute('aria-checked', 'true'));
     });
 });
 
@@ -281,7 +294,9 @@ describe('ModelSettings provider keys', () => {
         const card = await openFireworks();
         fireEvent.click(within(card).getByRole('button', { name: 'Remove key' }));
         expect(mockedApi.forgetProviderKey).not.toHaveBeenCalled();
-        fireEvent.click(within(card).getByRole('button', { name: 'Remove' }));
+        const ask = screen.getByRole('alertdialog', { name: 'Remove this key?' });
+        expect(within(ask).getByRole('button', { name: 'Keep' })).toHaveFocus();
+        fireEvent.click(within(ask).getByRole('button', { name: 'Remove key' }));
         await waitFor(() => expect(mockedApi.forgetProviderKey).toHaveBeenCalledWith('fireworks'));
         expect(await within(card).findByRole('status')).toHaveTextContent('Key cleared');
     });
@@ -474,7 +489,7 @@ describe('ModelSettings: an unreachable AMD gateway (#5604)', () => {
         render(<ModelSettings />);
         const tab = await screen.findByRole('radio', { name: /AMD LLM Gateway/ });
         expect(tab).toBeDisabled();
-        expect(tab).toHaveAttribute('title', NO_NET);
+        expect(tab).toHaveAttribute('title', "Unavailable: needs AMD's network or VPN.");
         expect(screen.getByRole('radio', { name: /Fireworks AI/ })).toBeEnabled();
     });
 

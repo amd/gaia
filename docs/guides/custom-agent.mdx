@@ -147,6 +147,7 @@ The HTTP API accepts any registered agent. Start the server the way the [Agent U
 
 ```bash
 curl -s http://127.0.0.1:4200/api/sessions \
+  -H "Authorization: Bearer $(cat ~/.gaia/agent-ui-token)" -H 'X-Gaia-UI: 1' \
   -H 'Content-Type: application/json' \
   -d '{"agent_type": "my-python-agent", "title": "Greet Ada"}'
 ```
@@ -155,11 +156,12 @@ The response carries the new session's `id`. Send a message to it to run your ag
 
 ```bash
 curl -s http://127.0.0.1:4200/api/chat/send \
+  -H "Authorization: Bearer $(cat ~/.gaia/agent-ui-token)" -H 'X-Gaia-UI: 1' \
   -H 'Content-Type: application/json' \
   -d '{"session_id": "<id>", "message": "Greet Ada", "stream": false}'
 ```
 
-Creating a session that names an agent that isn't registered is refused with a **422** that lists the ids which do resolve.
+Every request needs the Agent UI's [API token](/sdk/sdks/agent-ui#api-token), and writes also need `X-Gaia-UI: 1`. Creating a session that names an agent that isn't registered is refused with a **422** that lists the ids which do resolve.
 
 <Warning>
   Leave out the `X-Gaia-Client: agent-ui` header. Requests carrying it are held to the GAIA agent and get a **422** for any other `agent_type` — the rule the [Agent UI SDK reference](/sdk/sdks/agent-ui#flagship-only) describes.

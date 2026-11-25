@@ -73,7 +73,6 @@ jobs:
         uses: ./.github/actions/setup-venv
         with:
           python-version: '3.12'
-          # Note: 'blender' excluded as bpy requires Blender runtime
           install-package: '.[dev,talk,rag,mcp,api]'
 
       - name: Install Lemonade Server (PPA)
@@ -378,8 +377,10 @@ jobs:
           # verify Lemonade version" step; LEMONADE_INSTALLED_VERSION carries
           # that agreed value forward.
           HEALTH_VERSION=$(curl -s http://localhost:13305/api/v1/health | jq -r '.version // "unknown"')
-          echo "server /api/v1/health version: $HEALTH_VERSION (installed package: $LEMONADE_INSTALLED_VERSION)"
-          if [ "$HEALTH_VERSION" != "$LEMONADE_INSTALLED_VERSION" ]; then
+          # PPA builds report "<release>~<build>.<sha>"; compare the release only.
+          HEALTH_BASE_VERSION="${HEALTH_VERSION%%[~+]*}"
+          echo "server /api/v1/health version: $HEALTH_VERSION (release $HEALTH_BASE_VERSION; installed package: $LEMONADE_INSTALLED_VERSION)"
+          if [ "$HEALTH_BASE_VERSION" != "$LEMONADE_INSTALLED_VERSION" ]; then
             echo "::error::Running server reports version $HEALTH_VERSION but the installed package is $LEMONADE_INSTALLED_VERSION — the three version sources disagree. The server may be a stale process left running from before install/upgrade; restart lemond and retry."
             dump_lemonade_log
             exit 1

@@ -34,6 +34,8 @@ from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
 from gaia.agents.install_hints import agent_import_error_message
+from gaia.llm.hybrid import is_hybrid_model
+from gaia.ui import spending
 from gaia.ui.agent_threads import run_in_own_thread, wait_until_off_the_model
 from gaia.ui.run_manager import run_manager
 from gaia.ui.session_environment import apply_environment
@@ -54,6 +56,16 @@ _TICK_TIMEOUT = int(os.environ.get("GAIA_AGENT_TICK_TIMEOUT", "300"))
 
 # How long a user-message followup waits for the triggering turn to release the model
 _FOLLOWUP_GRACE_SECONDS = 10.0
+
+# Runs that end with a goal neither done nor failed before it is marked failed,
+# and the wait after the first such run (doubled after each one after it).
+GOAL_MAX_TRIES = 3
+GOAL_FIRST_RETRY_SECONDS = 300
+# Runs in a row that end asking to check back later before the goal is marked
+# stalled. They aren't tries, so without this only the hourly cap stopped them.
+GOAL_MAX_CHECK_BACKS = 10
+# How much of a run's answer a goal keeps as its reason.
+_GOAL_NOTE_CHARS = 300
 
 # The background chat goal ticks run in, listed with the other background runs.
 GOALS_SESSION_TITLE = "Background goals"
@@ -129,6 +141,8 @@ class AgentLoop:
         self._active_goal_ticks_lock = threading.Lock()
         # Why the last tick could not read the goal store; None once it opens.
         self.goal_store_error: Optional[str] = None
+        # The goal store file is damaged, so only a new goal list fixes it.
+        self.goal_store_damaged = False
 
     # ── Lifecycle ────────────────────────────────────────────────────────────
 
@@ -405,25 +419,82 @@ class AgentLoop:
                 note = f"{goal.progress_notes}\n{note}"
             store.update_goal_status(goal.id, "failed", progress_notes=note)
 
+    @staticmethod
+    def _note_goals(goals: List[Any], note: str) -> None:
+        """Show *note* on *goals* without changing their status."""
+        from gaia.agents.base.goal_store import GoalStore
+
+        store = GoalStore()
+        for goal in goals:
+            if goal.progress_notes != note:
+                store.update_goal_status(goal.id, goal.status, progress_notes=note)
+
+    @staticmethod
+    def _settle_goal(goal: Any, directive: Dict[str, Any], result: Any) -> None:
+        """End *goal* as the run reported it, or count an unfinished run.
+
+        An unfinished goal waits longer after each run and fails after
+        ``GOAL_MAX_TRIES``, so one that can't be done stops being paid for.
+        """
+        from gaia.agents.base.goal_store import GoalStore
+
+        answer = result.get("result") if isinstance(result, dict) else None
+        note = (
+            str(directive.get("reason") or "").strip()
+            or str(answer or "").strip()
+            or "The run ended without saying why."
+        )[:_GOAL_NOTE_CHARS]
+        outcome = directive.get("goal_outcome")
+        store = GoalStore()
+        if outcome == "done":
+            store.end_goal(goal.id, "completed", note)
+        elif outcome == "failed":
+            store.end_goal(goal.id, "failed", note)
+        elif directive.get("directive") == "scheduled":
+            # Checking back later is progress, not a failed try, up to a point.
+            store.defer_goal(
+                goal.id,
+                int(directive.get("wake_in_seconds") or 0),
+                note,
+                max_check_backs=GOAL_MAX_CHECK_BACKS,
+            )
+        else:
+            store.record_unfinished_run(
+                goal.id,
+                note,
+                max_tries=GOAL_MAX_TRIES,
+                first_wait_s=GOAL_FIRST_RETRY_SECONDS,
+            )
+
     def _get_actionable_goals(self) -> List[Any]:
         """Return approved, queued goals from GoalStore.
 
         Raises:
             RuntimeError: The goal store could not be read; the tick reports it.
         """
-        from gaia.agents.base.goal_store import GoalStore
+        from gaia.agents.base.goal_store import GoalStore, is_damaged_store_error
         from gaia.config import gaia_home
 
         try:
             goals = GoalStore().get_actionable_goals()[:5]
         except (sqlite3.Error, OSError) as exc:
-            self.goal_store_error = (
-                f"Could not read approved goals from {gaia_home() / 'goals.db'}: "
-                f"{exc}. Approved goals will not run until it opens; close other "
-                "GAIA windows using it and restart GAIA."
-            )
+            path = gaia_home() / "goals.db"
+            self.goal_store_damaged = is_damaged_store_error(exc)
+            if self.goal_store_damaged:
+                self.goal_store_error = (
+                    f"GAIA's goal list at {path} is damaged ({exc}), so approved "
+                    "goals can't run. Start a new goal list on Memory > Goals; "
+                    "the damaged file is kept beside it."
+                )
+            else:
+                self.goal_store_error = (
+                    f"Could not read approved goals from {path}: {exc}. Approved "
+                    "goals will not run until it opens; close other GAIA windows "
+                    "using it and restart GAIA."
+                )
             raise RuntimeError(self.goal_store_error) from exc
         self.goal_store_error = None
+        self.goal_store_damaged = False
         return goals
 
     # ── Tick execution ────────────────────────────────────────────────────────
@@ -452,12 +523,17 @@ class AgentLoop:
         tick_prompt = (
             f"[Autonomous tick — {len(goals)} pending goal(s)]\n\n"
             f"Approved goals to work on:\n{goal_lines}\n\n"
-            "Work on the highest-priority goal. Use your available tools to make "
-            "progress. When you are done or blocked, call set_loop_state() to "
-            "signal your status so the loop knows what to do next."
+            "Work on the first goal. Use your available tools to make progress. "
+            "When you stop, call set_loop_state() to signal your status so the "
+            "loop knows what to do next: goal_outcome='done' once that goal is "
+            "achieved, or goal_outcome='failed' with the reason when it cannot "
+            "be done. To check back on work still under way, use state "
+            f"'scheduled'; after {GOAL_MAX_CHECK_BACKS} check-backs in a row the "
+            "goal is marked stalled. Any other stop counts as one of "
+            f"{GOAL_MAX_TRIES} tries, after which the goal fails."
         )
 
-        result_holder: Dict[str, Any] = {"error": None}
+        result_holder: Dict[str, Any] = {"error": None, "stats": {}}
         # Set on timeout so the agent loop stops at its next step boundary.
         cancel_event = threading.Event()
         stopped_for_foreground = threading.Event()
@@ -469,6 +545,7 @@ class AgentLoop:
         db = self._db
 
         def _run_agent() -> None:
+            fresh_agent = None  # built for this tick alone, so closed after it
             try:
                 import gaia.ui._chat_helpers as _helpers
 
@@ -486,14 +563,23 @@ class AgentLoop:
                     # The agent runs as its own binary, as the apps ship it: the
                     # tick goes to it through the daemon, as scheduled prompts do.
                     # Its set_loop_state call reaches sse_handler through the relay.
-                    answer = _helpers.relay_one_prompt(
-                        sse_handler,
-                        tick_prompt,
-                        agent_type="gaia",
-                        model_id=db.get_setting("custom_model") or session.get("model"),
-                        memory=_helpers._memory_mode(session, db),
-                        max_steps=None,
-                    )
+                    model_id = db.get_setting("custom_model") or session.get("model")
+                    if not _may_spend(model_id):
+                        return
+                    try:
+                        answer = _helpers.relay_one_prompt(
+                            sse_handler,
+                            tick_prompt,
+                            agent_type="gaia",
+                            model_id=model_id,
+                            memory=_helpers._memory_mode(session, db),
+                            max_steps=None,
+                            stats=result_holder["stats"],
+                        )
+                    finally:
+                        result_holder["route"] = getattr(
+                            sse_handler, "relayed_route", None
+                        )
                     result_holder["result"] = {"result": answer or ""}
                     return
                 model_id = session.get("model")
@@ -505,9 +591,14 @@ class AgentLoop:
                 model_id, device_ctx = _helpers._apply_device_model(
                     session, agent_type, model_id, custom_model, registry
                 )
+                if not _may_spend(model_id):
+                    return
 
                 cached_agent = _helpers._get_cached_agent(
-                    session_id, model_id, agent_type
+                    session_id,
+                    model_id,
+                    agent_type,
+                    session.get("document_ids", []),
                 )
                 if cached_agent is not None:
                     agent = cached_agent
@@ -519,7 +610,7 @@ class AgentLoop:
                 else:
                     # Run the heavier sync work inline (we're in a thread).
                     try:
-                        from gaia_agent.agent import GaiaAgent, GaiaAgentConfig
+                        from gaiapy.agent import GaiaAgent, GaiaAgentConfig
                     except ImportError as e:
                         raise RuntimeError(
                             agent_import_error_message(
@@ -533,7 +624,10 @@ class AgentLoop:
                     rag_paths, lib_paths = _helpers._resolve_rag_paths(
                         db, session.get("document_ids", [])
                     )
-                    allowed = _helpers._compute_allowed_paths(rag_paths + lib_paths)
+                    allowed = _helpers._with_attachments(
+                        _helpers._compute_allowed_paths(rag_paths + lib_paths),
+                        _helpers._chat_upload_paths(db, session_id, []),
+                    )
                     config = GaiaAgentConfig(
                         model_id=model_id,
                         streaming=False,
@@ -547,9 +641,12 @@ class AgentLoop:
                         surface="agent_ui",
                     )
                     with _helpers.writing_tool_registry():
-                        agent = GaiaAgent(config)
+                        agent = fresh_agent = GaiaAgent(config)
                     _helpers._register_agent_memory_ops(agent)
                     agent.console = sse_handler
+                    # The tick's input is GAIA's own goal prompt, not the user's words;
+                    # a queued extraction would also keep this throwaway agent alive.
+                    agent._auto_extract_enabled = False
 
                 _helpers._restore_model_history(agent, db, session_id, tick_prompt)
 
@@ -559,13 +656,68 @@ class AgentLoop:
 
                 # Also replaces a prior streaming turn's fired cancel event.
                 agent._cancel_event = cancel_event
-                result_holder["result"] = agent.process_query(tick_prompt)
+                result_holder["agent"] = agent
+                result = agent.process_query(tick_prompt)
+                result_holder["result"] = result
+                result_holder["route"] = _helpers._turn_route(result)
+                if isinstance(result, dict):
+                    result_holder["stats"].update(
+                        (k, result[k])
+                        for k in ("input_tokens", "output_tokens", "cached_tokens")
+                        if k in result
+                    )
 
             except Exception as exc:
                 logger.error("AgentLoop tick execution failed: %s", exc, exc_info=True)
                 result_holder["error"] = str(exc)
             finally:
-                sse_handler.signal_done()
+                try:
+                    # Here, not after the wait: a run that outlives its timeout
+                    # still cost.
+                    if result_holder.get("model") is not None:
+                        spending.record_turn(
+                            db,
+                            _billed_model(),
+                            result_holder["stats"],
+                            failed=result_holder["error"] is not None,
+                        )
+                finally:
+                    sse_handler.signal_done()
+                    # After done: a slow MCP server stopping must not delay the tick.
+                    if fresh_agent is not None:
+                        try:
+                            fresh_agent.close()
+                        except Exception as exc:  # noqa: BLE001 — logged, tick ended
+                            logger.warning(
+                                "AgentLoop: closing the tick's agent failed: %s", exc
+                            )
+
+        def _billed_model() -> Optional[str]:
+            """The model the tick ran on; a hybrid tick bills its route's model."""
+            from gaia.ui._chat_helpers import _ran_on
+
+            model = result_holder["model"]
+            ran_on = _ran_on(
+                model, result_holder.get("route"), result_holder.get("agent")
+            )
+            if ran_on != model or not is_hybrid_model(model):
+                return ran_on
+            logger.warning(
+                "AgentLoop: hybrid tick for session %s came back without its "
+                "route, so its spend names 'hybrid': it failed before routing, "
+                "or the GAIA agent predates contract 2.29 (update it).",
+                session_id[:8],
+            )
+            return ran_on
+
+        def _may_spend(model_id: Optional[str]) -> bool:
+            """False, with the reason kept, once the cloud spending limit is reached."""
+            refusal = spending.limit_refusal(db, model_id)
+            if refusal:
+                result_holder["limit"] = refusal
+                return False
+            result_holder["model"] = model_id
+            return True
 
         worker = run_in_own_thread(_run_agent, name=f"gaia-tick-{session_id[:8]}")
 
@@ -579,6 +731,7 @@ class AgentLoop:
         try:
             deadline = time.monotonic() + _TICK_TIMEOUT
             done = set()
+            timed_out = ""  # why the run ended, once it ran out of time
             # Poll so a cancel or foreground turn is seen mid-tool, not at the timeout.
             while not done and not stopped_for_foreground.is_set():
                 remaining = deadline - time.monotonic()
@@ -591,6 +744,10 @@ class AgentLoop:
                     logger.info("AgentLoop: tick stopped for a user request")
                 else:
                     reason = "tick timed out"
+                    timed_out = (
+                        f"The run timed out after {_TICK_TIMEOUT // 60} min "
+                        "without finishing."
+                    )
                     logger.warning("AgentLoop: tick timed out after %ds", _TICK_TIMEOUT)
                 cancel_event.set()
                 sse_handler.cancelled.set()
@@ -605,6 +762,8 @@ class AgentLoop:
                         session_id[:8],
                     )
                     self._lingering_ticks[session_id] = worker
+                    if not stopped_for_foreground.is_set():
+                        self._settle_goal(goals[0], {"reason": timed_out}, None)
                     return LoopDirective("idle", reason=reason)
         except asyncio.CancelledError:
             cancel_event.set()
@@ -629,15 +788,26 @@ class AgentLoop:
             # A cancel or foreground chat paused this shared tick: its error is
             # the stop itself, and sibling goals stay queued for the next tick.
             return LoopDirective("idle", reason="tick stopped for user")
+        if result_holder.get("limit"):
+            # Kept queued, not failed: raising the limit lets the goal run.
+            logger.warning("AgentLoop: goal not run: %s", result_holder["limit"])
+            self._note_goals(goals[:1], f"Not run: {result_holder['limit']}")
+            return LoopDirective("idle", reason="spending limit reached")
+        if timed_out:
+            # Stopped for running out of time, not failed: count it as a try.
+            self._settle_goal(goals[0], {"reason": timed_out}, None)
+            return LoopDirective("idle", reason="tick timed out")
         if result_holder["error"]:
             # The goals are still actionable, so continuing would rerun the
             # failure at once until the hourly budget is gone.
             self._fail_goals(goals[:3], result_holder["error"])
             return LoopDirective("idle", reason="tick failed")
 
+        d = sse_handler.loop_state_directive or {}
+        self._settle_goal(goals[0], d, result_holder.get("result"))
+
         # Read directive from SSE handler (set by set_loop_state tool)
-        if sse_handler.loop_state_directive:
-            d = sse_handler.loop_state_directive
+        if d:
             return LoopDirective(
                 directive=d.get("directive", "idle"),
                 wake_in_seconds=d.get("wake_in_seconds", 0),

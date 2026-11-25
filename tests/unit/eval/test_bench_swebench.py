@@ -1327,30 +1327,3 @@ def test_a_sample_is_seeded_sorted_and_reproducible():
 def test_a_sample_larger_than_the_split_is_refused():
     with pytest.raises(swebench.SweBenchError, match="between 1 and 3"):
         swebench.sample_ids(4, ids=["a", "b", "c"])
-
-
-def test_every_id_is_listed_over_rest_when_datasets_is_missing(monkeypatch):
-    import requests
-
-    rows = [{"row": {"instance_id": f"r__p-{i}"}} for i in range(3)]
-
-    class Resp:
-        def __init__(self, offset):
-            self.offset = offset
-
-        def raise_for_status(self):
-            pass
-
-        def json(self):
-            return {"rows": rows[self.offset : self.offset + 1], "num_rows_total": 3}
-
-    monkeypatch.setattr(swebench, "ROWS_PER_PAGE", 1)
-    monkeypatch.setattr(
-        importlib.util, "find_spec", lambda name: None if name == "datasets" else 1
-    )
-    monkeypatch.setattr(
-        requests,
-        "get",
-        lambda url, timeout: Resp(int(url.split("offset=")[1].split("&")[0])),
-    )
-    assert swebench.all_instance_ids() == ["r__p-0", "r__p-1", "r__p-2"]

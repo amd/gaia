@@ -27,6 +27,7 @@ from gaia.llm.lemonade_client import (
     _model_ids_match,
     check_lemonade_version,
     cloud_model_provider,
+    configured_lemonade_url,
     fit_ctx_to_free_memory,
     is_cloud_model_entry,
     is_llm_model_entry,
@@ -418,6 +419,17 @@ class LemonadeManager:
         Args:
             min_context_size: Context size to recommend in error message.
         """
+        # A server the user chose isn't GAIA's to install or start.
+        configured = configured_lemonade_url()
+        if configured:
+            from gaia.llm.lemonade_choice import unreachable_server_message
+
+            print(
+                f"❌ Error: {unreachable_server_message(configured)}",
+                file=sys.stderr,
+            )
+            return
+
         print(
             "❌ Error: Lemonade server is not running or not accessible.",
             file=sys.stderr,
@@ -773,6 +785,8 @@ class LemonadeManager:
         elif min_context_size is None:
             min_context_size = resolve_ctx_size(device=device)
             if not is_cloud:
+                # Never resize the model this one is about to replace.
+                own_window_of = chat_model
                 # The window the chat model's own load gets when memory is short.
                 min_context_size = fit_ctx_to_free_memory(
                     chat_model, min_context_size, base_url
@@ -1856,7 +1870,7 @@ class LemonadeManager:
             f"ctx_size={requested_ctx}, but reports a {reported_ctx}-token "
             f"window after {attempts} reload(s); GAIA needs {min_context_size}. "
             "Free memory by closing other models or apps, or lower the context "
-            "size in Settings > Model; GAIA tries the reload again after about "
+            "size in Settings > Agent & model; GAIA tries the reload again after about "
             f"a minute. {lemonade_log_hint(base_url)}"
         )
 

@@ -804,10 +804,8 @@ def describe(
         method, reason = setup.method, setup.reason
     else:
         method = METHOD_GUIDED
-        reason = (
-            "On Windows this is changed in AMD Software, and it needs a restart. "
-            "GAIA shows you where."
-        )
+        # The panel already says it needs a restart; say where, not that again.
+        reason = "On Windows this is changed in AMD Software. GAIA shows you where."
     models = _models(machine)
     presets = _presets(machine, models)
     recommended = next(

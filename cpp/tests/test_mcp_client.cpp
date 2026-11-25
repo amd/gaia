@@ -1,15 +1,26 @@
 // Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 // SPDX-License-Identifier: MIT
 
+#include "support/unique_temp.h"
 #include <gtest/gtest.h>
 #include <gaia/agent.h>
 #include <gaia/mcp_client.h>
+#include <gaia/process.h>
 #include <gaia/security.h>
 #include <gaia/tool_registry.h>
 
 #include <filesystem>
+#include <fstream>
+#include <vector>
 
 #include "support/mock_llm_server.h"
+
+#ifdef _WIN32
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#endif
 
 using namespace gaia;
 
@@ -84,9 +95,124 @@ TEST(MCPClientTest, StdioTransportWithArgs) {
     EXPECT_FALSE(transport.isConnected());
 }
 
+#ifdef _WIN32
+TEST(MCPClientTest, ABatchFileServerRefusesAnArgumentCmdWouldActOn) {
+    const std::filesystem::path dir = std::filesystem::temp_directory_path() / "gaia-mcp-cmd-args";
+    std::filesystem::create_directories(dir);
+    const std::filesystem::path script = dir / "server.cmd";
+    { std::ofstream(script) << "@echo off\r\n"; }
+    for (const char* arg : {"https://h/x?a=1&b=2", "%PATH%", "a|b"}) {
+        StdioTransport transport(script.string(), {arg}, 5, false);
+        try {
+            transport.connect();
+            ADD_FAILURE() << arg << " reached cmd.exe";
+        } catch (const std::runtime_error& e) {
+            EXPECT_NE(std::string(e.what()).find("cmd.exe"), std::string::npos) << e.what();
+        }
+    }
+    std::error_code ec;
+    std::filesystem::remove_all(dir, ec);
+}
+
+TEST(MCPClientTest, ABareProgramNotOnPathFailsNamingIt) {
+    StdioTransport transport("gaia-no-such-mcp-program", {"-y"}, 5, false);
+    try {
+        transport.connect();
+        ADD_FAILURE() << "a missing program started";
+    } catch (const std::runtime_error& e) {
+        EXPECT_NE(std::string(e.what()).find("gaia-no-such-mcp-program"), std::string::npos) << e.what();
+        EXPECT_NE(std::string(e.what()).find("isn't on PATH"), std::string::npos) << e.what();
+    }
+
+    MCPClient client("missing", std::make_unique<StdioTransport>("gaia-no-such-mcp-program", 5, false));
+    EXPECT_FALSE(client.connect());
+    EXPECT_NE(client.lastError().find("isn't on PATH"), std::string::npos) << client.lastError();
+}
+
+// The batch-file screen must judge the file launch() starts from PATH, not an .exe of the same
+// name in the working folder, and must read the program the way launch() does.
+TEST(MCPClientTest, ABareBatchServerOnPathIsScreenedDespiteAPlantedExe) {
+    namespace tfs = std::filesystem;
+    const tfs::path onPath = tfs::temp_directory_path() / testsupport::perProcess("gaia-mcp-onpath");
+    const tfs::path working = tfs::temp_directory_path() / testsupport::perProcess("gaia-mcp-working");
+    tfs::create_directories(onPath);
+    tfs::create_directories(working);
+    { std::ofstream(onPath / "gaia-mcp-probe.cmd") << "@echo off\r\n"; }
+    tfs::copy_file(tfs::u8path(systemProgramPath("hostname.exe")), working / "gaia-mcp-probe.exe",
+                   tfs::copy_options::overwrite_existing);
+
+    const DWORD size = GetEnvironmentVariableW(L"PATH", nullptr, 0);
+    std::wstring oldPath(size, L'\0');
+    oldPath.resize(GetEnvironmentVariableW(L"PATH", oldPath.data(), size));
+    SetEnvironmentVariableW(L"PATH", (onPath.wstring() + L";" + oldPath).c_str());
+    const tfs::path before = tfs::current_path();
+    tfs::current_path(working);
+
+    std::vector<std::string> reached;
+    for (const char* command : {"gaia-mcp-probe", "\"gaia-mcp-probe\"", "gaia-mcp-probe -y"}) {
+        StdioTransport transport(command, {"a&b"}, 5, false);
+        try {
+            transport.connect();
+            reached.push_back(command);
+            transport.disconnect();
+        } catch (const std::runtime_error& e) {
+            EXPECT_NE(std::string(e.what()).find("cmd.exe"), std::string::npos) << command << ": " << e.what();
+        }
+    }
+
+    tfs::current_path(before);
+    SetEnvironmentVariableW(L"PATH", size != 0 ? oldPath.c_str() : nullptr);
+    std::error_code ec;
+    tfs::remove_all(onPath, ec);
+    tfs::remove_all(working, ec);
+    for (const auto& command : reached) ADD_FAILURE() << command << " passed a & to cmd.exe";
+}
+#endif
+
 TEST(MCPClientTest, StdioTransportSendWithoutConnect) {
     StdioTransport transport("echo hello", 10, false);
     EXPECT_THROW(transport.sendRequest("test"), std::runtime_error);
+}
+
+TEST(MCPClientTest, StdioTransportSkipsMessagesThatAreNotTheReply) {
+    // A notification and a stale reply come out ahead of the reply to request 0.
+#ifdef _WIN32
+    const std::string server =
+        "cmd /c echo {\"jsonrpc\":\"2.0\",\"method\":\"notifications/progress\"}"
+        "& echo {\"jsonrpc\":\"2.0\",\"id\":41,\"result\":{\"which\":\"stale\"}}"
+        "& echo {\"jsonrpc\":\"2.0\",\"id\":0,\"result\":{\"which\":\"mine\"}}"
+        "& ping -n 6 127.0.0.1 >nul";
+#else
+    const std::string server =
+        "printf '%s\\n' '{\"jsonrpc\":\"2.0\",\"method\":\"notifications/progress\"}' "
+        "'{\"jsonrpc\":\"2.0\",\"id\":41,\"result\":{\"which\":\"stale\"}}' "
+        "'{\"jsonrpc\":\"2.0\",\"id\":0,\"result\":{\"which\":\"mine\"}}'; sleep 5";
+#endif
+    StdioTransport transport(server, 4, false);
+    ASSERT_TRUE(transport.connect());
+    json reply = transport.sendRequest("tools/list");
+    EXPECT_EQ(reply["id"], 0);
+    EXPECT_EQ(reply["result"]["which"], "mine");
+    transport.disconnect();
+}
+
+TEST(MCPClientTest, StdioTransportIsUnusableAfterATimeout) {
+#ifdef _WIN32
+    const std::string server = "powershell -NoProfile -Command Start-Sleep 5";
+#else
+    const std::string server = "sleep 5";
+#endif
+    StdioTransport transport(server, 1, false);
+    ASSERT_TRUE(transport.connect());
+    try {
+        transport.sendRequest("tools/list");
+        FAIL() << "a silent server must time out";
+    } catch (const std::runtime_error& e) {
+        EXPECT_NE(std::string(e.what()).find("did not answer 'tools/list'"), std::string::npos)
+            << e.what();
+    }
+    EXPECT_FALSE(transport.isConnected());
+    EXPECT_THROW(transport.sendRequest("tools/list"), std::runtime_error);
 }
 
 // ---- MCPClient Tests ----
@@ -528,7 +654,7 @@ TEST(MCPConfirmationTest, AgentLoopDoesNotExecuteDeniedMcpTool) {
     // Agent installs a store rooted at the real user profile; swap in an empty
     // one so a developer's saved "always allow" can't defeat the assertion.
     const std::string storeDir =
-        (std::filesystem::temp_directory_path() / "gaia_mcp_gate_agent_test").string();
+        (std::filesystem::temp_directory_path() / testsupport::perProcess("gaia_mcp_gate_agent_test")).string();
     std::filesystem::remove_all(storeDir);
     agent.toolRegistry().setAllowedToolsStore(std::make_shared<AllowedToolsStore>(storeDir));
 
@@ -572,7 +698,7 @@ TEST(MCPConfirmationTest, AlwaysAllowStoreKeysOnThePrefixedName) {
     // security.mdx tells users to pre-approve "mcp_<server>_<tool>" — verify
     // that is in fact the key the registry checks.
     const std::string dir =
-        (std::filesystem::temp_directory_path() / "gaia_mcp_gate_test").string();
+        (std::filesystem::temp_directory_path() / testsupport::perProcess("gaia_mcp_gate_test")).string();
     std::filesystem::remove_all(dir);
     auto store = std::make_shared<AllowedToolsStore>(dir);
     store->addAlwaysAllowed("mcp_srv_delete_file");
@@ -620,3 +746,134 @@ TEST(MCPConfirmationTest, ProvenReadOnlyMcpToolRunsUnprompted) {
     EXPECT_EQ(prompts, 0) << "read-only MCP tool should not prompt";
     EXPECT_EQ(result["status"], "success");
 }
+
+// ---- resources / prompts ----
+
+namespace {
+
+/// Transport that answers each method from a script; records what was asked.
+class ScriptedTransport : public MCPTransport {
+public:
+    std::vector<std::pair<std::string, json>> calls;
+    bool connect() override { return true; }
+    void disconnect() override {}
+    bool isConnected() const override { return true; }
+    void sendNotification(const std::string&, const json& = json::object()) override {}
+    json sendRequest(const std::string& method, const json& params = json::object()) override {
+        calls.emplace_back(method, params);
+        auto ok = [](json r) { return json{{"jsonrpc", "2.0"}, {"id", 1}, {"result", r}}; };
+        if (method == "initialize") {
+            return ok({{"protocolVersion", "2025-06-18"},
+                       {"capabilities", {{"tools", json::object()}, {"resources", json::object()},
+                                         {"prompts", json::object()}}},
+                       {"serverInfo", {{"name", "scripted"}}}});
+        }
+        if (method == "resources/list") {
+            if (!params.contains("cursor")) {
+                return ok({{"resources", json::array({{{"uri", "file:///a.md"}, {"name", "a"}}})},
+                           {"nextCursor", "p2"}});
+            }
+            return ok({{"resources", json::array({{{"uri", "file:///b.md"}, {"name", "b"}}})}});
+        }
+        if (method == "resources/read") {
+            return ok({{"contents", json::array({{{"uri", params["uri"]}, {"text", "hello"}}})}});
+        }
+        if (method == "prompts/list") {
+            return ok({{"prompts", json::array({{{"name", "summarize"}}})}});
+        }
+        if (method == "prompts/get") {
+            return ok({{"messages", json::array({{{"role", "user"},
+                                                  {"content", {{"type", "text"},
+                                                               {"text", "Summarize " + params["arguments"].value("topic", "")}}}}})}});
+        }
+        return json{{"jsonrpc", "2.0"}, {"id", 1}, {"error", {{"code", -32601}, {"message", "no " + method}}}};
+    }
+};
+
+}  // namespace
+
+TEST(MCPResourcesTest, ListFollowsPaginationAndReadReturnsContents) {
+    auto t = std::make_unique<ScriptedTransport>();
+    MCPClient client("s", std::move(t));
+    ASSERT_TRUE(client.connect());
+    EXPECT_TRUE(client.capabilities().contains("resources"));
+    json all = client.listResources();
+    ASSERT_EQ(all.size(), 2u);
+    EXPECT_EQ(all[1]["uri"], "file:///b.md");
+    json contents = client.readResource("file:///a.md");
+    EXPECT_EQ(contents[0]["text"], "hello");
+}
+
+TEST(MCPResourcesTest, PromptsFillArguments) {
+    MCPClient client("s", std::make_unique<ScriptedTransport>());
+    ASSERT_TRUE(client.connect());
+    EXPECT_EQ(client.listPrompts().size(), 1u);
+    json p = client.getPrompt("summarize", {{"topic", "Q3"}});
+    EXPECT_EQ(p["messages"][0]["content"]["text"], "Summarize Q3");
+}
+
+TEST(MCPResourcesTest, ServerErrorsThrowInsteadOfLookingEmpty) {
+    // tools/list is not scripted: a server that can't list tools is broken, not tool-less.
+    MCPClient client("s", std::make_unique<ScriptedTransport>());
+    ASSERT_TRUE(client.connect());
+    EXPECT_THROW(client.listTools(), std::runtime_error);
+}
+
+TEST(MCPClientTest, ASchemaWithATypeListOrABooleanSchemaStillLoads) {
+    MCPToolSchema schema;
+    schema.name = "search";
+    schema.description = "Search";
+    schema.inputSchema = json::parse(R"({"type": "object",
+        "properties": {"q": {"type": ["string", "null"], "description": 7},
+                       "n": {"type": ["null", "integer"], "description": "how many"},
+                       "any": true},
+        "required": ["q", 5]})");
+    ToolInfo info;
+    ASSERT_NO_THROW(info = schema.toToolInfo("srv"));
+    ASSERT_EQ(info.parameters.size(), 3u);
+    for (const auto& p : info.parameters) {
+        if (p.name == "q") {
+            EXPECT_EQ(p.type, ToolParamType::STRING);
+            EXPECT_TRUE(p.required);
+        } else if (p.name == "n") {
+            EXPECT_EQ(p.type, ToolParamType::INTEGER);
+            EXPECT_EQ(p.description, "how many");
+            EXPECT_FALSE(p.required);
+        } else {
+            EXPECT_EQ(p.type, ToolParamType::STRING);
+        }
+    }
+    schema.inputSchema = json::parse(R"({"properties": ["not", "an", "object"]})");
+    EXPECT_NO_THROW(info = schema.toToolInfo("srv"));
+    EXPECT_TRUE(info.parameters.empty());
+}
+
+TEST(MCPClientTest, AnArgumentIsQuotedSoTheServerReceivesItAsWritten) {
+    // /bin/sh
+    EXPECT_EQ(StdioTransport::quoteArgument("-y", false), "-y");
+    EXPECT_EQ(StdioTransport::quoteArgument("@scope/pkg@1.2.3", false), "@scope/pkg@1.2.3");
+    EXPECT_EQ(StdioTransport::quoteArgument("", false), "''");
+    EXPECT_EQ(StdioTransport::quoteArgument("a b", false), "'a b'");
+    EXPECT_EQ(StdioTransport::quoteArgument("$HOME;rm *", false), "'$HOME;rm *'");
+    EXPECT_EQ(StdioTransport::quoteArgument("it's", false), "'it'\\''s'");
+    EXPECT_EQ(StdioTransport::quoteArgument("{\"a\": 1}", false), "'{\"a\": 1}'");
+    // A Windows command line
+    EXPECT_EQ(StdioTransport::quoteArgument("-y", true), "-y");
+    EXPECT_EQ(StdioTransport::quoteArgument("", true), "\"\"");
+    EXPECT_EQ(StdioTransport::quoteArgument("C:\\My Docs\\", true), "\"C:\\My Docs\\\\\"");
+    EXPECT_EQ(StdioTransport::quoteArgument("say \"hi\"", true), "\"say \\\"hi\\\"\"");
+    EXPECT_EQ(StdioTransport::quoteArgument("C:\\plain\\path", true), "C:\\plain\\path");
+}
+
+#ifndef _WIN32
+TEST(MCPClientTest, AStdioServerReceivesShellCharactersInAnArgumentUntouched) {
+    const std::string odd = "a b;$HOME `id` 'q' *";
+    const std::string script =
+        "read line; printf '{\"jsonrpc\":\"2.0\",\"id\":0,\"result\":{\"arg\":\"%s\"}}\\n' \"$1\"; sleep 2";
+    StdioTransport transport("sh", {"-c", script, "sh", odd}, 5, false);
+    ASSERT_TRUE(transport.connect());
+    const json reply = transport.sendRequest("tools/list");
+    EXPECT_EQ(reply["result"]["arg"], odd);
+    transport.disconnect();
+}
+#endif

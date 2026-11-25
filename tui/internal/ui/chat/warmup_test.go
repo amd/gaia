@@ -32,7 +32,7 @@ func (c *warmClient) Send(_ context.Context, q string) (<-chan interface{}, erro
 func warmModel(t *testing.T) (ChatModel, *warmClient) {
 	t.Helper()
 	c := &warmClient{followUpClient: followUpClient{supported: true}}
-	m := NewChatModel(c, "gaia", "", false)
+	m := NewChatModel(c, "gaia", "")
 	m.width, m.height = 100, 30
 	m.resize()
 	updated, cmd := m.Update(startWarmUpMsg{})
@@ -170,16 +170,16 @@ func TestAMessageTypedDuringWarmUpWaitsForIt(t *testing.T) {
 // would receive the sentinel as a question.
 func TestOnlyTheFlagshipWarmsUp(t *testing.T) {
 	c := &warmClient{}
-	for _, id := range []string{"email", "gaia"} {
-		m := NewChatModel(c, id, "", false)
+	for _, id := range []string{"notes", "gaia"} {
+		m := NewChatModel(c, id, "")
 		if got := m.warmUpApplies(); got != (id == "gaia") {
 			t.Errorf("warmUpApplies for %q = %t", id, got)
 		}
 	}
-	if NewChatModel(&nullClient{}, "gaia", "", false).warmUpApplies() {
+	if NewChatModel(&nullClient{}, "gaia", "").warmUpApplies() {
 		t.Error("a transport without the sentinel must not warm up")
 	}
-	if NewChatModel(c, "gaia", "hello", false).warmUpApplies() {
+	if NewChatModel(c, "gaia", "hello").warmUpApplies() {
 		t.Error("a launch with a question already pays for the same work")
 	}
 }
@@ -210,7 +210,7 @@ func TestNoHintWhenAQuestionIsAlreadyWaiting(t *testing.T) {
 func TestAWrappedStatusStaysIndented(t *testing.T) {
 	m, _ := warmModel(t)
 	m = feed(t, m, event.CanonicalFinalEvent{Type: "final", Answer: client.WarmedUp})
-	rendered := ansi.Strip(m.renderMessage(&m.messages[len(m.messages)-1], map[string]bool{}))
+	rendered := ansi.Strip(m.renderMessage(&m.messages[len(m.messages)-1]))
 	for _, row := range strings.Split(rendered, "\n") {
 		if strings.TrimSpace(row) != "" && !strings.HasPrefix(row, "  ") {
 			t.Errorf("row lost its indent: %q", row)

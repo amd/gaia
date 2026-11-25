@@ -506,8 +506,54 @@ def test_a_real_write_file_is_seen_by_the_check(real_agent):
     real_agent.process_query("write mod.py", max_steps=2)
 
     assert real_agent._edit_verification_rounds == 2
-    assert "no longer parses as Python" in json.dumps(sent[-1])
+    # mod.py is new this turn: it never parsed, so it can't "no longer" parse.
+    assert "doesn't parse as Python" in json.dumps(sent[-1])
     assert real_agent._edit_verification_findings == []
+
+
+DICTATED = '{"name": "gaia", "port": 8080,'
+
+
+def test_content_the_user_dictated_is_not_sent_back_for_repair(real_agent):
+    """The user asked for this exact broken JSON on purpose (#8036)."""
+    _script(
+        real_agent,
+        {
+            "tool": "write_file",
+            "tool_args": {"file_path": "cfg_test.json", "content": DICTATED},
+        },
+        {"answer": "Written."},
+    )
+
+    result = real_agent.process_query(
+        "Create the file cfg_test.json containing exactly this text and nothing "
+        f"else (it is deliberately written this way, do not fix it): {DICTATED}",
+        max_steps=2,
+    )
+
+    assert real_agent._edit_verification_findings == []
+    assert "valid JSON" not in str(result.get("result"))
+
+
+def test_a_new_file_that_does_not_parse_is_not_called_broken_by_the_edit(
+    real_agent,
+):
+    sent = _script(
+        real_agent,
+        {
+            "tool": "write_file",
+            "tool_args": {"file_path": "cfg.json", "content": DICTATED},
+        },
+        {"answer": "Written."},
+        {"answer": "Left as is."},
+        {"answer": "Left as is."},
+    )
+
+    real_agent.process_query("Write a config for gaia on port 8080 to cfg.json")
+
+    prompt = json.dumps(sent[2])
+    assert "isn't valid JSON" in prompt
+    assert "no longer" not in prompt
 
 
 def test_the_written_path_is_found_without_the_operation_field(real_agent):
@@ -728,7 +774,7 @@ def test_a_new_file_that_does_not_parse_is_reported(agent, tmp_path):
     _baseline_then_edit(agent, target, "{oops")
 
     (problem,) = agent._verify_turn_edits()
-    assert "is no longer valid JSON" in problem
+    assert "new.json` isn't valid JSON" in problem
 
 
 def test_an_empty_file_counts_as_parsing_before(agent, tmp_path):

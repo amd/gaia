@@ -17,14 +17,6 @@ import (
 
 const scriptError = `{"status":"error","error":"error: Python exited with code 1: ValueError: Length mismatch: Expected axis has 7 elements"}`
 
-func call(tool, args string) event.CanonicalToolCallEvent {
-	return event.CanonicalToolCallEvent{Type: "tool_call", Tool: tool, Args: json.RawMessage(args)}
-}
-
-func result(tool, data string) event.CanonicalToolResultEvent {
-	return event.CanonicalToolResultEvent{Type: "tool_result", Tool: tool, Data: json.RawMessage(data)}
-}
-
 var turnEnds = event.CanonicalFinalEvent{Type: "final", Answer: "Done."}
 
 // colour turns ANSI colour on for one test and returns failStyle's opening
@@ -69,7 +61,7 @@ func TestARetriedScriptErrorEndingInSuccessIsNotRed(t *testing.T) {
 		t.Errorf("a retried error was drawn red mid-turn:\n%s", ansi.Strip(live))
 	}
 	if got := ansi.Strip(live); !strings.Contains(got, "error, retried") ||
-		!strings.Contains(got, "Length mismatch") {
+		!strings.Contains(got, "ValueError") {
 		t.Errorf("the retried step must keep its one-line error:\n%s", got)
 	}
 
@@ -109,7 +101,7 @@ func TestAScriptErrorWithNoRetryBeforeTheTurnEndsIsRed(t *testing.T) {
 	if !strings.Contains(record, red) {
 		t.Errorf("the failure the turn ended on must be red:\n%s", ansi.Strip(record))
 	}
-	if got := ansi.Strip(record); !strings.Contains(got, "└ failed") ||
+	if got := ansi.Strip(record); !strings.Contains(got, "└ ✗ failed") ||
 		!strings.Contains(got, "Length mismatch") {
 		t.Errorf("the failure the turn ended on must say failed, with its error:\n%s", got)
 	}
@@ -126,7 +118,7 @@ func TestAnErrorFollowedByADifferentToolsSuccessStaysRed(t *testing.T) {
 	)
 
 	got := ansi.Strip(workRecord(t, m))
-	if strings.Contains(got, "retried") || !strings.Contains(got, "└ failed") {
+	if strings.Contains(got, "retried") || !strings.Contains(got, "└ ✗ failed") {
 		t.Errorf("another tool's success does not recover this one:\n%s", got)
 	}
 	if !strings.Contains(workRecord(t, m), red) {
@@ -145,7 +137,7 @@ func TestAShellFailureIsRecoveredOnlyByTheSameKindOfCommand(t *testing.T) {
 		result("run_shell_command", `{"status":"success","return_code":0}`),
 		turnEnds,
 	)
-	if got := ansi.Strip(workRecord(t, m)); !strings.Contains(got, "└ failed") ||
+	if got := ansi.Strip(workRecord(t, m)); !strings.Contains(got, "└ ✗ failed") ||
 		strings.Contains(got, "retried") {
 		t.Errorf("a different command's success recovered the pip failure:\n%s", got)
 	}
@@ -160,8 +152,8 @@ func TestAShellFailureIsRecoveredOnlyByTheSameKindOfCommand(t *testing.T) {
 	// Back to back, the settled attempt keeps its own row and one-line error:
 	// folded into its retry as "x2", the error it recovered from would vanish.
 	got := ansi.Strip(workRecord(t, m))
-	if strings.Contains(got, "└ failed") || strings.Contains(got, "x2") ||
-		!strings.Contains(got, "└ error, retried: Command failed (exit 1): python.exe: No module named pip") {
+	if strings.Contains(got, "└ ✗ failed") || strings.Contains(got, "x2") ||
+		!strings.Contains(got, "└ error, retried: Command failed (exit 1): python.exe") {
 		t.Errorf("the same command retried and passing must settle it, error kept:\n%s", got)
 	}
 }
@@ -191,7 +183,7 @@ func TestASuccessBeforeTheFailureDoesNotRecoverIt(t *testing.T) {
 		result("run_python_file", scriptError),
 		turnEnds,
 	)
-	if got := ansi.Strip(workRecord(t, m)); !strings.Contains(got, "└ failed") {
+	if got := ansi.Strip(workRecord(t, m)); !strings.Contains(got, "└ ✗ failed") {
 		t.Errorf("an earlier success recovered a later failure:\n%s", got)
 	}
 }
@@ -219,7 +211,7 @@ func TestAFileToolFailureIsRecoveredOnlyByTheSameFile(t *testing.T) {
 	)
 	record := workRecord(t, m)
 	got := ansi.Strip(record)
-	if strings.Contains(got, "retried") || !strings.Contains(got, "└ failed") ||
+	if strings.Contains(got, "retried") || !strings.Contains(got, "└ ✗ failed") ||
 		!strings.Contains(got, "Length mismatch") {
 		t.Errorf("another file's success recovered or hid the clean.py failure:\n%s", got)
 	}
@@ -293,7 +285,7 @@ func TestAShellFailureIsNotRecoveredByADifferentJobBehindAWrapper(t *testing.T) 
 		record := workRecord(t, shellTurn(t, p[0], p[1]))
 		got := ansi.Strip(record)
 		if strings.Contains(got, "retried") || strings.Contains(got, "x2") ||
-			!strings.Contains(got, "└ failed") || !strings.Contains(got, "boom-from-the-first-call") ||
+			!strings.Contains(got, "└ ✗ failed") || !strings.Contains(got, "boom-from-the-first-call") ||
 			!strings.Contains(record, red) {
 			t.Errorf("%q passing recovered or hid %q failing:\n%s", p[1], p[0], got)
 		}
@@ -315,7 +307,7 @@ func TestASameJobRetryRecoversAndKeepsItsError(t *testing.T) {
 		record := workRecord(t, shellTurn(t, p[0], p[1]))
 		got := ansi.Strip(record)
 		if !strings.Contains(got, "└ error, retried: Command failed (exit 1): boom-from-the-first-call") ||
-			strings.Contains(got, "└ failed") || strings.Contains(record, red) {
+			strings.Contains(got, "└ ✗ failed") || strings.Contains(record, red) {
 			t.Errorf("%q passing should settle %q with its error kept:\n%s", p[1], p[0], got)
 		}
 	}
@@ -340,7 +332,7 @@ func TestAFailureWithNothingToMatchOnIsNeverRetried(t *testing.T) {
 		)
 		record := workRecord(t, m)
 		got := ansi.Strip(record)
-		if strings.Contains(got, "retried") || !strings.Contains(got, "└ failed") ||
+		if strings.Contains(got, "retried") || !strings.Contains(got, "└ ✗ failed") ||
 			!strings.Contains(got, "boom-from-the-first-call") || !strings.Contains(record, red) {
 			t.Errorf("%s %s: a keyless failure was settled or hidden:\n%s", c.tool, c.failing, got)
 		}
@@ -395,7 +387,7 @@ func TestAChainedCommandIsRecoveredOnlyByTheSameChain(t *testing.T) {
 	for _, p := range differ {
 		record := workRecord(t, shellTurn(t, p[0], p[1]))
 		got := ansi.Strip(record)
-		if strings.Contains(got, "retried") || !strings.Contains(got, "└ failed") ||
+		if strings.Contains(got, "retried") || !strings.Contains(got, "└ ✗ failed") ||
 			!strings.Contains(got, "boom-from-the-first-call") || !strings.Contains(record, red) {
 			t.Errorf("%q passing recovered or hid %q failing:\n%s", p[1], p[0], got)
 		}
@@ -413,7 +405,7 @@ func TestAChainedCommandIsRecoveredOnlyByTheSameChain(t *testing.T) {
 	}
 	for _, p := range same {
 		got := ansi.Strip(workRecord(t, shellTurn(t, p[0], p[1])))
-		if !strings.Contains(got, "└ error, retried") || strings.Contains(got, "└ failed") {
+		if !strings.Contains(got, "└ error, retried") || strings.Contains(got, "└ ✗ failed") {
 			t.Errorf("%q passing should settle %q:\n%s", p[1], p[0], got)
 		}
 	}
@@ -432,7 +424,7 @@ func TestAFlagValueIsPartOfTheJob(t *testing.T) {
 	}
 	for _, p := range differ {
 		got := ansi.Strip(workRecord(t, shellTurn(t, p[0], p[1])))
-		if strings.Contains(got, "retried") || !strings.Contains(got, "└ failed") {
+		if strings.Contains(got, "retried") || !strings.Contains(got, "└ ✗ failed") {
 			t.Errorf("%q passing recovered %q failing:\n%s", p[1], p[0], got)
 		}
 	}

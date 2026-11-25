@@ -9,10 +9,12 @@ import { useChatStore } from '../stores/chatStore';
 import { useLogsStore } from '../stores/logsStore';
 import { useModelStore, useInferencePlace, displayModelName, sameModelId, UNKNOWN_PLACE_TITLE } from '../stores/modelStore';
 import { ctxLabel } from './modelMeta';
+import { LocalStatusError } from './LocalStatusError';
 import { useT, type Translate } from '../i18n/useT';
 import { ref, type MessageKey } from '../i18n/registry';
 import './ModelPicker.css';
 import type { LocalModelStatus, ModelPlacement } from '../types';
+import { setVisibleInterval } from '../utils/visibleInterval';
 
 const POLL_MS = 3000;
 
@@ -77,8 +79,7 @@ export function ModelStatusPill() {
     useEffect(() => {
         if (!open) return;
         void load();
-        const t = setInterval(() => { void load(); }, POLL_MS);
-        return () => clearInterval(t);
+        return setVisibleInterval(() => { void load(); }, POLL_MS);
     }, [open, load]);
 
     const restart = useCallback(async (confirm: boolean) => {
@@ -162,7 +163,7 @@ export function ModelStatusPill() {
                             </dl>
                             {s.placement?.warning && <span className="model-status-warning" role="alert">{s.placement.warning}</span>}
                             {s.error && (
-                                <span className="settings-error" role="alert" title={s.error_detail ?? undefined}>{s.error}</span>
+                                <span className="settings-error" role="alert" title={s.error_detail ?? undefined}><LocalStatusError status={s} /></span>
                             )}
                             {s.restart_error && <span className="settings-error" role="alert">{s.restart_error}</span>}
                         </>

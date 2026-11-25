@@ -148,14 +148,69 @@ export const SYSTEM_STATUS = {
     default_model_is_cloud: false, default_model_size_gb: 4.9, lemonade_url: 'http://127.0.0.1:13305',
     expected_model_loaded: true, download_progress: null, init_state: 'ready',
     init_tasks: [
-        { name: 'Checking LLM server', status: 'done' },
-        { name: 'Loading ML libraries', status: 'done' },
-        { name: 'Loading AI model', status: 'done' },
+        { name: 'Checking LLM server', step: 'check_server', status: 'done' },
+        { name: 'Loading ML libraries', step: 'load_libraries', status: 'done' },
+        { name: 'Loading AI model', step: 'load_model', status: 'done' },
     ],
     warm_up: { state: 'done', elapsed_seconds: 2.0, prompt_tokens: 1800, cached_tokens: 1800, error: null },
     detected_devices: ['gpu'], active_profile: 'chat', config_error: null, probe_warnings: [],
     data_dir: 'C:\\Users\\you\\.gaia\\chat',
 };
+
+/** Settings on a PC where both agents are installed and the Python one runs. */
+export const SETTINGS = {
+    custom_model: null, model_status: null, context_size: null, agent_mode: 'goal_driven', dynamic_tools: false, dynamic_tools_locked: false,
+    network_policy: 'cloud_allowed', flagship_agent: 'gaiapy', gaiacpp_available: true,
+};
+
+const IDLE_AGENT_DOWNLOAD = { state: 'idle', bytes_done: 0, bytes_total: null, error: null };
+
+/** Both agent programs on this PC, with their sizes; the Python one runs. */
+export const AGENT_PROGRAMS = {
+    current: 'gaiapy',
+    programs: [
+        { id: 'gaiapy', installed: true, size_bytes: 412_000_000, can_download: false, unavailable_reason: null },
+        { id: 'gaiacpp', installed: true, size_bytes: 6_800_000, can_download: false, unavailable_reason: null },
+    ],
+    download: IDLE_AGENT_DOWNLOAD,
+};
+
+/** gaiacpp downloading, about 40% through. */
+export const AGENT_DOWNLOADING = { state: 'downloading', bytes_done: 2_720_000, bytes_total: 6_800_000, error: null };
+export const AGENT_DOWNLOAD_FAILED = {
+    state: 'failed', bytes_done: 2_720_000, bytes_total: 6_800_000,
+    error: 'Download of gaiacpp-win32-x64 stopped: the connection was reset (ECONNRESET) after 2.7 MB.',
+};
+
+export interface AgentProgramsAnswers {
+    /** Installed; not here but downloadable; or not here and not offered. */
+    gaiacpp?: 'installed' | 'downloadable' | 'unavailable';
+    /** The download as the listing reports it when the page opens. */
+    download?: object;
+    /** What each poll of the download answers. */
+    poll?: object;
+    /** The agent in use. */
+    current?: 'gaiapy' | 'gaiacpp';
+}
+
+/** The agent programs as this PC would report them, and the gaiacpp download's answers. */
+export async function withAgentPrograms(page: Page, { gaiacpp = 'installed', download = IDLE_AGENT_DOWNLOAD, poll, current = 'gaiapy' }: AgentProgramsAnswers = {}): Promise<void> {
+    const cpp = gaiacpp === 'installed' ? AGENT_PROGRAMS.programs[1]
+        : gaiacpp === 'downloadable' ? { ...AGENT_PROGRAMS.programs[1], installed: false, can_download: true }
+            : { ...AGENT_PROGRAMS.programs[1], installed: false, size_bytes: null, unavailable_reason: 'this GAIA release has no gaiacpp to download. Use the Python agent, or update GAIA.', unavailable_code: 'no_release' };
+    const listing = { ...AGENT_PROGRAMS, current, programs: [AGENT_PROGRAMS.programs[0], cpp], download };
+    await page.route((url) => url.pathname.startsWith('/api/agent-programs'), async (route) => {
+        const { pathname } = new URL(route.request().url());
+        if (pathname === '/api/agent-programs') await route.fulfill({ json: listing });
+        else if (route.request().method() === 'POST') await route.fulfill({ status: 202, json: poll ?? AGENT_DOWNLOADING });
+        else await route.fulfill({ json: poll ?? download });
+    });
+}
+
+/** A PC where gaiacpp isn't installed and can't be downloaded. */
+export async function withoutGaiacpp(page: Page): Promise<void> {
+    await withAgentPrograms(page, { gaiacpp: 'unavailable' });
+}
 
 const ROUTES: Record<string, unknown> = {
     'GET /sessions': { sessions: SESSIONS, total: SESSIONS.length },
@@ -166,7 +221,8 @@ const ROUTES: Record<string, unknown> = {
     'GET /setup/check': { ready: true, steps: [] },
     'GET /setup/status': { state: 'idle' },
     'GET /setup/needs/chat': { job: 'chat', needed: false, model: null, disk_free_gb: null },
-    'GET /settings': { custom_model: null, model_status: null, context_size: null, agent_mode: 'goal_driven', dynamic_tools: false, dynamic_tools_locked: false },
+    'GET /settings': SETTINGS,
+    'GET /agent-programs': AGENT_PROGRAMS,
     'GET /providers': {
         providers: [
             { id: 'local', name: 'Local', remote: false, privacy_notice: 'Runs on this PC. Nothing leaves your machine.' },
@@ -208,7 +264,7 @@ const ROUTES: Record<string, unknown> = {
     },
     'GET /chat/permissions': { default_mode: 'ask', sessions: [] },
     [`GET /chat/permissions/${ANSWER_SESSION}`]: { session_id: ANSWER_SESSION, mode: 'ask', grants: [] },
-    'GET /tunnel/status': { active: false, url: null, token: null, startedAt: null, error: null, publicIp: null },
+    'GET /tunnel/status': { active: false, url: null, token: null, startedAt: null, error: null },
     'GET /mcp/status': { servers: [] },
     'GET /schedules': SCHEDULES,
     'GET /goals/health': { error: null },
@@ -217,10 +273,25 @@ const ROUTES: Record<string, unknown> = {
     'GET /agents': { agents: [{ id: 'gaia', name: 'GAIA', description: '', source: 'installed', conversation_starters: [], models: [] }], total: 1 },
     'GET /connectors': { connectors: [] },
     'GET /memory/settings': { memory_enabled: true },
+    'GET /memory/embedder': {
+        device: 'gpu', chosen: false, default_device: 'gpu',
+        options: [
+            { device: 'gpu', model: 'user.embeddinggemma-300m-GGUF', display_name: 'EmbeddingGemma 300M', proven: true, present: true, available: true, reason: null, downloaded: true },
+            { device: 'npu', model: 'embed-gemma-300m-FLM', display_name: 'EmbeddingGemma 300M NPU', proven: false, present: true, available: false, reason: "its search results aren't reliable yet, so GAIA embeds on the GPU", downloaded: true },
+        ],
+    },
     'GET /skills': { skills: [] },
     'GET /skills/featured': { libraries: [{ id: 'pstack', name: 'pstack', url: 'https://github.com/michael-denyer/pstack-claude', description: 'Engineering workflows: design, review, CI fixes, TDD, PR hygiene (MIT)' }] },
     'GET /system/resources': RESOURCES,
     'GET /system/model-server': { reachable: true, error: null, base_url: 'http://127.0.0.1:13305', port: 13305, owner: 'gaia' },
+    'GET /images/settings': {
+        model: 'Z-Image-Turbo', size: '1280x720', steps: null, max_steps: 100,
+        model_available: true, chat_model: 'Gemma-4-E4B-it-GGUF', chat_model_creates_images: false,
+        models: [
+            { id: 'Z-Image-Turbo', recipe: 'sd-cpp', downloaded: true, downloads_on_first_use: false, size_gb: 20.7, default_size: '1024x1024', default_steps: 9, sizes: ['512x512', '768x768', '1024x1024', '1280x720', '720x1280'] },
+            { id: 'SDXL-Turbo', recipe: 'sd-cpp', downloaded: false, downloads_on_first_use: true, size_gb: 6.46, default_size: '512x512', default_steps: 4, sizes: ['512x512', '768x768', '1024x1024'] },
+        ],
+    },
     'GET /speech/model': { downloaded: true, size_gb: 0.3 },
     'GET /spending/prices/fireworks': { provider: 'fireworks', models: [], source: null, note: null },
     'GET /speech/settings': {
@@ -286,21 +357,22 @@ export async function withoutFlagship(page: Page): Promise<void> {
 
 const modelRow = (id: string, over: Record<string, unknown>) => ({
     id, context_length: null, downloaded: true, labels: [], rank: null, note: null, evidence: null, state: 'downloaded',
-    available: true, unavailable_reason: null, fits: true, custom: false,
+    available: true, unavailable_reason: null, fits: true, custom: false, support: 'untested',
     placement: { device: 'gpu', backend: 'vulkan', label: 'GPU · Vulkan', source: 'expected', warning: null },
     ...over,
 });
 
-/** A Strix Halo with models on disk, more to download, an added one, and two it can't run. */
+/** A Strix Halo with models on disk, more to download, an added one, one that would leave
+ *  other apps little memory, and two it can't run. */
 export const MODEL_LIST = [
     modelRow('Gemma-4-E4B-it-GGUF', {
-        display_name: 'Gemma 4 E4B (Multimodal)', state: 'loaded', size_gb: 4.9, tokens_per_second: 41.2,
+        display_name: 'Gemma 4 E4B (Multimodal)', state: 'loaded', size_gb: 4.9, tokens_per_second: 41.2, support: 'verified',
         placement: { device: 'gpu', backend: 'vulkan', label: 'GPU · Vulkan', source: 'reported', warning: null },
         evidence: 'Eval: 128 of 218 scenarios passed on this model',
     }),
-    modelRow('Qwen3.6-35B-A3B-GGUF', { display_name: 'Qwen3.6 35B A3B (Multimodal)', size_gb: 23.3 }),
+    modelRow('Qwen3.6-35B-A3B-GGUF', { display_name: 'Qwen3.6 35B A3B (Multimodal)', size_gb: 23.3, support: 'verified' }),
     modelRow('gemma4-it-e4b-FLM', {
-        display_name: 'Gemma 4 E4B (NPU)', size_gb: 9.1,
+        display_name: 'Gemma 4 E4B (NPU)', size_gb: 9.1, support: 'verified',
         placement: { device: 'npu', backend: 'flm', label: 'NPU · FLM', source: 'expected', warning: null },
     }),
     modelRow('user.Qwen3-4B-Instruct-2507-Q4_K_M-GGUF', {
@@ -309,6 +381,7 @@ export const MODEL_LIST = [
     }),
     ...['gpt-oss 20B', 'Qwen3-VL-4B Instruct', 'SDXL-Turbo', 'Kokoro TTS', 'Whisper Large v3'].map((name, i) =>
         modelRow(`${name.replace(/ /g, '-')}-GGUF`, { display_name: name, downloaded: false, state: 'not_downloaded', size_gb: 3 + i * 4.5 })),
+    modelRow('Muse-Glimmer-30B-GGUF', { display_name: 'Muse Glimmer 30B', downloaded: false, state: 'not_downloaded', size_gb: 21.4, tight: true }),
     modelRow('Qwen3.8-Flash-Next-GGUF', {
         display_name: 'Qwen3.8 Flash Next', downloaded: false, state: 'not_downloaded', size_gb: 82.9, fits: false,
         placement: { device: 'gpu', backend: 'vulkan', label: 'GPU · Vulkan', source: 'expected', warning: 'Lemonade reports this model on the CPU, not the GPU.' },
@@ -382,9 +455,17 @@ export async function withSettingsPanes(page: Page, options: { networkPolicy?: '
             custom_model: null, model_status: null, context_size: null, agent_mode: 'goal_driven',
             dynamic_tools: false, dynamic_tools_locked: false,
             network_policy: options.networkPolicy ?? 'cloud_allowed', policy_warnings: [],
+            flagship_agent: 'gaiapy', gaiacpp_available: true,
             policy_notices: options.policyNotices ?? [],
         },
         'GET /memory/settings': { memory_enabled: true },
+        'GET /memory/embedder': {
+            device: 'gpu', chosen: false, default_device: 'gpu',
+            options: [
+                { device: 'gpu', model: 'user.embeddinggemma-300m-GGUF', display_name: 'EmbeddingGemma 300M', proven: true, present: true, available: true, reason: null, downloaded: true },
+                { device: 'npu', model: 'embed-gemma-300m-FLM', display_name: 'EmbeddingGemma 300M NPU', proven: false, present: true, available: false, reason: "its search results aren't reliable yet, so GAIA embeds on the GPU", downloaded: true },
+            ],
+        },
         'GET /skills': {
             skills: [
                 skill('gh-cli', 'agent-bundled', 'Work with GitHub from the terminal: issues, pull requests and releases.', { always_on: true }),
@@ -412,6 +493,7 @@ export async function withSettingsPanes(page: Page, options: { networkPolicy?: '
             await route.fulfill({ json: {
                 custom_model: null, model_status: null, context_size: null, agent_mode: 'goal_driven',
                 dynamic_tools: false, dynamic_tools_locked: false, network_policy: 'local_ai_only',
+                flagship_agent: 'gaiapy', gaiacpp_available: true,
                 policy_warnings: [], policy_notices: options.policyNotices ?? [],
             } });
         } else if (key in answers) await route.fulfill({ json: answers[key] });
@@ -486,7 +568,7 @@ const DISCORD_BOT = {
 export const DISCORD_STATES: Record<string, Record<string, unknown>> = {
     none: DISCORD_BASE,
     pairing: { ...DISCORD_BASE, ...DISCORD_BOT, state: 'pairing', pairing_code: 'K7QX4M9P', pairing_expires_at: 1e10, detail: 'DM the code to the bot to pair it with your Discord account.' },
-    connected: { ...DISCORD_BASE, ...DISCORD_BOT, state: 'connected', paired: true, owner_name: 'someone_with_a_long_name', model: 'Qwen3.6-35B-A3B-GGUF', always_allowed: ['write_file on files in C:/Users/someone_with_a_long_name/Documents/projects/quarterly-report', 'dir'] },
+    connected: { ...DISCORD_BASE, ...DISCORD_BOT, state: 'connected', paired: true, owner_name: 'someone_with_a_long_name', model: 'Qwen3.6-35B-A3B-GGUF', always_allowed: ['changes to files in C:/Users/someone_with_a_long_name/Documents/projects/quarterly-report', 'dir'] },
     crashed: { ...DISCORD_BASE, ...DISCORD_BOT, state: 'stopped', running: false, paired: true, owner_name: 'kalin', detail: 'The Discord bridge stopped unexpectedly.' },
     taken_over: { ...DISCORD_BASE, ...DISCORD_BOT, state: 'taken_over', paired: true, owner_name: 'kalin', detail: 'Another PC is answering this Discord bot.' },
     token_invalid: { ...DISCORD_BASE, ...DISCORD_BOT, state: 'token_invalid', paired: true, owner_name: 'kalin', detail: 'Discord rejected the bot token (HTTP 401). Reset the token in the Developer Portal and paste the new one.' },
@@ -577,6 +659,13 @@ export async function useLocale(page: Page, locale: string): Promise<void> {
     await page.addInitScript((code) => {
         window.localStorage.setItem('gaia-chat-locale', code);
     }, locale);
+}
+
+/** A user who turned the resource usage strip on. */
+export async function withResourceStrip(page: Page): Promise<void> {
+    await page.addInitScript(() => {
+        window.localStorage.setItem('gaia.resourceMonitor.visible', '1');
+    });
 }
 
 /** A status the running extraction tool's own model calls send, as the backend writes it. */

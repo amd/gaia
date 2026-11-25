@@ -6,7 +6,7 @@ import io
 import json
 
 import pytest
-from gaia_agent import stdio
+from gaiapy import stdio
 
 from gaia.skills import link
 
@@ -49,6 +49,37 @@ def test_bare_skills_lists_what_is_installed():
     events = _events(_Agent(), "/skills")
     assert events[-1]["type"] == "final"
     assert "`bro`, `deslop`" in events[-1]["answer"]
+
+
+def test_skills_tells_the_tui_what_it_can_offer_as_slash_commands():
+    class _Skill:
+        def __init__(self, description):
+            self.description = description
+
+    class _RunnableAgent(_Agent):
+        def activate_skill(self, name, how="model"):
+            raise AssertionError("listing must not load anything")
+
+    agent = _RunnableAgent()
+    agent.skill_manager.discover = lambda: {
+        "deslop": _Skill("Tidy code."),
+        "bro": _Skill(None),
+    }
+
+    status = _events(agent, "/skills")[0]
+
+    assert status == {
+        "type": "status",
+        "message": "",
+        "skills": [
+            {"name": "bro", "description": ""},
+            {"name": "deslop", "description": "Tidy code."},
+        ],
+    }
+
+
+def test_an_agent_that_cannot_run_skills_offers_none():
+    assert _events(_Agent(), "/skills")[0]["skills"] == []
 
 
 def test_add_without_confirm_previews_and_warns_but_adds_nothing(monkeypatch):
@@ -108,6 +139,18 @@ def test_a_bad_link_ends_in_one_error_event(monkeypatch):
     events = _events(_Agent(), "/skills add http://x")
     assert events[-1] == {"type": "error", "detail": "only https links are accepted"}
     assert sum(e["type"] in ("final", "error") for e in events) == 1
+
+
+def test_a_link_with_nothing_behind_it_names_no_terminal_command(monkeypatch):
+    """The terminal app's user may have no `gaia` on PATH either (#7973)."""
+
+    def missing(url, manager=None):
+        raise link.SkillLinkNotFoundError("Nothing found at https://x/y.")
+
+    monkeypatch.setattr(link, "preview_link", missing)
+    detail = _events(_Agent(), "/skills add acme/none")[-1]["detail"]
+    assert "gaia skill" not in detail
+    assert "skills folder inside .gaia" in detail
 
 
 @pytest.mark.parametrize("query", ["/skills add --allow-code", "/skills add confirm"])

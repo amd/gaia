@@ -30,8 +30,7 @@ from gaia.daemon.sidecars.spec import builtin_specs
 #: agent id -> "module:builder" for the package's own registration. Must cover
 #: every entry in ``builtin_specs()``; the completeness test below enforces it.
 _REGISTRATION_BUILDERS = {
-    "gaia": "gaia_agent:build_gaia",
-    "email": "gaia_agent_email:build_registration",
+    "gaia": "gaiapy:build_gaia",
 }
 
 

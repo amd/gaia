@@ -1,0 +1,389 @@
+---
+title: "Settings and troubleshooting"
+sidebarTitle: "Settings and help"
+description: "Every Settings tab and where each option is explained, plus logs and fixes for common problems"
+icon: "gear"
+---
+
+Open Settings from the gear at the bottom of the sidebar, or with `Ctrl+,` (`⌘,` on macOS). The tabs below are in the app's order.
+
+<Frame>
+  <img src="/images/agent-ui/settings.png" alt="Settings, open on the General tab, with every tab listed on the left" />
+</Frame>
+
+## Settings
+
+### General
+
+Language, appearance (Light, Dark, Match system), colors, **Show resource usage in chats**, shortcuts, and in the desktop app the [tray switches](/guides/agent-ui/desktop#the-tray-icon) and [updates](/guides/agent-ui/desktop#updates-and-installing-a-specific-version).
+
+**Language** switches the app's labels between **English** and **العربية
+(Arabic)**. In Arabic the whole layout reads right to left, with the sidebar on
+the right, and each label keeps its English in brackets, such as "محادثة جديدة
+(New chat)", set smaller and lighter so the Arabic leads. It changes the app,
+not the language GAIA answers in, and this device remembers it. In either language, each paragraph of an answer runs in
+its own direction, so an answer mixing Arabic and English shows each part the
+right way round, and code always reads left to right.
+
+**Colors** keeps the warm gray look by default. Pick one of eight palettes
+instead (Stone and ink, Blue marble, Glacier, Forest floor, Sage and mist,
+Basalt and lichen, Graphite and gold, Dusk), or **Custom** to choose your own
+accent and background tint. Each works in light and dark, and with custom
+colors the text shades adjust on their own so everything stays readable.
+
+### Setup
+
+**Settings → Setup** lists everything setup chose, each with a link to where
+you change it, and **Run setup again** goes through it once more. Your
+models, keys and chats stay. See [Setup in detail](/guides/agent-ui/getting-started#setup-in-detail).
+
+### Agent & model
+
+The model in use, context size, the models on this PC, cloud providers and keys, and this month's cloud spend. See [Choose a model](/guides/agent-ui/control#choose-a-model).
+
+**Agent**, at the top, picks the program that runs GAIA, each shown with its download size: **Full-featured** (the default), or **Fast and light** (beta). Each row names its program after it in small type, `gaiapy` or `gaiacpp`, as the CLI and these docs call them. **Compare the two** opens their strengths and trade-offs. A gaiacpp that isn't on this PC has a **Download** button on its row; its row can't be picked until then. Download shows a progress bar in the card and switches to gaiacpp when it's in; a failed download says so in the card with **Retry**, and the agent stays as it was. A switch applies from the next message in every chat; GAIA restarts the agent for it. Where this release offers no gaiacpp, its row says **Not installed** and the reason is shown under it. While GAIA is answering in a chat, a switch waits: finish or stop the answer first.
+
+While gaiacpp is the agent, the message box shows a **Fast and light · Beta** chip beside the model chip; click it to come back here. The default agent shows no chip. Once a chat has answered, its panel's **Agent info** names the agent that answered: **Runs on Full-featured (gaiapy)**, or **Runs on Fast and light (gaiacpp)** with a **Beta** tag, the same tag this card shows.
+
+If gaiacpp is the chosen agent and can't start, because its file is missing or fails its check, the new-chat screen says so and offers two buttons: **Download gaiacpp again**, with the same progress bar, and **Use Full-featured**, which saves gaiapy as your choice. GAIA never switches agents by itself, and a message you had typed stays in the box. In a chat you already have open, the same two buttons appear under the reply that failed, and once either one works GAIA sends that message again, as **Try again** does. Where this release has no gaiacpp to download, the screen gives that reason in place of the download button.
+
+### Image creation
+
+The model GAIA makes pictures with, the size and the number of steps (more
+steps add detail and time). The models are the image models downloaded in
+Lemonade, plus the older SD models that download the first time you use them;
+each offers only the sizes it handles well. **Automatic** keeps the model's own
+size or steps. Asking for a size or a model in the chat still overrides these.
+On a chat model too small to be offered image creation (Gemma 4 E4B), the
+section says so and links to **Settings → Agent & model**. A created image shows in the
+chat, and the activity line reads "Created an image". The
+[terminal app](/guides/tui) uses the same settings.
+
+### Permissions
+
+Every chat with full access or "always allow" answers, and **Start new chats in full access**. See [Permissions](/guides/agent-ui/control#permissions).
+
+### Skills
+
+What GAIA can load and where each skill came from. See [Skills](/guides/agent-ui/extend#skills).
+
+### Connectors
+
+Your accounts and services. See [Connectors](/guides/agent-ui/extend#connectors).
+
+### Messaging
+
+Discord. See [Discord](/guides/agent-ui/extend#discord).
+
+### Automations
+
+Reminders, summaries, alerts and triggers. See [Automations](/guides/agent-ui/extend#automations).
+
+### Memory
+
+Turn memory on or off. See [Memory](/guides/agent-ui/extend#memory).
+
+### Notifications
+
+A banner, a badge or nothing for each event, and keeping the PC awake. See [Notifications](/guides/agent-ui/control#notifications).
+
+### Read aloud
+
+The voice, the speed, and whether every reply is read. See [Read aloud](/guides/agent-ui/chat#read-aloud). On macOS this tab only says read aloud isn't offered there yet; a voice or auto-read saved earlier is kept.
+
+### Privacy
+
+Local only, where your data is kept, **Delete all chats** and undo history. See [Privacy](/guides/agent-ui/control#privacy).
+
+### Advanced
+
+The model server and llama.cpp backend, custom model ID, beta options, MCP servers, logs and roll back. The model server is covered [below](#the-model-server).
+
+### About
+
+The version, with **Copy version**, and links to what's new, the documentation and the issue tracker.
+
+## The model server
+
+Local chat runs on Lemonade Server. Most people never need this section: GAIA installs, starts and stops its own.
+
+### When GAIA's model server runs
+
+Local chat runs on GAIA's own Lemonade Server, the one `gaia init` installs.
+GAIA manages it for you, and it gives its memory back when you stop using GAIA:
+
+| When | What happens |
+|---|---|
+| You open the app (desktop, `npx @amd-gaia/agent-ui`, or `gaia-cli`) | GAIA's background service starts the server if it is not running |
+| You close the last GAIA app | Every model is unloaded and the agent processes it used are stopped, so your memory is free again. The server itself stays up for a quick next launch |
+| Another GAIA app or command is still using it, an agent is still answering, or a request is in flight | Nothing is unloaded until it is done |
+| No GAIA process has held it, and it has served no request, for 15 minutes | The server stops entirely |
+| A GAIA process sends a request after it stopped | It starts again and the request goes through, after a cold model load |
+| `gaia daemon stop` | The server stops, including the one first-time setup started |
+
+Every GAIA process that talks to the server holds a lease on it while it
+runs: the app, each `gaia` command, and a process started with another
+`GAIA_HOME` that points `LEMONADE_BASE_URL` at this server. The server is never
+stopped while a lease is held, an agent is answering, or a request is in
+flight. An agent running in the background on GAIA's behalf does not count on
+its own: it is there to serve the apps, so it is stopped when the last one
+closes and started again on your next message.
+
+The server keeps the same port and API key from one start to the next, so a
+chat that was open before a restart keeps working. If another program has taken
+the port, the server moves and gets a new key. Read the current key from
+`~/.gaia/lemonade/env.sh` (`env.ps1` on Windows).
+
+Fifteen minutes balances giving the GPU memory back to other apps against
+the cost of a cold model load, about 20 to 60 seconds, the next time you use
+GAIA. Change it, or turn the timeout off with `0`:
+
+```bash
+gaia config set lemonade_idle_timeout_minutes 30
+```
+
+The new value applies within seconds; no restart is needed.
+
+None of this applies to a Lemonade Server you run yourself and point GAIA at
+with `LEMONADE_BASE_URL`: GAIA never unloads its models or stops it.
+
+### Which server and which GPU backend
+
+**Settings → Advanced → Model server** shows what is actually running:
+
+- **Server**: GAIA's own Lemonade or yours (another Lemonade on this PC, or one
+  on another machine), with its version.
+- **Address**: the URL and port GAIA talks to.
+- **Chat model** and **Runs on**: the loaded model and its llama.cpp backend
+  (Vulkan, ROCm, CPU), NPU, or *Remote (cloud)*. "Lemonade's default" means the
+  load did not name a backend and Lemonade picked it. *unknown* means this
+  Lemonade does not report it.
+- **Context window** and the **Embedding model** with its backend.
+- One row for each other model this Lemonade has loaded (speech,
+  transcription, vision, reranking, image or 3D), labelled by its type, with
+  its name, backend and context window.
+
+*llama.cpp backend for chat models* offers only the backends GAIA has tested:
+**Vulkan** for the GPU. A chat model on a Ryzen AI NPU runs on FastFlowLM
+instead; choose one with **Change model**, or under **Backend** when you
+Customize setup. A different backend saved earlier still loads and shows here,
+so you can switch it to Vulkan. The choice applies the next time the chat model
+loads; **Reload chat model now** applies it at once. The embedding model keeps
+its own backend.
+
+The same setting from a terminal:
+
+```bash
+gaia config set llamacpp_backend vulkan   # vulkan | auto
+```
+
+**Change model** opens Settings → Agent & model. To use a different server, enter its
+address under **Settings → Advanced → Model server** (see [Use a Lemonade you already run](/guides/install#use-a-lemonade-you-already-run)).
+
+**Settings → Advanced → Model server** switches between GAIA's own Lemonade
+Server and one you already run: enter its address (and its API key, if it needs
+one) and choose **Use this server**. Chats already open move to it with their
+next message. The setup screen offers a Lemonade it finds
+running the first time. When the server you chose isn't answering, setup says
+how to start it and how to switch to GAIA's own instead. GAIA never changes
+your server's setup: connecting a cloud provider uses the one your server already has, and says so if it has none. **Use
+GAIA's own** is refused, with nothing changed, when GAIA's own server isn't
+installed; `gaia init --gaia-lemonade` installs it and switches. See
+[Use a Lemonade you already run](/guides/install#use-a-lemonade-you-already-run).
+
+## Logs
+
+Every log GAIA keeps is readable in the app, so you can see what went wrong
+and share it without a terminal. Open them from:
+
+- **Settings → Advanced → Logs**, with **View logs** and **Save all logs**;
+- the **Model server log** button in the sidebar's model popover (click
+  *Local · model* at the bottom of the sidebar), or in **Settings → Advanced →
+  Model server**;
+- under a reply that failed on a local model.
+
+The viewer has a tab for each part of GAIA:
+
+| Tab | What it shows |
+|---|---|
+| **Model server** | What Lemonade and the backends it runs wrote: llama.cpp's `llama-server` and, on a Ryzen AI NPU, FastFlowLM |
+| **GAIA** | `gaia.log`: this app's server, chats, tools, documents and setup |
+| **Background service** | The daemon that starts the model server and runs agents and scheduled tasks |
+| **Agent** | `gaia-agent.log` and each agent's five newest run logs; pick one under **File** |
+| **Desktop app** | The window, the installer and updates |
+| **Other** | The rest of `~/.gaia/logs`, such as the terminal app's log |
+
+Warnings are yellow and errors red; **Warnings and errors only** hides the
+rest. With **Follow new lines** on, new lines appear every two seconds and the
+view stays on the newest unless you scroll up. **Copy** and **Save to file**
+take the lines shown. **Save all logs** writes every log, with this PC's
+details, into one file to attach to a bug report (the same bundle as
+`gaia diagnostics`).
+
+Where the model server's lines come from:
+
+| Server | Source |
+|---|---|
+| GAIA's own Lemonade | Its log file, `~/.gaia/lemonade/lemond.log`. It's readable even when the server has stopped, and the viewer says so above the last lines it wrote |
+| Your Lemonade on this PC | Its live log stream. If it isn't answering, the viewer says so |
+| A Lemonade on another computer | Its log stream when that computer allows it; otherwise the viewer tells you to read the log there |
+
+API keys, bearer tokens and similar secrets are removed from every line,
+on screen and in a saved file. A line can still quote your chat, such as a
+prompt the backend printed, so read it before you share it. Logs aren't
+available over mobile access.
+
+## Troubleshooting
+
+<AccordionGroup>
+  <Accordion title="Lemonade Server not running">
+    You shouldn't have to start the model server yourself — `gaia daemon` starts and supervises it. So the question is why that didn't happen.
+
+    ```bash
+    gaia daemon status            # the daemon reports the model server it supervises
+    gaia daemon start             # if no daemon is running
+    gaia daemon logs --lines 100  # daemon up but no model server — the reason is here
+    ```
+
+    The usual cause is that GAIA isn't set up yet. The app shows its setup steps in that case; `gaia init` from a terminal does the same.
+  </Accordion>
+
+  <Accordion title="A model won't load, or a reply says it couldn't reach the local LLM">
+    Open the [logs](#logs): press **Model server log** under the failed reply, or in the sidebar's model popover. Turn on **Warnings and errors only** to find the line that explains it, such as a backend that exited, a device that was busy, or memory that ran out; the **GAIA** tab shows the same failure from GAIA's side. To report it, use **Save all logs** and attach the file.
+  </Accordion>
+
+  <Accordion title="Mobile access says ngrok is required">
+    Mobile access reaches this PC from your phone through [ngrok](https://ngrok.com/download), which you install once. The dialog links to ngrok's download page; install it, then press **Retry**. ngrok also needs a free account's authtoken:
+
+    ```bash
+    ngrok config add-authtoken <YOUR_TOKEN>
+    ```
+
+    Copy the token from [your ngrok dashboard](https://dashboard.ngrok.com/get-started/your-authtoken).
+  </Accordion>
+
+  <Accordion title="No model loaded">
+    ```bash
+    gaia download --agent chat
+    ```
+  </Accordion>
+
+  <Accordion title="Port 4200 already in use">
+    ```bash
+    # npm CLI
+    gaia-ui --port 8080
+
+    # Python CLI
+    gaia --ui --ui-port 8080
+    ```
+  </Accordion>
+
+  <Accordion title="Database locked error">
+    Close any other GAIA Agent UI or CLI instances. Only one writer at a time is supported.
+  </Accordion>
+
+  <Accordion title="Document indexing fails">
+    - The reason shows under the document in the library. A damaged, password-protected or scanned (no text) PDF is marked **Can't be read**: retrying won't help until you re-export the file, remove the password or run OCR on it
+    - Ensure the file is a supported format and does not need a password to open (PDFs with only permission restrictions index fine)
+    - A document added while GAIA's model server is stopped stays in the library marked **Waiting**, and GAIA indexes it by itself once the server is back. One added while the server was too busy is marked **Failed** with **Retry**
+    - Keep file size under 100MB
+    - For PDF image extraction, download the VLM model: `gaia download --agent chat`
+    - Two large documents index at a time and the rest wait their turn; small files (under 20 MB) have their own two slots, so they never wait behind big ones. A document that keeps making progress indexes to the end however long it takes. One that makes no progress for 10 minutes stops with an error that says so; to allow longer stalls, set `GAIA_INDEX_TIMEOUT` (seconds without progress) before GAIA starts, e.g. `export GAIA_INDEX_TIMEOUT=1200`
+  </Accordion>
+
+  <Accordion title="GAIA can only read documents under ...">
+    Documents can only be read from an allowed root. By default that is your
+    home directory — a path elsewhere on disk is rejected with HTTP 403.
+    GAIA gives the same answer whether or not a file exists there, so it can't
+    be used to probe the rest of the disk: if the path might be mistyped, check
+    it first. A missing file inside an allowed root says it doesn't exist.
+    Dropping the file onto the Document library works from anywhere: GAIA
+    keeps its own copy (up to 20 MB).
+
+    This bites on service accounts and CI runners, whose home
+    (`C:\Windows\System32\config\systemprofile`) is not where their files live.
+    Add the extra directory before starting the server:
+
+    ```bash
+    # POSIX — separate multiple roots with ':'
+    export GAIA_DOCUMENT_ROOTS=/srv/corpus
+    ```
+    ```powershell
+    # Windows — separate multiple roots with ';'
+    $env:GAIA_DOCUMENT_ROOTS = "C:\actions-runner\_work\gaia\gaia\eval\corpus"
+    ```
+
+    Each entry must be an absolute path to a directory that exists; a relative
+    or missing one fails the request with HTTP 500 rather than being ignored.
+    The containment check still applies — declaring a root widens access to
+    that root only, never to its parent, and a symlink escaping it is still
+    rejected.
+
+    Two limits worth knowing before you set this:
+
+    - A declared root is **browsable and previewable, but not searchable**.
+      File search and "open in file manager" still only look at your home
+      directory, so files under a declared root are reachable by path but will
+      not turn up by name.
+    - The roots apply to **every client of the backend**, including one
+      reaching it over the tunnel feature. Declare only what you would be
+      comfortable serving remotely.
+  </Accordion>
+
+  <Accordion title="First-run network egress to huggingface.co">
+    The first time you index a document, Lemonade Server pulls the embedding
+    model (`user.embeddinggemma-300m-GGUF`, ~334 MB) from `huggingface.co`,
+    cached under `~/.cache/huggingface/hub/`. Subsequent runs are offline.
+
+    If your environment blocks `huggingface.co`, pre-seed the cache on a
+    machine with internet access and copy it to the target machine, or set
+    `HF_HOME` to point at a pre-populated cache directory before launching
+    the UI.
+  </Accordion>
+
+  <Accordion title="Frontend shows JSON instead of the UI">
+    The Agent UI frontend has not been built.
+
+    **npm install (`gaia-ui`):** This is handled automatically — `gaia-ui` tells the Python server where to find the pre-built frontend. If you still see this error, try reinstalling: `npm install -g @amd-gaia/agent-ui@latest` Then restart with `gaia-ui`.
+
+    **Source/dev installs (git clone):** Run `gaia init` to build it automatically, or manually (from the repo root):
+
+    ```bash
+    cd src/gaia/apps/webui && npm install && npm run build
+    ```
+
+    Then restart `gaia chat --ui`.
+
+    **pip/PyPI installs (without gaia-ui):** Use the [npm install path](/guides/agent-ui/getting-started#other-ways-to-install) — the pip package does not include frontend source files.
+  </Accordion>
+
+  <Accordion title="LLM response times out or fails">
+    When a reply comes back empty, GAIA checks Lemonade Server before saying why. "The model returned an empty answer" means the server is fine: send the message again or pick another model. A message naming Lemonade means the server isn't responding (it says how to start it), it rejected GAIA's API key (check `LEMONADE_API_KEY`), or the model isn't loaded.
+
+    Slow or timed-out replies can also come from your MCP server configuration. Misconfigured or unreachable MCP servers cause the agent to wait up to 10 seconds per server before responding.
+
+    Check your config:
+
+    ```bash
+    # macOS / Linux
+    cat ~/.gaia/mcp_servers.json
+
+    # Windows (PowerShell)
+    Get-Content "$env:USERPROFILE\.gaia\mcp_servers.json"
+    ```
+
+    If it contains servers you don't recognize or aren't running, either remove them or reset the file:
+
+    ```json
+    { "mcpServers": {} }
+    ```
+
+    You can also manage MCP servers through the Agent UI settings panel or with the CLI:
+
+    ```bash
+    gaia mcp status
+    ```
+  </Accordion>
+</AccordionGroup>
+
+More fixes are in the [troubleshooting reference](/reference/troubleshooting).

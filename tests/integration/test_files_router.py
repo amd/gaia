@@ -31,6 +31,7 @@ from fastapi.testclient import TestClient
 
 from gaia.ui.server import create_app
 from gaia.ui.utils import uploads_dir
+from tests.fixtures.legacy_text import LEGACY_SAMPLES, UNDECODABLE
 
 logger = logging.getLogger(__name__)
 
@@ -49,7 +50,7 @@ def app(isolated_gaia_home):
 @pytest.fixture
 def client(app):
     """Create test client for the app."""
-    return TestClient(app)
+    return TestClient(app, client=("127.0.0.1", 50000))
 
 
 @pytest.fixture
@@ -178,8 +179,8 @@ class TestFileUpload:
         assert data["content_type"] == "text/plain"
         assert data["is_image"] is False
         assert data["url"].startswith("/api/files/uploads/")
-        # A random ID, then the name the user knows the file by.
-        assert re.fullmatch(r"[0-9a-f]{12}_test\.txt", data["filename"])
+        # The name the user knows the file by, with an id only on a clash.
+        assert re.fullmatch(r"(?:[0-9a-f]{12}_)?test\.txt", data["filename"])
         logger.info("Upload text file response: %s", data)
 
     def test_upload_image_file(self, client, sample_png_bytes):
@@ -308,9 +309,9 @@ class TestFileUpload:
             assert data["filename"].endswith(
                 ext
             ), f"Extension not preserved: expected {ext}, got {data['filename']}"
-            # Verify the ID prefix and the kept name
+            # The kept name, with an id only when that name is already taken
             assert re.fullmatch(
-                rf"[0-9a-f]{{12}}_myfile{re.escape(ext)}", data["filename"]
+                rf"(?:[0-9a-f]{{12}}_)?myfile{re.escape(ext)}", data["filename"]
             )
 
     def test_upload_is_stored_under_gaia_home(self, client):
@@ -925,10 +926,9 @@ class TestFilePreview:
         assert data["is_text"] is True
         assert data["encoding"] == "utf-8"
 
-    def test_preview_latin1_fallback(self, client, home_tmp_dir):
-        """Verify latin-1 fallback for non-UTF-8 encoded files."""
+    def test_preview_windows_western_text(self, client, home_tmp_dir):
+        """Western text that is not UTF-8 reads as Windows-1252."""
         latin1_file = home_tmp_dir / "latin1.txt"
-        # Write bytes that are valid latin-1 but not valid utf-8
         latin1_file.write_bytes(b"caf\xe9\nni\xf1o\n")
 
         resp = client.get(
@@ -939,7 +939,31 @@ class TestFilePreview:
 
         data = resp.json()
         assert data["is_text"] is True
-        assert data["encoding"] == "latin-1"
+        assert data["encoding"] == "cp1252"
+        assert data["preview_lines"] == ["café", "niño"]
+
+    @pytest.mark.parametrize(**LEGACY_SAMPLES)
+    def test_preview_legacy_encoding(self, client, home_tmp_dir, text, encoding):
+        """Arabic, Japanese, Chinese and Cyrillic files preview as their text (#8040)."""
+        f = home_tmp_dir / "legacy.csv"
+        f.write_bytes(text.encode(encoding))
+
+        data = client.get("/api/files/preview", params={"path": str(f)}).json()
+
+        assert data["is_text"] is True
+        assert data["preview_lines"] == text.splitlines()
+        assert data["columns"] == text.splitlines()[0].split(",")
+        assert data["row_count"] == len(text.splitlines()) - 1
+
+    def test_preview_undecodable_text_file_is_not_shown(self, client, home_tmp_dir):
+        """Bytes no encoding fits give no preview rather than mojibake."""
+        f = home_tmp_dir / "scrambled.txt"
+        f.write_bytes(UNDECODABLE)
+
+        data = client.get("/api/files/preview", params={"path": str(f)}).json()
+
+        assert data["is_text"] is False
+        assert data["preview_lines"] == []
 
     def test_preview_python_file(self, client, sample_py_file):
         """Preview a .py file to confirm code files work."""
@@ -1027,6 +1051,70 @@ class TestFilePreview:
             len(data["preview_lines"][0]) == 500
         ), f"Expected line truncated to 500 chars, got {len(data['preview_lines'][0])}"
         assert data["preview_lines"][1] == "short line"
+
+    @pytest.mark.parametrize("name", [".env", "id_rsa", "agent-ui-token", "hmac.key"])
+    def test_preview_refuses_credential_files(self, client, home_tmp_dir, name):
+        secret = home_tmp_dir / name
+        secret.write_text("SECRET_VALUE=abc123\n", encoding="utf-8")
+
+        resp = client.get("/api/files/preview", params={"path": str(secret)})
+
+        assert resp.status_code == 403
+        assert resp.json()["detail"] == (
+            "This file holds credentials, so GAIA won't preview it."
+        )
+        assert "abc123" not in resp.text
+
+    def test_preview_refuses_files_in_credential_folders(
+        self, client, home_tmp_dir, monkeypatch
+    ):
+        import gaia.security as security_mod
+
+        folder = home_tmp_dir / ".aws"
+        folder.mkdir()
+        (folder / "notes.txt").write_text("aws_secret=abc123\n", encoding="utf-8")
+        monkeypatch.setattr(security_mod, "SECRET_DIRECTORIES", {str(folder)})
+
+        resp = client.get(
+            "/api/files/preview", params={"path": str(folder / "notes.txt")}
+        )
+
+        assert resp.status_code == 403
+        assert "abc123" not in resp.text
+
+
+# ── TestLocalImage ───────────────────────────────────────────────────────────
+
+
+class TestLocalImage:
+    """GET /api/files/image."""
+
+    def test_svg_is_served_sandboxed(self, client, home_tmp_dir):
+        svg = home_tmp_dir / "drawing.svg"
+        svg.write_text(
+            '<svg xmlns="http://www.w3.org/2000/svg"><rect width="1" height="1"/></svg>',
+            encoding="utf-8",
+        )
+
+        resp = client.get("/api/files/image", params={"path": str(svg)})
+
+        assert resp.status_code == 200
+        assert resp.headers["content-security-policy"] == "sandbox"
+        assert resp.headers["x-content-type-options"] == "nosniff"
+
+    def test_image_in_a_credential_folder_is_refused(
+        self, client, home_tmp_dir, monkeypatch, sample_png_bytes
+    ):
+        import gaia.security as security_mod
+
+        folder = home_tmp_dir / ".gnupg"
+        folder.mkdir()
+        (folder / "shot.png").write_bytes(sample_png_bytes)
+        monkeypatch.setattr(security_mod, "SECRET_DIRECTORIES", {str(folder)})
+
+        resp = client.get("/api/files/image", params={"path": str(folder / "shot.png")})
+
+        assert resp.status_code == 403
 
 
 # ── TestFileOpen ─────────────────────────────────────────────────────────────
@@ -1354,8 +1442,10 @@ class TestSecurityEdgeCases:
         assert resp.status_code == 200
         data = resp.json()
         assert data["original_name"] == "my file (copy) [2].txt"
-        # No special characters leak into the stored name
-        assert re.fullmatch(r"[0-9a-f]{12}_my_file_copy_2\.txt", data["filename"])
+        # The stored name and its URL keep the user's spelling.
+        assert data["filename"] == "my file (copy) [2].txt"
+        assert data["url"] == "/api/files/uploads/my%20file%20%28copy%29%20%5B2%5D.txt"
+        assert client.get(data["url"]).content == b"data"
 
 
 # ── TestBrowseEdgeCases ──────────────────────────────────────────────────────
@@ -1481,3 +1571,27 @@ class TestPreviewEdgeCases:
         # min(max(0, 1), 200) = 1
         data = resp.json()
         assert len(data["preview_lines"]) == 1
+
+
+class TestFileBrowseDenialReason:
+    """A 403 caused by the operating system says so; the home-folder limit does not."""
+
+    def test_unreadable_folder_is_marked_os_denied(self, client, home_tmp_dir):
+        with patch("pathlib.Path.iterdir", side_effect=PermissionError("denied")):
+            resp = client.get("/api/files/browse", params={"path": str(home_tmp_dir)})
+        assert resp.status_code == 403
+        assert resp.json()["detail"]["status"] == "os_denied"
+
+    def test_outside_home_is_not_marked_os_denied(self, client):
+        outside = "C:\\\\Windows" if platform.system() == "Windows" else "/etc"
+        resp = client.get("/api/files/browse", params={"path": outside})
+        assert resp.status_code == 403
+        assert isinstance(resp.json()["detail"], str)
+
+
+def test_ui_token_file_name_is_read_blocked():
+    """Renaming the Agent UI token file must not drop it out of the read guard."""
+    from gaia.security import SENSITIVE_FILE_NAMES
+    from gaia.ui.api_token import TOKEN_FILE_NAME
+
+    assert TOKEN_FILE_NAME in SENSITIVE_FILE_NAMES

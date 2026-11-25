@@ -1,0 +1,31 @@
+{
+  "ref": "p3",
+  "url": "http://127.0.0.1:5000/react.html",
+  "title": "Pane fixture React",
+  "tag": "button",
+  "label": "button.primary",
+  "selector": "#root > section.card > button.primary",
+  "role": "button",
+  "name": "Save",
+  "text": "Save",
+  "rect": {
+    "x": 41,
+    "y": 110,
+    "width": 58,
+    "height": 36
+  },
+  "component": {
+    "name": "SaveButton",
+    "source": {
+      "file": "/react-app.js",
+      "line": 24311
+    }
+  },
+  "outerHTML": "<button class=\"primary\" type=\"button\">Save</button>",
+  "styles": {
+    "display": "inline-block",
+    "color": "rgb(255, 255, 255)",
+    "background-color": "rgb(22, 163, 74)"
+  },
+  "cropUrl": "/api/files/uploads/picked-p3.png"
+}

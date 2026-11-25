@@ -15,15 +15,20 @@
  *   GAIA_E2E_PYTHONPATH  checkout's src and hub agent, when GAIA is installed elsewhere
  *   GAIA_E2E_UI_DIST     built UI to serve (default: this checkout's dist)
  *   GAIA_E2E_BASE_URL    run only installed.journey.ts, against an app already running
+ *   GAIA_E2E_HUB_MIRROR  a folder from installer/headless/hub_mirror.py, served as the
+ *                        hub so no test downloads the assistant live (unset: the live hub)
+ *   GAIA_E2E_HUB_PORT    the port it is served on (default 18731)
  *   GAIA_VISUAL_CHROMIUM a Chromium or Chrome binary, as in visual/
  */
 
 import { defineConfig } from '@playwright/test';
 
 import type { JourneyOptions } from './harness';
+import { HUB_MIRROR, HUB_MIRROR_PORT } from './hub';
 
 const installed = !!process.env.GAIA_E2E_BASE_URL;
 const executablePath = process.env.GAIA_VISUAL_CHROMIUM || undefined;
+const python = process.env.GAIA_E2E_PYTHON || 'python';
 
 export default defineConfig<JourneyOptions>({
     testDir: '.',
@@ -47,6 +52,15 @@ export default defineConfig<JourneyOptions>({
         screenshot: 'only-on-failure',
         trace: 'retain-on-failure',
     },
+    webServer:
+        HUB_MIRROR && !installed
+            ? {
+                  command: `"${python}" -m http.server ${HUB_MIRROR_PORT} --bind 127.0.0.1 --directory "${HUB_MIRROR}"`,
+                  url: `http://127.0.0.1:${HUB_MIRROR_PORT}/index.json`,
+                  reuseExistingServer: false,
+                  stdout: 'ignore',
+              }
+            : undefined,
     projects: [
         { name: 'en', use: { lang: 'en' } },
         { name: 'ar', use: { lang: 'ar' } },

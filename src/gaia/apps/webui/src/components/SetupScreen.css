@@ -21,7 +21,7 @@
     margin-inline-start: 8px;
     color: var(--text-primary);
     font-size: 15px;
-    font-weight: 600;
+    font-weight: 500;
 }
 
 .setup-rail-list {
@@ -57,7 +57,7 @@ button.setup-rail-step:hover {
 .setup-rail-step.is-shown {
     background: var(--bg-primary);
     color: var(--text-primary);
-    font-weight: 600;
+    font-weight: 500;
 }
 
 .setup-rail-num {
@@ -125,9 +125,12 @@ button.setup-rail-step:hover {
     margin-inline-end: auto;
 }
 
-/* A long label wraps inside its button rather than running off the window. */
+/* A long label wraps inside its button rather than running off the window, and the button grows to hold it. */
 .setup-footer-row > button {
     max-inline-size: 100%;
+    block-size: auto;
+    min-block-size: 32px;
+    padding-block: 6px;
     white-space: normal;
 }
 
@@ -167,6 +170,16 @@ button.setup-rail-step:hover {
     padding: 14px 16px;
     border: 1px solid var(--border-light);
     border-radius: var(--radius-lg);
+}
+
+/* The version name and its English hint can outgrow a phone's width. */
+.setup-card .go-back-action {
+    block-size: auto;
+    min-block-size: 32px;
+    max-inline-size: 100%;
+    padding-block: 6px;
+    white-space: normal;
+    text-align: start;
 }
 
 .setup-hero {
@@ -209,13 +222,13 @@ button.setup-rail-step:hover {
 .setup-eyebrow {
     color: var(--accent);
     font-size: 12px;
-    font-weight: 600;
+    font-weight: 500;
 }
 
 .setup-hero-title {
     color: var(--text-primary);
     font-size: 20px;
-    font-weight: 600;
+    font-weight: 500;
 }
 
 .setup-facts {
@@ -237,7 +250,7 @@ button.setup-rail-step:hover {
 
 .setup-facts dd {
     color: var(--text-primary);
-    font-weight: 600;
+    font-weight: 500;
 }
 
 .setup-reasons {
@@ -245,6 +258,11 @@ button.setup-rail-step:hover {
     flex-direction: column;
     gap: 2px;
     padding-inline-start: 20px;
+    color: var(--text-secondary);
+    font-size: 14px;
+}
+
+.setup-agent-line {
     color: var(--text-secondary);
     font-size: 14px;
 }
@@ -414,7 +432,7 @@ button.setup-rail-step:hover {
 .setup-key-label {
     color: var(--text-primary);
     font-size: 13px;
-    font-weight: 600;
+    font-weight: 500;
 }
 
 .setup-key-row {
@@ -485,7 +503,7 @@ button.setup-rail-step:hover {
 .setup-title {
     color: var(--text-primary);
     font-size: 22px;
-    font-weight: 600;
+    font-weight: 500;
 }
 
 /* Focus lands on the title so screen readers announce the new step: a thin line under
@@ -557,7 +575,7 @@ button.setup-rail-step:hover {
 .setup-choice-title {
     display: block;
     font-size: 14px;
-    font-weight: 600;
+    font-weight: 500;
 }
 
 .setup-choice-note {
@@ -622,7 +640,7 @@ label.setup-choice {
     border-radius: var(--radius-full);
     color: var(--accent);
     font-size: 11px;
-    font-weight: 600;
+    font-weight: 500;
     vertical-align: 1px;
 }
 
@@ -778,6 +796,9 @@ label.setup-choice {
     align-items: center;
     gap: 6px;
     max-inline-size: 100%;
+    block-size: auto;
+    min-block-size: 32px;
+    padding-block: 6px;
     white-space: normal;
     text-align: start;
 }
@@ -828,7 +849,7 @@ label.setup-choice {
     margin: 8px 0 0;
     color: var(--text-secondary);
     font-size: 11px;
-    font-weight: 600;
+    font-weight: 500;
     letter-spacing: 0.04em;
     text-transform: uppercase;
 }
@@ -946,7 +967,7 @@ label.setup-choice {
     background: var(--bg-tertiary);
     color: var(--text-secondary);
     font-size: 11px;
-    font-weight: 600;
+    font-weight: 500;
     vertical-align: 1px;
 }
 

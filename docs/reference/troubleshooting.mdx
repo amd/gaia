@@ -52,7 +52,7 @@ icon: "bug"
 
     - **A warning says GAIA "could not switch HTTPS verification to the system
       certificate store"** — the `truststore` package is missing or broken. Run
-      `pip install --upgrade "truststore>=0.10.0"` in GAIA's environment. The warning
+      `pip install --upgrade "truststore>=0.10.3"` in GAIA's environment. The warning
       appears in the terminal, or in `gaia daemon logs` (add `--agent <id>` for an
       agent's own requests).
     - **No such warning in either place** — the proxy's root certificate is not in the OS
@@ -144,7 +144,7 @@ icon: "bug"
     asks before letting GAIA read it. Look for the system dialog (it can open behind
     other windows) and click **Always Allow**. The model list updates once you
     answer. If you click **Deny**, GAIA can't use the saved key; paste it again under
-    **Settings → Model**.
+    **Settings → Agent & model**.
 
     You only need to answer this once for each saved key. On a Mac, the GAIA daemon
     reads the keychain for the agent, so updating the agent doesn't ask again. The
@@ -159,7 +159,7 @@ icon: "bug"
     "Unlock keyring" or "Choose password for new keyring"), so GAIA can't read a
     saved key. GAIA waits five minutes before asking again, so the prompt doesn't
     keep coming back. To use a saved key sooner, choose **Try again** in the
-    model list or under **Settings → Model**, then unlock or create the keyring
+    model list or under **Settings → Agent & model**, then unlock or create the keyring
     in the prompt that opens. Connecting or testing a connector asks again too.
     Until then a connector reads as unavailable and the new-chat inbox card stays
     hidden.
@@ -219,7 +219,7 @@ icon: "bug"
     **Model server log** in the sidebar's model popover or under a reply that failed on a
     local model, and **Settings → Advanced → Logs**. The model server tab shows llama.cpp's
     and FastFlowLM's output too, and works for a Lemonade you run yourself. See
-    [Logs](/guides/agent-ui#logs).
+    [Logs](/guides/agent-ui/settings#logs).
   </Accordion>
 
   <Accordion title="gaia init can't install the GAIA agent" icon="store">
@@ -242,9 +242,8 @@ icon: "bug"
 
 <AccordionGroup>
   <Accordion title="Agent says a tool 'requires explicit user approval'" icon="shield-halved">
-    Dangerous tools — shell commands, file writes, email send / forward /
-    permanent delete, calendar RSVP — only run after you approve them. If nothing
-    can ask you, the tool is denied rather than run silently:
+    Dangerous tools — shell commands, file writes, and other tools that change
+    your machine — only run after you approve them. If nothing can ask you, the tool is denied rather than run silently:
 
     ```
     'send_now' requires explicit user approval and cannot run unattended…
@@ -482,17 +481,23 @@ it needs about 7.8 GB and only 6.0 GB is free.
 
 **Fix:** close apps that use a lot of memory, then send your message again.
 Web browsers, games, other AI apps and another Lemonade server with models loaded
-are the usual ones. On a 16 GB PC, about 8 GB free is the least Gemma-4-E4B loads
-in, and about 11 GB free when GAIA starts gets it the full window.
+are the usual ones. On a 16 GB PC GAIA's default is Qwen3.5-2B, which loads in
+about 4 GB free; Gemma-4-E4B, if you chose it there, needs about 8 GB, and about
+11 GB free when GAIA starts gets it the full window.
 
 What GAIA does on a small PC:
 
+- **Setup leaves room for your other apps.** Where the model shares the PC's
+  RAM, GAIA keeps the larger of 10 GB and a quarter of the RAM for everything
+  else, so a PC with 16 GB or less gets Qwen3.5-2B. It reads images itself, so
+  Gemma is not downloaded beside it. A model that would leave other apps little
+  memory is marked in the pickers, and setup asks before using it.
 - **Setup picks a model that fits the memory free now.** Before it downloads
-  the larger default (Qwen3.6), `gaia init` and the Agent UI's setup screen
-  check free memory, not just the PC's total. When it won't fit, they pick
-  Gemma-4-E4B and say how much Qwen3.6 needs and how much is free.
-- **The context window shrinks to fit.** Gemma-4-E4B loads with a 65,536-token
-  window when there is room, and otherwise steps down in 8,192-token steps to no
+  a larger default, `gaia init` and the Agent UI's setup screen check free
+  memory, not just the PC's total. When it won't fit, they pick the next smaller
+  model and say how much the larger one needs and how much is free.
+- **The context window shrinks to fit.** Gemma-4-E4B and the Qwen3.5 models load
+  with a 65,536-token window when there is room, and otherwise steps down in 8,192-token steps to no
   less than 32,768. The log says so. Restart GAIA after freeing memory to get the
   full window back.
 - **Below 32,768 tokens, GAIA refuses.** The flagship's prompt and tools alone
@@ -560,6 +565,15 @@ error. To run the chat model in the cloud instead, see
     is still empty, report it with `gaia diagnostics`.
   </Accordion>
 
+  <Accordion title="The model's answer came back corrupted" icon="file-circle-exclamation">
+    A local model can start repeating one token instead of writing an answer, for
+    example Gemma 4 sending `<unused49>` over and over. GAIA stops that reply, shows none
+    of the repeated text, ends the turn as failed and unloads the model, so your next
+    message loads a fresh copy. Send your message again. On your own Lemonade
+    Server GAIA leaves the model loaded, so unload or reload it there if it keeps
+    happening.
+  </Accordion>
+
   <Accordion title="Wrong model version installed" icon="code-branch">
     Force re-download to get the latest version:
     ```bash
@@ -568,10 +582,11 @@ error. To run the chat model in the cloud instead, see
   </Accordion>
 
   <Accordion title="A chat model fails with 'llama-server failed to start'" icon="triangle-exclamation">
-    llama.cpp exited while loading the model. GAIA starts a llama.cpp chat model with two
-    slots over one shared KV cache (`--parallel 2 --kv-unified --cache-ram 0
-    --slot-prompt-similarity 0.5`), so side work such as titles and memory doesn't evict the
-    conversation. Some models and llama.cpp builds can't start with those flags: Gemma 4 with
+    llama.cpp exited while loading the model. GAIA starts a llama.cpp chat model with three
+    slots over one shared KV cache (`--parallel 3 --kv-unified --cache-ram 0
+    --slot-prompt-similarity 0.5 --ctx-checkpoints 16`), so side work such as titles and
+    memory doesn't evict the conversation, and a long chat doesn't keep growing the model
+    server's memory. Some models and llama.cpp builds can't start with those flags: Gemma 4 with
     an MTP draft model aborts on llama.cpp b12020, for example
     ([#6221](https://github.com/amd/gaia/issues/6221)).
 
@@ -779,6 +794,31 @@ error. To run the chat model in the cloud instead, see
     reach safe mode.
   </Accordion>
 
+  <Accordion title="Setup fails the same way every time I try again" icon="clock-rotate-left">
+    A broken GAIA build can stop setup, for example at "GAIA couldn't download or
+    start its AI engine", in a way **Try again** can't fix. When an older version
+    finished setup on this PC, the setup screen also offers **Go back to GAIA
+    vX**, with the date it last worked. The same offer appears under the notice
+    when an update to GAIA's own model server fails.
+
+    Going back is your choice; GAIA never does it on its own. It downloads that
+    version, so it needs an internet connection, then restarts into it. Your
+    chats, memory and settings stay as they are. Updates pause so the broken
+    version isn't reinstalled; the newer version stays available, and **Unpin**
+    in **Settings → General → Updates** offers it again once a fix ships. The
+    older version lacks every fix released since, security fixes included, as
+    the offer says. Go forward again as soon as a fixed version is out.
+
+    The offer appears on the Windows desktop app and the Linux AppImage. A
+    `.deb`, whose files the package manager owns, and a Mac, whose releases
+    don't publish an in-app update yet, don't get it: install the older version
+    from the [releases page](https://github.com/amd/gaia/releases) instead. GAIA
+    records the version local setup finished on in `~/.gaia/last-working-version.json`;
+    a launch on a cloud model doesn't count.
+    Earlier versions didn't keep that record, so a version can be offered only
+    once setup has finished on it.
+  </Accordion>
+
   <Accordion title="GAIA's window stopped working" icon="window-restore">
     When only the window fails (its page crashes, often because the PC ran out
     of memory), GAIA itself keeps running, along with any answer or folder
@@ -878,11 +918,16 @@ error. To run the chat model in the cloud instead, see
 
   <Accordion title="Cloud models and downloads fail: the certificate store has no ca-certificates.crt" icon="certificate">
     **Cause:** the model server inside GAIA trusts HTTPS sites through exactly
-    one file, `/etc/ssl/certs/ca-certificates.crt`. The `ca-certificates`
-    package Fedora 44 first shipped leaves that file out, so every cloud model
-    and every model download fails. GAIA says so in setup's cloud step and in
-    a failed download, and `~/.gaia/lemonade/lemond.log` shows
-    `Problem with the SSL CA cert`. Your key is not the problem.
+    one file, `/etc/ssl/certs/ca-certificates.crt`, and ignores
+    `SSL_CERT_FILE`. Where that file is missing (the `ca-certificates`
+    package Fedora 44 first shipped leaves it out), GAIA starts the model
+    server in a private view of the filesystem that shows your system's own
+    bundle at that path, so cloud models and downloads work with no change to
+    your system. That needs unprivileged user namespaces; when the kernel
+    refuses them, every cloud model and every model download fails. GAIA then
+    says so in setup's cloud step and in a failed download, and
+    `~/.gaia/lemonade/lemond.log` shows `Problem with the SSL CA cert`. Your
+    key is not the problem.
 
     **Fix:** install your system's updates (GNOME Software, or
     `sudo dnf upgrade ca-certificates`); the updated package adds the file.

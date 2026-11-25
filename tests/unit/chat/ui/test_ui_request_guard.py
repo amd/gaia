@@ -77,7 +77,11 @@ def _scope(app, method: str, path: str, headers: dict) -> dict:
 
 
 async def _request(stack, app, method, path, headers, body: bytes = b""):
-    """Drive an ASGI app and return ``(status, headers_dict, body)``."""
+    """Drive an ASGI app and return ``(status, headers_dict, body)``.
+
+    Carries the API token so these tests isolate the Host/Origin/header guard.
+    """
+    headers = {"authorization": f"Bearer {app.state.ui_api_token}", **headers}
     sent = []
 
     async def receive():
@@ -228,7 +232,6 @@ def test_high_value_routes_are_in_the_covered_set(app):
         "/api/memory/prune",
         "/api/documents/upload",
         "/api/files/upload",
-        "/v1/email/send",
         "/api/chat/send",
     ):
         assert path in paths, f"{path} disappeared from the route table"

@@ -359,6 +359,7 @@ class LearnedOverlayStubMixin:
     learned_skills_enabled = _Agent.learned_skills_enabled
     overlaid_skills = _Agent.overlaid_skills
     learned_skill_scope = _Agent.learned_skill_scope
+    learned_skill_scopes = _Agent.learned_skill_scopes
 
     _memory_store = None
     _incognito = False

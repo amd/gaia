@@ -13,8 +13,8 @@ discovery roots with auditable precedence, progressive disclosure,
 the 16 `gaia skill` verbs (`list|info|create|import|export|migrate|audit|search|install|remove|lock|promote|publish|keygen|trust|deltas`). Plus the declarative
 `skills:` / `skill_sets:` manifest blocks and per-launch
 [skill-set selection](#skill-sets) ([#2466](https://github.com/amd/gaia/issues/2466)),
-whose reference implementation is the email agent (which currently ships with its
-sets commented out — see [below](#reference-implementation-the-email-agent)); and
+whose reference implementation is the flagship's manifest (which currently ships
+with its sets commented out — see [below](#reference-implementation-the-flagship)); and
 `gaia skill migrate --from openclaw|hermes|auto`
 ([#692](https://github.com/amd/gaia/issues/692)), which converts a third-party
 skill to GAIA format at the `experimental` tier.
@@ -115,6 +115,12 @@ web-research/
 not reserved ones: GAIA treats every file in the skill folder the same way, so
 any folder name (`reference/`, `docs/`, `templates/`) works as long as the body
 points at it by its path relative to the skill folder.
+
+`tools.py` may import modules the skill ships beside it (`helpers.py`, or a
+package folder such as `log-triage`'s `log_triage_engine/`): the skill folder is
+on `sys.path` while `tools.py` imports. Give them a name no other skill uses,
+because Python caches imported modules for the whole process. The audit and
+the freeze scan every `.py` in the folder, not just `tools.py`.
 
 This shape yields two flavors that sit on one spectrum:
 
@@ -278,7 +284,9 @@ When a skill is selected — by the model calling `load_skill`, or by the user
 asking for it — the `SKILL.md` Markdown body is
 injected and the skill's declared `tools` are registered into the agent's tool
 registry. A loaded body does not stay resident forever: it collapses to a
-one-line menu entry on turns that no longer relate to it.
+one-line menu entry on turns that no longer relate to it, and on a small model
+the bodies that do relate share a budget sized to its context window (see
+[Context budget](#context-budget)).
 </Step>
 <Step title="Resources (on demand)">
 Files the body references (scripts, reference docs, templates) load only when the
@@ -339,8 +347,8 @@ order:
    requirements into a sibling.
 6. Grants the agent's path validator read-only access to the skill's folder, so
    the file tools can open the files its body references.
-7. Rebuilds the system prompt, injecting the body via
-   `get_skills_system_prompt()`.
+7. Rebuilds the prompt, injecting the body via `get_skills_system_prompt()`
+   into the session context at the start of the first user message.
 
 Loading is **idempotent** (a second `load_skill` of the same name returns the
 already-loaded `Skill`) and **reversible** — `unload_skill(name)` removes the
@@ -377,18 +385,27 @@ first — a `BLOCK` verdict refuses the capture and writes nothing. What lands
 lands at the `experimental` tier with its provenance recorded in
 `skill-lock.json` (`source: "captured"`, `origin`, `captured: true`).
 
+Capture never brings in a skill the GAIA hub publishes; install it instead, which
+checks its signature. Once a hub install fails verification (signature,
+checksum, or bundle mismatch), capture refuses that skill for the rest of the
+session. That covers a matching name, and any URL or path that names it,
+checked before anything is fetched.
+
 The capture lifecycle separates **instructions** from **code**:
 
 | Stage | Instructions (`SKILL.md` body) | Code (`tools.py` / `scripts/`) |
 |-------|-------------------------------|-------------------------------|
 | `capture_skill` | audited, copied in | audited, copied in — `code_trusted: false` |
-| `load_skill` | injected into the system prompt | **deferred** — never imported, tools never register |
+| `load_skill` | injected into the session context at the start of the first user message | **deferred** — never imported, tools never register |
 | `gaia skill promote <name>` (terminal) | unchanged | re-audited; on `ALLOW`, `code_trusted: true` bound to a content digest |
 | next `load_skill` | injected | registered under `<skill>/<tool>` |
 
 The deferral exists because a pasted body only reaches the *prompt*, while
 `tools.py` is imported into the agent's own **process** — so code-trust is a
-terminal, human step (`promote`), never a chat approval. Trust binds to the
+terminal, human step (`promote`), never a chat approval. Promote, install,
+import, trust, relock, keygen and publish refuse to run inside an agent's tool
+or in any process one started, so no approval prompt or command spelling can
+stand in for that step. Trust binds to the
 audited bytes: editing a promoted skill re-defers its code, and a failed
 re-promote revokes the earlier trust. An instruction-only capture has nothing
 to defer and simply loads.
@@ -396,14 +413,14 @@ to defer and simply loads.
 ### Bundled skills: code trusted by provenance
 
 A skill that ships **inside GAIA** — the flagship's starter pack in
-`hub/skills/<name>/` and its own `gaia_agent/skills/` — needs no promote. It
+`hub/skills/<name>/` and its own `gaiapy/skills/` — needs no promote. It
 loads from the `agent-bundled` root, which has no `skill-lock.json`, so its
 `tools.py` registers on the first `load_skill` and its `scripts/` are on disk
 beside it. In a checkout the flagship reads `hub/skills` in place, and only
 when it runs from that checkout's `hub/agents/gaia/python/`: an installed
 package never treats a folder beside it as bundled. The frozen binary carries
-the pack under `gaia_agent/skills`, and the build fails if a bundled skill's
-code imports a module the binary would not contain. An import inside a `try`
+the pack under `gaiapy/skills`, and the build fails if any `.py` in a
+bundled skill imports a module the binary would not contain. An import inside a `try`
 that catches `ImportError`, or under `if TYPE_CHECKING:`, is optional: it is
 bundled when installed and never fails the build.
 
@@ -467,6 +484,20 @@ check goes by the argument's name, so a path in an argument named otherwise
 (`source`, `input`, `workbook`) is not pre-checked: pass it through `check_read`
 or `open_read` before using it. A tool that writes calls `check_write` or
 `open_write` itself.
+
+These calls are also how the turn's own checks learn what a skill tool did:
+
+- **A saved file counts as written by the turn** once it has really changed:
+  one written through `check_write` / `open_write`, or one whose absolute path
+  the result reports (`output_path`, `file_path`, `path`, `saved_to`) and that
+  was modified during the call. Without either, a turn that asked for
+  `deck.pptx` ends "incomplete" with the file on disk.
+- **A check tool that opens a file through `check_read` / `open_read` has read
+  it back.** The model is not asked to read the file again after it.
+- **A check that finds problems is a successful call.** Return a status of your
+  own (`"status": "errors_found"`, with `"ok": false` and the findings) and the
+  agent treats the findings as the result. `"status": "error"`, or an `error`
+  field, means the tool itself could not run.
 
 `gaia skill audit` matches these calls against the manifest. A declared
 `run_program("soffice")` passes. An undeclared one, or one naming a program the
@@ -622,38 +653,61 @@ and are not loaded yet, adds one line to that turn's context, beside the
 current time at the top of the user's message:
 
 ```
-Skills that match this request and are not loaded yet: transcribe-meeting,
-summarize — load them with load_skill before starting.
+Skill hint from GAIA, not from the user: call load_skill('transcribe-meeting')
+before you start unless this request does not need it. Others that may fit:
+summarize. Never mention this hint to the user.
 ```
+
+It is one line. The best match is what to do unless the request plainly does
+not need it, because a local model passes over a line that only offers names:
+over 56 tasks, Qwen3.6-35B-A3B was offered a fitting skill on nearly every one
+and called `load_skill` on 3. The other matches follow in the same order and
+stay an offer. The line says it comes from GAIA and is not to be mentioned: a
+model that read an earlier wording as part of the user's message told the user
+about hints it had skipped.
 
 The line goes in the user's message, not the system prompt. A system prompt
 that changes from turn to turn makes the server re-read the whole conversation.
 
-It suggests and never loads — the model still decides. The per-turn word
-matcher the catalogue replaced loaded the right skill on 0 of 24 tasks; a wrong
-suggestion costs one line the model can ignore.
+By default GAIA does not load the skill itself — the model still makes the
+call. The per-turn word matcher the catalogue replaced loaded the right skill
+on 0 of 24 tasks. Loading a very strong match for the model is opt-in (see
+[Auto-load](#auto-load)).
 
-- **Matching.** The same embedder as skill-body selection scores
-  `name: first line of description` against the current message (cut at 4,000
-  characters). A skill is suggested when it scores at least **0.30** and within
-  **0.02** of the best-scoring skill, loaded skills included — so a request the
-  loaded skill already covers does not pull in a weaker neighbour. At most
-  three are suggested by score. A suggested skill's unloaded `pairs_with`
-  companions follow it only when they score at least **0.40** themselves:
-  pairing is mutual, so `office-docs` pairs with five skills, and adding
-  companions unconditionally cut precision from 0.84 to 0.52.
-- **Calibration.** 54 invented requests over the 20 hub skills
-  (`tests/fixtures/skills/skill_suggestion_cases.json`). 12 of them should get
-  no suggestion, and 5 of those are near misses such as *"what is a pivot
-  table?"*. With `embeddinggemma-300m`: precision 0.84, recall 0.93, and 3 of
-  the 12 negatives got a suggestion. All 3 are near misses scoring 0.35–0.44,
-  as high as real requests (the weakest best match on a positive is 0.30), so
-  no threshold removes them without losing recall. The fixture has since
-  grown to cover every hub skill on main; rerun the calibration before
-  changing the defaults. Every hub skill needs
-  labelled requests; the coverage test names any that has none. The scores
-  depend on the embedding model: `nomic-embed-text-v2` measured far worse on
-  the first 37 requests, so recalibrate before changing the embedder. Run
+- **Matching.** The same embedder as skill-body selection scores each skill's
+  description (its first line, without the skill's name) against the current
+  message (cut at 4,000 characters). Both carry EmbeddingGemma's own prompts:
+  `title: none | text: ` for a description and `task: classification | query: `
+  for the message. A skill is suggested when it scores at least **0.37** and
+  within **0.02** of the best-scoring skill, loaded skills included — so a
+  request the loaded skill already covers does not pull in a weaker neighbour.
+  The best-scoring skill must also lead every skill it does not pair with by
+  **0.02**, or nothing is suggested: two unrelated skills scoring alike means
+  neither clearly fits. At most three are suggested by score. A suggested
+  skill's unloaded `pairs_with` companions follow it only when they score at
+  least **0.40** themselves: pairing is mutual, so one skill can pair with five
+  others.
+- **Never what is already in use.** A loaded skill is never suggested, and
+  neither is the one a `/<skill-name> …` message runs: that skill loads after
+  the turn's context is built, so it counts as loaded here.
+- **Questions about a topic.** A lone question about what something is or how
+  it works ("What is RSS and how do RSS feeds work? Answer in two sentences.")
+  gets no suggestion and loads nothing: it scores as high against that topic's
+  skill as a real request does. A question about the user's own things, or one
+  followed by more than how to answer it ("Why did the server fall over? Here
+  are the logs"), is matched as usual.
+- **Calibration.** 234 invented requests over the 28 hub skills
+  (`tests/fixtures/skills/skill_suggestion_cases.json`), 62 of which should
+  get no suggestion: small talk, general and coding questions, questions about
+  pasted text, and near misses such as *"what is a pivot table?"*. A hash of
+  each request puts it in a tuning half or a held-out half; the defaults were
+  chosen on the tuning half, and `SUGGEST_BAR` in
+  `tests/unit/test_skill_suggester.py` records what they measure on the
+  held-out half with `embeddinggemma-300m` and the bar they are held to. The
+  floor and lead trade a little recall for far fewer hints on requests that
+  need no skill. Every hub skill needs labelled requests in both
+  halves; a test names any that has none. The scores depend on the embedding
+  model and its prompts, so recalibrate before changing the embedder. Run
   `GAIA_SKILL_SUGGEST_CALIBRATE=1 pytest tests/unit/test_skill_suggester.py -k calibration`
   with `LEMONADE_BASE_URL` naming a running server. It only posts to
   `/embeddings`, which loads the embedding model if it is not loaded already.
@@ -667,6 +721,144 @@ suggestion costs one line the model can ignore.
 Tunable: `GAIA_SKILL_SUGGEST` (`0` turns it off, `1` forces it on) or
 `GaiaAgentConfig(skill_suggestions=False)`; `skill_suggestion_threshold` sets
 the floor. Turning the catalogue off turns suggestions off too.
+
+##### Auto-load
+
+A model can ignore an instruction too. With auto-load on, a match far above the
+suggestion floor is loaded before the turn starts, and the turn's context says
+so above the suggestion line:
+
+```
+Loaded report-from-sources because it matches this request — its instructions
+are in the system prompt.
+```
+
+Other matches, a companion of the loaded skill among them, are then named as
+an offer, not an instruction:
+
+```
+Skill hint from GAIA, not from the user: also available: office-docs. Call
+load_skill for one only if this request needs it. Never mention this hint to
+the user.
+```
+
+It is **off by default**. Turn it on with `GAIA_SKILL_AUTOLOAD=1` or
+`GaiaAgentConfig(skill_autoload=True)`; `GAIA_SKILL_AUTOLOAD=0` wins over the
+config. It needs suggestions on, and weaker matches are suggested exactly as
+they are without it.
+
+- **When.** The best suggested skill loads when it scores at least **0.40**
+  and leads every skill it does not pair with, loaded or not, by **0.03**.
+- **Companions.** Skills that pair (`pairs_with`, in either direction) score
+  alike by design, so a companion close behind the best match is not a reason
+  to hold back. Pairing does not load the companion, though: a skill loaded
+  only because its partner matched cost context on every step and its tools
+  went unused. The best-scoring companion loads with the best match only when
+  it reaches 0.40 and leads every remaining skill by 0.03 itself; otherwise
+  it is named as available. At most two skills load per turn, and one on a
+  model with a 64K window or smaller.
+  Example: `slide-decks` 0.62, `report-from-sources` 0.60 and `office-docs`
+  0.595, all paired, load `slide-decks` and name the other two. On the tuning
+  half, 1 of the 7 companions loaded under the earlier rule (reaching 0.40
+  was enough) was a skill the request was labelled with.
+- **Settings.** `skill_autoload_threshold` (`GAIA_SKILL_AUTOLOAD_TAU`) sets the
+  floor and `skill_autoload_margin` (`GAIA_SKILL_AUTOLOAD_MARGIN`) the lead.
+  The env values win, and one that is not a number stops startup.
+- **Stricter than a suggestion.** Both the floor (0.40 against 0.37) and the
+  lead (0.03 against 0.02) are above the suggestion bar, and a question about
+  a topic loads nothing (see Matching above).
+- **Calibration.** `AUTOLOAD_BAR` in `tests/unit/test_skill_suggester.py`
+  records what the defaults measure on the held-out half with
+  `embeddinggemma-300m`, and the bar they are held to. A higher floor lost
+  recall on the tuning half without removing a wrong load. Before the
+  topic-question rule, every wrong load was a question *about* a skill's topic,
+  such as "What is RSS and how do RSS feeds work?". A wrong load costs context,
+  not correctness, and auto-load stays opt-in. Run
+  `GAIA_SKILL_SUGGEST_CALIBRATE=1 pytest tests/unit/test_skill_suggester.py -k autoload_calibration -s`
+  with `LEMONADE_BASE_URL` naming a running server. It prints precision,
+  recall, wrong loads and loads on negatives for each floor from 0.37 to 0.55
+  and each lead from 0.00 to 0.08, on each half, and the tuning half request
+  by request. It fails if the defaults fall under `AUTOLOAD_BAR` on the
+  held-out half.
+- **Trusted skills only.** A skill loads this way only when it ships with the
+  agent, or was installed from the hub and `skill-lock.json` records it at the
+  `community` tier or above. A captured skill, one you wrote yourself, an
+  `experimental` install and anything from a `.claude` folder stay
+  suggestions: nothing checked them, so the model has to ask.
+- **Skills that grant a program.** A skill with `shell:execute:<binary>` lets
+  that program's allowed subcommands run without a prompt. In Ask mode such a
+  skill stays a suggestion. Under full access everything is pre-approved
+  already, so it loads, and a warning names the skill and the programs. When
+  full access is switched off, the skill is unloaded at the start of the next
+  turn and its grant goes with it. It is not auto-loaded again in that
+  session. Pre-approving gated tools without full access does not count.
+- **Size.** The skill bodies in the prompt this turn, plus the new one, must
+  fit in the model's [context budget](#context-budget): 6,000 tokens at most,
+  ~3,300 on a 64K model, ~1,600 on the default 32,768. Bodies that have
+  collapsed to their one-line reminder do not count. A skill skipped for size
+  stays a suggestion, and a warning gives its size, the tokens in use, the
+  budget and the window.
+- **Unloaded skills stay unloaded.** A skill unloaded earlier in the session,
+  by the model or by you, is not auto-loaded again, also after the agent is
+  rebuilt for changed settings.
+- **A load that fails** is logged as a warning and stays a suggestion.
+- **Asked for but inactive.** Auto-load cannot run with the catalogue or
+  suggestions off, in fast mode, with memory off (matching uses its embedder),
+  or on any embedder other than `embeddinggemma-300m`, such as the NPU
+  profile's FLM embedder. If you turned it on, one warning at startup says it
+  is inactive and why.
+
+The loaded body pins for the next few turns, like an explicit `load_skill`.
+
+### Context budget
+
+A skill body that helps a 200K-context cloud model can crowd a 64K local model
+out of its own instructions. On one such model, loading two or three skills
+with their tools took each request from about 23K to 40K tokens, and the
+model followed its instructions less well. So the flagship agent sizes the
+skill text in the prompt to the model's context window. Other agents opt in
+with `SKILL_CONTEXT_BUDGET = True`.
+
+| Window | Skill body budget | Auto-loads per turn |
+|---|---|---|
+| 16K | 1,000 tokens (the floor) | 1 |
+| 32K | ~1,600 tokens | 1 |
+| 64K | ~3,300 tokens | 1 |
+| 120K and up, or Claude (200K) | 6,000 tokens (the ceiling) | 2 |
+
+- **Budget.** 5% of the window, between 1,000 and 6,000 tokens. The window is
+  the one the conversation history is sized from. A Lemonade cloud model is
+  admitted at 64K by policy, not by its own window, so it uses the window
+  Lemonade's catalogue lists for it, or the 6,000-token ceiling when the
+  catalogue lists none. The window is read once per model, so the budget does
+  not move from turn to turn.
+- **Which bodies show in full.** When the bodies selected for a turn exceed
+  the budget, they are ranked: skills loaded since the last turn began (by
+  the model, the user, or auto-load), most recent first; then this turn's
+  relevance score; then the most recently loaded. The first is always shown
+  in full, whatever it costs. Each later one is shown in full if it still
+  fits, and otherwise as one line under its own heading:
+
+  ```
+  ==== LOADED SKILLS (summarized to fit this model's context — call
+  load_skill('<name>') again for one's full instructions, or read just the
+  references/<file> you need) ====
+  - data-explore: Explore a spreadsheet or CSV. References in
+    .../data-explore/references: charts.md, pivots.md
+  ```
+
+  Calling `load_skill` on a summarized skill shows it in full straight away,
+  summarizing another if it has to. A skill summarized partway through a turn
+  this way is announced as still loaded, with its tools and its one line,
+  never as no longer active.
+- **Tools are never withdrawn.** Only text shrinks. Every loaded skill keeps
+  its tools on the tool list whether its body is shown in full or summarized:
+  its `tools_required` and the tools it provides itself (its `tools.py`,
+  registered as `<skill>/<tool>`), on every window size.
+- **Diagnostics.** Each decision is logged at debug level under `[skills]`.
+  The turn's result and its `GAIA_TURN_LOG` record carry `skill_budget` —
+  the window and where it came from, the budget, the bodies shown in full and
+  summarized, the tokens they take, and the auto-load limit — and the Agent UI's context endpoint reports the same.
 
 ## Learned changes: the effective skill vs. the shipped one
 
@@ -811,38 +1003,24 @@ adopted the blocks, whose behaviour is unchanged.
 
 <Note>
 **A skill body costs context.** Loading a set injects each skill's Markdown body
-into the system prompt, which is prompt budget the agent's own tool results no
+into the session context at the start of the first user message, which is prompt budget the agent's own tool results no
 longer have. An agent with a tight context envelope must account for the loaded
-set's cost, not assume it is free — the email agent's bulk-triage path subtracts
-it from its result-envelope budget for exactly this reason — and its three-skill
-`personal` set still cut that envelope from 6,144 tokens to 4,810 (the four-skill
-`work` set, to 4,070). Budget the set, and keep bodies short.
+set's cost, not assume it is free. Budget the set, and keep bodies short.
 </Note>
 
-### Reference implementation: the email agent
+### Reference implementation: the flagship
 
-The email agent ([`hub/agents/email/`](https://github.com/amd/gaia/tree/main/hub/agents/email))
-is the worked example in the tree. It bundles six instruction-only skills and its
-manifest carries two sets — `personal` (triage, newsletter digests, travel
-itineraries) and `work` (triage, meeting scheduling, action-item extraction,
-escalation routing) — with `inbox-triage` deliberately in both.
+The flagship's manifest ([`hub/agents/gaia/python/gaia-agent.yaml`](https://github.com/amd/gaia/blob/main/hub/agents/gaia/python/gaia-agent.yaml))
+is the worked example in the tree. It keeps `gaia-voice` always on under
+`skills:` and sketches three sets — `research`, `documents` and `personal` —
+with a `documents` default.
 
 <Warning>
-**It ships with those blocks commented out**, pending an eval that shows the
-skills improve triage, so the released agent resolves no set and loads no skills
-— `active_skill_set is None`, `loaded_skills == {}`, and a `--skill-set` request
-is a startup error. Treat it as a wiring reference, not as evidence that a
-shipped agent has a set active.
+**It ships with the set blocks commented out**, pending an eval that shows the
+skills help, so the released agent resolves no set and loads only its always-on
+skill — a `GAIA_SKILL_SET` request is a startup error. Treat it as a wiring
+reference, not as evidence that a shipped agent has a set active.
 </Warning>
-
-Its selector maps the connected mailbox's account type onto a set: a personal
-Microsoft account gets `personal`, a work/school account gets `work`. The kind is
-derived at connect time from the id_token `tid` claim (personal accounts always
-carry the well-known consumers tenant; work/school accounts carry the
-organization's Entra tenant id) and recorded on the connection, so no agent
-re-derives it. A Gmail mailbox has no equivalent claim, so its kind is genuinely
-unknown and the selector returns `None` — the manifest's `default_skill_set`
-applies, explicitly.
 
 For a step-by-step author walkthrough see
 [Composing skills and skill sets](/guides/composing-skills).

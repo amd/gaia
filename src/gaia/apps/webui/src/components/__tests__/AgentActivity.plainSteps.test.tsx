@@ -458,7 +458,7 @@ describe('timeline review fixes', () => {
     it('filters a lone call between notes like any other', () => {
         const many = [1, 2, 3, 4, 5, 6].map((i) => call(i, `Reading file: ${i}.txt`, i === 1 ? { success: false } : {}));
         render(<AgentActivity steps={[...many, note(7, 'One more.'), call(8, 'Reading file: last.txt')]} isActive={false} />);
-        fireEvent.click(screen.getByRole('button', { name: /^Read file ×6$/ }));
+        fireEvent.click(screen.getByRole('button', { name: /^Read file ×6 \(1 failed\)$/ }));
         expect(screen.getByText('Reading file: last.txt')).toBeInTheDocument();
 
         fireEvent.change(screen.getByLabelText('Filter by status'), { target: { value: 'error' } });
@@ -545,5 +545,35 @@ describe('step icons', () => {
         );
 
         expect(container.querySelector('.flow-tool-left > svg')?.getAttribute('class')).toContain('lucide-circle-alert');
+    });
+});
+
+describe('consecutive thoughts', () => {
+    it('keeps a finished thought apart from the next one', () => {
+        const steps: AgentStep[] = [
+            { id: 1, type: 'thinking', label: 'Thinking', detail: 'Let me write it well.', active: false, latencyMs: 40, timestamp: 1 },
+            { id: 2, type: 'thinking', label: 'Thinking', detail: 'General knowledge question.', active: false, timestamp: 2 },
+        ];
+        const [row] = consolidateSteps(steps, false);
+        expect(row.detail).toBe('Let me write it well.\n\nGeneral knowledge question.');
+    });
+
+    it('keeps joining saved token pieces of one thought', () => {
+        const steps: AgentStep[] = [
+            { id: 1, type: 'thinking', label: 'Thinking', detail: 'Let me wri', active: false, timestamp: 1 },
+            { id: 2, type: 'thinking', label: 'Thinking', detail: 'te it well', active: false, timestamp: 2 },
+            { id: 3, type: 'thinking', label: 'Thinking', detail: '.', active: false, latencyMs: 40, timestamp: 3 },
+        ];
+        const [row] = consolidateSteps(steps, false);
+        expect(row.detail).toBe('Let me write it well.');
+    });
+
+    it('keeps joining a thought that is still streaming', () => {
+        const steps: AgentStep[] = [
+            { id: 1, type: 'thinking', label: 'Thinking', detail: 'Let me wri', active: true, timestamp: 1 },
+            { id: 2, type: 'thinking', label: 'Thinking', detail: 'te it well.', active: true, timestamp: 2 },
+        ];
+        const [row] = consolidateSteps(steps, true);
+        expect(row.detail).toBe('Let me write it well.');
     });
 });

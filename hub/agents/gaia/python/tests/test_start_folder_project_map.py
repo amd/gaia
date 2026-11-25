@@ -12,12 +12,12 @@ from __future__ import annotations
 
 import pytest
 
-pytest.importorskip("gaia_agent")
+pytest.importorskip("gaiapy")
 
 
 @pytest.fixture
 def build(monkeypatch, tmp_path):
-    from gaia_agent.agent import GaiaAgent, GaiaAgentConfig
+    from gaiapy.agent import GaiaAgent, GaiaAgentConfig
 
     from gaia.agents.base.tools import _TOOL_REGISTRY
 
@@ -63,7 +63,7 @@ def test_the_map_is_of_the_start_folders_project(build, project):
 
     assert agent._project_map_root() == str(project.resolve())
     assert agent._script_project_root() == str(project.resolve())
-    prompt = agent._compose_system_prompt()
+    prompt = agent._compose_system_prompt() + agent.session_context
     assert "PROJECT MAP" in prompt and str(project.resolve()) in prompt
 
 

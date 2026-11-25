@@ -379,7 +379,7 @@ from typing import Any, Dict
 # One entry ships: "gaia", the flagship agent. Add more here to expose them.
 AGENT_MODELS: Dict[str, Dict[str, Any]] = {
     "gaia": {
-        "class_name": "gaia_agent.agent.GaiaAgent",
+        "class_name": "gaiapy.agent.GaiaAgent",
         "init_params": {"silent_mode": True, "streaming": False},
     },
     # "your-agent-id": {
@@ -617,7 +617,7 @@ async def log_raw_requests(request: Request, call_next):
 
 ### Unit Tests
 
-**File:** `tests/api/test_api_server.py`
+**File:** `tests/test_api.py`
 
 ```python
 import pytest

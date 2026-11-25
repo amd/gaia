@@ -1,6 +1,7 @@
 // Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 // SPDX-License-Identifier: MIT
 
+#include "support/unique_temp.h"
 #include <gaia/database.h>
 #include <gtest/gtest.h>
 
@@ -25,7 +26,7 @@ protected:
     fs::path dir;
 
     void SetUp() override {
-        dir = fs::temp_directory_path() / "gaia_database_test";
+        dir = fs::temp_directory_path() / testsupport::perProcess("gaia_database_test");
         fs::remove_all(dir);
         fs::create_directories(dir);
     }
@@ -684,6 +685,32 @@ TEST_F(DatabaseTest, FailingMigrationErrorNamesTheStep) {
         EXPECT_NE(message.find("version 1"), std::string::npos) << message;
         EXPECT_NE(message.find(db.path()), std::string::npos) << message;
     }
+}
+
+TEST_F(DatabaseTest, MigrateSkipsAStepAnotherConnectionAppliedMeanwhile) {
+    const std::string path = dbPath("race.db");
+    Database first(path);
+    Database second(path);
+    const std::vector<Migration> steps = {
+        Migration::fromSql(1, "create widgets", "CREATE TABLE widgets (id INTEGER PRIMARY KEY)")};
+
+    std::atomic<bool> firstHoldsLock{false};
+    std::thread firstThread([&] {
+        Transaction txn(first, Transaction::Behavior::Immediate);
+        first.execute("CREATE TABLE widgets (id INTEGER PRIMARY KEY)");
+        first.setUserVersion(1);
+        firstHoldsLock = true;
+        std::this_thread::sleep_for(std::chrono::milliseconds(300));
+        txn.commit();
+    });
+    while (!firstHoldsLock) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    }
+
+    EXPECT_NO_THROW(second.migrate(steps));
+    firstThread.join();
+    EXPECT_EQ(second.userVersion(), 1);
+    EXPECT_TRUE(second.tableExists("widgets"));
 }
 
 TEST_F(DatabaseTest, MigrateRejectsOutOfOrderSteps) {

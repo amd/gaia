@@ -6,6 +6,7 @@ import { createPortal } from 'react-dom';
 import { Archive, Check, Copy, FileDown, Loader2, RotateCw, X } from 'lucide-react';
 import { useEscapeToClose } from '../hooks/useEscapeToClose';
 import { useFocusTrap } from '../hooks/useFocusTrap';
+import { useDialogFocus } from '../hooks/useDialogFocus';
 import { useT } from '../i18n/useT';
 import type { MessageKey } from '../i18n/registry';
 import * as api from '../services/api';
@@ -13,6 +14,7 @@ import { LOG_SOURCES, useLogsStore, type LogSource } from '../stores/logsStore';
 import type { LogFileInfo, LogLineInfo, LogReadResponse } from '../types/api.gen';
 import { formatBytes } from './setup/format';
 import { formatSize } from '../utils/format';
+import { setVisibleInterval } from '../utils/visibleInterval';
 import './LogsDialog.css';
 
 const POLL_MS = 2000;
@@ -111,8 +113,7 @@ export function LogView({ source, file }: { source: LogSource; file: string | nu
     }, [load]);
     useEffect(() => {
         if (!follow) return;
-        const id = setInterval(() => { void load(false); }, POLL_MS);
-        return () => clearInterval(id);
+        return setVisibleInterval(() => { void load(false); }, POLL_MS);
     }, [follow, load]);
 
     const shown = problemsOnly ? lines.filter(isProblem) : lines;
@@ -310,10 +311,11 @@ export function LogsDialog() {
     const [file, setFile] = useState<string | null>(null);
     useEscapeToClose(open, hide);
     useFocusTrap(panel, open);
+    // Closing hands focus back to the opener (e.g. Settings' "View logs"), not the page body.
+    useDialogFocus(panel, open, () => closeButton.current);
 
     useEffect(() => {
         if (!open) return;
-        closeButton.current?.focus();
         api.getLogSources()
             .then((res) => setFiles(Object.fromEntries(res.sources.map((s) => [s.id, s.files ?? []]))))
             .catch((err) => console.warn('[LogsDialog] could not list log files', err));

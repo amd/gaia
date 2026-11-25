@@ -24,6 +24,7 @@ from typing import Any, Dict, List, Optional, Set, Tuple
 
 import numpy as np
 
+from gaia.agents.base.memory_privacy import memory_writes_refused
 from gaia.agents.base.skill_synthesis import (
     MIN_OUTCOMES_TO_RETIRE,
     DistilledProcedure,
@@ -100,11 +101,7 @@ class ProceduralMemoryMixin:
         """
         # Deferred to break the memory <-> procedural_memory import cycle; read at
         # call time, after memory.py has finished loading.
-        from gaia.agents.base.memory import (
-            EMBEDDING_DIM,
-            WRITE_FAILURE_INDEX,
-            _blob_to_embedding,
-        )
+        from gaia.agents.base.memory import WRITE_FAILURE_INDEX, _blob_to_embedding
 
         try:
             import faiss
@@ -124,7 +121,8 @@ class ProceduralMemoryMixin:
 
         procedures = store.iter_skills_with_embeddings()
 
-        index = faiss.IndexFlatIP(EMBEDDING_DIM)
+        dim = self._active_embedding_dim()
+        index = faiss.IndexFlatIP(dim)
         id_map: List[str] = []
         skipped = 0
 
@@ -142,12 +140,12 @@ class ProceduralMemoryMixin:
                 )
                 skipped += 1
                 continue
-            if vec.shape[0] != EMBEDDING_DIM:
+            if vec.shape[0] != dim:
                 logger.debug(
                     "[MemoryMixin] procedure embedding %s has dim %d, expected %d",
                     proc["id"],
                     vec.shape[0],
-                    EMBEDDING_DIM,
+                    dim,
                 )
                 skipped += 1
                 continue
@@ -229,22 +227,22 @@ class ProceduralMemoryMixin:
             assert_faiss_omp_safe,
         )
 
-        index = getattr(self, "_proc_faiss_index", None)
-        if index is None or index.ntotal == 0:
-            return []
-
-        query = _validated_faiss_query(query_vec, index, "procedures")
-        k = min(top_k, index.ntotal)
-        if k < 1:
-            raise ValueError(f"top_k must be >= 1 for a FAISS search, got {top_k}")
-        assert_faiss_omp_safe("Procedure recall search")
-
         results = []
         with _PROC_INDEX_LOCK:
+            index = getattr(self, "_proc_faiss_index", None)
+            if index is None or index.ntotal == 0:
+                return []
+
+            query = _validated_faiss_query(query_vec, index, "procedures")
+            k = min(top_k, index.ntotal)
+            if k < 1:
+                raise ValueError(f"top_k must be >= 1 for a FAISS search, got {top_k}")
+            assert_faiss_omp_safe("Procedure recall search")
             scores, indices = index.search(query, k)
+            id_map = self._proc_faiss_id_map
             for score, idx in zip(scores[0], indices[0]):
-                if 0 <= idx < len(self._proc_faiss_id_map):
-                    results.append((self._proc_faiss_id_map[idx], float(score)))
+                if 0 <= idx < len(id_map):
+                    results.append((id_map[idx], float(score)))
         return results
 
     # ==================================================================
@@ -400,7 +398,7 @@ class ProceduralMemoryMixin:
 
         # Stamp last_used_at so `gaia memory status` can report reuse. Telemetry
         # only — a write hiccup must not crash the turn or drop the recall.
-        if recalled_ids:
+        if recalled_ids and not memory_writes_refused(self):
             try:
                 store.touch_skills(recalled_ids)
             except Exception as e:
@@ -594,7 +592,7 @@ class ProceduralMemoryMixin:
         decisions = getattr(self, "_turn_person_decisions", None)
         self._turn_person_decisions = None
         store = getattr(self, "_memory_store", None)
-        if not decisions or store is None or getattr(self, "_incognito", False):
+        if not decisions or store is None or memory_writes_refused(self):
             return
         in_context = set(getattr(self, "_recalled_skill_ids", None) or [])
         by_outcome: Dict[bool, List[str]] = {True: [], False: []}

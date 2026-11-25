@@ -1,7 +1,7 @@
 // Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 // SPDX-License-Identifier: MIT
 
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { Sidebar } from '../Sidebar';
 import { useChatStore } from '../../stores/chatStore';
@@ -115,6 +115,14 @@ describe('Sidebar', () => {
         expect(useChatStore.getState().showMemoryDashboard).toBe(false);
     });
 
+    it('marks only Memory as selected while it replaces the chat', () => {
+        useChatStore.setState({ currentSessionId: 'a', showMemoryDashboard: true });
+        const { container } = render(<Sidebar onNewChat={vi.fn()} />);
+        expect(container.querySelectorAll('.sb-row.is-active, .sb-nav-item.is-active')).toHaveLength(1);
+        expect(container.querySelectorAll('[aria-current="page"]')).toHaveLength(1);
+        expect(container.querySelector('.sb-nav-item.is-active')).toHaveAccessibleName('Memory');
+    });
+
     it('clicking the open chat leaves the Memory dashboard too', () => {
         useChatStore.setState({ currentSessionId: 'a', showMemoryDashboard: true, messages: [] });
         render(<Sidebar onNewChat={vi.fn()} />);
@@ -133,12 +141,34 @@ describe('Sidebar', () => {
         await waitFor(() => expect(screen.queryByText('Tax questions')).not.toBeInTheDocument());
     });
 
+    it('keeps the delete confirmation while the pointer rests on it', () => {
+        // Reverting under the pointer swaps the wide label for Pin, so the confirming click pins.
+        vi.useFakeTimers({ toFake: ['Date', 'setTimeout', 'clearTimeout'] });
+        render(<Sidebar onNewChat={vi.fn()} />);
+        const button = screen.getByRole('button', { name: 'Delete Tax questions' });
+        fireEvent.pointerEnter(button);
+        fireEvent.click(button);
+        act(() => { vi.advanceTimersByTime(10_000); });
+        expect(screen.getByRole('button', { name: 'Confirm delete Tax questions' })).toBeInTheDocument();
+
+        fireEvent.pointerLeave(button);
+        act(() => { vi.advanceTimersByTime(3_000); });
+        expect(screen.getByRole('button', { name: 'Delete Tax questions' })).toBeInTheDocument();
+    });
+
     it('shows a chat still holding messages to send, and flags one that failed', () => {
         useChatStore.getState().updateQueue('b', (q) => messageQueue.enqueue(messageQueue.enqueue(q, 'one', 'queued'), 'two', 'queued'));
         useChatStore.getState().updateQueue('c', (q) => messageQueue.enqueue(q, 'bad', 'failed'));
         render(<Sidebar onNewChat={vi.fn()} />);
         expect(screen.getByText('2 to send')).toBeInTheDocument();
         expect(screen.getByText('1 not sent')).toBeInTheDocument();
+    });
+
+    it('counts the messages still to send in Arabic', () => {
+        useChatStore.setState({ locale: 'ar' });
+        useChatStore.getState().updateQueue('b', (q) => messageQueue.enqueue(q, 'one', 'queued'));
+        render(<Sidebar onNewChat={vi.fn()} />);
+        expect(screen.getByText(/بانتظار الإرسال \(1\)/)).toBeInTheDocument();
     });
 
     it("says a delete takes the chat's unsent messages with it, and does", async () => {

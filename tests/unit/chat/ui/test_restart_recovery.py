@@ -13,6 +13,7 @@ which is how a server tells an earlier app in its own process from itself.
 """
 
 import asyncio
+import itertools
 import os
 import sqlite3
 import sys
@@ -483,6 +484,32 @@ async def test_a_reply_cut_off_by_a_server_restart_is_not_recovered(tmp_path):
     assert reply == f"It says hi.\n\n{INTERRUPTED_TURN_NOTICE}"
 
 
+async def test_text_that_starts_after_the_reasoning_is_saved_at_once(tmp_path):
+    # A thinking model reasons for seconds, so the last save often holds no
+    # text; a kill moments after the answer starts must still keep it.
+    now = [0.0]
+    db = ChatDatabase(str(tmp_path / "chat.db"))
+    try:
+        sid = db.create_session()["id"]
+        db.begin_turn(sid, "hi")
+        journal = restart_recovery.TurnJournal(db, sid, clock=lambda: now[0])
+        now[0] = restart_recovery.PARTIAL_SAVE_INTERVAL
+        journal.observe('data: {"type": "thinking", "content": "Plan it."}\n\n')
+        now[0] += 0.01
+        journal.observe(_chunk("Bridges are old."))
+        with _new_server():
+            assert recover_interrupted_work(db)["turns"] == 1
+        reply = db.get_messages(sid)[-1]["content"]
+    finally:
+        db.close()
+    assert reply == f"Bridges are old.\n\n{INTERRUPTED_TURN_NOTICE}"
+
+
+async def test_streamed_text_is_saved_at_least_twice_a_second():
+    # A cloud model writes a paragraph a second; a kill loses at most the last save.
+    assert restart_recovery.PARTIAL_SAVE_INTERVAL <= 0.5
+
+
 async def test_a_failed_close_does_not_mask_the_turns_own_error(runtime, caplog):
     db, _db_path, _manager, _http_request = runtime
     sid = db.create_session()["id"]
@@ -510,11 +537,18 @@ def _as_server(name):
     return patch.object(process_owner, "_TOKEN", name)
 
 
+@pytest.fixture
+def advancing_clock(monkeypatch):
+    """Every save gets a later time; real ones can tie within one Windows clock tick."""
+    ticks = itertools.count()
+    monkeypatch.setattr(ChatDatabase, "_now", lambda self: _at(next(ticks)))
+
+
 def _chunk(text):
     return f'data: {{"type": "chunk", "content": "{text}"}}\n\n'
 
 
-async def test_two_servers_in_one_chat_keep_their_own_turns(tmp_path):
+async def test_two_servers_in_one_chat_keep_their_own_turns(tmp_path, advancing_clock):
     """Each server's turn is its own row: A's text never lands in B's turn, and
     A's ending never erases B's marker."""
     path = str(tmp_path / "chat.db")
@@ -548,7 +582,7 @@ async def test_two_servers_in_one_chat_keep_their_own_turns(tmp_path):
     ]
 
 
-async def test_another_servers_reply_does_not_end_this_turn(tmp_path):
+async def test_another_servers_reply_does_not_end_this_turn(tmp_path, advancing_clock):
     """A later reply in the chat that is not this turn's leaves its marker."""
     path = str(tmp_path / "chat.db")
     db = ChatDatabase(path)

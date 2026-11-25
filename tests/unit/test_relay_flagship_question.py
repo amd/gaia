@@ -2,8 +2,8 @@
 # SPDX-License-Identifier: MIT
 """Answering a relayed flagship's mid-run question from the Agent UI.
 
-The Agent UI relays the answer with the spec §5.1 body ``{request_id, value}``
-— the same one the email sidecar takes. The flagship only took ``response``,
+The Agent UI relays the answer with the spec §5.1 body ``{request_id, value}``.
+The flagship only took ``response``,
 so every answer 422'd and the run sat on the question until it timed out.
 These drive the real Agent UI relay and proxy against the real flagship app
 over HTTP, because a stubbed proxy cannot catch a field-name mismatch.
@@ -17,9 +17,9 @@ import uuid
 
 import pytest
 
-from gaia.ui.email_sidecar import relay
-from gaia.ui.email_sidecar.profiles import GAIA_PROFILE
-from gaia.ui.email_sidecar.proxy import SidecarProxy
+from gaia.ui.sidecar import relay
+from gaia.ui.sidecar.profiles import GAIA_PROFILE
+from gaia.ui.sidecar.proxy import SidecarProxy
 from gaia.ui.sse_handler import SSEOutputHandler
 
 pytestmark = pytest.mark.allow_network
@@ -48,17 +48,18 @@ class _AskingAgent:
 def live_gaia_sidecar(monkeypatch):
     """The real flagship ``/v1/gaia`` app on a real port, with an asking agent."""
     uvicorn = pytest.importorskip("uvicorn")
-    pytest.importorskip("gaia_agent")
+    pytest.importorskip("gaiapy")
     import requests
-    from gaia_agent import caller_auth
-    from gaia_agent import server as server_mod
-    from gaia_agent import session_registry as sr
+    from gaiapy import caller_auth
+    from gaiapy import server as server_mod
+    from gaiapy import session_registry as sr
 
     from gaia.daemon.sidecars.manager import find_free_port
 
     caller_auth.reset()
     monkeypatch.delenv(caller_auth.TOKEN_FILE_ENV_VAR, raising=False)
     monkeypatch.delenv(caller_auth.TOKEN_ENV_VAR, raising=False)
+    monkeypatch.setenv(caller_auth.ALLOW_NO_TOKEN_ENV_VAR, "1")
     agents: list = []
 
     def build(**kw):
@@ -142,13 +143,10 @@ def test_the_ui_answer_reaches_the_flagship_question(live_gaia_sidecar):
     assert answers and answers[-1]["content"] == "picked=blue"
 
 
-def test_both_relayed_agents_take_the_same_answer_body():
-    """One relay body for both sidecars: the spec §5.1 ``value``."""
-    pytest.importorskip("gaia_agent")
-    pytest.importorskip("gaia_agent_email")
-    from gaia_agent.server import QueryRespondRequest as GaiaRespond
-    from gaia_agent_email.query_routes import QueryRespondRequest as EmailRespond
+def test_the_flagship_takes_the_relay_answer_body():
+    """The relay posts the spec §5.1 ``value``; the flagship reads it as the answer."""
+    pytest.importorskip("gaiapy")
+    from gaiapy.server import QueryRespondRequest
 
     body = {"request_id": "q-1", "value": "blue"}
-    assert GaiaRespond(**body).answer == "blue"
-    assert EmailRespond(**body).value == "blue"
+    assert QueryRespondRequest(**body).answer == "blue"

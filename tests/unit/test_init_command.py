@@ -416,34 +416,6 @@ class TestInitProfiles(unittest.TestCase):
             for key in required_keys:
                 self.assertIn(key, profile, f"Profile '{name}' missing key '{key}'")
 
-    def test_email_profile_defined(self):
-        """`gaia init --profile email` downloads the email triage model."""
-        from gaia.installer.init_command import INIT_PROFILES
-
-        self.assertIn("email", INIT_PROFILES)
-        email = INIT_PROFILES["email"]
-        self.assertEqual(email["agent"], "email")
-        self.assertIn("Gemma-4-E4B-it-GGUF", email["models"])
-
-    def test_email_min_version_locksteps_with_core(self):
-        """The email agent's runtime minimum must match GAIA's floor —
-        readiness (/v1/email/init) and the installer must agree on what
-        'compatible' means."""
-        from gaia.version import LEMONADE_MIN_VERSION
-
-        try:
-            from gaia_agent_email.version import MIN_LEMONADE_VERSION
-        except ImportError:
-            self.skipTest("gaia_agent_email (standalone email wheel) not installed")
-        self.assertEqual(LEMONADE_MIN_VERSION, MIN_LEMONADE_VERSION)
-
-    def test_email_profile_is_a_cli_choice(self):
-        """The init subparser must accept --profile email (argparse choices)."""
-        from gaia.cli import build_parser
-
-        ns = build_parser().parse_args(["init", "--profile", "email"])
-        self.assertEqual(ns.profile, "email")
-
 
 class TestRemoteAutoDetection(unittest.TestCase):
     """Test auto-detection of remote mode from LEMONADE_BASE_URL."""
@@ -907,10 +879,10 @@ class TestDownloadModels(unittest.TestCase):
     def test_npu_profile_pulls_builtin_model_without_recipe(self):
         """NPU/FLM models are built-in; pulling with a recipe 400s (#1655).
 
-        The npu profile must download both the FLM chat model and the FLM-native
-        embedder (#1744) via ensure_model_downloaded (pull by name), never
-        pull_model(recipe=...), which Lemonade rejects unless the name carries a
-        ``user.`` prefix.
+        The npu profile downloads the FLM chat model and the GPU embedder (the
+        FLM one's search isn't proven) via ensure_model_downloaded (pull by
+        name), never pull_model(recipe=...), which Lemonade rejects for a
+        built-in model.
         """
         from gaia.installer.init_command import InitCommand
 
@@ -927,7 +899,9 @@ class TestDownloadModels(unittest.TestCase):
             pulled = {
                 c.args[0] for c in mock_client.ensure_model_downloaded.call_args_list
             }
-            self.assertEqual(pulled, {"gemma4-it-e4b-FLM", "embed-gemma-300m-FLM"})
+            self.assertEqual(
+                pulled, {"gemma4-it-e4b-FLM", "user.embeddinggemma-300m-GGUF"}
+            )
             # Regression guard: no recipe-bearing pull_model call.
             mock_client.pull_model.assert_not_called()
 
@@ -952,6 +926,8 @@ class TestSkipChatModel(unittest.TestCase):
             mock_client = MagicMock()
             mock_client.get_system_info.return_value = SMALL_MACHINE
             mock_client.ensure_model_downloaded.return_value = True
+            # A cold cache: a downloaded Gemma would be kept instead.
+            mock_client.check_model_available.return_value = False
             mock_client_class.return_value = mock_client
 
             result = cmd._download_models()
@@ -959,8 +935,9 @@ class TestSkipChatModel(unittest.TestCase):
             pulled = {
                 c.args[0] for c in mock_client.ensure_model_downloaded.call_args_list
             }
+            # A 16 GB machine: its small default reads images, so no Gemma.
             self.assertEqual(
-                pulled, {"Gemma-4-E4B-it-GGUF", "user.embeddinggemma-300m-GGUF"}
+                pulled, {"Qwen3.5-2B-GGUF", "user.embeddinggemma-300m-GGUF"}
             )
 
     def test_skip_chat_model_downloads_only_the_embedder(self):
@@ -968,7 +945,7 @@ class TestSkipChatModel(unittest.TestCase):
         it would waste several GB of bandwidth/disk for a model that is
         never loaded. The embedder is still required: RAG/memory/code-index
         embeddings have no Claude equivalent (Anthropic has no embeddings
-        API — see hub/agents/gaia/python/gaia_agent/stdio.py)."""
+        API — see hub/agents/gaia/python/gaiapy/stdio.py)."""
         from gaia.installer.init_command import InitCommand
 
         cmd = InitCommand(profile="chat", yes=True, skip_chat_model=True)
@@ -1363,6 +1340,50 @@ class TestCheckSetupStatus(unittest.TestCase):
             "http://localhost:51234/api/v1",
         )
 
+    def test_unreadable_model_list_is_a_server_problem_not_missing_models(self):
+        """#8058: a model list in the wrong shape made a finished install read
+        as first-run setup, with every downloaded model "not downloaded"."""
+        from gaia.installer.init_command import check_setup_status
+        from gaia.llm.lemonade_client import LemonadeClient
+
+        with (
+            self._embedded(self._running()),
+            patch.object(LemonadeClient, "health_check", return_value={}),
+            patch.object(
+                LemonadeClient,
+                "_send_request",
+                return_value={"object": "list", "data": "x"},
+            ) as send,
+        ):
+            status = check_setup_status(profile="chat")
+
+        self.assertFalse(status.ready)
+        self.assertEqual(status.stage, "server")
+        self.assertTrue(status.model_list_unread)
+        self.assertFalse(any("not downloaded" in r for r in status.reasons))
+        self.assertIn("expected shape", status.reasons[0])
+        self.assertEqual(status.to_json()["model_list_unread"], True)
+        self.assertTrue(send.call_args.args[1].endswith("/models?show_all=true"))
+
+    def test_a_server_gone_before_its_model_list_is_not_a_bad_list(self):
+        """Dying between /health and /models is an outage, not a bad list."""
+        from gaia.installer.init_command import check_setup_status
+        from gaia.llm.lemonade_client import LemonadeClient, LemonadeClientError
+
+        with (
+            self._embedded(self._running()),
+            patch.object(LemonadeClient, "health_check", return_value={}),
+            patch.object(
+                LemonadeClient,
+                "_send_request",
+                side_effect=LemonadeClientError("connection refused"),
+            ),
+        ):
+            status = check_setup_status(profile="chat")
+
+        self.assertEqual(status.stage, "server")
+        self.assertFalse(status.model_list_unread)
+
     AGENT_MISSING = "The GAIA agent is not installed -- run: gaia init"
 
     def _check_with_models(self, profile="gaia", have=True, **kwargs):
@@ -1443,7 +1464,7 @@ class TestCheckSetupStatus(unittest.TestCase):
 
     def test_an_importable_checkout_package_is_not_an_installed_agent(self):
         """The apps run the flagship binary; a source checkout's importable
-        gaia_agent package must not stand in for it."""
+        gaiapy package must not stand in for it."""
         import importlib.util
 
         self._remove_flagship()
@@ -1451,7 +1472,7 @@ class TestCheckSetupStatus(unittest.TestCase):
         with patch(
             "importlib.util.find_spec",
             side_effect=lambda name, *a: (
-                MagicMock() if name == "gaia_agent" else real_find_spec(name, *a)
+                MagicMock() if name == "gaiapy" else real_find_spec(name, *a)
             ),
         ):
             status, _ = self._check_with_models()
@@ -1712,13 +1733,13 @@ class TestCheckSetupStatus(unittest.TestCase):
         self.assertEqual(status.reasons, [self.AGENT_MISSING])
 
     def test_only_the_tui_in_bin_still_needs_the_agent(self):
-        """A terminal install whose agent download failed leaves gaia-tui alone."""
+        """A terminal install whose agent download failed leaves gaia-cli alone."""
         from gaia.home import gaia_home
 
         self._remove_flagship()
         bin_dir = gaia_home() / "bin"
         bin_dir.mkdir(parents=True)
-        tui = "gaia-tui.exe" if sys.platform == "win32" else "gaia-tui"
+        tui = "gaia-cli.exe" if sys.platform == "win32" else "gaia-cli"
         (bin_dir / tui).write_bytes(b"x")
         self.host_key = "darwin-arm64"
         status, _ = self._check_with_models()
@@ -2819,7 +2840,9 @@ class TestHubInstallWiringFlagshipOnlyScope(_HubInstallWiringTestBase):
         self.assertIn("gaia", HUB_INSTALL_AGENTS)
         # The NPU profile keeps its own FLM models and device keys.
         npu = INIT_PROFILES["npu"]
-        self.assertEqual(npu["models"], ["gemma4-it-e4b-FLM", "embed-gemma-300m-FLM"])
+        self.assertEqual(
+            npu["models"], ["gemma4-it-e4b-FLM", "user.embeddinggemma-300m-GGUF"]
+        )
         self.assertEqual(npu["backend"], "flm:npu")
         # The flagship runs in the daemon / Agent UI, which [ui] installs.
         self.assertEqual(npu["pip_extras"], INIT_PROFILES["gaia"]["pip_extras"])
@@ -3222,7 +3245,7 @@ class TestPrintCompletionHeadlineGate(unittest.TestCase):
 
         cmd = InitCommand(profile=profile, yes=True)
         cmd._is_hub_agent_available = MagicMock(return_value=agent_available)
-        cmd._tui_installed = MagicMock(return_value=True)
+        cmd._tui_command = MagicMock(return_value="gaia-cli")
         return cmd
 
     def _render(self, cmd, rich):
@@ -3267,7 +3290,7 @@ class TestPrintCompletionHeadlineGate(unittest.TestCase):
                     complete, out = self._render(cmd, rich)
                     self.assertTrue(complete)
                     self.assertIn("GAIA initialization complete!", out)
-                    self.assertIn("gaia-tui", out)
+                    self.assertIn("gaia-cli", out)
                     self.assertNotIn("not installed yet", out)
 
     def test_npu_profile_leads_with_the_flagship_not_the_chat_wheels(self):
@@ -3292,7 +3315,7 @@ class TestPrintCompletionHeadlineGate(unittest.TestCase):
     def test_profiles_without_an_agent_say_so_plainly(self):
         """A profile that installs no agent completes, but names the gap and
         the supported fix instead of a git source install."""
-        for profile in ("chat", "sd", "rag", "vlm", "minimal", "email", "all"):
+        for profile in ("chat", "sd", "rag", "vlm", "minimal", "all"):
             for rich in (True, False):
                 with self.subTest(profile=profile, rich=rich):
                     cmd = self._make_cmd(profile, agent_available=False)
@@ -3448,7 +3471,8 @@ STRIX_HALO_64 = {
 
 class TestHardwareChatModel(unittest.TestCase):
     """The chat model follows the hardware: Qwen3.6 35B A3B where a GPU holds
-    it, Gemma 4 E4B everywhere else, and a user's default_model always wins."""
+    it, else the largest of Gemma 4 E4B, Qwen3.5 4B and Qwen3.5 2B that leaves
+    other apps their share of RAM, and a user's default_model always wins."""
 
     def setUp(self):
         from gaia.llm.lemonade_embedded import EmbeddedStatus
@@ -3494,14 +3518,19 @@ class TestHardwareChatModel(unittest.TestCase):
         probed = {c.args[0] for c in client.check_model_available.call_args_list}
         self.assertIn(DEFAULT_MODEL_NAME, probed)
 
-    def test_check_keeps_gemma_on_a_small_machine(self):
+    def test_check_asks_for_the_small_default_on_a_16gb_machine(self):
         from gaia.installer.init_command import check_setup_status
-        from gaia.llm.lemonade_client import DEFAULT_MODEL_NAME
+        from gaia.llm.lemonade_client import (
+            DEFAULT_MODEL_NAME,
+            TINY_DEFAULT_MODEL_NAME,
+        )
 
         client = self._client(SMALL_MACHINE)
         with patch("gaia.llm.lemonade_client.LemonadeClient", return_value=client):
             status = check_setup_status(profile="gaia")
-        self.assertTrue(any(DEFAULT_MODEL_NAME in r for r in status.reasons))
+        self.assertTrue(any(TINY_DEFAULT_MODEL_NAME in r for r in status.reasons))
+        # It reads images itself, so Gemma is not needed beside it.
+        self.assertFalse(any(DEFAULT_MODEL_NAME in r for r in status.reasons))
 
     def test_user_default_model_wins_without_probing_hardware(self):
         from gaia.config import GaiaConfig

@@ -132,8 +132,8 @@ on:
       - 'hub/agents/gaia/python/packaging/check_bundle_licenses.py'
       - 'hub/agents/gaia/python/packaging/check_glibc.py'
       - 'hub/agents/gaia/python/gaia-agent.yaml'
-      - 'hub/agents/gaia/python/gaia_agent/__init__.py'
-      - 'util/flagship_rc_assets.py'
+      - 'hub/agents/gaia/python/gaiapy/__init__.py'
+      - 'util/gaiapy_rc_assets.py'
       - 'src/gaia/llm/lemonade_embedded.py'
       - 'conftest.py'
       - 'tests/conftest.py'
@@ -142,6 +142,7 @@ on:
       - 'pyproject.toml'
       - 'util/release_tag.py'
       - 'util/check_release_assets.py'
+      - 'util/gaiacpp_release_assets.py'
       # custom-agent-mcp-harness runs these against the built wheel.
       - 'src/gaia/agents/base/console.py'
       - 'src/gaia/agents/registry.py'
@@ -550,11 +551,26 @@ jobs:
     needs: build
     if: always() && needs.build.result == 'success'
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    # Two download attempts at 10 minutes each, plus validation (#8408).
+    timeout-minutes: 25
     permissions:
       contents: read
     steps:
+      # A stalled artifact download once consumed the whole job budget and
+      # cancelled the release (#8408). The download gets its own timeout and
+      # one retry, so a slow artifact service cannot eat the test time.
       - name: Download all installer artifacts
+        id: download
+        timeout-minutes: 10
+        continue-on-error: true
+        uses: actions/download-artifact@v8
+        with:
+          path: ${{ runner.temp }}/artifacts
+          pattern: ${{ inputs.artifact_prefix != '' && format('{0}*', inputs.artifact_prefix) || '' }}
+
+      - name: Retry the artifact download
+        if: steps.download.outcome == 'failure'
+        timeout-minutes: 10
         uses: actions/download-artifact@v8
         with:
           path: ${{ runner.temp }}/artifacts
@@ -735,12 +751,26 @@ jobs:
     needs: build
     if: always() && needs.build.result == 'success'
     runs-on: ubuntu-24.04
-    timeout-minutes: 10
+    # Two download attempts at 10 minutes each, plus the structural checks.
+    timeout-minutes: 25
     steps:
       - name: Checkout
         uses: actions/checkout@v7
 
+      # The 478 MB installer once stalled until the job timeout (#8408).
+      # Cap the download separately and retry it once.
       - name: Download Linux installer artifact
+        id: download
+        timeout-minutes: 10
+        continue-on-error: true
+        uses: actions/download-artifact@v8
+        with:
+          name: ${{ inputs.artifact_prefix }}linux-installer
+          path: ${{ runner.temp }}/linux-installer
+
+      - name: Retry the Linux installer download
+        if: steps.download.outcome == 'failure'
+        timeout-minutes: 10
         uses: actions/download-artifact@v8
         with:
           name: ${{ inputs.artifact_prefix }}linux-installer
@@ -773,14 +803,28 @@ jobs:
     needs: build
     if: always() && needs.build.result == 'success'
     runs-on: macos-latest  # Apple Silicon (arm64) — matches build matrix
-    timeout-minutes: 10
+    # Two download attempts at 10 minutes each, plus the structural checks.
+    timeout-minutes: 25
     permissions:
       contents: read
     steps:
       - name: Checkout
         uses: actions/checkout@v7
 
+      # The macOS bundle downloads under the same budget as Linux, and a
+      # stalled fetch fails the job just as silently (#8408).
       - name: Download macOS installer artifact
+        id: download
+        timeout-minutes: 10
+        continue-on-error: true
+        uses: actions/download-artifact@v8
+        with:
+          name: ${{ inputs.artifact_prefix }}macos-installer  # ${{ matrix.platform }}-installer with platform=macos
+          path: ${{ runner.temp }}/macos-installer
+
+      - name: Retry the macOS installer download
+        if: steps.download.outcome == 'failure'
+        timeout-minutes: 10
         uses: actions/download-artifact@v8
         with:
           name: ${{ inputs.artifact_prefix }}macos-installer  # ${{ matrix.platform }}-installer with platform=macos
@@ -805,12 +849,24 @@ jobs:
     needs: build
     if: always() && needs.build.result == 'success'
     runs-on: ubuntu-24.04
-    timeout-minutes: 20
+    # Two download attempts at 10 minutes each, plus the distro checks.
+    timeout-minutes: 40
     steps:
       - name: Checkout
         uses: actions/checkout@v7
 
       - name: Download Linux installer artifact
+        id: download
+        timeout-minutes: 10
+        continue-on-error: true
+        uses: actions/download-artifact@v8
+        with:
+          name: ${{ inputs.artifact_prefix }}linux-installer
+          path: ${{ runner.temp }}/linux-installer
+
+      - name: Retry the Linux installer download
+        if: steps.download.outcome == 'failure'
+        timeout-minutes: 10
         uses: actions/download-artifact@v8
         with:
           name: ${{ inputs.artifact_prefix }}linux-installer
@@ -1066,12 +1122,24 @@ jobs:
     if: always() && needs.build.result == 'success'
     runs-on: ubuntu-24.04
     # apt-get can stall fetching xvfb; without this the job inherits the 6h default.
-    timeout-minutes: 20
+    # Two download attempts at 10 minutes each, plus the launch checks.
+    timeout-minutes: 40
     steps:
       - name: Checkout
         uses: actions/checkout@v7
 
       - name: Download Linux installer artifact
+        id: download
+        timeout-minutes: 10
+        continue-on-error: true
+        uses: actions/download-artifact@v8
+        with:
+          name: ${{ inputs.artifact_prefix }}linux-installer
+          path: ${{ runner.temp }}/linux-installer
+
+      - name: Retry the Linux installer download
+        if: steps.download.outcome == 'failure'
+        timeout-minutes: 10
         uses: actions/download-artifact@v8
         with:
           name: ${{ inputs.artifact_prefix }}linux-installer
@@ -1246,7 +1314,8 @@ jobs:
       inputs.publish_to_release == true &&
       inputs.tag != ''
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    # Two download attempts at 10 minutes each, plus the draft upload.
+    timeout-minutes: 30
     permissions:
       contents: write
     strategy:
@@ -1255,6 +1324,16 @@ jobs:
         platform: [windows, macos, linux]
     steps:
       - name: Download installer artifact
+        id: download
+        timeout-minutes: 10
+        continue-on-error: true
+        uses: actions/download-artifact@v8
+        with:
+          name: ${{ inputs.artifact_prefix }}${{ matrix.platform }}-installer
+          path: release-assets
+      - name: Retry the installer download
+        if: steps.download.outcome == 'failure'
+        timeout-minutes: 10
         uses: actions/download-artifact@v8
         with:
           name: ${{ inputs.artifact_prefix }}${{ matrix.platform }}-installer
@@ -1312,14 +1391,30 @@ jobs:
           echo "dmg-structural-smoke:        $dmg_result"
           fail=0
           if [ "$build_result" != "success" ]; then
-            echo "::error::One or more platform installer builds failed"
+            echo "::error::build did not succeed (status: ${build_result})"
             fail=1
           fi
-          for r in "$validate_result" "$structural_result" "$distro_result" "$userns_result" "$mcp_harness_result" "$dmg_result"; do
-            if [ "$r" != "success" ] && [ "$r" != "skipped" ]; then
-              echo "::error::Installer smoke job failed (status: $r)"
-              fail=1
-            fi
+          for entry in \
+            "validate-artifacts:${validate_result}" \
+            "appimage-structural-smoke:${structural_result}" \
+            "appimage-distro-matrix:${distro_result}" \
+            "appimage-userns-restricted:${userns_result}" \
+            "custom-agent-mcp-harness:${mcp_harness_result}" \
+            "dmg-structural-smoke:${dmg_result}"; do
+            job="${entry%%:*}"
+            result="${entry#*:}"
+            case "${result}" in
+              success|skipped) continue ;;
+              cancelled)
+                # GitHub reports a job timeout as 'cancelled', not 'failure'.
+                echo "::error::${job} was cancelled before it finished (a job timeout or a manual cancel), an infrastructure cancellation rather than a failed check. No check reported a failure, so 'gh run rerun --failed' is safe."
+                fail=1
+                ;;
+              *)
+                echo "::error::${job} failed (status: ${result})"
+                fail=1
+                ;;
+            esac
           done
           if [ "$fail" -eq 1 ]; then
             exit 1

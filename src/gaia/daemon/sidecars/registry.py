@@ -414,6 +414,27 @@ class SidecarRegistry:
         manager.check_responsive()
         return manager.base_url, manager.auth_token
 
+    def restart_if_crashed(self, agent_id: str) -> bool:
+        """Start *agent_id*'s sidecar again if its process died on its own.
+
+        Returns ``False`` for one that was never started or was stopped on
+        purpose; those are the caller's to start. Start failures raise as from
+        :meth:`ensure`.
+        """
+        self._spec(agent_id)
+        with self._lock:
+            holder = self._managers.get(agent_id)
+        if holder is None or not holder[0].exited_unexpectedly:
+            return False
+        logger.warning(
+            "daemon: agent '%s' sidecar pid %s exited unexpectedly; starting it "
+            "again",
+            agent_id,
+            holder[0].pid,
+        )
+        self.ensure(agent_id)
+        return True
+
     def authenticate_callback(self, credential: str) -> Optional[str]:
         """Return the agent_id of the RUNNING sidecar whose launch token equals
         *credential*, or ``None`` if no live sidecar owns it.
@@ -491,10 +512,15 @@ class SidecarRegistry:
         self._spec(agent_id)
         with self._lock:
             holder = self._managers.get(agent_id)
-        if holder is None or not holder[0].is_running:
+        if holder is None:
             return {"agent_id": agent_id, "state": "stopped"}
         manager, agent_lock = holder
+        if not manager.is_running and not manager.exited_unexpectedly:
+            return {"agent_id": agent_id, "state": "stopped"}
         with agent_lock:
+            if not manager.is_running and manager.exited_unexpectedly:
+                # Reaps the crashed one, so restart_if_crashed leaves it stopped.
+                manager.shutdown()
             self._stop_locked(agent_id, manager)
         return {"agent_id": agent_id, "state": "stopped"}
 
@@ -561,6 +587,44 @@ class SidecarRegistry:
                 holder = (self._new_manager(agent_id, spec, None), threading.Lock())
                 self._managers[agent_id] = holder
             return holder
+
+    def process_ids(self) -> "set[int]":
+        """The pid the daemon started for each running sidecar."""
+        with self._lock:
+            managers = [manager for manager, _ in self._managers.values()]
+        return {m.pid for m in managers if m.is_running and m.pid is not None}
+
+    def stop_idle(self) -> "list[str]":
+        """Stop every running sidecar that is not being started, stopped or
+        installed right now; return the ids stopped.
+
+        Never waits on an agent's lock: whoever holds it wants that agent.
+
+        Raises:
+            StopFailedError: A sidecar survived its tree-kill. The others are
+                still stopped first.
+        """
+        with self._lock:
+            holders = list(self._managers.items())
+        stopped, failures = [], []
+        for agent_id, (_, agent_lock) in holders:
+            if not agent_lock.acquire(blocking=False):
+                continue
+            try:
+                with self._lock:
+                    manager = self._managers[agent_id][0]
+                if not manager.is_running:
+                    continue
+                logger.info("registry: stopping idle %s sidecar", agent_id)
+                self._stop_locked(agent_id, manager)
+                stopped.append(agent_id)
+            except StopFailedError as e:
+                failures.append(str(e))
+            finally:
+                agent_lock.release()
+        if failures:
+            raise StopFailedError(" ".join(failures))
+        return stopped
 
     def shutdown_all(self) -> None:
         """Tree-kill every running sidecar (daemon shutdown path)."""

@@ -2,21 +2,20 @@
 // SPDX-License-Identifier: MIT
 
 import { useEffect, useState, useCallback, useRef, useId } from 'react';
-import { X, Plus, Clock, Play, Pause, Trash2, ChevronDown, ChevronUp, MessageSquare, Zap } from 'lucide-react';
+import { X, Plus, Clock, Play, Pause, Trash2, ChevronDown, ChevronUp, MessageSquare, Zap, Pencil } from 'lucide-react';
 import { useChatStore } from '../stores/chatStore';
 import { useScheduleStore } from '../stores/scheduleStore';
 import { log } from '../utils/logger';
-import type { Schedule, ScheduleResult, ParsedSchedule, ScheduleDescription } from '../types';
-import { ApiError, parseScheduleInput } from '../services/api';
-import { isMessageKey, stripIsolates, type MessageKey, type Say } from '../i18n/registry';
-import { dateLocale, tEn, translator, useT, type Translate } from '../i18n/useT';
+import type { Schedule, ScheduleResult, ParsedSchedule } from '../types';
+import { ApiError } from '../services/api';
+import { parseScheduleInput } from '../services/scheduleApi';
+import { stripIsolates, type MessageKey, type Say } from '../i18n/registry';
+import { dateLocale, translator, useT } from '../i18n/useT';
 import { useEscapeToClose } from '../hooks/useEscapeToClose';
 import { useFocusTrap } from '../hooks/useFocusTrap';
 import { useDialogFocus } from '../hooks/useDialogFocus';
+import { ConfirmSheet } from './setup/ConfirmSheet';
 import './ScheduleManager.css';
-
-/** How long the Delete button waits for its "Confirm?" click. */
-export const CONFIRM_DELETE_MS = 8000;
 
 const STATUS_LABEL: Record<Schedule['status'], MessageKey> = {
     active: 'schedules.status.active',
@@ -24,116 +23,11 @@ const STATUS_LABEL: Record<Schedule['status'], MessageKey> = {
     cancelled: 'schedules.status.cancelled',
 };
 
-/** Format an ISO date string to a relative or short time; `locale` formats dates (undefined: the PC's). */
-function formatTime(iso: string | null, say: Say, now?: Date, locale?: string): string {
-    if (!iso) return say('schedules.time.never');
-    const d = new Date(iso);
-    const current = now || new Date();
-    const diffMs = current.getTime() - d.getTime();
-    const diffSecs = Math.floor(diffMs / 1000);
+import { describeSchedule, formatClock, formatNextRun, formatTime, formatTimeOfDay, isCountdownRange } from '../utils/scheduleText';
+import { setVisibleInterval } from '../utils/visibleInterval';
 
-    if (diffSecs < 0) {
-        // Future time
-        const futureSecs = Math.abs(diffSecs);
-        if (futureSecs < 60) return say('schedules.time.inSeconds', { n: futureSecs });
-        const futureMins = Math.floor(futureSecs / 60);
-        if (futureMins < 60) return say('schedules.time.inMinutes', { n: futureMins });
-        const hrs = Math.floor(futureMins / 60);
-        if (hrs < 24) return say('schedules.time.inHours', { n: hrs });
-        return say('schedules.time.inDays', { n: Math.floor(hrs / 24) });
-    }
-    if (diffSecs < 60) return say('time.justNow');
-    const mins = Math.floor(diffSecs / 60);
-    if (mins < 60) return say('time.minutesAgo', { n: mins });
-    const hrs = Math.floor(mins / 60);
-    if (hrs < 24) return say('time.hoursAgo', { n: hrs });
-    return d.toLocaleDateString(locale, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
-}
-
-/** Next run as the user's local clock time, plus how far away it is. */
-export function formatNextRun(iso: string | null, now?: Date, say: Say = tEn.bare, locale?: string): string {
-    if (!iso) return say('schedules.time.never');
-    const relative = formatTime(iso, say, now, locale);
-    const d = new Date(iso);
-    if (d.getTime() <= (now || new Date()).getTime()) return relative;
-    const clock = d.toLocaleString(locale, { weekday: 'short', hour: 'numeric', minute: '2-digit' });
-    return say('schedules.time.clockIn', { clock, relative });
-}
-
-/** Returns true if the ISO timestamp is less than 60 seconds in the future. */
-function isCountdownRange(iso: string | null): boolean {
-    if (!iso) return false;
-    const diffMs = new Date(iso).getTime() - Date.now();
-    return diffMs > 0 && diffMs < 60000;
-}
-
-/** A clock time as the UI language writes it, 12h or 24h. */
-function formatClock(t: Translate, hour: number, minute = 0): string {
-    const at = new Date(2000, 0, 1, hour, minute);
-    return new Intl.DateTimeFormat(dateLocale(t), { hour: 'numeric', minute: '2-digit' }).format(at);
-}
-
-function formatTimeOfDay(time: string, t: Translate): string {
-    const [h, m] = time.split(':').map(Number);
-    return formatClock(t, h, m);
-}
-
-/** `base.<CLDR plural form>` for `n` in the UI language; null when that form has no message. */
-function countedKey(base: string, n: number, t: Translate): MessageKey | null {
-    const key = `${base}.${new Intl.PluralRules(t.locale).select(n)}`;
-    return isMessageKey(key) ? key : null;
-}
-
-const isWeekdays = (days: number[]) => days.length === 5 && days.every((d) => d < 5);
-const isWeekends = (days: number[]) => days.length === 2 && days.includes(5) && days.includes(6);
-
-/** Days after an interval or window: "weekdays", "Monday, Wednesday". */
-function dayPhrase(days: number[], t: Translate, say: Say): string | null {
-    if (isWeekdays(days)) return say('schedules.desc.days.weekdays');
-    if (isWeekends(days)) return say('schedules.desc.days.weekends');
-    if (days.length === 7) return say('schedules.desc.days.every');
-    const key = countedKey('schedules.desc.dayList', days.length, t);
-    if (!key) return null;
-    const names = days.map((d) => say(`schedules.dayName.${d}` as MessageKey)).join(say('schedules.desc.dayJoin'));
-    return say(key, { days: names });
-}
-
-/**
- * One language's wording of `parts`; null when a shape has no wording here.
- * `t` picks the plural form (the UI language's), `clock` writes the times.
- */
-function schedulePhrase(parts: ScheduleDescription, t: Translate, say: Say, clock: Translate): string | null {
-    const { kind, count, unit, days, time, start_hour, end_hour } = parts;
-    const at = (when: string) => (time ? say('schedules.desc.at', { when, time: formatTimeOfDay(time, clock) }) : when);
-    if (kind === 'every' || kind === 'window') {
-        const key = count && unit ? countedKey(`schedules.span.${unit}`, count, t) : null;
-        const on = days ? dayPhrase(days, t, say) : undefined;
-        if (!key || on === null) return null;
-        const span = say(key, { n: count! });
-        if (kind === 'every') {
-            return on ? say('schedules.desc.everyOn', { span, days: on }) : say('schedules.desc.every', { span });
-        }
-        if (start_hour == null || end_hour == null) return null;
-        const hours = say('schedules.hours', { start: formatClock(clock, start_hour), end: formatClock(clock, end_hour) });
-        return on ? say('schedules.desc.windowOn', { span, hours, days: on }) : say('schedules.desc.window', { span, hours });
-    }
-    if (kind === 'daily') return time ? at(say('schedules.desc.daily')) : null;
-    if (kind !== 'days' || !days?.length) return null;
-    if (days.length === 7) return at(say('schedules.desc.daily'));
-    if (isWeekdays(days)) return at(say('schedules.desc.weekdays'));
-    if (isWeekends(days)) return at(say('schedules.desc.weekends'));
-    const on = dayPhrase(days, t, say);
-    return on && at(say('schedules.desc.onDays', { days: on }));
-}
-
-/**
- * When a schedule runs, worded in the UI language from the backend's parts;
- * null when a shape has no wording here, so the caller shows the English.
- */
-export function describeSchedule(parts: ScheduleDescription | null | undefined, t: Translate): string | null {
-    if (!parts || schedulePhrase(parts, t, t.bare, t) === null) return null;
-    return t.compose((say, code) => schedulePhrase(parts, t, say, translator(code)) ?? '');
-}
+// The session panel words a schedule the same way, without loading this dialog.
+export { describeSchedule, formatNextRun };
 
 /** Format days_of_week array to human string. */
 function formatDays(days: number[], say: Say): string {
@@ -143,21 +37,34 @@ function formatDays(days: number[], say: Say): string {
     return days.map((d) => say(`schedules.day.${d}` as MessageKey)).join(say('schedules.days.join'));
 }
 
-function ScheduleCard({ schedule }: { schedule: Schedule }) {
+/** Quick picks for "When to run"; the value is what the schedule parser reads. */
+const WHEN_PRESETS: Array<{ label: MessageKey; value: string }> = [
+    { label: 'schedules.preset.morning', value: 'daily at 8am' },
+    { label: 'schedules.preset.weekdays', value: 'weekdays at 9am' },
+    { label: 'schedules.preset.hourly', value: 'every 1h' },
+];
+
+/** What the user typed when the schedule was made, so Edit starts from their own words. */
+export function scheduleInputText(schedule: Schedule): string {
+    if (schedule.schedule_config) {
+        try {
+            const raw = (JSON.parse(schedule.schedule_config) as { raw_input?: unknown }).raw_input;
+            if (typeof raw === 'string' && raw.trim()) return raw;
+        } catch (err) {
+            log.ui.warn(`Schedule "${schedule.name}" has an unreadable schedule_config`, err);
+        }
+    }
+    // Rows saved before the input was kept: the description reads back for most shapes, and the preview says if not.
+    return schedule.description;
+}
+
+function ScheduleCard({ schedule, onEdit }: { schedule: Schedule; onEdit: (schedule: Schedule) => void }) {
     const t = useT();
     const { selectedSchedule, selectSchedule, updateScheduleStatus, runScheduleNow, deleteSchedule, results, resultsLoading, loadSchedules, loadResults } = useScheduleStore();
     const { setCurrentSession, setShowSchedules } = useChatStore();
     const isSelected = selectedSchedule === schedule.name;
     const described = describeSchedule(schedule.description_parts, t);
-    const [confirmDelete, setConfirmDelete] = useState(false);
-    const confirmTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-    const clearConfirmTimer = useCallback(() => {
-        if (confirmTimerRef.current) {
-            clearTimeout(confirmTimerRef.current);
-            confirmTimerRef.current = null;
-        }
-    }, []);
-    useEffect(() => clearConfirmTimer, [clearConfirmTimer]);
+    const [askingDelete, setAskingDelete] = useState(false);
 
     // Live countdown: tick every second when next_run_at is < 60s away
     const [now, setNow] = useState(() => new Date());
@@ -212,18 +119,24 @@ function ScheduleCard({ schedule }: { schedule: Schedule }) {
 
     const handleDelete = useCallback((e: React.MouseEvent) => {
         e.stopPropagation();
-        clearConfirmTimer();
-        if (!confirmDelete) {
-            setConfirmDelete(true);
-            confirmTimerRef.current = setTimeout(() => {
-                confirmTimerRef.current = null;
-                setConfirmDelete(false);
-            }, CONFIRM_DELETE_MS);
-            return;
-        }
+        setAskingDelete(true);
+    }, []);
+
+    const confirmDelete = useCallback(() => {
+        setAskingDelete(false);
         log.ui.info(`Deleting schedule "${schedule.name}"`);
-        deleteSchedule(schedule.name);
-    }, [schedule.name, confirmDelete, deleteSchedule, clearConfirmTimer]);
+        void deleteSchedule(schedule.name);
+    }, [schedule.name, deleteSchedule]);
+
+    const handleEdit = useCallback((e: React.MouseEvent) => {
+        e.stopPropagation();
+        onEdit(schedule);
+    }, [onEdit, schedule]);
+
+    const handleToggleHistory = useCallback((e: React.MouseEvent) => {
+        e.stopPropagation();
+        selectSchedule(isSelected ? null : schedule.name);
+    }, [isSelected, schedule.name, selectSchedule]);
 
     const handleOpenChat = useCallback((e: React.MouseEvent) => {
         e.stopPropagation();
@@ -237,13 +150,14 @@ function ScheduleCard({ schedule }: { schedule: Schedule }) {
     return (
         <div
             className={`schedule-card ${isSelected ? 'selected' : ''} ${justRan ? 'just-ran' : ''}`}
-            onClick={() => selectSchedule(isSelected ? null : schedule.name)}
+            // A click in the delete dialog reaches here through its portal; it isn't a card click.
+            onClick={(e) => { if (e.currentTarget.contains(e.target as Node)) selectSchedule(isSelected ? null : schedule.name); }}
         >
             <div className="schedule-card-header">
-                <span className="schedule-card-name" dir="auto">{schedule.name}</span>
+                <span className="schedule-card-name" dir="auto" title={schedule.name}>{schedule.name}</span>
                 <span className={`schedule-card-status ${schedule.status}`}>{t(STATUS_LABEL[schedule.status])}</span>
             </div>
-            <div className="schedule-card-prompt" dir="auto">{schedule.prompt}</div>
+            <div className="schedule-card-prompt" dir="auto" title={schedule.prompt}>{schedule.prompt}</div>
             <div className="schedule-card-meta">
                 <span title={stripIsolates(described ?? schedule.description)}><Clock size={11} /> {described ?? <bdi>{schedule.description}</bdi>}</span>
                 <span>{t('schedules.card.runs', { n: schedule.run_count })}</span>
@@ -251,7 +165,7 @@ function ScheduleCard({ schedule }: { schedule: Schedule }) {
                 <span>{t.compose((say, code) => say('schedules.card.last', { when: formatTime(schedule.last_run_at, say, undefined, dateLocale(translator(code))) }))}</span>
                 <span>{t.compose((say, code) => say('schedules.card.next', { when: schedule.status === 'paused' ? say('schedules.status.paused') : formatNextRun(schedule.next_run_at, now, say, dateLocale(translator(code))) }))}</span>
             </div>
-            {schedule.last_error && (
+            {schedule.last_error && !(isSelected && !resultsLoading && results.some((r) => r.error)) && (
                 <div className="schedule-card-error">{t('schedules.card.lastFailed', { error: schedule.last_error })}</div>
             )}
             <div className="schedule-card-actions">
@@ -273,10 +187,30 @@ function ScheduleCard({ schedule }: { schedule: Schedule }) {
                         ? <><Pause size={11} /> {t('schedules.card.pause')}</>
                         : <><Play size={11} /> {t('schedules.card.resume')}</>}
                 </button>
+                <button className="btn-sm" onClick={handleEdit} disabled={schedule.running} title={t('schedules.card.editTitle')}>
+                    <Pencil size={11} /> {t('schedules.card.edit')}
+                </button>
                 <button className={`btn-sm danger`} onClick={handleDelete} title={t('schedules.card.delete')}>
-                    <Trash2 size={11} /> {t(confirmDelete ? 'schedules.card.confirmDelete' : 'schedules.card.delete')}
+                    <Trash2 size={11} /> {t('schedules.card.delete')}
+                </button>
+                <button className="btn-sm schedule-history-toggle" onClick={handleToggleHistory} aria-expanded={isSelected}>
+                    {isSelected ? <ChevronUp size={11} /> : <ChevronDown size={11} />} {t('schedules.card.pastRuns')}
                 </button>
             </div>
+            {askingDelete && (
+                <ConfirmSheet
+                    title={t('schedules.delete.ask', { name: schedule.name })}
+                    confirmLabel={t('schedules.delete.confirm')}
+                    cancelLabel={t('schedules.delete.cancel')}
+                    onConfirm={confirmDelete}
+                    onCancel={() => setAskingDelete(false)}
+                    danger
+                >
+                    <p>{t('schedules.delete.what')}</p>
+                    {schedule.session_id && <p>{t('schedules.delete.chatStays')}</p>}
+                    {schedule.running && <p>{t('schedules.delete.runStops')}</p>}
+                </ConfirmSheet>
+            )}
 
             {isSelected && (
                 <div className="schedule-results">
@@ -308,7 +242,7 @@ function ScheduleCard({ schedule }: { schedule: Schedule }) {
 export function ScheduleManager() {
     const t = useT();
     const { setShowSchedules } = useChatStore();
-    const { schedules, loading, error, actionError, loadSchedules, createSchedule, dismissActionError } = useScheduleStore();
+    const { schedules, loading, error, actionError, loadSchedules, createSchedule, editSchedule, dismissActionError } = useScheduleStore();
     const close = useCallback(() => setShowSchedules(false), [setShowSchedules]);
     useEscapeToClose(true, close);
     const dialogRef = useRef<HTMLDivElement>(null);
@@ -325,6 +259,9 @@ export function ScheduleManager() {
     const [parsing, setParsing] = useState(false);
     const [creating, setCreating] = useState(false);
     const [formError, setFormError] = useState<string | null>(null);
+    // The schedule the form is changing; null when it makes a new one.
+    const [editing, setEditing] = useState<string | null>(null);
+    const formRef = useRef<HTMLDivElement>(null);
     const [nameTaken, setNameTaken] = useState(false);
     const fieldId = useId();
     const scheduleFieldId = `${fieldId}-when`;
@@ -338,9 +275,11 @@ export function ScheduleManager() {
     const showRejectReason = scheduleRejected && /[A-Za-z]/.test(nlInput);
 
     useEffect(() => {
+        // A draft is an unsaved new schedule; an edit in progress is not one.
+        if (editing) return;
         const filled = nlInput.trim() || scheduleName.trim() || schedulePrompt.trim();
         useScheduleStore.getState().setDraft(filled ? { when: nlInput, name: scheduleName, prompt: schedulePrompt } : null);
-    }, [nlInput, scheduleName, schedulePrompt]);
+    }, [editing, nlInput, scheduleName, schedulePrompt]);
 
     // Debounced parse of NL input
     const parseTimerRef = useRef<number | null>(null);
@@ -366,14 +305,12 @@ export function ScheduleManager() {
     }, [nlInput]);
 
     // Load on mount + poll every 5s so we see updates when tasks fire
-    const pollRef = useRef<number | null>(null);
-
     useEffect(() => {
         log.ui.info('Schedule Manager opened');
         loadSchedules();
-        pollRef.current = window.setInterval(() => loadSchedules(), 5000);
+        const stop = setVisibleInterval(() => loadSchedules(), 5000);
         return () => {
-            if (pollRef.current) clearInterval(pollRef.current);
+            stop();
             dismissActionError();
         };
     }, [loadSchedules, dismissActionError]);
@@ -383,6 +320,32 @@ export function ScheduleManager() {
     const canCreate = nlInput.trim() && scheduleName.trim() && schedulePrompt.trim()
         && (parsed === null || parsed.valid);  // block only if parse explicitly returned invalid
 
+    const closeForm = useCallback(() => {
+        setShowCreate(false);
+        setEditing(null);
+        setFormError(null);
+        setNameTaken(false);
+        setParsed(null);
+        setNlInput('');
+        setScheduleName('');
+        setSchedulePrompt('');
+    }, []);
+
+    const startEdit = useCallback((schedule: Schedule) => {
+        setEditing(schedule.name);
+        setScheduleName(schedule.name);
+        setSchedulePrompt(schedule.prompt);
+        setNlInput(scheduleInputText(schedule));
+        setFormError(null);
+        setShowCreate(true);
+        log.ui.info(`Editing schedule "${schedule.name}"`);
+    }, []);
+
+    // The form sits above the list, so bring it into view when a card opens it.
+    useEffect(() => {
+        if (editing) formRef.current?.scrollIntoView?.({ block: 'nearest' });
+    }, [editing]);
+
     const handleCreate = useCallback(async () => {
         if (!canCreate) return;
         setCreating(true);
@@ -390,21 +353,22 @@ export function ScheduleManager() {
         setNameTaken(false);
         try {
             // Pass the raw NL input as interval - backend will re-parse it
-            await createSchedule(scheduleName.trim(), nlInput.trim(), schedulePrompt.trim());
-            useScheduleStore.getState().setDraft(null);
-            setNlInput('');
-            setScheduleName('');
-            setSchedulePrompt('');
-            setParsed(null);
-            setShowCreate(false);
-            log.ui.info(`Schedule "${scheduleName}" created`);
+            if (editing) {
+                await editSchedule(editing, nlInput.trim(), schedulePrompt.trim());
+                log.ui.info(`Schedule "${editing}" edited`);
+            } else {
+                await createSchedule(scheduleName.trim(), nlInput.trim(), schedulePrompt.trim());
+                useScheduleStore.getState().setDraft(null);
+                log.ui.info(`Schedule "${scheduleName}" created`);
+            }
+            closeForm();
         } catch (err) {
-            if (err instanceof ApiError && err.httpStatus === 409) setNameTaken(true);
-            else setFormError(err instanceof Error ? err.message : t('schedules.createFailed'));
+            if (!editing && err instanceof ApiError && err.httpStatus === 409) setNameTaken(true);
+            else setFormError(err instanceof Error ? err.message : t(editing ? 'schedules.editFailed' : 'schedules.createFailed'));
         } finally {
             setCreating(false);
         }
-    }, [canCreate, scheduleName, nlInput, schedulePrompt, createSchedule, t]);
+    }, [canCreate, editing, scheduleName, nlInput, schedulePrompt, createSchedule, editSchedule, closeForm, t]);
 
     return (
         <div ref={dialogRef} className="modal-overlay" onClick={() => setShowSchedules(false)} role="dialog" aria-modal="true" aria-label={t('schedules.title')}>
@@ -424,10 +388,24 @@ export function ScheduleManager() {
                                 <Plus size={14} /> {t('schedules.new')}
                             </button>
                         ) : (
-                            <div className="schedule-create-form">
+                            <div className="schedule-create-form" ref={formRef}>
+                                {editing && <h4 className="schedule-form-title">{t('schedules.editingTitle', { name: editing })}</h4>}
                                 {/* NL input */}
                                 <div className="schedule-field">
                                     <label className="schedule-field-label" htmlFor={scheduleFieldId}>{t('schedules.when')}</label>
+                                    <div className="schedule-presets">
+                                        {WHEN_PRESETS.map((preset) => (
+                                            <button
+                                                key={preset.value}
+                                                type="button"
+                                                className={`schedule-preset${nlInput.trim() === preset.value ? ' is-picked' : ''}`}
+                                                onClick={() => setNlInput(preset.value)}
+                                                aria-pressed={nlInput.trim() === preset.value}
+                                            >
+                                                {t(preset.label)}
+                                            </button>
+                                        ))}
+                                    </div>
                                     <textarea
                                         id={scheduleFieldId}
                                         className="schedule-nl-input"
@@ -464,7 +442,7 @@ export function ScheduleManager() {
                                                 )}
                                                 {parsed.valid && parsed.next_run_at && (
                                                     <div className="schedule-parsed-next">
-                                                        {t.compose((say, code) => say('schedules.nextRun', { when: new Date(parsed.next_run_at!).toLocaleString(dateLocale(translator(code))) }))}
+                                                        {t.compose((say, code) => say('schedules.nextRun', { when: formatNextRun(parsed.next_run_at, undefined, say, dateLocale(translator(code))) }))}
                                                     </div>
                                                 )}
                                                 {parsed.valid && (
@@ -501,6 +479,7 @@ export function ScheduleManager() {
                                             placeholder={t('schedules.namePlaceholder')}
                                             value={scheduleName}
                                             onChange={(e) => { setScheduleName(e.target.value); setNameTaken(false); }}
+                                            readOnly={editing !== null}
                                             className={!scheduleName.trim() && nlInput.trim() ? 'schedule-field-missing' : ''}
                                             aria-invalid={nameTaken}
                                             aria-describedby={nameTaken ? nameErrorId : undefined}
@@ -517,15 +496,18 @@ export function ScheduleManager() {
                                         value={schedulePrompt}
                                         onChange={(e) => setSchedulePrompt(e.target.value)}
                                     />
+                                    <div className="schedule-prompt-hint">{t('schedules.promptHint')}</div>
                                 </div>
 
                                 {formError && <p className="schedule-form-error"><bdi>{formError}</bdi></p>}
                                 <div className="schedule-create-actions">
-                                    <button className="btn-secondary" onClick={() => { setShowCreate(false); setFormError(null); setNameTaken(false); setParsed(null); setNlInput(''); setScheduleName(''); setSchedulePrompt(''); }}>
+                                    <button className="btn-secondary" onClick={closeForm}>
                                         {t('schedules.cancel')}
                                     </button>
                                     <button className="btn-primary" onClick={handleCreate} disabled={!canCreate || creating}>
-                                        {t(creating ? 'schedules.creating' : 'schedules.create')}
+                                        {editing
+                                            ? t(creating ? 'schedules.saving' : 'schedules.save')
+                                            : t(creating ? 'schedules.creating' : 'schedules.create')}
                                     </button>
                                 </div>
                             </div>
@@ -552,7 +534,7 @@ export function ScheduleManager() {
                         ) : (
                             <div className="schedule-list">
                                 {schedules.map((s) => (
-                                    <ScheduleCard key={s.id} schedule={s} />
+                                    <ScheduleCard key={s.id} schedule={s} onEdit={startEdit} />
                                 ))}
                             </div>
                         )}

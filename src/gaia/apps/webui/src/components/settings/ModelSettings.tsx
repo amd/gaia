@@ -5,15 +5,18 @@ import { RadioGroup } from '../RadioGroup';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ChevronDown, Cloud, Cpu, Loader2, Trash2 } from 'lucide-react';
 import * as api from '../../services/api';
-import { useModelStore, displayModelName, distinctModelLabels, sameModelId } from '../../stores/modelStore';
+import { useModelStore, displayModelName, distinctModelLabels, sameModelId, syncModelAfterSettingChange } from '../../stores/modelStore';
 import { useChatStore } from '../../stores/chatStore';
 import { useT, type Translate } from '../../i18n/useT';
 import { providerName, providerNotice } from '../../utils/providerText';
+import { setVisibleInterval } from '../../utils/visibleInterval';
 import { AddCustomModel } from './AddCustomModel';
 import { ErrorNotice, isServerDown } from './ErrorNotice';
 import { LocalModelsSections } from './LocalModelsSections';
 import { ModelInUse } from './ModelInUse';
 import { ModelRow } from './ModelRow';
+import { AgentChoice } from '../setup/AgentChoice';
+import { ConfirmSheet } from '../setup/ConfirmSheet';
 import { SettingsDisclosure } from './SettingsDisclosure';
 import { isDownloading } from '../modelMeta';
 import { modelServerHealth } from '../../services/statusPoll';
@@ -116,8 +119,7 @@ export function ModelSettings() {
     const awaitingPermission = !!providers?.some((p) => p.key_state === 'waiting_for_os_permission');
     useEffect(() => {
         if (!awaitingPermission) return;
-        const timer = setInterval(() => { void loadProviders(); }, DOWNLOAD_POLL_MS);
-        return () => clearInterval(timer);
+        return setVisibleInterval(() => { void loadProviders(); }, DOWNLOAD_POLL_MS);
     }, [awaitingPermission, loadProviders]);
     const activeProvider = active?.provider;
     useEffect(() => { if (activeProvider && !requested) setChosen(activeProvider); }, [activeProvider, requested]);
@@ -215,6 +217,7 @@ export function ModelSettings() {
     }, [loadModels]);
 
     const remove = useCallback(async (model: string) => {
+        const modelBefore = useModelStore.getState().active?.model;
         setBusy(`rm:${model}`);
         setNotice(null);
         try {
@@ -224,13 +227,14 @@ export function ModelSettings() {
                 : r.cleared.includes('default_model') ? 'settings.model.removedDefault' : 'settings.model.removed';
             setNotice({ ok: true, text: t(removed, { name: r.display_name }) });
             await loadModels('local', true);
-            await refreshActive();
+            // Removing the model in use puts chat back on the default, which loads now.
+            await syncModelAfterSettingChange(modelBefore);
         } catch (err) {
             setNotice({ ok: false, text: err instanceof Error ? err.message : String(err) });
         } finally {
             setBusy(null);
         }
-    }, [loadModels, refreshActive, t]);
+    }, [loadModels, t]);
 
     const added = useCallback(async (name: string) => {
         setNotice({ ok: true, text: t('settings.model.added', { name }) });
@@ -246,8 +250,7 @@ export function ModelSettings() {
     }, [anyDownloading, refreshActive]);
     useEffect(() => {
         if (chosen !== 'local' || !anyDownloading) return;
-        const timer = setInterval(() => { void loadModels('local', true); }, DOWNLOAD_POLL_MS);
-        return () => clearInterval(timer);
+        return setVisibleInterval(() => { void loadModels('local', true); }, DOWNLOAD_POLL_MS);
     }, [anyDownloading, chosen, loadModels]);
 
     // Keeps the in-use model's device and size on screen while another provider's tab is open.
@@ -278,6 +281,7 @@ export function ModelSettings() {
     const toDownload = visibleRunnable.filter((m) => !m.downloaded);
     const readyModels = (models ?? []).filter((m) => m.available !== false && m.downloaded);
     const ranked = readyModels.filter(inCollapsedView);
+    const removing = confirmRemove ? (models ?? []).find((m) => m.id === confirmRemove) ?? null : null;
     const switchChoices = chosen === 'fireworks' && ranked.some((m) => m.rank !== null) ? ranked : readyModels;
 
     const renderRow = (m: ProviderModel) => (
@@ -288,12 +292,9 @@ export function ModelSettings() {
             current={isCurrent(m)}
             remote={!!provider?.remote}
             busy={busy}
-            confirmingRemove={confirmRemove === m.id}
             onUse={() => void use(m.id)}
             onDownload={() => void download(m.id)}
             onAskRemove={() => setConfirmRemove(m.id)}
-            onKeep={() => setConfirmRemove(null)}
-            onRemove={() => void remove(m.id)}
             onNpuRecheck={() => void loadModels(chosen, true)}
         />
     );
@@ -301,6 +302,8 @@ export function ModelSettings() {
     return (
         <div className="settings-pane">
             <h2 className="settings-pane-title">{t('settings.section.model')}</h2>
+
+            <AgentChoice inSettings />
 
             <ModelInUse
                 row={listedInUse ?? (sameModelId(inUseRow?.id, active?.model) ? inUseRow : null)}
@@ -321,7 +324,7 @@ export function ModelSettings() {
                         className={`provider-tab${chosen === p.id ? ' is-active' : ''}${offline(p) || blocked(p) ? ' is-disabled' : ''}`}
                         onClick={() => setChosen(p.id)}
                         disabled={(offline(p) || blocked(p)) && chosen !== p.id}
-                        title={blocked(p) ? t('settings.privacy.localOnlyBlocked') : offline(p) ? p.network?.detail ?? undefined : undefined}
+                        title={blocked(p) ? t('settings.privacy.localOnlyBlocked') : offline(p) ? t('setup.key.gatewayOff') : undefined}
                     >
                         {p.remote ? <Cloud size={14} aria-hidden="true" /> : <Cpu size={14} aria-hidden="true" />}
                         <span>{providerName(t, p)}</span>
@@ -435,13 +438,7 @@ export function ModelSettings() {
                                             {t('settings.key.reconnect')}
                                         </button>
                                     )}
-                                    {(provider.key_source !== 'environment' || provider.key_from_gaia_env) && (confirmForget ? (
-                                        <>
-                                            <span className="settings-hint">{t('settings.key.removeAsk')}</span>
-                                            <button type="button" className="btn-danger" onClick={() => void forget()} disabled={busy !== null}>{t('settings.models.remove')}</button>
-                                            <button type="button" className="btn-secondary" onClick={() => setConfirmForget(false)}>{t('settings.models.keep')}</button>
-                                        </>
-                                    ) : (
+                                    {(provider.key_source !== 'environment' || provider.key_from_gaia_env) && (
                                         <>
                                             <button type="button" className="btn-secondary" onClick={() => setReplacingKey(true)} disabled={busy !== null}>{t('settings.key.replace')}</button>
                                             {provider.key_source !== 'environment' && (
@@ -457,7 +454,7 @@ export function ModelSettings() {
                                                 </button>
                                             )}
                                         </>
-                                    ))}
+                                    )}
                                 </div>
                             ) : (
                                 <div className="settings-row">
@@ -576,6 +573,30 @@ export function ModelSettings() {
 
                     {provider.remote && <SpendingLimit />}
                 </section>
+            )}
+            {removing && (
+                <ConfirmSheet
+                    title={t('settings.models.removeTitle', { name: labels[removing.id] ?? removing.id })}
+                    confirmLabel={removing.downloaded ? t('settings.model.removeDownload') : t('settings.models.remove')}
+                    cancelLabel={t('settings.models.keep')}
+                    danger
+                    onConfirm={() => { setConfirmRemove(null); void remove(removing.id); }}
+                    onCancel={() => setConfirmRemove(null)}
+                >
+                    {removing.downloaded && <p>{t('settings.model.removeDownloadBody')}</p>}
+                </ConfirmSheet>
+            )}
+            {confirmForget && provider && (
+                <ConfirmSheet
+                    title={t('settings.key.removeAsk')}
+                    confirmLabel={t('settings.key.remove')}
+                    cancelLabel={t('settings.models.keep')}
+                    danger
+                    onConfirm={() => void forget()}
+                    onCancel={() => setConfirmForget(false)}
+                >
+                    <p>{t('settings.key.removeBody', { name: provider.name })}</p>
+                </ConfirmSheet>
             )}
         </div>
     );

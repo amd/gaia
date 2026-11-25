@@ -6,10 +6,13 @@
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { EnvironmentSection } from '../EnvironmentSection';
+import { formatWindow } from '../../modelMeta';
 import { OfflineNotice } from '../OfflineNotice';
 import { PermissionModeChip } from '../../PermissionModeChip';
 import { useChatStore } from '../../../stores/chatStore';
+import { stripIsolates } from '../../../i18n/registry';
 import { announceMobileAccess } from '../../../utils/mobileAccessEvents';
+import { useSessionPanelStore } from '../../../stores/sessionPanelStore';
 import { ENV, resetPanelState, SID, stubPanelApi } from './testUtils';
 
 vi.mock('../../../services/api');
@@ -40,7 +43,26 @@ describe('Runs on', () => {
         render(<EnvironmentSection sessionId={SID} busy={false} />);
         expect(await screen.findByText(/This PC · GPU · Vulkan/)).toBeInTheDocument();
         expect(screen.getByText('Gemma 4 E4B')).toBeInTheDocument();
-        expect(screen.getByText('6.2 GB in use · 40.5 GB free')).toBeInTheDocument();
+        // Memory is a hover detail on the model, not a line of its own.
+        expect(screen.getByTitle('6.2 GB in use · 40.5 GB free')).toHaveTextContent('Gemma 4 E4B');
+        expect(screen.getByText('64K tokens')).toBeInTheDocument();
+    });
+
+    it("gives this chat's window, as the context meter does, not the server's larger load", async () => {
+        const status = await mocked.getLocalModelStatus();
+        mocked.getLocalModelStatus.mockResolvedValue({ ...status, ctx_size: 131072 });
+        const usage = {
+            window: 65536, reply_reserve: 4096, system: 3000, tools: 2000, documents: 0, history: 1000, query: 0,
+            used: 6000, history_budget: 12000, history_used: 1000, turns_in_view: 2, turns_hidden: 0,
+            at_risk: [], at_risk_tokens: 0,
+        };
+        render(<EnvironmentSection sessionId={SID} busy={false} usage={usage} />);
+        expect(await screen.findByText('64K tokens')).toBeInTheDocument();
+        expect(screen.queryByText('128K tokens')).not.toBeInTheDocument();
+    });
+
+    it('formats a window as Settings lists it, and any other size in thousands', () => {
+        expect([65536, 131072, 32768, 200000, 1_000_000, 8000].map(formatWindow)).toEqual(['64K', '128K', '32K', '200K', '1M', '8.0K']);
     });
 
     it("doesn't describe another chat's model as this one's", async () => {
@@ -60,12 +82,102 @@ describe('Runs on', () => {
         expect(mocked.getLocalModelStatus).not.toHaveBeenCalled();
     });
 
+    it('says a warming model is warming up, and reads it again until it loads', async () => {
+        vi.useFakeTimers({ shouldAdvanceTime: true });
+        try {
+            const loaded = await mocked.getLocalModelStatus();
+            mocked.getLocalModelStatus.mockReset();
+            mocked.getLocalModelStatus
+                .mockResolvedValueOnce({ ...(loaded as object), state: 'warming' } as never)
+                .mockResolvedValue(loaded as never);
+            render(<EnvironmentSection sessionId={SID} busy={false} />);
+            const modelLine = (pattern: RegExp) => (_: string, el: Element | null) =>
+                !!el?.classList.contains('sp-row-label') && pattern.test(stripIsolates(el.textContent ?? ''));
+            expect(await screen.findByText(modelLine(/^Gemma 4 E4B · Warming up$/))).toBeInTheDocument();
+
+            await act(async () => { await vi.advanceTimersByTimeAsync(3000); });
+
+            await waitFor(() => expect(screen.queryByText(modelLine(/Warming up/))).not.toBeInTheDocument());
+            expect(screen.getByText('Gemma 4 E4B')).toBeInTheDocument();
+        } finally {
+            vi.useRealTimers();
+        }
+    });
+
+    it("names this chat's model when nothing is loaded, without guessing at its memory", async () => {
+        useChatStore.setState({
+            sessions: [{ ...useChatStore.getState().sessions[0], effective_model: 'Gemma-4-E4B-it-GGUF' }],
+        });
+        const loaded = await mocked.getLocalModelStatus();
+        mocked.getLocalModelStatus.mockReset();
+        mocked.getLocalModelStatus.mockResolvedValue({
+            ...(loaded as object), state: 'idle', model: null, display_name: null, placement: null,
+            memory: { source: 'AMD iGPU', total_gb: 96, free_gb: 96, model_gb: null },
+        } as never);
+        render(<EnvironmentSection sessionId={SID} busy={false} />);
+        const line = (pattern: RegExp) => (_: string, el: Element | null) =>
+            !!el?.classList.contains('sp-row-label') && pattern.test(stripIsolates(el.textContent ?? ''));
+        expect(await screen.findByText(line(/^Gemma.?4.?E4B\S* · Not loaded — it loads with your next message$/))).toBeInTheDocument();
+        // Memory is the model line's hover text: what is free, never a guessed figure in use.
+        expect(screen.getByText(line(/Not loaded/))).toHaveAttribute('title', '96.0 GB free');
+        expect(screen.queryByText(/in use unknown/)).not.toBeInTheDocument();
+    });
+
     it('re-reads where it runs when a reply ends, not before', async () => {
         const { rerender } = render(<EnvironmentSection sessionId={SID} busy={false} />);
         await waitFor(() => expect(mocked.getLocalModelStatus).toHaveBeenCalledTimes(1));
         rerender(<EnvironmentSection sessionId={SID} busy />);
         rerender(<EnvironmentSection sessionId={SID} busy={false} />);
         await waitFor(() => expect(mocked.getLocalModelStatus).toHaveBeenCalledTimes(2));
+    });
+
+    describe('with the model server not answering', () => {
+        const URL = 'http://localhost:13305/api/v1';
+        const STOPPED = {
+            state: 'stopped', active_model: 'Gemma-4-E4B-it-GGUF', active_display_name: 'Gemma 4 E4B', active_remote: false,
+            model: null, display_name: null, placement: null, ctx_size: null, memory: null, memory_error: null,
+            error_detail: `The local model server is not reachable at ${URL} (connection refused).`,
+            base_url: URL, busy: false, restarting: false, restart_error: null,
+        };
+        // What the backend sends: an English line, and the cause the UI words itself.
+        const down = (owner: 'gaia' | 'user') => ({
+            ...STOPPED, owner, error_cause: 'model_server_down',
+            error: `The model server isn't answering at ${URL}. `
+                + (owner === 'gaia' ? 'Restart starts it.' : "GAIA doesn't start a server it doesn't run; start it yourself."),
+        });
+        afterEach(() => useChatStore.setState({ locale: 'en' }));
+
+        async function rowError(status: object, locale: 'en' | 'ar') {
+            useChatStore.setState({ locale });
+            mocked.getLocalModelStatus.mockResolvedValue(status as never);
+            const { container } = render(<EnvironmentSection sessionId={SID} busy={false} />);
+            await waitFor(() => expect(container.querySelector('.sp-row .sp-error')).not.toBeNull());
+            return container.querySelector('.sp-row .sp-error') as HTMLElement;
+        }
+
+        it.each([
+            ['gaia', `The model server isn't answering at ${URL}. Restart starts it.`],
+            ['user', `The model server isn't answering at ${URL}. GAIA doesn't start a server it doesn't run; start it yourself.`],
+        ] as const)('says so in English for a %s server', async (owner, line) => {
+            const el = await rowError(down(owner), 'en');
+            expect(stripIsolates(el.textContent ?? '')).toBe(line);
+            expect(el.querySelector('bdi[dir="ltr"]')).toHaveTextContent(URL);
+        });
+
+        it.each([
+            ['gaia', `خادم النماذج لا يستجيب على ${URL}. اضغط «إعادة التشغيل» لتشغيله.`],
+            ['user', `خادم النماذج لا يستجيب على ${URL}. لا يشغّل GAIA خادمًا لا يديره، فشغّله بنفسك.`],
+        ] as const)('says so in Arabic for a %s server, the address left to right', async (owner, line) => {
+            const el = await rowError(down(owner), 'ar');
+            const gloss = el.querySelector('.i18n-gloss')?.textContent ?? '';
+            expect(stripIsolates((el.textContent ?? '').replace(gloss, '')).trim()).toBe(line);
+            expect(el.querySelector('bdi[dir="ltr"]')).toHaveTextContent(URL);
+        });
+
+        it("keeps the backend's own words for any other failure", async () => {
+            const el = await rowError({ ...STOPPED, owner: 'gaia', error: 'Lemonade answered /health with HTTP 404.', error_cause: null }, 'ar');
+            expect(el).toHaveTextContent('Lemonade answered /health with HTTP 404.');
+        });
     });
 });
 
@@ -90,9 +202,69 @@ describe('Can read and write', () => {
         const list = await screen.findByRole('list');
         const rows = within(list).getAllByRole('listitem');
         expect(rows[0]).toHaveTextContent('project');
-        expect(rows[0]).toHaveTextContent('Added by you');
-        expect(rows[1]).toHaveTextContent("GAIA's documents folder");
-        expect(rows[2]).toHaveTextContent('Document in this chat');
+        // A folder shows its path, with where it came from on hover.
+        expect(within(rows[0]).getByTitle('Added by you')).toHaveTextContent('C:\\Users\\me\\project');
+        // A file shows where it came from, with its path on hover.
+        expect(within(rows[1]).getByText('Document in this chat')).toHaveAttribute('title', 'C:\\Users\\me\\report.pdf');
+        expect(rows[1]).not.toHaveTextContent('C:\\Users\\me\\report.pdf');
+    });
+
+    it("keeps GAIA's own folders behind one line until asked", async () => {
+        render(<EnvironmentSection sessionId={SID} busy={false} />);
+        const own = await screen.findByRole('button', { name: /GAIA's own folders/ });
+        expect(own).toHaveAttribute('aria-expanded', 'false');
+        expect(own).toHaveTextContent('1');
+        expect(screen.queryByTitle("GAIA's documents folder")).not.toBeInTheDocument();
+        fireEvent.click(own);
+        expect(screen.getByTitle("GAIA's documents folder")).toBeInTheDocument();
+    });
+
+    it('leaves the chat\'s documents to their own section when asked to', async () => {
+        render(<EnvironmentSection sessionId={SID} busy={false} hideDocuments />);
+        await screen.findByText('project');
+        expect(screen.queryByText('report.pdf')).not.toBeInTheDocument();
+    });
+});
+
+describe('rows that show only when they apply', () => {
+    it('shows how full the context is once it is measured, and opens the breakdown', async () => {
+        const { rerender } = render(<EnvironmentSection sessionId={SID} busy={false} />);
+        await screen.findByText('project');
+        expect(screen.queryByRole('button', { name: /Context/ })).not.toBeInTheDocument();
+
+        rerender(<EnvironmentSection sessionId={SID} busy={false} usage={{ window: 64000, used: 17280 } as never} />);
+        const row = screen.getByRole('button', { name: /Context/ });
+        expect(row).toHaveTextContent('27%');
+        fireEvent.click(row);
+        expect(useSessionPanelStore.getState().sections.context).toBe(true);
+    });
+
+    it('names the repository and branch once the chat has changed files', async () => {
+        mocked.getSessionGit.mockResolvedValue({
+            available: true,
+            repos: [{
+                root: 'C:\\Users\\me\\project', branch: 'feature/panel', remote: null, default_branch: 'main', gh: false,
+                files: ['a.ts', 'b.ts'], uncommitted: ['a.ts', 'b.ts'], ignored: [], draft: { title: '', body: '' }, pr_blocked: null,
+            }],
+        });
+        render(<EnvironmentSection sessionId={SID} busy={false} />);
+        await screen.findByText('project');
+        expect(screen.queryByText('feature/panel')).not.toBeInTheDocument();
+        expect(mocked.getSessionGit).not.toHaveBeenCalled();
+
+        act(() => useSessionPanelStore.getState().setSignals(SID, { changedFiles: 2 }));
+        expect(await screen.findByText('feature/panel')).toBeInTheDocument();
+        expect(screen.getByText('2 uncommitted')).toBeInTheDocument();
+        // The folder's name, not its whole Windows path.
+        expect(screen.getByText('feature/panel').parentElement).toHaveTextContent(/^project feature\/panel$/);
+    });
+
+    it('names the mailbox for an email chat', async () => {
+        useChatStore.setState({
+            sessions: [{ ...useChatStore.getState().sessions[0], agent_type: 'email', mail_provider: 'google' }],
+        });
+        render(<EnvironmentSection sessionId={SID} busy={false} />);
+        expect(await screen.findByText('Gmail')).toBeInTheDocument();
     });
 
     it("lists a library copy under the document's own name (#7224)", async () => {
@@ -142,6 +314,7 @@ describe('Can read and write', () => {
         const pickFolder = vi.fn<(defaultPath?: string) => Promise<string | null>>();
         beforeEach(() => {
             window.gaiaAPI = { dialog: { pickFolder } } as unknown as NonNullable<typeof window.gaiaAPI>;
+            mocked.checkEnvironmentFolder.mockResolvedValue({ refusal: null });
         });
         afterEach(() => {
             delete window.gaiaAPI;
@@ -155,6 +328,16 @@ describe('Can read and write', () => {
             await waitFor(() => expect(mocked.addEnvironmentFolder).toHaveBeenCalledWith(SID, '/Users/me/notes'));
             expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
             expect(mocked.browseFiles).not.toHaveBeenCalled();
+        });
+
+        it('refuses the home folder as soon as it is picked in the OS picker (#7996)', async () => {
+            const why = "GAIA can't be given /Users/me: it is your home directory. Pick a narrower folder.";
+            pickFolder.mockResolvedValue('/Users/me');
+            mocked.checkEnvironmentFolder.mockResolvedValue({ refusal: why });
+            render(<EnvironmentSection sessionId={SID} busy={false} />);
+            fireEvent.click(await screen.findByRole('button', { name: /Add folder/ }));
+            expect(await screen.findByRole('alert')).toHaveTextContent(why);
+            expect(mocked.addEnvironmentFolder).not.toHaveBeenCalled();
         });
 
         it('adds nothing when the OS picker is cancelled', async () => {
@@ -192,7 +375,10 @@ describe('Can read and write', () => {
         // Not a boundary: say so rather than listing folders as if they were the limit.
         expect(await screen.findByText('Files GAIA can reach')).toBeInTheDocument();
         expect(screen.queryByText(/its own process/)).not.toBeInTheDocument();
-        expect(screen.getByText(/never the whole user folder at once/)).toBeInTheDocument();
+        // The explanation waits behind its button, so the list isn't buried under a paragraph.
+        expect(screen.queryByText(/one at a time, never all of it at once/)).not.toBeInTheDocument();
+        fireEvent.click(screen.getByRole('button', { name: 'About these folders' }));
+        expect(screen.getByText(/one at a time, never all of it at once/)).toBeInTheDocument();
         expect(screen.queryByText('Can read and write')).not.toBeInTheDocument();
         expect(screen.queryByRole('button', { name: /Add folder/ })).not.toBeInTheDocument();
         expect(screen.queryByRole('button', { name: /^Remove / })).not.toBeInTheDocument();
@@ -209,7 +395,7 @@ describe('Can read and write', () => {
 
     it('shows Internet as text for an agent that keeps its own network rules', async () => {
         mocked.getEnvironment.mockResolvedValue({ ...ENV, enforced: false, internet_enforced: false });
-        useChatStore.setState({ sessions: [{ ...useChatStore.getState().sessions[0], agent_type: 'email' }] });
+        useChatStore.setState({ sessions: [{ ...useChatStore.getState().sessions[0], agent_type: 'my-sidecar' }] });
         render(<EnvironmentSection sessionId={SID} busy={false} />);
         expect(await screen.findByText('On')).toBeInTheDocument();
         expect(screen.queryByRole('switch', { name: 'Internet for this chat' })).not.toBeInTheDocument();
@@ -218,9 +404,10 @@ describe('Can read and write', () => {
 
     it("doesn't claim another agent's scope", async () => {
         mocked.getEnvironment.mockResolvedValue({ ...ENV, enforced: false });
-        useChatStore.setState({ sessions: [{ ...useChatStore.getState().sessions[0], agent_type: 'email' }] });
+        useChatStore.setState({ sessions: [{ ...useChatStore.getState().sessions[0], agent_type: 'my-sidecar' }] });
         render(<EnvironmentSection sessionId={SID} busy={false} />);
-        expect(await screen.findByText(/applies its own limits/)).toBeInTheDocument();
+        fireEvent.click(await screen.findByRole('button', { name: 'About these folders' }));
+        expect(screen.getByText(/applies its own limits/)).toBeInTheDocument();
         expect(screen.queryByText(/inside your user folder/)).not.toBeInTheDocument();
     });
 
@@ -249,7 +436,9 @@ describe('Internet', () => {
         await waitFor(() => expect(mocked.setInternet).toHaveBeenCalledWith(SID, false));
         expect(await screen.findByText(/Offline: internet is off for this chat/)).toBeInTheDocument();
         expect(toggle).toHaveAttribute('aria-checked', 'false');
-        expect(screen.getByText('Off: web search and pages are blocked')).toBeInTheDocument();
+        expect(screen.getByTitle('Web search and pages are blocked')).toHaveTextContent('Internet');
+        // The state is written beside the switch, not left to the knob's colour.
+        expect(toggle.parentElement).toHaveTextContent('Off');
 
         fireEvent.click(screen.getByRole('button', { name: 'Turn on' }));
         await waitFor(() => expect(mocked.setInternet).toHaveBeenLastCalledWith(SID, true));
@@ -304,7 +493,7 @@ describe('Phone access', () => {
         expect(screen.getByText('Starting…')).toBeInTheDocument();
 
         mocked.getTunnelStatus.mockResolvedValue({
-            active: true, url: 'https://x', token: 't', startedAt: null, error: null, publicIp: null,
+            active: true, url: 'https://x', token: 't', startedAt: null, error: null,
             device: { name: 'iPhone', lastSeen: '2026-10-16T20:00:00+00:00' },
         });
         act(() => announceMobileAccess(true));
@@ -315,7 +504,7 @@ describe('Phone access', () => {
 
     it('shows no error for phone access the user never got running', async () => {
         mocked.getTunnelStatus.mockResolvedValue({
-            active: false, url: null, token: null, startedAt: null, publicIp: null,
+            active: false, url: null, token: null, startedAt: null,
             error: 'ngrok is not installed. Install it from https://ngrok.com/download or run: choco install ngrok',
         });
         render(<EnvironmentSection sessionId={SID} busy={false} />);
@@ -381,5 +570,19 @@ describe('Permission mode', () => {
         expect(mocked.setPermissionMode).not.toHaveBeenCalled();
         expect(full).toHaveAttribute('aria-checked', 'false');
         expect(screen.getByRole('button', { name: 'Turn it on' })).toBeInTheDocument();
+    });
+});
+
+describe('EnvironmentSection marks hidden characters in names', () => {
+    it('shows a right-to-left override in a folder as a code', async () => {
+        mocked.getEnvironment.mockResolvedValue({
+            ...ENV,
+            folders: [{ path: 'C:\\Users\\me\\exe\u202Etxt', kind: 'folder', source: 'added', removable: true }],
+        });
+        render(<EnvironmentSection sessionId={SID} busy={false} />);
+        const list = await screen.findByRole('list');
+        expect(list).toHaveTextContent('exe[U+202E]txt');
+        expect(list.textContent).not.toContain('\u202E');
+        expect(list.querySelector('.sp-item-name')!.getAttribute('title')).toBe('C:\\Users\\me\\exe[U+202E]txt');
     });
 });

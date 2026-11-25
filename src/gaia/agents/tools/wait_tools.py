@@ -11,13 +11,13 @@ import time
 from datetime import datetime
 from typing import Any, Dict
 
+from gaia.agents.base.verification import OUT_OF_TIME, time_capped
 from gaia.logger import get_logger
 from gaia.tool_cancellation import tool_cancelled
 
 logger = get_logger(__name__)
 
-#: Longest single wait. A longer one takes several calls, each ending in a
-#: result the user sees.
+#: Longest wait. A longer one goes back to the user rather than being chained.
 MAX_SLEEP_SECONDS = 300.0
 
 # Upper bound on how late a wait notices Stop.
@@ -50,7 +50,7 @@ class WaitToolsMixin:
             """Wait before continuing: until a rate limit resets, or because the user asked you to wait.
 
             Args:
-                seconds: How long to wait, more than 0 and at most 300. To wait longer, call sleep again.
+                seconds: How long to wait, more than 0 and at most 300. For longer, tell the user when to retry; don't chain sleeps.
                 reason: What you are waiting for.
             """
             return self._sleep(seconds, reason)
@@ -77,12 +77,18 @@ class WaitToolsMixin:
             return {
                 "status": "error",
                 "error": (
-                    f"sleep waits at most {MAX_SLEEP_SECONDS:g} seconds per call; "
-                    f"got {seconds:g}, so nothing was waited. Call "
-                    f"sleep({MAX_SLEEP_SECONDS:g}), then call it again for the "
-                    f"remaining {seconds - MAX_SLEEP_SECONDS:g} seconds."
+                    f"sleep waits at most {MAX_SLEEP_SECONDS:g} seconds; got "
+                    f"{seconds:g}, so nothing was waited. That is too long to "
+                    "wait in this turn, so do not chain sleep calls. Tell the "
+                    "user what you are waiting for and when to retry, then end "
+                    "your turn."
                 ),
             }
+
+        allowed = time_capped(self, math.ceil(seconds))
+        if not allowed:
+            return dict(OUT_OF_TIME)
+        seconds = min(seconds, allowed)
 
         logger.info("Waiting %gs: %s", seconds, reason or "(no reason given)")
         start = time.monotonic()

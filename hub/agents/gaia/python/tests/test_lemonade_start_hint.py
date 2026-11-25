@@ -14,12 +14,12 @@ from types import SimpleNamespace
 
 import pytest
 
-pytest.importorskip("gaia_agent")
+pytest.importorskip("gaiapy")
 
 from fastapi.testclient import TestClient  # noqa: E402
-from gaia_agent import caller_auth  # noqa: E402
-from gaia_agent import server as server_mod  # noqa: E402
-from gaia_agent import stdio as stdio_mod  # noqa: E402
+from gaiapy import caller_auth  # noqa: E402
+from gaiapy import server as server_mod  # noqa: E402
+from gaiapy import stdio as stdio_mod  # noqa: E402
 
 from gaia.llm.lemonade_launcher import StartHint  # noqa: E402
 
@@ -41,6 +41,7 @@ def _init_body(monkeypatch):
     caller_auth.reset()
     monkeypatch.delenv(caller_auth.TOKEN_FILE_ENV_VAR, raising=False)
     monkeypatch.delenv(caller_auth.TOKEN_ENV_VAR, raising=False)
+    monkeypatch.setenv(caller_auth.ALLOW_NO_TOKEN_ENV_VAR, "1")
     monkeypatch.setattr(
         server_mod,
         "_probe_lemonade",
@@ -82,6 +83,7 @@ def _missing_model_hint(monkeypatch, pull):
     caller_auth.reset()
     monkeypatch.delenv(caller_auth.TOKEN_FILE_ENV_VAR, raising=False)
     monkeypatch.delenv(caller_auth.TOKEN_ENV_VAR, raising=False)
+    monkeypatch.setenv(caller_auth.ALLOW_NO_TOKEN_ENV_VAR, "1")
     try:
         return client.get("/v1/gaia/init").json()["hint"]
     finally:
@@ -127,18 +129,22 @@ def test_init_hint_never_names_the_removed_cli_unpatched(monkeypatch):
     assert "Start it with `lemonade-server serve`" not in hint
 
 
+@pytest.mark.parametrize("surface", ["agent_ui", "tui", "cli", "service"])
 @pytest.mark.parametrize("gaias_own", [True, False])
-def test_server_run_error_is_classified(start_hint, monkeypatch, gaias_own):
+def test_server_run_error_is_classified(start_hint, monkeypatch, gaias_own, surface):
     monkeypatch.setattr(
         "gaia.llm.lemonade_launcher.gaia_runs_lemonade", lambda *a: gaias_own
     )
     detail = server_mod._terminal_error_detail(
-        ConnectionError("Max retries exceeded ... Connection refused")
+        ConnectionError("Max retries exceeded ... Connection refused"), surface
     )
 
-    assert "local LLM" in detail
+    assert ("local LLM" in detail) is gaias_own
     assert "Max retries" not in detail
-    assert (_INSTRUCTION in detail) is not gaias_own
+    # A terminal gets this machine's start instruction; the Agent UI never a command.
+    terminal = surface != "agent_ui"
+    assert (_INSTRUCTION in detail) is (terminal and not gaias_own)
+    assert ("Start it the way you usually do" in detail) is not (terminal or gaias_own)
 
 
 def _fake_agent():

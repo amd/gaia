@@ -45,6 +45,7 @@ on:
       - 'tests/unit/test_run_python_adversarial.py'
       - 'tests/unit/test_run_python_frozen.py'
       - 'tests/unit/test_run_python_frozen_adversarial.py'
+      - 'tests/unit/test_script_credential_guard.py'
       - 'tests/unit/test_run_python_untracked.py'
       - 'tests/unit/test_scratch_dir_lifecycle.py'
       - 'tests/unit/test_tool_loader_disambiguation.py'
@@ -132,6 +133,7 @@ on:
       - 'tests/unit/test_run_python_adversarial.py'
       - 'tests/unit/test_run_python_frozen.py'
       - 'tests/unit/test_run_python_frozen_adversarial.py'
+      - 'tests/unit/test_script_credential_guard.py'
       - 'tests/unit/test_run_python_untracked.py'
       - 'tests/unit/test_scratch_dir_lifecycle.py'
       - 'tests/unit/test_tool_loader_disambiguation.py'
@@ -242,7 +244,7 @@ jobs:
         env:
           GAIA_MEMORY_DISABLED: "1"
         run: |
-          # Each of these importorskips gaia_agent, at module level or per
+          # Each of these importorskips gaiapy, at module level or per
           # test, so test_unit.yml collects them and runs none of it (#4206).
           python -m pytest \
             tests/unit/test_chat_agent_integration.py \
@@ -261,6 +263,7 @@ jobs:
             tests/unit/test_run_python_adversarial.py \
             tests/unit/test_run_python_frozen.py \
             tests/unit/test_run_python_frozen_adversarial.py \
+            tests/unit/test_script_credential_guard.py \
             tests/unit/test_run_python_untracked.py \
             tests/unit/test_scratch_dir_lifecycle.py \
             tests/unit/test_tool_loader_disambiguation.py \
@@ -288,7 +291,7 @@ jobs:
           echo "           FRAMEWORK REGISTRY DISCOVERY TESTS"
           echo "================================================================"
           # tests/unit/agents/test_registry.py::TestBuiltinRegistration has
-          # flagship cases that importorskip("gaia_agent") -- this lane
+          # flagship cases that importorskip("gaiapy") -- this lane
           # installs that wheel, so they actually run here instead of silently
           # skipping (#2240).
           echo "Verifying AgentRegistry resolves the flagship and its legacy chat ids..."

@@ -65,7 +65,7 @@ runs.
 |---|---|---|
 | `self.path_validator` | `PathValidator` | Enforces the allowlist/blocklist/size limits every write and read tool checks. |
 
-`ChatAgent` ([`hub/agents/gaia/python/gaia_agent/chat_agent.py`](https://github.com/amd/gaia/blob/main/hub/agents/gaia/python/gaia_agent/chat_agent.py))
+`ChatAgent` ([`hub/agents/gaia/python/gaiapy/chat_agent.py`](https://github.com/amd/gaia/blob/main/hub/agents/gaia/python/gaiapy/chat_agent.py))
 sets it before calling `super().__init__()`, because `_register_tools()` runs
 inside that call.
 
@@ -98,6 +98,13 @@ see [Read before edit](#read-before-edit).
 
 **Parameters:**
 - `file_path` (str, required): Path to the file to read
+- `offset` (int, optional): Zero-based character offset for a bounded page
+- `limit` (int, optional): Page size in characters. Beside `start_line` (and no
+  `end_line`) it is a number of lines; when `end_line` is also given, `end_line` wins
+- `start_line` / `end_line` (int, optional): 1-based, inclusive line range; a
+  `start_line` of 0 is read as line 1. Not combinable with `offset`
+- `raw` (bool, optional): For an `.html`/`.htm` file, return the markup instead of
+  the page's text
 
 **Returns:**
 ```python
@@ -122,22 +129,50 @@ see [Read before edit](#read-before-edit).
 }
 ```
 
-**Word, PDF and Excel files** (`.docx`, `.pdf`, `.xlsx`) return their extracted
-text instead of `[Binary file]`, one part at a time. A part is at most the
+**A text file too large for one tool result** (over the host's
+`_truncation_budget()` threshold) comes back as its first lines, numbered like a
+`start_line` read, plus an `outline`: one `line: label` row per definition or
+heading (Python from its syntax tree, Markdown headings, `diff --git` lines,
+and common declarations in other languages), sampled evenly when it has more
+rows than fit. `note` names the size and says to read the rest with
+`start_line`/`end_line`. A file the same turn wrote, a host with no budget, or a
+file whose first line alone is over the budget keeps the whole-file result.
+
+```python
+{
+    "status": "success",
+    "file_path": str,
+    "file_type": str,
+    "line_count": int,
+    "size_bytes": int,
+    "outline": str,             # one "   120: class Store" row per entry
+    "content": str,             # lines 1..end_line, numbered
+    "start_line": 1,
+    "end_line": int,
+    "total_lines": int,
+    "next_start_line": int,
+    "note": str,
+}
+```
+
+**Word, PDF, Excel and PowerPoint files** (`.docx`, `.pdf`, `.xlsx`, `.pptx`)
+return their extracted text instead of `[Binary file]`, one part at a time. A part is at most the
 model's tool-result budget (`limit` can shrink it) and ends on a line break:
 
 ```python
 {
     "status": "success",
     "file_path": str,
-    "file_type": "docx" | "pdf" | "xlsx",
-    "content": str,             # PDF text carries [Page N], Excel [Sheet: name]
+    "file_type": "docx" | "pdf" | "xlsx" | "pptx",
+    "content": str,             # PDF [Page N], Excel [Sheet: name], PowerPoint [Slide N] + [Notes]
     "offset": int,
     "total_chars": int,
     "next_offset": int | None,  # None once the end is reached
     "pages": int,               # PDF only
     "sheets": int,              # Excel only
-    "warning": str,             # Excel formulas with no saved value, which read as blank
+    "slides": int,              # PowerPoint only
+    "warning": str,             # Excel: formulas with no saved value, which read as blank;
+                                # PowerPoint: charts and pictures not in the text
     "note": str,                # present while more remains: where to continue
     "hint": str,                # first part of a document over 3 reads: retrieval is cheaper
 }
@@ -146,9 +181,36 @@ model's tool-result budget (`limit` can shrink it) and ends on a line break:
 `start_line`/`end_line` work on the extracted text too. Extraction is cached
 per file while it is unchanged, so paging does not re-parse it. A scanned PDF
 with no text layer, an encrypted one, or a corrupt file is an error naming the
-file; `.pptx` and `.epub` are an error pointing at `index_document`, and `.doc`,
+file; `.epub` is an error naming other ways to read it, and `.doc`,
 `.ppt`, `.xls` and the OpenDocument formats are an error saying to re-save the
 file as `.docx` / `.pptx` / `.xlsx` or PDF.
+
+A document whose text is too long to read in full is an error naming other
+ways to read it, best first: a loaded skill's tool that declares the file type,
+then `index_document`. Only tools the host has are named. Too-long results are
+cached like text, so the file is not re-parsed on every retry. **A too-long
+workbook** read without a line range is not an error: it returns an overview
+instead, deliberately with no `content`, since it is not the file's text. Its
+`note` names the same routes, with `run_python` (for a range of rows) between
+the skill's tool and `index_document`:
+
+```python
+{
+    "status": "success",
+    "file_path": str,
+    "file_type": "xlsx",
+    "overview": str,            # per sheet: "[Sheet: name] R rows x C columns" + first rows
+    "sheets": int,
+    "sheet_sizes": [{"sheet": str, "rows": int | None, "columns": int | None}],
+    "note": str,                # says it is not the data, and the other routes
+}
+```
+
+**HTML files** (`.html`, `.htm`) return the page's text without tags, scripts
+or styles, paged like a document (`file_type: "html"`), plus a `markup` key
+saying the markup was removed and how to get it: `raw=true` or a
+`start_line`/`end_line` read returns the markup, which is what the edit tools
+match. A file the same turn wrote reads back as written.
 
 When the agent also has `index_document`, the mixin adds a short
 `READING DOCUMENTS` prompt fragment: to review, compare, reconcile, audit or

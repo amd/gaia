@@ -26,7 +26,7 @@ const SESSION: Session = {
     agent_type: 'gaia',
 };
 
-const OVERLAY = 'Drop files to index them for this chat';
+const OVERLAY = 'Drop files to add them to this chat';
 
 beforeEach(() => {
     vi.clearAllMocks();

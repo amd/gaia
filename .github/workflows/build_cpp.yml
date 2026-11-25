@@ -99,7 +99,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest]
+        os: [ubuntu-latest, windows-latest, macos-latest]
 
     steps:
       - uses: actions/checkout@v7
@@ -107,6 +107,11 @@ jobs:
       - name: Install OpenSSL (Linux)
         if: runner.os == 'Linux'
         run: sudo apt-get install -y libssl-dev
+
+      # The runner's Homebrew has OpenSSL, outside the paths CMake searches by itself.
+      - name: Point CMake at OpenSSL (macOS)
+        if: runner.os == 'macOS'
+        run: echo "OPENSSL_ROOT_DIR=$(brew --prefix openssl@3)" >> "$GITHUB_ENV"
 
       - name: Restore FetchContent cache
         id: cache-deps
@@ -123,11 +128,25 @@ jobs:
           cmake -B cpp/build -S cpp -DCMAKE_BUILD_TYPE=Release -DGAIA_BUILD_INTEGRATION_TESTS=OFF | tee cpp-configure.log
           grep -q "GAIA SSL: enabled" cpp-configure.log || { echo "::error::OpenSSL not found; gaia_core would build without HTTPS"; exit 1; }
 
+      # A bare --parallel is an unbounded make -j on Linux: every test file compiles at once and the runner runs out of memory.
       - name: Build
-        run: cmake --build cpp/build --config Release --parallel
+        run: cmake --build cpp/build --config Release --parallel 4
 
       - name: Test
         run: ctest --test-dir cpp/build -C Release --output-on-failure
+
+      # The real binary against a model server that misbehaves on purpose
+      # (errors, dropped connections, garbage bodies, malformed tool calls): it
+      # must never hang, crash, or report success without an answer.
+      - name: Chaos test gaiacpp
+        shell: bash
+        run: |
+          set -euo pipefail
+          bin="$(find cpp/build -type f \( -name gaiacpp -o -name gaiacpp.exe \) | head -n1)"
+          [ -n "${bin}" ] || { echo "::error::the build produced no gaiacpp binary"; exit 1; }
+          py=python
+          [ "${RUNNER_OS}" = "macOS" ] && py=python3
+          "${py}" cpp/tests/chaos/chaos_gaiacpp.py --binary "${bin}" --runs 200 --jobs 4
 
   # Verify cmake --install + find_package round-trip works
   install-test:
@@ -234,7 +253,7 @@ jobs:
         uses: ./.github/actions/setup-venv
         with:
           python-version: '3.12'
-          install-package: '.[lemonade]'
+          install-package: '.'
 
       - name: Install Lemonade Server
         uses: ./.github/actions/install-lemonade
@@ -415,7 +434,7 @@ jobs:
               }
 
               # -j 1: run tests sequentially so they don't compete for the single LLM server
-              ctest --test-dir cpp/build-integration -C Release --output-on-failure -j 1 @excludeArg
+              ctest --test-dir cpp/build-integration -C Release --output-on-failure --no-tests=error -j 1 @excludeArg
               if ($LASTEXITCODE -ne 0) { throw "C++ integration tests failed" }
               Write-Host "[SUCCESS] All C++ integration tests passed!"
 
@@ -448,11 +467,21 @@ jobs:
     if: "!cancelled() && needs.build-and-test.result == 'success' && github.event_name != 'pull_request'"
     uses: ./.github/workflows/benchmark_cpp.yml
 
+  # The binary-size budget on pull requests: sizes are deterministic, so unlike the
+  # timing and memory metrics a regression here blocks the merge instead of
+  # turning main red after it.
+  binary-size:
+    name: C++ Binary Size
+    if: github.event_name == 'pull_request' && (github.event.pull_request.draft == false || contains(github.event.pull_request.labels.*.name, 'ready_for_ci'))
+    uses: ./.github/workflows/benchmark_cpp.yml
+    with:
+      sizes_only: true
+
   # Summary job
   cpp-build-summary:
     name: C++ Build Summary
     runs-on: ubuntu-latest
-    needs: [toolchain-script-tests, build-and-test, install-test, shared-lib-test, integration-test, benchmark]
+    needs: [toolchain-script-tests, build-and-test, install-test, shared-lib-test, integration-test, benchmark, binary-size]
     if: >-
       ${{ always() && !cancelled() &&
           needs.build-and-test.result != 'cancelled' }}
@@ -466,6 +495,7 @@ jobs:
           echo "Shared Lib Test:   ${{ needs.shared-lib-test.result }}"
           echo "Integration Tests: ${{ needs.integration-test.result }}"
           echo "Benchmarks:        ${{ needs.benchmark.result }}"
+          echo "Binary Size:       ${{ needs.binary-size.result }}"
           echo ""
 
           # Checked before the draft-skip exit: the toolchain script tests gate the
@@ -484,6 +514,11 @@ jobs:
           [[ "${{ needs.build-and-test.result }}"  != "success" ]] && FAILED=1
           [[ "${{ needs.install-test.result }}"    != "success" ]] && FAILED=1
           [[ "${{ needs.shared-lib-test.result }}" != "success" ]] && FAILED=1
+          # Runs on pull requests only; skipped everywhere else.
+          if [[ "${{ needs.binary-size.result }}" != "success" && "${{ needs.binary-size.result }}" != "skipped" ]]; then
+            echo "::error::C++ Binary Size failed: a binary grew past its budget or could not be measured; see that job's regression report"
+            FAILED=1
+          fi
           # Integration test runs on self-hosted STX hardware; treat
           # 'skipped' and 'failure' as non-blocking (warn only) since the
           # runner can be offline, busy, or missing hardware prerequisites.
@@ -498,7 +533,7 @@ jobs:
           fi
 
           if [[ "$FAILED" == "0" ]]; then
-            echo "All required C++ jobs passed (unit tests, install round-trip, shared library)!"
+            echo "All required C++ jobs passed (unit tests, install round-trip, shared library, binary size on PRs)!"
           else
             echo "One or more required C++ jobs failed"
             exit 1

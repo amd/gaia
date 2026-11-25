@@ -216,6 +216,7 @@ def test_refresh_token_rotation_preserves_the_account_type(monkeypatch):
         scopes=["openid"],
         client_id_hash="test-hash",
         account_type=ACCOUNT_TYPE_WORK,
+        account_id="user-oid",
     )
 
     class _Provider:
@@ -224,7 +225,8 @@ def test_refresh_token_rotation_preserves_the_account_type(monkeypatch):
 
     async def _fake_refresh(provider, refresh_token):
         assert refresh_token == "rt-1"
-        return "access-2", "rt-2", 3600  # rotated refresh token
+        # rotated refresh token
+        return tokens._Refreshed("access-2", "rt-2", 3600, id_token="")
 
     monkeypatch.setattr(tokens, "get_provider", lambda p: _Provider())
     monkeypatch.setattr(tokens, "_refresh_token", _fake_refresh)

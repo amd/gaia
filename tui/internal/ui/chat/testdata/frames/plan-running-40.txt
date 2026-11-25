@@ -1,0 +1,24 @@
+ GAIA  │ agent gaia
+────────────────────────────────────────
+▶ You: Compare this term sheet
+       against current seed terms
+       and write me a 2-page memo
+
+  ● Read term_sheet.pdf · 3.0s
+  Plan · 1 of 3 done
+    ✓ Read term_sheet.pdf
+    ▸ Search the web for 'seed round…
+    ○ Write the 2-page memo
+
+
+
+
+
+
+
+
+  ⣿ Search the web for 'seed ro… (12s)
+
+────────────────────────────────────────
+›
+  ● agent gaia streaming   Ctrl+C quit

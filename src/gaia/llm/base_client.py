@@ -19,6 +19,10 @@ class LLMClient(ABC):
     #: in the request history. OpenAI's API rejects unknown message fields.
     accepts_reasoning_history: bool = False
 
+    #: Whether the backend caches by exact prompt prefix and bills a changed
+    #: start as a fresh write, so the agent keeps mid-turn changes append-only.
+    caches_prompt_prefix: bool = False
+
     @property
     @abstractmethod
     def provider_name(self) -> str:
@@ -56,6 +60,12 @@ class LLMClient(ABC):
 
     def generate_image(self, prompt: str, **kwargs) -> dict:
         raise NotSupportedError(self.provider_name, "generate_image")
+
+    def edit_image(self, image_path: str, prompt: str, **kwargs) -> dict:
+        raise NotSupportedError(self.provider_name, "edit_image")
+
+    def upscale_image(self, image_path: str, **kwargs) -> dict:
+        raise NotSupportedError(self.provider_name, "upscale_image")
 
     def transcribe_audio(self, audio_path: str, **kwargs) -> Any:
         raise NotSupportedError(self.provider_name, "transcribe_audio")

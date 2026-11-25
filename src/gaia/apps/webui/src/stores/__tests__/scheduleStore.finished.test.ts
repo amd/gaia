@@ -2,12 +2,12 @@
 // SPDX-License-Identifier: MIT
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import * as api from '../../services/api';
+import * as api from '../../services/scheduleApi';
 import { useNotificationStore } from '../notificationStore';
 import { useScheduleStore } from '../scheduleStore';
 import type { Schedule } from '../../types';
 
-vi.mock('../../services/api');
+vi.mock('../../services/scheduleApi');
 
 function schedule(over: Partial<Schedule> = {}): Schedule {
     return {
@@ -61,6 +61,13 @@ describe('scheduled runs that finish', () => {
         expect(n.message).toBe('Three headlines today.');
         expect(n.sessionId).toBe('chat-1');
         expect(n.read).toBe(false);
+    });
+
+    it('show the answer as plain text, without markdown symbols', async () => {
+        await load(schedule());
+        await load(schedule({ run_count: 1, last_result: '**Three headlines** today, see [the full story](https://example.com/story).' }));
+
+        expect(infos()[0].message).toBe('Three headlines today, see the full story.');
     });
 
     it('notify once per run, not on every poll', async () => {

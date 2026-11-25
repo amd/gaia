@@ -2,11 +2,23 @@
 // SPDX-License-Identifier: MIT
 
 #include "gaia/agent.h"
+#include "gaia/http_client.h"
+#include "gaia/model_registry.h"
+#include "gaia/process.h"
+#include "gaia/secrets.h"
 #include "gaia/security.h"
 
 #include <algorithm>
+#include <cctype>
+#include <chrono>
+#include <cmath>
+#include <thread>
 #include <deque>
 #include <iostream>
+#include <iterator>
+#include <limits>
+#include <optional>
+#include <regex>
 #include <set>
 #include <sstream>
 #include <stdexcept>
@@ -120,6 +132,10 @@ Agent::Agent(const AgentConfig& config)
         }
     }
 
+    config_.apiKey = resolveApiKey(config_);
+    lemonade_.setApiKey(config_.apiKey);
+    lemonade_.setAbortCheck([this] { return cancelRequested(); });
+
     // Create console based on config
     if (config_.silentMode) {
         console_ = std::make_unique<SilentConsole>();
@@ -138,7 +154,10 @@ Agent::Agent(const AgentConfig& config)
 
     // Auto-install terminal confirm callback for interactive agents
     if (!config_.silentMode) {
-        tools_.setConfirmCallback(makeStdinConfirmCallback());
+        tools_.setConfirmCallback([this, ask = makeStdinConfirmCallback()](const std::string& tool, const json& args) {
+            releaseNpu();
+            return ask(tool, args);
+        });
     }
 
     // System prompt will be composed lazily
@@ -152,14 +171,16 @@ AgentConfig Agent::config() const {
 
 void Agent::setConfig(const AgentConfig& newConfig) {
     newConfig.validate();
+    const std::string key = resolveApiKey(newConfig);
     {
         std::lock_guard<std::mutex> lock(configMutex_);
         config_ = newConfig;
-        modelEnsured_ = false;
+        config_.apiKey = key;
         systemPromptDirty_ = true;
     }
     // Update LemonadeClient outside configMutex_ to avoid holding the lock
     // across external calls (guards against future LemonadeClient → Agent callbacks).
+    lemonade_.setApiKey(key);
     lemonade_.setBaseUrl(newConfig.baseUrl);
     lemonade_.setModel(newConfig.modelId);
     lemonade_.setContextSize(newConfig.contextSize);
@@ -170,7 +191,6 @@ void Agent::setModel(const std::string& modelId) {
     {
         std::lock_guard<std::mutex> lock(configMutex_);
         config_.modelId = modelId;
-        modelEnsured_ = false;
         // The model decides whether native tool calling is on, which decides
         // whether the response-format template belongs in the prompt.
         systemPromptDirty_ = true;
@@ -213,6 +233,12 @@ void Agent::setToolConfirmCallback(ToolConfirmCallback cb) {
 
 void Agent::setDefaultPolicy(ToolPolicy policy) {
     tools_.setDefaultPolicy(policy);
+}
+
+void Agent::setAllowedToolsStore(std::shared_ptr<AllowedToolsStore> store) {
+    if (!store) throw std::invalid_argument("setAllowedToolsStore needs a store");
+    allowedToolsStore_ = std::move(store);
+    tools_.setAllowedToolsStore(allowedToolsStore_);
 }
 
 // ---------------------------------------------------------------------------
@@ -465,19 +491,18 @@ std::string Agent::composeSystemPromptFor(const AgentConfig& cfg) const {
         oss << custom << "\n\n";
     }
 
-    // Tool descriptions. Kept even under native tool calling — Python does the
-    // same, and the prose list is what lets the model reason about which tool
-    // fits before emitting the call.
-    std::string toolsDesc = tools_.formatForPrompt();
-    if (!toolsDesc.empty()) {
-        oss << "==== AVAILABLE TOOLS ====\n" << toolsDesc << "\n";
-    }
-
     // Response format — omitted only when the request will actually carry a
     // `tools` array, which is what makes tool-calling models emit tool_calls
     // instead of prose JSON. With no enabled tool there is no `tools` field, so
     // dropping the template too would leave the model with no protocol at all.
     const bool willSendTools = cfg.useNativeToolCalls() && !tools_.enabledTools().empty();
+
+    // The prose list helps a full model weigh tools before calling one (Python
+    // keeps it too); a compact model re-reads it every step for little gain.
+    std::string toolsDesc = willSendTools && cfg.compactFeatures() ? std::string() : tools_.formatForPrompt();
+    if (!toolsDesc.empty()) {
+        oss << "==== AVAILABLE TOOLS ====\n" << toolsDesc << "\n";
+    }
     if (!willSendTools) {
         oss << (cfg.responseMode == ResponseMode::Conversational
                     ? CONVERSATIONAL_FORMAT_TEMPLATE
@@ -490,18 +515,30 @@ std::string Agent::composeSystemPromptFor(const AgentConfig& cfg) const {
 // ---- LLM Communication ----
 
 namespace {
-/// Reject stream-assembled tool calls that never received an id or a name.
-/// Sending them on would produce a tool reply with an empty ``tool_call_id``,
-/// which a spec-strict server rejects on the next request.
-void validateStreamedToolCalls(const std::vector<ToolCall>& calls) {
+/// A 200 reply the agent cannot read: a proxy's HTML page, an empty or cut-off
+/// body, no choices. The same request may well succeed when sent again.
+struct UnreadableLlmReply : std::runtime_error {
+    using std::runtime_error::runtime_error;
+};
+
+/// A stream that failed after part of the reply was shown. Sending the request
+/// again would show that text twice, so it is never retried.
+struct PartialStreamError : std::runtime_error {
+    using std::runtime_error::runtime_error;
+};
+
+/// An id for a tool call the server sent without one. The id only has to match
+/// between the call echoed back and its result, and the agent writes both.
+std::string assignedToolCallId() {
+    static std::atomic<unsigned long long> next{0};
+    return "call_gaia_" + std::to_string(++next);
+}
+
+/// Give stream-assembled tool calls an id when the server sent none, and reject
+/// one that never received a name.
+void validateStreamedToolCalls(std::vector<ToolCall>& calls) {
     for (size_t i = 0; i < calls.size(); ++i) {
-        if (calls[i].id.empty()) {
-            throw std::runtime_error(
-                "Streamed tool_calls entry " + std::to_string(i) +
-                " never received an 'id' across the SSE deltas, so its result "
-                "cannot be correlated back to the call. Function name seen: '" +
-                calls[i].name + "'.");
-        }
+        if (calls[i].id.empty()) calls[i].id = assignedToolCallId();
         if (calls[i].name.empty()) {
             throw std::runtime_error(
                 "Streamed tool_calls entry " + std::to_string(i) + " (id " +
@@ -523,31 +560,129 @@ std::vector<ToolCall> parseToolCallsArray(const json& arr) {
     }
     calls.reserve(arr.size());
     for (const auto& entry : arr) {
-        calls.push_back(ToolCall::fromJson(entry));
+        const auto id = entry.is_object() ? entry.find("id") : entry.end();
+        const bool hasId = entry.is_object() && id != entry.end() && id->is_string() &&
+                           !id->get_ref<const std::string&>().empty();
+        if (entry.is_object() && !hasId) {
+            json withId = entry;
+            withId["id"] = assignedToolCallId();
+            calls.push_back(ToolCall::fromJson(withId));
+        } else {
+            calls.push_back(ToolCall::fromJson(entry));
+        }
     }
     return calls;
+}
+
+UsageStats extractUsage(const json& responseJson);
+
+/// What a streamed reply's events say beyond its text.
+struct StreamSummary {
+    UsageStats usage;          // sent in the last event when the request asks for it
+    std::string finishReason;  // "stop", "length", "tool_calls"
+    bool reasoned = false;     // the model sent reasoning, whether or not it answered
+};
+
+StreamSummary summarizeStream(const std::string& raw) {
+    StreamSummary summary;
+    for (size_t pos = 0; pos < raw.size();) {
+        size_t end = raw.find('\n', pos);
+        if (end == std::string::npos) end = raw.size();
+        const std::string line = raw.substr(pos, end - pos);
+        pos = end + 1;
+        if (line.rfind("data:", 0) != 0) continue;
+        const json event = json::parse(line.substr(5), nullptr, false);
+        if (!event.is_object()) continue;
+        if (event.contains("usage") && event["usage"].is_object()) summary.usage = extractUsage(event);
+        const auto choices = event.find("choices");
+        if (choices == event.end() || !choices->is_array() || choices->empty()) continue;
+        const json& choice = (*choices)[0];
+        if (!choice.is_object()) continue;
+        const auto finish = choice.find("finish_reason");
+        if (finish != choice.end() && finish->is_string()) summary.finishReason = finish->get<std::string>();
+        const auto delta = choice.find("delta");
+        if (delta == choice.end() || !delta->is_object()) continue;
+        for (const char* key : {"reasoning_content", "reasoning"}) {
+            const auto text = delta->find(key);
+            if (text != delta->end() && text->is_string() && !text->get_ref<const std::string&>().empty()) {
+                summary.reasoned = true;
+            }
+        }
+    }
+    return summary;
 }
 
 UsageStats extractUsage(const json& responseJson) {
     UsageStats usage;
     if (responseJson.contains("usage") && responseJson["usage"].is_object()) {
         const auto& u = responseJson["usage"];
-        usage.promptTokens = u.value("prompt_tokens", 0);
-        usage.completionTokens = u.value("completion_tokens", 0);
-        usage.totalTokens = u.value("total_tokens", 0);
+        // Some servers send null for a count they don't keep.
+        const auto count = [](const json& from, const char* key) {
+            const auto it = from.find(key);
+            return it != from.end() && it->is_number() ? it->get<int>() : 0;
+        };
+        usage.promptTokens = count(u, "prompt_tokens");
+        usage.completionTokens = count(u, "completion_tokens");
+        usage.totalTokens = count(u, "total_tokens");
+        const auto details = u.find("prompt_tokens_details");
+        if (details != u.end() && details->is_object()) {
+            usage.cachedTokens = count(*details, "cached_tokens");
+        }
+        usage.peakContextTokens = usage.promptTokens + usage.completionTokens;
     }
     return usage;
 }
 } // namespace
 
+namespace {
+bool runsOnNpu(const std::string& modelId, const std::string& recipe) {
+    if (recipe == "flm") return true;
+    constexpr const char kSuffix[] = "-flm";
+    if (modelId.size() < sizeof kSuffix - 1) return false;
+    std::string tail = modelId.substr(modelId.size() - (sizeof kSuffix - 1));
+    for (auto& c : tail) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    return tail == kSuffix;
+}
+} // namespace
+
 Agent::LlmResult Agent::callLlm(const std::vector<Message>& messages, const std::string& sysPrompt,
-                                const AgentConfig& cfg) {
+                                const AgentConfig& cfg, bool allowTools) {
+    // Two agents on the NPU at once each run several times slower than in turn, and taking
+    // turns per request still makes each re-read its whole prompt. So the NPU is kept for
+    // the turn. Taken before the load, so one agent can't swap the model under another's reply.
+    if (!(npuTurnLock_ && npuTurnLock_->held()) && runsOnNpu(cfg.modelId, lemonade_.recipeOf(cfg.modelId))) {
+        auto lock = std::make_unique<MachineLock>("npu");
+        if (!lock->acquire(0)) {
+            console_->printWarning("Another agent is using the NPU; waiting for its turn to finish.");
+            while (!lock->acquire(200)) {
+                if (cancelRequested()) throw std::runtime_error("Cancelled while waiting for the NPU");
+            }
+        }
+        npuTurnLock_ = std::move(lock);
+    }
+    // Outside a turn the lock lasts this one call.
+    struct NpuRelease {
+        Agent& agent;
+        ~NpuRelease() {
+            if (!agent.inFlight_.load()) agent.npuTurnLock_.reset();
+        }
+    } npuRelease{*this};
+
+    // Re-check before every request: another client can reload the model at a smaller ctx mid-turn.
+    if (!cfg.modelId.empty()) {
+        try {
+            lemonade_.ensureModelLoaded();
+        } catch (const HttpError& e) {
+            throw HttpError("Could not load model " + cfg.modelId + ": " + e.what(), e.url(), e.status(), e.body());
+        }
+    }
+
     // Build OpenAI-compatible request.
     // NOTE: n_ctx is intentionally omitted — context size is set at model load
     // time via LemonadeClient::loadModel() / ensureModelLoaded(), not per-request.
     json requestBody;
     requestBody["model"] = cfg.modelId;
-    requestBody["max_tokens"] = cfg.maxTokens;
+    requestBody["max_tokens"] = cfg.replyTokenLimit();
     requestBody["temperature"] = cfg.temperature;
 
     json msgArray = json::array();
@@ -566,12 +701,14 @@ Agent::LlmResult Agent::callLlm(const std::vector<Message>& messages, const std:
 
     // Native OpenAI tool calling — the request keeps exactly its legacy shape
     // when this is off, so non-tool-calling models see a byte-identical body.
-    const bool nativeTools = cfg.useNativeToolCalls();
-    if (nativeTools) {
+    const bool nativeTools = allowTools && cfg.useNativeToolCalls();
+    if (cfg.useNativeToolCalls()) {
         json toolSchemas = tools_.buildOpenAiToolSchemas();
         if (!toolSchemas.empty()) {
             requestBody["tools"] = std::move(toolSchemas);
-            requestBody["tool_choice"] = cfg.toolChoice;
+            // A tool-free call still declares the tools: strict servers reject a
+            // history holding tool_calls when the request has no `tools` field.
+            requestBody["tool_choice"] = nativeTools ? cfg.toolChoice : "none";
         }
     }
 
@@ -581,18 +718,32 @@ Agent::LlmResult Agent::callLlm(const std::vector<Message>& messages, const std:
                   << std::endl;
     }
 
+    const int timeoutSec =
+        requestTimeout_ ? std::clamp(requestTimeout_(), 1, LEMONADE_REQUEST_TIMEOUT) : LEMONADE_REQUEST_TIMEOUT;
+
     // ---- Streaming path ----
-    if (config_.streaming) {
+    if (cfg.streaming) {
         std::string accumulated;
         std::vector<ToolCall> streamedToolCalls;
-        std::string rawResponse = lemonade_.chatCompletionsStreaming(
-            requestBody,
-            [this, &accumulated](const std::string& token) {
-                accumulated += token;
-                console_->printStreamToken(token);
-            },
-            streamedToolCalls
-        );
+        std::string rawResponse;
+        try {
+            rawResponse = lemonade_.chatCompletionsStreaming(
+                requestBody,
+                [this, &accumulated](const std::string& token) {
+                    accumulated += token;
+                    console_->printStreamToken(token);
+                },
+                streamedToolCalls,
+                timeoutSec
+            );
+        } catch (const std::exception& e) {
+            if (accumulated.empty() || cancelRequested()) throw;
+            console_->printStreamEnd();
+            throw PartialStreamError(
+                std::string("The model's reply was cut off after part of it was already shown (") + e.what() +
+                "). The request was not sent again, because the text already shown would repeat. "
+                "Check the connection to the model server, then send your message again.");
+        }
 
         // Never consume tool_calls we did not ask for. Some servers volunteer
         // them (llama.cpp --jinja) even with no `tools` in the request; acting
@@ -606,26 +757,17 @@ Agent::LlmResult Agent::callLlm(const std::vector<Message>& messages, const std:
         if (!streamedToolCalls.empty()) {
             validateStreamedToolCalls(streamedToolCalls);
             if (!accumulated.empty()) console_->printStreamEnd();
-            UsageStats usage;
-            try {
-                usage = extractUsage(json::parse(rawResponse));
-            } catch (...) {}
+            const StreamSummary summary = summarizeStream(rawResponse);
             if (cfg.debug) {
                 std::cerr << "[LLM] streamed tool_calls=" << streamedToolCalls.size() << std::endl;
             }
-            return {accumulated, usage, std::move(streamedToolCalls)};
+            return {accumulated, summary.usage, std::move(streamedToolCalls), summary.finishReason};
         }
 
         if (!accumulated.empty()) {
             console_->printStreamEnd();
-            // Streaming responses may include usage in the final chunk;
-            // attempt to extract from the raw bytes.
-            UsageStats usage;
-            try {
-                const json responseJson = json::parse(rawResponse);
-                usage = extractUsage(responseJson);
-            } catch (...) {}
-            return {accumulated, usage, {}};
+            const StreamSummary summary = summarizeStream(rawResponse);
+            return {accumulated, summary.usage, {}, summary.finishReason};
         }
 
         // Fallback: server returned a non-streaming response despite "stream":true.
@@ -658,11 +800,20 @@ Agent::LlmResult Agent::callLlm(const std::vector<Message>& messages, const std:
             } catch (...) {}
         }
 
-        throw std::runtime_error("Streaming response contained no tokens");
+        const StreamSummary summary = summarizeStream(rawResponse);
+        if (summary.finishReason == "length") {
+            throw std::runtime_error(
+                "The model reached its reply limit of " + std::to_string(cfg.replyTokenLimit()) +
+                " tokens before giving an answer" +
+                (summary.reasoned ? " (its reasoning used the whole limit)" : "") +
+                ". Raise the limit (--max-tokens; at most half the context window, --ctx-size) or ask for a shorter answer.");
+        }
+        throw UnreadableLlmReply(summary.reasoned ? "The model sent reasoning but no answer"
+                                                  : "Streaming response contained no tokens");
     }
 
     // ---- Non-streaming path ----
-    std::string responseBody = lemonade_.chatCompletions(requestBody);
+    std::string responseBody = lemonade_.chatCompletions(requestBody, timeoutSec);
 
     // Parse response
     json responseJson;
@@ -670,13 +821,18 @@ Agent::LlmResult Agent::callLlm(const std::vector<Message>& messages, const std:
         responseJson = json::parse(responseBody);
     } catch (const json::parse_error& e) {
         std::string preview = responseBody.substr(0, 200);
-        throw std::runtime_error(std::string("Failed to parse LLM response: ") + e.what() +
+        throw UnreadableLlmReply(std::string("Failed to parse LLM response: ") + e.what() +
                                  " | body: " + preview);
     }
 
     if (responseJson.contains("choices") && !responseJson["choices"].empty()) {
         const auto& choice = responseJson["choices"][0];
-        if (choice.contains("message")) {
+        std::string finish;
+        if (choice.is_object() && choice.contains("finish_reason") &&
+            choice["finish_reason"].is_string()) {
+            finish = choice["finish_reason"].get<std::string>();
+        }
+        if (choice.contains("message") && choice["message"].is_object()) {
             const auto& message = choice["message"];
             // tool_calls first: a native call carries content: null, which the
             // content-only check below would reject as an unexpected format.
@@ -691,21 +847,409 @@ Agent::LlmResult Agent::callLlm(const std::vector<Message>& messages, const std:
                     text = message["content"].get<std::string>();
                 }
                 return {text, extractUsage(responseJson),
-                        parseToolCallsArray(message["tool_calls"])};
+                        parseToolCallsArray(message["tool_calls"]), finish};
             }
             if (message.contains("content") && message["content"].is_string()) {
-                return {message["content"].get<std::string>(), extractUsage(responseJson), {}};
+                return {message["content"].get<std::string>(), extractUsage(responseJson), {},
+                        finish};
+            }
+            // No text and no calls (a cut-off reasoning block, or a reply that
+            // announces tool calls and carries none): an empty reply, which the
+            // loop asks about once before stopping.
+            if (!message.contains("content") || message["content"].is_null()) {
+                return {std::string(), extractUsage(responseJson), {}, finish};
             }
         }
     }
     // Include truncated response body in error for debugging
-    throw std::runtime_error("Unexpected LLM response format: " + responseBody.substr(0, 200));
+    throw UnreadableLlmReply("Unexpected LLM response format: " + responseBody.substr(0, 200));
+}
+
+// ---- Resilient model calls ----
+
+namespace {
+
+// Transient: the request may succeed unchanged if sent again.
+bool isTransientLlmFailure(const std::exception& e) {
+    if (dynamic_cast<const UnreadableLlmReply*>(&e)) return true;
+    if (const auto* he = dynamic_cast<const HttpError*>(&e)) {
+        const int s = he->status();
+        if (s == 0) {
+            const std::string what = he->what();
+            return what.find(" failed: ") != std::string::npos ||
+                   what.find("streaming failed") != std::string::npos;
+        }
+        return s == 408 || s == 409 || s == 425 || s == 429 || s >= 500;
+    }
+    return false;
+}
+
+bool isContextOverflow(const std::exception& e) {
+    std::string what = e.what();
+    if (const auto* he = dynamic_cast<const HttpError*>(&e)) what += he->body();
+    for (const char* marker : {"exceeds the available context size", "context window too small",
+                               "maximum context length", "context_length_exceeded",
+                               "context length", "too many tokens",
+                               "exceed_context_size", "got too long",
+                               // FastFlowLM's wording for a full window
+                               "Max length reached"}) {
+        if (what.find(marker) != std::string::npos) return true;
+    }
+    return false;
+}
+
+// Many lines of comma- or tab-separated values: rows copied out of a data file.
+bool looksLikePastedRows(const std::string& text) {
+    std::string t = text;
+    for (size_t at; (at = t.find("\\n")) != std::string::npos;) t.replace(at, 2, "\n");
+    size_t rows = 0, start = 0;
+    for (size_t end; (end = t.find('\n', start)) != std::string::npos; start = end + 1) {
+        const std::string line = t.substr(start, end - start);
+        if (std::count(line.begin(), line.end(), ',') + std::count(line.begin(), line.end(), '\t') >= 2) ++rows;
+    }
+    return rows >= 10;
+}
+
+// A reply made of a model's unused special tokens (`<unused49><unused49>...`) is noise from a
+// server whose copy of the model went bad, never an answer.
+bool isPlaceholderRun(const std::string& text) {
+    static const std::regex token(R"(<unused\d+>)");
+    if (text.size() < 64) return false;
+    size_t covered = 0;
+    for (auto it = std::sregex_iterator(text.begin(), text.end(), token); it != std::sregex_iterator(); ++it) {
+        covered += static_cast<size_t>(it->length(0));
+    }
+    return covered * 10 >= text.size() * 9;
+}
+
+// Shorten the model's own long replies, oldest first, keeping the newest message whole.
+size_t trimLongReplies(std::vector<Message>& messages) {
+    constexpr size_t kKeepHead = 600, kKeepTail = 300, kLong = 1500;
+    size_t freed = 0;
+    for (size_t i = 0; i + 1 < messages.size(); ++i) {
+        Message& m = messages[i];
+        if (m.role != MessageRole::ASSISTANT || m.content.size() <= kLong) continue;
+        size_t head = kKeepHead, tail = m.content.size() - kKeepTail;
+        while (head > 0 && (static_cast<unsigned char>(m.content[head]) & 0xC0) == 0x80) --head;
+        while (tail < m.content.size() && (static_cast<unsigned char>(m.content[tail]) & 0xC0) == 0x80) ++tail;
+        const std::string shorter = m.content.substr(0, head) +
+                                    "\n[...middle of this reply removed to fit the context window...]\n" +
+                                    m.content.substr(tail);
+        freed += m.content.size() - shorter.size();
+        m.content = shorter;
+    }
+    return freed;
+}
+
+} // namespace
+
+namespace {
+// A reply that holds a tool call nothing ran: a call with words after it, or a plan with no call
+// and no answer. Returns what to tell the model, or nullopt when the reply is an answer.
+std::optional<std::string> strandedCallNote(const std::string& reply, const ToolRegistry& tools) {
+    static const char* const kSpace = " \t\r\n";
+    const auto fenced = [&reply](size_t at) {
+        size_t fences = 0;
+        for (size_t p = reply.find("```"); p != std::string::npos && p < at; p = reply.find("```", p + 3)) ++fences;
+        return fences % 2 == 1;
+    };
+    for (size_t at = reply.find('{'); at != std::string::npos; at = reply.find('{', at + 1)) {
+        if (fenced(at)) continue;
+        const std::string candidate = extractFirstJsonObject(reply.substr(at));
+        if (candidate.empty()) continue;
+        const json call = json::parse(candidate, nullptr, false);
+        if (!call.is_object()) continue;
+        bool onlyCallKeys = true;
+        for (const auto& [key, value] : call.items()) {
+            onlyCallKeys = onlyCallKeys && (key == "tool" || key == "tool_args" || key == "thought" ||
+                                            key == "goal" || key == "plan");
+        }
+        if (!onlyCallKeys) return std::nullopt;
+        const bool whole = reply.find_first_not_of(kSpace) == at &&
+                           reply.find_first_not_of(kSpace, at + candidate.size()) == std::string::npos;
+        const bool namesTool = call.contains("tool") && call["tool"].is_string();
+        if (!namesTool) {
+            if (whole && call.contains("plan")) {
+                return "Your reply held a plan but no tool call and no answer. Send the tool call for the "
+                       "first step, or give your final answer.";
+            }
+            return std::nullopt;
+        }
+        const std::string name = call["tool"].get<std::string>();
+        const std::string after = reply.substr(at + candidate.size());
+        // A long passage after it is an answer that shows an example; a short tail is a call that was meant.
+        if (!tools.hasTool(name) || after.size() > 240 || after.find('{') != std::string::npos) return std::nullopt;
+        return "Your call to " + name + " was not run: a tool call must be the last thing in a reply, and "
+               "this one had text after it. Send the call again with nothing after it, or give your final answer.";
+    }
+    return std::nullopt;
+}
+}  // namespace
+
+std::string stripReasoning(const std::string& text) {
+    std::string out = text;
+    // A reasoning model may emit <think>…</think> inline; it is never the answer.
+    for (;;) {
+        const size_t open = out.find("<think>");
+        if (open == std::string::npos) break;
+        const size_t close = out.find("</think>", open);
+        if (close == std::string::npos) {
+            out.erase(open);
+            break;
+        }
+        out.erase(open, close + 8 - open);
+    }
+    // Some templates open the block in the prompt, so the reply starts inside it
+    // and only the close appears; text that merely mentions the tag is kept.
+    const size_t strayClose = out.find("</think>");
+    if (strayClose != std::string::npos && text.find("<think>") == std::string::npos &&
+        out.find("</think>", strayClose + 8) == std::string::npos) {
+        out.erase(0, strayClose + 8);
+    }
+    const size_t first = out.find_first_not_of(" \t\r\n");
+    return first == std::string::npos ? std::string() : out.substr(first);
+}
+
+Agent::LlmResult Agent::callLlmResilient(std::vector<Message>& messages,
+                                         const std::string& sysPrompt, const AgentConfig& cfg,
+                                         bool allowTools) {
+    int shrinkStage = 0;
+    int attempt = 0;
+    for (;;) {
+        try {
+            LlmResult r = callLlm(messages, sysPrompt, cfg, allowTools);
+            r.content = stripReasoning(r.content);
+            if (isPlaceholderRun(r.content)) {
+                // Not retried: the same server returns the same noise until the model is reloaded.
+                throw std::runtime_error(
+                    "The model " + cfg.modelId + " returned only placeholder tokens (" + r.content.substr(0, 24) +
+                    "... repeated), so the server's copy of the model is in a bad state. Unload and reload the "
+                    "model in Lemonade, then try again.");
+            }
+            return r;
+        } catch (const std::exception& e) {
+            if (cancelRequested()) throw;
+            if (dynamic_cast<const PartialStreamError*>(&e)) throw;
+            // Lemonade's cloud relay answers 500 with this text when the provider's reply has no
+            // content, which is a reply cut off at the length limit while still reasoning.
+            if (const auto* http = dynamic_cast<const HttpError*>(&e);
+                http && http->status() == 500 &&
+                http->body().find("type must be string, but is null") != std::string::npos) {
+                LlmResult cut;
+                cut.finishReason = "length";
+                return cut;
+            }
+            if (isContextOverflow(e)) {
+                // Free more each time: older tool output, then all of it, then long replies.
+                bool freed = false;
+                while (!freed && shrinkStage < 4) {
+                    const int stage = shrinkStage++;
+                    freed = (stage < 3 ? elideOldToolOutputs(messages, static_cast<size_t>(2 - stage))
+                                       : trimLongReplies(messages)) > 0;
+                }
+                if (freed) {
+                    console_->printWarning(
+                        "Context window full; shortened earlier tool output and replies, "
+                        "retrying.");
+                    continue;
+                }
+                throw std::runtime_error(
+                    "The conversation no longer fits the model's context window, even after "
+                    "shortening earlier tool output. Start a new chat, ask about fewer or "
+                    "smaller files at a time, or load the model with a larger context window. "
+                    "Server said: " + std::string(e.what()).substr(0, 300));
+            }
+            if (attempt >= cfg.llmRetries || !isTransientLlmFailure(e)) throw;
+            ++attempt;
+            const int waitSec = std::min(30, 2 << std::min(attempt - 1, 4));
+            console_->printWarning(std::string("Model call failed (") + e.what() +
+                                   "); retry " + std::to_string(attempt) + "/" +
+                                   std::to_string(cfg.llmRetries) + " in " +
+                                   std::to_string(waitSec) + "s");
+            for (int i = 0; i < waitSec * 10 && !cancelRequested(); ++i) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(100));
+            }
+            if (cancelRequested()) throw;
+        }
+    }
+}
+
+// ---- Tool output store ----
+
+namespace {
+constexpr size_t kMaxStoredToolOutputs = 64;
+constexpr int kReadToolOutputDefaultChars = 12000;
+
+// Move pos back to the start of the UTF-8 character it falls in.
+size_t utf8Boundary(const std::string& s, size_t pos) {
+    if (pos >= s.size()) return s.size();
+    while (pos > 0 && (static_cast<unsigned char>(s[pos]) & 0xC0) == 0x80) --pos;
+    return pos;
+}
+} // namespace
+
+std::string Agent::recordToolOutput(const json& toolResult, int maxChars) {
+    // Plain strings are re-encoded too, so invalid UTF-8 never reaches a request.
+    std::string full = toolResult.dump(-1, ' ', false, json::error_handler_t::replace);
+    if (toolResult.is_string()) full = json::parse(full).get<std::string>();
+    if (static_cast<int>(full.size()) <= maxChars) return full;
+
+    int id;
+    {
+        std::lock_guard<std::mutex> lock(toolOutputsMutex_);
+        id = nextToolOutputId_++;
+        toolOutputs_[id] = full;
+        while (toolOutputs_.size() > kMaxStoredToolOutputs) toolOutputs_.erase(toolOutputs_.begin());
+    }
+    const size_t headEnd = utf8Boundary(full, static_cast<size_t>(maxChars) * 6 / 10);
+    const size_t tailStart =
+        utf8Boundary(full, full.size() - (static_cast<size_t>(maxChars) - headEnd));
+    return full.substr(0, headEnd) + "\n...[output " + std::to_string(id) +
+           " clipped: chars " + std::to_string(headEnd) + "-" + std::to_string(tailStart) +
+           " of " + std::to_string(full.size()) +
+           " omitted. Call read_tool_output with output_id=" + std::to_string(id) +
+           " and offset=" + std::to_string(headEnd) + " to read them]...\n" +
+           full.substr(tailStart);
+}
+
+int Agent::resultCharLimit(const std::string& tool, const AgentConfig& cfg) const {
+    const auto& all = tools_.allTools();
+    const std::string resolved = tools_.resolveName(tool);
+    const auto it = all.find(resolved.empty() ? tool : resolved);
+    // A token is about four characters, so the window's token count in characters is a quarter of it.
+    if (it != all.end() && it->second.wideResult) return (std::max)(cfg.toolResultCharLimit(), cfg.contextSize);
+    return cfg.toolResultCharLimit();
+}
+
+int Agent::storeToolOutput(const std::string& text) {
+    std::lock_guard<std::mutex> lock(toolOutputsMutex_);
+    const int id = nextToolOutputId_++;
+    toolOutputs_[id] = text;
+    while (toolOutputs_.size() > kMaxStoredToolOutputs) toolOutputs_.erase(toolOutputs_.begin());
+    return id;
+}
+
+size_t Agent::elideOldToolOutputs(std::vector<Message>& messages, size_t keepRecent) {
+    std::vector<size_t> toolIdx;
+    for (size_t i = 0; i < messages.size(); ++i) {
+        if (messages[i].role == MessageRole::TOOL && messages[i].content.size() > 400) {
+            toolIdx.push_back(i);
+        }
+    }
+    if (toolIdx.size() <= keepRecent) return 0;
+    size_t freed = 0;
+    for (size_t k = 0; k + keepRecent < toolIdx.size(); ++k) {
+        Message& m = messages[toolIdx[k]];
+        int id;
+        {
+            std::lock_guard<std::mutex> lock(toolOutputsMutex_);
+            id = nextToolOutputId_++;
+            toolOutputs_[id] = m.content;
+            while (toolOutputs_.size() > kMaxStoredToolOutputs) toolOutputs_.erase(toolOutputs_.begin());
+        }
+        const std::string stub = "[earlier output of " + m.name.value_or("tool") + " (" +
+                                 std::to_string(m.content.size()) +
+                                 " chars) removed to fit the context window; read_tool_output "
+                                 "output_id=" + std::to_string(id) + " returns it]";
+        freed += m.content.size() - std::min(m.content.size(), stub.size());
+        m.content = stub;
+    }
+    return freed;
+}
+
+void Agent::registerBuiltinTools() {
+    if (tools_.hasTool("read_tool_output")) return;
+    ToolInfo info;
+    info.name = "read_tool_output";
+    info.description =
+        "Read part of an earlier tool output that was clipped or removed from the "
+        "conversation. Use the output_id named in the clipped output.";
+    info.policy = ToolPolicy::ALLOW;
+    info.parameters = {
+        {"output_id", ToolParamType::INTEGER, true, "The id named in the clipped output."},
+        {"offset", ToolParamType::INTEGER, false, "Character offset to start at (default 0)."},
+        {"length", ToolParamType::INTEGER, false,
+         "Characters to return (default 12000, max 50000)."},
+    };
+    info.callback = [this](const json& args) -> json {
+        const int id = args.at("output_id").get<int>();
+        const long long offset = std::max<long long>(0, args.value("offset", 0LL));
+        const long long length =
+            std::clamp<long long>(args.value("length", kReadToolOutputDefaultChars), 1, 50000);
+        std::lock_guard<std::mutex> lock(toolOutputsMutex_);
+        auto it = toolOutputs_.find(id);
+        if (it == toolOutputs_.end()) {
+            return json{{"status", "error"},
+                        {"error", "No stored output with id " + std::to_string(id) +
+                                      "; only the last " +
+                                      std::to_string(kMaxStoredToolOutputs) +
+                                      " clipped outputs are kept. Re-run the tool instead."}};
+        }
+        const std::string& full = it->second;
+        const size_t start = utf8Boundary(full, static_cast<size_t>(offset));
+        const size_t end = utf8Boundary(full, start + static_cast<size_t>(length));
+        const size_t n = end - start;
+        return json{{"status", "success"},
+                    {"output_id", id},
+                    {"offset", start},
+                    {"returned", n},
+                    {"total", full.size()},
+                    {"remaining", full.size() - start - n},
+                    {"text", full.substr(start, n)}};
+    };
+    tools_.registerTool(std::move(info));
 }
 
 // ---- Tool Execution ----
 
+namespace {
+std::optional<std::string> toolFailure(const json& r);  // defined with the loop helpers
+}  // namespace
+
+namespace {
+// A tool call's arguments for the step log: enough to see what was asked, not a whole file body.
+std::string clippedArgs(const json& args) {
+    constexpr size_t kMax = 300;
+    std::string text = args.dump(-1, ' ', false, json::error_handler_t::replace);
+    if (text.size() <= kMax) return text;
+    size_t cut = kMax;
+    while (cut > 0 && (static_cast<unsigned char>(text[cut]) & 0xC0) == 0x80) --cut;
+    return text.substr(0, cut) + "...";
+}
+} // namespace
+
 json Agent::executeTool(const std::string& toolName, const json& toolArgs) {
-    return tools_.executeTool(toolName, toolArgs);
+    const auto started = std::chrono::steady_clock::now();
+    const auto startedOnDisk = std::filesystem::file_time_type::clock::now();
+    json result;
+    // Whatever a tool or its checks throw is the tool's result, so the model
+    // hears about it and the turn goes on.
+    try {
+        result = tools_.executeTool(toolName, toolArgs);
+    } catch (const std::exception& e) {
+        result = json{{"status", "error"}, {"error", std::string("Tool '") + toolName + "' failed: " + e.what()}};
+    }
+    const double wall =
+        std::chrono::duration<double>(std::chrono::steady_clock::now() - started).count();
+    const std::string resolved = tools_.resolveName(toolName);
+    // Masked here, before the console, the step log and the model read it.
+    result = redactToolResult(resolved.empty() ? toolName : resolved, std::move(result));
+    std::string output = result.is_string() ? result.get<std::string>()
+                                            : result.dump(-1, ' ', false, json::error_handler_t::replace);
+    if (output.size() > 20000) output.resize(utf8Boundary(output, 20000));
+    turnToolCalls_.push_back({resolved.empty() ? toolName : resolved, toolArgs,
+                              !toolFailure(result).has_value(), turnStep_, wall, startedOnDisk,
+                              std::move(output)});
+    if (stepLogger_) {
+        const ToolCallRecord& call = turnToolCalls_.back();
+        stepLogger_({{"kind", "tool"},
+                     {"step", call.step},
+                     {"name", call.name},
+                     {"args", clippedArgs(call.args)},
+                     {"wall_s", std::round(wall * 1000) / 1000},
+                     {"ok", call.succeeded}});
+    }
+    return result;
 }
 
 // ---- MCP Integration ----
@@ -756,7 +1300,10 @@ bool Agent::connectMcpServer(const std::string& name, const json& config) {
         console_->printInfo("Connected to MCP server '" + name + "' with " +
                            std::to_string(mcpTools.size()) + " tools");
 
+        const json caps = client->capabilities();
         mcpClients_.emplace(name, std::move(client));
+        if (caps.contains("resources")) registerMcpResourceTools();
+        if (caps.contains("prompts")) registerMcpPromptTools();
 
         // Rebuild system prompt to include new tools
         rebuildSystemPrompt();
@@ -787,17 +1334,20 @@ json Agent::callMcpTool(const std::string& serverName, const std::string& toolNa
 
     MCPClient* client = it->second.get();
 
-    // First attempt — happy path
     if (client->isConnected()) {
         try {
             return client->callTool(toolName, args);
         } catch (const std::runtime_error& e) {
-            console_->printWarning("MCP tool call failed: " + std::string(e.what()) +
-                                   " -- attempting reconnect to '" + serverName + "'");
+            // The server may have run the call before the reply was lost, so it is never sent a second time.
+            const std::string what = e.what();
+            const bool back = reconnectMcpServer(serverName);
+            return json{{"error", "MCP tool call failed: " + what + " It was not sent again, because '" + serverName +
+                                      "' may already have run it. " +
+                                      (back ? "The connection is open again; check what the call did before repeating it."
+                                            : "Reconnecting to the server failed too.")}};
         }
-    } else {
-        console_->printWarning("MCP server '" + serverName + "' disconnected -- attempting reconnect");
     }
+    console_->printWarning("MCP server '" + serverName + "' disconnected -- attempting reconnect");
 
     // Reconnect once and retry
     if (!reconnectMcpServer(serverName)) {
@@ -853,6 +1403,99 @@ void Agent::disconnectAllMcp() {
         client->disconnect();
     }
     mcpClients_.clear();
+}
+
+// Resources and prompts are read through generic tools that name the server, so
+// a server with hundreds of resources adds two tools, not hundreds.
+void Agent::registerMcpResourceTools() {
+    if (tools_.hasTool("list_mcp_resources")) return;
+    auto serverArg = [this](const json& a) -> MCPClient* {
+        auto it = mcpClients_.find(a.value("server", ""));
+        return it == mcpClients_.end() ? nullptr : it->second.get();
+    };
+    auto servers = [this] {
+        std::string s;
+        for (const auto& [n, c] : mcpClients_) {
+            if (c->capabilities().contains("resources")) s += (s.empty() ? "" : ", ") + n;
+        }
+        return s;
+    };
+
+    ToolInfo list;
+    list.name = "list_mcp_resources";
+    list.description = "List the documents and data (resources) a connected MCP server offers.";
+    list.parameters = {{"server", ToolParamType::STRING, true, "MCP server name."}};
+    list.policy = ToolPolicy::ALLOW;
+    list.callback = [serverArg, servers](const json& a) -> json {
+        MCPClient* c = serverArg(a);
+        if (!c) return {{"status", "error"}, {"error", "No such MCP server. Servers with resources: " + servers()}};
+        try {
+            return {{"status", "success"}, {"resources", c->listResources()}};
+        } catch (const std::exception& e) {
+            return {{"status", "error"}, {"error", e.what()}};
+        }
+    };
+    tools_.registerTool(std::move(list));
+
+    ToolInfo read;
+    read.name = "read_mcp_resource";
+    read.description = "Read one resource (by its uri from list_mcp_resources) from an MCP server.";
+    read.parameters = {{"server", ToolParamType::STRING, true, "MCP server name."},
+                       {"uri", ToolParamType::STRING, true, "Resource uri."}};
+    read.policy = ToolPolicy::ALLOW;
+    read.callback = [serverArg, servers](const json& a) -> json {
+        MCPClient* c = serverArg(a);
+        if (!c) return {{"status", "error"}, {"error", "No such MCP server. Servers with resources: " + servers()}};
+        try {
+            return {{"status", "success"}, {"contents", c->readResource(a.value("uri", ""))}};
+        } catch (const std::exception& e) {
+            return {{"status", "error"}, {"error", e.what()}};
+        }
+    };
+    tools_.registerTool(std::move(read));
+}
+
+void Agent::registerMcpPromptTools() {
+    if (tools_.hasTool("list_mcp_prompts")) return;
+    auto serverArg = [this](const json& a) -> MCPClient* {
+        auto it = mcpClients_.find(a.value("server", ""));
+        return it == mcpClients_.end() ? nullptr : it->second.get();
+    };
+
+    ToolInfo list;
+    list.name = "list_mcp_prompts";
+    list.description = "List the prompt templates a connected MCP server offers.";
+    list.parameters = {{"server", ToolParamType::STRING, true, "MCP server name."}};
+    list.policy = ToolPolicy::ALLOW;
+    list.callback = [serverArg](const json& a) -> json {
+        MCPClient* c = serverArg(a);
+        if (!c) return {{"status", "error"}, {"error", "No such MCP server: " + a.value("server", "")}};
+        try {
+            return {{"status", "success"}, {"prompts", c->listPrompts()}};
+        } catch (const std::exception& e) {
+            return {{"status", "error"}, {"error", e.what()}};
+        }
+    };
+    tools_.registerTool(std::move(list));
+
+    ToolInfo get;
+    get.name = "get_mcp_prompt";
+    get.description = "Fill in an MCP server's prompt template and return its messages.";
+    get.parameters = {{"server", ToolParamType::STRING, true, "MCP server name."},
+                      {"name", ToolParamType::STRING, true, "Prompt name."},
+                      {"arguments", ToolParamType::OBJECT, false, "Values for the prompt's arguments."}};
+    get.policy = ToolPolicy::ALLOW;
+    get.callback = [serverArg](const json& a) -> json {
+        MCPClient* c = serverArg(a);
+        if (!c) return {{"status", "error"}, {"error", "No such MCP server: " + a.value("server", "")}};
+        try {
+            return {{"status", "success"},
+                    {"prompt", c->getPrompt(a.value("name", ""), a.value("arguments", json::object()))}};
+        } catch (const std::exception& e) {
+            return {{"status", "error"}, {"error", e.what()}};
+        }
+    };
+    tools_.registerTool(std::move(get));
 }
 
 // ---- Main Execution Loop ----
@@ -948,43 +1591,133 @@ std::string summarizeUserInput(const std::vector<Message>& userMessages) {
 
 using ToolCallWindow = std::deque<std::pair<std::string, json>>;
 
-// Loop detection: true when the previous (maxConsecutiveRepeats - 1) calls were
-// all this exact tool+args, making the pending one the Nth identical call.
-bool isRepeatedToolCall(const ToolCallWindow& history,
-                        const std::string& toolName, const json& toolArgs,
-                        int maxConsecutiveRepeats) {
-    const int repeatThreshold = maxConsecutiveRepeats - 1;
-    // A threshold of 0 vacuously matches — preserved from the inline version
-    // this replaced. AgentConfig::validate() requires maxConsecutiveRepeats >= 2,
-    // so it is only reachable from an unvalidated hand-built config.
-    if (static_cast<int>(history.size()) < repeatThreshold) return false;
-    for (size_t i = history.size() - static_cast<size_t>(repeatThreshold);
-         i < history.size(); ++i) {
-        if (history[i].first != toolName || history[i].second != toolArgs) {
-            return false;
+// Longest repeating cycle of calls the loop guard recognises (A, B, A, B, ...).
+constexpr int kMaxLoopPeriod = 3;
+
+// Loop detection: the length of the cycle the pending call would close for the
+// maxConsecutiveRepeats-th time back to back (1 = the same call over and over),
+// or 0 when it is not a loop. A model alternating a search with a read never
+// repeats a call twice in a row, so period 1 alone lets it run on.
+int loopPeriod(const ToolCallWindow& history,
+               const std::string& toolName, const json& toolArgs,
+               int maxConsecutiveRepeats) {
+    const int n = static_cast<int>(history.size()) + 1;  // the pending call is the last
+    auto same = [&](int i, int j) {
+        const std::string& nameI = i == n - 1 ? toolName : history[static_cast<size_t>(i)].first;
+        const std::string& nameJ = j == n - 1 ? toolName : history[static_cast<size_t>(j)].first;
+        if (nameI != nameJ) return false;
+        const json& argsI = i == n - 1 ? toolArgs : history[static_cast<size_t>(i)].second;
+        const json& argsJ = j == n - 1 ? toolArgs : history[static_cast<size_t>(j)].second;
+        return argsI == argsJ;
+    };
+    for (int period = 1; period <= kMaxLoopPeriod && period <= n; ++period) {
+        bool shorter = false;  // a repeat inside the block is a shorter period
+        for (int i = n - period; i < n && !shorter; ++i) {
+            for (int j = i + 1; j < n && !shorter; ++j) shorter = same(i, j);
         }
+        if (shorter) continue;
+        int repeats = 1;
+        while (n - (repeats + 1) * period >= 0) {
+            bool equal = true;
+            for (int k = 0; k < period && equal; ++k) {
+                equal = same(n - (repeats + 1) * period + k, n - period + k);
+            }
+            if (!equal) break;
+            ++repeats;
+        }
+        if (repeats >= maxConsecutiveRepeats) return period;
     }
-    return true;
+    return 0;
 }
 
-// Keeps only the calls isRepeatedToolCall() reads, so a long query's history
+// Keeps only the calls loopPeriod() reads, so a long query's history
 // does not hold every tool's arguments for its whole lifetime.
 void recordToolCall(ToolCallWindow& history, const std::string& toolName,
                     const json& toolArgs, int maxConsecutiveRepeats) {
     history.emplace_back(toolName, toolArgs);
-    const size_t keep = static_cast<size_t>(std::max(maxConsecutiveRepeats - 1, 0));
+    const size_t keep =
+        static_cast<size_t>(std::max(kMaxLoopPeriod * maxConsecutiveRepeats - 1, 0));
     while (history.size() > keep) history.pop_front();
 }
 
-// Serialize a tool result for the model, clipping the middle of oversized
-// payloads so both the head and the tail survive.
-std::string truncateToolResult(const json& toolResult) {
-    std::string resultStr = toolResult.dump();
-    if (resultStr.size() > 4000) {
-        resultStr = resultStr.substr(0, 2000) + "\n...[truncated]...\n" +
-                    resultStr.substr(resultStr.size() - 1500);
+// The error a tool result reports, whatever shape it uses ({"status":"error"},
+// {"ok":false}, {"error":...}, MCP {"isError":true}); nullopt for success.
+std::optional<std::string> toolFailure(const json& r) {
+    if (!r.is_object()) return std::nullopt;
+    auto message = [&r]() -> std::string {
+        if (r.contains("error")) {
+            const auto& e = r["error"];
+            if (e.is_string()) return e.get<std::string>();
+            if (e.is_object() && e.contains("message") && e["message"].is_string()) {
+                return e["message"].get<std::string>();
+            }
+            if (!e.is_null()) return e.dump(-1, ' ', false, json::error_handler_t::replace);
+        }
+        return "the tool reported a failure without a message";
+    };
+    if (r.contains("status") && r["status"].is_string() && r["status"] == "error") return message();
+    if (r.contains("ok") && r["ok"].is_boolean() && !r["ok"].get<bool>()) return message();
+    if (r.contains("isError") && r["isError"].is_boolean() && r["isError"].get<bool>()) {
+        return message();
     }
-    return resultStr;
+    if (r.contains("error") && !r["error"].is_null() && !r["error"].is_boolean() &&
+        r.value("status", "") != "success") {
+        return message();
+    }
+    return std::nullopt;
+}
+
+// Steps-left levels at which the model hears about its budget. The fraction
+// keeps a level from firing early on a budget too small to hold it.
+struct BudgetLevel {
+    int stepsLeft;
+    double fractionLeft;
+};
+constexpr BudgetLevel kBudgetLevels[] = {{20, 0.50}, {10, 0.25}, {5, 0.10}};
+
+// Below this many steps there is no room to act on a notice.
+constexpr int kMinStepsForBudgetNotices = 8;
+
+std::string budgetNotice(int level, int used, int total, int left) {
+    const std::string l = std::to_string(left), t = std::to_string(total);
+    if (level == 20) {
+        return "Step budget: " + std::to_string(used) + " of " + t + " used, " + l +
+               " left. Stop gathering context. If the task asks for files or other "
+               "deliverables, start producing them now from what you already have, and mark "
+               "any value you could not verify as unverified. If the part of this task that "
+               "changes something has not started yet, start it now.";
+    }
+    if (level == 10) {
+        return "Step budget: " + l + " of " + t +
+               " steps left. Write the requested deliverables now with what you have, marking "
+               "unverified values as unverified. A finished deliverable with its gaps flagged "
+               "is worth more than a better one never written; refine afterwards if there is "
+               "room.";
+    }
+    return "Step budget: " + l + " of " + t +
+           " steps left. Do not research further. Write anything requested that does not "
+           "exist yet, then answer with your findings and what is still missing. After the "
+           "last step no tool can be called and anything not already written is lost.";
+}
+
+std::string loopNudge(const std::string& toolName, int repeats, int period) {
+    if (period > 1) {
+        return json{{"status", "error"},
+                    {"error", "Not run: you have called " + toolName + " " +
+                                  std::to_string(repeats - 1) +
+                                  " times with the same arguments, in a repeating cycle of " +
+                                  std::to_string(period) +
+                                  " calls, and it returned no new progress. Do not repeat it — "
+                                  "try a different approach, or give your final answer."}}
+            .dump();
+    }
+    return json{{"status", "error"},
+                {"error", "Not run: this is the " + std::to_string(repeats) +
+                              "th identical call to " + toolName +
+                              " in a row, and it returned the same result each time. "
+                              "Use what it already returned, try a different approach, or "
+                              "give your final answer."}}
+        .dump();
 }
 
 // Make native tool_calls and their role=tool replies consistent before the
@@ -1032,6 +1765,43 @@ void repairToolCallPairing(std::vector<Message>& messages) {
     }
     messages = std::move(kept);
 }
+
+// A stopped request left with no reply reads as pending, and the model carries it out next turn.
+const char* const kStoppedReplyNote =
+    "(The user stopped this reply before it finished. Don't continue it unless they ask again.)";
+
+void appendStopNote(std::vector<Message>& messages) {
+    if (!messages.empty() && messages.back().role == MessageRole::ASSISTANT &&
+        messages.back().toolCalls.empty() && !messages.back().parts.has_value()) {
+        Message& last = messages.back();
+        if (!last.content.empty()) last.content += "\n\n";
+        last.content += kStoppedReplyNote;
+        return;
+    }
+    Message note;
+    note.role = MessageRole::ASSISTANT;
+    note.content = kStoppedReplyNote;
+    messages.push_back(std::move(note));
+}
+
+// Values of a call written as <parameter=key> tags are text; each gets the type its tool declares.
+json typeTextArgs(const ToolRegistry& tools, const std::string& toolName, json args) {
+    const ToolInfo* tool = tools.findTool(toolName);
+    if (!tool) tool = tools.findTool(tools.resolveName(toolName));
+    if (!tool) return args;
+    for (const auto& param : tool->parameters) {
+        const auto it = args.find(param.name);
+        if (it == args.end() || !it->is_string()) continue;
+        const json typed = json::parse(it->get<std::string>(), nullptr, false);
+        const bool fits = (param.type == ToolParamType::INTEGER && typed.is_number_integer()) ||
+                          (param.type == ToolParamType::NUMBER && typed.is_number()) ||
+                          (param.type == ToolParamType::BOOLEAN && typed.is_boolean()) ||
+                          (param.type == ToolParamType::ARRAY && typed.is_array()) ||
+                          (param.type == ToolParamType::OBJECT && typed.is_object());
+        if (fits) *it = typed;
+    }
+    return args;
+}
 } // namespace
 
 void Agent::setHistory(std::vector<Message> history) {
@@ -1040,6 +1810,46 @@ void Agent::setHistory(std::vector<Message> history) {
     }
     repairToolCallPairing(history);
     conversationHistory_ = std::move(history);
+}
+
+bool Agent::autoNativeToolCalls(const AgentConfig& cfg) {
+    if (auto known = knownToolCalling(cfg.modelId)) return *known;
+    const std::string key = cfg.baseUrl + "\n" + cfg.modelId;
+    if (auto it = serverToolCalling_.find(key); it != serverToolCalling_.end()) return it->second;
+    bool labelled = false;
+    const auto toolCalling = [](const json& model) {
+        const auto labels = model.find("labels");
+        return labels != model.end() && labels->is_array() &&
+               std::find(labels->begin(), labels->end(), "tool-calling") != labels->end();
+    };
+    // One model's entry first: the server builds the whole catalog one request at a time,
+    // which many agents starting together would queue on.
+    try {
+        const json model = lemonade_.getModelDetails(cfg.modelId);
+        if (model.is_object() && model.value("id", "") == cfg.modelId) {
+            labelled = toolCalling(model);
+            serverToolCalling_[key] = labelled;
+            return labelled;
+        }
+    } catch (const std::exception&) {
+        // No such route on this server, or an id it cannot take in a path: the catalog answers instead.
+    }
+    try {
+        const json catalog = lemonade_.listModels(true);
+        if (!catalog.is_object() || !catalog.contains("data") || !catalog["data"].is_array()) return false;
+        for (const auto& model : catalog["data"]) {
+            if (!model.is_object() || model.value("id", "") != cfg.modelId) continue;
+            labelled = toolCalling(model);
+            break;
+        }
+    } catch (const std::exception& e) {
+        // A server with no catalog says nothing either way: keep the text
+        // protocol every server accepts, and ask again next turn.
+        if (cfg.debug) std::cerr << "[agent] no model catalog at " << cfg.baseUrl << ": " << e.what() << "\n";
+        return false;
+    }
+    serverToolCalling_[key] = labelled;
+    return labelled;
 }
 
 json Agent::processQueryInternal(const std::vector<Message>& userMessages, int maxSteps) {
@@ -1069,9 +1879,17 @@ json Agent::processQueryInternal(const std::vector<Message>& userMessages, int m
 
     // Re-entrancy guard (RAII — releases on any exit path incl. exceptions).
     InFlightGuard guard(inFlight_);
+    struct NpuTurnRelease {
+        std::unique_ptr<MachineLock>& lock;
+        ~NpuTurnRelease() { lock.reset(); }
+    } npuTurnRelease{npuTurnLock_};
+    // A cancel ends a shell command a tool is running, not only the next step.
+    CommandCancelScope stopCommands([this] { return cancelRequested(); });
+    turnToolCalls_.clear();
+    turnStep_ = 0;
 
     // Reset cancel flag at the start of each query.
-    cancelled_.store(false);
+    cancelled_.store(false);  // cancelCheck_ is the caller's and stays
 
     // Snapshot config at start of query for thread-safe consistency throughout.
     AgentConfig cfg;
@@ -1080,18 +1898,30 @@ json Agent::processQueryInternal(const std::vector<Message>& userMessages, int m
         cfg = config_;
     }
 
-    int stepsLimit = (maxSteps > 0) ? maxSteps : cfg.maxSteps;
-
-    // Ensure the model is loaded with the requested context size (once per agent lifetime).
-    // Context size is a server-side setting applied at load time, not per-request.
-    if (!modelEnsured_ && !cfg.modelId.empty()) {
-        try {
-            lemonade_.ensureModelLoaded(); // uses stored model_ and contextSize_
-            modelEnsured_ = true;
-        } catch (const std::exception& e) {
-            console_->printWarning(std::string("Could not ensure model loaded: ") + e.what());
+    // The server may serve a larger window than the configured one, so only what none can hold.
+    size_t requestBytes = 0;
+    for (const auto& m : userMessages) {
+        requestBytes += m.content.size();
+        if (m.parts.has_value()) {
+            for (const auto& part : *m.parts) {
+                if (part.kind == ContentPart::Kind::TEXT) requestBytes += part.text.size();
+            }
         }
     }
+    constexpr size_t kLargestWindowTokens = 1048576;
+    const size_t windowTokens = std::max(kLargestWindowTokens, static_cast<size_t>(std::max(cfg.contextSize, 0)));
+    if (requestBytes / 8 > windowTokens) {
+        throw std::invalid_argument("The request is " + std::to_string(requestBytes) +
+                                    " bytes of text, more than any model's context window can hold. Save long "
+                                    "material to a file and ask about the file.");
+    }
+
+    // Settled once so the prompt and every request of the turn agree.
+    if (cfg.nativeToolCalls == NativeToolCalls::Auto) {
+        cfg.nativeToolCalls = autoNativeToolCalls(cfg) ? NativeToolCalls::Always : NativeToolCalls::Never;
+    }
+
+    int stepsLimit = (maxSteps > 0) ? maxSteps : cfg.maxSteps;
 
     // Reset state
     executionState_ = AgentState::PLANNING;
@@ -1108,31 +1938,156 @@ json Agent::processQueryInternal(const std::vector<Message>& userMessages, int m
         messages.push_back(msg);
     }
 
+    const size_t turnStart = messages.size();
     // Append caller-supplied user messages verbatim (may contain image parts).
     for (const auto& m : userMessages) {
         messages.push_back(m);
     }
 
     const std::string userInput = summarizeUserInput(userMessages);
+    turnRequest_ = userInput;
+    onTurnStart();
 
     console_->printProcessingStart(userInput, stepsLimit, cfg.modelId);
+    if (cfg.maxTokens > cfg.contextSize / 2) {
+        console_->printWarning("Reply limit " + std::to_string(cfg.maxTokens) + " is more than half the " +
+                               std::to_string(cfg.contextSize) + "-token context window; replies are capped at " +
+                               std::to_string(cfg.contextSize / 2) + ". Raise --ctx-size to allow more.");
+    }
 
     int stepsTaken = 0;
     std::string finalAnswer;
     int errorCount = 0;
+    json llmCallLog = json::array();
+    auto logLlmCall = [&llmCallLog, this](int step, std::chrono::steady_clock::time_point started,
+                                          const UsageStats& u) {
+        const double wall =
+            std::chrono::duration<double>(std::chrono::steady_clock::now() - started).count();
+        llmCallLog.push_back({{"step", step},
+                              {"wall_s", std::round(wall * 1000) / 1000},
+                              {"input_tokens", u.promptTokens},
+                              {"cached_tokens", u.cachedTokens},
+                              {"output_tokens", u.completionTokens}});
+        if (stepLogger_) {
+            json line = llmCallLog.back();
+            line["kind"] = "llm";
+            stepLogger_(line);
+        }
+    };
     std::string lastError;
     ToolCallWindow toolCallHistory; // recent (name, args) for loop detection
     UsageStats totalUsage;
+    int budgetLevelSent = std::numeric_limits<int>::max();  // this level and every higher one was sent
+    std::vector<std::string> budgetNotices;
+    bool failed = false;
+    bool incomplete = false;  // stopped short, but with an answer
+    bool lastToolFailed = false;
+    bool loopWarned = false;
+    bool emptyNudged = false;
+    ToolCallWindow warnedLoop;  // the calls of the loop last warned about
+    // Progress since a nudge earns a fresh one; repeating the warned loop does not.
+    auto toolSucceeded = [&](const std::string& name, const json& args) {
+        emptyNudged = false;
+        if (loopWarned && std::none_of(warnedLoop.begin(), warnedLoop.end(), [&](const auto& c) {
+                return c.first == name && c.second == args;
+            })) {
+            loopWarned = false;
+        }
+    };
+    bool emptyAtLimit = false;  // an empty reply that had used the whole reply limit
+    // After a compact model's runaway reply, the next ask is short so another costs a minute,
+    // not four. A reasoning model needs its full limit to think, so it keeps it.
+    AgentConfig shortCfg = cfg;
+    shortCfg.maxTokens = std::min(cfg.maxTokens, 1024);
+    bool shortNext = false;
+    int lastLimit = cfg.replyTokenLimit();
+    std::string llmError;       // the model call failure that ended the loop
+    constexpr size_t kMaxToolCallsPerReply = 24;
+    int malformedStreak = 0;
+    std::string stopReason;  // why the loop ended without an answer: loop | empty
+    // A reply that stopped at the length limit is the answer so far, not the whole of it.
+    const auto markCutOff = [&](const std::string& finishReason) {
+        if (finishReason != "length") return;
+        incomplete = true;
+        finalAnswer += "\n\n[This answer was cut off at the model's reply limit of " +
+                       std::to_string(cfg.replyTokenLimit()) + " tokens.]";
+    };
+    bool answerReviewed = false;
+    bool answerSentBack = false;
+    bool strandedCallSentBack = false;
+    bool claimPushed = false;
+    // One chance for the agent to send a final answer back (reviewFinalAnswer), and one
+    // more push when the answer after it still claims work that isn't there.
+    int announcePushes = 0;
+    auto reviewOnce = [&](const std::string& answer) -> std::optional<Message> {
+        if (stepsTaken >= stepsLimit) return std::nullopt;
+        // A small model narrates "next I will read X" between tool calls; that is not an answer.
+        if (announcePushes < 3) {
+            if (const std::optional<std::string> note = announcedStepNote(answer)) {
+                ++announcePushes;
+                if (stepLogger_) stepLogger_({{"kind", "review"}, {"step", stepsTaken}, {"note", *note}});
+                console_->printWarning("Answer sent back: " + *note);
+                Message m;
+                m.role = MessageRole::USER;
+                m.content = "[Not done yet] " + *note;
+                return m;
+            }
+        }
+        if (answerReviewed) {
+            if (!answerSentBack || claimPushed) return std::nullopt;
+            claimPushed = true;
+            const std::optional<std::string> still = unresolvedClaims(answer);
+            if (!still || still->empty()) return std::nullopt;
+            if (stepLogger_) stepLogger_({{"kind", "review"}, {"step", stepsTaken}, {"note", *still}});
+            console_->printWarning("Answer sent back: " + *still);
+            Message m;
+            m.role = MessageRole::USER;
+            m.content = "[Not done yet] " + *still +
+                        " Your last reply said it was done but called no tool, so nothing changed. Call the tool "
+                        "that does it now (file_write saves a file), then give your whole answer again.";
+            return m;
+        }
+        answerReviewed = true;
+        std::optional<std::string> note = reviewFinalAnswer(answer);
+        if (!note) return std::nullopt;
+        answerSentBack = true;
+        if (stepLogger_) stepLogger_({{"kind", "review"}, {"step", stepsTaken}, {"note", *note}});
+        console_->printWarning("Answer sent back: " + *note);
+        Message m;
+        m.role = MessageRole::USER;
+        m.content = "[Check before answering] " + *note;
+        return m;
+    };
+    // The answer after a send-back is final; what it still gets wrong is told to the user.
+    auto withUnresolved = [&](std::string answer) {
+        std::string notes;
+        if (answerSentBack) {
+            const std::optional<std::string> still = unresolvedClaims(answer);
+            if (still && !still->empty()) notes = *still;
+        }
+        const std::optional<std::string> unconfirmed = unconfirmedClaims(answer);
+        if (unconfirmed && !unconfirmed->empty()) {
+            notes += (notes.empty() ? "" : "\n\n") + *unconfirmed;
+            // A result the turn never showed is not a finished task.
+            incomplete = true;
+        }
+        if (notes.empty()) return answer;
+        if (stepLogger_) stepLogger_({{"kind", "review"}, {"step", stepsTaken}, {"unresolved", notes}});
+        // Streamed text is already on screen; otherwise the note prints with the answer.
+        if (cfg.streaming && !cfg.structuredEvents) console_->printWarning(notes);
+        return answer + "\n\n" + notes;
+    };
 
     while (stepsTaken < stepsLimit && finalAnswer.empty()) {
         // ---- Cancel check ----
-        if (cancelled_.load()) {
+        if (cancelRequested()) {
             console_->printWarning("Cancelled by user");
             finalAnswer = "[Cancelled after " + std::to_string(stepsTaken) + " step(s)]";
             break;
         }
 
         ++stepsTaken;
+        turnStep_ = stepsTaken;
         console_->printStepHeader(stepsTaken, stepsLimit);
 
         // ---- Error Recovery ----
@@ -1143,7 +2098,7 @@ json Agent::processQueryInternal(const std::vector<Message>& userMessages, int m
             errorMsg.role = MessageRole::USER;
             errorMsg.content =
                 "TOOL EXECUTION FAILED!\n\n"
-                "Error: " + lastError + "\n\n"
+                "Error: " + lastError.substr(0, utf8Boundary(lastError, 2000)) + "\n\n"
                 "Original task: " + userInput + "\n\n"
                 "Please analyze the error and try an alternative approach.\n";
             // The envelope reminder only applies to the prompt-JSON path; under
@@ -1162,35 +2117,122 @@ json Agent::processQueryInternal(const std::vector<Message>& userMessages, int m
         // decide whether to send `tools`.
         const std::string turnSystemPrompt = composeSystemPromptFor(cfg);
 
-        // Call LLM (retry once on failure).
-        // Skip progress spinner when streaming — tokens serve as live progress.
-        if (!config_.streaming) console_->startProgress("Thinking");
-        LlmResult llmResult;
-        try {
-            llmResult = callLlm(messages, turnSystemPrompt, cfg);
-        } catch (const std::exception& e) {
-            if (!config_.streaming) console_->stopProgress();
-            console_->printWarning(std::string("LLM call failed, retrying: ") + e.what());
-
-            // Retry once
-            if (!config_.streaming) console_->startProgress("Retrying");
-            try {
-                llmResult = callLlm(messages, turnSystemPrompt, cfg);
-            } catch (const std::exception& e2) {
-                if (!config_.streaming) console_->stopProgress();
-                console_->printError(std::string("LLM error: ") + e2.what());
-                finalAnswer = std::string("Unable to complete task due to LLM error: ") + e2.what();
+        const int stepsLeft = stepsLimit - stepsTaken + 1;
+        if (cfg.stepBudgetNotices && stepsTaken > 1 && stepsLimit >= kMinStepsForBudgetNotices) {
+            // Most urgent level first, so crossing two at once sends the one true now.
+            for (auto level = std::rbegin(kBudgetLevels); level != std::rend(kBudgetLevels); ++level) {
+                const int trigger = std::min(
+                    level->stepsLeft, std::max(1, static_cast<int>(level->fractionLeft * stepsLimit)));
+                if (level->stepsLeft >= budgetLevelSent || stepsLeft > trigger) continue;
+                budgetLevelSent = level->stepsLeft;
+                Message notice;
+                notice.role = MessageRole::USER;
+                notice.content = budgetNotice(level->stepsLeft, stepsTaken - 1, stepsLimit, stepsLeft);
+                budgetNotices.push_back(notice.content);
+                messages.push_back(notice);
                 break;
             }
         }
-        if (!config_.streaming) console_->stopProgress();
+
+        // Skip progress spinner when streaming — tokens serve as live progress.
+        if (!cfg.streaming) console_->startProgress("Thinking");
+        LlmResult llmResult;
+        const auto llmStarted = std::chrono::steady_clock::now();
+        try {
+            const AgentConfig& stepCfg = shortNext ? shortCfg : cfg;
+            lastLimit = stepCfg.replyTokenLimit();
+            shortNext = false;
+            llmResult = callLlmResilient(messages, turnSystemPrompt, stepCfg);
+        } catch (const std::exception& e) {
+            if (!cfg.streaming) console_->stopProgress();
+            if (cancelRequested()) {
+                console_->printWarning("Cancelled by user");
+                finalAnswer = "[Cancelled after " + std::to_string(stepsTaken) + " step(s)]";
+                break;
+            }
+            console_->printError(std::string("LLM error: ") + e.what());
+            llmError = e.what();
+            if (stepLogger_) {
+                stepLogger_({{"kind", "llm_error"}, {"step", stepsTaken}, {"error", llmError.substr(0, 600)}});
+            }
+            // A reply the agent could not use, after work was done: ask once for a
+            // closing answer. A server or window failure would only fail again.
+            const bool gathered = std::any_of(messages.begin(), messages.end(), [](const Message& m) {
+                return m.role == MessageRole::TOOL;
+            });
+            if (gathered && !dynamic_cast<const HttpError*>(&e) &&
+                !dynamic_cast<const PartialStreamError*>(&e) &&
+                llmError.find("no longer fits the model's context window") == std::string::npos) {
+                stopReason = "error";
+                break;
+            }
+            finalAnswer = "Unable to complete task due to LLM error: " + llmError;
+            failed = true;
+            break;
+        }
+        if (!cfg.streaming) console_->stopProgress();
 
         const std::string& response = llmResult.content;
         totalUsage += llmResult.usage;
+        logLlmCall(stepsTaken, llmStarted, llmResult.usage);
 
         // Debug: show response
         if (cfg.showPrompts) {
             console_->printResponse(response, "LLM Response");
+        }
+
+        // A reply cut at the length limit loses its last call; the earlier ones are whole.
+        std::string batchNote;
+        if (!llmResult.toolCalls.empty() && llmResult.finishReason == "length") {
+            const size_t sent = llmResult.toolCalls.size();
+            bool pastingRows = false;
+            while (!llmResult.toolCalls.empty()) {
+                try {
+                    llmResult.toolCalls.back().parsedArgs();
+                    break;
+                } catch (const std::exception&) {
+                    pastingRows = pastingRows || looksLikePastedRows(llmResult.toolCalls.back().arguments);
+                    llmResult.toolCalls.pop_back();
+                }
+            }
+            if (llmResult.toolCalls.size() < sent) {
+                console_->printWarning("The model's reply was cut off at the length limit of " +
+                                       std::to_string(cfg.replyTokenLimit()) + " tokens mid tool call.");
+                batchNote = "[Your reply was cut off at the length limit of " +
+                            std::to_string(cfg.replyTokenLimit()) + " tokens, so " +
+                            std::to_string(sent - llmResult.toolCalls.size()) +
+                            " unfinished tool call(s) at the end did not run. Send fewer calls "
+                            "per reply and keep arguments short; write long content in parts, and refer to "
+                            "a file by its path instead of pasting its contents.]";
+                if (pastingRows) {
+                    batchNote += " [The cut-off call was pasting rows of data. Don't copy a file's rows into a "
+                                 "command: a short script that opens the file is enough, for example python -c "
+                                 "\"import pandas as pd; df = pd.read_csv('data.csv'); "
+                                 "print(df.groupby('region')['revenue'].sum())\" with your file and column names.]";
+                }
+            }
+            if (llmResult.toolCalls.empty()) {
+                if (++malformedStreak > 2) {
+                    finalAnswer = "Unable to complete task: the model's reply was cut off at "
+                                  "the length limit of " + std::to_string(cfg.replyTokenLimit()) +
+                                  " tokens in the middle of a tool call three times in a row. "
+                                  "Raise the limit (--max-tokens; at most half the context window, --ctx-size) or ask for a smaller step.";
+                    failed = true;
+                    break;
+                }
+                Message note;
+                note.role = MessageRole::USER;
+                note.content = batchNote;
+                messages.push_back(note);
+                continue;
+            }
+        }
+        if (llmResult.toolCalls.size() > kMaxToolCallsPerReply) {
+            batchNote += (batchNote.empty() ? "" : " ") + std::string("[Only the first ") +
+                         std::to_string(kMaxToolCallsPerReply) + " of your " +
+                         std::to_string(llmResult.toolCalls.size()) +
+                         " tool calls ran. Send the rest in later replies.]";
+            llmResult.toolCalls.resize(kMaxToolCallsPerReply);
         }
 
         // ---- Native OpenAI tool_calls branch ----
@@ -1210,41 +2252,85 @@ json Agent::processQueryInternal(const std::vector<Message>& userMessages, int m
                 try {
                     decodedArgs.push_back(tc.parsedArgs());
                 } catch (const std::exception& e) {
-                    decodeError = e.what();
+                    decodeError = tc.name + ": " + e.what();
                     break;
                 }
-            }
-            if (!decodeError.empty()) {
-                console_->printError("Malformed tool call: " + decodeError);
-                finalAnswer = "Unable to complete task due to LLM error: " + decodeError;
-                break;
             }
 
             Message nativeAssistantMsg;
             nativeAssistantMsg.role = MessageRole::ASSISTANT;
             nativeAssistantMsg.content = response;
             nativeAssistantMsg.toolCalls = llmResult.toolCalls;
+            // Never replay arguments the server's chat template may fail to parse.
+            if (!decodeError.empty()) {
+                for (auto& tc : nativeAssistantMsg.toolCalls) tc.arguments = "{}";
+            }
             messages.push_back(nativeAssistantMsg);
+
+            // Nothing ran: answer every call with the problem so the model can resend.
+            if (!decodeError.empty()) {
+                console_->printWarning("Malformed tool call: " + decodeError);
+                if (++malformedStreak > 2) {
+                    finalAnswer = "Unable to complete task: the model sent malformed tool "
+                                  "arguments three times in a row (" + decodeError + ").";
+                    failed = true;
+                    break;
+                }
+                bool explained = false;
+                for (const auto& tc : llmResult.toolCalls) {
+                    Message reply;
+                    reply.role = MessageRole::TOOL;
+                    reply.name = tc.name;
+                    reply.toolCallId = tc.id;
+                    // The reason once; a large batch must not fill the window with copies.
+                    reply.content =
+                        json{{"status", "error"},
+                             {"error", explained
+                                           ? std::string("Not run: see the first result of this batch.")
+                                           : "Not run: the arguments in this batch were not valid "
+                                             "JSON (" + decodeError.substr(0, 400) +
+                                             "). Resend the call with a valid JSON object."}}
+                            .dump(-1, ' ', false, json::error_handler_t::replace);
+                    explained = true;
+                    messages.push_back(reply);
+                }
+                continue;
+            }
+            malformedStreak = 0;
 
             // structuredEvents consumers (TUI/WebUI) expect a thought per step;
             // a native turn's reasoning is whatever prose came with the calls.
-            if (!config_.streaming || config_.structuredEvents) {
+            if (!cfg.streaming || cfg.structuredEvents) {
                 console_->printThought(response);
             }
 
             bool loopDetected = false;
             for (size_t i = 0; i < llmResult.toolCalls.size(); ++i) {
                 const auto& tc = llmResult.toolCalls[i];
-                if (cancelled_.load()) break;
+                if (cancelRequested()) break;
 
                 const json& toolArgs = decodedArgs[i];
 
-                if (isRepeatedToolCall(toolCallHistory, tc.name, toolArgs,
-                                       cfg.maxConsecutiveRepeats)) {
-                    console_->printWarning("Detected repeated tool call loop. Breaking out.");
-                    finalAnswer = "Task stopped due to repeated tool call loop.";
-                    loopDetected = true;
-                    break;
+                if (const int period = loopPeriod(toolCallHistory, tc.name, toolArgs,
+                                                  cfg.maxConsecutiveRepeats)) {
+                    if (loopWarned) {
+                        console_->printWarning("Detected repeated tool call loop. Breaking out.");
+                        loopDetected = true;
+                        stopReason = "loop";
+                        break;
+                    }
+                    loopWarned = true;
+                    console_->printWarning("Repeated tool call; asking the model to change course.");
+                    Message reply;
+                    reply.role = MessageRole::TOOL;
+                    reply.name = tc.name;
+                    reply.toolCallId = tc.id;
+                    reply.content = loopNudge(tc.name, cfg.maxConsecutiveRepeats, period);
+                    messages.push_back(reply);
+                    warnedLoop = toolCallHistory;
+                    warnedLoop.emplace_back(tc.name, toolArgs);
+                    toolCallHistory.clear();
+                    continue;
                 }
 
                 console_->printToolUsage(tc.name);
@@ -1258,22 +2344,78 @@ json Agent::processQueryInternal(const std::vector<Message>& userMessages, int m
                 console_->prettyPrintJson(toolResult, "Tool Result");
 
                 recordToolCall(toolCallHistory, tc.name, toolArgs, cfg.maxConsecutiveRepeats);
+                announcePushes = 0;  // narration that is followed by the work is progress
 
                 Message toolMsg;
                 toolMsg.role = MessageRole::TOOL;
                 toolMsg.name = tc.name;
                 toolMsg.toolCallId = tc.id;
-                toolMsg.content = truncateToolResult(toolResult);
+                toolMsg.content = recordToolOutput(toolResult, resultCharLimit(tc.name, cfg));
                 messages.push_back(toolMsg);
 
-                if (toolResult.is_object() && toolResult.value("status", "") == "error") {
+                lastToolFailed = false;
+                if (auto err = toolFailure(toolResult)) {
                     ++errorCount;
-                    lastError = toolResult.value("error", "Unknown error");
+                    lastError = *err;
                     executionState_ = AgentState::ERROR_RECOVERY;
+                    lastToolFailed = true;
+                } else {
+                    toolSucceeded(tc.name, toolArgs);
+                }
+            }
+
+            // A loop stop is followed by a closing call, so every advertised call needs a reply.
+            for (size_t j = 0; loopDetected && j < llmResult.toolCalls.size(); ++j) {
+                const auto& tc = llmResult.toolCalls[j];
+                const bool answered = std::any_of(
+                    messages.begin(), messages.end(), [&tc](const Message& m) {
+                        return m.role == MessageRole::TOOL && m.toolCallId == tc.id;
+                    });
+                if (!answered) {
+                    Message reply;
+                    reply.role = MessageRole::TOOL;
+                    reply.name = tc.name;
+                    reply.toolCallId = tc.id;
+                    reply.content = R"({"status":"error","error":"Not run."})";
+                    messages.push_back(reply);
                 }
             }
 
             if (loopDetected) break;
+            if (!batchNote.empty()) {
+                Message note;
+                note.role = MessageRole::USER;
+                note.content = batchNote;
+                messages.push_back(note);
+            }
+            continue;
+        }
+
+        // An empty reply is usually a cut-off reasoning block; ask once more.
+        if (response.find_first_not_of(" \t\r\n") == std::string::npos) {
+            const bool atLimit = llmResult.finishReason == "length";
+            emptyAtLimit = emptyAtLimit || atLimit;
+            shortNext = atLimit && cfg.compactFeatures();
+            if (emptyNudged) {
+                stopReason = "empty";
+                break;
+            }
+            emptyNudged = true;
+            console_->printWarning(atLimit ? "The model used its whole reply limit of " +
+                                                 std::to_string(lastLimit) +
+                                                 " tokens without answering; asking again."
+                                           : "The model's reply was empty; asking again.");
+            Message retry;
+            retry.role = MessageRole::USER;
+            retry.content = std::string(atLimit
+                                            ? "[Your last reply hit the length limit before any "
+                                              "answer or tool call; the reasoning used all of it.] "
+                                            : "[Your last reply was empty, possibly cut off while "
+                                              "reasoning.] ") +
+                            "Continue: call a tool or give your final answer, keeping any "
+                            "reasoning short. If you were copying a file's contents, stop and refer "
+                            "to the file by its path.";
+            messages.push_back(retry);
             continue;
         }
 
@@ -1286,19 +2428,89 @@ json Agent::processQueryInternal(const std::vector<Message>& userMessages, int m
         // Parse response
         ParsedResponse parsed = parseLlmResponse(response);
 
+        // Tool-call text repeated from the request or from a file read this turn is a quote, not a call.
+        bool quotedCall = false;
+        if (parsed.toolName.has_value()) {
+            const auto squash = [](const std::string& text) {
+                std::string out;
+                for (const char c : text) {
+                    if (!std::isspace(static_cast<unsigned char>(c)) && c != '`') out.push_back(c);
+                }
+                return out;
+            };
+            const std::string said = squash(response);
+            bool quoted = said.size() >= 20 && squash(turnRequest_).find(said) != std::string::npos;
+            for (size_t i = turnStart; !quoted && said.size() >= 20 && i + 1 < messages.size(); ++i) {
+                const Message& m = messages[i];
+                if (m.role != MessageRole::TOOL && m.role != MessageRole::USER) continue;
+                const json result = json::parse(m.content, nullptr, false);
+                const bool hasText = result.is_object() && result.contains("content") && result["content"].is_string();
+                const std::string shown = squash(hasText ? result["content"].get<std::string>() : m.content);
+                // Either way round: the reply is part of what was read, or repeats all of a call that was read.
+                // A question or a line of a file that a real call passes on as an argument is not a quote.
+                const bool shownIsCall = shown.find("\"tool\"") != std::string::npos ||
+                                         shown.find("<tool_call>") != std::string::npos ||
+                                         shown.find("\"arguments\"") != std::string::npos;
+                quoted = shown.size() >= 20 && (shown.find(said) != std::string::npos ||
+                                                (shownIsCall && said.find(shown) != std::string::npos));
+            }
+            if (quoted) {
+                quotedCall = true;
+                parsed = ParsedResponse{};
+                parsed.answer = response;
+            }
+        }
+
+        // A call the reply buried under closing words never ran; taken for the answer, the turn would
+        // end "successfully" on text like {"tool": ...}. Asked for again, once.
+        if (!strandedCallSentBack && !quotedCall && !parsed.toolName.has_value() &&
+            !parsed.malformedToolCall.has_value() && stepsTaken < stepsLimit) {
+            if (const std::optional<std::string> note = strandedCallNote(response, tools_)) {
+                strandedCallSentBack = true;
+                if (stepLogger_) stepLogger_({{"kind", "review"}, {"step", stepsTaken}, {"note", *note}});
+                console_->printWarning("Reply sent back: " + *note);
+                Message retry;
+                retry.role = MessageRole::USER;
+                retry.content = "[Not done yet] " + *note;
+                messages.push_back(retry);
+                continue;
+            }
+        }
+
         // Display reasoning.
         // Skip when streaming — the raw tokens were already printed during callLlm().
         // Exception: structuredEvents mode emits both stream tokens AND structured events,
         // so the TUI/WebUI gets live progress AND parsed agent activity.
-        if (!config_.streaming || config_.structuredEvents) {
+        if (!cfg.streaming || cfg.structuredEvents) {
             console_->printThought(parsed.thought);
             console_->printGoal(parsed.goal);
         }
 
+        if (parsed.malformedToolCall.has_value()) {
+            console_->printWarning("Malformed tool call: " + *parsed.malformedToolCall);
+            if (++malformedStreak > 2) {
+                finalAnswer = "Unable to complete task: the model wrote a tool call that could "
+                              "not be run three times in a row (" + *parsed.malformedToolCall + ")";
+                failed = true;
+                break;
+            }
+            Message retry;
+            retry.role = MessageRole::USER;
+            retry.content = "[Your tool call was not run] " + *parsed.malformedToolCall +
+                            " Send the complete call again, or give your final answer.";
+            messages.push_back(retry);
+            continue;
+        }
+
         // ---- Handle final answer ----
         if (parsed.answer.has_value()) {
-            finalAnswer = parsed.answer.value();
-            if (!config_.streaming || config_.structuredEvents) console_->printFinalAnswer(finalAnswer, totalUsage);
+            if (auto pushback = reviewOnce(parsed.answer.value())) {
+                messages.push_back(*pushback);
+                continue;
+            }
+            finalAnswer = withUnresolved(parsed.answer.value());
+            markCutOff(llmResult.finishReason);
+            if (!cfg.streaming || cfg.structuredEvents) console_->printFinalAnswer(finalAnswer, totalUsage);
             break;
         }
 
@@ -1321,13 +2533,28 @@ json Agent::processQueryInternal(const std::vector<Message>& userMessages, int m
             std::string toolName = parsed.toolName.value();
             json toolArgs = parsed.toolArgs.value_or(json::object());
             if (toolArgs.is_null()) toolArgs = json::object();
+            if (parsed.toolArgsAreText) toolArgs = typeTextArgs(tools_, toolName, std::move(toolArgs));
+            malformedStreak = 0;
 
-            // Loop detection — same tool+args repeated maxConsecutiveRepeats times
-            if (isRepeatedToolCall(toolCallHistory, toolName, toolArgs,
-                                   cfg.maxConsecutiveRepeats)) {
-                console_->printWarning("Detected repeated tool call loop. Breaking out.");
-                finalAnswer = "Task stopped due to repeated tool call loop.";
-                break;
+            // Loop detection — a call, or a short cycle of calls, repeated maxConsecutiveRepeats times
+            if (const int period = loopPeriod(toolCallHistory, toolName, toolArgs,
+                                              cfg.maxConsecutiveRepeats)) {
+                if (loopWarned) {
+                    console_->printWarning("Detected repeated tool call loop. Breaking out.");
+                    stopReason = "loop";
+                    break;
+                }
+                loopWarned = true;
+                console_->printWarning("Repeated tool call; asking the model to change course.");
+                Message nudge;
+                nudge.role = MessageRole::TOOL;
+                nudge.name = toolName;
+                nudge.content = loopNudge(toolName, cfg.maxConsecutiveRepeats, period);
+                messages.push_back(nudge);
+                warnedLoop = toolCallHistory;
+                warnedLoop.emplace_back(toolName, toolArgs);
+                toolCallHistory.clear();
+                continue;
             }
 
             console_->printToolUsage(toolName);
@@ -1341,21 +2568,32 @@ json Agent::processQueryInternal(const std::vector<Message>& userMessages, int m
             console_->prettyPrintJson(toolResult, "Tool Result");
 
             recordToolCall(toolCallHistory, toolName, toolArgs, cfg.maxConsecutiveRepeats);
+            announcePushes = 0;  // narration that is followed by the work is progress
 
             // Add tool result to messages
             Message toolMsg;
             toolMsg.role = MessageRole::TOOL;
             toolMsg.name = toolName;
-            toolMsg.content = truncateToolResult(toolResult);
+            toolMsg.content = recordToolOutput(toolResult, resultCharLimit(toolName, cfg));
             messages.push_back(toolMsg);
 
-            // Check for error
-            bool isError = toolResult.is_object() &&
-                           toolResult.value("status", "") == "error";
-            if (isError) {
+            lastToolFailed = false;
+            if (auto err = toolFailure(toolResult)) {
                 ++errorCount;
-                lastError = toolResult.value("error", "Unknown error");
+                lastError = *err;
                 executionState_ = AgentState::ERROR_RECOVERY;
+                lastToolFailed = true;
+            } else {
+                toolSucceeded(toolName, toolArgs);
+            }
+
+            if (parsed.droppedToolCalls > 0) {
+                Message note;
+                note.role = MessageRole::USER;
+                note.content = "[Only the first tool call of your reply ran. The other " +
+                               std::to_string(parsed.droppedToolCalls) +
+                               " did not run: send them again, one tool call per reply.]";
+                messages.push_back(note);
             }
 
             continue;
@@ -1363,19 +2601,111 @@ json Agent::processQueryInternal(const std::vector<Message>& userMessages, int m
 
         // No tool call and no answer — treat response as conversational
         if (!parsed.toolName.has_value() && !parsed.answer.has_value()) {
-            finalAnswer = response;
-            if (!config_.streaming || config_.structuredEvents) console_->printFinalAnswer(finalAnswer, totalUsage);
+            if (auto pushback = reviewOnce(response)) {
+                messages.push_back(*pushback);
+                continue;
+            }
+            finalAnswer = withUnresolved(response);
+            markCutOff(llmResult.finishReason);
+            if (!cfg.streaming || cfg.structuredEvents) console_->printFinalAnswer(finalAnswer, totalUsage);
             break;
         }
     }
 
-    // Max steps reached without answer
-    if (finalAnswer.empty()) {
-        finalAnswer = "Reached maximum steps limit (" + std::to_string(stepsLimit) + " steps).";
-        console_->printWarning(finalAnswer);
+    // Out of steps, stopped in a loop, or no reply: one tool-free call for an honest wrap-up.
+    if (finalAnswer.empty() && !cancelRequested()) {
+        if (stopReason.empty()) stopReason = "cap";
+        const char* why = stopReason == "loop"  ? "[Stopped: repeated tool calls]"
+                          : stopReason == "empty" ? "[Stopped: empty replies]"
+                          : stopReason == "error" ? "[Stopped: your last reply could not be used]"
+                                                  : "[Step limit reached]";
+        console_->printWarning(std::string(why) + " Asking for a closing answer.");
+        if (cfg.stepBudgetNotices) {
+            Message closing;
+            closing.role = MessageRole::USER;
+            closing.content =
+                std::string(why) +
+                " You cannot call any more tools for this request. In plain text, give your "
+                "final answer: what you completed, the results so far, and what is still "
+                "unfinished. Do not claim work you did not do.";
+            messages.push_back(closing);
+            try {
+                const auto closingStarted = std::chrono::steady_clock::now();
+                LlmResult closingResult =
+                    callLlmResilient(messages, composeSystemPromptFor(cfg), shortNext ? shortCfg : cfg, false);
+                totalUsage += closingResult.usage;
+                logLlmCall(stepsTaken, closingStarted, closingResult.usage);
+                std::string text = closingResult.content;
+                const ParsedResponse p = parseLlmResponse(text);
+                if (!cfg.useNativeToolCalls() && p.answer.has_value()) {
+                    text = *p.answer;
+                } else if (p.toolName.has_value() || p.malformedToolCall.has_value()) {
+                    text.clear();  // a tool call written as text is not an answer
+                }
+                if (!text.empty()) {
+                    Message reply;
+                    reply.role = MessageRole::ASSISTANT;
+                    reply.content = text;
+                    messages.push_back(reply);
+                    finalAnswer = withUnresolved(text);
+                    if (!cfg.streaming || cfg.structuredEvents) {
+                        console_->printFinalAnswer(finalAnswer, totalUsage);
+                    }
+                }
+            } catch (const std::exception& e) {
+                console_->printError(std::string("Closing answer failed: ") + e.what());
+            }
+        }
+        if (finalAnswer.empty()) {
+            finalAnswer = stopReason == "loop"
+                              ? "Task stopped due to repeated tool call loop."
+                          : stopReason == "error"
+                              ? "Unable to complete task due to LLM error: " + llmError
+                          : stopReason == "empty"
+                              ? (emptyAtLimit
+                                     ? "Task stopped: the model used its whole reply limit of " +
+                                           std::to_string(lastLimit) +
+                                           " tokens without giving an answer. Raise the limit "
+                                           "(--max-tokens; at most half the context window, "
+                                           "--ctx-size) or pick a model that reasons less."
+                                     : std::string("Task stopped: the model returned empty replies."))
+                              : "Reached maximum steps limit (" + std::to_string(stepsLimit) + " steps).";
+            console_->printWarning(finalAnswer);
+            failed = true;
+        } else if (stopReason != "loop" || lastToolFailed) {
+            // A loop the model then answered from is a finished turn, as in the Python agent.
+            incomplete = true;
+        }
+    }
+    if (finalAnswer.empty() && cancelRequested()) {
+        finalAnswer = "[Cancelled after " + std::to_string(stepsTaken) + " step(s)]";
     }
 
     console_->printCompletion(stepsTaken, stepsLimit);
+
+    // Saved, a turn too large for the window would fail every later turn of the chat the same way.
+    if (failed && llmError.find("no longer fits the model's context window") != std::string::npos &&
+        turnStart <= messages.size()) {
+        messages.resize(turnStart);
+        Message dropped;
+        dropped.role = MessageRole::USER;
+        dropped.content = "[A request of " + std::to_string(userInput.size()) +
+                          " characters was left out of this chat: it did not fit the model's context window.]";
+        messages.push_back(dropped);
+        Message reply;
+        reply.role = MessageRole::ASSISTANT;
+        reply.content = "That request did not fit my context window, so nothing was done with it.";
+        messages.push_back(reply);
+    }
+
+    // A budget notice is this turn's guidance; saved, the next turn opens with a stale "5 steps left".
+    messages.erase(std::remove_if(messages.begin(), messages.end(),
+                                  [&budgetNotices](const Message& m) {
+                                      return m.role == MessageRole::USER &&
+                                             std::find(budgetNotices.begin(), budgetNotices.end(),
+                                                       m.content) != budgetNotices.end();
+                                  }),
+                   messages.end());
 
     // Store conversation history for session persistence.
     // Prompt-JSON tool results are converted to USER messages so the LLM server
@@ -1403,13 +2733,39 @@ json Agent::processQueryInternal(const std::vector<Message>& userMessages, int m
                        messages.begin() + (static_cast<int>(messages.size()) - cfg.maxHistoryMessages));
     }
     repairToolCallPairing(messages);
+    const bool stopped = cancelRequested();
+    if (stopped) appendStopNote(messages);
     conversationHistory_ = messages;
 
     json result = {
         {"result", finalAnswer},
         {"steps_taken", stepsTaken},
-        {"steps_limit", stepsLimit}
+        {"steps_limit", stepsLimit},
+        {"status", stopped ? "cancelled" : failed ? "error" : incomplete ? "incomplete" : "success"},
+        {"tool_errors", errorCount},
+        {"tool_calls", turnToolCalls_.size()},
+        {"llm_calls", llmCallLog.size()}
     };
+    if (!stopReason.empty()) result["stop_reason"] = stopReason == "cap" ? "step_limit" : stopReason;
+    json toolCallLog = json::array();
+    for (const auto& call : turnToolCalls_) {
+        // Arguments are what make a trace readable; capped so one huge write can't bloat the log.
+        std::string args = call.args.dump(-1, ' ', false, json::error_handler_t::replace);
+        constexpr size_t kMaxLoggedArgs = 2000;
+        if (args.size() > kMaxLoggedArgs) {
+            size_t cut = kMaxLoggedArgs;
+            while (cut > 0 && (static_cast<unsigned char>(args[cut]) & 0xC0) == 0x80) --cut;
+            args = args.substr(0, cut) + "... (" + std::to_string(args.size()) + " bytes)";
+        }
+        toolCallLog.push_back({{"step", call.step},
+                               {"name", call.name},
+                               {"args", std::move(args)},
+                               {"wall_s", std::round(call.wallSeconds * 1000) / 1000},
+                               {"ok", call.succeeded}});
+    }
+    result["telemetry"] = {{"llm_calls", std::move(llmCallLog)},
+                           {"tool_calls", std::move(toolCallLog)}};
+    totalUsage += sideUsage();
     if (totalUsage.totalTokens > 0) {
         result["usage"] = totalUsage.toJson();
     }

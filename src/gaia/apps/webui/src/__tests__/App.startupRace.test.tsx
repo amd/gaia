@@ -15,7 +15,9 @@ vi.mock('../services/api');
 import App from '../App';
 import * as api from '../services/api';
 import { useChatStore } from '../stores/chatStore';
+import { useBackendStore } from '../stores/backendStore';
 import { useModelStore } from '../stores/modelStore';
+import type { BackendLifecycle } from '../types/agent';
 import type { Session, SetupCheck } from '../types';
 
 const mocked = vi.mocked(api);
@@ -34,6 +36,7 @@ function session(over: Partial<Session> = {}): Session {
     };
 }
 
+const realRestart = useBackendStore.getState().restart;
 const READY: SetupCheck = { ready: true, steps: [] };
 
 let backendUp = false;
@@ -65,6 +68,7 @@ beforeEach(() => {
     mocked.requestWarmUp.mockImplementation(whenUp({ state: 'ready' as const }));
 
     useModelStore.setState({ active: null, error: null, restoreNotice: null });
+    useBackendStore.setState({ lifecycle: null, restartError: null, restart: realRestart });
     useChatStore.setState({
         sessions: [], currentSessionId: null, messages: [], agents: [], pendingPrompt: null, systemStatus: null,
         backendConnected: true, showMemoryDashboard: false, showSchedules: false, settingsSection: null,
@@ -131,20 +135,62 @@ describe('startup before the backend listens', () => {
         expect(text()).toMatch(/Could not check whether GAIA is set up: Server error/);
     });
 
-    it('shows the setup banner when the backend never starts', async () => {
+    it('says how long it has been waiting once the start runs past 10 s', async () => {
+        vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval', 'Date'] });
+        render(<App />);
+        await advance(9_000);
+        expect(text()).toContain('Starting GAIA');
+        expect(text()).not.toContain('Still starting');
+        await advance(5_000);
+        expect(text()).toContain('Starting GAIA');
+        expect(text()).toMatch(/Still starting · 1[34] s/);
+    });
+
+    it('says the background service did not start when the backend never starts, the error under Details', async () => {
         render(<App />);
         await advance(30_000);
         expect(text()).toContain('Starting GAIA');
         await advance(60_000);
-        expect(text()).toMatch(/Could not check whether GAIA is set up: Failed to fetch/);
+        expect(screen.getByRole('heading', { name: "GAIA's background service didn't start" })).toBeInTheDocument();
+        expect(text()).toContain('usually fixes this');
+        expect(screen.getByRole('button', { name: 'Check again' })).toBeInTheDocument();
+        const details = screen.getByText('Details').closest('details')!;
+        expect(details).not.toHaveAttribute('open');
+        expect(details.textContent).toContain('Failed to fetch');
+        expect(text()).not.toMatch(/Could not check whether GAIA is set up/);
+        // Outside the desktop app there is no backend to restart from here.
+        expect(screen.queryByRole('button', { name: 'Restart GAIA' })).toBeNull();
     });
 });
 
-describe('"Check again" on the setup banner', () => {
+describe('a desktop app that gave up starting its backend', () => {
+    const STOPPED: BackendLifecycle = {
+        status: 'stopped', port: null, since: 1, attempt: 0, maxRestarts: 3, nextAttemptAt: null, lastExit: null,
+        lastError: "GAIA's backend program is missing, so GAIA can't start: the app's files are incomplete. Reinstall GAIA.",
+        apiBase: null,
+    };
+
+    it('shows the failure at once with Restart GAIA and the reason, without waiting out the minute', async () => {
+        const restart = vi.fn(async () => {
+            useBackendStore.setState({ lifecycle: { ...STOPPED, status: 'restarting', lastError: null } });
+        });
+        useBackendStore.setState({ lifecycle: STOPPED, restart });
+        render(<App />);
+        await advance(3_000);
+        expect(screen.getByRole('heading', { name: "GAIA's background service didn't start" })).toBeInTheDocument();
+        expect(screen.getByText('Details').closest('details')!.textContent).toContain("GAIA's backend program is missing");
+        fireEvent.click(screen.getByRole('button', { name: 'Restart GAIA' }));
+        await advance(100);
+        expect(restart).toHaveBeenCalledTimes(1);
+        expect(screen.getByRole('button', { name: 'Restarting…' })).toBeDisabled();
+    });
+});
+
+describe('"Check again" on the failure screen', () => {
     async function bannerAfterNeverStarting() {
         render(<App />);
         await advance(61_000);
-        expect(text()).toMatch(/Could not check whether GAIA is set up: Failed to fetch/);
+        expect(text()).toContain("GAIA's background service didn't start");
     }
 
     it('answers at once while the backend is still down, instead of waiting another 60 s', async () => {
@@ -152,7 +198,7 @@ describe('"Check again" on the setup banner', () => {
         const before = mocked.checkSetup.mock.calls.length;
         fireEvent.click(screen.getByRole('button', { name: 'Check again' }));
         await advance(500);
-        expect(text()).toMatch(/Could not check whether GAIA is set up: Failed to fetch/);
+        expect(text()).toContain("GAIA's background service didn't start");
         await advance(5_000);
         // One click is one request; it does not start a background retry loop.
         expect(mocked.checkSetup.mock.calls.length).toBe(before + 1);
@@ -167,14 +213,23 @@ describe('"Check again" on the setup banner', () => {
         }
         await advance(10_000);
         expect(mocked.checkSetup.mock.calls.length).toBe(before + 3);
-        expect(text()).toMatch(/Could not check whether GAIA is set up/);
+        expect(text()).toContain("GAIA's background service didn't start");
     });
 
-    it('clears the banner once the backend is up', async () => {
+    it('opens the app once the backend is up', async () => {
         await bannerAfterNeverStarting();
         backendUp = true;
         fireEvent.click(screen.getByRole('button', { name: 'Check again' }));
         await advance(500);
-        expect(text()).not.toMatch(/Could not check whether GAIA is set up/);
+        expect(text()).not.toContain("GAIA's background service didn't start");
+        expect(text()).toContain('Trip planning');
+    });
+
+    it('opens the app on its own when the backend answers late', async () => {
+        await bannerAfterNeverStarting();
+        backendUp = true;
+        await advance(20_000);
+        expect(text()).not.toContain("GAIA's background service didn't start");
+        expect(text()).toContain('Trip planning');
     });
 });

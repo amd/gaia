@@ -16,6 +16,7 @@ from __future__ import annotations
 import sys
 import threading
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -172,16 +173,29 @@ def test_no_note_when_nothing_waits(home, dialog):
 
 
 def test_every_folder_waits_against_one_shared_deadline(home, dialog, monkeypatch):
-    import time
+    # A fake clock that only moves when a join waits, so a loaded runner can't flake it.
+    clock = {"now": 1000.0}
+    monkeypatch.setattr(
+        protected_folders, "time", SimpleNamespace(monotonic=lambda: clock["now"])
+    )
+    real_join = protected_folders._Probe.join
+    waits = []
 
+    def join(self, timeout=None):
+        waits.append(timeout)
+        real_join(self, 0)
+        if self.is_alive():
+            clock["now"] += timeout
+
+    monkeypatch.setattr(protected_folders._Probe, "join", join)
     monkeypatch.setattr(protected_folders, "MACOS_PROMPT_WAIT_S", 0.3)
     dialog["held"].update({"Documents", "Downloads", "Desktop"})
 
-    started = time.monotonic()
     states = macos_access([home / n for n in ("Documents", "Downloads", "Desktop")])
 
     assert set(states.values()) == {ASKING}
-    assert time.monotonic() - started < 0.6
+    assert len(waits) == 3
+    assert sum(waits) == pytest.approx(0.3)
 
 
 def test_a_folder_macos_denied_says_where_to_allow_it(home, dialog):

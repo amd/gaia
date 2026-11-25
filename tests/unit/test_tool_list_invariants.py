@@ -23,12 +23,12 @@ import types
 import numpy as np
 import pytest
 
-pytest.importorskip("gaia_agent")
+pytest.importorskip("gaiapy")
 
-from gaia_agent import stdio  # noqa: E402
-from gaia_agent.agent import GaiaAgent, GaiaAgentConfig  # noqa: E402
-from gaia_agent.chat_agent import MAX_TOOL_SEARCHES, ChatAgent  # noqa: E402
-from gaia_agent.tool_bundles import FULL_BUNDLES, FULL_CORE_TOOLS  # noqa: E402
+from gaiapy import stdio  # noqa: E402
+from gaiapy.agent import GaiaAgent, GaiaAgentConfig  # noqa: E402
+from gaiapy.chat_agent import MAX_TOOL_SEARCHES, ChatAgent  # noqa: E402
+from gaiapy.tool_bundles import FULL_BUNDLES, FULL_CORE_TOOLS  # noqa: E402
 
 from gaia.agents.base.history import SessionHistory  # noqa: E402
 from gaia.agents.base.memory import MemoryMixin  # noqa: E402
@@ -260,8 +260,11 @@ def test_a_jump_declares_the_tool_on_the_turn_that_needs_it(flagship):
     assert model.requests[0]["slot"] == FULL_TOOLS_SLOT
 
 
-def test_search_tools_declares_what_it_found_on_the_next_step(flagship):
+def test_search_tools_declares_what_it_found_on_the_next_step(flagship, monkeypatch):
     agent, model = flagship
+    monkeypatch.setattr(
+        agent, "_take_screenshot", lambda output_path="": {"status": "success"}
+    )
     _turn(
         agent,
         model,

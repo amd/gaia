@@ -1,6 +1,6 @@
 ---
 title: "Terminal UI — Developer Manual"
-description: "Build gaia-tui from source, drive it from a script through the control API, and debug it"
+description: "Build gaia-cli from source, drive it from a script through the control API, and debug it"
 icon: "wrench"
 ---
 
@@ -15,22 +15,160 @@ Three processes, and knowing which one you are looking at saves most of the
 debugging time:
 
 ```
-gaia-tui            Go. The terminal app and the control API.
-  └─ gaia-agent     Python subprocess, spawned once per session. The agent loop
-                    and every tool.
+gaia-cli            Go. The terminal app and the control API.
+  └─ the agent      A subprocess, spawned once per session. The agent loop and
+                    every tool. Either gaiacpp (C++) or gaia-agent (Python).
        └─ Lemonade  HTTP server. Runs local models and routes cloud chat.
 ```
 
 The readiness gate straddles all three: the **GAIA agent** and **Lemonade** rows
-are checked by the Go side; the **Language model** row shells out to
-`gaia init --check`, which is Python and talks to Lemonade.
+are checked by the Go side. The **Language model** row depends on the agent
+program: for `gaia-agent` it shells out to `gaia init --check`, which is Python
+and talks to Lemonade; for `gaiacpp` the Go side asks Lemonade directly.
+
+### Which agent program runs
+
+The flagship has two programs behind it: the Python one, `gaia-agent`, and the
+native one, `gaiacpp`. `gaia-cli` runs `gaia-agent` unless `gaiacpp` is asked
+for, the same default as the Agent UI and the daemon, so an installed `gaiacpp`
+the user never picked can't take away `--use-claude` or `--resume`. The header says
+which is answering: `agent gaia v<x> (gaiacpp · Beta)` for the native agent, plain
+`agent gaia v<x>` for the Python one.
+
+When `gaiacpp` is asked for by name, it is looked for in this order, and the
+first match wins:
+
+1. The file `GAIA_GAIACPP_PATH` names, when it is set and is a file
+2. `~/.gaia/bin/`, where both apps download it. This is the `bin` folder
+   of GAIA's home, so `GAIA_HOME` (or, without it, `GAIA_CONFIG_DIR`) moves it
+3. The folder `gaia-cli` itself is in
+4. `PATH`
+5. `~/.gaia/agents/gaia/`, then its `bin/`. `catalog.InstallRoot` follows GAIA's
+   home too, as `gaia_agents_dir` does, so the "looked in" list names the real folder
+
+The first four are the Agent UI backend's order
+(`native_flagship_candidates` in `src/gaia/daemon/sidecars/fetch.py`), so both
+apps run the same file for one saved choice. `GAIA_GAIACPP_PATH` is shared with
+the Agent UI; `GAIA_TUI_AGENT` and `--agent-program` are the terminal UI's own.
+
+The copy that is found is checked before it is run (`catalog.VerifyNative`,
+the counterpart of `verified_native_flagship`). When a `gaiacpp.install.json`
+sits beside a file named `gaiacpp` (`gaiacpp.exe` on Windows), which is what the
+Agent UI's download writes, the file's SHA-256 must equal the record's
+`sha256`. A mismatch, an unreadable record or one with no checksum is an error
+that names the file and the record; no other copy and no other program is run
+in its place. No record means no check: an installer's copy or a build of your
+own has none. A path given to `--agent-program` or `GAIA_TUI_AGENT` is checked
+the same way. `TestNativeNamesMatchTheBackend` fails when the record's file
+name or the variable's name drifts from the Python side.
+
+A build in your checkout is **not** picked up by itself: starting `gaia-cli`
+from inside a repository never runs whatever sits in its `cpp/build`.
+
+Which program a launch runs is decided by the first of these that is set
+(`agentChoice` in `internal/cli/root.go`):
+
+| Order | Source | Value | Session |
+|---|---|---|---|
+| 1 | `--agent-program` | A name or a path, from the table below | Pinned |
+| 2 | `GAIA_TUI_AGENT` | The same | Pinned |
+| 3 | `flagship_agent` in `~/.gaia/config.json` | `gaiapy` (runs `gaia-agent`) or `gaiacpp`; any other value stops the launch with an error naming the file and the key | Free |
+| 4 | Nothing | `gaia-agent`, even when `gaiacpp` is installed | Free |
+
+It applies to the flagship only, so `gaia-cli run email` ignores it and never
+reads the saved choice. A named or saved program that is not found is an error
+that lists where it looked; the other program is never run in its place.
+`--mock` replaces whichever was chosen, skips the saved choice, and pins the
+session.
+
+`/agent` in the chat lists both programs and `/agent gaiapy` / `/agent gaiacpp`
+relaunches the flagship on the other program in the running session
+(`switchProgram` in `internal/ui/root/agentprogram.go`). The program is
+resolved again from what is installed (`catalog.ForFlagship`), then goes
+through the readiness gate and `launchAgent` like an `/agents` switch. Only
+once it is running is `flagship_agent` written (`commitProgramSwitch`, through
+`preflight.WriteFlagshipAgent`: the same locked read-modify-write as the other
+shared keys, and the key the Agent UI and `gaia config set flagship_agent`
+use), so a switch that is cancelled at the gate or fails to start saves
+nothing. In a pinned session the choice is saved and the session is left
+alone. The switch
+to `gaiacpp` is refused, with nothing saved, in a `--use-claude` session and in
+a reopened one, the two cases a `gaiacpp` launch refuses on the command line.
+
+#### Downloading gaiacpp
+
+A `gaiacpp` that is missing (`catalog.MissingProgramError`) or fails its check
+(`catalog.NativeIntegrityError`) is offered as a download rather than refused
+(`internal/ui/root/programfetch.go`). The terminal UI does not fetch it itself:
+`internal/gaiaprogram` shells out to the hidden `gaia agent-program` command,
+which wraps `gaia.daemon.sidecars.gaiacpp_fetch`, the code behind the Agent UI's
+`/api/agent-programs` routes. One implementation owns the release lookup, the
+checksum check, the version check and the install record.
+
+| Command | Prints | Exit |
+|---|---|---|
+| `gaia agent-program status --json` | One object: `installed`, `path`, `target`, `can_download`, `size_bytes`, `version`, `reason`, `retry` (`true` when the release could not be reached) | `0` when it can be downloaded, else `1` |
+| `gaia agent-program download --json` | One object per line: `progress` (`bytes_done`, `bytes_total`), then `done` (`path`) or `failed` (`error`) | `0` installed, `1` failed |
+
+The offer is answered by Enter or Esc only while the chat is idle
+(`ChatModel.Idle`: no turn running, no panel open, nothing typed), so typing
+over it never answers it. Progress rewrites one status line
+(`ChatModel.ReplaceStatus`). After a download `switchProgram` runs again with
+`programFetched` set, so a `gaiacpp` that is still not found is an error and
+not a second offer. `FlagshipModel.WithProgramFetch` replaces both calls in
+tests; `TestAgentProgramSwitchEndToEnd` drives the whole path.
+
+To exercise the download without a published release, point
+`GAIA_GAIACPP_ASSETS_URL` at a folder (`file://…` or `https://…`) holding
+`gaiacpp-<platform>` and `gaiacpp-SHA256SUMS.txt`.
+
+At launch, a saved `gaiacpp` that fails the same two ways opens
+`internal/ui/agentrecovery` (`recoverSavedAgent` in `internal/ui/agentrecover.go`)
+before the main program: download again, use the Python agent, or quit. The
+Python agent runs only when it is picked, and the pick is then saved. A flag or
+`GAIA_TUI_AGENT` is a demand for that launch and still fails with the error, as
+does a launch with no terminal to ask in. The control API names the screen
+`agent-recovery`; it is a separate Bubble Tea program, so the control server
+restarts when the main session takes over.
+
+| Value | What runs |
+|---|---|
+| `gaiacpp` | The first `gaiacpp` in the five places above, then `cpp/build/Debug`, `cpp/build/Release` and `cpp/build` in the working directory and up to seven folders above it |
+| A path to `gaiacpp` | That file. It counts as `gaiacpp` when it is named `gaiacpp` or `gaiacpp-<platform>`, as the release assets are |
+| `gaia-agent` or `gaiapy` | The Python agent as installed: the first `gaia-agent` on `PATH`, in a finished install under `~/.gaia/agents/gaia/`, or in `cpp/build`. On an install whose record puts the flagship behind the daemon (`artifact_kind: binary`) it stays behind the daemon, and the first chat frame says so, because the `gaia-agent` file in that install is the daemon's HTTP sidecar |
+| A path to `gaia-agent` | That file, spawned by `gaia-cli` itself, even on a daemon install |
+
+On Windows `gaiacpp.exe` and `gaia-agent.exe` are accepted for the two names.
+`gaiacpp` is always a child process of `gaia-cli`, whatever the install record
+says.
+
+```bash
+GAIA_TUI_AGENT=gaia-agent gaia-cli                      # the Python agent
+gaia-cli --agent-program ../cpp/build/Release/gaiacpp   # a build of your own
+```
+
+What changes with `gaiacpp` (`catalog.Agent.Native`):
+
+| | `gaiacpp` | `gaia-agent` |
+|---|---|---|
+| Launched as | `gaiacpp --stdio`, plus `--dev`, `--full-access`, `--accept-edits`, `--model <id>` as needed | `gaia-agent`, plus the same and `--use-claude`, `--claude-model <id>` |
+| Claude | Not available. `--use-claude` is refused before any screen opens, and `/model <claude id>` is refused in the chat; neither reaches the agent, which would exit on the flag | Available |
+| Model server address | Passed in its environment: `LEMONADE_BASE_URL`, and `LEMONADE_API_KEY` when the server has a key. Inherited `LEMONADE_BASE_URL`, `LEMONADE_API_KEY`, `GAIA_BASE_URL` and `GAIA_API_KEY` are removed first, so the child only ever gets the address and key `gaia-cli` resolved | Reads GAIA's saved choice itself |
+| Language model row | Lemonade lists the launch model: a cloud model its provider serves, or a local one that is downloaded (`Gemma-4-E4B-it-GGUF` when none was chosen). Nothing is loaded and no embedding model is needed | `gaia init --check --load` |
+
+Setup still needs the Python `gaia` CLI on either agent: installing Lemonade
+from the gate (`f`), `/setup`, and adding a model from a link.
+
+`gaia-cli chat --subprocess "gaiacpp --stdio …"` also reads the canonical
+events; without `--stdio` it is refused, because `gaiacpp` would open its own
+prompt on the pipe.
 
 <Warning>
 **The agent subprocess is spawned once and outlives your edits.** Change Python
 source and the running TUI keeps executing the old code — a measurement taken
 without restarting is a measurement of the previous build. Restart the TUI
-after touching anything under `src/gaia/` or `hub/agents/`. This is the single
-easiest way to waste an hour.
+after touching anything under `src/gaia/` or `hub/agents/`, or after rebuilding
+`gaiacpp`. This is the single easiest way to waste an hour.
 </Warning>
 
 ## Building
@@ -39,7 +177,7 @@ Needs `git`, [Go](https://go.dev/dl/), and a Python env with `gaia` installed.
 
 ```bash
 cd gaia && uv venv && uv pip install -e .
-cd tui && make build          # -> tui/bin/gaia-tui (.exe on Windows)
+cd tui && make build          # -> tui/bin/gaia-cli (.exe on Windows)
 ```
 
 Other targets: `test`, `test-race`, `lint`, `vet`, `cover`, `mock-agent`,
@@ -51,8 +189,17 @@ For a dev run against your checkout:
 scripts/dev/run-tui.sh --dev --control
 ```
 
-`--dev` shows per-turn timings, steps, and tool arguments **on screen**;
-`--trace=<path>` writes the same events to JSONL instead. They are independent.
+There is one screen. `--dev` changes nothing on it: it turns on the control API
+(like `--control`), logs that API's input counts, state changes and waits, and
+the transport's diagnostics, to `$GAIA_TUI_HOME/gaia-tui.log`, and puts agents
+the TUI spawns at DEBUG in `~/.gaia/logs/gaia-agent.log`. Debug detail lives
+elsewhere:
+
+| Where | What |
+|---|---|
+| `Ctrl+O` | Each call's command or code, timings, full outcomes, and the turn's metrics (when the agent ran with `GAIA_TURN_LOG`) |
+| `--trace=<path>` | Every event as JSONL, tool arguments and results included. A traced launch also puts agents the TUI spawns at DEBUG in `~/.gaia/logs/gaia-agent.log` |
+| `gaia-tui.log` | Transport diagnostics under `--dev`. Metadata only, never input contents |
 
 To profile the TUI's own startup and rendering, add `--pprof 127.0.0.1:6060`
 (loopback addresses only) and read it with Go's profiler:
@@ -68,8 +215,7 @@ than source. When testing an agent from a checkout, set the matching mode on the
 TUI launch so its ensure request agrees:
 
 ```bash
-GAIA_GAIA_AGENT_MODE=dev gaia-tui     # flagship
-GAIA_EMAIL_AGENT_MODE=dev gaia-tui    # email
+GAIA_GAIA_AGENT_MODE=dev gaia-cli     # flagship
 ```
 
 Starting a dev sidecar separately while the TUI still defaults to `user` creates
@@ -114,9 +260,58 @@ upstream has the fix.
 
 A status or error line is one sentence on what is wrong plus the one next step.
 Daemon errors implement `daemon.Briefer`; render `daemon.Brief(err)` on the line
-and keep `err.Error()` (route, alternatives, log path) for a `d details` pane. In
-`--dev`, harness lines the user view hides (`Step 4/50`) show as they are, with
-no `[harness]` tag.
+and keep `err.Error()` (route, alternatives, log path) for a `d details` pane.
+Harness lines (`Step 4/50`, a plan's "Following the plan to …" headline,
+`Plan: a → b`) never reach the screen in any mode; they are in the trace.
+
+### The chat view
+
+A turn renders as one bullet per event (`internal/ui/chat/workview.go`), led by
+what the action does in plain words. `headline()` picks the words, best first:
+
+1. the call's `description` (or `purpose`) argument, sanitised by
+   `cleanDescription` and refused if it is placeholder text;
+2. the goal the agent announced before the call, if it reads as a goal
+   (`goalLike`): not a stage line ending in `-ing`, not the model musing, not a
+   template;
+3. a summary derived from the tool and its parsed arguments (`describeCall` in
+   `actions.go`), e.g. `Run a 42-line Python script that reads 3 spreadsheets`.
+
+What is running now is not a bullet but the status line, drawn by `View()`
+outside the viewport (`statusLine`). Motion (`motion.go`) rides the spinner's
+20 fps tick and redraws only that line, a pending prompt's title, and the
+finished turn's recap for one sweep. A tick never rebuilds the transcript.
+Turn it off with `reduced_motion` in `~/.gaia/config.json` or
+`GAIA_TUI_REDUCED_MOTION=1`; `NO_COLOR` and a non-TTY stdout turn it off too.
+
+Files a turn changed are found by `findDeliverables` (`deliverables.go`) and
+peeked without running anything: sheet names and row counts for xlsx, slide
+count for pptx, word count for docx and text, rows for csv.
+
+Golden frames of whole screens live in `internal/ui/chat/testdata/frames/`.
+After an intended change, regenerate them and review the diff:
+
+```bash
+cd tui && go test ./internal/ui/chat -run TestFrame -update
+```
+
+### Delegated work in the work log
+
+`delegate_task` is drawn as one bullet, like any other tool
+(`internal/ui/chat/delegation.go`). It is recognised by the shape of its
+result — a `summary` string and a `helpers` list — never by its narration,
+which differs between `gaiacpp` ("Handing 4 tasks to helpers") and
+`gaia-agent` ("Handing work to helpers").
+
+| When | What is drawn |
+|---|---|
+| Running | A `status` with `phase: "helpers"` is stored on the newest open tool and shown on the status line after its headline, with the word "helpers" dropped: `Handing 4 tasks to helpers · 3 of 4 done, 1 failed…`. It is never a bullet of its own and never becomes the model phase. With no tool open it is an ordinary status |
+| Finished, folded | The `└` line is the result's `summary`. `status: "partial"` draws it in the warning colour and leaves the bullet unfailed; `status: "error"` is a failed step (`error: …` while the turn runs, `✗ failed: …` once it ends). When any helper is not `ok`, a faint `· Ctrl+O details` follows the summary if the row has room for all of it. Two delegations in a row are never joined into one bullet |
+| Finished, `Ctrl+O` | The summary, then one clipped row per helper, in id order: `✓` / `~` / `✗`, the id, the task in a column of about two fifths of the row, then the first line of `conclusion`. A `partial` helper reads `stopped short (<reason>): …` and a `failed` one `failed: <reason>`, with `reason` in plain words (`step_limit` is "out of steps"). Past 16 helpers the list ends `… N more` |
+
+The result's `advice` and `error` are written for the model and are never
+drawn. A result the agent cut down on the wire (`{"truncated": true, …}`) has
+no `helpers`, so only the summary line is drawn, from the event's `preview`.
 
 ## The control API
 
@@ -155,6 +350,14 @@ with `cannot unmarshal string into Go struct field keysRequest.keys of type
 
 `text` types into the composer but does **not** submit. Follow it with
 `{"keys":["enter"]}`.
+
+To answer an approval prompt, wait until it is on screen and send `{"keys":["y"]}`
+or `{"keys":["n"]}`: a batch that ends on the letter answers as soon as it lands.
+"Always" takes two keys, `{"keys":["a","enter"]}`. A sentence sent with `text`
+while a prompt is up goes to the composer and never answers it, and with text in
+the composer the
+letters are typed too — answer with `{"keys":["tab","enter"]}` (once),
+`["tab","tab","enter"]` (always, where offered) or `["esc"]` (deny).
 
 ### Wait, never sleep
 
@@ -276,7 +479,7 @@ colour support, and the TUI then emits no escape sequences at all. It reads as
 | What | Where |
 |---|---|
 | TUI control/state log | `$GAIA_TUI_HOME/gaia-tui.log` |
-| Agent debug log | `~/.gaia/logs/gaia-agent.log` |
+| Agent debug log | `~/.gaia/logs/gaia-agent.log` (`gaia-agent` only; `gaiacpp` writes its log lines to stderr, which the TUI shows if the process exits with an error) |
 | Lemonade (embedded) | `~/.gaia/lemonade/lemond.log` |
 | Event trace | `~/.gaia/traces/<ts>-<agent>.jsonl` via `--trace` |
 

@@ -7,7 +7,8 @@ Two retrieval pipelines are measured, because users get both:
 * ``sdk`` — :meth:`RAGSDK._search_chunks`, plain dense top-k (what
   ``RAGSDK.query`` puts in front of the model);
 * ``agent`` — the ``query_documents`` tool exactly as the chat agents run it:
-  search-key expansion, keyword boosting, and the adaptive chunk cutoff.
+  search-key expansion, dense and keyword rankings merged by reciprocal rank
+  fusion, and the adaptive chunk cutoff.
 """
 
 from __future__ import annotations
@@ -28,6 +29,7 @@ from gaia.eval.retrieval.locate import (
     LabelError,
     chunk_hits,
     locate_chunks,
+    norm,
     resolve_evidence,
     token_overlap,
 )
@@ -105,7 +107,7 @@ def make_rag(
 def agent_query_tool(rag) -> Callable[[str], dict]:
     """The registered ``query_documents`` tool, bound to ``rag`` as the flagship binds it."""
     try:
-        from gaia_agent.agent import (  # pylint: disable=import-outside-toplevel
+        from gaiapy.agent import (  # pylint: disable=import-outside-toplevel
             GaiaAgent,
         )
     except ImportError as e:
@@ -301,7 +303,7 @@ class BenchIndex:
                 )
             hint = 0
             if ev.get("near"):
-                hint = doc.text.find(" ".join(ev["near"].split()))
+                hint = doc.text.find(norm(ev["near"]))
                 if hint < 0:
                     raise LabelError(
                         f"{q.id}: 'near' text is not in {ev['doc']} as indexed"

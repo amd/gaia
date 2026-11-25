@@ -7,30 +7,15 @@
     padding: 0 0 4px;
 }
 
-.side-rail-section + .side-rail-section {
-    border-top: 1px solid var(--border-light);
-}
-
 .side-rail-section-head {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    width: 100%;
-    padding: 10px 4px 6px;
-    font-size: 12.5px;
-    font-weight: 600;
-    color: var(--text-primary);
-    text-align: start;
-}
-
-.side-rail-chevron {
+    margin: 0;
+    padding: 4px 0 6px;
+    font-size: 11.5px;
+    font-weight: 500;
     color: var(--text-muted);
-    transition: transform var(--duration-fast) var(--ease);
 }
 
-.side-rail-chevron.open { transform: rotate(90deg); }
-
-.side-rail-section-body { padding: 0 4px 10px; }
+.side-rail-section-body { padding: 0 0 10px; }
 
 .side-rail-list {
     list-style: none;
@@ -65,7 +50,9 @@
     font-size: 12.5px;
     color: var(--text-primary);
     overflow: hidden;
-    text-overflow: ellipsis;
+    text-overflow: clip;
+    animation: fade-cut-inline both;
+    animation-timeline: scroll(self inline);
     white-space: nowrap;
 }
 
@@ -77,11 +64,13 @@
     text-decoration: none;
 }
 
-/* A flex item's bare text never gets an ellipsis, so the title needs its own box. */
+/* A flex item's bare text can't fade where it's cut, so the title needs its own box. */
 .side-rail-link-text {
     min-width: 0;
     overflow: hidden;
-    text-overflow: ellipsis;
+    text-overflow: clip;
+    animation: fade-cut-inline both;
+    animation-timeline: scroll(self inline);
     white-space: nowrap;
 }
 
@@ -93,7 +82,9 @@
     font-size: 11.5px;
     color: var(--text-muted);
     overflow: hidden;
-    text-overflow: ellipsis;
+    text-overflow: clip;
+    animation: fade-cut-inline both;
+    animation-timeline: scroll(self inline);
     white-space: nowrap;
 }
 
@@ -121,12 +112,6 @@
 .side-rail-item-gone .side-rail-name {
     color: var(--text-muted);
     text-decoration: line-through;
-}
-
-.side-rail-pending {
-    margin: 4px 4px 0;
-    font-size: 12.5px;
-    color: var(--text-secondary);
 }
 
 .side-rail-error {

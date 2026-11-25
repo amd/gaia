@@ -51,6 +51,7 @@ beforeEach(() => {
     mockedApi.getMessageCount.mockImplementation(async () => server.length);
     mockedApi.getActiveRuns.mockResolvedValue({ session_ids: [], queued: [], awaiting_user: {} });
     mockedApi.getContextUsage.mockResolvedValue({ available: false, reason: 'No answer yet.' });
+    mockedApi.getStartScreen.mockResolvedValue({ agent_problem: null } as never);
     mockedApi.getPermissions.mockResolvedValue({ session_id: 'session', mode: 'ask', grants: [] });
     mockedApi.listDocuments.mockResolvedValue({ documents: [], total: 0, total_size_bytes: 0, total_chunks: 0 });
     mockedApi.cancelStream.mockResolvedValue(undefined as never);
@@ -175,7 +176,8 @@ describe('a failed turn (#599)', () => {
         await act(async () => {
             sends[0].cbs.onDone({ type: 'done', content: 'Hello!', message_id: 2 } as never);
         });
-        expect(screen.queryByRole('button', { name: 'Try again' })).toBeNull();
+        // The failed-turn button; the answer's own retry icon shares its name.
+        expect(document.querySelector('.msg-try-again')).toBeNull();
         // Let the end-of-turn reload land here, not in the next test.
         await waitFor(() => expect(mockedApi.getMessages).toHaveBeenCalledTimes(2));
     });
@@ -265,7 +267,8 @@ describe('Try again on a failed turn', () => {
         const last = () => useChatStore.getState().messages[useChatStore.getState().messages.length - 1];
         await waitFor(() => expect(last()?.content).toContain('did not start this answer'));
         expect(last()?.failed).toBe(false);
-        expect(screen.queryByRole('button', { name: 'Try again' })).toBeNull();
+        // The failed-turn button; the answer's own retry icon shares its name.
+        expect(document.querySelector('.msg-try-again')).toBeNull();
     });
 
     it('sends once when Try again is clicked twice', async () => {

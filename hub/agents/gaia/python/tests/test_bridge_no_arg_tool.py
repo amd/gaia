@@ -6,7 +6,7 @@ The real agent loop and the real stdio turn feed a messaging bridge channel.
 A no-argument tool that runs far past ``GAIA_STREAM_TIMEOUT`` must be on the
 wire as a running tool, so the bridge's idle watchdog leaves it alone.
 
-Lives with the flagship's tests because it drives ``gaia_agent.stdio``.
+Lives with the flagship's tests because it drives ``gaiapy.stdio``.
 Driven on a fake clock; no model server is contacted.
 """
 
@@ -15,7 +15,7 @@ import threading
 import time
 from unittest.mock import MagicMock, patch
 
-from gaia_agent import stdio
+from gaiapy import stdio
 
 from gaia.messaging.bridge import (
     CONTROL_CANCEL,

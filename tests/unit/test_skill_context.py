@@ -21,6 +21,7 @@ from unittest.mock import patch
 
 import pytest
 
+from gaia.agents.base import agent as agent_module
 from gaia.agents.base.agent import Agent
 from gaia.security import PathValidator
 from gaia.skills import context as skill_context
@@ -29,6 +30,8 @@ from gaia.skills.errors import SkillValidationError
 from gaia.skills.manager import SkillManager
 from gaia.skills.permissions import Permission
 from gaia.skills.tiers import enforce_tier_ceiling
+
+pytestmark = pytest.mark.usefixtures("user_terminal")
 
 
 class _HostAgent(Agent):
@@ -579,6 +582,7 @@ def test_a_timed_out_call_deletes_its_temp_folder_once_the_worker_ends(
         "folder = ctx.temp_dir()\n"
         "(folder / 'part.txt').write_text('x')\n"
         "STATE['folder'] = folder\n"
+        "STATE['ready'].set()\n"
         "STATE['go'].wait(30)\n"
         "(folder / 'late.txt').write_text('still mine')\n"
         "STATE['wrote_late'] = True\n"
@@ -586,8 +590,20 @@ def test_a_timed_out_call_deletes_its_temp_folder_once_the_worker_ends(
     )
     _load(agent, tmp_path, "slow-probe", ["scratch:write"], body)
     module = sys.modules["gaia_skill_slow_probe_tools"]
-    module.STATE = {"go": threading.Event()}
+    ready = threading.Event()
+    module.STATE = {"go": threading.Event(), "ready": ready}
     monkeypatch.setattr(agent, "_bounded_tool_timeout", lambda *a: 0.3)
+    # The timeout clock starts only once the worker holds its folder, so a
+    # slow-starting worker on a loaded runner can't time out before making it.
+    real_clock = agent_module.awake_clock
+
+    def monotonic():
+        ready.wait(30)
+        return real_clock.monotonic()
+
+    monkeypatch.setattr(
+        agent_module, "awake_clock", SimpleNamespace(monotonic=monotonic)
+    )
 
     result = agent._execute_tool(
         "slow-probe/probe", {"file_path": str(allowed / "in.txt")}

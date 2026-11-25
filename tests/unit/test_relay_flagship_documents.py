@@ -31,15 +31,14 @@ from gaia.ui import permissions as session_permissions
 from gaia.ui import session_environment
 from gaia.ui._chat_helpers import _stream_chat_impl
 from gaia.ui.database import ChatDatabase
-from gaia.ui.email_sidecar import daemon_client as daemon_client_module
-from gaia.ui.email_sidecar import relay
-from gaia.ui.email_sidecar.profiles import (
-    EMAIL_PROFILE,
+from gaia.ui.models import ChatRequest
+from gaia.ui.sidecar import daemon_client as daemon_client_module
+from gaia.ui.sidecar.profiles import (
+    _NO_PROFILE,
     GAIA_PROFILE,
     documents_supported,
 )
-from gaia.ui.email_sidecar.proxy import SidecarProxy
-from gaia.ui.models import ChatRequest
+from gaia.ui.sidecar.proxy import SidecarProxy
 
 pytestmark = pytest.mark.allow_network
 
@@ -52,8 +51,8 @@ def test_only_a_flagship_at_2_16_takes_documents(version, expected):
     assert documents_supported(GAIA_PROFILE, version) is expected
 
 
-def test_email_never_takes_documents():
-    assert documents_supported(EMAIL_PROFILE, "9.9") is False
+def test_a_profile_without_the_floor_never_takes_documents():
+    assert documents_supported(_NO_PROFILE, "9.9") is False
 
 
 class _Rag:
@@ -61,11 +60,22 @@ class _Rag:
 
     def __init__(self, validator):
         self.validator = validator
+        self.indexed_files: set = set()
+        self.removed: list = []
 
     def index_document(self, path):
         if not self.validator.is_path_allowed(path, prompt_user=False):
             return {"success": False, "error": f"Access denied: {path}"}
+        self.indexed_files.add(path)
         return {"success": True, "num_chunks": 1}
+
+    def is_full(self):
+        return False
+
+    def remove_document(self, path):
+        self.indexed_files.discard(path)
+        self.removed.append(path)
+        return True
 
 
 class _DocAgent:
@@ -101,11 +111,11 @@ class _DocAgent:
 def live_gaia_sidecar(monkeypatch, tmp_path):
     """The real flagship ``/v1/gaia`` app on a real port, with a document agent."""
     uvicorn = pytest.importorskip("uvicorn")
-    pytest.importorskip("gaia_agent")
+    pytest.importorskip("gaiapy")
     import requests
-    from gaia_agent import caller_auth
-    from gaia_agent import server as server_mod
-    from gaia_agent import session_registry as sr
+    from gaiapy import caller_auth
+    from gaiapy import server as server_mod
+    from gaiapy import session_registry as sr
 
     import gaia.ui.turn_insights as turn_insights
     from gaia.daemon.sidecars.manager import find_free_port
@@ -115,6 +125,7 @@ def live_gaia_sidecar(monkeypatch, tmp_path):
     LemonadeManager.reset()
     monkeypatch.delenv(caller_auth.TOKEN_FILE_ENV_VAR, raising=False)
     monkeypatch.delenv(caller_auth.TOKEN_ENV_VAR, raising=False)
+    monkeypatch.setenv(caller_auth.ALLOW_NO_TOKEN_ENV_VAR, "1")
     # Context measurement is exercised by the relay after every turn. Keep it
     # local: the document contract does not need a real Lemonade health check.
     monkeypatch.setattr(turn_insights, "_loaded_chat_model", lambda *_args: None)
@@ -277,6 +288,7 @@ def chat(monkeypatch, sidecar_flagship_registry, tmp_path):
             path.name, str(path), hashlib.sha256(content).hexdigest(), len(content)
         )
         db.attach_document(session_id, doc["id"])
+        return doc["id"]
 
     yield SimpleNamespace(db=db, send=send, attach=attach, session_id=session_id)
     session_permissions.reset_all()
@@ -329,6 +341,94 @@ def test_a_document_attached_on_turn_three_is_read_by_the_relayed_flagship(
         agents[0].path_validator.is_path_allowed(str(sibling), prompt_user=False)
         is False
     )
+
+
+@pytest.mark.parametrize("remove", ["detach", "delete"])
+def test_a_document_taken_off_the_chat_is_no_longer_searched_by_the_relayed_flagship(
+    monkeypatch, live_gaia_sidecar, chat, tmp_path, remove
+):
+    base_url, agents, api_version = live_gaia_sidecar
+    _point_ui_at(monkeypatch, base_url, api_version)
+    kept = tmp_path / "kept.txt"
+    kept.write_text("KEPT-1", encoding="utf-8")
+    gone = tmp_path / "gone.txt"
+    gone.write_text("GONE-2", encoding="utf-8")
+    chat.attach(kept)
+    gone_id = chat.attach(gone)
+    assert _answer(chat.send("codes?")) == "GONE-2 | KEPT-1"
+
+    if remove == "detach":
+        chat.db.detach_document(chat.session_id, gone_id)
+    else:
+        chat.db.delete_document(gone_id)
+    answer = _answer(chat.send("codes?"))
+
+    assert answer == "KEPT-1"
+    [agent] = agents
+    assert agent.rag.removed == [str(gone.resolve())]
+
+
+def test_a_file_dropped_into_an_earlier_message_stays_searchable(
+    monkeypatch, live_gaia_sidecar, chat, tmp_path
+):
+    import gaia.ui.utils as ui_utils
+
+    base_url, agents, api_version = live_gaia_sidecar
+    _point_ui_at(monkeypatch, base_url, api_version)
+    uploads = tmp_path / "uploads"
+    uploads.mkdir()
+    monkeypatch.setattr(ui_utils, "uploads_dir", lambda: uploads)
+    (uploads / "report.txt").write_text("UPLOAD-4", encoding="utf-8")
+    linked = "Read this [report.txt](/api/files/uploads/report.txt)"
+    chat.db.add_message(chat.session_id, "user", linked)
+    assert _answer(chat.send(ui_utils.resolve_upload_links(linked))) == "UPLOAD-4"
+
+    chat.db.add_message(chat.session_id, "user", "and section 3?")
+    answer = _answer(chat.send("and section 3?"))
+
+    assert answer == "UPLOAD-4"
+    [agent] = agents
+    assert agent.rag.removed == []
+
+
+def test_an_attachment_taken_off_the_chat_leaves_the_relayed_flagship(
+    monkeypatch, live_gaia_sidecar, chat, tmp_path
+):
+    """A composer upload is listed as the chat's document; detaching it ends its use (#8812)."""
+    import gaia.ui.utils as ui_utils
+
+    base_url, agents, api_version = live_gaia_sidecar
+    _point_ui_at(monkeypatch, base_url, api_version)
+    uploads = tmp_path / "uploads"
+    uploads.mkdir()
+    monkeypatch.setattr(ui_utils, "uploads_dir", lambda: uploads)
+    (uploads / "brief.txt").write_text("BRIEF-9", encoding="utf-8")
+    linked = ui_utils.resolve_upload_links(
+        "Read this [brief.txt](/api/files/uploads/brief.txt)"
+    )
+    chat.db.add_message(chat.session_id, "user", linked)
+    assert _answer(chat.send(linked)) == "BRIEF-9"
+    [doc] = chat.db.get_session_documents(chat.session_id)
+
+    chat.db.detach_document(chat.session_id, doc["id"])
+    chat.db.add_message(chat.session_id, "user", "code?")
+
+    assert _answer(chat.send("code?")) == "no documents are indexed"
+
+
+def test_detaching_every_document_empties_the_relayed_flagship(
+    monkeypatch, live_gaia_sidecar, chat, tmp_path
+):
+    base_url, agents, api_version = live_gaia_sidecar
+    _point_ui_at(monkeypatch, base_url, api_version)
+    doc = tmp_path / "only.txt"
+    doc.write_text("ONLY-3", encoding="utf-8")
+    doc_id = chat.attach(doc)
+    assert _answer(chat.send("code?")) == "ONLY-3"
+
+    chat.db.detach_document(chat.session_id, doc_id)
+
+    assert _answer(chat.send("code?")) == "no documents are indexed"
 
 
 def test_an_older_flagship_says_documents_need_an_update(
@@ -495,32 +595,3 @@ def test_gaia_allowed_paths_still_narrows_a_relayed_folder(
 
     [agent] = agents
     assert str(folder.resolve()) not in agent.built_with["allowed_paths"]
-
-
-def test_email_turns_never_carry_documents(monkeypatch, tmp_path):
-    class _Handle:
-        api_version = "2.99"
-
-        def proxy(self):
-            class _Proxy:
-                def init(self):
-                    return 200, {}
-
-            return _Proxy()
-
-    monkeypatch.setattr(daemon_client_module, "acquire_handle", lambda _id: _Handle())
-    calls: list = []
-    monkeypatch.setattr(relay, "relay_query", lambda *a, **k: calls.append(k))
-    from gaia.ui.sse_handler import SSEOutputHandler
-
-    chat_helpers_module._dispatch_sidecar_query(
-        SSEOutputHandler(),
-        ChatRequest(session_id="s", message="triage", agent_type="email"),
-        [],
-        None,
-        "email",
-        documents=[str(tmp_path / "a.txt")],
-    )
-
-    [kwargs] = calls
-    assert kwargs["documents"] is None

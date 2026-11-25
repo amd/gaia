@@ -1,11 +1,13 @@
 package client
 
 import (
+	"errors"
 	"fmt"
 
 	"github.com/amd/gaia/tui/internal/catalog"
 	"github.com/amd/gaia/tui/internal/daemon"
 	"github.com/amd/gaia/tui/internal/event"
+	"github.com/amd/gaia/tui/internal/lemonade"
 )
 
 // ForAgentOptions configures the transport built by ForAgent.
@@ -50,18 +52,18 @@ type ForAgentOptions struct {
 }
 
 // Flags the flagship's stdio child takes for a listed session. Must match
-// gaia_agent.stdio's parser; pinned by tests/fixtures/stdio/gaia_stdio_wire.json.
+// gaiapy.stdio's parser; pinned by tests/fixtures/stdio/gaia_stdio_wire.json.
 const (
 	HistoryFileFlag = "--history-file"
 	SessionKindFlag = "--session-kind"
 )
 
 // HistoryFileEnv pins the flagship's transcript to one file for every launch
-// (gaia_agent.stdio reads the same variable as --history-file's default).
+// (gaiapy.stdio reads the same variable as --history-file's default).
 const HistoryFileEnv = "GAIA_HISTORY_FILE"
 
 // FullAccessFlag is the argument that starts a subprocess agent with
-// prompts off. Must match the flag gaia_agent.stdio's parser declares, and
+// prompts off. Must match the flag gaiapy.stdio's parser declares, and
 // SubprocessClient.FullAccessAtLaunch scans argv for exactly this string.
 // Deliberately the same name as the TUI's own flag: an agent too old to know
 // it exits on the unrecognized argument instead of starting with prompts on
@@ -71,7 +73,7 @@ const FullAccessFlag = "--full-access"
 
 // AcceptEditsFlag starts a subprocess agent in "accept edits" mode. Only ever
 // added on a respawn, to carry a mode the user picked with Shift+Tab over to
-// the replacement child; must match gaia_agent.stdio's parser.
+// the replacement child; must match gaiapy.stdio's parser.
 const AcceptEditsFlag = "--accept-edits"
 
 // UseClaudeFlag is the argument that points a subprocess agent at Anthropic's
@@ -83,6 +85,13 @@ const UseClaudeFlag = "--use-claude"
 // ClaudeModelFlag selects the Claude model; forwarded only alongside
 // UseClaudeFlag, followed by the model id as its own argv entry.
 const ClaudeModelFlag = "--claude-model"
+
+// NativeClaudeUnavailable is what a user is told when Claude is asked of the
+// native agent, which has no Claude provider. One text for the launch flag and
+// for /model, so the two cannot disagree.
+const NativeClaudeUnavailable = "Claude models are not available with the native GAIA agent (gaiacpp). " +
+	"Choose a model your Lemonade server offers instead — one on this PC, or a cloud " +
+	"provider such as Fireworks AI or the AMD LLM Gateway — with /provider."
 
 // ForAgent builds the transport a catalog entry declares.
 //
@@ -116,7 +125,7 @@ func ForAgent(agent catalog.Agent, opts ForAgentOptions) (AgentClient, error) {
 			return nil, fmt.Errorf(
 				"agent %q runs over the daemon transport, which cannot switch inference "+
 					"backends — --use-claude only works for an agent the TUI spawns itself. "+
-					"Drop the flag, or run the flagship (`gaia-tui`), which is one",
+					"Drop the flag, or run the flagship (`gaia-cli`), which is one",
 				agent.ID)
 		}
 		return NewSSEClient(agent.ID, daemon.New(daemon.Options{Logf: opts.Logf}), SSEOptions{
@@ -141,13 +150,17 @@ func ForAgent(agent catalog.Agent, opts ForAgentOptions) (AgentClient, error) {
 		}
 		// Appended, never mutated in place: BinaryArgs belongs to the catalog
 		// entry, and appending to it directly would let a full slice alias the
-		// catalog's backing array and leak --dev into the next launch.
+		// catalog's backing array and leak --dev into the next launch. A traced
+		// launch is a debugging one too, so it gets the agent's DEBUG log.
 		args := agent.BinaryArgs
-		if opts.Dev && len(agent.DevArgs) > 0 {
+		if (opts.Dev || opts.Trace != nil) && len(agent.DevArgs) > 0 {
 			args = append(append([]string{}, args...), agent.DevArgs...)
 		}
 		if opts.FullAccess {
 			args = append(append([]string{}, args...), FullAccessFlag)
+		}
+		if opts.UseClaude && agent.Native {
+			return nil, errors.New(NativeClaudeUnavailable)
 		}
 		if opts.UseClaude {
 			extra := []string{UseClaudeFlag}
@@ -156,11 +169,21 @@ func ForAgent(agent catalog.Agent, opts ForAgentOptions) (AgentClient, error) {
 			}
 			args = append(append([]string{}, args...), extra...)
 		}
-		if opts.Model != "" {
+		model := opts.Model
+		if model == "" && agent.Native && agent.ID == catalog.FlagshipID {
+			// gaiacpp reads no GAIA config: name GAIA's local chat model, which
+			// on a small PC is not the Gemma it would otherwise start on.
+			model = lemonade.LocalChatModel()
+		}
+		if model != "" {
 			if agent.ID != catalog.FlagshipID {
 				return nil, fmt.Errorf("model override is unsupported for subprocess agent %q", agent.ID)
 			}
-			args = append(append([]string{}, args...), "--model", opts.Model)
+			args = append(append([]string{}, args...), "--model", model)
+		}
+		// Before the session flags: gaiacpp doesn't take them and exits on an unknown argument.
+		if agent.Native {
+			return NewNativeSubprocessClient(bin, args, opts.Dev).WithTrace(opts.Trace).WithLogf(opts.Logf), nil
 		}
 		if opts.HistoryFile != "" {
 			args = append(append([]string{}, args...), HistoryFileFlag, opts.HistoryFile)

@@ -3,12 +3,16 @@
 
 #include "gaia/session.h"
 
+#include "gaia/security.h"
+
 #include <algorithm>
+#include <atomic>
 #include <chrono>
 #include <ctime>
 #include <filesystem>
 #include <fstream>
 #include <iomanip>
+#include <random>
 #include <sstream>
 #include <stdexcept>
 
@@ -68,15 +72,13 @@ std::string nowIdTimestamp() {
 // ---------------------------------------------------------------------------
 
 std::string SessionStore::defaultDir() {
-#ifdef _WIN32
-    const char* profile = std::getenv("USERPROFILE");
-    std::string home = profile ? profile : "C:\\Users\\Default";
-    return home + "\\.gaia\\sessions";
-#else
-    const char* home = std::getenv("HOME");  // NOLINT(concurrency-mt-unsafe)
-    std::string h = home ? home : "/tmp";
-    return h + "/.gaia/sessions";
-#endif
+    const std::string home = gaiaHome();
+    if (home.empty()) {
+        // A shared folder such as /tmp would let another account read saved chats.
+        throw std::runtime_error("Neither GAIA_HOME nor the home folder variable is set, so there is no private "
+                                 "folder for saved sessions. Set GAIA_HOME, or pass a folder to SessionStore.");
+    }
+    return (fs::path(home) / "sessions").string();
 }
 
 SessionStore::SessionStore()
@@ -206,16 +208,31 @@ void SessionStore::save(const std::string& id, const std::vector<Message>& histo
     }
     j["messages"] = messages;
 
-    // Write atomically-ish: write to file directly (no temp-rename on Windows
-    // for simplicity, matching the AllowedToolsStore pattern)
-    std::string path = pathForId(id);
-    std::ofstream f(path);
-    if (!f.is_open()) {
-        throw std::runtime_error("Failed to open session file for writing: " + path);
+    // Written beside the session and renamed over it, so a failed write never
+    // leaves a half-written session where the last good one was.
+    const std::string path = pathForId(id);
+    static const unsigned int processTag = std::random_device{}();
+    static std::atomic<unsigned long long> saves{0};
+    const std::string tmp =
+        path + ".tmp-" + std::to_string(processTag) + "-" + std::to_string(saves.fetch_add(1));
+    {
+        std::ofstream f(tmp);
+        if (!f.is_open()) {
+            throw std::runtime_error("Failed to open session file for writing: " + tmp);
+        }
+        f << j.dump(2, ' ', false, json::error_handler_t::replace) << "\n";
+        f.close();
+        if (f.fail()) {
+            fs::remove(tmp, ec);
+            throw std::runtime_error("Failed to write session file: " + tmp);
+        }
     }
-    f << j.dump(2) << "\n";
-    if (!f.good()) {
-        throw std::runtime_error("Failed to write session file: " + path);
+    fs::rename(tmp, path, ec);
+    if (ec) {
+        const std::string why = ec.message();
+        std::error_code cleanup;
+        fs::remove(tmp, cleanup);
+        throw std::runtime_error("Failed to move the saved session into place at '" + path + "': " + why);
     }
 }
 
@@ -289,7 +306,7 @@ std::vector<SessionInfo> SessionStore::list() const {
 
         try {
             std::ifstream f(entry.path());
-            if (!f.is_open()) continue;
+            if (!f.is_open()) throw std::runtime_error("the file could not be opened");
 
             json j = json::parse(f);
 
@@ -318,9 +335,13 @@ std::vector<SessionInfo> SessionStore::list() const {
             }
 
             sessions.push_back(std::move(info));
-        } catch (...) {
-            // Skip malformed session files
-            continue;
+        } catch (const std::exception& e) {
+            // Listed, not skipped: a session that vanished from the list looks deleted.
+            SessionInfo broken;
+            broken.id = entry.path().stem().string();
+            broken.problem = e.what();
+            broken.preview = "[unreadable session file " + entry.path().filename().string() + "]";
+            sessions.push_back(std::move(broken));
         }
     }
 
@@ -338,23 +359,11 @@ std::vector<SessionInfo> SessionStore::list() const {
 // ---------------------------------------------------------------------------
 
 std::string SessionStore::generateId() {
-    std::string base = "session-" + nowIdTimestamp();
-
-    // Check for collision — append a suffix if needed
-    // This handles the case where generateId() is called twice within the same second
-    static int counter = 0;
-    static std::string lastTimestamp;
-
-    std::string ts = nowIdTimestamp();
-    if (ts == lastTimestamp) {
-        ++counter;
-        lastTimestamp = ts;
-        return base + "-" + std::to_string(counter);
-    }
-
-    lastTimestamp = ts;
-    counter = 0;
-    return base;
+    // Every id after the first carries its number, so two calls in one second differ.
+    static std::atomic<unsigned long long> issued{0};
+    const unsigned long long n = issued.fetch_add(1);
+    const std::string base = "session-" + nowIdTimestamp();
+    return n == 0 ? base : base + "-" + std::to_string(n);
 }
 
 } // namespace gaia

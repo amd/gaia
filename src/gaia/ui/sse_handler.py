@@ -41,6 +41,7 @@ from gaia.agents.tools.connect_card import (
     connect_card_in,
 )
 from gaia.llm.providers.lemonade import (
+    NATIVE_TOOL_CALLS_PREFIX,
     TOOL_CALL_PROGRESS_INTERVAL_S,
     TOOL_CALL_PROGRESS_MIN_CHARS,
 )
@@ -75,6 +76,11 @@ _DIFF_CARD_MAX_CHARS = 64_000
 #: Result keys naming a file the tool wrote; kept on the summary view a
 #: relayed result is reduced to.
 RESULT_PATH_KEYS = ("file_path", "image_path", "audio_path")
+
+#: What a speech tool reports beside ``audio_path``: the recording's length,
+#: and where the user's copy and the listening script went. The audio card
+#: shows them as text.
+RESULT_AUDIO_KEYS = ("duration_seconds", "saved_to", "script_path")
 
 #: Generated media file types that a client may later open through an explicit
 #: card action.  Keep this intentionally narrow: a successful tool result is
@@ -114,6 +120,9 @@ _USE_HANDLER_TIMEOUT = object()
 # description of the user's work (#2804). The emitter is the only layer that
 # knows which it is, so it tags at the source; downstream
 # (:mod:`gaia.ui.sse_translation`) decides whether to forward it.
+
+#: Phase of the status that takes back a draft answer an answer check replaces.
+ANSWER_CHECK_PHASE = "answer_check"
 
 #: ``start_progress`` labels the agent loop uses to say "I am alive" rather than
 #: "here is what I am doing". Compared lower-cased and stripped of trailing
@@ -232,10 +241,15 @@ def _strip_balanced_json_blobs(text: str, needle: "re.Pattern") -> str:
 # The agent's response protocol: {"thought", "goal", "plan", "tool",
 # "tool_args", "answer"}. A streamed reply in this shape is the model talking to
 # the harness, not to the user, and must never reach the transcript raw.
-_ENVELOPE_KEYS = frozenset({"thought", "goal", "plan", "tool", "tool_args", "answer"})
+# The provider's native tool-call envelope ({"__tool_calls__": [...],
+# "finish_reason": ..., "content": ...}) is the same kind of control frame:
+# it carries the call, not the answer, so it is filtered the same way.
+_ENVELOPE_KEYS = frozenset(
+    {"thought", "goal", "plan", "tool", "tool_args", "answer", "__tool_calls__"}
+)
 # Keys only the protocol uses: one of them makes an object an envelope even
 # when the model adds a key of its own.
-_ENVELOPE_MARKER_KEYS = frozenset({"thought", "tool_args", "answer"})
+_ENVELOPE_MARKER_KEYS = frozenset({"thought", "tool_args", "answer", "__tool_calls__"})
 _ENVELOPE_LEAD_RE = re.compile(r'\{\s*"(\w+)"\s*:')
 _ENVELOPE_LEAD_PARTIAL_RE = re.compile(r'\{\s*(?:"\w*(?:"\s*)?)?')
 _FENCE_OPEN_RE = re.compile(r"```[ \t]*(?:json|JSON)?[ \t]*\r?\n")
@@ -444,8 +458,88 @@ _MARKUP_TOOL_NAME_RE = re.compile(r'name\s*=\s*"([\w.-]+)"')
 # The tool an opener that ends in ``name=`` names.
 _MARKUP_INVOKED_NAME_RE = re.compile(r'\s*"([\w.-]+)"')
 _ENVELOPE_TOOL_NAME_RE = re.compile(r'"tool"\s*:\s*"([\w.-]+)"')
+# The tool a native envelope names, nested under ``__tool_calls__``.
+_NATIVE_ENVELOPE_TOOL_NAME_RE = re.compile(
+    r'"function"\s*:\s*\{\s*"name"\s*:\s*"([\w.-]+)"'
+)
+# Opener of a native tool-call envelope, wherever it sits in the buffer.
+_NATIVE_ENVELOPE_OPEN_RE = re.compile(r'\{\s*"__tool_calls__"\s*:')
+# The opener, for recognising one split across chunks. Shared with the
+# provider's sentinel so the two cannot drift if it ever changes.
+_NATIVE_OPENER = NATIVE_TOOL_CALLS_PREFIX
+
+
+def _partial_native_opener_start(text: str) -> Optional[int]:
+    """Start of a trailing partial native-envelope opener, if any.
+
+    A chunk can end mid-opener (``Then {"__to``): the ``{`` is already out
+    of the buffer by the time the rest arrives, so hold the partial opener
+    back instead of showing it as prose. The next chunk decides whether it
+    is an envelope or ordinary text. Only the last ``{`` can start one, and
+    only a strict prefix of the opener counts; a full opener is handled by
+    the regex above, and anything else is prose.
+    """
+    i = text.rfind("{")
+    if i < 0:
+        return None
+    if len(text) - i > len(_NATIVE_OPENER) + 8:
+        # A partial opener is short; a longer tail is ordinary text.
+        return None
+    tail = re.sub(r"\s+", "", text[i:])
+    if len(tail) >= len(_NATIVE_OPENER):
+        return None
+    if _NATIVE_OPENER.startswith(tail):
+        return i
+    return None
+
+
 # Longest opener/closer, so a tag split across two tokens is still recognised.
 _MARKUP_TAIL = 64
+
+
+def _strip_native_envelope(text: str) -> str:
+    """A native tool-call envelope reduced to the text beside the call.
+
+    The provider's ``{"__tool_calls__": [...], "finish_reason": ...,
+    "content": ...}`` envelope is a control frame, never the answer. Its
+    ``content`` is the model's own words alongside the call, so that text is
+    kept; anything else (no content, or not an envelope at all) passes through
+    unchanged. Prose that merely quotes the envelope's first characters is not
+    an envelope and is left alone.
+
+    The envelope is dropped wherever it sits, not only when it is the whole
+    text: prose before it is kept, the same split the streaming path makes,
+    so the final answer and the saved reply agree with what streamed. The
+    opener must sit outside a fence, and the object after it must be a
+    balanced envelope that parses with a ``__tool_calls__`` list; anything
+    else (a quoted prefix, a truncated opener, JSON in a code block) is
+    ordinary text and is left alone.
+    """
+    if not text:
+        return text
+    result = text.strip()
+    while True:
+        native = _NATIVE_ENVELOPE_OPEN_RE.search(result)
+        if native is None:
+            break
+        i = native.start()
+        if _fence_after(result[:i], None, True)[0] is not None:
+            break
+        state, start, end, consumed, _scan = _leading_envelope(result[i:], True)
+        if state != _ENV_COMPLETE:
+            break
+        parsed = _parse_envelope(result[i + start : i + end])
+        if parsed is None:
+            break
+        calls = parsed.get("__tool_calls__")
+        if not isinstance(calls, list):
+            break
+        content = parsed.get("content")
+        kept = content if isinstance(content, str) else ""
+        result = result[:i] + kept + result[i + consumed :]
+    if result == text.strip():
+        return text
+    return result
 
 
 def _partial_markup_start(text: str) -> Optional[int]:
@@ -511,6 +605,27 @@ def _peel_response_socket(resp: Any) -> Optional[socket.socket]:
 _ANSWER_FIRST_RE = re.compile(r'\s*\{\s*"answer"\s*:')
 
 
+#: Longest string argument a plan item carries; a plan is re-sent every step.
+_PLAN_ARG_MAX = 300
+
+
+def _plan_item(step: Any) -> Dict[str, Any]:
+    """One plan step as ``{tool, description, args}`` for a client to narrate."""
+    if not isinstance(step, dict):
+        return {"description": str(step)}
+    item: Dict[str, Any] = {}
+    if step.get("tool"):
+        item["tool"] = str(step["tool"])
+    if step.get("description"):
+        item["description"] = str(step["description"])
+    args = step.get("tool_args")
+    if isinstance(args, dict) and args:
+        item["args"] = {
+            k: (v[:_PLAN_ARG_MAX] if isinstance(v, str) else v) for k, v in args.items()
+        }
+    return item
+
+
 class SSEOutputHandler(OutputHandler):
     """
     OutputHandler that queues agent events as JSON for SSE streaming.
@@ -526,7 +641,7 @@ class SSEOutputHandler(OutputHandler):
     #: raises this — a person reading a prompt routinely takes longer than a
     #: minute — but must not set it to ``None``: an unanswerable question with
     #: no bound is a turn that never ends, which reads as a hang rather than as
-    #: the refusal it effectively is. See ``gaia_agent.stdio.PermissionState``,
+    #: the refusal it effectively is. See ``gaiapy.stdio.PermissionState``,
     #: whose backstop deliberately outlasts its client's own bound.
     #:
     #: Class-level so a handler built with ``__new__`` — which callers that only
@@ -554,6 +669,9 @@ class SSEOutputHandler(OutputHandler):
 
     #: What "always" would grant on that prompt; ``None`` when not offered.
     _relay_always_scope: Optional[str] = None
+
+    #: The path that prompt asks to open, when it is a path-access prompt.
+    _relay_path_access: Optional[str] = None
 
     #: Answers that prompt "timeout" when the confirm window runs out.
     _relay_confirm_timer: Optional[threading.Timer] = None
@@ -667,6 +785,7 @@ class SSEOutputHandler(OutputHandler):
         # Only this id may be answered, so a late click cannot approve a newer one.
         self._relay_confirm_id = None
         self._relay_always_scope = None
+        self._relay_path_access = None
         # A relayed needs_input question the sidecar run is parked on.
         self._relay_question_id: Optional[str] = None
         # What the sidecar measured fills its context, from its ``final`` event.
@@ -675,9 +794,15 @@ class SSEOutputHandler(OutputHandler):
         self.relay_hidden_turns = 0
         self.relay_context_error: Optional[str] = None
         self.relay_performance: Optional[Dict[str, Any]] = None
+        # The route a relayed hybrid turn took, from the sidecar's ``final``.
+        self.relayed_route: Optional[Dict[str, Any]] = None
         # Sealed turn record for the turn in flight, stashed by
         # print_turn_metrics and consumed by the next print_final_answer.
         self._turn_metrics: Optional[Dict[str, Any]] = None
+        # The turn's answer and record for later turns, sealed when the answer
+        # prints so a daemon's final event need not wait on the run thread's tail.
+        self.staged_answer: Optional[str] = None
+        self.staged_model_messages: Optional[List[Dict[str, Any]]] = None
         # Set by mark_turn_failed; the next answer event carries ``failed``.
         self._turn_failed = False
         self._turn_failure: Optional[str] = None
@@ -688,10 +813,31 @@ class SSEOutputHandler(OutputHandler):
         self.turn_ledger = TurnLedger()
         # The diff print_diff drew for the call in flight; its result carries it.
         self._pending_diff_card: Optional[Dict[str, Any]] = None
+        # Live line for a draft answer a check is replacing; the draft is taken
+        # back when the next reply or tool call starts. None when none is.
+        self._superseded_answer: Optional[str] = None
 
     def _emit(self, event: Dict[str, Any]):
         """Push an event to the queue for SSE delivery."""
         etype = event.get("type") if event else None
+        if self._superseded_answer is not None and etype in (
+            "chunk",
+            "tool_start",
+            "answer",
+        ):
+            message, self._superseded_answer = self._superseded_answer, None
+            # The final answer replaces the draft by itself.
+            if etype != "answer":
+                self.delivered_answer = ""
+                self._emit(
+                    {
+                        "type": "status",
+                        "status": "working",
+                        "phase": ANSWER_CHECK_PHASE,
+                        "message": message,
+                        "retracts_answer": True,
+                    }
+                )
         if etype == "chunk":
             self._shown_fence, self._shown_line_start = _fence_after(
                 event.get("content") or "", self._shown_fence, self._shown_line_start
@@ -736,6 +882,7 @@ class SSEOutputHandler(OutputHandler):
         self._step_count = 0
         self._tool_count = 0
         self.delivered_answer = ""
+        self._superseded_answer = None
         model_label = model_id or "LLM"
         self._emit(
             {
@@ -818,6 +965,7 @@ class SSEOutputHandler(OutputHandler):
                 "steps": plan_strs,
                 "step_narrations": narrations,
                 "current_step": current_step,
+                "items": [_plan_item(step) for step in plan],
             }
         )
 
@@ -923,6 +1071,8 @@ class SSEOutputHandler(OutputHandler):
         latency_ms = self.record_tool_result(data, success)
         event = {
             "type": "tool_result",
+            # Which call this answers, so a client can follow one tool's results.
+            "tool": self._last_tool_name,
             "title": title,
             "summary": summary,
             "success": success,
@@ -937,6 +1087,12 @@ class SSEOutputHandler(OutputHandler):
         # A "denied" call nobody answered is not one the user declined.
         if isinstance(data, dict) and data.get("timed_out") is True:
             event["timed_out"] = True
+        # Nor is one GAIA's own rule stopped.
+        if isinstance(data, dict) and data.get("denied_by") == "policy":
+            event["denied_by"] = "policy"
+        # Nor is one GAIA turned down itself without showing a prompt.
+        if isinstance(data, dict) and data.get("declined_by") == "agent":
+            event["declined_by"] = "agent"
         # A refusal must not read as a site contacted, relayed or not.
         if isinstance(data, dict) and data.get(EXECUTED_KEY) is False:
             event[EXECUTED_KEY] = False
@@ -945,11 +1101,18 @@ class SSEOutputHandler(OutputHandler):
         # summary may be incomplete instead of making them infer truncation.
         if not isinstance(data, dict) and len(str(data)) > _SUMMARY_CHAR_CAP:
             event["summary_truncated"] = True
+        # The file a tool wrote, so a client can offer to open it.
+        if isinstance(data, dict) and isinstance(data.get("path"), str):
+            event["path"] = data["path"]
         # Where the tool wrote, resolved: a relayed turn's Outputs need it.
         if isinstance(data, dict):
             for key in RESULT_PATH_KEYS:
                 if isinstance(data.get(key), str):
                     event[key] = data[key]
+            if isinstance(data.get("audio_path"), str):
+                for key in RESULT_AUDIO_KEYS:
+                    if isinstance(data.get(key), (str, int, float)):
+                        event[key] = data[key]
             if isinstance(data.get("num_chunks"), int):
                 event["num_chunks"] = data["num_chunks"]
         # The summary drops the hits a relayed turn's sources are made of.
@@ -991,13 +1154,16 @@ class SSEOutputHandler(OutputHandler):
         # For file search results, include structured file list
         if isinstance(data, dict) and ("files" in data or "file_list" in data):
             files = data.get("file_list", data.get("files", []))
+            folders = data.get("directories")
             if isinstance(files, list):
                 # Keep the UI contract honest: "total" should never claim more accessible
                 # files than we actually include in the event payload.
                 # list_files reports bare names; the UI renders entries.
-                limited_files = [
-                    {"name": f} if isinstance(f, str) else f for f in files[:20]
-                ]
+                entries = [
+                    {"name": _entry_name(d), "kind": "folder"}
+                    for d in (folders if isinstance(folders, list) else [])
+                ] + [{"name": f} if isinstance(f, str) else f for f in files]
+                limited_files = entries[:20]
                 event["result_data"] = {
                     "type": "file_list",
                     "files": limited_files,  # Limit to 20 files
@@ -1164,6 +1330,11 @@ class SSEOutputHandler(OutputHandler):
             }
         )
 
+    def supersede_answer(self, message: str) -> None:
+        # Only text still on screen as the answer is a draft to take back.
+        if self._text_since_tool.strip():
+            self._superseded_answer = message
+
     def report_phase(self, phase: str, message: str, **counts: int):
         self._emit(
             {
@@ -1175,16 +1346,14 @@ class SSEOutputHandler(OutputHandler):
             }
         )
 
+    def report_draft(self, tool: str, text: str):
+        self._emit({"type": "draft", "tool": tool, "text": text})
+
     # === Structured-render map (#2109) ===
 
     # Mapping from tool name to the card "kind" the frontend's render-card
-    # registry draws (spec §4.2). Shared with the sidecar's own canonical
-    # translator (``gaia_agent_email/sse_translation.py`` duplicates this map
-    # to stay dependency-light) — a test in that package
-    # (``test_render_tool_to_lang_maps_stay_in_sync``) pins the two dicts
-    # equal so the duplication can't silently drift.
+    # registry draws (spec §4.2).
     _RENDER_TOOL_TO_LANG: ClassVar[Dict[str, str]] = {
-        "pre_scan_inbox": "email_pre_scan",
         # #2765: a generic ``table`` card (no new client code) so the thread
         # view renders straight from tool data instead of model prose.
         "get_thread": "table",
@@ -1203,6 +1372,7 @@ class SSEOutputHandler(OutputHandler):
         "generate_music": "media",
         "generate_sound_effect": "media",
         "text_to_speech": "media",
+        "dictate_document": "media",
     }
 
     def _render_card_payload(self, data: Any) -> Optional[Dict[str, Any]]:
@@ -1295,6 +1465,9 @@ class SSEOutputHandler(OutputHandler):
             "duration_seconds",
             "duration_requested",
             "generation_time_s",
+            "saved_to",
+            "script_path",
+            "form",
         ):
             if envelope.get(key) is not None:
                 payload[key] = envelope[key]
@@ -1305,6 +1478,20 @@ class SSEOutputHandler(OutputHandler):
     def print_turn_metrics(self, record: Dict[str, Any]):
         """Stash the sealed turn record for the answer event that follows."""
         self._turn_metrics = record
+
+    def stage_final_model_messages(
+        self, answer: str, messages: List[Dict[str, Any]]
+    ) -> List[Dict[str, Any]]:
+        """Keep the turn's answer and record sealed at the answer for ``final``.
+
+        The agent seals them before ``print_final_answer``; the daemon reads them
+        from here so ``final`` carries the measurement and what later turns
+        replay without waiting on the run thread (which may still be storing
+        memory or writing a trace).
+        """
+        self.staged_answer = answer
+        self.staged_model_messages = messages
+        return messages
 
     def mark_turn_failed(self, failure: Optional[str] = None) -> None:
         """The answer that follows ends a turn a model failure cut short."""
@@ -1322,6 +1509,10 @@ class SSEOutputHandler(OutputHandler):
         cached_tokens: Optional[int] = None,
     ):
         if answer:
+            # A native tool-call envelope is a control frame, never the
+            # answer: reduce it to the text beside the call before the other
+            # cleaners run, so it cannot reach the transcript as raw JSON.
+            answer = _strip_native_envelope(answer)
             # Set aside the verification-scope line before the cleaners run: an
             # answer they strip to nothing (a card-echo) must stay empty, not
             # arrive as a message consisting only of the scope line (#3376).
@@ -1520,6 +1711,13 @@ class SSEOutputHandler(OutputHandler):
                 self._broken_envelope_head = self._stream_buffer[:256]
                 return self._take_leading_envelopes(end_of_stream)
             answer = envelope.get("answer")
+            if not (isinstance(answer, str) and answer.strip()):
+                # A native envelope carries the model's own words beside the
+                # call in "content"; dropping them would lose the framing of
+                # why it called a tool, so they are the answer here.
+                if isinstance(envelope.get("__tool_calls__"), list):
+                    content = envelope.get("content")
+                    answer = content if isinstance(content, str) else None
             if isinstance(answer, str) and answer.strip():
                 self._emit({"type": "answer", "content": answer})
             logger.debug("Filtered response envelope: %s", self._stream_buffer[:100])
@@ -1541,7 +1739,7 @@ class SSEOutputHandler(OutputHandler):
         while True:
             nl = buf.find("\n", pos)
             if nl < 0:
-                return False
+                break
             i = _skip_ws(buf, nl + 1)
             pos = nl + 1
             if i >= len(buf) or buf[i] != "{":
@@ -1556,10 +1754,52 @@ class SSEOutputHandler(OutputHandler):
                 self._emit({"type": "chunk", "content": prose})
             self._stream_buffer = buf[i:]
             return True
+        # No envelope on a line of its own. A native envelope needs no line:
+        # its opener is distinctive, so it splits wherever it appears, even
+        # glued to the prose before it. A fence still wins: JSON in a code
+        # block is the answer's own content. Checked only after the lines
+        # above, so a protocol envelope earlier in the buffer still splits
+        # first instead of being emitted as prose.
+        native = _NATIVE_ENVELOPE_OPEN_RE.search(buf)
+        if native is not None:
+            i = native.start()
+            if (
+                self._fence_at(buf[:i])[0] is None
+                and _leading_envelope(buf[i:], end_of_stream)[0] != _ENV_NONE
+            ):
+                prose = buf[:i]
+                if prose.strip():
+                    self._json_filtered = False
+                    self._emit({"type": "chunk", "content": prose})
+                self._stream_buffer = buf[i:]
+                return True
+        # A chunk can end mid-opener ("Then {"__to"): hold the partial
+        # opener back the same way, so the next chunk decides what it is
+        # instead of the fragment leaking as prose. Hold it only when the
+        # head would really be classified as an envelope: a tail that merely
+        # looks like the opener's start ({" followed by a space, or a
+        # truncated key such as {"__tool_ calls) is ordinary text, and
+        # holding it would loop forever, the buffer never shrinking while
+        # _take_leading_envelopes keeps asking for the same head.
+        partial = _partial_native_opener_start(buf)
+        if (
+            partial is not None
+            and self._fence_at(buf[:partial])[0] is None
+            and _leading_envelope(buf[partial:], end_of_stream)[0] != _ENV_NONE
+        ):
+            prose = buf[:partial]
+            if prose.strip():
+                self._json_filtered = False
+                self._emit({"type": "chunk", "content": prose})
+            self._stream_buffer = buf[partial:]
+            return True
+        return False
 
     def _report_envelope_progress(self) -> None:
         if self._call_progress_due(len(self._stream_buffer)):
             named = _ENVELOPE_TOOL_NAME_RE.search(self._stream_buffer)
+            if named is None:
+                named = _NATIVE_ENVELOPE_TOOL_NAME_RE.search(self._stream_buffer)
             self._report_call_progress(
                 len(self._stream_buffer),
                 self._stream_buffer,
@@ -2072,6 +2312,7 @@ class SSEOutputHandler(OutputHandler):
                     f"'{tool_name}' needs your approval and nobody can answer on "
                     "this run. Start the request from the GAIA terminal UI or "
                     "Agent UI to approve it there.",
+                    unattended=True,
                 )
 
         # Before auto-approve: the eval runs with it on, and this is its only no.
@@ -2155,7 +2396,7 @@ class SSEOutputHandler(OutputHandler):
             logger.info(
                 "Background mode: immediately denied confirmation for '%s'", tool_name
             )
-            self._last_denial = Denial(tool_name, unattended_message)
+            self._last_denial = Denial(tool_name, unattended_message, unattended=True)
             return False
 
         confirm_id = str(uuid.uuid4())
@@ -2186,7 +2427,7 @@ class SSEOutputHandler(OutputHandler):
         if scope is not None:
             request["always_scope"] = scope.label
             # ``always_scope`` is matched as-is by the MCP control; this is its wording.
-            always_label = grant_phrase(tool_name, scope.subject)
+            always_label = scope.phrase or grant_phrase(tool_name, scope.subject)
             if always_label:
                 request["always_label"] = always_label
         # What this call does — `pytest` is not `rm -rf` — so the prompt's label
@@ -2218,6 +2459,7 @@ class SSEOutputHandler(OutputHandler):
                 tool_name,
                 f"Confirmation for '{tool_name}' was abandoned: the run was "
                 "cancelled before the user answered.",
+                unattended=True,
             )
             return False
 
@@ -2439,7 +2681,7 @@ class SSEOutputHandler(OutputHandler):
         for the whole blocking ``read()``, and ``close()`` waits on that same
         lock — so a cross-thread ``close()`` blocks until the read returns on
         its own (proven by the real-socket test in
-        ``tests/unit/test_email_sidecar_proxy.py``). ``shutdown()`` bypasses
+        ``tests/unit/test_sidecar_proxy.py``). ``shutdown()`` bypasses
         the file-object layer entirely and wakes the parked ``recv``
         immediately; the relay's stream generator then closes the response
         itself on the way out. ``resp.close()`` remains only as the fallback
@@ -2598,8 +2840,8 @@ class SSEOutputHandler(OutputHandler):
     def resolve_user_input(self, request_id: str, response: str) -> bool:
         """Unblock a pending ``request_user_input_blocking()`` call.
 
-        Called by ``POST /api/chat/user-input`` and by the email sidecar's
-        ``POST /v1/email/query/{run_id}/respond``.  Returns ``False`` if no
+        Called by ``POST /api/chat/user-input`` and by a sidecar's
+        ``POST /v1/<agent>/query/{run_id}/respond``.  Returns ``False`` if no
         request with that ID is pending, so the caller can answer 409 rather
         than report an accepted answer nothing will read.
         """
@@ -2637,15 +2879,20 @@ class SSEOutputHandler(OutputHandler):
             self._relay_question_id = request_id
 
     def set_relay_confirmation(
-        self, confirm_id: Optional[str], always_scope: Optional[str] = None
+        self,
+        confirm_id: Optional[str],
+        always_scope: Optional[str] = None,
+        path_access: Optional[str] = None,
     ) -> None:
         """Record (or clear, with ``None``) the sidecar prompt now pending.
 
         *always_scope* is what an "always" answer grants, when one is offered.
+        *path_access* is the path a path-access prompt asks to open.
         """
         with self._confirm_lock:
             self._relay_confirm_id = confirm_id
             self._relay_always_scope = always_scope if confirm_id else None
+            self._relay_path_access = path_access if confirm_id else None
             if self._relay_confirm_timer is not None:
                 self._relay_confirm_timer.cancel()
                 self._relay_confirm_timer = None
@@ -2686,6 +2933,13 @@ class SSEOutputHandler(OutputHandler):
                 return None
             return self._relay_always_scope
 
+    def relay_path_access(self, confirm_id: Optional[str]) -> Optional[str]:
+        """The path the pending prompt *confirm_id* asks to open, or None."""
+        with self._confirm_lock:
+            if not confirm_id or confirm_id != self._relay_confirm_id:
+                return None
+            return self._relay_path_access
+
     def resolve_relay_confirmation(
         self,
         approved: bool,
@@ -2714,6 +2968,7 @@ class SSEOutputHandler(OutputHandler):
                 return False
             self._relay_confirm_id = None
             self._relay_always_scope = None
+            self._relay_path_access = None
         if timed_out:
             decision = "timeout"
         elif always:
@@ -2830,6 +3085,68 @@ def _first_line_summary(text: str) -> str:
     return f"{first} (+{len(lines) - 1} more lines)" if len(lines) > 1 else first
 
 
+def _entry_name(entry: Any) -> str:
+    """A listed file's display name: ``{"name": "a.py", "directory": "/src"}`` -> ``"a.py (/src)"``."""
+    if not isinstance(entry, dict):
+        return str(entry)
+    name = entry.get("name", entry.get("filename", entry.get("file_name", "")))
+    if not name and entry.get("file_path"):
+        name = str(entry["file_path"]).replace("\\", "/").rsplit("/", 1)[-1]
+    directory = entry.get("directory", "")
+    if directory and name:
+        return f"{name} ({directory})"
+    return str(name or directory)
+
+
+def _listing_summary(data: Dict[str, Any]) -> str:
+    """``{"files": [...], "directories": [...]}`` -> ``"Found 3 files and 2 folders: ..."``."""
+    files = data.get("file_list", data.get("files"))
+    files = files if isinstance(files, list) else []
+    folders = data.get("directories")
+    folders = folders if isinstance(folders, list) else []
+    count = data.get("count")
+    # "count" is the files a search matched, which may exceed the names it returned.
+    file_count = (
+        max(count, len(files))
+        if isinstance(count, int) and not isinstance(count, bool)
+        else len(files)
+    )
+    folder_count = len(folders)
+    total = data.get("total")
+    other = (
+        total - file_count - folder_count
+        if isinstance(total, int) and not isinstance(total, bool)
+        else 0
+    )
+    parts = [
+        format_count(n, noun)
+        for n, noun in (
+            (file_count, "files"),
+            (folder_count, "folders"),
+            (other, "other entries"),
+        )
+        if n > 0
+    ]
+    if not parts:
+        found = "no files or folders" if "directories" in data else "no files"
+    elif len(parts) == 1:
+        found = parts[0]
+    else:
+        found = ", ".join(parts[:-1]) + f" and {parts[-1]}"
+
+    names = [f"{_entry_name(d)}/" for d in folders[:5]]
+    names += [_entry_name(f) for f in files[: 5 - len(names)]]
+    names = [n for n in names if n and n != "/"]
+    display_msg = data.get("display_message", "")
+    if not names:
+        return display_msg or f"Found {found}"
+    listed = "\n".join(f"  {name}" for name in names)
+    hidden = file_count + folder_count - len(names)
+    if hidden > 0:
+        listed += f"\n  ... +{hidden} more"
+    return f"{display_msg}\n{listed}" if display_msg else f"Found {found}:\n{listed}"
+
+
 def _summarize_tool_result(data: Dict[str, Any]) -> str:
     """Create a detailed human-readable summary of a tool result."""
     if not isinstance(data, dict):
@@ -2842,6 +3159,9 @@ def _summarize_tool_result(data: Dict[str, Any]) -> str:
         lines = stdout.strip().split("\n") if stdout.strip() else []
         if rc != 0 and data.get("expected_exit"):
             return f"{data['expected_exit']} (exit {rc})"
+        if rc != 0 and isinstance(data.get("exit_code_meaning"), str):
+            # winget reports failure as a bare number and prints to stdout.
+            return f"{data['exit_code_meaning']} (exit {rc})"
         if rc != 0:
             stderr = data.get("stderr", "")
             return f"Command failed (exit {rc})" + (
@@ -2855,39 +3175,9 @@ def _summarize_tool_result(data: Dict[str, Any]) -> str:
             return preview
         return "Command completed (no output)"
 
-    # File search results
+    # File search and folder listing results
     if "files" in data or "file_list" in data:
-        files = data.get("file_list", data.get("files", []))
-        count = data.get("count", len(files) if isinstance(files, list) else 0)
-        display_msg = data.get("display_message", "")
-        if isinstance(files, list) and files:
-            file_names = []
-            for f in files[:5]:
-                if isinstance(f, dict):
-                    name = f.get("name", f.get("filename", f.get("file_name", "")))
-                    # Fallback: extract filename from file_path if name keys are missing
-                    if not name and f.get("file_path"):
-                        name = f["file_path"].replace("\\", "/").rsplit("/", 1)[-1]
-                    directory = f.get("directory", "")
-                    if directory and name:
-                        file_names.append(f"{name} ({directory})")
-                    elif name:
-                        file_names.append(name)
-                    elif directory:
-                        file_names.append(directory)
-                else:
-                    file_names.append(str(f))
-            result = "\n".join(f"  {name}" for name in file_names)
-            if count > 5:
-                result += f"\n  ... +{count - 5} more"
-            return (
-                (display_msg + "\n" + result)
-                if display_msg
-                else f"Found {count} file(s):\n{result}"
-            )
-        if display_msg:
-            return display_msg
-        return f"Found {count} file(s)"
+        return _listing_summary(data)
 
     # Search/query results with chunks
     if "chunks" in data:
@@ -3045,6 +3335,7 @@ def clean_reply_text(text: str) -> str:
     """Strip the LLM output artifacts a reply must not be stored with."""
     if not text:
         return text
+    text = _strip_native_envelope(text)
     text = _TOOL_CALL_JSON_SUB_RE.sub("", text)
     # _clean_answer_json MUST run before _THOUGHT_JSON_SUB_RE, or a leaked
     # {"thought":..., "answer":...} blob is stripped whole, answer included.

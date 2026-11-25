@@ -108,10 +108,6 @@
     gap: 10px;
 }
 
-.changes-review-file .render-diff__title {
-    word-break: break-all;
-}
-
 .changes-review-loading {
     display: flex;
     align-items: center;

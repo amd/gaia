@@ -6,7 +6,7 @@
 #
 # Callers pack it so a user's PC never installs a Python package:
 #   build-installers.yml  the desktop app (resources/core)
-#   tui_installers.yml    the terminal .pkg / .deb / .rpm (beside gaia-tui)
+#   tui_installers.yml    the terminal .pkg / .deb / .rpm (beside gaia-cli)
 #   windows_setup.yml     the Windows setup's terminal component
 # Each passes its own artifact_prefix and only the platforms it packs, so two
 # callers in one run never upload the same artifact name. Dispatch it on its
@@ -48,7 +48,7 @@ on:
         type: string
         default: ''
       flagship:
-        description: 'artifact: a release candidate''s real-engine check installs the gaia-agent-<platform> builds this run froze (build_flagship_sidecar.yml), because its pre-release does not exist yet. Empty: it reads the published pre-release.'
+        description: 'artifact: a release candidate''s real-engine check installs the gaia-agent-<platform> builds this run froze (build_gaiapy.yml), because its pre-release does not exist yet. Empty: it reads the published pre-release.'
         required: false
         type: string
         default: ''
@@ -71,7 +71,9 @@ jobs:
       cancel-in-progress: ${{ github.event_name == 'pull_request' }}
     container: ${{ matrix.container }}
     continue-on-error: ${{ !matrix.required }}
-    timeout-minutes: 40
+    # Best-effort legs run on slower runners, and a timeout cancels the whole run
+    # even there: continue-on-error covers a failure, not a cancel.
+    timeout-minutes: ${{ matrix.required && 40 || 60 }}
     strategy:
       fail-fast: false
       matrix:
@@ -237,23 +239,36 @@ jobs:
   # (gaia.hub.prerelease), which the run under test is what publishes. Pack this
   # run's flagship builds exactly as publish.yml attaches them, so real-engine
   # installs those through the same release file. The caller must have built
-  # them (rc-flagship / build_flagship_sidecar.yml) before calling this.
+  # them (rc-flagship / build_gaiapy.yml) before calling this.
   rc-flagship:
     name: Pack this run's flagship (release candidate)
     if: inputs.flagship == 'artifact' && (contains(inputs.tag, '-rc') || contains(inputs.version, '-rc'))
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    # Two 5-minute download attempts plus packing.
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v7
         with:
           ref: ${{ inputs.ref || inputs.tag || github.ref }}
           sparse-checkout: |
-            util/flagship_rc_assets.py
-            hub/agents/gaia/python/gaia_agent/__init__.py
+            util/gaiapy_rc_assets.py
+            hub/agents/gaia/python/gaiapy/__init__.py
             hub/agents/gaia/python/gaia-agent.yaml
           sparse-checkout-cone-mode: false
 
+      # One bounded retry: a stalled download once cancelled a whole release.
       - uses: actions/download-artifact@v8
+        id: download_try_1
+        continue-on-error: true
+        timeout-minutes: 5
+        with:
+          pattern: gaia-agent-*
+          path: flagship
+
+      - name: Download (second try)
+        uses: actions/download-artifact@v8
+        if: steps.download_try_1.outcome == 'failure'
+        timeout-minutes: 5
         with:
           pattern: gaia-agent-*
           path: flagship
@@ -267,7 +282,7 @@ jobs:
           set -euo pipefail
           # 0.25.4-rc.3 is tagged v0.25.4-rc3.
           [ -n "${TAG}" ] || TAG="v${VERSION/-rc./-rc}"
-          python3 util/flagship_rc_assets.py release \
+          python3 util/gaiapy_rc_assets.py release \
             --artifacts flagship --tag "${TAG}" --commit "${COMMIT}" --out release-assets
           ls -l release-assets
 
@@ -301,6 +316,11 @@ jobs:
           - {label: macOS arm64, os: macos-latest, key: darwin-arm64, exe: gaia}
           - {label: Ubuntu 24.04, os: ubuntu-24.04, key: linux-x64, exe: gaia}
           - {label: Fedora 44, os: ubuntu-latest, key: linux-x64, exe: gaia, container: 'fedora:44'}  # Fedora 45's OpenSSL 4 has no libssl.so.3 (#7010)
+          # Fedora 44's original ca-certificates has no Debian-path CA file, the only one
+          # lemond reads, so GAIA starts it in a user+mount namespace (#7226). Docker's
+          # profiles and the Ubuntu host's AppArmor userns restriction block those
+          # namespaces; a Fedora desktop does not. Privileged only to lift the latter.
+          - {label: 'Fedora 44, original CA layout', os: ubuntu-latest, key: linux-x64, exe: gaia, ca_layout: fedora-original, container: {image: 'fedora:44', options: '--privileged'}}
     steps:
       - name: Is this platform wanted
         id: want
@@ -335,8 +355,32 @@ jobs:
           dnf install -y --setopt=install_weak_deps=False \
             $(grep -v '^#' installer/core/fedora-engine-packages.txt)
 
+      - name: Leave only Fedora's own CA bundle, as the original ca-certificates did
+        if: steps.want.outputs.run == 'true' && matrix.ca_layout == 'fedora-original'
+        run: |
+          # Before the files go: dnf itself verifies against them.
+          dnf install -y --setopt=install_weak_deps=False shadow-utils util-linux
+          rm -f /etc/ssl/certs/ca-certificates.crt /etc/pki/tls/certs/ca-bundle.crt /etc/pki/tls/cert.pem /etc/ssl/cert.pem
+          test -s /etc/pki/ca-trust/extracted/pem/tls-ca-bundle.pem
+          # The runner host is Ubuntu, which denies an unprivileged user namespace its
+          # capabilities; Fedora has no such restriction. Host-wide on a throwaway VM.
+          userns=/proc/sys/kernel/apparmor_restrict_unprivileged_userns
+          if [ -e "$userns" ]; then echo 0 > "$userns"; fi
+
+      # One bounded retry: a stalled download once cancelled a whole release.
       - uses: actions/download-artifact@v8
         if: steps.want.outputs.run == 'true'
+        id: download_try_2
+        continue-on-error: true
+        timeout-minutes: 5
+        with:
+          name: ${{ inputs.artifact_prefix }}gaia-core-${{ matrix.key }}
+          path: ${{ runner.temp }}/core-tgz
+
+      - name: Download (second try)
+        uses: actions/download-artifact@v8
+        if: (steps.want.outputs.run == 'true') && steps.download_try_2.outcome == 'failure'
+        timeout-minutes: 5
         with:
           name: ${{ inputs.artifact_prefix }}gaia-core-${{ matrix.key }}
           path: ${{ runner.temp }}/core-tgz
@@ -351,8 +395,20 @@ jobs:
           cd "${RUNNER_TEMP}"
           tar -C core -xzf "core-tgz/gaia-core-${{ matrix.key }}.tar.gz"
 
+      # One bounded retry: a stalled download once cancelled a whole release.
       - uses: actions/download-artifact@v8
         if: steps.want.outputs.run == 'true' && needs.rc-flagship.result == 'success'
+        id: download_try_3
+        continue-on-error: true
+        timeout-minutes: 5
+        with:
+          name: ${{ inputs.artifact_prefix }}rc-flagship-release
+          path: ${{ runner.temp }}/rc-flagship
+
+      - name: Download (second try)
+        uses: actions/download-artifact@v8
+        if: (steps.want.outputs.run == 'true' && needs.rc-flagship.result == 'success') && steps.download_try_3.outcome == 'failure'
+        timeout-minutes: 5
         with:
           name: ${{ inputs.artifact_prefix }}rc-flagship-release
           path: ${{ runner.temp }}/rc-flagship
@@ -362,6 +418,7 @@ jobs:
         shell: bash
         env:
           RUN_FLAGSHIP: ${{ needs.rc-flagship.result == 'success' }}
+          CA_LAYOUT: ${{ matrix.ca_layout }}
         run: |
           set -euo pipefail
           if [ "${RUN_FLAGSHIP}" = "true" ]; then
@@ -370,7 +427,16 @@ jobs:
             export GAIA_RC_FLAGSHIP_URL="file:///${dir#/}"
             echo "The release candidate installs this run's flagship from ${GAIA_RC_FLAGSHIP_URL}"
           fi
-          bash installer/core/real_engine_check.sh "${RUNNER_TEMP}/core/${{ matrix.exe }}" "${RUNNER_TEMP}/real-engine"
+          as_user=()
+          if [ "${CA_LAYOUT}" = "fedora-original" ]; then
+            # A desktop user, as on a real PC: container root's id would be unmapped
+            # from the runner-owned HOME inside lemond's namespace.
+            useradd -m gaia-user
+            chown -R gaia-user "${RUNNER_TEMP}/core"
+            install -d -o gaia-user "${RUNNER_TEMP}/real-engine"
+            as_user=(runuser -u gaia-user -- env HOME=/home/gaia-user)
+          fi
+          ${as_user[@]+"${as_user[@]}"} bash installer/core/real_engine_check.sh "${RUNNER_TEMP}/core/${{ matrix.exe }}" "${RUNNER_TEMP}/real-engine"
 
       - uses: actions/upload-artifact@v7
         if: failure() && steps.want.outputs.run == 'true'

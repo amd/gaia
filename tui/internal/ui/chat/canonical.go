@@ -43,6 +43,17 @@ type modelSwitchRecorder interface {
 func (m ChatModel) handleCanonicalEvent(evt interface{}) (ChatModel, tea.Cmd, bool) {
 	switch e := evt.(type) {
 	case event.CanonicalStatusEvent:
+		if e.RetractsAnswer {
+			// Not narration: dropped, so the next tool call never files it as a note.
+			m.buffer = ""
+			m.markDirty()
+		}
+		if e.Skills != nil {
+			m.setReportedSkills(e.Skills)
+			if e.ModelID == "" && e.Message == "" {
+				break
+			}
+		}
 		// The model-state ping (ModelID set) is header metadata, not turn
 		// progress — it never touches the activity log. Sent once at agent
 		// startup and again after every `/model` switch, so the header always
@@ -68,7 +79,7 @@ func (m ChatModel) handleCanonicalEvent(evt interface{}) (ChatModel, tea.Cmd, bo
 			if m.awaitingModelSwitch {
 				m.switchedTo = savedChoice{provider: providerOfBackend(e.ModelBackend), model: e.ModelID}
 				// A refused switch sends no ping, so a match is the confirmation.
-				if e.ModelID == m.switchTarget {
+				if sameModelID(e.ModelID, m.switchTarget) {
 					if r, ok := m.client.(modelSwitchRecorder); ok {
 						r.RecordModelSwitch(e.ModelID, e.ModelBackend == "claude")
 					}
@@ -95,8 +106,13 @@ func (m ChatModel) handleCanonicalEvent(evt interface{}) (ChatModel, tea.Cmd, bo
 			break
 		}
 
-		// Kept in the transcript, not the live line: it explains later answers.
-		if e.HistoryCut != nil {
+		if e.Plan != nil {
+			m.updatePlan(planFromWire(e.Plan.Steps, e.Plan.CurrentStep))
+		}
+
+		// Kept in the transcript, not the live line, so later progress cannot
+		// erase a notice about the turn or what the agent is able to do.
+		if e.HistoryCut != nil || e.Level == "warning" {
 			m.messages = append(m.messages, Message{
 				Role:    RoleStatus,
 				Content: truncateRunes(clean(e.Message), narrationMax),
@@ -104,23 +120,18 @@ func (m ChatModel) handleCanonicalEvent(evt interface{}) (ChatModel, tea.Cmd, bo
 			break
 		}
 
-		// A phase report drives the live line and nothing else: it is not
-		// narration, so it never lands in the work log.
-		if e.Phase != "" {
+		// Helper progress rides on the step running the helpers; with none open it is an ordinary status.
+		if e.Phase == phaseHelpers {
+			if m.setHelperProgress(e.Message) {
+				break
+			}
+		} else if e.Phase != "" {
+			// A phase report drives the live line and nothing else: it is not
+			// narration, so it never lands in the work log.
 			m.phase = modelPhase{name: e.Phase, words: e.Words, label: truncateRunes(clean(e.Message), narrationMax)}
 			break
 		}
 
-		// One live line, replaced — not a log. A user watching a 200s turn needs
-		// to know what is happening NOW; an accumulating list of "Step 2/50"
-		// and "Thinking" answers a question nobody asked and buries the tool
-		// call that actually says what the agent is doing.
-		// Tracked in both modes, shown in neither by itself: the canonical
-		// transport reports steps only in the `final` event's usage, so without
-		// this the step count is unknown until the turn is already over.
-		if n, ok := stepNumberOf(e.Message); ok {
-			m.totalSteps = n
-		}
 		// Bounded on the way in, like every other agent-supplied line the log
 		// keeps (see narrate.go). What PRINTS is still laid out to this terminal
 		// at render time; this only stops a megabyte of "status" living in the
@@ -136,11 +147,6 @@ func (m ChatModel) handleCanonicalEvent(evt interface{}) (ChatModel, tea.Cmd, bo
 		}
 		if msg := userFacingStatus(e.Message); msg != "" {
 			m.setLiveStatus(truncateRunes(msg, narrationMax))
-		} else if m.dev {
-			// --dev is where harness internals belong: suppressing them for
-			// everyone would make a wire-level bug invisible to whoever has to
-			// fix it.
-			m.setLiveStatus(truncateRunes(clean(e.Message), narrationMax))
 		}
 
 	case event.CanonicalTokenEvent:
@@ -155,22 +161,24 @@ func (m ChatModel) handleCanonicalEvent(evt interface{}) (ChatModel, tea.Cmd, bo
 	case event.CanonicalToolCallEvent:
 		m.stashNarration()
 		m.phase = modelPhase{}
-		item := ActivityItem{
+		m.activity = append(m.activity, ActivityItem{
 			Kind:     "tool",
 			Tool:     e.Tool,
 			Content:  toolNarration(e.Tool, e.Args, e.Narration),
+			Call:     describeCall(e.Tool, e.Args, e.Narration),
+			Goal:     m.takeGoal(),
+			At:       m.now(),
 			RetryKey: retryKey(e.Tool, e.Args),
-		}
-		if m.dev {
-			// The narration says what the call MEANS; this says what was
-			// actually passed. When an agent calls the right tool with the
-			// wrong argument the two disagree, and that gap is the bug.
-			item.Args = devPayload(e.Args, devPayloadWidth)
-		}
-		m.activity = append(m.activity, item)
+			Sources:  callSources(e.Tool, e.Args),
+		})
 
 	case event.CanonicalToolResultEvent:
 		m.phase = modelPhase{}
+		// Read before the generic failure path: its `error` text is for the model.
+		if d, ok := delegationOf(e.Data); ok {
+			m.setToolOutputAt(m.closeDelegation(e.Tool, d), e)
+			break
+		}
 		outcome, toolErr := event.ToolOutcomeOf(e)
 		if e.Render == "" {
 			// A tool that draws no card has no surface but its step row, so the
@@ -183,6 +191,7 @@ func (m ChatModel) handleCanonicalEvent(evt interface{}) (ChatModel, tea.Cmd, bo
 				break
 			}
 			m.markToolDone(e)
+			m.noteCreatedImage(e.Tool, e.Render, e.Data)
 			break
 		}
 		if outcome == event.ToolOutcomeFailed {
@@ -198,21 +207,10 @@ func (m ChatModel) handleCanonicalEvent(evt interface{}) (ChatModel, tea.Cmd, bo
 			})
 			break
 		}
-		// The sidecar declared a card, so the card is the result. The email
-		// agent's pre-scan tool docstring tells the model NOT to describe the
-		// results in prose precisely because the client is expected to draw
-		// this — ignore `render` and the turn produces one vague sentence.
+		// The sidecar declared a card, so the card is the result.
 		m.markToolDone(e)
-		identity := ""
-		if e.Render == "email_pre_scan" {
-			// The one card this session can produce from TWO independent
-			// sources (this typed tool_result, or the on-open pre-scan
-			// fetch) — update it in place rather than letting each source
-			// append its own (#2743).
-			identity = preScanCardIdentity
-			m.preScanRenderedThisTurn = true
-		}
-		m.upsertCard(identity, e.Tool, e.Render, e.Data)
+		m.appendCard(e.Tool, e.Render, e.Data)
+		m.noteCreatedImage(e.Tool, e.Render, e.Data)
 
 	case event.CanonicalNeedsInputEvent:
 		// The run is parked waiting for this answer, on the stream we are still
@@ -280,10 +278,13 @@ func (m ChatModel) handleCanonicalEvent(evt interface{}) (ChatModel, tea.Cmd, bo
 		}
 		content = StripVerificationScope(content)
 		m.buffer = ""
-		m.confirmRelayedSwitch()
-		if m.awaitingModelSwitch && m.switchTarget != "" && m.switchedTo.model == m.switchTarget {
+		// A stopped turn never answered on the new model; the next reply saves it.
+		if !m.cancelPending {
+			m.confirmRelayedSwitch()
+		}
+		if m.awaitingModelSwitch && m.switchTarget != "" && sameModelID(m.switchedTo.model, m.switchTarget) {
 			m.rememberModel(m.switchedTo)
-			if m.startup.inFlight && m.switchTarget == m.startup.model {
+			if m.startup.inFlight && sameModelID(m.switchTarget, m.startup.model) {
 				m.startup.confirmed = true
 				m.startup.warmNext = true
 				if m.startup.kind == StartupRestore {
@@ -295,21 +296,16 @@ func (m ChatModel) handleCanonicalEvent(evt interface{}) (ChatModel, tea.Cmd, bo
 				}
 			}
 		}
-		active := m.turnElapsed(time.Now())
+		active := m.turnElapsed(m.now())
 		duration := active
-		durationLabel := ""
 		if m.startup.warmNext {
-			if m.dev {
-				// A bare time under the model notice reads as noise.
-				durationLabel = "model switched in "
-			} else {
-				// The opening switch's time belongs to the ready line, not its own.
-				duration = 0
-			}
+			// The opening switch's time is the agent starting up, not an answer.
+			duration = 0
 		}
 		// The turn is over, so a confirmation still up is dead — resolved here,
 		// before the work is committed, so its step carries the outcome.
 		m.resolveConfirmationOnTurnEnd()
+		work := append([]ActivityItem(nil), m.activity...)
 		if content != "" {
 			m.commitAnsweredWork()
 		} else {
@@ -319,20 +315,27 @@ func (m ChatModel) handleCanonicalEvent(evt interface{}) (ChatModel, tea.Cmd, bo
 		// "cancelled" line settleTurn adds is the whole story, not a blank bubble.
 		if content != "" || !m.cancelPending {
 			m.messages = append(m.messages, Message{
-				Role:          RoleAssistant,
-				Content:       content,
-				Rendered:      components.RenderMarkdown(content),
-				Duration:      duration,
-				DurationLabel: durationLabel,
-				TTFT:          ttft,
-				TokPerS:       usage.TokPerS,
-				InputTokens:   usage.InputTokens,
-				CachedTokens:  usage.CachedTokens,
-				Steps:         usage.Steps,
-				ToolsUsed:     usage.ToolsUsed,
-				Tokens:        usage.Tokens,
-				Metrics:       usage.Metrics,
+				Role:         RoleAssistant,
+				Content:      content,
+				Rendered:     components.RenderMarkdown(content),
+				Duration:     duration,
+				TTFT:         ttft,
+				TokPerS:      usage.TokPerS,
+				InputTokens:  usage.InputTokens,
+				CachedTokens: usage.CachedTokens,
+				Steps:        usage.Steps,
+				ToolsUsed:    usage.ToolsUsed,
+				Tokens:       usage.Tokens,
+				Metrics:      usage.Metrics,
+				Recap:        workRecap(work),
+				Deliverables: findDeliverables(work, content, m.queryStart),
+				Provenance:   turnProvenance(work, m.turnPlace()),
+				FinishedAt:   m.now(),
+				CostUSD:      m.turnCostUSD(usage.InputTokens, usage.CachedTokens, usage.Tokens),
 			})
+			if duration > 0 {
+				m.markFinish()
+			}
 		}
 		// One ledger entry per turn, from what the backend reported. A turn
 		// with no token counts still counts as a turn — see sessionCost.
@@ -345,21 +348,13 @@ func (m ChatModel) handleCanonicalEvent(evt interface{}) (ChatModel, tea.Cmd, bo
 			cachedTok: usage.CachedTokens,
 			measured:  usage.InputTokens > 0 || usage.Tokens > 0,
 		})
-		// Drain here, not on doneMsg: streaming flips false in THIS handler, and doneMsg fires later, after a second query could already be in flight.
-		m.drainPendingPreScan()
 		m.streaming = false
 		m.activity = nil
 		// The turn is over, so any question it was waiting on is dead. Leaving
 		// the panel up would swallow every keystroke into a question nobody is
 		// listening to — the composer becomes unreachable and Esc quits the app.
 		m.question = nil
-		// A still-pending confirmation was resolved above, before commitWork —
-		// and on the current email sidecar that is the ORDINARY case: the
-		// stateless D1 stub sends this final refusal in the same stream read the
-		// needs_confirmation event arrived on, before a human can plausibly react.
-		if usage.Steps > 0 {
-			m.totalSteps = usage.Steps
-		}
+		// A still-pending confirmation was resolved above, before commitWork.
 		// This — not doneMsg — is the real settlement point for a daemon-relay
 		// turn: nothing below reschedules waitForEvent, so the channel's
 		// eventual close is never observed here. A cancelled turn that ends
@@ -389,7 +384,6 @@ func (m ChatModel) handleCanonicalEvent(evt interface{}) (ChatModel, tea.Cmd, bo
 		} else {
 			m.messages = append(m.messages, Message{Role: RoleError, Content: sanitizeErrorText(e.Detail)})
 		}
-		m.drainPendingPreScan()
 		m.streaming = false
 		m.activity = nil
 		m.question = nil
@@ -398,6 +392,9 @@ func (m ChatModel) handleCanonicalEvent(evt interface{}) (ChatModel, tea.Cmd, bo
 		m.settleTurn()
 		m.updateViewport()
 		return m, nil, true
+
+	case event.CanonicalContextUsageEvent:
+		m.takeContextUsage(e)
 
 	case event.CanonicalUnsupportedEvent:
 		// Contract §7: a newer agent's event type is shown, never dropped.
@@ -470,12 +467,11 @@ func (m ChatModel) answerQuestion(requestID, value string) tea.Cmd {
 }
 
 // resolveConfirmationOnTurnEnd clears a still-pending confirmation when the
-// run's own terminal event gets there first — which, against the current
-// email sidecar's stateless D1 stub, is the NORMAL case: `needs_confirmation`
-// is immediately followed, in the same stream read, by a synthesized `final`
-// refusal (docs/spec/agent-ui-query-sse-contract.md §5). Leaving the modal up
-// would trap every keystroke in a decision that can no longer change anything
-// — the composer becomes unreachable, exactly the bug m.question=nil already
+// run's own terminal event gets there first — for a stateless sidecar,
+// `needs_confirmation` is immediately followed, in the same stream read, by a
+// synthesized `final` refusal (docs/spec/agent-ui-query-sse-contract.md §5).
+// Leaving the modal up would trap every keystroke in a decision that can no
+// longer change anything — the composer becomes unreachable, exactly the bug m.question=nil already
 // fixes for a mid-run question. The gated step's row is the durable record of
 // what happened.
 func (m *ChatModel) resolveConfirmationOnTurnEnd() {
@@ -585,9 +581,8 @@ func confirmationOutcomeText(msg components.ConfirmationDecidedMsg) (text string
 // confirmAction delivers the user's decision on the transport's out-of-band
 // confirm seam. Only reachable when the triggering event carried a
 // confirm_url — the resume model (spec §5). No shipped sidecar sets that
-// field today, so this path exists for forward compatibility and is not
-// exercised against the current email agent; see ConfirmationModel's doc
-// comment for the full picture.
+// field today, so this path exists for forward compatibility; see
+// ConfirmationModel's doc comment for the full picture.
 func (m ChatModel) confirmAction(runID, action string, approved bool) tea.Cmd {
 	confirmer, ok := m.client.(client.AgentConfirmer)
 	if !ok {
@@ -614,25 +609,28 @@ func (m ChatModel) confirmAction(runID, action string, approved bool) tea.Cmd {
 // to the render card in the transcript — this line only says it came back, how
 // much of it, and how long it took.
 func (m *ChatModel) markToolDone(e event.CanonicalToolResultEvent) {
-	at := m.setOpenToolOutcome(e.Tool, toolResultSucceeded(e.Data), toolResultDetail(e))
+	ok := toolResultSucceeded(e.Data)
+	at := m.setOpenToolOutcome(e.Tool, ok, toolResultDetail(e))
+	m.planToolFinished(e.Tool, ok)
 	m.setToolOutputAt(at, e)
 }
 
-// setToolOutputAt attaches the raw result payload to one specific tool line.
-// Developer mode only, and a no-op otherwise.
+// setToolOutputAt records what a result says about the call it closed: when it
+// ended, how many lines of output came back, and where an edit landed. The raw
+// payload is never kept here — it is in the trace.
 //
-// Indexed rather than searched. Searching back for "the last tool line without
-// output" looked equivalent but is a different predicate from the one that
-// closed the line, and the two disagree exactly when it matters: two calls open
-// at once, or a payload that compacts to nothing, and the next result's payload
-// lands under the wrong call — which in the one view meant for verifying what
-// happened is worse than showing nothing.
+// Indexed rather than searched: with two calls open at once, a search for "the
+// last open line" attaches one call's result to the other.
 func (m *ChatModel) setToolOutputAt(at int, e event.CanonicalToolResultEvent) {
-	if !m.dev || at < 0 || at >= len(m.activity) {
+	if at < 0 || at >= len(m.activity) {
 		return
 	}
-	if payload := devPayload(e.Data, devPayloadWidth); payload != "" {
-		m.activity[at].Output = payload
+	item := &m.activity[at]
+	item.End = m.now()
+	item.OutLines = outputLines(e.Data)
+	item.Sources = append(item.Sources, resultSources(item.Tool, e.Data)...)
+	if c := item.Call.Change; c != nil && !c.Created && item.Success != nil && *item.Success {
+		c.StartLine = locateEdit(c)
 	}
 }
 
@@ -774,7 +772,14 @@ func userFacingStatus(raw string) string {
 //   - A new stage after a tool ran: its own line. The tool is evidence of work,
 //     and this is genuinely the next thing.
 func (m *ChatModel) setLiveStatus(msg string) {
+	// Placeholder goals ("objective", "Following the plan to <the whole
+	// request>", "Plan: a → b") describe the harness, not the work (#5089).
+	if isTemplateGoal(msg) {
+		return
+	}
+	m.goalFresh = true
 	sawWork := false
+
 	for i := len(m.activity) - 1; i >= 0; i-- {
 		switch m.activity[i].Kind {
 		case "tool", "confirm":

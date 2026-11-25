@@ -16,7 +16,7 @@ var _ MemoryProvider = (*SubprocessClient)(nil)
 
 // memoryDumpQuery is the sentinel FetchMemory sends instead of a real
 // question. Must match MEMORY_DUMP_QUERY in
-// hub/agents/gaia/python/gaia_agent/memory_dump.py exactly — the wire text is
+// hub/agents/gaia/python/gaiapy/memory_dump.py exactly — the wire text is
 // the whole contract, and the leading/trailing NUL makes it something a human
 // could never type, so it can never collide with a real chat message.
 const memoryDumpQuery = "\x00gaia:memory_dump\x00"
@@ -31,7 +31,7 @@ type MemoryProvider interface {
 }
 
 // MemoryDump mirrors the JSON payload build_memory_dump() in
-// hub/agents/gaia/python/gaia_agent/memory_dump.py returns. Available is
+// hub/agents/gaia/python/gaiapy/memory_dump.py returns. Available is
 // false when the session has no live store (Lemonade down, embedding model
 // not pulled, GAIA_MEMORY_DISABLED=1) — Reason is the actionable, cause-
 // specific explanation from MemoryMixin.memory_unavailable_message(), not a
@@ -56,7 +56,7 @@ type MemoryStats struct {
 	ByContext      map[string]int `json:"by_context"`
 	SensitiveCount int            `json:"sensitive_count"`
 	EntityCount    int            `json:"entity_count"`
-	AvgConfidence  float64        `json:"avg_confidence"`
+	AvgConfidence  *float64       `json:"avg_confidence,omitempty"`
 }
 
 // MemoryContext is one row of MemoryStore.get_contexts().
@@ -71,16 +71,16 @@ type MemoryContext struct {
 // the LLM to summarize its own memory, which is exactly the unreliable path
 // this view replaces).
 type MemoryItem struct {
-	ID         string  `json:"id"`
-	Category   string  `json:"category"`
-	Content    string  `json:"content"`
-	Entity     string  `json:"entity,omitempty"`
-	Context    string  `json:"context"`
-	Confidence float64 `json:"confidence"`
-	Sensitive  bool    `json:"sensitive"`
-	CreatedAt  string  `json:"created_at,omitempty"`
-	UpdatedAt  string  `json:"updated_at,omitempty"`
-	LastUsed   string  `json:"last_used,omitempty"`
+	ID         string   `json:"id"`
+	Category   string   `json:"category"`
+	Content    string   `json:"content"`
+	Entity     string   `json:"entity,omitempty"`
+	Context    string   `json:"context"`
+	Confidence *float64 `json:"confidence,omitempty"`
+	Sensitive  bool     `json:"sensitive"`
+	CreatedAt  string   `json:"created_at,omitempty"`
+	UpdatedAt  string   `json:"updated_at,omitempty"`
+	LastUsed   string   `json:"last_used,omitempty"`
 }
 
 // FetchMemory asks the running agent for its memory snapshot over the SAME
@@ -143,9 +143,9 @@ func (e *ErrMemoryContractTooOld) Error() string {
 }
 
 // FetchMemory implements MemoryProvider for the daemon-relayed transport:
-// GET /v1/<agent>/memory through the daemon relay, cloning FetchPreScan's
-// shape (prescan.go) -- ensure the sidecar, negotiate the peer's contract,
-// gate on it before trusting the response, then relay the request.
+// GET /v1/<agent>/memory through the daemon relay -- ensure the sidecar,
+// negotiate the peer's contract, gate on it before trusting the response, then
+// relay the request.
 func (s *SSEClient) FetchMemory(ctx context.Context) (MemoryDump, error) {
 	// First, before any network work: this answer needs nothing from the peer,
 	// and asking anyway would spawn a sidecar just to refuse — and a probe that
@@ -157,7 +157,7 @@ func (s *SSEClient) FetchMemory(ctx context.Context) (MemoryDump, error) {
 		// turn a 404 into the "advertised then refused" shape #3978 removes.
 		return MemoryDump{}, fmt.Errorf(
 			"the '%s' agent does not keep a memory store — only '%s' does. "+
-				"Run `gaia-tui` to talk to it, or `gaia-tui status` to see what is installed",
+				"Run `gaia-cli` to talk to it, or `gaia-cli status` to see what is installed",
 			s.agentID, memoryAgentID)
 	}
 
@@ -216,11 +216,32 @@ func (s *SSEClient) FetchMemory(ctx context.Context) (MemoryDump, error) {
 		)
 	}
 
-	// Unlike /prescan, the route returns build_memory_dump()'s payload
-	// directly as the response body -- no `result` envelope to unwrap.
+	// The route returns build_memory_dump()'s payload directly as the
+	// response body -- no `result` envelope to unwrap.
 	var dump MemoryDump
 	if err := json.Unmarshal(raw, &dump); err != nil {
 		return MemoryDump{}, fmt.Errorf("could not decode the '%s' memory response: %w", s.agentID, err)
 	}
 	return dump, nil
+}
+
+// errorDetailFromBody mirrors daemon.ErrorDetail's parsing but works from
+// already-read bytes, since the body can only be consumed once and this
+// caller needs it both for the success path (decode `result`) and the
+// error path (extract `detail`).
+func errorDetailFromBody(statusCode int, raw []byte) string {
+	if len(raw) == 0 {
+		return fmt.Sprintf("HTTP %d", statusCode)
+	}
+	var body struct {
+		Detail json.RawMessage `json:"detail"`
+	}
+	if err := json.Unmarshal(raw, &body); err == nil && len(body.Detail) > 0 {
+		var s string
+		if err := json.Unmarshal(body.Detail, &s); err == nil && s != "" {
+			return fmt.Sprintf("HTTP %d: %s", statusCode, s)
+		}
+		return fmt.Sprintf("HTTP %d: %s", statusCode, string(body.Detail))
+	}
+	return fmt.Sprintf("HTTP %d", statusCode)
 }

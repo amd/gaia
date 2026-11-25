@@ -36,9 +36,13 @@ class _FakeAgent:
         self._cancel_event = None
         self._mcp_manager = MagicMock()
         self.calls = []
+        self.closed = False
 
     def _register_tools(self):
         pass
+
+    def close(self):
+        self.closed = True
 
     def process_query(self, message):
         self.calls.append(message)
@@ -48,10 +52,10 @@ class _FakeAgent:
 @pytest.fixture
 def env(monkeypatch, tmp_path):
     # The tick imports GaiaAgent before it checks the cache; a cache hit never uses it.
-    fake_mod = types.ModuleType("gaia_agent.agent")
+    fake_mod = types.ModuleType("gaiapy.agent")
     fake_mod.GaiaAgent = fake_mod.GaiaAgentConfig = object
-    monkeypatch.setitem(sys.modules, "gaia_agent", types.ModuleType("x"))
-    monkeypatch.setitem(sys.modules, "gaia_agent.agent", fake_mod)
+    monkeypatch.setitem(sys.modules, "gaiapy", types.ModuleType("x"))
+    monkeypatch.setitem(sys.modules, "gaiapy.agent", fake_mod)
 
     registry = MagicMock()
     registry.canonical_id.side_effect = lambda t: t
@@ -92,6 +96,7 @@ async def test_tick_reuses_gaia_agent_without_evicting_it(env):
 
     assert helpers._agent_cache[session["id"]]["agent"] is agent
     agent._mcp_manager.disconnect_all.assert_not_called()
+    assert not agent.closed
     assert len(agent.calls) == 1
 
 
@@ -225,7 +230,7 @@ async def test_tick_without_a_cached_agent_builds_the_flagship(env, monkeypatch)
             super().__init__(config.kwargs["model_id"])
             built.append((config, self))
 
-    fake_mod = sys.modules["gaia_agent.agent"]
+    fake_mod = sys.modules["gaiapy.agent"]
     monkeypatch.setattr(fake_mod, "GaiaAgent", FakeGaiaAgent, raising=False)
     monkeypatch.setattr(fake_mod, "GaiaAgentConfig", FakeConfig, raising=False)
     loop, session, _cached = _make("gaia")
@@ -238,6 +243,10 @@ async def test_tick_without_a_cached_agent_builds_the_flagship(env, monkeypatch)
     assert config.kwargs["ui_session_id"] == session["id"]
     assert config.kwargs["silent_mode"] is True
     assert len(agent.calls) == 1
+    # Nothing caches it, so its MCP servers would outlive the tick.
+    assert agent.closed
+    # A queued memory extraction of GAIA's own prompt would keep it alive.
+    assert agent._auto_extract_enabled is False
 
 
 async def test_cancelling_an_inflight_goal_stops_its_background_tick(env):

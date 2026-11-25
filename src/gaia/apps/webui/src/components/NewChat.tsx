@@ -3,31 +3,38 @@
 
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { ChevronRight, FileText, X } from 'lucide-react';
+import { AgentChip } from './AgentChip';
+import { AgentRecovery } from './AgentRecovery';
+import { BrowserPaneToggle } from './browser-pane/BrowserPane';
 import { Composer } from './Composer';
 import { FolderChip } from './FolderChip';
 import { ModelChip } from './ModelChip';
 import { NpuBackdrop } from './NpuBackdrop';
 import { PermissionModeChip } from './PermissionModeChip';
 import { PrivateChip } from './PrivateChip';
+import { readSkillsForResearch, researchNeedsSkills, ResearchChip } from './ResearchChip';
 import { TryChips } from './TryChips';
 import { useAttachments } from '../hooks/useAttachments';
 import { useWarmUp, type WarmUpProgress } from '../hooks/useWarmUp';
 import * as api from '../services/api';
 import { isStarting } from '../services/statusPoll';
-import { useChatStore } from '../stores/chatStore';
+import { researchOn, useChatStore } from '../stores/chatStore';
+import { withResearchCommand } from '../utils/research';
 import { displayModelName, useModelNames, useModelStore } from '../stores/modelStore';
 import * as messageQueue from '../utils/messageQueue';
 import { setVisibleInterval } from '../utils/visibleInterval';
 import { log } from '../utils/logger';
-import { requestErrorText } from '../utils/requestErrors';
+import { requestErrorParam, requestErrorText } from '../utils/requestErrors';
+import { FlagshipMissing } from '../utils/newTask';
 import { durationMs, prefersReducedMotion } from '../utils/motion';
 import { deviceLabel } from '../utils/modelLabels';
-import type { StartScreen } from '../types';
+import type { AgentProblem, StartScreen } from '../types';
 import './NewChat.css';
 import { useSavedDraft } from '../hooks/useSavedDraft';
 import { NEW_CHAT_DRAFT_KEY } from '../utils/savedDraft';
 import { ref, type MessageKey } from '../i18n/registry';
 import { tEn, useT, type Translate } from '../i18n/useT';
+import { visibleName } from './CalendarApproval';
 
 interface NewChatProps {
     /**
@@ -39,10 +46,19 @@ interface NewChatProps {
     initialText?: string;
     /** Changes each time New chat is chosen, so the box takes focus even when already shown. */
     focusRequest?: number;
+    /** The flagship isn't installed: the top notice offers it, and a refused send points there while it shows. */
+    agentMissing?: boolean;
+    /** The box opens holding a first message the missing agent refused elsewhere (Personalize, setup, files). */
+    agentRefused?: boolean;
 }
 
 /** How often the start screen is asked for again while the assistant is unavailable. */
 export const START_RETRY_MS = 15_000;
+/** How long the starter row waits, unseen, for this PC's tasks before it shows the examples instead. */
+export const STARTERS_WAIT_MS = 3_000;
+
+/** A warm-up shorter than this finishes unseen, rather than flashing "0s". */
+export const WARM_UP_SHOWN_AFTER_S = 2;
 
 export function greeting(now: Date = new Date(), t: Translate = tEn): string {
     const h = now.getHours();
@@ -90,12 +106,16 @@ function attachWholeLibrary() {
         .map((d) => d.id));
 }
 
+/** Attached documents shown before the rest fold behind "+N more". */
+export const DOCS_SHOWN = 5;
+
 /**
  * A chat searches only the documents attached to it: show what this one will
  * get, and offer the rest of the library.
  */
 function LibraryDocuments() {
     const t = useT();
+    const [expanded, setExpanded] = useState(false);
     const documents = useChatStore((s) => s.documents);
     const draftIds = useChatStore((s) => s.draftDocumentIds);
     const removeDraftDocument = useChatStore((s) => s.removeDraftDocument);
@@ -104,25 +124,42 @@ function LibraryDocuments() {
     const offered = documents.filter((d) => d.indexing_status === 'complete' && !draftIds.includes(d.id));
     if (!attached.length && !offered.length) return null;
     const n = offered.length;
+    const hidden = attached.length - DOCS_SHOWN;
+    const shown = expanded || hidden <= 0 ? attached : attached.slice(0, DOCS_SHOWN);
     return (
         <div className="new-chat-docs">
             {attached.length > 0 && (
-                <ul className="new-chat-doc-list" aria-label={t('newChat.docs.forChat')}>
-                    {attached.map((d) => (
+                <ul
+                    id="new-chat-doc-list"
+                    className={`new-chat-doc-list${expanded ? ' is-expanded' : ''}`}
+                    aria-label={t('newChat.docs.forChat')}
+                >
+                    {shown.map((d) => (
                         <li key={d.id} className="new-chat-doc">
                             <FileText size={12} aria-hidden="true" />
-                            <span dir="auto">{d.filename}</span>
+                            <span dir="ltr">{visibleName(d.filename)}</span>
                             <button
                                 type="button"
                                 className="new-chat-doc-remove"
                                 onClick={() => removeDraftDocument(d.id)}
-                                aria-label={t('newChat.docs.dontAttach', { name: d.filename })}
+                                aria-label={t('newChat.docs.dontAttach', { name: visibleName(d.filename) })}
                             >
                                 <X size={12} aria-hidden="true" />
                             </button>
                         </li>
                     ))}
                 </ul>
+            )}
+            {hidden > 0 && (
+                <button
+                    type="button"
+                    className="link-btn new-chat-doc-toggle"
+                    aria-expanded={expanded}
+                    aria-controls="new-chat-doc-list"
+                    onClick={() => setExpanded((v) => !v)}
+                >
+                    {expanded ? t('newChat.docs.fewer') : t('newChat.docs.hidden', { n: hidden })}
+                </button>
             )}
             {n > 0 && (
                 <p className="new-chat-note">
@@ -163,18 +200,27 @@ function SetupFailed({ error }: { error: string }) {
 }
 
 /** An empty chat: a greeting and the composer over the NPU backdrop. Created on the first message. */
-export function NewChat({ onSend, initialText = '', focusRequest = 0 }: NewChatProps) {
+export function NewChat({ onSend, initialText = '', focusRequest = 0, agentMissing = false, agentRefused: heldRefused = false }: NewChatProps) {
     const t = useT();
+    const researchMode = useChatStore((s) => researchOn(s, null));
     const starting = useChatStore((s) => isStarting(s.systemStatus));
     const download = useChatStore((s) => s.systemStatus?.download_progress ?? null);
     // Moot once chats run in the cloud or a local model has loaded after all.
     const setupError = useChatStore((s) => (s.systemStatus?.model_loaded ? null : s.systemStatus?.setup_error ?? null));
     const remote = useModelStore((s) => !!s.active?.remote);
     const [text, setText] = useSavedDraft(NEW_CHAT_DRAFT_KEY, initialText);
+    const textNowRef = useRef(text);
+    textNowRef.current = text;
     const [error, setError] = useState<string | null>(null);
+    const [agentRefused, setAgentRefused] = useState(heldRefused);
     const [sending, setSending] = useState(false);
     const [start, setStart] = useState<StartScreen | null>(null);
     const [startError, setStartError] = useState<string | null>(null);
+    // A start screen that never answers must not leave the starter row blank for good.
+    const [startSlow, setStartSlow] = useState(false);
+    const [agentProblem, setAgentProblem] = useState<AgentProblem | null>(null);
+    // A message sent while the chosen agent can't start: it stays in the box.
+    const [keptForAgent, setKeptForAgent] = useState(false);
     const inputRef = useRef<HTMLTextAreaElement | null>(null);
     const innerRef = useRef<HTMLDivElement | null>(null);
     const composerRef = useRef<HTMLDivElement | null>(null);
@@ -191,6 +237,8 @@ export function NewChat({ onSend, initialText = '', focusRequest = 0 }: NewChatP
                 if (!live.current) return;
                 setStart(s);
                 setStartError(s.skills_error ?? null);
+                setAgentProblem(s.agent_problem ?? null);
+                if (!s.agent_problem) setKeptForAgent(false);
             })
             .catch((err) => {
                 log.api.warn('New-chat start screen unavailable', err);
@@ -203,6 +251,11 @@ export function NewChat({ onSend, initialText = '', focusRequest = 0 }: NewChatP
         loadStart();
         return () => { live.current = false; };
     }, [loadStart]);
+
+    useEffect(() => {
+        const timer = window.setTimeout(() => setStartSlow(true), STARTERS_WAIT_MS);
+        return () => window.clearTimeout(timer);
+    }, []);
 
     useEffect(() => {
         api.listDocuments()
@@ -231,6 +284,7 @@ export function NewChat({ onSend, initialText = '', focusRequest = 0 }: NewChatP
         sendingRef.current = true;
         setSending(true);
         setError(null);
+        setAgentRefused(false);
         // Cleared now, so anything typed while the chat is created is a new message.
         setText('');
         try {
@@ -241,7 +295,7 @@ export function NewChat({ onSend, initialText = '', focusRequest = 0 }: NewChatP
             if (held.length > 0 && sessionId) {
                 // The chat is open now; if its first message never went out, the rest wait for Send again.
                 const add = (items: messageQueue.QueuedMessage[], text: string) => sent === false
-                    ? [...items, { ...messageQueue.item(text, 'failed'), error: 'The first message was not sent.' }]
+                    ? [...items, { ...messageQueue.item(text, 'failed'), error: messageQueue.FIRST_NOT_SENT_ERROR }]
                     : messageQueue.enqueue(items, text, 'queued');
                 useChatStore.getState().updateQueue(sessionId, (q) => held.reduce(add, q));
             }
@@ -249,18 +303,51 @@ export function NewChat({ onSend, initialText = '', focusRequest = 0 }: NewChatP
             // Nothing was sent, so every message goes back in the box.
             const held = heldRef.current.splice(0);
             setText([draft || message, ...held].join('\n\n'));
-            setError(requestErrorText(err));
+            if (err instanceof FlagshipMissing) setAgentRefused(true);
+            else setError(requestErrorText(err));
         } finally {
             sendingRef.current = false;
             setSending(false);
         }
     }, [attachments, onSend]);
 
-    const submit = useCallback(() => send(attachments.compose(text.trim()), text.trim()), [attachments, send, text]);
+    const readingSkillsRef = useRef(false);
+    const submit = useCallback(async () => {
+        // It would only fail: the box keeps the message until the agent is back.
+        if (agentProblem) {
+            setKeptForAgent(true);
+            return;
+        }
+        const typed = text.trim();
+        if (readingSkillsRef.current) return;
+        if (researchNeedsSkills(typed, null)) {
+            readingSkillsRef.current = true;
+            setError(null);
+            try {
+                await readSkillsForResearch(typed, null);
+            } catch (err) {
+                setError(t('composer.researchSkillsUnavailable', { error: requestErrorParam(err) }));
+                return;
+            } finally {
+                readingSkillsRef.current = false;
+            }
+            // Edited during the wait: the box now holds the message the user means, so it stays unsent.
+            if (textNowRef.current !== text) return;
+        }
+        await send(attachments.compose(withResearchCommand(typed, researchOn(useChatStore.getState(), null))), typed);
+    }, [agentProblem, attachments, send, text, t]);
 
     useEffect(() => {
         if (focusRequest) inputRef.current?.focus();
     }, [focusRequest]);
+
+    // A prompt put in the box (Try in a new chat) is added to, so typing starts after it.
+    useEffect(() => {
+        const el = inputRef.current;
+        if (!initialText || !el) return;
+        el.focus();
+        el.setSelectionRange(el.value.length, el.value.length);
+    }, [initialText]);
 
     // Sending, not typing, drops the composer to the bottom: the box never moves under the cursor.
     const docked = sending;
@@ -282,10 +369,14 @@ export function NewChat({ onSend, initialText = '', focusRequest = 0 }: NewChatP
         );
     });
 
+    const lastExample = useRef('');
     const fillPrompt = useCallback((prompt: string) => {
-        setText(prompt);
+        const prev = lastExample.current;
+        const draft = (prev && text.endsWith(prev) ? text.slice(0, -prev.length) : text).trimEnd();
+        lastExample.current = prompt;
+        setText(draft ? `${draft}\n\n${prompt}` : prompt);
         inputRef.current?.focus();
-    }, []);
+    }, [text, setText]);
 
     const downloading = download?.state === 'starting' || download?.state === 'downloading';
     const activity = sending ? 'sending' : downloading ? 'download' : starting || warming !== null ? 'loading' : 'idle';
@@ -301,9 +392,13 @@ export function NewChat({ onSend, initialText = '', focusRequest = 0 }: NewChatP
                 contentRef={innerRef}
                 composerRef={composerRef}
             />
+            <div className="new-chat-actions">
+                <BrowserPaneToggle />
+            </div>
             <div className="new-chat-inner" ref={innerRef}>
                 <h1 className="new-chat-greeting" aria-hidden={docked}>{greeting(new Date(), t)}</h1>
                 {setupError && !remote && <SetupFailed error={setupError} />}
+                {agentProblem && <AgentRecovery problem={agentProblem} onRetry={() => loadStart()} kept={keptForAgent} />}
                 <div ref={composerRef}>
                     <Composer
                         value={text}
@@ -313,20 +408,25 @@ export function NewChat({ onSend, initialText = '', focusRequest = 0 }: NewChatP
                         disabledReason={starting ? t('composer.starting') : null}
                         autoFocus
                         inputRef={inputRef}
-                        leftControls={<><PermissionModeChip sessionId={null} /><PrivateChip disabled={sending} /></>}
+                        placeholder={researchMode ? t('composer.researchPlaceholder') : undefined}
+                        leftControls={<><PermissionModeChip sessionId={null} /><PrivateChip disabled={sending} /><ResearchChip sessionId={null} disabled={sending} compact /></>}
                         rightControls={<ModelChip />}
                     />
                 </div>
                 <div className="new-chat-meta">
                     {folder && <FolderChip folder={folder} disabled={starting || sending} />}
+                    {/* Under the model chip: the box's own row has no room left beside it. */}
+                    <AgentChip />
                 </div>
                 <LibraryDocuments />
-                {warming !== null && !starting && (
+                {warming !== null && !starting && warming.seconds >= WARM_UP_SHOWN_AFTER_S && (
                     <p className="new-chat-warmup" role="status">{warmUpLine(warming, t)}</p>
                 )}
                 {error && <p className="new-chat-error" role="alert">{error}</p>}
-                <TryChips onPick={fillPrompt} disabled={starting || sending} />
-                {startError && <AssistantUnavailable detail={startError} onRetry={() => loadStart()} />}
+                {agentRefused && agentMissing && <p className="new-chat-error" role="alert">{t('agentNotice.sendRefused')}</p>}
+                {/* Held unseen until the start screen answers, so examples don't flash up before this PC's tasks and nothing jumps. */}
+                <TryChips cards={start?.cards} pending={!start && !startError && !startSlow} onPick={fillPrompt} disabled={starting || sending} />
+                {!agentProblem && startError && <AssistantUnavailable detail={startError} onRetry={() => loadStart()} />}
             </div>
         </main>
     );

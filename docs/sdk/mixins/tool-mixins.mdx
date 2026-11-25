@@ -51,6 +51,7 @@ mixin and calling its `register_*_tools()` method. Each row is the exact
 | `skills` | `from gaia.agents.tools.skill_library_tools import SkillLibraryToolsMixin` | Model-driven skill library (list/search/install/load/unload) |
 | `skill_learning` | `from gaia.agents.tools.skill_learning_tools import SkillLearningToolsMixin` | Persist lessons learned while running a skill |
 | `audio` | `from gaia.agents.tools.audio_tools import AudioToolsMixin` | Transcribe audio, video or a video link via Lemonade, label speakers, extract a timestamped list, export subtitles |
+| `dictation` | `from gaia.agents.tools.dictation_tools import DictationToolsMixin` | Turn a document into an MP3 or WAV with the local Kokoro voice |
 | `audio_generation` | `from gaia.agents.tools.audio_generation_tools import AudioGenerationToolsMixin` | Generate WAV music and sound effects via Lemonade (`init_audio_generation`) |
 | `wait` | `from gaia.agents.tools.wait_tools import WaitToolsMixin` | `sleep` up to 300 s, e.g. until a rate limit resets; ends early on Stop |
 | `reasoning_effort` | `from gaia.agents.tools.reasoning_tools import ReasoningEffortToolsMixin` | `set_reasoning_effort` low/medium/high per step, on models that grade reasoning (gpt-oss) |
@@ -191,10 +192,11 @@ class MyImageAgent(Agent, SDToolsMixin):
             min_context_size=8192,  # 8K sufficient for SD
         )
 
-        # Initialize SD tools (auto-registers generate_image, list_sd_models, etc.)
+        # enable_edit_tools=True adds edit_image and upscale_image.
         # Images save to ~/.gaia/cache/sd/images unless you pass output_dir=.
         self.init_sd(
             default_model="SDXL-Turbo",  # Fast, good quality
+            enable_edit_tools=True,
         )
 
     def _register_tools(self):
@@ -211,8 +213,18 @@ result = agent.process_query("create a sunset over mountains")
 
 **Available Tools:**
 - `generate_image(prompt, model, size, steps, cfg_scale, seed)` - Generate images with SD
+- `edit_image(image_path, prompt, model, size, n)` - Edit an allowed local PNG/JPEG with a text prompt (opt-in, `enable_edit_tools=True`)
+- `upscale_image(image_path, model)` - Upscale an allowed local PNG (opt-in, `enable_edit_tools=True`)
 - `list_sd_models()` - List the image models downloaded in Lemonade, with each one's `image_defaults`
 - `get_generation_history(limit)` - See generated images from session
+
+Edit and upscale write new files under the output directory and never modify the source image. Their model (default `Flux-2-Klein-4B` for edits, `RealESRGAN-x4plus` for upscaling) must already be downloaded in Lemonade (legacy SD models such as `SD-Turbo` download on first use, as in `generate_image`); otherwise the tool returns an error naming how to download it.
+
+`init_sd(follow_user_settings=True)` makes a request that names no model use
+the user's `image_model`, `image_size` and `image_steps` from
+`~/.gaia/config.json`, read fresh at each call, ahead of `default_model`,
+`default_size` and `default_steps`. The flagship sets it; a request that names
+a model keeps that model's own defaults.
 
 To opt into image-to-3D reconstruction, initialize the mixin with
 `enable_3d_tools=True`. This adds

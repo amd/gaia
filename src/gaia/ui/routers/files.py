@@ -15,10 +15,8 @@ import concurrent.futures
 import datetime
 import logging
 import platform
-import re
 import shutil
 import threading
-import uuid
 from pathlib import Path
 from typing import List, Optional
 
@@ -28,7 +26,14 @@ from starlette.requests import ClientDisconnect
 
 from gaia.audio.media import MEDIA_EXTENSIONS, prune_older_than
 from gaia.env import child_env
-from gaia.upload_names import upload_copy_name
+from gaia.security import read_block
+from gaia.upload_names import (
+    place_copy,
+    reserve_copy_path,
+    upload_copy_stem,
+    upload_url_name,
+)
+from gaia.utils.text_decoding import file_encoding
 from gaia.utils.user_folders import documents_dir
 
 from .. import generated_media, session_environment
@@ -58,6 +63,9 @@ from ..utils import (
 )
 
 logger = logging.getLogger(__name__)
+
+# `detail.status` of a 403 the operating system caused, as opposed to GAIA's home-folder limit.
+OS_DENIED = "os_denied"
 
 # Maximum upload file size: 20 MB
 MAX_UPLOAD_SIZE = 20 * 1024 * 1024
@@ -96,13 +104,17 @@ SEARCH_SETUP_ALLOWANCE_SEC = 1.0
 router = APIRouter(tags=["files"])
 
 
+def _refuse_secret(resolved: Path) -> None:
+    """403 when *resolved* holds credentials or keys, before it is opened."""
+    blocked, _ = read_block(str(resolved))
+    if blocked:
+        raise HTTPException(
+            status_code=403,
+            detail="This file holds credentials, so GAIA won't preview it.",
+        )
+
+
 # ── Upload ───────────────────────────────────────────────────────────────────
-
-
-def _media_file_name(original_name: str, ext: str) -> str:
-    """A safe name that keeps the recording's own, for the transcript it produces."""
-    stem = re.sub(r"[^A-Za-z0-9._-]+", "_", Path(original_name).stem).strip("._")
-    return f"{stem[:_MEDIA_NAME_CHARS] or 'recording'}-{uuid.uuid4().hex[:8]}{ext}"
 
 
 @router.post("/api/files/upload-media", response_model=FileUploadResponse)
@@ -141,10 +153,11 @@ async def upload_media(request: Request, name: str = Query(..., min_length=1)):
             f"{upload_root} for this recording.",
         )
 
-    unique_name = _media_file_name(name, ext)
-    dest_path = upload_root / unique_name
+    stem = upload_copy_stem(name)[:_MEDIA_NAME_CHARS].rstrip(" ._-") or "attachment"
+    dest_path: Optional[Path] = None
     file_size = 0
     try:
+        dest_path = reserve_copy_path(upload_root, stem, ext)
         with dest_path.open("wb") as out:
             async for chunk in request.stream():
                 file_size += len(chunk)
@@ -161,13 +174,15 @@ async def upload_media(request: Request, name: str = Query(..., min_length=1)):
         dest_path.unlink(missing_ok=True)
         raise HTTPException(status_code=400, detail="The upload was cancelled.") from e
     except OSError as e:
-        dest_path.unlink(missing_ok=True)
-        logger.error("Could not save recording %s: %s", unique_name, e)
+        if dest_path is not None:
+            dest_path.unlink(missing_ok=True)
+        logger.error("Could not save recording %s: %s", name, e)
         raise HTTPException(
             status_code=507,
             detail=f"Could not save this recording: {e}. Check that the drive "
             f"holding {upload_root} has room for it.",
         ) from e
+    unique_name = dest_path.name
 
     if file_size == 0:
         dest_path.unlink(missing_ok=True)
@@ -180,7 +195,7 @@ async def upload_media(request: Request, name: str = Query(..., min_length=1)):
     return FileUploadResponse(
         filename=unique_name,
         original_name=name,
-        url=f"/api/files/uploads/{unique_name}",
+        url=f"/api/files/uploads/{upload_url_name(unique_name)}",
         size=file_size,
         content_type="application/octet-stream",
         is_image=False,
@@ -192,9 +207,9 @@ async def upload_file(file: UploadFile = File(...)):
     """Upload a file to the server.
 
     Accepts multipart form data with a ``file`` field.  The file is saved
-    to ``<GAIA_HOME>/chat/uploads/`` under ``<id>_<name><ext>``: the random ID
-    prevents collisions, and the name lets answers cite the file as the user
-    knows it.
+    to ``<GAIA_HOME>/chat/uploads/`` under ``<name><ext>``, so answers cite
+    the file as the user knows it; ``<id>_<name><ext>`` is used only when that
+    name holds other content.
 
     Constraints:
     - Maximum file size: 20 MB
@@ -264,16 +279,15 @@ async def upload_file(file: UploadFile = File(...)):
     upload_root = uploads_dir()
     upload_root.mkdir(parents=True, exist_ok=True)
 
-    # Unique copy name: random ID, sanitized original name, original extension
-    unique_name = upload_copy_name(original_name, ext)
-    dest_path = upload_root / unique_name
-
-    # Write file to disk
+    # The copy keeps the sanitized original name; an id is added only if it is taken.
     try:
-        dest_path.write_bytes(content)
+        dest_path = place_copy(
+            upload_root, upload_copy_stem(original_name), ext, content
+        )
     except OSError as e:
-        logger.error("Failed to save uploaded file %s: %s", unique_name, e)
+        logger.error("Failed to save uploaded file %s: %s", original_name, e)
         raise HTTPException(status_code=500, detail="Failed to save uploaded file")
+    unique_name = dest_path.name
 
     # Determine content type
     content_type = file.content_type or "application/octet-stream"
@@ -291,7 +305,7 @@ async def upload_file(file: UploadFile = File(...)):
     return FileUploadResponse(
         filename=unique_name,
         original_name=original_name,
-        url=f"/api/files/uploads/{unique_name}",
+        url=f"/api/files/uploads/{upload_url_name(unique_name)}",
         size=file_size,
         content_type=content_type,
         is_image=is_image,
@@ -349,7 +363,10 @@ async def browse_files(path: Optional[str] = None):
                 status_code=400, detail="Symbolic links are not supported"
             )
     except PermissionError:
-        raise HTTPException(status_code=403, detail="Access denied")
+        raise HTTPException(
+            status_code=403,
+            detail={"status": OS_DENIED, "message": "Access denied"},
+        )
 
     if not resolved.is_dir():
         raise HTTPException(status_code=404, detail="Directory not found")
@@ -413,7 +430,11 @@ async def browse_files(path: Optional[str] = None):
                     )
     except PermissionError:
         raise HTTPException(
-            status_code=403, detail="Permission denied for this directory"
+            status_code=403,
+            detail={
+                "status": OS_DENIED,
+                "message": "Permission denied for this directory",
+            },
         )
 
     # Sort: folders first, then files, alphabetically within each group
@@ -457,7 +478,13 @@ async def open_file_or_folder(request: OpenFileRequest):
     raw_path = Path(file_path)
     reveal = request.reveal
 
-    resolved = raw_path.resolve(strict=False)
+    try:
+        resolved = raw_path.resolve(strict=False)
+    except (ValueError, OSError) as e:  # too long for the OS
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid path: {session_environment.path_error_reason(e)}",
+        ) from e
 
     # Security: restrict to user's home directory FIRST, before ANY
     # filesystem operations (is_symlink/exists can throw PermissionError
@@ -477,10 +504,16 @@ async def open_file_or_folder(request: OpenFileRequest):
             raise HTTPException(
                 status_code=400, detail="Symbolic links are not supported"
             )
+        exists = resolved.exists()
     except PermissionError:
         raise HTTPException(status_code=403, detail="Access denied")
+    except OSError as e:  # POSIX resolve() lets a too-long path through
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid path: {session_environment.path_error_reason(e)}",
+        ) from e
 
-    if not resolved.exists():
+    if not exists:
         raise HTTPException(status_code=404, detail="Path not found")
 
     if request.launch:
@@ -846,6 +879,7 @@ async def preview_file(path: str, lines: int = 50):
 
     if not resolved.is_file():
         raise HTTPException(status_code=400, detail="Path is not a file")
+    _refuse_secret(resolved)
 
     lines = min(max(lines, 1), 200)
     stat = resolved.stat()
@@ -870,45 +904,45 @@ async def preview_file(path: str, lines: int = 50):
     if ext in TEXT_EXTENSIONS or (
         stat.st_size < 1_000_000 and _looks_like_text(resolved)
     ):
-        for encoding in ("utf-8", "latin-1", "cp1252"):
-            try:
-                import itertools
+        try:
+            import itertools
 
-                preview = []
-                total_lines = 0
-                with open(resolved, "r", encoding=encoding) as f:
-                    # Read only the first N lines for preview
-                    for line in itertools.islice(f, lines):
-                        preview.append(line.rstrip("\n\r")[:500])
-                    # Count remaining lines without loading into memory
-                    total_lines = len(preview)
-                    for _ in f:
-                        total_lines += 1
-                result["is_text"] = True
-                result["encoding"] = encoding
-                result["total_lines"] = total_lines
-                result["preview_lines"] = preview
+            encoding = file_encoding(resolved)
+            preview = []
+            total_lines = 0
+            with open(resolved, "r", encoding=encoding) as f:
+                # Read only the first N lines for preview
+                for line in itertools.islice(f, lines):
+                    preview.append(line.rstrip("\n\r")[:500])
+                # Count remaining lines without loading into memory
+                total_lines = len(preview)
+                for _ in f:
+                    total_lines += 1
+            result["is_text"] = True
+            result["encoding"] = encoding
+            result["total_lines"] = total_lines
+            result["preview_lines"] = preview
 
-                # CSV/TSV specific info
-                if ext in (".csv", ".tsv"):
-                    import csv as csv_mod
+            # CSV/TSV specific info
+            if ext in (".csv", ".tsv"):
+                import csv as csv_mod
 
-                    delimiter = "\t" if ext == ".tsv" else ","
-                    try:
-                        with open(resolved, "r", encoding=encoding) as cf:
-                            reader = csv_mod.reader(cf, delimiter=delimiter)
-                            header = next(reader, None)
-                            if header:
-                                result["columns"] = header
-                                row_count = sum(1 for _ in reader)
-                                result["row_count"] = row_count
-                    except (OSError, csv_mod.Error, UnicodeError) as exc:
-                        logger.warning(
-                            "CSV preview of %s has no column info: %s", resolved, exc
-                        )
-                break
-            except (UnicodeDecodeError, UnicodeError):
-                continue
+                delimiter = "\t" if ext == ".tsv" else ","
+                try:
+                    with open(resolved, "r", encoding=encoding) as cf:
+                        reader = csv_mod.reader(cf, delimiter=delimiter)
+                        header = next(reader, None)
+                        if header:
+                            result["columns"] = header
+                            row_count = sum(1 for _ in reader)
+                            result["row_count"] = row_count
+                except (OSError, csv_mod.Error, UnicodeError) as exc:
+                    logger.warning(
+                        "CSV preview of %s has no column info: %s", resolved, exc
+                    )
+        except UnicodeDecodeError as exc:
+            # The browser shows a file it cannot decode as binary.
+            logger.warning("No text preview of %s: %s", resolved, exc.reason)
 
     return FilePreviewResponse(**result)
 
@@ -949,6 +983,7 @@ async def serve_local_image(path: str):
 
     if not resolved.exists() or not resolved.is_file():
         raise HTTPException(status_code=404, detail="Image file not found")
+    _refuse_secret(resolved)
 
     ext = resolved.suffix.lower()
     if ext not in PREVIEWABLE_IMAGE_EXTENSIONS:
@@ -967,7 +1002,9 @@ async def serve_local_image(path: str):
         ".svg": "image/svg+xml",
     }
     media_type = media_types.get(ext, "application/octet-stream")
-    return FileResponse(path=str(resolved), media_type=media_type)
+    return harden_served_file(
+        FileResponse(path=str(resolved), media_type=media_type), resolved.name
+    )
 
 
 # ── Serve Generated Media ────────────────────────────────────────────────────

@@ -272,6 +272,41 @@ TEST(TuiApp, ConfirmToolRaisesAModalAndApproveRunsTheTool) {
     EXPECT_FALSE(app.modalVisible());
 }
 
+TEST(TuiApp, ConfirmModalShowsTheEndOfLongArguments) {
+    // 1230 characters once dumped, so the last wrapped line holds the tail marker whole.
+    const std::string message = "HEAD-MARK" + std::string(1198, 'x') + "TAIL-MARK";
+    const json call = {{"thought", "t"},
+                       {"goal", "g"},
+                       {"tool", "confirm_me"},
+                       {"tool_args", {{"message", message}}}};
+    json choice = json::object();
+    choice["message"] = json::object();
+    choice["message"]["content"] = call.dump();
+    json reply = json::object();
+    reply["choices"] = json::array({choice});
+
+    bench::MockLlmServer mock;
+    mock.pushResponse(reply.dump());
+    mock.pushResponse(kAnswer);
+
+    TempDir dir;
+    TuiTestAgent agent(makeConfig(mock.baseUrl()));
+    agent.toolRegistry().setAllowedToolsStore(std::make_shared<AllowedToolsStore>(dir.str()));
+
+    TuiApp app(agent);
+    submitText(app, "run the tool");
+    ASSERT_TRUE(waitFor([&] { return app.modalVisible(); })) << "no confirmation modal appeared";
+
+    const std::string frame = app.renderToString(80, 24);
+    EXPECT_TRUE(contains(frame, "HEAD-MARK")) << frame;
+    EXPECT_TRUE(contains(frame, "TAIL-MARK")) << frame;
+    EXPECT_TRUE(contains(frame, "... 780 characters hidden ...")) << frame;
+    EXPECT_TRUE(contains(frame, "[y] allow once")) << frame;
+
+    app.handleEvent(ftxui::Event::Character('n'));
+    ASSERT_TRUE(app.waitForIdle(10s));
+}
+
 // A key typed while the agent was working is delivered *after* the modal
 // opens (FTXUI drains its queue before drawing). It must not answer a modal
 // the user never saw - 'a' would otherwise permanently whitelist the tool.

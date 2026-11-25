@@ -85,6 +85,21 @@ describe('the log viewer', () => {
         expect(mocked.getLog).toHaveBeenCalledWith('model_server', { file: null, after: null });
     });
 
+    it('gives focus back to the button that opened it when it closes', async () => {
+        const opener = document.createElement('button');
+        opener.textContent = 'View logs';
+        document.body.appendChild(opener);
+        opener.focus();
+        render(<LogsDialog />);
+        await act(async () => { useLogsStore.getState().show(); });
+        expect(screen.getByRole('button', { name: 'Close' })).toHaveFocus();
+        await act(async () => { fireEvent.keyDown(document, { key: 'Escape' }); });
+        expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+        // Not the page body, where the next Tab would start from the top behind Settings.
+        expect(opener).toHaveFocus();
+        opener.remove();
+    });
+
     it('has a tab for every log GAIA keeps', async () => {
         await openLogs();
         const tabs = screen.getAllByRole('tab').map((tab) => tab.textContent);
@@ -168,6 +183,26 @@ describe('the log viewer', () => {
         fireEvent.click(screen.getByLabelText('Follow new lines'));
         await act(async () => { await vi.advanceTimersByTimeAsync(5000); });
         expect(mocked.getLog).toHaveBeenCalledTimes(1);
+    });
+
+    it('reads nothing while the window is hidden, and catches up once it is shown', async () => {
+        vi.useFakeTimers({ shouldAdvanceTime: true });
+        let state: DocumentVisibilityState = 'visible';
+        const visibility = vi.spyOn(document, 'visibilityState', 'get').mockImplementation(() => state);
+        try {
+            await openLogs();
+            await screen.findByText(/npu device busy/);
+            const before = mocked.getLog.mock.calls.length;
+            state = 'hidden';
+            act(() => { document.dispatchEvent(new Event('visibilitychange')); });
+            await act(async () => { await vi.advanceTimersByTimeAsync(10_000); });
+            expect(mocked.getLog).toHaveBeenCalledTimes(before);
+            state = 'visible';
+            await act(async () => { document.dispatchEvent(new Event('visibilitychange')); });
+            expect(mocked.getLog).toHaveBeenCalledTimes(before + 1);
+        } finally {
+            visibility.mockRestore();
+        }
     });
 
     it.each<[LogSource, string, string]>([

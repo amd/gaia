@@ -32,13 +32,13 @@ import threading
 import pytest
 
 from gaia.daemon.sidecars.spec import builtin_specs
-from gaia.ui.email_sidecar.profiles import GAIA_PROFILE, api_version_supported
-from gaia.ui.email_sidecar.proxy import SidecarProxy
-from gaia.ui.email_sidecar.relay import relay_query
+from gaia.ui.sidecar.profiles import GAIA_PROFILE, api_version_supported
+from gaia.ui.sidecar.proxy import SidecarProxy
+from gaia.ui.sidecar.relay import relay_query
 from gaia.ui.turn_summary import TurnLedger
 
 pytestmark = pytest.mark.skipif(
-    importlib.util.find_spec("gaia_agent") is None
+    importlib.util.find_spec("gaiapy") is None
     or importlib.util.find_spec("uvicorn") is None,
     reason="flagship agent + uvicorn required for the live sidecar round-trip",
 )

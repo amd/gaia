@@ -16,14 +16,14 @@ from unittest.mock import patch
 
 import pytest
 
-pytest.importorskip("gaia_agent")
+pytest.importorskip("gaiapy")
 
-from gaia_agent.chat_agent import (  # noqa: E402
+from gaiapy.chat_agent import (  # noqa: E402
     ChatAgent,
     ChatAgentConfig,
     _imports_gaia_tools,
 )
-from gaia_agent.tool_bundles import FULL_CORE_TOOLS  # noqa: E402
+from gaiapy.tool_bundles import FULL_CORE_TOOLS  # noqa: E402
 
 from gaia.agents.base.agent import TOOLS_REQUIRING_CONFIRMATION  # noqa: E402
 from gaia.agents.base.checks import CHECK_RESULT_KEY, CheckResult  # noqa: E402
@@ -56,8 +56,8 @@ def make_run_python():
 
     def build(allowed_path):
         with (
-            patch("gaia_agent.chat_agent.RAGSDK"),
-            patch("gaia_agent.chat_agent.RAGConfig"),
+            patch("gaiapy.chat_agent.RAGSDK"),
+            patch("gaiapy.chat_agent.RAGConfig"),
         ):
             agent = ChatAgent(
                 ChatAgentConfig(silent_mode=True, allowed_paths=[str(allowed_path)])
@@ -87,6 +87,30 @@ def test_it_runs_a_snippet_and_returns_stdout(make_run_python, project, monkeypa
     assert result["return_code"] == 0, result["stderr"]
     assert result["stdout"].strip() == "42"
     assert result["has_errors"] is False
+
+
+def test_long_output_says_it_was_cut_and_where_the_rest_is(
+    make_run_python, project, monkeypatch
+):
+    import json
+
+    monkeypatch.chdir(project)
+    _, run_python = make_run_python(project)
+
+    result = run_python("for i in range(4000): print('line', i)")
+
+    assert result["status"] == "success"
+    shown = json.loads(result["stdout"])
+    assert shown["continuation"] == "read_tool_output" and shown["artifact"]
+    assert len(result["stdout"]) <= 8000
+    assert "line 3999" in result["stdout"], "the end of the output is kept"
+
+
+def test_short_output_is_returned_as_is(make_run_python, project, monkeypatch):
+    monkeypatch.chdir(project)
+    _, run_python = make_run_python(project)
+
+    assert run_python("print('x' * 7000)")["stdout"] == "x" * 7000 + chr(10)
 
 
 def test_relative_paths_resolve_against_the_project_root(
@@ -331,19 +355,25 @@ def test_importing_a_gaia_tool_is_refused_with_the_tool_call_path(
     assert "ImportError" not in result["error"]
 
 
+_TOOLS = {"transcribe_media", "write_file", "read_file", "install_skill"}
+
+
 @pytest.mark.parametrize(
     "code",
     [
         "from gaia import transcribe_media",
-        "from gaia.agents.base.tools import tool",
-        "import gaia",
-        "import gaia.agents",
         "print(1)\nfrom gaia import write_file",
-        "    from gaia import write_file",
+        "if True:\n    from gaia import write_file",
+        "from gaia import cli, write_file",
+        "from gaia import write_file as save",
+        "import gaia\ngaia.write_file('a.txt', 'x')",
+        "import gaia as g\ng.read_file('a.txt')",
+        # ``import gaia.x`` binds ``gaia`` too.
+        "import gaia.agents\ngaia.transcribe_media('a.mp4')",
     ],
 )
-def test_gaia_imports_are_detected(code):
-    assert _imports_gaia_tools(code) is not None
+def test_importing_a_tool_through_gaia_is_detected(code):
+    assert _imports_gaia_tools(code, _TOOLS) is not None
 
 
 @pytest.mark.parametrize(
@@ -354,13 +384,33 @@ def test_gaia_imports_are_detected(code):
         "from pathlib import Path\nprint(Path('.').resolve())",
         # A different package whose name merely starts with the same letters.
         "import gaiatools",
-        "from gaiatools import helper",
+        "from gaiatools import write_file",
         # Only a mention, not an import.
-        "print('run from gaia import x to see it fail')",
+        "print('run from gaia import write_file to see it fail')",
+        "# from gaia import write_file\nprint(1)",
+        # The project's own modules, in a GAIA checkout.
+        "import gaia",
+        "import gaia.agents",
+        "from gaia.agents.base.tools import tool",
+        "from gaia.agents.base.claims import action_claims, claims_success",
+        "from gaia import cli",
+        # A module function that shares a tool's name is real code, not the tool.
+        "from gaia.skills.install import install_skill",
+        "import gaia.skills.install as m\nm.install_skill",
+        "import gaia.agents\ngaia.agents.write_file",
+        # Relative imports are the project's own.
+        "from .gaia import write_file",
+        # Not Python: the interpreter reports it, with the line.
+        "from gaia import write_file(",
+        "    from gaia import write_file",
     ],
 )
-def test_ordinary_snippets_are_not_flagged(code):
-    assert _imports_gaia_tools(code) is None
+def test_ordinary_and_project_imports_are_not_flagged(code):
+    assert _imports_gaia_tools(code, _TOOLS) is None
+
+
+def test_with_no_tools_known_nothing_is_flagged():
+    assert _imports_gaia_tools("from gaia import write_file", set()) is None
 
 
 def test_a_flagged_snippet_never_reaches_a_subprocess(
@@ -375,6 +425,71 @@ def test_a_flagged_snippet_never_reaches_a_subprocess(
 
     assert result["status"] == "error"
     spawn.assert_not_called()
+
+
+@pytest.fixture
+def src_checkout(tmp_path):
+    """A ``src/``-layout checkout of a package named ``gaia``, like this repo."""
+    root = tmp_path / "checkout"
+    package = root / "src" / "gaia"
+    (package / "agents").mkdir(parents=True)
+    (package / "__init__.py").write_text("", encoding="utf-8")
+    (package / "agents" / "__init__.py").write_text("", encoding="utf-8")
+    (package / "marker.py").write_text("WHERE = 'this checkout'\n", encoding="utf-8")
+    (root / "pyproject.toml").write_text("[project]\nname = 'gaia'\n")
+    return root.resolve()
+
+
+def test_a_src_layout_checkout_imports_its_own_code(
+    make_run_python, src_checkout, monkeypatch
+):
+    """Inside the project's own repo, its modules import from the checkout.
+
+    Refusing every ``gaia`` import here, or resolving it to the installed copy,
+    left the model hand-copying code and reporting the copy's output as proof.
+    """
+    monkeypatch.chdir(src_checkout)
+    _agent, run_python = make_run_python(src_checkout)
+
+    result = run_python(
+        code="from gaia.marker import WHERE\nimport gaia\nprint(WHERE, gaia.__file__)"
+    )
+
+    assert result["status"] == "success", result
+    assert "this checkout" in result["stdout"]
+    assert str(src_checkout / "src") in result["stdout"]
+
+
+def test_an_empty_src_folder_is_not_put_on_the_path(make_run_python, project):
+    """``src/`` with no package (a JS app's, say) adds nothing to the path."""
+    from gaiapy.chat_agent import _project_import_paths
+
+    assert _project_import_paths(project) == [str(project)]
+
+
+def test_a_tool_imported_from_a_submodule_gets_the_tool_hint(
+    make_run_python, src_checkout, monkeypatch
+):
+    """Not refused up front (a module may define that name); explained if it fails."""
+    monkeypatch.chdir(src_checkout)
+    _agent, run_python = make_run_python(src_checkout)
+
+    result = run_python(code="from gaia.agents import run_python")
+
+    assert result["status"] == "error"
+    assert "call it directly as a tool" in result.get("note", "")
+
+
+def test_an_unrelated_import_error_gets_no_tool_hint(
+    make_run_python, src_checkout, monkeypatch
+):
+    monkeypatch.chdir(src_checkout)
+    _agent, run_python = make_run_python(src_checkout)
+
+    result = run_python(code="from gaia.agents import not_a_tool_name")
+
+    assert result["status"] == "error"
+    assert "directly as a tool" not in result.get("note", "")
 
 
 def test_the_docstring_warns_against_importing_tools(make_run_python, project):
@@ -441,3 +556,308 @@ def test_a_snippet_that_is_not_a_test_run_declares_no_check(
     result = run_python(code="print('5 passed')")
 
     assert result[CHECK_RESULT_KEY] is None
+
+
+def test_an_unreadable_src_folder_fails_loudly(project, monkeypatch):
+    """Guessing would run the installed copy while reporting on the project."""
+    from gaiapy.chat_agent import _project_import_paths
+
+    real_iterdir = Path.iterdir
+
+    def _denied(self):
+        if self.name == "src":
+            raise PermissionError("access denied")
+        return real_iterdir(self)
+
+    monkeypatch.setattr(Path, "iterdir", _denied)
+
+    with pytest.raises(OSError, match="src"):
+        _project_import_paths(project)
+
+
+# ---------------------------------------------------------------- saved scripts
+
+
+def test_it_runs_a_saved_script_by_path_with_its_arguments(
+    make_run_python, project, monkeypatch
+):
+    """With only `code`, a saved script was typed out again for every run."""
+    monkeypatch.chdir(project)
+    _agent, run_python = make_run_python(project)
+    script = project / "job.py"
+    script.write_text("import sys\nprint('ran', sys.argv[1:])\n", encoding="utf-8")
+
+    result = run_python(path=str(script), args="one two")
+
+    assert result["status"] == "success", result
+    assert result["stdout"].strip() == "ran ['one', 'two']"
+
+
+def test_the_agent_runs_a_saved_script_through_run_python(
+    make_run_python, project, monkeypatch
+):
+    monkeypatch.chdir(project)
+    agent, _ = make_run_python(project)
+    agent.console.auto_approve_gated_tools = True
+    script = project / "job.py"
+    script.write_text("print(6 * 7)\n", encoding="utf-8")
+
+    result = agent._execute_tool("run_python", {"path": str(script)})
+
+    assert result["status"] == "success", result
+    assert result["stdout"].strip() == "42"
+
+
+def test_a_script_outside_the_allowed_folders_is_refused_by_path(
+    make_run_python, project, tmp_path, monkeypatch
+):
+    monkeypatch.chdir(project)
+    _agent, run_python = make_run_python(project)
+    outside = tmp_path / "elsewhere"
+    outside.mkdir()
+    script = outside / "job.py"
+    script.write_text("print('ran')\n", encoding="utf-8")
+
+    result = run_python(path=str(script))
+
+    assert result["status"] == "error"
+    assert "Access denied" in result["error"]
+
+
+@pytest.mark.parametrize(
+    "call, said",
+    [
+        ({"code": "print(1)", "path": "job.py"}, "not both"),
+        ({}, "exactly one of `code`"),
+        ({"code": "   "}, "exactly one of `code`"),
+        ({"code": "print(1)", "args": "-v"}, "`args` are passed to a saved script"),
+    ],
+)
+def test_code_and_path_are_one_or_the_other(
+    make_run_python, project, monkeypatch, call, said
+):
+    monkeypatch.chdir(project)
+    _agent, run_python = make_run_python(project)
+
+    result = run_python(**call)
+
+    assert result["status"] == "error"
+    assert result["executed"] is False
+    assert said in result["error"]
+
+
+def test_every_result_says_the_interpreter_is_new(
+    make_run_python, project, monkeypatch
+):
+    monkeypatch.chdir(project)
+    _agent, run_python = make_run_python(project)
+    script = project / "job.py"
+    script.write_text("print(1)\n", encoding="utf-8")
+
+    for result in (run_python(code="print(1)"), run_python(path=str(script))):
+        assert result["status"] == "success", result
+        assert result["interpreter"].startswith("new for this call")
+
+
+def test_the_description_says_each_call_starts_fresh_and_to_run_by_path(
+    make_run_python, project
+):
+    make_run_python(project)
+    described = _TOOL_REGISTRY["run_python"]["description"]
+
+    assert "Every call starts a new interpreter" in described
+    assert "run it by `path`" in described
+    assert "edit_file" in described
+
+
+def test_a_name_from_an_earlier_call_says_each_call_starts_fresh(
+    make_run_python, project, monkeypatch
+):
+    """Six runs died on a variable or a scratch file an earlier call had made."""
+    monkeypatch.chdir(project)
+    _agent, run_python = make_run_python(project)
+
+    result = run_python(code="print(table_from_the_last_call)")
+
+    assert result["status"] == "error"
+    assert "NameError" in result["error"]
+    assert (
+        "Each call starts fresh: save the script with write_file, fix it "
+        "with edit_file, and run it by path" in result["error"]
+    )
+
+
+def test_a_failed_saved_script_says_to_edit_it_and_run_it_again(
+    make_run_python, project, monkeypatch
+):
+    monkeypatch.chdir(project)
+    _agent, run_python = make_run_python(project)
+    script = project / "job.py"
+    script.write_text("print(1 / 0)\n", encoding="utf-8")
+
+    result = run_python(path=str(script))
+
+    assert result["status"] == "error"
+    assert "ZeroDivisionError" in result["error"]
+    assert f"Fix {script} with edit_file and run it again" in result["error"]
+    assert "don't send the script again" in result["error"]
+
+
+def test_a_script_given_the_wrong_arguments_is_left_alone(
+    make_run_python, project, monkeypatch
+):
+    # Told "fix it with edit_file", Qwen3.5-2B rewrote a working converter twice.
+    monkeypatch.chdir(project)
+    _agent, _run_python = make_run_python(project)
+    script = project / "convert_units.py"
+    script.write_text(
+        "import argparse\n"
+        "p = argparse.ArgumentParser()\n"
+        "p.add_argument('value', type=float)\n"
+        "p.add_argument('--from', dest='src', required=True)\n"
+        "print(p.parse_args().value)\n",
+        encoding="utf-8",
+    )
+    execute_python_file = _TOOL_REGISTRY["execute_python_file"]["function"]
+
+    result = execute_python_file(file_path=str(script))
+
+    assert result["status"] == "error"
+    assert "the following arguments are required" in result["error"]
+    assert "don't edit it" in result["error"]
+    assert "edit_file" not in result["error"]
+    assert (
+        execute_python_file(file_path=str(script), args="72 --from f")["stdout"].strip()
+        == "72.0"
+    )
+
+
+def test_a_failed_long_snippet_says_how_to_fix_it_without_sending_it_again(
+    make_run_python, project, monkeypatch
+):
+    monkeypatch.chdir(project)
+    _agent, run_python = make_run_python(project)
+    long_code = "\n".join(f"v{i} = {i}" for i in range(400)) + "\nprint(1 / 0)\n"
+
+    result = run_python(code=long_code)
+
+    assert result["status"] == "error"
+    assert (
+        "To fix it without sending the code again, save the script with "
+        "write_file, fix it with edit_file, and run it by path" in result["error"]
+    )
+
+
+def test_a_failed_short_snippet_is_not_told_to_save_it(
+    make_run_python, project, monkeypatch
+):
+    monkeypatch.chdir(project)
+    _agent, run_python = make_run_python(project)
+
+    result = run_python(code="print(1 / 0)")
+
+    assert result["status"] == "error"
+    assert "write_file" not in result["error"]
+
+
+# ---------------------------------------------------------------------------
+# Full access: the Python tools run where and what they are asked to
+# ---------------------------------------------------------------------------
+
+
+def test_full_access_runs_in_a_project_outside_the_allowed_paths(
+    make_run_python, project, tmp_path, monkeypatch
+):
+    """The case ``test_a_disallowed_project_the_user_chose_is_refused`` refuses."""
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    monkeypatch.chdir(project)
+    monkeypatch.setenv(PROJECT_ROOT_ENV, str(project))
+    agent, run_python = make_run_python(elsewhere)
+    agent.console.full_access = True
+
+    result = run_python(code="open('ran.txt', 'w').write('x')")
+
+    assert result["status"] == "success", result
+    assert (project / "ran.txt").exists()
+
+
+def test_full_access_runs_with_a_chosen_root_the_map_drops(
+    make_run_python, project, tmp_path, monkeypatch
+):
+    allowed = tmp_path / "docs"
+    allowed.mkdir()
+    monkeypatch.chdir(allowed)
+    monkeypatch.setenv(PROJECT_ROOT_ENV, str(project))
+    agent, run_python = make_run_python(allowed)
+    monkeypatch.setattr(agent, "_project_map_root", lambda: None, raising=False)
+    agent.console.full_access = True
+
+    result = run_python(code="print(6 * 7)")
+
+    assert result["status"] == "success", result
+    assert result["stdout"].strip() == "42"
+
+
+@pytest.mark.parametrize("full_access", [False, True])
+def test_a_script_outside_the_allowed_paths_runs_only_under_full_access(
+    make_run_python, project, tmp_path, monkeypatch, full_access
+):
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    script = elsewhere / "hello.py"
+    script.write_text("print('from elsewhere')\n", encoding="utf-8")
+    monkeypatch.chdir(project)
+    agent, _run_python = make_run_python(project)
+    agent.console.full_access = full_access
+    execute_python_file = _TOOL_REGISTRY["execute_python_file"]["function"]
+
+    result = execute_python_file(file_path=str(script))
+
+    if full_access:
+        assert result["status"] == "success", result
+        assert "from elsewhere" in result["stdout"]
+    else:
+        assert result["status"] == "error"
+        assert "Access denied" in result["error"]
+
+
+@pytest.mark.parametrize("full_access", [False, True])
+def test_the_child_is_guarded_and_marked_only_without_full_access(
+    make_run_python, project, monkeypatch, full_access
+):
+    from gaiapy import chat_agent
+    from gaiapy.python_runner import GUARDED_FOLDERS_ENV
+
+    seen = {}
+    real = chat_agent.run_python_job
+
+    def spy(cmd, **kwargs):
+        seen.update(env=dict(kwargs["env"]), marked=kwargs.get("marked", True))
+        return real(cmd, **kwargs)
+
+    monkeypatch.setattr(chat_agent, "run_python_job", spy)
+    monkeypatch.chdir(project)
+    agent, run_python = make_run_python(project)
+    agent.console.full_access = full_access
+
+    result = run_python(code="print(1)")
+
+    assert result["status"] == "success", result
+    assert (GUARDED_FOLDERS_ENV in seen["env"]) is not full_access
+    assert seen["marked"] is not full_access
+
+
+def test_full_access_does_not_run_in_a_folder_the_user_removed(
+    make_run_python, project, monkeypatch
+):
+    monkeypatch.chdir(project)
+    monkeypatch.setenv(PROJECT_ROOT_ENV, str(project))
+    agent, run_python = make_run_python(project)
+    agent.console.full_access = True
+    agent.path_validator.withhold_path(str(project))
+
+    result = run_python(code="open('ran.txt', 'w').write('x')")
+
+    assert result["status"] == "error"
+    assert not (project / "ran.txt").exists()

@@ -46,7 +46,7 @@ def _source_roots():
 
     For a hub agent the importable root is the directory CONTAINING the package
     (``hub/agents/gaia/python``), not the package itself — putting the package
-    dir on sys.path makes ``import gaia_agent`` miss it entirely.
+    dir on sys.path makes ``import gaiapy`` miss it entirely.
 
     A hub agent is included ONLY when its package already resolves somewhere.
     This redirects an existing install to this checkout; it must not *create*
@@ -66,8 +66,8 @@ _SOURCE_ROOTS = _source_roots()
 
 #: Modules whose origin proves which checkout is under test. The hub agents are
 #: listed too: they are separately editable-installed, so ``gaia`` can resolve
-#: here while ``gaia_agent`` quietly comes from another worktree.
-_ANCHOR_MODULES = ("gaia", "gaia_agent")
+#: here while ``gaiapy`` quietly comes from another worktree.
+_ANCHOR_MODULES = ("gaia", "gaiapy")
 
 
 def _prepend_source_roots() -> None:
@@ -275,6 +275,16 @@ def pytest_configure(config):  # noqa: D103 — pytest hook
         "markers",
         "npu_host_probe: let gaia.llm.npu_linux read this machine's NPU setup",
     )
+    config.addinivalue_line(
+        "markers",
+        "speech_platform_gate: judge whether GAIA offers its voice by this "
+        "machine's real platform",
+    )
+    config.addinivalue_line(
+        "markers",
+        "real_path_refresh: let gaia.program_lookup read PATH from the registry "
+        "or the login shell (its sources must be mocked)",
+    )
 
 
 _REAL_START_EMBEDDED = {}
@@ -390,6 +400,52 @@ def _no_npu_host_probe(request, monkeypatch):
     if request.node.get_closest_marker("npu_host_probe"):
         return
     monkeypatch.setattr(npu_linux, "problems", lambda: [])
+
+
+_REAL_CURRENT_PLATFORM = {}
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _speech_offered_on_any_platform():
+    """Run speech tests as on a platform where GAIA offers its voice.
+
+    Otherwise every read-aloud and dictation test fails on a Mac, where the
+    voice is withheld. Session scope also covers module-scoped fixtures that
+    build agents. Opt a test in to the real platform with
+    @pytest.mark.speech_platform_gate.
+    """
+    import gaia.config
+
+    _REAL_CURRENT_PLATFORM["function"] = gaia.config._current_platform
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(gaia.config, "_current_platform", lambda: "linux")
+        yield
+
+
+@pytest.fixture(autouse=True)
+def _real_speech_platform(request, monkeypatch):
+    if not request.node.get_closest_marker("speech_platform_gate"):
+        return
+    import gaia.config
+
+    monkeypatch.setattr(
+        gaia.config, "_current_platform", _REAL_CURRENT_PLATFORM["function"]
+    )
+
+
+@pytest.fixture(autouse=True)
+def _no_real_path_refresh(request, monkeypatch):
+    """Keep a program a test hides from ``PATH`` hidden.
+
+    A lookup that misses re-reads ``PATH`` from the registry, which on a
+    developer's PC would put the real git or gh back and flip the test. Opt a
+    test in with @pytest.mark.real_path_refresh.
+    """
+    if request.node.get_closest_marker("real_path_refresh"):
+        return
+    from gaia import program_lookup
+
+    monkeypatch.setattr(program_lookup, "refresh_path", lambda after_install=False: [])
 
 
 @pytest.fixture(autouse=True)
@@ -528,6 +584,75 @@ def _guard_real_gaia_home():
         yield
 
 
+_DEFAULT_LEMONADE_PORT = 13305
+_LOOPBACK_HOSTS = {"localhost", "::1", "0:0:0:0:0:0:0:1"}
+
+
+def _is_loopback(host) -> bool:
+    return isinstance(host, str) and (
+        host.lower() in _LOOPBACK_HOSTS or host.startswith("127.")
+    )
+
+
+def _redirected_lemonade_url() -> str | None:
+    """LEMONADE_BASE_URL when it points away from a local Lemonade on 13305."""
+    base_url = os.environ.get("LEMONADE_BASE_URL", "").strip()
+    if not base_url:
+        return None
+    parsed = urllib.parse.urlsplit(base_url)
+    if _is_loopback(parsed.hostname) and parsed.port == _DEFAULT_LEMONADE_PORT:
+        return None
+    return base_url
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _guard_default_lemonade_port():
+    """Fail a test that reaches local 13305 while LEMONADE_BASE_URL says otherwise.
+
+    Covers sockets opened in this process (requests, urllib, httpx sync); a
+    subprocess or a Windows proactor event loop is not seen.
+    """
+    redirected = _redirected_lemonade_url()
+    if redirected is None:
+        yield
+        return
+
+    import socket
+
+    def _check(address):
+        if (
+            isinstance(address, tuple)
+            and len(address) >= 2
+            and address[1] == _DEFAULT_LEMONADE_PORT
+            and _is_loopback(address[0])
+        ):
+            pytest.fail(
+                f"This test connected to {address[0]}:{_DEFAULT_LEMONADE_PORT}, "
+                f"but LEMONADE_BASE_URL={redirected} points tests elsewhere: it "
+                "would reach, and could load models on, the real Lemonade on "
+                "this machine. Resolve the address from LEMONADE_BASE_URL "
+                "(gaia.llm.lemonade_client._get_lemonade_config) instead of "
+                "hard-coding the default port.",
+                pytrace=False,
+            )
+
+    real_connect = socket.socket.connect
+    real_connect_ex = socket.socket.connect_ex
+
+    def guarded_connect(self, address):
+        _check(address)
+        return real_connect(self, address)
+
+    def guarded_connect_ex(self, address):
+        _check(address)
+        return real_connect_ex(self, address)
+
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(socket.socket, "connect", guarded_connect)
+        mp.setattr(socket.socket, "connect_ex", guarded_connect_ex)
+        yield
+
+
 def _sqlite_target(database, uri: bool) -> Path | None:
     """The file a ``sqlite3.connect`` call opens, or None for an in-memory DB."""
     if isinstance(database, int):
@@ -582,7 +707,7 @@ def _off_real_home(path: Path) -> Path:
 
 @pytest.fixture(scope="session", autouse=True)
 def _redirect_default_databases():
-    """Open the file index, scratchpad and email stores under ``_TEST_GAIA_HOME``, not ``~/.gaia``.
+    """Open the file index and scratchpad stores under ``_TEST_GAIA_HOME``, not ``~/.gaia``.
 
     Both default to ``gaia_home()``, and GAIA_HOME stays unset (see
     _STATE_ENV). ``ChatAgentConfig`` passes that same default in explicitly, so
@@ -604,13 +729,6 @@ def _redirect_default_databases():
 
         return init
 
-    def redirect_path(real_resolve):
-        @functools.wraps(real_resolve)
-        def resolve(self):
-            return str(_off_real_home(Path(real_resolve(self)).expanduser()))
-
-        return resolve
-
     with pytest.MonkeyPatch.context() as mp:
         for module, cls in (
             (index, index.FileSystemIndexService),
@@ -618,15 +736,6 @@ def _redirect_default_databases():
         ):
             mp.setattr(module, "gaia_home", redirected_home)
             mp.setattr(cls, "__init__", redirect_init(cls.__init__))
-        # The email agent keeps state.db and memory.db under ~/.gaia/email; its
-        # package is absent from jobs that don't install it.
-        if importlib.util.find_spec("gaia_agent_email") is not None:
-            from gaia_agent_email.config import EmailAgentConfig
-
-            for name in ("resolved_db_path", "resolved_memory_db_path"):
-                mp.setattr(
-                    EmailAgentConfig, name, redirect_path(getattr(EmailAgentConfig, name))
-                )
         yield
 
 

@@ -7,7 +7,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "gaia-agent-gaia"
-version = "0.3.5"
+version = "0.3.6"
 description = "The flagship GAIA agent — conversation, document Q&A, data analysis, and web research, with persistent memory and add-on skills"
 authors = [{ name = "AMD" }]
 license = "MIT"
@@ -27,35 +27,39 @@ requires-python = ">=3.10"
 # not drag faiss/pypdfium2 in just to import the class. RAG's real dependencies
 # come from `gaia init` into the active interpreter (#2358).
 dependencies = [
-  "amd-gaia>=0.26.0",
+  "amd-gaia>=0.27.0",
 ]
 
 [project.scripts]
 # Two transports, one binary: `--serve` (or a bind flag) runs the HTTP sidecar
 # the daemon supervises, anything else runs the newline-delimited JSON wire a
-# parent process spawns. gaia_agent.entry is the dispatcher, and it is
+# parent process spawns. gaiapy.entry is the dispatcher, and it is
 # deliberately light -- pointing this at server:main would make the stdio wire
 # import FastAPI (an extras-only dependency) just to discover it was not
 # selected; pointing it at stdio:main, as it did before, made `--serve`
 # unreachable from a pip install.
-gaia-agent = "gaia_agent.entry:main"
+# gaiapy is the harness's name; gaia-agent is the name installers and older
+# scripts use for the same program.
+gaiapy = "gaiapy.entry:main"
+gaia-agent = "gaiapy.entry:main"
 
 [project.entry-points."gaia.agent"]
-gaia = "gaia_agent:build_gaia"
+gaia = "gaiapy:build_gaia"
 
 [project.optional-dependencies]
 # setuptools: tests/test_starter_skill_build.py runs the real build hooks.
 test = ["pytest", "setuptools>=70.0"]
 
 [tool.setuptools.packages.find]
-include = ["gaia_agent*"]
+# gaia_agent is the package's old name: a small alias to gaiapy for outside code.
+include = ["gaiapy*", "gaia_agent*"]
 
 [tool.setuptools.cmdclass]
-build_py = "gaia_agent.build.build_py"
-sdist = "gaia_agent.build.sdist"
+build_py = "gaiapy.build.build_py"
+sdist = "gaiapy.build.sdist"
 
 [tool.setuptools.package-data]
 # The manifest and bundled skills must land inside the package so they survive
 # both the wheel and the frozen sidecar (SKILL_DIRS / SKILL_MANIFEST resolve
 # relative to __file__).
-gaia_agent = ["gaia-agent.yaml", "skills/**/*"]
+gaiapy = ["gaia-agent.yaml", "skills/**/*"]

@@ -71,11 +71,19 @@
      * with no blur, so it is a ring and never a glow. */
     --accent-ring: rgba(176, 141, 87, 0.40);
 
-    /* Accent as a button. Buttons are soft tinted: a brass wash carrying
-     * brass text, judged against itself. */
+    /* The brass wash: a chosen option or a pressed toggle, carrying brass
+     * text, judged against itself. */
     --accent-fill: #EEE8DD;
     --accent-fill-text: #7A5A22;
     --accent-fill-hover: #E6DCCB;
+
+    /* The one action a screen is asking for: the text colour as a fill,
+     * carrying the canvas colour, so it reads as a button on a warm ground
+     * where a brass wash did not. Named by role, so every palette's ink and
+     * canvas follow; the pairs are the text-on-canvas ones the tests measure. */
+    --action-fill: var(--text-primary);
+    --action-fill-text: var(--bg-primary);
+    --action-fill-hover: var(--text-secondary);
 
     /* Semantic status keeps its conventional hues. Warning amber sits next
      * to brass in hue, so every warning also carries an icon and a word. */
@@ -106,6 +114,14 @@
     --code-success: #5CC96E;
     --code-warning: #E5B567;
     --code-danger: #F2787C;
+    /* The live slide preview draws the deck's light theme in both app themes. */
+    --slide-paper: #FFFFFF;
+    --slide-ink: #1F2937;
+    --slide-ink-dim: #4B5563;
+    --slide-accent: #0072B2;
+    --slide-on-accent: #FFFFFF;
+    --slide-panel: #F3F4F6;
+    --slide-rule: #D1D5DB;
 
     --bg-primary: #FAF9F7;           /* canvas */
     --bg-secondary: #F6F4F1;         /* header / composer band */
@@ -171,10 +187,18 @@
     --fs-prose: 15px;     /* answers and your messages */
     --fs-title: 18px;     /* dialog titles */
 
+    /* The smallest height a text button takes. */
+    --hit-min: 28px;
+
     --sidebar-w: 260px;
     --content-w: 760px;
     /* The desktop app's top band, where the window controls sit (TITLE_BAR_HEIGHT in services/window-frame.cjs). */
     --titlebar-h: 48px;
+    /* Width of the docked browser pane; set while it is open. */
+    --browser-pane-inset: 0px;
+    /* The chat's and the pane's narrowest widths while both show (CHAT_MIN_WIDTH, PANE_MIN_WIDTH in browserPaneStore.ts). */
+    --chat-min-w: 560px;
+    --pane-min-w: 360px;
     /* Motion — every animation and transition takes its timing from here
        (enforced by styles/__tests__/motion.test.ts). */
     --ease: cubic-bezier(0.22, 1, 0.36, 1);       /* things arriving or settling */
@@ -186,6 +210,7 @@
     --duration: 200ms;        /* rows, popovers, toasts */
     --duration-slow: 320ms;   /* panels and height changes */
     --duration-spring: 440ms; /* step done, needs you, an answer arriving */
+    --duration-wash: 900ms;   /* the highlight on something new, fading */
     --duration-press: 80ms;   /* a press settles faster than it rose */
     --duration-spin: 900ms;   /* one spinner turn */
     --duration-blink: 1s;
@@ -361,10 +386,11 @@ a:hover { text-decoration: underline; }
 
 /* ── Notification center trigger/popover ───────────────────────── */
 
+/* Opens upward from the bell in the sidebar's footer, not across the window from it. */
 .notification-center-popover {
     position: fixed;
-    top: 52px;
-    inset-inline-end: 16px;
+    bottom: 56px;
+    inset-inline-start: 12px;
     z-index: 120;
 }
 
@@ -389,16 +415,16 @@ textarea:focus-visible {
 
 /* ── Shared Button Utilities ──────────────────────────────────────── */
 
-/* Soft tinted, and they answer the hand: a hover lifts 1px onto the resting
- * shadow, a press settles below rest faster than it rose. Brass marks the
- * action you would most likely take; neutral marks the rest. */
+/* They answer the hand: a hover lifts 1px onto the resting shadow, a press
+ * settles below rest faster than it rose. Ink marks the action a screen is
+ * asking for; a neutral wash marks the rest. */
 .btn-primary,
 .btn-secondary,
 .btn-danger {
     display: inline-flex; align-items: center; justify-content: center; gap: 6px;
     height: 32px; padding: 0 12px;
     border-radius: var(--radius-md);
-    font-family: var(--font-sans); font-size: var(--fs-ui); font-weight: 600;
+    font-family: var(--font-sans); font-size: var(--fs-ui); font-weight: 500;
     white-space: nowrap;
     transition:
         background var(--duration-fast) var(--ease),
@@ -406,10 +432,12 @@ textarea:focus-visible {
         box-shadow var(--duration) var(--ease),
         transform var(--duration) var(--ease-spring);
 }
-.btn-primary { background: var(--accent-fill); color: var(--accent-fill-text); }
-.btn-primary:hover { background: var(--accent-fill-hover); }
-/* Lightened, the English fell to 4.46:1 on the hover fill. */
-.btn-primary .i18n-gloss.i18n-gloss { color: inherit; }
+.btn-primary { background: var(--action-fill); color: var(--action-fill-text); }
+.btn-primary:hover { background: var(--action-fill-hover); }
+/* On an ink fill the gloss's own lightened colour would vanish into the button, so it takes the label's. */
+:is(.btn-primary, .perm-btn.is-primary, .compare-keep, .vp-btn-confirm, .fb-action-btn.primary, .composer-send,
+    .render-needs-input__free-text-submit, .render-connect__button, .render-guide__start, .email-connect-cta__button)
+    .i18n-gloss.i18n-gloss { color: inherit; }
 .btn-secondary { background: var(--bg-tertiary); color: var(--text-primary); }
 .btn-secondary:hover { background: var(--bg-active); }
 .btn-danger { background: var(--danger-dim); color: var(--danger); }
@@ -461,7 +489,7 @@ textarea:focus-visible {
     padding: 0 7px;
     font-family: var(--font-sans);
     font-size: var(--fs-caption);
-    font-weight: 600;
+    font-weight: 500;
     border-radius: var(--radius-xs);
     background: var(--bg-tertiary);
     color: var(--text-secondary);
@@ -497,7 +525,7 @@ textarea:focus-visible {
     flex-shrink: 0;
 }
 .modal-header h3 {
-    font-size: var(--fs-title); font-weight: 600; font-family: var(--font-sans);
+    font-size: var(--fs-title); font-weight: 500; font-family: var(--font-sans);
     letter-spacing: -0.015em;
     color: var(--text-primary);
 }
@@ -514,15 +542,32 @@ textarea:focus-visible {
 .modal-body::-webkit-scrollbar-thumb { background: var(--border); border-radius: var(--radius-full); }
 .modal-body::-webkit-scrollbar-thumb:hover { background: var(--text-muted); }
 
-/* ── AnimatedPresence exit animations ──────────────────────────── */
-
-@keyframes modalOverlayOut {
-    from { opacity: 1; }
-    to { opacity: 0; }
+/* Cut text fades out at its end rather than ending in "…". The scroll timeline
+ * is inactive when nothing overflows, so text that fits is never faded. */
+:root {
+    --fade-size: 2.5em;
 }
-@keyframes modalPanelOut {
-    from { opacity: 1; transform: translateY(0); }
-    to { opacity: 0; transform: translateY(12px); }
+/* :dir() resolves dir="auto" text by its own letters; vite.config's cssTarget keeps it native. */
+*:dir(ltr) {
+    --fade-to: right;
+}
+*:dir(rtl) {
+    --fade-to: left;
+}
+/* Without scroll timelines the animation would run on the clock and fade text that fits. */
+@supports (animation-timeline: scroll()) {
+    @keyframes fade-cut-inline {
+        from, to {
+            -webkit-mask-image: linear-gradient(to var(--fade-to), #000 calc(100% - var(--fade-size)), transparent);
+            mask-image: linear-gradient(to var(--fade-to), #000 calc(100% - var(--fade-size)), transparent);
+        }
+    }
+    @keyframes fade-cut-block {
+        from, to {
+            -webkit-mask-image: linear-gradient(to bottom, #000 calc(100% - 1.4em), transparent);
+            mask-image: linear-gradient(to bottom, #000 calc(100% - 1.4em), transparent);
+        }
+    }
 }
 
 /* ── Sidebar Overlay (Mobile) ────────────────────────────────────── */
@@ -584,7 +629,8 @@ textarea:focus-visible {
 .toast {
     position: fixed;
     bottom: 24px;
-    left: 50%;
+    /* Centred on the chat when the browser pane takes the right of the window. */
+    left: calc(50% - var(--browser-pane-inset) / 2);
     transform: translateX(-50%);
     z-index: 200;
     padding: 12px 16px;
@@ -597,6 +643,21 @@ textarea:focus-visible {
     box-shadow: var(--shadow-md);
     animation: toastIn var(--duration-spring) var(--ease-spring), toastOut var(--duration) var(--ease) var(--toast-hold) forwards;
     pointer-events: none;
+}
+/* "Restored your last model": long enough to read, gone before it's in the way.
+   Up top, so it never sits on the message box in an open chat. */
+.app-restore-toast {
+    --toast-hold: 3.4s;
+    top: 16px;
+    bottom: auto;
+}
+:root[data-titlebar] .app-restore-toast {
+    top: calc(var(--titlebar-h) + 8px);
+}
+
+/* Right to left the pane takes the window's left, so the chat's centre moves right. */
+:root[dir="rtl"] .toast {
+    left: calc(50% + var(--browser-pane-inset) / 2);
 }
 
 /* An error someone has to read and act on: it stays until they dismiss it, up
@@ -633,17 +694,12 @@ textarea:focus-visible {
 /* ── Animations ──────────────────────────────────────────────────── */
 
 @keyframes toastIn { from { opacity: 0; transform: translateX(-50%) translateY(8px); } to { opacity: 1; transform: translateX(-50%) translateY(0); } }
-@keyframes toastOut { from { opacity: 1; transform: translateY(0); } to { opacity: 0; transform: translateY(8px); } }
+/* Keeps the toast's centring: a bare translateY would jump it sideways as it leaves. */
+@keyframes toastOut { from { opacity: 1; transform: translateX(-50%) translateY(0); } to { opacity: 0; transform: translateX(-50%) translateY(8px); } }
 @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
-@keyframes fadeOut { from { opacity: 1; } to { opacity: 0; } }
 @keyframes slideUp { from { opacity: 0; transform: translateY(12px); } to { opacity: 1; transform: translateY(0); } }
-@keyframes slideDown { from { opacity: 1; transform: translateY(0); } to { opacity: 0; transform: translateY(12px); } }
 @keyframes blink { 0%, 100% { opacity: 1; } 50% { opacity: 0; } }
 @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.5; } }
-@keyframes bounce {
-    0%, 100% { transform: translateY(0); }
-    50% { transform: translateY(-3px); }
-}
 @keyframes spin { to { transform: rotate(360deg); } }
 /* Terminal cursor blink -- block style */
 @keyframes cursorBlink {
@@ -665,12 +721,6 @@ textarea:focus-visible {
     25%     { opacity: 1; }
     40%, 100% { opacity: 0.15; }
 }
-/* Scroll reveal animation */
-@keyframes revealUp {
-    from { opacity: 0; transform: translateY(20px); }
-    to { opacity: 1; transform: translateY(0); }
-}
-
 /* ── Theme transition smoothing ─────────────────────────────────── */
 
 /* ── Reduced Motion ──────────────────────────────────────────────── */
@@ -682,6 +732,10 @@ textarea:focus-visible {
         animation-iteration-count: 1 !important;
         transition-duration: 0.01ms !important;
         scroll-behavior: auto !important;
+    }
+    /* A section's grow-open ease lives on this pseudo-element, which * doesn't reach. */
+    *::details-content {
+        transition-duration: 0.01ms !important;
     }
     [data-theme="dark"] #root::after {
         display: none;
@@ -702,13 +756,20 @@ textarea:focus-visible {
 /* One-line notice at the top of the main area (restored model, setup check). */
 .app-notice {
     display: flex;
+    flex-wrap: wrap;
     align-items: center;
-    gap: 10px;
+    gap: 6px 10px;
     margin: 8px 12px 0;
     padding: 8px 12px;
     border-radius: var(--radius-md);
     background: var(--bg-tertiary);
     color: var(--text-primary);
+    font-size: var(--fs-ui);
+}
+
+/* The way back after a failed engine update, under its notice. */
+.app-go-back {
+    margin: 8px 12px 0;
     font-size: var(--fs-ui);
 }
 
@@ -727,8 +788,9 @@ textarea:focus-visible {
     mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round'%3E%3Ccircle cx='12' cy='12' r='9'/%3E%3Cpath d='M12 7.5v5.5M12 16.5v.01'/%3E%3C/svg%3E") center / contain no-repeat;
 }
 
+/* Too narrow for the words beside the buttons, the buttons wrap under the words. */
 .app-notice > span {
-    flex: 1;
+    flex: 1 1 240px;
     min-width: 0;
 }
 
@@ -736,7 +798,7 @@ textarea:focus-visible {
     display: inline-flex;
     padding: 4px;
     border-radius: var(--radius-sm);
-    color: var(--text-muted);
+    color: var(--text-secondary);
 }
 
 .app-notice-close:hover {
@@ -756,7 +818,7 @@ textarea:focus-visible {
     text-align: center;
     color: var(--text-primary);
 }
-.error-boundary-title { font-size: 15px; font-weight: 600; }
+.error-boundary-title { font-size: 15px; font-weight: 500; }
 .error-boundary-body { color: var(--text-secondary); font-size: var(--fs-ui); }
 .error-boundary-actions { display: flex; flex-wrap: wrap; justify-content: center; gap: 8px; margin-top: 4px; }
 .error-boundary-compact {
@@ -822,20 +884,28 @@ textarea:focus-visible {
 }
 /* A Latin name in a right-to-left UI: dir="auto" makes it truncate at its end,
    and this keeps it on the label's own edge. */
-:root[dir="rtl"] :is(.doc-name, .sb-location-name, .composer-chip-label,
-    .new-chat-folder-name, .sp-item-name, .connection-banner__text, .schedule-card-name, .schedule-card-prompt)[dir="auto"] {
+:root[dir="rtl"] :is(.sb-location-name, .composer-chip-label,
+    .new-chat-folder-name, .sp-item-name, .connection-banner__text, .schedule-card-name, .msg-cut-off)[dir="auto"] {
+    text-align: right;
+}
+/* A library name reads left to right so its extension stays last; it still sits on the row's own edge. */
+:root[dir="rtl"] :is(.doc-name, .sp-item-name, .side-rail-name)[dir="ltr"] {
     text-align: right;
 }
 /* The mirror: an Arabic name in a left-to-right UI stays on the left. */
-:root:not([dir="rtl"]) :is(.doc-name, .sb-location-name, .composer-chip-label,
-    .new-chat-folder-name, .sp-item-name, .connection-banner__text, .schedule-card-name, .schedule-card-prompt)[dir="auto"] {
+:root:not([dir="rtl"]) :is(.sb-location-name, .composer-chip-label,
+    .new-chat-folder-name, .sp-item-name, .connection-banner__text, .schedule-card-name, .msg-cut-off)[dir="auto"] {
     text-align: left;
+}
+/* A clamped block aligned to its end pushes its "…" past the edge, so these keep their own start. */
+.schedule-card-prompt, .skill-row-desc, .automation-detail, .notification-message {
+    text-align: start;
 }
 /* Windows: minimize, maximize and close sit at the top right. */
 :root[data-titlebar="overlay"] {
     --titlebar-controls-w: calc(100vw - env(titlebar-area-x, 0px) - env(titlebar-area-width, 100vw));
 }
-:root[data-titlebar="overlay"] .task-header {
+:root[data-titlebar="overlay"] :is(.task-header, .new-chat-actions) {
     min-height: var(--titlebar-h);
     padding-right: calc(var(--titlebar-controls-w) + 12px);
 }
@@ -848,9 +918,27 @@ textarea:focus-visible {
 :root[data-titlebar="mac"] .sb-top {
     padding-left: 84px;
 }
+/* The collapsed rail widens to hold the traffic lights, with the same 16px
+   margin on each side, and its top row moves below them. */
+:root[data-titlebar="mac"]:not([dir="rtl"]) .sb.is-collapsed {
+    width: 84px;
+    min-width: 84px;
+}
+:root[data-titlebar="mac"]:not([dir="rtl"]) .sb.is-collapsed .sb-top {
+    padding-inline: 10px;
+    padding-top: var(--titlebar-h);
+}
+/* Narrow windows: the floating sidebar button sits after the traffic lights,
+   and the top rows start after the button. */
+:root[data-titlebar="mac"]:not([dir="rtl"]) {
+    --sidebar-toggle-clearance: 138px;
+}
+:root[data-titlebar="mac"]:not([dir="rtl"]) .sidebar-toggle {
+    inset-inline-start: 84px;
+}
 /* Right to left the sidebar is on the right: it makes room for the Windows
    controls, and the chat header for the macOS ones. */
-:root[data-titlebar="overlay"][dir="rtl"] .task-header {
+:root[data-titlebar="overlay"][dir="rtl"] :is(.task-header, .new-chat-actions) {
     padding-right: 12px;
 }
 :root[data-titlebar="overlay"][dir="rtl"] .sb-top {
@@ -881,4 +969,63 @@ textarea:focus-visible {
 .startup .loading-spinner {
     flex: none;
     padding: 0;
+}
+
+.startup-elapsed {
+    color: var(--text-muted);
+    font-size: 13px;
+    font-variant-numeric: tabular-nums;
+}
+
+.startup--failed {
+    padding: 48px 16px;
+}
+
+.startup-failed {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    width: 100%;
+    max-width: 560px;
+}
+
+.startup-failed-title {
+    color: var(--text-primary);
+    font-size: 22px;
+    font-weight: 500;
+}
+
+.startup-failed-hint {
+    color: var(--text-secondary);
+    font-size: 14px;
+}
+
+.startup-failed-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+}
+
+.startup-failed-details {
+    color: var(--text-secondary);
+    font-size: 13px;
+}
+
+.startup-failed-details summary {
+    cursor: pointer;
+}
+
+.startup-failed-log {
+    max-height: 260px;
+    margin-block: 8px;
+    padding: 10px 12px;
+    overflow: auto;
+    background: var(--bg-code);
+    color: var(--text-code);
+    border-radius: var(--radius-md);
+    font-family: var(--font-mono);
+    font-size: 12px;
+    text-align: start;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
 }

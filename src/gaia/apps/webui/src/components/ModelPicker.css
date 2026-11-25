@@ -7,6 +7,8 @@
 /* Anchored in a narrow chip, the menu would shrink to its min-width; grow to fit names up to max-width. */
 .popover.model-menu {
     width: max-content;
+    /* Wider than other popovers: each row also carries setup's Verified / Untested tag. */
+    max-width: min(440px, calc(100vw - 32px));
 }
 
 .popover-row {
@@ -25,6 +27,11 @@
     flex-direction: row;
     align-items: baseline;
     gap: 8px;
+}
+
+.popover-item-body.is-inline .mc-chip {
+    flex-shrink: 0;
+    white-space: nowrap;
 }
 
 .popover-item-meta {
@@ -84,7 +91,9 @@
     color: var(--accent-blue);
     font-size: 11.5px;
     overflow: hidden;
-    text-overflow: ellipsis;
+    text-overflow: clip;
+    animation: fade-cut-inline both;
+    animation-timeline: scroll(self inline);
 }
 
 .model-state {
@@ -137,6 +146,11 @@
     color: var(--accent-green);
 }
 
+.model-badge.is-tight {
+    background: var(--accent-yellow-dim);
+    color: var(--accent-yellow);
+}
+
 .model-badge.is-loaded {
     background: var(--accent-green-dim);
     color: var(--accent-green);
@@ -155,7 +169,7 @@
 .model-badge.is-device {
     background: var(--accent-dim);
     color: var(--text-primary);
-    font-weight: 600;
+    font-weight: 500;
 }
 
 .model-badge.is-rank {
@@ -225,7 +239,7 @@
     display: flex;
     align-items: center;
     gap: 8px;
-    font-weight: 600;
+    font-weight: 500;
 }
 
 .model-status-dot {
@@ -255,7 +269,9 @@
     margin: 0;
     text-align: end;
     overflow: hidden;
-    text-overflow: ellipsis;
+    text-overflow: clip;
+    animation: fade-cut-inline both;
+    animation-timeline: scroll(self inline);
 }
 
 .model-status-actions {

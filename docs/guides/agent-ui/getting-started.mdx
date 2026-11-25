@@ -1,0 +1,356 @@
+---
+title: "Getting started"
+description: "Install the GAIA desktop app, set it up and get your first answer"
+icon: "rocket"
+---
+
+From download to your first answer takes a few minutes, plus the model download. Each step below is one screen in the app.
+
+<Steps>
+  <Step title="Install GAIA">
+    Download **Install GAIA** from [amd-gaia.ai](https://amd-gaia.ai/#install) and run it. On Windows, tick **GAIA Agent UI (desktop app)** on Choose Components, then open **GAIA** from the Start Menu.
+
+    Other platforms and install methods are under [Other ways to install](#other-ways-to-install).
+  </Step>
+
+  <Step title="Let GAIA check your PC">
+    The first launch opens setup. **Check this PC** looks at your processor, GPU, NPU, memory and disk. You don't need to do anything but wait for it to finish, then press **Continue**.
+
+    <Frame>
+      <img src="/images/agent-ui/setup-check.png" alt="Setup step 1, Check this PC, showing what setup found" />
+    </Frame>
+  </Step>
+
+  <Step title="Choose where chat runs">
+    **Your setup** offers two cards:
+
+    - A model on this PC, such as **Run Gemma 4 E4B (Multimodal) on this PC**, marked **Recommended for this PC** and already picked. The card shows the download size and what it runs on. Your chats stay on the PC.
+    - **Use a cloud model**. Nothing large downloads, but you need an API key and each message goes to the provider.
+
+    Not sure? Keep the model on this PC. You can change it later.
+
+    <Frame>
+      <img src="/images/agent-ui/setup-plan.png" alt="Setup step 2, Your setup, with a model on this PC recommended and a cloud model as the other choice" />
+    </Frame>
+  </Step>
+
+  <Step title="Download and start">
+    Press **Download and start**. Nothing downloads before this. The screen shows each part, its size, the speed and the time left. You can leave it running; **Cancel** keeps what finished.
+
+    <Frame>
+      <img src="/images/agent-ui/setup-download.png" alt="Setup step 3, Download, with progress for each part and each model" />
+    </Frame>
+  </Step>
+
+  <Step title="Wait for the test">
+    **Test** loads the model and asks it one real question, so you know GAIA works before you use it. When the required tests pass, setup says **GAIA is ready**. Press **Start chatting**.
+
+    <Frame>
+      <img src="/images/agent-ui/setup-test.png" alt="Setup step 4, Test, running each part for real" />
+    </Frame>
+  </Step>
+
+  <Step title="Ask your first question">
+    Type a question in the message box and press `Enter`. The starters under the box fill it in if you'd rather start from one; nothing is sent until you press `Enter`.
+
+    > *"Give me a recipe for banana bread"*
+    >
+    > *"Split a $142 dinner four ways with a 20% tip"*
+
+    <Frame>
+      <img src="/images/agent-ui/new-chat.png" alt="A new chat with the message box and a row of three starters" />
+    </Frame>
+  </Step>
+
+  <Step title="Ask about one of your files">
+    Drag a PDF or a spreadsheet into the chat and ask about it.
+
+    > *"Summarize this PDF in 3 bullet points"*
+
+    GAIA reads the file on your PC. See [Documents, files and history](/guides/agent-ui/documents).
+  </Step>
+
+  <Step title="Answer GAIA when it asks">
+    Before GAIA changes a file or runs a command, it asks above the message box. Choose **Allow once**, **Always allow** or **Deny**. See [Permissions](/guides/agent-ui/control#permissions).
+  </Step>
+
+  <Step title="Look at what the answer used">
+    The panel on the right of a chat shows what the answer read, what the chat made and changed, and what it may touch. Open it with the panel button at the right of the chat's title bar; it also opens by itself the first time GAIA creates or changes a file in a chat. See [The session panel](/guides/agent-ui/documents#the-session-panel).
+
+    <Frame>
+      <img src="/images/agent-ui/answer.png" alt="A finished answer with the session panel open on the right" />
+    </Frame>
+  </Step>
+</Steps>
+
+## What to try next
+
+<CardGroup cols={2}>
+  <Card title="Chatting with GAIA" icon="comments" href="/guides/agent-ui/chat">
+    Queue messages, edit and retry, compare models, cards and read aloud
+  </Card>
+
+  <Card title="Documents, files and history" icon="folder-open" href="/guides/agent-ui/documents">
+    Ask about documents, find files, review and undo changes
+  </Card>
+
+  <Card title="Models, control and privacy" icon="shield-halved" href="/guides/agent-ui/control">
+    Switch models, see where answers run, and decide what GAIA may do
+  </Card>
+
+  <Card title="Connect and extend" icon="plug" href="/guides/agent-ui/extend">
+    Skills, your mail and calendar, memory, scheduled tasks and your phone
+  </Card>
+</CardGroup>
+
+---
+
+## Your first chat screen
+
+The app opens straight to an empty chat: a greeting and a message box over a
+quiet field of dots laid out like the NPU's tile array. The dots say what GAIA
+is doing: they sweep while a model loads, fill from the bottom up while one
+downloads, and stir under the pointer and with each keystroke. The message box
+stays put while you type; send, and it drops to the bottom of the window and the
+dots clear away so the chat starts on a clean page. With reduced motion turned on in your
+system settings, the dots hold still.
+
+- **"Loading Qwen3.6-35B-A3B on your GPU… 12s"** under the message box means
+  the model is loading and reading GAIA's instructions ahead of your first
+  message, so that message gets a quick answer. You can type and send
+  meanwhile; a message sent early waits for it to finish rather than starting
+  over.
+
+Around the message box:
+
+- **+** attaches files, or drag them in.
+- The shield picks the [permission mode](/guides/agent-ui/control#permissions): **Ask** or **Full access**.
+- The model chip shows which model answers and where it runs. Click it to [choose another](/guides/agent-ui/control#choose-a-model).
+- The sidebar on the left holds **Memory**, **Scheduled tasks**, **Connectors**, **Documents**, **Skills** and [your chats](/guides/agent-ui/documents#your-chats).
+
+## Setup in detail
+
+The steps above are the short path. This section covers every screen of setup and the choices behind **Customize**.
+
+### Check this PC
+
+**First run:** no separate setup command is needed. The window opens and
+GAIA checks the PC by itself: processor, GPU, NPU, memory, disk, its model
+server and the backends this PC supports. **Check this PC** shows what it
+found, with links to the models folder and GAIA's data and logs, and opens
+each check and the full details on request. If a model server (Lemonade)
+already runs on the PC, it asks which one GAIA should use: **Install
+GAIA's own**, recommended because it is the version GAIA is tested with
+and keeps its own copy of each model, or **Use the one I have**, which
+keeps one copy of each model. **Your setup** then offers two cards of equal
+weight: a model on this PC, recommended and picked, with its
+download size and the reasons (where gaiacpp is on the PC or can be
+downloaded, it also names the agent, and **Change** opens Customize at the
+agent choice), and **Use a cloud model**, which downloads no chat model, needs an API key and sends each message to the provider.
+**Download and start** takes the local setup; with the cloud card picked,
+**Continue** opens the provider's key. Each step's main action is at the
+bottom right, and the language can be changed from the first screen.
+
+### Customize
+
+**Customize**, at the bottom left of Your setup, opens the model choices; the steps beside the screen stay
+the same. **Run on** comes first: **Graphics (GPU)**, which uses llama.cpp
+on Vulkan, or **Ryzen AI NPU**, which uses FastFlowLM, on a PC whose NPU has
+the memory for GAIA's NPU model or already has an NPU model. These are the
+two GAIA has tested. Picking one picks that device's chat model, and the
+chat list shows only that device's models. Setup keeps llama.cpp on Vulkan
+when it starts. On an integrated GPU, **Change how memory is split** opens GPU
+memory from there or from Check this PC. It is optional: unless you pick a
+new size, GAIA changes nothing. **Agent** picks the program that runs GAIA,
+each shown with its download size: **Full-featured** (`gaiapy`, recommended and
+the default) has every tool and feature and is the most tested, but uses more
+memory and starts more slowly; **Fast and light** (`gaiacpp`, beta) starts in a
+fraction of a second and uses a few megabytes of memory, but has fewer tools
+and features so far and is less tested. **Compare the two** under the choice
+says the same. Your pick is saved when you press **Continue**, before
+setup's test chat, so that chat talks to the agent you chose. If gaiacpp isn't
+on the PC, the **Download** step gets it first, with its own progress bar,
+while the models wait; then it becomes the agent and the models download. If
+that download fails, or GAIA can't switch to it, setup stops there and offers
+to try again or carry on with gaiapy. Where this release offers no gaiacpp, its row says
+**Not installed** and the reason is shown under it. You can switch later in Settings › Agent & model. The models are grouped by job, and picking
+a chat model updates the jobs that depend on it:
+
+| Job | What you choose |
+|---|---|
+| Chat | One model, from the ones that fit this PC. **Recommended** is what GAIA evaluated as the default for this PC, and **Verified** passed GAIA's evaluations. **Untested** models run at your own risk and wait behind **Show untested models**, which opens on its own when your chat model is one. A model too big for this PC isn't listed, unless it is already your chat model |
+| Reading images | Nothing, when the chat model reads images itself. Otherwise Gemma 4 E4B is preselected, and you can pick another or skip it. Off when chat runs on the NPU: the NPU model doesn't read images, so setup says so and downloads nothing for it, and a chat with an image says the image won't be read |
+| Documents and memory | The embedding model |
+| Optional extras | Speech to text, text to speech and creating images, off by default. Creating images isn't available with Gemma 4 E4B |
+
+**What you'll get** shows the result of those choices. A chat model you
+already chose that is too big for this PC's memory, or a selection too big for
+the disk, gets a warning with the numbers, and you can still go ahead.
+
+### Download
+
+**Download** lists everything that comes to this PC, with its size and
+where it comes from: the model server, the model runtime, Python packages,
+the GAIA agent and each model. Models show per-model and overall progress
+with speed and time left. Before the models start, the line under the list
+names the part being set up and how far its download is. **Cancel** sits in
+the bottom bar while setup works, including while GAIA's model server
+starts on Check this PC. Cancel keeps what finished, and **Retry** or
+**Resume** continues from there. A dropped connection is waited out for up
+to two minutes before a download fails; to fail straight away instead,
+untick **Keep trying if the connection drops** on Customize. While setup
+runs, a failed model's **Retry** appears once the other downloads finish. Optional
+extras can be added here too: they download once the rest is ready, so
+setup doesn't wait for them, and the Ready screen names any still coming.
+Extras you add are remembered if you quit setup. If you stop with only
+extras left, **Finish without the extras** checks the rest and finishes.
+
+### Test
+
+**Test** runs what you downloaded, because a download doesn't prove it
+works: the server answers, the chat model loads and answers, the vision
+model names the colour of a test image, the embedding model makes an
+embedding, each extra does its job, and GAIA answers one real message,
+on the cloud model when you chose one.
+Setup says it's ready only when the required tests pass. A failed test
+shows the error with **Test again**, **Choose another model** and, for a
+broken model, an option to download it again. A model that failed for
+any other reason, such as too little free memory or an empty answer,
+keeps its file: its **Retry** tests it again without downloading it. A
+test that doesn't finish in time stops with an error instead of hanging. Running `gaia init`
+yourself beforehand also works.
+
+### If setup has trouble
+
+Each step keeps a log. The logs and **Save a troubleshooting report** sit
+under **Having trouble?** at the bottom of every step, which opens by
+itself when a step fails. A redrawn progress bar shows only its last line.
+**Save a troubleshooting report** saves setup's logs, GAIA's logs and
+this PC's details in one file. API keys and other secrets are removed from
+the logs, but a log can quote your chats, so look it over before you share
+it. A copy stays in `~/.gaia`.
+
+If that first-launch setup fails (for example, too little free memory to
+load the model), the new-chat screen shows GAIA's error and a **Choose a
+model** button, so you can switch to a cloud model or a smaller one before
+your first message. Setup runs again on the next launch.
+
+### Change your choices later
+
+Later, if a job needs a model that isn't on this PC, GAIA says which one,
+how big it is and where it comes from, and offers **Download and
+continue**. Your message waits until it's ready.
+
+**Settings → Setup** lists everything setup chose, each with a link to where
+you change it, and **Run setup again** goes through it once more. Your
+models, keys and chats stay.
+
+Every choice can be changed later in **Settings → Agent & model**: the default chat
+model and the models on this PC under **Manage downloads and disk space**
+(tick a skipped model and **Apply** to download it; **Remove** deletes one
+only after you confirm), **GPU memory** on integrated-GPU PCs, and the
+downloads in progress, which also show in the sidebar while they run.
+
+## Other ways to install
+
+[Install GAIA](/guides/install) is the full install guide, including silent installs, updating and uninstalling. The paths below all give you the same app.
+
+<Tabs>
+  <Tab title="Desktop installer (easiest)">
+    Prebuilt desktop installers are published on the
+    [GitHub Releases page](https://github.com/amd/gaia/releases) alongside
+    each tagged release. They bundle the Electron shell and Lemonade Server
+    and download no models; on first launch the app asks which models to
+    download. This is
+    the simplest path for non-developer end users.
+
+
+    **Artifact naming** (`electron-builder.yml`):
+    `gaia-agent-ui-<version>-<arch>-setup.<ext>` — e.g. `gaia-agent-ui-X.Y.Z-x64-setup.exe`
+    and `gaia-agent-ui-X.Y.Z-amd64.deb`.
+
+    **Windows (.exe):**
+    1. Download **Install GAIA for Windows** from [amd-gaia.ai](https://amd-gaia.ai/#install) (`gaia-<version>-win-x64-setup.exe`) and run it.
+    2. Tick **GAIA Agent UI (desktop app)** on Choose Components (and the terminal too, if you want it), then launch "GAIA" from the desktop or Start Menu (binary: `gaia-desktop`).
+    3. Update by running the newer installer; it keeps your choices.
+    4. Uninstall via Windows Settings → Apps → Installed apps → GAIA.
+
+    See [Install GAIA](/guides/install) for silent installs. The desktop app's own installer, `gaia-agent-ui-<version>-x64-setup.exe`, is still on [Releases](https://github.com/amd/gaia/releases) for scripted installs of the app alone.
+
+    **Ubuntu (.deb):**
+    ```bash
+    sudo apt install ./gaia-agent-ui-<version>-amd64.deb
+    gaia-desktop
+    # Update: apt install the newer .deb the same way.
+    # Uninstall (apt package name is `gaia-desktop`):
+    sudo apt remove gaia-desktop
+    ```
+
+    See the [Packaging & Distribution](/deployment/ui) page for more detail on
+    the installers, supported platforms, and signing.
+  </Tab>
+
+  <Tab title="npm">
+    The npm package handles everything — on first run it auto-installs Python, the GAIA backend, Lemonade Server, and a minimal model.
+
+    **Requires:** [Node.js 20+](https://nodejs.org) (`winget install OpenJS.NodeJS.LTS` on Windows, `brew install node@22` on macOS)
+
+    ```bash
+    npm install -g @amd-gaia/agent-ui
+    gaia-ui
+    ```
+
+    The Agent UI opens automatically at [http://127.0.0.1:4200](http://127.0.0.1:4200).
+
+    | Flag | Description |
+    |------|-------------|
+    | `gaia-ui --port 8080` | Custom port |
+    | `gaia-ui --no-open` | Don't auto-open the browser |
+    | `gaia-ui --serve` | Serve frontend only (Node.js static server) |
+    | `gaia-ui --version` | Show version |
+
+    **Update:**
+
+    ```bash
+    npm install -g @amd-gaia/agent-ui@latest
+    ```
+  </Tab>
+
+  <Tab title="Python CLI">
+    If you already have GAIA installed via pip/uv:
+
+    ```bash
+    gaia --ui
+    ```
+
+    Or equivalently: `gaia chat --ui`
+
+    The Agent UI starts on port 4200 and prints a link to open in your
+    browser, `http://127.0.0.1:4200/?launch=...`. The link signs that browser
+    in and works once, within 10 minutes; after that the browser stays signed
+    in, so `http://127.0.0.1:4200` alone is enough. A browser that isn't
+    signed in shows the page but can't load your chats: restart the Agent UI
+    and open the new link.
+
+    | Flag | Description |
+    |------|-------------|
+    | `gaia --ui --ui-port 8080` | Custom port |
+    | `gaia --ui --base-url http://192.168.1.100:13305/api/v1` | Connect to Lemonade on another machine |
+
+    <Note>
+      **Source/dev installs:** The frontend is built during `gaia init`. If you see a JSON response instead of the UI, run `gaia init` or manually build (from the repo root):
+
+      ```bash
+      cd src/gaia/apps/webui && npm install && npm run build
+      ```
+    </Note>
+
+    <Note>
+      The `gaia` from the apps and the one-line installer already includes the Agent UI. If you installed GAIA with `pip` yourself and see a missing dependencies error, run the install command it prints — it targets the Python that GAIA runs in. In an activated environment of your own that is:
+
+      ```bash
+      uv pip install "amd-gaia[ui]"
+      ```
+    </Note>
+  </Tab>
+</Tabs>

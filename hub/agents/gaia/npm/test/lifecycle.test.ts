@@ -28,6 +28,8 @@ import {
 import {
   API_VERSION,
   RESERVED_PORT,
+  TOKEN_ENV_VAR,
+  TOKEN_FILE_ENV_VAR,
   checkVersion,
   health,
   resolveSidecarPath,
@@ -181,6 +183,76 @@ describe("spawnSidecar guards", () => {
   it("requires a binaryPath", () => {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     expect(() => spawnSidecar({} as any)).toThrow(TypeError);
+  });
+});
+
+describe("spawnSidecar caller-auth token", () => {
+  const exited = (s: ReturnType<typeof spawnSidecar>): Promise<void> =>
+    new Promise<void>((r) => {
+      if (s.child.exitCode !== null || s.child.signalCode !== null) r();
+      else s.child.once("exit", () => r());
+    });
+
+  it("delivers a fresh token in an owner-only file and removes it on exit", async () => {
+    const port = await freePort();
+    const sidecar = spawnSidecar({ binaryPath: diesInstantly(), port, autoCleanup: false });
+    expect(sidecar.authToken.length).toBeGreaterThanOrEqual(40);
+    expect(fs.readFileSync(sidecar.tokenFile, "utf8")).toBe(sidecar.authToken);
+    if (process.platform !== "win32") {
+      expect(fs.statSync(sidecar.tokenFile).mode & 0o777).toBe(0o600);
+    }
+    await exited(sidecar);
+    expect(fs.existsSync(path.dirname(sidecar.tokenFile))).toBe(false);
+  });
+
+  it("mints a different token for every spawn", async () => {
+    const a = spawnSidecar({ binaryPath: diesInstantly(), port: await freePort(), autoCleanup: false });
+    const b = spawnSidecar({ binaryPath: diesInstantly(), port: await freePort(), autoCleanup: false });
+    expect(a.authToken).not.toBe(b.authToken);
+    await Promise.all([exited(a), exited(b)]);
+  });
+
+  it("uses the caller's token when one is given", async () => {
+    const sidecar = spawnSidecar({
+      binaryPath: diesInstantly(),
+      port: await freePort(),
+      authToken: "caller-token",
+      autoCleanup: false,
+    });
+    expect(sidecar.authToken).toBe("caller-token");
+    expect(fs.readFileSync(sidecar.tokenFile, "utf8")).toBe("caller-token");
+    await exited(sidecar);
+  });
+
+  it("refuses a caller-set token-file variable instead of overriding it", async () => {
+    expect(() =>
+      spawnSidecar({
+        binaryPath: diesInstantly(),
+        port: 8197,
+        env: { [TOKEN_FILE_ENV_VAR]: path.join(tmp, "theirs") },
+      }),
+    ).toThrow(/pass your token as \{ authToken \}/);
+  });
+});
+
+posixOnly("spawnSidecar token delivery to the child", () => {
+  it("passes the token file, never the bare token, in the child's env", async () => {
+    const out = path.join(tmp, "env.json");
+    const bin = await fakeBinary(
+      "envdump",
+      `import fs from "node:fs";\nfs.writeFileSync(${JSON.stringify(out)}, JSON.stringify(process.env));`,
+    );
+    const sidecar = spawnSidecar({
+      binaryPath: bin,
+      port: await freePort(),
+      env: { [TOKEN_ENV_VAR]: "stale-env-token" },
+      autoCleanup: false,
+    });
+    await new Promise<void>((r) => sidecar.child.once("exit", () => r()));
+    const env = JSON.parse(fs.readFileSync(out, "utf8")) as Record<string, string>;
+    expect(env[TOKEN_FILE_ENV_VAR]).toBe(sidecar.tokenFile);
+    expect(env[TOKEN_ENV_VAR]).toBeUndefined();
+    expect(sidecar.authToken).toBe("stale-env-token");
   });
 });
 
@@ -546,7 +618,7 @@ describe("resolve*Path", () => {
   });
 
   it("returns the path once the binary is present and matches the lock", () => {
-    const { full, lock } = stage("a verified gaia-tui");
+    const { full, lock } = stage("a verified gaia-cli");
     expect(resolveTuiPath({ resourcesDir: tmp, lock })).toBe(full);
   });
 

@@ -18,7 +18,6 @@ with open("src/gaia/version.py", encoding="utf-8") as fp:
 # wheels are not on PyPI, and an 'amd-gaia[agents]' extra naming them made pip
 # silently downgrade amd-gaia to the newest release without the extra (#2240).
 AGENT_WHEEL_PACKAGES = [
-    "gaia-agent-email",
     "gaia-agent-gaia",
 ]
 
@@ -45,7 +44,7 @@ setup(
         "gaia.daemon.sidecars",
         "gaia.ui",
         "gaia.ui.routers",
-        "gaia.ui.email_sidecar",
+        "gaia.ui.sidecar",
         "gaia.sidecar",
         "gaia.database",
         "gaia.talk",
@@ -94,6 +93,7 @@ setup(
     ],
     package_data={
         "gaia.eval.memory": ["scenarios/*.yaml"],
+        "gaia.eval.bench": ["swebench_verified_ids.json"],
         # Browser-mode Agent UI bundle. Recursive globs in package_data are
         # unreliable across setuptools versions, so we list shallow patterns
         # here and back them up with `recursive-include` in MANIFEST.in. The
@@ -131,6 +131,9 @@ setup(
         # get_connection_with_tls_context but has no such hook, so the SNI
         # would silently revert to the pinned IP.
         "requests>=2.32.3",
+        # gaia.utils.text_decoding detects Windows-1256 / Shift-JIS / GBK text
+        # files with it, for the file tools, the Agent UI preview and RAG.
+        "charset-normalizer>=3.0",
         # <1.0: openai checks any imported httpx for httpx.Timeout, which the
         # 1.0 pre-releases removed, so `pip install --pre` broke every chat turn.
         "httpx>=0.27.0,<1.0",
@@ -138,7 +141,7 @@ setup(
         # HTTPS trusts the OS certificate store (gaia.tls), so a corporate
         # TLS-inspecting proxy's root works as it does for pip. 0.10 also
         # honours CA files loaded on top (certifi), so nothing stops verifying.
-        "truststore>=0.10.0",
+        "truststore>=0.10.3",
         "beautifulsoup4",
         # watchdog 7.0.0 starves Windows change delivery while a neighbouring
         # file is written continuously; stay on the known-good 6.x line until
@@ -222,7 +225,7 @@ setup(
             "faiss-cpu>=1.7.0",
             "numpy>=1.24.0",
             "pypdfium2>=5.0.0,<6",
-            "pypdf>=6.20.0",
+            "pypdf>=6.21.0",
             "python-pptx>=0.6.21",
             "python-docx>=1.1.0",
             "openpyxl>=3.1.0",
@@ -288,14 +291,11 @@ setup(
             # Tokenizer proxy for the tool-prompt cost harness (#1448,
             # gaia.eval.tool_cost) so the budget test can count tokens.
             "tiktoken>=0.7.0,<1.0.0",
-            # OpenAPI response-body validation against the committed spec
-            # (tests/test_email_openapi_conformance.py, #1897).
-            "jsonschema>=4.0.0,<5.0.0",
         ],
         "eval": [
             "bs4",
             "numpy>=2.0,<2.3.0",
-            "pypdf>=6.20.0",
+            "pypdf>=6.21.0",
             "reportlab",
             # Tool-prompt cost measurement (#1448): tiktoken cl100k_base proxy.
             "tiktoken>=0.7.0,<1.0.0",
@@ -328,7 +328,7 @@ setup(
             # PDF rendering and image extraction (PDFium; Apache-2.0/BSD-3).
             # PyMuPDF is AGPL-3.0 and must not come back.
             "pypdfium2>=5.0.0,<6",
-            "pypdf>=6.20.0",
+            "pypdf>=6.21.0",
             # Reading AND writing the common office formats. The read half is
             # what RAG needs; the write half is what the document skills need,
             # and this is the extra `gaia init --profile chat` installs. Without
@@ -380,7 +380,6 @@ setup(
     entry_points={
         "console_scripts": [
             "gaia = gaia.cli:main",
-            "gaia-cli = gaia.cli:main",
             "gaia-mcp = gaia.mcp.mcp_bridge:main",
         ]
     },

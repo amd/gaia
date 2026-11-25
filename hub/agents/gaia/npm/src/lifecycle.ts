@@ -23,6 +23,7 @@ import { type ChildProcess, spawn, spawnSync } from "node:child_process";
 import crypto from "node:crypto";
 import fs from "node:fs";
 import net from "node:net";
+import os from "node:os";
 import path from "node:path";
 
 import {
@@ -49,17 +50,28 @@ const log = createLogger("lifecycle");
 
 export const DEFAULT_HOST = "127.0.0.1";
 
-/** Matches `gaia_agent.server.DEFAULT_PORT`. NEVER 4001 (repo-reserved). */
+/** Matches `gaiapy.server.DEFAULT_PORT`. NEVER 4001 (repo-reserved). */
 export const DEFAULT_PORT = 8141;
 
 /** Repo-wide reserved port. Nothing here may ever bind it. */
 export const RESERVED_PORT = 4001;
 
 /** The apiVersion this package is built against (`server.py: API_VERSION`). */
-export const API_VERSION = "2.27";
+export const API_VERSION = "2.31";
 
 /** The agent id in the sidecar's route prefix (`/v1/gaia/...`). */
 export const AGENT_ID = "gaia";
+
+/** MUST equal `gaia_agent.caller_auth.TOKEN_FILE_ENV_VAR`. */
+export const TOKEN_FILE_ENV_VAR = "GAIA_GAIA_SIDECAR_TOKEN_FILE";
+
+/** MUST equal `gaia_agent.caller_auth.TOKEN_ENV_VAR` (legacy, token in the env). */
+export const TOKEN_ENV_VAR = "GAIA_GAIA_SIDECAR_TOKEN";
+
+/** A fresh per-session caller-auth token: 32 random bytes, URL-safe. */
+export function generateSessionToken(): string {
+  return crypto.randomBytes(32).toString("base64url");
+}
 
 /** `GET /health` response. */
 export interface HealthResponse {
@@ -81,14 +93,14 @@ export function sidecarExecutableName(
 }
 
 /**
- * Basename the TUI executable is written as. Deliberately `gaia-tui`, not
+ * Basename the TUI executable is written as. Deliberately `gaia-cli`, not
  * `gaia`: npm installs its own `gaia` bin shim, and a same-named executable in a
  * cache dir on PATH would shadow it.
  */
 export function tuiExecutableName(
   platform: NodeJS.Platform = process.platform,
 ): string {
-  return platform === "win32" ? "gaia-tui.exe" : "gaia-tui";
+  return platform === "win32" ? "gaia-cli.exe" : "gaia-cli";
 }
 
 export interface ResolveOptions {
@@ -182,7 +194,7 @@ export function resolveSidecarPath(opts: ResolveOptions): string {
 }
 
 export function resolveTuiPath(opts: ResolveOptions): string {
-  return resolveIn(opts, "tui", tuiExecutableName(), "gaia-tui");
+  return resolveIn(opts, "tui", tuiExecutableName(), "gaia-cli");
 }
 
 export interface SpawnOptions {
@@ -197,6 +209,11 @@ export interface SpawnOptions {
   /** Extra env vars merged over process.env. */
   env?: NodeJS.ProcessEnv;
   /**
+   * Caller-auth token to hand the sidecar. Defaults to a fresh token per spawn;
+   * pass one only to reuse a specific value. Never share it across sidecars.
+   */
+  authToken?: string;
+  /**
    * Reap this sidecar if the parent exits, crashes, or is interrupted without an
    * explicit `shutdown()`. Default `true` — the frozen binary's detached child
    * must never outlive us holding the port. Set `false` to own the lifecycle.
@@ -210,6 +227,10 @@ export interface Sidecar {
   host: string;
   port: number;
   baseUrl: string;
+  /** Send as `Authorization: Bearer <authToken>` on every `/v1/gaia/*` call. */
+  authToken: string;
+  /** The 0600 file the token was delivered in; removed when the sidecar exits. */
+  tokenFile: string;
 }
 
 // --- Auto-cleanup: reap orphaned sidecars when the parent process goes away ---
@@ -268,6 +289,42 @@ function killTreeSync(sidecar: Sidecar): void {
 function reapAllSync(): void {
   for (const s of liveSidecars) killTreeSync(s);
   liveSidecars.clear();
+}
+
+// Token-file directories still on disk; emptied as each sidecar exits.
+const secretDirs = new Set<string>();
+let secretCleanupInstalled = false;
+
+function removeSecretDir(dir: string): void {
+  if (!secretDirs.delete(dir)) return;
+  try {
+    fs.rmSync(dir, { recursive: true, force: true });
+  } catch (e) {
+    writeStderrSync(
+      `[gaia:lifecycle] ERROR could not remove the sidecar token directory ` +
+        `${dir}: ${(e as Error).message}. Delete it by hand.`,
+    );
+  }
+}
+
+/** Write *token* to a fresh owner-only file and return its path. */
+function writeTokenFile(token: string): string {
+  if (!secretCleanupInstalled) {
+    secretCleanupInstalled = true;
+    process.on("exit", () => {
+      for (const dir of [...secretDirs]) removeSecretDir(dir);
+    });
+  }
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "gaia-gaia-secret-"));
+  secretDirs.add(dir);
+  const file = path.join(dir, "launch-secret");
+  try {
+    fs.writeFileSync(file, token, { encoding: "utf8", mode: 0o600, flag: "wx" });
+  } catch (e) {
+    removeSecretDir(dir);
+    throw e;
+  }
+  return file;
 }
 
 function crashHandler(err: unknown): void {
@@ -346,15 +403,41 @@ export function spawnSidecar(opts: SpawnOptions): Sidecar {
   const args = ["--host", host, "--port", String(port)];
   if (opts.extraArgs?.length) args.push(...opts.extraArgs);
 
+  if (opts.env?.[TOKEN_FILE_ENV_VAR]) {
+    throw new TypeError(
+      `spawnSidecar writes the token file itself; pass your token as ` +
+        `{ authToken } instead of setting ${TOKEN_FILE_ENV_VAR} in env.`,
+    );
+  }
+  // The sidecar refuses to start without a token; a caller's own env token
+  // is honoured so an integrator that minted one keeps working.
+  const authToken =
+    opts.authToken ?? opts.env?.[TOKEN_ENV_VAR] ?? generateSessionToken();
+  const tokenFile = writeTokenFile(authToken);
+  const env: NodeJS.ProcessEnv = {
+    ...process.env,
+    ...(opts.env ?? {}),
+    [TOKEN_FILE_ENV_VAR]: tokenFile,
+  };
+  delete env[TOKEN_ENV_VAR];
+
   log.info(`spawning ${opts.binaryPath} ${args.join(" ")}`);
 
-  const child = spawn(opts.binaryPath, args, {
-    // detached on POSIX → the child leads its own process group so we can signal
-    // the whole tree. Windows has different detach semantics; we use taskkill /T.
-    detached: process.platform !== "win32",
-    stdio: ["ignore", "pipe", "pipe"],
-    env: { ...process.env, ...(opts.env ?? {}) },
-  });
+  let child: ChildProcess;
+  try {
+    child = spawn(opts.binaryPath, args, {
+      // detached on POSIX → the child leads its own process group so we can
+      // signal the whole tree. Windows has different detach semantics; we use
+      // taskkill /T.
+      detached: process.platform !== "win32",
+      stdio: ["ignore", "pipe", "pipe"],
+      env,
+    });
+  } catch (e) {
+    removeSecretDir(path.dirname(tokenFile));
+    throw e;
+  }
+  child.once("exit", () => removeSecretDir(path.dirname(tokenFile)));
 
   child.stdout?.on("data", (d) => log.debug(`[sidecar stdout] ${String(d).trimEnd()}`));
   child.stderr?.on("data", (d) => log.debug(`[sidecar stderr] ${String(d).trimEnd()}`));
@@ -363,7 +446,14 @@ export function spawnSidecar(opts: SpawnOptions): Sidecar {
   );
   child.on("error", (e) => log.error(`sidecar process error: ${e.message}`));
 
-  const sidecar: Sidecar = { child, host, port, baseUrl: `http://${host}:${port}` };
+  const sidecar: Sidecar = {
+    child,
+    host,
+    port,
+    baseUrl: `http://${host}:${port}`,
+    authToken,
+    tokenFile,
+  };
   if (opts.autoCleanup !== false) registerForCleanup(sidecar);
   return sidecar;
 }
@@ -487,7 +577,7 @@ function majorOf(v: string): number {
 }
 
 export interface VersionCheckOptions {
-  /** apiVersion this package was built against. Default API_VERSION ("2.27"). */
+  /** apiVersion this package was built against. Default API_VERSION ("2.31"). */
   expectedApiVersion?: string;
 }
 
@@ -744,7 +834,7 @@ export async function startSidecar(opts: StartOptions): Promise<Sidecar> {
 }
 
 export interface RunTuiOptions {
-  /** Absolute path to the gaia-tui binary. */
+  /** Absolute path to the gaia-cli binary. */
   binaryPath: string;
   /** Args forwarded verbatim to the TUI. */
   args?: string[];
@@ -762,7 +852,7 @@ export function runTui(opts: RunTuiOptions): Promise<number> {
     throw new TypeError("runTui requires { binaryPath }");
   }
   if (!fs.existsSync(opts.binaryPath)) {
-    throw new BinaryNotFoundError(`gaia-tui binary does not exist: ${opts.binaryPath}`);
+    throw new BinaryNotFoundError(`gaia-cli binary does not exist: ${opts.binaryPath}`);
   }
   return new Promise<number>((resolve, reject) => {
     const child = spawn(opts.binaryPath, opts.args ?? [], {

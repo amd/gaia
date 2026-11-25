@@ -715,6 +715,22 @@ def source_paths(clause):
 _CSV_COLUMNS = frozenset({"source", "text", "quote", "start", "end"})
 
 
+def _read_whole_page(result):
+    """Whether a read returned a whole file no longer than one extraction page.
+
+    The model then has every line in front of it, and an extraction pass would
+    only reread the same text. A ranged read reports ``total_lines``/``offset``.
+    """
+    content = result.get("content")
+    return (
+        isinstance(content, str)
+        and len(content) <= PAGE_CHARS
+        and "size_bytes" in result
+        and not result.get("is_binary")
+        and not any(key in result for key in ("total_lines", "offset", "next_offset"))
+    )
+
+
 class ExtractionLedger:
     def __init__(self, query, root, available=True):
         self.query = query
@@ -864,6 +880,10 @@ class ExtractionLedger:
                 isinstance(path, str)
                 and "\x00" not in path
                 and not self.is_output(self.key(path))
+                # Named sources stay owed; one read whole on the way is done.
+                and not (
+                    self.key(path) not in self.requested and _read_whole_page(result)
+                )
                 and (
                     self.key(path) in self.requested
                     # Code, data and binaries read on the way are lookups the
