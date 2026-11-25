@@ -818,6 +818,15 @@ def test_index_and_question_still_forces_the_query(agent):
         ("Index ~/reports. What was the Q2 total?", False),
         ("Index ~/reports, then summarize.", False),
         ("What is the S&P 500 index", False),
+        ("Please index ~/reports, nothing else.", True),
+        ("Index report.pdf and reply done", True),
+        ("Index ~/reports", False),
+        ("Index report.pdf and analyze it", False),
+        ("Index report.pdf and search for the budget", False),
+        ("Index report.pdf and check the Q2 revenue", False),
+        ("Index report.pdf, I need the revenue numbers", False),
+        ("Just index report.pdf and review it", False),
+        ("Just index report.pdf and tell me the total", False),
     ],
 )
 def test_requests_indexing_only(text, expected):

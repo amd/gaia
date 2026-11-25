@@ -1811,11 +1811,20 @@ _INDEX_QUESTION_NEEDS_USER_PATTERN = re.compile(
 )
 _SENTENCE_END_PATTERN = re.compile(r"[.!?](?=\s|$)|\n")
 _INDEX_TOOL_NAMES = ("index_directory", "index_document")
+# The few ways people say "just index it"; anything else keeps the forced search.
+_INDEX_ONLY_PATTERN = re.compile(
+    r"\b(?:just|only|simply)\s+(?:re-?)?index\b"
+    r"|\b(?:say|reply|respond)\s+(?:with\s+)?[\"'“]?done\b"
+    r"|\b(?:ask|query|questions?)\b[^.!?\n]*\blater\b|\bfor later\b"
+    r"|\bnothing else\b",
+    re.IGNORECASE,
+)
 # Anything that asks about the content, so indexing alone doesn't finish the turn.
 _ASKS_ABOUT_CONTENT_PATTERN = re.compile(
     r"\?|\b(?:what|who|whom|whose|when|where|why|how|which|tell me|summari[sz]e"
     r"|summary|explain|describe|find|list|show me|compare|extract|look up"
-    r"|answer|quote|give me|read)\b",
+    r"|answer|quote|give me|read|analy[sz]e|analysis|search|check|review|need"
+    r"|count|calculate|verify)\b",
     re.IGNORECASE,
 )
 
@@ -1835,9 +1844,12 @@ def _requests_indexing(text: str) -> bool:
 
 
 def _requests_indexing_only(text: str) -> bool:
-    """Whether *text* asks to index something and asks nothing about its content."""
-    return _requests_indexing(text) and not _ASKS_ABOUT_CONTENT_PATTERN.search(
-        text or ""
+    """Whether *text* explicitly asks only to index, and nothing about the content."""
+    text = text or ""
+    return (
+        _requests_indexing(text)
+        and bool(_INDEX_ONLY_PATTERN.search(text))
+        and not _ASKS_ABOUT_CONTENT_PATTERN.search(text)
     )
 
 
