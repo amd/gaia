@@ -52,6 +52,7 @@ from gaia.daemon.constants import (
 )
 from gaia.daemon.sidecars import fetch
 from gaia.daemon.sidecars.errors import (
+    KIND_HARNESS_MISSING,
     KIND_HARNESS_UNAVAILABLE,
     HealthTimeoutError,
     IntegrityError,
@@ -236,6 +237,8 @@ class AgentSidecarManager:
         )
         self.expected_api_version = expected_api_version
         self._proc: Optional[subprocess.Popen] = None
+        # The harness the flagship was last spawned as; None for other agents.
+        self._spawned_harness: Optional[str] = None
         # Latch: set once our process group has been observed empty. A group
         # never comes back, so a later hit on that number is a recycled pgid.
         self._group_gone = False
@@ -298,6 +301,13 @@ class AgentSidecarManager:
                 f"{_VALID_MODES}. There is no fallback — set it explicitly."
             )
         return m
+
+    @property
+    def uses_stale_harness(self) -> bool:
+        """The flagship runs as a harness other than the one saved since it started."""
+        if self._spawned_harness is None:
+            return False
+        return fetch.saved_flagship() != self._spawned_harness
 
     @property
     def uses_ignored_lemonade(self) -> bool:
@@ -392,25 +402,42 @@ class AgentSidecarManager:
     def __exit__(self, exc_type, exc, tb) -> None:
         self.shutdown()
 
-    def _native_flagship_command(self, port: int):
-        """The command for ``gaiacpp``, the agent the user chose in Settings."""
+    def _native_flagship_command(self, port: int, harness: str = fetch.NATIVE_FLAGSHIP):
+        """The command for native *harness*, the agent program the user chose in Settings."""
         try:
-            binary = fetch.verified_native_flagship()
+            binary = fetch.verified_native_flagship(harness)
         except IntegrityError as e:
             raise SidecarSpawnError(
                 f"Cannot start the GAIA agent: {e} Or switch back to the Python "
                 f"agent in Settings › Agent & model. Sidecar logs: {self.log_dir}."
             ) from e
         if binary is None:
-            looked = ", ".join(str(p) for p in fetch.native_flagship_candidates())
+            looked = ", ".join(
+                str(p) for p in fetch.native_flagship_candidates(harness)
+            )
+            if harness == fetch.NATIVE_FLAGSHIP:
+                get_it = "Download it in Settings › Agent & model, or switch back"
+            else:
+                # No release ships it yet: only a build of your own can run.
+                get_it = (
+                    f"This release doesn't download it; point "
+                    f"{fetch.NATIVE_HARNESS_PATH_ENV[harness]} at a build of it, or switch back"
+                )
             raise SidecarSpawnError(
-                "Cannot start the GAIA agent: gaiacpp is chosen as the agent but "
-                f"it is not installed on this PC (looked in: {looked}). Download "
-                "it in Settings › Agent & model, or switch back to the Python "
-                f"agent there. Sidecar logs: {self.log_dir}."
+                f"Cannot start the GAIA agent: {harness} is chosen as the agent but "
+                f"it is not installed on this PC (looked in: {looked}). {get_it} "
+                f"to the Python agent in Settings › Agent & model. Sidecar logs: {self.log_dir}.",
+                # Only gaiacpp can be downloaded; for the others the fix is another choice.
+                kind=(
+                    KIND_HARNESS_MISSING
+                    if harness == fetch.NATIVE_FLAGSHIP
+                    else KIND_HARNESS_UNAVAILABLE
+                ),
             )
         try:
-            self.installed_binary_version = fetch.native_flagship_version(binary)
+            self.installed_binary_version = fetch.native_flagship_version(
+                binary, harness
+            )
         except PlatformError as e:
             raise SidecarSpawnError(
                 f"Cannot start the GAIA agent: {e}. Switch back to the Python "
@@ -431,8 +458,9 @@ class AgentSidecarManager:
                     f"Cannot start the GAIA agent: {e} Sidecar logs: {self.log_dir}.",
                     kind=KIND_HARNESS_UNAVAILABLE,
                 ) from e
-            if harness == fetch.NATIVE_FLAGSHIP:
-                return self._native_flagship_command(port)
+            self._spawned_harness = harness
+            if harness in fetch.NATIVE_HARNESS_PATH_ENV:
+                return self._native_flagship_command(port, harness)
             if harness != fetch.PYTHON_FLAGSHIP:
                 # Never let the Python agent answer for a harness with no launcher here.
                 raise SidecarSpawnError(

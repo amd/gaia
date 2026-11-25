@@ -29,7 +29,7 @@ type programOption struct {
 	tradeOff string
 }
 
-var programOptions = []programOption{
+var allProgramOptions = []programOption{
 	{
 		choice:   preflight.FlagshipAgentPython,
 		label:    "Python agent (" + catalog.PythonAgentBinary + ")",
@@ -43,6 +43,25 @@ var programOptions = []programOption{
 		goodAt:   "Fast and light: starts quickly and uses little memory.",
 		tradeOff: "Fewer tools and features so far, and less tested.",
 	},
+	{
+		choice:   "gaiacode",
+		label:    "Native coding agent",
+		beta:     true,
+		goodAt:   "Built for code: runs your tests, proves its fixes, works with GitHub.",
+		tradeOff: "Coding only: no documents, memory or web search.",
+	},
+}
+
+// programOptions are the rows this build may run (an unoffered harness shows only
+// under the eval override).
+func programOptions() []programOption {
+	var out []programOption
+	for _, o := range allProgramOptions {
+		if preflight.FlagshipAgentProgram(o.choice) != "" {
+			out = append(out, o)
+		}
+	}
+	return out
 }
 
 // programSwitch is a switch of agent program waiting on the readiness gate.
@@ -62,6 +81,9 @@ func (m FlagshipModel) WithAgentPin(source string) FlagshipModel {
 // programOf names the saved choice agent is running as.
 func programOf(agent catalog.Agent) string {
 	if agent.Native {
+		if agent.Harness != "" {
+			return agent.Harness
+		}
 		return preflight.FlagshipAgentNative
 	}
 	return preflight.FlagshipAgentPython
@@ -107,8 +129,14 @@ func (m FlagshipModel) agentProgram(arg string) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	if preflight.FlagshipAgentProgram(choice) == "" {
+		if _, known := catalog.HarnessNamed(choice); known {
+			m.chat.AppendStatus(fmt.Sprintf(
+				"%s isn't available in this version of the GAIA TUI yet. Use /agent %s or /agent %s.",
+				choice, preflight.FlagshipAgentPython, preflight.FlagshipAgentNative))
+			return m, nil
+		}
 		m.chat.AppendStatus(fmt.Sprintf(
-			"%q is not an agent program. Use /agent %s or /agent %s; /agent alone shows both.",
+			"%q is not an agent program. Use /agent %s or /agent %s; /agent alone lists them.",
 			arg, preflight.FlagshipAgentPython, preflight.FlagshipAgentNative))
 		return m, nil
 	}
@@ -163,7 +191,7 @@ func (m FlagshipModel) switchProgram(choice string) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 
-	if reason := m.nativeRefusal(next.Native); reason != "" {
+	if reason := m.nativeRefusal(*next); reason != "" {
 		m.chat.AppendStatus(reason + fmt.Sprintf(
 			" Nothing was changed: this session is still on %s and your saved choice is as it was.", current))
 		return m, nil
@@ -188,19 +216,20 @@ func (m FlagshipModel) switchProgram(choice string) (tea.Model, tea.Cmd) {
 	return m.beginPreflight(*next)
 }
 
-// nativeRefusal is why this session cannot move to gaiacpp, or "". The same
-// two cases refuse a gaiacpp launch on the command line.
-func (m FlagshipModel) nativeRefusal(native bool) string {
-	if !native {
+// nativeRefusal is why this session cannot move to a native harness, or "". The
+// same two cases refuse a native launch on the command line.
+func (m FlagshipModel) nativeRefusal(next catalog.Agent) string {
+	if !next.Native {
 		return ""
 	}
+	name := programOf(next)
 	if m.useClaude {
-		return "Cannot switch to " + preflight.FlagshipAgentNative + ": this session was started with --use-claude. " +
-			client.NativeClaudeUnavailable
+		return "Cannot switch to " + name + ": this session was started with --use-claude. " +
+			client.NativeClaudeUnavailableFor(next.Harness)
 	}
 	if m.reopened {
-		return "Cannot switch to " + preflight.FlagshipAgentNative + ": this is a reopened session (--resume or /sessions), and " +
-			catalog.NativeAgentBinary + " doesn't keep sessions yet, so it could not carry this one on. " +
+		return "Cannot switch to " + name + ": this is a reopened session (--resume or /sessions), and " +
+			name + " doesn't keep sessions yet, so it could not carry this one on. " +
 			"Switch from a new session instead."
 	}
 	return ""
@@ -247,8 +276,8 @@ func (m FlagshipModel) programListing() string {
 	saved, savedErr := m.readProgram()
 
 	var b strings.Builder
-	b.WriteString("Agent programs: two programs can answer as GAIA.\n")
-	for _, opt := range programOptions {
+	fmt.Fprintf(&b, "Agent programs: %d programs can answer as GAIA.\n", len(programOptions()))
+	for _, opt := range programOptions() {
 		marker := "○"
 		if opt.choice == current {
 			marker = "●"

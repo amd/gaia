@@ -2061,7 +2061,8 @@ json Agent::processQueryInternal(const std::vector<Message>& userMessages, int m
     // The answer after a send-back is final; what it still gets wrong is told to the user.
     auto withUnresolved = [&](std::string answer) {
         std::string notes;
-        if (answerSentBack) {
+        // After a send-back, or never reviewed at all (the step limit): what it still gets wrong.
+        if (answerSentBack || !answerReviewed) {
             const std::optional<std::string> still = unresolvedClaims(answer);
             if (still && !still->empty()) notes = *still;
         }

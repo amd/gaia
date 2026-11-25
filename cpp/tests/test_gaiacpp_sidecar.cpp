@@ -405,6 +405,7 @@ TEST_F(GaiacppSidecar, EveryTokenRouteRefusesAMissingOrWrongToken) {
         {"GET", "/v1/gaia/init"},
         {"GET", "/v1/gaia/memory"},
         {"GET", "/v1/gaia/skills"},
+        {"GET", "/v1/gaia/activity"},
         {"POST", "/v1/gaia/query"},
         {"POST", "/v1/gaia/query/auth-run/cancel"},
         {"POST", "/v1/gaia/query/auth-run/tool_decision"},
@@ -452,6 +453,25 @@ TEST_F(GaiacppSidecar, EveryTokenRouteRefusesAMissingOrWrongToken) {
     EXPECT_EQ(ij["lemonade"]["reachable"], true);
     EXPECT_NE(ij["lemonade"]["base_url"].get<std::string>().find(std::to_string(mock().port())), std::string::npos);
     EXPECT_EQ(ij["model"]["id"], "mock-model");
+}
+
+TEST_F(GaiacppSidecar, ActivityCountsNoAnswersWhenIdle) {
+    ASSERT_NO_FATAL_FAILURE(startSidecar());
+    auto r = client().Get("/v1/gaia/activity", bearer());
+    ASSERT_TRUE(r);
+    ASSERT_EQ(r->status, 200) << r->body;
+    EXPECT_EQ(json::parse(r->body)["active_runs"], 0);
+    // A delivered answer stops counting once its stream is done.
+    Turn t(port_, queryBody("run-activity", "hi", {{"session_id", "chat-activity"}}));
+    ASSERT_TRUE(t.waitDone()) << t.describe();
+    long long left = -1;
+    for (int i = 0; i < 50 && left != 0; ++i) {
+        auto again = client().Get("/v1/gaia/activity", bearer());
+        ASSERT_TRUE(again);
+        left = json::parse(again->body)["active_runs"].get<long long>();
+        if (left != 0) std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    }
+    EXPECT_EQ(left, 0);
 }
 
 TEST_F(GaiacppSidecar, HealthAndVersionNeedNoTokenButStillCheckHostAndOrigin) {
@@ -529,7 +549,7 @@ TEST_F(GaiacppSidecar, EmptyTokenFileStopsStartupWithAReason) {
 
 // ---- 2. version ----
 
-TEST_F(GaiacppSidecar, VersionReportsApi227AndTheBinaryVersion) {
+TEST_F(GaiacppSidecar, VersionReportsApi228AndTheBinaryVersion) {
     // What `gaiacpp --version` prints is what the release checks read.
     {
         testsupport::ChildProcess v({GAIACPP_BIN, "--version"}, {}, root_.string(), (root_ / "v.out").string(),
@@ -548,17 +568,17 @@ TEST_F(GaiacppSidecar, VersionReportsApi227AndTheBinaryVersion) {
     ASSERT_TRUE(r);
     ASSERT_EQ(r->status, 200);
     const json v = json::parse(r->body);
-    EXPECT_EQ(v["apiVersion"], "2.27");
+    EXPECT_EQ(v["apiVersion"], "2.28");
     EXPECT_EQ(v["version"], binaryVersion);
     EXPECT_EQ(v["agent"], "gaia");
 
     auto daemonView = client().Get("/version");
     ASSERT_TRUE(daemonView);
     const json d = json::parse(daemonView->body);
-    EXPECT_EQ(d["apiVersion"], "2.27");
+    EXPECT_EQ(d["apiVersion"], "2.28");
     EXPECT_EQ(d["agentVersion"], binaryVersion);
 
-    EXPECT_NE(readFile(root_ / "sidecar.stderr").find("gaiacpp " + binaryVersion + " sidecar (api 2.27)"),
+    EXPECT_NE(readFile(root_ / "sidecar.stderr").find("gaiacpp " + binaryVersion + " sidecar (api 2.28)"),
               std::string::npos);
 }
 

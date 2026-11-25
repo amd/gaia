@@ -78,7 +78,7 @@ func (m ChatModel) refuseModelSwitch(arg string) string {
 
 	if client.IsClaudeModelID(arg) {
 		if m.nativeAgent() {
-			return client.NativeClaudeUnavailable + " Nothing was switched: this session is still on " +
+			return client.NativeClaudeUnavailableFor(m.nativeHarness()) + " Nothing was switched: this session is still on " +
 				m.currentModelName() + "."
 		}
 		if _, ok := client.KnownClaudeModel(arg); ok {
@@ -138,7 +138,15 @@ func (m ChatModel) remoteAlternative() string {
 		"`, which sends the conversation to Anthropic and needs ANTHROPIC_API_KEY."
 }
 
-// nativeAgent reports whether this session's agent is the C++ one (gaiacpp).
+// nativeHarness names the native harness this session runs, "" when unknown.
+func (m ChatModel) nativeHarness() string {
+	if c, ok := m.client.(interface{ NativeHarness() string }); ok {
+		return c.NativeHarness()
+	}
+	return ""
+}
+
+// nativeAgent reports whether this session's agent is a C++ one (gaiacpp, gaiacode).
 func (m ChatModel) nativeAgent() bool {
 	c, ok := m.client.(interface{ Native() bool })
 	return ok && c.Native()

@@ -26,6 +26,8 @@ func isolateNative(t *testing.T) nativeFixture {
 	t.Setenv("GAIA_HOME", "")
 	t.Setenv("GAIA_CONFIG_DIR", "")
 	t.Setenv(NativePathEnv, "")
+	t.Setenv("GAIA_GAIACODE_PATH", "")
+	t.Setenv(UnprovenHarnessEnv, "")
 	t.Chdir(f.cwd)
 	orig := selfExecutable
 	selfExecutable = func() (string, error) { return filepath.Join(f.beside, "gaia-cli"), nil }
@@ -521,5 +523,83 @@ func TestAMissingGaiapyIsReportedUnderTheNameTyped(t *testing.T) {
 	err := selectAgent(NewCatalog(), PythonAgentBinary)
 	if err == nil || !strings.Contains(err.Error(), ": "+PythonAgentBinary+" was asked for") {
 		t.Errorf("gaia-agent is no longer reported under its own name: %v", err)
+	}
+}
+
+// gaiacode isn't offered yet: naming it is refused, never answered by another program.
+func TestGaiacodeIsRefusedUntilItIsOffered(t *testing.T) {
+	isolateNative(t)
+	_, _, err := ForFlagship("gaiacode")
+	if err == nil || !strings.Contains(err.Error(), "isn't available") {
+		t.Fatalf("an unoffered gaiacode was accepted: %v", err)
+	}
+}
+
+// Under the eval override it runs from a build of its own, as a native stdio child.
+func TestGaiacodeRunsUnderTheEvalOverride(t *testing.T) {
+	f := isolateNative(t)
+	t.Setenv(UnprovenHarnessEnv, "gaiacode")
+	build := writeProgram(t, filepath.Join(f.cwd, "build"), "gaiacode")
+	t.Setenv("GAIA_GAIACODE_PATH", build)
+	writeProgram(t, f.path, NativeAgentBinary) // a gaiacpp on PATH must not answer for it
+	cat, _, err := ForFlagship("gaiacode")
+	if err != nil {
+		t.Fatalf("ForFlagship(gaiacode): %v", err)
+	}
+	a := cat.Get(FlagshipID)
+	if !a.Native || a.Harness != "gaiacode" || a.BinaryPath != absOr(build) {
+		t.Fatalf("flagship = native %v harness %q at %q, want gaiacode at %q", a.Native, a.Harness, a.BinaryPath, build)
+	}
+	if len(a.BinaryArgs) != 1 || a.BinaryArgs[0] != NativeStdioFlag {
+		t.Fatalf("args = %v, want [%s]", a.BinaryArgs, NativeStdioFlag)
+	}
+}
+
+func TestNativeHarnessOfNamesTheBuild(t *testing.T) {
+	for path, want := range map[string]string{
+		"/x/gaiacpp":                   "gaiacpp",
+		"/x/gaiacode":                  "gaiacode",
+		"/x/gaiacode-linux-x64":        "gaiacode",
+		"C:/x/GAIACPP-windows-x64.exe": "gaiacpp",
+		"/x/gaia-agent":                "",
+	} {
+		if got := NativeHarnessOf(path); got != want {
+			t.Errorf("NativeHarnessOf(%q) = %q, want %q", path, got, want)
+		}
+	}
+}
+
+// A path to a gaiacode build is no way around it not being offered yet.
+func TestAPathToAnUnofferedHarnessIsRefused(t *testing.T) {
+	f := isolateNative(t)
+	build := writeProgram(t, filepath.Join(f.cwd, "build"), "gaiacode")
+	_, _, err := ForFlagship(build)
+	if err == nil || !strings.Contains(err.Error(), "isn't available") {
+		t.Fatalf("a path to an unoffered gaiacode was accepted: %v", err)
+	}
+	t.Setenv(UnprovenHarnessEnv, "gaiacode")
+	if _, _, err := ForFlagship(build); err != nil {
+		t.Fatalf("under the eval override a path to gaiacode was refused: %v", err)
+	}
+}
+
+// GAIA_GAIACPP_PATH pointing at a gaiacode build doesn't run gaiacode as gaiacpp.
+func TestOneHarnessPathVariableNeverRunsAnother(t *testing.T) {
+	f := isolateNative(t)
+	other := writeProgram(t, filepath.Join(f.cwd, "build"), "gaiacode")
+	t.Setenv(NativePathEnv, other)
+	if l := FindNativeHarness(NativeAgentBinary, false); l.Found() {
+		t.Fatalf("gaiacpp's lookup returned the gaiacode build %s", l.Path)
+	}
+}
+
+// Every native harness the TUI can launch has a path variable the daemon shares.
+func TestEveryNativeHarnessHasAPathVariable(t *testing.T) {
+	for _, h := range Harnesses() {
+		if h.Native {
+			if _, ok := NativePathEnvs[h.Name]; !ok {
+				t.Errorf("native harness %s has no entry in NativePathEnvs", h.Name)
+			}
+		}
 	}
 }

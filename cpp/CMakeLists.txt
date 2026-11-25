@@ -283,6 +283,8 @@ add_library(gaia_core
     src/api_server.cpp
     src/web_tools.cpp
     src/workspace.cpp
+    src/shell_guards.cpp
+    src/file_snapshots.cpp
     src/document_index.cpp
     src/memory_store.cpp
     src/media_tools.cpp
@@ -409,9 +411,9 @@ if(GAIA_BUILD_GAIA_AGENT)
         agents/gaiacpp/main.cpp
         agents/gaiacpp/gaia_agent.cpp
         agents/gaiacpp/delegation.cpp
-        agents/gaiacpp/sidecar.cpp
-        agents/gaiacpp/stdio_server.cpp
-        agents/gaiacpp/bash_tools.cpp
+        apps/sidecar.cpp
+        apps/stdio_server.cpp
+        apps/bash_tools.cpp
     )
     # A GAIA release stamps its own version (0.25.4, 0.25.4-rc.1); the daemon
     # and the release checks read it back from `gaiacpp --version`.
@@ -445,6 +447,53 @@ if(GAIA_BUILD_GAIA_AGENT)
     option(GAIA_STATIC_CXX_RUNTIME "Link libstdc++/libgcc statically into gaiacpp" OFF)
     if(GAIA_STATIC_CXX_RUNTIME AND CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
         target_link_options(gaiacpp PRIVATE -static-libstdc++ -static-libgcc)
+    endif()
+endif()
+
+# ---------------------------------------------------------------------------
+# gaiacode: the native coding agent (headless, the TUI's stdio child, the daemon's sidecar)
+# ---------------------------------------------------------------------------
+option(GAIA_BUILD_GAIACODE "Build the gaiacode agent" ON)
+if(GAIA_BUILD_GAIACODE)
+    add_executable(gaiacode
+        agents/gaiacode/main.cpp
+        agents/gaiacode/code_agent.cpp
+        agents/gaiacode/check_runner.cpp
+        agents/gaiacode/github.cpp
+        apps/bash_tools.cpp
+        apps/sidecar.cpp
+        apps/stdio_server.cpp
+    )
+    # Bundled skills sit beside the binary, where SkillLibrary looks first.
+    add_custom_command(TARGET gaiacode POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_directory
+            ${CMAKE_CURRENT_SOURCE_DIR}/agents/gaiacode/skills $<TARGET_FILE_DIR:gaiacode>/skills)
+    set(GAIACODE_VERSION "${PROJECT_VERSION}" CACHE STRING "Version gaiacode reports")
+    target_compile_definitions(gaiacode PRIVATE GAIACODE_VERSION="${GAIACODE_VERSION}")
+    target_link_libraries(gaiacode PRIVATE gaia::gaia_core)
+    if(httplib_FOUND)
+        target_link_libraries(gaiacode PRIVATE httplib::httplib)
+    else()
+        target_include_directories(gaiacode SYSTEM PRIVATE
+            $<TARGET_PROPERTY:httplib::httplib,INTERFACE_INCLUDE_DIRECTORIES>)
+    endif()
+    # httplib's classes must match gaia_core's build of them (ODR).
+    if(OpenSSL_FOUND)
+        target_compile_definitions(gaiacode PRIVATE CPPHTTPLIB_OPENSSL_SUPPORT)
+        target_link_libraries(gaiacode PRIVATE OpenSSL::SSL OpenSSL::Crypto)
+    endif()
+    if(WIN32)
+        target_link_libraries(gaiacode PRIVATE psapi ws2_32)
+        # The same UTF-8 code page manifest as gaiacpp, for paths outside the legacy code page.
+        if(MSVC)
+            target_sources(gaiacode PRIVATE agents/gaiacpp/gaiacpp.manifest)
+        else()
+            enable_language(RC)
+            target_sources(gaiacode PRIVATE agents/gaiacpp/gaiacpp.rc)
+        endif()
+    endif()
+    if(GAIA_STATIC_CXX_RUNTIME AND CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
+        target_link_options(gaiacode PRIVATE -static-libstdc++ -static-libgcc)
     endif()
 endif()
 
@@ -491,6 +540,7 @@ if(GAIA_BUILD_TESTS)
         tests/test_agent_resilience.cpp
         tests/test_skill_library.cpp
         tests/test_workspace.cpp
+        tests/test_file_snapshots.cpp
         tests/test_document_index.cpp
         tests/test_gaia_agent.cpp
         tests/test_delegation.cpp
@@ -499,7 +549,7 @@ if(GAIA_BUILD_TESTS)
         tests/test_media_tools.cpp
         agents/gaiacpp/gaia_agent.cpp
         agents/gaiacpp/delegation.cpp
-        agents/gaiacpp/bash_tools.cpp
+        apps/bash_tools.cpp
         tests/test_console.cpp
         tests/test_http_client.cpp
         tests/test_lemonade_client.cpp
@@ -558,9 +608,26 @@ if(GAIA_BUILD_TESTS)
     # the CLI, and the sidecar HTTP + SSE API the Agent UI and the TUI use.
     if(GAIA_BUILD_GAIA_AGENT)
         target_sources(tests_mock PRIVATE tests/test_gaiacpp_cli.cpp tests/test_gaiacpp_sidecar.cpp)
-        target_sources(tests_mock PRIVATE tests/test_gaiacpp_stdio.cpp agents/gaiacpp/stdio_server.cpp)
+        target_sources(tests_mock PRIVATE tests/test_gaiacpp_stdio.cpp apps/stdio_server.cpp)
         target_compile_definitions(tests_mock PRIVATE GAIACPP_BIN="$<TARGET_FILE:gaiacpp>")
         add_dependencies(tests_mock gaiacpp)
+    endif()
+
+    if(GAIA_BUILD_GAIACODE)
+        target_sources(tests_mock PRIVATE
+            tests/test_gaiacode.cpp
+            tests/test_gaiacode_cli.cpp
+            tests/test_gaiacode_github.cpp
+            tests/test_gaiacode_apps.cpp
+            agents/gaiacode/code_agent.cpp
+            agents/gaiacode/check_runner.cpp
+            agents/gaiacode/github.cpp
+        )
+        if(NOT GAIA_BUILD_GAIA_AGENT)
+            target_sources(tests_mock PRIVATE apps/stdio_server.cpp)
+        endif()
+        target_compile_definitions(tests_mock PRIVATE GAIACODE_BIN="$<TARGET_FILE:gaiacode>")
+        add_dependencies(tests_mock gaiacode)
     endif()
 
     # TUI tests (conditional -- requires FTXUI)

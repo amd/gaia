@@ -2910,6 +2910,8 @@ def relay_one_prompt(
         agent_type=agent_type,
         memory=memory,
         max_steps=max_steps,
+        # Setup's check, the agent loop and schedules name their model on purpose.
+        picked_model=model_id,
     )
     # Drained only after the turn ends: safe because event_queue is unbounded.
     answer = None
@@ -2934,7 +2936,98 @@ def relay_one_prompt(
     return content
 
 
-def _dispatch_sidecar_query(
+# Relays between acquiring their agent and finishing, interactive and background alike.
+_COUNT_LOCK = threading.Lock()
+_relays_in_flight = 0
+_relay_held = threading.local()
+# One per agent: acquiring and restarting it is serialised, other agents and
+# finishing relays never wait on its daemon calls.
+_AGENT_LOCKS: dict = {}
+
+
+def _agent_lock(agent_type: str) -> threading.Lock:
+    with _COUNT_LOCK:
+        return _AGENT_LOCKS.setdefault(agent_type, threading.Lock())
+
+
+# The contract each harness added /activity in; an older sidecar can't say.
+_ACTIVITY_SINCE = {"gaiapy": (2, 32), "gaiacpp": (2, 28), "gaiacode": (2, 28)}
+
+
+def _reports_activity(handle) -> bool:
+    since = _ACTIVITY_SINCE.get(getattr(handle, "harness", None) or "gaiapy")
+    try:
+        major, minor = (int(p) for p in str(handle.api_version).split(".")[:2])
+    except (TypeError, ValueError):
+        return False
+    return since is not None and (major, minor) >= since
+
+
+_TAKES_OVER_LATER = (
+    "The agent program was changed in another GAIA app. "
+    "It takes over once the chats answering now finish."
+)
+
+
+def _acquire_for_relay(daemon_client, agent_type: str, session_id, sse_handler):
+    """Acquire *agent_type*'s sidecar for one relay, restarting a stale one only when idle.
+
+    Idle means no other chat here, no relay here, and no answer the sidecar is
+    giving any other app (the TUI drives the same one). The relay counts as in
+    flight from here until its dispatch returns.
+    """
+    global _relays_in_flight
+    from gaia.daemon.sidecars.errors import SidecarError
+    from gaia.ui.run_manager import run_manager
+
+    with _agent_lock(agent_type):
+        handle = daemon_client.acquire_handle(agent_type)
+        if getattr(handle, "stale_harness", False):
+            with _COUNT_LOCK:
+                busy_here = _relays_in_flight
+            others = [s for s in run_manager.active_sessions() if s != session_id]
+            elsewhere = 0
+            # A sidecar from before /activity: only this app's answers can be seen.
+            if not others and not busy_here and _reports_activity(handle):
+                try:
+                    elsewhere = daemon_client.active_runs(handle)
+                except SidecarError as exc:
+                    logger.warning(
+                        "chat: kept the %s agent running: %s", agent_type, exc
+                    )
+                    elsewhere = -1
+            if others or busy_here or elsewhere:
+                # Restarting now would cut those answers off.
+                sse_handler._emit(
+                    {"type": "status", "status": "info", "message": _TAKES_OVER_LATER}
+                )
+            else:
+                logger.info(
+                    "chat: restarting the %s agent on the agent program now chosen",
+                    agent_type,
+                )
+                daemon_client.stop_sidecar(agent_type)
+                handle = daemon_client.acquire_handle(agent_type)
+        with _COUNT_LOCK:
+            _relays_in_flight += 1
+            _relay_held.count = getattr(_relay_held, "count", 0) + 1
+    return handle
+
+
+def _dispatch_sidecar_query(*args, **kwargs) -> None:
+    """Relay one chat turn; see :func:`_dispatch_sidecar_query_unheld`."""
+    global _relays_in_flight
+    held_before = getattr(_relay_held, "count", 0)
+    try:
+        _dispatch_sidecar_query_unheld(*args, **kwargs)
+    finally:
+        with _COUNT_LOCK:
+            released = getattr(_relay_held, "count", 0) - held_before
+            _relays_in_flight -= released
+            _relay_held.count = held_before
+
+
+def _dispatch_sidecar_query_unheld(
     sse_handler,
     request: ChatRequest,
     history_pairs: list,
@@ -2953,8 +3046,12 @@ def _dispatch_sidecar_query(
     recording: TurnRecording | None = None,
     max_steps: int | None = None,
     turns: list | None = None,
+    picked_model: str | None = None,
 ) -> None:
     """Relay one chat turn to *agent_type*'s daemon sidecar (#2109, #4161).
+
+    *picked_model* is the model the user chose in the app's picker, if any: a
+    harness with no default model takes only that or the explicit choice.
 
     *record_followup* saves a message the user added mid-turn to the chat. A
     sidecar that takes such messages gets them while it runs; otherwise the
@@ -3021,7 +3118,7 @@ def _dispatch_sidecar_query(
     agent_type = profile.agent_id
 
     try:
-        handle = daemon_client.acquire_handle(agent_type)
+        handle = _acquire_for_relay(daemon_client, agent_type, session_id, sse_handler)
     except SidecarError as exc:
         # The daemon's text names its internals and can carry a traceback.
         logger.error("chat: could not start the %s agent: %s", agent_type, exc)
@@ -3042,6 +3139,45 @@ def _dispatch_sidecar_query(
             {"type": "agent_error", "content": profile.version_upgrade_message}
         )
         return
+
+    from gaia.daemon.sidecars import fetch as _fetch
+    from gaia.harnesses import NO_DEFAULT_MODEL, chosen_model
+
+    # A stale agent kept running answers as what it is, not as the new choice.
+    harness = (
+        (getattr(handle, "harness", None) or _fetch.saved_flagship())
+        if agent_type == FLAGSHIP_AGENT_ID
+        else None
+    )
+    if harness in NO_DEFAULT_MODEL:
+        # The model picked in the app, else the explicit choice; never the chat's filled-in default.
+        from gaia.llm.hybrid import start_model
+
+        model_id = start_model(picked_model) if picked_model else chosen_model()
+        if model_id and model_id.startswith("claude-"):
+            sse_handler._emit(
+                {
+                    "type": "agent_error",
+                    "content": (
+                        f"Claude models are not available with {harness}. Choose a "
+                        "model your Lemonade server offers in the model picker, then "
+                        "send your message again."
+                    ),
+                }
+            )
+            return
+        if not model_id:
+            sse_handler._emit(
+                {
+                    "type": "agent_error",
+                    "content": (
+                        f"No model is chosen for {harness}, and it has no default "
+                        "because no model is proven for it yet. Choose a model in "
+                        "the model picker, then send your message again."
+                    ),
+                }
+            )
+            return
 
     relayed_documents = None
     takes_documents = documents_supported(profile, handle.api_version)
@@ -5054,6 +5190,7 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                         ),
                         recording=recording,
                         turns=relay_turns,
+                        picked_model=custom_model,
                     )
                     result_holder["model_messages"] = getattr(
                         sse_handler, "relayed_model_messages", None

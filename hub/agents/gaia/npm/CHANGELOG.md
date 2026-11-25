@@ -8,6 +8,10 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 Requires the `gaia` Python CLI 0.27.0+ on `PATH`.
 
+- **Another app can see whether the sidecar is mid-answer (contract 2.32).**
+  `GET /v1/gaia/activity` returns `{ "active_runs": n }`, counting every
+  caller's runs, so an app switching the agent program waits for answers in
+  progress instead of cutting them off by restarting the sidecar.
 - **Docs: Ask and Accept edits refuse deletes, they don't ask.** A delete the
   shell would otherwise ask about is refused with no approval card; only Full
   access runs it. The SPEC and guides now say so.

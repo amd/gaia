@@ -67,6 +67,7 @@
                 "group": "User Guides",
                 "pages": [
                   "cpp/gaia-agent",
+                  "cpp/gaiacode",
                   "cpp/health-agent",
                   "cpp/wifi-agent",
                   "cpp/process-agent",

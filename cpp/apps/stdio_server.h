@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: MIT
 //
 // The stdio protocol the GAIA terminal UI speaks to its agent child, so
-// `gaiacpp --stdio` can be that child. Contract:
+// a native harness (`gaiacpp --stdio`, `gaiacode --stdio`) can be that child. Contract:
 // tests/fixtures/stdio/gaia_stdio_wire.json.
 //
 // stdin, one line each: a plain query, {"gaia_query": "..."}, or
@@ -25,17 +25,18 @@
 #include <thread>
 #include <vector>
 
+#include <gaia/agent.h>
 #include <gaia/security.h>
 #include <gaia/types.h>
 
 namespace gaia {
 
-class GaiaAgent;
-
 struct StdioOptions {
     bool fullAccess = false;   // approval prompts off
     bool acceptEdits = false;  // file edits inside editRoots run without asking
     bool dev = false;          // step-by-step status lines
+    /// Names the program in its log and error lines, e.g. "gaiacpp".
+    std::string program = "gaiacpp";
     std::string agentVersion;
     std::vector<std::string> editRoots;  // empty = the working directory
     bool memory = true;                  // false = the memory dump says memory is off
@@ -59,6 +60,9 @@ std::string cloudProviderOf(const std::string& modelId);
 /// tools natively, and the answer streams only when tool calls are native.
 void applyStdioModel(AgentConfig& cfg, const std::string& modelId, NativeToolCalls launchMode);
 
+/// False once stdout is a pipe nobody reads any more.
+bool stdoutHasReader();
+
 /// The working directory in UTF-8, the spelling editIsInside() reads.
 std::string workingFolderUtf8();
 
@@ -70,7 +74,7 @@ bool editIsInside(const std::string& target, const std::vector<std::string>& roo
 
 class StdioServer {
 public:
-    StdioServer(GaiaAgent& agent, std::istream& in, std::ostream& out, StdioOptions options);
+    StdioServer(Agent& agent, std::istream& in, std::ostream& out, StdioOptions options);
     /// Waits for the stdin reader, so `in` must reach end of input first.
     ~StdioServer();
 
@@ -119,7 +123,7 @@ private:
     json statusEvent();
     std::ostream& log();
 
-    GaiaAgent& agent_;
+    Agent& agent_;
     std::istream& in_;
     std::ostream& out_;
     StdioOptions options_;

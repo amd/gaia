@@ -472,7 +472,9 @@ def test_a_failed_update_leaves_the_working_copy_and_its_record_alone(
     assert "in use" in str(e.value)
     assert target.read_bytes() == b"the copy in use"
     assert json.loads(record.read_text(encoding="utf-8")) == old
-    monkeypatch.setattr(fetch, "native_flagship_candidates", lambda: [target])
+    monkeypatch.setattr(
+        fetch, "native_flagship_candidates", lambda name="gaiacpp": [target]
+    )
     assert (
         fetch.verified_native_flagship() == target
     ), "the old copy still passes its check"

@@ -120,6 +120,7 @@ OP_EVAL_COVERAGE: Dict[str, str] = {
     "sessions/{session_id}": _NO_EVAL_SENTINEL,
     "memory": _NO_EVAL_SENTINEL,
     "skills": _NO_EVAL_SENTINEL,
+    "activity": _NO_EVAL_SENTINEL,
 }
 
 # The no-MCP decision is deliberate, not an oversight — pinned so it cannot

@@ -263,11 +263,11 @@ Each request carries its whole conversation, so the server keeps no state betwee
 
 ## Running as the GAIA agent in the Agent UI
 
-`gaiacpp` can stand in for the Python flagship behind the GAIA daemon, so the Agent UI chats with it unchanged. The daemon starts an installed agent binary as `<binary> --host 127.0.0.1 --port <P>` with its token in `GAIA_GAIA_SIDECAR_TOKEN_FILE`; when that variable (or `GAIA_GAIA_SIDECAR_TOKEN`) is set, `gaiacpp` serves the flagship's sidecar API, version 2.27:
+`gaiacpp` can stand in for the Python flagship behind the GAIA daemon, so the Agent UI chats with it unchanged. The daemon starts an installed agent binary as `<binary> --host 127.0.0.1 --port <P>` with its token in `GAIA_GAIA_SIDECAR_TOKEN_FILE`; when that variable (or `GAIA_GAIA_SIDECAR_TOKEN`) is set, `gaiacpp` serves the flagship's sidecar API, version 2.28:
 
 - Chat over Server-Sent Events: streamed text, tool activity, approvals with "always allow in this chat", Stop, and full access.
 - Per-chat folder scope (`allowed_paths`), working folder, attached documents, memory on, private or off, and internet off. Each can change between turns, and internet and memory also apply mid-turn.
-- Each chat's tools (`/sessions/{id}/tools`), its "always" answers (`/sessions/{id}/grants`), the skills list (`/skills`) and the memory list (`/memory`).
+- Each chat's tools (`/sessions/{id}/tools`), its "always" answers (`/sessions/{id}/grants`), the skills list (`/skills`), the memory list (`/memory`), and how many answers are running now (`/activity`), which another app checks before it restarts the agent.
 
 A few things answer the way an older flagship would, and the UI copes with each:
 

@@ -355,3 +355,78 @@ func TestLeftoverProcessMessagesNameTheProgramThatRan(t *testing.T) {
 		t.Errorf("the notice names the wrong program: %s", notice)
 	}
 }
+
+// gaiacode has no proven model: it starts only on one the user chose, cloud ones
+// included, and with none it is refused rather than started on Gemma.
+func TestGaiacodeStartsOnlyOnAChosenModel(t *testing.T) {
+	t.Setenv("GAIA_MODEL_ID", "")
+	for _, tc := range []struct {
+		config string
+		want   []string
+	}{
+		{`{"last_model":"fireworks.glm-5p3-flash"}`, []string{"--stdio", "--model", "fireworks.glm-5p3-flash"}},
+		// Setup writes default_model from the hardware by itself: that is no choice.
+		{`{"default_model":"Qwen3.6-35B-A3B-GGUF"}`, nil},
+		{`{}`, nil},
+	} {
+		path := filepath.Join(t.TempDir(), "config.json")
+		if err := os.WriteFile(path, []byte(tc.config), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		t.Setenv("GAIA_CONFIG_FILE", path)
+		agent := nativeAgent(t)
+		agent.Harness = "gaiacode"
+		c, err := ForAgent(agent, ForAgentOptions{})
+		if tc.want == nil {
+			if err == nil || !strings.Contains(err.Error(), "No model is chosen for gaiacode") {
+				t.Errorf("%s: err = %v, want the no-model refusal", tc.config, err)
+			}
+			continue
+		}
+		if err != nil {
+			t.Fatalf("%s: %v", tc.config, err)
+		}
+		if sub := c.(*SubprocessClient); !reflect.DeepEqual(sub.args, tc.want) {
+			t.Errorf("%s: argv = %v, want %v", tc.config, sub.args, tc.want)
+		}
+		c.Close()
+	}
+}
+
+func TestClaudeRefusalNamesTheHarness(t *testing.T) {
+	agent := nativeAgent(t)
+	agent.Harness = "gaiacode"
+	_, err := ForAgent(agent, ForAgentOptions{UseClaude: true})
+	if err == nil || !strings.Contains(err.Error(), "(gaiacode)") {
+		t.Fatalf("err = %v, want it to name gaiacode", err)
+	}
+}
+
+// A Claude model saved from a Python-agent session gets the Claude message, not a launch.
+func TestGaiacodeOnASavedClaudeModelSaysClaudeIsUnavailable(t *testing.T) {
+	t.Setenv("GAIA_MODEL_ID", "")
+	path := filepath.Join(t.TempDir(), "config.json")
+	if err := os.WriteFile(path, []byte(`{"last_model":"claude-sonnet-5"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("GAIA_CONFIG_FILE", path)
+	agent := nativeAgent(t)
+	agent.Harness = "gaiacode"
+	if _, err := ForAgent(agent, ForAgentOptions{}); err == nil || !strings.Contains(err.Error(), "(gaiacode)") {
+		t.Fatalf("err = %v, want the Claude-unavailable message for gaiacode", err)
+	}
+}
+
+func TestTheNativeClientKnowsItsHarnessFromTheCatalog(t *testing.T) {
+	agent := nativeAgent(t)
+	agent.Harness = "gaiacode"
+	t.Setenv("GAIA_MODEL_ID", "Qwen3.6-35B-A3B-GGUF")
+	c, err := ForAgent(agent, ForAgentOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	if got := c.(*SubprocessClient).NativeHarness(); got != "gaiacode" {
+		t.Errorf("NativeHarness() = %q, want gaiacode (the binary here is the test program)", got)
+	}
+}

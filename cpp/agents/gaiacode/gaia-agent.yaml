@@ -1,0 +1,42 @@
+# Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
+# SPDX-License-Identifier: MIT
+#
+# Packaging manifest for gaiacode, the native (C++) coding agent. Built from
+# cpp/agents/gaiacode/ (CMake target `gaiacode`). It is not packaged for the Hub
+# yet: `cpp.binaries` stays empty, so cpp/packaging/package_agents.py skips it on
+# every platform until gaiacode has passed its evals and is offered.
+id: gaiacode
+name: GAIA Code (native)
+version: 0.1.0
+description: "Native coding agent: reads, edits and tests a repository's code, with GitHub tools and skills, in headless, terminal and Agent UI modes."
+author: AMD
+license: MIT
+
+category: development
+tags: [agent, coding, github, native]
+icon: code
+
+language: cpp
+min_gaia_version: "0.27.0"
+models: []
+
+requirements:
+  min_memory_gb: 8
+  platforms: [win-x64, linux-x64, darwin-arm64]
+
+cpp:
+  static_linked: true
+  binaries: {}
+
+permissions:
+  - filesystem:read
+  - filesystem:write
+  - process:execute
+  - network:read
+
+interfaces:
+  tui: true
+  cli: true
+  pipe: true
+  api_server: true
+  mcp_server: false

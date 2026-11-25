@@ -317,6 +317,42 @@ func LocalChatModel() string {
 	return m
 }
 
+// ChosenChatModel is the model the user chose for chat: GAIA_MODEL_ID, else
+// config.json's last_model, mirroring gaia.harnesses.chosen_model. Never
+// default_model, which setup fills in from the hardware by itself. "" with no
+// error when nothing was chosen, for a harness with no proven model (gaiacode).
+func ChosenChatModel() (string, error) {
+	if m := strings.TrimSpace(os.Getenv("GAIA_MODEL_ID")); m != "" {
+		return m, nil
+	}
+	path := ConfigPathFrom(os.Getenv, os.UserHomeDir)
+	if path == "" {
+		return "", nil
+	}
+	raw, err := filelock.ReadFile(path)
+	if os.IsNotExist(err) {
+		return "", nil
+	}
+	if err != nil {
+		return "", fmt.Errorf("cannot read the chosen model from %s: %w", path, err)
+	}
+	var doc struct {
+		Last string `json:"last_model"`
+	}
+	if err := json.Unmarshal(raw, &doc); err != nil {
+		return "", fmt.Errorf("cannot read the chosen model from %s: %w", path, err)
+	}
+	last := strings.TrimSpace(doc.Last)
+	if last == "" || !IsHybridID(last) {
+		return last, nil
+	}
+	h, err := ReadHybridModels()
+	if err != nil {
+		return "", fmt.Errorf("cannot read the hybrid model %s: %w", last, err)
+	}
+	return h.Cheap, nil
+}
+
 // GaiaChatModel is the model GAIA chats with, resolved as
 // gaia.llm.lemonade_client.resolve_chat_model does: config.json's last_model,
 // else default_model, else Gemma. A hybrid choice is its cheap model, the one

@@ -385,6 +385,7 @@ func (c *Catalog) SetMockBinary(binaryPath string) {
 		c.agents[i].DevArgs = nil
 		c.agents[i].CanonicalEvents = false
 		c.agents[i].Native = false
+		c.agents[i].Harness = ""
 		c.agents[i].Status = StatusInstalled
 	}
 }

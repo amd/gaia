@@ -1,0 +1,168 @@
+---
+title: "gaiacode: the native coding agent"
+description: "gaiacode: GAIA's native coding agent, in development. It edits a repository, runs its tests, and won't say they pass unless a run after its last change did."
+icon: "code"
+---
+
+<Warning>
+  **In development.** gaiacode is not offered in the Agent UI or the TUI yet, and no model
+  is proven for it, so it has no default model. It can already run behind both apps, but only
+  in GAIA's own evals, until it is proven there (see [In GAIA's apps](#in-gaias-apps)).
+</Warning>
+
+<Info>
+  **First time here?** Complete the [C++ Framework Setup](/cpp/setup) guide first.
+</Info>
+
+`gaiacode` is GAIA's coding agent as one native binary on the C++ framework. It reads a
+repository, edits it, runs its tests, and reports the test result it actually saw.
+
+## What it holds itself to
+
+When an answer says the tests (or the build) pass, gaiacode checks that a test run after its
+last edit in that turn passed. If none did, it sends the answer back to the model to run them,
+and once more if the next answer still makes the claim without a run. If the answer after that
+still does, the reply you get ends with:
+
+> I couldn't confirm the tests pass: no test run after the last change passed.
+
+Only a run of a test runner whose summary gaiacode can read counts: pytest, unittest, `go test`,
+`cargo test`, jest, vitest, mocha, rspec, phpunit, Maven and Gradle (JUnit), `dotnet test`,
+`swift test` and ctest. A run whose output has no summary it can read, or was too long to keep,
+backs nothing either way. Running a test file as a plain script (`python test_stats.py`) runs no
+tests, and `grep passed pytest.log` reads an old result, so neither counts.
+
+Any shell command that isn't a read counts as an edit, so a test run before it doesn't back the
+claim, except git commands that only record or share work (`git add`, `commit`, `push`, a new
+branch). A command that runs the tests and then writes, such as `pytest && black .`, counts as
+an edit.
+
+## Running it
+
+```bash
+gaiacode -p "fix the failing test in stats.py" --model Qwen3.6-35B-A3B-GGUF \
+  --dangerously-skip-permissions --output-format json
+```
+
+| Option | What it does |
+|---|---|
+| `-p, --print [TASK]` | Run one task headless; the task comes from stdin when omitted |
+| `--prompt-file FILE` | Read the task from a file |
+| `-m, --model ID` | The model to run. Required: there is no default until a model is proven |
+| `--base-url URL` | OpenAI-compatible endpoint (default: Lemonade at `http://localhost:13305/api/v1`) |
+| `--api-key-env NAME` | Environment variable that holds the endpoint's API key |
+| `--native-tools MODE` | `auto` (default), `always` or `never`: whether to use OpenAI tool calls |
+| `--cwd DIR` | Work in `DIR` |
+| `--allow-dir DIR` | Let the tools also reach `DIR` (repeatable) |
+| `--full-access` | Let the tools reach any path. With `--stdio`, turns approval prompts off instead |
+| `--stdio` | Run as the GAIA terminal UI's agent program (see below) |
+| `--accept-edits`, `--dev` | With `--stdio`: edits in the folder run without asking; step-by-step status lines |
+| `--host H`, `--port P` | The address the daemon starts its sidecar on (see below) |
+| `--output-format FMT` | `text` (default) or `json`, with the same field names as `gaiacpp -p` |
+| `--dangerously-skip-permissions` | Run tools that would ask: shell commands that change things, file writes, `run_checks` |
+| `--max-steps N` | Step limit for the run (default 200) |
+| `--repo [HOST/]OWNER/NAME` | GitHub repository to work on (HOST for GitHub Enterprise); default: the `upstream` remote, else `origin` |
+| `--allow-github-writes KINDS` | GitHub writes this run may make: `comment`, `pr`, `review`, `issue`, `rerun` (comma-separated) |
+| `--no-github` | No GitHub tools |
+| `--no-skills` | Load no skills |
+
+Exit codes: 0 when the run finished, 1 when it failed, 2 for a usage error.
+
+## Tools
+
+| Tool | Does |
+|---|---|
+| `file_read`, `file_write`, `file_edit`, `file_search` | Read, create, edit and find files, confined to the working folder and `--allow-dir` |
+| `git_status`, `git_diff`, `git_log`, `git_show` | Read the repository's state and history |
+| `bash_execute` | Run a shell command in a persistent shell; read-only commands inside the workspace don't ask |
+| `run_checks` | Run the project's tests and report passed, failed and skipped counts and the failing tests' names. With no command it finds the runner: pytest, `go test`, `cargo test`, an `npm test` script, or ctest in a CMake build |
+
+`run_checks` runs the repository's own code, so in a headless run it needs
+`--dangerously-skip-permissions`.
+
+A cloned repository is someone else's text, so some commands are refused before any approval, with
+the same checks gaiacpp makes. A command that uses a file name holding shell syntax (`x;rm -rf ~`)
+unquoted is refused, as is an edit to a file another program holds: one with a process lock beside
+it, or a header saying edits are overwritten. An inline script keeps its own `$name` instead of the
+shell blanking it. git never stops to ask for a password: a push with no saved credentials fails
+with git's own message.
+
+## In GAIA's apps
+
+gaiacode speaks the same two protocols as gaiacpp, so either app can run it as the GAIA agent
+program:
+
+- **Agent UI:** the GAIA daemon starts it as its `gaia` sidecar (`gaiacode --host 127.0.0.1 --port P`,
+  with the daemon's token), and each chat gets its own agent in the chat's folders. Turning internet
+  access off for a chat also turns its GitHub tools off.
+- **Terminal UI:** the TUI starts `gaiacode --stdio --model ID` as its agent program.
+
+In both, the shell, file edits and GitHub writes ask for approval in the app, so a comment, review, issue, pull
+request or CI re-run happens only once you approve it, unless you turn approvals off for the session. Starting
+it with `--allow-github-writes` limits which kinds of write it has at all. A chat with no model
+chosen is refused rather than run on a default, and attached files are named to the model, which
+reads them with its file tools (gaiacode has no document index).
+
+Each file gaiacode edits or creates is copied first, so the Agent UI's Changes view shows the turn's
+diff and Undo puts the files back. A shell command it runs is listed too, and the turn's undo is
+marked as possibly incomplete when the working tree shows the command changed something gaiacode
+kept no copy of.
+
+Until it is offered, only an eval run can choose it: the eval lanes set `GAIA_UNPROVEN_HARNESS=gaiacode`
+and point `GAIA_GAIACODE_PATH` at a build (`python util/run_eval_lane.py --harness gaiacode
+--harness-binary <path>`). A saved `flagship_agent: gaiacode` without that override is refused at
+launch with a message to choose another agent program, and the Python agent never answers in its place.
+
+## GitHub
+
+gaiacode reads and writes GitHub itself over its REST API; the `gh` CLI isn't needed.
+
+| Tool | Does |
+|---|---|
+| `gh_issue_view`, `gh_issue_list`, `gh_search` | Read an issue with its comments, list issues, search issues and pull requests |
+| `gh_pr_view` | A pull request's title, body, branches and changed files, with their patches when asked |
+| `gh_pr_checks` | The CI checks and commit statuses on a pull request's latest commit, or on a pushed branch or commit, each check run with its job id |
+| `gh_run_log` | The end of a CI job's log, where the failure usually is |
+| `gh_issue_comment` | Post a comment on an issue or pull request |
+| `gh_pr_create` | Open a pull request from a pushed branch, as a draft unless told otherwise |
+| `gh_pr_review` | Submit a review: approve, comment or request changes, with comments on lines of the change |
+| `gh_issue_create` | Open an issue, with existing labels |
+| `gh_run_rerun` | Re-run one CI job |
+
+The writes ask first, and a headless run makes them only when `--allow-github-writes`
+names the kind (`comment`, `pr`, `review`, `issue`, `rerun`), even with `--dangerously-skip-permissions`. Text that would
+be posted is checked for credentials first, and refused if it holds one. Everything the read
+tools return is marked as text written by other people, so the model treats it as data.
+
+**Which repository:** the `upstream` remote when there is one (a fork's issues live there),
+else `origin`, or `--repo`. A token embedded in a remote URL is ignored.
+
+**Which token, and where it goes.** A token is only sent to the host it belongs to:
+
+| Repository on | Token |
+|---|---|
+| github.com | `GH_TOKEN`, else `GITHUB_TOKEN`, else the login `gh` holds for github.com |
+| GitHub Enterprise | `GH_ENTERPRISE_TOKEN` when `GH_HOST` names that host, else the login `gh` holds for it |
+
+With no token, public repositories can still be read. `GITHUB_API_URL` points the tools at
+another API, and is honored only on this machine (127.0.0.1), for tests. A CI log GitHub
+serves from its storage is downloaded without the token.
+
+## Skills
+
+gaiacode loads skills from the `skills` folder beside its binary, from `~/.gaia/skills/`, and
+from the repository's and your own skill folders, like gaiacpp. It ships with:
+
+| Skill | Covers |
+|---|---|
+| `fix-ci` | Read a pull request's failing check and its log, reproduce it with `run_checks`, fix it, prove it |
+| `issue-to-pr` | Read an issue, add a test that fails, fix it, and open a draft pull request that closes it |
+| `pr-review` | Review a pull request for real defects, and post the review only once you approve it |
+
+## Building it
+
+gaiacode builds with the rest of the C++ framework (`GAIA_BUILD_GAIACODE`, on by default):
+
+```bash
+cmake -S cpp -B build && cmake --build build --target gaiacode
+```

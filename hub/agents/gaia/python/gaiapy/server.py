@@ -112,7 +112,9 @@ AGENT_ID = "gaia"
 #: 2.30 added ``DELETE /sessions/{id}``: end a session and stop its MCP servers.
 #: 2.31 added ``session_created`` on ``final``/``error``: the sidecar rebuilt
 #: this turn's agent (eviction, restart, or first use).
-API_VERSION = "2.31"
+#: 2.32 added ``GET /v1/gaia/activity``: the answers running now, so another
+#: app can tell before it restarts the sidecar.
+API_VERSION = "2.32"
 
 #: How long the stream allows the turn's context measurement before naming the
 #: failure on ``final``, and how long the loop's own fallback measurement waits.
@@ -736,6 +738,11 @@ class _RunRegistry:
             if run is not None:
                 return run.documents_left()
             return self._finished.get(run_id)
+
+    def active(self) -> int:
+        """How many runs are in flight now."""
+        with self._lock:
+            return len(self._runs)
 
     def remove(self, run_id: str) -> None:
         """Retire a finished run, remembering the id so a late cancel knows it
@@ -1435,6 +1442,12 @@ async def debug_turns(limit: int = 20) -> Dict[str, Any]:
     if limit < 1:
         raise HTTPException(status_code=422, detail="limit must be 1 or more")
     return {"turns": list(RECENT_TURNS)[-limit:]}
+
+
+@router.get("/activity")
+async def activity() -> Dict[str, int]:
+    """The answers running now, from any app, so a restart can wait for them."""
+    return {"active_runs": _registry.active()}
 
 
 @router.get("/skills")

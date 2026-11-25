@@ -89,9 +89,22 @@ const ClaudeModelFlag = "--claude-model"
 // NativeClaudeUnavailable is what a user is told when Claude is asked of the
 // native agent, which has no Claude provider. One text for the launch flag and
 // for /model, so the two cannot disagree.
-const NativeClaudeUnavailable = "Claude models are not available with the native GAIA agent (gaiacpp). " +
-	"Choose a model your Lemonade server offers instead — one on this PC, or a cloud " +
-	"provider such as Fireworks AI or the AMD LLM Gateway — with /provider."
+var NativeClaudeUnavailable = NativeClaudeUnavailableFor(catalog.NativeAgentBinary)
+
+// NativeClaudeUnavailableFor is NativeClaudeUnavailable for native harness name.
+func NativeClaudeUnavailableFor(name string) string {
+	if name == "" {
+		name = catalog.NativeAgentBinary
+	}
+	return "Claude models are not available with the native GAIA agent (" + name + "). " +
+		"Choose a model your Lemonade server offers instead — one on this PC, or a cloud " +
+		"provider such as Fireworks AI or the AMD LLM Gateway — with /provider."
+}
+
+// NoGaiacodeModel is why gaiacode isn't started with no model chosen: no model is
+// proven for it, so none is filled in.
+const NoGaiacodeModel = "No model is chosen for gaiacode, and it has no default because no model " +
+	"is proven for it yet. Press p and choose where chat runs."
 
 // ForAgent builds the transport a catalog entry declares.
 //
@@ -160,7 +173,7 @@ func ForAgent(agent catalog.Agent, opts ForAgentOptions) (AgentClient, error) {
 			args = append(append([]string{}, args...), FullAccessFlag)
 		}
 		if opts.UseClaude && agent.Native {
-			return nil, errors.New(NativeClaudeUnavailable)
+			return nil, errors.New(NativeClaudeUnavailableFor(agent.Harness))
 		}
 		if opts.UseClaude {
 			extra := []string{UseClaudeFlag}
@@ -171,9 +184,23 @@ func ForAgent(agent catalog.Agent, opts ForAgentOptions) (AgentClient, error) {
 		}
 		model := opts.Model
 		if model == "" && agent.Native && agent.ID == catalog.FlagshipID {
-			// gaiacpp reads no GAIA config: name GAIA's local chat model, which
-			// on a small PC is not the Gemma it would otherwise start on.
-			model = lemonade.LocalChatModel()
+			if agent.Harness == "gaiacode" {
+				// No model is proven for it: only one the user chose, never a default.
+				chosen, err := lemonade.ChosenChatModel()
+				if err != nil {
+					return nil, err
+				}
+				if model = chosen; model == "" {
+					return nil, errors.New(NoGaiacodeModel)
+				}
+				if IsClaudeModelID(model) {
+					return nil, errors.New(NativeClaudeUnavailableFor(agent.Harness))
+				}
+			} else {
+				// gaiacpp reads no GAIA config: name GAIA's local chat model, which
+				// on a small PC is not the Gemma it would otherwise start on.
+				model = lemonade.LocalChatModel()
+			}
 		}
 		if model != "" {
 			if agent.ID != catalog.FlagshipID {
@@ -183,7 +210,9 @@ func ForAgent(agent catalog.Agent, opts ForAgentOptions) (AgentClient, error) {
 		}
 		// Before the session flags: gaiacpp doesn't take them and exits on an unknown argument.
 		if agent.Native {
-			return NewNativeSubprocessClient(bin, args, opts.Dev).WithTrace(opts.Trace).WithLogf(opts.Logf), nil
+			c := NewNativeSubprocessClient(bin, args, opts.Dev).WithTrace(opts.Trace).WithLogf(opts.Logf)
+			c.harness = agent.Harness
+			return c, nil
 		}
 		if opts.HistoryFile != "" {
 			args = append(append([]string{}, args...), HistoryFileFlag, opts.HistoryFile)

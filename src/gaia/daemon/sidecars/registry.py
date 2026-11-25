@@ -383,6 +383,11 @@ class SidecarRegistry:
 
     def _ensured(self, agent_id: str, manager, lock_digest: Optional[str]) -> dict:
         entry = self._entry(agent_id, manager, include_token=True)
+        # Running as a harness other than the saved one (switched in another app). The caller
+        # restarts it once nothing is mid-answer; stopping it here would cut a turn off.
+        entry["stale_harness"] = getattr(manager, "uses_stale_harness", False)
+        # The harness it runs as, which a kept stale one still is.
+        entry["harness"] = getattr(manager, "_spawned_harness", None)
         if lock_digest is not None:
             entry["binary_lock_sha256"] = lock_digest
         return entry

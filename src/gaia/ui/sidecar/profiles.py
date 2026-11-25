@@ -24,6 +24,7 @@ from gaia.config import gaia_agents_dir
 from gaia.daemon import paths as daemon_paths
 from gaia.daemon.sidecars.errors import (
     KIND_CAPACITY,
+    KIND_HARNESS_MISSING,
     KIND_HARNESS_UNAVAILABLE,
     KIND_MODE_CONFLICT,
     KIND_NOT_INSTALLED,
@@ -36,6 +37,12 @@ from gaia.daemon.sidecars.errors import (
 HARNESS_UNAVAILABLE_MESSAGE = (
     "GAIA is set to use an agent program this version of GAIA can't run. "
     "Choose another in Settings › Agent & model, then send your message again."
+)
+
+#: The chosen agent program isn't on this PC.
+HARNESS_MISSING_MESSAGE = (
+    "The agent program chosen in Settings › Agent & model isn't on this PC. Download it "
+    "there, or choose another, then send your message again."
 )
 
 #: What to tell the user when the agent can't start for a reason of GAIA's own,
@@ -220,6 +227,8 @@ class RelayProfile:
             return self.version_upgrade_message
         if kind == KIND_HARNESS_UNAVAILABLE:
             return HARNESS_UNAVAILABLE_MESSAGE
+        if kind == KIND_HARNESS_MISSING:
+            return HARNESS_MISSING_MESSAGE
         message = _SERVICE_START_FAILED_MESSAGES.get(kind)
         if message is None:
             return self._with_log_folder(self.start_failed_message)

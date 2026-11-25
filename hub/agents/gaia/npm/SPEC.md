@@ -261,7 +261,7 @@ the header.
 | ------------------ | --------------------------------------- |
 | Default port       | `8141` (`DEFAULT_PORT` in `server.py`)  |
 | Reserved port      | `4001` — refused with a `RangeError`    |
-| Contract version   | `API_VERSION = "2.31"`                  |
+| Contract version   | `API_VERSION = "2.32"`                  |
 | Agent id / prefix  | `gaia` → `/v1/gaia/...`                 |
 
 ### 5.1 Endpoints
@@ -274,6 +274,7 @@ the header.
 | `GET`  | `/v1/gaia/init`                  | Readiness detail (Lemonade, model, connectors) |
 | `GET`  | `/v1/gaia/memory`                | The `/memory` snapshot (contract ≥ 2.13)       |
 | `GET`  | `/v1/gaia/skills`                | The skills the agent can load (contract ≥ 2.17) |
+| `GET`  | `/v1/gaia/activity`              | `{ "active_runs": n }`: the answers running now, from any caller, so an app can wait for them before restarting the sidecar (≥ 2.32) |
 | `POST` | `/v1/gaia/query`                 | The streaming surface (`text/event-stream`)    |
 | `POST` | `/v1/gaia/query/{run_id}/cancel` | Cancel a run by its host-minted `run_id`       |
 | `POST` | `/v1/gaia/query/{run_id}/respond`| Answer a mid-run question                      |

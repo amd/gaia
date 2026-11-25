@@ -3,6 +3,7 @@
 
 #include "sidecar.h"
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
@@ -21,6 +22,7 @@
 
 #include <httplib.h>
 
+#include <gaia/file_snapshots.h>
 #include <gaia/console.h>
 #include <gaia/lemonade_client.h>
 #include <gaia/memory_store.h>
@@ -28,13 +30,25 @@
 #include <gaia/skill_library.h>
 
 #include "bash_tools.h"
-#include "gaia_agent.h"
-
-#ifndef GAIACPP_VERSION
-#define GAIACPP_VERSION "0.0.0-dev"
-#endif
 
 namespace fs = std::filesystem;
+
+namespace {
+// Heads the list of attached files the sidecar adds for an agent with no document index.
+constexpr const char* kAttachedHeader = "\n\nAttached files (read them with your file tools):";
+
+// Whether an earlier user message is the sidecar's own list naming `path` on a line of its own.
+bool listsAttachedFile(const std::string& message, const std::string& path) {
+    const size_t header = message.find(kAttachedHeader);
+    if (header == std::string::npos) return false;
+    const std::string line = "\n- " + path;
+    for (size_t at = message.find(line, header); at != std::string::npos; at = message.find(line, at + 1)) {
+        const size_t end = at + line.size();
+        if (end == message.size() || message[end] == '\n') return true;
+    }
+    return false;
+}
+}  // namespace
 
 namespace gaia {
 
@@ -43,7 +57,7 @@ namespace {
 constexpr const char* kService = "gaia-agent-gaia";
 // Every request field and route up to this version is implemented; the Agent
 // UI turns features on by it, so it must never run ahead of the code.
-constexpr const char* kApiVersion = "2.27";
+constexpr const char* kApiVersion = "2.28";
 // Shown by the Agent UI's context meter in place of a measurement.
 constexpr const char* kNoContextMeasure = "Not available yet: gaiacpp doesn't report what fills its context.";
 constexpr auto kKeepalive = std::chrono::seconds(10);
@@ -196,7 +210,7 @@ struct Session {
     std::string id;
     bool temporary = false;  // no session_id: dropped after its one turn
     std::mutex agentMu;      // held to swap `agent` and by readers on other threads
-    std::unique_ptr<GaiaAgent> agent;
+    std::unique_ptr<Agent> agent;
     std::unique_lock<std::timed_mutex>* turnLock = nullptr;  // the sidecar-wide turn lock while this chat holds it
     SidecarConsole* console = nullptr;  // owned by agent
     std::atomic<bool> busy{false};
@@ -271,11 +285,14 @@ struct BadRequest : std::runtime_error {
 
 class Sidecar {
 public:
-    explicit Sidecar(SidecarOptions opts) : opts_(std::move(opts)) {}
+    explicit Sidecar(SidecarOptions opts) : opts_(std::move(opts)) {
+        if (!opts_.makeAgent) throw std::logic_error("runSidecar needs SidecarOptions::makeAgent");
+        if (opts_.program.empty()) throw std::logic_error("runSidecar needs SidecarOptions::program");
+    }
 
     int run() {
         if (!loopbackName(opts_.host)) {
-            throw std::runtime_error("gaiacpp sidecar only listens on this PC: --host must be 127.0.0.1, localhost "
+            throw std::runtime_error(opts_.program + " sidecar only listens on this PC: --host must be 127.0.0.1, localhost "
                                      "or ::1, not " + opts_.host + ".");
         }
         token_ = loadToken();
@@ -309,14 +326,14 @@ public:
         int port = opts_.port;
         if (port > 0) {
             if (!server_.bind_to_port(opts_.host, port)) {
-                throw std::runtime_error("gaiacpp sidecar can't bind " + opts_.host + ":" + std::to_string(port) +
+                throw std::runtime_error(opts_.program + " sidecar can't bind " + opts_.host + ":" + std::to_string(port) +
                                          " (in use?). The daemon picks the port; to run by hand, pass a free --port.");
             }
         } else {
             port = server_.bind_to_any_port(opts_.host);
-            if (port <= 0) throw std::runtime_error("gaiacpp sidecar can't bind a port on " + opts_.host);
+            if (port <= 0) throw std::runtime_error(opts_.program + " sidecar can't bind a port on " + opts_.host);
         }
-        std::cerr << "gaiacpp " GAIACPP_VERSION " sidecar (api " << kApiVersion << ") on http://" << opts_.host
+        std::cerr << opts_.program << " " << opts_.version << " sidecar (api " << kApiVersion << ") on http://" << opts_.host
                   << ":" << port << std::endl;
         server_.listen_after_bind();
         return 0;
@@ -344,13 +361,13 @@ private:
         return env;
     }
 
-    // The daemon hands over a keychain secret file the agent must remove; gaiacpp doesn't use it.
-    static void dropKeychainSecret() {
+    // The daemon hands over a keychain secret file the agent must remove; a native harness doesn't use it.
+    void dropKeychainSecret() {
         const std::string f = getEnvVar("GAIA_HOST_KEYCHAIN_SECRET_FILE");
         if (!f.empty()) {
             std::error_code ec;
             fs::remove(f, ec);
-            if (ec) std::cerr << "gaiacpp: could not remove the keychain secret file " << f << ": " << ec.message() << std::endl;
+            if (ec) std::cerr << opts_.program << ": could not remove the keychain secret file " << f << ": " << ec.message() << std::endl;
         }
     }
 
@@ -435,7 +452,7 @@ private:
         if (s.agent && s.builtWith == s.roots) return;
         AgentConfig cfg;
         cfg.baseUrl = getEnvVar("LEMONADE_BASE_URL", defaultBaseUrl());
-        cfg.modelId = opts_.defaultModel.empty() ? "Gemma-4-E4B-it-GGUF" : opts_.defaultModel;
+        cfg.modelId = opts_.defaultModel.empty() ? opts_.fallbackModel : opts_.defaultModel;
         cfg.contextSize = 32768;
         cfg.maxTokens = 16384;
         cfg.temperature = 0.2;
@@ -444,8 +461,7 @@ private:
         cfg.maxHistoryMessages = 0;  // the UI fits history to the window
         cfg.responseMode = ResponseMode::Conversational;
         cfg.apiKey = lemonadeKey_;
-        GaiaAgent::Options o;
-        o.maxHelpers = opts_.maxHelpers;
+        SidecarAgentSpec o;
         if (s.roots.empty()) {
             // Roots are UTF-8; the environment's narrow strings are the code page on Windows.
 #ifdef _WIN32
@@ -463,7 +479,8 @@ private:
         o.memoryPrivate = s.memoryPrivate;
         if (!s.shell) s.shell = BashTools::newSession();
         o.shell = s.shell;
-        auto agent = std::make_unique<GaiaAgent>(cfg, o);
+        auto agent = opts_.makeAgent(cfg, o);
+        if (!agent) throw std::logic_error("SidecarOptions::makeAgent returned no agent");
         auto console = std::make_unique<SidecarConsole>();
         SidecarConsole* consolePtr = console.get();
         agent->setOutputHandler(std::move(console));
@@ -592,11 +609,11 @@ private:
         });
         server_.Get("/version", [this](const httplib::Request& req, httplib::Response& res) {
             if (!admit(req, res, false)) return;
-            sendJson(res, 200, {{"apiVersion", kApiVersion}, {"agentVersion", GAIACPP_VERSION}});
+            sendJson(res, 200, {{"apiVersion", kApiVersion}, {"agentVersion", opts_.version}});
         });
         server_.Get("/v1/gaia/version", [this](const httplib::Request& req, httplib::Response& res) {
             if (!admit(req, res, false)) return;
-            sendJson(res, 200, {{"apiVersion", kApiVersion}, {"version", GAIACPP_VERSION}, {"agent", "gaia"}});
+            sendJson(res, 200, {{"apiVersion", kApiVersion}, {"version", opts_.version}, {"agent", "gaia"}});
         });
         server_.Get("/v1/gaia/init", [this](const httplib::Request& req, httplib::Response& res) {
             if (!admit(req, res, true)) return;
@@ -620,6 +637,11 @@ private:
         server_.Get("/v1/gaia/skills", [this](const httplib::Request& req, httplib::Response& res) {
             if (!admit(req, res, true)) return;
             skillsList(res);
+        });
+        // The answers running now, from any caller, so a restart can wait for them.
+        server_.Get("/v1/gaia/activity", [this](const httplib::Request& req, httplib::Response& res) {
+            if (!admit(req, res, true)) return;
+            sendJson(res, 200, {{"active_runs", undelivered_.load()}});
         });
         server_.Post("/v1/gaia/query", [this](const httplib::Request& req, httplib::Response& res) {
             if (!admit(req, res, true)) return;
@@ -691,7 +713,7 @@ private:
             if (!admit(req, res, true)) return;
             const std::string id = req.matches[1];
             if (!findRun(id)) return sendDetail(res, 404, "No run " + id + " in flight");
-            sendDetail(res, 409, "gaiacpp takes messages between turns, not during one");
+            sendDetail(res, 409, opts_.program + " takes messages between turns, not during one");
         });
         server_.Post(R"(/v1/gaia/sessions/([^/]+)/bypass)", [this](const httplib::Request& req, httplib::Response& res) {
             if (!admit(req, res, true)) return;
@@ -842,7 +864,7 @@ private:
         if (hasTurns && !body["context"].empty()) throw BadRequest(422, "send turns or context, not both");
         const std::string provider = body.value("provider", "");
         if (!provider.empty() && provider != "lemonade" && provider != "local") {
-            throw BadRequest(400, "gaiacpp runs models through Lemonade only; provider '" + provider + "' isn't supported");
+            throw BadRequest(400, opts_.program + " runs models through Lemonade only; provider '" + provider + "' isn't supported");
         }
         const std::string sid = body.contains("session_id") && body["session_id"].is_string()
                                     ? body["session_id"].get<std::string>() : "";
@@ -862,8 +884,12 @@ private:
         }
         const bool undoRequested = body.contains("changes_turn_id") && body["changes_turn_id"].is_string();
         if (undoRequested && sid.empty()) throw BadRequest(422, "changes_turn_id needs a session_id");
+        const std::string undoTurn = undoRequested ? body["changes_turn_id"].get<std::string>() : "";
         const bool reasoning = body.value("reasoning", false);
         const std::string model = body.value("model", "");
+        if (model.empty() && opts_.defaultModel.empty() && opts_.fallbackModel.empty()) {
+            throw BadRequest(400, opts_.program + " has no default model: choose a model for this chat.");
+        }
         const int maxSteps = body.value("max_steps", 0);
 
         // The UI sends the conversation every turn.
@@ -888,11 +914,14 @@ private:
 
         auto run = std::make_shared<Run>();
         run->id = runId;
+        // Held until the stream's last event is written (or the request is refused): /activity's count.
+        ++undelivered_;
+        const std::shared_ptr<void> delivering(nullptr, [this](void*) { --undelivered_; });
         {
             std::lock_guard<std::mutex> lock(runsMu_);
             if (runs_.count(runId)) throw BadRequest(409, "Duplicate run_id " + runId);
             if (runs_.size() >= kMaxOpenTurns) {
-                throw BadRequest(503, "gaiacpp already has " + std::to_string(kMaxOpenTurns) +
+                throw BadRequest(503, opts_.program + " already has " + std::to_string(kMaxOpenTurns) +
                                           " turns running or waiting. Send this again when one of them finishes.");
             }
             runs_[runId] = run;
@@ -930,7 +959,7 @@ private:
 
         try {
         std::thread([this, s, run, history = std::move(history), text, model, maxSteps, documents, reasoning,
-                     undoRequested, hasTurns]() mutable {
+                     undoRequested, undoTurn, hasTurns]() mutable {
             // One chat works at a time: the working folder is process-wide. A
             // chat waiting on its user lets go of it (see confirm()).
             std::unique_lock<std::timed_mutex> turnLock(turnsMu_, std::defer_lock);
@@ -948,6 +977,7 @@ private:
             if (started) s->turnLock = &turnLock;
             const auto t0 = std::chrono::steady_clock::now();
             json terminal;
+            std::shared_ptr<TurnRecorder> recorder;
             if (!started) {
                 terminal = {{"type", "final"}, {"answer", ""}};
             } else try {
@@ -966,11 +996,31 @@ private:
                 if (run->cancelled) throw std::runtime_error("cancelled");
                 const std::string folderProblem = enterWorkingDirectory(*s);
                 if (!folderProblem.empty()) throw std::runtime_error(folderProblem);
-                if (undoRequested) {
+                if (undoRequested && s->agent->recordsChanges()) {
+                    try {
+                        recorder = std::make_shared<TurnRecorder>(s->id, undoTurn);
+                        s->agent->setChangeRecorder(recorder);
+                    } catch (const SnapshotError& e) {
+                        s->console->emit({{"type", "status"},
+                                          {"message", std::string("Undo may not work for this turn: ") + e.what()}});
+                    }
+                } else if (undoRequested) {
                     s->console->emit({{"type", "status"},
-                                      {"message", "Undo may not work for this turn: gaiacpp doesn't record file changes yet."}});
+                                      {"message", "Undo may not work for this turn: " + opts_.program + " doesn't record file changes yet."}});
                 }
                 indexDocuments(*s, documents);
+                std::string asked = text;
+                if (!s->agent->tools().hasTool("index_document")) {
+                    // The UI resends the conversation each turn: name only files it doesn't already mention.
+                    std::string fresh;
+                    for (const auto& d : documents) {
+                        const bool named = std::any_of(history.begin(), history.end(), [&](const Message& m) {
+                            return m.role == MessageRole::USER && listsAttachedFile(m.content, d);
+                        });
+                        if (!named) fresh += "\n- " + d;
+                    }
+                    if (!fresh.empty()) asked += kAttachedHeader + fresh;
+                }
                 AgentConfig cfg = s->agent->config();
                 if (!model.empty()) cfg.modelId = model;
                 // Cloud models behind Lemonade speak native tool calls.
@@ -981,7 +1031,7 @@ private:
                 s->agent->setHistory(history);
                 const size_t before = s->agent->history().size();
                 if (run->cancelled) throw std::runtime_error("cancelled");
-                json r = s->agent->processQuery(text, maxSteps);
+                json r = s->agent->processQuery(asked, maxSteps);
                 const double elapsed = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
                 json usage = {{"steps", r.value("steps_taken", 0)}, {"tools_used", s->console->toolsUsed()},
                               {"elapsed", elapsed}};
@@ -1015,6 +1065,18 @@ private:
                 // Anything else would end the process and every other chat with it.
                 terminal = {{"type", "error"}, {"detail", "The turn failed with an unknown error"}, {"status", 500}};
             }
+            if (recorder) {
+                // Whatever ended the turn, what it changed is saved for the Changes view and undo.
+                s->agent->setChangeRecorder(nullptr);
+                try {
+                    recorder->finish();
+                } catch (const std::exception& e) {
+                    if (s->console) {
+                        s->console->emit({{"type", "status"},
+                                          {"message", std::string("Undo may not work for this turn: ") + e.what()}});
+                    }
+                }
+            }
             if (s->console) s->console->detach();
             {
                 std::lock_guard<std::mutex> lock(s->currentMu);
@@ -1042,7 +1104,7 @@ private:
 
         res.set_header("Cache-Control", "no-cache");
         res.set_chunked_content_provider(
-            "text/event-stream; charset=utf-8", [this, run, s](size_t, httplib::DataSink& sink) {
+            "text/event-stream; charset=utf-8", [this, run, s, delivering](size_t, httplib::DataSink& sink) {
                 auto last = std::chrono::steady_clock::now();
                 auto stopRun = [&] { run->cancel(); };  // the client went away: stop the run
                 for (;;) {
@@ -1122,7 +1184,8 @@ private:
         for (const auto& d : documents) {
             if (!s.indexed.count(d)) pending.push_back(d);
         }
-        if (pending.empty()) return;
+        // An agent with no document index reads an attachment with its file tools.
+        if (pending.empty() || !s.agent->tools().hasTool("index_document")) return;
         json names = json::array();
         for (const auto& d : pending) names.push_back(fs::path(d).filename().string());
         s.console->emit({{"type", "tool_call"}, {"tool", "index_documents"}, {"args", {{"documents", names}}}});
@@ -1142,6 +1205,8 @@ private:
     std::map<std::string, std::shared_ptr<Session>> sessions_;
     std::string lemonadeKey_;
     std::mutex runsMu_;
+    /// Runs whose answer hasn't been fully sent yet.
+    std::atomic<long long> undelivered_{0};
     std::map<std::string, std::shared_ptr<Run>> runs_;
     std::set<std::string> earlyCancels_;
     std::deque<std::string> earlyCancelOrder_;

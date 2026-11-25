@@ -9,6 +9,7 @@ the daemon starts as the GAIA agent and whether the Agent UI relays to it.
 import dataclasses
 import json
 import sys
+import threading
 from pathlib import Path
 
 import pytest
@@ -19,8 +20,8 @@ from gaia.config import GaiaConfig, GaiaConfigError
 from gaia.daemon.sidecars import fetch
 from gaia.daemon.sidecars import manager as mgr
 from gaia.daemon.sidecars.errors import (
+    KIND_HARNESS_MISSING,
     KIND_HARNESS_UNAVAILABLE,
-    KIND_START_FAILED,
     SidecarError,
     SidecarSpawnError,
 )
@@ -51,14 +52,18 @@ def fake_gaiacpp(tmp_path, monkeypatch):
     binary.write_bytes(b"not a real program")
     if sys.platform != "win32":
         binary.chmod(0o755)
-    monkeypatch.setattr(fetch, "native_flagship_candidates", lambda: [binary])
+    monkeypatch.setattr(
+        fetch, "native_flagship_candidates", lambda name="gaiacpp": [binary]
+    )
     return binary
 
 
 @pytest.fixture
 def no_gaiacpp(tmp_path, monkeypatch):
     missing = tmp_path / "nowhere" / fetch.native_flagship_executable_name()
-    monkeypatch.setattr(fetch, "native_flagship_candidates", lambda: [missing])
+    monkeypatch.setattr(
+        fetch, "native_flagship_candidates", lambda name="gaiacpp": [missing]
+    )
     return missing
 
 
@@ -160,7 +165,9 @@ def _flagship_manager():
 
 def test_the_daemon_starts_gaiacpp_when_it_is_chosen(fake_gaiacpp, monkeypatch):
     _choose("gaiacpp")
-    monkeypatch.setattr(fetch, "native_flagship_version", lambda binary: "0.1.0")
+    monkeypatch.setattr(
+        fetch, "native_flagship_version", lambda binary, name="gaiacpp": "0.1.0"
+    )
     m = _flagship_manager()
     argv, kwargs = m.build_spawn_command(port=45123)
     assert argv == [str(fake_gaiacpp), "--host", m.host, "--port", "45123"]
@@ -180,6 +187,13 @@ def test_a_chosen_gaiacpp_that_is_missing_fails_and_says_how_to_switch_back(
     text = str(e.value)
     assert "gaiacpp" in text and str(no_gaiacpp) in text
     assert "Settings › Agent & model" in text
+    # The Agent UI says what to do, not that "GAIA couldn't start its agent".
+    from gaia.ui.sidecar.profiles import HARNESS_MISSING_MESSAGE, profile_for
+
+    assert e.value.kind == KIND_HARNESS_MISSING
+    assert (
+        profile_for("gaia").start_failed_text(e.value.kind) == HARNESS_MISSING_MESSAGE
+    )
 
 
 def test_a_gaiacpp_that_cannot_report_its_version_is_not_started(fake_gaiacpp):
@@ -246,19 +260,63 @@ def test_the_daemon_refuses_to_start_a_harness_it_cannot_run():
     assert e.value.kind == KIND_HARNESS_UNAVAILABLE
 
 
-def test_an_unproven_harness_with_no_launcher_is_not_run_as_the_python_agent(
-    monkeypatch,
-):
-    # The eval override makes gaiacode "runnable", but nothing here can start it.
-    _save_raw("gaiacode")
+def test_the_daemon_starts_gaiacode_under_the_eval_override(monkeypatch, tmp_path):
+    # Not offered yet: only the eval lanes' override lets it run, from a build of its own.
+    binary = tmp_path / "build" / fetch.native_flagship_executable_name("gaiacode")
+    binary.parent.mkdir()
+    binary.write_bytes(b"#!/bin/sh\n")
+    binary.chmod(0o755)
+    monkeypatch.setenv("GAIA_GAIACODE_PATH", str(binary))
     monkeypatch.setenv("GAIA_UNPROVEN_HARNESS", "gaiacode")
     monkeypatch.setattr(
         fetch, "fetch_binary", lambda **k: pytest.fail("ran the Python agent")
     )
+    seen = []
+    monkeypatch.setattr(
+        fetch,
+        "native_flagship_version",
+        lambda b, name="gaiacpp": seen.append(name) or "0.1.0",
+    )
+    _save_raw("gaiacode")
+    m = _flagship_manager()
+    argv, kwargs = m.build_spawn_command(port=45123)
+    assert argv == [str(binary), "--host", m.host, "--port", "45123"]
+    assert kwargs == {} and seen == ["gaiacode"]
+    assert m.resolved_mode == "user"
+
+
+def test_a_missing_gaiacode_names_its_variable_and_never_runs_python(
+    monkeypatch, tmp_path
+):
+    monkeypatch.setenv("GAIA_HOME", str(tmp_path))
+    monkeypatch.delenv("GAIA_GAIACODE_PATH", raising=False)
+    monkeypatch.setenv("GAIA_UNPROVEN_HARNESS", "gaiacode")
+    monkeypatch.setattr(
+        fetch, "fetch_binary", lambda **k: pytest.fail("ran the Python agent")
+    )
+    _save_raw("gaiacode")
     with pytest.raises(SidecarSpawnError) as e:
         _flagship_manager().build_spawn_command(port=45123)
-    assert "gaiacode" in str(e.value) and "Settings" in str(e.value)
+    text = str(e.value)
+    assert "gaiacode" in text and "GAIA_GAIACODE_PATH" in text and "Settings" in text
+    # Nothing to download: the Agent UI says to choose another, never "download it".
     assert e.value.kind == KIND_HARNESS_UNAVAILABLE
+    from gaia.ui.routers.agent_programs import HARNESS_UNAVAILABLE, chosen_agent_problem
+
+    problem = chosen_agent_problem()
+    assert problem is not None and problem["code"] == HARNESS_UNAVAILABLE, problem
+    assert "GAIA_GAIACODE_PATH" in problem["detail"], "Settings says what is missing"
+
+
+def test_each_native_harness_looks_for_its_own_program(monkeypatch, tmp_path):
+    monkeypatch.setenv("GAIA_HOME", str(tmp_path))
+    monkeypatch.delenv("GAIA_GAIACPP_PATH", raising=False)
+    monkeypatch.delenv("GAIA_GAIACODE_PATH", raising=False)
+    assert fetch.native_flagship_candidates("gaiacode")[0] == (
+        tmp_path / "bin" / fetch.native_flagship_executable_name("gaiacode")
+    )
+    with pytest.raises(ValueError):
+        fetch.native_flagship_candidates("gaiapy")
 
 
 @pytest.mark.parametrize("saved", ["gaiacode", "gaiazzz"])
@@ -300,7 +358,8 @@ def test_a_missing_gaiacpp_is_not_reported_as_an_unrunnable_harness():
     _choose("gaiacpp")
     with pytest.raises(SidecarSpawnError) as e:
         _flagship_manager().build_spawn_command(port=45123)
-    assert e.value.kind == KIND_START_FAILED
+    # Missing, so the fix is to download it: never "this version can't run it".
+    assert e.value.kind == KIND_HARNESS_MISSING
 
 
 # ---------------------------------------------------------------- settings API
@@ -484,7 +543,9 @@ def test_a_downloaded_gaiacpp_that_was_changed_afterwards_is_not_run(
         "sha256": hashlib.sha256(b"what was downloaded").hexdigest(),
     }
     (tmp_path / fetch.NATIVE_INSTALL_RECORD_NAME).write_text(json.dumps(record))
-    monkeypatch.setattr(fetch, "native_flagship_candidates", lambda: [binary])
+    monkeypatch.setattr(
+        fetch, "native_flagship_candidates", lambda name="gaiacpp": [binary]
+    )
     assert fetch.verified_native_flagship() == binary
 
     binary.write_bytes(b"something else")
@@ -536,3 +597,415 @@ def test_a_switch_is_refused_while_setup_is_running_its_tests(
         client.put("/api/settings", json={"flagship_agent": "gaiacpp"}).status_code
         == 200
     )
+
+
+# ---------------------------------------------------------------- gaiacode's model
+
+
+def test_gaiacode_takes_only_a_model_the_user_chose(monkeypatch):
+    from gaia.harnesses import chosen_model
+
+    monkeypatch.delenv("GAIA_MODEL_ID", raising=False)
+    GaiaConfig.save_key("default_model", "Gemma-4-E4B-it-GGUF")
+    assert chosen_model() is None, "setup's hardware pick is not the user's choice"
+    GaiaConfig.save_key("last_model", "fireworks.glm-5p3")
+    assert chosen_model() == "fireworks.glm-5p3"
+    monkeypatch.setenv("GAIA_MODEL_ID", "Qwen3.6-35B-A3B-GGUF")
+    assert chosen_model() == "Qwen3.6-35B-A3B-GGUF"
+
+
+def _relay_once(monkeypatch, model, picked=None):
+    """Run one Agent UI turn for gaia; return (events, the model relay_query was given)."""
+    from gaia.ui.sidecar import daemon_client, relay
+
+    handle = daemon_client.SidecarHandle(
+        base_url="http://127.0.0.1:1",
+        token="t",
+        api_version="99.0",
+        agent_version="0.1.0",
+        mode="user",
+        pid=1,
+        agent_id="gaia",
+    )
+    monkeypatch.setattr(daemon_client, "acquire_handle", lambda agent_id: handle)
+    sent = {}
+
+    def _relay(*args, **kwargs):
+        sent["model"] = kwargs.get("model_id", args[3] if len(args) > 3 else None)
+
+    monkeypatch.setattr(relay, "relay_query", _relay)
+    events = []
+
+    class _Handler:
+        cancelled = threading.Event()
+
+        def _emit(self, event):
+            events.append(event)
+
+    request = ChatRequest(session_id="s1", message="hi", agent_type="gaia")
+    _chat_helpers._dispatch_sidecar_query(
+        _Handler(), request, [], model, "gaia", picked_model=picked
+    )
+    return events, sent
+
+
+def test_an_agent_ui_turn_never_sends_gaiacode_a_filled_in_model(monkeypatch):
+    monkeypatch.delenv("GAIA_MODEL_ID", raising=False)
+    _save_raw("gaiacode")
+    events, sent = _relay_once(monkeypatch, "Gemma-4-E4B-it-GGUF")
+    errors = [e["content"] for e in events if e["type"] == "agent_error"]
+    assert errors and "No model is chosen for gaiacode" in errors[0], events
+    assert "model" not in sent, "the turn reached gaiacode"
+
+
+def test_gaiacode_runs_on_the_model_picked_in_the_app(monkeypatch):
+    # The picker's choice wins over last_model, which another app may have written.
+    from gaia.ui.sidecar import daemon_client
+
+    monkeypatch.delenv("GAIA_MODEL_ID", raising=False)
+    GaiaConfig.save_key("last_model", "fireworks.glm-5p3")
+    _save_raw("gaiacode")
+
+    class _Ready:
+        base_url = "http://127.0.0.1:1"
+
+        def init(self):
+            return 200, {"model": {"present": True}}
+
+    monkeypatch.setattr(daemon_client.SidecarHandle, "proxy", lambda self: _Ready())
+    events, sent = _relay_once(monkeypatch, "Qwen3.5-4B-GGUF", picked="Qwen3.5-4B-GGUF")
+    assert not [e for e in events if e["type"] == "agent_error"], events
+    assert sent["model"] == "Qwen3.5-4B-GGUF"
+    # Whatever the chat's row holds, with no pick it is the explicit choice.
+    events, sent = _relay_once(monkeypatch, "Qwen3.5-4B-GGUF")
+    assert sent["model"] == "fireworks.glm-5p3"
+
+
+# ---------------------------------------------------------------- a switch made elsewhere
+
+
+def test_a_flagship_started_as_another_harness_is_stale_after_a_switch(
+    fake_gaiacpp, monkeypatch
+):
+    monkeypatch.setattr(
+        fetch, "native_flagship_version", lambda b, name="gaiacpp": "0.1.0"
+    )
+    _choose("gaiacpp")
+    m = _flagship_manager()
+    m.build_spawn_command(port=45123)
+    assert not m.uses_stale_harness
+    _choose("gaiapy")  # the TUI's /agent writes only config.json
+    assert m.uses_stale_harness
+
+
+def test_a_non_flagship_agent_is_never_stale():
+    other = [s for s in builtin_specs().values() if s.agent_id != "gaia"]
+    if not other:
+        pytest.skip("no other built-in sidecar spec")
+    assert not mgr.AgentSidecarManager(other[0]).uses_stale_harness
+
+
+# ---------------------------------------------------------------- start screen
+
+
+def test_the_start_screen_explains_a_saved_harness_it_cannot_run(monkeypatch):
+    from gaia.ui.routers import agent_programs
+
+    monkeypatch.delenv("GAIA_UNPROVEN_HARNESS", raising=False)
+    _save_raw("gaiacode")
+    problem = agent_programs.chosen_agent_problem()
+    assert problem["code"] == "harness_unavailable"
+    assert "gaiacode" in problem["detail"]
+
+
+# ---------------------------------------------------------------- a stale agent restarts only when idle
+
+
+def _stale_dispatch(monkeypatch, busy, elsewhere=0):
+    """One Agent UI turn whose sidecar runs a harness other than the saved one.
+
+    *elsewhere* is what the sidecar says other apps are running, or an
+    exception it raises instead.
+    """
+    from gaia.ui import run_manager as rm
+    from gaia.ui.sidecar import daemon_client, relay
+
+    def handle(stale):
+        return daemon_client.SidecarHandle(
+            base_url="http://127.0.0.1:1",
+            token="t",
+            api_version="99.0",
+            agent_version="0.1.0",
+            mode="user",
+            pid=1,
+            agent_id="gaia",
+            stale_harness=stale,
+        )
+
+    acquired, stopped = [], []
+
+    def _acquire(agent_id):
+        acquired.append(agent_id)
+        return handle(len(acquired) == 1)
+
+    monkeypatch.setattr(daemon_client, "acquire_handle", _acquire)
+    monkeypatch.setattr(
+        daemon_client, "stop_sidecar", lambda agent_id: stopped.append(agent_id)
+    )
+    monkeypatch.setattr(
+        rm.run_manager, "active_sessions", lambda: ["s1"] + (["other"] if busy else [])
+    )
+
+    def _active_runs(h):
+        if isinstance(elsewhere, Exception):
+            raise elsewhere
+        return elsewhere
+
+    monkeypatch.setattr(daemon_client, "active_runs", _active_runs)
+    monkeypatch.setattr(relay, "relay_query", lambda *a, **k: None)
+    events = []
+
+    class _Handler:
+        def _emit(self, event):
+            events.append(event)
+
+    request = ChatRequest(session_id="s1", message="hi", agent_type="gaia")
+    _chat_helpers._dispatch_sidecar_query(
+        _Handler(), request, [], "m", "gaia", session_id="s1"
+    )
+    return events, acquired, stopped
+
+
+def test_a_stale_agent_restarts_when_no_other_chat_is_answering(monkeypatch):
+    _choose("gaiapy")
+    events, acquired, stopped = _stale_dispatch(monkeypatch, busy=False)
+    assert stopped == ["gaia"] and len(acquired) == 2, events
+
+
+def test_a_stale_agent_is_left_running_while_another_chat_answers(monkeypatch):
+    _choose("gaiapy")
+    events, acquired, stopped = _stale_dispatch(monkeypatch, busy=True)
+    assert stopped == [] and len(acquired) == 1
+    assert any("takes over once" in e.get("message", "") for e in events), events
+
+
+def test_a_stale_agent_is_left_running_while_a_background_relay_runs(monkeypatch):
+    # A scheduled prompt or agent-loop tick isn't a chat session, but it is mid-answer.
+    _choose("gaiapy")
+    monkeypatch.setattr(_chat_helpers, "_relays_in_flight", 1)
+    events, acquired, stopped = _stale_dispatch(monkeypatch, busy=False)
+    assert stopped == [] and len(acquired) == 1
+    assert _chat_helpers._relays_in_flight == 1, "the turn's own count was released"
+
+
+def test_a_stale_agent_is_left_running_while_another_app_is_answering(monkeypatch):
+    # The TUI drives the same sidecar; its turns are invisible to this process.
+    _choose("gaiapy")
+    events, acquired, stopped = _stale_dispatch(monkeypatch, busy=False, elsewhere=1)
+    assert stopped == [] and len(acquired) == 1
+    assert any("takes over once" in e.get("message", "") for e in events), events
+
+
+def test_a_sidecar_that_cant_say_is_never_restarted_on_a_guess(monkeypatch):
+    from gaia.daemon.sidecars.errors import SidecarError
+
+    _choose("gaiapy")
+    events, acquired, stopped = _stale_dispatch(
+        monkeypatch, busy=False, elsewhere=SidecarError("HTTP 404")
+    )
+    assert stopped == [] and len(acquired) == 1
+    assert any("takes over once" in e.get("message", "") for e in events), events
+
+
+def test_a_sidecar_from_before_activity_restarts_on_this_apps_idle_check(monkeypatch):
+    # An old binary has no /activity; waiting on it would leave the switch pending forever.
+    from gaia.ui.sidecar import daemon_client
+
+    _choose("gaiapy")
+    real = daemon_client.SidecarHandle
+    monkeypatch.setattr(
+        daemon_client,
+        "SidecarHandle",
+        lambda **kw: real(**{**kw, "api_version": "2.31", "harness": "gaiapy"}),
+    )
+    # It would report a busy agent if asked: the restart shows it never was.
+    events, acquired, stopped = _stale_dispatch(monkeypatch, busy=False, elsewhere=1)
+    assert stopped == ["gaia"] and len(acquired) == 2, events
+
+
+def test_activity_is_read_only_from_a_sidecar_that_serves_it():
+    from gaia.ui.sidecar import daemon_client
+
+    def handle(version, harness):
+        return daemon_client.SidecarHandle(
+            base_url="http://127.0.0.1:1",
+            token="t",
+            api_version=version,
+            agent_version="0.1.0",
+            mode="user",
+            pid=1,
+            agent_id="gaia",
+            harness=harness,
+        )
+
+    assert _chat_helpers._reports_activity(handle("2.32", "gaiapy"))
+    assert not _chat_helpers._reports_activity(handle("2.31", "gaiapy"))
+    assert _chat_helpers._reports_activity(handle("2.28", "gaiacpp"))
+    assert not _chat_helpers._reports_activity(handle("2.27", "gaiacode"))
+    assert _chat_helpers._reports_activity(
+        handle("3.0", None)
+    ), "an unnamed harness is the Python one"
+    assert not _chat_helpers._reports_activity(handle("garbage", "gaiapy"))
+
+
+def test_active_runs_reads_the_sidecar_and_refuses_an_older_one(monkeypatch):
+    from gaia.daemon.sidecars.errors import SidecarError
+    from gaia.ui.sidecar import daemon_client
+
+    handle = daemon_client.SidecarHandle(
+        base_url="http://127.0.0.1:1",
+        token="tok",
+        api_version="2.32",
+        agent_version="0.1.0",
+        mode="user",
+        pid=1,
+        agent_id="gaia",
+    )
+    seen = {}
+
+    class _Reply:
+        def __init__(self, status, body):
+            self.status_code, self._body = status, body
+
+        def json(self):
+            return self._body
+
+    def _get(url, headers, timeout):
+        seen.update(url=url, auth=headers.get("Authorization"))
+        return reply
+
+    monkeypatch.setattr(daemon_client.requests, "get", _get)
+    reply = _Reply(200, {"active_runs": 2})
+    assert daemon_client.active_runs(handle) == 2
+    assert seen == {"url": "http://127.0.0.1:1/v1/gaia/activity", "auth": "Bearer tok"}
+    reply = _Reply(404, {"detail": "Not Found"})
+    with pytest.raises(SidecarError, match="can't say"):
+        daemon_client.active_runs(handle)
+
+
+def test_one_agents_restart_never_holds_up_anothers_relay(monkeypatch):
+    # The per-agent lock: a held "gaia" lock doesn't block a relay to another agent.
+    import threading
+
+    held = _chat_helpers._agent_lock("gaia")
+    other = _chat_helpers._agent_lock("custom")
+    assert held is not other
+    assert held is _chat_helpers._agent_lock("gaia")
+    with held:
+        got = []
+        t = threading.Thread(target=lambda: got.append(other.acquire(timeout=2)))
+        t.start()
+        t.join(5)
+        assert got == [True]
+        other.release()
+
+
+def test_a_background_relay_runs_gaiacode_on_the_model_it_names(monkeypatch):
+    # Setup's agent check names its model; last_model may be another app's pick.
+    seen = {}
+    monkeypatch.setattr(
+        _chat_helpers,
+        "_dispatch_sidecar_query",
+        lambda *a, **k: seen.update(k),
+    )
+    import queue
+
+    class _Handler:
+        event_queue = queue.Queue()
+
+    _chat_helpers.relay_one_prompt(
+        _Handler(),
+        "hi",
+        agent_type="gaia",
+        model_id="Qwen3.5-4B-GGUF",
+        memory="off",
+        max_steps=None,
+    )
+    assert seen["picked_model"] == "Qwen3.5-4B-GGUF"
+
+
+def test_a_relay_is_counted_until_its_dispatch_returns(monkeypatch):
+    _choose("gaiapy")
+    seen = []
+    from gaia.ui.sidecar import relay
+
+    monkeypatch.setattr(
+        relay,
+        "relay_query",
+        lambda *a, **k: seen.append(_chat_helpers._relays_in_flight),
+    )
+    _relay_once(monkeypatch, "m")
+    assert seen in ([1], []), seen
+    assert _chat_helpers._relays_in_flight == 0
+
+
+def test_a_kept_stale_agent_keeps_its_own_model_rules(monkeypatch):
+    # Saved gaiacode, but the running gaiapy answers: no gaiacode model refusal.
+    from gaia.ui import run_manager as rm
+    from gaia.ui.sidecar import daemon_client, relay
+
+    monkeypatch.delenv("GAIA_MODEL_ID", raising=False)
+    monkeypatch.setenv("GAIA_UNPROVEN_HARNESS", "gaiacode")
+    _save_raw("gaiacode")
+    handle = daemon_client.SidecarHandle(
+        base_url="http://127.0.0.1:1",
+        token="t",
+        api_version="99.0",
+        agent_version="0.1.0",
+        mode="user",
+        pid=1,
+        agent_id="gaia",
+        stale_harness=True,
+        harness="gaiapy",
+    )
+    monkeypatch.setattr(daemon_client, "acquire_handle", lambda agent_id: handle)
+    monkeypatch.setattr(rm.run_manager, "active_sessions", lambda: ["s1", "other"])
+    sent = {}
+    monkeypatch.setattr(
+        relay,
+        "relay_query",
+        lambda *a, **k: sent.setdefault("model", k.get("model_id")),
+    )
+    events = []
+
+    class _Handler:
+        def _emit(self, event):
+            events.append(event)
+
+    request = ChatRequest(session_id="s1", message="hi", agent_type="gaia")
+    _chat_helpers._dispatch_sidecar_query(
+        _Handler(), request, [], "Gemma-4-E4B-it-GGUF", "gaia", session_id="s1"
+    )
+    # Past the model rules (the relay itself isn't faked here): none of gaiacode's refusals.
+    for e in events:
+        assert "gaiacode" not in str(e.get("content", "")), events
+
+
+def test_gaiacode_on_hybrid_starts_on_its_cheap_model(monkeypatch):
+    from gaia.harnesses import chosen_model
+    from gaia.llm import hybrid
+
+    monkeypatch.delenv("GAIA_MODEL_ID", raising=False)
+    GaiaConfig.save_key("last_model", "hybrid")
+    assert chosen_model() == hybrid.start_model("hybrid")
+    assert chosen_model() != "hybrid"
+
+
+def test_gaiacode_refuses_a_claude_model_in_the_agent_ui(monkeypatch):
+    monkeypatch.delenv("GAIA_MODEL_ID", raising=False)
+    _save_raw("gaiacode")
+    GaiaConfig.save_key("last_model", "claude-sonnet-5")
+    events, sent = _relay_once(monkeypatch, "Gemma-4-E4B-it-GGUF")
+    errors = [e["content"] for e in events if e["type"] == "agent_error"]
+    assert errors and "Claude models are not available" in errors[0], events
+    assert "model" not in sent

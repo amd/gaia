@@ -81,7 +81,7 @@ func (m FlagshipModel) checkProgramCmd() tea.Cmd {
 // release whether it has one for this PC.
 func (m FlagshipModel) offerProgram(why string) (tea.Model, tea.Cmd) {
 	current := programOf(m.agent)
-	if reason := m.nativeRefusal(true); reason != "" {
+	if reason := m.nativeRefusal(catalog.Agent{Native: true, Harness: catalog.NativeAgentBinary}); reason != "" {
 		m.chat.AppendStatus(reason + " " + fmt.Sprintf(nothingChanged, current))
 		return m, nil
 	}

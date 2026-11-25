@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/amd/gaia/tui/internal/catalog"
+	"github.com/amd/gaia/tui/internal/client"
 	"github.com/amd/gaia/tui/internal/daemon"
 	"github.com/amd/gaia/tui/internal/gaiainit"
 	"github.com/amd/gaia/tui/internal/lemonade"
@@ -89,9 +90,11 @@ type LocalOptions struct {
 	// should chat run?", so the chat-model download is never chosen by default.
 	// Set by the interactive gate only: a headless run has nobody to ask.
 	AskWhereChatRuns bool
-	// Native marks the C++ agent (gaiacpp). It needs no Python setup and no
-	// embedding model, so the model row is answered by the model server alone.
+	// Native marks a C++ harness. It needs no Python setup and no embedding
+	// model, so the model row is answered by the model server alone.
 	Native bool
+	// Harness names the native harness (gaiacpp, gaiacode); empty is treated as gaiacpp.
+	Harness string
 }
 
 // NewLocalRunner builds the runner for an agent the TUI spawns itself.
@@ -841,16 +844,47 @@ func (l localRunner) verifyNativeModel(ctx context.Context) (Row, string, string
 		row.Detail = "Paste your " + lemonade.Label(provider) + " key and pick a model."
 		return row, "", ""
 	}
-	if lemonade.IsCloudID(l.opts.Model) {
-		checked, ok := checkCloudModel(ctx, l.opts.Model, row)
+	model, picked := l.opts.Model, true
+	if model == "" && l.opts.Harness == "gaiacode" {
+		// No model is proven for gaiacode: start only on one the user chose.
+		chosen, err := lemonade.ChosenChatModel()
+		if err != nil {
+			row.State = StateFailed
+			row.Disposition = status.DispositionHalt
+			row.Fix = FixNone
+			row.Line = "cannot read the chosen model"
+			row.Detail = err.Error()
+			row.Remedy = Remedy{Action: "Press p and choose where chat runs again; that rewrites the saved choice."}
+			return row, "", ""
+		}
+		if model = chosen; model == "" {
+			row.State = StateFailed
+			row.Disposition = status.DispositionHalt
+			row.Fix = FixNone
+			row.Line = "no model chosen for gaiacode"
+			row.Detail = "gaiacode has no default model: none is proven for it yet."
+			row.Remedy = Remedy{Action: "Press p and choose where chat runs: a model on this PC, or a cloud provider."}
+			return row, "", ""
+		}
+		if client.IsClaudeModelID(model) {
+			row.State = StateFailed
+			row.Disposition = status.DispositionHalt
+			row.Fix = FixNone
+			row.Line = model + " can't run on gaiacode"
+			row.Detail = client.NativeClaudeUnavailableFor(l.opts.Harness)
+			row.Remedy = Remedy{Action: "Press p and choose where chat runs: a model on this PC, or a cloud provider."}
+			return row, "", ""
+		}
+	}
+	if lemonade.IsCloudID(model) {
+		checked, ok := checkCloudModel(ctx, model, row)
 		if !ok {
 			return checked, "", ""
 		}
 		checked.State = StateOK
-		checked.Line = "chat uses " + l.opts.Model
-		return checked, l.opts.Model + " (in the cloud)", ""
+		checked.Line = "chat uses " + model
+		return checked, model + " (in the cloud)", ""
 	}
-	model, picked := l.opts.Model, true
 	if model == "" {
 		model, picked = nativeStartModel(), false
 	}

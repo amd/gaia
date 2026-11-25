@@ -33,13 +33,22 @@ const (
 // selfExecutable is os.Executable, swapped out by tests.
 var selfExecutable = os.Executable
 
-// IsNativeAgentBinary reports whether path names the C++ agent. Release assets
-// carry a platform suffix (gaiacpp-windows-x64.exe), so a prefix counts.
-func IsNativeAgentBinary(path string) bool {
+// NativeHarnessOf names the native harness path is a build of (gaiacpp, gaiacode),
+// or "" for any other program. Release assets carry a platform suffix
+// (gaiacpp-windows-x64.exe), so a prefix counts.
+func NativeHarnessOf(path string) string {
 	name := strings.ToLower(filepath.Base(path))
 	name = strings.TrimSuffix(name, ".exe")
-	return name == NativeAgentBinary || strings.HasPrefix(name, NativeAgentBinary+"-")
+	for _, h := range Harnesses() {
+		if h.Native && (name == h.Name || strings.HasPrefix(name, h.Name+"-")) {
+			return h.Name
+		}
+	}
+	return ""
 }
+
+// IsNativeAgentBinary reports whether path names a native harness.
+func IsNativeAgentBinary(path string) bool { return NativeHarnessOf(path) != "" }
 
 func isPythonAgentBinary(path string) bool {
 	name := strings.ToLower(filepath.Base(path))
@@ -93,7 +102,11 @@ func expandHome(dir string) string {
 //
 // The install directory is searched by name alone. The sentinel Find demands
 // exists because `gaia-agent` names two different programs; `gaiacpp` names one.
-func FindNative(inRepo bool) Lookup {
+func FindNative(inRepo bool) Lookup { return FindNativeHarness(NativeAgentBinary, inRepo) }
+
+// FindNativeHarness is FindNative for the native harness called name, through its
+// own path variable (NativePathEnvs).
+func FindNativeHarness(name string, inRepo bool) Lookup {
 	installDir := InstallRoot()
 	if installDir == "" {
 		installDir = filepath.Join("~", ".gaia", "agents")
@@ -104,12 +117,16 @@ func FindNative(inRepo bool) Lookup {
 	if self, err := selfExecutable(); err == nil {
 		beside = filepath.Dir(self)
 	}
-	explicit := strings.TrimSpace(os.Getenv(NativePathEnv))
+	pathEnv := NativePathEnvs[name]
+	explicit := ""
+	if pathEnv != "" {
+		explicit = strings.TrimSpace(os.Getenv(pathEnv))
+	}
 	homeBin := gaiaHomeBin()
 
 	var l Lookup
 	if explicit != "" {
-		l.Looked = append(l.Looked, explicit+" ("+NativePathEnv+")")
+		l.Looked = append(l.Looked, explicit+" ("+pathEnv+")")
 	}
 	if homeBin != "" {
 		l.Looked = append(l.Looked, homeBin)
@@ -126,7 +143,7 @@ func FindNative(inRepo bool) Lookup {
 		if dir == "" {
 			return ""
 		}
-		for _, candidate := range executableNames(NativeAgentBinary) {
+		for _, candidate := range executableNames(name) {
 			if p := filepath.Join(dir, candidate); isExecutableFile(p) {
 				return p
 			}
@@ -136,6 +153,10 @@ func FindNative(inRepo bool) Lookup {
 	// First match wins. The places GAIA itself fills come before PATH.
 	steps := []func() string{
 		func() string {
+			// A build of another known harness is not this one, whatever the variable says.
+			if other := NativeHarnessOf(explicit); other != "" && other != name {
+				return ""
+			}
 			if explicit != "" && isExecutableFile(explicit) {
 				return explicit
 			}
@@ -144,17 +165,17 @@ func FindNative(inRepo bool) Lookup {
 		func() string { return inDir(homeBin) },
 		func() string { return inDir(beside) },
 		func() string {
-			for _, candidate := range executableNames(NativeAgentBinary) {
+			for _, candidate := range executableNames(name) {
 				if p, err := exec.LookPath(candidate); err == nil {
 					return p
 				}
 			}
 			return ""
 		},
-		func() string { return installDirBinaryIn(InstallRoot(), FlagshipID, NativeAgentBinary) },
+		func() string { return installDirBinaryIn(InstallRoot(), FlagshipID, name) },
 		func() string {
 			if inRepo {
-				return findBinaryInRepo(NativeAgentBinary)
+				return findBinaryInRepo(name)
 			}
 			return ""
 		},
@@ -198,15 +219,20 @@ func (c *Catalog) SelectFlagshipAgent(choice string) (notice string, err error) 
 	case choice == "":
 		return "", nil
 
-	case strings.EqualFold(name, NativeAgentBinary):
-		l := FindNative(true)
+	case NativeHarness(strings.ToLower(name)):
+		harness := strings.ToLower(name)
+		if !HarnessRunnable(harness) {
+			return "", fmt.Errorf("%s isn't available in this version of the GAIA TUI yet. Use %s or %s. See %s",
+				harness, PythonAgentChoice, NativeAgentBinary, AgentChoiceDocsURL)
+		}
+		l := FindNativeHarness(harness, true)
 		if !l.Found() {
-			return "", missingChoiceError(NativeAgentBinary, l)
+			return "", missingChoiceError(harness, l)
 		}
 		if err := VerifyNative(l.Path); err != nil {
 			return "", err
 		}
-		agent.useNative(l.Path)
+		agent.useNative(harness, l.Path)
 		return "", nil
 
 	case strings.EqualFold(name, PythonAgentBinary), strings.EqualFold(name, PythonAgentChoice):
@@ -236,10 +262,14 @@ func (c *Catalog) SelectFlagshipAgent(choice string) (notice string, err error) 
 		}
 		switch {
 		case IsNativeAgentBinary(choice):
+			if h := NativeHarnessOf(choice); !HarnessRunnable(h) {
+				return "", fmt.Errorf("%s is a build of %s, which isn't available in this version of the GAIA TUI yet. "+
+					"Use %s or %s. See %s", choice, h, PythonAgentChoice, NativeAgentBinary, AgentChoiceDocsURL)
+			}
 			if err := VerifyNative(absOr(choice)); err != nil {
 				return "", err
 			}
-			agent.useNative(absOr(choice))
+			agent.useNative(NativeHarnessOf(choice), absOr(choice))
 		case isPythonAgentBinary(choice):
 			// A path is one particular program: the terminal UI runs it
 			// itself, whatever route the install record chose.
@@ -315,10 +345,11 @@ func ForFlagship(choice string) (*Catalog, string, error) {
 	return cat, notice, nil
 }
 
-// useNative puts the entry on gaiacpp. The transport is set too: an install
-// record may have moved the flagship behind the daemon, which runs the Python
-// agent, and gaiacpp is only ever a child of this program.
-func (a *Agent) useNative(path string) {
+// useNative puts the entry on native harness name. The transport is set too: an
+// install record may have moved the flagship behind the daemon, which runs the
+// Python agent, and a native harness is only ever a child of this program.
+func (a *Agent) useNative(name, path string) {
+	a.Harness = name
 	a.Transport = TransportSubprocess
 	a.BinaryPath = path
 	a.BinaryArgs = []string{NativeStdioFlag}

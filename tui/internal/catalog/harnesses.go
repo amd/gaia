@@ -7,7 +7,14 @@ import (
 	_ "embed"
 	"encoding/json"
 	"fmt"
+	"os"
+	"strings"
 )
+
+// UnprovenHarnessEnv names one known harness that may run before it is offered.
+// Only the eval lanes and tests set it; it mirrors UNPROVEN_HARNESS_ENV in
+// src/gaia/harnesses.py.
+const UnprovenHarnessEnv = "GAIA_UNPROVEN_HARNESS"
 
 // Harness is a program that can answer as the GAIA agent (flagship_agent in config.json).
 type Harness struct {
@@ -33,6 +40,22 @@ var harnesses = func() []Harness {
 
 // Harnesses lists every harness this build knows the name of, runnable or not.
 func Harnesses() []Harness { return append([]Harness(nil), harnesses...) }
+
+// HarnessRunnable reports whether this build may start the harness called name:
+// it is offered, or the eval override names it.
+func HarnessRunnable(name string) bool {
+	h, ok := HarnessNamed(name)
+	if !ok {
+		return false
+	}
+	return h.Runnable || strings.TrimSpace(os.Getenv(UnprovenHarnessEnv)) == name
+}
+
+// NativeHarness reports whether name is a native harness this build knows.
+func NativeHarness(name string) bool {
+	h, ok := HarnessNamed(name)
+	return ok && h.Native
+}
 
 // HarnessNamed is the harness called name, and whether this build knows it.
 func HarnessNamed(name string) (Harness, bool) {
