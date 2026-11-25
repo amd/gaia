@@ -38,28 +38,11 @@
     100% { opacity: 1; transform: scale(1); }
 }
 
-/* Side rail slides in from the right; the transcript eases over to make room. */
-.side-rail {
-    animation: railIn var(--duration-slow) var(--ease);
-}
-.side-rail:dir(rtl) {
-    animation-name: railInRtl;
-}
-
+/* The transcript eases over to make room for the session panel. */
 .task-view > .messages-scroll,
 .task-view > .input-area,
 .task-view > .doc-context-bar {
     transition: margin-inline-end var(--duration-slow) var(--ease);
-}
-
-@keyframes railIn {
-    from { opacity: 0; transform: translateX(24px); }
-    to { opacity: 1; transform: translateX(0); }
-}
-/* Right to left the panel is on the left, so it slides in from that side. */
-@keyframes railInRtl {
-    from { opacity: 0; transform: translateX(-24px); }
-    to { opacity: 1; transform: translateX(0); }
 }
 
 /* Queued messages drop in, and their state change (queued → sending) eases. */
