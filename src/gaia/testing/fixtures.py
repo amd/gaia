@@ -9,7 +9,8 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import List, Optional, Type, TypeVar
 
-from gaia.testing.mocks import MockLLMProvider, MockVLMClient
+from gaia.testing.mocks import MockVLMClient
+from gaia.testing.scripted import ScriptedLLMClient
 
 # Type variable for agent classes
 AgentT = TypeVar("AgentT")
@@ -87,50 +88,66 @@ def temp_file(
         tmp_path.unlink(missing_ok=True)
 
 
+def _inject_model(agent, model: ScriptedLLMClient) -> None:
+    """Make *model* the client the agent's loop calls, where it has one."""
+    agent._mock_llm = model  # pylint: disable=protected-access
+    chat = getattr(agent, "chat", None)
+    if chat is not None and hasattr(chat, "llm_client"):
+        chat.llm_client = model
+
+
 def create_test_agent(
     agent_class: Type[AgentT],
     mock_responses: Optional[List[str]] = None,
     mock_vlm_text: Optional[str] = None,
     inject_mocks: bool = True,
+    llm_client: Optional[ScriptedLLMClient] = None,
     **agent_kwargs,
 ) -> AgentT:
     """
     Create an agent instance configured for testing.
 
-    Creates an agent with silent mode enabled and optionally injects
-    mock LLM and VLM providers for testing without real API calls.
+    Creates an agent with silent mode enabled and a scripted model in place
+    of the real one, so ``process_query`` runs the whole loop with no network.
 
     Args:
         agent_class: The Agent class to instantiate
-        mock_responses: List of LLM responses to return in sequence
+        mock_responses: Text replies the model gives, in order
         mock_vlm_text: Text for mock VLM to return
-        inject_mocks: Whether to inject mock providers (default: True)
+        inject_mocks: Whether to inject the scripted model (default: True)
+        llm_client: A ScriptedLLMClient to use instead of one built from
+            ``mock_responses``; needed to script tool calls
         **agent_kwargs: Additional arguments passed to agent constructor
 
     Returns:
-        Configured agent instance
+        Configured agent instance; the scripted model is ``agent._mock_llm``
 
     Example:
-        from gaia.testing import create_test_agent
+        from gaia.testing import ScriptedLLMClient, create_test_agent
         from my_agent import CustomerAgent
 
         def test_customer_search():
+            model = ScriptedLLMClient()
+            model.push(call="search", name="John")
+            model.push(say="Found 1 customer named John.")
             agent = create_test_agent(
-                CustomerAgent,
-                mock_responses=[
-                    '{"tool": "search", "args": {"name": "John"}}',
-                    "Found 1 customer named John."
-                ],
-                db_url="sqlite:///:memory:",
+                CustomerAgent, llm_client=model, db_url="sqlite:///:memory:"
             )
 
             result = agent.process_query("Find customer John")
-            assert "John" in result["answer"]
+            assert result["status"] == "success"
+            assert "John" in result["result"]
 
     Note:
         The agent is created with `skip_lemonade=True` and `silent_mode=True`
-        to avoid requiring a running Lemonade server during tests.
+        to avoid requiring a running Lemonade server during tests. A model
+        call the script has no reply for raises ``ScriptExhausted``.
     """
+    if llm_client is not None and mock_responses is not None:
+        raise ValueError(
+            "Pass mock_responses or llm_client, not both: queue the replies on "
+            "the client with push()."
+        )
     # Ensure testing-friendly defaults
     agent_kwargs.setdefault("skip_lemonade", True)
     agent_kwargs.setdefault("silent_mode", True)
@@ -140,13 +157,7 @@ def create_test_agent(
 
     # Inject mocks if requested
     if inject_mocks:
-        # Create and attach mock LLM
-        mock_llm = MockLLMProvider(responses=mock_responses)
-        agent._mock_llm = mock_llm  # pylint: disable=protected-access
-
-        # Inject into chat attribute if it exists
-        if hasattr(agent, "chat"):
-            agent.chat = mock_llm
+        _inject_model(agent, llm_client or ScriptedLLMClient(mock_responses))
 
         # Create and attach mock VLM if text provided
         if mock_vlm_text is not None:
@@ -180,7 +191,7 @@ class AgentTestContext:
 
                 # Verify
                 assert ctx.mock_llm.was_called
-                assert "John" in result["answer"]
+                assert "John" in result["result"]
     """
 
     def __init__(
@@ -205,7 +216,7 @@ class AgentTestContext:
         self.agent_kwargs = agent_kwargs
 
         self.agent: Optional[AgentT] = None
-        self.mock_llm: Optional[MockLLMProvider] = None
+        self.mock_llm: Optional[ScriptedLLMClient] = None
         self.mock_vlm: Optional[MockVLMClient] = None
         self._temp_dir: Optional[Path] = None
         self._temp_dir_context = None
@@ -217,7 +228,7 @@ class AgentTestContext:
         self._temp_dir = Path(self._temp_dir_context.name)
 
         # Create mock providers
-        self.mock_llm = MockLLMProvider(responses=self.mock_responses)
+        self.mock_llm = ScriptedLLMClient(self.mock_responses)
         if self.mock_vlm_text is not None:
             self.mock_vlm = MockVLMClient(extracted_text=self.mock_vlm_text)
 
@@ -228,9 +239,7 @@ class AgentTestContext:
         self.agent = self.agent_class(**self.agent_kwargs)
 
         # Inject mocks
-        self.agent._mock_llm = self.mock_llm  # pylint: disable=protected-access
-        if hasattr(self.agent, "chat"):
-            self.agent.chat = self.mock_llm
+        _inject_model(self.agent, self.mock_llm)
 
         if self.mock_vlm is not None:
             self.agent._mock_vlm = self.mock_vlm  # pylint: disable=protected-access

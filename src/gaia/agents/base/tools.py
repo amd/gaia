@@ -39,6 +39,8 @@ _SUPPORTED_TOOL_KWARGS = (
     "preflight",
     "dedup_key",
     "model_view",
+    "max_calls_per_turn",
+    "terminal",
     "registry",
     "override",
 )
@@ -340,6 +342,8 @@ def tool(
     preflight: Callable[[Dict[str, Any]], Optional[Dict[str, Any]]] | None = None,
     dedup_key: list[str] | tuple[str, ...] | None = None,
     model_view: Callable[[Dict[str, Any]], Dict[str, Any]] | None = None,
+    max_calls_per_turn: int | None = None,
+    terminal: bool = False,
     registry: dict[str, dict] | None = None,
     override: bool = False,
     **unexpected_kwargs: object,
@@ -378,6 +382,15 @@ def tool(
             arguments echoed back, empty fields); the full result still goes
             to the UI, the checks and the saved conversation.
 
+        max_calls_per_turn: How many times this tool may run in one turn,
+            whatever its arguments. A call past the limit is not run: the model
+            gets a result saying so and is told to answer from what it has.
+            ``None`` (the default) sets no limit.
+        terminal: If True, a successful call ends the turn's tool use. The
+            model's next reply is the answer, and that request carries no
+            tools. For a tool like a handoff, after which nothing else should
+            run.
+
         registry: An explicit instance-local destination. When omitted, register
             globally for existing callers. Passing an empty mapping is honored;
             no entry is ever written to the global registry in this mode.
@@ -401,6 +414,20 @@ def tool(
             raise TypeError(
                 f"@tool(override=...) must be True or False for tool "
                 f"{f.__name__!r}, got {override!r}."
+            )
+        if not isinstance(terminal, bool):
+            raise TypeError(
+                f"@tool(terminal=...) must be True or False for tool "
+                f"{f.__name__!r}, got {terminal!r}."
+            )
+        if max_calls_per_turn is not None and (
+            isinstance(max_calls_per_turn, bool)
+            or not isinstance(max_calls_per_turn, int)
+            or max_calls_per_turn < 1
+        ):
+            raise TypeError(
+                f"@tool(max_calls_per_turn=...) must be a positive integer or "
+                f"None for tool {f.__name__!r}, got {max_calls_per_turn!r}."
             )
 
         # Extract function name and signature for the tool registry
@@ -465,6 +492,8 @@ def tool(
             "preflight": preflight,
             "dedup_key": dedup,
             "model_view": model_view,
+            "max_calls_per_turn": max_calls_per_turn,
+            "terminal": terminal,
         }
 
         # Return the function unchanged
