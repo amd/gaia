@@ -22,7 +22,7 @@
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",
-    "test": "npm run build && node --test test/"
+    "test": "npm run build && node --test test/sdk.test.mjs"
   },
   "repository": {
     "type": "git",

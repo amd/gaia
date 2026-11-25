@@ -79,6 +79,7 @@ updates:
       - "/.claude/skills/oss-dashboard/template"
       - "/workers/website-router"
       - "/src/vscode/gaia"
+      - "/sdk/typescript"
     schedule:
       interval: "weekly"
       day: "monday"
