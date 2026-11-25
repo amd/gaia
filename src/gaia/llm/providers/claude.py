@@ -18,14 +18,13 @@ from dataclasses import dataclass
 from typing import Any, Dict, Iterator, List, Optional, Tuple, Union
 
 from ..base_client import LLMClient
+from ..claude_defaults import DEFAULT_CLAUDE_MODEL
 from ..lemonade_client import is_provider_context_overflow
 from ..local_only import assert_provider_permitted
 from ..surface_hints import TUI_MODEL_SWITCH_HINT
 from .lemonade import _NATIVE_TC_KEY, LemonadeContextOverflowError
 
 logger = logging.getLogger(__name__)
-
-DEFAULT_CLAUDE_MODEL = "claude-sonnet-5"
 
 #: Context window every current Claude model provides, in tokens. Used to size
 #: tool-result truncation: without it the agent squeezes a 200K-context model

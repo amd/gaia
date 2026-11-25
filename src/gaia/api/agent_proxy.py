@@ -201,7 +201,7 @@ async def _acquire_daemon():
     started is a loud 503 — never a silent in-process fallback (#2178)."""
     from gaia.daemon.client import start_or_attach
 
-    loop = asyncio.get_event_loop()
+    loop = asyncio.get_running_loop()
     try:
         return await loop.run_in_executor(None, start_or_attach)
     except DaemonError as e:

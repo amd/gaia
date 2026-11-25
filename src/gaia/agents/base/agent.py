@@ -236,6 +236,7 @@ from gaia.canonical_path import UncheckablePathError, canonical_path
 from gaia.chat.sdk import AgentConfig, AgentSDK, LLMCallCancelled
 from gaia.credential_shapes import redact_file_content, redact_tool_output
 from gaia.daemon.broker_client import LeaseWaitCancelled, lease_cancel_scope
+from gaia.llm.claude_defaults import DEFAULT_CLAUDE_MODEL
 from gaia.llm.lemonade_client import (
     RECONNECTING_MESSAGE,
     budget_for_ctx,
@@ -3876,7 +3877,7 @@ Do NOT wrap conversational replies in JSON.
     def __init__(
         self,
         use_claude: bool = False,
-        claude_model: str = "claude-sonnet-5",
+        claude_model: str = DEFAULT_CLAUDE_MODEL,
         base_url: Optional[str] = None,
         model_id: str = None,
         max_steps: Optional[int] = None,

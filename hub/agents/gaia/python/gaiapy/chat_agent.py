@@ -32,6 +32,7 @@ from typing import (
 )
 
 from gaia.config import gaia_home
+from gaia.llm.claude_defaults import DEFAULT_CLAUDE_MODEL
 from gaia.logger import get_logger
 
 logger = get_logger(__name__)
@@ -731,7 +732,7 @@ class ChatAgentConfig:
 
     # LLM settings
     use_claude: bool = False
-    claude_model: str = "claude-sonnet-5"
+    claude_model: str = DEFAULT_CLAUDE_MODEL
     base_url: Optional[str] = None
     model_id: Optional[str] = None  # None = use default model (Gemma)
     # True: build without starting Lemonade or preloading; the first request loads.
