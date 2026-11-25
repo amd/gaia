@@ -19,6 +19,8 @@ from typing import Any, Callable, Dict, List, Optional
 from gaia.chat.prompts import Prompts
 from gaia.daemon.broker_client import LeaseWaitCancelled, lease_cancel_scope
 from gaia.llm import create_client
+from gaia.llm.base_client import LLMClient
+from gaia.llm.exceptions import NotSupportedError
 from gaia.llm.lemonade_client import (
     GPU_CTX_SIZE,
     LemonadeClient,
@@ -55,6 +57,23 @@ def _is_tool_call_envelope(chunk: str, tools: Optional[List[Dict]]) -> bool:
 
 class LLMCallCancelled(Exception):
     """The caller cancelled a model call; nothing it produced is returned."""
+
+
+class RequestRefused(Exception):
+    """``before_llm_call`` declined to send a request. Not an error to log."""
+
+
+def _usage_as_stats(usage: Any) -> Dict[str, Any]:
+    """An OpenAI-shape ``usage`` dict as per-call stats, cached count lifted out."""
+    if not isinstance(usage, dict):
+        return {}
+    stats = dict(usage)
+    details = usage.get("prompt_tokens_details")
+    if "cached_tokens" not in stats and isinstance(details, dict):
+        cached = details.get("cached_tokens")
+        if cached is not None:
+            stats["cached_tokens"] = cached
+    return stats
 
 
 class RAGContextError(RuntimeError):
@@ -145,29 +164,39 @@ class AgentSDK:
         ```
     """
 
-    def __init__(self, config: Optional[AgentConfig] = None):
+    def __init__(
+        self,
+        config: Optional[AgentConfig] = None,
+        llm_client: Optional[LLMClient] = None,
+    ):
         """
         Initialize the AgentSDK.
 
         Args:
             config: Configuration options. If None, uses defaults.
+            llm_client: The model client to use. When given, no other client
+                is built and ``config.model`` is the id sent to it.
         """
         self.config = config or AgentConfig()
         self.log = get_logger(__name__)
         self.log.setLevel(getattr(logging, self.config.logging_level))
 
-        # Initialize LLM client - factory auto-detects provider and validates
-        self.llm_client = create_client(
-            use_claude=self.config.use_claude,
-            model=(
-                self.config.claude_model
-                if self.config.use_claude
-                else self.config.model
-            ),
-            base_url=self.config.base_url,
-            # The SDK supplies per-request prompts, including runtime overrides.
-            system_prompt=None,
-        )
+        self._host_client = llm_client is not None
+        if llm_client is not None:
+            self.llm_client = llm_client
+        else:
+            # Initialize LLM client - factory auto-detects provider and validates
+            self.llm_client = create_client(
+                use_claude=self.config.use_claude,
+                model=(
+                    self.config.claude_model
+                    if self.config.use_claude
+                    else self.config.model
+                ),
+                base_url=self.config.base_url,
+                # The SDK supplies per-request prompts, including runtime overrides.
+                system_prompt=None,
+            )
 
         # Store conversation history
         self.chat_history = deque(maxlen=self.config.max_history_length * 2)
@@ -419,6 +448,23 @@ class AgentSDK:
     #: Receives one timing dict per model request; set by the agent loop.
     llm_call_sink: Optional[Callable[[Dict[str, Any]], None]] = None
 
+    #: Called with a request's keyword arguments before it is sent. It may
+    #: lower ``max_tokens``, or raise to refuse the request. Set by the agent
+    #: loop for a turn with a budget.
+    before_llm_call: Optional[Callable[[Dict[str, Any]], None]] = None
+
+    #: Called with each finished request's usage and whether it succeeded.
+    after_llm_call: Optional[Callable[[Any, bool], None]] = None
+
+    #: True when the caller passed its own client: its errors and requests are
+    #: left exactly as it wrote them.
+    _host_client: bool = False
+
+    def _gate_llm_call(self, kwargs: Dict[str, Any]) -> None:
+        gate = self.before_llm_call
+        if gate is not None and not getattr(_SIDE_CALLS, "active", False):
+            gate(kwargs)
+
     @staticmethod
     @contextmanager
     def side_request():
@@ -441,6 +487,9 @@ class AgentSDK:
         """Hand the sink this request's wall time, ttft, finish reason, and
         the tokens from the response's own usage (never ``/stats``)."""
         seconds = time.perf_counter() - started
+        after = self.after_llm_call
+        if after is not None and not getattr(_SIDE_CALLS, "active", False):
+            after(self.llm_client.get_last_usage() if ok else None, ok)
         sink = self.llm_call_sink
         if sink is None or getattr(_SIDE_CALLS, "active", False):
             return
@@ -554,6 +603,9 @@ class AgentSDK:
 
             # Set appropriate stop tokens based on model (safety net)
             model_lower = self.effective_model.lower() if self.effective_model else ""
+            if self._host_client:
+                # Chat-template stop tokens are a local-server matter.
+                model_lower = ""
             if "qwen" in model_lower:
                 kwargs.setdefault("stop", ["<|im_end|>", "<|im_start|>"])
             elif "llama" in model_lower:
@@ -571,6 +623,7 @@ class AgentSDK:
             if tools:
                 kwargs["tools"] = tools
 
+            self._gate_llm_call(kwargs)
             self._recorder_begin(structured, tools)
             call_started = time.perf_counter()
             call_ok = False
@@ -608,9 +661,13 @@ class AgentSDK:
             )
 
         except ConnectionError as e:
+            if self._host_client:
+                raise
             # Re-raise connection errors with additional context
             self.log.error(f"LLM connection error in send_messages: {e}")
             raise ConnectionError(f"Failed to connect to LLM server: {e}") from e
+        except RequestRefused:
+            raise
         except Exception as e:
             if stopped_by_user(e):
                 self.log.info(f"send_messages stopped by the user: {e}")
@@ -697,6 +754,9 @@ class AgentSDK:
 
             # Set appropriate stop tokens based on model (safety net)
             model_lower = self.effective_model.lower() if self.effective_model else ""
+            if self._host_client:
+                # Chat-template stop tokens are a local-server matter.
+                model_lower = ""
             if "qwen" in model_lower:
                 kwargs.setdefault("stop", ["<|im_end|>", "<|im_start|>"])
             elif "llama" in model_lower:
@@ -715,6 +775,7 @@ class AgentSDK:
             if tools:
                 kwargs["tools"] = tools
 
+            self._gate_llm_call(kwargs)
             self._recorder_begin(structured, tools)
             call_started = time.perf_counter()
             for chunk in self.llm_client.chat(
@@ -759,11 +820,15 @@ class AgentSDK:
         except LeaseWaitCancelled:
             raise  # the caller stopped waiting: not an error
         except ConnectionError as e:
+            if self._host_client:
+                raise
             # Re-raise connection errors with additional context
             self.log.error(f"LLM connection error in send_messages_stream: {e}")
             raise ConnectionError(
                 f"Failed to connect to LLM server (streaming): {e}"
             ) from e
+        except RequestRefused:
+            raise
         except Exception as e:
             if stopped_by_user(e):
                 self.log.info(f"send_messages_stream stopped by the user: {e}")
@@ -1030,7 +1095,11 @@ class AgentSDK:
             Dictionary of performance stats
         """
         try:
-            return self.llm_client.get_performance_stats() or {}
+            try:
+                return self.llm_client.get_performance_stats() or {}
+            except NotSupportedError:
+                # A client that reports usage only: the same counts, per call.
+                return _usage_as_stats(self.llm_client.get_last_usage())
         except Exception as e:
             self.log.warning(f"Failed to get stats: {e}")
             return {}

@@ -1,0 +1,214 @@
+---
+title: "Embedding GAIA in a Server"
+description: "Run the agent loop as a library inside your own service, with your own tools and model client"
+icon: "server"
+---
+
+GAIA's agent loop was built for a desktop app that acts on files. Inside a server
+that answers end users it needs a handful of things set differently. This page is
+the short list.
+
+## A minimal chat agent
+
+```python
+from gaia.agents.base.agent import Agent
+from gaia.agents.base.tool_outcome import tool_refusal
+from gaia.agents.base.tools import tool
+
+
+class SupportAgent(Agent):
+    def __init__(self, session, **kwargs):
+        self.session = session
+        super().__init__(
+            host="conversation",     # replies go to an end user
+            silent_mode=True,        # no console output
+            max_steps=8,
+            max_output_tokens=1200,  # the real cap, so cut-off prompts name it
+            **kwargs,
+        )
+
+    def _get_system_prompt(self) -> str:
+        return "You answer questions about orders."
+
+    def _register_tools(self) -> None:
+        tools = {}
+
+        @tool(registry=tools)
+        def get_order(order_number: str) -> dict:
+            """Look up an order by its number."""
+            if not self.session.verified(order_number):
+                return tool_refusal("That order has not been confirmed in this chat.")
+            return {"status": "success", "order": self.session.order(order_number)}
+
+        self._instance_tools = tools
+```
+
+Build one agent per request, passing your model client (below). Construction takes a
+few milliseconds, and nothing is shared between two agents.
+
+## The settings
+
+| Setting | Why |
+|---|---|
+| `host="conversation"` | The default host reads the user's message for files to write and sends back a reply that sounds like a plan. A customer who types "the box was dated 10/15" gets neither. The reply is returned exactly as the model wrote it |
+| `@tool(registry=...)` + `self._instance_tools` | Keeps each request's tools out of the process-wide registry, so two requests never see each other's |
+| `tool_refusal("...")` | A business rule saying no is an answer, not a failure. See [Return Value Patterns](/sdk/core/tools#pattern-3-refusal) |
+| `max_output_tokens` | If your client caps output itself, pass the same number here so GAIA's "your reply was cut off" prompt names the real limit |
+
+GAIA adds one tool of its own, `read_tool_output`, so the model can page through a
+result too long to send whole. Pass
+`tool_scope=["get_order", "read_tool_output"]` to refuse any call outside that list.
+
+## Reading the result
+
+`process_query()` returns a dict. Decide what to show from `status` and
+`stop_reason`, never from the text.
+
+```python
+result = agent.process_query(user_message)
+
+if result["status"] == "success":
+    reply = result["result"]
+elif result["stop_reason"] == "model_call":
+    reply = hand_off("model unavailable", result["failure"]["type"])
+elif result["stop_reason"] in ("model_calls", "output_tokens", "deadline", "cost"):
+    reply = hand_off("budget")
+else:
+    reply = hand_off(result["stop_reason"])
+```
+
+<Warning>
+Show `result["result"]` to an end user only when `status` is `"success"`. On any
+other status it holds GAIA's own explanation, written for a desktop user, and can
+name tools, step limits or the raw provider error.
+</Warning>
+
+| Key | What it holds |
+|---|---|
+| `status` | `success`, `incomplete`, `failed` or `cancelled` |
+| `stop_reason` | Why the turn ended: `answered`, `max_steps`, `model_call`, `output_cap`, `tool_call_format`, `reprompt_budget`, `repeated_calls`, `tool_error`, `completion_gaps`, `cancelled`, `no_answer`, or a budget limit: `model_calls`, `output_tokens`, `deadline`, `cost` |
+| `failure` | For a failed model call: `kind`, `type` (the exception class name), `message`, `step`. `None` otherwise. The exception itself is `agent.last_model_error` |
+| `budget_spent` | With a budget: `model_calls`, `input_tokens`, `cached_tokens`, `output_tokens` |
+| `tool_calls` | Every tool call in order: `name`, `args`, `result`, `ran`, `failed`. Check a reply's promises against this before sending it |
+| `reprompts` | Each time a check sent the model back for another reply: `guard`, `step`. More than a few per turn means a guard is fighting your prompt |
+| `caveats` | Everything GAIA would have appended to the answer on a workspace host: a tool result that carried instructions, a problem your own `answer_problems` found and the model did not fix. On a conversation host read this key; `completion_caveats` is the workspace host's and stays empty |
+| `input_tokens`, `output_tokens`, `cached_tokens`, `cost_usd` | Usage for the turn. `cost_usd` is Fireworks' list price from `gaia.llm.pricing`. It is `None` for a model with no card there and for any other provider; set `provider_name = "fireworks"` on your client when that is where the model runs |
+| `timing_summary` | Model seconds, tool seconds and model calls |
+
+## Your own model client
+
+Subclass `LLMClient` and pass it as `llm_client=`. GAIA then builds no client of its
+own and contacts no Lemonade server. `chat()` returns the model's text, or
+`tool_calls_reply(...)` when the model called tools.
+
+```python
+from gaia.llm.base_client import LLMClient
+from gaia.llm.tool_calls import tool_calls_reply
+
+
+class MyClient(LLMClient):
+    provider_name = "my-provider"
+    supports_native_tools = True   # send tools as tools=, not as prompt text
+    context_window = 128_000       # what history is fitted to
+
+    def chat(self, messages, model=None, stream=False, **kwargs):
+        response = self._post(messages, model, kwargs.get("tools"), kwargs["max_tokens"])
+        message = response["choices"][0]["message"]
+        self._usage = response.get("usage")
+        self._finish = response["choices"][0].get("finish_reason")
+        if message.get("tool_calls"):
+            return tool_calls_reply(
+                message["tool_calls"], message.get("content"), self._finish
+            )
+        return message.get("content") or ""
+
+    def generate(self, prompt, model=None, stream=False, **kwargs):
+        return self.chat([{"role": "user", "content": prompt}], model, stream, **kwargs)
+
+    def get_last_usage(self):
+        return self._usage
+
+    def get_last_finish_reason(self):
+        return self._finish
+
+
+agent = SupportAgent(session, llm_client=MyClient(), model_id="deepseek-v4p1-flash")
+```
+
+Things to know about this seam:
+
+- **Raise your own exceptions.** By default GAIA ends the turn with
+  `status: "failed"`, `stop_reason: "model_call"` and `result["failure"]`. Pass
+  `raise_model_errors=True` and `process_query` re-raises the same exception object
+  instead, after one attempt, with no retry.
+- **Declare what the model can do.** `supports_native_tools` and `context_window`
+  are read from your client, per agent. Nothing is looked up in a shared catalogue,
+  so two agents on two models in one process do not affect each other.
+- **Accept `**kwargs`.** Besides `messages`, `model`, `stream`, `tools` and
+  `max_tokens`, the loop can pass `temperature`, `top_p`, `tool_choice`,
+  `reasoning_effort` and `stop`. Forward the ones your provider takes.
+- **`model_id` is required** and is sent to your client unchanged.
+- **Return `finish_reason`.** `"length"` on a tool call is how GAIA knows the call
+  was cut off and asks for it again.
+- **Return `usage`.** The result's token counts, `cost_usd`, and the token and
+  dollar limits below are all summed from `get_last_usage()`, in the OpenAI shape.
+  It must describe the most recent call only, or a step's tokens are counted twice.
+  A turn with a token or dollar limit raises `BudgetNeedsUsage` if a reply comes
+  back without it: that is a setup mistake, so it is never reported as an outage.
+
+## Testing
+
+`gaia.testing.ScriptedLLMClient` runs the same loop with no network. See
+[Scripting the Model](/sdk/testing#17-3-scripting-the-model).
+
+```python
+from gaia.testing import ScriptedLLMClient
+
+model = ScriptedLLMClient()
+model.push(call="get_order", order_number="1001")
+model.push(say="It shipped on Monday.")
+agent = SupportAgent(session, llm_client=model, model_id="any-name")
+
+assert agent.process_query("Where is order 1001?")["result"] == "It shipped on Monday."
+```
+
+## Limits on a turn
+
+```python
+from gaia.agents.base.budget import TurnBudget
+
+budget = TurnBudget(max_model_calls=8, max_output_tokens=3600,
+                    deadline_s=25, max_cost_usd=0.03)
+result = agent.process_query(user_message, budget=budget)
+```
+
+The budget is checked before every model request the turn makes, retries and
+closing summaries included. When a limit is reached nothing more is sent, the status
+is `incomplete` and `stop_reason` names the limit. The user's message is never
+changed.
+
+| Limit | Notes |
+|---|---|
+| `max_model_calls` | Counts every request, not steps |
+| `max_output_tokens` | Each request's `max_tokens` is lowered to what is left |
+| `deadline_s` | Checked between requests; one in flight is not cut short, so give your client its own timeout |
+| `max_cost_usd` | Fireworks' list price from `gaia.llm.pricing`. A model with no card there, or on another provider, is refused with a `ValueError` when the turn starts |
+
+`deadline` is also the stop reason of the agent's own `time_limit_s`. To tell the two
+apart, check for `budget_spent` in the result: it is there only when a budget was set.
+
+Pass `budget=` to the constructor to apply one to every turn. The budget covers the
+agent's own model requests. A tool that calls a model itself, such as a vision or
+document-search tool, is outside it.
+
+## What stays your job
+
+- **Credentials.** Read them from the environment in your client. GAIA's OS keyring
+  lookup is for desktops.
+- **Checking the reply.** On a conversation host GAIA sends a reply back only when
+  it is malformed: a tool call or tool output written out as text. Two tries, then
+  the turn ends `incomplete` with `stop_reason: "tool_call_format"`. Whether the
+  reply is true is yours to check: compare it with `tool_calls` before it reaches a
+  customer.
+- **Hooks you add still run.** An `answer_problems` override, or a mixin such as
+  memory, can still send the model back. Those show up in `reprompts`.
