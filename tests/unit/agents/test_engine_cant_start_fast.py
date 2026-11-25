@@ -226,13 +226,15 @@ def test_the_memory_notice_names_no_dead_command(caplog):
     def _refuse():
         raise ConnectionError("Connection refused")
 
+    store = MagicMock()
     host = SimpleNamespace(
         _probe_embedder=_refuse,
         _embedding_model="nomic-embed-text-v2-moe-GGUF",
-        _memory_store=object(),
+        _memory_store=store,
     )
     with caplog.at_level(logging.WARNING, logger=memory.logger.name):
         assert MemoryMixin._start_memory_embedder(host) is False
+    store.close.assert_called_once()
     text = caplog.text
     assert "memory v2 disabled" in text
     assert "lemonade-server" not in text

@@ -1006,6 +1006,32 @@ class TestReconcileEndpoint:
         # nothing was skipped by a dim mismatch.
         assert resp.json()["pairs_checked"] >= 1
 
+    def test_reconcile_standalone_refuses_a_second_openmp_runtime(
+        self, client, test_store, monkeypatch
+    ):
+        """The standalone search must not run when two OpenMP runtimes are loaded."""
+        require_faiss()
+        import numpy as np
+
+        from gaia.agents.base import memory as memory_mod
+
+        monkeypatch.delenv(memory_mod._OMP_OVERRIDE_ENV, raising=False)
+        monkeypatch.setattr(
+            memory_mod,
+            "_loaded_omp_runtimes",
+            lambda: ["libomp.dylib", "libiomp5.dylib"],
+        )
+        vec = np.ones(8, dtype=np.float32).tobytes()
+        for content in ("omp fact one", "omp fact two"):
+            kid = _create_knowledge(client, content)["knowledge_id"]
+            test_store.store_embedding(kid, vec)
+
+        with patch("gaia.llm.create_client", return_value=MagicMock()):
+            resp = client.post("/api/memory/reconcile")
+
+        assert resp.status_code == 500
+        assert "OpenMP" in resp.json()["detail"]
+
     @pytest.mark.parametrize("category", ["system", "profile", "permission"])
     def test_reconcile_does_not_classify_privileged_rows(
         self, client, test_store, category

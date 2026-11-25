@@ -13,6 +13,8 @@ const {
   isAllowedExternalUrl,
   isInAppNavigation,
   describeBlockedUrl,
+  describeOpenFailure,
+  openExternalSafely,
   linkNoticeText,
 } = require("../../src/gaia/apps/webui/services/link-policy.cjs");
 
@@ -83,7 +85,9 @@ describe("describeBlockedUrl", () => {
     expect(msg).toContain("file");
     expect(msg).toMatch(/http, https and mailto/);
   });
+});
 
+describe("describeBlockedUrl in the OS language", () => {
   test("an Arabic OS gets the reason in Arabic with the URL kept left-to-right", () => {
     const msg = describeBlockedUrl("file:///C:/Windows/System32/calc.exe", "ar-EG");
     expect(msg).toContain("رفض GAIA فتح");
@@ -104,14 +108,96 @@ describe("describeBlockedUrl", () => {
 
 describe("linkNoticeText", () => {
   test.each([
-    ["ar", "تم حظر الرابط", "حسنًا"],
-    ["AR_sa", "تم حظر الرابط", "حسنًا"],
-    ["en-US", "Link blocked", "OK"],
-    ["de", "Link blocked", "OK"],
-    ["", "Link blocked", "OK"],
-    [undefined, "Link blocked", "OK"],
-  ])("%s → %s / %s", (locale, title, ok) => {
-    expect(linkNoticeText(locale).blockedTitle).toBe(title);
-    expect(linkNoticeText(locale).ok).toBe(ok);
+    ["ar", "تم حظر الرابط", "لم يُفتح الرابط", "حسنًا"],
+    ["AR_sa", "تم حظر الرابط", "لم يُفتح الرابط", "حسنًا"],
+    ["en-US", "Link blocked", "Link not opened", "OK"],
+    ["de", "Link blocked", "Link not opened", "OK"],
+    ["", "Link blocked", "Link not opened", "OK"],
+    [undefined, "Link blocked", "Link not opened", "OK"],
+  ])("%s → %s / %s / %s", (locale, blocked, notOpened, ok) => {
+    const text = linkNoticeText(locale);
+    expect(text.blockedTitle).toBe(blocked);
+    expect(text.notOpenedTitle).toBe(notOpened);
+    expect(text.ok).toBe(ok);
   });
+
+  test("every language has every string the English table has", () => {
+    const en = linkNoticeText("en");
+    const ar = linkNoticeText("ar");
+    expect(Object.keys(ar).sort()).toEqual(Object.keys(en).sort());
+    for (const key of Object.keys(en)) expect(typeof ar[key]).toBe(typeof en[key]);
+  });
+});
+
+describe("describeOpenFailure in the OS language", () => {
+  test("an Arabic OS gets the reason in Arabic with the link and OS error isolated", () => {
+    const msg = describeOpenFailure("mailto:a@b.c", new Error("No application."), "ar-EG");
+    expect(msg).toContain("تعذّر على GAIA فتح");
+    expect(msg).toContain("\u2068mailto:a@b.c\u2069");
+    expect(msg).toContain("\u2068No application\u2069");
+    expect(msg).not.toContain("..");
+    expect(msg).not.toMatch(/Check that/);
+  });
+
+  test("defaults to English", () => {
+    expect(describeOpenFailure("mailto:a@b.c", new Error("x"), "fr")).toMatch(/Check that this PC/);
+  });
+});
+
+test("main.cjs shows both link notices in the OS language and logs them in English", () => {
+  const main = require("fs")
+    .readFileSync(require("path").join(__dirname, "..", "..", "src", "gaia", "apps", "webui", "main.cjs"), "utf8")
+    .replace(/\r\n/g, "\n");
+  expect(main).not.toMatch(/warnAboutLink\("Link (blocked|not opened)"/);
+  expect(main).toMatch(/linkNoticeText\(locale\)\.blockedTitle/);
+  expect(main).toMatch(/linkNoticeText\(locale\)\.notOpenedTitle/);
+  expect(main).toMatch(/buttons: \[linkNoticeText\(locale\)\.ok\]/);
+  expect(main).toMatch(/console\.error\(`\[main\] \$\{logMessage\}`\)/);
+});
+
+describe("openExternalSafely", () => {
+  test("a mailto link on a PC with no mail app reports the failure instead of rejecting", async () => {
+    const shell = { openExternal: jest.fn().mockRejectedValue(new Error("No application knows how to open the URL")) };
+    const onFailure = jest.fn();
+    await expect(openExternalSafely(shell, "mailto:someone@example.com", onFailure)).resolves.toBeUndefined();
+    expect(onFailure).toHaveBeenCalledTimes(1);
+    expect(onFailure.mock.calls[0][0].message).toMatch(/No application/);
+  });
+
+  test("a synchronous throw is reported the same way", async () => {
+    const shell = { openExternal: jest.fn(() => { throw new Error("boom"); }) };
+    const onFailure = jest.fn();
+    await openExternalSafely(shell, "https://amd-gaia.ai", onFailure);
+    expect(onFailure).toHaveBeenCalledTimes(1);
+  });
+
+  test("a link that opens does not report anything", async () => {
+    const shell = { openExternal: jest.fn().mockResolvedValue(undefined) };
+    const onFailure = jest.fn();
+    await openExternalSafely(shell, "https://amd-gaia.ai", onFailure);
+    expect(shell.openExternal).toHaveBeenCalledWith("https://amd-gaia.ai");
+    expect(onFailure).not.toHaveBeenCalled();
+  });
+});
+
+describe("describeOpenFailure", () => {
+  test("names the link and the reason", () => {
+    const msg = describeOpenFailure("mailto:someone@example.com", new Error("No application"));
+    expect(msg).toContain("mailto:someone@example.com");
+    expect(msg).toContain("No application");
+  });
+
+  test("does not double the period when the OS error already ends in one", () => {
+    const msg = describeOpenFailure("mailto:a@b.c", new Error("No application."));
+    expect(msg).toContain("No application. Check");
+    expect(msg).not.toContain("..");
+  });
+});
+
+test("main.cjs never calls shell.openExternal or the data: loadURL without handling a rejection", () => {
+  const main = require("fs")
+    .readFileSync(require("path").join(__dirname, "..", "..", "src", "gaia", "apps", "webui", "main.cjs"), "utf8")
+    .replace(/\r\n/g, "\n");
+  expect(main).not.toMatch(/shell\.openExternal\(/);
+  expect(main).toMatch(/\.loadURL\("data:text\/html;charset=utf-8," \+ encodeURIComponent\(waitingHtml\)\)\s*\.catch\(/);
 });

@@ -1738,6 +1738,8 @@ class MemoryMixin(ProceduralMemoryMixin):
                 )
             # Tear down the partially-built state so no later code path tries
             # to use memory.
+            if self._memory_store is not None:
+                self._memory_store.close()
             self._memory_store = None
             self._auto_extract_enabled = False
             self._incognito = True
@@ -3765,17 +3767,23 @@ class MemoryMixin(ProceduralMemoryMixin):
         # Stack all vectors and compute pairwise similarities
         mat = np.stack(vectors)
         # For efficiency with large sets, check each item against its top-K neighbors
-        try:
-            import faiss
+        import faiss
 
+        assert_faiss_omp_safe("Memory reconciliation search")
+        try:
             temp_index = faiss.IndexFlatIP(self._embedding_dim)
             temp_index.add(mat)
 
             # Search each item for its top-5 neighbors
             n_neighbors = min(5, len(vectors))
             scores_all, indices_all = temp_index.search(mat, n_neighbors)
-        except Exception as e:
-            logger.debug("[MemoryMixin] reconciliation FAISS search failed: %s", e)
+        except (RuntimeError, ValueError) as e:
+            logger.warning(
+                "[MemoryMixin] reconciliation FAISS search over %d memories "
+                "failed, no conflicts were checked this run: %s",
+                len(vectors),
+                e,
+            )
             return result
 
         # Collect high-similarity pairs

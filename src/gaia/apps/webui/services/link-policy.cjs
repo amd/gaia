@@ -61,26 +61,34 @@ function isInAppNavigation(targetUrl, currentUrl) {
 }
 
 // U+2068/U+2069 keep a URL left-to-right inside Arabic text.
-const isolate = (text) => `\u2068${text}\u2069`;
+const isolate = (text) => `⁨${text}⁩`;
 
 const NOTICE_TEXT = {
   en: {
     blockedTitle: "Link blocked",
+    notOpenedTitle: "Link not opened",
     ok: "OK",
     noScheme: "no scheme",
     blocked: (url, scheme) =>
       `GAIA refused to open "${url}" (${scheme}). ` +
       "Only http, https and mailto links open outside the app — a link that " +
       "resolves to a local file or network share is never launched.",
+    openFailed: (url, reason) =>
+      `GAIA couldn't open "${url}": ${reason}. ` +
+      "Check that this PC has an app set up for that kind of link.",
   },
   ar: {
     blockedTitle: "تم حظر الرابط",
+    notOpenedTitle: "لم يُفتح الرابط",
     ok: "حسنًا",
     noScheme: "بلا بروتوكول",
     blocked: (url, scheme) =>
       `رفض GAIA فتح "${isolate(url)}" (${isolate(scheme)}). ` +
       "لا تُفتح خارج التطبيق إلا روابط http وhttps وmailto، ولا يُشغَّل أبدًا " +
       "رابط يشير إلى ملف محلي أو مجلد مشترك على الشبكة.",
+    openFailed: (url, reason) =>
+      `تعذّر على GAIA فتح "${isolate(url)}": ${isolate(reason)}. ` +
+      "تأكد من وجود تطبيق على هذا الجهاز مُعدّ لفتح هذا النوع من الروابط.",
   },
 };
 
@@ -110,10 +118,44 @@ function describeBlockedUrl(rawUrl, locale) {
   return text.blocked(shown.slice(0, 300), scheme);
 }
 
+/**
+ * A one-line, user-facing reason the OS could not open an allowed link.
+ *
+ * @param {string} rawUrl
+ * @param {unknown} err
+ * @param {string} [locale] The OS locale, as `app.getLocale()` gives it.
+ * @returns {string}
+ */
+function describeOpenFailure(rawUrl, err, locale) {
+  const reason = (err && err.message ? err.message : String(err)).replace(
+    /\.+$/,
+    "",
+  );
+  return linkNoticeText(locale).openFailed(String(rawUrl).slice(0, 300), reason);
+}
+
+/**
+ * `shell.openExternal` rejects when the OS has no handler (a mailto: link on a
+ * PC with no mail app). Unhandled, that rejection reaches the process-level
+ * fatal handler and quits the app, so every caller goes through here.
+ *
+ * @param {{ openExternal: (url: string) => Promise<void> }} shell
+ * @param {string} url
+ * @param {(err: unknown) => void} onFailure
+ * @returns {Promise<void>}
+ */
+function openExternalSafely(shell, url, onFailure) {
+  return Promise.resolve()
+    .then(() => shell.openExternal(url))
+    .catch(onFailure);
+}
+
 module.exports = {
   ALLOWED_EXTERNAL_SCHEMES,
   isAllowedExternalUrl,
   isInAppNavigation,
   describeBlockedUrl,
+  describeOpenFailure,
+  openExternalSafely,
   linkNoticeText,
 };

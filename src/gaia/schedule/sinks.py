@@ -102,6 +102,17 @@ def _to_file(path: str, output: str) -> None:
         ) from e
 
 
+_SECRET_KEY_PARTS = ("token", "api_key", "apikey", "secret", "password")
+
+
+def masked_sink_args(sink_args: Dict[str, Any]) -> Dict[str, Any]:
+    """Copy of *sink_args* with credential-like values hidden, for display."""
+    return {
+        key: "***" if any(p in key.lower() for p in _SECRET_KEY_PARTS) else value
+        for key, value in sink_args.items()
+    }
+
+
 def _to_notification(output: str, sink_args: Dict[str, Any]) -> None:
     title = sink_args.get("title", "GAIA schedule")
     system = platform.system()
@@ -110,7 +121,7 @@ def _to_notification(output: str, sink_args: Dict[str, Any]) -> None:
             script = f"display notification {_osa(output)} with title {_osa(title)}"
             subprocess.run(["osascript", "-e", script], check=True, timeout=30)
         elif system == "Linux":
-            subprocess.run(["notify-send", title, output], check=True, timeout=30)
+            subprocess.run(["notify-send", "--", title, output], check=True, timeout=30)
         elif system == "Windows":
             _to_windows_notification(title, output)
         else:
@@ -172,6 +183,8 @@ def _to_windows_notification(title: str, output: str) -> None:
         # MessageBox::Show remains open until the user dismisses it. Once
         # PowerShell stayed alive through startup, the notification is on
         # screen; do not make a scheduled job wait for user interaction.
+        if process.stderr:
+            process.stderr.close()
         return
     if return_code:
         stderr = (
