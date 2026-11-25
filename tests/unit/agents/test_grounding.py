@@ -33,6 +33,7 @@ from gaia.agents.base.grounding import (
     ACTION,
     CONTENT,
     LOOK,
+    action_findings,
     content_findings,
     grounding_correction,
     look_findings,
@@ -577,6 +578,60 @@ def test_tested_after_a_passing_pytest_is_backed():
     records[-1]["output"] = "4 passed in 0.05s\n"
 
     assert ungrounded(UNTESTED_FIX, BUGFIX_QUERY, records, locate=_locate) == []
+
+
+def _wrote(path):
+    record = _rec(
+        "write_file", {"file_path": path, "content": "x"}, {"status": "success"}
+    )
+    record["mutated"] = True
+    return record
+
+
+def _shell(command, failed=False):
+    record = _rec(
+        "run_shell_command",
+        {"command": command},
+        {"status": "success", "stdout": "832040\n", "return_code": 0},
+    )
+    record["failed"] = failed
+    return record
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "python3 /app/polyglot/main.py.c 30",
+        "cd /app && gcc cli_tool.cpp -o cli_tool && ./cli_tool weights.json image.png",
+    ],
+)
+def test_tested_is_backed_by_running_the_program_this_turn_wrote(command):
+    """With no test suite, the correction could not be met: a rerun never counted."""
+    records = [
+        _wrote("/app/polyglot/main.py.c"),
+        _wrote("/app/cli_tool.cpp"),
+        _shell(command),
+    ]
+
+    assert action_findings("The fix is complete and tested.", records) == []
+
+
+@pytest.mark.parametrize(
+    "records",
+    [
+        # Ran before the file was written.
+        [_shell("./cli_tool weights.json"), _wrote("/app/cli_tool.cpp")],
+        # The run failed.
+        [_wrote("/app/cli_tool.cpp"), _shell("./cli_tool weights.json", failed=True)],
+        # Something else ran.
+        [_wrote("/app/cli_tool.cpp"), _shell("ls -la /app")],
+        [_wrote("/app/cli_tool.cpp"), _shell("cat cli_tool_notes.txt")],
+    ],
+)
+def test_tested_is_not_backed_by_a_run_of_something_else(records):
+    findings = action_findings("The fix is complete and tested.", records)
+
+    assert [f.gate for f in findings] == [ACTION]
 
 
 @pytest.mark.parametrize("tool_name", ["query_specific_file", "query_documents"])

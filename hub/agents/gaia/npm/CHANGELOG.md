@@ -8,6 +8,11 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 Requires the `gaia` Python CLI 0.27.0+ on `PATH`.
 
+- **Running the program it just wrote counts as testing it.** An answer that
+  said "tested" was sent back unless a test runner had run, so on work with
+  no test suite the agent re-ran its program and the answer still ended with
+  "no test run is recorded". A successful run of a file written that turn,
+  after the write, now backs the claim.
 - **Docs: Ask and Accept edits refuse deletes, they don't ask.** A delete the
   shell would otherwise ask about is refused with no approval card; only Full
   access runs it. The SPEC and guides now say so.

@@ -204,6 +204,30 @@ def _tested(record: Dict[str, Any]) -> bool:
     return not label or (record.get("check_kind") or check_kind(label)) == "test"
 
 
+def _ran_what_it_wrote(records: Sequence[Dict[str, Any]]) -> bool:
+    """A file this turn wrote was then run and the run did not fail.
+
+    Where there is no test suite, running the program is the test.
+    """
+    written: Set[str] = set()
+    for record in records:
+        if record.get("mutated"):
+            args = record.get("args")
+            for key, value in args.items() if isinstance(args, dict) else ():
+                if not (isinstance(value, str) and key.endswith("path")):
+                    continue
+                stem = _slashed(value).rsplit("/", 1)[-1].split(".", 1)[0]
+                if len(stem) >= 4:
+                    written.add(stem)
+        elif written and _executed(record) and not record.get("failed"):
+            ran = _args_text(record)
+            if any(
+                re.search(rf"(?<![\w-]){re.escape(s)}(?![\w-])", ran) for s in written
+            ):
+                return True
+    return False
+
+
 def _touched_docs(record: Dict[str, Any]) -> bool:
     return _ran(record) and _has(_args_text(record), _DOC_MARKERS)
 
@@ -929,6 +953,8 @@ def action_findings(
     for kind, phrase in action_claims(answer):
         backed, why = _ACTION_EVIDENCE[kind]
         if any(backed(r) for r in records):
+            continue
+        if kind == "tested" and _ran_what_it_wrote(records):
             continue
         findings.append(
             Finding(
