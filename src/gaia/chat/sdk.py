@@ -19,6 +19,8 @@ from typing import Any, Callable, Dict, List, Optional
 from gaia.chat.prompts import Prompts
 from gaia.daemon.broker_client import LeaseWaitCancelled, lease_cancel_scope
 from gaia.llm import create_client
+from gaia.llm.base_client import LLMClient
+from gaia.llm.exceptions import NotSupportedError
 from gaia.llm.lemonade_client import (
     GPU_CTX_SIZE,
     LemonadeClient,
@@ -55,6 +57,19 @@ def _is_tool_call_envelope(chunk: str, tools: Optional[List[Dict]]) -> bool:
 
 class LLMCallCancelled(Exception):
     """The caller cancelled a model call; nothing it produced is returned."""
+
+
+def _usage_as_stats(usage: Any) -> Dict[str, Any]:
+    """An OpenAI-shape ``usage`` dict as per-call stats, cached count lifted out."""
+    if not isinstance(usage, dict):
+        return {}
+    stats = dict(usage)
+    details = usage.get("prompt_tokens_details")
+    if "cached_tokens" not in stats and isinstance(details, dict):
+        cached = details.get("cached_tokens")
+        if cached is not None:
+            stats["cached_tokens"] = cached
+    return stats
 
 
 class RAGContextError(RuntimeError):
@@ -145,29 +160,38 @@ class AgentSDK:
         ```
     """
 
-    def __init__(self, config: Optional[AgentConfig] = None):
+    def __init__(
+        self,
+        config: Optional[AgentConfig] = None,
+        llm_client: Optional[LLMClient] = None,
+    ):
         """
         Initialize the AgentSDK.
 
         Args:
             config: Configuration options. If None, uses defaults.
+            llm_client: The model client to use. When given, no other client
+                is built and ``config.model`` is the id sent to it.
         """
         self.config = config or AgentConfig()
         self.log = get_logger(__name__)
         self.log.setLevel(getattr(logging, self.config.logging_level))
 
-        # Initialize LLM client - factory auto-detects provider and validates
-        self.llm_client = create_client(
-            use_claude=self.config.use_claude,
-            model=(
-                self.config.claude_model
-                if self.config.use_claude
-                else self.config.model
-            ),
-            base_url=self.config.base_url,
-            # The SDK supplies per-request prompts, including runtime overrides.
-            system_prompt=None,
-        )
+        if llm_client is not None:
+            self.llm_client = llm_client
+        else:
+            # Initialize LLM client - factory auto-detects provider and validates
+            self.llm_client = create_client(
+                use_claude=self.config.use_claude,
+                model=(
+                    self.config.claude_model
+                    if self.config.use_claude
+                    else self.config.model
+                ),
+                base_url=self.config.base_url,
+                # The SDK supplies per-request prompts, including runtime overrides.
+                system_prompt=None,
+            )
 
         # Store conversation history
         self.chat_history = deque(maxlen=self.config.max_history_length * 2)
@@ -1030,7 +1054,11 @@ class AgentSDK:
             Dictionary of performance stats
         """
         try:
-            return self.llm_client.get_performance_stats() or {}
+            try:
+                return self.llm_client.get_performance_stats() or {}
+            except NotSupportedError:
+                # A client that reports usage only: the same counts, per call.
+                return _usage_as_stats(self.llm_client.get_last_usage())
         except Exception as e:
             self.log.warning(f"Failed to get stats: {e}")
             return {}
