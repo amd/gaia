@@ -12,7 +12,7 @@ import { ModelChip } from './ModelChip';
 import { NpuBackdrop } from './NpuBackdrop';
 import { PermissionModeChip } from './PermissionModeChip';
 import { PrivateChip } from './PrivateChip';
-import { ResearchChip } from './ResearchChip';
+import { readSkillsForResearch, researchNeedsSkills, ResearchChip } from './ResearchChip';
 import { TryChips } from './TryChips';
 import { useAttachments } from '../hooks/useAttachments';
 import { useWarmUp, type WarmUpProgress } from '../hooks/useWarmUp';
@@ -24,7 +24,7 @@ import { displayModelName, useModelNames, useModelStore } from '../stores/modelS
 import * as messageQueue from '../utils/messageQueue';
 import { setVisibleInterval } from '../utils/visibleInterval';
 import { log } from '../utils/logger';
-import { requestErrorText } from '../utils/requestErrors';
+import { requestErrorParam, requestErrorText } from '../utils/requestErrors';
 import { FlagshipMissing } from '../utils/newTask';
 import { durationMs, prefersReducedMotion } from '../utils/motion';
 import { deviceLabel } from '../utils/modelLabels';
@@ -209,6 +209,8 @@ export function NewChat({ onSend, initialText = '', focusRequest = 0, agentMissi
     const setupError = useChatStore((s) => (s.systemStatus?.model_loaded ? null : s.systemStatus?.setup_error ?? null));
     const remote = useModelStore((s) => !!s.active?.remote);
     const [text, setText] = useSavedDraft(NEW_CHAT_DRAFT_KEY, initialText);
+    const textNowRef = useRef(text);
+    textNowRef.current = text;
     const [error, setError] = useState<string | null>(null);
     const [agentRefused, setAgentRefused] = useState(heldRefused);
     const [sending, setSending] = useState(false);
@@ -309,14 +311,31 @@ export function NewChat({ onSend, initialText = '', focusRequest = 0, agentMissi
         }
     }, [attachments, onSend]);
 
-    const submit = useCallback(() => {
+    const readingSkillsRef = useRef(false);
+    const submit = useCallback(async () => {
         // It would only fail: the box keeps the message until the agent is back.
         if (agentProblem) {
             setKeptForAgent(true);
             return;
         }
-        return send(attachments.compose(withResearchCommand(text.trim(), researchOn(useChatStore.getState(), null))), text.trim());
-    }, [agentProblem, attachments, send, text]);
+        const typed = text.trim();
+        if (readingSkillsRef.current) return;
+        if (researchNeedsSkills(typed, null)) {
+            readingSkillsRef.current = true;
+            setError(null);
+            try {
+                await readSkillsForResearch(typed, null);
+            } catch (err) {
+                setError(t('composer.researchSkillsUnavailable', { error: requestErrorParam(err) }));
+                return;
+            } finally {
+                readingSkillsRef.current = false;
+            }
+            // Edited during the wait: the box now holds the message the user means, so it stays unsent.
+            if (textNowRef.current !== text) return;
+        }
+        await send(attachments.compose(withResearchCommand(typed, researchOn(useChatStore.getState(), null))), typed);
+    }, [agentProblem, attachments, send, text, t]);
 
     useEffect(() => {
         if (focusRequest) inputRef.current?.focus();
