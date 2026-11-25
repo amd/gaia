@@ -3543,6 +3543,193 @@ def _resolve_output_handles(agent, value):
     return value
 
 
+class _TurnState:
+    """What one agent turn knows while it runs.
+
+    ``Agent._process_query_impl`` and the step methods it calls share it, so a
+    step can move into its own method without passing every variable back.
+    Fields have no defaults: reading one before the turn sets it raises, as
+    reading the local variable did.
+    """
+
+    # A misspelled field fails here instead of creating a stray attribute.
+    __slots__ = (
+        "_QUERY_TOOLS",
+        "_next_plan",
+        "account_refused",
+        "answer_before_completion_check",
+        "answer_beside_tool_calls",
+        "answer_given_mid_turn",
+        "answer_repaired",
+        "budget_stop_pending",
+        "cancel_event",
+        "cancelled_by_console",
+        "capability_tool_last_succeeded",
+        "chat_response",
+        "chunk_response",
+        "completion_corrections",
+        "completion_gaps",
+        "consecutive_count",
+        "conversation",
+        "corrected_test_claims",
+        "current_call",
+        "cut_off_continuations",
+        "dedup_msg",
+        "error_count",
+        "error_msg",
+        "failed",
+        "final_answer",
+        "full_response",
+        "grounding_fired",
+        "had_extraction_tools",
+        "image_outcome_corrected",
+        "inline_reasoning",
+        "is_error",
+        "last_error",
+        "look_first_reprompted",
+        "loop_break_answer_unprinted",
+        "loop_corrected_calls",
+        "loop_window",
+        "markup_retries",
+        "messages",
+        "model_call_failed",
+        "model_calls",
+        "model_messages",
+        "mutation_call_cache",
+        "no_action_requested",
+        "no_look_requested",
+        "parse_failures",
+        "parsed",
+        "plan_corrections",
+        "previous_outputs",
+        "prompt",
+        "query_result_cache",
+        "reasoning",
+        "recent_results",
+        "request_text",
+        "required_calls_made",
+        "response",
+        "response_finish_reason",
+        "response_reasoning",
+        "response_stats",
+        "result_key",
+        "save_reprompted",
+        "self_check_open",
+        "self_check_sent",
+        "start_time",
+        "step_results",
+        "step_timer",
+        "steps_limit",
+        "steps_taken",
+        "stopped_on_announced_step",
+        "stream_cut_offs",
+        "test_claim_corrections",
+        "thought_only",
+        "thought_only_replies",
+        "thought_only_stop",
+        "time_limit_reached",
+        "tool_args",
+        "tool_call_history",
+        "tool_call_log",
+        "tool_name",
+        "tool_result",
+        "truncated_result",
+        "turn_record",
+        "turn_results",
+        "unfinished_answer_reprompts",
+        "user_stopped",
+        "verification_scope_applied",
+        "verify_after_change_reprompted",
+    )
+
+    _QUERY_TOOLS: Any
+    _next_plan: Any
+    account_refused: Any
+    answer_before_completion_check: Any
+    answer_beside_tool_calls: Any
+    answer_given_mid_turn: Any
+    answer_repaired: Any
+    budget_stop_pending: Any
+    cancel_event: Any
+    cancelled_by_console: Any
+    capability_tool_last_succeeded: Any
+    chat_response: Any
+    chunk_response: Any
+    completion_corrections: Any
+    completion_gaps: Any
+    consecutive_count: Any
+    conversation: Any
+    corrected_test_claims: Any
+    current_call: Any
+    cut_off_continuations: Any
+    dedup_msg: Any
+    error_count: Any
+    error_msg: Any
+    failed: Any
+    final_answer: Any
+    full_response: Any
+    grounding_fired: Any
+    had_extraction_tools: Any
+    image_outcome_corrected: Any
+    inline_reasoning: Any
+    is_error: Any
+    last_error: Any
+    look_first_reprompted: Any
+    loop_break_answer_unprinted: Any
+    loop_corrected_calls: Any
+    loop_window: Any
+    markup_retries: Any
+    messages: Any
+    model_call_failed: Any
+    model_calls: Any
+    model_messages: Any
+    mutation_call_cache: Any
+    no_action_requested: Any
+    no_look_requested: Any
+    parse_failures: Any
+    parsed: Any
+    plan_corrections: Any
+    previous_outputs: Any
+    prompt: Any
+    query_result_cache: Any
+    reasoning: Any
+    recent_results: Any
+    request_text: Any
+    required_calls_made: Any
+    response: Any
+    response_finish_reason: Any
+    response_reasoning: Any
+    response_stats: Any
+    result_key: Any
+    save_reprompted: Any
+    self_check_open: Any
+    self_check_sent: Any
+    start_time: Any
+    step_results: Any
+    step_timer: Any
+    steps_limit: Any
+    steps_taken: Any
+    stopped_on_announced_step: Any
+    stream_cut_offs: Any
+    test_claim_corrections: Any
+    thought_only: Any
+    thought_only_replies: Any
+    thought_only_stop: Any
+    time_limit_reached: Any
+    tool_args: Any
+    tool_call_history: Any
+    tool_call_log: Any
+    tool_name: Any
+    tool_result: Any
+    truncated_result: Any
+    turn_record: Any
+    turn_results: Any
+    unfinished_answer_reprompts: Any
+    user_stopped: Any
+    verification_scope_applied: Any
+    verify_after_change_reprompted: Any
+
+
 class Agent(abc.ABC):
     """
     Base Agent class that provides core functionality for domain-specific agents.
@@ -13619,6 +13806,1248 @@ Do NOT wrap conversational replies in JSON.
         )
         return f"{note}\n\n{user_input}"
 
+    def _recover_from_parse_error(
+        self,
+        parse_exc: ValueError,
+        *,
+        steps_taken: int,
+        step_results: List[Any],
+        messages: List[Dict[str, Any]],
+        parse_failures: int,
+        markup_retries: int,
+    ) -> Tuple[Optional[str], int]:
+        """Handle a model reply whose tool call could not be parsed.
+
+        Records the error and either gives up or asks the model to try again.
+        Returns ``(answer, markup_retries)``: ``answer`` is the reply to end the
+        turn with when the retries are used up, else None after the retry
+        prompt has been appended to ``messages``.
+        """
+        logger.warning(
+            "Tool-call parse failed (step %d): %s — recovering with retry prompt",
+            steps_taken,
+            parse_exc,
+        )
+        self.error_history.append(
+            {
+                "step": steps_taken,
+                "error": str(parse_exc),
+                "type": "tool_call_parse_error",
+            }
+        )
+        # Pull the most recent successful image path
+        # out of step_results so both the recovery prompt and the
+        # give-up fallback can surface it.  When the SD two-step
+        # flow's step-1 succeeded and step-2 parse-failed, the
+        # canonical path is the breadcrumb the model needs to
+        # retry verbatim, and the breadcrumb the user needs in the
+        # final answer so the successful generation isn't lost.
+        # No-op for agents that don't emit ``image_path``.
+        _last_image_path = next(
+            (
+                r["image_path"]
+                for r in reversed(step_results)
+                if isinstance(r, dict)
+                and r.get("status") == "success"
+                and r.get("image_path")
+            ),
+            None,
+        )
+        if isinstance(parse_exc, MalformedToolMarkup):
+            if markup_retries >= _MAX_MARKUP_RETRIES:
+                return _TOOL_MARKUP_FAILURE_ANSWER, markup_retries
+            markup_retries += 1
+        # If we've already retried several times, give up gracefully and
+        # answer in plain text rather than spamming the user.
+        if parse_failures >= 3:
+            if _last_image_path:
+                return (
+                    f"I generated your image at `{_last_image_path}`, "
+                    "but I couldn't finish the follow-up step. "
+                    "Try asking for the next step in a fresh message."
+                ), markup_retries
+            return (
+                "I had trouble formatting my tool call. Could you "
+                "rephrase or break the request into smaller pieces?"
+            ), markup_retries
+        assistant_msg = "[I tried to call a tool but it could not be parsed.]"
+        user_msg = self._tool_call_retry_prompt(parse_exc)
+        if _last_image_path:
+            user_msg += (
+                f"\n\nYour previous step generated an image at "
+                f"`{_last_image_path}`. If your next tool call "
+                "needs this path, copy that string VERBATIM — do "
+                "not retype it."
+            )
+            logger.info(
+                "[PARSE-RECOVERY] injected canonical image_path=%s",
+                _last_image_path,
+            )
+        # Push a synthetic assistant turn + recovery user message so the
+        # next LLM call has context. Don't include the raw envelope to
+        # keep noise out of the conversation history.
+        messages.append(
+            {
+                "role": "assistant",
+                "content": assistant_msg,
+            }
+        )
+        messages.append(
+            {
+                "role": "user",
+                "content": user_msg,
+            }
+        )
+        return None, markup_retries
+
+    def _call_model(self, turn: _TurnState) -> Optional[str]:
+        """Ask the model for this step's reply, streamed or not, and record it on the turn.
+
+        Returns "break" or "continue" when the step loop must do that, else None.
+        """
+        if self.streaming:
+            # Streaming mode - raw response will be streamed
+            # (SilentConsole will suppress this, AgentConsole will show it)
+
+            # Add prompt to conversation if debug is enabled
+            if self.debug_prompts:
+                turn.conversation.append(
+                    {"role": "system", "content": {"prompt": turn.prompt}}
+                )
+                # Print the prompt if show_prompts is enabled
+                if self.show_prompts:
+                    self.console.print_prompt(
+                        turn.prompt, f"Prompt (Step {turn.steps_taken})"
+                    )
+
+            # Get streaming response. Same context-overflow retry-on-trim
+            # behaviour as the non-streaming branch below — needed because
+            # multi-step ReAct loops accumulate tool results in `messages`.
+            _retried_after_trim_stream = False
+            _model_step_retries = 0
+            turn.full_response = ""
+            self._announce_model_call(after_tools=bool(turn.tool_call_history))
+            while True:
+                try:
+                    self._before_model_call(turn.messages)
+                    turn.model_calls += 1
+                    response_stream = self.chat.send_messages_stream(
+                        messages=self._with_session_context(turn.messages),
+                        system_prompt=self.system_prompt,
+                        tools=self._openai_tools,
+                        max_tokens=self._max_output_tokens(),
+                        **self._conversation_request_kwargs(),
+                        **self._reasoning_request_kwargs(),
+                    )
+
+                    # Process the streaming response chunks as they arrive
+                    turn.full_response = ""
+                    for turn.chunk_response in response_stream:
+                        # Cooperative cancel: the Agent UI's Stop sets
+                        # console.cancelled. Observe it per token so a
+                        # single-shot RAG/chat answer (no step boundaries)
+                        # halts promptly and the upstream Lemonade stream is
+                        # closed (GeneratorExit cascades to the llm_client
+                        # generator, which shuts the HTTP socket).
+                        if self._console_cancelled():
+                            turn.cancelled_by_console = True
+                            try:
+                                response_stream.close()
+                            except Exception:  # noqa: BLE001 - best-effort teardown
+                                logger.debug(
+                                    "Failed to close Lemonade stream on cancel",
+                                    exc_info=True,
+                                )
+                            break
+                        if turn.chunk_response.is_complete:
+                            turn.response_stats = turn.chunk_response.stats
+                            self._open_step_stats = turn.response_stats
+                            turn.response_finish_reason = getattr(
+                                turn.chunk_response, "finish_reason", None
+                            )
+                            turn.response_reasoning = _response_reasoning(
+                                turn.chunk_response
+                            )
+                            # Non-empty complete chunk = tool_calls sentinel from
+                            # native tool-calling path (no streaming for tool calls)
+                            if turn.chunk_response.text:
+                                turn.full_response = turn.chunk_response.text
+                        else:
+                            self.console.print_streaming_text(turn.chunk_response.text)
+                            turn.full_response += turn.chunk_response.text
+
+                    if turn.cancelled_by_console:
+                        break
+
+                    self.console.print_streaming_text("", end_of_stream=True)
+                    turn.response = turn.full_response
+                    self._turn_model_retries[
+                        "request_retries"
+                    ] += self._last_request_retries()
+                    break
+                except LemonadeStreamCutOffError as e:
+                    # A fragment is never the reply: ask for the whole one again.
+                    self.console.print_streaming_text("", end_of_stream=True)
+                    turn.stream_cut_offs += 1
+                    self.error_history.append(
+                        {
+                            "step": turn.steps_taken,
+                            "error": str(e),
+                            "type": STREAM_CUT_OFF_ERROR,
+                        }
+                    )
+                    if turn.stream_cut_offs > _MAX_STREAM_CUT_OFF_RETRIES:
+                        logger.warning(
+                            "[WORKFLOW] Reply stream cut off %d times this "
+                            "turn; stopping (step %d/%d)",
+                            turn.stream_cut_offs,
+                            turn.steps_taken,
+                            turn.steps_limit,
+                        )
+                        if isinstance(e, LemonadeReplyStalledError):
+                            # A stall is a failed model call, not just a fragment.
+                            turn.model_call_failed = True
+                            self._turn_model_retries["failed"] = True
+                            turn.final_answer = self._model_call_failed_answer(
+                                e,
+                                e.user_message,
+                                turn.steps_taken,
+                                turn.conversation,
+                            )
+                            turn.loop_break_answer_unprinted = True
+                        else:
+                            turn.final_answer = e.user_message
+                        break
+                    logger.warning(
+                        "[WORKFLOW] Reply stream ended before the model "
+                        "finished; requesting it again (%d/%d)",
+                        turn.stream_cut_offs,
+                        _MAX_STREAM_CUT_OFF_RETRIES,
+                    )
+                    if turn.full_response:
+                        self._restart_answer()
+                    continue
+                except ConnectionError as e:
+                    # A transient endpoint failure the client already
+                    # retried: wait, then ask again with the conversation
+                    # intact, instead of ending a run that was going fine.
+                    outcome, unreachable = self._model_failure_outcome(
+                        e,
+                        _model_step_retries,
+                        turn.steps_taken,
+                        turn.conversation,
+                        partial_output=bool(turn.full_response),
+                    )
+                    if outcome == "retry":
+                        _model_step_retries += 1
+                        continue
+                    if outcome == "cancelled":
+                        turn.cancelled_by_console = True
+                        break
+                    if outcome == "unreachable":
+                        turn.final_answer = unreachable
+                        turn.loop_break_answer_unprinted = True
+                        break
+                    turn.error_msg = (
+                        f"LLM Server Connection Failed (streaming): {str(e)}"
+                    )
+                    logger.error(turn.error_msg)
+                    self.console.print_error(turn.error_msg)
+                    turn.model_call_failed = True
+                    self.error_history.append(
+                        {
+                            "step": turn.steps_taken,
+                            "error": turn.error_msg,
+                            "type": "llm_connection_error",
+                        }
+                    )
+                    self._turn_model_retries["failed"] = True
+                    turn.final_answer = (
+                        f"I'm having trouble reaching the language model right now. "
+                        f"Please make sure Lemonade Server is running.\n\n"
+                        f"*Technical details: {str(e)}*"
+                    )
+                    break
+                except LeaseWaitCancelled:
+                    # Stopped while queued for the model: not an LLM error.
+                    turn.cancelled_by_console = True
+                    break
+                except Exception as e:
+                    if stopped_by_user(e):
+                        logger.info("Streaming stopped by the user: %s", e)
+                    else:
+                        logger.error(f"Unexpected error during streaming: {e}")
+                    err_text = str(e).lower()
+                    is_ctx_overflow = is_context_overflow_error(err_text)
+                    # Same rule as the non-streaming branch: only the probe
+                    # decides a bad load, never the window in the error.
+                    is_wrong_ctx_loaded = (
+                        is_ctx_overflow and self._is_loaded_ctx_too_small()
+                    )
+                    if is_wrong_ctx_loaded:
+                        self.error_history.append(
+                            {
+                                "step": turn.steps_taken,
+                                "error": str(e),
+                                "type": "llm_wrong_ctx_loaded_reraise",
+                            }
+                        )
+                        logger.warning(
+                            "Wrong ctx_size loaded (streaming) — re-raising"
+                            " so chat helper can reload model: %s",
+                            e,
+                        )
+                        raise
+                    if is_ctx_overflow and not _retried_after_trim_stream:
+                        _retried_after_trim_stream = True
+                        if self._retry_after_overflow_shrink(
+                            turn.messages, e, turn.steps_taken
+                        ):
+                            continue
+
+                    # A transient endpoint failure the client already
+                    # retried: wait, then ask again with the conversation
+                    # intact, instead of ending a run that was going fine.
+                    outcome, unreachable = self._model_failure_outcome(
+                        e,
+                        _model_step_retries,
+                        turn.steps_taken,
+                        turn.conversation,
+                        partial_output=bool(turn.full_response),
+                    )
+                    if outcome == "retry":
+                        _model_step_retries += 1
+                        continue
+                    if outcome == "cancelled":
+                        turn.cancelled_by_console = True
+                        break
+                    if outcome == "unreachable":
+                        turn.final_answer = unreachable
+                        turn.loop_break_answer_unprinted = True
+                        break
+
+                    turn.model_call_failed = True
+                    self.error_history.append(
+                        {
+                            "step": turn.steps_taken,
+                            "error": str(e),
+                            "type": "llm_streaming_error",
+                        }
+                    )
+                    self._turn_model_retries["failed"] = True
+                    if is_ctx_overflow:
+                        # Name the actual constraint and a next step
+                        # -- "re-ask with just the essentials" told
+                        # the user nothing about WHAT was too big or HOW to
+                        # shrink it, so every retry looked identical.
+                        turn.final_answer = _CONTEXT_STILL_OVERFLOWING_MESSAGE
+                        turn.loop_break_answer_unprinted = True
+                    else:
+                        # Streaming is the TUI's path; it must surface the
+                        # same typed messages the non-streaming path does.
+                        refusal = self._cloud_account_refusal(e)
+                        if refusal is not None:
+                            # Already printed as the turn's error.
+                            self.console.print_error(refusal)
+                            turn.account_refused = True
+                            turn.final_answer = refusal
+                        else:
+                            turn.final_answer = self._model_call_failed_answer(
+                                e,
+                                self._extract_lemonade_user_message(e),
+                                turn.steps_taken,
+                                turn.conversation,
+                            )
+                            turn.loop_break_answer_unprinted = True
+                    break
+            if turn.final_answer is not None or turn.cancelled_by_console:
+                return "break"
+        else:
+            # Use progress indicator for non-streaming mode
+            self.console.start_progress(self._progress_label())
+
+            # Debug logging before LLM call
+            if self.debug:
+
+                print(f"\n[DEBUG] About to call LLM with {len(turn.messages)} messages")
+                print(
+                    f"[DEBUG] Last message role: {turn.messages[-1]['role'] if turn.messages else 'No messages'}"
+                )
+                if turn.messages and len(turn.messages[-1].get("content", "")) < 500:
+                    print(
+                        f"[DEBUG] Last message content: {turn.messages[-1]['content']}"
+                    )
+                else:
+                    print(
+                        f"[DEBUG] Last message content length: {len(turn.messages[-1].get('content', ''))}"
+                    )
+                print(f"[DEBUG] Execution state: {self.execution_state}")
+                if self.execution_state == "PLANNING":
+                    print("[DEBUG] Current step: Planning (no active plan yet)")
+                else:
+                    print(
+                        f"[DEBUG] Current step: {self.current_step}/{self.total_plan_steps}"
+                    )
+
+            # Get complete response from AgentSDK. On context overflow
+            # mid-loop (the cumulative messages array got too long during
+            # this turn — common after several search_file/index calls),
+            # trim the oldest tool-result messages and retry ONCE before
+            # giving up. Keeps the conversation salvageable instead of
+            # failing the whole turn.
+            _retried_after_trim = False
+            _model_step_retries = 0
+            while True:
+                try:
+                    self._before_model_call(turn.messages)
+                    turn.model_calls += 1
+                    turn.chat_response = self.chat.send_messages(
+                        messages=self._with_session_context(turn.messages),
+                        system_prompt=self.system_prompt,
+                        tools=self._openai_tools,
+                        max_tokens=self._max_output_tokens(),
+                        **self._conversation_request_kwargs(),
+                        **self._reasoning_request_kwargs(),
+                    )
+                    turn.response = turn.chat_response.text
+                    turn.response_stats = turn.chat_response.stats
+                    self._open_step_stats = turn.response_stats
+                    turn.response_finish_reason = getattr(
+                        turn.chat_response, "finish_reason", None
+                    )
+                    turn.response_reasoning = _response_reasoning(turn.chat_response)
+                    self._turn_model_retries[
+                        "request_retries"
+                    ] += self._last_request_retries()
+                    break  # success → exit retry loop
+                except ConnectionError as e:
+                    self.console.stop_progress()
+                    # A transient endpoint failure the client already
+                    # retried: wait, then ask again with the conversation
+                    # intact, instead of ending a run that was going fine.
+                    outcome, unreachable = self._model_failure_outcome(
+                        e, _model_step_retries, turn.steps_taken, turn.conversation
+                    )
+                    if outcome == "retry":
+                        _model_step_retries += 1
+                        continue
+                    if outcome == "cancelled":
+                        turn.cancelled_by_console = True
+                        break
+                    if outcome == "unreachable":
+                        turn.final_answer = unreachable
+                        turn.loop_break_answer_unprinted = True
+                        break
+                    turn.error_msg = f"LLM Server Connection Failed: {str(e)}"
+                    logger.error(turn.error_msg)
+                    self.console.print_error(turn.error_msg)
+                    turn.model_call_failed = True
+                    self.error_history.append(
+                        {
+                            "step": turn.steps_taken,
+                            "error": turn.error_msg,
+                            "type": "llm_connection_error",
+                        }
+                    )
+                    self._turn_model_retries["failed"] = True
+                    turn.final_answer = (
+                        f"I'm having trouble reaching the language model right now. "
+                        f"Please make sure Lemonade Server is running.\n\n"
+                        f"*Technical details: {str(e)}*"
+                    )
+                    break
+                except LeaseWaitCancelled:
+                    # Stopped while queued for the model: not an LLM error.
+                    self.console.stop_progress()
+                    turn.cancelled_by_console = True
+                    break
+                except Exception as e:
+                    self.console.stop_progress()
+                    if self.debug:
+                        print(f"[DEBUG] Error calling LLM: {e}")
+                    if stopped_by_user(e):
+                        logger.info("LLM call stopped by the user: %s", e)
+                    else:
+                        logger.error(f"Unexpected error calling LLM: {e}")
+
+                    # Did we hit a context-overflow mid-loop? Classify by
+                    # structure-then-text since typed exceptions get
+                    # wrapped by AgentSDK and the backend's error shape
+                    # varies (llama.cpp vs. FastFlowLM).
+                    err_text = str(e).lower()
+                    is_ctx_overflow = is_context_overflow_error(err_text)
+                    # Only the loaded-vs-requested probe decides a bad
+                    # load: the window named in the error is equally valid
+                    # for a deliberately small pin.
+                    is_wrong_ctx_loaded = (
+                        is_ctx_overflow and self._is_loaded_ctx_too_small()
+                    )
+                    if is_wrong_ctx_loaded:
+                        self.error_history.append(
+                            {
+                                "step": turn.steps_taken,
+                                "error": str(e),
+                                "type": "llm_wrong_ctx_loaded_reraise",
+                            }
+                        )
+                        logger.warning(
+                            "Wrong ctx_size loaded — re-raising so chat "
+                            "helper can reload model: %s",
+                            e,
+                        )
+                        raise
+                    if is_ctx_overflow and not _retried_after_trim:
+                        _retried_after_trim = True
+                        if self._retry_after_overflow_shrink(
+                            turn.messages, e, turn.steps_taken
+                        ):
+                            continue  # retry with smaller payload
+
+                    # A transient endpoint failure the client already
+                    # retried: wait, then ask again with the conversation
+                    # intact, instead of ending a run that was going fine.
+                    outcome, unreachable = self._model_failure_outcome(
+                        e, _model_step_retries, turn.steps_taken, turn.conversation
+                    )
+                    if outcome == "retry":
+                        _model_step_retries += 1
+                        continue
+                    if outcome == "cancelled":
+                        turn.cancelled_by_console = True
+                        break
+                    if outcome == "unreachable":
+                        turn.final_answer = unreachable
+                        turn.loop_break_answer_unprinted = True
+                        break
+
+                    # Either context-overflow after trim, or unrelated.
+                    # Give up gracefully.
+                    turn.model_call_failed = True
+                    self.error_history.append(
+                        {
+                            "step": turn.steps_taken,
+                            "error": str(e),
+                            "type": "llm_error",
+                        }
+                    )
+                    self._turn_model_retries["failed"] = True
+                    if is_ctx_overflow:
+                        # Name the actual constraint and a next step
+                        # -- "re-ask with just the essentials" told
+                        # the user nothing about WHAT was too big or HOW to
+                        # shrink it, so every retry looked identical.
+                        turn.final_answer = _CONTEXT_STILL_OVERFLOWING_MESSAGE
+                        turn.loop_break_answer_unprinted = True
+                    else:
+                        # If we have a typed Lemonade error in the
+                        # cause-chain (e.g. ``LemonadeUpstreamTimeoutError``),
+                        # surface its actionable
+                        # ``user_message`` verbatim instead of wrapping it
+                        # with the generic "try again in a moment" copy —
+                        # that wrapper actively misleads users on
+                        # non-retryable failures.
+                        refusal = self._cloud_account_refusal(e)
+                        if refusal is not None:
+                            # Already printed as the turn's error.
+                            self.console.print_error(refusal)
+                            turn.account_refused = True
+                            turn.final_answer = refusal
+                        else:
+                            turn.final_answer = self._model_call_failed_answer(
+                                e,
+                                self._extract_lemonade_user_message(e),
+                                turn.steps_taken,
+                                turn.conversation,
+                            )
+                            turn.loop_break_answer_unprinted = True
+                    break
+            if turn.final_answer is not None or turn.cancelled_by_console:
+                return "break"
+
+            # Stop the progress indicator
+            self.console.stop_progress()
+        return None
+
+    def _run_plan_step(self, turn: _TurnState, user_input: str) -> Optional[str]:
+        """Run the next step of the current plan, if one is being executed.
+
+        Returns "break" or "continue" when the step loop must do that, else None.
+        """
+        if (
+            self.execution_state == self.STATE_EXECUTING_PLAN
+            and self.current_step < self.total_plan_steps
+        ):
+            logger.debug(
+                f"Executing plan step {self.current_step + 1}/{self.total_plan_steps}"
+            )
+            self.console.print_state_info(
+                f"EXECUTING PLAN: Step {self.current_step + 1}/{self.total_plan_steps}"
+            )
+
+            # Display the current plan with the current step highlighted
+            if self.current_plan:
+                self.console.print_plan(self.current_plan, self.current_step)
+
+            # Extract next step from plan
+            next_step = self.current_plan[self.current_step]
+
+            if self._defer_placeholder_plan_step(
+                next_step, turn.step_results, turn.messages
+            ):
+                # Falls through to a model turn that supplies the real value.
+                turn.step_results.clear()
+            elif (
+                isinstance(next_step, dict)
+                and next_step.get("tool")
+                and "tool_args" in next_step
+            ):
+                # We have a properly formatted step with tool and args
+                turn.tool_name = next_step["tool"]
+                turn.tool_args = next_step["tool_args"]
+
+                # Resolve dynamic parameters from previous step results
+                turn.tool_args = self._resolve_plan_parameters(
+                    turn.tool_args, turn.step_results
+                )
+
+                # The user's own words, not the memory context the loop prepends.
+                request = getattr(self, "_original_user_input", None) or user_input
+                # Create a parsed response structure as if it came from the LLM
+                turn.parsed = {
+                    "thought": f"Executing step {self.current_step + 1} of the plan",
+                    "goal": f"Following the plan to {request}",
+                    "tool": turn.tool_name,
+                    "tool_args": turn.tool_args,
+                }
+
+                # Add to conversation
+                turn.conversation.append({"role": "assistant", "content": turn.parsed})
+
+                # Display the agent's reasoning for the step
+                self.console.print_thought(
+                    turn.parsed.get("thought", "Executing plan step")
+                )
+                self.console.print_goal(turn.parsed.get("goal", "Following the plan"))
+
+                # Display the tool call in real-time
+                self.console.print_tool_usage(turn.tool_name)
+                # Sent even when empty: it is what releases the call to the wire.
+                self.console.pretty_print_json(turn.tool_args, "Arguments")
+
+                # Start progress indicator for tool execution
+                self.console.start_progress(f"Executing {turn.tool_name}")
+
+                # Execute the tool
+                turn.tool_result = self._execute_tool_timed(
+                    turn.tool_name, turn.tool_args
+                )
+
+                # Stop progress indicator
+                self.console.stop_progress()
+
+                if _is_image_tool(turn.tool_name):
+                    turn.capability_tool_last_succeeded = not tool_result_failed(
+                        turn.tool_result, FAILED_STATUSES
+                    )
+
+                # Handle domain-specific post-processing.
+                # A returned plan switches the agent into
+                # STATE_EXECUTING_PLAN for declarative multi-step
+                # recovery (e.g., prereq-enable + retry). The base
+                # impl returns None, but the hook's annotation is
+                # Optional[List[...]], so pylint's None-inference
+                # is wrong here — silence it explicitly.
+                # pylint: disable-next=assignment-from-none
+                turn._next_plan = self._post_process_tool_result(
+                    turn.tool_name, turn.tool_args, turn.tool_result
+                )
+                if turn._next_plan is not None:
+                    self._inject_recovery_plan(turn._next_plan)
+
+                # Handle large tool results
+                turn.truncated_result = self._handle_large_tool_result(
+                    turn.tool_name,
+                    turn.tool_result,
+                    turn.conversation,
+                    turn.tool_args,
+                )
+
+                # Display the tool result in real-time (show full result to user).
+                # Emit result BEFORE complete so SSE latency is captured.
+                self.console.pretty_print_json(turn.tool_result, "Tool Result")
+                self.console.print_tool_complete()
+
+                # Store the truncated output for future context
+                turn.previous_outputs.append(
+                    {
+                        "tool": turn.tool_name,
+                        "args": turn.tool_args,
+                        "result": turn.truncated_result,
+                    }
+                )
+
+                # Store full result for parameter substitution in subsequent plan steps
+                turn.step_results.append(turn.tool_result)
+                if (
+                    isinstance(turn.tool_result, dict)
+                    and turn.tool_result.get("status") == "success"
+                    and turn.tool_result.get("operation") == "edit_file"
+                    and turn.tool_result.get("file_path")
+                ):
+                    self._turn_file_edits.append(
+                        {
+                            "file_path": turn.tool_result["file_path"],
+                            "backup_path": turn.tool_result.get("backup_path"),
+                        }
+                    )
+
+                # Share tool output with subsequent LLM calls
+                turn.messages.append(
+                    self._create_tool_message(turn.tool_name, turn.truncated_result)
+                )
+                self._recast_unpaired_tool_results(turn.messages)
+
+                if self._turn_scope.turn_should_end:
+                    turn.final_answer, turn.steps_taken = self._end_turn_on_scope(
+                        turn.tool_name,
+                        turn.messages,
+                        turn.conversation,
+                        turn.steps_taken,
+                    )
+                    if turn.final_answer is None:
+                        turn.cancelled_by_console = True
+                    else:
+                        turn.loop_break_answer_unprinted = True
+                    return "break"
+
+                # Check for error (support multiple error formats)
+                turn.is_error = Agent._is_error_result(turn.tool_result)
+
+                if turn.is_error:
+                    turn.failed = tool_result_error_fields(turn.tool_result)
+                    turn.error_count += 1
+                    # Extract error message from various formats
+                    # Prefer error_brief for logging (avoids duplicate formatted output)
+                    turn.last_error = (
+                        turn.failed.get("error_brief")
+                        or turn.failed.get("error")
+                        or turn.failed.get("stderr")
+                        or turn.failed.get("hint")  # Many tools provide hints
+                        or turn.failed.get(
+                            "suggested_fix"
+                        )  # Some tools provide fix suggestions
+                        or f"Command failed with return code {turn.failed.get('return_code')}"
+                    )
+                    logger.warning(
+                        f"Tool execution error in plan (count: {turn.error_count}): {turn.last_error}"
+                    )
+                    # Only print if error wasn't already displayed by _execute_tool
+                    if not turn.failed.get("error_displayed"):
+                        # STATE_ERROR_RECOVERY below retries this — not a
+                        # fatal top-level failure.
+                        self.console.print_error(turn.last_error, recoverable=True)
+
+                    # Switch to error recovery state
+                    self.execution_state = self.STATE_ERROR_RECOVERY
+                    self.console.print_state_info(
+                        "ERROR RECOVERY: Handling tool execution failure"
+                    )
+
+                    # Break out of plan execution to trigger error recovery prompt
+                    return "continue"
+                else:
+                    # Success - move to next step in plan
+                    self.current_step += 1
+
+                    # Check if we've completed the plan
+                    if self.current_step >= self.total_plan_steps:
+                        logger.debug("Plan execution completed")
+                        self.execution_state = self.STATE_COMPLETION
+                        self.console.print_state_info("COMPLETION: Plan fully executed")
+
+                        # Increment plan iteration counter
+                        self.plan_iterations += 1
+                        logger.debug(f"Plan iteration {self.plan_iterations} completed")
+
+                        # Check if we've reached max plan iterations
+                        reached_max_iterations = self._plan_cap_reached(
+                            turn.steps_taken, turn.steps_limit
+                        )
+
+                        # Prepare message for final answer with the completed plan context
+                        plan_context = {
+                            "completed_plan": self.current_plan,
+                            "total_steps": self.total_plan_steps,
+                        }
+                        plan_context_raw = json.dumps(
+                            plan_context,
+                            default=self._json_serialize_fallback,
+                            ensure_ascii=False,
+                        )
+                        if len(plan_context_raw) > 20000:
+                            # Prose call site: spliced into an f-string
+                            # prompt below, never json.loads'd.
+                            plan_context_str = self._truncate_large_content(
+                                plan_context, max_chars=20000
+                            )
+                        else:
+                            plan_context_str = plan_context_raw
+
+                        if reached_max_iterations:
+                            turn.budget_stop_pending = True
+                            # Force final answer after max iterations
+                            completion_message = (
+                                f"No room for another plan: {turn.steps_limit - turn.steps_taken} "
+                                f"of {turn.steps_limit} steps left after {self.plan_iterations} plans.\n"
+                                f"Task: {user_input}\n"
+                                f"Plan information:\n{plan_context_str}\n\n"
+                                f"IMPORTANT: Stop planning and researching. {_DELIVER_NOW}\n"
+                                f"Then give a final answer with an honest assessment:\n"
+                                f"- Summarize what was successfully accomplished\n"
+                                f"- Clearly state if anything remains incomplete or if errors occurred\n"
+                                f"- If the task is fully complete, state that clearly\n\n"
+                                f'Answer with {{"thought": "...", "goal": "...", "answer": "..."}}'
+                            )
+                        elif not plan_recap_enabled():
+                            completion_message = (
+                                f"All {self.total_plan_steps} plan steps ran; "
+                                f"{turn.steps_limit - turn.steps_taken} of {turn.steps_limit} "
+                                "steps left. If the task is done, answer with "
+                                '{"thought": "...", "goal": "...", "answer": "..."}; '
+                                "if not, give a new plan."
+                            )
+                        else:
+                            completion_message = (
+                                "You have successfully completed all steps in the plan.\n"
+                                f"Task: {user_input}\n"
+                                f"Plan information:\n{plan_context_str}\n\n"
+                                f"Plan iteration: {self.plan_iterations}; "
+                                f"{turn.steps_limit - turn.steps_taken} of {turn.steps_limit} steps left\n"
+                                "Check if more work is needed:\n"
+                                "- If the task is complete and verified, provide a final answer\n"
+                                "- If critical validation/testing is needed, you may create ONE more plan\n"
+                                "- Only create additional plans if absolutely necessary\n\n"
+                                'If more work needed: Provide a NEW plan with {{"thought": "...", "goal": "...", "plan": [...]}}\n'
+                                'If everything is complete: Provide {{"thought": "...", "goal": "...", "answer": "..."}}'
+                            )
+
+                        # Debug logging - only show if truncation happened
+                        if self.debug and len(plan_context_raw) > 2000:
+                            print(
+                                "\n[DEBUG] Plan context truncated for completion message"
+                            )
+
+                        # Add completion request to messages
+                        turn.messages.append(
+                            {"role": "user", "content": completion_message}
+                        )
+
+                        # Send the completion prompt to get final answer
+                        self.console.print_state_info(
+                            "COMPLETION: Requesting final answer"
+                        )
+
+                        # Continue to next iteration to get final answer
+                        return "continue"
+                    else:
+                        # Continue with next step - no need to query LLM again
+                        return "continue"
+            else:
+                # Plan step doesn't have proper format, fall back to LLM
+                logger.warning(
+                    f"Plan step {self.current_step + 1} doesn't have proper format: {next_step}"
+                )
+                self.console.print_warning(
+                    f"Plan step {self.current_step + 1} format incorrect, asking LLM for guidance"
+                )
+                turn.prompt = (
+                    f"You are following a plan but step {self.current_step + 1} doesn't have proper format: {next_step}\n"
+                    "Please interpret this step and decide what tool to use next.\n\n"
+                    f"Task: {user_input}\n\n"
+                )
+        else:
+            # Normal execution flow - query the LLM
+            if self.execution_state == self.STATE_DIRECT_EXECUTION:
+                self.console.print_state_info("DIRECT EXECUTION: Analyzing task")
+            elif self.execution_state == self.STATE_PLANNING:
+                self.console.print_state_info("PLANNING: Creating or refining plan")
+            elif self.execution_state == self.STATE_ERROR_RECOVERY:
+                self.console.print_state_info("ERROR RECOVERY: Handling previous error")
+
+                # Truncate previous outputs if too large to avoid overwhelming the LLM.
+                # Prose call site: spliced into the recovery prompt below,
+                # never json.loads'd.
+                truncated_outputs = (
+                    self._truncate_large_content(turn.previous_outputs, max_chars=500)
+                    if turn.previous_outputs
+                    else "None"
+                )
+
+                # Create a specific error recovery prompt
+                last_tool = (
+                    turn.tool_call_history[-1][0]
+                    if turn.tool_call_history
+                    else "unknown tool"
+                )
+                header = (
+                    "TOOL EXECUTION FAILED!\n\n"
+                    f"You were trying to execute: {last_tool}\n"
+                    f"Error: {turn.last_error}\n\n"
+                    f"Original task: {user_input}\n\n"
+                    f"Current plan step {self.current_step + 1}/{self.total_plan_steps} failed.\n"
+                    f"Current plan: {self.current_plan}\n\n"
+                    f"Previous successful outputs: {truncated_outputs}\n\n"
+                )
+                if self._is_denial_error(turn.last_error):
+                    # "Fix the error" read as "find another way" is how a
+                    # user's no got routed around.
+                    turn.prompt = header + (
+                        "This was a denial or refusal of that one action, "
+                        "not a mistake to fix and not a no to the task. It is "
+                        "a decision about what the action DOES: the same "
+                        "command, script, host or file change through another "
+                        "tool is the same action.\n\n"
+                        "INSTRUCTIONS:\n"
+                        "1. Do not retry it, and do not do the same thing "
+                        "through another tool, command, or script.\n"
+                        "2. Carry on with the task by a different, legitimate "
+                        "means: another tool, a loaded skill's tool, or "
+                        "reading the files directly.\n"
+                        "3. In your answer say what was not done and why. If "
+                        "nothing else can do the job, stop and tell the user "
+                        "the exact command you need and why."
+                    )
+                else:
+                    turn.prompt = header + (
+                        "INSTRUCTIONS:\n"
+                        "1. Analyze the error and understand what went wrong\n"
+                        "2. Create a NEW corrected plan that fixes the error\n"
+                        "3. Make sure to use correct tool parameters (check the available tools)\n"
+                        "4. Start executing the corrected plan\n\n"
+                        "Respond with your analysis, a corrected plan, and the first tool to execute."
+                    )
+
+                # Add the error recovery prompt to the messages array so it gets sent to LLM
+                turn.messages.append({"role": "user", "content": turn.prompt})
+
+                # Reset state to planning after creating recovery prompt
+                self.execution_state = self.STATE_PLANNING
+                self.current_plan = None
+                self.current_step = 0
+                self.total_plan_steps = 0
+                turn.step_results.clear()  # Clear stale results from failed plan
+
+            elif self.execution_state == self.STATE_COMPLETION:
+                self.console.print_state_info("COMPLETION: Finalizing response")
+        return None
+
+    def _request_plan(self, turn: _TurnState, user_input: str) -> Optional[str]:
+        """Ask the model for a plan when its reply says it needs one first.
+
+        Returns "break" or "continue" when the step loop must do that, else None.
+        """
+        if "needs_plan" in turn.parsed and turn.parsed["needs_plan"]:
+            if turn.model_calls >= turn.steps_limit:
+                # The plan request is a model call; the budget has none left.
+                return "break"
+            # Prepare a special prompt that specifically requests a plan
+            deferred_tool = turn.parsed.get("deferred_tool", None)
+            deferred_args = turn.parsed.get("deferred_tool_args", {})
+
+            plan_prompt = (
+                "You MUST create a detailed plan first before taking any action.\n\n"
+                f"User request: {user_input}\n\n"
+            )
+
+            if deferred_tool:
+                plan_prompt += (
+                    f"You initially wanted to use the {deferred_tool} tool with these arguments:\n"
+                    f"{json.dumps(deferred_args, indent=2, default=self._json_serialize_fallback, ensure_ascii=False)}\n\n"
+                    "However, you MUST first create a plan. Please create a plan that includes this tool usage as a step.\n\n"
+                )
+
+            plan_prompt += (
+                "Create a detailed plan with all necessary steps in JSON format, including exact tool names and arguments.\n"
+                "Respond with your reasoning, plan, and the first tool to use."
+            )
+
+            # Store the plan prompt in conversation if debug is enabled
+            if self.debug_prompts:
+                turn.conversation.append(
+                    {"role": "system", "content": {"prompt": plan_prompt}}
+                )
+                if self.show_prompts:
+                    self.console.print_prompt(plan_prompt, "Plan Request Prompt")
+
+            # Notify the user we're asking for a plan
+            self.console.print_info("Requesting a detailed plan before proceeding")
+
+            # Get the planning response
+            if self.streaming:
+                # Add prompt to conversation if debug is enabled
+                if self.debug_prompts:
+                    turn.conversation.append(
+                        {"role": "system", "content": {"prompt": plan_prompt}}
+                    )
+                    # Print the prompt if show_prompts is enabled
+                    if self.show_prompts:
+                        self.console.print_prompt(
+                            plan_prompt, f"Prompt (Step {turn.steps_taken})"
+                        )
+
+                # Handle streaming as before
+                turn.full_response = ""
+                plan_reasoning = None
+                # Add plan request to messages
+                turn.messages.append({"role": "user", "content": plan_prompt})
+
+                # Use AgentSDK for streaming plan response
+                turn.model_calls += 1
+                stream_gen = self.chat.send_messages_stream(
+                    messages=self._with_session_context(turn.messages),
+                    system_prompt=self.system_prompt,
+                    tools=self._openai_tools,
+                    max_tokens=self._max_output_tokens(),
+                    **self._conversation_request_kwargs(),
+                    **self._reasoning_request_kwargs(),
+                )
+
+                for turn.chunk_response in stream_gen:
+                    if turn.chunk_response.is_complete:
+                        plan_reasoning = _response_reasoning(turn.chunk_response)
+                        if turn.chunk_response.text:
+                            turn.full_response = turn.chunk_response.text
+                    else:
+                        chunk = turn.chunk_response.text
+                        if hasattr(self.console, "print_streaming_text"):
+                            self.console.print_streaming_text(chunk)
+                        else:
+                            print(chunk, end="", flush=True)
+                        turn.full_response += chunk
+
+                if hasattr(self.console, "print_streaming_text"):
+                    self.console.print_streaming_text("", end_of_stream=True)
+                else:
+                    print("", flush=True)
+
+                plan_response = turn.full_response
+            else:
+                # Use progress indicator for non-streaming mode
+                self.console.start_progress("Creating plan")
+
+                # Store the plan prompt in conversation if debug is enabled
+                if self.debug_prompts:
+                    turn.conversation.append(
+                        {"role": "system", "content": {"prompt": plan_prompt}}
+                    )
+                    if self.show_prompts:
+                        self.console.print_prompt(plan_prompt, "Plan Request Prompt")
+
+                # Add plan request to messages
+                turn.messages.append({"role": "user", "content": plan_prompt})
+
+                # Use AgentSDK for non-streaming plan response
+                turn.model_calls += 1
+                turn.chat_response = self.chat.send_messages(
+                    messages=self._with_session_context(turn.messages),
+                    system_prompt=self.system_prompt,
+                    tools=self._openai_tools,
+                    max_tokens=self._max_output_tokens(),
+                    **self._conversation_request_kwargs(),
+                    **self._reasoning_request_kwargs(),
+                )
+                plan_response = turn.chat_response.text
+                plan_reasoning = _response_reasoning(turn.chat_response)
+                self.console.stop_progress()
+
+            plan_response, inline_plan_reasoning = _split_reasoning(plan_response)
+            plan_reasoning = plan_reasoning or inline_plan_reasoning
+
+            # Parse the plan response
+            try:
+                parsed_plan = self._parse_llm_response(plan_response)
+                # Budget is consecutive: a clean parse gives the retries back.
+                turn.parse_failures = 0
+                self._mark_errors_recovered()
+            except ValueError as plan_parse_exc:
+                logger.warning(
+                    "Plan parse failed (step %d): %s — recovering with retry prompt",
+                    turn.steps_taken,
+                    plan_parse_exc,
+                )
+                self.error_history.append(
+                    {
+                        "step": turn.steps_taken,
+                        "error": str(plan_parse_exc),
+                        "type": "tool_call_parse_error",
+                    }
+                )
+                turn.error_count += 1
+                turn.parse_failures += 1
+                if turn.parse_failures >= 3:
+                    turn.final_answer = (
+                        "I had trouble formatting my plan. Could you "
+                        "rephrase or break the request into smaller pieces?"
+                    )
+                    return "break"
+                turn.messages.append(
+                    {
+                        "role": "assistant",
+                        "content": "[I tried to send a plan but it could not be parsed.]",
+                    }
+                )
+                turn.messages.append(
+                    {
+                        "role": "user",
+                        "content": self._tool_call_retry_prompt(plan_parse_exc),
+                    }
+                )
+                turn.steps_taken += 1
+                return "continue"
+            logger.debug(f"Parsed plan response: {parsed_plan}")
+            turn.conversation.append(
+                {"role": "assistant", "content": parsed_plan}
+                | ({"reasoning": plan_reasoning} if plan_reasoning else {})
+            )
+
+            # Add plan response to messages for chat history. Same
+            # OpenAI-shape rule as the main-response append:
+            # a tool-calling-trained planner can emit native
+            # ``tool_calls`` instead of (or alongside) the expected
+            # plan JSON — those must be preserved as a structured
+            # assistant turn so the fan-out below can correlate
+            # results back via ``tool_call_id``.
+            turn.messages.append(
+                self._build_assistant_message(
+                    plan_response, parsed_plan, plan_reasoning
+                )
+            )
+
+            # Display the agent's reasoning for the plan
+            self.console.print_thought(parsed_plan.get("thought", "Creating plan"))
+            self.console.print_goal(parsed_plan.get("goal", "Planning for task"))
+
+            # Set the parsed response to the new plan for further processing
+            turn.parsed = parsed_plan
+        else:
+            # Display the agent's reasoning in real-time (only if provided)
+            # Skip if we just displayed thought/goal for a plan request above
+            thought = turn.parsed.get("thought", "").strip()
+            goal = turn.parsed.get("goal", "").strip()
+
+            if thought and thought != "No explicit reasoning provided":
+                self.console.print_thought(thought)
+
+            if goal and goal != "No explicit goal provided":
+                self.console.print_goal(goal)
+        return None
+
+    def _accept_plan(self, turn: _TurnState, user_input: str) -> Optional[str]:
+        """Check the plan the model sent and make it the current plan.
+
+        Returns "break" or "continue" when the step loop must do that, else None.
+        """
+        if "plan" in turn.parsed:
+            # Validate that plan is actually a list, not a string or other type
+            if not isinstance(turn.parsed["plan"], list):
+                logger.error(
+                    f"Invalid plan format: expected list, got {type(turn.parsed['plan']).__name__}. "
+                    f"Plan content: {turn.parsed['plan']}"
+                )
+                turn.plan_corrections += 1
+                if turn.plan_corrections > _MAX_PLAN_CORRECTIONS:
+                    turn.final_answer = _PLAN_FORMAT_FAILURE_ANSWER
+                    return "break"
+                # The "continue" below asks the LLM to correct itself —
+                # not a fatal top-level failure.
+                self.console.print_error(
+                    f"LLM returned invalid plan format (expected array, got {type(turn.parsed['plan']).__name__}). "
+                    "Asking for correction...",
+                    recoverable=True,
+                )
+
+                # Create error recovery prompt
+                turn.error_msg = (
+                    "ERROR: You provided a plan in the wrong format.\n"
+                    "Expected: an array of step objects\n"
+                    f"You provided: {type(turn.parsed['plan']).__name__}\n\n"
+                    "The correct format is:\n"
+                    f'{{"plan": [{{"tool": "tool_name", "tool_args": {{...}}, "description": "..."}}]}}\n\n'
+                    f"Please create a proper plan as an array of step objects for: {user_input}"
+                )
+                turn.messages.append({"role": "user", "content": turn.error_msg})
+
+                # Continue to next iteration to get corrected plan
+                return "continue"
+
+            # Validate that plan items are dictionaries with required fields
+            invalid_steps = []
+            for i, step in enumerate(turn.parsed["plan"]):
+                if not isinstance(step, dict):
+                    invalid_steps.append((i, type(step).__name__, step))
+                elif "tool" not in step or not step["tool"]:
+                    invalid_steps.append((i, "missing tool field", step))
+                elif "tool_args" not in step:
+                    # Auto-add empty tool_args for convenience
+                    # LLMs sometimes omit this for tools with all optional parameters
+                    step["tool_args"] = {}
+                    logger.debug(
+                        f"Auto-added empty tool_args for step {i+1}: {step['tool']}"
+                    )
+
+            if invalid_steps:
+                logger.error(f"Invalid plan steps found: {invalid_steps}")
+                turn.plan_corrections += 1
+                if turn.plan_corrections > _MAX_PLAN_CORRECTIONS:
+                    turn.final_answer = _PLAN_FORMAT_FAILURE_ANSWER
+                    return "break"
+                # The "continue" below asks the LLM to correct itself —
+                # not a fatal top-level failure.
+                self.console.print_error(
+                    f"Plan contains {len(invalid_steps)} invalid step(s). Asking for correction...",
+                    recoverable=True,
+                )
+
+                # Create detailed error message
+                error_details = "\n".join(
+                    [
+                        f"Step {i+1}: {issue} - {step}"
+                        for i, issue, step in invalid_steps[:3]  # Show first 3 errors
+                    ]
+                )
+
+                turn.error_msg = (
+                    f"ERROR: Your plan contains invalid steps:\n{error_details}\n\n"
+                    f"Each step must be a dictionary with 'tool' and 'tool_args' fields:\n"
+                    f'{{"tool": "tool_name", "tool_args": {{...}}, "description": "..."}}\n\n'
+                    f"Please create a corrected plan for: {user_input}"
+                )
+                turn.messages.append({"role": "user", "content": turn.error_msg})
+
+                # Continue to next iteration to get corrected plan
+                return "continue"
+
+            # Plan is valid - proceed with execution
+            plan = turn.parsed["plan"]
+            top_args = turn.parsed.get("tool_args")
+            if (
+                plan
+                and turn.parsed.get("tool") == plan[0]["tool"]
+                and isinstance(top_args, dict)
+                and top_args
+            ):
+                # The direct call is the one the model wrote out in full;
+                # its plan copy is often a stand-in for the same content.
+                plan[0] = {**plan[0], "tool_args": top_args}
+            self.current_plan = plan
+            self.current_step = 0
+            self.total_plan_steps = len(self.current_plan)
+            self.execution_state = self.STATE_EXECUTING_PLAN
+            logger.debug(
+                f"New plan created with {self.total_plan_steps} steps: {self.current_plan}"
+            )
+        return None
+
     def _process_query_impl(
         self,
         user_input: str,
@@ -13627,8 +15056,9 @@ Do NOT wrap conversational replies in JSON.
         filename: str = None,
     ) -> Dict[str, Any]:
         """Inner implementation of ``process_query`` — see public method docstring."""
-        start_time = time.time()  # Track query processing start time
-        step_timer = self._attach_step_timer()
+        turn = _TurnState()
+        turn.start_time = time.time()  # Track query processing start time
+        turn.step_timer = self._attach_step_timer()
         # Set per step; a step that exits early is recorded at the next boundary.
         self._open_step = None
         self._open_step_stats = None
@@ -13697,7 +15127,7 @@ Do NOT wrap conversational replies in JSON.
         self._extraction_ledger.activate_skill(
             self._extraction_skill_instructions(user_input)
         )
-        had_extraction_tools = "extract_document_items" in self._tools_registry
+        turn.had_extraction_tools = "extract_document_items" in self._tools_registry
         if self._extraction_ledger.offered:
             self._register_extraction_tool()
         # Thin tool lists keep them once offered: removing them changes tools=.
@@ -13707,15 +15137,15 @@ Do NOT wrap conversational replies in JSON.
             if self._instance_tools is not None:
                 self._instance_tools.pop("extract_document_items", None)
                 self._instance_tools.pop("save_extracted_items", None)
-        if self._extraction_ledger.offered or had_extraction_tools:
+        if self._extraction_ledger.offered or turn.had_extraction_tools:
             self._apply_tool_filter(self._active_tool_filter)
 
         logger.debug(f"Processing query: {user_input}")
-        conversation = []
+        turn.conversation = []
         # Build messages array for chat completions
         from gaia.agents.base.history import TurnMessages, fit_history_to_turn
 
-        messages = TurnMessages()
+        turn.messages = TurnMessages()
         self._turn_context_pin = None
 
         # Per-turn performance record (dev mode; no-op unless GAIA_TURN_LOG is
@@ -13723,13 +15153,13 @@ Do NOT wrap conversational replies in JSON.
         # submit-to-answer, which is what the user actually waits through.
         self._turn_recorder = self._begin_turn_record(user_input)
         # Set by whichever exit seals the record; read by the tail below.
-        turn_record: Optional[Dict[str, Any]] = None
+        turn.turn_record: Optional[Dict[str, Any]] = None
         # Sealed at the answer when the console carries it; reused for the result.
-        model_messages: Optional[List[Dict[str, Any]]] = None
+        turn.model_messages: Optional[List[Dict[str, Any]]] = None
 
         # Prepopulate with conversation history if available (for session persistence)
         if hasattr(self, "conversation_history") and self.conversation_history:
-            messages.extend(
+            turn.messages.extend(
                 fit_history_to_turn(self, self._history_for_request(), user_input)
             )
             logger.debug(
@@ -13739,87 +15169,89 @@ Do NOT wrap conversational replies in JSON.
         # grounding checks neither re-ask for it nor take a past claim as proof.
         self._grounding_history = "\n".join(
             observed_text(m.get("content"))
-            for m in messages
+            for m in turn.messages
             if isinstance(m, dict) and m.get("role") != "assistant"
         )
         # Grounding gates that already asked for one correction this turn.
-        grounding_fired: set = set()
+        turn.grounding_fired: set = set()
         # "Do not run anything, answer only with a plan": no nudge to act.
-        request_text = self._request_text(user_input)
-        no_action_requested = _asks_for_no_action(request_text)
+        turn.request_text = self._request_text(user_input)
+        turn.no_action_requested = _asks_for_no_action(turn.request_text)
         # "Why does foo.py fail? Don't touch anything": look, but don't edit.
-        no_look_requested = _asks_not_to_look(request_text)
-        self._turn_no_look_requested = no_look_requested
-        self._turn_plan_only_requested = _asks_for_a_plan_only(request_text)
-        if no_look_requested:
-            grounding_fired.add(LOOK)
+        turn.no_look_requested = _asks_not_to_look(turn.request_text)
+        self._turn_no_look_requested = turn.no_look_requested
+        self._turn_plan_only_requested = _asks_for_a_plan_only(turn.request_text)
+        if turn.no_look_requested:
+            turn.grounding_fired.add(LOOK)
 
-        steps_taken = 0
-        final_answer = None
+        turn.steps_taken = 0
+        turn.final_answer = None
         # Set when the Agent-UI Stop is observed mid-generation (per-token) so
         # the turn ends with empty text instead of a completed answer.
-        cancelled_by_console = False
+        turn.cancelled_by_console = False
         # Set when the person at the prompt declines more steps. Distinct from
         # cancelled_by_console, which only the Agent UI Stop button sets.
-        user_stopped = False
+        turn.user_stopped = False
         # Diagnostic only — no threshold reads this; it just numbers the warnings.
-        error_count = 0
+        turn.error_count = 0
         # Malformed replies get their own budget: failed tool calls are ordinary work.
-        parse_failures = 0
-        plan_corrections = 0
+        turn.parse_failures = 0
+        turn.plan_corrections = 0
         # Every request to the model, so no reply stream outruns the step budget.
         # A turn this stops is reported as a step-limit stop, with fewer tool steps.
-        model_calls = 0
-        markup_retries = 0
-        tool_call_history = []  # Recent tool calls, for loop detection
-        loop_window = max(
+        turn.model_calls = 0
+        turn.markup_retries = 0
+        turn.tool_call_history = []  # Recent tool calls, for loop detection
+        turn.loop_window = max(
             5, _MAX_LOOP_PERIOD * getattr(self, "max_consecutive_repeats", 4)
         )
         # One loop correction per turn; the next repeat of any call ends the turn.
-        loop_corrected_calls: set = set()
+        turn.loop_corrected_calls: set = set()
         # Each call's last result and how many times in a row it came back the same.
-        turn_results: Dict[Any, Tuple[int, int]] = {}
-        tool_call_log = (
+        turn.turn_results: Dict[Any, Tuple[int, int]] = {}
+        turn.tool_call_log = (
             []
         )  # Full unbounded log of all tool calls this turn (for workflow guards)
-        unfinished_answer_reprompts = 0
-        thought_only_replies = 0
-        thought_only_stop = False
-        stopped_on_announced_step = False
-        look_first_reprompted = False
-        save_reprompted = False
-        verify_after_change_reprompted = False
-        test_claim_corrections = 0
-        corrected_test_claims: set = set()
-        cut_off_continuations = 0
-        stream_cut_offs = 0
-        completion_corrections = 0
-        answer_repaired = False
+        turn.unfinished_answer_reprompts = 0
+        turn.thought_only_replies = 0
+        turn.thought_only_stop = False
+        turn.stopped_on_announced_step = False
+        turn.look_first_reprompted = False
+        turn.save_reprompted = False
+        turn.verify_after_change_reprompted = False
+        turn.test_claim_corrections = 0
+        turn.corrected_test_claims: set = set()
+        turn.cut_off_continuations = 0
+        turn.stream_cut_offs = 0
+        turn.completion_corrections = 0
+        turn.answer_repaired = False
         # Whether this turn already ran the calls required_calls() named.
-        required_calls_made = False
+        turn.required_calls_made = False
         # The self-check goes out once a turn. While it is open this holds
         # the answer it was sent about, and when and where it went out.
-        self_check_sent = False
-        self_check_open: Optional[Dict[str, Any]] = None
+        turn.self_check_sent = False
+        turn.self_check_open: Optional[Dict[str, Any]] = None
         # The answer a completion correction asked to replace.
-        answer_before_completion_check: Optional[str] = None
-        completion_gaps = []
+        turn.answer_before_completion_check: Optional[str] = None
+        turn.completion_gaps = []
         # Answer text the model sent alongside its latest tool calls.
-        answer_beside_tool_calls: Optional[str] = None
+        turn.answer_beside_tool_calls: Optional[str] = None
         # The latest answer sent alongside any tool calls this turn, lookups too.
-        answer_given_mid_turn: Optional[str] = None
+        turn.answer_given_mid_turn: Optional[str] = None
         # Latest generate_image outcome this turn: None until one has run.
-        capability_tool_last_succeeded: Optional[bool] = None
-        image_outcome_corrected = False
-        query_result_cache: dict[str, int] = (
+        turn.capability_tool_last_succeeded: Optional[bool] = None
+        turn.image_outcome_corrected = False
+        turn.query_result_cache: dict[str, int] = (
             {}
         )  # result_hash → call count (result-based dedup)
-        mutation_call_cache: dict[str, int] = (
+        turn.mutation_call_cache: dict[str, int] = (
             {}
         )  # (tool, normalized args) → call count (input-based dedup, #1317)
-        last_error = None  # Track the last error to handle it properly
-        previous_outputs = []  # Track previous tool outputs (truncated for context)
-        step_results = []  # Track full tool results for parameter substitution
+        turn.last_error = None  # Track the last error to handle it properly
+        turn.previous_outputs = (
+            []
+        )  # Track previous tool outputs (truncated for context)
+        turn.step_results = []  # Track full tool results for parameter substitution
 
         # Reset state management
         self.execution_state = self.STATE_PLANNING
@@ -13828,7 +15260,7 @@ Do NOT wrap conversational replies in JSON.
         self.total_plan_steps = 0
         self.plan_iterations = 0  # Reset plan iteration counter
         # The reply to a plan-budget stop is forced, not the user's answer.
-        budget_stop_pending = False
+        turn.budget_stop_pending = False
         # Tool-reported LLM usage this turn (see _fold_tool_usage) —
         # reset per-turn since an Agent instance persists across queries in
         # an interactive session.
@@ -13861,10 +15293,10 @@ Do NOT wrap conversational replies in JSON.
         self._last_boundary_at = self._turn_started_at
         self._step_durations = []
         # Read by `gaia -p` when the hard limit abandons the turn mid-call.
-        self._turn_conversation = conversation
+        self._turn_conversation = turn.conversation
         self._time_notice_sent = False
         self._time_marks_sent = 0
-        time_limit_reached = False
+        turn.time_limit_reached = False
         # Per-turn too: a previous turn's edits are not this turn's to repair.
         # The env knob is read here, not at import, so it can be changed
         # between turns.
@@ -13875,14 +15307,14 @@ Do NOT wrap conversational replies in JSON.
         self._self_check_on = self_check_enabled()
         # True once the emitted answer carries its scope line, so the post-loop
         # catch-all below never appends a second one.
-        verification_scope_applied = False
+        turn.verification_scope_applied = False
         # The loop guard breaks out with an answer nothing has printed yet;
         # the normal and step-cap paths print theirs where they set it.
-        loop_break_answer_unprinted = False
+        turn.loop_break_answer_unprinted = False
         # A refused cloud account ends the turn with nothing to verify.
-        account_refused = False
+        turn.account_refused = False
         # The model call failed, so the model never got to check its own work.
-        model_call_failed = False
+        turn.model_call_failed = False
         # Model-call retries this turn: client-level (inside one request) and
         # step-level (the agent waiting and asking again), plus whether the
         # model stayed unreachable. Reported on the result.
@@ -13902,26 +15334,26 @@ Do NOT wrap conversational replies in JSON.
         self._pending_eviction = None
 
         # Add user query to the conversation history
-        conversation.append({"role": "user", "content": user_input})
-        messages.recorded.clear()
-        messages.append(
+        turn.conversation.append({"role": "user", "content": user_input})
+        turn.messages.recorded.clear()
+        turn.messages.append(
             {"role": "user", "content": self._with_long_message_file(user_input)}
         )
-        self._tell_no_one_to_ask(messages)
-        self._tell_time_budget(messages)
+        self._tell_no_one_to_ask(turn.messages)
+        self._tell_time_budget(turn.messages)
 
         # Use provided max_steps or fall back to class default
-        steps_limit = max_steps if max_steps is not None else self.max_steps
+        turn.steps_limit = max_steps if max_steps is not None else self.max_steps
 
         # Print initial message with max steps info
-        self.console.print_processing_start(user_input, steps_limit, self.model_id)
-        logger.debug(f"Using max_steps: {steps_limit}")
+        self.console.print_processing_start(user_input, turn.steps_limit, self.model_id)
+        logger.debug(f"Using max_steps: {turn.steps_limit}")
 
-        prompt = f"User request: {user_input}\n\n"
+        turn.prompt = f"User request: {user_input}\n\n"
 
         # Only add planning reminder in PLANNING state
         if self.execution_state == self.STATE_PLANNING:
-            prompt += (
+            turn.prompt += (
                 "IMPORTANT: ALWAYS BEGIN WITH A PLAN before executing any tools.\n"
                 "First create a detailed plan with all necessary steps, then execute the first step.\n"
                 "When creating a plan with multiple steps:\n"
@@ -13930,444 +15362,91 @@ Do NOT wrap conversational replies in JSON.
                 "   3. Create plans with clear, executable steps that include both the tool name and the exact arguments for each step.\n"
             )
 
-        logger.debug(f"Input prompt: {prompt[:200]}...")
+        logger.debug(f"Input prompt: {turn.prompt[:200]}...")
 
         # Process the query in steps, allowing for multiple tool usages
         while (
-            steps_taken < steps_limit
-            and model_calls < steps_limit
-            and final_answer is None
+            turn.steps_taken < turn.steps_limit
+            and turn.model_calls < turn.steps_limit
+            and turn.final_answer is None
         ):
             # Cooperative cancellation: if a consumer (e.g. the Agent UI's
             # stream-timeout/disconnect cleanup) signalled cancel, stop here so
             # the producer thread is torn down rather than left running. Checked
             # at the step boundary; per-tool timeouts keep each step bounded so
             # this point is always reached in finite time.
-            cancel_event = getattr(self, "_cancel_event", None)
-            if cancel_event is not None and cancel_event.is_set():
+            turn.cancel_event = getattr(self, "_cancel_event", None)
+            if turn.cancel_event is not None and turn.cancel_event.is_set():
                 logger.warning(
                     "Agent run cancelled at step %d/%d via cancel_event",
-                    steps_taken,
-                    steps_limit,
+                    turn.steps_taken,
+                    turn.steps_limit,
                 )
                 # A limit that stopped the turn says so; a plain stop (Stop,
                 # a disconnect) gets the neutral wording.
-                final_answer = getattr(cancel_event, "message", None) or (
+                turn.final_answer = getattr(turn.cancel_event, "message", None) or (
                     "The request was stopped before it finished. Try again, or "
                     "break it into smaller steps if it was taking too long."
                 )
-                time_limit_reached = self._time_limit_passed()
-                if time_limit_reached:
+                turn.time_limit_reached = self._time_limit_passed()
+                if turn.time_limit_reached:
                     # No closing call fits past the deadline; keep what was found.
-                    latest = self._latest_findings(conversation)
+                    latest = self._latest_findings(turn.conversation)
                     if latest:
-                        final_answer += f"\n\nWhat I had found so far:\n{latest}"
+                        turn.final_answer += f"\n\nWhat I had found so far:\n{latest}"
                 break
 
-            self._supersede_checked_answer(messages)
+            self._supersede_checked_answer(turn.messages)
 
             # Anything the user sent mid-turn joins the context here, where the
             # loop is between steps and nothing is half-applied. AFTER the
             # cancel check above, deliberately: a cancelled turn breaks out
             # without running another step, and draining first would consume a
             # message this turn can no longer answer.
-            self._drain_followups(messages, conversation)
+            self._drain_followups(turn.messages, turn.conversation)
 
             # How much budget is left, said once per level, while there are
             # still steps to spend differently. Same place and same mechanism
             # as the drain above: appended at the step boundary so the next
             # model call sees it.
-            self._announce_step_budget(messages, conversation, steps_taken, steps_limit)
-            if self._time_is_up(messages, conversation):
-                time_limit_reached = True
+            self._announce_step_budget(
+                turn.messages, turn.conversation, turn.steps_taken, turn.steps_limit
+            )
+            if self._time_is_up(turn.messages, turn.conversation):
+                turn.time_limit_reached = True
                 break
 
             # Build the next prompt based on current state (this is for fallback mode only)
             # In chat mode, we'll just add to messages array
-            self._record_unrecorded_step(conversation)
-            steps_taken += 1
-            step_timer.begin_step(steps_taken)
-            self._open_step = steps_taken
+            self._record_unrecorded_step(turn.conversation)
+            turn.steps_taken += 1
+            turn.step_timer.begin_step(turn.steps_taken)
+            self._open_step = turn.steps_taken
             self._open_step_stats = None
             self._step_stats_recorded = False
-            logger.debug(f"Step {steps_taken}/{steps_limit}")
+            logger.debug(f"Step {turn.steps_taken}/{turn.steps_limit}")
             if self._context_evictor is not None:
                 from gaia.agents.base.artifacts import store_for
 
                 # Only the sent list changes; ``conversation`` keeps every result.
                 with turn_metrics.span("context_evict"):
                     self._pending_eviction = self._context_evictor.evict(
-                        messages, steps_taken, store_for(self)
+                        turn.messages, turn.steps_taken, store_for(self)
                     )
             if self._turn_recorder is not None and self.chat is not None:
-                self.chat.turn_step = steps_taken
+                self.chat.turn_step = turn.steps_taken
 
             # Display current step
-            self.console.print_step_header(steps_taken, steps_limit)
+            self.console.print_step_header(turn.steps_taken, turn.steps_limit)
 
             # Skip automatic finalization for single-step plans - always request proper final answer
 
             # If we're executing a plan, we might not need to query the LLM again
-            if (
-                self.execution_state == self.STATE_EXECUTING_PLAN
-                and self.current_step < self.total_plan_steps
-            ):
-                logger.debug(
-                    f"Executing plan step {self.current_step + 1}/{self.total_plan_steps}"
-                )
-                self.console.print_state_info(
-                    f"EXECUTING PLAN: Step {self.current_step + 1}/{self.total_plan_steps}"
-                )
-
-                # Display the current plan with the current step highlighted
-                if self.current_plan:
-                    self.console.print_plan(self.current_plan, self.current_step)
-
-                # Extract next step from plan
-                next_step = self.current_plan[self.current_step]
-
-                if self._defer_placeholder_plan_step(next_step, step_results, messages):
-                    # Falls through to a model turn that supplies the real value.
-                    step_results.clear()
-                elif (
-                    isinstance(next_step, dict)
-                    and next_step.get("tool")
-                    and "tool_args" in next_step
-                ):
-                    # We have a properly formatted step with tool and args
-                    tool_name = next_step["tool"]
-                    tool_args = next_step["tool_args"]
-
-                    # Resolve dynamic parameters from previous step results
-                    tool_args = self._resolve_plan_parameters(tool_args, step_results)
-
-                    # The user's own words, not the memory context the loop prepends.
-                    request = getattr(self, "_original_user_input", None) or user_input
-                    # Create a parsed response structure as if it came from the LLM
-                    parsed = {
-                        "thought": f"Executing step {self.current_step + 1} of the plan",
-                        "goal": f"Following the plan to {request}",
-                        "tool": tool_name,
-                        "tool_args": tool_args,
-                    }
-
-                    # Add to conversation
-                    conversation.append({"role": "assistant", "content": parsed})
-
-                    # Display the agent's reasoning for the step
-                    self.console.print_thought(
-                        parsed.get("thought", "Executing plan step")
-                    )
-                    self.console.print_goal(parsed.get("goal", "Following the plan"))
-
-                    # Display the tool call in real-time
-                    self.console.print_tool_usage(tool_name)
-                    # Sent even when empty: it is what releases the call to the wire.
-                    self.console.pretty_print_json(tool_args, "Arguments")
-
-                    # Start progress indicator for tool execution
-                    self.console.start_progress(f"Executing {tool_name}")
-
-                    # Execute the tool
-                    tool_result = self._execute_tool_timed(tool_name, tool_args)
-
-                    # Stop progress indicator
-                    self.console.stop_progress()
-
-                    if _is_image_tool(tool_name):
-                        capability_tool_last_succeeded = not tool_result_failed(
-                            tool_result, FAILED_STATUSES
-                        )
-
-                    # Handle domain-specific post-processing.
-                    # A returned plan switches the agent into
-                    # STATE_EXECUTING_PLAN for declarative multi-step
-                    # recovery (e.g., prereq-enable + retry). The base
-                    # impl returns None, but the hook's annotation is
-                    # Optional[List[...]], so pylint's None-inference
-                    # is wrong here — silence it explicitly.
-                    # pylint: disable-next=assignment-from-none
-                    _next_plan = self._post_process_tool_result(
-                        tool_name, tool_args, tool_result
-                    )
-                    if _next_plan is not None:
-                        self._inject_recovery_plan(_next_plan)
-
-                    # Handle large tool results
-                    truncated_result = self._handle_large_tool_result(
-                        tool_name, tool_result, conversation, tool_args
-                    )
-
-                    # Display the tool result in real-time (show full result to user).
-                    # Emit result BEFORE complete so SSE latency is captured.
-                    self.console.pretty_print_json(tool_result, "Tool Result")
-                    self.console.print_tool_complete()
-
-                    # Store the truncated output for future context
-                    previous_outputs.append(
-                        {
-                            "tool": tool_name,
-                            "args": tool_args,
-                            "result": truncated_result,
-                        }
-                    )
-
-                    # Store full result for parameter substitution in subsequent plan steps
-                    step_results.append(tool_result)
-                    if (
-                        isinstance(tool_result, dict)
-                        and tool_result.get("status") == "success"
-                        and tool_result.get("operation") == "edit_file"
-                        and tool_result.get("file_path")
-                    ):
-                        self._turn_file_edits.append(
-                            {
-                                "file_path": tool_result["file_path"],
-                                "backup_path": tool_result.get("backup_path"),
-                            }
-                        )
-
-                    # Share tool output with subsequent LLM calls
-                    messages.append(
-                        self._create_tool_message(tool_name, truncated_result)
-                    )
-                    self._recast_unpaired_tool_results(messages)
-
-                    if self._turn_scope.turn_should_end:
-                        final_answer, steps_taken = self._end_turn_on_scope(
-                            tool_name, messages, conversation, steps_taken
-                        )
-                        if final_answer is None:
-                            cancelled_by_console = True
-                        else:
-                            loop_break_answer_unprinted = True
-                        break
-
-                    # Check for error (support multiple error formats)
-                    is_error = Agent._is_error_result(tool_result)
-
-                    if is_error:
-                        failed = tool_result_error_fields(tool_result)
-                        error_count += 1
-                        # Extract error message from various formats
-                        # Prefer error_brief for logging (avoids duplicate formatted output)
-                        last_error = (
-                            failed.get("error_brief")
-                            or failed.get("error")
-                            or failed.get("stderr")
-                            or failed.get("hint")  # Many tools provide hints
-                            or failed.get(
-                                "suggested_fix"
-                            )  # Some tools provide fix suggestions
-                            or f"Command failed with return code {failed.get('return_code')}"
-                        )
-                        logger.warning(
-                            f"Tool execution error in plan (count: {error_count}): {last_error}"
-                        )
-                        # Only print if error wasn't already displayed by _execute_tool
-                        if not failed.get("error_displayed"):
-                            # STATE_ERROR_RECOVERY below retries this — not a
-                            # fatal top-level failure.
-                            self.console.print_error(last_error, recoverable=True)
-
-                        # Switch to error recovery state
-                        self.execution_state = self.STATE_ERROR_RECOVERY
-                        self.console.print_state_info(
-                            "ERROR RECOVERY: Handling tool execution failure"
-                        )
-
-                        # Break out of plan execution to trigger error recovery prompt
-                        continue
-                    else:
-                        # Success - move to next step in plan
-                        self.current_step += 1
-
-                        # Check if we've completed the plan
-                        if self.current_step >= self.total_plan_steps:
-                            logger.debug("Plan execution completed")
-                            self.execution_state = self.STATE_COMPLETION
-                            self.console.print_state_info(
-                                "COMPLETION: Plan fully executed"
-                            )
-
-                            # Increment plan iteration counter
-                            self.plan_iterations += 1
-                            logger.debug(
-                                f"Plan iteration {self.plan_iterations} completed"
-                            )
-
-                            # Check if we've reached max plan iterations
-                            reached_max_iterations = self._plan_cap_reached(
-                                steps_taken, steps_limit
-                            )
-
-                            # Prepare message for final answer with the completed plan context
-                            plan_context = {
-                                "completed_plan": self.current_plan,
-                                "total_steps": self.total_plan_steps,
-                            }
-                            plan_context_raw = json.dumps(
-                                plan_context,
-                                default=self._json_serialize_fallback,
-                                ensure_ascii=False,
-                            )
-                            if len(plan_context_raw) > 20000:
-                                # Prose call site: spliced into an f-string
-                                # prompt below, never json.loads'd.
-                                plan_context_str = self._truncate_large_content(
-                                    plan_context, max_chars=20000
-                                )
-                            else:
-                                plan_context_str = plan_context_raw
-
-                            if reached_max_iterations:
-                                budget_stop_pending = True
-                                # Force final answer after max iterations
-                                completion_message = (
-                                    f"No room for another plan: {steps_limit - steps_taken} "
-                                    f"of {steps_limit} steps left after {self.plan_iterations} plans.\n"
-                                    f"Task: {user_input}\n"
-                                    f"Plan information:\n{plan_context_str}\n\n"
-                                    f"IMPORTANT: Stop planning and researching. {_DELIVER_NOW}\n"
-                                    f"Then give a final answer with an honest assessment:\n"
-                                    f"- Summarize what was successfully accomplished\n"
-                                    f"- Clearly state if anything remains incomplete or if errors occurred\n"
-                                    f"- If the task is fully complete, state that clearly\n\n"
-                                    f'Answer with {{"thought": "...", "goal": "...", "answer": "..."}}'
-                                )
-                            elif not plan_recap_enabled():
-                                completion_message = (
-                                    f"All {self.total_plan_steps} plan steps ran; "
-                                    f"{steps_limit - steps_taken} of {steps_limit} "
-                                    "steps left. If the task is done, answer with "
-                                    '{"thought": "...", "goal": "...", "answer": "..."}; '
-                                    "if not, give a new plan."
-                                )
-                            else:
-                                completion_message = (
-                                    "You have successfully completed all steps in the plan.\n"
-                                    f"Task: {user_input}\n"
-                                    f"Plan information:\n{plan_context_str}\n\n"
-                                    f"Plan iteration: {self.plan_iterations}; "
-                                    f"{steps_limit - steps_taken} of {steps_limit} steps left\n"
-                                    "Check if more work is needed:\n"
-                                    "- If the task is complete and verified, provide a final answer\n"
-                                    "- If critical validation/testing is needed, you may create ONE more plan\n"
-                                    "- Only create additional plans if absolutely necessary\n\n"
-                                    'If more work needed: Provide a NEW plan with {{"thought": "...", "goal": "...", "plan": [...]}}\n'
-                                    'If everything is complete: Provide {{"thought": "...", "goal": "...", "answer": "..."}}'
-                                )
-
-                            # Debug logging - only show if truncation happened
-                            if self.debug and len(plan_context_raw) > 2000:
-                                print(
-                                    "\n[DEBUG] Plan context truncated for completion message"
-                                )
-
-                            # Add completion request to messages
-                            messages.append(
-                                {"role": "user", "content": completion_message}
-                            )
-
-                            # Send the completion prompt to get final answer
-                            self.console.print_state_info(
-                                "COMPLETION: Requesting final answer"
-                            )
-
-                            # Continue to next iteration to get final answer
-                            continue
-                        else:
-                            # Continue with next step - no need to query LLM again
-                            continue
-                else:
-                    # Plan step doesn't have proper format, fall back to LLM
-                    logger.warning(
-                        f"Plan step {self.current_step + 1} doesn't have proper format: {next_step}"
-                    )
-                    self.console.print_warning(
-                        f"Plan step {self.current_step + 1} format incorrect, asking LLM for guidance"
-                    )
-                    prompt = (
-                        f"You are following a plan but step {self.current_step + 1} doesn't have proper format: {next_step}\n"
-                        "Please interpret this step and decide what tool to use next.\n\n"
-                        f"Task: {user_input}\n\n"
-                    )
-            else:
-                # Normal execution flow - query the LLM
-                if self.execution_state == self.STATE_DIRECT_EXECUTION:
-                    self.console.print_state_info("DIRECT EXECUTION: Analyzing task")
-                elif self.execution_state == self.STATE_PLANNING:
-                    self.console.print_state_info("PLANNING: Creating or refining plan")
-                elif self.execution_state == self.STATE_ERROR_RECOVERY:
-                    self.console.print_state_info(
-                        "ERROR RECOVERY: Handling previous error"
-                    )
-
-                    # Truncate previous outputs if too large to avoid overwhelming the LLM.
-                    # Prose call site: spliced into the recovery prompt below,
-                    # never json.loads'd.
-                    truncated_outputs = (
-                        self._truncate_large_content(previous_outputs, max_chars=500)
-                        if previous_outputs
-                        else "None"
-                    )
-
-                    # Create a specific error recovery prompt
-                    last_tool = (
-                        tool_call_history[-1][0]
-                        if tool_call_history
-                        else "unknown tool"
-                    )
-                    header = (
-                        "TOOL EXECUTION FAILED!\n\n"
-                        f"You were trying to execute: {last_tool}\n"
-                        f"Error: {last_error}\n\n"
-                        f"Original task: {user_input}\n\n"
-                        f"Current plan step {self.current_step + 1}/{self.total_plan_steps} failed.\n"
-                        f"Current plan: {self.current_plan}\n\n"
-                        f"Previous successful outputs: {truncated_outputs}\n\n"
-                    )
-                    if self._is_denial_error(last_error):
-                        # "Fix the error" read as "find another way" is how a
-                        # user's no got routed around.
-                        prompt = header + (
-                            "This was a denial or refusal of that one action, "
-                            "not a mistake to fix and not a no to the task. It is "
-                            "a decision about what the action DOES: the same "
-                            "command, script, host or file change through another "
-                            "tool is the same action.\n\n"
-                            "INSTRUCTIONS:\n"
-                            "1. Do not retry it, and do not do the same thing "
-                            "through another tool, command, or script.\n"
-                            "2. Carry on with the task by a different, legitimate "
-                            "means: another tool, a loaded skill's tool, or "
-                            "reading the files directly.\n"
-                            "3. In your answer say what was not done and why. If "
-                            "nothing else can do the job, stop and tell the user "
-                            "the exact command you need and why."
-                        )
-                    else:
-                        prompt = header + (
-                            "INSTRUCTIONS:\n"
-                            "1. Analyze the error and understand what went wrong\n"
-                            "2. Create a NEW corrected plan that fixes the error\n"
-                            "3. Make sure to use correct tool parameters (check the available tools)\n"
-                            "4. Start executing the corrected plan\n\n"
-                            "Respond with your analysis, a corrected plan, and the first tool to execute."
-                        )
-
-                    # Add the error recovery prompt to the messages array so it gets sent to LLM
-                    messages.append({"role": "user", "content": prompt})
-
-                    # Reset state to planning after creating recovery prompt
-                    self.execution_state = self.STATE_PLANNING
-                    self.current_plan = None
-                    self.current_step = 0
-                    self.total_plan_steps = 0
-                    step_results.clear()  # Clear stale results from failed plan
-
-                elif self.execution_state == self.STATE_COMPLETION:
-                    self.console.print_state_info("COMPLETION: Finalizing response")
+            step_exit = self._run_plan_step(turn, user_input)
+            if step_exit == "break":
+                break
+            if step_exit == "continue":
+                continue
 
             # Print the prompt if show_prompts is enabled (separate from debug_prompts)
             if self.show_prompts:
@@ -14380,539 +15459,88 @@ Do NOT wrap conversational replies in JSON.
                     )
                 ]
 
-                for msg in messages:
+                for msg in turn.messages:
                     role = msg.get("role", "user").upper()
                     content = str(msg.get("content", ""))[:150]
                     context_parts.append(
                         f"{role}: {content}{'...' if len(str(msg.get('content', ''))) > 150 else ''}"
                     )
 
-                if not messages and prompt:
+                if not turn.messages and turn.prompt:
                     context_parts.append(
-                        f"USER: {prompt[:150]}{'...' if len(prompt) > 150 else ''}"
+                        f"USER: {turn.prompt[:150]}{'...' if len(turn.prompt) > 150 else ''}"
                     )
 
                 self.console.print_prompt("\n".join(context_parts), "LLM Context")
 
             # Handle streaming or non-streaming LLM response
             # Initialize response_stats so it's always in scope
-            response_stats = None
-            response_finish_reason = None
-            response_reasoning = None
+            turn.response_stats = None
+            turn.response_finish_reason = None
+            turn.response_reasoning = None
 
-            if self.streaming:
-                # Streaming mode - raw response will be streamed
-                # (SilentConsole will suppress this, AgentConsole will show it)
-
-                # Add prompt to conversation if debug is enabled
-                if self.debug_prompts:
-                    conversation.append(
-                        {"role": "system", "content": {"prompt": prompt}}
-                    )
-                    # Print the prompt if show_prompts is enabled
-                    if self.show_prompts:
-                        self.console.print_prompt(
-                            prompt, f"Prompt (Step {steps_taken})"
-                        )
-
-                # Get streaming response. Same context-overflow retry-on-trim
-                # behaviour as the non-streaming branch below — needed because
-                # multi-step ReAct loops accumulate tool results in `messages`.
-                _retried_after_trim_stream = False
-                _model_step_retries = 0
-                full_response = ""
-                self._announce_model_call(after_tools=bool(tool_call_history))
-                while True:
-                    try:
-                        self._before_model_call(messages)
-                        model_calls += 1
-                        response_stream = self.chat.send_messages_stream(
-                            messages=self._with_session_context(messages),
-                            system_prompt=self.system_prompt,
-                            tools=self._openai_tools,
-                            max_tokens=self._max_output_tokens(),
-                            **self._conversation_request_kwargs(),
-                            **self._reasoning_request_kwargs(),
-                        )
-
-                        # Process the streaming response chunks as they arrive
-                        full_response = ""
-                        for chunk_response in response_stream:
-                            # Cooperative cancel: the Agent UI's Stop sets
-                            # console.cancelled. Observe it per token so a
-                            # single-shot RAG/chat answer (no step boundaries)
-                            # halts promptly and the upstream Lemonade stream is
-                            # closed (GeneratorExit cascades to the llm_client
-                            # generator, which shuts the HTTP socket).
-                            if self._console_cancelled():
-                                cancelled_by_console = True
-                                try:
-                                    response_stream.close()
-                                except Exception:  # noqa: BLE001 - best-effort teardown
-                                    logger.debug(
-                                        "Failed to close Lemonade stream on cancel",
-                                        exc_info=True,
-                                    )
-                                break
-                            if chunk_response.is_complete:
-                                response_stats = chunk_response.stats
-                                self._open_step_stats = response_stats
-                                response_finish_reason = getattr(
-                                    chunk_response, "finish_reason", None
-                                )
-                                response_reasoning = _response_reasoning(chunk_response)
-                                # Non-empty complete chunk = tool_calls sentinel from
-                                # native tool-calling path (no streaming for tool calls)
-                                if chunk_response.text:
-                                    full_response = chunk_response.text
-                            else:
-                                self.console.print_streaming_text(chunk_response.text)
-                                full_response += chunk_response.text
-
-                        if cancelled_by_console:
-                            break
-
-                        self.console.print_streaming_text("", end_of_stream=True)
-                        response = full_response
-                        self._turn_model_retries[
-                            "request_retries"
-                        ] += self._last_request_retries()
-                        break
-                    except LemonadeStreamCutOffError as e:
-                        # A fragment is never the reply: ask for the whole one again.
-                        self.console.print_streaming_text("", end_of_stream=True)
-                        stream_cut_offs += 1
-                        self.error_history.append(
-                            {
-                                "step": steps_taken,
-                                "error": str(e),
-                                "type": STREAM_CUT_OFF_ERROR,
-                            }
-                        )
-                        if stream_cut_offs > _MAX_STREAM_CUT_OFF_RETRIES:
-                            logger.warning(
-                                "[WORKFLOW] Reply stream cut off %d times this "
-                                "turn; stopping (step %d/%d)",
-                                stream_cut_offs,
-                                steps_taken,
-                                steps_limit,
-                            )
-                            if isinstance(e, LemonadeReplyStalledError):
-                                # A stall is a failed model call, not just a fragment.
-                                model_call_failed = True
-                                self._turn_model_retries["failed"] = True
-                                final_answer = self._model_call_failed_answer(
-                                    e, e.user_message, steps_taken, conversation
-                                )
-                                loop_break_answer_unprinted = True
-                            else:
-                                final_answer = e.user_message
-                            break
-                        logger.warning(
-                            "[WORKFLOW] Reply stream ended before the model "
-                            "finished; requesting it again (%d/%d)",
-                            stream_cut_offs,
-                            _MAX_STREAM_CUT_OFF_RETRIES,
-                        )
-                        if full_response:
-                            self._restart_answer()
-                        continue
-                    except ConnectionError as e:
-                        # A transient endpoint failure the client already
-                        # retried: wait, then ask again with the conversation
-                        # intact, instead of ending a run that was going fine.
-                        outcome, unreachable = self._model_failure_outcome(
-                            e,
-                            _model_step_retries,
-                            steps_taken,
-                            conversation,
-                            partial_output=bool(full_response),
-                        )
-                        if outcome == "retry":
-                            _model_step_retries += 1
-                            continue
-                        if outcome == "cancelled":
-                            cancelled_by_console = True
-                            break
-                        if outcome == "unreachable":
-                            final_answer = unreachable
-                            loop_break_answer_unprinted = True
-                            break
-                        error_msg = (
-                            f"LLM Server Connection Failed (streaming): {str(e)}"
-                        )
-                        logger.error(error_msg)
-                        self.console.print_error(error_msg)
-                        model_call_failed = True
-                        self.error_history.append(
-                            {
-                                "step": steps_taken,
-                                "error": error_msg,
-                                "type": "llm_connection_error",
-                            }
-                        )
-                        self._turn_model_retries["failed"] = True
-                        final_answer = (
-                            f"I'm having trouble reaching the language model right now. "
-                            f"Please make sure Lemonade Server is running.\n\n"
-                            f"*Technical details: {str(e)}*"
-                        )
-                        break
-                    except LeaseWaitCancelled:
-                        # Stopped while queued for the model: not an LLM error.
-                        cancelled_by_console = True
-                        break
-                    except Exception as e:
-                        if stopped_by_user(e):
-                            logger.info("Streaming stopped by the user: %s", e)
-                        else:
-                            logger.error(f"Unexpected error during streaming: {e}")
-                        err_text = str(e).lower()
-                        is_ctx_overflow = is_context_overflow_error(err_text)
-                        # Same rule as the non-streaming branch: only the probe
-                        # decides a bad load, never the window in the error.
-                        is_wrong_ctx_loaded = (
-                            is_ctx_overflow and self._is_loaded_ctx_too_small()
-                        )
-                        if is_wrong_ctx_loaded:
-                            self.error_history.append(
-                                {
-                                    "step": steps_taken,
-                                    "error": str(e),
-                                    "type": "llm_wrong_ctx_loaded_reraise",
-                                }
-                            )
-                            logger.warning(
-                                "Wrong ctx_size loaded (streaming) — re-raising"
-                                " so chat helper can reload model: %s",
-                                e,
-                            )
-                            raise
-                        if is_ctx_overflow and not _retried_after_trim_stream:
-                            _retried_after_trim_stream = True
-                            if self._retry_after_overflow_shrink(
-                                messages, e, steps_taken
-                            ):
-                                continue
-
-                        # A transient endpoint failure the client already
-                        # retried: wait, then ask again with the conversation
-                        # intact, instead of ending a run that was going fine.
-                        outcome, unreachable = self._model_failure_outcome(
-                            e,
-                            _model_step_retries,
-                            steps_taken,
-                            conversation,
-                            partial_output=bool(full_response),
-                        )
-                        if outcome == "retry":
-                            _model_step_retries += 1
-                            continue
-                        if outcome == "cancelled":
-                            cancelled_by_console = True
-                            break
-                        if outcome == "unreachable":
-                            final_answer = unreachable
-                            loop_break_answer_unprinted = True
-                            break
-
-                        model_call_failed = True
-                        self.error_history.append(
-                            {
-                                "step": steps_taken,
-                                "error": str(e),
-                                "type": "llm_streaming_error",
-                            }
-                        )
-                        self._turn_model_retries["failed"] = True
-                        if is_ctx_overflow:
-                            # Name the actual constraint and a next step
-                            # -- "re-ask with just the essentials" told
-                            # the user nothing about WHAT was too big or HOW to
-                            # shrink it, so every retry looked identical.
-                            final_answer = _CONTEXT_STILL_OVERFLOWING_MESSAGE
-                            loop_break_answer_unprinted = True
-                        else:
-                            # Streaming is the TUI's path; it must surface the
-                            # same typed messages the non-streaming path does.
-                            refusal = self._cloud_account_refusal(e)
-                            if refusal is not None:
-                                # Already printed as the turn's error.
-                                self.console.print_error(refusal)
-                                account_refused = True
-                                final_answer = refusal
-                            else:
-                                final_answer = self._model_call_failed_answer(
-                                    e,
-                                    self._extract_lemonade_user_message(e),
-                                    steps_taken,
-                                    conversation,
-                                )
-                                loop_break_answer_unprinted = True
-                        break
-                if final_answer is not None or cancelled_by_console:
-                    break
-            else:
-                # Use progress indicator for non-streaming mode
-                self.console.start_progress(self._progress_label())
-
-                # Debug logging before LLM call
-                if self.debug:
-
-                    print(f"\n[DEBUG] About to call LLM with {len(messages)} messages")
-                    print(
-                        f"[DEBUG] Last message role: {messages[-1]['role'] if messages else 'No messages'}"
-                    )
-                    if messages and len(messages[-1].get("content", "")) < 500:
-                        print(
-                            f"[DEBUG] Last message content: {messages[-1]['content']}"
-                        )
-                    else:
-                        print(
-                            f"[DEBUG] Last message content length: {len(messages[-1].get('content', ''))}"
-                        )
-                    print(f"[DEBUG] Execution state: {self.execution_state}")
-                    if self.execution_state == "PLANNING":
-                        print("[DEBUG] Current step: Planning (no active plan yet)")
-                    else:
-                        print(
-                            f"[DEBUG] Current step: {self.current_step}/{self.total_plan_steps}"
-                        )
-
-                # Get complete response from AgentSDK. On context overflow
-                # mid-loop (the cumulative messages array got too long during
-                # this turn — common after several search_file/index calls),
-                # trim the oldest tool-result messages and retry ONCE before
-                # giving up. Keeps the conversation salvageable instead of
-                # failing the whole turn.
-                _retried_after_trim = False
-                _model_step_retries = 0
-                while True:
-                    try:
-                        self._before_model_call(messages)
-                        model_calls += 1
-                        chat_response = self.chat.send_messages(
-                            messages=self._with_session_context(messages),
-                            system_prompt=self.system_prompt,
-                            tools=self._openai_tools,
-                            max_tokens=self._max_output_tokens(),
-                            **self._conversation_request_kwargs(),
-                            **self._reasoning_request_kwargs(),
-                        )
-                        response = chat_response.text
-                        response_stats = chat_response.stats
-                        self._open_step_stats = response_stats
-                        response_finish_reason = getattr(
-                            chat_response, "finish_reason", None
-                        )
-                        response_reasoning = _response_reasoning(chat_response)
-                        self._turn_model_retries[
-                            "request_retries"
-                        ] += self._last_request_retries()
-                        break  # success → exit retry loop
-                    except ConnectionError as e:
-                        self.console.stop_progress()
-                        # A transient endpoint failure the client already
-                        # retried: wait, then ask again with the conversation
-                        # intact, instead of ending a run that was going fine.
-                        outcome, unreachable = self._model_failure_outcome(
-                            e, _model_step_retries, steps_taken, conversation
-                        )
-                        if outcome == "retry":
-                            _model_step_retries += 1
-                            continue
-                        if outcome == "cancelled":
-                            cancelled_by_console = True
-                            break
-                        if outcome == "unreachable":
-                            final_answer = unreachable
-                            loop_break_answer_unprinted = True
-                            break
-                        error_msg = f"LLM Server Connection Failed: {str(e)}"
-                        logger.error(error_msg)
-                        self.console.print_error(error_msg)
-                        model_call_failed = True
-                        self.error_history.append(
-                            {
-                                "step": steps_taken,
-                                "error": error_msg,
-                                "type": "llm_connection_error",
-                            }
-                        )
-                        self._turn_model_retries["failed"] = True
-                        final_answer = (
-                            f"I'm having trouble reaching the language model right now. "
-                            f"Please make sure Lemonade Server is running.\n\n"
-                            f"*Technical details: {str(e)}*"
-                        )
-                        break
-                    except LeaseWaitCancelled:
-                        # Stopped while queued for the model: not an LLM error.
-                        self.console.stop_progress()
-                        cancelled_by_console = True
-                        break
-                    except Exception as e:
-                        self.console.stop_progress()
-                        if self.debug:
-                            print(f"[DEBUG] Error calling LLM: {e}")
-                        if stopped_by_user(e):
-                            logger.info("LLM call stopped by the user: %s", e)
-                        else:
-                            logger.error(f"Unexpected error calling LLM: {e}")
-
-                        # Did we hit a context-overflow mid-loop? Classify by
-                        # structure-then-text since typed exceptions get
-                        # wrapped by AgentSDK and the backend's error shape
-                        # varies (llama.cpp vs. FastFlowLM).
-                        err_text = str(e).lower()
-                        is_ctx_overflow = is_context_overflow_error(err_text)
-                        # Only the loaded-vs-requested probe decides a bad
-                        # load: the window named in the error is equally valid
-                        # for a deliberately small pin.
-                        is_wrong_ctx_loaded = (
-                            is_ctx_overflow and self._is_loaded_ctx_too_small()
-                        )
-                        if is_wrong_ctx_loaded:
-                            self.error_history.append(
-                                {
-                                    "step": steps_taken,
-                                    "error": str(e),
-                                    "type": "llm_wrong_ctx_loaded_reraise",
-                                }
-                            )
-                            logger.warning(
-                                "Wrong ctx_size loaded — re-raising so chat "
-                                "helper can reload model: %s",
-                                e,
-                            )
-                            raise
-                        if is_ctx_overflow and not _retried_after_trim:
-                            _retried_after_trim = True
-                            if self._retry_after_overflow_shrink(
-                                messages, e, steps_taken
-                            ):
-                                continue  # retry with smaller payload
-
-                        # A transient endpoint failure the client already
-                        # retried: wait, then ask again with the conversation
-                        # intact, instead of ending a run that was going fine.
-                        outcome, unreachable = self._model_failure_outcome(
-                            e, _model_step_retries, steps_taken, conversation
-                        )
-                        if outcome == "retry":
-                            _model_step_retries += 1
-                            continue
-                        if outcome == "cancelled":
-                            cancelled_by_console = True
-                            break
-                        if outcome == "unreachable":
-                            final_answer = unreachable
-                            loop_break_answer_unprinted = True
-                            break
-
-                        # Either context-overflow after trim, or unrelated.
-                        # Give up gracefully.
-                        model_call_failed = True
-                        self.error_history.append(
-                            {
-                                "step": steps_taken,
-                                "error": str(e),
-                                "type": "llm_error",
-                            }
-                        )
-                        self._turn_model_retries["failed"] = True
-                        if is_ctx_overflow:
-                            # Name the actual constraint and a next step
-                            # -- "re-ask with just the essentials" told
-                            # the user nothing about WHAT was too big or HOW to
-                            # shrink it, so every retry looked identical.
-                            final_answer = _CONTEXT_STILL_OVERFLOWING_MESSAGE
-                            loop_break_answer_unprinted = True
-                        else:
-                            # If we have a typed Lemonade error in the
-                            # cause-chain (e.g. ``LemonadeUpstreamTimeoutError``),
-                            # surface its actionable
-                            # ``user_message`` verbatim instead of wrapping it
-                            # with the generic "try again in a moment" copy —
-                            # that wrapper actively misleads users on
-                            # non-retryable failures.
-                            refusal = self._cloud_account_refusal(e)
-                            if refusal is not None:
-                                # Already printed as the turn's error.
-                                self.console.print_error(refusal)
-                                account_refused = True
-                                final_answer = refusal
-                            else:
-                                final_answer = self._model_call_failed_answer(
-                                    e,
-                                    self._extract_lemonade_user_message(e),
-                                    steps_taken,
-                                    conversation,
-                                )
-                                loop_break_answer_unprinted = True
-                        break
-                if final_answer is not None or cancelled_by_console:
-                    break
-
-                # Stop the progress indicator
-                self.console.stop_progress()
+            step_exit = self._call_model(turn)
+            if step_exit == "break":
+                break
 
             # Reasoning is kept as reasoning: never parsed, never the answer.
-            response, inline_reasoning = _split_reasoning(response)
-            reasoning = response_reasoning or inline_reasoning
+            turn.response, turn.inline_reasoning = _split_reasoning(turn.response)
+            turn.reasoning = turn.response_reasoning or turn.inline_reasoning
 
             # Print the LLM response to the console
-            logger.debug(f"LLM response: {response[:200]}...")
+            logger.debug(f"LLM response: {turn.response[:200]}...")
             if self.show_prompts:
-                self.console.print_response(response, "LLM Response")
+                self.console.print_response(turn.response, "LLM Response")
 
             # A reply the output-token limit cut off is unfinished whatever it
             # says; parsing it would turn half a thought into the answer.
             if (
-                response_finish_reason == "length"
-                and not response.startswith('{"__tool_calls__":')
+                turn.response_finish_reason == "length"
+                and not turn.response.startswith('{"__tool_calls__":')
                 # Some gateways report "length" when a model stops on its own
                 # text tool call; a complete call is not cut off.
-                and not _holds_complete_text_call(response)
+                and not _holds_complete_text_call(turn.response)
             ):
                 self.error_history.append(
                     {
-                        "step": steps_taken,
+                        "step": turn.steps_taken,
                         "error": "reply cut off at the output-token limit",
                         "type": "output_truncated",
                     }
                 )
                 if (
-                    cut_off_continuations >= _MAX_CUT_OFF_CONTINUATIONS
-                    or steps_taken >= steps_limit
+                    turn.cut_off_continuations >= _MAX_CUT_OFF_CONTINUATIONS
+                    or turn.steps_taken >= turn.steps_limit
                 ):
                     logger.warning(
                         "[WORKFLOW] Reply cut off at the output-token limit "
                         "%d time(s) this turn; stopping (step %d/%d)",
-                        cut_off_continuations + 1,
-                        steps_taken,
-                        steps_limit,
+                        turn.cut_off_continuations + 1,
+                        turn.steps_taken,
+                        turn.steps_limit,
                     )
                     self._turn_model_retries["failed"] = True
-                    final_answer = self._cut_off_failure_answer(conversation)
+                    turn.final_answer = self._cut_off_failure_answer(turn.conversation)
                     # Printed like the other give-ups, so it carries the turn's
                     # token counts and the UI can price it.
-                    loop_break_answer_unprinted = True
+                    turn.loop_break_answer_unprinted = True
                     break
-                cut_off_continuations += 1
+                turn.cut_off_continuations += 1
                 logger.info(
                     "[WORKFLOW] Reply cut off at the output-token limit; "
                     "asking the model to continue (%d/%d)",
-                    cut_off_continuations,
+                    turn.cut_off_continuations,
                     _MAX_CUT_OFF_CONTINUATIONS,
                 )
-                if response:
-                    messages.append({"role": "assistant", "content": response})
+                if turn.response:
+                    turn.messages.append(
+                        {"role": "assistant", "content": turn.response}
+                    )
                 self._thinking_cut_off = _was_all_thinking(
-                    response, reasoning, response_stats
+                    turn.response, turn.reasoning, turn.response_stats
                 )
                 self._thinking_cut_offs += self._thinking_cut_off
-                messages.append(
+                turn.messages.append(
                     {
                         "role": "user",
                         "content": (
@@ -14924,7 +15552,7 @@ Do NOT wrap conversational replies in JSON.
                 )
                 continue
             # A reply that finished: the cut-off budget is for cut-offs in a row.
-            cut_off_continuations = 0
+            turn.cut_off_continuations = 0
             self._thinking_cut_off = False
 
             # Parse the response. Small models (e.g. 4B) sometimes emit malformed
@@ -14933,443 +15561,102 @@ Do NOT wrap conversational replies in JSON.
             # nudge the model to retry with simpler args, and continue the loop.
             try:
                 with turn_metrics.span("parse_response"):
-                    parsed = self._parse_llm_response(response)
+                    turn.parsed = self._parse_llm_response(turn.response)
                 # Budget is consecutive: a clean parse gives the retries back.
-                parse_failures = 0
-                markup_retries = 0
+                turn.parse_failures = 0
+                turn.markup_retries = 0
                 self._mark_errors_recovered()
             except ValueError as parse_exc:
-                logger.warning(
-                    "Tool-call parse failed (step %d): %s — recovering with retry prompt",
-                    steps_taken,
+                turn.error_count += 1
+                turn.parse_failures += 1
+                given_up, turn.markup_retries = self._recover_from_parse_error(
                     parse_exc,
+                    steps_taken=turn.steps_taken,
+                    step_results=turn.step_results,
+                    messages=turn.messages,
+                    parse_failures=turn.parse_failures,
+                    markup_retries=turn.markup_retries,
                 )
-                self.error_history.append(
-                    {
-                        "step": steps_taken,
-                        "error": str(parse_exc),
-                        "type": "tool_call_parse_error",
-                    }
-                )
-                error_count += 1
-                parse_failures += 1
-                # Pull the most recent successful image path
-                # out of step_results so both the recovery prompt and the
-                # give-up fallback can surface it.  When the SD two-step
-                # flow's step-1 succeeded and step-2 parse-failed, the
-                # canonical path is the breadcrumb the model needs to
-                # retry verbatim, and the breadcrumb the user needs in the
-                # final answer so the successful generation isn't lost.
-                # No-op for agents that don't emit ``image_path``.
-                _last_image_path = next(
-                    (
-                        r["image_path"]
-                        for r in reversed(step_results)
-                        if isinstance(r, dict)
-                        and r.get("status") == "success"
-                        and r.get("image_path")
-                    ),
-                    None,
-                )
-                if isinstance(parse_exc, MalformedToolMarkup):
-                    if markup_retries >= _MAX_MARKUP_RETRIES:
-                        final_answer = _TOOL_MARKUP_FAILURE_ANSWER
-                        break
-                    markup_retries += 1
-                # If we've already retried several times, give up gracefully and
-                # answer in plain text rather than spamming the user.
-                if parse_failures >= 3:
-                    if _last_image_path:
-                        final_answer = (
-                            f"I generated your image at `{_last_image_path}`, "
-                            "but I couldn't finish the follow-up step. "
-                            "Try asking for the next step in a fresh message."
-                        )
-                    else:
-                        final_answer = (
-                            "I had trouble formatting my tool call. Could you "
-                            "rephrase or break the request into smaller pieces?"
-                        )
+                if given_up is not None:
+                    turn.final_answer = given_up
                     break
-                assistant_msg = "[I tried to call a tool but it could not be parsed.]"
-                user_msg = self._tool_call_retry_prompt(parse_exc)
-                if _last_image_path:
-                    user_msg += (
-                        f"\n\nYour previous step generated an image at "
-                        f"`{_last_image_path}`. If your next tool call "
-                        "needs this path, copy that string VERBATIM — do "
-                        "not retype it."
-                    )
-                    logger.info(
-                        "[PARSE-RECOVERY] injected canonical image_path=%s",
-                        _last_image_path,
-                    )
-                # Push a synthetic assistant turn + recovery user message so the
-                # next LLM call has context. Don't include the raw envelope to
-                # keep noise out of the conversation history.
-                messages.append(
-                    {
-                        "role": "assistant",
-                        "content": assistant_msg,
-                    }
-                )
-                messages.append(
-                    {
-                        "role": "user",
-                        "content": user_msg,
-                    }
-                )
-                steps_taken += 1
+                turn.steps_taken += 1
                 continue
-            logger.debug(f"Parsed response: {parsed}")
-            thought_only = bool(parsed.pop("thought_only", False))
-            thought_only_replies = thought_only_replies + 1 if thought_only else 0
-            conversation.append(
-                {"role": "assistant", "content": parsed}
-                | ({"reasoning": reasoning} if reasoning else {})
+            logger.debug(f"Parsed response: {turn.parsed}")
+            turn.thought_only = bool(turn.parsed.pop("thought_only", False))
+            turn.thought_only_replies = (
+                turn.thought_only_replies + 1 if turn.thought_only else 0
+            )
+            turn.conversation.append(
+                {"role": "assistant", "content": turn.parsed}
+                | ({"reasoning": turn.reasoning} if turn.reasoning else {})
             )
 
             # Add assistant response to messages for chat history (OpenAI
             # shape for native tool_calls, raw text otherwise — see
             # ``_build_assistant_message`` for the why).
-            messages.append(self._build_assistant_message(response, parsed, reasoning))
-            if "answer" not in parsed:
-                answer_beside_tool_calls = _answer_beside_tool_calls(
-                    parsed.get("content") if parsed.get("tool_calls") else None,
-                    parsed.get("tool_calls"),
+            turn.messages.append(
+                self._build_assistant_message(
+                    turn.response, turn.parsed, turn.reasoning
                 )
-                if parsed.get("tool_calls"):
-                    answer_given_mid_turn = (
-                        _answer_beside_tool_calls(parsed.get("content"))
-                        or answer_given_mid_turn
+            )
+            if "answer" not in turn.parsed:
+                turn.answer_beside_tool_calls = _answer_beside_tool_calls(
+                    (
+                        turn.parsed.get("content")
+                        if turn.parsed.get("tool_calls")
+                        else None
+                    ),
+                    turn.parsed.get("tool_calls"),
+                )
+                if turn.parsed.get("tool_calls"):
+                    turn.answer_given_mid_turn = (
+                        _answer_beside_tool_calls(turn.parsed.get("content"))
+                        or turn.answer_given_mid_turn
                     )
 
             # If the LLM needs to create a plan first, re-prompt it specifically for that
-            if "needs_plan" in parsed and parsed["needs_plan"]:
-                if model_calls >= steps_limit:
-                    # The plan request is a model call; the budget has none left.
-                    break
-                # Prepare a special prompt that specifically requests a plan
-                deferred_tool = parsed.get("deferred_tool", None)
-                deferred_args = parsed.get("deferred_tool_args", {})
+            step_exit = self._request_plan(turn, user_input)
+            if step_exit == "break":
+                break
+            if step_exit == "continue":
+                continue
 
-                plan_prompt = (
-                    "You MUST create a detailed plan first before taking any action.\n\n"
-                    f"User request: {user_input}\n\n"
-                )
-
-                if deferred_tool:
-                    plan_prompt += (
-                        f"You initially wanted to use the {deferred_tool} tool with these arguments:\n"
-                        f"{json.dumps(deferred_args, indent=2, default=self._json_serialize_fallback, ensure_ascii=False)}\n\n"
-                        "However, you MUST first create a plan. Please create a plan that includes this tool usage as a step.\n\n"
-                    )
-
-                plan_prompt += (
-                    "Create a detailed plan with all necessary steps in JSON format, including exact tool names and arguments.\n"
-                    "Respond with your reasoning, plan, and the first tool to use."
-                )
-
-                # Store the plan prompt in conversation if debug is enabled
-                if self.debug_prompts:
-                    conversation.append(
-                        {"role": "system", "content": {"prompt": plan_prompt}}
-                    )
-                    if self.show_prompts:
-                        self.console.print_prompt(plan_prompt, "Plan Request Prompt")
-
-                # Notify the user we're asking for a plan
-                self.console.print_info("Requesting a detailed plan before proceeding")
-
-                # Get the planning response
-                if self.streaming:
-                    # Add prompt to conversation if debug is enabled
-                    if self.debug_prompts:
-                        conversation.append(
-                            {"role": "system", "content": {"prompt": plan_prompt}}
-                        )
-                        # Print the prompt if show_prompts is enabled
-                        if self.show_prompts:
-                            self.console.print_prompt(
-                                plan_prompt, f"Prompt (Step {steps_taken})"
-                            )
-
-                    # Handle streaming as before
-                    full_response = ""
-                    plan_reasoning = None
-                    # Add plan request to messages
-                    messages.append({"role": "user", "content": plan_prompt})
-
-                    # Use AgentSDK for streaming plan response
-                    model_calls += 1
-                    stream_gen = self.chat.send_messages_stream(
-                        messages=self._with_session_context(messages),
-                        system_prompt=self.system_prompt,
-                        tools=self._openai_tools,
-                        max_tokens=self._max_output_tokens(),
-                        **self._conversation_request_kwargs(),
-                        **self._reasoning_request_kwargs(),
-                    )
-
-                    for chunk_response in stream_gen:
-                        if chunk_response.is_complete:
-                            plan_reasoning = _response_reasoning(chunk_response)
-                            if chunk_response.text:
-                                full_response = chunk_response.text
-                        else:
-                            chunk = chunk_response.text
-                            if hasattr(self.console, "print_streaming_text"):
-                                self.console.print_streaming_text(chunk)
-                            else:
-                                print(chunk, end="", flush=True)
-                            full_response += chunk
-
-                    if hasattr(self.console, "print_streaming_text"):
-                        self.console.print_streaming_text("", end_of_stream=True)
-                    else:
-                        print("", flush=True)
-
-                    plan_response = full_response
-                else:
-                    # Use progress indicator for non-streaming mode
-                    self.console.start_progress("Creating plan")
-
-                    # Store the plan prompt in conversation if debug is enabled
-                    if self.debug_prompts:
-                        conversation.append(
-                            {"role": "system", "content": {"prompt": plan_prompt}}
-                        )
-                        if self.show_prompts:
-                            self.console.print_prompt(
-                                plan_prompt, "Plan Request Prompt"
-                            )
-
-                    # Add plan request to messages
-                    messages.append({"role": "user", "content": plan_prompt})
-
-                    # Use AgentSDK for non-streaming plan response
-                    model_calls += 1
-                    chat_response = self.chat.send_messages(
-                        messages=self._with_session_context(messages),
-                        system_prompt=self.system_prompt,
-                        tools=self._openai_tools,
-                        max_tokens=self._max_output_tokens(),
-                        **self._conversation_request_kwargs(),
-                        **self._reasoning_request_kwargs(),
-                    )
-                    plan_response = chat_response.text
-                    plan_reasoning = _response_reasoning(chat_response)
-                    self.console.stop_progress()
-
-                plan_response, inline_plan_reasoning = _split_reasoning(plan_response)
-                plan_reasoning = plan_reasoning or inline_plan_reasoning
-
-                # Parse the plan response
-                try:
-                    parsed_plan = self._parse_llm_response(plan_response)
-                    # Budget is consecutive: a clean parse gives the retries back.
-                    parse_failures = 0
-                    self._mark_errors_recovered()
-                except ValueError as plan_parse_exc:
-                    logger.warning(
-                        "Plan parse failed (step %d): %s — recovering with retry prompt",
-                        steps_taken,
-                        plan_parse_exc,
-                    )
-                    self.error_history.append(
-                        {
-                            "step": steps_taken,
-                            "error": str(plan_parse_exc),
-                            "type": "tool_call_parse_error",
-                        }
-                    )
-                    error_count += 1
-                    parse_failures += 1
-                    if parse_failures >= 3:
-                        final_answer = (
-                            "I had trouble formatting my plan. Could you "
-                            "rephrase or break the request into smaller pieces?"
-                        )
-                        break
-                    messages.append(
-                        {
-                            "role": "assistant",
-                            "content": "[I tried to send a plan but it could not be parsed.]",
-                        }
-                    )
-                    messages.append(
-                        {
-                            "role": "user",
-                            "content": self._tool_call_retry_prompt(plan_parse_exc),
-                        }
-                    )
-                    steps_taken += 1
-                    continue
-                logger.debug(f"Parsed plan response: {parsed_plan}")
-                conversation.append(
-                    {"role": "assistant", "content": parsed_plan}
-                    | ({"reasoning": plan_reasoning} if plan_reasoning else {})
-                )
-
-                # Add plan response to messages for chat history. Same
-                # OpenAI-shape rule as the main-response append:
-                # a tool-calling-trained planner can emit native
-                # ``tool_calls`` instead of (or alongside) the expected
-                # plan JSON — those must be preserved as a structured
-                # assistant turn so the fan-out below can correlate
-                # results back via ``tool_call_id``.
-                messages.append(
-                    self._build_assistant_message(
-                        plan_response, parsed_plan, plan_reasoning
-                    )
-                )
-
-                # Display the agent's reasoning for the plan
-                self.console.print_thought(parsed_plan.get("thought", "Creating plan"))
-                self.console.print_goal(parsed_plan.get("goal", "Planning for task"))
-
-                # Set the parsed response to the new plan for further processing
-                parsed = parsed_plan
-            else:
-                # Display the agent's reasoning in real-time (only if provided)
-                # Skip if we just displayed thought/goal for a plan request above
-                thought = parsed.get("thought", "").strip()
-                goal = parsed.get("goal", "").strip()
-
-                if thought and thought != "No explicit reasoning provided":
-                    self.console.print_thought(thought)
-
-                if goal and goal != "No explicit goal provided":
-                    self.console.print_goal(goal)
-
-            if thought_only:
+            if turn.thought_only:
                 self._record_step_stats(
-                    response_stats, steps_taken, step_timer, conversation
+                    turn.response_stats,
+                    turn.steps_taken,
+                    turn.step_timer,
+                    turn.conversation,
                 )
-                if thought_only_replies == 1:
+                if turn.thought_only_replies == 1:
                     # On the last step the step-cap closing call answers instead.
-                    if steps_taken < steps_limit:
+                    if turn.steps_taken < turn.steps_limit:
                         logger.warning(
                             "[WORKFLOW] Reply held only a thought at step %d; "
                             "asking for a tool call or an answer",
-                            steps_taken,
+                            turn.steps_taken,
                         )
-                        messages.append(
+                        turn.messages.append(
                             {"role": "user", "content": _THOUGHT_ONLY_PROMPT}
                         )
                     continue
                 logger.warning(
                     "[WORKFLOW] Reply held only a thought again at step %d; "
                     "ending the turn as unfinished",
-                    steps_taken,
+                    turn.steps_taken,
                 )
-                thought_only_stop = True
-                final_answer = _THOUGHT_ONLY_STOP
-                loop_break_answer_unprinted = True
+                turn.thought_only_stop = True
+                turn.final_answer = _THOUGHT_ONLY_STOP
+                turn.loop_break_answer_unprinted = True
                 break
 
             # Process plan if available
-            if "plan" in parsed:
-                # Validate that plan is actually a list, not a string or other type
-                if not isinstance(parsed["plan"], list):
-                    logger.error(
-                        f"Invalid plan format: expected list, got {type(parsed['plan']).__name__}. "
-                        f"Plan content: {parsed['plan']}"
-                    )
-                    plan_corrections += 1
-                    if plan_corrections > _MAX_PLAN_CORRECTIONS:
-                        final_answer = _PLAN_FORMAT_FAILURE_ANSWER
-                        break
-                    # The "continue" below asks the LLM to correct itself —
-                    # not a fatal top-level failure.
-                    self.console.print_error(
-                        f"LLM returned invalid plan format (expected array, got {type(parsed['plan']).__name__}). "
-                        "Asking for correction...",
-                        recoverable=True,
-                    )
-
-                    # Create error recovery prompt
-                    error_msg = (
-                        "ERROR: You provided a plan in the wrong format.\n"
-                        "Expected: an array of step objects\n"
-                        f"You provided: {type(parsed['plan']).__name__}\n\n"
-                        "The correct format is:\n"
-                        f'{{"plan": [{{"tool": "tool_name", "tool_args": {{...}}, "description": "..."}}]}}\n\n'
-                        f"Please create a proper plan as an array of step objects for: {user_input}"
-                    )
-                    messages.append({"role": "user", "content": error_msg})
-
-                    # Continue to next iteration to get corrected plan
-                    continue
-
-                # Validate that plan items are dictionaries with required fields
-                invalid_steps = []
-                for i, step in enumerate(parsed["plan"]):
-                    if not isinstance(step, dict):
-                        invalid_steps.append((i, type(step).__name__, step))
-                    elif "tool" not in step or not step["tool"]:
-                        invalid_steps.append((i, "missing tool field", step))
-                    elif "tool_args" not in step:
-                        # Auto-add empty tool_args for convenience
-                        # LLMs sometimes omit this for tools with all optional parameters
-                        step["tool_args"] = {}
-                        logger.debug(
-                            f"Auto-added empty tool_args for step {i+1}: {step['tool']}"
-                        )
-
-                if invalid_steps:
-                    logger.error(f"Invalid plan steps found: {invalid_steps}")
-                    plan_corrections += 1
-                    if plan_corrections > _MAX_PLAN_CORRECTIONS:
-                        final_answer = _PLAN_FORMAT_FAILURE_ANSWER
-                        break
-                    # The "continue" below asks the LLM to correct itself —
-                    # not a fatal top-level failure.
-                    self.console.print_error(
-                        f"Plan contains {len(invalid_steps)} invalid step(s). Asking for correction...",
-                        recoverable=True,
-                    )
-
-                    # Create detailed error message
-                    error_details = "\n".join(
-                        [
-                            f"Step {i+1}: {issue} - {step}"
-                            for i, issue, step in invalid_steps[
-                                :3
-                            ]  # Show first 3 errors
-                        ]
-                    )
-
-                    error_msg = (
-                        f"ERROR: Your plan contains invalid steps:\n{error_details}\n\n"
-                        f"Each step must be a dictionary with 'tool' and 'tool_args' fields:\n"
-                        f'{{"tool": "tool_name", "tool_args": {{...}}, "description": "..."}}\n\n'
-                        f"Please create a corrected plan for: {user_input}"
-                    )
-                    messages.append({"role": "user", "content": error_msg})
-
-                    # Continue to next iteration to get corrected plan
-                    continue
-
-                # Plan is valid - proceed with execution
-                plan = parsed["plan"]
-                top_args = parsed.get("tool_args")
-                if (
-                    plan
-                    and parsed.get("tool") == plan[0]["tool"]
-                    and isinstance(top_args, dict)
-                    and top_args
-                ):
-                    # The direct call is the one the model wrote out in full;
-                    # its plan copy is often a stand-in for the same content.
-                    plan[0] = {**plan[0], "tool_args": top_args}
-                self.current_plan = plan
-                self.current_step = 0
-                self.total_plan_steps = len(self.current_plan)
-                self.execution_state = self.STATE_EXECUTING_PLAN
-                logger.debug(
-                    f"New plan created with {self.total_plan_steps} steps: {self.current_plan}"
-                )
+            step_exit = self._accept_plan(turn, user_input)
+            if step_exit == "break":
+                break
+            if step_exit == "continue":
+                continue
 
             # === Native parallel tool_calls fan-out ===
             #
@@ -15388,112 +15675,126 @@ Do NOT wrap conversational replies in JSON.
             # JSON responses (no ``tool_calls`` field set) so that for
             # native single calls we still get proper ``tool_call_id``
             # linkage on the result message.
-            if parsed.get("tool_calls"):
-                tc_list = parsed["tool_calls"]
+            if turn.parsed.get("tool_calls"):
+                tc_list = turn.parsed["tool_calls"]
                 any_error = False
-                last_error = None
+                turn.last_error = None
                 fanout_repeat_break = False
                 post_tool_messages = []
 
                 # One response's calls are one attempt to the failure breaker.
                 self._turn_scope.begin_batch()
                 for fan_idx, tc in enumerate(tc_list):
-                    tool_name = tc["name"]
-                    tool_args = tc["tool_args"]
+                    turn.tool_name = tc["name"]
+                    turn.tool_args = tc["tool_args"]
                     tool_call_id = tc["id"]
                     logger.debug(
                         "Tool call %d/%d: %s with args %s",
                         fan_idx + 1,
                         len(tc_list),
-                        tool_name,
-                        tool_args,
+                        turn.tool_name,
+                        turn.tool_args,
                     )
 
                     # Display the tool call in real-time
-                    self.console.print_tool_usage(tool_name)
+                    self.console.print_tool_usage(turn.tool_name)
                     # Sent even when empty: it is what releases the call to the wire.
-                    self.console.pretty_print_json(tool_args, "Arguments")
-                    self.console.start_progress(f"Executing {tool_name}")
+                    self.console.pretty_print_json(turn.tool_args, "Arguments")
+                    self.console.start_progress(f"Executing {turn.tool_name}")
 
                     # Loop detection — same shape as legacy path so
                     # repeated calls across iterations are still caught.
-                    current_call = self._loop_guard_key(tool_name, tool_args)
-                    tool_call_history.append(current_call)
-                    tool_call_log.append((tool_name, str(tool_args)))
-                    if len(tool_call_history) > loop_window:
-                        tool_call_history.pop(0)
-                    consecutive_count = max(
-                        _repeat_count(tool_call_history),
-                        _same_result_repeats(turn_results, current_call) + 1,
+                    turn.current_call = self._loop_guard_key(
+                        turn.tool_name, turn.tool_args
                     )
-                    if consecutive_count >= self.max_consecutive_repeats:
+                    turn.tool_call_history.append(turn.current_call)
+                    turn.tool_call_log.append((turn.tool_name, str(turn.tool_args)))
+                    if len(turn.tool_call_history) > turn.loop_window:
+                        turn.tool_call_history.pop(0)
+                    turn.consecutive_count = max(
+                        _repeat_count(turn.tool_call_history),
+                        _same_result_repeats(turn.turn_results, turn.current_call) + 1,
+                    )
+                    if turn.consecutive_count >= self.max_consecutive_repeats:
                         self.console.stop_progress()
                         self._close_unrun_tool_card()
                         # NATIVE path appends results to ``previous_outputs``
                         # (line 3387), not ``step_results``. Unwrap the
                         # ``result`` field so the helper sees actual tool
                         # results, not the wrapper dicts.
-                        recent_results = [o.get("result") for o in previous_outputs]
-                        if not loop_corrected_calls:
-                            loop_corrected_calls.add(current_call)
+                        turn.recent_results = [
+                            o.get("result") for o in turn.previous_outputs
+                        ]
+                        if not turn.loop_corrected_calls:
+                            turn.loop_corrected_calls.add(turn.current_call)
                             # Sent as this call's result so tool_call_id pairing holds.
-                            messages.append(
+                            turn.messages.append(
                                 self._create_tool_message(
-                                    tool_name,
+                                    turn.tool_name,
                                     self._loop_correction_result(
-                                        tool_name, consecutive_count - 1, recent_results
+                                        turn.tool_name,
+                                        turn.consecutive_count - 1,
+                                        turn.recent_results,
                                     ),
                                     tool_call_id=tool_call_id,
                                 )
                             )
                             continue
                         self.console.print_repeated_tool_warning()
-                        final_answer, steps_taken = self._answer_after_repeated_calls(
-                            tool_name,
-                            consecutive_count - 2,
-                            recent_results,
-                            messages,
-                            conversation,
-                            steps_taken,
+                        turn.final_answer, turn.steps_taken = (
+                            self._answer_after_repeated_calls(
+                                turn.tool_name,
+                                turn.consecutive_count - 2,
+                                turn.recent_results,
+                                turn.messages,
+                                turn.conversation,
+                                turn.steps_taken,
+                            )
                         )
-                        if final_answer is None:
-                            cancelled_by_console = True
+                        if turn.final_answer is None:
+                            turn.cancelled_by_console = True
                         else:
-                            loop_break_answer_unprinted = True
+                            turn.loop_break_answer_unprinted = True
                         fanout_repeat_break = True
                         break
 
                     # Execute
-                    tool_result = self._execute_tool_timed(tool_name, tool_args)
+                    turn.tool_result = self._execute_tool_timed(
+                        turn.tool_name, turn.tool_args
+                    )
                     self.console.stop_progress()
-                    if self._is_throttled_result(tool_result):
+                    if self._is_throttled_result(turn.tool_result):
                         # Never ran, so not a repeat. Bounded: the shell
                         # limiter's windows drain within a few capped waits.
-                        tool_call_history.pop()
-                        self._wait_out_rate_limit(tool_result)
+                        turn.tool_call_history.pop()
+                        self._wait_out_rate_limit(turn.tool_result)
                     else:
-                        _note_turn_result(turn_results, current_call, tool_result)
+                        _note_turn_result(
+                            turn.turn_results, turn.current_call, turn.tool_result
+                        )
 
                     # Result-based dedup for query family tools
-                    _QUERY_TOOLS = (
+                    turn._QUERY_TOOLS = (
                         "query_documents",
                         "query_specific_file",
                     )
-                    if tool_name in _QUERY_TOOLS:
-                        result_key = f"{tool_name}:{hash(str(tool_result))}"
-                        query_result_cache[result_key] = (
-                            query_result_cache.get(result_key, 0) + 1
+                    if turn.tool_name in turn._QUERY_TOOLS:
+                        turn.result_key = (
+                            f"{turn.tool_name}:{hash(str(turn.tool_result))}"
                         )
-                        if query_result_cache[result_key] >= 2:
+                        turn.query_result_cache[turn.result_key] = (
+                            turn.query_result_cache.get(turn.result_key, 0) + 1
+                        )
+                        if turn.query_result_cache[turn.result_key] >= 2:
                             logger.debug(
                                 "[DEDUP] Same query result returned %d times "
                                 "— injecting stop signal",
-                                query_result_cache[result_key],
+                                turn.query_result_cache[turn.result_key],
                             )
-                            dedup_msg = (
+                            turn.dedup_msg = (
                                 f"[SYSTEM] You have received this same result "
-                                f"from {tool_name} "
-                                f"{query_result_cache[result_key]} times. "
+                                f"from {turn.tool_name} "
+                                f"{turn.query_result_cache[turn.result_key]} times. "
                                 "Querying again will not yield new "
                                 "information. STOP querying and answer "
                                 "directly from what you have retrieved, "
@@ -15502,7 +15803,7 @@ Do NOT wrap conversational replies in JSON.
                                 "information was not found in the document."
                             )
                             post_tool_messages.append(
-                                {"role": "user", "content": dedup_msg}
+                                {"role": "user", "content": turn.dedup_msg}
                             )
 
                     # Input-based dedup for mutation tools: catch an
@@ -15510,11 +15811,11 @@ Do NOT wrap conversational replies in JSON.
                     # calls are skipped so a rejected retry isn't mistaken for
                     # an applied change.
                     self._dedup_mutation_call(
-                        tool_name,
-                        tool_args,
-                        mutation_call_cache,
+                        turn.tool_name,
+                        turn.tool_args,
+                        turn.mutation_call_cache,
                         post_tool_messages,
-                        tool_result,
+                        turn.tool_result,
                     )
 
                     # Domain hooks. A returned plan switches the agent into
@@ -15522,25 +15823,28 @@ Do NOT wrap conversational replies in JSON.
                     # base impl returns None but the hook's annotation is
                     # Optional[List[...]] — silence pylint's None-inference.
                     # pylint: disable-next=assignment-from-none
-                    _next_plan = self._post_process_tool_result(
-                        tool_name, tool_args, tool_result
+                    turn._next_plan = self._post_process_tool_result(
+                        turn.tool_name, turn.tool_args, turn.tool_result
                     )
-                    if _next_plan is not None:
-                        self._inject_recovery_plan(_next_plan)
+                    if turn._next_plan is not None:
+                        self._inject_recovery_plan(turn._next_plan)
 
                     # Truncate large results before logging
-                    truncated_result = self._handle_large_tool_result(
-                        tool_name, tool_result, conversation, tool_args
+                    turn.truncated_result = self._handle_large_tool_result(
+                        turn.tool_name,
+                        turn.tool_result,
+                        turn.conversation,
+                        turn.tool_args,
                     )
 
-                    self.console.pretty_print_json(tool_result, "Result")
+                    self.console.pretty_print_json(turn.tool_result, "Result")
                     self.console.print_tool_complete()
 
-                    previous_outputs.append(
+                    turn.previous_outputs.append(
                         {
-                            "tool": tool_name,
-                            "args": tool_args,
-                            "result": truncated_result,
+                            "tool": turn.tool_name,
+                            "args": turn.tool_args,
+                            "result": turn.truncated_result,
                         }
                     )
 
@@ -15548,41 +15852,44 @@ Do NOT wrap conversational replies in JSON.
                     # tool_call_id from the originating call so the next
                     # LLM round can correlate this result with the right
                     # call in the prior assistant turn.
-                    messages.append(
+                    turn.messages.append(
                         self._create_tool_message(
-                            tool_name,
-                            truncated_result,
+                            turn.tool_name,
+                            turn.truncated_result,
                             tool_call_id=tool_call_id,
                         )
                     )
 
                     if self._turn_scope.turn_should_end:
-                        final_answer, steps_taken = self._end_turn_on_scope(
-                            tool_name, messages, conversation, steps_taken
+                        turn.final_answer, turn.steps_taken = self._end_turn_on_scope(
+                            turn.tool_name,
+                            turn.messages,
+                            turn.conversation,
+                            turn.steps_taken,
                         )
-                        if final_answer is None:
-                            cancelled_by_console = True
+                        if turn.final_answer is None:
+                            turn.cancelled_by_console = True
                         else:
-                            loop_break_answer_unprinted = True
+                            turn.loop_break_answer_unprinted = True
                         fanout_repeat_break = True
                         break
 
                     # Track errors but DON'T break early — drain all N
                     # tool calls first so conversation history reflects
                     # the full set.
-                    is_error = Agent._is_error_result(tool_result)
-                    if is_error:
-                        failed = tool_result_error_fields(tool_result)
-                        error_count += 1
-                        last_error = (
-                            failed.get("error_brief")
-                            or failed.get("error")
-                            or failed.get("stderr")
-                            or failed.get("hint")
-                            or failed.get("suggested_fix")
+                    turn.is_error = Agent._is_error_result(turn.tool_result)
+                    if turn.is_error:
+                        turn.failed = tool_result_error_fields(turn.tool_result)
+                        turn.error_count += 1
+                        turn.last_error = (
+                            turn.failed.get("error_brief")
+                            or turn.failed.get("error")
+                            or turn.failed.get("stderr")
+                            or turn.failed.get("hint")
+                            or turn.failed.get("suggested_fix")
                             or (
                                 "Command failed with return code "
-                                f"{failed.get('return_code')}"
+                                f"{turn.failed.get('return_code')}"
                             )
                         )
                         logger.warning(
@@ -15590,21 +15897,21 @@ Do NOT wrap conversational replies in JSON.
                             "%d/%d (count: %d): %s",
                             fan_idx + 1,
                             len(tc_list),
-                            error_count,
-                            last_error,
+                            turn.error_count,
+                            turn.last_error,
                         )
-                        if not failed.get("error_displayed"):
+                        if not turn.failed.get("error_displayed"):
                             # any_error below switches to STATE_ERROR_RECOVERY
                             # and retries — not a fatal top-level failure
                             # (the archive_message_batch repro).
-                            self.console.print_error(last_error, recoverable=True)
+                            self.console.print_error(turn.last_error, recoverable=True)
                         any_error = True
                 self._turn_scope.end_batch()
 
                 # Anthropic and other spec-strict providers require all native
                 # tool results to immediately follow the assistant tool-call
                 # turn. Dedup guidance belongs after the complete result group.
-                messages.extend(post_tool_messages)
+                turn.messages.extend(post_tool_messages)
 
                 if fanout_repeat_break:
                     break  # break outer while
@@ -15617,7 +15924,10 @@ Do NOT wrap conversational replies in JSON.
                         "ERROR RECOVERY: Handling tool execution failure"
                     )
                     self._record_step_stats(
-                        response_stats, steps_taken, step_timer, conversation
+                        turn.response_stats,
+                        turn.steps_taken,
+                        turn.step_timer,
+                        turn.conversation,
                     )
                     continue
 
@@ -15630,9 +15940,9 @@ Do NOT wrap conversational replies in JSON.
             # embedded-JSON path). Skipped when ``tool_calls`` is set —
             # those have already been dispatched by the fan-out above.
             if (
-                parsed.get("tool")
-                and "tool_args" in parsed
-                and not parsed.get("tool_calls")
+                turn.parsed.get("tool")
+                and "tool_args" in turn.parsed
+                and not turn.parsed.get("tool_calls")
             ):
 
                 # Display the current plan with the current step highlighted
@@ -15641,7 +15951,11 @@ Do NOT wrap conversational replies in JSON.
 
                 # When both plan and tool are present, prioritize the plan execution
                 # If we have a plan, we should execute from the plan, not the standalone tool call
-                if "plan" in parsed and self.current_plan and self.total_plan_steps > 0:
+                if (
+                    "plan" in turn.parsed
+                    and self.current_plan
+                    and self.total_plan_steps > 0
+                ):
                     # Skip the standalone tool execution and let the plan execution handle it
                     # The plan execution logic will handle this in the next iteration
                     logger.debug(
@@ -15656,88 +15970,100 @@ Do NOT wrap conversational replies in JSON.
                     )
                     self.execution_state = self.STATE_COMPLETION
 
-                tool_name = parsed["tool"]
-                tool_args = parsed["tool_args"]
-                logger.debug(f"Tool call detected: {tool_name} with args {tool_args}")
+                turn.tool_name = turn.parsed["tool"]
+                turn.tool_args = turn.parsed["tool_args"]
+                logger.debug(
+                    f"Tool call detected: {turn.tool_name} with args {turn.tool_args}"
+                )
 
                 # Display the tool call in real-time
-                self.console.print_tool_usage(tool_name)
+                self.console.print_tool_usage(turn.tool_name)
 
                 # Sent even when empty: it is what releases the call to the wire.
-                self.console.pretty_print_json(tool_args, "Arguments")
+                self.console.pretty_print_json(turn.tool_args, "Arguments")
 
                 # Start progress indicator for tool execution
-                self.console.start_progress(f"Executing {tool_name}")
+                self.console.start_progress(f"Executing {turn.tool_name}")
 
                 # Check for repeated tool calls (allow up to 3 identical calls)
-                current_call = self._loop_guard_key(tool_name, tool_args)
-                tool_call_history.append(current_call)
-                tool_call_log.append(
-                    (tool_name, str(tool_args))
+                turn.current_call = self._loop_guard_key(turn.tool_name, turn.tool_args)
+                turn.tool_call_history.append(turn.current_call)
+                turn.tool_call_log.append(
+                    (turn.tool_name, str(turn.tool_args))
                 )  # Full unbounded log for workflow guards
 
                 # Enough recent calls to see a short cycle repeat to the limit
-                if len(tool_call_history) > loop_window:
-                    tool_call_history.pop(0)
+                if len(turn.tool_call_history) > turn.loop_window:
+                    turn.tool_call_history.pop(0)
 
                 # Back-to-back repeats of this call, or of the cycle it closes,
                 # or of a result it already gave this turn in any order.
-                consecutive_count = max(
-                    _repeat_count(tool_call_history),
-                    _same_result_repeats(turn_results, current_call) + 1,
+                turn.consecutive_count = max(
+                    _repeat_count(turn.tool_call_history),
+                    _same_result_repeats(turn.turn_results, turn.current_call) + 1,
                 )
 
                 # Stop after max_consecutive_repeats identical calls
-                if consecutive_count >= self.max_consecutive_repeats:
+                if turn.consecutive_count >= self.max_consecutive_repeats:
                     # Stop progress indicator
                     self.console.stop_progress()
                     self._close_unrun_tool_card()
 
                     # Not ``step_results``: error recovery clears it before each retry.
-                    recent_results = [o.get("result") for o in previous_outputs]
-                    if not loop_corrected_calls:
-                        loop_corrected_calls.add(current_call)
-                        messages.append(
+                    turn.recent_results = [
+                        o.get("result") for o in turn.previous_outputs
+                    ]
+                    if not turn.loop_corrected_calls:
+                        turn.loop_corrected_calls.add(turn.current_call)
+                        turn.messages.append(
                             self._create_tool_message(
-                                tool_name,
+                                turn.tool_name,
                                 self._loop_correction_result(
-                                    tool_name, consecutive_count - 1, recent_results
+                                    turn.tool_name,
+                                    turn.consecutive_count - 1,
+                                    turn.recent_results,
                                 ),
                             )
                         )
                         continue
 
                     self.console.print_repeated_tool_warning()
-                    final_answer, steps_taken = self._answer_after_repeated_calls(
-                        tool_name,
-                        consecutive_count - 2,
-                        recent_results,
-                        messages,
-                        conversation,
-                        steps_taken,
+                    turn.final_answer, turn.steps_taken = (
+                        self._answer_after_repeated_calls(
+                            turn.tool_name,
+                            turn.consecutive_count - 2,
+                            turn.recent_results,
+                            turn.messages,
+                            turn.conversation,
+                            turn.steps_taken,
+                        )
                     )
-                    if final_answer is None:
-                        cancelled_by_console = True
+                    if turn.final_answer is None:
+                        turn.cancelled_by_console = True
                     else:
-                        loop_break_answer_unprinted = True
+                        turn.loop_break_answer_unprinted = True
                     break
 
                 # Execute the tool
-                tool_result = self._execute_tool_timed(tool_name, tool_args)
+                turn.tool_result = self._execute_tool_timed(
+                    turn.tool_name, turn.tool_args
+                )
 
                 # Stop progress indicator
                 self.console.stop_progress()
-                if self._is_throttled_result(tool_result):
+                if self._is_throttled_result(turn.tool_result):
                     # Never ran, so not a repeat. Bounded: the shell limiter's
                     # windows drain within a few capped waits.
-                    tool_call_history.pop()
-                    self._wait_out_rate_limit(tool_result)
+                    turn.tool_call_history.pop()
+                    self._wait_out_rate_limit(turn.tool_result)
                 else:
-                    _note_turn_result(turn_results, current_call, tool_result)
+                    _note_turn_result(
+                        turn.turn_results, turn.current_call, turn.tool_result
+                    )
 
-                if _is_image_tool(tool_name):
-                    capability_tool_last_succeeded = not tool_result_failed(
-                        tool_result, FAILED_STATUSES
+                if _is_image_tool(turn.tool_name):
+                    turn.capability_tool_last_succeeded = not tool_result_failed(
+                        turn.tool_result, FAILED_STATUSES
                     )
 
                 # Mirror the plan-execution branch so
@@ -15747,52 +16073,58 @@ Do NOT wrap conversational replies in JSON.
                 # prompt, give-up fallback) read ``step_results`` for the
                 # canonical ``image_path`` — without this append, the
                 # legacy single-tool path leaves them empty-handed.
-                step_results.append(tool_result)
+                turn.step_results.append(turn.tool_result)
                 if (
-                    isinstance(tool_result, dict)
-                    and tool_result.get("status") == "success"
-                    and tool_result.get("operation") == "edit_file"
-                    and tool_result.get("file_path")
+                    isinstance(turn.tool_result, dict)
+                    and turn.tool_result.get("status") == "success"
+                    and turn.tool_result.get("operation") == "edit_file"
+                    and turn.tool_result.get("file_path")
                 ):
                     self._turn_file_edits.append(
                         {
-                            "file_path": tool_result["file_path"],
-                            "backup_path": tool_result.get("backup_path"),
+                            "file_path": turn.tool_result["file_path"],
+                            "backup_path": turn.tool_result.get("backup_path"),
                         }
                     )
 
                 # Result-based dedup: if this tool (query family) returns the same result
                 # it returned in a prior call, inject a correction so the agent stops looping.
-                _QUERY_TOOLS = (
+                turn._QUERY_TOOLS = (
                     "query_documents",
                     "query_specific_file",
                 )
-                if tool_name in _QUERY_TOOLS:
-                    result_key = f"{tool_name}:{hash(str(tool_result))}"
-                    query_result_cache[result_key] = (
-                        query_result_cache.get(result_key, 0) + 1
+                if turn.tool_name in turn._QUERY_TOOLS:
+                    turn.result_key = f"{turn.tool_name}:{hash(str(turn.tool_result))}"
+                    turn.query_result_cache[turn.result_key] = (
+                        turn.query_result_cache.get(turn.result_key, 0) + 1
                     )
-                    if query_result_cache[result_key] >= 2:
+                    if turn.query_result_cache[turn.result_key] >= 2:
                         logger.debug(
                             "[DEDUP] Same query result returned %d times — injecting stop signal",
-                            query_result_cache[result_key],
+                            turn.query_result_cache[turn.result_key],
                         )
-                        dedup_msg = (
-                            f"[SYSTEM] You have received this same result from {tool_name} "
-                            f"{query_result_cache[result_key]} times. "
+                        turn.dedup_msg = (
+                            f"[SYSTEM] You have received this same result from {turn.tool_name} "
+                            f"{turn.query_result_cache[turn.result_key]} times. "
                             "Querying again will not yield new information. "
                             "STOP querying and answer directly from what you have retrieved, "
                             "OR check your prior turn responses for relevant data, "
                             "OR state that the information was not found in the document."
                         )
-                        messages.append({"role": "user", "content": dedup_msg})
+                        turn.messages.append(
+                            {"role": "user", "content": turn.dedup_msg}
+                        )
 
                 # Input-based dedup for mutation tools: catch an
                 # identical mutation re-issue at the first repeat. Errored calls
                 # are skipped so a rejected retry isn't mistaken for an applied
                 # change.
                 self._dedup_mutation_call(
-                    tool_name, tool_args, mutation_call_cache, messages, tool_result
+                    turn.tool_name,
+                    turn.tool_args,
+                    turn.mutation_call_cache,
+                    turn.messages,
+                    turn.tool_result,
                 )
 
                 # Handle domain-specific post-processing.
@@ -15800,39 +16132,48 @@ Do NOT wrap conversational replies in JSON.
                 # base impl returns None but the hook's annotation is
                 # Optional[List[...]] — silence pylint's None-inference.
                 # pylint: disable-next=assignment-from-none
-                _next_plan = self._post_process_tool_result(
-                    tool_name, tool_args, tool_result
+                turn._next_plan = self._post_process_tool_result(
+                    turn.tool_name, turn.tool_args, turn.tool_result
                 )
-                if _next_plan is not None:
-                    self._inject_recovery_plan(_next_plan)
+                if turn._next_plan is not None:
+                    self._inject_recovery_plan(turn._next_plan)
 
                 # Handle large tool results
-                truncated_result = self._handle_large_tool_result(
-                    tool_name, tool_result, conversation, tool_args
+                turn.truncated_result = self._handle_large_tool_result(
+                    turn.tool_name, turn.tool_result, turn.conversation, turn.tool_args
                 )
 
                 # Display the tool result in real-time (show full result to user).
                 # Emit result BEFORE complete so SSE latency is captured.
-                self.console.pretty_print_json(tool_result, "Result")
+                self.console.pretty_print_json(turn.tool_result, "Result")
                 self.console.print_tool_complete()
 
                 # Store the truncated output for future context
-                previous_outputs.append(
-                    {"tool": tool_name, "args": tool_args, "result": truncated_result}
+                turn.previous_outputs.append(
+                    {
+                        "tool": turn.tool_name,
+                        "args": turn.tool_args,
+                        "result": turn.truncated_result,
+                    }
                 )
 
                 # Share tool output with subsequent LLM calls
-                messages.append(self._create_tool_message(tool_name, truncated_result))
-                self._recast_unpaired_tool_results(messages)
+                turn.messages.append(
+                    self._create_tool_message(turn.tool_name, turn.truncated_result)
+                )
+                self._recast_unpaired_tool_results(turn.messages)
 
                 if self._turn_scope.turn_should_end:
-                    final_answer, steps_taken = self._end_turn_on_scope(
-                        tool_name, messages, conversation, steps_taken
+                    turn.final_answer, turn.steps_taken = self._end_turn_on_scope(
+                        turn.tool_name,
+                        turn.messages,
+                        turn.conversation,
+                        turn.steps_taken,
                     )
-                    if final_answer is None:
-                        cancelled_by_console = True
+                    if turn.final_answer is None:
+                        turn.cancelled_by_console = True
                     else:
-                        loop_break_answer_unprinted = True
+                        turn.loop_break_answer_unprinted = True
                     break
 
                 # For single-step plans, we still need to let the LLM process the result
@@ -15850,27 +16191,27 @@ Do NOT wrap conversational replies in JSON.
                     # will call the LLM with that result
 
                 # Check if tool execution resulted in an error (support multiple error formats)
-                is_error = Agent._is_error_result(tool_result)
-                if is_error:
-                    failed = tool_result_error_fields(tool_result)
-                    error_count += 1
+                turn.is_error = Agent._is_error_result(turn.tool_result)
+                if turn.is_error:
+                    turn.failed = tool_result_error_fields(turn.tool_result)
+                    turn.error_count += 1
                     # Prefer error_brief for logging (avoids duplicate formatted output)
-                    last_error = (
-                        failed.get("error_brief")
-                        or failed.get("error")
-                        or failed.get("stderr")
-                        or failed.get("hint")
-                        or failed.get("suggested_fix")
-                        or f"Command failed with return code {failed.get('return_code')}"
+                    turn.last_error = (
+                        turn.failed.get("error_brief")
+                        or turn.failed.get("error")
+                        or turn.failed.get("stderr")
+                        or turn.failed.get("hint")
+                        or turn.failed.get("suggested_fix")
+                        or f"Command failed with return code {turn.failed.get('return_code')}"
                     )
                     logger.warning(
-                        f"Tool execution error in plan (count: {error_count}): {last_error}"
+                        f"Tool execution error in plan (count: {turn.error_count}): {turn.last_error}"
                     )
                     # Only print if error wasn't already displayed by _execute_tool
-                    if not failed.get("error_displayed"):
+                    if not turn.failed.get("error_displayed"):
                         # STATE_ERROR_RECOVERY below retries this — not a
                         # fatal top-level failure.
-                        self.console.print_error(last_error, recoverable=True)
+                        self.console.print_error(turn.last_error, recoverable=True)
 
                     # Switch to error recovery state
                     self.execution_state = self.STATE_ERROR_RECOVERY
@@ -15879,7 +16220,10 @@ Do NOT wrap conversational replies in JSON.
                     )
                     # The step still made its model call and ran its tool.
                     self._record_step_stats(
-                        response_stats, steps_taken, step_timer, conversation
+                        turn.response_stats,
+                        turn.steps_taken,
+                        turn.step_timer,
+                        turn.conversation,
                     )
 
                     # Break out of tool execution to trigger error recovery prompt
@@ -15888,30 +16232,34 @@ Do NOT wrap conversational replies in JSON.
             # Collect and store performance stats for token tracking
             # Do this BEFORE checking for final answer so stats are always collected
             self._record_step_stats(
-                response_stats, steps_taken, step_timer, conversation
+                turn.response_stats,
+                turn.steps_taken,
+                turn.step_timer,
+                turn.conversation,
             )
 
             # Check for final answer (after collecting stats)
-            if "answer" in parsed:
+            if "answer" in turn.parsed:
                 # Every check below must see the text the user will see.
                 answer_candidate = _with_answer_beside_tool_calls(
-                    parsed["answer"], answer_beside_tool_calls
+                    turn.parsed["answer"], turn.answer_beside_tool_calls
                 )
                 answer_candidate = _with_earlier_answer(
-                    answer_candidate, answer_given_mid_turn
+                    answer_candidate, turn.answer_given_mid_turn
                 )
                 # FastFlowLM occasionally ends a long prefill with zero tokens.
                 if (
-                    parsed.get("empty_response")
-                    and steps_taken < steps_limit - 1
-                    and unfinished_answer_reprompts < _MAX_UNFINISHED_ANSWER_REPROMPTS
+                    turn.parsed.get("empty_response")
+                    and turn.steps_taken < turn.steps_limit - 1
+                    and turn.unfinished_answer_reprompts
+                    < _MAX_UNFINISHED_ANSWER_REPROMPTS
                 ):
-                    unfinished_answer_reprompts += 1
+                    turn.unfinished_answer_reprompts += 1
                     logger.warning(
                         "[WORKFLOW] Empty model reply at step %d; asking again",
-                        steps_taken,
+                        turn.steps_taken,
                     )
-                    messages.append(
+                    turn.messages.append(
                         {
                             "role": "user",
                             "content": (
@@ -15925,15 +16273,16 @@ Do NOT wrap conversational replies in JSON.
                     _asks_permission_to_index(answer_candidate)
                     and self._user_asked_to_index(user_input)
                     and any(name in self._tools_registry for name in _INDEX_TOOL_NAMES)
-                    and steps_taken < steps_limit - 1
-                    and unfinished_answer_reprompts < _MAX_UNFINISHED_ANSWER_REPROMPTS
+                    and turn.steps_taken < turn.steps_limit - 1
+                    and turn.unfinished_answer_reprompts
+                    < _MAX_UNFINISHED_ANSWER_REPROMPTS
                 ):
-                    unfinished_answer_reprompts += 1
+                    turn.unfinished_answer_reprompts += 1
                     logger.warning(
                         "[WORKFLOW] Asked permission to index what the user said "
                         "to index; asking it to index"
                     )
-                    messages.append(
+                    turn.messages.append(
                         {
                             "role": "user",
                             "content": (
@@ -15944,16 +16293,16 @@ Do NOT wrap conversational replies in JSON.
                         }
                     )
                     continue
-                completion_gaps = []
-                if self_check_open is not None:
+                turn.completion_gaps = []
+                if turn.self_check_open is not None:
                     # The reply is a verdict on the answer already given, so
                     # every check below judges that answer, not the verdict.
                     answer_candidate = self._close_self_check(
-                        self_check_open,
+                        turn.self_check_open,
                         _without_tool_markup(answer_candidate),
-                        steps_taken,
+                        turn.steps_taken,
                     )
-                    self_check_open = None
+                    turn.self_check_open = None
                 # Guard against incomplete workflows: detect when the LLM outputs
                 # planning text ("Let me now search...") as a final answer after
                 # calling index_document but before issuing a query tool call.
@@ -15985,9 +16334,9 @@ Do NOT wrap conversational replies in JSON.
                     "let me find",
                 )
                 last_was_index = bool(
-                    tool_call_history
+                    turn.tool_call_history
                     and any(
-                        tool_call_history[-1][0].lower().startswith(p)
+                        turn.tool_call_history[-1][0].lower().startswith(p)
                         for p in _INDEX_TOOLS
                     )
                 )
@@ -15995,24 +16344,24 @@ Do NOT wrap conversational replies in JSON.
                 # answers from LLM memory without querying it first. This is a
                 # hallucination pattern — the agent returns confident-sounding wrong
                 # answers because it never retrieved the document's actual content.
-                _QUERY_TOOLS = (
+                turn._QUERY_TOOLS = (
                     "query_specific_file",
                     "query_documents",
                     "search_indexed_chunks",
                 )
                 last_index_pos = -1
-                for _pos, (_tname, _) in enumerate(tool_call_log):
+                for _pos, (_tname, _) in enumerate(turn.tool_call_log):
                     if any(_tname.lower().startswith(_p) for _p in _INDEX_TOOLS):
                         last_index_pos = _pos
                 query_after_index = any(
                     _pos > last_index_pos
-                    and any(_tname.lower().startswith(_q) for _q in _QUERY_TOOLS)
-                    for _pos, (_tname, _) in enumerate(tool_call_log)
+                    and any(_tname.lower().startswith(_q) for _q in turn._QUERY_TOOLS)
+                    for _pos, (_tname, _) in enumerate(turn.tool_call_log)
                 )
                 if (
                     last_index_pos >= 0
                     and not query_after_index
-                    and steps_taken < steps_limit - 1
+                    and turn.steps_taken < turn.steps_limit - 1
                 ):
                     logger.debug(
                         "[WORKFLOW] Post-index answer without query — forcing query tool call: %s",
@@ -16023,7 +16372,7 @@ Do NOT wrap conversational replies in JSON.
                     # This is more reliable than sending a correction and hoping the LLM
                     # complies, since the LLM may loop on the same hallucination.
                     _last_indexed_file = None
-                    for _tname, _targs_str in reversed(tool_call_log):
+                    for _tname, _targs_str in reversed(turn.tool_call_log):
                         if any(_tname.lower().startswith(_p) for _p in _INDEX_TOOLS):
                             try:
                                 # tool_call_log stores str(tool_args) which is Python repr
@@ -16063,17 +16412,17 @@ Do NOT wrap conversational replies in JSON.
                                 "query": _forced_query,
                             },
                         }
-                        conversation.append(
+                        turn.conversation.append(
                             {"role": "assistant", "content": _forced_tool_call}
                         )
                         _forced_result = self._execute_tool_timed(
                             "query_specific_file",
                             {"file_path": _last_indexed_file, "query": _forced_query},
                         )
-                        tool_call_log.append(
+                        turn.tool_call_log.append(
                             ("query_specific_file", str(_forced_tool_call["tool_args"]))
                         )
-                        messages.append(
+                        turn.messages.append(
                             {
                                 "role": "user",
                                 "content": f"Tool result: {_forced_result}",
@@ -16084,7 +16433,7 @@ Do NOT wrap conversational replies in JSON.
                         )
                     else:
                         # No file path extractable — fall back to correction message
-                        messages.append(
+                        turn.messages.append(
                             {
                                 "role": "user",
                                 "content": (
@@ -16097,12 +16446,13 @@ Do NOT wrap conversational replies in JSON.
                     continue
 
                 unfinished_kind = _unfinished_answer_kind(answer_candidate)
-                if no_action_requested and unfinished_kind == "narration":
+                if turn.no_action_requested and unfinished_kind == "narration":
                     # A plan or a stated next step is what this turn asked for.
                     unfinished_kind = None
                 can_reprompt_unfinished = (
-                    steps_taken < steps_limit - 1
-                    and unfinished_answer_reprompts < _MAX_UNFINISHED_ANSWER_REPROMPTS
+                    turn.steps_taken < turn.steps_limit - 1
+                    and turn.unfinished_answer_reprompts
+                    < _MAX_UNFINISHED_ANSWER_REPROMPTS
                 )
                 if unfinished_kind and not can_reprompt_unfinished:
                     logger.warning(
@@ -16110,25 +16460,25 @@ Do NOT wrap conversational replies in JSON.
                         "budget or step limit reached (%d/%d re-prompts, "
                         "step %d/%d): %s",
                         unfinished_kind,
-                        unfinished_answer_reprompts,
+                        turn.unfinished_answer_reprompts,
                         _MAX_UNFINISHED_ANSWER_REPROMPTS,
-                        steps_taken,
-                        steps_limit,
+                        turn.steps_taken,
+                        turn.steps_limit,
                         answer_candidate[-120:],
                     )
-                stopped_on_announced_step = (
+                turn.stopped_on_announced_step = (
                     unfinished_kind == "narration" and not can_reprompt_unfinished
                 )
-                if stopped_on_announced_step:
+                if turn.stopped_on_announced_step:
                     # Never hand over the announcement as if it were the answer.
                     answer_candidate = _unfinished_step_answer(answer_candidate)
                 if unfinished_kind == "tool_markup" and can_reprompt_unfinished:
-                    unfinished_answer_reprompts += 1
+                    turn.unfinished_answer_reprompts += 1
                     logger.debug(
                         "[WORKFLOW] Blocking tool-call markup as final answer: %s",
                         answer_candidate[:120],
                     )
-                    messages.append(
+                    turn.messages.append(
                         {
                             "role": "user",
                             "content": (
@@ -16145,11 +16495,11 @@ Do NOT wrap conversational replies in JSON.
                 # An answer about named workspace files that never opened one.
                 # Plan steps run outside tool_call_log; the turn record has them.
                 if (
-                    not look_first_reprompted
-                    and not no_look_requested
-                    and not tool_call_log
+                    not turn.look_first_reprompted
+                    and not turn.no_look_requested
+                    and not turn.tool_call_log
                     and not self._turn_tool_executions
-                    and steps_taken < steps_limit - 1
+                    and turn.steps_taken < turn.steps_limit - 1
                     and any(name in self._tools_registry for name in _LOOK_TOOLS)
                 ):
                     unlooked = named_workspace_paths(
@@ -16157,9 +16507,9 @@ Do NOT wrap conversational replies in JSON.
                         os.getcwd(),
                     )
                     if unlooked:
-                        look_first_reprompted = True
+                        turn.look_first_reprompted = True
                         # Grounding's look gate would ask the same thing again.
-                        grounding_fired.add(LOOK)
+                        turn.grounding_fired.add(LOOK)
                         logger.info(
                             "[WORKFLOW] Answer named %s without a tool call; asking "
                             "the agent to look first",
@@ -16168,25 +16518,31 @@ Do NOT wrap conversational replies in JSON.
                         correction = LOOK_FIRST_PROMPT.format(
                             paths=", ".join(f"`{p}`" for p in unlooked[:3])
                         )
-                        messages.append({"role": "user", "content": correction})
-                        conversation.append({"role": "user", "content": correction})
+                        turn.messages.append({"role": "user", "content": correction})
+                        turn.conversation.append(
+                            {"role": "user", "content": correction}
+                        )
                         continue
 
                 # "Please remember this" answered with "noted" and no save.
                 unsaved = getattr(self, "_unsaved_memory_request", None)
-                if unsaved and not save_reprompted and steps_taken < steps_limit - 1:
-                    called = {name for name, _ in tool_call_log} | {
+                if (
+                    unsaved
+                    and not turn.save_reprompted
+                    and turn.steps_taken < turn.steps_limit - 1
+                ):
+                    called = {name for name, _ in turn.tool_call_log} | {
                         record.get("tool") for record in self._turn_tool_executions
                     }
                     nudge = unsaved(called)
                     if nudge:
-                        save_reprompted = True
+                        turn.save_reprompted = True
                         logger.info(
                             "[WORKFLOW] Asked to remember, nothing saved; asking "
                             "the agent to save it"
                         )
-                        messages.append({"role": "user", "content": nudge})
-                        conversation.append({"role": "user", "content": nudge})
+                        turn.messages.append({"role": "user", "content": nudge})
+                        turn.conversation.append({"role": "user", "content": nudge})
                         continue
 
                 # Universal planning-text guard: catch any short response that is
@@ -16198,18 +16554,18 @@ Do NOT wrap conversational replies in JSON.
                 #   3. post-tool planning after getting results ("I need more info... Let me query")
                 # The honest ending quotes the announcement; it is final, not planning.
                 is_planning_text = (
-                    not stopped_on_announced_step
-                    and not no_action_requested
+                    not turn.stopped_on_announced_step
+                    and not turn.no_action_requested
                     and len(answer_candidate) < 500
                     and any(
                         phrase in answer_candidate.lower()
                         for phrase in _PLANNING_PHRASES
                     )
                 )
-                if is_planning_text and steps_taken < steps_limit - 1:
+                if is_planning_text and turn.steps_taken < turn.steps_limit - 1:
                     if unfinished_kind == "narration":
                         # Same budget as the narration re-prompt, so the turn can end.
-                        unfinished_answer_reprompts += 1
+                        turn.unfinished_answer_reprompts += 1
                     # Inject a correction message and continue the loop to force the answer
                     logger.debug(
                         "[WORKFLOW] Blocking planning-only response as final answer: %s",
@@ -16227,22 +16583,22 @@ Do NOT wrap conversational replies in JSON.
                             "Call query_specific_file or query_documents NOW to retrieve the "
                             "actual content. Output a tool call JSON — not planning text."
                         )
-                    elif not tool_call_history and not self._turn_tool_executions:
+                    elif not turn.tool_call_history and not self._turn_tool_executions:
                         correction = (
                             "You said you would look that up but called no tools. "
                             "Call the appropriate tool RIGHT NOW. "
                             "Output a JSON tool call — not another planning sentence."
                         )
-                    messages.append({"role": "user", "content": correction})
+                    turn.messages.append({"role": "user", "content": correction})
                     continue  # Don't set final_answer — loop again to force the query
 
                 if unfinished_kind == "narration" and can_reprompt_unfinished:
-                    unfinished_answer_reprompts += 1
+                    turn.unfinished_answer_reprompts += 1
                     logger.debug(
                         "[WORKFLOW] Blocking narrated next step as final answer: %s",
                         answer_candidate[-120:],
                     )
-                    messages.append(
+                    turn.messages.append(
                         {
                             "role": "user",
                             "content": _narration_reprompt(answer_candidate),
@@ -16258,13 +16614,13 @@ Do NOT wrap conversational replies in JSON.
                 )
                 if (
                     _TOOL_ARTIFACT_PATTERN.match(answer_candidate.strip())
-                    and steps_taken < steps_limit - 1
+                    and turn.steps_taken < turn.steps_limit - 1
                 ):
                     logger.debug(
                         "[WORKFLOW] Blocking tool-syntax artifact as final answer: %s",
                         answer_candidate[:80],
                     )
-                    messages.append(
+                    turn.messages.append(
                         {
                             "role": "user",
                             "content": (
@@ -16291,12 +16647,12 @@ Do NOT wrap conversational replies in JSON.
                     re.search(p, answer_candidate, re.DOTALL)
                     for p in _RAW_JSON_PATTERNS
                 )
-                if is_raw_json and steps_taken < steps_limit - 1:
+                if is_raw_json and turn.steps_taken < turn.steps_limit - 1:
                     logger.debug(
                         "[WORKFLOW] Blocking raw-JSON hallucination as final answer: %s",
                         answer_candidate[:120],
                     )
-                    messages.append(
+                    turn.messages.append(
                         {
                             "role": "user",
                             "content": (
@@ -16312,7 +16668,7 @@ Do NOT wrap conversational replies in JSON.
                 # Only a generate_image call that ran leaves an outcome to check
                 # the answer against; a mention of the capability is not one.
                 image_outcome_recorded = (
-                    capability_tool_last_succeeded is not None
+                    turn.capability_tool_last_succeeded is not None
                     and any(_is_image_tool(_n) for _n in self._tools_registry)
                 )
                 # The record cannot say what the answer claims, so the answer
@@ -16344,8 +16700,8 @@ Do NOT wrap conversational replies in JSON.
                 ]
                 if (
                     image_outcome_recorded
-                    and not image_outcome_corrected
-                    and steps_taken < steps_limit - 1
+                    and not turn.image_outcome_corrected
+                    and turn.steps_taken < turn.steps_limit - 1
                     and any(
                         re.search(_p, answer_candidate, re.IGNORECASE)
                         for _p in _IMAGE_AVAILABILITY_CLAIM
@@ -16355,10 +16711,10 @@ Do NOT wrap conversational replies in JSON.
                         for _p in _IMAGE_OUTCOME_REPORTED
                     )
                 ):
-                    image_outcome_corrected = True
+                    turn.image_outcome_corrected = True
                     _outcome = (
                         "generate_image succeeded"
-                        if capability_tool_last_succeeded
+                        if turn.capability_tool_last_succeeded
                         else "generate_image returned an error"
                     )
                     logger.debug(
@@ -16366,7 +16722,7 @@ Do NOT wrap conversational replies in JSON.
                         _outcome,
                         answer_candidate[:80],
                     )
-                    messages.append(
+                    turn.messages.append(
                         {
                             "role": "user",
                             "content": (
@@ -16389,48 +16745,58 @@ Do NOT wrap conversational replies in JSON.
                         for f in self._grounding_findings(
                             answer_candidate, user_input, self._grounding_history
                         )
-                        if f.gate not in grounding_fired
+                        if f.gate not in turn.grounding_fired
                     ]
                 )
-                if fresh and steps_taken < steps_limit - 1:
-                    grounding_fired.update(f.gate for f in fresh)
+                if fresh and turn.steps_taken < turn.steps_limit - 1:
+                    turn.grounding_fired.update(f.gate for f in fresh)
                     logger.info(
                         "[check:grounding] %s fired at step %d",
                         ",".join(sorted({f.gate for f in fresh})),
-                        steps_taken,
+                        turn.steps_taken,
                     )
                     correction = {
                         "role": "user",
                         "content": grounding_correction(fresh),
                     }
-                    messages.append(correction)
-                    conversation.append(dict(correction))
+                    turn.messages.append(correction)
+                    turn.conversation.append(dict(correction))
                     continue
 
                 # An answer, not a plan or a narrated step: from here on, calls
                 # must serve the request rather than start new work.
-                if budget_stop_pending:
+                if turn.budget_stop_pending:
                     # Running out of plan budget is not finishing the request.
-                    budget_stop_pending = False
+                    turn.budget_stop_pending = False
                 elif not self._turn_scope.answered:
                     self._turn_scope.mark_answered()
-                    conversation.append(
+                    turn.conversation.append(
                         {
                             "role": "system",
-                            "content": {"type": ANSWERED_MARKER, "step": steps_taken},
+                            "content": {
+                                "type": ANSWERED_MARKER,
+                                "step": turn.steps_taken,
+                            },
                         }
                     )
                 # Changed code after the last test run: ask once for the run.
-                if not verify_after_change_reprompted and steps_taken < steps_limit - 1:
+                if (
+                    not turn.verify_after_change_reprompted
+                    and turn.steps_taken < turn.steps_limit - 1
+                ):
                     _correction = self._verify_after_change_prompt()
                     if _correction:
-                        verify_after_change_reprompted = True
+                        turn.verify_after_change_reprompted = True
                         logger.info(
-                            "%s fired at step %d", VERIFY_AFTER_CHANGE_TAG, steps_taken
+                            "%s fired at step %d",
+                            VERIFY_AFTER_CHANGE_TAG,
+                            turn.steps_taken,
                         )
-                        self._reopen_turn_scope(conversation)
-                        messages.append({"role": "user", "content": _correction})
-                        conversation.append({"role": "user", "content": _correction})
+                        self._reopen_turn_scope(turn.conversation)
+                        turn.messages.append({"role": "user", "content": _correction})
+                        turn.conversation.append(
+                            {"role": "user", "content": _correction}
+                        )
                         continue
                 # Last guard before the answer is sealed: the footer below
                 # already knows whether a test ran, so an answer that reports a
@@ -16441,9 +16807,9 @@ Do NOT wrap conversational replies in JSON.
                 if test_claim:
                     claim, why = test_claim
                     can_correct_claim = (
-                        steps_taken < steps_limit - 1
-                        and test_claim_corrections < _MAX_TEST_CLAIM_CORRECTIONS
-                        and claim.lower() not in corrected_test_claims
+                        turn.steps_taken < turn.steps_limit - 1
+                        and turn.test_claim_corrections < _MAX_TEST_CLAIM_CORRECTIONS
+                        and claim.lower() not in turn.corrected_test_claims
                     )
                     if not can_correct_claim:
                         logger.warning(
@@ -16451,16 +16817,16 @@ Do NOT wrap conversational replies in JSON.
                             "%d/%d corrections used, step %d/%d",
                             claim,
                             why,
-                            test_claim_corrections,
+                            turn.test_claim_corrections,
                             _MAX_TEST_CLAIM_CORRECTIONS,
-                            steps_taken,
-                            steps_limit,
+                            turn.steps_taken,
+                            turn.steps_limit,
                         )
                         # Kept, with the gap named after it below.
-                        completion_gaps = [why + "."]
+                        turn.completion_gaps = [why + "."]
                     else:
-                        test_claim_corrections += 1
-                        corrected_test_claims.add(claim.lower())
+                        turn.test_claim_corrections += 1
+                        turn.corrected_test_claims.add(claim.lower())
                         logger.debug(
                             "[WORKFLOW] Correcting unsupported test claim %r (%s)",
                             claim,
@@ -16486,9 +16852,9 @@ Do NOT wrap conversational replies in JSON.
                                 "not see."
                             ),
                         }
-                        self._reopen_turn_scope(conversation)
-                        messages.append(correction)
-                        conversation.append(dict(correction))
+                        self._reopen_turn_scope(turn.conversation)
+                        turn.messages.append(correction)
+                        turn.conversation.append(dict(correction))
                         continue
 
                 # A message that landed DURING this model call was never seen
@@ -16499,9 +16865,9 @@ Do NOT wrap conversational replies in JSON.
                 # steps_limit, which also makes the last step seal normally.
                 _cancel = getattr(self, "_cancel_event", None)
                 if (
-                    steps_taken < steps_limit
+                    turn.steps_taken < turn.steps_limit
                     and not (_cancel is not None and _cancel.is_set())
-                    and self._drain_followups(messages, conversation)
+                    and self._drain_followups(turn.messages, turn.conversation)
                 ):
                     continue
 
@@ -16511,7 +16877,7 @@ Do NOT wrap conversational replies in JSON.
                     if self._edit_verification_rounds < _MAX_EDIT_VERIFICATIONS:
                         edit_problems = self._verify_turn_edits()
                         if edit_problems:
-                            steps_limit += _VERIFY_REPAIR_STEPS
+                            turn.steps_limit += _VERIFY_REPAIR_STEPS
                             repair = {
                                 "role": "user",
                                 "content": _EDIT_VERIFICATION_PROMPT.format(
@@ -16519,31 +16885,31 @@ Do NOT wrap conversational replies in JSON.
                                     steps=_VERIFY_REPAIR_STEPS,
                                 ),
                             }
-                            messages.append(repair)
-                            conversation.append(dict(repair))
+                            turn.messages.append(repair)
+                            turn.conversation.append(dict(repair))
                             logger.info(
                                 "Post-edit verification found %d problem(s); "
                                 "granted %d repair step(s) (limit now %d)",
                                 len(edit_problems),
                                 _VERIFY_REPAIR_STEPS,
-                                steps_limit,
+                                turn.steps_limit,
                             )
                             continue
                     else:
                         # Out of repair rounds: still-broken files go into the answer.
                         self._edit_verification_findings = self._edit_problems()
-                        completion_gaps.extend(
+                        turn.completion_gaps.extend(
                             p
                             for p in self._edit_verification_findings
-                            if p not in completion_gaps
+                            if p not in turn.completion_gaps
                         )
 
                 unfinalized_answer = _without_tool_markup(answer_candidate)
-                if answer_before_completion_check is not None:
+                if turn.answer_before_completion_check is not None:
                     restored = _with_replaced_answer(
-                        unfinalized_answer, answer_before_completion_check
+                        unfinalized_answer, turn.answer_before_completion_check
                     )
-                    answer_before_completion_check = None
+                    turn.answer_before_completion_check = None
                     # Only once the work done since backs what it said.
                     restored_soft: List[str] = []
                     if (
@@ -16558,7 +16924,7 @@ Do NOT wrap conversational replies in JSON.
                     ):
                         unfinalized_answer = restored
                 answer_candidate = self.finalize_answer(
-                    unfinalized_answer, conversation
+                    unfinalized_answer, turn.conversation
                 )
                 self._check_extraction_sources()
                 soft_gaps: List[str] = []
@@ -16572,8 +16938,8 @@ Do NOT wrap conversational replies in JSON.
                 artifact_gaps.extend(extraction_gaps)
                 if artifact_gaps or soft_gaps:
                     if (
-                        completion_corrections < _MAX_FILE_WRITE_CLAIM_REPROMPTS
-                        and steps_taken < steps_limit - 1
+                        turn.completion_corrections < _MAX_FILE_WRITE_CLAIM_REPROMPTS
+                        and turn.steps_taken < turn.steps_limit - 1
                         and any(
                             name in self._tools_registry
                             for name in (
@@ -16587,8 +16953,8 @@ Do NOT wrap conversational replies in JSON.
                             )
                         )
                     ):
-                        completion_corrections += 1
-                        answer_before_completion_check = unfinalized_answer
+                        turn.completion_corrections += 1
+                        turn.answer_before_completion_check = unfinalized_answer
                         correction = (
                             (
                                 "[check:completion] "
@@ -16643,51 +17009,53 @@ Do NOT wrap conversational replies in JSON.
                             if artifact_gaps:
                                 # Writing and reading back the deliverable is the
                                 # request's work, even when a script produces it.
-                                self._reopen_turn_scope(conversation)
-                        messages.append({"role": "user", "content": correction})
-                        conversation.append({"role": "user", "content": correction})
+                                self._reopen_turn_scope(turn.conversation)
+                        turn.messages.append({"role": "user", "content": correction})
+                        turn.conversation.append(
+                            {"role": "user", "content": correction}
+                        )
                         continue
-                    completion_gaps.extend(artifact_gaps)
-                elif not self_check_sent and not completion_gaps:
-                    self_check_sent = True
-                    check = self._self_check_message(steps_taken, steps_limit)
+                    turn.completion_gaps.extend(artifact_gaps)
+                elif not turn.self_check_sent and not turn.completion_gaps:
+                    turn.self_check_sent = True
+                    check = self._self_check_message(turn.steps_taken, turn.steps_limit)
                     if check:
-                        self_check_open = {
+                        turn.self_check_open = {
                             "answer": unfinalized_answer,
                             "at": time.monotonic(),
-                            "step": steps_taken,
+                            "step": turn.steps_taken,
                             "tools": len(self._turn_tool_executions),
                         }
                         # A fix the check asks for is the request's own work.
                         self._turn_scope.widen(check)
-                        self._reopen_turn_scope(conversation)
-                        messages.append({"role": "user", "content": check})
-                        conversation.append({"role": "user", "content": check})
+                        self._reopen_turn_scope(turn.conversation)
+                        turn.messages.append({"role": "user", "content": check})
+                        turn.conversation.append({"role": "user", "content": check})
                         continue
                 answer_issues = self.answer_problems(answer_candidate)
                 if answer_issues:
-                    if not answer_repaired:
-                        answer_repaired = True
+                    if not turn.answer_repaired:
+                        turn.answer_repaired = True
                         # An acknowledgement-only reply must not replace the report.
-                        answer_before_completion_check = unfinalized_answer
-                        steps_limit += _ANSWER_REPAIR_STEPS
+                        turn.answer_before_completion_check = unfinalized_answer
+                        turn.steps_limit += _ANSWER_REPAIR_STEPS
                         repair = self.answer_repair_prompt(answer_issues)
                         self._turn_scope.widen(repair)
-                        self._reopen_turn_scope(conversation)
-                        messages.append({"role": "user", "content": repair})
-                        conversation.append({"role": "user", "content": repair})
+                        self._reopen_turn_scope(turn.conversation)
+                        turn.messages.append({"role": "user", "content": repair})
+                        turn.conversation.append({"role": "user", "content": repair})
                         logger.info(
                             "Answer check found %d problem(s); asked once for a "
                             "repair (step limit now %d)",
                             len(answer_issues),
-                            steps_limit,
+                            turn.steps_limit,
                         )
                         continue
-                    required = [] if required_calls_made else self.required_calls()
+                    required = [] if turn.required_calls_made else self.required_calls()
                     if required:
-                        required_calls_made = True
-                        answer_before_completion_check = None
-                        steps_limit += _ANSWER_REPAIR_STEPS
+                        turn.required_calls_made = True
+                        turn.answer_before_completion_check = None
+                        turn.steps_limit += _ANSWER_REPAIR_STEPS
                         # The request itself asked for these calls.
                         self._turn_scope.widen(
                             " ".join(
@@ -16695,14 +17063,14 @@ Do NOT wrap conversational replies in JSON.
                                 for n, a in required
                             )
                         )
-                        self._reopen_turn_scope(conversation)
+                        self._reopen_turn_scope(turn.conversation)
                         for name, args in required:
                             logger.info(
                                 "[WORKFLOW] The repair did not make the call the "
                                 "request asked for; running %s itself",
                                 name,
                             )
-                            conversation.append(
+                            turn.conversation.append(
                                 {
                                     "role": "assistant",
                                     "content": {"tool": name, "tool_args": args},
@@ -16717,7 +17085,7 @@ Do NOT wrap conversational replies in JSON.
                                 self.console.stop_progress()
                             self.console.pretty_print_json(result, "Result")
                             self.console.print_tool_complete()
-                            tool_call_log.append((name, str(args)))
+                            turn.tool_call_log.append((name, str(args)))
                             ran = (
                                 f"[check:answer] The user's request needed `{name}`, "
                                 f"so GAIA ran it with "
@@ -16725,11 +17093,11 @@ Do NOT wrap conversational replies in JSON.
                                 f"{result}. Answer the user from this result, "
                                 "without mentioning this check."
                             )
-                            messages.append({"role": "user", "content": ran})
-                            conversation.append({"role": "user", "content": ran})
+                            turn.messages.append({"role": "user", "content": ran})
+                            turn.conversation.append({"role": "user", "content": ran})
                         continue
-                    completion_gaps.extend(
-                        p for p in answer_issues if p not in completion_gaps
+                    turn.completion_gaps.extend(
+                        p for p in answer_issues if p not in turn.completion_gaps
                     )
                 # Validate after subclass rewriting, before console/SSE emission.
                 final_test_claim = unsupported_test_claim(
@@ -16737,18 +17105,18 @@ Do NOT wrap conversational replies in JSON.
                 )
                 if (
                     final_test_claim
-                    and final_test_claim[1] + "." not in completion_gaps
+                    and final_test_claim[1] + "." not in turn.completion_gaps
                 ):
-                    completion_gaps.append(final_test_claim[1] + ".")
+                    turn.completion_gaps.append(final_test_claim[1] + ".")
                 coverage_gap = self._completion_evidence.read_coverage_gap(
                     answer_candidate
                 )
-                if coverage_gap and coverage_gap not in completion_gaps:
-                    completion_gaps.append(coverage_gap)
-                if completion_gaps:
+                if coverage_gap and coverage_gap not in turn.completion_gaps:
+                    turn.completion_gaps.append(coverage_gap)
+                if turn.completion_gaps:
                     # Never discard the work: keep it and name what is unconfirmed.
                     answer_candidate = caveated_answer(
-                        answer_candidate, completion_gaps
+                        answer_candidate, turn.completion_gaps
                     )
                 else:
                     self._note_ungrounded(answer_candidate, user_input)
@@ -16756,7 +17124,7 @@ Do NOT wrap conversational replies in JSON.
                 if inventory:
                     # Never ask another synthesis call to reproduce the set; it condenses.
                     answer_candidate += "\n\n" + inventory
-                    if not completion_gaps:
+                    if not turn.completion_gaps:
                         saved = sorted(self._extraction_ledger.verified)
                         if saved:
                             answer_candidate += (
@@ -16764,8 +17132,8 @@ Do NOT wrap conversational replies in JSON.
                                 + ", ".join(f"`{path}`" for path in saved)
                                 + " and checked the file."
                             )
-                final_answer = self._with_verification_scope(answer_candidate)
-                verification_scope_applied = True
+                turn.final_answer = self._with_verification_scope(answer_candidate)
+                turn.verification_scope_applied = True
                 self.execution_state = self.STATE_COMPLETION
                 # Compute the real token total BEFORE printing the answer so it
                 # can ride the same event, instead of the post-loop aggregation
@@ -16773,34 +17141,36 @@ Do NOT wrap conversational replies in JSON.
                 # Output tokens only — "tokens actually generated",
                 # matching the tok/s calc downstream which is also output-only.
                 _pre_input_tokens, pre_output_tokens = _sum_conversation_tokens(
-                    conversation, self._tool_reported_usage
+                    turn.conversation, self._tool_reported_usage
                 )
-                if stopped_on_announced_step:
+                if turn.stopped_on_announced_step:
                     self._announce_turn_failed()
                 # Sealed before the answer prints: total_s must mean "until it
                 # was on screen", and the console folds the record into that
                 # same event.
-                turn_record = self._finish_turn_record(final_answer, steps_taken)
-                self._publish_turn_metrics(turn_record)
-                model_messages = self._stage_final_model_messages(
-                    messages, final_answer
+                turn.turn_record = self._finish_turn_record(
+                    turn.final_answer, turn.steps_taken
+                )
+                self._publish_turn_metrics(turn.turn_record)
+                turn.model_messages = self._stage_final_model_messages(
+                    turn.messages, turn.final_answer
                 )
                 self.console.print_final_answer(
-                    final_answer,
+                    turn.final_answer,
                     streaming=self.streaming,
                     total_tokens=pre_output_tokens,
                     input_tokens=_pre_input_tokens,
-                    cached_tokens=_sum_cached_tokens(conversation),
-                    ttft_seconds=_query_ttft_seconds(conversation),
-                    tok_per_s=_query_tok_per_s(conversation),
+                    cached_tokens=_sum_cached_tokens(turn.conversation),
+                    ttft_seconds=_query_ttft_seconds(turn.conversation),
+                    tok_per_s=_query_tok_per_s(turn.conversation),
                 )
                 break
 
             # Check if we're at the limit and ask user if they want to continue
-            if steps_taken == steps_limit and final_answer is None:
+            if turn.steps_taken == turn.steps_limit and turn.final_answer is None:
                 # Show what was accomplished
                 max_steps_msg = self._generate_max_steps_message(
-                    conversation, steps_taken, steps_limit
+                    turn.conversation, turn.steps_taken, turn.steps_limit
                 )
                 self.console.print_warning(max_steps_msg)
 
@@ -16813,55 +17183,55 @@ Do NOT wrap conversational replies in JSON.
                     hasattr(self, "silent_mode") and self.silent_mode
                 ):
                     try:
-                        response = (
+                        turn.response = (
                             input("\nContinue with 50 more steps? (y/n): ")
                             .strip()
                             .lower()
                         )
-                        if response in ["y", "yes"]:
-                            steps_limit += 50
+                        if turn.response in ["y", "yes"]:
+                            turn.steps_limit += 50
                             # A new budget: its 20/10/5 notices are due again.
                             self._budget_notices_sent = set()
                             self.console.print_info(
-                                f"✓ Continuing with {steps_limit} total steps...\n"
+                                f"✓ Continuing with {turn.steps_limit} total steps...\n"
                             )
                         else:
                             self.console.print_info("Stopping at user request.")
-                            user_stopped = True
+                            turn.user_stopped = True
                             break
                     except (EOFError, KeyboardInterrupt):
                         self.console.print_info("\nStopping at user request.")
-                        user_stopped = True
+                        turn.user_stopped = True
                         break
                 else:
                     # Silent mode - just stop
                     break
 
         return self._conclude_query(
-            account_refused=account_refused,
-            answer_before_completion_check=answer_before_completion_check,
-            answer_repaired=answer_repaired,
-            cancelled_by_console=cancelled_by_console,
-            completion_gaps=completion_gaps,
-            conversation=conversation,
+            account_refused=turn.account_refused,
+            answer_before_completion_check=turn.answer_before_completion_check,
+            answer_repaired=turn.answer_repaired,
+            cancelled_by_console=turn.cancelled_by_console,
+            completion_gaps=turn.completion_gaps,
+            conversation=turn.conversation,
             filename=filename,
-            final_answer=final_answer,
-            loop_break_answer_unprinted=loop_break_answer_unprinted,
-            messages=messages,
-            model_call_failed=model_call_failed,
-            model_messages=model_messages,
-            self_check_open=self_check_open,
-            start_time=start_time,
-            step_timer=step_timer,
-            steps_limit=steps_limit,
-            steps_taken=steps_taken,
-            thought_only_stop=thought_only_stop,
-            time_limit_reached=time_limit_reached,
+            final_answer=turn.final_answer,
+            loop_break_answer_unprinted=turn.loop_break_answer_unprinted,
+            messages=turn.messages,
+            model_call_failed=turn.model_call_failed,
+            model_messages=turn.model_messages,
+            self_check_open=turn.self_check_open,
+            start_time=turn.start_time,
+            step_timer=turn.step_timer,
+            steps_limit=turn.steps_limit,
+            steps_taken=turn.steps_taken,
+            thought_only_stop=turn.thought_only_stop,
+            time_limit_reached=turn.time_limit_reached,
             trace=trace,
-            turn_record=turn_record,
+            turn_record=turn.turn_record,
             user_input=user_input,
-            user_stopped=user_stopped,
-            verification_scope_applied=verification_scope_applied,
+            user_stopped=turn.user_stopped,
+            verification_scope_applied=turn.verification_scope_applied,
         )
 
     def _conclude_query(
