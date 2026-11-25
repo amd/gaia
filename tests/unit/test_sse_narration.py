@@ -55,6 +55,22 @@ class TestDeriveNarration:
             ("read_file", {"file_path": "src/app.py"}, "Reading file: src/app.py"),
             ("write_file", {"file_path": "out.md"}, "Writing file: out.md"),
             ("index_document", {"path": "spec.pdf"}, "Indexing document: spec.pdf"),
+            # Memory writes surface the fact or updated content in the narration line.
+            (
+                "remember",
+                {"fact": "User prefers concise replies", "category": "preference"},
+                "Saving to memory: User prefers concise replies",
+            ),
+            (
+                "update_memory",
+                {"knowledge_id": "abc-123", "content": "User's name is Tyler Bea"},
+                "Updating memory: User's name is Tyler Bea",
+            ),
+            (
+                "forget",
+                {"knowledge_id": "allergic to shellfish"},
+                "Deleting from memory: allergic to shellfish",
+            ),
             # No arguments -> the verb phrase alone still reads as an action.
             ("fetch_page", {}, "Fetching page"),
         ],
@@ -760,3 +776,42 @@ def test_audio_narration_drops_a_bogus_duration(bogus):
 def test_audio_narration_clips_a_long_prompt_to_one_line():
     line = derive_narration("generate_music", {"prompt": "piano\n" * 200})
     assert "\n" not in line and len(line) < 120
+
+
+def test_relay_enriches_bare_remember_narration_with_fact():
+    from gaia.ui.sidecar import relay
+    from gaia.ui.sidecar.profiles import GAIA_PROFILE
+
+    handler = SSEOutputHandler()
+    relay._dispatch_one(
+        handler,
+        {
+            "type": "tool_call",
+            "tool": "remember",
+            "args": {"fact": "User prefers tea", "category": "preference"},
+            "narration": "Saving to memory",
+        },
+        GAIA_PROFILE,
+    )
+    events = _drain(handler)
+    assert events[0]["narration"] == "Saving to memory: User prefers tea"
+    assert events[1]["narration"] == "Saving to memory: User prefers tea"
+
+
+def test_relay_keeps_custom_sidecar_narration_verbatim():
+    from gaia.ui.sidecar import relay
+    from gaia.ui.sidecar.profiles import GAIA_PROFILE
+
+    handler = SSEOutputHandler()
+    relay._dispatch_one(
+        handler,
+        {
+            "type": "tool_call",
+            "tool": "remember",
+            "args": {"fact": "User prefers tea"},
+            "narration": "Custom memory label",
+        },
+        GAIA_PROFILE,
+    )
+    events = _drain(handler)
+    assert events[0]["narration"] == "Custom memory label"

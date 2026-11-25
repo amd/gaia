@@ -422,12 +422,16 @@ def _dispatch_one(
             if tool == "set_loop_state" and hasattr(handler, "loop_state_directive"):
                 # The tool sets this on the console in-process; relayed, here.
                 handler.loop_state_directive = _loop_state_directive(args)
-        # The call in plain words; a sidecar older than the field gets it derived here.
-        narration = str(
-            event.get("narration")
-            or NATIVE_TOOL_LABELS.get(tool)
-            or derive_narration(tool, args if isinstance(args, dict) else {})
-        )
+        # The call in plain words; a sidecar older than the field (or missing a
+        # newly surfaced salient arg) gets enriched here.
+        raw_narration = str(event.get("narration") or "")
+        derived = derive_narration(tool, args if isinstance(args, dict) else {})
+        if not raw_narration:
+            narration = str(NATIVE_TOOL_LABELS.get(tool) or derived)
+        elif ": " not in raw_narration and derived.startswith(f"{raw_narration}: "):
+            narration = derived
+        else:
+            narration = raw_narration
         start: Dict[str, Any] = {
             "type": "tool_start",
             "tool": tool,

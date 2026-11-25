@@ -164,6 +164,7 @@ _SALIENT_ARG_KEYS = (
     "to",
     "text",
     "content",
+    "fact",
     "id",
 )
 
