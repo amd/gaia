@@ -20,7 +20,7 @@
     "ajv": "^8.20.0",
     "ajv-formats": "^3.0.1",
     "typescript": "^7.0.2",
-    "vitest": "^2.1.8",
+    "vitest": "^5.1.1",
     "wrangler": "^3.114.14"
   },
   "dependencies": {
