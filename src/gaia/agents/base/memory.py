@@ -703,6 +703,14 @@ _PASSWORD_VALUE_RE = re.compile(
 #: A fact that is just a value with a label: "WiFi: sunshine".
 _LABELLED_VALUE = re.compile(r"^[^:\n]{1,30}:\s*\S+\s*$")
 
+#: Any word that may name a secret: a forced save never fires near one, so a
+#: model that declined to save "the alarm code is 9090" is not overruled.
+_CREDENTIAL_WORD = re.compile(
+    r"\b(?:pass(?:word|wd|code|phrase)?|pw|pwd|pin|code|login|key"
+    r"|token|secret|credential|contrase(?:ñ|n)a|clave|passwort"
+    r"|kennwort|mot de passe|c(?:ó|o)digo)s?\b",
+    re.IGNORECASE,
+)
 #: The longest message a forced save reads; anything longer is left to the model.
 _FORCED_SAVE_MAX_CHARS = 300
 #: Characters a forced fact may hold. No comma: one starts a second clause
@@ -766,6 +774,7 @@ def fact_to_keep(request: str) -> str:
         or _DECLINE_SIGNAL.search(text)
         or not asks_to_keep_in_memory(text)
         or MemoryMixin._looks_like_credential(text)
+        or _CREDENTIAL_WORD.search(text)
     ):
         return ""
     for shape in _FORCED_SAVE_SHAPES:

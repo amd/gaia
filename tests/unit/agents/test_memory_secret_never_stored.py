@@ -299,6 +299,31 @@ def test_a_turn_where_the_model_skips_the_save_never_saves_a_secret(
     assert _contents(store) == []
 
 
+#: Secrets the remember filter lets through. The model declining them must stand.
+UNSHAPED_SECRETS = [
+    "remember my password - it's tango",
+    "Remember that the wifi pass is sunflower22.",
+    "remember the alarm code is 9090",
+    "Remember that the code to the gate is 7741.",
+    "remember my login is bob / pass bob123",
+]
+
+
+@pytest.mark.parametrize("request_text", UNSHAPED_SECRETS)
+def test_a_declined_secret_is_never_force_saved(
+    store, monkeypatch, tmp_path, request_text
+):
+    assert fact_to_keep(request_text) == ""
+    agent = _agent(store, monkeypatch, tmp_path)
+    decline = {"answer": "I won't keep that: it's a secret. Use a password manager."}
+    sent = _script(agent, *[decline] * 4)
+    agent.process_query(request_text)
+    assert _contents(store) == []
+    assert not any(
+        "needed `remember`" in str(m.get("content")) for m in sent[-1]
+    ), "GAIA ran remember itself"
+
+
 def test_a_forced_save_still_stores_an_ordinary_fact(store, monkeypatch, tmp_path):
     """The forced path runs the real tool, so its refusals apply to it too."""
     agent = _agent(store, monkeypatch, tmp_path)
