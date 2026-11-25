@@ -7,6 +7,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 
 	"github.com/amd/gaia/tui/internal/ui/theme"
 )
@@ -14,14 +15,14 @@ import (
 // --- state machine: pending -> approved / denied / timed-out ---------------
 
 func TestConfirmationStartsPending(t *testing.T) {
-	m := NewConfirmationModel("run-1", "send_draft", "Send reply to alice@example.com", "")
+	m := NewConfirmationModel("run-1", "write_file", "Write notes.md", "")
 	if !m.Pending() {
 		t.Fatalf("state = %v, want Pending", m.State())
 	}
 }
 
 func TestConfirmationYApproves(t *testing.T) {
-	m := NewConfirmationModel("run-1", "send_draft", "Send reply to alice@example.com", "")
+	m := NewConfirmationModel("run-1", "write_file", "Write notes.md", "")
 	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("y")})
 	if updated.State() != ConfirmationApproved {
 		t.Errorf("state = %v, want Approved", updated.State())
@@ -36,13 +37,13 @@ func TestConfirmationYApproves(t *testing.T) {
 	if !msg.Approved || msg.TimedOut {
 		t.Errorf("decided msg = %+v, want Approved=true TimedOut=false", msg)
 	}
-	if msg.RunID != "run-1" || msg.Action != "send_draft" {
+	if msg.RunID != "run-1" || msg.Action != "write_file" {
 		t.Errorf("decided msg lost identity: %+v", msg)
 	}
 }
 
 func TestConfirmationCapitalYApproves(t *testing.T) {
-	m := NewConfirmationModel("run-1", "send_draft", "", "")
+	m := NewConfirmationModel("run-1", "write_file", "", "")
 	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("Y")})
 	if updated.State() != ConfirmationApproved {
 		t.Errorf("state = %v, want Approved", updated.State())
@@ -50,7 +51,7 @@ func TestConfirmationCapitalYApproves(t *testing.T) {
 }
 
 func TestConfirmationNDenies(t *testing.T) {
-	m := NewConfirmationModel("run-1", "permanent_delete", "Delete the message from spam@example.com", "")
+	m := NewConfirmationModel("run-1", "forget_everything", "Erase every memory", "")
 	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("n")})
 	if updated.State() != ConfirmationDenied {
 		t.Errorf("state = %v, want Denied", updated.State())
@@ -62,7 +63,7 @@ func TestConfirmationNDenies(t *testing.T) {
 }
 
 func TestConfirmationEscDenies(t *testing.T) {
-	m := NewConfirmationModel("run-1", "permanent_delete", "", "")
+	m := NewConfirmationModel("run-1", "forget_everything", "", "")
 	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEsc})
 	if updated.State() != ConfirmationDenied {
 		t.Errorf("state = %v, want Denied", updated.State())
@@ -84,7 +85,7 @@ func TestConfirmationOtherKeysDoNothing(t *testing.T) {
 		{Type: tea.KeyTab},
 		{Type: tea.KeyUp},
 	} {
-		m := NewConfirmationModel("run-1", "send_draft", "", "")
+		m := NewConfirmationModel("run-1", "write_file", "", "")
 		updated, cmd := m.Update(key)
 		if updated.State() != ConfirmationPending {
 			t.Errorf("key %v resolved the confirmation to %v; only y/n/esc may", key, updated.State())
@@ -96,7 +97,7 @@ func TestConfirmationOtherKeysDoNothing(t *testing.T) {
 }
 
 func TestConfirmationTimeoutDeniesWithWarning(t *testing.T) {
-	m := NewConfirmationModel("run-1", "send_now", "Send to bob@example.com", "")
+	m := NewConfirmationModel("run-1", "write_file", "Write report.md", "")
 	updated, cmd := m.ResolveTimeout(m.ExpiryMsg())
 	if updated.State() != ConfirmationTimedOut {
 		t.Fatalf("state = %v, want TimedOut", updated.State())
@@ -115,7 +116,7 @@ func TestConfirmationTimeoutDeniesWithWarning(t *testing.T) {
 
 // A timer for a DIFFERENT (superseded) confirmation must never resolve this one.
 func TestConfirmationTimeoutIgnoresAnotherRun(t *testing.T) {
-	m := NewConfirmationModel("run-1", "send_now", "", "")
+	m := NewConfirmationModel("run-1", "write_file", "", "")
 	updated, cmd := m.ResolveTimeout(ConfirmationTimeoutMsg{RunID: "run-2", Seq: m.Seq()})
 	if updated.State() != ConfirmationPending {
 		t.Errorf("state = %v, want still Pending (the timer was for a different run)", updated.State())
@@ -128,7 +129,7 @@ func TestConfirmationTimeoutIgnoresAnotherRun(t *testing.T) {
 // Once resolved, further keys and a late timeout are no-ops — a decision is
 // made once.
 func TestConfirmationResolvedIgnoresFurtherInput(t *testing.T) {
-	m := NewConfirmationModel("run-1", "send_now", "", "")
+	m := NewConfirmationModel("run-1", "write_file", "", "")
 	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("y")})
 	if m.State() != ConfirmationApproved {
 		t.Fatalf("setup: state = %v, want Approved", m.State())
@@ -155,15 +156,12 @@ func TestConfirmationResolvedIgnoresFurtherInput(t *testing.T) {
 
 func TestClassifyActionRiskKnownActions(t *testing.T) {
 	for action, want := range map[string]RiskTier{
-		"send_now":                    RiskWrite,
-		"send_draft":                  RiskWrite,
-		"schedule_send":               RiskWrite,
-		"forward_message":             RiskWrite,
-		"accept_invite":               RiskWrite,
-		"decline_invite":              RiskWrite,
-		"create_event_from_email":     RiskWrite,
-		"permanent_delete":            RiskDestructive,
-		"quarantine_phishing_message": RiskDestructive,
+		"write_file":                RiskWrite,
+		"edit_file":                 RiskWrite,
+		"install_skill":             RiskWrite,
+		"share_engineering_context": RiskWrite,
+		"forget_everything":         RiskDestructive,
+		"run_python":                RiskDestructive,
 	} {
 		if got := ClassifyActionRisk(action); got != want {
 			t.Errorf("ClassifyActionRisk(%q) = %v, want %v", action, got, want)
@@ -258,9 +256,9 @@ func TestRiskTierBadgeWords(t *testing.T) {
 // --- rendering -----------------------------------------------------------
 
 func TestConfirmationViewShowsActionSummaryAndBadge(t *testing.T) {
-	m := NewConfirmationModel("run-1", "send_draft", `Send reply to alice@example.com — subject "Re: invoice"?`, "")
+	m := NewConfirmationModel("run-1", "share_engineering_context", `Share build.log with reviewer@example.com — "nightly failure"?`, "")
 	view := stripANSI(m.View())
-	for _, want := range []string{"Send this email?", "alice@example.com", "WRITE"} {
+	for _, want := range []string{"Allow share engineering context?", "reviewer@example.com", "WRITE"} {
 		if !strings.Contains(view, want) {
 			t.Errorf("view missing %q:\n%s", want, view)
 		}
@@ -269,8 +267,8 @@ func TestConfirmationViewShowsActionSummaryAndBadge(t *testing.T) {
 
 // The destructive tier carries a visible extra warning the write tier does not.
 func TestDestructiveTierShowsExtraWarning(t *testing.T) {
-	write := stripANSI(NewConfirmationModel("run-1", "send_draft", "x", "").View())
-	destructive := stripANSI(NewConfirmationModel("run-1", "permanent_delete", "x", "").View())
+	write := stripANSI(NewConfirmationModel("run-1", "write_file", "x", "").View())
+	destructive := stripANSI(NewConfirmationModel("run-1", "forget_everything", "x", "").View())
 
 	if strings.Contains(write, "cannot be") {
 		t.Errorf("write tier should not show the irreversibility warning:\n%s", write)
@@ -284,7 +282,7 @@ func TestDestructiveTierShowsExtraWarning(t *testing.T) {
 // to wait for: the run already ended, so expiring costs nothing and pretending
 // otherwise would be the lie.
 func TestConfirmationHintNamesTheKeysAndTimeout(t *testing.T) {
-	view := stripANSI(NewConfirmationModel("run-1", "send_draft", "x", "").View())
+	view := stripANSI(NewConfirmationModel("run-1", "write_file", "x", "").View())
 	for _, want := range []string{"y once", "n/esc deny", "30s"} {
 		if !strings.Contains(view, want) {
 			t.Errorf("hint missing %q:\n%s", want, view)
@@ -347,6 +345,13 @@ func TestEachOutcomeIsDistinct(t *testing.T) {
 			m := NewConfirmationModel("run-1", "run_shell_command", "x", "").
 				WithLiveChannel("cid-1", "gh issue list")
 			updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(tc.key)})
+			if tc.key == "a" {
+				// "Always" is only highlighted by its letter; Enter grants it.
+				if cmd != nil || !updated.Pending() {
+					t.Fatal("a alone granted always")
+				}
+				updated, cmd = updated.Update(tea.KeyMsg{Type: tea.KeyEnter})
+			}
 			if cmd == nil {
 				t.Fatalf("%q did not resolve the confirmation", tc.key)
 			}
@@ -371,7 +376,7 @@ func TestEachOutcomeIsDistinct(t *testing.T) {
 // "always" on a prompt with no channel would promise a suppression nobody
 // records, so the key does nothing at all rather than lying.
 func TestAlwaysIsInertWithoutALiveChannel(t *testing.T) {
-	m := NewConfirmationModel("run-1", "send_draft", "x", "")
+	m := NewConfirmationModel("run-1", "write_file", "x", "")
 	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("a")})
 	if cmd != nil {
 		t.Error("'a' must not resolve an undeliverable confirmation")
@@ -385,7 +390,7 @@ func TestAlwaysIsInertWithoutALiveChannel(t *testing.T) {
 // applies, expiry denies; where it does not, it is not armed at all.
 func TestTimeoutNeverApproves(t *testing.T) {
 	t.Run("undeliverable expires to denied", func(t *testing.T) {
-		m := NewConfirmationModel("run-1", "send_draft", "x", "")
+		m := NewConfirmationModel("run-1", "write_file", "x", "")
 		updated, cmd := m.ResolveTimeout(m.ExpiryMsg())
 		if cmd == nil {
 			t.Fatal("the timeout produced no decision")
@@ -467,7 +472,8 @@ func TestAlwaysPromisesOnlyTheScopeTheAgentNamed(t *testing.T) {
 		}
 	}
 
-	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("a")})
+	chosen, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("a")})
+	_, cmd := chosen.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	msg := cmd().(ConfirmationDecidedMsg)
 	if msg.AlwaysScope != "gh issue list" {
 		t.Errorf("the decision carried scope %q, want the one shown", msg.AlwaysScope)
@@ -481,7 +487,7 @@ func TestKnownToolsAreClassifiedRatherThanAllDestructive(t *testing.T) {
 		"write_file":        RiskWrite,
 		"install_skill":     RiskWrite,
 		"run_shell_command": RiskDestructive,
-		"permanent_delete":  RiskDestructive,
+		"forget_everything": RiskDestructive,
 	} {
 		if got := ClassifyActionRisk(tool); got != want {
 			t.Errorf("ClassifyActionRisk(%q) = %v, want %v", tool, got, want)
@@ -510,9 +516,9 @@ func TestConfirmationRendersLegiblyAtNarrowWidths(t *testing.T) {
 			if effective < 24 {
 				effective = 24
 			}
-			m := NewConfirmationModel("run-1", "permanent_delete",
-				"Permanently delete the message from a-very-long-sender-address@example-corp.com with subject "+
-					`"Re: Re: Re: quarterly numbers and the follow up nobody asked for"?`, "")
+			m := NewConfirmationModel("run-1", "forget_everything",
+				"Erase every memory and past conversation stored for a-very-long-account-name@example-corp.com "+
+					`including "Re: Re: Re: quarterly numbers and the follow up nobody asked for"?`, "")
 			m.SetWidth(width)
 			view := stripANSI(m.View())
 			for _, line := range strings.Split(view, "\n") {
@@ -526,7 +532,7 @@ func TestConfirmationRendersLegiblyAtNarrowWidths(t *testing.T) {
 
 func TestConfirmationViewDoesNotPanicWhenResolved(t *testing.T) {
 	for _, state := range []ConfirmState{ConfirmationApproved, ConfirmationDenied, ConfirmationTimedOut} {
-		m := NewConfirmationModel("run-1", "send_draft", "x", "")
+		m := NewConfirmationModel("run-1", "write_file", "x", "")
 		switch state {
 		case ConfirmationApproved:
 			m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("y")})
@@ -556,9 +562,9 @@ func TestDestructiveWarningDistinguishesUnboundedFromIrreversible(t *testing.T) 
 	}
 
 	// A genuinely irreversible action keeps the strong claim.
-	del := destructiveWarning("permanent_delete", false)
+	del := destructiveWarning("forget_everything", false)
 	if !strings.Contains(del, "may not be reversible") {
-		t.Errorf("permanent_delete lost its warning: %q", del)
+		t.Errorf("forget_everything lost its warning: %q", del)
 	}
 }
 
@@ -712,6 +718,30 @@ func TestDestructiveWarningForCodeRunnersPointsAtTheCode(t *testing.T) {
 		if got := ClassifyActionRisk(tool); got != RiskWrite {
 			t.Errorf("ClassifyActionRisk(%q) = %v, want write", tool, got)
 		}
+	}
+}
+
+// The long-turn check-in is a plain question, never a generic tool prompt, and
+// a check-in in a shape this build does not know is still shown as sent.
+func TestTheLongTurnCheckInReadsAsAQuestion(t *testing.T) {
+	m := NewConfirmationModel("r", "continue_long_turn", `{"steps":200,"model":"DeepSeek-V4.1-Flash"}`, "")
+	m.SetWidth(80)
+	view := ansi.Strip(m.View())
+	for _, want := range []string{"Keep going?", "200 steps so far on DeepSeek-V4.1-Flash"} {
+		if !strings.Contains(view, want) {
+			t.Errorf("the check-in lost %q:\n%s", want, view)
+		}
+	}
+	if strings.Contains(view, "Allow continue_long_turn") || strings.Contains(view, `"steps"`) {
+		t.Errorf("the check-in reads as a raw tool prompt:\n%s", view)
+	}
+	for _, odd := range []string{"", "steps=200", `{"model":"x"}`, "not json"} {
+		if got := longTurnSummary(odd); got != odd {
+			t.Errorf("longTurnSummary(%q) = %q; an unknown shape must pass through", odd, got)
+		}
+	}
+	if got := longTurnSummary(`{"steps":400}`); got != "400 steps so far" {
+		t.Errorf("a check-in without a model = %q", got)
 	}
 }
 
@@ -893,7 +923,7 @@ func TestTheFlagshipSkillsMailPromptsMustBeReadToTheEnd(t *testing.T) {
 		"send-email/discard_draft",
 		"send-email/update_draft",
 	} {
-		if ActionTitle(action) == "Allow "+action+"?" {
+		if strings.HasPrefix(ActionTitle(action), "Allow ") {
 			t.Errorf("%s has no plain-language title", action)
 		}
 		if _, ok := confirmationRiskTiers[action]; !ok {
@@ -909,6 +939,81 @@ func TestTheFlagshipSkillsMailPromptsMustBeReadToTheEnd(t *testing.T) {
 		}
 		if m = pressKey(m, "y"); m.State() != ConfirmationApproved {
 			t.Fatalf("%s: state = %v after reading it all, want Approved", action, m.State())
+		}
+	}
+}
+
+func TestCalendarApprovalNamesTheAccountUnderTheTitle(t *testing.T) {
+	summary := `{
+  "calendar_account": "jane.work@example.com",
+  "end": "2030-01-10T11:00:00",
+  "start": "2030-01-10T10:00:00",
+  "title": "Planning"
+}`
+	m := NewConfirmationModel("r1", "calendar/create_calendar_event", summary, "")
+	lines := strings.Split(ansi.Strip(m.View()), "\n")
+	title := -1
+	for i, l := range lines {
+		if strings.Contains(l, ActionTitle("calendar/create_calendar_event")) {
+			title = i
+			break
+		}
+	}
+	if title < 0 || title+1 >= len(lines) || !strings.Contains(lines[title+1], "Calendar: jane.work@example.com") {
+		t.Fatalf("the account must sit right under the title, where clipping keeps it:\n%s", strings.Join(lines, "\n"))
+	}
+	for _, other := range []string{`{"command": "ls"}`, "Send this email to jane@example.com", ""} {
+		if strings.Contains(ansi.Strip(NewConfirmationModel("r2", "x", other, "").View()), "Calendar:") {
+			t.Errorf("no calendar line without a calendar_account: %q", other)
+		}
+	}
+}
+
+// A highlighted answer says so in words, and Enter is what confirms it.
+func TestAHighlightedChoiceIsMarkedAndNeedsEnter(t *testing.T) {
+	m := NewConfirmationModel("run-1", "run_shell_command", "x", "").
+		WithLiveChannel("cid-1", "gh issue list")
+	if strings.Contains(stripANSI(m.View()), "enter to confirm") {
+		t.Fatal("nothing is highlighted on a fresh prompt")
+	}
+	if _, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter}); cmd != nil {
+		t.Fatal("Enter answered a prompt with nothing highlighted")
+	}
+
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("a")})
+	view := stripANSI(m.View())
+	if !strings.Contains(view, "▸ a always: gh issue list (this session) — enter to confirm") {
+		t.Errorf("the highlighted choice is not marked:\n%s", view)
+	}
+
+	m.ClearChoice()
+	if m.Chosen() || strings.Contains(stripANSI(m.View()), "enter to confirm") {
+		t.Error("ClearChoice left the highlight up")
+	}
+}
+
+// Tab walks every answer on offer, in the order shown, and wraps.
+func TestTabWalksTheChoices(t *testing.T) {
+	tab := tea.KeyMsg{Type: tea.KeyTab}
+	enter := tea.KeyMsg{Type: tea.KeyEnter}
+
+	scoped := NewConfirmationModel("r", "run_shell_command", "x", "").WithLiveChannel("c", "pwd")
+	unscoped := NewConfirmationModel("r", "run_shell_command", "x", "")
+	for _, tc := range []struct {
+		name string
+		m    ConfirmationModel
+		want []ConfirmState
+	}{
+		{"scoped", scoped, []ConfirmState{ConfirmationApproved, ConfirmationAlways, ConfirmationDenied, ConfirmationApproved}},
+		{"unscoped", unscoped, []ConfirmState{ConfirmationApproved, ConfirmationDenied, ConfirmationApproved}},
+	} {
+		m := tc.m
+		for i, want := range tc.want {
+			m, _ = m.Update(tab)
+			decided, cmd := m.Update(enter)
+			if cmd == nil || decided.State() != want {
+				t.Errorf("%s: tab %d then Enter -> %v, want %v", tc.name, i+1, decided.State(), want)
+			}
 		}
 	}
 }

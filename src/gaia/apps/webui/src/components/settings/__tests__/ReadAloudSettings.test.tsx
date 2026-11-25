@@ -89,6 +89,17 @@ describe('ReadAloudSettings', () => {
         );
     });
 
+    it('says reading aloud is not offered here instead of showing its controls', async () => {
+        mockedApi.getSpeechSettings.mockResolvedValue({
+            ...SETTINGS, available: false, unavailable_reason: "Reading aloud and dictation aren't offered on macOS yet",
+        });
+        render(<ReadAloudSettings />);
+        expect((await screen.findByRole('status')).textContent).toContain("Reading aloud isn't offered on this computer yet");
+        expect(screen.queryByLabelText('Voice')).toBeNull();
+        expect(screen.queryByRole('button', { name: 'Preview' })).toBeNull();
+        expect(screen.queryByRole('checkbox')).toBeNull();
+    });
+
     it('says why it could not load instead of showing empty controls', async () => {
         mockedApi.getSpeechSettings.mockRejectedValue(new api.ApiError('friendly', 503, 'server down', null));
         render(<ReadAloudSettings />);

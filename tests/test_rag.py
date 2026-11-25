@@ -37,6 +37,12 @@ except ImportError as e:
     IMPORT_ERROR = str(e)
 
 
+@pytest.fixture(autouse=True)
+def _tmp_gaia_home(tmp_path, monkeypatch):
+    # The HMAC key and file-audit log default to ~/.gaia/cache.
+    monkeypatch.setenv("GAIA_HOME", str(tmp_path / "gaia-home"))
+
+
 @pytest.fixture
 def mock_dependencies():
     """Mock external dependencies shared across RAG test classes."""
@@ -1481,10 +1487,12 @@ class TestCacheSecurity:
                 with pytest.raises(ValueError, match="integrity check failed"):
                     rag._verify_and_load_cache(cache_path)
 
-    def test_hmac_key_persists_across_instances(self, mock_dependencies):
+    def test_hmac_key_persists_across_instances(self, mock_dependencies, monkeypatch):
         """Test that HMAC key is created once and reused by new RAGSDK instances."""
         if not RAG_AVAILABLE:
             pytest.skip(f"RAG dependencies not available: {IMPORT_ERROR}")
+        # The key must follow the patched Path.home below.
+        monkeypatch.delenv("GAIA_HOME", raising=False)
 
         with tempfile.TemporaryDirectory() as temp_dir:
             config = RAGConfig(

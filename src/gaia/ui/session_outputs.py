@@ -64,7 +64,7 @@ def _item(
         state = "gone"
     else:
         state = "present"
-    on_disk = bool(path) and kind in ("file", "export", "image", "document")
+    on_disk = bool(path) and kind in ("file", "export", "image", "audio", "document")
     return {
         "id": f"{kind}:{message_id}:{_key(path) if path else ref or name}",
         "kind": kind,
@@ -125,8 +125,10 @@ def list_outputs(db: ChatDatabase, session_id: str) -> Dict[str, Any]:
         for f in summary.get("files") or []:
             add_file(f["path"], mid, at)
         for out in summary.get("outputs") or []:
-            if out["kind"] == "image" and out.get("path"):
+            if out["kind"] in ("image", "audio") and out.get("path"):
                 changes.pop((mid, _key(out["path"])), None)
+                if out.get("copy_of"):
+                    changes.pop((mid, _key(out["copy_of"])), None)
             items.append(
                 _item(
                     out["kind"],

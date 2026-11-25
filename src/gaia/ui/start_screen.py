@@ -152,10 +152,10 @@ def working_folder(choosable: bool) -> Dict[str, Any]:
 
 
 def _mail_connected() -> bool:
+    from gaia.connectors.accounts import list_accounts
     from gaia.connectors.credential_wait import CredentialStoreWaiting, read_within
     from gaia.connectors.errors import ConnectorsError
     from gaia.connectors.registry import REGISTRY
-    from gaia.connectors.store import peek_connection
 
     try:
         for connector_id in MAIL_CONNECTORS:
@@ -163,10 +163,10 @@ def _mail_connected() -> bool:
             ref = spec.oauth_provider_ref or spec.id
             found = read_within(
                 f"connection:{ref}",
-                lambda ref=ref: peek_connection(ref),
+                lambda ref=ref: list_accounts(ref),
                 f"your {spec.display_name} connection",
             )
-            if found is not None:
+            if any(a.status == "ok" for a in found):
                 return True
     except (ConnectorsError, CredentialStoreWaiting) as e:
         # The inbox card is a hint; an unreadable keyring must not blank the screen.

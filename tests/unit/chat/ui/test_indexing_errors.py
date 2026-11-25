@@ -8,6 +8,7 @@ returning 0 chunks, and that callers set indexing_status='failed'.
 """
 
 import shutil
+import tempfile
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -167,8 +168,8 @@ def home_tmp_dir():
     Must be under $HOME because safe_open_document rejects paths
     outside the user's home directory.
     """
-    d = Path.home() / ".gaia_test_indexing"
-    d.mkdir(exist_ok=True)
+    # One per test: a shared name let a parallel worker's teardown delete it.
+    d = Path(tempfile.mkdtemp(prefix=".gaia_test_indexing-", dir=Path.home()))
     yield d
     shutil.rmtree(d, ignore_errors=True)
 

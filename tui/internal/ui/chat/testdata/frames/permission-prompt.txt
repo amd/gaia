@@ -1,0 +1,30 @@
+ GAIA  │ agent gaia
+────────────────────────────────────────────────────────────────────────────────────────────────────
+▶ You: Clean the build folder
+
+  ● Delete build · waiting for you
+    └ rm -rf build/
+
+
+
+
+
+
+
+
+
+
+
+
+  DESTRUCTIVE  Run this command?
+
+ rm -rf build/
+
+ This deletes or discards data and may not be reversible.
+
+ mode: ask · shift+tab to change · expires in 30s
+
+  y once · n/esc deny
+────────────────────────────────────────────────────────────────────────────────────────────────────
+›
+  ● agent gaia waiting for your answer                ↑↓/wheel scroll · answer above · Ctrl+C quit

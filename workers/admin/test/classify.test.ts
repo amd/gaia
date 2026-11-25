@@ -30,6 +30,12 @@ describe("classifyAsset", () => {
     ["gaia_0.25.1_amd64.deb", "Linux", "Installer"],
     ["gaia-0.25.1.x86_64.rpm", "Linux", "Installer"],
     ["gaia-0.25.1-darwin-arm64.pkg", "macOS", "Installer"],
+    ["gaia-0.26.0-darwin-x64.pkg", "macOS", "Installer"],
+    ["gaia-agent-ui-0.26.0-arm64.zip", "macOS", "Agent UI"],
+    ["gaia-agent-darwin-x64", "macOS", "Agents"],
+    ["gaia-core-darwin-x64.tar.gz", "macOS", "Unclassified"],
+    ["gaia-core-linux-x64.tar.gz", "Linux", "Unclassified"],
+    ["gaia-core-win32-x64.tar.gz", "Windows", "Unclassified"],
     ["GaiaInstaller_0.20.0.zip", "Windows", "Installer"],
     ["gaia-windows-amd64.exe", "Windows", "CLI / TUI"],
     ["gaia-linux-arm64", "Linux", "CLI / TUI"],
@@ -41,7 +47,7 @@ describe("classifyAsset", () => {
     ["amd_gaia-0.25.1.tar.gz", "Cross-platform", "Python package"],
     ["gaia-agent-linux-x64", "Linux", "Agents"],
     ["gaia-agent-win32-x64.exe", "Windows", "Agents"],
-    ["gaia_agent_email-0.5.0-py3-none-any.whl", "Cross-platform", "Agents"],
+    ["gaia_agent_hello_world-0.5.0-py3-none-any.whl", "Cross-platform", "Agents"],
     ["jira-0.1.0-setup.exe", "Windows", "Agents"],
   ])("classifies %s as %s / %s", (name, os, product) => {
     expect(classifyAsset(name)).toEqual({ kind: "install", os, product });

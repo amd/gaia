@@ -27,6 +27,7 @@ import httpx
 import pytest
 import respx
 
+from gaia.connectors import store
 from gaia.connectors.flow import revoke_provider_token
 from gaia.connectors.oauth_pkce import OAuthPkceHandler
 from gaia.connectors.providers import _registry as _provider_registry
@@ -84,6 +85,8 @@ class TestRevokeProviderToken:
         assert result == {
             "revoke_supported": True,
             "revoked_remotely": True,
+            "revoke_attempted": True,
+            "nothing_stored": False,
             "revoke_error": None,
         }
 
@@ -131,15 +134,45 @@ class TestRevokeProviderToken:
         assert token_shaped_body not in log_text
 
     @pytest.mark.asyncio
-    async def test_no_stored_token_is_trivially_revoked(self, google_provider):
+    async def test_no_stored_token_reports_nothing_stored(self, google_provider):
         # Nothing was ever connected — there is no live grant to leave
-        # behind, so this is not a failure.
+        # behind, but no provider revoke happened either.
         result = await revoke_provider_token("google")
         assert result == {
             "revoke_supported": True,
-            "revoked_remotely": True,
+            "revoked_remotely": False,
+            "revoke_attempted": False,
+            "nothing_stored": True,
             "revoke_error": None,
         }
+
+    @pytest.mark.asyncio
+    @respx.mock
+    async def test_unreadable_stored_sign_in_is_not_nothing_stored(self, seeded_google):
+        """A slot holding a corrupt blob is not an empty slot (#8713)."""
+        store._kr_set(store._connection_username("google", store.DEFAULT_ACCOUNT), "{")
+
+        # No route registered: respx fails the test if a request goes out,
+        # proving an unreadable token is never posted anywhere.
+        result = await revoke_provider_token("google")
+
+        assert result["nothing_stored"] is False
+        assert result["revoked_remotely"] is False
+        assert result["revoke_supported"] is True
+        assert "could not read" in result["revoke_error"]
+        assert "https://myaccount.google.com/permissions" in result["revoke_error"]
+
+    @pytest.mark.asyncio
+    async def test_unreadable_work_account_points_at_the_work_revoke_page(self):
+        store._kr_set(
+            store._connection_username("microsoft", store.DEFAULT_ACCOUNT), "{"
+        )
+
+        result = await revoke_provider_token("microsoft", account_type="work")
+
+        assert result["nothing_stored"] is False
+        assert result["revoked_remotely"] is False
+        assert "https://myapps.microsoft.com" in result["revoke_error"]
 
     @pytest.mark.asyncio
     async def test_microsoft_reports_not_supported(self, monkeypatch, tmp_path):
@@ -162,6 +195,24 @@ class TestRevokeProviderToken:
         assert result == {
             "revoke_supported": False,
             "revoked_remotely": False,
+            "revoke_attempted": False,
+            "nothing_stored": False,
+            "revoke_error": None,
+        }
+
+    @pytest.mark.asyncio
+    async def test_microsoft_with_nothing_stored_is_not_a_failed_revoke(
+        self, monkeypatch, tmp_path
+    ):
+        monkeypatch.setenv("GAIA_MICROSOFT_CLIENT_ID", "test-ms-client")
+        monkeypatch.setattr("gaia.connectors.grants.Path.home", lambda: tmp_path)
+        _provider_registry.clear()
+        result = await revoke_provider_token("microsoft")
+        assert result == {
+            "revoke_supported": False,
+            "revoked_remotely": False,
+            "revoke_attempted": False,
+            "nothing_stored": True,
             "revoke_error": None,
         }
 
@@ -170,6 +221,7 @@ class TestRevokeProviderToken:
         result = await revoke_provider_token("not-a-real-provider")
         assert result["revoke_supported"] is False
         assert result["revoked_remotely"] is False
+        assert result["nothing_stored"] is False
         # Distinct from "provider has no revoke endpoint" (Microsoft): this
         # is "we couldn't even determine that" (#2591 review), so the reason
         # must be reported, not collapsed into the same silent False.
@@ -198,6 +250,7 @@ class TestRevokeProviderToken:
         result = await revoke_provider_token("google")
         assert result["revoke_supported"] is False
         assert result["revoked_remotely"] is False
+        assert result["nothing_stored"] is False
         assert result["revoke_error"] is not None
         assert "forwarded" in result["revoke_error"]
         # The stored (host app's) refresh token is untouched.

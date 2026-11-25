@@ -9,6 +9,7 @@ is attached, so neither an approval nor full access lifts the refusal.
 """
 
 import os
+import subprocess
 import sys
 
 import pytest
@@ -303,8 +304,32 @@ def run_shell(monkeypatch):
         "python -c \"print(open('.env').read())\"",
     ],
 )
-def test_full_access_does_not_lift_the_refusal(home, run_shell, command):
+def test_full_access_lifts_the_refusal(home, run_shell, command, monkeypatch):
+    started = []
+
+    def fake_step(step, *args, **kwargs):
+        # Nothing is read: the step is recorded, not started.
+        started.append(step.text)
+        return subprocess.CompletedProcess(step.text, 0, "", "")
+
+    monkeypatch.setattr(shell_tools, "_run_step", fake_step)
     run = run_shell(_Host(home, full_access=True))
+
+    result = run(command, working_directory=str(home / "proj"))
+
+    assert result["status"] == "success", result
+    assert started == [command]
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "findstr TOKEN .env" if os.name == "nt" else "cat .env",
+        "python -c \"print(open('.env').read())\"",
+    ],
+)
+def test_the_same_read_is_still_refused_without_full_access(home, run_shell, command):
+    run = run_shell(_Host(home))
 
     result = run(command, working_directory=str(home / "proj"))
 

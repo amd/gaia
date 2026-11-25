@@ -65,6 +65,7 @@ this turn's query matched it.
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 from typing import Any, Dict, List, Set
 
@@ -92,6 +93,43 @@ SKILL_LIBRARY_TOOL_NAMES = (
 _CHARS_PER_TOKEN = 4
 
 _DOCS_URL = "https://amd-gaia.ai/docs/spec/agent-skills"
+
+
+#: "add the skill at C:/x/receipt-format", "install the skill from ~/skills/foo".
+_SKILL_AT_PATH = re.compile(
+    r"\b(?:add|install|capture|import)\b[^.?!\n]{0,30}?\bskill\b[^.?!\n]{0,20}?"
+    r"\b(?:at|from|in)\s+(?:([`'\"])((?:[A-Za-z]:[\\/]|~[\\/]|/)[^`'\"\n]+)\1"
+    r"|((?:[A-Za-z]:[\\/]|~[\\/]|/)[^\s`'\"]+))",
+    re.IGNORECASE,
+)
+_DONT = re.compile(r"\b(?:don'?t|do\s+not|never|not\s+yet)\b", re.IGNORECASE)
+#: Before the match in its sentence: a colon or open quote (pasted text) or "how".
+_NOT_ASKED = re.compile(r"[:\"`“]|(?:^|\s)'|\bhow\b", re.IGNORECASE)
+
+
+def uncaptured_skill_path(request: str, tools_called: Set[str]) -> str:
+    """The folder the user asked to add as a skill when capture_skill never ran, or ""."""
+    if "capture_skill" in tools_called:
+        return ""
+    from gaia.agents.base.memory import _own_words
+
+    match, text = None, ""
+    for part in _own_words(request or ""):
+        for found in _SKILL_AT_PATH.finditer(part):
+            # Pasted text or a how-to question names a path; it asks for nothing.
+            if not _NOT_ASKED.search(re.split(r"[.?!\n]", part[: found.start()])[-1]):
+                match, text = found, part
+                break
+        if match:
+            break
+    if not match:
+        return ""
+    # A "don't" near the request may hold it back; stay quiet rather than guess.
+    if _DONT.search(text[max(0, match.start() - 40) : match.start()]) or _DONT.search(
+        text[match.end() :]
+    ):
+        return ""
+    return (match.group(2) or match.group(3)).rstrip(".,;:)?!")
 
 
 def estimate_prompt_tokens(text: str) -> int:
@@ -229,6 +267,163 @@ class SkillLibraryToolsMixin:
     disk, so the tools stay a view over the real thing.
     """
 
+    def activate_skill(self, name: str, how: str = "model") -> Dict[str, Any]:
+        """Turn on installed skill *name* for this chat and report the result.
+
+        What the ``load_skill`` tool returns, shared with a ``/<name>`` command
+        the user types. *how* is who asked: ``"model"`` or ``"user"``.
+        """
+        from gaia.skills.errors import SkillError
+        from gaia.skills.manager import CLAUDE_ROOTS
+
+        rejection = _reject_bad_name("load_skill", name)
+        if rejection is not None:
+            return rejection
+        skill_name = name.strip()
+        already_loaded = skill_name in self.loaded_skills
+        try:
+            # Rescan and re-parse rather than trusting cached frontmatter:
+            # the gate below has to see the SKILL.md that is on disk now, not
+            # the one discovery read before the last list_skills.
+            self.skill_manager.reload()
+            candidate = self.skill_manager.load(skill_name)
+        except SkillError as exc:
+            return _failure("load_skill", exc)
+
+        if candidate.gaia.tools and candidate.root in CLAUDE_ROOTS:
+            return _refuse_ungated_code(candidate)
+
+        try:
+            skill = self.load_skill(skill_name)
+        except SkillError as exc:
+            return _failure("load_skill", exc)
+        # Tools the framework supplies for this skill register now, so the
+        # unmet-tools warning below describes what the model can really call.
+        activate = getattr(self, "_activate_extraction_skills", None)
+        if callable(activate):
+            activate(skill_name)
+        self._announce_skill(skill.name, how)
+
+        # Captured-but-unpromoted code never registered (gaia.skills.capture)
+        # — report that honestly instead of listing tools that do not exist.
+        from gaia.skills.capture import code_is_deferred
+
+        deferred = code_is_deferred(skill)
+
+        payload: Dict[str, Any] = {
+            "status": "success",
+            "name": skill.name,
+            "already_loaded": already_loaded,
+            "security_tier": skill.security_tier,
+            # Where the skill lives, because most skills ship helper files
+            # and refer to them by RELATIVE path. Without this the model
+            # cannot resolve them: asked for a PDF, it tried to run
+            # `scripts/reportlab_creator.py`, got nothing, and fell back to
+            # hand-writing raw PDF that no reader could open. The pdf skill
+            # ships eight working scripts in exactly that folder.
+            "directory": str(skill.directory),
+            "resolving_paths": (
+                f"Paths in this skill's instructions are relative to "
+                f"{skill.directory} — join them onto it before use."
+            ),
+            "registered_tools": (
+                []
+                if deferred
+                else [skill.namespaced_tool_name(t) for t in skill.tool_names]
+            ),
+            "loaded_skills": sorted(self.loaded_skills),
+            "prompt_tokens_estimate": estimate_prompt_tokens(
+                self.get_skills_system_prompt()
+            ),
+        }
+        from gaia.agents.base.skill_catalog import companions
+
+        unloaded_companions = [
+            other
+            for other in companions(
+                self.skill_manager.discover(),
+                skill.name,
+                self._lists_project_skills(),
+            )
+            if other not in self.loaded_skills
+        ]
+        if unloaded_companions:
+            payload["companion_skills"] = unloaded_companions
+            payload["companion_hint"] = (
+                f"'{skill.name}' pairs with {', '.join(unloaded_companions)}, "
+                "not loaded yet. If the request also involves what one of them "
+                "covers, load it too before starting."
+            )
+        if deferred:
+            from gaia.skills.capture import deferred_remedy
+
+            inert = (
+                f"its {len(skill.tool_names)} tool(s) "
+                f"({', '.join(skill.tool_names)}) did NOT register"
+                if skill.tool_names
+                else "the commands it asks to run without a prompt were " "NOT granted"
+            )
+            payload["deferred_tools"] = list(skill.tool_names)
+            payload["warning"] = (
+                f"Skill '{skill.name}' is not yet trusted: {inert}. Its "
+                "instructions are loaded and usable. Tell the user this "
+                f"stays inert until they run {deferred_remedy(skill)} in "
+                "a terminal — do not claim it works."
+            )
+
+        # What the model can call now, by name: "registered_tools: []" alone
+        # reads as "no tools" for a skill that uses the agent's own.
+        report = self.skill_tool_report(skill)
+        if report["available"]:
+            payload["tools_available"] = report["available"]
+            payload["tools_hint"] = (
+                "These tools are on your tool list now and stay there for this "
+                "chat. Call them directly, as the skill's instructions say."
+            )
+        unlisted = [*report["blocked"], *report["unlisted"]]
+        if unlisted:
+            payload["unavailable_tools"] = unlisted
+            unlisted_warning = (
+                f"Skill '{skill.name}' names tool(s) {', '.join(unlisted)}, "
+                "which are turned off or not on the tool list in this chat, so "
+                "you cannot call them. The parts of its instructions that use "
+                "them cannot run — say so instead of improvising a substitute."
+            )
+            existing = payload.get("warning")
+            payload["warning"] = (
+                f"{existing} {unlisted_warning}" if existing else unlisted_warning
+            )
+
+        # tools_required is advisory at load time — the base loader logs the
+        # gap and loads anyway, so surface it here or the model discovers it
+        # mid-recipe as a missing tool.
+        unmet = [
+            required
+            for required in skill.gaia.tools_required
+            if required not in self._tools_registry
+        ]
+        if unmet:
+            payload["unmet_tools_required"] = unmet
+            unmet_warning = (
+                f"Skill '{skill.name}' expects tool(s) {', '.join(unmet)}, which "
+                "this agent does not have registered. The parts of its "
+                "instructions that use them cannot run — say so instead of "
+                "improvising a substitute."
+            )
+            existing = payload.get("warning")
+            payload["warning"] = (
+                f"{existing} {unmet_warning}" if existing else unmet_warning
+            )
+
+        from gaia.skills import unavailable_binaries
+
+        missing = unavailable_binaries(skill.parsed_permissions())
+        if missing:
+            payload["unavailable_commands"] = [p.binary for p in missing]
+            notes = " ".join(p.unavailable_note() for p in missing)
+            payload["warning"] = f"{payload.get('warning', '')} {notes}".strip()
+        return payload
+
     def register_skill_library_tools(self) -> None:
         """Register the eight skill-library tools onto this agent.
 
@@ -299,6 +494,12 @@ class SkillLibraryToolsMixin:
                     "needs a larger model. Tell the user so; a skill they paste "
                     "or point to can still be added with capture_skill. "
                     f"See {_DOCS_URL}"
+                )
+            elif not hub_offered:
+                payload["hint"] = (
+                    "Searching and installing skills from the hub needs a larger "
+                    "model. If the user wants a skill not listed here, tell them "
+                    "so; they can switch to a larger model in the model list."
                 )
             return payload
 
@@ -609,6 +810,8 @@ class SkillLibraryToolsMixin:
         # Activation
         # ------------------------------------------------------------------
 
+        # A model not offered install_skill gets Agent._fit_load_skill_hint's
+        # ``name`` wording instead.
         @tool
         def load_skill(name: str) -> dict:
             """Activate an installed skill and show its full instructions now.
@@ -627,134 +830,7 @@ class SkillLibraryToolsMixin:
                 missing tool or a substituted command. A missing command
                 with no substitute refuses the load.
             """
-            from gaia.skills.errors import SkillError
-            from gaia.skills.manager import CLAUDE_ROOTS
-
-            rejection = _reject_bad_name("load_skill", name)
-            if rejection is not None:
-                return rejection
-            skill_name = name.strip()
-            already_loaded = skill_name in agent.loaded_skills
-            try:
-                # Rescan and re-parse rather than trusting cached frontmatter:
-                # the gate below has to see the SKILL.md that is on disk now, not
-                # the one discovery read before the last list_skills.
-                agent.skill_manager.reload()
-                candidate = agent.skill_manager.load(skill_name)
-            except SkillError as exc:
-                return _failure("load_skill", exc)
-
-            if candidate.gaia.tools and candidate.root in CLAUDE_ROOTS:
-                return _refuse_ungated_code(candidate)
-
-            try:
-                skill = agent.load_skill(skill_name)
-            except SkillError as exc:
-                return _failure("load_skill", exc)
-            # Tools the framework supplies for this skill register now, so the
-            # unmet-tools warning below describes what the model can really call.
-            activate = getattr(agent, "_activate_extraction_skills", None)
-            if callable(activate):
-                activate(skill_name)
-            agent._announce_skill(skill.name, "model")
-
-            # Captured-but-unpromoted code never registered (gaia.skills.capture)
-            # — report that honestly instead of listing tools that do not exist.
-            from gaia.skills.capture import code_is_deferred
-
-            deferred = code_is_deferred(skill)
-
-            payload: Dict[str, Any] = {
-                "status": "success",
-                "name": skill.name,
-                "already_loaded": already_loaded,
-                "security_tier": skill.security_tier,
-                # Where the skill lives, because most skills ship helper files
-                # and refer to them by RELATIVE path. Without this the model
-                # cannot resolve them: asked for a PDF, it tried to run
-                # `scripts/reportlab_creator.py`, got nothing, and fell back to
-                # hand-writing raw PDF that no reader could open. The pdf skill
-                # ships eight working scripts in exactly that folder.
-                "directory": str(skill.directory),
-                "resolving_paths": (
-                    f"Paths in this skill's instructions are relative to "
-                    f"{skill.directory} — join them onto it before use."
-                ),
-                "registered_tools": (
-                    []
-                    if deferred
-                    else [skill.namespaced_tool_name(t) for t in skill.tool_names]
-                ),
-                "loaded_skills": sorted(agent.loaded_skills),
-                "prompt_tokens_estimate": estimate_prompt_tokens(
-                    agent.get_skills_system_prompt()
-                ),
-            }
-            from gaia.agents.base.skill_catalog import companions
-
-            unloaded_companions = [
-                other
-                for other in companions(
-                    agent.skill_manager.discover(),
-                    skill.name,
-                    agent._lists_project_skills(),
-                )
-                if other not in agent.loaded_skills
-            ]
-            if unloaded_companions:
-                payload["companion_skills"] = unloaded_companions
-                payload["companion_hint"] = (
-                    f"'{skill.name}' pairs with {', '.join(unloaded_companions)}, "
-                    "not loaded yet. If the request also involves what one of them "
-                    "covers, load it too before starting."
-                )
-            if deferred:
-                from gaia.skills.capture import deferred_remedy
-
-                inert = (
-                    f"its {len(skill.tool_names)} tool(s) "
-                    f"({', '.join(skill.tool_names)}) did NOT register"
-                    if skill.tool_names
-                    else "the commands it asks to run without a prompt were "
-                    "NOT granted"
-                )
-                payload["deferred_tools"] = list(skill.tool_names)
-                payload["warning"] = (
-                    f"Skill '{skill.name}' is not yet trusted: {inert}. Its "
-                    "instructions are loaded and usable. Tell the user this "
-                    f"stays inert until they run {deferred_remedy(skill)} in "
-                    "a terminal — do not claim it works."
-                )
-
-            # tools_required is advisory at load time — the base loader logs the
-            # gap and loads anyway, so surface it here or the model discovers it
-            # mid-recipe as a missing tool.
-            unmet = [
-                required
-                for required in skill.gaia.tools_required
-                if required not in agent._tools_registry
-            ]
-            if unmet:
-                payload["unmet_tools_required"] = unmet
-                unmet_warning = (
-                    f"Skill '{skill.name}' expects tool(s) {', '.join(unmet)}, which "
-                    "this agent does not have registered. The parts of its "
-                    "instructions that use them cannot run — say so instead of "
-                    "improvising a substitute."
-                )
-                existing = payload.get("warning")
-                payload["warning"] = (
-                    f"{existing} {unmet_warning}" if existing else unmet_warning
-                )
-
-            from gaia.skills import unavailable_binaries
-
-            missing = unavailable_binaries(skill.parsed_permissions())
-            if missing:
-                payload["unavailable_commands"] = [p.binary for p in missing]
-                notes = " ".join(p.unavailable_note() for p in missing)
-                payload["warning"] = f"{payload.get('warning', '')} {notes}".strip()
-            return payload
+            return agent.activate_skill(name)
 
         @tool
         def unload_skill(name: str) -> dict:

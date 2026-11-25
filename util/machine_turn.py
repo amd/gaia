@@ -79,11 +79,42 @@ def _raise_on_sigterm(signum, _frame):
     raise SystemExit(128 + signum)
 
 
+def _restore_handler(signum: int, handler) -> None:
+    # None means the old handler came from C (embedding); Python can't reinstall it.
+    if handler is None:
+        handler = (
+            signal.default_int_handler if signum == signal.SIGINT else signal.SIG_DFL
+        )
+    signal.signal(signum, handler)
+
+
+def _deliver_held_stop(signum: int, sigint_handler) -> None:
+    if signum != signal.SIGINT:
+        _raise_on_sigterm(signum, None)
+    elif callable(sigint_handler):
+        sigint_handler(signum, None)
+    elif sigint_handler != signal.SIG_IGN:
+        raise KeyboardInterrupt
+
+
 def _run_to_completion(command: list[str], env: dict[str, str]) -> int:
     """Run *command*; on Ctrl-C or SIGTERM, stop it before returning."""
-    proc = subprocess.Popen(command, env=env)
-    previous = signal.signal(signal.SIGTERM, _raise_on_sigterm)
+    # A stop that lands while the child is being created is held until the
+    # child is in hand, or it would escape before there is a process to stop.
+    held: list[int] = []
+
+    def hold(signum, _frame):
+        held.append(signum)
+
+    previous_int = signal.signal(signal.SIGINT, hold)
+    previous_term = signal.signal(signal.SIGTERM, hold)
+    proc = None
     try:
+        proc = subprocess.Popen(command, env=env)
+        _restore_handler(signal.SIGINT, previous_int)
+        signal.signal(signal.SIGTERM, _raise_on_sigterm)
+        for signum in held:
+            _deliver_held_stop(signum, previous_int)
         # The queued command may run for hours; short waits keep Ctrl-C
         # deliverable on Windows, where an untimed wait blocks it.
         while True:
@@ -92,15 +123,17 @@ def _run_to_completion(command: list[str], env: dict[str, str]) -> int:
             except subprocess.TimeoutExpired:
                 continue
     except BaseException:
-        proc.terminate()
-        try:
-            proc.wait(timeout=_STOP_GRACE_S)
-        except subprocess.TimeoutExpired:
-            proc.kill()
-            proc.wait(timeout=_STOP_GRACE_S)
+        if proc is not None:
+            proc.terminate()
+            try:
+                proc.wait(timeout=_STOP_GRACE_S)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                proc.wait(timeout=_STOP_GRACE_S)
         raise
     finally:
-        signal.signal(signal.SIGTERM, previous)
+        _restore_handler(signal.SIGINT, previous_int)
+        _restore_handler(signal.SIGTERM, previous_term)
 
 
 def main(argv: list[str] | None = None) -> int:

@@ -423,8 +423,8 @@ def test_a_platform_with_no_packaged_install_refuses_rather_than_guessing(
 def test_an_install_that_leaves_the_cli_off_path_is_not_reported_as_success(
     tools, monkeypatch
 ):
-    """The package manager said it worked and the binary still is not there —
-    almost always a PATH this process inherited before the install."""
+    """The package manager said it worked and the binary still is not there,
+    even after PATH was re-read. No "restart GAIA": that was the dead end."""
     monkeypatch.setattr(cli_setup_tools, "install_plan", _returns(WINGET))
     monkeypatch.setattr(cli_setup_tools, "detect", _returns(_status(MISSING)))
     monkeypatch.setattr(
@@ -434,7 +434,65 @@ def test_an_install_that_leaves_the_cli_off_path_is_not_reported_as_success(
     result = tools["install_cli"]("gh", WINGET.command)
 
     assert result["status"] == "error"
-    assert "still not on PATH" in result["error"]
+    assert "still cannot find 'gh'" in result["error"]
+    assert "Do not install it again" in result["error"]
+    assert "restart" not in result["error"].lower()
+
+
+def test_an_install_that_changed_nothing_is_not_run_a_second_time(monkeypatch):
+    """A model told "still missing" tends to install again, and again."""
+    runs = []
+    monkeypatch.setattr(cli_setup_tools, "install_plan", _returns(WINGET))
+    monkeypatch.setattr(cli_setup_tools, "detect", _returns(_status(MISSING)))
+    monkeypatch.setattr(
+        cli_setup_tools,
+        "run_install",
+        lambda *_a, **_k: runs.append(1) or "Successfully installed",
+    )
+    host = _Host()
+    host._denied_effects = object()
+    host.register_cli_setup_tools()
+    install = _TOOL_REGISTRY["install_cli"]["function"]
+
+    install("gh", WINGET.command)
+    again = install("gh", WINGET.command)
+
+    assert len(runs) == 1
+    assert again["status"] == "error"
+    assert "already finished during this request" in again["error"]
+
+    # The user's next request starts clean: they may have fixed something.
+    host._denied_effects = object()
+    install("gh", WINGET.command)
+    assert len(runs) == 2
+
+
+def test_path_is_re_read_between_the_install_and_the_check(tools, monkeypatch):
+    """winget adds the program's folder to PATH for new processes only, so the
+    check that follows the install has to look at the refreshed PATH."""
+    order = []
+    monkeypatch.setattr(cli_setup_tools, "install_plan", _returns(WINGET))
+    monkeypatch.setattr(
+        cli_setup_tools,
+        "run_install",
+        lambda *_a, **_k: order.append("install") or "Installed gh",
+    )
+    monkeypatch.setattr(
+        cli_setup_tools.program_lookup,
+        "refresh_path",
+        lambda after_install=False: order.append(("refresh", after_install)) or [],
+    )
+
+    def detect(*_a, **_k):
+        order.append("detect")
+        return _status(READY if ("refresh", True) in order else MISSING)
+
+    monkeypatch.setattr(cli_setup_tools, "detect", detect)
+
+    result = tools["install_cli"]("gh", WINGET.command)
+
+    assert order == ["detect", "install", ("refresh", True), "detect"]
+    assert result["installed"] is True
 
 
 def test_a_successful_install_reports_the_state_it_left_behind(tools, monkeypatch):

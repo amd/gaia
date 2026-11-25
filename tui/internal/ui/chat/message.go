@@ -40,8 +40,18 @@ type Message struct {
 	InputTokens  int           // prompt tokens this turn sent; 0 => not reported
 	CachedTokens int           // prompt tokens served from the backend's cache
 
-	// DurationLabel names the time in the footnote; empty prints it bare.
-	DurationLabel string
+	// Recap is the finished turn's work in a few words ("Read 8 files · ran 2
+	// commands"), and Deliverables the files it produced. FinishedAt is when
+	// the answer landed, for the recap's one-time sweep.
+	Recap        string
+	Deliverables []deliverable
+	// Provenance is where the turn ran and what it drew on; nil when it used
+	// no tools.
+	Provenance *provenance
+	FinishedAt time.Time
+	// CostUSD is what the turn cost on a per-token provider with a known
+	// price; 0 when either is not the case.
+	CostUSD float64
 
 	// Metrics is the agent's per-turn performance record. Nil unless the agent
 	// ran with GAIA_TURN_LOG set — every ordinary turn, and every turn from an
@@ -53,15 +63,15 @@ type Message struct {
 	Render string
 	Data   json.RawMessage
 
-	// Identity marks a RoleCard message as the ONE singular card of its
-	// kind per turn-sequence (#2743) -- today only the email pre-scan card,
-	// which can arrive from two independent sources (a typed turn's
-	// tool_result, or the on-open pre-scan fetch) that must update the SAME
-	// message in place rather than each appending its own. Empty for every
-	// other card, which always appends. Looked up by identity, not by a
-	// tracked index: `/clear` sets ChatModel.messages to nil (model.go), so
-	// a stale index would panic or silently overwrite an unrelated message.
+	// Identity marks a message updated in place rather than appended again
+	// (see setup.go). Looked up by identity, not by a tracked index: `/clear`
+	// sets ChatModel.messages to nil, so a stale index would overwrite an
+	// unrelated message.
 	Identity string
+
+	// ImagePath marks a status line naming an image the agent created: the
+	// path is drawn as a link, and a click on the line opens it.
+	ImagePath string
 
 	// Work is a RoleWork message's steps, as the live log held them.
 	Work []ActivityItem
@@ -90,23 +100,6 @@ func (m *Message) renderCard(w int) string {
 	return m.cardCache
 }
 
-// renderCardDeduped draws the card at w like renderCard, but skips any item
-// whose message_id is already in seen and folds the ids it ends up showing
-// into seen -- so a caller drawing more than one card in a turn threads the
-// accumulated set across calls. Always recomputes rather than using the width
-// cache: this card's visible content can legitimately differ call to call as
-// seen grows while sibling cards in the same turn are drawn. seen may be nil,
-// equivalent to renderCard.
-func (m *Message) renderCardDeduped(w int, seen map[string]bool) string {
-	rendered, ids := cards.RenderDeduped(m.Render, m.Data, w, seen)
-	if seen != nil {
-		for _, id := range ids {
-			seen[id] = true
-		}
-	}
-	return rendered
-}
-
 type ActivityItem struct {
 	// "thinking", "tool", "step", "status", "confirm", "note" — model text
 	// streamed before a tool call, which is narration rather than the answer —
@@ -122,14 +115,19 @@ type ActivityItem struct {
 	// Detail is the one-line outcome drawn under the item once its result
 	// lands ("18 skills · 21ms"). Empty until then.
 	Detail string
-	// Args and Output are the raw call arguments and raw result payload, one
-	// line each. Populated only in developer mode — in user mode they are left
-	// empty rather than filled and hidden at render time, so the quiet path
-	// never pays to format text nobody will read.
-	Args    string
-	Output  string
-	Done    bool
-	Success *bool
+	// Call is what the call said about itself: its category, the description
+	// the model wrote with it, the derived summary, the command or code (for
+	// Ctrl+O), the files it named and, for a write or an edit, the change.
+	Call callInfo
+	// Goal is the agent's announced goal standing when the call was made — the
+	// headline when the call carries no description of its own.
+	Goal string
+	// At and End bracket the call, for the elapsed time on its row.
+	At, End time.Time
+	// OutLines is how many lines of output the call produced, 0 when unknown.
+	OutLines int
+	Done     bool
+	Success  *bool
 	// Approval is the user's answer to a confirmation this step asked for —
 	// approvalWaiting until they answer, then "approved", "denied"… — or ""
 	// when it asked for none.
@@ -137,6 +135,8 @@ type ActivityItem struct {
 	// Repeat counts additional consecutive occurrences folded into this item by
 	// the live work log; 0 means it happened once.
 	Repeat int
+	// Sources are the pages and documents the call drew on (provenance.go).
+	Sources []string
 	// RetryKey is what "the same kind of call" means for a failed step that a
 	// later success can settle (see retryKey). Empty means nothing to match
 	// on, so the failure is never marked retried.
@@ -144,4 +144,14 @@ type ActivityItem struct {
 	// Recovery is how a failed step reads given the rest of its turn — set at
 	// render time by settleFailures, never stored. "" is a plain failure.
 	Recovery string
+	// Progress is a running delegation's latest count ("2 of 4 helpers
+	// done"), shown on the step's own row until its result lands.
+	Progress string
+	// Helpers is a finished delegation's per-helper outcomes, in id order;
+	// MoreHelpers counts any past the most one step lists.
+	Helpers     []helperOutcome
+	MoreHelpers int
+	// Partial marks a delegation some helpers failed or stopped short in,
+	// while others returned something usable: a warning, not a failed step.
+	Partial bool
 }

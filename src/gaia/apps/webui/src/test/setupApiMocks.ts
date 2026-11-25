@@ -9,7 +9,7 @@
 
 import type { MockedObject } from 'vitest';
 import type * as api from '../services/api';
-import type { GpuMemoryStatus, SetupPlan } from '../types';
+import type { AgentDownload, AgentPrograms, GpuMemoryStatus, Settings, SetupPlan } from '../types';
 import type { ModelServerInfo } from '../types/api.gen';
 import { resetSetupDownloads } from '../stores/setupDownloadsStore';
 
@@ -41,10 +41,40 @@ export const NO_GPU_SPLIT: GpuMemoryStatus = {
 /** A model server that names no backends, so Customize's backend choice has nothing to offer. */
 export const NO_BACKENDS = { reachable: true, available_backends: [], preferred_backend: null, default_backend: null } as unknown as ModelServerInfo;
 
+/** Settings as a fresh install reads them: the Python agent, the native one installed too. */
+export const SETTINGS: Settings = {
+    custom_model: null, model_status: null, context_size: null, dynamic_tools: false, dynamic_tools_locked: false,
+    agent_mode: 'goal_driven', network_policy: 'cloud_allowed', flagship_agent: 'gaiapy', gaiacpp_available: true,
+};
+
+export const NO_AGENT_DOWNLOAD: AgentDownload = { state: 'idle', bytes_done: 0, bytes_total: null, error: null };
+
+/** Both agent programs on this PC, the Python one in use. */
+export const AGENT_PROGRAMS: AgentPrograms = {
+    current: 'gaiapy',
+    programs: [
+        { id: 'gaiapy', installed: true, size_bytes: 412_000_000, can_download: false, unavailable_reason: null },
+        { id: 'gaiacpp', installed: true, size_bytes: 6_800_000, can_download: false, unavailable_reason: null },
+    ],
+    download: NO_AGENT_DOWNLOAD,
+};
+
+/** gaiacpp isn't on this PC: `reason` null means it can be downloaded, else why it can't. */
+export function withoutGaiacpp(reason: string | null = null): AgentPrograms {
+    return {
+        ...AGENT_PROGRAMS,
+        programs: AGENT_PROGRAMS.programs.map((p) => (p.id === 'gaiacpp'
+            ? { ...p, installed: false, can_download: reason === null, unavailable_reason: reason, size_bytes: reason === null ? p.size_bytes : null }
+            : p)),
+    };
+}
+
 export function mockSetupApis(mocked: MockedObject<typeof api>): void {
     resetSetupDownloads();
     mocked.getSetupPlan.mockResolvedValue(NO_SERVER_PLAN);
     mocked.getGpuMemory.mockResolvedValue(NO_GPU_SPLIT);
     mocked.getModelServer.mockResolvedValue(NO_BACKENDS);
     mocked.getSetupStatus.mockResolvedValue({ state: 'idle' });
+    mocked.getSettings.mockResolvedValue(SETTINGS);
+    mocked.getAgentPrograms.mockResolvedValue(AGENT_PROGRAMS);
 }

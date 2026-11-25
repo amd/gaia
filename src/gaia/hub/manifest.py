@@ -23,7 +23,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
-from pathlib import Path
+from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import Any, Dict, List, Optional, Union
 
 import yaml
@@ -621,7 +621,7 @@ def _parse_python(raw: Any, where: str) -> Optional[PythonConfig]:
     if entry_module is not None and not _nonempty_str(entry_module):
         raise ManifestError(
             f"gaia-agent.yaml{where}: python.entry_module must be a non-empty "
-            f"string (e.g. 'gaia_agent.agent')."
+            f"string (e.g. 'gaiapy.agent')."
         )
     if entry_class is not None and not _nonempty_str(entry_class):
         raise ManifestError(
@@ -632,6 +632,14 @@ def _parse_python(raw: Any, where: str) -> Optional[PythonConfig]:
         entry_module=entry_module,
         entry_class=entry_class,
         dependencies=_str_list(data.get("dependencies"), "python.dependencies", where),
+    )
+
+
+def _stays_in_agent_folder(path: str) -> bool:
+    """Whether *path* is relative and never climbs out, on POSIX or Windows."""
+    return not any(
+        pure.anchor or ".." in pure.parts
+        for pure in (PurePosixPath(path), PureWindowsPath(path))
     )
 
 
@@ -657,6 +665,12 @@ def _parse_cpp(raw: Any, where: str) -> Optional[CppConfig]:
                 raise ManifestError(
                     f"gaia-agent.yaml{where}: cpp.binaries[{plat!r}] must be a "
                     f"non-empty path string."
+                )
+            if not _stays_in_agent_folder(bin_path):
+                raise ManifestError(
+                    f"gaia-agent.yaml{where}: cpp.binaries[{plat!r}] is "
+                    f"{bin_path!r}; it must be a relative path inside the agent "
+                    f"folder, with no '..' (e.g. 'bin/my-agent')."
                 )
             binaries[plat] = bin_path
     return CppConfig(

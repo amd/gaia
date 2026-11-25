@@ -839,6 +839,78 @@ def test_active_names_the_provider_of_a_known_cloud_model(client, lemonade, keys
     assert client.get("/api/providers/active").json()["provider_name"] is None
 
 
+_OPENCODE = "opencode.big-model"
+
+
+@pytest.fixture
+def opencode_cold(lemonade, monkeypatch):
+    """A cloud model only Lemonade's list names, with nothing read from it yet."""
+    monkeypatch.setattr(lemonade_client, "_CLOUD_MODELS", {})
+    monkeypatch.setattr(lemonade_client, "_CLOUD_PROVIDERS", frozenset())
+    lemonade.models = [
+        {"id": _OPENCODE, "recipe": "cloud", "cloud_provider": "opencode"}
+    ]
+    return _OPENCODE
+
+
+def test_selecting_a_lemonade_listed_cloud_model_is_refused_under_local_only(
+    client, lemonade, keys, db, local_only_on, opencode_cold
+):
+    """#7327: Local only let this cloud model through as if it were local."""
+    resp = client.post("/api/providers/select", json={"model": opencode_cold})
+    assert resp.status_code == 409
+    assert "Local only is on" in resp.json()["detail"]
+    assert db.get_setting("custom_model") is None
+
+
+def test_picking_a_lemonade_listed_cloud_model_loads_nothing_here(
+    client, lemonade, keys, db, monkeypatch, opencode_cold
+):
+    from gaia.ui import warmup
+
+    asked = []
+    monkeypatch.setattr(
+        warmup, "request_warm_up", lambda reason, fresh=False: asked.append(fresh)
+    )
+    resp = client.post("/api/providers/select", json={"model": opencode_cold})
+    assert resp.status_code == 200, resp.text
+    assert db.get_setting("custom_model") == opencode_cold
+    assert asked == []
+    assert keys["ensure"] == []
+
+
+@pytest.mark.parametrize("method", ["GET", "PUT"])
+def test_a_lemonade_listed_cloud_model_has_no_context_to_choose(
+    client, lemonade, opencode_cold, method
+):
+    if method == "GET":
+        resp = client.get(
+            "/api/providers/local/context", params={"model": opencode_cold}
+        )
+    else:
+        resp = client.put(
+            "/api/providers/local/context",
+            json={"model": opencode_cold, "ctx_size": 32768},
+        )
+    assert resp.status_code == 422
+    assert resp.json()["detail"] == providers._CLOUD_CONTEXT_DETAIL
+    assert "system-info" not in lemonade.paths("GET")
+
+
+def test_restart_does_not_reload_a_lemonade_listed_cloud_model(
+    client, lemonade, db, monkeypatch, opencode_cold
+):
+    started = []
+    monkeypatch.setattr(
+        providers, "_start_reload", lambda *a: started.append(a) or True
+    )
+    db.set_setting("custom_model", opencode_cold)
+    resp = client.post("/api/providers/local/restart", json={"confirm": True})
+    assert resp.status_code == 422, resp.text
+    assert "runs in the cloud" in resp.json()["detail"]
+    assert started == []
+
+
 def test_active_restores_the_last_model_once_per_run(client, lemonade, keys, db):
     model = "fireworks.accounts/fireworks/models/glm-5p3-flash"
     _write_config({"last_model": model})
@@ -1343,6 +1415,24 @@ def test_a_missing_ca_file_is_named_instead_of_the_key(
     assert model_list["keys_checked"] == []
 
 
+def test_a_missing_ca_file_lemond_was_given_is_not_blamed(
+    client, lemonade, keys, model_list, monkeypatch
+):
+    """#7226: lemond runs with the file supplied, so a key with no models is
+    judged by the key check, not the host's store."""
+    from gaia.llm.lemonade_embedded import EmbeddedLemonade
+
+    monkeypatch.setattr(
+        EmbeddedLemonade, "_read_state", lambda self: {"ca_supplied": True}
+    )
+    model_list["ca_problem"] = "should not be shown"
+    lemonade.answers[("POST", "cloud/auth")] = (200, {"models_discovered": False})
+    resp = client.post("/api/providers/fireworks/connect", json={"api_key": KEY})
+    assert resp.status_code == 401
+    assert "did not accept that key" in resp.json()["detail"]
+    assert model_list["keys_checked"] == [KEY]
+
+
 def test_a_missing_ca_file_on_the_users_own_server_is_not_claimed(
     client, lemonade, keys, model_list
 ):
@@ -1411,7 +1501,7 @@ def test_connect_unregistered_provider_names_settings_not_a_command(
     assert resp.status_code == 409, resp.text
     detail = resp.json()["detail"]
     assert "no cloud provider registered" in detail
-    assert "Settings > Model" in detail
+    assert "Settings > Agent & model" in detail
     assert "connect it again" in detail
     assert "older than" not in detail
     assert "gaia gateway install" not in detail
@@ -1738,6 +1828,26 @@ def test_active_does_not_size_optional_models(client, lemonade):
     lemonade.answers[("GET", "system-info")] = (200, _STRIX_128)
     client.get("/api/providers/active")
     assert "system-info" not in lemonade.paths()
+
+
+def test_local_models_list_verified_first_in_setups_order_and_say_so(client, lemonade):
+    """Setup's order and Verified/Untested tags, not the alphabet: an untested
+    model whose id sorts first must not lead the list."""
+    ladder = list(lemonade_client.DEFAULT_MODEL_LADDER)
+    lemonade.models = [
+        {"id": "Aardvark-7B-GGUF", "downloaded": True, "labels": []},
+        *_GPT_OSS,
+        *({"id": m, "downloaded": False, "labels": []} for m in sorted(ladder)),
+    ]
+    lemonade.answers[("GET", "system-info")] = (200, _STRIX_128)
+    models = client.get("/api/providers/local/models").json()["models"]
+    ids = [m["id"] for m in models]
+    assert ids[: len(ladder)] == ladder
+    assert ids.index("gpt-oss-120b-mxfp-GGUF") < ids.index("Aardvark-7B-GGUF")
+    support = {m["id"]: m["support"] for m in models}
+    assert {support[m] for m in ladder} == {"verified"}
+    assert support["Aardvark-7B-GGUF"] == "untested"
+    assert support["gpt-oss-120b-mxfp-GGUF"] == "untested"
 
 
 def test_downloaded_gpt_oss_lists_even_when_memory_is_unknown(client, lemonade):

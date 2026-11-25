@@ -15,12 +15,12 @@ import uuid
 
 import pytest
 
-pytest.importorskip("gaia_agent")
+pytest.importorskip("gaiapy")
 
-import gaia_agent.session_registry as registry_mod  # noqa: E402
+import gaiapy.session_registry as registry_mod  # noqa: E402
 from fastapi.testclient import TestClient  # noqa: E402
-from gaia_agent import caller_auth  # noqa: E402
-from gaia_agent import server as server_mod  # noqa: E402
+from gaiapy import caller_auth  # noqa: E402
+from gaiapy import server as server_mod  # noqa: E402
 
 import gaia.llm.lemonade_client as lc  # noqa: E402
 import gaia.ui.warmup as ui_warmup  # noqa: E402
@@ -97,6 +97,7 @@ def sidecar(monkeypatch):
     caller_auth.reset()
     monkeypatch.delenv(caller_auth.TOKEN_FILE_ENV_VAR, raising=False)
     monkeypatch.delenv(caller_auth.TOKEN_ENV_VAR, raising=False)
+    monkeypatch.setenv(caller_auth.ALLOW_NO_TOKEN_ENV_VAR, "1")
     server = _ModelServer()
     warm_agent = _WarmUpAgent(server)
     turns = []

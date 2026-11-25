@@ -19,7 +19,7 @@ import (
 // names the agent id instead ("agent gaia"), which is a different string from
 // the product literal even for the flagship.
 func TestTheProductNameIsNotRepeatedBackAtTheUser(t *testing.T) {
-	m := NewChatModel(&nullClient{}, "GAIA", "", false)
+	m := NewChatModel(&nullClient{}, "GAIA", "")
 	m.width, m.height = 100, 30
 	m.resize()
 
@@ -33,14 +33,14 @@ func TestTheProductNameIsNotRepeatedBackAtTheUser(t *testing.T) {
 	}
 
 	// A DIFFERENT agent still gets named — that line carries information. The
-	// identity chip always lowercases the id, so "Email" reads as "email".
-	other := NewChatModel(&nullClient{}, "Email", "", false)
+	// identity chip always lowercases the id, so "Notes" reads as "notes".
+	other := NewChatModel(&nullClient{}, "Notes", "")
 	other.width, other.height = 100, 30
 	other.resize()
-	if h := ansi.Strip(other.renderHeader()); !strings.Contains(h, "email") {
+	if h := ansi.Strip(other.renderHeader()); !strings.Contains(h, "notes") {
 		t.Errorf("a non-flagship agent lost its name from the header: %q", h)
 	}
-	if w := ansi.Strip(other.renderWelcome()); !strings.Contains(w, "email") {
+	if w := ansi.Strip(other.renderWelcome()); !strings.Contains(w, "notes") {
 		t.Errorf("a non-flagship agent lost its name from the welcome:\n%s", w)
 	}
 }
@@ -155,7 +155,7 @@ func TestTheUsersQuestionIsDimmedInFull(t *testing.T) {
 	m := newTestChat(t)
 	m.messages = append(m.messages, Message{Role: RoleUser, Content: "what changed in the release?"})
 
-	raw := m.renderMessage(&m.messages[len(m.messages)-1], nil)
+	raw := m.renderMessage(&m.messages[len(m.messages)-1])
 	// The styled run has to cover the text, not just the prefix: no unstyled
 	// tail after the last reset.
 	if i := strings.LastIndex(raw, "\x1b[0m"); i >= 0 {
@@ -205,7 +205,7 @@ func TestTurnsAreSeparatedByBlankLines(t *testing.T) {
 // A 200-column terminal laying prose out as 200-character lines loses the eye on
 // the carriage return. Cards and tables are not prose and are not capped.
 func TestProseIsCappedToAReadableMeasure(t *testing.T) {
-	m := NewChatModel(&nullClient{}, "GAIA", "", false)
+	m := NewChatModel(&nullClient{}, "GAIA", "")
 	m.width, m.height = 220, 50
 	m.resize()
 
@@ -227,7 +227,7 @@ func TestTheLiveRegionHasABoundedHeight(t *testing.T) {
 	m := newTestChat(t)
 	for _, tool := range []string{
 		"list_inbox", "get_message", "classify", "apply_prefs",
-		"pre_scan_inbox", "index_document", "read_file", "summarize",
+		"list_inbox", "index_document", "read_file", "summarize",
 	} {
 		m = feed(t, m,
 			event.CanonicalToolCallEvent{Type: "tool_call", Tool: tool},
@@ -251,12 +251,12 @@ func TestTheLiveRegionHasABoundedHeight(t *testing.T) {
 // edge. Wrapping the question to the pane while capping the answer at 88 put a
 // 196-column question above an 88-column answer on a wide terminal.
 func TestAQuestionSharesTheAnswersMeasure(t *testing.T) {
-	m := NewChatModel(&nullClient{}, "GAIA", "", false)
+	m := NewChatModel(&nullClient{}, "GAIA", "")
 	m.width, m.height = 220, 50
 	m.resize()
 	m.messages = []Message{{Role: RoleUser, Content: strings.Repeat("a long question ", 30)}}
 
-	rendered := ansi.Strip(m.renderMessage(&m.messages[0], nil))
+	rendered := ansi.Strip(m.renderMessage(&m.messages[0]))
 	for _, line := range strings.Split(rendered, "\n") {
 		if w := ansi.StringWidth(line); w > m.answerWidth() {
 			t.Fatalf("a question line is %d columns wide; answers cap at %d", w, m.answerWidth())
@@ -289,8 +289,9 @@ func TestLegacyToolArgsTruncateOnRunesNotBytes(t *testing.T) {
 }
 
 // Six metrics under every answer trains the eye to skip the line entirely.
-// The default keeps the one figure a person reads; --dev keeps the rest.
-func TestAnswerTelemetryIsQuietByDefaultAndFullUnderDebug(t *testing.T) {
+// The default keeps the figures a person reads — time and tokens — and Ctrl+O
+// shows the rest. There is no mode that prints them by default.
+func TestAnswerTelemetryIsQuietByDefaultAndFullUnderCtrlO(t *testing.T) {
 	msg := &Message{
 		Role:      RoleAssistant,
 		Content:   "the answer",
@@ -302,17 +303,26 @@ func TestAnswerTelemetryIsQuietByDefaultAndFullUnderDebug(t *testing.T) {
 		ToolsUsed: 3,
 	}
 
-	quiet := NewChatModel(&nullClient{}, "GAIA", "", false)
-	got := quiet.answerStats(msg)
-	if got != "12.4s" {
-		t.Errorf("default footnote is %q; want just the elapsed time", got)
+	quiet := NewChatModel(&nullClient{}, "GAIA", "")
+	if got := quiet.answerStats(msg); got != "" {
+		t.Errorf("the full stats drew while folded: %q", got)
+	}
+	if got := quiet.recapLine(msg); got != "12s · ↓ 420 tokens" {
+		t.Errorf("default footnote is %q; want the time and the tokens", got)
 	}
 
-	dev := NewChatModel(&nullClient{}, "GAIA", "", true)
+	dev := NewChatModel(&nullClient{}, "GAIA", "")
+	dev.expandWork = true
 	full := dev.answerStats(msg)
-	for _, want := range []string{"12.4s", "ttft 0.9s", "420 tokens", "44.2 tok/s", "4 steps", "3 tools"} {
+	for _, want := range []string{"ttft 0.9s", "44.2 tok/s", "4 steps", "3 tools"} {
 		if !strings.Contains(full, want) {
-			t.Errorf("--dev footnote lost %q: %q", want, full)
+			t.Errorf("the Ctrl+O footnote lost %q: %q", want, full)
+		}
+	}
+	// The recap above already carries the time and the token count.
+	for _, dup := range []string{"12.4s", "420 tokens"} {
+		if strings.Contains(full, dup) {
+			t.Errorf("the Ctrl+O footnote repeats the recap's %q: %q", dup, full)
 		}
 	}
 }

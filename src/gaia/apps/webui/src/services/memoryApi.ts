@@ -4,6 +4,7 @@
 /** API client for the GAIA memory dashboard endpoints. */
 
 import { getApiBase } from '../utils/apiBase';
+import { noteBackendAnswer } from '../stores/uiAuthStore';
 
 async function memFetch<T>(method: string, path: string, body?: unknown): Promise<T> {
     const url = `${getApiBase()}${path}`;
@@ -18,6 +19,7 @@ async function memFetch<T>(method: string, path: string, body?: unknown): Promis
     const res = await fetch(url, init);
     if (!res.ok) {
         const text = await res.text().catch(() => '');
+        noteBackendAnswer(res.status, text);
         let detail = text;
         try { detail = JSON.parse(text).detail || text; } catch { /* noop */ }
         throw new Error(detail || `Memory API error (HTTP ${res.status})`);
@@ -245,6 +247,42 @@ export interface MemorySettingsUpdateResponse extends MemorySettings {
 
 export function updateMemorySettings(settings: Partial<MemorySettings>) {
     return memFetch<MemorySettingsUpdateResponse>('PUT', '/memory/settings', settings);
+}
+
+export type EmbedderDevice = 'npu' | 'gpu';
+
+/** One device the embedder may run on; `available` null while the model server is starting. */
+export interface EmbedderOption {
+    device: EmbedderDevice;
+    model: string;
+    display_name: string;
+    /** False for a device GAIA hasn't proven; it is shown but can't be chosen. */
+    proven: boolean;
+    /** Whether this PC's hardware can run it; null while the model server is starting. */
+    present: boolean | null;
+    available: boolean | null;
+    reason: string | null;
+    downloaded: boolean | null;
+}
+
+/** Where every chat embeds documents and memory. */
+export interface EmbedderView {
+    device: EmbedderDevice;
+    /** True when the user chose the device; false when it is the default. */
+    chosen: boolean;
+    default_device: EmbedderDevice;
+    options: EmbedderOption[];
+    /** Set by a change: false when the embedder stayed the same. */
+    changed?: boolean;
+}
+
+export function getEmbedder() {
+    return memFetch<EmbedderView>('GET', '/memory/embedder');
+}
+
+/** `null` returns to the PC's setup. */
+export function setEmbedder(device: EmbedderDevice | null) {
+    return memFetch<EmbedderView>('PUT', '/memory/embedder', { device });
 }
 
 export function clearAllMemory() {

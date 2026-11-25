@@ -24,7 +24,7 @@ RAGSDK provides document retrieval and Q&A capabilities using Retrieval-Augmente
 - Multi-format support (PDF, TXT, MD, CSV, JSON, code files)
 - VLM-based image text extraction from PDFs, on pages with under 200 characters of their own text, so scans are read and logos and photos on text pages aren't
 - Intelligent semantic chunking
-- Hardware-accelerated embeddings (NPU/GPU via Lemonade)
+- Hardware-accelerated embeddings (GPU via Lemonade)
 - Per-file search optimization
 - Automatic caching with content hashing
 - LRU memory management
@@ -40,7 +40,7 @@ RAGSDK provides document retrieval and Q&A capabilities using Retrieval-Augmente
 class RAGConfig:
     """Configuration for RAG SDK."""
 
-    model: str = DEFAULT_MODEL_NAME  # "Gemma-4-E4B-it-GGUF"
+    model: str = field(default_factory=resolve_local_chat_model)  # gaia init's local pick, else Gemma
     max_tokens: int = 1024
     chunk_size: int = 500  # max useful; chunks are capped at EMBED_MAX_CHARS (2000)
     chunk_overlap: int = 100
@@ -66,6 +66,12 @@ class RAGConfig:
     # VLM settings
     vlm_model: str = "Gemma-4-E4B-it-GGUF"
     use_vlm: bool = True  # False: never read PDF/PPTX images, even if the VLM is installed; image files then fail to index
+
+    # Optional reranking through Lemonade /rerank (off by default)
+    enable_reranking: bool = False
+    reranking_model: Optional[str] = None  # None: first downloaded `reranking` model
+    reranking_candidate_multiplier: int = 3  # vector candidates = max_chunks * this
+    reranking_timeout: int = 30  # seconds per rerank call
 
     # Security
     allowed_paths: Optional[List[str]] = None

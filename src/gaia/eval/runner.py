@@ -49,10 +49,11 @@ from gaia.eval.eval_lock import exclusive_eval
 from gaia.eval.fixture_env import fixture_fingerprint
 from gaia.eval.fixture_env import from_env as fixture_env_from_env
 from gaia.eval.fixture_env import localize
-from gaia.eval.process_tree import kill_tree as _kill_tree
 from gaia.eval.scenario_backend import ScenarioBackend, validate_approve_prompts
 from gaia.eval.scorecard import NOT_RUN, SKIPPED_STATUSES
 from gaia.llm.local_only import assert_provider_permitted, cloud_blocked
+from gaia.ui.api_token import UITokenError, auth_headers, read_token, token_path
+from gaia.utils.process_tree import kill_tree as _kill_tree
 
 logger = logging.getLogger(__name__)
 
@@ -139,6 +140,8 @@ def resolve_mcp_config(run_dir, backend_url: str) -> Path:
             "cannot reach the Agent UI backend."
         )
     server["args"] = [*server.get("args", []), "--backend", backend_url]
+    # The MCP server must present the token of the backend this run targets.
+    server["env"] = {**server.get("env", {}), "GAIA_UI_TOKEN_FILE": str(token_path())}
     resolved = Path(run_dir).resolve() / "mcp-config.resolved.json"
     resolved.parent.mkdir(parents=True, exist_ok=True)
     resolved.write_text(json.dumps(config, indent=2) + "\n", encoding="utf-8")
@@ -217,7 +220,7 @@ def _read_session_agent_type(backend_url: str, session_id: str, timeout: float =
     is worth nothing.
     """
     url = f"{backend_url.rstrip('/')}/api/sessions/{session_id}"
-    response = requests.get(url, timeout=timeout)
+    response = requests.get(url, timeout=timeout, headers=auth_headers())
     response.raise_for_status()
     return response.json().get("agent_type")
 
@@ -490,7 +493,7 @@ def _read_session_model(backend_url: str, session_id: str, timeout: float = 15.0
     one the session was created with. Raises on any transport or parse failure.
     """
     url = f"{backend_url.rstrip('/')}/api/sessions/{session_id}"
-    response = requests.get(url, timeout=timeout)
+    response = requests.get(url, timeout=timeout, headers=auth_headers())
     response.raise_for_status()
     return response.json().get("effective_model")
 
@@ -663,6 +666,12 @@ def validate_scenario(path: Path, data: dict) -> None:
     if approve_error:
         errors.append(approve_error)
 
+    skills_absent_error = _skills_absent_error(
+        (data.get("setup") or {}).get("skills_absent")
+    )
+    if skills_absent_error:
+        errors.append(skills_absent_error)
+
     memory_clear = (data.get("setup") or {}).get("memory_clear")
     if memory_clear is not None and not isinstance(memory_clear, bool):
         errors.append(
@@ -772,6 +781,15 @@ def _documents_exist(scenario_data: dict) -> bool:
 # would read as the agent's fault.
 REQUIRES_ASR_TAG = "requires_asr"
 REQUIRES_VLM_TAG = "requires_vlm"
+REQUIRES_SD_TAG = "requires_sd"
+REQUIRES_MUSIC_TAG = "requires_music"
+SD_MODEL = "SDXL-Turbo"
+MUSIC_MODEL = "ACE-Step-Music"
+
+# Tags pinning a scenario to the agent model's feature tier
+# (gaia/agents/base/model_features.py): a skill one tier withholds is scored
+# for use on the other and for an honest refusal on this one.
+REQUIRES_TIER_TAGS = {"requires_full_tier": "full", "requires_compact_tier": "compact"}
 
 
 def _required_models(scenario_data: dict) -> list:
@@ -779,9 +797,37 @@ def _required_models(scenario_data: dict) -> list:
     from gaia.audio.lemonade_asr import DEFAULT_ASR_MODEL
     from gaia.vlm.mixin import DEFAULT_VLM_MODEL
 
-    by_tag = {REQUIRES_ASR_TAG: DEFAULT_ASR_MODEL, REQUIRES_VLM_TAG: DEFAULT_VLM_MODEL}
+    by_tag = {
+        REQUIRES_ASR_TAG: DEFAULT_ASR_MODEL,
+        REQUIRES_VLM_TAG: DEFAULT_VLM_MODEL,
+        REQUIRES_SD_TAG: SD_MODEL,
+        REQUIRES_MUSIC_TAG: MUSIC_MODEL,
+    }
     tags = set(scenario_data.get("tags") or [])
     return [(tag, model) for tag, model in by_tag.items() if tag in tags]
+
+
+def _agent_tier(agent_model) -> str:
+    """The feature tier of the model the agent runs (the pinned one, else the default)."""
+    from gaia.agents.base.model_features import TIERS, features_for_model
+    from gaia.llm.lemonade_client import resolve_default_chat_model
+
+    features = features_for_model(agent_model or resolve_default_chat_model())
+    return next(name for name, tier in TIERS.items() if tier == features)
+
+
+def _tier_mismatch(scenario_data: dict, agent_model) -> list:
+    """Why the agent model's feature tier rules the scenario out; empty means it doesn't."""
+    tags = set(scenario_data.get("tags") or [])
+    wanted = [(t, tier) for t, tier in REQUIRES_TIER_TAGS.items() if t in tags]
+    if not wanted:
+        return []
+    actual = _agent_tier(agent_model)
+    return [
+        f"the agent model has the {actual!r} feature tier (tag {tag})"
+        for tag, tier in wanted
+        if tier != actual
+    ]
 
 
 def _missing_requirements(scenario_data: dict, downloaded_models: set) -> list:
@@ -808,7 +854,7 @@ def _downloaded_lemonade_models() -> set:
         catalog = client.list_models()
     except Exception as e:
         raise RuntimeError(
-            f"Scenarios tagged {REQUIRES_ASR_TAG}/{REQUIRES_VLM_TAG} need Lemonade's "
+            "Scenarios with a model requires_* tag need Lemonade's "
             f"model list to decide whether they can run, but GET "
             f"{client.base_url}/models failed: {e}. Start Lemonade "
             "(`gaia daemon start`) or set LEMONADE_BASE_URL to a running server."
@@ -1706,6 +1752,10 @@ def preflight_check(backend_url, scenarios=None):
         # ConnectionError catches http.client.RemoteDisconnected, which is not a
         # URLError - see urllib.request.AbstractHTTPHandler.do_open.
         errors.append(f"Agent UI not reachable at {backend_url}: {e}")
+    try:
+        read_token()
+    except UITokenError as e:
+        errors.append(str(e))
 
     # Check corpus manifest
     if not MANIFEST.exists():
@@ -1807,15 +1857,17 @@ def _apply_mailbox_fixture(backend_url: str, scenario_data: dict) -> Optional[st
             f"{sorted(_MAILBOX_FIXTURE_STATES)}"
         )
     url = f"{backend_url}/api/connectors/eval-mailbox"
-    req = urllib.request.Request(
-        url,
-        data=json.dumps({"attached": _MAILBOX_FIXTURE_STATES[state]}).encode(),
-        headers={"Content-Type": "application/json", "X-Gaia-UI": "1"},
-        method="POST",
-    )
     try:
+        req = urllib.request.Request(
+            url,
+            data=json.dumps({"attached": _MAILBOX_FIXTURE_STATES[state]}).encode(),
+            headers={"Content-Type": "application/json", **auth_headers()},
+            method="POST",
+        )
         with urllib.request.urlopen(req, timeout=10) as r:
             body = json.loads(r.read().decode("utf-8"))
+    except UITokenError as e:
+        return str(e)
     except (urllib.error.URLError, ConnectionError, TimeoutError) as e:
         return (
             f"could not set the fixture mailbox to {state} via {url}: {e}. Start "
@@ -1824,6 +1876,91 @@ def _apply_mailbox_fixture(backend_url: str, scenario_data: dict) -> Optional[st
         )
     if body.get("attached") != _MAILBOX_FIXTURE_STATES[state]:
         return f"{url} did not switch the fixture mailbox to {state}: {body}"
+    return None
+
+
+def _skills_absent_error(names) -> Optional[str]:
+    """Why ``setup.skills_absent`` is malformed, or ``None`` when it is usable."""
+    from gaia.skills.errors import SkillValidationError
+    from gaia.skills.naming import validated_skill_name
+
+    if names is None:
+        return None
+    if not isinstance(names, list) or not all(isinstance(n, str) for n in names):
+        return (
+            "setup.skills_absent must be a list of skill names the runner removes "
+            "before the scenario starts, e.g. ['unit-convert']"
+        )
+    for name in names:
+        try:
+            validated_skill_name(name, source="setup.skills_absent")
+        except SkillValidationError as e:
+            return str(e)
+    return None
+
+
+def _reaches_real_home(path: Path, real_home: Path) -> bool:
+    """True if *path* is, or sits inside, *real_home* through any alias.
+
+    Path equality misses links and second spellings (a junction, a UNC admin
+    share), so each existing ancestor is also compared by file identity.
+    A path that cannot be checked counts as reaching the real home.
+    """
+    target = path.resolve()
+    real = real_home.resolve()
+    if target == real or real in target.parents:
+        return True
+    if not real.exists():
+        return False
+    for candidate in (target, *target.parents):
+        try:
+            if candidate.exists() and os.path.samefile(candidate, real):
+                return True
+        except OSError:
+            return True
+    return False
+
+
+def _apply_skills_absent(scenario_data: dict) -> Optional[str]:
+    """Remove the scenario's ``setup.skills_absent`` skills from the eval home.
+
+    Scenarios in one category share a GAIA home, so a skill an earlier scenario
+    (or an earlier attempt) installed would otherwise still be there. Runs before
+    every attempt, including a re-run after an account switch. Refuses the
+    machine's real ``~/.gaia``. Returns ``None`` on success, or an error string.
+    """
+    from gaia.home import default_gaia_home, gaia_home
+    from gaia.skills.errors import SkillError, SkillNotFoundError
+    from gaia.skills.install import remove_skill
+    from gaia.skills.manager import SkillManager
+
+    names = (scenario_data.get("setup") or {}).get("skills_absent")
+    if names is None:
+        return None
+    malformed = _skills_absent_error(names)
+    if malformed:
+        return malformed
+    home = gaia_home()
+    skills_root = home / "skills"
+    if _reaches_real_home(home, default_gaia_home()) or _reaches_real_home(
+        skills_root, default_gaia_home()
+    ):
+        return (
+            f"setup.skills_absent deletes installed skills, but the eval home's "
+            f"skills ({skills_root}) lead into the real home "
+            f"({default_gaia_home()}). Run the category under an eval home, e.g. "
+            "`python util/run_eval_lane.py --category "
+            f"{scenario_data.get('category', '<category>')}`."
+        )
+    manager = SkillManager(user_skills_root=skills_root)
+    for name in names:
+        try:
+            removed = remove_skill(name, manager=manager)
+        except SkillNotFoundError:
+            continue
+        except SkillError as e:
+            return f"setup.skills_absent could not remove '{name}' from {home}: {e}"
+        logger.info("Removed leftover skill '%s' from %s", name, removed.path)
     return None
 
 
@@ -1836,8 +1973,8 @@ def _probe_eval_mailbox(backend_url: str) -> Optional[str]:
     import urllib.request
 
     url = f"{backend_url}/api/connectors/eval-mailbox"
-    req = urllib.request.Request(url, headers={"X-Gaia-UI": "1"})
     try:
+        req = urllib.request.Request(url, headers=auth_headers())
         with urllib.request.urlopen(req, timeout=5) as r:
             if r.status != 200:
                 return (
@@ -1852,6 +1989,8 @@ def _probe_eval_mailbox(backend_url: str) -> Optional[str]:
                 "with the absolute path."
             )
         return None
+    except UITokenError as e:
+        return str(e)
     except urllib.error.HTTPError as e:
         if e.code in (403, 404):
             return (
@@ -1916,15 +2055,17 @@ def _reset_memory(backend_url: str, scenario_data: dict) -> Optional[str]:
     if not _scenario_clears_memory(scenario_data):
         return None
     url = f"{backend_url}/api/memory/admin/clear"
-    req = urllib.request.Request(
-        url,
-        data=json.dumps({"scope": "all"}).encode("utf-8"),
-        headers={"Content-Type": "application/json", "X-Gaia-UI": "1"},
-        method="POST",
-    )
     try:
+        req = urllib.request.Request(
+            url,
+            data=json.dumps({"scope": "all"}).encode("utf-8"),
+            headers={"Content-Type": "application/json", **auth_headers()},
+            method="POST",
+        )
         with urllib.request.urlopen(req, timeout=30) as r:
             body = json.loads(r.read().decode("utf-8"))
+    except UITokenError as e:
+        return f"could not clear memory before the scenario: {e}"
     except urllib.error.HTTPError as e:
         if e.code == 403:
             return (
@@ -1960,12 +2101,16 @@ def _probe_memory_enabled(backend_url: str) -> Optional[str]:
 
     url = f"{backend_url}/api/memory/settings"
     enable = (
-        f"curl -X PUT {url} -H 'X-Gaia-UI: 1' -H 'Content-Type: application/json' "
-        "-d '{\"memory_enabled\": true}'"
+        f"curl -X PUT {url} -H 'X-Gaia-UI: 1' "
+        f"-H \"Authorization: Bearer $(cat '{token_path()}')\" "
+        "-H 'Content-Type: application/json' -d '{\"memory_enabled\": true}'"
     )
     try:
-        with urllib.request.urlopen(url, timeout=5) as r:
+        req = urllib.request.Request(url, headers=auth_headers())
+        with urllib.request.urlopen(req, timeout=5) as r:
             settings = json.loads(r.read().decode("utf-8"))
+    except UITokenError as e:
+        return str(e)
     except urllib.error.HTTPError as e:
         return f"Memory settings probe failed with HTTP {e.code} from {url}: {e.reason}"
     except (urllib.error.URLError, ConnectionError, TimeoutError) as e:
@@ -2006,13 +2151,13 @@ def _probe_memory_admin(backend_url: str) -> Optional[str]:
     import urllib.error
     import urllib.request
 
-    req = urllib.request.Request(
-        f"{backend_url}/api/memory/admin/seed",
-        data=b'{"items":[]}',
-        headers={"Content-Type": "application/json", "X-Gaia-UI": "1"},
-        method="POST",
-    )
     try:
+        req = urllib.request.Request(
+            f"{backend_url}/api/memory/admin/seed",
+            data=b'{"items":[]}',
+            headers={"Content-Type": "application/json", **auth_headers()},
+            method="POST",
+        )
         with urllib.request.urlopen(req, timeout=5) as r:
             if r.status == 200:
                 return None
@@ -2020,6 +2165,8 @@ def _probe_memory_admin(backend_url: str) -> Optional[str]:
                 f"Memory admin probe returned unexpected HTTP {r.status} "
                 f"from {backend_url}/api/memory/admin/seed"
             )
+    except UITokenError as e:
+        return str(e)
     except urllib.error.HTTPError as e:
         if e.code == 403:
             return (
@@ -2133,17 +2280,19 @@ def _set_scripted_user(backend_url: str, commands: list) -> Optional[str]:
     import urllib.error
     import urllib.request
 
-    req = urllib.request.Request(
-        f"{backend_url}/api/eval/scripted-user",
-        data=json.dumps({"decline_commands": commands}).encode("utf-8"),
-        headers={"Content-Type": "application/json", "X-Gaia-UI": "1"},
-        method="POST",
-    )
     try:
+        req = urllib.request.Request(
+            f"{backend_url}/api/eval/scripted-user",
+            data=json.dumps({"decline_commands": commands}).encode("utf-8"),
+            headers={"Content-Type": "application/json", **auth_headers()},
+            method="POST",
+        )
         with urllib.request.urlopen(req, timeout=5) as r:
             if r.status == 200:
                 return None
             return f"Scripted-user setup returned HTTP {r.status} from {backend_url}"
+    except UITokenError as e:
+        return str(e)
     except urllib.error.HTTPError as e:
         if e.code == 403:
             return (
@@ -2299,8 +2448,10 @@ def run_scenario_subprocess(
     while the driver runs and cleans the backend up after it.
     """
     scenario_id = scenario_data["id"]
-    setup_error = _apply_mailbox_fixture(backend_url, scenario_data) or _reset_memory(
-        backend_url, scenario_data
+    setup_error = (
+        _apply_mailbox_fixture(backend_url, scenario_data)
+        or _apply_skills_absent(scenario_data)
+        or _reset_memory(backend_url, scenario_data)
     )
     if setup_error:
         print(f"[SETUP_ERROR] {scenario_id}: {setup_error}", flush=True)
@@ -2373,7 +2524,7 @@ def run_scenario_subprocess(
     if scenario_backend is not None:
         try:
             scenario_backend.start()
-        except requests.RequestException as e:
+        except (requests.RequestException, UITokenError) as e:
             error = (
                 f"Could not watch {scenario_id}'s sessions on the backend at "
                 f"{backend_url}: {e}. Check the Agent UI backend is running."
@@ -3039,6 +3190,40 @@ class ScorecardMismatchError(ValueError):
     """Two scorecards measured different things, so diffing them means nothing."""
 
 
+#: What a scorecard without a ``harness`` ran: every run before harnesses were
+#: recorded, and every committed baseline, used the default (Python) harness.
+DEFAULT_RUN_HARNESS = "gaiapy"
+#: Recorded when the backend couldn't say; never comparable with anything.
+UNKNOWN_HARNESS = "unknown"
+
+
+def backend_harness(backend_url: str) -> str:
+    """The harness the backend runs as the GAIA agent (``flagship_agent``).
+
+    ``UNKNOWN_HARNESS`` when the backend can't be asked, which makes the
+    scorecard refuse every comparison rather than pass as the default harness.
+    """
+    import urllib.error
+    import urllib.request
+
+    req = urllib.request.Request(
+        f"{backend_url}/api/settings", headers={"X-Gaia-UI": "1"}
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=5) as r:
+            value = json.loads(r.read().decode("utf-8")).get("flagship_agent")
+    except (urllib.error.URLError, OSError, ValueError) as e:
+        logger.warning(
+            "Could not read which harness %s runs (%s); the scorecard records "
+            "it as %r and won't compare with any baseline.",
+            backend_url,
+            e,
+            UNKNOWN_HARNESS,
+        )
+        return UNKNOWN_HARNESS
+    return value if isinstance(value, str) and value else UNKNOWN_HARNESS
+
+
 def baseline_identity(baseline_path, baseline: dict) -> dict:
     """What a baseline was measured with: agent model, driver model, and source.
 
@@ -3060,12 +3245,14 @@ def baseline_identity(baseline_path, baseline: dict) -> dict:
             return {
                 "agent_model": meta.get("model"),
                 "eval_model": meta.get("eval_model"),
+                "harness": meta.get("harness") or DEFAULT_RUN_HARNESS,
                 "source": str(meta_path),
             }
     config = baseline.get("config") or {}
     return {
         "agent_model": config.get("agent_model"),
         "eval_model": config.get("model"),
+        "harness": config.get("harness") or DEFAULT_RUN_HARNESS,
         "source": str(baseline_path),
     }
 
@@ -3094,6 +3281,14 @@ def check_comparable(baseline_path, baseline: dict, current: dict) -> None:
             want["eval_model"],
             config.get("model"),
             "Re-run with --model set to the baseline's eval model.",
+        ),
+        (
+            "harness (the program that answered as GAIA)",
+            want["harness"],
+            config.get("harness") or DEFAULT_RUN_HARNESS,
+            "Run the eval with the backend's flagship_agent set to the baseline's "
+            "harness (util/run_eval_lane.py --harness), or compare against that "
+            "harness's own baseline.",
         ),
     )
     problems = []
@@ -3723,7 +3918,9 @@ class AgentEvalRunner:
                 )
                 continue
 
-            missing = _missing_requirements(scenario_data, downloaded_models)
+            missing = _missing_requirements(
+                scenario_data, downloaded_models
+            ) + _tier_mismatch(scenario_data, self.agent_model)
             if missing:
                 self._record_skip(
                     scenario_data,
@@ -3957,6 +4154,17 @@ class AgentEvalRunner:
             for s in previous
         ]
 
+        started_on = config.get("harness") or DEFAULT_RUN_HARNESS
+        now_on = backend_harness(self.backend_url)
+        if now_on != started_on:
+            print(
+                f"[ERROR] Cannot resume {run_dir}: it started on the {started_on} "
+                f"harness and the backend now runs {now_on}, so the scorecard would "
+                "mix two programs. Set flagship_agent back, or start a new run.",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+
         self._commit = _current_commit()
         earlier = sorted({s.get("commit") for s in kept.values() if s.get("commit")})
         if earlier and earlier != [self._commit]:
@@ -4064,6 +4272,8 @@ class AgentEvalRunner:
             "model": self.model,
             "budget_per_scenario_usd": float(self.budget),
             "agent_type": self.agent_type,
+            # Which program answered; --compare refuses a baseline from another.
+            "harness": backend_harness(self.backend_url),
             # The local model under test, as pinned; _finish replaces it with
             # what the sessions ran when nothing was pinned.
             "agent_model": self.agent_model,

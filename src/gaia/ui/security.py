@@ -1,11 +1,13 @@
 # Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 # SPDX-License-Identifier: MIT
 
-"""Cross-origin request defenses for the Agent UI backend.
+"""Request defenses for the Agent UI backend.
 
-The backend binds loopback and has no authentication while the tunnel is
-off, so any web page the user visits could drive it. Three layers close
-that off, all applied in middleware so a route added tomorrow is covered
+Every ``/api`` and ``/v1`` request must present the Agent UI API token
+(:class:`ApiTokenMiddleware`, :mod:`gaia.ui.api_token`), local callers
+included: binding loopback is not access control. Three more layers stop a
+web page the user visits from driving the backend through the user's own
+browser, all applied in middleware so a route added tomorrow is covered
 without its author remembering anything:
 
 1. **CSRF header** -- every mutating (non-GET/HEAD/OPTIONS) request to
@@ -39,7 +41,10 @@ from urllib.parse import urlsplit
 
 from fastapi import HTTPException, Request
 from starlette.datastructures import Headers
+from starlette.requests import cookie_parser
 from starlette.types import ASGIApp, Receive, Scope, Send
+
+from gaia.ui import api_token
 
 logger = logging.getLogger(__name__)
 
@@ -71,6 +76,12 @@ SAFE_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
 #: ``gaia.connectors.flow``, not by this app. An entry here is a hole, so
 #: ``tests/unit/chat/ui/test_ui_request_guard.py`` asserts it stays empty.
 CSRF_EXEMPT_PATHS: frozenset = frozenset()
+
+#: Paths that need no token: a liveness probe that returns no user data.
+TOKEN_EXEMPT_PATHS: frozenset = frozenset({"/api/health"})
+
+#: Cookie a phone carries after opening the mobile-access QR link.
+TUNNEL_COOKIE_NAME = "gaia_tunnel_token"
 
 #: Hostnames that always denote this machine.
 _LOOPBACK_NAMES = frozenset({"localhost", "::1"})
@@ -333,3 +344,89 @@ class UIRequestGuardMiddleware:
                 return
 
         await self.app(scope, receive, send)
+
+
+class ApiTokenMiddleware:
+    """Require the Agent UI API token on every ``/api`` and ``/v1`` request.
+
+    Accepted from ``Authorization: Bearer`` or the ``gaia_ui_token`` cookie.
+    While mobile access is on, a request that came through the tunnel may
+    present the tunnel's own token instead, so a paired phone works without
+    the install's token; :func:`require_local_pc` still refuses such requests.
+    ``OPTIONS`` passes so CORS can answer preflights, which carry no
+    credentials.
+    """
+
+    def __init__(self, app: ASGIApp) -> None:
+        self.app = app
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+        path = scope.get("path", "")
+        method = scope.get("method", "")
+        if (
+            not path.startswith(GUARDED_PREFIXES)
+            or path in TOKEN_EXEMPT_PATHS
+            or method == "OPTIONS"
+        ):
+            await self.app(scope, receive, send)
+            return
+
+        app = scope.get("app")
+        expected = getattr(getattr(app, "state", None), "ui_api_token", None)
+        if not expected:
+            raise RuntimeError(
+                "ApiTokenMiddleware is installed but app.state.ui_api_token is "
+                "unset; build the app with gaia.ui.server.create_app()."
+            )
+        headers = Headers(scope=scope)
+        cookies = cookie_parser(headers.get("cookie", ""))
+        presented = api_token.bearer(headers.get("authorization", ""))
+        if api_token.token_matches(expected, presented) or api_token.token_matches(
+            expected, cookies.get(api_token.COOKIE_NAME)
+        ):
+            await self.app(scope, receive, send)
+            return
+
+        tunnel = getattr(app.state, "tunnel", None)
+        forwarded = any(h in headers for h in _FORWARDED_HEADERS)
+        if tunnel is not None and tunnel.active and forwarded:
+            tunnel_token = presented or cookies.get(TUNNEL_COOKIE_NAME)
+            if tunnel_token and tunnel.validate_token(tunnel_token):
+                tunnel.note_device(headers.get("user-agent", ""))
+                await self.app(scope, receive, send)
+                return
+
+        client = scope.get("client")
+        logger.warning(
+            "Rejecting %s %s from %s: no valid Agent UI API token",
+            method,
+            path,
+            client[0] if client else "unknown",
+        )
+        body = json.dumps(
+            {
+                "detail": (
+                    "This request has no valid GAIA Agent UI token. Open the "
+                    "Agent UI from the GAIA desktop app, or from the sign-in "
+                    "link printed when it started. Scripts send 'Authorization: "
+                    f"Bearer <token>' with the token in the "
+                    f"{api_token.TOKEN_FILE_NAME} file in GAIA's home folder."
+                ),
+                "code": api_token.REJECTION_CODE,
+            }
+        ).encode()
+        await send(
+            {
+                "type": "http.response.start",
+                "status": 401,
+                "headers": [
+                    (b"content-type", b"application/json"),
+                    (b"content-length", str(len(body)).encode()),
+                    (b"www-authenticate", b"Bearer"),
+                ],
+            }
+        )
+        await send({"type": "http.response.body", "body": body})

@@ -315,7 +315,7 @@ The PR / commit message is where multi-paragraph context lives. The code carries
 
 **Why the rule exists:** fallbacks hide regressions. A review bot silently downgraded from Opus to a smaller model looks fine but produces worse reviews for weeks. A config loader that defaults a missing API key to `""` produces confusing 401s deep in the request pipeline instead of a clear `"ANTHROPIC_API_KEY is not set"` at startup. Better a loud error the user can fix than a quiet wrong answer.
 
-**On existing violations:** the codebase has pre-existing `except Exception: pass` blocks (mostly in `src/gaia/ui/`) that predate this rule. They are **tech debt, not precedent**. When you touch a file that has one, fix it in the same commit — add a specific exception type, log with context, or re-raise. Don't cite existing violations to justify adding new ones.
+**On existing violations:** the codebase has pre-existing `except Exception: pass` blocks that predate this rule. They are **tech debt, not precedent**. When you touch a file that has one, fix it in the same commit — add a specific exception type, log with context, or re-raise. Don't cite existing violations to justify adding new ones.
 
 ### Testing Requirements
 
@@ -581,21 +581,23 @@ gaia/
 │   ├── agents/         # Agent framework (no agents live in core)
 │   │   ├── base/       # Base Agent class, MCPAgent, ApiAgent mixins
 │   │   ├── tools/      # Cross-agent tool mixins (rag, file, shell, browser, scratchpad, screenshot…)
-│   │   ├── code_index/ # CodeIndexToolsMixin — semantic code search (FAISS)
 │   │   └── registry.py # Agent registry + KNOWN_TOOLS map
-│   │   #   Packaged agents live in hub/agents/<id>/python/: gaia (flagship,
-│   │   #   incl. its ChatAgent base), email. Per-task agents were collapsed into
-│   │   #   skills under hub/skills/.
+│   │   #   The one packaged agent lives in hub/agents/gaia/python/ (the
+│   │   #   flagship, incl. its ChatAgent base). Per-task agents were collapsed
+│   │   #   into skills under hub/skills/.
 │   ├── api/            # OpenAI-compatible REST API server
 │   ├── apps/           # Standalone applications
 │   │   ├── webui/      # Agent UI frontend (React/Vite/Electron)
 │   │   └── llm/        # LLM standalone app
+│   ├── automations/    # Reminders, alerts, triggers, summaries (gaia automation)
 │   ├── audio/          # Audio: Lemonade ASR, speaker diarization, TTS, media decode
-│   ├── chat/           # Agent SDK (AgentSDK class, prompts, app entry)
+│   ├── browser/        # Live-browser automation (Playwright) behind the browser_use tools
+│   ├── chat/           # Agent SDK (AgentSDK class, prompts)
 │   ├── code_index/     # Code indexing/search backend
 │   ├── connectors/     # Connector framework (Google/GitHub OAuth, MCP-server connectors, grants)
 │   ├── daemon/         # Headless daemon (gaia daemon): custody, broker, scheduler, sidecars
 │   ├── database/       # DatabaseMixin and DatabaseAgent
+│   ├── engineering/    # Developer-only coding-app context bridge (gaia mcp engineering)
 │   ├── eval/           # Evaluation framework
 │   ├── factory/        # Claude Code session-corpus harvest/analysis (LLM-free, local cache)
 │   ├── filesystem/     # Filesystem service/utilities
@@ -603,9 +605,9 @@ gaia/
 │   ├── hub/            # Download-server client: fetch, verify, install agent binaries (gaia init, daemon)
 │   ├── img/            # Shared image assets
 │   ├── installer/      # Install/init commands (gaia init, lemonade installer)
-│   ├── llm/            # LLM backend clients (Lemonade, Claude, OpenAI) + providers/
+│   ├── llm/            # LLM backend clients + providers/ (Lemonade, Claude, Fireworks)
 │   ├── mcp/            # Model Context Protocol servers/clients
-│   ├── messaging/      # Messaging adapters (Telegram, …)
+│   ├── messaging/      # Messaging adapters (Telegram, Slack, Discord)
 │   ├── rag/            # Document retrieval (RAG)
 │   ├── schedule/       # Cron scheduling backend (gaia schedule)
 │   ├── sd/             # Stable Diffusion tool mixin (SDToolsMixin)
@@ -619,22 +621,53 @@ gaia/
 │   ├── vlm/            # Vision LLM tool mixin (VLMToolsMixin, structured extraction)
 │   ├── web/            # Web utilities (search/fetch backend)
 │   └── cli.py          # Main CLI entry point (all `gaia <command>` subparsers)
+├── src/vscode/gaia/    # VS Code extension
 ├── tests/              # Test suite
 │   ├── unit/           # Unit tests
 │   ├── mcp/            # MCP integration tests
 │   ├── integration/    # Cross-system integration tests
 │   ├── installer/      # Installer / gaia init tests
-│   ├── stress/         # Stress/load tests
+│   ├── hardware/       # Tests that need real AMD hardware (self-hosted runners)
+│   ├── setup_journey/  # Clean-PC setup journey tests
 │   ├── electron/       # Electron app tests (Jest)
 │   ├── fixtures/       # Shared test fixtures/data
 │   └── test_*.py       # Top-level feature tests (sdk, api, chat, code, rag, eval…)
 ├── hub/                # Packages GAIA ships — agents/<id>/{npm,python}/, skills/, components/
+│   └── agents/gaia/python/  # gaiapy: the Python harness (package gaiapy, binary gaia-agent)
+├── cpp/                # C++17 agent framework (CMake project gaia-cpp)
+│   ├── agents/gaiacpp/ # gaiacpp: the native harness (binary gaiacpp)
+│   └── examples/       # Single-file demo agents (health, wifi, process, vlm…)
 ├── tui/                # Go terminal UI (module github.com/amd/gaia/tui)
+├── eval/               # Eval scenarios, corpus, CI lanes and tiers (the framework is src/gaia/eval/)
+├── examples/           # Example Python agents built on the SDK
+├── installer/          # Installers: NSIS, macOS pkg, Linux packages, install.ps1 / install.sh
+├── website/            # amd-gaia.ai marketing site (Astro)
+├── workers/            # Cloudflare Workers: download server (agent-hub), admin, website-router
 ├── scripts/            # Build, install, and launch scripts
 ├── util/               # Repo tooling (lint.py, check_doc_links.py, …)
 ├── docs/               # Documentation (MDX format)
 └── .github/workflows/  # CI/CD pipelines
 ```
+
+### Two harnesses: gaiapy and gaiacpp
+
+The flagship GAIA agent is one agent with two interchangeable programs
+("harnesses") behind it. Both speak the same sidecar/stdio contract, so the
+Agent UI and the TUI drive either one.
+
+| Harness | What it is | Source | Binary |
+|---------|------------|--------|--------|
+| `gaiapy` | The Python harness: every tool and feature, the default | `hub/agents/gaia/python/gaiapy/` on the framework in `src/gaia/` | `gaia-agent` (also `gaiapy` from a pip install) |
+| `gaiacpp` | The native C++ harness: fast and light, fewer features, beta | `cpp/agents/gaiacpp/` on the framework in `cpp/` | `gaiacpp` |
+
+`flagship_agent` in `~/.gaia/config.json` (`gaiapy` or `gaiacpp`) picks one;
+unset, the Python harness runs. The list lives in one table,
+[`src/gaia/harnesses.py`](src/gaia/harnesses.py), mirrored for the TUI in
+`tui/internal/catalog/harnesses.json` under a drift test. It also names
+`gaiacode`, a native coding harness in development: known but not yet runnable,
+so it can't be chosen. A name this version can't run still loads from
+`config.json` (a newer GAIA may have written it) and fails only when the agent
+is launched, never at config load and never by quietly running another harness.
 
 ### Console Script Entry Points
 
@@ -673,22 +706,23 @@ Defined in [`setup.py`](setup.py) under `console_scripts`:
 
 ### Agent Implementations
 
-Every registered agent ships as a standalone hub package under `hub/agents/<id>/python/`;
-`src/gaia/agents/` holds only the framework. The authoritative registry is
+The flagship is the only packaged agent; it ships as a standalone hub package under
+`hub/agents/gaia/python/`, and `src/gaia/agents/` holds only the framework. The authoritative registry is
 [`src/gaia/agents/registry.py`](src/gaia/agents/registry.py); each agent's default model
 is set in its own `agent.py` (see [Default Models](#default-models)).
 
 | Agent | Description |
 |-------|-------------|
 | **GaiaAgent** | The flagship — conversation, documents, data, web, memory, skills — hub (`gaia/`) |
-| **ChatAgent** | The flagship's base class, in the flagship package (`gaia/`, `gaia_agent.chat_agent`). Its old `chat`/`doc`/`file` ids resolve to `gaia`; the `gaia-agent-chat` re-export shim was removed in #6103 |
-| **EmailTriageAgent** | Email triage for Gmail or Outlook (local inference; needs the Google or Microsoft connector) — hub (`email/`) |
+| **ChatAgent** | The flagship's base class, in the flagship package (`gaia/`, `gaiapy.chat_agent`). Its old `chat`/`doc`/`file` ids resolve to `gaia`; the `gaia-agent-chat` re-export shim was removed in #6103 |
 
 Per-task agents (code, analyst, browser, fileio, docqa, doc-search, summarize, jira,
 docker, blender, sd, emr, routing) were **deleted**. Most of their capability is now the flagship's
 tool surface driven by a `SKILL.md` in [`hub/skills/`](hub/skills/) (for example
 `coding`, `file-ops`, `summarize`, `image-gen`); jira, docker, blender, emr and
-routing were dropped with no skill replacing them. Adding a capability
+routing were dropped with no skill replacing them. The standalone email agent was
+removed too (#4825): mail is the flagship's read-only Gmail/Outlook tools (`email` in
+`KNOWN_TOOLS`) plus the `inbox-triage` and `send-email` skills. Adding a capability
 means writing a skill, not shipping an agent. Custom agents stay supported (`gaia agent
 init/pack/publish`, `~/.gaia/agents/` discovery); the one reference package `gaia agent
 init` mirrors is [`tests/fixtures/agents/hello-world/`](tests/fixtures/agents/hello-world/),
@@ -713,12 +747,14 @@ New agents are Python classes inheriting from `Agent` (see [`src/gaia/agents/bas
 | `filesystem` | `gaia.agents.tools.filesystem_tools.FileSystemToolsMixin` | File system navigation |
 | `scratchpad` | `gaia.agents.tools.scratchpad_tools.ScratchpadToolsMixin` | SQL scratchpad tables for data analysis |
 | `browser` | `gaia.agents.tools.browser_tools.BrowserToolsMixin` | Web search, page fetch, download |
+| `browser_use` | `gaia.agents.tools.browser_use_tools.BrowserUseToolsMixin` | Live-browser tools: open, observe, act, and sign in |
 | `email` | `gaia.agents.tools.email_tools.EmailToolsMixin` | Read-only mailbox tools (Gmail / Outlook) |
 | `sd` | `gaia.sd.mixin.SDToolsMixin` | Stable Diffusion image generation |
 | `vlm` | `gaia.vlm.mixin.VLMToolsMixin` | Vision LLM / structured extraction |
 | `skills` | `gaia.agents.tools.skill_library_tools.SkillLibraryToolsMixin` | Model-driven skill library (list/search/install/load/unload) |
 | `skill_learning` | `gaia.agents.tools.skill_learning_tools.SkillLearningToolsMixin` | Persist lessons learned while running a skill |
 | `audio` | `gaia.agents.tools.audio_tools.AudioToolsMixin` | Transcribe audio, video or a video link via Lemonade, label speakers, extract a timestamped list, export subtitles |
+| `dictation` | `gaia.agents.tools.dictation_tools.DictationToolsMixin` | Turn a document into an MP3 or WAV with the local Kokoro voice |
 | `audio_generation` | `gaia.agents.tools.audio_generation_tools.AudioGenerationToolsMixin` | Generate WAV music and sound effects via Lemonade |
 | `wait` | `gaia.agents.tools.wait_tools.WaitToolsMixin` | `sleep` up to 300 s, e.g. until a rate limit resets; ends early on Stop |
 | `reasoning_effort` | `gaia.agents.tools.reasoning_tools.ReasoningEffortToolsMixin` | `set_reasoning_effort` low/medium/high per step, on models that grade reasoning (gpt-oss) |
@@ -726,14 +762,13 @@ New agents are Python classes inheriting from `Agent` (see [`src/gaia/agents/bas
 When adding a new tool mixin, register it in `KNOWN_TOOLS` so other agents can compose it by name.
 
 ### Default Models
-- The default chat model follows the hardware. `gaia init` adds `Qwen3.6-35B-A3B-GGUF` (`LARGE_DEFAULT_MODEL_NAME`, a Lemonade built-in MoE with 3B active, run with thinking on) where it fits — 23.3 GB of weights and vision projector plus its KV cache at the window it loads with (20 KiB/token, at least 64K, so ~27 GB for models), and only where a GPU holds it: a 64 GB+ Strix Halo or a 32 GB GPU, not a 24 GB card or a CPU-only PC — and records it as `default_model` in `~/.gaia/config.json` once downloaded; every smaller PC runs `Gemma-4-E4B-it-GGUF` (`DEFAULT_MODEL_NAME`). Gemma is also the vision model, so `gaia init` downloads it on every PC — except when the user has set `default_model`, which replaces it; image analysis then asks the user to download Gemma (`gaia download --agent vlm`) instead of downloading it inside the image tool. "Fits" is [`src/gaia/llm/model_fit.py`](src/gaia/llm/model_fit.py), read off Lemonade's `/system-info` and `/health`; the TUI picker applies the same rule from `tui/internal/lemonade/recommended_models.json` (a drift test pins the two). `user.Qwen3.8-Flash-Next-GGUF` (`FLASH_OPTION_MODEL_NAME`, 82.86 GB plus its KV cache at 64K — 24 KiB/token, 1.6 GB — so ~90 GB, multimodal, thinking on) is opt-in only on a 128 GB Strix Halo — never in `DEFAULT_MODEL_LADDER` — chosen with `gaia config set default_model`; `util/compare_local_models.py` measures both on real hardware.
+- The default chat model follows the hardware. `gaia init` adds `Qwen3.6-35B-A3B-GGUF` (`LARGE_DEFAULT_MODEL_NAME`, a Lemonade built-in MoE with 3B active, run with thinking on) where it fits — 23.3 GB of weights and vision projector plus its KV cache at the window it loads with (20 KiB/token, at least 64K, so ~27 GB for models), and only where a GPU holds it: a 64 GB+ Strix Halo or a 32 GB GPU, not a 24 GB card or a CPU-only PC — and records it as `default_model` in `~/.gaia/config.json` once downloaded. Every rung is judged against the memory left once other apps get theirs (`model_fit.with_app_headroom`): where the model shares the PC's RAM (iGPU, Mac, CPU-only) GAIA keeps max(10 GB, 25% of installed RAM) for the OS and other apps; a discrete GPU keeps its whole pool. Below Qwen3.6 that gives `Gemma-4-E4B-it-GGUF` (`DEFAULT_MODEL_NAME`, ~8.5 GB) on 24 GB+ PCs and 10 GB+ GPUs, `Qwen3.5-4B-GGUF` (`SMALL_DEFAULT_MODEL_NAME`, ~7 GB) on an 8 GB GPU, and `Qwen3.5-2B-GGUF` (`TINY_DEFAULT_MODEL_NAME`, ~3.8 GB, the ladder's floor) on every PC with 16 GB of RAM or less. Both Qwen3.5 models are Lemonade built-ins with vision, run with thinking off, `compact` tier, fixed at a 64K window; [`eval/analysis/small_models_2026-11.md`](eval/analysis/small_models_2026-11.md) is the benchmark and eval run that chose them. The pick and setup's options share `ladder_verdict`; free memory GAIA cannot read, memory busy right now, and a full disk rule out only models above Gemma, since the pick is saved for good. The same headroom caps how far any model's window grows (`context_for_capacity`). The setup plan sends `left_for_apps_gb` (RAM other apps keep with the pick loaded, the GPU carve-out never counted as free) and a per-model `tight` flag (fits, but leaves other apps less than the reserve; never the ladder's floor). Both apps mark tight models; the Agent UI asks before using one as the chat model, and the TUI gets the backend's 409 for a tight ladder model. The TUI picker mirrors the rule from `recommended_models.json`'s `fit` block. The NPU model is exempt: it is chosen explicitly (`--profile npu`) and judged against the NPU's own memory. With no `default_model`, agents fall back through `resolve_default_chat_model()` to Gemma, so `gaia init` always records a pick below Gemma, even when verify fails; and a PC with no saved choice that already has Gemma downloaded keeps it where Gemma fits (`ChatModelChoice.kept_over`, `_gemma_fits`), since installs from before the ladder went below Gemma saved none, so an update never sends them back to setup; Lemonade-only callers (the Lemonade provider, SDK config defaults, `gaia prompt`) use `resolve_local_chat_model()`, which never returns a Claude or cloud id. Gemma is also the vision model, so `gaia init` downloads it beside the chat model — except on a PC whose pick is a Qwen3.5 model, which reads images itself, and when the user has set `default_model`, which replaces it; image analysis then asks the user to download Gemma (`gaia download --agent vlm`) instead of downloading it inside the image tool. "Fits" is [`src/gaia/llm/model_fit.py`](src/gaia/llm/model_fit.py), read off Lemonade's `/system-info` and `/health`; the TUI picker applies the same rule from `tui/internal/lemonade/recommended_models.json` (a drift test pins the two). `user.Qwen3.8-Flash-Next-GGUF` (`FLASH_OPTION_MODEL_NAME`, 82.86 GB plus its KV cache at 64K — 24 KiB/token, 1.6 GB — so ~90 GB, multimodal, thinking on) is opt-in only on a 128 GB Strix Halo — never in `DEFAULT_MODEL_LADDER` — chosen with `gaia config set default_model`; `util/compare_local_models.py` measures both on real hardware.
 - NPU: `gemma4-it-e4b-FLM` (`NPU_DEFAULT_MODEL_NAME`, 9.1 GB) is Gemma-4-E4B's FastFlowLM twin (`NPU_TWINS`) — native tool calls at a 64K–128K window, and no image reading: GAIA turns reading images off while chat runs on the NPU rather than load a second model, and setup and chat say so (`VISION_OFF_ON_NPU`), judged against the NPU's memory (installed RAM less the GPU carve-out, `model_fit.npu_capacity`), never the GPU pool. It is the only entry in `NPU_MODEL_LADDER`: only models whose agent evals ran on the NPU go there (Qwen3.6's FLM build was too slow per turn). `gaia init --profile npu` picks it and records it as `default_model` and `last_model` (the model the Agent UI and TUI reopen on); the pickers offer it only on a PC with an available NPU (`npu_chat_models_that_fit`). Plain `gaia init` installs the FLM backend on any PC with an NPU so the pickers offer it; only `--profile npu` replaces a GPU `default_model`.
 - Lemonade lists no FLM model and refuses to pull one until its `flm:npu` backend is installed, so a download installs the backend first (`ensure_npu_backend`, and `Client.Pull` in the TUI). A pasted FastFlowLM link (`-NPU2` repo) resolves through that FastFlowLM release's `model_list.json` to the built-in, pulled by name.
-- Feature tier: each `MODELS` entry sets `feature_tier`. Gemma E4B (GPU and FLM) is `compact`, which withholds the scratchpad, email, image-generation and skill-hub tools and the skills that need them; everything else is `full`. One table, [`src/gaia/agents/base/model_features.py`](src/gaia/agents/base/model_features.py); `GAIA_FEATURE_TIER` forces a tier. Give a compact model a feature back only once it passes that feature's evals.
+- Feature tier: each `MODELS` entry sets `feature_tier`. Gemma E4B (GPU and FLM) and Qwen3.5 4B/2B are `compact`, which withholds the scratchpad, email, image-generation and skill-hub tools and the skills that need them; everything else is `full`. One table, [`src/gaia/agents/base/model_features.py`](src/gaia/agents/base/model_features.py); `GAIA_FEATURE_TIER` forces a tier. Give a compact model a feature back only once it passes that feature's evals.
 - Agents that leave `model_id` unset call `resolve_default_chat_model()` — `default_model`, else `DEFAULT_MODEL_NAME`. That covers GaiaAgent and ChatAgent. Sharing one model id is what keeps switching agents from evicting and cold-reloading the resident model.
-- **EmailTriageAgent is the one exception.** With no explicit `model_id` it calls `resolve_default_email_model()` (`hub/agents/email/python/gaia_agent_email/model_select.py`), which returns `gemma4-it-e2b-FLM` when an NPU is present *and* that model is already servable, and `DEFAULT_MODEL_NAME` in every other case.
-- Context window: a model that declares `max_ctx_size` and `kv_bytes_per_token` in `MODELS` ([`src/gaia/llm/lemonade_client.py`](src/gaia/llm/lemonade_client.py)) gets the largest window that fits the GPU memory Lemonade reports (`largest_context` in [`src/gaia/llm/model_fit.py`](src/gaia/llm/model_fit.py)), and the fit check charges the KV cache at that same window. Every other model gets its `min_ctx_size`, else `GPU_CTX_SIZE` (65536). FLM models size the same way, against system RAM (`gemma4-it-e4b-FLM` reaches 128K); `NPU_CTX_SIZE` (32768, FastFlowLM's default) is only the starting window for an FLM build with no memory figures, never a limit. Settings › Model (`context_sizes`) and `GAIA_CTX_SIZE` override it on any device, up to the model's `max_context_window`. Gemma-4-E4B loads at 65536 (the eval baseline was captured there) when memory allows. Before every load, free memory is checked too (`check_free_memory` in `model_fit.py`): when it is short, the window drops in 8K steps to a 32K floor, and below that the load is refused with how much is needed and free.
-- Vision: `Gemma-4-E4B-it-GGUF` is the default VLM (`vlm/mixin.py`, `llm/vlm_client.py`, `vlm/structured_extraction.py`); `Qwen3-VL-4B-Instruct-GGUF` also supported. The RAG SDK reads scans and images with a tested vision model already loaded, else the default chat model when it has vision, else Gemma, and none while chat runs on the NPU (`resident_vision_model`, `resolve_default_vision_model`). When that pick isn't downloaded and the user chose no `vision_model`, the image tools and RAG read with a downloaded `VISION_CHAT_MODELS` entry, a loaded one first (`downloaded_vision_model`, from the VLM client's `check_availability` and `_refuse_missing_vlm`); with none on disk they ask for the download
+- Context window: a model that declares `max_ctx_size` and `kv_bytes_per_token` in `MODELS` ([`src/gaia/llm/lemonade_client.py`](src/gaia/llm/lemonade_client.py)) gets the largest window that fits the GPU memory Lemonade reports, less the RAM kept for other apps where the model shares it (`largest_context` in [`src/gaia/llm/model_fit.py`](src/gaia/llm/model_fit.py), after `with_app_headroom`), and the fit check charges the KV cache at that same window. Every other model gets its `min_ctx_size`, else `GPU_CTX_SIZE` (65536). FLM models size the same way, against system RAM (`gemma4-it-e4b-FLM` reaches 128K); `NPU_CTX_SIZE` (32768, FastFlowLM's default) is only the starting window for an FLM build with no memory figures, never a limit. Settings › Agent & model (`context_sizes`) and `GAIA_CTX_SIZE` override it on any device, up to the model's `max_context_window`. Gemma-4-E4B loads at 65536 (the eval baseline was captured there) when memory allows. Before every load, free memory is checked too (`check_free_memory` in `model_fit.py`): when it is short, the window drops in 8K steps to a 32K floor, and below that the load is refused with how much is needed and free.
+- Vision: `Gemma-4-E4B-it-GGUF` is the default VLM where no vision-capable chat model is the default (`vlm/mixin.py`, `llm/vlm_client.py`, `vlm/structured_extraction.py`); `Qwen3-VL-4B-Instruct-GGUF` also supported. The RAG SDK and the image tools (`analyze_image`, `answer_question_about_image`) read scans and images with a tested vision model already loaded, else the default chat model when it has vision, else Gemma, and none while chat runs on the NPU (`resident_vision_model`, `resolve_default_vision_model`). When that pick isn't downloaded and the user chose no `vision_model`, the image tools and RAG read with a downloaded `VISION_CHAT_MODELS` entry, a loaded one first (`downloaded_vision_model`, from the VLM client's `check_availability` and `_refuse_missing_vlm`); with none on disk they ask for the download
 - Image generation (SD): `SDXL-Turbo`
 
 ### IMPORTANT: Never hardcode how Lemonade is started — `lemonade-server serve` is dead
@@ -778,23 +813,27 @@ All commands are registered in [`src/gaia/cli.py`](src/gaia/cli.py). Run `gaia -
 - `gaia prompt "<text>"` - Single prompt to LLM (with system-prompt support)
 - `gaia llm "<text>"` - Simple LLM queries
 - `gaia knowledge {search|extract|usage}` - Web knowledge via Tavily (search/extract)
-- `gaia email` - Email triage for Gmail or Outlook (local inference; needs the Google or Microsoft connector)
 
 **Servers & infrastructure:**
-- `gaia daemon` - The headless daemon (one machine-wide custody process; supervises sidecar agents)
+- `gaia daemon {start|status|stop|restart|agents|start-agent|stop-agent|logs}` - The headless daemon (one machine-wide custody process; supervises sidecar agents)
 - `gaia api` - OpenAI-compatible API server
-- `gaia mcp {start|stop|status|test|agent|serve|tui|list|tools|test-client}` - MCP bridge (add/remove moved to the connectors framework, #977)
+- `gaia mcp {start|stop|status|test|agent|serve|tui|list|tools|test-client|code-index|engineering}` - MCP bridge (add/remove moved to the connectors framework, #977)
 - `gaia schedule {add|list|show|remove|pause|resume|run|daemon}` - Run a skill or prompt on a cron schedule
 - `gaia telegram {start|stop|status}` - Telegram messaging adapter
 - `gaia slack {setup|start|stop|connect|decline|status}` - Slack messaging adapter
+- `gaia discord` - Discord messaging adapter (drive the agent from a Discord DM)
+- `gaia automation` - Reminders, alerts, triggers and summaries GAIA runs on its own
+- `gaia gateway` - Connect GAIA to the AMD LLM gateway (requires Lemonade >= 11.8)
 - `gaia connectors` - Manage connectors (Google/GitHub OAuth, MCP servers) and per-agent grants
 - `gaia cache {status|clear}` - Cache management
 
 **Setup & utilities:**
 - `gaia init` - Setup Lemonade Server and download models
-- `gaia lemonade embedded {start|stop|status|install|install-backend}` - GAIA's private, self-contained Lemonade instance (#3121)
+- `gaia lemonade embedded {start|stop|status|install|install-backend|uninstall}` - GAIA's private, self-contained Lemonade instance (#3121)
+- `gaia lemonade {connect|detect|status}` - Point GAIA at a Lemonade Server and check it
 - `gaia uninstall` - Tiered cleanup of `~/.gaia` and caches
 - `gaia config {show|get|set}` - Persistent config in `~/.gaia/config.json`
+- `gaia trust {list|add|decline|forget}` (also `gaia project trust`) - Saved folder trust decisions
 - `gaia skill` - Author and manage agent skills (`SKILL.md` capabilities)
 - `gaia download` - Download a model
 - `gaia kill` - Kill stray GAIA / Lemonade processes
@@ -803,7 +842,7 @@ All commands are registered in [`src/gaia/cli.py`](src/gaia/cli.py). Run `gaia -
 - `gaia stats` - Show statistics from the most recent run
 - `gaia memory` - Manage agent memory (onboarding bootstrap, status)
 - `gaia diagnostics` - Bundle logs + system info into a tarball for bug reports
-- `gaia agent {test|configure|health|status|export|import|install|list}` - Manage agents
+- `gaia agent {test|configure|health|status|export|import|install}` - Manage agents
 
 `gaia hub` and `gaia agent {init|version|pack|publish|login}` still work for scripts
 and release tooling but are hidden from `gaia -h`. **There is no user-facing Agent
@@ -816,6 +855,7 @@ the installers. **Skills are the one exception:** each final release publishes
 
 **Evaluation & analysis** (see [`docs/reference/eval.mdx`](docs/reference/eval.mdx)):
 - `gaia eval agent` - Run the agent eval benchmark (`--fix` auto-fixes failures)
+- `gaia eval {sessions|code|retrieval|memory|tasks}` - Other benchmarks: real Claude Code sessions, code generation, retrieval, long-run memory, outcome-scored tasks
 - `gaia perf-vis` - Visualize performance results
 
 **Standalone binaries** (separate `console_scripts`, not subcommands):
@@ -840,7 +880,7 @@ adaptive memory/skills/recovery, desktop-installer, browser-use, eval-hillclimbi
 Browse the directory rather than a partial list here.
 
 **Key architectural decisions (April 2026):**
-- **GaiaAgent** rename (#696) landed, but resolved differently than planned: rather than renaming `ChatAgent`, `GaiaAgent` became the flagship (`hub/agents/gaia/python/gaia_agent/agent.py`) and `ChatAgent` (`hub/agents/gaia/python/gaia_agent/chat_agent.py`, folded into the flagship package in #6099) was kept as its base class — see [Agent Implementations](#agent-implementations)
+- **GaiaAgent** rename (#696) landed, but resolved differently than planned: rather than renaming `ChatAgent`, `GaiaAgent` became the flagship (`hub/agents/gaia/python/gaiapy/agent.py`) and `ChatAgent` (`hub/agents/gaia/python/gaiapy/chat_agent.py`, folded into the flagship package in #6099) was kept as its base class — see [Agent Implementations](#agent-implementations)
 - Voice-first is P0 enabling technology (#702)
 - No context compaction — memory + RAG handles long conversations
 - Configuration dashboard + Observability dashboard as separate Agent UI panels

@@ -22,6 +22,11 @@ from pathlib import Path
 
 import pytest
 
+# Session guard: compares the real ~/.gaia before and after the run.
+from tests.unit.real_home_guard import (  # noqa: F401  pylint: disable=unused-import
+    _guard_real_gaia_home_session,
+)
+
 
 @pytest.fixture(scope="session")
 def python_with_pip(tmp_path_factory):
@@ -106,6 +111,8 @@ def mock_home(tmp_path, monkeypatch):
     monkeypatch.setenv("USERPROFILE", str(tmp_path))
     monkeypatch.setattr(Path, "home", staticmethod(lambda: tmp_path))
     monkeypatch.setattr(os.path, "expanduser", fake_expanduser)
+    monkeypatch.delenv("GAIA_HOME", raising=False)
+    monkeypatch.delenv("GAIA_CONFIG_DIR", raising=False)
     return tmp_path
 
 
@@ -124,16 +131,20 @@ def _restore_environ():
 
 
 @pytest.fixture(autouse=True)
-def _isolate_gaia_config(tmp_path, monkeypatch):
+def _isolate_gaia_config(tmp_path_factory, monkeypatch):
     """Keep unit tests off the developer's real ``~/.gaia/config.json``.
 
     ``GAIA_CONFIG_FILE`` is resolved at import time, so patching ``HOME`` is
     not enough.
+
+    The config gets its own folder, not ``tmp_path``: any config read leaves
+    ``config.json.lock`` beside the file, and ``tmp_path`` belongs to the test.
     """
     from gaia import config as config_mod
 
-    monkeypatch.setattr(config_mod, "GAIA_CONFIG_DIR", tmp_path)
-    monkeypatch.setattr(config_mod, "GAIA_CONFIG_FILE", tmp_path / "config.json")
+    config_dir = tmp_path_factory.mktemp("gaia-config")
+    monkeypatch.setattr(config_mod, "GAIA_CONFIG_DIR", config_dir)
+    monkeypatch.setattr(config_mod, "GAIA_CONFIG_FILE", config_dir / "config.json")
 
 
 @pytest.fixture(autouse=True)
@@ -196,8 +207,94 @@ def _forget_engine_start_failure(monkeypatch):
     monkeypatch.setattr(lemonade_client, "_ENGINE_START_FAILURE", None)
 
 
+@pytest.fixture(autouse=True)
+def _forget_agent_registry():
+    """A server test's startup leaves its agent registry behind; the next chat test must not inherit it.
+
+    With no hub agents installed (as in CI) that registry is empty, so a later
+    chat turn answers "GAIA's assistant isn't installed" instead of running.
+    Cleared before the test, since a ``monkeypatch`` undo can put it back after.
+    """
+    helpers = sys.modules.get("gaia.ui._chat_helpers")
+    if helpers is not None:
+        helpers.set_agent_registry(None)
+
+
 #: The home this run started with; a test that moves it keeps ``<its home>/.gaia``.
 _RUN_HOME = Path.home()
+
+#: The real ``~/.gaia``, which no unit test may create or write into.
+_REAL_GAIA_HOME = _RUN_HOME / ".gaia"
+_REAL_GAIA_PREFIXES = tuple({str(_REAL_GAIA_HOME), os.path.realpath(_REAL_GAIA_HOME)})
+#: Whether it existed, updated once a test is failed for creating it.
+_real_gaia_home_existed = [os.path.exists(_REAL_GAIA_HOME)]
+#: Bound now: a test may still have ``os.stat`` patched when the guard runs.
+_STAT = os.stat
+_WRITE_FLAGS = os.O_WRONLY | os.O_RDWR | os.O_CREAT | os.O_APPEND
+#: Writes into the real ``~/.gaia`` seen in this process since the last check.
+_real_home_writes: list = []
+
+
+def _exists(path) -> bool:
+    try:
+        _STAT(path)
+    except OSError:
+        return False
+    return True
+
+
+def _in_real_gaia_home(path) -> bool:
+    try:
+        path = os.fsdecode(path)
+    except TypeError:  # a file descriptor
+        return False
+    return any(path == p or path.startswith(p + os.sep) for p in _REAL_GAIA_PREFIXES)
+
+
+def _audit_real_gaia_home(event, args):
+    # Called for every audit event in the process: keep the miss path cheap.
+    if event == "open":
+        path, mode, flags = args
+        if mode is not None and not any(c in mode for c in "wax+"):
+            return
+        if mode is None and not (flags or 0) & _WRITE_FLAGS:
+            return
+    elif event in ("os.mkdir", "os.rename", "os.replace"):
+        path = args[1] if event != "os.mkdir" else args[0]
+    else:
+        return
+    if _in_real_gaia_home(path):
+        _real_home_writes.append(f"{event} {os.fsdecode(path)}")
+
+
+sys.addaudithook(_audit_real_gaia_home)
+
+
+@pytest.fixture(autouse=True)
+def _guard_real_gaia_home_writes():
+    """Fail a test that writes into, or creates, the developer's real ``~/.gaia``.
+
+    The audit hook sees this process's writes; the existence check also
+    catches a ``gaia`` subprocess creating the folder on a machine without one.
+    """
+    _real_home_writes.clear()
+    yield
+    problems = list(dict.fromkeys(_real_home_writes))
+    _real_home_writes.clear()
+    if not _real_gaia_home_existed[0] and _exists(_REAL_GAIA_HOME):
+        _real_gaia_home_existed[0] = True  # report it once, not after every test
+        problems.append(
+            f"created {_REAL_GAIA_HOME} (a subprocess, or a test running in "
+            "parallel, may have done it)"
+        )
+    if problems:
+        pytest.fail(
+            f"This test wrote into the real GAIA home {_REAL_GAIA_HOME}:\n  "
+            + "\n  ".join(problems)
+            + "\nResolve the path through gaia_home() at call time, or point "
+            "the test at tmp_path (the mock_home fixture, or GAIA_HOME).",
+            pytrace=False,
+        )
 
 
 def _patch_default_gaia_home(mp, default_gaia_home) -> None:
@@ -219,8 +316,9 @@ def _session_gaia_home(tmp_path_factory):
     """Keep ``gaia_home()`` -- edit backups, the audit log, databases -- off the
     developer's real ``~/.gaia``.
 
-    Only the ``~/.gaia`` fallback moves. GAIA_HOME and GAIA_CONFIG_DIR still win,
-    and a test that patches ``Path.home`` or sets HOME/USERPROFILE still gets
+    Only the ``~/.gaia`` fallback moves. GAIA_HOME and GAIA_CONFIG_DIR still win
+    unless they point into the real ``~/.gaia``, which is dropped for the session.
+    A test that patches ``Path.home`` or sets HOME/USERPROFILE still gets
     ``<that home>/.gaia``: setting GAIA_HOME here would override both.
     """
     isolated = tmp_path_factory.mktemp("home") / ".gaia"
@@ -231,6 +329,12 @@ def _session_gaia_home(tmp_path_factory):
 
     with pytest.MonkeyPatch.context() as mp:
         _patch_default_gaia_home(mp, default_gaia_home)
+        for env_var in ("GAIA_HOME", "GAIA_CONFIG_DIR"):
+            raw = os.environ.get(env_var, "").strip()
+            if raw:
+                resolved = os.path.expandvars(os.path.expanduser(raw))
+                if _in_real_gaia_home(resolved):
+                    mp.delenv(env_var, raising=False)
         yield default_gaia_home
 
 
@@ -259,7 +363,7 @@ def user_terminal(monkeypatch):
 _DAEMON_SPAWN_MESSAGE = (
     "Unit test tried to spawn a real GAIA daemon (gaia.daemon.client."
     "_spawn_and_wait). Mock the daemon boundary instead — e.g. monkeypatch "
-    "gaia.ui.email_sidecar.daemon_client.acquire_handle or "
+    "gaia.ui.sidecar.daemon_client.acquire_handle or "
     "gaia.daemon.client.start_or_attach. Real daemons belong in tests/integration/."
 )
 
@@ -641,6 +745,22 @@ def _forbid_real_lemonade_all_session(tmp_path_factory):
             + " Code running between tests (a finalizer or a leftover thread) "
             "tried: " + "; ".join(sorted({action for _, action in outside}))
         )
+
+
+@pytest.fixture(autouse=True)
+def _dead_lemonade_address_is_not_a_stopped_server(monkeypatch):
+    """A dead Lemonade address in a unit test stands in for a model server the
+    test fakes at a higher layer, so the Agent UI must not fail a turn over it.
+    A test of that check puts the real probe back itself."""
+    import importlib.util
+
+    if importlib.util.find_spec("fastapi") is None:
+        yield
+        return
+    from gaia.ui import _chat_helpers
+
+    monkeypatch.setattr(_chat_helpers, "_stopped_users_server", lambda: None)
+    yield
 
 
 _LEMONADE_ENV_VARS = ("LEMONADE_BASE_URL", "LEMONADE_HOST", "LEMONADE_PORT")

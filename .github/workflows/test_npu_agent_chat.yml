@@ -13,8 +13,7 @@
 # gaia-agent binary; the real Agent UI backend then relays one message to that
 # binary's sidecar, which the daemon starts. It fails unless the answer is real,
 # nothing said the model was unreachable, and Lemonade shows the model loaded
-# with the flm recipe. The E2B model, the email agent's NPU default, then gets
-# one direct prompt as before.
+# with the flm recipe.
 #
 # Not covered: the Electron shell, and the agent source in this checkout. The
 # sidecar is the published gaia-agent binary `gaia init` installs from the hub,
@@ -52,6 +51,9 @@ on:
       - 'src/gaia/llm/providers/**'
       - 'src/gaia/llm/model_device.py'
       - 'src/gaia/llm/model_fit.py'
+      # The token check_npu_agent_chat.py sends to the Agent UI.
+      - 'src/gaia/ui/__init__.py'
+      - 'src/gaia/ui/api_token.py'
       # The Agent UI's chat path to the agent sidecar.
       - 'src/gaia/ui/_chat_helpers.py'
       - 'src/gaia/ui/dispatch.py'
@@ -60,7 +62,7 @@ on:
       - 'src/gaia/ui/routers/chat.py'
       - 'src/gaia/ui/routers/sessions.py'
       - 'src/gaia/ui/routers/system.py'
-      - 'src/gaia/ui/email_sidecar/**'
+      - 'src/gaia/ui/sidecar/**'
       - 'src/gaia/daemon/sidecars/**'
       - 'src/gaia/daemon/lemonade.py'
   pull_request:
@@ -84,6 +86,9 @@ on:
       - 'src/gaia/llm/providers/**'
       - 'src/gaia/llm/model_device.py'
       - 'src/gaia/llm/model_fit.py'
+      # The token check_npu_agent_chat.py sends to the Agent UI.
+      - 'src/gaia/ui/__init__.py'
+      - 'src/gaia/ui/api_token.py'
       # The Agent UI's chat path to the agent sidecar.
       - 'src/gaia/ui/_chat_helpers.py'
       - 'src/gaia/ui/dispatch.py'
@@ -92,7 +97,7 @@ on:
       - 'src/gaia/ui/routers/chat.py'
       - 'src/gaia/ui/routers/sessions.py'
       - 'src/gaia/ui/routers/system.py'
-      - 'src/gaia/ui/email_sidecar/**'
+      - 'src/gaia/ui/sidecar/**'
       - 'src/gaia/daemon/sidecars/**'
       - 'src/gaia/daemon/lemonade.py'
 
@@ -106,7 +111,6 @@ permissions:
 
 env:
   NPU_MODEL: gemma4-it-e4b-FLM
-  EMAIL_NPU_MODEL: gemma4-it-e2b-FLM
 
 jobs:
   windows:
@@ -143,7 +147,6 @@ jobs:
           # the image may carry them: --force-models pulls them again.
           python util/check_npu_agent_chat.py `
               --model $env:NPU_MODEL `
-              --also-llm-model $env:EMAIL_NPU_MODEL `
               --force-models `
               --logs "${{ runner.temp }}\npu-logs"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
@@ -205,7 +208,6 @@ jobs:
           mkdir -p "$HOME"
           "$VENV/bin/python" util/check_npu_agent_chat.py \
             --model "$NPU_MODEL" \
-            --also-llm-model "$EMAIL_NPU_MODEL" \
             --logs "$NPU_WORKDIR/logs"
 
       - name: Upload logs on failure

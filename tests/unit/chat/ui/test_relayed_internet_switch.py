@@ -26,14 +26,14 @@ from gaia.agents.base.agent import Agent
 from gaia.daemon.sidecars.errors import SidecarError
 from gaia.ui import session_environment, turn_insights
 from gaia.ui.database import ChatDatabase
-from gaia.ui.email_sidecar import daemon_client, relay
-from gaia.ui.email_sidecar.profiles import (
-    EMAIL_PROFILE,
+from gaia.ui.models import ChatRequest
+from gaia.ui.sidecar import daemon_client, relay
+from gaia.ui.sidecar.profiles import (
+    _NO_PROFILE,
     GAIA_PROFILE,
     internet_supported,
 )
-from gaia.ui.email_sidecar.proxy import SidecarProxy
-from gaia.ui.models import ChatRequest
+from gaia.ui.sidecar.proxy import SidecarProxy
 from gaia.ui.sse_handler import SSEOutputHandler
 
 
@@ -44,9 +44,9 @@ def test_only_a_flagship_at_2_23_takes_the_switch(version, expected):
     assert internet_supported(GAIA_PROFILE, version) is expected
 
 
-def test_email_never_takes_the_switch():
-    assert EMAIL_PROFILE.min_internet_api_version is None
-    assert internet_supported(EMAIL_PROFILE, "9.9") is False
+def test_a_profile_without_the_floor_never_takes_the_switch():
+    assert _NO_PROFILE.min_internet_api_version is None
+    assert internet_supported(_NO_PROFILE, "9.9") is False
 
 
 class _Proxy:
@@ -117,16 +117,6 @@ def test_an_internet_on_turn_still_runs_on_an_older_flagship(monkeypatch):
     [body] = bodies
     assert "internet_off" not in body
     assert not [e for e in events if e["type"] == "agent_error"]
-
-
-def test_the_email_sidecar_is_never_sent_the_switch(monkeypatch):
-    proxy = _Proxy()
-    proxy.agent_id = "email"
-    relay.relay_query(
-        SSEOutputHandler(), proxy, query="q", context=[], profile=EMAIL_PROFILE
-    )
-    [body] = proxy.bodies
-    assert "internet_off" not in body
 
 
 def test_the_relay_omits_a_switch_it_was_not_given():
@@ -236,22 +226,6 @@ def test_a_relayed_flagship_chat_still_refuses_folder_removal(relayed_db, tmp_pa
     with pytest.raises(session_environment.EnvironmentChangeError) as refusal:
         session_environment.remove_folder(relayed_db, session["id"], str(tmp_path))
     assert "internet" not in str(refusal.value)
-
-
-def test_a_relayed_email_chat_keeps_its_own_network_rules(relayed_db, running_relays):
-    session = relayed_db.create_session(agent_type="email")
-    http = _running_relay(session["id"])
-
-    assert (
-        session_environment.describe(relayed_db, session)["internet_enforced"] is False
-    )
-
-    with pytest.raises(session_environment.EnvironmentChangeError) as refusal:
-        session_environment.set_internet(relayed_db, session["id"], False)
-    assert "network rules" in str(refusal.value)
-    assert "start a chat" not in str(refusal.value).lower()
-    assert session_environment.load(relayed_db, session["id"])["internet_off"] is False
-    assert http.posts == []
 
 
 def test_an_in_process_chat_enforces_both(monkeypatch):
@@ -635,16 +609,17 @@ class _ParkedWebAgent:
 def live_flagship(monkeypatch):
     """The real flagship sidecar app on a local port, with a parked web agent."""
     uvicorn = pytest.importorskip("uvicorn")
-    pytest.importorskip("gaia_agent")
-    from gaia_agent import caller_auth
-    from gaia_agent import server as server_mod
-    from gaia_agent import session_registry as sr
+    pytest.importorskip("gaiapy")
+    from gaiapy import caller_auth
+    from gaiapy import server as server_mod
+    from gaiapy import session_registry as sr
 
     from gaia.daemon.sidecars.manager import find_free_port
 
     caller_auth.reset()
     monkeypatch.delenv(caller_auth.TOKEN_FILE_ENV_VAR, raising=False)
     monkeypatch.delenv(caller_auth.TOKEN_ENV_VAR, raising=False)
+    monkeypatch.setenv(caller_auth.ALLOW_NO_TOKEN_ENV_VAR, "1")
     gate = threading.Event()
     agents: list = []
 
@@ -748,8 +723,8 @@ def test_switching_off_mid_turn_stops_the_flagships_next_web_search(
 def test_switching_off_while_a_turn_starts_stops_the_flagships_web_search(
     relayed_db, running_relays, live_flagship, monkeypatch, flip_when
 ):
-    from gaia_agent import server as server_mod
-    from gaia_agent import session_registry as sr
+    from gaiapy import server as server_mod
+    from gaiapy import session_registry as sr
 
     proxy, gate, agents = live_flagship
     session = relayed_db.create_session(agent_type="gaia")

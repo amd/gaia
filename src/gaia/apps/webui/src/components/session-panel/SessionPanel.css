@@ -18,6 +18,9 @@
     --sp-space-3: 12px;
     --sp-space-4: 16px;
     --sp-handle: 8px;
+    --sp-row-h: 26px;
+    --sp-icon-col: 16px;
+    --sp-meter-w: 44px;
     --sp-overlay-w: min(360px, calc(100% - 32px));
     --sp-dialog-w: min(520px, calc(100vw - 32px));
     --sp-picker-h: 260px;
@@ -105,7 +108,7 @@
 .sp-title {
     margin: 0;
     font-size: var(--sp-fs-title);
-    font-weight: 600;
+    font-weight: 500;
     color: var(--text-secondary);
 }
 
@@ -120,34 +123,41 @@
 
 .sp-section + .sp-section { border-top: 1px solid var(--border-light); }
 
+/* The details are one quiet list under their heading. */
+.sp-group-title ~ .sp-section { border-top: none; }
+.sp-group-title ~ .sp-section .sp-section-head { padding-top: var(--sp-space-2); font-weight: 500; }
+
 /* How the chat ran, below what it made and may touch. */
 .sp-group-title {
-    margin: var(--sp-space-4) 0 0;
-    padding: var(--sp-space-3) var(--sp-space-1) 0;
+    margin: var(--sp-space-3) 0 0;
+    padding: var(--sp-space-3) var(--sp-space-1) var(--sp-space-2);
     border-top: 1px solid var(--border-light);
     font-size: var(--sp-fs-sm);
-    font-weight: 600;
+    font-weight: 500;
     color: var(--text-muted);
 }
 
 .sp-section-heading { margin: 0; }
 
+/* A quiet label, its chevron after it: the rows below carry the weight. */
 .sp-section-head {
     display: flex;
     align-items: center;
-    gap: var(--sp-space-2);
+    gap: var(--sp-space-1);
     width: 100%;
     padding: var(--sp-space-3) var(--sp-space-1) var(--sp-space-2);
     font: inherit;
-    font-weight: 600;
-    color: var(--text-primary);
+    font-size: var(--sp-fs-title);
+    font-weight: 500;
+    color: var(--text-secondary);
     text-align: start;
     border-radius: var(--radius-sm);
 }
 
-.sp-section-head:hover { background: var(--bg-hover); }
+.sp-section-head:hover { color: var(--text-primary); }
 
 .sp-section-summary {
+    order: 3;
     margin-inline-start: auto;
     font-weight: 400;
     font-size: var(--sp-fs-sm);
@@ -155,11 +165,13 @@
 }
 
 .sp-chevron {
+    order: 2;
     flex-shrink: 0;
     color: var(--text-muted);
     transition: transform var(--duration-fast) var(--ease);
 }
 
+.sp-chevron:dir(rtl) { transform: scaleX(-1); }
 .sp-chevron.is-open { transform: rotate(90deg); }
 
 .sp-section-body {
@@ -174,38 +186,125 @@
 
 /* ── Shared rows, lists and actions ─────────────────────────────────── */
 
-.sp-env-row {
+/* One line per fact or control: icon, what it is, its control at the end. */
+.sp-rows {
     display: flex;
     flex-direction: column;
-    gap: var(--sp-space-1);
-}
-
-.sp-env-label {
-    font-size: var(--sp-fs-sm);
-    color: var(--text-muted);
-}
-
-.sp-env-value {
-    display: flex;
-    flex-direction: column;
-    align-items: flex-start;
     gap: var(--sp-space-1);
     min-width: 0;
 }
 
-.sp-place {
+.sp-row {
+    display: flex;
+    flex-direction: column;
+    gap: var(--sp-space-1);
+    min-width: 0;
+}
+
+.sp-row-line {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 0 var(--sp-space-2);
+    min-height: var(--sp-row-h);
+    min-width: 0;
+}
+
+.sp-row-icon {
+    display: inline-flex;
+    flex-shrink: 0;
+    width: var(--sp-icon-col);
+    color: var(--text-muted);
+}
+
+.sp-row-label {
+    flex: 1;
+    /* Long enough to read before the control drops to its own line. */
+    min-width: min(100%, 7em);
+    /* Wraps, never cut or pushed past the edge: fonts differ by OS, and Arabic carries its English beside it. */
+    overflow-wrap: anywhere;
+}
+
+.sp-row-end {
     display: inline-flex;
     align-items: center;
     gap: var(--sp-space-1);
-    font-weight: 500;
+    flex-shrink: 0;
+    max-width: 70%;
+    margin-inline-start: auto;
 }
 
-.sp-place.is-remote { color: var(--accent-yellow); }
+/* Detail under a row lines up with its label, not its icon. */
+.sp-row-sub { padding-inline-start: calc(var(--sp-icon-col) + var(--sp-space-2)); }
+
+.sp-row.is-remote .sp-row-icon,
+.sp-row.is-remote .sp-row-label { color: var(--accent-yellow); }
+
+.sp-quiet {
+    font-size: var(--sp-fs-sm);
+    color: var(--text-muted);
+}
+
+/* A row that is itself the action, such as Add folder. */
+.sp-row-button {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--sp-space-2);
+    flex: 1;
+    min-width: 0;
+    min-height: var(--sp-row-h);
+    font: inherit;
+    color: var(--text-secondary);
+    text-align: start;
+    border-radius: var(--radius-sm);
+}
+
+.sp-row-button:hover:not(:disabled) { color: var(--text-primary); }
+.sp-row-button:hover:not(:disabled) .sp-row-icon { color: var(--text-primary); }
+.sp-row-button:disabled { opacity: 0.5; cursor: not-allowed; }
+
+.sp-mono {
+    min-width: 0;
+    font-family: var(--font-mono);
+    font-size: var(--sp-fs-sm);
+    overflow: hidden;
+    text-overflow: clip;
+    animation: fade-cut-inline both;
+    animation-timeline: scroll(self inline);
+    white-space: nowrap;
+}
+
+/* The state reads before its switch, so the switches line up on the edge. */
+.sp-row-end .sp-switch-wrap { flex-direction: row-reverse; }
+
+.sp-info {
+    width: var(--sp-row-h);
+    height: var(--sp-row-h);
+    flex-shrink: 0;
+    color: var(--text-muted);
+}
+
+/* Help opened from an info button. */
+.sp-note {
+    padding: var(--sp-space-2) var(--sp-space-3);
+    font-size: var(--sp-fs-sm);
+    color: var(--text-secondary);
+    background: var(--bg-secondary);
+    border-radius: var(--radius-md);
+}
 
 .sp-meta {
     font-size: var(--sp-fs-sm);
     color: var(--text-muted);
     overflow-wrap: anywhere;
+}
+
+.sp-agent-program {
+    margin-block-end: var(--sp-space-2);
+}
+
+.sp-agent-program .setup-choice-tag {
+    margin-inline-start: var(--sp-space-1);
 }
 
 .sp-error,
@@ -236,7 +335,6 @@
     gap: var(--sp-space-2);
 }
 
-.sp-scope-item,
 .sp-output,
 .sp-change {
     display: flex;
@@ -261,18 +359,43 @@
 
 .sp-item-name {
     overflow: hidden;
-    text-overflow: ellipsis;
+    text-overflow: clip;
+    animation: fade-cut-inline both;
+    animation-timeline: scroll(self inline);
     white-space: nowrap;
 }
 
-/* One box, so a long path drops to its own line instead of wrapping around an rtl label. */
+/* The name stays whole; the path beside it gives way first. */
+.sp-scope-item { flex-wrap: nowrap; }
+.sp-scope-item .sp-item-name { flex-shrink: 0; max-width: 60%; }
+
 .sp-item-path {
-    display: inline-block;
-    max-width: 100%;
+    flex: 1 1 0;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: clip;
+    animation: fade-cut-inline both;
+    animation-timeline: scroll(self inline);
+    white-space: nowrap;
+}
+
+/* Right to left the path still starts beside its name. */
+:root[dir="rtl"] .sp-row-label[dir="ltr"],
+:root[dir="rtl"] .sp-item-path {
+    text-align: right;
+}
+
+/* Words, not a path: they wrap rather than lose their end. */
+.sp-item-source {
+    flex: 1 1 0;
+    min-width: 0;
     overflow-wrap: anywhere;
 }
 
 .sp-item-remove { flex-shrink: 0; }
+
+.sp-rows .sp-list { gap: var(--sp-space-1); }
+.sp-skill-icon { color: var(--accent); }
 
 .sp-tools {
     display: flex;
@@ -283,7 +406,7 @@
 .sp-tool-group-title {
     margin: 0 0 var(--sp-space-1);
     font-size: var(--sp-fs-sm);
-    font-weight: 600;
+    font-weight: 500;
 }
 
 .sp-tool {
@@ -294,15 +417,6 @@
 }
 
 .sp-tool code.sp-item-name { font-family: var(--font-mono); }
-
-.sp-skill-name {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    min-width: 0;
-}
-
-.sp-skill-name svg { flex-shrink: 0; color: var(--accent); }
 
 .sp-output.is-inactive .sp-item-name {
     color: var(--text-muted);
@@ -425,9 +539,12 @@
 
 .sp-segmented button.is-selected {
     color: var(--text-primary);
-    background: var(--bg-hover);
+    background: var(--bg-card);
+    box-shadow: var(--shadow-sm);
     font-weight: 500;
 }
+
+.sp-segmented button.is-risky.is-selected { color: var(--accent-yellow); }
 
 .sp-toggle.is-warn { color: var(--accent-yellow); }
 
@@ -540,3 +657,160 @@
     .sp-switch-knob,
     .msg-jump-target { transition: none; }
 }
+
+/* Slide preview: the deck drawn from its Markdown, in the deck's light theme. */
+.sd-preview { display: flex; flex-direction: column; gap: 10px; }
+.sd-status { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--text-secondary); }
+.sd-status.is-error { color: var(--danger); }
+.sd-spin { animation: spin var(--duration-spin) var(--ease-linear) infinite; }
+@media (prefers-reduced-motion: reduce) { .sd-spin { animation: none; } }
+.sd-slide {
+    container-type: inline-size;
+    aspect-ratio: 16 / 9;
+    background: var(--slide-paper);
+    color: var(--slide-ink);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 4cqw 4.5cqw 3cqw;
+    display: flex;
+    flex-direction: column;
+    gap: 2cqw;
+    overflow: hidden;
+    font-family: Calibri, Carlito, 'Segoe UI', system-ui, sans-serif;
+}
+.sd-empty { background: var(--slide-panel); }
+.sd-title { font-size: 4.2cqw; font-weight: 700; line-height: 1.15; }
+.sd-title::after { content: ''; display: block; width: 7cqw; height: 0.45cqw; background: var(--slide-accent); margin-top: 1cqw; }
+.sd-body { flex: 1; display: flex; flex-direction: column; gap: 1.6cqw; min-height: 0; }
+.sd-bullets { margin: 0; padding-left: 2.6cqw; font-size: 2.3cqw; line-height: 1.3; }
+.sd-bullets li + li { margin-top: 0.6cqw; }
+.sd-cover { flex: 1; display: flex; flex-direction: column; justify-content: center; gap: 1.5cqw; }
+.sd-cover-title { font-size: 5.4cqw; font-weight: 700; line-height: 1.1; }
+.sd-cover-sub { font-size: 2.6cqw; color: var(--slide-ink-dim); }
+.sd-stages { flex: 1; display: grid; gap: 0.6cqw; min-height: 0; }
+.sd-stage { display: flex; flex-direction: column; gap: 0.9cqw; min-width: 0; }
+.sd-stage-head {
+    background: var(--slide-accent);
+    color: var(--slide-on-accent);
+    font-weight: 700;
+    font-size: 1.9cqw;
+    line-height: 1.2;
+    text-align: center;
+    min-height: 8cqw;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0.8cqw 3cqw;
+    border-radius: 0.6cqw;
+}
+.sd-process .sd-stage-head { border-radius: 0; clip-path: polygon(0 0, calc(100% - 2.4cqw) 0, 100% 50%, calc(100% - 2.4cqw) 100%, 0 100%, 2.4cqw 50%); }
+.sd-process .sd-stage:first-child .sd-stage-head { clip-path: polygon(0 0, calc(100% - 2.4cqw) 0, 100% 50%, calc(100% - 2.4cqw) 100%, 0 100%); }
+.sd-stage-card { flex: 1; background: var(--slide-panel); border-radius: 0.8cqw; padding: 1.2cqw 1.4cqw; }
+.sd-stage-card .sd-bullets { font-size: 1.75cqw; padding-left: 2cqw; }
+.sd-axis {
+    background: var(--slide-accent);
+    color: var(--slide-on-accent);
+    font-weight: 700;
+    font-size: 1.9cqw;
+    text-align: center;
+    padding: 1.1cqw 4cqw;
+    clip-path: polygon(0 0, calc(100% - 2.4cqw) 0, 100% 50%, calc(100% - 2.4cqw) 100%, 0 100%);
+}
+.sd-columns { display: grid; grid-template-columns: 1fr 1fr; gap: 3cqw; }
+.sd-col-head { font-size: 2.4cqw; font-weight: 700; color: var(--slide-accent); margin-bottom: 1cqw; }
+.sd-table { border-collapse: collapse; font-size: 1.9cqw; width: 100%; }
+.sd-table th { background: var(--slide-accent); color: var(--slide-on-accent); text-align: left; }
+.sd-table th, .sd-table td { padding: 0.6cqw 1cqw; border-bottom: 1px solid var(--slide-rule); }
+.sd-chart { flex: 1; display: flex; align-items: center; justify-content: center; background: var(--slide-panel); border-radius: 0.8cqw; color: var(--slide-ink-dim); font-size: 2.2cqw; text-transform: capitalize; }
+.sd-source { font-size: 1.4cqw; color: var(--slide-ink-dim); }
+.sd-takeaway { background: var(--slide-ink); color: var(--slide-paper); font-weight: 700; font-size: 1.9cqw; padding: 1.1cqw 2cqw; border-radius: 0.6cqw; }
+.sd-open { align-self: flex-start; display: inline-flex; align-items: center; gap: 4px; }
+
+/* ── What the chat is doing ─────────────────────────────────────────── */
+
+.sp-focus {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--sp-space-1);
+    margin: 0;
+    padding: var(--sp-space-1) var(--sp-space-1) var(--sp-space-2);
+    list-style: none;
+}
+
+.sp-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--sp-space-1);
+    padding: 2px var(--sp-space-2);
+    font: inherit;
+    font-size: var(--sp-fs-sm);
+    font-weight: 500;
+    color: var(--text-secondary);
+    background: var(--bg-secondary);
+    border: 1px solid var(--border-light);
+    border-radius: var(--radius-full);
+}
+
+button.sp-chip:hover { color: var(--text-primary); background: var(--bg-hover); }
+
+/* A plain chat is the quiet default; real work is named in the accent. */
+.sp-chip:not(.is-chat) { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 35%, transparent); }
+.sp-chip.is-plan { color: var(--text-primary); }
+
+.sp-focus-count { font-weight: 400; color: var(--text-muted); }
+
+/* ── Plan, meters and badges ────────────────────────────────────────── */
+
+.sp-progress,
+.sp-meter {
+    display: block;
+    overflow: hidden;
+    background: var(--border-light);
+    border-radius: var(--radius-full);
+}
+
+.sp-progress { height: 3px; }
+.sp-meter { width: var(--sp-meter-w); height: 4px; }
+
+.sp-progress > span,
+.sp-meter > span {
+    display: block;
+    height: 100%;
+    background: var(--accent);
+    border-radius: inherit;
+    transition: width var(--duration-slow) var(--ease);
+}
+
+.sp-meter.is-high > span { background: var(--accent-yellow); }
+
+.sp-plan-step { align-items: flex-start; flex-wrap: nowrap; }
+.sp-plan-step .sp-row-icon { margin-top: 4px; }
+
+.sp-plan-text {
+    flex: 1;
+    min-width: 0;
+    padding: 3px 0;
+    overflow-wrap: anywhere;
+    transition: color var(--duration) var(--ease);
+}
+
+.sp-plan-step.is-done .sp-plan-text,
+.sp-plan-step.is-pending .sp-plan-text { color: var(--text-muted); }
+.sp-plan-step.is-done .sp-row-icon { color: var(--accent-green); }
+.sp-plan-step.is-running .sp-row-icon { color: var(--accent); }
+.sp-plan-step.is-failed .sp-row-icon { color: var(--danger); }
+.sp-plan-step.is-running .sp-plan-text { font-weight: 500; }
+
+.sp-badge {
+    padding: 0 var(--sp-space-2);
+    font-size: var(--sp-fs-sm);
+    color: var(--accent);
+    background: color-mix(in srgb, var(--accent) 12%, transparent);
+    border-radius: var(--radius-full);
+}
+
+button.sp-row-line { width: 100%; }
+
+.sp-cmd-icon.is-ok { color: var(--accent-green); }
+.sp-cmd-icon.is-failed { color: var(--danger); }
+.sp-cmd-icon.is-running { color: var(--accent); }

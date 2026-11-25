@@ -202,6 +202,9 @@ const CASES: Case[] = [
     // token, which flips too.
     ['--accent-fill-text', '--accent-fill', 'onFill'],
     ['--accent-fill-text', '--accent-fill-hover', 'onFill'],
+    // The primary action is --bg-primary on --text-primary, and on --text-secondary when hovered.
+    ['--bg-primary', '--text-primary', 'onFill'],
+    ['--bg-primary', '--text-secondary', 'onFill'],
     ['--text-inverse', '--danger', 'onFill'],
     ['--text-inverse', '--accent', 'onFill'],
     ['--text-inverse', '--accent-yellow', 'onFill'],
@@ -259,6 +262,13 @@ const SHARED_WITH_LIGHT = new Set([
     '--code-success',
     '--code-warning',
     '--code-danger',
+    '--slide-paper',
+    '--slide-ink',
+    '--slide-ink-dim',
+    '--slide-accent',
+    '--slide-on-accent',
+    '--slide-panel',
+    '--slide-rule',
 ]);
 
 describe('token declarations', () => {
@@ -867,6 +877,24 @@ describe('component rules, on the surface they actually land on', () => {
         }
         expect([...new Set(offenders)]).toEqual([]);
     });
+
+    // Muted text is recessive on the canvas and on a card, where the row repeats
+    // what it says. On the two darker fills it is a badge's only label, so it
+    // owes the text floor. A disabled or cancelled state is exempt, as in WCAG.
+    it.each(['light', 'dark'] as const)('%s theme: a label on a darker fill clears the text floor', (theme) => {
+        const DARKER = new Set(['--bg-tertiary', '--bg-active']);
+        // An empty list must mean no offenders, not that the walk stopped finding these fills.
+        expect(pairs.filter((p) => DARKER.has(p.bg)).length).toBeGreaterThan(5);
+        const offenders = pairs
+            .filter((p) => RECESSIVE.has(p.fg) && DARKER.has(p.bg) && !/disabled|cancelled/.test(p.selector))
+            .map((p) => {
+                const back = resolve(theme, p.bg);
+                return { ...p, ratio: contrast(resolve(theme, p.fg, back), back) };
+            })
+            .filter((p) => p.ratio < FLOOR.text)
+            .map((p) => `${p.path}  ${p.selector} (${p.via} ${p.bg}): ${p.fg} is ${p.ratio.toFixed(2)}:1, use --text-secondary`);
+        expect([...new Set(offenders)]).toEqual([]);
+    });
 });
 
 /**
@@ -909,7 +937,7 @@ describe('status hues stay on status', () => {
     const STATUS_WORDS = [
         'error', 'danger', 'fail', 'warn', 'deny',
         'delete', 'remove', 'clear', 'confirm', 'stop', 'invalid', 'overdue',
-        'urgent', 'missing', 'bad',
+        'missing', 'bad',
     ];
 
     /** Status by meaning, not by name. Each entry says which status. */

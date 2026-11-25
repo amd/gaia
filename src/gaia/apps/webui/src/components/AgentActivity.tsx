@@ -47,6 +47,7 @@ import { tEn, useT, type Translate } from '../i18n/useT';
 import { localizeLiveStatus } from '../utils/liveStatus';
 import { ensureModel } from '../stores/modelNeededStore';
 import './AgentActivity.css';
+import { visibleName, markStrayDirection } from './CalendarApproval';
 
 // ── Tool metadata: friendly names, icons, colors ──────────────────────────
 
@@ -186,6 +187,7 @@ function toolFallbackLabel(step: AgentStep, t: Translate): string {
         : step.timedOut ? t('tool.timedOut', { label: meta.activeLabel })
         : step.autoDeclined ? t('tool.autoDeclined', { label: meta.activeLabel })
         : step.declined ? t('tool.declined', { label: meta.activeLabel })
+        : step.refused ? t('tool.refused', { label: meta.activeLabel })
         : step.success === false ? t('tool.failed', { label: meta.activeLabel })
         : unfinished ? t('tool.unfinished', { label: meta.activeLabel }) : say(t, meta.label);
 }
@@ -195,10 +197,10 @@ export function toolRowText(step: AgentStep, t: Translate = tEn): string {
     // Narration can only humanize the prefixed tool id; the connector's own name says more.
     if (step.mcpServerLabel) return toolFallbackLabel(step, t);
     // GAIA writes this row itself, so it can say it in the UI's language.
-    if (step.tool === 'use_skill' && step.detail) return t('activity.usingSkill', { name: step.detail });
+    if (step.tool === 'use_skill' && step.detail) return t('activity.usingSkill', { name: visibleName(step.detail) });
     // A present-tense narration would read as if a call that never ran had run.
-    if ((step.declined || step.timedOut || step.autoDeclined) && !step.active) return toolFallbackLabel(step, t);
-    return step.narration ? compactNarration(step.narration) : toolFallbackLabel(step, t);
+    if ((step.declined || step.timedOut || step.refused || step.autoDeclined) && !step.active) return toolFallbackLabel(step, t);
+    return step.narration ? compactNarration(markStrayDirection(step.narration)) : toolFallbackLabel(step, t);
 }
 
 const COMPACT_DETAIL_CHARS = 48;
@@ -457,13 +459,14 @@ const SUMMARY_KINDS = 3;
 
 /** The one line a folded run of steps shows: what it did, in order. */
 export function stepsSummary(rows: ActivityRow[], t: Translate = tEn): string {
-    const kinds: { label: MessageRef; failedLabel?: MessageRef; allFailed: boolean; id: string; count: number }[] = [];
+    const kinds: { label: MessageRef; failedLabel?: MessageRef; allFailed: boolean; failures: number; id: string; count: number }[] = [];
     for (const row of rows) {
         let label: MessageRef;
         let failedLabel: MessageRef | undefined;
         if (row.type === 'tool' && row.timedOut) label = ref('activity.timedOut');
         else if (row.type === 'tool' && row.autoDeclined) label = ref('activity.autoDeclined');
         else if (row.type === 'tool' && row.declined) label = ref('activity.youDeclined');
+        else if (row.type === 'tool' && row.refused) label = ref('activity.gaiaRefused');
         else if (row.type === 'tool') {
             const meta = getToolMeta(row.tool, row);
             const skill = skillName(row);
@@ -477,11 +480,13 @@ export function stepsSummary(rows: ActivityRow[], t: Translate = tEn): string {
         const id = `${label.ref}:${JSON.stringify(label.params ?? {})}`;
         const failed = row.type === 'tool' && row.success === false;
         const seen = kinds.find((k) => k.id === id);
+        const n = row.count ?? 1;
         if (seen) {
-            seen.count += row.count ?? 1;
+            seen.count += n;
             seen.allFailed &&= failed;
+            seen.failures += failed ? n : 0;
         }
-        else kinds.push({ label, failedLabel, allFailed: failed, id, count: row.count ?? 1 });
+        else kinds.push({ label, failedLabel, allFailed: failed, failures: failed ? n : 0, id, count: n });
     }
     // Written once per language, so a bracketed locale brackets the whole line, not each piece.
     return t.compose((sayIn) => {
@@ -491,7 +496,10 @@ export function stepsSummary(rows: ActivityRow[], t: Translate = tEn): string {
             const shown = k.allFailed && k.failedLabel ? k.failedLabel : k.label;
             const label = sayIn(shown.ref, shown.params);
             const text = i === 0 ? label : label.charAt(0).toLowerCase() + label.slice(1);
-            return k.count > 1 ? `${text} ×${k.count}` : text;
+            const counted = k.count > 1 ? `${text} ×${k.count}` : text;
+            // "Ran command ×3" over one that failed would hide the failure.
+            const some = k.failedLabel && !k.allFailed && k.failures > 0;
+            return some ? sayIn('activity.someFailed', { text: counted, n: k.failures }) : counted;
         });
         const list = parts.join(sayIn('activity.summarySep'));
         const rest = kinds.length - parts.length;
@@ -690,7 +698,7 @@ export function AgentActivity({ steps, isActive, running = isActive, awaitingUse
                                 >
                                     {failed
                                         ? <AlertCircle size={13} className="agent-icon-error" />
-                                        : visible.some((r) => r.type === 'tool' && (r.declined || r.autoDeclined))
+                                        : visible.some((r) => r.type === 'tool' && (r.declined || r.refused || r.autoDeclined))
                                             ? <Ban size={13} className="flow-steps-done" />
                                             : <CheckCircle2 size={13} className="flow-steps-done" />}
                                     <span className="flow-steps-text">{stepsSummary(visible, t)}</span>
@@ -744,10 +752,11 @@ function isPlanShownLive(row: ActivityRow, livePlan?: ActivityRow): boolean {
 // ── Flow: a warning raised while the turn runs ──────────────────────────────
 
 function FlowWarning({ step }: { step: AgentStep }) {
+    const t = useT();
     return (
         <div className="flow-warning" role="status">
             <AlertCircle size={13} />
-            <span>{step.label}</span>
+            <span>{localizeLiveStatus(t, step.label)}</span>
         </div>
     );
 }
@@ -835,7 +844,7 @@ export function linkifyPaths(text: string, t: Translate = tEn): React.ReactNode 
     while ((match = pathRe.exec(text)) !== null) {
         const quote = match[1] ?? '';
         if (match.index > lastIndex || quote) {
-            parts.push(text.slice(lastIndex, match.index) + quote);
+            parts.push(markStrayDirection(text.slice(lastIndex, match.index)) + quote);
         }
         const rawMatch = quote ? match[2] : match[0];
         const filePath = rawMatch.replace(/[)}\]]+$/, ''); // trim trailing brackets
@@ -847,13 +856,13 @@ export function linkifyPaths(text: string, t: Translate = tEn): React.ReactNode 
                 key={match.index}
                 className="tool-result-path"
                 onClick={handleClick}
-                title={t('activity.openPath', { path: filePath })}
+                title={t('activity.openPath', { path: visibleName(filePath) })}
                 role="button"
                 tabIndex={0}
                 onKeyDown={(e) => { if (e.key === 'Enter') handleClick(); }}
             >
                 <FolderOpen size={10} style={{ flexShrink: 0, opacity: 0.7 }} />
-                {filePath}
+                {visibleName(filePath)}
             </span>
         );
         // Advance past the full raw match; push trimmed trailing brackets as plain text
@@ -863,8 +872,8 @@ export function linkifyPaths(text: string, t: Translate = tEn): React.ReactNode 
         lastIndex = match.index + match[0].length;
     }
 
-    if (parts.length === 0) return text;
-    if (lastIndex < text.length) parts.push(text.slice(lastIndex));
+    if (parts.length === 0) return markStrayDirection(text);
+    if (lastIndex < text.length) parts.push(markStrayDirection(text.slice(lastIndex)));
     return <>{parts}</>;
 }
 
@@ -895,8 +904,8 @@ function FileListView({ fileList }: { fileList: { files: Array<Record<string, un
                     {f.kind === 'folder'
                         ? <Folder size={11} className="file-list-icon" data-kind="folder" />
                         : <File size={11} className="file-list-icon" />}
-                    <span className="file-list-name">{getFileName(f, i)}</span>
-                    {getDirectory(f) && <span className="file-list-dir">{getDirectory(f)}</span>}
+                    <span className="file-list-name">{visibleName(getFileName(f, i))}</span>
+                    {getDirectory(f) && <span className="file-list-dir">{visibleName(getDirectory(f))}</span>}
                 </div>
             ))}
             {remaining > 0 && !expanded && (
@@ -936,7 +945,7 @@ function FlowToolCard({ step, isExpanded, onToggle, now, awaitingUser = false, s
     const line = waiting ? t('activity.waiting') : live || toolRowText(step, t);
     const count = step.count ?? 1;
     // A failed call's reason belongs on its row; a success's output stays one click deeper.
-    const notRun = (!!step.declined || !!step.timedOut || !!step.autoDeclined) && !step.active;
+    const notRun = (!!step.declined || !!step.timedOut || !!step.refused || !!step.autoDeclined) && !step.active;
     // A missing vision model is said by the offer under the row, not by the tool's raw error.
     const failure = step.success === false && step.result && !notRun && !step.needsModel ? failureText(step, t) : '';
     const timing = waiting
@@ -954,7 +963,7 @@ function FlowToolCard({ step, isExpanded, onToggle, now, awaitingUser = false, s
                 title={
                     waiting || live
                         ? toolRowText(step, t)
-                        : step.narration && step.narration !== line ? step.narration : undefined
+                        : step.narration && step.narration !== line ? markStrayDirection(step.narration) : undefined
                 }
             >
                 <div className="flow-tool-left">
@@ -1023,7 +1032,7 @@ function FlowToolCard({ step, isExpanded, onToggle, now, awaitingUser = false, s
                     {step.mcpOutput && (
                         <div className="step-detail-result result-success">
                             <span className="detail-section-label">{t('activity.detail.output')}</span>
-                            <CodeBlock code={step.mcpOutput.text} previewLines={MCP_OUTPUT_PREVIEW_LINES} testId="mcp-output" />
+                            <CodeBlock code={markStrayDirection(step.mcpOutput.text)} previewLines={MCP_OUTPUT_PREVIEW_LINES} testId="mcp-output" />
                             {step.mcpOutput.truncated && (
                                 <div className="cmd-truncated">{t('activity.truncated')}</div>
                             )}
@@ -1187,7 +1196,7 @@ function ChunksView({ chunks }: { chunks: RetrievalChunk[] }) {
                                 <div className="chunk-header-left">
                                     <BookOpen size={11} style={{ color: 'var(--accent-cyan)', flexShrink: 0 }} />
                                     {chunk.source && (
-                                        <span className="chunk-source">{chunk.source}</span>
+                                        <span className="chunk-source">{visibleName(chunk.source)}</span>
                                     )}
                                     {chunk.page != null && (
                                         <span className="chunk-page">{t('activity.chunkPage', { page: chunk.page })}</span>
@@ -1202,9 +1211,9 @@ function ChunksView({ chunks }: { chunks: RetrievalChunk[] }) {
                             </button>
                             <div className={`chunk-body ${isExpanded ? 'show' : ''}`}>
                                 {isExpanded ? (
-                                    <pre className="chunk-content">{chunk.content}</pre>
+                                    <pre className="chunk-content">{markStrayDirection(chunk.content)}</pre>
                                 ) : (
-                                    <div className="chunk-preview">{chunk.preview}</div>
+                                    <div className="chunk-preview">{markStrayDirection(chunk.preview)}</div>
                                 )}
                             </div>
                         </div>
@@ -1273,10 +1282,10 @@ function CommandOutputView({ output }: { output: CommandOutput }) {
             </div>
             <div className="cmd-line">
                 <span className="cmd-prompt">$</span>
-                <span className="cmd-text">{output.command}</span>
+                <span className="cmd-text">{markStrayDirection(output.command)}</span>
             </div>
-            {output.stdout && <pre className="cmd-stdout">{output.stdout}</pre>}
-            {output.stderr && <pre className="cmd-stderr">{output.stderr}</pre>}
+            {output.stdout && <pre className="cmd-stdout">{markStrayDirection(output.stdout)}</pre>}
+            {output.stderr && <pre className="cmd-stderr">{markStrayDirection(output.stderr)}</pre>}
             {output.truncated && (
                 <div className="cmd-truncated">{t('activity.truncated')}</div>
             )}
@@ -1312,7 +1321,7 @@ export function formatArgsDisplay(detail: string): React.ReactNode {
         : detail.split(/, (?=[A-Za-z_][\w.-]{0,29}:(?:\s|$))/).filter(Boolean);
 
     if (parts.length <= 1) {
-        return <span className="arg-value">{detail}</span>;
+        return <span className="arg-value">{markStrayDirection(detail)}</span>;
     }
 
     return (
@@ -1325,11 +1334,11 @@ export function formatArgsDisplay(detail: string): React.ReactNode {
                     return (
                         <div key={i} className="arg-row">
                             <span className="arg-key">{key}</span>
-                            <span className="arg-value">{val}</span>
+                            <span className="arg-value">{markStrayDirection(val)}</span>
                         </div>
                     );
                 }
-                return <div key={i} className="arg-row"><span className="arg-value">{part}</span></div>;
+                return <div key={i} className="arg-row"><span className="arg-value">{markStrayDirection(part)}</span></div>;
             })}
         </div>
     );

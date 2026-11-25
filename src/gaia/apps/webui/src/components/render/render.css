@@ -70,7 +70,7 @@
 }
 
 .render-table-card__title {
-    font-weight: 600;
+    font-weight: 500;
     margin-bottom: 6px;
 }
 
@@ -93,7 +93,7 @@
 }
 
 .render-table th {
-    font-weight: 600;
+    font-weight: 500;
     color: var(--text-secondary);
 }
 
@@ -108,7 +108,7 @@
 }
 
 .render-kv__title {
-    font-weight: 600;
+    font-weight: 500;
     margin-bottom: 6px;
 }
 
@@ -146,7 +146,7 @@
 }
 
 .render-list__title {
-    font-weight: 600;
+    font-weight: 500;
     margin-bottom: 6px;
 }
 
@@ -206,6 +206,10 @@
     color: var(--danger);
 }
 
+.render-audio__where {
+    overflow-wrap: anywhere;
+}
+
 .render-image__caption {
     color: var(--text-secondary);
     font-size: 12px;
@@ -223,7 +227,7 @@
 }
 
 .render-diff__title {
-    font-weight: 600;
+    font-weight: 500;
     margin-bottom: 6px;
     font-size: 13px;
 }
@@ -271,12 +275,12 @@
     margin-bottom: 4px;
 }
 
-/* ── needs_confirmation (#2109, stateless D1) ────────────────────────── */
+/* ── needs_confirmation an out-of-date agent could not wait on ──────── */
 
 .render-confirmation {
     background: var(--bg-card);
     border: 1px solid var(--accent-yellow);
-    border-left-width: 3px;
+    border-inline-start-width: 3px;
     border-radius: 8px;
     padding: 10px 12px;
     font-size: 13px;
@@ -297,26 +301,14 @@
     border-radius: 4px;
     padding: 2px 8px;
     font-size: 11px;
-    font-weight: 600;
+    font-weight: 500;
     text-transform: uppercase;
     letter-spacing: 0.04em;
 }
 
 .render-confirmation__label {
-    font-weight: 600;
+    font-weight: 500;
     font-size: 14px;
-    text-transform: capitalize;
-}
-
-/* Machine action name — code-derived truth, visually distinct from the
- * (attacker-influenced) summary block below. */
-.render-confirmation__action {
-    font-family: var(--font-mono);
-    font-size: 12px;
-    color: var(--text-secondary);
-    background: var(--bg-secondary);
-    border-radius: 4px;
-    padding: 1px 6px;
 }
 
 /* Plain-text summary: <pre> keeps it a literal text node with no markdown
@@ -342,6 +334,8 @@
 }
 
 .render-confirmation__dismiss {
+    flex-shrink: 0;
+    white-space: nowrap;
     background: transparent;
     border: 1px solid var(--border-light);
     border-radius: 6px;
@@ -387,7 +381,7 @@
     border-radius: 4px;
     padding: 2px 8px;
     font-size: 11px;
-    font-weight: 600;
+    font-weight: 500;
     text-transform: uppercase;
     letter-spacing: 0.04em;
 }
@@ -398,7 +392,7 @@
     border-radius: 4px;
     padding: 2px 8px;
     font-size: 11px;
-    font-weight: 600;
+    font-weight: 500;
     text-transform: uppercase;
     letter-spacing: 0.04em;
 }
@@ -470,8 +464,8 @@
 }
 
 .render-needs-input__free-text-submit {
-    background: var(--accent-fill);
-    color: var(--accent-fill-text);
+    background: var(--action-fill);
+    color: var(--action-fill-text);
     border: none;
     border-radius: 6px;
     padding: 5px 12px;
@@ -584,19 +578,19 @@
     align-items: center;
     gap: 6px;
     padding: 6px 12px;
-    background: var(--accent-fill);
-    color: var(--accent-fill-text);
-    border: 1px solid var(--accent-fill);
+    background: var(--action-fill);
+    color: var(--action-fill-text);
+    border: 1px solid var(--action-fill);
     border-radius: 6px;
     font-size: 12.5px;
-    font-weight: 600;
+    font-weight: 500;
     cursor: pointer;
     transition: background-color var(--duration-fast) var(--ease);
 }
 
 .render-connect__button:hover:not(:disabled) {
-    background: var(--accent-fill-hover);
-    border-color: var(--accent-fill-hover);
+    background: var(--action-fill-hover);
+    border-color: var(--action-fill-hover);
 }
 
 .render-connect__button--quiet,

@@ -23,18 +23,13 @@ on:
     paths:
       - 'tui/**'
       - 'src/gaia/daemon/**'
-      # The Python side of the email-scope drift guard (#2730 D2a) — a
-      # one-sided edit to the source-of-truth scope constants (or the shared
-      # fixture both sides diff against) must still run the Go test that
-      # checks connectScopes against them, or drift ships silently.
-      - 'hub/agents/email/python/gaia_agent_email/scopes.py'
-      - 'hub/agents/email/python/gaia_agent_email/outlook_scopes.py'
-      - 'tests/fixtures/connectors/email_scopes.json'
       # The shared TUI <-> flagship stdio wire fixture both languages test against.
       - 'tests/fixtures/stdio/gaia_stdio_wire.json'
       # Nothing else runs pre-release on these — the PE check this job invokes,
       # and the installers that package the binaries it builds.
       - 'util/check_pe_resources.py'
+      # installer/tui/fetch_gaiacpp.py imports it to verify the packaged gaiacpp.
+      - 'util/gaiacpp_release_assets.py'
       - 'installer/tui/**'
       - '.github/workflows/build_tui.yml'
       - '.github/workflows/tui_installers.yml'
@@ -49,12 +44,14 @@ on:
       # The installer jobs it calls read the flagship's pins and version.
       - 'hub/agents/gaia/npm/binaries.lock.json'
       - 'hub/agents/gaia/python/gaia-agent.yaml'
-      - 'hub/agents/gaia/python/gaia_agent/__init__.py'
+      - 'hub/agents/gaia/python/gaiapy/__init__.py'
       - 'hub/agents/gaia/python/packaging/gen_binaries_lock.py'
-      - 'util/flagship_rc_assets.py'
+      - 'util/gaiapy_rc_assets.py'
       - 'util/release_tag.py'
       - 'src/gaia/version.py'
       - 'LICENSE.md'
+      # The changes job reads this filter with it to decide what a PR runs.
+      - 'util/select_tests.py'
   pull_request:
     # NO `branches:` filter on purpose. It used to be `branches: [main]`, which
     # silences every stacked PR — one opened against another feature branch
@@ -69,18 +66,13 @@ on:
     paths:
       - 'tui/**'
       - 'src/gaia/daemon/**'
-      # The Python side of the email-scope drift guard (#2730 D2a) — a
-      # one-sided edit to the source-of-truth scope constants (or the shared
-      # fixture both sides diff against) must still run the Go test that
-      # checks connectScopes against them, or drift ships silently.
-      - 'hub/agents/email/python/gaia_agent_email/scopes.py'
-      - 'hub/agents/email/python/gaia_agent_email/outlook_scopes.py'
-      - 'tests/fixtures/connectors/email_scopes.json'
       # The shared TUI <-> flagship stdio wire fixture both languages test against.
       - 'tests/fixtures/stdio/gaia_stdio_wire.json'
       # Nothing else runs pre-release on these — the PE check this job invokes,
       # and the installers that package the binaries it builds.
       - 'util/check_pe_resources.py'
+      # installer/tui/fetch_gaiacpp.py imports it to verify the packaged gaiacpp.
+      - 'util/gaiacpp_release_assets.py'
       - 'installer/tui/**'
       - '.github/workflows/build_tui.yml'
       - '.github/workflows/tui_installers.yml'
@@ -95,12 +87,14 @@ on:
       # The installer jobs it calls read the flagship's pins and version.
       - 'hub/agents/gaia/npm/binaries.lock.json'
       - 'hub/agents/gaia/python/gaia-agent.yaml'
-      - 'hub/agents/gaia/python/gaia_agent/__init__.py'
+      - 'hub/agents/gaia/python/gaiapy/__init__.py'
       - 'hub/agents/gaia/python/packaging/gen_binaries_lock.py'
-      - 'util/flagship_rc_assets.py'
+      - 'util/gaiapy_rc_assets.py'
       - 'util/release_tag.py'
       - 'src/gaia/version.py'
       - 'LICENSE.md'
+      # The changes job reads this filter with it to decide what a PR runs.
+      - 'util/select_tests.py'
   merge_group:
   workflow_dispatch:
 
@@ -111,28 +105,86 @@ concurrency:
 permissions:
   contents: read
 
+# What runs where:
+#   pull request whose only files in the filter above are under
+#   src/gaia/apps/webui/: one job, "Freeze core with the UI" on Linux, the only
+#   thing here an Agent UI change can break.
+#   Any other pull request, push to main, merge queue and dispatch: the full Go
+#   test/lint/coverage, six-target build, installers and Windows setup.
+# The ci:full label runs the full set on a PR; it is read when the run starts,
+# so add it and then push (or close and reopen the PR).
+# "TUI Build & Test Result" is the one check to require: it is green only when
+# every job meant to run passed.
+
 jobs:
+  changes:
+    name: Decide what this change runs
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      full: ${{ steps.scope.outputs.tui_full }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          # The diff needs the merge base with the PR's base branch.
+          fetch-depth: ${{ github.event_name == 'pull_request' && '0' || '1' }}
+
+      - name: Set up Python
+        if: github.event_name == 'pull_request'
+        uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+
+      # The selector reads this workflow's paths filter.
+      - name: Install PyYAML
+        if: github.event_name == 'pull_request'
+        run: python -m pip install 'pyyaml>=6,<7'
+
+      - name: Pick the jobs this change needs
+        id: scope
+        env:
+          EVENT: ${{ github.event_name }}
+          BASE_REF: ${{ github.base_ref }}
+          LABEL_FULL: ${{ contains(github.event.pull_request.labels.*.name, 'ci:full') }}
+        run: |
+          set -euo pipefail
+          if [ "$EVENT" != pull_request ]; then
+            echo "tui_full=true" >> "$GITHUB_OUTPUT"
+            echo "**Job scope** — full: every $EVENT run builds and tests everything" >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          force=()
+          if [ "$LABEL_FULL" = true ]; then force=(--force-full "ci:full label"); fi
+          # A diff git can't compute fails this job, and so the result check.
+          python util/select_tests.py lane-scope --base "origin/$BASE_REF" \
+            --workflow .github/workflows/build_tui.yml \
+            --narrow-prefix src/gaia/apps/webui/ "${force[@]}" --github-output tui
+
+  # The one job an Agent UI change needs: build_core.yml builds the UI into the
+  # frozen core, and refuses to freeze without it.
+  core-ui:
+    name: Freeze core with the UI
+    needs: changes
+    if: >-
+      !cancelled() && needs.changes.result == 'success' &&
+      needs.changes.outputs.full == 'false'
+    uses: ./.github/workflows/build_core.yml
+    with:
+      platforms: 'linux-x64'
+      artifact_prefix: tui-ui-
+
   test:
     name: Test (${{ matrix.os }})
+    needs: changes
+    if: >-
+      !cancelled() && needs.changes.result == 'success' && needs.changes.outputs.full == 'true'
     runs-on: ${{ matrix.os }}
     strategy:
-      # Report all three platforms on every run. A first-time Windows failure
-      # must not hide a real Linux regression behind a cancelled job.
+      # Report all three platforms on every run, so a failure on one OS can't
+      # hide a regression on another behind a cancelled job.
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest]
-        include:
-          # Advisory for now. These tests have NEVER run on Windows, and what is
-          # most likely to break there is environmental, not logical: 15 test
-          # files use t.TempDir() (cleanup fails on Windows if a handle is still
-          # open) and 4 compile and spawn real child processes. -race also needs
-          # a C toolchain on windows/amd64, which is unverified here.
-          #
-          # This is additive: ubuntu and macos block as before, nothing is
-          # weakened. Flip `advisory` off once a green run proves it.
-          - os: windows-latest
-            advisory: true
-    continue-on-error: ${{ matrix.advisory == true }}
+        os: [ubuntu-latest, macos-latest, windows-latest]
     defaults:
       run:
         # bash on all three so one command works everywhere (Windows defaults to pwsh).
@@ -148,26 +200,18 @@ jobs:
 
       # -race is the point of this job. The TUI is concurrent throughout — SSE
       # streaming, the loopback control API, daemon polling — so this is where
-      # its real bugs are. Verified green on all 12 packages locally.
+      # its real bugs are.
       - name: Run tests (race)
-        # Windows runs the 13 unit packages but not ./test. That suite compiles
-        # and spawns real child processes and binds ports; two of its cases
-        # (TestHubCatalogLoadSurvivesTheChatView, TestASubprocessAgentIsNotGated)
-        # do not reach their view there. Naming the gap rather than leaving the
-        # job red forever — the unit packages are the coverage worth having on a
-        # third OS, and porting the integration harness is its own change.
-        run: |
-          if [ "${{ runner.os }}" = "Windows" ]; then
-            go test $(go list ./... | grep -v '/tui/test$') -v -count=1 -race -timeout=15m
-          else
-            go test ./... -v -count=1 -race -timeout=15m
-          fi
+        run: go test ./... -v -count=1 -race -timeout=15m
 
       - name: Vet
         run: go vet ./...
 
   lint:
     name: Lint
+    needs: changes
+    if: >-
+      !cancelled() && needs.changes.result == 'success' && needs.changes.outputs.full == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -185,11 +229,10 @@ jobs:
           version: v2.12.2
           working-directory: tui
 
-      # Both linters only analyze the host GOOS, so internal/daemon/lock_windows.go
-      # and pid_windows.go are invisible to every BLOCKING job — the only leg that
-      # compiles them is the advisory Windows one, which cannot fail the run. Vet
-      # them here so Windows-only code has enforcement that bites. darwin needs no
-      # equivalent: the macos test leg blocks and vets natively.
+      # Both linters only analyze the host GOOS, so internal/daemon/pid_windows.go
+      # is invisible to golangci-lint here. The Windows test leg compiles and
+      # vets it natively; this keeps it under the same linter pass as the rest.
+      # darwin needs no equivalent: the macos leg vets.
       - name: Vet Windows-only sources
         working-directory: tui
         env:
@@ -198,6 +241,9 @@ jobs:
 
   coverage:
     name: Coverage
+    needs: changes
+    if: >-
+      !cancelled() && needs.changes.result == 'success' && needs.changes.outputs.full == 'true'
     runs-on: ubuntu-latest
     # Genuinely non-blocking, not just labelled that way. `make cover` runs the
     # whole suite to produce a profile, so without this a test failure would
@@ -214,9 +260,8 @@ jobs:
 
       # Informational, NOT a gate. A threshold that blocks PRs needs buy-in that
       # a printed number does not, and the naive per-package figure is actively
-      # misleading here — internal/ui/hub and internal/ui/root read 0% because
-      # their tests live in the test/ package, so a naive gate would fail on two
-      # of the better-covered packages. `make cover` uses -coverpkg=./... to
+      # misleading here — code exercised by the test/ integration suite reads
+      # as uncovered in its own package. `make cover` uses -coverpkg=./... to
       # attribute coverage back to the package that owns the code.
       #
       # pipefail is set explicitly: a bare `make cover | tee` reports TEE's exit
@@ -367,6 +412,9 @@ jobs:
   # uninstall are all still exercised on a clean runner of each OS.
   installer-version:
     name: Resolve installer version
+    needs: changes
+    if: >-
+      !cancelled() && needs.changes.result == 'success' && needs.changes.outputs.full == 'true'
     runs-on: ubuntu-latest
     outputs:
       version: ${{ steps.v.outputs.version }}
@@ -392,6 +440,8 @@ jobs:
     with:
       version: ${{ needs.installer-version.outputs.version }}
       sidecar: stub
+      # A PR builds no gaiacpp; the stand-in keeps its packaging under test.
+      gaiacpp: stub
 
   # The one Windows setup, on a clean runner, the same workflow the release
   # calls. The desktop app it embeds comes from a named, published release --
@@ -408,5 +458,43 @@ jobs:
     with:
       version: ${{ needs.installer-version.outputs.version }}
       sidecar: stub
+      gaiacpp: stub
       agent_ui_release: v0.24.1
       agent_ui_release_sha256: 9aa26f8622a22a0df771e201d754823586d52b6a4dca8b754fb6fc6bb7973428
+
+  # The check to require. A skipped job reads as passing to a required check,
+  # so this job runs whatever happened and judges each job against the scope.
+  tui-result:
+    name: TUI Build & Test Result
+    needs: [changes, core-ui, test, lint, build, size-check, installer-version, installers, windows-setup]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    if: always()
+    steps:
+      - name: Check every job passed or was meant to be skipped
+        env:
+          NEEDS: ${{ toJSON(needs) }}
+          FULL: ${{ needs.changes.outputs.full }}
+        run: |
+          set -euo pipefail
+          changes=$(jq -r '.changes.result' <<<"$NEEDS")
+          if [ "$changes" != success ] || [ -z "$FULL" ]; then
+            echo "::error::Decide what this change runs ended $changes, so no job's skip can be trusted."
+            exit 1
+          fi
+          failed=0
+          for job in core-ui test lint build size-check installer-version installers windows-setup; do
+            result=$(jq -r --arg j "$job" '.[$j].result' <<<"$NEEDS")
+            if [ "$job" = core-ui ]; then
+              must_run=$([ "$FULL" = false ] && echo true || echo false)
+            else
+              must_run=$FULL
+            fi
+            if [ "$result" = success ] || { [ "$result" = skipped ] && [ "$must_run" = false ]; }; then
+              echo "$job: $result"
+            else
+              echo "::error::$job ended $result (expected to run: $must_run)."
+              failed=1
+            fi
+          done
+          exit "$failed"

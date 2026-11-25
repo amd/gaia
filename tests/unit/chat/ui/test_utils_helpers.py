@@ -288,6 +288,13 @@ class TestMessageToResponse:
         assert resp.rag_sources is not None
         assert resp.agent_steps is not None
 
+    def test_stats_keep_the_time_the_turn_waited_on_the_user(self, base_message):
+        base_message["inference_stats"] = json.dumps(
+            {"tokens_per_second": 40.0, "waiting_seconds": 80.0}
+        )
+        resp = message_to_response(base_message)
+        assert resp.stats.waiting_seconds == 80.0
+
     def test_returns_message_response_type(self, base_message):
         from gaia.ui.models import MessageResponse
 
@@ -506,7 +513,7 @@ class TestDocumentRoots:
         assert exc_info.value.status_code == 500
         assert "existing" in exc_info.value.detail
 
-    def test_empty_value_is_home_only(self, monkeypatch):
+    def test_empty_value_is_home_only(self, mock_home, monkeypatch):
         # A relocated GAIA_HOME adds its documents dir as a root.
         monkeypatch.delenv("GAIA_HOME", raising=False)
         monkeypatch.setenv(DOCUMENT_ROOTS_ENV, "")

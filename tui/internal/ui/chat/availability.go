@@ -84,7 +84,7 @@ func (m ChatModel) availableCommandSet() map[string]bool {
 			if supported, known := m.commandSupported(client.CapabilityMemory); known && !supported {
 				continue
 			}
-		case "/setup", "/models":
+		case "/setup", "/models", imageCommandPrefix, agentCommand:
 			if m.agentID != setupAgentID {
 				continue
 			}
@@ -93,7 +93,7 @@ func (m ChatModel) availableCommandSet() map[string]bool {
 			if m.agentID != setupAgentID || !m.gpuApplies {
 				continue
 			}
-		case modelCommandPrefix, "/provider", skillsCommandPrefix:
+		case modelCommandPrefix, "/provider", skillsCommandPrefix, researchCommand:
 			if !m.supportsModelCommand() {
 				continue
 			}

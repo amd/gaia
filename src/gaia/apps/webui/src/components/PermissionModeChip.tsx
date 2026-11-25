@@ -26,26 +26,33 @@ export function PermissionModeChip({ sessionId, disabled }: { sessionId: string 
     const t = useT();
     const draftMode = useChatStore((s) => s.draftPermissionMode);
     const setDraftMode = useChatStore((s) => s.setDraftPermissionMode);
-    const [mode, setMode] = useState<PermissionMode>(sessionId ? 'ask' : draftMode);
+    // Unknown until the chat's saved mode is read: showing "Ask" early would promise a question that may never come.
+    const [mode, setMode] = useState<PermissionMode | null>(sessionId ? null : draftMode);
     const [open, setOpen] = useState(false);
     const [confirming, setConfirming] = useState(false);
     const [error, setError] = useState<string | null>(null);
     const anchor = useRef<HTMLButtonElement>(null);
     const promptWaiting = useNotificationStore((s) => sessionId !== null && selectSessionPermissionPrompt(sessionId)(s) !== null);
 
+    // With no chat yet the chip shows the held choice.
     useEffect(() => {
-        if (!sessionId) {
-            setMode(draftMode);
-            return;
-        }
+        if (!sessionId) setMode(draftMode);
+    }, [sessionId, draftMode]);
+
+    // A chat's saved mode is read once per chat: the held choice changing must not blank it.
+    useEffect(() => {
+        if (!sessionId) return;
         let cancelled = false;
+        setMode(null);
+        setError(null);
         api.getPermissions(sessionId)
             .then((p) => { if (!cancelled) setMode(p.mode); })
             .catch((err) => { if (!cancelled) setError(requestErrorText(err)); });
         return () => { cancelled = true; };
-    }, [sessionId, draftMode]);
+    }, [sessionId]);
 
-    usePermissionModeEvents(sessionId, setMode);
+    // A mode announced from elsewhere is the current one, so an earlier failed read no longer applies.
+    usePermissionModeEvents(sessionId, useCallback((next: PermissionMode) => { setError(null); setMode(next); }, []));
 
     const apply = useCallback(async (next: PermissionMode) => {
         if (next === 'full_access' && !confirming) {
@@ -79,21 +86,23 @@ export function PermissionModeChip({ sessionId, disabled }: { sessionId: string 
     }, [confirming, promptWaiting, sessionId, setDraftMode]);
 
     const full = mode === 'full_access';
-    const Icon = full ? ShieldAlert : ShieldCheck;
+    const unread = mode === null;
+    const Icon = full || (unread && error) ? ShieldAlert : ShieldCheck;
+    const chipLabel = full ? t('perm.full') : unread ? t(error ? 'perm.unknown' : 'perm.checking') : t('env.ask');
     return (
         <div className="composer-chip-wrap">
             <button
                 ref={anchor}
                 type="button"
-                className={`composer-chip${full ? ' is-warning' : ''}`}
+                className={`composer-chip${full || (unread && error) ? ' is-warning' : ''}`}
                 onClick={() => { setConfirming(false); setOpen((v) => !v); }}
                 disabled={disabled}
                 aria-haspopup="dialog"
                 aria-expanded={open}
-                aria-label={t('perm.chipAria', { mode: ref(full ? 'perm.fullLower' : 'perm.askLower') })}
+                aria-label={unread ? t('perm.chipAriaUnread', { state: chipLabel }) : t('perm.chipAria', { mode: ref(full ? 'perm.fullLower' : 'perm.askLower') })}
             >
                 <Icon size={13} aria-hidden="true" />
-                <span className="composer-chip-label" dir="auto">{full ? t('perm.full') : t('env.ask')}</span>
+                <span className="composer-chip-label" dir="auto">{chipLabel}</span>
                 <ChevronDown size={12} aria-hidden="true" />
             </button>
             <Popover open={open} onClose={() => setOpen(false)} anchor={anchor} label={t('env.permission')}>

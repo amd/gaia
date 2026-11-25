@@ -12,10 +12,10 @@ from types import SimpleNamespace
 
 import pytest
 
-pytest.importorskip("gaia_agent")
+pytest.importorskip("gaiapy")
 
-from gaia_agent import chat_agent  # noqa: E402
-from gaia_agent.chat_agent import ChatAgent  # noqa: E402
+from gaiapy import chat_agent  # noqa: E402
+from gaiapy.chat_agent import ChatAgent  # noqa: E402
 
 from gaia.llm.inference_location import InferenceLocation  # noqa: E402
 
@@ -55,7 +55,9 @@ def test_gaias_own_lemonade_keeps_its_name(monkeypatch):
 def _failure_answer(label, cause):
     from gaia.agents.base.agent import Agent
 
-    host = SimpleNamespace(_model_service_label=lambda: label)
+    host = SimpleNamespace(
+        _model_service_label=lambda: label, _turn_model_retries={"failed": False}
+    )
     return Agent._model_failure_answer(
         host, [], 1, stopped_responding=False, cause=cause, advice=None
     )

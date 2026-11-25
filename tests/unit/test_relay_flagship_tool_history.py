@@ -19,15 +19,16 @@ from types import SimpleNamespace
 import pytest
 
 import gaia.ui._chat_helpers as chat_helpers_module
+from gaia.security import PathValidator
 from gaia.ui import permissions as session_permissions
 from gaia.ui._chat_helpers import _stream_chat_impl
 from gaia.ui.database import ChatDatabase
-from gaia.ui.email_sidecar.profiles import (
-    EMAIL_PROFILE,
+from gaia.ui.models import ChatRequest
+from gaia.ui.sidecar.profiles import (
+    _NO_PROFILE,
     GAIA_PROFILE,
     turns_supported,
 )
-from gaia.ui.models import ChatRequest
 from tests.unit.test_relay_flagship_documents import (  # noqa: F401  (fixture)
     _answer,
     _point_ui_at,
@@ -54,6 +55,7 @@ class _ToolAgent:
         # The sidecar syncs attached documents against these every turn.
         self.indexed_files: set = set()
         self.rag = None
+        self.path_validator = PathValidator([])
         self.seen: list = []
         self.external_marks = 0
 
@@ -104,17 +106,18 @@ class _BigToolAgent(_ToolAgent):
 @pytest.fixture
 def live_sidecar(monkeypatch, request):
     uvicorn = pytest.importorskip("uvicorn")
-    pytest.importorskip("gaia_agent")
+    pytest.importorskip("gaiapy")
     import requests
-    from gaia_agent import caller_auth
-    from gaia_agent import server as server_mod
-    from gaia_agent import session_registry as sr
+    from gaiapy import caller_auth
+    from gaiapy import server as server_mod
+    from gaiapy import session_registry as sr
 
     from gaia.daemon.sidecars.manager import find_free_port
 
     caller_auth.reset()
     monkeypatch.delenv(caller_auth.TOKEN_FILE_ENV_VAR, raising=False)
     monkeypatch.delenv(caller_auth.TOKEN_ENV_VAR, raising=False)
+    monkeypatch.setenv(caller_auth.ALLOW_NO_TOKEN_ENV_VAR, "1")
     agents: list = []
 
     agent_class = getattr(request, "param", _ToolAgent)
@@ -216,8 +219,8 @@ def test_only_a_flagship_at_2_25_takes_turns(version, expected):
     assert turns_supported(GAIA_PROFILE, version) is expected
 
 
-def test_email_never_takes_turns():
-    assert turns_supported(EMAIL_PROFILE, "9.9") is False
+def test_a_profile_without_the_floor_never_takes_turns():
+    assert turns_supported(_NO_PROFILE, "9.9") is False
 
 
 def test_the_next_turn_sees_the_refused_tool_call(monkeypatch, live_sidecar, chat):

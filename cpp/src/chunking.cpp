@@ -198,6 +198,8 @@ std::string toLower(std::string s) {
 
 /// RAGSDK._get_last_n_tokens: roughly the last n tokens, cut at a word boundary.
 std::string lastNTokens(const std::string& text, std::size_t nTokens) {
+    // Python's text[-0:] is the whole text, which would repeat each chunk into the next.
+    if (nTokens == 0) return "";
     const std::size_t targetChars = nTokens * 4;
     if (utf8Length(text) <= targetChars) return text;
 

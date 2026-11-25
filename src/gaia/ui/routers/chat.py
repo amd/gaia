@@ -24,6 +24,7 @@ from pydantic import BaseModel
 from starlette.background import BackgroundTask
 
 from gaia.agents.base.tool_grants import grant_scope
+from gaia.browser.picked import page_elements_json, with_page_elements
 
 from .. import answer_retry, followups
 from .. import permissions as session_permissions
@@ -143,15 +144,32 @@ async def send_message(
             detail="A chat request is already in progress for this session. "
             "Please wait for it to finish.",
         )
+    # The transcript keeps the browser link; the agent gets the file's path,
+    # and any elements picked in the browser pane as one block of page data.
+    # Built before the lock is taken: a failure here must not leave it held.
+    agent_request = request.model_copy(
+        update={
+            "message": resolve_upload_links(
+                with_page_elements(request.message, request.page_elements)
+            ),
+            "page_elements": None,
+        }
+    )
+    picked = page_elements_json(request.page_elements or [])
+
     await session_lock.acquire()
 
     # Foreground local work takes precedence over autonomous background goals.
     # Resolve once so a settings change cannot disagree with the later queue check.
     takes_line = turn_takes_the_line(db, session, request.agent_type)
     if takes_line:
-        from gaia.ui.agent_loop import agent_loop
+        try:
+            from gaia.ui.agent_loop import agent_loop
 
-        agent_loop.yield_to_user()
+            agent_loop.yield_to_user()
+        except BaseException:
+            session_lock.release()
+            raise
 
     # A streamed turn takes its place in line inside the run, so leaving the
     # chat while it waits doesn't drop it. A non-streamed one is saved first,
@@ -160,7 +178,7 @@ async def send_message(
     question_id = None
     if not request.stream:
         try:
-            question_id = db.begin_turn(sid, request.message)
+            question_id = db.begin_turn(sid, request.message, picked)
             _set_provisional_title(db, sid, request.message)
             if takes_line:
                 await turn_queue.acquire(sid)
@@ -187,11 +205,6 @@ async def send_message(
     # Resolve the patchable functions through gaia.ui.server so tests
     # that patch("gaia.ui.server._stream_chat_response") work correctly.
     srv = _server_mod()
-
-    # The transcript keeps the browser link; the agent gets the file's path.
-    agent_request = request.model_copy(
-        update={"message": resolve_upload_links(request.message)}
-    )
 
     try:
         if request.stream:
@@ -220,7 +233,7 @@ async def send_message(
 
             async def _stream():
                 try:
-                    db.begin_turn(request.session_id, request.message)
+                    db.begin_turn(request.session_id, request.message, picked)
                     _set_provisional_title(db, request.session_id, request.message)
                     # The detached lifecycle owns producer + persistence;
                     # this subscriber only relays buffered and live events.
@@ -270,6 +283,7 @@ async def send_message(
                         response_text,
                         model_messages=model_messages or None,
                         ends_turn=True,
+                        failed=bool(turn_box.get("failed")),
                     )
                     if "recording" in turn_box:
                         turn_box["recording"].link_message(msg_id)
@@ -301,7 +315,7 @@ async def send_message(
                         model_id=turn_box.get("model"),
                     )
                 )
-                run_status = "done"
+                run_status = "failed" if turn_box.get("failed") else "done"
                 return ChatResponse(
                     message_id=msg_id,
                     content=response_text,
@@ -418,7 +432,7 @@ async def _confirm_relayed_tool(
     from starlette.concurrency import run_in_threadpool
 
     from gaia.daemon.sidecars.errors import SidecarError
-    from gaia.ui.email_sidecar import grants as relayed_grants
+    from gaia.ui.sidecar import grants as relayed_grants
 
     always = request.always and request.approved
     scope = handler.relay_always_scope(request.confirm_id)
@@ -627,8 +641,8 @@ async def _revoke_relayed(session_id: str, agent_id: str, key: Optional[str]) ->
     from starlette.concurrency import run_in_threadpool
 
     from gaia.daemon.sidecars.errors import SidecarError
-    from gaia.ui.email_sidecar import daemon_client
-    from gaia.ui.email_sidecar import grants as relayed_grants
+    from gaia.ui.sidecar import daemon_client
+    from gaia.ui.sidecar import grants as relayed_grants
 
     from .._chat_helpers import _active_sse_handlers
 
@@ -889,24 +903,32 @@ async def get_context_usage(session_id: str, db: ChatDatabase = Depends(get_db))
         if relayed is not None and "usage" in relayed:
             return {"available": True, **relayed["usage"]}
         if relayed is not None:
-            return {"available": False, "reason": relayed["reason"]}
+            return {"available": False, **relayed}
         # Measuring needs the chat's agent, which lives in memory between turns.
-        answered = db.latest_message_id(session_id, role="assistant") is not None
+        if db.latest_message_id(session_id, role="assistant") is not None:
+            return {
+                "available": False,
+                "reason": (
+                    "Measured again with your next message: GAIA restarted or "
+                    "switched models since this chat's last answer."
+                ),
+                "reason_code": "remeasure_next_turn",
+            }
         return {
             "available": False,
-            "reason": (
-                "Measured again with your next message: GAIA restarted or "
-                "switched models since this chat's last answer."
-                if answered
-                else "Measured once GAIA has answered in this chat."
-            ),
+            "reason": "Measured once GAIA has answered in this chat.",
+            "reason_code": "not_answered_yet",
         }
+    from gaia.agents.base.skill_budget import skill_budget_report
+
     from ..turn_insights import panel_context
 
     def _measure():
-        return panel_context(
+        usage = panel_context(
             agent, model_turns(agent, db, session_id), getattr(agent, "model_id", None)
         )
+        usage["skill_budget"] = skill_budget_report(agent)
+        return usage
 
     return {"available": True, **(await asyncio.to_thread(_measure))}
 

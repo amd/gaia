@@ -29,7 +29,7 @@ Subcommands::
 
 ``--target`` is a checkout of the commit being released. The tables that name
 the artifacts (installer/tui/artifacts.py, gen_binaries_lock.py,
-util/flagship_rc_assets.py) are read from it, never copied here, so this file
+util/gaiapy_rc_assets.py) are read from it, never copied here, so this file
 cannot drift from the code that builds them.
 """
 
@@ -169,13 +169,13 @@ def core_version(target: Path) -> str:
 
 
 def agent_version(target: Path) -> str:
-    text = (target / "hub/agents/gaia/python/gaia_agent/__init__.py").read_text(
+    text = (target / "hub/agents/gaia/python/gaiapy/__init__.py").read_text(
         encoding="utf-8"
     )
     m = re.search(r'(?m)^__version__\s*=\s*"([^"]+)"', text)
     if not m:
         raise VerifyError(
-            "no __version__ in hub/agents/gaia/python/gaia_agent/__init__.py"
+            "no __version__ in hub/agents/gaia/python/gaiapy/__init__.py"
         )
     return m.group(1)
 
@@ -370,7 +370,7 @@ def build_lock(
     """binaries.lock.json from this run's own sidecar and terminal builds."""
     packaging = target / "hub/agents/gaia/python/packaging"
     gen = load_module(packaging / "gen_binaries_lock.py", "gen_binaries_lock")
-    rc_assets = load_module(target / "util/flagship_rc_assets.py", "flagship_rc_assets")
+    rc_assets = load_module(target / "util/gaiapy_rc_assets.py", "gaiapy_rc_assets")
 
     # collect() re-hashes every sidecar against the meta its freeze leg wrote.
     found = rc_assets.collect(sidecars)
@@ -634,7 +634,7 @@ def catalog(
         target / "hub/agents/gaia/python/packaging/gen_binaries_lock.py",
         "gen_binaries_lock",
     )
-    rc_assets = load_module(target / "util/flagship_rc_assets.py", "flagship_rc_assets")
+    rc_assets = load_module(target / "util/gaiapy_rc_assets.py", "gaiapy_rc_assets")
     agent_ver = agent_version(target)
     items: list[Artifact] = []
 

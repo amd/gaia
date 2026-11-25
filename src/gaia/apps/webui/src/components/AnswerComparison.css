@@ -16,7 +16,7 @@
     margin-bottom: 8px;
     color: var(--text-secondary);
     font-size: 13px;
-    font-weight: 600;
+    font-weight: 500;
 }
 
 .answer-compare-cols {
@@ -41,7 +41,9 @@
     overflow: hidden;
     color: var(--text-primary);
     font-size: 13px;
-    text-overflow: ellipsis;
+    text-overflow: clip;
+    animation: fade-cut-inline both;
+    animation-timeline: scroll(self inline);
     white-space: nowrap;
 }
 
@@ -74,14 +76,14 @@
 .compare-keep {
     align-self: flex-start;
     padding: 5px 10px;
-    background: var(--accent-fill);
+    background: var(--action-fill);
     border-radius: var(--radius-md);
-    color: var(--accent-fill-text);
+    color: var(--action-fill-text);
     font-size: 13px;
 }
 
 .compare-keep:hover:not(:disabled) {
-    background: var(--accent-fill-hover);
+    background: var(--action-fill-hover);
 }
 
 .compare-keep:disabled {
@@ -119,7 +121,9 @@
 .retry-menu-name {
     min-width: 0;
     overflow: hidden;
-    text-overflow: ellipsis;
+    text-overflow: clip;
+    animation: fade-cut-inline both;
+    animation-timeline: scroll(self inline);
     white-space: nowrap;
 }
 

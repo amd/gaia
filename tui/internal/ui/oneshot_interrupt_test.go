@@ -150,7 +150,7 @@ func startInterruptible(t *testing.T, c client.AgentClient, grace time.Duration,
 	}
 	r.started = time.Now()
 	go func() {
-		r.done <- runOneShotInterruptible(context.Background(), c, "q", r.out, r.err, false, nil,
+		r.done <- runOneShotInterruptible(context.Background(), c, "q", r.out, r.err, nil,
 			interruptOptions{
 				sigs:        r.sigs,
 				cancelGrace: grace,

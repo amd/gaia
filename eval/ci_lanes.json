@@ -57,7 +57,12 @@
     },
     {
       "lane": "gaia-skills",
-      "categories": ["gaia_skills_lifecycle", "gaia_skills_capture", "gaia_web"]
+      "categories": [
+        "gaia_skills_lifecycle",
+        "gaia_skills_capture",
+        "gaia_skills_selection",
+        "gaia_web"
+      ]
     },
     {
       "lane": "gaia-email",

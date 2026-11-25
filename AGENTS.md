@@ -144,7 +144,7 @@ When in doubt, file a smaller issue.
 
 ## Release validation
 
-Before any release ships, run the consumer journey end-to-end (see issue A4 / consumer-launch integration validation for v0.20.0). Per-PR tests are not a substitute. The orchestrator or release manager runs this — not the agents who wrote the individual PRs (calibration risk).
+Before any release ships, run the consumer journey end-to-end (the `gaia-release` skill's pre-tag verification). Per-PR tests are not a substitute. The orchestrator or release manager runs this — not the agents who wrote the individual PRs (calibration risk).
 
 ---
 
@@ -153,8 +153,8 @@ Before any release ships, run the consumer journey end-to-end (see issue A4 / co
 - **Project conventions:** `CLAUDE.md`
 - **Roadmap:** [`docs/roadmap.mdx`](docs/roadmap.mdx)
 - **Agent definitions:** `.claude/agents/*.md`
-- **Orchestration playbook:** not written yet (tracked by issue #A1).
-- **Mobile design-system spec:** `docs/spec/mobile-design-system.md` (see issue #A3)
+- **Orchestration playbook:** not written yet.
+- **Mobile design-system spec:** `docs/spec/mobile-design-system.md`
 - **Currently active stop-the-line PRs:** `gh pr list --repo amd/gaia --label stop-the-line`
 - **Consumer-critical issue tracker:** `gh issue list --repo amd/gaia --label consumer-critical`
 - **Spec-ready issues (agent-assignable):** `gh issue list --repo amd/gaia --label spec-ready`

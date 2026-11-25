@@ -8,9 +8,9 @@ import json
 from types import SimpleNamespace
 
 import pytest
-from gaia_agent import stdio
-from gaia_agent.agent import GaiaAgent
-from gaia_agent.chat_agent import ChatAgent
+from gaiapy import stdio
+from gaiapy.agent import GaiaAgent
+from gaiapy.chat_agent import ChatAgent
 
 from gaia.llm import hybrid
 from gaia.llm.hybrid import HybridRouter, HybridSettings, RouteDecision
@@ -165,12 +165,12 @@ def test_agent_built_on_hybrid_starts_on_the_cheap_model(monkeypatch):
 
     monkeypatch.setattr(ChatAgent, "__init__", fake_init)
     monkeypatch.setattr(
-        "gaia_agent.agent.HybridRouter",
+        "gaiapy.agent.HybridRouter",
         lambda: SimpleNamespace(
             settings=SimpleNamespace(cheap_model=CHEAP, strong_model=STRONG)
         ),
     )
-    from gaia_agent.agent import GaiaAgentConfig
+    from gaiapy.agent import GaiaAgentConfig
 
     agent = GaiaAgent(GaiaAgentConfig(model_id="hybrid"))
     assert seen["model_id"] == CHEAP and agent.hybrid_router is not None
@@ -200,6 +200,16 @@ def test_host_clear_history_resets_routing_too(monkeypatch):
 
 def test_clear_on_an_agent_without_routing_is_harmless():
     stdio._reset_hybrid_route(SimpleNamespace())
+
+
+def test_clear_forgets_the_sources_the_chat_has_seen(monkeypatch):
+    """A cleared chat's file numbers must not ground the next chat's deck."""
+    agent, _, _, _ = _agent(monkeypatch, [_label("answer_question", 1, "low")])
+    agent.conversation_history = [{"role": "user", "content": "Summarise q3.csv"}]
+    agent.note_seen("read_file", {"path": "q3.csv"}, "Revenue 12,431,220")
+    assert len(agent.seen_sources()) == 2
+    stdio.dispatch_query(agent, stdio.CLEAR_CONVERSATION_QUERY, io.StringIO())
+    assert agent.seen_sources() == []
 
 
 def test_routed_model_refusal_names_its_setting(monkeypatch):

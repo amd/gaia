@@ -1,247 +1,192 @@
 ---
 name: report-from-sources
-description: Build a report, deck, brief, workbook or chart from the user's own files without missing what the sources stress. Use when the user asks to turn documents, spreadsheets or exports into a report, slides, a one-pager, a summary or charts. Uses the newest file per dataset, cites source and period on every figure, and checks every requested item before handing over.
+description: "Work from a folder of the user's own documents and spreadsheets: find the newest copy of each dataset, pull named time series with cell citations, and check the finished report, deck or workbook against the sources. Use when a deliverable must be built from several source files. Pairs with office-docs and slide-decks, which write the file."
 license: MIT
-version: 1.0.0
+version: 1.1.0
 metadata:
   gaia:
     security_tier: community
+    requirements:
+      python: ">=3.10"
+      dependencies:
+        - openpyxl>=3.1
     tools_required:
       - list_files
       - read_file
       - run_python
+    tools:
+      - name: inventory_data_files
+        description: List a folder's time-series data files with sheets, units and period coverage, and name the newest copy of each dataset.
+        parameters:
+          folder:
+            type: string
+            required: true
+          recursive:
+            type: boolean
+            required: false
+            default: false
+        returns:
+          type: object
+        atomic: true
+      - name: series_from_workbook
+        description: Read named time series for chosen periods from a spreadsheet, CSV or JSON file, matched by label and cited to their cells.
+        parameters:
+          file_path:
+            type: string
+            required: true
+          labels:
+            type: array
+            required: true
+          sheet:
+            type: string
+            required: false
+            default: ""
+          periods:
+            type: string
+            required: false
+            default: last 12
+          orientation:
+            type: string
+            required: false
+            default: auto
+          filters:
+            type: string
+            required: false
+            default: ""
+        returns:
+          type: object
+        atomic: true
+      - name: chart_into_workbook
+        description: Chart named time series from a source file into an .xlsx as a native Excel chart with a source footnote, verified on reopen.
+        parameters:
+          output_path:
+            type: string
+            required: true
+          file_path:
+            type: string
+            required: true
+          labels:
+            type: array
+            required: true
+          sheet:
+            type: string
+            required: false
+            default: ""
+          periods:
+            type: string
+            required: false
+            default: last 12
+          chart_type:
+            type: string
+            required: false
+            default: line
+          title:
+            type: string
+            required: false
+            default: ""
+          y_axis_title:
+            type: string
+            required: false
+            default: ""
+          number_format:
+            type: string
+            required: false
+            default: ""
+          secondary_labels:
+            type: array
+            required: false
+          source_note:
+            type: string
+            required: false
+            default: ""
+          filters:
+            type: string
+            required: false
+            default: ""
+          orientation:
+            type: string
+            required: false
+            default: auto
+        returns:
+          type: object
+        atomic: false
     pairs_with:
       - office-docs
-      - data-explore
+      - slide-decks
     provenance:
       source: starter-pack
 ---
 
 # Report From Sources
 
-A deliverable can read well and still be wrong by omission: it skips the count
-of failures the source led with, drops the "down 8% from last year", or charts
-last year's file when this year's sat beside it. This skill is the order of
-work that prevents that. Use it together with whatever builds the file.
+A deliverable can read well and still be wrong by omission (it skips the
+headline figure the source led with, or charts last year's file when this
+year's sat beside it) or by addition (a figure no source contains). This is
+the order of work that prevents both. Use it with whatever builds the file.
 
-## 1. Inventory the inputs
+## Hard rules
 
-List the folder with `list_files(path)`, then record, for every file, what it
-covers and which period it is for:
+- **Every number is sourced.** Read time series with `series_from_workbook`
+  and compute other figures with `run_python`. Never retype a number from a
+  page or chart a look-alike series. Say which figures you computed. Every
+  chart and table names its source, period and units.
+- **Use the newest data vintage.** Call `inventory_data_files(folder)` first.
+  `datasets[].newest` is the file to use unless the user named a period.
+  Older copies are for comparison only, labelled so.
+- **Act on what a tool reports.** `ambiguous`, `notes` and `truncated` say
+  what to settle before you use the values. Never guess past them.
+- **Keep a key-facts ledger per source** before building: headline numbers,
+  changes the source states, notable events (a small count of rare events is
+  often the most important fact), risks, and what the source stresses.
+  Every ledger row goes into the deliverable.
+- **Nothing from outside the sources** unless it is labelled as such.
+- **Check the saved file before handing over.** Your memory of what you
+  wrote is not evidence.
 
-| File | Covers | Period / as-of | Found in | Use |
-|---|---|---|---|---|
-| sales_2023.xlsx | Regional sales | Jan-Dec 2023 | Month column | prior-year comparison |
-| sales_2024_q3.xlsx | Regional sales | Jan-Sep 2024 | sheet title | **primary** |
-| board_memo.docx | Quarter commentary | as of 30 Sep 2024 | first paragraph | facts ledger |
+The tools read time series only (a value per period). For a table by
+category or row-level records, use `run_python`.
 
-- The date written in the content (a title, an "as of" line, a date column)
-  beats the file name, which beats the modified time.
-- When several files cover the same thing for different periods, use the most
-  recent one that matches the request; if the user named a period, use that
-  one. Older files are for comparison only, and are labelled as such.
-- Two files for the same period that disagree: say which one you used and why
-  (later revision, "final" over "draft").
-- Show this table in your reply before you build anything.
+## Procedure
 
-This lists every spreadsheet's sheets, row counts and date ranges in one call:
+**One or two sources and a small ask: do steps 1, 3 and 5 only.**
 
-```python
-import re
-from datetime import datetime
-from pathlib import Path
-import pandas as pd
+1. **Inventory.** List each file: what it covers, its period or as-of date,
+   and its use (primary, comparison, facts). A file under `not_read` needs
+   the fallback in `references/inventory.md` (`list_files`, `run_python`).
+2. **Ledger.** With `read_file`, read the sections that hold the figures you
+   need; do not page a long PDF to the end unless the ask covers the whole
+   document. Record each fact, its value, stated or computed, and where it
+   is. When two sources disagree, keep both rows.
+3. **Build answer first**: an as-of header line ("As of 30 Sep 2024; data
+   through 2024Q3"), a summary with the 3-5 figures that carry it, the
+   evidence, then a **Conflicts and gaps** section ("None found" if empty).
+   Keep the source's framing ("fell 8% to $4.2M"). For a workbook chart call
+   `chart_into_workbook`. For a slide, `chart_input` from
+   `series_from_workbook` holds the `categories`, `series` and `source` a
+   slide-decks chart slide takes.
+4. **Check coverage both ways** on the reopened file: every ledger row is in
+   it, and every number in it traces to the ledger or a named computation.
+5. **Final requirements check.** List what the user asked for (each section,
+   chart, metric, ID and file name) plus the as-of line, summary first, and
+   Conflicts and gaps. Check each line against the saved file, fix the gaps,
+   and report each line as met or not met.
 
-FOLDER = Path(r"C:\Users\me\Documents\quarterly")
-DATEISH = re.compile(r"date|month|year|period|quarter|week|day|as.?of", re.I)
-for p in sorted(FOLDER.iterdir()):
-    if not p.is_file():
-        continue
-    print(f"\n== {p.name}  (modified {datetime.fromtimestamp(p.stat().st_mtime):%Y-%m-%d})")
-    years = sorted(set(re.findall(r"(?:19|20)\d\d", p.stem)))
-    if years:
-        print("   years in file name:", years)
-    if p.suffix.lower() in (".csv", ".xlsx", ".xlsm", ".xls"):
-        sheets = {"csv": pd.read_csv(p)} if p.suffix.lower() == ".csv" else pd.read_excel(p, sheet_name=None)
-        for name, df in sheets.items():
-            print(f"   [{name}] {len(df)} rows; columns: {list(df.columns)[:12]}")
-            for col in df.columns:
-                if DATEISH.search(str(col)):
-                    vals = df[col].dropna()
-                    if len(vals):
-                        print(f"     {col}: {vals.min()} .. {vals.max()}")
-```
+Ledger example:
 
-For documents, the period comes from reading them (step 2).
+| Fact | Value | Kind | Source |
+|---|---|---|---|
+| Sites closed this year | 3 (2 in Q3) | stated | board_memo.docx, Operations |
+| Q3 sales vs Q2 | +12% | computed: 4.6 / 4.1 - 1 | sales_2024_q3.xlsx, Summary!C7:D7 |
 
-## 2. Keep a key-facts ledger per source
+## References (paths relative to this skill's folder)
 
-Read each source in full with `read_file(file_path)`, following `next_offset`
-until it is null. A skim or a search result misses exactly the line that
-matters. For each source, write down:
-
-- **Headline numbers**: totals, rates, counts, balances.
-- **Changes the source states** against a prior period: from, to, and by how
-  much ("revenue $4.6M, down 8% from $5.0M").
-- **Notable events**: counts of failures, closures, incidents, outages, recalls,
-  defaults, departures. A small count of rare events is often the most
-  important fact on the page.
-- **Risks and caveats**: warnings, exceptions, restatements, missed targets.
-- **What the source itself emphasises**: its summary or highlights, the first
-  paragraph, bold text, "notably", "for the first time", "record".
-
-Each row gets the fact, the value, and where it is (file, plus page, sheet or
-section):
-
-| Fact | Value | Source |
-|---|---|---|
-| Sites closed this year | 3 (2 in Q3) | board_memo.docx, Operations section |
-| Q3 sales vs Q2 | +12% | sales_2024_q3.xlsx, Summary |
-| Supplier risk flagged | single source for part B | board_memo.docx, Risks |
-
-Keep the ledger in your working reply. Do not save it as an extra file in the
-user's folder unless they ask for one.
-
-## 3. Build from the ledger
-
-- Every headline number, stated change and notable event in the ledger goes
-  in. Anything else you leave out, leave out on purpose.
-- Keep the source's framing. Write "Net income fell 8% to $4.2M", not just
-  "Net income $4.2M".
-- Compute figures from the data with `run_python`. Never retype numbers you
-  read off a page.
-- **Every chart and table names its source and period**, e.g. "Source:
-  sales_2024_q3.xlsx, Jan-Sep 2024", and its units. Every figure in the text
-  carries its source in brackets.
-- Nothing from outside the sources unless you label it as such.
-
-## 4. Check coverage against the saved file
-
-Reopen what you saved and check every ledger row against it. This reads a
-.docx, .pptx (including chart data and notes), .xlsx or text file and reports
-each fact as found or missing:
-
-```python
-import re
-from pathlib import Path
-
-def deliverable_lines(path):
-    """What a reader sees in a saved .docx/.pptx/.xlsx/text file, one line per
-    paragraph, table row, chart series or sheet row."""
-    p, out = Path(path), []
-    kind = p.suffix.lower()
-    if kind == ".docx":
-        from docx import Document
-        doc = Document(p)
-        out += [x.text for x in doc.paragraphs]
-        out += [" | ".join(c.text for c in r.cells) for t in doc.tables for r in t.rows]
-    elif kind == ".pptx":
-        from pptx import Presentation
-        for slide in Presentation(p).slides:
-            for sh in slide.shapes:
-                if sh.has_text_frame:
-                    out += sh.text_frame.text.splitlines()
-                if sh.has_table:
-                    out += [" | ".join(c.text for c in r.cells) for r in sh.table.rows]
-                if sh.has_chart:
-                    for plot in sh.chart.plots:
-                        cats = list(plot.categories)
-                        out += [f"{s.name}: " + ", ".join(f"{c}={v}" for c, v in zip(cats, s.values))
-                                for s in plot.series]
-            if slide.has_notes_slide:
-                out += slide.notes_slide.notes_text_frame.text.splitlines()
-    elif kind in (".xlsx", ".xlsm"):
-        from openpyxl import load_workbook
-        for ws in load_workbook(p):  # formulas read as text, not results
-            out += [" | ".join(str(v) for v in row if v is not None) for row in ws.iter_rows(values_only=True)]
-    else:
-        out = p.read_text(encoding="utf-8", errors="replace").splitlines()
-    return [line for line in out if line.strip()]
-
-lines = deliverable_lines(r"C:\Users\me\Documents\quarterly\q3_review.pptx")
-# (fact, a word that sits next to it, the value as written)
-ledger = [
-    ("sites closed this year", "clos", "3"),
-    ("Q3 sales vs Q2", "sales", "12%"),
-]
-for fact, word, value in ledger:
-    num = re.compile(rf"(?<![\d.]){re.escape(value)}(?![\d])")
-    hit = next((l for l in lines if word.lower() in l.lower() and num.search(l)), None)
-    print("ok     " if hit else "MISSING", f"{fact} = {value}", f"-> {hit[:80]}" if hit else "")
-```
-
-A `MISSING` row means look, not necessarily absent: the value may be written
-as a word ("three") or rounded. Add whatever is truly missing and run the check
-again.
-
-## 5. Final requirements check
-
-Do this before saying any deliverable is done.
-
-1. **Turn the request into a numbered checklist.** One line for each thing the
-   user named: every section, chart, table, column and metric; every ID, item
-   or reference ("cite every ticket mentioned" means each one, by ID); every
-   structural ask (a labelled input cell, a toggle or dropdown, a sheet in a
-   given place); every file name, file type and folder; any length, audience or
-   style limit.
-2. **Check each line against the saved file.** Reopen it; your memory of what
-   you wrote is not evidence.
-3. **Fix the gaps and check again.**
-4. **Report the checklist** with each line marked met or not met. Say plainly
-   what is not met and why. Never mark a line met that you did not verify.
-
-Example request: *"Build a workbook from the three survey exports with a
-Summary sheet, a chart of satisfaction by region, and a labelled input at the
-top of Summary to switch between 2023 and 2024. Save it as survey_summary.xlsx
-next to the exports."*
-
-1. Uses all three exports
-2. Sheet named Summary
-3. Chart of satisfaction by region
-4. Input cell at the top of Summary, with a label beside it
-5. The input is a 2023/2024 dropdown, and the Summary formulas read it
-6. File name survey_summary.xlsx
-7. Saved in the exports folder
-
-To check that every ID in the sources made it in, append this to the step 4
-snippet and run them together (each `run_python` call starts fresh):
-
-```python
-source_text = Path(r"C:\Users\me\Documents\quarterly\board_memo.txt").read_text(encoding="utf-8")
-ID = re.compile(r"\b[A-Z]{2,}-\d+\b")  # fit the pattern to the IDs in front of you
-missing = sorted(set(ID.findall(source_text)) - set(ID.findall("\n".join(lines))))
-print("IDs missing from the deliverable:", missing or "none")
-```
-
-For a document source, take the text from `read_file` instead of `read_text`.
-
-To check a workbook's inputs, dropdowns and charts:
-
-```python
-import re
-from openpyxl import load_workbook
-
-wb = load_workbook(r"C:\Users\me\Documents\surveys\survey_summary.xlsx")
-formulas = [c.value for s in wb for row in s.iter_rows() for c in row
-            if isinstance(c.value, str) and c.value.startswith("=")]
-print("sheets:", wb.sheetnames, "| formulas:", len(formulas))
-for ws in wb:
-    print(f"[{ws.title}] {ws.max_row} rows, {len(ws._charts)} charts")
-    for dv in ws.data_validations.dataValidation:
-        for rng in str(dv.sqref).split():
-            cell = ws[rng.split(":")[0]]
-            label = ws.cell(cell.row, cell.column - 1).value if cell.column > 1 else None
-            ref = re.compile(rf"(?<![A-Za-z$])\$?{cell.column_letter}\$?{cell.row}(?!\d)")
-            users = sum(1 for f in formulas if ref.search(f))
-            print(f"  input {rng} label={label!r} options={dv.formula1} value={cell.value!r} "
-                  f"formulas reading it={users}")
-```
-
-An input that no formula reads (`formulas reading it=0`) is decoration, not a
-toggle.
-
-## Fork this
-
-Pin step 2 to your field's standing questions, for example churn, pipeline and
-headcount for a monthly business review, and the ledger becomes a checklist no
-report can skip.
+- `references/inventory.md` - read when files share a dataset, the vintage
+  is unclear, the result was `truncated`, or the tool could not parse a file.
+- `references/ledger.md` - read when building the ledger, for what each row
+  records and how to handle conflicting sources.
+- `references/building.md` - read before writing the deliverable, and when
+  `series_from_workbook` returns `ambiguous`, `not_found` or an error.
+- `references/coverage-checks.md` - read at step 4 for the scripts that list
+  missing facts and untraced numbers in a saved .docx, .pptx or .xlsx.
+- `references/final-check.md` - read at step 5 for a worked checklist and
+  scripts that check IDs and workbook inputs.

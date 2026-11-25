@@ -6,8 +6,8 @@ import re
 from unittest.mock import patch
 
 import pytest
-from gaia_agent.chat_agent import ChatAgent, ChatAgentConfig
-from gaia_agent.profiles import PROFILE_SPECS
+from gaiapy.chat_agent import ChatAgent, ChatAgentConfig
+from gaiapy.profiles import PROFILE_SPECS
 
 # Prompt names with no registered tool; remove an entry once its prompt is fixed.
 _KNOWN_GAPS = {
@@ -21,8 +21,8 @@ def prompts_and_tools():
     built = {}
     with (
         patch.dict("os.environ", {"GAIA_MEMORY_DISABLED": "1"}),
-        patch("gaia_agent.chat_agent.RAGSDK"),
-        patch("gaia_agent.chat_agent.RAGConfig"),
+        patch("gaiapy.chat_agent.RAGSDK"),
+        patch("gaiapy.chat_agent.RAGConfig"),
         patch("gaia.llm.lemonade_manager.LemonadeManager.ensure_ready"),
         patch("gaia.llm.lemonade_client.LemonadeClient"),
     ):
@@ -84,14 +84,14 @@ def test_doc_profile_discovery_rules_use_search_file(prompts_and_tools):
 def test_discovery_tool_follows_file_fs_group(groups, tool):
     import dataclasses
 
-    import gaia_agent.chat_agent as agent_mod
+    import gaiapy.chat_agent as agent_mod
 
     spec = dataclasses.replace(PROFILE_SPECS["doc"], tool_groups=groups)
     other = "find_files" if tool == "search_file" else "search_file"
     with (
         patch.dict("os.environ", {"GAIA_MEMORY_DISABLED": "1"}),
-        patch("gaia_agent.chat_agent.RAGSDK"),
-        patch("gaia_agent.chat_agent.RAGConfig"),
+        patch("gaiapy.chat_agent.RAGSDK"),
+        patch("gaiapy.chat_agent.RAGConfig"),
         patch("gaia.llm.lemonade_manager.LemonadeManager.ensure_ready"),
         patch("gaia.llm.lemonade_client.LemonadeClient"),
     ):
@@ -137,8 +137,8 @@ def test_scheduling_is_unsupported_only_without_the_calendar_skill():
 
     with (
         patch.dict("os.environ", {"GAIA_MEMORY_DISABLED": "1"}),
-        patch("gaia_agent.chat_agent.RAGSDK"),
-        patch("gaia_agent.chat_agent.RAGConfig"),
+        patch("gaiapy.chat_agent.RAGSDK"),
+        patch("gaiapy.chat_agent.RAGConfig"),
         patch("gaia.llm.lemonade_manager.LemonadeManager.ensure_ready"),
         patch("gaia.llm.lemonade_client.LemonadeClient"),
     ):
@@ -158,8 +158,8 @@ def test_sending_email_is_unsupported_only_without_the_send_email_skill():
 
     with (
         patch.dict("os.environ", {"GAIA_MEMORY_DISABLED": "1"}),
-        patch("gaia_agent.chat_agent.RAGSDK"),
-        patch("gaia_agent.chat_agent.RAGConfig"),
+        patch("gaiapy.chat_agent.RAGSDK"),
+        patch("gaiapy.chat_agent.RAGConfig"),
         patch("gaia.llm.lemonade_manager.LemonadeManager.ensure_ready"),
         patch("gaia.llm.lemonade_client.LemonadeClient"),
     ):
@@ -195,8 +195,8 @@ def test_data_profile_unsupported_line_keeps_image_analysis(prompts_and_tools):
 def _prompt_for_profile(profile):
     with (
         patch.dict("os.environ", {"GAIA_MEMORY_DISABLED": "1"}),
-        patch("gaia_agent.chat_agent.RAGSDK"),
-        patch("gaia_agent.chat_agent.RAGConfig"),
+        patch("gaiapy.chat_agent.RAGSDK"),
+        patch("gaiapy.chat_agent.RAGConfig"),
         patch("gaia.llm.lemonade_manager.LemonadeManager.ensure_ready"),
         patch("gaia.llm.lemonade_client.LemonadeClient"),
     ):
@@ -206,12 +206,12 @@ def _prompt_for_profile(profile):
 
 def _prompt_for_spec(spec):
     """Render the prompt with ``spec`` substituted for the data profile."""
-    import gaia_agent.chat_agent as agent_mod
+    import gaiapy.chat_agent as agent_mod
 
     with (
         patch.dict("os.environ", {"GAIA_MEMORY_DISABLED": "1"}),
-        patch("gaia_agent.chat_agent.RAGSDK"),
-        patch("gaia_agent.chat_agent.RAGConfig"),
+        patch("gaiapy.chat_agent.RAGSDK"),
+        patch("gaiapy.chat_agent.RAGConfig"),
         patch("gaia.llm.lemonade_manager.LemonadeManager.ensure_ready"),
         patch("gaia.llm.lemonade_client.LemonadeClient"),
     ):
@@ -246,8 +246,8 @@ def test_unknown_profile_falls_back_to_full_and_keeps_web_and_media():
     """An unrecognised profile registers full's tools, so it must advertise them."""
     with (
         patch.dict("os.environ", {"GAIA_MEMORY_DISABLED": "1"}),
-        patch("gaia_agent.chat_agent.RAGSDK"),
-        patch("gaia_agent.chat_agent.RAGConfig"),
+        patch("gaiapy.chat_agent.RAGSDK"),
+        patch("gaiapy.chat_agent.RAGConfig"),
         patch("gaia.llm.lemonade_manager.LemonadeManager.ensure_ready"),
         patch("gaia.llm.lemonade_client.LemonadeClient"),
     ):

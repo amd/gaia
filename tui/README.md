@@ -66,8 +66,8 @@ always fetch the latest release's. Rename it to `gaia-cli` and put it on your
 
 [`gaia-tui-SHA256SUMS.txt`](https://github.com/amd/gaia/releases/latest/download/gaia-tui-SHA256SUMS.txt)
 lists the SHA-256 of each. A direct download still needs the
-`gaia` CLI on your `PATH` — first-time setup (`gaia init`) and the `email`
-agent's daemon both go through it — so the one-line installer above is the
+`gaia` CLI on your `PATH` — first-time setup (`gaia init`) and the
+background service both go through it — so the one-line installer above is the
 shorter route.
 
 The binary is installed as `gaia-cli`, never as `gaia`: the two have different
@@ -101,6 +101,11 @@ without leaving the terminal.
 If `gaia-agent` itself is missing, the gate stops there and points you at the
 installer — there is no in-TUI download for the agent binary.
 
+The TUI runs `gaia-agent` unless you choose the native agent, `gaiacpp`, with
+`/agent gaiacpp`; then the header shows `(gaiacpp · Beta)`. `GAIA_TUI_AGENT=gaiacpp`
+(or `gaia-agent`, or a path) picks one for a launch; see the
+[developer manual](https://amd-gaia.ai/docs/reference/tui-dev#which-agent-program-runs).
+
 Colours adapt to your terminal automatically. Some terminals never answer that
 query (SSH, tmux, a CI log) — if the screen comes out hard to read, force it:
 
@@ -110,30 +115,30 @@ GAIA_TUI_THEME=light gaia-cli    # or dark; unset or "auto" = detect
 
 ## Running another agent
 
-`gaia-cli` ships one agent by default, but it can also drive `email` by id —
-it keeps its own readiness gate (background service, sidecar, local model,
-mailbox):
+`gaia-cli` ships one agent, the flagship. It can also drive a hub-installed
+sidecar agent by id — that launch keeps its own readiness gate (background
+service, sidecar, local model):
 
 ```bash
-gaia-cli run email                             # chat with it
-gaia-cli run email --query "triage my inbox"   # one-shot: answer on stdout
-gaia-cli chat --agent email                    # same as `run email`
+gaia-cli run <id>                          # chat with it
+gaia-cli run <id> --query "what is new"    # one-shot: answer on stdout
+gaia-cli chat --agent <id>                 # same as `run <id>`
 ```
 
-Installing and uninstalling a hub sidecar agent like `email` is the Python
-CLI's job, not the terminal UI's:
+Installing and uninstalling a hub sidecar agent is the Python CLI's job, not
+the terminal UI's:
 
 ```bash
 gaia hub list                 # what the Agent Hub offers, and what you have
-gaia hub install email
-gaia hub uninstall email
+gaia hub install <id>
+gaia hub uninstall <id>
 ```
 
 ## Commands worth knowing
 
 ```bash
 gaia-cli                    # launch straight into the flagship agent's chat
-gaia-cli run <id>           # chat with an agent by id (e.g. email)
+gaia-cli run <id>           # chat with an agent by id (e.g. gaia)
 gaia-cli run <id> --query "…"  # one-shot: answer on stdout, exit 0/1/3
 gaia-cli chat --agent <id>  # same idea, via the chat subcommand
 gaia-cli status             # is the background service running, and what do I have
@@ -288,15 +293,15 @@ binary; set the agent's mode environment variable to `dev` on the TUI launch so
 the TUI and daemon request the same checkout:
 
 ```bash
-GAIA_EMAIL_AGENT_MODE=dev gaia-cli run email
+GAIA_GAIA_AGENT_MODE=dev gaia-cli run gaia
 ```
 
 Dev mode resolves the TUI caller's checkout (`git rev-parse --show-toplevel`)
-and sends the agent package directory (`<clone>/hub/agents/email/python`) to
+and sends the agent package directory (`<clone>/hub/agents/gaia/python`) to
 the daemon. It compares that path — never executes it — against the checkout
 the daemon is anchored to; a mismatch is refused loudly, naming both
 checkouts and the fix. If you start the sidecar manually instead, use the same
-mode with `gaia daemon start-agent email --mode dev`.
+mode with `gaia daemon start-agent gaia --mode dev`.
 ## An agent that only exists in your clone
 
 **It shows up in `status`.** The catalog reads `~/.gaia/agents/<id>/.installed`
@@ -312,7 +317,7 @@ gaia-cli status     # lists myagent under "Installed in ~/.gaia/agents"
 **It will not run through the daemon.** Sidecar specs are built into GAIA core
 and there is deliberately no runtime registration route, so `gaia daemon
 start-agent myagent` fails with `unknown agent 'myagent'; registered agents:
-email`. `--mode dev` develops an agent core already knows about; it does not add
+gaia`. `--mode dev` develops an agent core already knows about; it does not add
 a new one. Getting a brand-new agent supervised end to end is not documented yet.
 
 ## A daemon of your own

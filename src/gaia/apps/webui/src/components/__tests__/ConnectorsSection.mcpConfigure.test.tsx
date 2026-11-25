@@ -186,7 +186,7 @@ describe('MCP connector configure panel', () => {
         }
     });
 
-    it('shows the field label, help and setup link from the catalog', async () => {
+    it('walks through the Slack setup in steps, with the catalog link and label', async () => {
         const row = mcpRow({
             id: 'mcp-slack',
             display_name: 'Slack',
@@ -211,10 +211,11 @@ describe('MCP connector configure panel', () => {
             'href',
             'https://api.slack.com/apps?new_app=1&manifest_json=%7B%7D',
         );
-        expect(screen.getByRole('link', { name: 'guide' })).toHaveAttribute(
-            'href',
-            'https://amd-gaia.ai/docs/connectors/slack',
-        );
+        expect(screen.getAllByRole('link', { name: /Create Slack app/ })).toHaveLength(1);
+        expect(screen.getByText('Copy the bot token')).toBeInTheDocument();
+        expect(screen.getByText('Invite the bot to your channels')).toBeInTheDocument();
+        // The steps replace the catalog hint, so it isn't shown twice.
+        expect(screen.queryByText(/Click/)).toBeNull();
         expect(screen.queryByText(/\*\*/)).toBeNull();
     });
 
@@ -324,6 +325,24 @@ describe('MCP connector configure panel', () => {
         const tile = document.querySelector('[data-connector-id="mcp-slack"]') as HTMLElement;
         expect(within(tile).getByText('Not working')).toBeInTheDocument();
         expect(within(tile).queryByText('Connected')).not.toBeInTheDocument();
+    });
+
+    it('says Connected only once a check has started the server (#8360)', async () => {
+        let finish: (r: { ok: boolean; detail: string }) => void = () => {};
+        mocked.testConnector.mockReturnValue(new Promise((resolve) => { finish = resolve; }) as never);
+        await openTile(mcpRow({ id: 'mcp-memory', display_name: 'Memory', configured: true }));
+        const tile = document.querySelector('[data-connector-id="mcp-memory"]') as HTMLElement;
+        const status = () => tile.querySelector('.connector-status')?.textContent;
+
+        // Turned on, but nothing has started it yet.
+        expect(status()).toBe('Turned on');
+        expect(within(tile).queryByText('Connected')).not.toBeInTheDocument();
+
+        fireEvent.click(screen.getByRole('button', { name: 'Check' }));
+        await waitFor(() => expect(status()).toBe('Checking…'));
+
+        finish({ ok: true, detail: 'started, 1 tool' });
+        await waitFor(() => expect(status()).toBe('Connected'));
     });
 
     it('does not blame the token when the server was only slow to start', async () => {

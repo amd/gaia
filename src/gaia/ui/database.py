@@ -15,7 +15,7 @@ import uuid
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional, Set
 
 from gaia.config import GaiaConfig, gaia_home
 from gaia.utils.process_owner import current_owner, owner_is_gone
@@ -160,6 +160,15 @@ CREATE TABLE IF NOT EXISTS session_documents (
     PRIMARY KEY (session_id, document_id)
 );
 
+-- Files attached in a chat's composer that went into the library. The upload
+-- stays readable while a document with its content is attached to the chat.
+CREATE TABLE IF NOT EXISTS session_uploads (
+    session_id TEXT REFERENCES sessions(id) ON DELETE CASCADE,
+    upload_path TEXT NOT NULL,
+    file_hash TEXT NOT NULL,
+    PRIMARY KEY (session_id, upload_path)
+);
+
 -- Messages
 CREATE TABLE IF NOT EXISTS messages (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -258,6 +267,7 @@ _CHAT_SCHEMA_OBJECTS = frozenset(
         "scheduled_tasks",
         "session_documents",
         "session_environment",
+        "session_uploads",
         "sessions",
         "settings",
         "unfinished_turns",
@@ -274,9 +284,11 @@ _CHAT_SCHEMA_COLUMNS = {
     },
     "messages": {
         "agent_steps",
+        "failed",
         "inference_stats",
         "library_notices",
         "model_messages",
+        "page_elements",
         "search_text",
         "stopped",
         "turn_summary",
@@ -502,9 +514,13 @@ class ChatDatabase:
         self._add_column("messages", "agent_steps", "TEXT")
         self._add_column("messages", "inference_stats", "TEXT")
         self._add_column("messages", "turn_summary", "TEXT")
+        # JSON list of the elements the user picked in the browser pane.
+        self._add_column("messages", "page_elements", "TEXT")
         self._add_column("messages", "library_notices", "TEXT")
         # 1 when the user's Stop ended this reply, so a reload still says so.
         self._add_column("messages", "stopped", "INTEGER NOT NULL DEFAULT 0")
+        # 1 when a model failure ended this reply's turn; old rows read as not failed.
+        self._add_column("messages", "failed", "INTEGER NOT NULL DEFAULT 0")
         self._add_column("documents", "indexing_status", "TEXT DEFAULT 'complete'")
         self._add_column("documents", "file_mtime", "REAL")
         self._add_column("documents", "last_error", "TEXT")
@@ -983,6 +999,7 @@ class ChatDatabase:
         library_notices: List[str] | None = None,
         ends_turn: bool = False,
         stopped: bool = False,
+        failed: bool = False,
     ) -> int:
         """Add a message to a session. Returns message ID.
 
@@ -1001,8 +1018,8 @@ class ChatDatabase:
                 """INSERT INTO messages
                    (session_id, role, content, created_at, rag_sources,
                     agent_steps, tokens_prompt, tokens_completion, inference_stats, model_messages,
-                    turn_summary, library_notices, stopped)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    turn_summary, library_notices, stopped, failed)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
                     session_id,
                     role,
@@ -1017,6 +1034,7 @@ class ChatDatabase:
                     summary_json,
                     notices_json,
                     int(stopped),
+                    int(failed),
                 ),
             )
 
@@ -1047,6 +1065,7 @@ class ChatDatabase:
         library_notices: List[str] | None = None,
         ends_turn: bool = False,
         stopped: bool = False,
+        failed: bool = False,
     ) -> int:
         """Atomically replace a message with a fresh row. Returns the new ID.
 
@@ -1077,8 +1096,8 @@ class ChatDatabase:
                 """INSERT INTO messages
                    (session_id, role, content, created_at, rag_sources,
                     agent_steps, tokens_prompt, tokens_completion, inference_stats, model_messages,
-                    turn_summary, library_notices, stopped)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    turn_summary, library_notices, stopped, failed)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
                     session_id,
                     role,
@@ -1093,6 +1112,7 @@ class ChatDatabase:
                     summary_json,
                     notices_json,
                     int(stopped),
+                    int(failed),
                 ),
             )
 
@@ -1143,6 +1163,16 @@ class ChatDatabase:
                     msg["inference_stats"] = json.loads(msg["inference_stats"])
                 except (json.JSONDecodeError, TypeError):
                     msg["inference_stats"] = None
+            if msg.get("page_elements"):
+                try:
+                    msg["page_elements"] = json.loads(msg["page_elements"])
+                except (json.JSONDecodeError, TypeError) as exc:
+                    logger.warning(
+                        "Message %s has unreadable picked elements: %s",
+                        msg.get("id"),
+                        exc,
+                    )
+                    msg["page_elements"] = None
             if msg.get("library_notices"):
                 try:
                     msg["library_notices"] = json.loads(msg["library_notices"])
@@ -1436,19 +1466,26 @@ class ChatDatabase:
 
     # ── Unfinished turns ────────────────────────────────────────────────
 
-    def begin_turn(self, session_id: str, question: str) -> int:
+    def begin_turn(
+        self,
+        session_id: str,
+        question: str,
+        page_elements: List[Dict] | None = None,
+    ) -> int:
         """Save the user's *question* and mark its reply as started, together.
 
         The row is this process's: only this process saves into or closes it,
         and another server closes it only once this process has exited.
+        ``page_elements`` are the elements the user picked in the browser pane.
         Returns the question's message id.
         """
         now = self._now()
+        picked_json = json.dumps(page_elements) if page_elements else None
         with self._transaction():
             cursor = self._conn.execute(
-                "INSERT INTO messages (session_id, role, content, created_at) "
-                "VALUES (?, 'user', ?, ?)",
-                (session_id, question, now),
+                "INSERT INTO messages (session_id, role, content, created_at, page_elements) "
+                "VALUES (?, 'user', ?, ?, ?)",
+                (session_id, question, now, picked_json),
             )
             question_id = cursor.lastrowid
             self._conn.execute(
@@ -1802,6 +1839,44 @@ class ChatDatabase:
             detached = cursor.rowcount > 0
         return detached
 
+    def record_session_upload(
+        self, session_id: str, upload_path: str, file_hash: str
+    ) -> None:
+        """Note that the chat's upload *upload_path* went into the library."""
+        with self._transaction():
+            self._conn.execute(
+                """INSERT OR IGNORE INTO session_uploads
+                   (session_id, upload_path, file_hash) VALUES (?, ?, ?)""",
+                (session_id, upload_path, file_hash),
+            )
+
+    def session_upload_paths(self, session_id: str) -> Set[str]:
+        """The chat's uploads already put in the library, attached or not."""
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT upload_path FROM session_uploads WHERE session_id = ?",
+                (session_id,),
+            ).fetchall()
+        return {row["upload_path"] for row in rows}
+
+    def removed_session_uploads(self, session_id: str) -> Set[str]:
+        """The chat's uploads whose document the user took off the chat.
+
+        Matched by content: the library keeps one row per content, which may be
+        a document added before the upload.
+        """
+        with self._lock:
+            rows = self._conn.execute(
+                """SELECT su.upload_path FROM session_uploads su
+                   WHERE su.session_id = ? AND NOT EXISTS (
+                       SELECT 1 FROM session_documents sd
+                       JOIN documents d ON d.id = sd.document_id
+                       WHERE sd.session_id = su.session_id
+                         AND d.file_hash = su.file_hash)""",
+                (session_id,),
+            ).fetchall()
+        return {row["upload_path"] for row in rows}
+
     def get_session_environment(self, session_id: str) -> Dict[str, Any]:
         """The chat's added and removed folders and its internet switch."""
         with self._lock:
@@ -2002,6 +2077,23 @@ class ChatDatabase:
             )
             return cursor.rowcount > 0
 
+    def update_document_path(self, doc_id: str, filepath: str) -> bool:
+        """Point a library row at its file's new location.
+
+        Args:
+            doc_id: Document ID.
+            filepath: Where the file now is.
+
+        Returns:
+            True if the document was found and updated.
+        """
+        with self._transaction():
+            cursor = self._conn.execute(
+                "UPDATE documents SET filepath = ? WHERE id = ?",
+                (filepath, doc_id),
+            )
+            return cursor.rowcount > 0
+
     def recent_inference_stats(self, limit: int = 500) -> List[Dict]:
         """Inference stats of the newest assistant messages that recorded any."""
         with self._lock:
@@ -2143,6 +2235,31 @@ class ChatDatabase:
                 ),
             )
 
+    def edit_scheduled_task(
+        self,
+        task_id: str,
+        *,
+        prompt: str,
+        interval_seconds: int,
+        schedule_config: str,
+        next_run_at: str | None,
+    ) -> None:
+        """Change what a scheduled task asks and when it runs.
+
+        Raises:
+            KeyError: if no task has *task_id*.
+        """
+        with self._transaction():
+            cursor = self._conn.execute(
+                """UPDATE scheduled_tasks
+                   SET prompt = ?, interval_seconds = ?, schedule_config = ?,
+                       next_run_at = ?
+                   WHERE id = ?""",
+                (prompt, interval_seconds, schedule_config, next_run_at, task_id),
+            )
+            if cursor.rowcount == 0:
+                raise KeyError(f"Scheduled task '{task_id}' not found")
+
     def claim_scheduled_run(
         self, task_id: str, expected_next_run_at: str | None, next_run_at: str
     ) -> bool:
@@ -2158,12 +2275,14 @@ class ChatDatabase:
             )
             return cursor.rowcount == 1
 
-    def scheduled_task_timing(self, task_id: str) -> Dict[str, Any]:
-        """The task's stored ``status`` and ``next_run_at``, as another server
-        may have set them."""
+    def scheduled_task_state(self, task_id: str) -> Dict[str, Any]:
+        """The task's stored ``status``, ``next_run_at``, ``prompt``,
+        ``interval_seconds`` and ``schedule_config``, as another server may
+        have set them."""
         with self._lock:
             row = self._conn.execute(
-                "SELECT status, next_run_at FROM scheduled_tasks WHERE id = ?",
+                "SELECT status, next_run_at, prompt, interval_seconds, "
+                "schedule_config FROM scheduled_tasks WHERE id = ?",
                 (task_id,),
             ).fetchone()
         if row is None:

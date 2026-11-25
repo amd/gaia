@@ -78,7 +78,7 @@ one of:
   They drove the hub browser, which no longer exists. Launching **is** running
   `gaia-cli`; switching agents inside a live session is chat's `/agents`, driven
   through `tui_send_text`/`tui_send_keys` like any other command; and installing
-  an extra agent such as email is `gaia hub install email` in the Python CLI.
+  an agent is the Python CLI's job (`gaia init` for the flagship).
 </Warning>
 
 <Note>
@@ -115,8 +115,8 @@ lie. `tui_status` and `tui_screen` keep working, and `tui_status` reports
 
     The TUI prints the port it bound and writes `~/.gaia/tui/control.json`
     (mode `0600`) holding the pid, port, and bearer token. The token is never
-    printed. Add `--dev` to log input counts, state transitions, and
-    wait resolution to stderr.
+    printed. `--dev` does the same as `--control` and also logs input counts,
+    state transitions, and wait resolution to the TUI log.
 
     For a fixed port: `gaia-cli --control-port 8770`.
   </Step>

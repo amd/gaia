@@ -1419,7 +1419,7 @@ def test_sdk_preserves_claude_tool_history(claude_sdk, stream):
 
 def test_stdio_flag_literals_match_tui_contract():
     """The Go TUI appends these literal strings to the child argv."""
-    stdio = pytest.importorskip("gaia_agent.stdio")
+    stdio = pytest.importorskip("gaiapy.stdio")
 
     args = stdio.build_parser().parse_args(
         ["--use-claude", "--claude-model", "claude-sonnet-5", "--dev"]

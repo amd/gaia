@@ -337,18 +337,42 @@ def test_file_index_does_not_rebuild_a_database_that_is_only_locked(tmp_path):
     assert not list(tmp_path.glob("file_index.db.*corrupt*"))
 
 
+# MemoryStore waits 5 s for the lock. A starved CI runner can take longer than
+# that just to queue six schema writes, so the openers wait a minute instead:
+# an open that fails at once, or a lock never released, still fails the test.
 _OPENER = textwrap.dedent("""
-    import sys, time
+    import sqlite3, sys, time
     from pathlib import Path
     from gaia.agents.base.memory_store import MemoryStore
+
+    PATIENT_MS = 60_000
+    connect = sqlite3.connect
+
+    class Patient(sqlite3.Connection):
+        widened = 0
+
+        def execute(self, sql, *args):
+            if sql == "PRAGMA busy_timeout=5000":
+                Patient.widened += 1
+                sql = f"PRAGMA busy_timeout={PATIENT_MS}"
+            return super().execute(sql, *args)
+
+    def patient_connect(*args, **kwargs):
+        return connect(*args, factory=Patient, timeout=PATIENT_MS / 1000, **kwargs)
+
+    sqlite3.connect = patient_connect
     print("ready", flush=True)
     for line in sys.stdin:
         path, start = line.rsplit(" ", 1)
         while time.time() < float(start):
             pass
+        widened = Patient.widened
         try:
             MemoryStore(Path(path)).close()
-            print("ok", flush=True)
+            if Patient.widened == widened:
+                print("MemoryStore no longer sets busy_timeout=5000", flush=True)
+            else:
+                print("ok", flush=True)
         except Exception as exc:  # reported to the test, which fails on it
             print(f"{type(exc).__name__}: {exc}", flush=True)
     """)

@@ -1,11 +1,16 @@
 # GAIA Terminal UI installers
 
 Native double-click installers for the GAIA Terminal UI (`gaia-cli`). Each one
-puts two executables on disk and on `PATH`:
+puts these executables on disk and on `PATH`:
 
 - **`gaia-cli`** — the Terminal UI itself (built from [`tui/`](../../tui))
 - **`gaia-agent`** — the flagship agent the Terminal UI spawns as a child process
   (`TransportSubprocess` in `tui/internal/catalog/catalog.go`)
+- **`gaiacpp`** — the native flagship agent, on Windows x64, Linux x64 and Apple
+  silicon. The Terminal UI runs it from beside `gaia-cli` in place of
+  `gaia-agent` once the user picks it with `/agent gaiacpp` (`FindNative` in
+  `tui/internal/catalog/native.go`); an Intel Mac package has none, so it runs
+  `gaia-agent`
 
 Shipping only the first installs a front end with nothing behind it, which is
 why the sidecar is bundled rather than fetched on first run.
@@ -29,13 +34,13 @@ exit codes are listed in `gaia-setup.nsi` and [Install GAIA](../../docs/guides/i
 | Linux x64 | [`linux/build-packages.sh`](linux/build-packages.sh) | `gaia_<version>_amd64.deb`, `gaia-<version>.x86_64.rpm` |
 
 **No installer is built for `win-arm64` or `linux-arm64`** — the flagship agent
-publishes no build for either, and [`fetch_sidecar.py`](fetch_sidecar.py) refuses
+publishes no build for either, and [`fetch_gaiapy.py`](fetch_gaiapy.py) refuses
 those platform keys rather than let a half-empty installer get built.
 
 ## Staging a payload
 
 All three builders take `--payload <dir>` holding `gaia-cli` and `gaia-agent`
-(with `.exe` suffixes on Windows), and `core/`: the frozen `gaia` and its
+(with `.exe` suffixes on Windows), `gaiacpp` where one is built, and `core/`: the frozen `gaia` and its
 `_internal` folder, unpacked from a `gaia-core-<platform>` build of
 [`build_core.yml`](../../.github/workflows/build_core.yml). The terminal UI runs
 setup and starts the daemon with that `gaia`, so the PC needs no Python. The Windows and macOS builders read
@@ -47,10 +52,10 @@ second:
 ```bash
 cd tui && CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o ../stage/gaia-cli ./cmd/gaia && cd ..
 cp LICENSE.md stage/
-python installer/tui/fetch_sidecar.py --platform linux-x64 --out stage
+python installer/tui/fetch_gaiapy.py --platform linux-x64 --out stage
 ```
 
-`fetch_sidecar.py` verifies the downloaded sidecar's SHA-256 against the digest
+`fetch_gaiapy.py` verifies the downloaded sidecar's SHA-256 against the digest
 committed in `hub/agents/gaia/npm/binaries.lock.json` — never against one served
 by the same host as the download, which would only prove the host agrees with
 itself. A mismatch deletes the file and exits non-zero, and a placeholder digest

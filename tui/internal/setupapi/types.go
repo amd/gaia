@@ -38,6 +38,10 @@ type Plan struct {
 	// the plan omits the field, as daemons before v0.25.4 do; that is unknown,
 	// not evidence that the PC has no NPU.
 	NPU *NPU `json:"npu"`
+	// LeftForAppsGB is the RAM other apps keep with the recommended model
+	// loaded; nil when the model has its own GPU memory, or from daemons that
+	// predate it.
+	LeftForAppsGB *float64 `json:"left_for_apps_gb"`
 }
 
 // NPU is the plan's "npu" field: present is whether Lemonade reports one on
@@ -157,6 +161,11 @@ type CatalogEntry struct {
 	FitReason  *string  `json:"fit_reason"`
 	// FitCode is why it doesn't fit: "memory", "npu" or "backend"; nil when it fits.
 	FitCode *string `json:"fit_code"`
+	// Tight: it fits, but leaves other apps less memory than GAIA keeps for them.
+	Tight bool `json:"tight"`
+	// SetupOffer: setup lists it as a chat choice; it runs here, or it is the
+	// user's chat model already.
+	SetupOffer bool `json:"setup_offer"`
 	// Role is set on Plan.Models only: "chat" or "embedding".
 	Role string `json:"role,omitempty"`
 }

@@ -6,7 +6,7 @@ import { ChevronRight } from 'lucide-react';
 import { useT } from '../../i18n/useT';
 import * as api from '../../services/api';
 import { useChatStore, type SettingsSection } from '../../stores/chatStore';
-import { useModelStore } from '../../stores/modelStore';
+import { displayModelName, useModelStore } from '../../stores/modelStore';
 import { ConfirmSheet } from '../setup/ConfirmSheet';
 import { formatSize, ltrIn, totalMemory } from '../setup/format';
 import { isServerDown } from './ErrorNotice';
@@ -48,7 +48,9 @@ export function SetupSettings() {
 
     // The plan's chat model is setup's local pick; a cloud user runs something else.
     const planned = plan?.catalog?.find((e) => e.id === plan.chat_model.id);
-    const chatName = active?.model ? (active.label ?? active.display_name ?? active.model) : planned?.name ?? null;
+    // A local model's label is its raw id and an English place word; a cloud one names its provider.
+    const activeName = active?.model ? (active.remote ? active.label ?? displayModelName(active.model) : displayModelName(active.model)) : null;
+    const chatName = activeName ?? planned?.name ?? null;
     const installed = (plan?.catalog ?? []).filter((e) => e.downloaded);
     const installedGb = installed.reduce((sum, e) => sum + (e.full_size_gb ?? 0), 0);
     const device = [hardware?.gpu_name, hardware?.npu_detected ? t('setup.checks.npu') : null].filter(Boolean).join(' · ');

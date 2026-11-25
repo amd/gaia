@@ -26,6 +26,8 @@ from gaia.audio.lemonade_tts import (
     TTS_SAMPLE_RATE,
     LemonadeTTSClient,
     LemonadeTTSError,
+    SpeechUnavailableError,
+    mp3_frames,
 )
 
 BASE = "http://lemonade.test:13305/api/v1"
@@ -86,6 +88,21 @@ def pcm_response(samples, rate=TTS_SAMPLE_RATE):
         content=pcm,
         headers={"Content-Type": f"audio/l16;rate={rate};endianness=little-endian"},
     )
+
+
+def mp3_bytes(frames):
+    """Whole MPEG-2 Layer III frames: 24 kHz mono at 160 kbps, as Lemonade sends."""
+    return (b"\xff\xf3\xe4\xc4" + b"\x00" * 476) * frames
+
+
+def id3v2(payload):
+    size = len(payload)
+    syncsafe = bytes((size >> shift) & 0x7F for shift in (21, 14, 7, 0))
+    return b"ID3\x03\x00\x00" + syncsafe + payload
+
+
+def mp3_response(content):
+    return FakeResponse(content=content, headers={"Content-Type": "audio/mpeg"})
 
 
 def catalog(*entries):
@@ -157,7 +174,7 @@ class TestTTSRequestShape:
             assert handle.getsampwidth() == 2
             assert handle.getnframes() == TTS_SAMPLE_RATE
 
-    def test_missing_model_preflight_names_the_talk_download_command(self, monkeypatch):
+    def test_missing_model_preflight_offers_the_download_in_the_apps(self, monkeypatch):
         wire = Wire(
             monkeypatch,
             [
@@ -167,12 +184,21 @@ class TestTTSRequestShape:
             ],
         )
         with pytest.raises(
-            LemonadeTTSError, match=r"not downloaded.*gaia download --agent talk"
-        ):
+            LemonadeTTSError,
+            match=r"not downloaded.*Read aloud under a reply.*/read-aloud in the TUI",
+        ) as refusal:
             LemonadeTTSClient(base_url=BASE).check_model_available()
+        # The apps recover; a chat reply never sends the user to a terminal.
+        assert "gaia download" not in str(refusal.value)
         assert [request.url for request in wire.requests] == [
             f"{BASE}/models?show_all=true"
         ]
+
+    def test_a_voice_missing_from_the_catalog_points_at_setup(self, monkeypatch):
+        Wire(monkeypatch, [catalog()])
+        with pytest.raises(LemonadeTTSError, match=r"no TTS model.*Run setup") as e:
+            LemonadeTTSClient(base_url=BASE).check_model_available()
+        assert "gaia download" not in str(e.value)
 
     def test_long_speech_is_split_and_joined(self, monkeypatch, tmp_path):
         wire = Wire(
@@ -195,6 +221,295 @@ class TestTTSRequestShape:
         assert seconds == pytest.approx(8 / TTS_SAMPLE_RATE)
         with wave.open(str(out)) as handle:
             assert handle.getnframes() == 8
+
+    def test_a_speech_file_goes_to_disk_piece_by_piece(self, monkeypatch, tmp_path):
+        wire = Wire(
+            monkeypatch,
+            [pcm_response(np.full(3, 0.1)), pcm_response(np.full(5, 0.2))],
+        )
+        out = tmp_path / "long.wav"
+        seen = []
+        seconds = LemonadeTTSClient(base_url=BASE).synthesize_file(
+            ["First.", "  ", "Second."],
+            out,
+            voice="bm_george",
+            speed=1.25,
+            on_piece=lambda index, total: seen.append((index, total)),
+        )
+        assert seen == [(1, 2), (2, 2)]
+        assert [wire.json_body(i)["input"] for i in (0, 1)] == ["First.", "Second."]
+        assert wire.json_body(0)["voice"] == "bm_george"
+        assert wire.json_body(0)["speed"] == 1.25
+        assert wire.json_body(0)["response_format"] == "pcm"
+        assert seconds == pytest.approx(8 / TTS_SAMPLE_RATE)
+        with wave.open(str(out)) as handle:
+            assert handle.getnframes() == 8
+            assert handle.getframerate() == TTS_SAMPLE_RATE
+
+    def test_mp3_pieces_are_joined_without_their_tags(self, monkeypatch, tmp_path):
+        first, second = mp3_bytes(3), mp3_bytes(2)
+        tagged = id3v2(b"x" * 20) + first + b"TAG" + b"\x00" * 125
+        wire = Wire(monkeypatch, [mp3_response(tagged), mp3_response(second)])
+        out = tmp_path / "speech.mp3"
+        seconds = LemonadeTTSClient(base_url=BASE).synthesize_file(
+            ["One.", "Two."], out, audio_format="mp3"
+        )
+        assert wire.json_body(0)["response_format"] == "mp3"
+        assert out.read_bytes() == first + second
+        assert seconds == pytest.approx(5 * 576 / 24000)
+
+    def test_mp3_frames_refuses_what_is_not_whole_frames(self):
+        frames, seconds = mp3_frames(mp3_bytes(4))
+        assert frames == mp3_bytes(4)
+        assert seconds == pytest.approx(4 * 576 / 24000)
+        with pytest.raises(ValueError, match="no MPEG frame"):
+            mp3_frames(b"RIFF" + b"\x00" * 64)
+        with pytest.raises(ValueError, match="cut short"):
+            mp3_frames(mp3_bytes(2)[:-10])
+        with pytest.raises(ValueError, match="no MPEG frames"):
+            mp3_frames(id3v2(b"only a tag"))
+
+    @staticmethod
+    def _info_frame(tag=b"Info", header=b"\xff\xf3\xe4\xc4", offset=13):
+        """A silent header frame as LAME writes it: the tag after the side info."""
+        size = 480 if header == b"\xff\xf3\xe4\xc4" else 417
+        body = bytearray(size - 4)
+        body[offset - 4 : offset] = tag
+        return header + bytes(body)
+
+    def test_a_pieces_info_frame_is_dropped_so_the_join_has_one_length(self):
+        # MPEG-2 mono: 9 bytes of side info, so the tag sits at byte 13.
+        for tag in (b"Info", b"Xing"):
+            frames, seconds = mp3_frames(self._info_frame(tag) + mp3_bytes(3))
+            assert frames == mp3_bytes(3)
+            assert seconds == pytest.approx(3 * 576 / 24000)
+
+    def test_mpeg1_stereo_and_vbri_headers_are_found_where_they_live(self):
+        # MPEG-1 Layer III, 128 kbps, 44.1 kHz, stereo: 32 bytes of side info.
+        mpeg1 = b"\xff\xfb\x90\x00"
+        plain = (mpeg1 + b"\x00" * 413) * 2
+        xing = self._info_frame(b"Xing", header=mpeg1, offset=36)
+        vbri = self._info_frame(b"VBRI", header=mpeg1, offset=36)
+        assert mp3_frames(xing + plain)[0] == plain
+        assert mp3_frames(vbri + plain)[0] == plain
+        # Mono MPEG-1 has 17 bytes of side info, so its tag is at byte 21.
+        mono = b"\xff\xfb\x90\xc0"
+        mono_plain = mono + b"\x00" * 413
+        assert (
+            mp3_frames(self._info_frame(header=mono, offset=21) + mono_plain)[0]
+            == mono_plain
+        )
+
+    def test_audio_that_happens_to_spell_info_is_kept(self):
+        # Only a leading frame can be a header; later ones are sound.
+        frames, seconds = mp3_frames(mp3_bytes(2) + self._info_frame())
+        assert len(frames) == 3 * 480
+        assert seconds == pytest.approx(3 * 576 / 24000)
+        # The tag at the wrong offset is sound too.
+        wrong = self._info_frame(offset=21) + mp3_bytes(1)
+        assert mp3_frames(wrong)[0] == wrong
+
+    def test_a_file_that_is_only_an_info_frame_has_no_audio(self):
+        with pytest.raises(ValueError, match="no MPEG frames"):
+            mp3_frames(self._info_frame())
+
+    def test_joined_pieces_keep_no_info_frame(self, monkeypatch, tmp_path):
+        first = self._info_frame() + mp3_bytes(2)
+        second = self._info_frame() + mp3_bytes(1)
+        Wire(monkeypatch, [mp3_response(first), mp3_response(second)])
+        out = tmp_path / "speech.mp3"
+        seconds = LemonadeTTSClient(base_url=BASE).synthesize_file(
+            ["One.", "Two."], out, audio_format="mp3"
+        )
+        assert out.read_bytes() == mp3_bytes(3)
+        assert seconds == pytest.approx(3 * 576 / 24000)
+
+    def test_a_reply_that_is_not_mp3_is_refused(self, monkeypatch, tmp_path):
+        Wire(monkeypatch, [pcm_response(np.zeros(4))])
+        out = tmp_path / "speech.mp3"
+        with pytest.raises(LemonadeTTSError, match="expected 'audio/mpeg'"):
+            LemonadeTTSClient(base_url=BASE).synthesize_file(
+                ["One."], out, audio_format="mp3"
+            )
+        assert not out.exists()
+
+    def test_a_failed_piece_leaves_no_half_written_file(self, monkeypatch, tmp_path):
+        Wire(
+            monkeypatch,
+            [pcm_response(np.zeros(4)), FakeResponse(500, {"error": "boom"})],
+        )
+        out = tmp_path / "speech.wav"
+        with pytest.raises(LemonadeTTSError):
+            LemonadeTTSClient(base_url=BASE).synthesize_file(["One.", "Two."], out)
+        assert not out.exists()
+
+    def test_a_stop_between_pieces_leaves_no_file(self, monkeypatch, tmp_path):
+        Wire(monkeypatch, [pcm_response(np.zeros(4))])
+        out = tmp_path / "speech.wav"
+
+        def stop_at_two(index, _total):
+            if index == 2:
+                raise KeyboardInterrupt
+
+        with pytest.raises(KeyboardInterrupt):
+            LemonadeTTSClient(base_url=BASE).synthesize_file(
+                ["One.", "Two."], out, on_piece=stop_at_two
+            )
+        assert not out.exists()
+
+    @pytest.mark.parametrize("audio_format", ["wav", "mp3"])
+    def test_a_failure_on_the_first_piece_keeps_its_own_error(
+        self, monkeypatch, tmp_path, audio_format
+    ):
+        """An unopened WAV used to raise "sampling rate not specified" instead."""
+        Wire(monkeypatch, [FakeResponse(500, {"error": "boom"})])
+        out = tmp_path / f"speech.{audio_format}"
+        with pytest.raises(LemonadeTTSError, match="500"):
+            LemonadeTTSClient(base_url=BASE).synthesize_file(
+                ["One."], out, audio_format=audio_format
+            )
+        assert not out.exists()
+
+    def test_a_stop_before_the_first_piece_keeps_its_own_error(self, tmp_path):
+        out = tmp_path / "speech.wav"
+
+        def stop(_index, _total):
+            raise KeyboardInterrupt
+
+        with pytest.raises(KeyboardInterrupt):
+            LemonadeTTSClient(base_url=BASE).synthesize_file(
+                ["One."], out, on_piece=stop
+            )
+        assert not out.exists()
+
+    def test_pieces_in_different_formats_are_not_joined(self, monkeypatch, tmp_path):
+        mono_24k = mp3_bytes(2)
+        stereo_22k = (b"\xff\xf3\xe0\x04" + b"\x00" * 518) * 2
+        Wire(monkeypatch, [mp3_response(mono_24k), mp3_response(stereo_22k)])
+        out = tmp_path / "speech.mp3"
+        with pytest.raises(LemonadeTTSError, match="piece 2 of 2"):
+            LemonadeTTSClient(base_url=BASE).synthesize_file(
+                ["One.", "Two."], out, audio_format="mp3"
+            )
+        assert not out.exists()
+
+        Wire(
+            monkeypatch,
+            [pcm_response(np.zeros(4)), pcm_response(np.zeros(4), rate=16000)],
+        )
+        wav = tmp_path / "speech.wav"
+        with pytest.raises(LemonadeTTSError, match="piece 2 of 2"):
+            LemonadeTTSClient(base_url=BASE).synthesize_file(["One.", "Two."], wav)
+        assert not wav.exists()
+
+    def test_an_unknown_file_format_or_empty_text_is_refused(self, tmp_path):
+        client = LemonadeTTSClient(base_url=BASE)
+        with pytest.raises(ValueError, match="wav, mp3"):
+            client.synthesize_file(["One."], tmp_path / "a.ogg", audio_format="ogg")
+        with pytest.raises(ValueError, match="must not be empty"):
+            client.synthesize_file(["  "], tmp_path / "a.wav")
+
+
+#: 30 words: at most 3 words a second, at least 10 s of speech.
+THIRTY_WORDS = (
+    "The board approved the new berth. Work starts in spring and ends before "
+    "winter. Traffic rose twelve percent to four thousand three hundred ten "
+    "vessels, the busiest year on record."
+)
+
+
+class TestClippedSpeech:
+    """A speech runtime that returns half a second for any text is refused."""
+
+    def test_the_fixture_is_thirty_words(self):
+        assert len(THIRTY_WORDS.split()) == 30
+
+    def test_half_a_second_for_thirty_words_is_refused(self, monkeypatch):
+        Wire(monkeypatch, [pcm_response(np.zeros(int(0.48 * TTS_SAMPLE_RATE)))])
+        with pytest.raises(LemonadeTTSError) as caught:
+            LemonadeTTSClient(base_url=BASE).synthesize(THIRTY_WORDS)
+        said = str(caught.value)
+        assert "returned 0.5 s of audio for 30 words" in said
+        assert "at least 10 s" in said
+        assert "update Lemonade Server" in said
+
+    def test_a_clipped_wav_piece_leaves_no_file(self, monkeypatch, tmp_path):
+        Wire(monkeypatch, [pcm_response(np.zeros(int(0.48 * TTS_SAMPLE_RATE)))])
+        out = tmp_path / "report.wav"
+        with pytest.raises(LemonadeTTSError, match="cut off"):
+            LemonadeTTSClient(base_url=BASE).synthesize_file([THIRTY_WORDS], out)
+        assert not out.exists()
+
+    def test_a_clipped_mp3_piece_leaves_no_file(self, monkeypatch, tmp_path):
+        # 20 MPEG-2 frames of 576 samples at 24 kHz: 0.48 s.
+        Wire(monkeypatch, [mp3_response(mp3_bytes(20))])
+        out = tmp_path / "report.mp3"
+        with pytest.raises(LemonadeTTSError, match="0.5 s of audio for 30 words"):
+            LemonadeTTSClient(base_url=BASE).synthesize_file(
+                [THIRTY_WORDS], out, audio_format="mp3"
+            )
+        assert not out.exists()
+
+    def test_a_later_clipped_piece_removes_the_whole_file(self, monkeypatch, tmp_path):
+        Wire(
+            monkeypatch,
+            [
+                pcm_response(np.zeros(12 * TTS_SAMPLE_RATE)),
+                pcm_response(np.zeros(int(0.48 * TTS_SAMPLE_RATE))),
+            ],
+        )
+        out = tmp_path / "report.wav"
+        with pytest.raises(LemonadeTTSError, match="cut off"):
+            LemonadeTTSClient(base_url=BASE).synthesize_file(
+                [THIRTY_WORDS, THIRTY_WORDS], out
+            )
+        assert not out.exists()
+
+    def test_speech_of_a_normal_length_is_saved(self, monkeypatch, tmp_path):
+        Wire(monkeypatch, [pcm_response(np.zeros(12 * TTS_SAMPLE_RATE))])
+        out = tmp_path / "report.wav"
+        seconds = LemonadeTTSClient(base_url=BASE).synthesize_file([THIRTY_WORDS], out)
+        assert seconds == pytest.approx(12)
+        with wave.open(str(out)) as handle:
+            assert handle.getnframes() == 12 * TTS_SAMPLE_RATE
+
+    def test_fast_speech_is_judged_at_its_speed(self, monkeypatch):
+        # At 2x the 30 words need 5 s at most-fast, so 1.5 s is whole speech.
+        Wire(monkeypatch, [pcm_response(np.zeros(int(1.5 * TTS_SAMPLE_RATE)))])
+        samples, _ = LemonadeTTSClient(base_url=BASE).synthesize(
+            THIRTY_WORDS, speed=2.0
+        )
+        assert len(samples) == int(1.5 * TTS_SAMPLE_RATE)
+
+    def test_short_text_is_not_length_checked(self, monkeypatch):
+        Wire(monkeypatch, [pcm_response(np.zeros(100))])
+        samples, _ = LemonadeTTSClient(base_url=BASE).synthesize("GAIA is ready.")
+        assert len(samples) == 100
+
+
+class TestSpeechWithheldOnUnprovenPlatform:
+    """Where GAIA hasn't proven its voice, no speech request is ever sent."""
+
+    @pytest.fixture(autouse=True)
+    def _on_a_mac(self, monkeypatch):
+        import gaia.config
+
+        monkeypatch.setattr(gaia.config, "_current_platform", lambda: "darwin")
+
+    @pytest.mark.parametrize(
+        "call",
+        [
+            lambda c: c.synthesize(THIRTY_WORDS),
+            lambda c: c.synthesize_mp3(THIRTY_WORDS),
+            lambda c: c.check_model_available(),
+            lambda c: c.ensure_model(),
+        ],
+    )
+    def test_every_speech_call_is_refused_before_the_wire(self, monkeypatch, call):
+        wire = Wire(monkeypatch, [])
+        with pytest.raises(SpeechUnavailableError, match="aren't offered on macOS"):
+            call(LemonadeTTSClient(base_url=BASE))
+        assert wire.requests == []
 
 
 class TestEnsureModelPulled:

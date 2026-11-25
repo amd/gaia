@@ -348,7 +348,7 @@ def test_audit_gate_uses_the_engine_when_it_is_installed(
     module = types.ModuleType("gaia.skills.audit")
 
     def audit_skill(directory):
-        calls.append(directory)
+        calls.append((directory, sorted(p.name for p in directory.iterdir())))
         return {
             "verdict": "ALLOW",
             "engine": "gaia-skill-audit/0.1.0",
@@ -361,9 +361,14 @@ def test_audit_gate_uses_the_engine_when_it_is_installed(
 
     marketplace.keygen()
     source = _write_source(tmp_path)
+    (source / "__pycache__").mkdir()
+    (source / "__pycache__" / "x.cpython-312.pyc").write_bytes(b"\x00")
     result = marketplace.publish(source, audit_report=None)
 
-    assert calls == [source]
+    # The gate reads the staged copy that gets signed, not the working folder.
+    ((audited, contents),) = calls
+    assert audited != source and audited.name == source.name
+    assert contents == ["SKILL.md"]
     assert result.audit.engine == "gaia-skill-audit/0.1.0"
     assert json.loads(marketplace.hub.publishes[-1].audit_json)["engine"] == (
         "gaia-skill-audit/0.1.0"
@@ -894,19 +899,6 @@ def test_remove_refuses_a_read_only_root(tmp_path):
     assert (bundled / "incident-review").is_dir()
 
 
-def test_installed_provenance_reads_from_the_lock(marketplace, tmp_path):
-    from gaia.skills.install import installed_provenance
-
-    key = marketplace.keygen()
-    marketplace.trust(key)
-    marketplace.publish(_write_source(tmp_path))
-    marketplace.install("web-research@^1.0")
-
-    provenance = installed_provenance(marketplace.manager)
-    assert provenance["web-research"]["requested"] == "^1.0"
-    assert provenance["web-research"]["installed_tier"] == "community"
-
-
 # ---------------------------------------------------------------------------
 # A hostile bundle: the client unpacks whatever the hub served
 # ---------------------------------------------------------------------------
@@ -964,6 +956,31 @@ def test_install_refuses_a_bundle_that_escapes_the_destination(marketplace):
         marketplace.install("web-research", allow_experimental=True)
     assert not (marketplace.skills_root / "web-research").exists()
     assert not (marketplace.skills_root.parent / "escaped.py").exists()
+
+
+@pytest.mark.parametrize(
+    ("cap", "limit"),
+    [("BUNDLE_MAX_MEMBER_BYTES", 1024), ("BUNDLE_MAX_TOTAL_BYTES", 1500)],
+)
+def test_install_refuses_a_bundle_over_the_size_cap(
+    marketplace, monkeypatch, cap, limit
+):
+    from gaia.skills import install as install_mod
+
+    payload = _zip_bytes(
+        {
+            "web-research/SKILL.md": "---\nname: web-research\n---\nbody\n",
+            "web-research/a.bin": "\0" * 1000,
+            "web-research/b.bin": "\0" * 2000,
+        }
+    )
+    _seed_raw_bundle(marketplace, payload)
+    monkeypatch.setattr(install_mod, cap, limit)
+
+    with pytest.raises(SkillValidationError, match="limit of") as exc:
+        marketplace.install("web-research", allow_experimental=True)
+    assert "hostile" not in str(exc.value)
+    assert not (marketplace.skills_root / "web-research").exists()
 
 
 def test_install_refuses_a_bundle_that_is_not_a_zip(marketplace):

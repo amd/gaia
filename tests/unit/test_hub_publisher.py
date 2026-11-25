@@ -18,15 +18,15 @@ from gaia.hub.packager import PackResult
 
 
 class _FakeKeyring:
-    """Minimal in-memory keyring backend."""
+    """Minimal in-memory stand-in for ``gaia.connectors.keyring_access``."""
 
     def __init__(self):
         self.store = {}
 
-    def set_password(self, service, username, password):
+    def write(self, service, username, password):
         self.store[(service, username)] = password
 
-    def get_password(self, service, username):
+    def read(self, service, username):
         return self.store.get((service, username))
 
 
@@ -104,6 +104,73 @@ def test_store_empty_token_raises(fake_keyring):
 def test_store_unknown_kind_raises(fake_keyring):
     with pytest.raises(publisher.PublisherError, match="unknown token kind"):
         publisher.store_token("bogus", "x")
+
+
+def _failing_keyring(monkeypatch, exc):
+    class _Failing(_FakeKeyring):
+        def read(self, service, username):
+            raise exc
+
+    monkeypatch.setattr(publisher, "_keyring", _Failing)
+
+
+@pytest.mark.parametrize(
+    "exc",
+    [
+        __import__("keyring.errors").errors.KeyringLocked("the keyring is locked"),
+        __import__("keyring.errors").errors.InitError("no backend"),
+        RuntimeError("dbus went away"),
+    ],
+    ids=["locked", "init", "other"],
+)
+@pytest.mark.parametrize("kind", ["hub", "pypi"])
+def test_a_keyring_read_failure_is_an_actionable_error(
+    exc, kind, clean_env, monkeypatch
+):
+    """A locked or broken keyring is never reported as "no token stored"."""
+    _failing_keyring(monkeypatch, exc)
+    get = publisher.get_hub_token if kind == "hub" else publisher.get_pypi_token
+    with pytest.raises(publisher.PublisherError) as err:
+        get()
+    msg = str(err.value)
+    assert f"could not read the {kind} token" in msg
+    assert str(exc) in msg
+    env = publisher.HUB_TOKEN_ENV if kind == "hub" else publisher.PYPI_TOKEN_ENV
+    assert env in msg
+    assert err.value.__cause__ is exc
+
+
+def test_the_env_token_wins_over_a_failing_keyring(clean_env, monkeypatch):
+    _failing_keyring(monkeypatch, RuntimeError("locked"))
+    monkeypatch.setenv(publisher.HUB_TOKEN_ENV, "from-env")
+    assert publisher.get_hub_token() == "from-env"
+
+
+def test_publish_with_a_locked_keyring_does_not_upload_anonymously(
+    clean_env, monkeypatch, pack_result, manifest_file
+):
+    import requests
+
+    _failing_keyring(monkeypatch, RuntimeError("the keyring is locked"))
+    posted = []
+    monkeypatch.setattr(requests, "post", lambda *a, **k: posted.append(a))
+    with pytest.raises(publisher.PublisherError, match="the keyring is locked"):
+        publisher._publish_r2(pack_result.wheel_path, manifest_file, None)
+    assert posted == []
+
+
+def test_skill_publish_prints_the_keyring_error(monkeypatch, capsys, tmp_path):
+    import argparse
+
+    from gaia.skills import cli as skill_cli
+
+    def _locked():
+        raise publisher.PublisherError("could not read the hub token: locked")
+
+    monkeypatch.setattr(publisher, "get_hub_token", _locked)
+    rc = skill_cli._handle_publish(argparse.Namespace(directory=str(tmp_path)))
+    assert rc == skill_cli.EXIT_INVALID
+    assert "could not read the hub token: locked" in capsys.readouterr().err
 
 
 # ---------------------------------------------------------------------------

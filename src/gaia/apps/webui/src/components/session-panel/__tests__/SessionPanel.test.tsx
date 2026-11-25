@@ -9,6 +9,7 @@ import { SessionPanel, SessionPanelToggle } from '../SessionPanel';
 import { useSessionPanelStore, PANEL_DEFAULT_WIDTH, PANEL_MIN_WIDTH } from '../../../stores/sessionPanelStore';
 import { useChatStore } from '../../../stores/chatStore';
 import { useModelStore } from '../../../stores/modelStore';
+import { useBrowserPaneStore } from '../../../stores/browserPaneStore';
 import type { Message, TurnSummary } from '../../../types';
 import { resetPanelState, SID, stubPanelApi, stubWindowWidth } from './testUtils';
 
@@ -63,30 +64,87 @@ afterEach(() => {
 describe('SessionPanel', () => {
     it("names this turn's model the way the model chip does, not by its raw id", () => {
         useModelStore.setState({ names: { 'Gemma-4-E4B-it-GGUF': 'Gemma 4 E4B' } });
-        const local = { ...SUMMARY, model: { ...SUMMARY.model!, name: 'Gemma-4-E4B-it-GGUF' } };
+        const local = { ...SUMMARY, model: { ...SUMMARY.model!, remote: true, name: 'Gemma-4-E4B-it-GGUF' } };
         render(<Panel messages={[ANSWERED[0], { ...ANSWERED[1], turnSummary: local }]} />);
         expect(screen.getByText('Gemma 4 E4B')).toHaveAttribute('title', 'Gemma-4-E4B-it-GGUF');
         useModelStore.setState({ names: {} });
     });
 
-    it('is docked open by default with every section', async () => {
+    it('is docked with every section once opened', async () => {
         render(<Panel />);
         expect(panel()).toHaveClass('is-docked');
-        for (const name of ['This answer', 'Folders and access', 'Context & performance', 'Outputs']) {
+        for (const name of ['This answer', 'Environment', 'Context & performance', 'Session']) {
             expect(screen.getByRole('button', { name: new RegExp(`^${name}`) })).toBeInTheDocument();
         }
         await waitFor(() => expect(mocked.getOutputs).toHaveBeenCalledWith(SID));
     });
 
-    it('leads with what the chat made and may touch, and keeps how it ran under Details', () => {
+    it('leads with the environment, and keeps how it ran under Details', () => {
         render(<Panel />);
         const heads = [...panel().querySelectorAll('.sp-section-title, .sp-group-title')].map((el) => el.textContent);
         const at = (name: string) => heads.findIndex((h) => h?.startsWith(name));
 
-        expect(at('Outputs')).toBeLessThan(at('Folders and access'));
-        expect(at('Folders and access')).toBeLessThan(at('Details'));
+        expect(at('Environment')).toBe(0);
+        expect(at('Environment')).toBeLessThan(at('Details'));
         expect(at('Details')).toBeLessThan(at('Context & performance'));
         expect(screen.getByRole('button', { name: /^Context & performance/ })).toHaveAttribute('aria-expanded', 'false');
+    });
+
+    it('starts closed for someone who never opened or closed it', () => {
+        resetPanelState({ open: false });
+        render(<Panel />);
+        expect(screen.queryByRole('complementary')).not.toBeInTheDocument();
+        fireEvent.click(screen.getByRole('button', { name: /Show session panel/ }));
+        expect(panel()).toHaveClass('is-docked');
+        expect(window.localStorage.getItem('gaia.sessionPanel.open')).toBe('1');
+    });
+
+    it("opens on its own when a reply makes the chat's first file, and not while the browser pane is open", () => {
+        resetPanelState({ open: false });
+        const made: Message[] = [
+            ...ANSWERED,
+            { id: 3, session_id: SID, role: 'user', content: 'save it', created_at: '', rag_sources: null },
+            { id: 4, session_id: SID, role: 'assistant', content: 'saved', created_at: '', rag_sources: null, turnSummary: { ...SUMMARY, outputs: [{ kind: 'image', name: 'chart.png', path: 'C:\\chart.png' }] } },
+        ];
+        useBrowserPaneStore.setState({ openChats: [SID] });
+        const { rerender } = render(<Panel busy messages={ANSWERED} />);
+        rerender(<Panel busy={false} messages={made} />);
+        expect(screen.queryByRole('complementary')).not.toBeInTheDocument();
+
+        useBrowserPaneStore.setState({ openChats: [] });
+        rerender(<Panel busy messages={ANSWERED} />);
+        rerender(<Panel busy={false} messages={made} />);
+        expect(panel()).toHaveClass('is-docked');
+        expect(window.localStorage.getItem('gaia.sessionPanel.open')).toBeNull();
+    });
+
+    it('hides an auto-opened panel for the browser pane without counting it as the user closing it', () => {
+        resetPanelState({ open: false });
+        const made: Message[] = [
+            ...ANSWERED,
+            { id: 3, session_id: SID, role: 'user', content: 'save it', created_at: '', rag_sources: null },
+            { id: 4, session_id: SID, role: 'assistant', content: 'saved', created_at: '', rag_sources: null, turnSummary: { ...SUMMARY, outputs: [{ kind: 'image', name: 'chart.png', path: 'C:\\chart.png' }] } },
+        ];
+        const { rerender } = render(<Panel busy messages={ANSWERED} />);
+        rerender(<Panel busy={false} messages={made} />);
+        expect(panel()).toHaveClass('is-docked');
+
+        act(() => useSessionPanelStore.getState().yieldSide());
+        expect(screen.queryByRole('complementary')).not.toBeInTheDocument();
+        expect(window.localStorage.getItem('gaia.sessionPanel.open')).toBeNull();
+        expect(useSessionPanelStore.getState().closedByUser).toBe(false);
+
+        // The next chat's first file still opens it.
+        rerender(<Panel busy messages={ANSWERED} />);
+        rerender(<Panel busy={false} messages={made} />);
+        expect(panel()).toHaveClass('is-docked');
+    });
+
+    it('closes a panel the user opened, as before, when the browser pane takes the side', () => {
+        render(<Panel />);
+        act(() => useSessionPanelStore.getState().yieldSide());
+        expect(screen.queryByRole('complementary')).not.toBeInTheDocument();
+        expect(window.localStorage.getItem('gaia.sessionPanel.open')).toBe('0');
     });
 
     it('closes, remembers it, and reopens from the header toggle', () => {
@@ -131,11 +189,11 @@ describe('SessionPanel', () => {
     it('collapses a section, stops reading it, and remembers it', async () => {
         render(<Panel />);
         await waitFor(() => expect(mocked.getOutputs).toHaveBeenCalledTimes(1));
-        const head = screen.getByRole('button', { name: /^Outputs/ });
+        const head = screen.getByRole('button', { name: /^Environment/ });
         fireEvent.click(head);
         expect(head).toHaveAttribute('aria-expanded', 'false');
-        expect(useSessionPanelStore.getState().sections.outputs).toBe(false);
-        expect(JSON.parse(window.localStorage.getItem('gaia.sessionPanel.sections') ?? '{}').outputs).toBe(false);
+        expect(useSessionPanelStore.getState().sections.environment).toBe(false);
+        expect(JSON.parse(window.localStorage.getItem('gaia.sessionPanel.sections') ?? '{}').environment).toBe(false);
     });
 
     it('resizes from the keyboard within its limits and remembers the width', () => {

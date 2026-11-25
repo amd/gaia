@@ -2,23 +2,22 @@
 // SPDX-License-Identifier: MIT
 
 import { useState } from 'react';
+import { isMessageKey, type MessageKey } from '../../i18n/registry';
+import { useT, type Translate } from '../../i18n/useT';
 import { UnsupportedCard } from './UnsupportedCard';
 
 /**
- * ConfirmationCard — the stateless `needs_confirmation` surface (#2109, D1).
+ * ConfirmationCard — a `needs_confirmation` the chat cannot answer.
  *
- * Informational, not blocking: by the time this event reaches the UI the
- * sidecar run is already over, and the terminal `final` answer that follows
- * carries the actual hand-off guidance. So there is no Approve button (the
- * canonical event carries no args and no token to act on) and Dismiss is
- * local component state only — nothing is pending anywhere server-side.
+ * The relay turns a confirmation into the permission prompt above the message
+ * box whenever the agent can wait for an answer. This card is what is left
+ * when it can't: an agent too old to take one has already ended the run, so
+ * the step did not happen and there is nothing here to approve.
  *
- * Rendering safety: `summary` embeds tool args derived from EMAIL CONTENT
- * (attacker-influenced). It must only ever render as a React text node —
- * never through ReactMarkdown/SafeMarkdown or any innerHTML path. Anti-spoof
- * layout: the machine `action` name is code-derived truth and is displayed
- * verbatim, visually separated from the summary block; the humanized label
- * derives from `action` alone, never by parsing `summary`.
+ * Rendering safety: `summary` embeds tool args that can come from email or
+ * web content. It must only ever render as a React text node — never through
+ * ReactMarkdown/SafeMarkdown or any innerHTML path — and the tool's name is
+ * derived from `action` alone, never by parsing `summary`.
  */
 
 interface ConfirmationPayload {
@@ -32,24 +31,29 @@ function isConfirmationPayload(value: unknown): value is ConfirmationPayload {
     return typeof v.action === 'string' && typeof v.summary === 'string';
 }
 
-/** Generic humanizer — no per-action lookup, so unknown tools stay safe. */
-function humanizeAction(action: string): string {
-    const words = action.replace(/_/g, ' ').trim();
-    return words.length > 0 ? words : 'action';
+/** The step in the UI language ("Writing file"); a tool with no entry reads as its own words. */
+function stepName(action: string, t: Translate): string {
+    const key = `tool.${action}.active`;
+    if (isMessageKey(key)) return t(key as MessageKey);
+    const words = action.replace(/[_-]+/g, ' ').trim();
+    return words ? t('tool.named.active', { what: words }) : t('tool.default.active');
 }
 
 export function ConfirmationCard({ data }: { data: unknown }) {
+    const t = useT();
     const [dismissed, setDismissed] = useState(false);
 
     if (!isConfirmationPayload(data)) {
         return <UnsupportedCard variant="invalid" render="needs_confirmation" data={data} />;
     }
 
+    const step = stepName(data.action, t);
+
     if (dismissed) {
         return (
             <div className="render-confirmation render-confirmation--dismissed">
                 <span className="render-confirmation__dismissed-note">
-                    Confirmation dismissed
+                    {t('confirmCard.dismissed', { step })}
                 </span>
             </div>
         );
@@ -58,23 +62,19 @@ export function ConfirmationCard({ data }: { data: unknown }) {
     return (
         <div className="render-confirmation">
             <div className="render-confirmation__header">
-                <span className="render-confirmation__badge">Approval needed</span>
-                <span className="render-confirmation__label">{humanizeAction(data.action)}</span>
-                <code className="render-confirmation__action">{data.action}</code>
+                <span className="render-confirmation__badge">{t('confirmCard.badge')}</span>
+                <span className="render-confirmation__label">{step}</span>
             </div>
-            {/* Plain text node only — attacker-influenced content. */}
-            <pre className="render-confirmation__summary">{data.summary}</pre>
+            {/* Plain text node only — the summary can carry outside content. */}
+            <pre className="render-confirmation__summary" dir="auto">{data.summary}</pre>
             <div className="render-confirmation__footer">
-                <span className="render-confirmation__note">
-                    Nothing was executed. Follow the assistant&apos;s guidance below to
-                    approve this action.
-                </span>
+                <span className="render-confirmation__note">{t('confirmCard.agentTooOld')}</span>
                 <button
                     type="button"
                     className="render-confirmation__dismiss"
                     onClick={() => setDismissed(true)}
                 >
-                    Dismiss
+                    {t('confirmCard.dismiss')}
                 </button>
             </div>
         </div>

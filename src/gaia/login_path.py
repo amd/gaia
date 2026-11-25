@@ -40,7 +40,8 @@ def _account_login_shell() -> str:
     try:
         import pwd  # pylint: disable=import-outside-toplevel
 
-        shell = pwd.getpwuid(os.getuid()).pw_shell
+        # Windows has no pwd, so the import above already raised there.
+        shell = pwd.getpwuid(os.getuid()).pw_shell  # pylint: disable=no-member
     except (ImportError, KeyError) as exc:
         raise LoginPathError(
             f"no login shell on record for this account: {exc}"

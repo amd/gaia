@@ -7,13 +7,13 @@ Gaia Talk SDK - Unified voice and text chat integration
 """
 
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, AsyncGenerator, Callable, Dict, Optional
 
 from gaia.audio.audio_client import AudioClient
 from gaia.chat.sdk import AgentConfig, AgentSDK
-from gaia.llm.lemonade_client import DEFAULT_MODEL_NAME
+from gaia.llm.lemonade_client import resolve_local_chat_model
 from gaia.llm.providers.claude import DEFAULT_CLAUDE_MODEL
 from gaia.logger import get_logger
 
@@ -39,7 +39,8 @@ class TalkConfig:
     mode: TalkMode = TalkMode.VOICE_AND_TEXT
 
     # Chat settings (from AgentConfig)
-    model: str = DEFAULT_MODEL_NAME
+    # The PC's default from setup: a small PC never downloads Gemma.
+    model: str = field(default_factory=resolve_local_chat_model)
     max_tokens: int = 512
     system_prompt: Optional[str] = None
     max_history_length: int = 4  # Number of conversation pairs to keep

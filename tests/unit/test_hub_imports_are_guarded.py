@@ -68,7 +68,7 @@ def test_hub_package_imports_in_unit_tests_are_guarded():
 
 
 def test_the_guard_catches_an_unguarded_import():
-    assert _imported_hub_packages(
-        "def t():\n    from gaia_agent.server import x\n"
-    ) == {"gaia_agent"}
-    assert _imported_hub_packages("from . import gaia_agent\n") == set()
+    assert _imported_hub_packages("def t():\n    from gaiapy.server import x\n") == {
+        "gaiapy"
+    }
+    assert _imported_hub_packages("from . import gaiapy\n") == set()

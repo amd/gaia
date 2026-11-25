@@ -12,7 +12,9 @@ export function ReadAloudButton({ messageId, content }: { messageId: string; con
     const status = useReadAloudStore((s) => (s.messageId === messageId ? s.status : null));
     const read = useReadAloudStore((s) => s.read);
     const stop = useReadAloudStore((s) => s.stop);
+    const unavailable = useReadAloudStore((s) => s.settings?.available === false);
 
+    if (unavailable) return null;
     const label = active ? t('readAloud.stop') : t('readAloud.read');
     return (
         <button

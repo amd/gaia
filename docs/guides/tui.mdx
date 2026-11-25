@@ -44,7 +44,7 @@ gaia-cli
 
 <Warning>
   This binary boots straight into the flagship, and it does not install, uninstall,
-  search, or vote on agents — that stays the Python CLI's job (`gaia hub install email` for the email agent).
+  search, or vote on agents — that stays the Python CLI's job (`gaia init` installs the flagship).
   An earlier version of the TUI opened on an agent browser that did all of that,
   with the flagship listed as "Coming Soon." That screen, and the `list` / `install` /
   `uninstall` / `hub` subcommands that drove it, are gone for good.
@@ -58,8 +58,10 @@ gaia-cli
 
 Every release publishes a native installer per platform at
 [amd-gaia.ai](https://amd-gaia.ai/#install) (the page picks your platform). Each puts
-two binaries on disk and on your PATH — `gaia-cli` (this app) and `gaia-agent` (the flagship agent
-it runs) — so there is nothing to unzip and nothing to `chmod`.
+`gaia-cli` (this app) and `gaia-agent` (the Python GAIA agent) on disk and on your PATH,
+so there is nothing to unzip and nothing to `chmod`. On Windows x64, Linux x64 and Apple
+silicon it also puts `gaiacpp` there, the native GAIA agent, which the terminal runs once
+you choose it. See [Which agent program answers](#which-agent-program-answers).
 
 | Platform | File | How to install | Installs to |
 | --- | --- | --- | --- |
@@ -69,7 +71,7 @@ it runs) — so there is nothing to unzip and nothing to `chmod`.
 | Linux x64 (Debian/Ubuntu) | `gaia_<version>_amd64.deb` | `sudo dpkg -i gaia_<version>_amd64.deb` | `/usr/bin` |
 | Linux x64 (Fedora/RHEL) | `gaia-<version>.x86_64.rpm` | `sudo dnf install ./gaia-<version>.x86_64.rpm` | `/usr/bin` |
 
-On macOS and Linux the package carries only those two binaries. The first time you
+On macOS and Linux the package carries only those binaries. The first time you
 open GAIA, setup installs the rest of GAIA (its Python part, the `gaia` command) into
 `~/.gaia`. That takes about two minutes and needs internet. The one-line installer
 (`curl -fsSL https://amd-gaia.ai/install.sh | sh`) installs it up front instead.
@@ -124,7 +126,7 @@ A macOS `.pkg` ships no uninstaller — that is the platform convention, not an
 omission — so remove the files and then forget the receipt:
 
 ```bash
-sudo rm -f /usr/local/bin/gaia-cli /usr/local/bin/gaia-agent
+sudo rm -f /usr/local/bin/gaia-cli /usr/local/bin/gaia-agent /usr/local/bin/gaiacpp
 sudo rm -rf /usr/local/share/doc/gaia-cli
 sudo pkgutil --forget ai.amd.gaia.terminal-hub
 sudo pkgutil --forget ai.amd.gaia.terminal-hub.docs
@@ -564,12 +566,26 @@ GAIA │ agent gaia v0.2.0 │ Gemma-4-E4B-it-GGUF
 Welcome to GAIA
 Connected to: agent gaia v0.2.0 (GAIA core 0.25.0)
 
-Type a message and press Enter to start chatting.
-Type /help for available commands.
+Try one: Tab to select, Enter to run
+  1  Today's tech news in brief
+  2  Research a topic, with sources
+  3  What fills up this folder
+  4  Book recommendations
+
+Ask a question, or type /help for what else this can do.
 ────────────────────────────────────────────────────────────────────────────────
 ┃ Ask anything... (Enter to send, Ctrl+C to quit)
   ● agent gaia v0.2.0 connected                                     Ctrl+C quit
 ```
+
+The first screen suggests up to four things to try, one per skill the agent
+has that works without further setup (no file, link or connected account needed
+first). With an empty composer, press Tab to select a suggestion, then Enter
+to send it. Tab cycles through the list; Esc or typing returns to the composer.
+Digits are always text. On a local model the list moves into the line that says
+the model is ready and remains selectable until your first message. The list
+comes from the skills the agent reports when it starts, built-in ones included,
+so it costs no model call.
 
 The `agent <id>` segment is always the stable id, lowercased — the same string
 `--agent <id>` takes, so you can read it straight off the header and pass it back.
@@ -582,8 +598,9 @@ chip next to it.
 
 The model chip names the chat model from the moment the chat opens, local
 included: the one the startup check loaded, until the agent reports the model it
-actually runs. The model you last picked is restored on the next launch; if it
-can't be, the chat says so in one line and opens the provider picker. See
+actually runs. The model you last picked is restored on the next launch, and the
+status bar says `restoring <model>…` until it is; if it can't be, the chat says
+so in one line and opens the provider picker. See
 [Your model is remembered](/guides/ai-providers#your-model-is-remembered).
 
 Once setup has installed the flagship as a hub package, the TUI reaches it through
@@ -609,25 +626,59 @@ names the update command.
 | `Ctrl+V` | Paste — text, or a clipboard **image** (a screenshot), which is saved to a temp file and its path inserted |
 | `Ctrl+Y` | Copy the whole answer |
 | `Ctrl+B` | Copy the last code block in the answer |
-| `Ctrl+F` | Open the newest generated image or audio file. Available only for the verified image/audio cards shown by the TUI |
-| `Ctrl+G` | Reveal the newest generated image or audio file in its folder. Like `Ctrl+F`, this is unavailable over SSH; use the displayed path on the remote machine instead |
-| `Ctrl+O` | Show every step in full — the agent's narration, wrapped commands, timings — or fold it back to one row per step |
+| `Ctrl+O` | Show every step in full — each call's command or code, its timing, its full outcome, the turn's metrics — or fold it back to one bullet per step |
+| `Ctrl+F` | Open the newest file a turn created: a document (spreadsheets, documents, decks, PDFs, text, images) or a generated image or audio file. Unavailable over SSH; use the displayed path on the remote machine instead |
+| `Ctrl+G` | Reveal the newest generated image or audio file in its folder. Like `Ctrl+F`, this is unavailable over SSH |
 
 ### Reading a turn
 
-While the agent works, and afterwards, each thing it did is one short row, with
-the answer set apart below:
+Each thing the agent does is one bullet that says what it did, in plain words.
+The command or code behind it is one dim line underneath at most, and `Ctrl+O`
+shows all of it. One line at the bottom says what is happening right now, how
+long the turn has taken, and moves while it works:
 
 ```
-  ▪ Reading file: toybox/dates.py
-    └ 3 symbols
-  ▪ Editing file: toybox/dates.py x2 · approved
-  ▪ Running command: python -m pytest -q tests/
-    └ exit 0 · 2 lines
+  ● I'll read each contract first, then build the register.
+  ● Read 4 files · 17s
+    └ msa_acme.docx, nda_beta.docx, sow_gamma.docx, … 1 more
+  ● Extract clause terms into a table · 4.0s
+    └ Run a 6-line Python script
+    └ error: KeyError: 'Term'
 
-  Fixed and verified — all 4 tests pass.
+  ⣟ Install the spreadsheet library… (2m 4s)
 ```
 
+When it finishes, the files it made are listed under the answer, with a look
+inside each one, and one line sums the turn up:
+
+```
+  Eight contracts reviewed. Three carry uncapped liability; …
+
+  Created
+    contract_review.xlsx  18 KB · 3 sheets: Register (9 rows), Clauses (65 rows), Summary
+    summary.md            1 KB · 212 words
+  ✓ Read 4 files · ran 1 Python script · 43s · ↓ 9.8k tokens
+```
+
+- **What a bullet says** comes from, best first: a description the model wrote
+  with the call, the goal the agent announced before it, then a summary built
+  from the call itself (`Run a 42-line Python script that reads 3 spreadsheets`,
+  `Search the web for 'FDIC Q2 2026'`). Placeholder text such as a plan's
+  "Following the plan to …" headline is never shown.
+- **The dot** is green when a step is done, grey while it is in progress, and red
+  only for a failure that ended the work. The words say the same thing, so
+  nothing depends on colour.
+- **A failed step** keeps its reason under it, remedy included. While the turn
+  is still running it reads `error` and stays calm, since the agent may fix it
+  and try again. Once a later run of the same file or the same command
+  succeeds, it is one calm line that reads `error, retried`. The same command
+  means every command in a `&&`, `||` or `;` chain, in the same folder, with the
+  same arguments; added switches like `--user` and the right side of a pipe
+  don't count. A step with no file or command to match, such as a web fetch or
+  a query, is never marked retried. A failure nothing recovered turns red and
+  reads `✗ failed` when the turn ends.
+- **Writes and edits** show a compact diff: line numbers, `+` and `-`, the code
+  in colour, cut with `… N more lines`.
 - **Paths** are shown relative to the folder you started GAIA in, or under `~`;
   a path that is still long keeps its end. The agent works in that folder too:
   a file you name without a full path, such as `note.txt` or `src/app.py`, is
@@ -639,23 +690,36 @@ the answer set apart below:
   lets GAIA use that file for the rest of the chat. Started from your home
   folder or a drive root, that is everything under it, so start GAIA in the
   folder you are working in.
-- **A failed step** keeps its reason under it, remedy included — that row is
-  where a failure lives, not a separate error. While the turn is still running
-  it reads `error` in amber, since the agent may fix it and try again. Once a
-  later run of the same file or the same command succeeds, it reads
-  `error, retried` and keeps its one-line error. The same command means every
-  command in a `&&`, `||` or `;` chain, in the same folder, with the same
-  arguments; added switches like `--user` and the right side of a pipe don't
-  count. A step with no file or command
-  to match, such as a web fetch or a query, is never marked retried. A failure
-  nothing recovered turns red and reads `failed` when the turn ends.
-- **A confirmation** asks once, in the prompt pinned above the composer. The step
-  it gated then records your answer in a word: `approved`, `denied`, or `always
-  allowed '<scope>'`.
-- **The agent's narration** ("Let me check the tests first") is folded away.
-  `Ctrl+O` shows it, along with each step's full command and timing. A stage or a
-  narration line the agent repeats word for word — a plan's "Following the plan
-  to …" headline before every step — is shown once, until it changes.
+- **A confirmation** asks once, in the prompt pinned above the composer. A plain
+  yes adds nothing to the step; `denied`, a timeout, or an "always" grant stays
+  on it.
+- **Work handed to helpers** is one step. When the agent splits a job into
+  several read-only tasks, the status line counts them off as they end:
+  `Handing 4 tasks to helpers · 2 of 4 done`, then `, 1 failed` once one has.
+  When they are all back, the line under the step says how it went:
+  `3 of 4 helpers finished, 1 failed.` That line is amber when some helpers
+  failed or stopped short but others answered, and the step reads `failed` in
+  red only when none did. `Ctrl+O` lists each helper under it — `✓` finished,
+  `~` stopped short, `✗` failed — with its task and the first line of what it
+  found, or why it stopped.
+- **A long turn** folds its middle once it has more than eight steps:
+  `… 23 more actions · Ctrl+O to expand`.
+- **Where the turn ran** is the quiet line under the summary of any turn that
+  used tools: `ran on this PC`, or the cloud provider's name when the model runs
+  remotely, then what went online — `read 3 pages from nps.gov and 1 more site
+  · 1 document`. An answer that used no tools gets nothing added.
+- **Sources** lists the web pages and documents an answer drew on, each a link
+  your terminal can open. If every web search and page fetch failed, a `[!]`
+  line says the answer could not get live data, so it is not mistaken for a
+  sourced one.
+- **A plan** the agent makes shows as a checklist right above the running step:
+  `✓` done, `▸` running, `○` still to do, with `Plan · 1 of 3 done` on top. It
+  updates in place as the agent moves through it, and a new plan replaces the
+  old one rather than adding a second list. A long plan keeps the running step
+  in view and folds the rest into `… N more`.
+- **Each file in the Created list is a link.** In a terminal that supports them
+  (Windows Terminal, iTerm2, WezTerm, kitty), clicking one opens the file.
+  `Ctrl+F` opens the newest one from the keyboard.
 
 ### Saying something while the agent is still working
 
@@ -704,37 +768,71 @@ mouse at all with `Ctrl+Y`, `/copy` or `/copy all`. The status bar shows the
 | Command | What it does |
 |---|---|
 | `/help` | Show the shortcut overlay (scrolls with `↑`/`↓`/`PgUp`/`PgDn` if it doesn't fit) |
-| `/clear` | Clear the conversation |
+| `/clear` | Clear the conversation, and forget every "always" you answered in it |
 | `/setup` | Re-run first-time setup for the flagship agent: choose the models, download them, then test them |
 | `/models` | The models on this PC: tick one to download it, untick to stop using it, `x` removes one (it asks first), `c` picks the chat model, `a` applies. Downloads keep going when you close it, and the status line shows `downloading 38%` |
 | `/gpu` | Give the GPU more memory so bigger models fit. Offered only on a PC with an integrated GPU |
 | `/memory` | See what the agent has stored about you — read-only, `Esc` to dismiss |
 | `/model` | Switch the flagship agent's live model. Bare `/model` lists what you can switch to |
-| `/skills` | List installed skills. `/skills add <link>` shows what a GitHub repo, skills.sh page or `.zip` holds and what each skill may do, with a security warning; `/skills add <link> confirm` adds that version (a `confirm` with no preview previews first) (`--allow-code` to include skills that ship scripts) |
+| `/skills` | List installed skills. `/skills add <link>` shows what a GitHub repo, skills.sh page or `.zip` holds and what each skill may do, with a security warning; `/skills add <link> confirm` adds that version (a `confirm` with no preview previews first) (`--allow-code` to include skills that ship scripts). In the default session, where the agent runs behind GAIA's background service, `/skills` lists the skills the chat can run and cannot add one yet: add it in the Agent UI under Settings › Skills, then type `/skills` again to see it |
+| `/research <topic>` | Research a topic: GAIA searches the web, reads the sources and writes a report that cites each page it read. `/research-report <topic>` does the same. Bare `/research` switches research mode on, so every message is researched until you type `/research` again or `/clear` (a `/<skill>` command for an installed skill still runs that skill); the header shows `research` while it is on. A message you type while GAIA is still answering steers that answer and is not researched on its own. See [Deep research](/guides/gaia#deep-research) |
 | `/provider` | Choose where chat runs — Local, Fireworks AI, or the AMD LLM Gateway — and set its key. Under Local, **Ctrl+A** adds a model from a Hugging Face link. With [Local only](/reference/cli#local-only) on, connecting a cloud provider is refused. See [AI providers](/guides/ai-providers) |
 | `/gateway` | Connect the AMD LLM Gateway and pick which of its models GAIA uses. See [LLM gateway](/guides/llm-gateway) |
 | `/slack` | Connect this agent to Slack, or show the connection's status. See [Slack](/guides/slack) |
 | `/automations` | List the reminders, summaries, alerts and triggers GAIA runs on its own, numbered. `/automations pause 2`, `resume 2` or `remove 2` changes one; a name works too. See [Automations](/guides/automations) |
-| `/connectors` | List your connected apps (Gmail, Slack, GitHub…). Also a clickable entry in the status bar. See [Connectors](/connectors) |
+| `/connectors` | List your connected apps (Gmail, Slack, GitHub…). A connector with several accounts lists each one, marking the default and any whose sign-in expired. Also a clickable entry in the status bar. See [Connectors](/connectors) |
 | `/connectors personalize <id>` | Optional: let GAIA read a connected app's recent activity, save what it learns to memory, and suggest automations. Told only to read; creates no schedules. GAIA keeps access to the app afterwards |
-| `/connectors revoke <id>` | Turn off GAIA's access to a tool-server connector (Slack, Notion…), such as the access Personalize leaves on |
+| `/connectors revoke <id>` | Turn off GAIA's access to a tool-server connector (Slack, Notion…), such as the access Personalize leaves on. Google and Microsoft access comes with signing in, so use `/connectors remove` for those |
+| `/connectors remove <id> [address]` | Sign a Google or Microsoft account out of GAIA. With several accounts connected, name the one to remove, or GAIA lists them |
+| `/connectors add <id>` | Sign another Google or Microsoft account in beside the ones already connected. Your browser opens the provider's account picker; GAIA waits up to 15 minutes |
+| `/connectors reconnect <id> <address>` | Sign an account in again after its sign-in expired. `/connectors` marks expired accounts |
+| `/connectors default <id> <address>` | Choose the account GAIA uses when you don't name one |
 | `/full-access` | Explain full access; `/full-access confirm` then turns it on for this session (off by default) |
 | `/full-access off` | Turn full access off for this session |
 | `/full-access always` | Keep it on for every future session (writes `full_access` to `~/.gaia/config.json`) |
 | `/full-access never` | Stop it coming back on future launches |
-| `/read-aloud` | Read the last reply aloud through Lemonade's voice model, played by the PC's own player. Run it again, or `/read-aloud stop`, to stop. Works while the agent is still answering |
-| `/voice` | Show the read-aloud voice, speed and auto-read, and list the voices (American or British English, female or male). `/voice bm_george` picks one, `/voice speed 125` sets the speed in percent (50–200), `/voice auto on` reads each finished reply. Saved to `~/.gaia/config.json`, shared with the [Agent UI](/guides/agent-ui/chat#read-aloud) |
+| `/image` | Show the model, size and steps GAIA creates images with, and the image models this Lemonade has, each with its sizes. `/image model Z-Image-Turbo`, `/image size 1280x720` (or `auto`) and `/image steps 12` (or `auto`) change them; saved to `~/.gaia/config.json`, shared with the [Agent UI](/guides/agent-ui#settings). A created image prints as a link; `/image open` opens the latest in the PC's image viewer. Flagship only |
+| `/read-aloud` | Read the last reply aloud through Lemonade's voice model, played by the PC's own player. Run it again, or `/read-aloud stop`, to stop. Works while the agent is still answering. To turn a whole document into an MP3, type its path and ask ([Dictate a Document](/guides/dictation)); the audio card appears here and `Ctrl+F` plays it. Not offered on macOS yet: it says why instead of reading |
+| `/voice` | Show the read-aloud voice, speed and auto-read, and list the voices (American or British English, female or male). `/voice bm_george` picks one, `/voice speed 125` sets the speed in percent (50–200), `/voice auto on` reads each finished reply (refused on macOS, where read aloud isn't offered yet). Saved to `~/.gaia/config.json`, shared with the [Agent UI](/guides/agent-ui/chat#read-aloud) |
 | `/cost` | What this session has spent — time, steps, tool calls, tokens, dollars |
+| `/context` | How full the model's context is, split into instructions, tool definitions, conversation, files and pages, and other tool calls and results |
 | `/cost help` | Where the rates come from, and how to set your own |
 | `/copy` | Pick any message with `↑` / `↓` and copy it with `Enter` (`Esc` cancels) |
 | `/copy all` | Copy the whole conversation as markdown |
+| `/agent` | Show the two programs that can answer as GAIA and which one is running. `/agent gaiapy` or `/agent gaiacpp` saves that choice and switches to it, offering to download `gaiacpp` (Beta) first when it isn't on this PC — see [Which agent program answers](#which-agent-program-answers) |
 | `/agents` | List agents installed on this machine and switch to one, without quitting |
 | `/update` | Check for a newer GAIA. `/update now` installs the newest, `/update v0.25.0` installs and pins that exact one, `/update back` returns to the version before the last update, `/update auto on` installs new releases when you quit (off by default), `/update rc on` offers release candidates too. See [Updating GAIA](/guides/install#updating-gaia) |
 | `/sessions` | Reopen a past session — see [Reopening a session](#reopening-a-session) |
 | `/sessions all` | The same list with eval and scheduled runs included |
+| `/<skill-name>` | Run an installed skill on the rest of the line, as in Claude Code: `/pdf turn notes.md into a report`. The palette lists your skills after the commands above. See [Skills](/guides/gaia#skills) |
+
+### How full the context is
+
+Local models see a limited window, so the status bar shows how full it is after
+each answer: `ctx 41%`. The figure counts what the model sees before older turns
+leave its view, so 100% is the point where they start to drop. Past 80% it reads
+`ctx 86% nearly full` and stays visible ahead of the scroll hints; on a narrow
+terminal it is the first thing to give way. `/context` prints the breakdown.
+The meter needs an agent the TUI launches itself, such as the flagship; an agent
+reached through the daemon doesn't report it to the TUI yet, so there the meter
+stays hidden.
+
+Once the history is three quarters of the way there, one line under the answer
+says which turns the next messages will push out of the model's view, oldest
+first. It is said again only when that list grows:
+
+```
+  [!] Context is nearly full: the next messages push the oldest 2 turns, from "Review the 8
+  contracts in ./contracts and build…" out of the model's view. It stays saved, and GAIA can
+  recall it if you ask.
+```
+
+Nothing is summarised or compacted. Turns that leave the view stay in the
+session's saved history, and GAIA's memory and document search are how it finds
+them again.
 
 Commands the current agent can't run drop out of `/help` and the `/` palette on
-their own — `/model`, `/skills`, `/setup`, `/models`, `/gpu` and `/provider` are flagship-only (`/gpu` only on an integrated-GPU PC), and `/memory`
+their own — `/model`, `/skills`, `/research`, `/setup`, `/models`, `/gpu`, `/provider` and `/agent` are flagship-only (`/gpu` only on an integrated-GPU PC), and `/memory`
 needs a peer new enough to serve it (see the [memory guide](/guides/memory#terminal-ui-memory)).
 `/agents` is always available.
 
@@ -757,6 +855,13 @@ open `/help` first:
          │  ▸ /model   Switch the model this session runs on (gaia …  │
          ╰────────────────────────────────────────────────────────────╯
 ```
+
+Installed skills follow the commands, one `/<skill-name>` row each; when the list is
+taller than the window it scrolls to keep the selection in view. Picking a skill row
+runs it with no request, and the agent asks what it needs; to give the request up
+front, type the name, a space, then the request. The rows are the skills the agent
+itself reports, built-in ones included, on a local or a cloud model alike; `/skills`
+reads the list again.
 
 Keep typing to narrow the list (`/mo` above narrows to `/model`), `↑`/`↓` to move the
 selection, `Enter` to run it, `Esc` to close the palette without touching the composer
@@ -805,8 +910,10 @@ saying what it can do.
 A command GAIA doesn't run unasked — `python script.py`, `git commit`, `npm test`
 with no skill loaded for it — gets this prompt rather than an error. `a` covers
 that one command family (`git commit`, `python (any script)`) for the session and
-nothing wider. If you deny it, the agent is told not to get the same result
-another way, and stops to explain.
+nothing wider, until `/clear` starts the conversation over or `/sessions`
+reopens another one. If you deny it, the agent is told that this one command is off:
+it must not run it through another tool or script, and it carries on with the
+rest of the task by other means and says what it could not do.
 
 A command GAIA's own checks don't cover — `git push`, `git fetch`, Python passed
 with `-c`, a PowerShell command it can't read, a line with `$(…)`, a path outside
@@ -833,15 +940,23 @@ don't cover that also deletes or discards work (`git push --force`, `git reset
 --hard`, `git clean`, `rm` outside the project), a granted CLI's actions that
 end someone else's work (`gh issue close`, `gh pr merge`), and folders no
 approval can open (credential folders, the system temp folder, a whole drive or
-your home folder), and reading credential files (`.env`, private keys, `.npmrc`) even
-under full access. The agent
-says what it would have run, so you can run it yourself.
+your home folder), and reading credential files (`.env`, private keys, `.npmrc`).
+The agent says what it would have run, so you can run it yourself. Under full
+access none of these is refused: the shell runs any command.
 
 | Key | What it does |
 |---|---|
 | `y` | Run it this once |
-| `a` | Run it, and stop asking about that kind of command for the rest of the session. The prompt names exactly what `a` covers: `pytest (runs the test code it finds)` covers every spelling of a test run (`python -m pytest`, `cd proj && pytest 2>&1 \| tail`), never a different program. A command that runs code it does not show says so — `make (runs the Makefile's commands)`, `pip install (runs the package's setup code)`, `python -m explore (runs that Python module)` — and `python (any script)` and `Python snippets (run_python)` cover any Python code. Anything that runs code from the agent's own scratch folder never offers `a`: a script there, a shell command run there or naming a path there, or a script handed one. Writing there never asks, so each run is answered on its own. Deletes never offer `a` |
+| `a`, then `Enter` | Run it, and stop asking about that kind of command for the rest of the session. `a` highlights the choice and `Enter` confirms it; `Backspace` takes the highlight back. The prompt names exactly what `a` covers: `pytest (runs the test code it finds)` covers every spelling of a test run (`python -m pytest`, `cd proj && pytest 2>&1 \| tail`), never a different program. A command that runs code it does not show says so — `make (runs the Makefile's commands)`, `pip install (runs the package's setup code)`, `python -m explore (runs that Python module)` — and `python (any script)` and `Python snippets (run_python)` cover any Python code. Anything that runs code from the agent's own scratch folder never offers `a`: a script there, a shell command run there or naming a path there, or a script handed one. Writing there never asks, so each run is answered on its own. Deletes never offer `a` |
 | `n` / `Esc` | Don't run it. The agent is told you said no |
+| `Tab`, then `Enter` | Move through the choices and confirm the highlighted one, without a letter |
+
+The prompt never reads an answer out of a message you are typing. Anything typed
+while it is up stays in the message box. With text there, `y`, `a` and `n` are
+typed like any other letter, and `Tab` then `Enter` (or `Esc` to deny) answers.
+With the box empty, a `y` or `n` that starts a word is typed too; pressed on its
+own it answers a moment later, or at once with `Enter`. Send the message once
+you have answered.
 
 An email prompt too long for the screen scrolls with `↑`/`↓`/`PgUp`/`PgDn`, and
 `y` only works once its last line has been on screen, because you are approving
@@ -859,7 +974,7 @@ giving up on something you never saw.
 |---|---|
 | `ask` (default) | Every shell command except plain reads inside the allowed folders, every Python run and file write |
 | `accept edits` | Shell commands and Python still ask. File edits inside the folder you started GAIA in run without asking. Hidden files and folders (`.git/`, `.bashrc`, `.github/`), folders on your `PATH`, and a file that would stand in for a real program on Windows (`git.bat`) still ask. Started from your home folder or a drive root, nothing is auto-accepted |
-| `full access` | Nothing — see below |
+| `full access` | Nothing — see below. Deletes run only here: in the other modes they are refused, not asked |
 
 Full access is never switched on by a stray keypress. The first time `Shift+Tab`
 reaches it in a session, GAIA explains what it does and stays in `ask`; type
@@ -871,8 +986,9 @@ on every frame.
 Commands GAIA's checks don't cover — printing a credential (`gh auth token`), a
 `git` option that hides a script — ask once in `ask` and `accept edits`, showing
 the exact line, and no `a` answer covers them. An encoded PowerShell command, or
-one that deletes or discards work on such a line, stays refused. Only full
-access lifts the shell guardrails; see [Full access](/reference/cli#full-access).
+one that deletes or discards work on such a line, stays refused. Full access
+lifts all of this: the shell runs any command, asks nothing and refuses
+nothing. See [Full access](/reference/cli#full-access).
 
 A session launched with `--use-claude` skips first-boot setup entirely and does not
 start the local server — that flag exists to avoid the local backend, so running an
@@ -971,9 +1087,17 @@ outside the chat's folders is headed `ACCESS`. Tools GAIA knows get a plain ques
 this command?`, `Write this file?`, `Install this skill?`); any other tool reads
 `Allow <tool>?`. A `DESTRUCTIVE` prompt adds a warning line under the call.
 
-**y** runs it once, **n** or **esc** denies. Denying is a normal outcome, not an
-error — the agent is told you said no, doesn't try another way to do the same
-thing, and carries on with whatever doesn't need it. When nobody can answer — a
+**y** runs it once, **a** then **Enter** runs it and stops asking about that
+kind of call for the session, **n** or **esc** denies. Typing a message while the
+prompt is up never answers it — see
+[When the agent asks first](#when-the-agent-asks-first). Denying is a normal outcome, not an
+error — the agent is told you said no to that one action, doesn't do the same
+thing through another tool, and carries on with the task by other means. A no
+covers the command on what it named (`pip install pandas`, not every `pip
+install`), and a declined script's own new output files can still be produced
+another way. The exact call you denied isn't asked about again in that chat,
+even one that changes nothing such as `echo`, until you ask for it again or
+`/clear` the conversation. When nobody can answer — a
 scheduled or background run, or a prompt that expires — the command doesn't run.
 A command GAIA's own checks don't cover offers no `a`: it shows the exact line
 and a risk line, and runs once if you say yes (see
@@ -984,7 +1108,8 @@ the part that matters. An "always allow" answer, where offered, is scoped to
 that specific call — approving `gh issue list` once does not hand over your
 shell for the session.
 
-`--full-access` runs every tool without asking, and the TUI shows a
+`--full-access` runs every tool without asking, and the shell and Python
+tools run whatever the agent gives them. The TUI shows a
 persistent warning the whole time it is on. `/full-access off` turns it off
 mid-session.
 
@@ -1004,7 +1129,9 @@ they were active, and where they stand:
 
 Pick one with `Enter` and its conversation is redrawn, the agent restarts on
 that session, and you carry on where you left off — the model remembers what
-was said, not just the screen. `gaia-cli --resume=<id>` reopens one directly; a
+was said, not just the screen. It starts with no "always" answers, neither the
+ones from the chat you left nor any given in that session before.
+`gaia-cli --resume=<id>` reopens one directly; a
 unique prefix of the id is enough. A session that is still open in another
 window can't be reopened until you close it there. If a turn is still running
 when you pick a session, GAIA asks first: `s` stops the turn and switches (the
@@ -1018,26 +1145,130 @@ The list shows chats only; `a` in the list (or `/sessions all`) adds eval and
 scheduled runs. Sessions are kept by the GAIA agent the TUI starts itself,
 under `~/.gaia/tui/history/`. When the agent is an installed binary that runs
 through the background service instead, it doesn't keep them yet: `/sessions`
-and `--resume` say so rather than showing an empty list.
+and `--resume` say so rather than showing an empty list. The native agent, `gaiacpp`, doesn't keep sessions yet either: `--resume` with it stops and names the Python agent to use instead.
 
-## Running another agent
+## Which agent program answers
 
-The flagship is the default, but `gaia-cli` can also drive `email` by id — it keeps
-its own five-row readiness gate:
+GAIA's agent comes as two programs: `gaiacpp`, the native one, and `gaia-agent`,
+the Python one. The terminal installers and the one-line installers put `gaiacpp` next
+to `gaia-cli` on Windows x64, Linux x64 and Apple silicon, alongside `gaia-agent`. The
+terminal UI runs `gaia-agent` until you choose `gaiacpp`, the same default as the Agent UI,
+so `--use-claude` and `--resume` keep working. Once chosen, `gaiacpp` is looked for in `~/.gaia/bin`
+(where GAIA downloads it), next to `gaia-cli`, on your PATH, then in
+`~/.gaia/agents/gaia`. With `GAIA_HOME` set, both `~/.gaia` folders are looked for
+under it instead. The header says which program is answering, and that `gaiacpp`
+is a Beta:
 
-```bash
-gaia-cli run email
-gaia-cli run email --query "triage my inbox"   # one-shot: answer on stdout
-gaia-cli chat --agent email                    # same thing, via `chat`
+```
+ GAIA  │ agent gaia v0.25.4 (gaiacpp · Beta) │ Gemma-4-E4B-it-GGUF
 ```
 
-Installing or removing it is the Python CLI's job:
+Without `(gaiacpp · Beta)` the Python agent is answering, as it does on an Intel Mac,
+Windows on Arm or Linux on Arm, where no `gaiacpp` is built.
+
+### Choosing one
+
+Type `/agent` in the chat to see both programs, which one is running, and
+which one you saved:
+
+| Choice | Good at | Trade-off |
+|---|---|---|
+| `gaiapy` — the Python agent, `gaia-agent` | Mature and well tested, with every tool and feature | Heavier: slower to start and uses more memory |
+| `gaiacpp` — the native C++ agent (**Beta**) | Fast and light: starts quickly and uses little memory | Fewer tools and features so far, and less tested |
+
+`/agent gaiapy` and `/agent gaiacpp` switch. The agent restarts on the other
+program right away: the readiness check runs for it, the transcript stays on
+screen under a line naming the program that now answers, and that program does
+not see the conversation above the line. Once it is running, the choice is
+saved as `flagship_agent` in `~/.gaia/config.json`, which the
+[Agent UI](/guides/agent-ui/settings) reads too. If you back out of the
+readiness check, or the program does not start, the session stays where it was
+and the saved choice is not changed. Typing `/agent` and a space turns the `/`
+palette into the same two-way picker.
+
+### Getting gaiacpp
+
+If `gaiacpp` is not on this PC, `/agent gaiacpp` offers to download it. GAIA
+checks whether this release has one for your PC and says how large it is; press
+Enter to download it or Esc to leave things as they are. Typing something else
+does not answer the offer. The download shows its progress on one line (Esc
+cancels it), is checked against the release's checksums, and is installed in
+`~/.gaia/bin` only if it passes. Then the switch carries on as above. It is the
+same download the [Agent UI](/guides/agent-ui/settings) does in Settings ›
+Agent & model.
+
+When this GAIA release has no `gaiacpp` for your PC, or the release can't be
+reached, `/agent gaiacpp` says which and changes nothing. A `gaiacpp` that fails
+its checksum check is offered as a fresh download the same way.
+
+`/agent gaiacpp` is refused in a session started with `--use-claude` and in one
+reopened with `--resume` or `/sessions`, since `gaiacpp` has no Claude provider
+and keeps no sessions yet.
+
+### When the saved gaiacpp can't start
+
+If `gaiacpp` is your saved choice and it is missing or fails its check, GAIA
+opens on a short screen instead of stopping with an error. It says why and
+waits for you to pick:
+
+- **Download gaiacpp again**, with a progress bar, then GAIA starts on it
+- **Use the Python agent**, which saves `gaiapy` as your choice (`/agent gaiacpp` switches back)
+- **Quit**
+
+GAIA never moves you to the Python agent by itself. `?` shows the full error,
+including where it looked. When the release has no `gaiacpp` to download, the
+first row says so and can't be picked.
+
+For one launch, set `GAIA_TUI_AGENT` to `gaiacpp`, `gaiapy` (or the program's
+own name, `gaia-agent`), or the path of either, or pass the same value to
+`--agent-program`:
 
 ```bash
-gaia hub list
-gaia hub install email
-gaia hub uninstall email
+GAIA_TUI_AGENT=gaia-agent gaia-cli
 ```
+
+That session is then pinned: `/agent gaiacpp` in it saves the choice for later
+launches and says the session keeps running what the flag or variable named.
+
+Which program a launch runs is decided in this order:
+
+1. `--agent-program`
+2. `GAIA_TUI_AGENT`
+3. The saved choice, `flagship_agent` (`gaiapy` or `gaiacpp`)
+4. With none of those, `gaia-agent`, even when `gaiacpp` is installed
+
+If the one named by `--agent-program` or `GAIA_TUI_AGENT` is not installed,
+`gaia-cli` stops and lists where it looked; it does not start the other one. A
+saved `gaiacpp` that is not installed opens the screen described in
+[When the saved gaiacpp can't start](#when-the-saved-gaiacpp-cant-start).
+
+A `gaiacpp` the Agent UI downloaded has a record of its checksum next to it
+(`gaiacpp.install.json`), and the terminal UI checks the file against it before
+every run. If the file no longer matches, or the record is damaged, GAIA does
+not run it: a saved choice opens the same screen, offering the download again or
+the Python agent, and a flag or variable stops the launch and names the file. It
+does not run another copy or the other program instead. A `flagship_agent`
+value other than `gaiapy` or `gaiacpp` also stops the launch, naming the file
+and the key.
+
+The native agent has no Claude provider. `--use-claude` is refused at launch
+with it, and `/model` with a Claude model is refused in the chat, leaving the
+session on its current model. Use `/provider` to pick a model on this PC or a
+cloud provider that Lemonade offers, or run the Python agent for Claude. The
+developer manual has the [full comparison](/reference/tui-dev#which-agent-program-runs).
+
+## Running an agent by id
+
+The flagship is the default, and `gaia-cli` can also drive an agent by its id:
+
+```bash
+gaia-cli run gaia
+gaia-cli run gaia --query "summarize my inbox"  # one-shot: answer on stdout
+gaia-cli chat --agent gaia                     # same thing, via `chat`
+```
+
+Installing or removing an agent is the Python CLI's job (`gaia init` for the
+flagship, `gaia hub` for scripted installs).
 
 ## Colours (light vs dark terminals)
 
@@ -1047,6 +1278,20 @@ query (SSH, tmux, a CI log) — if the screen comes out hard to read, force a mo
 ```bash
 GAIA_TUI_THEME=light gaia-cli    # or dark; unset or "auto" = detect
 ```
+
+### Motion
+
+Only what is happening right now moves: the spinner and a soft highlight
+sweeping across the status line, a gentle pulse on a prompt that is waiting for
+you, and one sweep across the summary line when a turn finishes. To turn all of
+it off:
+
+```bash
+gaia config set reduced_motion true     # every launch
+GAIA_TUI_REDUCED_MOTION=1 gaia-tui      # this launch
+```
+
+Motion is also off when `NO_COLOR` is set or the output is not a terminal.
 
 ## Troubleshooting
 

@@ -26,7 +26,13 @@ from starlette.requests import ClientDisconnect
 
 from gaia.audio.media import MEDIA_EXTENSIONS, prune_older_than
 from gaia.env import child_env
-from gaia.upload_names import place_copy, reserve_copy_path, upload_copy_stem
+from gaia.security import read_block
+from gaia.upload_names import (
+    place_copy,
+    reserve_copy_path,
+    upload_copy_stem,
+    upload_url_name,
+)
 from gaia.utils.text_decoding import file_encoding
 from gaia.utils.user_folders import documents_dir
 
@@ -98,6 +104,16 @@ SEARCH_SETUP_ALLOWANCE_SEC = 1.0
 router = APIRouter(tags=["files"])
 
 
+def _refuse_secret(resolved: Path) -> None:
+    """403 when *resolved* holds credentials or keys, before it is opened."""
+    blocked, _ = read_block(str(resolved))
+    if blocked:
+        raise HTTPException(
+            status_code=403,
+            detail="This file holds credentials, so GAIA won't preview it.",
+        )
+
+
 # ── Upload ───────────────────────────────────────────────────────────────────
 
 
@@ -137,7 +153,7 @@ async def upload_media(request: Request, name: str = Query(..., min_length=1)):
             f"{upload_root} for this recording.",
         )
 
-    stem = upload_copy_stem(name)[:_MEDIA_NAME_CHARS].rstrip("._-")
+    stem = upload_copy_stem(name)[:_MEDIA_NAME_CHARS].rstrip(" ._-") or "attachment"
     dest_path: Optional[Path] = None
     file_size = 0
     try:
@@ -179,7 +195,7 @@ async def upload_media(request: Request, name: str = Query(..., min_length=1)):
     return FileUploadResponse(
         filename=unique_name,
         original_name=name,
-        url=f"/api/files/uploads/{unique_name}",
+        url=f"/api/files/uploads/{upload_url_name(unique_name)}",
         size=file_size,
         content_type="application/octet-stream",
         is_image=False,
@@ -289,7 +305,7 @@ async def upload_file(file: UploadFile = File(...)):
     return FileUploadResponse(
         filename=unique_name,
         original_name=original_name,
-        url=f"/api/files/uploads/{unique_name}",
+        url=f"/api/files/uploads/{upload_url_name(unique_name)}",
         size=file_size,
         content_type=content_type,
         is_image=is_image,
@@ -462,7 +478,13 @@ async def open_file_or_folder(request: OpenFileRequest):
     raw_path = Path(file_path)
     reveal = request.reveal
 
-    resolved = raw_path.resolve(strict=False)
+    try:
+        resolved = raw_path.resolve(strict=False)
+    except (ValueError, OSError) as e:  # too long for the OS
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid path: {session_environment.path_error_reason(e)}",
+        ) from e
 
     # Security: restrict to user's home directory FIRST, before ANY
     # filesystem operations (is_symlink/exists can throw PermissionError
@@ -482,10 +504,16 @@ async def open_file_or_folder(request: OpenFileRequest):
             raise HTTPException(
                 status_code=400, detail="Symbolic links are not supported"
             )
+        exists = resolved.exists()
     except PermissionError:
         raise HTTPException(status_code=403, detail="Access denied")
+    except OSError as e:  # POSIX resolve() lets a too-long path through
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid path: {session_environment.path_error_reason(e)}",
+        ) from e
 
-    if not resolved.exists():
+    if not exists:
         raise HTTPException(status_code=404, detail="Path not found")
 
     if request.launch:
@@ -851,6 +879,7 @@ async def preview_file(path: str, lines: int = 50):
 
     if not resolved.is_file():
         raise HTTPException(status_code=400, detail="Path is not a file")
+    _refuse_secret(resolved)
 
     lines = min(max(lines, 1), 200)
     stat = resolved.stat()
@@ -954,6 +983,7 @@ async def serve_local_image(path: str):
 
     if not resolved.exists() or not resolved.is_file():
         raise HTTPException(status_code=404, detail="Image file not found")
+    _refuse_secret(resolved)
 
     ext = resolved.suffix.lower()
     if ext not in PREVIEWABLE_IMAGE_EXTENSIONS:
@@ -972,7 +1002,9 @@ async def serve_local_image(path: str):
         ".svg": "image/svg+xml",
     }
     media_type = media_types.get(ext, "application/octet-stream")
-    return FileResponse(path=str(resolved), media_type=media_type)
+    return harden_served_file(
+        FileResponse(path=str(resolved), media_type=media_type), resolved.name
+    )
 
 
 # ── Serve Generated Media ────────────────────────────────────────────────────

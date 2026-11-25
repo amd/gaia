@@ -67,7 +67,7 @@ implementation at all, and the security spine the design rested on — refusing 
 the C++ runtime can't honor — didn't exist in any form.
 
 The work on this branch since then pivoted to **Python**, subclassing the existing
-`ChatAgent` (`hub/agents/gaia/python/gaia_agent/agent.py` → `GaiaAgent`). That
+`ChatAgent` (`hub/agents/gaia/python/gaiapy/agent.py` → `GaiaAgent`). That
 reuses RAG, memory, code-index, and skills wholesale instead of rebuilding them in
 C++ first. I agree with this pivot — the readiness doc's blockers were real and
 would have meant months of prerequisite C++ work before a flagship agent could exist

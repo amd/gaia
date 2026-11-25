@@ -27,7 +27,7 @@ func (n *nullClient) ResetTranscript() { n.resets++ }
 func newTestModel(t *testing.T) (ChatModel, *nullClient) {
 	t.Helper()
 	c := &nullClient{}
-	m := NewChatModel(c, "email", "", false)
+	m := NewChatModel(c, "notes", "")
 	m.width, m.height = 100, 30
 	return m, c
 }
@@ -102,7 +102,7 @@ func TestCanonicalFinalCarriesRealTokenCount(t *testing.T) {
 	m, _ := newTestModel(t)
 	// The token count is a --dev figure; this test is about the plumbing
 	// that carries it, so it asks for the dev breakdown explicitly.
-	m.dev = true
+	m.expandWork = true
 	m.streaming = true
 	m.queryStart = time.Now().Add(-5 * time.Second)
 
@@ -117,7 +117,7 @@ func TestCanonicalFinalCarriesRealTokenCount(t *testing.T) {
 		t.Fatalf("Tokens = %d, want 42", last.Tokens)
 	}
 
-	rendered := m.renderMessage(&last, nil)
+	rendered := m.renderMessage(&last)
 	if !strings.Contains(rendered, "42 tokens") {
 		t.Errorf("rendered stats line missing \"42 tokens\":\n%s", rendered)
 	}
@@ -131,7 +131,7 @@ func TestCanonicalFinalCarriesRealTokenCount(t *testing.T) {
 // this is a fix, not a removal, and there is no fallback to the old guess.
 func TestCanonicalRenderOmitsTokensWhenZero(t *testing.T) {
 	m, _ := newTestModel(t)
-	m.dev = true
+	m.expandWork = true
 	msg := &Message{
 		Role:      RoleAssistant,
 		Duration:  3200 * time.Millisecond,
@@ -142,7 +142,7 @@ func TestCanonicalRenderOmitsTokensWhenZero(t *testing.T) {
 		Content:   "a reasonably long answer that would have guessed a nonzero token count under the old code",
 	}
 
-	rendered := m.renderMessage(msg, nil)
+	rendered := m.renderMessage(msg)
 	if strings.Contains(rendered, "tokens") || strings.Contains(rendered, "tok/s") {
 		t.Errorf("expected no tokens/tok-per-sec sub-line when Tokens == 0:\n%s", rendered)
 	}
@@ -194,7 +194,7 @@ func TestLegacyTransportWithNoMeasurementsReportsNone(t *testing.T) {
 // to drop all three, so a subprocess run showed none of them.
 func TestLegacyTransportRendersTheBackendsMeasurements(t *testing.T) {
 	m, _ := newTestModel(t)
-	m.dev = true
+	m.expandWork = true
 	m.streaming = true
 	m.queryStart = time.Now().Add(-37 * time.Second)
 
@@ -204,7 +204,7 @@ func TestLegacyTransportRendersTheBackendsMeasurements(t *testing.T) {
 	})
 
 	last := m.messages[len(m.messages)-1]
-	rendered := m.renderMessage(&last, nil)
+	rendered := m.renderMessage(&last)
 	for _, want := range []string{"ttft 31.7s", "68 tokens", "13.3 tok/s"} {
 		if !strings.Contains(rendered, want) {
 			t.Errorf("stats line missing %q:\n%s", want, rendered)
@@ -217,7 +217,7 @@ func TestLegacyTransportRendersTheBackendsMeasurements(t *testing.T) {
 // the old client-side stamp was most wrong.
 func TestCanonicalServerReportedTTFTReachesTheUser(t *testing.T) {
 	m, _ := newTestModel(t)
-	m.dev = true
+	m.expandWork = true
 	m.streaming = true
 	m.queryStart = time.Now().Add(-82 * time.Second)
 
@@ -235,7 +235,7 @@ func TestCanonicalServerReportedTTFTReachesTheUser(t *testing.T) {
 		t.Fatalf("TTFT = %v, want the backend-reported %v", last.TTFT, wantTTFT)
 	}
 
-	rendered := m.renderMessage(&last, nil)
+	rendered := m.renderMessage(&last)
 	if !strings.Contains(rendered, "ttft 9.4s") {
 		t.Errorf("rendered stats line missing \"ttft 9.4s\" — ttft still never reaches the user:\n%s", rendered)
 	}
@@ -338,7 +338,7 @@ func TestCanonicalToolCallAndResult(t *testing.T) {
 	if card.Render != "table" {
 		t.Errorf("card render = %q, want table", card.Render)
 	}
-	if rendered := m.renderMessage(card, nil); !strings.Contains(rendered, "a@b.c") {
+	if rendered := m.renderMessage(card); !strings.Contains(rendered, "a@b.c") {
 		t.Errorf("table card did not draw its row:\n%s", rendered)
 	}
 }
@@ -348,7 +348,6 @@ func TestCanonicalToolCallAndResult(t *testing.T) {
 func TestCanonicalToolCallWithNoArgumentsShowsAsRunning(t *testing.T) {
 	m, _ := newTestModel(t)
 	m.streaming = true
-	m.dev = true
 
 	parsed := event.ParseCanonicalEvent([]byte(`{"type":"tool_call","tool":"list_skills","args":{},"narration":"Listing your skills"}`))
 	call, ok := parsed.(event.CanonicalToolCallEvent)
@@ -367,8 +366,8 @@ func TestCanonicalToolCallWithNoArgumentsShowsAsRunning(t *testing.T) {
 	if item.Tool != "list_skills" || item.Content != "Listing your skills" {
 		t.Errorf("tool line = %q / %q, want list_skills / its narration", item.Tool, item.Content)
 	}
-	if item.Args != "" {
-		t.Errorf("empty arguments drew a payload in --dev: %q", item.Args)
+	if strings.Contains(item.Call.Derived, "{}") || strings.Contains(item.Content, "{}") {
+		t.Errorf("empty arguments drew a payload: %q / %q", item.Call.Derived, item.Content)
 	}
 }
 
@@ -554,14 +553,14 @@ func TestLegacyEventsStillHandled(t *testing.T) {
 // A one-step, one-tool turn reads "1 step · 1 tool", not "1 steps · 1 tools".
 func TestStatsLineSingularForOne(t *testing.T) {
 	m, _ := newTestModel(t)
-	m.dev = true
+	m.expandWork = true
 	rendered := m.renderMessage(&Message{
 		Role:      RoleAssistant,
 		Duration:  time.Second,
 		Steps:     1,
 		ToolsUsed: 1,
 		Content:   "391",
-	}, nil)
+	})
 	for _, bad := range []string{"1 steps", "1 tools"} {
 		if strings.Contains(rendered, bad) {
 			t.Errorf("stats line says %q:\n%s", bad, rendered)
@@ -569,5 +568,55 @@ func TestStatsLineSingularForOne(t *testing.T) {
 	}
 	if !strings.Contains(rendered, "1 step · 1 tool") {
 		t.Errorf("stats line missing \"1 step · 1 tool\":\n%s", rendered)
+	}
+}
+
+// The agent's skill list fills the "/" palette, and a later list replaces it.
+func TestCanonicalSkillListFillsThePalette(t *testing.T) {
+	m, _ := newTestModel(t)
+	m.streaming = true
+	before := len(m.messages)
+	m = feed(t, m, event.CanonicalStatusEvent{Type: "status", Skills: []event.SkillCommand{
+		{Name: "pdf", Description: "Make PDF files."},
+		{Name: "pptx", Description: "Make slide decks."},
+	}})
+	if len(m.messages) != before {
+		t.Errorf("a skills-only status added %d transcript lines", len(m.messages)-before)
+	}
+	m.input.SetValue("/pp")
+	got := m.paletteFiltered()
+	if len(got) != 1 || got[0].Name != "/pptx" {
+		t.Fatalf("palette for /pp = %+v, want /pptx", got)
+	}
+	m = feed(t, m, event.CanonicalStatusEvent{Type: "status", Skills: []event.SkillCommand{}})
+	if got := m.paletteFiltered(); len(got) != 0 {
+		t.Errorf("a removed skill is still offered: %+v", got)
+	}
+}
+
+func TestCanonicalRetractedAnswerIsNotKeptAsANote(t *testing.T) {
+	m, _ := newTestModel(t)
+	m.streaming = true
+	draft := "The command was declined, so nothing ran."
+	checked := "junk2.txt is still there: the command was declined."
+
+	m = feed(t, m,
+		event.CanonicalTokenEvent{Type: "token", Delta: draft},
+		event.CanonicalStatusEvent{
+			Type: "status", Message: "Checking the answer",
+			Phase: "answer_check", RetractsAnswer: true,
+		},
+		event.CanonicalToolCallEvent{Type: "tool_call", Tool: "read_file", Args: []byte(`{"file_path":"junk2.txt"}`)},
+		event.CanonicalToolResultEvent{Type: "tool_result", Tool: "read_file"},
+		event.CanonicalTokenEvent{Type: "token", Delta: checked},
+	)
+
+	if m.buffer != checked {
+		t.Errorf("streamed answer = %q, want only the checked one", m.buffer)
+	}
+	for _, item := range m.activity {
+		if item.Kind == "note" && strings.Contains(item.Content, "declined, so nothing ran") {
+			t.Errorf("the taken-back draft was kept as a work-log note: %q", item.Content)
+		}
 	}
 }

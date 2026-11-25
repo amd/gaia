@@ -7,6 +7,7 @@
 import { describe, expect, it } from 'vitest';
 import { render } from '@testing-library/react';
 import { MessageBubble, RenderedContent } from '../MessageBubble';
+import { markStrayDirection } from '../CalendarApproval';
 import type { Message } from '../../types';
 
 const ANSWER = [
@@ -57,5 +58,28 @@ describe('text direction in an answer', () => {
         } as Message;
         const { container } = render(<MessageBubble message={message} />);
         expect(container.querySelector('.msg-body p')).toHaveAttribute('dir', 'auto');
+    });
+});
+
+describe('direction characters in what the user typed', () => {
+    const userBubble = (content: string) => render(<MessageBubble message={{
+        id: 1, session_id: 's', role: 'user', content, created_at: '2026-01-01T00:00:00Z',
+    } as Message} />).container.querySelector('.msg-body')!.textContent;
+
+    it('marks an override so the rest of the message is not drawn reversed', () => {
+        expect(userBubble('Open report\u202Etxt.md please')).toBe('Open report[U+202E]txt.md please');
+    });
+
+    it('marks every embedding and override, and isolates left unpaired', () => {
+        expect(markStrayDirection('a\u202Ab\u202Bc\u202Cd\u202De\u202Ef')).toBe('a[U+202A]b[U+202B]c[U+202C]d[U+202D]e[U+202E]f');
+        expect(markStrayDirection('x\u2067y')).toBe('x[U+2067]y');
+        expect(markStrayDirection('x\u2069y')).toBe('x[U+2069]y');
+        expect(markStrayDirection('\u2066a\n\u2069b')).toBe('[U+2066]a\n[U+2069]b');
+    });
+
+    it('keeps Arabic, Hebrew, marks, joiners and paired isolates as written', () => {
+        const kept = 'ما هي النتائج؟ שלום \u200F\u200E \u200D\u200C 👩\u200D💻 \u2067عربي\u2069 \u2066\u2068x\u2069\u2069';
+        expect(markStrayDirection(kept)).toBe(kept);
+        expect(userBubble(kept)).toBe(kept);
     });
 });

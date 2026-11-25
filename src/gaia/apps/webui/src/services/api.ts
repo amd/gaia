@@ -3,11 +3,13 @@
 
 /** API client for GAIA Agent UI backend. */
 
-import type { Session, Message, FeaturedLibrary, LinkAddResult, LinkPreview, Document, SystemStatus, Settings, StreamEvent, TunnelStatus, Schedule, ScheduleResult, ParsedSchedule, BrowseResponse, IndexFolderResponse, MCPServerStatus, AgentInfo, ProvidersResponse, ProviderInfo, ProviderModelsResponse, ActiveModel, ContextChoice, CustomModelReport, CustomModelRemoved, LocalModelStatus, CloudPriceList, SpendingReport, ChatSpending, ConnectProviderBody, SkillInfo, WarmUpStatus, LemonadeTarget, LemonadeFound, LemonadeTargetBody, ResourceUsage } from '../types';
+import type { Session, Message, FeaturedLibrary, LinkAddResult, LinkPreview, Document, SystemStatus, Settings, StreamEvent, TunnelStatus, BrowseResponse, IndexFolderResponse, MCPServerStatus, AgentInfo, ProvidersResponse, ProviderInfo, ProviderModelsResponse, ActiveModel, ContextChoice, CustomModelReport, CustomModelRemoved, LocalModelStatus, CloudPriceList, SpendingReport, ChatSpending, ConnectProviderBody, SkillInfo, WarmUpStatus, LemonadeTarget, LemonadeFound, LemonadeTargetBody, ResourceUsage, AgentPrograms, AgentDownload } from '../types';
 import type { LogReadResponse, LogSourcesResponse, ModelServerInfo, SessionSearchResponse } from '../types/api.gen';
 import type { FileDiff, TurnChanges, UndoResult, UndoSettings } from '../types/changes';
+import type { PageElementWire } from '../../services/browser-pane/contract';
 import { getApiBase } from '../utils/apiBase';
 import { log } from '../utils/logger';
+import { noteBackendAnswer } from '../stores/uiAuthStore';
 import { chatDraftKey, clearSavedDraft } from '../utils/savedDraft';
 
 // -- Helpers -------------------------------------------------------------------
@@ -174,9 +176,11 @@ export async function apiFetch<T>(
     if (!res.ok) {
         const errorText = await res.text().catch(() => '');
         log.api.error(`${method} ${url} - HTTP ${res.status}`, { errorText });
+        noteBackendAnswer(res.status, errorText);
         const detail = parseErrorDetail(errorText);
         throw new ApiError(getFriendlyError(res.status, detail), res.status, detail, parseErrorStatus(errorText), parseErrorFields(errorText), parseErrorBody(errorText));
     }
+    noteBackendAnswer(res.status);
 
     // Some endpoints (DELETE, fire-and-forget POSTs) intentionally return no
     // body, so there is no JSON to parse. A non-JSON response *with* content,
@@ -248,6 +252,20 @@ export async function updateSettings(data: Partial<Settings>): Promise<Settings>
     return apiFetch<Settings>('PUT', '/settings', data);
 }
 
+/** Both agent programs: installed or not, their size, and any running gaiacpp download. */
+export async function getAgentPrograms(): Promise<AgentPrograms> {
+    return apiFetch<AgentPrograms>('GET', '/agent-programs');
+}
+
+/** Start downloading gaiacpp, or join the download already running. */
+export async function startAgentDownload(): Promise<AgentDownload> {
+    return apiFetch<AgentDownload>('POST', '/agent-programs/gaiacpp/download');
+}
+
+export async function getAgentDownload(): Promise<AgentDownload> {
+    return apiFetch<AgentDownload>('GET', '/agent-programs/gaiacpp/download');
+}
+
 export async function loadModel(modelName: string, ctxSize?: number, force = false): Promise<{ status: string; model: string; ctx_size: number }> {
     return apiFetch('POST', '/system/load-model', { model_name: modelName, ctx_size: ctxSize, force });
 }
@@ -283,6 +301,15 @@ export async function downloadModel(
         model_name: modelName,
         force,
         load_after: loadAfter,
+    });
+}
+
+/** Forget a failed download on the server, so it stays dismissed after a reload. */
+export async function dismissDownloadFailure(
+    modelName: string,
+): Promise<{ status: string; model: string }> {
+    return apiFetch('POST', '/system/download-progress/dismiss', {
+        model_name: modelName,
     });
 }
 
@@ -635,13 +662,19 @@ const AGENT_EVENT_TYPES = new Set([
     'status', 'step', 'thinking', 'commentary', 'plan',
     'tool_start', 'tool_end', 'tool_result', 'tool_args', 'tool_confirm', 'skill_use', 'agent_error',
     'permission_request', 'needs_confirmation', 'needs_input', 'policy_alert',
-    'followup_taken', 'followup_returned', 'followup_unavailable', 'context_usage',
+    'followup_taken', 'followup_returned', 'followup_unavailable', 'context_usage', 'draft',
 ]);
+
+/** What a send carries besides its text and callbacks. */
+export interface SendExtras {
+    /** Elements picked in the browser pane, sent as `page_elements`. */
+    pageElements?: PageElementWire[];
+}
 
 export function sendMessageStream(
     sessionId: string,
     message: string,
-    onChunkOrCallbacks: ((event: StreamEvent) => void) | StreamCallbacks,
+    onChunkOrCallbacks: ((event: StreamEvent) => void) | (StreamCallbacks & SendExtras),
     onDone?: (event: StreamEvent) => void,
     onError?: (error: Error) => void,
     agentType?: string,
@@ -673,6 +706,9 @@ export function sendMessageStream(
             session_id: sessionId,
             message,
             stream: true,
+            ...(typeof onChunkOrCallbacks !== 'function' && onChunkOrCallbacks.pageElements
+                ? { page_elements: onChunkOrCallbacks.pageElements }
+                : {}),
             ...(agentType ? { agent_type: agentType } : {}),
             ...(device ? { device } : {}),
         }),
@@ -803,6 +839,7 @@ async function consumeSSEResponse(
     if (!res.ok) {
         const errText = await res.text().catch(() => '');
         log.stream.error(`SSE connection failed: HTTP ${res.status}`, errText);
+        noteBackendAnswer(res.status, errText);
         // The server's own words when it gave any, never a raw JSON body.
         const detail = parseErrorDetail(errText);
         const message = detail && !isBareInternalError(detail) ? detail : getFriendlyError(res.status, detail);
@@ -918,12 +955,12 @@ async function consumeSSEResponse(
         reader.releaseLock();
     }
 
-    // Only signal completion if no explicit done event was received during the stream
-    if (!doneReceived) {
+    // An error event already closed the turn through onError; a done after it would add a second message.
+    if (!doneReceived && !errorReceived) {
         log.stream.timed(`SSE connection closed without done event: ${chunkCount} chunks, ${agentEventCount} agent events`, t);
         // A send that closes having said nothing would otherwise leave the
         // message sitting there with no answer and no error.
-        if (silentCloseIsError && chunkCount === 0 && agentEventCount === 0 && !errorReceived) {
+        if (silentCloseIsError && chunkCount === 0 && agentEventCount === 0) {
             callbacks.onError(new Error(
                 'GAIA closed the connection before any answer arrived. Send the message again; ' +
                 'if it keeps happening, check the GAIA server log.',
@@ -1239,42 +1276,6 @@ export async function getTunnelStatus(): Promise<TunnelStatus> {
 
 export async function getMCPRuntimeStatus(): Promise<{ servers: MCPServerStatus[] }> {
     return apiFetch('GET', '/mcp/status');
-}
-
-// -- Schedules -----------------------------------------------------------------
-
-export async function listSchedules(): Promise<{ schedules: Schedule[]; total: number }> {
-    return apiFetch('GET', '/schedules');
-}
-
-/** The user's IANA time zone, so "daily at 9am" means 9am where they are. */
-export function browserTimeZone(): string | undefined {
-    return Intl.DateTimeFormat().resolvedOptions().timeZone || undefined;
-}
-
-export async function createSchedule(name: string, interval: string, prompt: string): Promise<Schedule> {
-    return apiFetch('POST', '/schedules', { name, interval, prompt, timezone: browserTimeZone() });
-}
-
-export async function updateSchedule(name: string, status: string): Promise<Schedule> {
-    return apiFetch('PUT', `/schedules/${encodeURIComponent(name)}`, { status });
-}
-
-/** Run a schedule once now; its next scheduled time stays as it was. */
-export async function runScheduleNow(name: string): Promise<Schedule> {
-    return apiFetch('POST', `/schedules/${encodeURIComponent(name)}/run`);
-}
-
-export async function deleteSchedule(name: string): Promise<void> {
-    return apiFetch('DELETE', `/schedules/${encodeURIComponent(name)}`);
-}
-
-export async function getScheduleResults(name: string, limit: number = 20): Promise<{ results: ScheduleResult[]; total: number }> {
-    return apiFetch('GET', `/schedules/${encodeURIComponent(name)}/results?limit=${limit}`);
-}
-
-export async function parseScheduleInput(input: string): Promise<ParsedSchedule> {
-    return apiFetch('POST', '/schedules/parse', { input, timezone: browserTimeZone() });
 }
 
 // -- Undo a turn's file changes (#5225) --------------------------------------

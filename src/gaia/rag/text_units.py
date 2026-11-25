@@ -9,6 +9,7 @@ one unit, about what it costs the model in tokens.
 """
 
 import re
+import unicodedata
 from typing import List, Sequence
 
 # Han and kana, written without spaces between words.
@@ -20,13 +21,20 @@ _UNSPACED_CHARS = (
 WIDE_CHARS = _UNSPACED_CHARS + "\u1100-\u11ff\uac00-\ud7af"
 _WIDE = re.compile(f"[{WIDE_CHARS}]")
 _UNIT = re.compile(f"[{WIDE_CHARS}]|[^\\s{WIDE_CHARS}]+")
-_NO_SPACE = re.compile(f"[{_UNSPACED_CHARS}\u3000-\u303f\uff01-\uff65]")
+_UNSPACED_CLASS = f"[{_UNSPACED_CHARS}\u3000-\u303f\uff01-\uff65]"
+_NO_SPACE = re.compile(_UNSPACED_CLASS)
+
+# Capitals of Latin with accents, Greek, Cyrillic and Armenian (É, Ł, Ω, Д, Ա).
+# Their upper and lower case letters alternate, so the class is not written as ranges.
+_CAPITALS = "".join(
+    c for c in map(chr, range(0xC0, 0x2000)) if unicodedata.category(c) in ("Lu", "Lt")
+)
 
 SENTENCE_BREAK = re.compile(
     # A full stop before a capital, or before a letter of a script with no case.
-    r"(?<=[.!?])\s+(?=[A-Z\u0590-\u08ff\u0900-\u0dff])"
-    # Arabic, Urdu and Hindi sentence ends.
-    r"|(?<=[\u061f\u06d4\u0964\u0965])\s+"
+    f"(?<=[.!?])\\s+(?=[A-Z{_CAPITALS}\u0590-\u08ff\u0900-\u0dff])"
+    # Arabic, Urdu, Hindi and Armenian sentence ends.
+    r"|(?<=[\u061f\u06d4\u0964\u0965\u0589])\s+"
     # Chinese and Japanese ends, unless a closing quote or bracket follows.
     "|(?<=[\u3002\uff01\uff1f])(?![\u300d\u300f\uff09\u3015\u3011\u201d\u2019])\\s*"
 )
@@ -69,8 +77,23 @@ def join_pieces(pieces: Sequence[str]) -> str:
     return joined
 
 
+_UNSPACED_GAP = re.compile(f"(?<={_UNSPACED_CLASS})\\s+|\\s+(?={_UNSPACED_CLASS})")
+
+
+def close_unspaced_gaps(text: str) -> str:
+    """``text`` without whitespace next to a Chinese or Japanese character.
+
+    :func:`join_pieces` drops the gap between two such pieces, a paragraph
+    break included, and adds a space where one meets other text, so the
+    whitespace there is not the source's and can't be matched against it.
+    """
+    return _UNSPACED_GAP.sub("", text)
+
+
 def last_tokens(text: str, n_tokens: int) -> str:
     """About the last ``n_tokens`` of ``text``, starting at a word or sentence."""
+    if n_tokens <= 0:
+        return ""
     total = estimate_tokens(text)
     if _WIDE.search(text):
         target_chars = max(1, len(text) * n_tokens // total) if total else len(text)

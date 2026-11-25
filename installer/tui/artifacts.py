@@ -24,7 +24,7 @@ import argparse
 import sys
 from pathlib import Path
 
-from fetch_sidecar import platform_has_sidecar
+from fetch_gaiapy import platform_has_sidecar
 
 # terminal-hub platform key -> [(filename template, hub publish key), ...]
 #

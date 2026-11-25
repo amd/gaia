@@ -13,13 +13,13 @@ from __future__ import annotations
 
 import pytest
 
-pytest.importorskip("gaia_agent")
+pytest.importorskip("gaiapy")
 
 from fastapi.testclient import TestClient  # noqa: E402
-from gaia_agent import __version__ as agent_version  # noqa: E402
-from gaia_agent import caller_auth  # noqa: E402
-from gaia_agent import server as server_mod  # noqa: E402
-from gaia_agent import session_registry as sr  # noqa: E402
+from gaiapy import __version__ as agent_version  # noqa: E402
+from gaiapy import caller_auth  # noqa: E402
+from gaiapy import server as server_mod  # noqa: E402
+from gaiapy import session_registry as sr  # noqa: E402
 
 _BASE_URL = "http://127.0.0.1:8141"
 
@@ -71,6 +71,7 @@ def built(monkeypatch):
     caller_auth.reset()
     monkeypatch.delenv(caller_auth.TOKEN_FILE_ENV_VAR, raising=False)
     monkeypatch.delenv(caller_auth.TOKEN_ENV_VAR, raising=False)
+    monkeypatch.setenv(caller_auth.ALLOW_NO_TOKEN_ENV_VAR, "1")
 
     agents: list[_ScriptedAgent] = []
 
