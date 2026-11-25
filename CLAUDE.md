@@ -752,6 +752,7 @@ New agents are Python classes inheriting from `Agent` (see [`src/gaia/agents/bas
 | `dictation` | `gaia.agents.tools.dictation_tools.DictationToolsMixin` | Turn a document into an MP3 or WAV with the local Kokoro voice |
 | `audio_generation` | `gaia.agents.tools.audio_generation_tools.AudioGenerationToolsMixin` | Generate WAV music and sound effects via Lemonade |
 | `wait` | `gaia.agents.tools.wait_tools.WaitToolsMixin` | `sleep` up to 300 s, e.g. until a rate limit resets; ends early on Stop |
+| `user_input` | `gaia.agents.tools.user_input_tools.UserInputToolsMixin` | `request_user_input`: ask the user a question mid-turn; silence is never taken as an answer |
 | `reasoning_effort` | `gaia.agents.tools.reasoning_tools.ReasoningEffortToolsMixin` | `set_reasoning_effort` low/medium/high per step, on models that grade reasoning (gpt-oss) |
 
 When adding a new tool mixin, register it in `KNOWN_TOOLS` so other agents can compose it by name.

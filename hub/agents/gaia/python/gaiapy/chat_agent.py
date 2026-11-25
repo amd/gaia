@@ -69,7 +69,6 @@ from gaiapy.tool_bundles import PROFILE_TOOL_CONFIGS
 from gaiapy.tool_requests import requested_tools
 
 from gaia.agents.base.agent import Agent, _withheld_skill_tools, default_max_steps
-from gaia.agents.base.call_risk import NEEDS_PERSON_ARG, READ, call_risk
 from gaia.agents.base.checks import attach_check, check_from_python_run, snippet_target
 from gaia.agents.base.code_path_screen import (
     python_code_preflight,
@@ -133,6 +132,14 @@ from gaia.agents.tools import (  # Web browsing and search; Shared tools
     WaitToolsMixin,
 )
 from gaia.agents.tools.path_access import read_access_error, write_access_error
+
+# Re-exported: these moved to core with the tool, and callers import them here.
+from gaia.agents.tools.user_input_tools import (  # noqa: F401
+    NO_QUESTION_CHANNEL,
+    USER_INPUT_MAX_WAIT_S,
+    UserInputToolsMixin,
+    _no_answer_result,
+)
 from gaia.agents.tools.rag_tools import (
     _forget_evicted,
     attached_not_loaded,
@@ -173,38 +180,6 @@ from gaia.vlm.mixin import VLMToolsMixin
 # Distinct from ``None``. A missing RAG extra caches ``None``; any other RAG
 # startup failure leaves ``rag`` unset so the next access tries again.
 _UNSET = object()
-
-#: Longest request_user_input waits for an answer, in seconds.
-USER_INPUT_MAX_WAIT_S = 600
-
-#: request_user_input's answer where nobody can reply mid-run (a Discord DM, a
-#: one-shot run): no choice was made, so the question goes in the reply.
-NO_QUESTION_CHANNEL = (
-    "__NO_RESPONSE__ The user cannot answer a question mid-run here, so nothing "
-    "was chosen; do not act on a default. End your turn by asking the question "
-    "in your reply, with what they need to decide (such as the list); their "
-    "next message is the answer."
-)
-
-
-def _no_answer_result(timeout_seconds: int, default: Optional[str]) -> str:
-    """What request_user_input returns when nobody answered: never an answer."""
-    text = (
-        f"__NO_RESPONSE__ The user did not answer within {timeout_seconds} "
-        "seconds, so you have no answer from them. "
-    )
-    if default:
-        text += (
-            f'Your default was "{default}". You may go on with it only for steps '
-            "that change nothing, and your reply must say you assumed it because "
-            "they did not answer. "
-        )
-    return text + (
-        "Do not create, change, move or delete anything on that assumption: any "
-        "such step now needs the user's approval, even with Full access on. If "
-        "the work needs their choice, stop and end your reply with the question."
-    )
-
 
 #: ``search_tools``: searches a turn before it must get on with the job, longest
 #: query embedded, tools and skills returned, and tools returned with full docs.
@@ -884,6 +859,7 @@ def _where_mcp_servers_are_set_up(names: List[str], config_path: Path) -> str:
 class ChatAgent(
     MemoryMixin,
     Agent,
+    UserInputToolsMixin,
     RAGToolsMixin,
     FileToolsMixin,
     ShellToolsMixin,
@@ -939,9 +915,6 @@ class ChatAgent(
     _mcp_unavailable_error: Optional[str] = None
     _mcp_dropped_notice: Optional[str] = None
     _mcp_dropped_notice_shown: Optional[str] = None
-
-    # This turn's last request_user_input question, while it went unanswered.
-    _unanswered_question: Optional[str] = None
 
     def __init__(self, config: Optional[ChatAgentConfig] = None):
         """
@@ -1391,6 +1364,44 @@ class ChatAgent(
         if rag is not _UNSET and rag is not None:
             # Its own chat client names the model per call.
             rag.chat.config.model = model
+
+    def _rag_model_holders(self) -> list:
+        """The objects that name the model documents are summarized with."""
+        state = vars(self)
+        holders = [state.get("_rag_config")]
+        holders.append(
+            getattr(getattr(state.get("_rag"), "chat", None), "config", None)
+        )
+        return [h for h in holders if hasattr(h, "model")]
+
+    def _snapshot_model_followers(self) -> Dict[str, Any]:
+        """Also what ``follow_model_switch`` moves: image reading and documents."""
+        state = super()._snapshot_model_followers()
+        own = vars(self)
+        state.update({n: own[n] for n in ("vlm_model", "vlm_client") if n in own})
+        rag_kwargs = own.get("_rag_config_kwargs")
+        if isinstance(rag_kwargs, dict):
+            state["rag_model"] = rag_kwargs.get("model")
+            state["rag_vlm_models"] = [
+                (h, h.vlm_model)
+                for h in self._rag_model_holders()
+                if hasattr(h, "vlm_model")
+            ]
+        return state
+
+    def _restore_model_followers(self, state: Dict[str, Any]) -> None:
+        state = dict(state)
+        rag_vlm_models = state.pop("rag_vlm_models", [])
+        has_rag = "rag_model" in state
+        rag_model = state.pop("rag_model", None)
+        super()._restore_model_followers(state)
+        if not has_rag:
+            return
+        self._rag_config_kwargs["model"] = rag_model
+        for holder in self._rag_model_holders():
+            holder.model = rag_model
+        for holder, vlm_model in rag_vlm_models:
+            holder.vlm_model = vlm_model
 
     @property
     def rag(self) -> Optional[RAGSDK]:
@@ -2731,24 +2742,7 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
     def process_query(self, user_input, *args, **kwargs):
         """Run a turn, first telling the user about any dropped MCP servers."""
         self.report_mcp_dropped()
-        self._unanswered_question = None
         return super().process_query(user_input, *args, **kwargs)
-
-    def confirmation_args_for_call(
-        self, tool_name: str, tool_args: Dict[str, Any]
-    ) -> Dict[str, Any]:
-        """Also mark a gated call after an unanswered question for a person.
-
-        Pre-approval (Full access) must not turn the model's guess at an
-        answer into a change nobody agreed to. Only a call known to be a read
-        is exempt; the marker matters only on a call that already asks.
-        """
-        shown = super().confirmation_args_for_call(tool_name, tool_args)
-        if self._unanswered_question is None or not isinstance(shown, dict):
-            return shown
-        if call_risk(tool_name, tool_args) == READ:
-            return shown
-        return {**shown, NEEDS_PERSON_ARG: True}
 
     def _register_tools(self) -> None:
         """Register chat agent tools from mixins based on prompt_profile."""
@@ -4066,59 +4060,7 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
                 msg += f" Next wakeup in {wake_in_seconds}s."
             return msg
 
-        # The tool watchdog must outlast the wait itself, or a slow answer is
-        # dropped and the call abandoned.
-        @tool(timeout=USER_INPUT_MAX_WAIT_S + 30)
-        def request_user_input(
-            message: str,
-            choices: List[str] = None,
-            default_if_no_response: str = None,
-            timeout_seconds: int = 300,
-            continue_if_no_response: bool = True,
-        ) -> str:
-            """Ask the user a question and wait for their response.
-
-            Args:
-                message: The question to present to the user.
-                choices: Optional list of choices (renders as buttons in the UI).
-                default_if_no_response: The choice you would pick if nobody
-                    answers. It is never returned as the user's answer: on a
-                    timeout you get "__NO_RESPONSE__" with this default named.
-                timeout_seconds: How long to wait (10 to 600, default 300).
-                continue_if_no_response: If True, continue after timeout.
-                    If False, the loop pauses until user re-engages.
-
-            Returns:
-                The user's response or chosen option, or text starting with
-                "__NO_RESPONSE__" when they did not answer. Silence is not an
-                answer: then change nothing on an assumption, and say in your
-                reply that you are waiting on them or what you assumed.
-            """
-            timeout_seconds = min(int(timeout_seconds), USER_INPUT_MAX_WAIT_S)
-            console = _agent.console
-            if not getattr(console, "answers_questions", True):
-                # The default would read as the user's choice ("cancel").
-                _agent._unanswered_question = message
-                return NO_QUESTION_CHANNEL
-            if hasattr(console, "request_user_input_blocking"):
-                reply = console.request_user_input_blocking(
-                    message=message,
-                    choices=choices,
-                    default_if_no_response=None,
-                    timeout_seconds=timeout_seconds,
-                    continue_if_no_response=continue_if_no_response,
-                )
-            else:
-                # Non-SSE consoles (interactive sessions)
-                try:
-                    reply = input(f"\n[Agent asking]: {message}\n> ").strip()
-                except (EOFError, OSError):
-                    reply = ""
-            if reply and reply != "__NO_RESPONSE__":
-                _agent._unanswered_question = None
-                return reply
-            _agent._unanswered_question = message
-            return _no_answer_result(timeout_seconds, default_if_no_response)
+        self.register_user_input_tools()
 
     # NOTE: The actual tool definitions are in the mixin classes:
     # - RAGToolsMixin (rag_tools.py): RAG and document indexing tools

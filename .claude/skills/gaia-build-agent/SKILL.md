@@ -70,7 +70,10 @@ v0.17.5); an in-repo package under `hub/agents/` adds a `gaia-agent.yaml` manife
    conversation per agent (turns recorded with their tool calls; a file path
    resumes it later), and `agent.close()` (or `with MyAgent() as agent:`) when
    it ends. A subclass that owns more resources extends `close()` and calls
-   `super().close()`. See [`agent-system.mdx`](../../../docs/sdk/core/agent-system.mdx)
+   `super().close()`. `agent.switch_model("<model>")` changes model
+   mid-conversation (all or nothing). To let the model ask the user a
+   question, compose `UserInputToolsMixin` and call
+   `self.register_user_input_tools()`. See [`agent-system.mdx`](../../../docs/sdk/core/agent-system.mdx)
    → "Running an Agent Inside Your App".
 
 6. **Make it discoverable.** An **in-core** agent is added to

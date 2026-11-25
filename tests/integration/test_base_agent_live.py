@@ -16,7 +16,9 @@ import os
 import pytest
 
 from gaia.agents.base.agent import Agent, TurnCancel
+from gaia.agents.base.console import SilentConsole
 from gaia.agents.base.tools import _TOOL_REGISTRY, tool
+from gaia.agents.tools.user_input_tools import UserInputToolsMixin
 
 pytestmark = pytest.mark.integration
 
@@ -145,3 +147,100 @@ def test_an_unprefixed_hosted_model_gets_its_prefix(require_lemonade):
 def test_a_contradicting_provider_fails_before_lemonade_is_touched():
     with pytest.raises(ValueError, match="names provider 'amd'"):
         _AddAgent(silent_mode=True, provider="fireworks", model_id="amd.Llama-3.3-70B")
+
+
+def _second_local_model(current: str) -> str:
+    """Another downloaded local chat model to switch to (a small one first), or skip."""
+    from gaia.agents.base.model_switch import _lemonade_models, _lemonade_url
+    from gaia.llm.lemonade_client import cloud_model_provider
+
+    with _AddAgent(silent_mode=True) as probe:
+        listed = _lemonade_models(_lemonade_url(probe))
+    others = [
+        name
+        for name, entry in listed.items()
+        if name != current and cloud_model_provider(name, entry) is None
+    ]
+    if not others:
+        pytest.skip("Lemonade has only one downloaded chat model")
+    small = [name for name in others if "Gemma-4-E" in name or "Qwen3.5" in name]
+    return (small or others)[0]
+
+
+def test_a_conversation_survives_a_switch_to_another_local_model(require_lemonade):
+    with _AddAgent(silent_mode=True) as agent:
+        first = agent.chat.effective_model
+        other = _second_local_model(first)
+        agent.start_session_history()
+        agent.process_query("My name is Sam. What is 17 + 25?")
+
+        agent.switch_model(other)
+
+        assert agent.model_id == other
+        assert agent.chat.effective_model == other
+        answer = agent.process_query("What is my name, and what was that sum?")
+        assert "Sam" in answer["result"] and "42" in answer["result"]
+
+
+def test_a_conversation_survives_a_switch_to_a_hosted_model_and_back(
+    require_lemonade,
+):
+    hosted = _fireworks_model()
+    with _AddAgent(silent_mode=True) as agent:
+        local = agent.chat.effective_model
+        agent.start_session_history()
+        agent.process_query("My name is Sam. What is 17 + 25?")
+
+        agent.switch_model(hosted)
+        assert agent._model_service_label() == "Fireworks AI"
+        there = agent.process_query("What is my name?")["result"]
+        assert "Sam" in there
+
+        agent.switch_model(local)
+        assert agent._inference_location().remote is False
+        back = agent.process_query("And what was that sum?")["result"]
+        assert "42" in back
+
+
+def test_a_refused_switch_leaves_the_agent_answering_on_its_old_model(
+    require_lemonade,
+):
+    with _AddAgent(silent_mode=True) as agent:
+        before = agent.model_id
+        with pytest.raises(RuntimeError, match="Unknown Lemonade model"):
+            agent.switch_model("no-such-model-GGUF")
+        assert agent.model_id == before
+        assert "42" in agent.process_query("What is 17 + 25?")["result"]
+
+
+class _AnsweringConsole(SilentConsole):
+    """A console whose user picks the second choice."""
+
+    def __init__(self):
+        super().__init__()
+        self.asked = []
+
+    def request_user_input_blocking(self, message, choices=None, **_):
+        self.asked.append((message, choices))
+        return "green"
+
+
+class _AskingAgent(Agent, UserInputToolsMixin):
+    def _get_system_prompt(self) -> str:
+        return (
+            "You are a terse assistant. When the user asks you to ask them "
+            "something, call request_user_input, then report their answer."
+        )
+
+    def _register_tools(self) -> None:
+        self.register_user_input_tools()
+
+
+def test_the_model_asks_the_user_and_uses_the_answer(require_lemonade):
+    console = _AnsweringConsole()
+    with _AskingAgent(silent_mode=True, output_handler=console) as agent:
+        result = agent.process_query(
+            "Ask me whether I prefer blue or green, then tell me what I chose."
+        )
+    assert console.asked, result["result"]
+    assert "green" in result["result"].lower()

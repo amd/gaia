@@ -978,11 +978,53 @@ agent.process_query("Find the Q3 report")
 agent.process_query("Summarize its second section")
 ```
 
+Pass `on_cut=callback` to hear when older turns no longer fit the model's
+window: the callback gets a `HistoryCut(turns, tokens)`, so your app can tell
+the user. The file keeps every turn either way.
+
 Use one agent per conversation so they never mix. Passing the same path to a
 new agent resumes that conversation. The file holds tool output, including
 local file contents; delete it to remove the conversation. A host that manages
 history itself can still assign `agent.conversation_history` directly. The agent
 then leaves recording to the host.
+
+### Switching models
+
+`switch_model()` moves a running agent to another model and keeps the
+conversation. The target is a Claude id or any model your Lemonade server
+lists, local or hosted:
+
+```python
+agent.switch_model("Qwen3.5-4B-GGUF")
+agent.switch_model("fireworks.accounts/fireworks/models/glm-4p6")
+agent.switch_model("claude-sonnet-5")
+```
+
+The new client is built first and the change is applied as a unit. If anything
+fails (the model isn't listed, a key is missing, local-only mode is on) it
+raises `RuntimeError` with the fix and the agent stays on its old model. Call
+it between turns. A subclass that keeps something else per model overrides
+`follow_model_switch()` to move it, and `_snapshot_model_followers()` /
+`_restore_model_followers()` so a failed switch puts it back.
+
+### Asking the user a question
+
+Compose `UserInputToolsMixin` to give the model a `request_user_input` tool. It
+shows a question, with optional choices, and waits for the answer:
+
+```python
+from gaia.agents.tools.user_input_tools import UserInputToolsMixin
+
+class SetupAgent(Agent, UserInputToolsMixin):
+    def _register_tools(self):
+        self.register_user_input_tools()
+```
+
+The answer comes through the output handler: the Agent UI and TUI handlers
+show the question and wait, and a terminal console reads a line. If nobody
+answers in time, the model is told so. It never receives its own default as if
+the user chose it, and until the next turn any confirmation-gated change is
+marked as needing a person, even when tools were pre-approved.
 
 ### Releasing resources
 

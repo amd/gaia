@@ -281,14 +281,35 @@ def list_tools(self, verbose: bool = True) -> None:
     """
     pass
 
-def start_session_history(self, path: Optional[Union[str, os.PathLike]] = None) -> SessionHistory:
+def start_session_history(
+    self,
+    path: Optional[Union[str, os.PathLike]] = None,
+    on_cut: Optional[Callable[[HistoryCut], None]] = None,
+) -> SessionHistory:
     """
     Give this agent a conversation of its own. Each process_query then sends the
     earlier turns that fit the model's window (tool calls included) and records
     the finished turn; a turn that raises is not recorded. A path keeps the
     transcript in SQLite so a later agent resumes it; None keeps it in memory.
     Calling it again closes the history it started before. A host that assigns
-    conversation_history itself keeps recording to itself.
+    conversation_history itself keeps recording to itself. on_cut is called
+    with a HistoryCut(turns, tokens) when more earlier turns drop out of the
+    model's view than before.
+    """
+    pass
+
+def switch_model(self, target: str, on_status: Optional[Callable[[str], None]] = None) -> str:
+    """
+    Move the agent to another model, keeping its conversation. target is a
+    Claude id or a model the Lemonade server lists (local or cloud). Returns
+    the display name. The new client is built before anything changes and the
+    change is rolled back as a unit, so a failure raises RuntimeError with the
+    fix and leaves the agent on its old model. on_status gets a line while the
+    switch waits for GAIA's model server to restart.
+
+    Extension points: follow_model_switch() runs after the swap, before the
+    prompt is rebuilt; _snapshot_model_followers() and
+    _restore_model_followers(state) cover what it changes for the rollback.
     """
     pass
 

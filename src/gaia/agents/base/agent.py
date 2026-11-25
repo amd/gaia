@@ -3831,6 +3831,9 @@ class Agent(abc.ABC):
     # generic shell/file-mutation tools. Empty by default.
     CONFIRMATION_REQUIRED_TOOLS: ClassVar[frozenset] = frozenset()
 
+    # This turn's last request_user_input question, while it went unanswered.
+    _unanswered_question: Optional[str] = None
+
     #: Method names a composed mixin contributes to the confirmation decision.
     #: A static name set cannot express "gate this call only in this state" —
     #: the browser mixin gates a click only when the page is inside a signed-in
@@ -13164,6 +13167,7 @@ Do NOT wrap conversational replies in JSON.
         ns_id = self._namespaced_agent_id()
         # getattr: hosts built with __new__ reach process_query without __init__.
         self._turn_error_start = len(getattr(self, "error_history", ()))
+        self._unanswered_question = None
         # A level the model chose for the last request must not carry into this one.
         reset_effort = getattr(self, "reset_reasoning_effort", None)
         if reset_effort is not None:
@@ -13183,7 +13187,11 @@ Do NOT wrap conversational replies in JSON.
             ):
                 history = self._recording_history(user_input)
                 if history is not None:
-                    history.prepare(self, str(user_input))
+                    history.prepare(
+                        self,
+                        str(user_input),
+                        on_cut=getattr(self, "_history_on_cut", None),
+                    )
                     history.begin([{"role": "user", "content": str(user_input)}])
                 try:
                     expanded = self._expand_skill_command(user_input)
@@ -13223,7 +13231,9 @@ Do NOT wrap conversational replies in JSON.
             self._run_turn_end_hooks()
 
     def start_session_history(
-        self, path: Optional[Union[str, os.PathLike]] = None
+        self,
+        path: Optional[Union[str, os.PathLike]] = None,
+        on_cut: Optional[Callable[[Any], None]] = None,
     ) -> "SessionHistory":
         """Give this agent a conversation of its own, recorded turn by turn.
 
@@ -13234,17 +13244,67 @@ Do NOT wrap conversational replies in JSON.
         keeps it in memory. One agent per conversation keeps conversations
         apart. Calling it again starts a new history and closes the one this
         method started before; ``close()`` closes it.
+
+        *on_cut* is called with a ``HistoryCut(turns, tokens)`` whenever more
+        earlier turns drop out of the model's view than before, so a host can
+        tell the user. The file still holds every turn.
         """
         from gaia.agents.base.history import SessionHistory
 
         history = SessionHistory(path)
         previous = getattr(self, "_owned_history", None)
         self._owned_history = history
+        self._history_on_cut = on_cut
         self.conversation_history = history
         if previous is not None:
             previous.close()
         history.prepare(self, "")
         return history
+
+    def switch_model(
+        self, target: str, on_status: Optional[Callable[[str], None]] = None
+    ) -> str:
+        """Move this agent to model *target*, keeping its conversation.
+
+        *target* is a Claude id (``claude-sonnet-5``) or a model the Lemonade
+        server lists: a downloaded local one, or a cloud one such as
+        ``fireworks.<model>``. Returns the name to show for it. The new client
+        is built before anything changes and the change is rolled back as a
+        unit, so a failed switch raises ``RuntimeError`` with the fix and
+        leaves the agent on its old model. *on_status* gets a plain line while
+        the switch waits for GAIA's model server to restart. Call it between
+        turns, not during one.
+        """
+        from gaia.agents.base.model_switch import switch_concrete_model
+
+        if not isinstance(target, str) or not target.strip():
+            raise ValueError(
+                f"switch_model needs a model id, got {target!r}. Pass a Claude id "
+                "or a model your Lemonade server lists."
+            )
+        return switch_concrete_model(self, target.strip(), on_status)
+
+    def follow_model_switch(self) -> None:
+        """Hook run after a model switch, before the prompt is rebuilt.
+
+        Default: nothing. Override to re-point whatever this agent chose for
+        the model it was built on (a second client, a per-model setting).
+        """
+
+    def _snapshot_model_followers(self) -> Dict[str, Any]:
+        """State ``follow_model_switch`` may change, kept for a switch's rollback.
+
+        An override adds its own keys to ``super()``'s and undoes them in
+        ``_restore_model_followers``.
+        """
+        from gaia.agents.base.model_switch import snapshot_followers
+
+        return snapshot_followers(self)
+
+    def _restore_model_followers(self, state: Dict[str, Any]) -> None:
+        from gaia.agents.base.model_switch import restore_followers
+
+        restore_followers(self, state)
 
     @property
     def cancel_event(self) -> Optional[threading.Event]:
