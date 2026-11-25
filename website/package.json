@@ -24,7 +24,7 @@
     "@types/node": "^25.9.9",
     "autoprefixer": "^10.7.0",
     "postcss": "^8.5.33",
-    "vitest": "^2.1.8"
+    "vitest": "^5.1.1"
   },
   "engines": {
     "node": "22.x"
