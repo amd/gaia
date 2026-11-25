@@ -408,6 +408,10 @@ def _payload(value: Any) -> dict:
 #: underscore, a call, a scope or an assignment.
 _CODE_NAME = re.compile(r"^_|[()=<>]|::")
 
+#: A date or a fraction written with slashes (10/15, 1/2, 10/15/2026), which
+#: reads as a path only because of the slash.
+_DATE_OR_FRACTION = re.compile(r"\d{1,4}(?:/\d{1,4}){1,2}")
+
 
 def _path_token(match: re.Match) -> str | None:
     value = next(g for g in match.groups() if g is not None).strip()
@@ -418,6 +422,8 @@ def _path_token(match: re.Match) -> str | None:
     if "<" in value or ">" in value:
         return None  # a placeholder such as `<folder>/<name>`, not a real path
     quoted = any(match.group(i) is not None for i in (1, 2, 3))
+    if not quoted and _DATE_OR_FRACTION.fullmatch(value):
+        return None
     suffix = value.rsplit(".", 1)[-1].lower()
     # Dotted initials (U.S, e.g) are abbreviations, not file names.
     abbreviation = all(len(part) == 1 for part in value.split("."))
