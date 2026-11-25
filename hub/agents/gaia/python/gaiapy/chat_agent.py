@@ -856,7 +856,7 @@ class ChatAgentConfig:
 
     # Per-agent identity for the connectors activation filter (#1005).
     # Must be set BEFORE ``Agent.__init__`` runs ``_register_tools``, because
-    # that's where ``_active_mcp_servers`` consults ``is_agent_active`` to
+    # that's where ``_active_mcp_servers`` consults ``is_mcp_server_active`` to
     # decide which MCP servers' tools to surface. The registry's
     # ``_wrap_factory_with_namespaced_id`` injects this via kwargs, and the
     # UI's direct construction paths in ``_chat_helpers`` pass it explicitly.

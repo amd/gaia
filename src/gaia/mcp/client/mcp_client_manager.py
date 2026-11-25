@@ -151,10 +151,12 @@ class MCPClientManager:
         """Return server names whose tools are visible to *agent_id*.
 
         Per issue #1005 (per-agent activation), an MCP server's tools are
-        only visible to an agent when ``is_agent_active(server_id, agent_id)``
-        is True. With ``agent_id=None`` (CLI/debug context with no agent
-        identity), the unfiltered list is returned — activations only
-        gate the agent-tool path.
+        only visible to an agent when ``is_mcp_server_active(server_id,
+        agent_id)`` is True: activated for it, or a server the user added
+        themselves that the flagship was never told to stop using. With
+        ``agent_id=None`` (CLI/debug context with no agent identity), the
+        unfiltered list is returned — activations only gate the agent-tool
+        path.
 
         Activation lookups are file-backed (``activations.json``) and
         cached by the OS page cache; this method is safe to call in tight
@@ -165,9 +167,9 @@ class MCPClientManager:
         # Local import keeps the manager free of a hard dependency on the
         # connectors package — callers that never use activations don't
         # pay the import cost.
-        from gaia.connectors.activations import is_agent_active
+        from gaia.connectors.activations import is_mcp_server_active
 
-        return [name for name in self._clients if is_agent_active(name, agent_id)]
+        return [name for name in self._clients if is_mcp_server_active(name, agent_id)]
 
     def failed_servers_for_agent(self, agent_id: Optional[str]) -> Dict[str, str]:
         """Return ``{name: error}`` for servers that failed to connect.
@@ -177,12 +179,12 @@ class MCPClientManager:
         """
         if agent_id is None:
             return dict(self._failed)
-        from gaia.connectors.activations import is_agent_active
+        from gaia.connectors.activations import is_mcp_server_active
 
         return {
             name: error
             for name, error in self._failed.items()
-            if is_agent_active(name, agent_id)
+            if is_mcp_server_active(name, agent_id)
         }
 
     def tools_for_agent(self, agent_id: Optional[str]) -> Dict[str, List]:
@@ -191,8 +193,7 @@ class MCPClientManager:
         Returns every connected server's tool list when ``agent_id`` is
         None (CLI/debug callers) so unrelated tooling that walks the full
         registry keeps working. With a real ``agent_id`` the result is
-        filtered to servers that have been explicitly activated for the
-        pair via ``gaia.connectors.activations``.
+        filtered like :meth:`servers_for_agent`.
         """
         names = self.servers_for_agent(agent_id)
         result: Dict[str, List] = {}
