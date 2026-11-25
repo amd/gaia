@@ -56,10 +56,8 @@
     margin-top: 14px;
 }
 
-.try-chips-label {
-    margin-right: 2px;
-    color: var(--text-muted);
-    font-size: 12.5px;
+.try-chips.is-pending {
+    visibility: hidden;
 }
 
 .try-chip {

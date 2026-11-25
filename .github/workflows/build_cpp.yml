@@ -467,11 +467,21 @@ jobs:
     if: "!cancelled() && needs.build-and-test.result == 'success' && github.event_name != 'pull_request'"
     uses: ./.github/workflows/benchmark_cpp.yml
 
+  # The binary-size budget on pull requests: sizes are deterministic, so unlike the
+  # timing and memory metrics a regression here blocks the merge instead of
+  # turning main red after it.
+  binary-size:
+    name: C++ Binary Size
+    if: github.event_name == 'pull_request' && (github.event.pull_request.draft == false || contains(github.event.pull_request.labels.*.name, 'ready_for_ci'))
+    uses: ./.github/workflows/benchmark_cpp.yml
+    with:
+      sizes_only: true
+
   # Summary job
   cpp-build-summary:
     name: C++ Build Summary
     runs-on: ubuntu-latest
-    needs: [toolchain-script-tests, build-and-test, install-test, shared-lib-test, integration-test, benchmark]
+    needs: [toolchain-script-tests, build-and-test, install-test, shared-lib-test, integration-test, benchmark, binary-size]
     if: >-
       ${{ always() && !cancelled() &&
           needs.build-and-test.result != 'cancelled' }}
@@ -485,6 +495,7 @@ jobs:
           echo "Shared Lib Test:   ${{ needs.shared-lib-test.result }}"
           echo "Integration Tests: ${{ needs.integration-test.result }}"
           echo "Benchmarks:        ${{ needs.benchmark.result }}"
+          echo "Binary Size:       ${{ needs.binary-size.result }}"
           echo ""
 
           # Checked before the draft-skip exit: the toolchain script tests gate the
@@ -503,6 +514,11 @@ jobs:
           [[ "${{ needs.build-and-test.result }}"  != "success" ]] && FAILED=1
           [[ "${{ needs.install-test.result }}"    != "success" ]] && FAILED=1
           [[ "${{ needs.shared-lib-test.result }}" != "success" ]] && FAILED=1
+          # Runs on pull requests only; skipped everywhere else.
+          if [[ "${{ needs.binary-size.result }}" != "success" && "${{ needs.binary-size.result }}" != "skipped" ]]; then
+            echo "::error::C++ Binary Size failed: a binary grew past its budget or could not be measured; see that job's regression report"
+            FAILED=1
+          fi
           # Integration test runs on self-hosted STX hardware; treat
           # 'skipped' and 'failure' as non-blocking (warn only) since the
           # runner can be offline, busy, or missing hardware prerequisites.
@@ -517,7 +533,7 @@ jobs:
           fi
 
           if [[ "$FAILED" == "0" ]]; then
-            echo "All required C++ jobs passed (unit tests, install round-trip, shared library)!"
+            echo "All required C++ jobs passed (unit tests, install round-trip, shared library, binary size on PRs)!"
           else
             echo "One or more required C++ jobs failed"
             exit 1

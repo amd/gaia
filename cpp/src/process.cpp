@@ -386,11 +386,23 @@ ProcessResult runWithTimeout(const std::string& command,
     PROCESS_INFORMATION pi;
     ZeroMemory(&pi, sizeof(pi));
 
+    // The system's cmd.exe by full path: a bare "cmd" is looked up in the working folder first.
+    wchar_t systemDir[MAX_PATH];
+    const UINT systemDirLen = GetSystemDirectoryW(systemDir, MAX_PATH);
+    if (systemDirLen == 0 || systemDirLen >= MAX_PATH) {
+        const DWORD code = GetLastError();
+        CloseHandle(job);
+        DeleteProcThreadAttributeList(six.lpAttributeList);
+        CloseHandle(nulIn);
+        return failed("Failed to find the Windows system folder for cmd.exe", code);
+    }
+    const std::wstring cmdExe = std::wstring(systemDir, systemDirLen) + L"\\cmd.exe";
+
     // Build command line: cmd /c <command>. CreateProcessW needs a mutable buffer.
     std::wstring cmdLine = L"cmd /c " + widen(command);
 
     BOOL created = CreateProcessW(
-        nullptr,
+        cmdExe.c_str(),
         cmdLine.data(),
         nullptr,
         nullptr,
@@ -1449,6 +1461,62 @@ void ShellSession::reset() {
     impl_->overrides.clear();
     impl_->unset.clear();
 }
+
+#ifdef _WIN32
+std::string findProgramOnPath(const std::string& program) {
+    const std::vector<std::string> all = findProgramsOnPath(program);
+    return all.empty() ? std::string() : all.front();
+}
+
+std::vector<std::string> findProgramsOnPath(const std::string& program) {
+    std::vector<std::string> found;
+    if (program.empty() || program.find_first_of("\\/:\"") != std::string::npos) return found;
+    const DWORD size = GetEnvironmentVariableW(L"PATH", nullptr, 0);
+    if (size == 0) return found;
+    std::wstring path(size, L'\0');
+    path.resize(GetEnvironmentVariableW(L"PATH", path.data(), size));
+    std::vector<std::wstring> names;
+    if (program.find('.') != std::string::npos) {
+        names.push_back(widen(program));
+    } else {
+        for (const wchar_t* ext : {L".com", L".exe", L".bat", L".cmd"}) names.push_back(widen(program) + ext);
+    }
+    size_t start = 0;
+    while (start <= path.size()) {
+        size_t end = path.find(L';', start);
+        if (end == std::wstring::npos) end = path.size();
+        std::wstring dir = path.substr(start, end - start);
+        start = end + 1;
+        if (dir.size() >= 2 && dir.front() == L'"' && dir.back() == L'"') dir = dir.substr(1, dir.size() - 2);
+        const std::filesystem::path folder(dir);
+        if (dir.empty() || !folder.is_absolute()) continue;  // "." or a relative entry means the working folder
+        for (const auto& name : names) {
+            // Attributes, not is_regular_file: app execution aliases (WindowsApps\python.exe) are reparse points.
+            const std::filesystem::path candidate = folder / name;
+            const DWORD attrs = GetFileAttributesW(candidate.c_str());
+            if (attrs != INVALID_FILE_ATTRIBUTES && !(attrs & FILE_ATTRIBUTE_DIRECTORY)) {
+                found.push_back(candidate.u8string());
+                break;
+            }
+        }
+    }
+    return found;
+}
+
+std::string systemProgramPath(const std::string& relative) {
+    wchar_t systemDir[MAX_PATH];
+    const UINT len = GetSystemDirectoryW(systemDir, MAX_PATH);
+    if (len == 0 || len >= MAX_PATH) {
+        throw std::runtime_error("Windows didn't report its system folder (error " +
+                                 std::to_string(GetLastError()) + "), so " + relative + " can't be started.");
+    }
+    return (std::filesystem::path(std::wstring(systemDir, len)) / widen(relative)).u8string();
+}
+#else
+std::string findProgramOnPath(const std::string&) { return ""; }
+std::vector<std::string> findProgramsOnPath(const std::string&) { return {}; }
+std::string systemProgramPath(const std::string&) { return ""; }
+#endif
 
 } // namespace gaia
 

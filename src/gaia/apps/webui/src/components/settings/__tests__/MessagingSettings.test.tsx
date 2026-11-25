@@ -104,6 +104,21 @@ describe('MessagingSettings', () => {
         expect(await screen.findByRole('button', { name: 'Copied' })).toBeInTheDocument();
     });
 
+    it('pairing: a new code shows Copy code again', async () => {
+        vi.useFakeTimers({ shouldAdvanceTime: true });
+        vi.stubGlobal('navigator', { ...navigator, clipboard: { writeText: vi.fn().mockResolvedValue(undefined) } });
+        let current = PAIRING;
+        serve({ 'GET /messaging/discord': () => ({ body: current }) });
+        render(<MessagingSettings />);
+        fireEvent.click(await screen.findByRole('button', { name: 'Copy code' }));
+        expect(await screen.findByRole('button', { name: 'Copied' })).toBeInTheDocument();
+
+        current = { ...PAIRING, pairing_code: 'WXYZ6789' };
+        await act(async () => { await vi.advanceTimersByTimeAsync(3100); });
+
+        expect(await screen.findByRole('button', { name: 'Copy code' })).toBeInTheDocument();
+    });
+
     it('pairing: watches the bridge and shows success once the code is sent', async () => {
         vi.useFakeTimers({ shouldAdvanceTime: true });
         let current = PAIRING;

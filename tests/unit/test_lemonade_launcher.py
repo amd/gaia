@@ -33,6 +33,12 @@ def _no_embedded_lemonade(monkeypatch, tmp_path):
     monkeypatch.setenv("GAIA_HOME", str(tmp_path / "gaia-home"))
 
 
+@pytest.fixture
+def no_chosen_server(monkeypatch):
+    """The unit suite plants a dead LEMONADE_BASE_URL; these model a PC with none."""
+    monkeypatch.delenv("LEMONADE_BASE_URL", raising=False)
+
+
 # Real captured modern-client output (from `lemonade --version` on Windows
 # 10.7.0) — must parse to exactly "10.7.0" via re.search(r"(\d+\.\d+\.\d+)").
 MODERN_VERSION_OUTPUT = "lemonade version 10.7.0"
@@ -469,6 +475,7 @@ def test_macos_end_to_end_resolve_then_start_command(mocker):
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.usefixtures("no_chosen_server")
 def test_start_hint_modern_linux_names_systemctl_not_lemonade_server(mocker):
     """Modern Linux remedy is the systemd unit, never `lemonade-server serve`."""
     from gaia.llm.lemonade_launcher import LemonadeTooling, describe_start_hint
@@ -495,6 +502,7 @@ def test_start_hint_modern_linux_names_systemctl_not_lemonade_server(mocker):
     assert hint.foreground is False
 
 
+@pytest.mark.usefixtures("no_chosen_server")
 def test_start_hint_modern_windows_points_at_the_tray_not_a_shell_command(mocker):
     """Modern Windows has no start command a user would run — the server is
     launched from the tray icon, so emit prose and NO command."""
@@ -518,6 +526,7 @@ def test_start_hint_modern_windows_points_at_the_tray_not_a_shell_command(mocker
     assert "tray" in hint.instruction.lower()
 
 
+@pytest.mark.usefixtures("no_chosen_server")
 def test_start_hint_windows_override_path_is_joined_for_cmd_not_posix(mocker):
     """A Windows path must not come back wrapped in POSIX single quotes —
     `'C:\\x\\lemond'` is not runnable in cmd.exe."""
@@ -561,6 +570,7 @@ def test_render_command_windows_renders_env_the_cmd_way_never_drops_it(mocker):
     assert "k &&" not in rendered
 
 
+@pytest.mark.usefixtures("no_chosen_server")
 def test_start_hint_windows_modern_names_no_ctx_variable(mocker):
     """The hint must not tell a user to set a variable Lemonade never reads
     (#3320): with no env, cmd.exe and PowerShell agree on one bare command."""
@@ -585,6 +595,7 @@ def test_start_hint_windows_modern_names_no_ctx_variable(mocker):
     assert "CTX" not in hint.instruction
 
 
+@pytest.mark.usefixtures("no_chosen_server")
 def test_start_hint_windows_keeps_one_command_when_both_shells_agree(mocker):
     """An unquoted path with no env runs as-is in cmd.exe and PowerShell, so
     the hint stays a single command the Agent UI can show as code."""
@@ -737,10 +748,52 @@ def test_start_hint_for_a_chosen_server_never_says_not_installed(mocker, system)
 
     hint = describe_start_hint()
 
-    assert hint == StartHint(instruction=OTHER_SERVER_START_HINT)
+    assert hint == StartHint(
+        instruction=(
+            f"The model server GAIA uses is at 127.0.0.1:59999. "
+            f"{OTHER_SERVER_START_HINT}"
+        )
+    )
     assert "gaia init" not in hint.instruction
 
 
+@pytest.mark.parametrize(
+    "launcher",
+    [r"C:\lemonade_server\bin\LemonadeServer.exe", "/usr/bin/lemond"],
+)
+def test_start_hint_for_a_chosen_server_names_it_not_the_install_here(mocker, launcher):
+    """The tray or local install starts the default server, not the chosen one."""
+    from gaia.llm.lemonade_launcher import (
+        OTHER_SERVER_START_HINT,
+        LemonadeTooling,
+        StartHint,
+        describe_start_hint,
+    )
+
+    mocker.patch("platform.system", return_value="Windows")
+    mocker.patch(
+        "gaia.llm.lemonade_launcher.resolve_lemonade",
+        return_value=LemonadeTooling(
+            found=True, kind="modern", client_path=launcher, server_launcher=launcher
+        ),
+    )
+    mocker.patch.dict(
+        os.environ, {"LEMONADE_BASE_URL": "http://127.0.0.1:4328/api/v1"}, clear=False
+    )
+
+    hint = describe_start_hint(ctx_size=32768)
+
+    assert hint == StartHint(
+        instruction=(
+            f"The model server GAIA uses is at 127.0.0.1:4328. "
+            f"{OTHER_SERVER_START_HINT}"
+        )
+    )
+    for wrong in ("tray", "Start menu", "Run", "systemctl", "lemond"):
+        assert wrong not in hint.instruction
+
+
+@pytest.mark.usefixtures("no_chosen_server")
 def test_start_hint_instruction_embeds_the_command_verbatim(mocker):
     """`instruction` is the single string call sites print — when a command
     exists it must contain it, so no call site has to re-render it."""

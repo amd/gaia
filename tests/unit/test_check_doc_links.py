@@ -13,6 +13,8 @@ at all.
 """
 
 import http.client
+import json
+import re
 import ssl
 import sys
 import urllib.error
@@ -187,6 +189,308 @@ def test_other_certificate_failures_stay_broken(message):
     with patch("urllib.request.urlopen", side_effect=_cert_error(message)):
         status, _ = cdl.check_external_link("https://example.org/page")
     assert status == "broken"
+
+
+# ── batched GitHub issue/PR lookups ──────────────────────────────────────────
+# One REST call per issue/PR link spent the workflow token's shared hourly
+# quota (~1,760 calls a run), failing unrelated jobs across the repo.
+
+
+class _Resp:
+    def __init__(self, body: bytes):
+        self._body = body
+
+    def read(self, *args):
+        return self._body
+
+    def getcode(self):
+        return 200
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+
+class _GraphQL:
+    """A fake urlopen: answers GraphQL from ``existing``, records every call."""
+
+    def __init__(self, existing, repos=None, fail=None):
+        self.existing = existing
+        self.repos = repos
+        self.fail = fail
+        self.graphql = []
+        self.rest = []
+
+    def __call__(self, req, timeout=None):
+        if req.full_url != cdl.GITHUB_GRAPHQL_URL:
+            self.rest.append(req.full_url)
+            return _Resp(b"{}")
+        body = json.loads(req.data)
+        self.graphql.append(body)
+        if isinstance(self.fail, BaseException):
+            raise self.fail
+        if self.fail is not None:
+            return _Resp(json.dumps(self.fail).encode())
+        key = (body["variables"]["owner"], body["variables"]["name"])
+        if self.repos is not None and key not in self.repos:
+            payload = {
+                "data": {"repository": None},
+                "errors": [{"type": "NOT_FOUND", "message": "no repo"}],
+            }
+            return _Resp(json.dumps(payload).encode())
+        repo, errors = {}, []
+        for alias, number in re.findall(
+            r"(n\d+): issueOrPullRequest\(number: (\d+)\)", body["query"]
+        ):
+            if int(number) in self.existing:
+                repo[alias] = {"__typename": "Issue"}
+            else:
+                repo[alias] = None
+                errors.append({"type": "NOT_FOUND", "path": ["repository", alias]})
+        payload = {"data": {"repository": repo}}
+        if errors:
+            payload["errors"] = errors
+        return _Resp(json.dumps(payload).encode())
+
+
+def _gaia(n, suffix=""):
+    return f"https://github.com/amd/gaia/issues/{n}{suffix}"
+
+
+OK = ("ok", "exists (GitHub GraphQL)")
+
+
+def test_issue_links_are_checked_in_batches_not_one_call_each():
+    urls = [_gaia(n) for n in range(1, 251)]
+    urls.append("https://github.com/other/repo/pull/7")
+    fake = _GraphQL(existing=set(range(1, 251)))
+    with patch("urllib.request.urlopen", fake):
+        answers = cdl.prefetch_github_refs(urls, "tok")
+    assert len(fake.graphql) == 3 + 1  # 100+100+50 for amd/gaia, 1 for other/repo
+    assert fake.rest == []
+    assert answers == {u: OK for u in urls}
+
+
+def test_fragments_of_one_number_share_one_lookup():
+    urls = [_gaia(5), _gaia(5, "#issuecomment-1"), "https://github.com/amd/gaia/pull/5"]
+    fake = _GraphQL(existing={5})
+    with patch("urllib.request.urlopen", fake):
+        answers = cdl.prefetch_github_refs(urls, "tok")
+    assert len(fake.graphql) == 1
+    assert fake.graphql[0]["query"].count("issueOrPullRequest") == 1
+    assert answers == {u: OK for u in urls}
+
+
+def test_a_missing_number_is_left_for_the_rest_check():
+    fake = _GraphQL(existing={1})
+    with patch("urllib.request.urlopen", fake):
+        answers = cdl.prefetch_github_refs([_gaia(1), _gaia(999999)], "tok")
+    assert answers == {_gaia(1): OK}
+
+
+def test_an_inaccessible_repo_is_left_for_the_rest_check():
+    fake = _GraphQL(existing={3}, repos={("amd", "gaia")})
+    with patch("urllib.request.urlopen", fake):
+        answers = cdl.prefetch_github_refs(
+            ["https://github.com/private/thing/issues/3"], "tok"
+        )
+    assert answers == {}
+
+
+def test_a_rate_limited_batch_warns_and_never_falls_back_to_rest():
+    err = urllib.error.HTTPError(
+        cdl.GITHUB_GRAPHQL_URL, 403, "Forbidden", hdrs=None, fp=None
+    )
+    urls = [_gaia(n) for n in range(1, 151)]
+    fake = _GraphQL(existing=set(), fail=err)
+    with patch("urllib.request.urlopen", fake):
+        answers = cdl.prefetch_github_refs(urls, "tok")
+    assert set(answers) == set(urls)
+    assert {status for status, _ in answers.values()} == {"warning"}
+    assert "HTTP 403" in answers[urls[0]][1]
+    assert fake.rest == []
+
+
+def test_a_graphql_level_rate_limit_is_a_warning_not_ok():
+    body = {"data": None, "errors": [{"type": "RATE_LIMITED", "message": "slow down"}]}
+    fake = _GraphQL(existing={1}, fail=body)
+    with patch("urllib.request.urlopen", fake):
+        answers = cdl.prefetch_github_refs([_gaia(1)], "tok")
+    assert answers[_gaia(1)][0] == "warning"
+    assert "slow down" in answers[_gaia(1)][1]
+
+
+def test_a_non_not_found_error_beside_data_is_not_trusted():
+    body = {
+        "data": {"repository": {"n1": {"__typename": "Issue"}}},
+        "errors": [{"type": "SERVICE_UNAVAILABLE", "message": "partial"}],
+    }
+    fake = _GraphQL(existing={1}, fail=body)
+    with patch("urllib.request.urlopen", fake):
+        answers = cdl.prefetch_github_refs([_gaia(1)], "tok")
+    assert answers[_gaia(1)][0] == "warning"
+
+
+def test_a_network_error_on_a_batch_is_a_warning():
+    fake = _GraphQL(existing=set(), fail=ConnectionResetError("reset"))
+    with patch("urllib.request.urlopen", fake):
+        answers = cdl.prefetch_github_refs([_gaia(1)], "tok")
+    assert answers[_gaia(1)][0] == "warning"
+
+
+def test_no_token_means_no_batch_and_no_network():
+    def boom(*args, **kwargs):
+        raise AssertionError("no network without a token")
+
+    with patch("urllib.request.urlopen", boom):
+        assert cdl.prefetch_github_refs([_gaia(1)], None) == {}
+        assert cdl.prefetch_github_refs([_gaia(1)], "") == {}
+
+
+def test_owner_and_repo_travel_as_variables_not_query_text():
+    fake = _GraphQL(existing={1})
+    with patch("urllib.request.urlopen", fake):
+        cdl.prefetch_github_refs(['https://github.com/a"b/c){x}/issues/1'], "tok")
+    sent = fake.graphql[0]
+    assert sent["variables"] == {"owner": 'a"b', "name": "c){x}"}
+    assert 'a"b' not in sent["query"] and "c){x}" not in sent["query"]
+
+
+def test_an_out_of_range_number_does_not_poison_its_batch():
+    fake = _GraphQL(existing={1})
+    with patch("urllib.request.urlopen", fake):
+        answers = cdl.prefetch_github_refs([_gaia(1), _gaia(2**31)], "tok")
+    assert answers == {_gaia(1): OK}
+    assert str(2**31) not in fake.graphql[0]["query"]
+
+
+def test_non_github_links_are_ignored_by_the_batch():
+    fake = _GraphQL(existing=set())
+    with patch("urllib.request.urlopen", fake):
+        assert cdl.prefetch_github_refs(["https://example.org/issues/1"], "t") == {}
+    assert fake.graphql == []
+
+
+def test_check_links_sends_only_unresolved_links_to_rest(tmp_path, monkeypatch):
+    docs = tmp_path / "docs"
+    docs.mkdir()
+    (docs / "a.md").write_text(
+        f"[x]({_gaia(1)}) [y]({_gaia(2)}) [z]({_gaia(424242)}) "
+        "[w](https://example.org/page)\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("GITHUB_TOKEN", "tok")
+    monkeypatch.setattr(cdl.time, "sleep", lambda *_: None)
+    fake = _GraphQL(existing={1, 2})
+    with patch("urllib.request.urlopen", fake):
+        results = cdl.check_links(str(tmp_path), external_only=True, max_workers=2)
+    assert len(fake.graphql) == 1
+    assert sorted(fake.rest) == [
+        "https://api.github.com/repos/amd/gaia/issues/424242",
+        "https://example.org/page",
+    ]
+    by_url = {r.url: r for r in results}
+    assert by_url[_gaia(1)].status == by_url[_gaia(2)].status == "ok"
+    assert len(results) == 4
+
+
+def _run_checker(monkeypatch, capsys, *args):
+    monkeypatch.setattr(sys, "argv", ["check_doc_links.py", *args])
+    with pytest.raises(SystemExit) as exc:
+        cdl.main()
+    return exc.value.code, capsys.readouterr().out
+
+
+def test_failed_github_batch_fails_cli_without_rest_fallback(
+    tmp_path, monkeypatch, capsys
+):
+    docs = tmp_path / "docs"
+    docs.mkdir()
+    (docs / "a.md").write_text(
+        f"[first]({_gaia(1)}) [comment]({_gaia(1, '#issuecomment-2')}) "
+        f"[second]({_gaia(2)})\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(cdl, "__file__", str(tmp_path / "util" / "check_doc_links.py"))
+    monkeypatch.setenv("GITHUB_TOKEN", "tok")
+    monkeypatch.setenv("GITHUB_ACTIONS", "true")
+    fake = _GraphQL(existing=set(), fail=OSError("unavailable"))
+    with patch("urllib.request.urlopen", fake):
+        code, output = _run_checker(monkeypatch, capsys, "--external-only")
+    assert code == 1
+    assert "::error title=GitHub link verification incomplete::" in output
+    assert "2/2 unique GitHub issue/PR references unverified" in output
+    assert "FAILED: Could not verify most GitHub issue/PR references" in output
+    assert "PASSED:" not in output
+    assert "set GITHUB_TOKEN" in output and "--internal-only" in output
+    assert len(fake.graphql) == 1
+    assert fake.rest == []
+
+
+def test_exactly_half_unverified_counts_github_aliases_once(monkeypatch, capsys):
+    results = [
+        cdl.LinkResult("a.md", 1, _gaia(1), "warning", "timeout"),
+        cdl.LinkResult("a.md", 2, _gaia(1, "#issuecomment-2"), "warning", "timeout"),
+        cdl.LinkResult(
+            "b.md", 1, "https://github.com/AMD/GAIA/issues/1", "warning", "timeout"
+        ),
+        cdl.LinkResult("b.md", 2, _gaia(2), "ok", ""),
+        cdl.LinkResult("b.md", 3, _gaia(2, "#issuecomment-3"), "warning", "timeout"),
+        cdl.LinkResult("b.md", 4, _gaia(3), "skipped", ""),
+        cdl.LinkResult("b.md", 5, "https://example.org/page", "warning", "timeout"),
+    ]
+    monkeypatch.setattr(cdl, "check_links", lambda *args, **kwargs: results)
+    monkeypatch.setenv("GITHUB_ACTIONS", "true")
+    code, output = _run_checker(monkeypatch, capsys)
+    assert code == 0
+    assert "1/2 unique GitHub issue/PR references unverified" in output
+    assert "::warning title=GitHub link verification incomplete::" in output
+    assert "PASSED: No broken links found; some links could not be verified" in output
+    assert "All links valid" not in output
+
+
+def test_tokenless_rate_limited_run_fails_with_remedy(monkeypatch, capsys):
+    results = [
+        cdl.LinkResult("a.md", i, _gaia(i), "warning", "HTTP 403 (rate limited)")
+        for i in range(1, 4)
+    ]
+    monkeypatch.setattr(cdl, "check_links", lambda *args, **kwargs: results)
+    monkeypatch.delenv("GITHUB_TOKEN", raising=False)
+    monkeypatch.delenv("GITHUB_ACTIONS", raising=False)
+    code, output = _run_checker(monkeypatch, capsys)
+    assert code == 1
+    assert "3/3 unique GitHub issue/PR references unverified" in output
+    assert "set GITHUB_TOKEN" in output and "--internal-only" in output
+    assert "::error" not in output
+
+
+@pytest.mark.parametrize(
+    ("results", "code", "message"),
+    [
+        ([], 0, "PASSED: No links to check"),
+        ([(_gaia(1), "skipped")], 0, "PASSED: No links to check"),
+        (
+            [("https://example.org/page", "warning")],
+            0,
+            "PASSED: No broken links found; some links could not be verified",
+        ),
+        ([(_gaia(1), "broken")], 1, "FAILED: Found broken links"),
+        ([(_gaia(1), "ok")], 0, "PASSED: All links valid"),
+    ],
+)
+def test_cli_preserves_normal_link_results(results, code, message, monkeypatch, capsys):
+    links = [
+        cdl.LinkResult("a.md", i, url, status, "")
+        for i, (url, status) in enumerate(results, 1)
+    ]
+    monkeypatch.setattr(cdl, "check_links", lambda *args, **kwargs: links)
+    monkeypatch.setenv("GITHUB_ACTIONS", "true")
+    exit_code, output = _run_checker(monkeypatch, capsys)
+    assert exit_code == code
+    assert message in output
+    assert "GitHub link verification incomplete::" not in output
 
 
 if __name__ == "__main__":

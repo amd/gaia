@@ -67,6 +67,15 @@ export function ReadAloudSettings() {
         return <p className="settings-hint"><Loader2 size={13} className="spin" /> {t('settings.loading')}</p>;
     }
 
+    if (settings.available === false) {
+        return (
+            <div className="settings-pane">
+                <h2 className="settings-pane-title">{t('settings.section.voice')}</h2>
+                <p className="settings-pane-lede" role="status">{t('readAloud.settings.unavailable')}</p>
+            </div>
+        );
+    }
+
     return (
         <div className="settings-pane">
             <h2 className="settings-pane-title">{t('settings.section.voice')}</h2>

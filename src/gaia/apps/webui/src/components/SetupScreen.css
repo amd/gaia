@@ -262,6 +262,11 @@ button.setup-rail-step:hover {
     font-size: 14px;
 }
 
+.setup-agent-line {
+    color: var(--text-secondary);
+    font-size: 14px;
+}
+
 .setup-bar-head {
     display: flex;
     justify-content: space-between;

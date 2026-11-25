@@ -170,10 +170,10 @@ curl http://127.0.0.1:8141/health
 It waits for `GET /health`, checks the contract version, and tears the whole
 process tree down on Ctrl+C. See [`SPEC.md`](./SPEC.md) for the endpoints.
 
-The sidecar normally requires a per-session bearer token on `/v1/gaia/*`, but
-neither `serve` nor `startSidecar` mints one, so both leave it in dev mode — the
-token check off, `Host`/`Origin` still enforced. This agent has shell and file
-tools, so before you expose it to anything, supply a token of your own: see
+Every `/v1/gaia/*` request needs the per-session bearer token, and the sidecar
+refuses to start without one. `serve` and `startSidecar` mint a fresh token for
+each start and hand it to the sidecar in a `0600` file; `serve` prints that
+file's path, and `startSidecar` returns the token as `authToken`. See
 [`SPEC.md` §5.4](./SPEC.md#54-caller-authentication).
 
 ## Programmatic use
@@ -189,7 +189,10 @@ const sessionId = randomUUID(); // reuse across the whole conversation, see belo
 
 const res = await fetch(`${proc.baseUrl}/v1/gaia/query`, {
   method: "POST",
-  headers: { "content-type": "application/json" },
+  headers: {
+    "content-type": "application/json",
+    authorization: `Bearer ${proc.authToken}`,
+  },
   body: JSON.stringify({
     query: "summarize my notes",
     run_id: randomUUID(),
@@ -291,6 +294,12 @@ never silently replaces the old one. While the server restarts, `status` lines
 carry phase `model_restart`, also when it stopped under a tool's own model
 calls (a long document extraction, say), which report each page with phase
 `reading` ("Reading page 4 of 12…").
+
+**A checked answer replaces the first one.** When GAIA checks its answer at the
+end of a turn and writes it again, a `status` with `retracts_answer: true`
+(phase `answer_check`) comes before the new text or the check's next tool
+call: drop the `token` text since the last tool call, so the turn shows one
+answer. A check that keeps the answer sends no retraction.
 
 **Showing how full the model's window is?** From contract 2.21 the `final`
 event carries `context`: the window size, the tokens the next call will take,

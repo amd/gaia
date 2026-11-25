@@ -306,12 +306,17 @@ def test_a_tag_without_packages_never_fetches_a_release_that_does_not_exist_yet(
 
 def test_gaiacpp_is_verified_before_any_package_is_built(tui_jobs):
     job = tui_jobs["gaiacpp"]
-    (download,) = [
+    # One bounded attempt and one retry of the same artifact.
+    first, retry = [
         s
         for s in job["steps"]
         if s.get("uses", "").startswith("actions/download-artifact")
     ]
-    assert download["with"]["name"] == "gaia-cpp-agents-${{ inputs.gaiacpp_tag }}"
+    for download in (first, retry):
+        assert download["with"]["name"] == "gaia-cpp-agents-${{ inputs.gaiacpp_tag }}"
+        assert download["timeout-minutes"] == 5
+    assert first["continue-on-error"] is True
+    assert f"steps.{first['id']}.outcome == 'failure'" in retry["if"]
     run = _step(job, "Verify gaiacpp")["run"]
     assert "fetch_gaiacpp.py bundle --bundle gaiacpp-bundle/lemonade" in run
     assert "fetch_gaiacpp.py release" in run

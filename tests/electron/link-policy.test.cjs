@@ -13,6 +13,8 @@ const {
   isAllowedExternalUrl,
   isInAppNavigation,
   describeBlockedUrl,
+  describeOpenFailure,
+  openExternalSafely,
 } = require("../../src/gaia/apps/webui/services/link-policy.cjs");
 
 const APP_URL =
@@ -82,4 +84,51 @@ describe("describeBlockedUrl", () => {
     expect(msg).toContain("file");
     expect(msg).toMatch(/http, https and mailto/);
   });
+});
+
+describe("openExternalSafely", () => {
+  test("a mailto link on a PC with no mail app reports the failure instead of rejecting", async () => {
+    const shell = { openExternal: jest.fn().mockRejectedValue(new Error("No application knows how to open the URL")) };
+    const onFailure = jest.fn();
+    await expect(openExternalSafely(shell, "mailto:someone@example.com", onFailure)).resolves.toBeUndefined();
+    expect(onFailure).toHaveBeenCalledTimes(1);
+    expect(onFailure.mock.calls[0][0].message).toMatch(/No application/);
+  });
+
+  test("a synchronous throw is reported the same way", async () => {
+    const shell = { openExternal: jest.fn(() => { throw new Error("boom"); }) };
+    const onFailure = jest.fn();
+    await openExternalSafely(shell, "https://amd-gaia.ai", onFailure);
+    expect(onFailure).toHaveBeenCalledTimes(1);
+  });
+
+  test("a link that opens does not report anything", async () => {
+    const shell = { openExternal: jest.fn().mockResolvedValue(undefined) };
+    const onFailure = jest.fn();
+    await openExternalSafely(shell, "https://amd-gaia.ai", onFailure);
+    expect(shell.openExternal).toHaveBeenCalledWith("https://amd-gaia.ai");
+    expect(onFailure).not.toHaveBeenCalled();
+  });
+});
+
+describe("describeOpenFailure", () => {
+  test("names the link and the reason", () => {
+    const msg = describeOpenFailure("mailto:someone@example.com", new Error("No application"));
+    expect(msg).toContain("mailto:someone@example.com");
+    expect(msg).toContain("No application");
+  });
+
+  test("does not double the period when the OS error already ends in one", () => {
+    const msg = describeOpenFailure("mailto:a@b.c", new Error("No application."));
+    expect(msg).toContain("No application. Check");
+    expect(msg).not.toContain("..");
+  });
+});
+
+test("main.cjs never calls shell.openExternal or the data: loadURL without handling a rejection", () => {
+  const main = require("fs")
+    .readFileSync(require("path").join(__dirname, "..", "..", "src", "gaia", "apps", "webui", "main.cjs"), "utf8")
+    .replace(/\r\n/g, "\n");
+  expect(main).not.toMatch(/shell\.openExternal\(/);
+  expect(main).toMatch(/\.loadURL\("data:text\/html;charset=utf-8," \+ encodeURIComponent\(waitingHtml\)\)\s*\.catch\(/);
 });

@@ -1,6 +1,10 @@
 package chat
 
-import "github.com/amd/gaia/tui/internal/control"
+import (
+	"strings"
+
+	"github.com/amd/gaia/tui/internal/control"
+)
 
 // IsStreaming reports whether a query is currently in flight.
 func (m ChatModel) IsStreaming() bool { return m.streaming }
@@ -82,4 +86,25 @@ func (m ChatModel) controlSessionCost() *control.SessionCost {
 		sc.USD = &usd
 	}
 	return sc
+}
+
+// Idle reports that nothing in the chat is waiting on the keyboard: no turn
+// running, no panel open and nothing typed. A host may then read Enter or Esc
+// as the answer to a question of its own.
+func (m ChatModel) Idle() bool {
+	return !m.streaming && strings.TrimSpace(m.input.Value()) == "" &&
+		m.providerPanel == nil && m.agentsPanel == nil && !m.modelSetupOpen && !m.help.Open
+}
+
+// ReplaceStatus rewrites the newest status line reading prev to next, so a
+// host can show progress on one line; with no such line it appends next.
+func (m *ChatModel) ReplaceStatus(prev, next string) {
+	for i := len(m.messages) - 1; i >= 0; i-- {
+		if m.messages[i].Role == RoleStatus && m.messages[i].Content == prev {
+			m.messages[i].Content = next
+			m.updateViewport()
+			return
+		}
+	}
+	m.AppendStatus(next)
 }

@@ -158,25 +158,47 @@ describe('turning the selection into choices', () => {
 
 
 
-describe('download totals from one source', () => {
-    it('counts only what was left to download, as the models step did', () => {
-        // The embedder is on disk; Qwen was 7.6 GB in; Gemma is new.
+describe('overall download progress agrees with the rows', () => {
+    it('counts the bytes each row shows, a resumed partial included', () => {
+        // The embedder is on disk; Qwen was 7.6 GB in when this run started; Gemma is new.
         const p = plan([
             { ...QWEN, partial: true, partial_gb: 7.6, size_gb: 15.7 },
             GEMMA,
             { ...EMBED, downloaded: true, size_gb: 0 },
         ]);
-        const sel = initialSelection(p);
         const status = runStatus([
             progress({ id: EMBED.id, roles: ['embedding'], state: 'verifying', bytes_done: 0.3e9, bytes_total: 0.3e9 }),
             progress({ id: QWEN.id, state: 'downloading', bytes_done: 9.6e9, bytes_total: 23.3e9 }),
             progress({ id: GEMMA.id, roles: ['vision'], state: 'queued', bytes_total: 5.97e9 }),
         ]);
         const overall = overallFromPlan(status, p)!;
-        expect(overall.bytes_total / 1e9).toBeCloseTo(totals(p, sel).downloadGb!, 1);
-        // 2 GB of Qwen's remaining 15.7 GB have come since the start.
-        expect(overall.bytes_done / 1e9).toBeCloseTo(2.0, 1);
-        expect(overall.percent).toBe(Math.floor((2.0 / 21.67) * 100));
+        expect(overall.bytes_done / 1e9).toBeCloseTo(9.9, 1);
+        expect(overall.bytes_total / 1e9).toBeCloseTo(29.57, 1);
+        expect(overall.percent).toBe(Math.floor((9.9 / 29.57) * 100));
+    });
+
+    it('after Stop, counts models downloaded but not yet checked as done (#8797)', () => {
+        // The plan the download started from still lists them as not downloaded,
+        // and a model already on disk at the run's start reports no byte counts.
+        const p = plan([QWEN, EMBED, { ...EMBED, id: 'Whisper-Large-v3-Turbo', name: 'Whisper', size_gb: 1.6, full_size_gb: 1.6 }]);
+        const status = runStatus([
+            progress({ id: EMBED.id, roles: ['embedding'], state: 'unchecked', bytes_done: 0, bytes_total: 0 }),
+            progress({ id: QWEN.id, state: 'unchecked', bytes_done: 0, bytes_total: 0 }),
+            progress({ id: 'Whisper-Large-v3-Turbo', roles: ['speech'], state: 'cancelled', bytes_done: 0.56e9, bytes_total: 1.6e9 }),
+        ], { state: 'cancelled' });
+        const overall = overallFromPlan(status, p)!;
+        const total = (QWEN.full_size_gb! + EMBED.full_size_gb! + 1.6) * 1e9;
+        expect(overall.bytes_total).toBeCloseTo(total, -6);
+        expect(overall.bytes_done).toBeCloseTo(total - 1.04e9, -6);
+        expect(overall.percent).toBe(Math.floor(((total - 1.04e9) * 100) / total));
+    });
+
+    it('after a resume, never reads less than the rows already show (#8797)', () => {
+        const p = plan([{ ...QWEN, partial: true, partial_gb: 1.0, size_gb: 22.3 }]);
+        const status = runStatus([progress({ id: QWEN.id, state: 'downloading', bytes_done: 1.1e9, bytes_total: 23.3e9 })]);
+        const overall = overallFromPlan(status, p)!;
+        expect(overall.bytes_done).toBe(1.1e9);
+        expect(overall.bytes_total).toBe(23.3e9);
     });
 
     it('reads 100% when everything was already on this PC', () => {

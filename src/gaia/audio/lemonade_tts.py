@@ -30,6 +30,13 @@ DEFAULT_SYNTH_TIMEOUT = 120
 #: Longest text sent in one speech request; longer text is split at sentences.
 SPEECH_CHUNK_CHARS = 1800
 
+#: Faster than any voice speaks, so speech much shorter than this is cut off.
+MAX_WORDS_PER_SECOND = 3.0
+#: Speech under this share of the fastest estimate is refused as cut off.
+TRUNCATED_FRACTION = 0.25
+#: Text this short is not length-checked: a pause or two skews the estimate.
+MIN_WORDS_TO_CHECK = 10
+
 #: Formats a speech file is written in, and the suffix each takes. MP3 is
 #: Lemonade's own encoding of the same voice, about 2.4x smaller than WAV.
 SPEECH_FILE_FORMATS = {"wav": ".wav", "mp3": ".mp3"}
@@ -233,6 +240,42 @@ class LemonadeTTSError(RuntimeError):
     """Raised when Lemonade cannot produce speech."""
 
 
+class SpeechUnavailableError(LemonadeTTSError):
+    """GAIA doesn't offer its local voice on this platform (see
+    :func:`gaia.config.speech_output_unproven_reason`)."""
+
+
+def refuse_unless_speech_offered() -> None:
+    """Raise :class:`SpeechUnavailableError` where GAIA's voice isn't proven."""
+    from gaia.config import speech_output_unproven_reason
+
+    reason = speech_output_unproven_reason()
+    if reason:
+        raise SpeechUnavailableError(reason)
+
+
+def check_speech_length(text: str, seconds: float, speed: float = 1.0) -> None:
+    """Raise when *seconds* of speech is far too short to have said *text*.
+
+    Catches a speech runtime that answers every request with a fraction of a
+    second of audio, which would otherwise be saved or played as if whole.
+    """
+    words = len(text.split())
+    if words < MIN_WORDS_TO_CHECK:
+        return
+    fastest = words / (MAX_WORDS_PER_SECOND * max(speed, 0.01))
+    if seconds >= fastest * TRUNCATED_FRACTION:
+        return
+    raise LemonadeTTSError(
+        f"Lemonade's speech model returned {seconds:.1f} s of audio for "
+        f"{words} words, which take at least {fastest:.0f} s to say, so the "
+        "speech is cut off and GAIA did not use it. This is a fault in "
+        "Lemonade's text-to-speech runtime: update Lemonade Server and try "
+        "again, and check its log for the speech request. Known issue: "
+        "https://github.com/amd/gaia/issues/8831"
+    )
+
+
 class LemonadeTTSClient(LemonadeAudioService):
     """Text-to-speech against a running Lemonade Server."""
 
@@ -269,9 +312,11 @@ class LemonadeTTSClient(LemonadeAudioService):
 
         Raises:
             ConnectionError: Lemonade Server is not reachable.
+            SpeechUnavailableError: GAIA doesn't offer its voice on this platform.
             LemonadeTTSError: The model is unknown to this server or the pull
                 failed.
         """
+        refuse_unless_speech_offered()
         self.ensure_model_pulled("tts", say=say)
 
     def check_model_available(self) -> None:
@@ -283,6 +328,7 @@ class LemonadeTTSClient(LemonadeAudioService):
         """
         from gaia.llm.surface_hints import SPEECH_DOWNLOAD_HINT, SPEECH_SETUP_HINT
 
+        refuse_unless_speech_offered()
         catalog = self.catalog()
         entry = next((item for item in catalog if item.get("id") == self.model), None)
         if entry is None:
@@ -352,6 +398,7 @@ class LemonadeTTSClient(LemonadeAudioService):
         """One ``/audio/speech`` reply for *text*, checked for an HTTP error."""
         if not text or not text.strip():
             raise ValueError("text to speak must not be empty.")
+        refuse_unless_speech_offered()
         self._refuse_unless_local()
         body = {
             "model": self.model,
@@ -388,7 +435,8 @@ class LemonadeTTSClient(LemonadeAudioService):
         Raises:
             ValueError: *text* is empty.
             ConnectionError: Lemonade Server is not reachable.
-            LemonadeTTSError: The server refused the request or did not return MP3.
+            LemonadeTTSError: The server refused the request, did not return
+                MP3, or returned far too little speech for *text*.
         """
         response = self._speech_response(text, voice, speed, "mp3")
         content_type = response.headers.get("Content-Type", "")
@@ -399,12 +447,14 @@ class LemonadeTTSClient(LemonadeAudioService):
                 "Server version, or save the speech as WAV."
             )
         try:
-            return mp3_frames(response.content)
+            frames, seconds = mp3_frames(response.content)
         except ValueError as e:
             raise LemonadeTTSError(
                 f"Lemonade returned MP3 speech that cannot be read: {e}. Save "
                 "the speech as WAV instead."
             ) from e
+        check_speech_length(text, seconds, speed)
+        return frames, seconds
 
     def synthesize_file(
         self,
@@ -484,8 +534,9 @@ class LemonadeTTSClient(LemonadeAudioService):
         Raises:
             ValueError: *text* is empty.
             ConnectionError: Lemonade Server is not reachable.
-            LemonadeTTSError: The server refused the request or returned audio
-                in a format other than 16-bit PCM.
+            LemonadeTTSError: The server refused the request, returned audio
+                in a format other than 16-bit PCM, or returned far too little
+                speech for *text*.
         """
         response = self._speech_response(text, voice, speed, "pcm")
         content_type = response.headers.get("Content-Type", "")
@@ -504,7 +555,14 @@ class LemonadeTTSClient(LemonadeAudioService):
         samples = (
             np.frombuffer(response.content, dtype="<i2").astype(np.float32) / 32768.0
         )
-        return samples, int(rate_match.group(1))
+        rate = int(rate_match.group(1))
+        if rate <= 0:
+            raise LemonadeTTSError(
+                f"Lemonade returned an unusable sample rate in '{content_type}'. "
+                "Check the Lemonade Server version."
+            )
+        check_speech_length(text, len(samples) / rate, speed)
+        return samples, rate
 
     def synthesize_to_wav(
         self,

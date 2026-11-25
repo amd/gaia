@@ -970,6 +970,17 @@ class TestResolveMcpConfig:
         ]["args"]
         assert args[-2:] == ["--backend", BACKEND]
 
+    def test_the_agent_ui_server_reads_the_runs_api_token(self, tmp_path):
+        from gaia.ui.api_token import token_path
+
+        resolved = runner.resolve_mcp_config(tmp_path, BACKEND)
+
+        env = json.loads(resolved.read_text(encoding="utf-8"))["mcpServers"][
+            "gaia-agent-ui"
+        ]["env"]
+        assert env["GAIA_UI_TOKEN_FILE"] == str(token_path())
+        assert env["GAIA_MEMORY_ADMIN"] == "1"
+
     def test_a_template_without_the_agent_ui_server_is_refused(
         self, tmp_path, monkeypatch
     ):

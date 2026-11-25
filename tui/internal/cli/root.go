@@ -117,6 +117,12 @@ func agentChoice() (ui.AgentChoice, error) {
 		return ui.AgentChoice{}, fmt.Errorf("could not read the saved agent program: %w. "+
 			"Or pass --agent-program to choose one for this launch", err)
 	}
+	// Never run another program in place of one this build can't start.
+	if why := preflight.FlagshipAgentUnavailable(saved.Choice); why != "" {
+		return ui.AgentChoice{}, fmt.Errorf("%s: %s: %s. Pass --agent-program %s or %s for this launch, "+
+			"or choose another agent program in the Agent UI's Settings", saved.Path, preflight.FlagshipAgentKey,
+			why, preflight.FlagshipAgentPython, preflight.FlagshipAgentNative)
+	}
 	return ui.AgentChoice{Program: saved.Program()}, nil
 }
 

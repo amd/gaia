@@ -136,6 +136,14 @@ var confirmationRiskTiers = map[string]RiskTier{
 	"remove_skill":        RiskWrite,
 	// Erases every memory and past conversation; nothing brings them back.
 	"forget_everything": RiskDestructive,
+	// gaiacpp's names for its gated tools.
+	"bash_execute":    RiskDestructive,
+	"file_write":      RiskWrite,
+	"file_edit":       RiskWrite,
+	"generate_image":  RiskWrite,
+	"take_screenshot": RiskWrite,
+	"web_fetch":       RiskWrite,
+	"forget":          RiskDestructive,
 	// Not a tool: PathValidator asking to widen this session's scope by one path (reads and changes).
 	"allow_path_access": RiskAccess,
 	// Not a tool: the agent asking whether to read this folder's CLAUDE.md, AGENTS.md and skills.
@@ -172,6 +180,15 @@ var actionTitles = map[string]string{
 	"discard_draft":        "Delete this draft?",
 	"update_draft":         "Change this draft?",
 
+	// gaiacpp's names for its gated tools.
+	"bash_execute":    "Run this command?",
+	"file_write":      "Write this file?",
+	"file_edit":       "Edit this file?",
+	"take_screenshot": "Take a screenshot?",
+	"generate_image":  "Create this image?",
+	"forget":          "Forget this memory?",
+	"web_fetch":       "Open this web page?",
+
 	"send-email/send_now":         "Send this email?",
 	"send-email/send_draft":       "Send this email?",
 	"send-email/reply_to_message": "Send this reply?",
@@ -191,7 +208,11 @@ func ActionTitle(action string) string {
 	if title, ok := actionTitles[action]; ok {
 		return title
 	}
-	return "Allow " + action + "?"
+	// A connector's tools are named at runtime; the body shows the call.
+	if strings.HasPrefix(action, "mcp_") {
+		return "Use this connector tool?"
+	}
+	return "Allow " + strings.ReplaceAll(action, "_", " ") + "?"
 }
 
 // unboundedRiskActions are tiered Destructive because their name does not bound
@@ -200,6 +221,7 @@ func ActionTitle(action string) string {
 // or as code decides which text on screen the warning points at.
 var unboundedRiskActions = map[string]string{
 	"run_shell_command":   "command",
+	"bash_execute":        "command",
 	"wait_for_condition":  "command",
 	"run_python":          "code",
 	"execute_python_file": "code",

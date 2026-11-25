@@ -2436,3 +2436,31 @@ def test_a_well_formed_manifest_still_installs(tmp_path):
         )
         is None
     )
+
+
+@pytest.mark.parametrize(
+    ("cap", "limit"),
+    [("CPP_ARCHIVE_MAX_MEMBER_BYTES", 1024), ("CPP_ARCHIVE_MAX_TOTAL_BYTES", 1500)],
+)
+def test_install_cpp_refuses_an_archive_over_the_size_cap(
+    tmp_path, monkeypatch, cap, limit
+):
+    import io
+    import zipfile
+
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+        zf.writestr("bin/a", b"\0" * 1000)
+        zf.writestr("bin/b", b"\0" * 2000)
+    monkeypatch.setattr(installer, cap, limit)
+
+    with pytest.raises(InstallError, match="limit of") as exc:
+        _cpp_install_from_archive(tmp_path, "native.zip", buf.getvalue())
+    assert "malicious" not in str(exc.value)
+    assert not (tmp_path / "native" / "bin" / "b").exists()
+
+
+def test_install_cpp_size_caps_clear_the_largest_real_agent():
+    flagship_binary = 150 * 1024 * 1024
+    assert installer.CPP_ARCHIVE_MAX_MEMBER_BYTES > 4 * flagship_binary
+    assert installer.CPP_ARCHIVE_MAX_TOTAL_BYTES > 8 * flagship_binary
