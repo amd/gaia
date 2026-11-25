@@ -733,6 +733,7 @@ jobs:
         --max-turns 100
         --model claude-opus-5-5
         --allowedTools Edit,Read,Write,Grep,Glob,Bash
+        --permission-mode default
 
   # Decides whether a comment WITHOUT @claude is a follow-up Claude should consider
   # (#1408). A cheap API read, so the Opus run below only starts when a maintainer is
