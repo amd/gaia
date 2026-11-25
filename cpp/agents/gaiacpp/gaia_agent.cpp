@@ -941,7 +941,8 @@ std::vector<std::string> GaiaAgent::claimedFiles(const std::string& answer) {
         R"((md|csv|tsv|xlsx|xls|docx|pptx|txt|json|html|py|pdf|png|jpg|svg|yaml|yml|sh|ics|xml))\b)",
         std::regex::icase);
     static const std::regex verbEnd(kWriteVerbs, std::regex::icase);
-    const std::string prose = dropCounterfactual(plainPunctuation(answer, ";"));
+    // Bounded like the other answer checks: MSVC's std::regex refuses a search that long.
+    const std::string prose = dropCounterfactual(plainPunctuation(textForChecks(answer), ";"));
     std::vector<std::string> out;
     size_t pos = 0;
     std::smatch m;
