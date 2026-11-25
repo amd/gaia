@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import contextlib
 from types import SimpleNamespace
+from unittest.mock import MagicMock
 
 import pytest
 from gaiapy import research, stdio
@@ -590,3 +591,31 @@ def test_a_question_that_points_at_the_document_must_read_it(request_text):
             for p in agent.answer_problems("Sure.")
             if p.startswith("The answer did not read the documents")
         ]
+
+
+@pytest.mark.parametrize(
+    "request_text, flagged",
+    [
+        # From negation_handling: the handbook is the only source, and unnamed.
+        ("Are contractors eligible for health benefits?", True),
+        ("What about dental and vision for contractors?", True),
+        ("What is the capital of France?", False),
+        ("How do I boil an egg?", False),
+    ],
+)
+def test_a_question_about_what_a_document_holds_must_read_it(request_text, flagged):
+    rag = MagicMock()
+    rag.document_words.return_value = frozenset(
+        {"contractors", "eligible", "health", "dental", "vision", "benefits"}
+    )
+    with _agent() as (agent, _seen):
+        agent._rag = rag
+        agent.indexed_files = {"C:/docs/employee_handbook.md"}
+        agent._original_user_input = request_text
+        agent._turn_tool_executions = []
+        problems = [
+            p
+            for p in agent.answer_problems("Sure.")
+            if p.startswith("The answer did not read the documents")
+        ]
+        assert bool(problems) is flagged

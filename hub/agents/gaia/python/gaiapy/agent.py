@@ -280,6 +280,13 @@ _DOCUMENT_WORDS = re.compile(
 )
 
 
+#: Question words that say nothing about what a question is about.
+_QUESTION_FILLER = frozenset(
+    "what which when where whom whose does have that this there their they them "
+    "with from about into your tell give show list explain please could would "
+    "should much many some more most also only just like than then were been "
+    "being make made know want need".split()
+)
 _COMMON_NAME_WORDS = frozenset("the and for with from new old copy draft final".split())
 
 
@@ -924,9 +931,31 @@ class GaiaAgent(
             return []
         if called & _READS_DOCUMENTS:
             return []
-        if not _points_at_documents(request, documents):
+        if not _points_at_documents(request, documents) and not (
+            self._asks_about_document_content(request, documents)
+        ):
             return []
         return documents
+
+    def _asks_about_document_content(self, request: str, documents) -> bool:
+        """True when most of a question's own words appear in an attached
+        document: "are contractors eligible for health benefits?" over the
+        employee handbook, which names no document."""
+        rag = getattr(self, "_rag", None)
+        # An older core has no document_words; the name check above still runs.
+        if rag is None or not hasattr(rag, "document_words"):
+            return False
+        asked = {
+            word
+            for word in re.findall(r"[^\W\d_]{4,}", request.lower())
+            if word not in _QUESTION_FILLER
+        }
+        if len(asked) < 2:
+            return False
+        held = set()
+        for document in documents:
+            held |= asked & rag.document_words(document)
+        return len(held) >= 2 and 2 * len(held) >= len(asked)
 
     def answer_repair_prompt(self, problems):
         if self._research_brief != RESEARCH_BRIEF:

@@ -22,7 +22,7 @@ import time
 import zipfile
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, FrozenSet, List, Optional, Tuple
 
 import numpy as np
 
@@ -949,6 +949,7 @@ class RAGSDK:
         # This enables efficient per-file searches
         self.file_to_chunk_indices = {}  # {file_path: [chunk_idx1, chunk_idx2, ...]}
         self._scripts_cache = {}  # {file_path: ((first_idx,), n_chunks), scripts)}
+        self._words_cache = {}  # {file_path: ((first_idx,), n_chunks), words)}
         self.chunk_to_file = {}  # {chunk_idx: file_path} for reverse lookup
 
         # Per-file FAISS indices and embeddings (CACHED for performance)
@@ -1403,6 +1404,27 @@ class RAGSDK:
         scripts = text_scripts("".join(chunks))
         self._scripts_cache[file_path] = (key, scripts)
         return list(scripts)
+
+    def document_words(self, file_path: str) -> FrozenSet[str]:
+        """Lower-case words of four or more letters in an indexed file.
+
+        Lets the agent tell a question about a document ("are contractors
+        eligible for health benefits?") from one it can answer without it.
+        """
+        with self._state_lock:
+            indices = list(self.file_to_chunk_indices.get(file_path, []))
+            chunks = [self.chunks[i] for i in indices if i < len(self.chunks)]
+        key = (tuple(indices[:1]), len(chunks))
+        cached = self._words_cache.get(file_path)
+        if cached and cached[0] == key:
+            return cached[1]
+        words = frozenset(
+            word
+            for chunk in chunks
+            for word in re.findall(r"[^\W\d_]{4,}", str(chunk).lower())
+        )
+        self._words_cache[file_path] = (key, words)
+        return words
 
     def _get_cache_path(self, file_path: str, content_key: Optional[str] = None) -> str:
         """Chunk-cache path: :meth:`_content_key` plus :meth:`_chunking_fingerprint`.
