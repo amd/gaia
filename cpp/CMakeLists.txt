@@ -411,6 +411,7 @@ if(GAIA_BUILD_GAIA_AGENT)
         agents/gaiacpp/delegation.cpp
         agents/gaiacpp/sidecar.cpp
         agents/gaiacpp/stdio_server.cpp
+        agents/gaiacpp/host_server.cpp
         agents/gaiacpp/bash_tools.cpp
     )
     # A GAIA release stamps its own version (0.25.4, 0.25.4-rc.1); the daemon
@@ -559,6 +560,7 @@ if(GAIA_BUILD_TESTS)
     if(GAIA_BUILD_GAIA_AGENT)
         target_sources(tests_mock PRIVATE tests/test_gaiacpp_cli.cpp tests/test_gaiacpp_sidecar.cpp)
         target_sources(tests_mock PRIVATE tests/test_gaiacpp_stdio.cpp agents/gaiacpp/stdio_server.cpp)
+        target_sources(tests_mock PRIVATE tests/test_gaiacpp_engine.cpp agents/gaiacpp/host_server.cpp)
         target_compile_definitions(tests_mock PRIVATE GAIACPP_BIN="$<TARGET_FILE:gaiacpp>")
         add_dependencies(tests_mock gaiacpp)
     endif()

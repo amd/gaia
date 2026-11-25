@@ -24,6 +24,15 @@ dependencies:
       tests/unit/test_flagship_ci.py names it as the docs page that must NOT
       trigger this lane; it is a probe string, not a file the test reads.
 
+  test_sdk.yml:
+    conftest.py: >-
+      The lane runs pytest with `--rootdir sdk/python --confcutdir sdk/python`,
+      so the repo-root conftest is never loaded; the SDK is tested without the
+      gaia package installed.
+    pyproject.toml: >-
+      The lane passes `-c sdk/python/pyproject.toml`, so pytest reads the SDK's
+      own config (under sdk/**, which the lane triggers on), not the repo's.
+
   test_unit.yml:
     docs/guides/email.mdx: >-
       tests/unit/test_audit_synthesis_prep.py uses it as a finding's path in a

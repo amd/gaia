@@ -577,6 +577,10 @@ def context_window(agent: Any) -> int:
     """
     from gaia.llm.lemonade_client import LemonadeClient
 
+    # A host's own client knows its model's window; no catalogue does.
+    declared = getattr(getattr(agent, "_host_llm_client", None), "context_window", None)
+    if isinstance(declared, int) and not isinstance(declared, bool) and declared > 0:
+        return declared
     claude = bool(getattr(agent, "_use_claude", False))
     cloud = not claude and _is_cloud(agent)
     if not (claude or cloud):

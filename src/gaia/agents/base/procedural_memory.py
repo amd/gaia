@@ -37,6 +37,7 @@ from gaia.agents.base.skill_synthesis import (
     load_synthesis_config,
     reconcile_and_store,
 )
+from gaia.chat.sdk import AgentSDK
 from gaia.llm.lemonade_client import SIDE_SLOT, no_thinking_kwargs
 from gaia.logger import get_logger
 
@@ -902,12 +903,14 @@ class ProceduralMemoryMixin:
             # pass loudly (no smaller-model fallback), per the off-state table.
             # The cluster stays unmarked, so the next pass retries it.
             try:
-                candidate = distill_cluster(
-                    cluster,
-                    functools.partial(
-                        self.chat.send_messages, **self._side_request_kwargs()
-                    ),
-                )
+                # A side request: never counted against a running turn's budget.
+                with AgentSDK.side_request():
+                    candidate = distill_cluster(
+                        cluster,
+                        functools.partial(
+                            self.chat.send_messages, **self._side_request_kwargs()
+                        ),
+                    )
             except Exception as e:
                 logger.warning(
                     "[MemoryMixin] skill synthesis pass aborted — distillation LLM "
