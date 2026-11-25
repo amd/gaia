@@ -4706,8 +4706,11 @@ class MemoryMixin(ProceduralMemoryMixin):
                 record_error,
             )
 
-        # Truncate result summary
-        result_str = str(result)
+        # The tool docs a malformed call gets back are for the model, not the log.
+        logged = result
+        if isinstance(result, dict) and "tool_docs" in result:
+            logged = {k: v for k, v in result.items() if k != "tool_docs"}
+        result_str = str(logged)
         result_summary = result_str[:500] if len(result_str) > 500 else result_str
 
         # Log to tool_history

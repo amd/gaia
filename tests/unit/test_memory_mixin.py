@@ -1728,6 +1728,31 @@ class TestToolExecutionLogging:
         assert rows[0]["executed"] is False
         assert rows[0]["error"] == error
 
+    def test_tool_docs_go_to_the_model_not_the_tool_history(
+        self, mixin_host, monkeypatch
+    ):
+        """A malformed call's ``tool_docs`` reach the caller but stay out of the log."""
+        docs = "[Tool docs: write_file]\nPARAMETERS_SHOULD_NOT_BE_LOGGED"
+
+        def malformed(self_arg, name, args):
+            return {
+                "status": "error",
+                "error_type": "invalid_arguments",
+                "error": "missing path",
+                "tool_docs": docs,
+            }
+
+        monkeypatch.setattr(FakeAgent, "_execute_tool", malformed)
+
+        result = mixin_host._execute_tool("write_file", {})
+
+        assert result["tool_docs"] == docs
+        rows = mixin_host.memory_store.get_tool_history("write_file")
+        assert len(rows) == 1
+        assert "missing path" in rows[0]["result_summary"]
+        assert "PARAMETERS_SHOULD_NOT_BE_LOGGED" not in rows[0]["result_summary"]
+        assert "tool_docs" not in rows[0]["result_summary"]
+
     def test_execute_tool_logs_failure(self, mixin_host):
         """_execute_tool logs failed tool calls with error details."""
 
