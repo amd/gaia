@@ -352,46 +352,6 @@ class LemonadeTTSClient(LemonadeAudioService):
                 f"{SPEECH_DOWNLOAD_HINT}"
             )
 
-    def synthesize_long(
-        self,
-        text: str,
-        voice: str = DEFAULT_VOICE,
-        speed: float = 1.0,
-        limit: int = 1800,
-    ) -> Tuple[np.ndarray, int]:
-        """Synthesize long text in sentence-sized chunks and join the PCM."""
-        if not text or not text.strip():
-            raise ValueError("text to speak must not be empty.")
-        pieces = _split_text(text, limit)
-        chunks: List[np.ndarray] = []
-        rate: Optional[int] = None
-        for piece in pieces:
-            samples, piece_rate = self.synthesize(piece, voice=voice, speed=speed)
-            if rate is None:
-                rate = piece_rate
-            elif piece_rate != rate:
-                raise LemonadeTTSError(
-                    f"Lemonade changed speech sample rate from {rate} to {piece_rate}."
-                )
-            chunks.append(samples)
-        return np.concatenate(chunks), rate or TTS_SAMPLE_RATE
-
-    def synthesize_to_wav_long(
-        self,
-        text: str,
-        output_path: str | Path,
-        voice: str = DEFAULT_VOICE,
-        speed: float = 1.0,
-        limit: int = 1800,
-    ) -> Tuple[float, int]:
-        """Synthesize long text into one 16-bit mono WAV and report its chunks."""
-        pieces = _split_text(text, limit)
-        samples, rate = self.synthesize_long(
-            text, voice=voice, speed=speed, limit=limit
-        )
-        write_wav(output_path, samples, rate)
-        return len(samples) / rate, len(pieces)
-
     def _speech_response(
         self, text: str, voice: str, speed: float, response_format: str
     ) -> requests.Response:

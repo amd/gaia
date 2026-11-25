@@ -383,12 +383,6 @@ class IsolatedGaia:
         cfg.update(values)
         path.write_text(json.dumps(cfg), encoding="utf-8")
 
-    def is_lemond_installed(self) -> bool:
-        from gaia.version import LEMONADE_VERSION
-
-        exe = "lemond.exe" if sys.platform == "win32" else "lemond"
-        return (self.home / "lemonade" / "dist" / LEMONADE_VERSION / exe).is_file()
-
     # -- reading state ---------------------------------------------------------
 
     def state(self) -> Optional[Dict[str, Any]]:

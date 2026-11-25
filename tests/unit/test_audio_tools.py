@@ -1350,44 +1350,6 @@ class TestDegradedSpeakerIdIsVisible:
         assert "speaker_identification" not in result
 
 
-class TestTranscriptionStatus:
-    def test_reports_not_ready_without_ffmpeg_but_does_not_install(self):
-        with (
-            patch("gaia.audio.media.find_ffmpeg", return_value=None),
-            patch("gaia.audio.lemonade_asr.LemonadeASRClient") as client,
-        ):
-            client.return_value.available_models.return_value = ["Whisper-Base"]
-            result = Host()._transcription_status()
-
-        assert result["ready"] is False
-        assert "not installed" in result["ffmpeg"]
-
-    def test_unreachable_lemonade_is_reported_not_raised(self):
-        with (
-            patch("gaia.audio.media.find_ffmpeg", return_value="ffmpeg"),
-            patch("gaia.audio.lemonade_asr.LemonadeASRClient") as client,
-        ):
-            client.return_value.available_models.side_effect = ConnectionError(
-                "not reachable at http://localhost:13305"
-            )
-            result = Host()._transcription_status()
-
-        assert result["ready"] is False
-        assert result["lemonade"] == "unreachable"
-        assert "13305" in result["lemonade_error"]
-
-    def test_ready_when_both_present(self):
-        with (
-            patch("gaia.audio.media.find_ffmpeg", return_value="ffmpeg"),
-            patch("gaia.audio.lemonade_asr.LemonadeASRClient") as client,
-        ):
-            client.return_value.available_models.return_value = ["Whisper-Base"]
-            result = Host()._transcription_status()
-
-        assert result["ready"] is True
-        assert result["available_models"] == ["Whisper-Base"]
-
-
 def _repo_profiles():
     """Load this checkout's chat profiles by path.
 

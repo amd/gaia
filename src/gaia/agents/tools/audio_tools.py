@@ -521,7 +521,6 @@ class AudioToolsMixin:
     without changing any state, so re-calling it always looks reasonable. ``transcribe_media``
     already fails loudly and actionably when a component is missing, which is
     the same information at the moment it actually matters.
-    ``transcription_status()`` remains as a plain method for diagnostics.
     """
 
     def register_audio_tools(self) -> None:
@@ -1611,32 +1610,6 @@ class AudioToolsMixin:
         destination.parent.mkdir(parents=True, exist_ok=True)
         destination.write_text(transcript.text, encoding="utf-8")
         return destination
-
-    def _transcription_status(self) -> Dict:
-        """Report component availability without installing anything."""
-        from gaia.audio.lemonade_asr import LemonadeASRClient
-        from gaia.audio.media import find_ffmpeg
-
-        ffmpeg_path = find_ffmpeg()
-
-        models: List[str] = []
-        lemonade_error = None
-        try:
-            models = LemonadeASRClient().available_models()
-        except Exception as e:
-            lemonade_error = str(e)
-
-        ready = bool(ffmpeg_path) and bool(models)
-        result = {
-            "status": "success",
-            "ready": ready,
-            "ffmpeg": ffmpeg_path or "not installed (installed on first transcription)",
-            "lemonade": "reachable" if lemonade_error is None else "unreachable",
-            "available_models": models,
-        }
-        if lemonade_error:
-            result["lemonade_error"] = lemonade_error
-        return result
 
     def _download_speech_model(self, client) -> None:
         """Download and load the speech model as their own visible steps.

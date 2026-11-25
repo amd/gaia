@@ -9044,31 +9044,6 @@ class LemonadeClient:
         if backend.get("state") in ("installable", "update_required"):
             self.install_backend(NPU_BACKEND_SPEC, timeout=NPU_BACKEND_INSTALL_TIMEOUT)
 
-    def uninstall_backend(self, spec: str, timeout: int = 120) -> Dict[str, Any]:
-        """Uninstall a Lemonade backend.
-
-        Args:
-            spec: Backend specification (e.g. 'flm:npu', 'llamacpp:vulkan')
-            timeout: Request timeout in seconds
-
-        Returns:
-            Dict containing uninstall status
-
-        Raises:
-            ValueError: If *spec* is not in ``recipe:backend`` form
-            LemonadeClientError: If the uninstall fails
-        """
-        self.log.info(f"Uninstalling backend: {spec}")
-        recipe, backend = split_backend_spec(spec)
-        request_data: Dict[str, Any] = {"recipe": recipe, "backend": backend}
-        url = f"{self.base_url}/uninstall"
-        try:
-            response = self._send_request("post", url, request_data, timeout=timeout)
-            self.log.info(f"Uninstalled backend {spec}: {response}")
-            return response
-        except Exception as e:
-            raise LemonadeClientError(f"Failed to uninstall backend {spec}: {e}") from e
-
     def get_recipe_status(self, recipe: str) -> Optional[Dict[str, Any]]:
         """Get the status of a specific recipe from system-info.
 

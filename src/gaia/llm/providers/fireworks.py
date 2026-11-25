@@ -231,24 +231,6 @@ def search(models: List[FireworksModel], term: str) -> List[FireworksModel]:
     return [m for m in models if needle in m.id.lower()]
 
 
-def missing_from_gateway(
-    catalogue: List[FireworksModel], gateway_ids: List[str]
-) -> List[FireworksModel]:
-    """Models Fireworks serves that the gateway never offered.
-
-    The point of asking the provider directly: naming the gap turns "the model
-    I want is not in the list" into a checkable claim.
-    """
-    known = set()
-    for gid in gateway_ids or []:
-        trimmed = (
-            gid[len(LEMONADE_PREFIX) :] if gid.startswith(LEMONADE_PREFIX) else gid
-        )
-        known.add(trimmed)
-        known.add(trimmed.rsplit("/", 1)[-1])
-    return [m for m in catalogue if m.id not in known and m.short_name not in known]
-
-
 @dataclass
 class LibraryModel:
     """One model in Fireworks' library, servable or not."""

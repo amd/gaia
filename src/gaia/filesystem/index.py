@@ -842,29 +842,6 @@ class FileSystemIndexService(DatabaseMixin):
         return self.query(sql, params)
 
     # ------------------------------------------------------------------
-    # Directory stats
-    # ------------------------------------------------------------------
-
-    def get_directory_stats(self, path: str) -> Optional[Dict[str, Any]]:
-        """
-        Get cached directory statistics.
-
-        Args:
-            path: Directory path to look up.
-
-        Returns:
-            Dict with ``total_size``, ``file_count``, ``dir_count``,
-            ``deepest_depth``, ``common_extensions``, ``last_scanned``,
-            or None if the directory has not been scanned.
-        """
-        resolved = str(Path(path).resolve())
-        return self.query(
-            "SELECT * FROM directory_stats WHERE path = :path",
-            {"path": resolved},
-            one=True,
-        )
-
-    # ------------------------------------------------------------------
     # Categorization
     # ------------------------------------------------------------------
 
@@ -882,91 +859,6 @@ class FileSystemIndexService(DatabaseMixin):
         """
         ext = _get_extension(Path(file_path).name)
         return _auto_categorize(ext) if ext else ("other", "unknown")
-
-    # ------------------------------------------------------------------
-    # Statistics
-    # ------------------------------------------------------------------
-
-    def get_statistics(self) -> Dict[str, Any]:
-        """
-        Return aggregate index statistics.
-
-        Returns:
-            Dict with ``total_files``, ``total_directories``,
-            ``total_size_bytes``, ``categories``, ``top_extensions``,
-            and ``last_scan``.
-        """
-        total_files_row = self.query(
-            "SELECT COUNT(*) AS cnt FROM files WHERE is_directory = 0", one=True
-        )
-        total_dirs_row = self.query(
-            "SELECT COUNT(*) AS cnt FROM files WHERE is_directory = 1", one=True
-        )
-        size_row = self.query(
-            "SELECT COALESCE(SUM(size), 0) AS total FROM files "
-            "WHERE is_directory = 0",
-            one=True,
-        )
-
-        categories = self.query(
-            "SELECT category, COUNT(*) AS cnt FROM file_categories "
-            "GROUP BY category ORDER BY cnt DESC"
-        )
-
-        top_exts = self.query(
-            "SELECT extension, COUNT(*) AS cnt FROM files "
-            "WHERE extension IS NOT NULL AND is_directory = 0 "
-            "GROUP BY extension ORDER BY cnt DESC LIMIT 15"
-        )
-
-        last_scan_row = self.query(
-            "SELECT * FROM scan_log ORDER BY completed_at DESC LIMIT 1",
-            one=True,
-        )
-
-        return {
-            "total_files": total_files_row["cnt"] if total_files_row else 0,
-            "total_directories": total_dirs_row["cnt"] if total_dirs_row else 0,
-            "total_size_bytes": size_row["total"] if size_row else 0,
-            "categories": {r["category"]: r["cnt"] for r in categories},
-            "top_extensions": {r["extension"]: r["cnt"] for r in top_exts},
-            "last_scan": dict(last_scan_row) if last_scan_row else None,
-        }
-
-    # ------------------------------------------------------------------
-    # Maintenance
-    # ------------------------------------------------------------------
-
-    def cleanup_stale(self, max_age_days: int = 30) -> int:
-        """
-        Remove entries for files that no longer exist on disk.
-
-        Args:
-            max_age_days: Only check files indexed more than this many days
-                          ago.  Set to 0 to check all entries.
-
-        Returns:
-            Number of stale entries removed.
-        """
-        if max_age_days > 0:
-            cutoff = (
-                datetime.datetime.now() - datetime.timedelta(days=max_age_days)
-            ).isoformat()
-            rows = self.query(
-                "SELECT id, path FROM files WHERE indexed_at < :cutoff",
-                {"cutoff": cutoff},
-            )
-        else:
-            rows = self.query("SELECT id, path FROM files")
-
-        removed = 0
-        for row in rows:
-            if not Path(row["path"]).exists():
-                self.delete("files", "id = :id", {"id": row["id"]})
-                removed += 1
-
-        logger.info("Cleaned up %d stale entries", removed)
-        return removed
 
     # ------------------------------------------------------------------
     # Bookmarks

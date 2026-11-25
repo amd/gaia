@@ -171,7 +171,12 @@ class TestScanPrefixIsAFolderBoundary:
         index.scan_directory(str(docs2))
         index.scan_directory(str(docs), incremental=False)
 
-        assert index.get_directory_stats(str(docs))["file_count"] == 1
+        row = index.query(
+            "SELECT file_count FROM directory_stats WHERE path = :path",
+            {"path": str(docs.resolve())},
+            one=True,
+        )
+        assert row["file_count"] == 1
 
     def test_an_underscore_in_the_folder_is_not_a_wildcard(self, tmp_path, index):
         mine = tmp_path / "my_docs"

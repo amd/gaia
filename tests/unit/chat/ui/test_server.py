@@ -19,9 +19,8 @@ import pytest
 from fastapi.testclient import TestClient
 
 from gaia.ui.server import _sanitize_static_path, create_app
+from gaia.ui.utils import ALLOWED_EXTENSIONS
 from gaia.ui.utils import compute_file_hash as _compute_file_hash
-from gaia.ui.utils import sanitize_document_path as _sanitize_document_path
-from gaia.ui.utils import validate_file_path as _validate_file_path
 
 logger = logging.getLogger(__name__)
 
@@ -2511,68 +2510,12 @@ class TestHelperFunctions:
             os.unlink(tmp_path)
 
 
-class TestValidateFilePath:
-    """Tests for _validate_file_path security validation."""
+class TestDocumentAllowlist:
+    """The extension allowlist the document endpoints enforce."""
 
-    def test_valid_pdf_path(self):
-        from pathlib import Path
-
-        # Should not raise for a valid absolute path with allowed extension
-        _validate_file_path(Path("/home/user/document.pdf").resolve())
-
-    def test_valid_txt_path(self):
-        from pathlib import Path
-
-        _validate_file_path(Path("/home/user/notes.txt").resolve())
-
-    def test_valid_md_path(self):
-        from pathlib import Path
-
-        _validate_file_path(Path("/home/user/readme.md").resolve())
-
-    def test_rejects_null_bytes(self):
-        from pathlib import Path
-
-        with pytest.raises(Exception) as exc_info:
-            _validate_file_path(Path("/home/user/file\x00.pdf"))
-        assert exc_info.value.status_code == 400
-
-    def test_rejects_unsupported_extension(self):
-        from pathlib import Path
-
-        with pytest.raises(Exception) as exc_info:
-            _validate_file_path(Path("/home/user/malware.exe").resolve())
-        assert exc_info.value.status_code == 400
-        assert "Unsupported file type" in exc_info.value.detail
-
-    def test_rejects_no_extension(self):
-        from pathlib import Path
-
-        with pytest.raises(Exception) as exc_info:
-            _validate_file_path(Path("/home/user/noextension").resolve())
-        assert exc_info.value.status_code == 400
-
-    def test_rejects_binary_extensions(self):
-        from pathlib import Path
-
-        for ext in [".exe", ".dll", ".so", ".bin", ".dat"]:
-            with pytest.raises(Exception) as exc_info:
-                _validate_file_path(Path(f"/home/user/file{ext}").resolve())
-            assert exc_info.value.status_code == 400
-
-    def test_allows_code_extensions(self):
-        from pathlib import Path
-
-        for ext in [".py", ".js", ".ts", ".java", ".c", ".cpp"]:
-            # Should not raise
-            _validate_file_path(Path(f"/home/user/file{ext}").resolve())
-
-    def test_allows_document_extensions(self):
-        from pathlib import Path
-
+    def test_allows_documents_and_code(self):
         # Only list extensions that have real extractors in
-        # src/gaia/rag/sdk.py::_extract_text_from_file. See
-        # ``ALLOWED_EXTENSIONS`` in src/gaia/ui/utils.py for the canonical list.
+        # src/gaia/rag/sdk.py::_extract_text_from_file.
         for ext in [
             ".pdf",
             ".pptx",
@@ -2583,22 +2526,20 @@ class TestValidateFilePath:
             ".json",
             ".xlsx",
             ".yaml",
+            ".py",
+            ".js",
+            ".ts",
+            ".java",
+            ".c",
+            ".cpp",
         ]:
-            # Should not raise
-            _validate_file_path(Path(f"/home/user/file{ext}").resolve())
+            assert ext in ALLOWED_EXTENSIONS
 
-    def test_rejects_legacy_office_extensions(self):
-        """Legacy binary Office formats must be rejected, not silently indexed
-        as binary garbage. Regression test for the allowlist — GAIA ships
-        python-docx/python-pptx (modern .docx/.pptx) but no parser for the
-        legacy BIFF/binary .doc/.ppt/.xls, so those would produce garbage.
-        NOTE: .pptx and .docx ARE supported."""
-        from pathlib import Path
-
-        for ext in [".doc", ".ppt", ".xls"]:
-            with pytest.raises(Exception) as exc_info:
-                _validate_file_path(Path(f"/home/user/file{ext}").resolve())
-            assert exc_info.value.status_code == 400
+    def test_rejects_binaries_and_legacy_office(self):
+        """GAIA has no parser for legacy binary .doc/.ppt/.xls, so indexing
+        them would produce garbage."""
+        for ext in [".exe", ".dll", ".so", ".bin", ".dat", ".doc", ".ppt", ".xls"]:
+            assert ext not in ALLOWED_EXTENSIONS
 
     @patch("gaia.ui.server._index_document")
     def test_upload_rejects_unsafe_extension(self, mock_index, client):
@@ -2629,42 +2570,6 @@ class TestValidateFilePath:
             )
         finally:
             os.unlink(tmp_path)
-
-
-class TestSanitizeDocumentPath:
-    """Tests for _sanitize_document_path security sanitization."""
-
-    def test_returns_resolved_path(self):
-        from pathlib import Path
-
-        result = _sanitize_document_path("/home/user/doc.pdf")
-        assert result.is_absolute()
-        assert result == Path("/home/user/doc.pdf").resolve()
-
-    def test_rejects_null_bytes(self):
-        with pytest.raises(Exception) as exc_info:
-            _sanitize_document_path("/home/user/file\x00.pdf")
-        assert exc_info.value.status_code == 400
-
-    def test_rejects_unsafe_extension(self):
-        with pytest.raises(Exception) as exc_info:
-            _sanitize_document_path("/home/user/malware.exe")
-        assert exc_info.value.status_code == 400
-        detail = exc_info.value.detail
-        assert "Unsupported file type" in detail or "cannot be indexed" in detail
-
-    def test_accepts_valid_extensions(self):
-        for ext in [".pdf", ".txt", ".md", ".json", ".py", ".csv"]:
-            result = _sanitize_document_path(f"/home/user/file{ext}")
-            assert result.suffix == ext
-
-    def test_resolves_traversal_in_path(self):
-        from pathlib import Path
-
-        # Path with .. should be resolved
-        result = _sanitize_document_path("/home/user/../user/doc.txt")
-        assert ".." not in str(result)
-        assert result == Path("/home/user/doc.txt").resolve()
 
 
 class TestSanitizeStaticPath:

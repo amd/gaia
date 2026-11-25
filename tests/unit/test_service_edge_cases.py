@@ -11,7 +11,6 @@ row-limit enforcement, SQL-injection keyword blocking, shared-database
 coexistence, and transaction atomicity.
 """
 
-import datetime
 import sqlite3
 from unittest.mock import patch
 
@@ -87,26 +86,6 @@ def stale_dir(tmp_path):
     root.mkdir()
     (root / "keep.txt").write_text("I stay")
     (root / "remove_me.txt").write_text("I will be deleted")
-    return root
-
-
-@pytest.fixture
-def multi_ext_dir(tmp_path):
-    """Create a directory with many extensions for statistics ordering tests.
-
-    5 .py, 3 .txt, 2 .md, 1 .csv
-    """
-    root = tmp_path / "multi_ext"
-    root.mkdir()
-
-    for i in range(5):
-        (root / f"code_{i}.py").write_text(f"# code {i}")
-    for i in range(3):
-        (root / f"note_{i}.txt").write_text(f"note {i}")
-    for i in range(2):
-        (root / f"doc_{i}.md").write_text(f"# doc {i}")
-    (root / "data.csv").write_text("a,b\n1,2\n")
-
     return root
 
 
@@ -383,72 +362,6 @@ class TestAutoCategorizeInstanceMethod:
         cat, subcat = tmp_index.auto_categorize("Makefile")
         assert cat == "other"
         assert subcat == "unknown"
-
-
-class TestGetStatisticsTopExtensions:
-    """Edge case: verify top_extensions are ordered by descending count."""
-
-    def test_top_extensions_ordering(self, tmp_index, multi_ext_dir):
-        """top_extensions dict preserves descending count order."""
-        tmp_index.scan_directory(str(multi_ext_dir))
-
-        stats = tmp_index.get_statistics()
-        top_exts = stats["top_extensions"]
-
-        # The dict should have py, txt, md, csv in that order.
-        ext_items = list(top_exts.items())
-        assert len(ext_items) >= 4
-
-        # Counts should be non-increasing (descending).
-        counts = [cnt for _, cnt in ext_items]
-        for i in range(len(counts) - 1):
-            assert counts[i] >= counts[i + 1], f"top_extensions not sorted: {ext_items}"
-
-        # First entry should be 'py' with count 5.
-        assert ext_items[0][0] == "py"
-        assert ext_items[0][1] == 5
-
-
-class TestCleanupStaleWithMaxAgeDays:
-    """Edge case: cleanup_stale with max_age_days > 0 filters by indexed_at."""
-
-    def test_max_age_days_filters_by_cutoff(self, tmp_index, tmp_path):
-        """Only entries indexed more than max_age_days ago are candidates."""
-        root = tmp_path / "age_test"
-        root.mkdir()
-        (root / "old_file.txt").write_text("old")
-        (root / "new_file.txt").write_text("new")
-
-        tmp_index.scan_directory(str(root))
-
-        # Manually backdate the indexed_at for old_file.txt to 60 days ago.
-        old_resolved = str((root / "old_file.txt").resolve())
-        past = (datetime.datetime.now() - datetime.timedelta(days=60)).isoformat()
-        tmp_index.update(
-            "files",
-            {"indexed_at": past},
-            "path = :path",
-            {"path": old_resolved},
-        )
-
-        # Delete BOTH files from disk.
-        (root / "old_file.txt").unlink()
-        (root / "new_file.txt").unlink()
-
-        # cleanup_stale with max_age_days=30 should only remove old_file.txt
-        # because new_file.txt was indexed just now (within 30 days).
-        removed = tmp_index.cleanup_stale(max_age_days=30)
-        assert removed == 1
-
-        # new_file.txt should still be in the index (even though it was deleted
-        # from disk) because its indexed_at is recent.
-        new_resolved = str((root / "new_file.txt").resolve())
-        row = tmp_index.query(
-            "SELECT * FROM files WHERE path = :path",
-            {"path": new_resolved},
-            one=True,
-        )
-        assert row is not None
 
 
 class TestBuildExcludesWithUserPatterns:

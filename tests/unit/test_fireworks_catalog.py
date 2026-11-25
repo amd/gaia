@@ -24,7 +24,6 @@ from gaia.llm.providers.fireworks import (
     FireworksModel,
     fetch_library,
     fetch_models,
-    missing_from_gateway,
     needs_deployment,
     resolve_fireworks_api_key,
     search,
@@ -277,31 +276,6 @@ class TestLibrary:
         with pytest.raises(FireworksError, match="403") as e:
             fetch_library(api_key="k")
         assert FIREWORKS_CONTROL_URL in str(e.value)
-
-
-class TestGapAgainstTheGateway:
-    """The reason this exists: name what the gateway is not offering."""
-
-    def setup_method(self):
-        self.catalogue = [
-            FireworksModel(id="accounts/fireworks/models/gemma-4-31b-it"),
-            FireworksModel(id="accounts/fireworks/models/qwen3p8-27b"),
-            FireworksModel(id="accounts/fireworks/models/glm-5p3"),
-        ]
-
-    def test_reports_only_what_the_gateway_lacks(self):
-        missing = missing_from_gateway(self.catalogue, ["fireworks.glm-5p3"])
-        assert [m.short_name for m in missing] == ["gemma-4-31b-it", "qwen3p8-27b"]
-
-    def test_matches_a_gateway_id_written_in_full_path_form(self):
-        missing = missing_from_gateway(
-            self.catalogue,
-            ["fireworks.accounts/fireworks/models/glm-5p3"],
-        )
-        assert "glm-5p3" not in [m.short_name for m in missing]
-
-    def test_an_empty_gateway_list_means_everything_is_missing(self):
-        assert len(missing_from_gateway(self.catalogue, [])) == 3
 
 
 class TestSearch:

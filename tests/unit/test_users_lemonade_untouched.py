@@ -490,12 +490,11 @@ class TestModelLoad:
             lambda c: c.unload_model(),
             lambda c: c.delete_model("Users-Own-Model"),
             lambda c: c.install_backend("llamacpp:rocm"),
-            lambda c: c.uninstall_backend("llamacpp:vulkan"),
             lambda c: c.load_model(
                 CHAT, auto_download=False, prompt=False, save_options=True
             ),
         ],
-        ids=["unload", "unload-all", "delete", "install", "uninstall", "save-opts"],
+        ids=["unload", "unload-all", "delete", "install", "save-opts"],
     )
     def test_setup_changes_are_refused_before_anything_is_sent(
         self, users_server, client, call
