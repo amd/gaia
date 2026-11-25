@@ -52,6 +52,12 @@ The SDK looks for `gaiacpp` in this order: the `engine` option, the `GAIA_ENGINE
 environment variable, a `bin/` folder beside the package, then `PATH`. Builds are
 attached to each [GAIA release](https://github.com/amd/gaia/releases).
 
+## A package that carries the engine
+
+Put the binary in `bin/` before `npm pack` and the tarball is self-contained:
+installed alone, it runs a turn with no `GAIA_ENGINE`. `test/smoke-installed.mjs`
+checks exactly that, and CI runs it on every change.
+
 ## Tests
 
 ```bash

@@ -144,6 +144,20 @@ cmake -B build -S cpp -DCMAKE_BUILD_TYPE=Release
 cmake --build build --target gaiacpp
 ```
 
+### A slim install
+
+The Python SDK has no dependencies, so a server image needs only one wheel:
+
+```bash
+python sdk/python/build_wheel.py --engine build/gaiacpp --out dist
+pip install dist/gaia_sdk-*.whl
+```
+
+The wheel carries the engine and is tagged for the platform it was built on. CI
+installs it into an empty environment with no package index and runs a turn through
+it, and does the same for the npm package with the binary in its `bin/` folder.
+Neither package is published to PyPI or npm yet.
+
 ## How this differs from the Python agent
 
 GAIA has a second way to embed the loop: importing `gaia.agents.base.agent.Agent` from

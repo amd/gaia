@@ -92,3 +92,27 @@ jobs:
           npm ci
           npm test | tee node-test.log
           grep -q "^ℹ skipped 0$" node-test.log
+
+      # The slim install: a wheel that carries the engine, installed alone with
+      # no index and no dependencies, must run a turn. The smoke script fails if
+      # the SDK or the engine came from anywhere but the installed wheel.
+      - name: Clean install of the Python wheel
+        run: |
+          python sdk/python/build_wheel.py --engine "$GAIA_ENGINE" --out "$RUNNER_TEMP/wheelhouse"
+          python -m venv "$RUNNER_TEMP/clean-env"
+          "$RUNNER_TEMP/clean-env/bin/python" -m pip install --no-index --no-deps "$RUNNER_TEMP"/wheelhouse/gaia_sdk-*.whl
+          cd "$RUNNER_TEMP"
+          env -u GAIA_ENGINE "$RUNNER_TEMP/clean-env/bin/python" "$GITHUB_WORKSPACE/sdk/python/tests/smoke_installed.py"
+
+      - name: Clean install of the npm package
+        working-directory: sdk/typescript
+        run: |
+          mkdir -p bin "$RUNNER_TEMP/npm-clean"
+          cp "$GAIA_ENGINE" bin/
+          TGZ=$(npm pack --pack-destination "$RUNNER_TEMP/npm-clean" | tail -1)
+          rm -rf bin
+          cd "$RUNNER_TEMP/npm-clean"
+          npm init -y > /dev/null
+          npm install --no-audit --no-fund "./$TGZ"
+          cp "$GITHUB_WORKSPACE/sdk/typescript/test/smoke-installed.mjs" .
+          env -u GAIA_ENGINE node smoke-installed.mjs

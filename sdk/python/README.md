@@ -40,6 +40,17 @@ The SDK looks for `gaiacpp` in this order: the `engine=` argument, the `GAIA_ENG
 environment variable, the binary inside a platform wheel, then `PATH`. Builds are
 attached to each [GAIA release](https://github.com/amd/gaia/releases).
 
+## A wheel that carries the engine
+
+```bash
+python build_wheel.py --engine /path/to/gaiacpp --out dist
+pip install dist/gaia_sdk-*.whl      # nothing else is installed
+```
+
+The wheel is tagged for the platform the binary was built on. Installed alone, it
+runs a turn with no other package and no `GAIA_ENGINE`; `tests/smoke_installed.py`
+checks exactly that, and CI runs it on every change.
+
 ## Tests
 
 ```bash
