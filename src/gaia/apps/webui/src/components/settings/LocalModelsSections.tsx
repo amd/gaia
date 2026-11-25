@@ -17,8 +17,7 @@ import { GpuMemoryPanel } from '../setup/GpuMemoryPanel';
 import { driveName, ModelChecklist, SelectionSummary, tooBigText } from '../setup/ModelChecklist';
 import {
     catalogOf, chooseChat, initialSelection, isVision, pendingDownloads, shortfall, skipChanges, toggle, tooBig,
-    type Selection,
-} from '../setup/selection';
+    type Selection, onlyTight } from '../setup/selection';
 import { ErrorNotice, isServerDown } from './ErrorNotice';
 import { SettingsDisclosure } from './SettingsDisclosure';
 import '../setup/setup.css';
@@ -306,8 +305,8 @@ export function LocalModelsSections({ downloadsSlot }: { downloadsSlot?: HTMLEle
             )}
             {sheet?.kind === 'no_fit' && (
                 <ConfirmSheet
-                    title={sheet.models.length === 1 ? t('setup.confirm.noFitOne', { name: sheet.models[0].name }) : t('setup.confirm.noFitMany')}
-                    confirmLabel={t('setup.confirm.downloadAnyway')}
+                    title={onlyTight(sheet.models) ? t('setup.confirm.tightOne', { name: sheet.models[0].name }) : sheet.models.length === 1 ? t('setup.confirm.noFitOne', { name: sheet.models[0].name }) : t('setup.confirm.noFitMany')}
+                    confirmLabel={onlyTight(sheet.models) ? t('setup.confirm.useAnyway') : t('setup.confirm.downloadAnyway')}
                     cancelLabel={t('setup.confirm.pickSmaller')}
                     onConfirm={() => { setSheet(null); setNoFitAcked(true); void apply(true, false); }}
                     onCancel={() => setSheet(null)}

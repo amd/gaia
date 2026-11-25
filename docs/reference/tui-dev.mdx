@@ -32,18 +32,19 @@ The flagship has two programs behind it: the Python one, `gaia-agent`, and the
 native one, `gaiacpp`. `gaia-cli` runs `gaia-agent` unless `gaiacpp` is asked
 for, the same default as the Agent UI and the daemon, so an installed `gaiacpp`
 the user never picked can't take away `--use-claude` or `--resume`. The header says
-which is answering: `agent gaia v<x> (gaiacpp)` for the native agent, plain
+which is answering: `agent gaia v<x> (gaiacpp · Beta)` for the native agent, plain
 `agent gaia v<x>` for the Python one.
 
 When `gaiacpp` is asked for by name, it is looked for in this order, and the
 first match wins:
 
 1. The file `GAIA_GAIACPP_PATH` names, when it is set and is a file
-2. `~/.gaia/bin/`, where the Agent UI downloads it. This is the `bin` folder
+2. `~/.gaia/bin/`, where both apps download it. This is the `bin` folder
    of GAIA's home, so `GAIA_HOME` (or, without it, `GAIA_CONFIG_DIR`) moves it
 3. The folder `gaia-cli` itself is in
 4. `PATH`
-5. `~/.gaia/agents/gaia/`, then its `bin/`
+5. `~/.gaia/agents/gaia/`, then its `bin/`. `catalog.InstallRoot` follows GAIA's
+   home too, as `gaia_agents_dir` does, so the "looked in" list names the real folder
 
 The first four are the Agent UI backend's order
 (`native_flagship_candidates` in `src/gaia/daemon/sidecars/fetch.py`), so both
@@ -93,6 +94,42 @@ nothing. In a pinned session the choice is saved and the session is left
 alone. The switch
 to `gaiacpp` is refused, with nothing saved, in a `--use-claude` session and in
 a reopened one, the two cases a `gaiacpp` launch refuses on the command line.
+
+#### Downloading gaiacpp
+
+A `gaiacpp` that is missing (`catalog.MissingProgramError`) or fails its check
+(`catalog.NativeIntegrityError`) is offered as a download rather than refused
+(`internal/ui/root/programfetch.go`). The terminal UI does not fetch it itself:
+`internal/gaiaprogram` shells out to the hidden `gaia agent-program` command,
+which wraps `gaia.daemon.sidecars.gaiacpp_fetch`, the code behind the Agent UI's
+`/api/agent-programs` routes. One implementation owns the release lookup, the
+checksum check, the version check and the install record.
+
+| Command | Prints | Exit |
+|---|---|---|
+| `gaia agent-program status --json` | One object: `installed`, `path`, `target`, `can_download`, `size_bytes`, `version`, `reason`, `retry` (`true` when the release could not be reached) | `0` when it can be downloaded, else `1` |
+| `gaia agent-program download --json` | One object per line: `progress` (`bytes_done`, `bytes_total`), then `done` (`path`) or `failed` (`error`) | `0` installed, `1` failed |
+
+The offer is answered by Enter or Esc only while the chat is idle
+(`ChatModel.Idle`: no turn running, no panel open, nothing typed), so typing
+over it never answers it. Progress rewrites one status line
+(`ChatModel.ReplaceStatus`). After a download `switchProgram` runs again with
+`programFetched` set, so a `gaiacpp` that is still not found is an error and
+not a second offer. `FlagshipModel.WithProgramFetch` replaces both calls in
+tests; `TestAgentProgramSwitchEndToEnd` drives the whole path.
+
+To exercise the download without a published release, point
+`GAIA_GAIACPP_ASSETS_URL` at a folder (`file://…` or `https://…`) holding
+`gaiacpp-<platform>` and `gaiacpp-SHA256SUMS.txt`.
+
+At launch, a saved `gaiacpp` that fails the same two ways opens
+`internal/ui/agentrecovery` (`recoverSavedAgent` in `internal/ui/agentrecover.go`)
+before the main program: download again, use the Python agent, or quit. The
+Python agent runs only when it is picked, and the pick is then saved. A flag or
+`GAIA_TUI_AGENT` is a demand for that launch and still fails with the error, as
+does a launch with no terminal to ask in. The control API names the screen
+`agent-recovery`; it is a separate Bubble Tea program, so the control server
+restarts when the main session takes over.
 
 | Value | What runs |
 |---|---|

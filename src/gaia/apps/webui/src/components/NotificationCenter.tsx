@@ -26,7 +26,7 @@ import type { GaiaNotification, NotificationType } from '../types/agent';
 import { dateLocale, useT, type Translate } from '../i18n/useT';
 import { MarkedText, markLtr } from './MarkedText';
 import './NotificationCenter.css';
-import { visibleText } from './CalendarApproval';
+import { visibleStrict, visibleText } from './CalendarApproval';
 
 interface NotificationCenterProps {
   onClose: () => void;
@@ -197,7 +197,7 @@ export function NotificationCenter({ onClose, onOpenChat }: NotificationCenterPr
           notifications.map((n) => {
             const meta = NOTIFICATION_META[n.type];
             // A prompt reads as its card does, not as its stored English text.
-            const prompt = n.type === 'permission_request' && n.tool ? permissionPromptText(n, t, (s) => markLtr(visibleText(s, true))) : null;
+            const prompt = n.type === 'permission_request' && n.tool ? permissionPromptText(n, t, (s) => markLtr(visibleStrict(s))) : null;
             return (
               <div
                 className={`notification-item ${!n.read ? 'unread' : ''} ${meta.colorClass}`}

@@ -190,11 +190,11 @@ def test_marking_a_used_chat_private_applies_to_the_next_turn(chat, stream):
 @pytest.fixture
 def tick(chat, monkeypatch):
     # The tick imports the agent package before it checks the cache.
-    fake_pkg = types.ModuleType("gaia_agent")
-    fake_mod = types.ModuleType("gaia_agent.agent")
+    fake_pkg = types.ModuleType("gaiapy")
+    fake_mod = types.ModuleType("gaiapy.agent")
     fake_mod.GaiaAgent = fake_mod.GaiaAgentConfig = object
-    monkeypatch.setitem(sys.modules, "gaia_agent", fake_pkg)
-    monkeypatch.setitem(sys.modules, "gaia_agent.agent", fake_mod)
+    monkeypatch.setitem(sys.modules, "gaiapy", fake_pkg)
+    monkeypatch.setitem(sys.modules, "gaiapy.agent", fake_mod)
     monkeypatch.setattr(AgentLoop, "_get_actionable_goals", lambda self: [])
     monkeypatch.setattr(AgentLoop, "_settle_goal", staticmethod(lambda *a: None))
 
@@ -249,11 +249,11 @@ def test_scheduled_run_follows_the_memory_setting(monkeypatch, enabled):
         def close(self):
             pass
 
-    fake_mod = types.ModuleType("gaia_agent.agent")
+    fake_mod = types.ModuleType("gaiapy.agent")
     fake_mod.GaiaAgent = _Agent
     fake_mod.GaiaAgentConfig = SimpleNamespace
-    monkeypatch.setitem(sys.modules, "gaia_agent", types.ModuleType("gaia_agent"))
-    monkeypatch.setitem(sys.modules, "gaia_agent.agent", fake_mod)
+    monkeypatch.setitem(sys.modules, "gaiapy", types.ModuleType("gaiapy"))
+    monkeypatch.setitem(sys.modules, "gaiapy.agent", fake_mod)
     # A wheel install: the flagship runs in process.
     monkeypatch.setattr(
         helpers,

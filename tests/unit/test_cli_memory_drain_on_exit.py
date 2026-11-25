@@ -37,16 +37,16 @@ def chat_agent_stubs(monkeypatch):
     agent = MagicMock()
     agent.current_session = "session-1"
 
-    agent_module = types.ModuleType("gaia_agent.agent")
+    agent_module = types.ModuleType("gaiapy.agent")
     agent_module.GaiaAgent = MagicMock(return_value=agent)
     agent_module.GaiaAgentConfig = MagicMock()
 
-    app_module = types.ModuleType("gaia_agent.interactive")
+    app_module = types.ModuleType("gaiapy.interactive")
     app_module.interactive_mode = MagicMock()
 
-    monkeypatch.setitem(sys.modules, "gaia_agent", types.ModuleType("gaia_agent"))
-    monkeypatch.setitem(sys.modules, "gaia_agent.agent", agent_module)
-    monkeypatch.setitem(sys.modules, "gaia_agent.interactive", app_module)
+    monkeypatch.setitem(sys.modules, "gaiapy", types.ModuleType("gaiapy"))
+    monkeypatch.setitem(sys.modules, "gaiapy.agent", agent_module)
+    monkeypatch.setitem(sys.modules, "gaiapy.interactive", app_module)
 
     return types.SimpleNamespace(agent=agent, app=app_module, module=agent_module)
 
@@ -136,11 +136,11 @@ def test_missing_flagship_relays_and_never_runs_chat_agent(
     own binary through the daemon, and never quietly runs the base ChatAgent."""
     import gaia.cli as cli
 
-    monkeypatch.setitem(sys.modules, "gaia_agent.agent", None)  # import fails
-    chat_module = types.ModuleType("gaia_agent.chat_agent")
+    monkeypatch.setitem(sys.modules, "gaiapy.agent", None)  # import fails
+    chat_module = types.ModuleType("gaiapy.chat_agent")
     chat_module.ChatAgent = MagicMock()
     chat_module.ChatAgentConfig = MagicMock()
-    monkeypatch.setitem(sys.modules, "gaia_agent.chat_agent", chat_module)
+    monkeypatch.setitem(sys.modules, "gaiapy.chat_agent", chat_module)
     relay = MagicMock(return_value=1)
     monkeypatch.setattr(cli, "_gaia_chat_relay", relay)
 

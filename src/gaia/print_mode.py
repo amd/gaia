@@ -147,7 +147,9 @@ def summarize(
     if result.get("time_limit_reached"):
         record["time_limit_reached"] = True
     if record["is_error"]:
-        record["error"] = _turn_error(result)
+        # The agent words its errors for the TUI; this is a terminal command.
+        record["error"] = _cli(_turn_error(result))
+        record["result"] = _cli(record["result"])
     if verbose:
         record["conversation"] = conversation
     return record
@@ -173,6 +175,18 @@ def configure_console(console: Any, skip_permissions: bool, full_access: bool) -
     console.auto_approve_gated_tools = skip_permissions or full_access
     # Asked for by name on the command line, as the TUI's /full-access is.
     console.full_access = full_access
+
+
+def _describe(exc: BaseException) -> str:
+    """An exception as the user reads it.
+
+    A plain ValueError is a bad flag, setting or input, worded for the user.
+    Any other type, its subclasses (a JSON or Unicode decode error) included,
+    is unexpected, and its class name helps a bug report.
+    """
+    if exc.__class__ is ValueError and str(exc):
+        return str(exc)
+    return f"{type(exc).__name__}: {exc}"
 
 
 def _emit_failure(output_format: str, message: str, code: int = 1) -> int:
@@ -269,8 +283,7 @@ def run(
         # DEBUG, not INFO: the console handler prints INFO, traceback and all.
         log.debug("gaia -p failed", exc_info=True)
         return _emit_failure(
-            output_format,
-            _explain_routed(settings, route, exc) or f"{type(exc).__name__}: {exc}",
+            output_format, _explain_routed(settings, route, exc) or _describe(exc)
         )
 
     if output_format == "json":
@@ -650,11 +663,26 @@ def _start_server(
         "chat", quiet=True, base_url=base_url, model=model, preload=preload
     )
     if not success:
-        raise PrintModeError(
-            "The model server could not be started. Run `gaia daemon status` for "
-            "its state and `gaia init` if Lemonade is not installed."
-        )
+        raise PrintModeError(_server_down_message(base_url))
     return detected_base_url
+
+
+def _server_down_message(base_url: Optional[str]) -> str:
+    """Why the model server is unreachable, for GAIA's own or the user's server."""
+    from gaia.llm.lemonade_client import configured_lemonade_url
+    from gaia.llm.lemonade_launcher import gaia_runs_lemonade
+
+    chosen = base_url or configured_lemonade_url()
+    if chosen and not gaia_runs_lemonade(base_url):
+        return (
+            f"The model server at {chosen} isn't answering. GAIA doesn't start "
+            "a model server at an address you chose, so start it the way you "
+            "usually do, then try again."
+        )
+    return (
+        "The model server could not be started. Run `gaia daemon status` for "
+        "its state and `gaia init` if Lemonade is not installed."
+    )
 
 
 def _run_turn(
@@ -681,7 +709,7 @@ def _run_turn(
 
     model = _model_on_disk(model, base_url, yes=yes)
     try:
-        from gaia_agent.agent import GaiaAgent, GaiaAgentConfig
+        from gaiapy.agent import GaiaAgent, GaiaAgentConfig
     except ImportError:
         # The agent ships as its own binary here, as the apps do: run the turn
         # on it through the daemon, which brings up the model server for it.

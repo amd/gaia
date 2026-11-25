@@ -541,7 +541,7 @@
     font-family: var(--font-mono);
     text-transform: uppercase;
     letter-spacing: 1.5px;
-    color: var(--text-muted);
+    color: var(--text-secondary);
     background: var(--bg-tertiary);
     border-bottom: 1px solid var(--border);
     white-space: nowrap;

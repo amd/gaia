@@ -15,6 +15,7 @@ import asyncio
 import hashlib
 import logging
 import os
+import sqlite3
 import sys
 import tempfile
 import unicodedata
@@ -25,6 +26,7 @@ from typing import List
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from fastapi.responses import FileResponse
 
+from gaia.security import read_block
 from gaia.upload_names import reserve_copy_path
 from gaia.utils.image_formats import IMAGE_EXTENSIONS
 
@@ -74,6 +76,18 @@ UPLOAD_CHUNK_SIZE = 64 * 1024  # 64 KB
 
 # Length of the random hex ID in a partial upload's name.
 MANAGED_ID_LEN = 12
+
+
+_CREDENTIAL_FILE_DETAIL = (
+    "This file holds credentials or keys, so GAIA won't add it to the library "
+    "or serve it. Open it yourself if you need it."
+)
+
+
+def _refuse_secret(path: Path) -> None:
+    """403 when *path* holds credentials or keys, the files the read tools refuse."""
+    if read_block(str(path))[0]:
+        raise HTTPException(status_code=403, detail=_CREDENTIAL_FILE_DETAIL)
 
 
 def _short_id() -> str:
@@ -229,13 +243,17 @@ async def upload_by_path(
     if "\x00" in request.filepath:
         raise HTTPException(status_code=400, detail="Invalid file path")
 
+    # ``~`` is the user's home, as safe_open_document reads it, so check that path.
+    expanded = os.path.expanduser(request.filepath)
     # Resolve once — used for both the lock key and safe_open validation
     try:
-        resolved = Path(request.filepath).resolve()
+        resolved = Path(expanded).resolve()
     except (ValueError, OSError) as e:  # too long for the OS
         raise HTTPException(
             status_code=400, detail=f"Invalid file path: {path_error_reason(e)}"
         ) from e
+    ensure_document_path_allowed(Path(expanded))
+    _refuse_secret(resolved)
     lock = upload_locks.setdefault(str(resolved), asyncio.Lock())
 
     async with lock:
@@ -405,7 +423,9 @@ async def upload_document_blob(
     size check, deduplicated by SHA-256 content hash, then indexed via the
     standard RAG pipeline. Files are capped at ``MAX_DOCUMENT_UPLOAD_SIZE``.
 
-    On any failure, partial / orphaned files are cleaned up.
+    On any failure, partial / orphaned files are cleaned up, except when the
+    model server couldn't index it: the copy then stays as a failed row that
+    is indexed again once the server is back.
     """
     # 1. Validate filename
     if not file.filename:
@@ -543,17 +563,12 @@ async def upload_document_blob(
             status_code=422, detail={"status": e.kind, "message": str(e)}
         ) from e
     except ModelServerIndexError as e:
-        _cleanup_temp(final_path)
+        # The file is fine: keep it as a row that waits for the server.
         # The connection error stays in the log; the client words the reason.
         logger.warning("Could not index uploaded document %s: %s", display_name, e)
-        raise HTTPException(
-            status_code=503,
-            detail={
-                "status": e.kind,
-                "message": "GAIA's model server isn't answering, so the "
-                "document couldn't be added. Retry once it's back.",
-            },
-        ) from e
+        return _waiting_for_server(
+            db, final_path, display_name, file_hash, bytes_written, e
+        )
     except Exception as e:
         _cleanup_temp(final_path)
         logger.error(
@@ -633,6 +648,8 @@ async def get_document_file(doc_id: str, db: ChatDatabase = Depends(get_db)):
             status_code=404,
             detail=f"{doc.get('filename') or doc_id} is no longer on disk at {path}",
         )
+    if not _is_server_owned(str(real)):
+        _refuse_secret(real)
     # FileResponse opens the file only once headers are out, cutting the reply.
     try:
         with open(real, "rb"):
@@ -696,6 +713,8 @@ async def reindex_document(
             status_code=422,
             detail=f"File not found on disk for document {doc_id!r}",
         )
+    if not _is_server_owned(filepath):
+        _refuse_secret(Path(filepath))
 
     db.update_document_status(doc_id, "indexing", last_error=None)
 
@@ -766,6 +785,55 @@ async def delete_document(doc_id: str, db: ChatDatabase = Depends(get_db)):
         _cleanup_temp(Path(filepath))
 
     return {"deleted": True}
+
+
+_SERVER_OUT = {
+    "model_server_down": "GAIA's model server isn't answering. GAIA adds this "
+    "document once it is back.",
+    "model_server_busy": "GAIA's model server was too busy to add this "
+    "document. Retry it.",
+}
+
+
+def _waiting_for_server(
+    db: ChatDatabase,
+    copy: Path,
+    display_name: str,
+    file_hash: str,
+    file_size: int,
+    error: ModelServerIndexError,
+) -> DocumentResponse:
+    """Record a dropped file the model server couldn't index as a failed row.
+
+    The app retries a ``model_server_down`` row by itself once the server is
+    back; a ``model_server_busy`` one waits on the row's Retry. The copy stays.
+    """
+    try:
+        doc = db.add_document(
+            filename=display_name,
+            filepath=str(copy),
+            file_hash=file_hash,
+            file_size=file_size,
+            chunk_count=0,
+            file_mtime=copy.stat().st_mtime,
+        )
+    except (OSError, sqlite3.Error):
+        _cleanup_temp(copy)
+        raise
+    if Path(doc["filepath"]).resolve() != copy.resolve():
+        # The same content went in meanwhile; that row stands for this file.
+        _cleanup_temp(copy)
+    if doc.get("indexing_status") in ("pending", "indexing") or (
+        doc.get("indexing_status") == "complete" and doc.get("chunk_count")
+    ):
+        return doc_to_response(doc)
+    db.update_document_status(
+        doc["id"],
+        "failed",
+        last_error=_SERVER_OUT.get(error.kind, str(error)),
+        error_kind=error.kind,
+    )
+    return doc_to_response(db.get_document(doc["id"]))
 
 
 def _record_failed_document(
@@ -849,6 +917,9 @@ async def index_folder(request: IndexFolderRequest, db: ChatDatabase = Depends(g
             if item.is_symlink() or not item.is_file():
                 continue
             if item.suffix.lower() in FOLDER_INDEX_EXTENSIONS:
+                if read_block(str(item))[0]:
+                    skipped += 1
+                    continue
                 candidate_files.append(item)
             elif item.suffix.lower() in IMAGE_EXTENSIONS:
                 skipped_images += 1

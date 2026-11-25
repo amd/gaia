@@ -276,7 +276,7 @@ def test_permissive_libraries_are_neither_forbidden_nor_reported():
 
 
 def test_a_binary_without_licence_notices_is_flagged():
-    assert check.missing_notices(["numpy", "gaia_agent/gaia-agent.yaml"]) == list(
+    assert check.missing_notices(["numpy", "gaiapy/gaia-agent.yaml"]) == list(
         check.REQUIRED_NOTICES
     )
 

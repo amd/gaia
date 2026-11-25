@@ -16,7 +16,7 @@ var _ MemoryProvider = (*SubprocessClient)(nil)
 
 // memoryDumpQuery is the sentinel FetchMemory sends instead of a real
 // question. Must match MEMORY_DUMP_QUERY in
-// hub/agents/gaia/python/gaia_agent/memory_dump.py exactly — the wire text is
+// hub/agents/gaia/python/gaiapy/memory_dump.py exactly — the wire text is
 // the whole contract, and the leading/trailing NUL makes it something a human
 // could never type, so it can never collide with a real chat message.
 const memoryDumpQuery = "\x00gaia:memory_dump\x00"
@@ -31,7 +31,7 @@ type MemoryProvider interface {
 }
 
 // MemoryDump mirrors the JSON payload build_memory_dump() in
-// hub/agents/gaia/python/gaia_agent/memory_dump.py returns. Available is
+// hub/agents/gaia/python/gaiapy/memory_dump.py returns. Available is
 // false when the session has no live store (Lemonade down, embedding model
 // not pulled, GAIA_MEMORY_DISABLED=1) — Reason is the actionable, cause-
 // specific explanation from MemoryMixin.memory_unavailable_message(), not a

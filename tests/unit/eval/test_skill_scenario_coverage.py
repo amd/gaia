@@ -184,11 +184,11 @@ def test_the_eval_default_agent_is_the_flagship():
 def test_the_flagship_actually_provides_load_skill():
     """The other half of the assertion above, where the flagship is installed.
 
-    ``gaia_agent`` is a hub package, absent from lanes that install only one
+    ``gaiapy`` is a hub package, absent from lanes that install only one
     agent, so this skips rather than failing there -- the name check above still
     runs everywhere.
     """
-    agent_module = pytest.importorskip("gaia_agent.agent")
+    agent_module = pytest.importorskip("gaiapy.agent")
 
     assert SkillLibraryToolsMixin in agent_module.GaiaAgent.__mro__
     assert hasattr(agent_module.GaiaAgent, "load_skill")

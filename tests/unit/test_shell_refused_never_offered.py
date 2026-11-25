@@ -94,7 +94,9 @@ def _prompts(events) -> list:
 
 def _assert_reads_as_refused(result: dict) -> None:
     """What the model reads must rule out approval and point the user at doing it."""
-    assert result["status"] == "error"
+    # GAIA's own no, so the apps show it as blocked rather than a failed run.
+    assert result["status"] == "denied"
+    assert result["denied_by"] == "policy"
     assert result["tier"] == TIER_REFUSE
     assert result["executed"] is False
     text = f"{result['error']} {result.get('hint', '')}"
@@ -151,6 +153,26 @@ def test_a_refusal_outside_gh_also_rules_out_approval(tmp_path):
     assert _prompts(events) == []
     assert result["tier"] == TIER_REFUSE
     assert "no approval can change that" in result["hint"]
+
+
+def test_a_blocked_git_push_reaches_the_app_as_blocked_by_gaia(tmp_path):
+    """The Agent UI shows "Blocked by GAIA" for a denied_by=policy result."""
+    handler = SSEOutputHandler()
+
+    result, _ = _drive(
+        _agent(handler), handler, "git push --force origin main", tmp_path
+    )
+    handler.pretty_print_json(result, title="Command Output")
+    events = []
+    while not handler.event_queue.empty():
+        events.append(handler.event_queue.get_nowait())
+
+    tool_results = [e for e in events if e.get("type") == "tool_result"]
+    assert tool_results, events
+    assert tool_results[-1]["status"] == "denied"
+    assert tool_results[-1]["denied_by"] == "policy"
+    # The reason is kept for the model and the row.
+    assert "'git push' is not allowed" in result["error"]
 
 
 def test_a_command_the_user_may_approve_once_still_asks(tmp_path, gh_on_path):

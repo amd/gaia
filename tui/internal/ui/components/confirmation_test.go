@@ -258,7 +258,7 @@ func TestRiskTierBadgeWords(t *testing.T) {
 func TestConfirmationViewShowsActionSummaryAndBadge(t *testing.T) {
 	m := NewConfirmationModel("run-1", "share_engineering_context", `Share build.log with reviewer@example.com — "nightly failure"?`, "")
 	view := stripANSI(m.View())
-	for _, want := range []string{"share_engineering_context", "reviewer@example.com", "WRITE"} {
+	for _, want := range []string{"Allow share engineering context?", "reviewer@example.com", "WRITE"} {
 		if !strings.Contains(view, want) {
 			t.Errorf("view missing %q:\n%s", want, view)
 		}
@@ -923,7 +923,7 @@ func TestTheFlagshipSkillsMailPromptsMustBeReadToTheEnd(t *testing.T) {
 		"send-email/discard_draft",
 		"send-email/update_draft",
 	} {
-		if ActionTitle(action) == "Allow "+action+"?" {
+		if strings.HasPrefix(ActionTitle(action), "Allow ") {
 			t.Errorf("%s has no plain-language title", action)
 		}
 		if _, ok := confirmationRiskTiers[action]; !ok {

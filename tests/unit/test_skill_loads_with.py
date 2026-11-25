@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import pytest
 
-pytest.importorskip("gaia_agent")
+pytest.importorskip("gaiapy")
 
 from gaia.eval.tool_cost import build_doc_agent_skeleton  # noqa: E402
 

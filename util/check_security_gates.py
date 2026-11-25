@@ -136,6 +136,11 @@ def load_allowlist() -> set[Tuple[str, str]]:
                 f"{SUPPRESSIONS_FILE}: suppression {path}:{rule} has no "
                 f"'justification' — every approved suppression must say why."
             )
+        if (path, rule) in allow:
+            raise ValueError(
+                f"{SUPPRESSIONS_FILE}: suppression {path}:{rule} is listed more "
+                f"than once; keep one entry so removing it revokes the suppression."
+            )
         allow.add((path, rule))
     return allow
 

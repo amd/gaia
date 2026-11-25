@@ -4,15 +4,12 @@ see CONTRIBUTING.md (https://github.com/amd/gaia/blob/main/CONTRIBUTING.md)
 if you don't have one yet.
 -->
 
-## Summary
-
-<!-- 1–2 sentences describing what this PR does, in plain English. -->
-
-## Why
+## Why this matters
 
 <!--
-Why is this change being made? What problem does it solve, what was missing,
-or what was painful? Reviewers need the motivation, not just the diff.
+Two or three sentences: what was broken or missing before, and what works now.
+Lead with what a user or reviewer notices, not with what the code does. See
+"PR Descriptions" in CLAUDE.md.
 -->
 
 ## Linked issue
@@ -24,12 +21,6 @@ If this PR only partially addresses an issue, use `Refs #123` instead.
 -->
 
 Closes #N <!-- replace N with the issue number, e.g. Closes #123 -->
-
-## Changes
-
-<!-- Bullet list of the meaningful changes a reviewer should know about. -->
-
--
 
 ## Test plan
 

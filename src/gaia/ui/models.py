@@ -337,7 +337,8 @@ class SettingsResponse(BaseModel):
     # reflects the effective value and disables (no silent no-op).
     dynamic_tools_locked: bool = False
     # The program that is the GAIA agent; ~/.gaia/config.json, shared with the terminal UI.
-    flagship_agent: Literal["gaiapy", "gaiacpp"] = "gaiapy"
+    # A plain string: a harness a newer GAIA saved still shows, so Settings can change it.
+    flagship_agent: str = "gaiapy"
     # False when gaiacpp is not installed on this PC, so it cannot be chosen.
     gaiacpp_available: bool = False
     # The shared policy file, not the Agent UI database. Local only clears
@@ -736,6 +737,8 @@ class InferenceStatsResponse(BaseModel):
     seconds: Optional[float] = None
     # True only for an answer kept from "Retry with…".
     retried: Optional[bool] = None
+    # Seconds the turn sat on the user's answer to a permission prompt.
+    waiting_seconds: Optional[float] = None
     # Where the turn was answered, as the footer says it: "on your GPU", "via Fireworks AI".
     place: Optional[str] = None
     # Set on a ``hybrid`` session's turns.

@@ -4,7 +4,7 @@
 
 from __future__ import annotations
 
-from gaia_agent.agent import REPOSITORY_WORK_PROMPT
+from gaiapy.agent import REPOSITORY_WORK_PROMPT
 
 from tests.unit.test_profilespec_characterization import chat_agent_build_context
 

@@ -24,6 +24,10 @@ export interface SpeechSettings {
     min_speed: number;
     max_speed: number;
     voices: Voice[];
+    /** False where GAIA doesn't offer its voice: Read aloud is hidden. */
+    available?: boolean;
+    /** The server's reason when it isn't available. */
+    unavailable_reason?: string | null;
 }
 
 export async function getSpeechSettings(): Promise<SpeechSettings> {

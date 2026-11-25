@@ -545,11 +545,11 @@ def stub_env(monkeypatch):
     """Serve _StubAgent as the flagship and stub out the model server."""
     _StubAgent.instances = []
     _StubAgent.result = {"status": "success", "result": "pong"}
-    agent_mod = types.ModuleType("gaia_agent.agent")
+    agent_mod = types.ModuleType("gaiapy.agent")
     agent_mod.GaiaAgent = _StubAgent
     agent_mod.GaiaAgentConfig = _StubConfig
-    monkeypatch.setitem(sys.modules, "gaia_agent", types.ModuleType("gaia_agent"))
-    monkeypatch.setitem(sys.modules, "gaia_agent.agent", agent_mod)
+    monkeypatch.setitem(sys.modules, "gaiapy", types.ModuleType("gaiapy"))
+    monkeypatch.setitem(sys.modules, "gaiapy.agent", agent_mod)
 
     init = MagicMock(return_value=(True, "http://detected:13305/api/v1"))
     monkeypatch.setattr("gaia.cli.initialize_lemonade_for_agent", init)
@@ -1345,9 +1345,19 @@ def test_the_relayed_turn_does_not_run_after_a_failed_download(
     assert list(relay) == []
 
 
+def _server_owner(monkeypatch, chosen, gaia_runs):
+    monkeypatch.setattr(
+        "gaia.llm.lemonade_client.configured_lemonade_url", lambda: chosen
+    )
+    monkeypatch.setattr(
+        "gaia.llm.lemonade_launcher.gaia_runs_lemonade", lambda base_url=None: gaia_runs
+    )
+
+
 def test_run_returns_1_with_an_actionable_message_when_the_server_fails(
-    stub_env, capsys
+    stub_env, monkeypatch, capsys
 ):
+    _server_owner(monkeypatch, chosen=None, gaia_runs=True)
     stub_env.return_value = (False, None)
     assert print_mode.run("q", model="m") == 1
     captured = capsys.readouterr()
@@ -1356,6 +1366,28 @@ def test_run_returns_1_with_an_actionable_message_when_the_server_fails(
     assert "gaia daemon status" in captured.err
     assert "gaia init" in captured.err
     assert _StubAgent.instances == []
+
+
+@pytest.mark.parametrize(
+    "env_url, base_url, shown",
+    [
+        ("http://127.0.0.1:4328", None, "http://127.0.0.1:4328"),
+        (None, "http://box:8000/api/v1", "http://box:8000/api/v1"),
+    ],
+)
+def test_a_stopped_server_the_user_chose_is_named_not_started(
+    stub_env, monkeypatch, capsys, env_url, base_url, shown
+):
+    _server_owner(monkeypatch, chosen=env_url, gaia_runs=False)
+    stub_env.return_value = (False, None)
+    assert print_mode.run("q", model="m", base_url=base_url, output_format="json") == 1
+    error = json.loads(capsys.readouterr().out)["error"]
+    assert error == (
+        f"The model server at {shown} isn't answering. GAIA doesn't start a "
+        "model server at an address you chose, so start it the way you "
+        "usually do, then try again."
+    )
+    assert "gaia init" not in error and "gaia daemon" not in error
 
 
 def test_run_reads_the_prompt_from_stdin(stub_env, monkeypatch, capsys):
@@ -1384,7 +1416,7 @@ def test_memory_is_drained_even_when_the_turn_raises(stub_env):
         def process_query(self, text):
             raise RuntimeError("model call failed")
 
-    sys.modules["gaia_agent.agent"].GaiaAgent = _Boom
+    sys.modules["gaiapy.agent"].GaiaAgent = _Boom
     assert print_mode.run("q", model="m") == 1
     assert _agent().drained
 
@@ -1410,7 +1442,7 @@ class _Outcome:
 @pytest.fixture
 def relay(stub_env, monkeypatch):
     """No importable agent, as in the frozen app: the turn goes to the sidecar."""
-    monkeypatch.setitem(sys.modules, "gaia_agent.agent", None)
+    monkeypatch.setitem(sys.modules, "gaiapy.agent", None)
 
     class Calls(list):
         outcome = _Outcome("final", final_answer="pong from the binary")
@@ -1560,7 +1592,7 @@ def test_an_exception_mid_turn_is_reported_not_a_traceback(stub_env, capsys, fmt
         def process_query(self, text):
             raise ConnectionError("gateway reset the connection")
 
-    sys.modules["gaia_agent.agent"].GaiaAgent = _Boom
+    sys.modules["gaiapy.agent"].GaiaAgent = _Boom
     assert print_mode.run("q", model="m", output_format=fmt) == 1
     captured = capsys.readouterr()
     assert "ConnectionError: gateway reset the connection" in captured.err
@@ -1571,6 +1603,52 @@ def test_an_exception_mid_turn_is_reported_not_a_traceback(stub_env, capsys, fmt
         assert "gateway reset" in record["error"]
     else:
         assert captured.out == ""
+
+
+@pytest.mark.parametrize("fmt", ["text", "json"])
+def test_a_bad_setting_reads_as_a_sentence_without_a_class_name(stub_env, capsys, fmt):
+    message = "GAIA_SKILL_AUTOLOAD_TAU must be a float, got 'abc'"
+
+    class _BadSetting(_StubAgent):
+        def process_query(self, text):
+            raise ValueError(message)
+
+    sys.modules["gaiapy.agent"].GaiaAgent = _BadSetting
+    assert print_mode.run("q", model="m", output_format=fmt) == 1
+    captured = capsys.readouterr()
+    assert f"gaia -p: {message}" in captured.err
+    assert "ValueError" not in captured.err
+    if fmt == "json":
+        assert json.loads(captured.out)["error"] == message
+
+
+@pytest.mark.parametrize("fmt", ["text", "json"])
+def test_a_failed_turn_names_the_model_flag_not_the_tui(stub_env, capsys, fmt):
+    from gaia.llm.surface_hints import CLI_MODEL_SWITCH_HINT, TUI_MODEL_SWITCH_HINT
+
+    error = (
+        "fireworks.no-such-model isn't available on Fireworks AI (HTTP 404). "
+        f"Trying again won't help. {TUI_MODEL_SWITCH_HINT}"
+    )
+    _StubAgent.result = {"status": "error", "result": error, "error": error}
+    assert print_mode.run("q", model="m", output_format=fmt) == 1
+    captured = capsys.readouterr()
+    assert "/model in the TUI" not in captured.out + captured.err
+    assert CLI_MODEL_SWITCH_HINT in captured.err
+    if fmt == "json":
+        record = json.loads(captured.out)
+        assert record["error"].endswith(CLI_MODEL_SWITCH_HINT)
+        assert record["result"].endswith(CLI_MODEL_SWITCH_HINT)
+
+
+def test_a_decode_error_keeps_its_class_name(stub_env, capsys):
+    class _BadJson(_StubAgent):
+        def process_query(self, text):
+            json.loads("not json")
+
+    sys.modules["gaiapy.agent"].GaiaAgent = _BadJson
+    assert print_mode.run("q", model="m") == 1
+    assert "JSONDecodeError: " in capsys.readouterr().err
 
 
 def test_a_failed_turn_says_why_on_stderr(stub_env, capsys):
@@ -1713,7 +1791,7 @@ def test_ctrl_c_exits_130_without_a_traceback(stub_env, capsys):
         def process_query(self, text):
             raise KeyboardInterrupt
 
-    sys.modules["gaia_agent.agent"].GaiaAgent = _Interrupted
+    sys.modules["gaiapy.agent"].GaiaAgent = _Interrupted
     assert print_mode.run("q", model="m", output_format="json") == 130
     captured = capsys.readouterr()
     assert json.loads(captured.out)["error"] == "interrupted"
@@ -1760,7 +1838,7 @@ def test_a_failure_with_no_recorded_error_says_its_status_once(stub_env, capsys)
         def process_query(self, text):
             return {"status": "incomplete", "result": "partial", "conversation": []}
 
-    sys.modules["gaia_agent.agent"].GaiaAgent = _Incomplete
+    sys.modules["gaiapy.agent"].GaiaAgent = _Incomplete
     assert print_mode.run("q", model="m") == 1
     assert capsys.readouterr().err.count("ended with status") == 1
 
@@ -1772,7 +1850,7 @@ def test_an_unexpected_failure_does_not_log_its_traceback_at_info(
         def process_query(self, text):
             raise ConnectionError("reset")
 
-    sys.modules["gaia_agent.agent"].GaiaAgent = _Boom
+    sys.modules["gaiapy.agent"].GaiaAgent = _Boom
     with caplog.at_level(logging.INFO):
         assert print_mode.run("q", model="m") == 1
     assert not [r for r in caplog.records if r.exc_info]

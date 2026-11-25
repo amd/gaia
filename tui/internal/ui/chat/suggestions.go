@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
@@ -20,13 +21,15 @@ import (
 )
 
 // The first screen suggests up to four things to try, each one a skill the
-// agent has and that needs no further setup, picked with its number. The list
+// agent has and that needs no further setup, picked with Tab and Enter. The list
 // is the agent's own report of its skills, which includes the ones built into
 // it; the skills folder is read only until that report arrives. The model is
 // never asked: a local model call costs seconds.
 
 // suggestionsMax is how many the first screen offers.
 const suggestionsMax = 4
+
+const starterHint = "Try one: Tab to select, Enter to run"
 
 // starter is one thing to try: the skill that does it, the words on screen and
 // the request it sends.
@@ -149,7 +152,11 @@ func (m ChatModel) listSkillsCmd() tea.Cmd {
 func (m *ChatModel) setReportedSkills(skills []event.SkillCommand) {
 	m.skillCommands = skills
 	if m.suggests {
-		m.starters = reportedStarters(skills)
+		reported := reportedStarters(skills)
+		if !slices.Equal(m.starters, reported) {
+			m.starterFocus = 0
+		}
+		m.starters = reported
 		m.refreshReadyLine()
 	}
 }
@@ -165,7 +172,7 @@ func readyTail(ss []starter) string {
 
 // refreshReadyLine rewrites the Ready line's ending when the suggestions
 // change after it was written: the agent's skill report can arrive after the
-// warm-up ends, and the line must show the list the numbers pick from.
+// warm-up ends, and the line must show the list the user can pick from.
 func (m *ChatModel) refreshReadyLine() {
 	if m.readyTail == "" || m.hasUserMessage() {
 		return
@@ -195,9 +202,13 @@ func (m ChatModel) renderSuggestions() string {
 		return ""
 	}
 	width := max(m.width-8, 8)
-	rows := []string{activityStyle.Render("Try one — press its number:")}
+	rows := []string{activityStyle.Render(starterHint)}
 	for i, s := range m.starters {
-		rows = append(rows, "  "+suggestKeyStyle.Render(fmt.Sprintf("%d", i+1))+"  "+
+		prefix := "  "
+		if m.starterFocus == i+1 {
+			prefix = "> "
+		}
+		rows = append(rows, prefix+suggestKeyStyle.Render(fmt.Sprintf("%d", i+1))+"  "+
 			suggestLabelStyle.Render(truncateRunes(s.label, width)))
 	}
 	return strings.Join(rows, "\n")
@@ -209,7 +220,7 @@ func suggestionsText(ss []starter) string {
 	if len(ss) == 0 {
 		return ""
 	}
-	rows := []string{"Try one — press its number:"}
+	rows := []string{starterHint}
 	for i, s := range ss {
 		rows = append(rows, fmt.Sprintf("  %d  %s", i+1, s.label))
 	}
@@ -218,8 +229,7 @@ func suggestionsText(ss []starter) string {
 
 // suggestionsShown reports whether the list is on screen: on the welcome
 // screen, or in the line that says a local model is ready. A notice that
-// replaces the welcome screen hides the list, and a hidden number must not
-// start anything.
+// replaces the welcome screen hides the list, which then cannot be focused.
 func (m ChatModel) suggestionsShown() bool {
 	if len(m.starters) == 0 {
 		return false
@@ -236,26 +246,62 @@ func (m ChatModel) suggestionsShown() bool {
 	return false
 }
 
-// suggestionsOpen reports whether the numbers still pick a suggestion: while
-// the list is shown, until the user's first message, while nothing else has
-// the screen.
-func (m ChatModel) suggestionsOpen() bool {
-	return m.suggestionsShown() && !m.hasUserMessage() && !m.streaming && !m.memoryLoading &&
-		m.memoryView == nil && !(m.warming && !m.warmHidden)
+// canFocusStarter holds until the first message, while the list is visible
+// and neither the composer nor another control owns the input.
+func (m ChatModel) canFocusStarter() bool {
+	return m.starterFocus >= 0 && m.starterFocus <= len(m.starters) &&
+		m.suggestionsShown() && !m.hasUserMessage() && !m.streaming && !m.memoryLoading &&
+		m.memoryView == nil && !(m.warming && !m.warmHidden) && !m.setupChecking && !m.setupRunning &&
+		m.input.Value() == "" && !m.help.Open && !m.pick.open && !m.palette.open &&
+		m.question == nil && m.confirmation == nil && !m.sel.active
 }
 
-// pickSuggestion starts the numbered suggestion when the key is one and the
-// composer is empty; ok is false for every other key.
-func (m ChatModel) pickSuggestion(msg tea.KeyMsg) (tea.Model, tea.Cmd, bool) {
-	if msg.Type != tea.KeyRunes || len(msg.Runes) != 1 || msg.Alt || !m.suggestionsOpen() ||
-		m.input.Value() != "" || m.palette.open || m.question != nil || m.confirmation != nil {
-		return m, nil, false
+// renderReadyStarterFocus marks the focused row without changing the stored
+// Ready line: its original text is also how we know the list is still shown.
+func (m ChatModel) renderReadyStarterFocus(body string) string {
+	if m.starterFocus <= 0 || m.starterFocus > len(m.starters) ||
+		m.readyTail == "" || !strings.HasSuffix(body, m.readyTail) {
+		return body
 	}
-	n := int(msg.Runes[0] - '1')
-	if n < 0 || n >= len(m.starters) {
-		return m, nil, false
+	n := m.starterFocus
+	label := m.starters[n-1].label
+	line := fmt.Sprintf("%d  %s", n, label)
+	return strings.TrimSuffix(body, m.readyTail) + strings.Replace(m.readyTail, "\n  "+line, "\n> "+line, 1)
+}
+
+func starterNavigationKey(msg tea.KeyMsg) bool {
+	return !msg.Alt && !msg.Paste && (msg.Type == tea.KeyTab || msg.Type == tea.KeyEnter || msg.Type == tea.KeyEsc)
+}
+
+func (m *ChatModel) clearStarterFocus() {
+	if m.starterFocus != 0 {
+		m.starterFocus = 0
+		m.updateViewport()
 	}
-	m.input.SetValue(m.starters[n].prompt)
-	next, cmd := m.handleKey(tea.KeyMsg{Type: tea.KeyEnter})
-	return next, cmd, true
+}
+
+// handleStarterKey makes sending a starter an explicit two-step action. Tab
+// returns to the composer after the last row, and Escape leaves it directly.
+func (m ChatModel) handleStarterKey(msg tea.KeyMsg) (tea.Model, tea.Cmd, bool) {
+	if starterNavigationKey(msg) && m.canFocusStarter() {
+		switch msg.Type {
+		case tea.KeyTab:
+			m.starterFocus = (m.starterFocus + 1) % (len(m.starters) + 1)
+			m.updateViewport()
+			return m, nil, true
+		case tea.KeyEsc:
+			if m.starterFocus != 0 {
+				m.clearStarterFocus()
+				return m, nil, true
+			}
+		case tea.KeyEnter:
+			if m.starterFocus != 0 {
+				m.input.SetValue(m.starters[m.starterFocus-1].prompt)
+				m.starterFocus = 0
+				next, cmd := m.handleKey(tea.KeyMsg{Type: tea.KeyEnter})
+				return next, cmd, true
+			}
+		}
+	}
+	return m, nil, false
 }

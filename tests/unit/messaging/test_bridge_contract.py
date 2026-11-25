@@ -1,4 +1,4 @@
-"""Pin the bridge's wire literals against the real ``gaia_agent.stdio``.
+"""Pin the bridge's wire literals against the real ``gaiapy.stdio``.
 
 The bridge keeps the protocol constants as its own literals rather than
 importing them, because core must not depend on a hub wheel. That is the right
@@ -19,7 +19,7 @@ import pytest
 from gaia.messaging import bridge
 
 stdio = pytest.importorskip(
-    "gaia_agent.stdio",
+    "gaiapy.stdio",
     reason="the flagship agent package is not installed in this environment",
 )
 

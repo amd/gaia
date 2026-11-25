@@ -9,6 +9,7 @@ import type { FileDiff, TurnChanges, UndoResult, UndoSettings } from '../types/c
 import type { PageElementWire } from '../../services/browser-pane/contract';
 import { getApiBase } from '../utils/apiBase';
 import { log } from '../utils/logger';
+import { noteBackendAnswer } from '../stores/uiAuthStore';
 import { chatDraftKey, clearSavedDraft } from '../utils/savedDraft';
 
 // -- Helpers -------------------------------------------------------------------
@@ -175,9 +176,11 @@ export async function apiFetch<T>(
     if (!res.ok) {
         const errorText = await res.text().catch(() => '');
         log.api.error(`${method} ${url} - HTTP ${res.status}`, { errorText });
+        noteBackendAnswer(res.status, errorText);
         const detail = parseErrorDetail(errorText);
         throw new ApiError(getFriendlyError(res.status, detail), res.status, detail, parseErrorStatus(errorText), parseErrorFields(errorText), parseErrorBody(errorText));
     }
+    noteBackendAnswer(res.status);
 
     // Some endpoints (DELETE, fire-and-forget POSTs) intentionally return no
     // body, so there is no JSON to parse. A non-JSON response *with* content,
@@ -836,6 +839,7 @@ async function consumeSSEResponse(
     if (!res.ok) {
         const errText = await res.text().catch(() => '');
         log.stream.error(`SSE connection failed: HTTP ${res.status}`, errText);
+        noteBackendAnswer(res.status, errText);
         // The server's own words when it gave any, never a raw JSON body.
         const detail = parseErrorDetail(errText);
         const message = detail && !isBareInternalError(detail) ? detail : getFriendlyError(res.status, detail);
@@ -951,12 +955,12 @@ async function consumeSSEResponse(
         reader.releaseLock();
     }
 
-    // Only signal completion if no explicit done event was received during the stream
-    if (!doneReceived) {
+    // An error event already closed the turn through onError; a done after it would add a second message.
+    if (!doneReceived && !errorReceived) {
         log.stream.timed(`SSE connection closed without done event: ${chunkCount} chunks, ${agentEventCount} agent events`, t);
         // A send that closes having said nothing would otherwise leave the
         // message sitting there with no answer and no error.
-        if (silentCloseIsError && chunkCount === 0 && agentEventCount === 0 && !errorReceived) {
+        if (silentCloseIsError && chunkCount === 0 && agentEventCount === 0) {
             callbacks.onError(new Error(
                 'GAIA closed the connection before any answer arrived. Send the message again; ' +
                 'if it keeps happening, check the GAIA server log.',

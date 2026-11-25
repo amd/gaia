@@ -19,9 +19,9 @@ import pytest
 
 # The stdio transport ships with the standalone gaia-agent wheel; skip when the
 # core-only test job hasn't installed it.
-pytest.importorskip("gaia_agent")
+pytest.importorskip("gaiapy")
 
-from gaia_agent.stdio import (  # noqa: E402
+from gaiapy.stdio import (  # noqa: E402
     PermissionState,
     _pump_stdin,
     apply_control,
@@ -353,7 +353,7 @@ class TestGrantsSurviveTheTurnBoundary:
         never ends its turn. The backstop must sit clear of the TUI's own
         10-minute bound so a real answer is never pre-empted by it.
         """
-        from gaia_agent.stdio import ORPHANED_CONFIRM_TIMEOUT_SECONDS
+        from gaiapy.stdio import ORPHANED_CONFIRM_TIMEOUT_SECONDS
 
         from gaia.ui.sse_handler import SSEOutputHandler
 

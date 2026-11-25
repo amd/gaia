@@ -12,7 +12,7 @@ sys.path.append(os.path.join(os.getcwd(), "src"))
 # contract here. ChatAgent ships in the flagship gaia-agent-gaia wheel
 # (#6099).
 try:
-    from gaia_agent.chat_agent import ChatAgent, ChatAgentConfig
+    from gaiapy.chat_agent import ChatAgent, ChatAgentConfig
 except ImportError:
     raise SystemExit(
         "gaia-agent-gaia is not installed — run: pip install -e hub/agents/gaia/python"

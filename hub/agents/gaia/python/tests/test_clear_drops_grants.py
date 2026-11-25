@@ -1,6 +1,6 @@
 # Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 # SPDX-License-Identifier: MIT
-"""Clearing a conversation forgets its "always" answers, and only its own.
+"""Clearing a conversation forgets its "always" and "no" answers, and only its own.
 
 An "always" was given in the context of one conversation. Once the user clears
 it, the next request starts from nothing, so the same command has to ask again.
@@ -18,9 +18,9 @@ import time
 from types import SimpleNamespace
 from unittest.mock import Mock
 
-from gaia_agent import stdio
-from gaia_agent.interactive import interactive_mode
-from gaia_agent.stdio import PermissionState
+from gaiapy import stdio
+from gaiapy.interactive import interactive_mode
+from gaiapy.stdio import PermissionState
 
 from gaia.agents.base.tool_grants import grant_scope
 from gaia.ui.sse_handler import SSEOutputHandler
@@ -103,6 +103,22 @@ def test_the_same_command_asks_again_after_host_clear_history(monkeypatch):
     handler = _next_turn(state)
     assert _asks(handler, _TESTS)
     assert _asks(handler, _WRITE)
+
+
+def test_a_declined_command_is_asked_about_again_after_a_clear():
+    from gaia.agents.base.agent import Agent
+    from gaia.agents.base.denied_effects import DeclinedCalls
+
+    agent = _Agent()
+    agent._declined_calls = DeclinedCalls()
+    agent._declined_calls.record(*_TESTS)
+    agent.forget_declined_calls = lambda: Agent.forget_declined_calls(agent)
+
+    stdio.dispatch_query(
+        agent, stdio.CLEAR_CONVERSATION_QUERY, io.StringIO(), state=PermissionState()
+    )
+
+    assert agent._declined_calls.declined(*_TESTS) is None
 
 
 def test_clear_keeps_full_access_and_drops_only_grants():
@@ -250,8 +266,8 @@ def test_cli_reset_that_fails_to_save_keeps_the_conversation_and_its_grants(
 
 _STDIO_CHILD = r"""
 import sys
-import gaia_agent.agent as agent_mod
-from gaia_agent import stdio
+import gaiapy.agent as agent_mod
+from gaiapy import stdio
 
 class Agent:
     def __init__(self, config=None):

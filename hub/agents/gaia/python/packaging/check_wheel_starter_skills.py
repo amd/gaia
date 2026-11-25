@@ -23,7 +23,7 @@ def starter_skill_names() -> set[str]:
 
 
 def wheel_skill_names(wheel: Path) -> set[str]:
-    prefix = "gaia_agent/skills/"
+    prefix = "gaiapy/skills/"
     with zipfile.ZipFile(wheel) as archive:
         return {
             name[len(prefix) : -len("/SKILL.md")]
@@ -43,10 +43,7 @@ def main() -> int:
         raise SystemExit(
             f"{wheel.name} is missing starter skills: {', '.join(missing)}"
         )
-    print(
-        f"{wheel.name}: verified {len(expected)} starter skills in "
-        "gaia_agent/skills/"
-    )
+    print(f"{wheel.name}: verified {len(expected)} starter skills in " "gaiapy/skills/")
     return 0
 
 

@@ -610,7 +610,7 @@ class AgentLoop:
                 else:
                     # Run the heavier sync work inline (we're in a thread).
                     try:
-                        from gaia_agent.agent import GaiaAgent, GaiaAgentConfig
+                        from gaiapy.agent import GaiaAgent, GaiaAgentConfig
                     except ImportError as e:
                         raise RuntimeError(
                             agent_import_error_message(

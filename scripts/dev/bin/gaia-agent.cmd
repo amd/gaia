@@ -8,4 +8,4 @@ setlocal
 set REPO=%~dp0..\..\..
 set PYTHONPATH=%REPO%\src;%REPO%\hub\agents\gaia\python
 if "%GAIA_DEV_PYTHON%"=="" set GAIA_DEV_PYTHON=python
-"%GAIA_DEV_PYTHON%" -m gaia_agent.server %*
+"%GAIA_DEV_PYTHON%" -m gaiapy.server %*

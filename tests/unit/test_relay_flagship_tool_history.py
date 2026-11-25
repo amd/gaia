@@ -106,17 +106,18 @@ class _BigToolAgent(_ToolAgent):
 @pytest.fixture
 def live_sidecar(monkeypatch, request):
     uvicorn = pytest.importorskip("uvicorn")
-    pytest.importorskip("gaia_agent")
+    pytest.importorskip("gaiapy")
     import requests
-    from gaia_agent import caller_auth
-    from gaia_agent import server as server_mod
-    from gaia_agent import session_registry as sr
+    from gaiapy import caller_auth
+    from gaiapy import server as server_mod
+    from gaiapy import session_registry as sr
 
     from gaia.daemon.sidecars.manager import find_free_port
 
     caller_auth.reset()
     monkeypatch.delenv(caller_auth.TOKEN_FILE_ENV_VAR, raising=False)
     monkeypatch.delenv(caller_auth.TOKEN_ENV_VAR, raising=False)
+    monkeypatch.setenv(caller_auth.ALLOW_NO_TOKEN_ENV_VAR, "1")
     agents: list = []
 
     agent_class = getattr(request, "param", _ToolAgent)
