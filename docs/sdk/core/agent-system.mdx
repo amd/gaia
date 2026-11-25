@@ -587,7 +587,7 @@ def search_codebase(query: str) -> str:
 
 **Cause:** Usually means `max_steps` is too high, or tools return ambiguous results.
 
-**What the user gets:** at `max_consecutive_repeats` identical calls the model gets one correction in place of the call, and a repeat after that ends the turn. If the calls that ran worked, the agent makes one more model call with no tool calls allowed and answers from their results; if they errored or were refused, the answer names that failure.
+**What the user gets:** at `max_consecutive_repeats` identical calls the model gets one correction in place of the call, and a repeat after that ends the turn. The calls need not be back to back: a call that has returned the same result that many times this turn, in any order among other calls, counts the same, while one whose result changed (a file read again after an edit) starts over, and a call to the wait tool resets every count. A turn gets one correction in total; the next repeat of any call ends it. If the calls that ran worked, the agent makes one more model call with no tool calls allowed and answers from their results; if they errored or were refused, the answer names that failure.
 
 Two loops that vary their arguments are stopped the same way:
 
@@ -1169,14 +1169,23 @@ A subclass can add a check of its own. Override `answer_problems(answer)` to
 return what is wrong with a final answer as plain sentences; the loop sends
 them back once per turn with `answer_repair_prompt(problems)` (override it to
 word the request), and lists any still present after that in the "not
-confirmed" note. The default returns nothing.
+confirmed" note. Call `super().answer_problems(answer)` and add to its list,
+so the built-in checks keep running:
+
+- **Base agent:** an answer that is only leftover tool-call markup, such as
+  `\n\n"}`.
+- **Memory:** an answer that says something was saved when `remember` refused
+  it, or a request to remember something that ended with no `remember` call.
+- **Flagship:** a request to add the skill at a named folder that ended with no
+  `capture_skill` call.
 
 ```python
 class ReportAgent(Agent):
     def answer_problems(self, answer: str) -> list[str]:
+        problems = super().answer_problems(answer)
         if "## Sources" not in answer:
-            return ["The report has no Sources list."]
-        return []
+            problems.append("The report has no Sources list.")
+        return problems
 ```
 
 The flagship uses it on `/research` turns to check that every cited link is a

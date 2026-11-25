@@ -51,7 +51,7 @@ def server(tmp_path, monkeypatch):
 @pytest.fixture
 def npu_chat(server, tmp_path):
     """A flagship in a chat that started on Gemma's NPU build."""
-    from gaia_agent.session_registry import build_session_agent, close_agent
+    from gaiapy.session_registry import build_session_agent, close_agent
 
     agent = build_session_agent(model_id=NPU, allowed_paths=[str(tmp_path / "work")])
     yield agent
@@ -59,7 +59,7 @@ def npu_chat(server, tmp_path):
 
 
 def test_a_chat_moved_to_the_gpu_reads_images_and_answers_there(npu_chat, server):
-    from gaia_agent import stdio
+    from gaiapy import stdio
 
     assert npu_chat.vlm_model is None, "reading images is off on the NPU"
 
@@ -82,7 +82,7 @@ def test_a_chat_moved_to_the_gpu_reads_images_and_answers_there(npu_chat, server
 
 
 def test_a_chat_moved_to_the_npu_stops_reading_images(npu_chat):
-    from gaia_agent import stdio
+    from gaiapy import stdio
 
     stdio.switch_model(npu_chat, GPU)
     stdio.switch_model(npu_chat, NPU)
@@ -94,7 +94,7 @@ def test_a_chat_moved_to_the_npu_stops_reading_images(npu_chat):
 
 
 def test_a_switch_that_fails_leaves_the_old_models_settings(npu_chat, monkeypatch):
-    from gaia_agent import stdio
+    from gaiapy import stdio
 
     def broken():
         raise ValueError("prompt composition failed")
@@ -114,7 +114,7 @@ def test_a_switch_that_fails_leaves_the_old_models_settings(npu_chat, monkeypatc
 
 def test_a_vision_model_chosen_in_settings_reaches_an_open_chat(server, tmp_path):
     """It was read once, when the chat's agent was built."""
-    from gaia_agent.session_registry import build_session_agent, close_agent
+    from gaiapy.session_registry import build_session_agent, close_agent
 
     from gaia.config import GaiaConfig
 
@@ -137,7 +137,7 @@ def test_image_reading_follows_the_agents_own_model_not_the_saved_pick(
     server, tmp_path
 ):
     """Tools re-register every in-process turn; the pick saved elsewhere must not win."""
-    from gaia_agent.session_registry import build_session_agent, close_agent
+    from gaiapy.session_registry import build_session_agent, close_agent
 
     from gaia.config import GaiaConfig
 
@@ -157,8 +157,8 @@ def test_every_chat_on_a_pc_uses_its_profiles_embedder(server, tmp_path, profile
     Memory has one store; a different embedder clears all its vectors (#6008).
     It is the GPU one on an NPU PC too: the NPU build's search isn't proven.
     """
-    from gaia_agent import stdio
-    from gaia_agent.session_registry import build_session_agent, close_agent
+    from gaiapy import stdio
+    from gaiapy.session_registry import build_session_agent, close_agent
 
     from gaia.config import GaiaConfig
 
@@ -183,7 +183,7 @@ def test_an_open_chat_follows_an_embedder_moved_in_settings(server, tmp_path):
     The model, the conversation and the loaded skills carry over; nothing is
     rebuilt while the embedder stays where it is.
     """
-    from gaia_agent import session_registry as sr
+    from gaiapy import session_registry as sr
 
     from gaia.config import GaiaConfig
 
@@ -251,7 +251,7 @@ def test_only_a_moved_embedder_counts_as_changed(monkeypatch):
     An agent that recorded no embedder never rebuilds; an unreadable config
     fails the turn loudly rather than quietly keeping the old embedder.
     """
-    from gaia_agent import chat_agent as ca
+    from gaiapy import chat_agent as ca
 
     from gaia.config import GaiaConfigError
 

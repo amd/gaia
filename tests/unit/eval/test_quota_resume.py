@@ -143,6 +143,7 @@ def harness(tmp_path, monkeypatch, claude_login):
     monkeypatch.setattr(runner, "preflight_check", lambda *a, **k: [])
     monkeypatch.setattr(runner, "_missing_requirements", lambda _sd, _m: [])
     monkeypatch.setattr(runner, "_stamp_agent_provenance", lambda *a, **k: None)
+    monkeypatch.setattr(runner, "backend_harness", lambda _url: "gaiapy")
     monkeypatch.setattr(
         runner,
         "run_scripted_scenario",

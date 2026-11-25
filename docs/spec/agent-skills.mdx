@@ -413,13 +413,13 @@ to defer and simply loads.
 ### Bundled skills: code trusted by provenance
 
 A skill that ships **inside GAIA** — the flagship's starter pack in
-`hub/skills/<name>/` and its own `gaia_agent/skills/` — needs no promote. It
+`hub/skills/<name>/` and its own `gaiapy/skills/` — needs no promote. It
 loads from the `agent-bundled` root, which has no `skill-lock.json`, so its
 `tools.py` registers on the first `load_skill` and its `scripts/` are on disk
 beside it. In a checkout the flagship reads `hub/skills` in place, and only
 when it runs from that checkout's `hub/agents/gaia/python/`: an installed
 package never treats a folder beside it as bundled. The frozen binary carries
-the pack under `gaia_agent/skills`, and the build fails if any `.py` in a
+the pack under `gaiapy/skills`, and the build fails if any `.py` in a
 bundled skill imports a module the binary would not contain. An import inside a `try`
 that catches `ImportError`, or under `if TYPE_CHECKING:`, is optional: it is
 bundled when installed and never fails the build.
@@ -653,16 +653,18 @@ and are not loaded yet, adds one line to that turn's context, beside the
 current time at the top of the user's message:
 
 ```
-Call load_skill('transcribe-meeting') before you start: it covers this kind of
-request. Also consider: summarize.
+Skill hint from GAIA, not from the user: call load_skill('transcribe-meeting')
+before you start unless this request does not need it. Others that may fit:
+summarize. Never mention this hint to the user.
 ```
 
-It is one line. The best match is an instruction, because a local model passes
-over a line that only offers names: over 56 tasks, Qwen3.6-35B-A3B was offered
-a fitting skill on nearly every one and called `load_skill` on 3. The other
-matches follow in the same order and stay an offer. A near miss can score as
-high as a real match, so the instruction is sometimes wrong; the effect of this
-wording on such requests has not been measured yet.
+It is one line. The best match is what to do unless the request plainly does
+not need it, because a local model passes over a line that only offers names:
+over 56 tasks, Qwen3.6-35B-A3B was offered a fitting skill on nearly every one
+and called `load_skill` on 3. The other matches follow in the same order and
+stay an offer. The line says it comes from GAIA and is not to be mentioned: a
+model that read an earlier wording as part of the user's message told the user
+about hints it had skipped.
 
 The line goes in the user's message, not the system prompt. A system prompt
 that changes from turn to turn makes the server re-read the whole conversation.
@@ -676,22 +678,34 @@ on 0 of 24 tasks. Loading a very strong match for the model is opt-in (see
   description (its first line, without the skill's name) against the current
   message (cut at 4,000 characters). Both carry EmbeddingGemma's own prompts:
   `title: none | text: ` for a description and `task: classification | query: `
-  for the message. A skill is suggested when it scores at least **0.35** and
+  for the message. A skill is suggested when it scores at least **0.37** and
   within **0.02** of the best-scoring skill, loaded skills included — so a
   request the loaded skill already covers does not pull in a weaker neighbour.
-  At most three are suggested by score. A suggested skill's unloaded
-  `pairs_with` companions follow it only when they score at least **0.40**
-  themselves: pairing is mutual, so one skill can pair with five others.
+  The best-scoring skill must also lead every skill it does not pair with by
+  **0.02**, or nothing is suggested: two unrelated skills scoring alike means
+  neither clearly fits. At most three are suggested by score. A suggested
+  skill's unloaded `pairs_with` companions follow it only when they score at
+  least **0.40** themselves: pairing is mutual, so one skill can pair with five
+  others.
+- **Never what is already in use.** A loaded skill is never suggested, and
+  neither is the one a `/<skill-name> …` message runs: that skill loads after
+  the turn's context is built, so it counts as loaded here.
+- **Questions about a topic.** A lone question about what something is or how
+  it works ("What is RSS and how do RSS feeds work? Answer in two sentences.")
+  gets no suggestion and loads nothing: it scores as high against that topic's
+  skill as a real request does. A question about the user's own things, or one
+  followed by more than how to answer it ("Why did the server fall over? Here
+  are the logs"), is matched as usual.
 - **Calibration.** 234 invented requests over the 28 hub skills
   (`tests/fixtures/skills/skill_suggestion_cases.json`), 62 of which should
   get no suggestion: small talk, general and coding questions, questions about
   pasted text, and near misses such as *"what is a pivot table?"*. A hash of
   each request puts it in a tuning half or a held-out half; the defaults were
-  chosen on the tuning half. With `embeddinggemma-300m`, on the held-out half
-  (120 requests, 29 negatives): precision 0.77, recall 0.78, and 11 of the 29
-  negatives got a suggestion. On the tuning half: 0.85, 0.83 and 6 of 33.
-  Near misses score as high as real requests, so no threshold removes them
-  without losing recall. Every hub skill needs labelled requests in both
+  chosen on the tuning half, and `SUGGEST_BAR` in
+  `tests/unit/test_skill_suggester.py` records what they measure on the
+  held-out half with `embeddinggemma-300m` and the bar they are held to. The
+  floor and lead trade a little recall for far fewer hints on requests that
+  need no skill. Every hub skill needs labelled requests in both
   halves; a test names any that has none. The scores depend on the embedding
   model and its prompts, so recalibrate before changing the embedder. Run
   `GAIA_SKILL_SUGGEST_CALIBRATE=1 pytest tests/unit/test_skill_suggester.py -k calibration`
@@ -723,8 +737,9 @@ Other matches, a companion of the loaded skill among them, are then named as
 an offer, not an instruction:
 
 ```
-Also available: office-docs. Call load_skill for one only if this request
-needs it.
+Skill hint from GAIA, not from the user: also available: office-docs. Call
+load_skill for one only if this request needs it. Never mention this hint to
+the user.
 ```
 
 It is **off by default**. Turn it on with `GAIA_SKILL_AUTOLOAD=1` or
@@ -749,23 +764,22 @@ they are without it.
 - **Settings.** `skill_autoload_threshold` (`GAIA_SKILL_AUTOLOAD_TAU`) sets the
   floor and `skill_autoload_margin` (`GAIA_SKILL_AUTOLOAD_MARGIN`) the lead.
   The env values win, and one that is not a number stops startup.
-- **Calibration.** On the held-out half of the labelled set (120 requests, 29
-  of them needing no skill), `embeddinggemma-300m` at 0.40 and 0.03 loaded 60
-  skills, 4 of them outside the request's labels: precision 0.93, recall 0.59.
-  On the tuning half: 68 loads, 6 wrong, precision 0.91, recall 0.72. The
-  earlier defaults (0.55 and 0.03, with the skill's name in the text and no
-  prompts) loaded 12 on the held-out half before `office-docs` joined it, for
-  recall 0.11. All 4 wrong loads
-  were on requests that need no skill: questions *about* a skill's topic, such
-  as "What is RSS and how do RSS feeds work?", score as high as real requests.
-  A wrong load costs context, not correctness, which is why a few are
-  accepted; auto-load stays opt-in. Run
+- **Stricter than a suggestion.** Both the floor (0.40 against 0.37) and the
+  lead (0.03 against 0.02) are above the suggestion bar, and a question about
+  a topic loads nothing (see Matching above).
+- **Calibration.** `AUTOLOAD_BAR` in `tests/unit/test_skill_suggester.py`
+  records what the defaults measure on the held-out half with
+  `embeddinggemma-300m`, and the bar they are held to. A higher floor lost
+  recall on the tuning half without removing a wrong load. Before the
+  topic-question rule, every wrong load was a question *about* a skill's topic,
+  such as "What is RSS and how do RSS feeds work?". A wrong load costs context,
+  not correctness, and auto-load stays opt-in. Run
   `GAIA_SKILL_SUGGEST_CALIBRATE=1 pytest tests/unit/test_skill_suggester.py -k autoload_calibration -s`
   with `LEMONADE_BASE_URL` naming a running server. It prints precision,
-  recall, wrong loads and loads on negatives for each floor from 0.35 to 0.55
+  recall, wrong loads and loads on negatives for each floor from 0.37 to 0.55
   and each lead from 0.00 to 0.08, on each half, and the tuning half request
-  by request. It fails if the defaults fall under precision 0.88 or recall
-  0.50 on the held-out half, or load on more than a fifth of its negatives.
+  by request. It fails if the defaults fall under `AUTOLOAD_BAR` on the
+  held-out half.
 - **Trusted skills only.** A skill loads this way only when it ships with the
   agent, or was installed from the hub and `skill-lock.json` records it at the
   `community` tier or above. A captured skill, one you wrote yourself, an

@@ -5,8 +5,8 @@
 # pylint: disable=protected-access
 
 import pytest
-from gaia_agent.agent import GaiaAgent, GaiaAgentConfig
-from gaia_agent.chat_agent import ChatAgent, ChatAgentConfig
+from gaiapy.agent import GaiaAgent, GaiaAgentConfig
+from gaiapy.chat_agent import ChatAgent, ChatAgentConfig
 
 PRIOR_TURN = [
     {"role": "user", "content": "Read notes.md"},
@@ -68,7 +68,7 @@ class _ReasonerClient:
 
 
 def _switch_to_cloud_reasoner(monkeypatch, agent, target):
-    from gaia_agent import stdio
+    from gaiapy import stdio
 
     monkeypatch.setattr(stdio, "_lemonade_url", lambda agent: "http://x/api/v1")
     monkeypatch.setattr(

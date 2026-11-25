@@ -35,12 +35,12 @@ from unittest import mock
 
 import pytest
 
-pytest.importorskip("gaia_agent")
+pytest.importorskip("gaiapy")
 
 from fastapi.testclient import TestClient  # noqa: E402
-from gaia_agent import caller_auth  # noqa: E402
-from gaia_agent import server as server_mod  # noqa: E402
-from gaia_agent import session_registry as sr  # noqa: E402
+from gaiapy import caller_auth  # noqa: E402
+from gaiapy import server as server_mod  # noqa: E402
+from gaiapy import session_registry as sr  # noqa: E402
 
 _BASE_URL = "http://127.0.0.1:8141"
 _TOKEN = "test-caller-token"
@@ -55,6 +55,7 @@ class _ScriptedAgent:
         self.closed = 0
         self.console = None
         self.conversation_history = []
+        self.loaded_skills = {}
         self._cancel_event = None
         self.saw_cancelled = None
         self.raise_on_query = False
@@ -183,6 +184,61 @@ def _events(response):
         if line.startswith("data: "):
             out.append(json.loads(line[len("data: ") :]))
     return out
+
+
+@pytest.mark.parametrize("early_cancel", [False, True])
+def test_failed_skill_reload_is_reported_once_in_chat(built, monkeypatch, early_cancel):
+    from gaia.skills.errors import SkillNotFoundError
+
+    client, agents = built
+    changed = False
+
+    def load_skill(self, name):
+        if name == "broken":
+            raise SkillNotFoundError("synthetic private path /example/private/SKILL.md")
+        self.loaded_skills[name] = object()
+
+    monkeypatch.setattr(
+        _ScriptedAgent, "built_settings_changed", lambda self: changed, raising=False
+    )
+    monkeypatch.setattr(_ScriptedAgent, "load_skill", load_skill, raising=False)
+
+    def turn(**kwargs):
+        response = client.post(
+            "/v1/gaia/query", json=_body(session_id="loaded", **kwargs)
+        )
+        assert response.status_code == 200, response.text
+        return _events(response)
+
+    def warnings(events):
+        return [e for e in events if e.get("level") == "warning"]
+
+    assert not warnings(turn())
+    agents[0].loaded_skills.update({"coding": object(), "broken": object()})
+    changed = True
+    if early_cancel:
+        run_id = str(uuid.uuid4())
+        client.post(f"/v1/gaia/query/{run_id}/cancel")
+        assert not warnings(turn(run_id=run_id))
+        assert agents[-1].saw_cancelled is True
+        assert len(agents) == 2
+        changed = False
+
+    events = turn()
+    assert len(agents) == 2
+    assert set(agents[-1].loaded_skills) == {"coding"}
+    assert warnings(events) == [
+        {
+            "type": "status",
+            "level": "warning",
+            "message": "Skill 'broken' was not restored after settings changed: "
+            "its files could not be found. Reload it if needed.",
+        }
+    ]
+    assert events[-1]["type"] == "final"
+    assert events[-1]["answer"] == "answered: hello"
+    changed = False
+    assert not warnings(turn())
 
 
 def _terminals(response):
@@ -929,7 +985,7 @@ def switched_backend(monkeypatch):
     ``switched`` replaces ``_AgentSession.switch_model`` wholesale, which also
     skips the provider it records — the thing the tests below are about.
     """
-    from gaia_agent import stdio
+    from gaiapy import stdio
 
     calls: list = []
 
@@ -965,7 +1021,7 @@ def test_a_local_session_asked_for_claude_switches_to_claude(built, switched_bac
     # The symbol `_default_model_for` actually reads. Identical to
     # ChatAgentConfig's today by inheritance, but naming that one instead would
     # fail confusingly the day the flagship overrides the default.
-    from gaia_agent.agent import GaiaAgentConfig
+    from gaiapy.agent import GaiaAgentConfig
 
     client, _ = built
     client.post("/v1/gaia/query", json=_body(session_id="s-1", model="model-a"))
@@ -1158,7 +1214,7 @@ def test_a_decision_for_a_finished_run_is_refused_rather_than_dropped(built):
 @pytest.mark.parametrize("decision", ["allow", "deny", "always"])
 def test_every_decision_the_stdio_channel_accepts_is_accepted_here(decision):
     """The two transports must not disagree about the vocabulary."""
-    from gaia_agent import stdio
+    from gaiapy import stdio
 
     assert decision in {
         stdio.DECISION_ALLOW,
@@ -1199,6 +1255,7 @@ def test_full_access_is_refused_on_a_sidecar_without_caller_auth(built, monkeypa
     client, agents = built
     client.post("/v1/gaia/query", json=_body(session_id="s-1"))
     monkeypatch.delenv(caller_auth.TOKEN_ENV_VAR)
+    monkeypatch.setenv(caller_auth.ALLOW_NO_TOKEN_ENV_VAR, "1")
     caller_auth.reset()
     open_client = TestClient(server_mod.build_app(), base_url=_BASE_URL)
 

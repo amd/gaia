@@ -187,3 +187,57 @@ class TestWhichBash:
     def test_posix_uses_bash(self, monkeypatch):
         monkeypatch.setattr(sys, "platform", "darwin")
         assert _bash() == "bash"
+
+
+BUILD_SIDE = (
+    "build_agents.yml",
+    "build_core.yml",
+    "build_gaiapy.yml",
+    "tui_installers.yml",
+    "windows_setup.yml",
+)
+
+
+def _build_side_downloads():
+    for name in BUILD_SIDE:
+        wf = yaml.safe_load(
+            (REPO_ROOT / ".github" / "workflows" / name).read_text(encoding="utf-8")
+        )
+        for job_id, job in wf["jobs"].items():
+            steps = job.get("steps", [])
+            for i, step in enumerate(steps):
+                if str(step.get("uses", "")).startswith(DOWNLOAD):
+                    yield f"{name}:{job_id}", job, steps, i, step
+
+
+@pytest.mark.parametrize("name", BUILD_SIDE)
+def test_the_build_side_scan_finds_downloads(name):
+    assert any(site.startswith(f"{name}:") for site, *_ in _build_side_downloads())
+
+
+def test_every_build_side_download_is_bounded_and_a_retry_still_fails_loudly():
+    for site, job, steps, i, step in _build_side_downloads():
+        assert step.get("timeout-minutes") or job.get(
+            "timeout-minutes"
+        ), f"{site}: download #{i} has neither a step nor a job timeout"
+        if step.get("continue-on-error") is not True:
+            continue
+        # A tolerated first attempt must be followed by a retry of the same
+        # artifact that is guarded on the first outcome and is NOT tolerated.
+        assert i + 1 < len(steps), f"{site}: tolerated download with no retry"
+        retry = steps[i + 1]
+        assert str(retry.get("uses", "")).startswith(DOWNLOAD), site
+        assert f"steps.{step['id']}{OUTCOME_GUARD}" in str(retry.get("if", "")), site
+        assert retry.get("with") == step.get("with"), f"{site}: retry differs"
+        assert (
+            retry.get("continue-on-error") is not True
+        ), f"{site}: the second attempt must fail the job"
+
+
+def test_the_release_bundle_cannot_hang_a_tagged_release():
+    wf = yaml.safe_load(
+        (REPO_ROOT / ".github" / "workflows" / "build_agents.yml").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert isinstance(wf["jobs"]["release-bundle"].get("timeout-minutes"), int)

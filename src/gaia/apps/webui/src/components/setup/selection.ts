@@ -207,9 +207,16 @@ export function shortfall(plan: SetupPlan, sel: Selection): Shortfall | null {
     return { needGb: downloadGb, freeGb, freeUpGb, drop };
 }
 
-/** Ticked models (and the default chat model) that may not fit this PC's memory. */
+/** Ticked models (and the default chat model) that may not fit this PC's memory,
+ *  and a chosen chat model that fits but leaves other apps little room: both ask first. */
 export function tooBig(catalog: SetupCatalogEntry[], sel: Selection): SetupCatalogEntry[] {
-    return catalog.filter((e) => e.fits === false && (sel.ticked.has(e.id) || e.id === sel.defaultChat));
+    return catalog.filter((e) => (e.fits === false && (sel.ticked.has(e.id) || e.id === sel.defaultChat))
+        || (e.fits === true && !!e.tight && e.id === sel.defaultChat));
+}
+
+/** Every model in *asks* fits, so the question is about room for other apps. */
+export function onlyTight(asks: SetupCatalogEntry[]): boolean {
+    return asks.length > 0 && asks.every((e) => e.fits === true && !!e.tight);
 }
 
 /** Vision is lost when the vision model is neither ticked nor on disk. */
@@ -245,23 +252,20 @@ export function extraModels(plan: SetupPlan, sel: Selection): string[] {
 }
 
 /**
- * The download's overall progress from the same plan the models step totalled:
- * only what was left to download when it started, so the two screens never
- * disagree (a model already on disk adds nothing; a partial one only its rest).
+ * The download's overall progress, from the same bytes the rows show: a model
+ * on disk (ready, being checked, or kept unchecked after Stop) counts whole,
+ * and a partial one counts what it has. The plan supplies a size a row lacks.
  */
 export function overallFromPlan(status: SetupRunStatus, plan: SetupPlan | null): SetupOverall | undefined {
     const rows = (status.models ?? []).filter((m) => m.state !== 'skipped');
-    if (!plan?.catalog || rows.length === 0) return status.overall;
+    if (rows.length === 0) return status.overall;
     let done = 0;
     let total = 0;
     for (const m of rows) {
-        const entry = plan.catalog.find((e) => e.id === m.id);
-        const left = entry?.downloaded ? 0
-            : entry?.size_gb != null ? Math.min(m.bytes_total || Infinity, entry.size_gb * 1e9)
-                : m.bytes_total;
-        const before = Math.max(0, m.bytes_total - left);
-        total += left;
-        done += m.state === 'ready' || m.state === 'verifying' ? left : Math.min(left, Math.max(0, m.bytes_done - before));
+        const entry = plan?.catalog?.find((e) => e.id === m.id);
+        const size = m.bytes_total || (entry?.full_size_gb ?? 0) * 1e9;
+        total += size;
+        done += m.state === 'ready' || m.state === 'verifying' || m.state === 'unchecked' ? size : Math.min(size, m.bytes_done);
     }
     return {
         bytes_done: done,

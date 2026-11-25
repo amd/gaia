@@ -118,7 +118,7 @@ wrapper around it.
 |---|---|---|
 | `everyday` | 14 small coding and GitHub tasks on `eval/tasks/toybox`, a synthetic Python project built for this: explain a file, fix a bug with a regression test, triage GitHub issues, find a duplicate, draft a reply, refactor, review a patch, write tests, a weekly CSV report, a shell-injection fix, label issues, config from an env var. The GitHub tasks run against an offline `gh` stand-in serving committed fixtures — no task reaches a personal login. | Running the code, plus the judge |
 | `therock` | 4 real bugs from the public [ROCm/TheRock](https://github.com/ROCm/TheRock) repository, each checked out at the commit **before** its fix. The agent's diff is graded against the pull request that actually fixed it, fetched only after the agent has exited. Two of the four forbid internet use in the prompt. | The judge, against the real fix |
-| `swebench` | Instances of [SWE-bench Verified](https://huggingface.co/datasets/SWE-bench/SWE-bench_Verified), the public benchmark of real GitHub issues: the agent gets the repository at the commit before the fix and the issue text, and its patch is graded by the official SWE-bench harness running the repository's own tests in Docker. Nothing of the dataset is in this repo; see [SWE-bench Verified](#swe-bench-verified) below. | The official harness (the judge grades quality only) |
+| `swebench` | Instances of [SWE-bench Verified](https://huggingface.co/datasets/SWE-bench/SWE-bench_Verified), the public benchmark of real GitHub issues: the agent gets the repository at the commit before the fix and the issue text, and its patch is graded by the official SWE-bench harness running the repository's own tests in Docker. Only its instance ids are in this repo; see [SWE-bench Verified](#swe-bench-verified) below. | The official harness (the judge grades quality only) |
 
 `everyday` is the one to reach for first — small, fast, cheap, and mechanically
 checkable for most tasks. `therock` is a real 144K-line codebase with a real fix as
@@ -199,9 +199,12 @@ the instance when the official harness applies its patch in the instance's own
 Docker image and every `FAIL_TO_PASS` test passes with no `PASS_TO_PASS` test
 breaking.
 
-**Nothing of the dataset is committed here.** `--suite swebench` is built at run
-time: each instance is read from the Hugging Face dataset (the `datasets` package
-when it is installed, the datasets-server REST API otherwise) and cached as one
+**Only the split's 500 instance ids are committed**
+(`src/gaia/eval/bench/swebench_verified_ids.json`), so `--sample` draws without the
+network. `--suite swebench` is built at run time: each instance is read from the
+Hugging Face dataset (the `datasets` package when it is installed, the
+datasets-server REST API otherwise, which retries a 5xx or dropped connection
+three times) and cached as one
 JSON file under the work root (`$GAIA_BENCH_WORK_ROOT/swebench/`), which `--fence`
 keeps out of the agent's reach. That cache never holds the gold patch: the judge
 fetches the patches again after the agent exits, so re-judging a run needs the

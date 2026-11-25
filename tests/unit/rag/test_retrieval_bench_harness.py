@@ -63,7 +63,7 @@ def _fake_make_rag(cache_dir, allowed, model=None, **overrides):
 def _needs_chat_agent():
     """The ``agent`` pipeline calls the chat agent's real ``query_documents``."""
     pytest.importorskip(
-        "gaia_agent", reason="runs in test_chat_agent.yml, with the flagship wheel"
+        "gaiapy", reason="runs in test_chat_agent.yml, with the flagship wheel"
     )
 
 
@@ -382,3 +382,114 @@ def test_each_benchmark_answer_starts_with_an_empty_chat_history(dataset, tmp_pa
 def test_query_history_leak_is_skipped_without_answer_generation(dataset, tmp_path):
     result = hard_cases.query_history_leak(_ctx(dataset, tmp_path))
     assert result["status"] == "skipped"
+
+
+def _bad_label(qid="bad", quote="text that is not there"):
+    return Question(
+        qid, "synthetic", "?", "x", "exact", [{"doc": "pumps", "quote": quote}]
+    )
+
+
+@pytest.fixture
+def no_agent(monkeypatch):
+    """Skip the flagship's query_documents so these run without its wheel."""
+    monkeypatch.setattr(
+        harness.BenchIndex, "agent_search", lambda self, query: ([], 0.001)
+    )
+
+
+def test_a_bad_label_is_recorded_and_the_later_questions_still_score(
+    dataset, tmp_path, no_agent
+):
+    dataset.questions.insert(1, _bad_label())
+    opts = runner.RunOptions(suite=runner.SUITES["pr"], out_dir=tmp_path / "out")
+    result = runner._run_dataset(
+        dataset, tmp_path / "work", opts, answers=False, judge=None
+    )
+    scored = [q["id"] for q in result["questions"]]
+    assert scored == [f"q{i}" for i in range(len(TOPICS))]
+    assert [e["id"] for e in result["label_errors"]] == ["bad"]
+    assert "not found" in result["label_errors"][0]["error"]
+    assert result["summary"]["label_errors"] == 1
+    assert result["summary"]["questions"] == len(TOPICS)
+    assert len(opts.label_errors) == 1
+    assert opts.label_errors[0].startswith("synthetic/bad: ")
+
+
+def test_every_bad_label_is_reported_not_just_the_first(dataset, tmp_path, no_agent):
+    dataset.questions[:] = [_bad_label("b1"), _bad_label("b2", "also missing")]
+    opts = runner.RunOptions(suite=runner.SUITES["pr"], out_dir=tmp_path / "out")
+    result = runner._run_dataset(
+        dataset, tmp_path / "work", opts, answers=False, judge=None
+    )
+    assert result["questions"] == []
+    assert result["summary"]["questions"] == 0
+    assert [e["id"] for e in result["label_errors"]] == ["b1", "b2"]
+    assert len(opts.label_errors) == 2
+
+
+def test_a_label_on_a_page_the_document_lacks_is_a_label_error(
+    dataset, tmp_path, no_agent
+):
+    bad = Question(
+        "nopage",
+        "synthetic",
+        "?",
+        "x",
+        "exact",
+        [{"doc": "pumps", "page": 3, "quote": "rated thrust"}],
+    )
+    dataset.questions.append(bad)
+    opts = runner.RunOptions(suite=runner.SUITES["pr"], out_dir=tmp_path / "out")
+    result = runner._run_dataset(
+        dataset, tmp_path / "work", opts, answers=False, judge=None
+    )
+    assert [e["id"] for e in result["label_errors"]] == ["nopage"]
+    assert len(result["questions"]) == len(TOPICS)
+
+
+def test_a_failure_that_is_not_a_label_error_still_stops_the_run(
+    dataset, tmp_path, monkeypatch
+):
+    def broken(self, query):
+        raise RuntimeError("query_documents failed")
+
+    monkeypatch.setattr(harness.BenchIndex, "agent_search", broken)
+    opts = runner.RunOptions(suite=runner.SUITES["pr"], out_dir=tmp_path / "out")
+    with pytest.raises(RuntimeError, match="query_documents failed"):
+        runner._run_dataset(dataset, tmp_path / "work", opts, answers=False, judge=None)
+    assert opts.label_errors == []
+
+
+def _scale_on(dataset, monkeypatch):
+    monkeypatch.setattr(runner, "load_labelled", lambda name, offline: dataset)
+    monkeypatch.setattr(runner, "wikipedia_distractors", lambda n, offline: [])
+
+
+def test_a_scale_tier_records_label_errors_and_scores_the_rest(
+    dataset, tmp_path, monkeypatch, no_agent
+):
+    dataset.questions.append(_bad_label())
+    _scale_on(dataset, monkeypatch)
+    opts = runner.RunOptions(
+        suite=runner.SUITES["pr"], out_dir=tmp_path / "out", log=lambda _m: None
+    )
+    out = runner._run_scale(tmp_path / "work", opts, [len(TOPICS)])
+    assert opts.label_errors == [opts.label_errors[0]]
+    assert opts.label_errors[0].startswith(f"scale-{len(TOPICS)}/bad: ")
+    assert out["tiers"][0]["retrieval"]["questions"] == len(TOPICS)
+
+
+def test_a_scale_tier_where_every_label_fails_reports_them_without_crashing(
+    dataset, tmp_path, monkeypatch, no_agent
+):
+    dataset.questions[:] = [_bad_label("b1"), _bad_label("b2", "also missing")]
+    _scale_on(dataset, monkeypatch)
+    logged = []
+    opts = runner.RunOptions(
+        suite=runner.SUITES["pr"], out_dir=tmp_path / "out", log=logged.append
+    )
+    out = runner._run_scale(tmp_path / "work", opts, [1])
+    assert out["tiers"] == []
+    assert len(opts.label_errors) == 2
+    assert any("no question scored" in m for m in logged)

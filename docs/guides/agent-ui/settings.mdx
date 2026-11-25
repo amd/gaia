@@ -41,7 +41,11 @@ models, keys and chats stay. See [Setup in detail](/guides/agent-ui/getting-star
 
 The model in use, context size, the models on this PC, cloud providers and keys, and this month's cloud spend. See [Choose a model](/guides/agent-ui/control#choose-a-model).
 
-**Agent**, at the top, picks the program that runs GAIA, each shown with its download size: **gaiapy**, the full-featured Python agent (the default), or **gaiacpp**, the fast and light native C++ agent (beta). **Compare the two** opens their strengths and trade-offs. A gaiacpp that isn't on this PC has a **Download** button on its row; its row can't be picked until then. Download shows a progress bar in the card and switches to gaiacpp when it's in; a failed download says so in the card with **Retry**, and the agent stays as it was. A switch applies from the next message in every chat; GAIA restarts the agent for it. Where this release offers no gaiacpp, its row says **Not installed** and the reason is shown under it. While GAIA is answering in a chat, a switch waits: finish or stop the answer first.
+**Agent**, at the top, picks the program that runs GAIA, each shown with its download size: **Full-featured** (the default), or **Fast and light** (beta). Each row names its program after it in small type, `gaiapy` or `gaiacpp`, as the CLI and these docs call them. **Compare the two** opens their strengths and trade-offs. A gaiacpp that isn't on this PC has a **Download** button on its row; its row can't be picked until then. Download shows a progress bar in the card and switches to gaiacpp when it's in; a failed download says so in the card with **Retry**, and the agent stays as it was. A switch applies from the next message in every chat; GAIA restarts the agent for it. Where this release offers no gaiacpp, its row says **Not installed** and the reason is shown under it. While GAIA is answering in a chat, a switch waits: finish or stop the answer first.
+
+While gaiacpp is the agent, the message box shows a **Fast and light · Beta** chip beside the model chip; click it to come back here. The default agent shows no chip. Once a chat has answered, its panel's **Agent info** names the agent that answered: **Runs on Full-featured (gaiapy)**, or **Runs on Fast and light (gaiacpp)** with a **Beta** tag, the same tag this card shows.
+
+If gaiacpp is the chosen agent and can't start, because its file is missing or fails its check, the new-chat screen says so and offers two buttons: **Download gaiacpp again**, with the same progress bar, and **Use Full-featured**, which saves gaiapy as your choice. GAIA never switches agents by itself, and a message you had typed stays in the box. In a chat you already have open, the same two buttons appear under the reply that failed, and once either one works GAIA sends that message again, as **Try again** does. Where this release has no gaiacpp to download, the screen gives that reason in place of the download button.
 
 ### Image creation
 
@@ -85,7 +89,7 @@ A banner, a badge or nothing for each event, and keeping the PC awake. See [Noti
 
 ### Read aloud
 
-The voice, the speed, and whether every reply is read. See [Read aloud](/guides/agent-ui/chat#read-aloud).
+The voice, the speed, and whether every reply is read. See [Read aloud](/guides/agent-ui/chat#read-aloud). On macOS this tab only says read aloud isn't offered there yet; a voice or auto-read saved earlier is kept.
 
 ### Privacy
 
@@ -249,7 +253,7 @@ available over mobile access.
   </Accordion>
 
   <Accordion title="Mobile access says ngrok is required">
-    Mobile access reaches this PC from your phone through [ngrok](https://ngrok.com/download), which you install once. The dialog shows the install command for your system with a **Copy** button; run it, then press **Retry**. ngrok also needs a free account's authtoken:
+    Mobile access reaches this PC from your phone through [ngrok](https://ngrok.com/download), which you install once. The dialog links to ngrok's download page; install it, then press **Retry**. ngrok also needs a free account's authtoken:
 
     ```bash
     ngrok config add-authtoken <YOUR_TOKEN>
@@ -281,6 +285,7 @@ available over mobile access.
   <Accordion title="Document indexing fails">
     - The reason shows under the document in the library. A damaged, password-protected or scanned (no text) PDF is marked **Can't be read**: retrying won't help until you re-export the file, remove the password or run OCR on it
     - Ensure the file is a supported format and does not need a password to open (PDFs with only permission restrictions index fine)
+    - A document added while GAIA's model server is stopped stays in the library marked **Waiting**, and GAIA indexes it by itself once the server is back. One added while the server was too busy is marked **Failed** with **Retry**
     - Keep file size under 100MB
     - For PDF image extraction, download the VLM model: `gaia download --agent chat`
     - Two large documents index at a time and the rest wait their turn; small files (under 20 MB) have their own two slots, so they never wait behind big ones. A document that keeps making progress indexes to the end however long it takes. One that makes no progress for 10 minutes stops with an error that says so; to allow longer stalls, set `GAIA_INDEX_TIMEOUT` (seconds without progress) before GAIA starts, e.g. `export GAIA_INDEX_TIMEOUT=1200`

@@ -473,6 +473,8 @@ func entryStatus(e lemonade.Entry) string {
 		return "downloaded"
 	case e.FitUnknown:
 		return "fit unknown"
+	case e.Fits && e.Tight:
+		return fmt.Sprintf("download %.1f GB · tight", e.SizeGB())
 	case e.Fits:
 		return fmt.Sprintf("download %.1f GB", e.SizeGB())
 	case e.SizeGB() > 0:
@@ -1122,6 +1124,9 @@ func (m Model) View() string {
 			}
 			if !selected.Selectable() && selected.Reason != "" {
 				lines = append(lines, dim.Render("Can't use: "+selected.Reason))
+			}
+			if selected.Selectable() && selected.Tight {
+				lines = append(lines, dim.Render(lemonade.TightNote))
 			}
 			if evidence := lemonade.Evidence(selected.Model.ID); evidence != "" {
 				lines = append(lines, "Measured: "+evidence)

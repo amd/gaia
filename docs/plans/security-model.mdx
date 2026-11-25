@@ -13,7 +13,8 @@ icon: "shield"
 > out-of-process sidecars that must authenticate on every leg — see §0.11 (per-spawn
 > secret + per-agent-scoped callback token) and §0.24 (third-party trust root +
 > egress containment). Read v2 §0 before relying on the localhost-only assumptions
-> below.
+> below. The Agent UI backend now requires a per-install token from every caller,
+> local ones included ([Agent UI security](/sdk/sdks/agent-ui#security)).
 
 > **Date:** 2026-04-01
 >
@@ -270,7 +271,7 @@ tools keep their own rules. Tokens in command output are still masked.
 
 **Both transports.** The stdio transport sets `full_access` from
 `--full-access` or the control channel. The HTTP transport
-(`hub/agents/gaia/python/gaia_agent/server.py`) sets it per session through
+(`hub/agents/gaia/python/gaiapy/server.py`) sets it per session through
 `POST /v1/gaia/sessions/{id}/bypass`, which the Agent UI calls when a chat is
 switched to Full access. Token auth and `HostOriginMiddleware`
 (`caller_auth.py`) guard that route. A request with no session has no mode, so

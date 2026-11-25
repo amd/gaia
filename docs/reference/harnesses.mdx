@@ -16,21 +16,27 @@ same whichever is answering.
 | Good at | Every tool and feature, and the most tested | Starts in a fraction of a second and uses a few megabytes of memory |
 | Trade-off | Slower to start and uses more memory | Fewer tools and features so far, no Claude provider, keeps no sessions yet |
 | Default | Yes | No, it runs only once chosen |
-| Agent source | `hub/agents/gaia/python/gaia_agent/` | `cpp/agents/gaiacpp/` |
+| Agent source | `hub/agents/gaia/python/gaiapy/` | `cpp/agents/gaiacpp/` |
 | Framework it is built on | `src/gaia/` (the `amd-gaia` package) | `cpp/` (the `gaia-cpp` CMake project) |
-| Program name | `gaia-agent` | `gaiacpp` |
+| Python package | `gaiapy` (importable as `gaia_agent` too, its old name) | n/a |
+| Program name | `gaia-agent` in an installed GAIA; `gaiapy` or `gaia-agent` from a `pip` install | `gaiacpp` |
 | User guide | [GAIA Agent](/guides/gaia) | [gaiacpp](/cpp/gaia-agent) |
 
 <Note>
-  `gaiapy` is the name of the choice, not of a file: the Python harness's
-  program on disk is `gaia-agent`. `gaiacpp` is both the choice and the program.
+  The installers still ship the Python harness's program as `gaia-agent`, so
+  that is the file an installed GAIA has on disk. The terminal UI accepts
+  `gaiapy` wherever it accepts `gaia-agent`. `gaiacpp` is both the choice and
+  the program.
 </Note>
 
 ## Choosing one
 
 The choice is saved as `flagship_agent` in `~/.gaia/config.json`, with the
 value `gaiapy` or `gaiacpp`. Both apps read the same key. With nothing saved,
-the Python harness runs, even when `gaiacpp` is installed.
+the Python harness runs, even when `gaiacpp` is installed. A name this version
+can't run (one a newer GAIA saved) still loads, so the Agent UI and its
+Settings open; starting the agent fails with a message saying to choose
+another, and no other harness runs in its place.
 
 | Where | How |
 |---|---|

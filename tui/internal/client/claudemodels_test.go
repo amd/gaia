@@ -75,7 +75,7 @@ func TestGoAndPythonClaudeModelListsAgree(t *testing.T) {
 	block := regexp.MustCompile(`(?s)CLAUDE_MODELS: Dict\[str, str\] = \{(.*?)\}`).
 		FindSubmatch(src)
 	if block == nil {
-		t.Fatal("CLAUDE_MODELS not found in gaia_agent/stdio.py — has it been renamed?")
+		t.Fatal("CLAUDE_MODELS not found in gaiapy/stdio.py — has it been renamed?")
 	}
 	var pyIDs []string
 	for _, m := range regexp.MustCompile(`"(claude-[^"]+)"\s*:`).FindAllSubmatch(block[1], -1) {
@@ -96,7 +96,7 @@ func pythonStdioPath(t *testing.T) string {
 		t.Fatal("cannot locate this test's own source file")
 	}
 	repo := filepath.Join(filepath.Dir(self), "..", "..", "..")
-	return filepath.Join(repo, "hub", "agents", "gaia", "python", "gaia_agent", "stdio.py")
+	return filepath.Join(repo, "hub", "agents", "gaia", "python", "gaiapy", "stdio.py")
 }
 
 // Every refusal and every help string names ExampleClaudeModelID. If it ever

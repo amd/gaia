@@ -9,8 +9,8 @@ import sys
 from pathlib import Path
 
 import pytest
-from gaia_agent import session_index, stdio
-from gaia_agent.session_index import SessionIndex
+from gaiapy import session_index, stdio
+from gaiapy.session_index import SessionIndex
 
 WIRE = (
     Path(__file__).resolve().parents[5] / "tests" / "fixtures" / "stdio"
@@ -138,7 +138,7 @@ def test_dispatch_indexes_real_turns_and_clear_empties_the_listing(
 
 def _run_main(tmp_path, monkeypatch, crash=False):
     """Run stdio.main on one question with a stand-in agent; return the history path."""
-    import gaia_agent.agent as agent_mod
+    import gaiapy.agent as agent_mod
 
     class Agent:
         def __init__(self, config=None):

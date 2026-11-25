@@ -14,10 +14,10 @@ import json
 
 import pytest
 
-pytest.importorskip("gaia_agent")
+pytest.importorskip("gaiapy")
 
-import gaia_agent.session_registry as registry_mod  # noqa: E402
-from gaia_agent import server as server_mod  # noqa: E402
+import gaiapy.session_registry as registry_mod  # noqa: E402
+from gaiapy import server as server_mod  # noqa: E402
 
 import gaia.config as gaia_config  # noqa: E402
 import gaia.llm.lemonade_client as lc  # noqa: E402
@@ -174,12 +174,12 @@ def test_an_npu_warm_up_that_only_loads_says_so(sidecar, monkeypatch, caplog):
 def test_a_chat_agent_built_with_skip_lemonade_preloads_nothing():
     from unittest.mock import patch
 
-    from gaia_agent.chat_agent import ChatAgent, ChatAgentConfig
+    from gaiapy.chat_agent import ChatAgent, ChatAgentConfig
 
     with (
         patch.dict("os.environ", {"GAIA_MEMORY_DISABLED": "1"}),
-        patch("gaia_agent.chat_agent.RAGSDK"),
-        patch("gaia_agent.chat_agent.RAGConfig"),
+        patch("gaiapy.chat_agent.RAGSDK"),
+        patch("gaiapy.chat_agent.RAGConfig"),
         patch("gaia.llm.lemonade_manager.LemonadeManager.ensure_ready") as ready,
         patch("gaia.llm.lemonade_client.LemonadeClient"),
     ):

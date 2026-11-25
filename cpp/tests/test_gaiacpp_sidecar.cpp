@@ -690,6 +690,13 @@ TEST_F(GaiacppSidecar, ReadOnlyToolStreamsToolCallThenResultThenFinal) {
     EXPECT_EQ(events.back()["answer"], "The note says hello.");
     EXPECT_EQ(events.back()["usage"]["tools_used"], 1);
     EXPECT_EQ(events.back()["usage"]["steps"], 2);
+    // Two calls of 120 in and 8 out: output is what the model wrote, never input + output.
+    EXPECT_EQ(events.back()["usage"]["input_tokens"], 240);
+    EXPECT_EQ(events.back()["usage"]["tokens"], 16) << events.back()["usage"].dump();
+    EXPECT_EQ(events.back()["usage"]["cached_tokens"], 0);
+    EXPECT_FALSE(events.back().contains("context"));
+    EXPECT_NE(events.back().value("context_error", "").find("gaiacpp doesn't report"), std::string::npos)
+        << "the context meter is told why it has no measurement: " << events.back().dump();
 
     auto sent = modelRequests();
     ASSERT_EQ(sent.size(), 2u);

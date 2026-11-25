@@ -193,7 +193,7 @@ per-turn.
 
 | | seconds |
 |---|---:|
-| `import gaia_agent` (faiss, RAG deps) | 6.3 |
+| `import gaiapy` (faiss, RAG deps) | 6.3 |
 | `GaiaAgent()` construction | 2.1 |
 | **agent cold start** | **8.4** |
 

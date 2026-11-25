@@ -602,7 +602,7 @@ def test_dotted_local_model_survives_cloud_cleanup(local_only_on):
 
 
 def test_the_flagship_model_switch_refuses_a_cloud_model(local_only_on):
-    stdio = pytest.importorskip("gaia_agent.stdio")
+    stdio = pytest.importorskip("gaiapy.stdio")
     switch_model = stdio.switch_model
 
     for target in ("fireworks.glm-5p3-flash", "amd.gpt-oss-120b", "claude-opus-5"):

@@ -321,8 +321,8 @@ class TestAgentImportErrorMessage:
         # installed for the wheel's own tests. CPython assigns ImportError.name
         # exactly this way at raise time, so the constructed object is the
         # identical shape the real import machinery produces.
-        error = ModuleNotFoundError("No module named 'gaia_agent'")
-        error.name = "gaia_agent"
+        error = ModuleNotFoundError("No module named 'gaiapy'")
+        error.name = "gaiapy"
         message = agent_import_error_message(
             error, "The GAIA agent is not installed", "gaia-agent-gaia"
         )
@@ -371,10 +371,10 @@ class TestAgentImportErrorMessage:
         assert "_gaia_missing_transitive_dep" in message
 
     def test_gaia_agent_gaia_missing_top_level_reports_not_installed(self):
-        """gaia-agent-gaia's top-level package is gaia_agent (not gaia_agent_gaia).
-        A ModuleNotFoundError for gaia_agent must be treated as 'not installed'."""
-        error = ModuleNotFoundError("No module named 'gaia_agent'")
-        error.name = "gaia_agent"
+        """gaia-agent-gaia's top-level package is gaiapy (not gaia_agent_gaia).
+        A ModuleNotFoundError for gaiapy must be treated as 'not installed'."""
+        error = ModuleNotFoundError("No module named 'gaiapy'")
+        error.name = "gaiapy"
         message = agent_import_error_message(
             error, "The GAIA agent is not installed", "gaia-agent-gaia"
         )

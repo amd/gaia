@@ -205,8 +205,8 @@ def test_a_release_without_gaiacpp_says_why_it_cannot_be_downloaded(
     gaiacpp = _program(client.get("/api/agent-programs").json(), "gaiacpp")
     assert gaiacpp["can_download"] is False
     assert gaiacpp["size_bytes"] is None
-    assert "could not read" in gaiacpp["unavailable_reason"]
-    assert gaiacpp["unavailable_code"] is None
+    assert "has no gaiacpp to download" in gaiacpp["unavailable_reason"]
+    assert gaiacpp["unavailable_code"] == "no_release"
 
 
 class _Answers:
@@ -334,6 +334,29 @@ def test_gaiacpp_already_here_is_not_downloaded_again(client, release, tmp_path)
     _place(target, PAYLOAD)
     r = client.post("/api/agent-programs/gaiacpp/download")
     assert r.status_code == 409
+
+
+def test_a_gaiacpp_that_fails_its_check_can_be_downloaded_again(
+    client, release, tmp_path
+):
+    target = _target(tmp_path)
+    target.parent.mkdir(parents=True)
+    _place(target, b"changed after download")
+    (target.parent / gaiacpp_fetch.INSTALL_RECORD_NAME).write_text(
+        json.dumps(
+            {
+                "version": "0.26.1",
+                "sha256": hashlib.sha256(PAYLOAD).hexdigest(),
+                "tag": "v0.26.1",
+            }
+        )
+    )
+    gaiacpp = _program(client.get("/api/agent-programs").json(), "gaiacpp")
+    assert gaiacpp["installed"] is True and gaiacpp["can_download"] is True
+    assert gaiacpp["update_available"] is False
+    assert client.post("/api/agent-programs/gaiacpp/download").status_code == 202
+    assert _wait(client, {"done", "failed"})["state"] == "done"
+    assert fetch.verified_native_flagship() == target
 
 
 def test_only_gaiacpp_is_downloaded_here(client):
@@ -506,3 +529,119 @@ def test_an_update_of_an_agent_not_in_use_goes_ahead_during_a_chat(
     assert client.post("/api/agent-programs/gaiacpp/download").status_code == 202
     assert _wait(client, {"done", "failed"})["state"] == "done"
     assert target.read_bytes() == PAYLOAD
+
+
+# ------------------------------------------------- recovery: adversarial cases
+
+
+def _broken_copy(tmp_path):
+    """A gaiacpp whose bytes no longer match the record its download wrote."""
+    target = _target(tmp_path)
+    target.parent.mkdir(parents=True)
+    _place(target, b"changed after download")
+    record = {
+        "version": "0.26.1",
+        "sha256": hashlib.sha256(PAYLOAD).hexdigest(),
+        "tag": "v0.26.1",
+    }
+    record_path = target.parent / gaiacpp_fetch.INSTALL_RECORD_NAME
+    record_path.write_text(json.dumps(record), encoding="utf-8")
+    return target, record_path
+
+
+def test_a_tampered_release_never_blesses_a_broken_copy(client, release, tmp_path):
+    target, record_path = _broken_copy(tmp_path)
+    record_before = record_path.read_text(encoding="utf-8")
+    (release / gaiacpp_fetch.ASSETS["win32-x64"]).write_bytes(b"also tampered")
+    assert client.post("/api/agent-programs/gaiacpp/download").status_code == 202
+    failed = _wait(client, {"done", "failed"})
+    assert failed["state"] == "failed" and "SHA-256 mismatch" in failed["error"]
+    assert target.read_bytes() == b"changed after download"
+    assert record_path.read_text(encoding="utf-8") == record_before
+    with pytest.raises(IntegrityError):
+        fetch.verified_native_flagship()
+
+
+def test_a_broken_copy_on_a_release_without_gaiacpp_says_why_with_its_code(
+    client, tmp_path, monkeypatch
+):
+    _broken_copy(tmp_path)
+    empty = tmp_path / "empty"
+    empty.mkdir()
+    monkeypatch.setenv(gaiacpp_fetch.ASSETS_URL_ENV, empty.as_uri())
+    gaiacpp = _program(client.get("/api/agent-programs").json(), "gaiacpp")
+    assert gaiacpp["installed"] is True and gaiacpp["can_download"] is False
+    assert "has no gaiacpp to download" in gaiacpp["unavailable_reason"]
+    assert gaiacpp["unavailable_code"] == "no_release"
+
+
+def test_a_working_copy_carries_no_unavailable_reason_or_code(
+    client, tmp_path, monkeypatch
+):
+    target = _target(tmp_path)
+    target.parent.mkdir(parents=True)
+    _place(target, PAYLOAD)
+    empty = tmp_path / "empty"
+    empty.mkdir()
+    monkeypatch.setenv(gaiacpp_fetch.ASSETS_URL_ENV, empty.as_uri())
+    gaiacpp = _program(client.get("/api/agent-programs").json(), "gaiacpp")
+    assert gaiacpp["unavailable_reason"] is None
+    assert gaiacpp["unavailable_code"] is None
+
+
+def test_a_part_left_by_a_killed_download_is_never_run_as_gaiacpp(release, tmp_path):
+    from gaia.config import GaiaConfig
+    from gaia.ui.routers.agent_programs import GAIACPP_MISSING, chosen_agent_problem
+
+    bin_dir = _target(tmp_path).parent
+    bin_dir.mkdir(parents=True)
+    _place(bin_dir / f"gaiacpp-part-x1{_target(tmp_path).suffix}", PAYLOAD)
+    (bin_dir / "gaiacpp-part-record.json").write_text("{}", encoding="utf-8")
+    GaiaConfig.save_key("flagship_agent", "gaiacpp")
+    assert fetch.native_flagship() is None
+    assert chosen_agent_problem()["code"] == GAIACPP_MISSING
+    gaiacpp_fetch.download(core_version="0.26.1")
+    assert list(bin_dir.glob("gaiacpp-part-*")) == []
+    assert fetch.verified_native_flagship() == _target(tmp_path)
+
+
+def test_a_download_cut_off_mid_stream_installs_nothing(release, tmp_path, monkeypatch):
+    import requests
+
+    def cut_off(url, session):
+        def body():
+            yield PAYLOAD[:1000]
+            raise requests.ConnectionError("connection reset")
+
+        return len(PAYLOAD), body()
+
+    monkeypatch.setattr(gaiacpp_fetch, "_stream", cut_off)
+    with pytest.raises(RuntimeError, match="stopped after 1000 bytes"):
+        gaiacpp_fetch.download(core_version="0.26.1")
+    bin_dir = _target(tmp_path).parent
+    assert not _target(tmp_path).exists()
+    assert list(bin_dir.glob("gaiacpp*")) == []
+    assert not (bin_dir / gaiacpp_fetch.INSTALL_RECORD_NAME).exists()
+
+
+def test_the_binary_is_not_run_for_its_version_until_its_checksum_matches(
+    release, tmp_path, monkeypatch
+):
+    ran = []
+    monkeypatch.setattr(fetch, "native_flagship_stamp", lambda p: ran.append(p))
+    (release / gaiacpp_fetch.ASSETS["win32-x64"]).write_bytes(b"tampered")
+    with pytest.raises(IntegrityError):
+        gaiacpp_fetch.download(core_version="0.26.1")
+    assert ran == []
+
+
+@pytest.mark.parametrize(
+    "header", ["X-Forwarded-For", "X-Forwarded-Host", "X-Forwarded-Proto"]
+)
+def test_a_download_over_mobile_access_is_refused(client, release, tmp_path, header):
+    r = client.post(
+        "/api/agent-programs/gaiacpp/download", headers={header: "phone.example"}
+    )
+    assert r.status_code == 403
+    assert not _target(tmp_path).exists()
+    assert agent_programs._job["state"] == "idle"

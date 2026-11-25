@@ -983,7 +983,7 @@ class TestPlainUserCopy:
 
 
 @pytest.mark.skipif(
-    importlib.util.find_spec("gaia_agent") is None,
+    importlib.util.find_spec("gaiapy") is None,
     reason="flagship package required to read its real tool registry",
 )
 class TestGaiaToolMapsMatchTheFlagship:
@@ -1003,7 +1003,7 @@ class TestGaiaToolMapsMatchTheFlagship:
         # faked so register_memory_tools still runs.
         import os
 
-        from gaia_agent.agent import GaiaAgent, GaiaAgentConfig
+        from gaiapy.agent import GaiaAgent, GaiaAgentConfig
 
         previous = os.environ.get("GAIA_MEMORY_DISABLED")
         os.environ["GAIA_MEMORY_DISABLED"] = "1"

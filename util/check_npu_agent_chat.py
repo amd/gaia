@@ -61,7 +61,7 @@ UNREACHABLE_MARKERS = (
 )
 
 #: Sent as the Agent UI sends them, so the backend treats this as the app.
-UI_HEADERS = {"X-Gaia-UI": "1", "X-Gaia-Client": "agent-ui"}
+UI_CLIENT_HEADER = {"X-Gaia-Client": "agent-ui"}
 
 PROMPT = "Reply with one short sentence that says hello."
 
@@ -337,6 +337,16 @@ def _lemonade() -> tuple[str, Dict[str, str]]:
     return base, lemonade_auth_headers(resolve_lemonade_api_key(base_url=base))
 
 
+def _ui_headers() -> Dict[str, str]:
+    """The Agent UI's headers, with the API token the backend wrote to GAIA_HOME."""
+    from gaia.ui.api_token import UITokenError, auth_headers
+
+    try:
+        return {**auth_headers(), **UI_CLIENT_HEADER}
+    except UITokenError as e:
+        raise CheckFailed(str(e)) from e
+
+
 def _wait_for_backend(base: str, proc: subprocess.Popen) -> None:
     deadline = time.monotonic() + BACKEND_START_TIMEOUT_S
     while True:
@@ -346,7 +356,7 @@ def _wait_for_backend(base: str, proc: subprocess.Popen) -> None:
                 "see backend.log in the logs"
             )
         try:
-            with _http(f"{base}/api/health", headers=UI_HEADERS, timeout=5):
+            with _http(f"{base}/api/health", timeout=5):
                 return
         except (urllib.error.URLError, OSError) as e:
             if time.monotonic() > deadline:
@@ -363,7 +373,7 @@ def _send_turn(base: str, model: str) -> TurnResult:
         with _http(
             f"{base}/api/sessions",
             body={"title": "NPU agent chat check", "model": model},
-            headers=UI_HEADERS,
+            headers=_ui_headers(),
         ) as reply:
             session = json.load(reply)
     except urllib.error.HTTPError as e:
@@ -376,7 +386,7 @@ def _send_turn(base: str, model: str) -> TurnResult:
         with _http(
             f"{base}/api/chat/send",
             body={"session_id": session["id"], "message": PROMPT, "stream": True},
-            headers=UI_HEADERS,
+            headers=_ui_headers(),
             timeout=TURN_TIMEOUT_S,
         ) as reply:
             lines = (raw.decode("utf-8", "replace").rstrip("\r\n") for raw in reply)
@@ -457,9 +467,9 @@ def run(args: argparse.Namespace) -> None:
         if problems:
             raise CheckFailed(f"{'; '.join(problems)}. {LINUX_DRIVER_HELP}")
 
-    if importlib.util.find_spec("gaia_agent") is not None:
+    if importlib.util.find_spec("gaiapy") is not None:
         raise CheckFailed(
-            "gaia_agent is importable in this Python, so the backend would run "
+            "gaiapy is importable in this Python, so the backend would run "
             "the agent in-process instead of through the gaia-agent binary the "
             "apps use. Install GAIA without the flagship wheel."
         )
@@ -495,7 +505,7 @@ def run(args: argparse.Namespace) -> None:
         _say(f"answer: {result.answer[:500]!r}")
         problems = turn_problems(result)
 
-        server = _get_json(f"{url}/api/system/model-server", UI_HEADERS)
+        server = _get_json(f"{url}/api/system/model-server", _ui_headers())
         if server.get("owner") != "gaia":
             problems.append(
                 f"the backend used the {server.get('owner')!r} Lemonade at "
