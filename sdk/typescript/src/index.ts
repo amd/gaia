@@ -75,6 +75,14 @@ export interface Tool<Args = Record<string, unknown>> {
   description: string;
   parameters: ParametersSchema;
   run: (args: Args) => unknown | Promise<unknown>;
+  /**
+   * How many times the tool may run in one turn, whatever its arguments. A
+   * call past the limit is not run: the model is told so and asked to answer
+   * from the result it has.
+   */
+  maxCallsPerTurn?: number;
+  /** After a successful call, no other tool runs this turn. For a tool like a handoff. */
+  terminal?: boolean;
 }
 
 /** Declare a tool. Checks what the model must be told is there. */
@@ -93,6 +101,17 @@ export function tool<Args = Record<string, unknown>>(spec: Tool<Args>): Tool<Arg
   if (typeof spec.run !== "function") {
     throw new TypeError(`Tool "${spec.name}" needs a run function.`);
   }
+  if (
+    spec.maxCallsPerTurn !== undefined &&
+    (!Number.isInteger(spec.maxCallsPerTurn) || spec.maxCallsPerTurn < 1)
+  ) {
+    throw new TypeError(
+      `Tool "${spec.name}": maxCallsPerTurn must be a positive whole number, got ${String(spec.maxCallsPerTurn)}.`,
+    );
+  }
+  if (spec.terminal !== undefined && typeof spec.terminal !== "boolean") {
+    throw new TypeError(`Tool "${spec.name}": terminal must be true or false.`);
+  }
   return spec;
 }
 
@@ -104,7 +123,25 @@ export interface Budget {
   modelCalls?: number;
   outputTokens?: number;
   seconds?: number;
+  /** Dollars at the agent's `prices`, which it then needs. */
+  usd?: number;
 }
+
+/**
+ * A model's list prices in dollars per million tokens. The engine carries no
+ * rate card, so a dollar budget and `Turn.costUsd` need them.
+ */
+export interface Prices {
+  input: number;
+  cachedInput: number;
+  output: number;
+}
+
+/** Returns what is wrong with the answer, or nothing. */
+export type AnswerCheck = (answer: string, toolCalls: ToolCall[]) => string | null | undefined;
+
+/** A turn's stop reason when an answer check still objects after the one repair. */
+export const UNRESOLVED_CHECKS = "unresolved_checks";
 
 export interface Message {
   role: "user" | "assistant";
@@ -146,6 +183,10 @@ export interface Turn {
   failure: { kind: string; message: string } | null;
   /** One entry per model request. */
   modelCalls: ModelCall[];
+  /** Dollars at the agent's `prices`; null when it has none. */
+  costUsd: number | null;
+  /** What the answer checks still object to after the one repair. */
+  unresolvedChecks: string[];
 }
 
 export interface AgentOptions {
@@ -169,18 +210,32 @@ export interface AgentOptions {
   retries?: number;
   /** Limits applied to every turn; `run(..., {budget})` overrides. */
   budget?: Budget;
+  /** The model's list prices, for `Turn.costUsd` and `budget.usd`. */
+  prices?: Prices;
+  /**
+   * Run on each successful answer. The model is sent the problems once to
+   * repair; any still found afterwards are in `Turn.unresolvedChecks` and the
+   * turn is "incomplete".
+   */
+  answerChecks?: AnswerCheck[];
   onModelCall?: (call: ModelCall) => void;
   /** The gaiacpp binary, or a command to start it, when it is not found otherwise. */
   engine?: string | string[];
 }
 
-function checkBudget(budget: Budget | undefined): Record<string, number> | undefined {
+function checkBudget(budget: Budget | undefined, priced: boolean): Record<string, number> | undefined {
   if (!budget) return undefined;
+  if (budget.usd !== undefined && !priced) {
+    throw new RangeError(
+      "budget.usd needs the agent's prices: pass prices: {input, cachedInput, output} in dollars per million tokens, or limit the turn with outputTokens or modelCalls instead.",
+    );
+  }
   const wire: Record<string, number> = {};
   for (const [key, name, whole] of [
     ["modelCalls", "model_calls", true],
     ["outputTokens", "output_tokens", true],
     ["seconds", "seconds", false],
+    ["usd", "usd", false],
   ] as const) {
     const value = budget[key];
     if (value === undefined) continue;
@@ -369,7 +424,18 @@ export class Agent {
       if (tools.has(checked.name)) throw new TypeError(`Two tools are named "${checked.name}".`);
       tools.set(checked.name, checked);
     }
-    checkBudget(options.budget);
+    const prices = options.prices;
+    if (prices !== undefined) {
+      for (const key of ["input", "cachedInput", "output"] as const) {
+        if (typeof prices[key] !== "number" || !(prices[key] >= 0)) {
+          throw new RangeError(`prices.${key} must be a number, 0 or more, got ${String(prices[key])}.`);
+        }
+      }
+    }
+    checkBudget(options.budget, prices !== undefined);
+    for (const check of options.answerChecks ?? []) {
+      if (typeof check !== "function") throw new TypeError("answerChecks must be functions.");
+    }
 
     const init: Record<string, unknown> = {
       type: "init",
@@ -381,6 +447,8 @@ export class Agent {
         name: t.name,
         description: t.description,
         parameters: t.parameters,
+        ...(t.maxCallsPerTurn !== undefined ? { max_calls_per_turn: t.maxCallsPerTurn } : {}),
+        ...(t.terminal ? { terminal: true } : {}),
       })),
       native_tools: options.nativeTools ?? true,
       retries: options.retries ?? 0,
@@ -393,6 +461,9 @@ export class Agent {
       ["temperature", options.temperature],
     ] as const) {
       if (value !== undefined) init[key] = value;
+    }
+    if (prices !== undefined) {
+      init.prices = { input: prices.input, cached_input: prices.cachedInput, output: prices.output };
     }
 
     const engine = new Engine(findEngine(options.engine));
@@ -425,7 +496,33 @@ export class Agent {
   async run(messages: string | Message[], options: { budget?: Budget } = {}): Promise<Turn> {
     const conversation: Message[] =
       typeof messages === "string" ? [{ role: "user", content: messages }] : messages;
-    const budget = checkBudget(options.budget ?? this.options.budget);
+    const budget = checkBudget(options.budget ?? this.options.budget, this.options.prices !== undefined);
+
+    const turn = await this.runOnce(conversation, budget);
+    const checks = this.options.answerChecks ?? [];
+    if (!turn.ok || checks.length === 0) return turn;
+    const problems = findProblems(checks, turn.text, turn.toolCalls);
+    if (problems.length === 0) return turn;
+    // One repair, then the answer is returned with what is still wrong.
+    const second = await this.runOnce(
+      [
+        ...conversation,
+        { role: "assistant", content: turn.text },
+        {
+          role: "user",
+          content: `[check] ${problems.join(" ")} Give your complete answer again: it replaces the one above, which the user will not see. Do not mention this check.`,
+        },
+      ],
+      budget,
+    );
+    const merged = mergeTurns(turn, second);
+    if (!second.ok) return { ...merged, unresolvedChecks: problems };
+    const left = findProblems(checks, merged.text, merged.toolCalls);
+    if (left.length === 0) return merged;
+    return { ...merged, ok: false, status: "incomplete", stopReason: UNRESOLVED_CHECKS, unresolvedChecks: left };
+  }
+
+  private async runOnce(conversation: Message[], budget: Record<string, number> | undefined): Promise<Turn> {
     const id = `t${++this.turns}`;
     const request: Record<string, unknown> = {
       type: "turn",
@@ -460,6 +557,8 @@ export class Agent {
           seconds: Number(event.seconds ?? 0),
           failure: (event.failure ?? null) as Turn["failure"],
           modelCalls,
+          costUsd: typeof event.cost_usd === "number" ? event.cost_usd : null,
+          unresolvedChecks: [],
         };
       } else {
         throw new EngineError(
@@ -496,6 +595,32 @@ export class Agent {
   async close(): Promise<void> {
     await this.engine.close();
   }
+}
+
+function findProblems(checks: AnswerCheck[], text: string, toolCalls: ToolCall[]): string[] {
+  const found: string[] = [];
+  for (const check of checks) {
+    const problem = check(text, [...toolCalls]);
+    if (problem) found.push(String(problem));
+  }
+  return found;
+}
+
+/** The repair turn's outcome, with both turns' work and spend. */
+function mergeTurns(first: Turn, second: Turn): Turn {
+  return {
+    ...second,
+    toolCalls: [...first.toolCalls, ...second.toolCalls],
+    usage: {
+      modelCalls: first.usage.modelCalls + second.usage.modelCalls,
+      inputTokens: first.usage.inputTokens + second.usage.inputTokens,
+      cachedTokens: first.usage.cachedTokens + second.usage.cachedTokens,
+      outputTokens: first.usage.outputTokens + second.usage.outputTokens,
+    },
+    seconds: first.seconds + second.seconds,
+    modelCalls: [...first.modelCalls, ...second.modelCalls],
+    costUsd: first.costUsd === null || second.costUsd === null ? null : first.costUsd + second.costUsd,
+  };
 }
 
 function toUsage(raw: unknown): Omit<Usage, "modelCalls"> {

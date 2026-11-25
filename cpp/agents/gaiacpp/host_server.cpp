@@ -8,6 +8,7 @@
 #include <cmath>
 #include <exception>
 #include <istream>
+#include <map>
 #include <memory>
 #include <optional>
 #include <ostream>
@@ -79,6 +80,14 @@ struct HostTool {
     std::string name;
     std::string description;
     std::vector<ToolParameter> parameters;
+    int maxCallsPerTurn = 0;  // 0 = no limit
+    bool terminal = false;    // after it succeeds, no other tool runs this turn
+};
+
+/// List prices in dollars per million tokens, as the host gave them.
+struct Prices {
+    bool set = false;
+    double input = 0.0, cachedInput = 0.0, output = 0.0;
 };
 
 HostTool parseTool(const json& j) {
@@ -86,6 +95,11 @@ HostTool parseTool(const json& j) {
     HostTool tool;
     tool.name = requireString(j, "name", "init");
     tool.description = j.value("description", std::string());
+    tool.maxCallsPerTurn = positiveInt(j, "max_calls_per_turn", "init", 0);
+    if (j.contains("terminal") && !j["terminal"].is_boolean()) {
+        throw ProtocolError("bad_init", "`terminal` of tool `" + tool.name + "` must be true or false.");
+    }
+    tool.terminal = j.value("terminal", false);
     const json schema = j.value("parameters", json::object());
     if (!schema.is_object()) {
         throw ProtocolError("bad_init", "`parameters` of tool `" + tool.name +
@@ -123,6 +137,7 @@ struct Budget {
     int modelCalls = 0;
     int outputTokens = 0;
     double seconds = 0.0;
+    double usd = 0.0;
 };
 
 class HostAgent;
@@ -166,7 +181,47 @@ public:
         stop_.clear();
         toolCalls_ = json::array();
         fatal_ = nullptr;
+        callCounts_.clear();
+        terminalDone_ = false;
     }
+
+    void setPrices(Prices prices) { prices_ = prices; }
+    bool priced() const { return prices_.set; }
+
+    /// Dollars this turn has cost at the host's prices, or null without any.
+    json costUsd() const {
+        if (!prices_.set) return nullptr;
+        const int uncached = inputTokens_ > cachedTokens_ ? inputTokens_ - cachedTokens_ : 0;
+        return (uncached * prices_.input + cachedTokens_ * prices_.cachedInput +
+                outputTokens_ * prices_.output) /
+               1e6;
+    }
+
+    /// Why this call must not run, as the result the model is given; null to run it.
+    json refusalFor(const HostTool& tool) {
+        if (terminalDone_) {
+            return {{"status", "refused"},
+                    {"message", "Not run: this turn's tool use has ended. Give your answer now."}};
+        }
+        if (tool.maxCallsPerTurn > 0 && callCounts_[tool.name] >= tool.maxCallsPerTurn) {
+            const std::string times =
+                tool.maxCallsPerTurn == 1 ? "once" : std::to_string(tool.maxCallsPerTurn) + " times";
+            return {{"status", "refused"},
+                    {"message", "`" + tool.name + "` already ran " + times +
+                                    " this turn, which is its limit, so this call was not run. "
+                                    "Answer from the result you already have."}};
+        }
+        ++callCounts_[tool.name];
+        return nullptr;
+    }
+
+    /// Record a call the engine answered itself, so the host still sees it.
+    void noteRefused(const std::string& name, const json& args, const json& result) {
+        toolCalls_.push_back({{"name", name}, {"arguments", args}, {"result", result}, {"failed", false}});
+    }
+
+    void endToolUse() { terminalDone_ = true; }
+    bool lastCallFailed() const { return !toolCalls_.empty() && toolCalls_.back().value("failed", false); }
 
     /// Record why the turn cannot go on: the host left, or broke the protocol.
     void abandon(std::exception_ptr why) {
@@ -184,6 +239,7 @@ public:
         if (budget_.seconds > 0 && elapsed() >= budget_.seconds) return "deadline";
         if (budget_.modelCalls > 0 && modelCalls_ >= budget_.modelCalls) return "model_calls";
         if (budget_.outputTokens > 0 && outputTokens_ >= budget_.outputTokens) return "output_tokens";
+        if (budget_.usd > 0 && prices_.set && costUsd().get<double>() >= budget_.usd) return "cost";
         return "";
     }
 
@@ -257,6 +313,9 @@ private:
     std::string stop_;
     json toolCalls_ = json::array();
     std::exception_ptr fatal_;
+    Prices prices_;
+    std::map<std::string, int> callCounts_;
+    bool terminalDone_ = false;
 };
 
 /// The loop with the host's prompt and the host's tools, and none of its own.
@@ -291,17 +350,25 @@ protected:
             info.parameters = tool.parameters;
             info.policy = ToolPolicy::ALLOW;  // the host decides what its own tools may do
             const std::string name = tool.name;
-            info.callback = [this, name](const json& args) -> json {
+            const HostTool declared = tool;
+            info.callback = [this, name, declared](const json& args) -> json {
                 if (stopIfSpent()) {
                     return {{"status", "error"}, {"error", "Not run: this turn's budget is spent."}};
                 }
                 if (session_.abandoned()) {
                     return {{"status", "error"}, {"error", "Not run: the host stopped answering."}};
                 }
+                const json refusal = session_.refusalFor(declared);
+                if (!refusal.is_null()) {
+                    session_.noteRefused(name, args, refusal);
+                    return refusal;
+                }
                 // The tool registry turns anything thrown here into a tool error for
                 // the model, so a host that left would be asked again and again.
                 try {
-                    return session_.callHostTool(name, args);
+                    json result = session_.callHostTool(name, args);
+                    if (declared.terminal && !session_.lastCallFailed()) session_.endToolUse();
+                    return result;
                 } catch (const HostGone&) {
                     session_.abandon(std::current_exception());
                 } catch (const ProtocolError&) {
@@ -384,6 +451,21 @@ std::unique_ptr<HostAgent> buildAgent(const json& init, Session& session) {
         }
         tools.push_back(std::move(tool));
     }
+    if (init.contains("prices") && !init["prices"].is_null()) {
+        const json& p = init["prices"];
+        Prices prices;
+        prices.set = true;
+        for (const auto& [key, field] : {std::pair<const char*, double*>{"input", &prices.input},
+                                         {"cached_input", &prices.cachedInput},
+                                         {"output", &prices.output}}) {
+            if (!p.is_object() || !p.contains(key) || !p[key].is_number() || p[key].get<double>() < 0) {
+                throw ProtocolError("bad_init", "`prices` needs `input`, `cached_input` and `output` as "
+                                                "dollars per million tokens, each 0 or more.");
+            }
+            *field = p[key].get<double>();
+        }
+        session.setPrices(prices);
+    }
     return std::make_unique<HostAgent>(cfg, init.value("system_prompt", std::string()), std::move(tools),
                                        session);
 }
@@ -400,6 +482,12 @@ Budget parseBudget(const json& turn) {
             throw ProtocolError("bad_turn", "`budget.seconds` must be a positive number.");
         }
         budget.seconds = b["seconds"].get<double>();
+    }
+    if (b.contains("usd") && !b["usd"].is_null()) {
+        if (!b["usd"].is_number() || b["usd"].get<double>() <= 0) {
+            throw ProtocolError("bad_turn", "`budget.usd` must be a positive number.");
+        }
+        budget.usd = b["usd"].get<double>();
     }
     return budget;
 }
@@ -439,6 +527,7 @@ json finalEvent(const Session& session, const json& result) {
             {"text", text},
             {"tool_calls", session.toolCalls()},
             {"usage", session.usage()},
+            {"cost_usd", session.costUsd()},
             {"seconds", std::round(session.elapsed() * 1000) / 1000},
             {"failure", failure}};
 }
@@ -465,6 +554,11 @@ void runTurn(HostAgent& agent, Session& session, const json& turn) {
     const std::string input = history.back().content;
     history.pop_back();
     const Budget budget = parseBudget(turn);
+    if (budget.usd > 0 && !session.priced()) {
+        // A dollar limit the engine cannot meter would simply never fire.
+        throw ProtocolError("bad_turn", "`budget.usd` needs `prices` in `init`: the engine carries no "
+                                        "rate card, so give the model's prices per million tokens.");
+    }
 
     session.beginTurn(id, budget);
     agent.setHistory(std::move(history));

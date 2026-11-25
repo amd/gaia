@@ -88,11 +88,8 @@ test("init and turn carry only fields the wire allows", async () => {
   for (const key of Object.keys(sent.init)) assert.ok(allowed.has(key), `init has ${key}`);
   const turnSpec = FIXTURE.host_to_engine.turn;
   assert.deepEqual(Object.keys(sent.turn).sort(), [...turnSpec.required, ...turnSpec.optional].sort());
-  assert.deepEqual(Object.keys(sent.turn.budget).sort(), [...FIXTURE.budget].sort());
-  assert.deepEqual(
-    Object.keys(sent.init.tools[0]).sort(),
-    [...FIXTURE.tool.required, ...FIXTURE.tool.optional].sort(),
-  );
+  assert.deepEqual(Object.keys(sent.turn.budget).sort(), FIXTURE.budget.filter((k) => k !== "usd").sort());
+  assert.deepEqual(Object.keys(sent.init.tools[0]).sort(), ["description", "name", "parameters"]);
   assert.equal(sent.init.api_key_env, "PROVIDER_KEY");
   assert.deepEqual(sent.turn.messages, [{ role: "user", content: "hi" }]);
 });
@@ -391,5 +388,165 @@ test("real engine: a provider failure is a typed turn, and the next turn still r
     assert.equal(first.failure.kind, "model_call");
     assert.equal(second.ok, true);
     assert.equal(second.text, "Hello again.");
+  });
+});
+
+// ---- limits and checks ---------------------------------------------------
+
+function limitedTools(ran) {
+  return [
+    tool({
+      name: "get_order",
+      description: "Look up an order by its number.",
+      parameters: orderSchema,
+      maxCallsPerTurn: 1,
+      run: ({ order_number }) => {
+        ran.push(["get_order", order_number]);
+        return { status: "shipped" };
+      },
+    }),
+    tool({
+      name: "handoff_to_human",
+      description: "Pass the conversation to a person.",
+      parameters: { type: "object", properties: { summary: { type: "string" } }, required: ["summary"] },
+      terminal: true,
+      run: ({ summary }) => {
+        ran.push(["handoff_to_human", summary]);
+        return { ticket: "T-17" };
+      },
+    }),
+  ];
+}
+
+function handoffWasReal(answer, toolCalls) {
+  const said = answer.toLowerCase().includes("passed this to the team");
+  const did = toolCalls.some((c) => c.name === "handoff_to_human" && !c.failed);
+  return said && !did ? "You said this was passed to the team, but handoff_to_human was not called." : null;
+}
+
+test("tool limits and prices go out under the wire's names", async () => {
+  const sent = await withAgent(
+    {
+      model: "echo-init",
+      tools: limitedTools([]),
+      prices: { input: 0.3, cachedInput: 0.006, output: 1.2 },
+      budget: { usd: 0.03 },
+    },
+    async (agent) => JSON.parse((await agent.run("hi")).text),
+  );
+
+  const allowed = new Set([...FIXTURE.tool.required, ...FIXTURE.tool.optional]);
+  for (const declared of sent.init.tools) {
+    for (const key of Object.keys(declared)) assert.ok(allowed.has(key), `tool has ${key}`);
+  }
+  assert.equal(sent.init.tools[0].max_calls_per_turn, 1);
+  assert.equal(sent.init.tools[1].terminal, true);
+  assert.deepEqual(Object.keys(sent.init.prices).sort(), [...FIXTURE.prices].sort());
+  assert.deepEqual(sent.turn.budget, { usd: 0.03 });
+});
+
+test("a dollar budget without prices is refused before anything is sent", async () => {
+  await assert.rejects(
+    () => Agent.start({ model: "answer", baseUrl: "http://x/v1", engine: FAKE, budget: { usd: 0.03 } }),
+    /needs the agent's prices/,
+  );
+  await withAgent({ model: "answer" }, async (agent) => {
+    await assert.rejects(() => agent.run("hi", { budget: { usd: 0.03 } }), /needs the agent's prices/);
+  });
+});
+
+test("bad tool limits are refused", () => {
+  const base = { name: "t", description: "d", parameters: orderSchema, run: () => 1 };
+  assert.throws(() => tool({ ...base, maxCallsPerTurn: 0 }), /positive whole number/);
+  assert.throws(() => tool({ ...base, terminal: "yes" }), /true or false/);
+});
+
+async function withLimitedAgent(options, body) {
+  const model = await modelServer();
+  const ran = [];
+  const agent = await Agent.start({
+    model: "host-model",
+    baseUrl: model.baseUrl,
+    systemPrompt: "You answer questions about orders.",
+    tools: limitedTools(ran),
+    engine: REAL,
+    ...options,
+  });
+  try {
+    return await body(agent, model, ran);
+  } finally {
+    await agent.close();
+    await model.close();
+  }
+}
+
+test("real engine: a tool past its per-turn limit is not run", real, async () => {
+  await withLimitedAgent({}, async (agent, model, ran) => {
+    model.call("get_order", { order_number: "1001" });
+    model.call("get_order", { order_number: "2002" });
+    model.say("Order 1001 has shipped.");
+
+    const turn = await agent.run("Where are my orders?");
+
+    assert.deepEqual(ran, [["get_order", "1001"]]);
+    assert.equal(turn.text, "Order 1001 has shipped.");
+    assert.equal(turn.toolCalls[1].result.status, "refused");
+  });
+});
+
+test("real engine: after a terminal tool no other tool runs", real, async () => {
+  await withLimitedAgent({}, async (agent, model, ran) => {
+    model.call("handoff_to_human", { summary: "empty box" });
+    model.call("get_order", { order_number: "1001" });
+    model.say("A colleague will email you today.");
+
+    const turn = await agent.run("my box was empty");
+
+    assert.deepEqual(ran, [["handoff_to_human", "empty box"]]);
+    assert.equal(turn.text, "A colleague will email you today.");
+  });
+});
+
+test("real engine: a dollar budget stops the turn at the agent's prices", real, async () => {
+  await withLimitedAgent({ prices: { input: 1000, cachedInput: 0, output: 10000 } }, async (agent, model, ran) => {
+    model.call("get_order", { order_number: "1001" });
+    model.say("never asked for");
+
+    const turn = await agent.run("Where is order 1001?", { budget: { usd: 0.1 } });
+
+    assert.equal(turn.stopReason, "cost");
+    assert.ok(Math.abs(turn.costUsd - 0.17) < 1e-9);
+    assert.deepEqual(ran, []);
+  });
+});
+
+test("real engine: a claim without the call is sent back once, then backed by a real call", real, async () => {
+  await withLimitedAgent({ answerChecks: [handoffWasReal] }, async (agent, model, ran) => {
+    model.say("I've passed this to the team.");
+    model.call("handoff_to_human", { summary: "empty box" });
+    model.say("I've passed this to the team.");
+
+    const turn = await agent.run("my box was empty");
+
+    assert.deepEqual(ran, [["handoff_to_human", "empty box"]]);
+    assert.equal(turn.ok, true);
+    assert.deepEqual(turn.unresolvedChecks, []);
+    assert.equal(turn.usage.modelCalls, 3);
+    assert.equal(turn.costUsd, null);
+  });
+});
+
+test("real engine: a claim the model never backs is returned for the host to withhold", real, async () => {
+  await withLimitedAgent({ answerChecks: [handoffWasReal] }, async (agent, model) => {
+    model.say("I've passed this to the team.");
+    model.say("I've passed this to the team.");
+
+    const turn = await agent.run("my box was empty");
+
+    assert.equal(turn.ok, false);
+    assert.equal(turn.status, "incomplete");
+    assert.equal(turn.stopReason, "unresolved_checks");
+    assert.equal(turn.unresolvedChecks.length, 1);
+    assert.equal(model.requests.length, 2);
   });
 });

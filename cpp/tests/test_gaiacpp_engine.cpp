@@ -400,6 +400,118 @@ TEST_F(GaiacppEngine, RetriesAndStepCountsThatAreNotSmallWholeNumbersAreRefused)
     }
 }
 
+TEST_F(GaiacppEngine, AToolPastItsPerTurnLimitIsNotRunAndTheModelIsToldSo) {
+    mock_.pushResponse(toolCall("get_order", {{"order_number", "1001"}}));
+    mock_.pushResponse(toolCall("get_order", {{"order_number", "2002"}}));
+    mock_.pushResponse(answer("Order 1001 has shipped."));
+    json limited = init();
+    limited["tools"][0]["max_calls_per_turn"] = 1;
+    const json result = {{"type", "tool_result"}, {"id", "t1:1"}, {"result", {{"status", "shipped"}}}};
+
+    const auto events = run({limited, turn("t1", "Where are my orders?"), result});
+
+    // The host was asked once; the second call never reached it.
+    EXPECT_EQ(ofType(events, "tool_request").size(), 1u);
+    const json final = ofType(events, "final").at(0);
+    EXPECT_EQ(final["status"], "success");
+    ASSERT_EQ(final["tool_calls"].size(), 2u);
+    EXPECT_EQ(final["tool_calls"][1]["arguments"]["order_number"], "2002");
+    EXPECT_EQ(final["tool_calls"][1]["result"]["status"], "refused");
+    EXPECT_EQ(final["tool_calls"][1]["failed"], false);
+    EXPECT_NE(mock_.receivedBodies().at(2).find("already ran once this turn"), std::string::npos);
+}
+
+TEST_F(GaiacppEngine, AfterATerminalToolNoOtherToolRuns) {
+    mock_.pushResponse(toolCall("handoff", {{"summary", "empty box"}}));
+    mock_.pushResponse(toolCall("get_order", {{"order_number", "1001"}}));
+    mock_.pushResponse(answer("A colleague will email you today."));
+    json withHandoff = init();
+    withHandoff["tools"].push_back(
+        {{"name", "handoff"},
+         {"description", "Pass the conversation to a person."},
+         {"parameters",
+          {{"type", "object"},
+           {"properties", {{"summary", {{"type", "string"}}}}},
+           {"required", json::array({"summary"})}}},
+         {"terminal", true}});
+    const json result = {{"type", "tool_result"}, {"id", "t1:1"}, {"result", {{"ticket", "T-17"}}}};
+
+    const auto events = run({withHandoff, turn("t1", "my box was empty"), result});
+
+    const auto requests = ofType(events, "tool_request");
+    ASSERT_EQ(requests.size(), 1u);
+    EXPECT_EQ(requests[0]["name"], "handoff");
+    const json final = ofType(events, "final").at(0);
+    EXPECT_EQ(final["status"], "success");
+    EXPECT_EQ(final["text"], "A colleague will email you today.");
+    EXPECT_EQ(final["tool_calls"][1]["result"]["status"], "refused");
+}
+
+TEST_F(GaiacppEngine, ATerminalToolThatFailedDoesNotEndToolUse) {
+    mock_.pushResponse(toolCall("get_order", {{"order_number", "1001"}}));
+    mock_.pushResponse(toolCall("get_order", {{"order_number", "1001"}}));
+    mock_.pushResponse(answer("It has shipped."));
+    json terminal = init();
+    terminal["tools"][0]["terminal"] = true;
+    const json failed = {{"type", "tool_result"}, {"id", "t1:1"}, {"error", "archive offline"}};
+    const json worked = {{"type", "tool_result"}, {"id", "t1:2"}, {"result", {{"status", "shipped"}}}};
+
+    const auto events = run({terminal, turn("t1", "Where is order 1001?"), failed, worked});
+
+    EXPECT_EQ(ofType(events, "tool_request").size(), 2u);
+    EXPECT_EQ(ofType(events, "final").at(0)["text"], "It has shipped.");
+}
+
+TEST_F(GaiacppEngine, ADollarLimitStopsTheTurnAtTheHostsPrices) {
+    // 100 in + 7 out at $1,000 and $10,000 per million: $0.17 a request.
+    mock_.pushResponse(toolCall("get_order", {{"order_number", "1001"}}));
+    mock_.pushResponse(answer("never asked for"));
+    json priced = init();
+    priced["prices"] = {{"input", 1000.0}, {"cached_input", 0.0}, {"output", 10000.0}};
+    json t = turn("t1", "Where is order 1001?");
+    t["budget"] = {{"usd", 0.10}};
+
+    const auto events = run({priced, t});
+
+    const json final = ofType(events, "final").at(0);
+    EXPECT_EQ(final["status"], "incomplete");
+    EXPECT_EQ(final["stop_reason"], "cost");
+    EXPECT_NEAR(final["cost_usd"].get<double>(), 0.17, 1e-9);
+    EXPECT_TRUE(ofType(events, "tool_request").empty());
+    EXPECT_EQ(mock_.requestCount(), 1);
+}
+
+TEST_F(GaiacppEngine, CostIsNullWithoutPricesAndADollarLimitIsRefused) {
+    mock_.pushResponse(answer("Hello."));
+    json t = turn("t2", "hi");
+    t["budget"] = {{"usd", 0.10}};
+
+    const auto events = run({init(), turn("t1", "hi"), t});
+
+    EXPECT_TRUE(ofType(events, "final").at(0)["cost_usd"].is_null());
+    const auto errors = ofType(events, "error");
+    ASSERT_EQ(errors.size(), 1u);
+    EXPECT_EQ(errors[0]["code"], "bad_turn");
+    EXPECT_NE(errors[0]["message"].get<std::string>().find("prices"), std::string::npos);
+    EXPECT_EQ(mock_.requestCount(), 1);
+}
+
+TEST_F(GaiacppEngine, BadToolLimitsAndPricesAreRefused) {
+    for (const auto& [where, value] : std::vector<std::pair<std::string, json>>{
+             {"max_calls_per_turn", 0}, {"max_calls_per_turn", "1"}, {"terminal", "yes"}}) {
+        json bad = init();
+        bad["tools"][0][where] = value;
+        const auto events = run({bad});
+        ASSERT_EQ(events.size(), 1u) << where;
+        EXPECT_EQ(events[0]["code"], "bad_init") << where;
+    }
+    json bad = init();
+    bad["prices"] = {{"input", 1.0}};
+    const auto events = run({bad});
+    ASSERT_EQ(events.size(), 1u);
+    EXPECT_EQ(events[0]["code"], "bad_init");
+}
+
 // The contract both SDKs are written against.
 json wireFixture() {
     std::ifstream in(std::string(GAIA_REPO_FIXTURES_DIR) + "/stdio/gaia_host_wire.json");

@@ -40,13 +40,22 @@ class Tool:
     description: str
     parameters: Dict[str, Any]
     function: Callable[..., Any]
+    #: How many times the tool may run in one turn; None for no limit.
+    max_calls_per_turn: Optional[int] = None
+    #: After a successful call, no other tool runs this turn.
+    terminal: bool = False
 
     def declaration(self) -> Dict[str, Any]:
-        return {
+        declared: Dict[str, Any] = {
             "name": self.name,
             "description": self.description,
             "parameters": self.parameters,
         }
+        if self.max_calls_per_turn is not None:
+            declared["max_calls_per_turn"] = self.max_calls_per_turn
+        if self.terminal:
+            declared["terminal"] = True
+        return declared
 
 
 def _schema_for(annotation: Any, where: str) -> Dict[str, Any]:
@@ -102,12 +111,32 @@ def tool(
     *,
     name: Optional[str] = None,
     description: Optional[str] = None,
+    max_calls_per_turn: Optional[int] = None,
+    terminal: bool = False,
 ) -> Any:
     """Make a function a tool. Use as ``@tool`` or ``@tool(name=..., description=...)``.
 
     The description is the docstring's first paragraph, and each argument's
     type comes from its type hint, so both are required.
+
+    Args:
+        max_calls_per_turn: How many times the tool may run in one turn,
+            whatever its arguments. A call past the limit is not run: the
+            model is told so and asked to answer from the result it has.
+        terminal: After a successful call, no other tool runs this turn, so
+            the model's next reply is its answer. For a tool like a handoff.
     """
+    if max_calls_per_turn is not None and (
+        isinstance(max_calls_per_turn, bool)
+        or not isinstance(max_calls_per_turn, int)
+        or max_calls_per_turn < 1
+    ):
+        raise TypeError(
+            "max_calls_per_turn must be a positive integer or None, got "
+            f"{max_calls_per_turn!r}."
+        )
+    if not isinstance(terminal, bool):
+        raise TypeError(f"terminal must be True or False, got {terminal!r}.")
 
     def build(f: Callable[..., Any]) -> Tool:
         doc = inspect.getdoc(f) or ""
@@ -145,6 +174,8 @@ def tool(
                 "required": required,
             },
             function=f,
+            max_calls_per_turn=max_calls_per_turn,
+            terminal=terminal,
         )
 
     return build(function) if function is not None else build

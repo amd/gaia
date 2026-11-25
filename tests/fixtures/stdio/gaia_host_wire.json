@@ -13,7 +13,8 @@
         "context_size",
         "temperature",
         "native_tools",
-        "retries"
+        "retries",
+        "prices"
       ]
     },
     "turn": {
@@ -30,9 +31,10 @@
   },
   "tool": {
     "required": ["name"],
-    "optional": ["description", "parameters"]
+    "optional": ["description", "parameters", "max_calls_per_turn", "terminal"]
   },
-  "budget": ["model_calls", "output_tokens", "seconds"],
+  "budget": ["model_calls", "output_tokens", "seconds", "usd"],
+  "prices": ["input", "cached_input", "output"],
   "engine_to_host": {
     "ready": ["type", "protocol", "version"],
     "tool_request": ["type", "id", "turn", "name", "arguments"],
@@ -45,6 +47,7 @@
       "text",
       "tool_calls",
       "usage",
+      "cost_usd",
       "seconds",
       "failure"
     ],
@@ -60,6 +63,7 @@
     "model_calls",
     "output_tokens",
     "deadline",
+    "cost",
     "model_call",
     "repeated_calls",
     "no_answer",

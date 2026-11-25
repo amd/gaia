@@ -50,7 +50,8 @@ Sent once, first.
 | `base_url` | yes | An OpenAI-compatible endpoint, such as `https://api.example.com/v1` |
 | `api_key_env` | no | **Name** of an environment variable of the engine process that holds the key. The key itself never goes on the wire; `api_key` is refused |
 | `system_prompt` | no | Sent to the model as written. With `native_tools: false` the engine adds the tool list and how to call a tool after it, since the model has no other way to learn them |
-| `tools` | no | Each `{"name", "description", "parameters"}`, where `parameters` is a JSON Schema object |
+| `tools` | no | Each `{"name", "description", "parameters"}`, where `parameters` is a JSON Schema object. Optional per tool: `max_calls_per_turn` (a call past it is not run, and the model is told so) and `terminal` (after it succeeds, no other tool runs this turn) |
+| `prices` | no | `{"input", "cached_input", "output"}` in dollars per million tokens. Needed for `cost_usd` and for a `usd` budget: the engine carries no rate card |
 | `max_steps` | no | Tool-using steps a turn may take (default 20) |
 | `max_output_tokens` | no | Cap on each model reply (default 4096) |
 | `context_size` | no | The model's window in tokens (default 32768) |
@@ -64,7 +65,7 @@ Sent once, first.
 |---|---|---|
 | `id` | yes | Your id for the turn; echoed on every event |
 | `messages` | yes | The conversation so far as `{"role": "user" \| "assistant", "content": "..."}`, ending with the user's new message. The engine keeps no history between turns |
-| `budget` | no | `{"model_calls", "output_tokens", "seconds"}`; any subset |
+| `budget` | no | `{"model_calls", "output_tokens", "seconds", "usd"}`; any subset. `usd` without `prices` in `init` is refused with `bad_turn` |
 
 ### `tool_result`
 
@@ -92,7 +93,7 @@ Ends the process. Closing stdin does the same.
 | `ready` | `protocol`, `version` |
 | `tool_request` | `id`, `turn`, `name`, `arguments` |
 | `model_call` | `turn`, `step`, `seconds`, `usage` (`input_tokens`, `cached_tokens`, `output_tokens`) — one per model request |
-| `final` | `turn`, `status`, `stop_reason`, `text`, `tool_calls`, `usage`, `seconds`, `failure` — exactly one per turn |
+| `final` | `turn`, `status`, `stop_reason`, `text`, `tool_calls`, `usage`, `cost_usd`, `seconds`, `failure` — exactly one per turn |
 | `error` | `code`, `message` |
 
 ### `final`
@@ -101,7 +102,7 @@ Ends the process. Closing stdin does the same.
 |---|---|---|
 | `success` | `answered` | `text` is the model's answer |
 | `incomplete` | `max_steps` | The step limit ran out |
-| `incomplete` | `model_calls`, `output_tokens`, `deadline` | A `budget` limit was reached. Nothing more was sent to the model, and `text` is empty |
+| `incomplete` | `model_calls`, `output_tokens`, `deadline`, `cost` | A `budget` limit was reached. Nothing more was sent to the model, and `text` is empty |
 | `incomplete` | `repeated_calls`, `no_answer` | The loop stopped itself |
 | `failed` | `model_call` | A model request failed; `failure` is `{"kind": "model_call", "message": "..."}` |
 
@@ -109,7 +110,10 @@ Show `text` to an end user only when `status` is `success`. The status `cancelle
 is reserved: protocol 1 has no message that cancels a turn.
 
 `tool_calls` lists every call the host answered: `name`, `arguments`, `result`,
-`failed`. `usage` adds `model_calls` to the three token counts.
+`failed`. A call the engine refused itself (past a tool's limit, or after a terminal
+tool) is listed too, with `{"status": "refused"}` as its result. `usage` adds
+`model_calls` to the three token counts, and `cost_usd` is those tokens at the
+`prices` from `init`, or `null` without them.
 
 A budget is checked when the model asks for a tool, before the tool runs. An answer
 that arrives on the last allowed request is still an answer.

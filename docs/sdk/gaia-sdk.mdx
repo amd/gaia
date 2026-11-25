@@ -93,7 +93,9 @@ try {
 | `tools` | Your functions. In Python the schema comes from type hints and the docstring; in TypeScript you give a JSON Schema |
 | `max_steps` / `maxSteps` | Tool-using steps one turn may take |
 | `max_output_tokens` / `maxOutputTokens` | Cap on each model reply |
-| `budget` | Limits on a turn: model calls, output tokens, seconds |
+| `budget` | Limits on a turn: model calls, output tokens, seconds, dollars |
+| `prices` | The model's list prices per million tokens. Needed for a dollar budget and for the turn's cost: the engine carries no rate card |
+| `answer_checks` / `answerChecks` | Functions that compare the answer with the tool calls that ran |
 | `on_model_call` / `onModelCall` | Called once per model request with its usage and seconds |
 | `engine` | Path to the `gaiacpp` binary, when it is not found otherwise |
 
@@ -106,10 +108,12 @@ keeps no history between turns, so send what the model should see.
 |---|---|
 | `ok` | True when `status` is `success`. Show `text` to an end user only then |
 | `status` | `success`, `incomplete`, `failed` |
-| `stop_reason` / `stopReason` | `answered`, `max_steps`, `model_calls`, `output_tokens`, `deadline`, `model_call`, `repeated_calls`, `no_answer` |
+| `stop_reason` / `stopReason` | `answered`, `max_steps`, `model_calls`, `output_tokens`, `deadline`, `cost`, `model_call`, `unresolved_checks`, `repeated_calls`, `no_answer` |
 | `text` | The model's answer, exactly as it wrote it |
 | `tool_calls` / `toolCalls` | Every tool call in order: name, arguments, result, failed |
 | `usage` | Model calls and input, cached and output tokens |
+| `cost_usd` / `costUsd` | Those tokens at your `prices`; empty without them |
+| `unresolved_checks` / `unresolvedChecks` | What your answer checks still object to after the one repair |
 | `failure` | For a failed model request: its kind and message |
 
 A failed model request, a spent budget and a step limit are not exceptions. They are
@@ -125,12 +129,55 @@ A tool that returns normally gives the model its result. Two other outcomes:
 | `raise ToolRefusal("...")` / `throw new ToolRefusal("...")` | `{"status": "refused", "message": "..."}` as an ordinary result to explain. Not a failure |
 | Any other exception | The call failed, and why. The turn goes on |
 
+### Limiting how often a tool runs
+
+<CodeGroup>
+
+```python Python
+@tool(max_calls_per_turn=1, terminal=True)
+def handoff_to_human(summary: str) -> dict:
+    """Pass the conversation to a person."""
+    ...
+```
+
+```ts TypeScript
+const handoff = tool({ name: "handoff_to_human", description: "Pass the conversation to a person.",
+  parameters: { type: "object", properties: { summary: { type: "string" } }, required: ["summary"] },
+  maxCallsPerTurn: 1, terminal: true, run: ({ summary }) => openTicket(summary) });
+```
+
+</CodeGroup>
+
+A call past `max_calls_per_turn` is not run: the model is told so and asked to answer
+from the result it has. After a `terminal` tool succeeds, no other tool runs that turn,
+so the model's next reply is its answer.
+
+## Checking the answer against what ran
+
+An answer check gets the answer and the turn's tool calls, and returns what is wrong
+or nothing. The SDK sends the problems back to the model once. If the next answer
+still fails, the turn comes back `incomplete` with the problems in
+`unresolved_checks`, so you can withhold it.
+
+```python
+def handoff_was_real(answer, tool_calls):
+    said = "passed this to the team" in answer.lower()
+    did = any(c["name"] == "handoff_to_human" and not c["failed"] for c in tool_calls)
+    if said and not did:
+        return "You said this was passed to the team, but handoff_to_human was not called."
+
+agent = Agent(..., answer_checks=[handoff_was_real])
+```
+
 ## Budgets
 
 A budget is checked when the model asks for a tool. Once a limit is reached the tool is
 not run, nothing more is sent to the model, and the turn ends `incomplete` with the
 limit as its stop reason. An answer that arrives on the last allowed request is still
 an answer.
+
+A dollar limit (`usd`) needs `prices`; without them it is refused before anything is
+sent, since a limit that cannot be metered would never fire.
 
 ## Getting the engine
 
@@ -168,7 +215,8 @@ GAIA has a second way to embed the loop: importing `gaia.agents.base.agent.Agent
 | Runs as | A child process, one native binary | In your Python process, with the full package |
 | Languages | Python and TypeScript | Python |
 | Install | No dependencies | The whole `amd-gaia` dependency set |
-| Tool limits, answer checks, dollar budgets | Not yet | Yes |
+| Tool limits, answer checks, dollar budgets | Yes; you supply the prices | Yes; Fireworks' prices are built in |
+| Cancel a turn, stream tokens | Not yet | Yes |
 | Maturity | Beta | The loop the desktop apps run |
 
 The wire between the SDK and the engine is documented in

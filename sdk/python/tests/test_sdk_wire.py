@@ -14,6 +14,7 @@ from gaia_sdk import (
     Budget,
     EngineError,
     EngineNotFound,
+    Prices,
     ToolRefusal,
     tool,
 )
@@ -80,10 +81,11 @@ def test_init_and_turn_carry_only_fields_the_wire_allows(fake_engine):
     assert set(sent["init"]) <= set(init_spec["required"]) | set(init_spec["optional"])
     turn_spec = FIXTURE["host_to_engine"]["turn"]
     assert set(sent["turn"]) == set(turn_spec["required"]) | set(turn_spec["optional"])
-    assert set(sent["turn"]["budget"]) == set(FIXTURE["budget"])
+    assert set(sent["turn"]["budget"]) == set(FIXTURE["budget"]) - {"usd"}
     tool_spec = FIXTURE["tool"]
     declared = sent["init"]["tools"][0]
-    assert set(declared) == set(tool_spec["required"]) | set(tool_spec["optional"])
+    assert set(declared) == {"name", "description", "parameters"}
+    assert set(declared) <= set(tool_spec["required"]) | set(tool_spec["optional"])
     assert sent["init"]["api_key_env"] == "PROVIDER_KEY"
     assert sent["turn"]["messages"] == [{"role": "user", "content": "hi"}]
 
@@ -258,3 +260,50 @@ def test_two_tools_with_one_name_are_refused(fake_engine):
 def test_budget_rejects_limits_that_are_not_positive(kwargs):
     with pytest.raises(ValueError, match="Budget"):
         Budget(**kwargs)
+
+
+def test_tool_limits_and_prices_go_out_under_the_wires_names(fake_engine):
+    @tool(max_calls_per_turn=2, terminal=True)
+    def handoff(summary: str) -> dict:
+        """Pass the conversation to a person."""
+        return {}
+
+    with _agent(
+        fake_engine,
+        "echo-init",
+        tools=[handoff, get_order],
+        prices=Prices(input=0.3, cached_input=0.006, output=1.2),
+        budget=Budget(usd=0.03),
+    ) as agent:
+        sent = json.loads(agent.run("hi").text)
+
+    limited, plain = sent["init"]["tools"]
+    allowed = set(FIXTURE["tool"]["required"]) | set(FIXTURE["tool"]["optional"])
+    assert set(limited) <= allowed
+    assert (limited["max_calls_per_turn"], limited["terminal"]) == (2, True)
+    assert "max_calls_per_turn" not in plain and "terminal" not in plain
+    assert set(sent["init"]["prices"]) == set(FIXTURE["prices"])
+    assert sent["turn"]["budget"] == {"usd": 0.03}
+    assert set(sent["turn"]["budget"]) <= set(FIXTURE["budget"])
+
+
+def test_dollar_budget_without_prices_is_refused_before_anything_is_sent(fake_engine):
+    with pytest.raises(ValueError, match="needs the agent's prices"):
+        _agent(fake_engine, budget=Budget(usd=0.03))
+
+    with _agent(fake_engine) as agent:
+        with pytest.raises(ValueError, match="needs the agent's prices"):
+            agent.run("hi", budget=Budget(usd=0.03))
+
+
+@pytest.mark.parametrize(
+    "kwargs", [{"max_calls_per_turn": 0}, {"max_calls_per_turn": True}, {"terminal": 1}]
+)
+def test_bad_tool_limits_are_refused(kwargs):
+    with pytest.raises(TypeError):
+        tool(**kwargs)
+
+
+def test_prices_must_not_be_negative():
+    with pytest.raises(ValueError, match="Prices.output"):
+        Prices(input=1.0, cached_input=0.0, output=-1.0)
