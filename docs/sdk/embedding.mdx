@@ -91,6 +91,7 @@ name tools, step limits or the raw provider error.
 | `budget_spent` | With a budget: `model_calls`, `input_tokens`, `cached_tokens`, `output_tokens` |
 | `tool_calls` | Every tool call in order: `name`, `args`, `result`, `ran`, `failed`. Check a reply's promises against this before sending it |
 | `reprompts` | Each time a check sent the model back for another reply: `guard`, `step`. More than a few per turn means a guard is fighting your prompt |
+| `unresolved_checks` | Problems your `answer_checks` still found after the one repair |
 | `caveats` | Everything GAIA would have appended to the answer on a workspace host: a tool result that carried instructions, a problem your own `answer_problems` found and the model did not fix |
 | `input_tokens`, `output_tokens`, `cached_tokens`, `cost_usd` | Usage for the turn. `cost_usd` is the list price from `gaia.llm.pricing`, or `None` for a model that has no card there |
 | `timing_summary` | Model seconds, tool seconds and model calls |
@@ -198,14 +199,45 @@ Pass `budget=` to the constructor to apply one to every turn. The budget covers 
 agent's own model requests. A tool that calls a model itself, such as a vision or
 document-search tool, is outside it.
 
+## Checking the reply against what ran
+
+An answer check gets the reply and the turn's tool calls, and returns what is wrong
+or `None`. GAIA sends the problems back to the model once. If the next reply still
+fails, it is returned with the problems in `unresolved_checks` and
+`status: "incomplete"`, so you can withhold it.
+
+```python
+def handoff_was_real(answer: str, tool_calls: list) -> str | None:
+    said = "passed this to the team" in answer.lower()
+    did = any(c["name"] == "handoff_to_human" and c["ran"] for c in tool_calls)
+    if said and not did:
+        return "You said this was passed to the team, but handoff_to_human was not called."
+    return None
+
+agent = SupportAgent(session, llm_client=client, model_id=model,
+                     answer_checks=[handoff_was_real])
+```
+
+To stop a tool being called more than it should, see
+[Limiting how often a tool runs](/sdk/core/tools#limiting-how-often-a-tool-runs).
+
+## Metering each model request
+
+```python
+agent = SupportAgent(..., on_model_call=lambda call: meter.record(call))
+```
+
+`call` has `usage`, `ok`, `seconds`, `finish_reason` and `cost_usd` (`None` for a
+model with no list price, and for a failed request). It fires once per request,
+retries included.
+
 ## What stays your job
 
 - **Credentials.** Read them from the environment in your client. GAIA's OS keyring
   lookup is for desktops.
-- **Checking the reply.** On a conversation host GAIA sends a reply back only when
-  it is malformed: a tool call or tool output written out as text. Two tries, then
-  the turn ends `incomplete` with `stop_reason: "tool_call_format"`. Whether the
-  reply is true is yours to check: compare it with `tool_calls` before it reaches a
-  customer.
+- **Deciding what is true.** On a conversation host GAIA sends a reply back only
+  when it is malformed (a tool call or tool output written out as text; two tries,
+  then `incomplete` with `stop_reason: "tool_call_format"`) or when one of your
+  `answer_checks` objects. It has no opinion of its own on whether the reply is true.
 - **Hooks you add still run.** An `answer_problems` override, or a mixin such as
   memory, can still send the model back. Those show up in `reprompts`.

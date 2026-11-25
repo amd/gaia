@@ -116,6 +116,8 @@ def __init__(
     llm_client: Optional[LLMClient] = None,
     raise_model_errors: bool = False,
     budget: Optional[TurnBudget] = None,
+    answer_checks: Optional[Sequence[Callable[[str, List[Dict]], Optional[str]]]] = None,
+    on_model_call: Optional[Callable[[Dict[str, Any]], None]] = None,
 ) -> None:
     """
     Initialize the Agent.
@@ -157,8 +159,10 @@ def __init__(
         llm_client: Your own LLMClient; no other client is built, model_id is required
         raise_model_errors: Re-raise a failed model call's own exception (default: False)
         budget: TurnBudget applied to every turn (default: None)
+        answer_checks: check(answer, tool_calls) functions run on each final answer
+        on_model_call: Called once per model request with its usage and cost
 
-    See /sdk/embedding for the last four.
+    See /sdk/embedding for the last six.
     """
 ```
 
@@ -236,6 +240,8 @@ def process_query(
             "failure": dict | None,  # A failed model call: {"kind", "type",
                                      # "message", "step"}; the exception is
                                      # agent.last_model_error
+            "unresolved_checks": list,  # answer_checks problems left after
+                                     # the one repair
             "caveats": list,         # host="conversation": notes kept out of
                                      # the answer
             "stop_reason": str,      # Why the turn ended: "answered",

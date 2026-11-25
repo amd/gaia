@@ -200,6 +200,7 @@ from gaia.agents.base.tool_markup import (
 )
 from gaia.agents.base.tool_outcome import (
     FAILED_STATUSES,
+    REFUSED_STATUS,
     tool_result_dict,
     tool_result_error_fields,
     tool_result_failed,
@@ -740,6 +741,18 @@ def _trace_includes_schema_text() -> bool:
         f"GAIA_TRACE_TOOL_SCHEMA must be a boolean (1/0, true/false, on/off), "
         f"got {raw!r}. Unset it to record the full schema."
     )
+
+
+def _text_beside_tool_calls(reply: str) -> str:
+    """*reply*, or only its prose when it is a native tool-call envelope."""
+    if not reply.startswith('{"__tool_calls__":'):
+        return reply
+    try:
+        envelope = json.loads(reply)
+    except ValueError:
+        return ""
+    content = envelope.get("content") if isinstance(envelope, dict) else None
+    return content.strip() if isinstance(content, str) else ""
 
 
 #: The result text of a turn a ``TurnBudget`` stopped. Not an answer.
@@ -3844,6 +3857,10 @@ class Agent(abc.ABC):
     last_model_error: Optional[BaseException] = None
     _turn_budget: Optional[TurnBudget] = None
     _turn_failure: Optional[Dict[str, Any]] = None
+    _answer_checks: tuple = ()
+    on_model_call: Optional[Callable[[Dict[str, Any]], None]] = None
+    #: A terminal tool ran: the next reply is the answer and gets no tools.
+    _terminal_tool_done: bool = False
 
     # Set by a host (the Agent UI's session panel); checked on every tool call.
     internet_off: bool = False
@@ -4011,6 +4028,10 @@ Do NOT wrap conversational replies in JSON.
         llm_client: Optional[LLMClient] = None,
         raise_model_errors: bool = False,
         budget: Optional[TurnBudget] = None,
+        answer_checks: Optional[
+            Sequence[Callable[[str, List[Dict]], Optional[str]]]
+        ] = None,
+        on_model_call: Optional[Callable[[Dict[str, Any]], None]] = None,
     ):
         """
         Initialize the Agent with LLM client.
@@ -4078,6 +4099,15 @@ Do NOT wrap conversational replies in JSON.
                           ``agent.last_model_error``.
             budget: A ``TurnBudget`` every turn is held to; see
                           ``process_query``.
+            answer_checks: Functions ``check(answer, tool_calls)`` run on each
+                          final answer; ``tool_calls`` is the turn's record, as
+                          in the result. One returns a sentence saying what is
+                          wrong, or None. The model is sent the problems once
+                          to repair; any still found afterwards are in the
+                          result's ``unresolved_checks`` and the status is
+                          ``incomplete``.
+            on_model_call: Called once per model request with ``{"usage",
+                          "ok", "seconds", "finish_reason", "cost_usd"}``.
             max_output_tokens: Output-token cap for each LLM reply, thinking
                           included. None (default) picks per model:
                           CLOUD_MAX_OUTPUT_TOKENS for a Lemonade cloud model,
@@ -4137,6 +4167,21 @@ Do NOT wrap conversational replies in JSON.
             )
         self.budget = budget
         self._turn_spend = TurnSpend()
+        for check in answer_checks or ():
+            if not callable(check):
+                raise TypeError(
+                    f"answer_checks must be callables, got {type(check).__name__}."
+                )
+        self._answer_checks = tuple(answer_checks or ())
+        # How often each limited tool ran this turn.
+        self._turn_tool_counts: Dict[str, int] = {}
+        # Answer-check problems the one repair did not fix.
+        self._turn_unresolved_checks: List[str] = []
+        if on_model_call is not None and not callable(on_model_call):
+            raise TypeError(
+                f"on_model_call must be callable, got {type(on_model_call).__name__}."
+            )
+        self.on_model_call = on_model_call
         self.device = device
         if tool_scope is None:
             self._tool_scope = None
@@ -5744,7 +5789,10 @@ Do NOT wrap conversational replies in JSON.
     @property
     def _openai_tools(self):
         """Return OpenAI function-calling schemas when the active model supports native tool_calls."""
-        if self._uses_native_tool_calls():
+        if getattr(self, "_terminal_tool_done", False):
+            # Nothing may run after a terminal tool, so nothing is offered.
+            schemas = None
+        elif self._uses_native_tool_calls():
             schemas = (
                 self._build_openai_tool_schemas(filter_to=self._active_tool_filter)
                 or None
@@ -8135,7 +8183,10 @@ Do NOT wrap conversational replies in JSON.
         # In single_tool_per_turn mode, once a tool has run the next LLM turn
         # should be the final user-facing answer — never another tool call.
         if getattr(self, "_single_tool_done", False):
-            return {"thought": "", "answer": (response or "").strip() or "Done."}
+            text = (response or "").strip()
+            if getattr(self, "_terminal_tool_done", False):
+                text = _text_beside_tool_calls(text)
+            return {"thought": "", "answer": text or "Done."}
 
         # --- Native tool_calls branch ---
         # The Lemonade provider encodes native tool_calls as a sentinel JSON string
@@ -9398,6 +9449,37 @@ Do NOT wrap conversational replies in JSON.
             ),
         }
 
+    def _tool_entry(self, tool_name: Any) -> Dict[str, Any]:
+        name = str(tool_name or "").strip().removesuffix("()").strip()
+        entry = self._execution_tool_registry().get(name)
+        return entry if isinstance(entry, dict) else {}
+
+    def _over_tool_limit(self, tool_name: Any) -> Optional[Dict[str, Any]]:
+        """The result for a call past the tool's ``max_calls_per_turn``, else None.
+
+        Counts the call when it is within the limit.
+        """
+        entry = self._tool_entry(tool_name)
+        limit = entry.get("max_calls_per_turn")
+        if not limit:
+            return None
+        counts = getattr(self, "_turn_tool_counts", None)
+        if counts is None:
+            counts = self._turn_tool_counts = {}
+        name = entry.get("name") or str(tool_name)
+        if counts.get(name, 0) < limit:
+            counts[name] = counts.get(name, 0) + 1
+            return None
+        times = "once" if limit == 1 else f"{limit} times"
+        return {
+            **NOT_EXECUTED,
+            "status": REFUSED_STATUS,
+            "message": (
+                f"`{name}` already ran {times} this turn, which is its limit, so "
+                "this call was not run. Answer from the result you already have."
+            ),
+        }
+
     def _execute_tool_timed(self, tool_name: str, tool_args: Dict[str, Any]) -> Any:
         """Run :meth:`_execute_tool`, timing it for the step and turn records.
 
@@ -9431,6 +9513,10 @@ Do NOT wrap conversational replies in JSON.
         refused = self._refuse_inventory_hand_edit(tool_name, tool_args)
         if refused is not None:
             return refused
+        over_limit = self._over_tool_limit(tool_name)
+        if over_limit is not None:
+            self._note_verification_signal(tool_name, tool_args, over_limit)
+            return over_limit
         outermost = not getattr(self, "_tool_timing_depth", 0)
         scope = getattr(self, "_turn_scope", None) if outermost else None
         if scope is not None:
@@ -12412,7 +12498,13 @@ Do NOT wrap conversational replies in JSON.
         """
         if _is_markup_debris(answer):
             return [_GARBLED_ANSWER]
-        return []
+        calls = list(getattr(self, "_turn_tool_calls", None) or [])
+        problems = []
+        for check in getattr(self, "_answer_checks", ()):
+            problem = check(answer, calls)
+            if problem:
+                problems.append(str(problem))
+        return problems
 
     def required_calls(self) -> List[Tuple[str, Dict[str, Any]]]:
         """Calls the user's own words asked for that this turn never made.
@@ -12475,6 +12567,13 @@ Do NOT wrap conversational replies in JSON.
         record["output"] = check_output(tool_name, result)
         record["observed"] = observed_excerpt(observed_text(result))
         log.append(record)
+        if (
+            record["ran"]
+            and not record["failed"]
+            and self._tool_entry(tool_name).get("terminal")
+        ):
+            self._single_tool_done = True
+            self._terminal_tool_done = True
         calls = getattr(self, "_turn_tool_calls", None)
         if calls is not None:
             calls.append(
@@ -12666,19 +12765,33 @@ Do NOT wrap conversational replies in JSON.
         self._turn_failure = None
         self.last_model_error = None
         chat = getattr(self, "chat", None)
-        if chat is not None and budget is not None:
+        if chat is None:
+            return
+        if budget is not None:
             chat.before_llm_call = self._budget_gate
-            chat.after_llm_call = self._budget_charge
+        if budget is not None or getattr(self, "on_model_call", None) is not None:
+            chat.after_llm_call = self._after_model_request
 
     def _end_turn_budget(self) -> None:
         """Disarm the limits: a warm-up or a later turn is not this turn's spend."""
-        if getattr(self, "_turn_budget", None) is None:
+        watching = getattr(self, "on_model_call", None) is not None
+        if getattr(self, "_turn_budget", None) is None and not watching:
             return
         self._turn_budget = None
         chat = getattr(self, "chat", None)
         if chat is not None:
             chat.before_llm_call = None
             chat.after_llm_call = None
+
+    def _after_model_request(self, call: Dict[str, Any]) -> None:
+        """Charge a finished model request to the budget and report it."""
+        self._budget_charge(call.get("usage"), bool(call.get("ok")))
+        report = getattr(self, "on_model_call", None)
+        if report is None:
+            return
+        spent = TurnSpend()
+        spent.add_usage(call.get("usage"))
+        report({**call, "cost_usd": spent.cost_usd(self._budget_model())})
 
     def _budget_stop_reason(self) -> Optional[str]:
         """The limit this turn has reached, or None while there is room."""
@@ -14094,6 +14207,9 @@ Do NOT wrap conversational replies in JSON.
             getattr(self, "_original_user_input", None) or user_input,
         )
         self._single_tool_done = False
+        self._terminal_tool_done = False
+        self._turn_tool_counts = {}
+        self._turn_unresolved_checks = []
         self._turn_seq += 1
         self._denied_effects = DeniedEffects(os.getcwd())
         Agent._lift_declined_calls(
@@ -17221,6 +17337,7 @@ Do NOT wrap conversational replies in JSON.
                             messages.append({"role": "user", "content": ran})
                             conversation.append({"role": "user", "content": ran})
                         continue
+                    self._turn_unresolved_checks = list(answer_issues)
                     completion_gaps.extend(
                         p for p in answer_issues if p not in completion_gaps
                     )
@@ -17695,6 +17812,8 @@ Do NOT wrap conversational replies in JSON.
             "reprompts": list(self._turn_reprompts),
             # Notes a conversation host keeps out of the answer.
             "caveats": list(self._turn_caveats),
+            # Answer-check problems the one repair did not fix.
+            "unresolved_checks": list(self._turn_unresolved_checks),
         }
         # Why the turn ended, for callers that must not read the answer text.
         result["stop_reason"] = stop_reason(
@@ -18334,6 +18453,7 @@ Do NOT wrap conversational replies in JSON.
         self.total_plan_steps = len(validated)
         self.execution_state = self.STATE_EXECUTING_PLAN
         self._single_tool_done = False
+        self._terminal_tool_done = False
         logger.debug(
             "[_inject_recovery_plan] STATE_EXECUTING_PLAN with %d steps: %s",
             len(validated),

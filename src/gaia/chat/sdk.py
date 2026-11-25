@@ -449,8 +449,9 @@ class AgentSDK:
     #: loop for a turn with a budget.
     before_llm_call: Optional[Callable[[Dict[str, Any]], None]] = None
 
-    #: Called with each finished request's usage and whether it succeeded.
-    after_llm_call: Optional[Callable[[Any, bool], None]] = None
+    #: Called once per finished request with ``{"usage", "ok", "seconds",
+    #: "finish_reason"}``; ``usage`` is None for a request that failed.
+    after_llm_call: Optional[Callable[[Dict[str, Any]], None]] = None
 
     #: True when the caller passed its own client: its errors and requests are
     #: left exactly as it wrote them.
@@ -485,7 +486,16 @@ class AgentSDK:
         seconds = time.perf_counter() - started
         after = self.after_llm_call
         if after is not None and not getattr(_SIDE_CALLS, "active", False):
-            after(self.llm_client.get_last_usage() if ok else None, ok)
+            after(
+                {
+                    "usage": self.llm_client.get_last_usage() if ok else None,
+                    "ok": ok,
+                    "seconds": seconds,
+                    "finish_reason": (
+                        self.llm_client.get_last_finish_reason() if ok else None
+                    ),
+                }
+            )
         sink = self.llm_call_sink
         if sink is None or getattr(_SIDE_CALLS, "active", False):
             return

@@ -1081,6 +1081,25 @@ Copyright(C) 2024-2026 Advanced Micro Devices, Inc. All rights reserved.
 SPDX-License-Identifier: MIT
 </small>
 
+## Limiting how often a tool runs
+
+Two `@tool` options bound a turn's tool use without a line in the system prompt:
+
+```python
+@tool(max_calls_per_turn=1, terminal=True)
+def handoff_to_human(summary: str, reason: str = "") -> dict:
+    """Pass the conversation to a person."""
+    ...
+```
+
+| Option | Effect |
+|---|---|
+| `max_calls_per_turn=N` | The tool runs at most N times in one turn, whatever its arguments. A call past the limit is not run; the model is told so and asked to answer from the result it has. It never gets an earlier call's result under new arguments |
+| `terminal=True` | After a successful call the model's next reply is the answer, and that request carries no tools. A call that failed does not end tool use |
+
+`dedup_key` and the agent's `max_consecutive_repeats` are different: they stop
+*identical* calls in a row.
+
 ## Instance-local tool registration
 
 Capability-gated tools can pass `registry=local_tools` to `@tool(...)`. The

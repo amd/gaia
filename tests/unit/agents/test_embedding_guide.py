@@ -254,3 +254,35 @@ def test_scope_from_the_guide_still_allows_paging_through_a_long_result():
     )
 
     assert agent._tool_scope == {"get_order", "read_tool_output"}
+
+
+def test_guides_answer_check_snippet_withholds_an_unbacked_claim():
+    def handoff_was_real(answer, tool_calls):
+        said = "passed this to the team" in answer.lower()
+        did = any(c["name"] == "handoff_to_human" and c["ran"] for c in tool_calls)
+        if said and not did:
+            return "You said this was passed to the team, but handoff_to_human was not called."
+        return None
+
+    client = MyClient([_text("I've passed this to the team.")] * 2)
+    agent = SupportAgent(
+        _Session(), llm_client=client, model_id="m", answer_checks=[handoff_was_real]
+    )
+
+    result = agent.process_query("my box was empty")
+
+    assert result["status"] == "incomplete"
+    assert len(result["unresolved_checks"]) == 1
+
+
+def test_guides_on_model_call_snippet_reports_each_request():
+    seen = []
+    client = MyClient([_text("Hello.")])
+    agent = SupportAgent(
+        _Session(), llm_client=client, model_id="m", on_model_call=seen.append
+    )
+
+    agent.process_query("hi")
+
+    assert len(seen) == 1
+    assert set(seen[0]) == {"usage", "ok", "seconds", "finish_reason", "cost_usd"}
