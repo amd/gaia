@@ -49,14 +49,14 @@ Sent once, first.
 | `model` | yes | The model id sent to the provider, unchanged |
 | `base_url` | yes | An OpenAI-compatible endpoint, such as `https://api.example.com/v1` |
 | `api_key_env` | no | **Name** of an environment variable of the engine process that holds the key. The key itself never goes on the wire; `api_key` is refused |
-| `system_prompt` | no | Sent to the model exactly as written |
+| `system_prompt` | no | Sent to the model as written. With `native_tools: false` the engine adds the tool list and how to call a tool after it, since the model has no other way to learn them |
 | `tools` | no | Each `{"name", "description", "parameters"}`, where `parameters` is a JSON Schema object |
 | `max_steps` | no | Tool-using steps a turn may take (default 20) |
 | `max_output_tokens` | no | Cap on each model reply (default 4096) |
 | `context_size` | no | The model's window in tokens (default 32768) |
 | `temperature` | no | Default 0.2 |
 | `native_tools` | no | `true` (default) sends tools as `tools=`; `false` describes them in the prompt |
-| `retries` | no | Retries of a failed model request (default 0) |
+| `retries` | no | Retries of a failed model request, 0 to 100 (default 0) |
 
 ### `turn`
 
@@ -68,7 +68,9 @@ Sent once, first.
 
 ### `tool_result`
 
-Answer every `tool_request` before sending anything else.
+Answer every `tool_request` before sending anything else. Any other message in its
+place ends the turn with a `bad_message` error and no `final`; `shutdown` or a closed
+stdin ends the process at once, with no further model request.
 
 | Field | Meaning |
 |---|---|
@@ -103,7 +105,8 @@ Ends the process. Closing stdin does the same.
 | `incomplete` | `repeated_calls`, `no_answer` | The loop stopped itself |
 | `failed` | `model_call` | A model request failed; `failure` is `{"kind": "model_call", "message": "..."}` |
 
-Show `text` to an end user only when `status` is `success`.
+Show `text` to an end user only when `status` is `success`. The status `cancelled`
+is reserved: protocol 1 has no message that cancels a turn.
 
 `tool_calls` lists every call the host answered: `name`, `arguments`, `result`,
 `failed`. `usage` adds `model_calls` to the three token counts.
@@ -117,7 +120,7 @@ that arrives on the last allowed request is still an answer.
 |---|---|---|
 | `bad_init` | `init` was missing, malformed or the wrong version | The engine exits with code 2 |
 | `bad_turn` | A `turn` could not be run as sent | The engine keeps serving |
-| `bad_message` | A line was not a JSON object with a `type`, or arrived out of order | The engine keeps serving |
+| `bad_message` | A line was not a JSON object with a `type`, or arrived out of order | The turn in progress ends with no `final`; the engine keeps serving |
 | `engine_error` | The engine itself failed | The engine keeps serving |
 
 The contract is pinned by `tests/fixtures/stdio/gaia_host_wire.json`.

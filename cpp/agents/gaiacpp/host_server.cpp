@@ -4,7 +4,9 @@
 #include "host_server.h"
 
 #include <chrono>
+#include <climits>
 #include <cmath>
+#include <exception>
 #include <istream>
 #include <memory>
 #include <optional>
@@ -52,7 +54,8 @@ std::string requireString(const json& j, const char* key, const char* where) {
 
 int positiveInt(const json& j, const char* key, const char* where, int fallback) {
     if (!j.contains(key) || j[key].is_null()) return fallback;
-    if (!j[key].is_number_integer() || j[key].get<long long>() <= 0) {
+    if (!j[key].is_number_integer() || j[key].get<long long>() <= 0 ||
+        j[key].get<long long>() > INT_MAX) {
         throw ProtocolError(std::string("bad_") + where,
                             std::string("`") + key + "` in `" + where +
                                 "` must be a positive whole number, got " + dump(j[key]) + ".");
@@ -162,7 +165,15 @@ public:
         nextCall_ = 0;
         stop_.clear();
         toolCalls_ = json::array();
+        fatal_ = nullptr;
     }
+
+    /// Record why the turn cannot go on: the host left, or broke the protocol.
+    void abandon(std::exception_ptr why) {
+        if (!fatal_) fatal_ = std::move(why);
+    }
+    bool abandoned() const { return static_cast<bool>(fatal_); }
+    std::exception_ptr takeFatal() { return std::exchange(fatal_, nullptr); }
 
     double elapsed() const {
         return std::chrono::duration<double>(std::chrono::steady_clock::now() - started_).count();
@@ -198,6 +209,8 @@ public:
         const std::optional<json> answer = read();
         if (!answer) throw HostGone();
         const std::string type = (*answer)["type"].get<std::string>();
+        // A host that asks to stop mid-call is leaving, not making a mistake.
+        if (type == "shutdown") throw HostGone();
         if (type != "tool_result" || answer->value("id", std::string()) != id) {
             throw ProtocolError("bad_message", "Expected `tool_result` for `" + id + "`, got `" + type +
                                                    "`. Answer each `tool_request` before sending "
@@ -243,6 +256,7 @@ private:
     int nextCall_ = 0;
     std::string stop_;
     json toolCalls_ = json::array();
+    std::exception_ptr fatal_;
 };
 
 /// The loop with the host's prompt and the host's tools, and none of its own.
@@ -281,7 +295,20 @@ protected:
                 if (stopIfSpent()) {
                     return {{"status", "error"}, {"error", "Not run: this turn's budget is spent."}};
                 }
-                return session_.callHostTool(name, args);
+                if (session_.abandoned()) {
+                    return {{"status", "error"}, {"error", "Not run: the host stopped answering."}};
+                }
+                // The tool registry turns anything thrown here into a tool error for
+                // the model, so a host that left would be asked again and again.
+                try {
+                    return session_.callHostTool(name, args);
+                } catch (const HostGone&) {
+                    session_.abandon(std::current_exception());
+                } catch (const ProtocolError&) {
+                    session_.abandon(std::current_exception());
+                }
+                requestCancel();
+                return {{"status", "error"}, {"error", "Not run: the host stopped answering."}};
             };
             toolRegistry().registerTool(std::move(info));
         }
@@ -335,10 +362,16 @@ std::unique_ptr<HostAgent> buildAgent(const json& init, Session& session) {
     cfg.maxHistoryMessages = 0;      // the host sends the history it wants each turn
     cfg.stepBudgetNotices = false;   // nothing is added to the host's messages
     cfg.proseToolList = false;       // the prompt goes out as the host wrote it
-    cfg.llmRetries = init.contains("retries") && init["retries"].is_number_integer()
-                         ? init["retries"].get<int>()
-                         : 0;
-    if (cfg.llmRetries < 0) throw ProtocolError("bad_init", "`retries` must be 0 or more.");
+    cfg.llmRetries = 0;
+    if (init.contains("retries") && !init["retries"].is_null()) {
+        const json& retries = init["retries"];
+        if (!retries.is_number_integer() || retries.get<long long>() < 0 ||
+            retries.get<long long>() > 100) {
+            throw ProtocolError("bad_init", "`retries` must be a whole number from 0 to 100, got " +
+                                                dump(retries) + ".");
+        }
+        cfg.llmRetries = retries.get<int>();
+    }
 
     std::vector<HostTool> tools;
     std::set<std::string> names;
@@ -436,6 +469,8 @@ void runTurn(HostAgent& agent, Session& session, const json& turn) {
     session.beginTurn(id, budget);
     agent.setHistory(std::move(history));
     const json result = agent.processQuery(input);
+    // The host left or broke the protocol mid-turn: there is no `final` to send.
+    if (std::exception_ptr fatal = session.takeFatal()) std::rethrow_exception(fatal);
     session.write(finalEvent(session, result));
 }
 
