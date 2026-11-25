@@ -68,21 +68,12 @@ def _lemonade_models(base_url: Optional[str]) -> Dict[str, Dict[str, Any]]:
     """Downloaded local and discovered Fireworks/AMD chat models Lemonade serves.
 
     Maps each id, in sorted order, to its catalog entry, so a switch can hand
-    the entry to the new client instead of reading the catalog a second time.
-
-    Goes through ``LemonadeClient`` (the one Lemonade HTTP client the rest of
-    the codebase uses) rather than a bespoke ``requests`` call, so base_url
-    resolution (env var, default host/port) and error shape match every other
-    caller. Raises RuntimeError (never a raw client exception) naming the URL
-    and the fix — the ``/model`` command surfaces this verbatim as its
-    terminal error, so it has to be actionable on its own.
+    the entry to the new client. Raises RuntimeError naming the URL and the
+    fix when Lemonade is unreachable; callers show it to the user as is.
     """
     client = LemonadeClient(base_url=base_url, verbose=False)
     try:
-        # show_all=True is required to get `labels`/`downloaded` back at all
-        # (list_models's own docstring: those are "additional fields" only
-        # present in the full-catalog response) — filtered to downloaded
-        # entries below since this is a "what can I switch to RIGHT NOW" list.
+        # Only the full catalog carries `labels` and `downloaded`.
         catalog = client.list_models(show_all=True)
     except LemonadeClientError as exc:
         raise RuntimeError(
@@ -269,11 +260,7 @@ def _apply_switch(
         # Image reading and document summaries were set up for the old model.
         if hasattr(agent, "follow_model_switch"):
             agent.follow_model_switch()
-        # Gemma-family prompts carry an embedded-JSON tool-call envelope
-        # Claude doesn't need (it speaks native tool_calls) — the cached
-        # system prompt must be recomposed under the new backend or the next
-        # turn ships stale instructions for a client that no longer needs
-        # them.
+        # The cached prompt carries the old backend's tool-call format.
         agent.rebuild_system_prompt()
     except Exception as exc:
         _restore_switch_state(agent, snapshot)

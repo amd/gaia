@@ -556,3 +556,50 @@ def test_a_turn_that_cannot_be_saved_says_so_and_leaves_no_stand_in():
 
     assert history.turns(agent) == []
     assert history._pending is None
+
+
+def test_a_turn_after_close_says_the_history_is_gone():
+    agent = _agent(["Paris."])
+    agent.start_session_history()
+    agent.close()
+
+    with pytest.raises(RuntimeError, match="closed this agent's session history"):
+        agent.process_query("Capital of France?")
+
+    assert agent.sent.call_count == 0
+
+
+def test_a_new_history_after_close_works_again():
+    agent = _agent(["Paris."])
+    agent.start_session_history()
+    agent.close()
+
+    agent.start_session_history()
+    agent.process_query("Capital of France?")
+
+    assert len(agent.conversation_history.turns(agent)) == 1
+
+
+def test_an_agent_that_never_had_a_history_still_runs_after_close():
+    agent = _agent(["Paris."])
+    agent.close()
+
+    assert "Paris." in agent.process_query("Capital of France?")["result"]
+
+
+def test_a_cancel_event_a_subclass_set_before_init_is_kept():
+    import threading
+
+    class _EarlyAgent(_PlainAgent):
+        def __init__(self, **kwargs):
+            self.cancel_event = threading.Event()
+            super().__init__(**kwargs)
+
+    with patch("gaia.agents.base.agent.AgentSDK"):
+        agent = _EarlyAgent(silent_mode=True, skip_lemonade=True)
+
+    assert isinstance(agent.cancel_event, threading.Event)
+
+
+def test_cancel_event_reads_none_on_an_agent_built_without_init():
+    assert _PlainAgent.__new__(_PlainAgent).cancel_event is None

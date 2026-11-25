@@ -4198,6 +4198,8 @@ Do NOT wrap conversational replies in JSON.
         # Set by start_session_history: process_query then records each turn.
         self._owned_history: Optional[SessionHistory] = None
         self._history_on_cut: Optional[Callable[[Any], None]] = None
+        # close() closed a history this agent had been given.
+        self._history_closed = False
         # Tools whose full docs went to the model this turn (thin schemas).
         self._tool_docs_sent: Set[str] = set()
         # User messages and tool results, for skill tools that check facts (note_seen).
@@ -4235,7 +4237,10 @@ Do NOT wrap conversational replies in JSON.
         # Optional cooperative cancel signal. When set (e.g. by the Agent UI's
         # stream-timeout/disconnect cleanup), the process_query loop bails at the
         # next step boundary so the producer thread is torn down, not leaked.
-        self._cancel_event: Optional[threading.Event] = None
+        # Kept when a subclass set ``cancel_event`` before calling this.
+        self._cancel_event: Optional[threading.Event] = getattr(
+            self, "_cancel_event", None
+        )
         # System text supplied by an API caller; see set_caller_system_prompt.
         self._caller_system_prompt: Optional[str] = None
         # Optional queue of follow-ups the user sent WHILE this turn was
@@ -13493,6 +13498,7 @@ Do NOT wrap conversational replies in JSON.
         history = SessionHistory(path)
         previous = getattr(self, "_owned_history", None)
         self._owned_history = history
+        self._history_closed = False
         self._history_on_cut = on_cut
         self.conversation_history = history
         if previous is not None:
@@ -13557,7 +13563,7 @@ Do NOT wrap conversational replies in JSON.
         Set it from another thread to stop ``process_query``; a ``TurnCancel``
         also sets the answer the turn ends with. ``None`` (default): no stop.
         """
-        return self._cancel_event
+        return getattr(self, "_cancel_event", None)
 
     @cancel_event.setter
     def cancel_event(self, event: Optional[threading.Event]) -> None:
@@ -13565,6 +13571,13 @@ Do NOT wrap conversational replies in JSON.
 
     def _recording_history(self, user_input: Any) -> Optional["SessionHistory"]:
         """The history ``start_session_history`` gave this agent, while it's in use."""
+        # A host that assigned its own history since then runs with that one.
+        if getattr(self, "_history_closed", False) and not self.conversation_history:
+            raise RuntimeError(
+                "close() closed this agent's session history, so the turn would "
+                "run with none. Call start_session_history() again, or build a "
+                "new agent."
+            )
         history = getattr(self, "_owned_history", None)
         if history is None or self.conversation_history is not history:
             return None
@@ -13581,6 +13594,7 @@ Do NOT wrap conversational replies in JSON.
         history = getattr(self, "_owned_history", None)
         if history is not None:
             self._owned_history = None
+            self._history_closed = True
             if self.conversation_history is history:
                 self.conversation_history = []
             history.close()
