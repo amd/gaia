@@ -3553,7 +3553,10 @@ _HOSTED_PROVIDER_REMEDY = {
         "Lemonade it runs), or set LEMONADE_FIREWORKS_API_KEY where your own "
         "Lemonade runs and restart it"
     ),
-    "amd": "Connect the AMD LLM gateway with /gateway in the TUI",
+    "amd": (
+        "Connect the AMD LLM gateway with `gaia gateway install`, "
+        "or /gateway in the TUI"
+    ),
 }
 
 

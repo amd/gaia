@@ -459,7 +459,7 @@ print(agent.model_id)  # fireworks.accounts/fireworks/models/glm-4p6
 | `"lemonade"` | A local model in Lemonade | None |
 | `"claude"` | The Claude API (same as `use_claude=True`) | `ANTHROPIC_API_KEY` |
 | `"fireworks"` | Fireworks AI, through Lemonade | `FIREWORKS_API_KEY` in the agent's environment, or `LEMONADE_FIREWORKS_API_KEY` where your own Lemonade runs |
-| `"amd"` | The AMD LLM gateway, through Lemonade | Connect it with `gaia gateway`, or `/gateway` in the TUI |
+| `"amd"` | The AMD LLM gateway, through Lemonade | Connect it with `gaia gateway install`, or `/gateway` in the TUI |
 
 The model id gets the `<provider>.` prefix when it lacks one. While it is built,
 the agent registers and keys the provider on GAIA's own Lemonade. If the
