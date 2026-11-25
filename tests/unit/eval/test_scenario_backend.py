@@ -19,6 +19,7 @@ import psutil
 import pytest
 
 from gaia.eval import claude_credential, runner
+from gaia.ui.api_token import auth_headers
 
 from ._fake_agent_ui import FakeAgentUI
 
@@ -183,11 +184,14 @@ def test_a_chat_that_is_not_the_evals_is_never_answered_or_stopped(
     fake = FakeAgentUI()
     fake.slot = threading.Semaphore(2)
     fake.url = fake.start()
-    mine = requests.post(f"{fake.url}/api/sessions", json={"title": "My chat"}).json()
+    mine = requests.post(
+        f"{fake.url}/api/sessions", json={"title": "My chat"}, headers=auth_headers()
+    ).json()
     threading.Thread(
         target=lambda: requests.post(
             f"{fake.url}/api/chat/send",
             json={"session_id": mine["id"], "message": "prompt write_file a.txt"},
+            headers=auth_headers(),
             timeout=60,
         ),
         daemon=True,

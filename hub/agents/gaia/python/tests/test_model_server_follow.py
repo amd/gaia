@@ -64,7 +64,7 @@ def _chats(server, since):
 
 
 def test_an_open_chat_asks_the_server_chosen_since(servers):
-    from gaia_agent import session_registry as sr
+    from gaiapy import session_registry as sr
 
     (first, second), choose, work = servers
     choose(0)
@@ -89,7 +89,7 @@ def test_an_open_chat_asks_the_server_chosen_since(servers):
 
 
 def test_an_unchanged_server_keeps_the_agent(servers):
-    from gaia_agent import session_registry as sr
+    from gaiapy import session_registry as sr
 
     _, choose, work = servers
     choose(0)
@@ -117,8 +117,8 @@ def test_an_unchanged_server_keeps_the_agent(servers):
 def test_switching_to_or_from_gaias_own_server_is_a_change(
     monkeypatch, built, now, changed
 ):
-    from gaia_agent import chat_agent
-    from gaia_agent.chat_agent import ChatAgent
+    from gaiapy import chat_agent
+    from gaiapy.chat_agent import ChatAgent
 
     agent = ChatAgent.__new__(ChatAgent)
     agent._model_server_at_build = built

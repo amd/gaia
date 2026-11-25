@@ -107,21 +107,21 @@ _FREE_MEMORY_UNREAD = (
 
 
 def _options(client, capacity) -> List[Dict[str, Any]]:
-    """Each default chat model, and whether this PC and its Lemonade can run it.
+    """Each default chat model, and whether it may be this PC's default.
 
-    Judged as :func:`recommend_default_chat_model` judges them (registry size,
-    the server's version, then the memory free now); the size shown is the
-    server's catalog size.
+    The floor is judged on fit alone, since every PC gets it when nothing larger
+    passes; the rest by :func:`~gaia.llm.lemonade_client.ladder_verdict`, as
+    the pick judges them. The size shown is the one Settings shows
+    (:func:`model_choice.download_size_gb`).
     """
     from gaia.llm.lemonade_client import (
         DEFAULT_MODEL_LADDER,
-        LemonadeClientError,
         _model_ids_match,
         find_model_requirement,
-        free_memory_shortfall,
         kv_cache_for,
+        ladder_verdict,
     )
-    from gaia.llm.model_fit import ModelFitError, check_fit, required_memory_gb
+    from gaia.llm.model_fit import check_fit, required_memory_gb
 
     catalog: Dict[str, float] = {}
     if client is not None:
@@ -132,11 +132,11 @@ def _options(client, capacity) -> List[Dict[str, Any]]:
 
     options = []
     for model_id in DEFAULT_MODEL_LADDER:
-        mr = find_model_requirement(model_id)
         size = _registry_size(model_id)
         fits: Optional[bool] = None
         reason = None
-        if capacity is not None and size:
+        if capacity is not None and size and model_id == DEFAULT_MODEL_LADDER[-1]:
+            mr = find_model_requirement(model_id)
             kv = kv_cache_for(mr, capacity) if mr else 0.0
             verdict = check_fit(size, capacity, kv)
             fits, reason = verdict.fits, verdict.reason or None
@@ -144,25 +144,42 @@ def _options(client, capacity) -> List[Dict[str, Any]]:
             if need > capacity.memory_gb:
                 # The memory reason in the plan's decimal GB, like its numbers.
                 reason = model_choice.memory_reason(need, capacity)
-        if fits and client is not None and mr and model_id != DEFAULT_MODEL_LADDER[-1]:
-            try:
-                busy = free_memory_shortfall(client, mr, capacity)
-            except (ModelFitError, LemonadeClientError):
+        elif capacity is not None and size:
+            fits, reason = ladder_verdict(
+                client, model_id, capacity, judge_free_memory=client is not None
+            )
+            if fits is None:
                 # The screen shows numbers; the reading error goes to the log.
-                logger.exception("Setup plan: could not read free memory")
-                fits, reason = None, _FREE_MEMORY_UNREAD
-            else:
-                if busy:
-                    fits, reason = False, busy
+                logger.warning("Setup plan: %s: %s", model_id, reason)
+                reason = _FREE_MEMORY_UNREAD
         options.append(
             {
                 "id": model_id,
-                "size_gb": catalog.get(model_id, size),
+                "size_gb": model_choice.download_size_gb(
+                    model_id, catalog.get(model_id)
+                ),
                 "fits": fits,
                 "reason": reason,
             }
         )
     return options
+
+
+def _left_for_apps_gb(capacity, entry: Optional[Dict[str, Any]]) -> Optional[float]:
+    """Decimal GB of RAM other apps keep with *entry*'s model loaded: installed
+    RAM less the model, or less the GPU's carve-out when that is larger, since
+    apps never get the carve-out. None on a PC whose model has memory of its
+    own (a discrete GPU), whose RAM is unknown, or when the model's need is."""
+    from gaia.llm.model_fit import app_reserve_gb
+
+    if capacity is None or not app_reserve_gb(capacity) or not entry:
+        return None
+    need = entry.get("need_gb")
+    if need is None:
+        return None
+    ram = model_choice.to_decimal_gb(capacity.installed_ram_gb)
+    held = max(need, model_choice.to_decimal_gb(capacity.carve_out_gb))
+    return round(max(0.0, ram - held), 1)
 
 
 def _is_local(lemonade: Dict[str, Any]) -> bool:
@@ -395,6 +412,7 @@ def _catalog(
     )
     from gaia.llm.lemonade_client import (
         DEFAULT_MODEL_LADDER,
+        FLASH_OPTION_MODEL_NAME,
         is_cloud_model_entry,
         runs_on_npu,
     )
@@ -411,7 +429,12 @@ def _catalog(
         return any(same(model_id, m) for m in ids)
 
     order: List[str] = []
-    offered = [*model_choice.VISION_ONLY_MODELS, *model_choice.OPTIONAL_MODELS]
+    offered = [
+        m
+        for m in [*model_choice.VISION_ONLY_MODELS, *model_choice.OPTIONAL_MODELS]
+        # One already downloaded stays listed, so Settings can still remove it.
+        if not model_choice.withheld_reason(m) or (entry_for(m) or {}).get("downloaded")
+    ]
     known = [*planned, *_known_chat_models(capacity), *offered]
     # GAIA's own models: a Lemonade-only model the user made the chat model is
     # planned, but stays in the Lemonade list where they found it.
@@ -465,6 +488,9 @@ def _catalog(
         recipe = (entry or {}).get("recipe") or (
             "flm" if runs_on_npu(model_id) else None
         )
+        fit = model_choice.backend_fit(
+            model_choice.memory_fit(model_id, full, capacity), recipe, system_info
+        )
         catalog.append(
             {
                 "id": model_id,
@@ -478,7 +504,8 @@ def _catalog(
                 ),
                 "recipe": recipe,
                 "size_gb": remaining,
-                "full_size_gb": float(full) if full is not None else None,
+                # Shown only: Settings' decimal GB, not the server's GiB figure.
+                "full_size_gb": model_choice.download_size_gb(model_id, full),
                 "partial": partial_gb > 0,
                 "partial_gb": partial_gb,
                 "downloaded": downloaded if client is not None else None,
@@ -500,11 +527,13 @@ def _catalog(
                 "reads_images": model_choice.reads_images(model_id),
                 "feature_tier": model_choice.feature_tier(model_id),
                 "source": _model_source(entry),
-                **model_choice.backend_fit(
-                    model_choice.memory_fit(model_id, full, capacity),
-                    recipe,
-                    system_info,
+                # Only what runs here, never config-only Flash; the user's own stays.
+                "setup_offer": same(model_id, chat_id)
+                or (
+                    fit["fits"] is not False
+                    and not same(model_id, FLASH_OPTION_MODEL_NAME)
                 ),
+                **fit,
             }
         )
     return catalog
@@ -556,7 +585,11 @@ def build_plan(
             enforce_fit=False,
             profile=profile,
         )
-        chat = {"id": choice.model_id, "user_set": choice.user_set}
+        # A Gemma kept from before an update is the user's model, not today's pick.
+        chat = {
+            "id": choice.model_id,
+            "user_set": choice.user_set or bool(choice.kept_over),
+        }
         planned = with_chat_model(
             profile, _profile_models(profile, client), lambda: choice
         )
@@ -620,6 +653,9 @@ def build_plan(
         "chat_model": chat,
         "recommended_model": recommended,
         "decided_after_server": client is None and not chat["user_set"],
+        "left_for_apps_gb": _left_for_apps_gb(
+            capacity, by_id.get(recommended) if recommended else None
+        ),
         "memory_gb": (
             round(model_choice.to_decimal_gb(capacity.memory_gb)) if capacity else None
         ),
@@ -687,10 +723,19 @@ def _refuse_unrunnable(plan: Dict[str, Any]) -> None:
     )
 
 
+def _refuse_withheld(model_id: str) -> None:
+    """Raise :class:`CantRunHere` for a model GAIA doesn't offer on this PC."""
+    reason = model_choice.withheld_reason(model_id)
+    if reason:
+        raise CantRunHere(f"Setup can't download {_display_name(model_id)}. {reason}")
+
+
 def check_extra_models(model_ids: List[str]) -> List[str]:
     """*model_ids* as the catalog names them; raises for one nobody has."""
     if not model_ids:
         return []
+    for model_id in model_ids:
+        _refuse_withheld(model_id)
     catalog = build_plan()["catalog"]
     out = []
     for model_id in model_ids:
@@ -747,6 +792,7 @@ def choose_chat_model(
     from gaia.llm.lemonade_client import (
         DEFAULT_MODEL_LADDER,
         LemonadeClientError,
+        below_gemma,
         recommend_default_chat_model,
     )
 
@@ -782,15 +828,21 @@ def choose_chat_model(
             f"{_display_name(model_id)} can't run on this PC: {cant_run}. "
             "Choose another chat model."
         )
+    runs = fits
     if model_id in DEFAULT_MODEL_LADDER and model_id != DEFAULT_MODEL_LADDER[-1]:
-        # The ladder also checks the server's version and the memory free now.
+        # The ladder also judges room for other apps and the memory free now.
         option = next(o for o in _options(client, capacity) if o["id"] == model_id)
         fits, reason = option["fits"], option["reason"]
     if fits is False and not acknowledge_no_fit:
+        message = (
+            f"{model_id} would leave your other apps little memory: {reason}."
+            if runs and entry.get("tight")
+            else f"{model_id} may not run on this PC: {reason}."
+        )
         raise NeedsAcknowledgement(
             {
                 "code": "no_fit",
-                "message": (f"{model_id} may not run on this PC: {reason}."),
+                "message": message,
                 "model_id": model_id,
                 "need_gb": entry["need_gb"],
                 "capacity_gb": entry["capacity_gb"],
@@ -801,8 +853,11 @@ def choose_chat_model(
         return
     try:
         # gaia init re-picks by free memory; clear only when it would pick this.
+        # A pick below Gemma is always saved: with no default_model every agent
+        # falls back to Gemma, which a PC that small does not download.
         hand_back = (
             model_id == recommended
+            and not below_gemma(model_id)
             and recommend_default_chat_model(client)[0] == model_id
         )
     except LemonadeClientError as e:
@@ -931,6 +986,8 @@ def set_model_skipped(
     """Skip one of *profile*'s models, or take it back; saved in ``skipped_models``."""
     from gaia.config import GaiaConfigError
 
+    if not skipped:
+        _refuse_withheld(model_id)
     if skipped:
         plan = build_plan(profile, skip_chat_model)
         planned = [e["id"] for e in plan["catalog"] if e["planned"]]
@@ -982,6 +1039,7 @@ def remove_model(model_id: str) -> float:
 
 
 def _download_entry(model_id: str):
+    _refuse_withheld(model_id)
     plan = build_plan()
     entry = next(
         (e for e in plan["catalog"] if model_choice.ids_match(e["id"], model_id)),

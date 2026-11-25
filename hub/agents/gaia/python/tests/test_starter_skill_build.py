@@ -5,7 +5,7 @@
 
 A plain ``pip install`` built a wheel holding only the package's own three
 skills, because the pack lives at hub/skills, outside the package root. The
-build hooks in ``gaia_agent.build`` copy it into the wheel (``build_py``) and
+build hooks in ``gaiapy.build`` copy it into the wheel (``build_py``) and
 into the sdist (``sdist``), so pip-from-git, ``pip wheel`` and ``python -m
 build`` (wheel built from the sdist) all carry it.
 """
@@ -21,15 +21,13 @@ import zipfile
 from pathlib import Path
 
 import pytest
-from gaia_agent.build import checkout_starter_skills, copy_starter_skills
+from gaiapy.build import checkout_starter_skills, copy_starter_skills
 
 #: tests/ -> python/ -> gaia/ -> agents/ -> hub/ -> repo root
 REPO_ROOT = Path(__file__).resolve().parents[5]
 PACKAGE_ROOT = REPO_ROOT / "hub" / "agents" / "gaia" / "python"
 HUB_SKILLS = REPO_ROOT / "hub" / "skills"
-OWNED = {
-    p.name for p in (PACKAGE_ROOT / "gaia_agent" / "skills").iterdir() if p.is_dir()
-}
+OWNED = {p.name for p in (PACKAGE_ROOT / "gaiapy" / "skills").iterdir() if p.is_dir()}
 STARTERS = {
     p.name for p in HUB_SKILLS.iterdir() if p.is_dir() and (p / "SKILL.md").is_file()
 }
@@ -42,7 +40,7 @@ def _skill(root: Path, name: str, body: str = "body") -> Path:
 
 
 def _skills_in(names) -> set[str]:
-    prefix = "gaia_agent/skills/"
+    prefix = "gaiapy/skills/"
     return {
         n.split(prefix, 1)[1].split("/")[0]
         for n in names
@@ -122,7 +120,7 @@ def _repo_markers(root: Path) -> None:
 
 
 def _build_py_at(root: Path) -> Path:
-    path = root / "hub" / "agents" / "gaia" / "python" / "gaia_agent" / "build.py"
+    path = root / "hub" / "agents" / "gaia" / "python" / "gaiapy" / "build.py"
     path.parent.mkdir(parents=True)
     path.write_text("", encoding="utf-8")
     (root / "hub" / "skills").mkdir()
@@ -142,7 +140,7 @@ def test_matching_layout_without_repo_markers_is_not_a_checkout(tmp_path):
 def test_other_layout_is_not_a_checkout(tmp_path):
     _repo_markers(tmp_path)
     (tmp_path / "skills").mkdir()
-    here = tmp_path / "a" / "b" / "c" / "pkg" / "gaia_agent" / "build.py"
+    here = tmp_path / "a" / "b" / "c" / "pkg" / "gaiapy" / "build.py"
     here.parent.mkdir(parents=True)
     here.write_text("", encoding="utf-8")
     assert checkout_starter_skills(here) is None
@@ -258,7 +256,7 @@ def test_wheel_from_an_unpacked_sdist_never_reads_skills_above_it(
     if layout != "generic":
         unpacked = unpacked.rename(parent / "python")
     # build.py's parents[4] is ``top``: the folder a naive lookup would read.
-    assert (unpacked / "gaia_agent" / "build.py").resolve().parents[4] == top.resolve()
+    assert (unpacked / "gaiapy" / "build.py").resolve().parents[4] == top.resolve()
     _plant_skill(top / "skills")
 
     wheel = _backend(unpacked, "build_wheel", tmp_path / "dist")

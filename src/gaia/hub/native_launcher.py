@@ -143,6 +143,18 @@ def current_platform() -> str:
     return f"{os_prefix}-{arch}"
 
 
+def _inside_agent_dir(binary: Path, agent_dir: Union[str, Path]) -> Path:
+    """*binary* resolved, refused unless it lies inside *agent_dir*."""
+    resolved = binary.resolve()
+    if not resolved.is_relative_to(Path(agent_dir).resolve()):
+        raise NativeAgentError(
+            f"Native agent binary {resolved} is outside the agent folder "
+            f"{agent_dir}. The manifest's cpp.binaries path must point inside "
+            f"the agent's own folder. See {_SPEC_URL}."
+        )
+    return resolved
+
+
 # ---------------------------------------------------------------------------
 # Per-process bookkeeping
 # ---------------------------------------------------------------------------
@@ -322,7 +334,8 @@ class NativeAgentLauncher:
 
         Raises:
             NativeAgentError: If no binary is declared for this platform
-                (wrong-platform) or the declared binary file is missing.
+                (wrong-platform), the declared path leaves *agent_dir*, or the
+                binary file is missing.
         """
         triple = platform_triple or current_platform()
         rel = binaries.get(triple)
@@ -333,7 +346,7 @@ class NativeAgentLauncher:
                 f"binaries for: {available}. Build/download a {triple} binary or "
                 f"run on a supported platform. See {_SPEC_URL}."
             )
-        binary = (Path(agent_dir) / rel).resolve()
+        binary = _inside_agent_dir(Path(agent_dir) / rel, agent_dir)
         if not binary.exists():
             raise NativeAgentError(
                 f"Native binary not found: {binary} (declared for {triple!r}). "
@@ -359,9 +372,9 @@ class NativeAgentLauncher:
 
         Args:
             agent_dir: Directory the agent lives in; *binary_name* is resolved
-                relative to it (an absolute *binary_name* is used as-is).
-            binary_name: Path to the executable (relative to *agent_dir* or
-                absolute).
+                relative to it and must stay inside it.
+            binary_name: Path to the executable (relative to *agent_dir*, or
+                absolute inside it).
             extra_args: Extra CLI args appended after ``--stdio``.
             env: Extra environment variables merged over
                 :func:`gaia.env.child_env` (GAIA's environment minus its
@@ -374,13 +387,11 @@ class NativeAgentLauncher:
             and :meth:`stop`.
 
         Raises:
-            NativeAgentError: If the binary is missing, the process dies on
-                startup, or the handshake fails.
+            NativeAgentError: If the binary is missing or outside *agent_dir*,
+                the process dies on startup, or the handshake fails.
         """
         agent_dir = Path(agent_dir)
-        binary_path = Path(binary_name)
-        if not binary_path.is_absolute():
-            binary_path = (agent_dir / binary_path).resolve()
+        binary_path = _inside_agent_dir(agent_dir / binary_name, agent_dir)
 
         if not binary_path.exists():
             raise NativeAgentError(

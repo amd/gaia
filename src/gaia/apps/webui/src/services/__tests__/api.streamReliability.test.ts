@@ -24,6 +24,7 @@ function openStream() {
         send: (event: Record<string, unknown>) => ctrl.enqueue(encoder.encode(`data: ${JSON.stringify(event)}\n\n`)),
         keepalive: () => ctrl.enqueue(encoder.encode(': keepalive\n\n')),
         cut: () => ctrl.error(new TypeError('network error')),
+        close: () => ctrl.close(),
     };
 }
 
@@ -157,6 +158,20 @@ describe('chat stream idle watchdog (E4)', () => {
         s.send({ type: 'error', content: 'boom' });
         s.cut();
         await vi.advanceTimersByTimeAsync(31_000);
+        expect(cb.onError).toHaveBeenCalledTimes(1);
+        expect(cb.onDone).not.toHaveBeenCalled();
+    });
+
+    it('does not report done when the stream ends cleanly right after an error event', async () => {
+        const s = openStream();
+        fetchMock().mockResolvedValue(s.response);
+        const cb = callbacks();
+        sendMessageStream('s1', 'hi', cb);
+        await vi.advanceTimersByTimeAsync(0);
+        s.send({ type: 'chunk', content: 'partial answer' });
+        s.send({ type: 'error', content: 'boom' });
+        s.close();
+        await vi.advanceTimersByTimeAsync(0);
         expect(cb.onError).toHaveBeenCalledTimes(1);
         expect(cb.onDone).not.toHaveBeenCalled();
     });

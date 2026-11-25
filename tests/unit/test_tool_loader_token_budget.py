@@ -39,9 +39,9 @@ import pytest
 
 # DOC_CORE_TOOLS ships in the flagship gaia-agent-gaia wheel (#6099); skip
 # the whole module when a framework-only env lacks it.
-pytest.importorskip("gaia_agent")
+pytest.importorskip("gaiapy")
 
-from gaia_agent.tool_bundles import DOC_CORE_TOOLS  # noqa: E402
+from gaiapy.tool_bundles import DOC_CORE_TOOLS  # noqa: E402
 
 from gaia.eval.tool_cost import (  # noqa: E402
     FIXED_SUBSET_DEFAULT,

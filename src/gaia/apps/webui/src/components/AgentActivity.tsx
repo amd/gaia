@@ -752,10 +752,11 @@ function isPlanShownLive(row: ActivityRow, livePlan?: ActivityRow): boolean {
 // ── Flow: a warning raised while the turn runs ──────────────────────────────
 
 function FlowWarning({ step }: { step: AgentStep }) {
+    const t = useT();
     return (
         <div className="flow-warning" role="status">
             <AlertCircle size={13} />
-            <span>{step.label}</span>
+            <span>{localizeLiveStatus(t, step.label)}</span>
         </div>
     );
 }

@@ -26,7 +26,7 @@ class _Console:
 
 @pytest.fixture
 def agent():
-    from gaia_agent.chat_agent import ChatAgent
+    from gaiapy.chat_agent import ChatAgent
 
     stub = object.__new__(ChatAgent)
     stub.console = _Console()

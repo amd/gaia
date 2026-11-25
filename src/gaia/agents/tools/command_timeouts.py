@@ -683,7 +683,9 @@ _KILL_GRACE_SECONDS = 5.0
 _TREE_KILL_SECONDS = 15.0
 
 
-def terminate_process_tree(process: "subprocess.Popen") -> Tuple[str, str]:
+def terminate_process_tree(
+    process: "subprocess.Popen", read_output: bool = True
+) -> Tuple[str, str]:
     """Kill *process* and every descendant, then collect what it printed.
 
     A timeout that does not reach the grandchildren is not a timeout: the child
@@ -691,9 +693,13 @@ def terminate_process_tree(process: "subprocess.Popen") -> Tuple[str, str]:
     as it lives — a 5s deadline measured at over two minutes on Windows before
     this existed.
 
+    *read_output* False only waits for the exit, for a process whose stdout
+    another process consumes (a pipeline's upstream stage).
+
     Returns:
         ``(stdout, stderr)`` buffered before the kill; empty strings if even the
-        post-kill read will not complete, which is logged rather than hidden.
+        post-kill read will not complete, which is logged rather than hidden,
+        or when *read_output* is False.
     """
     try:
         if os.name == "nt":
@@ -714,6 +720,9 @@ def terminate_process_tree(process: "subprocess.Popen") -> Tuple[str, str]:
 
     process.kill()
     try:
+        if not read_output:
+            process.wait(timeout=_KILL_GRACE_SECONDS)
+            return "", ""
         return process.communicate(timeout=_KILL_GRACE_SECONDS)
     except subprocess.TimeoutExpired:
         logger.warning(

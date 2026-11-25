@@ -54,6 +54,7 @@ function fitLine(e: SetupCatalogEntry, t: Say): string | null {
 
 /** Why a model doesn't fit: its real reason, never "too big" for one no backend here runs. */
 export function tooBigText(e: SetupCatalogEntry, t: Translate): string {
+    if (e.fits === true && e.tight) return t('setup.models.warn.tight');
     if (e.fit_code === 'npu') return t('setup.models.warn.npu');
     if (e.fit_code === 'backend') return t('setup.models.warn.backend');
     return e.need_gb != null && e.capacity_gb != null
@@ -93,7 +94,8 @@ function ModelRow({ entry: e, ticked, onToggle, disabled, progress, actions, pla
     const big = e.fits === false;
     const caveat = !ticked ? skipCaveat(e, t, place, imagesCovered) : null;
     const downloading = progress?.state === 'downloading' && progress.bytes_total > 0;
-    const warning = big ? tooBigText(e, t) : caveat;
+    const tight = e.fits === true && !!e.tight;
+    const warning = big ? tooBigText(e, t) : (caveat ?? (tight ? t('setup.models.warn.tight') : null));
     const describedBy = [`${id}-status`, `${id}-note`, warning ? `${id}-warn` : null].filter(Boolean).join(' ');
     return (
         <li className={`mc-row${ticked ? ' is-ticked' : ''}${warning ? ' has-warning' : ''}`}>

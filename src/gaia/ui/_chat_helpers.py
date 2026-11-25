@@ -221,9 +221,14 @@ def refuse_unstreamed_sidecar_chat(agent_type: str) -> None:
 
 
 def _native_flagship_chosen() -> bool:
+    """Whether the saved harness is anything but the Python one.
+
+    A harness this version can't run still relays, so the daemon's spawn reports
+    why instead of the Python agent quietly answering in its place.
+    """
     from gaia.daemon.sidecars import fetch
 
-    return fetch.chosen_flagship() == fetch.NATIVE_FLAGSHIP
+    return fetch.saved_flagship() != fetch.PYTHON_FLAGSHIP
 
 
 def _should_relay_to_sidecar(agent_type: str, registry) -> bool:
@@ -248,7 +253,7 @@ def _should_relay_to_sidecar(agent_type: str, registry) -> bool:
     if profile is None:
         return False
     if agent_type == FLAGSHIP_AGENT_ID and _native_flagship_chosen():
-        # gaiacpp is a program of its own: it only ever runs behind the daemon.
+        # A native harness is a program of its own: it only ever runs behind the daemon.
         return True
     if registry is None:
         return True
@@ -2238,12 +2243,8 @@ def _relayed_documents(rag_file_paths: list, attached: list) -> list:
     return list(rag_file_paths) + extra
 
 
-def _chat_upload_paths(db: ChatDatabase, session_id: str, attached: list) -> list:
-    """Every upload the chat's messages have linked so far, *attached* included.
-
-    A relayed flagship drops a document a turn leaves out, so a file dropped
-    into an earlier message must keep going with every later turn.
-    """
+def _linked_upload_paths(db: ChatDatabase, session_id: str, attached: list) -> list:
+    """Every upload the chat's messages have linked so far, *attached* included."""
     found = set(attached)
     for message in db.get_messages(session_id, limit=-1):
         if message["role"] == "user" and message.get("content"):
@@ -2251,6 +2252,36 @@ def _chat_upload_paths(db: ChatDatabase, session_id: str, attached: list) -> lis
                 attached_upload_paths(resolve_upload_links(message["content"]))
             )
     return sorted(found)
+
+
+def _chat_upload_paths(db: ChatDatabase, session_id: str, attached: list) -> list:
+    """The chat's uploads it may read: every one linked, less those taken off it.
+
+    A relayed flagship drops a document a turn leaves out, so a file dropped
+    into an earlier message must keep going with every later turn.
+    """
+    removed = db.removed_session_uploads(session_id)
+    return [
+        p for p in _linked_upload_paths(db, session_id, attached) if p not in removed
+    ]
+
+
+def _list_chat_uploads(
+    db: ChatDatabase, session_id: str, document_ids: list, attached: list
+) -> Tuple[list, list]:
+    """Put the chat's composer documents in its document list, before its scope is read.
+
+    Returns *document_ids* with the new ones added, and the library rows newly
+    attached, for the turn's ``documents_added``.
+    """
+    from .agent_documents import add_chat_uploads
+
+    added = add_chat_uploads(
+        db, session_id, _linked_upload_paths(db, session_id, attached), attached
+    )
+    ids = list(document_ids)
+    ids += [d["id"] for d in added if d["id"] not in ids]
+    return ids, added
 
 
 def _extend_cached_scope(agent, allowed: list) -> None:
@@ -2358,17 +2389,25 @@ _relayed_contexts_lock = threading.Lock()
 
 
 def record_relayed_context(
-    session_id: str, usage: Optional[dict], reason: Optional[str]
+    session_id: str,
+    usage: Optional[dict],
+    reason: Optional[str],
+    reason_code: Optional[str] = None,
 ) -> None:
     """Keep what a relayed turn measured, or why it has no measurement.
 
-    A turn with neither (an error, a Stop) keeps the previous measurement.
+    ``reason_code`` lets the Agent UI translate ``reason``; without one it
+    shows the English. A turn with neither (an error, a Stop) keeps the
+    previous measurement.
     """
     with _relayed_contexts_lock:
         if usage is not None:
             _relayed_contexts[session_id] = {"usage": usage}
         elif reason:
-            _relayed_contexts[session_id] = {"reason": reason}
+            entry = {"reason": reason}
+            if reason_code:
+                entry["reason_code"] = reason_code
+            _relayed_contexts[session_id] = entry
 
 
 def relayed_context_reason(profile, api_version, handler) -> Optional[str]:
@@ -2376,6 +2415,11 @@ def relayed_context_reason(profile, api_version, handler) -> Optional[str]:
     if not context_supported(profile, api_version):
         return profile.context_upgrade_message
     return getattr(handler, "relay_context_error", None)
+
+
+def relayed_context_reason_code(profile, api_version) -> Optional[str]:
+    """The stable code for :func:`relayed_context_reason`, when GAIA wrote it."""
+    return None if context_supported(profile, api_version) else "agent_too_old"
 
 
 def forget_relayed_context(session_id: str) -> None:
@@ -3293,6 +3337,7 @@ def _dispatch_sidecar_query(
             session_id,
             getattr(sse_handler, "relay_context", None),
             relayed_context_reason(profile, handle.api_version, sse_handler),
+            relayed_context_reason_code(profile, handle.api_version),
         )
 
 
@@ -3727,7 +3772,12 @@ def _turn_summary(
             location=(
                 _agent_location(agent) if agent is not None else relayed_location
             ),
-            written_files=evidence.written_files() if evidence is not None else (),
+            # The ledger's keys are case-folded on Windows; realpath restores the name on disk.
+            written_files=(
+                [os.path.realpath(key) for key in evidence.written_files()]
+                if evidence is not None
+                else ()
+            ),
             display_names=upload_display_names(message),
             usage=answer_event,
         )
@@ -3900,23 +3950,32 @@ def _done_event(
 
 
 async def _add_indexed_documents_to_library(
-    db: ChatDatabase, session_id: str, sse_handler
+    db: ChatDatabase,
+    session_id: str,
+    sse_handler,
+    listed_uploads: Optional[list] = None,
 ) -> Tuple[list, list]:
-    """Library rows for the files the agent indexed this turn, and notices.
+    """Library rows the turn attached to the chat, and notices.
 
-    Each file is recorded in the Document library and attached to the chat, as
-    if the user had added it there.
+    Each file the agent indexed is recorded in the Document library and
+    attached to the chat, as if the user had added it there. *listed_uploads*
+    are the composer attachments already put there when the turn began; they
+    are read again for what indexing them recorded.
     """
-    indexed = sse_handler.turn_ledger.indexed_documents()
-    if not indexed:
-        return [], []
     from .agent_documents import add_indexed_documents
     from .utils import doc_to_response
 
-    added = await asyncio.to_thread(add_indexed_documents, db, session_id, indexed)
+    indexed = sse_handler.turn_ledger.indexed_documents()
+    rows = [db.get_document(doc["id"]) for doc in listed_uploads or []]
+    notices: list = []
+    if indexed:
+        added = await asyncio.to_thread(add_indexed_documents, db, session_id, indexed)
+        rows += added.documents
+        notices = added.notices
+    unique = {doc["id"]: doc for doc in rows if doc}
     return (
-        [doc_to_response(doc).model_dump(mode="json") for doc in added.documents],
-        added.notices,
+        [doc_to_response(doc).model_dump(mode="json") for doc in unique.values()],
+        notices,
     )
 
 
@@ -4331,8 +4390,10 @@ async def _get_chat_response(
     activity_box: dict = {}
 
     def _do_chat():
-        # Resolve document IDs to file paths.
-        document_ids = session.get("document_ids", [])
+        attached = attached_upload_paths(request.message)
+        document_ids, _listed = _list_chat_uploads(
+            db, request.session_id, session.get("document_ids", []), attached
+        )
         rag_file_paths, library_paths = _resolve_rag_paths(db, document_ids)
 
         all_doc_paths = rag_file_paths + library_paths
@@ -4343,7 +4404,6 @@ async def _get_chat_response(
                 len(library_paths),
             )
 
-        attached = attached_upload_paths(request.message)
         # Every upload in the chat, not just this turn's: no prompt opens them later.
         allowed = _with_attachments(
             _compute_allowed_paths(all_doc_paths),
@@ -4396,6 +4456,7 @@ async def _get_chat_response(
         refusal = spending.limit_refusal(db, model_id)
         if refusal:
             return refusal
+        _refuse_turn_on_stopped_users_server()
 
         # ── Agent cache ──────────────────────────────────────────────────────
         # Reuse what a running warm-up is caching rather than read it twice.
@@ -4786,10 +4847,16 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
         history_pairs = _build_history_pairs(relay_messages)
         relay_turns = transcript_turns(relay_messages)
 
-        # Resolve document IDs to file paths.
         # Session-specific docs get auto-indexed; library docs are available
         # for on-demand indexing by the agent based on user's query.
-        document_ids = session.get("document_ids", [])
+        attached = attached_upload_paths(request.message)
+        document_ids, listed_uploads = await asyncio.to_thread(
+            _list_chat_uploads,
+            db,
+            request.session_id,
+            session.get("document_ids", []),
+            attached,
+        )
         rag_file_paths, library_paths = _resolve_rag_paths(db, document_ids)
 
         all_doc_paths = rag_file_paths + library_paths
@@ -4800,7 +4867,6 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                 len(library_paths),
             )
 
-        attached = attached_upload_paths(request.message)
         # Every upload in the chat, not just this turn's: no prompt opens them later.
         allowed = _with_attachments(
             _compute_allowed_paths(all_doc_paths),
@@ -5757,7 +5823,7 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
             full_response = result_holder.get("answer", "") or ""
 
         documents_added, library_notices = await _add_indexed_documents_to_library(
-            db, request.session_id, sse_handler
+            db, request.session_id, sse_handler, listed_uploads
         )
         if library_notices:
             # Live status makes the outcome visible before the turn closes; the
@@ -5864,6 +5930,11 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                         failed=unanswered,
                         stats=inference_stats,
                     )
+                    # The footer's answer time leaves out the user's own thinking time.
+                    perf_time = inference_stats["performance"].get("time") or {}
+                    waited = perf_time.get("waiting_seconds") or 0
+                    if waited > 0:
+                        inference_stats["waiting_seconds"] = waited
                 except (KeyError, TypeError, ValueError, ArithmeticError) as exc:
                     # The answer is still saved; the panel shows the turn as unmeasured.
                     logger.warning(

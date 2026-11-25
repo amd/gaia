@@ -20,6 +20,8 @@ description: "Several mail accounts per provider, a browser pane in GAIA desktop
 - **The standalone email agent is removed** — `gaia email`, the `gaia-agent-email` and `@amd-gaia/agent-email` packages, the `/v1/email` routes and the `email` setup profile are gone. Ask GAIA about your mail in `gaia chat` or the Agent UI; see the [Email guide](/guides/email). Upgrading removes the old install and names any email it had scheduled, which won't be sent. (PR [#7108](https://github.com/amd/gaia/pull/7108))
 - **`gaia agent list` and `gaia eval benchmark` are removed** — `gaia agent list` now says what replaced it. (PR [#7108](https://github.com/amd/gaia/pull/7108))
 - **`gaia.ui.email_sidecar` is renamed `gaia.ui.sidecar`** — update the import. (PR [#7108](https://github.com/amd/gaia/pull/7108))
+- **The Python harness package is renamed `gaiapy`** — `import gaia_agent` still works and returns the same modules, and a `gaiapy` command starts the harness beside `gaia-agent`. This core needs the matching flagship: if you installed the flagship package (`gaia-agent-gaia`) with pip, upgrade it together with the core. (PR [#8711](https://github.com/amd/gaia/pull/8711))
+- **The `gaia-bash` C++ agent is removed** — `gaiacpp` runs the same shell tools. The `gaia-bash` binary and the `GAIA_BUILD_BASH_AGENT` CMake option are gone. (PR [#8706](https://github.com/amd/gaia/pull/8706))
 
 ## What's New
 
@@ -29,7 +31,7 @@ description: "Several mail accounts per provider, a browser pane in GAIA desktop
 - **Office documents, decks and reports** — `office-docs` builds spreadsheets and Word files and checks formulas; `slide-decks` builds native PowerPoint decks; `report-from-sources` cites each spreadsheet value's cell. (PRs [#5417](https://github.com/amd/gaia/pull/5417), [#5459](https://github.com/amd/gaia/pull/5459), [#5453](https://github.com/amd/gaia/pull/5453))
 - **Log triage** — the `log-triage` skill reads every named log in one call and returns the anomalies. (PRs [#5465](https://github.com/amd/gaia/pull/5465), [#8537](https://github.com/amd/gaia/pull/8537))
 - **Go back after a failed setup** — on Windows and the Linux AppImage, a failed setup offers to reinstall and pin the last version that worked on this PC. (PR [#7013](https://github.com/amd/gaia/pull/7013))
-- **Full access runs any command** — the shell and Python tools run what they are given, deletes and installs included. Other modes still ask. (PR [#8560](https://github.com/amd/gaia/pull/8560))
+- **Full access runs any command** — the shell and Python tools run what they are given, deletes and installs included. Other modes still ask about installs, but never run a delete: it is refused, and only Full access runs it. (PR [#8560](https://github.com/amd/gaia/pull/8560))
 - **Skill auto-load, opt-in** — with `GAIA_SKILL_AUTOLOAD=1` a skill that clearly matches the request loads before the turn. (PRs [#5442](https://github.com/amd/gaia/pull/5442), [#8510](https://github.com/amd/gaia/pull/8510))
 - **Document reranking, opt-in** — `RAGConfig(enable_reranking=True)` reorders retrieved passages with a Lemonade reranking model. (PR [#6136](https://github.com/amd/gaia/pull/6136))
 - **Review saved folder answers** — `gaia trust` manages GAIA's per-folder answers about project guidance files. (PR [#8480](https://github.com/amd/gaia/pull/8480))
@@ -79,7 +81,7 @@ description: "Several mail accounts per provider, a browser pane in GAIA desktop
 - **An MCP connector shows Connected only after a check has started it.** (PR [#8434](https://github.com/amd/gaia/pull/8434))
 - **The document library's install hint matches this build.** (PR [#8327](https://github.com/amd/gaia/pull/8327))
 - **A document overlap of 0 repeats nothing between chunks.** (PR [#8382](https://github.com/amd/gaia/pull/8382))
-- **Documents in Russian, Greek, Polish and other languages are split into sentences**, so their chunks overlap like English ones instead of being cut every 2,000 characters. (PR [#8499](https://github.com/amd/gaia/pull/8499))
+- **Documents in Russian, Greek, Polish and other languages are split into sentences**, so their chunks overlap like English ones instead of being cut every 2,000 characters.
 - **Documents added while the model server was down are indexed once it is back**, and show "Waiting", not "Failed". (PR [#8353](https://github.com/amd/gaia/pull/8353))
 - **Setup retries and resumes a dropped assistant download** instead of failing. (PR [#8490](https://github.com/amd/gaia/pull/8490))
 - **A failed model download stays reported after Settings closes**, until you dismiss it. (PR [#8468](https://github.com/amd/gaia/pull/8468))
@@ -88,7 +90,7 @@ description: "Several mail accounts per provider, a browser pane in GAIA desktop
 - **The skill command gate and skill audit check what actually runs**, and a skill folder carrying compiled modules, archives or `node_modules` gets a review verdict. (PRs [#7662](https://github.com/amd/gaia/pull/7662), [#8542](https://github.com/amd/gaia/pull/8542))
 - **Every hub skill is covered by eval scenarios or listed as deferred**, and each skills release installs every skill back from the hub. (PR [#6493](https://github.com/amd/gaia/pull/6493))
 - **The eval CI guide's example timeouts fit real run times**, so a copied workflow isn't stopped mid-eval. Closes [#3458](https://github.com/amd/gaia/issues/3458). (PR [#8527](https://github.com/amd/gaia/pull/8527))
-- **CI** — the auto-labeler retries on a spent rate limit, a manual embeddings run can target a chosen test box, and two test fixes. (PRs [#8529](https://github.com/amd/gaia/pull/8529), [#8528](https://github.com/amd/gaia/pull/8528), [#8557](https://github.com/amd/gaia/pull/8557), [#8561](https://github.com/amd/gaia/pull/8561))
+- **CI** — the auto-labeler retries on a spent rate limit, a manual embeddings run can target a chosen test box, and a test fix. (PRs [#8529](https://github.com/amd/gaia/pull/8529), [#8528](https://github.com/amd/gaia/pull/8528), [#8557](https://github.com/amd/gaia/pull/8557))
 - **The "GAIA doesn't run this model server" line is translated in Arabic.** (PR [#8435](https://github.com/amd/gaia/pull/8435))
 - **A release candidate names its own pre-release as the agent's source.** (PR [#8433](https://github.com/amd/gaia/pull/8433))
 
@@ -112,7 +114,6 @@ Thanks to the community members who contributed to this release:
 - [@eshitakundu](https://github.com/eshitakundu) — passing tool results by handle, and measuring what MCP servers cost an agent (PRs [#8121](https://github.com/amd/gaia/pull/8121), [#8294](https://github.com/amd/gaia/pull/8294))
 - [@bniladridas](https://github.com/bniladridas) — bare JSON answers, attachment names, failed-download reporting, and installer and test CI fixes (PRs [#8462](https://github.com/amd/gaia/pull/8462), [#8461](https://github.com/amd/gaia/pull/8461), [#8468](https://github.com/amd/gaia/pull/8468), [#8482](https://github.com/amd/gaia/pull/8482), [#8466](https://github.com/amd/gaia/pull/8466), [#8465](https://github.com/amd/gaia/pull/8465), [#8467](https://github.com/amd/gaia/pull/8467), [#8464](https://github.com/amd/gaia/pull/8464), [#8402](https://github.com/amd/gaia/pull/8402))
 - [@huong8373tt-beep](https://github.com/huong8373tt-beep) — optional Lemonade reranking for document search (PR [#6136](https://github.com/amd/gaia/pull/6136))
-- [@0z5a](https://github.com/0z5a) — sentence splitting for non-ASCII languages, and an installer test fix (PRs [#8499](https://github.com/amd/gaia/pull/8499), [#8561](https://github.com/amd/gaia/pull/8561))
 - [@tharunsridhar](https://github.com/tharunsridhar) — skills eval scenarios that install a skill the agent doesn't bundle (PR [#8541](https://github.com/amd/gaia/pull/8541))
 
 ## Full Changelog

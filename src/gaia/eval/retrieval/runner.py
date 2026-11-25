@@ -28,6 +28,7 @@ from gaia.eval.retrieval.corpus import (
 from gaia.eval.retrieval.harness import (
     DENSE_DEPTH,
     BenchIndex,
+    LabelError,
     QuestionResult,
     index_dataset,
 )
@@ -96,6 +97,8 @@ class RunOptions:
     rag_overrides: dict = field(default_factory=dict)
     log: Callable[[str], None] = print
     errors: List[str] = field(default_factory=list)
+    #: Questions whose label does not match the extracted text; each fails the run.
+    label_errors: List[str] = field(default_factory=list)
 
 
 # ── metadata ────────────────────────────────────────────────────────────────
@@ -416,8 +419,16 @@ def _run_dataset(
         f"in {stats['index_s']}s"
     )
     results: List[QuestionResult] = []
+    label_errors: List[dict] = []
     for i, q in enumerate(ds.questions, 1):
-        r = bench.score_retrieval(q, ("sdk", "agent"))
+        try:
+            r = bench.score_retrieval(q, ("sdk", "agent"))
+        except LabelError as e:
+            # One bad label must not hide every later question's score; the run still fails.
+            label_errors.append({"id": q.id, "error": str(e)})
+            opts.label_errors.append(f"{ds.id}/{q.id}: {e}")
+            log(f"    LABEL ERROR {q.id}: {e}")
+            continue
         if answers:
             text, indices, latency = bench.answer(q.question)
             in_context = bench.context_has_evidence(q, indices)
@@ -443,9 +454,10 @@ def _run_dataset(
         "sources": ds.sources,
         "index": stats,
         "embedder": _embedder_info(bench),
-        "summary": _summarize(results),
+        "summary": {**_summarize(results), "label_errors": len(label_errors)},
         "by_tag": _by_tag(results),
         "questions": [asdict(r) for r in results],
+        "label_errors": label_errors,
     }
 
 
@@ -479,11 +491,20 @@ def _run_scale(work: Path, opts: RunOptions, tiers: Sequence[int]) -> dict:
         bench.build(
             required=set(target_ids), on_progress=_progress(log, f"scale-{tier}")
         )
-        results = [bench.score_retrieval(q, ("sdk", "agent")) for q in questions]
+        results = []
+        for q in questions:
+            try:
+                results.append(bench.score_retrieval(q, ("sdk", "agent")))
+            except LabelError as e:
+                opts.label_errors.append(f"scale-{tier}/{q.id}: {e}")
+                log(f"    LABEL ERROR {q.id}: {e}")
         stats = {k: v for k, v in bench.build_stats.items() if k != "per_document"}
         slowest = sorted(
             bench.build_stats["per_document"], key=lambda d: -d["seconds"]
         )[:5]
+        if not results:
+            log(f"    scale-{tier}: no question scored, every label failed")
+            continue
         summary = _summarize(results)
         out["tiers"].append(
             {
@@ -585,6 +606,7 @@ def run(opts: RunOptions) -> dict:
     finally:
         results["meta"]["duration_s"] = round(time.time() - started, 1)
         results["meta"]["errors"] = opts.errors
+        results["meta"]["label_errors"] = opts.label_errors
         (opts.out_dir / "results.json").write_text(
             json.dumps(results, indent=1, default=str), encoding="utf-8"
         )
@@ -634,8 +656,9 @@ def render_markdown(results: dict) -> str:
         "## Retrieval and answers",
         "",
         "`sdk` is RAGSDK dense search; `agent` is the chat agents' query_documents tool "
-        "(keyword boost, adaptive cutoff). An answer is a *retrieval miss* when the evidence "
-        "never reached the model, a *generation miss* when it did and the answer was still wrong.",
+        "(dense and keyword rankings merged by reciprocal rank fusion, adaptive cutoff). "
+        "An answer is a *retrieval miss* when the evidence never reached the model, a "
+        "*generation miss* when it did and the answer was still wrong.",
         "",
         "| Dataset | Qs | sdk R@1 | sdk R@5 | sdk R@20 | MRR | doc R@5 | agent R@returned (avg n) "
         "| answer acc (scored) | retrieval miss | generation miss | sdk p95 |",
@@ -742,6 +765,16 @@ def render_markdown(results: dict) -> str:
             lines.append(f"| {c['title']} | **{c['status']}** | {c['finding']} |")
     if meta.get("errors"):
         lines += ["", "## Errors", ""] + [f"- {e}" for e in meta["errors"]]
+    if meta.get("label_errors"):
+        lines += [
+            "",
+            "## Label errors",
+            "",
+            "These questions were not scored: their evidence label is not in the text as "
+            "GAIA extracts it. Fix the label in eval/retrieval/datasets/ (the quote must "
+            "match the document), then rerun.",
+            "",
+        ] + [f"- {e}" for e in meta["label_errors"]]
     lines += ["", "## Sources", ""]
     for name, s in meta.get("sources", {}).items():
         lines.append(

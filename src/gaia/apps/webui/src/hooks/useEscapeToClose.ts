@@ -22,6 +22,15 @@ export function openLayerCount(): number {
     return layers.length;
 }
 
+/**
+ * True while a modal dialog covers the app. Narrower than the layer registry:
+ * a menu, a popover and the Memory page join that too, and app shortcuts should
+ * keep working beside those.
+ */
+export function isModalOpen(): boolean {
+    return document.querySelector('[aria-modal="true"]') !== null;
+}
+
 function closeTopLayer(e: KeyboardEvent): void {
     if (e.key !== 'Escape' || e.defaultPrevented) return;
     const top = layers[layers.length - 1];

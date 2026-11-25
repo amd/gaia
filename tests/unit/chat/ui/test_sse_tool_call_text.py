@@ -9,12 +9,13 @@ long "thought" with an unescaped quote; and long calls that used to sit behind
 a bare timer.
 """
 
+import json
 import time
 
 import pytest
 
 from gaia.ui import sse_handler as sse_mod
-from gaia.ui.sse_handler import SSEOutputHandler
+from gaia.ui.sse_handler import SSEOutputHandler, clean_reply_text
 
 
 @pytest.fixture
@@ -380,3 +381,149 @@ class TestReviewFindings:
             + f"\n```\n{fence}\nDone."
         )
         assert _shown(_feed(handler, _pieces(text, 4))) == text
+
+
+def _native_envelope(content=None, name="write_file", args=None):
+    """The provider's native tool-call envelope, as Lemonade yields it."""
+    call = {
+        "id": "call_1",
+        "type": "function",
+        "function": {
+            "name": name,
+            "arguments": json.dumps(
+                args or {"file_path": "reconciliation.md", "content": "x"}
+            ),
+        },
+    }
+    return json.dumps(
+        {"__tool_calls__": [call], "finish_reason": "tool_calls", "content": content}
+    )
+
+
+def _answer(events):
+    return "".join(e["content"] for e in events if e and e["type"] == "answer")
+
+
+class TestNativeEnvelopeNeverStreams:
+    """A native tool-call envelope is a control frame, never answer text (#8161).
+
+    While an approval waits, the answer area showed the whole write call as
+    raw JSON; the short line ("Writing file: reconciliation.md") comes from
+    the tool's own narration once the envelope stops leaking here.
+    """
+
+    @pytest.mark.parametrize("size", [1, 2, 3, 7, 16, 64, 10_000])
+    def test_native_envelope_split_any_way_is_dropped(self, handler, size):
+        assert _shown(_feed(handler, _pieces(_native_envelope(), size))) == ""
+
+    def test_narration_before_a_native_envelope_shows(self, handler):
+        text = "Saving that." + _native_envelope()
+        assert _shown(_feed(handler, _pieces(text, 6))) == "Saving that."
+
+    def test_native_envelope_with_content_shows_only_the_content(self, handler):
+        envelope = _native_envelope("Reconciling the two files now.")
+        assert _shown(_feed(handler, _pieces(envelope, 5))) == (
+            "Reconciling the two files now."
+        )
+
+    def test_protocol_envelope_before_a_native_one_still_splits_first(self, handler):
+        protocol = '{"thought": "t", "tool": "list_files", "tool_args": {}}'
+        text = "Checking the files.\n" + protocol + " Then " + _native_envelope()
+        assert _shown(_feed(handler, _pieces(text, 6))).strip() == (
+            "Checking the files.\nThen"
+        )
+
+    @pytest.mark.parametrize(
+        "chunks,expected",
+        [
+            (['{"_ _'], '{"_ _'),
+            (['Use {"\n'], 'Use {"\n'),
+            (['{" ', 'key": 1}'], '{" key": 1}'),
+            (['See {"__tool_ calls', " here."], 'See {"__tool_ calls here.'),
+        ],
+    )
+    def test_lookalike_partial_opener_is_prose_not_a_hang(
+        self, handler, chunks, expected
+    ):
+        # A tail that merely looks like the opener's start (a space or a
+        # newline after {", or a truncated key) is ordinary text. Holding it
+        # as a partial opener hung the stream: the buffer never shrank while
+        # the head kept classifying as no envelope.
+        assert _shown(_feed(handler, chunks)) == expected
+
+    def test_split_native_opener_is_still_held(self, handler):
+        # The guard above must not give up a real opener split across
+        # chunks: the envelope still drops and only its content shows.
+        assert (
+            _shown(
+                _feed(
+                    handler,
+                    ['Then {"__to', 'ol_calls__": [], "content": "hi"}'],
+                )
+            )
+            == "Then hi"
+        )
+
+    def test_prose_quoting_the_envelope_prefix_still_shows(self, handler):
+        # Only a whole envelope is a tool call; a model merely quoting its
+        # first characters is still talking to the user.
+        text = '{"__tool_calls__": is the key the provider uses for native calls.}'
+        assert _shown(_feed(handler, _pieces(text, 4))) == text
+
+    def test_native_envelope_in_a_code_block_is_an_example(self, handler):
+        # One chunk: the fence opener is visible in the buffer prefix, so the
+        # JSON inside it is the answer's own content. (Fed token by token the
+        # fence open is never recognised, and the envelope drops like a
+        # protocol envelope does there; see test_a_dropped_fenced_envelope.)
+        text = "Example:\n```json\n" + _native_envelope() + "\n```\nDone."
+        assert _shown(_feed(handler, [text])) == text
+
+    def test_long_native_envelope_token_by_token_is_not_quadratic(self, handler):
+        big = _native_envelope(args={"file_path": "big.md", "content": "x" * 20_000})
+        started = time.monotonic()
+        assert _shown(_feed(handler, _pieces(big, 4))) == ""
+        assert time.monotonic() - started < 5
+
+    def test_native_envelope_as_the_final_answer_is_empty(self, handler):
+        handler.print_final_answer(_native_envelope())
+        assert _answer(_drain(handler)) == ""
+
+    def test_final_answer_keeps_the_text_beside_a_native_call(self, handler):
+        handler.print_final_answer(_native_envelope("Reconciling the two files now."))
+        assert _answer(_drain(handler)) == "Reconciling the two files now."
+
+    def test_final_answer_drops_an_envelope_after_prose(self, handler):
+        # The streaming path already splits prose from the envelope; the
+        # final answer did not, so the raw JSON reached the transcript when
+        # prose came right before the call.
+        handler.print_final_answer("Sure. " + _native_envelope())
+        assert _answer(_drain(handler)) == "Sure."
+
+    def test_final_answer_keeps_prose_and_content_around_an_envelope(self, handler):
+        handler.print_final_answer(
+            "Sure. " + _native_envelope("Reconciling the two files now.")
+        )
+        assert _answer(_drain(handler)) == "Sure. Reconciling the two files now."
+
+    def test_clean_reply_text_strips_a_native_envelope(self):
+        assert clean_reply_text(_native_envelope()) == ""
+        assert (
+            clean_reply_text(_native_envelope("Reconciling the two files now."))
+            == "Reconciling the two files now."
+        )
+        quoted = '{"__tool_calls__": is the key the provider uses for native calls.}'
+        assert clean_reply_text(quoted) == quoted
+
+    def test_clean_reply_text_drops_an_envelope_after_prose(self):
+        assert clean_reply_text("Sure. " + _native_envelope()) == "Sure."
+        assert (
+            clean_reply_text(
+                "Sure. " + _native_envelope("Reconciling the two files now.")
+            )
+            == "Sure. Reconciling the two files now."
+        )
+        assert clean_reply_text(_native_envelope() + " Done.") == "Done."
+
+    def test_clean_reply_text_keeps_a_fenced_envelope_after_prose(self):
+        text = "Example:\n```json\n" + _native_envelope() + "\n```\nDone."
+        assert clean_reply_text(text) == text

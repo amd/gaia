@@ -84,7 +84,7 @@ class TestBuiltinAgentHubMetadata:
         return r
 
     def test_legacy_chat_id_shows_the_flagship_metadata(self, registry):
-        pytest.importorskip("gaia_agent")
+        pytest.importorskip("gaiapy")
         reg = registry.get("chat")
         assert reg is not None
         assert reg.id == "gaia"
@@ -94,7 +94,7 @@ class TestBuiltinAgentHubMetadata:
         assert reg.language == "python"
 
     def test_gaia_lite_resolves_to_the_flagship_with_lite_tier(self, registry):
-        pytest.importorskip("gaia_agent")
+        pytest.importorskip("gaiapy")
         # #1162: gaia-lite is a legacy alias on the lite tier, not a
         # standalone registration; since #6099 it resolves to the flagship.
         assert registry.canonical_id("gaia-lite") == "gaia"
@@ -194,7 +194,7 @@ class TestConsumesMcpServersExposure:
     Settings "Active for" panel can list dynamic MCP consumers."""
 
     def test_reg_to_info_exposes_flag_for_chat(self):
-        pytest.importorskip("gaia_agent")
+        pytest.importorskip("gaiapy")
         from gaia.ui.routers.agents import _reg_to_info
 
         registry = AgentRegistry()

@@ -8,8 +8,8 @@ import contextlib
 from types import SimpleNamespace
 
 import pytest
-from gaia_agent import research, stdio
-from gaia_agent.agent import GaiaAgent, GaiaAgentConfig
+from gaiapy import research, stdio
+from gaiapy.agent import GaiaAgent, GaiaAgentConfig
 
 from gaia.agents.base.agent import Agent
 from gaia.agents.base.model_features import TIER_ENV
@@ -235,6 +235,17 @@ def test_a_report_that_cites_nothing_it_read_is_flagged():
     assert "cites none of the pages" in problem
 
 
+def test_only_pages_read_this_turn_must_be_cited():
+    memo = "Saved memo.docx."
+    assert research.citation_problems(memo, [_FETCH_NIH], turn_calls=[]) == []
+    (problem,) = research.citation_problems(memo, [_FETCH_NIH], turn_calls=[_FETCH_NIH])
+    assert "cites none of the pages" in problem
+    # A link from an earlier turn's reading still has to be one that was read.
+    altered = f"See [source]({_NIH}x)."
+    (problem,) = research.citation_problems(altered, [_FETCH_NIH], turn_calls=[])
+    assert "may be wrong" in problem
+
+
 _PDF = "https://arxiv.org/pdf/2401.00001"
 _PDF_REFUSED = (
     "fetch_page",
@@ -343,3 +354,21 @@ def test_only_a_research_turn_checks_citations():
         assert "give your complete report again" in repair
         # A model answered the check ("You're right - there's a stray ]") until told not to.
         assert "without mentioning it" in repair
+
+
+def test_a_named_skill_folder_nobody_captured_gets_a_repair():
+    folder = "C:/Users/me/skills/receipt-format"
+    with _agent() as (agent, _seen):
+        if "capture_skill" not in agent._tools_registry:
+            pytest.skip("this build registers no capture_skill")
+        agent._original_user_input = f"add the skill at {folder} to your library"
+        agent._turn_tool_executions = [{"tool": "list_skills"}]
+        (problem,) = agent.answer_problems("That folder is protected.")
+        assert problem == f"No skill was added from `{folder}`."
+        assert "Call capture_skill with source set to that path" in (
+            agent.answer_repair_prompt([problem])
+        )
+        assert agent.required_calls() == [("capture_skill", {"source": folder})]
+        agent._turn_tool_executions.append({"tool": "capture_skill"})
+        assert agent.required_calls() == []
+        assert agent.answer_problems("Added.") == []

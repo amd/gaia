@@ -63,7 +63,7 @@ def bundled_skill_tool_schemas(agent: Any) -> List[dict]:
     Registers each tool-providing skill on *agent* just long enough to render
     its schemas, then removes it again, leaving the agent as it was.
     """
-    from gaia_agent.agent import _bundled_skill_roots
+    from gaiapy.agent import _bundled_skill_roots
 
     from gaia.skills.format import SKILL_FILENAME, parse_skill_file
     from gaia.skills.loader import register_skill_tools, unregister_skill_tools

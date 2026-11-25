@@ -563,3 +563,86 @@ def test_upload_path_corrupt_pdf_error_names_original_file(client, home_tmp_dir)
 
     assert r2.status_code == 500
     _assert_names_user_file(db.get_document(body["id"])["last_error"])
+
+
+# ── Credential files stay out of the library ─────────────────────────────────
+
+
+_SECRET = "sk-live-do-not-leak"
+
+
+def test_upload_path_refuses_credential_file(client, mock_index_document, home_tmp_dir):
+    """A file the agent's read tools refuse can't be added to the library by path."""
+    for name in ("credentials.json", "Secrets.JSON", "service_account.json"):
+        secret = home_tmp_dir / name
+        secret.write_text(f'{{"key": "{_SECRET}"}}', encoding="utf-8")
+
+        r = client.post("/api/documents/upload-path", json={"filepath": str(secret)})
+
+        assert r.status_code == 403, (name, r.text)
+        assert _SECRET not in r.text
+    mock_index_document.assert_not_called()
+    assert client.app.state.db.list_documents() == []
+
+
+def test_upload_path_accepts_names_that_only_look_like_secrets(
+    client, mock_index_document, home_tmp_dir
+):
+    """Ordinary files whose names mention keys or tokens still index."""
+    for name in ("keys.md", "token_counter.txt", "my_credentials_notes.txt"):
+        doc = home_tmp_dir / name
+        doc.write_text("ordinary notes\n", encoding="utf-8")
+
+        r = client.post("/api/documents/upload-path", json={"filepath": str(doc)})
+
+        assert r.status_code == 200, (name, r.text)
+
+
+def test_upload_path_outside_roots_keeps_root_refusal(client, tmp_path):
+    """A credential-named file outside the roots gets the roots 403, not a hint."""
+    outside = tmp_path / "credentials.json"
+    outside.write_text("{}", encoding="utf-8")
+
+    r = client.post("/api/documents/upload-path", json={"filepath": str(outside)})
+
+    assert r.status_code == 403
+    assert "credentials or keys" not in r.json()["detail"]
+
+
+def test_document_file_refuses_credential_row_indexed_earlier(client, home_tmp_dir):
+    """A credential file already in the library is not served back raw."""
+    secret = home_tmp_dir / "credentials.json"
+    secret.write_text(f'{{"key": "{_SECRET}"}}', encoding="utf-8")
+    doc = client.app.state.db.add_document(
+        filename=secret.name,
+        filepath=str(secret),
+        file_hash="h-secret",
+        file_size=secret.stat().st_size,
+        chunk_count=1,
+        file_mtime=secret.stat().st_mtime,
+    )
+
+    r = client.get(f"/api/documents/{doc['id']}/file")
+    assert r.status_code == 403
+    assert _SECRET not in r.text
+
+    r = client.post(f"/api/documents/{doc['id']}/reindex")
+    assert r.status_code == 403
+
+
+def test_index_folder_skips_credential_files(client, mock_index_document, home_tmp_dir):
+    """Indexing a folder leaves its credential files out and counts them skipped."""
+    (home_tmp_dir / "notes.txt").write_text("ordinary notes\n", encoding="utf-8")
+    (home_tmp_dir / "secrets.json").write_text(f'"{_SECRET}"', encoding="utf-8")
+
+    r = client.post(
+        "/api/documents/index-folder",
+        json={"folder_path": str(home_tmp_dir), "recursive": False},
+    )
+
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert [d["filename"] for d in body["documents"]] == ["notes.txt"]
+    assert body["skipped"] == 1
+    indexed = [c.args[0].name for c in mock_index_document.call_args_list]
+    assert indexed == ["notes.txt"]

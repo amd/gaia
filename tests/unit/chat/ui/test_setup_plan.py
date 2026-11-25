@@ -19,6 +19,8 @@ from gaia.llm.lemonade_client import (
     DEFAULT_EMBEDDING_MODEL,
     DEFAULT_MODEL_NAME,
     LARGE_DEFAULT_MODEL_NAME,
+    SMALL_DEFAULT_MODEL_NAME,
+    TINY_DEFAULT_MODEL_NAME,
     LemonadeClient,
     LemonadeClientError,
 )
@@ -32,6 +34,8 @@ _REAL_LEMONADE = sp._lemonade
 UI = {"X-Gaia-UI": "1"}
 BIG_GPU = MachineCapacity(memory_gb=96, memory_source="AMD iGPU", disk_free_gb=500)
 SMALL_GPU = MachineCapacity(memory_gb=12, memory_source="AMD iGPU", disk_free_gb=500)
+# A 16 GB laptop with a 4 GB carve-out: 10 GB for models, 16 GB of RAM in all.
+LAPTOP_16 = MachineCapacity(memory_gb=10, memory_source="AMD iGPU", disk_free_gb=500)
 
 
 @pytest.fixture(autouse=True)
@@ -50,19 +54,40 @@ def config_file(tmp_path, monkeypatch):
 class _FakeLemonade:
     """A running Lemonade on a PC with *capacity*; *downloaded* models are on disk."""
 
-    def __init__(self, capacity, downloaded=(), version="2026.44.1"):
+    def __init__(
+        self, capacity, downloaded=(), version="2026.44.1", ram_gb=None, carve_out=None
+    ):
         self.capacity = capacity
         self.downloaded = set(downloaded)
         self.version = version
+        self.ram_gb = ram_gb if ram_gb is not None else capacity.memory_gb + 64
+        # An iGPU's split: its carve-out plus the shared RAM that makes the pool.
+        self.carve_out = carve_out
 
     def health_check(self):
         return {"status": "ok", "version": self.version}
 
+    def check_model_available(self, model_id):
+        return model_id in self.downloaded
+
     def get_system_info(self, timeout=None):
         return {
-            "Physical Memory": f"{self.capacity.memory_gb + 64:.2f} GB",
+            "Physical Memory": f"{self.ram_gb:.2f} GB",
+            "OS Version": "Windows 11 Pro",
             "devices": {
-                "amd_igpu": {"available": True, "vram_gb": self.capacity.memory_gb},
+                (
+                    "amd_dgpu"
+                    if self.capacity.memory_source == "AMD GPU"
+                    else "amd_igpu"
+                ): (
+                    {"available": True, "vram_gb": self.capacity.memory_gb}
+                    if self.carve_out is None
+                    else {
+                        "available": True,
+                        "vram_gb": self.carve_out,
+                        "virtual_mem_gb": self.capacity.memory_gb - self.carve_out,
+                    }
+                ),
                 "amd_npu": {"available": True},
             },
             "model_storage": {"free_bytes": self.capacity.disk_free_gb * 1e9},
@@ -75,6 +100,8 @@ class _FakeLemonade:
                 for m, size in (
                     (LARGE_DEFAULT_MODEL_NAME, 23.3),
                     (DEFAULT_MODEL_NAME, 5.6),
+                    (SMALL_DEFAULT_MODEL_NAME, 3.58),
+                    (TINY_DEFAULT_MODEL_NAME, 2.01),
                     (DEFAULT_EMBEDDING_MODEL.removeprefix("user."), 0.3),
                 )
             ]
@@ -85,8 +112,8 @@ class _FakeLemonade:
 def running(monkeypatch):
     """Point the plan at a fake running server on *capacity*."""
 
-    def use(capacity, downloaded=(), version="2026.44.1"):
-        fake = _FakeLemonade(capacity, downloaded, version)
+    def use(capacity, downloaded=(), version="2026.44.1", ram_gb=None, carve_out=None):
+        fake = _FakeLemonade(capacity, downloaded, version, ram_gb, carve_out)
         monkeypatch.setattr(sp, "_client", lambda url: fake)
         return fake
 
@@ -273,10 +300,23 @@ def test_options_say_which_models_fit(running):
     assert options[DEFAULT_MODEL_NAME]["fits"] is True
 
 
-def test_options_show_the_catalog_size(running):
-    running(BIG_GPU)
+def test_options_show_the_size_settings_shows(running, monkeypatch):
+    """A server that lists GiB (5.56, 21.7) still reads 5.97 and 23.3 GB here."""
+    fake = running(BIG_GPU)
+    gib = {LARGE_DEFAULT_MODEL_NAME: 21.7, DEFAULT_MODEL_NAME: 5.56}
+    listed = fake.list_models
+    monkeypatch.setattr(
+        fake,
+        "list_models",
+        lambda show_all=False: {
+            "data": [
+                {**e, "size": gib.get(e["id"], e["size"])} for e in listed()["data"]
+            ]
+        },
+    )
     options = {o["id"]: o for o in sp.build_plan()["options"]}
-    assert options[DEFAULT_MODEL_NAME]["size_gb"] == 5.6
+    assert options[DEFAULT_MODEL_NAME]["size_gb"] == 5.97
+    assert options[LARGE_DEFAULT_MODEL_NAME]["size_gb"] == 23.3
 
 
 def test_picking_the_smaller_model_saves_it_and_drops_the_large_download(
@@ -289,6 +329,109 @@ def test_picking_the_smaller_model_saves_it_and_drops_the_large_download(
     assert plan["chat_model"]["id"] == DEFAULT_MODEL_NAME
     assert plan["chat_model"]["user_set"] is True
     assert LARGE_DEFAULT_MODEL_NAME not in _plan_ids(plan)
+
+
+def test_a_16gb_laptop_gets_the_2b_and_keeps_10gb_for_other_apps(running):
+    running(LAPTOP_16, ram_gb=16, carve_out=4)
+    plan = sp.build_plan()
+    by_id = {e["id"]: e for e in plan["catalog"]}
+    # Apps never get the GPU's 4 GB carve-out, which here outweighs the model.
+    held = max(by_id[TINY_DEFAULT_MODEL_NAME]["need_gb"], 4 * GB_PER_GIB)
+    left = 16 * GB_PER_GIB - held
+    assert plan["left_for_apps_gb"] == round(left, 1)
+    assert plan["left_for_apps_gb"] > 10 * GB_PER_GIB
+    assert plan["recommended_model"] == TINY_DEFAULT_MODEL_NAME
+    assert plan["chat_model"]["id"] == TINY_DEFAULT_MODEL_NAME
+    # It reads images itself, so the download is the model and the embedder.
+    assert set(_plan_ids(plan)) == {TINY_DEFAULT_MODEL_NAME, DEFAULT_EMBEDDING_MODEL}
+    assert plan["download_gb"] == round(2.01 + 0.3, 1)
+    by_id = {e["id"]: e for e in plan["catalog"]}
+    # Gemma and the 4B would load, but leave other apps too little: tight.
+    for model_id in (DEFAULT_MODEL_NAME, SMALL_DEFAULT_MODEL_NAME):
+        assert by_id[model_id]["fits"] is True and by_id[model_id]["tight"] is True
+    assert by_id[TINY_DEFAULT_MODEL_NAME]["tight"] is False
+
+
+def test_an_8gb_laptop_is_not_asked_to_confirm_its_own_pick(running):
+    """Nothing is left once other apps get 10 GB, but the floor is never tight:
+    there is no smaller model to offer instead."""
+    laptop = MachineCapacity(memory_gb=4.2, memory_source="AMD iGPU", disk_free_gb=500)
+    running(laptop, ram_gb=8)
+    plan = sp.build_plan()
+    assert plan["recommended_model"] == TINY_DEFAULT_MODEL_NAME
+    pick = next(e for e in plan["catalog"] if e["id"] == TINY_DEFAULT_MODEL_NAME)
+    assert pick["fits"] is True and pick["tight"] is False
+
+
+def test_left_for_apps_never_counts_the_gpu_carve_out(running):
+    """A 128 GB Strix Halo with 96 GB reserved for its GPU: apps get the other
+    32 GB, not 128 GB less the model."""
+    halo = MachineCapacity(memory_gb=111.8, memory_source="AMD iGPU", disk_free_gb=900)
+    fake = running(halo, ram_gb=128)
+    real = fake.get_system_info
+
+    def with_carve_out(timeout=None):
+        info = real(timeout)
+        info["devices"] = {
+            "amd_gpu": [
+                {
+                    "available": True,
+                    "integrated": True,
+                    "vram_gb": 96.0,
+                    "virtual_mem_gb": 15.8,
+                }
+            ]
+        }
+        return info
+
+    fake.get_system_info = with_carve_out
+    plan = sp.build_plan()
+    assert plan["recommended_model"] == LARGE_DEFAULT_MODEL_NAME
+    assert plan["left_for_apps_gb"] == round((128 - 96) * GB_PER_GIB, 1)
+
+
+def test_a_32gb_pc_gets_gemma_with_room_to_spare(running):
+    running(SMALL_GPU, ram_gb=32)
+    plan = sp.build_plan()
+    assert plan["recommended_model"] == DEFAULT_MODEL_NAME
+    gemma = next(e for e in plan["catalog"] if e["id"] == DEFAULT_MODEL_NAME)
+    assert gemma["fits"] is True and gemma["tight"] is False
+
+
+def test_a_discrete_gpu_keeps_nothing_back(running):
+    """The model sits in the card's own memory, so no RAM is held back."""
+    dgpu = MachineCapacity(memory_gb=8, memory_source="AMD GPU", disk_free_gb=500)
+    running(dgpu, ram_gb=32)
+    plan = sp.build_plan()
+    assert plan["left_for_apps_gb"] is None
+
+
+def test_choosing_gemma_on_a_16gb_laptop_asks_then_saves_it(running, config_file):
+    running(LAPTOP_16, ram_gb=16, carve_out=4)
+    with pytest.raises(sp.NeedsAcknowledgement) as asked:
+        sp.choose_chat_model(DEFAULT_MODEL_NAME)
+    message = asked.value.detail["message"]
+    assert "would leave your other apps little memory" in message
+    assert "may not run" not in message
+    sp.choose_chat_model(DEFAULT_MODEL_NAME, acknowledge_no_fit=True)
+    assert json.loads(config_file.read_text())["default_model"] == DEFAULT_MODEL_NAME
+    plan = sp.build_plan()
+    assert plan["chat_model"] == {
+        "id": DEFAULT_MODEL_NAME,
+        "user_set": True,
+        "size_gb": 5.6,
+        "downloaded": False,
+    }
+    assert TINY_DEFAULT_MODEL_NAME not in _plan_ids(plan)
+    # Choosing the small model again saves it rather than handing it back:
+    # with no default_model, every agent would fall back to the Gemma this PC
+    # never downloaded.
+    sp.choose_chat_model(TINY_DEFAULT_MODEL_NAME)
+    saved = json.loads(config_file.read_text())["default_model"]
+    assert saved == TINY_DEFAULT_MODEL_NAME
+    from gaia.llm.lemonade_client import resolve_default_chat_model
+
+    assert resolve_default_chat_model() == TINY_DEFAULT_MODEL_NAME
 
 
 def test_picking_the_recommendation_again_hands_the_choice_back_to_setup(
@@ -768,8 +911,11 @@ def test_catalog_shows_settings_size_for_a_model_outside_setups_own(
     shown = sp.model_choice.download_size_gb(MUSE_GLIMMER_MODEL_NAME, 19.9)
     assert shown == 21.36
     assert _entry(plan, MUSE_GLIMMER_MODEL_NAME)["full_size_gb"] == shown
-    # Setup's own models keep the size the plan's fit checks run on.
-    assert _entry(plan, DEFAULT_MODEL_NAME)["full_size_gb"] == 5.6
+    # Setup's own models show Settings' size too; the download the plan's
+    # disk check sums stays the server's figure.
+    gemma = _entry(plan, DEFAULT_MODEL_NAME)
+    assert gemma["full_size_gb"] == 5.97
+    assert gemma["size_gb"] == 5.6
 
 
 def test_catalog_leaves_out_cloud_models_lemonade_lists_as_downloaded(
@@ -1375,6 +1521,28 @@ def test_a_model_too_big_for_memory_says_memory(flm_box):
     assert qwen["fits"] is False and qwen["fit_code"] == "memory"
 
 
+def test_setup_offers_only_chat_models_that_fit_and_never_flash(running):
+    from gaia.llm.lemonade_client import FLASH_OPTION_MODEL_NAME
+
+    running(SMALL_GPU)
+    plan = sp.build_plan()
+    assert _entry(plan, LARGE_DEFAULT_MODEL_NAME)["setup_offer"] is False
+    assert _entry(plan, DEFAULT_MODEL_NAME)["setup_offer"] is True
+    running(BIG_GPU)
+    plan = sp.build_plan()
+    assert _entry(plan, LARGE_DEFAULT_MODEL_NAME)["setup_offer"] is True
+    assert _entry(plan, FLASH_OPTION_MODEL_NAME)["setup_offer"] is False
+
+
+def test_setup_keeps_offering_the_users_own_chat_model_even_when_it_does_not_fit(
+    running,
+):
+    running(SMALL_GPU)
+    sp.choose_chat_model(LARGE_DEFAULT_MODEL_NAME, acknowledge_no_fit=True)
+    qwen = _entry(sp.build_plan(), LARGE_DEFAULT_MODEL_NAME)
+    assert qwen["fits"] is False and qwen["setup_offer"] is True
+
+
 def test_choosing_an_npu_model_that_cant_run_here_is_refused_not_confirmed(
     client, running
 ):
@@ -1471,3 +1639,22 @@ def test_a_release_candidates_plan_names_its_own_pre_release_for_the_agent(
     assert agent_source() == "hub.amd-gaia.ai"
     monkeypatch.setattr(prerelease, "CORE_VERSION", "0.26.0rc32")
     assert agent_source() == "github.com/amd/gaia/releases/tag/v0.26.0-rc32"
+
+
+def test_every_plan_field_is_declared_in_the_agent_ui_and_tui(running):
+    """A field the apps don't declare is dead on arrival: a rename must fail here."""
+    import re
+    from pathlib import Path
+
+    repo = Path(__file__).resolve().parents[4]
+    ts = (repo / "src/gaia/apps/webui/src/types/setup.ts").read_text(encoding="utf-8")
+    go = (repo / "tui/internal/setupapi/types.go").read_text(encoding="utf-8")
+    ts_keys = set(re.findall(r"^\s+(\w+)\??:", ts, re.M))
+    go_keys = set(re.findall(r'json:"(\w+)', go))
+    running(LAPTOP_16, ram_gb=16, carve_out=4)
+    plan = sp.build_plan()
+    for key in ("left_for_apps_gb", "recommended_model"):
+        assert key in plan and key in ts_keys and key in go_keys, key
+    entry = plan["catalog"][0]
+    for key in ("tight", "fits", "fit_code", "reads_images", "setup_offer"):
+        assert key in entry and key in ts_keys and key in go_keys, key

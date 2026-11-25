@@ -16,9 +16,9 @@ from unittest.mock import patch
 
 import pytest
 
-pytest.importorskip("gaia_agent")
+pytest.importorskip("gaiapy")
 
-from gaia_agent.server import QueryRequest, _declare_who_answers  # noqa: E402
+from gaiapy.server import QueryRequest, _declare_who_answers  # noqa: E402
 
 from gaia.agents.base.agent import Agent  # noqa: E402
 from gaia.agents.tools.filesystem_tools import FileSystemToolsMixin  # noqa: E402

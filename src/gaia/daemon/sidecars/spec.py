@@ -100,7 +100,7 @@ class AgentSidecarSpec:
     )
     #: One-line description for the agent's card. A binary install ships no
     #: importable wheel, so the entry point's own registration (e.g.
-    #: ``gaia_agent.build_gaia``) never loads and the UI would otherwise show
+    #: ``gaiapy.build_gaia``) never loads and the UI would otherwise show
     #: a generated "<Name> agent" placeholder. Transcribed from the package's
     #: registration, drift-guarded by
     #: tests/unit/agents/test_sidecar_card_drift.py.
@@ -123,7 +123,7 @@ class AgentSidecarSpec:
 _GAIA_TOKEN_ENV_VAR = "GAIA_GAIA_SIDECAR_TOKEN"
 _GAIA_TOKEN_FILE_ENV_VAR = "GAIA_GAIA_SIDECAR_TOKEN_FILE"
 
-# Mirrors gaia_agent.connectors.MAILBOX_REQUIREMENTS: the shipped flagship is a
+# Mirrors gaiapy.connectors.MAILBOX_REQUIREMENTS: the shipped flagship is a
 # frozen binary, so its own declaration cannot be imported to derive scopes.
 _GAIA_REQUIRED_CONNECTIONS = (
     ConnectorRequirement(

@@ -44,7 +44,8 @@ if sys.platform == "win32":
             AwakeClockError: Windows refused ``QueryUnbiasedInterruptTime``,
                 so no time limit can be measured.
         """
-        ticks = ctypes.c_ulonglong()
+        # pylint infers the macOS ctypes stub, which needs a value
+        ticks = ctypes.c_ulonglong()  # pylint: disable=no-value-for-parameter
         if not _query(ctypes.byref(ticks)):
             err = ctypes.WinError(ctypes.get_last_error())
             raise AwakeClockError(

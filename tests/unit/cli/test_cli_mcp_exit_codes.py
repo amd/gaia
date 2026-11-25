@@ -185,11 +185,10 @@ class TestFailuresExitOne:
         pid_file = in_tmp / "gaia.mcp.pid"
         pid_file.write_text("4242", encoding="utf-8")
         monkeypatch.setattr(cli.sys, "platform", "win32")
+        monkeypatch.setattr(cli, "_is_mcp_bridge_process", lambda _pid: True)
 
         def run(cmd, **_kwargs):
-            if cmd[0] == "taskkill":
-                raise cli.subprocess.CalledProcessError(1, cmd)
-            return types.SimpleNamespace(stdout="python.exe 4242")
+            raise cli.subprocess.CalledProcessError(1, cmd)
 
         monkeypatch.setattr(cli.subprocess, "run", run)
 

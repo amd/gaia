@@ -50,6 +50,12 @@ import requests
 # exercise the rejection path directly and do not rely on this.
 os.environ.setdefault("GAIA_UI_ALLOWED_HOSTS", "testserver")
 
+# Every Agent UI request needs the API token. Point the suite at its own token
+# file so no test reads or creates the developer's real one.
+_UI_TOKEN_FILE = Path(tempfile.mkdtemp(prefix="gaia-ui-token-")) / "agent-ui-token"
+_UI_TOKEN_FILE.write_text("test-agent-ui-token", encoding="utf-8")
+os.environ.setdefault("GAIA_UI_TOKEN_FILE", str(_UI_TOKEN_FILE))
+
 _BROWSER_LAUNCHERS = ("open", "open_new", "open_new_tab")
 
 
@@ -585,6 +591,9 @@ def in_memory_keyring():
 def _testclient_sends_ui_header():
     """Make every ``TestClient`` carry ``X-Gaia-UI``, as real clients do.
 
+    A client of the Agent UI app also carries its API token, as the desktop
+    app and scripts do; a test of the refusal pops ``authorization``.
+
     ``gaia.ui.security.UIRequestGuardMiddleware`` refuses mutating
     ``/api``/``/v1`` requests without it. Over a hundred call sites across
     ~40 modules build their own ``TestClient``, so defaulting the header
@@ -606,6 +615,10 @@ def _testclient_sends_ui_header():
     def _init_with_ui_header(self, *args, **kwargs):
         original_init(self, *args, **kwargs)
         self.headers.setdefault("x-gaia-ui", "1")
+        app = args[0] if args else kwargs.get("app")
+        token = getattr(getattr(app, "state", None), "ui_api_token", None)
+        if isinstance(token, str):
+            self.headers.setdefault("authorization", f"Bearer {token}")
 
     TestClient.__init__ = _init_with_ui_header
     try:

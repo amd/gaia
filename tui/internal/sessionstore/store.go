@@ -4,7 +4,7 @@
 // Package sessionstore reads the listing the flagship agent keeps beside each
 // session's transcript, so the TUI can show past sessions and reopen one.
 //
-// The agent owns every file here (gaia_agent/session_index.py). For a session
+// The agent owns every file here (gaiapy/session_index.py). For a session
 // <id> it keeps <id>.sqlite3 (what the model replays), <id>.json (title, kind,
 // status, owning pid) and <id>.jsonl (one line per finished turn). The TUI
 // only reads the last two and picks the <id> it passes back as --history-file.

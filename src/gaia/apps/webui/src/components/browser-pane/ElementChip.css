@@ -64,7 +64,7 @@
 }
 
 .element-chip-component {
-    color: var(--text-muted);
+    color: var(--text-secondary);
     font-family: var(--font-mono);
     font-size: 11px;
     white-space: nowrap;
@@ -105,7 +105,7 @@
 }
 
 .element-chip-state {
-    color: var(--text-muted);
+    color: var(--text-secondary);
     white-space: nowrap;
 }
 

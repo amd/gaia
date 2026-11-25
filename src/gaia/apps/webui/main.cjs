@@ -17,6 +17,7 @@ const {
   app,
   autoUpdater: electronAutoUpdater,
   BrowserWindow,
+  clipboard,
   Menu,
   dialog,
   ipcMain,
@@ -123,11 +124,15 @@ const {
   isAllowedExternalUrl,
   isInAppNavigation,
   describeBlockedUrl,
+  describeOpenFailure,
+  openExternalSafely,
 } = require("./services/link-policy.cjs");
 const { installWindowKeys } = require("./services/window-keys.cjs");
+const { installContextMenu } = require("./services/context-menu.cjs");
 const { installQuitCleanup } = require("./services/quit-cleanup.cjs");
 const { chromiumSwitches } = require("./services/chromium-switches.cjs");
 const { titleBarKind, titleBarOptions } = require("./services/window-frame.cjs");
+const { installBackendAuth } = require("./services/ui-token.cjs");
 const { resolveDevQaMode } = require("./services/dev-qa-mode.cjs");
 const { createBrowserPaneService, PANE_PARTITION } = require("./services/browser-pane/ipc.cjs");
 const { DevServerSupervisor } = require("./services/browser-pane/dev-servers.cjs");
@@ -266,6 +271,8 @@ let shutdownStarted = false;
 // Set once an update install starts quitting the app.
 let updateQuitStarted = false;
 let backendPort = DEFAULT_BACKEND_PORT;
+// The port of the backend this app spawned; only it is sent the API token.
+let spawnedBackendPort = null;
 let healthCheckUrl = `http://localhost:${backendPort}/api/health`;
 let backendStderrTail = [];
 let isIntentionalKill = false;
@@ -345,6 +352,15 @@ async function cleanupOrphanedBackend() {
   });
 }
 
+/** What the user reads when GAIA's backend program can't be found: what to do, and where it looked. */
+function missingBackendMessage() {
+  const looked = [backendInstaller.BUNDLED_GAIA_BIN, backendInstaller.GAIA_BIN].filter(Boolean).join(", ");
+  return (
+    "GAIA's backend program is missing, so GAIA can't start: the app's files are incomplete. " +
+    `Reinstall GAIA from https://amd-gaia.ai/#install. Looked for ${looked} and for gaia on PATH.`
+  );
+}
+
 /**
  * Start the GAIA Python backend. Expects the backend installer to have
  * already ensured the venv is populated — callers should await
@@ -382,6 +398,8 @@ async function startBackend() {
   if (!devQa) await cleanupOrphanedBackend();
 
   console.log(`Starting backend: ${gaiaCmd} chat --ui --ui-port ${backendPort}`);
+  spawnedBackendPort = backendPort;
+  const childPort = backendPort;
 
   // Reset per-spawn state so a fresh crash dialog doesn't mix tails.
   backendStderrTail = [];
@@ -457,6 +475,8 @@ async function startBackend() {
       console.error(`Backend exited with code ${code} (signal=${signal}, pid=${child.pid})`);
     }
     if (backendProcess === child) backendProcess = null;
+    // Whatever binds the port next is not ours, so it gets no token.
+    if (spawnedBackendPort === childPort) spawnedBackendPort = null;
     if (trayManager && !isQuitting) trayManager.setBackendAlive(false);
 
     // Once restarts run out, the supervisor's onStopped shows the crash dialog.
@@ -485,13 +505,19 @@ async function startBackend() {
 /**
  * Start a new backend for the supervisor and resolve once it answers.
  * Rejects when it exits first or never answers, so the supervisor retries.
+ * A backend still alive here is a hung one Restart GAIA was pressed for:
+ * stop it first, or the new backend would run beside it on a new port.
  */
 async function restartBackend() {
+  if (backendProcess) {
+    const hung = backendProcess;
+    backendProcess = null;
+    isIntentionalKill = true;
+    await portManager.killBackend(hung);
+  }
   backendStarting = startBackend();
   const child = await backendStarting;
-  if (!child) {
-    throw new Error("GAIA's backend program is missing, so it can't restart. Reinstall GAIA.");
-  }
+  if (!child) throw Object.assign(new Error(missingBackendMessage()), { terminal: true });
   if (quitStarted()) {
     isIntentionalKill = true;
     await portManager.killBackend(child);
@@ -533,6 +559,8 @@ const backendSupervisor = createBackendSupervisor({
         (state.status === "restarting" ? ` (try ${state.attempt} of ${state.maxRestarts})` : "") +
         (state.lastError ? `: ${state.lastError}` : "")
     );
+    // A backend up again after a failed start leaves nothing to roll back from.
+    if (state.status === "running") autoUpdater.clearStartFailure();
     if (mainWindow && !mainWindow.isDestroyed()) {
       mainWindow.webContents.send("backend:state", backendStateForRenderer(state));
     }
@@ -645,21 +673,28 @@ function findDistPath() {
 
 /** Refuse a link loudly — the user clicked it, so they get told why nothing happened. */
 function reportBlockedLink(url) {
-  const message = describeBlockedUrl(url);
+  warnAboutLink("Link blocked", describeBlockedUrl(url));
+}
+
+function reportLinkNotOpened(url, err) {
+  warnAboutLink("Link not opened", describeOpenFailure(url, err));
+}
+
+function warnAboutLink(title, message) {
   console.error(`[main] ${message}`);
   // Non-blocking and parented: showErrorBox would freeze the main process.
   dialog
     .showMessageBox(mainWindow && !mainWindow.isDestroyed() ? mainWindow : null, {
       type: "warning",
-      title: "Link blocked",
-      message: "Link blocked",
+      title,
+      message: title,
       detail: message,
       buttons: ["OK"],
       noLink: true,
     })
     .catch((err) =>
       console.error(
-        `[main] Could not show the link-blocked dialog: ${err && err.message ? err.message : err}`
+        `[main] Could not show the "${title}" dialog: ${err && err.message ? err.message : err}`
       )
     );
 }
@@ -726,13 +761,14 @@ function createWindow() {
     installWindowKeys(mainWindow.webContents, { devTools: !app.isPackaged });
   }
   mainWindow.setMenuBarVisibility(false);
+  installContextMenu(mainWindow, { Menu, clipboard, locale: app.getLocale() });
 
   // Open external links in the default browser. The URL here is already
   // RESOLVED against the file:// document, so a scheme-less markdown link
   // arrives as file:///C:/… — check the scheme before handing it to the OS.
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
     if (isAllowedExternalUrl(url)) {
-      shell.openExternal(url);
+      openExternalSafely(shell, url, (err) => reportLinkNotOpened(url, err));
     } else {
       reportBlockedLink(url);
     }
@@ -746,7 +782,7 @@ function createWindow() {
     if (isInAppNavigation(url, currentUrl)) return;
     event.preventDefault();
     if (isAllowedExternalUrl(url)) {
-      shell.openExternal(url);
+      openExternalSafely(shell, url, (err) => reportLinkNotOpened(url, err));
       return;
     }
     reportBlockedLink(url);
@@ -854,9 +890,11 @@ async function loadApp() {
           </div>
         </body>
       </html>`;
-    mainWindow.loadURL(
-      "data:text/html;charset=utf-8," + encodeURIComponent(waitingHtml)
-    );
+    mainWindow
+      .loadURL("data:text/html;charset=utf-8," + encodeURIComponent(waitingHtml))
+      .catch((err) =>
+        console.error(`[main] Could not show the waiting page: ${err && err.message ? err.message : err}`)
+      );
   }
 }
 
@@ -973,19 +1011,10 @@ function setupJumpList() {
         items: [
           {
             type: "task",
-            title: "New Task",
-            description: "Start a new agent task",
+            title: "Open GAIA",
+            description: "Show the GAIA window",
             program: process.execPath,
             args: "",
-            iconPath: process.execPath,
-            iconIndex: 0,
-          },
-          {
-            type: "task",
-            title: "Agent Manager",
-            description: "View and manage OS agents",
-            program: process.execPath,
-            args: "--show-agents",
             iconPath: process.execPath,
             iconIndex: 0,
           },
@@ -1098,6 +1127,7 @@ app.whenReady().then(async () => {
   // The window, and the tray that keeps a closed one reachable, come before
   // anything that can take time, so an install runs in plain sight.
   titleDownloadSaveDialogs();
+  installBackendAuth(session.defaultSession, { getPort: () => spawnedBackendPort });
   // Before the window: the desktop ties a window to its launcher when it appears.
   if (app.isPackaged) {
     try {
@@ -1180,7 +1210,9 @@ app.whenReady().then(async () => {
   if (shutdownStarted) return;
   backendStarting = startBackend();
   backendProcess = await backendStarting;
+  // The window reads this state and shows the failure instead of waiting for a backend.
   if (backendProcess) backendSupervisor.running(backendPort);
+  else backendSupervisor.failedToStart(missingBackendMessage());
   if (shutdownStarted) {
     console.log("[main] Quit during startup — not opening the window");
     return;
