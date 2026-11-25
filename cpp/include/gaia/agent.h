@@ -46,6 +46,12 @@ namespace gaia {
 /// Drop <think>…</think> reasoning (and a stray leading </think>) from a reply.
 GAIA_API std::string stripReasoning(const std::string& text);
 
+/// `text` as the request and answer checks read it: at most `maxBytes` (the start
+/// and the end are kept) and no unbroken run of non-space bytes longer than
+/// `maxRun`. A backtracking pattern costs the square of such a run, so the checks
+/// never see one. Cuts fall on UTF-8 character boundaries.
+GAIA_API std::string textForChecks(const std::string& text, size_t maxBytes = 64 * 1024, size_t maxRun = 256);
+
 class GAIA_API Agent {
 public:
     explicit Agent(const AgentConfig& config = {});
@@ -386,7 +392,8 @@ protected:
     /// Every tool call of the query in progress, in order (for answer review).
     const std::vector<ToolCallRecord>& turnToolCalls() const { return turnToolCalls_; }
 
-    /// The user's request for the query in progress, as text (for answer review).
+    /// The user's request for the query in progress, as textForChecks() gives it
+    /// (for answer review): what the user typed, minus input no check should scan.
     const std::string& turnRequest() const { return turnRequest_; }
 
     /// Keep text for read_tool_output and return its output_id.

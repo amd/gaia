@@ -20,6 +20,7 @@
 #include <gaia/model_registry.h>
 #include <gaia/process.h>
 #include <gaia/security.h>
+#include <gaia/shell_guard.h>
 #include <gaia/web_tools.h>
 #include <gaia/workspace.h>
 
@@ -98,6 +99,9 @@ void GaiaAgent::registerTools() {
             std::string cmd = " " + command + " ";
             if (!isReadOnlyShellCommand(cmd, posix)) return false;
             ShellSession& session = shell ? *shell : BashTools::defaultSession();
+            if (posix && !judgeShellCommand(command, session.cwd(), session.environment(), ws.get()).inside()) {
+                return false;
+            }
             // An exported PATH or preload decides which program `ls` is.
             for (const auto& [name, value] : session.environment()) {
                 static const std::set<std::string> steering = {
@@ -119,6 +123,20 @@ void GaiaAgent::registerTools() {
         const auto proven = [check = readStaysInside](const json& args) { return check(args.value("command", "")); };
         ToolInfo sh = Workspace::confineShell(BashTools::bashExecute(options_.shell), ws, "command",
                                               !BashTools::detectShell().empty(), proven);
+        // A command approved unread (a script, an interpreter) can leave the shell outside the folders.
+        ToolCallback runShell = std::move(sh.callback);
+        sh.callback = [ws, shell, runShell](const json& args) -> json {
+            ShellSession& session = shell ? *shell : BashTools::defaultSession();
+            returnShellInside(*ws, session);
+            json result = runShell(args);
+            const std::string left = returnShellInside(*ws, session);
+            if (!left.empty() && result.is_object()) {
+                result["cwd"] = session.cwd();
+                result["note"] = "The command left the shell in " + left + ", outside the folders this agent may "
+                                 "use, so the shell was moved back to " + session.cwd() + ".";
+            }
+            return result;
+        };
         sh.needsConfirm = [proven](const json& args) { return !proven(args); };
         reg.registerTool(std::move(sh));
         reg.registerTool(BashTools::envInspect());
@@ -186,6 +204,31 @@ void GaiaAgent::registerTools() {
                         return ws->judgeCommand(args["command"].get<std::string>(), !BashTools::detectShell().empty());
                     });
                 }
+                // What the command reaches once the shell has expanded and resolved its words.
+                if (why.empty()) {
+                    ShellSession& session = options_.shell ? *options_.shell : BashTools::defaultSession();
+                    returnShellInside(*ws, session);
+                    ShellJudgement judged;
+                    why = openOutside([&] {
+                        judged = judgeShell(args["command"].get<std::string>());
+                        if (judged.outsideWord.empty()) return Workspace::Outside{};
+                        if (!judged.refusal.empty()) return Workspace::Outside{judged.refusal, ""};
+                        return Workspace::Outside{ws->outsideRefusal(judged.outsideWord, judged.outsideWhy),
+                                                  judged.outsidePath};
+                    });
+                    if (why.empty() && !judged.opaque.empty() && options_.unattended) {
+                        const std::string command = args["command"].get<std::string>();
+                        size_t cut = std::min<size_t>(command.size(), 80);
+                        while (cut > 0 && cut < command.size() && (static_cast<unsigned char>(command[cut]) & 0xC0) == 0x80) --cut;
+                        why = "Not run: `" + command.substr(0, cut) +
+                              "` needs a person's approval, because " + judged.opaque +
+                              ", so GAIA can't check that it stays inside the folders this agent may use. Nobody "
+                              "can approve it in this run. Do the task with the file tools or with commands GAIA "
+                              "can check (ls, cat, grep, cp, mv, mkdir and the like, on paths inside those "
+                              "folders). If that can't be done, tell the user the exact command to run "
+                              "themselves, or to start gaiacpp with --full-access.";
+                    }
+                }
             }
             if (args.contains("command") && args["command"].is_string()) {
                 if (why.empty()) {
@@ -196,15 +239,18 @@ void GaiaAgent::registerTools() {
                     }
                     why = unquotedHostileName(args["command"].get<std::string>(), names);
                 }
-                if (why.empty()) why = pastedDataRefusal(args["command"].get<std::string>(), foldersInUse());
-                if (why.empty()) why = oneLineBlockRefusal(args["command"].get<std::string>());
+                // Advice, not safety: these read the command with any very long word cut short, since
+                // their patterns cost the square of one.
+                const std::string advised = textForChecks(args["command"].get<std::string>(), 64 * 1024, 1024);
+                if (why.empty()) why = pastedDataRefusal(advised, foldersInUse());
+                if (why.empty()) why = oneLineBlockRefusal(advised);
                 if (why.empty()) {
                     std::vector<CallSeen> seen;
                     for (const auto& c : turnToolCalls()) seen.push_back({c.name, c.args, c.output});
                     std::vector<std::string> places = foldersInUse();
                     std::error_code ec;
                     places.push_back(fs::current_path(ec).u8string());
-                    const std::string table = unreadTable(args["command"].get<std::string>(), seen, places);
+                    const std::string table = unreadTable(advised, seen, places);
                     std::lock_guard<std::mutex> lock(turnListingMu_);
                     if (!table.empty() && turnTablesPointedAt_.insert(table).second) {
                         why = "Not run yet. " + table + " is a small table: read it with file_read first. That "
@@ -222,7 +268,7 @@ void GaiaAgent::registerTools() {
                         }
                         earlier.push_back({c.name, ranArgs, c.output});
                     }
-                    why = repeatedCommandRefusal(args["command"].get<std::string>(), earlier);
+                    why = repeatedCommandRefusal(advised, earlier);
                 }
             }
         } else if (args.contains("path") && args["path"].is_string()) {
@@ -234,6 +280,9 @@ void GaiaAgent::registerTools() {
                           args["path"].get<std::string>() + " would land in the working folder instead. Write it to " +
                           beside + ".";
                 }
+            }
+            if (why.empty() && (tool.name == "file_write" || tool.name == "file_edit")) {
+                why = ws->sharedFileRefusal(args["path"].get<std::string>());
             }
             // Whole words: a folder named locked_config is not the user acknowledging a lock.
             static const std::regex mentionsLock(R"(\b(?:lock|locked|lockfile|managed|anyway)\b)",
@@ -275,6 +324,34 @@ void GaiaAgent::registerTools() {
                    : std::function<std::string(const std::string&)>()));
         }
     }
+}
+
+std::string GaiaAgent::returnShellInside(const Workspace& ws, ShellSession& session) {
+    const std::string at = session.cwd();
+    if (ws.locate(at, "").allowed || !ws.attachedFileFolder(at).empty()) return "";
+    const std::string start = session.startCwd();
+    session.setCwd(ws.locate(start, "").allowed ? start : ws.roots().front());
+    return at;
+}
+
+ShellJudgement GaiaAgent::judgeShell(const std::string& command) const {
+    ShellSession& session = options_.shell ? *options_.shell : BashTools::defaultSession();
+    if (BashTools::detectShell().empty()) {
+        // cmd.exe: only its plain reads are understood.
+        ShellJudgement out;
+        if (!isReadOnlyShellCommand(command, false)) out.opaque = "cmd.exe runs it, and GAIA reads only bash commands";
+        return out;
+    }
+    return judgeShellCommand(command, session.cwd(), session.environment(), workspace_.get());
+}
+
+std::string GaiaAgent::shellApprovalNote(const std::string& command) const {
+    if (!workspace_) return "";
+    const ShellJudgement judged = judgeShell(command);
+    if (judged.opaque.empty()) return "";
+    return "GAIA can't check where this command reads or writes: " + judged.opaque +
+           ". It can reach files outside the folders this chat may use" +
+           (options_.webOff ? ", and GAIA can't tell whether it goes online." : ".");
 }
 
 std::vector<std::string> GaiaAgent::foldersInUse() const {
@@ -339,12 +416,21 @@ std::optional<json> GaiaAgent::switchRefusal(const ToolInfo& tool, const json& a
     auto refuse = [](const std::string& why) {
         return json{{"status", "error"}, {"error", why}, {"executed", false}};
     };
+    // What an earlier command exported decides which program a later `$TOOL` is.
+    std::map<std::string, std::string> shellEnv;
+    std::string shellDir;
+    if (tool.name == "bash_execute" &&
+        ((options_.internetOff && options_.internetOff->load()) || options_.webOff)) {
+        ShellSession& session = options_.shell ? *options_.shell : BashTools::defaultSession();
+        shellEnv = session.environment();
+        shellDir = session.cwd();
+    }
     if (options_.internetOff && options_.internetOff->load()) {
-        const std::string why = internetRefusal(tool, args);
+        const std::string why = internetRefusal(tool, args, shellEnv, shellDir);
         if (!why.empty()) return refuse(why);
     }
     if (options_.webOff) {
-        const std::string why = webFetchRefusal(tool, args);
+        const std::string why = webFetchRefusal(tool, args, shellEnv, shellDir);
         if (!why.empty()) return refuse(why);
     }
     static const std::set<std::string> reads = {"recall"};
@@ -2145,12 +2231,46 @@ size_t utf8Cut(const std::string& text, size_t limit) {
 std::string reviewedPart(const std::string& answer) {
     constexpr size_t kHead = 6000;
     constexpr size_t kTail = 2000;
-    if (answer.size() <= kHead + kTail) return answer;
+    // No long unbroken run either: a backtracking pattern costs the square of one.
+    if (answer.size() <= kHead + kTail) return textForChecks(answer);
     size_t tail = answer.size() - kTail;
     while (tail < answer.size() && (static_cast<unsigned char>(answer[tail]) & 0xC0) == 0x80) ++tail;
-    return answer.substr(0, utf8Cut(answer, kHead)) + "\n...\n" + answer.substr(tail);
+    return textForChecks(answer.substr(0, utf8Cut(answer, kHead)) + "\n...\n" + answer.substr(tail));
 }
 }  // namespace
+
+std::vector<std::string> GaiaAgent::namedFiles(const std::string& text) {
+    static const std::set<std::string> kinds = {"md",   "txt", "csv",  "tsv",  "xls", "xlsx", "doc", "docx",
+                                                "pdf",  "ppt", "pptx", "json", "yml", "yaml", "log", "htm",
+                                                "html", "xml", "ini",  "toml", "eml", "zip"};
+    const auto isWord = [](char c) { return std::isalnum(static_cast<unsigned char>(c)) || c == '_'; };
+    const auto inName = [&](char c) { return isWord(c) || c == '.' || c == '&' || c == '~' || c == '-'; };
+    std::vector<std::string> names;
+    for (size_t at = 0; at < text.size();) {
+        if (!inName(text[at])) {
+            ++at;
+            continue;
+        }
+        size_t end = at;
+        while (end < text.size() && inName(text[end])) ++end;
+        // One pass from the right: the name ends at the last extension in the run.
+        size_t wordEnd = end;
+        for (size_t i = end; i-- > at + 1;) {
+            if (isWord(text[i])) continue;
+            const size_t stop = wordEnd;
+            wordEnd = i;
+            if (text[i] != '.') continue;
+            std::string ext = text.substr(i + 1, stop - i - 1);
+            std::transform(ext.begin(), ext.end(), ext.begin(),
+                           [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+            if (!kinds.count(ext)) continue;
+            names.push_back(text.substr(at, i + 1 + ext.size() - at));
+            break;
+        }
+        at = end;
+    }
+    return names;
+}
 
 std::string GaiaAgent::oneLineBlockRefusal(const std::string& command) {
     static const std::regex inline_(R"(\bpython[\d.]*(?:\.exe)?\s+-c\s+(["']))", std::regex::icase);
@@ -2775,14 +2895,9 @@ std::optional<std::string> GaiaAgent::reviewAnswer(const std::string& answer, bo
         std::vector<CallSeen> seen;
         for (const auto& c : calls) seen.push_back({c.name, c.args, c.output});
         // A named file that isn't there is the missing thing, not a fact other files might hold.
-        static const std::regex namedFile(
-            R"([\w.&~-]+\.(?:md|txt|csv|tsv|xlsx?|docx?|pdf|pptx?|json|ya?ml|log|html?|xml|ini|toml|eml|zip)\b)",
-            std::regex::icase);
         bool namedFileMissing = false;
-        const std::string& request = turnRequest();
-        for (auto it = std::sregex_iterator(request.begin(), request.end(), namedFile);
-             it != std::sregex_iterator() && !namedFileMissing; ++it) {
-            namedFileMissing = !exists(it->str());
+        for (const auto& named : namedFiles(turnRequest())) {
+            if ((namedFileMissing = !exists(named))) break;
         }
         if (!lookedNote && !namedFileMissing) {
             if (auto note = unopenedFilesNote(answer, roots, seen)) notes.push_back(*note);

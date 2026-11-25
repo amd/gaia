@@ -254,6 +254,60 @@ def test_the_turn_tells_the_app_about_the_listed_attachment(app):
     ]
 
 
+def test_an_attachment_the_agent_could_not_read_is_listed_as_failed(app):
+    """gaiacpp reads the upload itself; when it can't, the bar must not tick it."""
+    from gaia.ui._chat_helpers import _add_indexed_documents_to_library
+    from gaia.ui.turn_summary import TurnLedger
+
+    client, db = app
+    chat = db.create_session(title="A")
+    listed, readable = _send(
+        db, chat["id"], "Sum it up\n\n" + _attach(client, "report.pdf", b"not a pdf")
+    )
+    handler = MagicMock()
+    handler.turn_ledger = TurnLedger()
+    handler.turn_ledger.tool_started("index_document")
+    handler.turn_ledger.tool_args({"path": readable[0]})
+    handler.turn_ledger.tool_result("error: Can't read PDF report.pdf", False)
+
+    documents, _ = asyncio.run(
+        _add_indexed_documents_to_library(db, chat["id"], handler, listed)
+    )
+
+    assert [(d["id"], d["indexing_status"]) for d in documents] == [
+        (listed[0]["id"], "failed")
+    ]
+    assert db.get_document(listed[0]["id"])["last_error"] == "Can't read PDF report.pdf"
+
+
+def test_a_failed_read_the_agent_retried_is_not_marked(app):
+    from gaia.ui._chat_helpers import _add_indexed_documents_to_library
+    from gaia.ui.turn_summary import TurnLedger
+
+    client, db = app
+    chat = db.create_session(title="A")
+    listed, readable = _send(
+        db, chat["id"], "Read it\n\n" + _attach(client, "brief.md", b"ALPHA-7")
+    )
+    ledger = TurnLedger()
+    ledger.tool_started("index_document")
+    ledger.tool_args({"path": readable[0]})
+    ledger.tool_result("error: busy", False)
+    ledger.tool_started("index_document")
+    ledger.tool_args({"path": readable[0]})
+    ledger.tool_result(
+        {"status": "success", "file_path": readable[0], "num_chunks": 1}, True
+    )
+    handler = MagicMock()
+    handler.turn_ledger = ledger
+
+    documents, _ = asyncio.run(
+        _add_indexed_documents_to_library(db, chat["id"], handler, listed)
+    )
+
+    assert documents[0]["indexing_status"] != "failed"
+
+
 def test_attaching_a_removed_file_again_reopens_it(app):
     client, db = app
     chat = db.create_session(title="A")

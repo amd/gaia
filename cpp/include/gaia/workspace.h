@@ -3,11 +3,13 @@
 //
 // Workspace: the folders an agent may touch. Mirrors the Python agent's path
 // confinement (PathValidator / search scope): file tools refuse paths outside
-// the roots, and shell commands that name an existing location outside them
-// (other than system directories programs live in) are refused before running.
+// the roots, and shell commands that name a location outside them (other than
+// system directories programs live in) are refused before running.
 //
-// The shell check reads the command text, so it is a guard against an agent
-// wandering (a drive-wide `find`, a document's planted path), not a sandbox.
+// judgeCommand() reads the command's text for absolute paths, ~ paths and
+// links; judgeShellCommand() in shell_guard.h expands and resolves every word
+// the way the shell will. Both run before the command does: neither is a
+// sandbox, and a command they can't read is reported as such, not passed.
 
 #pragma once
 
@@ -59,6 +61,30 @@ public:
 
     /// True when `path` (relative to the working directory) lies inside a root.
     bool contains(const std::string& path) const;
+
+    /// Where a path leads, and whether a shell command may use it.
+    struct Place {
+        bool allowed = false;  // inside a root, or in a system folder
+        bool system = false;   // allowed only as a system folder (/usr, /etc, /tmp)
+        std::string real;      // every link followed; "" when that can't be worked out
+    };
+
+    /// Where `path` leads for a shell standing in `cwd` ("" = the working directory).
+    Place locate(const std::string& path, const std::string& cwd) const;
+
+    /// False when the tree under `dir` holds a link that leads outside the roots,
+    /// or is too large to tell: a command that follows links would leave through it.
+    bool linksStayInside(const std::string& dir) const;
+
+    /// True when `path` is a link, or a folder with a link somewhere in it (or too large to tell).
+    static bool holdsLinks(const std::string& path);
+
+    /// Why a file tool must not write to `path`: the file has a second name (a hard
+    /// link) that may lie outside the roots. "" when it has one name or isn't there yet.
+    std::string sharedFileRefusal(const std::string& path) const;
+
+    /// The refusal for a place a shell command names, with `why` added. Public for the shell guard.
+    std::string outsideRefusal(const std::string& word, const std::string& why = "") const;
 
     /// "" when the path is allowed, else the refusal the model should read.
     std::string checkPath(const std::string& path) const;

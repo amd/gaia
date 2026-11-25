@@ -18,6 +18,7 @@
 #include <gaia/lemonade_client.h>
 #include <gaia/memory_store.h>
 #include <gaia/process.h>
+#include <gaia/shell_guard.h>
 #include <gaia/skill_library.h>
 #include <gaia/web_tools.h>
 #include <gaia/workspace.h>
@@ -38,6 +39,9 @@ public:
         // with fullAccess, which lets the tools reach anywhere the user can.
         std::vector<std::string> workspaceRoots;
         bool fullAccess = false;
+        // Approvals are answered by a switch, not a person (a headless run, MCP, serve). A shell
+        // command GAIA can't check then doesn't run: only fullAccess, the user's own choice, runs it.
+        bool unattended = false;
         bool documents = true;       // index_document / query_documents
         std::string embeddingModel;  // empty = keyword-only retrieval
         bool memory = true;          // remember / recall across sessions
@@ -65,6 +69,10 @@ public:
     /// folders: `ask` returns true to let that path in for the agent's lifetime.
     /// Never set, such a call is refused with the terminal's --allow-dir advice.
     void setPathAccessPrompt(std::function<bool(const std::string& path)> ask);
+
+    /// What the approval card for a shell command must say besides the command: that GAIA can't
+    /// check where it reads or writes, and why. "" when the command was checked.
+    std::string shellApprovalNote(const std::string& command) const;
 
     /// delegate_task for this agent: runs read-only helpers on stated tasks.
     ToolInfo delegateTaskTool();
@@ -150,6 +158,10 @@ public:
     /// Why a one-line `python -c` script cannot run (a block statement after a semicolon); empty if it can.
     static std::string oneLineBlockRefusal(const std::string& command);
 
+    /// File names with a document extension (report.md, a.b-c.xlsx) in text, in
+    /// order. One pass: the time taken grows with the length, never its square.
+    static std::vector<std::string> namedFiles(const std::string& text);
+
     static std::string pastedDataRefusal(const std::string& command, const std::vector<std::string>& roots);
 
     /// The small CSV a command names that file_read has not returned this turn; empty when there is none.
@@ -227,6 +239,13 @@ private:
 
     /// The chat's switches, checked before a tool can ask for approval.
     std::optional<json> switchRefusal(const ToolInfo& tool, const json& args) const;
+
+    /// The command judged as this chat's shell will run it: its folder, its exported variables.
+    ShellJudgement judgeShell(const std::string& command) const;
+
+    /// Moves a shell standing outside the folders back to where it started. Returns the
+    /// folder it had drifted to, "" when it was inside.
+    static std::string returnShellInside(const Workspace& ws, ShellSession& session);
     bool memoryOff() const { return options_.memoryOff && options_.memoryOff->load(); }
 
     Options options_;

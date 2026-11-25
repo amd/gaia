@@ -55,6 +55,11 @@ namespace {
 
 constexpr auto kWait = std::chrono::seconds(30);
 
+// What an approval card adds under a command whose program GAIA has no rule for.
+const char* const kUncheckedProgram =
+    "GAIA can't check where this command reads or writes: GAIA has no rule for what this program reads or "
+    "writes. It can reach files outside the folders this chat may use.";
+
 // An input stream that blocks for more data until close(), like a pipe.
 class PipeBuf : public std::streambuf {
 public:
@@ -864,10 +869,12 @@ TEST_F(GaiacppStdio, AZeroWidthCharacterInAShellCommandShowsAsACode) {
     ask("make a folder");
     const json prompt = waitFor("needs_confirmation");
     ASSERT_TRUE(prompt.is_object());
-    EXPECT_EQ(prompt["summary"], "mk[U+2060]dir inv[U+200B]oice");
+    // mk + joiner + dir is not mkdir, so the card also says the command could not be checked.
+    EXPECT_EQ(prompt["summary"], std::string("mk[U+2060]dir inv[U+200B]oice\n\n") + kUncheckedProgram);
     const std::string scope = prompt.value("always_scope", "");
     for (const char* hidden : {"\xE2\x81\xA0", "\xE2\x80\x8B"}) {
         EXPECT_EQ(scope.find(hidden), std::string::npos) << scope;
+        EXPECT_EQ(prompt.value("summary", "").find(hidden), std::string::npos);
     }
     decide("deny", prompt["confirm_id"]);
     ASSERT_TRUE(waitTerminal(1).is_object());
@@ -911,11 +918,89 @@ TEST_F(GaiacppStdio, AJoinerInAProgramNameShowsAsACodeInTheCardAndItsAlwaysLabel
     const json prompt = waitFor("needs_confirmation");
     ASSERT_TRUE(prompt.is_object());
     // A command's words get the name rule; its line breaks and indents stay layout.
-    EXPECT_EQ(prompt["summary"], "gi[U+200D]t status\n\tgi[U+200C]t log");
-    // The label is one line: the name rule codes its line break and tab too.
-    EXPECT_EQ(prompt["always_scope"], "Run `gi[U+200D]t status[U+000A][U+0009]gi[U+200C]t log`");
+    EXPECT_EQ(prompt["summary"], std::string("gi[U+200D]t status\n\tgi[U+200C]t log\n\n") + kUncheckedProgram);
+    EXPECT_FALSE(prompt.contains("always_scope")) << "two commands on two lines get no 'always': " << prompt.dump();
     decide("deny", prompt["confirm_id"]);
     ASSERT_TRUE(waitTerminal(1).is_object());
+
+    // One command: its label is one line, and the name rule codes a tab in it too.
+    mock_.pushResponse(toolCall("bash_execute", {{"command", "gi\xE2\x80\x8D" "t status\tgi\xE2\x80\x8C" "t"}}));
+    mock_.pushResponse(answer("Not run."));
+    ask("check the repo again");
+    const json single = waitFor("needs_confirmation", 2);
+    ASSERT_TRUE(single.is_object());
+    EXPECT_EQ(single["always_scope"], "Run `gi[U+200D]t status[U+0009]gi[U+200C]t`");
+    decide("deny", single["confirm_id"]);
+    ASSERT_TRUE(waitTerminal(2).is_object());
+}
+
+// "mkdir a && rm -rf b" must never be offered as "Always allow Run `mkdir b`".
+TEST_F(GaiacppStdio, ALineOfSeveralCommandsIsNotOfferedAlways) {
+    Start s;
+    s.shell = true;
+    start(s);
+    int query = 0;
+    for (const char* chained : {"mkdir made1 && rm -rf made3", "mkdir a; rmdir a", "ls nope || mkdir b", "mkdir c | cat",
+                                "(mkdir d)", "mkdir \"$(date +%s)\"", "mkdir e\nrmdir e", "mkdir f &"}) {
+        mock_.pushResponse(toolCall("bash_execute", {{"command", chained}}));
+        mock_.pushResponse(answer("Not run."));
+        ask("run it");
+        const json prompt = waitFor("needs_confirmation", ++query);
+        ASSERT_TRUE(prompt.is_object()) << chained;
+        EXPECT_EQ(prompt.value("summary", "").rfind(chained, 0), 0u) << "the card shows the whole line: " << prompt.dump();
+        EXPECT_FALSE(prompt.contains("always_scope")) << chained << ": " << prompt.dump();
+        // An "always" sent anyway approves this one run and grants nothing.
+        decide("always", prompt["confirm_id"]);
+        ASSERT_TRUE(waitTerminal(query).is_object());
+    }
+    mock_.pushResponse(toolCall("bash_execute", {{"command", "mkdir made1 && rm -rf made3"}}));
+    mock_.pushResponse(answer("Not run."));
+    ask("run it again");
+    const json again = waitFor("needs_confirmation", ++query);
+    ASSERT_TRUE(again.is_object()) << "the earlier 'always' must not have been kept";
+    decide("deny", again["confirm_id"]);
+    ASSERT_TRUE(waitTerminal(query).is_object());
+
+    // One command keeps its offer, and quoted operators are not a chain.
+    mock_.pushResponse(toolCall("bash_execute", {{"command", "mkdir 'a && b'"}}));
+    mock_.pushResponse(answer("Not run."));
+    ask("one more");
+    const json single = waitFor("needs_confirmation", ++query);
+    ASSERT_TRUE(single.is_object());
+    EXPECT_TRUE(single.contains("always_scope")) << single.dump();
+    decide("deny", single["confirm_id"]);
+    ASSERT_TRUE(waitTerminal(query).is_object());
+}
+
+// A command the check can't read says so on its card, and a checked one says nothing more.
+TEST_F(GaiacppStdio, AnUncheckedShellCommandSaysSoOnItsCard) {
+    Start s;
+    s.shell = true;
+    start(s);
+    int query = 0;
+    for (const char* unchecked : {"python3 build.py", "make", "npm test", "bash run.sh", "git commit -m x"}) {
+        mock_.pushResponse(toolCall("bash_execute", {{"command", unchecked}}));
+        mock_.pushResponse(answer("Not run."));
+        ask("run it");
+        const json prompt = waitFor("needs_confirmation", ++query);
+        ASSERT_TRUE(prompt.is_object()) << unchecked;
+        const std::string summary = prompt.value("summary", "");
+        EXPECT_EQ(summary.rfind(unchecked, 0), 0u) << summary;
+        EXPECT_NE(summary.find("GAIA can't check where this command reads or writes"), std::string::npos) << summary;
+        EXPECT_NE(summary.find("It can reach files outside the folders this chat may use"), std::string::npos) << summary;
+        decide("deny", prompt["confirm_id"]);
+        ASSERT_TRUE(waitTerminal(query).is_object());
+    }
+    for (const char* checked : {"mkdir reports", "cp a.txt b.txt", "rm -f old.log", "touch x && mv x y"}) {
+        mock_.pushResponse(toolCall("bash_execute", {{"command", checked}}));
+        mock_.pushResponse(answer("Not run."));
+        ask("run it");
+        const json prompt = waitFor("needs_confirmation", ++query);
+        ASSERT_TRUE(prompt.is_object()) << checked;
+        EXPECT_EQ(prompt["summary"], checked) << "a checked command carries no warning";
+        decide("deny", prompt["confirm_id"]);
+        ASSERT_TRUE(waitTerminal(query).is_object());
+    }
 }
 
 // Content keeps the prose rule: emoji ZWJ sequences, an emoji's own selector and

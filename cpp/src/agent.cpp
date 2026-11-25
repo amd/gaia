@@ -25,6 +25,45 @@
 
 namespace gaia {
 
+std::string textForChecks(const std::string& text, size_t maxBytes, size_t maxRun) {
+    const auto continues = [&text](size_t at) {
+        return at < text.size() && (static_cast<unsigned char>(text[at]) & 0xC0) == 0x80;
+    };
+    const auto isSpace = [](char c) { return c == ' ' || (c >= '\t' && c <= '\r'); };
+    std::string out;
+    out.reserve((std::min)(text.size(), maxBytes) + 16);
+    // One pass over [from, to): a run is cut at maxRun and the rest of it skipped.
+    const auto append = [&](size_t from, size_t to) {
+        size_t run = 0;
+        for (size_t i = from; i < to; ++i) {
+            const char c = text[i];
+            if (isSpace(c)) {
+                run = 0;
+                out += c;
+            } else if (run >= maxRun && !continues(i)) {
+                out += ' ';
+                while (i + 1 < to && !isSpace(text[i + 1])) ++i;
+                run = 0;
+            } else {
+                ++run;
+                out += c;
+            }
+        }
+    };
+    if (text.size() <= maxBytes) {
+        append(0, text.size());
+        return out;
+    }
+    size_t head = maxBytes / 2;
+    while (head > 0 && continues(head)) --head;
+    size_t tail = text.size() - maxBytes / 2;
+    while (continues(tail)) ++tail;
+    append(0, head);
+    out += "\n...\n";
+    append(tail, text.size());
+    return out;
+}
+
 // Response format template (mirrors Python Agent._response_format_template)
 const std::string Agent::RESPONSE_FORMAT_TEMPLATE = R"(
 ==== RESPONSE FORMAT ====
@@ -2046,7 +2085,7 @@ json Agent::processQueryInternal(const std::vector<Message>& userMessages, int m
     }
 
     const std::string userInput = summarizeUserInput(userMessages);
-    turnRequest_ = userInput;
+    turnRequest_ = textForChecks(userInput);
     onTurnStart();
 
     console_->printProcessingStart(userInput, stepsLimit, cfg.modelId);

@@ -6158,6 +6158,40 @@ for (const locale of ['ar', 'en'] as const) {
     });
 }
 
+// Fast and light, a document it can't read, then a command it can't check: its English risk note and
+// the attach step's English narration both read in Arabic.
+const UNCHECKED_NOTE = "GAIA can't check where this command reads or writes: python3 runs code, which can read and write anywhere you can. It can reach files outside the folders this chat may use.";
+const PDF_CHECK = `python3 -c "import pypdf; print('ok')" 2>&1 || echo "no pdf library"`;
+
+for (const locale of ['ar', 'en'] as const) {
+    test(`Fast and light's unchecked-command card and its attach step read in the UI's language (${locale})`, async ({ page }) => {
+        await page.addInitScript(streamThenWait, [
+            { type: 'tool_start', tool: 'index_documents', detail: 'documents: report-q3.pdf', narration: 'Indexing documents' },
+            { type: 'tool_end', success: true },
+            {
+                type: 'permission_request', tool: 'run_shell_command', tool_label: 'Running a shell command', confirm_id: 'c-unchecked',
+                args: { command: PDF_CHECK, working_directory: '/Users/you/.gaia/documents', _risk_note: UNCHECKED_NOTE },
+            },
+        ]);
+        await open(page, `#${ANSWER_SESSION}`, locale);
+        await page.locator('textarea').first().fill('summarize this report in three points');
+        await page.keyboard.press('Enter');
+        const risk = page.locator('.perm-card-risk');
+        await expect(risk).toBeVisible();
+        const step = page.locator('.flow-tool-label').filter({ hasText: /documents|المستندات/ }).first();
+        if (locale === 'ar') {
+            await expect(risk).toContainText('لا يستطيع GAIA التحقق');
+            await expect(risk).toContainText('يشغّل تعليمات برمجية');
+            await expect(step).toContainText('أضاف المستندات');
+        } else {
+            await expect(risk).toHaveText(UNCHECKED_NOTE);
+            await expect(step).toHaveText('Added documents');
+        }
+        expect(await audit(page)).toEqual([]);
+        await shot(page, `permission-unchecked-native-${locale}`);
+    });
+}
+
 const FOLDER = 'C:\\Users\\you\\Documents\\uxa';
 const STEPS_THEN_PROMPT = [
     ...['expenses_oct.csv', 'expenses_nov.csv', 'notes.txt', 'draft_old.txt', 'a.txt', 'b.txt', 'c.txt', 'd.txt'].flatMap((f) => [

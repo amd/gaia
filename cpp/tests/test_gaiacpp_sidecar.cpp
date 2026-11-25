@@ -956,6 +956,59 @@ TEST_F(GaiacppSidecar, AlwaysOnAFileWriteAllowsOnlyThatWrite) {
     EXPECT_TRUE(json::parse(send("GET", "/v1/gaia/sessions/chat-write/grants", bearer())->body)["grants"].empty());
 }
 
+#ifndef _WIN32
+// The desktop card for "mkdir a && rm -rf b" must not offer "Always allow Run `mkdir b`".
+TEST_F(GaiacppSidecar, ALineOfSeveralCommandsIsNotOfferedAlways) {
+    const std::string chained = "mkdir " + (work_ / "made1").string() + " && rm -rf " + (work_ / "made3").string();
+    for (int i = 0; i < 2; ++i) {
+        mock().pushResponse(toolReply("bash_execute", {{"command", chained}}));
+        mock().pushResponse(answerReply("ok"));
+    }
+    mock().pushResponse(toolReply("bash_execute", {{"command", "mkdir 'one && two'"}}));
+    mock().pushResponse(answerReply("ok"));
+    ASSERT_NO_FATAL_FAILURE(startSidecar());
+    const json allowed = json::array({work_.string()});
+    fs::create_directories(work_ / "made3");
+
+    // "always" is sent anyway, as a host that still drew the button would.
+    auto card = runTurn(*this, port_, "run-ch1", "chat-chain", allowed, "always");
+    ASSERT_TRUE(card);
+    EXPECT_EQ((*card)["args"]["command"], chained) << "the card shows the whole line";
+    EXPECT_FALSE(card->contains("always_scope")) << card->dump();
+    EXPECT_FALSE(card->contains("always_label")) << card->dump();
+    EXPECT_TRUE(json::parse(send("GET", "/v1/gaia/sessions/chat-chain/grants", bearer())->body)["grants"].empty());
+
+    // Nothing was granted: the same line asks again.
+    fs::remove_all(work_ / "made1");
+    ASSERT_TRUE(runTurn(*this, port_, "run-ch2", "chat-chain", allowed, "deny")) << "the same chained line must ask again";
+
+    // One command whose words hold an operator in quotes keeps its offer.
+    auto single = runTurn(*this, port_, "run-ch3", "chat-chain", allowed, "deny");
+    ASSERT_TRUE(single);
+    EXPECT_EQ((*single)["always_scope"], "bash_execute:exact:mkdir 'one && two'") << single->dump();
+}
+
+// A command the check can't read carries that warning as the card's risk note.
+TEST_F(GaiacppSidecar, AnUncheckedShellCommandCarriesARiskNote) {
+    mock().pushResponse(toolReply("bash_execute", {{"command", "python3 report.py"}}));
+    mock().pushResponse(answerReply("ok"));
+    mock().pushResponse(toolReply("bash_execute", {{"command", "mkdir reports"}}));
+    mock().pushResponse(answerReply("ok"));
+    ASSERT_NO_FATAL_FAILURE(startSidecar());
+    const json allowed = json::array({work_.string()});
+
+    auto unchecked = runTurn(*this, port_, "run-un1", "chat-note", allowed, "deny");
+    ASSERT_TRUE(unchecked);
+    const std::string note = (*unchecked)["prompt_context"].value("risk_note", "");
+    EXPECT_NE(note.find("GAIA can't check where this command reads or writes"), std::string::npos) << unchecked->dump();
+    EXPECT_NE(note.find("It can reach files outside the folders this chat may use"), std::string::npos) << note;
+
+    auto checked = runTurn(*this, port_, "run-un2", "chat-note", allowed, "deny");
+    ASSERT_TRUE(checked);
+    EXPECT_FALSE(checked->contains("prompt_context") && (*checked)["prompt_context"].contains("risk_note")) << checked->dump();
+}
+#endif
+
 TEST_F(GaiacppSidecar, AlwaysOnAShellCommandCoversThatScopeInThatChatOnly) {
     // mkdir changes the disk, so it asks on every shell (bash, Git Bash, cmd.exe), and its grant is "mkdir commands".
     for (const char* command : {"mkdir sub1", "mkdir sub2", "rmdir sub1", "mkdir sub3", "mkdir sub4"}) {

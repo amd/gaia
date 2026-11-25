@@ -191,10 +191,12 @@ void printUsage() {
         "  --screenshots             Offer take_screenshot (off by default: privacy)\n"
         "  --allow-dir DIR           Also let the tools use DIR (repeatable). By default\n"
         "                            they are confined to the working directory\n"
-        "  --full-access             Let the tools reach any path the user can\n"
+        "  --full-access             Let the tools reach any path the user can, and run\n"
+        "                            shell commands GAIA can't check (scripts, python, make)\n"
         "  --dangerously-skip-permissions\n"
         "                            Run gated tools (shell, writes, web) without asking.\n"
-        "                            Without it, headless runs deny them.\n"
+        "                            Without it, headless runs deny them. A shell command\n"
+        "                            GAIA can't check still needs --full-access.\n"
         "Serve:\n"
         "  --host H                  Bind address (default 127.0.0.1)\n"
         "  --port N                  Port (default 8200; 0 = any free port)\n"
@@ -636,6 +638,12 @@ gaia::GaiaAgent::Options agentOptions(const Cli& cli, const Settings& settings) 
     return o;
 }
 
+// For a run where a switch answers the approvals and no person does.
+gaia::GaiaAgent::Options unattended(gaia::GaiaAgent::Options o) {
+    o.unattended = true;
+    return o;
+}
+
 // The server answers and the model is on disk, before a person waits on a load.
 void checkModelOnDisk(const Cli& cli, const Settings& settings) {
     gaia::LemonadeClient client(gaia::LemonadeClientConfig{settings.cfg.baseUrl});
@@ -648,13 +656,24 @@ std::atomic<gaia::ApiServer*> g_server{nullptr};
 
 std::atomic<int> g_signals{0};
 
+// How long `serve` has to stop cleanly after SIGTERM or Ctrl+C before it exits anyway.
+constexpr unsigned kServeStopGraceSeconds = 10;
+
 // First signal: stop gracefully. A second one exits at once, since a blocking
 // model call or tool can't see the cancel flag until it returns.
 extern "C" void onSignal(int) {
     if (g_signals.fetch_add(1) > 0) std::_Exit(130);
+#ifndef _WIN32
+    // A server must go down when told to, even if a request never reaches a cancel point.
+    if (g_server.load()) alarm(kServeStopGraceSeconds);
+#endif
     if (auto* s = g_server.load()) s->stop();
     if (auto* a = g_agent.load()) a->requestCancel();
 }
+
+#ifndef _WIN32
+extern "C" void onStopGraceOver(int) { std::_Exit(143); }
+#endif
 
 // Tools only: the calling program brings its own model, so none is contacted.
 int runMcp(const Cli& cli) {
@@ -664,7 +683,7 @@ int runMcp(const Cli& cli) {
     const Settings settings = buildSettings(cli);
     gaia::AgentConfig cfg = settings.cfg;
     cfg.silentMode = true;
-    gaia::GaiaAgent agent(cfg, agentOptions(cli, settings));
+    gaia::GaiaAgent agent(cfg, unattended(agentOptions(cli, settings)));
     pinConfig(agent, cfg);
     agent.setToolConfirmCallback([skip = cli.skipPermissions](const std::string& tool, const gaia::json&) {
         if (!skip) {
@@ -771,7 +790,7 @@ int runPrint(const Cli& cli) {
     checkModelOnDisk(cli, settings);
     gaia::AgentConfig cfg = settings.cfg;
     cfg.silentMode = true;  // stdout carries only the answer
-    gaia::GaiaAgent agent(cfg, agentOptions(cli, settings));
+    gaia::GaiaAgent agent(cfg, unattended(agentOptions(cli, settings)));
     pinConfig(agent, cfg);
     agent.setOutputHandler(std::make_unique<gaia::CleanConsole>());
     agent.setToolConfirmCallback([skip = cli.skipPermissions](const std::string& tool, const gaia::json&) {
@@ -876,7 +895,7 @@ int runServe(const Cli& cli) {
     const Settings settings = buildSettings(cli);
     gaia::AgentConfig cfg = settings.cfg;
     cfg.silentMode = true;
-    gaia::GaiaAgent agent(cfg, agentOptions(cli, settings));
+    gaia::GaiaAgent agent(cfg, unattended(agentOptions(cli, settings)));
     pinConfig(agent, cfg);
     agent.setOutputHandler(std::make_unique<gaia::CleanConsole>());
     // No person at the keyboard: the client that started the server owns safety.
@@ -932,7 +951,7 @@ int runServe(const Cli& cli) {
 int runInteractive(const Cli& cli) {
     const Settings settings = buildSettings(cli);
     checkModelOnDisk(cli, settings);
-    gaia::GaiaAgent agent(settings.cfg, agentOptions(cli, settings));
+    gaia::GaiaAgent agent(settings.cfg, cli.skipPermissions ? unattended(agentOptions(cli, settings)) : agentOptions(cli, settings));
     pinConfig(agent, settings.cfg);
     if (cli.skipPermissions) {
         agent.setToolConfirmCallback([](const std::string&, const gaia::json&) {
@@ -1087,6 +1106,9 @@ int main(int argc, char** argv) {
         }
         std::signal(SIGINT, onSignal);
         std::signal(SIGTERM, onSignal);
+#ifndef _WIN32
+        std::signal(SIGALRM, onStopGraceOver);
+#endif
 #ifdef SIGBREAK
         std::signal(SIGBREAK, onSignal);  // Ctrl+Break, and what a parent sends a console child on Windows
 #endif

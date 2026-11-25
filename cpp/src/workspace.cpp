@@ -266,6 +266,40 @@ std::string Workspace::refusal(const std::string& path) const {
            "). Work inside them. " + remedy;
 }
 
+std::string Workspace::outsideRefusal(const std::string& word, const std::string& why) const {
+    return refusal(word) + (why.empty() ? "" : " " + why);
+}
+
+Workspace::Place Workspace::locate(const std::string& path, const std::string& cwd) const {
+    const std::vector<std::string> roots = this->roots();
+    const std::string expanded = expandHome(fromShellPath(path));
+    if (outsideNetworkPath(expanded, roots)) return {};
+    fs::path p = fs::u8path(expanded);
+    const bool absolute = p.has_root_directory();
+    if (!absolute && !cwd.empty()) p = fs::u8path(fromShellPath(cwd)) / p;
+    Place place;
+    place.real = resolveWriteTarget(p.u8string());
+    if (place.real.empty()) return place;
+    const std::string abs = spelled(fs::u8path(place.real));
+    if (std::any_of(roots.begin(), roots.end(), [&](const std::string& r) { return under(abs, r); })) {
+        place.allowed = true;
+    } else if (inSystemDir(abs) || (absolute && looksLikePattern(abs))) {
+        place.allowed = place.system = true;
+    }
+    return place;
+}
+
+std::string Workspace::sharedFileRefusal(const std::string& path) const {
+    const std::string target = resolveWriteTarget(expandHome(path));
+    if (target.empty()) return "";
+    std::error_code ec;
+    const fs::path real = fs::u8path(target);
+    if (!fs::is_regular_file(real, ec) || fs::hard_link_count(real, ec) <= 1 || ec) return "";
+    return "Refused: " + path + " has a second name (a hard link), which may be a file outside the folders this "
+           "agent may use, and writing to it here would change that file too. To change only this copy, replace "
+           "it with a fresh one first (copy it to a new name, then move the copy over it).";
+}
+
 std::string Workspace::checkPath(const std::string& path) const { return judgePath(path).refusal; }
 
 Workspace::Outside Workspace::judgePath(const std::string& path) const {
@@ -546,6 +580,33 @@ bool followsLinks(const std::vector<std::string>& words) {
     return false;
 }
 }  // namespace
+
+bool Workspace::linksStayInside(const std::string& dir) const {
+    const std::vector<std::string> roots = this->roots();
+    const Inside inside = [&roots](const std::string& abs) {
+        return std::any_of(roots.begin(), roots.end(), [&](const std::string& r) { return under(abs, r); });
+    };
+    std::error_code ec;
+    const fs::path p = fs::u8path(dir);
+    if (!fs::is_directory(p, ec)) return true;
+    return treeStaysInside(p, inside);
+}
+
+bool Workspace::holdsLinks(const std::string& path) {
+    std::error_code ec;
+    const fs::path p = fs::u8path(path);
+    const fs::file_status st = fs::symlink_status(p, ec);
+    if (ec || st.type() == fs::file_type::not_found) return false;
+    if (isLink(st)) return true;
+    if (!fs::is_directory(st)) return false;
+    size_t seen = 0;
+    for (fs::recursive_directory_iterator it(p, fs::directory_options::skip_permission_denied, ec), end;
+         !ec && it != end; it.increment(ec)) {
+        if (++seen > 20000) return true;
+        if (it->is_symlink(ec)) return true;
+    }
+    return false;
+}
 
 bool Workspace::readsStayInside(const std::vector<std::vector<std::string>>& segments,
                                 const std::string& cwd) const {

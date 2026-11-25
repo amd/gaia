@@ -20,6 +20,7 @@
 #include <gaia/http_client.h>
 #include <gaia/lemonade_client.h>
 #include <gaia/memory_store.h>
+#include <gaia/shell_guard.h>
 #include <gaia/workspace.h>
 
 #include "gaia_agent.h"
@@ -951,7 +952,15 @@ ToolConfirmResult StdioServer::confirm(const std::string& tool, const json& args
     // "Always" is only offered where the grant is narrower than the tool: a
     // write to one file must not approve every later write.
     const ToolInfo* info = agent_.tools().findTool(tool);
-    const std::string key = info && info->grantScope ? tool + ":" + info->grantScope(args) : "";
+    const bool shell = tool == "bash_execute";
+    // A line of several commands gets no "always": a label for it reads as covering less than it does.
+    // One program's grant (`cmd:`) is the exception: `cd folder && one command`, where cd never asks.
+    const std::string scope = info && info->grantScope ? info->grantScope(args) : "";
+    const bool chained = shell && scope.rfind("cmd:", 0) != 0 &&
+                         judgeShellCommand(argOf(args, "command"), "", {}, nullptr).compound;
+    const std::string key = info && info->grantScope && !chained ? tool + ":" + scope : "";
+    // Read off the lock: it looks at the files the command names.
+    const std::string unchecked = shell ? agent_.shellApprovalNote(argOf(args, "command")) : "";
     const bool edit = tool == "file_write" || tool == "file_edit";
     // Judged off the lock: it reads the filesystem and PATH.
     const bool acceptable = edit && editIsInside(argOf(args, "path"), options_.editRoots);
@@ -968,7 +977,9 @@ ToolConfirmResult StdioServer::confirm(const std::string& tool, const json& args
         return ToolConfirmResult::UNATTENDED;
     }
     const std::string confirmId = randomHex(16);
-    const std::string summary = promptSummary(tool, args);
+    // The terminal UI shows the summary as the card's body, so the warning goes under the command.
+    const std::string summary =
+        promptSummary(tool, args) + (unchecked.empty() ? "" : "\n\n" + visible(unchecked, Shown::Line));
     json event = {{"type", "needs_confirmation"},
                   {"run_id", runId_},
                   {"action", tool},

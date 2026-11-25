@@ -27,6 +27,7 @@
 #include <gaia/lemonade_client.h>
 #include <gaia/memory_store.h>
 #include <gaia/security.h>
+#include <gaia/shell_guard.h>
 #include <gaia/skill_library.h>
 
 #include "bash_tools.h"
@@ -641,7 +642,12 @@ private:
         const bool pathAccess = tool == kPathAccessPrompt;
         // "Always" only where the grant is narrower than the tool: one file write must not approve every later one.
         const ToolInfo* info = s.agent ? s.agent->tools().findTool(tool) : nullptr;
-        const std::string key = info && info->grantScope ? tool + ":" + info->grantScope(args) : "";
+        // A line of several commands gets no "always": a label for it reads as covering less than it does.
+        // One program's grant (`cmd:`) is the exception: `cd folder && one command`, where cd never asks.
+        const std::string scope = info && info->grantScope ? info->grantScope(args) : "";
+        const bool chained = shell && scope.rfind("cmd:", 0) != 0 &&
+                             judgeShellCommand(args.value("command", ""), "", {}, nullptr).compound;
+        const std::string key = info && info->grantScope && !chained ? tool + ":" + scope : "";
         json ev = {{"type", "needs_confirmation"},
                    {"run_id", run->id},
                    {"action", tool},
@@ -658,6 +664,9 @@ private:
             ev["always_label"] = grantLabel(key);
         }
         if (!s.workingDirectory.empty()) ev["prompt_context"] = {{"working_directory", s.workingDirectory}};
+        // The card's own risk line: this command was not checked, and can reach outside the chat's folders.
+        const std::string unchecked = shell && s.agent ? s.agent->shellApprovalNote(args.value("command", "")) : "";
+        if (!unchecked.empty()) ev["prompt_context"]["risk_note"] = unchecked;
         run->push(ev);
         // Other chats may run while this one waits for its user.
         if (s.agent) s.agent->releaseNpu();
