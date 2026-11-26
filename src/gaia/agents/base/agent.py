@@ -766,6 +766,13 @@ _BUDGET_STOP_ANSWER = (
     "This turn reached its budget ({reason}) before an answer was ready."
 )
 
+# After a refused tool call, for an agent whose turn is a reply to a person.
+_REFUSED_ACTION_REPLY_PROMPT = (
+    "[note] That action was refused, and the refusal stands. Do not retry it, "
+    "and do not do the same thing through another tool. Tell the user plainly "
+    "what you could not do. Do not mention this note."
+)
+
 #: The result text of a turn the host's ``StopTurn`` ended. Not an answer.
 _HOST_STOP_ANSWER = (
     "This turn was stopped by the application before an answer was ready."
@@ -15240,9 +15247,14 @@ Do NOT wrap conversational replies in JSON.
 
                     # A reply to a person takes the tool's error as it stands
                     # in the conversation; asked for an analysis and a corrected
-                    # plan, the model answers with those instead.
+                    # plan, the model answers with those instead. A refusal
+                    # still needs saying: it must not be routed around.
                     if not self._conversation_host():
                         messages.append({"role": "user", "content": prompt})
+                    elif self._is_denial_error(last_error):
+                        messages.append(
+                            {"role": "user", "content": _REFUSED_ACTION_REPLY_PROMPT}
+                        )
 
                     # Reset state to planning after creating recovery prompt
                     self.execution_state = self.STATE_PLANNING
@@ -15973,7 +15985,15 @@ Do NOT wrap conversational replies in JSON.
                                 else:
                                     print(chunk, end="", flush=True)
                                 full_response += chunk
+                    except LeaseWaitCancelled:
+                        self.console.stop_progress()
+                        cancelled_by_console = True
+                        break
                     except Exception as e:  # pylint: disable=broad-exception-caught
+                        if stopped_by_user(e):
+                            self.console.stop_progress()
+                            cancelled_by_console = True
+                            break
                         final_answer = self._plan_request_failed(
                             e, steps_taken, conversation
                         )
@@ -16020,7 +16040,15 @@ Do NOT wrap conversational replies in JSON.
                             **self._conversation_request_kwargs(),
                             **self._reasoning_request_kwargs(),
                         )
+                    except LeaseWaitCancelled:
+                        self.console.stop_progress()
+                        cancelled_by_console = True
+                        break
                     except Exception as e:  # pylint: disable=broad-exception-caught
+                        if stopped_by_user(e):
+                            self.console.stop_progress()
+                            cancelled_by_console = True
+                            break
                         final_answer = self._plan_request_failed(
                             e, steps_taken, conversation
                         )

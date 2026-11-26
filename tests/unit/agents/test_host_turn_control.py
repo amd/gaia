@@ -29,6 +29,8 @@ from gaia.agents.base.turn_outcome import (
     STOP_MODEL_CALL,
     STOP_OUTPUT_CAP,
 )
+from gaia.daemon.broker_client import LeaseWaitCancelled
+from gaia.llm.retry import StreamCancelledError
 from gaia.testing import ScriptedLLMClient
 
 CUT_OFF = {"prompt_tokens": 500, "completion_tokens": 1200}
@@ -623,6 +625,24 @@ def test_stop_turn_in_a_request_for_a_plan_is_a_host_stop():
     assert result["host_stop"] == "quota"
 
 
+@pytest.mark.parametrize("host", ["conversation", "workspace"])
+@pytest.mark.parametrize(
+    "stop", [StreamCancelledError("stopped"), LeaseWaitCancelled("stopped")]
+)
+def test_a_stop_during_a_request_for_a_plan_is_cancelled_not_failed(host, stop):
+    model = _NativeClient()
+    model.push(say='{"thought": "t", "needs_plan": true}')
+    model.push(raises=stop)
+    agent = _SupportAgent(llm_client=model, host=host)
+
+    result = agent.process_query("Where is order 1?")
+
+    assert result["status"] == "cancelled"
+    assert result["stop_reason"] == STOP_CANCELLED
+    assert result["result"] == ""
+    assert agent.last_model_error is None
+
+
 # What the model is told after a tool error
 
 
@@ -659,6 +679,33 @@ def test_a_tool_error_reaches_a_person_s_agent_without_a_recovery_plan_prompt():
 
 def test_a_desktop_agent_is_still_asked_for_a_corrected_plan():
     assert "TOOL EXECUTION FAILED" in _sent_after_the_tool_error("workspace")
+
+
+class _RefusingLookupAgent(_SupportAgent):
+    def _register_tools(self) -> None:
+        local = {}
+
+        @tool(registry=local)
+        def get_order(order_number: str) -> dict:
+            """Look up an order by its number."""
+            return {"status": "error", "error": "Access denied for this account."}
+
+        self._instance_tools = local
+
+
+@pytest.mark.parametrize("host", ["conversation", "workspace"])
+def test_after_a_refused_call_the_model_is_told_not_to_route_around_it(host):
+    model = _NativeClient()
+    model.push(call="get_order", order_number="1")
+    model.push(say="I can't show that order.")
+
+    _RefusingLookupAgent(llm_client=model, host=host).process_query("Where is it?")
+
+    sent = " ".join(str(m.get("content")) for m in model.call_history[1]["messages"])
+    assert "do not do the same thing through another tool" in sent.lower()
+    if host == "conversation":
+        assert "TOOL EXECUTION FAILED" not in sent
+        assert "plan" not in sent.lower().split("[note]")[1]
 
 
 # Replies the protocol must keep reading the way it did
