@@ -73,6 +73,11 @@ def _usage_as_stats(usage: Any) -> Dict[str, Any]:
         cached = details.get("cached_tokens")
         if cached is not None:
             stats["cached_tokens"] = cached
+    details = usage.get("completion_tokens_details")
+    if "reasoning_tokens" not in stats and isinstance(details, dict):
+        reasoning = details.get("reasoning_tokens")
+        if reasoning is not None:
+            stats["reasoning_tokens"] = reasoning
     return stats
 
 

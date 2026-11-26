@@ -32,7 +32,17 @@ from __future__ import annotations
 
 import json
 import re
-from typing import Any, Callable, Dict, FrozenSet, List, Optional, Sequence, Tuple
+from typing import (
+    Any,
+    Callable,
+    Dict,
+    FrozenSet,
+    List,
+    Optional,
+    Sequence,
+    Set,
+    Tuple,
+)
 
 from gaia.agents.base.checks import (
     CheckResult,
@@ -760,19 +770,26 @@ def observed_text(value: Any) -> str:
     so a value read from a file would no longer match itself.
     """
     parts: List[str] = []
+    # Containers on the way down: a tool result that holds itself has no end.
+    open_ids: Set[int] = set()
 
     def walk(item: Any) -> None:
         if item is None:
             return
         if isinstance(item, str):
             parts.append(item)
-        elif isinstance(item, dict):
-            for key, sub in item.items():
-                parts.append(str(key))
-                walk(sub)
-        elif isinstance(item, (list, tuple, set, frozenset)):
-            for sub in item:
-                walk(sub)
+        elif isinstance(item, (dict, list, tuple, set, frozenset)):
+            if id(item) in open_ids:
+                return
+            open_ids.add(id(item))
+            if isinstance(item, dict):
+                for key, sub in item.items():
+                    parts.append(str(key))
+                    walk(sub)
+            else:
+                for sub in item:
+                    walk(sub)
+            open_ids.discard(id(item))
         else:
             parts.append(str(item))
 

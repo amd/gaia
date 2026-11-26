@@ -85,6 +85,8 @@ def test_order_lookup():
 | `finish_reason="length"` | Reply is cut off at the output-token cap |
 | `usage={...}` | Reports these token counts for the reply |
 | `raises=exc` | The model call fails with `exc` |
+| `say="", finish_reason="length"` | The whole output cap went on reasoning: no answer and no tool call |
+| `delay_s=2` | The model takes two seconds to reply (or to fail), to test a deadline |
 
 A model call the script has no reply for raises `ScriptExhausted`, so a loop that
 makes an extra call fails the test. For text-only scripts,

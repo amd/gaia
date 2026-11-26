@@ -10,12 +10,15 @@ message is never changed by it.
 
 from __future__ import annotations
 
+import math
+import time
 from dataclasses import dataclass
 from typing import Any, Dict, Optional
 
 from gaia.agents.base.turn_outcome import (
     STOP_COST,
     STOP_DEADLINE,
+    STOP_HOST,
     STOP_MODEL_CALLS,
     STOP_OUTPUT_TOKENS,
 )
@@ -28,12 +31,59 @@ BUDGET_STOP_REASONS = frozenset(
 )
 
 
-class TurnBudgetExceeded(RequestRefused):
+#: Stop reasons that end a turn ``incomplete`` with no further model request.
+TURN_STOP_REASONS = BUDGET_STOP_REASONS | {STOP_HOST}
+
+
+class TurnStopped(RequestRefused):
+    """A model request was not sent because the turn is over. Not a failure."""
+
+    def __init__(self, message: str, reason: str):
+        super().__init__(message)
+        self.reason = reason
+
+
+class TurnBudgetExceeded(TurnStopped):
     """A model request was refused because the turn's budget has no room for it."""
 
     def __init__(self, reason: str):
-        super().__init__(f"turn budget reached: {reason}")
-        self.reason = reason
+        super().__init__(f"turn budget reached: {reason}", reason)
+
+
+class StopTurn(TurnStopped):
+    """Raise from ``before_model_call`` or a model client to end the turn now.
+
+    The request is not sent or retried, no closing request follows, and the
+    result is ``incomplete`` with ``stop_reason`` ``"host_stop"`` and *detail*
+    in ``host_stop``.
+    """
+
+    def __init__(self, detail: str = ""):
+        super().__init__(f"the host stopped the turn: {detail}", STOP_HOST)
+        self.detail = str(detail)
+
+
+class AgentBusy(RuntimeError):
+    """``process_query`` was called while another thread's turn was running."""
+
+
+@dataclass(frozen=True)
+class ModelCallContext:
+    """What ``before_model_call`` is told about the request about to be sent.
+
+    Attributes:
+        model_calls: Requests this turn has already sent.
+        input_tokens: Input tokens those requests reported.
+        output_tokens: Output tokens those requests reported.
+        elapsed_s: Seconds since the turn started.
+        seconds_left: Seconds until the turn's deadline; ``None`` without one.
+    """
+
+    model_calls: int
+    input_tokens: int
+    output_tokens: int
+    elapsed_s: float
+    seconds_left: Optional[float]
 
 
 class BudgetNeedsUsage(RuntimeError):
@@ -53,12 +103,19 @@ class TurnBudget:
         max_cost_usd: Dollars at the model's list price. The model must be on
             the rate card (:mod:`gaia.llm.pricing`), or the turn is refused
             when it starts.
+        deadline_at: A ``time.monotonic()`` value the turn must end by, for a
+            turn whose clock started before GAIA saw it (time in a queue).
+            With ``deadline_s`` too, the earlier of the two applies.
+        min_call_seconds: A request is not started with less than this long
+            left before the deadline. Needs ``deadline_s`` or ``deadline_at``.
     """
 
     max_model_calls: Optional[int] = None
     max_output_tokens: Optional[int] = None
     deadline_s: Optional[float] = None
     max_cost_usd: Optional[float] = None
+    deadline_at: Optional[float] = None
+    min_call_seconds: Optional[float] = None
 
     def __post_init__(self) -> None:
         for name in ("max_model_calls", "max_output_tokens"):
@@ -70,7 +127,22 @@ class TurnBudget:
                     f"TurnBudget.{name} must be a positive integer or None, "
                     f"got {value!r}."
                 )
-        for name in ("deadline_s", "max_cost_usd"):
+        at = self.deadline_at
+        if at is not None and (
+            isinstance(at, bool) or not isinstance(at, (int, float)) or math.isnan(at)
+        ):
+            raise ValueError(
+                "TurnBudget.deadline_at must be a time.monotonic() value or "
+                f"None, got {at!r}."
+            )
+        if self.min_call_seconds is not None and (
+            self.deadline_s is None and self.deadline_at is None
+        ):
+            raise ValueError(
+                "TurnBudget.min_call_seconds needs a deadline to measure "
+                "against: set deadline_s or deadline_at as well."
+            )
+        for name in ("deadline_s", "max_cost_usd", "min_call_seconds"):
             value = getattr(self, name)
             if value is not None and (
                 isinstance(value, bool)
@@ -81,6 +153,17 @@ class TurnBudget:
                     f"TurnBudget.{name} must be a positive number or None, "
                     f"got {value!r}."
                 )
+
+    def seconds_left(
+        self, elapsed_s: float, now: Optional[float] = None
+    ) -> Optional[float]:
+        """Seconds until the deadline, negative once past; ``None`` without one."""
+        left = []
+        if self.deadline_s is not None:
+            left.append(self.deadline_s - elapsed_s)
+        if self.deadline_at is not None:
+            left.append(self.deadline_at - (time.monotonic() if now is None else now))
+        return min(left) if left else None
 
     def require_price(self, model: Optional[str]) -> None:
         """Refuse a dollar limit on a model the rate card cannot price."""
@@ -146,7 +229,8 @@ def exhausted(
     """The stop reason when *budget* has no room for another model request."""
     if budget is None:
         return None
-    if budget.deadline_s is not None and elapsed_s >= budget.deadline_s:
+    left = budget.seconds_left(elapsed_s)
+    if left is not None and (left <= 0 or left < (budget.min_call_seconds or 0)):
         return STOP_DEADLINE
     if (
         budget.max_model_calls is not None

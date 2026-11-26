@@ -62,6 +62,7 @@ class ScriptedLLMClient(LLMClient):
         finish_reason: Optional[str] = None,
         usage: Optional[Dict[str, Any]] = None,
         raises: Optional[BaseException] = None,
+        delay_s: float = 0.0,
         **tool_args: Any,
     ) -> "ScriptedLLMClient":
         """Queue the model's next reply.
@@ -75,6 +76,8 @@ class ScriptedLLMClient(LLMClient):
                 cut off at the output-token cap.
             usage: OpenAI-shape token counts reported for this reply.
             raises: An exception the client raises instead of replying.
+            delay_s: Seconds the client waits before it replies or raises,
+                to play a slow model against a deadline.
         """
         if raises is None and say is None and call is None:
             raise ValueError("push() needs say=, call= or raises=.")
@@ -90,6 +93,7 @@ class ScriptedLLMClient(LLMClient):
                 "finish_reason": finish_reason,
                 "usage": usage,
                 "raises": raises,
+                "delay_s": delay_s,
             }
         )
         return self
@@ -125,6 +129,8 @@ class ScriptedLLMClient(LLMClient):
                 f"sent: {str(prompt)[:200]!r}"
             )
         reply = self._queue.pop(0)
+        if reply["delay_s"] > 0:
+            time.sleep(reply["delay_s"])
         if reply["raises"] is not None:
             raise reply["raises"]
         text = self._render(reply, native=bool(kwargs.get("tools")))

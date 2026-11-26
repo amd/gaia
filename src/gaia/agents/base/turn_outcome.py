@@ -31,6 +31,8 @@ STOP_MODEL_CALLS = "model_calls"
 STOP_OUTPUT_TOKENS = "output_tokens"
 #: ``TurnBudget.max_cost_usd`` was reached.
 STOP_COST = "cost"
+#: The host ended the turn: ``before_model_call`` or its client raised ``StopTurn``.
+STOP_HOST = "host_stop"
 #: A model call failed for good.
 STOP_MODEL_CALL = "model_call"
 #: Replies kept being cut off at the output-token cap.

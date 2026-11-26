@@ -42,17 +42,22 @@ from typing import (
     MutableMapping,
     Optional,
     Sequence,
+    Set,
     Tuple,
     Union,
 )
 
 from gaia.agents.base import turn_metrics
 from gaia.agents.base.budget import (
-    BUDGET_STOP_REASONS,
+    TURN_STOP_REASONS,
+    AgentBusy,
     BudgetNeedsUsage,
+    ModelCallContext,
+    StopTurn,
     TurnBudget,
     TurnBudgetExceeded,
     TurnSpend,
+    TurnStopped,
 )
 from gaia.agents.base.budget import exhausted as budget_exhausted
 from gaia.agents.base.call_risk import (
@@ -218,6 +223,7 @@ from gaia.agents.base.turn_outcome import (
     HOST_WORKSPACE,
     HOSTS,
     STOP_CANCELLED,
+    STOP_HOST,
     STOP_MODEL_CALL,
     STOP_OUTPUT_CAP,
     STOP_REPROMPT_BUDGET,
@@ -758,6 +764,11 @@ def _text_beside_tool_calls(reply: str) -> str:
 #: The result text of a turn a ``TurnBudget`` stopped. Not an answer.
 _BUDGET_STOP_ANSWER = (
     "This turn reached its budget ({reason}) before an answer was ready."
+)
+
+#: The result text of a turn the host's ``StopTurn`` ended. Not an answer.
+_HOST_STOP_ANSWER = (
+    "This turn was stopped by the application before an answer was ready."
 )
 
 #: Why a conversation host's turn is not a success when its reply stayed malformed.
@@ -1745,7 +1756,11 @@ _MAX_CUT_OFF_CONTINUATIONS = 2
 _MAX_STREAM_CUT_OFF_RETRIES = 2
 STREAM_CUT_OFF_ERROR = "stream_cut_off"
 # Errors the loop recovered from once a later reply parsed: not a failed turn.
-_RECOVERABLE_ERROR_TYPES = frozenset({"tool_call_parse_error", STREAM_CUT_OFF_ERROR})
+_RECOVERABLE_ERROR_TYPES = frozenset(
+    {"tool_call_parse_error", STREAM_CUT_OFF_ERROR, "output_truncated"}
+)
+# Guards the check-and-claim of an agent's turn; held for a few statements.
+_TURN_CLAIM_LOCK = threading.Lock()
 _CUT_OFF_CONTINUE_PROMPT = (
     "Your last reply was cut off at the output-token limit before it finished, "
     "so nothing in it was carried out. Continue from where you stopped: keep "
@@ -1762,10 +1777,58 @@ _CUT_OFF_ALL_THINKING_PROMPT = (
     "small step and make one tool call now: run an experiment, or write a "
     "rough first version to a file and improve it from there."
 )
+# The same, for an agent whose turn is a reply to a person, not work on files.
+_CUT_OFF_ALL_THINKING_REPLY_PROMPT = (
+    "Your last reply was cut off at the output-token limit with nothing in "
+    "it: the whole limit went on thinking, so there is no answer and no tool "
+    "call. Think for a few lines at most, then make the next tool call or "
+    "give the answer."
+)
+
+
+def _claiming_turn(entry: Callable[..., Any]) -> Callable[..., Any]:
+    """Wrap a subclass's ``process_query`` so it claims the turn before it runs."""
+
+    @functools.wraps(entry)
+    def process_query(self, *args: Any, **kwargs: Any) -> Any:
+        if not self._claim_turn():
+            return entry(self, *args, **kwargs)
+        try:
+            return entry(self, *args, **kwargs)
+        finally:
+            self._release_turn()
+
+    process_query._claims_turn = True
+    return process_query
+
+
+def _holds_itself(value: Any) -> bool:
+    """Whether a tool result reaches itself through its own dicts and lists."""
+    open_ids: Set[int] = set()
+    # (container, entered): a container is closed again once its items are done.
+    stack: List[Tuple[Any, bool]] = [(value, False)]
+    while stack:
+        item, entered = stack.pop()
+        if not isinstance(item, (dict, list, tuple)):
+            continue
+        if entered:
+            open_ids.discard(id(item))
+            continue
+        if id(item) in open_ids:
+            return True
+        open_ids.add(id(item))
+        stack.append((item, True))
+        stack.extend(
+            (sub, False) for sub in (item.values() if isinstance(item, dict) else item)
+        )
+    return False
 
 
 def _was_all_thinking(
-    response: str, reasoning: Optional[str], stats: Optional[Dict[str, Any]]
+    response: str,
+    reasoning: Optional[str],
+    stats: Optional[Dict[str, Any]],
+    host_client: bool = False,
 ) -> bool:
     """True when a cut-off reply holds no text because thinking used the limit.
 
@@ -1774,7 +1837,11 @@ def _was_all_thinking(
     """
     if response.strip():
         return False
-    return bool(reasoning or (stats or {}).get("reasoning_tokens"))
+    stats = stats or {}
+    if reasoning or stats.get("reasoning_tokens"):
+        return True
+    # A host's client may report neither: output tokens with no text were thinking.
+    return bool(host_client and stats.get("completion_tokens"))
 
 
 _CUT_OFF_FAILURE_ANSWER = (
@@ -1816,6 +1883,8 @@ _ENVELOPE_KEYS = ("thought", "goal", "tool", "tool_args", "plan")
 # Every field the loop reads off a decoded reply. A JSON object carrying none
 # of them is the model's data, not a protocol envelope.
 _PROTOCOL_KEYS = frozenset(_ENVELOPE_KEYS) | {"answer", "tool_calls", "needs_plan"}
+# A reply holding one of these asks for work; its "answer" is not the turn's.
+_ACTION_KEYS = ("tool", "tool_calls", "plan", "needs_plan")
 #: Times the model is told its plan is malformed before the turn ends.
 _MAX_PLAN_CORRECTIONS = 2
 _PLAN_FORMAT_FAILURE_ANSWER = (
@@ -3859,6 +3928,16 @@ class Agent(abc.ABC):
     _turn_failure: Optional[Dict[str, Any]] = None
     _answer_checks: tuple = ()
     on_model_call: Optional[Callable[[Dict[str, Any]], None]] = None
+    before_model_call: Optional[Callable[[ModelCallContext], None]] = None
+    #: The thread running this agent's turn, and how deep it has re-entered.
+    _turn_owner: Optional[int] = None
+    _turn_depth: int = 0
+    #: The loop itself is running, not only a subclass's work around it.
+    _turn_in_loop: bool = False
+    #: ``cancel()`` was called for the turn in flight.
+    _turn_cancel_requested: bool = False
+    #: What the host's ``StopTurn`` said.
+    _host_stop_detail: Optional[str] = None
     #: A terminal tool ran: the next reply is the answer and gets no tools.
     _terminal_tool_done: bool = False
 
@@ -4032,6 +4111,7 @@ Do NOT wrap conversational replies in JSON.
             Sequence[Callable[[str, List[Dict]], Optional[str]]]
         ] = None,
         on_model_call: Optional[Callable[[Dict[str, Any]], None]] = None,
+        before_model_call: Optional[Callable[[ModelCallContext], None]] = None,
     ):
         """
         Initialize the Agent with LLM client.
@@ -4108,6 +4188,11 @@ Do NOT wrap conversational replies in JSON.
                           ``incomplete``.
             on_model_call: Called once per model request with ``{"usage",
                           "ok", "seconds", "finish_reason", "cost_usd"}``.
+            before_model_call: Called with a ``ModelCallContext`` before each
+                          model request is sent. It may wait (a rate limit),
+                          or raise ``StopTurn(detail)`` to end the turn with
+                          ``stop_reason`` ``"host_stop"``. Anything else it
+                          raises is treated as a failed model call.
             max_output_tokens: Output-token cap for each LLM reply, thinking
                           included. None (default) picks per model:
                           CLOUD_MAX_OUTPUT_TOKENS for a Lemonade cloud model,
@@ -4182,6 +4267,12 @@ Do NOT wrap conversational replies in JSON.
                 f"on_model_call must be callable, got {type(on_model_call).__name__}."
             )
         self.on_model_call = on_model_call
+        if before_model_call is not None and not callable(before_model_call):
+            raise TypeError(
+                "before_model_call must be callable, got "
+                f"{type(before_model_call).__name__}."
+            )
+        self.before_model_call = before_model_call
         self.device = device
         if tool_scope is None:
             self._tool_scope = None
@@ -8128,6 +8219,17 @@ Do NOT wrap conversational replies in JSON.
             not _PROTOCOL_KEYS.intersection(parsed) or self._is_data_not_a_plan(parsed)
         ):
             return {"thought": "", "goal": "", "answer": (response or "").strip()}
+        if (
+            isinstance(parsed, dict)
+            and parsed.get("answer") is not None
+            and not isinstance(parsed["answer"], str)
+            and not any(parsed.get(key) for key in _ACTION_KEYS)
+        ):
+            # An "answer" that is a number or an object is data, not the protocol.
+            return {"thought": "", "goal": "", "answer": (response or "").strip()}
+        if isinstance(parsed, dict) and "answer" in parsed and parsed["answer"] is None:
+            # "answer": null says there is none yet; the rest of the reply stands.
+            del parsed["answer"]
         return parsed
 
     def _is_data_not_a_plan(self, parsed: Dict[str, Any]) -> bool:
@@ -8282,8 +8384,13 @@ Do NOT wrap conversational replies in JSON.
             # poisons that one call's parse, not the others.
             normalised: list[Dict[str, Any]] = []
             for idx, tc in enumerate(raw_tool_calls):
-                name = tc["function"]["name"]
-                arguments_raw = tc["function"].get("arguments")
+                function = tc.get("function") if isinstance(tc, dict) else None
+                name = function.get("name") if isinstance(function, dict) else None
+                if not isinstance(name, str) or not name:
+                    raise ValueError(
+                        f"Malformed tool_calls entry {idx + 1}: it names no function."
+                    )
+                arguments_raw = function.get("arguments")
                 # ``arguments`` is canonically a JSON string per OpenAI spec,
                 # but llama.cpp 4B-class models occasionally emit it
                 # pre-parsed as a dict. Accept both shapes — only call
@@ -8907,7 +9014,7 @@ Do NOT wrap conversational replies in JSON.
             started = awake_clock.monotonic()
             while worker.is_alive():
                 # The user's Stop reaches a tool that polls for cancellation.
-                if any(
+                if getattr(self, "_turn_cancel_requested", False) or any(
                     isinstance(e, threading.Event) and e.is_set()
                     for e in (stop, console_stop)
                 ):
@@ -10968,6 +11075,14 @@ Do NOT wrap conversational replies in JSON.
         Returns:
             The truncated result or original if within limits
         """
+        if _holds_itself(tool_result):
+            # JSON cannot hold it, and nor can a message to the model.
+            logger.warning(
+                "%s returned a value that contains itself; sending the model "
+                "its str() form.",
+                tool_name,
+            )
+            tool_result = str(tool_result)
         extraction = getattr(self, "_extraction_ledger", None)
         if extraction is not None:
             self._activate_extraction_skills(
@@ -12058,12 +12173,15 @@ Do NOT wrap conversational replies in JSON.
         a reply cut off with nothing but thinking in it, and for the rest of a
         turn that has had two such replies.
         """
-        host_client = getattr(self, "_host_llm_client", None) is not None
-        if not host_client and (self._thinking_cut_off or self._thinking_cut_offs >= 2):
-            # Thinking used a whole reply: ask a cloud model for its least.
-            from gaia.llm.lemonade_client import cloud_lowest_reasoning_effort
+        host_client = getattr(self, "_host_llm_client", None)
+        if self._thinking_cut_off or self._thinking_cut_offs >= 2:
+            # Thinking used a whole reply: ask the model for its least.
+            if host_client is not None:
+                effort = getattr(host_client, "lowest_reasoning_effort", None)
+            else:
+                from gaia.llm.lemonade_client import cloud_lowest_reasoning_effort
 
-            effort = cloud_lowest_reasoning_effort(getattr(self, "model_id", None))
+                effort = cloud_lowest_reasoning_effort(getattr(self, "model_id", None))
             if effort:
                 return {"reasoning_effort": effort}
         chosen = getattr(self, "reasoning_effort_kwargs", None)
@@ -12732,9 +12850,10 @@ Do NOT wrap conversational replies in JSON.
             # The host's setup, never a provider outage: always raised.
             self.console.stop_progress()
             raise exc
-        if isinstance(
-            exc, (TurnBudgetExceeded, _NotAnAnswer, _ClosingOverflow)
-        ) or stopped_by_user(exc):
+        if isinstance(exc, TurnStopped):
+            self._note_turn_stopped(exc)
+            return
+        if isinstance(exc, (_NotAnAnswer, _ClosingOverflow)) or stopped_by_user(exc):
             return
         self.last_model_error = exc
         self._turn_failure = {
@@ -12775,19 +12894,25 @@ Do NOT wrap conversational replies in JSON.
         self._turn_budget = budget
         self._turn_spend = TurnSpend()
         self._turn_failure = None
+        self._host_stop_detail = None
         self.last_model_error = None
         chat = getattr(self, "chat", None)
         if chat is None:
             return
-        if budget is not None:
+        if self._model_requests_watched():
             chat.before_llm_call = self._budget_gate
-        if budget is not None or getattr(self, "on_model_call", None) is not None:
             chat.after_llm_call = self._after_model_request
+
+    def _model_requests_watched(self) -> bool:
+        return (
+            getattr(self, "_turn_budget", None) is not None
+            or getattr(self, "on_model_call", None) is not None
+            or getattr(self, "before_model_call", None) is not None
+        )
 
     def _end_turn_budget(self) -> None:
         """Disarm the limits: a warm-up or a later turn is not this turn's spend."""
-        watching = getattr(self, "on_model_call", None) is not None
-        if getattr(self, "_turn_budget", None) is None and not watching:
+        if not self._model_requests_watched():
             return
         self._turn_budget = None
         chat = getattr(self, "chat", None)
@@ -12818,16 +12943,71 @@ Do NOT wrap conversational replies in JSON.
         self._turn_stop_hint = reason
         return _BUDGET_STOP_ANSWER.format(reason=reason.replace("_", " "))
 
-    def _budget_gate(self, kwargs: Dict[str, Any]) -> None:
-        """Refuse a model request the budget has no room for; cap its output."""
-        budget = self._turn_budget
-        if budget is None:
-            return
+    def _note_turn_stopped(self, stop: TurnStopped) -> None:
+        """Record why the turn stopped, whichever request the stop came from."""
+        self._turn_stop_hint = stop.reason
+        if isinstance(stop, StopTurn):
+            self._host_stop_detail = stop.detail
+
+    def _turn_stopped_answer(self, stop: TurnStopped) -> str:
+        """The result text for a request the budget or the host refused."""
+        self._note_turn_stopped(stop)
+        if isinstance(stop, StopTurn):
+            return _HOST_STOP_ANSWER
+        return self._budget_stop_answer(stop.reason)
+
+    def _plan_request_failed(
+        self, exc: Exception, step: int, conversation: List[Dict[str, Any]]
+    ) -> str:
+        """The result text when the request for a plan could not be made."""
+        self.console.stop_progress()
+        if isinstance(exc, TurnStopped):
+            return self._turn_stopped_answer(exc)
+        self._host_model_error(exc, step)
+        logger.error("Model call for the plan failed: %s", exc)
+        self.error_history.append(
+            {"step": step, "error": str(exc), "type": "llm_error"}
+        )
+        self._turn_model_retries["failed"] = True
+        return self._model_call_failed_answer(
+            exc, self._extract_lemonade_user_message(exc), step, conversation
+        )
+
+    def _refuse_past_budget(self) -> None:
         reason = self._budget_stop_reason()
         if reason:
             self._turn_stop_hint = reason
             raise TurnBudgetExceeded(reason)
+
+    def _budget_gate(self, kwargs: Dict[str, Any]) -> None:
+        """Refuse a model request the budget or the host has no room for."""
+        budget = self._turn_budget
+        self._refuse_past_budget()
+        ask = getattr(self, "before_model_call", None)
+        if ask is not None:
+            started = getattr(self, "_turn_started_at", None)
+            elapsed = time.monotonic() - started if started is not None else 0.0
+            spend = self._turn_spend
+            try:
+                ask(
+                    ModelCallContext(
+                        model_calls=spend.model_calls,
+                        input_tokens=spend.input_tokens,
+                        output_tokens=spend.output_tokens,
+                        elapsed_s=elapsed,
+                        seconds_left=(
+                            budget.seconds_left(elapsed) if budget is not None else None
+                        ),
+                    )
+                )
+            except StopTurn as stop:
+                self._note_turn_stopped(stop)
+                raise
+            # The hook may have waited past the deadline.
+            self._refuse_past_budget()
         self._turn_spend.model_calls += 1
+        if budget is None:
+            return
         if budget.max_output_tokens is not None:
             left = budget.max_output_tokens - self._turn_spend.output_tokens
             cap = kwargs.get("max_tokens")
@@ -12836,6 +13016,7 @@ Do NOT wrap conversational replies in JSON.
     def _budget_charge(self, usage: Any, ok: bool) -> None:
         budget = self._turn_budget
         if budget is None:
+            self._turn_spend.add_usage(usage)
             return
         counted = isinstance(usage, dict) and usage.get("completion_tokens") is not None
         metered = (
@@ -13639,6 +13820,91 @@ Do NOT wrap conversational replies in JSON.
             Dict containing the final result and operation details
         """
         ns_id = self._namespaced_agent_id()
+        if not self._claim_turn():
+            return self._run_claimed_turn(
+                ns_id, user_input, max_steps, trace, filename, budget
+            )
+        outermost_loop = not self._turn_in_loop
+        self._turn_in_loop = True
+        try:
+            return self._run_claimed_turn(
+                ns_id, user_input, max_steps, trace, filename, budget
+            )
+        finally:
+            if outermost_loop:
+                self._turn_in_loop = False
+            self._release_turn()
+
+    def cancel(self) -> None:
+        """Stop the turn in flight at its next step. Safe from any thread.
+
+        The model request or tool call already running finishes first (a tool
+        that polls for cancellation stops early); nothing further is sent. The
+        turn returns ``status`` ``"cancelled"`` with an empty ``result``.
+        Without a turn in flight this does nothing.
+        """
+        with _TURN_CLAIM_LOCK:
+            if self._turn_owner is not None:
+                self._turn_cancel_requested = True
+
+    def __init_subclass__(cls, **kwargs: Any) -> None:
+        super().__init_subclass__(**kwargs)
+        # A subclass or mixin that wraps process_query does work before the
+        # base class is reached; the turn must be claimed before that work.
+        entry = cls.__dict__.get("process_query") or cls.process_query
+        if entry is Agent.__dict__["process_query"]:
+            return
+        if inspect.isfunction(entry) and not getattr(entry, "_claims_turn", False):
+            cls.process_query = _claiming_turn(entry)
+
+    def _claim_turn(self) -> bool:
+        """Mark this thread as running the agent's turn; False if another is."""
+        me = threading.get_ident()
+        embedded = getattr(self, "_host_llm_client", None) is not None or (
+            getattr(self, "host", HOST_WORKSPACE) == HOST_CONVERSATION
+        )
+        with _TURN_CLAIM_LOCK:
+            owner = self._turn_owner
+            if owner is None:
+                self._turn_owner = me
+                self._turn_depth = 1
+                self._turn_cancel_requested = False
+                return True
+            # The same thread again: a subclass's process_query calling the
+            # base one. Once the loop itself is running it is a nested turn.
+            if owner == me and not (embedded and self._turn_in_loop):
+                self._turn_depth += 1
+                return True
+        message = (
+            f"{type(self).__name__}.process_query was called while a turn is "
+            "already running on the same agent. An agent holds one "
+            "conversation's state, so two turns at once would mix their "
+            "messages, tool results and budgets. Give each thread its own "
+            "agent, or wait for the first turn to return."
+        )
+        if embedded:
+            raise AgentBusy(message)
+        logger.warning(message)
+        return False
+
+    def _release_turn(self) -> None:
+        with _TURN_CLAIM_LOCK:
+            self._turn_depth -= 1
+            if self._turn_depth <= 0:
+                self._turn_owner = None
+                self._turn_depth = 0
+                # A cancel that arrived too late to stop anything is spent.
+                self._turn_cancel_requested = False
+
+    def _run_claimed_turn(
+        self,
+        ns_id: str,
+        user_input: str,
+        max_steps: Optional[int],
+        trace: bool,
+        filename: Optional[str],
+        budget: Optional[TurnBudget],
+    ) -> Dict[str, Any]:
         # getattr: hosts built with __new__ reach process_query without __init__.
         self._turn_error_start = len(getattr(self, "error_history", ()))
         # A level the model chose for the last request must not carry into this one.
@@ -14548,6 +14814,10 @@ Do NOT wrap conversational replies in JSON.
             # the producer thread is torn down rather than left running. Checked
             # at the step boundary; per-tool timeouts keep each step bounded so
             # this point is always reached in finite time.
+            if self._turn_cancel_requested:
+                logger.info("Agent run cancelled at step %d by cancel()", steps_taken)
+                cancelled_by_console = True
+                break
             cancel_event = getattr(self, "_cancel_event", None)
             if cancel_event is not None and cancel_event.is_set():
                 logger.warning(
@@ -14968,8 +15238,11 @@ Do NOT wrap conversational replies in JSON.
                             "Respond with your analysis, a corrected plan, and the first tool to execute."
                         )
 
-                    # Add the error recovery prompt to the messages array so it gets sent to LLM
-                    messages.append({"role": "user", "content": prompt})
+                    # A reply to a person takes the tool's error as it stands
+                    # in the conversation; asked for an analysis and a corrected
+                    # plan, the model answers with those instead.
+                    if not self._conversation_host():
+                        messages.append({"role": "user", "content": prompt})
 
                     # Reset state to planning after creating recovery prompt
                     self.execution_state = self.STATE_PLANNING
@@ -15177,8 +15450,8 @@ Do NOT wrap conversational replies in JSON.
                         cancelled_by_console = True
                         break
                     except Exception as e:
-                        if isinstance(e, TurnBudgetExceeded):
-                            final_answer = self._budget_stop_answer(e.reason)
+                        if isinstance(e, TurnStopped):
+                            final_answer = self._turn_stopped_answer(e)
                             loop_break_answer_unprinted = True
                             break
                         self._host_model_error(e, steps_taken)
@@ -15373,8 +15646,8 @@ Do NOT wrap conversational replies in JSON.
                         break
                     except Exception as e:
                         self.console.stop_progress()
-                        if isinstance(e, TurnBudgetExceeded):
-                            final_answer = self._budget_stop_answer(e.reason)
+                        if isinstance(e, TurnStopped):
+                            final_answer = self._turn_stopped_answer(e)
                             loop_break_answer_unprinted = True
                             break
                         self._host_model_error(e, steps_taken)
@@ -15540,14 +15813,21 @@ Do NOT wrap conversational replies in JSON.
                 if response:
                     messages.append({"role": "assistant", "content": response})
                 self._thinking_cut_off = _was_all_thinking(
-                    response, reasoning, response_stats
+                    response,
+                    reasoning,
+                    response_stats,
+                    host_client=getattr(self, "_host_llm_client", None) is not None,
                 )
                 self._thinking_cut_offs += self._thinking_cut_off
                 messages.append(
                     {
                         "role": "user",
                         "content": (
-                            _CUT_OFF_ALL_THINKING_PROMPT
+                            (
+                                _CUT_OFF_ALL_THINKING_REPLY_PROMPT
+                                if self._conversation_host()
+                                else _CUT_OFF_ALL_THINKING_PROMPT
+                            )
                             if self._thinking_cut_off
                             else _CUT_OFF_CONTINUE_PROMPT
                         ),
@@ -15671,27 +15951,34 @@ Do NOT wrap conversational replies in JSON.
                         break
                     # Use AgentSDK for streaming plan response
                     model_calls += 1
-                    stream_gen = self.chat.send_messages_stream(
-                        messages=self._with_session_context(messages),
-                        system_prompt=self.system_prompt,
-                        tools=self._openai_tools,
-                        max_tokens=self._max_output_tokens(),
-                        **self._conversation_request_kwargs(),
-                        **self._reasoning_request_kwargs(),
-                    )
+                    try:
+                        stream_gen = self.chat.send_messages_stream(
+                            messages=self._with_session_context(messages),
+                            system_prompt=self.system_prompt,
+                            tools=self._openai_tools,
+                            max_tokens=self._max_output_tokens(),
+                            **self._conversation_request_kwargs(),
+                            **self._reasoning_request_kwargs(),
+                        )
 
-                    for chunk_response in stream_gen:
-                        if chunk_response.is_complete:
-                            plan_reasoning = _response_reasoning(chunk_response)
-                            if chunk_response.text:
-                                full_response = chunk_response.text
-                        else:
-                            chunk = chunk_response.text
-                            if hasattr(self.console, "print_streaming_text"):
-                                self.console.print_streaming_text(chunk)
+                        for chunk_response in stream_gen:
+                            if chunk_response.is_complete:
+                                plan_reasoning = _response_reasoning(chunk_response)
+                                if chunk_response.text:
+                                    full_response = chunk_response.text
                             else:
-                                print(chunk, end="", flush=True)
-                            full_response += chunk
+                                chunk = chunk_response.text
+                                if hasattr(self.console, "print_streaming_text"):
+                                    self.console.print_streaming_text(chunk)
+                                else:
+                                    print(chunk, end="", flush=True)
+                                full_response += chunk
+                    except Exception as e:  # pylint: disable=broad-exception-caught
+                        final_answer = self._plan_request_failed(
+                            e, steps_taken, conversation
+                        )
+                        loop_break_answer_unprinted = True
+                        break
 
                     if hasattr(self.console, "print_streaming_text"):
                         self.console.print_streaming_text("", end_of_stream=True)
@@ -15724,14 +16011,21 @@ Do NOT wrap conversational replies in JSON.
                         break
                     # Use AgentSDK for non-streaming plan response
                     model_calls += 1
-                    chat_response = self.chat.send_messages(
-                        messages=self._with_session_context(messages),
-                        system_prompt=self.system_prompt,
-                        tools=self._openai_tools,
-                        max_tokens=self._max_output_tokens(),
-                        **self._conversation_request_kwargs(),
-                        **self._reasoning_request_kwargs(),
-                    )
+                    try:
+                        chat_response = self.chat.send_messages(
+                            messages=self._with_session_context(messages),
+                            system_prompt=self.system_prompt,
+                            tools=self._openai_tools,
+                            max_tokens=self._max_output_tokens(),
+                            **self._conversation_request_kwargs(),
+                            **self._reasoning_request_kwargs(),
+                        )
+                    except Exception as e:  # pylint: disable=broad-exception-caught
+                        final_answer = self._plan_request_failed(
+                            e, steps_taken, conversation
+                        )
+                        loop_break_answer_unprinted = True
+                        break
                     plan_response = chat_response.text
                     plan_reasoning = _response_reasoning(chat_response)
                     self.console.stop_progress()
@@ -17782,7 +18076,7 @@ Do NOT wrap conversational replies in JSON.
                     and not getattr(self, "_stopped_on_failing_repeats", False)
                     and not max_steps_reached
                     and not time_limit_reached
-                    and self._turn_stop_hint not in BUDGET_STOP_REASONS
+                    and self._turn_stop_hint not in TURN_STOP_REASONS
                     else "incomplete"
                 )
             ),
@@ -17864,6 +18158,8 @@ Do NOT wrap conversational replies in JSON.
         )
         if self._turn_budget is not None:
             result["budget_spent"] = self._turn_spend.as_dict()
+        if result["stop_reason"] == STOP_HOST:
+            result["host_stop"] = self._host_stop_detail or ""
         if result["stop_reason"] != STOP_MODEL_CALL:
             result["failure"] = None
             self.last_model_error = None

@@ -33,6 +33,12 @@ class LLMClient(ABC):
     #: only from a client passed to ``Agent(llm_client=...)``.
     context_window: Optional[int] = None
 
+    #: The least ``reasoning_effort`` the model accepts (``"low"``, ``"none"``),
+    #: when it takes one. Read only from a client passed to
+    #: ``Agent(llm_client=...)``: a reply that spent its whole output cap on
+    #: reasoning is asked for again with ``reasoning_effort`` set to this.
+    lowest_reasoning_effort: Optional[str] = None
+
     @property
     @abstractmethod
     def provider_name(self) -> str:

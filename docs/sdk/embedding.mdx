@@ -79,6 +79,8 @@ elif result["stop_reason"] == "model_call":
     reply = hand_off("model unavailable", result["failure"]["type"])
 elif result["stop_reason"] in ("model_calls", "output_tokens", "deadline", "cost"):
     reply = hand_off("budget")
+elif result["stop_reason"] == "host_stop":
+    reply = hand_off(result["host_stop"])
 else:
     reply = hand_off(result["stop_reason"])
 ```
@@ -92,7 +94,8 @@ name tools, step limits or the raw provider error.
 | Key | What it holds |
 |---|---|
 | `status` | `success`, `incomplete`, `failed` or `cancelled` |
-| `stop_reason` | Why the turn ended: `answered`, `max_steps`, `model_call`, `output_cap`, `tool_call_format`, `reprompt_budget`, `repeated_calls`, `tool_error`, `completion_gaps`, `cancelled`, `no_answer`, or a budget limit: `model_calls`, `output_tokens`, `deadline`, `cost` |
+| `stop_reason` | Why the turn ended: `answered`, `max_steps`, `model_call`, `output_cap`, `tool_call_format`, `reprompt_budget`, `repeated_calls`, `tool_error`, `completion_gaps`, `cancelled`, `no_answer`, `host_stop`, or a budget limit: `model_calls`, `output_tokens`, `deadline`, `cost` |
+| `host_stop` | What your `StopTurn` said, when `stop_reason` is `host_stop` |
 | `failure` | For a failed model call: `kind`, `type` (the exception class name), `message`, `step`. `None` otherwise. The exception itself is `agent.last_model_error` |
 | `budget_spent` | With a budget: `model_calls`, `input_tokens`, `cached_tokens`, `output_tokens` |
 | `tool_calls` | Every tool call in order: `name`, `args`, `result`, `ran`, `failed`. Check a reply's promises against this before sending it |
@@ -117,6 +120,7 @@ class MyClient(LLMClient):
     provider_name = "my-provider"
     supports_native_tools = True   # send tools as tools=, not as prompt text
     context_window = 128_000       # what history is fitted to
+    lowest_reasoning_effort = "low"  # omit if the model takes no reasoning_effort
 
     def chat(self, messages, model=None, stream=False, **kwargs):
         response = self._post(messages, model, kwargs.get("tools"), kwargs["max_tokens"])
@@ -157,6 +161,11 @@ Things to know about this seam:
 - **`model_id` is required** and is sent to your client unchanged.
 - **Return `finish_reason`.** `"length"` on a tool call is how GAIA knows the call
   was cut off and asks for it again.
+- **Declare `lowest_reasoning_effort` for a reasoning model.** A reply that spends
+  its whole output cap on reasoning comes back empty. GAIA asks again, and with
+  this set the retry carries `reasoning_effort=<that value>` in `kwargs`, so the
+  same question is not thought to the cap a second time. A turn that recovers
+  this way is a `success`; the wasted request's tokens are still counted.
 - **Return `usage`.** The result's token counts, `cost_usd`, and the token and
   dollar limits below are all summed from `get_last_usage()`, in the OpenAI shape.
   It must describe the most recent call only, or a step's tokens are counted twice.
@@ -198,7 +207,9 @@ changed.
 |---|---|
 | `max_model_calls` | Counts every request, not steps |
 | `max_output_tokens` | Each request's `max_tokens` is lowered to what is left |
-| `deadline_s` | Checked between requests; one in flight is not cut short, so give your client its own timeout |
+| `deadline_s` | Seconds from the start of the turn. Checked between requests; one in flight is not cut short, so give your client its own timeout |
+| `deadline_at` | A `time.monotonic()` value the turn must end by, for a turn that already waited in your queue. With `deadline_s` too, the earlier applies |
+| `min_call_seconds` | A request is not started with less than this left before the deadline. Set it to about one model call, so a turn does not start a request it cannot finish |
 | `max_cost_usd` | Fireworks' list price from `gaia.llm.pricing`. A model with no card there, or on another provider, is refused with a `ValueError` when the turn starts |
 
 `deadline` is also the stop reason of the agent's own `time_limit_s`. To tell the two
@@ -207,6 +218,57 @@ apart, check for `budget_spent` in the result: it is there only when a budget wa
 Pass `budget=` to the constructor to apply one to every turn. The budget covers the
 agent's own model requests. A tool that calls a model itself, such as a vision or
 document-search tool, is outside it.
+
+## Deciding before each model request
+
+`before_model_call` runs before every request the turn sends, retries included. Use
+it for a rate limit or a quota you keep yourself.
+
+```python
+from gaia.agents.base.budget import StopTurn
+
+def gate(ctx):
+    wait = limiter.seconds_until_free(account_id)
+    if wait > (ctx.seconds_left or 30):
+        raise StopTurn("account is over its rate limit")
+    time.sleep(wait)
+    client.timeout = ctx.seconds_left      # never wait on the model past the deadline
+
+agent = SupportAgent(session, llm_client=client, model_id=model, before_model_call=gate)
+```
+
+`ctx` has `model_calls`, `input_tokens` and `output_tokens` spent so far this turn,
+`elapsed_s`, and `seconds_left` (`None` without a deadline). To wait, sleep in the
+hook; the deadline is checked again when it returns.
+
+`StopTurn(detail)` ends the turn: the request is not sent, nothing is retried and no
+closing request follows. The result is `incomplete` with `stop_reason: "host_stop"`
+and your text in `host_stop`. Your client can raise it too, for a provider's 429 it
+does not want retried. Any other exception from the hook is a failed model call, the
+same as one from the client.
+
+## Stopping a turn nobody is waiting for
+
+```python
+agent.cancel()      # from any thread
+```
+
+The turn stops at its next step: the model request or tool call in flight finishes,
+and nothing further is sent. The result has `status: "cancelled"` and an empty
+`result`. If the reply already in flight was the answer, the turn returns it as a
+`success`. With no turn running, `cancel()` does nothing.
+
+## Threads
+
+| What | Safe to share between threads? |
+|---|---|
+| An agent | No. It holds one conversation. A second `process_query` while one is running raises `AgentBusy` |
+| Agents, one per thread | Yes. Each needs its own tools (`self._instance_tools`) |
+| Your model client | Only if you made it so. GAIA calls `chat()`, then `get_last_usage()` and `get_last_finish_reason()` on the same thread, so a client that keeps "the last call" on `self` must be one per agent |
+| `agent.cancel()` | Yes |
+
+A turn holds its thread while it waits on the model, so one process runs as many
+turns at once as it has worker threads. There is no async loop.
 
 ## Checking the reply against what ran
 
