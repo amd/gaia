@@ -11,7 +11,7 @@ import { dirname, join } from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 
-import { Agent, EngineError, EngineNotFound, PROTOCOL, ToolRefusal, tool } from "../dist/index.js";
+import { Agent, AgentBusy, EngineError, EngineNotFound, PROTOCOL, ToolRefusal, tool } from "../dist/index.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const FAKE = [process.execPath, join(here, "fake-engine.mjs")];
@@ -237,6 +237,8 @@ async function modelServer() {
   const replies = [];
   const requests = [];
   const authorization = [];
+  // Milliseconds to wait before the next reply; plays a slow provider.
+  const state = { delayMs: 0 };
   const server = createServer((req, res) => {
     let body = "";
     req.on("data", (chunk) => (body += chunk));
@@ -245,10 +247,17 @@ async function modelServer() {
       authorization.push(req.headers.authorization ?? "");
       const [status, reply] = replies.shift() ?? [500, {}];
       const payload = JSON.stringify(reply);
-      res.writeHead(status, { "Content-Type": "application/json", "Content-Length": Buffer.byteLength(payload) });
-      res.end(payload);
+      const wait = state.delayMs;
+      state.delayMs = 0;
+      setTimeout(() => {
+        // The engine may have given up on a slow reply and closed the socket.
+        if (res.destroyed) return;
+        res.writeHead(status, { "Content-Type": "application/json", "Content-Length": Buffer.byteLength(payload) });
+        res.end(payload);
+      }, wait);
     });
   });
+  server.on("clientError", () => {});
   await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
   const push = (message) =>
     replies.push([
@@ -259,6 +268,8 @@ async function modelServer() {
     baseUrl: `http://127.0.0.1:${server.address().port}/v1`,
     requests,
     authorization,
+    replies,
+    slow: (ms) => (state.delayMs = ms),
     say: (text) => push({ role: "assistant", content: text }),
     call: (name, args) =>
       push({
@@ -267,7 +278,11 @@ async function modelServer() {
         tool_calls: [{ id: "c1", type: "function", function: { name, arguments: JSON.stringify(args) } }],
       }),
     fail: (status = 503) => replies.push([status, { error: { message: "upstream overloaded" } }]),
-    close: () => new Promise((resolve) => server.close(resolve)),
+    close: () =>
+      new Promise((resolve) => {
+        server.closeAllConnections?.();
+        server.close(resolve);
+      }),
   };
 }
 
@@ -548,5 +563,199 @@ test("real engine: a claim the model never backs is returned for the host to wit
     assert.equal(turn.stopReason, "unresolved_checks");
     assert.equal(turn.unresolvedChecks.length, 1);
     assert.equal(model.requests.length, 2);
+  });
+});
+
+// ---- tools, hosts and providers that misbehave ----------------------------
+
+function oddTools(gate) {
+  const circular = {};
+  circular.self = circular;
+  const results = {
+    circular: () => circular,
+    bigint: () => ({ total: 10n }),
+    thrower: () => ({
+      toJSON() {
+        throw new Error("cannot serialise");
+      },
+    }),
+    undefined: () => undefined,
+    nan: () => ({ total: Number.NaN }),
+    text: () => "plain text",
+    huge: () => ({ rows: Array.from({ length: 2000 }, () => "x".repeat(1000)) }),
+  };
+  return [
+    tool({
+      name: "lookup",
+      description: "Look something up in a system that answers oddly.",
+      parameters: { type: "object", properties: { kind: { type: "string" } }, required: ["kind"] },
+      run: async ({ kind }) => {
+        if (gate) await gate();
+        if (kind === "raise") throw new Error("archive offline");
+        return results[kind]();
+      },
+    }),
+  ];
+}
+
+async function withOddAgent(options, body) {
+  const model = await modelServer();
+  const { gate, ...rest } = options;
+  const agent = await Agent.start({
+    model: "host-model",
+    baseUrl: model.baseUrl,
+    systemPrompt: "You answer questions about orders.",
+    tools: oddTools(gate),
+    engine: REAL,
+    ...rest,
+  });
+  try {
+    return await body(agent, model);
+  } finally {
+    await agent.close();
+    await model.close();
+  }
+}
+
+for (const kind of ["circular", "bigint", "thrower"]) {
+  test(`real engine: a tool result JSON cannot hold (${kind}) is a tool error the model is told of`, real, async () => {
+    await withOddAgent({}, async (agent, model) => {
+      model.call("lookup", { kind });
+      model.say("I could not read that.");
+      model.say("Second answer.");
+
+      const turn = await agent.run("look it up");
+      const after = await agent.run("and again");
+
+      assert.equal(turn.text, "I could not read that.");
+      assert.equal(turn.toolCalls[0].failed, true);
+      assert.match(turn.toolCalls[0].result.error, /cannot be sent to the model as JSON/);
+      assert.match(JSON.stringify(model.requests[1].messages), /cannot be sent to the model as JSON/);
+      assert.equal(after.text, "Second answer.");
+    });
+  });
+}
+
+for (const kind of ["undefined", "nan", "text", "huge"]) {
+  test(`real engine: a tool result of any JSON shape (${kind}) reaches the model`, real, async () => {
+    await withOddAgent({}, async (agent, model) => {
+      model.call("lookup", { kind });
+      model.say("Done.");
+
+      const turn = await agent.run("look it up");
+
+      assert.equal(turn.text, "Done.");
+      assert.equal(turn.toolCalls[0].failed, false);
+    });
+  });
+}
+
+test("real engine: a callback that throws does not hand its answer to the next turn", real, async () => {
+  let seen = 0;
+  const onModelCall = () => {
+    if (++seen === 1) throw new Error("metrics sink down");
+  };
+  await withOddAgent({ onModelCall }, async (agent, model) => {
+    model.say("First answer.");
+    model.say("Second answer.");
+
+    await assert.rejects(() => agent.run("one"), /metrics sink down/);
+    const second = await agent.run("two");
+
+    assert.equal(second.text, "Second answer.");
+    assert.equal(model.requests.length, 2);
+  });
+});
+
+test("real engine: a second run before the first resolves is told the agent is busy", real, async () => {
+  let release;
+  let entered;
+  const inTool = new Promise((resolve) => (entered = resolve));
+  const gate = () => {
+    entered();
+    return new Promise((resolve) => (release = resolve));
+  };
+  await withOddAgent({ gate }, async (agent, model) => {
+    model.call("lookup", { kind: "text" });
+    model.say("First answer.");
+    model.say("Second answer.");
+
+    const first = agent.run("one");
+    await inTool;
+    await assert.rejects(() => agent.run("two"), AgentBusy);
+    release();
+
+    assert.equal((await first).text, "First answer.");
+    assert.equal((await agent.run("two")).text, "Second answer.");
+  });
+});
+
+test("real engine: a closed agent says so", real, async () => {
+  const model = await modelServer();
+  const agent = await Agent.start({ model: "m", baseUrl: model.baseUrl, engine: REAL });
+  await agent.close();
+
+  await assert.rejects(() => agent.run("hi"), /This agent was closed/);
+  await model.close();
+});
+
+test("real engine: a turn the engine refuses leaves the agent usable", real, async () => {
+  await withOddAgent({}, async (agent, model) => {
+    model.say("Hello.");
+
+    await assert.rejects(
+      () => agent.run([{ role: "assistant", content: "I spoke last" }]),
+      (error) => error instanceof EngineError && error.code === "bad_turn",
+    );
+    await assert.rejects(() => agent.run(["hi"]), TypeError);
+
+    assert.equal((await agent.run("hi")).text, "Hello.");
+  });
+});
+
+test("real engine: a request still in flight at the deadline is cut off", real, async () => {
+  await withOddAgent({}, async (agent, model) => {
+    model.say("far too late");
+    model.slow(15000);
+    model.say("On time.");
+
+    const started = Date.now();
+    const turn = await agent.run("hi", { budget: { seconds: 1 } });
+    const waited = (Date.now() - started) / 1000;
+    const after = await agent.run("hi");
+
+    assert.equal(turn.status, "incomplete");
+    assert.equal(turn.stopReason, "deadline");
+    assert.equal(turn.text, "");
+    assert.ok(waited < 8, `waited ${waited.toFixed(1)}s for a 1s deadline`);
+    assert.equal(after.text, "On time.");
+  });
+});
+
+test("real engine: a long run of mixed turns keeps each answer with its own turn", real, async () => {
+  await withOddAgent({}, async (agent, model) => {
+    for (let round = 0; round < 30; round++) {
+      const label = `answer ${round}`;
+      const kind = round % 4;
+      if (kind === 0) {
+        model.say(label);
+        assert.equal((await agent.run("hi")).text, label);
+      } else if (kind === 1) {
+        model.call("lookup", { kind: "circular" });
+        model.say(label);
+        const turn = await agent.run("hi");
+        assert.equal(turn.text, label);
+        assert.equal(turn.toolCalls[0].failed, true);
+      } else if (kind === 2) {
+        model.fail(503);
+        const turn = await agent.run("hi");
+        assert.equal(turn.stopReason, "model_call");
+      } else {
+        model.call("lookup", { kind: "text" });
+        const turn = await agent.run("hi", { budget: { modelCalls: 1 } });
+        assert.equal(turn.stopReason, "model_calls");
+      }
+      assert.equal(model.replies.length, 0, `round ${round} left a reply unread`);
+    }
   });
 });

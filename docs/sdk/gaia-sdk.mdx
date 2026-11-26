@@ -120,12 +120,23 @@ A failed model request, a spent budget and a step limit are not exceptions. They
 a turn whose `ok` is false, so one `if` handles all three. `EngineError` is raised only
 when the engine itself cannot run the turn.
 
+### One turn at a time
+
+An agent drives one engine process, so it runs one turn at a time. A second `run`
+while one is running raises `AgentBusy`; use one agent per thread, or per concurrent
+turn in Node. Agents do not share anything, so as many as you like can run side by
+side.
+
+If `on_model_call` raises, the turn is still finished first and the error is raised
+after it, so the next `run` gets its own answer and not the interrupted turn's.
+
 ## Tools
 
 A tool that returns normally gives the model its result. Two other outcomes:
 
 | In the tool | The model is told |
 |---|---|
+| Return something JSON cannot hold (an object, bytes, `NaN`, a value that contains itself) | The call failed, and why. The turn goes on |
 | `raise ToolRefusal("...")` / `throw new ToolRefusal("...")` | `{"status": "refused", "message": "..."}` as an ordinary result to explain. Not a failure |
 | Any other exception | The call failed, and why. The turn goes on |
 
@@ -175,6 +186,10 @@ A budget is checked when the model asks for a tool. Once a limit is reached the 
 not run, nothing more is sent to the model, and the turn ends `incomplete` with the
 limit as its stop reason. An answer that arrives on the last allowed request is still
 an answer.
+
+`seconds` also cuts off a model request still in flight when the time runs out: the
+turn ends `incomplete` with `deadline`, to the nearest second, instead of waiting for
+a slow provider to answer.
 
 A dollar limit (`usd`) needs `prices`; without them it is refused before anything is
 sent, since a limit that cannot be metered would never fire.

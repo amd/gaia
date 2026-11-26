@@ -31,6 +31,10 @@ class EngineError(RuntimeError):
         self.code = code
 
 
+class AgentBusy(RuntimeError):
+    """``run`` was called while another turn was running on the same agent."""
+
+
 class EngineNotFound(EngineError):
     """No ``gaiacpp`` engine binary could be found to start."""
 
@@ -87,7 +91,8 @@ class Engine:
                 f"The engine has stopped (exit code {self._process.returncode})."
             )
         try:
-            self._process.stdin.write(json.dumps(message) + "\n")
+            # NaN and Infinity are not JSON; the engine would refuse the line.
+            self._process.stdin.write(json.dumps(message, allow_nan=False) + "\n")
             self._process.stdin.flush()
         except (BrokenPipeError, OSError) as e:
             raise EngineError(f"The engine stopped reading: {e}") from e

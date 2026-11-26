@@ -22,13 +22,14 @@ is the thin layer between the two.
 """
 
 from gaia_sdk.agent import UNRESOLVED_CHECKS, Agent, Budget, Prices, Turn
-from gaia_sdk.engine import PROTOCOL, EngineError, EngineNotFound
+from gaia_sdk.engine import PROTOCOL, AgentBusy, EngineError, EngineNotFound
 from gaia_sdk.tools import Tool, ToolRefusal, tool
 
 __version__ = "0.1.0"
 
 __all__ = [
     "Agent",
+    "AgentBusy",
     "Budget",
     "EngineError",
     "EngineNotFound",

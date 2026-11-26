@@ -7,6 +7,7 @@ import os
 import shutil
 import sys
 import threading
+import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
@@ -24,6 +25,8 @@ class ModelServer:
         self.replies = []
         self.requests = []
         self.authorization = []
+        # Seconds to wait before the next reply; plays a slow provider.
+        self.delay = 0.0
         server = self
 
         class Handler(BaseHTTPRequestHandler):
@@ -32,12 +35,18 @@ class ModelServer:
                 server.requests.append(json.loads(body))
                 server.authorization.append(self.headers.get("Authorization", ""))
                 status, reply = server.replies.pop(0) if server.replies else (500, {})
+                delay, server.delay = server.delay, 0.0
+                time.sleep(delay)
                 payload = json.dumps(reply).encode()
-                self.send_response(status)
-                self.send_header("Content-Type", "application/json")
-                self.send_header("Content-Length", str(len(payload)))
-                self.end_headers()
-                self.wfile.write(payload)
+                try:
+                    self.send_response(status)
+                    self.send_header("Content-Type", "application/json")
+                    self.send_header("Content-Length", str(len(payload)))
+                    self.end_headers()
+                    self.wfile.write(payload)
+                except OSError:
+                    # The engine gave up on a slow reply and closed the socket.
+                    return
 
             def log_message(self, *args):
                 pass

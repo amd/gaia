@@ -5,10 +5,11 @@
 from __future__ import annotations
 
 import itertools
+import threading
 from dataclasses import dataclass, field, replace
 from typing import Any, Callable, Dict, List, Optional, Sequence, Union
 
-from gaia_sdk.engine import PROTOCOL, Engine, EngineError, find_engine
+from gaia_sdk.engine import PROTOCOL, AgentBusy, Engine, EngineError, find_engine
 from gaia_sdk.tools import Tool, ToolRefusal
 from gaia_sdk.tools import tool as as_tool
 
@@ -161,8 +162,9 @@ class Agent:
             ``seconds`` and ``usage``.
         engine: Path to the ``gaiacpp`` binary, when it is not found otherwise.
 
-    One agent runs one turn at a time. Close it, or use it as a context
-    manager, to stop the engine process.
+    One agent runs one turn at a time: a second ``run`` while one is
+    running raises ``AgentBusy``. Use one agent per thread. Close it, or use
+    it as a context manager, to stop the engine process.
     """
 
     def __init__(
@@ -203,6 +205,10 @@ class Agent:
         self._answer_checks = tuple(answer_checks)
         self.on_model_call = on_model_call
         self._turn_ids = itertools.count(1)
+        self._running = threading.Lock()
+        self._closed = False
+        # A turn the engine is still running that this agent stopped following.
+        self._out_of_step = False
 
         init: Dict[str, Any] = {
             "type": "init",
@@ -274,9 +280,29 @@ class Agent:
         """
         if isinstance(messages, str):
             messages = [{"role": "user", "content": messages}]
+        for message in messages:
+            if not isinstance(message, dict):
+                raise TypeError(
+                    "Each message must be a dict with 'role' and 'content', got "
+                    f"{type(message).__name__}."
+                )
         conversation = [dict(message) for message in messages]
         budget = self._checked_budget(budget) or self.budget
+        if not self._running.acquire(blocking=False):
+            raise AgentBusy(
+                "This agent is already running a turn. One agent drives one "
+                "engine process, so two turns at once would mix their events. "
+                "Give each thread its own Agent, or wait for the first run() "
+                "to return."
+            )
+        try:
+            return self._run_checked(conversation, budget)
+        finally:
+            self._running.release()
 
+    def _run_checked(
+        self, conversation: List[Message], budget: Optional[Budget]
+    ) -> Turn:
         turn = self._run_once(conversation, budget)
         if not turn.ok or not self._answer_checks:
             return turn
@@ -319,20 +345,50 @@ class Agent:
         }
         if budget is not None and budget.as_wire():
             request["budget"] = budget.as_wire()
+        if self._closed:
+            raise EngineError("This agent was closed. Create a new Agent.")
+        if self._out_of_step:
+            raise EngineError(
+                "An earlier turn on this agent was interrupted before the engine "
+                "finished it, so the two no longer agree on which turn is "
+                "running. Close this agent and create a new one."
+            )
         self._engine.send(request)
+        self._out_of_step = True
 
         model_calls: List[Dict[str, Any]] = []
+        callback_error: Optional[Exception] = None
         while True:
-            event = self._engine.receive()
+            try:
+                event = self._engine.receive()
+            except EngineError as refused:
+                # The engine refused the turn before starting it, and is ready
+                # for the next one.
+                if refused.code == "bad_turn":
+                    self._out_of_step = False
+                raise
             kind = event["type"]
+            if event.get("turn") not in (None, turn_id):
+                raise EngineError(
+                    f"The engine sent a {kind!r} event for turn "
+                    f"{event.get('turn')!r} while {turn_id!r} was running."
+                )
             if kind == "tool_request":
-                self._engine.send(self._answer(event))
+                self._send_tool_result(event)
             elif kind == "model_call":
                 call = {k: event.get(k) for k in ("step", "seconds", "usage")}
                 model_calls.append(call)
-                if self.on_model_call is not None:
-                    self.on_model_call(call)
+                if self.on_model_call is not None and callback_error is None:
+                    try:
+                        self.on_model_call(call)
+                    except Exception as e:  # pylint: disable=broad-except
+                        # Raised once the engine has finished the turn: leaving
+                        # now would hand this turn's answer to the next run().
+                        callback_error = e
             elif kind == "final":
+                self._out_of_step = False
+                if callback_error is not None:
+                    raise callback_error
                 return Turn(
                     status=event["status"],
                     stop_reason=event["stop_reason"],
@@ -366,8 +422,26 @@ class Agent:
             answer["error"] = f"{type(e).__name__}: {e}"
         return answer
 
+    def _send_tool_result(self, request: Dict[str, Any]) -> None:
+        """Answer one ``tool_request``; a result JSON cannot hold is a tool error."""
+        try:
+            self._engine.send(self._answer(request))
+        except (TypeError, ValueError, RecursionError) as e:
+            self._engine.send(
+                {
+                    "type": "tool_result",
+                    "id": request["id"],
+                    "error": (
+                        f"{request.get('name')} returned a value that cannot be "
+                        f"sent to the model as JSON ({type(e).__name__}: {e}). "
+                        "Return dicts, lists, strings, numbers, booleans or None."
+                    ),
+                }
+            )
+
     def close(self) -> None:
         """Stop the engine process."""
+        self._closed = True
         self._engine.close()
 
     def __enter__(self) -> "Agent":

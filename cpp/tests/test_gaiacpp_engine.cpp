@@ -7,10 +7,15 @@
 
 #include <gtest/gtest.h>
 
+#include <chrono>
 #include <fstream>
+#include <future>
+#include <map>
+#include <random>
 #include <set>
 #include <sstream>
 #include <string>
+#include <thread>
 #include <vector>
 
 #include "../agents/gaiacpp/host_server.h"
@@ -531,6 +536,116 @@ std::set<std::string> listed(const json& names) {
     std::set<std::string> out;
     for (const auto& name : names) out.insert(name.get<std::string>());
     return out;
+}
+
+TEST_F(GaiacppEngine, ARequestStillInFlightAtTheDeadlineIsCutOff) {
+    std::promise<void> release;
+    mock_.holdNextResponse(release.get_future().share());
+    // Without the cut-off the held reply arrives here and the turn "succeeds" late.
+    std::thread provider([&release] {
+        std::this_thread::sleep_for(std::chrono::seconds(8));
+        release.set_value();
+    });
+    json limited = turn("t1", "hi");
+    limited["budget"] = {{"seconds", 1}};
+
+    const auto started = std::chrono::steady_clock::now();
+    const auto events = run({init(), limited});
+    const double waited =
+        std::chrono::duration<double>(std::chrono::steady_clock::now() - started).count();
+    provider.join();
+
+    const auto finals = ofType(events, "final");
+    ASSERT_EQ(finals.size(), 1u);
+    EXPECT_EQ(finals[0]["status"], "incomplete");
+    EXPECT_EQ(finals[0]["stop_reason"], "deadline");
+    EXPECT_EQ(finals[0]["text"], "");
+    EXPECT_TRUE(finals[0]["failure"].is_null());
+    EXPECT_LT(waited, 6.0);
+}
+
+TEST_F(GaiacppEngine, AProviderFailureBeforeTheDeadlineIsStillAFailure) {
+    mock_.pushResponse(R"({"error":{"message":"upstream overloaded"}})", 503);
+    json limited = turn("t1", "hi");
+    limited["budget"] = {{"seconds", 60}};
+
+    const auto finals = ofType(run({init(), limited}), "final");
+
+    ASSERT_EQ(finals.size(), 1u);
+    EXPECT_EQ(finals[0]["stop_reason"], "model_call");
+}
+
+TEST_F(GaiacppEngine, NoRunOfBadLinesCrashesTheEngineOrGarblesItsOutput) {
+    const std::vector<std::string> junk = {
+        "not json", "{", "[]", "null", "42", "\"text\"", "", "   ", "{\"type\":5}",
+        "{\"type\":\"dance\"}", "{\"type\":\"tool_result\",\"id\":\"zzz\",\"result\":1}",
+        "{\"type\":\"tool_result\"}", "{\"type\":\"turn\"}",
+        "{\"type\":\"turn\",\"id\":5,\"messages\":\"hi\"}",
+        "{\"type\":\"turn\",\"id\":\"x\",\"messages\":[5,null,{\"role\":1}]}",
+        "{\"type\":\"turn\",\"id\":\"y\",\"messages\":[],\"budget\":\"lots\"}",
+        "{\"type\":\"turn\",\"id\":\"z\",\"messages\":[{\"role\":\"user\",\"content\":\"hi\"}],"
+        "\"budget\":{\"model_calls\":-5,\"seconds\":\"x\"}}",
+        "{\"type\":\"turn\",\"id\":\"w\",\"messages\":[{\"role\":\"wizard\",\"content\":\"hi\"}]}",
+        std::string(20000, '['), std::string("{\"type\":\"turn\",\"id\":\"n\0x\"}", 27),
+        "{\"type\":\"init\",\"protocol\":\"1\",\"model\":5,\"tools\":\"x\"}",
+    };
+    const std::vector<std::string> modelReplies = {
+        answer("Here is the answer."), toolCall("get_order", {{"order_number", "1"}}),
+        toolCall("delete_everything", {{"confirm", true}}), "garbage", "{}", R"({"choices":[]})",
+        R"({"choices":[{"message":null}]})", R"({"choices":[{"message":{"content":5}}]})",
+        R"({"choices":[{"message":{"tool_calls":"x"}}]})",
+        R"({"choices":[{"message":{"tool_calls":[{"id":"c"}]}}]})", answer(""),
+    };
+
+    for (unsigned seed = 0; seed < 150; ++seed) {
+        std::mt19937 rng(seed);
+        auto pick = [&rng](size_t n) { return std::uniform_int_distribution<size_t>(0, n - 1)(rng); };
+        mock_.clearQueue();
+        for (int i = 0; i < 6; ++i) mock_.pushResponse(modelReplies[pick(modelReplies.size())]);
+        mock_.pushResponses(answer("Here is the answer."), 20);
+
+        std::string input;
+        if (pick(4) != 0) input += init().dump() + "\n";
+        int turns = 0;
+        const size_t lines = 1 + pick(8);
+        for (size_t i = 0; i < lines; ++i) {
+            switch (pick(4)) {
+            case 0:
+                input += turn("t" + std::to_string(++turns), "Where is my order?").dump() + "\n";
+                break;
+            case 1:
+                // The id of the tool call a turn in flight would be waiting on.
+                input += json{{"type", "tool_result"},
+                              {"id", "t" + std::to_string(turns) + ":1"},
+                              {"result", {{"status", "shipped"}}}}
+                             .dump() +
+                         "\n";
+                break;
+            default:
+                input += junk[pick(junk.size())] + "\n";
+            }
+        }
+
+        std::istringstream in(input);
+        std::ostringstream out;
+        const int code = runHostServer(in, out, HostOptions{"test"});
+
+        EXPECT_TRUE(code == 0 || code == 2) << "seed " << seed << " exit " << code;
+        std::istringstream written(out.str());
+        std::string line;
+        std::map<std::string, int> finalsPerTurn;
+        while (std::getline(written, line)) {
+            if (line.empty()) continue;
+            const json event = json::parse(line, nullptr, false);
+            ASSERT_FALSE(event.is_discarded()) << "seed " << seed << " wrote: " << line.substr(0, 120);
+            ASSERT_TRUE(event.is_object() && event.contains("type") && event["type"].is_string())
+                << "seed " << seed;
+            if (event["type"] == "final") ++finalsPerTurn[event.value("turn", std::string())];
+        }
+        for (const auto& [id, count] : finalsPerTurn) {
+            EXPECT_EQ(count, 1) << "seed " << seed << " turn " << id;
+        }
+    }
 }
 
 TEST_F(GaiacppEngine, EveryEventHasExactlyTheFieldsTheWireFixtureLists) {

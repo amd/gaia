@@ -34,6 +34,10 @@ with Agent(
 `turn` has `status`, `stop_reason`, `text`, `tool_calls`, `usage`, `seconds`,
 `failure` and `model_calls`. Show `text` to an end user only when `turn.ok`.
 
+One agent runs one turn at a time; a second `run` while one is running raises
+`AgentBusy`. A tool result JSON cannot hold is reported to the model as a failed call,
+and a `seconds` budget cuts off a model request still in flight.
+
 ## The engine binary
 
 The SDK looks for `gaiacpp` in this order: the `engine=` argument, the `GAIA_ENGINE`

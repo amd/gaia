@@ -3,11 +3,13 @@
 
 #include "host_server.h"
 
+#include <algorithm>
 #include <chrono>
 #include <climits>
 #include <cmath>
 #include <exception>
 #include <istream>
+#include <limits>
 #include <map>
 #include <memory>
 #include <optional>
@@ -234,6 +236,13 @@ public:
         return std::chrono::duration<double>(std::chrono::steady_clock::now() - started_).count();
     }
 
+    /// Seconds a model request may still take; 0 when the turn has no deadline.
+    int secondsLeft() const {
+        if (budget_.seconds <= 0) return 0;
+        return std::max(1, static_cast<int>(std::ceil(budget_.seconds - elapsed())));
+    }
+    bool pastDeadline() const { return budget_.seconds > 0 && elapsed() >= budget_.seconds; }
+
     /// The limit this turn has reached, or "" while there is room.
     std::string spent() const {
         if (budget_.seconds > 0 && elapsed() >= budget_.seconds) return "deadline";
@@ -328,6 +337,11 @@ public:
         // The answer goes to the host on the wire and is printed nowhere else.
         setOutputHandler(std::make_unique<SilentConsole>(true));
         init();
+        // Without this a request that outlives the deadline is waited out in full.
+        setRequestTimeout([this]() {
+            const int left = session_.secondsLeft();
+            return left > 0 ? left : std::numeric_limits<int>::max();
+        });
         setStepLogger([this](const json& line) {
             const std::string kind = line.value("kind", std::string());
             if (kind == "llm") {
@@ -502,6 +516,11 @@ json finalEvent(const Session& session, const json& result) {
     if (!session.stopReason().empty()) {
         status = "incomplete";
         stop = session.stopReason();
+        text.clear();
+    } else if (engineStatus == "error" && session.pastDeadline()) {
+        // The request was cut off by the turn's own deadline, not by the provider.
+        status = "incomplete";
+        stop = "deadline";
         text.clear();
     } else if (engineStatus == "error") {
         status = "failed";

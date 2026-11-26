@@ -35,6 +35,14 @@ export class EngineError extends Error {
 }
 
 /** No `gaiacpp` engine binary could be found to start. */
+/** `run` was called while another turn was running on the same agent. */
+export class AgentBusy extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "AgentBusy";
+  }
+}
+
 export class EngineNotFound extends EngineError {
   constructor(message: string) {
     super(message);
@@ -396,7 +404,8 @@ class Engine {
 
 /**
  * The GAIA agent loop, with your prompt and your tools. One agent runs one
- * turn at a time. Close it to stop the engine process.
+ * turn at a time: a second `run` before the first resolves throws `AgentBusy`.
+ * Close it to stop the engine process.
  */
 export class Agent {
   /** The version the engine reported. */
@@ -406,6 +415,10 @@ export class Agent {
   private readonly tools: Map<string, Tool<any>>;
   private readonly options: AgentOptions;
   private turns = 0;
+  private running = false;
+  private closed = false;
+  // A turn the engine is still running that this agent stopped following.
+  private outOfStep = false;
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   private constructor(engine: Engine, tools: Map<string, Tool<any>>, options: AgentOptions, version: string) {
@@ -497,7 +510,23 @@ export class Agent {
     const conversation: Message[] =
       typeof messages === "string" ? [{ role: "user", content: messages }] : messages;
     const budget = checkBudget(options.budget ?? this.options.budget, this.options.prices !== undefined);
+    if (!Array.isArray(conversation) || conversation.some((m) => m === null || typeof m !== "object")) {
+      throw new TypeError("messages must be a string or an array of { role, content } objects.");
+    }
+    if (this.running) {
+      throw new AgentBusy(
+        "This agent is already running a turn. One agent drives one engine process, so two turns at once would mix their events. Await the first run(), or use one Agent per concurrent turn.",
+      );
+    }
+    this.running = true;
+    try {
+      return await this.runChecked(conversation, budget);
+    } finally {
+      this.running = false;
+    }
+  }
 
+  private async runChecked(conversation: Message[], budget: Record<string, number> | undefined): Promise<Turn> {
     const turn = await this.runOnce(conversation, budget);
     const checks = this.options.answerChecks ?? [];
     if (!turn.ok || checks.length === 0) return turn;
@@ -530,13 +559,33 @@ export class Agent {
       messages: conversation.map((m) => ({ role: m.role, content: m.content })),
     };
     if (budget) request.budget = budget;
+    if (this.closed) throw new EngineError("This agent was closed. Start a new Agent.");
+    if (this.outOfStep) {
+      throw new EngineError(
+        "An earlier turn on this agent was interrupted before the engine finished it, so the two no longer agree on which turn is running. Close this agent and start a new one.",
+      );
+    }
     this.engine.send(request);
+    this.outOfStep = true;
 
     const modelCalls: ModelCall[] = [];
+    let callbackError: { error: unknown } | null = null;
     for (;;) {
-      const event = await this.engine.receive();
+      let event: WireEvent;
+      try {
+        event = await this.engine.receive();
+      } catch (error) {
+        // The engine refused the turn before starting it, and is ready for the next one.
+        if (error instanceof EngineError && error.code === "bad_turn") this.outOfStep = false;
+        throw error;
+      }
+      if (event.turn !== undefined && event.turn !== null && event.turn !== id) {
+        throw new EngineError(
+          `The engine sent a "${event.type}" event for turn "${String(event.turn)}" while "${id}" was running.`,
+        );
+      }
       if (event.type === "tool_request") {
-        this.engine.send(await this.answer(event));
+        this.sendToolResult(event, await this.answer(event));
       } else if (event.type === "model_call") {
         const call: ModelCall = {
           step: Number(event.step ?? 0),
@@ -544,8 +593,18 @@ export class Agent {
           usage: toUsage(event.usage),
         };
         modelCalls.push(call);
-        this.options.onModelCall?.(call);
+        if (callbackError === null) {
+          try {
+            this.options.onModelCall?.(call);
+          } catch (error) {
+            // Thrown once the engine has finished the turn: leaving now would
+            // hand this turn's answer to the next run().
+            callbackError = { error };
+          }
+        }
       } else if (event.type === "final") {
+        this.outOfStep = false;
+        if (callbackError !== null) throw callbackError.error;
         const usage = (event.usage ?? {}) as Record<string, number>;
         return {
           ok: event.status === "success",
@@ -591,8 +650,24 @@ export class Agent {
     return answer;
   }
 
+  /** Answer one `tool_request`; a result JSON cannot hold is a tool error. */
+  private sendToolResult(request: WireEvent, answer: Record<string, unknown>): void {
+    try {
+      this.engine.send(answer);
+    } catch (error) {
+      if (error instanceof EngineError) throw error;
+      const e = error as Error;
+      this.engine.send({
+        type: "tool_result",
+        id: request.id,
+        error: `${String(request.name)} returned a value that cannot be sent to the model as JSON (${e?.name ?? "Error"}: ${e?.message ?? String(error)}). Return objects, arrays, strings, numbers, booleans or null.`,
+      });
+    }
+  }
+
   /** Stop the engine process. */
   async close(): Promise<void> {
+    this.closed = true;
     await this.engine.close();
   }
 }

@@ -102,7 +102,7 @@ Ends the process. Closing stdin does the same.
 |---|---|---|
 | `success` | `answered` | `text` is the model's answer |
 | `incomplete` | `max_steps` | The step limit ran out |
-| `incomplete` | `model_calls`, `output_tokens`, `deadline`, `cost` | A `budget` limit was reached. Nothing more was sent to the model, and `text` is empty |
+| `incomplete` | `model_calls`, `output_tokens`, `deadline`, `cost` | A `budget` limit was reached. Nothing more was sent to the model, and `text` is empty. A request still in flight when `seconds` runs out is cut off, to the nearest second, and the turn ends with `deadline` |
 | `incomplete` | `repeated_calls`, `no_answer` | The loop stopped itself |
 | `failed` | `model_call` | A model request failed; `failure` is `{"kind": "model_call", "message": "..."}` |
 
