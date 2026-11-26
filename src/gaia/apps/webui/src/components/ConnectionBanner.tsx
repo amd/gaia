@@ -108,9 +108,8 @@ export function ConnectionBanner({ onRetry, backendSlow = false, backendError = 
     const canRestart = lifecycle !== null;
     const [dismissed, setDismissed] = useState(false);
 
-    // Suppress the banner entirely while a conversation is in progress.
-    // The banner will not show, will not update its internal state, and will
-    // resume normal behaviour only when there is no active conversation.
+    // Setup and model banners stay hidden while a conversation is in progress;
+    // GAIA's own health (unreachable, erroring, slow or stalled) still shows.
     const hasActiveConversation = !!currentSessionId && messages.length > 0;
 
     const modelName = systemStatus?.default_model_name ?? DEFAULT_MODEL_NAME;
