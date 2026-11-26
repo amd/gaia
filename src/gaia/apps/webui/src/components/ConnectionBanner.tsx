@@ -99,7 +99,13 @@ export function ConnectionBanner({ onRetry, backendSlow = false, backendError = 
 }) {
     const t = useT();
     const { backendConnected, systemStatus, currentSessionId, messages } = useChatStore();
+    // A message that got no start in time says GAIA is stuck before the status check can.
+    const backendStalled = useChatStore((s) => s.backendStalled);
     const lifecycle = useBackendStore((s) => s.lifecycle);
+    const restart = useBackendStore((s) => s.restart);
+    const restartError = useBackendStore((s) => s.restartError);
+    // Only the desktop app supervises the backend, so only it can restart a hung one.
+    const canRestart = lifecycle !== null;
     const [dismissed, setDismissed] = useState(false);
 
     // Suppress the banner entirely while a conversation is in progress.
@@ -338,12 +344,7 @@ export function ConnectionBanner({ onRetry, backendSlow = false, backendError = 
         );
     }
 
-    // Nothing to show
-    if (dismissed) return null;
-
-    // Hidden while a conversation is active (user is in a chat with messages).
-    if (hasActiveConversation) return null;
-
+    // GAIA's own health shows mid-chat too: a stuck assistant is why the next message would fail.
     // Case 1: Backend API is unreachable
     if (!backendConnected) {
         return (
@@ -353,9 +354,12 @@ export function ConnectionBanner({ onRetry, backendSlow = false, backendError = 
                 </div>
                 <div className="connection-banner__text" dir="auto">
                     {t('banner.unreachable')}{' '}
-                    <span className="connection-banner__hint">{t('banner.unreachableHint')}</span>
+                    <span className="connection-banner__hint">
+                        {restartError ? t('banner.restartFailed', { error: restartError }) : t('banner.unreachableHint')}
+                    </span>
                 </div>
                 {onRetry && <RetryButton onRetry={onRetry} label={t('banner.retry')} />}
+                {canRestart && <RetryButton onRetry={restart} label={t('banner.restartButton')} busyLabel={t('banner.restartingShort')} />}
             </div>
         );
     }
@@ -377,7 +381,7 @@ export function ConnectionBanner({ onRetry, backendSlow = false, backendError = 
     }
 
     // Case 1b: the backend answers, but too slowly to read its status.
-    if (backendSlow) {
+    if (backendSlow || backendStalled) {
         return (
             <div className="connection-banner connection-banner--warning" role="status">
                 <div className="connection-banner__icon">
@@ -385,12 +389,21 @@ export function ConnectionBanner({ onRetry, backendSlow = false, backendError = 
                 </div>
                 <div className="connection-banner__text" dir="auto">
                     {t('banner.backendSlow')}{' '}
-                    <span className="connection-banner__hint">{t('banner.backendSlowHint')}</span>
+                    <span className="connection-banner__hint">
+                        {restartError ? t('banner.restartFailed', { error: restartError }) : t('banner.backendSlowHint')}
+                    </span>
                 </div>
                 {onRetry && <RetryButton onRetry={onRetry} label={t('settings.key.checkAgain')} />}
+                {canRestart && <RetryButton onRetry={restart} label={t('banner.restartButton')} busyLabel={t('banner.restartingShort')} />}
             </div>
         );
     }
+
+    // Nothing to show
+    if (dismissed) return null;
+
+    // Hidden while a conversation is active (user is in a chat with messages).
+    if (hasActiveConversation) return null;
 
     // Case 1b: ~/.gaia/config.json exists but could not be loaded.
     // Not dismissable: the shared dismiss flag would also hide a Lemonade-down banner.

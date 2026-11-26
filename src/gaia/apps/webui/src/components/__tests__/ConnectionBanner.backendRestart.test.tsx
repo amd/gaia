@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: MIT
 
 import { act, fireEvent, render, screen } from '@testing-library/react';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest';
 import { ConnectionBanner } from '../ConnectionBanner';
 import { useChatStore } from '../../stores/chatStore';
 import { followBackendLifecycle, resyncBackend, useBackendStore } from '../../stores/backendStore';
@@ -68,6 +68,57 @@ describe('a crashed backend', () => {
         const { container } = render(<ConnectionBanner />);
         expect(container).toHaveTextContent('Can’t reach GAIA’s assistant. GAIA keeps trying to reconnect.');
         expect(container).not.toHaveTextContent(/still running/i);
+    });
+});
+
+describe('a backend that is running but stuck (#9015)', () => {
+    const openChat = () => useChatStore.setState({
+        backendConnected: true, currentSessionId: 's1', messages: [{ role: 'user', content: 'hi' }] as never,
+    });
+
+    it('says GAIA is slow even while a chat is open, and offers Restart GAIA in the desktop app', async () => {
+        openChat();
+        const restart = vi.fn(async () => ({ ...base, status: 'restarting' as const, since: Date.now() }));
+        window.gaiaAPI = { backend: { restart, getState: vi.fn(), onState: vi.fn() } } as never;
+        useBackendStore.setState({ lifecycle: base });
+        const { container } = render(<ConnectionBanner backendSlow onRetry={() => {}} />);
+        expect(container).toHaveTextContent('GAIA is slow to answer.');
+        expect(screen.getByRole('button', { name: 'Check again' })).toBeInTheDocument();
+        await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Restart GAIA' })); });
+        expect(restart).toHaveBeenCalledTimes(1);
+    });
+
+    it('says it can’t reach GAIA while a chat is open, with Restart GAIA in the desktop app', () => {
+        openChat();
+        useChatStore.setState({ backendConnected: false });
+        useBackendStore.setState({ lifecycle: base });
+        const { container } = render(<ConnectionBanner onRetry={() => {}} />);
+        expect(container).toHaveTextContent('Can’t reach GAIA’s assistant.');
+        expect(screen.getByRole('button', { name: 'Restart GAIA' })).toBeInTheDocument();
+    });
+
+    it('says why Restart GAIA failed on a stuck backend', async () => {
+        openChat();
+        window.gaiaAPI = { backend: { restart: vi.fn(async () => { throw new Error('IPC gone'); }), getState: vi.fn(), onState: vi.fn() } } as never;
+        useBackendStore.setState({ lifecycle: base });
+        const { container } = render(<ConnectionBanner backendSlow />);
+        await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Restart GAIA' })); });
+        expect(container).toHaveTextContent('GAIA couldn’t restart its assistant: IPC gone');
+    });
+
+    it('says GAIA is slow as soon as a message got no start, before the status check catches up', () => {
+        openChat();
+        useChatStore.setState({ backendStalled: true });
+        onTestFinished(() => useChatStore.setState({ backendStalled: false }));
+        const { container } = render(<ConnectionBanner />);
+        expect(container).toHaveTextContent('GAIA is slow to answer.');
+    });
+
+    it('offers no Restart GAIA in a browser, which can’t restart the backend', () => {
+        openChat();
+        render(<ConnectionBanner backendSlow />);
+        expect(screen.getByText(/GAIA is slow to answer/)).toBeInTheDocument();
+        expect(screen.queryByRole('button', { name: 'Restart GAIA' })).toBeNull();
     });
 });
 
