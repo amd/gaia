@@ -1349,20 +1349,7 @@ class ChatAgent(
         profile = getattr(self.config, "prompt_profile", "full")
         if "doc_rag" not in get_profile_spec(profile).tool_groups:
             return ""
-        if not self.rag:
-            return ""
         lines = []
-        # Copied first: a background index can add to the set during this loop.
-        indexed = list(self.rag.indexed_files)
-        if indexed:
-            scripts = {fp: self._scripts(fp) for fp in indexed}
-            entries = sorted(
-                {self._indexed_entry(fp, scripts[fp]) for fp in indexed},
-                key=str.lower,
-            )
-            lines.append(f"[Indexed documents: {', '.join(entries)}]")
-            if any(s and s != ["Latin"] for s in scripts.values()):
-                lines.append(_CROSS_LANGUAGE_NOTE)
         restore_failures_state = getattr(self, "_document_restore_failures", {})
         restore_failure_lock = getattr(self, "_restore_failure_lock", None)
         if restore_failure_lock is None:
@@ -1378,6 +1365,19 @@ class ChatAgent(
                 "[Document restore failed; tell the user before answering from it: "
                 f"{reasons}]"
             )
+        if not self.rag:
+            return "\n".join(lines)
+        # Copied first: a background index can add to the set during this loop.
+        indexed = list(self.rag.indexed_files)
+        if indexed:
+            scripts = {fp: self._scripts(fp) for fp in indexed}
+            entries = sorted(
+                {self._indexed_entry(fp, scripts[fp]) for fp in indexed},
+                key=str.lower,
+            )
+            lines.append(f"[Indexed documents: {', '.join(entries)}]")
+            if any(s and s != ["Latin"] for s in scripts.values()):
+                lines.append(_CROSS_LANGUAGE_NOTE)
         failed_paths = {os.path.realpath(path) for path in restore_failures}
         not_loaded = [
             path
@@ -4635,7 +4635,9 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
                         result = self.rag.index_document(doc_path)
                         if result.get("success"):
                             self.indexed_files.add(doc_path)
-                            self._clear_document_restore_failure(doc_path)
+                            RAGToolsMixin._clear_document_restore_failure(
+                                self, doc_path
+                            )
                         else:
                             ChatAgent._record_document_restore_failure(
                                 self, doc_path, result.get("error", "Unknown error")

@@ -189,6 +189,24 @@ def test_resume_lists_a_document_that_indexed(tmp_path, monkeypatch):
     assert ChatAgent.load_session(stub, "s1") is True
 
     assert stub.indexed_files == {str(doc)}
+    assert stub._document_restore_failures == {}
+
+
+def test_resume_reports_documents_when_rag_is_unavailable(tmp_path):
+    doc = tmp_path / "notes.pdf"
+    stub, _ = _resume(tmp_path, PathValidator(), [doc])
+    stub.config = SimpleNamespace(prompt_profile="full")
+    stub.rag = None
+
+    assert ChatAgent.load_session(stub, "s1") is True
+
+    assert stub._document_restore_failures == {
+        str(doc): "RAG dependencies not installed"
+    }
+    assert "Document restore failed" in ChatAgent._indexed_documents_line(stub)
+    assert "notes.pdf: RAG dependencies not installed" in (
+        ChatAgent._indexed_documents_line(stub)
+    )
 
 
 def test_resume_logs_why_a_document_was_not_restored(outside, tmp_path, caplog):
