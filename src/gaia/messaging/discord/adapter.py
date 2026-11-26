@@ -53,6 +53,7 @@ from gaia.messaging.bridge import (
     AgentChannel,
     Turn,
     resolve_agent_argv,
+    written_file_path,
 )
 from gaia.messaging.discord import github_watch, state
 from gaia.security import (
@@ -236,17 +237,6 @@ _DECISION_VERBS = {
     DECISION_ALWAYS: "✅ Always allowed",
     DECISION_DENY: "⛔ Denied",
 }
-
-#: Tools whose ``tool_call`` args name the file they write.
-WRITE_TOOLS = frozenset(
-    {
-        "write_file",
-        "edit_file",
-        "write_markdown_file",
-        "write_python_file",
-        "edit_python_file",
-    }
-)
 
 _CDN_HOSTS = ("cdn.discordapp.com", "media.discordapp.net")
 _UNSAFE_NAME = re.compile(r"[^A-Za-z0-9._-]+")
@@ -1676,10 +1666,9 @@ class DiscordAdapter:
         self._agent().cancel()
 
     def _remember_written_file(self, target: ReplyTarget, tool: str, args: Any) -> None:
-        if tool not in WRITE_TOOLS or not isinstance(args, dict):
-            return
-        raw = args.get("file_path") or args.get("path")
-        target.pending_upload = raw if isinstance(raw, str) else ""
+        path = written_file_path(tool, args)
+        if path is not None:
+            target.pending_upload = path
 
     def _maybe_upload(self, target: ReplyTarget, event: Dict[str, Any]) -> None:
         """Send back the file the preceding tool wrote or made, within limits."""

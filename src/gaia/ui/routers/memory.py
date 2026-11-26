@@ -3,10 +3,10 @@
 
 """Memory Dashboard REST API for GAIA Agent UI."""
 
+import importlib
 import json
 import logging
 import os
-import re
 import sqlite3
 import threading
 import uuid
@@ -34,7 +34,6 @@ from gaia.agents.base.memory_store import (
     check_memory_content,
     is_about_user,
 )
-from gaia.llm.reasoning import strip_reasoning
 from gaia.ui.memory_settings import MEMORY_ENABLED_KEY, memory_enabled
 
 from ..database import ChatDatabase
@@ -761,34 +760,17 @@ def rebuild_embeddings() -> Dict:
         )
 
 
-_RECONCILIATION_PROMPT = """\
-Given these two memory items from the same user, classify their relationship.
-Return JSON: {{"relationship": "reinforce|contradict|weaken|neutral", "action": "description"}}
-
-Item A (stored {date_a}): {content_a}
-Item B (stored {date_b}): {content_b}"""
-
-_RECONCILE_SIMILARITY_THRESHOLD = 0.85
-
-
 @router.post("/api/memory/reconcile")
 def trigger_reconciliation(max_pairs: int = Query(20, ge=1, le=100)) -> Dict:
     """Manually trigger background memory reconciliation.
 
     Compares knowledge entries for contradictions and reinforcements using
     FAISS similarity search + LLM classification.  Works standalone — no
-    active ChatAgent session required.
+    active ChatAgent session required. Both paths run
+    ``gaia.agents.base.memory.reconcile_memories``, so they agree.
 
     Returns ``{pairs_checked, reinforced, contradicted, weakened, neutral}``.
     """
-    result = {
-        "pairs_checked": 0,
-        "reinforced": 0,
-        "contradicted": 0,
-        "weakened": 0,
-        "neutral": 0,
-    }
-
     # If an active agent session is available, prefer it (uses cached FAISS index)
     if _reconcile_fn is not None:
         try:
@@ -801,184 +783,47 @@ def trigger_reconciliation(max_pairs: int = Query(20, ge=1, le=100)) -> Dict:
                 "Check the GAIA server log for the traceback.",
             ) from exc
 
-    # Standalone path — build a temporary FAISS index from stored embeddings
     try:
-        import numpy as np
+        importlib.import_module("faiss")
+    except ImportError:
+        raise HTTPException(503, "faiss not installed — run: pip install faiss-cpu")
 
-        try:
-            import faiss
-        except ImportError:
-            raise HTTPException(503, "faiss not installed — run: pip install faiss-cpu")
-
-        from gaia.agents.base.memory import _blob_to_embedding, assert_faiss_omp_safe
+    try:
+        from gaia.agents.base.memory import (
+            RECONCILIATION_SYSTEM_PROMPT,
+            reconcile_memories,
+            reconciliation_max_tokens,
+        )
         from gaia.llm import create_client
+        from gaia.llm.lemonade_client import (
+            no_thinking_kwargs,
+            resolve_local_chat_model,
+        )
 
         store = _get_store()
-        items = store.get_items_for_reconciliation(limit=200)
+        llm: Dict[str, Any] = {}
 
-        if len(items) < 2:
-            return result  # Not enough items with embeddings
-
-        # Dimension is derived from the stored vectors, not a hardcoded constant
-        # — the active embedder (e.g. the NPU FLM embedder) may differ from the
-        # GGUF default (#1744). The first valid vector sets the expected dim;
-        # any vector of a different dim (a stale pre-switch embedding) is skipped.
-        ids: List[str] = []
-        vectors: List[np.ndarray] = []
-        item_map: Dict[str, Any] = {}
-        expected_dim: Optional[int] = None
-        undecodable = 0
-
-        for item in items:
-            try:
-                vec = _blob_to_embedding(item["embedding"])
-                if expected_dim is None:
-                    expected_dim = int(vec.shape[0])
-                if vec.shape[0] != expected_dim:
-                    continue
-                norm = np.linalg.norm(vec)
-                if norm > 0:
-                    vec = vec / norm
-                ids.append(item["id"])
-                vectors.append(vec)
-                item_map[item["id"]] = item
-            except (ValueError, TypeError, KeyError) as exc:
-                undecodable += 1
-                logger.debug(
-                    "[memory router] skipping item %s: %s", item.get("id"), exc
-                )
-
-        if undecodable:
-            logger.warning(
-                "[memory router] reconcile skipped %d item(s) with an unreadable "
-                "embedding; POST /api/memory/rebuild-embeddings to include them",
-                undecodable,
-            )
-
-        if len(vectors) < 2 or expected_dim is None:
-            return result
-
-        mat = np.stack(vectors).astype(np.float32)
-        index = faiss.IndexFlatIP(expected_dim)
-        index.add(mat)
-
-        n_neighbors = min(5, len(vectors))
-        assert_faiss_omp_safe("Memory dashboard reconciliation search")
-        scores_all, indices_all = index.search(mat, n_neighbors)
-
-        # Collect high-similarity pairs
-        pairs: List[tuple] = []
-        seen: set = set()
-        for i in range(len(vectors)):
-            for j_pos in range(n_neighbors):
-                j = int(indices_all[i][j_pos])
-                if j == i:
-                    continue
-                sim = float(scores_all[i][j_pos])
-                if sim >= _RECONCILE_SIMILARITY_THRESHOLD:
-                    key = tuple(sorted((ids[i], ids[j])))
-                    if key not in seen:
-                        seen.add(key)
-                        pairs.append((ids[i], ids[j], sim))
-
-        pairs.sort(key=lambda x: x[2], reverse=True)
-        pairs = pairs[:max_pairs]
-
-        if not pairs:
-            return result
-
-        llm = create_client()
-        # One metadata dict per id for the whole run: a memory in several
-        # pairs must keep every marker, not just the last pair's.
-        metas: Dict[str, Dict[str, Any]] = {}
-
-        def _meta(knowledge_id: str) -> Dict[str, Any]:
-            if knowledge_id not in metas:
-                raw_meta = item_map[knowledge_id].get("metadata") or {}
-                if isinstance(raw_meta, str):
-                    try:
-                        raw_meta = json.loads(raw_meta) if raw_meta else {}
-                    except json.JSONDecodeError as exc:
-                        raise ValueError(
-                            f"memory {knowledge_id} has unreadable metadata "
-                            f"({exc}); fix or delete that entry, then retry"
-                        ) from exc
-                meta = dict(raw_meta)
-                meta["reconciled_with"] = list(meta.get("reconciled_with") or [])
-                metas[knowledge_id] = meta
-            return metas[knowledge_id]
-
-        for id_a, id_b, _sim in pairs:
-            item_a = item_map.get(id_a)
-            item_b = item_map.get(id_b)
-            if not item_a or not item_b:
-                continue
-
-            # Skip already-reconciled pairs
-            meta_a = _meta(id_a)
-            meta_b = _meta(id_b)
-            if id_b in meta_a["reconciled_with"] or id_a in meta_b["reconciled_with"]:
-                continue
-
-            prompt = _RECONCILIATION_PROMPT.format(
-                date_a=str(item_a.get("created_at", "unknown"))[:10],
-                content_a=str(item_a.get("content", ""))[:500],
-                date_b=str(item_b.get("created_at", "unknown"))[:10],
-                content_b=str(item_b.get("content", ""))[:500],
-            )
-            # An LLM that is down fails the run; only an unparseable reply skips a pair.
-            raw = llm.chat(
-                [{"role": "user", "content": prompt}],
+        def classify(prompt: str) -> str:
+            # Created on first use: a run with no new pairs needs no LLM.
+            if not llm:
+                llm["model"] = resolve_local_chat_model()
+                llm["client"] = create_client()
+            model = llm["model"]
+            raw = llm["client"].chat(
+                [
+                    {"role": "system", "content": RECONCILIATION_SYSTEM_PROMPT},
+                    {"role": "user", "content": prompt},
+                ],
+                model=model,
                 temperature=0.1,
-                max_new_tokens=128,
+                max_tokens=reconciliation_max_tokens(model),
+                **no_thinking_kwargs(model),
             )
             if hasattr(raw, "__iter__") and not isinstance(raw, str):
                 raw = "".join(raw)
-            raw = strip_reasoning(raw)
-            if raw.startswith("```"):
-                raw = re.sub(r"^```(?:json)?\s*", "", raw)
-                raw = re.sub(r"\s*```$", "", raw).strip()
-            try:
-                classification = json.loads(raw)
-                relationship = classification.get("relationship", "neutral")
-            except (json.JSONDecodeError, AttributeError) as exc:
-                logger.warning(
-                    "[memory router] skipping pair %s/%s: unparseable reply (%s)",
-                    id_a,
-                    id_b,
-                    exc,
-                )
-                continue
+            return raw
 
-            result["pairs_checked"] += 1
-
-            if relationship == "reinforce":
-                store.update_confidence(id_a, 0.05)
-                store.update_confidence(id_b, 0.05)
-                result["reinforced"] += 1
-            elif relationship == "contradict":
-                # Weaken both slightly; log in metadata
-                store.update_confidence(id_a, -0.1)
-                store.update_confidence(id_b, -0.1)
-                result["contradicted"] += 1
-            elif relationship == "weaken":
-                store.update_confidence(id_b, -0.05)
-                result["weakened"] += 1
-            else:
-                result["neutral"] += 1
-
-            # An unrecorded pair is re-classified, and re-penalised, next run.
-            meta_a["reconciled_with"].append(id_b)
-            meta_b["reconciled_with"].append(id_a)
-            for knowledge_id, meta in ((id_a, meta_a), (id_b, meta_b)):
-                if not store.update(knowledge_id, metadata=meta):
-                    raise RuntimeError(
-                        f"could not mark memory {knowledge_id} as reconciled: "
-                        "the entry no longer exists"
-                    )
-
-        logger.info("[memory router] standalone reconcile: %s", result)
-        return result
+        return reconcile_memories(store, classify, max_pairs=max_pairs)
 
     except HTTPException:
         raise

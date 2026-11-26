@@ -14,6 +14,10 @@
  * A ledger file records each server's pids and command lines, so the next
  * launch can stop servers a crash left behind. It only ever signals a pid it
  * recorded whose command line still matches.
+ *
+ * A server must listen only on loopback. Once its port answers, the
+ * addresses it is bound to are read from the OS; one bound to every interface
+ * or to a network address is stopped with an error saying how to bind it.
  */
 
 "use strict";
@@ -24,6 +28,7 @@ const net = require("net");
 const path = require("path");
 const { BridgeError } = require("./bridge-error.cjs");
 const { descendantsFromTable, killProcessTree, listProcesses } = require("../process-tree.cjs");
+const { isLoopback, listeningAddresses } = require("./listen-addresses.cjs");
 
 /** @typedef {import("./contract").DevServerSpec} DevServerSpec */
 /** @typedef {import("./contract").DevServerState} DevServerState */
@@ -49,6 +54,10 @@ const LINE_CHARS = 500;
 const PROBE_EVERY_MS = 100;
 const PROBE_TIMEOUT_MS = 400;
 const REAP_GRACE_MS = 3000;
+const LOOPBACK_HINT =
+  'Start it bound to 127.0.0.1: in launch.json\'s runtimeArgs add "--bind 127.0.0.1" for python -m http.server, ' +
+  '"--host 127.0.0.1" for Vite or webpack serve, "--hostname 127.0.0.1" for Next.js, "-a 127.0.0.1" for http-server, ' +
+  'or "--listen tcp://127.0.0.1:<port>" for serve; for an npm script, put the flag in package.json\'s script.';
 const ERROR_LINE = /\berror\b|\bfailed\b|\bexception\b|\bfatal\b|\bpanic\b|ERR!/i;
 
 function envNameAllowed(name) {
@@ -56,6 +65,7 @@ function envNameAllowed(name) {
 }
 
 /**
+ * HOST=127.0.0.1 is the loopback bind for dev servers that read it; launch.json may set another loopback HOST.
  * @param {DevServerSpec} spec @param {NodeJS.ProcessEnv} from
  * @param {string | null} searchPath The backend's login-shell PATH; an app opened from the Dock has only launchd's.
  */
@@ -63,7 +73,7 @@ function childEnv(spec, from, searchPath = null) {
   const env = {};
   for (const name of INHERITED_ENV) if (from[name] !== undefined) env[name] = from[name];
   if (searchPath) env.PATH = searchPath;
-  return { ...env, ...spec.env };
+  return { ...env, HOST: "127.0.0.1", ...spec.env };
 }
 
 /** True when something accepts a TCP connection on the port, over IPv4 or IPv6 loopback. */
@@ -148,6 +158,7 @@ class DevServerSupervisor {
    *   spawn?: typeof childProcess.spawn,
    *   listProcesses?: typeof listProcesses,
    *   killTree?: typeof killProcessTree,
+   *   listeningAddresses?: typeof listeningAddresses,
    *   reapGraceMs?: number,
    *   logger?: { log: Function, error: Function },
    * }} deps
@@ -158,6 +169,7 @@ class DevServerSupervisor {
       spawn: childProcess.spawn,
       listProcesses,
       killTree: killProcessTree,
+      listeningAddresses,
       reapGraceMs: REAP_GRACE_MS,
       logger: console,
       ...deps,
@@ -427,8 +439,39 @@ class DevServerSupervisor {
       }
       await new Promise((r) => setTimeout(r, PROBE_EVERY_MS));
     }
+    await this.requireLoopbackOnly(entry);
     entry.status = "ready";
     this.deps.onChange();
+  }
+
+  /** Stop a server anything off this computer could reach, or whose binding can't be read. */
+  async requireLoopbackOnly(entry) {
+    let addresses;
+    try {
+      addresses = await this.deps.listeningAddresses(entry.spec.port);
+    } catch (err) {
+      await this.halt(entry);
+      throw this.notLoopback(entry, `answered, but GAIA could not read which network addresses it listens on (${err.message}), so it stopped it rather than risk exposing it.`, []);
+    }
+    const open = addresses.filter((a) => !isLoopback(a));
+    if (addresses.length > 0 && open.length === 0) return;
+    await this.halt(entry);
+    if (addresses.length === 0) {
+      throw this.notLoopback(entry, "answered, but GAIA could not see which address it listens on, so it stopped it rather than risk exposing it.", []);
+    }
+    const everywhere = open.some((a) => a === "*" || a === "0.0.0.0" || a === "::");
+    const where = everywhere ? "all network interfaces" : `the network address ${open.join(", ")}`;
+    throw this.notLoopback(entry, `listened on ${where}, so other computers on the network could reach it; GAIA stopped it.`, open);
+  }
+
+  notLoopback(entry, what, addresses) {
+    const { spec } = entry;
+    this.deps.logger.error(`[dev-servers] Stopped "${spec.name}" on port ${spec.port}: not bound to loopback only (${addresses.join(", ") || "binding unknown"}).`);
+    return new BridgeError("dev_server_failed", `Dev server "${spec.name}" (${spec.argv.join(" ")}) on port ${spec.port} ${what} ${LOOPBACK_HINT}`, {
+      exitCode: null,
+      lines: [],
+      addresses,
+    });
   }
 
   failed(entry, what) {

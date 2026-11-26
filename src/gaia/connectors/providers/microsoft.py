@@ -56,11 +56,10 @@ from __future__ import annotations
 
 import logging
 import os
-from typing import Iterable, Mapping, Sequence
-from urllib.parse import urlencode
+from typing import Iterable, Sequence
 
 from gaia.connectors.errors import OAuthClientNotConfiguredError
-from gaia.connectors.providers.base import client_id_hash
+from gaia.connectors.providers.base import PkceRequests, client_id_hash
 from gaia.connectors.setup_routes import get_route, render_console_steps
 
 logger = logging.getLogger(__name__)
@@ -162,7 +161,7 @@ SCOPE_DESCRIPTIONS: dict[str, str] = {
 }
 
 
-class MicrosoftOAuthProvider:
+class MicrosoftOAuthProvider(PkceRequests):
     """
     Concrete provider for the Microsoft identity platform. One instance per
     connector id (``microsoft`` / ``microsoft_work``) — see the module
@@ -375,50 +374,6 @@ class MicrosoftOAuthProvider:
         if login_hint and domain:
             params["domain_hint"] = domain
         return params
-
-    def authorization_url(
-        self,
-        redirect_uri: str,
-        challenge: str,
-        state: str,
-        scopes: Iterable[str],
-        extra_params: Mapping[str, str] | None = None,
-    ) -> str:
-        params = {
-            "client_id": self.client_id,
-            "redirect_uri": redirect_uri,
-            "response_type": "code",
-            "code_challenge": challenge,
-            "code_challenge_method": "S256",
-            "state": state,
-            "scope": " ".join(scopes),
-        }
-        params.update(self.authorization_params())
-        params.update(extra_params or {})
-        return f"{self.auth_url}?{urlencode(params)}"
-
-    def token_request_body(self, code: str, verifier: str, redirect_uri: str) -> dict:
-        body: dict = {
-            "grant_type": "authorization_code",
-            "code": code,
-            "code_verifier": verifier,
-            "redirect_uri": redirect_uri,
-            "client_id": self.client_id,
-        }
-        # Public client: omit unless a confidential-app secret is configured.
-        if self.client_secret:
-            body["client_secret"] = self.client_secret
-        return body
-
-    def refresh_request_body(self, refresh_token: str) -> dict:
-        body: dict = {
-            "grant_type": "refresh_token",
-            "refresh_token": refresh_token,
-            "client_id": self.client_id,
-        }
-        if self.client_secret:
-            body["client_secret"] = self.client_secret
-        return body
 
     # ---- Device-code flow (#1275) ------------------------------------------
     # RFC 8628 device authorization grant. Used for the zero-setup sign-in that

@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shlex
 import socket
 import subprocess
@@ -199,6 +200,113 @@ def test_the_fixture_app_parses(tmp_path):
     specs = load_specs(FIXTURE_APP, allowed=allow(FIXTURE_APP))
     assert {s.name for s in specs} >= {"web", "crash"}
     assert all(s.argv[0] == "node" for s in specs)
+
+
+# ------------------------------------------------------------ loopback binds
+
+
+@pytest.mark.parametrize(
+    "exe, args, added",
+    [
+        ("python3", ["-m", "http.server", "9876"], ["--bind", "127.0.0.1"]),
+        ("python", ["-u", "-m", "http.server"], ["--bind", "127.0.0.1"]),
+        ("npx", ["vite"], ["--host", "127.0.0.1"]),
+        ("npx", ["--yes", "vite", "preview"], ["--host", "127.0.0.1"]),
+        ("next", ["dev"], ["--hostname", "127.0.0.1"]),
+        ("npx", ["serve", "."], ["--listen", "tcp://127.0.0.1:9876"]),
+        ("npx", ["http-server", "."], ["-a", "127.0.0.1"]),
+        ("npx", ["webpack", "serve"], ["--host", "127.0.0.1"]),
+    ],
+)
+def test_a_known_server_with_no_bind_gets_a_loopback_one(tmp_path, exe, args, added):
+    write_launch(
+        tmp_path, {**WEB, "runtimeExecutable": exe, "runtimeArgs": args, "port": 9876}
+    )
+    spec = spec_named(tmp_path, "web", allowed=allow(tmp_path))
+    assert spec.argv == (exe, *args, *added)
+    assert spec.prompt_args()["command"] == shlex.join(spec.argv)
+
+
+@pytest.mark.parametrize(
+    "exe, args",
+    [
+        ("python3", ["-m", "http.server", "--bind", "127.0.0.1"]),
+        ("python3", ["-m", "http.server", "-b", "::1"]),
+        ("npx", ["vite", "--host=localhost"]),
+        ("next", ["dev", "-H", "127.0.0.1"]),
+        ("npx", ["serve", "-l", "tcp://localhost:9876"]),
+        ("node", ["server.js", "--host", "0.0.0.0"]),
+        ("npm", ["run", "dev"]),
+        ("npx", ["vite", "build"]),
+        ("python", ["-b", "-m", "http.server", "--bind", "127.0.0.1"]),
+    ],
+)
+def test_a_loopback_bind_or_an_unknown_command_is_left_as_written(tmp_path, exe, args):
+    write_launch(tmp_path, {**WEB, "runtimeExecutable": exe, "runtimeArgs": args})
+    assert spec_named(tmp_path, "web", allowed=allow(tmp_path)).argv == (exe, *args)
+
+
+@pytest.mark.parametrize(
+    "exe, args, message",
+    [
+        (
+            "python3",
+            ["-m", "http.server", "--bind", "0.0.0.0"],
+            r"'0\.0\.0\.0'.*--bind 127\.0\.0\.1",
+        ),
+        ("python3", ["-m", "http.server", "-b", "192.168.1.5"], r"'192\.168\.1\.5'"),
+        ("npx", ["vite", "--host"], r"Vite is given no address.*--host 127\.0\.0\.1"),
+        ("npx", ["vite", "--host=0.0.0.0"], r"'0\.0\.0\.0'"),
+        ("next", ["dev", "--hostname", "::"], r"Next\.js is given '::'"),
+        ("npx", ["serve", "-l", "3000"], r"tcp://127\.0\.0\.1:4173"),
+        ("npx", ["http-server", "-a", "0.0.0.0"], r"-a 127\.0\.0\.1"),
+    ],
+)
+def test_a_known_server_bound_to_the_network_is_refused(tmp_path, exe, args, message):
+    write_launch(tmp_path, {**WEB, "runtimeExecutable": exe, "runtimeArgs": args})
+    with pytest.raises(LaunchConfigError) as err:
+        load_specs(tmp_path, allowed=allow(tmp_path))
+    assert re.search(message, str(err.value))
+    assert "other computers on the network could reach it" in str(err.value)
+
+
+@pytest.mark.parametrize("name", ["HOST", "HOSTNAME"])
+def test_env_may_set_host_only_to_loopback(tmp_path, name):
+    write_launch(tmp_path, {**WEB, "env": {name: "0.0.0.0"}})
+    with pytest.raises(LaunchConfigError, match=f"env {name}=0.0.0.0 would let other"):
+        load_specs(tmp_path, allowed=allow(tmp_path))
+    write_launch(tmp_path, {**WEB, "env": {name: "127.0.0.1"}})
+    assert spec_named(tmp_path, "web", allowed=allow(tmp_path)).env == (
+        (name, "127.0.0.1"),
+    )
+
+
+@pytest.mark.parametrize(
+    "value, loopback",
+    [
+        ("127.0.0.1", True),
+        ("127.8.8.8", True),
+        ("localhost", True),
+        ("::1", True),
+        ("[::1]", True),
+        ("tcp://127.0.0.1:3000", True),
+        ("tcp://localhost:3000", True),
+        ("0.0.0.0", False),
+        ("::", False),
+        ("192.168.1.5", False),
+        ("tcp://0.0.0.0:3000", False),
+        ("3000", False),
+        ("", False),
+        ("example.com", False),
+    ],
+)
+def test_loopback_host(value, loopback):
+    assert dev_servers.loopback_host(value) is loopback
+
+
+def test_the_static_server_is_left_alone(tmp_path):
+    spec = dev_servers.static_spec(tmp_path, 18123)
+    assert dev_servers.bind_loopback(spec.argv, 18123) == spec.argv
 
 
 # ------------------------------------------------------- approval by digest

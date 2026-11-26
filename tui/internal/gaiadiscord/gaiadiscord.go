@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/amd/gaia/tui/internal/gaiainit"
+	"github.com/amd/gaia/tui/internal/textutil"
 )
 
 // CallTimeout bounds a status probe or a connect. Starting the bridge waits
@@ -129,7 +130,7 @@ func run(ctx context.Context, timeout time.Duration, stdin string, args ...strin
 	cmd.Stdout = &out
 	cmd.Stderr = &errBuf
 	runErr := cmd.Run()
-	return out.Bytes(), lastMeaningfulLine(errBuf.String() + out.String()), runErr
+	return out.Bytes(), textutil.LastLine(errBuf.String() + out.String()), runErr
 }
 
 // jsonFrom decodes the last JSON object a command printed: a stray log line
@@ -252,14 +253,4 @@ func Decline(ctx context.Context, never bool) error {
 		args = append(args, "--never")
 	}
 	return simple(ctx, "record that", args...)
-}
-
-func lastMeaningfulLine(s string) string {
-	lines := strings.Split(strings.TrimSpace(s), "\n")
-	for i := len(lines) - 1; i >= 0; i-- {
-		if line := strings.TrimSpace(lines[i]); line != "" {
-			return line
-		}
-	}
-	return "(no output)"
 }

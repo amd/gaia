@@ -55,12 +55,24 @@ def test_reconcile_raises_when_a_second_openmp_runtime_is_loaded(
         reconciling_host.reconcile_memory()
 
 
-def test_reconcile_search_failure_is_logged_as_a_warning(reconciling_host, caplog):
+def test_reconcile_search_failure_is_raised(reconciling_host):
+    """A failed search is an error, not a quiet "0 pairs checked"."""
     with patch("faiss.IndexFlatIP.search", side_effect=RuntimeError("boom")):
-        with caplog.at_level(logging.WARNING, logger=memory_mod.logger.name):
-            result = reconciling_host.reconcile_memory()
+        with pytest.raises(RuntimeError, match="boom"):
+            reconciling_host.reconcile_memory()
 
-    assert result["pairs_checked"] == 0
+
+def test_startup_logs_a_failed_reconcile_as_a_warning(reconciling_host, caplog):
+    with (
+        patch.object(
+            reconciling_host, "reconcile_memory", side_effect=RuntimeError("boom")
+        ),
+        patch.object(reconciling_host, "consolidate_old_sessions", return_value={}),
+        patch.object(reconciling_host, "start_skill_synthesis"),
+    ):
+        with caplog.at_level(logging.WARNING, logger=memory_mod.logger.name):
+            reconciling_host._run_memory_post_init()
+
     assert any(
         r.levelno == logging.WARNING and "boom" in r.getMessage()
         for r in caplog.records

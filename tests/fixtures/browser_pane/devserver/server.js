@@ -2,8 +2,9 @@
 // SPDX-License-Identifier: MIT
 
 // A tiny dev server for the browser pane's dev-server tests. Node only, no
-// packages. `--port N` sets the port, `--crash` fails on boot, and a syntax
-// error saved into src/app.js is logged as a build error, like a bundler would.
+// packages. `--port N` sets the port, `--host H` the address (default
+// localhost), `--crash` fails on boot, and a syntax error saved into
+// src/app.js is logged as a build error, like a bundler would.
 
 "use strict";
 
@@ -14,6 +15,7 @@ const vm = require("vm");
 
 const args = process.argv.slice(2);
 const port = Number(args[args.indexOf("--port") + 1] || process.env.PORT || 41730);
+const host = args.includes("--host") ? args[args.indexOf("--host") + 1] : "localhost";
 const source = path.join(__dirname, "src", "app.js");
 
 console.log(`> fixture-dev-server starting (node ${process.version})`);
@@ -49,6 +51,6 @@ http
     res.writeHead(200, { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" });
     res.end(`<!doctype html><title>Fixture dev server</title>${page}`);
   })
-  .listen(port, "localhost", () => console.log(`> ready on http://localhost:${port}/`));
+  .listen(port, host, () => console.log(`> ready on http://localhost:${port}/`));
 
 process.on("SIGTERM", () => process.exit(0));

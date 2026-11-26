@@ -312,7 +312,8 @@ def _check_vite_leak(files: Iterable[Path]) -> list[str]:
         # and deeply nested chunks where the regex over minified code is noisy.
         try:
             text = p.read_text(encoding="utf-8", errors="replace")
-        except OSError:
+        except OSError as e:
+            errors.append(f"cannot read {p} to scan it for leaked VITE_* values: {e}")
             continue
         if _VITE_LEAK_RE.search(text):
             errors.append(f"possible leaked VITE_* literal in bundle: {p}")
