@@ -48,6 +48,7 @@ from gaia.messaging.bridge import (
     AgentChannel,
     StreamThrottle,
     Turn,
+    written_file_path,
 )
 
 log = get_logger(__name__)
@@ -120,18 +121,6 @@ MULTI_USER_ERROR = (
     "  gaia slack start --allowed-users U024BE7LH\n"
     "\n"
     "Docs: https://amd-gaia.ai/docs/guides/slack"
-)
-
-#: Tools whose ``tool_call`` args name the file they write. The canonical
-#: ``tool_result`` carries only a summary, so the path is taken from the call.
-WRITE_TOOLS = frozenset(
-    {
-        "write_file",
-        "edit_file",
-        "write_markdown_file",
-        "write_python_file",
-        "edit_python_file",
-    }
 )
 
 #: Seconds an approval prompt waits before it is denied. The agent itself waits
@@ -847,10 +836,9 @@ class SlackAdapter:
 
     def _remember_written_file(self, target: ReplyTarget, tool: str, args: Any) -> None:
         """Note the path a file-writing tool was asked to write."""
-        if tool not in WRITE_TOOLS or not isinstance(args, dict):
-            return
-        raw = args.get("file_path") or args.get("path")
-        target.pending_upload = raw if isinstance(raw, str) else ""
+        path = written_file_path(tool, args)
+        if path is not None:
+            target.pending_upload = path
 
     def _maybe_upload(self, target: ReplyTarget, event: Dict[str, Any]) -> None:
         """Send back the file the preceding write tool produced.

@@ -112,8 +112,8 @@ def turn(query, limit=600, poll=False):
     call("POST", "keys", {"keys": ["enter"], "delay_ms": 40})
     try:
         call("POST", "wait", {"state": {"streaming": True}, "timeout_ms": 20000})
-    except Exception:
-        pass
+    except Exception as e:
+        raise RuntimeError(f"the turn never started streaming within 20 s: {query!r}") from e
     samples = []
     while time.time() - t0 < limit:
         streaming = call("GET", "status")["state"]["streaming"]

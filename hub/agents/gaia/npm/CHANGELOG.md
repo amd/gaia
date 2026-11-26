@@ -15,7 +15,10 @@ Requires the `gaia` Python CLI 0.27.0+ on `PATH`.
   travels with the first user message, and every `surface` shares one system
   prompt. The log's new `PROMPT_PREFIX` lines say, per chat, how much of the
   prompt the model reused, and warn with what changed when it could not.
-
+- **A turn that recovered from a cut-off reply is no longer reported as failed.**
+  A reply that hit the output-token limit was asked to continue and the turn
+  went on to answer, but the turn still ended with `status: failed`, and
+  `gaia -p` exited 1. Only a turn that gives up on cut-off replies fails now.
 - **Docs: Ask and Accept edits refuse deletes, they don't ask.** A delete the
   shell would otherwise ask about is refused with no approval card; only Full
   access runs it. The SPEC and guides now say so.

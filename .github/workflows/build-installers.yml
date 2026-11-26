@@ -131,6 +131,8 @@ on:
       - '.github/workflows/build_core.yml'
       - 'hub/agents/gaia/python/packaging/check_bundle_licenses.py'
       - 'hub/agents/gaia/python/packaging/check_glibc.py'
+      # installer/core/freeze.py takes its exclusion lists from the agent's freeze.
+      - 'hub/agents/gaia/python/packaging/freeze.py'
       - 'hub/agents/gaia/python/gaia-agent.yaml'
       - 'hub/agents/gaia/python/gaiapy/__init__.py'
       - 'util/gaiapy_rc_assets.py'

@@ -137,8 +137,8 @@ for (const name of Object.keys(TOOL_ICON)) {
 /** Rows that mark the agent picking up a skill; use_skill is one GAIA adds itself. */
 const SKILL_USE_TOOLS = new Set(['load_skill', 'use_skill']);
 
-// Memory works in the background: its steps show only when they fail.
-const BACKGROUND_TOOLS = new Set(['remember', 'recall', 'update_memory', 'forget']);
+// Silent memory reads stay in the background unless they fail; memory writes always show.
+const BACKGROUND_TOOLS = new Set(['recall']);
 
 function isBackgroundStep(step: AgentStep): boolean {
     return step.type === 'tool' && step.success !== false && BACKGROUND_TOOLS.has(step.tool ?? '');

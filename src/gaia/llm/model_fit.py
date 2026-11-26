@@ -41,6 +41,8 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
+from gaia.llm.display_adapters import iter_display_adapters
+
 #: Multiplier on the weights' size for runtime buffers that scale with the model.
 MEMORY_OVERHEAD_FACTOR = 1.05
 #: Fixed headroom for compute buffers and a small KV cache.
@@ -280,10 +282,7 @@ def _gpu_entries(devices: Dict[str, Any]) -> List[Tuple[str, bool, Dict[str, Any
     return out
 
 
-#: Windows' display-adapter class; each adapter's subkey records its memory.
-_DISPLAY_CLASS_KEY = (
-    r"SYSTEM\CurrentControlSet\Control\Class\{4d36e968-e325-11ce-bfc1-08002be10318}"
-)
+_MEMORY_SIZE_VALUE = "HardwareInformation.qwMemorySize"
 
 
 def _windows_adapter_memory_gb(name: Any) -> float:
@@ -295,31 +294,12 @@ def _windows_adapter_memory_gb(name: Any) -> float:
     """
     if sys.platform != "win32" or not isinstance(name, str) or not name:
         return 0.0
-    import winreg  # pylint: disable=import-error
-
-    try:
-        root = winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, _DISPLAY_CLASS_KEY)
-    except OSError:
-        return 0.0
-    with root:
-        index = 0
-        while True:
-            try:
-                subkey = winreg.EnumKey(root, index)
-            except OSError:
-                return 0.0
-            index += 1
-            try:
-                with winreg.OpenKey(root, subkey) as adapter:
-                    if winreg.QueryValueEx(adapter, "DriverDesc")[0] != name:
-                        continue
-                    size = winreg.QueryValueEx(
-                        adapter, "HardwareInformation.qwMemorySize"
-                    )[0]
-            except OSError:
-                # "Properties" and other non-adapter subkeys refuse the read.
-                continue
-            return int(size) / 1024**3 if isinstance(size, int) else 0.0
+    for values in iter_display_adapters(_MEMORY_SIZE_VALUE):
+        if values["DriverDesc"] != name or _MEMORY_SIZE_VALUE not in values:
+            continue
+        size = values[_MEMORY_SIZE_VALUE]
+        return int(size) / 1024**3 if isinstance(size, int) else 0.0
+    return 0.0
 
 
 @dataclass(frozen=True)

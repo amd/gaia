@@ -50,6 +50,12 @@ def test_a_fresh_install_gets_four_cards_that_work_without_setup():
     assert _skills(cards) == ["research-report", "coding", "summarize", "check-in"]
 
 
+def test_no_code_card_in_gaias_own_documents_folder():
+    """The desktop app starts there: "Work on code · In documents" asked about an empty folder."""
+    ctx = ss.Context(STARTER, 0, False, "documents", gaia_folder=True)
+    assert "coding" not in _skills(ss.pick_cards(ctx))
+
+
 def test_what_the_user_set_up_comes_first():
     cards = ss.pick_cards(_ctx(docs=3, mail=True))
     assert _skills(cards) == [

@@ -68,3 +68,19 @@ it('shows no overlay for dragged text', async () => {
     await dragOver(['text/plain']);
     expect(screen.queryByText(OVERLAY)).not.toBeInTheDocument();
 });
+
+it('clears the overlay when the file is dropped on the message box', async () => {
+    const { container } = render(<ChatView sessionId={SESSION.id} />);
+    const chat = container.querySelector('main.task-view') as HTMLElement;
+    const composer = container.querySelector('.composer') as HTMLElement;
+    mockedApi.uploadFile.mockResolvedValue({ url: '/api/files/photo.png' } as Awaited<ReturnType<typeof api.uploadFile>>);
+    const file = new File(['x'], 'photo.png', { type: 'image/png' });
+    await act(async () => {
+        fireEvent.dragOver(chat, { dataTransfer: { types: ['Files'] } });
+    });
+    expect(screen.getByText(OVERLAY)).toBeInTheDocument();
+    await act(async () => {
+        fireEvent.drop(composer, { dataTransfer: { types: ['Files'], files: [file] } });
+    });
+    expect(screen.queryByText(OVERLAY)).not.toBeInTheDocument();
+});

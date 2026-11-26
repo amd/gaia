@@ -171,7 +171,12 @@ posix("ensure", () => {
 
   test("the server gets only the allowed environment", () => {
     const env = childEnv({ env: { NODE_ENV: "development" } }, { PATH: "/bin", HOME: "/h", ANTHROPIC_API_KEY: "sk-x", GAIA_BROWSER_PANE_DISCOVERY: "/f" });
-    expect(env).toEqual({ PATH: "/bin", HOME: "/h", NODE_ENV: "development" });
+    expect(env).toEqual({ PATH: "/bin", HOME: "/h", HOST: "127.0.0.1", NODE_ENV: "development" });
+  });
+
+  test("HOST defaults to 127.0.0.1; launch.json may set another loopback HOST", () => {
+    expect(childEnv({ env: {} }, { HOST: "0.0.0.0" }).HOST).toBe("127.0.0.1");
+    expect(childEnv({ env: { HOST: "localhost" } }, {}).HOST).toBe("localhost");
   });
 
   test("the server finds tools on the backend's login PATH, not main's", () => {
@@ -182,6 +187,70 @@ posix("ensure", () => {
   test("ensure before start is a bug, not a silent wait", async () => {
     const { sup } = supervisor();
     await expect(sup.ensure(KEY, spec(1234), "chat-1")).rejects.toMatchObject({ code: "internal" });
+  });
+});
+
+posix("only this computer reaches a dev server", () => {
+  async function startWith(listeningAddresses, extra = []) {
+    const spawn = jest.fn(childProcess.spawn);
+    const logger = { log: () => {}, error: jest.fn() };
+    const { sup } = supervisor({ spawn, logger, ...(listeningAddresses ? { listeningAddresses } : {}) });
+    await sup.start();
+    const port = await freePort();
+    const err = await sup.ensure(KEY, spec(port, extra), "chat-1").catch((e) => e);
+    const pid = spawn.mock.results[0].value.pid;
+    return { sup, port, err, pid, logger };
+  }
+
+  test("a server on loopback only is ready", async () => {
+    const listeningAddresses = jest.fn(async () => ["127.0.0.1", "::1"]);
+    const { sup, port, err: started } = await startWith(listeningAddresses);
+    expect(started).toMatchObject({ server: { status: "ready" } });
+    expect(listeningAddresses).toHaveBeenCalledWith(port);
+    expect(sup.list()[0].status).toBe("ready");
+  });
+
+  test("one listening on all interfaces is stopped, with how to bind it", async () => {
+    const { sup, port, err, pid, logger } = await startWith(async () => ["127.0.0.1", "*"]);
+    expect(err).toBeInstanceOf(BridgeError);
+    expect(err.code).toBe("dev_server_failed");
+    expect(err.message).toMatch(/listened on all network interfaces, so other computers on the network could reach it; GAIA stopped it/);
+    expect(err.message).toContain("--bind 127.0.0.1");
+    expect(err.data.addresses).toEqual(["*"]);
+    expect(alive(pid)).toBe(false);
+    expect(await portAnswers(port)).toBe(false);
+    expect(sup.list()[0].status).toBe("stopped");
+    expect(logger.error).toHaveBeenCalledWith(expect.stringMatching(/not bound to loopback only \(\*\)/));
+  });
+
+  test("one listening on a network address is stopped and the address named", async () => {
+    const { err, pid } = await startWith(async () => ["::1", "192.168.1.5"]);
+    expect(err.message).toMatch(/listened on the network address 192\.168\.1\.5/);
+    expect(alive(pid)).toBe(false);
+  });
+
+  test("a binding GAIA can't read stops the server, never passes it", async () => {
+    const { err, pid } = await startWith(async () => {
+      throw new Error("spawn /usr/sbin/lsof ENOENT");
+    });
+    expect(err.code).toBe("dev_server_failed");
+    expect(err.message).toMatch(/could not read which network addresses it listens on \(spawn \/usr\/sbin\/lsof ENOENT\)/);
+    expect(alive(pid)).toBe(false);
+  });
+
+  test("no listener visible on a port that answers stops the server", async () => {
+    const { err, pid } = await startWith(async () => []);
+    expect(err.message).toMatch(/could not see which address it listens on/);
+    expect(alive(pid)).toBe(false);
+  });
+
+  test("the OS's own listing catches a real server bound to 0.0.0.0", async () => {
+    const { sup, port, err, pid } = await startWith(undefined, ["--host", "0.0.0.0"]);
+    expect(err.code).toBe("dev_server_failed");
+    expect(err.message).toMatch(/all network interfaces/);
+    expect(alive(pid)).toBe(false);
+    expect(await portAnswers(port)).toBe(false);
+    expect(sup.list()[0].status).toBe("stopped");
   });
 });
 

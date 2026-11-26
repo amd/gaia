@@ -25,27 +25,34 @@ it.each([
     expect(screen.queryByText('Used tool')).toBeNull();
 });
 
-it.each(['remember', 'recall', 'update_memory', 'forget'])(
-    'keeps a successful %s step out of the activity list',
-    (tool) => {
-        const steps = [step(tool), { ...step('find_files'), id: 2 }];
-        render(<AgentActivity steps={steps} isActive={false} />);
+it.each([
+    ['remember', 'Saved to memory'],
+    ['update_memory', 'Updated memory'],
+    ['forget', 'Deleted from memory'],
+])('shows a successful %s memory write step in the activity list', (tool, label) => {
+    render(<AgentActivity steps={[step(tool)]} isActive={false} />);
 
-        expect(screen.getByText('Found files')).toBeInTheDocument();
-        expect(screen.queryByText(/memory/i)).toBeNull();
-    },
-);
+    expect(screen.getByText(label)).toBeInTheDocument();
+});
 
-it('shows nothing when memory was the only activity', () => {
+it('keeps a successful recall step out of the activity list', () => {
+    const steps = [step('recall'), { ...step('find_files'), id: 2 }];
+    render(<AgentActivity steps={steps} isActive={false} />);
+
+    expect(screen.getByText('Found files')).toBeInTheDocument();
+    expect(screen.queryByText(/memory/i)).toBeNull();
+});
+
+it('shows nothing when recall was the only activity', () => {
     const { container } = render(
-        <AgentActivity steps={[step('remember')]} isActive={false} />,
+        <AgentActivity steps={[step('recall')]} isActive={false} />,
     );
 
     expect(container).toBeEmptyDOMElement();
 });
 
-it('still shows a memory step that failed', () => {
-    render(<AgentActivity steps={[step('remember', false, false)]} isActive={false} />);
+it('still shows a background recall step that failed', () => {
+    render(<AgentActivity steps={[step('recall', false, false)]} isActive={false} />);
 
     expect(screen.getByText(/memory/i)).toBeInTheDocument();
 });
@@ -82,11 +89,18 @@ it('names a running GAIA agent step in the present tense', () => {
     expect(screen.getByText('Asking you')).toBeInTheDocument();
 });
 
-it('leaves hidden memory steps out of a folded summary', () => {
-    const steps = [step('remember'), { ...step('find_files'), id: 2 }, { ...step('read_file'), id: 3 }];
+it('leaves hidden recall steps out of a folded summary', () => {
+    const steps = [step('recall'), { ...step('find_files'), id: 2 }, { ...step('read_file'), id: 3 }];
     render(<AgentActivity steps={steps} isActive={false} />);
 
     expect(screen.getByRole('button', { name: /^Found files, read file$/ })).toBeInTheDocument();
+});
+
+it('includes memory writes in a folded summary', () => {
+    const steps = [step('remember'), { ...step('find_files'), id: 2 }];
+    render(<AgentActivity steps={steps} isActive={false} />);
+
+    expect(screen.getByRole('button', { name: /^Saved to memory, found files$/ })).toBeInTheDocument();
 });
 
 it('names a tool it has no label for, rather than "Used tool"', () => {

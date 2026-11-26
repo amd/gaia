@@ -6490,7 +6490,11 @@ class TestSideRequestsDisableThinking:
                 "created_at": "2026-01-01T00:00:00",
                 "metadata": {},
             }
-            for item_id in ("k-a", "k-b")
+            # Real rows: reconciliation fails loudly when it cannot mark a pair.
+            for item_id in (
+                host._memory_store.store(category="fact", content=content)
+                for content in ("User deploys on Fridays", "User reviews on Mondays")
+            )
         ]
         host._faiss_index = MagicMock(ntotal=2)
         host.chat = _chat_for(_THINKING_MODEL, text='{"relationship": "neutral"}')
@@ -6586,7 +6590,11 @@ class TestSideRequestsDropReasoning:
                 "created_at": "2026-01-01T00:00:00",
                 "metadata": {},
             }
-            for item_id in ("k-a", "k-b")
+            # Real rows: reconciliation fails loudly when it cannot mark a pair.
+            for item_id in (
+                host._memory_store.store(category="fact", content=content)
+                for content in ("User deploys on Fridays", "User reviews on Mondays")
+            )
         ]
         host._faiss_index = MagicMock(ntotal=2)
         reply = _with_reasoning(shape, '{"relationship": "reinforce"}')
