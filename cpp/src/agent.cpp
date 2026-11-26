@@ -649,6 +649,10 @@ bool runsOnNpu(const std::string& modelId, const std::string& recipe) {
 
 Agent::LlmResult Agent::callLlm(const std::vector<Message>& messages, const std::string& sysPrompt,
                                 const AgentConfig& cfg, bool allowTools) {
+    if (beforeModelRequest_) {
+        beforeModelRequest_();
+        if (cancelRequested()) throw std::runtime_error("Cancelled before the model request");
+    }
     // Two agents on the NPU at once each run several times slower than in turn, and taking
     // turns per request still makes each re-read its whole prompt. So the NPU is kept for
     // the turn. Taken before the load, so one agent can't swap the model under another's reply.

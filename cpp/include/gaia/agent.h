@@ -186,6 +186,10 @@ public:
     /// so a turn that is killed or hangs still leaves a record.
     void setStepLogger(std::function<void(const json&)> logger) { stepLogger_ = std::move(logger); }
 
+    /// Called on the loop's thread before every model request, retries included.
+    /// It may wait, or call requestCancel() so the request is not sent.
+    void setBeforeModelRequest(std::function<void()> hook) { beforeModelRequest_ = std::move(hook); }
+
     /// Seconds one model request may take, asked before each request; unset = the client's own limit.
     void setRequestTimeout(std::function<int()> seconds) { requestTimeout_ = std::move(seconds); }
 
@@ -489,6 +493,7 @@ private:
     std::function<bool()> cancelCheck_;
     std::function<void(const json&)> stepLogger_;
     std::function<int()> requestTimeout_;
+    std::function<void()> beforeModelRequest_;
     bool cancelRequested() const { return cancelled_.load() || (cancelCheck_ && cancelCheck_()); }
 
     AgentState executionState_ = AgentState::PLANNING;

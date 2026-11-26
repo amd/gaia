@@ -21,7 +21,15 @@ is the thin layer between the two.
             print(turn.text)
 """
 
-from gaia_sdk.agent import UNRESOLVED_CHECKS, Agent, Budget, Prices, Turn
+from gaia_sdk.agent import (
+    UNRESOLVED_CHECKS,
+    Agent,
+    Budget,
+    ModelRequest,
+    Prices,
+    StopTurn,
+    Turn,
+)
 from gaia_sdk.engine import PROTOCOL, AgentBusy, EngineError, EngineNotFound
 from gaia_sdk.tools import Tool, ToolRefusal, tool
 
@@ -33,8 +41,10 @@ __all__ = [
     "Budget",
     "EngineError",
     "EngineNotFound",
+    "ModelRequest",
     "PROTOCOL",
     "Prices",
+    "StopTurn",
     "Tool",
     "ToolRefusal",
     "Turn",

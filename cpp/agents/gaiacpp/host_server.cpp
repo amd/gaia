@@ -185,6 +185,54 @@ public:
         fatal_ = nullptr;
         callCounts_.clear();
         terminalDone_ = false;
+        nextGate_ = 0;
+        hostStop_.clear();
+        cancelledByHost_ = false;
+    }
+
+    void gateModelCalls(bool on) { gate_ = on; }
+    bool gated() const { return gate_; }
+    bool cancelledByHost() const { return cancelledByHost_; }
+    const std::string& hostStop() const { return hostStop_; }
+
+    /// Ask the host whether the next model request may go. False: the turn is over.
+    bool askHost() {
+        const std::string id = turnId_ + ":m" + std::to_string(++nextGate_);
+        json left = nullptr;
+        if (budget_.seconds > 0) {
+            left = std::round(std::max(0.0, budget_.seconds - elapsed()) * 1000) / 1000;
+        }
+        write({{"type", "model_request"},
+               {"id", id},
+               {"turn", turnId_},
+               {"model_calls", modelCalls_},
+               {"input_tokens", inputTokens_},
+               {"output_tokens", outputTokens_},
+               {"seconds", std::round(elapsed() * 1000) / 1000},
+               {"seconds_left", left}});
+        const std::optional<json> answer = read();
+        if (!answer) throw HostGone();
+        const std::string type = (*answer)["type"].get<std::string>();
+        if (type == "shutdown") throw HostGone();
+        if (type == "cancel") {
+            cancelledByHost_ = true;
+            return false;
+        }
+        if (type != "model_go" || answer->value("id", std::string()) != id) {
+            throw ProtocolError("bad_message", "Expected `model_go` or `cancel` for `" + id + "`, got `" +
+                                                   type + "`. Answer each `model_request` before "
+                                                          "sending anything else.");
+        }
+        if (answer->contains("stop") && !(*answer)["stop"].is_null()) {
+            if (!(*answer)["stop"].is_string()) {
+                throw ProtocolError("bad_message", "`model_go.stop` must be a string: why the host is "
+                                                   "ending the turn.");
+            }
+            hostStop_ = (*answer)["stop"].get<std::string>();
+            stopFor("host_stop");
+            return false;
+        }
+        return true;
     }
 
     void setPrices(Prices prices) { prices_ = prices; }
@@ -276,6 +324,12 @@ public:
         const std::string type = (*answer)["type"].get<std::string>();
         // A host that asks to stop mid-call is leaving, not making a mistake.
         if (type == "shutdown") throw HostGone();
+        if (type == "cancel") {
+            cancelledByHost_ = true;
+            json notRun = {{"status", "error"}, {"error", "Not run: the turn was cancelled."}};
+            toolCalls_.push_back({{"name", name}, {"arguments", args}, {"result", notRun}, {"failed", true}});
+            return notRun;
+        }
         if (type != "tool_result" || answer->value("id", std::string()) != id) {
             throw ProtocolError("bad_message", "Expected `tool_result` for `" + id + "`, got `" + type +
                                                    "`. Answer each `tool_request` before sending "
@@ -325,6 +379,10 @@ private:
     Prices prices_;
     std::map<std::string, int> callCounts_;
     bool terminalDone_ = false;
+    bool gate_ = false;
+    int nextGate_ = 0;
+    std::string hostStop_;
+    bool cancelledByHost_ = false;
 };
 
 /// The loop with the host's prompt and the host's tools, and none of its own.
@@ -341,6 +399,18 @@ public:
         setRequestTimeout([this]() {
             const int left = session_.secondsLeft();
             return left > 0 ? left : std::numeric_limits<int>::max();
+        });
+        setBeforeModelRequest([this]() {
+            if (!session_.gated() || session_.abandoned() || session_.cancelledByHost()) return;
+            try {
+                if (!session_.askHost()) requestCancel();
+                return;
+            } catch (const HostGone&) {
+                session_.abandon(std::current_exception());
+            } catch (const ProtocolError&) {
+                session_.abandon(std::current_exception());
+            }
+            requestCancel();
         });
         setStepLogger([this](const json& line) {
             const std::string kind = line.value("kind", std::string());
@@ -381,6 +451,7 @@ protected:
                 // the model, so a host that left would be asked again and again.
                 try {
                     json result = session_.callHostTool(name, args);
+                    if (session_.cancelledByHost()) requestCancel();
                     if (declared.terminal && !session_.lastCallFailed()) session_.endToolUse();
                     return result;
                 } catch (const HostGone&) {
@@ -454,6 +525,11 @@ std::unique_ptr<HostAgent> buildAgent(const json& init, Session& session) {
         cfg.llmRetries = retries.get<int>();
     }
 
+    if (init.contains("gate_model_calls") && !init["gate_model_calls"].is_boolean()) {
+        throw ProtocolError("bad_init", "`gate_model_calls` must be true or false.");
+    }
+    session.gateModelCalls(init.value("gate_model_calls", false));
+
     std::vector<HostTool> tools;
     std::set<std::string> names;
     const json declared = init.value("tools", json::array());
@@ -513,7 +589,11 @@ json finalEvent(const Session& session, const json& result) {
     std::string status = "success";
     std::string stop = "answered";
     json failure = nullptr;
-    if (!session.stopReason().empty()) {
+    if (session.cancelledByHost()) {
+        status = "cancelled";
+        stop = "cancelled";
+        text.clear();
+    } else if (!session.stopReason().empty()) {
         status = "incomplete";
         stop = session.stopReason();
         text.clear();
@@ -548,7 +628,8 @@ json finalEvent(const Session& session, const json& result) {
             {"usage", session.usage()},
             {"cost_usd", session.costUsd()},
             {"seconds", std::round(session.elapsed() * 1000) / 1000},
-            {"failure", failure}};
+            {"failure", failure},
+            {"host_stop", stop == "host_stop" ? json(session.hostStop()) : json(nullptr)}};
 }
 
 void runTurn(HostAgent& agent, Session& session, const json& turn) {

@@ -14,7 +14,8 @@
         "temperature",
         "native_tools",
         "retries",
-        "prices"
+        "prices",
+        "gate_model_calls"
       ]
     },
     "turn": {
@@ -24,6 +25,13 @@
     "tool_result": {
       "required": ["type", "id"],
       "one_of": ["result", "error"]
+    },
+    "model_go": {
+      "required": ["type", "id"],
+      "optional": ["stop"]
+    },
+    "cancel": {
+      "required": ["type"]
     },
     "shutdown": {
       "required": ["type"]
@@ -38,6 +46,16 @@
   "engine_to_host": {
     "ready": ["type", "protocol", "version"],
     "tool_request": ["type", "id", "turn", "name", "arguments"],
+    "model_request": [
+      "type",
+      "id",
+      "turn",
+      "model_calls",
+      "input_tokens",
+      "output_tokens",
+      "seconds",
+      "seconds_left"
+    ],
     "model_call": ["type", "turn", "step", "seconds", "usage"],
     "final": [
       "type",
@@ -49,7 +67,8 @@
       "usage",
       "cost_usd",
       "seconds",
-      "failure"
+      "failure",
+      "host_stop"
     ],
     "error": ["type", "code", "message"]
   },
@@ -64,6 +83,7 @@
     "output_tokens",
     "deadline",
     "cost",
+    "host_stop",
     "model_call",
     "repeated_calls",
     "no_answer",

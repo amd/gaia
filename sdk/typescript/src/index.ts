@@ -34,7 +34,6 @@ export class EngineError extends Error {
   }
 }
 
-/** No `gaiacpp` engine binary could be found to start. */
 /** `run` was called while another turn was running on the same agent. */
 export class AgentBusy extends Error {
   constructor(message: string) {
@@ -43,6 +42,33 @@ export class AgentBusy extends Error {
   }
 }
 
+/**
+ * Throw from `beforeModelCall` to end the turn without another request. The
+ * turn comes back "incomplete" with `stopReason` "host_stop" and the detail in
+ * `Turn.hostStop`.
+ */
+export class StopTurn extends Error {
+  readonly detail: string;
+  constructor(detail = "") {
+    super(detail);
+    this.name = "StopTurn";
+    this.detail = String(detail);
+  }
+}
+
+/** What `beforeModelCall` is told about the request about to be sent. */
+export interface ModelRequest {
+  /** Requests this turn has already sent. */
+  modelCalls: number;
+  inputTokens: number;
+  outputTokens: number;
+  /** Seconds since the turn started. */
+  seconds: number;
+  /** Seconds until the turn's `budget.seconds` runs out; null without one. */
+  secondsLeft: number | null;
+}
+
+/** No `gaiacpp` engine binary could be found to start. */
 export class EngineNotFound extends EngineError {
   constructor(message: string) {
     super(message);
@@ -195,6 +221,8 @@ export interface Turn {
   costUsd: number | null;
   /** What the answer checks still object to after the one repair. */
   unresolvedChecks: string[];
+  /** What `StopTurn` said, when `stopReason` is "host_stop". */
+  hostStop: string | null;
 }
 
 export interface AgentOptions {
@@ -227,6 +255,13 @@ export interface AgentOptions {
    */
   answerChecks?: AnswerCheck[];
   onModelCall?: (call: ModelCall) => void;
+  /**
+   * Called before each model request is sent. It may wait (a rate limit), or
+   * throw `StopTurn(detail)` to end the turn with `stopReason` "host_stop".
+   * Anything else it throws ends the turn too, and is thrown from `run` once
+   * the engine has finished it.
+   */
+  beforeModelCall?: (request: ModelRequest) => void | Promise<void>;
   /** The gaiacpp binary, or a command to start it, when it is not found otherwise. */
   engine?: string | string[];
 }
@@ -417,6 +452,8 @@ export class Agent {
   private turns = 0;
   private running = false;
   private closed = false;
+  private cancelRequested = false;
+  private hookError: { error: unknown } | null = null;
   // A turn the engine is still running that this agent stopped following.
   private outOfStep = false;
 
@@ -465,6 +502,8 @@ export class Agent {
       })),
       native_tools: options.nativeTools ?? true,
       retries: options.retries ?? 0,
+      // Asked before each model request: where cancel() and the hook act.
+      gate_model_calls: true,
     };
     for (const [key, value] of [
       ["api_key_env", options.apiKeyEnv],
@@ -519,6 +558,7 @@ export class Agent {
       );
     }
     this.running = true;
+    this.cancelRequested = false;
     try {
       return await this.runChecked(conversation, budget);
     } finally {
@@ -570,6 +610,7 @@ export class Agent {
 
     const modelCalls: ModelCall[] = [];
     let callbackError: { error: unknown } | null = null;
+    this.hookError = null;
     for (;;) {
       let event: WireEvent;
       try {
@@ -585,7 +626,10 @@ export class Agent {
         );
       }
       if (event.type === "tool_request") {
-        this.sendToolResult(event, await this.answer(event));
+        if (this.cancelRequested) this.engine.send({ type: "cancel" });
+        else this.sendToolResult(event, await this.answer(event));
+      } else if (event.type === "model_request") {
+        this.engine.send(await this.modelGo(event));
       } else if (event.type === "model_call") {
         const call: ModelCall = {
           step: Number(event.step ?? 0),
@@ -604,6 +648,7 @@ export class Agent {
         }
       } else if (event.type === "final") {
         this.outOfStep = false;
+        callbackError = this.hookError ?? callbackError;
         if (callbackError !== null) throw callbackError.error;
         const usage = (event.usage ?? {}) as Record<string, number>;
         return {
@@ -618,6 +663,7 @@ export class Agent {
           modelCalls,
           costUsd: typeof event.cost_usd === "number" ? event.cost_usd : null,
           unresolvedChecks: [],
+          hostStop: typeof event.host_stop === "string" ? event.host_stop : null,
         };
       } else {
         throw new EngineError(
@@ -650,9 +696,51 @@ export class Agent {
     return answer;
   }
 
+  /**
+   * Stop the turn in flight. The model request or tool call already running
+   * finishes; nothing further is sent, and the turn resolves with status
+   * "cancelled". Without a turn in flight this does nothing.
+   */
+  cancel(): void {
+    if (this.running) this.cancelRequested = true;
+  }
+
+  /** Answer one `model_request`: go, stop the turn, or cancel it. */
+  private async modelGo(request: WireEvent): Promise<Record<string, unknown>> {
+    if (this.cancelRequested) return { type: "cancel" };
+    const go: Record<string, unknown> = { type: "model_go", id: request.id };
+    const hook = this.options.beforeModelCall;
+    if (!hook) return go;
+    try {
+      await hook({
+        modelCalls: Number(request.model_calls ?? 0),
+        inputTokens: Number(request.input_tokens ?? 0),
+        outputTokens: Number(request.output_tokens ?? 0),
+        seconds: Number(request.seconds ?? 0),
+        secondsLeft: typeof request.seconds_left === "number" ? request.seconds_left : null,
+      });
+    } catch (error) {
+      if (error instanceof StopTurn) {
+        go.stop = error.detail;
+      } else {
+        // The engine is told to stop, so the two stay in step; the error
+        // itself is thrown once the turn has ended.
+        const e = error as Error;
+        go.stop = `beforeModelCall threw ${e?.name ?? "Error"}: ${e?.message ?? String(error)}`;
+        this.hookError = { error };
+      }
+    }
+    return this.cancelRequested ? { type: "cancel" } : go;
+  }
+
   /** Answer one `tool_request`; a result JSON cannot hold is a tool error. */
   private sendToolResult(request: WireEvent, answer: Record<string, unknown>): void {
     try {
+      // JSON drops a function, a symbol and a toJSON() that returns undefined
+      // without an error, and the engine would then get no result at all.
+      if ("result" in answer && JSON.stringify(answer.result) === undefined) {
+        throw new TypeError(`a ${typeof answer.result} has no JSON form`);
+      }
       this.engine.send(answer);
     } catch (error) {
       if (error instanceof EngineError) throw error;

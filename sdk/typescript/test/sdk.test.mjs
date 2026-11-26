@@ -11,7 +11,16 @@ import { dirname, join } from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 
-import { Agent, AgentBusy, EngineError, EngineNotFound, PROTOCOL, ToolRefusal, tool } from "../dist/index.js";
+import {
+  Agent,
+  AgentBusy,
+  EngineError,
+  EngineNotFound,
+  PROTOCOL,
+  StopTurn,
+  ToolRefusal,
+  tool,
+} from "../dist/index.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const FAKE = [process.execPath, join(here, "fake-engine.mjs")];
@@ -580,6 +589,13 @@ function oddTools(gate) {
       },
     }),
     undefined: () => undefined,
+    function: () => () => 1,
+    symbol: () => Symbol("x"),
+    nojson: () => ({
+      toJSON() {
+        return undefined;
+      },
+    }),
     nan: () => ({ total: Number.NaN }),
     text: () => "plain text",
     huge: () => ({ rows: Array.from({ length: 2000 }, () => "x".repeat(1000)) }),
@@ -617,7 +633,7 @@ async function withOddAgent(options, body) {
   }
 }
 
-for (const kind of ["circular", "bigint", "thrower"]) {
+for (const kind of ["circular", "bigint", "thrower", "function", "symbol", "nojson"]) {
   test(`real engine: a tool result JSON cannot hold (${kind}) is a tool error the model is told of`, real, async () => {
     await withOddAgent({}, async (agent, model) => {
       model.call("lookup", { kind });
@@ -757,5 +773,99 @@ test("real engine: a long run of mixed turns keeps each answer with its own turn
       }
       assert.equal(model.replies.length, 0, `round ${round} left a reply unread`);
     }
+  });
+});
+
+test("real engine: the hook is told what the turn has spent before each request", real, async () => {
+  const seen = [];
+  await withOddAgent({ beforeModelCall: (request) => void seen.push(request) }, async (agent, model) => {
+    model.call("lookup", { kind: "text" });
+    model.say("Done.");
+
+    const turn = await agent.run("look it up", { budget: { seconds: 60 } });
+
+    assert.equal(turn.text, "Done.");
+    assert.deepEqual(
+      seen.map((r) => [r.modelCalls, r.outputTokens]),
+      [
+        [0, 0],
+        [1, 7],
+      ],
+    );
+    assert.ok(seen[1].secondsLeft > 0 && seen[1].secondsLeft <= 60);
+    assert.equal(turn.hostStop, null);
+  });
+});
+
+test("real engine: StopTurn ends the turn without another request", real, async () => {
+  let stop = true;
+  const beforeModelCall = async (request) => {
+    if (stop && request.modelCalls === 1) throw new StopTurn("account is over its rate limit");
+  };
+  await withOddAgent({ beforeModelCall }, async (agent, model) => {
+    model.call("lookup", { kind: "text" });
+    model.say("Next turn.");
+
+    const turn = await agent.run("look it up");
+    const sent = model.requests.length;
+    stop = false;
+    const after = await agent.run("hi");
+
+    assert.equal(turn.status, "incomplete");
+    assert.equal(turn.stopReason, "host_stop");
+    assert.equal(turn.hostStop, "account is over its rate limit");
+    assert.equal(turn.text, "");
+    assert.equal(sent, 1);
+    assert.equal(after.text, "Next turn.");
+  });
+});
+
+test("real engine: a hook that throws ends the turn and rejects after it", real, async () => {
+  let calls = 0;
+  const beforeModelCall = () => {
+    if (++calls === 1) throw new Error("limiter unreachable");
+  };
+  await withOddAgent({ beforeModelCall }, async (agent, model) => {
+    model.say("Second answer.");
+
+    await assert.rejects(() => agent.run("one"), /limiter unreachable/);
+    assert.equal(model.requests.length, 0);
+
+    assert.equal((await agent.run("two")).text, "Second answer.");
+  });
+});
+
+test("real engine: cancel during a tool call ends the turn cancelled", real, async () => {
+  let release;
+  let entered;
+  const inTool = new Promise((resolve) => (entered = resolve));
+  const gate = () => {
+    entered();
+    return new Promise((resolve) => (release = resolve));
+  };
+  await withOddAgent({ gate }, async (agent, model) => {
+    model.call("lookup", { kind: "text" });
+    model.say("Next turn.");
+
+    const first = agent.run("one");
+    await inTool;
+    agent.cancel();
+    release();
+    const turn = await first;
+
+    assert.equal(turn.status, "cancelled");
+    assert.equal(turn.stopReason, "cancelled");
+    assert.equal(turn.text, "");
+    assert.equal(model.requests.length, 1);
+  });
+});
+
+test("real engine: cancel with no turn running does not stop the next one", real, async () => {
+  await withOddAgent({}, async (agent, model) => {
+    model.say("Hello.");
+
+    agent.cancel();
+
+    assert.equal((await agent.run("hi")).text, "Hello.");
   });
 });

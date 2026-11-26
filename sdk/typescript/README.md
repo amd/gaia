@@ -49,6 +49,8 @@ try {
 One agent runs one turn at a time; a second `run` while one is running raises
 `AgentBusy`. A tool result JSON cannot hold is reported to the model as a failed call,
 and a `seconds` budget cuts off a model request still in flight.
+`beforeModelCall` runs before each model request and can wait or stop the turn, and
+`agent.cancel()` stops a turn from outside.
 
 ## The engine binary
 

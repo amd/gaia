@@ -75,6 +75,14 @@ protected:
                 {"messages", json::array({{{"role", "user"}, {"content", text}}})}};
     }
 
+    json gatedInit() const {
+        json message = init();
+        message["gate_model_calls"] = true;
+        return message;
+    }
+
+    static json go(const std::string& id) { return {{"type", "model_go"}, {"id", id}}; }
+
     /// Run the engine over `lines`, and return what it wrote.
     std::vector<json> run(const std::vector<json>& lines) {
         std::string input;
@@ -605,11 +613,18 @@ TEST_F(GaiacppEngine, NoRunOfBadLinesCrashesTheEngineOrGarblesItsOutput) {
         mock_.pushResponses(answer("Here is the answer."), 20);
 
         std::string input;
-        if (pick(4) != 0) input += init().dump() + "\n";
+        if (pick(4) != 0) input += (pick(2) ? gatedInit() : init()).dump() + "\n";
         int turns = 0;
         const size_t lines = 1 + pick(8);
         for (size_t i = 0; i < lines; ++i) {
-            switch (pick(4)) {
+            switch (pick(6)) {
+            case 4:
+                input += go("t" + std::to_string(turns) + ":m" + std::to_string(1 + pick(3))).dump() + "\n";
+                break;
+            case 5:
+                input += pick(2) ? std::string("{\"type\":\"cancel\"}\n")
+                                 : std::string("{\"type\":\"model_go\",\"id\":\"t1:m1\",\"stop\":\"quota\"}\n");
+                break;
             case 0:
                 input += turn("t" + std::to_string(++turns), "Where is my order?").dump() + "\n";
                 break;
@@ -648,6 +663,111 @@ TEST_F(GaiacppEngine, NoRunOfBadLinesCrashesTheEngineOrGarblesItsOutput) {
     }
 }
 
+TEST_F(GaiacppEngine, WithTheGateOnEveryModelRequestWaitsForTheHost) {
+    mock_.pushResponse(toolCall("get_order", {{"order_number", "1001"}}));
+    mock_.pushResponse(answer("It has shipped."));
+    const json result = {{"type", "tool_result"}, {"id", "t1:1"}, {"result", {{"status", "shipped"}}}};
+    json limited = turn("t1", "Where is order 1001?");
+    limited["budget"] = {{"seconds", 60}};
+
+    const auto events = run({gatedInit(), limited, go("t1:m1"), result, go("t1:m2")});
+
+    const auto asked = ofType(events, "model_request");
+    ASSERT_EQ(asked.size(), 2u);
+    EXPECT_EQ(asked[0]["id"], "t1:m1");
+    EXPECT_EQ(asked[0]["model_calls"], 0);
+    EXPECT_EQ(asked[1]["model_calls"], 1);
+    EXPECT_EQ(asked[1]["output_tokens"], 7);
+    EXPECT_GT(asked[1]["seconds_left"].get<double>(), 0.0);
+    EXPECT_LE(asked[1]["seconds_left"].get<double>(), 60.0);
+    EXPECT_EQ(ofType(events, "final").at(0)["text"], "It has shipped.");
+    EXPECT_TRUE(ofType(events, "final").at(0)["host_stop"].is_null());
+}
+
+TEST_F(GaiacppEngine, WithoutTheGateNoModelRequestIsSent) {
+    mock_.pushResponse(answer("Hello."));
+
+    const auto events = run({init(), turn("t1", "hi")});
+
+    EXPECT_TRUE(ofType(events, "model_request").empty());
+    EXPECT_EQ(ofType(events, "final").at(0)["text"], "Hello.");
+}
+
+TEST_F(GaiacppEngine, AHostStopEndsTheTurnWithoutSendingTheRequest) {
+    mock_.pushResponse(toolCall("get_order", {{"order_number", "1001"}}));
+    mock_.pushResponse(answer("Next turn."));
+    const json result = {{"type", "tool_result"}, {"id", "t1:1"}, {"result", {{"status", "shipped"}}}};
+    json stop = go("t1:m2");
+    stop["stop"] = "account is over its rate limit";
+
+    const auto events = run({gatedInit(), turn("t1", "Where is order 1001?"), go("t1:m1"), result, stop,
+                             turn("t2", "hi"), go("t2:m1")});
+
+    const auto finals = ofType(events, "final");
+    ASSERT_EQ(finals.size(), 2u);
+    EXPECT_EQ(finals[0]["status"], "incomplete");
+    EXPECT_EQ(finals[0]["stop_reason"], "host_stop");
+    EXPECT_EQ(finals[0]["host_stop"], "account is over its rate limit");
+    EXPECT_EQ(finals[0]["text"], "");
+    EXPECT_TRUE(finals[0]["failure"].is_null());
+    EXPECT_EQ(finals[0]["usage"]["model_calls"], 1);
+    EXPECT_EQ(finals[1]["status"], "success");
+    EXPECT_EQ(finals[1]["text"], "Next turn.");
+    EXPECT_EQ(mock_.requestCount(), 2);
+}
+
+TEST_F(GaiacppEngine, ACancelInPlaceOfModelGoEndsTheTurnCancelled) {
+    mock_.pushResponse(answer("Next turn."));
+
+    const auto events =
+        run({gatedInit(), turn("t1", "hi"), json{{"type", "cancel"}}, turn("t2", "hi"), go("t2:m1")});
+
+    const auto finals = ofType(events, "final");
+    ASSERT_EQ(finals.size(), 2u);
+    EXPECT_EQ(finals[0]["status"], "cancelled");
+    EXPECT_EQ(finals[0]["stop_reason"], "cancelled");
+    EXPECT_EQ(finals[0]["text"], "");
+    EXPECT_EQ(finals[1]["text"], "Next turn.");
+    EXPECT_EQ(mock_.requestCount(), 1);
+}
+
+TEST_F(GaiacppEngine, ACancelInPlaceOfAToolResultEndsTheTurnCancelled) {
+    mock_.pushResponse(toolCall("get_order", {{"order_number", "1001"}}));
+    mock_.pushResponse(answer("never asked for"));
+
+    const auto events = run({init(), turn("t1", "Where is order 1001?"), json{{"type", "cancel"}}});
+
+    const auto finals = ofType(events, "final");
+    ASSERT_EQ(finals.size(), 1u);
+    EXPECT_EQ(finals[0]["status"], "cancelled");
+    EXPECT_EQ(finals[0]["tool_calls"][0]["failed"], true);
+    EXPECT_EQ(mock_.requestCount(), 1);
+}
+
+TEST_F(GaiacppEngine, AWrongAnswerToAModelRequestIsNamedAndTheNextTurnStillRuns) {
+    mock_.pushResponse(answer("Next turn."));
+    json notAString = go("t1:m1");
+    notAString["stop"] = 5;
+
+    const auto events = run({gatedInit(), turn("t1", "hi"), notAString, turn("t2", "hi"), go("t2:m1")});
+
+    ASSERT_EQ(ofType(events, "error").size(), 1u);
+    EXPECT_EQ(ofType(events, "error")[0]["code"], "bad_message");
+    const auto finals = ofType(events, "final");
+    ASSERT_EQ(finals.size(), 1u);
+    EXPECT_EQ(finals[0]["turn"], "t2");
+    EXPECT_EQ(mock_.requestCount(), 1);
+}
+
+TEST_F(GaiacppEngine, AGateFlagThatIsNotABooleanIsRefused) {
+    json bad = init();
+    bad["gate_model_calls"] = "yes";
+
+    const auto events = run({bad});
+
+    EXPECT_EQ(ofType(events, "error").at(0)["code"], "bad_init");
+}
+
 TEST_F(GaiacppEngine, EveryEventHasExactlyTheFieldsTheWireFixtureLists) {
     const json fixture = wireFixture();
     mock_.pushResponse(toolCall("get_order", {{"order_number", "1001"}}));
@@ -656,7 +776,8 @@ TEST_F(GaiacppEngine, EveryEventHasExactlyTheFieldsTheWireFixtureLists) {
     json bad = turn("t2", "hi");
     bad.erase("messages");
 
-    const auto events = run({init(), turn("t1", "Where is order 1001?"), result, bad});
+    const auto events =
+        run({gatedInit(), turn("t1", "Where is order 1001?"), go("t1:m1"), result, go("t1:m2"), bad});
 
     std::set<std::string> seen;
     for (const auto& event : events) {

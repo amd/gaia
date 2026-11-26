@@ -104,6 +104,32 @@ class Budget:
         }
 
 
+class StopTurn(Exception):
+    """Raise from ``before_model_call`` to end the turn without another request.
+
+    The turn comes back ``incomplete`` with ``stop_reason`` ``"host_stop"`` and
+    *detail* in ``Turn.host_stop``.
+    """
+
+    def __init__(self, detail: str = ""):
+        super().__init__(detail)
+        self.detail = str(detail)
+
+
+@dataclass(frozen=True)
+class ModelRequest:
+    """What ``before_model_call`` is told about the request about to be sent."""
+
+    #: Requests this turn has already sent.
+    model_calls: int
+    input_tokens: int
+    output_tokens: int
+    #: Seconds since the turn started.
+    seconds: float
+    #: Seconds until the turn's ``Budget.seconds`` runs out; None without one.
+    seconds_left: Optional[float]
+
+
 @dataclass(frozen=True)
 class Turn:
     """How one turn ended."""
@@ -129,6 +155,8 @@ class Turn:
     cost_usd: Optional[float] = None
     #: What the answer checks still object to after the one repair.
     unresolved_checks: List[str] = field(default_factory=list)
+    #: What ``StopTurn`` said, when ``stop_reason`` is ``host_stop``.
+    host_stop: Optional[str] = None
 
     @property
     def ok(self) -> bool:
@@ -160,6 +188,11 @@ class Agent:
             are in ``Turn.unresolved_checks`` and the turn is ``incomplete``.
         on_model_call: Called once per model request with its ``step``,
             ``seconds`` and ``usage``.
+        before_model_call: Called with a ``ModelRequest`` before each model
+            request is sent. It may wait (a rate limit), or raise
+            ``StopTurn(detail)`` to end the turn with ``stop_reason``
+            ``"host_stop"``. Anything else it raises ends the turn too,
+            and is raised from ``run`` once the engine has finished it.
         engine: Path to the ``gaiacpp`` binary, when it is not found otherwise.
 
     One agent runs one turn at a time: a second ``run`` while one is
@@ -185,6 +218,7 @@ class Agent:
         prices: Optional[Prices] = None,
         answer_checks: Sequence[AnswerCheck] = (),
         on_model_call: Optional[Callable[[Dict[str, Any]], None]] = None,
+        before_model_call: Optional[Callable[[ModelRequest], None]] = None,
         engine: Optional[str] = None,
     ):
         self._tools: Dict[str, Tool] = {}
@@ -204,6 +238,14 @@ class Agent:
                 )
         self._answer_checks = tuple(answer_checks)
         self.on_model_call = on_model_call
+        if before_model_call is not None and not callable(before_model_call):
+            raise TypeError(
+                "before_model_call must be callable, got "
+                f"{type(before_model_call).__name__}."
+            )
+        self.before_model_call = before_model_call
+        self._cancel = threading.Event()
+        self._hook_error: Optional[Exception] = None
         self._turn_ids = itertools.count(1)
         self._running = threading.Lock()
         self._closed = False
@@ -219,6 +261,8 @@ class Agent:
             "tools": [item.declaration() for item in self._tools.values()],
             "native_tools": native_tools,
             "retries": retries,
+            # Asked before each model request: where cancel() and the hook act.
+            "gate_model_calls": True,
         }
         for key, value in (
             ("api_key_env", api_key_env),
@@ -295,10 +339,21 @@ class Agent:
                 "Give each thread its own Agent, or wait for the first run() "
                 "to return."
             )
+        self._cancel.clear()
         try:
             return self._run_checked(conversation, budget)
         finally:
             self._running.release()
+
+    def cancel(self) -> None:
+        """Stop the turn in flight. Safe from any thread.
+
+        The model request or tool call already running finishes; nothing
+        further is sent, and the turn returns ``status`` ``"cancelled"``.
+        Without a turn in flight this does nothing.
+        """
+        if self._running.locked():
+            self._cancel.set()
 
     def _run_checked(
         self, conversation: List[Message], budget: Optional[Budget]
@@ -358,6 +413,7 @@ class Agent:
 
         model_calls: List[Dict[str, Any]] = []
         callback_error: Optional[Exception] = None
+        self._hook_error = None
         while True:
             try:
                 event = self._engine.receive()
@@ -374,7 +430,12 @@ class Agent:
                     f"{event.get('turn')!r} while {turn_id!r} was running."
                 )
             if kind == "tool_request":
-                self._send_tool_result(event)
+                if self._cancel.is_set():
+                    self._engine.send({"type": "cancel"})
+                else:
+                    self._send_tool_result(event)
+            elif kind == "model_request":
+                self._engine.send(self._model_go(event))
             elif kind == "model_call":
                 call = {k: event.get(k) for k in ("step", "seconds", "usage")}
                 model_calls.append(call)
@@ -387,6 +448,7 @@ class Agent:
                         callback_error = e
             elif kind == "final":
                 self._out_of_step = False
+                callback_error = self._hook_error or callback_error
                 if callback_error is not None:
                     raise callback_error
                 return Turn(
@@ -399,6 +461,7 @@ class Agent:
                     failure=event.get("failure"),
                     model_calls=model_calls,
                     cost_usd=event.get("cost_usd"),
+                    host_stop=event.get("host_stop"),
                 )
             else:
                 raise EngineError(
@@ -421,6 +484,35 @@ class Agent:
             # The model is told the call failed and why; the turn goes on.
             answer["error"] = f"{type(e).__name__}: {e}"
         return answer
+
+    def _model_go(self, request: Dict[str, Any]) -> Dict[str, Any]:
+        """Answer one ``model_request``: go, stop the turn, or cancel it."""
+        if self._cancel.is_set():
+            return {"type": "cancel"}
+        go: Dict[str, Any] = {"type": "model_go", "id": request["id"]}
+        if self.before_model_call is None:
+            return go
+        left = request.get("seconds_left")
+        try:
+            self.before_model_call(
+                ModelRequest(
+                    model_calls=int(request.get("model_calls") or 0),
+                    input_tokens=int(request.get("input_tokens") or 0),
+                    output_tokens=int(request.get("output_tokens") or 0),
+                    seconds=float(request.get("seconds") or 0.0),
+                    seconds_left=None if left is None else float(left),
+                )
+            )
+        except StopTurn as stop:
+            go["stop"] = stop.detail
+        except Exception as e:  # pylint: disable=broad-except
+            # The engine is told to stop, so the two stay in step; the error
+            # itself is raised once the turn has ended.
+            go["stop"] = f"before_model_call raised {type(e).__name__}: {e}"
+            self._hook_error = e
+        if self._cancel.is_set():
+            return {"type": "cancel"}
+        return go
 
     def _send_tool_result(self, request: Dict[str, Any]) -> None:
         """Answer one ``tool_request``; a result JSON cannot hold is a tool error."""

@@ -14,7 +14,15 @@ import time
 
 import pytest
 
-from gaia_sdk import Agent, AgentBusy, Budget, EngineError, tool
+from gaia_sdk import (
+    Agent,
+    AgentBusy,
+    Budget,
+    EngineError,
+    ModelRequest,
+    StopTurn,
+    tool,
+)
 
 # Scripts per fuzz test. GAIA_FUZZ_SEEDS=300 is a deeper local sweep.
 FUZZ_SEEDS = int(os.environ.get("GAIA_FUZZ_SEEDS", "25"))
@@ -202,6 +210,168 @@ def test_request_still_in_flight_at_the_deadline_is_cut_off(real_engine, model):
     assert turn.text == ""
     assert waited < 8, f"waited {waited:.1f}s for a 1s deadline"
     assert after.text == "On time."
+
+
+def test_hook_is_told_what_the_turn_has_spent_before_each_request(real_engine, model):
+    model.call("lookup", kind="text")
+    model.say("Done.")
+    seen = []
+
+    with _agent(real_engine, model, before_model_call=seen.append) as agent:
+        turn = agent.run("look it up", budget=Budget(seconds=60))
+
+    assert turn.text == "Done."
+    assert [type(request) for request in seen] == [ModelRequest, ModelRequest]
+    assert [request.model_calls for request in seen] == [0, 1]
+    assert [request.output_tokens for request in seen] == [0, 7]
+    assert 0 < seen[1].seconds_left <= 60
+    assert seen[1].seconds >= seen[0].seconds
+
+
+def test_hook_is_told_there_is_no_deadline_without_one(real_engine, model):
+    model.say("Hello.")
+    seen = []
+
+    with _agent(real_engine, model, before_model_call=seen.append) as agent:
+        agent.run("hi")
+
+    assert seen[0].seconds_left is None
+
+
+def test_stop_turn_ends_the_turn_without_another_request(real_engine, model):
+    model.call("lookup", kind="text")
+    model.say("Next turn.")
+    stop = [True]
+
+    def hook(request):
+        if stop[0] and request.model_calls == 1:
+            raise StopTurn("account is over its rate limit")
+
+    with _agent(real_engine, model, before_model_call=hook) as agent:
+        turn = agent.run("look it up")
+        requests_after_stop = len(model.requests)
+        stop[0] = False
+        after = agent.run("hi")
+
+    assert (turn.status, turn.stop_reason) == ("incomplete", "host_stop")
+    assert turn.host_stop == "account is over its rate limit"
+    assert turn.text == "" and turn.failure is None
+    assert requests_after_stop == 1, "the refused request was sent anyway"
+    assert [call["failed"] for call in turn.tool_calls] == [False]
+    assert after.text == "Next turn." and after.host_stop is None
+
+
+def test_hook_that_raises_ends_the_turn_and_raises_after_it(real_engine, model):
+    model.say("Second answer.")
+    calls = []
+
+    def hook(request):
+        calls.append(request)
+        if len(calls) == 1:
+            raise RuntimeError("limiter unreachable")
+
+    with _agent(real_engine, model, before_model_call=hook) as agent:
+        with pytest.raises(RuntimeError, match="limiter unreachable"):
+            agent.run("one")
+        sent_by_the_failed_turn = len(model.requests)
+        second = agent.run("two")
+
+    assert sent_by_the_failed_turn == 0
+    assert second.text == "Second answer."
+
+
+def test_hook_that_is_not_callable_is_refused(real_engine, model):
+    with pytest.raises(TypeError, match="before_model_call must be callable"):
+        _agent(real_engine, model, before_model_call="nope")
+
+
+def test_cancel_during_a_tool_call_ends_the_turn_cancelled(real_engine, model):
+    in_tool = threading.Event()
+    go_on = threading.Event()
+
+    def gate():
+        in_tool.set()
+        assert go_on.wait(timeout=30)
+
+    model.call("lookup", kind="text")
+    model.say("Next turn.")
+    turns = []
+
+    with _agent(real_engine, model, gate=gate) as agent:
+        worker = threading.Thread(target=lambda: turns.append(agent.run("one")))
+        worker.start()
+        assert in_tool.wait(timeout=30)
+        agent.cancel()
+        go_on.set()
+        worker.join(timeout=30)
+        requests_after_cancel = len(model.requests)
+        in_tool.clear()
+        after = agent.run("two")
+
+    assert (turns[0].status, turns[0].stop_reason) == ("cancelled", "cancelled")
+    assert turns[0].text == ""
+    assert requests_after_cancel == 1, "a request was sent after cancel()"
+    assert after.text == "Next turn."
+
+
+def test_cancel_from_the_hook_stops_before_the_first_request(real_engine, model):
+    model.say("Next turn.")
+    holder = {}
+    cancel = [True]
+
+    def hook(request):
+        if cancel[0]:
+            holder["agent"].cancel()
+
+    with _agent(real_engine, model, before_model_call=hook) as agent:
+        holder["agent"] = agent
+        turn = agent.run("one")
+        sent = len(model.requests)
+        cancel[0] = False
+        after = agent.run("two")
+
+    assert turn.status == "cancelled"
+    assert sent == 0
+    assert after.text == "Next turn."
+
+
+def test_cancel_with_no_turn_running_does_not_stop_the_next_one(real_engine, model):
+    model.say("Hello.")
+
+    with _agent(real_engine, model) as agent:
+        agent.cancel()
+        turn = agent.run("hi")
+
+    assert turn.text == "Hello."
+
+
+def test_cancel_from_many_threads_at_any_moment_leaves_a_usable_agent(
+    real_engine, model
+):
+    rng = random.Random(11)
+
+    with _agent(real_engine, model) as agent:
+        for _ in range(15):
+            model.replies.clear()
+            for _ in range(3):
+                model.call("lookup", kind="text")
+            model.say("Done.")
+            timers = [
+                threading.Timer(rng.uniform(0, 0.08), agent.cancel) for _ in range(5)
+            ]
+            for timer in timers:
+                timer.start()
+            turn = agent.run("look it up")
+            for timer in timers:
+                timer.join()
+
+            assert turn.status in ("cancelled", "success")
+            if turn.status == "cancelled":
+                assert turn.text == ""
+
+        model.replies.clear()
+        model.say("Still here.")
+        assert agent.run("hi").text == "Still here."
 
 
 def test_many_agents_on_many_threads_each_get_their_own_answers(real_engine, model):

@@ -58,6 +58,7 @@ Sent once, first.
 | `temperature` | no | Default 0.2 |
 | `native_tools` | no | `true` (default) sends tools as `tools=`; `false` describes them in the prompt |
 | `retries` | no | Retries of a failed model request, 0 to 100 (default 0) |
+| `gate_model_calls` | no | `true`: the engine sends a `model_request` before every model request and waits for `model_go`. Default `false` |
 
 ### `turn`
 
@@ -82,6 +83,24 @@ stdin ends the process at once, with no further model request.
 A tool that ran and said no should send a `result`, such as
 `{"status": "refused", "message": "..."}`. `error` is for a call that failed.
 
+### `model_go`
+
+With `gate_model_calls` on, answer every `model_request` before sending anything
+else. Take as long as you need: this is where a host waits out a rate limit.
+
+| Field | Meaning |
+|---|---|
+| `id` | The `id` of the `model_request` |
+| `stop` | Optional string. The request is not sent, and the turn ends `incomplete` with `stop_reason` `host_stop` and this text in `host_stop` |
+
+### `cancel`
+
+`{"type": "cancel"}` in place of a `tool_result` or a `model_go` ends the turn with
+status `cancelled`. Nothing more is sent to the model, and the tool that was asked
+for is recorded as not run. The engine reads the host only at those two points, so a
+turn is cancelled between requests, not during one; turn `gate_model_calls` on to
+have a point before every request.
+
 ### `shutdown`
 
 Ends the process. Closing stdin does the same.
@@ -92,8 +111,9 @@ Ends the process. Closing stdin does the same.
 |---|---|
 | `ready` | `protocol`, `version` |
 | `tool_request` | `id`, `turn`, `name`, `arguments` |
+| `model_request` | `id`, `turn`, `model_calls`, `input_tokens`, `output_tokens` (spent so far this turn), `seconds` since the turn began, `seconds_left` before the `seconds` budget (`null` without one) — only with `gate_model_calls`, one per model request, retries included |
 | `model_call` | `turn`, `step`, `seconds`, `usage` (`input_tokens`, `cached_tokens`, `output_tokens`) — one per model request |
-| `final` | `turn`, `status`, `stop_reason`, `text`, `tool_calls`, `usage`, `cost_usd`, `seconds`, `failure` — exactly one per turn |
+| `final` | `turn`, `status`, `stop_reason`, `text`, `tool_calls`, `usage`, `cost_usd`, `seconds`, `failure`, `host_stop` — exactly one per turn |
 | `error` | `code`, `message` |
 
 ### `final`
@@ -104,10 +124,11 @@ Ends the process. Closing stdin does the same.
 | `incomplete` | `max_steps` | The step limit ran out |
 | `incomplete` | `model_calls`, `output_tokens`, `deadline`, `cost` | A `budget` limit was reached. Nothing more was sent to the model, and `text` is empty. A request still in flight when `seconds` runs out is cut off, to the nearest second, and the turn ends with `deadline` |
 | `incomplete` | `repeated_calls`, `no_answer` | The loop stopped itself |
+| `incomplete` | `host_stop` | The host answered a `model_request` with `stop`; `host_stop` holds what it said |
 | `failed` | `model_call` | A model request failed; `failure` is `{"kind": "model_call", "message": "..."}` |
+| `cancelled` | `cancelled` | The host sent `cancel`; `text` is empty |
 
-Show `text` to an end user only when `status` is `success`. The status `cancelled`
-is reserved: protocol 1 has no message that cancels a turn.
+Show `text` to an end user only when `status` is `success`.
 
 `tool_calls` lists every call the host answered: `name`, `arguments`, `result`,
 `failed`. A call the engine refused itself (past a tool's limit, or after a terminal

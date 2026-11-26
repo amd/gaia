@@ -97,6 +97,7 @@ try {
 | `prices` | The model's list prices per million tokens. Needed for a dollar budget and for the turn's cost: the engine carries no rate card |
 | `answer_checks` / `answerChecks` | Functions that compare the answer with the tool calls that ran |
 | `on_model_call` / `onModelCall` | Called once per model request with its usage and seconds |
+| `before_model_call` / `beforeModelCall` | Called before each model request; it can wait, or stop the turn |
 | `engine` | Path to the `gaiacpp` binary, when it is not found otherwise |
 
 ## What a turn gives back
@@ -108,7 +109,7 @@ keeps no history between turns, so send what the model should see.
 |---|---|
 | `ok` | True when `status` is `success`. Show `text` to an end user only then |
 | `status` | `success`, `incomplete`, `failed` |
-| `stop_reason` / `stopReason` | `answered`, `max_steps`, `model_calls`, `output_tokens`, `deadline`, `cost`, `model_call`, `unresolved_checks`, `repeated_calls`, `no_answer` |
+| `stop_reason` / `stopReason` | `answered`, `max_steps`, `model_calls`, `output_tokens`, `deadline`, `cost`, `model_call`, `unresolved_checks`, `repeated_calls`, `no_answer`, `host_stop`, `cancelled` |
 | `text` | The model's answer, exactly as it wrote it |
 | `tool_calls` / `toolCalls` | Every tool call in order: name, arguments, result, failed |
 | `usage` | Model calls and input, cached and output tokens |
@@ -136,7 +137,7 @@ A tool that returns normally gives the model its result. Two other outcomes:
 
 | In the tool | The model is told |
 |---|---|
-| Return something JSON cannot hold (an object, bytes, `NaN`, a value that contains itself) | The call failed, and why. The turn goes on |
+| Return something JSON cannot hold. Python: an object, bytes, `NaN`, a value that contains itself. TypeScript: a `BigInt`, a function, a value that contains itself (`NaN` is sent as `null`) | The call failed, and why. The turn goes on |
 | `raise ToolRefusal("...")` / `throw new ToolRefusal("...")` | `{"status": "refused", "message": "..."}` as an ordinary result to explain. Not a failure |
 | Any other exception | The call failed, and why. The turn goes on |
 
@@ -194,6 +195,53 @@ a slow provider to answer.
 A dollar limit (`usd`) needs `prices`; without them it is refused before anything is
 sent, since a limit that cannot be metered would never fire.
 
+## Holding a request back, and stopping a turn
+
+`before_model_call` runs before every model request, retries included. Use it for a
+rate limit or a quota you keep yourself.
+
+<CodeGroup>
+
+```python Python
+from gaia_sdk import StopTurn
+
+def gate(request):
+    wait = limiter.seconds_until_free(account_id)
+    if request.seconds_left is not None and wait > request.seconds_left:
+        raise StopTurn("account is over its rate limit")
+    time.sleep(wait)
+
+agent = Agent(..., before_model_call=gate)
+```
+
+```ts TypeScript
+import { StopTurn } from "@amd/gaia-sdk";
+
+const agent = await Agent.start({
+  ...,
+  beforeModelCall: async (request) => {
+    const wait = limiter.secondsUntilFree(accountId);
+    if (request.secondsLeft !== null && wait > request.secondsLeft) {
+      throw new StopTurn("account is over its rate limit");
+    }
+    await sleep(wait * 1000);
+  },
+});
+```
+
+</CodeGroup>
+
+The request has what the turn has spent so far (`model_calls`, `input_tokens`,
+`output_tokens`), `seconds` since it began, and `seconds_left` when the turn has a
+`seconds` budget. `StopTurn` ends the turn `incomplete` with `stop_reason`
+`host_stop` and your text in `host_stop` / `hostStop`: the request is not sent. Any
+other error from the hook ends the turn too, and is raised from `run` once the engine
+has finished it.
+
+`agent.cancel()` stops the turn in flight from any thread: the model request or tool
+call already running finishes, nothing further is sent, and the turn comes back with
+status `cancelled`. With no turn running it does nothing.
+
 ## Getting the engine
 
 The SDK looks for `gaiacpp` in this order: the `engine` option, the `GAIA_ENGINE`
@@ -231,7 +279,8 @@ GAIA has a second way to embed the loop: importing `gaia.agents.base.agent.Agent
 | Languages | Python and TypeScript | Python |
 | Install | No dependencies | The whole `amd-gaia` dependency set |
 | Tool limits, answer checks, dollar budgets | Yes; you supply the prices | Yes; Fireworks' prices are built in |
-| Cancel a turn, stream tokens | Not yet | Yes |
+| Hook before each model request, cancel a turn | Yes | Yes |
+| Stream tokens | Not yet | Yes |
 | Maturity | Beta | The loop the desktop apps run |
 
 The wire between the SDK and the engine is documented in
