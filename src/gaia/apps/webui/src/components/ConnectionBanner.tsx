@@ -101,6 +101,8 @@ export function ConnectionBanner({ onRetry, backendSlow = false, backendError = 
     const { backendConnected, systemStatus, currentSessionId, messages } = useChatStore();
     // A message that got no start in time says GAIA is stuck before the status check can.
     const backendStalled = useChatStore((s) => s.backendStalled);
+    // A slow status check can come while a reply still streams; a restart would end it.
+    const streaming = useChatStore((s) => s.isStreaming);
     const lifecycle = useBackendStore((s) => s.lifecycle);
     const restart = useBackendStore((s) => s.restart);
     const restartError = useBackendStore((s) => s.restartError);
@@ -393,7 +395,7 @@ export function ConnectionBanner({ onRetry, backendSlow = false, backendError = 
                     </span>
                 </div>
                 {onRetry && <RetryButton onRetry={onRetry} label={t('settings.key.checkAgain')} />}
-                {canRestart && <RetryButton onRetry={restart} label={t('banner.restartButton')} busyLabel={t('banner.restartingShort')} />}
+                {canRestart && (backendStalled || !streaming) && <RetryButton onRetry={restart} label={t('banner.restartButton')} busyLabel={t('banner.restartingShort')} />}
             </div>
         );
     }

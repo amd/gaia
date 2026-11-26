@@ -114,6 +114,16 @@ describe('a backend that is running but stuck (#9015)', () => {
         expect(container).toHaveTextContent('GAIA is slow to answer.');
     });
 
+    it('offers no Restart GAIA on a slow status check while a reply is still streaming', () => {
+        openChat();
+        useChatStore.setState({ isStreaming: true });
+        onTestFinished(() => useChatStore.setState({ isStreaming: false }));
+        useBackendStore.setState({ lifecycle: base });
+        const { container } = render(<ConnectionBanner backendSlow />);
+        expect(container).toHaveTextContent('GAIA is slow to answer.');
+        expect(screen.queryByRole('button', { name: 'Restart GAIA' })).toBeNull();
+    });
+
     it('offers no Restart GAIA in a browser, which can’t restart the backend', () => {
         openChat();
         render(<ConnectionBanner backendSlow />);
