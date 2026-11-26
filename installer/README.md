@@ -54,7 +54,6 @@ README for the per-platform builders and payload-staging steps.
 | `install.ps1` | One-shot Windows installer pulled via `irm https://amd-gaia.ai/install.ps1 \| iex` |
 | `install.sh` | One-shot Linux/macOS installer pulled via `curl -fsSL https://amd-gaia.ai/install.sh \| sh`. POSIX `sh` only — the one-liner pipes into `sh`, which is `dash` on Debian/Ubuntu, so bash-only syntax breaks there. |
 | `build-gaia-installer.ps1` | Package the two GAIA binaries into a single shareable Windows `.exe` |
-| `build-ui-installer.ps1` / `.sh` | Build the Electron Agent UI installer locally |
 | `start-agent-ui.ps1` / `.sh` | Launch the Agent UI (backend + frontend) during development |
 | `fetch_lemonade_embeddable.py` | Download the pinned embeddable Lemonade archive for the desktop app's `extraResources`, verified against `EMBEDDABLE_SHA256`, so first-run setup can unpack it instead of downloading it |
 | `ensure-lemonade-running.ps1` | Launch Lemonade Server for development and CI (Windows): by default a persistent Scheduled Task that outlives the job; `-JobScoped` for a server owned by the calling step (use this on a dev box). On Linux, build the argv with `gaia.llm.lemonade_launcher.build_start_command` — see `test_gaia_cli_linux.yml` |
@@ -134,10 +133,6 @@ python installer/scripts/fetch_lemonade_embeddable.py --platform win-x64 \
   --out src/gaia/apps/webui/build/vendor/lemonade
 ```
 
-> **Note:** the `build-ui-installer.ps1` / `.sh` scripts in `scripts/` still shell out
-> to `npx electron-forge package` / `make`, which no longer matches this tree —
-> `electron-forge` isn't a dependency any more. Use the `package:*` npm scripts above
-> until those two scripts are migrated.
 > See [§7 Phase C](../docs/plans/desktop-installer.mdx) for the migration history.
 
 ## `version/` — version helpers

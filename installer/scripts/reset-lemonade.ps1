@@ -26,7 +26,7 @@
 
 .PARAMETER Version
     Lemonade version to install. Defaults to LEMONADE_VERSION from
-    src/gaia/version.py when run from a GAIA checkout, else 10.9.0.
+    src/gaia/version.py; outside a GAIA checkout it must be given.
 
 .PARAMETER Port
     Port to verify the server on. Default 13305.
@@ -45,7 +45,7 @@
 .EXAMPLE
     powershell -ExecutionPolicy Bypass -File installer\scripts\reset-lemonade.ps1
 .EXAMPLE
-    .\reset-lemonade.ps1 -Version 10.8.1 -VerifyModel Qwen3-4B-Instruct-2507-GGUF
+    .\reset-lemonade.ps1 -Version 2026.44.1 -VerifyModel Qwen3-4B-Instruct-2507-GGUF
 #>
 [CmdletBinding()]
 param(
@@ -67,7 +67,10 @@ if (-not $Version) {
         $line = Select-String -Path $verPy -Pattern 'LEMONADE_VERSION\s*=\s*"([0-9.]+)"' | Select-Object -First 1
         if ($line) { $Version = $line.Matches[0].Groups[1].Value }
     }
-    if (-not $Version) { $Version = "10.9.0" }
+    if (-not $Version) {
+        Write-Error "Could not read LEMONADE_VERSION from $verPy. Pass -Version <x.y.z>, the version src/gaia/version.py pins."
+        exit 1
+    }
 }
 Log "Target Lemonade version: $Version"
 
