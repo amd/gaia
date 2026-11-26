@@ -1289,6 +1289,18 @@ class RAGToolsMixin:
         """
         return "No documents are currently indexed."
 
+    def _clear_document_restore_failure(self, file_path: str) -> None:
+        """Clear any restore warning for a document that is now indexed."""
+        restore_failures = getattr(self, "_document_restore_failures", None)
+        lock = getattr(self, "_restore_failure_lock", None)
+        if restore_failures is None or lock is None:
+            return
+        real_file_path = os.path.realpath(file_path)
+        with lock:
+            for failed_path in list(restore_failures):
+                if os.path.realpath(failed_path) == real_file_path:
+                    del restore_failures[failed_path]
+
     def _attach_indexed_document(self, file_path: str, result: Dict[str, Any]) -> str:
         """Record a successful index on the agent and its chat session.
 
@@ -1297,6 +1309,7 @@ class RAGToolsMixin:
         """
         _forget_evicted(self.indexed_files, result.get("evicted", []))
         self.indexed_files.add(file_path)
+        self._clear_document_restore_failure(file_path)
         save_warning = ""
         session = getattr(self, "current_session", None)
         if session and file_path not in session.indexed_documents:

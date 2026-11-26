@@ -9,6 +9,7 @@ and a document that is refused on resume must not be reported as loaded.
 """
 
 import logging
+import threading
 from types import SimpleNamespace
 from unittest.mock import Mock
 
@@ -159,6 +160,9 @@ def _resume(tmp_path, validator, docs):
         rag=_FakeRag(validator),
         indexed_files=set(),
         watch_directories=[],
+        _restore_failure_lock=threading.Lock(),
+        _document_restore_failures={},
+        _watch_failures={},
         current_session=None,
         conversation_history=[],
     )
@@ -172,6 +176,8 @@ def test_resume_does_not_list_a_document_that_was_refused(outside, tmp_path):
     assert ChatAgent.load_session(stub, "s1") is True
 
     assert stub.indexed_files == set()
+    assert stub.attached_documents == [str(pdf)]
+    assert stub._document_restore_failures == {str(pdf): "file_unreadable"}
 
 
 def test_resume_lists_a_document_that_indexed(tmp_path, monkeypatch):
@@ -205,6 +211,35 @@ def test_resume_does_not_grant_a_path_the_session_file_names(outside, tmp_path):
     ChatAgent.load_session(stub, "s1")
 
     assert not validator.is_path_allowed(str(pdf))
+
+
+def test_resume_reports_a_watched_directory_that_fails_to_start(tmp_path, monkeypatch):
+    watched = tmp_path / "watched"
+    watched.mkdir()
+    stub, session = _resume(tmp_path, PathValidator(), [])
+    session.watched_directories = [str(watched)]
+    stub.observers = []
+    stub.file_handlers = []
+    stub.reindex_file = Mock()
+    stub._handle_file_deletion = Mock()
+    stub._handle_file_move = Mock()
+    stub._should_watch_file = Mock()
+    stub._watch_directory = lambda directory: ChatAgent._watch_directory(
+        stub, directory
+    )
+
+    class BrokenObserver:
+        def schedule(self, *_args, **_kwargs):
+            raise OSError("watcher unavailable")
+
+    monkeypatch.setattr("gaiapy.chat_agent.check_watchdog_available", lambda: True)
+    monkeypatch.setattr("gaiapy.chat_agent.Observer", BrokenObserver)
+
+    assert ChatAgent.load_session(stub, "s1") is True
+
+    assert stub.watch_directories == []
+    assert stub._watch_failures[str(watched)] == "OSError: watcher unavailable"
+    assert "Directory watching failed" in ChatAgent._watch_failure_line(stub)
 
 
 def test_resume_reports_how_many_documents_are_loaded(
