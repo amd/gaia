@@ -41,7 +41,7 @@ from __future__ import annotations
 import math
 import re
 from pathlib import PureWindowsPath
-from typing import Any, Mapping, Optional
+from typing import Any, Dict, Mapping, Optional
 
 #: ``channel`` value marking an event as harness bookkeeping rather than a
 #: description of the user's work. Lives here because the layer that *tags*
@@ -164,6 +164,7 @@ _SALIENT_ARG_KEYS = (
     "to",
     "text",
     "content",
+    "fact",
     "id",
 )
 
@@ -239,6 +240,86 @@ _FILE_NAME_TOOLS = frozenset(
 )
 
 _WHITESPACE_RUN = re.compile(r"\s+")
+
+#: Memory write tools whose narration and arguments carry privacy or UUID rules.
+MEMORY_WRITE_TOOLS = frozenset({"remember", "update_memory", "forget"})
+
+#: Placeholder substituted for private memory text in activity cards and summaries.
+PRIVATE_MEMORY_PLACEHOLDER = "[private]"
+
+_UUID_RE = re.compile(
+    r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+    re.IGNORECASE,
+)
+
+
+def is_sensitive_memory_args(args: Optional[Mapping[str, Any]]) -> bool:
+    """Return True when a memory write marks the entry private."""
+    if not isinstance(args, Mapping):
+        return False
+    raw = args.get("sensitive")
+    if isinstance(raw, bool):
+        return raw
+    if isinstance(raw, str):
+        return raw.strip().lower() in ("true", "1", "yes")
+    return False
+
+
+def _looks_like_credential(text: str) -> bool:
+    # The same check remember/update_memory use to refuse a secret.
+    from gaia.agents.base.memory import MemoryMixin
+
+    return MemoryMixin._looks_like_credential(text)
+
+
+def is_private_memory_write(
+    tool: Optional[str], args: Optional[Mapping[str, Any]]
+) -> bool:
+    """Return True when a memory write's text must stay off the activity row.
+
+    That is a private entry, a credential the tool refuses, or an
+    update_memory that doesn't say the entry is public: an edit keeps the
+    stored entry's privacy, which the UI can't see from here.
+    """
+    if tool not in ("remember", "update_memory") or not isinstance(args, Mapping):
+        return False
+    if is_sensitive_memory_args(args):
+        return True
+    texts = [args.get(key) for key in ("fact", "content")]
+    if any(isinstance(t, str) and t and _looks_like_credential(t) for t in texts):
+        return True
+    if tool == "update_memory":
+        return str(args.get("sensitive", "")).strip().lower() not in (
+            "false",
+            "0",
+            "no",
+        )
+    return False
+
+
+def sanitize_memory_args(tool: Optional[str], args: Dict[str, Any]) -> Dict[str, Any]:
+    """Mask private memory text before args enter UI events or turn logs."""
+    if not is_private_memory_write(tool, args):
+        return args
+    masked = dict(args)
+    for key in ("fact", "content"):
+        if isinstance(masked.get(key), str) and masked[key]:
+            masked[key] = PRIVATE_MEMORY_PLACEHOLDER
+    return masked
+
+
+def sanitize_memory_result(tool: Optional[str], data: Any) -> Any:
+    """Drop echoed private text from a successful sensitive memory write result."""
+    if tool not in ("remember", "update_memory") or not isinstance(data, dict):
+        return data
+    if data.get("status") not in ("stored", "updated"):
+        return data
+    cleaned = dict(data)
+    if isinstance(cleaned.get("message"), str):
+        cleaned["message"] = (
+            "Private memory saved." if tool == "remember" else "Private memory updated."
+        )
+    return cleaned
 
 
 def _collapse(text: Any) -> str:
@@ -352,9 +433,14 @@ def derive_narration(tool: str, args: Optional[Mapping[str, Any]] = None) -> str
     if audio is not None:
         return audio
 
-    detail = _salient_arg(args)
-    if detail and name in _FILE_NAME_TOOLS and "://" not in detail:
-        detail = PureWindowsPath(detail).name or detail
+    if is_private_memory_write(name, args):
+        detail = None
+    else:
+        detail = _salient_arg(args)
+        if detail and name in ("forget", "update_memory") and _UUID_RE.match(detail):
+            detail = None
+        if detail and name in _FILE_NAME_TOOLS and "://" not in detail:
+            detail = PureWindowsPath(detail).name or detail
 
     override = _NARRATION_OVERRIDES.get(name)
     # A shell tool without its command is worse than useless — it hides the one
@@ -537,9 +623,15 @@ def derive_preview(
 
 __all__ = [
     "DEBUG_CHANNEL",
+    "MEMORY_WRITE_TOOLS",
+    "PRIVATE_MEMORY_PLACEHOLDER",
     "derive_narration",
     "derive_preview",
     "format_count",
     "grant_phrase",
+    "is_private_memory_write",
+    "is_sensitive_memory_args",
+    "sanitize_memory_args",
+    "sanitize_memory_result",
     "tool_phrase",
 ]

@@ -860,4 +860,12 @@ describe('ModelChip in Arabic', () => {
         const chip = screen.getByRole('button', { name: /kimi-k2/ });
         expect(chip.getAttribute('title')).toContain('ويغادر سجل المحادثة هذا الجهاز');
     });
+
+    it('labels the not-downloaded icon in Arabic', () => {
+        useModelStore.setState({ active: { ...LOCAL_ACTIVE, downloaded: false } });
+        render(<ModelChip />);
+        const chip = screen.getByRole('button', { name: /Gemma/ });
+        expect(chip).toHaveClass('is-warning');
+        expect(chip.querySelector('[aria-label*="غير منزَّل"]')).not.toBeNull();
+    });
 });

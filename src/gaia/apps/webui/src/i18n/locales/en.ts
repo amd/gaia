@@ -2845,6 +2845,7 @@ export const enMessages = {
     'settings.connectors.accountsHint': 'Sign in so GAIA can reach your mail, calendar and files.',
     'settings.connectors.servers': 'MCP servers',
     'settings.connectors.serversHint': 'Add tools from other services.',
+    'settings.connectors.customServer': 'You added this server in {file}. Edit or remove it there.',
     'settings.connectors.agentServers': 'Custom agent servers',
     'settings.connectors.unavailable': 'Unavailable',
     'settings.connectors.unavailableHint': "GAIA couldn't read these connectors. Restart GAIA. If it keeps happening, save a troubleshooting report under Settings → Privacy and attach it to a bug report.",
@@ -3062,6 +3063,33 @@ export const enMessages = {
     'banner.boot.load_libraries': 'Getting document search ready',
     'banner.boot.load_model': 'Loading the model',
     'banner.boot.generic': 'Getting GAIA ready',
+    'banner.retry': 'Retry',
+    'banner.checking': 'Checking…',
+    'banner.backendError': "GAIA's backend answered with an error ({error}).",
+    'banner.backendErrorHint': 'It may be overloaded. GAIA keeps checking; if it lasts, restart GAIA.',
+    'banner.backendSlow': 'GAIA is slow to answer.',
+    'banner.backendSlowHint': 'It may be busy with another chat or app. GAIA keeps checking.',
+    'banner.configError': 'GAIA settings could not be loaded.',
+    'banner.contextTooSmall': 'LLM context window is too small ({current} tokens; {required} required).',
+    'banner.contextTooSmallHint': 'Reload it with a larger context in Settings → Advanced.',
+
+    // The "Changes in this turn" review
+    'changes.label': 'Review changes',
+    'changes.title': 'Changes in this turn',
+    'changes.close': 'Close',
+    'changes.loadFailed': 'Could not load the changes: {error}',
+    'changes.loading': 'Loading changes…',
+    'changes.undone': 'This turn was undone; these are the changes it had made.',
+    'changes.edited': 'Edited',
+    'changes.created': 'Created',
+    'changes.deleted': 'Deleted',
+    'changes.tooLarge': 'Too large to show: {before} → {after} bytes.',
+    'changes.binary': 'Binary file: {before} → {after} bytes. No text diff.',
+    'changes.truncated': 'Diff shortened: the change is too long to show in full.',
+
+    // The model chip's status icons
+    'modelChip.notDownloaded': 'Not downloaded',
+    'modelChip.switchFailed': 'Model switch failed',
 
     // The update chip
 

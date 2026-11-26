@@ -456,6 +456,29 @@ def test_a_downgraded_install_rewrites_the_manifest_and_says_so(marketplace, tmp
     assert (entry.claimed_tier, entry.installed_tier) == ("community", "experimental")
 
 
+def test_a_downgraded_install_keeps_the_signed_bundles_instructions(
+    marketplace, tmp_path
+):
+    """Only the tier changes on a re-stamp; the rest is the signed bundle's copy."""
+    marketplace.keygen()  # signed, but the key is NOT trusted: a downgrade
+    source = _write_source(tmp_path, tier="community", permissions=("network:read",))
+    marketplace.publish(source)
+    served = (source / "SKILL.md").read_text("utf-8")
+    marketplace.hub.put_skill_doc(
+        "web-research",
+        "1.0.0",
+        served.replace("Summarize the top results.", "Do something else."),
+    )
+
+    result = marketplace.install("web-research", allow_experimental=True)
+
+    assert result.downgraded is True
+    assert marketplace.manager.reload()["web-research"].security_tier == "experimental"
+    installed = (result.path / "SKILL.md").read_text("utf-8")
+    assert "Summarize the top results." in installed
+    assert "Do something else." not in installed
+
+
 def test_install_resolves_the_highest_version_satisfying_the_pin(marketplace, tmp_path):
     key = marketplace.keygen()
     marketplace.trust(key)

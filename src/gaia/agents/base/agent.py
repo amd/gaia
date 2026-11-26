@@ -1811,6 +1811,48 @@ _INDEX_QUESTION_NEEDS_USER_PATTERN = re.compile(
 )
 _SENTENCE_END_PATTERN = re.compile(r"[.!?](?=\s|$)|\n")
 _INDEX_TOOL_NAMES = ("index_directory", "index_document")
+# "Just index it and say done": every sentence must be an index command or one
+# of these closers, so any other request keeps the forced search.
+_INDEX_ONLY_TAIL = (
+    r"(?:(?:say|reply|respond)\s+(?:with\s+)?[\"'“]?done[\"'”]?"
+    r"|nothing\s+else"
+    r"|(?:so\s+)?(?:that\s+)?(?:i|we)\s*(?:can|could|will|['’]ll|may|might)\s+"
+    r"ask(?:\s+(?:you|about\s+it|about\s+them|questions(?:\s+about\s+it)?))*"
+    r"\s+later"
+    r"|for\s+later)"
+)
+# What "index" may take: a pronoun, a path or filename, or a file-type noun.
+_INDEX_ONLY_PATH = (
+    r"(?:\"[^\"]+\"|'[^']+'|(?=\S*\w)\S*[\\/~*]\S*|[\w-]+\.[A-Za-z0-9]{1,5})"
+)
+_INDEX_ONLY_OBJECT = (
+    r"(?:(?:all|all\s+of|everything\s+in|the|my|this|that|these|those|our|every)\s+)*"
+    r"(?:it|this|that|these|those|them|" + _INDEX_ONLY_PATH + r"|(?:[\w-]+\s+){0,2}"
+    r"(?:files?|documents?|docs|folders?|director(?:y|ies)|reports?|pdfs?)"
+    r"(?:\s+" + _INDEX_ONLY_PATH + r")?)"
+    r"(?:\s+(?:in|from)\s+" + _INDEX_ONLY_PATH + r")?"
+)
+_INDEX_ONLY_SENTENCE_PATTERN = re.compile(
+    r"(?:(?:please|kindly|just|only|simply|now|go\s+ahead\s+and)\s+)*"
+    r"(?:re-?)?index\s+"
+    + _INDEX_ONLY_OBJECT
+    + r"(?:[,;]?\s*(?:(?:and|then|and\s+then)\s+)?"
+    + _INDEX_ONLY_TAIL
+    + r")?"
+    r"|" + _INDEX_ONLY_TAIL,
+    re.IGNORECASE,
+)
+_INDEX_ONLY_MARKER_PATTERN = re.compile(
+    r"\b(?:just|only|simply)\s+(?:re-?)?index\b|" + _INDEX_ONLY_TAIL, re.IGNORECASE
+)
+# Anything that asks about the content, so indexing alone doesn't finish the turn.
+_ASKS_ABOUT_CONTENT_PATTERN = re.compile(
+    r"\?|\b(?:what|who|whom|whose|when|where|why|how|which|tell me|summari[sz]e"
+    r"|summary|explain|describe|find|list|show me|compare|extract|look up"
+    r"|answer|quote|give me|read|analy[sz]e|analysis|search|check|review|need"
+    r"|count|calculate|verify)\b",
+    re.IGNORECASE,
+)
 
 
 def _requests_indexing(text: str) -> bool:
@@ -1825,6 +1867,23 @@ def _requests_indexing(text: str) -> bool:
         if not _NEGATED_BEFORE_PATTERN.search(text[sentence_start:verb]):
             return True
     return False
+
+
+def _requests_indexing_only(text: str) -> bool:
+    """Whether *text* explicitly asks only to index, and nothing about the content."""
+    text = (text or "").strip()
+    if (
+        not _requests_indexing(text)
+        or _ASKS_ABOUT_CONTENT_PATTERN.search(text)
+        or not _INDEX_ONLY_MARKER_PATTERN.search(text)
+    ):
+        return False
+    sentences = (
+        part.strip(" .!")
+        for part in _SENTENCE_END_PATTERN.split(text)
+        if part.strip(" .!")
+    )
+    return all(_INDEX_ONLY_SENTENCE_PATTERN.fullmatch(s) for s in sentences)
 
 
 def _asks_permission_to_index(answer: str) -> bool:
@@ -12229,7 +12288,7 @@ Do NOT wrap conversational replies in JSON.
         did not fix. The loop then makes each call itself, through the same
         approval gates as any call, once per turn, and has the model answer from
         the result. A call goes here only when its arguments come straight from
-        the request ("add the skill at <path>"). Empty by default.
+        the request ("remember X", "add the skill at <path>"). Empty by default.
         """
         return []
 
@@ -13619,6 +13678,100 @@ Do NOT wrap conversational replies in JSON.
         )
         return f"{note}\n\n{user_input}"
 
+    def _recover_from_parse_error(
+        self,
+        parse_exc: ValueError,
+        *,
+        steps_taken: int,
+        step_results: List[Any],
+        messages: List[Dict[str, Any]],
+        parse_failures: int,
+        markup_retries: int,
+    ) -> Tuple[Optional[str], int]:
+        """Handle a model reply whose tool call could not be parsed.
+
+        Records the error and either gives up or asks the model to try again.
+        Returns ``(answer, markup_retries)``: ``answer`` is the reply to end the
+        turn with when the retries are used up, else None after the retry
+        prompt has been appended to ``messages``.
+        """
+        logger.warning(
+            "Tool-call parse failed (step %d): %s — recovering with retry prompt",
+            steps_taken,
+            parse_exc,
+        )
+        self.error_history.append(
+            {
+                "step": steps_taken,
+                "error": str(parse_exc),
+                "type": "tool_call_parse_error",
+            }
+        )
+        # Pull the most recent successful image path
+        # out of step_results so both the recovery prompt and the
+        # give-up fallback can surface it.  When the SD two-step
+        # flow's step-1 succeeded and step-2 parse-failed, the
+        # canonical path is the breadcrumb the model needs to
+        # retry verbatim, and the breadcrumb the user needs in the
+        # final answer so the successful generation isn't lost.
+        # No-op for agents that don't emit ``image_path``.
+        _last_image_path = next(
+            (
+                r["image_path"]
+                for r in reversed(step_results)
+                if isinstance(r, dict)
+                and r.get("status") == "success"
+                and r.get("image_path")
+            ),
+            None,
+        )
+        if isinstance(parse_exc, MalformedToolMarkup):
+            if markup_retries >= _MAX_MARKUP_RETRIES:
+                return _TOOL_MARKUP_FAILURE_ANSWER, markup_retries
+            markup_retries += 1
+        # If we've already retried several times, give up gracefully and
+        # answer in plain text rather than spamming the user.
+        if parse_failures >= 3:
+            if _last_image_path:
+                return (
+                    f"I generated your image at `{_last_image_path}`, "
+                    "but I couldn't finish the follow-up step. "
+                    "Try asking for the next step in a fresh message."
+                ), markup_retries
+            return (
+                "I had trouble formatting my tool call. Could you "
+                "rephrase or break the request into smaller pieces?"
+            ), markup_retries
+        assistant_msg = "[I tried to call a tool but it could not be parsed.]"
+        user_msg = self._tool_call_retry_prompt(parse_exc)
+        if _last_image_path:
+            user_msg += (
+                f"\n\nYour previous step generated an image at "
+                f"`{_last_image_path}`. If your next tool call "
+                "needs this path, copy that string VERBATIM — do "
+                "not retype it."
+            )
+            logger.info(
+                "[PARSE-RECOVERY] injected canonical image_path=%s",
+                _last_image_path,
+            )
+        # Push a synthetic assistant turn + recovery user message so the
+        # next LLM call has context. Don't include the raw envelope to
+        # keep noise out of the conversation history.
+        messages.append(
+            {
+                "role": "assistant",
+                "content": assistant_msg,
+            }
+        )
+        messages.append(
+            {
+                "role": "user",
+                "content": user_msg,
+            }
+        )
+        return None, markup_retries
+
     def _process_query_impl(
         self,
         user_input: str,
@@ -14939,86 +15092,19 @@ Do NOT wrap conversational replies in JSON.
                 markup_retries = 0
                 self._mark_errors_recovered()
             except ValueError as parse_exc:
-                logger.warning(
-                    "Tool-call parse failed (step %d): %s — recovering with retry prompt",
-                    steps_taken,
-                    parse_exc,
-                )
-                self.error_history.append(
-                    {
-                        "step": steps_taken,
-                        "error": str(parse_exc),
-                        "type": "tool_call_parse_error",
-                    }
-                )
                 error_count += 1
                 parse_failures += 1
-                # Pull the most recent successful image path
-                # out of step_results so both the recovery prompt and the
-                # give-up fallback can surface it.  When the SD two-step
-                # flow's step-1 succeeded and step-2 parse-failed, the
-                # canonical path is the breadcrumb the model needs to
-                # retry verbatim, and the breadcrumb the user needs in the
-                # final answer so the successful generation isn't lost.
-                # No-op for agents that don't emit ``image_path``.
-                _last_image_path = next(
-                    (
-                        r["image_path"]
-                        for r in reversed(step_results)
-                        if isinstance(r, dict)
-                        and r.get("status") == "success"
-                        and r.get("image_path")
-                    ),
-                    None,
+                given_up, markup_retries = self._recover_from_parse_error(
+                    parse_exc,
+                    steps_taken=steps_taken,
+                    step_results=step_results,
+                    messages=messages,
+                    parse_failures=parse_failures,
+                    markup_retries=markup_retries,
                 )
-                if isinstance(parse_exc, MalformedToolMarkup):
-                    if markup_retries >= _MAX_MARKUP_RETRIES:
-                        final_answer = _TOOL_MARKUP_FAILURE_ANSWER
-                        break
-                    markup_retries += 1
-                # If we've already retried several times, give up gracefully and
-                # answer in plain text rather than spamming the user.
-                if parse_failures >= 3:
-                    if _last_image_path:
-                        final_answer = (
-                            f"I generated your image at `{_last_image_path}`, "
-                            "but I couldn't finish the follow-up step. "
-                            "Try asking for the next step in a fresh message."
-                        )
-                    else:
-                        final_answer = (
-                            "I had trouble formatting my tool call. Could you "
-                            "rephrase or break the request into smaller pieces?"
-                        )
+                if given_up is not None:
+                    final_answer = given_up
                     break
-                assistant_msg = "[I tried to call a tool but it could not be parsed.]"
-                user_msg = self._tool_call_retry_prompt(parse_exc)
-                if _last_image_path:
-                    user_msg += (
-                        f"\n\nYour previous step generated an image at "
-                        f"`{_last_image_path}`. If your next tool call "
-                        "needs this path, copy that string VERBATIM — do "
-                        "not retype it."
-                    )
-                    logger.info(
-                        "[PARSE-RECOVERY] injected canonical image_path=%s",
-                        _last_image_path,
-                    )
-                # Push a synthetic assistant turn + recovery user message so the
-                # next LLM call has context. Don't include the raw envelope to
-                # keep noise out of the conversation history.
-                messages.append(
-                    {
-                        "role": "assistant",
-                        "content": assistant_msg,
-                    }
-                )
-                messages.append(
-                    {
-                        "role": "user",
-                        "content": user_msg,
-                    }
-                )
                 steps_taken += 1
                 continue
             logger.debug(f"Parsed response: {parsed}")
@@ -16012,6 +16098,9 @@ Do NOT wrap conversational replies in JSON.
                 if (
                     last_index_pos >= 0
                     and not query_after_index
+                    and not _requests_indexing_only(
+                        getattr(self, "_original_user_input", None) or user_input
+                    )
                     and steps_taken < steps_limit - 1
                 ):
                     logger.debug(
