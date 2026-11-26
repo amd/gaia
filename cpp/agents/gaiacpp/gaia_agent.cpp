@@ -1607,6 +1607,15 @@ std::string comparablePath(std::string p) {
     while (p.size() > 1 && p.back() == '/') p.pop_back();
 #ifdef _WIN32
     std::transform(p.begin(), p.end(), p.begin(), [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
+    // Git Bash and Cygwin report C:\x as /c/x or /cygdrive/c/x.
+    for (const std::string mount : {"/cygdrive/", "/"}) {
+        const size_t at = mount.size();
+        if (p.compare(0, at, mount) == 0 && p.size() > at && std::isalpha(static_cast<unsigned char>(p[at])) &&
+            (p.size() == at + 1 || p[at + 1] == '/')) {
+            p = std::string(1, p[at]) + ":" + (p.size() == at + 1 ? "/" : p.substr(at + 1));
+            break;
+        }
+    }
 #endif
     return p;
 }
