@@ -18,6 +18,8 @@ import (
 	"github.com/amd/gaia/tui/internal/client"
 	"github.com/amd/gaia/tui/internal/event"
 	"github.com/amd/gaia/tui/internal/ui/theme"
+
+	"github.com/amd/gaia/tui/internal/catalog"
 )
 
 // The first screen suggests up to four things to try, each one a skill the
@@ -62,7 +64,7 @@ var skillsDir = userSkillsDir
 func userSkillsDir() string {
 	for _, name := range []string{"GAIA_HOME", "GAIA_CONFIG_DIR"} {
 		if dir := strings.TrimSpace(os.Getenv(name)); dir != "" {
-			return filepath.Join(os.ExpandEnv(expandHome(dir)), "skills")
+			return filepath.Join(os.ExpandEnv(catalog.ExpandHome(dir)), "skills")
 		}
 	}
 	home, err := os.UserHomeDir()
@@ -70,18 +72,6 @@ func userSkillsDir() string {
 		return ""
 	}
 	return filepath.Join(home, ".gaia", "skills")
-}
-
-// expandHome replaces a leading ~ with the user's home directory.
-func expandHome(dir string) string {
-	if dir != "~" && !strings.HasPrefix(dir, "~/") && !strings.HasPrefix(dir, `~\`) {
-		return dir
-	}
-	home, err := os.UserHomeDir()
-	if err != nil || home == "" {
-		return dir
-	}
-	return filepath.Join(home, dir[1:])
 }
 
 // startersWhere is the starters whose skill has() reports, at most four.

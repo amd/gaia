@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/amd/gaia/tui/internal/gaiainit"
+	"github.com/amd/gaia/tui/internal/textutil"
 )
 
 // CallTimeout bounds one list or change; a cold `gaia` start alone can take ~15 s.
@@ -81,7 +82,7 @@ func run(ctx context.Context, args ...string) ([]byte, string, error) {
 	cmd.Stdout = &out
 	cmd.Stderr = &errBuf
 	runErr := cmd.Run()
-	return out.Bytes(), lastMeaningfulLine(errBuf.String() + out.String()), runErr
+	return out.Bytes(), textutil.LastLine(errBuf.String() + out.String()), runErr
 }
 
 // List reads every automation, the Discord watches and waiting messages left out.
@@ -132,14 +133,4 @@ func Set(ctx context.Context, action, ref string) (string, error) {
 		return "", errors.New(strings.TrimPrefix(said, "❌ "))
 	}
 	return said, nil
-}
-
-func lastMeaningfulLine(s string) string {
-	lines := strings.Split(strings.TrimSpace(s), "\n")
-	for i := len(lines) - 1; i >= 0; i-- {
-		if line := strings.TrimSpace(lines[i]); line != "" {
-			return line
-		}
-	}
-	return "(no output)"
 }

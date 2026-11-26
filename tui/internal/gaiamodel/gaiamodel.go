@@ -23,6 +23,7 @@ import (
 	"time"
 
 	"github.com/amd/gaia/tui/internal/gaiainit"
+	"github.com/amd/gaia/tui/internal/textutil"
 )
 
 // Timeout bounds one call. A check reads Hugging Face and, once per llama.cpp
@@ -193,11 +194,11 @@ func run(ctx context.Context, out any, args ...string) error {
 	refused := errors.As(runErr, &exitErr) && exitErr.ExitCode() == 1
 	if runErr != nil && !refused {
 		return fmt.Errorf("`gaia %s` failed (%w): %s", strings.Join(args[:2], " "), runErr,
-			lastLine(stderr.String()+stdout.String()))
+			textutil.LastLine(stderr.String()+stdout.String()))
 	}
 	if len(raw) == 0 {
 		return fmt.Errorf("`gaia %s` printed no JSON: %s", strings.Join(args[:2], " "),
-			lastLine(stderr.String()+stdout.String()))
+			textutil.LastLine(stderr.String()+stdout.String()))
 	}
 	if refused {
 		var r refusal
@@ -208,17 +209,7 @@ func run(ctx context.Context, out any, args ...string) error {
 	}
 	if err := json.Unmarshal(raw, out); err != nil {
 		return fmt.Errorf("`gaia %s` returned something that is not its JSON (%w): %s",
-			strings.Join(args[:2], " "), err, lastLine(stdout.String()))
+			strings.Join(args[:2], " "), err, textutil.LastLine(stdout.String()))
 	}
 	return nil
-}
-
-func lastLine(s string) string {
-	lines := strings.Split(strings.TrimSpace(s), "\n")
-	for i := len(lines) - 1; i >= 0; i-- {
-		if line := strings.TrimSpace(lines[i]); line != "" {
-			return line
-		}
-	}
-	return "(no output)"
 }

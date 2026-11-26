@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"github.com/amd/gaia/tui/internal/gaiainit"
+	"github.com/amd/gaia/tui/internal/textutil"
 )
 
 // StatusTimeout bounds the read-only probe. It spawns a Python interpreter and
@@ -105,7 +106,7 @@ func Query(ctx context.Context) (Status, error) {
 	cmd.Stderr = &errBuf
 	if runErr := cmd.Run(); runErr != nil {
 		return Status{}, fmt.Errorf("%w (%w). GAIA said: %s",
-			ErrUnanswered, runErr, lastMeaningfulLine(errBuf.String()+out.String()))
+			ErrUnanswered, runErr, textutil.LastLine(errBuf.String()+out.String()))
 	}
 
 	// The CLI's logger writes to stderr, but a stray banner on stdout would
@@ -119,7 +120,7 @@ func Query(ctx context.Context) (Status, error) {
 	if err := json.Unmarshal(raw, &status); err != nil {
 		return Status{}, fmt.Errorf("%w: `gaia slack status --json` returned "+
 			"something that is not JSON (%w): %s",
-			ErrUnanswered, err, lastMeaningfulLine(out.String()))
+			ErrUnanswered, err, textutil.LastLine(out.String()))
 	}
 	return status, nil
 }
@@ -145,7 +146,7 @@ func Decline(ctx context.Context, never bool) error {
 	cmd.Stderr = &out
 	if runErr := cmd.Run(); runErr != nil {
 		return fmt.Errorf("could not record the Slack decision (%w). GAIA said: %s",
-			runErr, lastMeaningfulLine(out.String()))
+			runErr, textutil.LastLine(out.String()))
 	}
 	return nil
 }
@@ -174,7 +175,7 @@ func Connect(ctx context.Context, appToken, botToken string) (string, error) {
 	if runErr := cmd.Run(); runErr != nil {
 		// The CLI prints its own actionable refusal (a swapped pair, a token
 		// Slack rejected); quoting it beats an exit code.
-		return "", fmt.Errorf("%s", lastMeaningfulLine(out.String()+errBuf.String()))
+		return "", fmt.Errorf("%s", textutil.LastLine(out.String()+errBuf.String()))
 	}
 
 	var result struct {
@@ -188,7 +189,7 @@ func Connect(ctx context.Context, appToken, botToken string) (string, error) {
 	if err := json.Unmarshal(raw, &result); err != nil || !result.Connected {
 		return "", fmt.Errorf(
 			"Slack setup finished but said something unexpected: %s",
-			lastMeaningfulLine(out.String()))
+			textutil.LastLine(out.String()))
 	}
 	return result.Team, nil
 }
@@ -210,9 +211,9 @@ func CreateAppURL(ctx context.Context) (string, error) {
 	cmd.Stderr = &errBuf
 	if runErr := cmd.Run(); runErr != nil {
 		return "", fmt.Errorf("could not build the Slack create-app URL (%w). "+
-			"GAIA said: %s", runErr, lastMeaningfulLine(errBuf.String()+out.String()))
+			"GAIA said: %s", runErr, textutil.LastLine(errBuf.String()+out.String()))
 	}
-	url := strings.TrimSpace(lastMeaningfulLine(out.String()))
+	url := strings.TrimSpace(textutil.LastLine(out.String()))
 	if !strings.HasPrefix(url, "https://") {
 		return "", fmt.Errorf(
 			"expected a create-app URL from `gaia slack setup --print-url`, got: %s", url)
@@ -222,15 +223,3 @@ func CreateAppURL(ctx context.Context) (string, error) {
 
 // TypedCommand is what a user should type to do this themselves.
 const TypedCommand = "gaia slack setup"
-
-// lastMeaningfulLine returns the last non-blank line, for quoting a failure.
-// The whole buffer would bury the reason under a traceback.
-func lastMeaningfulLine(s string) string {
-	lines := strings.Split(strings.TrimSpace(s), "\n")
-	for i := len(lines) - 1; i >= 0; i-- {
-		if line := strings.TrimSpace(lines[i]); line != "" {
-			return line
-		}
-	}
-	return "(no output)"
-}

@@ -1,8 +1,8 @@
 // Copyright(C) 2026 Advanced Micro Devices, Inc. All rights reserved.
 // SPDX-License-Identifier: MIT
 
-// Package textutil holds plain-text formatting the setup screens share, so one
-// size never prints two ways.
+// Package textutil holds plain-text formatting shared across the TUI, so one
+// thing never prints two ways.
 package textutil
 
 import (
@@ -71,4 +71,16 @@ func Wrap(s string, w int) []string {
 		return []string{""}
 	}
 	return out
+}
+
+// LastLine is the last non-blank line of a command's output, for quoting a
+// failure: the whole buffer would bury the reason under a traceback.
+func LastLine(s string) string {
+	lines := strings.Split(strings.TrimSpace(s), "\n")
+	for i := len(lines) - 1; i >= 0; i-- {
+		if line := strings.TrimSpace(lines[i]); line != "" {
+			return line
+		}
+	}
+	return "(no output)"
 }
