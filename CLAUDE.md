@@ -802,7 +802,7 @@ stopped existing, and it was found only when a user tried to follow it.
 
 ## CLI Commands
 
-The parser is built in [`src/gaia/cli.py`](src/gaia/cli.py); some command groups register from their own module through `add_subparser` / `handle` (`knowledge_cli.py`, `cache_cli.py`, `connectors/cli.py`, `project_trust_cli.py`, `engineering/cli.py`, `llm/custom_models_cli.py`). Run `gaia -h` for the authoritative list.
+The parser is built in [`src/gaia/cli.py`](src/gaia/cli.py); some command groups register from their own module through `add_subparser` / `handle` (`knowledge_cli.py`, `cache_cli.py`, `connectors/cli.py`, `project_trust_cli.py`, `llm/custom_models_cli.py`) or `add_parser` / `run` (`engineering/cli.py`). Run `gaia -h` for the authoritative list.
 
 **Agents & chat:**
 - `gaia chat` - Interactive chat with RAG

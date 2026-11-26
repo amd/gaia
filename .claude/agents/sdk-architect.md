@@ -46,7 +46,7 @@ src/gaia/
 └── eval/              # Evaluation framework
 ```
 
-Concrete agents are **not** in this tree — the shipped one is `hub/agents/gaia/python/gaiapy/`, and custom ones ship as their own wheel (`gaia_agent_<id>/`, scaffolded by `gaia agent init`) and plugs in via a `gaia.agent` entry point. Treat every symbol the core exposes to them (`Agent`, the mixins, `AgentRegistration`, `class_factory`) as published API with real downstream consumers: breaking it breaks separately-versioned packages, not just in-repo callers.
+Concrete agents are **not** in this tree — the shipped one is `hub/agents/gaia/python/gaiapy/`, and custom ones ship as their own wheel (`gaia_agent_<id>/`, scaffolded by `gaia agent init`) and plug in via a `gaia.agent` entry point. Treat every symbol the core exposes to them (`Agent`, the mixins, `AgentRegistration`, `class_factory`) as published API with real downstream consumers: breaking it breaks separately-versioned packages, not just in-repo callers.
 
 ## Invariants
 

@@ -75,7 +75,7 @@ parent_parser.add_argument("--stats", "--show-stats", dest="show_stats", action=
 
 0. **A command with its own subcommands goes in its own module.** Give the module an
    `add_subparser(subparsers)` and a `handle(args)`, then in `cli.py` import it lazily
-   where the parser is built and where `async_main` dispatches. `src/gaia/cache_cli.py`
+   where the parser is built and where `main()` dispatches on `args.action`. `src/gaia/cache_cli.py`
    and `src/gaia/knowledge_cli.py` are the pattern; `cli.py` is already 11,000 lines.
 1. **Define subparser** (a single command without its own module) next to existing ones, inheriting `parent_parser`:
    ```python
