@@ -204,28 +204,74 @@ def _tested(record: Dict[str, Any]) -> bool:
     return not label or (record.get("check_kind") or check_kind(label)) == "test"
 
 
+_INTERPRETERS = frozenset(
+    "python python2 python3 py pypy pypy3 node nodejs deno bun ts-node tsx ruby "
+    "perl php lua bash sh zsh pwsh powershell rscript julia java go dotnet".split()
+)
+_RUN_PREFIXES = frozenset({"sudo", "time", "env", "nohup", "exec"})
+_RUN_SUBCOMMANDS = frozenset({"run"})
+
+
+def _file_stem(path: str) -> str:
+    return _slashed(path).rsplit("/", 1)[-1].split(".", 1)[0]
+
+
+def _programs_run(command: str) -> Iterable[str]:
+    """The program each segment of a shell command runs, as a file stem.
+
+    ``./cli_tool`` and ``python3 main.py.c`` run a program; ``cat cli_tool.cpp``
+    and ``gcc cli_tool.cpp`` only read or build one.
+    """
+    for segment in re.split(r"&&|\|\||[;|\n]", command):
+        words = segment.split()
+        while words and ("=" in words[0] or words[0] in _RUN_PREFIXES):
+            words.pop(0)
+        if not words:
+            continue
+        program = _file_stem(words[0].strip("'\""))
+        if program in _INTERPRETERS:
+            rest = [w for w in words[1:] if w not in _RUN_SUBCOMMANDS]
+            if "-c" in rest:
+                continue
+            if "-m" in rest:
+                rest = rest[rest.index("-m") + 1 :]
+            operands = [w for w in rest if not w.startswith("-")]
+            if not operands:
+                continue
+            program = _file_stem(operands[0].strip("'\""))
+        yield program
+
+
 def _ran_what_it_wrote(records: Sequence[Dict[str, Any]]) -> bool:
-    """A file this turn wrote was then run and the run did not fail.
+    """A file this turn wrote was then run, after its last write, and the run
+    did not fail.
 
     Where there is no test suite, running the program is the test.
     """
     written: Set[str] = set()
+    ran: Set[str] = set()
     for record in records:
+        args = record.get("args")
+        args = args if isinstance(args, dict) else {}
         if record.get("mutated"):
-            args = record.get("args")
-            for key, value in args.items() if isinstance(args, dict) else ():
-                if not (isinstance(value, str) and key.endswith("path")):
-                    continue
-                stem = _slashed(value).rsplit("/", 1)[-1].split(".", 1)[0]
-                if len(stem) >= 4:
-                    written.add(stem)
+            for key, value in args.items():
+                if isinstance(value, str) and key.endswith("path"):
+                    stem = _file_stem(value)
+                    if len(stem) >= 4:
+                        written.add(stem)
+                        ran.discard(stem)
         elif written and _executed(record) and not record.get("failed"):
-            ran = _args_text(record)
-            if any(
-                re.search(rf"(?<![\w-]){re.escape(s)}(?![\w-])", ran) for s in written
-            ):
-                return True
-    return False
+            command = args.get("command")
+            if isinstance(command, str):
+                programs = set(_programs_run(_slashed(command)))
+            else:
+                programs = {
+                    _file_stem(value)
+                    for key, value in args.items()
+                    if isinstance(value, str) and key.endswith("path")
+                }
+            ran |= written & programs
+    return bool(ran)
 
 
 def _touched_docs(record: Dict[str, Any]) -> bool:
