@@ -523,7 +523,10 @@ async function stopBackendTree(proc) {
       throw new Error(`The backend process tree is still running (pid ${result.survivors.join(", ")}).`);
     }
     if (result.verified !== true) {
-      throw new Error("The backend process tree could not be verified as stopped.");
+      throw new Error(
+        "The backend process tree could not be verified as stopped. " +
+          "Quit GAIA, end any leftover GAIA or Python processes in Task Manager, then reopen GAIA."
+      );
     }
   } catch (err) {
     isIntentionalKill = false;

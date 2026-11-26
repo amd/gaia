@@ -148,17 +148,33 @@ describe("killProcessTree on real processes", () => {
     await waitFor(() => child.exitCode !== null || child.signalCode !== null);
     const listProcesses = jest.fn(async () => []);
     const result = await killProcessTree(child, { ...quiet, listProcesses });
-    expect(result).toEqual({ killed: [], survivors: [], verified: false });
+    expect(result).toEqual({ killed: [], survivors: [], verified: true });
   });
 
-  test("port manager does not treat an exited launcher as proof its tree is gone", async () => {
+  test("clears an unknown tree after a later process-table read succeeds", async () => {
+    const { child } = await startTree([], 1);
+    const listProcesses = jest
+      .fn()
+      .mockRejectedValueOnce(new Error("process query timed out"))
+      .mockResolvedValue([]);
+    const options = { ...quiet, listProcesses, graceMs: 1000, forceWaitMs: 1000 };
+    const first = await killProcessTree(child, options);
+    expect(await waitFor(() => child.exitCode !== null || child.signalCode !== null)).toBe(true);
+    const retry = await killProcessTree(child, options);
+
+    expect(first.verified).toBe(false);
+    expect(retry).toEqual({ killed: [], survivors: [], verified: true });
+    expect(listProcesses).toHaveBeenCalledTimes(2);
+  });
+
+  test("port manager verifies an exited launcher when the process table is readable", async () => {
     const { child } = await startTree([], 1);
     child.kill("SIGKILL");
     await waitFor(() => child.exitCode !== null || child.signalCode !== null);
 
     const result = await killBackend(child, { log: () => {}, error: () => {} });
 
-    expect(result).toEqual({ killed: [], survivors: [], verified: false });
+    expect(result).toEqual({ killed: [], survivors: [], verified: true });
   });
 
   test("reports a live root when the operating system refuses to signal it", async () => {

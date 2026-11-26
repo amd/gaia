@@ -224,12 +224,26 @@ async function killProcessTree(target, opts = {}) {
   const unverifiedMembers = new Map();
   const absorb = (table) => {
     const live = new Map(table.map((r) => [r.pid, r.command]));
+    for (const [memberPid, descendant] of [...known]) {
+      const command = live.get(memberPid);
+      if (command === descendant.command) {
+        unverifiedMembers.delete(memberPid);
+        continue;
+      }
+      if (command !== undefined || !pidAlive(memberPid)) {
+        known.delete(memberPid);
+        members.delete(memberPid);
+        unverifiedMembers.delete(memberPid);
+      } else {
+        unverifiedMembers.set(memberPid, descendant);
+      }
+    }
     // A member that exited, or whose pid now runs something else, is no
     // longer ours to signal.
     for (const [memberPid, command] of [...members]) {
       if (live.get(memberPid) !== command) {
         members.delete(memberPid);
-        known.delete(memberPid);
+        if (live.has(memberPid) || !pidAlive(memberPid)) known.delete(memberPid);
       }
     }
     for (const d of known.values()) {
@@ -259,6 +273,7 @@ async function killProcessTree(target, opts = {}) {
       logError(`[process-tree] ${label} ${pid}: ${tableError.message}; descendants may keep running.`);
     }
     absorb(table);
+    if (!rootAlive(proc, pid) && known.size === 0 && unverifiedMembers.size === 0) unknownTree = false;
   } catch (err) {
     tableError = err;
     unknownTree = true;
@@ -307,6 +322,16 @@ async function killProcessTree(target, opts = {}) {
   }
 
   const finish = (survivors, verified) => {
+    if (!rootAlive(proc, pid)) {
+      for (const memberPid of known.keys()) {
+        if (!pidAlive(memberPid)) known.delete(memberPid);
+      }
+      for (const memberPid of unverifiedMembers.keys()) {
+        if (!pidAlive(memberPid)) unverifiedMembers.delete(memberPid);
+      }
+      if (!tableError && known.size === 0 && unverifiedMembers.size === 0) unknownTree = false;
+      verified = !unknownTree && !tableError && survivors.length === 0;
+    }
     const result = { killed, survivors: [...new Set(survivors)], verified };
     if (proc) {
       if (verified) pendingTreeState.delete(proc);
