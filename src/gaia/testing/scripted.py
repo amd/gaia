@@ -77,7 +77,8 @@ class ScriptedLLMClient(LLMClient):
             usage: OpenAI-shape token counts reported for this reply.
             raises: An exception the client raises instead of replying.
             delay_s: Seconds the client waits before it replies or raises,
-                to play a slow model against a deadline.
+                to play a slow model against a deadline. A tool argument of
+                this name cannot be passed through ``push``.
         """
         if raises is None and say is None and call is None:
             raise ValueError("push() needs say=, call= or raises=.")

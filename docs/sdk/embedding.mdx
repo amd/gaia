@@ -229,7 +229,7 @@ from gaia.agents.base.budget import StopTurn
 
 def gate(ctx):
     wait = limiter.seconds_until_free(account_id)
-    if wait > (ctx.seconds_left or 30):
+    if wait > (30 if ctx.seconds_left is None else ctx.seconds_left):
         raise StopTurn("account is over its rate limit")
     time.sleep(wait)
     client.timeout = ctx.seconds_left      # never wait on the model past the deadline
