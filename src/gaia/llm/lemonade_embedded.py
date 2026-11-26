@@ -55,6 +55,7 @@ from typing import Callable, Dict, List, Optional, Tuple
 
 from gaia import home as home_mod
 from gaia.env import child_env
+from gaia.llm.display_adapters import iter_display_adapters
 from gaia.logger import get_logger
 from gaia.utils.archive import ArchiveError, safe_extract
 from gaia.utils.terminal import (
@@ -483,39 +484,16 @@ _COOPMAT_OFF_ADAPTERS = re.compile(r"Radeon\(TM\) 80[4-6]0S", re.IGNORECASE)
 #: run Qwen3.6 with coopmat on, and turning it off there halves prompt speed.
 _COOPMAT_BROKEN_THROUGH = (32, 0, 12078, 30)
 
-#: Windows' display-adapter class; each adapter's subkey names the adapter.
-_DISPLAY_CLASS_KEY = (
-    r"SYSTEM\CurrentControlSet\Control\Class\{4d36e968-e325-11ce-bfc1-08002be10318}"
-)
-
 
 def _windows_display_adapters() -> List[Tuple[str, str]]:
     """``(DriverDesc, DriverVersion)`` of every display adapter Windows records."""
-    import winreg  # pylint: disable=import-error
-
-    adapters = []
-    try:
-        root = winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, _DISPLAY_CLASS_KEY)
-    except OSError:
-        return adapters
-    with root:
-        index = 0
-        while True:
-            try:
-                subkey = winreg.EnumKey(root, index)
-            except OSError:
-                return adapters
-            index += 1
-            try:
-                with winreg.OpenKey(root, subkey) as adapter:
-                    name = str(winreg.QueryValueEx(adapter, "DriverDesc")[0])
-                    try:
-                        version = str(winreg.QueryValueEx(adapter, "DriverVersion")[0])
-                    except OSError:
-                        version = ""
-                    adapters.append((name, version))
-            except OSError:
-                continue  # "Properties" and other non-adapter subkeys
+    return [
+        (
+            str(values["DriverDesc"]),
+            str(values["DriverVersion"]) if "DriverVersion" in values else "",
+        )
+        for values in iter_display_adapters("DriverVersion")
+    ]
 
 
 def _driver_version(text: str) -> Optional[Tuple[int, ...]]:

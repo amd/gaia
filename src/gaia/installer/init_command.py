@@ -57,6 +57,7 @@ from gaia.installer._stdin import stdin_is_tty
 from gaia.llm.model_fit import MachineCapacity, format_gb, with_app_headroom
 from gaia.logger import get_logger
 from gaia.ui.build import WebuiBuildStatus
+from gaia.utils.download_tally import DownloadTally
 
 log = get_logger(__name__)
 
@@ -1392,9 +1393,7 @@ class _JsonDownloadProgress:
         self.bytes_total = planned_bytes or 0
         self.speed_bps = 0.0
         self._clock = clock
-        self._finished = 0
-        self._file = None
-        self._file_total = 0
+        self._tally_bytes = DownloadTally(planned_bytes)
         self._emitted_at = None
         self._window = None
 
@@ -1415,22 +1414,9 @@ class _JsonDownloadProgress:
             self.emitter.emit("error", model=self.model_id, message=message)
 
     def _tally(self, event: dict) -> None:
-        name = event.get("file") or ""
-        done = int(event.get("bytes_downloaded") or 0)
-        if self._file is not None and name != self._file:
-            self._finished += self._file_total
-            self._file_total = 0
-        self._file = name
-        # Mid-file events can carry bytes_total 0, so keep the largest seen.
-        self._file_total = max(
-            self._file_total, int(event.get("bytes_total") or 0), done
-        )
-        self.bytes_done = self._finished + done
-        total = int(event.get("total_download_size") or 0)
-        self.bytes_total = max(
-            total or self.planned_bytes or self._finished + self._file_total,
-            self.bytes_done,
-        )
+        self._tally_bytes.add(event)
+        self.bytes_done = self._tally_bytes.bytes_done
+        self.bytes_total = self._tally_bytes.bytes_total
         now = self._clock()
         # From the first event, so bytes a resumed pull already had don't count.
         if self._window is None:
