@@ -82,12 +82,14 @@ func ConfigPathFrom(getenv func(string) string, homeDir func() (string, error)) 
 }
 
 // ConfigDirFrom mirrors gaia.config.GAIA_CONFIG_DIR: GAIA_CONFIG_DIR, then
-// GAIA_HOME, then ~/.gaia. "" when no home directory resolves.
+// GAIA_HOME, then ~/.gaia, expanding them as Python does. "" when no home
+// directory resolves.
 func ConfigDirFrom(getenv func(string) string, homeDir func() (string, error)) string {
-	for _, name := range []string{"GAIA_CONFIG_DIR", "GAIA_HOME"} {
-		if dir := strings.TrimSpace(getenv(name)); dir != "" {
-			return dir
-		}
+	if dir := strings.TrimSpace(getenv("GAIA_CONFIG_DIR")); dir != "" {
+		return expandUser(dir, homeDir)
+	}
+	if dir := strings.TrimSpace(getenv("GAIA_HOME")); dir != "" {
+		return expandUser(os.Expand(dir, getenv), homeDir)
 	}
 	home, err := homeDir()
 	if err != nil || home == "" {
