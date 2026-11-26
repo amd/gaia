@@ -205,7 +205,8 @@ def _emit_failure(output_format: str, message: str, code: int = 1) -> int:
                 ensure_ascii=False,
             )
         )
-    print(f"❌ gaia -p: {message}", file=sys.stderr)
+    prefix = "" if message.startswith("gaia -p") else "gaia -p: "
+    print(f"❌ {prefix}{message}", file=sys.stderr)
     return code
 
 
@@ -763,6 +764,9 @@ def _run_turn(
             from gaia.agents.base.memory import drain_memory_extraction
 
             drain_memory_extraction(agent)
+            # Stop MCP servers now: at interpreter exit __del__ can't start the
+            # thread that stops them, and logs a traceback instead.
+            agent.close()
     record = summarize(
         result, agent.model_id or model, time.time() - started, verbose=verbose
     )
