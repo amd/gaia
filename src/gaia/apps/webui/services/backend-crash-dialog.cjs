@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: MIT
 
 /**
- * The dialog shown when GAIA's backend exits on its own. Every choice ends
+ * The dialog shown when GAIA's backend cannot recover after an exit or outage. Every choice ends
  * somewhere: Restart relaunches the app, Quit quits it, and Save diagnostics
  * writes the bundle and comes back to the same choice.
  */
@@ -19,8 +19,11 @@ function stripAnsi(text) {
 }
 
 /** The dialog's detail text: what happened, what to do, then the log tail. */
-function crashDetail(code, signal, tailLines) {
-  const how = signal ? `signal ${signal}` : `exit code ${code}`;
+function crashDetail(code, signal, tailLines, reason) {
+  let how;
+  if (signal) how = `signal ${signal}`;
+  else if (code !== null && code !== undefined) how = `exit code ${code}`;
+  else how = `last error: ${reason || "unknown cause"}`;
   const tail = (tailLines || []).map(stripAnsi).join("\n") || "(nothing was logged)";
   return (
     `GAIA's background service stopped unexpectedly (${how}). Your chats are saved.\n` +
@@ -50,8 +53,19 @@ function relaunchOptions(env = process.env, argv = process.argv) {
  * @param {object} [deps.parent] window the dialog is modal to, e.g. mainWindow
  * @returns {Promise<"restart"|"quit">}
  */
-async function showBackendCrashDialog({ dialog, app, code, signal, tailLines, writeDiagnostics, beforeQuit, env = process.env, parent }) {
-  const detail = crashDetail(code, signal, tailLines);
+async function showBackendCrashDialog({
+  dialog,
+  app,
+  code,
+  signal,
+  reason,
+  tailLines,
+  writeDiagnostics,
+  beforeQuit,
+  env = process.env,
+  parent,
+}) {
+  const detail = crashDetail(code, signal, tailLines, reason);
   // Modal to GAIA's window and in front: unparented, it can open behind other apps.
   const owner = parent && !parent.isDestroyed() ? parent : null;
   if (owner) {

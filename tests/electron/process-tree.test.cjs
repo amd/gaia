@@ -22,6 +22,7 @@ const {
   parsePosixTable,
   parseWindowsTable,
 } = require("../../src/gaia/apps/webui/services/process-tree.cjs");
+const { killBackend } = require("../../src/gaia/apps/webui/services/port-manager.cjs");
 
 const FIXTURE = path.join(__dirname, "fixtures", "proc-tree-child.cjs");
 const quiet = { log: () => {}, logError: () => {} };
@@ -124,9 +125,9 @@ describe("killProcessTree on real processes", () => {
   });
 
   test("still stops the root, loudly, when the process table can't be read", async () => {
-    const { child } = await startTree([], 1);
+    const { child, pids } = await startTree(["--children=1", "--detach-children"], 2);
     const errors = [];
-    await killProcessTree(child, {
+    const result = await killProcessTree(child, {
       log: () => {},
       logError: (m) => errors.push(m),
       graceMs: 1000,
@@ -135,7 +136,10 @@ describe("killProcessTree on real processes", () => {
       },
     });
     expect(await waitFor(() => child.exitCode !== null || child.signalCode !== null)).toBe(true);
+    expect(pidAlive(pids[1])).toBe(true);
     expect(errors.join("\n")).toMatch(/ps: not found.*may keep running/);
+    expect(result.survivors).toEqual([]);
+    expect(result.verified).toBe(false);
   });
 
   test("is a no-op on a child that already exited", async () => {
@@ -144,7 +148,40 @@ describe("killProcessTree on real processes", () => {
     await waitFor(() => child.exitCode !== null || child.signalCode !== null);
     const listProcesses = jest.fn(async () => []);
     const result = await killProcessTree(child, { ...quiet, listProcesses });
-    expect(result).toEqual({ killed: [], survivors: [] });
+    expect(result).toEqual({ killed: [], survivors: [], verified: false });
+  });
+
+  test("port manager does not treat an exited launcher as proof its tree is gone", async () => {
+    const { child } = await startTree([], 1);
+    child.kill("SIGKILL");
+    await waitFor(() => child.exitCode !== null || child.signalCode !== null);
+
+    const result = await killBackend(child, { log: () => {}, error: () => {} });
+
+    expect(result).toEqual({ killed: [], survivors: [], verified: false });
+  });
+
+  test("reports a live root when the operating system refuses to signal it", async () => {
+    const errors = [];
+    const root = {
+      pid: 7788,
+      exitCode: null,
+      signalCode: null,
+      kill: jest.fn(() => false),
+    };
+    const result = await killProcessTree(root, {
+      ...quiet,
+      logError: (message) => errors.push(message),
+      graceMs: 0,
+      forceWaitMs: 0,
+      platform: "win32",
+      listProcesses: async () => [{ pid: root.pid, ppid: process.pid, command: "root", started: null }],
+    });
+
+    expect(root.kill).toHaveBeenCalledWith("SIGTERM");
+    expect(root.kill).toHaveBeenCalledWith("SIGKILL");
+    expect(result).toEqual({ killed: [], survivors: [root.pid], verified: false });
+    expect(errors.join("\n")).toMatch(/still running/);
   });
 
   const posixOnly = process.platform === "win32" ? test.skip : test;
@@ -153,7 +190,7 @@ describe("killProcessTree on real processes", () => {
   // pass these two tests are about.
   test("on Windows the SIGKILL pass re-reads nothing and targets only the root", async () => {
     const root = await startTree([], 1);
-    const bystander = await startTree([], 1);
+    const bystander = await startTree(["--ignore-term"], 1);
     let reads = 0;
     const listProcesses = async () => {
       reads += 1;
@@ -165,12 +202,23 @@ describe("killProcessTree on real processes", () => {
     // Pretend SIGTERM changed nothing, as for a process Windows refused to end.
     const realKill = root.child.kill.bind(root.child);
     root.child.kill = (sig) => (sig === "SIGKILL" ? realKill("SIGKILL") : true);
-    const killSpy = jest.spyOn(process, "kill");
+    const realProcessKill = process.kill.bind(process);
+    const killSpy = jest.spyOn(process, "kill").mockImplementation((targetPid, signal) => {
+      if (targetPid === bystander.child.pid && signal === "SIGTERM") return true;
+      return realProcessKill(targetPid, signal);
+    });
     try {
-      await killProcessTree(root.child, { ...quiet, graceMs: 200, listProcesses, platform: "win32" });
+      const result = await killProcessTree(root.child, {
+        ...quiet,
+        graceMs: 200,
+        listProcesses,
+        platform: "win32",
+      });
       const sigkills = killSpy.mock.calls.filter(([, sig]) => sig === "SIGKILL").map(([p]) => p);
       expect(reads).toBe(1);
       expect(sigkills).not.toContain(bystander.child.pid);
+      expect(result.survivors).toContain(bystander.child.pid);
+      expect(result.verified).toBe(false);
       expect(await waitFor(() => root.child.exitCode !== null || root.child.signalCode !== null)).toBe(true);
     } finally {
       killSpy.mockRestore();
@@ -214,7 +262,7 @@ describe("killProcessTree on real processes", () => {
         { pid: member.child.pid, ppid: root.child.pid, command: "gaia-tool", started: null },
       ];
     };
-    await killProcessTree(root.child, {
+    const result = await killProcessTree(root.child, {
       log: () => {},
       logError: (m) => errors.push(m),
       graceMs: 300,
@@ -222,6 +270,8 @@ describe("killProcessTree on real processes", () => {
     });
     expect(await waitFor(() => root.child.signalCode !== null)).toBe(true);
     expect(pidAlive(member.child.pid)).toBe(true);
+    expect(result.survivors).toContain(member.child.pid);
+    expect(result.verified).toBe(false);
     expect(errors.join("\n")).toMatch(/ps timed out.*only the process itself gets SIGKILL/);
   });
 
