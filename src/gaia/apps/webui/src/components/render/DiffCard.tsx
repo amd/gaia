@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: MIT
 
 import { UnsupportedCard } from './UnsupportedCard';
-import { isOptionalString } from './primitiveShared';
+import { isOptionalString, lineClass } from './primitiveShared';
 import { visibleName } from '../CalendarApproval';
 
 interface DiffPayload {
@@ -24,14 +24,6 @@ function isDiffPayload(value: unknown): value is DiffPayload {
         && isOptionalString(v.badge)
         && isOptionalString(v.note)
         && typeof v.unified === 'string';
-}
-
-/** FIXED prefix -> class lookup — classes must never be derived from
- *  line content (content is untrusted). */
-function lineClass(line: string): string {
-    if (line.startsWith('+')) return 'render-diff__line render-diff__line--added';
-    if (line.startsWith('-')) return 'render-diff__line render-diff__line--removed';
-    return 'render-diff__line';
 }
 
 const HUNK_GAP = '⋯';

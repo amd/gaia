@@ -177,11 +177,17 @@ addresses that are not this chat's dev servers or an "always" site, and
    step on its own.
 5. **To serve a site the user built**, call
    `browser-pane/dev_server(action="start", project="<folder>")`. A folder of
-   plain HTML needs no setup; an app with its own dev command needs
+   plain HTML needs no setup and no launch.json: don't write one to run
+   `python -m http.server`. An app with its own dev command needs
    `<folder>/.gaia/launch.json`, e.g. `{"version": "0.0.1", "configurations":
-   [{"name": "web", "runtimeExecutable": "npm", "runtimeArgs": ["run", "dev"],
-   "port": 5173}]}`. Never start a server with `run_shell_command` or Python:
-   those wait for it to exit and hang the turn.
+   [{"name": "web", "runtimeExecutable": "npx", "runtimeArgs": ["vite",
+   "--host", "127.0.0.1"], "port": 5173}]}`. Never start a server with
+   `run_shell_command` or Python: those wait for it to exit and hang the turn.
+   A dev server must listen on 127.0.0.1 only, so nothing else on the network
+   reaches it. Put the bind in `runtimeArgs` (`--bind 127.0.0.1` for
+   `python -m http.server`, `--host 127.0.0.1` for Vite, `--hostname 127.0.0.1`
+   for Next.js) or in package.json's dev script. GAIA stops a server that
+   listens on all network interfaces and says so.
 6. **Report what the result says.** If the user declines, do not do it another
    way.
 

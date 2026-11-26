@@ -13,6 +13,10 @@ Requires the `gaia` Python CLI 0.27.0+ on `PATH`.
   no test suite the agent re-ran its program and the answer still ended with
   "no test run is recorded". A successful run of a file written that turn,
   after the write, now backs the claim.
+- **A turn that recovered from a cut-off reply is no longer reported as failed.**
+  A reply that hit the output-token limit was asked to continue and the turn
+  went on to answer, but the turn still ended with `status: failed`, and
+  `gaia -p` exited 1. Only a turn that gives up on cut-off replies fails now.
 - **Docs: Ask and Accept edits refuse deletes, they don't ask.** A delete the
   shell would otherwise ask about is refused with no approval card; only Full
   access runs it. The SPEC and guides now say so.

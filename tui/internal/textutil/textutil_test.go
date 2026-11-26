@@ -21,3 +21,17 @@ func TestFormatGB(t *testing.T) {
 		}
 	}
 }
+
+func TestLastLine(t *testing.T) {
+	for in, want := range map[string]string{
+		"Traceback\n  File x\nValueError: bad\n\n": "ValueError: bad",
+		"one line":       "one line",
+		"a\r\n  b  \r\n": "b",
+		"":               "(no output)",
+		" \n\t\n":        "(no output)",
+	} {
+		if got := LastLine(in); got != want {
+			t.Errorf("LastLine(%q) = %q, want %q", in, got, want)
+		}
+	}
+}

@@ -51,7 +51,7 @@ func isPythonAgentBinary(path string) bool {
 func gaiaHome() string {
 	for _, name := range []string{"GAIA_HOME", "GAIA_CONFIG_DIR"} {
 		if dir := strings.TrimSpace(os.Getenv(name)); dir != "" {
-			return expandHome(os.ExpandEnv(dir))
+			return ExpandHome(os.ExpandEnv(dir))
 		}
 	}
 	home, err := os.UserHomeDir()
@@ -70,8 +70,8 @@ func gaiaHomeBin() string {
 	return filepath.Join(home, "bin")
 }
 
-// expandHome replaces a leading ~ with the user's home directory.
-func expandHome(dir string) string {
+// ExpandHome replaces a leading ~ with the user's home directory.
+func ExpandHome(dir string) string {
 	if dir != "~" && !strings.HasPrefix(dir, "~/") && !strings.HasPrefix(dir, `~\`) {
 		return dir
 	}
