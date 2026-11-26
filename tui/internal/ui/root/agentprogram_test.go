@@ -421,7 +421,8 @@ func TestAgentProgramListingNamesBothMarksBetaCurrentAndUnavailable(t *testing.T
 		t.Errorf("the native row is wrong: %q", cpp)
 	}
 	for _, want := range []string{
-		"Mature and well tested", "Heavier", "Fast and light", "Fewer tools",
+		"Full-featured", "Every tool and feature, and well tested", "Heavier",
+		"Fast and light", "Starts quickly", "Fewer tools",
 		"Not on this PC yet: /agent gaiacpp offers to download it.",
 		"No saved choice yet", "/agent gaiapy", "/agent gaiacpp",
 	} {

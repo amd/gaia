@@ -64,6 +64,7 @@ func TestResumeTargetRefusesWhatCannotBeReopened(t *testing.T) {
 		want   string
 	}{
 		{"daemon flagship", catalog.Agent{ID: catalog.FlagshipID, Transport: catalog.TransportDaemon}, Resume{Pick: true}, "keeps no sessions"},
+		{"native flagship", catalog.Agent{ID: catalog.FlagshipID, Transport: catalog.TransportSubprocess, Native: true}, Resume{Pick: true}, "Full-featured"},
 		{"unknown id", flagship(), Resume{ID: "0000dead"}, "no session"},
 		{"open elsewhere", flagship(), Resume{ID: "feed0002"}, "open in another GAIA window"},
 	} {
