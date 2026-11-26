@@ -5771,11 +5771,17 @@ Do NOT wrap conversational replies in JSON.
         if self._prefix_read_due is not None:
             return
         self._prefix_read_due = True
-        # Reads _openai_tools, which records the list as sent; the send re-records it.
+        # _openai_tools records the list as sent; keep the trace on the real send.
+        recorded = (
+            getattr(self, "_last_tool_schemas", None),
+            getattr(self, "_last_tool_filter", None),
+        )
+        tools = self._openai_tools
+        self._last_tool_schemas, self._last_tool_filter = recorded
         prefix_log.note_sent(
             self.model_id,
             self._prefix_log_name(),
-            prefix_log.prefix_of(self.system_prompt, self._openai_tools),
+            prefix_log.prefix_of(self.system_prompt, tools),
             slot=self._conversation_request_kwargs().get("id_slot", 0),
         )
 

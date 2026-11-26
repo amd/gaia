@@ -161,6 +161,19 @@ def test_only_the_agent_ui_is_pointed_at_scheduled_tasks(gaia_docs, surface):
     assert ("Scheduled tasks" in context) == (surface == "agent_ui")
 
 
+# Gemma follows whichever of two contradicting lines it read last.
+def test_the_agent_ui_line_overrides_unsupported_scheduling(gaia_docs):
+    agent = _build(allowed_paths=[str(gaia_docs)], surface="agent_ui")
+    try:
+        unsupported = _unsupported_line(agent.system_prompt)
+        context = agent.session_context
+    finally:
+        agent.__del__()
+
+    assert "scheduling" in unsupported
+    assert "replaces any **UNSUPPORTED:** entry for scheduling" in context
+
+
 # A front end's turn can only reuse the prompt the start-up warm-up cached when
 # both send the same system prompt and tools; Gemma re-reads all of it otherwise.
 @pytest.mark.parametrize("surface", ["agent_ui", "tui", "cli"])

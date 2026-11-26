@@ -707,7 +707,7 @@ _AGENT_UI_SCHEDULE_LINE = (
     '**Scheduled tasks** in the sidebar (schedules like "every 6h", "daily at '
     '9am", "every monday at 3pm"). For a recurring request, point the user '
     "there and help them word a valid schedule and prompt; never say scheduling "
-    "is unavailable."
+    "is unavailable. This replaces any **UNSUPPORTED:** entry for scheduling."
 )
 
 
