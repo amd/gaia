@@ -6,6 +6,7 @@ import { AlertTriangle, Loader2 } from 'lucide-react';
 import * as api from '../../services/api';
 import { isMessageKey, ref } from '../../i18n/registry';
 import { useT, type Translate } from '../../i18n/useT';
+import { CLAIMS_ESCAPE } from '../../hooks/useEscapeToClose';
 import { requestErrorText } from '../../utils/requestErrors';
 import type { FeaturedLibrary, LinkAddResult, LinkPreview, LinkSkill } from '../../types';
 
@@ -125,6 +126,12 @@ export function AddSkillsFromLink({ onAdded }: { onAdded: () => void }) {
                     inputMode="url"
                     value={url}
                     onChange={(e) => setUrl(e.target.value)}
+                    onKeyDown={(e) => {
+                        if (e.key !== 'Escape' || !(preview || url)) return;
+                        e.preventDefault();
+                        if (preview) setPreview(null); else setUrl('');
+                    }}
+                    {...CLAIMS_ESCAPE}
                     onPaste={(e) => {
                         const pasted = e.clipboardData.getData('text').trim();
                         if (pasted) { e.preventDefault(); setUrl(pasted); void read(pasted); }

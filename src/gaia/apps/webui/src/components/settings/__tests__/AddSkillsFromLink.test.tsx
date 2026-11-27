@@ -4,6 +4,7 @@
 import { fireEvent, render, screen } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { AddSkillsFromLink } from '../AddSkillsFromLink';
+import { useEscapeToClose } from '../../../hooks/useEscapeToClose';
 import * as api from '../../../services/api';
 import type { LinkSkill } from '../../../types';
 
@@ -14,6 +15,11 @@ const LINK = 'https://github.com/owner/library';
 
 function found(name: string, extra: Partial<LinkSkill> = {}): LinkSkill {
     return { name, description: `${name} does a job`, path: `skills/${name}`, has_code: false, permissions: [], permissions_unreadable: false, verdict: 'ALLOW', findings: [], installed: false, update: false, error: null, ...extra };
+}
+
+function InDialog({ onClose }: { onClose: () => void }) {
+    useEscapeToClose(true, onClose);
+    return <AddSkillsFromLink onAdded={vi.fn()} />;
 }
 
 beforeEach(() => {
@@ -123,5 +129,24 @@ describe('AddSkillsFromLink', () => {
         fireEvent.change(screen.getByLabelText('Link to a skill or skills library'), { target: { value: 'owner/missing' } });
         fireEvent.click(screen.getByRole('button', { name: 'Read' }));
         expect(await screen.findByRole('alert')).toHaveTextContent('Nothing found at the link');
+    });
+
+    it('dismisses the preview on Escape in the link box instead of closing Settings', async () => {
+        const onClose = vi.fn();
+        render(<InDialog onClose={onClose} />);
+        const box = screen.getByLabelText('Link to a skill or skills library');
+        fireEvent.change(box, { target: { value: LINK } });
+        fireEvent.click(screen.getByRole('button', { name: 'Read' }));
+        await screen.findByText('deslop');
+        fireEvent.keyDown(box, { key: 'Escape' });
+        expect(screen.queryByText('deslop')).not.toBeInTheDocument();
+        expect(onClose).not.toHaveBeenCalled();
+        expect(box).toHaveValue(LINK);
+        // The box still holds the link, so the next Escape clears it; the one after closes Settings.
+        fireEvent.keyDown(box, { key: 'Escape' });
+        expect(box).toHaveValue('');
+        expect(onClose).not.toHaveBeenCalled();
+        fireEvent.keyDown(box, { key: 'Escape' });
+        expect(onClose).toHaveBeenCalledOnce();
     });
 });

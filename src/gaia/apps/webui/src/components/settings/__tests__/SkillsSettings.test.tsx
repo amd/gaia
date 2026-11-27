@@ -4,6 +4,7 @@
 import { fireEvent, render, screen, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { SkillsSettings } from '../SkillsSettings';
+import { useEscapeToClose } from '../../../hooks/useEscapeToClose';
 import * as api from '../../../services/api';
 import { useChatStore } from '../../../stores/chatStore';
 import type { SkillInfo, SkillSource } from '../../../types';
@@ -24,6 +25,12 @@ beforeEach(() => {
         invalid: {},
     });
 });
+
+/** Settings as the app hosts it: Escape anywhere that nothing else claims closes it. */
+function InDialog({ onClose }: { onClose: () => void }) {
+    useEscapeToClose(true, onClose);
+    return <SkillsSettings onUseSkill={vi.fn()} />;
+}
 
 afterEach(() => useChatStore.setState({ locale: 'en' }));
 
@@ -262,5 +269,23 @@ describe('SkillsSettings', () => {
         const isolated = text.split('\u2068.claude/skills\u2069').length - 1;
         expect(raw).toBe(2);
         expect(isolated).toBe(raw);
+    });
+
+    it('clears the search on Escape instead of closing Settings', async () => {
+        mockedApi.listSkills.mockResolvedValue({
+            skills: ['a', 'b', 'c', 'd', 'e', 'f', 'g'].map((n) => skill(`skill-${n}`, `Does ${n}`)),
+            invalid: {},
+        });
+        const onClose = vi.fn();
+        render(<InDialog onClose={onClose} />);
+        const search = await screen.findByRole('searchbox', { name: 'Search skills' });
+        fireEvent.change(search, { target: { value: 'skill-c' } });
+        fireEvent.keyDown(search, { key: 'Escape' });
+        expect(search).toHaveValue('');
+        expect(onClose).not.toHaveBeenCalled();
+        expect(screen.getByText('skill-a')).toBeInTheDocument();
+        // With nothing left to clear, Escape closes Settings as usual.
+        fireEvent.keyDown(search, { key: 'Escape' });
+        expect(onClose).toHaveBeenCalledOnce();
     });
 });
