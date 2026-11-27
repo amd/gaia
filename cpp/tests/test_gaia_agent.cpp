@@ -284,10 +284,46 @@ TEST(GaiaAgentTest, AnalyzeImageSendsTheImageToTheModel) {
                     p["image_url"]["url"].get<std::string>().rfind("data:image/png;base64,", 0) == 0;
     }
     EXPECT_TRUE(hasImage);
+    EXPECT_FALSE(body.contains("chat_template_kwargs")) << "Gemma has no thinking switch";
 
     json outside = agent.toolRegistry().executeTool(
         "analyze_image", json{{"path", "/etc/hostname"}, {"question", "?"}});
     EXPECT_EQ(outside["status"], "error");
+}
+
+TEST(GaiaAgentTest, AnalyzeImageSendsTheVisionModelsOwnThinkingChoice) {
+    Workdir w;
+    fs::copy_file(fs::path(GAIA_TEST_FIXTURES_DIR) / "tiny.png", w.path / "dot.png");
+    struct Case {
+        std::string chatModel, visionModel;
+        json want;  // null: no chat_template_kwargs at all
+    };
+    const std::vector<Case> cases = {
+        {"Qwen3.5-2B-GGUF", "", json{{"enable_thinking", false}}},
+        {"user.qwen3.5-4b-gguf", "", json{{"enable_thinking", false}}},
+        {"Qwen3.5-2B-GGUF", "Qwen3.6-35B-A3B-GGUF", json{{"enable_thinking", true}}},
+        {"Qwen3.5-2B-GGUF", "Gemma-4-E4B-it-GGUF", nullptr},
+        {"Qwen3.5-2B-GGUF", "some-unknown-vlm", nullptr},
+    };
+    for (const auto& c : cases) {
+        bench::MockLlmServer mock;
+        mock.pushResponse(answer("A pixel."));
+        AgentConfig cfg = cfgFor(mock);
+        cfg.modelId = c.chatModel;
+        GaiaAgent::Options o = optionsFor(w);
+        o.visionModel = c.visionModel;
+        GaiaAgent agent(cfg, o);
+        json r = agent.toolRegistry().executeTool(
+            "analyze_image", json{{"path", (w.path / "dot.png").string()}, {"question", "What is this?"}});
+        ASSERT_EQ(r["status"], "success") << r.dump();
+        const json body = json::parse(mock.receivedBodies().back());
+        const std::string label = c.chatModel + " / " + c.visionModel;
+        if (c.want.is_null()) {
+            EXPECT_FALSE(body.contains("chat_template_kwargs")) << label;
+        } else {
+            EXPECT_EQ(body["chat_template_kwargs"], c.want) << label;
+        }
+    }
 }
 
 TEST(GaiaAgentTest, ClaimingTestsRanWithoutRunningThemIsSentBack) {
@@ -554,6 +590,17 @@ TEST(GaiaAgentTest, ATestsPassClaimIsNotBackedByInstallsProbesPrintedSummariesOr
         "All 4 tests pass.", {edit("/work/proj/src/stats.py"), shellRunIn("/work/proj/tests", "pytest", 0, pytestOk)}));
     EXPECT_FALSE(GaiaAgent::unsupportedTestClaim(
         "All 4 tests pass.", {edit("C:\\work\\proj\\stats.py"), shellRunIn("C:\\work\\proj", "pytest", 0, pytestOk)}));
+#ifdef _WIN32
+    // Git Bash and Cygwin name the same folder /c/... and /cygdrive/c/....
+    for (const char* shellCwd : {"/c/Users/u/repo", "/cygdrive/c/Users/u/repo", "/c/users/u/repo/tests"}) {
+        EXPECT_FALSE(GaiaAgent::unsupportedTestClaim(
+            "All 4 tests pass.", {edit("C:/Users/u/repo/calc/ops.py"), shellRunIn(shellCwd, "pytest", 0, pytestOk)}))
+            << shellCwd;
+    }
+    EXPECT_EQ(why(GaiaAgent::unsupportedTestClaim(
+                  "All 4 tests pass.", {edit("C:/Users/u/repo/calc/ops.py"), shellRunIn("/d/Users/u/repo", "pytest", 0, pytestOk)})),
+              elsewhere);
+#endif
     // A relative path gives no folder to compare: the run stands.
     EXPECT_FALSE(GaiaAgent::unsupportedTestClaim("All 4 tests pass.",
                                                  {edit("stats.py"), shellRunIn("/tmp/scratch", "pytest", 0, pytestOk)}));
