@@ -83,7 +83,7 @@ describe('ModelSettings provider keys', () => {
 
         const tab = await screen.findByRole('radio', { name: /Fireworks AI/ });
         expect(tab).toBeDisabled();
-        expect(tab).toHaveAttribute('title', 'Blocked by Local only. Turn it off in Settings to use cloud models.');
+        expect(tab).toHaveAttribute('title', 'Blocked by Local only. Turn it off in Settings to use cloud models or web search.');
         expect(mockedApi.listProviderModels).toHaveBeenCalledWith('local');
         expect(mockedApi.listProviderModels).not.toHaveBeenCalledWith('fireworks');
     });
