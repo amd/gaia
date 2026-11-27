@@ -4,7 +4,7 @@
 import { useLayoutEffect, useRef, useState } from 'react';
 import { useT } from '../../i18n/useT';
 
-/** A skill's description, cut at two lines until the reader asks for the rest. */
+/** A skill's description, cut at one line until the reader asks for the rest. */
 export function SkillDescription({ text }: { text: string }) {
     const t = useT();
     const ref = useRef<HTMLSpanElement>(null);
