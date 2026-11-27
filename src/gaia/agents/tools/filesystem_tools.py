@@ -1469,7 +1469,7 @@ class FileSystemToolsMixin:
 
         @tool(atomic=True)
         def bookmark(
-            action: str = "list",
+            action: str = None,
             path: str = None,
             label: str = None,
         ) -> Union[str, dict]:
@@ -1481,11 +1481,20 @@ class FileSystemToolsMixin:
             Use 'list' to see all saved bookmarks.
 
             Args:
-                action: add, remove, or list (default: list)
+                action: add, remove, or list (default: list when no path is given)
                 path: File or directory path to bookmark (required for add/remove)
                 label: Human-friendly name for the bookmark (optional, for add)
             """
-            result = _bookmark_impl(action, path, label)
+            if action is None and path:
+                # Listing would drop the path the caller plainly meant to act on.
+                return {
+                    "status": "error",
+                    "error": (
+                        f"bookmark got a path ({path}) but no action. Call it again "
+                        "with action='add' to save it or action='remove' to delete it."
+                    ),
+                }
+            result = _bookmark_impl(action or "list", path, label)
             notice = _take_rebuild_notice(mixin, mixin._fs_index)
             if isinstance(result, dict):
                 return {**result, "error": notice + result["error"]}

@@ -1373,6 +1373,17 @@ class TestModelRequirements:
         assert DEFAULT_VLM_MODEL in missing[0]
         assert "requires_vlm" in missing[0]
 
+    def test_a_chat_model_that_reads_images_needs_no_gemma(self):
+        """On an 8 GB PC the 2B reads images itself; Gemma is never downloaded."""
+        from gaia.llm.lemonade_client import TINY_DEFAULT_MODEL_NAME
+
+        missing = runner._missing_requirements(
+            {"tags": ["requires_vlm"]},
+            {TINY_DEFAULT_MODEL_NAME},
+            TINY_DEFAULT_MODEL_NAME,
+        )
+        assert missing == []
+
     def test_asr_without_ffmpeg_is_missing(self, monkeypatch):
         import gaia.audio.media
         from gaia.audio.lemonade_asr import DEFAULT_ASR_MODEL

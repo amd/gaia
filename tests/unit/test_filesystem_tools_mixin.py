@@ -1099,6 +1099,18 @@ class TestBookmark:
         assert "Notes" in result
         assert str(f.resolve()) in result
 
+    def test_no_action_and_no_path_lists(self):
+        assert "No bookmarks" in self.bookmark()
+
+    def test_a_path_without_an_action_asks_which_one(self, tmp_path):
+        """Listing would silently drop the path a caller meant to save."""
+        f = tmp_path / "plan.md"
+        f.write_text("plan")
+        result = self.bookmark(path=str(f), label="Plan")
+        assert result["status"] == "error"
+        assert "action='add'" in result["error"]
+        assert "No bookmarks" in self.bookmark(action="list")
+
     def test_add_bookmark_no_path_error(self):
         """Adding a bookmark without a path returns error."""
         result = self.bookmark(action="add", path=None)

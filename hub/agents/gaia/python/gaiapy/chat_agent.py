@@ -536,6 +536,38 @@ _COSTLY_TO_RESEND_CHARS = 2000
 #: argparse's "prog.py: error: ..." and click's "Error: Missing argument ...".
 _USAGE_ERROR = re.compile(r"^(?:\S+\.py: error: |Error: (?:Missing|No such|Invalid) )")
 
+#: Calls that read a data file as text, where analyze_data_file computes the answer.
+#: A Windows or POSIX path in the user's words, quoted or not.
+_PATH_IN_TEXT = re.compile(
+    r"""(?:[A-Za-z]:[\\/]|~[\\/]|/)[^\s"'`<>|]+|["'`][A-Za-z]:[\\/][^"'`]+["'`]"""
+)
+
+
+def _with_next_step(result: Any, hint: str) -> Any:
+    """*result* with *hint* added to its ``next_step``, after any hint already there."""
+    if not isinstance(result, dict):
+        return result
+    earlier = str(result.get("next_step") or "").strip()
+    return {**result, "next_step": f"{earlier} {hint}" if earlier else hint}
+
+
+_TEXT_READS_OF_TABLES = frozenset(
+    {
+        "read_file",
+        "query_specific_file",
+        "search_file_content",
+        "run_shell_command",
+        "run_python",
+    }
+)
+#: A .csv/.tsv/.xlsx/.xls path inside a call's arguments: a quoted one may hold
+#: spaces; "report.csv.md" is not a table.
+_TABLE_FILE = re.compile(
+    r"""(?P<q>["'])(?P<quoted>[^"'\n]*?\.(?:csv|tsv|xlsx|xls))(?P=q)"""
+    r"""|(?P<bare>[^\s"'|<>]+?\.(?:csv|tsv|xlsx|xls))(?![\w.])""",
+    re.IGNORECASE,
+)
+
 
 def _fix_and_rerun_hint(
     last_line: str, script: Optional[str], snippet_chars: int, tools: Collection[str]
@@ -2000,7 +2032,61 @@ class ChatAgent(
             and tool_name not in self._tool_docs_sent
         ):
             result = {**result, "tool_docs": self._tool_docs([tool_name])}
+        table = self._table_read_by_hand(tool_name, tool_args)
+        if table:
+            result = _with_next_step(
+                result,
+                f"{table} is a table. For totals, averages, counts or rankings, "
+                f"call analyze_data_file with file_path={table!r} (group_by "
+                "and date_range narrow it): it computes them exactly. Don't "
+                "add up rows yourself.",
+            )
+        repo = self._repo_the_command_missed(tool_name, tool_args, result)
+        if repo:
+            result = _with_next_step(
+                result,
+                "That ran outside the repository the user named. Run it again "
+                f"with working_directory={repo!r}.",
+            )
         return result
+
+    def _repo_the_command_missed(
+        self, tool_name: str, tool_args: Dict[str, Any], result: Any
+    ) -> str:
+        """The repository the user named that a git command ran outside of, or "".
+
+        A small model ran git with no working_directory, got "not a git
+        repository", and gave up or guessed, with the repo path in the request.
+        """
+        if tool_name != "run_shell_command" or (tool_args or {}).get(
+            "working_directory"
+        ):
+            return ""
+        if "not a git repository" not in str(result):
+            return ""
+        request = str(getattr(self, "_original_user_input", "") or "")
+        for found in _PATH_IN_TEXT.finditer(request):
+            path = Path(found.group(0).strip("'\"`.,;:)")).expanduser()
+            for candidate in (path, *path.parents):
+                if (candidate / ".git").exists():
+                    return str(candidate)
+        return ""
+
+    def _table_read_by_hand(self, tool_name: str, tool_args: Dict[str, Any]) -> str:
+        """The data file this call reads as text when analyze_data_file would
+        compute the answer, or "". Small models sum rows by hand and drop some."""
+        if tool_name not in _TEXT_READS_OF_TABLES:
+            return ""
+        if "analyze_data_file" not in self._tools_registry:
+            return ""
+        executions = getattr(self, "_turn_tool_executions", None) or []
+        if any(r.get("tool") == "analyze_data_file" for r in executions):
+            return ""
+        for value in (tool_args or {}).values():
+            found = _TABLE_FILE.search(str(value))
+            if found:
+                return found.group("quoted") or found.group("bare")
+        return ""
 
     def _build_tool_selection_query(self, user_input: str) -> str:
         """Build the selection query: previous user message + current, last 4K chars.

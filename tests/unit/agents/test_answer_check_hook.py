@@ -359,3 +359,15 @@ def test_a_turn_the_failure_breaker_ends_still_names_its_unread_citations(
     result = agent.process_query("research the finding")
     assert result["result"].startswith("From what I know")
     assert f"This cited page was never opened: {_PAGE}." in result["result"]
+
+
+class _StyleAgent(_CheckedAgent):
+    STYLE_ANSWER_PROBLEMS = frozenset({"The answer still says BAD."})
+
+
+def test_a_style_problem_left_after_the_repair_is_not_shown(monkeypatch, tmp_path):
+    agent = _make(_StyleAgent, monkeypatch, tmp_path)
+    sent = _script(agent, "BAD draft", "Still BAD.")
+    result = agent.process_query("question")
+    assert len(sent) == 2, "it still gets the repair round"
+    assert result["result"] == "Still BAD."

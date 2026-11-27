@@ -12271,6 +12271,10 @@ Do NOT wrap conversational replies in JSON.
         """
         return answer
 
+    #: Answer problems about style, not substance: they get the repair round
+    #: but are never named to the user when the repair misses them.
+    STYLE_ANSWER_PROBLEMS: FrozenSet[str] = frozenset()
+
     def answer_problems(  # pylint: disable=unused-argument
         self, answer: str
     ) -> List[str]:
@@ -16826,7 +16830,10 @@ Do NOT wrap conversational replies in JSON.
                             conversation.append({"role": "user", "content": ran})
                         continue
                     completion_gaps.extend(
-                        p for p in answer_issues if p not in completion_gaps
+                        p
+                        for p in answer_issues
+                        if p not in completion_gaps
+                        and p not in self.STYLE_ANSWER_PROBLEMS
                     )
                 # Validate after subclass rewriting, before console/SSE emission.
                 final_test_claim = unsupported_test_claim(

@@ -793,14 +793,19 @@ MUSIC_MODEL = "ACE-Step-Music"
 REQUIRES_TIER_TAGS = {"requires_full_tier": "full", "requires_compact_tier": "compact"}
 
 
-def _required_models(scenario_data: dict) -> list:
-    """Return ``(tag, model_id)`` for each ``requires_*`` tag the scenario carries."""
+def _required_models(scenario_data: dict, agent_model=None) -> list:
+    """Return ``(tag, model_id)`` for each ``requires_*`` tag the scenario carries.
+
+    The image model is the one GAIA reads images with for *agent_model*: a
+    chat model that reads images itself (Qwen3.5-2B on an 8 GB PC) needs no
+    Gemma. ``None`` when reading images is off for it (chat on the NPU).
+    """
     from gaia.audio.lemonade_asr import DEFAULT_ASR_MODEL
-    from gaia.vlm.mixin import DEFAULT_VLM_MODEL
+    from gaia.llm.lemonade_client import resolve_default_vision_model
 
     by_tag = {
         REQUIRES_ASR_TAG: DEFAULT_ASR_MODEL,
-        REQUIRES_VLM_TAG: DEFAULT_VLM_MODEL,
+        REQUIRES_VLM_TAG: resolve_default_vision_model(agent_model),
         REQUIRES_SD_TAG: SD_MODEL,
         REQUIRES_MUSIC_TAG: MUSIC_MODEL,
     }
@@ -831,14 +836,20 @@ def _tier_mismatch(scenario_data: dict, agent_model) -> list:
     ]
 
 
-def _missing_requirements(scenario_data: dict, downloaded_models: set) -> list:
+def _missing_requirements(
+    scenario_data: dict, downloaded_models: set, agent_model=None
+) -> list:
     """Return why this machine cannot run the scenario; empty means it can."""
     from gaia.audio.media import find_ffmpeg
 
     missing = [
-        f"{model} is not downloaded on the Lemonade server (tag {tag})"
-        for tag, model in _required_models(scenario_data)
-        if model not in downloaded_models
+        (
+            f"reading images is off for {agent_model} (tag {tag})"
+            if model is None
+            else f"{model} is not downloaded on the Lemonade server (tag {tag})"
+        )
+        for tag, model in _required_models(scenario_data, agent_model)
+        if model is None or model not in downloaded_models
     ]
     # transcribe_media would otherwise try a package-manager install mid-run.
     if REQUIRES_ASR_TAG in (scenario_data.get("tags") or []) and not find_ffmpeg():
@@ -3920,7 +3931,7 @@ class AgentEvalRunner:
                 continue
 
             missing = _missing_requirements(
-                scenario_data, downloaded_models
+                scenario_data, downloaded_models, self.agent_model
             ) + _tier_mismatch(scenario_data, self.agent_model)
             if missing:
                 self._record_skip(

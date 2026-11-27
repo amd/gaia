@@ -144,7 +144,7 @@ def test_id_dropped_by_an_excluded_tag_is_refused(scenario_dir):
 def _stub_the_run(monkeypatch):
     monkeypatch.setattr(runner, "preflight_check", lambda *a, **k: [])
     monkeypatch.setattr(runner, "_documents_exist", lambda _sd: True)
-    monkeypatch.setattr(runner, "_missing_requirements", lambda _sd, _m: [])
+    monkeypatch.setattr(runner, "_missing_requirements", lambda *_a: [])
     monkeypatch.setattr(
         runner,
         "run_scripted_scenario",

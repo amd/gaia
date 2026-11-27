@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import contextlib
 from types import SimpleNamespace
+from unittest.mock import MagicMock
 
 import pytest
 from gaiapy import research, stdio
@@ -372,3 +373,249 @@ def test_a_named_skill_folder_nobody_captured_gets_a_repair():
         agent._turn_tool_executions.append({"tool": "capture_skill"})
         assert agent.required_calls() == []
         assert agent.answer_problems("Added.") == []
+
+
+def test_a_question_about_an_attached_document_must_read_it():
+    # Qwen3.5-2B answered RFC 7231 and Raspberry Pi questions from memory with
+    # the document attached; Gemma queried it.
+    doc = "C:/docs/rfc7231.txt"
+    with _agent() as (agent, _seen):
+        agent.indexed_files = {doc}
+        agent._original_user_input = "What does section 4.3.1 say about GET?"
+        agent._turn_tool_executions = []
+        (problem,) = agent.answer_problems("GET retrieves a resource.")
+        assert problem.startswith("The answer did not read the documents")
+        assert "rfc7231.txt" in problem
+        assert "query_specific_file" in agent.answer_repair_prompt([problem])
+        assert agent.required_calls() == [
+            (
+                "query_specific_file",
+                {"file_path": doc, "query": "What does section 4.3.1 say about GET?"},
+            )
+        ]
+        agent._turn_tool_executions = [{"tool": "query_specific_file"}]
+        assert agent.answer_problems("Section 4.3.1 says…") == []
+        assert agent.required_calls() == []
+
+
+@pytest.mark.parametrize(
+    "request_text, docs",
+    [
+        ("What is the capital of France?", set()),  # nothing attached
+        ("Thanks, that helps.", {"C:/docs/a.pdf"}),  # not a question
+        ("Index this folder for me.", {"C:/docs/a.pdf"}),
+        # Attached, but the question is about something else.
+        ("What is the capital of France?", {"C:/docs/rfc7231.txt"}),
+        ("How do I boil an egg?", {"C:/docs/q3_report.pdf"}),
+    ],
+)
+def test_no_document_check_where_it_does_not_apply(request_text, docs):
+    with _agent() as (agent, _seen):
+        agent.indexed_files = docs
+        agent._original_user_input = request_text
+        agent._turn_tool_executions = []
+        assert agent.answer_problems("Sure.") == []
+        assert agent.required_calls() == []
+
+
+def test_several_unread_documents_are_queried_together():
+    with _agent() as (agent, _seen):
+        agent.indexed_files = {"C:/docs/a.pdf", "C:/docs/b.pdf"}
+        agent._original_user_input = "Which document mentions the deadline?"
+        agent._turn_tool_executions = []
+        assert agent.required_calls() == [
+            ("query_documents", {"query": "Which document mentions the deadline?"})
+        ]
+
+
+@pytest.mark.parametrize(
+    "request_text, answer, flagged",
+    [
+        ("Hi!", "Hi! How can I help?", False),
+        (
+            "Hi!",
+            "Hello! I can help with:\n- files\n- documents\n- the web\n- memory",
+            True,
+        ),
+        ("What can you do?", " ".join(["word"] * 80), True),
+        (
+            "What can you do?",
+            "I read and write files, search the web and remember things.",
+            False,
+        ),
+        # Not small talk: a real question may get a long answer.
+        (
+            "How do I set up a Python virtual environment on Windows?",
+            " ".join(["w"] * 200),
+            False,
+        ),
+    ],
+)
+def test_small_talk_gets_a_short_reply(request_text, answer, flagged):
+    from gaiapy.agent import _SMALL_TALK_TOO_LONG
+
+    with _agent() as (agent, _seen):
+        agent.indexed_files = set()
+        agent._original_user_input = request_text
+        agent._turn_tool_executions = []
+        problems = agent.answer_problems(answer)
+        assert (_SMALL_TALK_TOO_LONG in problems) is flagged
+        # A style problem gets a repair but is never named to the user.
+        assert _SMALL_TALK_TOO_LONG in agent.STYLE_ANSWER_PROBLEMS
+
+
+def test_a_named_skill_that_was_not_loaded_is_loaded():
+    with _agent() as (agent, _seen):
+        installed = agent.skill_manager.discover()
+        if (
+            "research-report" not in installed
+            or "load_skill" not in agent._tools_registry
+        ):
+            pytest.skip("this build installs no research-report skill")
+        agent.indexed_files = set()
+        agent._original_user_input = "Load the research-report skill."
+        agent._turn_tool_executions = []
+        problems = agent.answer_problems("Loaded the research-report skill.")
+        assert (
+            "The skill the user asked for was not loaded: `research-report`."
+            in problems
+        )
+        assert "load_skill" in agent.answer_repair_prompt(problems)
+        assert ("load_skill", {"name": "research-report"}) in agent.required_calls()
+        agent._turn_tool_executions = [{"tool": "load_skill"}]
+        assert not [p for p in agent.answer_problems("Done.") if "skill" in p]
+
+
+@pytest.mark.parametrize(
+    "request_text",
+    [
+        "Load the no-such-thing skill.",
+        "What skills do you have?",
+        "Write a skill file.",
+    ],
+)
+def test_no_skill_check_for_a_skill_that_is_not_installed(request_text):
+    with _agent() as (agent, _seen):
+        agent.indexed_files = set()
+        agent._original_user_input = request_text
+        agent._turn_tool_executions = []
+        assert not [p for p in agent.answer_problems("OK.") if "skill" in p]
+
+
+@pytest.mark.parametrize(
+    "request_text, answer, wrong",
+    [
+        # Verbatim from the 2B's core_arithmetic_direct failure.
+        ("What is 17 times 23?", "17 × 23 = 411.", True),
+        ("What is 17 times 23?", "It's 391.", False),
+        ("What's 15% of 240?", "That comes to 120.", True),
+        ("What's 15% of 240?", "36", False),
+        ("How much is 1,200 / 3?", "Each gets $400.", False),
+        ("what is 2.5 x 4?", "10", False),
+        ("What is 1/3 as a decimal?", "0.333", False),
+        ("What is 1/3 as a decimal?", "0.5", True),
+        # More than one operation: only the first two operands would be checked.
+        ("What is 2 + 3 + 4?", "9", False),
+        ("What is 10 + 5 * 2?", "20", False),
+        # Not a calculation request.
+        ("Remind me in 3 - 5 days", "ok", False),
+        ("call me at 555-1234", "ok", False),
+        ("What happened on 9/11?", "Attacks on the US in 2001.", False),
+        ("Is a 50/50 split fair?", "Yes.", False),
+        ("What is 1920 x 1080 resolution called?", "Full HD.", False),
+    ],
+)
+def test_simple_arithmetic_is_checked(request_text, answer, wrong):
+    from gaiapy.agent import _wrong_arithmetic
+
+    assert bool(_wrong_arithmetic(request_text, answer)) is wrong
+
+
+def test_a_web_address_nothing_fetched_is_fetched_as_given():
+    url = "http://127.0.0.1:8765/web/ferry.html"
+    with _agent() as (agent, _seen):
+        if "fetch_page" not in agent._tools_registry:
+            pytest.skip("this build registers no fetch_page")
+        agent.indexed_files = set()
+        agent._original_user_input = f"What time is the last ferry? See {url}."
+        agent._turn_tool_executions = []
+        problems = agent.answer_problems("The last ferry leaves at 11pm.")
+        assert (
+            f"The answer did not fetch the web address the user gave: {url}" in problems
+        )
+        assert "fetch_page" in agent.answer_repair_prompt(problems)
+        assert ("fetch_page", {"url": url}) in agent.required_calls()
+        agent._turn_tool_executions = [{"tool": "fetch_page"}]
+        assert not [p for p in agent.answer_problems("At 9pm.") if "web address" in p]
+
+
+def test_a_question_that_names_a_document_must_read_it():
+    with _agent() as (agent, _seen):
+        agent.indexed_files = {"C:/docs/pi4_datasheet.pdf"}
+        agent._original_user_input = "What GPIO voltage does the Pi4 use?"
+        agent._turn_tool_executions = []
+        (problem,) = agent.answer_problems("3.3 V.")
+        assert problem.startswith("The answer did not read the documents")
+
+
+def test_hints_keep_an_earlier_next_step_and_skip_text_results():
+    from gaiapy.chat_agent import _with_next_step
+
+    assert _with_next_step("not a git repository", "Run it again.") == (
+        "not a git repository"
+    )
+    assert _with_next_step({"next_step": "Check the path."}, "Run it again.") == {
+        "next_step": "Check the path. Run it again."
+    }
+    assert _with_next_step({"ok": True}, "Run it again.") == {
+        "ok": True,
+        "next_step": "Run it again.",
+    }
+
+
+@pytest.mark.parametrize(
+    "request_text",
+    [
+        "What does the policy say about refunds?",
+        "According to it, when is the deadline?",
+        "Summarize the attached file.",
+    ],
+)
+def test_a_question_that_points_at_the_document_must_read_it(request_text):
+    with _agent() as (agent, _seen):
+        agent.indexed_files = {"C:/docs/q3_report.pdf"}
+        agent._original_user_input = request_text
+        agent._turn_tool_executions = []
+        assert [
+            p
+            for p in agent.answer_problems("Sure.")
+            if p.startswith("The answer did not read the documents")
+        ]
+
+
+@pytest.mark.parametrize(
+    "request_text, flagged",
+    [
+        # From negation_handling: the handbook is the only source, and unnamed.
+        ("Are contractors eligible for health benefits?", True),
+        ("What about dental and vision for contractors?", True),
+        ("What is the capital of France?", False),
+        ("How do I boil an egg?", False),
+    ],
+)
+def test_a_question_about_what_a_document_holds_must_read_it(request_text, flagged):
+    rag = MagicMock()
+    rag.document_words.return_value = frozenset(
+        {"contractors", "eligible", "health", "dental", "vision", "benefits"}
+    )
+    with _agent() as (agent, _seen):
+        agent._rag = rag
+        agent.indexed_files = {"C:/docs/employee_handbook.md"}
+        agent._original_user_input = request_text
+        agent._turn_tool_executions = []
+        problems = [
+            p
+            for p in agent.answer_problems("Sure.")
+            if p.startswith("The answer did not read the documents")
+        ]
+        assert bool(problems) is flagged
