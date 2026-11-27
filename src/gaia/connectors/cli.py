@@ -219,7 +219,7 @@ def add_subparser(subparsers: argparse._SubParsersAction) -> None:
     p_gg.add_argument("connector_id")
     p_gg.add_argument(
         "agent_id",
-        help="Namespaced agent id, e.g. 'builtin:chat' or 'custom:abc:inbox'",
+        help="Namespaced agent id, e.g. 'installed:gaia' or 'custom:abc:inbox'",
     )
     p_gg.add_argument(
         "--scopes",

@@ -176,8 +176,8 @@ def _load_font(size: int, *, bold: bool = False, mono: bool = False):
                     # Helvetica.ttc contains multiple faces; index 1 is bold.
                     try:
                         return ImageFont.truetype(path, size=size, index=1)
-                    except Exception:
-                        pass
+                    except OSError as e:
+                        print(f"warning: no bold face in {path} ({e}); using the regular face")
                 return font
             except OSError:
                 continue

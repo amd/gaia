@@ -644,5 +644,37 @@ def test_index_folder_skips_credential_files(client, mock_index_document, home_t
     body = r.json()
     assert [d["filename"] for d in body["documents"]] == ["notes.txt"]
     assert body["skipped"] == 1
+    assert body["skipped_files"] == [
+        {"file": "secrets.json", "reason": "credential_file"}
+    ]
+    assert body["skipped_files_truncated"] is False
+    assert _SECRET not in r.text
+    indexed = [c.args[0].name for c in mock_index_document.call_args_list]
+    assert indexed == ["notes.txt"]
+
+
+def test_index_folder_caps_named_skipped_files(
+    client, mock_index_document, home_tmp_dir
+):
+    """The response names up to 50 skipped files and says when it stopped."""
+    (home_tmp_dir / "notes.txt").write_text("ordinary notes\n", encoding="utf-8")
+    expected = {f"skip_{i:02d}.bin" for i in range(51)}
+    for name in expected:
+        (home_tmp_dir / name).write_bytes(b"not a document")
+
+    r = client.post(
+        "/api/documents/index-folder",
+        json={"folder_path": str(home_tmp_dir), "recursive": False},
+    )
+
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["skipped"] == 51
+    assert len(body["skipped_files"]) == 50
+    assert body["skipped_files_truncated"] is True
+    asserted = {f["file"] for f in body["skipped_files"]}
+    assert asserted <= expected
+    assert {f["reason"] for f in body["skipped_files"]} == {"unsupported_type"}
+    assert [d["filename"] for d in body["documents"]] == ["notes.txt"]
     indexed = [c.args[0].name for c in mock_index_document.call_args_list]
     assert indexed == ["notes.txt"]

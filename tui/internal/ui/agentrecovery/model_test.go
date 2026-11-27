@@ -49,7 +49,7 @@ func TestTheScreenSaysWhyAndOffersBothWaysOut(t *testing.T) {
 	m, _ := screen(t, available, nil)
 	view := m.View()
 	for _, want := range []string{"GAIA's agent didn't start", why, "Nothing has been switched",
-		"Download gaiacpp again", "12.0 MB", "Use the Python agent", "Quit"} {
+		"Download gaiacpp again", "12.0 MB", "Use Full-featured", "Quit"} {
 		if !strings.Contains(view, want) {
 			t.Errorf("the screen does not say %q:\n%s", want, view)
 		}
@@ -108,7 +108,7 @@ func TestAFailedDownloadStaysOnTheScreenWithTheReason(t *testing.T) {
 	if quit != nil || *picked != Quit {
 		t.Fatal("a failed download left the screen")
 	}
-	if view := m.View(); !strings.Contains(view, "gaiacpp was not installed: SHA-256 mismatch") || !strings.Contains(view, "Use the Python agent") {
+	if view := m.View(); !strings.Contains(view, "gaiacpp was not installed: SHA-256 mismatch") || !strings.Contains(view, "Use Full-featured") {
 		t.Fatalf("the failure or the way out is missing:\n%s", view)
 	}
 }

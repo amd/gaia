@@ -327,10 +327,10 @@ gaia connectors grants revoke google installed:gaia
 # Per-agent activations — gate which agents see this MCP server's tools.
 # Activations apply to mcp_server connectors only; OAuth connectors are
 # rejected with exit 3 (use per-scope grants above instead).
-gaia connectors activations activate mcp-github builtin:chat \
+gaia connectors activations activate mcp-github installed:gaia \
     --scopes use   # --scopes is only consulted when no prior grant exists
 gaia connectors activations list mcp-github
-gaia connectors activations deactivate mcp-github builtin:chat
+gaia connectors activations deactivate mcp-github installed:gaia
 
 # Disconnect
 gaia connectors disconnect google
@@ -542,16 +542,16 @@ from gaia.connectors import activate, deactivate
 # Activate (auto-grants if no prior grant exists). mcp-github is the
 # catalog id for the GitHub MCP server; activations only accept
 # mcp_server connectors.
-activate("mcp-github", "builtin:chat", scopes_for_grant=["use"])
+activate("mcp-github", "installed:gaia", scopes_for_grant=["use"])
 
 # Deactivate (preserves grant — re-activate is one click)
-deactivate("mcp-github", "builtin:chat")
+deactivate("mcp-github", "installed:gaia")
 ```
 
 ```bash
-gaia connectors activations activate mcp-github builtin:chat --scopes use
+gaia connectors activations activate mcp-github installed:gaia --scopes use
 gaia connectors activations list mcp-github
-gaia connectors activations deactivate mcp-github builtin:chat
+gaia connectors activations deactivate mcp-github installed:gaia
 ```
 
 ### Which agents appear in the "Active for" panel
@@ -562,7 +562,7 @@ For an `mcp_server` connector the panel lists agents from **two** sources:
 2. Agents that set `CONSUMES_MCP_SERVERS = True` — they load MCP servers
    dynamically at runtime (from `~/.gaia/mcp_servers.json`) and gate the
    tools through this same activation ledger, so they can use **any** MCP
-   connector once activated. `builtin:chat` is the canonical example.
+   connector once activated. `installed:gaia` is the canonical example.
 
 Category (2) agents declare no scopes of their own, so one-click activation
 auto-grants the canonical `use` scope. The registry surfaces the flag on

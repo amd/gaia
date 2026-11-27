@@ -1448,6 +1448,275 @@ def _blob_to_embedding(blob: bytes) -> np.ndarray:
     return np.frombuffer(blob, dtype=np.float32).copy()
 
 
+# ============================================================================
+# Memory Reconciliation (shared by the agent and the dashboard)
+# ============================================================================
+
+#: System prompt sent with every ``_RECONCILIATION_PROMPT`` classification.
+RECONCILIATION_SYSTEM_PROMPT = (
+    "You are a memory reconciliation engine. Return valid JSON only."
+)
+
+#: Most recently updated memories a reconciliation run compares.
+RECONCILE_CANDIDATE_LIMIT = 200
+
+#: Nearest neighbours searched per memory when looking for similar pairs.
+RECONCILE_NEIGHBORS = 5
+
+
+def reconciliation_max_tokens(model_id: Optional[str]) -> int:
+    """Output budget for one classification reply on *model_id*."""
+    return 256 + reasoning_headroom(model_id)
+
+
+def empty_reconcile_result() -> Dict[str, int]:
+    """The counts a reconciliation run returns, all zero."""
+    return {
+        "pairs_checked": 0,
+        "reinforced": 0,
+        "contradicted": 0,
+        "weakened": 0,
+        "neutral": 0,
+    }
+
+
+def _parse_relationship(raw: str) -> Optional[str]:
+    """The ``relationship`` in a classification reply, or None if unreadable."""
+    text = strip_reasoning(raw).strip()
+    if text.startswith("```"):
+        text = re.sub(r"^```(?:json)?\s*", "", text)
+        text = re.sub(r"\s*```$", "", text).strip()
+    try:
+        classification = json.loads(text)
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(classification, dict):
+        return None
+    return str(classification.get("relationship", "neutral"))
+
+
+def _reconcile_metadata(item: Dict) -> Dict[str, Any]:
+    """A copy of *item*'s metadata with ``reconciled_with`` as a list."""
+    raw_meta = item.get("metadata") or {}
+    if isinstance(raw_meta, str):
+        try:
+            raw_meta = json.loads(raw_meta) if raw_meta else {}
+        except json.JSONDecodeError as exc:
+            raise ValueError(
+                f"memory {item['id']} has unreadable metadata ({exc}); "
+                "fix or delete that entry in the Memory dashboard, then retry"
+            ) from exc
+    if not isinstance(raw_meta, dict):
+        raise ValueError(
+            f"memory {item['id']} has metadata of type {type(raw_meta).__name__}, "
+            "not an object; fix or delete that entry in the Memory dashboard, "
+            "then retry"
+        )
+    meta = dict(raw_meta)
+    reconciled = meta.get("reconciled_with") or []
+    if not isinstance(reconciled, list):
+        raise ValueError(
+            f"memory {item['id']} has a reconciled_with marker of type "
+            f"{type(reconciled).__name__}, not a list; fix or delete that entry "
+            "in the Memory dashboard, then retry"
+        )
+    meta["reconciled_with"] = list(reconciled)
+    return meta
+
+
+def reconcile_memories(
+    store: Any,
+    classify: Callable[[str], str],
+    *,
+    max_pairs: int = 20,
+    embedding_dim: Optional[int] = None,
+    on_superseded: Optional[Callable[[str], None]] = None,
+) -> Dict[str, int]:
+    """Classify near-duplicate memories in pairs and apply each verdict.
+
+    Pairs are memories with cosine similarity of at least
+    ``RECONCILE_SIMILARITY_THRESHOLD``. Each new pair goes to *classify*,
+    which takes a ``_RECONCILIATION_PROMPT`` and returns the model's raw reply:
+
+    - ``reinforce``: both gain 0.05 confidence.
+    - ``contradict``: the older is superseded by the newer, which gains 0.1.
+    - ``weaken``: the older loses 0.1.
+    - anything else: no change.
+
+    Both memories of a classified pair are marked ``reconciled_with`` each
+    other, so no later run classifies that pair again.
+
+    Args:
+        store: The ``MemoryStore`` to read candidates from and write to.
+        classify: Sends one prompt to the LLM and returns its reply text.
+            Its errors propagate; only an unparseable reply skips a pair.
+        max_pairs: Most pairs classified in this run.
+        embedding_dim: Expected vector size; vectors of another size (a
+            previous embedder's) are skipped. None takes the first readable
+            vector's size.
+        on_superseded: Called with the id of each memory a contradiction
+            retires, e.g. to drop it from a cached search index.
+
+    Returns:
+        ``{pairs_checked, reinforced, contradicted, weakened, neutral}``.
+
+    Raises:
+        ImportError: faiss is not installed.
+        ValueError: a candidate memory's metadata cannot be read.
+        RuntimeError: an unsafe FAISS call, or a memory that vanished mid-run.
+    """
+    result = empty_reconcile_result()
+
+    items = store.get_items_for_reconciliation(limit=RECONCILE_CANDIDATE_LIMIT)
+    if len(items) < 2:
+        return result
+
+    ids: List[str] = []
+    vectors: List[np.ndarray] = []
+    item_map: Dict[str, Dict] = {}
+    expected_dim = embedding_dim
+    undecodable = 0
+    wrong_dim = 0
+    for item in items:
+        try:
+            vec = _blob_to_embedding(item["embedding"])
+        except (ValueError, TypeError, KeyError) as exc:
+            undecodable += 1
+            logger.debug("Reconcile skipping memory %s: %s", item.get("id"), exc)
+            continue
+        if expected_dim is None:
+            expected_dim = int(vec.shape[0])
+        if vec.shape[0] != expected_dim:
+            wrong_dim += 1
+            continue
+        norm = np.linalg.norm(vec)
+        if norm > 0:
+            vec = vec / norm
+        ids.append(item["id"])
+        vectors.append(vec)
+        item_map[item["id"]] = item
+
+    if undecodable or wrong_dim:
+        logger.warning(
+            "Reconcile skipped %d memory(ies) with an unreadable embedding and "
+            "%d from a different embedder; POST /api/memory/rebuild-embeddings "
+            "(Memory dashboard > Rebuild embeddings) to include them",
+            undecodable,
+            wrong_dim,
+        )
+
+    if len(vectors) < 2 or expected_dim is None:
+        return result
+
+    import faiss
+
+    assert_faiss_omp_safe("Memory reconciliation search")
+    mat = np.stack(vectors).astype(np.float32)
+    index = faiss.IndexFlatIP(expected_dim)
+    index.add(mat)
+    n_neighbors = min(RECONCILE_NEIGHBORS, len(vectors))
+    scores_all, indices_all = index.search(mat, n_neighbors)
+
+    # One metadata dict per id for the whole run: a memory in several pairs
+    # must keep every marker, not just the last pair's.
+    metas: Dict[str, Dict[str, Any]] = {}
+
+    def _meta(knowledge_id: str) -> Dict[str, Any]:
+        if knowledge_id not in metas:
+            metas[knowledge_id] = _reconcile_metadata(item_map[knowledge_id])
+        return metas[knowledge_id]
+
+    pairs: List[Tuple[str, str, float]] = []
+    seen: Set[Tuple[str, str]] = set()
+    for i in range(len(vectors)):
+        for j_pos in range(n_neighbors):
+            j = int(indices_all[i][j_pos])
+            if j in (i, -1):
+                continue
+            sim = float(scores_all[i][j_pos])
+            if sim < RECONCILE_SIMILARITY_THRESHOLD:
+                continue
+            key = (min(ids[i], ids[j]), max(ids[i], ids[j]))
+            if key in seen:
+                continue
+            seen.add(key)
+            # Drop settled pairs before the cap, or they fill it every run.
+            if ids[j] in _meta(ids[i])["reconciled_with"]:
+                continue
+            if ids[i] in _meta(ids[j])["reconciled_with"]:
+                continue
+            pairs.append((ids[i], ids[j], sim))
+
+    pairs.sort(key=lambda p: p[2], reverse=True)
+    pairs = pairs[:max_pairs]
+
+    superseded: Set[str] = set()
+    for id_a, id_b, _sim in pairs:
+        if id_a in superseded or id_b in superseded:
+            # Retired earlier in this run; it leaves the candidates next run.
+            continue
+        item_a = item_map[id_a]
+        item_b = item_map[id_b]
+        prompt = _RECONCILIATION_PROMPT.format(
+            date_a=str(item_a.get("created_at") or "unknown")[:10],
+            content_a=str(item_a.get("content", ""))[:500],
+            date_b=str(item_b.get("created_at") or "unknown")[:10],
+            content_b=str(item_b.get("content", ""))[:500],
+        )
+        relationship = _parse_relationship(classify(prompt))
+        if relationship is None:
+            logger.warning(
+                "Reconcile skipping pair %s/%s: the reply was not a JSON object; "
+                "it is classified again next run",
+                id_a,
+                id_b,
+            )
+            continue
+
+        result["pairs_checked"] += 1
+
+        # Marked before the verdict lands: a failed write must never let the
+        # next run apply this pair's verdict a second time.
+        meta_a = _meta(id_a)
+        meta_b = _meta(id_b)
+        meta_a["reconciled_with"].append(id_b)
+        meta_b["reconciled_with"].append(id_a)
+        for knowledge_id, meta in ((id_a, meta_a), (id_b, meta_b)):
+            if not store.update(knowledge_id, metadata=meta):
+                raise RuntimeError(
+                    f"could not mark memory {knowledge_id} as reconciled: "
+                    "the entry no longer exists"
+                )
+
+        a_is_older = str(item_a.get("created_at") or "") <= str(
+            item_b.get("created_at") or ""
+        )
+        older, newer = (id_a, id_b) if a_is_older else (id_b, id_a)
+
+        if relationship == "reinforce":
+            store.update_confidence(id_a, 0.05)
+            store.update_confidence(id_b, 0.05)
+            result["reinforced"] += 1
+        elif relationship == "contradict":
+            if not store.update(older, superseded_by=newer):
+                raise RuntimeError(
+                    f"could not supersede memory {older}: the entry no longer exists"
+                )
+            store.update_confidence(newer, 0.1)
+            superseded.add(older)
+            if on_superseded is not None:
+                on_superseded(older)
+            result["contradicted"] += 1
+        elif relationship == "weaken":
+            store.update_confidence(older, -0.1)
+            result["weakened"] += 1
+        else:
+            result["neutral"] += 1
+
+    logger.info("[memory] reconciliation: %s", result)
+    return result
+
+
 #: Reason codes for why memory is unavailable this session. Distinct
 #: codes because the remedies differ: an unset env var, a model that was
 #: never pulled into a *running* Lemonade, a pulled model Lemonade cannot
@@ -2340,13 +2609,9 @@ class MemoryMixin(ProceduralMemoryMixin):
 
     def _get_embedding_cache(self):
         """Lazy-init the content-keyed embedding cache (per-instance)."""
-        cache = getattr(self, "_embedding_cache", None)
-        if cache is None:
-            from gaia.llm.embedding_cache import EmbeddingCache
+        from gaia.llm.embedding_cache import cache_for
 
-            cache = EmbeddingCache()
-            self._embedding_cache = cache
-        return cache
+        return cache_for(self)
 
     def _embed_text(self, text: str) -> np.ndarray:
         """Embed text via Lemonade using the active embedder.
@@ -3515,9 +3780,7 @@ class MemoryMixin(ProceduralMemoryMixin):
         """
         # Step 6: reconcile_memory() (max 20 pairs)
         try:
-            recon = self.reconcile_memory(max_pairs=20)
-            if recon.get("pairs_checked", 0) > 0:
-                logger.info("[MemoryMixin] post-init reconciliation: %s", recon)
+            self.reconcile_memory(max_pairs=20)
         except Exception as e:
             logger.warning("[MemoryMixin] post-init reconciliation failed: %s", e)
 
@@ -3829,8 +4092,8 @@ class MemoryMixin(ProceduralMemoryMixin):
     def reconcile_memory(self, max_pairs: int = 20) -> Dict:
         """Pairwise similarity check on active items for conflict detection.
 
-        Finds pairs with >0.85 cosine similarity, then uses LLM to classify:
-        reinforce/contradict/weaken/neutral.
+        Runs :func:`reconcile_memories` with this agent's chat model; see it
+        for the verdicts and what each one changes.
 
         Args:
             max_pairs: Maximum number of pair classifications per run.
@@ -3838,222 +4101,29 @@ class MemoryMixin(ProceduralMemoryMixin):
         Returns:
             Dict with {pairs_checked, reinforced, contradicted, weakened, neutral}.
         """
-        result = {
-            "pairs_checked": 0,
-            "reinforced": 0,
-            "contradicted": 0,
-            "weakened": 0,
-            "neutral": 0,
-        }
-
         self._finish_deferred_memory_init()
         if self._faiss_index is None or self._faiss_index.ntotal < 2:
-            return result
+            return empty_reconcile_result()
 
-        store = self._memory_store
-
-        # Get all active items with embeddings for pairwise comparison
-        items = store.get_items_for_reconciliation()
-        if len(items) < 2:
-            return result
-
-        # Build a mapping for quick lookup
-        item_map = {}
-        vectors = []
-        ids = []
-        for item in items:
-            try:
-                vec = _blob_to_embedding(item["embedding"])
-                if vec.shape[0] != self._embedding_dim:
-                    continue
-                norm = np.linalg.norm(vec)
-                if norm > 0:
-                    vec = vec / norm
-                item_map[item["id"]] = item
-                vectors.append(vec)
-                ids.append(item["id"])
-            except Exception as e:
-                logger.warning(
-                    "Skipping memory %s in reconciliation: corrupt embedding: %s",
-                    item.get("id"),
-                    e,
-                )
-                continue
-
-        if len(vectors) < 2:
-            return result
-
-        # Stack all vectors and compute pairwise similarities
-        mat = np.stack(vectors)
-        # For efficiency with large sets, check each item against its top-K neighbors
-        import faiss
-
-        assert_faiss_omp_safe("Memory reconciliation search")
-        try:
-            temp_index = faiss.IndexFlatIP(self._embedding_dim)
-            temp_index.add(mat)
-
-            # Search each item for its top-5 neighbors
-            n_neighbors = min(5, len(vectors))
-            scores_all, indices_all = temp_index.search(mat, n_neighbors)
-        except (RuntimeError, ValueError) as e:
-            logger.warning(
-                "[MemoryMixin] reconciliation FAISS search over %d memories "
-                "failed, no conflicts were checked this run: %s",
-                len(vectors),
-                e,
+        def classify(prompt: str) -> str:
+            response = self.chat.send_messages(
+                messages=[{"role": "user", "content": prompt}],
+                system_prompt=RECONCILIATION_SYSTEM_PROMPT,
+                temperature=0.1,
+                max_tokens=reconciliation_max_tokens(
+                    getattr(self.chat, "effective_model", None)
+                ),
+                **self._side_request_kwargs(),
             )
-            return result
+            return response.text if hasattr(response, "text") else str(response)
 
-        # Collect high-similarity pairs
-        pairs = []
-        seen_pairs = set()
-        for i in range(len(vectors)):
-            for j_pos in range(n_neighbors):
-                j = int(indices_all[i][j_pos])
-                if j == i:
-                    continue
-                sim = float(scores_all[i][j_pos])
-                if sim >= RECONCILE_SIMILARITY_THRESHOLD:
-                    pair_key = tuple(sorted((ids[i], ids[j])))
-                    if pair_key not in seen_pairs:
-                        seen_pairs.add(pair_key)
-                        pairs.append((ids[i], ids[j], sim))
-
-        # Sort by similarity descending, take top max_pairs
-        pairs.sort(key=lambda x: x[2], reverse=True)
-        pairs = pairs[:max_pairs]
-
-        if not pairs:
-            return result
-
-        for id_a, id_b, sim in pairs:
-            try:
-                item_a = item_map.get(id_a)
-                item_b = item_map.get(id_b)
-                if not item_a or not item_b:
-                    continue
-
-                # Skip already reconciled pairs
-                meta_a = item_a.get("metadata") or {}
-                meta_b = item_b.get("metadata") or {}
-                if isinstance(meta_a, str):
-                    meta_a = json.loads(meta_a) if meta_a else {}
-                if isinstance(meta_b, str):
-                    meta_b = json.loads(meta_b) if meta_b else {}
-
-                # Check if already reconciled with each other
-                reconciled_a = meta_a.get("reconciled_with", [])
-                reconciled_b = meta_b.get("reconciled_with", [])
-                if id_b in reconciled_a or id_a in reconciled_b:
-                    continue
-
-                prompt = _RECONCILIATION_PROMPT.format(
-                    date_a=item_a.get("created_at", "unknown")[:10],
-                    content_a=item_a.get("content", "")[:500],
-                    date_b=item_b.get("created_at", "unknown")[:10],
-                    content_b=item_b.get("content", "")[:500],
-                )
-
-                response = self.chat.send_messages(
-                    messages=[{"role": "user", "content": prompt}],
-                    system_prompt="You are a memory reconciliation engine. Return valid JSON only.",
-                    temperature=0.1,
-                    max_tokens=256
-                    + reasoning_headroom(getattr(self.chat, "effective_model", None)),
-                    **self._side_request_kwargs(),
-                )
-
-                raw_text = response.text if hasattr(response, "text") else str(response)
-                raw_text = strip_reasoning(raw_text)
-                if raw_text.startswith("```"):
-                    raw_text = re.sub(r"^```(?:json)?\s*", "", raw_text)
-                    raw_text = re.sub(r"\s*```$", "", raw_text)
-
-                classification = json.loads(raw_text)
-                relationship = classification.get("relationship", "neutral")
-
-                result["pairs_checked"] += 1
-
-                if relationship == "reinforce":
-                    # Boost confidence of both items by +0.05
-                    store.update_confidence(id_a, 0.05)
-                    store.update_confidence(id_b, 0.05)
-                    result["reinforced"] += 1
-
-                elif relationship == "contradict":
-                    # Supersede the older item, boost newer confidence +0.1
-                    a_date = item_a.get("created_at", "")
-                    b_date = item_b.get("created_at", "")
-                    if a_date <= b_date:
-                        # A is older, B is newer
-                        store.update(id_a, superseded_by=id_b)
-                        store.update_confidence(id_b, 0.1)
-                        self._faiss_remove(id_a)
-                    else:
-                        # B is older, A is newer
-                        store.update(id_b, superseded_by=id_a)
-                        store.update_confidence(id_a, 0.1)
-                        self._faiss_remove(id_b)
-                    result["contradicted"] += 1
-
-                elif relationship == "weaken":
-                    # Reduce confidence of the older item by 0.1
-                    a_date = item_a.get("created_at", "")
-                    b_date = item_b.get("created_at", "")
-                    if a_date <= b_date:
-                        store.update_confidence(id_a, -0.1)
-                    else:
-                        store.update_confidence(id_b, -0.1)
-                    result["weakened"] += 1
-
-                else:
-                    result["neutral"] += 1
-
-                # Mark both items as reconciled with each other
-                # Merge with existing metadata rather than clobbering
-                try:
-                    merged_a = dict(meta_a) if isinstance(meta_a, dict) else {}
-                    if not isinstance(reconciled_a, list):
-                        reconciled_a = []
-                    reconciled_a.append(id_b)
-                    merged_a["reconciled_with"] = reconciled_a
-                    store.update(id_a, metadata=merged_a)
-
-                    merged_b = dict(meta_b) if isinstance(meta_b, dict) else {}
-                    if not isinstance(reconciled_b, list):
-                        reconciled_b = []
-                    reconciled_b.append(id_a)
-                    merged_b["reconciled_with"] = reconciled_b
-                    store.update(id_b, metadata=merged_b)
-                except Exception as e:
-                    # Loud: a failed mark means this pair is re-examined (and
-                    # re-sent to the LLM) on every startup until it succeeds.
-                    logger.warning(
-                        "[MemoryMixin] failed to mark pair %s/%s reconciled — "
-                        "it will be re-checked next startup: %s",
-                        id_a[:8],
-                        id_b[:8],
-                        e,
-                    )
-
-            except json.JSONDecodeError as e:
-                logger.warning(
-                    "[MemoryMixin] reconciliation reply for pair %s/%s was not JSON "
-                    "(%s) — it will be re-checked next startup",
-                    id_a[:8],
-                    id_b[:8],
-                    e,
-                )
-            except Exception as e:
-                logger.debug(
-                    "[MemoryMixin] reconciliation failed for pair %s/%s: %s",
-                    id_a[:8],
-                    id_b[:8],
-                    e,
-                )
-
-        return result
+        return reconcile_memories(
+            self._memory_store,
+            classify,
+            max_pairs=max_pairs,
+            embedding_dim=self._embedding_dim,
+            on_superseded=self._faiss_remove,
+        )
 
     # ------------------------------------------------------------------
     # Hook 1: System Prompt Injection
@@ -4215,9 +4285,9 @@ class MemoryMixin(ProceduralMemoryMixin):
             "=== MEMORY (Persistent Second Brain) ===\n"
             "You have persistent memory across sessions. USE IT PROACTIVELY:\n"
             "- GREETINGS: If you know the user's name or context, personalize greetings!\n"
-            "  WRONG: 'Hey! What are you working on?' (generic, ignores stored knowledge)\n"
-            "  RIGHT: 'Hey Jordan! How's the K8s migration going?' (uses stored name + project)\n"
-            "  Reference their name, project, or recent activity. Make them feel known.\n"
+            "  Greet them by the name stored below and mention the project or recent\n"
+            "  activity stored below. With nothing stored, greet them plainly: never\n"
+            "  guess a name or a project.\n"
             "- IMPERATIVE: Any storage request ('remember', 'store', 'set a reminder',\n"
             "  'remind me', 'add a journal entry', 'log this') → call `remember` FIRST,\n"
             "  even when they say 'just acknowledge'. A verbal 'Got it' WITHOUT a tool\n"

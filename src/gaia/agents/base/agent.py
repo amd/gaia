@@ -236,6 +236,7 @@ from gaia.canonical_path import UncheckablePathError, canonical_path
 from gaia.chat.sdk import AgentConfig, AgentSDK, LLMCallCancelled
 from gaia.credential_shapes import redact_file_content, redact_tool_output
 from gaia.daemon.broker_client import LeaseWaitCancelled, lease_cancel_scope
+from gaia.llm.claude_defaults import DEFAULT_CLAUDE_MODEL
 from gaia.llm.lemonade_client import (
     RECONNECTING_MESSAGE,
     budget_for_ctx,
@@ -1699,7 +1700,9 @@ _MAX_CUT_OFF_CONTINUATIONS = 2
 _MAX_STREAM_CUT_OFF_RETRIES = 2
 STREAM_CUT_OFF_ERROR = "stream_cut_off"
 # Errors the loop recovered from once a later reply parsed: not a failed turn.
-_RECOVERABLE_ERROR_TYPES = frozenset({"tool_call_parse_error", STREAM_CUT_OFF_ERROR})
+_RECOVERABLE_ERROR_TYPES = frozenset(
+    {"tool_call_parse_error", STREAM_CUT_OFF_ERROR, "output_truncated"}
+)
 _CUT_OFF_CONTINUE_PROMPT = (
     "Your last reply was cut off at the output-token limit before it finished, "
     "so nothing in it was carried out. Continue from where you stopped: keep "
@@ -3935,7 +3938,7 @@ Do NOT wrap conversational replies in JSON.
     def __init__(
         self,
         use_claude: bool = False,
-        claude_model: str = "claude-sonnet-5",
+        claude_model: str = DEFAULT_CLAUDE_MODEL,
         base_url: Optional[str] = None,
         model_id: str = None,
         max_steps: Optional[int] = None,
@@ -12500,7 +12503,7 @@ Do NOT wrap conversational replies in JSON.
         """
         if not answer or not answer.strip():
             return []
-        roots = [os.getcwd(), self._verification_project_root()]
+        roots = [self._session_folder(), os.getcwd(), self._verification_project_root()]
         return ungrounded(
             strip_verification_scope(answer),
             self._request_text(query),
@@ -12750,7 +12753,11 @@ Do NOT wrap conversational replies in JSON.
                 strip_verification_scope(answer),
                 self._request_text(query),
                 history,
-                [os.getcwd(), self._verification_project_root()],
+                [
+                    self._session_folder(),
+                    os.getcwd(),
+                    self._verification_project_root(),
+                ],
             )
         self._turn_ungrounded = unverified_reasons(findings)
 
@@ -13800,7 +13807,8 @@ Do NOT wrap conversational replies in JSON.
         )
         self._single_tool_done = False
         self._turn_seq += 1
-        self._denied_effects = DeniedEffects(os.getcwd())
+        session_folder = self._session_folder()
+        self._denied_effects = DeniedEffects(session_folder)
         Agent._lift_declined_calls(
             self, getattr(self, "_original_user_input", None) or user_input
         )
@@ -13811,11 +13819,11 @@ Do NOT wrap conversational replies in JSON.
         self._last_tool_schemas = None
         self._last_tool_filter = None
 
-        # Relative paths resolve against the working directory, as the file tools do.
+        # Relative paths resolve against the chat folder, as the file tools do.
         # Text handed over to translate names no source to inventory.
         self._extraction_ledger = ExtractionLedger(
             instruction_part(user_input),
-            os.getcwd(),
+            session_folder,
             available=self._read_validator() is not None,
         )
         # A test agent built via __new__ never ran Agent.__init__, so it has
@@ -13826,7 +13834,7 @@ Do NOT wrap conversational replies in JSON.
             )
         self._turn_scope.begin_turn(
             user_input,
-            os.getcwd(),
+            session_folder,
             scratch=getattr(self._read_validator(), "scratch_dir", None),
         )
         self._stopped_on_failing_repeats = False
@@ -13997,7 +14005,7 @@ Do NOT wrap conversational replies in JSON.
         self._deliverable_cache = {}
         self._completion_evidence = CompletionEvidence(
             self._request_text(user_input),
-            os.getcwd(),
+            session_folder,
             scratch=getattr(self._read_validator(), "scratch_dir", None),
             validator=self._read_validator(),
             backups=self._session_backups,
@@ -16243,7 +16251,7 @@ Do NOT wrap conversational replies in JSON.
                 ):
                     unlooked = named_workspace_paths(
                         getattr(self, "_original_user_input", None) or user_input,
-                        os.getcwd(),
+                        self._session_folder(),
                     )
                     if unlooked:
                         look_first_reprompted = True

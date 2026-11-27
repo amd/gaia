@@ -22,6 +22,7 @@ const childProcess = require("child_process");
 
 const DEFAULT_GRACE_MS = 3000;
 const DEFAULT_FORCE_WAIT_MS = 1000;
+const pendingTreeState = new WeakMap();
 // PowerShell's CIM query takes about a second on an idle PC and several on a
 // loaded one; timing out strands every process the agent started. `ps` is fast.
 const WINDOWS_LIST_TIMEOUT_MS = 20000;
@@ -195,7 +196,7 @@ function rootAlive(proc, pid) {
  *   on Linux and macOS when the root may already have exited: its children
  *   are then re-parented and can no longer be found from it. Each is killed
  *   only while its command line still matches, so a reused pid is spared.
- * @returns {Promise<{ killed: number[], survivors: number[] }>}
+ * @returns {Promise<{ killed: number[], survivors: number[], verified: boolean }>}
  */
 async function killProcessTree(target, opts = {}) {
   const {
@@ -209,36 +210,75 @@ async function killProcessTree(target, opts = {}) {
   } = opts;
   const proc = target && typeof target === "object" ? target : null;
   const pid = proc ? proc.pid : target;
-  if (!pid) return { killed: [], survivors: [] };
+  if (!pid) return { killed: [], survivors: [], verified: true };
 
   const readTable = () => (opts.listProcesses || listProcesses)(opts);
 
   // pid -> command, for every non-root member we intend to stop.
+  const priorState = proc ? pendingTreeState.get(proc) : null;
+  const known = new Map((priorState && priorState.descendants ? priorState.descendants : []).map((d) => [d.pid, d]));
+  for (const d of knownDescendants) known.set(d.pid, d);
+  let unknownTree = Boolean(priorState && priorState.unknown);
+  if (!rootAlive(proc, pid) && known.size === 0) unknownTree = true;
   const members = new Map();
+  const unverifiedMembers = new Map();
   const absorb = (table) => {
     const live = new Map(table.map((r) => [r.pid, r.command]));
+    for (const [memberPid, descendant] of [...known]) {
+      const command = live.get(memberPid);
+      if (command === descendant.command) {
+        unverifiedMembers.delete(memberPid);
+        continue;
+      }
+      if (command !== undefined || !pidAlive(memberPid)) {
+        known.delete(memberPid);
+        members.delete(memberPid);
+        unverifiedMembers.delete(memberPid);
+      } else {
+        unverifiedMembers.set(memberPid, descendant);
+      }
+    }
     // A member that exited, or whose pid now runs something else, is no
     // longer ours to signal.
     for (const [memberPid, command] of [...members]) {
-      if (live.get(memberPid) !== command) members.delete(memberPid);
+      if (live.get(memberPid) !== command) {
+        members.delete(memberPid);
+        if (live.has(memberPid) || !pidAlive(memberPid)) known.delete(memberPid);
+      }
     }
-    for (const d of knownDescendants) {
+    for (const d of known.values()) {
       if (live.has(d.pid) && live.get(d.pid) === d.command) members.set(d.pid, d.command);
     }
     if (live.has(pid) && rootAlive(proc, pid)) {
-      for (const d of descendantsFromTable(table, pid).descendants) members.set(d.pid, d.command);
+      for (const d of descendantsFromTable(table, pid).descendants) {
+        members.set(d.pid, d.command);
+        known.set(d.pid, d);
+      }
     }
     // Children of members that outlived their parent's handle.
     for (const memberPid of [...members.keys()]) {
-      for (const d of descendantsFromTable(table, memberPid).descendants) members.set(d.pid, d.command);
+      for (const d of descendantsFromTable(table, memberPid).descendants) {
+        members.set(d.pid, d.command);
+        known.set(d.pid, d);
+      }
     }
   };
 
   let tableError = null;
   try {
-    absorb(await readTable());
+    const table = await readTable();
+    if (rootAlive(proc, pid) && !table.some((row) => row.pid === pid)) {
+      tableError = new Error(`the live root pid ${pid} was missing from the process table`);
+      unknownTree = true;
+      logError(`[process-tree] ${label} ${pid}: ${tableError.message}; descendants may keep running.`);
+    }
+    absorb(table);
+    if (!rootAlive(proc, pid) && known.size === 0 && unverifiedMembers.size === 0) unknownTree = false;
   } catch (err) {
     tableError = err;
+    unknownTree = true;
+    for (const d of known.values()) unverifiedMembers.set(d.pid, d);
+    members.clear();
     logError(
       `[process-tree] ${label} ${pid}: ${err.message} — only the ${label} itself will be stopped; ` +
         "any process it started may keep running. Check them with Task Manager or `ps`."
@@ -248,7 +288,8 @@ async function killProcessTree(target, opts = {}) {
   const signal = (p, sig) => {
     try {
       if (p === pid && proc) {
-        if (rootAlive(proc, pid)) proc.kill(sig);
+        if (!rootAlive(proc, pid)) return false;
+        return proc.kill(sig) !== false;
       } else {
         process.kill(p, sig);
       }
@@ -271,27 +312,56 @@ async function killProcessTree(target, opts = {}) {
   };
 
   const all = () => [pid, ...members.keys()];
+  const observed = () => [...new Set([...all(), ...unverifiedMembers.keys()])];
   const killed = [];
   for (const p of all()) {
     if (alive(p) && signal(p, "SIGTERM")) killed.push(p);
   }
-  if (killed.length === 0) return { killed, survivors: [] };
-  log(`[process-tree] SIGTERM sent to ${label} ${pid} and ${killed.length - (killed.includes(pid) ? 1 : 0)} descendant(s)`);
+  if (killed.length) {
+    log(`[process-tree] SIGTERM sent to ${label} ${pid} and ${killed.length - (killed.includes(pid) ? 1 : 0)} descendant(s)`);
+  }
 
-  if (await waitAllGone(all(), graceMs)) return { killed, survivors: [] };
+  const finish = (survivors, verified) => {
+    if (!rootAlive(proc, pid)) {
+      for (const memberPid of known.keys()) {
+        if (!pidAlive(memberPid)) known.delete(memberPid);
+      }
+      for (const memberPid of unverifiedMembers.keys()) {
+        if (!pidAlive(memberPid)) unverifiedMembers.delete(memberPid);
+      }
+      if (!tableError && known.size === 0 && unverifiedMembers.size === 0) unknownTree = false;
+      verified = !unknownTree && !tableError && survivors.length === 0;
+    }
+    const result = { killed, survivors: [...new Set(survivors)], verified };
+    if (proc) {
+      if (verified) pendingTreeState.delete(proc);
+      else pendingTreeState.set(proc, { descendants: [...known.values()], unknown: unknownTree });
+    }
+    return result;
+  };
+
+  if (await waitAllGone(observed(), graceMs)) {
+    const survivors = [...unverifiedMembers.keys()].filter(pidAlive);
+    return finish(survivors, !unknownTree && !tableError && survivors.length === 0);
+  }
 
   if (platform === "win32") {
     // SIGTERM was already TerminateProcess, so a member still listed is one
     // that could not be ended or a pid already reused: only the root, through
     // its handle, is worth a second try. Skipping the re-read also keeps a
     // slow PowerShell from eating the quit's time limit.
+    for (const [memberPid, command] of members) {
+      if (alive(memberPid)) unverifiedMembers.set(memberPid, { pid: memberPid, command });
+    }
     members.clear();
   } else if (!tableError) {
     try {
       absorb(await readTable());
     } catch (err) {
       // Without a fresh table a member's pid may already belong to a stranger.
+      for (const [memberPid, command] of members) unverifiedMembers.set(memberPid, { pid: memberPid, command });
       members.clear();
+      unknownTree = true;
       logError(
         `[process-tree] ${label} ${pid}: re-reading the tree before SIGKILL failed (${err.message}); ` +
           `only the ${label} itself gets SIGKILL — any process it started may keep running.`
@@ -304,15 +374,15 @@ async function killProcessTree(target, opts = {}) {
   }
   log(`[process-tree] SIGKILL sent to ${stubborn.length} process(es) of ${label} ${pid} that ignored SIGTERM`);
 
-  await waitAllGone(stubborn, forceWaitMs);
-  const survivors = stubborn.filter(alive);
+  await waitAllGone([...stubborn, ...unverifiedMembers.keys()], forceWaitMs);
+  const survivors = [...new Set([...stubborn.filter(alive), ...[...unverifiedMembers.keys()].filter(pidAlive)])];
   if (survivors.length) {
     logError(
       `[process-tree] ${label} ${pid}: pid(s) ${survivors.join(", ")} still running ${forceWaitMs} ms after SIGKILL — ` +
         "end them with Task Manager or `kill -9` before relaunching GAIA."
     );
   }
-  return { killed, survivors };
+  return finish(survivors, !unknownTree && !tableError && survivors.length === 0);
 }
 
 module.exports = {

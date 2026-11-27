@@ -34,6 +34,7 @@ from gaia.config import (
 )
 from gaia.home import DOCUMENT_COPIES_SUBDIR
 from gaia.llm import lemonade_embedded
+from gaia.utils.hashing import sha256_file
 from gaia.utils.image_formats import IMAGE_EXTENSIONS
 from gaia.utils.user_folders import documents_dir
 
@@ -812,11 +813,7 @@ def format_size(size_bytes: int) -> str:
 
 def compute_file_hash(filepath: Path) -> str:
     """Compute SHA-256 hash of file contents."""
-    sha256 = hashlib.sha256()
-    with open(filepath, "rb") as f:
-        for block in iter(lambda: f.read(8192), b""):
-            sha256.update(block)
-    return sha256.hexdigest()
+    return sha256_file(filepath)
 
 
 def compute_file_hash_from_fd(fd: int) -> str:

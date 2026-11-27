@@ -829,17 +829,21 @@ error. To run the chat model in the cloud instead, see
   </Accordion>
 
   <Accordion title="GAIA's assistant stopped and is restarting" icon="rotate">
-    The desktop app restarts its assistant when it stops on its own. The banner
-    shows how long it has been restarting, and your chats are saved. GAIA tries
-    up to three times in ten minutes, waiting longer before each try. If they all
-    fail, a dialog offers to restart GAIA, save diagnostics, or quit, and the
-    banner offers **Restart GAIA**, which starts the assistant again without
-    closing the app.
+    The desktop app restarts its assistant when its process exits or the health
+    endpoint stops answering. The app checks every five seconds; three failed
+    checks in a row trigger recovery. The banner shows how long it has been
+    restarting, and your chats are saved. GAIA tries up to three times in ten
+    minutes, waiting longer before each try. If they all fail, a dialog offers to
+    restart GAIA, save diagnostics, or quit, and the banner offers **Restart GAIA**,
+    which starts the assistant again without closing the app.
+    Ending the backend process from Task Manager follows the same recovery path:
+    the banner reports the restart and GAIA starts a replacement without closing
+    the desktop app.
 
     To report it, choose **Save diagnostics** and attach the bundle. It holds
     these files from `~/.gaia/`:
 
-    - `electron-main.log`: the exit code and the assistant's last output.
+    - `electron-main.log`: the exit or health failure and the assistant's last output.
     - `logs/backend-faults.log`: the stack of every thread, when the assistant
       died in a hard crash that skipped normal logging.
   </Accordion>

@@ -32,15 +32,15 @@ type programOption struct {
 var programOptions = []programOption{
 	{
 		choice:   preflight.FlagshipAgentPython,
-		label:    "Python agent (" + catalog.PythonAgentBinary + ")",
-		goodAt:   "Mature and well tested, with every tool and feature.",
+		label:    catalog.HarnessLabel(catalog.PythonAgentChoice) + " (" + catalog.PythonAgentBinary + ")",
+		goodAt:   "Every tool and feature, and well tested.",
 		tradeOff: "Heavier: slower to start and uses more memory.",
 	},
 	{
 		choice:   preflight.FlagshipAgentNative,
-		label:    "Native C++ agent",
+		label:    catalog.HarnessLabel(catalog.NativeAgentBinary),
 		beta:     true,
-		goodAt:   "Fast and light: starts quickly and uses little memory.",
+		goodAt:   "Starts quickly and uses little memory.",
 		tradeOff: "Fewer tools and features so far, and less tested.",
 	},
 }

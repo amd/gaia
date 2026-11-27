@@ -11,6 +11,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
 
+	"github.com/amd/gaia/tui/internal/catalog"
 	"github.com/amd/gaia/tui/internal/client"
 	"github.com/amd/gaia/tui/internal/event"
 	"github.com/amd/gaia/tui/internal/ui/theme"
@@ -121,8 +122,8 @@ const agentPalettePrefix = agentCommand + " "
 func agentPaletteCommands() []paletteCommand {
 	return []paletteCommand{
 		{agentCommand, "Show both programs and which one is running"},
-		{agentPalettePrefix + "gaiapy", "Python agent: every tool, well tested, heavier"},
-		{agentPalettePrefix + "gaiacpp", "Native agent (Beta): fast, light, fewer tools"},
+		{agentPalettePrefix + "gaiapy", catalog.HarnessLabel(catalog.PythonAgentChoice) + ": every tool, well tested, heavier"},
+		{agentPalettePrefix + "gaiacpp", catalog.HarnessLabel(catalog.NativeAgentBinary) + " (Beta): starts quickly, fewer tools"},
 	}
 }
 

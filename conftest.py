@@ -333,6 +333,36 @@ def _no_embedded_lemonade_start():
         yield
 
 
+#: Tests point Lemonade at port 9 (discard) to mean "no server here".
+_DEAD_PORT = 9
+_LOCAL_HOSTS = {"127.0.0.1", "localhost", "::1"}
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _dead_port_refuses_at_once():
+    """Refuse a connection to the dead test port at once, as Linux does.
+
+    Windows retries a refused connect for about two seconds, so a test that
+    reaches the dead port many times took most of a minute there.
+    """
+    if sys.platform != "win32":
+        yield
+        return
+    from urllib3.util import connection
+
+    real = connection.create_connection
+
+    def create_connection(address, *args, **kwargs):
+        host, port = address[0], address[1]
+        if port == _DEAD_PORT and host in _LOCAL_HOSTS:
+            raise ConnectionRefusedError(10061, f"nothing listens on {host}:{port}")
+        return real(address, *args, **kwargs)
+
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(connection, "create_connection", create_connection)
+        yield
+
+
 @pytest.fixture(autouse=True)
 def _allow_embedded_start(request, monkeypatch):
     if not request.node.get_closest_marker("embedded_start"):

@@ -973,6 +973,9 @@
 .cmd-copy.copied {
     color: var(--code-success);
 }
+.cmd-copy.failed {
+    color: var(--code-danger);
+}
 
 .cmd-line {
     display: flex;

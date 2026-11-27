@@ -23,6 +23,7 @@ on:
     paths:
       - 'hub/agents/*/python/packaging/publish_to_r2.py'
       - 'hub/components/*/publish_to_r2.py'
+      - 'util/hub_r2_publish.py'
       - 'hub/agents/*/python/packaging/gen_binaries_lock.py'
       - 'workers/agent-hub/**'
       - 'util/verify_publish_pipeline.py'

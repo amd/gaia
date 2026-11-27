@@ -28,6 +28,9 @@ from typing import List, Tuple
 
 from gaia.logger import get_logger
 
+#: The Agent UI backend's default port. Light to import, so the CLI can read it.
+AGENT_UI_PORT = 4200
+
 log = get_logger(__name__)
 
 # Names that positively identify a Lemonade Server process.

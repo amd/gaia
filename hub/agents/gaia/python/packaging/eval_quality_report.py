@@ -80,6 +80,7 @@ def aggregate(summaries: list[dict]) -> dict:
     passed = judged = 0
     score_mass = 0.0
     score_count = 0
+    missing_score = False
     for s in summaries:
         s_judged = sum(int(s.get(k, 0) or 0) for k in _JUDGED_KEYS)
         passed += int(s.get("passed", 0) or 0)
@@ -87,14 +88,19 @@ def aggregate(summaries: list[dict]) -> dict:
         # avg_score is per-card over its judged scenarios; re-weight by count
         # so the pooled mean is the true across-category mean.
         avg = s.get("avg_score")
-        if isinstance(avg, (int, float)) and not isinstance(avg, bool) and s_judged:
-            score_mass += float(avg) * s_judged
-            score_count += s_judged
+        if s_judged:
+            if isinstance(avg, (int, float)) and not isinstance(avg, bool):
+                score_mass += float(avg) * s_judged
+                score_count += s_judged
+            else:
+                missing_score = True
     return {
         "judged": judged,
         "passed": passed,
         "judged_pass_rate": (passed / judged) if judged else None,
-        "avg_score": (score_mass / score_count) if score_count else None,
+        "avg_score": (
+            None if missing_score or not score_count else score_mass / score_count
+        ),
     }
 
 
@@ -103,13 +109,23 @@ def evaluate(thresholds: dict, pooled: dict) -> dict:
     enforce = bool(thresholds.get("enforce"))
     breaches: list[str] = []
     min_rate = thresholds.get("min_judged_pass_rate")
-    if isinstance(min_rate, (int, float)) and pooled["judged_pass_rate"] < min_rate:
-        breaches.append(
-            f"judged_pass_rate {pooled['judged_pass_rate']:.4f} < bar {min_rate}"
-        )
+    if isinstance(min_rate, (int, float)):
+        judged_pass_rate = pooled["judged_pass_rate"]
+        if judged_pass_rate is None:
+            breaches.append(
+                f"judged_pass_rate unavailable; cannot compare with bar {min_rate}"
+            )
+        elif judged_pass_rate < min_rate:
+            breaches.append(f"judged_pass_rate {judged_pass_rate:.4f} < bar {min_rate}")
     min_score = thresholds.get("min_avg_score")
-    if isinstance(min_score, (int, float)) and pooled["avg_score"] < min_score:
-        breaches.append(f"avg_score {pooled['avg_score']:.2f} < bar {min_score}")
+    if isinstance(min_score, (int, float)):
+        avg_score = pooled["avg_score"]
+        if avg_score is None:
+            breaches.append(
+                f"avg_score unavailable; cannot compare with bar {min_score}"
+            )
+        elif avg_score < min_score:
+            breaches.append(f"avg_score {avg_score:.2f} < bar {min_score}")
     passed = not breaches
     return {
         "passed": passed,
@@ -150,12 +166,14 @@ def main() -> int:
         return 1
 
     quality_gate = evaluate(thresholds, pooled)
+    avg_score = pooled["avg_score"]
+    avg_score_text = "unavailable" if avg_score is None else f"{avg_score:.2f}"
 
     print("\n=============== GAIA QUALITY GATE REPORT ===============")
     print(
         f"  judged={pooled['judged']} passed={pooled['passed']} "
         f"judged_pass_rate={pooled['judged_pass_rate']:.4f} "
-        f"avg_score={pooled['avg_score']:.2f}"
+        f"avg_score={avg_score_text}"
     )
     print(
         f"  gate: passed={quality_gate['passed']} "

@@ -8,12 +8,15 @@ import json
 import os
 import tempfile
 import time
+from dataclasses import fields
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional, Type, TypeVar
 
 from gaia.logger import get_logger
 
 log = get_logger(__name__)
+
+T = TypeVar("T")
 
 
 class StateFileError(RuntimeError):
@@ -98,3 +101,22 @@ def read_json_or_set_aside(path: Path, what: str) -> Optional[Dict[str, Any]]:
             f"at {moved} and starts over with none.",
             moved,
         ) from e
+
+
+def read_records(path: Path, what: str, key: str, cls: Type[T], remedy: str) -> List[T]:
+    """The *cls* dataclasses listed under *key* in *path*; ``[]`` when absent.
+
+    Unknown fields are dropped, so a file a newer GAIA wrote still loads. A
+    record that cannot build *cls* raises :class:`CorruptStateFile` ending in
+    *remedy*. *what* names the contents if the file has to be set aside.
+    """
+    data = read_json_or_set_aside(path, what)
+    if data is None:
+        return []
+    names = {f.name for f in fields(cls)}
+    try:
+        return [
+            cls(**{k: v for k, v in d.items() if k in names}) for d in data.get(key, [])
+        ]
+    except TypeError as e:
+        raise CorruptStateFile(f"{path} is not usable: {e}. {remedy}") from e

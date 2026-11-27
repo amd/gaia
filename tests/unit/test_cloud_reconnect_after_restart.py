@@ -477,6 +477,30 @@ def _gateway_started_offline(lemond, monkeypatch):
     )
 
 
+def test_local_only_model_list_reread_sends_no_fireworks_key(lemond, monkeypatch):
+    from gaia.llm import cloud_keys
+
+    _started_offline(lemond)
+    monkeypatch.setattr(cloud_keys, "cloud_blocked", lambda: True)
+    client = lc.LemonadeClient(base_url=lc.resolve_lemonade_base_url())
+
+    with pytest.raises(cloud_keys.CloudKeyBlockedError):
+        cloud_keys.rediscover_models("fireworks", client=client)
+    assert lemond.calls == []
+
+
+def test_local_only_model_list_reread_sends_no_gateway_token(lemond, monkeypatch):
+    from gaia.llm import cloud_keys
+
+    _gateway_started_offline(lemond, monkeypatch)
+    monkeypatch.setattr(cloud_keys, "cloud_blocked", lambda: True)
+    client = lc.LemonadeClient(base_url=lc.resolve_lemonade_base_url())
+
+    with pytest.raises(cloud_keys.CloudKeyBlockedError):
+        cloud_keys.rediscover_models("amd", client=client)
+    assert lemond.calls == []
+
+
 def test_an_unreachable_gateway_is_not_blamed_on_the_model(lemond, monkeypatch):
     chat = _gateway_started_offline(lemond, monkeypatch)
 

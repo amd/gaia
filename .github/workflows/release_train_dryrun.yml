@@ -167,7 +167,8 @@ jobs:
         working-directory: src/gaia/apps/webui
         run: |
           set -euo pipefail
-          npm ci
+          # Dependabot writes the Agent UI lockfile with npm 11; keep Node 22 but install with npm 11.
+          npx -y npm@11 ci
           npm run build
           test -f dist/index.html || { echo "::error::dist/index.html was not built"; exit 1; }
           node --check bin/gaia-ui.cjs
