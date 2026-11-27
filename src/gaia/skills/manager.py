@@ -49,6 +49,7 @@ from gaia.skills.format import (
     Skill,
     parse_project_skill_file,
     parse_skill_file,
+    parse_skill_metadata,
 )
 
 log = get_logger(__name__)
@@ -105,15 +106,16 @@ def user_skills_dir() -> Path:
     return gaia_home() / "skills"
 
 
-def _parse(entry: Path, root: SkillRoot) -> Skill:
-    """Parse *entry* fully, body included, named as its root names it."""
+def _parse(entry: Path, root: SkillRoot, *, body: bool = False) -> Skill:
+    """Parse *entry*, named as its root names it; *body* also reads instructions."""
     if root.plugin is not None:
         skill = parse_project_skill_file(entry, root=root.label, read_only=True)
         skill.name = f"{root.plugin}:{skill.name}"
         return skill
     if root.label == ROOT_CLAUDE_PROJECT:
         return parse_project_skill_file(entry, root=root.label, read_only=True)
-    return parse_skill_file(entry, root=root.label, read_only=root.read_only)
+    parse = parse_skill_file if body else parse_skill_metadata
+    return parse(entry, root=root.label, read_only=root.read_only)
 
 
 def default_project_dir() -> Optional[Path]:
@@ -458,7 +460,7 @@ class SkillManager:
             metadata = self.get(name)
             root = self._winning_roots[name]
         assert metadata.path is not None  # discovery always sets it
-        skill = _parse(metadata.path, root)
+        skill = _parse(metadata.path, root, body=True)
         if metadata.root == ROOT_USER:
             # Deferred: keeps the marketplace modules off the import path of
             # every agent that merely composes a bundled skill.
