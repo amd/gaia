@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: MIT
 
 #include "gaia/web_tools.h"
+#include "lower_ascii.h"
 
 #include <algorithm>
 #include <cctype>
@@ -23,15 +24,9 @@ namespace gaia {
 
 namespace {
 
-std::string lower(std::string s) {
-    std::transform(s.begin(), s.end(), s.begin(),
-                   [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
-    return s;
-}
-
 // Split "https://host:port/path?q" into origin and path.
 bool splitUrl(const std::string& url, std::string& origin, std::string& path) {
-    const std::string l = lower(url);
+    const std::string l = detail::lowerAscii(url);
     if (l.rfind("http://", 0) != 0 && l.rfind("https://", 0) != 0) return false;
     const size_t schemeEnd = url.find("://") + 3;
     const size_t slash = url.find_first_of("/?#", schemeEnd);
@@ -54,7 +49,7 @@ std::string hostOf(const std::string& origin) {
 
 std::string resolveLocation(const std::string& origin, const std::string& path,
                             const std::string& location) {
-    const std::string l = lower(location);
+    const std::string l = detail::lowerAscii(location);
     if (l.rfind("http://", 0) == 0 || l.rfind("https://", 0) == 0) return location;
     if (location.rfind("//", 0) == 0) return origin.substr(0, origin.find("://") + 1) + location;
     if (!location.empty() && location[0] == '/') return origin + location;
@@ -224,7 +219,7 @@ json WebTools::doWebFetch(const json& args) {
     }
     if (resp.body.size() > kMaxBodyBytes) resp.body.resize(kMaxBodyBytes);
 
-    const std::string type = lower(resp.header("Content-Type"));
+    const std::string type = detail::lowerAscii(resp.header("Content-Type"));
     std::string text = type.find("html") != std::string::npos ? htmlToText(resp.body) : resp.body;
     const size_t total = text.size();
     bool truncated = false;
@@ -241,7 +236,7 @@ json WebTools::doWebFetch(const json& args) {
 std::string WebTools::htmlToText(const std::string& html) {
     std::string out;
     out.reserve(html.size() / 2);
-    const std::string low = lower(html);
+    const std::string low = detail::lowerAscii(html);
     size_t i = 0;
     while (i < html.size()) {
         if (html[i] != '<') {
