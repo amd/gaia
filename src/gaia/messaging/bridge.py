@@ -222,7 +222,7 @@ class StreamThrottle:
 
     def __init__(
         self,
-        flush: Callable[[str], None],
+        flush: Callable[[str], Optional[bool]],
         interval: float = 1.0,
         now: Callable[[], float] = time.monotonic,
     ) -> None:
@@ -232,6 +232,7 @@ class StreamThrottle:
         self._text = ""
         self._flushed = ""
         self._last = 0.0
+        self._last_flush_ok = True
 
     @property
     def text(self) -> str:
@@ -245,19 +246,28 @@ class StreamThrottle:
         if now - self._last >= self._interval:
             self._emit(now)
 
-    def finish(self) -> None:
-        """Flush any text the interval held back."""
-        self._emit(self._now())
+    def finish(self) -> bool:
+        """Flush whatever the interval held back and report if it failed.
 
-    def _emit(self, now: float) -> None:
+        ``add`` ignores the result: a mid-stream edit failure stays tolerant.
+        Only callers that need to know about the final flush, such as an
+        adapter sending a fallback warning, use the return value.
+        """
+        return self._emit(self._now())
+
+    def _emit(self, now: float) -> bool:
         # An unchanged body is not worth an API call, and on Slack an edit that
-        # changes nothing still counts against the channel's rate limit.
+        # changes nothing still counts against the channel's rate limit. A
+        # previous failure is still reported, so a final with no new text can
+        # ask the adapter for a fallback without retrying the same edit.
         if self._text == self._flushed:
             self._last = now
-            return
-        self._flush(self._text)
+            return self._last_flush_ok
+        ok = self._flush(self._text)
         self._flushed = self._text
         self._last = now
+        self._last_flush_ok = ok is not False
+        return self._last_flush_ok
 
 
 class AgentChannel:
