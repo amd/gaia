@@ -147,6 +147,46 @@ wrangler r2 object put amd-gaia/videos/video.mp4 --file=video.mp4
 2. Click "Upload"
 3. Drag and drop file
 
+## Upload Test Evidence for a PR
+
+The bucket is public, so screenshots, logs, and traces for a PR go up through one
+helper that refuses anything containing a credential:
+
+```bash
+scripts/testing/upload-evidence.sh pr-1234 chat.png run.log
+# https://assets.amd-gaia.ai/testing/pr-1234/20261109T153012Z-3f2a/chat.png
+# https://assets.amd-gaia.ai/testing/pr-1234/20261109T153012Z-3f2a/run.log
+```
+
+- **Key layout:** `testing/<ref>/<run-id>/<file>`. `<ref>` is your PR or issue
+  (`pr-1234`, `issue-2369`); `<run-id>` is the UTC time plus 4 random hex digits,
+  so a rerun never overwrites earlier evidence. File names must be letters,
+  digits, `.`, `_` or `-`.
+- **Secret scan:** each file is copied to a private temp folder, and that copy
+  is what gets scanned and uploaded, so a log still being written can't change
+  after the scan. Every file, its name, and the ref are checked against the
+  patterns GAIA redacts from failure records (`_NAMED_SECRET_PATTERNS` in
+  `src/gaia/llm/failure_record.py`: bearer tokens, `sk-`/`ghp_`/`github_pat_`/
+  `hf_`/`AIza` keys, AWS/R2-style access keys and secret assignments, JWTs,
+  `NAME_API_KEY=` assignments, auth headers and cookies in JSON or HAR files,
+  PEM private keys (JSON-escaped too), passwords in URLs). A file that isn't
+  UTF-8 text — a `.zip`, a `.gz`, a `.pdf`, a UTF-16 log such as Windows
+  PowerShell 5.1's `>` writes — can't be scanned, so it is refused: upload it
+  unpacked or re-saved as UTF-8. Symlinks are refused too. One hit or refusal
+  uploads nothing and names the file and pattern, never the secret. There is no
+  skip flag: fix the file and rerun. Add a pattern there and both the scan and
+  redaction get it.
+- **Images and video** are recognised by their content, not just the extension,
+  so a log renamed `.png` is scanned as text. Their bytes are scanned too, so a
+  key in EXIF, a PNG text chunk (compressed ones are unpacked) or data tacked on
+  after the image is caught; a PNG that is truncated or has data after its end is
+  refused. Pixels can't be scanned, so the helper names each image for you to
+  check by eye for keys, tokens, emails, and personal data. Each URL prints as
+  soon as its file is uploaded.
+- **Needs** rclone with the `gaia` remote above (or set `R2_REMOTE`), and this
+  repo's Python environment for the scan. Credentials stay in your rclone config;
+  CI does not use this helper.
+
 ## Embed in Mintlify
 
 Add to your MDX documentation:
