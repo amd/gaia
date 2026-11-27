@@ -187,8 +187,9 @@ class TestLargeBlobChunking:
         assert blob is not None
         assert blob["refresh_token"] == big_token
 
-    def test_large_blob_uses_vault_without_keyring_chunk_slots(self):
+    def test_large_blob_is_in_vault_and_mirrored_as_legacy_chunks(self):
         from gaia.connectors import vault
+        from gaia.connectors.store import _kr_legacy_get
 
         big_token = "R" * (_CHUNK_CHARS * 2)
         save_connection(
@@ -199,11 +200,11 @@ class TestLargeBlobChunking:
             client_id_hash="h",
         )
         username = _connection_username("microsoft", "default")
-        # Stored in vault.enc under the single master key — no raw per-slot
-        # or chunk Keychain entries are written.
         assert keyring.get_password(SERVICE_NAME, vault.MASTER_KEY_USERNAME) is not None
-        assert keyring.get_password(SERVICE_NAME, username) is None
-        assert keyring.get_password(SERVICE_NAME, _chunk_username(username, 0)) is None
+        assert vault.vault_path().exists()
+        # Transition release: an older build still reads the chunked legacy copy.
+        assert keyring.get_password(SERVICE_NAME, username).startswith(_CHUNK_SENTINEL)
+        assert big_token in _kr_legacy_get(username)
 
     def test_delete_removes_all_chunk_slots(self):
         big_token = "R" * (_CHUNK_CHARS * 2)
@@ -222,7 +223,8 @@ class TestLargeBlobChunking:
 
     def test_overwrite_sweeps_legacy_chunk_slots(self):
         # Overwriting a connection that previously had legacy chunked Keychain
-        # slots sweeps those stale Keychain slots cleanly.
+        # slots replaces the legacy copy with the current value and sweeps the
+        # stale chunk slots.
         username = _connection_username("microsoft", "default")
         keyring.set_password(SERVICE_NAME, username, f"{_CHUNK_SENTINEL}2:00000000")
         keyring.set_password(
@@ -238,7 +240,7 @@ class TestLargeBlobChunking:
             scopes=["s1"],
             client_id_hash="h",
         )
-        assert keyring.get_password(SERVICE_NAME, username) is None
+        assert '"short"' in keyring.get_password(SERVICE_NAME, username)
         assert keyring.get_password(SERVICE_NAME, _chunk_username(username, 0)) is None
         assert keyring.get_password(SERVICE_NAME, _chunk_username(username, 1)) is None
         blob = load_connection("microsoft", current_client_id_hash="h")

@@ -14,7 +14,13 @@ GAIA never writes tokens or API keys to plaintext files. Your OS credential stor
 | Linux | gnome-keyring or kwallet |
 | Windows | Credential Locker |
 
-Keeping one master key in the OS credential store avoids prompting once per saved secret when an unsigned macOS build updates. Existing per-slot OS keyring entries are migrated lazily into `vault.enc` on first read and removed from the OS keyring once written to the vault (one-way migration: downgrading to a release predating `vault.enc` requires signing in again). Deleting the last entry in `vault.enc` removes both `vault.enc` and `vault-master-key`.
+Keeping one master key in the OS credential store avoids prompting once per saved secret when an unsigned macOS build updates. Existing per-slot OS keyring entries are copied into `vault.enc` on first read; after that GAIA reads them from the vault only. Deleting the last entry in `vault.enc` removes both `vault.enc` and `vault-master-key`.
+
+**Transition release.** This release keeps the old per-slot keyring entries, and every save also updates them, so downgrading GAIA or running an older agent build that reads them directly still finds you connected. The next release stops updating them and removes them; downgrading past that point means signing in again.
+
+**macOS trade-off.** Before the vault, macOS asked separately for each saved secret, so you could approve one connection and decline another. Now one approval of the master key unlocks every secret GAIA's Python processes keep in the vault (connector sign-ins, cloud and gateway keys, Slack and Discord tokens, the browser session key). MCP server keys are not in the vault and are still approved one by one.
+
+keyring's `null` backend stores nothing, so on it saving any of these secrets fails with an error instead of appearing to succeed. Where no credential store exists, supply the secret through its environment variable.
 
 The `vault.enc` envelope format (version 1) is fixed for cross-runtime compatibility: 6-byte magic `GAIAV1`, 1-byte version (`0x01`), 12-byte random nonce, and AES-256-GCM ciphertext plus 16-byte tag over UTF-8 JSON `{"entries":{"<slot>":"<value>"},"v":1}` with associated data `gaia.connections:vault:v1`.
 

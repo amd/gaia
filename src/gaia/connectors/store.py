@@ -11,7 +11,8 @@ Single-master-key vault design:
     ``scopes``, ``connected_at``, ``client_id_hash``), persisted via atomic
     temp-file replace under a cross-process lock so a partial write cannot
     leave a fresh token with stale metadata. Legacy per-slot OS keyring entries
-    are migrated lazily on first read.
+    are copied in lazily on first read and, for one transition release, kept
+    and updated on every write so older builds still read current values.
 
 Backend allowlist (plan amendment A4):
     Plaintext or weak file-backed keyring backends (e.g. ``keyrings.alt``'s
@@ -482,6 +483,44 @@ def _kr_legacy_delete(username: str) -> None:
         for idx in range(count):
             _kr_raw_delete(_chunk_username(username, idx))
     _kr_clear_chunks(username, for_delete=True)
+
+
+def _kr_sweep_chunks_from(username: str, start: int) -> None:
+    """Delete chunk slots ``start``, ``start+1``, ... until one is absent.
+
+    Deletes without reading, so no macOS read prompt opens.
+    """
+    idx = start
+    while True:
+        try:
+            keyring_access.delete(SERVICE_NAME, _chunk_username(username, idx))
+        except keyring.errors.PasswordDeleteError:
+            return
+        except keyring.errors.KeyringError as e:
+            raise ConnectorsError(
+                f"Keyring delete_password failed: {e}. See "
+                "docs/security/connections.mdx."
+            ) from e
+        idx += 1
+
+
+def _kr_legacy_set(username: str, payload: str) -> None:
+    """Write a legacy (possibly chunked) per-slot entry older builds can read.
+
+    Chunks are written BEFORE the manifest so a reader never sees a manifest
+    pointing at not-yet-written parts.
+    """
+    if len(payload) <= _CHUNK_CHARS:
+        _kr_raw_set(username, payload)
+        _kr_sweep_chunks_from(username, 0)
+        return
+    chunks = [
+        payload[i : i + _CHUNK_CHARS] for i in range(0, len(payload), _CHUNK_CHARS)
+    ]
+    for idx, chunk in enumerate(chunks):
+        _kr_raw_set(_chunk_username(username, idx), chunk)
+    _kr_raw_set(username, f"{_CHUNK_SENTINEL}{len(chunks)}:{_payload_crc(payload)}")
+    _kr_sweep_chunks_from(username, len(chunks))
 
 
 def _kr_set(username: str, payload: str) -> None:

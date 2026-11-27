@@ -19,11 +19,24 @@ from gaia.messaging.discord import credentials as discord_credentials
 from gaia.messaging.slack import credentials as slack_credentials
 
 
-class TestSingleKeychainEntry:
-    """All Python-owned gaia.connections secrets share ONE OS Keychain entry."""
+def _record_reads(monkeypatch, backend) -> list:
+    """Usernames the OS keyring is asked to read from now on."""
+    reads = []
+    real_get = backend.get_password
 
-    def test_multiple_secrets_create_only_one_keychain_item(
-        self, _autouse_in_memory_keyring
+    def recording_get(service, username):
+        reads.append(username)
+        return real_get(service, username)
+
+    monkeypatch.setattr(backend, "get_password", recording_get)
+    return reads
+
+
+class TestSingleKeychainEntry:
+    """Python-owned gaia.connections secrets are read through ONE Keychain entry."""
+
+    def test_reads_touch_only_the_master_key(
+        self, _autouse_in_memory_keyring, monkeypatch
     ):
         store.save_connection(
             provider="google",
@@ -48,12 +61,9 @@ class TestSingleKeychainEntry:
         discord_credentials.save("discord-bot-tok")
         browser_key = browser_session._load_key()
 
-        # Exactly ONE entry in the OS keyring: the vault master key.
-        assert list(_autouse_in_memory_keyring._store.keys()) == [
-            (vault.SERVICE_NAME, vault.MASTER_KEY_USERNAME)
-        ]
-
-        # Every stored secret round-trips through its normal API.
+        # Every stored secret round-trips through its normal API, and the only
+        # OS keyring item read is the vault master key.
+        reads = _record_reads(monkeypatch, _autouse_in_memory_keyring)
         assert (
             store.load_connection("google", current_client_id_hash="h1")[
                 "refresh_token"
@@ -73,6 +83,7 @@ class TestSingleKeychainEntry:
         assert slack_credentials.load().app_token == "xapp-app-tok"
         assert discord_credentials.load() == "discord-bot-tok"
         assert browser_session._load_key() == browser_key
+        assert set(reads) == {vault.MASTER_KEY_USERNAME}
 
         # On-disk vault is ciphertext, not plaintext, and 0600 on POSIX.
         raw_disk = vault.vault_path().read_bytes()
@@ -120,7 +131,7 @@ class TestEnvelopeContract:
         nonce = bytes.fromhex("a0a1a2a3a4a5a6a7a8a9aaab")
         entries = {"secret:demo": "hello-vault"}
 
-        blob = vault.encrypt_envelope(key, entries, nonce=nonce)
+        blob = vault._encrypt_envelope_with_nonce(key, entries, nonce)
 
         assert blob[:6] == b"GAIAV1"
         assert blob[6] == 1
@@ -133,6 +144,21 @@ class TestEnvelopeContract:
             "6eff00268ac356714073be72ea334bfe2515f07959e0e10d4697c7c859aa1499"
         )
         assert vault.decrypt_envelope(key, blob) == entries
+
+    def test_public_encrypt_takes_no_nonce_and_never_repeats_one(self):
+        import inspect
+
+        assert list(inspect.signature(vault.encrypt_envelope).parameters) == [
+            "key",
+            "entries",
+        ]
+        with pytest.raises(TypeError):
+            vault.encrypt_envelope(  # pylint: disable=unexpected-keyword-arg
+                os.urandom(32), {"k": "v"}, nonce=bytes(12)
+            )
+        key = os.urandom(32)
+        nonces = {vault.encrypt_envelope(key, {"k": "v"})[7:19] for _ in range(50)}
+        assert len(nonces) == 50
 
     def test_tampered_ciphertext_fails_loudly(self):
         key = os.urandom(32)
@@ -172,26 +198,60 @@ class TestEnvelopeContract:
 
 
 class TestLazyLegacyMigration:
-    """Existing per-slot Keychain items migrate into vault.enc on first read."""
+    """Per-slot Keychain items are copied into vault.enc on first read and kept
+    for one release, so a downgrade or an older agent build still finds them."""
 
-    def test_plain_legacy_slot_migrates_and_is_removed_from_keychain(
-        self, _autouse_in_memory_keyring
+    def test_plain_legacy_slot_is_copied_and_kept(
+        self, _autouse_in_memory_keyring, monkeypatch
     ):
         username = store._secret_username("legacy_key")
         keyring.set_password(vault.SERVICE_NAME, username, "legacy-secret-val")
 
         assert store.peek_secret("legacy_key") == "legacy-secret-val"
-        # Legacy slot removed; only vault-master-key remains in OS keyring.
-        assert keyring.get_password(vault.SERVICE_NAME, username) is None
-        assert list(_autouse_in_memory_keyring._store.keys()) == [
-            (vault.SERVICE_NAME, vault.MASTER_KEY_USERNAME)
-        ]
-        # Second read comes straight from vault.enc.
+        assert vault.vault_path().exists()
+        assert keyring.get_password(vault.SERVICE_NAME, username) == "legacy-secret-val"
+        # Second read comes straight from vault.enc, not the legacy item.
+        reads = _record_reads(monkeypatch, _autouse_in_memory_keyring)
         assert store.peek_secret("legacy_key") == "legacy-secret-val"
+        assert username not in reads
 
-    def test_chunked_legacy_slot_migrates_and_cleans_all_chunks(
+    def test_writes_keep_the_legacy_copy_current_for_a_downgrade(
         self, _autouse_in_memory_keyring
     ):
+        username = store._secret_username("rotating")
+        keyring.set_password(vault.SERVICE_NAME, username, "v1")
+        assert store.peek_secret("rotating") == "v1"
+
+        store.save_secret("rotating", "v2")
+        # An older build reads the per-slot item directly: never stale.
+        assert store._kr_legacy_get(username) == "v2"
+        assert store.peek_secret("rotating") == "v2"
+
+        big = "B" * (store._CHUNK_CHARS * 2 + 7)
+        store.save_secret("rotating", big)
+        assert store._kr_legacy_get(username) == big
+        store.save_secret("rotating", "short")
+        assert store._kr_legacy_get(username) == "short"
+        assert (
+            keyring.get_password(vault.SERVICE_NAME, store._chunk_username(username, 0))
+            is None
+        )
+
+        store.delete_secret("rotating")
+        assert store._kr_legacy_get(username) is None
+        assert store.peek_secret("rotating") is None
+
+    def test_a_failed_legacy_mirror_write_fails_the_save(
+        self, _autouse_in_memory_keyring, monkeypatch
+    ):
+        def refuse(_username, _value):
+            raise ConnectorsError("Keyring set_password failed: denied")
+
+        monkeypatch.setattr(store, "_kr_legacy_set", refuse)
+        with pytest.raises(ConnectorsError, match="set_password failed"):
+            store.save_secret("mirrored", "val")
+
+    def test_chunked_legacy_slot_is_copied_and_kept(self, _autouse_in_memory_keyring):
         import json
 
         big_token = "M" * (store._CHUNK_CHARS * 2 + 50)
@@ -222,19 +282,13 @@ class TestLazyLegacyMigration:
         loaded = store.load_connection("microsoft", current_client_id_hash="h")
         assert loaded is not None
         assert loaded["refresh_token"] == big_token
-        assert keyring.get_password(vault.SERVICE_NAME, username) is None
-        for idx in range(len(chunks)):
-            assert (
-                keyring.get_password(
-                    vault.SERVICE_NAME, store._chunk_username(username, idx)
-                )
-                is None
-            )
-        assert list(_autouse_in_memory_keyring._store.keys()) == [
-            (vault.SERVICE_NAME, vault.MASTER_KEY_USERNAME)
-        ]
+        assert username in vault._read_vault_entries(
+            vault.vault_path(), for_delete=False
+        )
+        # The chunked legacy copy is left intact for an older build.
+        assert store._kr_legacy_get(username) == payload
 
-    def test_legacy_browser_session_key_migrates_without_breaking_sessions(
+    def test_legacy_browser_session_key_is_copied_without_breaking_sessions(
         self, _autouse_in_memory_keyring, tmp_path, monkeypatch
     ):
         monkeypatch.setattr(browser_session, "sessions_dir", lambda: tmp_path)
@@ -246,21 +300,30 @@ class TestLazyLegacyMigration:
         )
 
         assert browser_session._load_key() == legacy_key
+        assert vault.get(browser_session.KEYRING_USERNAME) == legacy_key.hex()
         assert (
             keyring.get_password(
                 browser_session.KEYRING_SERVICE, browser_session.KEYRING_USERNAME
             )
-            is None
+            == legacy_key.hex()
         )
-        assert list(_autouse_in_memory_keyring._store.keys()) == [
-            (vault.SERVICE_NAME, vault.MASTER_KEY_USERNAME)
-        ]
 
-    def test_null_keyring_does_not_create_orphan_vault_file(self, monkeypatch):
+    def test_null_keyring_save_fails_loudly_without_orphan_vault(self, monkeypatch):
         monkeypatch.setattr(keyring.core, "_keyring_backend", NullKeyring())
-        store.save_secret("discarded", "val")
+        with pytest.raises(ConnectorsError, match="null backend"):
+            store.save_secret("discarded", "val")
         assert not vault.vault_path().exists()
         assert store.peek_secret("discarded") is None
+
+    def test_null_keyring_fails_every_vault_backed_save(self, monkeypatch):
+        monkeypatch.setattr(keyring.core, "_keyring_backend", NullKeyring())
+        with pytest.raises(ConnectorsError, match="null backend"):
+            vault.put("secret:any", "val")
+        with pytest.raises(ConnectorsError, match="null backend"):
+            slack_credentials.save("xoxb-bot", "xapp-app")
+        with pytest.raises(discord_credentials.DiscordCredentialsError):
+            discord_credentials.save("discord-bot-tok")
+        assert not vault.vault_path().exists()
 
 
 class TestConcurrency:
@@ -287,9 +350,12 @@ class TestConcurrency:
             t.join(timeout=15)
 
         assert errors == []
-        assert list(_autouse_in_memory_keyring._store.keys()) == [
-            (vault.SERVICE_NAME, vault.MASTER_KEY_USERNAME)
-        ]
+        assert (
+            vault.SERVICE_NAME,
+            vault.MASTER_KEY_USERNAME,
+        ) in _autouse_in_memory_keyring._store
+        entries = vault._read_vault_entries(vault.vault_path(), for_delete=False)
+        assert len(entries) == n_threads
         for i in range(n_threads):
             assert store.peek_secret(f"slot-{i}") == f"val-{i}"
 
@@ -346,7 +412,8 @@ class TestConcurrency:
 
         monkeypatch.undo()
         assert store.peek_secret("rotated") == "fresh-rotated-token"
-        assert keyring.get_password(vault.SERVICE_NAME, slot) is None
+        # The legacy copy follows the newer write, so a downgrade is not stale.
+        assert keyring.get_password(vault.SERVICE_NAME, slot) == "fresh-rotated-token"
 
     def test_read_recovers_from_concurrent_vault_remint(
         self, _autouse_in_memory_keyring, monkeypatch

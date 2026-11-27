@@ -90,7 +90,11 @@ def test_retry_asks_the_store_once_more(dismissed):
 def test_saving_a_key_is_an_action_that_may_ask_again(dismissed, monkeypatch):
     with pytest.raises(store.KeyringRefused):
         store.peek_secret("provider:fireworks")
-    monkeypatch.setattr(store.keyring, "set_password", lambda *a: None)
+    monkeypatch.setattr(
+        store.keyring,
+        "set_password",
+        lambda _service, user, value: dismissed.values.__setitem__(user, value),
+    )
     dismissed.error = None
     store.save_secret("provider:fireworks", "fw_new_key_1234567")
     assert store.keyring_refusal() is None

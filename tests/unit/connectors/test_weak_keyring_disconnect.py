@@ -169,8 +169,10 @@ def _connection_keys(provider):
 
 
 def _drop_vault_slot(items, slot_name: str) -> None:
-    """Remove one slot from ``vault.enc`` while keeping the test's keyring dict."""
+    """Remove one slot from ``vault.enc`` and its mirrored legacy keyring item."""
     from gaia.connectors import vault
+
+    items.pop((SERVICE, slot_name), None)
 
     raw_key = items.get((SERVICE, vault.MASTER_KEY_USERNAME))
     path = vault.vault_path()

@@ -11,8 +11,12 @@ This module keeps one 32-byte AES-256-GCM master key in the OS credential
 store (service ``gaia.connections``, username ``vault-master-key``) and stores
 all Python-owned secret slots inside one ``0600`` encrypted file at
 ``~/.gaia/connectors/vault.enc`` (or ``$GAIA_VAULT_FILE``). Existing legacy
-Keychain items are migrated lazily on first read and removed from the OS
-Keychain once persisted in the vault.
+Keychain items are copied into the vault lazily on first read.
+
+Transition release: legacy per-slot items are kept, and every write also
+updates them, so a downgrade or an older agent build that reads the per-slot
+items still sees current values. Reads always prefer the vault. The next
+release stops mirroring and removes the legacy items.
 
 MCP server slots (``mcp-*``) remain directly in the OS Keychain because the
 C++ runtime (``cpp/src/keyring.cpp``) resolves ``$keyring`` references there.
@@ -93,15 +97,23 @@ def _aesgcm():
     return AESGCM
 
 
-def encrypt_envelope(
-    key: bytes, entries: Dict[str, str], *, nonce: Optional[bytes] = None
+def encrypt_envelope(key: bytes, entries: Dict[str, str]) -> bytes:
+    """Serialize and encrypt ``entries`` into the version-1 vault envelope.
+
+    Always draws a fresh random nonce: reusing one under the same key breaks
+    AES-GCM.
+    """
+    return _encrypt_envelope_with_nonce(key, entries, os.urandom(_NONCE_BYTES))
+
+
+def _encrypt_envelope_with_nonce(
+    key: bytes, entries: Dict[str, str], iv: bytes
 ) -> bytes:
-    """Serialize and encrypt ``entries`` into the version-1 vault envelope."""
+    """Test-vector hook only; production code must call :func:`encrypt_envelope`."""
     if len(key) != _KEY_BYTES:
         raise ConnectorsError(
             f"Vault master key must be {_KEY_BYTES} bytes, got {len(key)}."
         )
-    iv = os.urandom(_NONCE_BYTES) if nonce is None else nonce
     if len(iv) != _NONCE_BYTES:
         raise ConnectorsError(
             f"Vault nonce must be {_NONCE_BYTES} bytes, got {len(iv)}."
@@ -315,6 +327,20 @@ def _sweep_legacy_slot_no_read(username: str, *, keyring_mod=None) -> None:
         idx += 1
 
 
+def _mirror_legacy_slot(username: str, value: str, *, keyring_mod=None) -> None:
+    """Keep the legacy per-slot item equal to the vault value (transition release).
+
+    Writes only, never reads, so it adds no macOS read prompt. A failure is
+    raised: a stale legacy item would be read as current after a downgrade.
+    """
+    if keyring_mod is not None:
+        keyring_mod.write(SERVICE_NAME, username, value)
+        return
+    from gaia.connectors import store
+
+    store._kr_legacy_set(username, value)
+
+
 def _read_legacy_slot(
     username: str, *, for_delete: bool, keyring_mod=None
 ) -> Optional[str]:
@@ -339,9 +365,8 @@ def _load_or_mint_master_key(
 ) -> Optional[bytes]:
     """Return the master key from Keychain, minting and verifying it if allowed.
 
-    Returns ``None`` only when ``allow_mint`` is True and the active backend
-    silently discards writes (such as ``NullKeyring``), or when ``allow_mint``
-    is False and no key is stored.
+    Returns ``None`` only when ``allow_mint`` is False and no key is stored.
+    Raises when the active backend silently discards writes (``NullKeyring``).
     """
     if preloaded_key is not None:
         return preloaded_key
@@ -355,15 +380,28 @@ def _load_or_mint_master_key(
     _raw_set(MASTER_KEY_USERNAME, key_hex, keyring_mod=keyring_mod)
     readback = _raw_get(MASTER_KEY_USERNAME, for_delete=False, keyring_mod=keyring_mod)
     if readback is None:
-        # A null/no-op backend silently discarded the write; do not create a
-        # vault file whose master key cannot be read back.
-        return None
+        # Never create a vault file whose master key cannot be read back.
+        raise _discarded_write_error()
     if readback.strip() != key_hex:
         raise ConnectorsError(
             "The OS credential store returned a different value than the vault "
             "master key that was just written."
         )
     return key
+
+
+def _discarded_write_error() -> ConnectorsError:
+    configured = os.environ.get("PYTHON_KEYRING_BACKEND") or "auto-detected"
+    return ConnectorsError(
+        "Could not save the secret: the OS credential store discarded the "
+        f"credential vault's master key (keyring backend: {configured}). This "
+        "happens with keyring's null backend, which stores nothing. Install a "
+        "system credential store (gnome-keyring or kwallet on Linux; macOS "
+        "Keychain and Windows Credential Locker are built in), or unset "
+        "PYTHON_KEYRING_BACKEND, and restart GAIA. Where no credential store "
+        "exists, supply the secret through its environment variable instead. "
+        "See docs/security/connections.mdx."
+    )
 
 
 def _missing_master_key_error(path: Path) -> ConnectorsError:
@@ -388,8 +426,7 @@ def _write_entries_locked(
     Returns ``(written, effective_value)``. When ``only_if_absent`` is True and
     ``username`` is already present in ``path``, the existing value is kept
     (preventing a slow legacy migration from overwriting a newer token) and
-    ``(False, existing_value)`` is returned. Returns ``(False, value)`` when
-    the keyring backend silently discarded a newly minted master key.
+    ``(False, existing_value)`` is returned.
     """
     if path.exists():
         blob = path.read_bytes()
@@ -419,8 +456,6 @@ def _write_entries_locked(
         # process may have deleted both vault.enc and vault-master-key since
         # the pre-lock read.
         key = _load_or_mint_master_key(allow_mint=True, keyring_mod=keyring_mod)
-        if key is None:
-            return False, value
         entries = {}
 
     entries[username] = value
@@ -488,15 +523,14 @@ def put(username: str, value: str, *, keyring_mod=None) -> None:
             preloaded_key = _parse_master_key(raw_key)
 
     with _vault_locked():
-        written, _ = _write_entries_locked(
+        _write_entries_locked(
             path,
             username,
             value,
             preloaded_key=preloaded_key,
             keyring_mod=keyring_mod,
         )
-    if written:
-        _sweep_legacy_slot_no_read(username, keyring_mod=keyring_mod)
+    _mirror_legacy_slot(username, value, keyring_mod=keyring_mod)
 
 
 def get(
@@ -508,9 +542,9 @@ def get(
     """Read ``username`` from the encrypted vault, falling back to legacy Keychain.
 
     When a legacy Keychain entry is read and ``migrate`` is True, it is copied
-    into ``vault.enc`` only if ``username`` is still absent there, and the
-    legacy Keychain slot is removed so subsequent macOS updates do not
-    re-prompt for it.
+    into ``vault.enc`` only if ``username`` is still absent there. The legacy
+    item is kept for this transition release so a downgrade still finds it;
+    later reads come from the vault and never touch it.
     """
     from gaia.connectors import store
 
@@ -536,7 +570,7 @@ def get(
                 preloaded_key = _parse_master_key(raw_key)
         try:
             with _vault_locked():
-                written, effective = _write_entries_locked(
+                _, effective = _write_entries_locked(
                     path,
                     username,
                     legacy,
@@ -552,18 +586,6 @@ def get(
                 e,
             )
             return legacy
-        # Clean up the legacy slot whenever the value is safely in vault.enc
-        # (either written by us or already populated by a concurrent writer).
-        if written or path.exists():
-            try:
-                _sweep_legacy_slot_no_read(username, keyring_mod=keyring_mod)
-            except (OSError, ConnectorsError) as e:
-                logger.warning(
-                    "Migrated %s into vault but could not remove legacy "
-                    "keyring entry: %s",
-                    username,
-                    e,
-                )
         return effective
     return legacy
 
