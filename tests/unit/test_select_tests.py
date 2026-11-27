@@ -39,6 +39,29 @@ FILES = {
         "    subprocess.Popen([sys.executable, '-m', 'gaia.daemon_server'])\n"
     ),
     "src/gaia/daemon_server.py": "def main():\n    from gaia.core import consts\n",
+    # Each spawns something, and names a module in a string it never runs.
+    "src/gaia/spawn_prefix.py": "import subprocess\nLEVELS = 'gaia.core.levels'\n",
+    "src/gaia/spawn_url.py": (
+        "import subprocess\nDOCS = 'https://example.com/?m=gaia.core.consts'\n"
+    ),
+    "src/gaia/spawn_logger.py": (
+        "import logging, subprocess\nLOG = logging.getLogger('gaia.core.home')\n"
+    ),
+    # A level table's keys are logger names; a plain dict's are not.
+    "src/gaia/spawn_levels.py": (
+        "import logging, subprocess\n"
+        "LEVELS = {'gaia.core.home': logging.INFO, 'gaia.core.base': 'DEBUG'}\n"
+        "LEVELS['gaia.tools.sinks'] = logging.ERROR\n"
+        "ROUTES = {'gaia.core.consts': 'run'}\n"
+    ),
+    # Spawns something, and names the server only where nothing runs it.
+    "src/gaia/daemon_hint.py": (
+        '"""Pairs with ``python -m gaia.daemon_server``."""\n'
+        "import subprocess\n"
+        "def open_logs():\n"
+        '    """Logs land where gaia.daemon_server:main writes them."""\n'
+        "    subprocess.run(['open', 'logs'])\n"
+    ),
     "util/check_docs.py": (
         "from pathlib import Path\n"
         "def pages():\n    return list(Path('docs').rglob('*.mdx'))\n"
@@ -68,6 +91,7 @@ FILES = {
             return home
         """),
     "tests/unit/__init__.py": "",
+    st.CONFTEST_SMOKE_TEST: "",
     "tests/unit/sub/conftest.py": "from gaia.tools.sinks import go\n",
     "tests/unit/sub/test_in_sub.py": "def test_x():\n    pass\n",
     "tests/unit/test_base.py": "from gaia.core.base import VALUE\n",
@@ -258,6 +282,24 @@ def test_a_fixture_requested_through_another_fixture_is_followed(graph):
     assert "tests/unit/test_chain.py" in _selected(graph, "src/gaia/tools/reader.py")
 
 
+def test_a_change_to_a_conftest_import_adds_the_smoke_test(graph, tmp_path):
+    # reader is imported only inside a non-autouse fixture body, so no static
+    # or map link reaches the smoke test; the guard adds it.
+    narrow = {"src/gaia/tools/reader.py": {ANCHOR}}
+    assert st.CONFTEST_SMOKE_TEST in _selected(
+        graph, "src/gaia/tools/reader.py", coverage=narrow
+    )
+    assert st.CONFTEST_SMOKE_TEST not in _selected(
+        graph, "src/gaia/tools/sinks.py", coverage={"src/gaia/tools/sinks.py": {ANCHOR}}
+    )
+    (tmp_path / st.CONFTEST_SMOKE_TEST).unlink()
+    gone = st.build_graph(
+        repo=tmp_path, files=sorted(set(FILES) - {st.CONFTEST_SMOKE_TEST})
+    )
+    with pytest.raises(SystemExit, match="CONFTEST_SMOKE_TEST"):
+        st.select(gone, ["src/gaia/tools/reader.py"], narrow)
+
+
 def test_a_module_an_autouse_fixture_imports_reaches_every_test(graph):
     sel = st.select(graph, ["src/gaia/core/home.py"], FULL_MAP)
     assert "tests/unit/test_unrelated.py" in sel.tests
@@ -315,11 +357,17 @@ def test_a_test_the_map_never_ran_follows_lazy_imports(graph):
     assert "tests/unit/test_cli.py" in hit
 
 
-def test_a_source_file_the_map_never_saw_runs_the_full_suite(graph):
-    # sinks.py is new since the map (or never ran): nothing vouches for it.
+def test_a_source_file_the_map_never_saw_selects_by_its_imports(graph):
+    # sinks.py is new since the map, so its importers stand in for coverage.
     coverage = {"src/gaia/cli.py": {"tests/unit/test_cli.py"}}
-    reason = _full(graph, "src/gaia/tools/sinks.py", coverage=coverage)
-    assert "no entry in the coverage map" in reason
+    sel = st.select(graph, ["src/gaia/tools/sinks.py"], coverage)
+    assert not sel.full and "src/gaia/tools/sinks.py" in sel.reason
+    assert {"tests/unit/test_patch.py", "tests/unit/test_proc.py"} <= set(sel.tests)
+    assert "tests/unit/test_unrelated.py" not in sel.tests
+    # A deleted one may still be named by a test, so it runs everything.
+    assert "deleted or renamed" in _full(
+        graph, "src/gaia/tools/gone.py", coverage=coverage
+    )
 
 
 def test_a_stale_map_runs_the_full_suite(graph):
@@ -351,6 +399,32 @@ def test_a_spawned_childs_lazy_imports_count_too(graph):
     assert "tests/unit/test_daemon_start.py" in hit
 
 
+def test_a_module_named_only_in_a_docstring_is_not_a_spawned_child(graph):
+    # Both files spawn; only daemon_client starts the server.
+    coverage = {
+        "src/gaia/daemon_client.py": {"tests/unit/test_daemon_start.py"},
+        "src/gaia/daemon_hint.py": {"tests/unit/test_unrelated.py"},
+        "src/gaia/daemon_server.py": {"tests/unit/test_patch.py"},
+    }
+    hit = _selected(graph, "src/gaia/daemon_server.py", coverage=coverage)
+    assert "tests/unit/test_daemon_start.py" in hit
+    assert "tests/unit/test_unrelated.py" not in hit
+
+
+@pytest.mark.parametrize(
+    "path, child",
+    [
+        ("src/gaia/spawn_prefix.py", None),
+        ("src/gaia/spawn_url.py", None),
+        ("src/gaia/spawn_logger.py", None),
+        ("src/gaia/spawn_levels.py", "src/gaia/core/consts.py"),
+        ("src/gaia/daemon_client.py", "src/gaia/daemon_server.py"),
+    ],
+)
+def test_only_a_whole_module_name_in_running_code_names_a_child(graph, path, child):
+    assert graph.spawn_deps.get(path, set()) == ({child} if child else set())
+
+
 def test_a_mapped_test_that_reaches_nothing_stays_out(graph):
     coverage = {
         "src/gaia/daemon_client.py": {"tests/unit/test_daemon_start.py"},
@@ -359,6 +433,30 @@ def test_a_mapped_test_that_reaches_nothing_stays_out(graph):
     }
     hit = _selected(graph, "src/gaia/tools/sinks.py", coverage=coverage)
     assert "tests/unit/test_daemon_start.py" not in hit
+
+
+def test_build_map_ignores_suite_wide_fixture_setup(tmp_path):
+    from coverage import CoverageData
+
+    repo = tmp_path / "repo"
+    (repo / "src").mkdir(parents=True)
+    mod = repo / "src" / "mod.py"
+    mod.write_text("\n" * 5, encoding="utf-8")
+    suite = [f"tests/unit/test_{n}.py" for n in "abcde"]
+
+    cov = CoverageData(basename=str(tmp_path / ".coverage"))
+    for test in suite:
+        cov.set_context(f"{test}::test_x|setup")
+        cov.add_lines({str(mod): [1]})  # autouse fixture: runs for every test
+    cov.set_context(f"{suite[0]}::test_x|run")
+    cov.add_lines({str(mod): [2]})
+    cov.set_context(f"{suite[1]}::test_x|setup")
+    cov.add_lines({str(mod): [3]})  # a fixture only some tests request
+    cov.write()
+
+    built = st.build_map(tmp_path / ".coverage", repo=repo)
+    reached = {built["tests"][i] for i in built["files"]["src/mod.py"]}
+    assert reached == {suite[0], suite[1]}
 
 
 @pytest.mark.parametrize("days, stale", [(0, False), (3, False), (4, True)])

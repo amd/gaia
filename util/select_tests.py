@@ -5,13 +5,14 @@
 
 **Narrowing is an allowlist.** A PR runs a subset only when every changed file
 is a unit-test file, shipped ``.py`` code under a root the coverage map
-measures (``src/gaia``, and ``hub/agents`` when the map includes it) with an
-entry in the map, or a file tests only ever read (``read_only_class``: docs
-pages, Agent UI sources, the Go TUI tree, hub data), which reaches just the
-tests that name it or scan its folder. Everything else runs the whole suite:
-other data files, pinned manifests and lockfiles, ``util/`` scripts, test
-helpers and fixtures, ``eval/``, configs, workflows, any ``conftest.py``, a deleted or renamed file, a missing or stale map, this script
-and the workflow that runs it. Tests load such files by path
+measures (``src/gaia``, and ``hub/agents`` when the map includes it), or a
+file tests only ever read (``read_only_class``: docs pages, Agent UI sources,
+the Go TUI tree, hub data), which reaches just the tests that name it or scan
+its folder. Everything else runs the whole suite: other data files, pinned
+manifests and lockfiles, ``util/`` scripts, test helpers and fixtures,
+``eval/``, configs, workflows, any ``conftest.py``, a deleted or renamed file,
+a missing or stale map, this script and the workflow that runs it. Tests load
+such files by path
 (``spec_from_file_location``, ``runpy``, ``open``), and neither imports nor
 coverage can follow what those scripts import or read. A selection over
 ``FULL_FRACTION`` of the suite also runs everything, since the saving is gone.
@@ -20,9 +21,11 @@ For a change that passes the allowlist, two sources say which tests it reaches:
 
 **The coverage map** (``build-map``), from a full run with per-test coverage
 contexts on main. It lists, for each source file, the test files that executed
-it. This is what makes the selection tight: most of ``src/gaia`` imports most of
-the rest inside function bodies, so static reading alone would run nearly
-everything for nearly any change.
+it, except lines that more than ``FULL_FRACTION`` of the suite runs in the
+setup or teardown phase (an autouse fixture's work), which say nothing about
+what a test uses. This is what makes the selection tight: most of
+``src/gaia`` imports most of the rest inside function bodies, so static reading
+alone would run nearly everything for nearly any change.
 
 **Static rules**, added on top for what coverage can't see:
 
@@ -35,13 +38,19 @@ everything for nearly any change.
 - Tests and tooling that list a directory (``rglob``, ``os.walk``) are affected
   by any file under a directory whose name they spell out.
 - A ``conftest.py`` below the suite root reaches every file beneath it.
+- A change to a module the root ``conftest.py`` imports always adds
+  ``CONFTEST_SMOKE_TEST``, since the map drops that conftest's suite-wide setup.
 - A package ``__init__`` reaches everything under it when it changes, but the
   walk never continues *through* one: ``gaia/__init__`` imports the agent base
   eagerly, and following that would make every test depend on everything.
 - Code run in a child process (``python -m gaia.daemon``), by a test or by
   shipped code, counts with all its imports, since coverage can't see inside.
-- A test the map never ran (added since the nightly build) follows imports
-  inside functions too.
+  A module named only in a docstring is not run that way: docstrings never run.
+  Shipped code names a child only by a whole module name, never by part of a
+  URL, a file name (``gaia.log``) or a logger name (``getLogger("gaia.llm")``,
+  or a key of a table of logging levels).
+- A test the map never ran, or source file it has no entry for (added since
+  the nightly build), follows imports inside functions too.
 
 **The workflow's own paths filter** (``--trigger-paths-from``) decides only
 whether anything runs, as GitHub does for a pull request: a merge-queue group
@@ -91,6 +100,9 @@ from typing import Dict, Iterable, List, Optional, Set, Tuple
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_TEST_ROOT = "tests/unit"
+# Always selected when a change touches a module the root conftest imports: the
+# map drops that conftest's suite-wide setup lines, and this test runs them.
+CONFTEST_SMOKE_TEST = "tests/unit/test_unit_daemon_isolation.py"
 MAP_VERSION = 1
 # The nightly run rebuilds the map; older than this means it stopped.
 MAX_MAP_AGE = timedelta(days=3)
@@ -105,6 +117,7 @@ _DOTTED_RE = re.compile(r"^[A-Za-z_]\w*(\.[A-Za-z_]\w*)+(:[A-Za-z_]\w*)?$")
 _PATH_SPLIT_RE = re.compile(r"[\\/]")
 _ISOLATION_RE = re.compile(r"isolate|guard|restore|block|forbid")
 _SPAWN_RE = re.compile(r"sys\.executable|\bsubprocess\b|\bPopen\b|create_subprocess")
+_LEVEL_NAMES = {"NOTSET", "DEBUG", "INFO", "WARN", "WARNING", "ERROR", "CRITICAL"}
 
 FULL_RUN_FILES = {
     "setup.py",
@@ -252,6 +265,8 @@ class Graph:
     spawn_deps: Dict[str, Set[str]] = field(default_factory=_edges)
     imported_modules: Dict[str, Set[str]] = field(default_factory=_edges)
     sources: Dict[str, str] = field(default_factory=dict)
+    # Files the top-level conftests import, at module level or in any fixture.
+    conftest_imports: Set[str] = field(default_factory=set)
 
 
 @dataclass
@@ -332,6 +347,11 @@ class _Imports(ast.NodeVisitor):
         self.module_level: List[ast.AST] = []
         self.in_function: List[ast.AST] = []
         self.strings: List[str] = []
+        # Never executed, so they name modules but never a child process.
+        self.docstrings: List[str] = []
+        # Logger names, not child processes: getLogger()'s first argument, and
+        # the keys of (and lookups in) a table of logging levels.
+        self.logger_names: List[str] = []
         # Pieces of a joined path: "SKILL.md" there is not a bare file name.
         self.path_pieces: List[str] = []
         self._joined: Set[int] = set()
@@ -340,9 +360,60 @@ class _Imports(ast.NodeVisitor):
         self.folder_strings: List[str] = []
         # Inner links of a `/` chain, already read with the whole chain.
         self._chained: Set[int] = set()
+        self._docstring_ids: Set[int] = set()
+        self._logger_ids: Set[int] = set()
         self._depth = 0
 
+    def _mark_docstring(self, node: ast.AST) -> None:
+        body = getattr(node, "body", None)
+        if (
+            isinstance(body, list)
+            and body
+            and isinstance(body[0], ast.Expr)
+            and isinstance(body[0].value, ast.Constant)
+            and isinstance(body[0].value.value, str)
+        ):
+            self._docstring_ids.add(id(body[0].value))
+
+    def visit_Module(self, node: ast.Module) -> None:
+        self._mark_docstring(node)
+        self._mark_level_tables(node)
+        self.generic_visit(node)
+
+    def _mark_level_tables(self, tree: ast.Module) -> None:
+        """Mark the keys of every dict assigned a logging level per key, and
+        the string keys later looked up in it by the name it was assigned to."""
+        tables: Set[str] = set()
+        for node in ast.walk(tree):
+            if not isinstance(node, (ast.Assign, ast.AnnAssign)):
+                continue
+            if not _is_level_table(node.value):
+                continue
+            self._logger_ids.update(id(k) for k in node.value.keys if k is not None)
+            targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+            tables.update(ast.unparse(t) for t in targets)
+        if not tables:
+            return
+        for node in ast.walk(tree):
+            key = None
+            if isinstance(node, ast.Subscript):
+                table, key = node.value, node.slice
+            elif (
+                isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Attribute)
+                and node.func.attr in ("get", "setdefault", "pop")
+                and node.args
+            ):
+                table, key = node.func.value, node.args[0]
+            if isinstance(key, ast.Constant) and ast.unparse(table) in tables:
+                self._logger_ids.add(id(key))
+
+    def visit_ClassDef(self, node: ast.ClassDef) -> None:
+        self._mark_docstring(node)
+        self.generic_visit(node)
+
     def _function(self, node: ast.AST) -> None:
+        self._mark_docstring(node)
         self._depth += 1
         self.generic_visit(node)
         self._depth -= 1
@@ -368,6 +439,10 @@ class _Imports(ast.NodeVisitor):
         if isinstance(node.value, str):
             if id(node) in self._joined:
                 self.path_pieces.append(node.value)
+            elif id(node) in self._docstring_ids:
+                self.docstrings.append(node.value)
+            elif id(node) in self._logger_ids:
+                self.logger_names.append(node.value)
             else:
                 self.strings.append(node.value)
 
@@ -410,7 +485,44 @@ class _Imports(ast.NodeVisitor):
     def visit_Call(self, node: ast.Call) -> None:
         if _joins_a_path(node):
             self._add_path(node.args)
+        name = getattr(node.func, "attr", None) or getattr(node.func, "id", None)
+        if name == "getLogger" and node.args and isinstance(node.args[0], ast.Constant):
+            self._logger_ids.add(id(node.args[0]))
         self.generic_visit(node)
+
+
+def _is_level_table(node: Optional[ast.AST]) -> bool:
+    """A dict literal whose every value is a logging level (``logging.INFO``
+    or ``"INFO"``)."""
+    if not isinstance(node, ast.Dict) or not node.values:
+        return False
+    for value in node.values:
+        if isinstance(value, ast.Attribute):
+            name = value.attr
+        elif isinstance(value, ast.Constant) and isinstance(value.value, str):
+            name = value.value
+        else:
+            return False
+        if name not in _LEVEL_NAMES:
+            return False
+    return True
+
+
+def _names_a_child(
+    text: str, match: "re.Match[str]", module_files: Dict[str, str]
+) -> bool:
+    """Whether a dotted name in shipped code's string can be a module it runs.
+
+    Only a whole module name counts, so a file name ("gaia.log") or a module
+    path with an attribute is not one, and neither is part of a URL or a host
+    ("amd-gaia.ai").
+    """
+    if match.group() not in module_files:
+        return False
+    if text[match.start() - 1 : match.start()] in ("-", ".", "/", "@"):
+        return False
+    start = max(text.rfind(c, 0, match.start()) for c in " \t\n'\"") + 1
+    return "://" not in text[start : match.end()]
 
 
 def _joins_a_path(node: ast.AST) -> bool:
@@ -582,13 +694,18 @@ def build_graph(repo: Path = REPO_ROOT, files: Optional[List[str]] = None) -> Gr
             for text in found.folder_strings:
                 folders = folder_targets([p for p in _PATH_SPLIT_RE.split(text) if p])
                 graph.folder_reads[path].update(folders)
-        for text in found.strings:
+        texts = [(s, "code") for s in found.strings]
+        texts += [(s, "docstring") for s in found.docstrings]
+        texts += [(s, "logger") for s in found.logger_names]
+        for text, kind in texts:
             value = text.strip()
-            if package_code and spawns and "." in value:
-                for name in embedded.findall(value):
-                    target = resolve(name)
-                    if target and module_files[target] != path:
-                        graph.spawn_deps[path].add(module_files[target])
+            if package_code and spawns and kind == "code":
+                for match in embedded.finditer(value):
+                    if not _names_a_child(value, match, module_files):
+                        continue
+                    target = module_files[match.group()]
+                    if target != path:
+                        graph.spawn_deps[path].add(target)
             if not package_code:
                 head = value.split(".")[0]
                 named: List[str] = []
@@ -600,9 +717,9 @@ def build_graph(repo: Path = REPO_ROOT, files: Optional[List[str]] = None) -> Gr
                     named = embedded.findall(value)
                 for name in named:
                     link(path, name, graph.deps, parent_only=True)
-                    found = resolve(name)
-                    if spawns and found:
-                        graph.subprocess_targets[path].add(module_files[found])
+                    module = resolve(name)
+                    if spawns and module and kind != "docstring":
+                        graph.subprocess_targets[path].add(module_files[module])
             pieces = [p for p in _PATH_SPLIT_RE.split(value) if p]
             if not pieces:
                 continue
@@ -634,10 +751,13 @@ def build_graph(repo: Path = REPO_ROOT, files: Optional[List[str]] = None) -> Gr
                 graph.deps[path].add(conftest)
             continue
         fixtures, autouse = _fixture_imports(graph.sources.get(conftest, ""), conftest)
-        if not fixtures:
-            continue
         package = _module_name(conftest, "")
         package = package.rpartition(".")[0] if package else None
+        for node in ast.walk(ast.parse(graph.sources.get(conftest, ""))):
+            if isinstance(node, (ast.Import, ast.ImportFrom)):
+                graph.conftest_imports |= import_files(node, package)
+        if not fixtures:
+            continue
         patched: Set[str] = set()
         for name in autouse:
             for node in fixtures.get(name, ()):
@@ -735,25 +855,47 @@ def load_map(path: Path) -> Tuple[Dict[str, Set[str]], bool]:
     return files, stale
 
 
+_SETUP_PHASES = ("setup", "teardown")
+
+
+def _split_context(context: str) -> Tuple[str, str]:
+    """A pytest-cov context ``<nodeid>|<phase>`` as (test file, phase)."""
+    nodeid, _, phase = context.partition("|")
+    return nodeid.split("::", 1)[0].replace("\\", "/"), phase
+
+
 def build_map(coverage_file: Path, repo: Path = REPO_ROOT) -> dict:
     from coverage import CoverageData
 
     data = CoverageData(basename=str(coverage_file))
     data.read()
-    tests: Dict[str, int] = {}
-    files: Dict[str, Set[int]] = {}
+    lines: Dict[str, List[Set[str]]] = {}
+    suite: Set[str] = set()
     for measured in data.measured_files():
         try:
             rel = Path(measured).resolve().relative_to(repo.resolve()).as_posix()
         except ValueError:
             continue
-        hit: Set[int] = set()
-        for contexts in (data.contexts_by_lineno(measured) or {}).values():
+        lines[rel] = list((data.contexts_by_lineno(measured) or {}).values())
+        for contexts in lines[rel]:
             for context in contexts:
-                test = context.split("::", 1)[0]
+                test, _ = _split_context(context)
+                if test.endswith(".py"):
+                    suite.add(test)
+    tests: Dict[str, int] = {}
+    files: Dict[str, Set[int]] = {}
+    for rel, per_line in lines.items():
+        hit: Set[int] = set()
+        for contexts in per_line:
+            split = [_split_context(c) for c in contexts]
+            fixture_files = {t for t, phase in split if phase in _SETUP_PHASES}
+            shared = len(fixture_files) > FULL_FRACTION * len(suite)
+            for test, phase in split:
                 if not test.endswith(".py"):
                     continue
-                hit.add(tests.setdefault(test.replace("\\", "/"), len(tests)))
+                if shared and phase in _SETUP_PHASES:
+                    continue
+                hit.add(tests.setdefault(test, len(tests)))
         if hit:
             files[rel] = hit
     names = sorted(tests, key=tests.get)
@@ -870,10 +1012,11 @@ def full_run_reason(
     """Why the whole suite must run, or None if the selection can narrow.
 
     Narrowing is an allowlist: every changed file must be a unit-test file,
-    shipped .py code the coverage map measures and has an entry for, or a
-    read-only file (``read_only_class``). Anything else (other data files, util/ scripts, test helpers and fixtures, eval/, configs,
-    workflows) can be loaded by path or read by a script, which neither imports
-    nor coverage can follow, so it runs everything.
+    shipped .py code the coverage map measures, or a read-only file
+    (``read_only_class``). Anything else (other data files, util/ scripts, test
+    helpers and fixtures, eval/, configs, workflows) can be loaded by path or
+    read by a script, which neither imports nor coverage can follow, so it runs
+    everything.
     """
     if coverage is None:
         return "no coverage map"
@@ -895,8 +1038,6 @@ def full_run_reason(
             continue
         if not is_measured(path, coverage):
             return f"{path} is outside the code the coverage map measures"
-        if path not in coverage:
-            return f"{path} has no entry in the coverage map"
     return None
 
 
@@ -1064,9 +1205,27 @@ def select(
         if len(tests) > FULL_FRACTION * len(all_tests):
             reason = f"{len(tests)} of {len(all_tests)} test files affected"
             tests = all_tests
+    if reason is None and graph.conftest_imports.intersection(changed):
+        if CONFTEST_SMOKE_TEST not in all_tests:
+            raise SystemExit(
+                f"select_tests: {CONFTEST_SMOKE_TEST} is missing from {test_root}, "
+                "but a change touches a module the root conftest imports. Restore "
+                "it, or point CONFTEST_SMOKE_TEST at another fast test."
+            )
+        tests = sorted(set(tests) | {CONFTEST_SMOKE_TEST})
     if platform_only:
         tests = [p for p in tests if is_platform_sensitive(graph, p)]
     detail = reason or f"{len(changed)} changed file(s)"
+    if reason is None and coverage is not None:
+        unmapped = [
+            p
+            for p in changed
+            if p.endswith(".py")
+            and p not in coverage
+            and not is_test_file(p, test_root)
+        ]
+        if unmapped:
+            detail += "; read statically, no map entry yet: " + ", ".join(unmapped)
     return Selection(
         full=reason is not None and not platform_only,
         reason=detail,
