@@ -79,10 +79,16 @@ inputs:
     required: false
     default: ${{ github.token }}
 
+outputs:
+  issue:
+    description: 'report only: number of the issue filed, commented on or edited'
+    value: ${{ steps.auto-issue.outputs.issue }}
+
 runs:
   using: 'composite'
   steps:
     - name: ${{ inputs.mode == 'resolve' && 'Close the recovered tracking issue' || 'File or update the tracking issue' }}
+      id: auto-issue
       shell: bash
       env:
         GH_TOKEN: ${{ inputs.github-token }}
