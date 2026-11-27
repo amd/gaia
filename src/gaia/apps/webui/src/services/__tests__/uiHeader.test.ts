@@ -89,7 +89,7 @@ describe('every mutating request carries x-gaia-ui', () => {
 
     it('opening an attached file in the preview', async () => {
         fetchMock.mockResolvedValue(new Response('hello', { status: 200 }));
-        const { getByRole } = render(createElement(AttachmentLink, { href: '/api/files/uploads/a.txt' }, 'a.txt'));
+        const { getByRole } = render(createElement(AttachmentLink, { href: '/api/files/uploads/a.txt', children: 'a.txt' }));
         fireEvent.click(getByRole('button', { name: 'a.txt' }));
         await waitFor(() => expect(fetchMock).toHaveBeenCalled());
         expect(fetchMock.mock.calls[0][0]).toBe('/api/files/uploads/a.txt');
