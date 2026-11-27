@@ -15,11 +15,17 @@ sys.path.insert(0, os.path.abspath("src"))
 
 from gaia.messaging import telegram as telegram_module
 from gaia.messaging.telegram import (
+    FINAL_CONTENT_WARNING,
     FINAL_DELIVERY_WARNING,
     UNAUTHORIZED_REPLY,
     TelegramAdapter,
 )
-from gaia.messaging.telegram_api import TelegramNetworkError, TelegramRetryAfter
+from gaia.messaging.telegram_api import (
+    TelegramAPIError,
+    TelegramNetworkError,
+    TelegramRetryAfter,
+    TelegramTimedOut,
+)
 
 
 def test_run_telegram_scaffold_returns_adapter(mock_home, monkeypatch):
@@ -233,6 +239,80 @@ async def test_a_rate_limited_final_edit_goes_straight_to_the_warning(
     ]
     assert any(
         record.levelno == logging.WARNING and "rate limited" in record.getMessage()
+        for record in caplog.records
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_rejected_final_edit_does_not_ask_the_user_to_resend(
+    monkeypatch, caplog
+):
+    """A permanent Telegram 400 needs a warning that does not advise retrying."""
+    adapter, reply, reply_text, update = _streaming_adapter(monkeypatch)
+
+    async def reject(text):
+        if text == "Hello from Gaia":
+            raise TelegramAPIError(
+                "message too long",
+                method="editMessageText",
+                status_code=400,
+                error_code=400,
+                description="message is too long",
+            )
+
+    reply.edit_text = AsyncMock(side_effect=reject)
+    with caplog.at_level(logging.WARNING, logger="gaia.messaging.telegram"):
+        await adapter._handle_message(update, None)
+
+    assert reply.edit_text.await_args_list == [
+        call("Hello"),
+        call("Hello from Gaia"),
+    ]
+    assert reply_text.await_args_list == [
+        call("Thinking..."),
+        call(FINAL_CONTENT_WARNING),
+    ]
+    assert "resend" not in FINAL_CONTENT_WARNING.lower()
+    assert "too long" not in FINAL_CONTENT_WARNING.lower()
+    assert any(
+        record.levelno == logging.WARNING and "already rejected" in record.getMessage()
+        for record in caplog.records
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_timeout_then_not_modified_counts_as_delivered(monkeypatch, caplog):
+    """A lost timeout response must not turn an applied edit into a warning."""
+    adapter, reply, reply_text, update = _streaming_adapter(monkeypatch)
+    attempts = 0
+
+    async def timeout_then_not_modified(text):
+        nonlocal attempts
+        if text == "Hello from Gaia":
+            attempts += 1
+            if attempts == 1:
+                raise TelegramTimedOut("timeout", method="editMessageText")
+            raise TelegramAPIError(
+                "message is not modified",
+                method="editMessageText",
+                status_code=400,
+                error_code=400,
+                description="message is not modified",
+            )
+
+    reply.edit_text = AsyncMock(side_effect=timeout_then_not_modified)
+    with caplog.at_level(logging.WARNING, logger="gaia.messaging.telegram"):
+        await adapter._handle_message(update, None)
+
+    assert reply.edit_text.await_args_list == [
+        call("Hello"),
+        call("Hello from Gaia"),
+        call("Hello from Gaia"),
+    ]
+    assert reply_text.await_args_list == [call("Thinking...")]
+    assert not any(
+        record.levelno == logging.WARNING
+        and "Final Telegram edit" in record.getMessage()
         for record in caplog.records
     )
 
