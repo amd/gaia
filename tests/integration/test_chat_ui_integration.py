@@ -1114,17 +1114,18 @@ class TestSessionTimestamps:
 
         assert updated_at >= created_at
 
-    def test_updated_at_changes_on_rename(self, client):
-        """Session updated_at advances after renaming."""
-        resp = client.post("/api/sessions", json={"title": "Before"})
-        sid = resp.json()["id"]
-        original = resp.json()["updated_at"]
-
+    def test_rename_keeps_the_chat_where_it_was(self, client):
+        """Renaming a chat leaves updated_at and the list order alone."""
+        first = client.post("/api/sessions", json={"title": "First"}).json()
         time.sleep(0.02)
+        second = client.post("/api/sessions", json={"title": "Second"}).json()
 
-        resp2 = client.put(f"/api/sessions/{sid}", json={"title": "After"})
-        updated = resp2.json()["updated_at"]
-        assert updated >= original
+        resp = client.put(f"/api/sessions/{first['id']}", json={"title": "Renamed"})
+
+        assert resp.json()["title"] == "Renamed"
+        assert resp.json()["updated_at"] == first["updated_at"]
+        listed = client.get("/api/sessions").json()["sessions"]
+        assert [s["id"] for s in listed][:2] == [second["id"], first["id"]]
 
     def test_sessions_ordered_by_most_recent(self, client, db):
         """List sessions returns most recently updated first."""
