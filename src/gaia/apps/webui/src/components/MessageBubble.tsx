@@ -940,7 +940,7 @@ export function MessageBubble({ message, isStreaming, agentSteps, agentStepsActi
                             {t('logs.agentLog')}
                         </button>
                     ) : (isError || (message.role === 'assistant' && isModelFailure(message.content))) && !isStreaming && (message.turnSummary?.model?.remote ?? place?.remote) === false && (
-                        /* A local model failed: what Lemonade and its backend wrote says why. The turn's own model decides; the picked one only stands in for turns saved before it was recorded. */
+                        /* A local model failed: what Lemonade and its backend wrote says why. Older turns fall back to the picked model. */
                         <button type="button" className="msg-try-again" onClick={() => showServerLog('model_server')}>
                             <ScrollText size={12} aria-hidden="true" />
                             {t('logs.serverLog')}
