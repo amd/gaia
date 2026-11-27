@@ -1618,10 +1618,11 @@ export function ChatView({ sessionId }: ChatViewProps) {
         if (e.dataTransfer.files.length === 0) return;
 
         const dropped = Array.from(e.dataTransfer.files);
-        // A recording is transcribed by the agent, not indexed as a document.
-        const recordings = dropped.filter((file) => isMediaFile(file.name));
-        if (recordings.length > 0) attach.addFiles(recordings);
-        const documents = dropped.filter((file) => !isMediaFile(file.name));
+        // Recordings and photos ride with the message, as on the message box; the rest are indexed.
+        const isAttachment = (file: File) => isMediaFile(file.name) || file.type.startsWith('image/');
+        const attachments = dropped.filter(isAttachment);
+        if (attachments.length > 0) attach.addFiles(attachments);
+        const documents = dropped.filter((file) => !isAttachment(file));
         if (documents.length === 0) return;
 
         if (!(await ensureModel('embedding'))) return;
