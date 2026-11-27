@@ -81,4 +81,15 @@ describe('useFollowScroll', () => {
         expect(follow.current).toBe(true);
         expect(onDistance).not.toHaveBeenCalled();
     });
+    it('leaves following to the scroll event on a wheel-up away from the top, e.g. inside tool activity', () => {
+        const { el } = makeList(500, 3000, 1000);
+        const follow = { current: true };
+        const onDistance = vi.fn();
+        const { result } = renderHook(() => useFollowScroll({ current: el }, follow, onDistance));
+
+        result.current.listProps.onWheel({ deltaY: -100 } as ReactWheelEvent);
+
+        expect(follow.current).toBe(true);
+        expect(onDistance).not.toHaveBeenCalled();
+    });
 });

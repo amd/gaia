@@ -70,9 +70,10 @@ export function useFollowScroll(
         if (e.deltaY > 0) { clearUserScroll(); return; }
         if (e.deltaY === 0) return;
         markUserScroll();
-        // A wheel-up at the top fires no scroll event; a list opened there would keep no jump button.
+        // A wheel-up at the top fires no scroll event, so a chat opened there showed no jump button.
+        // Only at the top: one inside a nested scroller (tool activity) mustn't stop following.
         const el = scrollRef.current;
-        if (!el) return;
+        if (!el || el.scrollTop > 0) return;
         const dist = el.scrollHeight - el.scrollTop - el.clientHeight;
         if (dist <= AT_BOTTOM_PX) return;
         followRef.current = false;
