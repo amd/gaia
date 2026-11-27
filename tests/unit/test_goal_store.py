@@ -111,10 +111,10 @@ class TestGoalCRUD:
 
     def test_delete_cascades_to_tasks(self, store):
         goal = _make_goal(store)
-        store.add_task(goal.id, "Task 1")
+        task = store.add_task(goal.id, "Task 1")
         store.delete_goal(goal.id)
         # Tasks should be gone (CASCADE)
-        assert store.get_goal_tasks(goal.id) == []
+        assert store.get_task(task.id) is None
 
 
 # ===========================================================================
@@ -235,12 +235,12 @@ class TestTaskCRUD:
         assert updated.status == "completed"
         assert updated.result == "Written 42 lines."
 
-    def test_get_goal_tasks_ordered_by_index(self, store):
+    def test_goal_tasks_ordered_by_index(self, store):
         goal = _make_goal(store)
         store.add_task(goal.id, "Third", order_index=2)
         store.add_task(goal.id, "First", order_index=0)
         store.add_task(goal.id, "Second", order_index=1)
-        tasks = store.get_goal_tasks(goal.id)
+        tasks = store.get_goal(goal.id).tasks
         assert [t.order_index for t in tasks] == [0, 1, 2]
         assert tasks[0].description == "First"
 

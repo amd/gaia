@@ -75,7 +75,7 @@ def test_embed_failure_warns_once_keeps_the_row_and_counts_it(host, caplog):
 
     for kid in (first, second):
         assert host._memory_store.get_item(kid) is not None
-    assert host.memory_write_failures() == {WRITE_FAILURE_EMBED: 2}
+    assert host._memory_write_failures == {WRITE_FAILURE_EMBED: 2}
     assert host._memory_store.get_embedding_coverage()["without_embedding"] == 2
 
 
@@ -87,7 +87,7 @@ def test_each_failure_kind_warns_on_its_own_first_occurrence(host, caplog):
     host._note_memory_write_failure(WRITE_FAILURE_STORE, "lost a row: %s", "again")
 
     assert len(_warnings(caplog)) == 2
-    assert host.memory_write_failures() == {
+    assert host._memory_write_failures == {
         WRITE_FAILURE_EMBED: 1,
         WRITE_FAILURE_STORE: 2,
     }
@@ -100,7 +100,7 @@ def test_successful_write_stores_the_vector_and_counts_nothing(host, caplog):
         _save(host, "The build runs on Linux")
 
     assert not _warnings(caplog)
-    assert host.memory_write_failures() == {}
+    assert host._memory_write_failures == {}
     assert host._memory_store.get_embedding_coverage()["without_embedding"] == 0
 
 
@@ -117,7 +117,7 @@ def test_faiss_add_failure_warns_once_and_counts_an_index_gap(host, caplog):
     warnings = _warnings(caplog)
     assert len(warnings) == 1
     assert "id-1" in warnings[0].getMessage()
-    assert host.memory_write_failures() == {WRITE_FAILURE_INDEX: 2}
+    assert host._memory_write_failures == {WRITE_FAILURE_INDEX: 2}
 
 
 def test_a_failed_re_embed_after_an_edit_leaves_no_stale_vector(host, caplog):
@@ -137,7 +137,7 @@ def test_a_failed_re_embed_after_an_edit_leaves_no_stale_vector(host, caplog):
     assert stored is False
     remove.assert_called_once_with(kid)
     add.assert_not_called()
-    assert host.memory_write_failures() == {WRITE_FAILURE_EMBED: 1}
+    assert host._memory_write_failures == {WRITE_FAILURE_EMBED: 1}
 
 
 def test_remember_tool_still_stores_when_the_embedder_fails(host, caplog):
@@ -152,7 +152,7 @@ def test_remember_tool_still_stores_when_the_embedder_fails(host, caplog):
     assert result["status"] == "stored"
     assert host._memory_store.get_item(result["knowledge_id"]) is not None
     assert len(_warnings(caplog)) == 1
-    assert host.memory_write_failures() == {WRITE_FAILURE_EMBED: 1}
+    assert host._memory_write_failures == {WRITE_FAILURE_EMBED: 1}
 
 
 def test_memory_status_reports_entries_without_a_vector(tmp_path, monkeypatch, capsys):

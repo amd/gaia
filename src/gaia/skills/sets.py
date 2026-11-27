@@ -118,18 +118,6 @@ class SkillSets:
         """Declared set names, in manifest declaration order."""
         return list(self.sets)
 
-    def skills_for(self, name: Optional[str]) -> Tuple[SkillRef, ...]:
-        """Always-on skills plus the named set's skills, in declaration order.
-
-        Raises:
-            SkillSetError: *name* is not a declared set.
-        """
-        if name is None:
-            return self.always
-        if name not in self.sets:
-            raise SkillSetError(self._unknown_set_message(name))
-        return self.always + tuple(self.sets[name])
-
     def resolve(
         self,
         *,

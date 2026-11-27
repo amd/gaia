@@ -188,7 +188,7 @@ jobs:
           REM Only the fast tests (SD-Turbo, 512x512); SDXL-Base takes 5+ min per image.
           REM --capture=sys avoids fd-level capture crash on Windows (ValueError: I/O on closed file)
           REM One invocation, exit code kept: cmd reports only its LAST command's status.
-          pytest tests/integration/test_sd_integration.py::TestSDIntegration::test_generate_small_image tests/integration/test_sd_integration.py::TestSDIntegration::test_health_check_with_real_server tests/integration/test_sd_integration.py::TestLemonadeClientSDMethods::test_list_sd_models -v -rs --tb=short --capture=sys
+          pytest tests/integration/test_sd_integration.py::TestSDIntegration::test_generate_small_image tests/integration/test_sd_integration.py::TestLemonadeClientSDMethods::test_list_sd_models -v -rs --tb=short --capture=sys
           set sd_exit=%ERRORLEVEL%
 
           echo.

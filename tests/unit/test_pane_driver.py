@@ -117,7 +117,7 @@ def test_every_call_carries_the_token_and_names_its_op(bridge, discovery_file):
     "fixture_key,run",
     [
         ("evaluate", lambda d: d.snapshot()),
-        ("origin", lambda d: d.current_origin()),
+        ("origin", lambda d: d.page_origins()),
         ("screenshot", lambda d: d.screenshot()),
         (
             "logs",
@@ -290,7 +290,7 @@ def test_every_op_names_the_chat_so_main_can_refuse_one_the_user_left(
 ):
     driver = _driver(bridge, discovery_file)
     driver.snapshot()
-    driver.current_origin()
+    driver.page_origins()
     driver.logs("console", errors_only=False, pattern=None, new_only=False)
     for req in bridge.requests:
         if req["op"] != "hello":

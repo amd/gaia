@@ -39,10 +39,6 @@ class _ReasoningFilter:
             yield shown
 
 
-def _without_reasoning(chunks: Iterable[str]) -> Iterator[str]:
-    return _ReasoningFilter()(chunks)
-
-
 def _reasoning_only_error(max_tokens: int) -> RuntimeError:
     return RuntimeError(
         f"The model spent its whole {max_tokens}-token budget reasoning and "

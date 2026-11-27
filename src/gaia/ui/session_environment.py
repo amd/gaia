@@ -280,11 +280,6 @@ def begin_turn(session_id: str) -> List[str]:
         return list(_approved_paths.get(session_id, []))
 
 
-def approved_paths(session_id: str) -> List[str]:
-    """What *session_id*'s relayed agent was allowed at its prompts, right now."""
-    return _approved(session_id)
-
-
 def forget_approved_before(session_id: str, before: List[str]) -> None:
     """Drop *session_id*'s approved paths that were already approved in
     *before* (the :func:`begin_turn` snapshot), keeping any approved

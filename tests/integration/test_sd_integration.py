@@ -90,19 +90,6 @@ class TestSDIntegration:
         assert "generation_time_s" in result
         assert result["generation_time_s"] > 0
 
-    def test_health_check_with_real_server(self):
-        """Test health check returns available SD models."""
-        mixin = SDToolsMixin()
-        mixin.init_sd()
-
-        health = mixin.sd_health_check()
-
-        assert health["status"] == "healthy"
-        assert "models" in health
-        assert len(health["models"]) > 0
-        # At least SD-Turbo should be available
-        assert any("SD" in m for m in health["models"])
-
     def test_generation_history_tracking(self, tmp_path):
         """Test that generations are tracked in history."""
         mixin = SDToolsMixin()

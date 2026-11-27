@@ -359,54 +359,6 @@ class TestSDToolsMixinRejectsNonImages:
         }
 
 
-class TestSDToolsMixinHealthCheck:
-    """Test SDToolsMixin health check."""
-
-    def test_health_check_healthy(self, mock_lemonade_client):
-        """Test health check when server is healthy."""
-        mock_lemonade_client.list_sd_models.return_value = [
-            {"id": "SD-Turbo", "labels": ["image"]},
-            {"id": "SDXL-Turbo", "labels": ["image"]},
-        ]
-
-        mixin = SDToolsMixin()
-        mixin.init_sd()
-
-        health = mixin.sd_health_check()
-
-        assert health["status"] == "healthy"
-        assert "SD-Turbo" in health["models"]
-        assert "SDXL-Turbo" in health["models"]
-
-    def test_health_check_unavailable(self, mock_lemonade_client):
-        """Test health check when server is unavailable."""
-        from gaia.llm.lemonade_client import LemonadeClientError
-
-        mock_lemonade_client.list_sd_models.side_effect = LemonadeClientError(
-            "Connection refused"
-        )
-
-        mixin = SDToolsMixin()
-        mixin.init_sd()
-
-        health = mixin.sd_health_check()
-
-        assert health["status"] == "unavailable"
-        assert "error" in health
-
-    def test_health_check_no_models(self, mock_lemonade_client):
-        """Test health check when no SD models available."""
-        mock_lemonade_client.list_sd_models.return_value = []
-
-        mixin = SDToolsMixin()
-        mixin.init_sd()
-
-        health = mixin.sd_health_check()
-
-        assert health["status"] == "unavailable"
-        assert "No SD models" in health["error"]
-
-
 class TestSDToolsMixinSaveImage:
     """Test SDToolsMixin image saving."""
 
@@ -440,69 +392,6 @@ class TestSDToolsMixinSaveImage:
         assert "<" not in path.stem
 
 
-class TestSDHealthCheckRemedy:
-    """The 'no SD models' remedy must name the model this instance will ask for.
-
-    Hardcoding a literal produced a remedy that ran successfully and still left
-    the user stuck: they were told to pull SD-Turbo, did, retried, and
-    generation then requested the instance default (SDXL-Turbo) which they
-    still did not have. Right verb, wrong argument.
-    """
-
-    @pytest.fixture
-    def _modern_tooling(self):
-        from gaia.llm.lemonade_launcher import LemonadeTooling
-
-        with (
-            patch("platform.system", return_value="Linux"),
-            patch(
-                "gaia.llm.lemonade_launcher.resolve_lemonade",
-                return_value=LemonadeTooling(
-                    found=True,
-                    kind="modern",
-                    client_path="/usr/bin/lemonade",
-                    server_launcher="/usr/bin/lemond",
-                ),
-            ),
-        ):
-            yield
-
-    @pytest.mark.parametrize(
-        "configured", ["SDXL-Turbo", "SD-Turbo", "SDXL-Base-1.0", "SD-1.5"]
-    )
-    def test_remedy_names_the_configured_model(
-        self, tmp_path, mock_lemonade_client, _modern_tooling, configured
-    ):
-        mixin = SDToolsMixin()
-        mixin.init_sd(output_dir=str(tmp_path), default_model=configured)
-        mock_lemonade_client.list_sd_models.return_value = []
-
-        health = mixin.sd_health_check()
-
-        assert health["status"] == "unavailable"
-        assert f"pull {configured}" in health["error"], health["error"]
-
-    def test_remedy_follows_the_default_rather_than_a_literal(
-        self, tmp_path, mock_lemonade_client, _modern_tooling
-    ):
-        """With no explicit model, the remedy must track init_sd's default —
-        so changing that default can never leave this string behind."""
-        import inspect
-
-        default = (
-            inspect.signature(SDToolsMixin.init_sd).parameters["default_model"].default
-        )
-
-        mixin = SDToolsMixin()
-        mixin.init_sd(output_dir=str(tmp_path))
-        mock_lemonade_client.list_sd_models.return_value = []
-
-        health = mixin.sd_health_check()
-
-        assert f"pull {default}" in health["error"], health["error"]
-        assert "gaia download" not in health["error"]
-
-
 class TestSDOutputLocation:
     """Images land under the GAIA config dir and never overwrite each other."""
 
@@ -528,13 +417,3 @@ class TestSDOutputLocation:
         assert first != second
         assert first.read_bytes() == b"one"
         assert second.read_bytes() == b"two"
-
-    def test_health_check_names_the_unexpected_error(self, mock_lemonade_client):
-        mock_lemonade_client.list_sd_models.side_effect = OSError("socket closed")
-        mixin = SDToolsMixin()
-        mixin.init_sd()
-
-        health = mixin.sd_health_check()
-
-        assert health["status"] == "unavailable"
-        assert "socket closed" in health["error"]

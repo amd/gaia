@@ -244,21 +244,6 @@ def api_key_credential(
     return ClaudeCredential(ENV_KEY, api_key=value)
 
 
-def credential_present(env: Optional[Mapping[str, str]] = None) -> bool:
-    """True when :func:`resolve_claude_credential` would return a credential.
-
-    False only when nothing is set. A credential that is set but unusable (a
-    token with no CLI, a CLI whose login cannot be read) raises its
-    ``RuntimeError``, so the caller fails loudly with the fix instead of the
-    generic "nothing set" message.
-    """
-    try:
-        resolve_claude_credential(env)
-    except ValueError:
-        return False
-    return True
-
-
 def announce(chosen: ClaudeCredential, role: str = "Claude judge") -> None:
     """Print which credential *role* uses, once per process.
 

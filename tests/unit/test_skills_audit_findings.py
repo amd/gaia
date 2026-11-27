@@ -146,31 +146,6 @@ def test_report_payload_withholds_snippets_by_default():
 
 
 # ----------------------------------------------------------------------
-# GovernanceDecision projection
-# ----------------------------------------------------------------------
-
-
-def test_report_projects_onto_a_governance_decision():
-    report = _report(verdict="REVIEW", findings=(_finding(rule_id="body.injection"),))
-    decision = report.to_governance_decision()
-    assert decision.decision == "REVIEW"
-    assert decision.reason == report.reason
-    assert decision.rule_ids == ["body.injection"]
-    assert decision.policy_version == AUDIT_ENGINE
-
-
-def test_governance_decision_rule_ids_are_deduplicated_in_first_seen_order():
-    report = _report(
-        findings=(
-            _finding(rule_id="b.rule"),
-            _finding(rule_id="a.rule"),
-            _finding(rule_id="b.rule"),
-        )
-    )
-    assert report.to_governance_decision().rule_ids == ["b.rule", "a.rule"]
-
-
-# ----------------------------------------------------------------------
 # Content digest — binds a report to the bytes it audited
 # ----------------------------------------------------------------------
 

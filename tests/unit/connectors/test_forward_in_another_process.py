@@ -230,7 +230,7 @@ def test_a_killed_forward_is_recovered_before_a_new_read(
 
     from gaia.connectors import store
 
-    assert store.has_forward_recovery("google")
+    assert store.forward_recovery_slot("google") is not None
     assert store.peek_provider_credentials("google")["client_id"] == NEW_CLIENT
 
     # The normal reader takes the lock, restores the marker, and only then
@@ -238,7 +238,7 @@ def test_a_killed_forward_is_recovered_before_a_new_read(
     provider, connection = tokens.load_current_connection("google")
     assert provider.client_id == OLD_CLIENT
     assert connection["refresh_token"] == "old-refresh"
-    assert not store.has_forward_recovery("google")
+    assert store.forward_recovery_slot("google") is None
 
 
 def test_a_disconnect_after_a_killed_forward_is_not_undone(
@@ -250,7 +250,7 @@ def test_a_disconnect_after_a_killed_forward_is_not_undone(
     _forward_in_another_process(shared_keyring, kill_after_client_write=True)
     store.delete_connection("google")
 
-    assert not store.has_forward_recovery("google")
+    assert store.forward_recovery_slot("google") is None
     assert peek_connection("google") is None
     assert tokens.load_current_connection("google")[1] is None
     assert peek_connection("google") is None
@@ -274,7 +274,7 @@ def test_a_reconnect_after_a_killed_forward_is_not_rolled_back(
         client_id_hash=fresh.client_id_hash,
     )
 
-    assert not store.has_forward_recovery("google")
+    assert store.forward_recovery_slot("google") is None
     provider, connection = tokens.load_current_connection("google")
     assert provider.client_id == NEW_CLIENT
     assert connection["refresh_token"] == "reconnected-refresh"
@@ -314,7 +314,7 @@ def test_a_corrupt_recovery_marker_is_cleared_by_a_disconnect(
     with pytest.raises(ConnectorsError, match="recovery record"):
         tokens.load_current_connection("google")
     store.delete_connection("google")
-    assert not store.has_forward_recovery("google")
+    assert store.forward_recovery_slot("google") is None
     assert tokens.load_current_connection("google")[1] is None
 
 

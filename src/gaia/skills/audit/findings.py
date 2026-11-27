@@ -23,7 +23,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable, Literal, Optional
 
-from gaia.governance.schemas import DecisionType, GovernanceDecision
+from gaia.governance.schemas import DecisionType
 
 #: Engine id + version. Bumped whenever a rule change can move a verdict, so a
 #: recorded catalog entry always names the engine that produced it.
@@ -211,15 +211,6 @@ class AuditReport:
             if any(f.severity == severity for f in self.findings)
         }
 
-    @property
-    def rule_ids(self) -> list[str]:
-        """Distinct rule ids in first-seen order."""
-        seen: list[str] = []
-        for finding in self.findings:
-            if finding.rule_id not in seen:
-                seen.append(finding.rule_id)
-        return seen
-
     # ------------------------------------------------------------------
     # Serialization
     # ------------------------------------------------------------------
@@ -261,24 +252,6 @@ class AuditReport:
             manifest_digest=data.get("manifest_digest", ""),
             audited_at=data["audited_at"],
             engine=data.get("engine", AUDIT_ENGINE),
-        )
-
-    def to_governance_decision(self) -> GovernanceDecision:
-        """Project onto the shared governance decision type."""
-        return GovernanceDecision(
-            decision=self.verdict,
-            reason=self.reason,
-            policy_version=self.engine,
-            rule_ids=self.rule_ids,
-            metadata={
-                "skill": self.skill,
-                "version": self.version,
-                "security_tier": self.security_tier,
-                "cleared_tiers": list(self.cleared_tiers),
-                "content_digest": self.content_digest,
-                "manifest_digest": self.manifest_digest,
-                "counts": self.counts_by_severity(),
-            },
         )
 
 

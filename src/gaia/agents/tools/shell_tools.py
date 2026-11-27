@@ -6322,13 +6322,6 @@ class ShellToolsMixin:
             previous.close()
         return self._shell_session
 
-    def close_shell_session(self) -> None:
-        """Tear the session down at task end. Safe to call more than once."""
-        session = getattr(self, "_shell_session", None)
-        if session is not None:
-            session.close()
-            self._shell_session = None
-
     def _validate_shell_command(self, command: str) -> tuple:
         """Every refusal ``command`` earns on its text alone, plus its steps.
 

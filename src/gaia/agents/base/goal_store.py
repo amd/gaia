@@ -686,11 +686,6 @@ class GoalStore:
             conn.commit()
         return self.get_task(task_id)
 
-    def get_goal_tasks(self, goal_id: str) -> List[Task]:
-        """Return all tasks for a goal ordered by index."""
-        with self._lock:
-            return self._get_tasks_unlocked(goal_id)
-
     # ------------------------------------------------------------------
     # Agent-loop helpers
     # ------------------------------------------------------------------

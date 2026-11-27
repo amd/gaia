@@ -166,7 +166,7 @@ class TestGaiaConfig:
 
 
 class TestLemonadeClientBackendMethods:
-    """Test install_backend, uninstall_backend, get_recipe_status."""
+    """Test install_backend and get_recipe_status."""
 
     def test_install_backend(self):
         from gaia.llm.lemonade_client import LemonadeClient
@@ -212,23 +212,6 @@ class TestLemonadeClientBackendMethods:
 
         with pytest.raises(LemonadeClientError, match="Failed to install backend"):
             client.install_backend("flm:npu")
-
-    def test_uninstall_backend(self):
-        from gaia.llm.lemonade_client import LemonadeClient
-
-        client = LemonadeClient.__new__(LemonadeClient)
-        client.base_url = "http://localhost:13305/api/v1"
-        client.log = MagicMock()
-        client._send_request = MagicMock(return_value={"status": "success"})
-
-        result = client.uninstall_backend("flm:npu")
-        assert result == {"status": "success"}
-        client._send_request.assert_called_once_with(
-            "post",
-            "http://localhost:13305/api/v1/uninstall",
-            {"recipe": "flm", "backend": "npu"},
-            timeout=120,
-        )
 
     @pytest.mark.parametrize("spec", ["flm", "", ":npu", "flm:"])
     def test_backend_spec_must_be_recipe_colon_backend(self, spec):

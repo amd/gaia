@@ -937,7 +937,7 @@ confirmation (§2.1.5).
 - **Local-ok:** the local pass rate on the mechanical check is within the
   pre-registered margin of the cloud pass rate.
 - **Judge scores** are secondary and reported as a paired difference with a clustered
-  bootstrap: a new `paired_clustered_bootstrap(diffs, clusters, one_sided=True)` in `eval/statistics.py`. It raises on n < 2. The existing `bootstrap_ci` is unpaired, unclustered and two-sided, and silently returns `(0.0, 0.0)` for n < 2, so it isn't used.
+  bootstrap: a new `paired_clustered_bootstrap(diffs, clusters, one_sided=True)` in a new eval statistics module. It raises on n < 2.
 - **Oracle:** split the repeats. Pick the cheapest local-ok tier on repeats 1–3, score
   it on 4–5.
 

@@ -426,7 +426,7 @@ from gaia.mcp.context7_cache import Context7RateLimiter
 limiter = Context7RateLimiter(Path(sys.argv[1]))
 together()
 for _ in range(int(sys.argv[2])):
-    limiter.consume_token()
+    limiter.acquire()
 """
 
 
@@ -481,7 +481,7 @@ def test_context7_corrupt_rate_state_fails_loudly(tmp_path):
     state.write_text('{"tokens": 0.0, "last_upd', encoding="utf-8")
 
     with pytest.raises(Context7CacheError, match="rate_state.json"):
-        Context7RateLimiter(state).consume_token()
+        Context7RateLimiter(state).acquire()
 
 
 # --------------------------------------------------------------------------

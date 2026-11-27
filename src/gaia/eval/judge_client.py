@@ -37,7 +37,6 @@ from gaia.env import load_env
 from gaia.eval.claude_credential import (  # noqa: F401  # pylint: disable=unused-import
     API_KEY_VAR,
     announce,
-    credential_present,
     resolve_claude_credential,
 )
 from gaia.eval.claude_usage import TOKEN_FIELDS, usage_from_cli
@@ -66,16 +65,6 @@ _JUDGE_SYSTEM_PROMPT = (
 _DISALLOWED_TOOLS = (
     "Bash,Read,Write,Edit,Glob,Grep,WebFetch,WebSearch,Task,TodoWrite,NotebookEdit"
 )
-
-
-def judge_credential_present() -> bool:
-    """True when some credential could drive the judge.
-
-    The eval report scripts guard on this before spending Lemonade time. It
-    deliberately does not say whether the credential will be *accepted* — for
-    that, probe it (see :func:`probe_judge_credential`).
-    """
-    return credential_present()
 
 
 @dataclass(frozen=True)

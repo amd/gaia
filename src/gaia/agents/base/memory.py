@@ -2708,16 +2708,6 @@ class MemoryMixin(ProceduralMemoryMixin):
         else:
             logger.debug(message, *args)
 
-    def memory_write_failures(self) -> Dict[str, int]:
-        """Per-kind count of memory writes that lost data this session.
-
-        Keys are ``WRITE_FAILURE_EMBED`` (saved without a search vector),
-        ``WRITE_FAILURE_INDEX`` (vector not in the search index) and
-        ``WRITE_FAILURE_STORE`` (not saved).
-        """
-        with _WRITE_FAILURE_LOCK:
-            return dict(getattr(self, "_memory_write_failures", None) or {})
-
     def _embed_and_index(
         self, knowledge_id: str, text: str, what: str, *, replace: bool = False
     ) -> bool:

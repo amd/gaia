@@ -146,7 +146,14 @@ def _recorded_corpus(frozen: Path) -> Optional[str]:
 
 
 def _staleness(cache: Path) -> Tuple[Optional[bool], bool]:
-    """``(is the snapshot stale, was that decided on content)``."""
+    """``(is the snapshot stale, was that decided on content)``.
+
+    Stale is ``None`` when there is no snapshot yet.  Keyed on the *content*
+    of ``traces.jsonl``, not its mtime: ``scan`` rewrites that file whole on
+    every run, so its mtime advances even when the rescan found nothing new.
+    Snapshots frozen before the fingerprint existed carry no digest and fall
+    back to mtime.
+    """
 
     frozen = cache / SNAPSHOT
     traces = cache / "traces.jsonl"
@@ -158,22 +165,6 @@ def _staleness(cache: Path) -> Tuple[Optional[bool], bool]:
     if recorded is not None:
         return recorded != corpus_digest(traces), True
     return traces.stat().st_mtime > frozen.stat().st_mtime, False
-
-
-def snapshot_is_stale(cache: Path) -> Optional[bool]:
-    """Has the corpus changed under the frozen snapshot?
-
-    ``None`` when there is no snapshot yet.  Otherwise True past the point
-    where every figure derived here describes a corpus that no longer matches
-    the one ``report`` renders.
-
-    Keyed on the *content* of ``traces.jsonl``, not its mtime: ``scan``
-    rewrites that file whole on every run, so its mtime advances even when the
-    rescan found nothing new.  Snapshots frozen before the fingerprint existed
-    carry no digest and fall back to mtime.
-    """
-
-    return _staleness(cache)[0]
 
 
 def snapshot_stamp(cache: Path) -> str:

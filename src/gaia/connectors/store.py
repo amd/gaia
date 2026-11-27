@@ -717,12 +717,6 @@ def _forward_recovery_username(provider: str) -> str:
     return f"recovery:forward:{provider}"
 
 
-def has_forward_recovery(provider: str) -> bool:
-    """Whether a previous forwarded save left a recovery marker."""
-    verify_keyring_backend()
-    return _kr_get(_forward_recovery_username(provider)) is not None
-
-
 def forward_recovery_slot(provider: str) -> Optional[str]:
     """The account slot an interrupted forward left a marker for, or None."""
     verify_keyring_backend()

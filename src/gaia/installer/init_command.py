@@ -2381,31 +2381,6 @@ class InitCommand:
         ca_problem = server.ca_problem()
         return f"{ca_problem} {read_log}" if ca_problem else read_log
 
-    def _verify_model(self, client, model_id: str) -> tuple:
-        """
-        Verify a model is available (downloaded) on the server.
-
-        Note: We only check if the model exists in the server's model list.
-        Running inference to verify would require loading each model, which is
-        slow and can cause server issues. If a model is corrupted, the error
-        will surface when the user tries to use it.
-
-        Args:
-            client: LemonadeClient instance
-            model_id: Model ID to verify
-
-        Returns:
-            Tuple of (success: bool, error_type: str or None)
-        """
-        try:
-            # Check if model is in the available models list
-            if client.check_model_available(model_id):
-                return (True, None)
-            return (False, "not_found")
-        except Exception as e:
-            log.debug(f"Model verification failed for {model_id}: {e}")
-            return (False, "server_error")
-
     def _check_device_available(self) -> bool:
         """Check that the required hardware device is available.
 

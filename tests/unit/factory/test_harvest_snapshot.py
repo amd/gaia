@@ -24,11 +24,15 @@ from gaia.factory.harvest.context import (
     SNAPSHOT,
     corpus_digest,
     require_fresh_snapshot,
-    snapshot_is_stale,
     snapshot_stamp,
 )
 
 CORPUS = '{"session_id": "a"}\n'
+
+
+def snapshot_is_stale(cache):
+    """The staleness verdict ``require_fresh_snapshot`` gates on."""
+    return context._staleness(cache)[0]
 
 
 def seed(cache, *, snapshot_older, corpus=CORPUS, fingerprint=True):

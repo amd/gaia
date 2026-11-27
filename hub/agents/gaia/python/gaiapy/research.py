@@ -78,12 +78,6 @@ def split_research_command(text: object) -> Optional[Tuple[str, str]]:
     return None
 
 
-def parse_research_command(text: object) -> Optional[str]:
-    """The topic of a ``/research`` turn, ``""`` for a bare one, ``None`` otherwise."""
-    split = split_research_command(text)
-    return None if split is None else split[1]
-
-
 def research_brief(topic: str) -> str:
     """The instruction a research turn adds to its context."""
     return RESEARCH_BRIEF if topic else BARE_RESEARCH_BRIEF

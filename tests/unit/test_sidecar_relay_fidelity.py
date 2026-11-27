@@ -166,7 +166,7 @@ def test_a_mid_turn_approval_survives_its_own_turns_session_created():
             handler, final, GAIA_PROFILE, session_id=session_id, approved_before=before
         )
 
-        remaining = session_environment.approved_paths(session_id)
+        remaining = session_environment._approved(session_id)
         assert remaining == ["/new/this-turn.txt"]
     finally:
         session_environment.forget_session(session_id)
@@ -199,7 +199,7 @@ def test_a_file_approved_again_after_a_rebuild_stays_listed(approvals):
     before = env.begin_turn(sid)
     env.note_approved_path(sid, "/a")  # the rebuilt agent asks again
     _rebuilt_turn_ends(sid, before)
-    assert env.approved_paths(sid) == ["/a"]
+    assert env._approved(sid) == ["/a"]
 
 
 def test_only_the_reapproved_file_survives_a_rebuild(approvals):
@@ -210,7 +210,7 @@ def test_only_the_reapproved_file_survives_a_rebuild(approvals):
     env.note_approved_path(sid, "/b")
     env.note_approved_path(sid, "/d")
     _rebuilt_turn_ends(sid, before)
-    assert env.approved_paths(sid) == ["/b", "/d"]
+    assert env._approved(sid) == ["/b", "/d"]
 
 
 def test_an_approval_from_an_earlier_turn_does_not_count_as_this_turns(approvals):
@@ -219,7 +219,7 @@ def test_an_approval_from_an_earlier_turn_does_not_count_as_this_turns(approvals
     env.note_approved_path(sid, "/a")  # approved last turn, by the old agent
     before = env.begin_turn(sid)  # this turn; the agent is rebuilt
     _rebuilt_turn_ends(sid, before)
-    assert env.approved_paths(sid) == []
+    assert env._approved(sid) == []
 
 
 def test_forgetting_a_session_also_forgets_this_turns_approvals(approvals):
@@ -227,7 +227,7 @@ def test_forgetting_a_session_also_forgets_this_turns_approvals(approvals):
     env.begin_turn(sid)
     env.note_approved_path(sid, "/a")
     env.forget_session(sid)
-    assert env.approved_paths(sid) == []
+    assert env._approved(sid) == []
     assert sid not in env._approved_this_turn
 
 
@@ -240,8 +240,8 @@ def test_another_chats_reapproval_does_not_shield_this_chats_stale_file(approval
         env.begin_turn(other)
         env.note_approved_path(other, "/a")
         _rebuilt_turn_ends(sid, before)
-        assert env.approved_paths(sid) == []
-        assert env.approved_paths(other) == ["/a"]
+        assert env._approved(sid) == []
+        assert env._approved(other) == ["/a"]
     finally:
         env.forget_session(other)
 

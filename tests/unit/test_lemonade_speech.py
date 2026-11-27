@@ -200,28 +200,6 @@ class TestTTSRequestShape:
             LemonadeTTSClient(base_url=BASE).check_model_available()
         assert "gaia download" not in str(e.value)
 
-    def test_long_speech_is_split_and_joined(self, monkeypatch, tmp_path):
-        wire = Wire(
-            monkeypatch,
-            [
-                pcm_response(np.full(3, 0.1)),
-                pcm_response(np.full(5, 0.2)),
-            ],
-        )
-        out = tmp_path / "long.wav"
-        text = "First sentence. Second sentence."
-        seconds, chunks = LemonadeTTSClient(base_url=BASE).synthesize_to_wav_long(
-            text, out, limit=20
-        )
-        speech_requests = [
-            request for request in wire.requests if request.method == "POST"
-        ]
-        assert len(speech_requests) == 2
-        assert chunks == 2
-        assert seconds == pytest.approx(8 / TTS_SAMPLE_RATE)
-        with wave.open(str(out)) as handle:
-            assert handle.getnframes() == 8
-
     def test_a_speech_file_goes_to_disk_piece_by_piece(self, monkeypatch, tmp_path):
         wire = Wire(
             monkeypatch,

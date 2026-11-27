@@ -13,7 +13,7 @@ from unittest.mock import MagicMock
 import pytest
 
 # ---------------------------------------------------------------------------
-# Shared mocks — we need anthropic + bs4 importable before importing ClaudeClient
+# Shared mocks — we need anthropic importable before importing ClaudeClient
 # ---------------------------------------------------------------------------
 
 
@@ -25,7 +25,7 @@ def _make_mock_anthropic():
 
 
 def _build_client(monkeypatch, temperature=None, model="claude-sonnet-4-6"):
-    """Construct a ClaudeClient with mocked anthropic/bs4 deps.
+    """Construct a ClaudeClient with a mocked anthropic dependency.
 
     ``temperature`` is only forwarded to the constructor when not ``None`` so
     tests can exercise the true default-argument path (no kwarg at all), not
@@ -33,7 +33,6 @@ def _build_client(monkeypatch, temperature=None, model="claude-sonnet-4-6"):
     """
     monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
     monkeypatch.setattr("gaia.eval.claude.anthropic", _make_mock_anthropic())
-    monkeypatch.setattr("gaia.eval.claude.BeautifulSoup", MagicMock())
     from gaia.eval.claude import ClaudeClient
 
     kwargs = {"model": model}
@@ -51,7 +50,6 @@ class TestClaudeClientInit:
     def test_raises_on_missing_api_key(self, monkeypatch):
         monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
         monkeypatch.setattr("gaia.eval.claude.anthropic", _make_mock_anthropic())
-        monkeypatch.setattr("gaia.eval.claude.BeautifulSoup", MagicMock())
 
         from gaia.eval.claude import ClaudeClient
 
@@ -60,28 +58,16 @@ class TestClaudeClientInit:
 
     def test_raises_on_missing_anthropic(self, monkeypatch):
         monkeypatch.setattr("gaia.eval.claude.anthropic", None)
-        monkeypatch.setattr("gaia.eval.claude.BeautifulSoup", MagicMock())
 
         from gaia.eval.claude import ClaudeClient
 
         with pytest.raises(ImportError, match="anthropic"):
             ClaudeClient()
 
-    def test_raises_on_missing_bs4(self, monkeypatch):
-        monkeypatch.setattr("gaia.eval.claude.anthropic", _make_mock_anthropic())
-        monkeypatch.setattr("gaia.eval.claude.BeautifulSoup", None)
-        monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key-123")
-
-        from gaia.eval.claude import ClaudeClient
-
-        with pytest.raises(ImportError, match="bs4"):
-            ClaudeClient()
-
     def test_success_with_valid_env(self, monkeypatch):
         monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key-123")
         mock_anthropic = _make_mock_anthropic()
         monkeypatch.setattr("gaia.eval.claude.anthropic", mock_anthropic)
-        monkeypatch.setattr("gaia.eval.claude.BeautifulSoup", MagicMock())
 
         from gaia.eval.claude import ClaudeClient
 
@@ -110,7 +96,6 @@ class TestClaudeClientInit:
             monkeypatch.setitem(gaia._PRE_DOTENV_ENVIRON, "ANTHROPIC_API_KEY", secret)
             monkeypatch.setenv("ANTHROPIC_API_KEY", secret)
         monkeypatch.setattr("gaia.eval.claude.anthropic", _make_mock_anthropic())
-        monkeypatch.setattr("gaia.eval.claude.BeautifulSoup", MagicMock())
 
         from gaia.eval.claude import ClaudeClient
 
@@ -131,7 +116,6 @@ class TestCalculateCost:
     def client(self, monkeypatch):
         monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
         monkeypatch.setattr("gaia.eval.claude.anthropic", _make_mock_anthropic())
-        monkeypatch.setattr("gaia.eval.claude.BeautifulSoup", MagicMock())
         from gaia.eval.claude import ClaudeClient
 
         return ClaudeClient(model="claude-sonnet-4-6")
@@ -151,7 +135,6 @@ class TestCalculateCost:
     def test_unknown_model_is_refused_before_any_call(self, monkeypatch):
         monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
         monkeypatch.setattr("gaia.eval.claude.anthropic", _make_mock_anthropic())
-        monkeypatch.setattr("gaia.eval.claude.BeautifulSoup", MagicMock())
         from gaia.eval.claude import ClaudeClient
 
         with pytest.raises(ValueError, match="claude-future-9000"):
@@ -169,7 +152,6 @@ class TestGetCompletion:
         monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
         mock_anthropic = _make_mock_anthropic()
         monkeypatch.setattr("gaia.eval.claude.anthropic", mock_anthropic)
-        monkeypatch.setattr("gaia.eval.claude.BeautifulSoup", MagicMock())
         from gaia.eval.claude import ClaudeClient
 
         c = ClaudeClient(model="claude-sonnet-4-6")
@@ -200,7 +182,6 @@ class TestGetCompletionWithUsage:
     def client(self, monkeypatch):
         monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
         monkeypatch.setattr("gaia.eval.claude.anthropic", _make_mock_anthropic())
-        monkeypatch.setattr("gaia.eval.claude.BeautifulSoup", MagicMock())
         from gaia.eval.claude import ClaudeClient
 
         return ClaudeClient(model="claude-sonnet-4-6")
@@ -231,7 +212,6 @@ class TestCountTokens:
     def client(self, monkeypatch):
         monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
         monkeypatch.setattr("gaia.eval.claude.anthropic", _make_mock_anthropic())
-        monkeypatch.setattr("gaia.eval.claude.BeautifulSoup", MagicMock())
         from gaia.eval.claude import ClaudeClient
 
         return ClaudeClient(model="claude-sonnet-4-6")
@@ -322,129 +302,11 @@ class TestGetCompletionWithUsageTemperature:
         assert "temperature" not in kwargs
 
 
-class TestAnalyzeFileHtmlTemperature:
-    """analyze_file's HTML branch (claude.py:246)."""
-
-    @pytest.fixture()
-    def html_file(self, tmp_path):
-        path = tmp_path / "doc.html"
-        path.write_text("<html><body>hello</body></html>", encoding="utf-8")
-        return path
-
-    def test_temperature_pinned_when_set(self, monkeypatch, html_file):
-        client = _build_client(monkeypatch, temperature=0.0)
-        monkeypatch.setattr(client, "_convert_html_to_text", lambda *a, **kw: "hello")
-        client.client.messages.create.return_value = SimpleNamespace(
-            content=[SimpleNamespace(text="analysis")]
-        )
-        client.analyze_file(str(html_file), "summarize")
-        kwargs = client.client.messages.create.call_args.kwargs
-        assert kwargs["temperature"] == 0.0
-
-    def test_temperature_omitted_by_default(self, monkeypatch, html_file):
-        client = _build_client(monkeypatch)
-        monkeypatch.setattr(client, "_convert_html_to_text", lambda *a, **kw: "hello")
-        client.client.messages.create.return_value = SimpleNamespace(
-            content=[SimpleNamespace(text="analysis")]
-        )
-        client.analyze_file(str(html_file), "summarize")
-        kwargs = client.client.messages.create.call_args.kwargs
-        assert "temperature" not in kwargs
-
-
-class TestAnalyzeFileBinaryTemperature:
-    """analyze_file's base64/document branch (claude.py:277)."""
-
-    @pytest.fixture()
-    def pdf_file(self, tmp_path):
-        path = tmp_path / "doc.pdf"
-        path.write_bytes(b"%PDF-1.4 fake pdf content")
-        return path
-
-    def test_temperature_pinned_when_set(self, monkeypatch, pdf_file):
-        client = _build_client(monkeypatch, temperature=0.0)
-        client.client.messages.create.return_value = SimpleNamespace(
-            content=[SimpleNamespace(text="analysis")]
-        )
-        client.analyze_file(str(pdf_file), "summarize")
-        kwargs = client.client.messages.create.call_args.kwargs
-        assert kwargs["temperature"] == 0.0
-
-    def test_temperature_omitted_by_default(self, monkeypatch, pdf_file):
-        client = _build_client(monkeypatch)
-        client.client.messages.create.return_value = SimpleNamespace(
-            content=[SimpleNamespace(text="analysis")]
-        )
-        client.analyze_file(str(pdf_file), "summarize")
-        kwargs = client.client.messages.create.call_args.kwargs
-        assert "temperature" not in kwargs
-
-
-class TestAnalyzeFileWithUsageTextTemperature:
-    """analyze_file_with_usage's text branch (claude.py:342)."""
-
-    @pytest.fixture()
-    def txt_file(self, tmp_path):
-        path = tmp_path / "doc.txt"
-        path.write_text("hello world", encoding="utf-8")
-        return path
-
-    def test_temperature_pinned_when_set(self, monkeypatch, txt_file):
-        client = _build_client(monkeypatch, temperature=0.0)
-        client.client.messages.create.return_value = SimpleNamespace(
-            content=[SimpleNamespace(text="analysis")],
-            usage=SimpleNamespace(input_tokens=10, output_tokens=5),
-        )
-        client.analyze_file_with_usage(str(txt_file), "summarize")
-        kwargs = client.client.messages.create.call_args.kwargs
-        assert kwargs["temperature"] == 0.0
-
-    def test_temperature_omitted_by_default(self, monkeypatch, txt_file):
-        client = _build_client(monkeypatch)
-        client.client.messages.create.return_value = SimpleNamespace(
-            content=[SimpleNamespace(text="analysis")],
-            usage=SimpleNamespace(input_tokens=10, output_tokens=5),
-        )
-        client.analyze_file_with_usage(str(txt_file), "summarize")
-        kwargs = client.client.messages.create.call_args.kwargs
-        assert "temperature" not in kwargs
-
-
-class TestAnalyzeFileWithUsageBinaryTemperature:
-    """analyze_file_with_usage's binary/PDF branch (claude.py:389)."""
-
-    @pytest.fixture()
-    def pdf_file(self, tmp_path):
-        path = tmp_path / "doc.pdf"
-        path.write_bytes(b"%PDF-1.4 fake pdf content")
-        return path
-
-    def test_temperature_pinned_when_set(self, monkeypatch, pdf_file):
-        client = _build_client(monkeypatch, temperature=0.0)
-        client.client.messages.create.return_value = SimpleNamespace(
-            content=[SimpleNamespace(text="analysis")],
-            usage=SimpleNamespace(input_tokens=10, output_tokens=5),
-        )
-        client.analyze_file_with_usage(str(pdf_file), "summarize")
-        kwargs = client.client.messages.create.call_args.kwargs
-        assert kwargs["temperature"] == 0.0
-
-    def test_temperature_omitted_by_default(self, monkeypatch, pdf_file):
-        client = _build_client(monkeypatch)
-        client.client.messages.create.return_value = SimpleNamespace(
-            content=[SimpleNamespace(text="analysis")],
-            usage=SimpleNamespace(input_tokens=10, output_tokens=5),
-        )
-        client.analyze_file_with_usage(str(pdf_file), "summarize")
-        kwargs = client.client.messages.create.call_args.kwargs
-        assert "temperature" not in kwargs
-
-
 # ---------------------------------------------------------------------------
 # Thinking blocks (#3884)
 #
 # The default judge is thinking-enabled and answers with [thinking, text], so
-# every extraction path must pick the first TEXT block instead of block zero.
+# first_text_block must pick the first TEXT block instead of block zero.
 # A response with no text block must raise, not degrade to empty text — an
 # empty judge reply parses as a failed case and silently lowers the score.
 # ---------------------------------------------------------------------------
@@ -458,10 +320,6 @@ def _thinking_block():
 
 def _text_block(text="the verdict"):
     return SimpleNamespace(type="text", text=text)
-
-
-def _thinking_then_text(text="the verdict", **extra):
-    return SimpleNamespace(content=[_thinking_block(), _text_block(text)], **extra)
 
 
 class TestFirstTextBlock:
@@ -494,68 +352,3 @@ class TestFirstTextBlock:
 
         with pytest.raises(ValueError, match="claude-opus-5"):
             first_text_block([], "claude-opus-5")
-
-
-class TestExtractionPathsWithThinkingBlock:
-    @pytest.fixture()
-    def html_file(self, tmp_path):
-        path = tmp_path / "doc.html"
-        path.write_text("<html><body>hello</body></html>", encoding="utf-8")
-        return path
-
-    @pytest.fixture()
-    def txt_file(self, tmp_path):
-        path = tmp_path / "doc.txt"
-        path.write_text("hello world", encoding="utf-8")
-        return path
-
-    @pytest.fixture()
-    def pdf_file(self, tmp_path):
-        path = tmp_path / "doc.pdf"
-        path.write_bytes(b"%PDF-1.4 fake pdf content")
-        return path
-
-    def test_analyze_file_html(self, monkeypatch, html_file):
-        client = _build_client(monkeypatch, model="claude-opus-5")
-        monkeypatch.setattr(client, "_convert_html_to_text", lambda *a, **kw: "hello")
-        client.client.messages.create.return_value = _thinking_then_text("html verdict")
-
-        assert client.analyze_file(str(html_file), "summarize") == "html verdict"
-
-    def test_analyze_file_binary(self, monkeypatch, pdf_file):
-        client = _build_client(monkeypatch, model="claude-opus-5")
-        client.client.messages.create.return_value = _thinking_then_text("pdf verdict")
-
-        assert client.analyze_file(str(pdf_file), "summarize") == "pdf verdict"
-
-    def test_analyze_file_with_usage_text(self, monkeypatch, txt_file):
-        client = _build_client(monkeypatch, model="claude-opus-5")
-        client.client.messages.create.return_value = _thinking_then_text(
-            "txt verdict", usage=SimpleNamespace(input_tokens=10, output_tokens=5)
-        )
-
-        result = client.analyze_file_with_usage(str(txt_file), "summarize")
-        assert result["content"] == "txt verdict"
-        assert result["usage"]["total_tokens"] == 15
-
-    def test_analyze_file_with_usage_binary(self, monkeypatch, pdf_file):
-        client = _build_client(monkeypatch, model="claude-opus-5")
-        client.client.messages.create.return_value = _thinking_then_text(
-            "pdf verdict", usage=SimpleNamespace(input_tokens=10, output_tokens=5)
-        )
-
-        result = client.analyze_file_with_usage(str(pdf_file), "summarize")
-        assert result["content"] == "pdf verdict"
-        assert result["usage"]["total_tokens"] == 15
-
-    def test_no_text_block_raises_instead_of_returning_empty(
-        self, monkeypatch, txt_file
-    ):
-        client = _build_client(monkeypatch, model="claude-opus-5")
-        client.client.messages.create.return_value = SimpleNamespace(
-            content=[_thinking_block()],
-            usage=SimpleNamespace(input_tokens=10, output_tokens=5),
-        )
-
-        with pytest.raises(ValueError, match="No text block"):
-            client.analyze_file_with_usage(str(txt_file), "summarize")
