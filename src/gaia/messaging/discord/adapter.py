@@ -1799,7 +1799,12 @@ class DiscordAdapter:
                     self._upload(target, raw, asked=True) is not False
                 ) and delivered
             asked = []
-        for chunk in split_message(untable(answer) or "-# (no answer)"):
+        chunks = (
+            []
+            if only_files and not delivered
+            else split_message(untable(answer) or "-# (no answer)")
+        )
+        for chunk in chunks:
             delivered = bool(self._send(target.channel_id, chunk)) and delivered
         # After the words, so a refusal is the last thing said about the file.
         for raw in asked:

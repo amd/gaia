@@ -145,6 +145,8 @@ def test_a_failed_final_file_send_posts_a_warning(
 
     assert _files(ad) == []
     assert da.FINAL_DELIVERY_WARNING in _texts(ad)
+    if only_file:
+        assert "-# Sent." not in _texts(ad)
     assert "upload rejected" not in da.FINAL_DELIVERY_WARNING
     assert any(
         record.levelno == logging.WARNING
@@ -183,6 +185,8 @@ def test_a_refused_file_with_a_failed_note_posts_a_warning(
 
     assert any(text.startswith("-# Not sent:") for text in attempted)
     assert da.FINAL_DELIVERY_WARNING in _texts(ad)
+    if only_file:
+        assert "-# Sent." not in _texts(ad)
     assert "note rejected" not in da.FINAL_DELIVERY_WARNING
     assert any(
         record.levelno == logging.WARNING
