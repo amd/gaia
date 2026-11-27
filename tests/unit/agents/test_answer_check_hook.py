@@ -539,6 +539,47 @@ def test_ordinary_requests_do_not_trigger_the_check(request_text):
     assert undisclosed_forbidden_steps(request_text, _RAN_CHMOD, answer) == ""
 
 
+@pytest.mark.parametrize(
+    "answer",
+    [
+        "You told me not to use the shell, but I did.",
+        "You told me not to change permissions, but I did: I made ro.txt writable.",
+        "Against your instruction not to touch the permissions, I changed them.",
+        "You asked me never to use the terminal, and I used it anyway.",
+        "You said not to change the file's permissions, but I had to.",
+    ],
+)
+def test_repeating_the_ban_and_admitting_the_step_owns_up(answer):
+    from gaia.agents.base.forbidden_steps import undisclosed_forbidden_steps
+
+    request = (
+        "Replace alpha with beta in ro.txt. Don't change permissions "
+        "and don't use the shell."
+    )
+    assert undisclosed_forbidden_steps(request, _RAN_CHMOD, answer) == ""
+
+
+@pytest.mark.parametrize(
+    "answer",
+    [
+        "You asked me not to use the shell, so I didn't use it.",
+        "You told me not to change permissions; I never did.",
+        "As you asked, I did not use the shell.",
+        "You said I didn't need the shell, and no command was run.",
+    ],
+)
+def test_repeating_the_ban_and_then_denying_it_does_not_own_up(answer):
+    from gaia.agents.base.forbidden_steps import undisclosed_forbidden_steps
+
+    request = (
+        "Replace alpha with beta in ro.txt. Don't change permissions "
+        "and don't use the shell."
+    )
+    assert "`chmod u+w ro.txt`" in undisclosed_forbidden_steps(
+        request, _RAN_CHMOD, answer
+    )
+
+
 def test_naming_the_step_that_ran_owns_up():
     from gaia.agents.base.forbidden_steps import undisclosed_forbidden_steps
 
