@@ -1194,6 +1194,7 @@ const messages: Messages = {
     'fileBrowser.columnsLabel': 'الأعمدة:',
     'fileBrowser.previewLoading': 'جارٍ تحميل المعاينة...',
     'fileBrowser.binary': 'ملف ثنائي - لا تتوفر معاينة',
+    'fileBrowser.emptyFile': 'هذا الملف فارغ',
     'docs.loadRetry': 'إعادة المحاولة',
     'docs.deleteFailed': 'تعذّرت إزالة {name}: {error}',
     'docs.cancelFailed': 'تعذّر إلغاء فهرسة {name}: {error}',

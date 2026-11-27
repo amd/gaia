@@ -734,7 +734,7 @@ export function FileBrowser({ onStartChat }: FileBrowserProps) {
                                 </div>
                                 <div className="fb-preview-meta">
                                     <span>{previewFile.size_display}</span>
-                                    {previewFile.total_lines && <span>{t('fileBrowser.lines', { n: previewFile.total_lines })}</span>}
+                                    {previewFile.total_lines ? <span>{t('fileBrowser.lines', { n: previewFile.total_lines })}</span> : null}
                                     {previewFile.columns && <span>{t('fileBrowser.columnCount', { n: previewFile.columns.length })}</span>}
                                     {previewFile.row_count !== null && <span>{t('fileBrowser.rows', { n: previewFile.row_count })}</span>}
                                 </div>
@@ -750,7 +750,9 @@ export function FileBrowser({ onStartChat }: FileBrowserProps) {
                                         {markStrayDirection(previewFile.preview_lines.slice(0, 30).join('\n'))}
                                     </pre>
                                 ) : (
-                                    <div className="fb-preview-binary">{t('fileBrowser.binary')}</div>
+                                    <div className="fb-preview-binary">
+                                        {t(previewFile.is_text ? 'fileBrowser.emptyFile' : 'fileBrowser.binary')}
+                                    </div>
                                 )}
                             </div>
                         )}
