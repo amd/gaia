@@ -3530,7 +3530,7 @@ const messages: Messages = {
     'schedules.time.inMinutes': 'بعد {n} د',
     'schedules.time.inHours': 'بعد {n} س',
     'schedules.time.inDays': 'بعد {n} ي',
-    'schedules.time.clockIn': '{clock} ({relative})',
+    'schedules.time.clockIn': '\u2067{clock} ({relative})\u2069',
     'schedules.hours': 'من {start} إلى {end}',
     'schedules.days.weekdays': 'من الاثنين إلى الجمعة',
     'schedules.days.weekends': 'السبت والأحد',
