@@ -993,6 +993,9 @@ for (const locale of ['ar', 'en']) {
         await expect(page.locator('.render-guide__title', { hasText: 'خبز الموز' })).toBeVisible();
         await expect(page.locator('.render-calc')).toBeVisible();
         expect(await audit(page)).toEqual([]);
+        const boxDrop = await page.locator('.render-calc__field').evaluateAll((fields) =>
+            fields.map((f) => Math.round(f.querySelector('.render-calc__box')!.getBoundingClientRect().top - f.getBoundingClientRect().top)));
+        expect(new Set(boxDrop).size, `every field puts its box in the same place, got ${boxDrop}`).toBe(1);
         await page.locator('.render-guide').first().screenshot({ path: info.outputPath(`guide-card-${locale}.png`) });
         await page.locator('.render-calc').screenshot({ path: info.outputPath(`loan-card-${locale}.png`) });
     });
