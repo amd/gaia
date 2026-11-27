@@ -1124,7 +1124,7 @@ function FlowError({ step }: { step: AgentStep }) {
     return (
         <div className="flow-error">
             <AlertCircle size={13} />
-            <span>{step.detail || step.label || t('activity.errorOccurred')}</span>
+            <span dir="auto">{step.detail || step.label || t('activity.errorOccurred')}</span>
         </div>
     );
 }
