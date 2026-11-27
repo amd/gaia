@@ -598,22 +598,80 @@ def _shell(command, failed=False):
     return record
 
 
+def _shell_in(command, working_directory):
+    record = _shell(command)
+    record["args"]["working_directory"] = working_directory
+    return record
+
+
 @pytest.mark.parametrize(
-    "command",
+    "written, command",
     [
-        "python3 /app/polyglot/main.py.c 30",
-        "cd /app && gcc cli_tool.cpp -o cli_tool && ./cli_tool weights.json image.png",
-        "cd /app && g++ -O2 cli_tool.cpp -o cli_tool; ./cli_tool --help | head",
-        "PYTHONPATH=. python -u /app/polyglot/main.py.c",
-        "go run ./main.go",
+        ("/app/polyglot/main.py.c", "python3 /app/polyglot/main.py.c 30"),
+        (
+            "/app/cli_tool.cpp",
+            "cd /app && gcc cli_tool.cpp -o cli_tool && ./cli_tool w.json i.png",
+        ),
+        (
+            "/app/cli_tool.cpp",
+            "cd /app && g++ -O2 cli_tool.cpp -o cli_tool; ./cli_tool --help | head",
+        ),
+        ("/app/polyglot/main.py.c", "PYTHONPATH=. python -u /app/polyglot/main.py.c"),
+        ("/app/main.go", "cd /app && go run ./main.go"),
+        # Wrappers around the interpreter.
+        ("f.py", "timeout 10 python f.py"),
+        ("f.py", "timeout -s KILL 10s python3 f.py"),
+        ("f.py", "uv run python f.py"),
+        ("f.py", "uv run --with requests f.py"),
+        ("f.ts", "npx tsx f.ts"),
+        ("f.ts", "npx -y ts-node f.ts"),
+        ("f.py", "env A=1 nice -n 5 python f.py"),
+        ("f.py", "sh -c 'python f.py'"),
+        ("/work/f.py", 'bash -c "python /work/f.py > out.txt 2>&1"'),
+        # Interpreter flags are not the program.
+        ("f.py", "python -W ignore f.py"),
+        ("f.py", "python -X dev -O f.py arg"),
+        ("f.js", "node --require ./setup.js f.js"),
+        ("pkg/tool.py", "python -m pkg.tool --flag"),
+        ("C:\\work\\f.py", "python C:\\work\\f.py"),
+        # Three-letter stems.
+        ("app.py", "python app.py"),
+        ("/srv/cli.py", "cd /srv && python3 cli.py --help"),
+        # Build-and-run tools run the package in the directory.
+        ("/app/main.go", "cd /app && go run ."),
+        ("/app/src/main.rs", "cd /app && cargo run --release"),
+        ("main.go", "go run ."),
+        # A compiled binary built from the written source after its last write.
+        ("f.c", "gcc f.c && ./a.out"),
+        ("/app/f.c", "cd /app && cc -O2 f.c -o f && ./f"),
+        ("/app/f.rs", "cd /app && rustc f.rs && ./f"),
+        ("/app/Main.java", "cd /app && javac Main.java && java Main"),
+        ("/app/run.sh", "bash /app/run.sh"),
+        ("/app/run.sh", "/app/run.sh"),
+        # Relative paths resolve against ``cd`` and the call's working directory.
+        ("src/main.py", "python src/main.py"),
+        ("/repo/src/main.py", "cd /repo/src && python main.py"),
+        ("/repo/src/main.py", "cd /repo && cd src && python ./main.py"),
     ],
 )
-def test_tested_is_backed_by_running_the_program_this_turn_wrote(command):
+def test_tested_is_backed_by_running_the_program_this_turn_wrote(written, command):
     """With no test suite, the correction could not be met: a rerun never counted."""
+    records = [_wrote(written), _shell(command)]
+
+    assert action_findings("The fix is complete and tested.", records) == []
+
+
+def test_running_in_the_calls_working_directory_counts():
+    records = [_wrote("/repo/app.py"), _shell_in("python app.py", "/repo")]
+
+    assert action_findings("The fix is complete and tested.", records) == []
+
+
+def test_a_binary_built_in_an_earlier_call_counts():
     records = [
-        _wrote("/app/polyglot/main.py.c"),
-        _wrote("/app/cli_tool.cpp"),
-        _shell(command),
+        _wrote("/app/main.c"),
+        _shell("cd /app && gcc main.c -o main"),
+        _shell("/app/main 5"),
     ]
 
     assert action_findings("The fix is complete and tested.", records) == []
@@ -647,16 +705,43 @@ def test_tested_is_backed_by_a_python_file_tool_running_what_it_wrote():
         [_wrote("/app/cli_tool.cpp"), _shell("head -50 /app/cli_tool.cpp")],
         [_wrote("/app/cli_tool.cpp"), _shell("grep -n main cli_tool.cpp")],
         [_wrote("/app/cli_tool.cpp"), _shell("gcc cli_tool.cpp -o cli_tool")],
+        [_wrote("f.c"), _shell("gcc -c f.c && ./a.out")],
         [
             _wrote("/app/main.py"),
             _shell("python3 -c 'import ast; ast.parse(open(\"main.py\").read())'"),
         ],
+        [_wrote("main.py"), _shell("python -m py_compile main.py")],
+        # Syntax checks never run the program.
+        [_wrote("f.js"), _shell("node --check f.js")],
+        [_wrote("f.js"), _shell("node -c f.js")],
+        [_wrote("f.php"), _shell("php -l f.php")],
+        [_wrote("s.sh"), _shell("bash -n s.sh")],
+        [_wrote("s.rb"), _shell("ruby -c s.rb")],
+        # A stale binary: the source was rewritten and not rebuilt.
+        [_wrote("/app/main.c"), _shell("./main")],
+        [
+            _wrote("/app/main.c"),
+            _shell("cd /app && gcc main.c -o main"),
+            _wrote("/app/main.c"),
+            _shell("cd /app && ./main"),
+        ],
+        # A binary built from some other source.
+        [_wrote("/app/main.c"), _shell("cd /app && gcc other.c -o main && ./main")],
+        # Same file name, different path.
+        [_wrote("src/main.py"), _shell("python other/main.py")],
+        [_wrote("/repo/src/main.py"), _shell("python /repo/other/main.py")],
+        [_wrote("/repo/src/main.py"), _shell("cd /repo/other && python main.py")],
+        [_wrote("/repo/app.py"), _shell_in("python app.py", "/elsewhere")],
+        # A directory build that holds none of what was written.
+        [_wrote("/app/main.go"), _shell("cd /other && go run .")],
+        [_wrote("/app/main.py"), _shell("cd /app && go run .")],
         # Rewritten after the run, and not run again.
         [
             _wrote("/app/cli_tool.cpp"),
             _shell("./cli_tool weights.json"),
             _wrote("/app/cli_tool.cpp"),
         ],
+        [_wrote("/app/f.py"), _shell("python /app/f.py"), _wrote("/app/f.py")],
     ],
 )
 def test_tested_is_not_backed_by_a_run_of_something_else(records):

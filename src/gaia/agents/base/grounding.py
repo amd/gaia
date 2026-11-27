@@ -30,9 +30,21 @@ from __future__ import annotations
 
 import math
 import os
+import posixpath
 import re
+import shlex
 from dataclasses import dataclass
-from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Set
+from typing import (
+    Any,
+    Callable,
+    Dict,
+    Iterable,
+    List,
+    Optional,
+    Sequence,
+    Set,
+    Tuple,
+)
 
 from gaia.agents.base.checks import check_kind
 from gaia.agents.base.claims import (
@@ -205,72 +217,283 @@ def _tested(record: Dict[str, Any]) -> bool:
 
 
 _INTERPRETERS = frozenset(
-    "python python2 python3 py pypy pypy3 node nodejs deno bun ts-node tsx ruby "
-    "perl php lua bash sh zsh pwsh powershell rscript julia java go dotnet".split()
+    "python py pypy node nodejs deno bun ts-node tsx ruby perl php lua bash sh "
+    "zsh dash pwsh powershell rscript julia java".split()
 )
-_RUN_PREFIXES = frozenset({"sudo", "time", "env", "nohup", "exec"})
-_RUN_SUBCOMMANDS = frozenset({"run"})
+_SHELLS = frozenset({"bash", "sh", "zsh", "dash"})
+#: Flags that only check syntax: the program never runs.
+_SYNTAX_ONLY = {
+    **{name: {"-c", "--check"} for name in ("node", "nodejs")},
+    **{name: {"-n"} for name in _SHELLS},
+    "php": {"-l", "--syntax-check"},
+    "ruby": {"-c"},
+    "perl": {"-c"},
+}
+#: Flags whose value is inline code rather than a file.
+_INLINE_CODE = {
+    "default": {"-c", "-e", "-E", "-p", "--eval", "--print", "-command"},
+    "php": {"-r"},
+}
+#: Interpreter flags that take the next word as their value.
+_FLAG_VALUES = {
+    **{name: {"-W", "-X"} for name in ("python", "py", "pypy")},
+    **{
+        name: {"-r", "--require", "--import", "--loader"}
+        for name in ("node", "nodejs", "tsx", "ts-node")
+    },
+    **{name: {"-o", "-O"} for name in _SHELLS},
+    "php": {"-c", "-d"},
+    "ruby": {"-I", "-r"},
+    "java": {"-cp", "-classpath", "--class-path"},
+}
+#: Wrapper flags that take the next word as their value.
+_WRAPPER_FLAG_VALUES = frozenset(
+    "-s -k -n -u -g -p -C --signal --kill-after --with --python --project "
+    "--directory --env-file --extra --package".split()
+)
+#: Wrappers that run the rest of the command: ``timeout 10 python f.py``.
+_WRAPPERS = frozenset(
+    "sudo time env nohup exec command nice ionice stdbuf timeout npx bunx".split()
+)
+#: Tools whose ``run`` subcommand wraps another command: ``uv run python f.py``.
+_RUN_WRAPPERS = frozenset({"uv", "poetry", "pipenv", "pdm", "hatch"})
+#: Tools whose ``run`` builds and runs the sources of a directory.
+_BUILD_AND_RUN = {"go": (".go",), "cargo": (".rs",), "dotnet": (".cs", ".fs")}
+_COMPILERS = frozenset(
+    "gcc g++ cc c++ clang clang++ tcc rustc javac nvcc gfortran".split()
+)
+_SOURCE_EXTS = (
+    ".c", ".cc", ".cpp", ".cxx", ".m", ".mm", ".rs", ".java", ".cu", ".f",
+    ".f90", ".s",
+)  # fmt: skip
+_SEPARATORS = frozenset({"&&", "||", ";", ";;", "|", "|&", "&", "(", ")"})
+_ASSIGNMENT = re.compile(r"^[A-Za-z_]\w*=")
+_ABSOLUTE = re.compile(r"^(?:/|~|[a-z]:/)")
 
 
-def _file_stem(path: str) -> str:
-    return _slashed(path).rsplit("/", 1)[-1].split(".", 1)[0]
+def _command_words(command: str) -> List[str]:
+    # Windows separators become ``/``; an escaped quote stays a shell escape.
+    text = re.sub(r"\\(?![\\'\"])", "/", command).replace("\n", " ; ")
+    try:
+        lexer = shlex.shlex(text, posix=True, punctuation_chars=True)
+        lexer.whitespace_split = True
+        return list(lexer)
+    except ValueError:
+        return re.findall(r"&&|\|\||[;|&()<>]+|[^\s;|&()<>]+", text)
 
 
-def _programs_run(command: str) -> Iterable[str]:
-    """The program each segment of a shell command runs, as a file stem.
+def _segments(words: Sequence[str]) -> Iterable[List[str]]:
+    segment: List[str] = []
+    skip_target = False
+    for word in words:
+        if skip_target:
+            skip_target = False
+        elif word in _SEPARATORS:
+            if segment:
+                yield segment
+            segment = []
+        elif word and set(word) <= set("<>&|"):
+            # A redirect: drop its fd (``2>``) and its target.
+            if segment and segment[-1].isdigit():
+                segment.pop()
+            skip_target = True
+        else:
+            segment.append(word)
+    if segment:
+        yield segment
 
-    ``./cli_tool`` and ``python3 main.py.c`` run a program; ``cat cli_tool.cpp``
-    and ``gcc cli_tool.cpp`` only read or build one.
+
+def _program_name(word: str) -> str:
+    name = word.rsplit("/", 1)[-1].lower()
+    name = name[:-4] if name.endswith(".exe") else name
+    return re.sub(r"[\d.]+$", "", name) or name
+
+
+def _resolve(path: str, cwd: Optional[str]) -> str:
+    """*path* made absolute, or left relative to the agent's own directory."""
+    path = path.replace("\\", "/").lower()
+    if cwd and not _ABSOLUTE.match(path):
+        path = posixpath.join(cwd, path)
+    return posixpath.normpath(path)
+
+
+def _same_path(a: str, b: str) -> bool:
+    if a == b:
+        return True
+    a_abs, b_abs = bool(_ABSOLUTE.match(a)), bool(_ABSOLUTE.match(b))
+    if a_abs == b_abs:
+        return False
+    # The relative side is under a directory the record doesn't name.
+    rel, full = (b, a) if a_abs else (a, b)
+    return full.endswith("/" + rel)
+
+
+def _under(path: str, directory: str) -> bool:
+    if directory == ".":
+        return True
+    if bool(_ABSOLUTE.match(path)) == bool(_ABSOLUTE.match(directory)):
+        return path.startswith(directory.rstrip("/") + "/")
+    return f"/{directory}/" in f"/{path}"
+
+
+def _skip_flags(words: List[str]) -> List[str]:
+    while words and (words[0].startswith("-") or _ASSIGNMENT.match(words[0])):
+        words = words[2:] if words[0] in _WRAPPER_FLAG_VALUES else words[1:]
+    return words
+
+
+def _interpreted(name: str, args: List[str]) -> Tuple[str, List[str]]:
+    """``("files", paths)`` the interpreter runs, ``("shell", [code])`` for
+    ``sh -c``, or ``("none", [])`` for inline code and syntax checks."""
+    inline = _INLINE_CODE.get(name, _INLINE_CODE["default"])
+    while args:
+        word, args = args[0], args[1:]
+        if word in _SYNTAX_ONLY.get(name, ()):
+            return "none", []
+        if name in _SHELLS and word == "-c":
+            return ("shell", args[:1]) if args else ("none", [])
+        if word in inline:
+            return "none", []
+        if word == "-m" and name in ("python", "py", "pypy"):
+            if not args or args[0] in ("py_compile", "compileall"):
+                return "none", []
+            module = args[0].replace(".", "/")
+            return "files", [module + ".py", module + "/__main__.py"]
+        if not word.startswith("-"):
+            if name == "java" and not word.endswith(".java"):
+                return "files", [word.replace(".", "/") + ".class"]
+            return "files", [word]
+        if word in _FLAG_VALUES.get(name, ()) and args:
+            args = args[1:]
+    return "none", []
+
+
+def _run_events(command: str, cwd: Optional[str]) -> Iterable[Tuple[Any, ...]]:
+    """What a shell command runs or builds, segment by segment, after ``cd``.
+
+    Yields ``("run", path)``, ``("run_dir", directory, extensions)`` and
+    ``("build", sources, output)``.
     """
-    for segment in re.split(r"&&|\|\||[;|\n]", command):
-        words = segment.split()
-        while words and ("=" in words[0] or words[0] in _RUN_PREFIXES):
-            words.pop(0)
+    for words in _segments(_command_words(command)):
+        while words and _ASSIGNMENT.match(words[0]):
+            words = words[1:]
+        name = _program_name(words[0]) if words else ""
+        if name in ("cd", "pushd"):
+            target = words[1] if len(words) > 1 else "-"
+            cwd = None if target == "-" else _resolve(target, cwd)
+            continue
+        while words and (
+            name in _WRAPPERS or (name in _RUN_WRAPPERS and words[1:2] == ["run"])
+        ):
+            words = _skip_flags(words[2:] if name in _RUN_WRAPPERS else words[1:])
+            if name == "timeout" and words:
+                words = words[1:]  # the duration
+            name = _program_name(words[0]) if words else ""
         if not words:
             continue
-        program = _file_stem(words[0].strip("'\""))
-        if program in _INTERPRETERS:
-            rest = [w for w in words[1:] if w not in _RUN_SUBCOMMANDS]
-            if "-c" in rest:
+        args = words[1:]
+        if name in _BUILD_AND_RUN:
+            if args[:1] == ["run"]:
+                exts = _BUILD_AND_RUN[name]
+                operands = [a for a in args[1:] if not a.startswith("-")]
+                files = [a for a in operands if a.endswith(exts)]
+                for path in files:
+                    yield ("run", _resolve(path, cwd))
+                if not files:
+                    target = operands[0] if operands and name == "go" else "."
+                    yield ("run_dir", _resolve(target, cwd), exts)
+            continue
+        if name in _COMPILERS:
+            if "-c" in args or "-fsyntax-only" in args or "-S" in args:
                 continue
-            if "-m" in rest:
-                rest = rest[rest.index("-m") + 1 :]
-            operands = [w for w in rest if not w.startswith("-")]
-            if not operands:
-                continue
-            program = _file_stem(operands[0].strip("'\""))
-        yield program
+            sources = [
+                _resolve(a, cwd)
+                for a in args
+                if not a.startswith("-") and a.lower().endswith(_SOURCE_EXTS)
+            ]
+            output = None
+            for i, arg in enumerate(args):
+                if arg == "-o" and i + 1 < len(args):
+                    output = args[i + 1]
+                elif arg.startswith("-o") and len(arg) > 2:
+                    output = arg[2:]
+            if name == "javac":
+                outputs = [s.rsplit(".", 1)[0] + ".class" for s in sources]
+            elif output is None and name == "rustc" and sources:
+                outputs = [sources[0].rsplit(".", 1)[0]]
+            else:
+                outputs = [_resolve(output or "a.out", cwd)]
+            for out in outputs if sources else []:
+                yield ("build", sources, out)
+                yield ("build", sources, out + ".exe")
+            continue
+        if name in ("deno", "bun") and args[:1] == ["run"]:
+            args = args[1:]
+        if name in _INTERPRETERS:
+            kind, values = _interpreted(name, args)
+            if kind == "shell":
+                yield from _run_events(values[0], cwd)
+            for path in values if kind == "files" else []:
+                yield ("run", _resolve(path, cwd))
+            continue
+        yield ("run", _resolve(words[0], cwd))
 
 
 def _ran_what_it_wrote(records: Sequence[Dict[str, Any]]) -> bool:
     """A file this turn wrote was then run, after its last write, and the run
     did not fail.
 
-    Where there is no test suite, running the program is the test.
+    Where there is no test suite, running the program is the test. A binary
+    counts only when built from a written source after that source's last write.
     """
-    written: Set[str] = set()
+    written: List[str] = []
+    built: Dict[str, Set[str]] = {}
     ran: Set[str] = set()
+
+    def credit(path: str) -> None:
+        ran.update(w for w in written if _same_path(path, w))
+        for out, sources in built.items():
+            if _same_path(path, out):
+                ran.update(sources)
+
     for record in records:
         args = record.get("args")
         args = args if isinstance(args, dict) else {}
         if record.get("mutated"):
             for key, value in args.items():
-                if isinstance(value, str) and key.endswith("path"):
-                    stem = _file_stem(value)
-                    if len(stem) >= 4:
-                        written.add(stem)
-                        ran.discard(stem)
-        elif written and _executed(record) and not record.get("failed"):
-            command = args.get("command")
-            if isinstance(command, str):
-                programs = set(_programs_run(_slashed(command)))
-            else:
-                programs = {
-                    _file_stem(value)
-                    for key, value in args.items()
-                    if isinstance(value, str) and key.endswith("path")
+                if not (isinstance(value, str) and value and key.endswith("path")):
+                    continue
+                path = _resolve(value, None)
+                if path not in written:
+                    written.append(path)
+                ran.discard(path)
+                built = {
+                    out: sources
+                    for out, sources in built.items()
+                    if not any(_same_path(s, path) for s in sources)
                 }
-            ran |= written & programs
+            continue
+        if not written or not _executed(record) or record.get("failed"):
+            continue
+        command = args.get("command")
+        if not isinstance(command, str):
+            for key, value in args.items():
+                if isinstance(value, str) and value and key.endswith("path"):
+                    credit(_resolve(value, None))
+            continue
+        cwd = args.get("working_directory") or args.get("cwd")
+        cwd = _resolve(cwd, None) if isinstance(cwd, str) and cwd else None
+        for event in _run_events(command, cwd):
+            if event[0] == "run":
+                credit(event[1])
+            elif event[0] == "run_dir":
+                ran.update(
+                    w for w in written if w.endswith(event[2]) and _under(w, event[1])
+                )
+            else:
+                fresh = {w for w in written if any(_same_path(s, w) for s in event[1])}
+                if fresh:
+                    built[event[2]] = fresh
     return bool(ran)
 
 
