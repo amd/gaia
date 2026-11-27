@@ -1696,8 +1696,8 @@ describe('SetupScreen: cloud', () => {
         const gateway = screen.getByRole('radio', { name: /AMD LLM Gateway/ });
         expect(fireworks).toBeDisabled();
         expect(gateway).toBeDisabled();
-        expect(fireworks).toHaveTextContent('Blocked by Local only. Turn it off in Settings to use cloud models.');
-        expect(screen.getByRole('alert')).toHaveTextContent('Blocked by Local only. Turn it off in Settings to use cloud models.');
+        expect(fireworks).toHaveTextContent('Blocked by Local only. Turn it off in Settings to use cloud models or web search.');
+        expect(screen.getByRole('alert')).toHaveTextContent('Blocked by Local only. Turn it off in Settings to use cloud models or web search.');
         expect(screen.getByRole('button', { name: /Test and connect/ })).toBeDisabled();
         expect(mockedApi.getCloudPrices).not.toHaveBeenCalled();
     });
