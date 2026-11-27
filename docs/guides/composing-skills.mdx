@@ -158,7 +158,6 @@ class MyReviewAgent(Agent, FileIOToolsMixin):
     def _register_tools(self) -> None:
         _TOOL_REGISTRY.clear()
         self.register_file_io_tools()
-        self._snapshot_tools()
 ```
 
 `Agent.__init__` resolves a set and loads it — the always-on skills plus that

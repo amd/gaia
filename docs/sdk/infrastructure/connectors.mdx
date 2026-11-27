@@ -399,8 +399,6 @@ class GmailAgent(Agent):
         def list_recent_messages(limit: int = 5) -> str:
             """List the ids of the newest Gmail messages."""
             return json.dumps(recent_message_ids(max(1, min(limit, 25))))
-
-        self._snapshot_tools()
 ```
 
 `format_connector_error` turns the two states a user can fix — `AGENT_NOT_GRANTED`

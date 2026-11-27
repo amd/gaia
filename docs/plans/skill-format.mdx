@@ -595,7 +595,8 @@ def search_web(query: str, max_results: int = 5) -> dict:
 | `tools` declared but no `tools.py` on disk | Either add the module or drop `tools` to make it instruction-only. |
 | `tools.py` fails to import | The error names the exception and points at `requirements.dependencies`. |
 
-Every failure restores `_TOOL_REGISTRY` (and `sys.modules`) byte-for-byte — there
+Every failure puts back each `_TOOL_REGISTRY` entry the import wrote (and
+`sys.modules`), leaving entries other agents wrote meanwhile alone — there
 is **no partial load**, as [Agent Skills](/spec/agent-skills#scoping-into-an-agent)
 requires. Shipping a `tools.py` while declaring no `tools` is not an error: the
 module is simply not imported, and the skill loads instruction-only.

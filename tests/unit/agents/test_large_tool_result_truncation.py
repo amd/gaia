@@ -682,7 +682,7 @@ class TestStringResults:
             agent = parallel._DummyAgent(silent_mode=True, skip_lemonade=True)
             agent.streaming = False
             parallel._register_tool(
-                "large_text", lambda: "HEAD_FACT " + "x" * 100000 + " TAIL_FACT"
+                agent, "large_text", lambda: "HEAD_FACT " + "x" * 100000 + " TAIL_FACT"
             )
             chat = parallel._stub_chat(
                 agent,

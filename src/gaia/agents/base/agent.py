@@ -3604,7 +3604,18 @@ def _resolve_output_handles(agent, value):
     return value
 
 
-class Agent(abc.ABC):
+class _AgentMeta(abc.ABCMeta):
+    """Scopes a whole construction, so tools a subclass registers after
+    ``Agent.__init__`` took its snapshot still reach the agent's own set."""
+
+    def __call__(cls, *args, **kwargs):
+        with tool_build() as late:
+            agent = super().__call__(*args, **kwargs)
+        agent._adopt_late_tools(late)
+        return agent
+
+
+class Agent(metaclass=_AgentMeta):
     """
     Base Agent class that provides core functionality for domain-specific agents.
 
@@ -4308,6 +4319,9 @@ Do NOT wrap conversational replies in JSON.
         # _response_format_template must be set above before this call).
         with tool_build():
             self._register_tools()
+        # The registry is process-wide: a later agent's build replaces these closures.
+        if self._instance_tools is None:
+            self._snapshot_tools()
         self._install_path_access_prompt()
         from gaia.agents.base.artifacts import ArtifactStore
 
@@ -5426,9 +5440,8 @@ Do NOT wrap conversational replies in JSON.
     def _tools_registry(self) -> MutableMapping[str, Any]:
         """Return this agent's effective tool registry.
 
-        Uses the per-instance snapshot if ``_snapshot_tools()`` was called,
-        otherwise falls back to the global ``_TOOL_REGISTRY`` for backward
-        compatibility with agents that predate the snapshot mechanism.
+        The per-instance snapshot ``Agent.__init__`` takes. The global
+        ``_TOOL_REGISTRY`` fallback only serves objects built without it.
         """
         if self._instance_tools is not None:
             return self._instance_tools
@@ -5456,6 +5469,24 @@ Do NOT wrap conversational replies in JSON.
         }
         if hasattr(self, "_tool_overrides"):
             self._instance_tools.update(self._tool_overrides)
+
+    def _adopt_late_tools(self, names: set[str]) -> None:
+        """Add tools registered after the snapshot, e.g. in a subclass's
+        ``__init__`` past ``super().__init__()``. A name already withheld
+        from the model stays withheld."""
+        if self._instance_tools is None or not names:
+            return
+        withheld = self._withheld_tool_entries
+        for name in names:
+            entry = _TOOL_REGISTRY.get(name)
+            if entry is None:  # unregistered again before construction ended
+                continue
+            if name in withheld:
+                withheld[name] = entry
+            else:
+                self._instance_tools[name] = entry
+        if hasattr(self, "_system_prompt_cache"):
+            del self._system_prompt_cache
 
     def apply_context_eviction(self, model_id: Optional[str], cloud: bool) -> None:
         """Turn context eviction on or off for *model_id*, as a new agent on it would."""
@@ -5493,17 +5524,22 @@ Do NOT wrap conversational replies in JSON.
 
     def _offer_features(self, features: ModelFeatures) -> None:
         """Withhold the tools *features* turns off; give back the rest."""
-        if self._instance_tools is not None:
-            # getattr: tests build agents without running Agent.__init__.
-            self._instance_tools.update(getattr(self, "_withheld_tool_entries", {}))
-            self._withheld_tool_entries = {
-                name: self._instance_tools.pop(name)
-                for name in sorted(
-                    withheld_tools(features) | set(platform_withheld_tools())
-                )
-                if name in self._instance_tools
-            }
-            self._fit_load_skill_hint()
+        tools = self._instance_tools
+        if tools is None:
+            raise RuntimeError(
+                f"{type(self).__name__} has no tool snapshot to withhold tools "
+                "from; Agent.__init__ takes one after _register_tools()."
+            )
+        # getattr: tests build agents without running Agent.__init__.
+        tools.update(getattr(self, "_withheld_tool_entries", {}))
+        self._withheld_tool_entries = {
+            name: tools.pop(name)
+            for name in sorted(
+                withheld_tools(features) | set(platform_withheld_tools())
+            )
+            if name in tools
+        }
+        self._fit_load_skill_hint()
         self.model_features = features
 
     def _fit_load_skill_hint(self) -> None:

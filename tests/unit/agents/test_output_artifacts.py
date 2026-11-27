@@ -140,14 +140,13 @@ def test_whitespace_json_list_keeps_original_records_and_recovers_bytes(
     assert store_for(agent).read(excerpt[-1]["artifact"], 0, 2)["content"] == "[ "
 
 
-def test_registry_additions_survive_lookup_and_snapshot():
+def test_registry_additions_stay_with_this_agent():
     agent = make_agent()
     agent._register_output_reader()
     added = {"function": lambda: "added"}
     agent._tools_registry["new_tool"] = added
     assert agent._tools_registry["new_tool"] is added
-    agent._snapshot_tools()
-    assert agent._tools_registry["new_tool"] is added
+    assert "new_tool" not in make_agent()._tools_registry
 
 
 def test_empty_agent_keeps_no_tool_surface(monkeypatch):

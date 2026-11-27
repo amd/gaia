@@ -358,7 +358,8 @@ tools and the prompt fragment, returning `True` if the skill was loaded.
 A manifest whose declared tools don't match its `tools.py` **fails loudly** and
 loads nothing: not a missing tool, an undeclared extra tool, a parameter-name
 mismatch, a required/optional flip, or a type contradiction. There is **no
-partial load** — the tool registry is restored byte-for-byte on any failure.
+partial load** — on any failure, every registry entry the import wrote is put
+back as it was. Entries other agents write meanwhile are left alone.
 
 <Note>
 **Tier ceilings are enforced at install, import and capture, and re-checked at

@@ -456,9 +456,11 @@ class MCPClientMixin:
 
             gaia_tool["function"] = create_enhanced_wrapper()
 
-            # Register in global registry
+            # Register in global registry, and in this agent's own tool set
             gaia_name = gaia_tool["name"]
             _TOOL_REGISTRY[gaia_name] = gaia_tool
+            if getattr(self, "_instance_tools", None) is not None:
+                self._instance_tools[gaia_name] = gaia_tool
 
             logger.debug(f"Registered MCP tool: {gaia_name}")
 
@@ -476,6 +478,8 @@ class MCPClientMixin:
             # ``client.name`` (raw) here would leak every tool whose
             # server name needed sanitisation.
             gaia_name = f"mcp_{client.prefix}_{tool.name}"
+            if getattr(self, "_instance_tools", None) is not None:
+                self._instance_tools.pop(gaia_name, None)
             if gaia_name in _TOOL_REGISTRY:
                 del _TOOL_REGISTRY[gaia_name]
                 logger.debug(f"Unregistered MCP tool: {gaia_name}")

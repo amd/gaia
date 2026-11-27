@@ -94,7 +94,7 @@ def test_a_prompt_inside_a_tool_does_not_count_against_its_timeout(layout, monke
     console = _Console(answer=True, delay=3.0)
     agent = _agent(layout, console)
 
-    @tool
+    @tool(registry=agent._tools_registry)
     def reads_document() -> dict:
         """Reads the document."""
         allowed, reason = agent.path_validator.validate_read(str(layout["notes"]))
@@ -113,7 +113,7 @@ def test_an_answered_prompt_still_does_not_count_once_the_tool_carries_on(
     monkeypatch.setenv("GAIA_AGENT_TOOL_TIMEOUT", "2")
     agent = _agent(layout, _Console(answer=True, delay=3.0))
 
-    @tool
+    @tool(registry=agent._tools_registry)
     def reads_then_works() -> dict:
         """Asks for access, then keeps working."""
         allowed, _reason = agent.path_validator.validate_read(str(layout["notes"]))
@@ -128,7 +128,7 @@ def test_a_tool_that_hangs_after_the_prompt_is_still_abandoned(layout, monkeypat
     agent = _agent(layout, _Console(answer=True, delay=0.2))
     release = threading.Event()
 
-    @tool
+    @tool(registry=agent._tools_registry)
     def asks_then_hangs() -> dict:
         """Asks for access, then blocks."""
         agent.path_validator.validate_read(str(layout["notes"]))
