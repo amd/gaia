@@ -2884,6 +2884,10 @@ def _refuse_internet_off(
     )
 
 
+class ModelServerDownError(RuntimeError):
+    """A relayed run failed because the model server did not answer."""
+
+
 def relay_one_prompt(
     handler,
     prompt: str,
@@ -2930,7 +2934,10 @@ def relay_one_prompt(
         return None
     content = str(answer.get("content") or "")
     if answer.get("failed"):
-        raise RuntimeError(content or "The GAIA agent's run failed.")
+        message = content or "The GAIA agent's run failed."
+        if answer.get("failure") == MODEL_SERVER_DOWN:
+            raise ModelServerDownError(message)
+        raise RuntimeError(message)
     return content
 
 
@@ -3915,15 +3922,18 @@ def _turn_failure_kind(answer_event: Optional[dict], result: Any) -> Optional[st
     return None
 
 
-def _failed_turn_program(agent_type: str) -> Optional[str]:
+def _failed_turn_program(
+    agent_type: str, failure: Optional[str] = None
+) -> Optional[str]:
     """``gaiacpp`` when a failed turn ran on the native agent, else None.
 
     The UI then says which agent the chat runs on and how to switch; it never
-    switches by itself.
+    switches by itself. A model-server outage is not the agent's fault, so it
+    names no program.
     """
     from gaia.daemon.sidecars import fetch
 
-    if agent_type != FLAGSHIP_AGENT_ID:
+    if agent_type != FLAGSHIP_AGENT_ID or failure == MODEL_SERVER_DOWN:
         return None
     if fetch.saved_flagship() != fetch.NATIVE_FLAGSHIP:
         return None
@@ -6054,6 +6064,11 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                 ),
                 request.session_id,
             )
+            failure_kind = (
+                _turn_failure_kind(answer_event, result_holder.get("result"))
+                if turn_failed
+                else None
+            )
             done_event = _done_event(
                 msg_id,
                 full_response,
@@ -6061,15 +6076,13 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                 stats=inference_stats,
                 turn_summary=turn_summary,
                 failed=turn_failed,
-                failure=(
-                    _turn_failure_kind(answer_event, result_holder.get("result"))
-                    if turn_failed
-                    else None
-                ),
+                failure=failure_kind,
                 documents_added=documents_added,
                 library_notices=library_notices,
                 agent_program=(
-                    _failed_turn_program(agent_type) if turn_failed else None
+                    _failed_turn_program(agent_type, failure_kind)
+                    if turn_failed
+                    else None
                 ),
             )
             done_data = json.dumps(done_event)

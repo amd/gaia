@@ -629,6 +629,55 @@ class TestFailedTurnProgram:
         monkeypatch.setattr(fetch, "saved_flagship", lambda: saved)
         assert _failed_turn_program(agent_type) == expected
 
+    @pytest.mark.parametrize("failure", [None, "the model call failed"])
+    def test_a_model_server_outage_is_not_blamed_on_gaiacpp(self, monkeypatch, failure):
+        from gaia.daemon.sidecars import fetch
+        from gaia.llm.providers.lemonade import MODEL_SERVER_DOWN
+        from gaia.ui._chat_helpers import _failed_turn_program
+
+        monkeypatch.setattr(fetch, "saved_flagship", lambda: "gaiacpp")
+        assert _failed_turn_program("gaia", MODEL_SERVER_DOWN) is None
+        assert _failed_turn_program("gaia", failure) == "gaiacpp"
+
+
+class TestRelayOnePromptFailures:
+    """A relayed run's failure keeps its cause, so setup can tell a server outage apart."""
+
+    def _relay(self, monkeypatch, answer):
+        from gaia.ui import _chat_helpers as helpers
+        from gaia.ui.sse_handler import SSEOutputHandler
+
+        handler = SSEOutputHandler(background_mode=True)
+        monkeypatch.setattr(
+            helpers,
+            "_dispatch_sidecar_query",
+            lambda h, *_a, **_k: h.event_queue.put(answer),
+        )
+        return helpers.relay_one_prompt(
+            handler, "hi", agent_type="gaia", model_id=None, memory="off", max_steps=1
+        )
+
+    def test_a_server_outage_raises_its_own_error(self, monkeypatch):
+        from gaia.llm.providers.lemonade import MODEL_SERVER_DOWN
+        from gaia.ui._chat_helpers import ModelServerDownError
+
+        answer = {
+            "type": "answer",
+            "content": "GAIA's model server isn't running.",
+            "failed": True,
+            "failure": MODEL_SERVER_DOWN,
+        }
+        with pytest.raises(ModelServerDownError, match="isn't running"):
+            self._relay(monkeypatch, answer)
+
+    def test_another_failure_is_a_plain_runtime_error(self, monkeypatch):
+        from gaia.ui._chat_helpers import ModelServerDownError
+
+        answer = {"type": "answer", "content": "tool crashed", "failed": True}
+        with pytest.raises(RuntimeError, match="tool crashed") as caught:
+            self._relay(monkeypatch, answer)
+        assert not isinstance(caught.value, ModelServerDownError)
+
 
 # ── _canonical_agent_type ─────────────────────────────────────────────────
 

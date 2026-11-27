@@ -743,3 +743,21 @@ def test_a_copy_that_cannot_say_its_version_is_not_flagged(tmp_path, monkeypatch
     monkeypatch.setattr(gaiacpp_fetch, "release_tag", lambda core=None: "v0.26.1")
     assert gaiacpp_fetch.update_available(old) is False
     assert agent_programs._installed_version(old) is None
+
+
+def test_a_copy_whose_version_fails_is_run_once_per_file(tmp_path, monkeypatch):
+    """A hung --version costs up to 20 s; a listing must not pay it twice."""
+    old = _older_copy_on_path(tmp_path, monkeypatch)
+    asked = []
+
+    def _silent(path):
+        asked.append(path)
+        raise PlatformError(f"{path} --version did not print a version")
+
+    monkeypatch.setattr(fetch, "native_flagship_stamp", _silent)
+    monkeypatch.setattr(gaiacpp_fetch, "release_tag", lambda core=None: "v0.26.1")
+    assert gaiacpp_fetch.update_available(old) is False
+    assert agent_programs._installed_version(old) is None
+    with pytest.raises(PlatformError, match="did not print a version"):
+        gaiacpp_fetch.installed_version(old)
+    assert asked == [old]
