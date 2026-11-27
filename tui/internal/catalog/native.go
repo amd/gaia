@@ -258,11 +258,11 @@ func (c *Catalog) SelectFlagshipAgent(choice string) (notice string, err error) 
 		choice, NativeAgentBinary, PythonAgentChoice, PythonAgentBinary, AgentChoiceDocsURL)
 }
 
-// DaemonPythonNotice tells a user who named the Python agent (gaiapy or
-// gaia-agent) that, on their install, it is reached through the daemon rather
-// than spawned.
-const DaemonPythonNotice = "[!] The Python agent was asked for. On this install it " +
-	"runs through the GAIA background service, so that is what answers. To run one particular " +
+// DaemonPythonNotice tells a user who named Full-featured, the Python agent
+// (gaiapy or gaia-agent), that on their install it is reached through the
+// daemon rather than spawned.
+var DaemonPythonNotice = "[!] You asked for " + HarnessLabel(PythonAgentChoice) + " (the Python agent). " +
+	"On this install it runs through the GAIA background service, so that is what answers. To run one particular " +
 	PythonAgentBinary + " program instead, give its full path."
 
 // AgentChoiceDocsURL explains which agent program the terminal UI runs.

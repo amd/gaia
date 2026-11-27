@@ -116,10 +116,17 @@ func TestPaletteAgentPickerListsBothProgramsAndMarksBeta(t *testing.T) {
 	if len(names) != 3 || !containsAll(names, "/agent", "/agent gaiapy", "/agent gaiacpp") {
 		t.Fatalf("\"/agent \" should offer the listing and both programs, got %v", names)
 	}
+	wantDesc := map[string]string{
+		"/agent gaiapy":  "Full-featured",
+		"/agent gaiacpp": "Fast and light (Beta)",
+	}
 	for _, row := range rows {
 		beta := strings.Contains(row.Desc, "Beta")
 		if (row.Name == "/agent gaiacpp") != beta {
 			t.Errorf("%s: Beta marking is wrong in %q", row.Name, row.Desc)
+		}
+		if want, ok := wantDesc[row.Name]; ok && !strings.Contains(row.Desc, want) {
+			t.Errorf("%s: the description does not name %q: %q", row.Name, want, row.Desc)
 		}
 	}
 
