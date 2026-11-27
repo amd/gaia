@@ -32,9 +32,10 @@ export function SetupSettings() {
     const runSetupAgain = useChatStore((s) => s.runSetupAgain);
     const active = useModelStore((s) => s.active);
     const serverDown = useChatStore((s) => s.systemStatus?.lemonade_running === false);
-    // The failed restore the main window's banner reports: the saved model has no working key.
-    const chatFailure = active?.restore?.status === 'failed' ? active.restore.message : null;
-    const chatUnusable = !serverDown && active?.restore?.status === 'failed';
+    // The failed restore the main window's banner reports, when it is about the model in use.
+    const restoreFailed = active?.restore?.status === 'failed' && !!active.model && active.restore.model === active.model;
+    const chatFailure = restoreFailed ? active?.restore?.message ?? null : null;
+    const chatUnusable = !serverDown && restoreFailed;
     const [plan, setPlan] = useState<SetupPlan | null>(null);
     const [hardware, setHardware] = useState<PreflightReport | null>(null);
     const [gpu, setGpu] = useState<GpuMemoryStatus | null>(null);

@@ -46,12 +46,21 @@ describe('SetupSettings', () => {
 
     it('says the chat model can\'t be used, not Ready, when its saved cloud key no longer works', async () => {
         const message = "Couldn't restore your last model deepseek-v4p1-flash: Fireworks AI has no working key.";
-        useModelStore.setState({ active: { ...CLOUD, restore: { status: 'failed', message } } });
+        useModelStore.setState({ active: { ...CLOUD, restore: { status: 'failed', message, model: CLOUD.model! } } });
         render(<SetupSettings />);
         expect(await screen.findByText("Your chat model can't be used yet")).toBeTruthy();
         expect(screen.getByText(message)).toBeTruthy();
         expect(screen.queryByText('Ready')).toBeNull();
         expect(screen.queryByText(/^Running /)).toBeNull();
+    });
+
+    it('keeps saying Ready when the failed restore is about a different model than the one in use', async () => {
+        const message = "Couldn't restore your last model old-model: it is not downloaded.";
+        useModelStore.setState({ active: { ...LOCAL, restore: { status: 'failed', message, model: 'Deleted-Model-GGUF' } } });
+        render(<SetupSettings />);
+        expect(await screen.findByText('Running Qwen3.6 35B A3B')).toBeTruthy();
+        expect(screen.queryByText("Your chat model can't be used yet")).toBeNull();
+        expect(screen.queryByText(message)).toBeNull();
     });
 
     it('says the model server is not answering instead of Ready while it is down', async () => {
