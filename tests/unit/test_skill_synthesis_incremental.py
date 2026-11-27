@@ -460,7 +460,7 @@ class TestOldStore:
             version = store._conn.execute(
                 "SELECT version FROM schema_version ORDER BY version DESC LIMIT 1"
             ).fetchone()[0]
-            assert version == 8
+            assert version == 9
             assert store.get_synthesis_watermark() is None
             assert store.get_synthesis_marks() == {}
             assert len(store.iter_sessions()) == 3  # history survived
