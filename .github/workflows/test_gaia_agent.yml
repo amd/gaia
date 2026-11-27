@@ -15,6 +15,8 @@ on:
     paths:
       - '.github/workflows/test_gaia_agent.yml'
       - '.github/workflows/build_gaiapy.yml'
+      # test_check_wheel_starter_skills.py reads this build action.
+      - '.github/actions/build-agent-wheel/**'
       - 'setup.py'
       - 'pyproject.toml'
       - 'conftest.py'
@@ -91,6 +93,8 @@ on:
     paths:
       - '.github/workflows/test_gaia_agent.yml'
       - '.github/workflows/build_gaiapy.yml'
+      # test_check_wheel_starter_skills.py reads this build action.
+      - '.github/actions/build-agent-wheel/**'
       - 'setup.py'
       - 'pyproject.toml'
       - 'conftest.py'
