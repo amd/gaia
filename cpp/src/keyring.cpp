@@ -9,8 +9,11 @@
 #ifdef _WIN32
 #include <windows.h>
 #include <wincred.h>
+
+#include "win_utf8.h"
 #else
 #include "gaia/process.h"
+#include "shell_quote.h"
 #endif
 
 namespace gaia {
@@ -27,26 +30,10 @@ KeyringBackend& testBackend() {
 }
 
 #ifdef _WIN32
-std::wstring widen(const std::string& s) {
-    if (s.empty()) return {};
-    const int n = MultiByteToWideChar(CP_UTF8, 0, s.data(), static_cast<int>(s.size()), nullptr, 0);
-    std::wstring w(static_cast<size_t>(n), L'\0');
-    MultiByteToWideChar(CP_UTF8, 0, s.data(), static_cast<int>(s.size()), &w[0], n);
-    return w;
-}
-
-std::string narrow(const wchar_t* w, size_t len) {
-    if (len == 0) return {};
-    const int n = WideCharToMultiByte(CP_UTF8, 0, w, static_cast<int>(len), nullptr, 0, nullptr, nullptr);
-    std::string s(static_cast<size_t>(n), '\0');
-    WideCharToMultiByte(CP_UTF8, 0, w, static_cast<int>(len), &s[0], n, nullptr, nullptr);
-    return s;
-}
-
 // keyring stores the password as UTF-16 in the credential blob.
 std::optional<std::string> readTarget(const std::string& target, const std::string* requireUser) {
     PCREDENTIALW cred = nullptr;
-    if (!CredReadW(widen(target).c_str(), CRED_TYPE_GENERIC, 0, &cred)) {
+    if (!CredReadW(detail::widen(target).c_str(), CRED_TYPE_GENERIC, 0, &cred)) {
         const DWORD err = GetLastError();
         if (err == ERROR_NOT_FOUND) return std::nullopt;
         throw std::runtime_error("Windows Credential Manager refused to read '" + target +
@@ -54,9 +41,9 @@ std::optional<std::string> readTarget(const std::string& target, const std::stri
     }
     std::optional<std::string> out;
     const bool userOk = !requireUser ||
-                        (cred->UserName && narrow(cred->UserName, wcslen(cred->UserName)) == *requireUser);
+                        (cred->UserName && detail::narrow(cred->UserName, wcslen(cred->UserName)) == *requireUser);
     if (userOk && cred->CredentialBlob) {
-        out = narrow(reinterpret_cast<const wchar_t*>(cred->CredentialBlob),
+        out = detail::narrow(reinterpret_cast<const wchar_t*>(cred->CredentialBlob),
                      cred->CredentialBlobSize / sizeof(wchar_t));
     }
     CredFree(cred);
@@ -68,24 +55,18 @@ std::optional<std::string> osRead(const std::string& service, const std::string&
     return readTarget(username + "@" + service, nullptr);
 }
 #else
-std::string shellQuote(const std::string& s) {
-    std::string out = "'";
-    for (char c : s) out += (c == '\'') ? std::string("'\\''") : std::string(1, c);
-    return out + "'";
-}
-
 std::optional<std::string> osRead(const std::string& service, const std::string& username) {
 #ifdef __APPLE__
-    const ProcessResult r = ProcessRunner::run("security find-generic-password -s " + shellQuote(service) +
-                                                   " -a " + shellQuote(username) + " -w",
+    const ProcessResult r = ProcessRunner::run("security find-generic-password -s " + detail::shellQuote(service) +
+                                                   " -a " + detail::shellQuote(username) + " -w",
                                                15000);
     if (r.exitCode == 44) return std::nullopt;  // errSecItemNotFound
     if (r.exitCode != 0) {
         throw std::runtime_error("The macOS Keychain couldn't be read: " + r.stderr_output.substr(0, 200));
     }
 #else
-    const ProcessResult r = ProcessRunner::run("secret-tool lookup service " + shellQuote(service) +
-                                                   " username " + shellQuote(username),
+    const ProcessResult r = ProcessRunner::run("secret-tool lookup service " + detail::shellQuote(service) +
+                                                   " username " + detail::shellQuote(username),
                                                15000);
     if (r.exitCode == 127) {
         throw std::runtime_error(

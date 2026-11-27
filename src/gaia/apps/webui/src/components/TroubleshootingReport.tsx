@@ -25,11 +25,10 @@ export interface ReportClasses {
 }
 
 /**
- * Saves one troubleshooting report: setup's record, GAIA's logs, the saved
- * model-failure records and this PC's details. It is written on this PC and
- * handed to the browser's save; nothing is sent anywhere.
+ * Writes the troubleshooting report on this PC and hands it to the browser's
+ * save. *failedKey* words the error when that fails.
  */
-export function TroubleshootingReport({ classes, note }: { classes: ReportClasses; note?: string }) {
+export function useSaveReport(failedKey: 'setup.logs.reportFailed' | 'logs.saveAllFailed') {
     const t = useT();
     const [saving, setSaving] = useState(false);
     const [saved, setSaved] = useState<api.SetupReport | null>(null);
@@ -51,11 +50,23 @@ export function TroubleshootingReport({ classes, note }: { classes: ReportClasse
             setTimeout(() => URL.revokeObjectURL(url), 60_000);
             setSaved(report);
         } catch (err) {
-            setError(t('setup.logs.reportFailed', { error: errorText(err) }));
+            setError(t(failedKey, { error: errorText(err) }));
         } finally {
             setSaving(false);
         }
-    }, [t]);
+    }, [t, failedKey]);
+
+    return { saving, saved, error, save };
+}
+
+/**
+ * Saves one troubleshooting report: setup's record, GAIA's logs, the saved
+ * model-failure records and this PC's details. It is written on this PC and
+ * handed to the browser's save; nothing is sent anywhere.
+ */
+export function TroubleshootingReport({ classes, note }: { classes: ReportClasses; note?: string }) {
+    const t = useT();
+    const { saving, saved, error, save } = useSaveReport('setup.logs.reportFailed');
 
     return (
         <div className={classes.root}>

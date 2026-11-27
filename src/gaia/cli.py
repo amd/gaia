@@ -46,6 +46,7 @@ from gaia.mcp.ports import (
 )
 from gaia.perf_analysis import run_perf_visualization
 from gaia.ports import (
+    AGENT_UI_PORT,
     is_killable_process,
     is_lemonade_process,
     listeners_on_port,
@@ -971,7 +972,9 @@ def _enable_backend_fault_log(log):
     )
 
 
-def _launch_agent_ui(port=4200, base_url=None, log=None, debug=False, webui_dist=None):
+def _launch_agent_ui(
+    port=AGENT_UI_PORT, base_url=None, log=None, debug=False, webui_dist=None
+):
     """Launch the Agent UI server (FastAPI + uvicorn).
 
     Reused by top-level --ui, gaia chat --ui, and the interactive menu.
@@ -1250,8 +1253,8 @@ def build_parser():
     parser.add_argument(
         "--ui-port",
         type=int,
-        default=4200,
-        help="Port for the Agent UI server (default: 4200, used with --ui)",
+        default=AGENT_UI_PORT,
+        help=f"Port for the Agent UI server (default: {AGENT_UI_PORT}, used with --ui)",
     )
     parser.add_argument(
         "--ui-dist",
@@ -1612,8 +1615,8 @@ def build_parser():
     chat_parser.add_argument(
         "--ui-port",
         type=int,
-        default=4200,
-        help="Port for the Agent UI server (default: 4200)",
+        default=AGENT_UI_PORT,
+        help=f"Port for the Agent UI server (default: {AGENT_UI_PORT})",
     )
     chat_parser.add_argument(
         "--ui-dist",
@@ -2416,8 +2419,8 @@ Examples:
     )
     agent_eval_parser.add_argument(
         "--backend",
-        default="http://localhost:4200",
-        help="Agent UI backend URL (default: http://localhost:4200)",
+        default=f"http://localhost:{AGENT_UI_PORT}",
+        help=f"Agent UI backend URL (default: http://localhost:{AGENT_UI_PORT})",
     )
     agent_eval_parser.add_argument(
         "--agent-type",
@@ -3317,8 +3320,8 @@ afterwards (or `swebench <run_dir>` does, later).
     )
     mcp_serve_parser.add_argument(
         "--backend",
-        default="http://localhost:4200",
-        help="GAIA Agent UI backend URL (default: http://localhost:4200)",
+        default=f"http://localhost:{AGENT_UI_PORT}",
+        help=f"GAIA Agent UI backend URL (default: http://localhost:{AGENT_UI_PORT})",
     )
     mcp_serve_parser.add_argument(
         "--stdio",
@@ -5035,7 +5038,7 @@ def main():
                 ("--ui", args.ui),
                 ("--cli", args.cli),
                 ("--ui-dist", args.ui_dist is not None),
-                ("--ui-port", args.ui_port != 4200),
+                ("--ui-port", args.ui_port != AGENT_UI_PORT),
             )
             if given
         ]
@@ -5077,7 +5080,7 @@ def main():
         # Top-level --ui flag: launch Agent UI
         if getattr(args, "ui", False):
             _launch_agent_ui(
-                port=getattr(args, "ui_port", 4200),
+                port=getattr(args, "ui_port", AGENT_UI_PORT),
                 base_url=getattr(args, "base_url", None),
                 log=log,
                 debug=getattr(args, "debug", False),
@@ -5092,7 +5095,7 @@ def main():
 
         # No flags: launch Agent UI (default experience)
         _launch_agent_ui(
-            port=getattr(args, "ui_port", 4200),
+            port=getattr(args, "ui_port", AGENT_UI_PORT),
             base_url=getattr(args, "base_url", None),
             log=log,
             debug=getattr(args, "debug", False),
@@ -5170,7 +5173,7 @@ def main():
         if max_files:
             os.environ["GAIA_MAX_INDEXED_FILES"] = str(max_files)
         _launch_agent_ui(
-            port=getattr(args, "ui_port", 4200),
+            port=getattr(args, "ui_port", AGENT_UI_PORT),
             base_url=getattr(args, "base_url", None),
             log=log,
             debug=getattr(args, "debug", False),

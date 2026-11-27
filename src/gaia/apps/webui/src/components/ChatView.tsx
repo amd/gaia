@@ -1243,8 +1243,13 @@ export function ChatView({ sessionId }: ChatViewProps) {
                     created_at: new Date().toISOString(),
                     rag_sources: null,
                     failed: !mayStillFinish(err),
+                    stalled: err instanceof api.StreamTimeoutError || undefined,
                     failureText: err.message || undefined,
                 };
+                // A send nobody started in time is the clearest sign GAIA is stuck; say so now.
+                if (err instanceof api.StreamTimeoutError && err.endpoint === 'send') {
+                    useChatStore.getState().setBackendStalled(true);
+                }
                 addMessage(errMsg);
                 setStreaming(false);
                 clearStreamContent();

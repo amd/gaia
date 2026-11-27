@@ -14,6 +14,7 @@ import (
 	"github.com/amd/gaia/tui/internal/gaiainit"
 	"github.com/amd/gaia/tui/internal/lemonade"
 	"github.com/amd/gaia/tui/internal/setupapi"
+	"github.com/amd/gaia/tui/internal/textutil"
 	"github.com/amd/gaia/tui/internal/ui/components"
 	"github.com/amd/gaia/tui/internal/ui/status"
 )
@@ -369,7 +370,7 @@ func (m Model) chooserLines(w, budget int) []string {
 		}
 		out := []string{
 			components.Pad(labelStyle.Render(title)),
-			components.Pad(dimStyle.Render(truncate("Change it any time: p on this screen, /provider in chat.", w-2*indentW))),
+			components.Pad(dimStyle.Render(textutil.Truncate("Change it any time: p on this screen, /provider in chat.", w-2*indentW))),
 		}
 		if tight == 0 {
 			out = append(out, "")
@@ -395,7 +396,7 @@ func (m Model) chooserLines(w, budget int) []string {
 				detail = detail[:keep]
 			}
 			for _, d := range detail {
-				for _, l := range wrap(d, textW) {
+				for _, l := range textutil.Wrap(d, textW) {
 					out = append(out, components.Pad("     "+dimStyle.Render(l)))
 				}
 			}
@@ -404,7 +405,7 @@ func (m Model) chooserLines(w, budget int) []string {
 			}
 		}
 		if m.note != "" {
-			out = append(out, components.IndentAll(wrap(m.note, w-2*indentW), indentW)...)
+			out = append(out, components.IndentAll(textutil.Wrap(m.note, w-2*indentW), indentW)...)
 		}
 		return out
 	}

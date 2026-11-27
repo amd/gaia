@@ -448,9 +448,10 @@ class AgentInfo(BaseModel):
     # Settings "Active for" panel lists such agents as activatable for
     # MCP-server connectors even without a static ``required_connections`` entry.
     consumes_mcp_servers: bool = False
-    # T-X2: opaque grant-ledger key. Built-ins use ``builtin:<id>``; custom
-    # agents use ``custom:<sha256-prefix>:<id>``. The CLI and UI consent
-    # dialog use this when calling ``grant_agent`` / ``revoke_agent_grant``.
+    # T-X2: opaque grant-ledger key. Installed agents use ``installed:<id>``,
+    # native agents use ``native:<id>``, and custom agents use
+    # ``custom:<sha256-prefix>:<id>``. The CLI and UI consent dialog use this
+    # when calling ``grant_agent`` / ``revoke_agent_grant``.
     namespaced_agent_id: str = ""
     # Display metadata in the /api/agents contract; the Agent UI renders none of it.
     category: str = "general"
@@ -942,6 +943,16 @@ class IndexFolderRequest(BaseModel):
     recursive: bool = True
 
 
+SkippedReason = Literal["unsupported_type", "credential_file"]
+
+
+class SkippedFile(BaseModel):
+    """One file left out of folder indexing, with the reason it was left out."""
+
+    file: str
+    reason: SkippedReason
+
+
 class IndexFolderResponse(BaseModel):
     """Response from folder indexing operation."""
 
@@ -949,6 +960,10 @@ class IndexFolderResponse(BaseModel):
     failed: int = 0
     # Files in the folder that aren't a type GAIA indexes.
     skipped: int = 0
+    # Named skipped files, grouped by reason in the UI. ``reason`` is either
+    # ``unsupported_type`` or ``credential_file``.
+    skipped_files: List[SkippedFile] = Field(default_factory=list)
+    skipped_files_truncated: bool = False
     # Images in the folder: GAIA reads them only when picked one by one.
     skipped_images: int = 0
     documents: List[DocumentResponse] = Field(default_factory=list)

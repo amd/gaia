@@ -104,6 +104,12 @@ INTERRUPTED_TEXT = (
     "-# Interrupted — GAIA stopped before it finished. Send it again if you "
     "still need it."
 )
+#: Posted when the final answer could not be delivered. It deliberately
+#: repeats neither the answer nor the platform error: both can carry private
+#: file contents, tool output or credentials from an error.
+FINAL_DELIVERY_WARNING = (
+    "⚠️ GAIA could not finish its reply here. Please resend your message and try again."
+)
 #: What an approval prompt left by a stopped bridge turns into.
 EXPIRED_PROMPT_TEXT = "**Expired — GAIA stopped before you answered.** Nothing ran."
 OPEN_PLACEHOLDER = "placeholder"
@@ -1692,61 +1698,64 @@ class DiscordAdapter:
         if raw:
             self._upload(target, raw)
 
-    def _upload(self, target: ReplyTarget, raw: str, *, asked: bool = False) -> None:
+    def _upload(
+        self, target: ReplyTarget, raw: str, *, asked: bool = False
+    ) -> Optional[bool]:
         """Post one file from this PC in the DM.
 
         *asked* is a file the reply named with ``[[send: …]]``: a refusal is
-        then said in the DM, since the user is waiting for that file.
+        then said in the DM, since the user is waiting for that file. For an
+        asked file, returns whether that file or refusal note reached the user;
+        returns None when nothing was attempted.
         """
 
-        def refuse(why: str) -> None:
+        def refuse(why: str) -> Optional[bool]:
             audit.warning("Did not send %s to Discord: %s", raw, why)
             if asked:
-                self._send(target.channel_id, f"-# Not sent: {why}")
+                return bool(self._send(target.channel_id, f"-# Not sent: {why}"))
+            return None
 
         try:
             path = Path(raw).expanduser().resolve()
         except (OSError, ValueError) as e:
-            refuse(f"`{neutralize(raw)}` is not a path I can read ({e}).")
-            return
+            return refuse(f"`{neutralize(raw)}` is not a path I can read ({e}).")
         key = str(path)
         if key in target.uploaded:
-            return
+            return None
         name = f"`{neutralize(path.name)}`"
         if not path.is_file():
-            refuse(f"{name} is not a file on this PC.")
-            return
+            return refuse(f"{name} is not a file on this PC.")
         if is_scratch_path(path) and not asked:
             # The agent's own working files (a smoke-test log), not a deliverable.
             return
         roots = [r for r in self.upload_roots if path == r or r in path.parents]
         if not roots:
-            refuse(f"{name} is outside the folders GAIA may send files from.")
-            return
+            return refuse(f"{name} is outside the folders GAIA may send files from.")
         if (
             path.name.lower() in {n.lower() for n in SENSITIVE_FILE_NAMES}
             or path.suffix.lower() in SENSITIVE_EXTENSIONS
         ):
-            refuse(f"{name} looks like a key or password file, so it stays on your PC.")
-            return
+            return refuse(
+                f"{name} looks like a key or password file, so it stays on your PC."
+            )
         if asked and _holds_settings(path, max(roots, key=lambda r: len(r.parts))):
-            refuse(
+            return refuse(
                 f"{name} is in a hidden or app-settings folder, where sign-ins are "
                 "kept, so it stays on your PC."
             )
-            return
         if path.stat().st_size > MAX_UPLOAD_BYTES:
-            self._send(
+            sent = self._send(
                 target.channel_id,
                 f"-# {name} is larger than Discord's 10 MB limit, "
                 "so it stays on your PC.",
             )
-            return
+            return bool(sent) if asked else None
         if asked and len(target.uploaded) >= MAX_SENDS_PER_REPLY:
-            refuse(f"{name}: only {MAX_SENDS_PER_REPLY} files are sent per reply.")
-            return
+            return refuse(
+                f"{name}: only {MAX_SENDS_PER_REPLY} files are sent per reply."
+            )
         target.uploaded.add(key)
-        self._send(target.channel_id, f"Here's {name}.", file_path=path)
+        return bool(self._send(target.channel_id, f"Here's {name}.", file_path=path))
 
     def _finish(self, target: ReplyTarget, answer: str, failed: bool = False) -> None:
         """Post the answer as new messages below everything else, then drop the
@@ -1782,16 +1791,31 @@ class DiscordAdapter:
         if self._forgot_notice and target.question and target.answer_filter is None:
             self._forgot_notice = False
             answer = f"{answer}\n\n{FORGOT_NOTICE}"
+        delivered = True
         if only_files:
             # Nothing else to say: the files are the answer, then "Sent."
             for raw in asked:
-                self._upload(target, raw, asked=True)
+                delivered = (
+                    self._upload(target, raw, asked=True) is not False
+                ) and delivered
             asked = []
-        for chunk in split_message(untable(answer) or "-# (no answer)"):
-            self._send(target.channel_id, chunk)
+        chunks = (
+            []
+            if only_files and not delivered
+            else split_message(untable(answer) or "-# (no answer)")
+        )
+        for chunk in chunks:
+            delivered = bool(self._send(target.channel_id, chunk)) and delivered
         # After the words, so a refusal is the last thing said about the file.
         for raw in asked:
-            self._upload(target, raw, asked=True)
+            delivered = (
+                self._upload(target, raw, asked=True) is not False
+            ) and delivered
+        if not delivered:
+            log.warning(
+                "Could not finish the Discord reply in channel %s", target.channel_id
+            )
+            self._send(target.channel_id, FINAL_DELIVERY_WARNING)
         if target.reply_id:
             self._delete(target.channel_id, target.reply_id)
             target.reply_id = ""

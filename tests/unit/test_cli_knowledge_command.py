@@ -119,6 +119,50 @@ def _patch_tavily(monkeypatch):
     yield
 
 
+@pytest.fixture
+def local_only_on(tmp_path, monkeypatch):
+    monkeypatch.setenv("GAIA_POLICY_FILE", str(tmp_path / "policy.json"))
+    from gaia.llm import local_only
+
+    local_only.set_policy("local_ai_only")
+
+
+@pytest.fixture
+def cloud_allowed(tmp_path, monkeypatch):
+    monkeypatch.setenv("GAIA_POLICY_FILE", str(tmp_path / "policy.json"))
+    from gaia.llm import local_only
+
+    local_only.set_policy("cloud_allowed")
+
+
+@pytest.mark.parametrize("action", ["search", "extract"])
+def test_local_only_refuses_knowledge_before_a_client_is_built(
+    local_only_on, monkeypatch, capsys, action
+):
+    def refuse(*_args, **_kwargs):
+        pytest.fail("Tavily client was built while Local only was on")
+
+    monkeypatch.setattr(tavily_module, "TavilyClient", refuse)
+
+    with pytest.raises(SystemExit) as excinfo:
+        knowledge_cli.handle(_knowledge_args(action))
+
+    assert excinfo.value.code == 1
+    out = capsys.readouterr().out
+    assert "Web research is unavailable while Local only is on" in out
+    assert "cloud_allowed" in out
+    assert "Settings > Privacy" in out
+
+
+@pytest.mark.parametrize("action", ["search", "extract"])
+def test_cloud_allowed_knowledge_still_runs(cloud_allowed, capsys, action):
+    knowledge_cli.handle(_knowledge_args(action))
+
+    out = capsys.readouterr().out
+    assert "Web research is unavailable" not in out
+    assert "Credits used: 0 total" in out
+
+
 # ---------------------------------------------------------------------------
 # BudgetConfig(block=not args.no_block) wiring
 # ---------------------------------------------------------------------------

@@ -19,7 +19,8 @@ import { isMacPlatform } from '../utils/platform';
 import { dateLocale, useT, type Translate } from '../i18n/useT';
 import type { MessageKey } from '../i18n/registry';
 import { UploadErrorToast, isExtensionSupported, getUnsupportedCategory } from './UnsupportedFeature';
-import type { FileEntry, BrowseResponse, QuickLink } from '../types';
+import { describeSkippedFiles } from './folderIndexResult';
+import type { FileEntry, BrowseResponse, QuickLink, SkippedFile } from '../types';
 import './FileBrowser.css';
 import './UnsupportedFeature.css';
 import { visibleName, markStrayDirection } from './CalendarApproval';
@@ -107,6 +108,9 @@ interface IndexResult {
     lastErrorKind?: string | null;
     /** Images inside added folders, which GAIA reads only when added one by one. */
     skippedImages: number;
+    /** Named skipped files from added folders, grouped by reason in the status. */
+    skippedFiles: SkippedFile[];
+    skippedFilesTruncated: boolean;
 }
 
 /**
@@ -136,6 +140,8 @@ async function indexAndAttachFiles(
     let lastError = '';
     let lastErrorKind: string | null = null;
     let skippedImages = 0;
+    const skippedFiles: SkippedFile[] = [];
+    let skippedFilesTruncated = false;
     const folderPaths = new Set(entries.filter(e => e.type === 'folder').map(e => e.path));
 
     for (const filepath of supported) {
@@ -145,6 +151,8 @@ async function indexAndAttachFiles(
                 const newIds: string[] = [];
                 result.documents.forEach(d => { if (d.id) newIds.push(d.id); });
                 skippedImages += result.skipped_images ?? 0;
+                skippedFiles.push(...(result.skipped_files ?? []));
+                skippedFilesTruncated ||= result.skipped_files_truncated === true;
                 // Each failed file has a library row saying why, to retry from.
                 if (result.failed > 0) {
                     failed += result.failed;
@@ -205,7 +213,7 @@ async function indexAndAttachFiles(
         }
     }
 
-    return { docIds, supported, succeededFiles, unsupported, failed, lastError, lastErrorKind, skippedImages };
+    return { docIds, supported, succeededFiles, unsupported, failed, lastError, lastErrorKind, skippedImages, skippedFiles, skippedFilesTruncated };
 }
 
 const isHiddenName = (name: string) => name.startsWith('.');
@@ -398,6 +406,7 @@ export function FileBrowser({ onStartChat }: FileBrowserProps) {
                 const added = t.plural('fileBrowser.added', result.docIds.length);
                 const parts = [added];
                 if (result.unsupported.length > 0) parts.push(t.plural('fileBrowser.skipped', result.unsupported.length));
+                parts.push(...describeSkippedFiles(t, { skipped_files: result.skippedFiles, skipped_files_truncated: result.skippedFilesTruncated }));
                 if (result.skippedImages > 0) parts.push(t.plural('docs.folder.images', result.skippedImages));
                 setIndexStatus(parts.join(' '));
             }

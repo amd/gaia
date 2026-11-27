@@ -20,9 +20,14 @@ block in ``src/gaia/apps/webui/electron-builder.yml``.
 from __future__ import annotations
 
 import random
+import sys
 from pathlib import Path
 
 from PIL import Image, ImageDraw, ImageFilter, ImageFont
+
+# Run as a script, so the shared art module one folder up is put on the path.
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from brand_art import vertical_gradient  # noqa: E402  pylint: disable=wrong-import-position
 
 # ---- Layout -------------------------------------------------------------
 
@@ -35,8 +40,6 @@ ICON_APPS_CENTER = (500, 200)
 
 # ---- GAIA Agent UI dark palette ----------------------------------------
 
-BG_TOP = (8, 8, 13)           # --bg-sidebar #08080d
-BG_BOTTOM = (14, 14, 22)      # --bg-primary #0e0e16
 
 # Soft glow under each drop target — acts as ambient stage lighting,
 # not a hard halo ring. The eye reads "two landing zones" without
@@ -53,22 +56,6 @@ WORDMARK_COLOR = (95, 98, 120, 130)
 
 # ---- Background ---------------------------------------------------------
 
-
-def _gradient_background() -> Image.Image:
-    """Vertical linear gradient. Keeps the look restrained — no radial
-    vignettes, no rainbow. Reads like the Agent UI sidebar→content
-    transition.
-    """
-    img = Image.new("RGB", (WIDTH, HEIGHT), BG_TOP)
-    pixels = img.load()
-    for y in range(HEIGHT):
-        t = y / (HEIGHT - 1)
-        r = round(BG_TOP[0] * (1 - t) + BG_BOTTOM[0] * t)
-        g = round(BG_TOP[1] * (1 - t) + BG_BOTTOM[1] * t)
-        b = round(BG_TOP[2] * (1 - t) + BG_BOTTOM[2] * t)
-        for x in range(WIDTH):
-            pixels[x, y] = (r, g, b)
-    return img
 
 
 def _grain_overlay(size: tuple[int, int]) -> Image.Image:
@@ -150,7 +137,7 @@ def _load_font(size: int, *, mono: bool = False) -> ImageFont.ImageFont:
 
 
 def main() -> None:
-    base = _gradient_background().convert("RGBA")
+    base = vertical_gradient(WIDTH, HEIGHT).convert("RGBA")
 
     # Grain.
     base = Image.alpha_composite(base, _grain_overlay(base.size))

@@ -48,8 +48,19 @@ class FileToolsMixin:
                     }
 
                 if directory not in self.watch_directories:
+                    if not self._watch_directory(directory):
+                        return {
+                            "status": "error",
+                            "error": f"Failed to start watching directory: {directory}",
+                            "has_errors": True,
+                            "operation": "add_watch_directory",
+                            "directory": directory,
+                            "hint": (
+                                "The directory was not added to the watch list. "
+                                "Check the watcher error and try again."
+                            ),
+                        }
                     self.watch_directories.append(directory)
-                    self._watch_directory(directory)
 
                     # Index existing files in the directory
                     path = Path(directory)
@@ -60,6 +71,11 @@ class FileToolsMixin:
                         try:
                             if self.rag.index_document(str(pdf_file)).get("success"):
                                 self.indexed_files.add(str(pdf_file))
+                                clear_restore_failure = getattr(
+                                    self, "_clear_document_restore_failure", None
+                                )
+                                if callable(clear_restore_failure):
+                                    clear_restore_failure(str(pdf_file))
                                 indexed_count += 1
                                 if hasattr(self, "debug") and self.debug:
                                     logger.debug(f"Auto-indexed: {pdf_file}")

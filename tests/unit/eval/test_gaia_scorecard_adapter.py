@@ -386,6 +386,117 @@ class TestReleaseWorkflowWiring:
         assert "gaia-eval" not in needs, f"publish must not wait on the eval: {needs}"
 
 
+class TestQualityReport:
+    def test_partial_average_score_is_not_pooled_as_complete(self):
+        mod = _load("eval_quality_report")
+        pooled = mod.aggregate(
+            [
+                {"passed": 1, "failed": 0, "blocked": 0, "avg_score": 8.0},
+                {"passed": 1, "failed": 0, "blocked": 0, "avg_score": None},
+            ]
+        )
+
+        assert pooled["judged"] == 2
+        assert pooled["avg_score"] is None
+
+    def test_missing_average_score_is_an_enforced_breach(self):
+        mod = _load("eval_quality_report")
+        pooled = mod.aggregate(
+            [{"passed": 1, "failed": 1, "blocked": 0, "avg_score": None}]
+        )
+
+        gate = mod.evaluate(
+            {"enforce": True, "min_judged_pass_rate": 0.5, "min_avg_score": 5.0},
+            pooled,
+        )
+
+        assert pooled["avg_score"] is None
+        assert gate["passed"] is False
+        assert gate["should_fail"] is True
+        assert gate["breaches"] == [
+            "avg_score unavailable; cannot compare with bar 5.0"
+        ]
+
+    def test_missing_average_score_is_reported_without_blocking_in_report_mode(self):
+        mod = _load("eval_quality_report")
+        pooled = mod.aggregate(
+            [{"passed": 1, "failed": 1, "blocked": 0, "avg_score": None}]
+        )
+
+        gate = mod.evaluate(
+            {"enforce": False, "min_avg_score": 5.0},
+            pooled,
+        )
+
+        assert gate["passed"] is False
+        assert gate["should_fail"] is False
+
+    def test_main_writes_a_report_for_missing_average_score(
+        self, tmp_path, monkeypatch
+    ):
+        eval_out = tmp_path / "eval-out" / "gaia_core"
+        eval_out.mkdir(parents=True)
+        (eval_out / "scorecard.json").write_text(
+            json.dumps(
+                {
+                    "summary": {
+                        "passed": 1,
+                        "failed": 1,
+                        "blocked": 0,
+                        "avg_score": None,
+                    }
+                }
+            ),
+            encoding="utf-8",
+        )
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setenv("GAIA_EVAL_SCORECARDS_DIR", str(tmp_path / "eval-out"))
+
+        mod = _load("eval_quality_report")
+        monkeypatch.setattr(
+            mod,
+            "load_thresholds",
+            lambda: {
+                "enforce": True,
+                "min_judged_pass_rate": 0.5,
+                "min_avg_score": 5.0,
+            },
+        )
+        assert mod.main() == 1
+
+        report = json.loads(
+            (tmp_path / "eval-out" / "quality_gate_report.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        assert report["quality_gate"]["passed"] is False
+        assert report["quality_gate"]["measured"]["avg_score"] is None
+        assert any(
+            "avg_score unavailable" in breach
+            for breach in report["quality_gate"]["breaches"]
+        )
+
+    def test_threshold_breach_and_pass_remain_numeric(self):
+        mod = _load("eval_quality_report")
+        pooled = mod.aggregate(
+            [{"passed": 2, "failed": 0, "blocked": 0, "avg_score": 8.0}]
+        )
+
+        passing = mod.evaluate(
+            {"enforce": True, "min_judged_pass_rate": 0.5, "min_avg_score": 5.0},
+            pooled,
+        )
+        failing = mod.evaluate(
+            {"enforce": True, "min_judged_pass_rate": 1.1, "min_avg_score": 9.0},
+            pooled,
+        )
+
+        assert passing["passed"] is True
+        assert passing["should_fail"] is False
+        assert failing["passed"] is False
+        assert failing["should_fail"] is True
+
+
 class TestPerfReport:
     def _write_cards(self, tmp_path, scenarios):
         out = tmp_path / "eval-out" / "gaia_core"

@@ -19,6 +19,7 @@ import type { Document, IndexFolderResponse } from '../types';
 import { dateLocale, useT, type Translate } from '../i18n/useT';
 import { pluralKey } from '../i18n/registry';
 import { IndexingProgress } from './IndexingProgress';
+import { describeSkippedFiles } from './folderIndexResult';
 import { needsRetry, serverFailureText, serverNotAddedText, waitsForServerReturn } from '../utils/documentFailure';
 import { setVisibleInterval } from '../utils/visibleInterval';
 import './DocumentLibrary.css';
@@ -44,6 +45,7 @@ function describeFolderResult(t: Translate, folderName: string, result: IndexFol
         if (skipped > 0) {
             parts.push(say(pluralKey('docs.folder.skipped', skipped), { n: skipped }));
         }
+        parts.push(...describeSkippedFiles(say, result));
         const images = result.skipped_images ?? 0;
         if (images > 0) {
             parts.push(say(pluralKey('docs.folder.images', images), { n: images }));
