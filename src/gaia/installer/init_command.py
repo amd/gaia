@@ -1469,6 +1469,8 @@ class InitCommand:
         remote: bool = False,
         skip_webui_build: bool = False,
         skip_pip_extras: bool = False,
+        with_programs: Optional[list] = None,
+        without_programs: Optional[list] = None,
         skip_chat_model: bool = False,
         progress_callback: Optional[Callable[[InitProgress], None]] = None,
         lemonade_url: Optional[str] = None,
@@ -1540,6 +1542,9 @@ class InitCommand:
         self.skip_webui_build = skip_webui_build
         # The frozen app bundles its packages and has no pip to add more.
         self.skip_pip_extras = skip_pip_extras or is_frozen()
+        self.with_programs = list(with_programs or [])
+        self.without_programs = list(without_programs or [])
+        self._program_notes: list = []
         self.force_reinstall = force_reinstall
         self.force_models = force_models
         self.yes = yes
@@ -1810,6 +1815,76 @@ class InitCommand:
         self._print_success(f"Installed [{extras_str}] dependencies")
         return True
 
+    def offer_programs(self) -> bool:
+        """Find or install the programs skills use; True when none failed.
+
+        Optional: a program that is declined, skipped or fails to install is
+        reported and kept for the closing summary, and never fails setup.
+        Git is only ever looked for unless none is installed. LibreOffice is
+        installed only when named.
+        """
+        from gaia import programs
+        from gaia.config import GaiaConfig
+
+        try:
+            if self.without_programs:
+
+                def skip(doc: dict) -> None:
+                    current = [p for p in doc.get("skipped_programs") or []]
+                    doc["skipped_programs"] = list(
+                        dict.fromkeys(current + self.without_programs)
+                    )
+
+                GaiaConfig.edit_doc(skip)
+            skipped = set(GaiaConfig.load().skipped_programs) - set(self.with_programs)
+        except Exception as e:  # noqa: BLE001 - optional step; reported, not fatal
+            self._program_notes.append(f"Programs were not checked: {e}")
+            self._print_error(self._program_notes[-1])
+            return False
+
+        failed = False
+        for program in programs.PROGRAMS.values():
+            named = program.id in self.with_programs
+            found = programs.find(program.id)
+            if found is not None:
+                self._print_success(f"{program.title}: found at {found.path}")
+                continue
+            command = programs.how_to_install(program.id)
+            later = f"To install it later, run: {command}"
+            if program.id in skipped:
+                self._print(f"   {program.title}: skipped, as you chose. {later}")
+                continue
+            if program.setup == programs.EXPLICIT and not named:
+                continue
+            if not programs.can_install(program.id):
+                note = f"{program.title} is not installed. Install it with: {command}"
+                self._program_notes.append(note)
+                self._print_warning(note)
+                continue
+            if not named:
+                default = program.setup == programs.PRESELECTED
+                if self.yes:
+                    wanted = default
+                else:
+                    self._print(f"   {programs.describe(program.id)}")
+                    wanted = self._prompt_yes_no(
+                        f"Install {program.title}?", default=default
+                    )
+                if not wanted:
+                    self._print(f"   {program.title}: not installed. {later}")
+                    continue
+            self._print_success(f"Installing {program.title} ({program.size})...")
+            try:
+                found = programs.install(program.id)
+            except programs.ProgramError as e:
+                failed = True
+                note = f"{program.title} was NOT installed. {e}"
+                self._program_notes.append(note)
+                self._print_error(note)
+                continue
+            self._print_success(f"{program.title}: installed at {found.path}")
+        return not failed
+
     def run(self) -> int:
         """
         Execute the initialization workflow.
@@ -1931,6 +2006,12 @@ class InitCommand:
                     return self._fail_before_agent(has_hub_agent_check)
                 self._component("packages", "done")
 
+            # Every install, the desktop app included: these are programs, not
+            # Python packages.
+            self._print("")
+            self._print("Programs for skills (optional):")
+            self.offer_programs()
+
             # Ensure the profile's hub agent (chat's standalone wheel) is
             # installed (#2358). Independent of the pip-extras step above:
             # the hub install targets the isolated
@@ -2033,7 +2114,10 @@ class InitCommand:
                 self._print_error("Agent UI frontend build failed -- see above.")
                 return 1
 
-            return 0 if self._print_completion() else 1
+            completed = self._print_completion()
+            for note in self._program_notes:
+                self._print_warning(note)
+            return 0 if completed else 1
 
         except KeyboardInterrupt:
             self._print("")
@@ -4277,6 +4361,39 @@ class InitCommand:
         return not setup_incomplete
 
 
+def run_programs(
+    with_programs: Optional[list] = None,
+    without_programs: Optional[list] = None,
+    yes: bool = False,
+    check: bool = False,
+    as_json: bool = False,
+) -> int:
+    """Entry point for ``gaia init --programs`` (``--check``, ``--json``).
+
+    Returns 0 when nothing failed to install; with ``check``, 0 when every
+    program setup installs by default is found.
+    """
+    from gaia import programs
+
+    if check:
+        rows = programs.status()
+        ready = all(r["found"] for r in rows if r["setup"] == programs.PRESELECTED)
+        if as_json:
+            print(json.dumps({"ready": ready, "programs": rows}))
+        else:
+            for row in rows:
+                print(f"  {programs.status_line(row)}")
+        return 0 if ready else 1
+    command = InitCommand(
+        profile=DEFAULT_INIT_PROFILE,
+        skip_models=True,
+        yes=yes,
+        with_programs=with_programs,
+        without_programs=without_programs,
+    )
+    return 0 if command.offer_programs() else 1
+
+
 def run_agent_refresh() -> int:
     """Entry point for `gaia init --agent-only`."""
     return InitCommand(profile=DEFAULT_INIT_PROFILE, skip_models=True).refresh_agent()
@@ -4328,6 +4445,8 @@ def run_init(
     remote: bool = False,
     skip_webui_build: bool = False,
     skip_pip_extras: bool = False,
+    with_programs: Optional[list] = None,
+    without_programs: Optional[list] = None,
     skip_chat_model: bool = False,
     lemonade_url: Optional[str] = None,
     gaia_lemonade: bool = False,
@@ -4350,6 +4469,8 @@ def run_init(
         remote: Use the Lemonade Server LEMONADE_BASE_URL names
         skip_webui_build: Skip the Agent UI frontend build step entirely
         skip_pip_extras: Install no Python packages; the desktop app ships its own
+        with_programs: Programs to install as well (``--with-program``)
+        without_programs: Programs to leave out, now and in later runs
         skip_chat_model: Skip the profile's chat LLM, keep any embedding model
             (see InitCommand's docstring — for a Claude-backed session)
         lemonade_url: Use (and save) the Lemonade Server the user runs here
@@ -4374,6 +4495,8 @@ def run_init(
             remote=remote,
             skip_webui_build=skip_webui_build,
             skip_pip_extras=skip_pip_extras,
+            with_programs=with_programs,
+            without_programs=without_programs,
             skip_chat_model=skip_chat_model,
             lemonade_url=lemonade_url,
             gaia_lemonade=gaia_lemonade,

@@ -424,6 +424,28 @@ The installer above is for using GAIA. To build agents, work on GAIA itself, or 
 | Either front end from source | [Development guide](/reference/dev); the terminal builds with `cd tui && make build`, the desktop installers as in [Packaging & Distribution](/deployment/ui) |
 | A Windows build of your own branch to hand to someone | [Shareable build](/deployment/shareable-build). Uninstall it before running the GAIA installer, which refuses to install beside it. |
 
+### Programs some skills use
+
+A few skills run a separate program. GAIA ships none of them: it looks for one you already have, and otherwise offers to get it from its publisher. `gaia init` does this as an optional step, and a program you decline or that fails to install never stops setup.
+
+| Program | What it is for | Setup default | Where it comes from |
+|---|---|---|---|
+| Git | Reading and changing repositories | Used where found. If none is installed: on Windows, MinGit 2.56.1 (38 MB download) is offered with yes as the default and unpacked under `~/.gaia/programs`; on macOS and Linux GAIA prints the install command | [Git for Windows releases](https://github.com/git-for-windows/git/releases), GPL-2.0 |
+| Tesseract OCR | Reading text from scans and images | Offered, yes by default (about 50 MB, English data) | Windows: the `UB-Mannheim.TesseractOCR` winget package; macOS: `brew install tesseract`; Linux: GAIA prints the command. Apache-2.0 |
+| ffmpeg | Decoding audio and video for transcription | Offered, no by default (about 100 MB). Also installed the first time you transcribe a file | Windows: the `Gyan.FFmpeg` winget package (a GPL build); macOS: Homebrew |
+| LibreOffice | Recalculating and converting Office files | Never offered (about 350 MB). Installed only when you name it | The `TheDocumentFoundation.LibreOffice` winget package or Homebrew cask, MPL-2.0 |
+
+```bash
+gaia init --programs --check                       # what is found, what is missing
+gaia init --programs                               # the defaults above
+gaia init --programs --with-program libreoffice    # one program by name
+gaia init --without-program tesseract              # set up without it, and remember that
+```
+
+GAIA finds a program on `PATH`, in the folder its installer uses (for example `C:\Program Files\Git\cmd`), or in `~/.gaia/programs`, and adds that folder to the `PATH` of its own processes only. It never changes your `PATH` and never installs with administrator rights on its own; a package manager may ask you to approve its installer. A Git download is unpacked only if its SHA-256 matches the one pinned in GAIA.
+
+Without LibreOffice the `office-docs` skill still works; loading it tells you which checks are skipped and the command that installs it.
+
 ## Next steps
 
 - [Quickstart](/quickstart) — your first conversation with a GAIA agent

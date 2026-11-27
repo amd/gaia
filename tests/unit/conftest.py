@@ -151,6 +151,15 @@ def _isolate_gaia_config(tmp_path_factory, monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _no_programs(monkeypatch):
+    """Setup under test finds and installs no programs; ``test_programs`` sets its own."""
+    from gaia import programs
+
+    monkeypatch.setattr(programs, "PROGRAMS", {})
+    monkeypatch.setattr(programs, "BY_COMMAND", {})
+
+
+@pytest.fixture(autouse=True)
 def _stub_daemon_scheduler_notifications(request, monkeypatch):
     """Keep unit tests from opening real desktop notifications."""
     if request.node.get_closest_marker("real_sinks"):
