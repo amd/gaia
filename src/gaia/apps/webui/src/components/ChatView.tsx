@@ -1758,7 +1758,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
                     {historyLoaded && rows.length === 0 && !isStreaming && !openingShown && !pendingPrompt && (
                         <div className="chat-empty">
                             <h2 className="chat-empty-title">{t('chat.empty.title')}</h2>
-                            <p className="chat-empty-hint">{t('chat.empty.hint')}</p>
+                            {!retiredAgent && <p className="chat-empty-hint">{t('chat.empty.hint')}</p>}
                         </div>
                     )}
 
