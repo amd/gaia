@@ -31,18 +31,6 @@ def agent():
     _TOOL_REGISTRY.pop("look_first_test_reader", None)
 
 
-@pytest.fixture
-def chat_and_process(tmp_path, monkeypatch):
-    """A chat folder with a file the process folder does not have."""
-    chat = tmp_path / "runs" / "chat"
-    process = tmp_path / "home"
-    chat.mkdir(parents=True)
-    process.mkdir()
-    (chat / "notes.csv").write_text("name,value\nalpha,1\n", encoding="utf-8")
-    monkeypatch.chdir(process)
-    return chat, process
-
-
 def test_turn_start_checks_use_the_chat_folder(agent, chat_and_process):
     chat, _process = chat_and_process
     agent.working_directory = str(chat)

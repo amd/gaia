@@ -31,18 +31,6 @@ def workspace(tmp_path, monkeypatch):
     return tmp_path
 
 
-@pytest.fixture
-def chat_and_process(tmp_path, monkeypatch):
-    """A chat folder with a file the process folder does not have."""
-    chat = tmp_path / "runs" / "chat"
-    process = tmp_path / "home"
-    chat.mkdir(parents=True)
-    process.mkdir()
-    (chat / "notes.csv").write_text("name,value\nalpha,1\n", encoding="utf-8")
-    monkeypatch.chdir(process)
-    return chat, process
-
-
 @pytest.mark.parametrize(
     "request_text,expected",
     [
