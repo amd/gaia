@@ -81,13 +81,15 @@ const audit = async (page: Page): Promise<string[]> => {
     // Bounded by time, not frames: a page still loading on a busy CI runner starts a few in a row.
     await page.evaluate(async () => {
         const deadline = performance.now() + 3_000;
-        let moving: Animation[] = [];
+        const running = () => document.getAnimations().filter((a) => a instanceof CSSTransition);
         while (performance.now() < deadline) {
-            moving = document.getAnimations().filter((a) => a instanceof CSSTransition);
+            const moving = running();
             if (!moving.length) return;
             await Promise.all(moving.map((a) => a.finished.catch(() => undefined)));
             await new Promise((done) => requestAnimationFrame(done));
         }
+        const moving = running();
+        if (!moving.length) return;
         const names = moving.map((a) => {
             const el = (a.effect as KeyframeEffect | null)?.target;
             return `${el?.tagName.toLowerCase()}.${el?.className} ${(a as CSSTransition).transitionProperty}`;
