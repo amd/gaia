@@ -1069,6 +1069,7 @@ const messages: Messages = {
     'docs.indexingFolder': 'جارٍ فهرسة المستندات في {name}...',
     'docs.willAttach': 'ستتم إضافة {name} إلى محادثتك الجديدة التالية.',
     'docs.attached': 'تمت إضافة {name} إلى {chat}.',
+    'docs.sameContents': 'يحتوي {name} على نفس محتوى {existing} الموجود بالفعل في مكتبتك.',
     'docs.indexing': 'جارٍ الفهرسة...',
     'docs.indexingLabel': 'جارٍ الفهرسة',
     'recording.title': 'تقدّم معالجة التسجيل',

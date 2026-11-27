@@ -1069,6 +1069,7 @@ export const enMessages = {
     'docs.indexingFolder': 'Indexing the documents in {name}...',
     'docs.willAttach': '{name} will be added to your next new chat.',
     'docs.attached': 'Added {name} to {chat}.',
+    'docs.sameContents': '{name} has the same contents as {existing}, which is already in your library.',
     'docs.indexing': 'Indexing...',
     'docs.indexingLabel': 'Indexing',
     'recording.title': 'Recording progress',
