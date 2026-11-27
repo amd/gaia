@@ -17,8 +17,8 @@ Current fixtures:
 - api_client: HTTP client (requests.Session) configured for API testing
 - lemonade_available: Session-scoped fixture checking if Lemonade server is running
 - require_lemonade: Fixture that skips tests if Lemonade is not available
-- in_memory_keyring: Session-scoped fixture installing an in-memory keyring backend
-  (used by tests/unit/connectors/ to avoid SecretService prerequisite on Linux CI)
+- in_memory_keyring: Session-autouse fixture installing an in-memory keyring backend
+  for the whole suite, and refusing calls to the platform backend it replaces
 - ui_api_client: Function-scoped TestClient against gaia.ui.server.create_app()
 - mock_lemonade_client: Shared mock for LemonadeClient (requires pytest-mock)
 - reload_module: importlib.reload a module for one test, restoring its originals after
@@ -30,6 +30,7 @@ To add new fixtures for other test suites, define them in this file and they'll
 be automatically available to all test files.
 """
 
+import functools
 import importlib
 import os
 import subprocess
@@ -55,6 +56,14 @@ os.environ.setdefault("GAIA_UI_ALLOWED_HOSTS", "testserver")
 _UI_TOKEN_FILE = Path(tempfile.mkdtemp(prefix="gaia-ui-token-")) / "agent-ui-token"
 _UI_TOKEN_FILE.write_text("test-agent-ui-token", encoding="utf-8")
 os.environ.setdefault("GAIA_UI_TOKEN_FILE", str(_UI_TOKEN_FILE))
+
+# Child processes cannot inherit ``keyring.set_keyring()``. The session fixture
+# sets this so a CLI or daemon spawned by a test resolves keyring's no-op store
+# instead of the developer's credential manager.
+_TEST_KEYRING_BACKEND = "keyring.backends.null.Keyring"
+_DISABLED_KEYRING_MODULES = frozenset(
+    {"keyring.backends.null", "keyring.backends.fail"}
+)
 
 _BROWSER_LAUNCHERS = ("open", "open_new", "open_new_tab")
 
@@ -511,8 +520,45 @@ def api_client(api_server):
 
 
 # =============================================================================
-# CONNECTIONS / KEYRING FIXTURES (issue #915)
+# KEYRING FIXTURES (issues #915 and #8848)
 # =============================================================================
+
+
+def _guard_keyring_backend(backend):
+    """Make every password method on *backend* fail, and return a restore hook.
+
+    Replacing the active backend keeps ordinary calls away from the OS store.
+    This wrapper covers the second path: code that kept a reference to the
+    platform backend before the fixture ran, or rebuilt it directly, must not
+    silently read the developer's sign-ins. The original methods are kept so the
+    fixture can hand the unmodified backend back at session teardown.
+    """
+    name = type(backend).__name__
+
+    def _refuse(operation, *_args, **_kwargs):
+        pytest.fail(
+            f"A test reached the real OS keyring ({name}.{operation}). The "
+            "suite installs an in-memory backend for every test; patch "
+            "keyring.get_keyring() in a test that needs a different backend.",
+            pytrace=False,
+        )
+
+    originals = {}
+    for operation in (
+        "get_password",
+        "set_password",
+        "delete_password",
+        "get_credential",
+    ):
+        if hasattr(backend, operation):
+            originals[operation] = getattr(backend, operation)
+            setattr(backend, operation, functools.partial(_refuse, operation))
+
+    def _restore():
+        for operation, original in originals.items():
+            setattr(backend, operation, original)
+
+    return backend, _restore
 
 
 def _make_in_memory_keyring():
@@ -559,32 +605,44 @@ def _make_in_memory_keyring():
     return _InMemoryKeyring()
 
 
-@pytest.fixture(scope="session")
+@pytest.fixture(scope="session", autouse=True)
 def in_memory_keyring():
     """
-    Install an in-memory keyring backend for the duration of the test session.
+    Install an in-memory keyring backend for the whole test session.
 
-    Use as a session-scoped dependency in connections tests. The autouse fixture
-    in tests/unit/connectors/conftest.py wraps this to ensure every connections
-    test has the in-memory backend before any gaia.connectors module is imported.
+    Autouse from the root conftest, so no test reads the developer's credential
+    store, on Linux CI (no SecretService and a plaintext fallback), macOS
+    Keychain or Windows Credential Manager. The autouse fixture in
+    tests/unit/connectors/conftest.py clears the backing dict between connector
+    tests so state does not leak.
 
-    Linux CI runners ship without SecretService, and the production-default
-    keyrings.alt fallback is plaintext — we explicitly refuse that backend in
-    gaia.connectors.store. This fixture short-circuits the keyring lookup
-    chain to a deterministic in-memory backend that no production code uses.
+    The platform backend resolved before the switch is wrapped to fail loudly,
+    so a test that kept a reference to it cannot bypass the fixture. Its methods
+    are restored when the session ends. Child processes inherit
+    ``PYTHON_KEYRING_BACKEND`` pointing at keyring's null backend, since
+    ``set_keyring`` is process-local.
 
     Yields:
         _InMemoryKeyring: the active backend (already installed via keyring.set_keyring)
     """
     import keyring
 
-    backend = _make_in_memory_keyring()
     previous = keyring.get_keyring()
-    keyring.set_keyring(backend)
-    try:
-        yield backend
-    finally:
-        keyring.set_keyring(previous)
+    restore_previous = None
+    if type(previous).__module__ not in _DISABLED_KEYRING_MODULES:
+        previous, restore_previous = _guard_keyring_backend(previous)
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setenv("PYTHON_KEYRING_BACKEND", _TEST_KEYRING_BACKEND)
+        backend = _make_in_memory_keyring()
+        keyring.set_keyring(backend)
+        try:
+            yield backend
+        finally:
+            try:
+                keyring.set_keyring(previous)
+            finally:
+                if restore_previous is not None:
+                    restore_previous()
 
 
 @pytest.fixture(scope="session", autouse=True)
