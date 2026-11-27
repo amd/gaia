@@ -346,7 +346,7 @@ export function FileBrowser({ onStartChat }: FileBrowserProps) {
         setPreviewLoading(true);
         try {
             const data = await api.previewFile(path);
-            setPreviewFile(data as FilePreview);
+            setPreviewFile({ ...data, size_display: formatSize(data.size) } as FilePreview);
         } catch (err) {
             log.ui.error('Preview failed', err);
         } finally {
