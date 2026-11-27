@@ -247,3 +247,19 @@ func TestOpenFileRefusesWhatMediaRefuses(t *testing.T) {
 		}
 	}
 }
+
+func TestAReaderGivenAnOutputFileWrites(t *testing.T) {
+	for _, cmd := range []string{
+		"sort -o out.txt in.txt", "sort --output=out.txt in.txt", "sort --output out.txt in.txt",
+		"sort -uo out.txt in.txt", "sort -oout.txt in.txt", "uniq in.txt out.txt", "cat a | uniq -c - out.txt",
+	} {
+		if onlyReadsFiles(cmd) {
+			t.Errorf("%q writes a file but was taken as read-only", cmd)
+		}
+	}
+	for _, cmd := range []string{"sort in.txt", "sort -u -k2 in.txt", "uniq -c in.txt", "sort -t, -n in.txt | uniq"} {
+		if !onlyReadsFiles(cmd) {
+			t.Errorf("%q only reads but was taken as a write", cmd)
+		}
+	}
+}

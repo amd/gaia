@@ -14,6 +14,13 @@
 #include <memory>
 #include <random>
 
+#ifdef _WIN32
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#endif
+
 using namespace gaia;
 namespace fs = std::filesystem;
 
@@ -378,6 +385,28 @@ TEST(WorkspaceTest, NetworkAndDevicePathsAreRefusedByTheirSpelling) {
         EXPECT_FALSE(ws.contains(path)) << path;
         EXPECT_NE(ws.checkPath(path), "") << path;
     }
+}
+#endif
+
+#ifdef _WIN32
+// An 8.3 alias names the same folder as its long name, so it is refused the same way.
+TEST(WorkspaceTest, AShortNameForAnOutsideFolderIsRefused) {
+    Dirs d;
+    Workspace ws({d.work.string()});
+    const fs::path outside = d.base / "outside-folder-with-a-long-name";
+    fs::create_directories(outside);
+    std::ofstream(outside / "secret.txt") << "CANARY";
+    wchar_t buf[MAX_PATH];
+    const DWORD n = GetShortPathNameW((outside / "secret.txt").wstring().c_str(), buf, MAX_PATH);
+    ASSERT_GT(n, 0u);
+    ASSERT_LT(n, static_cast<DWORD>(MAX_PATH));
+    const std::string shortPath = fs::path(buf).u8string();
+    EXPECT_FALSE(ws.contains(shortPath)) << shortPath;
+    EXPECT_NE(ws.checkPath(shortPath), "") << shortPath;
+    EXPECT_NE(ws.checkCommand("type \"" + shortPath + "\""), "") << shortPath;
+    InFolder in(d.work);
+    const std::string relative = (fs::path(buf).parent_path().filename() / "secret.txt").u8string();
+    EXPECT_NE(ws.checkCommand("cd .. && type " + relative), "") << relative;
 }
 #endif
 

@@ -241,6 +241,23 @@ TEST(DeclinedCalls, AskingAgainPutsTheCallToTheUserAgain) {
     EXPECT_EQ(agent.ran, (std::vector<std::string>{"rm old.log"}));
 }
 
+TEST(DeclinedCalls, AWordThatOnlyContainsAgainIsNotARetry) {
+    bench::MockLlmServer mock;
+    DeclineAgent agent(cfgFor(mock));
+    agent.initForTest();
+    mock.pushResponse(shell("c1", "rm old.log"));
+    mock.pushResponse(answer("ok"));
+    agent.processQuery("clean up");
+
+    agent.reply = ToolConfirmResult::ALLOW_ONCE;
+    mock.pushResponse(shell("c2", "rm old.log"));  // still declined: "against" asks for nothing
+    mock.pushResponse(answer("ok"));
+    agent.processQuery("check the totals against last month");
+
+    EXPECT_EQ(agent.asked.size(), 1u) << json(agent.asked).dump();
+    EXPECT_TRUE(agent.ran.empty());
+}
+
 TEST(DeclinedCalls, AClearedChatForgetsThem) {
     bench::MockLlmServer mock;
     DeclineAgent agent(cfgFor(mock));

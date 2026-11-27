@@ -170,11 +170,32 @@ func onlyReadsFiles(cmd string) bool {
 		return false
 	}
 	for _, part := range parts {
-		if prog, _ := program(part); !readerPrograms[prog] {
+		prog, args := program(part)
+		if !readerPrograms[prog] || readerWrites(prog, args) {
 			return false
 		}
 	}
 	return true
+}
+
+// readerWrites reports a reader given a file to write: `sort -o out`, `uniq in out`.
+func readerWrites(prog string, args []string) bool {
+	operands := 0
+	for _, a := range args {
+		switch {
+		case a == "--output" || strings.HasPrefix(a, "--output="):
+			return prog == "sort"
+		case strings.HasPrefix(a, "--"):
+		case strings.HasPrefix(a, "-") && len(a) > 1:
+			// A short-option cluster with o (`-o`, `-uo`, `-ofile`) names sort's output.
+			if prog == "sort" && strings.ContainsRune(a[1:], 'o') {
+				return true
+			}
+		default:
+			operands++
+		}
+	}
+	return prog == "uniq" && operands > 1
 }
 
 // cdTarget is the folder a command moves to first (`cd dir && …`), or "".
