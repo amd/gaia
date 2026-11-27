@@ -182,10 +182,10 @@ describe('Chat App Installer Readiness', () => {
     });
 
     it('should use port 4200 as default (not 4001)', () => {
+      const portsPath = path.join(BACKEND_PATH, '..', 'ports.py');
+      expect(fs.readFileSync(portsPath, 'utf8')).toMatch(/^AGENT_UI_PORT = 4200$/m);
       const serverPath = path.join(BACKEND_PATH, 'server.py');
-      const content = fs.readFileSync(serverPath, 'utf8');
-      expect(content).toContain('4200');
-      expect(content).not.toContain('4001');
+      expect(fs.readFileSync(serverPath, 'utf8')).not.toContain('4001');
     });
   });
 
