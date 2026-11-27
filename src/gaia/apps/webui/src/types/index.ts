@@ -779,12 +779,22 @@ export interface BrowseResponse {
     folder_refusal?: string | null;
 }
 
+/** One skipped file from folder indexing and the reason it was left out. */
+export interface SkippedFile {
+    file: string;
+    reason: string;
+}
+
 /** Response from the /documents/index-folder endpoint. */
 export interface IndexFolderResponse {
     indexed: number;
     failed: number;
     /** Files in the folder of a type GAIA doesn't index. */
     skipped?: number;
+    /** Named skipped files. ``reason`` is ``unsupported_type`` or ``credential_file``. */
+    skipped_files?: SkippedFile[];
+    /** Whether the server stopped recording skipped filenames at its cap. */
+    skipped_files_truncated?: boolean;
     /** Images in the folder; GAIA reads an image only when it is added on its own. */
     skipped_images?: number;
     documents: Document[];

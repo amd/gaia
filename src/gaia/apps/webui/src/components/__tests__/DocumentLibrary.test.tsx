@@ -423,6 +423,30 @@ describe('DocumentLibrary path box', () => {
         expect(screen.queryByRole('alert')).toBeNull();
     });
 
+    it('names the files a folder skipped and why', async () => {
+        mockedApi.listDocuments.mockResolvedValue(emptyList);
+        mockedApi.uploadDocumentByPath.mockRejectedValue(
+            Object.assign(new Error('is a folder'), { httpStatus: 400, reason: 'is_folder' }),
+        );
+        mockedApi.indexFolder.mockResolvedValue({
+            indexed: 1, failed: 0, skipped: 3, skipped_files_truncated: true, errors: [],
+            skipped_files: [
+                { file: 'program.exe', reason: 'unsupported_type' },
+                { file: 'secrets.json', reason: 'credential_file' },
+                { file: 'song.mp3', reason: 'unsupported_type' },
+            ],
+            documents: [COMPLETE_DOC],
+        });
+        render(<DocumentLibrary />);
+
+        submitPath('/home/me/downloads');
+
+        const notice = await screen.findByRole('status');
+        expect(notice.textContent).toContain("Files GAIA can't add: program.exe, song.mp3");
+        expect(notice.textContent).toContain("Credential files GAIA won't add: secrets.json");
+        expect(notice.textContent).toContain('Showing the first 50 skipped files.');
+    });
+
     it('says how many images a folder left out and how to add them', async () => {
         mockedApi.listDocuments.mockResolvedValue(emptyList);
         mockedApi.uploadDocumentByPath.mockRejectedValue(
@@ -617,6 +641,29 @@ describe('DocumentLibrary notices follow the interface language', () => {
         expect(text).toContain('الملفات المتخطّاة لأن GAIA لا يستطيع إضافة نوعها: 1.');
         expect(text).toContain('لا تُضمَّن المجلدات الفرعية.');
         expect(text.indexOf('الملفات المضافة')).toBe(0);
+    });
+
+    it('names skipped files with translated reasons in Arabic', async () => {
+        setUiLocale('ar');
+        mockedApi.listDocuments.mockResolvedValue(emptyList);
+        mockedApi.uploadDocumentByPath.mockRejectedValue(
+            Object.assign(new Error('is a folder'), { httpStatus: 400, reason: 'is_folder' }),
+        );
+        mockedApi.indexFolder.mockResolvedValue({
+            indexed: 1, failed: 0, skipped: 2, errors: [],
+            skipped_files: [
+                { file: 'ملاحظات.exe', reason: 'unsupported_type' },
+                { file: 'credentials.json', reason: 'credential_file' },
+            ],
+            documents: [COMPLETE_DOC],
+        });
+        const { container } = render(<DocumentLibrary />);
+
+        submitPath(container, '/home/me/trip');
+
+        const text = stripIsolates((await screen.findByRole('status')).textContent ?? '');
+        expect(text).toContain('الملفات التي لا يستطيع GAIA إضافتها: ملاحظات.exe');
+        expect(text).toContain('ملفات بيانات الدخول التي لن يضيفها GAIA: credentials.json');
     });
 
     it('says in Arabic how many images a folder left out', async () => {

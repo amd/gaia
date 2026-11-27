@@ -191,6 +191,14 @@ class TestFolderIndexing:
 
         assert body["indexed"] == 1
         assert body["failed"] == 0
+        assert body["skipped"] == 3
+        assert body["skipped_files_truncated"] is False
+        assert {f["reason"] for f in body["skipped_files"]} == {"unsupported_type"}
+        assert {f["file"] for f in body["skipped_files"]} == {
+            "program.exe",
+            "library.dll",
+            "song.mp3",
+        }
         assert len(body["documents"]) == 1
         assert body["documents"][0]["filename"] == "good.txt"
 

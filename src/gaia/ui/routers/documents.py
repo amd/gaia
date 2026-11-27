@@ -21,7 +21,7 @@ import tempfile
 import unicodedata
 import uuid
 from pathlib import Path
-from typing import List
+from typing import Dict, List
 
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from fastapi.responses import FileResponse
@@ -76,6 +76,9 @@ UPLOAD_CHUNK_SIZE = 64 * 1024  # 64 KB
 
 # Length of the random hex ID in a partial upload's name.
 MANAGED_ID_LEN = 12
+
+# How many skipped filenames folder indexing reports before it truncates.
+_MAX_INDEX_FOLDER_SKIPPED = 50
 
 
 _CREDENTIAL_FILE_DETAIL = (
@@ -910,7 +913,19 @@ async def index_folder(request: IndexFolderRequest, db: ChatDatabase = Depends(g
     # Collect all candidate files
     candidate_files: List[Path] = []
     skipped = 0
+    skipped_files: List[Dict[str, str]] = []
+    skipped_files_truncated = False
     skipped_images = 0
+
+    def record_skipped(item: Path, reason: str) -> None:
+        nonlocal skipped_files_truncated
+        skipped_files.append(
+            {"file": item.relative_to(resolved).as_posix(), "reason": reason}
+        )
+        if len(skipped_files) > _MAX_INDEX_FOLDER_SKIPPED:
+            skipped_files.pop()
+            skipped_files_truncated = True
+
     try:
         pattern_iter = resolved.rglob("*") if request.recursive else resolved.iterdir()
         for item in pattern_iter:
@@ -919,12 +934,14 @@ async def index_folder(request: IndexFolderRequest, db: ChatDatabase = Depends(g
             if item.suffix.lower() in FOLDER_INDEX_EXTENSIONS:
                 if read_block(str(item))[0]:
                     skipped += 1
+                    record_skipped(item, "credential_file")
                     continue
                 candidate_files.append(item)
             elif item.suffix.lower() in IMAGE_EXTENSIONS:
                 skipped_images += 1
             else:
                 skipped += 1
+                record_skipped(item, "unsupported_type")
     except PermissionError:
         raise HTTPException(
             status_code=403,
@@ -936,6 +953,8 @@ async def index_folder(request: IndexFolderRequest, db: ChatDatabase = Depends(g
             indexed=0,
             failed=0,
             skipped=skipped,
+            skipped_files=skipped_files,
+            skipped_files_truncated=skipped_files_truncated,
             skipped_images=skipped_images,
             documents=[],
             errors=[],
@@ -1006,6 +1025,8 @@ async def index_folder(request: IndexFolderRequest, db: ChatDatabase = Depends(g
         indexed=len(indexed_docs),
         failed=len(errors),
         skipped=skipped,
+        skipped_files=skipped_files,
+        skipped_files_truncated=skipped_files_truncated,
         skipped_images=skipped_images,
         documents=indexed_docs,
         errors=errors,
