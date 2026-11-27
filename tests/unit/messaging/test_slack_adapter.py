@@ -451,7 +451,7 @@ def test_a_failed_final_update_posts_a_warning_in_the_original_thread(adapter, c
     assert "invalid_blocks" not in fallbacks[0]["text"]
     assert any(
         record.levelno == logging.WARNING
-        and "Could not deliver the final Slack answer" in record.getMessage()
+        and "Could not finish the Slack reply" in record.getMessage()
         for record in caplog.records
     )
 
@@ -521,6 +521,29 @@ def test_a_failed_empty_answer_flush_posts_a_warning_in_the_original_thread(adap
     assert len(fallbacks) == 1
     assert fallbacks[0]["thread_ts"] == turn.context.thread_ts
     assert streamed not in fallbacks[0]["text"]
+
+
+def test_a_failed_stream_flush_is_retried_at_finalization(adapter):
+    """A successful retry leaves the completed reply visible, without a warning."""
+    a, web, channel = adapter
+    turn = _target_for(adapter)
+    original = web.chat_update
+    streamed = "partial answer"
+    attempts = []
+
+    def fail_first(**kwargs):
+        attempts.append(kwargs["text"])
+        if len(attempts) == 1:
+            raise RuntimeError("ratelimited")
+        return original(**kwargs)
+
+    web.chat_update = fail_first
+    channel.on_event({"type": "token", "delta": streamed}, turn)
+    channel.on_event({"type": "final", "answer": ""}, turn)
+
+    assert attempts == [streamed, streamed]
+    assert any(u["text"] == streamed for u in web.updated)
+    assert not any(p["text"] == FINAL_DELIVERY_WARNING for p in web.posted)
 
 
 def test_a_failed_empty_answer_fallback_post_raises_instead_of_hiding_the_error(

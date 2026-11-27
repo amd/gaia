@@ -332,11 +332,34 @@ def test_throttle_finish_flushes_the_tail():
 
 
 def test_throttle_finish_reports_a_failed_flush():
-    """A final adapter flush can ask for a fallback only when it knows it failed."""
+    """A final adapter flush can ask for a fallback only when it still fails."""
     clock = [100.0]
-    throttle = StreamThrottle(lambda _: False, interval=1.0, now=lambda: clock[0])
+    attempts = []
+
+    def fail(_text):
+        attempts.append(_text)
+        return False
+
+    throttle = StreamThrottle(fail, interval=1.0, now=lambda: clock[0])
     throttle.add("a")
     assert throttle.finish() is False
+    assert attempts == ["a", "a"]
+
+
+def test_throttle_finish_retries_a_failed_flush():
+    """A failed stream edit gets one more try before the user sees a warning."""
+    clock = [100.0]
+    attempts = []
+
+    def flaky(_text):
+        attempts.append(_text)
+        return len(attempts) > 1
+
+    throttle = StreamThrottle(flaky, interval=1.0, now=lambda: clock[0])
+    throttle.add("a")
+    clock[0] = 101.0
+    assert throttle.finish() is True
+    assert attempts == ["a", "a"]
 
 
 def test_throttle_finish_reports_success_for_callbacks_with_no_result():

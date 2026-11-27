@@ -66,7 +66,7 @@ UNAUTHORIZED_REPLY = "Sorry — you're not authorized to use this GAIA agent."
 #: It deliberately repeats neither the answer nor the Slack error: those may
 #: contain private file contents, tool output or credentials from an error.
 FINAL_DELIVERY_WARNING = (
-    ":warning: GAIA could not deliver its final answer in this reply. "
+    ":warning: GAIA could not finish its reply here. "
     "Please resend your message and try again."
 )
 
@@ -911,7 +911,7 @@ class SlackAdapter:
             delivered = True
         if not delivered:
             log.warning(
-                "Could not deliver the final Slack answer in channel %s, reply %s",
+                "Could not finish the Slack reply in channel %s, reply %s",
                 target.channel,
                 target.reply_ts,
             )
