@@ -699,7 +699,7 @@ export function FileBrowser({ onStartChat }: FileBrowserProps) {
                                         aria-label={t('fileBrowser.selectAria', { name: visibleName(entry.name) })}
                                     />
                                     <span className="fb-entry-icon">{getFileIcon(entry)}</span>
-                                    <span className="fb-entry-name" title={visibleName(entry.path)}>{visibleName(entry.name)}</span>
+                                    <span className="fb-entry-name" title={visibleName(entry.path)} dir="auto">{visibleName(entry.name)}</span>
                                     {fileUnsupported && (
                                         <span className="fb-unsupported-badge">
                                             {t('fileBrowser.notIndexable')}
@@ -716,7 +716,7 @@ export function FileBrowser({ onStartChat }: FileBrowserProps) {
                                             <Eye size={14} />
                                         </button>
                                     )}
-                                    <span className="fb-entry-size">{entry.type === 'file' ? formatSize(entry.size) : ''}</span>
+                                    <span className="fb-entry-size">{entry.type === 'file' ? <bdi dir="ltr">{formatSize(entry.size)}</bdi> : ''}</span>
                                     <span className="fb-entry-date">{formatDate(entry.modified, t)}</span>
                                 </div>
                                 );
@@ -727,7 +727,7 @@ export function FileBrowser({ onStartChat }: FileBrowserProps) {
                         {previewFile && (
                             <div className="fb-preview">
                                 <div className="fb-preview-header">
-                                    <span className="fb-preview-name">{visibleName(previewFile.name)}</span>
+                                    <span className="fb-preview-name" dir="auto">{visibleName(previewFile.name)}</span>
                                     <button className="btn-icon-sm" onClick={() => setPreviewFile(null)} aria-label={t('fileBrowser.closePreview')}>
                                         <X size={14} />
                                     </button>
