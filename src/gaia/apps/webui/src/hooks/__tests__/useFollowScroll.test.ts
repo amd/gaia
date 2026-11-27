@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: MIT
 
 import { renderHook } from '@testing-library/react';
+import type { WheelEvent as ReactWheelEvent } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { useFollowScroll } from '../useFollowScroll';
 
@@ -55,5 +56,29 @@ describe('useFollowScroll', () => {
         resize?.();
 
         expect(el.scrollTop).toBe(1100);
+    });
+    it('offers the jump button when a wheel-up at the top of a long chat moves nothing', () => {
+        const { el } = makeList(500, 3000, 0);
+        const follow = { current: true };
+        const onDistance = vi.fn();
+        const { result } = renderHook(() => useFollowScroll({ current: el }, follow, onDistance));
+
+        result.current.listProps.onWheel({ deltaY: -100 } as ReactWheelEvent);
+
+        expect(follow.current).toBe(false);
+        expect(onDistance).toHaveBeenCalledWith(2500);
+        expect(result.current.userScrolling()).toBe(true);
+    });
+
+    it('keeps following on a wheel-up when the whole chat fits', () => {
+        const { el } = makeList(500, 500, 0);
+        const follow = { current: true };
+        const onDistance = vi.fn();
+        const { result } = renderHook(() => useFollowScroll({ current: el }, follow, onDistance));
+
+        result.current.listProps.onWheel({ deltaY: -100 } as ReactWheelEvent);
+
+        expect(follow.current).toBe(true);
+        expect(onDistance).not.toHaveBeenCalled();
     });
 });
