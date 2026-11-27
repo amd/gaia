@@ -497,6 +497,9 @@ export interface Message {
     stopError?: string;
     /** Client-side: this reply stands in for a turn that failed before answering. */
     failed?: boolean;
+    /** Client-side: GAIA never started this turn in time. Shown as an error, but the
+     *  run may still finish server-side, so it offers no Try again. */
+    stalled?: boolean;
     /** Client-side: the raw error, to recognize the server's saved copy of this failure. */
     failureText?: string;
     /** Client-side: the cause a failed turn named (`done.failure`), for its fix. */

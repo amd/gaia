@@ -615,7 +615,8 @@ export function MessageBubble({ message, isStreaming, agentSteps, agentStepsActi
         const steps = dropAnswerDrafts(agentSteps, message.content);
         return isStreaming ? { steps, echoed: false, endedBy: null } : dropErrorsEchoedInAnswer(steps, message.content);
     }, [agentSteps, message.content, message.role, isStreaming]);
-    const isError = message.role === 'assistant' && (echo.echoed || message.failed === true || isErrorContent(message.content));
+    const isError = message.role === 'assistant'
+        && (echo.echoed || message.failed === true || message.stalled === true || isErrorContent(message.content));
     const place = useInferencePlace();
     const showServerLog = useLogsStore((s) => s.show);
     const openSettings = useChatStore((s) => s.openSettings);
