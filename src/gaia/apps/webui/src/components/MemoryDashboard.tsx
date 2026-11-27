@@ -2708,7 +2708,7 @@ export function MemoryDashboard() {
                     {/* ── Goals Tab ──────────────────────────────────────── */}
                     {activeTab === 'goals' && (
                         <div className="mem-goals-tab">
-                            <p className="mem-tab-intro">{t('mem.goals.intro')}</p>
+                            <p className="mem-tab-intro">{t('mem.goals.intro', { name: ref('chat.title.goals') })}</p>
                             {goalStoreError && (goalStoreDamaged ? (
                                 <div className="mem-advanced-error" role="alert">
                                     <AlertTriangle size={14} /> {t('mem.goals.storeDamaged')}{' '}

@@ -15,6 +15,9 @@ export const enMessages = {
     'sidebar.open': 'Open sidebar',
     'sidebar.search': 'Search chats',
     'sidebar.newChat': 'New chat',
+    // Titles of chats GAIA makes itself; the stored titles are these English ones.
+    'chat.title.schedule': 'Schedule: {name}',
+    'chat.title.goals': 'Background goals',
     'sidebar.memory': 'Memory',
     'sidebar.schedules': 'Scheduled tasks',
     'sidebar.documents': 'Documents',
@@ -3947,7 +3950,7 @@ export const enMessages = {
     'mem.goals.priorityHigh': 'High priority',
     'mem.goals.create': 'Create',
     'mem.goals.loading': 'Loading goals...',
-    'mem.goals.intro': 'A goal is a bigger job you want GAIA to work on by itself. GAIA splits it into steps and works through them in the background, in a chat called “Background goals”, while GAIA is running. For something that should happen at a set time, use Scheduled tasks.',
+    'mem.goals.intro': 'A goal is a bigger job you want GAIA to work on by itself. GAIA splits it into steps and works through them in the background, in a chat called “{name}”, while GAIA is running. For something that should happen at a set time, use Scheduled tasks.',
     'mem.goals.empty': 'No goals yet. Create one, or accept one GAIA suggests during a chat.',
     'mem.goals.source.agent_inferred': 'agent inferred',
     'mem.goals.source.agent_scheduled': 'agent scheduled',
