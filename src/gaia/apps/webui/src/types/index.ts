@@ -112,10 +112,9 @@ export interface AgentInfo {
      */
     consumes_mcp_servers?: boolean;
     /**
-     * Opaque grant-ledger key. Built-ins are `builtin:<id>`, custom agents
-     * are `custom:<sha256-prefix>:<id>`, installed agents are
-     * `installed:<id>`, and native agents are `native:<id>`. Pass this to
-     * the grants endpoint.
+     * Opaque grant-ledger key. Installed agents are `installed:<id>`,
+     * native agents are `native:<id>`, and custom agents are
+     * `custom:<sha256-prefix>:<id>`. Pass this to the grants endpoint.
      */
     namespaced_agent_id?: string;
     category?: string;
@@ -201,7 +200,7 @@ export interface ConnectorRow {
     scopes: string[];
     /**
      * Per-agent MCP-tool-visibility activation snapshot (issue #1005).
-     * Keys are namespaced agent ids (``builtin:chat``,
+     * Keys are namespaced agent ids (``installed:gaia``,
      * ``custom:<hash>:<id>``, …), values are ``true`` when the agent can
      * see the server's tools and ``false`` once turned off. Absence means
      * inactive, except that a ``custom`` server reports ``installed:gaia``

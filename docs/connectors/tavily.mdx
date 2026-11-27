@@ -57,8 +57,8 @@ servers a grant covers credential access, but the agent won't see the
 tools until you also activate them (activation defaults to OFF):
 
 ```bash
-gaia connectors grants grant mcp-tavily builtin:chat --scopes "*"
-gaia connectors activations activate mcp-tavily builtin:chat
+gaia connectors grants grant mcp-tavily installed:gaia --scopes "*"
+gaia connectors activations activate mcp-tavily installed:gaia
 ```
 
 (In the UI: the tile's **GAIA can use Tavily in chat** switch does both at once.) See the

@@ -11,10 +11,10 @@ Schema::
       }
     }
 
-Where ``namespaced_agent_id`` is ``builtin:<id>`` for built-in agents,
-``custom:<sha256-prefix>:<id>`` for custom agents under
-``~/.gaia/agents/`` (per plan amendment A9), ``installed:<id>`` for
-wheel-installed agents, and ``native:<id>`` for binary agents.
+Where ``namespaced_agent_id`` is ``installed:<id>`` for wheel-installed
+agents (including the flagship ``installed:gaia``), ``native:<id>`` for
+binary agents, and ``custom:<sha256-prefix>:<id>`` for custom agents under
+``~/.gaia/agents/`` (per plan amendment A9).
 
 Atomicity guarantees:
 
