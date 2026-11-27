@@ -786,7 +786,41 @@ _CRASHES = [
     "panic: runtime error: index out of range",
     "process exited with code 1",
     "python: can't open file 'f.py': [Errno 2] No such file or directory",
+    # Signal deaths: OOM kill, SIGTERM, SIGABRT, SIGBUS, SIGILL, SIGFPE.
+    "Killed",
+    "bash: line 1:  4242 Killed                  python f.py",
+    "Terminated",
+    "Aborted (core dumped)",
+    "Bus error",
+    "Illegal instruction (core dumped)",
+    "Floating point exception",
 ]
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "python f.py 2>/dev/null; echo done",
+        "python f.py >/dev/null 2>&1; echo done",
+        "python f.py &>/dev/null || echo done",
+        "python f.py 2>/dev/null | head",
+        "python f.py 2> NUL & echo done",
+        "nohup python f.py > /dev/null 2>&1 &",
+    ],
+)
+def test_a_hidden_run_whose_output_went_to_null_is_not_a_test(command):
+    """The output the call shows came from the trailing command, not the program."""
+    records = [_wrote("f.py"), _shell(command, stdout="done\n")]
+
+    findings = action_findings("The fix is complete and tested.", records)
+
+    assert [f.gate for f in findings] == [ACTION]
+
+
+def test_a_shown_run_that_discards_stderr_still_counts():
+    records = [_wrote("f.py"), _shell("python f.py 2>/dev/null")]
+
+    assert action_findings("The fix is complete and tested.", records) == []
 
 
 @pytest.mark.parametrize("command", _MASKED)

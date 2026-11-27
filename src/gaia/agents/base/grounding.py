@@ -276,6 +276,8 @@ _RUN_ERROR = re.compile(
     r"|\bpanic:|\bAborted\b|exit(?:ed)? (?:with )?(?:code|status) -?[1-9]"
     r"|returned non-zero|command not found|No such file or directory"
     r"|is not recognized as an internal or external command"
+    r"|\b(?:Killed|Terminated|Hangup|Bus error|Illegal instruction)\b"
+    r"|Floating point exception|(?:killed|terminated) by signal|Out of memory"
 )
 _ASSIGNMENT = re.compile(r"^[A-Za-z_]\w*=")
 _ABSOLUTE = re.compile(r"^(?:/|~|[a-z]:/)")
@@ -292,38 +294,51 @@ def _command_words(command: str) -> List[str]:
         return re.findall(r"&&|\|\||[;|&()<>]+|[^\s;|&()<>]+", text)
 
 
-def _segments(words: Sequence[str]) -> Iterable[Tuple[List[str], bool]]:
-    """Each simple command, and whether the command's exit status is lost.
+#: How much a command's own outcome shows: its exit status is the call's,
+#: it is hidden but its output is not, or both are hidden.
+_SHOWN, _MASKED, _BLIND = 0, 1, 2
+_NULL_SINKS = frozenset({"/dev/null", "nul", "nul:", "$null"})
+
+
+def _segments(words: Sequence[str]) -> Iterable[Tuple[List[str], int]]:
+    """Each simple command, and how much of its outcome the call shows.
 
     ``f || true``, ``f; echo``, ``f &`` and ``f | head`` all report another
-    command's status, so the call's success says nothing about ``f``.
+    command's status, so the call's success says nothing about ``f``; if ``f``
+    also sends output to ``/dev/null``, what the call printed isn't f's either.
     """
     segment: List[str] = []
-    pending: Optional[Tuple[List[str], str]] = None
-    skip_target = False
+    discards = False
+    pending: Optional[Tuple[List[str], str, bool]] = None
+    in_target = False
+
+    def level(separator: str, discarded: bool, last: bool) -> int:
+        # ``f;`` with nothing after keeps f's status; ``f &`` never does.
+        if separator not in _MASKING or (last and separator not in ("&", "|", "|&")):
+            return _SHOWN
+        return _BLIND if discarded else _MASKED
+
     for word in words:
-        if skip_target:
-            skip_target = False
+        if in_target:
+            in_target = False
+            discards = discards or word.lower() in _NULL_SINKS
         elif word in _SEPARATORS:
             if segment:
                 if pending:
-                    yield pending[0], pending[1] in _MASKING
-                pending = (segment, word)
-            segment = []
+                    yield pending[0], level(pending[1], pending[2], False)
+                pending = (segment, word, discards)
+            segment, discards = [], False
         elif word and set(word) <= set("<>&|"):
             # A redirect: drop its fd (``2>``) and its target.
             if segment and segment[-1].isdigit():
                 segment.pop()
-            skip_target = True
+            in_target = True
         else:
             segment.append(word)
     if pending:
-        # ``f;`` with nothing after keeps f's status; ``f &`` never does.
-        yield pending[0], pending[1] in _MASKING and (
-            bool(segment) or pending[1] in ("&", "|", "|&")
-        )
+        yield pending[0], level(pending[1], pending[2], not segment)
     if segment:
-        yield segment, False
+        yield segment, _SHOWN
 
 
 def _program_name(word: str) -> str:
@@ -392,7 +407,7 @@ def _interpreted(name: str, args: List[str]) -> Tuple[str, List[str]]:
 
 
 def _run_events(
-    command: str, cwd: Optional[str], masked: bool = False, subshell: bool = False
+    command: str, cwd: Optional[str], masked: int = _SHOWN, subshell: bool = False
 ) -> Iterable[Tuple[Any, ...]]:
     """What a shell command runs or builds, segment by segment, after ``cd``.
 
@@ -402,7 +417,7 @@ def _run_events(
     command's own.
     """
     for words, lost in _segments(_command_words(command)):
-        lost = lost or masked
+        lost = max(lost, masked)
         while words and _ASSIGNMENT.match(words[0]):
             words = words[1:]
         name = _program_name(words[0]) if words else ""
@@ -418,7 +433,7 @@ def _run_events(
         while words and (
             name in _WRAPPERS or (name in _RUN_WRAPPERS and words[1:2] == ["run"])
         ):
-            lost = lost or name == "nohup"
+            lost = max(lost, _MASKED if name == "nohup" else _SHOWN)
             words = _skip_flags(words[2:] if name in _RUN_WRAPPERS else words[1:])
             if name == "timeout" and words:
                 words = words[1:]  # the duration
@@ -550,7 +565,7 @@ def _ran_what_it_wrote(records: Sequence[Dict[str, Any]]) -> bool:
             if event[0] == "cd":
                 # The shell session keeps the directory a command moved to.
                 session_cwd = event[1]
-            elif errored or (event[-1] and not shown):
+            elif errored or event[-1] == _BLIND or (event[-1] and not shown):
                 continue
             elif event[0] == "run":
                 credit(event[1])
