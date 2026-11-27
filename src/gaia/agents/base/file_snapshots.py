@@ -26,7 +26,6 @@ from __future__ import annotations
 import contextlib
 import contextvars
 import difflib
-import hashlib
 import json
 import logging
 import os
@@ -40,6 +39,8 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Iterable, Iterator, List, Optional
+
+from gaia.utils.hashing import sha256_file as _sha256_file
 
 logger = logging.getLogger(__name__)
 
@@ -99,14 +100,6 @@ def new_turn_id() -> str:
 
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
-
-
-def _sha256_file(path: Path) -> str:
-    digest = hashlib.sha256()
-    with open(path, "rb") as fh:
-        for block in iter(lambda: fh.read(1 << 20), b""):
-            digest.update(block)
-    return digest.hexdigest()
 
 
 def _write_json_atomic(path: Path, data: Dict[str, Any]) -> None:
