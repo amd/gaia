@@ -43,6 +43,7 @@ from ..models import (
     DocumentUploadRequest,
     IndexFolderRequest,
     IndexFolderResponse,
+    SkippedReason,
 )
 from ..session_environment import path_error_reason
 from ..utils import (
@@ -80,6 +81,9 @@ MANAGED_ID_LEN = 12
 # How many skipped filenames folder indexing reports before it truncates.
 _MAX_INDEX_FOLDER_SKIPPED = 50
 
+# Desktop artifacts that still count as skipped but do not deserve a named slot.
+_UNNAMED_OS_FILES = frozenset({".ds_store", "desktop.ini", "ehthumbs.db", "thumbs.db"})
+
 
 _CREDENTIAL_FILE_DETAIL = (
     "This file holds credentials or keys, so GAIA won't add it to the library "
@@ -91,6 +95,13 @@ def _refuse_secret(path: Path) -> None:
     """403 when *path* holds credentials or keys, the files the read tools refuse."""
     if read_block(str(path))[0]:
         raise HTTPException(status_code=403, detail=_CREDENTIAL_FILE_DETAIL)
+
+
+def _is_unnamed_skip(relative: Path) -> bool:
+    """Hide dot-paths and OS artifacts from the named list, not from the count."""
+    return any(part.startswith(".") for part in relative.parts) or (
+        relative.name.lower() in _UNNAMED_OS_FILES
+    )
 
 
 def _short_id() -> str:
@@ -917,11 +928,12 @@ async def index_folder(request: IndexFolderRequest, db: ChatDatabase = Depends(g
     skipped_files_truncated = False
     skipped_images = 0
 
-    def record_skipped(item: Path, reason: str) -> None:
+    def record_skipped(item: Path, reason: SkippedReason) -> None:
         nonlocal skipped_files_truncated
-        skipped_files.append(
-            {"file": item.relative_to(resolved).as_posix(), "reason": reason}
-        )
+        relative = item.relative_to(resolved)
+        if _is_unnamed_skip(relative):
+            return
+        skipped_files.append({"file": relative.as_posix(), "reason": reason})
         if len(skipped_files) > _MAX_INDEX_FOLDER_SKIPPED:
             skipped_files.pop()
             skipped_files_truncated = True

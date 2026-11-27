@@ -942,11 +942,14 @@ class IndexFolderRequest(BaseModel):
     recursive: bool = True
 
 
+SkippedReason = Literal["unsupported_type", "credential_file"]
+
+
 class SkippedFile(BaseModel):
     """One file left out of folder indexing, with the reason it was left out."""
 
     file: str
-    reason: str
+    reason: SkippedReason
 
 
 class IndexFolderResponse(BaseModel):

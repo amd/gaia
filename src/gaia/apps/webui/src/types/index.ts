@@ -779,10 +779,13 @@ export interface BrowseResponse {
     folder_refusal?: string | null;
 }
 
+/** Why folder indexing left a file out. Keep in sync with the backend model. */
+export type SkippedFileReason = 'unsupported_type' | 'credential_file';
+
 /** One skipped file from folder indexing and the reason it was left out. */
 export interface SkippedFile {
     file: string;
-    reason: string;
+    reason: SkippedFileReason;
 }
 
 /** Response from the /documents/index-folder endpoint. */

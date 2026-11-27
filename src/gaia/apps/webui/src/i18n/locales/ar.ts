@@ -1105,7 +1105,7 @@ const messages: Messages = {
     'docs.folder.noSubfolders': 'لا تُضمَّن المجلدات الفرعية.',
     'docs.folder.skippedFiles.unsupported': 'الملفات التي لا يستطيع GAIA إضافتها: {names}',
     'docs.folder.skippedFiles.credential': 'ملفات بيانات الدخول التي لن يضيفها GAIA: {names}',
-    'docs.folder.skippedFiles.truncated': 'تُعرض أول 50 ملفًا متخطّى فقط.',
+    'docs.folder.skippedFiles.truncated': 'تُعرض أول {n} ملفًا متخطّى فقط.',
     'docs.notFound': '«{name}» غير موجود',
     'docs.notFoundDetail': 'تحقّق من المسار بحثًا عن خطأ إملائي، ثم أضفه مجددًا.',
     'docs.tooLarge': '«{name}» كبير جدًا',

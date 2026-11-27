@@ -849,7 +849,7 @@ export interface IndexFolderResponse {
  */
 export interface SkippedFile {
   file: string;
-  reason: string;
+  reason: "unsupported_type" | "credential_file";
 }
 export interface InferenceCommit {
   insights: InferenceCommitItem[];

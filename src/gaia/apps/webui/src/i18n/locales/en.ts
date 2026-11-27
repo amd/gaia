@@ -1105,7 +1105,7 @@ export const enMessages = {
     'docs.folder.noSubfolders': "Subfolders aren't included.",
     'docs.folder.skippedFiles.unsupported': "Files GAIA can't add: {names}",
     'docs.folder.skippedFiles.credential': "Credential files GAIA won't add: {names}",
-    'docs.folder.skippedFiles.truncated': 'Showing the first 50 skipped files.',
+    'docs.folder.skippedFiles.truncated': 'Showing the first {n} skipped files.',
     'docs.notFound': '"{name}" doesn\'t exist',
     'docs.notFoundDetail': 'Check the path for typos, then add it again.',
     'docs.tooLarge': '"{name}" is too large',

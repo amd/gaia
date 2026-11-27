@@ -34,7 +34,7 @@ describe('describeSkippedFiles', () => {
     it('caps a combined status and keeps the server truncation flag', () => {
         const files = Array.from({ length: 51 }, (_, i) => ({
             file: `skip-${i}.bin`,
-            reason: 'unsupported_type',
+            reason: 'unsupported_type' as const,
         }));
         const parts = describeSkippedFiles(en, { skipped_files: files }).map(stripIsolates);
 

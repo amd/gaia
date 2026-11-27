@@ -5474,6 +5474,10 @@
         "type": "string"
       },
       "reason": {
+        "enum": [
+          "unsupported_type",
+          "credential_file"
+        ],
         "title": "Reason",
         "type": "string"
       }
