@@ -68,11 +68,11 @@ if [ "$RUN_BACKEND" = true ]; then
     fi
 
     # Check that gaia is installed (editable install)
-    if ! (cd "$PROJECT_ROOT" && uv run python -c "import gaia" 2>/dev/null); then
+    if ! (cd "$PROJECT_ROOT" && uv run python -c "import gaia.ui.server" 2>/dev/null); then
         echo "[ERROR] GAIA is not installed. Run the following from the project root:"
         echo ""
         echo "  cd $PROJECT_ROOT"
-        echo "  uv venv && uv pip install -e \".[dev,rag]\""
+        echo "  uv venv && uv pip install -e \".[dev,ui]\""
         echo ""
         echo "See docs/reference/dev.mdx for full setup instructions."
         exit 1

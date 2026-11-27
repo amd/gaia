@@ -50,7 +50,8 @@ func TestAgentProgramFlagOverridesTheEnvironment(t *testing.T) {
 		t.Fatal("--agent-program is not registered")
 	}
 	for _, must := range []string{catalog.NativeAgentBinary, catalog.PythonAgentBinary, catalog.AgentEnv,
-		"/agent", preflight.FlagshipAgentKey} {
+		"/agent", preflight.FlagshipAgentKey, catalog.HarnessLabel(catalog.NativeAgentBinary),
+		catalog.HarnessLabel(catalog.PythonAgentChoice)} {
 		if !strings.Contains(f.Usage, must) {
 			t.Errorf("--agent-program help text does not mention %q: %q", must, f.Usage)
 		}

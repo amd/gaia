@@ -22,6 +22,7 @@ from gaia.llm.lemonade_launcher import describe_client_hint, describe_start_hint
 from gaia.logger import get_logger
 from gaia.security import PathValidator
 from gaia.tool_cancellation import raise_if_cancelled
+from gaia.utils.hashing import sha256_file as _file_sha256
 
 
 def _missing_deps_msg() -> str:
@@ -58,14 +59,6 @@ _SENSITIVE_PREFIXES = (".env.",)
 
 # Extensions that are always sensitive
 _SENSITIVE_EXTENSIONS = {".pem", ".key", ".pfx", ".p12", ".jks", ".keystore"}
-
-
-def _file_sha256(path: Path) -> str:
-    digest = hashlib.sha256()
-    with open(path, "rb") as f:
-        for block in iter(lambda: f.read(1 << 20), b""):
-            digest.update(block)
-    return digest.hexdigest()
 
 
 def _is_sensitive_file(filename: str) -> bool:

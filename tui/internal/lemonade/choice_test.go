@@ -513,3 +513,29 @@ func TestAResavedKeyIsRefetched(t *testing.T) {
 		t.Fatalf("after re-save: %q, %v; want the new key", key, err)
 	}
 }
+
+// Python expands ~ in GAIA_CONFIG_DIR and ~ and $VARs in GAIA_HOME, so the TUI
+// must land on the same folder or its config and gateway files split from Python's.
+func TestConfigDirExpandsLikePython(t *testing.T) {
+	home := filepath.Join("fake", "home")
+	homeDir := func() (string, error) { return home, nil }
+	cases := []struct {
+		name string
+		env  map[string]string
+		want string
+	}{
+		{"tilde GAIA_HOME", map[string]string{"GAIA_HOME": "~/gaia-test"}, filepath.Join(home, "gaia-test")},
+		{"var GAIA_HOME", map[string]string{"GAIA_HOME": "$ROOT/g", "ROOT": "base"}, filepath.Join("base", "g")},
+		{"tilde GAIA_CONFIG_DIR wins", map[string]string{"GAIA_CONFIG_DIR": "~/cfg", "GAIA_HOME": "/other"}, filepath.Join(home, "cfg")},
+		{"default", map[string]string{}, filepath.Join(home, ".gaia")},
+	}
+	for _, tc := range cases {
+		getenv := func(k string) string { return tc.env[k] }
+		if got := ConfigDirFrom(getenv, homeDir); filepath.Clean(got) != tc.want {
+			t.Errorf("%s: ConfigDirFrom = %q, want %q", tc.name, got, tc.want)
+		}
+		if got, want := ConfigPathFrom(getenv, homeDir), filepath.Join(tc.want, "config.json"); got != want {
+			t.Errorf("%s: ConfigPathFrom = %q, want %q", tc.name, got, want)
+		}
+	}
+}

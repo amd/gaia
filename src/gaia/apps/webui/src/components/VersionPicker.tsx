@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: MIT
 
 import { useEffect, useRef, useState } from 'react';
+import { getUpdaterBridge } from '../hooks/useUpdateStatus';
 import type { ReleaseInfo } from '../hooks/useUpdateStatus';
 import { updateErrorReason } from '../hooks/updateError';
 import { useEscapeToClose } from '../hooks/useEscapeToClose';
@@ -21,15 +22,6 @@ type PickerView =
     | { kind: 'list'; releases: ReleaseInfo[] }
     | { kind: 'confirm'; release: ReleaseInfo; releases: ReleaseInfo[] }
     | { kind: 'installing' };
-
-interface GaiaUpdaterBridge {
-    listReleases: () => Promise<ReleaseInfo[] | { error: string }>;
-    installVersion: (tag: string) => Promise<unknown>;
-}
-
-function getUpdaterBridge(): GaiaUpdaterBridge | undefined {
-    return (window as unknown as { gaiaUpdater?: GaiaUpdaterBridge }).gaiaUpdater;
-}
 
 /**
  * Modal dialog that lets the user pick an exact GAIA release (newer or older)

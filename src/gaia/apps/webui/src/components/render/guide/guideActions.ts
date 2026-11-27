@@ -1,12 +1,7 @@
 // Copyright(C) 2026 Advanced Micro Devices, Inc. All rights reserved.
 // SPDX-License-Identifier: MIT
 
-/** Copy, share and print for a guide's text. Each throws when the platform refuses. */
-
-export async function copyGuide(text: string): Promise<void> {
-    if (!navigator.clipboard?.writeText) throw new Error('Clipboard is not available here');
-    await navigator.clipboard.writeText(text);
-}
+/** Share and print for a guide's text. Each throws when the platform refuses. */
 
 export function canShare(): boolean {
     return typeof navigator !== 'undefined' && typeof navigator.share === 'function';

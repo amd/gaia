@@ -197,23 +197,21 @@ class _RememberingAgent(MemoryMixin, Agent):
 
 
 @pytest.mark.parametrize(
-    "request_text",
+    "request_text, fact",
     [
-        "Remember that my dog's name is Rex.",
-        "My birthday is March 3. Please remember that.",
+        ("Remember that my dog's name is Rex.", "my dog's name is Rex"),
+        ("My birthday is March 3. Please remember that.", "My birthday is March 3"),
     ],
 )
-def test_gaia_never_calls_remember_for_the_model(monkeypatch, tmp_path, request_text):
+def test_a_plain_remember_request_the_model_skips_is_saved_once(
+    monkeypatch, tmp_path, request_text, fact
+):
     agent = _make(_RememberingAgent, monkeypatch, tmp_path)
     agent.saved = []
     agent.console.background_mode = False
-    sent = _script(agent, "Got it.", "Got it, noted.", "Okay.")
+    _script(agent, "Got it.", "Got it, noted.", "Okay.", "Saved.", "Saved.")
     agent.process_query(request_text)
-    assert agent.saved == []
-    # The completion nudge and the answer check each ask once; GAIA calls nothing.
-    assert len(sent) == 3
-    (repair,) = _repairs(sent)
-    assert "Call remember now" in repair
+    assert agent.saved == [fact]
 
 
 def test_a_declined_detail_is_never_pushed_back_for_a_save(monkeypatch, tmp_path):

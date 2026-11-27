@@ -1981,7 +1981,7 @@ gaia config set default_model Qwen3.6-35B-A3B-GGUF # persist a default model
 | `hybrid_classifier_model` | _(the cheap model)_ | Model that labels each turn for `hybrid` |
 | `hybrid_classifier_timeout` | `15` | Seconds `hybrid` waits for the label (1-120) before running the turn on the strong model |
 | `hybrid_policy` | `quality` | How readily `hybrid` uses the cheap model: `quality` or `balanced`, which also sends medium-difficulty code changes to the cheap model — cheaper, with a measurable quality cost on harder fixes. See [Hybrid model](/guides/llm-gateway#hybrid-model) |
-| `flagship_agent` | unset | Which program is the GAIA agent in the Agent UI and the terminal UI: `gaiapy` (the Python agent: every tool and feature, the most tested) or `gaiacpp` (the native C++ agent: fast and light, fewer features so far, beta). Unset, both run the Python agent, even when `gaiacpp` is installed. Both apps have the same switch: Settings > Agent & model in the Agent UI, `/agent` in the terminal UI |
+| `flagship_agent` | unset | Which program is the GAIA agent in the Agent UI and the terminal UI: `gaiapy` (Full-featured, the Python agent: every tool and feature, the most tested) or `gaiacpp` (Fast and light, the native C++ agent: fewer features so far, beta). Unset, both run Full-featured, even when `gaiacpp` is installed. Both apps have the same switch: Settings > Agent & model in the Agent UI, `/agent` in the terminal UI |
 | `cloud_reasoning_effort` | `off` | `off` sends cloud models no `reasoning_effort`, leaving each in its provider's default mode. `low`, `medium` or `high` probes each cloud model once and sends that effort to the ones that reason, at the cost of more tokens and slower replies. See [Reasoning](/guides/llm-gateway#reasoning) |
 | `last_provider`, `last_model` | _(unset)_ | The model last chosen in `gaia-cli` or the Agent UI, restored on its next launch and used by `gaia schedule` runs (on `hybrid`, each run's prompt is routed like a chat turn and runs on the cheap or strong model it picks) — see [Your model is remembered](/guides/ai-providers#your-model-is-remembered). `gaia config set last_model ""` forgets it |
 | `lemonade_idle_timeout_minutes` | `15` | Stop GAIA's own Lemonade Server once no GAIA process has held it, and it has served no request, for this many minutes; `0` keeps it running until `gaia daemon stop` — see [GAIA's Lemonade Server](#gaias-lemonade-server) |
@@ -1998,20 +1998,25 @@ gaia config set default_model Qwen3.6-35B-A3B-GGUF # persist a default model
 | `read_aloud_voice` | _(unset = `af_bella`)_ | The Kokoro voice the Agent UI and the TUI read replies in, such as `bm_george`; any other value is refused — see [Read aloud](/guides/agent-ui/chat#read-aloud) |
 | `read_aloud_speed` | `100` | Read-aloud speed, as a percentage of normal (50–200) |
 | `read_aloud_auto` | `false` | Read each finished reply aloud without being asked |
-| `network_policy` | `cloud_allowed` | `local_ai_only` makes GAIA refuse every cloud AI model — see [Local only](#local-only). Stored in `~/.gaia/policy.json`, not in `config.json` |
+| `network_policy` | `cloud_allowed` | `local_ai_only` makes GAIA refuse every cloud AI model and every GAIA web search or knowledge request; see [Local only](#local-only). Stored in `~/.gaia/policy.json`, not in `config.json` |
 
 ### Local only
 
 ```bash
 gaia config set network_policy local_ai_only   # no AI request reaches a cloud model
 gaia config get network_policy
-gaia config set network_policy cloud_allowed   # allow cloud models again
+gaia config set network_policy cloud_allowed   # allow cloud models and web search again
 ```
 
 With `local_ai_only`, GAIA refuses every AI request to a model Lemonade's catalog
 doesn't list as local: Fireworks and AMD LLM Gateway models, Lemonade router
 collections, and any model id the catalog doesn't know. The refusal names the model
 and how to turn the setting off. Downloading a local model still works.
+
+It also refuses GAIA's web search before any request is sent: the agent's
+`search_web` tool, its Tavily and DuckDuckGo paths, direct MCP tools from web-search
+connectors, and `gaia knowledge search` and `gaia knowledge extract`. The refusal
+says how to turn the setting off. Cached results are not used while it is on.
 
 It applies everywhere GAIA sends a prompt or a key:
 
@@ -2033,8 +2038,10 @@ wasn't checked. `gaia config show` lists the policy file and the current level.
 
 What it does not cover:
 
-- Non-AI network features: web page fetch, connectors and MCP servers keep working
-  and keep their own permissions.
+- Other network features: web page fetch, file download, connectors and MCP servers
+  keep working and keep their own permissions. Web-search calls from GAIA's own
+  search, `gaia knowledge`, and web-search connectors are the exception described
+  above.
 - A Lemonade Server you run on another machine: GAIA treats the models it lists as
   local, so prompts go to that machine.
 - An agent sidecar built before this setting existed: it runs its

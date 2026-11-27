@@ -262,8 +262,8 @@ the top of the project. When that file exists, GAIA uses it:
 }
 ```
 
-- **`runtimeExecutable` and `runtimeArgs`** are the command, run as is and
-  never through a shell. **`port`** is where it listens. **`cwd`** (optional)
+- **`runtimeExecutable` and `runtimeArgs`** are the command, never run
+  through a shell. **`port`** is where it listens. **`cwd`** (optional)
   is a folder inside the project. **`url`** (optional) is the page to open.
   **`readyTimeoutSeconds`** (optional, up to 120) is how long to wait for the
   port.
@@ -272,6 +272,14 @@ the top of the project. When that file exists, GAIA uses it:
   `PYTHONUNBUFFERED`, and names starting `VITE_`, `NEXT_PUBLIC_`, `REACT_APP_`
   or `PUBLIC_`. The server gets your `PATH`, home folder and locale from
   GAIA's environment, and none of its keys or tokens.
+- **Only this PC reaches a dev server.** Once the port answers, GAIA checks
+  the address the server listens on. A server listening on all network
+  interfaces or on a network address is stopped, with a message saying how to
+  bind it to `127.0.0.1`. For `python -m http.server`, Vite, Next.js, `serve`,
+  `http-server` and webpack's dev server, GAIA adds the `127.0.0.1` bind
+  when the command has none, and refuses one bound elsewhere; the approval
+  shows the command with it. Servers also get `HOST=127.0.0.1`, and `env`
+  may set `HOST` or `HOSTNAME` only to a loopback address.
 - **No file yet?** GAIA writes one for you, then asks before running it.
 - **Starting asks first** and shows the exact command, folder and port.
   **Always allow** covers that exact command for this chat; if the command,

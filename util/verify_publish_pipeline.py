@@ -102,9 +102,11 @@ from urllib.parse import urlparse
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 WORKER_DIR = REPO_ROOT / "workers" / "agent-hub"
+# Both publishers import DIRECT_UPLOAD_THRESHOLD from here.
+SHARED_HELPERS = REPO_ROOT / "util" / "hub_r2_publish.py"
 
 # The size at which an artifact stops fitting through the Worker. Checked against
-# each publisher's own constant at startup, so moving it there fails here loudly
+# the publishers' shared constant at startup, so moving it there fails here loudly
 # instead of silently testing the wrong lane.
 DIRECT_UPLOAD_THRESHOLD = 90 * 1024 * 1024
 
@@ -137,6 +139,7 @@ class Spec:
     key: str
     path: Path
     threshold_const: str
+    threshold_path: Path
     drives: str
     # Capabilities. A case that needs one the publisher lacks is reported N/A
     # rather than passed or failed, so the table never overstates coverage.
@@ -157,6 +160,7 @@ SPECS = {
         key="terminal-hub",
         path=REPO_ROOT / "hub/components/terminal-hub/publish_to_r2.py",
         threshold_const="DIRECT_UPLOAD_THRESHOLD",
+        threshold_path=SHARED_HELPERS,
         drives="release_components.yml",
         direct_r2=True,
         lenient_rebuild=True,
@@ -175,6 +179,7 @@ SPECS = {
         key="gaia",
         path=REPO_ROOT / "hub/agents/gaia/python/packaging/publish_to_r2.py",
         threshold_const="DIRECT_UPLOAD_THRESHOLD",
+        threshold_path=SHARED_HELPERS,
         drives="release_agent_gaia.yml",
         direct_r2=True,
         lenient_rebuild=True,
@@ -894,7 +899,7 @@ def _read_threshold(spec: Spec) -> int:
     """Read a publisher's request-body cap constant without importing it."""
     import ast
 
-    tree = ast.parse(spec.path.read_text(encoding="utf-8"))
+    tree = ast.parse(spec.threshold_path.read_text(encoding="utf-8"))
     for node in tree.body:
         if isinstance(node, ast.Assign) and any(
             isinstance(t, ast.Name) and t.id == spec.threshold_const
@@ -902,7 +907,8 @@ def _read_threshold(spec: Spec) -> int:
         ):
             return int(eval(compile(ast.Expression(node.value), "<t>", "eval")))
     raise SystemExit(
-        f"error: {spec.threshold_const} not found in {spec.path.relative_to(REPO_ROOT)}"
+        f"error: {spec.threshold_const} not found in "
+        f"{spec.threshold_path.relative_to(REPO_ROOT)}"
     )
 
 
@@ -940,7 +946,8 @@ def main(argv=None) -> int:
         threshold = _read_threshold(spec)
         if threshold != DIRECT_UPLOAD_THRESHOLD:
             raise SystemExit(
-                f"error: {spec.path.relative_to(REPO_ROOT)} sets {spec.threshold_const} "
+                f"error: {spec.threshold_path.relative_to(REPO_ROOT)} sets "
+                f"{spec.threshold_const} "
                 f"to {threshold}, but this harness builds its oversized fixture at "
                 f"{DIRECT_UPLOAD_THRESHOLD}. Update DIRECT_UPLOAD_THRESHOLD here so the "
                 "oversized cases still test the right lane."

@@ -21,7 +21,7 @@ import tempfile
 import unicodedata
 import uuid
 from pathlib import Path
-from typing import List
+from typing import Dict, List
 
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from fastapi.responses import FileResponse
@@ -43,6 +43,7 @@ from ..models import (
     DocumentUploadRequest,
     IndexFolderRequest,
     IndexFolderResponse,
+    SkippedReason,
 )
 from ..session_environment import path_error_reason
 from ..utils import (
@@ -77,6 +78,12 @@ UPLOAD_CHUNK_SIZE = 64 * 1024  # 64 KB
 # Length of the random hex ID in a partial upload's name.
 MANAGED_ID_LEN = 12
 
+# How many skipped filenames folder indexing reports before it truncates.
+_MAX_INDEX_FOLDER_SKIPPED = 50
+
+# Desktop artifacts that still count as skipped but do not deserve a named slot.
+_UNNAMED_OS_FILES = frozenset({".ds_store", "desktop.ini", "ehthumbs.db", "thumbs.db"})
+
 
 _CREDENTIAL_FILE_DETAIL = (
     "This file holds credentials or keys, so GAIA won't add it to the library "
@@ -88,6 +95,13 @@ def _refuse_secret(path: Path) -> None:
     """403 when *path* holds credentials or keys, the files the read tools refuse."""
     if read_block(str(path))[0]:
         raise HTTPException(status_code=403, detail=_CREDENTIAL_FILE_DETAIL)
+
+
+def _is_unnamed_skip(relative: Path) -> bool:
+    """Hide dot-paths and OS artifacts from the named list, not from the count."""
+    return any(part.startswith(".") for part in relative.parts) or (
+        relative.name.lower() in _UNNAMED_OS_FILES
+    )
 
 
 def _short_id() -> str:
@@ -878,7 +892,20 @@ async def index_folder(request: IndexFolderRequest, db: ChatDatabase = Depends(g
     # Collect all candidate files
     candidate_files: List[Path] = []
     skipped = 0
+    skipped_files: List[Dict[str, str]] = []
+    skipped_files_truncated = False
     skipped_images = 0
+
+    def record_skipped(item: Path, reason: SkippedReason) -> None:
+        nonlocal skipped_files_truncated
+        relative = item.relative_to(resolved)
+        if _is_unnamed_skip(relative):
+            return
+        skipped_files.append({"file": relative.as_posix(), "reason": reason})
+        if len(skipped_files) > _MAX_INDEX_FOLDER_SKIPPED:
+            skipped_files.pop()
+            skipped_files_truncated = True
+
     try:
         pattern_iter = resolved.rglob("*") if request.recursive else resolved.iterdir()
         for item in pattern_iter:
@@ -887,12 +914,14 @@ async def index_folder(request: IndexFolderRequest, db: ChatDatabase = Depends(g
             if item.suffix.lower() in FOLDER_INDEX_EXTENSIONS:
                 if read_block(str(item))[0]:
                     skipped += 1
+                    record_skipped(item, "credential_file")
                     continue
                 candidate_files.append(item)
             elif item.suffix.lower() in IMAGE_EXTENSIONS:
                 skipped_images += 1
             else:
                 skipped += 1
+                record_skipped(item, "unsupported_type")
     except PermissionError:
         raise HTTPException(
             status_code=403,
@@ -904,6 +933,8 @@ async def index_folder(request: IndexFolderRequest, db: ChatDatabase = Depends(g
             indexed=0,
             failed=0,
             skipped=skipped,
+            skipped_files=skipped_files,
+            skipped_files_truncated=skipped_files_truncated,
             skipped_images=skipped_images,
             documents=[],
             errors=[],
@@ -974,6 +1005,8 @@ async def index_folder(request: IndexFolderRequest, db: ChatDatabase = Depends(g
         indexed=len(indexed_docs),
         failed=len(errors),
         skipped=skipped,
+        skipped_files=skipped_files,
+        skipped_files_truncated=skipped_files_truncated,
         skipped_images=skipped_images,
         documents=indexed_docs,
         errors=errors,

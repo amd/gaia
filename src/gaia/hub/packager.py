@@ -17,7 +17,6 @@ There is no degraded "best-effort" wheel — a build failure is loud.
 
 from __future__ import annotations
 
-import hashlib
 import re
 import subprocess
 import sys
@@ -27,11 +26,11 @@ from typing import List, Optional
 
 from gaia.hub import manifest as hub_manifest
 from gaia.logger import get_logger
+from gaia.utils.hashing import sha256_file as _sha256_file
 
 log = get_logger(__name__)
 
 # Read SHA-256 in 1 MiB chunks so a large native-deps wheel doesn't balloon RAM.
-_HASH_CHUNK = 1024 * 1024
 
 _SPEC_URL = "https://amd-gaia.ai/docs/spec/agent-hub-restructure"
 
@@ -68,15 +67,6 @@ def _normalize_wheel_stem(dist_name: str) -> str:
     filename. We use this to locate the wheel ``python -m build`` produced.
     """
     return re.sub(r"[-_.]+", "_", dist_name).lower()
-
-
-def _sha256_file(path: Path) -> str:
-    """Return the lowercase hex SHA-256 of *path* (streamed)."""
-    digest = hashlib.sha256()
-    with path.open("rb") as fh:
-        for chunk in iter(lambda: fh.read(_HASH_CHUNK), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
 
 
 def _read_pyproject_name(pyproject: Path) -> Optional[str]:

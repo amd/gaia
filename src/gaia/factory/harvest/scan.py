@@ -16,7 +16,11 @@ from collections import Counter
 from pathlib import Path
 from typing import Dict, List, Optional
 
-from gaia.factory.harvest.analyze import analyze, duration_minutes
+from gaia.factory.harvest.analyze import (  # noqa: F401  percentile is re-exported
+    analyze,
+    duration_minutes,
+    percentile,
+)
 from gaia.factory.harvest.reader import Trace, iter_traces
 
 DEFAULT_OUT = Path.home() / ".gaia" / "cache" / "factory"
@@ -77,14 +81,6 @@ def estimate_cost(trace: Trace) -> Dict[str, float]:
         "total": fresh + cached,
         "unpriced_tokens": unpriced,
     }
-
-
-def percentile(values: List[float], pct: float) -> float:
-    if not values:
-        return 0.0
-    ordered = sorted(values)
-    idx = min(len(ordered) - 1, int(pct / 100.0 * (len(ordered) - 1) + 0.5))
-    return ordered[idx]
 
 
 def summarize(traces: List[Trace]) -> Dict:

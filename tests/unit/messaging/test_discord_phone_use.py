@@ -5,6 +5,7 @@ getting files back, starting over, replying to a message, asking for help."""
 
 from __future__ import annotations
 
+import logging
 import os
 import time
 
@@ -116,6 +117,82 @@ def test_a_reply_that_is_only_a_file_still_says_something(tmp_path):
     ad._on_agent_event({"type": "final", "answer": f"[[send: `{doc}`]]"}, turn)
     assert _files(ad) == [doc.resolve()]
     assert _texts(ad)[-1] == "-# Sent."
+
+
+@pytest.mark.parametrize("only_file", [True, False])
+def test_a_failed_final_file_send_posts_a_warning(
+    tmp_path, monkeypatch, caplog, only_file
+):
+    """A file the user asked for is a final answer, not a mid-stream edit."""
+    doc = tmp_path / "a.txt"
+    doc.write_text("x")
+    ad, clock = make(upload_roots=[str(tmp_path)])
+    ad.on_ready()
+    turn = _turn(ad, clock, "send me the file")
+    original = ad.transport.send
+
+    def fail_file(channel_id, text, **kwargs):
+        if kwargs.get("file_path"):
+            raise RuntimeError("upload rejected")
+        return original(channel_id, text, **kwargs)
+
+    monkeypatch.setattr(ad.transport, "send", fail_file)
+    answer = f"[[send: `{doc}`]]"
+    if not only_file:
+        answer = f"Here it is.\n{answer}\nDone."
+    with caplog.at_level(logging.WARNING, logger="gaia.messaging.discord.adapter"):
+        ad._on_agent_event({"type": "final", "answer": answer}, turn)
+
+    assert _files(ad) == []
+    assert da.FINAL_DELIVERY_WARNING in _texts(ad)
+    if only_file:
+        assert "-# Sent." not in _texts(ad)
+    assert "upload rejected" not in da.FINAL_DELIVERY_WARNING
+    assert any(
+        record.levelno == logging.WARNING
+        and "Could not finish the Discord reply" in record.getMessage()
+        for record in caplog.records
+    )
+
+
+@pytest.mark.parametrize("only_file", [True, False])
+def test_a_refused_file_with_a_failed_note_posts_a_warning(
+    tmp_path, monkeypatch, caplog, only_file
+):
+    """A rejected file only counts as delivered when its refusal note lands."""
+    allowed = tmp_path / "allowed"
+    allowed.mkdir()
+    doc = tmp_path / "outside.txt"
+    doc.write_text("x")
+    ad, clock = make(upload_roots=[str(allowed)])
+    ad.on_ready()
+    turn = _turn(ad, clock, "send me the file")
+    original = ad.transport.send
+    attempted = []
+
+    def fail_note(channel_id, text, **kwargs):
+        attempted.append(text)
+        if text.startswith("-# Not sent:"):
+            raise RuntimeError("note rejected")
+        return original(channel_id, text, **kwargs)
+
+    monkeypatch.setattr(ad.transport, "send", fail_note)
+    answer = f"[[send: `{doc}`]]"
+    if not only_file:
+        answer = f"Here it is.\n{answer}\nDone."
+    with caplog.at_level(logging.WARNING, logger="gaia.messaging.discord.adapter"):
+        ad._on_agent_event({"type": "final", "answer": answer}, turn)
+
+    assert any(text.startswith("-# Not sent:") for text in attempted)
+    assert da.FINAL_DELIVERY_WARNING in _texts(ad)
+    if only_file:
+        assert "-# Sent." not in _texts(ad)
+    assert "note rejected" not in da.FINAL_DELIVERY_WARNING
+    assert any(
+        record.levelno == logging.WARNING
+        and "Could not finish the Discord reply" in record.getMessage()
+        for record in caplog.records
+    )
 
 
 @pytest.mark.parametrize(

@@ -32,7 +32,7 @@ Follow [`CLAUDE.md`](../../CLAUDE.md) → "How You Communicate".
 2. `src/gaia/llm/`, `src/gaia/sd/`, `src/gaia/vlm/`, `src/gaia/audio/`, `src/gaia/rag/` — service SDKs
 3. `src/gaia/agents/base/` — `Agent`, `MCPAgent`, `ApiAgent`, `@tool`, `AgentConsole`
 4. `src/gaia/agents/tools/` — reusable mixins registered in `KNOWN_TOOLS`
-5. `hub/agents/<id>/python/gaia_agent_<id>/agent.py` — every concrete agent, discovered via the `gaia.agent` entry point. `src/gaia/agents/` keeps the framework only — no concrete agents
+5. `hub/agents/gaia/python/gaiapy/agent.py` — the one shipped agent (custom ones scaffolded by `gaia agent init` use `gaia_agent_<id>/`), discovered via the `gaia.agent` entry point. `src/gaia/agents/` keeps the framework only — no concrete agents
 6. `src/gaia/cli.py`, `src/gaia/api/`, `src/gaia/ui/` — user-facing surfaces
 
 **Rule:** dependencies must point downward in this stack. `base/` never imports from a concrete agent. A mixin never imports the CLI.

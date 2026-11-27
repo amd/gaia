@@ -30,3 +30,10 @@ export function isOptionalString(value: unknown): value is string | undefined {
 export function truncationLabel(total: number): string {
     return `+${total - MAX_ITEMS} more (truncated)`;
 }
+
+/** A diff line's class, from its fixed +/- prefix only: the line's text is untrusted. */
+export function lineClass(line: string): string {
+    if (line.startsWith('+')) return 'render-diff__line render-diff__line--added';
+    if (line.startsWith('-')) return 'render-diff__line render-diff__line--removed';
+    return 'render-diff__line';
+}

@@ -92,7 +92,7 @@ icon: "brain"  # Lucide icon name
 ## Reference anchors
 
 - Agent base: `src/gaia/agents/base/agent.py`
-- Concrete agents: `hub/agents/<id>/python/gaia_agent_<id>/agent.py` (not `src/gaia/agents/<id>/`)
+- Concrete agents: the shipped one is `hub/agents/gaia/python/gaiapy/agent.py`; one scaffolded by `gaia agent init` lives at `<id>/python/gaia_agent_<id>/agent.py` (never `src/gaia/agents/<id>/`)
 - LLM client: `src/gaia/llm/lemonade_client.py`
 - Agent SDK: `src/gaia/chat/sdk.py` (class `AgentSDK`, formerly `ChatSDK`)
 - RAG SDK: `src/gaia/rag/sdk.py`

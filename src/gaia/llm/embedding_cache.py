@@ -79,3 +79,12 @@ class EmbeddingCache:
     def __len__(self) -> int:
         with self._lock:
             return len(self._store)
+
+
+def cache_for(owner: object) -> EmbeddingCache:
+    """``owner``'s own EmbeddingCache, created on first use."""
+    cache = getattr(owner, "_embedding_cache", None)
+    if cache is None:
+        cache = EmbeddingCache()
+        owner._embedding_cache = cache  # pylint: disable=protected-access
+    return cache

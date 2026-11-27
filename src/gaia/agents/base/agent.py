@@ -236,6 +236,7 @@ from gaia.canonical_path import UncheckablePathError, canonical_path
 from gaia.chat.sdk import AgentConfig, AgentSDK, LLMCallCancelled
 from gaia.credential_shapes import redact_file_content, redact_tool_output
 from gaia.daemon.broker_client import LeaseWaitCancelled, lease_cancel_scope
+from gaia.llm.claude_defaults import DEFAULT_CLAUDE_MODEL
 from gaia.llm.lemonade_client import (
     RECONNECTING_MESSAGE,
     budget_for_ctx,
@@ -1699,7 +1700,9 @@ _MAX_CUT_OFF_CONTINUATIONS = 2
 _MAX_STREAM_CUT_OFF_RETRIES = 2
 STREAM_CUT_OFF_ERROR = "stream_cut_off"
 # Errors the loop recovered from once a later reply parsed: not a failed turn.
-_RECOVERABLE_ERROR_TYPES = frozenset({"tool_call_parse_error", STREAM_CUT_OFF_ERROR})
+_RECOVERABLE_ERROR_TYPES = frozenset(
+    {"tool_call_parse_error", STREAM_CUT_OFF_ERROR, "output_truncated"}
+)
 _CUT_OFF_CONTINUE_PROMPT = (
     "Your last reply was cut off at the output-token limit before it finished, "
     "so nothing in it was carried out. Continue from where you stopped: keep "
@@ -1811,6 +1814,48 @@ _INDEX_QUESTION_NEEDS_USER_PATTERN = re.compile(
 )
 _SENTENCE_END_PATTERN = re.compile(r"[.!?](?=\s|$)|\n")
 _INDEX_TOOL_NAMES = ("index_directory", "index_document")
+# "Just index it and say done": every sentence must be an index command or one
+# of these closers, so any other request keeps the forced search.
+_INDEX_ONLY_TAIL = (
+    r"(?:(?:say|reply|respond)\s+(?:with\s+)?[\"'“]?done[\"'”]?"
+    r"|nothing\s+else"
+    r"|(?:so\s+)?(?:that\s+)?(?:i|we)\s*(?:can|could|will|['’]ll|may|might)\s+"
+    r"ask(?:\s+(?:you|about\s+it|about\s+them|questions(?:\s+about\s+it)?))*"
+    r"\s+later"
+    r"|for\s+later)"
+)
+# What "index" may take: a pronoun, a path or filename, or a file-type noun.
+_INDEX_ONLY_PATH = (
+    r"(?:\"[^\"]+\"|'[^']+'|(?=\S*\w)\S*[\\/~*]\S*|[\w-]+\.[A-Za-z0-9]{1,5})"
+)
+_INDEX_ONLY_OBJECT = (
+    r"(?:(?:all|all\s+of|everything\s+in|the|my|this|that|these|those|our|every)\s+)*"
+    r"(?:it|this|that|these|those|them|" + _INDEX_ONLY_PATH + r"|(?:[\w-]+\s+){0,2}"
+    r"(?:files?|documents?|docs|folders?|director(?:y|ies)|reports?|pdfs?)"
+    r"(?:\s+" + _INDEX_ONLY_PATH + r")?)"
+    r"(?:\s+(?:in|from)\s+" + _INDEX_ONLY_PATH + r")?"
+)
+_INDEX_ONLY_SENTENCE_PATTERN = re.compile(
+    r"(?:(?:please|kindly|just|only|simply|now|go\s+ahead\s+and)\s+)*"
+    r"(?:re-?)?index\s+"
+    + _INDEX_ONLY_OBJECT
+    + r"(?:[,;]?\s*(?:(?:and|then|and\s+then)\s+)?"
+    + _INDEX_ONLY_TAIL
+    + r")?"
+    r"|" + _INDEX_ONLY_TAIL,
+    re.IGNORECASE,
+)
+_INDEX_ONLY_MARKER_PATTERN = re.compile(
+    r"\b(?:just|only|simply)\s+(?:re-?)?index\b|" + _INDEX_ONLY_TAIL, re.IGNORECASE
+)
+# Anything that asks about the content, so indexing alone doesn't finish the turn.
+_ASKS_ABOUT_CONTENT_PATTERN = re.compile(
+    r"\?|\b(?:what|who|whom|whose|when|where|why|how|which|tell me|summari[sz]e"
+    r"|summary|explain|describe|find|list|show me|compare|extract|look up"
+    r"|answer|quote|give me|read|analy[sz]e|analysis|search|check|review|need"
+    r"|count|calculate|verify)\b",
+    re.IGNORECASE,
+)
 
 
 def _requests_indexing(text: str) -> bool:
@@ -1825,6 +1870,23 @@ def _requests_indexing(text: str) -> bool:
         if not _NEGATED_BEFORE_PATTERN.search(text[sentence_start:verb]):
             return True
     return False
+
+
+def _requests_indexing_only(text: str) -> bool:
+    """Whether *text* explicitly asks only to index, and nothing about the content."""
+    text = (text or "").strip()
+    if (
+        not _requests_indexing(text)
+        or _ASKS_ABOUT_CONTENT_PATTERN.search(text)
+        or not _INDEX_ONLY_MARKER_PATTERN.search(text)
+    ):
+        return False
+    sentences = (
+        part.strip(" .!")
+        for part in _SENTENCE_END_PATTERN.split(text)
+        if part.strip(" .!")
+    )
+    return all(_INDEX_ONLY_SENTENCE_PATTERN.fullmatch(s) for s in sentences)
 
 
 def _asks_permission_to_index(answer: str) -> bool:
@@ -3876,7 +3938,7 @@ Do NOT wrap conversational replies in JSON.
     def __init__(
         self,
         use_claude: bool = False,
-        claude_model: str = "claude-sonnet-5",
+        claude_model: str = DEFAULT_CLAUDE_MODEL,
         base_url: Optional[str] = None,
         model_id: str = None,
         max_steps: Optional[int] = None,
@@ -12229,7 +12291,7 @@ Do NOT wrap conversational replies in JSON.
         did not fix. The loop then makes each call itself, through the same
         approval gates as any call, once per turn, and has the model answer from
         the result. A call goes here only when its arguments come straight from
-        the request ("add the skill at <path>"). Empty by default.
+        the request ("remember X", "add the skill at <path>"). Empty by default.
         """
         return []
 
@@ -12441,7 +12503,7 @@ Do NOT wrap conversational replies in JSON.
         """
         if not answer or not answer.strip():
             return []
-        roots = [os.getcwd(), self._verification_project_root()]
+        roots = [self._session_folder(), os.getcwd(), self._verification_project_root()]
         return ungrounded(
             strip_verification_scope(answer),
             self._request_text(query),
@@ -12691,7 +12753,11 @@ Do NOT wrap conversational replies in JSON.
                 strip_verification_scope(answer),
                 self._request_text(query),
                 history,
-                [os.getcwd(), self._verification_project_root()],
+                [
+                    self._session_folder(),
+                    os.getcwd(),
+                    self._verification_project_root(),
+                ],
             )
         self._turn_ungrounded = unverified_reasons(findings)
 
@@ -13741,7 +13807,8 @@ Do NOT wrap conversational replies in JSON.
         )
         self._single_tool_done = False
         self._turn_seq += 1
-        self._denied_effects = DeniedEffects(os.getcwd())
+        session_folder = self._session_folder()
+        self._denied_effects = DeniedEffects(session_folder)
         Agent._lift_declined_calls(
             self, getattr(self, "_original_user_input", None) or user_input
         )
@@ -13752,11 +13819,11 @@ Do NOT wrap conversational replies in JSON.
         self._last_tool_schemas = None
         self._last_tool_filter = None
 
-        # Relative paths resolve against the working directory, as the file tools do.
+        # Relative paths resolve against the chat folder, as the file tools do.
         # Text handed over to translate names no source to inventory.
         self._extraction_ledger = ExtractionLedger(
             instruction_part(user_input),
-            os.getcwd(),
+            session_folder,
             available=self._read_validator() is not None,
         )
         # A test agent built via __new__ never ran Agent.__init__, so it has
@@ -13767,7 +13834,7 @@ Do NOT wrap conversational replies in JSON.
             )
         self._turn_scope.begin_turn(
             user_input,
-            os.getcwd(),
+            session_folder,
             scratch=getattr(self._read_validator(), "scratch_dir", None),
         )
         self._stopped_on_failing_repeats = False
@@ -13938,7 +14005,7 @@ Do NOT wrap conversational replies in JSON.
         self._deliverable_cache = {}
         self._completion_evidence = CompletionEvidence(
             self._request_text(user_input),
-            os.getcwd(),
+            session_folder,
             scratch=getattr(self._read_validator(), "scratch_dir", None),
             validator=self._read_validator(),
             backups=self._session_backups,
@@ -16039,6 +16106,9 @@ Do NOT wrap conversational replies in JSON.
                 if (
                     last_index_pos >= 0
                     and not query_after_index
+                    and not _requests_indexing_only(
+                        getattr(self, "_original_user_input", None) or user_input
+                    )
                     and steps_taken < steps_limit - 1
                 ):
                     logger.debug(
@@ -16181,7 +16251,7 @@ Do NOT wrap conversational replies in JSON.
                 ):
                     unlooked = named_workspace_paths(
                         getattr(self, "_original_user_input", None) or user_input,
-                        os.getcwd(),
+                        self._session_folder(),
                     )
                     if unlooked:
                         look_first_reprompted = True

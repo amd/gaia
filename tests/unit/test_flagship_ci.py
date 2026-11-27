@@ -35,6 +35,7 @@ def triggers():
 @pytest.mark.parametrize(
     "changed_path",
     [
+        ".github/actions/build-agent-wheel/action.yml",
         "hub/agents/gaia/python/gaiapy/stdio.py",
         "hub/agents/gaia/python/gaiapy/chat_agent.py",
         "src/gaia/ui/sse_translation.py",

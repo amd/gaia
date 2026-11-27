@@ -55,6 +55,7 @@ from typing import Callable, Dict, List, Optional, Tuple
 
 from gaia import home as home_mod
 from gaia.env import child_env
+from gaia.llm.display_adapters import iter_display_adapters
 from gaia.logger import get_logger
 from gaia.utils.archive import ArchiveError, safe_extract
 from gaia.utils.terminal import (
@@ -483,39 +484,16 @@ _COOPMAT_OFF_ADAPTERS = re.compile(r"Radeon\(TM\) 80[4-6]0S", re.IGNORECASE)
 #: run Qwen3.6 with coopmat on, and turning it off there halves prompt speed.
 _COOPMAT_BROKEN_THROUGH = (32, 0, 12078, 30)
 
-#: Windows' display-adapter class; each adapter's subkey names the adapter.
-_DISPLAY_CLASS_KEY = (
-    r"SYSTEM\CurrentControlSet\Control\Class\{4d36e968-e325-11ce-bfc1-08002be10318}"
-)
-
 
 def _windows_display_adapters() -> List[Tuple[str, str]]:
     """``(DriverDesc, DriverVersion)`` of every display adapter Windows records."""
-    import winreg  # pylint: disable=import-error
-
-    adapters = []
-    try:
-        root = winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, _DISPLAY_CLASS_KEY)
-    except OSError:
-        return adapters
-    with root:
-        index = 0
-        while True:
-            try:
-                subkey = winreg.EnumKey(root, index)
-            except OSError:
-                return adapters
-            index += 1
-            try:
-                with winreg.OpenKey(root, subkey) as adapter:
-                    name = str(winreg.QueryValueEx(adapter, "DriverDesc")[0])
-                    try:
-                        version = str(winreg.QueryValueEx(adapter, "DriverVersion")[0])
-                    except OSError:
-                        version = ""
-                    adapters.append((name, version))
-            except OSError:
-                continue  # "Properties" and other non-adapter subkeys
+    return [
+        (
+            str(values["DriverDesc"]),
+            str(values["DriverVersion"]) if "DriverVersion" in values else "",
+        )
+        for values in iter_display_adapters("DriverVersion")
+    ]
 
 
 def _driver_version(text: str) -> Optional[Tuple[int, ...]]:
@@ -1397,6 +1375,10 @@ class EmbeddedLemonade:
         try:
             proc = psutil.Process(pid)
             cmdline = proc.cmdline()
+            # The kernel's path for the running binary, not argv[0]: argv[0]
+            # is whatever path the launcher typed, and through a symlinked
+            # GAIA home that later changed it no longer leads into dist/.
+            exe = proc.exe() or (cmdline[0] if cmdline else "")
         except psutil.NoSuchProcess:
             return OTHER
         except psutil.AccessDenied:
@@ -1407,7 +1389,7 @@ class EmbeddedLemonade:
             except psutil.AccessDenied:
                 return UNKNOWN
             return UNKNOWN if Path(name).stem.lower() == "lemond" else OTHER
-        if not self._is_own_cmdline(cmdline, port):
+        if not self._is_own_cmdline(exe, cmdline, port):
             return OTHER
         try:
             env = proc.environ()
@@ -1417,21 +1399,11 @@ class EmbeddedLemonade:
             return OTHER
         return OWN if env.get("LEMONADE_API_KEY") == api_key else OTHER
 
-    def _is_own_cmdline(self, cmdline: List[str], port: int) -> bool:
-        """Whether *cmdline* runs this install's lemond on *port*."""
-        if not cmdline:
+    def _is_own_cmdline(self, exe: str, cmdline: List[str], port: int) -> bool:
+        """Whether *exe*, run as *cmdline*, is this install's lemond on *port*."""
+        if not exe or Path(exe).stem.lower() != "lemond":
             return False
-        exe = Path(cmdline[0])
-        if exe.stem.lower() != "lemond":
-            return False
-        dist_root = os.path.normcase(str((self.root / "dist").resolve()))
-        try:
-            exe_dir = os.path.normcase(str(exe.resolve().parent))
-            inside = os.path.commonpath([dist_root, exe_dir]) == dist_root
-        except (OSError, ValueError):
-            # ValueError: different drives on Windows -- not under dist/.
-            return False
-        if not inside:
+        if not _inside(exe, os.path.normcase(str((self.root / "dist").resolve()))):
             return False
         args = cmdline[1:]
         return any(

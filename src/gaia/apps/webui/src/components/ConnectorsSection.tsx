@@ -33,6 +33,7 @@ import { personalizeSourceKind, requestPersonalize } from '../utils/connectorPer
 import { ConnectorTileMenu } from './ConnectorTileMenu';
 import { AccountAddress, ConnectorAccountList } from './ConnectorAccounts';
 import { accountChoices, needsSignIn, showsAccountList } from '../utils/connectorAccounts';
+import { openAuthUrl } from '../utils/openAuthUrl';
 import { ConfirmSheet } from './setup/ConfirmSheet';
 import { SettingsDisclosure } from './settings/SettingsDisclosure';
 import { ltrIn } from './setup/format';
@@ -668,20 +669,6 @@ function OAuthConfigureBody({
         window.addEventListener('focus', handleFocus);
         return () => window.removeEventListener('focus', handleFocus);
     }, [onChanged]);
-
-    // Open the OAuth URL in a real browser (Electron prefers the system
-    // browser via the IPC bridge; fall back to window.open for the
-    // dev-server case).
-    const openAuthUrl = (url: string) => {
-        const anyWindow = window as unknown as {
-            gaia?: { openExternal?: (url: string) => void };
-        };
-        if (anyWindow.gaia?.openExternal) {
-            anyWindow.gaia.openExternal(url);
-        } else {
-            window.open(url, '_blank', 'noopener');
-        }
-    };
 
     const handleConnect = async () => {
         setBusy(true);

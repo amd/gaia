@@ -29,6 +29,7 @@ import { FLAGSHIP_AGENT_ID } from '../../utils/newTask';
 import { useT } from '../../i18n/useT';
 import { log } from '../../utils/logger';
 import { accountRef, middleCut, reconnectOffer } from '../../utils/connectorAccounts';
+import { openAuthUrl } from '../../utils/openAuthUrl';
 import { useConnectorsSSE } from '../../hooks/useConnectorsSSE';
 import type { ConnectorListEntry } from '../../types';
 import { ltrIn } from '../setup/format';
@@ -108,19 +109,6 @@ export function detectProvider(content: string): EmailProvider | 'all' {
         lower.includes('o365');
     if (mentionsGoogle === mentionsMicrosoft) return 'all';
     return mentionsGoogle ? 'google' : 'microsoft';
-}
-
-// ── OAuth helpers (mirror ConnectorsSection.openAuthUrl) ─────────────────────
-
-function openAuthUrl(url: string): void {
-    const anyWindow = window as unknown as {
-        gaia?: { openExternal?: (url: string) => void };
-    };
-    if (anyWindow.gaia?.openExternal) {
-        anyWindow.gaia.openExternal(url);
-    } else {
-        window.open(url, '_blank', 'noopener');
-    }
 }
 
 // ── Single-provider connect button ────────────────────────────────────────────

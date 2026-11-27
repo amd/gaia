@@ -112,10 +112,9 @@ export interface AgentInfo {
      */
     consumes_mcp_servers?: boolean;
     /**
-     * Opaque grant-ledger key. Built-ins are `builtin:<id>`, custom agents
-     * are `custom:<sha256-prefix>:<id>`, installed agents are
-     * `installed:<id>`, and native agents are `native:<id>`. Pass this to
-     * the grants endpoint.
+     * Opaque grant-ledger key. Installed agents are `installed:<id>`,
+     * native agents are `native:<id>`, and custom agents are
+     * `custom:<sha256-prefix>:<id>`. Pass this to the grants endpoint.
      */
     namespaced_agent_id?: string;
     category?: string;
@@ -201,7 +200,7 @@ export interface ConnectorRow {
     scopes: string[];
     /**
      * Per-agent MCP-tool-visibility activation snapshot (issue #1005).
-     * Keys are namespaced agent ids (``builtin:chat``,
+     * Keys are namespaced agent ids (``installed:gaia``,
      * ``custom:<hash>:<id>``, …), values are ``true`` when the agent can
      * see the server's tools and ``false`` once turned off. Absence means
      * inactive, except that a ``custom`` server reports ``installed:gaia``
@@ -779,12 +778,25 @@ export interface BrowseResponse {
     folder_refusal?: string | null;
 }
 
+/** Why folder indexing left a file out. Keep in sync with the backend model. */
+export type SkippedFileReason = 'unsupported_type' | 'credential_file';
+
+/** One skipped file from folder indexing and the reason it was left out. */
+export interface SkippedFile {
+    file: string;
+    reason: SkippedFileReason;
+}
+
 /** Response from the /documents/index-folder endpoint. */
 export interface IndexFolderResponse {
     indexed: number;
     failed: number;
     /** Files in the folder of a type GAIA doesn't index. */
     skipped?: number;
+    /** Named skipped files. ``reason`` is ``unsupported_type`` or ``credential_file``. */
+    skipped_files?: SkippedFile[];
+    /** Whether the server stopped recording skipped filenames at its cap. */
+    skipped_files_truncated?: boolean;
     /** Images in the folder; GAIA reads an image only when it is added on its own. */
     skipped_images?: number;
     documents: Document[];

@@ -367,7 +367,12 @@ def test_watch_directory_relative_path_uses_chat_workspace(tmp_path, monkeypatch
         "Rag", (), {"index_document": lambda _self, _path: {"success": True}}
     )()
     watched = []
-    host._watch_directory = watched.append
+
+    def start_watching(path):
+        watched.append(path)
+        return True
+
+    host._watch_directory = start_watching
     host._auto_save_session = lambda: None
     registered = _register_tools(host, FileToolsMixin.register_file_tools)
 

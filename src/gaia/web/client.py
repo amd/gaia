@@ -28,6 +28,7 @@ import urllib3
 from requests.adapters import HTTPAdapter
 from urllib3.connectionpool import HTTPConnectionPool, HTTPSConnectionPool
 
+from gaia.llm.local_only import assert_web_permitted
 from gaia.llm.retry import parse_retry_after
 from gaia.logger import get_logger
 from gaia.tool_cancellation import ToolCancelled
@@ -1514,10 +1515,12 @@ class WebClient:
         Stop ends the wait instead of sitting it out.
 
         Raises:
+            CloudDisabledError: Local only is on, so no request is sent.
             SearchUnavailableError: every attempt was turned away.
             ToolCancelled: ``should_stop`` returned True during a wait.
             SearchStatusError: DDG answered another non-200 status (a RuntimeError).
         """
+        assert_web_permitted("DuckDuckGo search")
         if not BS4_AVAILABLE:
             raise ImportError("beautifulsoup4 is required for web search.")
         if max_attempts < 1:
