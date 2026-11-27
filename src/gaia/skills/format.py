@@ -54,6 +54,11 @@ MAX_NAME_LENGTH = 64
 MAX_DESCRIPTION_LENGTH = 1024
 
 NAME_PATTERN = re.compile(r"^[a-z0-9]+(-[a-z0-9]+)*$")
+#: How Claude Code names a plugin's skill: ``<plugin>:<skill>``. Discovery
+#: builds these names; a ``SKILL.md`` can never declare one.
+PLUGIN_SKILL_NAME_PATTERN = re.compile(
+    r"^[a-z0-9]+(-[a-z0-9]+)*:[a-z0-9]+(-[a-z0-9]+)*$"
+)
 
 # Official SemVer 2.0.0 pattern (semver.org).
 SEMVER_PATTERN = re.compile(

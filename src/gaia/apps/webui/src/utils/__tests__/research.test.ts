@@ -44,6 +44,8 @@ describe('research mode', () => {
         }
         expect(withResearchCommand('/docx memo', false, skills)).toBe('/docx memo');
         expect(isSkillCommand('/docx memo', new Set())).toBe(false);
+        const plugin = new Set(['garden-kit:plant-care']);
+        expect(withResearchCommand('/garden-kit:plant-care my fern', true, plugin)).toBe('/garden-kit:plant-care my fern');
     });
 
     it('runs a skill typed in any case, sent in the lowercase the agent reads', () => {

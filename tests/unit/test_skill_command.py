@@ -22,6 +22,7 @@ from gaia.skills.command import (
             "find the docs\nand cite them",
         ),
         ("/pdf\tx", "pdf", "x"),
+        ("/garden-kit:plant-care water it", "garden-kit:plant-care", "water it"),
     ],
 )
 def test_parses_a_command(text, name, typed):
@@ -42,6 +43,9 @@ def test_parses_a_command(text, name, typed):
         "/pdf--x",
         "say /pdf",
         " /pdf",
+        "/a:b:c",
+        "/garden-kit:",
+        "/:pdf",
     ],
 )
 def test_rejects_text_that_is_not_a_command(text):

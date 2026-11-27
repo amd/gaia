@@ -24,7 +24,7 @@ export function isResearchMessage(text: string): boolean {
 }
 
 /** `/<name>` at the start, followed by space or the end: the shape the agent reads as a skill command, in any case. */
-const SKILL_COMMAND = /^\/([a-z0-9]+(?:-[a-z0-9]+)*)(?=\s|$)/i;
+const SKILL_COMMAND = /^\/((?:[a-z0-9]+(?:-[a-z0-9]+)*:)?[a-z0-9]+(?:-[a-z0-9]+)*)(?=\s|$)/i;
 
 /** null until the list has been read: an unread list is not "no skills". */
 let installedSkills: ReadonlySet<string> | null = null;

@@ -234,7 +234,7 @@ a skill of the same `name` found earlier.
 |:----------:|----------|------------|-------|
 | 1 | Agent-bundled `skills/<name>/` | `agent-bundled` | Shipped inside an agent package; read-only. Auto-detected beside the agent's module and beside its `gaia-agent.yaml`, plus any path the agent lists in `SKILL_DIRS`. |
 | 2 | `~/.gaia/skills/<name>/` | `user` | This user, all projects. The **writable** root — where `gaia skill create` and `gaia skill import` install. Moves with `GAIA_HOME` (or `GAIA_CONFIG_DIR`). |
-| 3 | `./.claude/skills/` then `~/.claude/skills/` | `claude-project` / `claude-import` | **Read-only import** for Claude Code compatibility. When the agent knows its project root (`SkillManager(project_dir=...)`), that root's `.claude/skills` is labelled `claude-project` instead of the working directory's `claude-import`. |
+| 3 | `./.claude/skills/` then `~/.claude/skills/` | `claude-project` / `claude-import` | **Read-only import** for Claude Code compatibility. When the agent knows its project root (`SkillManager(project_dir=...)`), that root's `.claude/skills` is labelled `claude-project` instead of the working directory's `claude-import`. The skills of the Claude Code plugins this user has enabled come last, also as `claude-import`, named as Claude Code names them: `<plugin>:<skill>`. |
 
 Roots 1–2 are native GAIA. Root 3 lets an existing Claude Code skill library work
 in GAIA with zero migration (see [Compatibility](#agent-skills--claude-code-compatibility)).
@@ -245,6 +245,15 @@ visible via `SkillManager.shadowed()` and is reported by `gaia skill list` and
 (`SkillManager.discovery_errors`, a non-zero exit from `gaia skill list`) rather
 than quietly omitted. A malformed skill under a read-only `claude-import` root is
 another tool's file, so `gaia skill list` reports it as a warning and still exits `0`.
+
+Plugins are read the way Claude Code reads them: `~/.claude/plugins/installed_plugins.json`
+names each user-scope install, `enabledPlugins` in `~/.claude/settings.json` (else
+the plugin's `defaultEnabled`) says whether it is on, and its skills are
+`skills/<name>/SKILL.md`, the folders its `plugin.json` `skills` key adds, or a lone
+`SKILL.md` at its root. With no `installed_plugins.json` there are no plugin skills;
+one that does not parse is logged as a warning naming the file, and every other
+skill still lists. A `<plugin>:<skill>` name exists only for these imports: a
+`SKILL.md` GAIA authors can't declare one.
 
 <Note>
 **Deferred to a later phase — not dropped:**

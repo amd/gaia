@@ -2967,7 +2967,7 @@ Skills are discovered from these roots, highest precedence first:
 | `agent-bundled` | An agent package's own `skills/` directory | No |
 | `user` | `~/.gaia/skills/` (honors `GAIA_CONFIG_DIR`) | **Yes** — where `create` and `import` install |
 | `claude-project` | The agent's project's `.claude/skills/` | No — listed in the skill catalog like Claude Code lists them, for a model that gets the full project context (see `project_context` under [Configuration](#configuration)); its `tools.py` and CLI grants stay withheld, since cloning a repo is not consent to run its code |
-| `claude-import` | `./.claude/skills/` (when no project is known) then `~/.claude/skills/` | No — read-only Claude Code import, loadable by name but not listed in the catalog |
+| `claude-import` | `./.claude/skills/` (when no project is known), then `~/.claude/skills/`, then the skills of enabled Claude Code plugins, named `<plugin>:<skill>` as Claude Code names them | No — read-only Claude Code import, loadable by name but not listed in the catalog |
 
 ### Subcommands
 

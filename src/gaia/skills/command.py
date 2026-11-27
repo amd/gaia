@@ -18,7 +18,7 @@ from typing import Any, Dict, Optional
 # note), one line each and a blank line after. The command is the user's text.
 _COMMAND = re.compile(
     r"\A(?P<lead>(?:\[[^\n]*\]\n\n)*)"
-    r"/(?P<name>[a-z0-9]+(?:-[a-z0-9]+)*)"
+    r"/(?P<name>(?:[a-z0-9]+(?:-[a-z0-9]+)*:)?[a-z0-9]+(?:-[a-z0-9]+)*)"
     r"(?:[ \t]*\n|[ \t]+|\Z)(?P<request>.*)\Z",
     re.DOTALL,
 )
@@ -38,7 +38,8 @@ def parse_skill_command(text: str) -> Optional[SkillCommand]:
 
     Only the shape is checked here; whether *name* is an installed skill is the
     caller's question. ``/etc/hosts`` and ``/tmp/x.txt`` never match, because a
-    skill name cannot hold a second slash or a dot.
+    skill name cannot hold a second slash or a dot. A Claude Code plugin's
+    skill is typed as Claude Code types it: ``/<plugin>:<skill>``.
     """
     match = _COMMAND.match(text or "")
     if match is None:

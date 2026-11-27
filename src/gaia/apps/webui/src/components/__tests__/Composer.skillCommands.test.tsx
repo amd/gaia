@@ -101,6 +101,20 @@ describe('Composer "/" skill commands', () => {
         expect(screen.queryByRole('listbox')).toBeNull();
     });
 
+    it("lists a Claude Code plugin's skills by their plugin:skill name", async () => {
+        mockedApi.listSkills.mockResolvedValue({
+            skills: [...SKILLS, skill('garden-kit:plant-care', 'Care for a houseplant. Use for watering plans.')],
+            invalid: {},
+        });
+        render(<Harness />);
+        type('/garden-kit:');
+
+        const options = await screen.findAllByRole('option');
+        expect(options.map((o) => o.textContent)).toEqual(['/garden-kit:plant-careCare for a houseplant.']);
+        fireEvent.keyDown(box(), { key: 'Enter' });
+        expect(box().value).toBe('/garden-kit:plant-care ');
+    });
+
     it('stays shut for paths and ordinary text', async () => {
         render(<Harness />);
         type('/tmp/notes.txt');

@@ -56,7 +56,7 @@ const SKILL_RELOAD_REASONS = new Map<string, Parameters<Translate>[0]>([
 export function localizeLiveStatus(t: Translate, label: string): string {
     const key = EXACT[label];
     if (key) return t(key);
-    const skill = /^Skill '([a-z0-9-]+)' was not restored after settings changed: ([^.]+)\. Reload it if needed\.$/.exec(label);
+    const skill = /^Skill '([a-z0-9:-]+)' was not restored after settings changed: ([^.]+)\. Reload it if needed\.$/.exec(label);
     if (skill) {
         const reason = SKILL_RELOAD_REASONS.get(skill[2]);
         if (reason) return t(reason, { skill: skill[1] });

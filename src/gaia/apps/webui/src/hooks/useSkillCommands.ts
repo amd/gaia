@@ -6,8 +6,8 @@ import * as api from '../services/api';
 import type { SkillInfo } from '../types';
 import { rememberInstalledSkills } from '../utils/research';
 
-/** A composer that holds only `/` and a skill name being typed. */
-const TYPING_COMMAND = /^\/[a-z0-9-]*$/i;
+/** A composer that holds only `/` and a skill name being typed, a plugin's `plugin:skill` included. */
+const TYPING_COMMAND = /^\/[a-z0-9-]*(?::[a-z0-9-]*)?$/i;
 
 type Status = 'loading' | 'ready' | 'error';
 
