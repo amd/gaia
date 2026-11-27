@@ -6588,6 +6588,19 @@ test('composer chips stay whole at phone width', async ({ page }) => {
 });
 
 for (const locale of ['en', 'ar']) {
+    test(`a narrow new chat keeps the model name readable beside the memory chip (${locale})`, async ({ page }) => {
+        await page.setViewportSize({ width: 800, height: 600 });
+        await open(page, '', locale);
+        const label = page.locator('.composer-row .composer-chip-label').last();
+        await expect(label).toBeVisible();
+        const shown = await label.evaluate((el) => el.clientWidth);
+        const full = await label.evaluate((el) => el.scrollWidth);
+        expect(shown, `model name cut to ${shown}px of ${full}px`).toBeGreaterThanOrEqual(full);
+        expect(await audit(page)).toEqual([]);
+    });
+}
+
+for (const locale of ['en', 'ar']) {
     test(`a narrow window keeps the model name readable in the composer (${locale})`, async ({ page }) => {
         await page.setViewportSize({ width: 820, height: 640 });
         await open(page, `#${ANSWER_SESSION}`, locale, withMeasuredContext);

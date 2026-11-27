@@ -359,6 +359,11 @@
     max-width: 14rem;
 }
 
+/* In a narrow row the label goes before the model name is cut; the eye icon and the button's aria-label still carry the state. */
+@container composer-row (max-width: 560px) {
+    .composer-chip-memory .composer-chip-label { display: none; }
+}
+
 /* Beside the Research chip it gives up that chip's width, so the model name keeps its room. */
 .composer-row-left:has(.composer-chip-research) .composer-chip-memory .composer-chip-label {
     max-width: 11.75rem;
