@@ -1,7 +1,7 @@
 // Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 // SPDX-License-Identifier: MIT
 
-import { useEffect, useRef, useCallback, useState, useMemo, type CSSProperties } from 'react';
+import { useEffect, useLayoutEffect, useRef, useCallback, useState, useMemo, type CSSProperties } from 'react';
 import { Activity, Edit3, Download, Upload, ArrowDown, FolderSearch, Clock } from 'lucide-react';
 import { TurnAnnouncer } from './TurnAnnouncer';
 import { MessageBubble, cleanToolCallContent } from './MessageBubble';
@@ -341,7 +341,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
     // Auto-scroll (throttled) — scrolls at most once per 100ms while
     // streaming, and also schedules a trailing scroll so the final chunk
     // is never missed.  Only fires when the user hasn't scrolled away.
-    useEffect(() => {
+    useLayoutEffect(() => {
         if (!isNearBottomRef.current) return;
 
         const now = Date.now();
@@ -356,15 +356,13 @@ export function ChatView({ sessionId }: ChatViewProps) {
             messagesEndRef.current?.scrollIntoView({ behavior: 'instant' });
         };
 
-        if (elapsed >= THROTTLE_MS) {
-            // Enough time passed — scroll immediately
-            doScroll();
-        }
+        // A loaded history lands on its end before it paints; only streaming chunks wait.
+        if (!isStreaming || elapsed >= THROTTLE_MS) doScroll();
 
         // Always schedule a trailing scroll so the very last update is caught
         if (scrollTimerRef.current) clearTimeout(scrollTimerRef.current);
         scrollTimerRef.current = setTimeout(doScroll, THROTTLE_MS);
-    }, [messages, streamingContent, agentSteps]);
+    }, [messages, streamingContent, agentSteps, isStreaming]);
 
     // Focus input
     useEffect(() => { inputRef.current?.focus(); }, [sessionId]);
