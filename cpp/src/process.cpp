@@ -50,6 +50,8 @@ extern char** environ;
 #   endif
 #endif
 
+#include "win_utf8.h"
+
 namespace gaia {
 
 // ---------------------------------------------------------------------------
@@ -65,22 +67,8 @@ bool cancelRequestedHere() { return t_cancelled && *t_cancelled && (*t_cancelled
 
 #ifdef _WIN32
 // Commands, folders and file names are UTF-8 strings; Windows takes them wide.
-std::wstring widen(const std::string& utf8) {
-    if (utf8.empty()) return L"";
-    const int n = MultiByteToWideChar(CP_UTF8, 0, utf8.data(), static_cast<int>(utf8.size()), nullptr, 0);
-    std::wstring wide(static_cast<size_t>(n), L'\0');
-    MultiByteToWideChar(CP_UTF8, 0, utf8.data(), static_cast<int>(utf8.size()), wide.data(), n);
-    return wide;
-}
-
-std::string narrow(const std::wstring& wide) {
-    if (wide.empty()) return "";
-    const int n = WideCharToMultiByte(CP_UTF8, 0, wide.data(), static_cast<int>(wide.size()), nullptr, 0,
-                                      nullptr, nullptr);
-    std::string utf8(static_cast<size_t>(n), '\0');
-    WideCharToMultiByte(CP_UTF8, 0, wide.data(), static_cast<int>(wide.size()), utf8.data(), n, nullptr, nullptr);
-    return utf8;
-}
+using detail::narrow;
+using detail::widen;
 #endif
 
 /// Read up to maxBytes from a FILE*, returning the captured data.

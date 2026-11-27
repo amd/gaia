@@ -391,8 +391,10 @@ TEST(DocumentIndexTest, AFolderIndexDoesNotWalkIntoAFolderLink) {
     fs::remove(loop, ec);
 }
 
-TEST(DocumentIndexTest, AWordFileInAFolderWithASpaceIsRead) {
-    // A minimal .docx: one stored zip entry, word/document.xml, with two paragraphs.
+namespace {
+
+// A minimal .docx: one stored zip entry, word/document.xml, with two paragraphs.
+std::string minimalDocx() {
     static const char* const kDocxHex =
         "504b03041400000000000000215cee71b67b050100000501000011000000776f72642f646f63756d656e742e786d6c3c3f78"
         "6d6c2076657273696f6e3d22312e30223f3e3c773a646f63756d656e7420786d6c6e733a773d22687474703a2f2f73636865"
@@ -406,9 +408,11 @@ TEST(DocumentIndexTest, AWordFileInAFolderWithASpaceIsRead) {
     for (size_t i = 0; kDocxHex[i] != '\0' && kDocxHex[i + 1] != '\0'; i += 2) {
         bytes.push_back(static_cast<char>(std::stoi(std::string(kDocxHex + i, 2), nullptr, 16)));
     }
-    TempDir d;
-    fs::create_directories(d.path / "my docs");
-    const fs::path docx = d.path / "my docs" / "halden note.docx";
+    return bytes;
+}
+
+void expectDocxIsRead(const fs::path& docx) {
+    const std::string bytes = minimalDocx();
     std::ofstream(docx, std::ios::binary).write(bytes.data(), static_cast<std::streamsize>(bytes.size()));
 
     std::string text;
@@ -422,4 +426,18 @@ TEST(DocumentIndexTest, AWordFileInAFolderWithASpaceIsRead) {
     }
     EXPECT_NE(text.find("The agreed budget is 48,250 euros."), std::string::npos) << text;
     EXPECT_NE(text.find("The owner is Marit Oksanen."), std::string::npos) << text;
+}
+
+}  // namespace
+
+TEST(DocumentIndexTest, AWordFileInAFolderWithASpaceIsRead) {
+    TempDir d;
+    fs::create_directories(d.path / "my docs");
+    expectDocxIsRead(d.path / "my docs" / "halden note.docx");
+}
+
+TEST(DocumentIndexTest, AWordFileWithPercentSignsInItsNameIsRead) {
+    // cmd.exe would expand %PATH% in the name if it reached the command line.
+    TempDir d;
+    expectDocxIsRead(d.path / "budget %PATH% 100%.docx");
 }

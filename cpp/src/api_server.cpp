@@ -4,6 +4,7 @@
 // ApiServer — OpenAI-compatible HTTP server wrapping a GAIA Agent.
 
 #include "gaia/api_server.h"
+#include "lower_ascii.h"
 
 #include <algorithm>
 #include <atomic>
@@ -67,12 +68,6 @@ void sendError(httplib::Response& res, int status, const std::string& message,
                const std::string& type, const std::string& code = "") {
     res.status = status;
     res.set_content(errorJson(message, type, code).dump(-1, ' ', false, json::error_handler_t::replace), "application/json");
-}
-
-std::string lower(std::string s) {
-    std::transform(s.begin(), s.end(), s.begin(),
-                   [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
-    return s;
 }
 
 // Compares every byte of the longer input so timing doesn't leak the key.
@@ -528,7 +523,7 @@ struct ApiServer::Impl {
 
         // DNS-rebinding guard: a loopback server only answers to loopback names.
         if (isLoopbackHost(opts.host)) {
-            std::string name = lower(hostHeaderName(req.get_header_value("Host")));
+            std::string name = detail::lowerAscii(hostHeaderName(req.get_header_value("Host")));
             if (!isLoopbackHost(name)) {
                 sendError(res, 403, "Host '" + req.get_header_value("Host") +
                                         "' is not allowed; this server only answers "
@@ -560,7 +555,7 @@ struct ApiServer::Impl {
             const std::string auth = req.get_header_value("Authorization");
             const std::string prefix = "Bearer ";
             const bool ok = auth.size() > prefix.size() &&
-                            lower(auth.substr(0, prefix.size())) == "bearer " &&
+                            detail::lowerAscii(auth.substr(0, prefix.size())) == "bearer " &&
                             constantTimeEquals(auth.substr(prefix.size()), opts.apiKey);
             if (!ok) {
                 res.set_header("WWW-Authenticate", "Bearer");
@@ -573,7 +568,7 @@ struct ApiServer::Impl {
 
         // JSON-only POSTs force a CORS preflight on any cross-site attempt.
         if (req.method == "POST") {
-            std::string ct = lower(req.get_header_value("Content-Type"));
+            std::string ct = detail::lowerAscii(req.get_header_value("Content-Type"));
             if (ct.rfind("application/json", 0) != 0) {
                 sendError(res, 415, "Content-Type must be application/json",
                           "invalid_request_error", "unsupported_media_type");

@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: MIT
 
 #include "gaia/web_tools.h"
+#include "lower_ascii.h"
 
 #include <algorithm>
 #include <cctype>
@@ -24,15 +25,9 @@ namespace gaia {
 
 namespace {
 
-std::string lower(std::string s) {
-    std::transform(s.begin(), s.end(), s.begin(),
-                   [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
-    return s;
-}
-
 // Split "https://host:port/path?q" into origin and path.
 bool splitUrl(const std::string& url, std::string& origin, std::string& path) {
-    const std::string l = lower(url);
+    const std::string l = detail::lowerAscii(url);
     if (l.rfind("http://", 0) != 0 && l.rfind("https://", 0) != 0) return false;
     const size_t schemeEnd = url.find("://") + 3;
     const size_t slash = url.find_first_of("/?#", schemeEnd);
@@ -55,7 +50,7 @@ std::string hostOf(const std::string& origin) {
 
 std::string resolveLocation(const std::string& origin, const std::string& path,
                             const std::string& location) {
-    const std::string l = lower(location);
+    const std::string l = detail::lowerAscii(location);
     if (l.rfind("http://", 0) == 0 || l.rfind("https://", 0) == 0) return location;
     if (location.rfind("//", 0) == 0) return origin.substr(0, origin.find("://") + 1) + location;
     if (!location.empty() && location[0] == '/') return origin + location;
@@ -170,7 +165,7 @@ json pageWindow(const WebPageCache::Page& page, size_t offset, size_t maxChars, 
                 {"total_chars", total}, {"truncated", false}};
     offset = utf8Start(text, offset);
     if (!find.empty()) {
-        const std::string hay = lower(text), needle = lower(find);
+        const std::string hay = detail::lowerAscii(text), needle = detail::lowerAscii(find);
         std::vector<std::pair<size_t, size_t>> spans;
         for (size_t at = hay.find(needle, offset); at != std::string::npos; at = hay.find(needle, at + needle.size())) {
             const size_t start = utf8Start(text, (std::max)(offset, at >= kFindContextChars ? at - kFindContextChars : 0));
@@ -390,7 +385,7 @@ json WebTools::doWebFetch(const json& args, const std::shared_ptr<WebPageCache>&
     }
     if (resp.body.size() > kMaxBodyBytes) resp.body.resize(kMaxBodyBytes);
 
-    const std::string type = lower(resp.header("Content-Type"));
+    const std::string type = detail::lowerAscii(resp.header("Content-Type"));
     WebPageCache::Page page{url, type, type.find("html") != std::string::npos ? htmlToText(resp.body) : resp.body};
     json out = pageWindow(page, offset, maxChars, find, cache != nullptr);
     if (cache) {
@@ -403,7 +398,7 @@ json WebTools::doWebFetch(const json& args, const std::shared_ptr<WebPageCache>&
 std::string WebTools::htmlToText(const std::string& html) {
     std::string out;
     out.reserve(html.size() / 2);
-    const std::string low = lower(html);
+    const std::string low = detail::lowerAscii(html);
     size_t i = 0;
     while (i < html.size()) {
         if (html[i] != '<') {
