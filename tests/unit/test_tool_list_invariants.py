@@ -41,6 +41,13 @@ from gaia.llm.lemonade_client import (  # noqa: E402
 
 from .skills_helpers import isolated_manager, write_skill_dir  # noqa: E402
 
+
+@pytest.fixture(autouse=True)
+def _jump_mode(monkeypatch):
+    """These pin the jump loader: one move to the whole registry, primed ahead."""
+    monkeypatch.setenv("GAIA_TOOL_LIST", "jump")
+
+
 _DIM = 768
 
 

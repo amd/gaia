@@ -35,7 +35,17 @@ import logging
 import os
 import re
 from dataclasses import dataclass
-from typing import Callable, Dict, FrozenSet, Iterable, List, Optional, Sequence, Tuple
+from typing import (
+    Callable,
+    Dict,
+    FrozenSet,
+    Iterable,
+    List,
+    Optional,
+    Pattern,
+    Sequence,
+    Tuple,
+)
 
 import numpy as np
 
@@ -48,6 +58,13 @@ logger = logging.getLogger(__name__)
 # scores about the same on everything.
 DEFAULT_THRESHOLD = 0.40
 JUMP_MARGIN = 0.03
+
+#: Retrieval mode: each turn adds up to this many tools that score at least
+#: :data:`RETRIEVE_FLOOR` on the request. Replaying 535 eval turns, a 19-tool
+#: core plus these kept recall at the jump loader's 96% with 23 tools on the
+#: list instead of 57.
+RETRIEVE_TOP_K = 5
+RETRIEVE_FLOOR = 0.35
 
 # ``search_tools`` returns nothing below this: an answer of "no match" must stay
 # possible, or the model keeps calling whatever came back first.
@@ -67,6 +84,23 @@ def dynamic_tools_env_override() -> Optional[bool]:
     if raw is None:
         return None
     return raw.strip().lower() in ("1", "true", "yes", "on")
+
+
+#: ``GAIA_TOOL_LIST``: how the flagship's list grows. Unset = retrieval.
+TOOL_LIST_ENV = "GAIA_TOOL_LIST"
+
+
+def tool_list_mode() -> str:
+    """``"retrieval"`` unless ``GAIA_TOOL_LIST`` says ``jump``; raises on anything else."""
+    raw = os.getenv(TOOL_LIST_ENV, "").strip().lower()
+    if raw in ("", "retrieval"):
+        return "retrieval"
+    if raw == "jump":
+        return "jump"
+    raise ValueError(
+        f"{TOOL_LIST_ENV}={raw!r} is not a tool-list mode; set it to 'retrieval' "
+        "(the default) or 'jump', or unset it."
+    )
 
 
 #: Longest description a tool keeps in the fixed ``tools=`` list, in characters.
@@ -173,6 +207,8 @@ class ToolLoader:
         embed_batch_fn: Optional[Callable[[Sequence[str]], "np.ndarray"]] = None,
         threshold: float = DEFAULT_THRESHOLD,
         optional_tools: Sequence[str] = (),
+        mode: str = "jump",
+        triggers: Sequence[Tuple[Pattern[str], FrozenSet[str]]] = (),
     ) -> None:
         """Build a tool loader.
 
@@ -190,7 +226,20 @@ class ToolLoader:
                 subclass contributes that the base profile does not. Exempt from
                 :meth:`validate_registry` only; every other name there still
                 fails loudly, and the list simply omits an absent tool.
+            mode: ``"retrieval"`` never jumps: each turn adds the tools the
+                request's words call for (*triggers*), any it names, and the
+                best few that score on it. ``"jump"`` moves the session to the
+                whole registry on the first need outside the list.
+            triggers: ``(pattern, tool names)`` pairs; a request matching the
+                pattern adds those tools in retrieval mode.
         """
+        if mode not in ("retrieval", "jump"):
+            raise ValueError(
+                f"ToolLoader mode {mode!r} is not 'retrieval' or 'jump'; check "
+                "GAIA_TOOL_LIST."
+            )
+        self._mode = mode
+        self._triggers = tuple(triggers)
         self._core: FrozenSet[str] = frozenset(core_tools)
         self._bundles: List[ToolBundle] = list(bundles)
         self._optional: FrozenSet[str] = frozenset(optional_tools)
@@ -219,6 +268,11 @@ class ToolLoader:
     def turns(self) -> int:
         """Turns selected for in this session."""
         return self._turn
+
+    @property
+    def mode(self) -> str:
+        """``"retrieval"`` (add what a turn needs) or ``"jump"`` (move to all)."""
+        return self._mode
 
     @property
     def jumped(self) -> bool:
@@ -306,7 +360,11 @@ class ToolLoader:
             self.admit_tools(skill_tools, registry)
 
         scores: Dict[str, float] = {}
-        if not self.jumped:
+        if self._mode == "retrieval":
+            scores = self._retrieve(query, registry, requested_tools or ())
+            if scores is None:
+                return None
+        elif not self.jumped:
             listed = set(self.offered(registry))
             if any(n in registry and n not in listed for n in requested_tools or ()):
                 self.jump("requested")
@@ -341,6 +399,45 @@ class ToolLoader:
         offered = self.offered(registry)
         self._log_selection(query, scores, offered)
         return offered
+
+    def _retrieve(
+        self, query: str, registry: Dict[str, dict], requested: Sequence[str]
+    ) -> Optional[Dict[str, float]]:
+        """Add this turn's tools in retrieval mode; the scores, or None when the
+        embedder failed and the session fell back to the whole registry."""
+        listed = set(self.offered(registry))
+        wanted = [n for n in requested if n in registry and n not in listed]
+        for pattern, names in self._triggers:
+            if pattern.search(query or ""):
+                wanted += sorted(n for n in names if n in registry and n not in listed)
+        if wanted:
+            self.admit_tools(list(dict.fromkeys(wanted)), registry)
+            listed = set(self.offered(registry))
+        try:
+            tool_vecs = self._ensure_tool_embeddings(registry)
+            qvec = self._embed_fn(query)
+        except Exception as exc:  # noqa: BLE001 — disabled + re-surfaced loudly
+            self._session_disabled = True
+            logger.warning(
+                "[ToolLoader] embedding service unreachable — dynamic tool "
+                "loading disabled for this session (all tools will be shown; "
+                "check that Lemonade is running and reload to re-enable). "
+                "Reason: %s",
+                exc,
+            )
+            return None
+        scores = {n: float(np.dot(qvec, v)) for n, v in tool_vecs.items()}
+        best = sorted(
+            (
+                (s, n)
+                for n, s in scores.items()
+                if n not in listed and s >= RETRIEVE_FLOOR
+            ),
+            reverse=True,
+        )[:RETRIEVE_TOP_K]
+        if best:
+            self.admit_tools([n for _, n in best], registry)
+        return scores
 
     def jump(self, reason: str) -> None:
         """Move this session to the full list. Later calls change nothing."""

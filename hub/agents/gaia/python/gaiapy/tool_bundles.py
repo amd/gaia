@@ -19,8 +19,9 @@ construction on some installs (see :data:`FULL_OPTIONAL_TOOLS`).
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
-from typing import Dict, FrozenSet, List
+from typing import Dict, FrozenSet, List, Pattern, Sequence, Tuple
 
 from gaia.agents.base.tool_loader import ToolBundle
 
@@ -218,49 +219,33 @@ DOC_BUNDLES = [
 # bundle, reached by the session's one move to the full list.
 FULL_CORE_TOOLS = frozenset(
     {
-        # memory v2 -- persistent recall is always relevant
-        "remember",
-        "recall",
-        "update_memory",
-        "forget",
-        "forget_everything",
-        "search_past_conversations",
-        # universal entry points
-        "read_file",
+        # What a turn reaches for whatever it is about, measured over 535 eval
+        # turns on three models; everything else arrives by retrieval or a
+        # trigger (FULL_TRIGGERS), keeping the list near 20 tools, not 57.
+        "query_specific_file",
         "query_documents",
-        # file editing -- ranked out of the dynamic slots on edit requests (#3752)
+        "read_file",
         "write_file",
         "edit_file",
-        # computation -- without it the model does arithmetic in its head or
-        # writes a throwaway script into the user's repo to get a number
         "run_python",
+        "run_shell_command",
+        "browse_directory",
+        "search_file",
+        "search_web",
+        "fetch_page",
+        "remember",
+        "recall",
+        # skills: the catalogue tells the model to load them; listing them is
+        # the next step when the catalogue is not enough
+        "load_skill",
+        "list_skills",
+        # finds any tool or skill the list lacks
+        "search_tools",
+        # reads a result too long to inline; the harness names it in the result
+        "read_tool_output",
         # loop control -- autonomous-turn signalling
         "set_loop_state",
         "request_user_input",
-        "sleep",
-        # finds any tool or skill the list lacks
-        "search_tools",
-        "read_tool_output",
-        # the skill catalogue (#3764) tells the model to call this even when
-        # the skills bundle was not selected.
-        "load_skill",
-        # the next most-called tools in the eval baseline: core alone covered 41%
-        # of calls, these bring it to 77%, and a turn that needs none of the rest
-        # never pays for them
-        "query_specific_file",
-        "index_document",
-        "summarize_document",
-        "analyze_data_file",
-        "find_files",
-        "search_file",
-        "browse_directory",
-        "search_web",
-        "fetch_page",
-        "run_shell_command",
-        # without these a model read and browsed its way to the same answer,
-        # in about a fifth more steps
-        "search_file_content",
-        "list_files",
     }
 )
 
@@ -687,13 +672,60 @@ FULL_OPTIONAL_TOOLS = frozenset(
 )
 
 
+#: Words in a request that call for a tool whatever the embedding scores: a
+#: question about "the sign in bakery.png" scores no image tool above the bar.
+FULL_TRIGGERS: Tuple[Tuple[Pattern[str], FrozenSet[str]], ...] = tuple(
+    (re.compile(pattern, re.IGNORECASE), frozenset(tools))
+    for pattern, tools in (
+        (
+            r"\.(?:png|jpe?g|gif|webp|bmp|heic)\b|\b(?:image|photo|picture|screenshot)s?\b",
+            {"analyze_image", "answer_question_about_image"},
+        ),
+        (
+            r"\.(?:csv|tsv|xlsx|xls)\b|\b(?:spreadsheet|workbook)s?\b",
+            {"analyze_data_file"},
+        ),
+        (
+            r"\b(?:folders?|director(?:y|ies)|list (?:the |my )?files)\b",
+            {"list_files", "find_files"},
+        ),
+        (
+            r"\bfiles? (?:named|called|containing|that contain)\b",
+            {"find_files", "search_file_content"},
+        ),
+        (r"\bskills?\b", {"skill_status"}),
+        (
+            r"\bindex(?:ed|ing)?\b",
+            {"index_document", "index_directory", "list_indexed_documents"},
+        ),
+        (r"\bsummar(?:y|ise|ize|ies)\b", {"summarize_document"}),
+        (
+            r"\b(?:forget|update (?:what you know|my memory))\b",
+            {"forget", "update_memory"},
+        ),
+        (
+            r"\b(?:forget everything|wipe (?:your |my )?memory|"
+            r"delete (?:all )?(?:of )?(?:my |your )?memor(?:y|ies))\b",
+            {"forget_everything"},
+        ),
+        (
+            r"\b(?:last time|earlier (?:chat|conversation)|we (?:talked|discussed))\b",
+            {"search_past_conversations"},
+        ),
+        (r"\b(?:wait|remind|in \d+ (?:seconds?|minutes?))\b", {"sleep"}),
+    )
+)
+
+
 @dataclass(frozen=True)
 class ProfileToolConfig:
-    """The CORE / bundle / optional triple configuring one profile's loader."""
+    """What configures one profile's loader: CORE, bundles, optional tools and
+    the request words that call for a tool (:data:`FULL_TRIGGERS`)."""
 
     core: FrozenSet[str]
     bundles: List[ToolBundle]
     optional: FrozenSet[str] = frozenset()
+    triggers: Sequence[Tuple[Pattern[str], FrozenSet[str]]] = ()
 
 
 #: Profiles that support dynamic tool loading. A profile absent from this map
@@ -702,6 +734,9 @@ class ProfileToolConfig:
 PROFILE_TOOL_CONFIGS: Dict[str, ProfileToolConfig] = {
     "doc": ProfileToolConfig(core=DOC_CORE_TOOLS, bundles=DOC_BUNDLES),
     "full": ProfileToolConfig(
-        core=FULL_CORE_TOOLS, bundles=FULL_BUNDLES, optional=FULL_OPTIONAL_TOOLS
+        core=FULL_CORE_TOOLS,
+        bundles=FULL_BUNDLES,
+        optional=FULL_OPTIONAL_TOOLS,
+        triggers=FULL_TRIGGERS,
     ),
 }
