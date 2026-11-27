@@ -4605,6 +4605,19 @@ for (const locale of ['ar', 'en']) {
             await shot(page, `schedules-${locale}-long-prompt`);
         });
 
+        if (locale === 'en') {
+            test('a short Arabic prompt sits on the same edge as the card name', async ({ page }) => {
+                await openSchedules(page, [{ ...SCHEDULE_ROW, id: 's7', name: 'ملخص الصباح', prompt: 'لخّص ملاحظاتي غير المقروءة.' }]);
+                const card = page.locator('.schedule-card').first();
+                const textLeft = (selector: string) => card.locator(selector).evaluate((el) => {
+                    const range = document.createRange();
+                    range.selectNodeContents(el);
+                    return range.getBoundingClientRect().left;
+                });
+                expect(Math.abs((await textLeft('.schedule-card-prompt')) - (await textLeft('.schedule-card-name'))), 'the prompt jumped to the far side of the card').toBeLessThan(2);
+            });
+        }
+
         test('new schedule, nothing typed yet', async ({ page }) => {
             await openSchedules(page, []);
             await page.locator('.schedule-modal .btn-primary').click();

@@ -242,6 +242,12 @@
     overflow-wrap: anywhere;
 }
 
+/* A short Arabic prompt in a left-to-right UI sits at the card's left, like its name; its text keeps its own start. */
+:root:not([dir="rtl"]) .schedule-card-prompt:dir(rtl) {
+    inline-size: fit-content;
+    max-inline-size: 100%;
+}
+
 .schedule-card-actions {
     display: flex;
     gap: 4px;
