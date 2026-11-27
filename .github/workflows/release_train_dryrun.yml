@@ -542,7 +542,8 @@ jobs:
         run: |
           set -euo pipefail
           cp "${RUNNER_TEMP}/flagship/binaries.lock.json" binaries.lock.json
-          npm ci
+          # Dependabot writes lockfiles with npm 11; Node 22's npm 10 rejects them.
+          npx -y npm@11 ci
           npm run build
           npm pack --ignore-scripts --pack-destination "${RUNNER_TEMP}/flagship"
 

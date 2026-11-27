@@ -59,7 +59,8 @@ jobs:
 
       - name: Install Worker dependencies
         working-directory: workers/agent-hub
-        run: npm ci
+        # Dependabot writes lockfiles with npm 11; Node 22's npm 10 rejects them.
+        run: npx -y npm@11 ci
 
       # requests + pyyaml are what the publisher imports at module scope; boto3
       # is needed for the oversized lane, and case G asserts the pre-flight
