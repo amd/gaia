@@ -1461,7 +1461,6 @@ export interface SessionSearchResult {
  */
 export interface SettingsResponse {
   agent_mode?: string;
-  context_size?: number | null;
   custom_model?: string | null;
   dynamic_tools?: boolean;
   dynamic_tools_locked?: boolean;
@@ -1480,10 +1479,6 @@ export interface SettingsUpdateRequest {
    * Agent operating mode. One of: 'manual' (request/response only), 'goal_driven' (execute approved goals). Default: 'goal_driven'. 'autonomous' (observe, infer, and execute own goals) is not implemented yet and is rejected (#2005).
    */
   agent_mode?: string | null;
-  /**
-   * Context window size in tokens for model loading. Must be >= 32768 (the minimum required by GAIA Chat). Set to null to reset to the default (32768).
-   */
-  context_size?: number | null;
   /**
    * HuggingFace model ID to use instead of the default model. Example: huihui-ai/Huihui-Qwen3.5-35B-A3B-abliterated. Set to empty string or null to clear the override.
    */

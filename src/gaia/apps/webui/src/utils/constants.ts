@@ -14,6 +14,9 @@ export const DEFAULT_MODEL_NAME = 'Gemma-4-E4B-it-GGUF';
  *  Must match `MAX_SESSION_TITLE_CHARS` in `gaia.ui.models`. */
 export const MAX_SESSION_TITLE_CHARS = 200;
 
+/** Widest window (px) laid out as a phone. The CSS media queries write the same 768px. */
+export const MOBILE_MAX_PX = 768;
+
 /** Max spinner duration (ms) for model load operations (5 min safety reset). */
 export const LOAD_SPINNER_TIMEOUT_MS = 300_000;
 

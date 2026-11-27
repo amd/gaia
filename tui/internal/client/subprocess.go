@@ -38,8 +38,6 @@ const closeGrace = 2 * time.Second
 // nothing to save exits at once, so this only costs time when it is needed.
 const agentExitGrace = 20 * time.Second
 
-var subprocessLemonadePorts = []string{"13305"}
-
 // markEmbedded reports whether the URL handed to the child is GAIA's own
 // server, which moves port and key when the daemon restarts it.
 func markEmbedded() bool {
@@ -63,7 +61,7 @@ func detectLemonadeURL() string {
 	if lemonade.GAIARunsLemonade() {
 		return ""
 	}
-	for _, port := range subprocessLemonadePorts {
+	for _, port := range lemonade.LocalPorts {
 		url := "http://localhost:" + port + "/api/v1"
 		client := lemonade.New(url)
 		client.HTTP.Timeout = 2 * time.Second

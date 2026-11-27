@@ -9,6 +9,7 @@ from pydantic import BaseModel, Field, field_validator
 
 from gaia.browser.picked import MAX_ELEMENTS as _MAX_PAGE_ELEMENTS
 from gaia.browser.picked import PageElement
+from gaia.llm.lemonade_client import DEFAULT_MODEL_NAME
 from gaia.version import __version__ as _gaia_version
 
 # ── System ──────────────────────────────────────────────────────────────────
@@ -102,7 +103,7 @@ class SystemStatus(BaseModel):
     model_downloaded: Optional[bool] = None  # None=unknown, True/False if checked
     # Required model for GAIA Chat; None when an unreadable config hides it
     # (``config_error`` then says why).
-    default_model_name: Optional[str] = "Gemma-4-E4B-it-GGUF"
+    default_model_name: Optional[str] = DEFAULT_MODEL_NAME
     # True for a cloud model: nothing to download, load or resize locally.
     default_model_is_cloud: bool = False
     # Catalog-reported size of ``default_model_name``. Populated alongside
@@ -324,9 +325,6 @@ class SettingsResponse(BaseModel):
 
     custom_model: Optional[str] = None
     model_status: Optional[ModelStatus] = None
-    context_size: Optional[int] = (
-        None  # Persisted ctx_size override; None = use default
-    )
     # "manual" | "goal_driven". "autonomous" is unshipped (#2005), rejected on
     # write, and migrated to "goal_driven" when the database opens.
     agent_mode: str = "goal_driven"
@@ -373,15 +371,6 @@ class SettingsUpdateRequest(BaseModel):
             )
         return value
 
-    context_size: Optional[int] = Field(
-        None,
-        description=(
-            "Context window size in tokens for model loading. "
-            "Must be >= 32768 (the minimum required by GAIA Chat). "
-            "Set to null to reset to the default (32768)."
-        ),
-        ge=32768,
-    )
     agent_mode: Optional[str] = Field(
         None,
         description=(

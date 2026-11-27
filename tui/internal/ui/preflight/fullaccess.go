@@ -5,7 +5,6 @@ package preflight
 
 import (
 	"encoding/json"
-	"errors"
 	"fmt"
 	"os"
 
@@ -58,16 +57,12 @@ func readFullAccess(p hostProbe) FullAccessConfig {
 	if path == "" {
 		return FullAccessConfig{}
 	}
-	read := p.readConfig
-	if read == nil {
-		read = p.readFile
-	}
-	raw, err := read(path)
-	if errors.Is(err, os.ErrNotExist) {
-		return FullAccessConfig{Path: path}
-	}
+	raw, ok, err := readSharedConfig(p, path)
 	if err != nil {
-		return FullAccessConfig{Path: path, Err: fmt.Errorf("cannot read %s: %w", path, err)}
+		return FullAccessConfig{Path: path, Err: err}
+	}
+	if !ok {
+		return FullAccessConfig{Path: path}
 	}
 	var cfg struct {
 		FullAccess *bool `json:"full_access"`

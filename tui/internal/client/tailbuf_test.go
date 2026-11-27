@@ -10,6 +10,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/amd/gaia/tui/internal/event"
+	"github.com/amd/gaia/tui/internal/lemonade"
 )
 
 func TestTailBufferUnderLimitIsVerbatim(t *testing.T) {
@@ -148,9 +149,9 @@ func main() {
 // output, which is what explains the exit, and not with megabytes of it.
 func TestSubprocessClient_ExitReportsBoundedStderrTail(t *testing.T) {
 	isolateSubprocessConnection(t)
-	old := subprocessLemonadePorts
-	subprocessLemonadePorts = nil
-	t.Cleanup(func() { subprocessLemonadePorts = old })
+	old := lemonade.LocalPorts
+	lemonade.LocalPorts = nil
+	t.Cleanup(func() { lemonade.LocalPorts = old })
 
 	bin := buildAgentFrom(t, t.TempDir(), "noisy_exit_agent", noisyExitAgentSrc)
 	c := NewSubprocessClient(bin, nil, false)

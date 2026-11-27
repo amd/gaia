@@ -46,6 +46,7 @@ on:
       - 'cpp/CMakeLists.txt'
       - 'cpp/agents/gaiacpp/main.cpp'
       - 'cpp/agents/gaiacpp/stdio_server.cpp'
+      - 'cpp/agents/gaiacpp/sidecar.cpp'
       - 'cpp/src/model_registry.cpp'
       - 'cpp/tests/chaos/chaos_gaiacpp.py'
       # Hub agent code, skills and component manifests that tests/unit imports or reads.
@@ -131,6 +132,7 @@ on:
       - 'cpp/CMakeLists.txt'
       - 'cpp/agents/gaiacpp/main.cpp'
       - 'cpp/agents/gaiacpp/stdio_server.cpp'
+      - 'cpp/agents/gaiacpp/sidecar.cpp'
       - 'cpp/src/model_registry.cpp'
       - 'cpp/tests/chaos/chaos_gaiacpp.py'
       # Hub agent code, skills and component manifests that tests/unit imports or reads.

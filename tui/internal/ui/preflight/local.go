@@ -51,11 +51,6 @@ import (
 // answering rather than answering slowly.
 const lemonadeProbeTimeout = 3 * time.Second
 
-// lemonadePorts are the ports a local Lemonade listens on. Mirrors
-// client.detectLemonadeURL — a probe that looked elsewhere would report a
-// running server as down.
-var lemonadePorts = []string{"13305"}
-
 // lemonadeBaseURLEnv points the agent at a specific server, possibly on another
 // machine. When it is set it is the ONLY thing probed: finding a local server
 // on 13305 would prove nothing about the one the agent will actually use.
@@ -546,7 +541,7 @@ func probeLemonadeHTTP(ctx context.Context) (base string, reachable bool, trace 
 		// answering on a standard port cannot make that connection ready.
 		bases = []string{lemonade.ResolveBaseURL("")}
 	} else {
-		for _, port := range lemonadePorts {
+		for _, port := range lemonade.LocalPorts {
 			bases = append(bases, "http://localhost:"+port+"/api/v1")
 		}
 	}
@@ -819,7 +814,7 @@ func (l localRunner) verifyModelsStatus(ctx context.Context, _ Config) (Row, str
 
 // nativeDefaultModel is the model gaiacpp runs when neither the launch nor
 // GAIA's config names one.
-const nativeDefaultModel = "Gemma-4-E4B-it-GGUF"
+const nativeDefaultModel = lemonade.DefaultChatModel
 
 // nativeStartModel is the local model gaiacpp is started on when the launch
 // names none: GAIA's local chat model (setup saves a small PC's pick), else

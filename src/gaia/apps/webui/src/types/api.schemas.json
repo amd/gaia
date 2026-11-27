@@ -5180,17 +5180,6 @@
         "title": "Agent Mode",
         "type": "string"
       },
-      "context_size": {
-        "anyOf": [
-          {
-            "type": "integer"
-          },
-          {
-            "type": "null"
-          }
-        ],
-        "title": "Context Size"
-      },
       "custom_model": {
         "anyOf": [
           {
@@ -5273,19 +5262,6 @@
         ],
         "description": "Agent operating mode. One of: 'manual' (request/response only), 'goal_driven' (execute approved goals). Default: 'goal_driven'. 'autonomous' (observe, infer, and execute own goals) is not implemented yet and is rejected (#2005).",
         "title": "Agent Mode"
-      },
-      "context_size": {
-        "anyOf": [
-          {
-            "minimum": 32768.0,
-            "type": "integer"
-          },
-          {
-            "type": "null"
-          }
-        ],
-        "description": "Context window size in tokens for model loading. Must be >= 32768 (the minimum required by GAIA Chat). Set to null to reset to the default (32768).",
-        "title": "Context Size"
       },
       "custom_model": {
         "anyOf": [

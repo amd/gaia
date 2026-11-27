@@ -605,8 +605,6 @@ export interface AgentPrograms {
 export interface Settings {
     custom_model: string | null;
     model_status: ModelStatus | null;
-    /** Persisted context window size override (tokens). null = use default 32768. */
-    context_size: number | null;
     /** Dynamic tool loading. Effective value: GAIA_DYNAMIC_TOOLS wins when set, else config.json. */
     dynamic_tools: boolean;
     /** True when GAIA_DYNAMIC_TOOLS locks the value — the toggle reflects the effective value and disables. */

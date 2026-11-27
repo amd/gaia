@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/amd/gaia/tui/internal/event"
+	"github.com/amd/gaia/tui/internal/lemonade"
 )
 
 // argvAgentSrc answers each query with its own argv, and exits 1 on "die" —
@@ -61,9 +62,9 @@ func turn(t *testing.T, c *SubprocessClient, query string) (answer, agentErr str
 // came back on the launch model — a cloud conversation silently went local.
 func TestConfirmedModelSwitchSurvivesARespawn(t *testing.T) {
 	isolateSubprocessConnection(t)
-	old := subprocessLemonadePorts
-	subprocessLemonadePorts = nil
-	t.Cleanup(func() { subprocessLemonadePorts = old })
+	old := lemonade.LocalPorts
+	lemonade.LocalPorts = nil
+	t.Cleanup(func() { lemonade.LocalPorts = old })
 
 	bin := buildAgentFrom(t, t.TempDir(), "argv_agent", argvAgentSrc)
 	c := NewCanonicalSubprocessClient(bin, []string{"--json-events", "--model", "Qwen3.6-35B-A3B-GGUF"}, false)

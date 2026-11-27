@@ -15,6 +15,8 @@ import (
 	"strings"
 	"sync"
 	"testing"
+
+	"github.com/amd/gaia/tui/internal/lemonade"
 )
 
 func TestSetModelBeforeStartReplacesOnlyInferenceFlags(t *testing.T) {
@@ -96,9 +98,9 @@ func replaceSubprocessPorts(t *testing.T, serverURL string) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	old := subprocessLemonadePorts
-	subprocessLemonadePorts = []string{u.Port()}
-	t.Cleanup(func() { subprocessLemonadePorts = old })
+	old := lemonade.LocalPorts
+	lemonade.LocalPorts = []string{u.Port()}
+	t.Cleanup(func() { lemonade.LocalPorts = old })
 }
 
 func TestPendingCloudSelectionLaunchesAgainstEmbeddedEndpoint(t *testing.T) {

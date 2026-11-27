@@ -59,6 +59,8 @@ import time
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
 from unittest.mock import MagicMock, patch
 
+from gaia.llm.lemonade_client import DEFAULT_MODEL_NAME
+
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from gaiapy.chat_agent import ChatAgent
 
@@ -259,7 +261,7 @@ def build_doc_agent_skeleton(
                 agent = ChatAgent.__new__(ChatAgent)
                 agent.config = cfg
                 agent._instance_tools = None
-                agent.model_id = "Gemma-4-E4B-it-GGUF"
+                agent.model_id = DEFAULT_MODEL_NAME
                 agent._memory_store = MagicMock()  # non-None -> memory tools register
                 agent.rag = MagicMock()
                 agent.console = MagicMock()
@@ -335,7 +337,7 @@ def build_full_agent_skeleton(
                 agent = GaiaAgent.__new__(GaiaAgent)
                 agent.config = cfg
                 agent._instance_tools = None
-                agent.model_id = "Gemma-4-E4B-it-GGUF"
+                agent.model_id = DEFAULT_MODEL_NAME
                 agent._memory_store = MagicMock()
                 agent.rag = MagicMock()
                 agent.console = MagicMock()
@@ -923,7 +925,7 @@ def parse_ttft_from_scorecard(path: str) -> Dict[str, Any]:
     }
 
 
-DEFAULT_TTFT_MODEL = "Gemma-4-E4B-it-GGUF"
+DEFAULT_TTFT_MODEL = DEFAULT_MODEL_NAME
 DEFAULT_TTFT_QUERY = (
     "What does the employee handbook say about remote work? Find and read it."
 )
