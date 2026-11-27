@@ -1300,6 +1300,7 @@ def _linear_bound(source: str) -> float:
 def _detect_seconds(source: str):
     """Best of three detector runs, so one stall cannot fail a timing test."""
     best = float("inf")
+    gc_was_enabled = gc.isenabled()
     gc.disable()
     try:
         for _ in range(3):
@@ -1307,7 +1308,10 @@ def _detect_seconds(source: str):
             found = _detect_test_runner(source)
             best = min(best, time.perf_counter() - started)
     finally:
-        gc.enable()
+        if gc_was_enabled:
+            gc.enable()
+        else:
+            gc.disable()
     return found, best
 
 
