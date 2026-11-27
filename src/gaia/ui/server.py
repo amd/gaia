@@ -40,6 +40,7 @@ from gaia.agents.install_hints import agent_wheel_failed_message
 from gaia.client_hangups import quiet_client_hangups
 from gaia.config import UnsafeGaiaHomeError
 from gaia.listener_guard import keep_listening_after_client_resets
+from gaia.ports import AGENT_UI_PORT
 from gaia.security import AllowedPathsEnvError, env_allowed_paths
 
 from . import api_token
@@ -111,7 +112,7 @@ from .utils import uploads_dir
 logger = logging.getLogger(__name__)
 
 # Default port for agent UI server
-DEFAULT_PORT = 4200
+DEFAULT_PORT = AGENT_UI_PORT
 
 
 class _SpaPathConvertor(PathConvertor):
@@ -843,8 +844,8 @@ def create_app(
     app.add_middleware(
         CORSMiddleware,
         allow_origins=[
-            "http://localhost:4200",
-            "http://127.0.0.1:4200",
+            f"http://localhost:{DEFAULT_PORT}",
+            f"http://127.0.0.1:{DEFAULT_PORT}",
             "http://localhost:5174",
             "http://127.0.0.1:5174",
             "http://localhost:5173",
