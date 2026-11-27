@@ -1066,7 +1066,15 @@ export interface ActiveModel {
     inference_description?: string | null;
     /** `pending` while the model server is still starting; ask again. */
     /** `retry`: a failed cloud restore the backend checks again on the next read. */
-    restore?: { status: 'restored' | 'failed' | 'none' | 'pending'; message: string | null; retry?: boolean };
+    restore?: {
+        status: 'restored' | 'failed' | 'none' | 'pending';
+        message: string | null;
+        retry?: boolean;
+        /** A failed restore's parts, so the UI can word it in the user's language. */
+        model?: string;
+        reason?: string;
+        reason_code?: string | null;
+    };
 }
 
 export interface ProvidersResponse {
