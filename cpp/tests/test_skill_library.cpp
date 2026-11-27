@@ -116,6 +116,31 @@ TEST(SkillLibraryTest, LoadSkillToolReturnsInstructions) {
     EXPECT_EQ(listed["skills"].size(), 2u);
 }
 
+TEST(SkillLibraryTest, ASkillNeedingToolsTheAgentLacksIsNeitherOfferedNorLoaded) {
+    TempTree t;
+    t.raw("user", "needs-python",
+          "---\nname: needs-python\ndescription: Crunch numbers.\nmetadata:\n  gaia:\n"
+          "    tools_required: [run_python, file_read]\n---\n\nUse run_python.\n");
+    t.skill("user", "plain", "Plain.", "Body.");
+    SkillLibrary lib({t.root("user", "user")});
+    ToolRegistry reg;
+    lib.registerTools(reg);
+    EXPECT_NE(lib.renderPrompt().find("needs-python"), std::string::npos) << "unset, every skill is offered";
+    lib.requireTools([](const std::string& tool) { return tool == "file_read"; });
+    const std::string catalog = lib.renderPrompt();
+    EXPECT_EQ(catalog.find("needs-python"), std::string::npos) << catalog;
+    EXPECT_NE(catalog.find("plain"), std::string::npos);
+    const json r = reg.executeTool("load_skill", json{{"name", "needs-python"}});
+    EXPECT_EQ(r["status"], "error");
+    EXPECT_NE(r["error"].get<std::string>().find("run_python"), std::string::npos) << r.dump();
+    const json listed = reg.executeTool("list_skills", json::object());
+    bool flagged = false;
+    for (const auto& s : listed["skills"]) {
+        if (s["name"] == "needs-python") flagged = s.value("needs_missing_tools", "") == "run_python";
+    }
+    EXPECT_TRUE(flagged) << listed.dump();
+}
+
 TEST(SkillLibraryTest, LoaderSeamPutsBodyInPrompt) {
     TempTree t;
     t.skill("user", "coding", "Write and fix code.", "Always run the tests.");

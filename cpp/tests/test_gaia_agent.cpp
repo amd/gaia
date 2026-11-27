@@ -1018,6 +1018,27 @@ TEST(GaiaAgentTest, AFalseTestsPassClaimIsSentBackOnceThenCaveatedAndTheTurnIsIn
     }
 }
 
+TEST(GaiaAgentTest, AnAnswerAtTheStepLimitNamingAMissingFileSaysSo) {
+    // No steps left to send it back, so the check runs on the closing answer itself.
+    Workdir w;
+    bench::MockLlmServer mock;
+    mock.pushResponse(shellCall("echo a"));
+    mock.pushResponse(shellCall("echo b"));
+    const std::string closing = "I saved the table to `totals.md`.";
+    mock.pushResponse(answer(closing));
+    AgentConfig c = cfgFor(mock);
+    c.maxSteps = 2;
+    c.nativeToolCalls = NativeToolCalls::Always;
+    GaiaAgent agent(c, optionsFor(w));
+    agent.toolRegistry().setConfirmCallback(
+        [](const std::string&, const json&) { return ToolConfirmResult::ALLOW_ONCE; });
+    const json r = agent.processQuery("make the table");
+    const std::string result = r.value("result", "");
+    ASSERT_EQ(result.rfind(closing, 0), 0u) << result;
+    EXPECT_GT(result.size(), closing.size()) << "a note follows the answer";
+    EXPECT_NE(result.find("totals.md", closing.size()), std::string::npos) << result;
+}
+
 TEST(GaiaAgentTest, SayingAFileIsMissingWithoutLookingIsSentBack) {
     Workdir w;
     bench::MockLlmServer mock;
