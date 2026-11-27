@@ -44,6 +44,16 @@ describe('SetupSettings', () => {
         expect(screen.queryByText(/Qwen3\.6/)).toBeNull();
     });
 
+    it('says the chat model can\'t be used, not Ready, when its saved cloud key no longer works', async () => {
+        const message = "Couldn't restore your last model deepseek-v4p1-flash: Fireworks AI has no working key.";
+        useModelStore.setState({ active: { ...CLOUD, restore: { status: 'failed', message } } });
+        render(<SetupSettings />);
+        expect(await screen.findByText("Your chat model can't be used yet")).toBeTruthy();
+        expect(screen.getByText(message)).toBeTruthy();
+        expect(screen.queryByText('Ready')).toBeNull();
+        expect(screen.queryByText(/^Running /)).toBeNull();
+    });
+
     it('says the model server is not answering instead of Ready while it is down', async () => {
         useModelStore.setState({
             active: {

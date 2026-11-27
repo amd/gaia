@@ -32,6 +32,9 @@ export function SetupSettings() {
     const runSetupAgain = useChatStore((s) => s.runSetupAgain);
     const active = useModelStore((s) => s.active);
     const serverDown = useChatStore((s) => s.systemStatus?.lemonade_running === false);
+    // The failed restore the main window's banner reports: the saved model has no working key.
+    const chatFailure = active?.restore?.status === 'failed' ? active.restore.message : null;
+    const chatUnusable = !serverDown && active?.restore?.status === 'failed';
     const [plan, setPlan] = useState<SetupPlan | null>(null);
     const [hardware, setHardware] = useState<PreflightReport | null>(null);
     const [gpu, setGpu] = useState<GpuMemoryStatus | null>(null);
@@ -101,8 +104,9 @@ export function SetupSettings() {
             <p className="settings-hint">{t('settings.setup.lede')}</p>
             <div className="settings-setup-status">
                 <span>
-                    <strong>{t(serverDown ? 'settings.setup.serverDown' : 'settings.setup.ready')}</strong>
-                    {chatName && !serverDown && <span className="settings-hint"> <bdi>{t('settings.setup.running', { name: chatName })}</bdi></span>}
+                    <strong>{t(serverDown ? 'settings.setup.serverDown' : chatUnusable ? 'settings.setup.chatUnusable' : 'settings.setup.ready')}</strong>
+                    {chatUnusable && chatFailure && <span className="settings-hint"> <bdi>{chatFailure}</bdi></span>}
+                    {chatName && !serverDown && !chatUnusable && <span className="settings-hint"> <bdi>{t('settings.setup.running', { name: chatName })}</bdi></span>}
                 </span>
                 <button type="button" className="btn-secondary" data-testid="setup-run-again" onClick={() => setAsking(true)}>
                     {t('settings.setup.runAgain')}
