@@ -398,6 +398,10 @@ export function cancelGoal(goalId: string) {
     return memFetch<Goal>('PUT', `/goals/${encodeURIComponent(goalId)}/cancel`);
 }
 
+export function retryGoal(goalId: string) {
+    return memFetch<Goal>('PUT', `/goals/${encodeURIComponent(goalId)}/status`, { status: 'queued' });
+}
+
 export function deleteGoal(goalId: string) {
     return memFetch<void>('DELETE', `/goals/${encodeURIComponent(goalId)}`);
 }
