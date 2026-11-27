@@ -188,6 +188,10 @@ public:
     /// On error: {"error": string}
     static ToolInfo fileSearch();
 
+    /// Why the file tools refuse `path` before touching it (a device name, a folder, a
+    /// credential file); "" when they may open it.
+    static std::string refusesPath(const std::string& path);
+
 private:
     // Implementation callbacks
     static json doFileRead(const json& args);

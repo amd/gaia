@@ -82,7 +82,6 @@ std::string narrate(const std::string& tool, const json& args) {
     if (tool == "load_skill") return "Loading the " + argOf(args, "name") + " skill";
     if (tool == "query_documents") return "Searching the documents";
     if (tool == "index_document") return "Indexing " + argOf(args, "path");
-    if (tool == "search_code") return "Searching the code";
     if (tool == "delegate_task") {
         const size_t n = args.is_object() && args.contains("tasks") && args["tasks"].is_array() ? args["tasks"].size() : 0;
         return n > 0 ? "Handing " + std::to_string(n) + (n == 1 ? " task" : " tasks") + " to helpers"

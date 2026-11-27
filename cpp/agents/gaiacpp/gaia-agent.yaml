@@ -7,12 +7,12 @@
 id: gaia
 name: GAIA Agent (native)
 version: 0.1.0
-description: "General-purpose local agent: files, documents, data, code, shell and web, with headless, OpenAI-compatible server and interactive modes."
+description: "General-purpose local agent: files, documents, data, shell and web, with headless, OpenAI-compatible server and interactive modes."
 author: AMD
 license: MIT
 
 category: productivity
-tags: [agent, files, documents, data, coding, openai-compatible, lemonade]
+tags: [agent, files, documents, data, openai-compatible, lemonade]
 icon: sparkles
 
 language: cpp
