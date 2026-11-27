@@ -294,7 +294,8 @@ jobs:
       - name: Install npm dependencies
         working-directory: src/gaia/apps/webui
         shell: bash
-        run: npm ci
+        # Dependabot writes the Agent UI lockfile with npm 11; keep Node 22 but install with npm 11.
+        run: npx -y npm@11 ci
 
       # ─── Bundle the frozen GAIA core ────────────────────────────────
       # electron-builder.yml packs build/core as <resources>/core; the app runs
