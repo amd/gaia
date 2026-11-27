@@ -2007,7 +2007,12 @@ Used to reach the UI from a phone.
     `errors`, `skipped`: files of a type GAIA doesn't index or that hold
     credentials or keys, and
     `skipped_images`: images, which GAIA reads only when each is added on its
-    own. A file that fails, or yields no text, gets a `failed` library row with
+    own. `skipped_files` names up to 50 of the skipped files, each with
+    `file` (its path inside the folder) and `reason` (`unsupported_type` or
+    `credential_file`); `skipped_files_truncated` is `true` when there were
+    more. Hidden paths and desktop artifacts still count in `skipped` but are
+    left out of the named list. A file that fails, or yields no text, gets a
+    `failed` library row with
     its `last_error`, so it can be retried with `reindex`; it is not in
     `documents`.
   </Accordion>
