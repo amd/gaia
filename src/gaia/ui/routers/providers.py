@@ -1013,7 +1013,7 @@ def restore_last_model(db: ChatDatabase, load: bool = True) -> Dict[str, Any]:
                     "Pick a model to continue."
                 ),
                 "retry": provider_of(last) != LOCAL and not cloud_blocked(),
-                "model": last,
+                "model_id": last,
             }
         return _restore_result
 
