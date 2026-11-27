@@ -11,7 +11,8 @@ import keyring
 import keyring.backend
 import pytest
 
-from tests.conftest import _guard_keyring_backend, in_memory_keyring
+import tests.conftest as root_conftest
+from tests.conftest import _guard_keyring_backend
 
 
 class _FakePlatformKeyring(keyring.backend.KeyringBackend):
@@ -70,8 +71,10 @@ def test_the_session_fixture_guards_and_restores_the_prior_backend(monkeypatch):
     monkeypatch.setattr(keyring, "set_keyring", installed.append)
 
     # The undecorated generator is the session fixture's body, so closing it
-    # exercises the real teardown without ending the test session.
-    fixture = in_memory_keyring.__wrapped__()
+    # exercises the real teardown without ending the test session. Access it
+    # through the module so pytest does not register a second copy of this
+    # root autouse fixture in the test module.
+    fixture = root_conftest.in_memory_keyring.__wrapped__()
     try:
         backend = next(fixture)
         assert type(backend).__name__ == "_InMemoryKeyring"

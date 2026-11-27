@@ -528,9 +528,9 @@ def _guard_keyring_backend(backend):
     """Make every password method on *backend* fail, and return a restore hook.
 
     Replacing the active backend keeps ordinary calls away from the OS store.
-    This wrapper covers the second path: code that kept a reference to the
-    platform backend before the fixture ran, or rebuilt it directly, must not
-    silently read the developer's sign-ins. The original methods are kept so the
+    This wrapper covers code that kept a reference to this already-resolved
+    backend instance and calls it directly. It cannot guard a new instance
+    constructed after the fixture ran. The original methods are kept so the
     fixture can hand the unmodified backend back at session teardown.
     """
     name = type(backend).__name__
