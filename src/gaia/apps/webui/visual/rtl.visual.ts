@@ -7315,7 +7315,7 @@ const CRASHES: Record<'main' | 'sidebar' | 'window', { hash: string; before: (pa
     window: {
         hash: '',
         before: (page) => page.route((url) => url.pathname === '/api/providers/active', (route) =>
-            route.fulfill({ json: { provider: 'local', model: 'Gemma-4-E4B-it-GGUF', label: 'Gemma-4-E4B-it-GGUF · local', remote: false, is_default: true, restore: { status: 'failed', message: BROKEN } } })),
+            route.fulfill({ json: { provider: 'local', model: 'Gemma-4-E4B-it-GGUF', label: 'Gemma-4-E4B-it-GGUF · local', remote: false, is_default: true, restore: { status: 'failed', message: BROKEN, model: BROKEN, reason: 'it has no working key' } } })),
     },
 };
 
