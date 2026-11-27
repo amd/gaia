@@ -126,13 +126,14 @@ export function AddSkillsFromLink({ onAdded }: { onAdded: () => void }) {
                     value={url}
                     onChange={(e) => setUrl(e.target.value)}
                     onPaste={(e) => {
+                        if (busy !== null) return;
                         const pasted = e.clipboardData.getData('text').trim();
                         if (pasted) { e.preventDefault(); setUrl(pasted); void read(pasted); }
                     }}
                     placeholder={t.bare('settings.skills.link.placeholder')}
                     title={t('settings.skills.link.hint')}
                     aria-label={t('settings.skills.link.aria')}
-                    disabled={busy !== null}
+                    readOnly={busy !== null}
                 />
                 <button type="submit" className="btn-secondary" disabled={!url.trim() || busy !== null}>
                     {busy === 'preview' ? <><Loader2 size={13} className="spin" /> {t('settings.skills.link.reading')}</> : t('settings.skills.link.read')}

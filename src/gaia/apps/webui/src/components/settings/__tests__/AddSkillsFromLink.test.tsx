@@ -124,4 +124,21 @@ describe('AddSkillsFromLink', () => {
         fireEvent.click(screen.getByRole('button', { name: 'Read' }));
         expect(await screen.findByRole('alert')).toHaveTextContent('Nothing found at the link');
     });
+
+    it('keeps the cursor in the link box while it reads, so a wrong link can be fixed', async () => {
+        let fail: (e: Error) => void = () => {};
+        mockedApi.previewSkillLink.mockReturnValue(new Promise((_, reject) => { fail = reject; }));
+        render(<AddSkillsFromLink onAdded={vi.fn()} />);
+        const box = screen.getByLabelText('Link to a skill or skills library');
+        box.focus();
+        fireEvent.change(box, { target: { value: 'owner/missing' } });
+        fireEvent.submit(box.closest('form')!);
+        await screen.findByText('Reading…');
+        expect(box).not.toBeDisabled();
+        expect(box).toHaveFocus();
+        fail(new Error('Nothing found at the link'));
+        await screen.findByRole('alert');
+        expect(box).toHaveFocus();
+        expect(box).not.toHaveAttribute('readonly');
+    });
 });
