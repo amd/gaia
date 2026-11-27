@@ -24,10 +24,13 @@ _MIN_SHORT_LINES = 12
 
 
 def looks_tabular(plain_text: str) -> bool:
-    """True when the plain text reads like table cells, one per line."""
+    """True when plain extraction reads like table cells or numeric rows."""
     lines = [line.strip() for line in plain_text.splitlines() if line.strip()]
     short = sum(1 for line in lines if len(line) <= _SHORT_LINE_CHARS)
-    return short >= _MIN_SHORT_LINES and short * 2 >= len(lines)
+    numeric_rows = sum(1 for line in lines if _looks_like_row(line))
+    return (short >= _MIN_SHORT_LINES and short * 2 >= len(lines)) or (
+        numeric_rows >= _MIN_ROWS
+    )
 
 
 def _fields(line: str) -> List[str]:
@@ -36,6 +39,15 @@ def _fields(line: str) -> List[str]:
 
 def _is_header(cells: Sequence[str]) -> bool:
     return not any(_NUMBER.fullmatch(cell) for cell in cells)
+
+
+def _looks_like_row(line: str) -> bool:
+    fields = line.split()
+    return (
+        len(fields) >= _MIN_COLUMNS
+        and _NUMBER.fullmatch(fields[0]) is not None
+        and _NUMBER.fullmatch(fields[-1]) is not None
+    )
 
 
 def _table_blocks(layout_text: str) -> List[List[List[str]]]:
