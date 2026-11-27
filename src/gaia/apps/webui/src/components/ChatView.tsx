@@ -260,6 +260,8 @@ export function ChatView({ sessionId }: ChatViewProps) {
 
     // Load messages on mount, then poll for external changes (MCP, API)
     const lastMsgCountRef = useRef<number>(0);
+    // True once this chat's history has loaded, so a chat with no messages shows its empty state, not a flash of it.
+    const [historyLoaded, setHistoryLoaded] = useState(false);
     // Messages sent from this view; a history load that started before one must not replace it.
     const sentRef = useRef<number>(0);
 
@@ -298,6 +300,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
                     setMessages(keepFailedReply(shown, msgs));
                     lastMsgCountRef.current = msgs.length;
                 }
+                if (isInitial) setHistoryLoaded(true);
             } catch (err) {
                 if (cancelled) return;
                 if (isInitial) {
@@ -1749,6 +1752,13 @@ export function ChatView({ sessionId }: ChatViewProps) {
                                     </div>
                                 </div>
                             ))}
+                        </div>
+                    )}
+
+                    {historyLoaded && rows.length === 0 && !isStreaming && !openingShown && !pendingPrompt && (
+                        <div className="chat-empty">
+                            <h2 className="chat-empty-title">{t('chat.empty.title')}</h2>
+                            <p className="chat-empty-hint">{t('chat.empty.hint')}</p>
                         </div>
                     )}
 

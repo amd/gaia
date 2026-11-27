@@ -1686,6 +1686,8 @@ const messages: Messages = {
     'settings.sections': 'أقسام الإعدادات',
     'chat.loadingTools': 'جارٍ تحميل المزيد من الأدوات',
     'chat.loadingMessages': 'جارٍ تحميل الرسائل',
+    'chat.empty.title': 'هذه المحادثة فارغة',
+    'chat.empty.hint': 'أرسل رسالة في الأسفل لتبدأ.',
     'chat.privateOffTitle': 'إيقاف المحادثة الخاصة. هذه المحادثة لا تُحفظ في الذاكرة.',
     'chat.browseFiles': 'تصفح الملفات على هذا الجهاز',
     'chat.exportTitle': 'تصدير بصيغة Markdown',
