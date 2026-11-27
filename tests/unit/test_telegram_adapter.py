@@ -14,7 +14,12 @@ import pytest
 sys.path.insert(0, os.path.abspath("src"))
 
 from gaia.messaging import telegram as telegram_module
-from gaia.messaging.telegram import UNAUTHORIZED_REPLY, TelegramAdapter
+from gaia.messaging.telegram import (
+    FINAL_DELIVERY_WARNING,
+    UNAUTHORIZED_REPLY,
+    TelegramAdapter,
+)
+from gaia.messaging.telegram_api import TelegramNetworkError, TelegramRetryAfter
 
 
 def test_run_telegram_scaffold_returns_adapter(mock_home, monkeypatch):
@@ -143,6 +148,169 @@ async def test_allowed_user_streams_accumulated_response(monkeypatch):
         call("Hello"),
         call("Hello from Gaia"),
     ]
+
+
+def _streaming_adapter(monkeypatch):
+    adapter = TelegramAdapter(token="fake-token", allowed_users={12345})
+    streamed_reply = AsyncMock()
+    reply_text = AsyncMock(return_value=streamed_reply)
+    update = SimpleNamespace(
+        effective_user=SimpleNamespace(id=12345),
+        message=SimpleNamespace(
+            text="hello",
+            photo=[],
+            document=None,
+            reply_text=reply_text,
+        ),
+    )
+
+    class StubSession:
+        def send_stream(self, text):
+            return iter(
+                [
+                    SimpleNamespace(text="Hello"),
+                    SimpleNamespace(text=" from Gaia"),
+                ]
+            )
+
+    monkeypatch.setattr(
+        "gaia.messaging.telegram.get_or_create_session", lambda user_id: StubSession()
+    )
+    return adapter, streamed_reply, reply_text, update
+
+
+@pytest.mark.asyncio
+async def test_a_failed_final_edit_posts_a_warning(monkeypatch, caplog):
+    """The user sees a failed answer without the answer or the API error repeated."""
+    adapter, reply, reply_text, update = _streaming_adapter(monkeypatch)
+
+    async def fail_final(text):
+        if text == "Hello from Gaia":
+            raise TelegramNetworkError("offline", method="editMessageText")
+
+    reply.edit_text = AsyncMock(side_effect=fail_final)
+    with caplog.at_level(logging.WARNING, logger="gaia.messaging.telegram"):
+        await adapter._handle_message(update, None)
+
+    assert reply.edit_text.await_args_list == [
+        call("Hello"),
+        call("Hello from Gaia"),
+        call("Hello from Gaia"),
+        call("Hello from Gaia"),
+    ]
+    assert reply_text.await_args_list == [
+        call("Thinking..."),
+        call(FINAL_DELIVERY_WARNING),
+    ]
+    assert any(
+        record.levelno == logging.WARNING
+        and "Final Telegram edit" in record.getMessage()
+        for record in caplog.records
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_rate_limited_final_edit_goes_straight_to_the_warning(
+    monkeypatch, caplog
+):
+    """A 429 is not retried immediately; the user hears about it instead."""
+    adapter, reply, reply_text, update = _streaming_adapter(monkeypatch)
+
+    async def rate_limited(text):
+        if text == "Hello from Gaia":
+            raise TelegramRetryAfter(
+                "slow down", method="editMessageText", retry_after=2
+            )
+
+    reply.edit_text = AsyncMock(side_effect=rate_limited)
+    with caplog.at_level(logging.WARNING, logger="gaia.messaging.telegram"):
+        await adapter._handle_message(update, None)
+
+    assert reply.edit_text.await_count == 3
+    assert reply_text.await_args_list == [
+        call("Thinking..."),
+        call(FINAL_DELIVERY_WARNING),
+    ]
+    assert any(
+        record.levelno == logging.WARNING and "rate limited" in record.getMessage()
+        for record in caplog.records
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_failed_fallback_post_is_logged_and_raises(monkeypatch, caplog):
+    """A warning that cannot be posted is not hidden from the bridge either."""
+    adapter, reply, reply_text, update = _streaming_adapter(monkeypatch)
+
+    async def fail_final(text):
+        raise TelegramNetworkError("offline", method="editMessageText")
+
+    async def fail_warning(text):
+        if text == FINAL_DELIVERY_WARNING:
+            raise TelegramNetworkError("offline", method="sendMessage")
+        return reply
+
+    reply.edit_text = AsyncMock(side_effect=fail_final)
+    reply_text.side_effect = fail_warning
+    with (
+        caplog.at_level(logging.WARNING, logger="gaia.messaging.telegram"),
+        pytest.raises(TelegramNetworkError),
+    ):
+        await adapter._handle_message(update, None)
+
+    assert any(
+        record.levelno == logging.WARNING
+        and "Could not post the final Telegram warning" in record.getMessage()
+        for record in caplog.records
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_final_edit_retries_before_telling_the_user(monkeypatch):
+    """A transient failure that clears on the final retry needs no fallback."""
+    adapter, reply, reply_text, update = _streaming_adapter(monkeypatch)
+    failed = False
+
+    async def flaky_final(text):
+        nonlocal failed
+        if text == "Hello from Gaia" and not failed:
+            failed = True
+            raise TelegramNetworkError("offline", method="editMessageText")
+
+    reply.edit_text = AsyncMock(side_effect=flaky_final)
+    await adapter._handle_message(update, None)
+
+    assert reply.edit_text.await_args_list == [
+        call("Hello"),
+        call("Hello from Gaia"),
+        call("Hello from Gaia"),
+    ]
+    assert reply_text.await_args_list == [call("Thinking...")]
+
+
+@pytest.mark.asyncio
+async def test_a_mid_stream_edit_failure_stays_tolerant(monkeypatch, caplog):
+    """A failed progress edit is not retried or reported as a final failure."""
+    adapter, reply, reply_text, update = _streaming_adapter(monkeypatch)
+
+    async def fail_first(text):
+        if text == "Hello":
+            raise TelegramNetworkError("offline", method="editMessageText")
+
+    reply.edit_text = AsyncMock(side_effect=fail_first)
+    with caplog.at_level(logging.WARNING, logger="gaia.messaging.telegram"):
+        await adapter._handle_message(update, None)
+
+    assert reply.edit_text.await_args_list == [
+        call("Hello"),
+        call("Hello from Gaia"),
+    ]
+    assert reply_text.await_args_list == [call("Thinking...")]
+    assert not any(
+        record.levelno == logging.WARNING
+        and "Final Telegram edit" in record.getMessage()
+        for record in caplog.records
+    )
 
 
 @pytest.mark.asyncio

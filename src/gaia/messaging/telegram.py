@@ -79,6 +79,13 @@ def get_or_create_session(user_id: int) -> AgentSDK:
 
 UNAUTHORIZED_REPLY = "Sorry — you're not authorized to use this bot."
 
+#: Posted when the final reply edit could not be delivered. It deliberately
+#: repeats neither the answer nor the Bot API error: both can carry private
+#: file contents, tool output or credentials from an error.
+FINAL_DELIVERY_WARNING = (
+    "⚠️ GAIA could not finish its reply here. Please resend your message and try again."
+)
+
 #: Text of the refusal. One string so the CLI and the exception agree.
 NO_ALLOWLIST_ERROR = (
     "Telegram adapter refused to start: no allowed-users configured.\n"
@@ -217,6 +224,47 @@ class TelegramAdapter:
         await update.message.reply_text(
             "Hello! I'm Gaia. Send a message and I'll respond (streaming)."
         )
+
+    async def _edit_stream_reply(self, reply, text: str, user, *, final: bool) -> bool:
+        """Edit the streaming reply, returning whether Telegram accepted it.
+
+        Mid-stream failures stay tolerant: the next chunk retries with newer
+        text. A final network failure gets one more try; a rate limit goes
+        straight to the user warning rather than burning another API call.
+        """
+        try:
+            await reply.edit_text(text)
+            return True
+        except TelegramRetryAfter as e:
+            if not final:
+                log.debug("Transient telegram edit failure: %s", e)
+                return False
+            log.warning(
+                "Final Telegram edit was rate limited for user %s: %s", user.id, e
+            )
+            return False
+        except TelegramNetworkError as e:
+            if not final:
+                log.debug("Transient telegram edit failure: %s", e)
+                return False
+            log.warning("Final Telegram edit failed for user %s: %s", user.id, e)
+        except Exception as e:
+            if not final:
+                log.exception("Unexpected error editing telegram message: %s", e)
+                return False
+            log.warning(
+                "Unexpected final Telegram edit failure for user %s: %s",
+                user.id,
+                e,
+                exc_info=True,
+            )
+
+        try:
+            await reply.edit_text(text)
+            return True
+        except Exception as e:
+            log.warning("Final Telegram edit retry failed for user %s: %s", user.id, e)
+            return False
 
     @require_allowed
     async def _handle_message(self, update, _context):
@@ -367,16 +415,24 @@ class TelegramAdapter:
                 text_chunk = f"{accumulated}\n\n{note}" if accumulated else note
                 done = True
             accumulated = text_chunk
-            # Edit the reply with the latest accumulated text (Telegram rate limits apply)
-            try:
-                if accumulated != last_edited:
-                    await reply.edit_text(accumulated)
+            delivered = True
+            if accumulated != last_edited:
+                delivered = await self._edit_stream_reply(
+                    reply, accumulated, user, final=done
+                )
+                if delivered:
                     last_edited = accumulated
-            except (TelegramRetryAfter, TelegramNetworkError) as e:
-                log.debug("Transient telegram edit failure: %s", e)
-            except Exception as e:
-                log.exception("Unexpected error editing telegram message: %s", e)
             if done:
+                if not delivered:
+                    try:
+                        await update.message.reply_text(FINAL_DELIVERY_WARNING)
+                    except Exception as e:
+                        log.warning(
+                            "Could not post the final Telegram warning for user %s: %s",
+                            user.id,
+                            e,
+                        )
+                        raise
                 break
 
     async def _dispatch(self, raw: dict) -> None:
