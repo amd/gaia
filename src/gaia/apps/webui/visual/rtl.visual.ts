@@ -2491,6 +2491,25 @@ for (const locale of ['ar', 'en']) {
         await shot(page, `files-${locale}-zoomed`);
     });
 
+    // A long path scrolls inside the path bar; the open folder and Go up stayed out of reach.
+    test(`the file browser keeps the open folder and Go up in view four folders deep (${locale})`, async ({ page }) => {
+        await page.setViewportSize({ width: 800, height: 600 });
+        const deep = 'C:\\Shared Projects\\quarterly-financial-reports\\design-review-meeting-notes\\final-archive-2026-edition';
+        await open(page, '', locale, async (p) => {
+            await withOldFile(p);
+            await p.route('**/api/files/browse**', (route) => route.fulfill({
+                json: { current_path: deep, parent_path: 'C:\\Shared Projects\\quarterly-financial-reports\\design-review-meeting-notes', quick_links: [], entries: [] },
+            }));
+        });
+        await page.locator('.sb').getByRole('button', { name: /Documents/ }).click();
+        await page.getByRole('button', { name: /Browse files/ }).click();
+        await expect(page.locator('.fb-crumb').last()).toHaveText('final-archive-2026-edition');
+        // Chromium rounds the scroll end to whole pixels, so right-to-left can clip a fraction of the button's padding.
+        await expect(page.locator('.fb-crumb').last()).toBeInViewport({ ratio: 0.95 });
+        await expect(page.locator('.fb-up-btn')).toBeInViewport({ ratio: 1 });
+        await shot(page, `files-${locale}-deep-path`);
+    });
+
     test(`an answer's timestamp and outputs read in the interface language (${locale})`, async ({ page }) => {
         await withPanelOpen(page);
         const month = locale === 'ar' ? ARABIC_MONTH : /Mar/;
