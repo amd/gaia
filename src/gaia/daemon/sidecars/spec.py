@@ -16,7 +16,7 @@ from pathlib import Path
 from typing import Optional, Tuple
 
 from gaia.connectors.providers.base import ConnectorRequirement
-from gaia.daemon.sidecars.errors import DevSrcDirResolutionError
+from gaia.daemon.sidecars.errors import DevSrcDirResolutionError, UnknownAgentError
 
 
 @dataclass(frozen=True)
@@ -493,3 +493,14 @@ def builtin_specs() -> "dict[str, AgentSidecarSpec]":
             consumes_mcp_servers=True,
         ),
     }
+
+
+def spec_for(specs: "dict[str, AgentSidecarSpec]", agent_id: str) -> AgentSidecarSpec:
+    """The registered spec for ``agent_id``; an unknown id names the known ones."""
+    spec = specs.get(agent_id)
+    if spec is None:
+        raise UnknownAgentError(
+            f"unknown agent '{agent_id}'; registered agents: "
+            + ", ".join(sorted(specs))
+        )
+    return spec

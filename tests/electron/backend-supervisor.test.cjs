@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: MIT
 
 /**
- * The backend supervisor restarts GAIA's backend when it exits on its own:
+ * The backend supervisor restarts GAIA's backend when it exits or stops answering:
  * after a growing wait, at most a few times in a window, and then it stops
  * and waits for the user's Restart GAIA.
  */
@@ -69,6 +69,7 @@ test("a successful restart reports running on the new port", async () => {
   await h.settle();
   expect(h.last()).toMatchObject({ status: "running", port: 6123 });
   expect(h.sup.getState().port).toBe(6123);
+  expect(h.sup.getState().lastExit).toBeNull();
 });
 
 test("a failed start counts as a crash and waits longer before the next try", async () => {
@@ -112,6 +113,37 @@ test("old restarts age out of the window", async () => {
   await h.settle();
   h.advance(60_001);
   expect(h.sup.crashed({ code: 1 })).toBe("restarting");
+});
+
+test("a health failure uses the restart budget and keeps its reason without inventing an exit", async () => {
+  const onStopped = jest.fn();
+  const h = harness({ maxRestarts: 1, backoffMs: [10], onStopped });
+  h.sup.running(5000);
+  expect(h.sup.healthFailed(new Error("health endpoint refused the connection"))).toBe("restarting");
+  h.advance(10);
+  h.starts[0].resolve({ port: 6123 });
+  await h.settle();
+
+  expect(h.sup.healthFailed(new Error("health endpoint is still unavailable"))).toBe("stopped");
+  expect(h.last()).toMatchObject({
+    status: "stopped",
+    lastExit: null,
+    lastError: "health endpoint is still unavailable",
+  });
+  expect(onStopped).toHaveBeenCalledTimes(1);
+  expect(onStopped.mock.calls[0][0].lastError).toBe("health endpoint is still unavailable");
+});
+
+test("a health failure is ignored while starting, waiting to retry, or stopped", () => {
+  const h = harness({ backoffMs: [1000] });
+  h.sup.running(5000);
+  h.sup.crashed({ code: 1 });
+  expect(h.sup.healthFailed(new Error("late probe"))).toBe("restarting");
+  h.advance(1000);
+  expect(h.sup.healthFailed(new Error("probe during start"))).toBe("restarting");
+  h.sup.stop();
+  expect(h.sup.healthFailed(new Error("probe after quit"))).toBe("stopped");
+  expect(h.starts).toHaveLength(1);
 });
 
 test("Restart GAIA after the cap starts at once with a fresh budget", async () => {
@@ -222,3 +254,72 @@ test("a crash that hits the cap calls onStopped too, and Restart GAIA re-arms it
   expect(h.last().status).toBe("stopped");
   expect(onStopped).toHaveBeenCalledTimes(2);
 });
+
+test("a backend that could not be started at all is stopped until Restart GAIA", () => {
+  const h = harness();
+  const onStopped = jest.fn();
+  const sup = createBackendSupervisor({ start: () => new Promise(() => {}), onState: (s) => h.states.push(s), onStopped });
+  sup.failedToStart("GAIA's backend program is missing");
+  expect(h.last()).toMatchObject({ status: "stopped", lastError: "GAIA's backend program is missing", nextAttemptAt: null });
+  expect(onStopped).not.toHaveBeenCalled();
+  sup.restartNow();
+  expect(h.last()).toMatchObject({ status: "restarting", attempt: 1 });
+});
+
+test("Restart GAIA with the program still missing stops at once, with no retries and no crash dialog", async () => {
+  const onStopped = jest.fn();
+  const h = harness({
+    onStopped,
+    start: jest.fn(() => Promise.reject(Object.assign(new Error("GAIA's backend program is missing"), { terminal: true }))),
+  });
+  h.sup.failedToStart("GAIA's backend program is missing");
+  h.sup.restartNow();
+  await h.settle();
+  expect(h.last()).toMatchObject({ status: "stopped", nextAttemptAt: null, lastError: "GAIA's backend program is missing" });
+  expect(h.pending()).toHaveLength(0);
+  expect(onStopped).not.toHaveBeenCalled();
+});
+
+test("a start that fails for another reason still retries on the backoff", async () => {
+  const h = harness({ start: jest.fn(() => Promise.reject(new Error("port in use"))) });
+  h.sup.failedToStart("GAIA's backend program is missing");
+  h.sup.restartNow();
+  await h.settle();
+  expect(h.last()).toMatchObject({ status: "restarting", lastError: "port in use" });
+  expect(h.pending()).toHaveLength(1);
+});
+
+test("Restart GAIA restarts a backend still reported running, with a fresh budget", async () => {
+  const h = harness({ backoffMs: [1000] });
+  h.sup.running(5000);
+  h.sup.restartNow();
+  expect(h.starts).toHaveLength(1);
+  // A restart from running starts a new outage, so the banner's timer counts from here.
+  expect(h.last()).toMatchObject({ status: "restarting", attempt: 1, since: 1_000_000, nextAttemptAt: null });
+  h.starts[0].resolve({ port: 6123 });
+  await h.settle();
+  expect(h.last()).toMatchObject({ status: "running", port: 6123 });
+});
+
+test("Restart GAIA pressed twice while running starts only once", () => {
+  const h = harness();
+  h.sup.running(5000);
+  h.sup.restartNow();
+  h.sup.restartNow();
+  expect(h.starts).toHaveLength(1);
+});
+
+test("Restart GAIA from running that fails terminally stops at once, with no retries", async () => {
+  const onStopped = jest.fn();
+  const h = harness({
+    onStopped,
+    start: jest.fn(() => Promise.reject(Object.assign(new Error("GAIA's backend program is missing"), { terminal: true }))),
+  });
+  h.sup.running(5000);
+  h.sup.restartNow();
+  await h.settle();
+  expect(h.last()).toMatchObject({ status: "stopped", nextAttemptAt: null, lastError: "GAIA's backend program is missing" });
+  expect(h.pending()).toHaveLength(0);
+  expect(onStopped).not.toHaveBeenCalled();
+});
+

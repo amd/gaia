@@ -35,6 +35,7 @@ from gaia.agents.tools.browser_tools import (
     SEARCH_UNAVAILABLE_STREAK_LIMIT,
     BrowserToolsMixin,
 )
+from gaia.llm.local_only import CloudDisabledError
 from gaia.tool_cancellation import ToolCancelled
 from gaia.web import client as web_client
 from gaia.web.client import SearchUnavailableError, WebClient, _SearchGate
@@ -100,6 +101,22 @@ def client():
     c = WebClient()
     yield c
     c.close()
+
+
+@pytest.fixture
+def local_only_on(tmp_path, monkeypatch):
+    monkeypatch.setenv("GAIA_POLICY_FILE", str(tmp_path / "policy.json"))
+    from gaia.llm import local_only
+
+    local_only.set_policy("local_ai_only")
+
+
+@pytest.fixture
+def cloud_allowed(tmp_path, monkeypatch):
+    monkeypatch.setenv("GAIA_POLICY_FILE", str(tmp_path / "policy.json"))
+    from gaia.llm import local_only
+
+    local_only.set_policy("cloud_allowed")
 
 
 def _serve(client, *responses):
@@ -254,6 +271,15 @@ class TestRetryAndEndpoints:
     def test_max_attempts_must_be_positive(self, client, sleeps):
         with pytest.raises(ValueError, match="max_attempts"):
             client.search_duckduckgo("q", max_attempts=0)
+
+    def test_local_only_refuses_before_any_duckduckgo_request(
+        self, local_only_on, client, sleeps
+    ):
+        patcher, calls = _serve(client)
+        with patcher, pytest.raises(CloudDisabledError, match="DuckDuckGo search"):
+            client.search_duckduckgo("q")
+
+        assert calls == []
 
 
 class TestSearchGate:
@@ -486,6 +512,36 @@ class TestSearchToolResult:
             [],
         )
         built.assert_not_called()
+
+    def test_local_only_refuses_before_ddg_or_a_search_connector(
+        self, local_only_on, monkeypatch
+    ):
+        web = MagicMock()
+        web.search_duckduckgo.side_effect = lambda *a, **k: pytest.fail("DDG reached")
+        tavily = MagicMock()
+        monkeypatch.setattr("gaia.web.tavily.TavilyClient", lambda: tavily)
+        monkeypatch.setattr(
+            "gaia.connectors.mcp_server.is_mcp_server_configured", lambda _id: True
+        )
+        _, search_web = _search_tool(web)
+
+        result = search_web("q")
+
+        assert result["executed"] is False
+        assert "Web search is unavailable while Local only is on" in result["error"]
+        assert "cloud_allowed" in result["error"]
+        web.search_duckduckgo.assert_not_called()
+        tavily.search.assert_not_called()
+
+    def test_cloud_allowed_agent_search_still_uses_ddg(self, cloud_allowed):
+        web = MagicMock()
+        web.search_duckduckgo.return_value = [
+            {"title": "T", "url": "https://example.com", "snippet": ""}
+        ]
+        _, search_web = _search_tool(web)
+
+        assert "1. T" in search_web("q")
+        web.search_duckduckgo.assert_called_once()
 
 
 class _MemoryHost(MemoryMixin):

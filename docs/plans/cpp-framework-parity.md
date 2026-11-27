@@ -579,6 +579,11 @@ timeout returning **408 with the screen it saw**; port 4001 reserved and rejecte
 makes every TUI assertion in P7.4 real rather than a screenshot someone eyeballed.
 
 **P7.4 — `gaia-bash` supersession gate**
+
+> **Overtaken (2026-11):** `gaia-bash` was removed in #8706 without this head-to-head
+> gate, because `gaiacpp` became the C++ agent going forward. The comparison below was
+> never run, and the bash eval adapter and scenarios went with the agent.
+
 The proof that a skill-programmed generic agent replaces a hardcoded one. A `coding` skill set that
 reproduces `gaia-bash`'s behavior on top of `gaia-agent`'s compiled-in toolbelt (`gaia-bash`
 registers exactly `FileIOTools` + `GitTools` + `bash_execute` + `env_inspect`), and a **head-to-head

@@ -8,25 +8,16 @@ The same :mod:`gaia.llm.gpu_memory` calls the Agent UI makes under
 
 from __future__ import annotations
 
-from typing import Any, Callable, Dict, Optional
+from typing import Any, Dict, Optional
 
-from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel, Field
+from fastapi import APIRouter, Depends
 
-_SETTING_GB = "GPU memory to set, in decimal GB (10**9 bytes)."
-
-
-class GpuMemoryApplyRequest(BaseModel):
-    setting_gb: float = Field(description=_SETTING_GB)
-    confirm: bool = False
-
-
-class GpuMemoryRevertRequest(BaseModel):
-    confirm: bool = False
-
-
-class GpuMemoryPendingRequest(BaseModel):
-    setting_gb: float = Field(description=_SETTING_GB)
+from gaia.llm.gpu_memory_http import (
+    GpuMemoryApplyRequest,
+    GpuMemoryPendingRequest,
+    GpuMemoryRevertRequest,
+    answer,
+)
 
 
 def build_gpu_memory_router(token: str) -> APIRouter:
@@ -39,12 +30,6 @@ def build_gpu_memory_router(token: str) -> APIRouter:
         tags=["gpu-memory"],
         dependencies=[Depends(build_require_token(token))],
     )
-
-    def answer(call: Callable[[], Dict[str, Any]]) -> Dict[str, Any]:
-        try:
-            return call()
-        except gpu_memory.GpuMemoryError as e:
-            raise HTTPException(status_code=e.status, detail=str(e)) from e
 
     @router.get("")
     def read(setting_gb: Optional[float] = None) -> Dict[str, Any]:

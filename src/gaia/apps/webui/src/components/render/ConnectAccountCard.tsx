@@ -10,6 +10,7 @@ import { useConnectorsSSE } from '../../hooks/useConnectorsSSE';
 import { log } from '../../utils/logger';
 import type { ConnectorAccount, ConnectorListEntry, Message } from '../../types';
 import { accountRef, accountsOf, addedBesideDefault, middleCut, reconnectOffer, signInFixed, type ConnectOffer } from '../../utils/connectorAccounts';
+import { openAuthUrl } from '../../utils/openAuthUrl';
 import { useConnectorPoll } from '../../hooks/useConnectorPoll';
 import { ltrIn } from '../setup/format';
 import { UnsupportedCard } from './UnsupportedCard';
@@ -108,12 +109,6 @@ const PROVIDER_NAMES: Record<string, string> = {
     microsoft: 'Microsoft',
     microsoft_work: 'Microsoft 365',
 };
-
-function openAuthUrl(url: string): void {
-    const bridge = (window as unknown as { gaia?: { openExternal?: (url: string) => void } }).gaia;
-    if (bridge?.openExternal) bridge.openExternal(url);
-    else window.open(url, '_blank', 'noopener');
-}
 
 /** Sign-in refused because this PC has no OAuth client for the provider yet. */
 function isUnconfigured(e: unknown): boolean {

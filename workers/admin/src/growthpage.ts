@@ -19,6 +19,10 @@ export const TARGETS = {
   retention: { good: 0.25, warn: 0.15 },
   external: { good: 0.2, warn: 0.1 },
   busFactor: { good: 2, warn: 1 },
+  /** Share of merged outside pull requests from the two people with the most; lower is better. */
+  concentration: { good: 0.5, warn: 0.75 },
+  /** Share of outside issues and pull requests at least two days old that the core team answered within two days. */
+  answered2d: { good: 0.8, warn: 0.6 },
   /** Downloads in the window against the window before. */
   downloads: { good: -0.1, warn: -0.3 },
 } as const;
@@ -55,7 +59,13 @@ var INFO={` + INFO_COMMON + String.raw`
 'momentum':['Momentum','Each period against the average of the four before it, so a release spike or a quiet week stands out without week-to-week noise. Above the zero line is faster than the recent pace. The period in progress is left out. Active contributors are people who committed or opened a PR; downloads are PyPI and GitHub installs.'],
 'retention':['Newcomers who came back','People whose first pull request fell in each period, split by whether they opened another within 90 days. Periods less than 90 days old stay blank until their newcomers have had the full time.'],
 'outside':['Outside share of merged PRs','Per period, the share of merged pull requests opened by people outside the core team, bots left out. The dashed line is the target (__EXT_GOOD__).'],
-'bench':['Against healthy projects','GAIA’s targets are set from its own recent history, a little above its median; the peers are far larger communities, shown for context rather than as goals. Peer figures come from the GitHub API and public star trackers, __ASOF__; GAIA’s are live, for the selected range. Time to first reply is not collected yet.']};
+'g-resp-i':['First response to issues','For issues opened in the window by people outside the core team: the median time until the core team first answered, by a comment or by closing it. A close counts even when the author closed it, and an issue nobody has answered counts with its age so far, so the median can read low while many are waiting. The colour therefore follows the line below it: the share of issues at least two days old that were answered within two days. Green: __ANS_GOOD__ or more. Amber: __ANS_WARN__ or more. Red: less.'],
+'g-resp-p':['First response to pull requests','The same for outside pull requests: the median time until the core team first commented, left an inline review comment, merged or closed it. A review verdict on its own (approve or request changes, with no inline comment) is not collected, so such a PR counts from its next comment, merge or close and can read slow. Coloured by the share answered within two days, as for issues.'],
+'g-conc':['Outside concentration','Of the outside pull requests merged in the window, the share from the two people with the most. A high share means one or two people carry most of the outside work, so one of them stopping looks like the whole community shrinking. Not scored when fewer than three people had outside pull requests merged, since the top two are then everyone. Green: __CONC_GOOD__ or less. Amber: up to __CONC_WARN__. Red: more.'],
+'resp':['Answered within two days','Per period, by when the item was opened: the share of outside issues and pull requests that the core team first answered within two days, by a comment, an inline review comment, a merge or a close. Items less than two days old are left out until they are. A share rather than a median, so one slow item in a quiet week cannot swamp the chart; the medians are in the cards above. The dashed line is the target (__ANS_GOOD__).'],
+'funnel':['Contributor funnel','Outside people whose first issue or pull request was opened in the range, and how far each has gone since: opened a pull request, had one merged, had two or more merged. Recent newcomers have had less time, so the later steps read low for short ranges. The core team is left out, judged by each person’s most recent item.'],
+'conc':['Top outside contributors','The people with the most outside pull requests merged in the range (counted per pull request, as for Outside PRs, so someone who has since joined the core team still shows for the work they did before), with their share of all merged outside pull requests and the last time they opened anything. Someone who carried a lot and has gone quiet is worth a thank-you or a check-in.'],
+'bench':['Against healthy projects','GAIA’s targets are set from its own recent history, a little above its median; the peers are far larger communities, shown for context rather than as goals. Peer figures come from the GitHub API and public star trackers, __ASOF__; GAIA’s are live, for the selected range. GAIA’s time to first reply counts a close as a reply, where the peers count human comments only.']};
 var T=__TARGETS__;
 var MINE=__MAINTAINERS__,CORE=__CORE__;
 var BENCH=__BENCH__;
@@ -84,13 +94,21 @@ function drawKpis(){var g=D.growth;if(!g){el('ov').innerHTML='<div class="card e
   hh+=kpi('g-ret','Newcomer retention',pct(nc.rate,0),nc.rate==null?'no newcomers 3 to 6 months ago':fmt(nc.returned)+' of '+fmt(nc.cohort)+' newcomers from 3–6 months ago came back',level(nc.rate,rule(T.retention)),nc.rate==null?'':pct(nc.rate,0)+' of newcomers opened another PR within 90 days');
   hh+=kpi('g-ext','Outside PRs',pct(c.externalShare,0),'of '+fmt(c.prsMerged)+' merged PRs · '+rt+(MINE.length?'':' · <a href="/admin/developers">set the core team</a>'),level(c.externalShare,rule(T.external)),pct(c.externalShare,0)+' of merged PRs came from outside the core team');
   hh+=kpi('g-bus','Bus factor',c.busFactor==null?'—':fmt(c.busFactor),c.busFactor==null?'no commits in the window':(c.busFactor===1?'person':'people')+' made half the commits · '+rt,level(c.busFactor,rule(T.busFactor)),c.busFactor==null?'':fmt(c.busFactor)+(c.busFactor===1?' person made':' people made')+' half the commits');
+  var rs=g.responses,resp=function(key,label,s,ps,noun){if(!s.opened)return kpi(key,label,'—','no outside '+noun+' opened · '+rt,'','');
+      var sub=pct(s.within2d,0)+' answered within 2 days · '+fmt(s.waiting)+' unanswered · of '+fmt(s.opened)+was(ps&&ps.opened?ps.medianHours:null,hrs);
+      return kpi(key,label,hrs(s.medianHours),sub,level(s.within2d,rule(T.answered2d)),s.within2d==null?'':pct(s.within2d,0)+' of outside '+noun+' answered within 2 days (target '+pct(T.answered2d.good,0)+')');};
+  if(rs)hh+=resp('g-resp-i','Issue first response',rs.current.issue,rs.previous&&rs.previous.issue,'issues')+resp('g-resp-p','PR first response',rs.current.pr,rs.previous&&rs.previous.pr,'pull requests');
+  else hh+=kpi('g-resp-i','First response','—','comments not collected yet','','');
+  var cc=g.concentration;
+  hh+=kpi('g-conc','Outside concentration',pct(cc.topTwoShare,0),cc.topTwoShare!=null?'of '+fmt(cc.merged)+' merged outside PRs came from 2 people · '+rt:cc.merged?'only '+plural(cc.people,'person','people')+' had outside PRs merged · '+rt:'no outside PRs merged · '+rt,level(cc.topTwoShare,rule(T.concentration,false)),cc.topTwoShare==null?'':pct(cc.topTwoShare,0)+' of merged outside PRs came from the top two people');
   el('hv').innerHTML='<div class="strip">'+hh+'</div>';}
+function hrs(h){return h==null?'—':ddur(h/24);}
 /* Each period against the mean of the up-to-four before it (at least two); null for the period in progress. */
 function trail(keys,val,now){var out=[];for(var i=0;i<keys.length;i++){var v=val(keys[i]);if(v==null||keys[i]===now){out.push(null);continue;}
   var prev=[];for(var j=i-1;j>=0&&prev.length<4;j--){var x=val(keys[j]);if(x!=null)prev.push(x);}
   var avg=prev.length>=2?prev.reduce(function(a,b){return a+b;},0)/prev.length:null;out.push(avg?v/avg-1:null);}return out;}
 function drawCharts(){var g=D.growth,rows=inRange();
-  if(!g||!rows.length){['rate','momentum','retention','outside'].forEach(function(id){emptyBox(id,g?'No data for this range yet.':'Could not load growth data.');});return;}
+  if(!g||!rows.length){['rate','momentum','retention','outside','resp','funnel'].forEach(function(id){emptyBox(id,g?'No data for this range yet.':'Could not load growth data.');});el('conc').innerHTML='';return;}
   var K=rows.map(function(r){return r.start;}),gr=g.gran,v=function(f){return rows.map(f);},now=nowKey(g);
   var part=K[K.length-1]===now?'The last '+gr+' is still in progress, so it reads low.':'';
   chart('rate',{keys:K,gran:gr,type:'line',title:'Stars and forks',h:240,note:part,yfmt:function(x){return pct(x,x<.1?1:0);},target:perPeriod(T.starRate.good,gr),targetLabel:'star target',
@@ -107,11 +125,28 @@ function drawCharts(){var g=D.growth,rows=inRange();
   else chart('retention',{partial:false,keys:K,gran:gr,type:'bar',stacked:true,title:'Newcomers who came back',h:220,note:waiting?'The last '+waiting+' '+gr+(waiting>1?'s are':' is')+' blank: their newcomers have not had 90 days yet.':'',
     series:[{name:'Came back',color:'var(--s3)',vals:v(function(r){return r.newcomerReturned;})},{name:'Did not',color:'var(--neutral)',vals:v(function(r){return r.newcomerCohort==null?null:r.newcomerCohort-r.newcomerReturned;})}]});
   chart('outside',{partial:false,keys:K,gran:gr,type:'line',title:'Outside share of merged PRs',h:220,ymin:0,ymax:1,yfmt:function(x){return pct(x,0);},target:T.external.good,targetLabel:'target',
-    series:[{name:'Outside share',color:'var(--s2)',vals:v(function(r){return r.prsMerged?r.externalMerged/r.prsMerged:null;}),fmt:function(x){return pct(x,0);}}]});}
+    series:[{name:'Outside share',color:'var(--s2)',vals:v(function(r){return r.prsMerged?r.externalMerged/r.prsMerged:null;}),fmt:function(x){return pct(x,0);}}]});
+  drawEngagement(K,gr);}
+/* First response over time, how far newcomers went, and who carries the outside work. */
+function drawEngagement(K,gr){var g=D.growth,rs=g.responses;
+  if(!rs)emptyBox('resp','Comments have not been collected yet; they arrive with the next collection.');
+  else{var by={};rs.periods.forEach(function(r){by[r.start]=r;});var pick=function(f){return K.map(function(k){return by[k]?f(by[k]):null;});};
+    chart('resp',{keys:K,gran:gr,type:'line',title:'Answered within two days',h:220,ymin:0,ymax:1,yfmt:function(x){return pct(x,0);},target:T.answered2d.good,targetLabel:'target',
+      series:[{name:'Issues',color:'var(--s1)',vals:pick(function(r){return r.issueWithin2d;}),fmt:function(x){return pct(x,0);}},{name:'Pull requests',color:'var(--s2)',vals:pick(function(r){return r.prWithin2d;}),fmt:function(x){return pct(x,0);}}]});}
+  var f=g.funnel,labs=['First showed up','Opened a PR','Had a PR merged','Had 2+ merged'];
+  if(!f.people)emptyBox('funnel','Nobody new from outside the core team in this range.');
+  else chart('funnel',{keys:labs,cats:labs,catName:'Step',type:'bar',title:'Contributor funnel',h:220,
+    note:f.issueFirst?fmt(f.issueThenPr)+' of the '+fmt(f.issueFirst)+' who started with an issue went on to open a pull request.':'',
+    series:[{name:'People',color:'var(--s3)',vals:[f.people,f.openedPr,f.merged,f.mergedTwice],fmt:function(n){return fmt(n)+' ('+pct(n/f.people,0)+')';}}]});
+  var c=g.concentration,box=el('conc');
+  if(!c.top.length){box.innerHTML='<div class="empty">No outside pull requests were merged in this range.</div>';return;}
+  box.innerHTML='<div class="scroll" style="max-height:420px"><table><tr><th>Person</th><th class="n">Merged PRs</th><th class="n">Share</th><th class="n">Last opened anything</th></tr>'+c.top.map(function(p){var quiet=ageDays(p.lastSeen);
+    return '<tr><td class="trunc mono" style="max-width:220px;font-size:12px"><a href="https://github.com/'+encodeURIComponent(p.author)+'" target="_blank" rel="noopener">'+esc(p.author)+'</a></td><td class="n">'+fmt(p.merged)+'</td><td class="n">'+pct(p.merged/c.merged,0)+'</td><td'+cellLv(quiet,{good:14,warn:30,higher:false})+'>'+(quiet<1?'today':ddur(quiet)+' ago')+'</td></tr>';}).join('')+'</table></div>';}
+function ageDays(iso){return Math.max(0,(asOfMs()-Date.parse(iso))/864e5);}
 function drawBench(){var g=D.growth,box=el('bench');if(!g){box.innerHTML='';return;}var c=g.current,last=g.periods[g.periods.length-1],n30=c.newContributors*30/g.days;
   var wk=g.days<7?'pick 7d or longer':null;
   var mine={stars:g.days<30?'pick 30d or longer':pct(c.starRate30),ratio:last&&last.starsTotal?(last.forksTotal/last.starsTotal).toFixed(2):'—',new:g.days<30?'pick 30d or longer':fmt(Math.round(n30))+(last&&last.starsTotal?' ('+pct(n30/last.starsTotal)+' of its stars)':''),
-    ext:wk||pct(c.externalShare,0),ret:pct(g.newcomers.rate,0),bus:wk||(c.busFactor==null?'—':fmt(c.busFactor)),resp:'Not collected yet'};
+    ext:wk||pct(c.externalShare,0),ret:pct(g.newcomers.rate,0),bus:wk||(c.busFactor==null?'—':fmt(c.busFactor)),resp:g.responses?hrs(g.responses.current.issue.medianHours):'Not collected yet'};
   box.innerHTML='<div class="scroll" style="max-height:none"><table><tr><th>Metric</th><th>GAIA</th><th>Target</th><th>Hermes Agent</th><th>Peers</th></tr>'+BENCH.map(function(b){
     return '<tr><td>'+esc(b.metric)+'</td><td class="num">'+esc(mine[b.key])+'</td><td>'+esc(b.target)+'</td><td>'+esc(b.hermes)+'</td><td style="white-space:normal">'+esc(b.peers)+'</td></tr>';}).join('')+'</table></div>';}
 function render(){ATTN=[];setUrl({});syncShell();drawKpis();drawCharts();drawBench();drawAttention();drawStatus();}
@@ -137,7 +172,11 @@ export function renderGrowthPage(people: string[][] = []): string {
     .replace(/__EXT_GOOD__/g, pc(TARGETS.external.good))
     .replace(/__EXT_WARN__/g, pc(TARGETS.external.warn))
     .replace(/__BUS_GOOD__/g, String(TARGETS.busFactor.good))
-    .replace(/__BUS_WARN__/g, String(TARGETS.busFactor.warn));
+    .replace(/__BUS_WARN__/g, String(TARGETS.busFactor.warn))
+    .replace(/__CONC_GOOD__/g, pc(TARGETS.concentration.good))
+    .replace(/__CONC_WARN__/g, pc(TARGETS.concentration.warn))
+    .replace(/__ANS_GOOD__/g, pc(TARGETS.answered2d.good))
+    .replace(/__ANS_WARN__/g, pc(TARGETS.answered2d.warn));
   const body = `<style>#ov .strip,#hv .strip{grid-template-columns:repeat(auto-fit,minmax(150px,1fr))}</style>
 <div id="ov"><div class="skel"></div></div>
 <section class="stack"><div class="head"><h2>Rate of change</h2></div>
@@ -146,6 +185,8 @@ export function renderGrowthPage(people: string[][] = []): string {
 <section class="stack"><div class="head"><h2>Community health</h2></div>
 <div id="hv"></div>
 <div class="grid2">${card("retention", "Newcomers who came back", "First-time PR authors who opened another within 90 days.")}${card("outside", "Outside share of merged PRs", "Per period, against the target.")}</div>
+<div class="grid2">${card("resp", "Answered within two days", "Outside issues and PRs the core team answered within two days.")}${card("funnel", "Contributor funnel", "Outside newcomers in the range, and how far they have gone.")}</div>
+<div class="card"><div class="ch"><span class="t">Top outside contributors${infoBtn("conc", "Top outside contributors")}</span><span class="d">Most merged PRs in the range, and when each last opened anything.</span></div><div id="conc"></div></div>
 </section>
 <section class="stack"><div class="head"><h2>Benchmarks</h2></div>
 <div class="card"><div class="ch"><span class="t">Against healthy projects${infoBtn("bench", "Against healthy projects")}</span><span class="d">GAIA in the selected range beside fast-growing AI-agent projects.</span></div><div id="bench"></div></div>

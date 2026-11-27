@@ -4,7 +4,7 @@
 """Tavily web-search wrapper with caching, credit accounting, and a fallback.
 
 Sits between GAIA and the ``tavily-python`` SDK so callers get one front door
-with four behaviours layered on top of the raw API:
+with five behaviours layered on top of the raw API:
 
 - **SQLite cache** (``DatabaseMixin``): a normalized query/params hash maps to a
   stored response with a TTL, so repeat queries don't re-spend credits.
@@ -15,6 +15,8 @@ with four behaviours layered on top of the raw API:
   cap to a warning.
 - **DuckDuckGo fallback**: when the ``mcp-tavily`` connector isn't configured,
   ``search`` degrades to the keyless DuckDuckGo path instead of failing.
+- **Local only**: an active ``local_ai_only`` policy refuses every operation
+  before cache lookup, the DuckDuckGo fallback or any external request.
 
 The API key is read from the connector's keyring entry, never passed around in
 plaintext config. See ``gaia.connectors.catalog.mcp_servers._TAVILY``.
@@ -32,6 +34,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Union
 
 from gaia.database.mixin import DatabaseMixin
+from gaia.llm.local_only import assert_web_permitted
 from gaia.logger import get_logger
 from gaia.web.client import WebClient
 
@@ -460,6 +463,7 @@ class TavilyClient(_TavilyBase):
         max_results: int = 5,
         **kwargs: Any,
     ) -> Dict[str, Any]:
+        assert_web_permitted("Tavily search")
         if not self._configured:
             log.info(
                 "Tavily connector not configured; using DuckDuckGo for query=%r",
@@ -493,6 +497,7 @@ class TavilyClient(_TavilyBase):
         extract_depth: str = "basic",
         **kwargs: Any,
     ) -> Dict[str, Any]:
+        assert_web_permitted("Tavily extract")
         urls = [urls] if isinstance(urls, str) else list(urls)
         if not self._configured:
             raise TavilyConfigError(
@@ -520,6 +525,7 @@ class TavilyClient(_TavilyBase):
     def crawl(
         self, url: str, *, extract_depth: str = "basic", **kwargs: Any
     ) -> Dict[str, Any]:
+        assert_web_permitted("Tavily crawl")
         if not self._configured:
             raise TavilyConfigError(
                 "crawl requires the Tavily connector. Configure it with "
@@ -586,6 +592,7 @@ class AsyncTavilyClient(_TavilyBase):
         max_results: int = 5,
         **kwargs: Any,
     ) -> Dict[str, Any]:
+        assert_web_permitted("Tavily search")
         await self._ensure_resolved()
         if not self._configured:
             log.info(
@@ -622,6 +629,7 @@ class AsyncTavilyClient(_TavilyBase):
         extract_depth: str = "basic",
         **kwargs: Any,
     ) -> Dict[str, Any]:
+        assert_web_permitted("Tavily extract")
         await self._ensure_resolved()
         urls = [urls] if isinstance(urls, str) else list(urls)
         if not self._configured:

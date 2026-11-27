@@ -276,9 +276,9 @@ describe("main.cjs quit wiring", () => {
     const body = MAIN.slice(MAIN.indexOf("async function cleanup()"));
     expect(body.indexOf("shutdownStarted = true")).toBeGreaterThan(-1);
     const awaitStart = body.indexOf("await backendStarting");
-    const kill = body.indexOf("portManager.killBackend(proc)");
+    const stop = body.indexOf("await stopBackendTree(proc)");
     expect(awaitStart).toBeGreaterThan(-1);
-    expect(kill).toBeGreaterThan(awaitStart);
+    expect(stop).toBeGreaterThan(awaitStart);
   });
 
   test("startup does not go on to load the app once a quit has begun", () => {

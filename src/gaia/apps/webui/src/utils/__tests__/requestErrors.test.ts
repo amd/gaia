@@ -15,6 +15,6 @@ describe('requestErrorText', () => {
         );
 
         expect(requestErrorParam(error)).toEqual({ ref: 'settings.privacy.localOnlyBlocked' });
-        expect(requestErrorText(error)).toBe('Blocked by Local only. Turn it off in Settings to use cloud models.');
+        expect(requestErrorText(error)).toBe('Blocked by Local only. Turn it off in Settings to use cloud models or web search.');
     });
 });

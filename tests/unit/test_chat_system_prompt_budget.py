@@ -176,6 +176,35 @@ def test_chat_system_prompt_within_budget(
     )
 
 
+@pytest.mark.parametrize(
+    ("platform_id", "os_name", "told"),
+    [
+        ("darwin", "Darwin", True),
+        ("win32", "Windows", False),
+        ("linux", "Linux", False),
+    ],
+)
+def test_prompt_says_speech_is_off_only_where_it_is_withheld(
+    platform_id: str, os_name: str, told: bool, monkeypatch
+) -> None:
+    """Where the voice is withheld the prompt says so, and still fits the budget."""
+    import gaia.config
+
+    monkeypatch.setattr(gaia.config, "_current_platform", lambda: platform_id)
+    version, machine, home = _PLATFORMS[os_name]
+    with (
+        patch("gaiapy.chat_agent.platform.system", return_value=os_name),
+        patch("gaiapy.chat_agent.platform.version", return_value=version),
+        patch("gaiapy.chat_agent.platform.machine", return_value=machine),
+        patch("gaiapy.chat_agent.Path.home", return_value=home),
+    ):
+        for (profile, n_indexed), budget in _BUDGET_CHARS.items():
+            prompt = _make_agent(profile, n_indexed)._get_system_prompt()
+            assert ("**NO SPEECH OUTPUT ON THIS PC:**" in prompt) is told
+            assert ("issues/8831" in prompt) is told
+            assert len(prompt) <= budget, (profile, n_indexed, len(prompt))
+
+
 def test_chat_system_prompt_directives_preserved() -> None:
     """The trimmed prompt must still carry the imperative RAG directives.
 

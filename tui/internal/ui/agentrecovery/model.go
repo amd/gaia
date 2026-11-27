@@ -3,8 +3,9 @@
 
 // Package agentrecovery is the screen a launch shows when the saved agent
 // program is gaiacpp and it cannot run: missing, or failing its check. It
-// says why and waits for the user to pick: download gaiacpp again, use the
-// Python agent, or quit. Nothing is switched without that pick.
+// says why and waits for the user to pick: download gaiacpp again, use
+// Full-featured (the Python agent), or quit. Nothing is switched without that
+// pick.
 package agentrecovery
 
 import (
@@ -29,7 +30,8 @@ const (
 	Quit Choice = iota
 	// Downloaded means gaiacpp was downloaded and verified: launch on it.
 	Downloaded
-	// UsePython means the user asked for the Python agent instead.
+	// UsePython means the user asked for Full-featured, the Python agent,
+	// instead.
 	UsePython
 )
 
@@ -125,7 +127,7 @@ func (m Model) options() []option {
 	}
 	return []option{
 		download,
-		{choice: UsePython, label: "Use the Python agent",
+		{choice: UsePython, label: "Use " + catalog.HarnessLabel(catalog.PythonAgentChoice),
 			note: "saved as your agent program; /agent " + catalog.NativeAgentBinary + " switches back"},
 		{choice: Quit, label: "Quit"},
 	}
@@ -254,7 +256,9 @@ func (m Model) View() string {
 	b.WriteString(titleStyle.Render("GAIA's agent didn't start") + "\n\n")
 	b.WriteString(wrap.Inherit(textStyle).Render(m.why) + "\n")
 	b.WriteString(wrap.Inherit(dimStyle).Render(
-		"Your saved agent program is "+catalog.NativeAgentBinary+" (Beta). Nothing has been switched; pick what to do.") + "\n\n")
+		"Your saved agent program is "+catalog.HarnessLabel(catalog.NativeAgentBinary)+
+			" ("+catalog.NativeAgentBinary+", Beta).") + "\n")
+	b.WriteString(wrap.Inherit(dimStyle).Render("Nothing has been switched; pick what to do.") + "\n\n")
 
 	if m.stage == stageDownloading {
 		b.WriteString(textStyle.Render(m.progressLine()) + "\n\n")

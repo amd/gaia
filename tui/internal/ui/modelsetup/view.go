@@ -156,7 +156,7 @@ func withHint(div, hint string) string {
 func (m Model) header(w int, left, right string) string {
 	gap := w - 2*indentW - lipgloss.Width(left) - lipgloss.Width(right)
 	if gap < 1 {
-		return components.Pad(titleStyle.Render(truncate(left, w-2*indentW)))
+		return components.Pad(titleStyle.Render(textutil.Truncate(left, w-2*indentW)))
 	}
 	return components.Pad(titleStyle.Render(left) + strings.Repeat(" ", gap) + summaryStyle.Render(right))
 }
@@ -349,7 +349,7 @@ func (m Model) jobHeading(job string, w int) []string {
 			if m.builtInVision() {
 				text = visionBuiltIn(chat)
 			}
-			out = append(out, components.Pad(dimStyle.Render(truncate(text, width))))
+			out = append(out, components.Pad(dimStyle.Render(textutil.Truncate(text, width))))
 		}
 	case jobDocs:
 		out = append(out, components.Pad(jobStyle.Render(jobDocsTitle)))
@@ -451,12 +451,12 @@ func (m Model) itemLine(i int, it item, w int) string {
 	size := m.sizeText(r)
 	line := cursor + tickStyle.Render(tick) + " "
 	if m.shortPurpose() {
-		line += nameStyle.Render(fmt.Sprintf("%-*s", 18, truncate(name, 18))) + " "
+		line += nameStyle.Render(fmt.Sprintf("%-*s", 18, textutil.Truncate(name, 18))) + " "
 	} else {
-		line += nameStyle.Render(fmt.Sprintf("%-*s", nameW, truncate(name, nameW))) + " " +
+		line += nameStyle.Render(fmt.Sprintf("%-*s", nameW, textutil.Truncate(name, nameW))) + " " +
 			dimStyle.Render(fmt.Sprintf("%-*s", labelW, r.supportText())) + " "
 	}
-	line += dimStyle.Render(fmt.Sprintf("%-*s", m.sizeCol(), truncate(size, m.sizeCol())))
+	line += dimStyle.Render(fmt.Sprintf("%-*s", m.sizeCol(), textutil.Truncate(size, m.sizeCol())))
 	if marks := m.marks(it, w-2*indentW-lipgloss.Width(line)-1); marks != "" {
 		line += " " + marks
 	}
@@ -605,7 +605,7 @@ func (m Model) noteLines(w int) []string {
 	width := w - indent - indentW
 	var out []string
 	add := func(s lipgloss.Style, text string) {
-		for _, l := range wrap(text, width) {
+		for _, l := range textutil.Wrap(text, width) {
 			out = append(out, strings.Repeat(" ", indent)+s.Render(l))
 		}
 	}
@@ -680,9 +680,9 @@ func (m Model) modelsBottom(w int) []string {
 	if m.opts.Mode == ModeFirstRun {
 		out = append(out, components.Pad(m.keepTryLine()))
 	}
-	out = append(out, components.Pad(dimStyle.Render(truncate(diskSummary(m.sel.downloadGB(), m.freeGB(), m.drive()), width))))
+	out = append(out, components.Pad(dimStyle.Render(textutil.Truncate(diskSummary(m.sel.downloadGB(), m.freeGB(), m.drive()), width))))
 	if names := m.componentsToFetch(); len(names) > 0 {
-		out = append(out, components.Pad(dimStyle.Render(truncate(alsoSetUp(names), width))))
+		out = append(out, components.Pad(dimStyle.Render(textutil.Truncate(alsoSetUp(names), width))))
 	}
 	if msg := m.sel.shortfall(m.freeGB(), m.drive()); msg != "" {
 		out = append(out, components.IndentAll(wrapStyled(warnStyle, "[!] "+msg, width), indentW)...)
@@ -735,8 +735,8 @@ func contentLine(marker, name string, st lipgloss.Style, w int, facts ...string)
 		}
 	}
 	room := w - 2*indentW - 5 - col - 1
-	return components.Pad(st.Render(fmt.Sprintf("%-4s", marker)) + " " + textStyle.Render(fmt.Sprintf("%-*s", col, truncate(name, col))) + " " +
-		dimStyle.Render(truncate(strings.Join(parts, " · "), room)))
+	return components.Pad(st.Render(fmt.Sprintf("%-4s", marker)) + " " + textStyle.Render(fmt.Sprintf("%-*s", col, textutil.Truncate(name, col))) + " " +
+		dimStyle.Render(textutil.Truncate(strings.Join(parts, " · "), room)))
 }
 
 // componentLine shows how far a component is. A component reports only its
@@ -773,7 +773,7 @@ func (m Model) contentsView(w int) (body, foot []string) {
 		}
 		body = append(body, contentLine("[ ]", r.name, dimStyle, w, contentsWaiting, contentSize(r.leftGB), from))
 	}
-	body = append(body, "", components.Pad(dimStyle.Render(truncate(diskSummary(m.sel.downloadGB(), m.freeGB(), m.drive()), w-2*indentW))))
+	body = append(body, "", components.Pad(dimStyle.Render(textutil.Truncate(diskSummary(m.sel.downloadGB(), m.freeGB(), m.drive()), w-2*indentW))))
 	return body, m.footer(w, [][2]string{{"enter", "continue"}, {"esc", "back"}})
 }
 
@@ -804,7 +804,7 @@ func (m Model) pickLines(w int) []string {
 		if r.npu {
 			extra = strings.TrimSpace(extra + " " + markNPU)
 		}
-		out = append(out, components.Pad(cursor+dimStyle.Render(mark)+" "+st.Render(truncate(r.name, w-20))+"  "+dimStyle.Render(extra)))
+		out = append(out, components.Pad(cursor+dimStyle.Render(mark)+" "+st.Render(textutil.Truncate(r.name, w-20))+"  "+dimStyle.Render(extra)))
 	}
 	return out
 }
@@ -994,7 +994,7 @@ func (m Model) guideView(w int) (body, foot []string) {
 	}
 	for i, step := range m.gpu.GuidedSteps {
 		prefix := fmt.Sprintf("%d. ", i+1)
-		lines := wrap(step, width-len(prefix))
+		lines := textutil.Wrap(step, width-len(prefix))
 		for j, l := range lines {
 			if j == 0 {
 				body = append(body, components.Pad(textStyle.Render(prefix+l)))
@@ -1070,7 +1070,7 @@ func (m Model) downloadView(w int) (body, foot []string) {
 		if m.opts.Mode != ModeFirstRun {
 			leaving = leavingKeeps
 		}
-		body = append(body, components.Pad(dimStyle.Render(truncate(leaving, width))))
+		body = append(body, components.Pad(dimStyle.Render(textutil.Truncate(leaving, width))))
 	}
 	// Under the models, whose rows the user acts on; a window too short for
 	// the list keeps only the rows.
@@ -1169,7 +1169,7 @@ func (m Model) progressLine(i int, r setupapi.ModelProgress, w int, now time.Tim
 	if w < 60 {
 		nw = 14
 	}
-	nameCol := fmt.Sprintf("%-*s", nw, truncate(name, nw))
+	nameCol := fmt.Sprintf("%-*s", nw, textutil.Truncate(name, nw))
 	if m.lost != nil {
 		return components.Pad(cursor + warnStyle.Render("[?] ") + " " + dimStyle.Render(nameCol) + " " + dimStyle.Render("last known: "+r.State))
 	}
@@ -1295,7 +1295,7 @@ func (m Model) progressNote(r setupapi.ModelProgress, width int) []string {
 	indent := 8
 	var lines []string
 	add := func(s lipgloss.Style, text string) {
-		for _, l := range wrap(text, width-indent+indentW) {
+		for _, l := range textutil.Wrap(text, width-indent+indentW) {
 			lines = append(lines, strings.Repeat(" ", indent)+s.Render(l))
 		}
 	}
@@ -1452,7 +1452,7 @@ func (m Model) testLine(marker string, st lipgloss.Style, label, result string, 
 	const col = 16
 	room := w - 2*indentW - 5 - col - 1
 	return components.Pad(st.Render(fmt.Sprintf("%-4s", marker)) + " " +
-		textStyle.Render(fmt.Sprintf("%-*s", room, truncate(label, room))) + " " + dimStyle.Render(result))
+		textStyle.Render(fmt.Sprintf("%-*s", room, textutil.Truncate(label, room))) + " " + dimStyle.Render(result))
 }
 
 // testView lists every test with its real result. A required failure stays on
@@ -1486,7 +1486,7 @@ func (m Model) testView(w int) (body, foot []string) {
 	}
 	body = append(body, components.Pad(line+" "+warnStyle.Render(fmt.Sprintf("%d%%", finished*100/total))))
 	if m.dl.active {
-		body = append(body, components.Pad(dimStyle.Render(truncate(testLede, width))))
+		body = append(body, components.Pad(dimStyle.Render(textutil.Truncate(testLede, width))))
 	}
 	shownErrors := map[string]bool{}
 	for _, r := range rows {
@@ -1792,68 +1792,11 @@ func (m Model) busyText() string {
 }
 
 func wrapStyled(s lipgloss.Style, text string, w int) []string {
-	lines := wrap(text, w)
+	lines := textutil.Wrap(text, w)
 	for i, l := range lines {
 		lines[i] = s.Render(l)
 	}
 	return lines
-}
-
-// truncate cuts a plain string to w columns.
-func truncate(s string, w int) string {
-	if w <= 0 {
-		return ""
-	}
-	if lipgloss.Width(s) <= w {
-		return s
-	}
-	runes := []rune(s)
-	for len(runes) > 0 && lipgloss.Width(string(runes))+1 > w {
-		runes = runes[:len(runes)-1]
-	}
-	return string(runes) + "…"
-}
-
-// wrap breaks text on word boundaries into lines of at most w columns.
-func wrap(s string, w int) []string {
-	if w < 8 {
-		w = 8
-	}
-	var out []string
-	for _, para := range strings.Split(s, "\n") {
-		line := ""
-		for _, word := range strings.Fields(para) {
-			for lipgloss.Width(word) > w {
-				if line != "" {
-					out = append(out, line)
-					line = ""
-				}
-				runes := []rune(word)
-				cut := len(runes)
-				for cut > 0 && lipgloss.Width(string(runes[:cut])) > w {
-					cut--
-				}
-				out = append(out, string(runes[:cut]))
-				word = string(runes[cut:])
-			}
-			switch {
-			case line == "":
-				line = word
-			case lipgloss.Width(line)+1+lipgloss.Width(word) <= w:
-				line += " " + word
-			default:
-				out = append(out, line)
-				line = word
-			}
-		}
-		if line != "" {
-			out = append(out, line)
-		}
-	}
-	if len(out) == 0 {
-		return []string{""}
-	}
-	return out
 }
 
 // clip is the last pass of every frame: no line wider than the terminal and no

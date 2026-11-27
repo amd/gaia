@@ -1521,6 +1521,28 @@ def test_a_model_too_big_for_memory_says_memory(flm_box):
     assert qwen["fits"] is False and qwen["fit_code"] == "memory"
 
 
+def test_setup_offers_only_chat_models_that_fit_and_never_flash(running):
+    from gaia.llm.lemonade_client import FLASH_OPTION_MODEL_NAME
+
+    running(SMALL_GPU)
+    plan = sp.build_plan()
+    assert _entry(plan, LARGE_DEFAULT_MODEL_NAME)["setup_offer"] is False
+    assert _entry(plan, DEFAULT_MODEL_NAME)["setup_offer"] is True
+    running(BIG_GPU)
+    plan = sp.build_plan()
+    assert _entry(plan, LARGE_DEFAULT_MODEL_NAME)["setup_offer"] is True
+    assert _entry(plan, FLASH_OPTION_MODEL_NAME)["setup_offer"] is False
+
+
+def test_setup_keeps_offering_the_users_own_chat_model_even_when_it_does_not_fit(
+    running,
+):
+    running(SMALL_GPU)
+    sp.choose_chat_model(LARGE_DEFAULT_MODEL_NAME, acknowledge_no_fit=True)
+    qwen = _entry(sp.build_plan(), LARGE_DEFAULT_MODEL_NAME)
+    assert qwen["fits"] is False and qwen["setup_offer"] is True
+
+
 def test_choosing_an_npu_model_that_cant_run_here_is_refused_not_confirmed(
     client, running
 ):
@@ -1634,5 +1656,5 @@ def test_every_plan_field_is_declared_in_the_agent_ui_and_tui(running):
     for key in ("left_for_apps_gb", "recommended_model"):
         assert key in plan and key in ts_keys and key in go_keys, key
     entry = plan["catalog"][0]
-    for key in ("tight", "fits", "fit_code", "reads_images"):
+    for key in ("tight", "fits", "fit_code", "reads_images", "setup_offer"):
         assert key in entry and key in ts_keys and key in go_keys, key

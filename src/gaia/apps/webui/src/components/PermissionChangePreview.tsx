@@ -5,6 +5,7 @@ import { useState } from 'react';
 import { useT } from '../i18n/useT';
 import { CodeBlock } from './PermissionPrompt';
 import { unseenWith, visibleWith } from './CalendarApproval';
+import { lineClass } from './render/primitiveShared';
 import './render/render.css';
 import './PermissionChangePreview.css';
 
@@ -57,13 +58,6 @@ export function editLines(before: string, after: string): string[] {
         ...b.slice(head, b.length - tail).map((l) => `+${l}`),
         ...a.slice(a.length - tail, a.length - tail + CONTEXT_LINES).map((l) => ` ${l}`),
     ];
-}
-
-/** Fixed prefix -> class; never derived from the line's own text. */
-function lineClass(line: string): string {
-    if (line.startsWith('+')) return 'render-diff__line render-diff__line--added';
-    if (line.startsWith('-')) return 'render-diff__line render-diff__line--removed';
-    return 'render-diff__line';
 }
 
 function EditDiff({ lines }: { lines: string[] }) {

@@ -185,6 +185,26 @@ describe('the log viewer', () => {
         expect(mocked.getLog).toHaveBeenCalledTimes(1);
     });
 
+    it('reads nothing while the window is hidden, and catches up once it is shown', async () => {
+        vi.useFakeTimers({ shouldAdvanceTime: true });
+        let state: DocumentVisibilityState = 'visible';
+        const visibility = vi.spyOn(document, 'visibilityState', 'get').mockImplementation(() => state);
+        try {
+            await openLogs();
+            await screen.findByText(/npu device busy/);
+            const before = mocked.getLog.mock.calls.length;
+            state = 'hidden';
+            act(() => { document.dispatchEvent(new Event('visibilitychange')); });
+            await act(async () => { await vi.advanceTimersByTimeAsync(10_000); });
+            expect(mocked.getLog).toHaveBeenCalledTimes(before);
+            state = 'visible';
+            await act(async () => { document.dispatchEvent(new Event('visibilitychange')); });
+            expect(mocked.getLog).toHaveBeenCalledTimes(before + 1);
+        } finally {
+            visibility.mockRestore();
+        }
+    });
+
     it.each<[LogSource, string, string]>([
         ['model_server', 'not_running', "Your Lemonade Server isn't answering"],
         ['model_server', 'remote', 'runs on another computer'],

@@ -23,12 +23,16 @@
 #include <gaia/workspace.h>
 
 #include "gaia_agent.h"
+#include "wire_util.h"
 
 namespace fs = std::filesystem;
 
 namespace gaia {
 
 namespace {
+
+using wire::dumps;
+using wire::randomHex;
 
 const char* const kQueryKey = "gaia_query";
 const char* const kControlKey = "gaia_control";
@@ -41,16 +45,6 @@ constexpr auto kOrphanedConfirmTimeout = std::chrono::minutes(15);
 constexpr int kStatusProbeSeconds = 3;
 constexpr auto kTokenBatch = std::chrono::milliseconds(30);
 constexpr size_t kMaxEventData = 20000;
-
-std::string dumps(const json& j) { return j.dump(-1, ' ', false, json::error_handler_t::replace); }
-
-std::string randomHex(size_t n) {
-    static thread_local std::mt19937_64 rng(std::random_device{}());
-    static const char* hex = "0123456789abcdef";
-    std::string s;
-    for (size_t i = 0; i < n; ++i) s.push_back(hex[rng() & 0xF]);
-    return s;
-}
 
 std::string lower(std::string s) {
     std::transform(s.begin(), s.end(), s.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });

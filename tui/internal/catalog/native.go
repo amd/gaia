@@ -51,7 +51,7 @@ func isPythonAgentBinary(path string) bool {
 func gaiaHome() string {
 	for _, name := range []string{"GAIA_HOME", "GAIA_CONFIG_DIR"} {
 		if dir := strings.TrimSpace(os.Getenv(name)); dir != "" {
-			return expandHome(os.ExpandEnv(dir))
+			return ExpandHome(os.ExpandEnv(dir))
 		}
 	}
 	home, err := os.UserHomeDir()
@@ -70,8 +70,8 @@ func gaiaHomeBin() string {
 	return filepath.Join(home, "bin")
 }
 
-// expandHome replaces a leading ~ with the user's home directory.
-func expandHome(dir string) string {
+// ExpandHome replaces a leading ~ with the user's home directory.
+func ExpandHome(dir string) string {
 	if dir != "~" && !strings.HasPrefix(dir, "~/") && !strings.HasPrefix(dir, `~\`) {
 		return dir
 	}
@@ -258,11 +258,11 @@ func (c *Catalog) SelectFlagshipAgent(choice string) (notice string, err error) 
 		choice, NativeAgentBinary, PythonAgentChoice, PythonAgentBinary, AgentChoiceDocsURL)
 }
 
-// DaemonPythonNotice tells a user who named the Python agent (gaiapy or
-// gaia-agent) that, on their install, it is reached through the daemon rather
-// than spawned.
-const DaemonPythonNotice = "[!] The Python agent was asked for. On this install it " +
-	"runs through the GAIA background service, so that is what answers. To run one particular " +
+// DaemonPythonNotice tells a user who named Full-featured, the Python agent
+// (gaiapy or gaia-agent), that on their install it is reached through the
+// daemon rather than spawned.
+var DaemonPythonNotice = "[!] You asked for " + HarnessLabel(PythonAgentChoice) + " (the Python agent). " +
+	"On this install it runs through the GAIA background service, so that is what answers. To run one particular " +
 	PythonAgentBinary + " program instead, give its full path."
 
 // AgentChoiceDocsURL explains which agent program the terminal UI runs.

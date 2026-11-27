@@ -163,6 +163,9 @@ type CatalogEntry struct {
 	FitCode *string `json:"fit_code"`
 	// Tight: it fits, but leaves other apps less memory than GAIA keeps for them.
 	Tight bool `json:"tight"`
+	// SetupOffer: setup lists it as a chat choice; it runs here, or it is the
+	// user's chat model already.
+	SetupOffer bool `json:"setup_offer"`
 	// Role is set on Plan.Models only: "chat" or "embedding".
 	Role string `json:"role,omitempty"`
 }

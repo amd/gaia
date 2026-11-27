@@ -570,6 +570,24 @@ def test_a_recovered_cut_off_passes_the_live_gate(agent):
     assert cli_agent._failed_response(result) is None
 
 
+def test_a_turn_that_answered_after_a_cut_off_is_not_a_failed_turn(agent):
+    """`gaia -p` exited 1 on a finished run because one earlier reply ran long."""
+    _stub_chat(agent, (TR8319_CB_REPLY, "length"), ("gfx90a is MI200.", "stop"))
+
+    result = agent.process_query("What about gfx90a?", max_steps=10)
+
+    assert result["status"] == "success"
+    assert result["error_history"][0]["recovered"] is True
+
+
+def test_a_turn_that_gave_up_on_cut_offs_is_still_a_failed_turn(agent):
+    _stub_chat(agent, *[(TR8319_CB_REPLY, "length")] * (_MAX_CUT_OFF_CONTINUATIONS + 3))
+
+    result = agent.process_query("Fix gfx90a PR testing", max_steps=20)
+
+    assert result["status"] == "failed"
+
+
 BAD_TOOL_CALL = '{"__tool_calls__": [{"function": {"name": "x", "arguments": "{'
 
 

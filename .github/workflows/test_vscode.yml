@@ -41,6 +41,7 @@ jobs:
           cache: 'npm'
           cache-dependency-path: src/vscode/gaia/package-lock.json
       - name: Install dependencies
-        run: npm ci
+        # Dependabot writes lockfiles with npm 11; Node 22's npm 10 rejects them.
+        run: npx -y npm@11 ci
       - name: Compile and test
         run: npm test

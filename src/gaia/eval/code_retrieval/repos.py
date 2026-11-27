@@ -12,15 +12,12 @@ so a repository fetched for one benchmark is not fetched again for another.
 from __future__ import annotations
 
 import re
-import shutil
-import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 from typing import List, Optional, Sequence
 
+from gaia.eval.bench.git_runner import run_git
 from gaia.eval.bench.swebench import fetch_commit
-
-GIT_TIMEOUT_S = 900
 
 
 class RepoError(RuntimeError):
@@ -28,30 +25,13 @@ class RepoError(RuntimeError):
 
 
 def git(args: Sequence[str], cwd: Optional[Path] = None) -> str:
-    exe = shutil.which("git")
-    if not exe:
-        raise RepoError("The retrieval benchmark needs git on PATH.")
-    try:
-        proc = subprocess.run(
-            [exe, *args],
-            cwd=cwd,
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            stdin=subprocess.DEVNULL,
-            timeout=GIT_TIMEOUT_S,
-            check=True,
-        )
-    except subprocess.CalledProcessError as exc:
-        raise RepoError(
-            f"`git {' '.join(args)}` failed in {cwd}: {exc.stderr.strip()[-500:]}"
-        ) from exc
-    except subprocess.TimeoutExpired as exc:
-        raise RepoError(
-            f"`git {' '.join(args)}` did not finish in {GIT_TIMEOUT_S}s"
-        ) from exc
-    return proc.stdout
+    return run_git(
+        args,
+        cwd,
+        RepoError,
+        "The retrieval benchmark needs git on PATH.",
+        name_cwd=True,
+    )
 
 
 @dataclass(frozen=True)

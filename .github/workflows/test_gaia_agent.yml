@@ -15,6 +15,8 @@ on:
     paths:
       - '.github/workflows/test_gaia_agent.yml'
       - '.github/workflows/build_gaiapy.yml'
+      # test_check_wheel_starter_skills.py reads this build action.
+      - '.github/actions/build-agent-wheel/**'
       - 'setup.py'
       - 'pyproject.toml'
       - 'conftest.py'
@@ -82,6 +84,7 @@ on:
       - 'tests/fixtures/**'
       - 'tests/unit/__init__.py'
       - 'tests/unit/agents/__init__.py'
+      - 'tests/unit/agents/conftest.py'
       - 'tests/unit/agents/test_parallel_tool_calls.py'
       - 'tests/unit/skills_helpers.py'
   pull_request:
@@ -90,6 +93,8 @@ on:
     paths:
       - '.github/workflows/test_gaia_agent.yml'
       - '.github/workflows/build_gaiapy.yml'
+      # test_check_wheel_starter_skills.py reads this build action.
+      - '.github/actions/build-agent-wheel/**'
       - 'setup.py'
       - 'pyproject.toml'
       - 'conftest.py'
@@ -157,6 +162,7 @@ on:
       - 'tests/fixtures/**'
       - 'tests/unit/__init__.py'
       - 'tests/unit/agents/__init__.py'
+      - 'tests/unit/agents/conftest.py'
       - 'tests/unit/agents/test_parallel_tool_calls.py'
       - 'tests/unit/skills_helpers.py'
   merge_group:

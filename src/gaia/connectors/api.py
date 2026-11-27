@@ -545,7 +545,9 @@ async def _revoke_one(
     elif refusal is not None:
         result = nothing_to_revoke(provider)
     else:
-        result = await revoke_provider_token(provider, slot=acct.slot)
+        result = await revoke_provider_token(
+            provider, slot=acct.slot, account_type=acct.account_type
+        )
     remaining = await locked_write(
         provider, _accounts.remove_account, provider, acct.slot
     )
@@ -584,8 +586,8 @@ async def revoke_connection_async(
     ``accounts`` list of each one's result.
 
     Returns ``{"revoke_supported": bool, "revoked_remotely": bool,
-    "nothing_stored": bool, "revoke_error": str | None, "account_id",
-    "account_email", "remaining_accounts": int}`` (see
+    "revoke_attempted": bool, "nothing_stored": bool, "revoke_error": str | None,
+    "account_id", "account_email", "remaining_accounts": int}`` (see
     ``flow.revoke_provider_token``). Never bare success for what was only a
     local keyring delete. Reporting
     a full revoke when the provider-side grant is still live was the
@@ -642,6 +644,7 @@ def _combine_revokes(results: List[Dict[str, Any]]) -> Dict[str, Any]:
     return {
         "revoke_supported": all(r["revoke_supported"] for r in results),
         "revoked_remotely": any_revoked and all_resolved,
+        "revoke_attempted": any(r.get("revoke_attempted", False) for r in results),
         "nothing_stored": bool(results)
         and all(r.get("nothing_stored", False) for r in results),
         "revoke_error": errors[0] if errors else None,
@@ -1030,7 +1033,17 @@ def _require_mcp_server_for_activation(connector_id: str) -> None:
     try:
         spec = REGISTRY.get(connector_id)
     except KeyError as e:
-        raise ConfigurationError(f"Unknown connector '{connector_id}'.") from e
+        # A server the user added to mcp_servers.json themselves.
+        from gaia.config import mcp_servers_path
+        from gaia.connectors.mcp_server import is_custom_mcp_server
+
+        if is_custom_mcp_server(connector_id):
+            return
+        raise ConfigurationError(
+            f"Unknown connector '{connector_id}': it is not in the connector "
+            f"catalog and {mcp_servers_path()} has no MCP server by that name. "
+            "`gaia connectors list` shows the ids that can be activated."
+        ) from e
     if spec.type != "mcp_server":
         raise ConfigurationError(
             f"Activations apply to MCP-server connectors only; "
@@ -1064,9 +1077,12 @@ def activate(
     See ``docs/sdk/infrastructure/connectors.mdx`` for the two-axis model.
     """
     _require_mcp_server_for_activation(connector_id)
+    from gaia.connectors.registry import REGISTRY
+
     existing_scopes = list_agent_grants(connector_id).get(agent_id)
     auto_granted = False
-    if existing_scopes is None:
+    # GAIA holds no credential for a user-added server, so there is nothing to grant.
+    if existing_scopes is None and connector_id in REGISTRY:
         if scopes_for_grant is None:
             raise ConfigurationError(
                 f"Cannot activate connector '{connector_id}' for agent "

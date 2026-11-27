@@ -3,7 +3,7 @@
 
 import React, { createContext, useCallback, useContext, useId, useLayoutEffect, useRef, useState, useEffect, useMemo } from 'react';
 import type { Components } from 'react-markdown';
-import { Copy, Check, AlertTriangle, Trash2, RefreshCw, RotateCw, Play, Pencil, FolderOpen, Square, FileText, ScrollText, Settings } from 'lucide-react';
+import { Copy, Check, AlertCircle, AlertTriangle, Trash2, RefreshCw, RotateCw, Play, Pencil, FolderOpen, Square, FileText, ScrollText, Settings } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import { SAFE_DISALLOWED_ELEMENTS, joinAttachmentLinks, safeUrlTransform, splitAttachmentLinks } from '../utils/markdown';
 import remarkGfm from 'remark-gfm';
@@ -35,6 +35,7 @@ import type { MessageKey } from '../i18n/registry';
 import { useChatStore } from '../stores/chatStore';
 import { useLogsStore } from '../stores/logsStore';
 import { CLAIMS_ESCAPE } from '../hooks/useEscapeToClose';
+import { useCopyFeedback } from '../hooks/useCopyFeedback';
 import { dropAnswerDrafts } from '../utils/answerDrafts';
 import { describeFailedTurn, failedTurnDetails } from '../utils/failedTurn';
 import { splitUploadedImages } from '../utils/messageImages';
@@ -120,7 +121,7 @@ function ThinkingIndicator({ active, label, awaitingUser = false }: { active: bo
                 <span className="thinking-indicator-elapsed"> · <bdi dir="ltr">{elapsed}s</bdi></span>
             )}
             {showModelWaitHint && (
-                <span className="thinking-indicator-hint" role="status">{t(place?.remote === false ? 'live.localModelWaitHint' : 'live.modelWaitHint')}</span>
+                <span className="thinking-indicator-hint" role="status">{place?.remote === false ? t('live.localModelWaitHint', { n: String(MODEL_WAIT_HINT_S) }) : t('live.modelWaitHint')}</span>
             )}
         </span>
     );
@@ -614,7 +615,8 @@ export function MessageBubble({ message, isStreaming, agentSteps, agentStepsActi
         const steps = dropAnswerDrafts(agentSteps, message.content);
         return isStreaming ? { steps, echoed: false, endedBy: null } : dropErrorsEchoedInAnswer(steps, message.content);
     }, [agentSteps, message.content, message.role, isStreaming]);
-    const isError = message.role === 'assistant' && (echo.echoed || message.failed === true || isErrorContent(message.content));
+    const isError = message.role === 'assistant'
+        && (echo.echoed || message.failed === true || message.stalled === true || isErrorContent(message.content));
     const place = useInferencePlace();
     const showServerLog = useLogsStore((s) => s.show);
     const openSettings = useChatStore((s) => s.openSettings);
@@ -652,7 +654,7 @@ export function MessageBubble({ message, isStreaming, agentSteps, agentStepsActi
     const summaryFiles = message.turnSummary?.files;
     const writtenFiles = useMemo(() => summaryFiles?.map((f) => f.path) ?? [], [summaryFiles]);
     const readAloudId = `${message.session_id}:${message.id}`;
-    const [copied, setCopied] = useState(false);
+    const [copyState, copy] = useCopyFeedback();
     const [confirmDelete, setConfirmDelete] = useState(false);
     const collapsibleUser = message.role === 'user' && isLongUserMessage(message.content);
     const excerpt = useMemo(() => (collapsibleUser ? messageExcerpt(message.content) : null), [collapsibleUser, message.content]);
@@ -670,36 +672,18 @@ export function MessageBubble({ message, isStreaming, agentSteps, agentStepsActi
         scrollAfterCollapseRef.current = false;
         userBodyRef.current?.scrollIntoView?.({ block: 'nearest' });
     }, [userExpanded]);
-    const copyTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
     const deleteTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
     // Clean up timers on unmount to avoid setState on unmounted component
     useEffect(() => {
         return () => {
-            if (copyTimerRef.current) clearTimeout(copyTimerRef.current);
             if (deleteTimerRef.current) clearTimeout(deleteTimerRef.current);
         };
     }, []);
 
     const handleCopy = useCallback(() => {
-        const text = message.role === 'assistant' ? plainAnswerText(cleanedContent) : message.content;
-        if (navigator.clipboard?.writeText) {
-            navigator.clipboard.writeText(text).catch(() => {});
-        } else {
-            // Fallback for non-HTTPS contexts (common for localhost)
-            const textarea = document.createElement('textarea');
-            textarea.value = text;
-            textarea.style.position = 'fixed';
-            textarea.style.opacity = '0';
-            document.body.appendChild(textarea);
-            textarea.select();
-            document.execCommand('copy');
-            document.body.removeChild(textarea);
-        }
-        setCopied(true);
-        if (copyTimerRef.current) clearTimeout(copyTimerRef.current);
-        copyTimerRef.current = setTimeout(() => setCopied(false), 2000);
-    }, [cleanedContent, message.content, message.role]);
+        copy(message.role === 'assistant' ? plainAnswerText(cleanedContent) : message.content);
+    }, [copy, cleanedContent, message.content, message.role]);
 
     const handleDelete = useCallback(() => {
         if (!confirmDelete) {
@@ -786,12 +770,12 @@ export function MessageBubble({ message, isStreaming, agentSteps, agentStepsActi
                             )}
                             {hasAnswerText && (
                                 <button
-                                    className={`msg-copy ${copied ? 'copied' : ''}`}
+                                    className={`msg-copy ${copyState === 'idle' ? '' : copyState}`}
                                     onClick={handleCopy}
-                                    title={copied ? t('msg.copied') : t('msg.copy')}
-                                    aria-label={copied ? t('msg.copiedAria') : t('msg.copy')}
+                                    title={copyState === 'copied' ? t('msg.copied') : copyState === 'failed' ? t('msg.copyFailed') : t('msg.copy')}
+                                    aria-label={copyState === 'copied' ? t('msg.copiedAria') : copyState === 'failed' ? t('msg.copyFailed') : t('msg.copy')}
                                 >
-                                    {copied ? <Check size={12} /> : <Copy size={12} />}
+                                    {copyState === 'copied' ? <Check size={12} /> : copyState === 'failed' ? <AlertCircle size={12} /> : <Copy size={12} />}
                                 </button>
                             )}
                             {/* Delete button */}
@@ -1008,7 +992,7 @@ const StreamingContext = createContext(false);
 /** Custom code block with copy button; a long one opens collapsed to a preview. */
 function CodeBlock({ lang, code }: { lang: string; code: string }) {
     const t = useT();
-    const [copied, setCopied] = useState(false);
+    const [copyState, copy] = useCopyFeedback();
     const [expanded, setExpanded] = useState(false);
     const streaming = useContext(StreamingContext);
     const bodyId = useId();
@@ -1016,32 +1000,6 @@ function CodeBlock({ lang, code }: { lang: string; code: string }) {
     // While streaming, cap as soon as the preview fills so the block never grows and then shrinks.
     const collapsible = lines > (streaming ? CODE_PREVIEW_LINES : CODE_COLLAPSE_LINES);
     const collapsed = collapsible && !expanded;
-    const copyTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-
-    useEffect(() => {
-        return () => {
-            if (copyTimerRef.current) clearTimeout(copyTimerRef.current);
-        };
-    }, []);
-
-    const handleCopy = useCallback(() => {
-        if (navigator.clipboard?.writeText) {
-            navigator.clipboard.writeText(code).catch(() => {});
-        } else {
-            // Fallback for non-HTTPS contexts (common for localhost)
-            const textarea = document.createElement('textarea');
-            textarea.value = code;
-            textarea.style.position = 'fixed';
-            textarea.style.opacity = '0';
-            document.body.appendChild(textarea);
-            textarea.select();
-            document.execCommand('copy');
-            document.body.removeChild(textarea);
-        }
-        setCopied(true);
-        if (copyTimerRef.current) clearTimeout(copyTimerRef.current);
-        copyTimerRef.current = setTimeout(() => setCopied(false), 2000);
-    }, [code]);
 
     return (
         // Code reads left to right even inside an Arabic answer.
@@ -1049,13 +1007,13 @@ function CodeBlock({ lang, code }: { lang: string; code: string }) {
             <div className="code-header">
                 <span className="code-lang">{lang || 'code'}</span>
                 <button
-                    className={`code-copy ${copied ? 'copied' : ''}`}
-                    onClick={handleCopy}
-                    title={copied ? t('msg.copied') : t('code.copy')}
-                    aria-label={copied ? t('msg.copiedAria') : t('code.copyAria')}
+                    className={`code-copy ${copyState === 'idle' ? '' : copyState}`}
+                    onClick={() => copy(code)}
+                    title={copyState === 'copied' ? t('msg.copied') : copyState === 'failed' ? t('msg.copyFailed') : t('code.copy')}
+                    aria-label={copyState === 'copied' ? t('msg.copiedAria') : copyState === 'failed' ? t('msg.copyFailed') : t('code.copyAria')}
                 >
-                    {copied ? <Check size={13} /> : <Copy size={13} />}
-                    <span>{copied ? t('code.copied') : t('code.copy')}</span>
+                    {copyState === 'copied' ? <Check size={13} /> : copyState === 'failed' ? <AlertCircle size={13} /> : <Copy size={13} />}
+                    <span>{copyState === 'copied' ? t('code.copied') : copyState === 'failed' ? t('msg.copyFailed') : t('code.copy')}</span>
                 </button>
             </div>
             <pre id={bodyId}><code>{code}</code></pre>
