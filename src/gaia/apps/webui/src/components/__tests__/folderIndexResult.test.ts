@@ -3,7 +3,7 @@
 
 import { describe, expect, it } from 'vitest';
 import { describeSkippedFiles } from '../folderIndexResult';
-import { stripIsolates } from '../../i18n/registry';
+import { isolate, stripIsolates } from '../../i18n/registry';
 import { translator } from '../../i18n/useT';
 
 const en = translator('en').bare;
@@ -56,5 +56,14 @@ describe('describeSkippedFiles', () => {
             'الملفات التي لا يستطيع GAIA إضافتها: ملف عليها.exe',
             'ملفات بيانات الدخول التي لن يضيفها GAIA: credentials.json',
         ]);
+    });
+
+    it('keeps an Arabic filename in its own island in English', () => {
+        const label = describeSkippedFiles(en, {
+            skipped_files: [{ file: 'ملاحظات.exe', reason: 'unsupported_type' }],
+        })[0];
+
+        expect(stripIsolates(label)).toBe("Files GAIA can't add: ملاحظات.exe");
+        expect(label).toContain(isolate('ملاحظات.exe', 'ltr'));
     });
 });

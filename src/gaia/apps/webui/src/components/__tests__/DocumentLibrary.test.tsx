@@ -442,9 +442,10 @@ describe('DocumentLibrary path box', () => {
         submitPath('/home/me/downloads');
 
         const notice = await screen.findByRole('status');
-        expect(notice.textContent).toContain("Files GAIA can't add: program.exe, song.mp3");
-        expect(notice.textContent).toContain("Credential files GAIA won't add: secrets.json");
-        expect(notice.textContent).toContain('Showing the first 50 skipped files.');
+        const text = stripIsolates(notice.textContent ?? '');
+        expect(text).toContain("Files GAIA can't add: program.exe, song.mp3");
+        expect(text).toContain("Credential files GAIA won't add: secrets.json");
+        expect(text).toContain('Showing the first 50 skipped files.');
     });
 
     it('says how many images a folder left out and how to add them', async () => {

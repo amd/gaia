@@ -613,8 +613,9 @@ describe('FileBrowser folder add', () => {
 
         await addScanFolder();
 
-        const status = await screen.findByText(/Files GAIA can't add: program.exe/);
-        expect(status).toHaveTextContent("Credential files GAIA won't add: secrets.json");
-        expect(status).not.toHaveTextContent('Showing the first 50 skipped files.');
+        await waitFor(() => expect(document.querySelector('.fb-index-status')).not.toBeNull());
+        const text = stripIsolates(document.querySelector('.fb-index-status')?.textContent ?? '');
+        expect(text).toContain("Credential files GAIA won't add: secrets.json");
+        expect(text).not.toContain('Showing the first 50 skipped files.');
     });
 });

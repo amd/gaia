@@ -1,7 +1,7 @@
 // Copyright(C) 2026 Advanced Micro Devices, Inc. All rights reserved.
 // SPDX-License-Identifier: MIT
 
-import type { MessageKey, Say } from '../i18n/registry';
+import { isolate, type MessageKey, type Say } from '../i18n/registry';
 import type { SkippedFile } from '../types';
 
 /** The skipped-file detail returned by folder indexing. */
@@ -21,7 +21,9 @@ export function describeSkippedFiles(say: Say, result: FolderSkippedFiles): stri
     const shown = files.slice(0, MAX_SKIPPED_NAMES);
     const parts: string[] = [];
     const addGroup = (reason: string, key: MessageKey) => {
-        const names = shown.filter((entry) => entry.reason === reason).map((entry) => entry.file);
+        const names = shown
+            .filter((entry) => entry.reason === reason)
+            .map((entry) => isolate(entry.file, 'ltr'));
         if (names.length > 0) parts.push(say(key, { names: names.join(', ') }));
     };
     addGroup('unsupported_type', 'docs.folder.skippedFiles.unsupported');

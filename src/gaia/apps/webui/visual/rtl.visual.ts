@@ -6609,6 +6609,7 @@ for (const locale of ['en', 'ar']) {
                 documents: [{ id: 'd1', filename: 'notes.txt', filepath: '/docs/notes.txt', file_size: 12, chunk_count: 1, indexing_status: 'complete', indexed_at: NOW.toISOString(), last_accessed_at: null, sessions_using: 0 }],
                 skipped_files: [
                     { file: 'program.exe', reason: 'unsupported_type' },
+                    { file: 'ملاحظات.exe', reason: 'unsupported_type' },
                     { file: 'secrets.json', reason: 'credential_file' },
                     { file: 'song.mp3', reason: 'unsupported_type' },
                 ],
@@ -6624,7 +6625,10 @@ for (const locale of ['en', 'ar']) {
         const reasonLabels = locale === 'en'
             ? ["Files GAIA can't add:", "Credential files GAIA won't add:", 'Showing the first 50 skipped files.']
             : ['الملفات التي لا يستطيع GAIA إضافتها:', 'ملفات بيانات الدخول التي لن يضيفها GAIA:', 'تُعرض أول 50 ملفًا متخطّى فقط.'];
-        for (const label of [...reasonLabels, 'program.exe', 'song.mp3', 'secrets.json']) {
+        const names = locale === 'en'
+            ? ['program.exe', 'ملاحظات.exe', 'song.mp3', 'secrets.json']
+            : ['program.exe', 'song.mp3', 'secrets.json', 'ملاحظات.exe'];
+        for (const label of [...reasonLabels, ...names]) {
             expect(text, `missing ${label} from: ${text}`).toContain(label);
         }
         expect(text.indexOf('program.exe')).toBeLessThan(text.indexOf('secrets.json'));
