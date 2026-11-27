@@ -104,6 +104,11 @@ export function joinAttachmentLinks(text: string, links: AttachmentLink[]): stri
     return text ? `${text}\n\n${block}` : block;
 }
 
+/** True for a chat attachment link after `safeUrlTransform` has pointed it at the backend. */
+export function isUploadUrl(url: string | undefined): url is string {
+    return !!url && url.startsWith(`${getApiBase()}/files/uploads/`);
+}
+
 /**
  * URL transformer for ReactMarkdown's `urlTransform` prop.
  * Returns the URL untouched if its scheme is in the allow list, otherwise
