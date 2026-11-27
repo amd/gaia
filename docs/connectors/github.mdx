@@ -71,16 +71,13 @@ token in the keyring.
 ## Step 3 — Grant scopes to specific agents
 
 Each agent must be granted access individually. The GitHub MCP server
-exposes its tools (e.g. `list_issues`, `create_pull_request`); GAIA's
-agent grants are at the **MCP-tool level**.
+exposes tools such as `list_issues` and `create_pull_request`, but GAIA
+grants the connector as a whole with the single `use` scope. Tool visibility
+is controlled separately by activation.
 
 ```bash
-# Grant the chat agent the ability to use any GitHub tool
-gaia connectors grants grant mcp-github builtin:chat --scopes "*"
-
-# Or grant specific tools only:
-gaia connectors grants grant mcp-github builtin:chat \
-  --scopes list_issues list_pull_requests
+# Grant the GAIA agent access to the GitHub connector
+gaia connectors grants grant mcp-github installed:gaia --scopes use
 ```
 
 (In the UI: open the connector tile and turn on the **GAIA can use GitHub in chat** switch.)
@@ -92,7 +89,7 @@ For MCP servers, a grant alone isn't enough — the agent also needs an
 defaults to OFF (least-privilege), so activate it explicitly:
 
 ```bash
-gaia connectors activations activate mcp-github builtin:chat
+gaia connectors activations activate mcp-github installed:gaia
 ```
 
 (In the UI: the tile's **GAIA can use GitHub in chat** switch does both at once.) An

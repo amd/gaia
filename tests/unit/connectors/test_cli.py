@@ -746,6 +746,13 @@ class TestGrants:
         assert rc == 0
         assert "No grants" in out
 
+    def test_grants_help_names_the_live_agent_id(self):
+        rc, out, _err = _run("connectors", "grants", "grant", "--help")
+
+        assert rc == 0
+        assert "installed:gaia" in out
+        assert "builtin:chat" not in out
+
 
 class TestConfigure:
     """``gaia connectors configure google --client-id … --client-secret …`` (#1084).
