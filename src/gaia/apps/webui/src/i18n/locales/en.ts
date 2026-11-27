@@ -2321,6 +2321,7 @@ export const enMessages = {
     'setup.models.line.imageCreation': 'Creates pictures from a description.',
     'setup.models.fit.ok': 'Needs about {need} of memory; this PC has {have} for models.',
     'setup.models.fit.unknown': 'GAIA couldn’t read this PC’s memory, so it can’t tell if this fits.',
+    'setup.models.fit.unknownNeed': 'GAIA doesn’t know how much memory this model needs, so it can’t tell if it fits.',
     'setup.models.status.onPc': 'On this PC',
     'setup.models.status.download': 'Download {size}',
     'setup.models.status.partial': 'Partly downloaded, {size} left',
