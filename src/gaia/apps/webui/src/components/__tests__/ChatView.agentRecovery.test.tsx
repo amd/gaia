@@ -109,6 +109,16 @@ describe('an open chat whose agent could not start', () => {
         expect(sends).toEqual([]);
     });
 
+    it('shows the card instead of the generic failure, its Try again and its model server log', async () => {
+        render(<ChatView sessionId={SESSION.id} />);
+
+        expect(await screen.findByRole('button', { name: 'Use Full-featured' })).toBeInTheDocument();
+        expect(screen.queryByText(/GAIA couldn't start its agent/)).toBeNull();
+        expect(screen.queryByRole('button', { name: 'Try again' })).toBeNull();
+        expect(screen.queryByRole('button', { name: /Model server log/ })).toBeNull();
+        expect(screen.getByText(QUESTION)).toBeInTheDocument();
+    });
+
     it('offers nothing when the agent is not why the turn failed', async () => {
         mockedApi.getStartScreen.mockResolvedValue({ ...MISSING, skills_error: null, agent_problem: null });
         render(<ChatView sessionId={SESSION.id} />);

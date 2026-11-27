@@ -315,8 +315,8 @@ std::vector<std::pair<int, std::string>> DocumentIndex::extractPages(const std::
 #ifdef __APPLE__
         // No poppler on a stock Mac: the system's own PDF reader, one form feed after each page.
         if (noPdftotext) {
-            r = ProcessRunner::run("/usr/bin/osascript -l JavaScript -e " + shellQuote(kPdfKitScript) + " " +
-                                       shellQuote(path),
+            r = ProcessRunner::run("/usr/bin/osascript -l JavaScript -e " + detail::shellQuote(kPdfKitScript) + " " +
+                                       detail::shellQuote(path),
                                    120000, "", {}, kMaxExtractBytes);
         }
 #else
