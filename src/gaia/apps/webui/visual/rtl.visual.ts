@@ -645,7 +645,8 @@ for (const locale of ['en', 'ar']) {
             expect(await inView('/skill-00'), 'the first skill is out of view').toBe(true);
             await box.press('ArrowUp');
             await expect(menu.getByRole('option', { name: '/skill-23' })).toHaveAttribute('aria-selected', 'true');
-            expect(await inView('/skill-23'), 'the selected skill is out of view').toBe(true);
+            // The list scrolls to the selection a frame after it is marked selected.
+            await expect.poll(() => inView('/skill-23'), 'the selected skill is out of view').toBe(true);
             // At phone width the closed sidebar sits off screen by design.
             if (width >= 1280) expect(await audit(page)).toEqual([]);
         });
