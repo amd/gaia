@@ -17,6 +17,7 @@ const {
   app,
   autoUpdater: electronAutoUpdater,
   BrowserWindow,
+  clipboard,
   Menu,
   dialog,
   ipcMain,
@@ -71,6 +72,8 @@ try {
     onRendererGone: (contents, details) => {
       void handleRendererGone(contents, details);
     },
+    // A pane tab's crash is the pane's to report ("Reload to try again"), not GAIA's.
+    isPanePage: (contents) => contents.session === session.fromPartition(PANE_PARTITION),
   }));
 } catch (err) {
   try { process.stderr.write(`[main] safety-net load failed: ${err.message}\n`); } catch { }
@@ -105,10 +108,15 @@ const AgentProcessManager = require("./services/agent-process-manager.cjs");
 const NotificationService = require("./services/notification-service.cjs");
 const KeepAwake = require("./services/keep-awake.cjs");
 const PortManager = require("./services/port-manager.cjs");
-const { isGaiaBackendProcess } = require("./services/backend-orphan.cjs");
+const {
+  cleanupOrphanedBackends,
+  forgetBackend,
+  recordBackend,
+} = require("./services/backend-orphan.cjs");
 const { showBackendCrashDialog } = require("./services/backend-crash-dialog.cjs");
 const { showRendererGoneDialog } = require("./services/renderer-gone-dialog.cjs");
 const { createBackendSupervisor } = require("./services/backend-supervisor.cjs");
+const { createBackendHealthMonitor } = require("./services/backend-health-monitor.cjs");
 const { buildIndexQuery, INSTALL_SCREEN_QUERY } = require("./services/index-query.cjs");
 const backendInstaller = require("./services/backend-installer.cjs");
 const { createEngineInstall } = require("./services/engine-install.cjs");
@@ -119,11 +127,26 @@ const {
   isAllowedExternalUrl,
   isInAppNavigation,
   describeBlockedUrl,
+  describeOpenFailure,
+  openExternalSafely,
+  linkNoticeText,
 } = require("./services/link-policy.cjs");
 const { installWindowKeys } = require("./services/window-keys.cjs");
+const { installContextMenu } = require("./services/context-menu.cjs");
 const { installQuitCleanup } = require("./services/quit-cleanup.cjs");
 const { chromiumSwitches } = require("./services/chromium-switches.cjs");
 const { titleBarKind, titleBarOptions } = require("./services/window-frame.cjs");
+const { installBackendAuth } = require("./services/ui-token.cjs");
+const { resolveDevQaMode } = require("./services/dev-qa-mode.cjs");
+const { createBrowserPaneService, PANE_PARTITION } = require("./services/browser-pane/ipc.cjs");
+const { DevServerSupervisor } = require("./services/browser-pane/dev-servers.cjs");
+const { servicePorts } = require("./services/browser-pane/service-ports.cjs");
+const {
+  DISCOVERY_ENV: PANE_DISCOVERY_ENV,
+  createHandlers: createPaneBridgeHandlers,
+  discoveryPath: paneDiscoveryPath,
+  startBridge: startPaneBridge,
+} = require("./services/browser-pane/bridge-server.cjs");
 
 // No ozone switch: Electron 38+ already picks Wayland or X11, and users override with --ozone-platform=x11.
 for (const [name, value] of chromiumSwitches({ platform: process.platform, env: process.env })) {
@@ -213,11 +236,16 @@ const APP_NAME = "GAIA";
 // from prior aborted sessions (issue #782 / T5).
 const DEFAULT_BACKEND_PORT = 4200;
 const STARTUP_TIMEOUT = 30000;
+const BACKEND_HEALTH_CHECK_TIMEOUT = 2000;
 // A restart must answer within this, or it counts as a failed try.
 const RESTART_TIMEOUT = 90000;
 
 // Parse CLI args (T11: --minimized flag for auto-start)
 const startMinimized = process.argv.includes("--minimized");
+
+// GAIA_BIN in an unpackaged build: use that backend and leave the user's install alone.
+const devQa = resolveDevQaMode({ isPackaged: app.isPackaged, env: process.env });
+if (devQa) console.log(`[main] Dev QA mode: backend ${devQa.gaiaBin}; installer and pidfile skipped`);
 
 // Load app.config.json if available
 let appConfig = {};
@@ -240,6 +268,9 @@ const windowConfig = appConfig.window || {
 // ── State ──────────────────────────────────────────────────────────────────
 
 let backendProcess = null;
+let backendCleanupPending = null;
+let backendHealthMonitoringEnabled = false;
+let backendHealthMonitor = null;
 // The in-flight startBackend(), so a quit during startup can wait for the
 // spawn and stop it instead of leaving it behind.
 let backendStarting = null;
@@ -248,6 +279,8 @@ let shutdownStarted = false;
 // Set once an update install starts quitting the app.
 let updateQuitStarted = false;
 let backendPort = DEFAULT_BACKEND_PORT;
+// The port of the backend this app spawned; only it is sent the API token.
+let spawnedBackendPort = null;
 let healthCheckUrl = `http://localhost:${backendPort}/api/health`;
 let backendStderrTail = [];
 let isIntentionalKill = false;
@@ -273,6 +306,20 @@ let notificationService = null;
 /** @type {KeepAwake | null} */
 let keepAwake = null;
 
+/** @type {ReturnType<typeof createBrowserPaneService> | null} */
+let browserPane = null;
+
+/** @type {Awaited<ReturnType<typeof startPaneBridge>> | null} */
+let paneBridge = null;
+
+/** @type {DevServerSupervisor | null} */
+let devServers = null;
+
+/** Where the agent finds the pane's bridge; the backend is told through PANE_DISCOVERY_ENV. */
+function paneDiscoveryFile() {
+  return paneDiscoveryPath({ devQa: Boolean(devQa), userDataDir: app.getPath("userData"), gaiaDir: _GAIA_DIR });
+}
+
 /** @type {PortManager} */
 const portManager = new PortManager({
   logger: { log: console.log.bind(console), error: console.error.bind(console) },
@@ -292,54 +339,34 @@ function quitStarted() {
 // ── Backend Process ────────────────────────────────────────────────────────
 
 /**
- * Terminate a backend left running from a previous launch.
+ * Terminate backends left running by a previous launch.
  *
- * The desktop app may be double-clicked multiple times or crash, leaving an
- * orphaned `gaia chat --ui` process. On Windows that process keeps an open
- * handle on `gaia.exe`, so the next upgrade's `uv pip install --refresh` fails
- * with `os error 32` (file in use) — issue #1388. We MUST run this BEFORE the
- * installer (`engineInstall.run()`), not just before spawning the new backend,
- * so the executable can be replaced.
+ * The desktop app may crash, leaving an orphaned `gaia chat --ui` process. On
+ * Windows that process keeps an open handle on `gaia.exe`, so the next
+ * upgrade's `uv pip install --refresh` fails with `os error 32` (file in use)
+ * — issue #1388. We MUST run this BEFORE the installer (`engineInstall.run()`),
+ * not just before spawning the new backend, so the executable can be replaced.
  *
- * The PID is read from ~/.gaia/backend.pid and verified to be a GAIA backend
- * (conservative match) before signalling, so we never kill unrelated user
- * processes (issue #782 TOCTOU mitigation). Idempotent: the pidfile is removed
- * after the first call, so later calls are no-ops.
+ * Each app records its backend under ~/.gaia/backend-pids/<app pid>.pid. Only
+ * backends whose app is gone are stopped, and only once verified to be a GAIA
+ * backend (issue #782): another copy of the app sharing ~/.gaia keeps its own
+ * (issue #7062).
  */
 async function cleanupOrphanedBackend() {
-  try {
-    const pidFile = path.join(_GAIA_DIR, "backend.pid");
-    if (!fs.existsSync(pidFile)) return;
-    try {
-      const existingPid = parseInt(fs.readFileSync(pidFile, "utf8").trim(), 10);
-      if (!Number.isNaN(existingPid)) {
-        console.log(`[main] Found existing backend pidfile (${existingPid}) — verifying process identity`);
+  await cleanupOrphanedBackends({
+    gaiaDir: _GAIA_DIR,
+    killBackend: (pid) => portManager.killBackend(pid),
+    logger: console,
+  });
+}
 
-        let isBackend = false;
-        try {
-          isBackend = isGaiaBackendProcess(existingPid);
-        } catch (err) {
-          console.warn(`[main] Could not verify pid ${existingPid}: ${err.message}`);
-        }
-
-        if (!isBackend) {
-          console.log(`[main] PID ${existingPid} does not appear to be a GAIA backend; skipping kill`);
-        } else {
-          try {
-            await portManager.killBackend(existingPid);
-            console.log(`[main] Cleaned up previous backend pid ${existingPid}`);
-          } catch (err) {
-            console.warn(`[main] Could not clean previous backend pid ${existingPid}: ${err.message}`);
-          }
-        }
-      }
-    } catch (err) {
-      console.warn(`[main] Failed reading backend pidfile: ${err.message}`);
-    }
-    try { fs.unlinkSync(pidFile); } catch { /* ignore */ }
-  } catch (err) {
-    console.warn(`[main] PID cleanup check failed: ${err.message}`);
-  }
+/** What the user reads when GAIA's backend program can't be found: what to do, and where it looked. */
+function missingBackendMessage() {
+  const looked = [backendInstaller.BUNDLED_GAIA_BIN, backendInstaller.GAIA_BIN].filter(Boolean).join(", ");
+  return (
+    "GAIA's backend program is missing, so GAIA can't start: the app's files are incomplete. " +
+    `Reinstall GAIA from https://amd-gaia.ai/#install. Looked for ${looked} and for gaia on PATH.`
+  );
 }
 
 /**
@@ -351,7 +378,7 @@ async function cleanupOrphanedBackend() {
  * (shouldn't happen post-ensureBackend, but we guard just in case).
  */
 async function startBackend() {
-  const gaiaCmd = backendInstaller.findGaiaBin();
+  const gaiaCmd = devQa ? devQa.gaiaBin : backendInstaller.findGaiaBin();
 
   if (!gaiaCmd) {
     console.error(
@@ -374,11 +401,13 @@ async function startBackend() {
   }
   healthCheckUrl = `http://localhost:${backendPort}/api/health`;
   // Defensively clean up any orphaned backend in case bootstrap was skipped
-  // on this path. cleanupOrphanedBackend() is idempotent and a no-op once the
-  // pidfile has already been consumed earlier in app startup.
-  await cleanupOrphanedBackend();
+  // on this path. A no-op once earlier startup removed the orphans' records.
+  // Dev QA mode leaves it alone: it belongs to the installed app's backend.
+  if (!devQa) await cleanupOrphanedBackend();
 
   console.log(`Starting backend: ${gaiaCmd} chat --ui --ui-port ${backendPort}`);
+  spawnedBackendPort = backendPort;
+  const childPort = backendPort;
 
   // Reset per-spawn state so a fresh crash dialog doesn't mix tails.
   backendStderrTail = [];
@@ -394,9 +423,11 @@ async function startBackend() {
       // and no other GAIA client is using them.
       // GAIA_BUNDLED_LEMONADE_DIR: where EmbeddedLemonade.install() finds the
       // archive this app ships (electron-builder.yml) instead of downloading it.
+      // GAIA_BROWSER_PANE_DISCOVERY: the agent finds this app's browser pane, never another app's.
       env: {
         ...process.env,
         GAIA_APP_PID: String(process.pid),
+        [PANE_DISCOVERY_ENV]: paneDiscoveryFile(),
         // Piped stdout is block-buffered: a dying backend's last lines would never arrive.
         PYTHONUNBUFFERED: "1",
         ...(app.isPackaged && {
@@ -434,16 +465,15 @@ async function startBackend() {
     console.error("Failed to start backend:", err.message);
   });
 
-  // Write a PID file so subsequent AppImage launches can detect and
-  // cleanup this backend if it becomes orphaned. The pidfile is removed
-  // when the child exits.
-  try {
-    try { fs.mkdirSync(_GAIA_DIR, { recursive: true }); } catch { /* ignore */ }
-    const pidFile = path.join(_GAIA_DIR, "backend.pid");
-    fs.writeFileSync(pidFile, String(child.pid), { mode: 0o600 });
-    console.log(`[main] Wrote backend pidfile ${pidFile} (pid=${child.pid})`);
-  } catch (err) {
-    console.warn(`[main] Could not write backend pidfile: ${err.message}`);
+  // Record this backend so a later launch can stop it if this app dies
+  // without stopping it. The record is removed when the child exits.
+  if (!devQa) {
+    try {
+      const file = recordBackend({ gaiaDir: _GAIA_DIR, ownerPid: process.pid, backendPid: child.pid });
+      console.log(`[main] Wrote backend pidfile ${file} (pid=${child.pid})`);
+    } catch (err) {
+      console.warn(`[main] Could not write backend pidfile: ${err.message}`);
+    }
   }
 
   child.on("exit", (code, signal) => {
@@ -453,23 +483,20 @@ async function startBackend() {
       console.error(`Backend exited with code ${code} (signal=${signal}, pid=${child.pid})`);
     }
     if (backendProcess === child) backendProcess = null;
+    // Whatever binds the port next is not ours, so it gets no token.
+    if (spawnedBackendPort === childPort) spawnedBackendPort = null;
     if (trayManager && !isQuitting) trayManager.setBackendAlive(false);
 
     // Once restarts run out, the supervisor's onStopped shows the crash dialog.
     if (crashed) backendSupervisor.crashed({ code, signal });
 
-    // Remove pidfile on exit to avoid leaving stale PID behind.
-    try {
-      const pidFile = path.join(_GAIA_DIR, "backend.pid");
-      if (fs.existsSync(pidFile)) {
-        const p = fs.readFileSync(pidFile, "utf8").trim();
-        if (p && parseInt(p, 10) === child.pid) {
-          try { fs.unlinkSync(pidFile); } catch { /* ignore */ }
-        }
+    // Remove this app's record, unless a newer backend already replaced it.
+    if (!devQa) {
+      try {
+        forgetBackend({ gaiaDir: _GAIA_DIR, ownerPid: process.pid, backendPid: child.pid });
+      } catch (err) {
+        console.warn(`[main] Failed to remove backend pidfile: ${err.message}`);
       }
-    } catch (err) {
-      // Non-fatal — just log and continue.
-      console.warn(`[main] Failed to remove backend pidfile: ${err.message}`);
     }
   });
 
@@ -483,19 +510,47 @@ async function startBackend() {
   return child;
 }
 
+/** Stop a backend tree and keep its handle pending until termination is verified. */
+async function stopBackendTree(proc) {
+  backendCleanupPending = proc;
+  isIntentionalKill = true;
+  try {
+    const result = await portManager.killBackend(proc);
+    if (!result || !Array.isArray(result.survivors)) {
+      throw new Error("The backend stop did not confirm that its process tree exited.");
+    }
+    if (result.survivors.length) {
+      throw new Error(`The backend process tree is still running (pid ${result.survivors.join(", ")}).`);
+    }
+    if (result.verified !== true) {
+      throw new Error(
+        "The backend process tree could not be verified as stopped. " +
+          "Quit GAIA, end any leftover GAIA or Python processes in Task Manager, then reopen GAIA."
+      );
+    }
+  } catch (err) {
+    isIntentionalKill = false;
+    throw err;
+  }
+  if (backendCleanupPending === proc) backendCleanupPending = null;
+  if (backendProcess === proc) backendProcess = null;
+}
+
 /**
  * Start a new backend for the supervisor and resolve once it answers.
  * Rejects when it exits first or never answers, so the supervisor retries.
+ * A backend still alive here is a hung one Restart GAIA was pressed for:
+ * stop it first, or the new backend would run beside it on a new port.
  */
 async function restartBackend() {
+  const previousBackend = backendCleanupPending || backendProcess;
+  if (previousBackend) await stopBackendTree(previousBackend);
+
   backendStarting = startBackend();
   const child = await backendStarting;
-  if (!child) {
-    throw new Error("GAIA's backend program is missing, so it can't restart. Reinstall GAIA.");
-  }
+  if (!child) throw Object.assign(new Error(missingBackendMessage()), { terminal: true });
   if (quitStarted()) {
-    isIntentionalKill = true;
-    await portManager.killBackend(child);
+    await stopBackendTree(child);
     throw new Error("GAIA is quitting, so the restarted backend was stopped.");
   }
   backendProcess = child;
@@ -505,10 +560,10 @@ async function restartBackend() {
     if (!alive()) {
       throw new Error(`The backend exited (code ${child.exitCode}, signal ${child.signalCode}) before it answered.`);
     }
-    isIntentionalKill = true;
-    await portManager.killBackend(child);
+    await stopBackendTree(child);
     throw new Error(`The backend did not answer within ${RESTART_TIMEOUT / 1000} s.`);
   }
+  enableBackendHealthMonitoring();
   console.log(`[main] Backend restarted on port ${backendPort} (pid=${child.pid})`);
   if (trayManager) {
     trayManager.setBackendPort(backendPort);
@@ -525,20 +580,41 @@ function backendStateForRenderer(state) {
 const backendSupervisor = createBackendSupervisor({
   start: restartBackend,
   onStopped: (state) => {
-    const { code = null, signal = null } = state.lastExit || {};
-    void handleBackendCrash(code, signal);
+    void handleBackendCrash(state);
   },
   onState: (state) => {
+    if (backendHealthMonitor) {
+      if (backendHealthMonitoringEnabled && state.status === "running") backendHealthMonitor.start();
+      else backendHealthMonitor.stop();
+    }
     console.log(
       `[main] Backend ${state.status}` +
         (state.status === "restarting" ? ` (try ${state.attempt} of ${state.maxRestarts})` : "") +
         (state.lastError ? `: ${state.lastError}` : "")
     );
+    // A backend up again after a failed start leaves nothing to roll back from.
+    if (state.status === "running") autoUpdater.clearStartFailure();
     if (mainWindow && !mainWindow.isDestroyed()) {
       mainWindow.webContents.send("backend:state", backendStateForRenderer(state));
     }
   },
 });
+
+backendHealthMonitor = createBackendHealthMonitor({
+  check: checkBackendHealth,
+  onUnhealthy: (error, failures) => {
+    const message = error && error.message ? error.message : String(error);
+    const reason = new Error(`Health check failed ${failures} consecutive times: ${message}`);
+    console.warn(`[main] ${reason.message}`);
+    backendSupervisor.healthFailed(reason);
+  },
+});
+
+function enableBackendHealthMonitoring() {
+  if (quitStarted()) return;
+  backendHealthMonitoringEnabled = true;
+  if (backendSupervisor.getState().status === "running") backendHealthMonitor.start();
+}
 
 ipcMain.handle("backend:get-state", () => backendStateForRenderer(backendSupervisor.getState()));
 ipcMain.handle("backend:restart", () => {
@@ -550,7 +626,8 @@ ipcMain.handle("backend:restart", () => {
  * Tell the user the backend stopped and offer Restart / Save diagnostics /
  * Quit. Invoked by the supervisor's onStopped once automatic restarts run out.
  */
-async function handleBackendCrash(code, signal) {
+async function handleBackendCrash(state) {
+  const { code = null, signal = null } = state.lastExit || {};
   autoUpdater.reportStartFailure();
   try {
     const choice = await showBackendCrashDialog({
@@ -558,6 +635,7 @@ async function handleBackendCrash(code, signal) {
       app,
       code,
       signal,
+      reason: state.lastError,
       tailLines: backendStderrTail.slice(-8),
       writeDiagnostics: () => portManager.writeDiagnosticsBundle(),
       // The backend is gone, so there is no running work to ask about.
@@ -600,30 +678,61 @@ async function handleRendererGone(contents, { reason }) {
 
 async function waitForBackend(timeoutMs, isAlive = () => true) {
   const start = Date.now();
-  const http = require("http");
 
   while (Date.now() - start < timeoutMs && isAlive()) {
     try {
-      await new Promise((resolve, reject) => {
-        const req = http.get(healthCheckUrl, (res) => {
-          if (res.statusCode === 200) {
-            resolve();
-          } else {
-            reject(new Error(`Status ${res.statusCode}`));
-          }
-        });
-        req.on("error", reject);
-        req.setTimeout(2000, () => {
-          req.destroy();
-          reject(new Error("timeout"));
-        });
-      });
+      await checkBackendHealth();
       return true;
     } catch {
       await new Promise((r) => setTimeout(r, 500));
     }
   }
   return false;
+}
+
+function checkBackendHealth(signal) {
+  const http = require("http");
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    let deadline = null;
+    let req = null;
+    const onAbort = () => {
+      const error = new Error("Health check was cancelled.");
+      finish(reject, error);
+      req.destroy(error);
+    };
+    const finish = (handler, value) => {
+      if (settled) return;
+      settled = true;
+      if (deadline) clearTimeout(deadline);
+      if (signal) signal.removeEventListener("abort", onAbort);
+      handler(value);
+    };
+    req = http.get(healthCheckUrl, (res) => {
+      if (res.statusCode !== 200) {
+        finish(reject, new Error(`Health endpoint returned status ${res.statusCode}.`));
+        res.destroy();
+        return;
+      }
+      res.once("end", () => finish(resolve));
+      res.once("aborted", () => finish(reject, new Error("Health endpoint response was aborted.")));
+      res.once("close", () => {
+        if (!res.complete) finish(reject, new Error("Health endpoint response closed before completion."));
+      });
+      res.once("error", (error) => finish(reject, error));
+      res.resume();
+    });
+    deadline = setTimeout(() => {
+      const error = new Error("Health endpoint did not answer within 2 s.");
+      finish(reject, error);
+      req.destroy(error);
+    }, BACKEND_HEALTH_CHECK_TIMEOUT);
+    req.once("error", (error) => finish(reject, error));
+    if (signal) {
+      if (signal.aborted) onAbort();
+      else signal.addEventListener("abort", onAbort, { once: true });
+    }
+  });
 }
 
 // ── Window ─────────────────────────────────────────────────────────────────
@@ -646,21 +755,41 @@ function findDistPath() {
 
 /** Refuse a link loudly — the user clicked it, so they get told why nothing happened. */
 function reportBlockedLink(url) {
-  const message = describeBlockedUrl(url);
-  console.error(`[main] ${message}`);
+  const locale = app.getLocale();
+  warnAboutLink(
+    linkNoticeText(locale).blockedTitle,
+    describeBlockedUrl(url, locale),
+    describeBlockedUrl(url),
+    locale,
+  );
+}
+
+function reportLinkNotOpened(url, err) {
+  const locale = app.getLocale();
+  warnAboutLink(
+    linkNoticeText(locale).notOpenedTitle,
+    describeOpenFailure(url, err, locale),
+    describeOpenFailure(url, err),
+    locale,
+  );
+}
+
+// The log line stays English so bug reports stay readable.
+function warnAboutLink(title, message, logMessage, locale) {
+  console.error(`[main] ${logMessage}`);
   // Non-blocking and parented: showErrorBox would freeze the main process.
   dialog
     .showMessageBox(mainWindow && !mainWindow.isDestroyed() ? mainWindow : null, {
       type: "warning",
-      title: "Link blocked",
-      message: "Link blocked",
+      title,
+      message: title,
       detail: message,
-      buttons: ["OK"],
+      buttons: [linkNoticeText(locale).ok],
       noLink: true,
     })
     .catch((err) =>
       console.error(
-        `[main] Could not show the link-blocked dialog: ${err && err.message ? err.message : err}`
+        `[main] Could not show the "${title}" dialog: ${err && err.message ? err.message : err}`
       )
     );
 }
@@ -727,13 +856,14 @@ function createWindow() {
     installWindowKeys(mainWindow.webContents, { devTools: !app.isPackaged });
   }
   mainWindow.setMenuBarVisibility(false);
+  installContextMenu(mainWindow, { Menu, clipboard, locale: app.getLocale() });
 
   // Open external links in the default browser. The URL here is already
   // RESOLVED against the file:// document, so a scheme-less markdown link
   // arrives as file:///C:/… — check the scheme before handing it to the OS.
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
     if (isAllowedExternalUrl(url)) {
-      shell.openExternal(url);
+      openExternalSafely(shell, url, (err) => reportLinkNotOpened(url, err));
     } else {
       reportBlockedLink(url);
     }
@@ -747,7 +877,7 @@ function createWindow() {
     if (isInAppNavigation(url, currentUrl)) return;
     event.preventDefault();
     if (isAllowedExternalUrl(url)) {
-      shell.openExternal(url);
+      openExternalSafely(shell, url, (err) => reportLinkNotOpened(url, err));
       return;
     }
     reportBlockedLink(url);
@@ -855,9 +985,11 @@ async function loadApp() {
           </div>
         </body>
       </html>`;
-    mainWindow.loadURL(
-      "data:text/html;charset=utf-8," + encodeURIComponent(waitingHtml)
-    );
+    mainWindow
+      .loadURL("data:text/html;charset=utf-8," + encodeURIComponent(waitingHtml))
+      .catch((err) =>
+        console.error(`[main] Could not show the waiting page: ${err && err.message ? err.message : err}`)
+      );
   }
 }
 
@@ -875,6 +1007,7 @@ function reopenWindow() {
   revealWhenReady(reopened, () => !reopened.isDestroyed() && reopened.show());
   if (trayManager) trayManager.mainWindow = mainWindow;
   if (notificationService) notificationService.mainWindow = mainWindow;
+  if (browserPane) browserPane.attach(mainWindow);
   loadApp().catch((err) => {
     console.error("[main] Failed to load the reopened window:", err.message);
     dialog.showErrorBox("GAIA", `GAIA couldn't reopen its window: ${err.message}`);
@@ -920,6 +1053,44 @@ function initializeServices() {
 
   folderDialog.registerIpcHandlers();
 
+  // GAIA's backend, the pane bridge, and GAIA's other local services: no pane page may reach any.
+  const appPorts = () => [backendPort, ...(paneBridge ? [paneBridge.port] : []), ...servicePorts()];
+
+  // Dev servers the agent starts; ones a crash left running are stopped first.
+  devServers = new DevServerSupervisor({
+    dir: path.join(app.getPath("userData"), "dev-servers"),
+    blockedPorts: appPorts,
+    onChange: () => {
+      if (browserPane) browserPane.publish();
+    },
+  });
+  devServers.start();
+
+  // A browser beside the chat; its pages can't reach GAIA's own backend.
+  browserPane = createBrowserPaneService({
+    ipcMain,
+    session: session.fromPartition(PANE_PARTITION),
+    shell,
+    userDataDir: app.getPath("userData"),
+    savePathFor: saveFolderFor,
+    // GAIA's backend, the bridge and GAIA's other local services: no pane page may reach any.
+    blockedPorts: appPorts,
+    devServers,
+  });
+  browserPane.attach(mainWindow);
+
+  // The agent reaches the pane through this loopback bridge, in-process or from a sidecar.
+  startPaneBridge({
+    discoveryFile: paneDiscoveryFile(),
+    handlers: createPaneBridgeHandlers({ getHost: () => browserPane.getHost(), devServers, appVersion: app.getVersion() }),
+  })
+    .then((bridge) => {
+      paneBridge = bridge;
+    })
+    .catch((err) => {
+      console.error(`[main] The browser pane bridge did not start, so the agent can't use the pane: ${err.message}`);
+    });
+
   console.log("[main] Services initialized");
 }
 
@@ -935,19 +1106,10 @@ function setupJumpList() {
         items: [
           {
             type: "task",
-            title: "New Task",
-            description: "Start a new agent task",
+            title: "Open GAIA",
+            description: "Show the GAIA window",
             program: process.execPath,
             args: "",
-            iconPath: process.execPath,
-            iconIndex: 0,
-          },
-          {
-            type: "task",
-            title: "Agent Manager",
-            description: "View and manage OS agents",
-            program: process.execPath,
-            args: "--show-agents",
             iconPath: process.execPath,
             iconIndex: 0,
           },
@@ -1060,6 +1222,7 @@ app.whenReady().then(async () => {
   // The window, and the tray that keeps a closed one reachable, come before
   // anything that can take time, so an install runs in plain sight.
   titleDownloadSaveDialogs();
+  installBackendAuth(session.defaultSession, { getPort: () => spawnedBackendPort });
   // Before the window: the desktop ties a window to its launcher when it appears.
   if (app.isPackaged) {
     try {
@@ -1093,36 +1256,40 @@ app.whenReady().then(async () => {
   });
 
   // Decided before the window has a page, so a current backend never sees this screen.
-  showingInstallScreen = !backendInstaller.isBackendCurrent();
+  // Dev QA mode runs GAIA_BIN's backend and never installs one.
+  if (!devQa) showingInstallScreen = !backendInstaller.isBackendCurrent();
   if (showingInstallScreen) await loadApp();
 
-  // Phase 0: seed bundled agents BEFORE the Python backend starts, so the
-  // agent registry sees them on its first discovery pass. Failures here are
-  // non-fatal — the app must still launch even if seeding is blocked (e.g.
-  // permission error on ~/.gaia/agents).
-  try {
-    const seedResult = await agentSeeder.seedBundledAgents();
-    if (seedResult.seeded.length > 0) {
-      console.log("[main] Seeded agents:", seedResult.seeded);
+  // Both write to the user's ~/.gaia, so dev QA mode skips them.
+  if (!devQa) {
+    // Phase 0: seed bundled agents BEFORE the Python backend starts, so the
+    // agent registry sees them on its first discovery pass. Failures here are
+    // non-fatal — the app must still launch even if seeding is blocked (e.g.
+    // permission error on ~/.gaia/agents).
+    try {
+      const seedResult = await agentSeeder.seedBundledAgents();
+      if (seedResult.seeded.length > 0) {
+        console.log("[main] Seeded agents:", seedResult.seeded);
+      }
+      if (seedResult.cleaned.length > 0) {
+        console.log("[main] Cleaned legacy agents:", seedResult.cleaned);
+      }
+      if (seedResult.errors.length > 0) {
+        console.warn(
+          "[main] Agent seeding errors:",
+          seedResult.errors.map((e) => e.id)
+        );
+      }
+    } catch (err) {
+      console.warn("[main] Agent seeding failed (non-fatal):", err);
     }
-    if (seedResult.cleaned.length > 0) {
-      console.log("[main] Cleaned legacy agents:", seedResult.cleaned);
-    }
-    if (seedResult.errors.length > 0) {
-      console.warn(
-        "[main] Agent seeding errors:",
-        seedResult.errors.map((e) => e.id)
-      );
-    }
-  } catch (err) {
-    console.warn("[main] Agent seeding failed (non-fatal):", err);
-  }
 
-  // Phase A0: kill any orphaned backend from a previous launch BEFORE the
-  // installer runs. On Windows a live `gaia chat --ui` holds an open handle on
-  // gaia.exe, so an upgrade's `uv pip install --refresh` fails with os error 32
-  // unless that process is gone first (issue #1388).
-  await cleanupOrphanedBackend();
+    // Phase A0: kill any orphaned backend from a previous launch BEFORE the
+    // installer runs. On Windows a live `gaia chat --ui` holds an open handle on
+    // gaia.exe, so an upgrade's `uv pip install --refresh` fails with os error 32
+    // unless that process is gone first (issue #1388).
+    await cleanupOrphanedBackend();
+  }
 
   // Phase A: install or upgrade the Python backend behind EngineInstallScreen.
   if (showingInstallScreen) {
@@ -1138,7 +1305,9 @@ app.whenReady().then(async () => {
   if (shutdownStarted) return;
   backendStarting = startBackend();
   backendProcess = await backendStarting;
+  // The window reads this state and shows the failure instead of waiting for a backend.
   if (backendProcess) backendSupervisor.running(backendPort);
+  else backendSupervisor.failedToStart(missingBackendMessage());
   if (shutdownStarted) {
     console.log("[main] Quit during startup — not opening the window");
     return;
@@ -1174,9 +1343,10 @@ app.whenReady().then(async () => {
   let backendReady = false;
   if (backendProcess) {
     console.log("Waiting for backend to start...");
-    backendReady = await waitForBackend(STARTUP_TIMEOUT);
+    backendReady = await waitForBackend(STARTUP_TIMEOUT, () => !quitStarted());
     if (backendReady) {
       console.log("Backend API is ready on port", backendPort);
+      enableBackendHealthMonitoring();
     } else {
       console.warn("Backend did not respond within timeout.");
     }
@@ -1184,8 +1354,16 @@ app.whenReady().then(async () => {
   if (!backendReady) {
     autoUpdater.reportStartFailure();
     if (backendProcess) {
-      waitForBackend(STARTUP_TIMEOUT * 10).then((ready) => {
-        if (ready) autoUpdater.clearStartFailure();
+      waitForBackend(STARTUP_TIMEOUT * 10, () => !quitStarted()).then((ready) => {
+        if (ready) {
+          autoUpdater.clearStartFailure();
+          enableBackendHealthMonitoring();
+        } else if (backendProcess && !quitStarted() && backendSupervisor.getState().status === "running") {
+          backendHealthMonitoringEnabled = true;
+          backendSupervisor.healthFailed(
+            new Error("The backend health endpoint did not respond during the startup grace period.")
+          );
+        }
       });
     }
   }
@@ -1195,8 +1373,8 @@ app.whenReady().then(async () => {
     if (mainWindow) await loadApp();
   }
 
-  // Auto-start enabled agents (T2)
-  if (agentProcessManager) {
+  // Auto-start enabled agents (T2); in dev QA mode the installed app owns them.
+  if (agentProcessManager && !devQa) {
     try {
       await agentProcessManager.startAllEnabled();
     } catch (err) {
@@ -1271,6 +1449,7 @@ const quitGuard = installQuitGuard({
     // Mark any subsequent backend exit as intentional so we don't pop the
     // crash dialog during normal shutdown.
     isIntentionalKill = true;
+    backendHealthMonitor.stop();
     backendSupervisor.stop();
   },
   onError: (err) => {
@@ -1286,6 +1465,7 @@ const quitGuard = installQuitGuard({
 // The installer is already running: a restart now would hold its files open.
 electronAutoUpdater.on("before-quit-for-update", () => {
   updateQuitStarted = true;
+  backendHealthMonitor.stop();
   backendSupervisor.stop();
 });
 
@@ -1295,6 +1475,7 @@ installQuitCleanup({ app, cleanup });
 
 async function cleanup() {
   shutdownStarted = true;
+  backendHealthMonitor.stop();
   backendSupervisor.stop();
   const installStopped = engineInstall ? engineInstall.stop() : null;
   const updating = app.isPackaged && autoUpdater.installsOnQuit();
@@ -1320,15 +1501,29 @@ async function cleanup() {
     keepAwake = null;
   }
 
-  // The install, the agents and the backend stop side by side: each waits out
-  // its own grace period, and in series they could overrun the quit's time limit.
-  await Promise.all([installStopped, stopAgentsForQuit(), stopBackendForQuit()]);
+  if (paneBridge) {
+    await paneBridge.close().catch((err) => console.error(`[main] Closing the browser pane bridge failed: ${err.message}`));
+    paneBridge = null;
+  }
+
+  // The install, the agents, the backend and the dev servers stop side by side: each
+  // waits out its own grace period, and in series they could overrun the quit's time limit.
+  await Promise.all([installStopped, stopAgentsForQuit(), stopBackendForQuit(), stopDevServersForQuit()]);
   if (updating) await stopDaemonForUpdate();
 
   // Destroy tray icon
   if (trayManager) {
     trayManager.destroy();
     trayManager = null;
+  }
+}
+
+async function stopDevServersForQuit() {
+  if (!devServers) return;
+  try {
+    await devServers.stopAll();
+  } catch (err) {
+    console.error(`[main] Stopping dev servers failed: ${err.message}. Any left running are stopped on the next launch.`);
   }
 }
 
@@ -1363,7 +1558,7 @@ async function stopBackendForQuit() {
   if (backendStarting) {
     try {
       const started = await backendStarting;
-      if (started && !backendProcess && started.exitCode === null && started.signalCode === null) {
+      if (started && !backendProcess && !backendCleanupPending && started.exitCode === null && started.signalCode === null) {
         backendProcess = started;
       }
     } catch (err) {
@@ -1375,17 +1570,16 @@ async function stopBackendForQuit() {
   // (SIGTERM → wait 3 s → SIGKILL).
   // F5: previously we did this inline; extracted so main.cjs stays lean and
   // to prevent orphan leaks across runs (issue #782).
-  if (backendProcess) {
+  const processToStop = backendCleanupPending || backendProcess;
+  if (processToStop) {
     console.log("Stopping backend process...");
-    const proc = backendProcess;
+    const proc = processToStop;
     backendProcess = null;
-    isIntentionalKill = true;
 
     try {
-      // Pass the ChildProcess handle (not a bare pid) so port-manager
-      // can short-circuit via `proc.exitCode` and close the PID-reuse
-      // TOCTOU window.
-      await portManager.killBackend(proc);
+      // Pass the ChildProcess handle so the process-tree tracker can safely
+      // retry descendants if the launcher exits during termination.
+      await stopBackendTree(proc);
     } catch (err) {
       console.error("Error stopping backend:", err.message);
     }

@@ -21,6 +21,7 @@ import { translator } from '../i18n/useT';
 import { requestPersonalize } from '../utils/connectorPersonalize';
 import { FLAGSHIP_AGENT_ID } from '../utils/newTask';
 import type { AgentInfo, BrowseResponse, SetupCheck } from '../types';
+import { AGENT_PROGRAMS } from '../test/setupApiMocks';
 
 const mocked = vi.mocked(api);
 const OLD_ENGLISH = translator('en')('agentNotice.sendRefused');
@@ -90,6 +91,7 @@ beforeEach(() => {
         compatible: true, blockers: [], warnings: [], ram_gb: 32, gpu_name: null, npu_detected: false, disk_free_gb: 100,
     } as never);
     mocked.getSetupStatus.mockResolvedValue({ state: 'idle' });
+    mocked.getAgentPrograms.mockResolvedValue(AGENT_PROGRAMS);
     mocked.getLemonadeTarget.mockResolvedValue({
         mode: 'gaia', saved_mode: null, source: 'gaia', base_url: null, saved_base_url: null,
         api_key_stored: false, gaia_installed: false, offer: false, what_gaia_does: '',

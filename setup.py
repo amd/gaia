@@ -18,7 +18,6 @@ with open("src/gaia/version.py", encoding="utf-8") as fp:
 # wheels are not on PyPI, and an 'amd-gaia[agents]' extra naming them made pip
 # silently downgrade amd-gaia to the newest release without the extra (#2240).
 AGENT_WHEEL_PACKAGES = [
-    "gaia-agent-email",
     "gaia-agent-gaia",
 ]
 
@@ -45,7 +44,7 @@ setup(
         "gaia.daemon.sidecars",
         "gaia.ui",
         "gaia.ui.routers",
-        "gaia.ui.email_sidecar",
+        "gaia.ui.sidecar",
         "gaia.sidecar",
         "gaia.database",
         "gaia.talk",
@@ -94,6 +93,7 @@ setup(
     ],
     package_data={
         "gaia.eval.memory": ["scenarios/*.yaml"],
+        "gaia.eval.bench": ["swebench_verified_ids.json"],
         # Browser-mode Agent UI bundle. Recursive globs in package_data are
         # unreliable across setuptools versions, so we list shallow patterns
         # here and back them up with `recursive-include` in MANIFEST.in. The
@@ -141,7 +141,7 @@ setup(
         # HTTPS trusts the OS certificate store (gaia.tls), so a corporate
         # TLS-inspecting proxy's root works as it does for pip. 0.10 also
         # honours CA files loaded on top (certifi), so nothing stops verifying.
-        "truststore>=0.10.0",
+        "truststore>=0.10.3",
         "beautifulsoup4",
         # watchdog 7.0.0 starves Windows change delivery while a neighbouring
         # file is written continuously; stay on the known-good 6.x line until
@@ -291,9 +291,6 @@ setup(
             # Tokenizer proxy for the tool-prompt cost harness (#1448,
             # gaia.eval.tool_cost) so the budget test can count tokens.
             "tiktoken>=0.7.0,<1.0.0",
-            # OpenAPI response-body validation against the committed spec
-            # (tests/test_email_openapi_conformance.py, #1897).
-            "jsonschema>=4.0.0,<5.0.0",
         ],
         "eval": [
             "bs4",

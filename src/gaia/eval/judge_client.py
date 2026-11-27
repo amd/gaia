@@ -14,9 +14,8 @@ the transport layer:
   runner it needs no environment variable when the CLI is logged in.
 
 Both yield an object exposing ``get_completion(prompt)`` that returns a list of
-content blocks with a ``.text`` attribute, so the three judge factories
-(``draft_quality`` / ``action_item_quality`` / ``briefing_quality``) consume
-either without caring which is in play.
+content blocks with a ``.text`` attribute, so a judge consumes either
+without caring which is in play.
 
 Which one is used follows :mod:`gaia.eval.claude_credential`: the subscription
 first, then ``ANTHROPIC_API_KEY`` from the environment, then from a ``.env``.
@@ -37,8 +36,6 @@ from dataclasses import dataclass
 from gaia.env import load_env
 from gaia.eval.claude_credential import (  # noqa: F401  # pylint: disable=unused-import
     API_KEY_VAR,
-    MISSING_CREDENTIAL_ERROR,
-    TOKEN_WITHOUT_CLI_ERROR,
     announce,
     credential_present,
     resolve_claude_credential,

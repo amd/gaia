@@ -3,10 +3,10 @@
 
 """Memory Dashboard REST API for GAIA Agent UI."""
 
+import importlib
 import json
 import logging
 import os
-import re
 import sqlite3
 import threading
 import uuid
@@ -34,7 +34,6 @@ from gaia.agents.base.memory_store import (
     check_memory_content,
     is_about_user,
 )
-from gaia.llm.reasoning import strip_reasoning
 from gaia.ui.memory_settings import MEMORY_ENABLED_KEY, memory_enabled
 
 from ..database import ChatDatabase
@@ -349,7 +348,7 @@ def list_knowledge(
         pattern="^(updated_at|confidence|created_at|category|context|content|use_count)$",
     ),
     order: str = Query("desc", pattern="^(asc|desc)$"),
-    offset: int = Query(0, ge=0),
+    offset: int = Query(0, ge=0, le=2**63 - 1),
     limit: int = Query(50, ge=1, le=200),
     about_user: bool = Query(
         False,
@@ -432,13 +431,13 @@ def _embed_row(store, knowledge_id: str) -> Dict[str, Any]:
     The row stays saved either way; a failure is reported to the caller as
     ``embedded: false`` plus the reason, never swallowed.
     """
-    from gaia.agents.base.memory import EMBEDDING_MODEL
+    from gaia.agents.registry import machine_embedding_model
 
     item = store.get_item(knowledge_id)
     if item is None:
         raise HTTPException(404, f"Knowledge entry {knowledge_id} not found")
-    # The stored vectors' embedder, not a hardcoded default (#1744).
-    model = store.get_embedder_id() or EMBEDDING_MODEL
+    # The one every chat on this PC uses; the agent re-stamps the store with it.
+    model = machine_embedding_model()
     try:
         store.store_embedding(knowledge_id, _make_embed_fn(model)(item["content"]))
     except Exception as exc:  # the row is saved; only its vector is missing
@@ -745,14 +744,12 @@ def rebuild_embeddings() -> Dict:
     Returns ``{backfilled: int, total_without: int}``.
     """
     try:
-        from gaia.agents.base.memory import EMBEDDING_MODEL
+        from gaia.agents.registry import machine_embedding_model
 
         store = _get_store()
-        # Re-embed with the embedder that produced the stored vectors, not a
-        # hardcoded default. On the NPU profile that is the FLM-native embedder;
-        # the GGUF default would mix vector spaces in one table and reload a
-        # Vulkan GGUF embedder that evicts the FLM chat model (#1744).
-        embedder_model = store.get_embedder_id() or EMBEDDING_MODEL
+        # Re-embed with the embedder every chat on this PC uses, which the
+        # agent stamps on its next start anyway; the stamp may be a profile old.
+        embedder_model = machine_embedding_model()
         store.reconcile_embedder(embedder_model)
         result = store.backfill_embeddings(_make_embed_fn(embedder_model))
         return result
@@ -763,34 +760,17 @@ def rebuild_embeddings() -> Dict:
         )
 
 
-_RECONCILIATION_PROMPT = """\
-Given these two memory items from the same user, classify their relationship.
-Return JSON: {{"relationship": "reinforce|contradict|weaken|neutral", "action": "description"}}
-
-Item A (stored {date_a}): {content_a}
-Item B (stored {date_b}): {content_b}"""
-
-_RECONCILE_SIMILARITY_THRESHOLD = 0.85
-
-
 @router.post("/api/memory/reconcile")
 def trigger_reconciliation(max_pairs: int = Query(20, ge=1, le=100)) -> Dict:
     """Manually trigger background memory reconciliation.
 
     Compares knowledge entries for contradictions and reinforcements using
     FAISS similarity search + LLM classification.  Works standalone — no
-    active ChatAgent session required.
+    active ChatAgent session required. Both paths run
+    ``gaia.agents.base.memory.reconcile_memories``, so they agree.
 
     Returns ``{pairs_checked, reinforced, contradicted, weakened, neutral}``.
     """
-    result = {
-        "pairs_checked": 0,
-        "reinforced": 0,
-        "contradicted": 0,
-        "weakened": 0,
-        "neutral": 0,
-    }
-
     # If an active agent session is available, prefer it (uses cached FAISS index)
     if _reconcile_fn is not None:
         try:
@@ -803,183 +783,47 @@ def trigger_reconciliation(max_pairs: int = Query(20, ge=1, le=100)) -> Dict:
                 "Check the GAIA server log for the traceback.",
             ) from exc
 
-    # Standalone path — build a temporary FAISS index from stored embeddings
     try:
-        import numpy as np
+        importlib.import_module("faiss")
+    except ImportError:
+        raise HTTPException(503, "faiss not installed — run: pip install faiss-cpu")
 
-        try:
-            import faiss
-        except ImportError:
-            raise HTTPException(503, "faiss not installed — run: pip install faiss-cpu")
-
-        from gaia.agents.base.memory import _blob_to_embedding
+    try:
+        from gaia.agents.base.memory import (
+            RECONCILIATION_SYSTEM_PROMPT,
+            reconcile_memories,
+            reconciliation_max_tokens,
+        )
         from gaia.llm import create_client
+        from gaia.llm.lemonade_client import (
+            no_thinking_kwargs,
+            resolve_local_chat_model,
+        )
 
         store = _get_store()
-        items = store.get_items_for_reconciliation(limit=200)
+        llm: Dict[str, Any] = {}
 
-        if len(items) < 2:
-            return result  # Not enough items with embeddings
-
-        # Dimension is derived from the stored vectors, not a hardcoded constant
-        # — the active embedder (e.g. the NPU FLM embedder) may differ from the
-        # GGUF default (#1744). The first valid vector sets the expected dim;
-        # any vector of a different dim (a stale pre-switch embedding) is skipped.
-        ids: List[str] = []
-        vectors: List[np.ndarray] = []
-        item_map: Dict[str, Any] = {}
-        expected_dim: Optional[int] = None
-        undecodable = 0
-
-        for item in items:
-            try:
-                vec = _blob_to_embedding(item["embedding"])
-                if expected_dim is None:
-                    expected_dim = int(vec.shape[0])
-                if vec.shape[0] != expected_dim:
-                    continue
-                norm = np.linalg.norm(vec)
-                if norm > 0:
-                    vec = vec / norm
-                ids.append(item["id"])
-                vectors.append(vec)
-                item_map[item["id"]] = item
-            except (ValueError, TypeError, KeyError) as exc:
-                undecodable += 1
-                logger.debug(
-                    "[memory router] skipping item %s: %s", item.get("id"), exc
-                )
-
-        if undecodable:
-            logger.warning(
-                "[memory router] reconcile skipped %d item(s) with an unreadable "
-                "embedding; POST /api/memory/rebuild-embeddings to include them",
-                undecodable,
-            )
-
-        if len(vectors) < 2 or expected_dim is None:
-            return result
-
-        mat = np.stack(vectors).astype(np.float32)
-        index = faiss.IndexFlatIP(expected_dim)
-        index.add(mat)
-
-        n_neighbors = min(5, len(vectors))
-        scores_all, indices_all = index.search(mat, n_neighbors)
-
-        # Collect high-similarity pairs
-        pairs: List[tuple] = []
-        seen: set = set()
-        for i in range(len(vectors)):
-            for j_pos in range(n_neighbors):
-                j = int(indices_all[i][j_pos])
-                if j == i:
-                    continue
-                sim = float(scores_all[i][j_pos])
-                if sim >= _RECONCILE_SIMILARITY_THRESHOLD:
-                    key = tuple(sorted((ids[i], ids[j])))
-                    if key not in seen:
-                        seen.add(key)
-                        pairs.append((ids[i], ids[j], sim))
-
-        pairs.sort(key=lambda x: x[2], reverse=True)
-        pairs = pairs[:max_pairs]
-
-        if not pairs:
-            return result
-
-        llm = create_client()
-        # One metadata dict per id for the whole run: a memory in several
-        # pairs must keep every marker, not just the last pair's.
-        metas: Dict[str, Dict[str, Any]] = {}
-
-        def _meta(knowledge_id: str) -> Dict[str, Any]:
-            if knowledge_id not in metas:
-                raw_meta = item_map[knowledge_id].get("metadata") or {}
-                if isinstance(raw_meta, str):
-                    try:
-                        raw_meta = json.loads(raw_meta) if raw_meta else {}
-                    except json.JSONDecodeError as exc:
-                        raise ValueError(
-                            f"memory {knowledge_id} has unreadable metadata "
-                            f"({exc}); fix or delete that entry, then retry"
-                        ) from exc
-                meta = dict(raw_meta)
-                meta["reconciled_with"] = list(meta.get("reconciled_with") or [])
-                metas[knowledge_id] = meta
-            return metas[knowledge_id]
-
-        for id_a, id_b, _sim in pairs:
-            item_a = item_map.get(id_a)
-            item_b = item_map.get(id_b)
-            if not item_a or not item_b:
-                continue
-
-            # Skip already-reconciled pairs
-            meta_a = _meta(id_a)
-            meta_b = _meta(id_b)
-            if id_b in meta_a["reconciled_with"] or id_a in meta_b["reconciled_with"]:
-                continue
-
-            prompt = _RECONCILIATION_PROMPT.format(
-                date_a=str(item_a.get("created_at", "unknown"))[:10],
-                content_a=str(item_a.get("content", ""))[:500],
-                date_b=str(item_b.get("created_at", "unknown"))[:10],
-                content_b=str(item_b.get("content", ""))[:500],
-            )
-            # An LLM that is down fails the run; only an unparseable reply skips a pair.
-            raw = llm.chat(
-                [{"role": "user", "content": prompt}],
+        def classify(prompt: str) -> str:
+            # Created on first use: a run with no new pairs needs no LLM.
+            if not llm:
+                llm["model"] = resolve_local_chat_model()
+                llm["client"] = create_client()
+            model = llm["model"]
+            raw = llm["client"].chat(
+                [
+                    {"role": "system", "content": RECONCILIATION_SYSTEM_PROMPT},
+                    {"role": "user", "content": prompt},
+                ],
+                model=model,
                 temperature=0.1,
-                max_new_tokens=128,
+                max_tokens=reconciliation_max_tokens(model),
+                **no_thinking_kwargs(model),
             )
             if hasattr(raw, "__iter__") and not isinstance(raw, str):
                 raw = "".join(raw)
-            raw = strip_reasoning(raw)
-            if raw.startswith("```"):
-                raw = re.sub(r"^```(?:json)?\s*", "", raw)
-                raw = re.sub(r"\s*```$", "", raw).strip()
-            try:
-                classification = json.loads(raw)
-                relationship = classification.get("relationship", "neutral")
-            except (json.JSONDecodeError, AttributeError) as exc:
-                logger.warning(
-                    "[memory router] skipping pair %s/%s: unparseable reply (%s)",
-                    id_a,
-                    id_b,
-                    exc,
-                )
-                continue
+            return raw
 
-            result["pairs_checked"] += 1
-
-            if relationship == "reinforce":
-                store.update_confidence(id_a, 0.05)
-                store.update_confidence(id_b, 0.05)
-                result["reinforced"] += 1
-            elif relationship == "contradict":
-                # Weaken both slightly; log in metadata
-                store.update_confidence(id_a, -0.1)
-                store.update_confidence(id_b, -0.1)
-                result["contradicted"] += 1
-            elif relationship == "weaken":
-                store.update_confidence(id_b, -0.05)
-                result["weakened"] += 1
-            else:
-                result["neutral"] += 1
-
-            # An unrecorded pair is re-classified, and re-penalised, next run.
-            meta_a["reconciled_with"].append(id_b)
-            meta_b["reconciled_with"].append(id_a)
-            for knowledge_id, meta in ((id_a, meta_a), (id_b, meta_b)):
-                if not store.update(knowledge_id, metadata=meta):
-                    raise RuntimeError(
-                        f"could not mark memory {knowledge_id} as reconciled: "
-                        "the entry no longer exists"
-                    )
-
-        logger.info("[memory router] standalone reconcile: %s", result)
-        return result
+        return reconcile_memories(store, classify, max_pairs=max_pairs)
 
     except HTTPException:
         raise
@@ -1607,7 +1451,7 @@ def stream_inference(include_browser: bool = Query(False)):
                         "message": (
                             "Profile inference runs only on a local model, and "
                             f"'{model}' isn't downloaded on this PC. Download it "
-                            "under Settings > Model > Manage downloads and disk "
+                            "under Settings > Agent & model > Manage downloads and disk "
                             "space, then try again."
                         ),
                     }
@@ -1860,6 +1704,135 @@ def _get_memory_settings_dict(db: ChatDatabase) -> Dict:
         == "true",
         "system_discovery_consent": json_consent,
     }
+
+
+class EmbedderBody(BaseModel):
+    """``npu`` or ``gpu``; None is the default (the GPU)."""
+
+    device: Optional[Literal["npu", "gpu"]] = None
+
+
+def _embedder_for(device: str) -> Tuple[str, str]:
+    """``(model, recipe)`` of the embedder that runs on *device*."""
+    from gaia.agents.registry import DEFAULT_DEVICE_CONFIGS
+
+    config = next(dc for dc in DEFAULT_DEVICE_CONFIGS if dc.device == device)
+    return config.embedding_model, config.recipe
+
+
+_UNPROVEN_REASON = "its search results aren't reliable yet, so GAIA embeds on the GPU"
+
+
+def _embedder_option(device: str) -> Dict[str, Any]:
+    """One device the embedder may run on, and whether this PC can use it now."""
+    from gaia.config import GaiaConfig
+    from gaia.llm.lemonade_client import LemonadeClient, LemonadeClientError
+
+    from .providers import ProviderError, device_unavailable_reason, display_name
+
+    model, recipe = _embedder_for(device)
+    proven = device in GaiaConfig.TESTED_EMBEDDING_DEVICES
+    option: Dict[str, Any] = {
+        "device": device,
+        "model": model,
+        "display_name": display_name(model),
+        "proven": proven,
+        "present": None,
+        "available": None,
+        "reason": None,
+        "downloaded": None,
+    }
+    try:
+        option["reason"] = device_unavailable_reason(recipe)
+        option["present"] = option["reason"] is None
+        option["available"] = option["present"]
+        option["downloaded"] = bool(
+            LemonadeClient(verbose=False).get_model_info(model)["downloaded"]
+        )
+    except (ProviderError, LemonadeClientError) as e:
+        # Unknown, not refused: the model server isn't answering yet.
+        option["reason"] = str(e)
+    if not proven:
+        option["available"] = False
+        if option["present"]:
+            option["reason"] = _UNPROVEN_REASON
+    return option
+
+
+def _embedder_view() -> Dict[str, Any]:
+    from gaia.agents.registry import machine_embedding_device
+    from gaia.config import GaiaConfig
+
+    config = GaiaConfig.load()
+    device = machine_embedding_device()
+    return {
+        "device": device,
+        "chosen": config.embedding_device is not None,
+        "default_device": "gpu",
+        "options": [_embedder_option(d) for d in GaiaConfig.EMBEDDING_DEVICE_CHOICES],
+    }
+
+
+@router.get("/api/memory/embedder")
+def get_embedder() -> Dict[str, Any]:
+    """Where every chat embeds documents and memory, and where it could instead."""
+    from gaia.config import GaiaConfigError
+
+    try:
+        return _embedder_view()
+    except GaiaConfigError as e:
+        raise HTTPException(status_code=500, detail=str(e)) from e
+
+
+@router.put("/api/memory/embedder", dependencies=[Depends(_require_ui_header)])
+def set_embedder(body: EmbedderBody) -> Dict[str, Any]:
+    """Run the embedder on *device* for every chat; None is the default (GPU).
+
+    Each chat moves to it on its next turn, and stored memory is re-embedded
+    with it. ``changed`` is False when the embedder stays the same. Refused
+    while a reply runs here: its agent holds the old embedder.
+    """
+    from gaia.agents.registry import machine_embedding_model
+    from gaia.config import GaiaConfig, GaiaConfigError
+
+    from .._chat_helpers import _active_sse_handlers, evict_all_session_agents
+    from .providers import ProviderError, device_unavailable_reason
+
+    if _active_sse_handlers:
+        raise HTTPException(
+            status_code=409,
+            detail="A reply is running. Change the embedder once it finishes.",
+        )
+    if (
+        body.device is not None
+        and body.device not in GaiaConfig.TESTED_EMBEDDING_DEVICES
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail=f"GAIA doesn't embed on the {body.device.upper()}: {_UNPROVEN_REASON}.",
+        )
+    if body.device is not None:
+        _, recipe = _embedder_for(body.device)
+        try:
+            reason = device_unavailable_reason(recipe)
+        except ProviderError as e:
+            raise HTTPException(status_code=503, detail=str(e)) from e
+        if reason:
+            raise HTTPException(
+                status_code=409,
+                detail=f"This PC can't run the embedder on the {body.device.upper()}: {reason}",
+            )
+    try:
+        before = machine_embedding_model()
+        GaiaConfig.save_key("embedding_device", body.device or "auto")
+        changed = machine_embedding_model() != before
+    except GaiaConfigError as e:
+        raise HTTPException(status_code=500, detail=str(e)) from e
+    if changed:
+        # This process's agents picked theirs as they were built; GAIA's agent
+        # sidecar rebuilds each session on its next turn.
+        evict_all_session_agents()
+    return {**_embedder_view(), "changed": changed}
 
 
 @router.get("/api/memory/settings")

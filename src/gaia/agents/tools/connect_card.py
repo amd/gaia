@@ -86,13 +86,16 @@ def connect_card(
     agent_id: str,
     reconnect: Iterable[str] = (),
     scopes: Optional[Mapping[str, Iterable[str]]] = None,
+    account: Optional[Mapping[str, str]] = None,
 ) -> Dict[str, Any]:
     """The card payload offering *providers*, granting *agent_id* on sign-in.
 
     *reconnect* names those connected already, so the card does not read their
     being connected as the fix. *scopes* maps a provider to the access the
     failed call needs, so sign-in asks for that and no more; a provider it
-    leaves out asks for everything the agent declares.
+    leaves out asks for everything the agent declares. *account* maps a
+    provider to the account the failed call used (stable id or address), so
+    the app offers that one instead of guessing among several.
     """
     names = list(dict.fromkeys(providers))
     if not names:
@@ -111,6 +114,9 @@ def connect_card(
     asked = {p: s for p, s in asked.items() if s}
     if asked:
         card["scopes"] = asked
+    used = {p: a for p, a in (account or {}).items() if p in names and a}
+    if used:
+        card["account"] = used
     return card
 
 
@@ -143,6 +149,7 @@ def with_connect_remedy(
     field: str = "error",
     reconnect: Iterable[str] = (),
     scopes: Optional[Mapping[str, Iterable[str]]] = None,
+    account: Optional[Mapping[str, str]] = None,
 ) -> Dict[str, Any]:
     """*payload* with how to connect *providers* added to its ``field``.
 
@@ -156,7 +163,11 @@ def with_connect_remedy(
     payload[field] = f"{payload[field]} {note}" if payload.get(field) else note
     if surface == AGENT_UI:
         payload[CONNECT_CARD_KEY] = connect_card(
-            names, agent_id=agent_id, reconnect=reconnect, scopes=scopes
+            names,
+            agent_id=agent_id,
+            reconnect=reconnect,
+            scopes=scopes,
+            account=account,
         )
     return payload
 
@@ -185,6 +196,7 @@ def with_connect_card(
         surface=surface,
         reconnect=getattr(error, "reconnect", ()),
         scopes={**(scopes or {}), **(getattr(error, "scopes", None) or {})},
+        account=getattr(error, "account", None),
     )
 
 
@@ -208,6 +220,11 @@ def connect_card_in(result: Any) -> Optional[Dict[str, Any]]:
         and asked
         and all(isinstance(s, str) and s for s in asked)
         for p, asked in scopes.items()
+    ):
+        return None
+    account = card.get("account", {})
+    if not isinstance(account, dict) or not all(
+        p in providers and isinstance(a, str) and a for p, a in account.items()
     ):
         return None
     return card

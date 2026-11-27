@@ -20,6 +20,7 @@ import os
 import threading
 import time
 import uuid
+from contextlib import asynccontextmanager
 from typing import AsyncGenerator, List, Tuple
 
 import httpx
@@ -28,6 +29,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 
 from gaia.agents.base.api_agent import ApiAgent
+from gaia.listener_guard import keep_listening_after_client_resets
 
 from .agent_proxy import build_agent_proxy_router
 from .agent_registry import registry
@@ -154,6 +156,28 @@ def _prepare_agent(
         agent.max_output_tokens = request.max_tokens
 
 
+def _close_agent(agent) -> None:
+    """Release the per-request agent's handles now; a failure is logged, not raised."""
+    try:
+        agent.close()
+    except Exception:  # noqa: BLE001 - cleanup must not replace the reply
+        logger.error("Closing the request's agent failed", exc_info=True)
+
+
+def _close_agent_when_done(task, agent) -> None:
+    """Close *agent* once *task*, which is still driving it, has finished."""
+    task.add_done_callback(
+        lambda _t: threading.Thread(
+            target=_close_agent, args=(agent,), daemon=True
+        ).start()
+    )
+
+
+async def _close_agent_now(agent) -> None:
+    """Close *agent* off the event loop; a cancelled caller can't stop the close."""
+    await asyncio.shield(asyncio.to_thread(_close_agent, agent))
+
+
 def _prepend_tool_denials(agent, content: str) -> str:
     """Prefix ``content`` with any confirmation refusals the agent hit.
 
@@ -186,25 +210,24 @@ def _prepend_tool_denials(agent, content: str) -> str:
     return "\n".join(list(denials.values()) + ([content] if content else []))
 
 
+@asynccontextmanager
+async def _lifespan(_app):
+    # A client resetting a queued connection must not close the listener.
+    keep_listening_after_client_resets(asyncio.get_running_loop())
+    yield
+
+
 # Initialize FastAPI app
 app = FastAPI(
     title="GAIA OpenAI-Compatible API",
     description="OpenAI-compatible API for GAIA agents",
     version="1.0.0",
+    lifespan=_lifespan,
 )
 
 # Cross-origin and caller-auth policy live in one place for every GAIA local
 # HTTP server -- see gaia/api/local_http.py.
 app.add_middleware(CORSMiddleware, **cors_config())
-
-
-# The email agent's REST surface (POST /v1/email/*) is no longer mounted
-# in-process (#2176). It was the last in-process agent mount after the v2
-# thin-host migration (#1896); the API server now reaches every agent —
-# email included — the same way the UI does: as a thin client of the
-# always-on daemon, via the /v1/<agent>/* relay mounted below (#2178 / V2-17).
-# So `gaia api` exposes /v1/email/{triage,draft,send,...} by relaying to the
-# out-of-process email sidecar, never by importing that wheel in-process.
 
 
 # Raw request logging middleware (debug mode only)
@@ -340,7 +363,11 @@ async def create_chat_completion(request: ChatCompletionRequest):
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
 
-    _prepare_agent(agent, request, history, system_text)
+    try:
+        _prepare_agent(agent, request, history, system_text)
+    except BaseException:
+        await _close_agent_now(agent)
+        raise
 
     # Handle streaming vs non-streaming
     if request.stream:
@@ -364,7 +391,19 @@ async def create_chat_completion(request: ChatCompletionRequest):
 
         # Keep synchronous agent work from blocking health checks and other
         # requests handled by the event loop.
-        result = await asyncio.to_thread(agent.process_query, user_message)
+        turn = asyncio.get_running_loop().run_in_executor(
+            None, agent.process_query, user_message
+        )
+        try:
+            # Shielded: a cancelled request must not close the agent mid-turn.
+            result = await asyncio.shield(turn)
+        except asyncio.CancelledError:
+            _close_agent_when_done(turn, agent)
+            raise
+        except BaseException:
+            await _close_agent_now(agent)
+            raise
+        await _close_agent_now(agent)
 
         # Debug logging: show what agent returned
         if _api_debug_enabled():
@@ -603,6 +642,9 @@ async def create_sse_stream(agent, query: str, model: str) -> AsyncGenerator[str
             handler_cancelled = getattr(output_handler, "cancelled", None)
             if handler_cancelled is not None:
                 handler_cancelled.set()
+            _close_agent_when_done(task, agent)
+        else:
+            await _close_agent_now(agent)
 
     if failure is not None:
         # Headers are already sent, so the status can't change; say it in-band.
@@ -769,11 +811,11 @@ def _loaded_llm_model(payload):
 
 
 # Agent /v1/<agent>/* surface (#2178 / V2-17, #2176): the /query loop streams
-# through the always-on daemon relay (#2150); the fixed-function agent routes
-# (e.g. the email agent's /v1/email/{triage,draft,send,…}) relay buffered.
+# through the always-on daemon relay (#2150); an agent's fixed-function routes
+# relay buffered.
 # Mounted after the OpenAI-compatible routes are declared; the router refuses the
 # reserved chat/models ids at routing time, so it never shadows
 # /v1/chat/completions or /v1/models (nor their 404/405). The API server stays a
 # thin client — it forwards only the daemon client token, never a sidecar
-# bearer. Gated by GAIA_API_KEY (§0.33), independent of the email wheel.
+# bearer. Gated by GAIA_API_KEY (§0.33).
 app.include_router(build_agent_proxy_router())

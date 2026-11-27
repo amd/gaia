@@ -41,11 +41,15 @@ _REPO_ROOT = Path(__file__).resolve().parents[5]
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
-pytest.importorskip("gaia_agent")
+pytest.importorskip("gaiapy")
 
-from gaia_agent.agent import GaiaAgent, GaiaAgentConfig  # noqa: E402
-from gaia_agent.skill_tools import SKILL_LIBRARY_TOOL_NAMES  # noqa: E402
+from gaiapy.agent import GaiaAgent, GaiaAgentConfig  # noqa: E402
 
+from gaia.agents.base.history import (  # noqa: E402
+    MEMORY_CONTEXT_FOOTER,
+    MEMORY_CONTEXT_HEADER,
+)
+from gaia.agents.tools.skill_library_tools import SKILL_LIBRARY_TOOL_NAMES  # noqa: E402
 from gaia.skills.capture import (  # noqa: E402
     published_skill_names as _REAL_PUBLISHED_SKILL_NAMES,
 )
@@ -224,7 +228,7 @@ def session(library):
     )
     agent.rebuild_system_prompt()
 
-    from gaia_agent.skill_tools import estimate_prompt_tokens
+    from gaia.agents.tools.skill_library_tools import estimate_prompt_tokens
 
     return SimpleNamespace(
         agent=agent,
@@ -1282,7 +1286,10 @@ class TestTheListViewNeverLosesASkill:
     """
 
     def test_a_long_description_is_summarised(self):
-        from gaia_agent.skill_tools import _LIST_DESCRIPTION_CHARS, _summarize
+        from gaia.agents.tools.skill_library_tools import (
+            _LIST_DESCRIPTION_CHARS,
+            _summarize,
+        )
 
         summary = _summarize("x" * 5000)
         assert len(summary) < 5000
@@ -1293,12 +1300,12 @@ class TestTheListViewNeverLosesASkill:
         )
 
     def test_a_short_description_is_untouched(self):
-        from gaia_agent.skill_tools import _summarize
+        from gaia.agents.tools.skill_library_tools import _summarize
 
         assert _summarize("Triage GitHub issues.") == "Triage GitHub issues."
 
     def test_missing_description_does_not_explode(self):
-        from gaia_agent.skill_tools import _summarize
+        from gaia.agents.tools.skill_library_tools import _summarize
 
         assert _summarize("") == ""
         assert _summarize(None) == ""
@@ -1307,8 +1314,7 @@ class TestTheListViewNeverLosesASkill:
         """36 skills with 1KB descriptions each must still fit the NPU."""
         import json
 
-        from gaia_agent.skill_tools import _summarize
-
+        from gaia.agents.tools.skill_library_tools import _summarize
         from gaia.llm.lemonade_client import truncation_budget
 
         entries = [
@@ -1515,3 +1521,103 @@ class TestCaptureSkillTool:
         result = call(session, "capture_skill", source="whatever", name="../evil")
         assert result["status"] == "error"
         assert "not a skill name" in result["error"]
+
+
+# ---------------------------------------------------------------------------
+# /<skill-name> typed by the user
+# ---------------------------------------------------------------------------
+
+
+def test_a_typed_skill_command_loads_the_skill_and_frames_the_request(session):
+    agent = session.agent
+    sent = agent._expand_skill_command("/note-taker summarize this chat")
+
+    assert "note-taker" in agent.loaded_skills
+    assert NOTE_TAKER_MARKER in agent._prompt_text()
+    assert sent.startswith("[GAIA: the user typed /note-taker")
+    assert sent.endswith("\n\nsummarize this chat")
+    assert agent.describe_skills()[-1] == {"name": "note-taker", "how": "user"}
+
+
+def test_the_skill_body_survives_the_turns_skill_selection(session):
+    """The per-turn selector must not hide the body the user just asked for."""
+    agent = session.agent
+    sent = agent._expand_skill_command("/note-taker")
+
+    agent._refresh_active_skill_filter(sent)
+
+    assert NOTE_TAKER_MARKER in agent._prompt_text()
+    assert "No request was typed after the command" in sent
+
+
+def test_process_query_sends_the_framed_request(session, monkeypatch):
+    seen = []
+    monkeypatch.setattr(
+        session.agent,
+        "_process_query_impl",
+        lambda user_input, *a, **k: seen.append(user_input) or {"result": ""},
+    )
+    monkeypatch.setattr(
+        session.agent, "get_memory_dynamic_context", lambda: "Current time: noon"
+    )
+    session.agent.process_query("/note-taker take notes")
+
+    memory, _, sent = seen[0].partition(MEMORY_CONTEXT_FOOTER + "\n\n")
+    assert memory.startswith(MEMORY_CONTEXT_HEADER)
+    assert sent.startswith("[GAIA: the user typed /note-taker")
+    assert sent.endswith("take notes")
+    assert "note-taker" in session.agent.loaded_skills
+
+
+@pytest.mark.parametrize(
+    "text",
+    ["/tmp/report.txt summarize it", "/not-installed hi", "/etc", "hi /note-taker"],
+)
+def test_text_that_names_no_installed_skill_passes_through(session, text):
+    assert session.agent._expand_skill_command(text) == text
+    assert "note-taker" not in session.agent.loaded_skills
+
+
+def test_a_refused_skill_is_reported_not_run(session):
+    sent = session.agent._expand_skill_command("/imported-code do the thing")
+
+    assert "imported-code" not in session.agent.loaded_skills
+    assert "could not be turned on" in sent
+    assert "Do not attempt their request without the skill" in sent
+    assert "gaia skill import" in sent
+
+
+@pytest.mark.parametrize("pattern", ["load_skill", "load_*"])
+def test_a_typed_command_is_refused_while_load_skill_is_withheld(
+    session, monkeypatch, pattern
+):
+    monkeypatch.setattr(session.agent, "_denied_tool_patterns", (pattern,))
+
+    sent = session.agent._expand_skill_command("/note-taker take notes")
+
+    assert "note-taker" not in session.agent.loaded_skills
+    assert NOTE_TAKER_MARKER not in session.agent._prompt_text()
+    assert "could not be turned on" in sent
+    assert "load_skill tool is withheld" in sent
+    assert "Do not attempt their request without the skill" in sent
+    assert sent.endswith("Their request was: take notes")
+
+
+def test_a_typed_command_for_a_loaded_skill_still_runs_while_withheld(
+    session, monkeypatch
+):
+    session.agent._expand_skill_command("/note-taker")
+    monkeypatch.setattr(session.agent, "_denied_tool_patterns", ("load_skill",))
+
+    sent = session.agent._expand_skill_command("/note-taker take notes")
+
+    assert "It is loaded" in sent
+    assert sent.endswith("\n\ntake notes")
+
+
+def test_a_folder_note_in_front_of_the_command_is_kept(session):
+    note = "[This chat is working in the folder C:\\work. When the user says it.]"
+    sent = session.agent._expand_skill_command(f"{note}\n\n/note-taker go")
+
+    assert sent.startswith(note + "\n\n[GAIA: the user typed /note-taker")
+    assert "note-taker" in session.agent.loaded_skills

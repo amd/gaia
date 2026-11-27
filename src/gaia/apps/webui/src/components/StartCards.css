@@ -36,7 +36,7 @@
     align-items: center;
     gap: 4px;
     font-size: 13.5px;
-    font-weight: 600;
+    font-weight: 500;
 }
 
 .start-card-title svg {
@@ -56,10 +56,8 @@
     margin-top: 14px;
 }
 
-.try-chips-label {
-    margin-right: 2px;
-    color: var(--text-muted);
-    font-size: 12.5px;
+.try-chips.is-pending {
+    visibility: hidden;
 }
 
 .try-chip {
@@ -92,14 +90,16 @@
     display: inline-block;
     max-inline-size: 100%;
     overflow: hidden;
-    text-overflow: ellipsis;
+    text-overflow: clip;
+    animation: fade-cut-inline both;
+    animation-timeline: scroll(self inline);
     white-space: nowrap;
     vertical-align: bottom;
 }
 .start-card-part + .start-card-part {
     margin-inline-start: 0.3em;
 }
-/* Inline, so a long English half ends in an ellipsis rather than vanishing whole. */
+/* Inline, so a long English half is cut at its end rather than vanishing whole. */
 .start-card-note .start-card-part .i18n-gloss {
     display: inline;
 }

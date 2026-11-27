@@ -227,7 +227,7 @@ def main(argv=None) -> int:
     print(
         "Each was built on a newer system than the floor. Build the Linux agent "
         "in the floor container (the linux-x64 row of "
-        ".github/workflows/build_flagship_sidecar.yml), and if a dependency "
+        ".github/workflows/build_gaiapy.yml), and if a dependency "
         "only publishes wheels for newer glibc, pin a release that does not.",
         file=sys.stderr,
     )

@@ -981,10 +981,10 @@ describe('Chat App Integration', () => {
     });
 
     it('should have ARIA labels on session actions', () => {
-      expectTranslated(sidebarContent, "? t.plural('row.confirmDeleteUnsentAria', unsent, { title: session.title })", 'row.confirmDeleteUnsentAria.one', 'Confirm delete {title} and its {n} unsent message');
+      expectTranslated(sidebarContent, "? t.plural('row.confirmDeleteUnsentAria', unsent, { title: shownTitle })", 'row.confirmDeleteUnsentAria.one', 'Confirm delete {title} and its {n} unsent message');
       expect(EN_MESSAGES['row.confirmDeleteUnsentAria.other']).toBe('Confirm delete {title} and its {n} unsent messages');
-      expectTranslated(sidebarContent, ": t('row.confirmDeleteAria', { title: session.title }))", 'row.confirmDeleteAria', 'Confirm delete {title}');
-      expectTranslated(sidebarContent, ": t('row.deleteAria', { title: session.title })}", 'row.deleteAria', 'Delete {title}');
+      expectTranslated(sidebarContent, ": t('row.confirmDeleteAria', { title: shownTitle }))", 'row.confirmDeleteAria', 'Confirm delete {title}');
+      expectTranslated(sidebarContent, ": t('row.deleteAria', { title: shownTitle })}", 'row.deleteAria', 'Delete {title}');
       expectTranslated(sidebarContent, '<nav className="sb-list" id="sb-chat-list" aria-label={t(\'sidebar.recent\')}>', 'sidebar.recent', 'Recent chats');
     });
 
@@ -1231,8 +1231,9 @@ describe('Chat App Integration', () => {
       expect(chatCss).toContain('.drag-active');
     });
 
-    it('should have chat title overflow handling', () => {
-      expect(chatCss).toContain('text-overflow: ellipsis');
+    it('fades a long chat title at its end instead of cutting it with "…"', () => {
+      expect(chatCss).not.toContain('text-overflow: ellipsis');
+      expect(chatCss).toContain('animation: fade-cut-inline');
     });
 
     it('should use the native browser caret instead of a custom block cursor', () => {
@@ -1277,22 +1278,23 @@ describe('Chat App Integration', () => {
 
     it('should have copy feedback with Check icon', () => {
       expect(msgContent).toContain("import { Copy, Check");
-      expect(msgContent).toContain('copied');
-      expect(msgContent).toContain('setCopied(true)');
+      expect(msgContent).toContain("import { useCopyFeedback } from '../hooks/useCopyFeedback'");
+      expect(msgContent).toContain("copyState === 'copied' ? <Check");
     });
 
     it('should reset copy state after timeout', () => {
-      expect(msgContent).toContain('setCopied(false)');
-      expect(msgContent).toContain('2000');
+      const hook = fs.readFileSync(path.join(CHAT_APP_PATH, 'src/hooks/useCopyFeedback.ts'), 'utf8');
+      expect(hook).toContain('COPIED_MS = 2000');
+      expect(hook).toContain("setTimeout(() => setState('idle'), ms)");
     });
 
     it('should show Copied text in copy button', () => {
-      expectTranslated(msgContent, "{copied ? t('code.copied') : t('code.copy')}", 'code.copied', 'Copied');
+      expectTranslated(msgContent, "copyState === 'copied' ? t('code.copied')", 'code.copied', 'Copied');
       expect(EN_MESSAGES['code.copy']).toBe('Copy');
     });
 
     it('should have copy button aria-labels', () => {
-      expectTranslated(msgContent, "aria-label={copied ? t('msg.copiedAria') : t('code.copyAria')}", 'msg.copiedAria', 'Copied to clipboard');
+      expectTranslated(msgContent, "aria-label={copyState === 'copied' ? t('msg.copiedAria')", 'msg.copiedAria', 'Copied to clipboard');
       expect(EN_MESSAGES['code.copyAria']).toBe('Copy code');
     });
   });
@@ -1447,7 +1449,7 @@ describe('Chat App Integration', () => {
     });
 
     it('should have aria-label on document delete buttons', () => {
-      expectTranslated(docContent, "aria-label={t('docs.removeAria', { name: doc.filename })}", 'docs.removeAria', 'Remove {name}');
+      expectTranslated(docContent, "aria-label={t('docs.removeAria', { name: visibleName(doc.filename) })}", 'docs.removeAria', 'Remove {name}');
     });
   });
 

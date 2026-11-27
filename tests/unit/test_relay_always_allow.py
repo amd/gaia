@@ -26,20 +26,21 @@ import gaia.ui._chat_helpers as chat_helpers_module
 from gaia.agents.registry import AgentRegistry
 from gaia.daemon.sidecars.errors import SidecarError, SidecarHTTPError
 from gaia.hub.installer import register_installed_sidecars
+from gaia.security import PathValidator
 from gaia.ui import _chat_helpers as helpers
 from gaia.ui import permissions as session_permissions
 from gaia.ui.database import ChatDatabase
-from gaia.ui.email_sidecar import daemon_client as daemon_client_module
-from gaia.ui.email_sidecar import grants as relayed_grants
-from gaia.ui.email_sidecar import relay
-from gaia.ui.email_sidecar.profiles import (
-    EMAIL_PROFILE,
+from gaia.ui.models import ChatRequest
+from gaia.ui.routers.chat import router as chat_router
+from gaia.ui.sidecar import daemon_client as daemon_client_module
+from gaia.ui.sidecar import grants as relayed_grants
+from gaia.ui.sidecar import relay
+from gaia.ui.sidecar.profiles import (
+    _NO_PROFILE,
     GAIA_PROFILE,
     grants_supported,
 )
-from gaia.ui.email_sidecar.proxy import SidecarProxy
-from gaia.ui.models import ChatRequest
-from gaia.ui.routers.chat import router as chat_router
+from gaia.ui.sidecar.proxy import SidecarProxy
 from gaia.ui.sse_handler import SSEOutputHandler
 
 pytestmark = pytest.mark.allow_network
@@ -71,8 +72,8 @@ def test_only_a_flagship_at_2_26_lists_its_grants(version, expected):
     assert grants_supported(GAIA_PROFILE, version) is expected
 
 
-def test_email_never_offers_always():
-    assert grants_supported(EMAIL_PROFILE, "9.9") is False
+def test_a_profile_without_the_floor_never_offers_always():
+    assert grants_supported(_NO_PROFILE, "9.9") is False
 
 
 class _Proxy:
@@ -354,6 +355,7 @@ class _WritingAgent:
         # The sidecar syncs attached documents against these every turn.
         self.indexed_files: set = set()
         self.rag = None
+        self.path_validator = PathValidator([])
 
     def process_query(self, query, max_steps=None):
         approved = self.console.confirm_tool_execution(
@@ -368,17 +370,18 @@ class _WritingAgent:
 @pytest.fixture
 def live_gaia_sidecar(monkeypatch):
     uvicorn = pytest.importorskip("uvicorn")
-    pytest.importorskip("gaia_agent")
+    pytest.importorskip("gaiapy")
     import requests
-    from gaia_agent import caller_auth
-    from gaia_agent import server as server_mod
-    from gaia_agent import session_registry as sr
+    from gaiapy import caller_auth
+    from gaiapy import server as server_mod
+    from gaiapy import session_registry as sr
 
     from gaia.daemon.sidecars.manager import find_free_port
 
     caller_auth.reset()
     monkeypatch.delenv(caller_auth.TOKEN_FILE_ENV_VAR, raising=False)
     monkeypatch.delenv(caller_auth.TOKEN_ENV_VAR, raising=False)
+    monkeypatch.setenv(caller_auth.ALLOW_NO_TOKEN_ENV_VAR, "1")
     monkeypatch.setattr(server_mod, "build_query_agent", _WritingAgent)
     monkeypatch.setattr(sr, "build_session_agent", _WritingAgent)
     monkeypatch.setattr(server_mod, "_warmup_blocking", lambda: None)

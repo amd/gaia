@@ -77,7 +77,14 @@ class TestGetModelInfo:
             "id": "Gemma-4-12B-it-GGUF",
             "size_gb": 7.29,
             "downloaded": False,
+            "listed": True,
         }
+
+    def test_a_model_the_catalog_does_not_know_is_not_listed(self, server, client):
+        info = client.get_model_info("Gemma-4-E4B-typo")
+
+        assert info["listed"] is False
+        assert info["downloaded"] is False
 
     def test_downloaded_model_reads_size_field(self, server, client):
         assert client.get_model_info("Gemma-4-E4B-it-GGUF")["size_gb"] == 5.56
@@ -87,6 +94,39 @@ class TestGetModelInfo:
             rsps.add(responses.GET, f"{BASE}/models", status=500)
             with pytest.raises(LemonadeClientError):
                 client.get_model_info("Gemma-4-12B-it-GGUF")
+
+
+class TestEstimateModelSize:
+    """The name-based size, used when neither Lemonade nor GAIA records one."""
+
+    @pytest.mark.parametrize(
+        "name, size_gb",
+        [
+            # 27B is read whole: it used to match the "7b" inside it (5.0 GB).
+            ("Qwen3.8-27B-UD-Q4_K_XL-GGUF", 16.2),
+            ("Some-24B-GGUF", 14.4),
+            ("Some-12B-it-GGUF", 7.2),
+            ("Llama-7B-GGUF", 5.0),
+            ("Some-E4B-it-GGUF", 2.5),
+            ("Qwen3-0.6B-GGUF", 1.0),
+            ("Qwen3.5-35B-A3B-GGUF", 18.0),
+            ("Some-70B-GGUF", 40.0),
+            ("nomic-embed-text-GGUF", 0.5),
+            ("Mystery-GGUF", 10.0),
+        ],
+    )
+    def test_reads_the_parameter_count_from_the_name(self, client, name, size_gb):
+        assert client._estimate_model_size(name) == size_gb
+
+    def test_an_unlisted_model_gaia_knows_reports_its_recorded_size(
+        self, server, client
+    ):
+        from gaia.llm.lemonade_client import FLASH_OPTION_MODEL_NAME
+
+        info = client.get_model_info(FLASH_OPTION_MODEL_NAME)
+
+        assert info["listed"] is False
+        assert info["size_gb"] == 82.86
 
 
 class TestAutoDownloadDiskCheck:

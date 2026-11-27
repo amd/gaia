@@ -614,3 +614,29 @@ class TestOpenOrRebuild:
             assert [t["name"] for t in reopened.list_tables()] == ["keep"]
         finally:
             reopened.close_db()
+
+
+class TestReusedTableSaysWhatItHolds:
+    """Tables outlive a session, so a reused one may not be empty."""
+
+    def test_a_reused_table_with_rows_says_so(self, scratchpad):
+        scratchpad.create_table("sales", "product TEXT, revenue REAL")
+        scratchpad.insert_rows("sales", [{"product": "Pro", "revenue": 7200.0}])
+        again = scratchpad.create_table("sales", "product TEXT, revenue REAL")
+        assert "already holds 1 row(s)" in again
+        assert "drop_table" in again
+
+    def test_a_reused_empty_table_adds_no_note(self, scratchpad):
+        scratchpad.create_table("sales", "product TEXT, revenue REAL")
+        again = scratchpad.create_table("sales", "product TEXT, revenue REAL")
+        assert again == (
+            "Table 'sales' already exists with columns: product TEXT, revenue REAL."
+        )
+
+
+def test_row_count_is_the_tables_rows_now(tmp_path):
+    service = ScratchpadService(db_path=str(tmp_path / "scratch.db"))
+    service.create_table("sales", "region TEXT, amount REAL")
+    assert service.row_count("sales") == 0
+    service.insert_rows("sales", [{"region": "east", "amount": 1.0}] * 3)
+    assert service.row_count("sales") == 3

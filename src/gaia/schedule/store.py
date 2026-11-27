@@ -35,7 +35,7 @@ except ModuleNotFoundError:  # pragma: no cover - exercised only on 3.10
 import tomli_w
 
 from gaia.schedule.lock import store_lock
-from gaia.utils.file_lock import replace_retrying
+from gaia.utils.file_lock import read_bytes_retrying, replace_retrying
 
 DEFAULT_STORE_PATH = Path(os.path.expanduser("~/.gaia/schedules.toml"))
 
@@ -348,8 +348,8 @@ class TomlScheduleStore:
     def load(self) -> Dict[str, Schedule]:
         if not self.path.exists():
             return {}
-        with open(self.path, "rb") as f:
-            raw = tomllib.load(f)
+        # Read without the store lock: a save's rename can briefly refuse it.
+        raw = tomllib.loads(read_bytes_retrying(self.path).decode("utf-8"))
         schedules = raw.get("schedules", {})
         return {
             name: Schedule.from_toml_dict(name, data)

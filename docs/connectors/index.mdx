@@ -82,7 +82,7 @@ schedules until you pick which ones you want.
 GAIA keeps access to the connector after the pass. To turn that off, open the
 connector under **Connectors** in the Agent UI and switch GAIA off there, or
 run `/connectors revoke <id>` in the TUI. `/connectors` in the TUI shows which
-connectors GAIA can use.
+connectors GAIA can use, and `/connectors allow <id>` turns one back on.
 
 Run `gaia connectors list` to see every connector the catalog currently
 ships — it is the source of truth for what you can configure today.
@@ -146,6 +146,11 @@ on its own — the agent also needs an **activation** before those tools
 appear in its prompt (`gaia connectors activations activate <id>
 <agent>`). OAuth connectors like Google don't use activations. See the
 [connections security model](/security/connections) for the full model.
+
+An MCP server you added to `mcp_servers.json` yourself needs neither: GAIA
+can use it until you turn it off. It is listed under **Connectors** in the
+Agent UI and in `/connectors` in the TUI with the same on/off switch. See
+[Servers you added yourself](/sdk/infrastructure/connectors#servers-you-added-yourself).
 
 ## See also
 

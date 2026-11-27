@@ -6,7 +6,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-pytest.importorskip("gaia_agent")
+pytest.importorskip("gaiapy")
 
 from gaia.agents.tools import rag_tools  # noqa: E402
 from tests.unit.test_profilespec_characterization import (  # noqa: E402
@@ -94,6 +94,20 @@ def test_a_document_that_failed_in_the_background_is_named_as_failed():
             "[Indexed documents: b.txt (/docs/b.txt)]\n"
             "[Indexing failed in the background, tell the user: "
             "big.pdf: ConnectionError: embedder unreachable]"
+        )
+
+
+def test_a_document_restore_failure_is_named_as_failed():
+    rag = _rag([])
+    with chat_agent_build_context("full", rag_indexed_files=[]) as agent:
+        agent._memory_store = None
+        agent.rag = rag
+        agent.attached_documents = ["/docs/missing.pdf"]
+        agent._document_restore_failures = {"/docs/missing.pdf": "file not found"}
+
+        assert agent.get_memory_dynamic_context() == (
+            "[Document restore failed; tell the user before answering from it: "
+            "missing.pdf: file not found]"
         )
 
 

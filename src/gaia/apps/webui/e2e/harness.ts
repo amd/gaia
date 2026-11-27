@@ -9,6 +9,7 @@
 
 import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
 import { createWriteStream, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, type WriteStream } from 'node:fs';
+import { createRequire } from 'node:module';
 import { createServer, type Server } from 'node:net';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
@@ -17,6 +18,7 @@ import { fileURLToPath } from 'node:url';
 import { expect, test as base, type Page } from '@playwright/test';
 
 import { translate, type MessageKey, type Params } from '../src/i18n/registry';
+import { HUB_URL } from './hub';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const REPO = resolve(HERE, '..', '..', '..', '..', '..');
@@ -25,6 +27,8 @@ const PYTHON = process.env.GAIA_E2E_PYTHON || 'python';
 const UI_DIST = process.env.GAIA_E2E_UI_DIST || resolve(HERE, '..', 'dist');
 const SCREENS = process.env.GAIA_E2E_SCREENS || join(HERE, 'test-results', 'screens');
 const START_TIMEOUT_MS = 120_000;
+
+const uiToken = createRequire(import.meta.url)('../services/ui-token.cjs') as { uiTokenPath: (opts?: { env?: NodeJS.ProcessEnv }) => string };
 
 export const CHAT_MODEL = 'Gemma-4-E4B-it-GGUF';
 export const EMBEDDER = 'user.embeddinggemma-300m-GGUF';
@@ -169,6 +173,11 @@ export class Journey {
         return `http://127.0.0.1:${this.backendPort}`;
     }
 
+    /** The API token file the backend writes into this journey's home. */
+    get tokenFile(): string {
+        return uiToken.uiTokenPath({ env: this.env() });
+    }
+
     get lemonadeUrl(): string {
         return `http://127.0.0.1:${this.lemonadePort}/api/v1`;
     }
@@ -192,6 +201,7 @@ export class Journey {
             PYTHONUTF8: '1',
             PYTHONIOENCODING: 'utf-8',
             ...(process.env.GAIA_E2E_PYTHONPATH ? { PYTHONPATH: process.env.GAIA_E2E_PYTHONPATH } : {}),
+            ...(HUB_URL ? { GAIA_HUB_URL: HUB_URL } : {}),
             ...extra,
         };
     }
@@ -389,12 +399,25 @@ export const test = base.extend<Fixtures & JourneyOptions>({
     open: async ({ page, lang, journey }, use) => {
         await page.addInitScript((code) => window.localStorage.setItem('gaia-chat-locale', code), lang);
         await use(async () => {
-            await page.goto(`${journey.url}/`);
+            await signIn(page, journey.url, journey.tokenFile);
         });
     },
 });
 
 export { expect };
+
+/** Where an installed app's backend keeps its API token, as this process's env resolves it. */
+export const installedTokenFile = (): string => uiToken.uiTokenPath();
+
+/** Sign the page in the way `gaia chat --ui` does: open a single-use launch link, which sets the cookie and lands on /. */
+export async function signIn(page: Page, base: string, tokenFile: string): Promise<void> {
+    const token = readFileSync(tokenFile, 'utf-8').trim();
+    const reply = await fetch(`${base}/api/auth/launch-code`, { method: 'POST', headers: { Authorization: `Bearer ${token}`, 'X-Gaia-UI': '1' } });
+    const body = await reply.text();
+    expect(reply.ok, `POST ${base}/api/auth/launch-code: HTTP ${reply.status} ${body}`).toBe(true);
+    const { path } = JSON.parse(body) as { path: string };
+    await page.goto(`${base}${path}`);
+}
 
 export const stepTitle = (page: Page) => page.locator('#setup-title');
 

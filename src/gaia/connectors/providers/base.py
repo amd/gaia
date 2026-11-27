@@ -15,8 +15,10 @@ Defines:
 
 from __future__ import annotations
 
+import zlib
 from dataclasses import dataclass, field
-from typing import Iterable, Protocol, Sequence, runtime_checkable
+from typing import Iterable, Mapping, Protocol, Sequence, runtime_checkable
+from urllib.parse import urlencode
 
 
 @dataclass(frozen=True)
@@ -77,7 +79,19 @@ class OAuthProvider(Protocol):
         challenge: str,
         state: str,
         scopes: Iterable[str],
+        extra_params: Mapping[str, str] | None = None,
     ) -> str: ...
+
+    def account_prompt_params(
+        self,
+        *,
+        select_account: bool,
+        login_hint: str | None,
+        account_type: str | None,
+    ) -> dict:
+        """Authorization-URL params that pick the account: the provider's
+        account picker when adding one, or a hint when reconnecting one."""
+        ...
 
     def token_request_body(
         self, code: str, verifier: str, redirect_uri: str
@@ -86,3 +100,69 @@ class OAuthProvider(Protocol):
     def refresh_request_body(self, refresh_token: str) -> dict: ...
 
     def authorization_params(self) -> dict: ...
+
+
+def client_id_hash(client_id: str) -> str:
+    """CRC32 fingerprint of an OAuth client id, for the stored-connection
+    tripwire and log correlation only. Not a security measure."""
+    return format(zlib.crc32(client_id.encode()), "08x")
+
+
+class PkceRequests:
+    """The OAuth 2.0 PKCE requests that are the same for every provider.
+
+    A provider class supplies ``client_id``, ``client_secret``, ``auth_url`` and
+    ``authorization_params()``; provider-specific parameters belong there.
+    """
+
+    client_id: str
+    client_secret: str | None
+    auth_url: str
+
+    def authorization_params(self) -> dict:
+        raise NotImplementedError(
+            f"{type(self).__name__} must define authorization_params()"
+        )
+
+    def authorization_url(
+        self,
+        redirect_uri: str,
+        challenge: str,
+        state: str,
+        scopes: Iterable[str],
+        extra_params: Mapping[str, str] | None = None,
+    ) -> str:
+        params = {
+            "client_id": self.client_id,
+            "redirect_uri": redirect_uri,
+            "response_type": "code",
+            "code_challenge": challenge,
+            "code_challenge_method": "S256",
+            "state": state,
+            "scope": " ".join(scopes),
+        }
+        params.update(self.authorization_params())
+        params.update(extra_params or {})
+        return f"{self.auth_url}?{urlencode(params)}"
+
+    def token_request_body(self, code: str, verifier: str, redirect_uri: str) -> dict:
+        body: dict = {
+            "grant_type": "authorization_code",
+            "code": code,
+            "code_verifier": verifier,
+            "redirect_uri": redirect_uri,
+            "client_id": self.client_id,
+        }
+        if self.client_secret:
+            body["client_secret"] = self.client_secret
+        return body
+
+    def refresh_request_body(self, refresh_token: str) -> dict:
+        body: dict = {
+            "grant_type": "refresh_token",
+            "refresh_token": refresh_token,
+            "client_id": self.client_id,
+        }
+        if self.client_secret:
+            body["client_secret"] = self.client_secret
+        return body

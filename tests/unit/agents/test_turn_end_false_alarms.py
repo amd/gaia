@@ -1,0 +1,607 @@
+# Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
+# SPDX-License-Identifier: MIT
+"""Notes the turn-end checks added to work that was in fact done.
+
+Each was a true statement about the framework's own records and a false one
+about the work: a file "never written" that a tool had saved, a file "not
+read back" that a check tool had just opened, figures "with no source" that
+the turn's script computed, and a check tool's findings counted as the tool
+failing. A turn whose file exists ends "success"; what is left to say is a
+caveat in the answer.
+"""
+
+import json
+import logging
+import os
+import time
+from pathlib import Path
+from unittest.mock import MagicMock, patch
+
+import pytest
+
+from gaia.agents.base.agent import Agent
+from gaia.agents.base.completion import (
+    CompletionEvidence,
+    blocking_gaps,
+    caveated_answer,
+)
+from gaia.agents.base.deliverables import (
+    asks_for_invented_data,
+    file_findings,
+    text_blocks,
+)
+from gaia.agents.base.tool_outcome import tool_result_failed
+from gaia.agents.base.tools import _TOOL_REGISTRY, tool
+from gaia.agents.base.verification import observed_text, verification_record
+from gaia.agents.tools.file_io_tools import FileIOToolsMixin
+from gaia.security import PathValidator
+
+# ---------------------------------------------------------------------------
+# A check that found problems is a call that worked
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "result",
+    [
+        {"status": "errors_found", "ok": False, "errors": [{"cell": "B2"}]},
+        {"status": "no_formulas", "ok": False, "summary": "typed values only"},
+        json.dumps({"status": "fail", "ok": False, "issues": ["slide 2 overflows"]}),
+    ],
+)
+def test_findings_are_not_a_failed_call(result):
+    assert tool_result_failed(result) is False
+
+
+@pytest.mark.parametrize(
+    "result",
+    [
+        {"ok": False, "error": "no such mailbox"},
+        {"ok": False},
+        {"status": "error", "ok": False, "error": "could not open the file"},
+        {"status": "denied", "ok": False},
+        {"status": "errors_found", "ok": False, "error": "check crashed"},
+        {"status": "errors_found", "success": False},
+    ],
+)
+def test_a_call_that_did_not_work_still_fails(result):
+    assert tool_result_failed(result) is True
+
+
+class _CheckAgent(Agent, FileIOToolsMixin):
+    def _get_system_prompt(self):
+        return "Use tools for files."
+
+    def _register_tools(self):
+        self.path_validator = PathValidator(allowed_paths=[str(Path.cwd())])
+        self.register_file_io_tools()
+
+        @tool
+        def check_file(file_path: str) -> dict:
+            """Check a file and report what is wrong in it."""
+            return {
+                "status": "errors_found",
+                "ok": False,
+                "file_path": file_path,
+                "errors": [{"line": 1, "problem": "total does not add up"}],
+            }
+
+        @tool
+        def export_file(output_path: str) -> dict:
+            """Save a report at output_path."""
+            # Past the file clock's slack, as any real export is.
+            time.sleep(0.05)
+            Path(output_path).write_text("report\n", encoding="utf-8")
+            return {"status": "success", "output_path": output_path}
+
+
+@pytest.fixture
+def agent(tmp_path, monkeypatch):
+    saved = dict(_TOOL_REGISTRY)
+    _TOOL_REGISTRY.clear()
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("GAIA_AGENT_SELF_CHECK", "0")
+    with patch("gaia.agents.base.agent.AgentSDK"):
+        instance = _CheckAgent(silent_mode=True, skip_lemonade=True)
+    instance.streaming = False
+    instance._tool_requires_confirmation = lambda *a, **kw: False
+    instance.console = MagicMock()
+    instance.console.cancelled = None
+    yield instance
+    _TOOL_REGISTRY.clear()
+    _TOOL_REGISTRY.update(saved)
+
+
+def _script(agent, *turns):
+    left = list(turns)
+
+    def send(*_a, **_kw):
+        assert left, "unexpected model call"
+        return MagicMock(text=json.dumps(left.pop(0)), stats={})
+
+    agent.chat.send_messages.side_effect = send
+    return left
+
+
+def _call(tool_name, **args):
+    return {"tool": tool_name, "tool_args": args}
+
+
+def test_a_check_tools_findings_are_not_a_tool_error(agent, tmp_path, caplog):
+    (tmp_path / "sheet.csv").write_text("a,b\n1,2\n")
+    left = _script(
+        agent,
+        _call("check_file", file_path=str(tmp_path / "sheet.csv")),
+        {"answer": "sheet.csv has one problem: the total does not add up."},
+    )
+
+    with caplog.at_level(logging.WARNING, logger="gaia.agents.base.agent"):
+        result = agent.process_query("Check sheet.csv", max_steps=6)
+
+    assert not left
+    assert result["error_count"] == 0
+    assert result["status"] == "success"
+    assert not [r for r in caplog.records if "Tool execution error" in r.getMessage()]
+    agent.console.print_error.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# A file a tool reports saving counts as written
+# ---------------------------------------------------------------------------
+
+
+def test_a_tool_that_reports_its_saved_path_wrote_the_file(agent, tmp_path):
+    out = tmp_path / "report.pdf"
+    left = _script(
+        agent,
+        _call("export_file", output_path=str(out)),
+        {"answer": f"I saved the report to `{out}`."},
+    )
+
+    result = agent.process_query(f"Export the report to `{out}`", max_steps=6)
+
+    assert not left
+    assert out.exists()
+    assert "No successful write" not in result["result"]
+    assert result["completion_gaps"] == []
+    assert result["status"] == "success", result["result"]
+
+
+def test_a_path_a_tool_only_names_is_not_a_write(tmp_path):
+    """A check tool echoes the file it read: that file did not change."""
+    old = tmp_path / "old.txt"
+    old.write_text("x")
+    stale = time.time() - 60
+    os.utime(old, (stale, stale))
+    evidence = CompletionEvidence("Check old.txt", str(tmp_path))
+
+    evidence.snapshot("check_file", {"file_path": str(old)})
+    evidence.record(
+        "check_file", {}, {"status": "success", "file_path": str(old)}, True
+    )
+
+    assert evidence.written_files() == []
+
+
+def test_a_nested_or_relative_report_is_read_carefully(tmp_path):
+    out = tmp_path / "list.csv"
+    evidence = CompletionEvidence("Save the list to list.csv", str(tmp_path))
+
+    evidence.snapshot("export-skill/save", {})
+    time.sleep(0.05)
+    out.write_text("a\n")
+    evidence.record(
+        "export-skill/save",
+        {},
+        {"status": "success", "output": {"written": True, "path": str(out)}},
+        True,
+    )
+    assert [Path(p).name for p in evidence.written_files()] == ["list.csv"]
+
+    # A bare name could be any folder's file: not taken as proof.
+    other = CompletionEvidence("Save it", str(tmp_path))
+    other.snapshot("export-skill/save", {})
+    other.record(
+        "export-skill/save", {}, {"status": "success", "path": "list.csv"}, True
+    )
+    assert other.written_files() == []
+
+
+# ---------------------------------------------------------------------------
+# "Not read back" when it was, in effect
+# ---------------------------------------------------------------------------
+
+
+def _readback_gaps(evidence):
+    return evidence.gaps("Saved it.", lambda _s: True)
+
+
+def _written(tmp_path, name="out.md"):
+    out = tmp_path / name
+    out.write_text("one\n")
+    evidence = CompletionEvidence(f"Save it to {out}", str(tmp_path))
+    evidence.record("write_file", {"file_path": str(out)}, {"status": "success"}, True)
+    return out, evidence
+
+
+def test_a_skill_tool_that_opened_the_file_read_it_back(tmp_path):
+    out, evidence = _written(tmp_path)
+    assert any("read back" in gap for gap in _readback_gaps(evidence))
+
+    evidence.expect_skill_read(str(out))
+    evidence.record("some-skill/verify", {}, {"status": "errors_found"}, True)
+
+    assert _readback_gaps(evidence) == []
+
+
+def test_a_failed_check_or_a_later_write_does_not_count(tmp_path):
+    out, evidence = _written(tmp_path)
+    evidence.expect_skill_read(str(out))
+    evidence.record("some-skill/verify", {}, {"status": "error"}, False)
+    assert any("read back" in gap for gap in _readback_gaps(evidence))
+
+    evidence.expect_skill_read(str(out))
+    evidence.record("some-skill/verify", {}, {"status": "success"}, True)
+    evidence.record("write_file", {"file_path": str(out)}, {"status": "success"}, True)
+    assert any("read back" in gap for gap in _readback_gaps(evidence))
+
+
+def test_an_edit_in_place_of_a_file_read_in_full_needs_no_second_read(tmp_path):
+    out, evidence = _written(tmp_path)
+    evidence.read_by_framework(evidence.key(str(out)))
+    assert _readback_gaps(evidence) == []
+
+    for _ in range(3):
+        evidence.record(
+            "edit_file", {"file_path": str(out)}, {"status": "success"}, True
+        )
+    assert _readback_gaps(evidence) == []
+
+    # A whole-file rewrite is new text nobody has seen.
+    evidence.record("write_file", {"file_path": str(out)}, {"status": "success"}, True)
+    assert any("read back" in gap for gap in _readback_gaps(evidence))
+
+
+def test_an_edit_of_a_file_never_read_in_full_still_needs_a_read(tmp_path):
+    out, evidence = _written(tmp_path)
+    evidence.record("edit_file", {"file_path": str(out)}, {"status": "success"}, True)
+    assert any("read back" in gap for gap in _readback_gaps(evidence))
+
+
+def test_an_unread_file_is_a_caveat_not_unfinished_work():
+    unread = "`out.md` has not been read back completely after its latest write."
+    missing = "No successful write to `out.md` is recorded for this turn."
+
+    assert blocking_gaps([unread]) == []
+    assert blocking_gaps([unread, missing]) == [missing]
+    assert (
+        caveated_answer("Saved it.", [unread]) == f"Saved it.\n\nNot checked: {unread}"
+    )
+    assert "couldn't confirm" in caveated_answer("Saved it.", [unread, missing])
+
+
+# ---------------------------------------------------------------------------
+# Figures a script computed are not "figures with no source"
+# ---------------------------------------------------------------------------
+
+_TABLE = "| Group | Total Items | Dropped |\n|---|---|---|\n| All | 48215 | 1930 |\n"
+#: Reads its input by a joined path and sets a width: nothing the strict
+#: analysis can follow, and nothing that types a figure.
+_COMPUTES = (
+    "import csv, os\n"
+    "source = os.path.join(os.getcwd(), 'items.csv')\n"
+    "rows = list(csv.DictReader(open(source)))\n"
+    "total = sum(int(r['items']) for r in rows)\n"
+    "dropped = sum(int(r['dropped']) for r in rows)\n"
+    "width = 22.5\n"
+    "open('summary.md', 'w').write(f'| All | {total} | {dropped} |')\n"
+)
+_TYPES = "open('summary.md', 'w').write('| All | 48215 | 1930 |')\n"
+
+
+def _ran(code):
+    result = {"status": "success", "stdout": "", "stderr": "", "return_code": 0}
+    record = verification_record("run_python", {"code": code}, result, errored=False)
+    record.update(args={"code": code}, output="", observed=observed_text(result))
+    return record
+
+
+def _findings(code, **kw):
+    return file_findings(
+        {"summary.md": text_blocks(_TABLE, ".md")},
+        [_ran(code)],
+        query="Summarise items.csv into summary.md",
+        **kw,
+    )
+
+
+def test_figures_a_script_built_into_the_file_are_its_output():
+    assert _findings(_COMPUTES), "the strict reading reports them"
+    assert _findings(_COMPUTES, built=["summary.md"]) == []
+
+
+def test_figures_typed_into_the_script_are_still_reported():
+    found = _findings(_TYPES, built=["summary.md"])
+    assert found and "48215" in found[0].note
+
+
+# ---------------------------------------------------------------------------
+# Sample data the user asked for has no source to find
+# ---------------------------------------------------------------------------
+
+_SALES = "| Region | Amount |\n|---|---|\n| North | $12,500 |\n| South | $9,800 |\n"
+_SALES_SCRIPT = (
+    "import csv\n"
+    "rows = [('North', 12500), ('South', 9800)]\n"
+    "csv.writer(open('sales.csv', 'w')).writerows(rows)\n"
+)
+
+
+def _sales(query, records=None, **kw):
+    return file_findings(
+        {"sales.csv": text_blocks(_SALES, ".md")},
+        [_ran(_SALES_SCRIPT)] if records is None else records,
+        query=query,
+        built=["sales.csv"],
+        **kw,
+    )
+
+
+def _read_record(path, text):
+    result = {"status": "success", "content": text}
+    record = verification_record(
+        "read_file", {"file_path": path}, result, errored=False
+    )
+    record.update(args={"file_path": path}, output=text, observed=observed_text(result))
+    return record
+
+
+@pytest.mark.parametrize(
+    "query",
+    [
+        # #8651, asked for explicitly.
+        "create sales.csv holding 5 rows of made-up sample sales (region, amount) "
+        "using a Python script, then read it back and tell me the total",
+        "Make sales.csv with some fake numbers so I can try the chart",
+        "write sales.csv filled with dummy data",
+        "I need mock sales figures in sales.csv",
+        "put made-up amounts for two regions into sales.csv",
+        "generate synthetic transactions and save them as sales.csv",
+        "synthetic test records in sales.csv",
+        "just make up some sales numbers and save them to sales.csv",
+        "make up 10 sample orders and save them to sales.csv",
+        "Create sales.csv with random amounts per region using gen.py",
+        "write sales.csv with a fake customer list and balances",
+        "create a fake customer list with emails and balances in sales.csv",
+        "fill sales.csv with make-believe prices",
+        "write mock-up figures to sales.csv",
+        "mock up a table of sales in sales.csv",
+        "invent some prices for a toy store in sales.csv",
+        "Generate placeholder rows for the Acme demo in sales.csv",
+        "fictional sales for a store called Bob's in sales.csv",
+        "realistic but made-up sales figures in sales.csv",
+        "generate fake data from scratch in sales.csv",
+        # The negation is about realness, not about the invention.
+        "10 fake orders in sales.csv, nothing real",
+        "I don’t want real data, just fake numbers in sales.csv",
+        # First person that only owns the invented phrase or the purpose.
+        "put our fake numbers in sales.csv",
+        "make up fake numbers for our pitch deck in sales.csv",
+        "Fake data for my unit tests in sales.csv",
+        "give us fake customer data in sales.csv",
+        "we need dummy sales data in sales.csv",
+        "can you make up some numbers for us in sales.csv",
+        # A later clause that names no figures of its own.
+        "make up 10 orders, then save them to sales.csv",
+        "fake names, then put them in a table in sales.csv",
+        "fill in the table with fake numbers in sales.csv",
+        "fake orders but keep them under 100 dollars in sales.csv",
+    ],
+)
+def test_invented_data_the_user_asked_for_is_not_reported(query):
+    assert _sales(query) == []
+
+
+@pytest.mark.parametrize(
+    "query",
+    [
+        "create sales.csv with last quarter's sales by region",
+        "write our real regional sales to sales.csv, not sample data",
+        "save sales.csv with the actual amounts - no made-up numbers",
+        "put a sample of my real data into sales.csv",
+        "copy a sample from orders.csv into sales.csv",
+        "write 5 sample rows from ledger.xlsx to sales.csv",
+        "for example, save the regional totals to sales.csv",
+        "test that the totals are right and save the data to sales.csv",
+        "what sample size do I need? save the regional figures to sales.csv",
+        # "Sample", "example", "illustrative", "demo" and "test" are ambiguous.
+        "create sales.csv holding 5 rows of sample sales (region, amount) using a "
+        "Python script, then read it back and tell me the total",
+        "create sales.csv with example data for a demo",
+        "build sales.csv with a few rows of test data",
+        "put sample-data for a demo in sales.csv",
+        "SAMPLE ORDERS into sales.csv",
+        "write illustrative figures to sales.csv",
+        "hypothetical sales for next year in sales.csv",
+        "sample data on Monday's demo in sales.csv",
+        # The adjective names the subject, not the data: the prices are real.
+        "write a price comparison of toy drones to sales.csv",
+        "Price out the demo kit BOM in sales.csv",
+        "pick a random laptop and save its price and specs to sales.csv",
+        "write sales.csv for our demo day with current venue prices",
+        "Write a market report on the toy industry to sales.csv with revenue figures",
+        "fake Rolex prices in sales.csv",
+        "synthetic rubber prices in sales.csv",
+        "the products that make up our revenue, in sales.csv",
+        "make up for lost sales in sales.csv",
+        "a team made up of 5 people and their salaries in sales.csv",
+        "realistic but made-up? sales figures in sales.csv",
+        # A file name is not the data noun: "sales" here is sales.csv.
+        "list the toy drones to sales.csv",
+        "save a mock test of the sales.csv totals",
+        # Any sign the figures are meant to be real outweighs every other word.
+        "write sales.csv for the demo with actual prices of the top 3 GPUs",
+        "write a spreadsheet sales.csv to test the prices of the top 5 laptops",
+        "save example prices for the RTX 4090 at Newegg and Amazon to sales.csv",
+        "make a demo spreadsheet sales.csv with current prices of GPUs",
+        "sample sales from last quarter for our 3 regions in sales.csv",
+        "write example numbers from the 2023 census to sales.csv",
+        "save sample prices from https://shop.example/gpus to sales.csv",
+        "save today's sample prices to sales.csv",
+        "put the latest sample sales in sales.csv",
+        "write illustrative figures from Nvidia's earnings to sales.csv",
+        "Using genuine figures, make a sample sales table in sales.csv",
+        "sample sales table in sales.csv, verified figures only",
+        "sample sales data using genuine 2024 Amazon prices in sales.csv",
+        "sample table of AMD's Q3 revenue by segment in sales.csv",
+        "illustrative table of Apple's 2024 revenue in sales.csv",
+        "example table of the top 5 GPUs and their MSRP in sales.csv",
+        "sample prices of RTX 4090 cards on newegg in sales.csv",
+        "sample prices of iPhone 16 models in sales.csv",
+        "use the numbers in Q3_report.pdf to build sample sales data in sales.csv",
+        "sample table of exchange rates per the ECB in sales.csv",
+        "sample orders matching what's in the database in sales.csv",
+        "sample customers list with their true balances in sales.csv",
+        # ...even next to an explicit invention word.
+        "mock up a table of today's GPU prices in sales.csv",
+        "mock table of NVIDIA stock prices this week in sales.csv",
+        "fake it till you make it: write Tesla's Q3 revenue numbers in sales.csv",
+        "fictional story with real 2023 inflation figures in sales.csv",
+        "dummy-proof list of current mortgage rates in sales.csv",
+        "fake prices for the iPhone 16 in sales.csv",
+        "fake sales numbers for AMD's Q3 in sales.csv",
+        "make up sales figures based on ledger.xlsx in sales.csv",
+        "dummy data per the ECB in sales.csv",
+        "make up fake sales numbers from www.example.com in sales.csv",
+        # A negation anywhere means real figures.
+        "I do not want you to use fake numbers - put our real regional sales in "
+        "sales.csv",
+        "Please never invent anything. Save sample sales to sales.csv",
+        "don’t use dummy data; write sales.csv",
+        "fake numbers aren't okay in sales.csv",
+        "real numbers only, no fake data, in sales.csv",
+        "run a test on the sales numbers and put the results in sales.csv",
+        # Invented names or layout, but the user's own figures.
+        "fake data is fine for names, but the prices must be correct in sales.csv",
+        "fake customer names but keep our sales amounts in sales.csv",
+        "placeholder names, but use our sales figures in sales.csv",
+        "mock invoices with the prices we charge in sales.csv",
+        "mock invoices using our price list in sales.csv",
+        "dummy data structure, then fill in my expenses in sales.csv",
+        "fake customer names but keep the amounts in sales.csv",
+        "dummy data of my expenses in sales.csv",
+        "fake invoices for our customers in sales.csv",
+        "mock invoices; the prices are accurate in sales.csv",
+        # Not English: no exemption, so it warns.
+        "datos de ejemplo en sales.csv",
+        "Beispieldaten in sales.csv speichern",
+    ],
+)
+def test_a_request_for_real_figures_is_still_reported(query):
+    found = _sales(query)
+    assert found and "12,500" in found[0].note
+
+
+@pytest.mark.parametrize(
+    "query",
+    [
+        "fake data is fine for names, but the prices must be correct in sales.csv",
+        "fake customer names but keep our sales amounts in sales.csv",
+        "placeholder names, but use our sales figures in sales.csv",
+        "mock invoices with the prices we charge in sales.csv",
+        "mock invoices using our price list in sales.csv",
+        "dummy data structure, then fill in my expenses in budget.xlsx",
+    ],
+)
+def test_the_users_own_figures_beside_invented_names_are_real(query):
+    written = {"budget.xlsx" if "budget" in query else "sales.csv"}
+    assert not asks_for_invented_data(query, written)
+
+
+def test_a_very_long_request_is_never_exempted():
+    query = "make up fake sales numbers in sales.csv. " + "Keep going. " * 400
+
+    assert len(query) > 4000
+    assert asks_for_invented_data(query[:4000], {"sales.csv"})
+    assert not asks_for_invented_data(query, {"sales.csv"})
+    assert _sales(query)
+
+
+_SIZE = 100_000
+_LONG_REQUESTS = {
+    "invention then negations": "fake data " + "no " * (_SIZE // 3),
+    "negations then invention": "no " * (_SIZE // 3) + " fake data",
+    "many words": "fake data in out.csv " + "word " * (_SIZE // 5),
+    "spaces": "sample " + " " * _SIZE + "data",
+    "dashes": "sample" + "-" * _SIZE + "data",
+    "one long word": "fake " + "a" * _SIZE,
+    "dotted name": "fake data " + "a." * (_SIZE // 2),
+    "alternating negations": "fake data " + "not ex " * (_SIZE // 7),
+    "repeated sample": "sample " * (_SIZE // 7),
+    "repeated make up": "make up " * (_SIZE // 8),
+    "mixed separators": "fake data " + "a-b.c'd&e " * (_SIZE // 10),
+}
+
+
+@pytest.mark.parametrize("shape", sorted(_LONG_REQUESTS))
+def test_the_request_scan_is_linear(shape):
+    """Each shape at 100 KB, and cut to just under the cap so the scan runs."""
+    query = _LONG_REQUESTS[shape]
+    for text in (query, query[:3999]):
+        start = time.perf_counter()
+        asks_for_invented_data(text, {"out.csv"})
+        assert time.perf_counter() - start < 0.1, len(text)
+
+
+def test_invented_wording_does_not_excuse_figures_meant_to_come_from_a_file_read():
+    for query in (
+        "turn my ledger into fake sales rows in sales.csv",
+        "write made-up sales to sales.csv",
+    ):
+        assert asks_for_invented_data(query, {"sales.csv"})
+    records = [
+        _read_record("ledger.csv", "region,units\nNorth,3\n"),
+        _ran(_SALES_SCRIPT),
+    ]
+
+    assert _sales("turn my ledger into fake sales rows in sales.csv", records)
+    assert _sales(
+        "write made-up sales to sales.csv",
+        input_names=["C:/work/ledger.csv"],
+        inputs=["region,units\nNorth,3\n"],
+    )
+
+
+def test_invented_wording_does_not_excuse_figures_the_turn_looked_up():
+    query = "look up Acme and write a fake sales report to sales.csv"
+    assert asks_for_invented_data(query, {"sales.csv"})
+    result = {"summary": "Acme regional revenue: North 11,000, South 9,100"}
+    search = verification_record(
+        "search_web", {"query": "acme sales"}, result, errored=False
+    )
+    search.update(
+        args={"query": "acme sales"}, output="", observed=observed_text(result)
+    )
+
+    assert _sales(query, [search, _ran(_SALES_SCRIPT)])
+
+
+def test_reading_the_skill_or_the_file_back_keeps_the_exemption():
+    records = [
+        _read_record("skills/office-docs/SKILL.md", "Use openpyxl. Limit 100 rows."),
+        _read_record(
+            r"C:\gaia\skills\office-docs\references\excel.md", "Widths: 12, 40."
+        ),
+        _ran(_SALES_SCRIPT),
+        _read_record("sales.csv", "North,12500\nSouth,9800\n"),
+    ]
+
+    assert (
+        _sales(
+            "create sales.csv with 5 rows of made-up sample sales",
+            records,
+            input_names=["C:/gaia/skills/office-docs/references/excel.md"],
+            inputs=["Widths: 12, 40."],
+        )
+        == []
+    )

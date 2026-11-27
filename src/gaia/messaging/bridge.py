@@ -9,7 +9,7 @@ throttle so streamed tokens do not exceed a platform's edit rate, and a terminal
 event for every turn even when the child dies. They live here so a second
 adapter is a renderer and a socket, not a second bridge.
 
-The wire is ``gaia_agent.stdio``'s: newline-delimited JSON, one query per stdin
+The wire is ``gaiapy.stdio``'s: newline-delimited JSON, one query per stdin
 line, canonical ``status`` / ``tool_call`` / ``tool_result`` /
 ``needs_confirmation`` / ``token`` / ``final`` / ``error`` events back, and a
 ``gaia_control`` line carrying an approval decision. The constants below are a
@@ -18,7 +18,7 @@ because core must not depend on a hub wheel; ``tests/unit/messaging/
 test_bridge_contract.py`` pins them against the real definitions.
 
 Security posture: this module exposes no way to turn permission bypass on.
-``gaia_agent.stdio`` accepts a ``bypass`` control verb, and a remote surface must
+``gaiapy.stdio`` accepts a ``bypass`` control verb, and a remote surface must
 never be able to send it — an allowlisted user is trusted to ask for a tool, not
 to silently disarm the gate for every later one. Bypass stays a local decision,
 and ``tests/unit/messaging/test_bridge.py`` pins its absence.
@@ -40,23 +40,44 @@ from gaia.stream_timeout import DEFAULT_STREAM_TIMEOUT_SECONDS, stream_timeout_f
 
 log = get_logger(__name__)
 
+#: Tools whose ``tool_call`` args name the file they write. The canonical
+#: ``tool_result`` carries only a summary, so the path is taken from the call.
+WRITE_TOOLS = frozenset(
+    {
+        "write_file",
+        "edit_file",
+        "write_markdown_file",
+        "write_python_file",
+        "edit_python_file",
+    }
+)
+
+
+def written_file_path(tool: str, args: Any) -> Optional[str]:
+    """The path a file-writing tool call names ("" when it names none); None for any other call."""
+    if tool not in WRITE_TOOLS or not isinstance(args, dict):
+        return None
+    raw = args.get("file_path") or args.get("path")
+    return raw if isinstance(raw, str) else ""
+
+
 #: Discriminator marking a stdin line as control rather than a query.
-#: Contract with ``gaia_agent.stdio.CONTROL_KEY``.
+#: Contract with ``gaiapy.stdio.CONTROL_KEY``.
 CONTROL_KEY = "gaia_control"
 
 #: Wrapper for a query whose text contains newlines — stdin is read a line at a
 #: time, so an unwrapped multi-line question becomes several unrelated turns.
-#: Contract with ``gaia_agent.stdio.QUERY_KEY``.
+#: Contract with ``gaiapy.stdio.QUERY_KEY``.
 QUERY_KEY = "gaia_query"
 
 #: Control verb answering the confirmation currently pending.
 CONTROL_TOOL_DECISION = "tool_decision"
 
 #: Control verb stopping the running turn while keeping the agent, its history
-#: and its grants. Contract with ``gaia_agent.stdio.CONTROL_CANCEL``.
+#: and its grants. Contract with ``gaiapy.stdio.CONTROL_CANCEL``.
 CONTROL_CANCEL = "cancel"
 #: Starts a fresh conversation. Contract with
-#: ``gaia_agent.stdio.CONTROL_CLEAR_HISTORY``.
+#: ``gaiapy.stdio.CONTROL_CLEAR_HISTORY``.
 CONTROL_CLEAR_HISTORY = "clear_history"
 
 DECISION_ALLOW = "allow"
@@ -74,7 +95,7 @@ TERMINAL_EVENTS = frozenset({"final", "error"})
 NEEDS_CONFIRMATION = "needs_confirmation"
 
 #: Console script installed by the ``gaia-agent-gaia`` wheel
-#: (``[project.scripts] gaia-agent = "gaia_agent.entry:main"``).
+#: (``[project.scripts] gaia-agent = "gaiapy.entry:main"``).
 DEFAULT_AGENT_BINARY = "gaia-agent"
 
 #: How long a turn may go without progress before it is stopped: the Agent
@@ -201,7 +222,7 @@ class StreamThrottle:
 
     def __init__(
         self,
-        flush: Callable[[str], None],
+        flush: Callable[[str], Optional[bool]],
         interval: float = 1.0,
         now: Callable[[], float] = time.monotonic,
     ) -> None:
@@ -211,6 +232,7 @@ class StreamThrottle:
         self._text = ""
         self._flushed = ""
         self._last = 0.0
+        self._last_flush_ok = True
 
     @property
     def text(self) -> str:
@@ -224,19 +246,30 @@ class StreamThrottle:
         if now - self._last >= self._interval:
             self._emit(now)
 
-    def finish(self) -> None:
-        """Flush any text the interval held back."""
-        self._emit(self._now())
+    def finish(self) -> bool:
+        """Flush whatever the interval held back and report if it failed.
 
-    def _emit(self, now: float) -> None:
+        ``add`` ignores the result: a mid-stream edit failure stays tolerant.
+        A body whose last edit failed gets one more try here, when the turn is
+        finishing and a rate-limit window may have passed. Only callers that
+        need the final result, such as an adapter sending a fallback warning,
+        use the return value.
+        """
+        return self._emit(self._now())
+
+    def _emit(self, now: float) -> bool:
         # An unchanged body is not worth an API call, and on Slack an edit that
-        # changes nothing still counts against the channel's rate limit.
-        if self._text == self._flushed:
+        # changes nothing still counts against the channel's rate limit. An
+        # edit that failed is worth one more try at finalization, when a
+        # rate-limit window may have passed.
+        if self._text == self._flushed and self._last_flush_ok:
             self._last = now
-            return
-        self._flush(self._text)
+            return True
+        ok = self._flush(self._text)
         self._flushed = self._text
         self._last = now
+        self._last_flush_ok = ok is not False
+        return self._last_flush_ok
 
 
 class AgentChannel:

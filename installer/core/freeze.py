@@ -74,7 +74,7 @@ PACKAGE_DATA = [
 
 #: Never in the frozen core: the hub agents, which run as their own binaries
 #: through the daemon. The chat paths relay to them when they can't be imported.
-NOT_SHIPPED = ["gaia_agent", "gaia_agent_email"]
+NOT_SHIPPED = ["gaiapy"]
 
 #: The amd-gaia extras the freeze environment installs. A frozen app has no pip,
 #: so a command whose extra is missing here can never run for an installer user.
@@ -95,30 +95,23 @@ if sys.platform == "win32":
 #: Imported only inside functions, so a missing one would still build.
 REQUIRED_MODULES = ["fastapi", "pypdf", "pypdfium2", "sounddevice", "plyer", "mcp"]
 
-# Same as the agent's freeze: GPL code GAIA must not ship, and the ML stack no
-# GAIA path runs in-process.
-GPL_EXCLUDES = [
-    "PyInstaller",
-    "altgraph",
-    "pefile",
-    "macholib",
-    "readline",
-    "_gdbm",
-    "_dbm",
-    "dbm.gnu",
-    "dbm.ndbm",
-]
+
+def _load_agent_freeze():
+    """The agent's freeze script, by path: this script is ``freeze`` too."""
+    spec = importlib.util.spec_from_file_location(
+        "gaia_agent_freeze", AGENT_PACKAGING / "freeze.py"
+    )
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+# One list for both builds, so a GPL module excluded from one can't ship in the
+# other. The ML stack is out too: no GAIA path runs it in-process.
+_agent_freeze = _load_agent_freeze()
+GPL_EXCLUDES = _agent_freeze.GPL_EXCLUDES
 EXCLUDES = [
-    "torch",
-    "transformers",
-    "sentence_transformers",
-    "tokenizers",
-    "safetensors",
-    "torchvision",
-    "torchaudio",
-    "scipy",
-    "sympy",
-    "tkinter",
+    *_agent_freeze.ML_EXCLUDES,
     "mcp.cli",
     *GPL_EXCLUDES,
     *NOT_SHIPPED,

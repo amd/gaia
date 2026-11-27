@@ -25,6 +25,7 @@ from urllib.parse import urlsplit
 from gaia.agents.base.file_snapshots import before_change
 from gaia.agents.base.verification import NOT_EXECUTED
 from gaia.agents.tools.workspace_paths import _workspace_target
+from gaia.llm.local_only import CloudDisabledError, assert_web_permitted
 from gaia.tool_cancellation import ToolCancelled, tool_cancelled
 
 if TYPE_CHECKING:
@@ -272,6 +273,7 @@ def _mcp_connector_search(
     mixin, spec: "ConnectorSpec", query: str, num_results: int
 ) -> List[Dict[str, str]]:
     """Run *spec*'s search tool on the MCP server this agent already runs."""
+    assert_web_permitted("MCP web search")
     from gaia.mcp.client.mcp_client import mcp_tool_error
 
     manager = getattr(mixin, "_mcp_manager", None)
@@ -925,6 +927,16 @@ class BrowserToolsMixin:
                 query: Search query string
                 num_results: Number of results to return (default: 5, max: 10)
             """
+            try:
+                assert_web_permitted("Web search")
+            except CloudDisabledError as e:
+                return {
+                    **NOT_EXECUTED,
+                    "status": "error",
+                    "error": str(e),
+                    "retryable": False,
+                }
+
             if not _ensure_web_client():
                 return "Error: Browser tools not initialized. Web search is disabled."
 
@@ -1040,13 +1052,12 @@ class BrowserToolsMixin:
                 return "Error: Browser tools not initialized. Download is disabled."
 
             validator = getattr(mixin, "_path_validator", None)
-            if not Path(save_to).expanduser().is_absolute():
-                save_to = str(_workspace_target(mixin, save_to))
+            # Saved under the same canonical folder the checks below judge.
+            save_to = str(_workspace_target(mixin, save_to))
 
             # Refuse a blocked folder (/etc, ~/.ssh, ...) before any request.
             if validator:
-                resolved_dir = str(Path(save_to).expanduser().resolve())
-                is_blocked, reason = validator.is_write_blocked(resolved_dir)
+                is_blocked, reason = validator.is_write_blocked(save_to)
                 if is_blocked:
                     return _download_refusal(reason)
 

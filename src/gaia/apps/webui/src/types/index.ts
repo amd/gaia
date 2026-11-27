@@ -4,6 +4,7 @@
 /** Types shared across the GAIA Agent UI frontend. */
 
 import type { TurnSummaryResponse } from './api.gen';
+import type { PageElementWire } from '../../services/browser-pane/contract';
 import type { SetupNpuProblem } from './setup';
 
 export * from './setup';
@@ -27,7 +28,7 @@ export interface Session {
     agent_type?: string;
     /** Device used for this session (cpu / gpu / npu). */
     device?: string;
-    /** Mail provider for email-triage sessions ("google" | "microsoft"). */
+    /** Mailbox the session's mail tools read ("google" | "microsoft"). */
     mail_provider?: string | null;
     /** Whether chat leaves this machine; null/absent when the backend can't tell. */
     inference_remote?: boolean | null;
@@ -111,10 +112,9 @@ export interface AgentInfo {
      */
     consumes_mcp_servers?: boolean;
     /**
-     * Opaque grant-ledger key. Built-ins are `builtin:<id>`, custom agents
-     * are `custom:<sha256-prefix>:<id>`, installed agents are
-     * `installed:<id>`, and native agents are `native:<id>`. Pass this to
-     * the grants endpoint.
+     * Opaque grant-ledger key. Installed agents are `installed:<id>`,
+     * native agents are `native:<id>`, and custom agents are
+     * `custom:<sha256-prefix>:<id>`. Pass this to the grants endpoint.
      */
     namespaced_agent_id?: string;
     category?: string;
@@ -165,6 +165,11 @@ export interface ConnectorRow {
     docs_url: string | null;
     configured: boolean;
     /**
+     * An MCP server the user added to ``mcp_servers.json`` themselves. It can
+     * be switched on or off, but has no setup form and is removed in that file.
+     */
+    custom?: boolean;
+    /**
      * ``false`` when the connector cannot be instantiated as configured —
      * for example, an ``oauth_pkce`` provider whose required environment
      * variables (``GAIA_GOOGLE_CLIENT_ID`` etc.) aren't set. The UI uses
@@ -188,14 +193,18 @@ export interface ConnectorRow {
      * apply.
      */
     enabled: boolean;
+    /** The default account's address. */
     account_id: string | null;
+    /** Every signed-in account of an OAuth connector, oldest first; absent for MCP servers. */
+    accounts?: ConnectorAccount[];
     scopes: string[];
     /**
      * Per-agent MCP-tool-visibility activation snapshot (issue #1005).
-     * Keys are namespaced agent ids (``builtin:chat``,
-     * ``custom:<hash>:<id>``, …), values are ``true`` when the agent is
-     * explicitly activated. Absence means inactive — activations are
-     * opt-in. Populated only for ``type === 'mcp_server'`` connectors;
+     * Keys are namespaced agent ids (``installed:gaia``,
+     * ``custom:<hash>:<id>``, …), values are ``true`` when the agent can
+     * see the server's tools and ``false`` once turned off. Absence means
+     * inactive, except that a ``custom`` server reports ``installed:gaia``
+     * as ``true`` until turned off. Populated only for ``type === 'mcp_server'`` connectors;
      * OAuth connectors always return ``{}`` because activation writes
      * are rejected for them at the API layer.
      */
@@ -238,6 +247,14 @@ export interface ConnectorRow {
         client_id: string | null;
         has_secret: boolean;
     } | null;
+}
+
+/** One signed-in account of an OAuth connector. `account_id` is the provider's stable id. */
+export interface ConnectorAccount {
+    account_id: string;
+    email: string;
+    status: 'ok' | 'reauth_required' | 'error';
+    is_default: boolean;
 }
 
 /** A catalog connector whose live state the backend failed to read; its summary raised. */
@@ -295,6 +312,8 @@ export interface InferenceStats {
     seconds?: number | null;
     /** True only for an answer kept from Retry with…. */
     retried?: boolean | null;
+    /** Seconds the turn waited on the user's answer to a permission prompt; absent when it never waited. */
+    waiting_seconds?: number | null;
     /** Where the turn was answered: "on your GPU", "via Fireworks AI". */
     place?: string | null;
     /** Set on a `hybrid` chat's turns: the model the turn was routed to, and why. */
@@ -445,7 +464,9 @@ export interface RetryResult {
 }
 
 /** GET /api/chat/context: the meter's numbers, or why there are none yet. */
-export type ContextUsageResult = ({ available: true } & ContextUsage) | { available: false; reason: string };
+export type ContextUsageResult =
+    | ({ available: true } & ContextUsage)
+    | { available: false; reason: string; reason_code?: string };
 
 /** POST /api/chat/retry-with/choose: which answer the chat now continues from. */
 export type RetryChoice = { kept: 'original' } | {
@@ -484,6 +505,8 @@ export interface Message {
     historyNotice?: string;
     /** Sources, files and data flow of the turn, for the side rail (#5222). */
     turnSummary?: TurnSummary;
+    /** Elements the user picked in the browser pane and sent with this message. */
+    page_elements?: PageElementWire[] | null;
     /** Notices from adding indexed files to the document library. */
     libraryNotices?: string[];
 }
@@ -545,6 +568,40 @@ export interface ModelStatus {
     checked: boolean;
 }
 
+/** The Python agent (every tool, the default) or the native C++ one (fast, fewer tools). */
+export type FlagshipAgent = 'gaiapy' | 'gaiacpp';
+
+/** A download of gaiacpp, polled while `state` is downloading. */
+export interface AgentDownload {
+    state: 'idle' | 'downloading' | 'done' | 'failed';
+    bytes_done: number;
+    bytes_total: number | null;
+    error: string | null;
+}
+
+export interface AgentProgram {
+    id: FlagshipAgent;
+    installed: boolean;
+    /** Null when the size couldn't be read. */
+    size_bytes: number | null;
+    /** gaiacpp isn't on this PC and this release offers it. */
+    can_download: boolean;
+    /** Why gaiacpp can't be had here, when it isn't installed and can't be downloaded. */
+    unavailable_reason: string | null;
+    /** Set when the reason is one the UI has its own words for; any other reason is shown as it is. */
+    unavailable_code?: 'no_release' | 'unreachable' | 'unverifiable' | null;
+    /** A newer build is offered; not shown yet. */
+    update_available?: boolean;
+}
+
+/** `GET /api/agent-programs`: both agent programs and any running download. */
+export interface AgentPrograms {
+    /** The saved choice as written; may name a harness this version can't run (none of `programs`). */
+    current: string;
+    programs: AgentProgram[];
+    download: AgentDownload;
+}
+
 export interface Settings {
     custom_model: string | null;
     model_status: ModelStatus | null;
@@ -558,6 +615,11 @@ export interface Settings {
     agent_mode: 'manual' | 'goal_driven';
     /** Shared network policy controlling cloud AI use. */
     network_policy: 'cloud_allowed' | 'local_ai_only';
+    /** The program that runs the GAIA agent; "gaiapy" when the user never chose. May name a
+     *  harness a newer GAIA saved that this one can't run, until the user picks another. */
+    flagship_agent: string;
+    /** False when the gaiacpp program isn't installed on this PC, so it can't be chosen. */
+    gaiacpp_available: boolean;
     policy_warnings?: string[];
     policy_notices?: Array<{ code: string; severity: 'info' | 'warning'; url?: string; reason?: string; cause?: string | null; models?: string[] | null }>;
 }
@@ -716,12 +778,25 @@ export interface BrowseResponse {
     folder_refusal?: string | null;
 }
 
+/** Why folder indexing left a file out. Keep in sync with the backend model. */
+export type SkippedFileReason = 'unsupported_type' | 'credential_file';
+
+/** One skipped file from folder indexing and the reason it was left out. */
+export interface SkippedFile {
+    file: string;
+    reason: SkippedFileReason;
+}
+
 /** Response from the /documents/index-folder endpoint. */
 export interface IndexFolderResponse {
     indexed: number;
     failed: number;
     /** Files in the folder of a type GAIA doesn't index. */
     skipped?: number;
+    /** Named skipped files. ``reason`` is ``unsupported_type`` or ``credential_file``. */
+    skipped_files?: SkippedFile[];
+    /** Whether the server stopped recording skipped filenames at its cap. */
+    skipped_files_truncated?: boolean;
     /** Images in the folder; GAIA reads an image only when it is added on its own. */
     skipped_images?: number;
     documents: Document[];
@@ -816,7 +891,6 @@ export interface TunnelStatus {
     reason?: 'ngrok_not_installed' | null;
     /** This OS's ngrok install commands, set only with that reason. */
     installCommands?: string[];
-    publicIp: string | null;
     /** The device behind the latest authenticated remote request. */
     device?: { name: string; lastSeen: string } | null;
 }
@@ -877,6 +951,8 @@ export interface AgentStep {
     declined?: boolean;
     /** Nobody answered its permission prompt in time, so it never ran (for type='tool'). */
     timedOut?: boolean;
+    /** GAIA's own rule stopped this call; nobody was asked (for type='tool'). */
+    refused?: boolean;
     /** GAIA turned this call down itself without asking, so it never ran (for type='tool'). */
     autoDeclined?: boolean;
     /** Whether this step is currently running. */
@@ -1012,12 +1088,16 @@ export interface ProviderModel {
     size_gb?: number | null;
     /** Fits this PC's memory; null when GAIA can't tell. */
     fits?: boolean | null;
+    /** Fits, but would leave other apps less memory than GAIA keeps for them. */
+    tight?: boolean;
     available?: boolean;
     unavailable_reason?: string | null;
     /** What stops this NPU model on this PC's NPU (Linux setup), in place of the reason. */
     npu_problems?: SetupNpuProblem[];
     /** Median tokens/s of its recent turns on this PC. */
     tokens_per_second?: number | null;
+    /** Setup's tag: covered by GAIA's evals, or not; null for a model with no such tag. Local models only. */
+    support?: 'verified' | 'untested' | null;
     /** An in-flight (or just-finished) download of this model. */
     download_progress?: DownloadProgress | null;
     /** List price per million tokens; null when unknown (never shown as $0). Cloud models only. */

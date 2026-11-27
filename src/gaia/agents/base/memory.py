@@ -46,6 +46,7 @@ import sqlite3
 import sys
 import threading
 import time
+import unicodedata
 import weakref
 from collections import deque
 from contextlib import nullcontext
@@ -308,9 +309,9 @@ _FORGET_FILLER = frozenset(
 )
 
 #: Size cap on the stable memory section, instructions included
-#: (4250 chars ≈ 1060 tokens). Grow it with the instructions, so they never
+#: (4460 chars ≈ 1115 tokens). Grow it with the instructions, so they never
 #: take room from the user's memories.
-STABLE_MEMORY_PROMPT_CHARS = 4250
+STABLE_MEMORY_PROMPT_CHARS = 4460
 #: Rows read per category when filling that section; the size cap decides
 #: how many are shown.
 STABLE_MEMORY_FETCH_LIMIT = 200
@@ -461,6 +462,28 @@ def _forget_text(item: Dict) -> Tuple[str, ...]:
     return fact_words(str(item.get("content", "")))
 
 
+#: Phones type "don’t": the memory guards match a straight apostrophe.
+_APOSTROPHES = str.maketrans(
+    dict.fromkeys(
+        "\u2018\u2019\u201b\u02b9\u02bb\u02bc\u02c8\u2032\u2035\uff07`\u00b4", "'"
+    )
+)
+
+
+def _straight_apostrophes(text: str) -> str:
+    """*text* with each apostrophe look-alike made "'", so its length is unchanged."""
+    return text.translate(_APOSTROPHES)
+
+
+def _normalised(text: str) -> str:
+    """*text* in NFKC, with no invisible format characters and straight apostrophes."""
+    # The acute accent first: NFKC turns it into a space and a combining mark.
+    text = unicodedata.normalize("NFKC", _straight_apostrophes(text))
+    return "".join(ch for ch in text if unicodedata.category(ch) != "Cf").translate(
+        _APOSTROPHES
+    )
+
+
 _FORGET_SENTENCE = re.compile(r"[^.!?\n]+[.!?]*")
 _FORGET_VERB = re.compile(r"\b(?:forget|erase|delete|remove)\b", re.IGNORECASE)
 #: "Could you forget X?" asks for it; "Did you forget X?" doesn't.
@@ -485,7 +508,7 @@ _FORGET_WHAT_END = re.compile(
 
 def _forget_requests(user_input: str) -> List[str]:
     """What *user_input* asks to forget, one entry per request."""
-    text = user_input.replace("\u2019", "'")
+    text = _straight_apostrophes(user_input)
     asked = []
     for sentence in _FORGET_SENTENCE.findall(text):
         sentence = sentence.strip()
@@ -620,6 +643,162 @@ SAVE_WHEN_ASKED_PROMPT = (
     "your answer."
 )
 
+#: A sentence telling the user something was kept in memory.
+_SAVE_CLAIM = re.compile(
+    r"\bi(?:'ve|\s+have|'ll|\s+will)?\s+(?:now\s+|also\s+)?"
+    r"(?:saved|stored|remembered|noted|save|store|remember|note)\b"
+    r"|\b(?:is|was|has\s+been|have\s+been)\s+(?:now\s+)?"
+    r"(?:saved|stored|remembered|noted)\b"
+    r"|^\W*(?:saved|stored|remembered|noted)\b"
+    r"|\b(?:tucked|filed|locked)\s+away\b"
+    r"|\bnow\s+(?:in|part\s+of)\s+(?:your|my)\s+memory\b"
+    r"|\badded\s+(?:\S+\s+){0,3}?to\s+(?:your|my)\s+memory\b",
+    re.IGNORECASE | re.MULTILINE,
+)
+_NOT_SAVED = re.compile(
+    r"\b(?:not|never|no|nothing|none|cannot|unable|refus\w*|block\w*|\w+n't)\b",
+    re.IGNORECASE,
+)
+
+
+#: Answer-check problems, also shown to the user when the repair doesn't take.
+_REFUSED_SAVE = "This was not saved to memory."
+_REFUSED_SECRET = (
+    "This was not saved to memory: GAIA does not keep passwords or other secrets."
+)
+_NOTHING_SAVED = "Nothing was saved to memory."
+_DECLINED_SAVE = "This was not saved to memory: you asked to leave it out."
+#: What remember returns for a detail the user declined. Opens with "Not
+#: stored": the model repeats a tool result's first words to the user.
+_DECLINED_NOT_STORED = (
+    "Not stored: the user said to leave this out of memory. Tell them you left "
+    "it out. Do not save it another way."
+)
+
+
+#: Status words: "password is expired" names no password, so a later fact
+#: that merely uses one ("the meeting is long") is not blocked by it.
+_STATUS_WORDS = frozenset(
+    "expired required wrong optional long short weak strong new old same reset "
+    "changed empty blank correct incorrect invalid valid missing locked falsch "
+    "richtig abgelaufen erforderlich obligatoria obligatorio incorrecta "
+    "incorrecto caducada caducado obligatoire expiré expirée "
+    "the and his her its our your their".split()
+)
+#: A password word, an optional aside (", by the way,") and "is", ":" or "=".
+#: Any value after it is refused: a false refusal is fine, a leak is not.
+_PASSWORD_IS = (
+    r"\b(?:password|passphrase|passcode|contrase(?:ñ|n)a|passwort|kennwort"
+    r"|mot de passe|senha|wachtwoord|has(?:ł|l)o|api[_ -]?key|secret"
+    r"|access[_ -]?token|auth[_ -]?token|credential)s?\b"
+    r"(?:\s*,[^,\n]{1,40},)?\s*"
+    r"(?:(?:is|es|era|ist|war|est|é|e|jest|was)\b|[:=])"
+)
+#: The value itself: "is 'secret'", "is: blue42", "is the word falcon".
+_PASSWORD_VALUE_RE = re.compile(
+    _PASSWORD_IS + r"\s*[:=]?\s*(?:(?:the|a|an)\s+)?(?:(?:word|phrase)\s+)?"
+    r"[\"'`‘’“”]?(?P<value>[^\s\"'`‘’“”,;!?()]+)",
+    re.IGNORECASE,
+)
+#: A fact that is just a value with a label: "WiFi: sunshine".
+_LABELLED_VALUE = re.compile(r"^[^:\n]{1,30}:\s*\S+\s*$")
+
+#: Any word that may name a secret: a forced save never fires near one, so a
+#: model that declined to save "the alarm code is 9090" is not overruled.
+_CREDENTIAL_WORD = re.compile(
+    r"\b(?:pass(?:word|wd|code|phrase)?|pw|pwd|pin|code|login|key"
+    r"|token|secret|credential|contrase(?:ñ|n)a|clave|passwort"
+    r"|kennwort|mot de passe|c(?:ó|o)digo)s?\b",
+    re.IGNORECASE,
+)
+#: The longest message a forced save reads; anything longer is left to the model.
+_FORCED_SAVE_MAX_CHARS = 300
+#: Characters a forced fact may hold. No comma: one starts a second clause
+#: ("..., maar niet opslaan"), so a fact with one is left to the model.
+_FACT = r"(?P<fact>[A-Za-z0-9 '\"/:%$.\-]+?)"
+#: The only messages GAIA saves on its own, the whole message and nothing more:
+#: "(Please) remember (that) X." / "(Please) keep in mind (that) X.",
+#: "Remember this (for later): X." and
+#: "X. Please remember that." / "X. Please remember this."
+_FORCED_SAVE_SHAPES = (
+    re.compile(
+        r"(?:please\s+)?(?:remember|keep\s+in\s+mind)"
+        r"(?:\s+that|\s+this(?:\s+for\s+later)?\s*:)?\s+" + _FACT + r"[.!]?",
+        re.IGNORECASE,
+    ),
+    re.compile(_FACT + r"\.?\s+please\s+remember\s+(?:that|this)[.!]?", re.IGNORECASE),
+)
+#: A second sentence inside the fact: a stop, "!" or "?" before a space or the end.
+_SECOND_SENTENCE = re.compile(r"[.!?](?:\s|$)|[!?]")
+#: A second clause that may change or take back the first.
+_SECOND_CLAUSE = re.compile(
+    r"\b(?:but|then|except|unless|though|although|however|instead|actually|wait"
+    r"|also|jk|kidding|abort|strike|scrap|scratch|stop|cancel\w*|undo|forget\w*)\b",
+    re.IGNORECASE,
+)
+#: The words that ask to keep something in memory. A forced save needs exactly one.
+_MEMORY_ASK = re.compile(
+    r"\bremember\w*|\bmemori[sz]\w*|\bin\s+mind\b|\bmemor(?:y|ies)\b", re.IGNORECASE
+)
+#: A negation or decline anywhere in the message leaves the save to the model.
+#: Deliberately blunt: "remember that I'm not vegan" is left to the model too.
+_DECLINE_SIGNAL = re.compile(
+    r"\b(?:not|never|no|nah|nope|nevermind|cannot|forget\w*|skip\w*|cancel\w*"
+    r"|ignore|disregard|undo|delete|erase|remove|except|unless"
+    r"|nicht|nein|kein\w*|nunca|jamais|nada|non|niet|nie|inte|ikke|nej|ne|pas"
+    r"|nao|nem|nu)\b"
+    r"|n\s*'+\s*t\b"
+    r"|\b(?:do|does|did|wo|ca|could|would|should|must|need|is|are|was|were"
+    r"|has|have|had|ai|might)\s*n\s*t\b"
+    r"|\brather\s+(?:you|u)\b|\bprefer\s+(?:you|u|that\s+you)\b"
+    r"|\bhold\s+off\b|\bscratch\s+that\b|\bsecond\s+thoughts?\b"
+    r"|\bchanged?\s+my\s+mind\b",
+    re.IGNORECASE,
+)
+
+
+def fact_to_keep(request: str) -> str:
+    """The fact in *request* the user asked to remember, or "".
+
+    GAIA saves this itself when the model skips the save, so it only reads one
+    fixed shape: the whole message is a single plain-ASCII sentence such as
+    "Remember that my dog's name is Rex." or "My birthday is March 3. Please
+    remember that.", with no comma, no negation, no second clause and at most
+    300 characters. Every other request is left to the model.
+    """
+    text = _straight_apostrophes(request or "").strip()
+    if (
+        len(text) > _FORCED_SAVE_MAX_CHARS
+        or not all(" " <= ch <= "~" for ch in text)
+        or len(_MEMORY_ASK.findall(text)) != 1
+        or _DECLINE_SIGNAL.search(text)
+        or not asks_to_keep_in_memory(text)
+        or MemoryMixin._looks_like_credential(text)
+        or _CREDENTIAL_WORD.search(text)
+    ):
+        return ""
+    for shape in _FORCED_SAVE_SHAPES:
+        match = shape.fullmatch(text)
+        if match is None:
+            continue
+        fact = match.group("fact").strip()
+        if (
+            _SECOND_SENTENCE.search(fact)
+            or _SECOND_CLAUSE.search(fact)
+            or len(fact.split()) < 2
+        ):
+            return ""
+        return fact
+    return ""
+
+
+def claims_memory_save(answer: str) -> bool:
+    """True when *answer* tells the user something was saved, with no denial beside it."""
+    for sentence in re.split(r"(?<=[.!?])\s+|\n+", answer or ""):
+        if _SAVE_CLAIM.search(sentence) and not _NOT_SAVED.search(sentence):
+            return True
+    return False
+
 
 def _saved_despite(ignored: Dict[str, str], knowledge_id: str) -> str:
     """What remember tells the model after saving without a bad optional argument.
@@ -659,6 +838,16 @@ def _own_words(text: str) -> List[str]:
 
 
 _SENTENCE_END = re.compile(r"[.?!\n]|$")
+#: A negation before the verb withholds the request: "I don't want you to remember".
+_HELD_BACK = re.compile(
+    r"\b(?:don'?t|do\s+not|doesn'?t|never|no\s+need|not|shouldn'?t|won'?t)\b",
+    re.IGNORECASE,
+)
+
+
+def _clause_before(part: str, start: int) -> str:
+    """The words of *part*'s clause that come before *start*."""
+    return re.split(r"[.?!,;\n]", part[:start])[-1]
 
 
 def _is_material(part: str, start: int) -> bool:
@@ -673,10 +862,121 @@ def _is_material(part: str, start: int) -> bool:
     )
 
 
+_DECLINED_OBJECT = r"(?:it|that|this|them|those|these|that\s+one)"
+#: Where a decline must end, so "leave it out of the recipe" is not one.
+_DECLINE_END = (
+    r"(?:\s+(?:of|from|in|to)\s+(?:(?:your|my|the)\s+)?memory)?"
+    r"(?=\W*$|\s*[.!?,;:)\n]|\s+(?:and|but|please|thanks|thank|ok|okay|though)\b)"
+)
+#: The user telling the agent not to keep something: "leave it out",
+#: "don't save that", "do not remember my address". The object must be a
+#: pronoun, except after remember/memorize, so "don't save the file" is file work.
+_DECLINE = re.compile(
+    r"\b(?:"
+    rf"(?:leave|keep)\s+{_DECLINED_OBJECT}\s+out{_DECLINE_END}"
+    r"|(?:don'?t|do\s+not|no\s+need\s+to)\s+(?:please\s+)?(?:ever\s+)?(?:"
+    rf"(?:save|store|keep|record|log)\s+(?:any\s+of\s+)?{_DECLINED_OBJECT}{_DECLINE_END}"
+    rf"|(?:remember|memori[sz]e)\s+(?:{_DECLINED_OBJECT}|my|the|any)\b))",
+    re.IGNORECASE,
+)
+#: A word before the phrase that makes it a statement, not an instruction:
+#: "I don't save it", "told her to leave it out", "you can leave it out".
+_DECLINE_SUBJECT = frozenset(
+    "i you we they he she it who which to will would could can should might may "
+    "must shall did does".split()
+)
+#: Words that may sit right before an instruction. Any other word might be its
+#: subject ("my kids don't keep them"), so only a number or code ("555-1234
+#: leave it out"), punctuation or the start of the message may.
+_DECLINE_LEADS = frozenset(
+    "please just but and so actually then ok okay also now oh wait no".split()
+)
+_DECLINE_CLAUSE_BREAK = re.compile(
+    r"[.!?]+(?=\s|$)|[;,\n]+|\b(?:and|but)\b", re.IGNORECASE
+)
+#: Stems of the request words themselves, which say nothing about the detail.
+_DECLINE_NOISE_STEMS = frozenset(
+    {"reme", "memo", "save", "stor", "keep", "reco", "leav", "out", "plea", "actu"}
+)
+
+
+def _detail_stems(text: str) -> set:
+    """Content stems of *text*, less the words of a memory request or decline."""
+    return content_stems(text) - _DECLINE_NOISE_STEMS
+
+
+def _declined_spans(part: str, strict: bool = True) -> List[Tuple[int, int]]:
+    """Where in *part* sits a detail the user said to leave out of memory.
+
+    One (start, end) per decline: its own clause, or, when that clause holds
+    nothing but the decline ("…555-1234, but don't keep it"), the clause before.
+    *strict* also drops a phrase after a word that may be its subject, for the
+    checks that refuse a save; the looser read only stops asking for one.
+    """
+    bounds = [0]
+    for brk in _DECLINE_CLAUSE_BREAK.finditer(part):
+        bounds.extend((brk.start(), brk.end()))
+    bounds.append(len(part))
+    clauses = [(bounds[i], bounds[i + 1]) for i in range(0, len(bounds), 2)]
+    spans = []
+    for decline in _DECLINE.finditer(part):
+        before = re.search(r"([\w']+)\s+$", part[: decline.start()])
+        word = before.group(1).lower() if before else ""
+        if word.split("'")[0] in _DECLINE_SUBJECT:
+            continue
+        if strict and re.search(r"[a-z]", word) and word not in _DECLINE_LEADS:
+            continue
+        if _is_material(part, decline.start()):
+            continue
+        index = next(i for i, (s, e) in enumerate(clauses) if s <= decline.start() <= e)
+        start, end = clauses[index]
+        own = part[start : decline.start()] + part[decline.end() : end]
+        while not _detail_stems(own) and index > 0:
+            index -= 1
+            start, end = clauses[index]
+            own = part[start:end]
+        if _detail_stems(own):
+            spans.append((start, end))
+    return spans
+
+
+def declined_details(text: str) -> List[str]:
+    """The clauses of *text* that hold a detail the user said not to keep."""
+    return [
+        part[start:end]
+        for part in _own_words(_normalised(text or ""))
+        for start, end in _declined_spans(part)
+    ]
+
+
+def _user_declined(content: str, user_text: str) -> bool:
+    """Whether saving *content* would keep a detail *user_text* said to leave out."""
+    stems = _detail_stems(content)
+    if not stems:
+        return False
+    for part in _own_words(_normalised(user_text or "")):
+        spans = _declined_spans(part)
+        kept_stems = _detail_stems(
+            "".join(
+                " " if any(s <= i < e for s, e in spans) else ch
+                for i, ch in enumerate(part)
+            )
+        )
+        for start, end in spans:
+            declined = _detail_stems(part[start:end])
+            # A word the kept facts share ("phone") can't tell the declined one apart.
+            if stems & (declined - kept_stems or declined):
+                return True
+    return False
+
+
 def asks_to_keep_in_memory(text: str) -> bool:
     """True when *text* asks the agent to remember something it says."""
-    for part in _own_words(text or ""):
+    for part in _own_words(_normalised(text or "")):
+        declined = _declined_spans(part, strict=False)
         for request in _STORAGE_REQUEST.finditer(part):
+            if any(s <= request.end() <= e for s, e in declined):
+                continue
             end = _SENTENCE_END.search(part, request.end())
             verb = _KEEP_IN_MEMORY.search(part, request.start())
             if (
@@ -684,6 +984,7 @@ def asks_to_keep_in_memory(text: str) -> bool:
                 and verb.start() < request.end()
                 and not _is_material(part, request.start())
                 and not _NOT_A_FACT.match(part, verb.end())
+                and not _HELD_BACK.search(_clause_before(part, verb.start()))
                 # "Can you remember my dog's name?" asks; "…remember that I…?" tells.
                 and (
                     part[end.start() : end.end()] != "?"
@@ -1147,6 +1448,275 @@ def _blob_to_embedding(blob: bytes) -> np.ndarray:
     return np.frombuffer(blob, dtype=np.float32).copy()
 
 
+# ============================================================================
+# Memory Reconciliation (shared by the agent and the dashboard)
+# ============================================================================
+
+#: System prompt sent with every ``_RECONCILIATION_PROMPT`` classification.
+RECONCILIATION_SYSTEM_PROMPT = (
+    "You are a memory reconciliation engine. Return valid JSON only."
+)
+
+#: Most recently updated memories a reconciliation run compares.
+RECONCILE_CANDIDATE_LIMIT = 200
+
+#: Nearest neighbours searched per memory when looking for similar pairs.
+RECONCILE_NEIGHBORS = 5
+
+
+def reconciliation_max_tokens(model_id: Optional[str]) -> int:
+    """Output budget for one classification reply on *model_id*."""
+    return 256 + reasoning_headroom(model_id)
+
+
+def empty_reconcile_result() -> Dict[str, int]:
+    """The counts a reconciliation run returns, all zero."""
+    return {
+        "pairs_checked": 0,
+        "reinforced": 0,
+        "contradicted": 0,
+        "weakened": 0,
+        "neutral": 0,
+    }
+
+
+def _parse_relationship(raw: str) -> Optional[str]:
+    """The ``relationship`` in a classification reply, or None if unreadable."""
+    text = strip_reasoning(raw).strip()
+    if text.startswith("```"):
+        text = re.sub(r"^```(?:json)?\s*", "", text)
+        text = re.sub(r"\s*```$", "", text).strip()
+    try:
+        classification = json.loads(text)
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(classification, dict):
+        return None
+    return str(classification.get("relationship", "neutral"))
+
+
+def _reconcile_metadata(item: Dict) -> Dict[str, Any]:
+    """A copy of *item*'s metadata with ``reconciled_with`` as a list."""
+    raw_meta = item.get("metadata") or {}
+    if isinstance(raw_meta, str):
+        try:
+            raw_meta = json.loads(raw_meta) if raw_meta else {}
+        except json.JSONDecodeError as exc:
+            raise ValueError(
+                f"memory {item['id']} has unreadable metadata ({exc}); "
+                "fix or delete that entry in the Memory dashboard, then retry"
+            ) from exc
+    if not isinstance(raw_meta, dict):
+        raise ValueError(
+            f"memory {item['id']} has metadata of type {type(raw_meta).__name__}, "
+            "not an object; fix or delete that entry in the Memory dashboard, "
+            "then retry"
+        )
+    meta = dict(raw_meta)
+    reconciled = meta.get("reconciled_with") or []
+    if not isinstance(reconciled, list):
+        raise ValueError(
+            f"memory {item['id']} has a reconciled_with marker of type "
+            f"{type(reconciled).__name__}, not a list; fix or delete that entry "
+            "in the Memory dashboard, then retry"
+        )
+    meta["reconciled_with"] = list(reconciled)
+    return meta
+
+
+def reconcile_memories(
+    store: Any,
+    classify: Callable[[str], str],
+    *,
+    max_pairs: int = 20,
+    embedding_dim: Optional[int] = None,
+    on_superseded: Optional[Callable[[str], None]] = None,
+) -> Dict[str, int]:
+    """Classify near-duplicate memories in pairs and apply each verdict.
+
+    Pairs are memories with cosine similarity of at least
+    ``RECONCILE_SIMILARITY_THRESHOLD``. Each new pair goes to *classify*,
+    which takes a ``_RECONCILIATION_PROMPT`` and returns the model's raw reply:
+
+    - ``reinforce``: both gain 0.05 confidence.
+    - ``contradict``: the older is superseded by the newer, which gains 0.1.
+    - ``weaken``: the older loses 0.1.
+    - anything else: no change.
+
+    Both memories of a classified pair are marked ``reconciled_with`` each
+    other, so no later run classifies that pair again.
+
+    Args:
+        store: The ``MemoryStore`` to read candidates from and write to.
+        classify: Sends one prompt to the LLM and returns its reply text.
+            Its errors propagate; only an unparseable reply skips a pair.
+        max_pairs: Most pairs classified in this run.
+        embedding_dim: Expected vector size; vectors of another size (a
+            previous embedder's) are skipped. None takes the first readable
+            vector's size.
+        on_superseded: Called with the id of each memory a contradiction
+            retires, e.g. to drop it from a cached search index.
+
+    Returns:
+        ``{pairs_checked, reinforced, contradicted, weakened, neutral}``.
+
+    Raises:
+        ImportError: faiss is not installed.
+        ValueError: a candidate memory's metadata cannot be read.
+        RuntimeError: an unsafe FAISS call, or a memory that vanished mid-run.
+    """
+    result = empty_reconcile_result()
+
+    items = store.get_items_for_reconciliation(limit=RECONCILE_CANDIDATE_LIMIT)
+    if len(items) < 2:
+        return result
+
+    ids: List[str] = []
+    vectors: List[np.ndarray] = []
+    item_map: Dict[str, Dict] = {}
+    expected_dim = embedding_dim
+    undecodable = 0
+    wrong_dim = 0
+    for item in items:
+        try:
+            vec = _blob_to_embedding(item["embedding"])
+        except (ValueError, TypeError, KeyError) as exc:
+            undecodable += 1
+            logger.debug("Reconcile skipping memory %s: %s", item.get("id"), exc)
+            continue
+        if expected_dim is None:
+            expected_dim = int(vec.shape[0])
+        if vec.shape[0] != expected_dim:
+            wrong_dim += 1
+            continue
+        norm = np.linalg.norm(vec)
+        if norm > 0:
+            vec = vec / norm
+        ids.append(item["id"])
+        vectors.append(vec)
+        item_map[item["id"]] = item
+
+    if undecodable or wrong_dim:
+        logger.warning(
+            "Reconcile skipped %d memory(ies) with an unreadable embedding and "
+            "%d from a different embedder; POST /api/memory/rebuild-embeddings "
+            "(Memory dashboard > Rebuild embeddings) to include them",
+            undecodable,
+            wrong_dim,
+        )
+
+    if len(vectors) < 2 or expected_dim is None:
+        return result
+
+    import faiss
+
+    assert_faiss_omp_safe("Memory reconciliation search")
+    mat = np.stack(vectors).astype(np.float32)
+    index = faiss.IndexFlatIP(expected_dim)
+    index.add(mat)
+    n_neighbors = min(RECONCILE_NEIGHBORS, len(vectors))
+    scores_all, indices_all = index.search(mat, n_neighbors)
+
+    # One metadata dict per id for the whole run: a memory in several pairs
+    # must keep every marker, not just the last pair's.
+    metas: Dict[str, Dict[str, Any]] = {}
+
+    def _meta(knowledge_id: str) -> Dict[str, Any]:
+        if knowledge_id not in metas:
+            metas[knowledge_id] = _reconcile_metadata(item_map[knowledge_id])
+        return metas[knowledge_id]
+
+    pairs: List[Tuple[str, str, float]] = []
+    seen: Set[Tuple[str, str]] = set()
+    for i in range(len(vectors)):
+        for j_pos in range(n_neighbors):
+            j = int(indices_all[i][j_pos])
+            if j in (i, -1):
+                continue
+            sim = float(scores_all[i][j_pos])
+            if sim < RECONCILE_SIMILARITY_THRESHOLD:
+                continue
+            key = (min(ids[i], ids[j]), max(ids[i], ids[j]))
+            if key in seen:
+                continue
+            seen.add(key)
+            # Drop settled pairs before the cap, or they fill it every run.
+            if ids[j] in _meta(ids[i])["reconciled_with"]:
+                continue
+            if ids[i] in _meta(ids[j])["reconciled_with"]:
+                continue
+            pairs.append((ids[i], ids[j], sim))
+
+    pairs.sort(key=lambda p: p[2], reverse=True)
+    pairs = pairs[:max_pairs]
+
+    superseded: Set[str] = set()
+    for id_a, id_b, _sim in pairs:
+        if id_a in superseded or id_b in superseded:
+            # Retired earlier in this run; it leaves the candidates next run.
+            continue
+        item_a = item_map[id_a]
+        item_b = item_map[id_b]
+        prompt = _RECONCILIATION_PROMPT.format(
+            date_a=str(item_a.get("created_at") or "unknown")[:10],
+            content_a=str(item_a.get("content", ""))[:500],
+            date_b=str(item_b.get("created_at") or "unknown")[:10],
+            content_b=str(item_b.get("content", ""))[:500],
+        )
+        relationship = _parse_relationship(classify(prompt))
+        if relationship is None:
+            logger.warning(
+                "Reconcile skipping pair %s/%s: the reply was not a JSON object; "
+                "it is classified again next run",
+                id_a,
+                id_b,
+            )
+            continue
+
+        result["pairs_checked"] += 1
+
+        # Marked before the verdict lands: a failed write must never let the
+        # next run apply this pair's verdict a second time.
+        meta_a = _meta(id_a)
+        meta_b = _meta(id_b)
+        meta_a["reconciled_with"].append(id_b)
+        meta_b["reconciled_with"].append(id_a)
+        for knowledge_id, meta in ((id_a, meta_a), (id_b, meta_b)):
+            if not store.update(knowledge_id, metadata=meta):
+                raise RuntimeError(
+                    f"could not mark memory {knowledge_id} as reconciled: "
+                    "the entry no longer exists"
+                )
+
+        a_is_older = str(item_a.get("created_at") or "") <= str(
+            item_b.get("created_at") or ""
+        )
+        older, newer = (id_a, id_b) if a_is_older else (id_b, id_a)
+
+        if relationship == "reinforce":
+            store.update_confidence(id_a, 0.05)
+            store.update_confidence(id_b, 0.05)
+            result["reinforced"] += 1
+        elif relationship == "contradict":
+            if not store.update(older, superseded_by=newer):
+                raise RuntimeError(
+                    f"could not supersede memory {older}: the entry no longer exists"
+                )
+            store.update_confidence(newer, 0.1)
+            superseded.add(older)
+            if on_superseded is not None:
+                on_superseded(older)
+            result["contradicted"] += 1
+        elif relationship == "weaken":
+            store.update_confidence(older, -0.1)
+            result["weakened"] += 1
+        else:
+            result["neutral"] += 1
+
+    logger.info("[memory] reconciliation: %s", result)
+    return result
+
+
 #: Reason codes for why memory is unavailable this session. Distinct
 #: codes because the remedies differ: an unset env var, a model that was
 #: never pulled into a *running* Lemonade, a pulled model Lemonade cannot
@@ -1556,6 +2126,8 @@ class MemoryMixin(ProceduralMemoryMixin):
                 )
             # Tear down the partially-built state so no later code path tries
             # to use memory.
+            if self._memory_store is not None:
+                self._memory_store.close()
             self._memory_store = None
             self._auto_extract_enabled = False
             self._incognito = True
@@ -2037,13 +2609,9 @@ class MemoryMixin(ProceduralMemoryMixin):
 
     def _get_embedding_cache(self):
         """Lazy-init the content-keyed embedding cache (per-instance)."""
-        cache = getattr(self, "_embedding_cache", None)
-        if cache is None:
-            from gaia.llm.embedding_cache import EmbeddingCache
+        from gaia.llm.embedding_cache import cache_for
 
-            cache = EmbeddingCache()
-            self._embedding_cache = cache
-        return cache
+        return cache_for(self)
 
     def _embed_text(self, text: str) -> np.ndarray:
         """Embed text via Lemonade using the active embedder.
@@ -2807,6 +3375,15 @@ class MemoryMixin(ProceduralMemoryMixin):
                         str(op.get("content", ""))[:80],
                     )
                     continue
+                if op_type in ("add", "update") and _user_declined(
+                    str(op.get("content", "")), user_input
+                ):
+                    logger.info(
+                        "[MemoryMixin] not stored: proposed memory is a detail the "
+                        "user said to leave out: %s",
+                        str(op.get("content", ""))[:80],
+                    )
+                    continue
                 if op_type in ("add", "update") and _copied_from_material(
                     str(op.get("content", "")), user_input, material, prior
                 ):
@@ -2973,8 +3550,7 @@ class MemoryMixin(ProceduralMemoryMixin):
         memory lifted from it apart from one the user stated.
 
         Only reached when ``_execute_tool`` resolves to this mixin. An agent
-        listing ``Agent`` ahead of ``MemoryMixin`` — ``EmailTriageAgent`` does,
-        and documents it on its ``process_query`` — shadows this override, so
+        listing ``Agent`` ahead of ``MemoryMixin`` shadows this override, so
         its source check sees only the answer.
         """
         cap = EXTRACTION_TOOL_RECORD_DETAIL_CHARS
@@ -3204,9 +3780,7 @@ class MemoryMixin(ProceduralMemoryMixin):
         """
         # Step 6: reconcile_memory() (max 20 pairs)
         try:
-            recon = self.reconcile_memory(max_pairs=20)
-            if recon.get("pairs_checked", 0) > 0:
-                logger.info("[MemoryMixin] post-init reconciliation: %s", recon)
+            self.reconcile_memory(max_pairs=20)
         except Exception as e:
             logger.warning("[MemoryMixin] post-init reconciliation failed: %s", e)
 
@@ -3518,8 +4092,8 @@ class MemoryMixin(ProceduralMemoryMixin):
     def reconcile_memory(self, max_pairs: int = 20) -> Dict:
         """Pairwise similarity check on active items for conflict detection.
 
-        Finds pairs with >0.85 cosine similarity, then uses LLM to classify:
-        reinforce/contradict/weaken/neutral.
+        Runs :func:`reconcile_memories` with this agent's chat model; see it
+        for the verdicts and what each one changes.
 
         Args:
             max_pairs: Maximum number of pair classifications per run.
@@ -3527,216 +4101,29 @@ class MemoryMixin(ProceduralMemoryMixin):
         Returns:
             Dict with {pairs_checked, reinforced, contradicted, weakened, neutral}.
         """
-        result = {
-            "pairs_checked": 0,
-            "reinforced": 0,
-            "contradicted": 0,
-            "weakened": 0,
-            "neutral": 0,
-        }
-
         self._finish_deferred_memory_init()
         if self._faiss_index is None or self._faiss_index.ntotal < 2:
-            return result
+            return empty_reconcile_result()
 
-        store = self._memory_store
+        def classify(prompt: str) -> str:
+            response = self.chat.send_messages(
+                messages=[{"role": "user", "content": prompt}],
+                system_prompt=RECONCILIATION_SYSTEM_PROMPT,
+                temperature=0.1,
+                max_tokens=reconciliation_max_tokens(
+                    getattr(self.chat, "effective_model", None)
+                ),
+                **self._side_request_kwargs(),
+            )
+            return response.text if hasattr(response, "text") else str(response)
 
-        # Get all active items with embeddings for pairwise comparison
-        items = store.get_items_for_reconciliation()
-        if len(items) < 2:
-            return result
-
-        # Build a mapping for quick lookup
-        item_map = {}
-        vectors = []
-        ids = []
-        for item in items:
-            try:
-                vec = _blob_to_embedding(item["embedding"])
-                if vec.shape[0] != self._embedding_dim:
-                    continue
-                norm = np.linalg.norm(vec)
-                if norm > 0:
-                    vec = vec / norm
-                item_map[item["id"]] = item
-                vectors.append(vec)
-                ids.append(item["id"])
-            except Exception as e:
-                logger.warning(
-                    "Skipping memory %s in reconciliation: corrupt embedding: %s",
-                    item.get("id"),
-                    e,
-                )
-                continue
-
-        if len(vectors) < 2:
-            return result
-
-        # Stack all vectors and compute pairwise similarities
-        mat = np.stack(vectors)
-        # For efficiency with large sets, check each item against its top-K neighbors
-        try:
-            import faiss
-
-            temp_index = faiss.IndexFlatIP(self._embedding_dim)
-            temp_index.add(mat)
-
-            # Search each item for its top-5 neighbors
-            n_neighbors = min(5, len(vectors))
-            scores_all, indices_all = temp_index.search(mat, n_neighbors)
-        except Exception as e:
-            logger.debug("[MemoryMixin] reconciliation FAISS search failed: %s", e)
-            return result
-
-        # Collect high-similarity pairs
-        pairs = []
-        seen_pairs = set()
-        for i in range(len(vectors)):
-            for j_pos in range(n_neighbors):
-                j = int(indices_all[i][j_pos])
-                if j == i:
-                    continue
-                sim = float(scores_all[i][j_pos])
-                if sim >= RECONCILE_SIMILARITY_THRESHOLD:
-                    pair_key = tuple(sorted((ids[i], ids[j])))
-                    if pair_key not in seen_pairs:
-                        seen_pairs.add(pair_key)
-                        pairs.append((ids[i], ids[j], sim))
-
-        # Sort by similarity descending, take top max_pairs
-        pairs.sort(key=lambda x: x[2], reverse=True)
-        pairs = pairs[:max_pairs]
-
-        if not pairs:
-            return result
-
-        for id_a, id_b, sim in pairs:
-            try:
-                item_a = item_map.get(id_a)
-                item_b = item_map.get(id_b)
-                if not item_a or not item_b:
-                    continue
-
-                # Skip already reconciled pairs
-                meta_a = item_a.get("metadata") or {}
-                meta_b = item_b.get("metadata") or {}
-                if isinstance(meta_a, str):
-                    meta_a = json.loads(meta_a) if meta_a else {}
-                if isinstance(meta_b, str):
-                    meta_b = json.loads(meta_b) if meta_b else {}
-
-                # Check if already reconciled with each other
-                reconciled_a = meta_a.get("reconciled_with", [])
-                reconciled_b = meta_b.get("reconciled_with", [])
-                if id_b in reconciled_a or id_a in reconciled_b:
-                    continue
-
-                prompt = _RECONCILIATION_PROMPT.format(
-                    date_a=item_a.get("created_at", "unknown")[:10],
-                    content_a=item_a.get("content", "")[:500],
-                    date_b=item_b.get("created_at", "unknown")[:10],
-                    content_b=item_b.get("content", "")[:500],
-                )
-
-                response = self.chat.send_messages(
-                    messages=[{"role": "user", "content": prompt}],
-                    system_prompt="You are a memory reconciliation engine. Return valid JSON only.",
-                    temperature=0.1,
-                    max_tokens=256
-                    + reasoning_headroom(getattr(self.chat, "effective_model", None)),
-                    **self._side_request_kwargs(),
-                )
-
-                raw_text = response.text if hasattr(response, "text") else str(response)
-                raw_text = strip_reasoning(raw_text)
-                if raw_text.startswith("```"):
-                    raw_text = re.sub(r"^```(?:json)?\s*", "", raw_text)
-                    raw_text = re.sub(r"\s*```$", "", raw_text)
-
-                classification = json.loads(raw_text)
-                relationship = classification.get("relationship", "neutral")
-
-                result["pairs_checked"] += 1
-
-                if relationship == "reinforce":
-                    # Boost confidence of both items by +0.05
-                    store.update_confidence(id_a, 0.05)
-                    store.update_confidence(id_b, 0.05)
-                    result["reinforced"] += 1
-
-                elif relationship == "contradict":
-                    # Supersede the older item, boost newer confidence +0.1
-                    a_date = item_a.get("created_at", "")
-                    b_date = item_b.get("created_at", "")
-                    if a_date <= b_date:
-                        # A is older, B is newer
-                        store.update(id_a, superseded_by=id_b)
-                        store.update_confidence(id_b, 0.1)
-                        self._faiss_remove(id_a)
-                    else:
-                        # B is older, A is newer
-                        store.update(id_b, superseded_by=id_a)
-                        store.update_confidence(id_a, 0.1)
-                        self._faiss_remove(id_b)
-                    result["contradicted"] += 1
-
-                elif relationship == "weaken":
-                    # Reduce confidence of the older item by 0.1
-                    a_date = item_a.get("created_at", "")
-                    b_date = item_b.get("created_at", "")
-                    if a_date <= b_date:
-                        store.update_confidence(id_a, -0.1)
-                    else:
-                        store.update_confidence(id_b, -0.1)
-                    result["weakened"] += 1
-
-                else:
-                    result["neutral"] += 1
-
-                # Mark both items as reconciled with each other
-                # Merge with existing metadata rather than clobbering
-                try:
-                    merged_a = dict(meta_a) if isinstance(meta_a, dict) else {}
-                    if not isinstance(reconciled_a, list):
-                        reconciled_a = []
-                    reconciled_a.append(id_b)
-                    merged_a["reconciled_with"] = reconciled_a
-                    store.update(id_a, metadata=merged_a)
-
-                    merged_b = dict(meta_b) if isinstance(meta_b, dict) else {}
-                    if not isinstance(reconciled_b, list):
-                        reconciled_b = []
-                    reconciled_b.append(id_a)
-                    merged_b["reconciled_with"] = reconciled_b
-                    store.update(id_b, metadata=merged_b)
-                except Exception as e:
-                    # Loud: a failed mark means this pair is re-examined (and
-                    # re-sent to the LLM) on every startup until it succeeds.
-                    logger.warning(
-                        "[MemoryMixin] failed to mark pair %s/%s reconciled — "
-                        "it will be re-checked next startup: %s",
-                        id_a[:8],
-                        id_b[:8],
-                        e,
-                    )
-
-            except json.JSONDecodeError as e:
-                logger.warning(
-                    "[MemoryMixin] reconciliation reply for pair %s/%s was not JSON "
-                    "(%s) — it will be re-checked next startup",
-                    id_a[:8],
-                    id_b[:8],
-                    e,
-                )
-            except Exception as e:
-                logger.debug(
-                    "[MemoryMixin] reconciliation failed for pair %s/%s: %s",
-                    id_a[:8],
-                    id_b[:8],
-                    e,
-                )
-
-        return result
+        return reconcile_memories(
+            self._memory_store,
+            classify,
+            max_pairs=max_pairs,
+            embedding_dim=self._embedding_dim,
+            on_superseded=self._faiss_remove,
+        )
 
     # ------------------------------------------------------------------
     # Hook 1: System Prompt Injection
@@ -3818,6 +4205,16 @@ class MemoryMixin(ProceduralMemoryMixin):
         if frozen is not None and knowledge_id in shown:
             self._refresh_stable_memory_prompt()
 
+    def _prepare_turn_context(  # pylint: disable=unused-argument
+        self, user_input: str
+    ) -> None:
+        """Hook run each turn just before :meth:`get_memory_dynamic_context`.
+
+        Default: no-op. A host does here whatever the context then reports
+        (the flagship loads a matching skill), so the getter itself stays
+        free of side effects. Overrides must call ``super()``.
+        """
+
     def get_memory_dynamic_context(self) -> str:
         """Build the per-turn dynamic context string: current time + upcoming items.
 
@@ -3888,13 +4285,16 @@ class MemoryMixin(ProceduralMemoryMixin):
             "=== MEMORY (Persistent Second Brain) ===\n"
             "You have persistent memory across sessions. USE IT PROACTIVELY:\n"
             "- GREETINGS: If you know the user's name or context, personalize greetings!\n"
-            "  WRONG: 'Hey! What are you working on?' (generic, ignores stored knowledge)\n"
-            "  RIGHT: 'Hey Jordan! How's the K8s migration going?' (uses stored name + project)\n"
-            "  Reference their name, project, or recent activity. Make them feel known.\n"
+            "  Greet them by the name stored below and mention the project or recent\n"
+            "  activity stored below. With nothing stored, greet them plainly: never\n"
+            "  guess a name or a project.\n"
             "- IMPERATIVE: Any storage request ('remember', 'store', 'set a reminder',\n"
             "  'remind me', 'add a journal entry', 'log this') → call `remember` FIRST,\n"
             "  even when they say 'just acknowledge'. A verbal 'Got it' WITHOUT a tool\n"
             "  call does NOT persist across sessions.\n"
+            "- A detail the user declines is never saved, even inside a request:\n"
+            "  'remember my address is 4 Elm St leave it out', '…don't save that',\n"
+            "  '…not that one' → no `remember` call for it; say you left it out.\n"
             "- Reminders/deadlines → remember(category='reminder', due_at='YYYY-MM-DD').\n"
             "  This only stores a memory; it does NOT send an alert or run at the due\n"
             "  time. Never promise an automatic notification. Say you will bring it up\n"
@@ -4391,6 +4791,7 @@ class MemoryMixin(ProceduralMemoryMixin):
                 self._refresh_recalled_skills(user_input)
 
             with turn_metrics.pre_turn_span(self, "memory_context"):
+                self._prepare_turn_context(user_input)
                 dynamic = self.get_memory_dynamic_context()
             augmented = frame_user_message(dynamic, user_input)
 
@@ -4603,6 +5004,19 @@ class MemoryMixin(ProceduralMemoryMixin):
             # keyword directly adjacent to a value: "password is X", "secret: X"
             r"\b(?:password|passphrase|api[_ -]?key|secret|access[_ -]?token"
             r"|auth[_ -]?token|credential)s?\b\s*(?:is|:|=)\s*\S+",
+            # the same in other languages or with an aside: "contraseña es X",
+            # "password, by the way, is X"
+            _PASSWORD_IS + r"\s*\S+",
+            # short forms need a value shaped like one: "pw is hunter2", never
+            # "pw editor is vim" or "pwd is /home/me"
+            r"\b(?:pw|pwd)\b"
+            r"\s*(?:(?:is|es|era|ist|war|est|é|e|jest|was)\b|[:=])\s*"
+            r"(?![/~])(?=\S*[0-9!@#$%^&*])\S{4,}",
+            # a password word right before a value with letters and a digit or
+            # symbol: "password hunter2", never "password manager" or "pw 2024"
+            r"\b(?:password|passphrase|passcode|pw|pwd|contrase(?:ñ|n)a"
+            r"|passwort|kennwort|senha|wachtwoord)\b\s+"
+            r"(?![/~])(?=\S*[A-Za-z])(?=\S*[0-9!@#$%^&*])\S{4,}",
             # dash/underscore-joined token in any case, e.g. HALIBUT-4417-ZULU
             # or tango-9921-delta; a file extension right after it
             # (sales_2024_report.pdf) marks a filename, not a secret.
@@ -4781,6 +5195,83 @@ class MemoryMixin(ProceduralMemoryMixin):
             return None
         return SAVE_WHEN_ASKED_PROMPT
 
+    def _memory_saves_this_turn(self) -> List[Dict[str, Any]]:
+        """This turn's remember / update_memory results, oldest first."""
+        turn = getattr(self, "_turn_tool_executions", None)
+        if getattr(self, "_memory_saves_turn", None) is not turn:
+            self._memory_saves_turn = turn
+            self._memory_saves = []
+        return self._memory_saves
+
+    def _execute_tool_timed(self, tool_name, tool_args):
+        result = super()._execute_tool_timed(tool_name, tool_args)
+        name = str(tool_name or "").strip().removesuffix("()").replace("-", "_")
+        if name.lower() in ("remember", "update_memory"):
+            self._memory_saves_this_turn().append(
+                result if isinstance(result, dict) else {"status": "error"}
+            )
+        return result
+
+    def answer_problems(self, answer):
+        """Adds what the answer says about memory that this turn's saves don't back.
+
+        Small models repeat "Stored" over a refusal, or say "got it" and never
+        call remember; a nudge alone did not stop either.
+        """
+        problems = super().answer_problems(answer)
+        saves = self._memory_saves_this_turn()
+        if any(s.get("status") in ("stored", "updated") for s in saves):
+            return problems
+        request = getattr(self, "_original_user_input", None) or ""
+        if declined_details(request) and claims_memory_save(answer):
+            problems.append(_DECLINED_SAVE)
+            return problems
+        # Only a turn the user asked to remember: "saved" elsewhere is a file.
+        if not asks_to_keep_in_memory(request):
+            return problems
+        refused = [s for s in saves if s.get("status") == "skipped"]
+        if refused and claims_memory_save(answer):
+            secret = _CREDENTIAL_NOT_STORED in str(refused[-1].get("message") or "")
+            problems.append(_REFUSED_SECRET if secret else _REFUSED_SAVE)
+            return problems
+        called = {r.get("tool") for r in getattr(self, "_turn_tool_executions", [])}
+        if self._unsaved_memory_request(called):
+            problems.append(_NOTHING_SAVED)
+        return problems
+
+    def required_calls(self):
+        calls = list(super().required_calls())
+        saves = self._memory_saves_this_turn()
+        if saves:
+            return calls
+        called = {r.get("tool") for r in getattr(self, "_turn_tool_executions", [])}
+        if not self._unsaved_memory_request(called):
+            return calls
+        fact = fact_to_keep(getattr(self, "_original_user_input", None) or "")
+        if fact:
+            calls.append(("remember", {"fact": fact}))
+        return calls
+
+    def answer_repair_prompt(self, problems):
+        prompt = super().answer_repair_prompt(problems)
+        if _REFUSED_SAVE in problems or _REFUSED_SECRET in problems:
+            prompt += (
+                " Your answer says it was saved; remember refused it. Say plainly "
+                "that it was not saved, and why. Do not call remember again."
+            )
+        if _DECLINED_SAVE in problems:
+            prompt += (
+                " Your answer says it was saved, but the user said to leave it out "
+                "and nothing was saved. Say plainly that you left it out. Do not "
+                "call remember."
+            )
+        if _NOTHING_SAVED in problems:
+            prompt += (
+                " Call remember now with what the user asked you to keep, then "
+                "give your answer."
+            )
+        return prompt
+
     @classmethod
     def _looks_like_credential(cls, text: str) -> bool:
         """True when *text* looks like it carries a credential (conservative).
@@ -4792,6 +5283,30 @@ class MemoryMixin(ProceduralMemoryMixin):
         mean a leaked secret, so this errs conservative on what it flags.
         """
         return bool(text and cls._credential_spans(text))
+
+    def _holds_request_secret(self, text: str) -> bool:
+        """True when *text* keeps a secret value from this turn's request.
+
+        A small model saves the bare value ("Tr0ub4dor&3") of "my wifi
+        password is Tr0ub4dor&3", which no shape on its own reveals.
+        """
+        request = getattr(self, "_original_user_input", None) or ""
+        values = [m.group("value") for m in _PASSWORD_VALUE_RE.finditer(request)]
+        for start, end in self._credential_spans(request):
+            words = re.split(r"[\s:=]+", request[start:end].strip())
+            if words and re.search(r"[0-9!@#$%^&*]", words[-1]):
+                values.append(words[-1])
+        text = text or ""
+        bare = len(text.split()) <= 3 or bool(_LABELLED_VALUE.match(text.strip()))
+        for value in values:
+            value = value.strip(".,;!?\"'`()[]‘’“”")
+            if len(value) < 3:
+                continue
+            if not bare and value.lower() in _STATUS_WORDS:
+                continue
+            if re.search(rf"(?<!\w){re.escape(value)}(?!\w)", text, re.IGNORECASE):
+                return True
+        return False
 
     #: Argument keys naming what a call acted on, in priority order. A shell
     #: command is keyed by its binary, so ``pytest -q`` working again retires
@@ -5863,6 +6378,20 @@ class MemoryMixin(ProceduralMemoryMixin):
                 ),
             }
 
+        def _declined_refusal(text: str) -> Optional[dict]:
+            user_text = getattr(mixin, "_original_user_input", None) or ""
+            if not _user_declined(text, user_text):
+                return None
+            logger.info(
+                "[MemoryMixin] refusing a detail the user said to leave out: %s",
+                text[:80],
+            )
+            return {
+                "status": "skipped",
+                "stored": 0,
+                "message": _DECLINED_NOT_STORED,
+            }
+
         @tool
         def remember(
             fact: str,
@@ -5877,8 +6406,10 @@ class MemoryMixin(ProceduralMemoryMixin):
             Store the user's statement verbatim — summarizing loses the
             attributes a later recall needs ("gateway on port 8080 with basic
             HTTP auth", not "gateway uses 8080"). One call per distinct fact,
-            never a concatenated blob. Credential-shaped content and transient
-            observations are refused.
+            never a concatenated blob. Never store a detail the user says to
+            leave out ("... leave it out", "don't save that", "not that one"):
+            skip it and tell them you left it out. Credential-shaped content
+            and transient observations are refused.
 
             Args:
                 fact: The statement to store, in the user's own words.
@@ -5894,6 +6425,8 @@ class MemoryMixin(ProceduralMemoryMixin):
                 return refused
             if not fact or not fact.strip():
                 return {"status": "error", "message": "fact must not be empty."}
+            if (declined := _declined_refusal(fact)) is not None:
+                return declined
 
             # A bad label must not lose the fact: save without it and say so.
             ignored: Dict[str, str] = {}
@@ -5937,7 +6470,9 @@ class MemoryMixin(ProceduralMemoryMixin):
             # a local-first memory that quietly accumulates secrets is the
             # Microsoft Recall failure mode. See _looks_like_credential for
             # what this detector can and cannot catch.
-            if MemoryMixin._looks_like_credential(fact):
+            if MemoryMixin._looks_like_credential(fact) or mixin._holds_request_secret(
+                fact
+            ):
                 logger.info(
                     "[MemoryMixin] remember(): refusing credential-shaped content"
                 )
@@ -6246,7 +6781,9 @@ class MemoryMixin(ProceduralMemoryMixin):
                         "status": "error",
                         "message": "content must not be empty or whitespace-only.",
                     }
-                if MemoryMixin._looks_like_credential(content):
+                if MemoryMixin._looks_like_credential(
+                    content
+                ) or mixin._holds_request_secret(content):
                     logger.info(
                         "[MemoryMixin] update_memory(): refusing "
                         "credential-shaped content"
@@ -6297,6 +6834,8 @@ class MemoryMixin(ProceduralMemoryMixin):
 
             if not kwargs:
                 return {"status": "error", "message": "No fields to update."}
+            if content and (declined := _declined_refusal(content)) is not None:
+                return declined
 
             # Moving tool text out of "error" makes it read as the user's own.
             existing = mixin._memory_store.get_item(knowledge_id) or {}

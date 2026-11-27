@@ -8,7 +8,7 @@ import { ModelSettings } from '../ModelSettings';
 import { useModelStore } from '../../../stores/modelStore';
 import { useChatStore } from '../../../stores/chatStore';
 import * as api from '../../../services/api';
-import { mockSetupApis } from '../../../test/setupApiMocks';
+import { mockSetupApis, SETTINGS } from '../../../test/setupApiMocks';
 import type { ActiveModel, ProviderInfo, ProviderModel } from '../../../types';
 
 vi.mock('../../../services/api');
@@ -55,6 +55,19 @@ beforeEach(() => {
     });
 });
 
+describe('ModelSettings agent', () => {
+    it('picks the agent at the top of the page; the comparison says when a switch applies', async () => {
+        mockedApi.updateSettings.mockResolvedValue({ ...SETTINGS, flagship_agent: 'gaiacpp' });
+        render(<ModelSettings />);
+        const card = await screen.findByRole('region', { name: 'Agent' });
+        fireEvent.click(await within(card).findByRole('button', { name: 'Compare the two' }));
+        expect(within(card).getByText('A switch applies from the next message in every chat.')).toBeVisible();
+        fireEvent.click(await within(card).findByRole('radio', { name: /gaiacpp/ }));
+        expect(mockedApi.updateSettings).toHaveBeenCalledWith({ flagship_agent: 'gaiacpp' });
+        await waitFor(() => expect(within(card).getByRole('radio', { name: /gaiacpp/ })).toHaveAttribute('aria-checked', 'true'));
+    });
+});
+
 describe('ModelSettings provider keys', () => {
     it('opens on the provider "Add your key" named, not the one in use', async () => {
         useChatStore.getState().openSettings('model', 'fireworks');
@@ -70,7 +83,7 @@ describe('ModelSettings provider keys', () => {
 
         const tab = await screen.findByRole('radio', { name: /Fireworks AI/ });
         expect(tab).toBeDisabled();
-        expect(tab).toHaveAttribute('title', 'Blocked by Local only. Turn it off in Settings to use cloud models.');
+        expect(tab).toHaveAttribute('title', 'Blocked by Local only. Turn it off in Settings to use cloud models or web search.');
         expect(mockedApi.listProviderModels).toHaveBeenCalledWith('local');
         expect(mockedApi.listProviderModels).not.toHaveBeenCalledWith('fireworks');
     });

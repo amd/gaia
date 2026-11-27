@@ -4,7 +4,6 @@
 name: Test Electron Framework and Apps
 
 on:
-  workflow_call:
   push:
     branches: ["main"]
     paths:
@@ -98,7 +97,8 @@ jobs:
       - name: Install dependencies
         working-directory: src/gaia/apps/webui
         run: |
-          npm ci
+          # Dependabot writes the Agent UI lockfile with npm 11; keep Node 22 but install with npm 11.
+          npx -y npm@11 ci
 
       # Also runs src/types/apiContract.ts, the hand-written vs generated API type drift guard.
       - name: Type-check
@@ -180,7 +180,8 @@ jobs:
 
       - name: Install the Agent UI's Electron
         working-directory: src/gaia/apps/webui
-        run: npm ci
+        # Dependabot writes the Agent UI lockfile with npm 11; keep Node 22 but install with npm 11.
+        run: npx -y npm@11 ci
 
       - name: Install xvfb
         if: runner.os == 'Linux'

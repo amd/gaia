@@ -16,7 +16,7 @@ it('gives a Mac user a Mac path example, not a Windows one', async () => {
     render(<DocumentLibrary />);
 
     const box = await screen.findByLabelText('File path to add');
-    expect(box.getAttribute('placeholder')).toBe('/Users/you/Documents/manual.pdf');
+    expect(box.getAttribute('placeholder')).toBe('/Users/you/Documents/a.pdf');
 });
 
 it('keeps the sentence out of the path box so a right-to-left sentence cannot scramble the example', async () => {

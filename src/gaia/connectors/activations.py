@@ -26,6 +26,12 @@ Activations default to **False** when absent — least-privilege opt-in. The
 ledger only stores explicit True/False entries; an unknown ``(connector_id,
 agent_id)`` pair returns ``is_agent_active == False``.
 
+One default differs: an MCP server the user added to ``mcp_servers.json``
+themselves (its id is not in the connector catalog) is on for the flagship
+until they turn it off — see :func:`is_mcp_server_active`. Writing the entry
+was the user's opt-in, and the ledger has no other way to learn about a
+project-local file. Turning one off stores an explicit ``false``.
+
 Schema::
 
     {
@@ -51,7 +57,6 @@ Atomicity guarantees mirror :mod:`gaia.connectors.grants`:
 
 from __future__ import annotations
 
-import asyncio
 import json
 import logging
 import os
@@ -73,6 +78,9 @@ ACTIVATIONS_FILE = Path.home() / ".gaia" / "connectors" / "activations.json"
 
 SCHEMA_VERSION = 1
 
+#: The flagship agent's id in this ledger (``GaiaAgentConfig.namespaced_agent_id``).
+FLAGSHIP_AGENT_ID = "installed:gaia"
+
 
 # Per-process write lock. ``threading.Lock`` is sufficient for the CLI worker
 # thread + UI server thread + test driver case; async callers serialize on
@@ -86,6 +94,11 @@ class ActivationsLedgerCorrupt(ConnectorsError):
     def __init__(self, message: str, path: Path) -> None:
         super().__init__(message)
         self.path = path
+
+
+def activations_path() -> Path:
+    """Where the activation ledger lives, resolved now."""
+    return _activations_path()
 
 
 def _activations_path() -> Path:
@@ -234,17 +247,16 @@ def activate_agent(connector_id: str, agent_id: str) -> None:
 
 def deactivate_agent(connector_id: str, agent_id: str) -> None:
     """
-    Remove the active entry for ``(connector_id, agent_id)``. Idempotent.
+    Record ``(connector_id, agent_id)`` as off. Idempotent.
 
-    Deactivation deletes the explicit entry rather than writing ``False``
-    so the absence-equals-inactive invariant remains the source of truth.
+    An explicit ``false`` is stored rather than deleting the entry: a server
+    the user added themselves is on for the flagship until decided, so the
+    decision to turn it off has to be remembered.
     """
     with _write_lock:
         data = load_activations()
-        if connector_id in data and agent_id in data[connector_id]:
-            del data[connector_id][agent_id]
-            if not data[connector_id]:
-                del data[connector_id]
+        if data.get(connector_id, {}).get(agent_id) is not False:
+            data.setdefault(connector_id, {})[agent_id] = False
             _save_activations_locked(data)
             logger.debug(
                 "activations: deactivated connector_id=%s agent_id=%s",
@@ -285,33 +297,57 @@ def list_agent_activations(connector_id: str) -> Dict[str, bool]:
     return dict(load_activations().get(connector_id, {}))
 
 
+def _in_catalog(connector_id: str) -> bool:
+    import gaia.connectors.catalog  # noqa: F401  # pylint: disable=unused-import
+    from gaia.connectors.registry import REGISTRY
+
+    return connector_id in REGISTRY
+
+
+def effective_activations(connector_id: str) -> Dict[str, bool]:
+    """Return ``{agent_id: bool}`` as agents see it, defaults included.
+
+    The stored entries, plus the flagship's default for a user-added server
+    it has no entry for (see :func:`is_mcp_server_active`). This is what
+    Settings and ``gaia connectors list`` show.
+    """
+    entries = list_agent_activations(connector_id)
+    if FLAGSHIP_AGENT_ID not in entries and not _in_catalog(connector_id):
+        entries[FLAGSHIP_AGENT_ID] = True
+    return entries
+
+
+def is_mcp_server_active(server_id: str, agent_id: str) -> bool:
+    """
+    Return True if ``agent_id`` sees MCP server ``server_id``'s tools.
+
+    An explicit ledger entry always wins. Without one, a catalog connector is
+    off (opt-in), and a server the user added to ``mcp_servers.json``
+    themselves is on for the flagship and off for every other agent.
+    """
+    return bool(effective_activations(server_id).get(agent_id, False))
+
+
 def is_agent_active(connector_id: str, agent_id: str) -> bool:
     """
     Return True if ``agent_id`` is explicitly active for ``connector_id``.
 
-    Absence in the ledger returns False — activations are opt-in.
+    Absence in the ledger returns False — activations are opt-in. This reads
+    the ledger only; tool visibility is :func:`is_mcp_server_active`.
     """
     return bool(load_activations().get(connector_id, {}).get(agent_id, False))
 
 
-async def activate_agent_async(connector_id: str, agent_id: str) -> None:
-    """Async wrapper around :func:`activate_agent` for native-async callers."""
-    await asyncio.to_thread(activate_agent, connector_id, agent_id)
-
-
-async def deactivate_agent_async(connector_id: str, agent_id: str) -> None:
-    """Async wrapper around :func:`deactivate_agent`."""
-    await asyncio.to_thread(deactivate_agent, connector_id, agent_id)
-
-
 __all__ = [
     "ACTIVATIONS_FILE",
+    "FLAGSHIP_AGENT_ID",
     "SCHEMA_VERSION",
     "activate_agent",
-    "activate_agent_async",
+    "activations_path",
     "deactivate_agent",
-    "deactivate_agent_async",
+    "effective_activations",
     "is_agent_active",
+    "is_mcp_server_active",
     "list_agent_activations",
     "load_activations",
     "revoke_all_activations_for",

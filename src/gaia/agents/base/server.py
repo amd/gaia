@@ -3,7 +3,7 @@
 """Framework-provided generic server — the 5-interface standard for agents.
 
 Every Agent Hub package should be runnable through the same five interface
-modes (the gaia-bash PR #985 pattern): an interactive **TUI**, a one-shot
+modes: an interactive **TUI**, a one-shot
 **CLI** (``--prompt``), a **pipe** mode (stdin → stdout), an OpenAI-compatible
 **REST API server** (``--api``), and an **MCP stdio server** (``--mcp``).
 
@@ -424,6 +424,9 @@ class AgentServer:
         """
         self._ensure_interface(INTERFACE_API)
 
+        import asyncio
+        from contextlib import asynccontextmanager
+
         from fastapi import Depends, FastAPI, HTTPException
         from fastapi.middleware.cors import CORSMiddleware
         from fastapi.responses import StreamingResponse
@@ -439,6 +442,13 @@ class AgentServer:
             UsageInfo,
             message_text,
         )
+        from gaia.listener_guard import keep_listening_after_client_resets
+
+        @asynccontextmanager
+        async def lifespan(_app):
+            # A client resetting a queued connection must not close the listener.
+            keep_listening_after_client_resets(asyncio.get_running_loop())
+            yield
 
         # App-wide, so a route mounted later (``/v1/<id>/init``) is guarded too.
         caller_guard = build_caller_guard(self.api_surface)
@@ -447,6 +457,7 @@ class AgentServer:
             description=f"OpenAI-compatible API for the {self.name} agent",
             version="1.0.0",
             dependencies=[Depends(caller_guard)],
+            lifespan=lifespan,
         )
         app.add_middleware(CORSMiddleware, **cors_config())
 

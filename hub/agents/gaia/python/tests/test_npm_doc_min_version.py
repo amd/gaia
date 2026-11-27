@@ -51,6 +51,14 @@ def test_skill_min_version_matches_manifest(min_gaia_version):
     assert version == min_gaia_version
 
 
+def test_skill_prerequisites_min_version_matches_manifest(min_gaia_version):
+    version = _extract(
+        NPM_DIR / "SKILL.md",
+        r"be \*\*(\d+\.\d+\.\d+) or newer\*\*",
+    )
+    assert version == min_gaia_version
+
+
 def test_changelog_min_version_matches_manifest(min_gaia_version):
     version = _extract(
         NPM_DIR / "CHANGELOG.md",

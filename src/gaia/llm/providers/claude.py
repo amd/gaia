@@ -17,22 +17,14 @@ from collections import OrderedDict
 from dataclasses import dataclass
 from typing import Any, Dict, Iterator, List, Optional, Tuple, Union
 
-# The factory imports this module only when the claude provider is requested,
-# so the guarded import never taxes the Lemonade-only path.
-try:
-    import anthropic
-except ImportError:
-    anthropic = None  # type: ignore[assignment]
-
 from ..base_client import LLMClient
+from ..claude_defaults import DEFAULT_CLAUDE_MODEL
 from ..lemonade_client import is_provider_context_overflow
 from ..local_only import assert_provider_permitted
 from ..surface_hints import TUI_MODEL_SWITCH_HINT
 from .lemonade import _NATIVE_TC_KEY, LemonadeContextOverflowError
 
 logger = logging.getLogger(__name__)
-
-DEFAULT_CLAUDE_MODEL = "claude-sonnet-5"
 
 #: Context window every current Claude model provides, in tokens. Used to size
 #: tool-result truncation: without it the agent squeezes a 200K-context model
@@ -250,7 +242,29 @@ def _check_empty_reply(stop_reason: str, api_blocks: List[dict]) -> None:
     )
 
 
+_UNLOADED = object()
+
+
+def __getattr__(name: str):
+    """Load the Anthropic SDK the first time ``anthropic`` is read here.
+
+    Other modules import this one for its constants, so the SDK must not load
+    with it. ``None`` stands for "not installed", as the old guarded import did.
+    """
+    if name != "anthropic":
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+    try:
+        import anthropic as sdk  # pylint: disable=import-outside-toplevel
+    except ImportError:
+        sdk = None
+    globals()["anthropic"] = sdk
+    return sdk
+
+
 def _require_anthropic():
+    anthropic = globals().get("anthropic", _UNLOADED)
+    if anthropic is _UNLOADED:
+        anthropic = __getattr__("anthropic")
     if anthropic is None:
         raise ImportError(
             "The 'anthropic' package is required for --use-claude. "
@@ -1318,7 +1332,16 @@ class ClaudeProvider(LLMClient):
     def vision(self, images: list[bytes], prompt: str, **kwargs) -> str:
         import base64  # pylint: disable=import-outside-toplevel
 
-        image_b64 = base64.b64encode(images[0]).decode()
+        from gaia.utils.image_alpha import (  # pylint: disable=import-outside-toplevel
+            flatten_image_bytes,
+        )
+
+        from ..vlm_client import (  # pylint: disable=import-outside-toplevel
+            detect_image_mime_type,
+        )
+
+        image = flatten_image_bytes(images[0])
+        image_b64 = base64.b64encode(image).decode()
         messages = [
             {
                 "role": "user",
@@ -1327,7 +1350,7 @@ class ClaudeProvider(LLMClient):
                         "type": "image",
                         "source": {
                             "type": "base64",
-                            "media_type": "image/jpeg",
+                            "media_type": detect_image_mime_type(image),
                             "data": image_b64,
                         },
                     },

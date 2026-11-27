@@ -12,6 +12,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 
 	"github.com/amd/gaia/tui/internal/client"
+	"github.com/amd/gaia/tui/internal/textutil"
 	"github.com/amd/gaia/tui/internal/ui/components"
 	"github.com/amd/gaia/tui/internal/ui/theme"
 )
@@ -219,7 +220,7 @@ func renderMemoryView(dump client.MemoryDump, width int) string {
 
 	if len(dump.Items) == 0 {
 		lines = append(lines, "", memorySummaryStyle.Render(memoryGutter(width)+
-			truncateToWidth("No memories stored yet.", memoryWrapWidth(width))))
+			textutil.Truncate("No memories stored yet.", memoryWrapWidth(width))))
 	}
 
 	return strings.Join(lines, "\n")
@@ -230,13 +231,13 @@ func renderMemoryView(dump client.MemoryDump, width int) string {
 // must span the pane exactly — short and it reads as a ragged highlight.
 func memoryBand(label, count string, width int) string {
 	if width < 8 {
-		return memoryBandStyle.Render(truncateToWidth(label, width))
+		return memoryBandStyle.Render(textutil.Truncate(label, width))
 	}
 	label = " " + strings.ToUpper(label)
 	count = count + " "
 	gap := width - lipgloss.Width(label) - lipgloss.Width(count)
 	if gap < 1 {
-		return memoryBandStyle.Render(padToWidth(truncateToWidth(label, width), width))
+		return memoryBandStyle.Render(padToWidth(textutil.Truncate(label, width), width))
 	}
 	return memoryBandStyle.Render(label + strings.Repeat(" ", gap) + count)
 }
@@ -249,7 +250,7 @@ func renderMemorySummary(dump client.MemoryDump, width int) []string {
 	detail := []string{
 		formatMemoryCounts(dump.Stats.ByCategory),
 		formatMemoryContextCounts(dump.Contexts),
-		fmt.Sprintf("%d entities · avg confidence %.2f", dump.Stats.EntityCount, dump.Stats.AvgConfidence),
+		formatMemoryEntityLine(dump.Stats),
 	}
 	for _, d := range detail {
 		if d == "" || d == "—" {
@@ -264,9 +265,17 @@ func renderMemorySummary(dump client.MemoryDump, width int) []string {
 		// Named, not hidden: this view exists because a plaintext secret was
 		// found sitting in memory with no way to see it was there.
 		note := fmt.Sprintf("%d sensitive — shown below, not redacted", dump.Stats.SensitiveCount)
-		lines = append(lines, memoryFlagStyle.Render(memoryGutter(width)+truncateToWidth(note, memoryWrapWidth(width))))
+		lines = append(lines, memoryFlagStyle.Render(memoryGutter(width)+textutil.Truncate(note, memoryWrapWidth(width))))
 	}
 	return lines
+}
+
+func formatMemoryEntityLine(stats client.MemoryStats) string {
+	line := fmt.Sprintf("%d entities", stats.EntityCount)
+	if stats.AvgConfidence != nil {
+		line += fmt.Sprintf(" · avg confidence %.2f", *stats.AvgConfidence)
+	}
+	return line
 }
 
 func renderMemorySection(group memoryCategoryGroup, totalForCategory, width int) []string {
@@ -317,7 +326,7 @@ func renderMemoryEntry(item client.MemoryItem, width int) []string {
 	}
 
 	if meta := formatMemoryMeta(item); meta != "" {
-		lines = append(lines, memoryMetaStyle.Render(memoryGutter(width)+truncateToWidth(meta, wrapAt)))
+		lines = append(lines, memoryMetaStyle.Render(memoryGutter(width)+textutil.Truncate(meta, wrapAt)))
 	}
 	return lines
 }
@@ -387,7 +396,9 @@ func formatMemoryMeta(item client.MemoryItem) string {
 	if item.Context != "" && item.Context != "global" {
 		meta = append(meta, item.Context)
 	}
-	meta = append(meta, fmt.Sprintf("confidence %.2f", item.Confidence))
+	if item.Confidence != nil {
+		meta = append(meta, fmt.Sprintf("confidence %.2f", *item.Confidence))
+	}
 	if u := formatMemoryTimestamp(item.UpdatedAt); u != "" {
 		meta = append(meta, u)
 	}
@@ -432,7 +443,7 @@ func wrapMemoryText(s string, w int) []string {
 	var out []string
 	cur := ""
 	for _, f := range fields {
-		f = truncateToWidth(f, w) // a single word wider than the measure
+		f = textutil.Truncate(f, w) // a single word wider than the measure
 		switch {
 		case cur == "":
 			cur = f
@@ -447,20 +458,6 @@ func wrapMemoryText(s string, w int) []string {
 		out = append(out, cur)
 	}
 	return out
-}
-
-func truncateToWidth(s string, w int) string {
-	if w <= 0 {
-		return ""
-	}
-	if lipgloss.Width(s) <= w {
-		return s
-	}
-	r := []rune(s)
-	for len(r) > 0 && lipgloss.Width(string(r))+1 > w {
-		r = r[:len(r)-1]
-	}
-	return string(r) + "…"
 }
 
 func padToWidth(s string, w int) string {

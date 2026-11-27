@@ -5,7 +5,8 @@ import "encoding/json"
 // The canonical `/query` SSE vocabulary from
 // docs/spec/agent-ui-query-sse-contract.md §4, streamed by every v2 agent
 // sidecar through the daemon relay: the frozen seven, plus `needs_input` — the
-// additive-MINOR eighth type that resolved spec §9 Q3 (#2469).
+// additive-MINOR eighth type that resolved spec §9 Q3 (#2469) — and the
+// non-terminal `context_usage` meter (contract 2.28).
 //
 // These are NOT the legacy in-process types in types.go (step / thinking /
 // tool_start / chunk / answer / …), which the subprocess transport still uses.
@@ -24,6 +25,7 @@ const (
 	CanonicalTypeNeedsInput        = "needs_input"
 	CanonicalTypeFinal             = "final"
 	CanonicalTypeError             = "error"
+	CanonicalTypeContextUsage      = "context_usage"
 )
 
 // CanonicalStatusEvent — progress narration (spinner label / status line).
@@ -33,7 +35,7 @@ const (
 // frozen `/query` HTTP contract other hub agents publish
 // (docs/spec/agent-ui-query-sse-contract.md governs that one; the gaia
 // flagship agent has no such surface). They are a stdio-transport-local
-// extension: a model-state ping gaia_agent/stdio.py sends at startup and
+// extension: a model-state ping gaiapy/stdio.py sends at startup and
 // after a live `/model` switch. Safe to share this Go type with the
 // daemon-relay path anyway — an agent that never sets these fields leaves
 // them at their zero value, which decodes as an ordinary (blank) status
@@ -43,6 +45,7 @@ const (
 type CanonicalStatusEvent struct {
 	Type    string `json:"type"`
 	Message string `json:"message"`
+	Level   string `json:"level,omitempty"` // "warning" is kept as a chat notice.
 	// ModelID is the model actually resolved for chat (e.g. "claude-sonnet-5"
 	// or "Gemma-4-E4B-it-GGUF") — empty means this is a plain status line, not
 	// a model banner.
@@ -75,9 +78,63 @@ type CanonicalStatusEvent struct {
 	Phase string `json:"phase,omitempty"`
 	Words int    `json:"words,omitempty"`
 	Chars int    `json:"chars,omitempty"`
+	// RetractsAnswer takes back the answer text streamed since the last tool
+	// call: it was cut off ("answer_restart") or a check replaces it ("answer_check").
+	RetractsAnswer bool `json:"retracts_answer,omitempty"`
 	// HistoryCut is set when older turns just left the model's view; Message
 	// then carries the line to keep in the transcript.
 	HistoryCut *HistoryCut `json:"history_cut,omitempty"`
+	// Plan is the agent's current plan and the step it is on, re-sent each
+	// time the step moves. Message is then a headline or empty.
+	Plan *PlanState `json:"plan,omitempty"`
+	// Skills are the installed skills the user can run by typing /<name>. Sent
+	// with the model ping and after /skills; nil means "not reported".
+	Skills []SkillCommand `json:"skills,omitempty"`
+}
+
+// PlanState is a plan as the agent runs it.
+type PlanState struct {
+	Steps       []PlanStep `json:"steps"`
+	CurrentStep int        `json:"current_step"`
+}
+
+// PlanStep is one step: the tool it will call and its arguments, and the
+// model's own description when it wrote one.
+type PlanStep struct {
+	Tool        string          `json:"tool,omitempty"`
+	Description string          `json:"description,omitempty"`
+	Args        json.RawMessage `json:"args,omitempty"`
+}
+
+// SkillCommand is one installed skill as the "/" palette lists it.
+type SkillCommand struct {
+	Name        string `json:"name"`
+	Description string `json:"description"`
+}
+
+// CanonicalContextUsageEvent is how full the model's context will be for the
+// next message, by kind, in estimated tokens (contract 2.28). Not terminal.
+// HistoryBudget is how much history is replayed before older turns drop, and
+// AtRisk previews the turns the next ones will push out of view.
+type CanonicalContextUsageEvent struct {
+	Type            string   `json:"type"`
+	Window          int      `json:"window"`
+	ReplyReserve    int      `json:"reply_reserve"`
+	System          int      `json:"system"`
+	Skills          int      `json:"skills"`
+	Memory          int      `json:"memory"`
+	Tools           int      `json:"tools"`
+	ToolDefinitions int      `json:"tool_definitions"`
+	Documents       int      `json:"documents"`
+	History         int      `json:"history"`
+	Query           int      `json:"query"`
+	HistoryBudget   int      `json:"history_budget"`
+	HistoryUsed     int      `json:"history_used"`
+	TurnsInView     int      `json:"turns_in_view"`
+	TurnsHidden     int      `json:"turns_hidden"`
+	AtRisk          []string `json:"at_risk"`
+	AtRiskTokens    int      `json:"at_risk_tokens"`
+	Used            int      `json:"used"`
 }
 
 // HistoryCut sizes the turns no longer replayed to the model.
@@ -107,8 +164,8 @@ type CanonicalToolCallEvent struct {
 
 // CanonicalToolResultEvent — a tool's structured result.
 //
-// Render is the sidecar's declared card key (e.g. "email_pre_scan", or one of the
-// generic primitives "table" / "key_value" / "list" / "image" / "audio" / "media" / "diff"). Data is
+// Render is the sidecar's declared card key: one of the generic primitives
+// "table" / "key_value" / "list" / "image" / "audio" / "media" / "diff". Data is
 // the render-specific payload. An unknown Render must degrade to a generic result
 // card — never to a blank.
 //

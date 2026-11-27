@@ -39,11 +39,13 @@ it. Scoping keeps the affordance and takes away the blast radius.
 from __future__ import annotations
 
 import glob
+import hashlib
+import json
 import ntpath
 import os
 import posixpath
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from gaia.agents.base.call_risk import DESTRUCTIVE, RISK_NOTE_ARG, shell_command_risk
@@ -54,11 +56,13 @@ from gaia.agents.base.command_facts import (
     line_words,
     read_command,
 )
+from gaia.agents.base.person_approval import visible_strict
 from gaia.agents.base.write_safety import (
     has_hidden_part,
     is_too_broad_folder,
     lands_where_code_runs,
 )
+from gaia.canonical_path import canonical_path
 from gaia.utils.paths import UnsafePathSegment, safe_path_segment
 
 #: Binaries whose name bounds nothing: they run whatever they are handed, so
@@ -276,6 +280,44 @@ SCRATCH_ARG = "_scratch_dir"
 #: folder grant stable without changing the tool's model-supplied arguments.
 RESOLVED_PATH_ARG = "_resolved_file_path"
 
+#: Prompt argument set by the browser mixin (never the model): the site a
+#: browser-pane call would read. Present only when that site is what the
+#: prompt asks about.
+SITE_ARG = "_site"
+
+#: Arguments that name one file, folder, address or id: on an approval card,
+#: every character that doesn't show or joins letters reads as its code.
+NAME_ARGS = frozenset(
+    {
+        "path",
+        "file_path",
+        "folder",
+        "working_directory",
+        "project_root",
+        "output_path",
+        "url",
+        SITE_ARG,
+        "id",
+        "name",
+    }
+)
+
+#: The tool that starts a project's dev server from ``.gaia/launch.json``.
+DEV_SERVER_TOOL = "dev_server"
+
+#: The bundled skill whose tools drive GAIA desktop's browser pane.
+BROWSER_PANE_SKILL = "browser-pane"
+
+
+def pane_tool_name(tool_name: str) -> str:
+    """A browser-pane skill tool's own name (``browser-pane/x`` -> ``x``).
+
+    Only that skill's prefix is stripped: another skill's ``browser_x`` is not
+    a pane tool and never gets a pane grant.
+    """
+    return tool_name.removeprefix(f"{BROWSER_PANE_SKILL}/")
+
+
 #: Tools whose every call is the same kind of action, so the family IS the
 #: tool. The label says how wide that is.
 _FAMILY_TOOLS = {
@@ -325,31 +367,47 @@ def grant_scope(tool_name: str, tool_args: Any) -> Optional[GrantScope]:
         if renamed is not None:
             return renamed
     if tool_name in _SHELL_TOOLS:
-        return _shell_scope(tool_name, args)
-    if tool_name in PATH_TOOLS:
-        return _path_scope(tool_name, args)
-    if tool_name in _SKILL_TOOLS:
-        return _named_scope(tool_name, args, _SKILL_ARG_NAMES)
-    if tool_name in _FAMILY_TOOLS:
+        scope = _shell_scope(tool_name, args)
+    elif tool_name in PATH_TOOLS:
+        scope = _path_scope(tool_name, args)
+    elif tool_name in _SKILL_TOOLS:
+        scope = _named_scope(tool_name, args, _SKILL_ARG_NAMES)
+    elif tool_name in _FAMILY_TOOLS:
         return GrantScope(keys=(tool_name,), label=_FAMILY_TOOLS[tool_name])
-    return None
+    else:
+        tool_name = pane_tool_name(tool_name)
+        if tool_name.startswith("browser_") and args.get(SITE_ARG):
+            scope = _site_scope(str(args[SITE_ARG]))
+        elif tool_name == DEV_SERVER_TOOL:
+            scope = _dev_server_scope(args)
+        else:
+            return None
+    if scope is None:
+        return None
+    # The words a button shows come from the model: a hidden, reordering or
+    # joining character in them reads as its code. The keys keep the real name.
+    return replace(
+        scope, label=visible_strict(scope.label), subject=visible_strict(scope.subject)
+    )
 
 
 def is_inside_folder(path: str, folder: str) -> bool:
     """True when *path* resolves to something strictly inside *folder*.
 
-    Both sides go through ``realpath``, so a symlink, junction, 8.3 name or
-    ``..`` is judged by where it really lands, never by how it is spelled. A
-    spelling ``realpath`` leaves distinct (``\\\\?\\``, a UNC share, a case
-    variant on macOS) is caught by file identity. A path that cannot be
-    resolved counts as inside: the caller then asks instead of trusting it.
+    Both sides go through :func:`~gaia.canonical_path.canonical_path`, so a
+    symlink, junction, 8.3 name, ``..``, ``\\\\?\\`` prefix or this PC's ``C$``
+    share is judged by where it really lands, never by how it is spelled. A
+    spelling that still differs (a case variant on macOS) is caught by file
+    identity. A path that cannot be resolved, or names another computer's share
+    or a device, counts as inside: the caller then asks instead of trusting it.
     """
     if not path or not folder:
         return False
     try:
-        real_path = os.path.realpath(path)
-        real_folder = os.path.realpath(folder)
+        real_path = canonical_path(path, for_comparison=True)
+        real_folder = canonical_path(folder, for_comparison=True)
     except (OSError, ValueError):
+        # UncheckablePathError included: a share or device path is never trusted.
         return True
     case_path, case_folder = os.path.normcase(real_path), os.path.normcase(real_folder)
     try:
@@ -741,6 +799,48 @@ def _path_scope(tool_name: str, args: Dict[str, Any]) -> Optional[GrantScope]:
     )
 
 
+def _site_scope(origin: str) -> GrantScope:
+    """One grant per site, shared by every browser-pane tool.
+
+    "Always" on opening a page covers reading it again with any tool, which is
+    what the prompt promises: GAIA may read pages on this site.
+    """
+    host = origin.split("://", 1)[-1]
+    return GrantScope(
+        keys=(f"browser_site:{origin}",), label=f"pages on {host}", subject=host
+    )
+
+
+def launch_digest(command: str, folder: str, port: Any, env: Any) -> str:
+    """What a dev-server approval is keyed on: everything that decides what runs."""
+    payload = json.dumps(
+        {"command": command, "folder": folder, "port": port, "env": env or {}},
+        sort_keys=True,
+    )
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def _dev_server_scope(args: Dict[str, Any]) -> Optional[GrantScope]:
+    """One grant per exact command, folder, port and env, so an edit asks again.
+
+    "Always" is offered only where the shell rules would offer it for the same
+    line: a command whose name bounds nothing (``bash -c``) asks every time.
+    """
+    command = args.get("command")
+    folder = args.get("folder")
+    if args.get("action") != "start" or not isinstance(command, str) or not folder:
+        return None
+    if _shell_scope("run_shell_command", {"command": command}) is None:
+        return None
+    digest = launch_digest(command, str(folder), args.get("port"), args.get("env"))
+    where = os.path.basename(os.path.normpath(str(folder))) or str(folder)
+    return GrantScope(
+        keys=(f"{DEV_SERVER_TOOL}:{digest}",),
+        label=f"{command} in {where}",
+        subject=command,
+    )
+
+
 def _file_change_scope(parent: str, as_written: str) -> GrantScope:
     """The one folder grant writes, edits and renames in *parent* share."""
     shown = parent.replace("/", "\\") if "\\" in as_written else parent
@@ -874,14 +974,20 @@ def _named_scope(
 
 
 __all__ = [
+    "BROWSER_PANE_SKILL",
+    "DEV_SERVER_TOOL",
     "GrantScope",
+    "NAME_ARGS",
     "PATH_ACCESS_PROMPT_TOOL",
     "PATH_TOOLS",
     "PROJECT_TRUST_PROMPT_TOOL",
     "RISK_NOTE_ARG",
     "SCRATCH_ARG",
+    "SITE_ARG",
     "command_reaches_folder",
     "grant_scope",
+    "launch_digest",
     "is_inside_folder",
+    "pane_tool_name",
     "path_argument",
 ]

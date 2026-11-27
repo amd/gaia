@@ -55,6 +55,19 @@ describe('addCard', () => {
         });
     });
 
+    it('keeps the account both steps used, and drops one they disagree on', () => {
+        const same = addCard(
+            [connect({ account: { google: 'work@example.com' } })],
+            connect({ account: { google: 'work@example.com' } }),
+        );
+        expect((same[0].data as { account?: unknown }).account).toEqual({ google: 'work@example.com' });
+        const split = addCard(
+            [connect({ account: { google: 'work@example.com' } })],
+            connect({ account: { google: 'home@example.com' } }),
+        );
+        expect((split[0].data as { account?: unknown }).account).toBeUndefined();
+    });
+
     it('keeps cards for different agents apart', () => {
         expect(addCard([connect()], connect({ agent_id: 'installed:email' }))).toHaveLength(2);
     });

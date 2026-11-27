@@ -26,10 +26,10 @@ def client():
 
 
 def _fake_agent_module(monkeypatch, skill_dirs):
-    mod = types.ModuleType("gaia_agent.agent")
+    mod = types.ModuleType("gaiapy.agent")
     mod.ENGINEERING_SKILL = "gaia-harness-engineering"
     mod.GaiaAgent = type("GaiaAgent", (), {"SKILL_DIRS": skill_dirs})
-    monkeypatch.setitem(sys.modules, "gaia_agent.agent", mod)
+    monkeypatch.setitem(sys.modules, "gaiapy.agent", mod)
 
 
 def _skill(name, **kw):
@@ -104,7 +104,7 @@ def test_a_manifest_marks_always_on_skills_without_changing_discovery(
     manifest = tmp_path / "gaia-agent.yaml"
     manifest.write_text("skills:\n  - gaia-voice\n", encoding="utf-8")
     _fake_agent_module(monkeypatch, [str(tmp_path)])
-    from gaia_agent.agent import GaiaAgent
+    from gaiapy.agent import GaiaAgent
 
     GaiaAgent.SKILL_MANIFEST = str(manifest)
 
@@ -149,10 +149,10 @@ class _FakeHandle:
 
 
 def _no_agent_package(monkeypatch, handle=None, acquire_error=None):
-    """The Hub-binary install: no ``gaia_agent`` package beside the UI."""
-    from gaia.ui.email_sidecar import daemon_client
+    """The Hub-binary install: no ``gaiapy`` package beside the UI."""
+    from gaia.ui.sidecar import daemon_client
 
-    monkeypatch.setitem(sys.modules, "gaia_agent.agent", None)
+    monkeypatch.setitem(sys.modules, "gaiapy.agent", None)
     calls = []
 
     def acquire(agent_id):
@@ -231,7 +231,7 @@ def test_an_agent_that_fails_to_list_is_a_502_with_its_reason(client, monkeypatc
 
 def test_the_proxy_asks_the_flagships_skills_route():
     """Pin the outgoing call, not just that one was made."""
-    from gaia.ui.email_sidecar.proxy import SidecarProxy
+    from gaia.ui.sidecar.proxy import SidecarProxy
 
     seen = {}
 
@@ -278,7 +278,7 @@ def test_real_discovery_hides_the_engineering_skill(client, mock_home, monkeypat
     """Against the real GaiaAgent roots: bundled skills listed, dev skill not."""
     monkeypatch.setenv("GAIA_CONFIG_DIR", str(mock_home / ".gaia"))
     monkeypatch.chdir(mock_home)
-    pytest.importorskip("gaia_agent.agent")
+    pytest.importorskip("gaiapy.agent")
     resp = client.get("/api/skills")
     assert resp.status_code == 200, resp.text
     names = {s["name"] for s in resp.json()["skills"]}

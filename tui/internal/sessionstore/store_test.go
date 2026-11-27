@@ -255,7 +255,7 @@ func TestAge(t *testing.T) {
 	}
 }
 
-// The index is written by gaia_agent/session_index.py; both sides read the
+// The index is written by gaiapy/session_index.py; both sides read the
 // layout from the same fixture.
 func TestIndexLayoutMatchesTheWireContract(t *testing.T) {
 	path := filepath.Join("..", "..", "..", "tests", "fixtures", "stdio", "gaia_stdio_wire.json")

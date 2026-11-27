@@ -17,6 +17,8 @@ before calling a chat item passed.
 Every command but `find` needs the test app's backend port: `--port`, or
 GAIA_UI_PORT=$(launch_isolated.py port --home ...). There is no default, because
 the person's own app may be on 4200 and these commands would read their chats.
+They also need that app's API token: `--home` (or GAIA_UI_HOME), the folder
+given to `launch_isolated.py start --home`, whose .gaia/agent-ui-token it reads.
 Read-only: nothing here changes app state.
 """
 
@@ -32,8 +34,34 @@ import sys
 import time
 import urllib.error
 import urllib.request
+from pathlib import Path
 
 HEADERS = {"X-Gaia-UI": "1", "Accept": "application/json"}
+
+
+def token_file(home: str) -> Path:
+    """The API token of the app started with ``launch_isolated.py start --home``."""
+    return Path(home) / ".gaia" / "agent-ui-token"
+
+
+def add_token(home: str | None) -> None:
+    """Send the test app's API token on every request; exit with the fix if absent."""
+    if not home:
+        sys.exit(
+            "give --home or set GAIA_UI_HOME to the test app's --home: every "
+            "Agent UI request but /api/health needs its API token."
+        )
+    path = token_file(home)
+    try:
+        token = path.read_text(encoding="utf-8").strip()
+    except OSError as e:
+        sys.exit(
+            f"Cannot read the Agent UI API token at {path} ({e}). Is --home the "
+            "folder given to `launch_isolated.py start`, and has its backend started?"
+        )
+    if not token:
+        sys.exit(f"The Agent UI API token file {path} is empty.")
+    HEADERS["Authorization"] = f"Bearer {token}"
 
 
 def get(port: int, path: str, timeout: float = 10) -> dict:
@@ -90,6 +118,25 @@ def listening() -> list[tuple[int, int]]:
     return sorted({(int(port), int(pid)) for port, pid in rx.findall(out)})
 
 
+def describe(port: int) -> str:
+    """Version and model of the backend on *port*, when it takes our token."""
+    if "Authorization" not in HEADERS:
+        return "(pass --home to read its version)"
+    req = urllib.request.Request(
+        f"http://127.0.0.1:{port}/api/system/status", headers=HEADERS
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=10) as r:
+            st = json.loads(r.read().decode("utf-8"))
+    except urllib.error.HTTPError as e:
+        if e.code == 401:
+            return "(another home's backend: its token differs)"
+        return f"(status: HTTP {e.code})"
+    except (urllib.error.URLError, OSError, ValueError) as e:
+        return f"(status unreadable: {e})"
+    return f"version {st.get('version')}  model {st.get('model_loaded')}"
+
+
 def cmd_find(a) -> None:
     found = 0
     for port, pid in listening():
@@ -103,10 +150,7 @@ def cmd_find(a) -> None:
             # Not every loopback listener speaks HTTP; those are simply not GAIA.
             continue
         if isinstance(body, dict) and body.get("service") == "gaia-agent-ui":
-            st = get(port, "/api/system/status")
-            print(
-                f"port {port}  pid {pid}  version {st.get('version')}  model {st.get('model_loaded')}"
-            )
+            print(f"port {port}  pid {pid}  {describe(port)}")
             found += 1
     if not found:
         sys.exit(
@@ -211,6 +255,11 @@ def main() -> None:
         default=int(env_port) if env_port else None,
         help="The test app's backend port (or GAIA_UI_PORT)",
     )
+    ap.add_argument(
+        "--home",
+        default=os.environ.get("GAIA_UI_HOME"),
+        help="The test app's --home, for its API token (or GAIA_UI_HOME)",
+    )
     sub = ap.add_subparsers(dest="cmd", required=True)
     sub.add_parser("find").set_defaults(fn=cmd_find)
     sub.add_parser("health").set_defaults(fn=cmd_health)
@@ -233,6 +282,8 @@ def main() -> None:
     a = ap.parse_args()
     if a.cmd != "find" and a.port is None:
         ap.error("give --port or set GAIA_UI_PORT (launch_isolated.py port --home ...)")
+    if a.cmd != "find" or a.home:
+        add_token(a.home)
     a.fn(a)
 
 

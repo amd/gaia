@@ -3,7 +3,7 @@
 
 """
 Cross-platform linting script for GAIA project.
-Runs the same checks as util/lint.ps1 but works on Linux/macOS/Windows.
+Runs every lint check on Linux, macOS and Windows; CI runs this same script.
 Used by CI and can be run locally for consistency.
 """
 
@@ -509,7 +509,7 @@ def check_imports() -> CheckResult:
 
     hub_optional = os.environ.get("GAIA_REQUIRE_HUB_AGENTS") != "1"
 
-    # Comprehensive import tests matching lint.ps1
+    # Comprehensive import tests
     tests = [
         # Core CLI
         ("import", "gaia.cli", "CLI module", False),
@@ -539,8 +539,8 @@ def check_imports() -> CheckResult:
         # Specialized Agents — optional so a framework-only env (no
         # gaia-agent-<id> installed) skips rather than fails. CI installs them
         # and sets GAIA_REQUIRE_HUB_AGENTS=1 so a broken import fails.
-        ("from", "gaia_agent.agent", "GaiaAgent", "Flagship agent", hub_optional),
-        ("from", "gaia_agent.chat_agent", "ChatAgent", "Chat agent", hub_optional),
+        ("from", "gaiapy.agent", "GaiaAgent", "Flagship agent", hub_optional),
+        ("from", "gaiapy.chat_agent", "ChatAgent", "Chat agent", hub_optional),
         # Database
         ("from", "gaia.database", "DatabaseAgent", "Database agent", False),
         ("from", "gaia.database", "DatabaseMixin", "Database mixin", False),
@@ -909,8 +909,8 @@ def count_python_files() -> tuple[int, int]:
                 total_files += 1
                 try:
                     total_lines += len(py_file.read_text(encoding="utf-8").splitlines())
-                except Exception:
-                    pass
+                except (OSError, UnicodeDecodeError) as e:
+                    print(f"[WARN] line count skips {py_file}: {e}")
 
     return total_files, total_lines
 

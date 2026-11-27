@@ -12,12 +12,13 @@ See: https://docs.pytest.org/en/stable/reference/fixtures.html#conftest-py-shari
 
 Current fixtures:
 - _block_real_browser_launch: Session-autouse guard so no test can open a real browser
+- _block_real_screen_capture: Session-autouse guard so no test can grab the real screen
 - api_server: Function-scoped fixture that starts GAIA API server for integration tests
 - api_client: HTTP client (requests.Session) configured for API testing
 - lemonade_available: Session-scoped fixture checking if Lemonade server is running
 - require_lemonade: Fixture that skips tests if Lemonade is not available
-- in_memory_keyring: Session-scoped fixture installing an in-memory keyring backend
-  (used by tests/unit/connectors/ to avoid SecretService prerequisite on Linux CI)
+- in_memory_keyring: Session-autouse fixture installing an in-memory keyring backend
+  for the whole suite, and refusing calls to the platform backend it replaces
 - ui_api_client: Function-scoped TestClient against gaia.ui.server.create_app()
 - mock_lemonade_client: Shared mock for LemonadeClient (requires pytest-mock)
 - reload_module: importlib.reload a module for one test, restoring its originals after
@@ -29,6 +30,7 @@ To add new fixtures for other test suites, define them in this file and they'll
 be automatically available to all test files.
 """
 
+import functools
 import importlib
 import os
 import subprocess
@@ -48,6 +50,20 @@ import requests
 # rather than rewriting every TestClient's ``base_url``. The guard's own tests
 # exercise the rejection path directly and do not rely on this.
 os.environ.setdefault("GAIA_UI_ALLOWED_HOSTS", "testserver")
+
+# Every Agent UI request needs the API token. Point the suite at its own token
+# file so no test reads or creates the developer's real one.
+_UI_TOKEN_FILE = Path(tempfile.mkdtemp(prefix="gaia-ui-token-")) / "agent-ui-token"
+_UI_TOKEN_FILE.write_text("test-agent-ui-token", encoding="utf-8")
+os.environ.setdefault("GAIA_UI_TOKEN_FILE", str(_UI_TOKEN_FILE))
+
+# Child processes cannot inherit ``keyring.set_keyring()``. The session fixture
+# sets this so a CLI or daemon spawned by a test resolves keyring's no-op store
+# instead of the developer's credential manager.
+_TEST_KEYRING_BACKEND = "keyring.backends.null.Keyring"
+_DISABLED_KEYRING_MODULES = frozenset(
+    {"keyring.backends.null", "keyring.backends.fail"}
+)
 
 _BROWSER_LAUNCHERS = ("open", "open_new", "open_new_tab")
 
@@ -79,58 +95,27 @@ def _block_real_browser_launch():
         setattr(webbrowser, name, original)
 
 
-_EMAIL_CORPUS_DIR = Path(__file__).parent / "fixtures" / "email"
-_BUILD_EMAIL_CORPUS = """
-try:
-    from tests.fixtures.email.generate_mbox import ensure_corpus
-except ImportError:
-    raise SystemExit(0)
-ensure_corpus()
-"""
-
-
-def pytest_sessionstart(session):
-    """Rebuild the email-triage corpus from its committed seed before any test.
-
-    ``synthetic_inbox.mbox`` + ``ground_truth.json`` are generated artifacts (not
-    committed — fully derived from ``vendor_corpus_seed.jsonl``), so a fresh
-    checkout has the seed but not the corpus. This materialises them once so
-    email unit/integration tests find their inputs. It no-ops when the email
-    agent extra isn't installed (those tests don't run here); a missing
-    committed seed still raises loudly inside ``ensure_corpus``.
-
-    Under pytest-xdist only the controller builds it, before any worker starts:
-    several workers rewriting the same mbox would corrupt it. It runs in a
-    child interpreter because importing the generator puts the email agent on
-    ``sys.path``, which would change which test files collect.
-    """
-    if hasattr(session.config, "workerinput"):
-        return
-    if all(
-        (_EMAIL_CORPUS_DIR / name).exists()
-        for name in ("synthetic_inbox.mbox", "ground_truth.json")
-    ):
-        return
-    subprocess.run(
-        [sys.executable, "-c", _BUILD_EMAIL_CORPUS],
-        cwd=_EMAIL_CORPUS_DIR.parents[2],
-        check=True,
-    )
-
-
 @pytest.fixture(scope="session", autouse=True)
-def _ensure_email_corpus():
-    """Check the corpus is in place, and import its generator after collection.
+def _block_real_screen_capture():
+    """No test may grab the real screen: it prompts for screen recording on macOS."""
+    saved = []
 
-    The controller already built the corpus (see ``pytest_sessionstart``), so
-    ``ensure_corpus`` is a no-op here; the import still puts the email agent on
-    ``sys.path`` for the rest of the session, as it always has.
-    """
-    try:
-        from tests.fixtures.email.generate_mbox import ensure_corpus
-    except ImportError:
-        return
-    ensure_corpus()
+    def _blocked(*_args, **_kwargs):
+        raise RuntimeError(
+            "tests must not capture the real screen; stub it like "
+            "tests/unit/test_screenshot_tools.py"
+        )
+
+    for module_name, attr in (("PIL.ImageGrab", "grab"), ("mss", "mss")):
+        try:
+            module = importlib.import_module(module_name)
+        except ImportError:
+            continue
+        saved.append((module, attr, getattr(module, attr)))
+        setattr(module, attr, _blocked)
+    yield
+    for module, attr, original in saved:
+        setattr(module, attr, original)
 
 
 def pytest_configure(config):
@@ -535,8 +520,45 @@ def api_client(api_server):
 
 
 # =============================================================================
-# CONNECTIONS / KEYRING FIXTURES (issue #915)
+# KEYRING FIXTURES (issues #915 and #8848)
 # =============================================================================
+
+
+def _guard_keyring_backend(backend):
+    """Make every password method on *backend* fail, and return a restore hook.
+
+    Replacing the active backend keeps ordinary calls away from the OS store.
+    This wrapper covers code that kept a reference to this already-resolved
+    backend instance and calls it directly. It cannot guard a new instance
+    constructed after the fixture ran. The original methods are kept so the
+    fixture can hand the unmodified backend back at session teardown.
+    """
+    name = type(backend).__name__
+
+    def _refuse(operation, *_args, **_kwargs):
+        pytest.fail(
+            f"A test reached the real OS keyring ({name}.{operation}). The "
+            "suite installs an in-memory backend for every test; patch "
+            "keyring.get_keyring() in a test that needs a different backend.",
+            pytrace=False,
+        )
+
+    originals = {}
+    for operation in (
+        "get_password",
+        "set_password",
+        "delete_password",
+        "get_credential",
+    ):
+        if hasattr(backend, operation):
+            originals[operation] = getattr(backend, operation)
+            setattr(backend, operation, functools.partial(_refuse, operation))
+
+    def _restore():
+        for operation, original in originals.items():
+            setattr(backend, operation, original)
+
+    return backend, _restore
 
 
 def _make_in_memory_keyring():
@@ -583,37 +605,52 @@ def _make_in_memory_keyring():
     return _InMemoryKeyring()
 
 
-@pytest.fixture(scope="session")
+@pytest.fixture(scope="session", autouse=True)
 def in_memory_keyring():
     """
-    Install an in-memory keyring backend for the duration of the test session.
+    Install an in-memory keyring backend for the whole test session.
 
-    Use as a session-scoped dependency in connections tests. The autouse fixture
-    in tests/unit/connectors/conftest.py wraps this to ensure every connections
-    test has the in-memory backend before any gaia.connectors module is imported.
+    Autouse from the root conftest, so no test reads the developer's credential
+    store, on Linux CI (no SecretService and a plaintext fallback), macOS
+    Keychain or Windows Credential Manager. The autouse fixture in
+    tests/unit/connectors/conftest.py clears the backing dict between connector
+    tests so state does not leak.
 
-    Linux CI runners ship without SecretService, and the production-default
-    keyrings.alt fallback is plaintext — we explicitly refuse that backend in
-    gaia.connectors.store. This fixture short-circuits the keyring lookup
-    chain to a deterministic in-memory backend that no production code uses.
+    The platform backend resolved before the switch is wrapped to fail loudly,
+    so a test that kept a reference to it cannot bypass the fixture. Its methods
+    are restored when the session ends. Child processes inherit
+    ``PYTHON_KEYRING_BACKEND`` pointing at keyring's null backend, since
+    ``set_keyring`` is process-local.
 
     Yields:
         _InMemoryKeyring: the active backend (already installed via keyring.set_keyring)
     """
     import keyring
 
-    backend = _make_in_memory_keyring()
     previous = keyring.get_keyring()
-    keyring.set_keyring(backend)
-    try:
-        yield backend
-    finally:
-        keyring.set_keyring(previous)
+    restore_previous = None
+    if type(previous).__module__ not in _DISABLED_KEYRING_MODULES:
+        previous, restore_previous = _guard_keyring_backend(previous)
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setenv("PYTHON_KEYRING_BACKEND", _TEST_KEYRING_BACKEND)
+        backend = _make_in_memory_keyring()
+        keyring.set_keyring(backend)
+        try:
+            yield backend
+        finally:
+            try:
+                keyring.set_keyring(previous)
+            finally:
+                if restore_previous is not None:
+                    restore_previous()
 
 
 @pytest.fixture(scope="session", autouse=True)
 def _testclient_sends_ui_header():
     """Make every ``TestClient`` carry ``X-Gaia-UI``, as real clients do.
+
+    A client of the Agent UI app also carries its API token, as the desktop
+    app and scripts do; a test of the refusal pops ``authorization``.
 
     ``gaia.ui.security.UIRequestGuardMiddleware`` refuses mutating
     ``/api``/``/v1`` requests without it. Over a hundred call sites across
@@ -636,6 +673,10 @@ def _testclient_sends_ui_header():
     def _init_with_ui_header(self, *args, **kwargs):
         original_init(self, *args, **kwargs)
         self.headers.setdefault("x-gaia-ui", "1")
+        app = args[0] if args else kwargs.get("app")
+        token = getattr(getattr(app, "state", None), "ui_api_token", None)
+        if isinstance(token, str):
+            self.headers.setdefault("authorization", f"Bearer {token}")
 
     TestClient.__init__ = _init_with_ui_header
     try:

@@ -1870,7 +1870,7 @@ class LemonadeManager:
             f"ctx_size={requested_ctx}, but reports a {reported_ctx}-token "
             f"window after {attempts} reload(s); GAIA needs {min_context_size}. "
             "Free memory by closing other models or apps, or lower the context "
-            "size in Settings > Model; GAIA tries the reload again after about "
+            "size in Settings > Agent & model; GAIA tries the reload again after about "
             f"a minute. {lemonade_log_hint(base_url)}"
         )
 

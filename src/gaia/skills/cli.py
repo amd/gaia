@@ -55,7 +55,7 @@ from gaia.skills.migrate import (
 from gaia.skills.naming import skill_directory, validated_skill_name
 from gaia.skills.signing import ROLE_AMD, ROLE_PUBLISHER
 from gaia.skills.tiers import LOWEST_TIER
-from gaia.utils.archive import ArchiveError, safe_extract
+from gaia.utils.archive import ArchiveError, ArchiveSizeError, safe_extract
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     # Runtime imports of drift stay inside the two verbs that need it, to keep
@@ -1281,7 +1281,13 @@ def _handle_remove(args: argparse.Namespace) -> int:
 
 def _handle_lock(args: argparse.Namespace) -> int:
     """Check the user root against ``skill-lock.json``, or re-record it."""
-    from gaia.skills.drift import DRIFT_UNRECORDED, DRIFT_UNTRACKED, check_drift, relock
+    from gaia.skills.drift import (
+        DRIFT_REAUDIT,
+        DRIFT_UNRECORDED,
+        DRIFT_UNTRACKED,
+        check_drift,
+        relock,
+    )
 
     root = _manager().user_root
 
@@ -1309,6 +1315,17 @@ def _handle_lock(args: argparse.Namespace) -> int:
         print(
             f"⚠ {len(unrecorded)} skill(s) in {root} predate content digests, so "
             f"{report.lock_file.name} cannot verify them{also}:\n",
+            file=sys.stderr,
+        )
+        print(report.render(), file=sys.stderr)
+        return EXIT_INVALID
+
+    reaudit = [d for d in report.drifts if d.kind == DRIFT_REAUDIT]
+    if reaudit and len(reaudit) == len(notable):
+        print(
+            f"⚠ {len(reaudit)} skill(s) in {root} were checked by an older GAIA "
+            "and need re-auditing under this version's rules. Their files are "
+            "unchanged; their code stays off until you re-check them:\n",
             file=sys.stderr,
         )
         print(report.render(), file=sys.stderr)
@@ -1370,10 +1387,14 @@ def _render_relock(result: "RelockResult", root: Path, *, as_json: bool) -> int:
 
 
 def _handle_publish(args: argparse.Namespace) -> int:
-    from gaia.hub.publisher import get_hub_token
+    from gaia.hub.publisher import PublisherError, get_hub_token
     from gaia.skills.publish import publish_skill
 
-    token = get_hub_token() or ""
+    try:
+        token = get_hub_token() or ""
+    except PublisherError as exc:
+        sys.stderr.write(f"❌ {exc}\n")
+        return EXIT_INVALID
     result = publish_skill(
         Path(args.directory),
         token=token,
@@ -1581,8 +1602,21 @@ def _download(url: str, destination: Path) -> Path:
 
 def _unpack(archive: Path, destination: Path) -> Path:
     """Extract a skill .zip, refusing unsafe entries, and return its root."""
+    from gaia.skills import install as skill_install
+
     try:
-        safe_extract(archive, destination, kind="zip")
+        safe_extract(
+            archive,
+            destination,
+            kind="zip",
+            max_member_bytes=skill_install.BUNDLE_MAX_MEMBER_BYTES,
+            max_total_bytes=skill_install.BUNDLE_MAX_TOTAL_BYTES,
+        )
+    except ArchiveSizeError as exc:
+        raise SkillValidationError(
+            f"Refusing to extract {archive}: {exc}. The bundle is larger than "
+            "GAIA allows for a skill; nothing was imported."
+        ) from exc
     except ArchiveError as exc:
         raise SkillValidationError(
             f"Refusing to extract {archive}: {exc}. The bundle is malformed or "

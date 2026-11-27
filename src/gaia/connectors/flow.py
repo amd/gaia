@@ -21,7 +21,7 @@ Plan amendment A8 hardenings:
 - ``webbrowser.open`` dispatched via ``run_in_executor`` so a slow
   browser launch on Linux does not block concurrent SSE streams.
 
-v1 single-flow scope: ``_pending`` is a ``dict[flow_id, _PendingFlow]``,
+Single-flow scope: ``_pending`` is a ``dict[flow_id, _PendingFlow]``,
 but only one flow can be active at a time per process — a second
 ``start_authorization`` call while one is pending raises
 ``FlowInProgressError``.
@@ -38,7 +38,7 @@ import secrets
 import uuid
 import webbrowser
 from dataclasses import dataclass, field
-from typing import Any, Dict, Iterable, Mapping, Optional
+from typing import TYPE_CHECKING, Any, Dict, Iterable, Mapping, Optional, Tuple
 from urllib.parse import urlsplit
 
 import httpx
@@ -51,13 +51,21 @@ from gaia.connectors.errors import (
     FlowTimeoutError,
     GrantAfterConnectError,
     OAuthProviderError,
+    ProfileRefusedError,
     ScopeNotAllowedError,
 )
 from gaia.connectors.events import emit
 from gaia.connectors.pkce import compute_code_challenge, generate_code_verifier
 from gaia.connectors.prior_state import resolve_or_reject_empty_scopes
 from gaia.connectors.providers import get as get_provider
-from gaia.connectors.store import DEFAULT_ACCOUNT, peek_connection, save_connection
+from gaia.connectors.store import (
+    DEFAULT_ACCOUNT,
+    connection_slot_in_use,
+    peek_connection,
+)
+
+if TYPE_CHECKING:
+    from gaia.connectors.accounts import Account
 
 logger = logging.getLogger(__name__)
 
@@ -93,6 +101,23 @@ _ERROR_HTML = (
 # and click through Google's interstitial.
 _FLOW_TIMEOUT_SECONDS = 900
 
+# An overall cap on the profile lookup (httpx's timeout is per phase).
+_USERINFO_DEADLINE_SECONDS = 10.0
+
+
+@dataclass(frozen=True)
+class SignInIntent:
+    """Why a sign-in was started.
+
+    ``add_account`` shows the provider's account picker. ``reconnect`` is the
+    account id of the stored account being signed in again; its address goes
+    to the provider as a hint. Either way the account that actually signs in
+    decides where the token is saved (see ``accounts.save_signed_in_account``).
+    """
+
+    add_account: bool = False
+    reconnect: Optional[str] = None
+
 
 @dataclass
 class _PendingFlow:
@@ -110,6 +135,16 @@ class _PendingFlow:
     grant_agents: Dict[str, list[str]] = field(default_factory=dict)
     # Ends a flow nobody awaits (the apps) when the user just closes the tab.
     expiry: Optional[asyncio.TimerHandle] = None
+    # What the user asked for: add another account, or reconnect one.
+    intent: SignInIntent = field(default_factory=SignInIntent)
+
+
+@dataclass(frozen=True)
+class AccountIdentity:
+    """Who signed in: the provider's stable account id and the address."""
+
+    account_id: str
+    email: str
 
 
 # v1 single-flow constraint per the plan: only one flow can be pending at
@@ -187,47 +222,150 @@ def _resolve_account_type(provider, id_token: str) -> Optional[str]:
     return account_type if isinstance(account_type, str) and account_type else None
 
 
-async def _resolve_account_email(provider, id_token: str, access_token: str) -> str:
-    """Best-effort account email for display: prefer the id_token claim; if it
-    yields nothing, fall back to the provider's ``userinfo_url`` (e.g. Graph
-    ``/me``). Returns ``"default"`` when neither works — the connection is keyed
-    by DEFAULT_ACCOUNT internally, so this only affects the display label and
-    must never fail the connect. The userinfo call is skipped entirely for
-    providers whose id_token already carries the email (e.g. Google)."""
+async def identify_account(
+    provider, id_token: str, access_token: str
+) -> AccountIdentity:
+    """Which account signed in, from the token response.
+
+    Google: the id_token's ``sub`` and ``email`` (GAIA requests ``openid`` and
+    the email scope). Microsoft, which GAIA signs in without ``openid``: the
+    Graph ``/me`` profile's ``id`` and address (``userinfo_url``). Raises
+    ``ConnectorsError`` when either is missing: saving a sign-in GAIA can't
+    tell apart from the others would mix accounts together.
+    """
+    claims = _decode_id_token_claims(id_token or "")
     email = _decode_email_from_id_token(id_token or "")
-    if email:
-        return email
+    provider_id = getattr(provider, "provider_id", "?")
     userinfo_url = getattr(provider, "userinfo_url", None)
-    parse = getattr(provider, "parse_account_email", None)
-    if userinfo_url and access_token and callable(parse):
-        try:
-            async with httpx.AsyncClient(timeout=10.0) as client:
-                resp = await client.get(
-                    userinfo_url, headers={"Authorization": f"Bearer {access_token}"}
-                )
-            if resp.status_code == 200:
-                return parse(resp.json()) or "default"
-            logger.error(
-                "flow: userinfo lookup for %s returned HTTP %s at %s — the "
-                "connection is usable but will be labelled 'default' instead "
-                "of the account address. Reconnect with the provider's default "
-                "scopes (a hand-typed --scopes list that drops the profile "
-                "scope cannot resolve an address).",
-                getattr(provider, "provider_id", "?"),
-                resp.status_code,
-                userinfo_url,
+    if userinfo_url:
+        info = await _fetch_userinfo(provider_id, userinfo_url, access_token)
+        account_id = provider.parse_account_id(info)
+        email = email or provider.parse_account_email(info)
+    else:
+        sub = claims.get("sub")
+        account_id = sub if isinstance(sub, str) else None
+    if not account_id or not email:
+        missing = " and ".join(
+            name
+            for name, value in (("account id", account_id), ("address", email))
+            if not value
+        )
+        raise ConnectorsError(
+            f"{provider_id} signed in, but its reply did not say which account "
+            f"it was (no {missing}), so GAIA did not save it: it could not tell "
+            "this account from the others. Connect again with the connector's "
+            "default scopes; a hand-typed --scopes list must keep "
+            f"{', '.join(getattr(provider, 'default_scopes', ()))}."
+        )
+    return AccountIdentity(account_id=account_id, email=email)
+
+
+async def _fetch_userinfo(provider_id: str, url: str, access_token: str) -> dict:
+    if not access_token:
+        raise ConnectorsError(
+            f"{provider_id} returned no access token to look up the signed-in "
+            "account with. Connect again."
+        )
+
+    async def _get() -> httpx.Response:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            return await client.get(
+                url, headers={"Authorization": f"Bearer {access_token}"}
             )
-        except Exception as e:  # noqa: BLE001 — label-only, never fail connect
-            logger.error(
-                "flow: userinfo lookup for %s failed (%s) at %s — the "
-                "connection is usable but will be labelled 'default' instead "
-                "of the account address. Check network reachability to the "
-                "provider, then reconnect.",
-                getattr(provider, "provider_id", "?"),
-                e,
-                userinfo_url,
-            )
-    return "default"
+
+    try:
+        resp = await asyncio.wait_for(_get(), _USERINFO_DEADLINE_SECONDS)
+    except asyncio.TimeoutError as e:
+        raise ConnectorsError(
+            f"{provider_id}'s profile lookup at {url} did not answer within "
+            f"{_USERINFO_DEADLINE_SECONDS:.0f}s, so GAIA could not tell which "
+            "account signed in. Check the network and connect again."
+        ) from e
+    except httpx.HTTPError as e:
+        raise ConnectorsError(
+            f"Could not look up which {provider_id} account signed in "
+            f"({type(e).__name__}) at {url}. Check the network and connect again."
+        ) from e
+    if resp.status_code != 200:
+        refused = resp.status_code in (401, 403)
+        raise (ProfileRefusedError if refused else ConnectorsError)(
+            f"Looking up which {provider_id} account signed in failed with HTTP "
+            f"{resp.status_code} at {url}. Connect again with the connector's "
+            "default scopes (they include the profile permission)."
+        )
+    try:
+        info = resp.json()
+    except ValueError as e:
+        raise ConnectorsError(
+            f"{provider_id}'s profile reply at {url} was not JSON. Connect again."
+        ) from e
+    if not isinstance(info, dict):
+        raise ConnectorsError(
+            f"{provider_id}'s profile reply at {url} had the wrong shape. "
+            "Connect again."
+        )
+    return info
+
+
+async def _save_signed_in(
+    provider_id: str,
+    provider,
+    payload: Dict[str, Any],
+    granted_scopes: list[str],
+    account_type: Optional[str],
+    *,
+    add_account: bool = False,
+) -> Dict[str, Any]:
+    """Identify the account, store it, and return the result fields."""
+    from gaia.connectors.accounts import save_signed_in_account
+
+    identity = await identify_account(
+        provider, payload.get("id_token", ""), payload.get("access_token", "")
+    )
+    account, added = await locked_write(
+        provider_id,
+        save_signed_in_account,
+        provider_id,
+        account_id=identity.account_id,
+        email=identity.email,
+        refresh_token=payload["refresh_token"],
+        scopes=granted_scopes,
+        client_id_hash=provider.client_id_hash,
+        # D8: record the minting authority — None for providers with no
+        # concept of a tenant (e.g. Google), which save_connection omits
+        # from the blob entirely (A7-style contract).
+        tenant=getattr(provider, "tenant", None),
+        account_type=account_type,
+        add_account=add_account,
+    )
+    return {
+        "account_email": account.email,
+        "account_id": account.account_id,
+        "added": added,
+        "is_default": account.is_default,
+    }
+
+
+def _sign_in_intent(
+    provider_id: str, add_account: bool, account: Optional[str]
+) -> Tuple[SignInIntent, Optional["Account"]]:
+    """The intent of a sign-in, and the stored account it reconnects if any.
+    Raises before any sign-in starts when ``account`` is not stored."""
+    if add_account and account is not None:
+        raise ConnectorsError(
+            f"Signing in to {provider_id}: pass add_account=True to add an "
+            "account, or account=<id or address> to reconnect one, not both."
+        )
+    target = None
+    if account is not None:
+        from gaia.connectors.accounts import resolve_account
+
+        target = resolve_account(provider_id, account)
+    intent = SignInIntent(
+        add_account=add_account,
+        reconnect=target.account_id if target else None,
+    )
+    return intent, target
 
 
 def _reject_scopes_outside_catalog(provider_id: str, scopes_list: list[str]) -> None:
@@ -249,14 +387,18 @@ async def start_authorization(
     provider_id: str,
     scopes: Iterable[str],
     grant_agents: Optional[Mapping[str, Iterable[str]]] = None,
+    *,
+    add_account: bool = False,
+    account: Optional[str] = None,
+    callback_port: Optional[int] = None,
 ) -> Dict[str, Any]:
     """
     Begin the OAuth flow for ``provider_id`` with the requested scopes.
 
-    Returns ``{flow_id, authorization_url}``. Spins up a loopback aiohttp
-    runner on an ephemeral port, stores the pending flow, fires a
-    background callback to ``webbrowser.open(...)`` (in an executor to
-    keep the event loop responsive), and returns immediately.
+    Returns ``{flow_id, authorization_url, callback_port}``. Spins up a
+    loopback aiohttp runner on an ephemeral port (or explicit ``callback_port``),
+    stores the pending flow, fires a background callback to ``webbrowser.open(...)``
+    (in an executor to keep the event loop responsive), and returns immediately.
 
     The caller is expected to await ``complete_authorization(flow_id)``
     to wait for the redirect. A flow nobody awaits (the apps) still ends
@@ -271,7 +413,27 @@ async def start_authorization(
     ``_exchange_code_for_tokens`` — a grant that cannot be written fails
     the whole flow loudly rather than leaving a connected-but-ungranted
     dead end.
+
+    ``add_account`` shows the provider's account picker so the user can sign
+    in to another account. ``account`` (an account id or address) reconnects
+    that stored account: its address is sent as a sign-in hint. The account
+    that actually signs in decides where the token is saved: a stored account
+    with the same id is updated in place, any other is added, and no account
+    is ever overwritten by a different one.
     """
+    if callback_port is not None:
+        if (
+            not isinstance(callback_port, int)
+            or isinstance(callback_port, bool)
+            or callback_port < 1
+            or callback_port > 65535
+        ):
+            raise ConnectorsError(
+                f"Invalid callback port {callback_port!r}: "
+                "must be an integer between 1 and 65535."
+            )
+
+    intent, target = _sign_in_intent(provider_id, add_account, account)
     if _pending:
         # User re-clicking Connect signals the previous flow is dead.
         # Common case: Google blocks the auth (wrong account / consent
@@ -296,13 +458,20 @@ async def start_authorization(
     )
     # Both CLI and Agent UI browser flows converge here.
     _reject_scopes_outside_catalog(provider_id, scopes_list)
+    extra_params: Dict[str, str] = {}
+    if add_account or target is not None:
+        extra_params = provider.account_prompt_params(
+            select_account=add_account,
+            login_hint=target.email if target else None,
+            account_type=target.account_type if target else None,
+        )
 
     code_verifier = generate_code_verifier()
     challenge = compute_code_challenge(code_verifier)
     state = secrets.token_urlsafe(32)
     flow_id = uuid.uuid4().hex
 
-    loop = asyncio.get_event_loop()
+    loop = asyncio.get_running_loop()
     future: "asyncio.Future[Dict[str, Any]]" = loop.create_future()
     # The apps never await it; each failure also goes out as an event.
     future.add_done_callback(lambda f: f.cancelled() or f.exception())
@@ -316,8 +485,22 @@ async def start_authorization(
     # aiohttp's access log would write the code and state in the query string.
     runner = web.AppRunner(app, access_log=None)
     await runner.setup()
-    site = web.TCPSite(runner, "127.0.0.1", 0)
-    await site.start()
+    site = web.TCPSite(runner, "127.0.0.1", callback_port or 0)
+    try:
+        await site.start()
+    except OSError as e:
+        await runner.cleanup()
+        if callback_port is not None:
+            cause = (
+                "permission denied (ports below 1024 need elevated rights)"
+                if isinstance(e, PermissionError)
+                else f"port is already in use ({type(e).__name__})"
+            )
+            raise ConnectorsError(
+                f"Could not bind OAuth callback to port {callback_port}: {cause}. "
+                "Choose a free port above 1024 with --callback-port, or omit it for an ephemeral port."
+            ) from e
+        raise
 
     # Read back the actual port the kernel assigned. aiohttp keeps the
     # bound sockets on the runner.sites list.
@@ -329,6 +512,7 @@ async def start_authorization(
         challenge=challenge,
         state=state,
         scopes=scopes_list,
+        extra_params=extra_params,
     )
 
     _pending[flow_id] = _PendingFlow(
@@ -345,6 +529,7 @@ async def start_authorization(
             for agent_id, agent_scopes in (grant_agents or {}).items()
         },
         expiry=loop.call_later(_FLOW_TIMEOUT_SECONDS, _start_expiry, flow_id),
+        intent=intent,
     )
 
     # Fire-and-forget the browser launch — A8: do not block the event
@@ -382,7 +567,11 @@ async def start_authorization(
         len(_pending[flow_id].grant_agents),
         flow_id,
     )
-    return {"flow_id": flow_id, "authorization_url": authorization_url}
+    return {
+        "flow_id": flow_id,
+        "authorization_url": authorization_url,
+        "callback_port": port,
+    }
 
 
 async def complete_authorization(flow_id: str) -> Dict[str, Any]:
@@ -467,7 +656,10 @@ async def _teardown_flow(flow_id: str) -> None:
 
 
 async def revoke_provider_token(
-    provider_id: str, *, account_email: str = DEFAULT_ACCOUNT
+    provider_id: str,
+    *,
+    slot: str = DEFAULT_ACCOUNT,
+    account_type: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
     Attempt a provider-side OAuth revoke of the stored refresh token (#2591).
@@ -491,11 +683,25 @@ async def revoke_provider_token(
       could not be resolved. ``revoke_error`` names which, so callers don't
       conflate "can't be revoked" with "wasn't tried".
     - ``revoke_supported=True, revoked_remotely=True`` — the provider's
-      revoke endpoint accepted the request (or there was no refresh token
-      stored to revoke in the first place).
-    - ``revoke_supported=True, revoked_remotely=False`` — the endpoint call
-      failed; ``revoke_error`` carries why. The provider-side grant is still
-      live and the caller must say so.
+      revoke endpoint accepted the request (``revoke_attempted=True``).
+    - ``revoke_supported=True, revoked_remotely=False,
+      nothing_stored=True``: the slot was empty, so there was no refresh
+      token to revoke and no provider call was made. This is distinct from a
+      revoke that failed.
+    - ``revoke_supported=<provider's>, revoked_remotely=False,
+      nothing_stored=False, revoke_error=<why>`` — the slot holds a sign-in
+      GAIA cannot read (#8713), so there was no token to send. The local copy
+      is still removed and ``revoke_error`` says where to revoke by hand. The
+      slot is not empty, so this must never be reported as nothing stored.
+    - ``revoke_supported=True, revoked_remotely=False,
+      revoke_attempted=True`` — the endpoint call failed; ``revoke_error``
+      carries why. The provider-side grant is still live and the caller must
+      say so.
+
+    ``revoke_attempted`` is True only when a revoke request was actually sent.
+    It is False for an empty slot, an unreadable sign-in, a forwarded
+    connection, an unresolvable provider, and a provider with no revoke
+    endpoint, so callers can say "not attempted" instead of "failed".
 
     **Forwarded connections are never revoked remotely (#2591 review).** A
     connection imported via ``api.import_forwarded_connection`` stores a
@@ -508,11 +714,13 @@ async def revoke_provider_token(
     (the caller deletes the keyring entry regardless); only the remote call
     is skipped.
     """
-    blob = peek_connection(provider_id, account_email=account_email)
+    blob = peek_connection(provider_id, slot=slot)
     if blob and blob.get("forwarded"):
         return {
             "revoke_supported": False,
             "revoked_remotely": False,
+            "revoke_attempted": False,
+            "nothing_stored": False,
             "revoke_error": (
                 "this connection was forwarded to GAIA by another application "
                 "— the token belongs to that app, not GAIA, so revoking it "
@@ -521,6 +729,12 @@ async def revoke_provider_token(
                 "connected-apps page, to fully revoke access."
             ),
         }
+
+    # None means empty OR unreadable; only an empty slot is "nothing stored".
+    if blob is None and provider_id in HAS_REVOKE_ENDPOINT:
+        if not connection_slot_in_use(provider_id, slot=slot):
+            return nothing_to_revoke(provider_id)
+        return unreadable_sign_in(provider_id, account_type=account_type)
 
     try:
         provider = get_provider(provider_id)
@@ -533,6 +747,8 @@ async def revoke_provider_token(
         return {
             "revoke_supported": False,
             "revoked_remotely": False,
+            "revoke_attempted": False,
+            "nothing_stored": False,
             "revoke_error": f"provider {provider_id!r} could not be resolved: {exc}",
         }
     # Read the attribute directly, never via getattr-with-default: a provider
@@ -542,8 +758,14 @@ async def revoke_provider_token(
     result: Dict[str, Any] = {
         "revoke_supported": bool(revoke_url),
         "revoked_remotely": False,
+        "revoke_attempted": False,
+        "nothing_stored": False,
         "revoke_error": None,
     }
+    refresh_token = (blob or {}).get("refresh_token")
+    if not refresh_token:
+        result["nothing_stored"] = True
+        return result
     if not revoke_url:
         return result
 
@@ -551,12 +773,7 @@ async def revoke_provider_token(
     # ``spec.oauth_provider_ref``, which every credential-name heuristic reads
     # as secret material, and the host identifies the provider just as exactly.
     revoke_host = urlsplit(revoke_url).netloc
-
-    refresh_token = (blob or {}).get("refresh_token")
-    if not refresh_token:
-        # Nothing stored to revoke — there is no live grant to leave behind.
-        result["revoked_remotely"] = True
-        return result
+    result["revoke_attempted"] = True
 
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
@@ -598,6 +815,125 @@ async def revoke_provider_token(
         response.status_code,
     )
     return result
+
+
+#: Whether each OAuth provider has a revoke endpoint, mirroring its ``revoke_url``.
+#: Static so a disconnect can answer without the provider's client configured.
+HAS_REVOKE_ENDPOINT: Dict[str, bool] = {
+    "google": True,
+    "microsoft": False,
+    "microsoft_work": False,
+}
+
+
+def nothing_to_revoke(provider_id: str) -> Dict[str, Any]:
+    """The revoke outcome for an account with no token stored: no live grant.
+
+    Matches what :func:`revoke_provider_token` reports for the same case, so a
+    provider with no revoke endpoint still says so. Reads nothing from the
+    keyring, so it answers on one that refuses reads.
+    """
+    if provider_id not in HAS_REVOKE_ENDPOINT:
+        return {
+            "revoke_supported": False,
+            "revoked_remotely": False,
+            "revoke_attempted": False,
+            "nothing_stored": False,
+            "revoke_error": f"provider {provider_id!r} could not be resolved",
+        }
+    return {
+        "revoke_supported": HAS_REVOKE_ENDPOINT[provider_id],
+        "revoked_remotely": False,
+        "revoke_attempted": False,
+        "nothing_stored": True,
+        "revoke_error": None,
+    }
+
+
+#: Where a user removes GAIA's access by hand, per OAuth provider id.
+REVOKE_PAGES: Dict[str, Tuple[str, str]] = {
+    "google": ("Google", "https://myaccount.google.com/permissions"),
+    "microsoft": ("Microsoft", "https://account.live.com/consent/Manage"),
+    "microsoft_work": ("Microsoft", "https://myapps.microsoft.com"),
+}
+
+
+def revoke_page_for(
+    provider_id: str, *, account_type: Optional[str] = None
+) -> Tuple[str, str]:
+    """The provider label and connected-apps URL where the user revokes GAIA.
+
+    ``account_type`` sends a work account saved under ``microsoft`` to the
+    work page. Shared by every path that has to tell the user to revoke by
+    hand (weak keyring, unreadable sign-in).
+    """
+    from gaia.connectors.providers.microsoft import ACCOUNT_TYPE_WORK
+
+    page_id = provider_id
+    if provider_id == "microsoft" and account_type == ACCOUNT_TYPE_WORK:
+        page_id = "microsoft_work"
+    return REVOKE_PAGES.get(
+        page_id, (provider_id, "your account's connected-apps page")
+    )
+
+
+def unreadable_sign_in(
+    provider_id: str, *, account_type: Optional[str] = None
+) -> Dict[str, Any]:
+    """The revoke outcome when the slot holds a sign-in GAIA cannot read.
+
+    ``peek_connection`` returns ``None`` for a corrupt blob while the entry
+    stays in place, so this is not an empty slot: the local copy is removed,
+    but there is no token to revoke, and the user must revoke GAIA's access
+    at the provider by hand (#8713).
+    """
+    label, page = revoke_page_for(provider_id, account_type=account_type)
+    return {
+        "revoke_supported": HAS_REVOKE_ENDPOINT[provider_id],
+        "revoked_remotely": False,
+        "revoke_attempted": False,
+        "nothing_stored": False,
+        "revoke_error": (
+            "GAIA could not read the stored sign-in, so it removed the local "
+            f"copy without revoking GAIA's access at {label}. To revoke it, "
+            f"remove GAIA at {page}"
+        ),
+    }
+
+
+def not_revoked_on_weak_keyring(
+    provider_id: str,
+    *,
+    uninspectable: bool = False,
+    account_type: Optional[str] = None,
+) -> Dict[str, Any]:
+    """The revoke outcome when the keyring refuses reads (weak or uninspectable).
+
+    Revoking needs the stored refresh token, which GAIA will not read from
+    such a keyring, so only the local copy is removed. ``revoke_error`` tells
+    the user where to revoke GAIA's access by hand. ``uninspectable`` is a
+    chain GAIA could not check, which may well be secure; ``account_type``
+    sends a work account saved under ``microsoft`` to the work page.
+    """
+    label, page = revoke_page_for(provider_id, account_type=account_type)
+    if uninspectable:
+        why = "GAIA could not confirm the keyring on this PC is secure"
+        fix = "use a single system credential store"
+    else:
+        why = "The keyring on this PC is not secure"
+        fix = "switch to a secure credential store"
+    return {
+        "revoke_supported": False,
+        "revoked_remotely": False,
+        "revoke_attempted": False,
+        "nothing_stored": False,
+        "revoke_error": (
+            f"{why}, so GAIA removed the sign-in without reading it and did "
+            f"not revoke GAIA's access at {label}. To revoke it, remove GAIA "
+            f"at {page}. To keep using connectors, {fix}: "
+            "https://amd-gaia.ai/docs/security/connections"
+        ),
+    }
 
 
 async def _handle_callback(request: web.Request, flow_id: str) -> web.Response:
@@ -868,8 +1204,7 @@ async def _exchange_code_for_tokens(flow: _PendingFlow, code: str) -> Dict[str, 
             status_code=response.status_code,
         )
     payload = response.json()
-    refresh_token = payload.get("refresh_token")
-    if not refresh_token:
+    if not payload.get("refresh_token"):
         raise ConnectorsError(
             f"Token endpoint for {flow.provider_id} returned no "
             "refresh_token. Make sure the provider's "
@@ -878,26 +1213,19 @@ async def _exchange_code_for_tokens(flow: _PendingFlow, code: str) -> Dict[str, 
             "docs/security/connections.mdx."
         )
 
-    account_email = await _resolve_account_email(
-        provider, payload.get("id_token", ""), payload.get("access_token", "")
-    )
     account_type = _resolve_account_type(provider, payload.get("id_token", ""))
     granted_scopes = _resolve_granted_scopes(payload, flow.scopes)
-
-    await locked_write(
+    saved = await _save_signed_in(
         flow.provider_id,
-        save_connection,
-        provider=flow.provider_id,
-        account_email=account_email or "default",
-        refresh_token=refresh_token,
-        scopes=granted_scopes,
-        client_id_hash=provider.client_id_hash,
-        # D8: record the minting authority — None for providers with no
-        # concept of a tenant (e.g. Google), which save_connection omits
-        # from the blob entirely (A7-style contract).
-        tenant=getattr(provider, "tenant", None),
-        account_type=account_type,
+        provider,
+        payload,
+        granted_scopes,
+        account_type,
+        add_account=flow.intent.add_account,
     )
+    if flow.intent.reconnect:
+        # Lets the caller say so when a different account came back.
+        saved["requested_account_id"] = flow.intent.reconnect
 
     # No separate state-cache write needed — the keyring blob written
     # above is the source of truth for "configured / account / scopes",
@@ -918,26 +1246,39 @@ async def _exchange_code_for_tokens(flow: _PendingFlow, code: str) -> Dict[str, 
 
     state_dict = {
         "provider": flow.provider_id,
-        "account_email": account_email or "default",
+        **saved,
         "scopes": granted_scopes,
         "connected_at": _time.time(),
     }
-    # Emit both the new framework event-name (matches the SSE router
-    # docstring and what the AgentUI listens for) and the legacy name
-    # for any older subscribers. The keys ``connector_id`` /
-    # ``account_email`` match the router-documented payload.
+    await _emit_connected(flow.provider_id, saved)
+    return state_dict
+
+
+async def _emit_connected(provider_id: str, saved: Dict[str, Any]) -> None:
+    """Emit the framework event (what the Agent UI listens for) and the legacy
+    one. ``account_id`` names the account; ``added`` says it is new;
+    ``is_default`` says whether it is the default account (an added account
+    is not, unless it is the first); ``requested_account_id`` is the account
+    a reconnect asked for, if any."""
     await emit(
         "connector.oauth.completed",
         {
-            "connector_id": flow.provider_id,
-            "account_email": state_dict["account_email"],
+            "connector_id": provider_id,
+            "account_email": saved["account_email"],
+            "account_id": saved["account_id"],
+            "added": saved["added"],
+            "is_default": saved["is_default"],
+            "requested_account_id": saved.get("requested_account_id"),
         },
     )
     await emit(
         "connection.connected",
-        {"provider": flow.provider_id, "account_email": state_dict["account_email"]},
+        {
+            "provider": provider_id,
+            "account_email": saved["account_email"],
+            "account_id": saved["account_id"],
+        },
     )
-    return state_dict
 
 
 # ---------------------------------------------------------------------------
@@ -953,14 +1294,26 @@ async def _exchange_code_for_tokens(flow: _PendingFlow, code: str) -> Dict[str, 
 _DEVICE_POLL_DEFAULT_INTERVAL = 5
 
 
-async def start_device_flow(provider_id: str, scopes: Iterable[str]) -> Dict[str, Any]:
+async def start_device_flow(
+    provider_id: str,
+    scopes: Iterable[str],
+    *,
+    add_account: bool = False,
+    account: Optional[str] = None,
+) -> Dict[str, Any]:
     """Request a device + user code from the provider's device-code endpoint.
 
     Returns ``{provider_id, scopes, device_code, user_code, verification_uri,
-    expires_in, interval, message}``. The caller shows ``user_code`` +
+    expires_in, interval, message, intent}``. The caller shows ``user_code`` +
     ``verification_uri`` (or the provider-supplied ``message``) to the user,
-    then awaits :func:`poll_device_flow` with the returned ``device_code``.
+    then awaits :func:`poll_device_flow` with the returned ``device_code`` and
+    ``intent``.
+
+    ``add_account`` and ``account`` mean what they mean for
+    :func:`start_authorization`. The device-code page has no account picker
+    or sign-in hint, so they only decide where the sign-in is saved.
     """
+    intent, _target = _sign_in_intent(provider_id, add_account, account)
     provider = get_provider(provider_id)
     device_code_url = getattr(provider, "device_code_url", None)
     if not device_code_url:
@@ -1027,6 +1380,7 @@ async def start_device_flow(provider_id: str, scopes: Iterable[str]) -> Dict[str
         "expires_in": int(d.get("expires_in", 900)),
         "interval": int(d.get("interval", _DEVICE_POLL_DEFAULT_INTERVAL)),
         "message": d.get("message", ""),
+        "intent": intent,
     }
 
 
@@ -1038,8 +1392,12 @@ async def poll_device_flow(
     interval: int = _DEVICE_POLL_DEFAULT_INTERVAL,
     expires_in: int = 900,
     grant_agents: Optional[Mapping[str, Iterable[str]]] = None,
+    intent: Optional[SignInIntent] = None,
 ) -> Dict[str, Any]:
     """Poll the token endpoint until the user approves the device code.
+
+    ``intent`` is the one :func:`start_device_flow` returned; without it the
+    sign-in is saved as a plain connect.
 
     Honors the RFC 8628 poll cadence: ``authorization_pending`` waits one
     ``interval``; ``slow_down`` widens it by 5s. Persists the connection on
@@ -1101,50 +1459,38 @@ async def poll_device_flow(
                 )
             await asyncio.sleep(poll_interval)
 
-    refresh_token = payload.get("refresh_token")
-    if not refresh_token:
+    if not payload.get("refresh_token"):
         raise ConnectorsError(
             f"Device-code token response for {provider_id} returned no "
             "refresh_token. The 'offline_access' scope must be requested (it is "
             "in the Microsoft default_scopes). See docs/security/connections.mdx."
         )
-    account_email = await _resolve_account_email(
-        provider, payload.get("id_token", ""), payload.get("access_token", "")
-    )
     account_type = _resolve_account_type(provider, payload.get("id_token", ""))
     granted_scopes = _resolve_granted_scopes(payload, scopes_list)
-
-    await locked_write(
+    intent = intent or SignInIntent()
+    saved = await _save_signed_in(
         provider_id,
-        save_connection,
-        provider=provider_id,
-        account_email=account_email,
-        refresh_token=refresh_token,
-        scopes=granted_scopes,
-        client_id_hash=provider.client_id_hash,
-        tenant=getattr(provider, "tenant", None),
-        account_type=account_type,
+        provider,
+        payload,
+        granted_scopes,
+        account_type,
+        add_account=intent.add_account,
     )
+    if intent.reconnect:
+        saved["requested_account_id"] = intent.reconnect
 
     await _commit_grants_for_provider(provider_id, grant_agents, granted_scopes)
 
-    await emit(
-        "connector.oauth.completed",
-        {"connector_id": provider_id, "account_email": account_email},
-    )
-    await emit(
-        "connection.connected",
-        {"provider": provider_id, "account_email": account_email},
-    )
+    await _emit_connected(provider_id, saved)
     logger.info(
-        "device-flow: connected provider=%s account=%s scopes=%d",
+        "device-flow: connected provider=%s added=%s scopes=%d",
         provider_id,
-        account_email,
+        saved["added"],
         len(granted_scopes),
     )
     return {
         "provider": provider_id,
-        "account_email": account_email,
+        **saved,
         "scopes": granted_scopes,
         "connected_at": _time.time(),
     }

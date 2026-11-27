@@ -15,26 +15,34 @@ so the loop can stop an overlapping call, whichever tool it arrives through.
 Extraction is deliberately conservative about what it records from a denial:
 text utilities in a pipeline (``| tail``) and ``cd`` are never recorded, so
 declining ``cd repo && pytest | tail`` blocks the test run and nothing else.
+
+A denial is of one action, not of a tool or a task. A command with operands
+(``pip install pandas``, ``gh issue close 3``) covers that command on those
+operands, in any spelling, and not the same program aimed elsewhere. A declined
+Python program covers the script, what it runs and contacts, and the files it
+would delete, move or overwrite; a file it would only have created where the
+agent may write is its output, not what was declined, so the task can still
+produce that output another way.
 """
 
 from __future__ import annotations
 
 import ast
 import contextvars
-import functools
 import ipaddress
+import json
 import logging
 import ntpath
 import os
 import re
 import shlex
-import socket
 import tempfile
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Optional, Sequence, Set, Tuple
 
 from gaia.agents.base.call_risk import DESTRUCTIVE, shell_command_risk
 from gaia.agents.base.command_wrappers import unwrap_command_argv
+from gaia.canonical_path import canonical_path
 
 logger = logging.getLogger(__name__)
 
@@ -46,6 +54,15 @@ SCRIPT = "script"
 #: Set on a refusal nobody chose — no person was there to approve the call —
 #: so it is kept off the ledger and other routes to the effect stay open.
 UNATTENDED_REFUSAL = "unattended_refusal"
+
+#: Set, to the program's name, on a call that could not run because that
+#: program is not installed. Installing it fixes that, so it is kept off the
+#: ledger too: the host the call aimed at was never refused.
+PROGRAM_NOT_FOUND = "program_not_found"
+
+#: Set on a call that did not run because its tool's own permission check
+#: raised. A crash is not a "no", so it is kept off the ledger as well.
+PERMISSION_CHECK_FAILED = "permission_check_failed"
 
 #: A file change whose target the code computes: it could be any denied path.
 COMPUTED_PATH = "a path the code works out when it runs"
@@ -397,49 +414,16 @@ def _path_within(child: str, parent: str) -> bool:
     return child.startswith(parent + os.sep) or child.startswith(parent + "/")
 
 
-_UNC_DRIVE_RE = re.compile(r"^\\\\([^\\]+)\\([A-Za-z])\$(\\.*)?$")
-
-
-@functools.lru_cache(maxsize=1)
-def _local_hosts() -> frozenset:
-    r"""Host names an administrative share (``\\host\c$``) means this PC by."""
-    return frozenset({"localhost", "127.0.0.1", "::1", socket.gethostname().lower()})
-
-
-def _windows_spelling(path: str) -> str:
-    r"""One spelling for the many Windows has for a file.
-
-    ``\\?\C:\x``, ``\\localhost\c$\x``, ``C:\x::$DATA``, ``C:\x:stream`` and
-    ``C:\x.`` all open ``C:\x``.
-    """
-    path = path.replace("/", "\\")
-    lowered = path.lower()
-    if lowered.startswith("\\\\?\\unc\\"):
-        path = "\\\\" + path[8:]
-    elif lowered.startswith(("\\\\?\\", "\\\\.\\")):
-        path = path[4:]
-    share = _UNC_DRIVE_RE.match(path)
-    if share and share.group(1).lower() in _local_hosts():
-        path = f"{share.group(2)}:{share.group(3) or chr(92)}"
-    drive, rest = os.path.splitdrive(path)
-    parts = [
-        part if part in (".", "..") else part.split(":", 1)[0].rstrip(" .")
-        for part in rest.split("\\")
-    ]
-    return drive + "\\".join(parts)
-
-
 def _canonical(path: str) -> str:
-    """The form every target is compared in, wherever it was spelled."""
-    if os.name == "nt":
-        path = _windows_spelling(path)
+    """The form every target is compared in, wherever it was spelled.
+
+    The same canonical form the path validator judges by, with a named NTFS
+    stream compared as its file.
+    """
     try:
-        # Expands 8.3 short names and follows links, as opening the file would.
-        path = os.path.realpath(path)
-    except (OSError, ValueError) as e:
-        logger.debug(
-            "compared a target as written; resolving it failed (%s)", type(e).__name__
-        )
+        path = canonical_path(path, for_comparison=True)
+    except (OSError, ValueError) as e:  # UncheckablePathError included
+        logger.debug("compared a target as written: %s", e)
     return os.path.normcase(os.path.abspath(path))
 
 
@@ -738,12 +722,8 @@ def _program(token: str) -> str:
     return _EXE_SUFFIX_RE.sub("", base)
 
 
-def _canonical_family(program: str, rest: Sequence[str]) -> Optional[str]:
-    """``pytest`` → the test suite; ``gh issue close 1`` → ``gh issue close``."""
-    if program in _NEUTRAL_PROGRAMS or not program:
-        return None
-    if program in _TEST_RUNNERS:
-        return TEST_SUITE
+def _command_words(rest: Sequence[str]) -> List[str]:
+    """The lowercased words of *rest* that are neither switches nor their values."""
     words: List[str] = []
     skip = False
     for w in rest:
@@ -753,6 +733,109 @@ def _canonical_family(program: str, rest: Sequence[str]) -> Optional[str]:
             skip = True
         elif not w.startswith("-") and not w.startswith("/"):
             words.append(w.lower())
+    return words
+
+
+#: While set, each command a parse reads notes its family and operand words.
+_OPERANDS: "contextvars.ContextVar[Optional[Dict[str, List[frozenset]]]]" = (
+    contextvars.ContextVar("denied_effects_operands", default=None)
+)
+
+
+#: Flags whose value is free text about the action, not what it acts on.
+_TEXT_FLAGS = frozenset({"--message", "--title", "--body", "--comment", "--notes"})
+#: Short forms of those, read only for the programs that give them that meaning.
+_SHORT_TEXT_FLAGS = {"git": frozenset({"-m"}), "gh": frozenset({"-m", "-b", "-t"})}
+#: Programs whose operands are packages, where ``pandas==2.2`` is ``pandas``.
+_PACKAGE_PROGRAMS = frozenset(
+    {"pip", "pip3", "uv", "pipx", "conda", "mamba", "npm", "pnpm", "yarn", "winget"}
+)
+_VERSION_PIN = re.compile(r"[\[<>=!~;@ ]")
+#: ``git commit -am "msg"``: only flags that take no value may precede ``m``
+#: (``-Fm`` reads ``m`` as the file). Commit only: ``checkout -m`` merges.
+_COMMIT_MESSAGE_CLUSTER = re.compile(r"-[aeinopqsvz]+m")
+
+
+def _without_text_values(family: str, rest: Sequence[str]) -> List[str]:
+    """*rest* without the values of message-style flags.
+
+    ``git commit -m "fix bug"`` and ``git commit -m "Fix the bug"`` are one
+    action: the wording of a message is not what the command acts on.
+    """
+    flags = _TEXT_FLAGS | _SHORT_TEXT_FLAGS.get(family.split(" ")[0], frozenset())
+    kept: List[str] = []
+    skip = False
+    # After a bare ``--`` git reads ``-am`` as a path, not a message cluster.
+    paths_only = False
+    for word in rest:
+        if skip:
+            skip = False
+        elif word.lower() in flags or (
+            family == "git commit"
+            and not paths_only
+            and _COMMIT_MESSAGE_CLUSTER.fullmatch(word)
+        ):
+            skip = True
+        else:
+            paths_only = paths_only or word == "--"
+            kept.append(word)
+    return kept
+
+
+def _unpinned(word: str) -> str:
+    """A package operand without its version, extras or markers."""
+    # A leading ``@`` is an npm scope, not a pin.
+    return word[:1] + _VERSION_PIN.split(word[1:], maxsplit=1)[0]
+
+
+def _note_command(family: Optional[str], rest: Sequence[str], cwd: str) -> None:
+    """Record what *family* was run on: the words after its subcommand.
+
+    Each is kept as a path under *cwd*, so ``.`` holds ``a.txt`` and a plain
+    word (``pandas``) still only equals itself. The text of a message and the
+    version a package is pinned to are left out: a rewording, or the same
+    package at another version, is the same action.
+    """
+    sink = _OPERANDS.get()
+    if sink is None or not family or family == TEST_SUITE:
+        return
+    depth = len(family.split(" ")) - 1
+    rest = _without_text_values(family, rest)
+    words = [w.strip("'\"") for w in _command_words(rest)[depth:]]
+    if family.split(" ")[0] in _PACKAGE_PROGRAMS:
+        words = [_unpinned(w) for w in words]
+    sink.setdefault(family, []).append(
+        frozenset(_lexical_path(w, cwd) or w for w in words if w)
+    )
+
+
+def _holds(outer: frozenset, inner: frozenset) -> bool:
+    """True when every operand of *inner* is one of *outer*'s, or inside one."""
+    return all(any(_path_within(i, o) for o in outer) for i in inner)
+
+
+def _same_command(
+    mine: Optional[List[frozenset]], theirs: Optional[List[frozenset]]
+) -> bool:
+    """False only when both runs name operands and neither set holds the other.
+
+    ``git push`` covers ``git push origin main`` and the reverse, and ``git
+    add .`` covers ``git add a.txt``; ``pip install pandas`` does not cover
+    ``pip install openpyxl``. A run whose operands could not be read is
+    treated as the same command.
+    """
+    if not mine or not theirs:
+        return True
+    return any(_holds(a, b) or _holds(b, a) for a in mine for b in theirs)
+
+
+def _canonical_family(program: str, rest: Sequence[str]) -> Optional[str]:
+    """``pytest`` → the test suite; ``gh issue close 1`` → ``gh issue close``."""
+    if program in _NEUTRAL_PROGRAMS or not program:
+        return None
+    if program in _TEST_RUNNERS:
+        return TEST_SUITE
+    words = _command_words(rest)
     if program in _PACKAGE_TEST_SCRIPTS and words[:1] == ["test"]:
         return TEST_SUITE
     if program in _PACKAGE_TEST_SCRIPTS and words[:2] == ["run", "test"]:
@@ -769,6 +852,7 @@ def _python_invocation(args: Sequence[str], cwd: str, depth: int) -> Set[Effect]
         if arg == "-m" and i + 1 < len(args):
             module = args[i + 1].lower()
             family = _canonical_family(module.split(".")[0], args[i + 2 :])
+            _note_command(family, args[i + 2 :], cwd)
             return {Effect(COMMAND, family)} if family else set()
         if arg == "-c" and i + 1 < len(args):
             return effects_of_python_code(args[i + 1], cwd, depth + 1)
@@ -1080,6 +1164,7 @@ def _effects_of_argv(argv: Sequence[str], cwd: str, depth: int) -> Set[Effect]:
     family = _canonical_family(program, rest)
     if family:
         effects.add(Effect(COMMAND, family))
+        _note_command(family, rest, cwd)
     if program in ("mklink", "ln") or (
         program in ("new-item", "ni") and _new_item_links(rest)
     ):
@@ -1194,6 +1279,29 @@ _PATH_DERIVERS = frozenset(
 )
 #: ``os.path`` functions that return their argument's path, reshaped.
 _SAME_PATH_FUNCS = frozenset({"abspath", "normpath", "realpath", "expanduser"})
+
+
+#: How Python code changes a path: it makes the folder, writes the file, or
+#: does something that can lose what is there (delete, move, link).
+_MAKES, _WRITES, _DESTROYS = "makes", "writes", "destroys"
+_FOLDER_MAKERS = frozenset({"makedirs", "mkdir"})
+_PY_DESTROYERS = {
+    "os": frozenset({"rename", "replace", "renames", "symlink", "link"}),
+    "shutil": frozenset({"move"}),
+    "_winapi": frozenset({"CreateJunction"}),
+}
+_PATH_DESTROYER_METHODS = frozenset({"rename", "replace", "symlink_to", "hardlink_to"})
+#: While set, each path Python code changes is noted with how it changes it.
+_PY_CHANGES: "contextvars.ContextVar[Optional[Dict[Effect, Set[str]]]]" = (
+    contextvars.ContextVar("denied_effects_py_changes", default=None)
+)
+
+
+def _note_py_change(effects: Set["Effect"], how: str) -> None:
+    sink = _PY_CHANGES.get()
+    if sink is not None:
+        for effect in effects:
+            sink.setdefault(effect, set()).add(how)
 
 
 def _arg(call: ast.Call, position: int, keyword: str) -> Optional[ast.AST]:
@@ -1549,10 +1657,22 @@ class _PyFiles:
             _note_linked()
         module, name = self._callee(call)
         func = call.func
+        method = func.attr if isinstance(func, ast.Attribute) else None
         if (name or "") in _PY_DELETERS.get(module or "", ()) or (
-            isinstance(func, ast.Attribute) and func.attr in _PATH_DELETER_METHODS
+            method in _PATH_DELETER_METHODS
         ):
             _note_deleted(found)
+            _note_py_change(found, _DESTROYS)
+        elif (name or "") in _PY_DESTROYERS.get(module or "", ()) or (
+            module is None and method in _PATH_DESTROYER_METHODS
+        ):
+            _note_py_change(found, _DESTROYS)
+        elif (module == "os" and name in _FOLDER_MAKERS) or (
+            module is None and method == "mkdir"
+        ):
+            _note_py_change(found, _MAKES)
+        else:
+            _note_py_change(found, _WRITES)
         return found
 
     def _changed(self, call: ast.Call) -> Set[Effect]:
@@ -2059,6 +2179,8 @@ class Denial:
     #: GAIA's policy said no, not a person, so no person can lift it.
     refused: bool = False
     by_user: bool = True
+    #: Command family -> the operand words of each declined run of it.
+    operands: Dict[str, List[frozenset]] = field(default_factory=dict)
 
     def who(self) -> str:
         """Who said no, as the model and the user are told."""
@@ -2105,6 +2227,40 @@ def _refusal_scope(
     return keep
 
 
+def _read_call(
+    tool_name: str,
+    tool_args: Optional[Dict[str, Any]],
+    cwd: str,
+    keep: Optional[Callable[[str, Set[Effect]], Set[Effect]]] = None,
+) -> Tuple[Set[Effect], Dict[str, List[frozenset]], Dict[Effect, Set[str]]]:
+    """A call's effects, its commands' operands, and how its Python changes paths."""
+    operands = _OPERANDS.set({})
+    changes = _PY_CHANGES.set({})
+    try:
+        effects = effects_of_call(tool_name, tool_args, cwd, keep=keep)
+        return effects, _OPERANDS.get() or {}, _PY_CHANGES.get() or {}
+    finally:
+        _PY_CHANGES.reset(changes)
+        _OPERANDS.reset(operands)
+
+
+def _only_an_output(
+    effect: Effect, how: Optional[Set[str]], may_create: Callable[[str], bool]
+) -> bool:
+    """True for a path a Python program would only create, where it may.
+
+    Nothing is lost by making a new file, or a folder that is already there,
+    so it is the program's output rather than the thing that was declined.
+    """
+    if effect.kind != PATH or not how or _DESTROYS in how:
+        return False
+    if os.path.lexists(effect.target) and not (
+        how == {_MAKES} and os.path.isdir(effect.target)
+    ):
+        return False
+    return bool(may_create(effect.target))
+
+
 class DeniedEffects:
     """The effects declined so far this turn. One per turn; never persisted."""
 
@@ -2127,6 +2283,7 @@ class DeniedEffects:
         refused: bool = False,
         paths: Optional[Sequence[str]] = None,
         hosts: Optional[Sequence[str]] = None,
+        may_create: Optional[Callable[[str], bool]] = None,
     ) -> Optional[Denial]:
         """Remember what this declined call would have done.
 
@@ -2138,15 +2295,27 @@ class DeniedEffects:
         given, are the call's targets as the tool itself resolved them,
         recorded instead of reading them off the arguments. *hosts* likewise:
         the host a fetch was blocked at and the address it resolved to, which
-        after a redirect is not the host the URL argument names.
+        after a redirect is not the host the URL argument names. *may_create*
+        says whether the agent may make a path without asking: with it, a path
+        the call's Python would only have created there is left off (see
+        :func:`_only_an_output`); without it every path is recorded.
         """
+        operands: Dict[str, List[frozenset]] = {}
         if paths is not None:
             found = {Effect(PATH, p) for p in map(_norm_path_abs, paths) if p}
         elif hosts is not None:
             found = {Effect(NETWORK, canonical_host(h)) for h in hosts if h}
         else:
             keep = _refusal_scope(reason, refused_alone) if scope_to_reason else None
-            found = effects_of_call(tool_name, tool_args, self.cwd, keep=keep)
+            found, operands, changes = _read_call(
+                tool_name, tool_args, self.cwd, keep=keep
+            )
+            if may_create is not None:
+                found = {
+                    e
+                    for e in found
+                    if not _only_an_output(e, changes.get(e), may_create)
+                }
         effects = {
             e
             for e in found
@@ -2161,20 +2330,129 @@ class DeniedEffects:
             effects,
             refused=refused,
             by_user=by_user and not refused,
+            operands=operands,
         )
         self.denials.append(denial)
         return denial
 
     def conflict(
-        self, tool_name: str, tool_args: Optional[Dict[str, Any]]
+        self,
+        tool_name: str,
+        tool_args: Optional[Dict[str, Any]],
+        by_user_only: bool = False,
     ) -> Optional[Tuple[Denial, Effect]]:
-        """The earlier denial this call would route around, if any."""
+        """The earlier denial this call would route around, if any.
+
+        *by_user_only* looks only at what a person declined.
+        """
         if not self:
             return None
-        wanted = effects_of_call(tool_name, tool_args, self.cwd)
+        wanted, operands, _ = _read_call(tool_name, tool_args, self.cwd)
         for denial in self.denials:
+            if by_user_only and not denial.by_user:
+                continue
             for denied in denial.effects:
                 for effect in wanted:
-                    if denied.overlaps(effect):
-                        return denial, effect
+                    if not denied.overlaps(effect):
+                        continue
+                    # The same program on something else is another action.
+                    if denied.kind == COMMAND and not _same_command(
+                        denial.operands.get(denied.target),
+                        operands.get(effect.target),
+                    ):
+                        continue
+                    return denial, effect
         return None
+
+
+# ------------------------------------------------------------------ exact calls
+
+_ASCII_SPACE = re.compile(r"[ \t\r\n\f\v]+")
+#: A later message that asks for a declined call again.
+_ASKS_AGAIN = re.compile(
+    r"\b(?:again|retry|re-?run|run (?:it|that|this)\b"
+    r"|go ahead|do it\b|allow it|approve"
+    r"|once more|one more (?:time|go|try)|try (?:it|that|this)\b|redo\b"
+    r"|execute (?:it|that|this)\b|proceed|misclick|changed my mind)"
+    r"|^\s*(?:yes|yeah|yep|ok|okay|sure)\b"
+    # Spanish, Portuguese, French, German, Italian, Dutch, Polish, Turkish.
+    r"|\b(?:otra vez|de nuevo|novamente|de novo|encore|r[ée]essa\w*|nochmal"
+    r"|noch einmal|erneut|di nuovo|riprova\w*|opnieuw|nog een keer|ponownie"
+    r"|jeszcze raz|tekrar)\b"
+    # Russian, Chinese, Japanese, Korean, Arabic, Hindi.
+    r"|снова|ещ[её] раз|повтор|再试|再运行|再执行|再来|再一次|重试|重新"
+    r"|もう一度|再実行|再試行|やり直|다시|مرة أخرى|फिर से",
+    re.IGNORECASE,
+)
+_NEGATED_ASK = re.compile(
+    r"\b(?<!why )(?:don['’]?t|do not|never|not)\s+"
+    r"(?:try|retry|re-?run|run|do|allow|approve|go|again)\b",
+    re.IGNORECASE,
+)
+
+
+def _spaced(value: Any) -> Any:
+    """*value* with runs of ASCII whitespace in its one-line strings collapsed.
+
+    ASCII only: a no-break or zero-width space makes another command. A
+    multi-line string keeps its spacing, since indentation can be content.
+    """
+    if isinstance(value, str):
+        text = value.strip(" \t\r\n\f\v")
+        if "\n" in text or "\r" in text:
+            return text
+        return _ASCII_SPACE.sub(" ", text)
+    if isinstance(value, dict):
+        return {str(k): _spaced(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_spaced(v) for v in value]
+    return value
+
+
+def declined_call_key(tool_name: str, tool_args: Any) -> str:
+    """One call's identity: its tool and arguments, whitespace aside."""
+    return json.dumps(
+        [tool_name, _spaced(tool_args)], sort_keys=True, default=str, ensure_ascii=False
+    )
+
+
+class DeclinedCalls:
+    """The exact calls the user declined in this chat.
+
+    A retry of one is refused without asking again, whatever its effects.
+    A call lasts until a later message of the user's asks for it again.
+    """
+
+    def __init__(self) -> None:
+        self._calls: Dict[str, str] = {}
+
+    def __bool__(self) -> bool:
+        return bool(self._calls)
+
+    def record(self, tool_name: str, tool_args: Any) -> None:
+        """Remember that the user said no to this exact call."""
+        self._calls[declined_call_key(tool_name, tool_args)] = render_call(
+            tool_name, tool_args if isinstance(tool_args, dict) else None
+        )
+
+    def declined(self, tool_name: str, tool_args: Any) -> Optional[str]:
+        """The declined call this one repeats, as it was shown, or None."""
+        return self._calls.get(declined_call_key(tool_name, tool_args))
+
+    def lift_for(self, message: str) -> List[str]:
+        """Drop the calls *message* asks for again; returns them as shown.
+
+        A message that names a call, or asks to retry, asks again; one that
+        says not to does not. A wrong guess here only puts the call to the
+        user again, so it never runs anything unasked.
+        """
+        text = _ASCII_SPACE.sub(" ", message or "").strip()
+        if not self._calls or not text or _NEGATED_ASK.search(text):
+            return []
+        retry = _ASKS_AGAIN.search(text) is not None
+        lifted = [
+            key
+            for key, shown in self._calls.items()
+            if retry or (shown and _ASCII_SPACE.sub(" ", shown).strip() in text)
+        ]
+        return [self._calls.pop(key) for key in lifted]

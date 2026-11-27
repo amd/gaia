@@ -1965,3 +1965,40 @@ class TestAccountListIsReadableNotWritable:
         shadow.write_text("root:$6$hash:19000:0:99999:7:::\n")
         is_blocked, _ = validator.is_read_blocked(str(shadow))
         assert is_blocked
+
+    @pytest.mark.parametrize(
+        "spelling", ["{d}//passwd", "{d}/./passwd", "{d}/x/../passwd"]
+    )
+    def test_other_spellings_of_passwd_read_but_never_write(
+        self, validator, tmp_path, spelling
+    ):
+        (tmp_path / "x").mkdir()
+        (tmp_path / "passwd").write_text("root:x:0:0:root:/root:/bin/bash\n")
+        path = spelling.format(d=tmp_path.as_posix())
+        assert not validator.is_read_blocked(path)[0]
+        assert validator.is_write_blocked(path)[0]
+
+    def test_link_named_passwd_to_shadow_is_refused_to_read(self, validator, tmp_path):
+        shadow = tmp_path / "shadow"
+        shadow.write_text("root:$6$hash:19000:0:99999:7:::\n")
+        link = tmp_path / "passwd"
+        try:
+            link.symlink_to(shadow)
+        except OSError as e:
+            pytest.skip(f"symlinks unavailable here: {e}")
+        assert validator.is_read_blocked(str(link))[0]
+
+    @pytest.mark.parametrize(
+        "name", ["shadow", "sudoers", "id_rsa", "id_ed25519", ".env"]
+    )
+    def test_other_secret_files_stay_refused(self, validator, tmp_path, name):
+        target = tmp_path / name
+        target.write_text("secret\n")
+        assert validator.is_read_blocked(str(target))[0]
+
+    def test_only_passwd_was_opened_up(self):
+        from gaia import security
+
+        assert security.SENSITIVE_FILE_NAMES - security.READ_BLOCKED_FILE_NAMES == {
+            "passwd"
+        }

@@ -571,7 +571,7 @@ class VersionRun:
             "request": "agent",
         }
         try:
-            import gaia_agent  # noqa: F401  pylint: disable=unused-import,import-outside-toplevel
+            import gaiapy  # noqa: F401  pylint: disable=unused-import,import-outside-toplevel
         except ImportError as e:
             cell.update(ok=None, skipped=f"the flagship agent is not installed: {e}")
             return cell

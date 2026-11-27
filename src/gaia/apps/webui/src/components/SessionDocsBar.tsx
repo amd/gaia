@@ -6,10 +6,11 @@ import { AlertCircle, CheckCircle2, FileText, X } from 'lucide-react';
 import { useChatStore } from '../stores/chatStore';
 import * as api from '../services/api';
 import { log } from '../utils/logger';
+import { visibleName } from './CalendarApproval';
 import { middleTruncate } from '../utils/format';
 import { useT } from '../i18n/useT';
 import { pluralKey } from '../i18n/registry';
-import { isServerFailure } from '../utils/documentFailure';
+import { needsRetry, waitsForServerReturn } from '../utils/documentFailure';
 
 /** What one chat searches at once: ``RAGConfig.max_indexed_files`` and ``max_total_chunks`` in ``gaia/rag/sdk.py``. */
 export const SEARCHED_AT_ONCE = 100;
@@ -66,7 +67,7 @@ export function SessionDocsBar({ sessionId, onDetachFailed }: {
             log.doc.info(`Detached document from session: ${doc?.filename || docId}`);
         } catch (err) {
             log.doc.error(`Failed to detach document: ${doc?.filename || docId}`, err);
-            onDetachFailed(doc?.filename || docId, err);
+            onDetachFailed(doc?.filename ? visibleName(doc.filename) : docId, err);
         }
     }, [documents, sessionId, updateSessionInList, onDetachFailed]);
 
@@ -82,8 +83,9 @@ export function SessionDocsBar({ sessionId, onDetachFailed }: {
     const failedDocs = sessionDocs.filter((d) => d.indexing_status === 'failed');
     const failedCount = failedDocs.length;
     // A file that failed only because the model server was down isn't unreadable.
-    const serverWaitCount = failedDocs.filter((d) => isServerFailure(d.error_kind)).length;
-    const unreadableCount = failedCount - serverWaitCount;
+    const serverWaitCount = failedDocs.filter((d) => waitsForServerReturn(d.error_kind)).length;
+    const retryCount = failedDocs.filter((d) => needsRetry(d.error_kind)).length;
+    const unreadableCount = failedCount - serverWaitCount - retryCount;
     const readableCount = sessionDocs.length - failedCount;
     const byId = new Map(sessionDocs.map((d) => [d.id, d]));
     const loadOrder = (session?.document_ids ?? []).flatMap((id) => {
@@ -95,6 +97,7 @@ export function SessionDocsBar({ sessionId, onDetachFailed }: {
         readableCount > 0 ? say(pluralKey('docsBar.count', readableCount), { n: readableCount }) : null,
         unreadableCount > 0 ? say(pluralKey('docsBar.failed', unreadableCount), { n: unreadableCount }) : null,
         serverWaitCount > 0 ? say(pluralKey('docsBar.serverWaiting', serverWaitCount), { n: serverWaitCount }) : null,
+        retryCount > 0 ? say(pluralKey('docsBar.needsRetry', retryCount), { n: retryCount }) : null,
     ].filter(Boolean).join(' · '));
     return (
         <div
@@ -110,21 +113,23 @@ export function SessionDocsBar({ sessionId, onDetachFailed }: {
             <div className={`doc-context-pills${docsExpanded ? ' doc-context-pills-expanded' : ''}`}>
                 {visibleDocs.map((d) => {
                     const failed = d.indexing_status === 'failed';
-                    const failedTitle = isServerFailure(d.error_kind) ? 'docsBar.serverTitle' : 'docsBar.failedTitle';
+                    const failedTitle = waitsForServerReturn(d.error_kind)
+                        ? 'docsBar.serverTitle'
+                        : needsRetry(d.error_kind) ? 'docsBar.busyTitle' : 'docsBar.failedTitle';
                     return (
                     <span
                         key={d.id}
                         className={`doc-pill${failed ? ' doc-pill-failed' : ''}`}
-                        title={failed ? t(failedTitle, { name: d.filename }) : d.filepath || d.filename}
+                        title={failed ? t(failedTitle, { name: visibleName(d.filename) }) : visibleName(d.filepath || d.filename)}
                     >
                         {failed
                             ? <AlertCircle size={9} className="doc-pill-icon" aria-hidden="true" />
                             : <FileText size={9} className="doc-pill-icon" aria-hidden="true" />}
-                        <span className="doc-pill-name" dir="ltr">{middleTruncate(d.filename, 24)}</span>
+                        <span className="doc-pill-name" dir="ltr">{middleTruncate(visibleName(d.filename), 24)}</span>
                         <button
                             className="doc-pill-remove"
                             onClick={(e) => handleRemoveDocument(e, d.id)}
-                            aria-label={t('docsBar.remove', { name: d.filename })}
+                            aria-label={t('docsBar.remove', { name: visibleName(d.filename) })}
                         >
                             <X size={10} />
                         </button>

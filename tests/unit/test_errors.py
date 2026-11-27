@@ -20,51 +20,15 @@ from gaia.agents.base.errors import (
     _get_code_context,
     _truncate_args,
     format_execution_trace,
-    format_user_error,
 )
 
 # ============================================================================
-# 1. format_user_error() TESTS
+# 1. FRAMEWORK PATH FILTERING
 # ============================================================================
 
 
-class TestFormatUserError:
-    """Test format_user_error function."""
-
-    def test_format_user_error_basic_exception(self):
-        """Verify basic exception formatting includes type and message."""
-        try:
-            raise ValueError("test error message")
-        except ValueError as e:
-            result = format_user_error(e)
-
-        assert "ValueError: test error message" in result
-        assert "Traceback (most recent call last):" in result
-
-    def test_format_user_error_keyerror(self):
-        """Verify KeyError formatting."""
-        try:
-            d = {}
-            _ = d["missing_key"]
-        except KeyError as e:
-            result = format_user_error(e)
-
-        assert "KeyError" in result
-        assert "missing_key" in result
-
-    def test_format_user_error_no_traceback(self):
-        """Verify handling of exception without traceback."""
-        e = RuntimeError("no traceback")
-        # Manually clear the traceback
-        e.__traceback__ = None
-        result = format_user_error(e)
-
-        assert "RuntimeError: no traceback" in result
-        # Should not crash even without traceback
-
-
-class TestFormatUserErrorFiltering:
-    """Test framework path filtering in format_user_error."""
+class TestFrameworkPathFiltering:
+    """Which stack frames count as framework code and are filtered out."""
 
     def test_framework_paths_includes_all_agents(self):
         """Verify FRAMEWORK_PATHS covers every place framework code lives."""
@@ -74,7 +38,7 @@ class TestFormatUserErrorFiltering:
             # Hub agents: gaia/email ship as wheels, filtered via the
             # package name / site-packages / the hub editable path.
             "hub/agents/",
-            "gaia_agent/",
+            "gaiapy/",
             "site-packages/",
         ]
         for path in expected_paths:

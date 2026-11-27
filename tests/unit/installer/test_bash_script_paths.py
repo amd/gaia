@@ -53,15 +53,3 @@ def test_start_agent_ui_resolves_project_root_and_webui_dir():
     assert webui_assignment == "$PROJECT_ROOT/src/gaia/apps/webui"
     assert project_root / "src" / "gaia" / "apps" / "webui" == WEBUI_DIR
     assert WEBUI_DIR.is_dir()
-
-
-def test_build_ui_installer_resolves_repo_root_and_webui_dir():
-    script = SCRIPTS_DIR / "build-ui-installer.sh"
-
-    repo_root = _resolved_from_scripts_dir(_script_assignment(script, "REPO_ROOT"))
-    webui_assignment = _literal_assignment(script, "WEBUI_DIR")
-
-    assert repo_root == REPO_ROOT
-    assert webui_assignment == "$REPO_ROOT/src/gaia/apps/webui"
-    assert repo_root / "src" / "gaia" / "apps" / "webui" == WEBUI_DIR
-    assert WEBUI_DIR.is_dir()

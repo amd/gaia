@@ -4,7 +4,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Check, Copy } from 'lucide-react';
 import { UnsupportedCard } from '../UnsupportedCard';
-import { copyGuide } from '../guide/guideActions';
+import { copyText } from '../../../utils/clipboard';
 import {
     currencySymbol,
     formatCalculatorText,
@@ -42,7 +42,7 @@ function Calculator({ wire }: { wire: CalculatorWire }) {
     }, [notice]);
 
     const onCopy = () => {
-        copyGuide(formatCalculatorText(title, spec, values, money, t)).then(
+        copyText(formatCalculatorText(title, spec, values, money, t)).then(
             () => setNotice(copiedNotice),
             (err: unknown) => setNotice(t('cards.copyFailed', { error: err instanceof Error ? err.message : String(err) })),
         );

@@ -3,12 +3,16 @@
 
 import React, { createContext, useCallback, useContext, useId, useLayoutEffect, useRef, useState, useEffect, useMemo } from 'react';
 import type { Components } from 'react-markdown';
-import { Copy, Check, AlertTriangle, Trash2, RefreshCw, RotateCw, Play, Pencil, FolderOpen, Square, FileText, ScrollText, Settings } from 'lucide-react';
+import { Copy, Check, AlertCircle, AlertTriangle, Trash2, RefreshCw, RotateCw, Play, Pencil, FolderOpen, Square, FileText, ScrollText, Settings } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import { SAFE_DISALLOWED_ELEMENTS, joinAttachmentLinks, safeUrlTransform, splitAttachmentLinks } from '../utils/markdown';
 import remarkGfm from 'remark-gfm';
+import remarkMath from 'remark-math';
+import temml from 'temml';
+import 'temml/dist/Temml-Local.css';
 import remarkWindowsPaths from '../utils/remarkWindowsPaths';
 import { remarkSoftBreaks } from '../utils/remarkSoftBreaks';
+import { normalizeMathDelimiters } from '../utils/mathDelimiters';
 import { remarkNumericColumns } from '../utils/remarkNumericColumns';
 import { AgentActivity } from './AgentActivity';
 import { EmailConnectCta, isAuthRequiredMessage } from './email/EmailConnectCta';
@@ -25,11 +29,13 @@ import { TurnChanges } from './TurnChanges';
 import { ReadAloudButton, ReadAloudError, ReadAloudNote } from './ReadAloudButton';
 import { TroubleshootingReport, namesFailureRecord, type ReportClasses } from './TroubleshootingReport';
 import { CODE_COLLAPSE_LINES, CODE_PREVIEW_LINES, ExpandToggle, countLines, isLongUserMessage, lineCount, messageExcerpt, sizeLabel } from './LongContent';
+import { SentElementChips } from './browser-pane/ElementChip';
 import { dateLocale, useT, type Translate } from '../i18n/useT';
 import type { MessageKey } from '../i18n/registry';
 import { useChatStore } from '../stores/chatStore';
 import { useLogsStore } from '../stores/logsStore';
 import { CLAIMS_ESCAPE } from '../hooks/useEscapeToClose';
+import { useCopyFeedback } from '../hooks/useCopyFeedback';
 import { dropAnswerDrafts } from '../utils/answerDrafts';
 import { describeFailedTurn, failedTurnDetails } from '../utils/failedTurn';
 import { splitUploadedImages } from '../utils/messageImages';
@@ -39,6 +45,7 @@ import {
     type CitationIndex, type CitedDoc, type FoundPage,
 } from '../utils/citations';
 import './MessageBubble.css';
+import { visibleName, markStrayDirection } from './CalendarApproval';
 
 interface MessageBubbleProps {
     message: Message;
@@ -114,7 +121,7 @@ function ThinkingIndicator({ active, label, awaitingUser = false }: { active: bo
                 <span className="thinking-indicator-elapsed"> · <bdi dir="ltr">{elapsed}s</bdi></span>
             )}
             {showModelWaitHint && (
-                <span className="thinking-indicator-hint" role="status">{t(place?.remote === false ? 'live.localModelWaitHint' : 'live.modelWaitHint')}</span>
+                <span className="thinking-indicator-hint" role="status">{place?.remote === false ? t('live.localModelWaitHint', { n: String(MODEL_WAIT_HINT_S) }) : t('live.modelWaitHint')}</span>
             )}
         </span>
     );
@@ -362,10 +369,6 @@ const KNOWN_CODE_LANGS = new Set([
     'matlab', 'octave', 'fortran', 'cobol', 'pascal', 'delphi', 'ada',
     'assembly', 'asm', 'nasm', 'wasm', 'solidity', 'sol', 'verilog', 'vhdl',
     'text', 'txt', 'plaintext', 'diff', 'patch', 'log',
-    // Retired fence-payload tags (#2109 cutover): cards now arrive via
-    // tool_result.render, never fences. Kept ONLY so pre-cutover session
-    // history shows those payloads as fenced JSON code blocks, not bare prose.
-    'email_pre_scan', 'email-pre-scan',
 ]);
 
 /**
@@ -638,7 +641,7 @@ export function MessageBubble({ message, isStreaming, agentSteps, agentStepsActi
     );
     const cleanedContent = useMemo(
         () => {
-            if (userParts) return userParts.text;
+            if (userParts) return markStrayDirection(userParts.text);
             const body = cutOff
                 ? cutOff.body
                 : endedBy ? message.content.trimEnd().slice(0, -endedBy.length) : message.content;
@@ -650,7 +653,7 @@ export function MessageBubble({ message, isStreaming, agentSteps, agentStepsActi
     const summaryFiles = message.turnSummary?.files;
     const writtenFiles = useMemo(() => summaryFiles?.map((f) => f.path) ?? [], [summaryFiles]);
     const readAloudId = `${message.session_id}:${message.id}`;
-    const [copied, setCopied] = useState(false);
+    const [copyState, copy] = useCopyFeedback();
     const [confirmDelete, setConfirmDelete] = useState(false);
     const collapsibleUser = message.role === 'user' && isLongUserMessage(message.content);
     const excerpt = useMemo(() => (collapsibleUser ? messageExcerpt(message.content) : null), [collapsibleUser, message.content]);
@@ -668,36 +671,18 @@ export function MessageBubble({ message, isStreaming, agentSteps, agentStepsActi
         scrollAfterCollapseRef.current = false;
         userBodyRef.current?.scrollIntoView?.({ block: 'nearest' });
     }, [userExpanded]);
-    const copyTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
     const deleteTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
     // Clean up timers on unmount to avoid setState on unmounted component
     useEffect(() => {
         return () => {
-            if (copyTimerRef.current) clearTimeout(copyTimerRef.current);
             if (deleteTimerRef.current) clearTimeout(deleteTimerRef.current);
         };
     }, []);
 
     const handleCopy = useCallback(() => {
-        const text = message.role === 'assistant' ? plainAnswerText(cleanedContent) : message.content;
-        if (navigator.clipboard?.writeText) {
-            navigator.clipboard.writeText(text).catch(() => {});
-        } else {
-            // Fallback for non-HTTPS contexts (common for localhost)
-            const textarea = document.createElement('textarea');
-            textarea.value = text;
-            textarea.style.position = 'fixed';
-            textarea.style.opacity = '0';
-            document.body.appendChild(textarea);
-            textarea.select();
-            document.execCommand('copy');
-            document.body.removeChild(textarea);
-        }
-        setCopied(true);
-        if (copyTimerRef.current) clearTimeout(copyTimerRef.current);
-        copyTimerRef.current = setTimeout(() => setCopied(false), 2000);
-    }, [cleanedContent, message.content, message.role]);
+        copy(message.role === 'assistant' ? plainAnswerText(cleanedContent) : message.content);
+    }, [copy, cleanedContent, message.content, message.role]);
 
     const handleDelete = useCallback(() => {
         if (!confirmDelete) {
@@ -784,12 +769,12 @@ export function MessageBubble({ message, isStreaming, agentSteps, agentStepsActi
                             )}
                             {hasAnswerText && (
                                 <button
-                                    className={`msg-copy ${copied ? 'copied' : ''}`}
+                                    className={`msg-copy ${copyState === 'idle' ? '' : copyState}`}
                                     onClick={handleCopy}
-                                    title={copied ? t('msg.copied') : t('msg.copy')}
-                                    aria-label={copied ? t('msg.copiedAria') : t('msg.copy')}
+                                    title={copyState === 'copied' ? t('msg.copied') : copyState === 'failed' ? t('msg.copyFailed') : t('msg.copy')}
+                                    aria-label={copyState === 'copied' ? t('msg.copiedAria') : copyState === 'failed' ? t('msg.copyFailed') : t('msg.copy')}
                                 >
-                                    {copied ? <Check size={12} /> : <Copy size={12} />}
+                                    {copyState === 'copied' ? <Check size={12} /> : copyState === 'failed' ? <AlertCircle size={12} /> : <Copy size={12} />}
                                 </button>
                             )}
                             {/* Delete button */}
@@ -833,6 +818,9 @@ export function MessageBubble({ message, isStreaming, agentSteps, agentStepsActi
                     {(message.cards ?? cards)?.map((card, i) => (
                         <RenderCard key={i} render={card.render} data={card.data} />
                     ))}
+                    {message.page_elements && message.page_elements.length > 0 && (
+                        <SentElementChips elements={message.page_elements} />
+                    )}
                     {/* The cursor is a streaming indicator, not decoration — it never
                         outlives the write. See docs/spec/gaia-design-language.mdx. */}
                     {editing && onEdit ? (
@@ -1003,7 +991,7 @@ const StreamingContext = createContext(false);
 /** Custom code block with copy button; a long one opens collapsed to a preview. */
 function CodeBlock({ lang, code }: { lang: string; code: string }) {
     const t = useT();
-    const [copied, setCopied] = useState(false);
+    const [copyState, copy] = useCopyFeedback();
     const [expanded, setExpanded] = useState(false);
     const streaming = useContext(StreamingContext);
     const bodyId = useId();
@@ -1011,32 +999,6 @@ function CodeBlock({ lang, code }: { lang: string; code: string }) {
     // While streaming, cap as soon as the preview fills so the block never grows and then shrinks.
     const collapsible = lines > (streaming ? CODE_PREVIEW_LINES : CODE_COLLAPSE_LINES);
     const collapsed = collapsible && !expanded;
-    const copyTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-
-    useEffect(() => {
-        return () => {
-            if (copyTimerRef.current) clearTimeout(copyTimerRef.current);
-        };
-    }, []);
-
-    const handleCopy = useCallback(() => {
-        if (navigator.clipboard?.writeText) {
-            navigator.clipboard.writeText(code).catch(() => {});
-        } else {
-            // Fallback for non-HTTPS contexts (common for localhost)
-            const textarea = document.createElement('textarea');
-            textarea.value = code;
-            textarea.style.position = 'fixed';
-            textarea.style.opacity = '0';
-            document.body.appendChild(textarea);
-            textarea.select();
-            document.execCommand('copy');
-            document.body.removeChild(textarea);
-        }
-        setCopied(true);
-        if (copyTimerRef.current) clearTimeout(copyTimerRef.current);
-        copyTimerRef.current = setTimeout(() => setCopied(false), 2000);
-    }, [code]);
 
     return (
         // Code reads left to right even inside an Arabic answer.
@@ -1044,13 +1006,13 @@ function CodeBlock({ lang, code }: { lang: string; code: string }) {
             <div className="code-header">
                 <span className="code-lang">{lang || 'code'}</span>
                 <button
-                    className={`code-copy ${copied ? 'copied' : ''}`}
-                    onClick={handleCopy}
-                    title={copied ? t('msg.copied') : t('code.copy')}
-                    aria-label={copied ? t('msg.copiedAria') : t('code.copyAria')}
+                    className={`code-copy ${copyState === 'idle' ? '' : copyState}`}
+                    onClick={() => copy(code)}
+                    title={copyState === 'copied' ? t('msg.copied') : copyState === 'failed' ? t('msg.copyFailed') : t('code.copy')}
+                    aria-label={copyState === 'copied' ? t('msg.copiedAria') : copyState === 'failed' ? t('msg.copyFailed') : t('code.copyAria')}
                 >
-                    {copied ? <Check size={13} /> : <Copy size={13} />}
-                    <span>{copied ? t('code.copied') : t('code.copy')}</span>
+                    {copyState === 'copied' ? <Check size={13} /> : copyState === 'failed' ? <AlertCircle size={13} /> : <Copy size={13} />}
+                    <span>{copyState === 'copied' ? t('code.copied') : copyState === 'failed' ? t('msg.copyFailed') : t('code.copy')}</span>
                 </button>
             </div>
             <pre id={bodyId}><code>{code}</code></pre>
@@ -1123,13 +1085,13 @@ function FilePathLink({ path, label }: { path: string; label?: string }) {
             className="file-path-link"
             dir="ltr"
             onClick={handleClick}
-            title={`Open in file explorer: ${path}`}
+            title={`Open in file explorer: ${visibleName(path)}`}
             role="button"
             tabIndex={0}
             onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); handleClick(e as unknown as React.MouseEvent); } }}
         >
             <FolderOpen size={12} className="file-path-icon" />
-            {label ?? path}
+            {visibleName(label ?? path)}
         </span>
     );
 }
@@ -1178,12 +1140,12 @@ function CitationLink({ doc, page, t }: { doc: CitedDoc; page?: number; t: Trans
             target="_blank"
             rel="noopener noreferrer"
             dir="ltr"
-            title={page ? t('citation.openPage', { page }) : t('citation.open', { name: doc.label })}
+            title={page ? t('citation.openPage', { page }) : t('citation.open', { name: visibleName(doc.label) })}
             data-doc-id={doc.id}
             data-page={page}
         >
             <FileText size={12} className="citation-icon" aria-hidden="true" />
-            {doc.label}
+            {visibleName(doc.label)}
         </a>
     );
 }
@@ -1286,11 +1248,46 @@ function Linkified({ children }: { children?: React.ReactNode }) {
     return <>{out}</>;
 }
 
+/**
+ * A formula, drawn as MathML. A formula that does not parse shows its source
+ * in the error colour, with the reason on hover, rather than vanishing.
+ */
+function MathFormula({ tex, display }: { tex: string; display: boolean }) {
+    const html = useMemo(
+        () => temml.renderToString(tex, { displayMode: display, throwOnError: false, errorColor: 'var(--danger)' }),
+        [tex, display],
+    );
+    const ref = useRef<HTMLElement | null>(null);
+    const [wide, setWide] = useState(false);
+    // A formula can't wrap: one wider than its line gets a line of its own that scrolls.
+    useLayoutEffect(() => {
+        const el = ref.current;
+        if (display || !el) return;
+        const measure = () => {
+            const math = el.firstElementChild;
+            // An inline ancestor (bold, a link) has no width of its own.
+            let block = el.parentElement;
+            while (block && block.clientWidth === 0) block = block.parentElement;
+            if (math && block) setWide(math.getBoundingClientRect().width > block.clientWidth);
+        };
+        measure();
+        const column = el.closest('.md-content');
+        if (!column || typeof ResizeObserver === 'undefined') return;
+        const observer = new ResizeObserver(measure);
+        observer.observe(column);
+        return () => observer.disconnect();
+    }, [html, display]);
+    const Tag = display ? 'div' : 'span';
+    const className = display ? 'md-math md-math-display' : wide ? 'md-math md-math-wide' : 'md-math';
+    return <Tag ref={ref as React.Ref<never>} className={className} dir="ltr" dangerouslySetInnerHTML={{ __html: html }} />;
+}
+
 // `node` is the markdown AST; spread onto <code> it renders as node="[object Object]".
-function InlineCode({ className: _className, children, node: _node, ...props }: React.ComponentProps<'code'> & { node?: unknown }) {
+function InlineCode({ className, children, node: _node, ...props }: React.ComponentProps<'code'> & { node?: unknown }) {
     const index = useContext(CitationContext);
     const writtenFiles = useContext(WrittenFilesContext);
     const t = useT();
+    if (className?.includes('math-inline')) return <MathFormula tex={String(children)} display={false} />;
     // A filename here outside a block Linkified handles (e.g. inside **bold**).
     const doc = inlineCodeDoc(index, children);
     if (doc) return <CitationLink doc={doc} t={t} />;
@@ -1318,9 +1315,6 @@ const MARKDOWN_COMPONENTS: Components = {
     code: InlineCode,
     // Fenced code blocks: react-markdown wraps them in <pre><code>.
     // Extract the language and code text, render as CodeBlock.
-    // (The fence→card mount for email_pre_scan was retired at the
-    // #2109 cutover — cards arrive via tool_result.render now;
-    // pre-cutover history renders those fences as code blocks.)
     pre({ children }) {
         // children is <code className="language-xxx">...</code>
         const codeChild = React.Children.toArray(children)[0];
@@ -1329,6 +1323,7 @@ const MARKDOWN_COMPONENTS: Components = {
             const className = codeProps?.className || '';
             const match = /language-([\w-]+)/.exec(className);
             const codeString = String(codeProps?.children || '').replace(/\n$/, '');
+            if (className.includes('math-display')) return <MathFormula tex={codeString} display />;
             const lang = match?.[1] || '';
             return (
                 <CodeBlock
@@ -1408,9 +1403,13 @@ const MARKDOWN_COMPONENTS: Components = {
 
 const NO_WRITTEN_FILES: readonly string[] = [];
 
+// Single dollars are money ("$5 and $10"); normalizeMathDelimiters turns real maths into `$$`.
+const REMARK_MATH: [typeof remarkMath, { singleDollarTextMath: boolean }] = [remarkMath, { singleDollarTextMath: false }];
+
 export function RenderedContent({ content, showCursor, isStreaming = false, writtenFiles = NO_WRITTEN_FILES }: { content: string; showCursor?: boolean; isStreaming?: boolean; writtenFiles?: readonly string[] }) {
     const documents = useChatStore((s) => s.documents);
     const citations = useMemo(() => buildCitationIndex(documents), [documents]);
+    const markdown = useMemo(() => normalizeMathDelimiters(content), [content]);
     if (!content && !showCursor) return null;
     if (!content && showCursor) return <span className="cursor" />;
 
@@ -1420,12 +1419,12 @@ export function RenderedContent({ content, showCursor, isStreaming = false, writ
         <WrittenFilesContext.Provider value={writtenFiles}>
         <div className="md-content">
             <ReactMarkdown
-                remarkPlugins={[remarkGfm, remarkNumericColumns, remarkWindowsPaths, remarkSoftBreaks]}
+                remarkPlugins={[remarkGfm, REMARK_MATH, remarkNumericColumns, remarkWindowsPaths, remarkSoftBreaks]}
                 disallowedElements={[...SAFE_DISALLOWED_ELEMENTS]}
                 urlTransform={safeUrlTransform}
                 components={MARKDOWN_COMPONENTS}
             >
-                {content}
+                {markdown}
             </ReactMarkdown>
             {showCursor && <span className="cursor" />}
         </div>

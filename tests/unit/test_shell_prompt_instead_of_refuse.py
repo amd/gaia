@@ -352,17 +352,18 @@ def test_an_auto_approving_run_refuses_rather_than_widening(repo, monkeypatch):
 
 
 # ---------------------------------------------------------------------------
-# Full access in a relayed Agent UI chat: gated commands are asked about
+# Prompts pre-approved with the shell gates kept on: gated commands are asked about
 # ---------------------------------------------------------------------------
 
 
 def _full_access_chat(*, watched: bool = True) -> SSEOutputHandler:
-    """The handler a sidecar ``/query`` builds for a Full access chat.
+    """The handler of a host that pre-approves prompts but keeps the shell gates on.
 
-    Over the socket Full access pre-approves prompts but keeps the shell gates
-    on (#3373); ``watched`` is the caller declaring a person can answer.
+    ``PermissionState(lifts_shell_gates=False)``; ``watched`` is the caller
+    declaring a person can answer. A sidecar session's own Full access lifts
+    the gates (``test_full_access_runs_anything``).
     """
-    stdio = pytest.importorskip("gaia_agent.stdio")
+    stdio = pytest.importorskip("gaiapy.stdio")
     handler = SSEOutputHandler()
     stdio.PermissionState(full_access=True, lifts_shell_gates=False).attach(handler)
     handler.answers_confirmations = watched
@@ -896,7 +897,10 @@ def test_the_remaining_hard_refusals_never_prompt(repo, command):
     result, events = _drive(agent, handler, _shell(command, repo))
 
     assert _prompts(events) == [], f"{command!r} reached the prompt"
-    assert result["status"] == "error"
+    # A policy no is "denied" by GAIA, never a user's no.
+    assert result["status"] == "error" or (
+        result["status"] == "denied" and result.get("denied_by") == "policy"
+    )
     assert result["executed"] is False
     assert result.get("tier", TIER_REFUSE) == TIER_REFUSE
     assert _staged(repo) == {"tracked.txt"}

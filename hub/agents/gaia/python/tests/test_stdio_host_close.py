@@ -16,7 +16,7 @@ import sys
 import threading
 
 import pytest
-from gaia_agent import stdio
+from gaiapy import stdio
 
 from gaia.agents.base.history import SessionHistory
 from gaia.ui.sse_handler import SSEOutputHandler

@@ -7,7 +7,7 @@ export function isMacPlatform(): boolean {
 
 /** A sample document path in the form *platform* writes paths, for input placeholders. */
 export function examplePath(platform: string = typeof navigator !== 'undefined' ? navigator.platform : ''): string {
-    if (/Mac/i.test(platform)) return '/Users/you/Documents/manual.pdf';
+    if (/Mac/i.test(platform)) return '/Users/you/Documents/a.pdf';
     if (/Win/i.test(platform)) return 'C:\\Users\\you\\Documents\\manual.pdf';
     return '/home/you/Documents/manual.pdf';
 }

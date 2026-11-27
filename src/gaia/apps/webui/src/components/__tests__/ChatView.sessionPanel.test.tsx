@@ -1,10 +1,10 @@
 // Copyright(C) 2026 Advanced Micro Devices, Inc. All rights reserved.
 // SPDX-License-Identifier: MIT
 
-/** The session panel's "This answer" shows the turn summary, live and after a reload (#5222, #5279). */
+/** The session panel in a chat: when it opens on its own, and its "This answer" (#5222, #5279). */
 
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ChatView } from '../ChatView';
 import { useChatStore } from '../../stores/chatStore';
 import { useSessionPanelStore } from '../../stores/sessionPanelStore';
@@ -58,6 +58,7 @@ beforeEach(() => {
     });
     Object.defineProperty(HTMLElement.prototype, 'scrollIntoView', { configurable: true, value: vi.fn() });
     window.localStorage.clear();
+    window.localStorage.setItem('gaia.sessionPanel.open', '1');
     useSessionPanelStore.getState().reload();
     useChatStore.setState({
         sessions: [SESSION],
@@ -114,7 +115,7 @@ describe('ChatView session panel: this answer', () => {
         });
         await waitFor(() => expect(
             panel(),
-        ).toHaveTextContent('Working on this answer'));
+        ).not.toHaveTextContent('AMD LLM Gateway (cloud)'));
         expect(panel()).not.toHaveTextContent('AMD LLM Gateway');
     });
 
@@ -130,5 +131,101 @@ describe('ChatView session panel: this answer', () => {
         await waitFor(() => expect(
             panel(),
         ).toHaveTextContent('amd.com'));
+    });
+});
+
+const MADE_FILE: TurnSummary = {
+    ...SUMMARY,
+    files: [{ path: 'C:\\Users\\me\\Documents\\action-items.md', name: 'action-items.md', openable: true }],
+};
+
+function narrowWindow(narrow: boolean) {
+    Object.defineProperty(window, 'matchMedia', {
+        configurable: true,
+        value: (query: string) => ({
+            matches: narrow && query.includes('max-width'),
+            media: query,
+            addEventListener: vi.fn(),
+            removeEventListener: vi.fn(),
+        }),
+    });
+}
+
+async function sendAndFinish(summary: TurnSummary) {
+    await act(async () => {
+        fireEvent.change(screen.getByLabelText('Message'), { target: { value: 'save the action items' } });
+        fireEvent.click(screen.getByLabelText('Send'));
+    });
+    await waitFor(() => expect(callbacks).not.toBeNull());
+    await act(async () => {
+        callbacks!.onDone({ type: 'done', content: 'saved', message_id: 9, turn_summary: summary } as StreamEvent);
+    });
+}
+
+const noPanel = () => expect(screen.queryByRole('complementary', { name: 'Session panel' })).not.toBeInTheDocument();
+
+describe('ChatView session panel: opens when there is something to show', () => {
+    beforeEach(() => {
+        window.localStorage.clear();
+        useSessionPanelStore.getState().reload();
+    });
+
+    afterEach(() => {
+        delete (window as { matchMedia?: unknown }).matchMedia;
+    });
+
+    it('starts closed for someone who never opened or closed it', () => {
+        render(<ChatView sessionId={SESSION.id} />);
+        noPanel();
+        expect(screen.getByRole('button', { name: 'Show session panel' })).toHaveAttribute('aria-pressed', 'false');
+    });
+
+    it("opens beside the chat on the chat's first file, without remembering it or taking focus", async () => {
+        render(<ChatView sessionId={SESSION.id} />);
+        const composer = screen.getByLabelText('Message');
+        composer.focus();
+        await sendAndFinish(MADE_FILE);
+        expect(panel()).toHaveClass('is-docked');
+        expect(window.localStorage.getItem('gaia.sessionPanel.open')).toBeNull();
+        expect(panel()).not.toContainElement(document.activeElement as HTMLElement);
+    });
+
+    it('stays closed after a turn that made no file', async () => {
+        render(<ChatView sessionId={SESSION.id} />);
+        await sendAndFinish(SUMMARY);
+        noPanel();
+    });
+
+    it('stays closed once the user has closed it', async () => {
+        window.localStorage.setItem('gaia.sessionPanel.open', '0');
+        useSessionPanelStore.getState().reload();
+        render(<ChatView sessionId={SESSION.id} />);
+        await sendAndFinish(MADE_FILE);
+        noPanel();
+    });
+
+    it('never opens over the chat on a narrow window', async () => {
+        narrowWindow(true);
+        render(<ChatView sessionId={SESSION.id} />);
+        await sendAndFinish(MADE_FILE);
+        expect(screen.queryByRole('dialog', { name: 'Session panel' })).not.toBeInTheDocument();
+        expect(useSessionPanelStore.getState().overlayOpen).toBe(false);
+        // Nor waits to appear docked once the window widens.
+        expect(useSessionPanelStore.getState().open).toBe(false);
+    });
+
+    it('stays closed on opening a chat that already made files, and when it makes more', async () => {
+        mockedApi.getMessages.mockResolvedValue({
+            messages: [
+                { id: 1, session_id: SESSION.id, role: 'user', content: 'earlier question', created_at: '', rag_sources: null },
+                { id: 2, session_id: SESSION.id, role: 'assistant', content: 'earlier answer', created_at: '', rag_sources: null, turn_summary: MADE_FILE },
+            ],
+            total: 2,
+        } as never);
+        render(<ChatView sessionId={SESSION.id} />);
+        await screen.findByText('earlier answer');
+        noPanel();
+        await sendAndFinish(MADE_FILE);
+        noPanel();
     });
 });

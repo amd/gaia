@@ -80,14 +80,21 @@ models, not an unused local chat model.
 
 ### The default local model
 
-`gaia init` picks the local chat model from the same rule: **Qwen3.6 35B
-A3B** on any PC whose GPU has ~27 GB for models (its 23.3 GB of weights and
-vision projector plus the context cache at its smallest, 64K window — a 64 GB+
-Strix Halo or a 32 GB GPU qualifies; a 24 GB card does not), **Gemma 4 E4B** everywhere
-else, including CPU-only PCs. Qwen3.6 must also fit the memory free when setup
+`gaia init` picks the local chat model from the same rule, judged against the
+memory left once other apps get theirs: where the model shares the PC's RAM (an
+integrated GPU, a Mac or no GPU), GAIA keeps the larger of 10 GB and a quarter
+of the RAM for the OS and other apps. That gives **Qwen3.6 35B A3B** on any PC
+whose GPU has ~27 GB for models (its 23.3 GB of weights and vision projector
+plus the context cache at its smallest, 64K window — a 64 GB+ Strix Halo or a
+32 GB GPU qualifies; a 24 GB card does not), **Gemma 4 E4B** on 24 GB+ PCs and
+10 GB+ GPUs, **Qwen3.5 4B** on an 8 GB GPU, and **Qwen3.5 2B** on every PC with
+16 GB of RAM or less, CPU-only ones included. Both Qwen3.5 models read images
+themselves, so those PCs don't download Gemma. A PC set up before this rule that
+already has Gemma keeps it where Gemma fits. See [Choosing models](/reference/cli#choosing-models)
+for the full table. Qwen3.6 must also fit the memory free when setup
 runs (about 26 GB at its smallest window): on a 48 GB Mac with other apps holding
 memory, setup picks Gemma and says how much Qwen3.6 needs and how much is free.
-GAIA keeps that pick; to use Qwen3.6 later, close those apps and choose it in **Settings → Model**. GAIA runs Qwen3.6 with thinking on, so each step
+GAIA keeps that pick; to use Qwen3.6 later, close those apps and choose it in **Settings → Agent & model**. GAIA runs Qwen3.6 with thinking on, so each step
 reasons before it answers or calls a tool. It records the pick as `default_model` in `~/.gaia/config.json`,
 so the TUI's agent starts on it. Set `gaia config set default_model <id>` to
 choose your own; `gaia init` never overwrites it, and downloads it instead of
@@ -200,7 +207,7 @@ its own, if smaller): GAIA doesn't know its memory use per token, so it doesn't
 grow the window the way it does for its own models. Removing it deletes its download too, and
 if it was your saved model the next launch uses the default.
 
-- **Agent UI:** Settings › Model › Local, open **Add a model from Hugging Face**.
+- **Agent UI:** Settings › Agent & model › Local, open **Add a model from Hugging Face**.
   The model chip's menu has **Add a model from a link…**. Added models have a
   **Remove** button.
 - **TUI:** in `/provider` › Local, press **Ctrl+A**, paste the link, and press
@@ -228,8 +235,8 @@ model sends its full size again.
 
 | PC | Memory for models | Window | KV cache |
 |----|-------------------|--------|----------|
-| Strix Halo 128 GB (96 GB carve-out) | ~112 GB | 262,144 | 5.4 GB |
-| Strix Halo 64 GB | ~48–56 GB | 262,144 | 5.4 GB |
+| Strix Halo 128 GB (96 GB carve-out) | ~96 GB | 262,144 | 5.4 GB |
+| Strix Halo 64 GB | ~48 GB | 262,144 | 5.4 GB |
 | 32 GB GPU | 32 GB | 90,112 | 1.8 GB |
 | 24 GB GPU | 24 GB | Qwen3.6 not picked; Gemma at 65,536 | — |
 
@@ -315,7 +322,9 @@ with `gaia config set network_policy cloud_allowed`. Details and limits:
   too, so GAIA registers it again first, using your saved key or
   `FIREWORKS_API_KEY`. If a cloud reply still finds the provider gone, GAIA
   reconnects it and sends the message once more; if that fails, the error says
-  GAIA's AI engine lost the connection, not that the model is missing. A key Fireworks AI or the gateway rejects is not kept.
+  GAIA's AI engine lost the connection (or "Your model server" if you set
+  `LEMONADE_BASE_URL` or chose your own server), not that the model is missing. A key
+  Fireworks AI or the gateway rejects is not kept.
   GAIA never writes a key to config files, transcripts, control logs,
   traces, or command-line arguments.
 - If Fireworks AI's model list fails but your key was not rejected, the Agent UI

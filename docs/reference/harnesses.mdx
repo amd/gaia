@@ -1,0 +1,72 @@
+---
+title: "The two harnesses: gaiapy and gaiacpp"
+description: "The GAIA agent is one agent with two programs behind it. Where each one lives in the repository, what it is called, and how the apps choose between them."
+icon: "code-branch"
+---
+
+The GAIA agent is one agent with two interchangeable programs behind it. Each
+program is a **harness**: the loop that sends the conversation to the model,
+runs the tools it asks for, and streams the answer back. The Agent UI and the
+terminal UI drive either one through the same contract, so a chat looks the
+same whichever is answering.
+
+| | `gaiapy` | `gaiacpp` |
+|---|---|---|
+| What it is | The Python harness | The native C++ harness (**beta**) |
+| Good at | Every tool and feature, and the most tested | Starts in a fraction of a second and uses a few megabytes of memory |
+| Trade-off | Slower to start and uses more memory | Fewer tools and features so far, no Claude provider, keeps no sessions yet |
+| Default | Yes | No, it runs only once chosen |
+| Agent source | `hub/agents/gaia/python/gaiapy/` | `cpp/agents/gaiacpp/` |
+| Framework it is built on | `src/gaia/` (the `amd-gaia` package) | `cpp/` (the `gaia-cpp` CMake project) |
+| Python package | `gaiapy` (importable as `gaia_agent` too, its old name) | n/a |
+| Program name | `gaia-agent` in an installed GAIA; `gaiapy` or `gaia-agent` from a `pip` install | `gaiacpp` |
+| User guide | [GAIA Agent](/guides/gaia) | [gaiacpp](/cpp/gaia-agent) |
+
+<Note>
+  The installers still ship the Python harness's program as `gaia-agent`, so
+  that is the file an installed GAIA has on disk. The terminal UI accepts
+  `gaiapy` wherever it accepts `gaia-agent`. `gaiacpp` is both the choice and
+  the program.
+</Note>
+
+## Choosing one
+
+The choice is saved as `flagship_agent` in `~/.gaia/config.json`, with the
+value `gaiapy` or `gaiacpp`. Both apps read the same key. With nothing saved,
+the Python harness runs, even when `gaiacpp` is installed. A name this version
+can't run (one a newer GAIA saved) still loads, so the Agent UI and its
+Settings open; starting the agent fails with a message saying to choose
+another, and no other harness runs in its place.
+
+| Where | How |
+|---|---|
+| Agent UI | Settings › Agent & model, or the Customize screen of first-run setup. See [Settings](/guides/agent-ui/settings) |
+| Terminal UI | `/agent gaiapy` or `/agent gaiacpp`. See [Which agent program answers](/guides/tui#which-agent-program-answers) |
+| Command line | `gaia config set flagship_agent gaiacpp` |
+
+A saved choice whose program is missing, or no longer matches its recorded
+checksum, is an error that names the file. Neither app runs the other harness
+in its place.
+
+## What the two share
+
+- **The wire contract.** The terminal UI talks to its agent over stdio, one JSON
+  event per line. The names are pinned by `tests/fixtures/stdio/gaia_stdio_wire.json`,
+  and both harnesses and the terminal UI are tested against it.
+- **The sidecar API.** Behind the daemon, `gaiacpp` serves the same API the
+  Python harness does, so the Agent UI needs no changes. See
+  [Running as the GAIA agent in the Agent UI](/cpp/gaia-agent#running-as-the-gaia-agent-in-the-agent-ui).
+- **The model table.** `tests/unit/test_cpp_model_registry_mirror.py` fails when
+  the C++ model registry drifts from the Python one.
+
+## Working on one
+
+| | `gaiapy` | `gaiacpp` |
+|---|---|---|
+| Set up | [Development guide](/reference/dev) | [C++ setup](/cpp/setup) |
+| Install or build | `pip install -e hub/agents/gaia/python` | Build `cpp/` with CMake |
+| Run in the terminal UI | `gaia-cli --agent-program gaia-agent` | `gaia-cli --agent-program path/to/gaiacpp` |
+| Tests | `hub/agents/gaia/python/tests/` and `tests/` | `cpp/tests/`. See [C++ testing](/cpp/testing) |
+
+The terminal UI's [developer manual](/reference/tui-dev#which-agent-program-runs)
+has the full order in which a launch picks a program.

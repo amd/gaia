@@ -24,6 +24,8 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Set, Tuple
 
+from gaia.canonical_path import UncheckablePathError, canonical_path
+from gaia.home import chat_data_dirs
 from gaia.utils.terminal import stdin_is_interactive
 
 logger = logging.getLogger(__name__)
@@ -124,6 +126,8 @@ SENSITIVE_FILE_NAMES: Set[str] = {
     "keystore.jks",
     ".npmrc",
     ".pypirc",
+    # gaia.ui.api_token.TOKEN_FILE_NAME: the Agent UI's API token.
+    "agent-ui-token",
 }
 
 # Never written, but free to read: world-readable account lists that hold no
@@ -217,7 +221,25 @@ def _secret_directories() -> Set[str]:
         home / ".config" / "gcloud",
         home / "AppData" / "Roaming" / "gcloud",
     ]
-    return {os.path.normpath(str(c)) for c in candidates}
+    return _with_resolved_forms(candidates)
+
+
+def _with_resolved_forms(folders: Any) -> Set[str]:
+    """Each folder as written and as its link-resolved canonical form.
+
+    A path is judged by its canonical form, so a home folder reached through a
+    link must be listed by where it really is as well.
+    """
+    forms = set()
+    for folder in folders:
+        forms.add(os.path.normpath(str(folder)))
+        forms.add(_scope_root(folder))
+    return forms
+
+
+def _case_insensitive_paths() -> bool:
+    """Windows and (by default) macOS open ``.SSH`` as ``.ssh``."""
+    return platform.system() in ("Windows", "Darwin")
 
 
 def _path_is_within(candidate: Path, parent: Path) -> bool:
@@ -230,10 +252,9 @@ def _path_is_within(candidate: Path, parent: Path) -> bool:
     Returns:
         True when candidate == parent or candidate is inside it.
     """
-    is_windows = platform.system() == "Windows"
     norm_candidate = os.path.normpath(_normalize_macos_symlinks(str(candidate)))
     norm_parent = os.path.normpath(_normalize_macos_symlinks(str(parent)))
-    if is_windows:
+    if _case_insensitive_paths():
         norm_candidate, norm_parent = norm_candidate.lower(), norm_parent.lower()
     # A drive root or "/" already ends in a separator.
     prefix = norm_parent if norm_parent.endswith(os.sep) else norm_parent + os.sep
@@ -312,6 +333,10 @@ def _is_gaia_user_content(norm_path: str, state_dir: str) -> bool:
         return False
     first_segment = relative.replace("\\", "/").split("/", 1)[0].lower()
     return first_segment in GAIA_STATE_USER_CONTENT_SUBDIRS
+
+
+#: The suffixes the image tool saves; nothing else in its folder is readable.
+GENERATED_IMAGE_SUFFIXES = frozenset({".png", ".jpg", ".jpeg", ".webp", ".gif"})
 
 
 def _get_blocked_directories() -> Set[str]:
@@ -393,11 +418,6 @@ def _get_blocked_directories() -> Set[str]:
     return blocked
 
 
-# Pre-compute once at module load
-BLOCKED_DIRECTORIES: Set[str] = _get_blocked_directories()
-GAIA_STATE_DIRECTORIES: Set[str] = _gaia_state_dirs()
-SECRET_DIRECTORIES: Set[str] = _secret_directories()
-
 #: How long the list of credential files is reused. A link made later still
 #: names a file already listed; only a file added to the folder waits for this.
 SECRET_LINKS_TTL_S = 10.0
@@ -472,12 +492,31 @@ def secret_folder_sharing(path: Any) -> Optional[str]:
 
 
 def _real_path(path: Any) -> str:
-    """*path* with ``~`` expanded and every symlink and ``..`` resolved.
+    """The canonical form of a path a tool was handed; see :func:`canonical_path`.
 
-    Tools expand ``~`` before they open a path, so the check must judge the
-    same path — not a literal ``<cwd>/~`` that happens to sit inside the CWD.
+    Raises:
+        UncheckablePathError: *path* is not a file on this PC GAIA can judge.
     """
-    return os.path.realpath(os.path.expanduser(os.fspath(path)))
+    return canonical_path(path)
+
+
+def _scope_root(path: Any) -> str:
+    """A configured folder (a scope or a protected root) in canonical form.
+
+    A root GAIA cannot canonicalise, such as a folder redirected to a network
+    share, keeps its resolved spelling: it only ever matches a path that was
+    canonicalised itself, and those never leave this PC.
+    """
+    try:
+        return canonical_path(path)
+    except UncheckablePathError:
+        return os.path.realpath(os.path.expanduser(os.fspath(path)))
+
+
+# Pre-compute once at module load
+BLOCKED_DIRECTORIES: Set[str] = _with_resolved_forms(_get_blocked_directories())
+GAIA_STATE_DIRECTORIES: Set[str] = _with_resolved_forms(_gaia_state_dirs())
+SECRET_DIRECTORIES: Set[str] = _secret_directories()
 
 
 def protected_directory_of(path: Any) -> Optional[str]:
@@ -499,6 +538,25 @@ def protected_directory_of(path: Any) -> Optional[str]:
         if _path_is_within(Path(real), Path(secret_dir)):
             return secret_dir
     return None
+
+
+#: Added to a refusal of an operating-system file (the hosts file, /etc).
+_ADMIN_ONLY = (
+    " It is an operating-system file, which takes administrator rights that "
+    "GAIA never uses, even when the user says yes. Don't try another way. Tell "
+    "the user exactly what to do and how to do it themselves as administrator."
+)
+
+
+def _is_os_file(path: Path) -> bool:
+    """Whether *path* is in a system folder, not GAIA's state or the user's home."""
+    blocked = protected_directory_of(path)
+    if blocked is None or blocked in SECRET_DIRECTORIES:
+        return False
+    normalized = os.path.normpath(blocked)
+    if normalized in GAIA_STATE_DIRECTORIES:
+        return False
+    return not _path_is_within(Path(normalized), Path.home())
 
 
 def is_credential_file_name(name: str) -> bool:
@@ -720,7 +778,10 @@ def sweep_stale_scratch_dirs() -> int:
                 continue
         try:
             info = os.lstat(path)
-            if hasattr(os, "getuid") and info.st_uid != os.getuid():
+            if (
+                hasattr(os, "getuid")
+                and info.st_uid != os.getuid()  # pylint: disable=no-member
+            ):
                 continue
             if _last_activity(path) > cutoff:
                 continue
@@ -906,7 +967,7 @@ def _intersect_scopes(
     nothing when they are disjoint. Ceiling entries that meet no scope entry
     are logged once: they can never widen what the agent may touch.
     """
-    granted = [Path(_real_path(p)) for p in scope]
+    granted = [Path(_scope_root(p)) for p in scope]
     kept: List[Path] = []
     for limit in ceiling:
         met = False
@@ -955,6 +1016,78 @@ def narrow_allowed_paths(
         return paths
     base = [Path.cwd()] if paths is None else paths
     return [str(p) for p in _intersect_scopes(base, ceiling, warn=warn)]
+
+
+def read_block(path: str) -> Tuple[bool, str]:
+    """Whether *path* holds secrets GAIA must not read back, in any chat.
+
+    The allowlist answers "is this in scope"; it cannot answer "is this a
+    private key". Being inside an allowed directory has never made
+    ``id_rsa`` or ``.env`` safe to read into a prompt that a model — and
+    whatever the model is told to do with it — then sees.
+
+    Args:
+        path: File path to check for read permission.
+
+    Returns:
+        Tuple of (is_blocked, reason). If blocked, reason explains why.
+    """
+    try:
+        real_path = Path(_real_path(path))
+        file_name = real_path.name.lower()
+        file_ext = real_path.suffix.lower()
+
+        if file_name in {s.lower() for s in READ_BLOCKED_FILE_NAMES}:
+            return (
+                True,
+                f"Read blocked: '{real_path.name}' holds credentials, keys or "
+                f"secrets. Open it yourself if you need its contents — the "
+                f"agent is not allowed to read it into the conversation.",
+            )
+
+        if file_ext in SENSITIVE_EXTENSIONS:
+            return (
+                True,
+                f"Read blocked: files with extension '{file_ext}' are "
+                f"certificates or private keys. The agent is not allowed to "
+                f"read them into the conversation.",
+            )
+
+        for secret_dir in SECRET_DIRECTORIES:
+            if _path_is_within(real_path, Path(secret_dir)):
+                return (
+                    True,
+                    f"Read blocked: '{real_path}' is inside '{secret_dir}', "
+                    f"which holds credentials. The agent is not allowed to "
+                    f"read from it.",
+                )
+
+        shared = secret_folder_sharing(real_path)
+        if shared:
+            return (
+                True,
+                f"Read blocked: '{real_path}' is the same file as one inside "
+                f"'{shared}', which holds credentials. The agent is not "
+                f"allowed to read it.",
+            )
+
+        return (False, "")
+
+    except UncheckablePathError as e:
+        return (True, f"Read blocked: {e}")
+    except Exception as e:
+        logger.error(f"Error checking read block for {path}: {e}")
+        # Fail-closed: refuse if we can't determine safety.
+        return (True, f"Read blocked: unable to validate path safety: {e}")
+
+
+def _chat_data_root(real_path: Path) -> Optional[Path]:
+    """The chat data folder an already-resolved *real_path* is in, or None."""
+    for folder in chat_data_dirs():
+        root = Path(_scope_root(folder))
+        if _path_is_within(real_path, root):
+            return root
+    return None
 
 
 class PathValidator:
@@ -1018,9 +1151,11 @@ class PathValidator:
         # transcripts are here unless the environment confines this session.
         self.read_only_paths: Set[Path] = set()
         if self._env_scope is None:
-            self.read_only_paths.add(Path(_real_path(gaia_home() / "transcripts")))
+            self.read_only_paths.add(Path(_scope_root(gaia_home() / "transcripts")))
         # Folders the user took away from this chat: refused, never prompted for.
         self.withheld_paths: Set[Path] = set()
+        # Those that were files when withheld: a document taken off the chat.
+        self._withheld_files: Set[Path] = set()
         self.scratch_dir: Optional[Path] = None
 
         # A host-supplied scope must not union with the machine-global grants the
@@ -1205,16 +1340,16 @@ class PathValidator:
         if self._on_prompt_start:
             try:
                 self._on_prompt_start()
-            except Exception:  # pragma: no cover – best-effort
-                pass
+            except Exception as e:  # pragma: no cover – best-effort
+                logger.debug("on_prompt_start callback failed: %s", e)
         try:
             yield
         finally:
             if self._on_prompt_end:
                 try:
                     self._on_prompt_end()
-                except Exception:  # pragma: no cover – best-effort
-                    pass
+                except Exception as e:  # pragma: no cover – best-effort
+                    logger.debug("on_prompt_end callback failed: %s", e)
 
     def add_allowed_path(self, path: str) -> None:
         """
@@ -1277,7 +1412,7 @@ class PathValidator:
         """
         self.read_only_paths.discard(Path(_real_path(path)))
 
-    def withhold_path(self, path: str) -> None:
+    def withhold_path(self, path: str, *, document: Optional[bool] = None) -> None:
         """Refuse everything under *path* until :meth:`release_path`.
 
         Wins over every grant, including a wider allowed folder, a read-only
@@ -1285,13 +1420,18 @@ class PathValidator:
 
         Args:
             path: The folder (or file) the user removed.
+            document: Whether *path* is a document taken off the chat, which
+                changes the advice in the refusal. Unset, a path that is a
+                file now counts as one; pass it when the file may be gone.
         """
         real = Path(_real_path(path))
         self.withheld_paths.add(real)
+        if document if document is not None else real.is_file():
+            self._withheld_files.add(real)
         self.allowed_paths = {
             p
             for p in self.allowed_paths
-            if not _path_is_within(Path(_real_path(p)), real)
+            if not _path_is_within(Path(_scope_root(p)), real)
         }
         logger.info("Withheld path: %s", real)
 
@@ -1301,7 +1441,13 @@ class PathValidator:
         Args:
             path: The folder (or file) that was withheld.
         """
-        self.withheld_paths.discard(Path(_real_path(path)))
+        real = Path(_real_path(path))
+        self.withheld_paths.discard(real)
+        self._withheld_files.discard(real)
+
+    def is_withheld_document(self, path: Any) -> bool:
+        """Whether *path* was withheld as a document rather than a folder."""
+        return Path(_real_path(path)) in self._withheld_files
 
     def withheld_root(self, path: str) -> Optional[Path]:
         """The withheld folder *path* is in, or None."""
@@ -1311,10 +1457,75 @@ class PathValidator:
                 return root
         return None
 
+    @staticmethod
+    def chat_data_root_of(path: Any) -> Optional[Path]:
+        """GAIA's chat data folder when *path* is inside it, else None.
+
+        It holds every chat's database, message attachments and document
+        copies. Only a grant of the exact file, an attached one, opens
+        anything there, and only to read: a folder, a read-only grant, an
+        approval or full access never does, so one chat cannot read what was
+        attached to another.
+
+        Args:
+            path: Any path; ``~``, ``..`` and symlinks are resolved first.
+        """
+        return _chat_data_root(Path(_real_path(path)))
+
+    def _granted_exactly(self, real_path: Path) -> bool:
+        """Whether *real_path* itself, not a folder holding it, was granted."""
+        return any(
+            _path_is_within(real_path, granted) and _path_is_within(granted, real_path)
+            for granted in (Path(_scope_root(p)) for p in self.allowed_paths)
+        )
+
     def _in_read_only_scope(self, path: str) -> bool:
         """Whether *path*, symlinks and ``..`` resolved, is under a read-only grant."""
         real = Path(_real_path(path))
-        return any(_path_is_within(real, root) for root in self.read_only_paths)
+        if self.chat_data_root_of(real) is not None:
+            return False
+        if any(_path_is_within(real, root) for root in self.read_only_paths):
+            return True
+        return self.is_generated_image(path)
+
+    def is_generated_image(self, path: str) -> bool:
+        """Whether *path* is an image GAIA's image tool saved, so reads may reach it.
+
+        GAIA's state folder stays write-blocked; this opens reads of one kind
+        of file in one folder. *path* must resolve (``..``, links and 8.3
+        names followed) to a regular, singly linked file with an image suffix
+        directly inside :func:`gaia.config.generated_images_dir`, and that
+        folder must not itself be a link out of GAIA's state folder.
+
+        Args:
+            path: The path a tool was given.
+
+        Returns:
+            True only when every condition holds; False on any doubt.
+        """
+        import gaia.config as _config
+
+        try:
+            real = Path(_real_path(path))
+            if real.suffix.lower() not in GENERATED_IMAGE_SUFFIXES:
+                return False
+            base = Path(_real_path(_config.GAIA_CONFIG_DIR))
+            folder = base.joinpath(*_config.GENERATED_IMAGES_SUBDIR.parts)
+            # cache/sd/images re-pointed by a link is no longer GAIA's folder.
+            if os.path.normcase(_real_path(folder)) != os.path.normcase(str(folder)):
+                return False
+            if os.path.normcase(str(real.parent)) != os.path.normcase(str(folder)):
+                return False
+            info = os.lstat(real)
+            # A hard link could name a file that lives elsewhere.
+            if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1:
+                return False
+        except (OSError, ValueError) as exc:
+            logger.debug("Not a generated image %s: %s", path, exc)
+            return False
+        if not self.in_env_scope(real) or self.withheld_root(str(real)) is not None:
+            return False
+        return not self.is_read_blocked(str(real))[0]
 
     def set_access_prompt(
         self,
@@ -1372,13 +1583,21 @@ class PathValidator:
             )
         withheld = self.withheld_root(str(path))
         if withheld is not None:
+            if withheld in self._withheld_files:
+                return f"'{path}' was taken off this chat by the user"
             return f"'{path}' is in {withheld}, which the user removed from this chat"
+        if self.chat_data_root_of(path) is not None:
+            return (
+                f"'{path}' is in GAIA's chat data, where a chat opens only what "
+                "is attached to it"
+            )
         read_blocked, reason = self.is_read_blocked(str(path))
         if read_blocked:
             return reason
-        write_blocked, reason = self.is_write_blocked(str(path))
-        if write_blocked:
-            return reason
+        # Said as what the path is: this refuses reads as well as writes.
+        protected = self._write_block(str(path))[0]
+        if protected:
+            return protected
         for root in _system_temp_roots():
             if _path_is_within(path, Path(os.path.realpath(root))):
                 return f"'{path}' is inside the system temp directory '{root}'"
@@ -1405,7 +1624,10 @@ class PathValidator:
         Returns:
             The reason *path* stays refused whatever the user answers, else "".
         """
-        return self._unaskable_reason(Path(_real_path(path)))
+        try:
+            return self._unaskable_reason(Path(_real_path(path)))
+        except UncheckablePathError as e:
+            return str(e)
 
     def _can_prompt(self) -> bool:
         """True when a blocking ``input()`` would actually reach the requester."""
@@ -1501,13 +1723,29 @@ class PathValidator:
             ``Access denied: '<path>' is not in allowed paths.`` followed by what
             the user can actually do about it here.
         """
+        try:
+            real_path = Path(_real_path(path))
+        except UncheckablePathError as e:
+            return f"Access denied: {e}"
         withheld = self.withheld_root(path)
+        if withheld is not None and withheld in self._withheld_files:
+            return (
+                f"Access denied: the user took '{withheld.name}' off this chat. "
+                "Don't try another way to reach it; tell the user to attach it "
+                "to this chat again if they want it used."
+            )
         if withheld is not None:
             return (
                 f"Access denied: '{path}' is in {withheld}, which the user removed "
                 "from this chat's folders. Don't try another way to reach it; tell "
                 "the user it can be added back under Environment in the session "
                 "panel."
+            )
+        if self.chat_data_root_of(real_path) is not None:
+            return (
+                f"Access denied: '{real_path.name}' is not attached to this chat. "
+                "Don't try another way to reach it; tell the user to attach it to "
+                "this chat if they want it used."
             )
         if self._declined_by_user(path):
             return (
@@ -1517,11 +1755,11 @@ class PathValidator:
                 "they attach it to this chat or allow it when asked again."
             )
         message = f"Access denied: '{path}' is not in allowed paths."
-        real_path = Path(_real_path(path))
         unaskable = self._unaskable_reason(real_path)
         if unaskable:
             remedy = (
                 f" No approval can grant it: {unaskable.rstrip('.')}."
+                f"{_ADMIN_ONLY if _is_os_file(real_path) else ''}"
                 f"{self._folders_inside_home_hint(real_path)}"
             )
         elif self._access_prompt is not None or self._can_prompt():
@@ -1552,7 +1790,7 @@ class PathValidator:
         try:
             # Resolve path using os.path.realpath to follow symlinks
             # This prevents TOCTOU attacks by resolving at check time
-            real_path = Path(_real_path(path)).resolve()
+            real_path = Path(_real_path(path))
             real_path_str = str(real_path)
 
             # Held to the env scope even if something added a wider grant directly.
@@ -1560,6 +1798,8 @@ class PathValidator:
                 return False
             if self.withheld_root(real_path_str) is not None:
                 return False
+            if _chat_data_root(real_path) is not None:
+                return self._granted_exactly(real_path)
 
             # macOS /var symlink handling: normalize by removing /private prefix.
             # Use the module-level helper so is_write_blocked applies the same
@@ -1571,8 +1811,7 @@ class PathValidator:
                 try:
                     # Ensure allowed_path is also resolved to handle symlinks correctly
                     # IMPORTANT: Use str(allowed_path) as allowed_path might already be a Path object
-                    allowed_path_str_raw = str(allowed_path)
-                    res_allowed = Path(os.path.realpath(allowed_path_str_raw)).resolve()
+                    res_allowed = Path(_scope_root(allowed_path))
                     allowed_path_str = str(res_allowed)
                     norm_allowed_path = _normalize_macos_symlinks(allowed_path_str)
 
@@ -1684,62 +1923,13 @@ class PathValidator:
     def is_read_blocked(self, path: str) -> Tuple[bool, str]:
         """Check whether a path holds secrets the agent must not read back.
 
-        The allowlist answers "is this in scope"; it cannot answer "is this a
-        private key". Being inside an allowed directory has never made
-        ``id_rsa`` or ``.env`` safe to read into a prompt that a model — and
-        whatever the model is told to do with it — then sees.
-
         Args:
             path: File path to check for read permission.
 
         Returns:
             Tuple of (is_blocked, reason). If blocked, reason explains why.
         """
-        try:
-            real_path = Path(_real_path(path))
-            file_name = real_path.name.lower()
-            file_ext = real_path.suffix.lower()
-
-            if file_name in {s.lower() for s in READ_BLOCKED_FILE_NAMES}:
-                return (
-                    True,
-                    f"Read blocked: '{real_path.name}' holds credentials, keys or "
-                    f"secrets. Open it yourself if you need its contents — the "
-                    f"agent is not allowed to read it into the conversation.",
-                )
-
-            if file_ext in SENSITIVE_EXTENSIONS:
-                return (
-                    True,
-                    f"Read blocked: files with extension '{file_ext}' are "
-                    f"certificates or private keys. The agent is not allowed to "
-                    f"read them into the conversation.",
-                )
-
-            for secret_dir in SECRET_DIRECTORIES:
-                if _path_is_within(real_path, Path(secret_dir)):
-                    return (
-                        True,
-                        f"Read blocked: '{real_path}' is inside '{secret_dir}', "
-                        f"which holds credentials. The agent is not allowed to "
-                        f"read from it.",
-                    )
-
-            shared = secret_folder_sharing(real_path)
-            if shared:
-                return (
-                    True,
-                    f"Read blocked: '{real_path}' is the same file as one inside "
-                    f"'{shared}', which holds credentials. The agent is not "
-                    f"allowed to read it.",
-                )
-
-            return (False, "")
-
-        except Exception as e:
-            logger.error(f"Error checking read block for {path}: {e}")
-            # Fail-closed: refuse if we can't determine safety.
-            return (True, f"Read blocked: unable to validate path safety: {e}")
+        return read_block(path)
 
     def _missing_instead_of_prompt(self, path: str) -> str:
         """A "not found" refusal for an out-of-scope *path* that is not there.
@@ -1759,7 +1949,10 @@ class PathValidator:
         """
         if self._access_prompt is None and not self._can_prompt():
             return ""
-        real_path = Path(_real_path(path)).resolve()
+        try:
+            real_path = Path(_real_path(path))
+        except UncheckablePathError:
+            return ""
         if self._unaskable_reason(real_path):
             return ""
         try:
@@ -1816,6 +2009,10 @@ class PathValidator:
         Returns:
             Tuple of (is_allowed, reason). If not allowed, reason explains why.
         """
+        try:
+            _real_path(path)
+        except UncheckablePathError as e:
+            return (False, f"Access denied: {e}")
         if self.withheld_root(path) is not None:
             return (False, self.access_denied_message(path))
         if not self._in_read_only_scope(path) and not self.is_path_allowed(
@@ -1852,6 +2049,19 @@ class PathValidator:
         Returns:
             Tuple of (is_blocked, reason). If blocked, reason explains why.
         """
+        why, advice = self._write_block(path)
+        if not why:
+            return (False, "")
+        return (True, f"Write blocked: {why}{advice}")
+
+    def _write_block(self, path: str) -> Tuple[str, str]:
+        """Why *path* may not be written, and what to say to a writer.
+
+        Returns:
+            ``(why, advice)``: *why* names what the path is, with no verb, so
+            a refused read can give it too; *advice* is for a writer only.
+            ``("", "")`` when the path may be written.
+        """
         try:
             # Use os.path.realpath exclusively for symlink resolution — do NOT
             # chain Path.resolve(), which re-resolves on Python <3.12 via a
@@ -1864,77 +2074,84 @@ class PathValidator:
             file_name = real_path.name.lower()
             file_ext = real_path.suffix.lower()
 
-            # Check blocked directories (case-insensitive on Windows)
-            is_windows = platform.system() == "Windows"
+            # Chats share one copy of each attached file; editing it edits theirs.
+            if _chat_data_root(real_path) is not None:
+                return (
+                    f"'{real_path.name}' is GAIA's copy of a file "
+                    "attached to a chat, which other chats may share",
+                    ". Save the changed version as a new file in a folder this "
+                    "chat can write to.",
+                )
+
+            # Check blocked directories (case-insensitive on Windows and macOS)
+            fold = _case_insensitive_paths()
             for blocked_dir in BLOCKED_DIRECTORIES:
                 normalized_blocked = os.path.normpath(
                     _normalize_macos_symlinks(blocked_dir)
                 )
-                # Case-insensitive comparison on Windows, case-sensitive elsewhere
-                cmp_norm = norm_path.lower() if is_windows else norm_path
-                cmp_blocked = (
-                    normalized_blocked.lower() if is_windows else normalized_blocked
-                )
+                cmp_norm = norm_path.lower() if fold else norm_path
+                cmp_blocked = normalized_blocked.lower() if fold else normalized_blocked
                 if cmp_norm.startswith(cmp_blocked + os.sep) or cmp_norm == cmp_blocked:
                     if normalized_blocked in GAIA_STATE_DIRECTORIES and (
                         _is_gaia_user_content(norm_path, normalized_blocked)
                     ):
                         continue
                     return (
-                        True,
-                        f"Write blocked: '{real_path}' is inside protected "
-                        f"directory '{blocked_dir}'",
+                        f"'{real_path}' is inside protected directory "
+                        f"'{blocked_dir}'",
+                        "",
                     )
 
             # Credential folders also hold config their tools execute.
             for secret_dir in SECRET_DIRECTORIES:
                 if _path_is_within(real_path, Path(secret_dir)):
                     return (
-                        True,
-                        f"Write blocked: '{real_path}' is inside protected "
-                        f"directory '{secret_dir}', which holds credentials and "
-                        f"tool configuration. Edit it yourself if you need to.",
+                        f"'{real_path}' is inside protected directory "
+                        f"'{secret_dir}', which holds credentials and tool "
+                        "configuration",
+                        ". Edit it yourself if you need to.",
                     )
             shared = secret_folder_sharing(real_path)
             if shared:
                 return (
-                    True,
-                    f"Write blocked: '{real_path}' is the same file as one inside "
-                    f"'{shared}', which holds credentials and tool configuration. "
-                    f"Edit it yourself if you need to.",
+                    f"'{real_path}' is the same file as one inside "
+                    f"'{shared}', which holds credentials and tool configuration",
+                    ". Edit it yourself if you need to.",
                 )
 
             # Check sensitive file names
             if file_name in {s.lower() for s in SENSITIVE_FILE_NAMES}:
                 return (
-                    True,
-                    f"Write blocked: '{real_path.name}' is a sensitive file "
-                    f"(credentials/keys/secrets). Writing to it is not allowed.",
+                    f"'{real_path.name}' is a sensitive file "
+                    "(credentials/keys/secrets)",
+                    ". Writing to it is not allowed.",
                 )
 
             # Check sensitive extensions
             if file_ext in SENSITIVE_EXTENSIONS:
                 return (
-                    True,
-                    f"Write blocked: files with extension '{file_ext}' are "
-                    f"sensitive (certificates/keys). Writing is not allowed.",
+                    f"files with extension '{file_ext}' are sensitive "
+                    "(certificates/keys)",
+                    ". Writing is not allowed.",
                 )
 
             startup_reason = _startup_execution_reason(real_path)
             if startup_reason:
                 return (
-                    True,
-                    f"Write blocked: {startup_reason}. Writing to it would make "
-                    f"the agent's content run on your machine without you asking. "
-                    f"Edit it yourself if that is what you intended.",
+                    startup_reason,
+                    ". Writing to it would make the agent's content run on your "
+                    "machine without you asking. Edit it yourself if that is what "
+                    "you intended.",
                 )
 
-            return (False, "")
+            return ("", "")
 
+        except UncheckablePathError as e:
+            return (str(e), "")
         except Exception as e:
             logger.error(f"Error checking write block for {path}: {e}")
             # Fail-closed: block if we can't determine safety
-            return (True, f"Write blocked: unable to validate path safety: {e}")
+            return (f"unable to validate path safety: {e}", "")
 
     def validate_write(
         self,
@@ -1959,6 +2176,11 @@ class PathValidator:
         Returns:
             Tuple of (is_allowed, reason). If not allowed, reason explains why.
         """
+        try:
+            _real_path(path)
+        except UncheckablePathError as e:
+            return (False, f"Access denied: {e}")
+
         # 1. Check allowlist
         if not self.is_path_allowed(path, prompt_user=prompt_user):
             return (False, self.access_denied_message(path))
@@ -1979,7 +2201,7 @@ class PathValidator:
             )
 
         # 4. Overwrite confirmation for existing files
-        real_path = Path(_real_path(path)).resolve()
+        real_path = Path(_real_path(path))
         if real_path.exists() and prompt_user:
             try:
                 existing_size = real_path.stat().st_size

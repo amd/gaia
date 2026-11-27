@@ -12,12 +12,15 @@ Stored at ``~/.gaia/config.json``.
 import json
 import logging
 import os
+import re
+import sys
 from contextlib import contextmanager
 from dataclasses import dataclass, field, fields
 from pathlib import Path
-from typing import Any, Callable, ClassVar, Dict, Iterator, List, Optional
+from typing import Any, Callable, ClassVar, Dict, Iterator, List, Optional, Tuple
 
 # Re-exported: the resolver lives in a leaf module so gaia.logger can use it.
+from gaia.harnesses import HARNESSES
 from gaia.home import (  # noqa: F401  pylint: disable=unused-import
     default_gaia_home,
     gaia_home,
@@ -54,9 +57,44 @@ GAIA_CONFIG_FILE = Path(
     os.getenv("GAIA_CONFIG_FILE", str(GAIA_CONFIG_DIR / "config.json"))
 )
 
+#: Where the image tool saves what it generates, below ``GAIA_CONFIG_DIR``.
+GENERATED_IMAGES_SUBDIR = Path("cache", "sd", "images")
+
+
+def generated_images_dir() -> Path:
+    """Return the folder the image tool saves into, read at call time."""
+    return GAIA_CONFIG_DIR / GENERATED_IMAGES_SUBDIR
+
+
 # Read-aloud speed, as a percentage of Kokoro's normal speed.
 READ_ALOUD_MIN_SPEED = 50
 READ_ALOUD_MAX_SPEED = 200
+
+_PLATFORM_NAMES = {"darwin": "macOS", "win32": "Windows", "linux": "Linux"}
+
+
+def _current_platform() -> str:
+    return sys.platform
+
+
+def speech_output_unproven_reason(platform: Optional[str] = None) -> Optional[str]:
+    """Why GAIA doesn't offer its local voice on this platform, or None where it does.
+
+    The voice is read-aloud, dictation and ``text_to_speech``; *platform* is a
+    ``sys.platform`` value and defaults to this PC's.
+    """
+    platform = platform or _current_platform()
+    if platform in GaiaConfig.TESTED_SPEECH_OUTPUT_PLATFORMS:
+        return None
+    name = _PLATFORM_NAMES.get(platform, platform)
+    proven = " and ".join(
+        _PLATFORM_NAMES[p] for p in GaiaConfig.TESTED_SPEECH_OUTPUT_PLATFORMS
+    )
+    return (
+        f"Reading aloud and dictation aren't offered on {name} yet, because GAIA "
+        f"hasn't verified its local voice there. They work on {proven}; follow "
+        f"https://github.com/amd/gaia/issues/8831 for {name}."
+    )
 
 
 class GaiaConfigError(Exception):
@@ -66,6 +104,54 @@ class GaiaConfigError(Exception):
     but corrupt/unreadable* file is, so it surfaces loudly instead of being
     silently swallowed into defaults.
     """
+
+
+#: The most image-generation steps a saved setting may ask for.
+IMAGE_MAX_STEPS = 100
+
+_IMAGE_SIZE_RE = re.compile(r"^([1-9][0-9]{1,4})x([1-9][0-9]{1,4})$")
+
+
+def parse_image_size(size: str) -> Tuple[int, int]:
+    """``(width, height)`` for a ``WIDTHxHEIGHT`` string; raises ValueError otherwise."""
+    match = _IMAGE_SIZE_RE.match(str(size).strip())
+    if not match:
+        raise ValueError(
+            f"Image size must be WIDTHxHEIGHT, such as 1024x1024, got {size!r}."
+        )
+    return int(match.group(1)), int(match.group(2))
+
+
+def check_image_setting(key: str, value: Any) -> Any:
+    """*value* for ``image_model``, ``image_size`` or ``image_steps``, with
+    ``auto`` or empty meaning the model's default; raises on anything else.
+
+    Only the shape is checked here: whether a model takes a size needs
+    Lemonade's catalog, which :mod:`gaia.sd.settings` reads.
+    """
+    word = str(value if value is not None else "").strip()
+    if not word or word.lower() == "auto":
+        return None
+    if key == "image_model":
+        return word
+    if key == "image_size":
+        try:
+            width, height = parse_image_size(word)
+        except ValueError as e:
+            raise GaiaConfigError(f"image_size: {e}") from e
+        return f"{width}x{height}"
+    try:
+        steps = int(word)
+    except ValueError as e:
+        raise GaiaConfigError(
+            f"image_steps must be a whole number from 1 to {IMAGE_MAX_STEPS}, or auto; "
+            f"got {value!r}."
+        ) from e
+    if not 1 <= steps <= IMAGE_MAX_STEPS:
+        raise GaiaConfigError(
+            f"image_steps must be from 1 to {IMAGE_MAX_STEPS}, or auto; got {steps}."
+        )
+    return steps
 
 
 def check_read_aloud_voice(value: Any) -> Optional[str]:
@@ -147,6 +233,10 @@ class GaiaConfig:
         default_device: Default inference device ('cpu', 'gpu', 'npu').
             GPU is the default — it's the most broadly available accelerated
             path on AMD hardware.
+        embedding_device: Where every chat embeds documents and memory.
+            ``None`` (the default) is the GPU on every PC; only a device in
+            ``TESTED_EMBEDDING_DEVICES`` can be set. Changing it re-embeds
+            stored memory.
         default_model: Persistent default model ID for model-bearing commands
             (``gaia chat`` / ``gaia llm`` / ``gaia prompt``) and for new
             Agent UI sessions (``ChatDatabase.create_session``). ``None``
@@ -188,6 +278,11 @@ class GaiaConfig:
             or ``cpu``) GAIA asks Lemonade for when it loads a local chat
             model. ``None`` (set it to ``auto``) leaves the choice to Lemonade.
             Takes effect on the next load; the embedding model keeps its own.
+        flagship_agent: which program is the GAIA agent in the Agent UI and
+            the terminal UI: ``gaiapy`` (the Python agent) or ``gaiacpp`` (the
+            native C++ agent, beta). ``None`` means the user has not chosen,
+            and both the Agent UI and the terminal UI run the Python agent;
+            an installed ``gaiacpp`` runs only once it is chosen.
         cloud_reasoning_effort: ``off`` (the default) sends cloud models no
             ``reasoning_effort``, leaving each at its provider's default.
             ``low``, ``medium`` or ``high`` turns on a one-time probe per cloud
@@ -209,6 +304,13 @@ class GaiaConfig:
             ``.claude/skills`` the agent puts in its prompt: ``full``, ``off``,
             or ``None`` (set it to ``auto``) to decide per model. See
             :mod:`gaia.project_context`.
+        image_model: The Lemonade model GAIA creates images with when the
+            request names none. ``None`` uses SDXL-Turbo. The Agent UI and the
+            TUI share it.
+        image_size: ``WIDTHxHEIGHT`` for those images, or ``None`` (set it to
+            ``auto``) for the model's own default.
+        image_steps: Generation steps, or ``None`` (``auto``) for the model's
+            default. More steps add detail and time.
         read_aloud_voice: The Kokoro voice replies are read aloud in, e.g.
             ``af_bella``. ``None`` uses the default voice. The Agent UI and the
             TUI share it.
@@ -231,10 +333,14 @@ class GaiaConfig:
         hybrid_policy: How readily ``hybrid`` uses the cheap model:
             ``quality`` (default) or ``balanced``, which also sends
             medium-difficulty code changes to it.
+        reduced_motion: Turn off the terminal UI's animations — the shimmer on
+            the live status line, a pending prompt's pulse, and the spinner.
+            ``GAIA_TUI_REDUCED_MOTION=1`` does the same for one launch.
     """
 
     profile: str = "chat"
     default_device: str = "gpu"
+    embedding_device: Optional[str] = None
     default_model: Optional[str] = None
     vision_model: Optional[str] = None
     full_access: bool = False
@@ -252,15 +358,20 @@ class GaiaConfig:
     undo_max_mb: int = 500
     skipped_models: List[str] = field(default_factory=list)
     project_context: Optional[str] = None
+    image_model: Optional[str] = None
+    image_size: Optional[str] = None
+    image_steps: Optional[int] = None
     read_aloud_voice: Optional[str] = None
     read_aloud_speed: int = 100
     read_aloud_auto: bool = False
     dynamic_tools: bool = True
+    flagship_agent: Optional[str] = None
     hybrid_cheap_model: Optional[str] = None
     hybrid_strong_model: Optional[str] = None
     hybrid_classifier_model: Optional[str] = None
     hybrid_classifier_timeout: int = 15
     hybrid_policy: str = "quality"
+    reduced_motion: bool = False
 
     #: Field values as last read from or written to the file (not a field).
     _loaded: ClassVar[Optional[dict]] = None
@@ -307,6 +418,8 @@ class GaiaConfig:
             return cls._coerce_model_list(value)
         if key == "project_context":
             return cls._check_project_context(value, "gaia config", "Use one of those.")
+        if key in ("image_model", "image_size", "image_steps"):
+            return check_image_setting(key, value)
         if key == "read_aloud_voice":
             return check_read_aloud_voice(value)
         if key == "read_aloud_speed":
@@ -319,6 +432,8 @@ class GaiaConfig:
             )
         if key == "hybrid_policy":
             return cls._check_hybrid_policy(value, "gaia config")
+        if key == "embedding_device":
+            return cls._check_embedding_device(value, "gaia config", offering=True)
         if cls._is_int_field(key):
             return cls._whole_number(key, value)
         if not cls._is_bool_field(key) or isinstance(value, bool):
@@ -397,6 +512,9 @@ class GaiaConfig:
     #: The ones GAIA's evals cover, and so the only ones a user may newly choose.
     #: A file saved with another still loads, so no install stops starting.
     TESTED_LLAMACPP_BACKENDS = ("vulkan",)
+    #: ``sys.platform`` values where the Kokoro voice is proven to speak whole
+    #: replies; elsewhere read-aloud, dictation and its setup offer are withheld.
+    TESTED_SPEECH_OUTPUT_PLATFORMS = ("win32", "linux")
 
     @classmethod
     def _check_llamacpp_backend(cls, value: Any, where: str) -> Optional[str]:
@@ -411,6 +529,72 @@ class GaiaConfig:
                 f"{where}: 'llamacpp_backend' must be one of "
                 f"{', '.join(cls.LLAMACPP_BACKEND_CHOICES)}, but it is {value!r}. "
                 "Run `gaia config set llamacpp_backend auto` to let Lemonade choose."
+            )
+        return word
+
+    #: Values ``flagship_agent`` can be set to: the harnesses this version can run.
+    FLAGSHIP_AGENT_CHOICES = tuple(h.name for h in HARNESSES if h.runnable)
+
+    #: The shape of a harness name, so a name a newer GAIA saved still loads.
+    _HARNESS_NAME = re.compile(r"[a-z][a-z0-9_-]{0,31}")
+
+    @classmethod
+    def _check_flagship_agent(
+        cls, value: Any, where: str, *, setting: bool = False
+    ) -> Optional[str]:
+        """Normalise a ``flagship_agent`` value.
+
+        Loading keeps any well-formed name, even one this version can't run, so a
+        config a newer GAIA wrote never stops this one from starting; launching it
+        raises instead (``gaia.harnesses.require_runnable``). Setting accepts only
+        the harnesses this version can run.
+        """
+        if value is None:
+            return None
+        word = value.strip().lower() if isinstance(value, str) else value
+        if setting and word not in cls.FLAGSHIP_AGENT_CHOICES:
+            raise GaiaConfigError(
+                f"{where}: 'flagship_agent' must be one of "
+                f"{', '.join(cls.FLAGSHIP_AGENT_CHOICES)}, but it is {value!r}."
+            )
+        if not isinstance(word, str) or not cls._HARNESS_NAME.fullmatch(word):
+            raise GaiaConfigError(
+                f"{where}: 'flagship_agent' must be one of "
+                f"{', '.join(cls.FLAGSHIP_AGENT_CHOICES)}, but it is {value!r}. "
+                "Change it to one of those, or delete the 'flagship_agent' line "
+                "to go back to the default."
+            )
+        return word
+
+    #: Devices an embedder has a build for. A saved one still loads.
+    EMBEDDING_DEVICE_CHOICES = ("gpu", "npu")
+    #: The ones whose search GAIA has proven, and so the only ones it offers.
+    #: The NPU build (embed-gemma-300m-FLM on FastFlowLM 1.0.7) ranked documents
+    #: no better than chance; add it back once a newer build passes.
+    TESTED_EMBEDDING_DEVICES = ("gpu",)
+
+    @classmethod
+    def _check_embedding_device(
+        cls, value: Any, where: str, *, offering: bool = False
+    ) -> Optional[str]:
+        """Normalise an ``embedding_device`` value; ``auto`` (or empty) is None.
+
+        *offering* refuses a device GAIA hasn't proven, for a new choice; a
+        value already saved is read without it.
+        """
+        if value is None:
+            return None
+        word = str(value).strip().lower()
+        if word in ("", "auto"):
+            return None
+        allowed = (
+            cls.TESTED_EMBEDDING_DEVICES if offering else cls.EMBEDDING_DEVICE_CHOICES
+        )
+        if word not in allowed:
+            raise GaiaConfigError(
+                f"{where}: 'embedding_device' must be "
+                f"{' or '.join(('auto',) + allowed)}, but it is {value!r}. "
+                "Set it to auto to embed on the GPU."
             )
         return word
 
@@ -633,6 +817,14 @@ class GaiaConfig:
             kwargs["cloud_reasoning_effort"] = cls._check_cloud_reasoning_effort(
                 kwargs["cloud_reasoning_effort"], f"GAIA config at {config_file}"
             )
+        if "flagship_agent" in kwargs:
+            kwargs["flagship_agent"] = cls._check_flagship_agent(
+                kwargs["flagship_agent"], f"GAIA config at {config_file}"
+            )
+        if "embedding_device" in kwargs:
+            kwargs["embedding_device"] = cls._check_embedding_device(
+                kwargs["embedding_device"], f"GAIA config at {config_file}"
+            )
         where = f"GAIA config at {config_file}"
         for key in HYBRID_MODEL_KEYS:
             if key in kwargs:
@@ -800,10 +992,24 @@ class GaiaConfig:
         if key == "cloud_reasoning_effort":
             setattr(self, key, self._check_cloud_reasoning_effort(value, "gaia config"))
             return
+        if key == "flagship_agent":
+            setattr(
+                self,
+                key,
+                self._check_flagship_agent(value, "gaia config", setting=True),
+            )
+            return
+        if key == "embedding_device":
+            setattr(
+                self,
+                key,
+                self._check_embedding_device(value, "gaia config", offering=True),
+            )
+            return
         if key == "context_sizes":
             raise GaiaConfigError(
                 "context_sizes is set per model: choose a context size in the "
-                "Agent UI under Settings › Model, or edit config.json by hand."
+                "Agent UI under Settings › Agent & model, or edit config.json by hand."
             )
         setattr(self, key, self._coerce(key, value))
 

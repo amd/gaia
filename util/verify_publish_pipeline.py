@@ -17,8 +17,8 @@ TWO PUBLISHERS, NOT ONE
 -----------------------
 There are two ``publish_to_r2.py`` scripts and they are different programs::
 
-    hub/agents/email/python/packaging/publish_to_r2.py   --publisher email
-        release_agent_email.yml, release_components.yml
+    hub/components/terminal-hub/publish_to_r2.py         --publisher terminal-hub
+        release_components.yml
 
     hub/agents/gaia/python/packaging/publish_to_r2.py    --publisher gaia
         release_agent_gaia.yml
@@ -55,7 +55,7 @@ H  ``--require-new`` turns "this run stored nothing new" into a hard failure,
 I  The platform key and executable name are derived from the artifact filename
    rather than hardcoded to one product. Both are load-bearing: the release
    workflows pass binaries with no explicit artifact key, and
-   release_agent_email.yml feeds this summary into gen_binaries_lock.py, which
+   release_agent_gaia.yml feeds this summary into gen_binaries_lock.py, which
    reads ``executable`` straight out of it.
 J  A publisher WITHOUT a direct-to-R2 lane refuses an oversized artifact at the
    cap rather than 413ing mid-release. This is the gaia release's live blocker:
@@ -102,9 +102,11 @@ from urllib.parse import urlparse
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 WORKER_DIR = REPO_ROOT / "workers" / "agent-hub"
+# Both publishers import DIRECT_UPLOAD_THRESHOLD from here.
+SHARED_HELPERS = REPO_ROOT / "util" / "hub_r2_publish.py"
 
 # The size at which an artifact stops fitting through the Worker. Checked against
-# each publisher's own constant at startup, so moving it there fails here loudly
+# the publishers' shared constant at startup, so moving it there fails here loudly
 # instead of silently testing the wrong lane.
 DIRECT_UPLOAD_THRESHOLD = 90 * 1024 * 1024
 
@@ -130,13 +132,14 @@ class Spec:
     """One publisher script, and which behaviours it currently claims to have.
 
     There are TWO publishers and they are not the same program. Every case below
-    names the one it exercises, because proving the email publisher says nothing
-    about the gaia release -- release_agent_gaia.yml runs the gaia copy.
+    names the one it exercises, because proving the terminal-hub publisher says
+    nothing about the gaia release -- release_agent_gaia.yml runs the gaia copy.
     """
 
     key: str
     path: Path
     threshold_const: str
+    threshold_path: Path
     drives: str
     # Capabilities. A case that needs one the publisher lacks is reported N/A
     # rather than passed or failed, so the table never overstates coverage.
@@ -153,21 +156,22 @@ class Spec:
 
 
 SPECS = {
-    "email": Spec(
-        key="email",
-        path=REPO_ROOT / "hub/agents/email/python/packaging/publish_to_r2.py",
+    "terminal-hub": Spec(
+        key="terminal-hub",
+        path=REPO_ROOT / "hub/components/terminal-hub/publish_to_r2.py",
         threshold_const="DIRECT_UPLOAD_THRESHOLD",
-        drives="release_agent_email.yml, release_components.yml",
+        threshold_path=SHARED_HELPERS,
+        drives="release_components.yml",
         direct_r2=True,
         lenient_rebuild=True,
         strict_immutable_flag=True,
         require_new_flag=True,
         executable_cases=(
             ("gaia-agent-linux-x64", "linux-x64", "gaia-agent"),
-            ("email-agent-win32-x64.exe", "win32-x64", "email-agent.exe"),
+            ("gaia-agent-win32-x64.exe", "win32-x64", "gaia-agent.exe"),
         ),
     ),
-    # A separate 367-line script. It has NONE of the email publisher's fixes: no
+    # A separate 367-line script. It has NONE of the terminal-hub publisher's fixes: no
     # direct-to-R2 lane (it hard-fails at the cap and tells you to port one), the
     # old hard-failure on a differing rebuild, and neither opt-in flag. Its
     # artifact key is <component>:<platform>, not <platform>.
@@ -175,6 +179,7 @@ SPECS = {
         key="gaia",
         path=REPO_ROOT / "hub/agents/gaia/python/packaging/publish_to_r2.py",
         threshold_const="DIRECT_UPLOAD_THRESHOLD",
+        threshold_path=SHARED_HELPERS,
         drives="release_agent_gaia.yml",
         direct_r2=True,
         lenient_rebuild=True,
@@ -814,8 +819,8 @@ def case_i(c: Ctx) -> str:
     """The platform key and executable name are derived, not hardcoded.
 
     Both matter beyond cosmetics: release_agent_gaia.yml passes its binaries with
-    no explicit ``=<platform-key>``, and release_agent_email.yml feeds this
-    summary into gen_binaries_lock.py, which reads ``rec["executable"]``.
+    no explicit ``=<platform-key>``, and feeds this summary into
+    gen_binaries_lock.py, which reads ``rec["executable"]``.
     """
     expected, args = {}, []
     for i, (filename, platform, executable) in enumerate(c.spec.executable_cases):
@@ -894,7 +899,7 @@ def _read_threshold(spec: Spec) -> int:
     """Read a publisher's request-body cap constant without importing it."""
     import ast
 
-    tree = ast.parse(spec.path.read_text(encoding="utf-8"))
+    tree = ast.parse(spec.threshold_path.read_text(encoding="utf-8"))
     for node in tree.body:
         if isinstance(node, ast.Assign) and any(
             isinstance(t, ast.Name) and t.id == spec.threshold_const
@@ -902,7 +907,8 @@ def _read_threshold(spec: Spec) -> int:
         ):
             return int(eval(compile(ast.Expression(node.value), "<t>", "eval")))
     raise SystemExit(
-        f"error: {spec.threshold_const} not found in {spec.path.relative_to(REPO_ROOT)}"
+        f"error: {spec.threshold_const} not found in "
+        f"{spec.threshold_path.relative_to(REPO_ROOT)}"
     )
 
 
@@ -921,7 +927,7 @@ def main(argv=None) -> int:
         choices=[*SPECS, "both"],
         default="both",
         help="Which publisher script to exercise. There are TWO and they are not "
-        "the same program: 'email' backs the email/chat/components releases, "
+        "the same program: 'terminal-hub' backs release_components.yml, "
         "'gaia' backs release_agent_gaia.yml. Default: both.",
     )
     parser.add_argument(
@@ -940,7 +946,8 @@ def main(argv=None) -> int:
         threshold = _read_threshold(spec)
         if threshold != DIRECT_UPLOAD_THRESHOLD:
             raise SystemExit(
-                f"error: {spec.path.relative_to(REPO_ROOT)} sets {spec.threshold_const} "
+                f"error: {spec.threshold_path.relative_to(REPO_ROOT)} sets "
+                f"{spec.threshold_const} "
                 f"to {threshold}, but this harness builds its oversized fixture at "
                 f"{DIRECT_UPLOAD_THRESHOLD}. Update DIRECT_UPLOAD_THRESHOLD here so the "
                 "oversized cases still test the right lane."

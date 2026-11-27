@@ -124,10 +124,11 @@ def recall_key(provider: str) -> Optional[str]:
 
 def forget_key(provider: str) -> bool:
     """Remove the kept key. True when one was stored."""
-    from gaia.connectors.store import delete_secret
+    from gaia.connectors.store import delete_secret, secret_in_use
 
     slot = _check(provider)
-    had = recall_key(provider) is not None
+    # A weak keyring refuses the read but not the delete.
+    had = recall_key(provider) is not None or secret_in_use(slot)
     delete_secret(slot)
     return had
 
@@ -215,6 +216,61 @@ def provider_lost(provider: str, client: Optional[LemonadeClient] = None) -> boo
         raise CloudKeyError(str(e)) from e
     entry = _provider_entry(base_url, provider)
     return not (entry and (entry.get("env_var_set") or entry.get("runtime_key_set")))
+
+
+def provider_found_no_models(
+    provider: str, client: Optional[LemonadeClient] = None
+) -> bool:
+    """Whether *provider* holds a key but listed no models: Lemonade could not
+    reach it (offline when it started) or the provider refused the key."""
+    _check(provider)
+    client = client or LemonadeClient(verbose=False)
+    try:
+        base_url = client.credential_base_url()
+    except LemonadeClientError as e:
+        raise CloudKeyError(str(e)) from e
+    entry = _provider_entry(base_url, provider)
+    return bool(
+        entry
+        and (entry.get("env_var_set") or entry.get("runtime_key_set"))
+        and not entry.get("models_discovered")
+    )
+
+
+def rediscover_models(provider: str, client: Optional[LemonadeClient] = None) -> bool:
+    """Hand a keyed provider its key again so Lemonade reads the model list once
+    more. Only on a Lemonade GAIA runs itself; True when it now finds models."""
+    from gaia.llm.lemonade_launcher import gaia_runs_lemonade
+
+    _check(provider)
+    if cloud_blocked():
+        raise CloudKeyBlockedError(local_only_key_message(provider))
+    client = client or LemonadeClient(verbose=False)
+    try:
+        base_url = client.credential_base_url()
+    except LemonadeClientError as e:
+        raise CloudKeyError(str(e)) from e
+    if not gaia_runs_lemonade(base_url):
+        return False
+    if provider == GATEWAY_PROVIDER:
+        from gaia.llm.gateway import GatewayManager, lemonade_token_with_source
+
+        found = lemonade_token_with_source(lemonade_url=None, warn=False)
+        if not found:
+            return False
+        token = found[0]
+        del found
+        result = GatewayManager(client).set_token(token)
+        del token
+        return bool((result or {}).get("models_discovered"))
+    key = recall_key(provider) or env_key(provider)
+    if not key:
+        return False
+    result = _request(
+        base_url, "POST", "cloud/auth", {"provider": provider, "api_key": key}
+    )
+    del key
+    return bool(result.get("models_discovered"))
 
 
 def reconnect_provider(provider: str, client: Optional[LemonadeClient] = None) -> bool:

@@ -48,7 +48,8 @@ OUTPUT_TOOLS = frozenset({"run_shell_command", "run_python", "execute_python_fil
 #: Carried by every condensed result, so the model learns the read from the result.
 FETCH_HINT = (
     "read_tool_output(artifact, entry=n) returns one indexed part verbatim; "
-    "entry=n, to_entry=m returns parts n..m in one call"
+    "entry=n, to_entry=m returns parts n..m in one call; "
+    "pass the artifact as another tool's argument to give it the full text"
 )
 #: Arguments whose value can name a part of the result (a symbol, a pattern).
 NAMING_ARGS = ("pattern", "query", "function_name", "name", "symbol", "section")

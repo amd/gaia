@@ -340,7 +340,7 @@ jobs:
             ## Review Checklist
 
             ### 1. Code Quality & Patterns
-            - **Architecture Consistency:** For new agents, compare with existing agents under `hub/agents/<id>/python/gaia_agent_<id>/agent.py` (email, gaia) and the reference package `tests/fixtures/agents/hello-world/`
+            - **Architecture Consistency:** For new agents, compare with the flagship at `hub/agents/gaia/python/gaiapy/agent.py` and the reference package `tests/fixtures/agents/hello-world/`
               - Does it extend `src/gaia/agents/base/agent.py` (`class Agent`)?
               - Does it register tools via `@tool` (see `src/gaia/agents/base/tools.py`)?
               - Does error handling use `src/gaia/agents/base/errors.py` formatters?
@@ -733,6 +733,7 @@ jobs:
         --max-turns 100
         --model claude-opus-5-5
         --allowedTools Edit,Read,Write,Grep,Glob,Bash
+        --permission-mode default
 
   # Decides whether a comment WITHOUT @claude is a follow-up Claude should consider
   # (#1408). A cheap API read, so the Opus run below only starts when a maintainer is
@@ -1099,7 +1100,7 @@ jobs:
             - `question` — a usage question with no defect claimed.
 
             Apply AT MOST ONE component label, only if the issue clearly belongs to it:
-            `agent::email`, `cli`, `agent-ui`, `rag`, `eval`, `tests`, `installer`, `connectors`,
+            `cli`, `agent-ui`, `rag`, `eval`, `tests`, `installer`, `connectors`,
             `mcp`, `llm`, `audio`, `electron`, `lemonade 🍋` (the emoji is part of the name),
             `performance`, `security`.
 
@@ -1124,7 +1125,7 @@ jobs:
             Search for prior art before commenting:
               `gh issue list --repo ${{ github.repository }} --state all --limit 40 --search "<key terms from the title>" --json number,title,state`
             A duplicate means the SAME underlying defect, not merely the same subsystem —
-            two different email-agent bugs are not duplicates. If you find one you are
+            two different RAG bugs are not duplicates. If you find one you are
             genuinely confident about, mention it in the comment as a possibility and
             link it. Do NOT apply the `duplicate` label and do NOT close anything.
 
@@ -1321,7 +1322,7 @@ jobs:
       - name: Attempt auto-fix
         if: steps.existing.outputs.pr == ''
         id: claude   # referenced by the Notify step's execution_file check below
-        uses: anthropics/claude-code-action@61a9c274fa7110a66dfafc1bbbced03833eb25fe  # v1.0.269
+        uses: anthropics/claude-code-action@acfe7992852970efb4fee683d63d628e3e52df67  # v1.0.286
         with:
           # Prefer subscription OAuth, fall back to API key — see "Authentication" in the file header.
           anthropic_api_key: ${{ steps.claude_account.outputs.account == 'none' && secrets.ANTHROPIC_API_KEY || '' }}

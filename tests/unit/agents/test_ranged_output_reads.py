@@ -118,7 +118,6 @@ def test_an_out_of_order_index_stops_the_run():
         ({"entry": 1, "to_entry": 2, "offset": 5}, "pass it with entry"),
         ({"entry": 1, "to_entry": 2, "limit": 5}, "pass it with entry"),
         ({"entry": 3, "to_entry": 2}, "before entry"),
-        ({"entry": 1, "to_entry": 9}, "not in the index"),
         ({"entry": 0, "to_entry": 2}, "not in the index"),
         ({"entry": 1, "to_entry": True}, "index entry number"),
         ({"entry": 1, "to_entry": "2"}, "index entry number"),
@@ -128,6 +127,26 @@ def test_a_malformed_run_is_refused_with_the_fix(kwargs, match):
     store, handle, _ = _indexed([100, 100, 100])
     with pytest.raises(ValueError, match=match):
         store.read(handle, **kwargs)
+
+
+@pytest.mark.parametrize("last", [4, 9, 10**9])
+def test_a_to_entry_past_the_index_returns_what_is_there(last):
+    store, handle, parts = _indexed([100, 100, 100])
+
+    page = store.read(handle, entry=2, to_entry=last, max_chars=20000)
+
+    assert page["content"] == "".join(parts[1:])
+    assert page["to_entry"] == 3
+    assert "next_entry" not in page
+
+
+def test_a_to_entry_past_the_index_still_stops_at_the_budget():
+    store, handle, parts = _indexed([2000, 2000, 2000])
+
+    page = store.read(handle, entry=1, to_entry=50, max_chars=3000)
+
+    assert page["content"] == parts[0]
+    assert page["to_entry"] == 1 and page["next_entry"] == 2
 
 
 def test_single_entry_reads_are_unchanged():

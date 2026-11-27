@@ -115,6 +115,7 @@ def test_lists_the_cached_agents_tools_with_a_category_each(client):
             },
         ],
         "skills": [],
+        "program": None,
     }
 
 
@@ -200,7 +201,7 @@ class _Proxy:
 @pytest.fixture
 def sidecar(monkeypatch):
     """The flagship runs as a daemon sidecar, as on a Hub binary install."""
-    from gaia.ui.email_sidecar import daemon_client
+    from gaia.ui.sidecar import daemon_client
 
     monkeypatch.setattr(session_environment, "relayed", lambda _session: True)
     state = SimpleNamespace(
@@ -271,7 +272,7 @@ def test_the_email_agent_says_it_cannot_list_tools_without_being_started(
 
 
 def test_a_sidecar_that_cannot_start_is_a_503(client, sidecar, monkeypatch):
-    from gaia.ui.email_sidecar import daemon_client
+    from gaia.ui.sidecar import daemon_client
 
     def fail(_agent_id):
         raise SidecarError("sidecar crashed")
@@ -353,9 +354,26 @@ def test_extra_sidecar_fields_are_not_passed_through(client, sidecar):
     assert r.json()["skills"] is None
 
 
+@pytest.mark.parametrize("chosen, program", [(None, "gaiapy"), ("gaiacpp", "gaiacpp")])
+def test_a_relayed_flagship_says_which_program_runs_it(
+    client, sidecar, chosen, program
+):
+    from gaia.config import GaiaConfig
+
+    if chosen:
+        GaiaConfig.save_key("flagship_agent", chosen)
+    sid, _ = _new_session(client, "gaia")
+    sidecar.proxy.answer = {"tools": []}
+
+    r = _get(client, sid)
+
+    assert r.status_code == 200, r.text
+    assert r.json()["program"] == program
+
+
 def test_proxy_asks_the_sessions_tools_route():
     """The wire shape: GET /v1/<agent>/sessions/<id>/tools on that sidecar."""
-    from gaia.ui.email_sidecar.proxy import SidecarProxy
+    from gaia.ui.sidecar.proxy import SidecarProxy
 
     calls = []
 

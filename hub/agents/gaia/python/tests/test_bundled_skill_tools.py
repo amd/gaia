@@ -19,7 +19,7 @@ import importlib.util
 from pathlib import Path
 
 import pytest
-from gaia_agent.agent import _bundled_skill_roots
+from gaiapy.agent import _bundled_skill_roots
 
 from gaia.skills.audit import audit_skill
 from gaia.skills.capture import code_is_deferred
@@ -52,7 +52,7 @@ CODE_SKILLS = [d for d in _bundled_skill_dirs() if _ships_code(d)]
 
 @pytest.fixture(scope="module")
 def flagship():
-    from gaia_agent.agent import GaiaAgent, GaiaAgentConfig
+    from gaiapy.agent import GaiaAgent, GaiaAgentConfig
 
     return GaiaAgent(config=GaiaAgentConfig(silent_mode=True))
 
@@ -192,6 +192,41 @@ def test_the_send_email_skill_asks_before_any_mail_leaves_on_the_flagship(
         assert flagship.unload_skill("send-email")
 
 
+def test_the_browser_pane_skill_is_gated_on_the_flagship(tmp_path):
+    """Its tools stay off the list until it loads; browser_eval then asks every
+    time, and the others ask through the browser gate, by site and control."""
+    from gaiapy.agent import GaiaAgent, GaiaAgentConfig
+
+    from gaia.agents.base.tools import _TOOL_REGISTRY
+    from gaia.agents.tools.browser_use_tools import BrowserUseToolsMixin
+
+    saved = dict(_TOOL_REGISTRY)
+    try:
+        with pytest.MonkeyPatch.context() as mp:
+            mp.setattr(
+                BrowserUseToolsMixin, "_pane_at_startup", lambda self: (True, True)
+            )
+            agent = GaiaAgent(config=GaiaAgentConfig(silent_mode=True))
+        before = set(agent._tools_registry)
+        assert not any(n.startswith("browser-pane/") for n in before)
+        assert "browser-pane" in agent.skill_manager.discover()
+
+        agent.load_skill(
+            "browser-pane", manager=_bundled_only(agent.SKILL_DIRS, tmp_path)
+        )
+        added = set(agent._tools_registry) - before
+        assert len(added) == 9 and all(n.startswith("browser-pane/") for n in added)
+        assert agent._tools_registry["browser-pane/browser_eval"][
+            "requires_confirmation"
+        ]
+        assert "browser_call_needs_confirmation" in agent.confirmation_hooks()
+        assert agent.unload_skill("browser-pane")
+        assert set(agent._tools_registry) == before
+    finally:
+        _TOOL_REGISTRY.clear()
+        _TOOL_REGISTRY.update(saved)
+
+
 def test_a_bundled_skill_scripts_file_runs_by_path(flagship, tmp_path):
     """A skill's scripts/ file is on disk at <skill directory>/scripts/<file>.
 
@@ -279,8 +314,8 @@ def test_the_freeze_bundles_every_starter_skill():
 
 
 def test_the_freeze_lands_skills_where_the_frozen_agent_looks():
-    """``gaia_agent/skills`` is ``_SKILLS_DIR`` relative to the package."""
-    from gaia_agent.agent import _SKILLS_DIR
+    """``gaiapy/skills`` is ``_SKILLS_DIR`` relative to the package."""
+    from gaiapy.agent import _SKILLS_DIR
 
     assert freeze.SKILLS_DEST == f"{_SKILLS_DIR.parent.name}/{_SKILLS_DIR.name}"
 
@@ -400,3 +435,27 @@ def test_the_freeze_still_bundles_a_guarded_import_that_is_installed(tmp_path):
         hidden = freeze.skill_code_hidden_imports([skill_dir])
 
     assert "gaia.web.client" in hidden
+
+
+def test_the_freeze_scans_the_modules_tools_py_imports(tmp_path):
+    """A skill's own package is local, and what that package imports must ship."""
+    skill_dir = tmp_path / "split"
+    (skill_dir / "engine").mkdir(parents=True)
+    (skill_dir / "tools.py").write_text("from engine.core import run\n")
+    (skill_dir / "engine" / "__init__.py").write_text("")
+    (skill_dir / "engine" / "core.py").write_text(
+        "import gaia.web.client\nfrom .helpers import x\n"
+    )
+
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(freeze, "REPO_ROOT", tmp_path)
+        hidden = freeze.skill_code_hidden_imports([skill_dir])
+
+    assert "gaia.web.client" in hidden
+    assert not any(name.startswith("engine") for name in hidden)
+
+    (skill_dir / "engine" / "core.py").write_text("import gaia_no_such_module_xyz\n")
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(freeze, "REPO_ROOT", tmp_path)
+        with pytest.raises(SystemExit, match="gaia_no_such_module_xyz"):
+            freeze.skill_code_hidden_imports([skill_dir])

@@ -201,7 +201,7 @@ async def _acquire_daemon():
     started is a loud 503 — never a silent in-process fallback (#2178)."""
     from gaia.daemon.client import start_or_attach
 
-    loop = asyncio.get_event_loop()
+    loop = asyncio.get_running_loop()
     try:
         return await loop.run_in_executor(None, start_or_attach)
     except DaemonError as e:
@@ -225,7 +225,7 @@ def build_agent_proxy_router() -> APIRouter:
     * ``POST /v1/{agent}/query`` and ``.../query/{run_id}/cancel`` — the
       streaming agent loop (SSE, relayed unbuffered).
     * ``{METHOD} /v1/{agent}/{subpath}`` — the fixed-function agent surface
-      (e.g. the email agent's ``/v1/email/{triage,draft,send,health,…}``),
+      (e.g. an agent's ``/v1/<agent>/health``),
       buffered passthrough. Without this, those routes 404 on ``gaia api`` even
       though the sidecar serves them (#2176).
 

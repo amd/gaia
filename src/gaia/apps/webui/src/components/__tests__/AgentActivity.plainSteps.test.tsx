@@ -343,20 +343,30 @@ describe('expanded view order', () => {
 });
 
 describe('background memory calls', () => {
-    const memory = (id: number, success: boolean): AgentStep =>
-        call(id, 'Remembering: owner', { tool: 'remember', success });
+    const recall = (id: number, success: boolean): AgentStep =>
+        call(id, 'Recalling memory: owner', { tool: 'recall', success });
+    const remember = (id: number, success: boolean): AgentStep =>
+        call(id, 'Saving to memory: owner', { tool: 'remember', success });
 
-    it('stay out of the rows and do not split identical calls', () => {
+    it('keep successful recall out of the rows and do not split identical calls', () => {
         const rows = consolidateSteps([
-            call(1, 'Reading file: a.txt'), memory(2, true), call(3, 'Reading file: a.txt'),
+            call(1, 'Reading file: a.txt'), recall(2, true), call(3, 'Reading file: a.txt'),
         ], false);
 
         expect(rows.map((r) => [r.tool, r.count ?? 1])).toEqual([['read_file', 2]]);
     });
 
-    it('show when they fail, and keep the calls around them apart', () => {
+    it('show recall when it fails, and keep the calls around it apart', () => {
         const rows = consolidateSteps([
-            call(1, 'Reading file: a.txt'), memory(2, false), call(3, 'Reading file: a.txt'),
+            call(1, 'Reading file: a.txt'), recall(2, false), call(3, 'Reading file: a.txt'),
+        ], false);
+
+        expect(rows.map((r) => r.tool)).toEqual(['read_file', 'recall', 'read_file']);
+    });
+
+    it('keep successful memory writes visible in the rows', () => {
+        const rows = consolidateSteps([
+            call(1, 'Reading file: a.txt'), remember(2, true), call(3, 'Reading file: a.txt'),
         ], false);
 
         expect(rows.map((r) => r.tool)).toEqual(['read_file', 'remember', 'read_file']);
@@ -458,7 +468,7 @@ describe('timeline review fixes', () => {
     it('filters a lone call between notes like any other', () => {
         const many = [1, 2, 3, 4, 5, 6].map((i) => call(i, `Reading file: ${i}.txt`, i === 1 ? { success: false } : {}));
         render(<AgentActivity steps={[...many, note(7, 'One more.'), call(8, 'Reading file: last.txt')]} isActive={false} />);
-        fireEvent.click(screen.getByRole('button', { name: /^Read file ×6$/ }));
+        fireEvent.click(screen.getByRole('button', { name: /^Read file ×6 \(1 failed\)$/ }));
         expect(screen.getByText('Reading file: last.txt')).toBeInTheDocument();
 
         fireEvent.change(screen.getByLabelText('Filter by status'), { target: { value: 'error' } });

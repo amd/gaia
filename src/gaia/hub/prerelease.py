@@ -6,7 +6,7 @@ The Agent Hub has no pre-release channel, so its ``gaia`` agent is whatever
 the last flagship release published -- often many commits older than a core
 release candidate. A release candidate therefore attaches a flagship frozen
 from its own commit to its GitHub pre-release (publish.yml's ``rc-flagship``,
-packaged by ``util/flagship_rc_assets.py``), and an RC core installs that one.
+packaged by ``util/gaiapy_rc_assets.py``), and an RC core installs that one.
 
 There is no fallback to the hub: if the pre-release has no flagship, the
 install fails and says where it looked. A tester silently running a stale
@@ -37,6 +37,8 @@ RELEASES_DOWNLOAD_URL = "https://github.com/amd/gaia/releases/download"
 RELEASE_MANIFEST_NAME = "gaia-agent-release.json"
 AGENT_YAML_ASSET_NAME = "gaia-agent.yaml"
 SCHEMA_VERSION = 1
+#: The download server a final build's flagship comes from.
+HUB_ORIGIN = "hub.amd-gaia.ai"
 #: Overrides ``RELEASES_DOWNLOAD_URL/<tag>``: the directory holding the assets.
 ASSETS_URL_ENV = "GAIA_RC_FLAGSHIP_URL"
 
@@ -84,6 +86,19 @@ def release_candidate_tag(core_version: str) -> Optional[str]:
     if not m:
         return None
     return f"v{m.group('base')}-rc{m.group('rc')}"
+
+
+def flagship_origin(core_version: Optional[str] = None) -> str:
+    """Where this build's flagship downloads from, as a person reads it after
+    "From": the hub for a final or dev build, the pre-release (or the override
+    in ``GAIA_RC_FLAGSHIP_URL``) for a release candidate. Reads no network."""
+    tag = release_candidate_tag(core_version or CORE_VERSION)
+    if tag is None:
+        return HUB_ORIGIN
+    override = os.environ.get(ASSETS_URL_ENV, "").strip().rstrip("/")
+    if override:
+        return override.removeprefix("https://")
+    return f"github.com/amd/gaia/releases/tag/{tag}"
 
 
 def flagship_source(

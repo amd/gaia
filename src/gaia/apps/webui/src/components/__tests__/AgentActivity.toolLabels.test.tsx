@@ -25,27 +25,34 @@ it.each([
     expect(screen.queryByText('Used tool')).toBeNull();
 });
 
-it.each(['remember', 'recall', 'update_memory', 'forget'])(
-    'keeps a successful %s step out of the activity list',
-    (tool) => {
-        const steps = [step(tool), { ...step('find_files'), id: 2 }];
-        render(<AgentActivity steps={steps} isActive={false} />);
+it.each([
+    ['remember', 'Saved to memory'],
+    ['update_memory', 'Updated memory'],
+    ['forget', 'Deleted from memory'],
+])('shows a successful %s memory write step in the activity list', (tool, label) => {
+    render(<AgentActivity steps={[step(tool)]} isActive={false} />);
 
-        expect(screen.getByText('Found files')).toBeInTheDocument();
-        expect(screen.queryByText(/memory/i)).toBeNull();
-    },
-);
+    expect(screen.getByText(label)).toBeInTheDocument();
+});
 
-it('shows nothing when memory was the only activity', () => {
+it('keeps a successful recall step out of the activity list', () => {
+    const steps = [step('recall'), { ...step('find_files'), id: 2 }];
+    render(<AgentActivity steps={steps} isActive={false} />);
+
+    expect(screen.getByText('Found files')).toBeInTheDocument();
+    expect(screen.queryByText(/memory/i)).toBeNull();
+});
+
+it('shows nothing when recall was the only activity', () => {
     const { container } = render(
-        <AgentActivity steps={[step('remember')]} isActive={false} />,
+        <AgentActivity steps={[step('recall')]} isActive={false} />,
     );
 
     expect(container).toBeEmptyDOMElement();
 });
 
-it('still shows a memory step that failed', () => {
-    render(<AgentActivity steps={[step('remember', false, false)]} isActive={false} />);
+it('still shows a background recall step that failed', () => {
+    render(<AgentActivity steps={[step('recall', false, false)]} isActive={false} />);
 
     expect(screen.getByText(/memory/i)).toBeInTheDocument();
 });
@@ -82,11 +89,18 @@ it('names a running GAIA agent step in the present tense', () => {
     expect(screen.getByText('Asking you')).toBeInTheDocument();
 });
 
-it('leaves hidden memory steps out of a folded summary', () => {
-    const steps = [step('remember'), { ...step('find_files'), id: 2 }, { ...step('read_file'), id: 3 }];
+it('leaves hidden recall steps out of a folded summary', () => {
+    const steps = [step('recall'), { ...step('find_files'), id: 2 }, { ...step('read_file'), id: 3 }];
     render(<AgentActivity steps={steps} isActive={false} />);
 
     expect(screen.getByRole('button', { name: /^Found files, read file$/ })).toBeInTheDocument();
+});
+
+it('includes memory writes in a folded summary', () => {
+    const steps = [step('remember'), { ...step('find_files'), id: 2 }];
+    render(<AgentActivity steps={steps} isActive={false} />);
+
+    expect(screen.getByRole('button', { name: /^Saved to memory, found files$/ })).toBeInTheDocument();
 });
 
 it('names a tool it has no label for, rather than "Used tool"', () => {
@@ -118,6 +132,40 @@ it('says the user declined a call, not that it failed, even with a narration', (
     expect(screen.getByText('You declined: Running Python')).toBeInTheDocument();
     expect(screen.queryByText(/failed|denied by the user/)).toBeNull();
     expect(container.querySelector('.flow-tool')).not.toHaveClass('error');
+});
+
+it('says GAIA did not run a call its own rule stopped, not that the user declined', () => {
+    const refused: AgentStep = {
+        ...step('run_shell_command', false, false), refused: true, narration: 'Running git clone',
+        result: 'Not run: this reaches github.com, and `git clone` was refused earlier in this request.',
+    };
+    const { container } = render(<AgentActivity steps={[refused]} isActive={false} />);
+
+    expect(screen.getByText('Blocked by GAIA: Running command')).toBeInTheDocument();
+    expect(screen.queryByText(/failed|declined/i)).toBeNull();
+    expect(container.querySelector('.flow-tool')).not.toHaveClass('error');
+});
+
+it('names a call GAIA did not run in a folded summary, not as a decline', () => {
+    const steps: AgentStep[] = [
+        { ...step('read_file'), id: 1, detail: 'a' },
+        { ...step('run_shell_command', false, false), id: 2, refused: true },
+    ];
+    render(<AgentActivity steps={steps} isActive={false} />);
+
+    const summary = screen.getByRole('button', { name: /^Read file, a step was blocked by GAIA$/ });
+    expect(summary.querySelector('.lucide-ban')).not.toBeNull();
+});
+
+it('says how many of a folded run of calls failed, not only how many ran', () => {
+    const steps: AgentStep[] = [
+        { ...step('run_shell_command'), id: 1, detail: 'a' },
+        { ...step('run_shell_command', false, false), id: 2, detail: 'b' },
+        { ...step('run_shell_command'), id: 3, detail: 'c' },
+    ];
+    render(<AgentActivity steps={steps} isActive={false} />);
+
+    expect(screen.getByRole('button', { name: /^Ran command ×3 \(1 failed\)$/ })).toBeInTheDocument();
 });
 
 it('says a call nobody answered timed out and never ran', () => {

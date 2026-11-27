@@ -235,7 +235,8 @@ function Setup-Journey {
     $env:PLAYWRIGHT_BROWSERS_PATH = "$work\playwright-browsers"
     Push-Location "$repo\src\gaia\apps\webui"
     try {
-        & npm ci --ignore-scripts
+        # Dependabot writes the Agent UI lockfile with npm 11; the runner's Node 22 ships npm 10.
+        & npx -y npm@11 ci --ignore-scripts
         if ($LASTEXITCODE -ne 0) { Fail 'npm ci failed in the web UI' }
         & npx playwright install chromium
         if ($LASTEXITCODE -ne 0) { Fail 'Playwright could not install Chromium' }
@@ -248,8 +249,12 @@ function Setup-Journey {
 }
 
 function Stop-AgentUi {
-    $backendPid = Get-Content "$gaiaHome\backend.pid" -ErrorAction SilentlyContinue
-    if ($backendPid) { & taskkill.exe /T /F /PID $backendPid 2>&1 | Out-Null }
+    # backend-pids\<app pid>.pid per app; backend.pid from older apps.
+    $records = @(Get-Item "$gaiaHome\backend.pid" -ErrorAction SilentlyContinue) + @(Get-ChildItem "$gaiaHome\backend-pids\*.pid" -ErrorAction SilentlyContinue)
+    foreach ($record in $records) {
+        $backendPid = Get-Content $record.FullName -ErrorAction SilentlyContinue
+        if ($backendPid) { & taskkill.exe /T /F /PID $backendPid 2>&1 | Out-Null }
+    }
     & taskkill.exe /T /F /IM gaia-desktop.exe 2>&1 | Out-Null
     Get-Process | Where-Object { $_.Path -and $_.Path -like "$gaiaHome\venv\*" } | Stop-Process -Force -ErrorAction SilentlyContinue
     Start-Sleep -Seconds 3

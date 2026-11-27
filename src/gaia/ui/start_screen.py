@@ -41,6 +41,8 @@ class Context:
     indexed_documents: int
     mail_connected: bool
     folder_name: str
+    #: The chat works in GAIA's own documents folder, not a project of the user's.
+    gaia_folder: bool = False
 
 
 def _documents(ctx: Context) -> Optional[Card]:
@@ -76,7 +78,9 @@ def _research(_ctx: Context) -> Card:
     )
 
 
-def _code(ctx: Context) -> Card:
+def _code(ctx: Context) -> Optional[Card]:
+    if ctx.gaia_folder:
+        return None
     return Card(
         "coding",
         "Work on code",
@@ -152,10 +156,10 @@ def working_folder(choosable: bool) -> Dict[str, Any]:
 
 
 def _mail_connected() -> bool:
+    from gaia.connectors.accounts import list_accounts
     from gaia.connectors.credential_wait import CredentialStoreWaiting, read_within
     from gaia.connectors.errors import ConnectorsError
     from gaia.connectors.registry import REGISTRY
-    from gaia.connectors.store import peek_connection
 
     try:
         for connector_id in MAIL_CONNECTORS:
@@ -163,10 +167,10 @@ def _mail_connected() -> bool:
             ref = spec.oauth_provider_ref or spec.id
             found = read_within(
                 f"connection:{ref}",
-                lambda ref=ref: peek_connection(ref),
+                lambda ref=ref: list_accounts(ref),
                 f"your {spec.display_name} connection",
             )
-            if found is not None:
+            if any(a.status == "ok" for a in found):
                 return True
     except (ConnectorsError, CredentialStoreWaiting) as e:
         # The inbox card is a hint; an unreadable keyring must not blank the screen.
@@ -186,5 +190,6 @@ def start_screen(db, skills: List[Dict[str, Any]], choosable: bool) -> Dict[str,
         ),
         mail_connected=_mail_connected(),
         folder_name=folder["name"],
+        gaia_folder=folder["gaia_folder"],
     )
     return {"cards": pick_cards(ctx), "working_folder": folder}

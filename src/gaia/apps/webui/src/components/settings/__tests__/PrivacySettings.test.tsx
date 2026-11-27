@@ -60,7 +60,7 @@ describe('PrivacySettings local only', () => {
 
         await waitFor(() => expect(mockedApi.updateSettings).toHaveBeenCalledWith({ network_policy: 'local_ai_only' }));
         const notice = await screen.findByRole('status');
-        expect(notice).toHaveTextContent('Cloud models are unavailable');
+        expect(notice).toHaveTextContent('Cloud models and GAIA web search are unavailable');
         // Next to the switch, not at the bottom of a long pane.
         expect(screen.getByRole('region', { name: 'Local only' })).toContainElement(notice);
     });
@@ -111,7 +111,7 @@ describe('PrivacySettings local only', () => {
         expect(toggle).toBeEnabled();
         fireEvent.click(toggle);
         await waitFor(() => expect(mockedApi.updateSettings).toHaveBeenCalledTimes(1));
-        expect(await screen.findByRole('status')).toHaveTextContent('Cloud models are unavailable');
+        expect(await screen.findByRole('status')).toHaveTextContent('Cloud models and GAIA web search are unavailable');
     });
 
     describe('with the model server not answering', () => {
@@ -134,7 +134,7 @@ describe('PrivacySettings local only', () => {
 
             const alert = await screen.findByRole('alert');
             expect(alert).toHaveTextContent("Local only is on, but GAIA couldn't check whether your saved model collection.router is a cloud model because the model server isn't answering");
-            expect(alert).toHaveTextContent('Settings → Model');
+            expect(alert).toHaveTextContent('Settings → Agent & model');
             expect(alert).toHaveTextContent('keeps any cloud keys it already holds');
             expect(alert.textContent).not.toMatch(/HTTPConnectionPool|WinError|Request failed|\(/);
             expect(screen.getByRole('switch', { name: 'Local only' })).toBeChecked();

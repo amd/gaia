@@ -47,21 +47,38 @@ def _own_exe(manager, version=None):
 
 
 class _FakeProcess:
-    """psutil.Process stand-in: a cmdline, an environment, maybe refusals."""
+    """psutil.Process stand-in: a cmdline, an environment, maybe refusals.
+
+    *exe* is the binary the kernel reports; unset, it is ``cmdline[0]``.
+    """
 
     def __init__(
-        self, cmdline, env=None, cmdline_denied=False, env_denied=False, name=None
+        self,
+        cmdline,
+        env=None,
+        cmdline_denied=False,
+        env_denied=False,
+        name=None,
+        exe=None,
     ):
         self._cmdline = cmdline
         self._env = env or {}
         self._cmdline_denied = cmdline_denied
         self._env_denied = env_denied
         self._name = name
+        self._exe = exe
 
     def name(self):
         if self._name is None:
             raise psutil.AccessDenied(PID)
         return self._name
+
+    def exe(self):
+        if self._cmdline_denied:
+            raise psutil.AccessDenied(PID)
+        if self._exe is not None:
+            return self._exe
+        return self._cmdline[0] if self._cmdline else ""
 
     def cmdline(self):
         if self._cmdline_denied:
@@ -124,6 +141,38 @@ class TestIdentity:
             },
         )
         assert manager._identify(PID, PORT, KEY) == OWN
+
+    def test_its_lemond_launched_through_a_path_that_moved_since_is_gaias(
+        self, manager, monkeypatch, tmp_path
+    ):
+        """GAIA_HOME was a symlink at launch; argv[0] kept the old path."""
+        stale = str(tmp_path / "old-home" / "lemonade" / "dist" / "v" / "lemond")
+        _processes(
+            monkeypatch,
+            {
+                PID: _FakeProcess(
+                    [stale, "c", "c", "--port", str(PORT)],
+                    {"LEMONADE_API_KEY": KEY},
+                    exe=_own_exe(manager),
+                )
+            },
+        )
+        assert manager._identify(PID, PORT, KEY) == OWN
+
+    def test_argv0_naming_gaias_dist_does_not_make_another_binary_gaias(
+        self, manager, monkeypatch, tmp_path
+    ):
+        _processes(
+            monkeypatch,
+            {
+                PID: _FakeProcess(
+                    [_own_exe(manager), "c", "c", "--port", str(PORT)],
+                    {"LEMONADE_API_KEY": KEY},
+                    exe=str(tmp_path / "elsewhere" / "lemond"),
+                )
+            },
+        )
+        assert manager._identify(PID, PORT, KEY) == OTHER
 
     @pytest.mark.parametrize(
         "cmdline,env",
@@ -738,6 +787,8 @@ class TestStartupExitMessage:
         import gaia.llm.npu_linux as npu_linux
 
         monkeypatch.setattr(npu_linux, "raise_memlock_soft_limit", lambda: None)
+        # The host's own CA layout is not under test here.
+        monkeypatch.setattr(EmbeddedLemonade, "_ca_overlay", lambda self: None)
         monkeypatch.setenv("LD_LIBRARY_PATH", "/home/u/.gaia/app-core/_internal")
         monkeypatch.delenv("LD_LIBRARY_PATH_ORIG", raising=False)
         self._exits_writing(manager, monkeypatch, b"")

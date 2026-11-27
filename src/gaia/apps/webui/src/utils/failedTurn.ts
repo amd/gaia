@@ -34,11 +34,11 @@ const CONTEXT_RE = /context (?:window|size|length|limit)|exceeds the available c
 
 // Every tab by the English label it shows; Voice is shown as "Read aloud".
 const SECTION_LABELS: Record<string, SettingsSection> = {
-    general: 'general', setup: 'setup', model: 'model', permissions: 'permissions', skills: 'skills',
+    general: 'general', setup: 'setup', 'agent & model': 'model', model: 'model', permissions: 'permissions', skills: 'skills',
     connectors: 'connectors', messaging: 'messaging', automations: 'automations', memory: 'memory',
     privacy: 'privacy', notifications: 'notifications', 'read aloud': 'voice', advanced: 'advanced', about: 'about',
 };
-const SECTION_RE = /Settings\s*(?:>|›|→)\s*(General|Setup|Model|Permissions|Skills|Connectors|Messaging|Automations|Memory|Privacy|Notifications|Read aloud|Advanced|About)\b/g;
+const SECTION_RE = /Settings\s*(?:>|›|→)\s*(General|Setup|Agent & model|Model|Permissions|Skills|Connectors|Messaging|Automations|Memory|Privacy|Notifications|Read aloud|Advanced|About)\b/g;
 
 function kindOf(text: string): FailedTurnKind {
     if (MODEL_UNAVAILABLE_RE.test(text)) return 'modelUnavailable';

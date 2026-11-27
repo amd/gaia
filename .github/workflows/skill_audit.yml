@@ -302,6 +302,17 @@ jobs:
           print(summary)
           PY
 
+      # Names the eval scenarios a changed hub skill has, with the dispatch
+      # input for eval_flagship.yml. Never dispatches: the pool is too scarce.
+      - name: List eval scenarios for changed skills
+        if: always() && steps.detect.outputs.skills != '[]'
+        run: |
+          set -euo pipefail
+          hint=$(python util/skill_eval_scenarios.py --from-file skill-dirs.txt --markdown)
+          if [ -n "$hint" ]; then
+            printf '\n%s\n' "$hint" | tee -a skill-audit-summary.md >> "$GITHUB_STEP_SUMMARY"
+          fi
+
       - name: Upload audit reports
         if: always() && steps.detect.outputs.skills != '[]'
         uses: actions/upload-artifact@v7
@@ -558,7 +569,7 @@ jobs:
         id: claude
         if: steps.claude_account.outcome == 'success'
         continue-on-error: true   # advisory: a crash here must not gate the merge
-        uses: anthropics/claude-code-action@61a9c274fa7110a66dfafc1bbbced03833eb25fe  # v1.0.269
+        uses: anthropics/claude-code-action@acfe7992852970efb4fee683d63d628e3e52df67  # v1.0.286
         with:
           anthropic_api_key: ${{ steps.claude_account.outputs.account == 'none' && secrets.ANTHROPIC_API_KEY || '' }}
           claude_code_oauth_token: ${{ steps.claude_account.outputs.account == 'secondary' && secrets.CLAUDE_CODE_OAUTH_TOKEN_SECONDARY || secrets.CLAUDE_CODE_OAUTH_TOKEN }}
@@ -621,3 +632,4 @@ jobs:
             --max-turns 100
             --model ${{ env.AUDIT_MODEL }}
             --allowedTools Read,Grep,Glob,Bash
+            --permission-mode default

@@ -8,11 +8,12 @@ import { useBackendStore } from '../stores/backendStore';
 import type { BackendLifecycle } from '../types/agent';
 import { useT } from '../i18n/useT';
 import { isMessageKey } from '../i18n/registry';
-import { namesSetupCommand, needsLocalSetup, SetUpLocalButton } from './settings/ErrorNotice';
+import { namesSetupCommand, needsLocalSetup, SetUpLocalButton, startInstructionText } from './settings/ErrorNotice';
 import { MIN_CONTEXT_SIZE, DEFAULT_MODEL_NAME } from '../utils/constants';
 import { useModelActions } from '../hooks/useModelActions';
 import { isStarting, modelServerHealth } from '../services/statusPoll';
 import { displayModelName, useModelNames, useModelStore } from '../stores/modelStore';
+import { ltrIn } from './setup/format';
 import './ConnectionBanner.css';
 
 /**
@@ -21,11 +22,12 @@ import './ConnectionBanner.css';
  * context window is too small. Provides clear messaging and actionable hints.
  */
 /** A retry that says it is checking until the check answers. */
-function RetryButton({ onRetry, label, busyLabel = 'Checking…' }: {
+function RetryButton({ onRetry, label, busyLabel }: {
     onRetry: () => void | Promise<void>;
     label: string;
     busyLabel?: string;
 }) {
+    const t = useT();
     const [checking, setChecking] = useState(false);
     const run = () => {
         setChecking(true);
@@ -33,7 +35,7 @@ function RetryButton({ onRetry, label, busyLabel = 'Checking…' }: {
     };
     return (
         <button className="connection-banner__retry" onClick={run} disabled={checking}>
-            {checking ? busyLabel : label}
+            {checking ? busyLabel ?? t('banner.checking') : label}
         </button>
     );
 }
@@ -155,11 +157,7 @@ export function ConnectionBanner({ onRetry, backendSlow = false, backendError = 
         isDownloadingModel ||
         activeProgress?.state === 'downloading' ||
         activeProgress?.state === 'starting';
-    const [downloadErrorDismissed, setDownloadErrorDismissed] = useState(false);
-    // A new download's failure must show even if the last one was dismissed.
-    useEffect(() => {
-        if (isActiveDownload) setDownloadErrorDismissed(false);
-    }, [isActiveDownload]);
+    const dismissDownloadFailure = useChatStore((s) => s.dismissDownloadFailure);
 
     // A crashed backend outranks everything, even a chat in progress: nothing answers until it's back.
     if (lifecycle && lifecycle.status !== 'running') return <BackendRestartBanner lifecycle={lifecycle} />;
@@ -173,10 +171,18 @@ export function ConnectionBanner({ onRetry, backendSlow = false, backendError = 
     // suppressing during an active conversation: if the download fails
     // mid-chat we still want to surface the failure prominently.
     const downloadName = activeProgress?.model_name || modelName;
-    if (isActiveDownload || (activeProgress?.state === 'error' && !downloadErrorDismissed)) {
+    const dismissDownloadError = async () => {
+        try {
+            await dismissDownloadFailure(activeProgress?.model_name ?? downloadName);
+        } catch {
+            // The server still holds the failure; keep the warning until a retry works.
+        }
+    };
+    if (isActiveDownload || activeProgress?.state === 'error') {
+        const shownName = displayModelName(downloadName);
         const sizeHint = activeProgress?.total_bytes
-            ? `${(activeProgress.total_bytes / 1e9).toFixed(1)} GB`
-            : 'large download';
+            ? ltrIn(t.locale, `${(activeProgress.total_bytes / 1e9).toFixed(1)} GB`)
+            : t('banner.download.sizeUnknown');
         const isError = activeProgress?.state === 'error';
         return (
             <div
@@ -191,19 +197,20 @@ export function ConnectionBanner({ onRetry, backendSlow = false, backendError = 
                 <div className="connection-banner__text" dir="auto">
                     {isError ? (
                         <>
-                            Download of <strong>{downloadName}</strong> failed.{' '}
+                            {t('banner.download.failed', { model: shownName })}{' '}
                             {(downloadError ?? activeProgress?.message) && (
                                 <span className="connection-banner__hint">{downloadError ?? activeProgress?.message}</span>
                             )}
                         </>
                     ) : (
                         <>
-                            Downloading <strong>{downloadName}</strong> ({sizeHint}).
+                            {t('banner.download.running', { model: shownName, size: sizeHint })}
                             {activeProgress?.state === 'downloading' && activeProgress.file && (
                                 <>
                                     {' '}
                                     <span className="connection-banner__hint">
-                                        File {activeProgress.file_index} / {activeProgress.total_files}: <code>{activeProgress.file}</code>
+                                        {t('banner.download.file', { index: activeProgress.file_index, total: activeProgress.total_files })}{' '}
+                                        <code>{activeProgress.file}</code>
                                     </span>
                                 </>
                             )}
@@ -215,7 +222,7 @@ export function ConnectionBanner({ onRetry, backendSlow = false, backendError = 
                         className="connection-banner__retry"
                         onClick={() => downloadModel(false, downloadName, !systemStatus?.model_loaded)}
                     >
-                        Retry
+                        {t('banner.download.retry')}
                     </button>
                 ) : (
                     <span className="connection-banner__loading connection-banner__progress">
@@ -227,23 +234,23 @@ export function ConnectionBanner({ onRetry, backendSlow = false, backendError = 
                                     aria-valuenow={activeProgress.percent}
                                     aria-valuemin={0}
                                     aria-valuemax={100}
-                                    aria-label="Download progress"
+                                    aria-label={t('banner.download.progress')}
                                 >
                                     <span
                                         className="connection-banner__progress-fill"
                                         style={{ width: `${activeProgress.percent}%` }}
                                     />
                                 </span>
-                                <span className="connection-banner__progress-label">
+                                <bdi className="connection-banner__progress-label" dir="ltr">
                                     {activeProgress.percent}% &middot;{' '}
                                     {(activeProgress.downloaded_bytes / 1e9).toFixed(2)} /{' '}
                                     {(activeProgress.total_bytes / 1e9).toFixed(2)} GB
-                                </span>
+                                </bdi>
                             </>
                         ) : (
                             <>
                                 <Loader2 size={13} className="connection-banner__spinner" />
-                                {activeProgress?.state === 'starting' ? activeProgress.message ?? 'Starting download…' : 'Downloading…'}
+                                {activeProgress?.state === 'starting' ? activeProgress.message ?? t('banner.download.starting') : t('banner.download.downloading')}
                             </>
                         )}
                     </span>
@@ -255,8 +262,8 @@ export function ConnectionBanner({ onRetry, backendSlow = false, backendError = 
                 {isError && (
                     <button
                         className="connection-banner__dismiss"
-                        onClick={() => setDownloadErrorDismissed(true)}
-                        aria-label="Dismiss"
+                        onClick={() => void dismissDownloadError()}
+                        aria-label={t('banner.dismiss')}
                     >
                         <X size={14} />
                     </button>
@@ -310,7 +317,11 @@ export function ConnectionBanner({ onRetry, backendSlow = false, backendError = 
     // Takes priority over all other cases (including dismiss and active-conversation suppression)
     // because the system is not yet ready to serve requests. A status the backend
     // can't refresh (slow or failing) is not proof the boot is still running.
-    if (isStarting(systemStatus) && !backendSlow && !backendError) {
+    // Once the server check is over, a server that isn't answering outranks the later boot steps.
+    const serverCheck = systemStatus?.init_tasks?.find(t => t.step === 'check_server');
+    const serverDownAfterCheck = systemStatus?.lemonade_running === false
+        && !!serverCheck && serverCheck.status !== 'pending' && serverCheck.status !== 'running';
+    if (isStarting(systemStatus) && !backendSlow && !backendError && !serverDownAfterCheck) {
         // The task's English `name` is a log label; only its `step` is shown, translated.
         const step = systemStatus?.init_tasks?.find(t => t.status === 'running')?.step;
         const stepKey = `banner.boot.${step}`;
@@ -344,7 +355,7 @@ export function ConnectionBanner({ onRetry, backendSlow = false, backendError = 
                     {t('banner.unreachable')}{' '}
                     <span className="connection-banner__hint">{t('banner.unreachableHint')}</span>
                 </div>
-                {onRetry && <RetryButton onRetry={onRetry} label="Retry" />}
+                {onRetry && <RetryButton onRetry={onRetry} label={t('banner.retry')} />}
             </div>
         );
     }
@@ -357,12 +368,10 @@ export function ConnectionBanner({ onRetry, backendSlow = false, backendError = 
                     <AlertTriangle size={16} />
                 </div>
                 <div className="connection-banner__text" dir="auto">
-                    GAIA's backend answered with an error ({backendError}).{' '}
-                    <span className="connection-banner__hint">
-                        It may be overloaded. GAIA keeps checking; if it lasts, restart GAIA.
-                    </span>
+                    {t('banner.backendError', { error: backendError })}{' '}
+                    <span className="connection-banner__hint">{t('banner.backendErrorHint')}</span>
                 </div>
-                {onRetry && <RetryButton onRetry={onRetry} label="Check again" />}
+                {onRetry && <RetryButton onRetry={onRetry} label={t('settings.key.checkAgain')} />}
             </div>
         );
     }
@@ -375,12 +384,10 @@ export function ConnectionBanner({ onRetry, backendSlow = false, backendError = 
                     <AlertTriangle size={16} />
                 </div>
                 <div className="connection-banner__text" dir="auto">
-                    GAIA is slow to answer.{' '}
-                    <span className="connection-banner__hint">
-                        It may be busy with another chat or app. GAIA keeps checking.
-                    </span>
+                    {t('banner.backendSlow')}{' '}
+                    <span className="connection-banner__hint">{t('banner.backendSlowHint')}</span>
                 </div>
-                {onRetry && <RetryButton onRetry={onRetry} label="Check again" />}
+                {onRetry && <RetryButton onRetry={onRetry} label={t('settings.key.checkAgain')} />}
             </div>
         );
     }
@@ -394,10 +401,10 @@ export function ConnectionBanner({ onRetry, backendSlow = false, backendError = 
                     <AlertTriangle size={16} />
                 </div>
                 <div className="connection-banner__text" dir="auto">
-                    GAIA settings could not be loaded.{' '}
+                    {t('banner.configError')}{' '}
                     <span className="connection-banner__hint">{systemStatus.config_error}</span>
                 </div>
-                {onRetry && <RetryButton onRetry={onRetry} label="Check again" />}
+                {onRetry && <RetryButton onRetry={onRetry} label={t('settings.key.checkAgain')} />}
             </div>
         );
     }
@@ -425,7 +432,7 @@ export function ConnectionBanner({ onRetry, backendSlow = false, backendError = 
                             <code dir="ltr">{startCommand}</code>
                         </span>
                     ) : startInstruction && (
-                        <span className="connection-banner__hint">{startInstruction}</span>
+                        <span className="connection-banner__hint">{startInstructionText(t, startInstruction)}</span>
                     )}
                 </div>
                 {setupNeeded && <SetUpLocalButton className="connection-banner__retry" />}
@@ -433,7 +440,7 @@ export function ConnectionBanner({ onRetry, backendSlow = false, backendError = 
                 <button
                     className="connection-banner__dismiss"
                     onClick={() => setDismissed(true)}
-                    aria-label="Dismiss"
+                    aria-label={t('banner.dismiss')}
                 >
                     <X size={14} />
                 </button>
@@ -455,17 +462,17 @@ export function ConnectionBanner({ onRetry, backendSlow = false, backendError = 
                     <Layers size={16} />
                 </div>
                 <div className="connection-banner__text" dir="auto">
-                    LLM context window is too small ({current.toLocaleString()} tokens;{' '}
-                    {MIN_CONTEXT_SIZE.toLocaleString()} required).{' '}
-                    <span className="connection-banner__hint">
-                        Reload it with a larger context in Settings → Advanced.
-                    </span>
+                    {t('banner.contextTooSmall', {
+                        current: ltrIn(t.locale, current.toLocaleString()),
+                        required: ltrIn(t.locale, MIN_CONTEXT_SIZE.toLocaleString()),
+                    })}{' '}
+                    <span className="connection-banner__hint">{t('banner.contextTooSmallHint')}</span>
                 </div>
-                {onRetry && <RetryButton onRetry={onRetry} label="Check again" />}
+                {onRetry && <RetryButton onRetry={onRetry} label={t('settings.key.checkAgain')} />}
                 <button
                     className="connection-banner__dismiss"
                     onClick={() => setDismissed(true)}
-                    aria-label="Dismiss"
+                    aria-label={t('banner.dismiss')}
                 >
                     <X size={14} />
                 </button>

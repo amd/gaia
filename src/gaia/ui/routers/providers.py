@@ -201,7 +201,7 @@ def _cloud_error(
         if not install and isinstance(message, str) and "is not installed" in message:
             return ProviderError(
                 f"Lemonade has no cloud provider registered for {name}, so it "
-                "cannot accept a key yet. Open Settings > Model and connect it "
+                "cannot accept a key yet. Open Settings > Agent & model and connect it "
                 "again, then try again.",
                 409,
             )
@@ -591,8 +591,32 @@ def _list_models(provider: str, *, offer_optional: bool = True) -> List[Dict[str
         m["source_url"] = entry["source_url"] if entry else None
     if provider == AMD:
         _rank_gateway_models(out)
+    if provider == LOCAL:
+        for m in out:
+            m["support"] = model_choice.support_label(m["id"])
+        order = _setup_chat_order()
+        out.sort(
+            key=lambda x: (
+                x["support"] != "verified",
+                next(
+                    (i for i, o in enumerate(order) if _model_ids_match(x["id"], o)),
+                    len(order),
+                ),
+                x["id"].lower(),
+            )
+        )
+        return out
     out.sort(key=lambda x: (x["rank"] is None, x["rank"] or 0, x["id"].lower()))
     return out
+
+
+def _setup_chat_order() -> List[str]:
+    """GAIA's chat models in the order setup lists them, NPU ones included."""
+    from gaia.llm.lemonade_client import NPU_MODEL_LADDER
+    from gaia.ui.setup_plan import _known_chat_models
+
+    order = _known_chat_models()
+    return [*order, *(m for m in NPU_MODEL_LADDER if m not in order)]
 
 
 def _model_entries(body: Dict[str, Any]) -> List[Dict[str, Any]]:
@@ -708,6 +732,12 @@ def _learn_cloud_models(model_id: str) -> None:
         _is_cloud_model(model_id)
     except ProviderError as e:
         logger.info("Could not tell whether %s is a cloud model: %s", model_id, e)
+
+
+def _is_cloud(model_id: str) -> bool:
+    """True when a cloud provider answers *model_id*, reading Lemonade's list if needed."""
+    _learn_cloud_models(model_id)
+    return cloud_provider_name(model_id) is not None
 
 
 def model_label(model_id: str) -> str:
@@ -864,8 +894,12 @@ def _check_model_available(model_id: str) -> Optional[str]:
     from gaia.llm.cloud_keys import CloudKeyError, ensure_authenticated
 
     provider = provider_of(model_id)
-    if provider != LOCAL and cloud_blocked():
+    cloud = _is_cloud(model_id)
+    if cloud and cloud_blocked():
         return "Local only is on, so cloud models can't run"
+    if cloud and provider == LOCAL:
+        # A provider GAIA has no tab for: Lemonade listed it and relays it.
+        return None
     try:
         if provider != LOCAL:
             base_url = _base_url()
@@ -1286,12 +1320,11 @@ def _use_known_models(provider: str, key: str, *, persist_key: bool = True) -> N
     from gaia.llm.fireworks_known_models import KnownModelsError, use_known_models
     from gaia.llm.lemonade_embedded import EmbeddedLemonade, EmbeddedLemonadeError
     from gaia.llm.lemonade_launcher import gaia_runs_lemonade
-    from gaia.llm.lemonade_tls import ca_store_problem
     from gaia.llm.providers.fireworks import ModelListState, check_model_list
 
     name = _NAMES[provider]
     runs_lemonade = gaia_runs_lemonade(_base_url())
-    ca_problem = ca_store_problem() if runs_lemonade else None
+    ca_problem = EmbeddedLemonade().ca_problem() if runs_lemonade else None
     if ca_problem:
         raise ProviderError(ca_problem, 503)
     check = check_model_list(key) if provider == FIREWORKS else None
@@ -1545,6 +1578,39 @@ def _local_unavailable(models: List[Dict[str, Any]], model_id: str) -> Optional[
     )
 
 
+def device_unavailable_reason(recipe: str) -> Optional[str]:
+    """Why this PC can't run a model with *recipe*, judged by its hardware.
+
+    For a model the chat list leaves out, such as an embedder: no NPU, an NPU
+    that isn't set up, or no backend for *recipe*. Raises
+    :class:`ProviderError` when Lemonade can't be read.
+    """
+    from gaia.installer.model_choice import backend_fit, cant_run_reason
+    from gaia.llm.model_fit import (
+        ModelFitError,
+        capacity_from_system_info,
+        npu_capacity,
+        npu_not_ready_reason,
+    )
+
+    system_info = _read_system_info()
+    if recipe == "flm":
+        try:
+            capacity = capacity_from_system_info(system_info)
+        except ModelFitError:
+            # No memory figures: the backend check below still decides.
+            capacity = None
+        if capacity is not None:
+            npu = npu_capacity(capacity)
+            if npu is None:
+                return "Lemonade reports no Ryzen AI NPU on this PC"
+            reason = npu_not_ready_reason(npu)
+            if reason:
+                return reason
+    fit = {"fits": None, "fit_reason": None, "fit_code": None}
+    return cant_run_reason(backend_fit(fit, recipe, system_info))
+
+
 def local_unavailable_reason(model_id: str) -> Optional[str]:
     """Why nothing on this PC can run local *model_id*; None if something can.
 
@@ -1592,6 +1658,7 @@ def select_model(
     if not model_id:
         raise HTTPException(status_code=422, detail="No model given.")
     refuse_blocked_cloud_model(model_id)
+    cloud = _is_cloud(model_id)
     from gaia.config import GaiaConfigError
     from gaia.connectors.credential_wait import (
         CredentialStoreLocked,
@@ -1625,7 +1692,7 @@ def select_model(
         _raise(e)
     db.set_setting("custom_model", model_id)
     db.set_setting(PICKED_MODEL_SETTING, model_id)
-    if provider_of(model_id) == LOCAL:
+    if not cloud:
         from gaia.ui import warmup
 
         # Load it now: nothing else would until the next message is sent.
@@ -1796,7 +1863,7 @@ def _context_view(model_id: str) -> Dict[str, Any]:
     from gaia.llm.context_choice import context_range, saved_context_size
     from gaia.llm.model_fit import ModelFitError, capacity_from_system_info
 
-    if provider_of(model_id) != LOCAL:
+    if _is_cloud(model_id):
         raise HTTPException(status_code=422, detail=_CLOUD_CONTEXT_DETAIL)
     try:
         capacity = capacity_from_system_info(_read_system_info())
@@ -1851,7 +1918,7 @@ def set_context(body: ContextRequest) -> Dict[str, Any]:
     model_id = body.model.strip()
     if not model_id:
         raise HTTPException(status_code=422, detail="No model given.")
-    if provider_of(model_id) != LOCAL:
+    if _is_cloud(model_id):
         raise HTTPException(status_code=422, detail=_CLOUD_CONTEXT_DETAIL)
     try:
         capacity = capacity_from_system_info(_read_system_info())
@@ -2378,7 +2445,7 @@ def restart_local(
             ),
         )
     # A stopped server is started even for a cloud model: it relays that model too.
-    if server_up and provider_of(model_id) != LOCAL:
+    if server_up and _is_cloud(model_id):
         raise HTTPException(
             status_code=422,
             detail="The active model runs in the cloud; nothing to restart.",

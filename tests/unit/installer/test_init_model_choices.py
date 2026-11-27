@@ -27,6 +27,8 @@ from gaia.llm.lemonade_client import (
     DEFAULT_MODEL_NAME,
     LARGE_DEFAULT_MODEL_NAME,
     NPU_DEFAULT_MODEL_NAME,
+    SMALL_DEFAULT_MODEL_NAME,
+    TINY_DEFAULT_MODEL_NAME,
     LemonadeClient,
 )
 from gaia.ui import setup_plan as sp
@@ -64,6 +66,8 @@ class FakeLemonade(LemonadeClient):
             for m, size, labels, recipe in (
                 (LARGE_DEFAULT_MODEL_NAME, 23.3, [], "llamacpp"),
                 (DEFAULT_MODEL_NAME, 5.97, ["vision"], "llamacpp"),
+                (SMALL_DEFAULT_MODEL_NAME, 3.58, ["vision"], "llamacpp"),
+                (TINY_DEFAULT_MODEL_NAME, 2.01, ["vision"], "llamacpp"),
                 (EMBEDDER, 0.33, ["embeddings"], "llamacpp"),
                 (FLM, 3.4, ["chat"], "flm"),
                 *extra,
@@ -586,3 +590,250 @@ def test_download_later_still_fails_when_its_own_pull_fails(lemonade, home):
     fake.pull_model_stream = broken
     cmd = InitCommand(profile="gaia", yes=True, extra_models=[LARGE_DEFAULT_MODEL_NAME])
     assert not _download(cmd)
+
+
+def test_the_chat_model_line_counts_the_memory_kept_for_other_apps(monkeypatch):
+    """A 16 GB laptop's headline must agree with the reasons under it: 6 GB, not 10."""
+    from gaia.installer import init_command
+    from gaia.llm.model_fit import MachineCapacity
+
+    laptop = MachineCapacity(
+        memory_gb=10.0,
+        memory_source="AMD iGPU",
+        disk_free_gb=500.0,
+        installed_ram_gb=16.0,
+        carve_out_gb=4.0,
+    )
+    choice = init_command.ChatModelChoice(
+        model_id=TINY_DEFAULT_MODEL_NAME, user_set=False, skipped=[], capacity=laptop
+    )
+    monkeypatch.setattr(init_command, "resolve_init_chat_model", lambda *a, **k: choice)
+    cmd = InitCommand(profile="gaia", yes=True)
+    said = []
+    monkeypatch.setattr(cmd, "_print", lambda text, *a, **k: said.append(text))
+    cmd._chat_model(object())
+    assert said[0] == (
+        f"   Chat model: {TINY_DEFAULT_MODEL_NAME} — this PC has 6 GB for models "
+        "once 10 GB is kept for other apps (AMD iGPU)"
+    )
+
+
+def test_an_8gb_laptop_hears_the_2b_is_the_smallest_and_shares_memory(monkeypatch):
+    """With nothing left for models, the line must not read as "it doesn't fit"."""
+    from gaia.installer import init_command
+    from gaia.llm.model_fit import MachineCapacity
+
+    laptop = MachineCapacity(
+        memory_gb=8.0,
+        memory_source="AMD iGPU",
+        disk_free_gb=500.0,
+        installed_ram_gb=8.0,
+        carve_out_gb=2.0,
+    )
+    choice = init_command.ChatModelChoice(
+        model_id=TINY_DEFAULT_MODEL_NAME, user_set=False, skipped=[], capacity=laptop
+    )
+    monkeypatch.setattr(init_command, "resolve_init_chat_model", lambda *a, **k: choice)
+    cmd = InitCommand(profile="gaia", yes=True)
+    said = []
+    monkeypatch.setattr(cmd, "_print", lambda text, *a, **k: said.append(text))
+    cmd._chat_model(object())
+    assert said[0] == (
+        f"   Chat model: {TINY_DEFAULT_MODEL_NAME}, the smallest model GAIA offers. "
+        "It shares memory with your other apps: this PC has 0 GB for models "
+        "once 10 GB is kept for other apps (AMD iGPU)"
+    )
+
+
+def _laptop16(monkeypatch):
+    """This PC's pick is the 2B, as on a 16 GB laptop once other apps keep 10 GB."""
+    from gaia.llm.model_fit import MachineCapacity
+
+    laptop = MachineCapacity(
+        memory_gb=10.0,
+        memory_source="AMD iGPU",
+        disk_free_gb=500.0,
+        installed_ram_gb=16.0,
+        carve_out_gb=4.0,
+    )
+    monkeypatch.setattr(
+        lemonade_client,
+        "recommend_default_chat_model",
+        lambda client, judge_free_memory=True: (TINY_DEFAULT_MODEL_NAME, [], laptop),
+    )
+
+
+def test_an_update_keeps_gemma_on_a_small_pc_that_already_has_it(
+    lemonade, home, monkeypatch
+):
+    """Older setups saved no choice when Gemma was every PC's default."""
+    from gaia.installer.init_command import check_setup_status, resolve_init_chat_model
+
+    _laptop16(monkeypatch)
+    fake = lemonade(downloaded=[EMBEDDER, DEFAULT_MODEL_NAME])
+    monkeypatch.setenv("LEMONADE_BASE_URL", URL)
+
+    choice = resolve_init_chat_model(fake, reset_corrupt=False, enforce_fit=False)
+
+    assert choice.model_id == DEFAULT_MODEL_NAME
+    assert choice.kept_over == TINY_DEFAULT_MODEL_NAME
+    assert check_setup_status("gaia").ready
+    assert "default_model" not in _config(home)
+
+
+def test_an_update_does_not_keep_a_gemma_that_cannot_fit(lemonade, home, monkeypatch):
+    """An 8 GB laptop has about 4 GB for models; Gemma needs 8.5, so it gets the 2B."""
+    from gaia.installer.init_command import resolve_init_chat_model
+    from gaia.llm.model_fit import MachineCapacity
+
+    laptop8 = MachineCapacity(
+        memory_gb=4.0,
+        memory_source="AMD iGPU",
+        disk_free_gb=500.0,
+        installed_ram_gb=8.0,
+        carve_out_gb=0.5,
+    )
+    monkeypatch.setattr(
+        lemonade_client,
+        "recommend_default_chat_model",
+        lambda client, judge_free_memory=True: (TINY_DEFAULT_MODEL_NAME, [], laptop8),
+    )
+    fake = lemonade(downloaded=[EMBEDDER, DEFAULT_MODEL_NAME])
+    monkeypatch.setenv("LEMONADE_BASE_URL", URL)
+
+    choice = resolve_init_chat_model(fake, reset_corrupt=False, enforce_fit=False)
+
+    assert choice.model_id == TINY_DEFAULT_MODEL_NAME
+    assert choice.kept_over is None
+
+
+@pytest.mark.parametrize(
+    ("memory_gb", "kept"),
+    [(None, True), (8.0, False), (10.0, True)],
+    ids=["memory-unknown", "8-of-16-gb", "10-of-16-gb"],
+)
+def test_gemma_is_kept_only_where_it_fits_or_memory_is_unknown(
+    lemonade, home, monkeypatch, memory_gb, kept
+):
+    from gaia.installer.init_command import resolve_init_chat_model
+    from gaia.llm.model_fit import MachineCapacity
+
+    capacity = (
+        None
+        if memory_gb is None
+        else MachineCapacity(
+            memory_gb=memory_gb,
+            memory_source="AMD iGPU",
+            disk_free_gb=500.0,
+            installed_ram_gb=16.0,
+            carve_out_gb=4.0,
+        )
+    )
+    monkeypatch.setattr(
+        lemonade_client,
+        "recommend_default_chat_model",
+        lambda client, judge_free_memory=True: (TINY_DEFAULT_MODEL_NAME, [], capacity),
+    )
+    fake = lemonade(downloaded=[EMBEDDER, DEFAULT_MODEL_NAME])
+    monkeypatch.setenv("LEMONADE_BASE_URL", URL)
+
+    choice = resolve_init_chat_model(fake, reset_corrupt=False, enforce_fit=False)
+
+    assert choice.model_id == (DEFAULT_MODEL_NAME if kept else TINY_DEFAULT_MODEL_NAME)
+    assert choice.kept_over == (TINY_DEFAULT_MODEL_NAME if kept else None)
+
+
+def test_a_new_small_pc_gets_the_2b(lemonade, home, monkeypatch):
+    from gaia.installer.init_command import check_setup_status, resolve_init_chat_model
+
+    _laptop16(monkeypatch)
+    fake = lemonade(downloaded=[EMBEDDER])
+    monkeypatch.setenv("LEMONADE_BASE_URL", URL)
+
+    choice = resolve_init_chat_model(fake, reset_corrupt=False, enforce_fit=False)
+
+    assert choice.model_id == TINY_DEFAULT_MODEL_NAME and choice.kept_over is None
+    status = check_setup_status("gaia")
+    assert not status.ready
+    assert any(TINY_DEFAULT_MODEL_NAME in r for r in status.reasons)
+
+
+def test_a_saved_choice_beats_a_kept_gemma(lemonade, home, monkeypatch):
+    from gaia.installer.init_command import resolve_init_chat_model
+
+    _laptop16(monkeypatch)
+    fake = lemonade(downloaded=[EMBEDDER, DEFAULT_MODEL_NAME, TINY_DEFAULT_MODEL_NAME])
+    home.write_text(json.dumps({"default_model": TINY_DEFAULT_MODEL_NAME}))
+
+    choice = resolve_init_chat_model(fake, reset_corrupt=False, enforce_fit=False)
+
+    assert choice.model_id == TINY_DEFAULT_MODEL_NAME and choice.user_set
+
+
+def test_init_says_it_kept_gemma_and_how_to_switch(lemonade, home, monkeypatch):
+    _laptop16(monkeypatch)
+    fake = lemonade(downloaded=[EMBEDDER, DEFAULT_MODEL_NAME])
+    cmd = InitCommand(profile="gaia", yes=True)
+    said = []
+    monkeypatch.setattr(cmd, "_print", lambda text, *a, **k: said.append(text))
+
+    assert cmd._chat_model(fake) == DEFAULT_MODEL_NAME
+    assert said[0] == (
+        f"   Chat model: {DEFAULT_MODEL_NAME} (already downloaded, kept). "
+        f"{TINY_DEFAULT_MODEL_NAME} leaves other apps more memory on this PC: "
+        f"`gaia init --use-model {TINY_DEFAULT_MODEL_NAME}`"
+    )
+
+
+def test_the_setup_screens_show_a_kept_gemma_as_the_users_own(
+    lemonade, home, monkeypatch
+):
+    """Not "recommended", and no left-for-apps line worked out for the 2B."""
+    _laptop16(monkeypatch)
+    lemonade(downloaded=[EMBEDDER, DEFAULT_MODEL_NAME])
+
+    plan = sp.build_plan(skip_chat_model=False)
+
+    assert plan["chat_model"]["id"] == DEFAULT_MODEL_NAME
+    assert plan["chat_model"]["user_set"] is True
+    assert plan["recommended_model"] == TINY_DEFAULT_MODEL_NAME
+
+
+# ── the read-aloud voice where GAIA hasn't proven it ───────────────────────
+
+KOKORO = ("kokoro-v1", 0.34, ["tts"], "kokoro")
+
+
+def _catalog_ids():
+    return [e["id"] for e in sp.build_plan(skip_chat_model=False)["catalog"]]
+
+
+def test_setup_offers_the_voice_where_it_is_proven(lemonade):
+    lemonade(extra=[KOKORO])
+    assert "kokoro-v1" in _catalog_ids()
+
+
+def test_setup_does_not_offer_the_voice_on_a_mac(lemonade, monkeypatch):
+    monkeypatch.setattr(gaia.config, "_current_platform", lambda: "darwin")
+    fake = lemonade(extra=[KOKORO])
+    assert "kokoro-v1" not in _catalog_ids()
+    for choose in (
+        lambda: sp.check_extra_models(["kokoro-v1"]),
+        lambda: sp.set_model_skipped("kokoro-v1", False),
+        lambda: sp.prepare_download("kokoro-v1"),
+    ):
+        with pytest.raises(sp.CantRunHere, match="aren't offered on macOS"):
+            choose()
+    assert fake.pulls == []
+
+
+def test_a_voice_downloaded_before_it_was_withheld_stays_listed(lemonade, monkeypatch):
+    """So Settings can still show and remove it; nothing re-downloads it."""
+    monkeypatch.setattr(gaia.config, "_current_platform", lambda: "darwin")
+    lemonade(extra=[KOKORO], downloaded=["kokoro-v1"])
+    entry = next(
+        e
+        for e in sp.build_plan(skip_chat_model=False)["catalog"]
+        if e["id"] == "kokoro-v1"
+    )
+    assert entry["downloaded"] is True and entry["planned"] is False

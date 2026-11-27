@@ -347,7 +347,7 @@ jobs:
       - name: Run Claude (${{ matrix.dimension }} lens)
         id: claude
         continue-on-error: true
-        uses: anthropics/claude-code-action@61a9c274fa7110a66dfafc1bbbced03833eb25fe  # v1.0.269
+        uses: anthropics/claude-code-action@acfe7992852970efb4fee683d63d628e3e52df67  # v1.0.286
         with:
           # Prefer subscription OAuth, fall back to API key — see claude.yml "Authentication".
           anthropic_api_key: ${{ needs.preflight.outputs.claude_account == 'none' && secrets.ANTHROPIC_API_KEY || '' }}
@@ -424,15 +424,15 @@ jobs:
             touches a published hub agent, review it against this bar explicitly and bump any
             gap up one severity level** (a gap here is never 🟡; a user-facing break on the
             default path is 🔴).
-            - **Which agents are published:** currently the **email agent** and the **gaia
-              flagship agent** — code at `hub/agents/<id>/python/`, npm client at
+            - **Which agents are published:** currently the **gaia flagship agent**
+              only — code at `hub/agents/<id>/python/`, npm client at
               `hub/agents/<id>/npm/`. Detect
               any *other* published agent generally: it has a `.github/workflows/release_agent_<id>.yml`
               OR a shipped `hub/agents/**/SCORECARD.md` OR a released `version:` in its
               `hub/agents/**/<id>/gaia-agent.yaml`. Apply this bar to every one you find.
             - **What each lens checks on a published agent** (apply only YOUR lens):
               - **docs**: the canonical README (the npm client README for npm agents, e.g.
-                `hub/agents/email/npm/README.md`) is high-quality and integrator-facing;
+                `hub/agents/gaia/npm/README.md`) is high-quality and integrator-facing;
                 `SPEC.md` is a complete technical reference; `SKILL.md` is a real AI-integration
                 playbook; `CHANGELOG.md` accurately names each version's change; any shipped
                 contract spec (`spec_html.py` / `specification.html` / `openapi.*.json`) matches
@@ -731,7 +731,7 @@ jobs:
       - name: Synthesize and file one issue per defect
         id: claude
         continue-on-error: true
-        uses: anthropics/claude-code-action@61a9c274fa7110a66dfafc1bbbced03833eb25fe  # v1.0.269
+        uses: anthropics/claude-code-action@acfe7992852970efb4fee683d63d628e3e52df67  # v1.0.286
         with:
           anthropic_api_key: ${{ needs.preflight.outputs.claude_account == 'none' && secrets.ANTHROPIC_API_KEY || '' }}
           claude_code_oauth_token: ${{ needs.preflight.outputs.claude_account == 'secondary' && secrets.CLAUDE_CODE_OAUTH_TOKEN_SECONDARY || secrets.CLAUDE_CODE_OAUTH_TOKEN }}

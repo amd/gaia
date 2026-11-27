@@ -446,6 +446,28 @@ describe('FileBrowser dates follow the interface language', () => {
     });
 });
 
+it('marks a right-to-left override in entry names, paths, buttons, quick links, the path bar and the preview', async () => {
+    const rlo = String.fromCodePoint(0x202e);
+    const name = `report${rlo}txt.md`;
+    mockedApi.browseFiles.mockResolvedValue({
+        current_path: `/home/u${rlo}x`,
+        parent_path: '/home',
+        entries: [{ name, path: `/home/u/${name}`, type: 'file', size: 10, extension: '.md', modified: '' }],
+        quick_links: [{ name: `Docs${rlo}x`, path: `/home/docs${rlo}x`, icon: 'folder' }],
+    });
+    mockedApi.previewFile.mockResolvedValue({ ...FILE_PREVIEW, name, path: `/home/u/${name}`, preview_lines: [`a ${rlo}b`] });
+    render(<FileBrowser onStartChat={vi.fn()} />);
+    const shown = await screen.findByText('report[U+202E]txt.md');
+    expect(shown).toHaveAttribute('title', '/home/u/report[U+202E]txt.md');
+    expect(screen.getByRole('checkbox', { name: 'Select report[U+202E]txt.md' })).toBeInTheDocument();
+    expect(screen.getByText('Docs[U+202E]x').closest('button')).toHaveAttribute('title', '/home/docs[U+202E]x');
+    expect(screen.getByRole('button', { name: 'u[U+202E]x' })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Preview report[U+202E]txt.md' }));
+    expect(await screen.findByText('a [U+202E]b')).toBeInTheDocument();
+    expect(document.querySelector('.fb-preview-name')!.textContent).toBe('report[U+202E]txt.md');
+    expect(document.body.innerHTML).not.toContain(rlo);
+});
+
 describe('unreadable folder', () => {
     const osDenied = () => Object.assign(new Error('Permission denied for this directory'), { httpStatus: 403, reason: 'os_denied' });
 
@@ -576,5 +598,24 @@ describe('FileBrowser folder add', () => {
         expect(await screen.findByText(
             'Added 1 file Left out 2 images: add them one at a time and GAIA will read them.',
         )).toBeInTheDocument();
+    });
+
+    it('names skipped files from a folder and why', async () => {
+        mockedApi.indexFolder.mockResolvedValue({
+            indexed: 1, failed: 0, skipped: 2, skipped_images: 0,
+            skipped_files: [
+                { file: 'program.exe', reason: 'unsupported_type' },
+                { file: 'secrets.json', reason: 'credential_file' },
+            ],
+            skipped_files_truncated: false,
+            errors: [], documents: [DOC],
+        } as never);
+
+        await addScanFolder();
+
+        await waitFor(() => expect(document.querySelector('.fb-index-status')).not.toBeNull());
+        const text = stripIsolates(document.querySelector('.fb-index-status')?.textContent ?? '');
+        expect(text).toContain("Credential files GAIA won't add: secrets.json");
+        expect(text).not.toContain('Showing the first 50 skipped files.');
     });
 });

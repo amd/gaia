@@ -331,6 +331,46 @@ def test_throttle_finish_flushes_the_tail():
     assert flushed[-1] == "atail"
 
 
+def test_throttle_finish_reports_a_failed_flush():
+    """A final adapter flush can ask for a fallback only when it still fails."""
+    clock = [100.0]
+    attempts = []
+
+    def fail(_text):
+        attempts.append(_text)
+        return False
+
+    throttle = StreamThrottle(fail, interval=1.0, now=lambda: clock[0])
+    throttle.add("a")
+    assert throttle.finish() is False
+    assert attempts == ["a", "a"]
+
+
+def test_throttle_finish_retries_a_failed_flush():
+    """A failed stream edit gets one more try before the user sees a warning."""
+    clock = [100.0]
+    attempts = []
+
+    def flaky(_text):
+        attempts.append(_text)
+        return len(attempts) > 1
+
+    throttle = StreamThrottle(flaky, interval=1.0, now=lambda: clock[0])
+    throttle.add("a")
+    clock[0] = 101.0
+    assert throttle.finish() is True
+    assert attempts == ["a", "a"]
+
+
+def test_throttle_finish_reports_success_for_callbacks_with_no_result():
+    """Other adapters keep their existing callbacks and are treated as successful."""
+    clock = [100.0]
+    flushed = []
+    throttle = StreamThrottle(flushed.append, interval=1.0, now=lambda: clock[0])
+    throttle.add("a")
+    assert throttle.finish() is True
+
+
 def test_throttle_skips_an_edit_that_would_change_nothing():
     """An unchanged body still costs a call against the channel's rate limit."""
     clock = [100.0]

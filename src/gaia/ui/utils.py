@@ -20,6 +20,7 @@ import string
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Generator, List, Optional, Sequence, Tuple
+from urllib.parse import unquote
 
 from fastapi import HTTPException
 from fastapi.staticfiles import StaticFiles
@@ -31,7 +32,9 @@ from gaia.config import (
     UnsafeGaiaHomeError,
     unsafe_gaia_home_reason,
 )
-from gaia.llm.lemonade_embedded import gaia_home
+from gaia.home import DOCUMENT_COPIES_SUBDIR
+from gaia.llm import lemonade_embedded
+from gaia.utils.hashing import sha256_file
 from gaia.utils.image_formats import IMAGE_EXTENSIONS
 from gaia.utils.user_folders import documents_dir
 
@@ -268,6 +271,21 @@ def message_to_response(msg: dict) -> MessageResponse:
                 exc,
             )
 
+    page_elements = None
+    if msg.get("page_elements"):
+        from pydantic import ValidationError
+
+        from gaia.browser.picked import PageElement
+
+        try:
+            page_elements = [PageElement(**e) for e in msg["page_elements"]]
+        except (ValidationError, TypeError) as exc:
+            logger.warning(
+                "Message %s picked elements do not match the schema: %s",
+                msg.get("id"),
+                exc,
+            )
+
     return MessageResponse(
         id=msg["id"],
         session_id=msg["session_id"],
@@ -278,8 +296,10 @@ def message_to_response(msg: dict) -> MessageResponse:
         agent_steps=agent_steps,
         stats=stats,
         turn_summary=turn_summary,
+        page_elements=page_elements,
         library_notices=msg.get("library_notices"),
         stopped=bool(msg.get("stopped")),
+        failed=bool(msg.get("failed")),
     )
 
 
@@ -484,7 +504,8 @@ def _ui_gaia_home() -> Path:
             ``uploads_dir()`` is called from ``create_app()``, where one would
             surface as a raw traceback rather than something a user can act on.
     """
-    home = gaia_home()
+    # Looked up on the module each call, so a relocated home is always seen.
+    home = lemonade_embedded.gaia_home()
     resolved = home.resolve()
     user_home = Path.home().resolve()
 
@@ -508,6 +529,15 @@ def _ui_gaia_home() -> Path:
 def managed_documents_dir() -> Path:
     """Where the Agent UI stores documents it owns (``<GAIA_HOME>/documents``)."""
     return _ui_gaia_home() / "documents"
+
+
+def document_copies_dir() -> Path:
+    """Where the Agent UI keeps its copy of each document dragged into a chat.
+
+    Outside GAIA's documents folder, which every chat may use: a chat is
+    granted only the copies attached to it.
+    """
+    return _ui_gaia_home() / DOCUMENT_COPIES_SUBDIR
 
 
 def uploads_dir() -> Path:
@@ -542,33 +572,64 @@ class UploadStaticFiles(StaticFiles):
         return harden_served_file(await super().get_response(path, scope), path)
 
 
+# One upload name as the browser link carries it: the characters
+# ``quote(name, safe="")`` leaves alone, or a byte escape. Mirrors
+# UPLOAD_NAME in the web UI's markdown.ts.
+_UPLOAD_NAME_PATTERN = r"(?:[A-Za-z0-9._~-]|%[0-9A-Fa-f]{2})+"
+
 UPLOAD_LINK_RE = re.compile(
     r"(?P<bang>!?)\[(?P<label>[^\]\n]*)\]\("
     + re.escape(UPLOAD_URL_PREFIX)
-    + r"(?P<name>[^)\s]+)\)"
+    + rf"(?P<name>{_UPLOAD_NAME_PATTERN})\)"
 )
+
+
+def _upload_path(encoded_name: str, root: Path) -> Optional[str]:
+    """The file an encoded upload link names, or None if it names no plain file.
+
+    Decoding happens before validation, so an escape cannot smuggle a path
+    separator, a traversal step or a control character past the checks.
+    """
+    try:
+        name = unquote(encoded_name, errors="strict")
+    except UnicodeDecodeError:
+        return None
+    if (
+        not name
+        or name.startswith(".")
+        or name != name.strip(" .")
+        or any(c in "/\\:" or ord(c) < 32 or ord(c) == 127 for c in name)
+    ):
+        return None
+    path = root / name
+    if path.is_symlink() or not path.is_file():
+        return None
+    if path.resolve().parent != root:
+        return None
+    return str(path)
 
 
 def resolve_upload_links(message: str) -> str:
     """Point a message's attachment links at the files on disk, for the agent.
 
     The composer appends ``[name](/api/files/uploads/<file>)`` links, which only
-    the browser can follow. The agent reads files by path, so each link to a
-    file that exists directly inside ``uploads_dir()`` gets its absolute path
-    as the target. Anything else (traversal, a missing file) is left as is.
+    the browser can follow. The name is percent-encoded, so spaces and non-Latin
+    text survive the Markdown link. The agent reads files by path, so each link
+    to a file that exists directly inside ``uploads_dir()`` gets its absolute
+    path as the target. Anything else (traversal, a missing file) is left as is.
     """
     if UPLOAD_URL_PREFIX not in message:
         return message
     root = uploads_dir().resolve()
 
     def _sub(match: "re.Match[str]") -> str:
-        name = match.group("name")
-        if name in (".", "..") or "/" in name or "\\" in name:
-            logger.warning("Upload link %r is not a plain file name; left as is", name)
-            return match.group(0)
-        path = (root / name).resolve()
-        if path.parent != root or not path.is_file():
-            logger.warning("Upload link %r names no file in %s; left as is", name, root)
+        path = _upload_path(match.group("name"), root)
+        if path is None:
+            logger.warning(
+                "Upload link %r names no plain file in %s; left as is",
+                match.group("name"),
+                root,
+            )
             return match.group(0)
         return f"{match.group('bang')}[{match.group('label')}]({path})"
 
@@ -581,33 +642,37 @@ def attached_upload_paths(message: str) -> List[str]:
     These are GAIA's own copies of files the user just picked, so the turn may
     read them without asking. Only a regular file directly inside
     ``uploads_dir()``, linked the way ``resolve_upload_links`` writes it,
-    counts — never a symlink, a subfolder, or a path that escapes the folder.
+    counts, never a symlink, a subfolder, or a path that escapes the folder.
+    Stored names can contain spaces and parentheses, so the message is matched
+    against the folder's own entries instead of a path-shaped regex.
     """
     root = uploads_dir().resolve()
-    prefix = str(root) + os.sep
-    if prefix not in message:
+    if not root.is_dir() or "](" not in message:
+        return []
+    try:
+        children = list(root.iterdir())
+    except OSError:
         return []
     found = set()
-    for match in re.finditer(
-        r"\]\(" + re.escape(prefix) + r"(?P<name>[^)\s\\/]+)\)", message
-    ):
-        name = match.group("name")
-        if name in (".", ".."):
+    for child in children:
+        path = str(child)
+        if path not in message or f"]({path})" not in message:
             continue
-        path = root / name
-        if path.is_symlink() or not path.is_file():
+        try:
+            if child.is_symlink() or not child.is_file():
+                continue
+        except OSError:
             continue
-        if path.resolve().parent != root:
-            continue
-        found.add(str(path))
+        found.add(path)
     return sorted(found)
 
 
 def document_roots() -> List[Path]:
     """Return the directories documents may be read from.
 
-    Always includes the user's home directory, plus GAIA's own managed
-    documents folder when ``GAIA_HOME`` moves it outside every other root.
+    Always includes the user's home directory, plus GAIA's own documents
+    folder, its document copies and chat uploads when ``GAIA_HOME`` moves
+    them outside every other root.
     Each entry of ``GAIA_DOCUMENT_ROOTS`` adds another root; a relative or
     non-existent entry is a server misconfiguration and raises HTTP 500 rather than being
     skipped, so a typo can never silently narrow access back to home.
@@ -643,9 +708,10 @@ def document_roots() -> List[Path]:
             )
         declared.append(candidate)
 
-    managed = managed_documents_dir().resolve()
-    if not any(managed.is_relative_to(root.resolve()) for root in declared):
-        declared.append(managed)
+    for owned in (managed_documents_dir(), document_copies_dir(), uploads_dir()):
+        owned = owned.resolve()
+        if not any(owned.is_relative_to(root.resolve()) for root in declared):
+            declared.append(owned)
 
     roots: List[Path] = []
     for candidate in declared:
@@ -747,11 +813,7 @@ def format_size(size_bytes: int) -> str:
 
 def compute_file_hash(filepath: Path) -> str:
     """Compute SHA-256 hash of file contents."""
-    sha256 = hashlib.sha256()
-    with open(filepath, "rb") as f:
-        for block in iter(lambda: f.read(8192), b""):
-            sha256.update(block)
-    return sha256.hexdigest()
+    return sha256_file(filepath)
 
 
 def compute_file_hash_from_fd(fd: int) -> str:

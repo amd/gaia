@@ -19,6 +19,7 @@
 //	                           (and the bootloader its own, to <path>.boot)
 //	MOCKAGENT_SIDE_EFFECT=<p>  "slow tool" writes this file only if it completes
 //	MOCKAGENT_TOOL_MS=<n>      how long "slow tool" runs (default 5000)
+//	MOCKAGENT_CANONICAL=1      answer in the flagship's canonical events, warm-up included
 //
 // Queries: "slow tool" runs a long tool call that honours a cancel, "stubborn
 // slow tool" one that ignores it, and "report full access" answers
@@ -149,9 +150,9 @@ func handleQuery(query string) {
 				"ok":     false,
 				"status": "error",
 				"code":   "CONNECTOR_ERROR",
-				"error": "no forwarded 'google' credential is available to the email sidecar.\n" +
+				"error": "no forwarded 'google' credential is available to GAIA.\n" +
 					"Connect and grant it in one command — no Agent UI required:\n" +
-					"`gaia connectors connect google --scopes gmail.readonly --grant-agent installed:email`",
+					"`gaia connectors connect google --scopes gmail.readonly --grant-agent installed:gaia`",
 			},
 		})
 		delay(50, 100)
@@ -386,7 +387,25 @@ func main() {
 
 	queries := make(chan string, 16)
 	go pumpStdin(queries)
+	canonical := os.Getenv("MOCKAGENT_CANONICAL") == "1"
 	for q := range queries {
+		if canonical {
+			runCanonicalTurn(q)
+			continue
+		}
 		runTurn(q)
 	}
+}
+
+// warmUpQuery mirrors client.WarmUpQuery, the flagship's warm-up sentinel.
+const warmUpQuery = "\x00gaia:warm_up\x00"
+
+// runCanonicalTurn answers one query the way the flagship's stdio agent does:
+// a single `final` event.
+func runCanonicalTurn(query string) {
+	answer := "echo: " + query
+	if query == warmUpQuery {
+		answer = "warmed_up"
+	}
+	emit(map[string]interface{}{"type": "final", "answer": answer})
 }

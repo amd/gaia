@@ -93,7 +93,9 @@
     color: var(--text-secondary);
     font-size: var(--fs-label);
     overflow: hidden;
-    text-overflow: ellipsis;
+    text-overflow: clip;
+    animation: fade-cut-inline both;
+    animation-timeline: scroll(self inline);
     white-space: nowrap;
 }
 

@@ -12,7 +12,7 @@ telling the user the skill is still loaded.
 import threading
 
 import pytest
-from gaia_agent import session_registry as sr
+from gaiapy import session_registry as sr
 
 
 class _FakeAgent:
@@ -225,6 +225,46 @@ def test_reclaimed_flag_is_not_repeated_on_the_next_lookup(monkeypatch):
 
 
 # ---------------------------------------------------------------------------
+# freshly_built: unlike reclaimed_after_eviction (eviction only), this is set
+# on every path that builds a session's agent for the first time in this
+# process — including a true first use and, critically, a session_id the
+# registry has no record of because the process itself restarted (#8083).
+# ---------------------------------------------------------------------------
+
+
+def test_first_use_is_flagged_freshly_built(registry):
+    session = registry.get_or_create("never-seen-before")
+    assert session.freshly_built is True
+
+
+def test_reclaimed_after_eviction_is_also_freshly_built(monkeypatch):
+    monkeypatch.setattr(sr, "build_session_agent", lambda **kw: _FakeAgent(**kw))
+    reg = sr._SessionRegistry(max_sessions=1)
+
+    reg.get_or_create("a")
+    reg.get_or_create("b")  # evicts "a"
+
+    reclaimed = reg.get_or_create("a")
+    assert reclaimed.freshly_built is True
+    reg.clear()
+
+
+def test_freshly_built_flag_is_not_repeated_on_the_next_lookup(monkeypatch):
+    """Same consume-once contract as reclaimed_after_eviction, owned by the caller."""
+    monkeypatch.setattr(sr, "build_session_agent", lambda **kw: _FakeAgent(**kw))
+    reg = sr._SessionRegistry(max_sessions=1)
+
+    session = reg.get_or_create("a")
+    assert session.freshly_built is True
+
+    session.freshly_built = False  # server.py's consume step
+    same = reg.get_or_create("a")
+    assert same is session
+    assert same.freshly_built is False
+    reg.clear()
+
+
+# ---------------------------------------------------------------------------
 # Teardown: the helper must actually reach a real agent's handles. It probed
 # only ``close_db`` — which GaiaAgent does not define — so every eviction was a
 # silent no-op that leaked the whole agent while looking like it had cleaned up.
@@ -270,7 +310,7 @@ def test_close_agent_is_loud_when_an_agent_exposes_no_teardown(caplog):
 def test_the_real_gaia_agent_exposes_the_teardown_the_registry_calls():
     """The regression itself, asserted against the shipped class rather than a
     fake — a fake that defines ``close_db`` proved nothing about GaiaAgent."""
-    from gaia_agent.agent import GaiaAgent
+    from gaiapy.agent import GaiaAgent
 
     assert callable(getattr(GaiaAgent, "close", None)) or callable(
         getattr(GaiaAgent, "close_db", None)
@@ -439,3 +479,51 @@ def test_checkout_takes_the_turn_atomically_with_eviction(monkeypatch):
     finally:
         session.run_lock.release()
         reg.clear()
+
+
+def test_a_rebuilt_agent_keeps_the_sources_its_chat_has_seen():
+    from types import SimpleNamespace
+
+    seen = [("read_file", {"path": "q3.csv"}, "Revenue 12,431,220")]
+    old = SimpleNamespace(conversation_history=[], _seen_sources=seen)
+    new = SimpleNamespace(conversation_history=[], _seen_sources=[], config=None)
+    sr._carry_session_state(old, new, "s1")
+    assert new._seen_sources == seen and new._seen_sources is not seen
+
+
+class _SkilledAgent(_FakeAgent):
+    """A fake whose Settings can change under it and that loads skills, one broken."""
+
+    settings_changed = False
+
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self.conversation_history = []
+
+    def built_settings_changed(self):
+        return _SkilledAgent.settings_changed
+
+    def load_skill(self, name):
+        if name == "broken":
+            raise RuntimeError("skill files are gone")
+        self.loaded_skills[name] = object()
+
+
+def test_changed_settings_rebuild_the_agent_with_its_skills(monkeypatch):
+    monkeypatch.setattr(sr, "build_session_agent", lambda **kw: _SkilledAgent(**kw))
+    monkeypatch.setattr(_SkilledAgent, "settings_changed", False)
+    reg = sr._SessionRegistry()
+    session, _ = reg.checkout("a", use_claude=True, claude_model="claude-x")
+    old = session.agent
+    old.loaded_skills.update({"coding": object(), "broken": object()})
+    assert session.follow_settings() is False
+
+    monkeypatch.setattr(_SkilledAgent, "settings_changed", True)
+    assert session.follow_settings(model_id="ignored") is True
+    new = session.agent
+    assert old.closed is True
+    assert new.kwargs == {"use_claude": True, "claude_model": "claude-x"}
+    # A skill that can't load again is left out, not fatal to the turn.
+    assert set(new.loaded_skills) == {"coding"}
+    session.run_lock.release()
+    reg.clear()

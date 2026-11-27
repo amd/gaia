@@ -3,7 +3,9 @@
 
 /** Zustand store for GAIA Agent UI state. */
 
+import { isResearchMessage } from '../utils/research';
 import { create } from 'zustand';
+import * as api from '../services/api';
 import type { ActiveRuns, AwaitingUser, Session, Message, Document, AgentStep, SystemStatus, AgentInfo, RenderCardData, PermissionMode, ProviderId, FoundItem } from '../types';
 import { applyTheme, resolveTheme, syncTitleBar, type ThemePreference } from '../utils/theme';
 import { DEFAULT_CUSTOM, PALETTE_IDS, applyPalette, isHexColor, type CustomColors, type PaletteId } from '../utils/palette';
@@ -17,6 +19,7 @@ export type SettingsSection =
     | 'general'
     | 'setup'
     | 'model'
+    | 'images'
     | 'permissions'
     | 'skills'
     | 'connectors'
@@ -290,6 +293,8 @@ interface ChatState {
     systemStatus: SystemStatus | null;
     backendConnected: boolean;
     setSystemStatus: (status: SystemStatus | null) => void;
+    /** Forget a failed download on the server, then clear it from the status. */
+    dismissDownloadFailure: (modelName: string) => Promise<void>;
     setBackendConnected: (connected: boolean) => void;
 
     // UI state
@@ -327,6 +332,11 @@ interface ChatState {
     draftDocumentIds: string[];
     /** The next new chat is created private, so its first message is never remembered. */
     draftPrivate: boolean;
+    /**
+     * Research mode, per chat: while on, each message is sent as a `/research`
+     * turn. The new-chat screen's choice is kept under `NEW_CHAT_RESEARCH`.
+     */
+    research: Record<string, boolean>;
     /** A folder the next new chat may read and write from its first message. */
     draftFolder: string | null;
     sidebarOpen: boolean;
@@ -366,6 +376,13 @@ interface ChatState {
     /** After a chat is created: the next draft starts from the default again. */
     resetDraftPermissionMode: () => void;
     setDraftPrivate: (on: boolean) => void;
+    /** `sessionId` null is the new-chat screen. */
+    setResearch: (sessionId: string | null, on: boolean) => void;
+    /**
+     * A chat just started with *firstMessage*: it takes the new-chat screen's
+     * Research choice only when that message went out as a research turn.
+     */
+    adoptDraftResearch: (sessionId: string, firstMessage: string) => void;
     setDraftFolder: (path: string | null) => void;
     addDraftDocuments: (ids: string[]) => void;
     removeDraftDocument: (id: string) => void;
@@ -377,8 +394,24 @@ interface ChatState {
     setPendingPrompt: (prompt: PendingPrompt | null) => void;
 }
 
+const removedListeners = new Set<(id: string) => void>();
+
+/** Run `listener` with each chat's id when the user deletes it. Returns its unsubscribe. */
+export function onSessionRemoved(listener: (id: string) => void): () => void {
+    removedListeners.add(listener);
+    return () => removedListeners.delete(listener);
+}
+
 /** The sidebar's Memory, Scheduled tasks and Documents: opening one closes the others. */
 const NO_DESTINATION = { showMemoryDashboard: false, showSchedules: false, showDocLibrary: false };
+
+/** The key in `research` for the new-chat screen, which has no session yet. */
+export const NEW_CHAT_RESEARCH = '';
+
+/** Whether research mode is on for *sessionId* (null: the new-chat screen). */
+export function researchOn(state: Pick<ChatState, 'research'>, sessionId: string | null): boolean {
+    return !!state.research[sessionId ?? NEW_CHAT_RESEARCH];
+}
 
 /** *steps* with *step* just before the last tool call if it is still running, else at the end. */
 function beforeRunningCall(steps: AgentStep[], step: AgentStep): AgentStep[] {
@@ -460,7 +493,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
     addSession: (session) =>
         set((state) => ({ sessions: [session, ...state.sessions] })),
     // The chat's queued messages go with it; the delete button says so first.
-    removeSession: (id) =>
+    removeSession: (id) => {
         set((state) => {
             const next: Partial<ChatState> = {
                 sessions: state.sessions.filter((s) => s.id !== id),
@@ -479,7 +512,9 @@ export const useChatStore = create<ChatState>((set, get) => ({
                 next.queueHolds = queueHolds;
             }
             return next;
-        }),
+        });
+        for (const listener of removedListeners) listener(id);
+    },
     updateSessionInList: (id, updates) =>
         set((state) => ({
             sessions: state.sessions.map((s) => (s.id === id ? { ...s, ...updates } : s)),
@@ -638,6 +673,14 @@ export const useChatStore = create<ChatState>((set, get) => ({
     systemStatus: null,
     backendConnected: true, // Assume connected until proven otherwise
     setSystemStatus: (status) => set({ systemStatus: status }),
+    dismissDownloadFailure: async (modelName) => {
+        await api.dismissDownloadFailure(modelName);
+        set((state) => {
+            const status = state.systemStatus;
+            if (!status || status.download_progress?.state !== 'error') return state;
+            return { systemStatus: { ...status, download_progress: null } };
+        });
+    },
     setBackendConnected: (connected) => set({ backendConnected: connected }),
 
     // UI
@@ -661,6 +704,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
     defaultPermissionModeKnown: false,
     draftDocumentIds: [],
     draftPrivate: false,
+    research: {},
     draftFolder: null,
     setThemePreference: (pref) => {
         writePref('gaia-chat-theme', pref);
@@ -751,6 +795,19 @@ export const useChatStore = create<ChatState>((set, get) => ({
     resetDraftPermissionMode: () =>
         set((state) => ({ draftPermissionMode: state.defaultPermissionMode, draftPermissionModeChosen: false })),
     setDraftPrivate: (on) => set({ draftPrivate: on }),
+    adoptDraftResearch: (sessionId, firstMessage) => set((state) => {
+        if (!state.research[NEW_CHAT_RESEARCH] || !isResearchMessage(firstMessage)) return {};
+        const research = { ...state.research, [sessionId]: true };
+        delete research[NEW_CHAT_RESEARCH];
+        return { research };
+    }),
+    setResearch: (sessionId, on) => set((state) => {
+        const research = { ...state.research };
+        const key = sessionId ?? NEW_CHAT_RESEARCH;
+        if (on) research[key] = true;
+        else delete research[key];
+        return { research };
+    }),
     setDraftFolder: (path) => set({ draftFolder: path }),
     addDraftDocuments: (ids) =>
         set((state) => {

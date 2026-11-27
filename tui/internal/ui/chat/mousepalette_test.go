@@ -120,7 +120,7 @@ func TestClickingTheSelectedPaletteRowRunsIt(t *testing.T) {
 // same contract as Esc (TestPaletteEscClosesWithoutQuittingOrCancelling).
 func TestClickingOutsideThePaletteClosesIt(t *testing.T) {
 	m, _ := newTestModel(t)
-	// /clear rather than /model: newTestModel's agent ("email") is not the
+	// /clear rather than /model: newTestModel's agent ("notes") is not the
 	// flagship, and /model is now gated away from it (availability.go) — /clear
 	// is offered to every agent, and this test only needs SOME open palette.
 	m = typeInto(t, m, "/cl")

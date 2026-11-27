@@ -24,11 +24,10 @@ same human-readable string for a given scope. A unit test in
 from __future__ import annotations
 
 import os
-import zlib
-from typing import Iterable, Sequence
-from urllib.parse import urlencode
+from typing import Sequence
 
 from gaia.connectors.errors import OAuthClientNotConfiguredError
+from gaia.connectors.providers.base import PkceRequests, client_id_hash
 from gaia.connectors.setup_routes import get_route, render_console_steps
 
 # Plain-language descriptions for the AgentUI consent dialog (AC23). The
@@ -60,7 +59,7 @@ GOOGLE_IDENTITY_SCOPES: tuple[str, ...] = (
 )
 
 
-class GoogleOAuthProvider:
+class GoogleOAuthProvider(PkceRequests):
     """
     Concrete provider for ``accounts.google.com``. Implements ``OAuthProvider``
     structurally — no inheritance.
@@ -130,28 +129,27 @@ class GoogleOAuthProvider:
                 provider_label="Google",
                 console_steps=console_steps,
                 example=(
-                    "  For the email agent, copy-paste (bash) after creating the "
+                    "  For mail and calendar in GAIA, copy-paste (bash) after creating the "
                     "client above:\n"
                     "    gaia connectors configure google --client-id <ID> "
                     "--client-secret <SECRET>\n"
                     "    gaia connectors connect google --grant-agent "
-                    "installed:email\n"
+                    "installed:gaia\n"
                     "  (Naming the agent is enough — GAIA reads the scopes it "
                     "already declares, no need to type them out. To grant a "
                     "narrower set instead, pass --scopes explicitly:\n"
-                    '    SCOPES="https://www.googleapis.com/auth/gmail.modify '
-                    "https://www.googleapis.com/auth/gmail.send "
-                    "https://www.googleapis.com/auth/calendar.events "
-                    'https://www.googleapis.com/auth/calendar.readonly"\n'
+                    '    SCOPES="https://www.googleapis.com/auth/gmail.readonly '
+                    "https://www.googleapis.com/auth/gmail.compose "
+                    'https://www.googleapis.com/auth/calendar.events"\n'
                     "    gaia connectors connect google --scopes $SCOPES "
-                    "--grant-agent installed:email)"
+                    "--grant-agent installed:gaia)"
                 ),
                 docs="https://amd-gaia.ai/docs/connectors/google",
             )
         self.client_id: str = resolved_id
         # CRC32 fingerprint for log correlation / tripwire comparison only.
         # Non-cryptographic by design — not used for security.
-        self.client_id_hash: str = format(zlib.crc32(resolved_id.encode()), "08x")
+        self.client_id_hash: str = client_id_hash(resolved_id)
         # Google requires client_secret even for Desktop-type PKCE clients.
         self.client_secret: str = (
             client_secret
@@ -183,43 +181,20 @@ class GoogleOAuthProvider:
             "include_granted_scopes": "true",
         }
 
-    def authorization_url(
+    def account_prompt_params(
         self,
-        redirect_uri: str,
-        challenge: str,
-        state: str,
-        scopes: Iterable[str],
-    ) -> str:
-        params = {
-            "client_id": self.client_id,
-            "redirect_uri": redirect_uri,
-            "response_type": "code",
-            "code_challenge": challenge,
-            "code_challenge_method": "S256",
-            "state": state,
-            "scope": " ".join(scopes),
-        }
-        params.update(self.authorization_params())
-        return f"{self.auth_url}?{urlencode(params)}"
-
-    def token_request_body(self, code: str, verifier: str, redirect_uri: str) -> dict:
-        body: dict = {
-            "grant_type": "authorization_code",
-            "code": code,
-            "code_verifier": verifier,
-            "redirect_uri": redirect_uri,
-            "client_id": self.client_id,
-        }
-        if self.client_secret:
-            body["client_secret"] = self.client_secret
-        return body
-
-    def refresh_request_body(self, refresh_token: str) -> dict:
-        body: dict = {
-            "grant_type": "refresh_token",
-            "refresh_token": refresh_token,
-            "client_id": self.client_id,
-        }
-        if self.client_secret:
-            body["client_secret"] = self.client_secret
-        return body
+        *,
+        select_account: bool,
+        login_hint: str | None,
+        account_type: str | None,
+    ) -> dict:
+        """Which account Google signs in: the picker when adding an account
+        (``prompt=consent`` stays so a refresh token is still issued), or a hint
+        when reconnecting one. Google has no account kinds to hint."""
+        del account_type
+        params: dict = {}
+        if select_account:
+            params["prompt"] = "select_account consent"
+        if login_hint:
+            params["login_hint"] = login_hint
+        return params

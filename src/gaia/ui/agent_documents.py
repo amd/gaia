@@ -6,7 +6,8 @@ When the user asks the agent to "add X to my documents", ``index_document``
 indexes it inside the agent, which may be a separate sidecar process. This
 module records each such file in the library and attaches it to the chat, as
 the library's own Add does, so it shows in Documents and in the chat and the
-next chat can attach it.
+next chat can attach it. Documents attached in the chat's composer go in the
+same way, so the user can see and remove what the chat reads.
 """
 
 from __future__ import annotations
@@ -24,6 +25,7 @@ from fastapi import HTTPException
 
 from gaia.logger import get_logger
 from gaia.upload_names import reserve_copy_path
+from gaia.utils.image_formats import IMAGE_EXTENSIONS
 
 from .database import ChatDatabase
 from .routers.documents import _sanitize_stem
@@ -31,6 +33,7 @@ from .utils import (
     ALLOWED_EXTENSIONS,
     compute_file_hash,
     compute_file_hash_from_fd,
+    document_copies_dir,
     is_within_document_roots,
     managed_documents_dir,
     safe_open_document,
@@ -95,10 +98,10 @@ def _record_copy(
     if existing:
         return existing, False
 
-    managed = managed_documents_dir()
-    managed.mkdir(parents=True, exist_ok=True)
+    copies = document_copies_dir()
+    copies.mkdir(parents=True, exist_ok=True)
     copy = reserve_copy_path(
-        managed,
+        copies,
         _sanitize_stem(path.stem),
         path.suffix.lower(),
         taken=lambda p: db.path_held_by_other_content(str(p), file_hash),
@@ -129,8 +132,11 @@ def _is_other_file(doc: Dict[str, Any], path: Path) -> bool:
     stored = doc.get("filepath") or ""
     if not stored or Path(os.path.realpath(stored)) == path:
         return False
-    managed = Path(os.path.realpath(managed_documents_dir()))
-    return managed not in Path(os.path.realpath(stored)).parents
+    stored_real = Path(os.path.realpath(stored))
+    return not any(
+        Path(os.path.realpath(owned)) in stored_real.parents
+        for owned in (managed_documents_dir(), document_copies_dir())
+    )
 
 
 def add_indexed_documents(
@@ -181,6 +187,63 @@ def add_indexed_documents(
             f"your documents, so later chats won't find it: {reason}"
         )
     return result
+
+
+def _listed_as_document(path: Path) -> bool:
+    """Whether a composer attachment goes into the library.
+
+    Images are read by vision and recordings transcribed, not indexed.
+    """
+    from gaia.audio.media import MEDIA_EXTENSIONS
+
+    suffix = path.suffix.lower()
+    return (
+        suffix in ALLOWED_EXTENSIONS
+        and suffix not in IMAGE_EXTENSIONS
+        and suffix not in MEDIA_EXTENSIONS
+    )
+
+
+def add_chat_uploads(
+    db: ChatDatabase,
+    session_id: str,
+    uploads: Iterable[str],
+    reattached: Iterable[str] = (),
+) -> List[Dict[str, Any]]:
+    """Put the documents attached in the chat's composer in the library, attached to it.
+
+    Each upload goes in once: one the user takes off stays off, and the chat
+    stops reading it (``ChatDatabase.removed_session_uploads``), unless it is
+    in *reattached*, the uploads the user attached again in this message.
+    Returns the library rows newly attached. An upload that can't be recorded
+    stays readable by the chat, as before it was listed; the error is logged.
+    """
+    # The same file attached again reuses its upload path.
+    reopened = db.removed_session_uploads(session_id) & set(reattached)
+    known = db.session_upload_paths(session_id) - reopened
+    added: List[Dict[str, Any]] = []
+    for upload in uploads:
+        path = Path(os.path.realpath(upload))
+        if upload in known or not _listed_as_document(path):
+            continue
+        try:
+            # The upload is GAIA's own copy already, inside the document roots.
+            doc = _record_in_place(db, path, 0)
+            db.attach_document(session_id, doc["id"])
+            db.record_session_upload(session_id, upload, doc["file_hash"])
+        except (HTTPException, OSError, sqlite3.Error) as exc:
+            reason = _detail(exc) if isinstance(exc, HTTPException) else exc
+            logger.error(
+                "Attachment %s stays readable in chat %s but is not listed in "
+                "its documents: %s",
+                path,
+                session_id[:8],
+                reason,
+                exc_info=True,
+            )
+            continue
+        added.append(db.get_document(doc["id"]))
+    return added
 
 
 @functools.lru_cache(maxsize=512)

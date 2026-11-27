@@ -35,7 +35,7 @@ VLMClient provides Vision-Language Model capabilities for extracting text from i
 
 1. **Model Management**
    - Load VLM model (Gemma-4-E4B-it-GGUF)
-   - Missing-model guidance via Settings → Model or `gaia download --agent vlm`
+   - Missing-model guidance via Settings → Agent & model or `gaia download --agent vlm`
    - Model availability checking
    - Every request re-checks the model is loaded at its required context size
 
@@ -439,7 +439,7 @@ self.client = LemonadeClient(model=vlm_model, host=host, port=port)
 
 ### Unit Tests
 
-**File:** `tests/llm/test_vlm_client.py`
+The block below is an illustrative example, not a file in the repo. The real tests are under `tests/unit/`, for example `tests/unit/test_vlm_extraction_failures.py`.
 
 ```python
 import pytest

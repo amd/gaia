@@ -43,13 +43,32 @@ describe('safeUrlTransform — chat upload links', () => {
     });
 
     it.each([
-        // Traversal or a nested path
+        '/api/files/uploads/Q3%20plan%20%28final%29.pdf',
+        '/api/files/uploads/%D8%AA%D9%82%D8%B1%D9%8A%D8%B1%20%D8%A7%D9%84%D8%A7%D8%AC%D8%AA%D9%85%D8%A7%D8%B9.pdf',
+        '/api/files/uploads/report%231%20%26%20notes.pdf',
+        '/api/files/uploads/x%2Ey.png',
+    ])('keeps the encoded name in %s', (url) => {
+        expect(safeUrlTransform(url)).toBe(url);
+    });
+
+    it.each([
+        // Traversal or a nested path, raw or percent-encoded
         '/api/files/uploads/../../secrets.txt',
         '/api/files/uploads/..',
         '/api/files/uploads/sub/x.png',
         '/api/files/uploads/%2e%2e%2fx.png',
+        '/api/files/uploads/%2Fetc%2Fpasswd',
+        '/api/files/uploads/x%5Cevil',
+        '/api/files/uploads/x%00.png',
+        '/api/files/uploads/%2Ehidden.png',
         '/api/files/uploads/.hidden',
         '/api/files/uploads/',
+        '/api/files/uploads/%',
+        '/api/files/uploads/x%2.png',
+        '/api/files/uploads/x%zz.png',
+        // Raw characters that belong percent-encoded
+        '/api/files/uploads/Q3 plan.pdf',
+        '/api/files/uploads/تقرير.pdf',
         // Extra parts after the file name
         '/api/files/uploads/x.png?y=1',
         '/api/files/uploads/x.png#y',

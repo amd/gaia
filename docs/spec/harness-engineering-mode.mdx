@@ -111,7 +111,7 @@ Local CLI help/version checks found Claude Code 2.1.271 and app-bundled Codex 0.
 
 | Inspected source | Reuse / change |
 |---|---|
-| `hub/agents/gaia/python/gaia_agent/agent.py` | Flagship composition; add mode-gated skill/tool integration |
+| `hub/agents/gaia/python/gaiapy/agent.py` | Flagship composition; add mode-gated skill/tool integration |
 | `src/gaia/agents/base/agent.py` | Skill loading and per-turn filtering; add conditional residency without global activation |
 | `tui/internal/cli/root.go` | Existing `--dev` is diagnostic output; preserve it and add an explicit engineering-mode opt-in |
 | `tui/internal/catalog/catalog.go`, `client/factory.go` | Flagship is a persistent subprocess; retain that path |
@@ -127,7 +127,7 @@ Proposed source organization: `src/gaia/engineering/` containing `models.py`, `s
 
 ## 6. Developer-mode skill and startup
 
-The skill ships at `hub/agents/gaia/python/gaia_agent/skills/gaia-harness-engineering/SKILL.md`; the host loads it only in developer mode.
+The skill ships at `hub/agents/gaia/python/gaiapy/skills/gaia-harness-engineering/SKILL.md`; the host loads it only in developer mode.
 
 - Resolve explicit developer mode before the first interactive turn. Proposed flag: `--developer-mode`; existing `--dev`/`--debug` retain logging semantics.
 - Load the skill exactly once and keep it resident in that enabled session despite semantic skill filtering. Do not add it to unconditional `skills:` or the global default skill set.

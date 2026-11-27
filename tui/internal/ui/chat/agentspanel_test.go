@@ -17,7 +17,7 @@ type stubHubLister struct{}
 func (stubHubLister) Catalog(ctx context.Context, start, installedOnly, refresh bool) (*catalog.HubCatalog, error) {
 	return &catalog.HubCatalog{Agents: []catalog.HubEntry{
 		{ID: "gaia", Name: "GAIA", InstalledVersion: "0.2.0"},
-		{ID: "email", Name: "Email", InstalledVersion: "0.1.3"},
+		{ID: "notes", Name: "Notes", InstalledVersion: "0.1.3"},
 	}}, nil
 }
 func (stubHubLister) Agents(ctx context.Context, start bool) ([]catalog.AgentRuntime, error) {

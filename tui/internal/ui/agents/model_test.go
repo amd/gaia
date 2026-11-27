@@ -61,11 +61,11 @@ func TestPopulatedListShowsIDNameVersionAndState(t *testing.T) {
 	client := &stubLister{
 		catalogOut: &catalog.HubCatalog{Agents: []catalog.HubEntry{
 			{ID: "gaia", Name: "GAIA", InstalledVersion: "0.2.0"},
-			{ID: "email", Name: "Email", InstalledVersion: "0.1.3"},
+			{ID: "notes", Name: "Notes", InstalledVersion: "0.1.3"},
 		}},
 		agentsOut: []catalog.AgentRuntime{
 			{AgentID: "gaia", State: "running"},
-			{AgentID: "email", State: "stopped"},
+			{AgentID: "notes", State: "stopped"},
 		},
 	}
 	m := loadSync(New(client, 80, 24))
@@ -75,9 +75,9 @@ func TestPopulatedListShowsIDNameVersionAndState(t *testing.T) {
 	if len(gaia) < 4 || gaia[1] != "GAIA" || gaia[2] != "v0.2.0" || gaia[3] != "running" {
 		t.Fatalf("gaia row wrong: %v", gaia)
 	}
-	email := rowFields(t, view, "email")
-	if len(email) < 4 || email[1] != "Email" || email[2] != "v0.1.3" || email[3] != "stopped" {
-		t.Fatalf("email row wrong: %v", email)
+	notes := rowFields(t, view, "notes")
+	if len(notes) < 4 || notes[1] != "Notes" || notes[2] != "v0.1.3" || notes[3] != "stopped" {
+		t.Fatalf("notes row wrong: %v", notes)
 	}
 }
 
@@ -94,7 +94,7 @@ func TestUncachedHubIndexUsesLocallyKnownDisplayName(t *testing.T) {
 		// {"id": id, "name": id}.
 		catalogOut: &catalog.HubCatalog{Agents: []catalog.HubEntry{
 			{ID: "gaia", Name: "gaia"},
-			{ID: "email", Name: "email"},
+			{ID: "notes", Name: "notes"},
 		}},
 		agentsOut: []catalog.AgentRuntime{{AgentID: "gaia", State: "running"}},
 	}
@@ -105,9 +105,10 @@ func TestUncachedHubIndexUsesLocallyKnownDisplayName(t *testing.T) {
 	if len(gaia) < 2 || gaia[1] != "GAIA" {
 		t.Fatalf("expected known display name GAIA, got: %v", gaia)
 	}
-	email := rowFields(t, view, "email")
-	if len(email) < 2 || email[1] != "Email" {
-		t.Fatalf("expected known display name Email, got: %v", email)
+	// An id this binary does not ship is never given a guessed name.
+	notes := rowFields(t, view, "notes")
+	if len(notes) < 2 || notes[1] != "notes" {
+		t.Fatalf("expected the id verbatim for an unknown agent, got: %v", notes)
 	}
 }
 
@@ -153,9 +154,9 @@ func TestSelectionAndCancelKeys(t *testing.T) {
 	client := &stubLister{
 		catalogOut: &catalog.HubCatalog{Agents: []catalog.HubEntry{
 			{ID: "gaia", Name: "GAIA"},
-			{ID: "email", Name: "Email"},
+			{ID: "notes", Name: "Notes"},
 		}},
-		agentsOut: []catalog.AgentRuntime{{AgentID: "gaia", State: "running"}, {AgentID: "email", State: "stopped"}},
+		agentsOut: []catalog.AgentRuntime{{AgentID: "gaia", State: "running"}, {AgentID: "notes", State: "stopped"}},
 	}
 	m := loadSync(New(client, 80, 24))
 
@@ -169,7 +170,7 @@ func TestSelectionAndCancelKeys(t *testing.T) {
 	next, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	m = next.(Model)
 	sel, ok := cmd().(SelectedMsg)
-	if !ok || sel.ID != "email" {
+	if !ok || sel.ID != "notes" {
 		t.Fatalf("enter did not select the highlighted row: %+v", sel)
 	}
 	// Selection drops the fetch that was in flight...
@@ -213,7 +214,7 @@ func TestAbandonedLoadResultsCannotLandOnTheCurrentList(t *testing.T) {
 func TestPanelNeverOutgrowsItsWindow(t *testing.T) {
 	client := &stubLister{
 		catalogOut: &catalog.HubCatalog{Agents: []catalog.HubEntry{
-			{ID: "gaia", Name: "GAIA"}, {ID: "email", Name: "Email"}, {ID: "another", Name: "Another"},
+			{ID: "gaia", Name: "GAIA"}, {ID: "notes", Name: "Notes"}, {ID: "another", Name: "Another"},
 		}},
 		agentsOut: []catalog.AgentRuntime{{AgentID: "gaia", State: "running"}},
 	}
@@ -237,7 +238,7 @@ func TestThePanelStaysUsableAfterAnAbandonedSelection(t *testing.T) {
 	client := &stubLister{
 		catalogOut: &catalog.HubCatalog{Agents: []catalog.HubEntry{
 			{ID: "gaia", Name: "GAIA", InstalledVersion: "0.2.0"},
-			{ID: "email", Name: "Email", InstalledVersion: "0.1.3"},
+			{ID: "notes", Name: "Notes", InstalledVersion: "0.1.3"},
 		}},
 		agentsOut: []catalog.AgentRuntime{{AgentID: "gaia", State: "running"}},
 	}
@@ -354,12 +355,12 @@ func writeCorruptInstall(t *testing.T, id string) {
 }
 
 func TestAnUnreadableInstallIsNamedNotDropped(t *testing.T) {
-	writeCorruptInstall(t, "email")
+	writeCorruptInstall(t, "notes")
 	client := &stubLister{catalogOut: &catalog.HubCatalog{}}
 
 	view := ansi.Strip(loadSync(New(client, 120, 30)).View())
 
-	if !strings.Contains(view, "'email' is not listed as installed") || !strings.Contains(view, "reinstall it") {
+	if !strings.Contains(view, "'notes' is not listed as installed") || !strings.Contains(view, "reinstall it") {
 		t.Fatalf("the panel dropped the unreadable install silently:\n%s", view)
 	}
 }

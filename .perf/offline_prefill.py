@@ -78,7 +78,7 @@ def main() -> None:
     ), patch.object(
         requests.Session, "request", _no_network
     ):
-        from gaia_agent.agent import GaiaAgent, GaiaAgentConfig
+        from gaiapy.agent import GaiaAgent, GaiaAgentConfig
 
         agent = GaiaAgent(config=GaiaAgentConfig(silent_mode=True))
 
@@ -155,11 +155,11 @@ def main() -> None:
 def _core_names(agent, registry):
     """CORE set for the active profile, intersected with the live registry."""
     try:
-        from gaia_agent.tool_bundles import FULL_CORE_TOOLS
+        from gaiapy.tool_bundles import FULL_CORE_TOOLS
 
         core = set(FULL_CORE_TOOLS)
     except ImportError:
-        from gaia_agent.tool_bundles import DOC_CORE_TOOLS
+        from gaiapy.tool_bundles import DOC_CORE_TOOLS
 
         core = set(DOC_CORE_TOOLS)
     loader = getattr(agent, "tool_loader", None)

@@ -14,7 +14,7 @@ from pathlib import Path
 
 import pytest
 import requests
-from gaia_agent import stdio
+from gaiapy import stdio
 
 from gaia.daemon.instance import DaemonInstance
 from gaia.llm import lemonade_client as lc

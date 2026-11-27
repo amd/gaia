@@ -587,7 +587,7 @@ def search_codebase(query: str) -> str:
 
 **Cause:** Usually means `max_steps` is too high, or tools return ambiguous results.
 
-**What the user gets:** at `max_consecutive_repeats` identical calls the model gets one correction in place of the call, and a repeat after that ends the turn. If the calls that ran worked, the agent makes one more model call with no tool calls allowed and answers from their results; if they errored or were refused, the answer names that failure.
+**What the user gets:** at `max_consecutive_repeats` identical calls the model gets one correction in place of the call, and a repeat after that ends the turn. The calls need not be back to back: a call that has returned the same result that many times this turn, in any order among other calls, counts the same, while one whose result changed (a file read again after an edit) starts over, and a call to the wait tool resets every count. A turn gets one correction in total; the next repeat of any call ends it. If the calls that ran worked, the agent makes one more model call with no tool calls allowed and answers from their results; if they errored or were refused, the answer names that failure.
 
 Two loops that vary their arguments are stopped the same way:
 
@@ -1093,22 +1093,29 @@ The loop asks once for a tool call or the final answer; a second such reply in
 a row ends the turn with status `incomplete` and an answer saying the request
 is unfinished.
 
-Only a write that is clearly documentation, or the request's own output, leaves
-an earlier test run standing; every other write makes it stale. Documentation
-means prose (`.md`, `.mdx`, `.rst`), a `README`, `CHANGELOG`, `LICENSE` or
-similar file (bare or `.txt`), or a text or image file under a `docs` folder.
-The request's output is any non-code file it asked for (`OUTPUT.md`,
-`result.json`, `report.csv`). Neither applies to a file a test may read, so
-these always count as changes, even when the request named them as its output:
-any source file (`.py`, `.ts`, …, even one named `README.py`); a file under a
-folder, or with a name, that looks like test input (`tests`, `test_data`,
-`__tests__`, `spec`, `fixtures`, `data`, `mocks`, `samples`, `e2e`, `golden`,
-`expected_output.md`, …); a file anywhere below a folder that holds an
-`__init__.py` (a prompt `.md` the code loads); and build, install or test
-configuration (`requirements*.txt`, `pyproject.toml`, `pytest.ini`,
-`package.json`, `CMakeLists.txt`, …). A plain `.txt`, `.csv` or `.json` that the
-request didn't ask for counts too. Folder names are read below the project
-root. The verify-after-change nudge uses the same rule.
+Only a write that is clearly documentation, or a report the request asked for,
+leaves an earlier test run standing; every other write makes it stale.
+Documentation means prose (`.md`, `.mdx`, `.rst`), a `README`, `CHANGELOG`,
+`LICENSE` or similar file (bare or `.txt`), or a text or image file under a
+`docs` folder. A report is a requested file of a report type: prose, plain
+text or a log, a table (`.csv`, `.tsv`, `.xlsx`), a document (`.pdf`, `.docx`,
+`.pptx`) or an image (`OUTPUT.md`, `report.csv`, `summary.pdf`). Any other
+requested file is config or data the code reads, so it counts as a change:
+`settings.yaml`, `app.json`, `conf.toml`, `setup.ini`, `.env`, `schema.sql`,
+`index.html`, `Dockerfile`, and every source file (`.py`, `.ts`, …, even one
+named `README.py`). Neither exemption applies to a file a test or the agent
+may read, so these always count as changes, even when the request named them
+as its output: a file under a folder, or with a name, that looks like test
+input (`tests`, `test_data`, `__tests__`, `spec`, `fixtures`, `data`, `mocks`,
+`samples`, `e2e`, `golden`, `expected_output.md`, …); a skill or prompt file
+(`SKILL.md`, anything under a `skills` or `prompts` folder); a file anywhere
+below a folder that holds an `__init__.py` (a prompt `.md` the code loads); and
+build, install or test configuration (`requirements*.txt`, `pyproject.toml`,
+`pytest.ini`, `package.json`, `CMakeLists.txt`, …). A plain `.txt`, `.csv` or
+`.json` that the request didn't ask for counts too. Folder names are read below
+the project root. Only the file-writing tools (`write_file`, `edit_file`, …)
+are judged; an edit made by a shell command or a script is not. The
+verify-after-change nudge uses the same rule.
 
 A check that ran more than once in the turn is judged by its most recent run. A
 test that failed and then passed after a fix is `verified` and gets no note; one
@@ -1129,7 +1136,7 @@ without looking and report work they never did:
 |-------|------------|
 | look | The request names a file (that exists) or a lowercase snake_case symbol such as `parse_updated()`, and no successful read named it — a failed read, or the name appearing in a directory listing, does not count; the correction says where the file is on disk. A symbol only counts in a turn about the project (a named file exists or a tool ran), so "what does `max_tokens` do?" is not a lookup request. Or, in such a turn, the answer says something "does not exist" with no search, listing or read on record. |
 | content | The answer presents data — a table (a cell may carry a currency sign, "$10,342.50"), an untagged/CSV/JSON code block, or prose that states an exact amount of money ("$2,708.95", "USD 1,375.25") — and its values appear in no tool output or earlier user or tool message. With a table or block, or after a `run_python`, `execute_python_file` or `query_data` call that never succeeded this turn, decimals, dates and percentages in the surrounding prose are judged too; otherwise only the stated amounts are. So after a failed run, "2322.16 / 141 = 16.40748" is a finding: the operands came from a tool, but the quotient is wrong. A tool's own arguments are not evidence: a search that repeats its query does not confirm the query. A scaled amount matches its other spellings ("$14.5M" and "14,500,000"; a "B" after a currency sign is billions, not bytes). A value one arithmetic step from two grounded values the answer shows (a sum, a difference, an average of two, a ratio), or a total equal to the sum of three or more grounded values it shows, counts as grounded. Prose restating a figure from a file the turn wrote is left to the `file` check; small whole numbers, versions and estimates are not judged. |
-| file | A file the turn wrote (`.md`, `.txt`, `.csv`, `.tsv`, `.json`, and the text and table cells of `.xlsx`, `.docx`, `.pptx`; up to 5 MB) holds money, percentages or unit quantities (`27 W`, `8 GB`) that no tool result this turn, input file the tools were pointed at, or user message shows. Prices only count when the evidence shows them as prices — beside a currency, on a price line, or in a data row — so a datasheet's "60 Hz" is not a source for "$60". A scale or spelling the source doesn't use still matches: "$14.5M", "$14.5 million" and "$14,500,000" are one figure, as are "$293.5B", "$293.5 billion" and "293,500,000,000", "$500k" and "$500,000", "12%", "0.12" and "twelve percent", and a range like "$3–5M" and its two ends. Totals, line amounts, per-unit splits, taxes and shares computed from sourced figures pass, and a figure computed from an unsourced one is not listed beside it. Reading the file back, and the numbers a script hard-codes, are not sources. A figure the file marks as an estimate ("est.", "~", "unverified", or "all prices are estimates") is not flagged. An answer that calls the figures unverified and names them gets no note. This check never asks the model for a correction: a false positive would have it edit a correct deliverable, so what it finds goes straight into the "not confirmed" note, naming the file and figures. The file is never edited. |
+| file | A file the turn wrote (`.md`, `.txt`, `.csv`, `.tsv`, `.json`, and the text and table cells of `.xlsx`, `.docx`, `.pptx`; up to 5 MB) holds money, percentages or unit quantities (`27 W`, `8 GB`) that no tool result this turn, input file the tools were pointed at, or user message shows. Prices only count when the evidence shows them as prices — beside a currency, on a price line, or in a data row — so a datasheet's "60 Hz" is not a source for "$60". A scale or spelling the source doesn't use still matches: "$14.5M", "$14.5 million" and "$14,500,000" are one figure, as are "$293.5B", "$293.5 billion" and "293,500,000,000", "$500k" and "$500,000", "12%", "0.12" and "twelve percent", and a range like "$3–5M" and its two ends. Totals, line amounts, per-unit splits, taxes and shares computed from sourced figures pass, and a figure computed from an unsourced one is not listed beside it. Reading the file back, and the numbers a script hard-codes, are not sources. A figure the file marks as an estimate ("est.", "~", "unverified", or "all prices are estimates") is not flagged. An answer that calls the figures unverified and names them gets no note. Neither does a request that clearly asks for invented data ("fake customer list", "dummy data", "make up 10 orders", "made-up numbers", "synthetic records", "random amounts"), which has no source to find. "Sample", "example", "illustrative", "demo" and "test" are ambiguous and keep the note. So does any negation ("don't use fake numbers"), a named input file or a file or lookup the turn read, and any sign the figures are real, even beside an invention word: "actual", "real", "genuine", "verified", "correct", "current", "today's", "latest", "official", a source ("from the 2023 census", "per the ECB", "at Newegg", a URL), a period ("Q3", "2024", "this week"), the user's own figures outside the invented phrase ("our price list", "the prices we charge", "keep the amounts", "fill in my expenses"; "our fake numbers" stays exempt), a clause after "but" or "then" that names figures without inventing them ("fake names, but the prices must be correct"), or a named company or product in one of two shapes: a capitalised name with "'s" before a finance word ("Apple's revenue"), or a capitalised, all-caps or camelCase name right before a number ("RTX 4090", "iPhone 16"). A lowercase or bare name ("nvidia sales", "fake sales numbers for Microsoft") is not recognised. A request over 4,000 characters is never exempted. This check never asks the model for a correction: a false positive would have it edit a correct deliverable, so what it finds goes straight into the "not confirmed" note, naming the file and figures. The file is never edited. |
 | action | The answer says it searched, read, ran, tested, verified or documented something, and no tool of that kind ran. Negated clauses ("I did not run the tests"), advice ("once you have run it") and descriptions ("it is tested on every pull request") are not claims. |
 
 Each check except file asks for at most one correction per turn, before the answer is
@@ -1155,6 +1162,34 @@ call that failed before printing anything, carry a `computation` note telling
 the model not to report computed figures. A failed shell command, or a script
 that printed results before it crashed, gets no note: those are for the model
 to fix and run again.
+
+### Your own answer check
+
+A subclass can add a check of its own. Override `answer_problems(answer)` to
+return what is wrong with a final answer as plain sentences; the loop sends
+them back once per turn with `answer_repair_prompt(problems)` (override it to
+word the request), and lists any still present after that in the "not
+confirmed" note. Call `super().answer_problems(answer)` and add to its list,
+so the built-in checks keep running:
+
+- **Base agent:** an answer that is only leftover tool-call markup, such as
+  `\n\n"}`.
+- **Memory:** an answer that says something was saved when `remember` refused
+  it, or a request to remember something that ended with no `remember` call.
+- **Flagship:** a request to add the skill at a named folder that ended with no
+  `capture_skill` call.
+
+```python
+class ReportAgent(Agent):
+    def answer_problems(self, answer: str) -> list[str]:
+        problems = super().answer_problems(answer)
+        if "## Sources" not in answer:
+            problems.append("The report has no Sources list.")
+        return problems
+```
+
+The flagship uses it on `/research` turns to check that every cited link is a
+page it fetched (`gaia.web.citations`).
 
 ### Saved output and cleanup evidence
 
@@ -1221,13 +1256,48 @@ The loop offers one bounded correction for missing artifact evidence. That
 correction reopens the turn, so writing the output, running the script that
 produces it, and reading it back are not refused as work after the answer;
 files inside a folder the request or the correction names are always in scope.
-If work or readback remains missing, the emitted answer names the gaps and `process_query`
-returns `status: "incomplete"` with `completion_gaps`. When the turn ended on an
+If work remains missing, the emitted answer names the gaps and `process_query`
+returns `status: "incomplete"` with `completion_gaps`. A file that was written
+and only not read back afterwards exists: the answer says so in a "Not checked:"
+line, the gap is listed in `completion_caveats`, and the status stays
+`"success"`. A file counts as read back when the model read it in full, when
+the framework matched a whole-file write, when a skill's check tool opened it,
+or when it was read in full and then changed only by in-place edits. When the turn ended on an
 error, such as an unreachable server, the error message and `failed` status are
 kept and the gaps are listed beneath it. A blocked save cannot be
 reported as success on the last step or after a repeated unsupported answer.
 Readback establishes observed output; it does **not** measure semantic correctness
 or recall when extracting every item from a long document.
+
+**The self-check.** A turn that built a document or data file gets one more
+message before its answer goes out (`[check:self]`), at most once. It applies
+when the turn read other files to build it, built an office file (`.xlsx`,
+`.docx`, `.pptx`), or left something code can already see is wrong; a chat
+answer, a code edit, or a text file typed from nothing gets none. The model
+replies in a few lines: each explicit requirement of the request marked met or
+not met, three plausibility questions when the file was built from inputs (the
+share of items flagged, kept or dropped; duplicate or conflicting input
+records; blanks, zeros or dropped rows from a parse or merge), and a
+figures-against-sources line only for a prose file that quotes figures. It
+ends with `RESULT: PASS` or `RESULT: MISS`. On a pass the answer already given
+goes out unchanged, so the check costs one short step. On a miss the model
+either fixes it and answers again, or the miss is added to the answer in a
+"Not as requested:" line. Either way the turn is `"success"`.
+
+What code can check is checked in code and raised only when it fails: an empty
+file, a requested file name written with another extension, a deck whose slide
+count differs from the one the request gives, a workbook missing a tab the
+request names (or holding it empty), and text over a word limit the request
+states. Anything still wrong after the check is said in the answer.
+
+With a time limit the check follows the turn's own pace: it keeps only the
+requirements line when fewer than three typical steps remain before the stop
+point, and is skipped when not even one does, or when no step is left. A turn
+that runs out of steps or time while the check is open keeps the answer it had
+already given. Every firing, skip and outcome is logged on one line starting
+`[check:self]` (`fired` / `skipped` with the mode and reason; `done` with the
+verdict, seconds, model steps and tool calls it cost). Set
+`GAIA_AGENT_SELF_CHECK=0` to turn it off.
 
 The statement rides in the emitted answer, so it reaches every surface — the
 CLI console, the SSE `answer` event, and `process_query`'s return value — and
@@ -1387,7 +1457,7 @@ never needed. A part longer than 8,000 characters comes back in pages: the page 
 `remaining`, and `read_tool_output(artifact, offset=next_offset,
 limit=remaining)` continues it. Without an entry, `offset` and `limit` (default
 2,000) read any span. An entry number outside the index is an error that names
-the valid range. Unicode offsets count characters, not bytes.
+the valid range; a `to_entry` past the last entry reads to the end. Unicode offsets count characters, not bytes.
 
 The archived text is the original string, the field named by
 `archived_field`, or JSON (one record per line) for a structured result. Small
@@ -1403,6 +1473,16 @@ and share a 64 MiB archive quota. Unknown, expired, cross-session handles and
 quota exhaustion return explicit errors. Restarting an agent invalidates its
 output handles; rerun the source tool if the session has ended. A continuation
 reads captured output rather than re-executing a potentially state-changing tool.
+
+To hand a large result to another tool, pass its handle as the argument:
+`write_file(file_path="notes.md", content="output_…")`, where the handle is the
+result's full `artifact` value (`output_` and 32 hex characters). The tool gets
+the whole archived text, and the text never enters the prompt. Only an argument
+that is exactly a handle is replaced, at any depth in lists and objects; a
+handle inside other text is left as written. The replacement happens before
+permission checks and confirmation prompts, so they see the real text. An
+unknown or expired handle stops the call with an error naming the handle.
+`read_tool_output` is the one tool that takes the handle itself.
 
 ### Exhaustive document extraction
 

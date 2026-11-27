@@ -423,6 +423,31 @@ describe('DocumentLibrary path box', () => {
         expect(screen.queryByRole('alert')).toBeNull();
     });
 
+    it('names the files a folder skipped and why', async () => {
+        mockedApi.listDocuments.mockResolvedValue(emptyList);
+        mockedApi.uploadDocumentByPath.mockRejectedValue(
+            Object.assign(new Error('is a folder'), { httpStatus: 400, reason: 'is_folder' }),
+        );
+        mockedApi.indexFolder.mockResolvedValue({
+            indexed: 1, failed: 0, skipped: 3, skipped_files_truncated: true, errors: [],
+            skipped_files: [
+                { file: 'program.exe', reason: 'unsupported_type' },
+                { file: 'secrets.json', reason: 'credential_file' },
+                { file: 'song.mp3', reason: 'unsupported_type' },
+            ],
+            documents: [COMPLETE_DOC],
+        });
+        render(<DocumentLibrary />);
+
+        submitPath('/home/me/downloads');
+
+        const notice = await screen.findByRole('status');
+        const text = stripIsolates(notice.textContent ?? '');
+        expect(text).toContain("Files GAIA can't add: program.exe, song.mp3");
+        expect(text).toContain("Credential files GAIA won't add: secrets.json");
+        expect(text).toContain('Showing the first 50 skipped files.');
+    });
+
     it('says how many images a folder left out and how to add them', async () => {
         mockedApi.listDocuments.mockResolvedValue(emptyList);
         mockedApi.uploadDocumentByPath.mockRejectedValue(
@@ -547,6 +572,47 @@ describe('DocumentLibrary dates follow the interface language', () => {
     });
 });
 
+it('shows a right-to-left override in a document name as a code', async () => {
+    mockedApi.listDocuments.mockResolvedValue({
+        documents: [{ ...COMPLETE_DOC, filename: 'plan\u202Efdp.md', filepath: 'C:\\d\\plan\u202Efdp.md' }],
+        total: 1, total_size_bytes: 2048, total_chunks: 5,
+    });
+    render(<DocumentLibrary />);
+    expect(await screen.findByText('plan[U+202E]fdp.md')).toBeInTheDocument();
+    const folder = screen.getByRole('button', { name: /Open containing folder for plan\[U\+202E\]fdp\.md/ });
+    expect(folder.getAttribute('title')).toContain('C:\\d\\plan[U+202E]fdp.md');
+    expect(document.querySelector('.doc-name')!.textContent).not.toContain('\u202E');
+});
+
+it('marks a right-to-left override in every row button name', async () => {
+    mockedApi.listDocuments.mockResolvedValue({
+        documents: [
+            { ...COMPLETE_DOC, filename: 'report\u202Etxt.md', filepath: 'C:\\d\\report\u202Etxt.md' },
+            { ...FAILED_DOC, filename: 'notes\u202Etxt.md', filepath: 'C:\\d\\notes\u202Etxt.md' },
+        ],
+        total: 2, total_size_bytes: 3072, total_chunks: 5,
+    });
+    render(<DocumentLibrary />);
+    await screen.findByText('report[U+202E]txt.md');
+    const labels = screen.getAllByRole('button').map((b) => b.getAttribute('aria-label') ?? '');
+    expect(labels.filter((l) => l.includes('report[U+202E]txt.md'))).toHaveLength(3);
+    expect(labels.filter((l) => l.includes('notes[U+202E]txt.md'))).toHaveLength(3);
+    expect(labels.join('\n')).not.toContain('\u202E');
+});
+
+it('marks a right-to-left override in the notice after a failed remove', async () => {
+    mockedApi.listDocuments.mockResolvedValue({
+        documents: [{ ...COMPLETE_DOC, filename: 'report\u202Etxt.md' }],
+        total: 1, total_size_bytes: 2048, total_chunks: 5,
+    });
+    mockedApi.deleteDocument.mockRejectedValue(new Error('locked'));
+    render(<DocumentLibrary />);
+    fireEvent.click(await screen.findByRole('button', { name: /Remove report\[U\+202E\]txt\.md/ }));
+    const notice = await screen.findByText(/Couldn't remove/);
+    expect(notice.textContent).toContain('report[U+202E]txt.md');
+    expect(notice.textContent).not.toContain('\u202E');
+});
+
 describe('DocumentLibrary notices follow the interface language', () => {
     afterEach(resetUiLocale);
     const emptyList = { documents: [], total: 0, total_size_bytes: 0, total_chunks: 0 };
@@ -576,6 +642,29 @@ describe('DocumentLibrary notices follow the interface language', () => {
         expect(text).toContain('الملفات المتخطّاة لأن GAIA لا يستطيع إضافة نوعها: 1.');
         expect(text).toContain('لا تُضمَّن المجلدات الفرعية.');
         expect(text.indexOf('الملفات المضافة')).toBe(0);
+    });
+
+    it('names skipped files with translated reasons in Arabic', async () => {
+        setUiLocale('ar');
+        mockedApi.listDocuments.mockResolvedValue(emptyList);
+        mockedApi.uploadDocumentByPath.mockRejectedValue(
+            Object.assign(new Error('is a folder'), { httpStatus: 400, reason: 'is_folder' }),
+        );
+        mockedApi.indexFolder.mockResolvedValue({
+            indexed: 1, failed: 0, skipped: 2, errors: [],
+            skipped_files: [
+                { file: 'ملاحظات.exe', reason: 'unsupported_type' },
+                { file: 'credentials.json', reason: 'credential_file' },
+            ],
+            documents: [COMPLETE_DOC],
+        });
+        const { container } = render(<DocumentLibrary />);
+
+        submitPath(container, '/home/me/trip');
+
+        const text = stripIsolates((await screen.findByRole('status')).textContent ?? '');
+        expect(text).toContain('الملفات التي لا يستطيع GAIA إضافتها: ملاحظات.exe');
+        expect(text).toContain('ملفات بيانات الدخول التي لن يضيفها GAIA: credentials.json');
     });
 
     it('says in Arabic how many images a folder left out', async () => {

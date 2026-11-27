@@ -61,6 +61,49 @@ describe("/api/downloads", () => {
     expect(d.daily).toEqual([expect.objectContaining({ day: day(1), install: 30, meta: 400 })]);
     expect(d.firstSnapshotDay).toBe(day(2));
   });
+
+  it("gives the newest final release's installs per day, from zero on the day it shipped", async () => {
+    const db = memoryD1();
+    await put(db, "releases", ["tag", "published_at", "prerelease", "html_url"], [
+      ["v1.0.0", iso(30), 0, "u"],
+      ["v1.1.0", iso(2), 0, "u"],
+      ["v1.2.0-rc1", iso(1), 1, "u"],
+    ]);
+    await put(db, "asset_snapshots", ["day", "tag", "asset", "downloads"], [
+      [day(3), "v1.0.0", "gaia-windows-setup.exe", 100],
+      [day(2), "v1.0.0", "gaia-windows-setup.exe", 110],
+      [day(2), "v1.1.0", "gaia-windows-setup.exe", 40],
+      [day(1), "v1.0.0", "gaia-windows-setup.exe", 111],
+      [day(1), "v1.1.0", "gaia-windows-setup.exe", 70],
+      [day(1), "v1.1.0", "latest.yml", 900],
+      [day(1), "v1.2.0-rc1", "gaia-windows-setup.exe", 5],
+    ]);
+    const d = await get(db, "/api/downloads", "range=30");
+    expect(d.latestDaily).toEqual({ tag: "v1.1.0", daily: [{ day: day(2), install: 40 }, { day: day(1), install: 30 }] });
+  });
+
+  it("treats a day the release is missing from as a gap, not as zero downloads", async () => {
+    const db = memoryD1();
+    await put(db, "releases", ["tag", "published_at", "prerelease", "html_url"], [
+      ["v1.0.0", iso(30), 0, "u"],
+      ["v1.1.0", iso(5), 0, "u"],
+    ]);
+    await put(db, "asset_snapshots", ["day", "tag", "asset", "downloads"], [
+      [day(4), "v1.1.0", "gaia-windows-setup.exe", 100],
+      [day(3), "v1.1.0", "gaia-windows-setup.exe", 150],
+      [day(2), "v1.0.0", "gaia-windows-setup.exe", 500],
+      [day(1), "v1.1.0", "gaia-windows-setup.exe", 170],
+    ]);
+    const d = await get(db, "/api/downloads", "range=30");
+    expect(d.latestDaily.daily).toEqual([{ day: day(3), install: 50 }]);
+  });
+
+  it("has no per-day figures before any final release", async () => {
+    const db = memoryD1();
+    await put(db, "releases", ["tag", "published_at", "prerelease", "html_url"], [["v1.0.0-rc1", iso(2), 1, "u"]]);
+    await put(db, "asset_snapshots", ["day", "tag", "asset", "downloads"], [[day(1), "v1.0.0-rc1", "gaia-windows-setup.exe", 3]]);
+    expect((await get(db, "/api/downloads", "range=30")).latestDaily).toBeNull();
+  });
 });
 
 describe("/api/traction", () => {
@@ -118,6 +161,29 @@ describe("/api/momentum core and outside split", () => {
     expect(m.split.outside).toMatchObject({ prsMerged: 1, medianDaysToMerge: 2, openIssues: 1 });
     expect(m.botOpenIssues).toBe(1);
   });
+
+  it("lists pending contributors: people with something open, grouped by core team and outside", async () => {
+    const db = memoryD1();
+    await put(db, "items", ["number", "kind", "created_at", "closed_at", "merged_at", "assoc", "author", "draft"], [
+      [1, "pr", iso(20), null, null, "NONE", "carol", 0],
+      [2, "issue", iso(5), null, null, "NONE", "carol", null],
+      [3, "issue", iso(4), null, null, "NONE", "dave", null],
+      [4, "pr", iso(3), null, null, "NONE", "alice-work", 0],
+      [5, "pr", iso(3), iso(2), iso(2), "NONE", "erin", 0],
+      [6, "issue", iso(3), null, null, "NONE", "github-actions[bot]", null],
+      [7, "pr", iso(6), null, null, "NONE", "fay", 1],
+    ]);
+    // The people filter hides carol from the page's other numbers; she is still waiting.
+    const m = await get(db, "/api/momentum", "range=30&core=" + encodeURIComponent("alice+alice-work") + "&exclude=carol");
+    expect(m.pending.people).toEqual([
+      { author: "carol", accounts: ["carol"], core: false, openPrs: 1, openIssues: 1, oldestPr: iso(20), oldestIssue: iso(5) },
+      { author: "alice", accounts: ["alice-work"], core: true, openPrs: 1, openIssues: 0, oldestPr: iso(3), oldestIssue: null },
+      { author: "dave", accounts: ["dave"], core: false, openPrs: 0, openIssues: 1, oldestPr: null, oldestIssue: iso(4) },
+    ]);
+    expect(m.pending.daily.at(-1)).toEqual({ day: day(0), outsidePr: 1, outsideIssue: 1, corePr: 1, coreIssue: 0 });
+    // The core team and outside table still reads the same team from the grouped form.
+    expect(m.split.core.openPrs).toBe(1);
+  });
 });
 
 describe("/api/growth", () => {
@@ -141,6 +207,28 @@ describe("/api/growth", () => {
     expect((await get(db, "/api/growth", "range=1")).days).toBe(2);
     expect(g.gran).toBe("week");
     expect((await get(db, "/api/growth", "range=7")).current.externalShare).toBe(1);
+  });
+});
+
+describe("/api/growth community engagement", () => {
+  it("withholds first-response figures until comments are collected, then times outside items to the core team's first answer", async () => {
+    const db = memoryD1();
+    await put(db, "items", ["number", "kind", "created_at", "closed_at", "merged_at", "assoc", "author"], [
+      [1, "issue", iso(5), null, null, "NONE", "carol"],
+      [2, "pr", iso(4), iso(3), iso(3), "CONTRIBUTOR", "carol"],
+      [3, "pr", iso(4), iso(3.5), iso(3.5), "CONTRIBUTOR", "dave"],
+      [4, "pr", iso(4), iso(3), iso(3), "CONTRIBUTOR", "alice"],
+    ]);
+    const before = await get(db, "/api/growth", "range=7&core=alice");
+    expect(before.responses).toBeNull();
+    expect(before.funnel).toMatchObject({ people: 2, openedPr: 2, merged: 2, issueFirst: 1, issueThenPr: 1 });
+    expect(before.concentration).toMatchObject({ merged: 2, people: 2, topTwoShare: null });
+    await put(db, "item_responses", ["number", "login", "assoc", "at"], [[1, "alice", "CONTRIBUTOR", iso(4.5)]]);
+    await put(db, "collect_log", ["finished_at", "source", "ok", "detail"], [[iso(0), "comments", 1, ""], [iso(0), "issues", 1, ""]]);
+    const g = await get(db, "/api/growth", "range=7&core=alice");
+    expect(g.responses.current.issue).toEqual({ opened: 1, medianHours: 12, within2d: 1, waiting: 0 });
+    expect(g.responses.current.pr).toMatchObject({ opened: 2, medianHours: 18 });
+    expect(g.responses.periods.length).toBeGreaterThan(0);
   });
 });
 
