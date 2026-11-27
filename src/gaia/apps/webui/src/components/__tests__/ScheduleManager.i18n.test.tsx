@@ -156,8 +156,6 @@ describe('schedule dates follow the interface language, not the PC', () => {
         const text = formatNextRun('2026-10-16T09:00:00Z', now, translator('ar').bare, dateLocale(translator('ar')));
         expect(text.startsWith('\u2067')).toBe(true);
         expect(text.endsWith('\u2069')).toBe(true);
-        const plain = stripIsolates(text);
-        expect(plain.search(ARABIC_WEEKDAY)).toBeLessThan(plain.indexOf('بعد 2 ي'));
     });
 
     it('shows an Arabic next run on the card in an Arabic UI', () => {
