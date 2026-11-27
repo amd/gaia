@@ -488,6 +488,17 @@ TEST(GaiaAgentTest, ATestsPassClaimIsNotBackedByInstallsProbesPrintedSummariesOr
         "All 4 tests pass.", {edit("/work/proj/src/stats.py"), shellRunIn("/work/proj/tests", "pytest", 0, pytestOk)}));
     EXPECT_FALSE(GaiaAgent::unsupportedTestClaim(
         "All 4 tests pass.", {edit("C:\\work\\proj\\stats.py"), shellRunIn("C:\\work\\proj", "pytest", 0, pytestOk)}));
+#ifdef _WIN32
+    // Git Bash and Cygwin name the same folder /c/... and /cygdrive/c/....
+    for (const char* shellCwd : {"/c/Users/u/repo", "/cygdrive/c/Users/u/repo", "/c/users/u/repo/tests"}) {
+        EXPECT_FALSE(GaiaAgent::unsupportedTestClaim(
+            "All 4 tests pass.", {edit("C:/Users/u/repo/calc/ops.py"), shellRunIn(shellCwd, "pytest", 0, pytestOk)}))
+            << shellCwd;
+    }
+    EXPECT_EQ(why(GaiaAgent::unsupportedTestClaim(
+                  "All 4 tests pass.", {edit("C:/Users/u/repo/calc/ops.py"), shellRunIn("/d/Users/u/repo", "pytest", 0, pytestOk)})),
+              elsewhere);
+#endif
     // A relative path gives no folder to compare: the run stands.
     EXPECT_FALSE(GaiaAgent::unsupportedTestClaim("All 4 tests pass.",
                                                  {edit("stats.py"), shellRunIn("/tmp/scratch", "pytest", 0, pytestOk)}));
