@@ -56,10 +56,11 @@ ROOT_AGENT_BUNDLED = "agent-bundled"
 ROOT_USER = "user"
 ROOT_CLAUDE_IMPORT = "claude-import"
 #: The ``.claude/skills`` of the project the agent was started in. Listed in the
-#: skill catalogue, unlike ``claude-import``, and parsed the way Claude Code
-#: parses it (:func:`gaia.skills.format.parse_project_skill_file`).
+#: skill catalogue, unlike ``claude-import``.
 ROOT_CLAUDE_PROJECT = "claude-project"
-#: Both ``.claude/skills`` labels: another host's skills, never GAIA-audited.
+#: Both ``.claude/skills`` labels: another host's skills, never GAIA-audited,
+#: parsed the way Claude Code parses them
+#: (:func:`gaia.skills.format.parse_project_skill_file`).
 CLAUDE_ROOTS = frozenset({ROOT_CLAUDE_IMPORT, ROOT_CLAUDE_PROJECT})
 
 # Invalid third-party imports already warned about; discovery reruns every turn.
@@ -100,7 +101,7 @@ def user_skills_dir() -> Path:
 
 
 def _parse(entry: Path, root: SkillRoot) -> Skill:
-    if root.label == ROOT_CLAUDE_PROJECT:
+    if root.label in CLAUDE_ROOTS:
         return parse_project_skill_file(entry, root=root.label, read_only=True)
     return parse_skill_metadata(entry, root=root.label, read_only=root.read_only)
 
@@ -342,7 +343,7 @@ class SkillManager:
         assert metadata.path is not None  # discovery always sets it
         parse = (
             parse_project_skill_file
-            if metadata.root == ROOT_CLAUDE_PROJECT
+            if metadata.root in CLAUDE_ROOTS
             else parse_skill_file
         )
         skill = parse(metadata.path, root=metadata.root, read_only=metadata.read_only)
