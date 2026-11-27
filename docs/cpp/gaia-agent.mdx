@@ -338,7 +338,7 @@ A control with a field of the wrong type is rejected with a line on stderr and c
 - `--use-claude` and `--claude-model` stop the program with exit code 2, because `gaiacpp` has no Claude provider.
 - `GAIA_LEMONADE_EMBEDDED=1` is not acted on: `gaiacpp` keeps the `LEMONADE_BASE_URL` it started with, so if GAIA's own model server restarts on another port, turns end in `error` until the terminal UI restarts the agent.
 
-The terminal UI does not start `gaiacpp` by itself yet: it looks for a program named `gaia-agent` and does not pass `--stdio`.
+The terminal UI starts `gaiacpp` with `--stdio` once it is chosen (`/agent gaiacpp`, or `flagship_agent` in `~/.gaia/config.json`). See [Which agent program answers](/guides/tui#which-agent-program-answers).
 
 ## Lemonade integration
 

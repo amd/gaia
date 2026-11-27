@@ -37,7 +37,7 @@ say each point once. The prompt text itself is always shown in full.
 | Prompt assembly | `_compose_system_prompt` / `_format_tools_for_prompt` in `src/gaia/agents/base/agent.py` |
 | Chat defaults | `src/gaia/chat/prompts.py` |
 
-Concrete agents live under `hub/agents/<id>/python/gaia_agent_<id>/` — `src/gaia/agents/` is framework-only.
+The shipped agent lives under `hub/agents/gaia/python/gaiapy/` (custom agents scaffold as `gaia_agent_<id>/`) — `src/gaia/agents/` is framework-only.
 
 ## Required output shape
 
