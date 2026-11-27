@@ -144,6 +144,36 @@ class TestMCPClientMixin:
         assert "cloud_allowed" in result["error"]
         base_wrapper.assert_not_called()
 
+    def test_local_only_leaves_a_user_added_server_running(self, local_only_on):
+        # docs/reference/cli.mdx "Local only" says custom MCP servers aren't covered.
+        client = Mock()
+        client.name = "my-searxng"
+        client.prefix = "my_searxng"
+        tool = MCPTool(
+            name="searxng_web_search",
+            description="Search the web",
+            input_schema={
+                "type": "object",
+                "properties": {"query": {"type": "string"}},
+                "required": ["query"],
+            },
+        )
+        client.list_tools.return_value = [tool]
+        base_wrapper = Mock(return_value={"contents": [{"text": "hit"}]})
+        client.create_tool_wrapper.return_value = base_wrapper
+        host = object.__new__(MCPClientMixin)
+
+        converted = host._convert_mcp_tools(client)
+        host._register_mcp_tools(client, converted)
+        registered = next(
+            item
+            for item in _TOOL_REGISTRY.values()
+            if item["name"].endswith("searxng_web_search")
+        )
+
+        assert registered["function"](query="q")["status"] == "success"
+        base_wrapper.assert_called_once_with(query="q")
+
     def test_cloud_allowed_registered_web_search_tool_still_runs(self, cloud_allowed):
         client = Mock()
         client.name = "mcp-brave-search"
