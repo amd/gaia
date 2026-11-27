@@ -4605,6 +4605,13 @@ for (const locale of ['ar', 'en']) {
             await shot(page, `schedules-${locale}-long-prompt`);
         });
 
+        test('the info line moves whole items to a new line instead of squeezing them into columns', async ({ page }) => {
+            await openSchedules(page);
+            const meta = page.locator('.schedule-card-meta').first();
+            await expect(meta).toBeVisible();
+            expect(await meta.evaluate((el) => getComputedStyle(el).flexWrap)).toBe('wrap');
+        });
+
         test('new schedule, nothing typed yet', async ({ page }) => {
             await openSchedules(page, []);
             await page.locator('.schedule-modal .btn-primary').click();
