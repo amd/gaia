@@ -5,11 +5,22 @@ import { useEffect, useState } from 'react';
 import { AlertTriangle, Loader2 } from 'lucide-react';
 import * as api from '../../services/api';
 import { isMessageKey, ref } from '../../i18n/registry';
-import { useT, type Translate } from '../../i18n/useT';
+import { tEn, useT, type Translate } from '../../i18n/useT';
 import { requestErrorText } from '../../utils/requestErrors';
 import type { FeaturedLibrary, LinkAddResult, LinkPreview, LinkSkill } from '../../types';
 
 /** Ready to add: readable, not blocked, new or an update, and code only when allowed. */
+/** A link with nothing behind it in the user's language, naming the link they pasted; other errors as sent. */
+function linkErrorText(err: unknown, t: Translate): string {
+    if (err instanceof api.ApiError && err.reason === 'link_not_found') {
+        const link = err.body?.link;
+        if (typeof link === 'string' && tEn('settings.skills.link.notFound', { link }) === err.detail) {
+            return t('settings.skills.link.notFound', { link });
+        }
+    }
+    return requestErrorText(err, t);
+}
+
 const addable = (s: LinkSkill, allowCode: boolean) =>
     !s.error && (!s.installed || s.update) && (allowCode || !s.has_code);
 
@@ -54,7 +65,7 @@ export function AddSkillsFromLink({ onAdded }: { onAdded: () => void }) {
             setPreview(p);
             setPicked(new Set(p.skills.filter((s) => addable(s, false)).map((s) => s.name)));
         } catch (err) {
-            setError(requestErrorText(err, t));
+            setError(linkErrorText(err, t));
         } finally {
             setBusy(null);
         }
@@ -71,7 +82,7 @@ export function AddSkillsFromLink({ onAdded }: { onAdded: () => void }) {
             setUrl('');
             if (r.added.length) onAdded();
         } catch (err) {
-            setError(requestErrorText(err, t));
+            setError(linkErrorText(err, t));
         } finally {
             setBusy(null);
         }

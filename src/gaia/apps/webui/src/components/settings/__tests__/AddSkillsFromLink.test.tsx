@@ -2,10 +2,12 @@
 // SPDX-License-Identifier: MIT
 
 import { fireEvent, render, screen } from '@testing-library/react';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { AddSkillsFromLink } from '../AddSkillsFromLink';
 import * as api from '../../../services/api';
 import type { LinkSkill } from '../../../types';
+import { setUiLocale } from '../../../test/dates';
+import { stripIsolates } from '../../../i18n/registry';
 
 vi.mock('../../../services/api');
 
@@ -123,5 +125,30 @@ describe('AddSkillsFromLink', () => {
         fireEvent.change(screen.getByLabelText('Link to a skill or skills library'), { target: { value: 'owner/missing' } });
         fireEvent.click(screen.getByRole('button', { name: 'Read' }));
         expect(await screen.findByRole('alert')).toHaveTextContent('Nothing found at the link');
+    });
+
+    describe('a link with nothing behind it', () => {
+        const MISSING = 'https://github.com/example-nonexistent-zz/meal-skills';
+        // The 400 the backend sends for it, as api.ts parses it.
+        const notFound = () => Object.assign(Object.create(api.ApiError.prototype), {
+            httpStatus: 400,
+            reason: 'link_not_found',
+            body: { status: 'link_not_found', link: MISSING },
+            detail: `Nothing found at ${MISSING}. Check the link — a private repository can't be read without signing in. If you have a copy of the skill, put its folder in the skills folder inside .gaia in your home folder.`,
+        });
+
+        afterEach(() => setUiLocale('en'));
+
+        it('names the link the user pasted, in Arabic', async () => {
+            setUiLocale('ar');
+            mockedApi.previewSkillLink.mockRejectedValue(notFound());
+            render(<AddSkillsFromLink onAdded={vi.fn()} />);
+            fireEvent.change(screen.getByRole('textbox'), { target: { value: MISSING } });
+            fireEvent.click(screen.getByRole('button', { name: /قراءة|Read/ }));
+            const alert = stripIsolates((await screen.findByRole('alert')).textContent ?? '');
+            expect(alert.startsWith(`لم يُعثر على شيء في ${MISSING}.`)).toBe(true);
+            expect(alert).not.toContain('codeload');
+            expect(alert).not.toContain('reopen');
+        });
     });
 });

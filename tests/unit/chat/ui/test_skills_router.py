@@ -325,7 +325,10 @@ def test_a_link_with_nothing_behind_it_names_no_terminal_command(
     from gaia.skills import link
 
     def missing(*args, **kwargs):
-        raise link.SkillLinkNotFoundError("Nothing found at https://x/y.")
+        raise link.SkillLinkNotFoundError(
+            "Nothing found at https://github.com/acme/none.",
+            "https://github.com/acme/none",
+        )
 
     monkeypatch.setattr(link, "preview_link", missing)
     monkeypatch.setattr(link, "add_from_link", missing)
@@ -336,8 +339,14 @@ def test_a_link_with_nothing_behind_it_names_no_terminal_command(
 
     assert r.status_code == 400
     detail = r.json()["detail"]
-    assert "gaia skill" not in detail
-    assert "skills folder inside .gaia" in detail
+    # Coded, so the app can say it in the user's language and name the link.
+    assert detail["status"] == "link_not_found"
+    assert detail["link"] == "https://github.com/acme/none"
+    message = detail["message"]
+    assert "gaia skill" not in message
+    assert "skills folder inside .gaia" in message
+    # The user is already in Settings > Skills, and the list reloads on focus.
+    assert "reopen" not in message
 
 
 def test_add_passes_the_chosen_names_and_code_opt_in(client, monkeypatch):
