@@ -77,10 +77,11 @@ func (m ChatModel) withResearch(query string) string {
 	return researchCommand + " " + query
 }
 
-// skillCommandRE is the shape the agent reads as a skill command: /<name>
+// skillCommandRE is the shape the agent reads as a skill command: /<name>,
+// or /<plugin>:<name> for a Claude Code plugin's skill,
 // followed by space or the end of the line. The agent reads lowercase names
 // only, so a match in another case is lowercased before it is sent.
-var skillCommandRE = regexp.MustCompile(`^/([a-zA-Z0-9]+(?:-[a-zA-Z0-9]+)*)(?:\s|$)`)
+var skillCommandRE = regexp.MustCompile(`^/((?:[a-zA-Z0-9]+(?:-[a-zA-Z0-9]+)*:)?[a-zA-Z0-9]+(?:-[a-zA-Z0-9]+)*)(?:\s|$)`)
 
 // asSkillCommand is query with its /<name> lowercased, and true, when name is
 // an installed skill in any case. A mistyped name or a path such as

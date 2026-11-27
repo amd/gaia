@@ -130,6 +130,25 @@ func TestResearchModeLeavesSkillCommandsAlone(t *testing.T) {
 	}
 }
 
+// A Claude Code plugin's skill is /<plugin>:<skill>; research mode leaves it
+// alone and lowercases it like any other skill command.
+func TestResearchModeLeavesPluginSkillCommandsAlone(t *testing.T) {
+	m := flagshipModel(t)
+	m.researchMode = true
+	m.skillCommands = []event.SkillCommand{{Name: "garden-kit:plant-care", Description: "Plants."}}
+	for line, want := range map[string]string{
+		"/garden-kit:plant-care my fern": "/garden-kit:plant-care my fern",
+		"/Garden-Kit:Plant-Care":         "/garden-kit:plant-care",
+	} {
+		if got := m.withResearch(line); got != want {
+			t.Errorf("%q was sent as %q, want %q", line, got, want)
+		}
+	}
+	if got := m.withResearch("/garden-kit:seed-swap tips"); got != "/research /garden-kit:seed-swap tips" {
+		t.Errorf("an unknown plugin skill was sent as %q, want the research prefix", got)
+	}
+}
+
 // The agent reads skill names in lowercase only, so /Docx is sent as /docx,
 // with research mode on or off.
 func TestSkillCommandInAnyCaseRunsTheSkill(t *testing.T) {

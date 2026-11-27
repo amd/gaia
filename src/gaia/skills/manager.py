@@ -173,17 +173,16 @@ def claude_plugin_skill_roots() -> list[SkillRoot]:
     No registry means no plugins; an unreadable file is warned about, naming it.
     """
     claude = Path.home() / ".claude"
-    found = []
-    for key, path in (
-        ("plugins", claude / "plugins" / "installed_plugins.json"),
-        ("enabledPlugins", claude / "settings.json"),
-    ):
-        try:
-            found.append(_json_object(path, key))
-        except (OSError, ValueError) as exc:
-            _warn_once(f"Not listing Claude Code plugin skills: {path}", str(exc))
-            return []
-    installs, enabled = found
+    registry = claude / "plugins" / "installed_plugins.json"
+    settings = claude / "settings.json"
+    where = registry
+    try:
+        installs = _json_object(registry, "plugins")
+        where = settings
+        enabled = _json_object(settings, "enabledPlugins")
+    except (OSError, ValueError) as exc:
+        _warn_once(f"Not listing Claude Code plugin skills: {where}", str(exc))
+        return []
 
     roots: list[SkillRoot] = []
     for key, records in installs.items():
@@ -266,6 +265,8 @@ class SkillManager:
 
         self._lock = threading.RLock()
         self._metadata: Optional[dict[str, Skill]] = None
+        #: Claude Code plugins' skill folders, read once per discovery.
+        self._plugin_roots: Optional[list[SkillRoot]] = None
         self._shadowed: dict[str, list[Skill]] = {}
         #: The root each discovered skill won from, so :meth:`load` names it alike.
         self._winning_roots: dict[str, SkillRoot] = {}
@@ -311,7 +312,9 @@ class SkillManager:
                 for d in claude
             )
             if self._claude_dirs is None:
-                roots.extend(claude_plugin_skill_roots())
+                if self._plugin_roots is None:
+                    self._plugin_roots = claude_plugin_skill_roots()
+                roots.extend(self._plugin_roots)
         return roots
 
     # ------------------------------------------------------------------
@@ -327,6 +330,7 @@ class SkillManager:
         with self._lock:
             if self._metadata is not None and not force:
                 return dict(self._metadata)
+            self._plugin_roots = None
 
             found: dict[str, Skill] = {}
             winning_roots: dict[str, SkillRoot] = {}
