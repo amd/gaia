@@ -3607,8 +3607,6 @@ def _resolve_output_handles(agent, value):
     return value
 
 
-DEFAULT_CLAUDE_MODEL = "claude-sonnet-5"
-
 HOSTED_MODELS_DOCS = "https://amd-gaia.ai/docs/sdk/core/agent-system#hosted-models"
 
 _HOSTED_PROVIDER_REMEDY = {
