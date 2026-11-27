@@ -664,6 +664,10 @@ void GaiaAgent::registerVisionTool(std::shared_ptr<const Workspace> ws) {
                      {"max_tokens", 2048},
                      {"temperature", 0.1},
                      {"messages", json::array({m.toJson()})}};
+        // Same per-model choice as the main request and Python's vision path.
+        if (const auto thinking = knownThinking(model)) {
+            body["chat_template_kwargs"] = {{"enable_thinking", *thinking}};
+        }
         try {
             const json resp = json::parse(visionClient_->chatCompletions(body));
             const json& msg = resp.at("choices").at(0).at("message");
