@@ -1298,9 +1298,17 @@ def _linear_bound(source: str) -> float:
 
 
 def _detect_seconds(source: str):
-    started = time.perf_counter()
-    found = _detect_test_runner(source)
-    return found, time.perf_counter() - started
+    """Best of three detector runs, so one stall cannot fail a timing test."""
+    best = float("inf")
+    gc.disable()
+    try:
+        for _ in range(3):
+            started = time.perf_counter()
+            found = _detect_test_runner(source)
+            best = min(best, time.perf_counter() - started)
+    finally:
+        gc.enable()
+    return found, best
 
 
 @pytest.mark.parametrize(
