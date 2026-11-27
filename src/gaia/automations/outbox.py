@@ -19,7 +19,7 @@ from __future__ import annotations
 
 import time
 import uuid
-from dataclasses import asdict, dataclass, fields
+from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Callable, Dict, List, Optional
 
@@ -65,19 +65,13 @@ def _locked():
 
 
 def _load() -> List[Delivery]:
-    data = files.read_json_or_set_aside(path(), "undelivered automation messages")
-    if data is None:
-        return []
-    names = {f.name for f in fields(Delivery)}
-    try:
-        return [
-            Delivery(**{k: v for k, v in d.items() if k in names})
-            for d in data.get("deliveries", [])
-        ]
-    except TypeError as e:
-        raise files.CorruptStateFile(
-            f"{path()} is not usable: {e}. Delete it to drop what is waiting."
-        ) from e
+    return files.read_records(
+        path(),
+        "undelivered automation messages",
+        "deliveries",
+        Delivery,
+        "Delete it to drop what is waiting.",
+    )
 
 
 def _save(items: List[Delivery]) -> None:

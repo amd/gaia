@@ -10,6 +10,8 @@ import (
 	"unicode"
 
 	tea "github.com/charmbracelet/bubbletea"
+
+	"github.com/amd/gaia/tui/internal/catalog"
 )
 
 // A line is a command when it starts with "/" and then nothing or one word of
@@ -73,8 +75,8 @@ func (m ChatModel) nativeUnavailable(query string) string {
 	if m.agentProgramHost {
 		how = "Type /agent gaiapy to switch."
 	}
-	return fmt.Sprintf("%s needs the Python agent: gaiacpp, the native agent this session runs, doesn't %s yet. %s",
-		word, lack, how)
+	return fmt.Sprintf("%s needs %s (the Python agent): gaiacpp, the %s agent this session runs, doesn't %s yet. %s",
+		word, catalog.HarnessLabel(catalog.PythonAgentChoice), catalog.HarnessLabel(catalog.NativeAgentBinary), lack, how)
 }
 
 // builtinCommandWord reports whether word is one of the TUI's own commands.

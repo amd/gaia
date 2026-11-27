@@ -12,6 +12,7 @@ import logging
 import pytest
 
 import gaia.web.tavily as tav
+from gaia.llm.local_only import CloudDisabledError
 from gaia.web.tavily import (
     AsyncTavilyClient,
     BudgetConfig,
@@ -102,6 +103,14 @@ class Clock:
 @pytest.fixture
 def fake_sdk():
     return FakeSyncSDK()
+
+
+@pytest.fixture
+def local_only_on(tmp_path, monkeypatch):
+    monkeypatch.setenv("GAIA_POLICY_FILE", str(tmp_path / "policy.json"))
+    from gaia.llm import local_only
+
+    local_only.set_policy("local_ai_only")
 
 
 def make_client(fake_sdk, **kwargs):
@@ -370,6 +379,51 @@ def test_configured_but_sdk_missing_raises(monkeypatch):
         TavilyClient(db_path=":memory:", api_key="tvly-xxx")
 
 
+# --- Local only -------------------------------------------------------------
+
+
+def test_local_only_refuses_configured_search_before_sdk(fake_sdk, local_only_on):
+    client = make_client(fake_sdk)
+    with pytest.raises(CloudDisabledError, match="Tavily search"):
+        client.search("q")
+    assert fake_sdk.search_calls == 0
+    client.close()
+
+
+def test_local_only_refuses_unconfigured_search_before_ddg(monkeypatch, local_only_on):
+    monkeypatch.setattr(tav, "_load_api_key", lambda: None)
+    web = FakeWeb()
+    client = TavilyClient(db_path=":memory:", web_client=web)
+
+    with pytest.raises(CloudDisabledError, match="Tavily search"):
+        client.search("q")
+
+    assert web.calls == 0
+    client.close()
+
+
+def test_local_only_refuses_extract_and_crawl_before_sdk(fake_sdk, local_only_on):
+    client = make_client(fake_sdk)
+    with pytest.raises(CloudDisabledError, match="Tavily extract"):
+        client.extract("https://example.com")
+    with pytest.raises(CloudDisabledError, match="Tavily crawl"):
+        client.crawl("https://example.com")
+    assert fake_sdk.extract_calls == 0
+    client.close()
+
+
+def test_cloud_allowed_tavily_search_still_calls_sdk(fake_sdk, tmp_path, monkeypatch):
+    monkeypatch.setenv("GAIA_POLICY_FILE", str(tmp_path / "policy.json"))
+    from gaia.llm import local_only
+
+    local_only.set_policy("cloud_allowed")
+    client = make_client(fake_sdk)
+
+    assert client.search("q")["query"] == "q"
+    assert fake_sdk.search_calls == 1
+    client.close()
+
+
 # --- Async client -----------------------------------------------------------
 
 
@@ -392,6 +446,34 @@ async def test_async_unconfigured_falls_back_to_ddg(monkeypatch):
     result = await client.search("anything")
     assert result["source"] == "duckduckgo"
     assert web.calls == 1
+    client.close()
+
+
+async def test_async_local_only_refuses_before_sdk(local_only_on):
+    sdk = FakeAsyncSDK()
+    client = AsyncTavilyClient(db_path=":memory:", sdk_client=sdk)
+
+    with pytest.raises(CloudDisabledError, match="Tavily search"):
+        await client.search("q")
+    with pytest.raises(CloudDisabledError, match="Tavily extract"):
+        await client.extract("https://example.com")
+
+    assert sdk.search_calls == 0
+    client.close()
+
+
+async def test_async_local_only_refuses_before_ddg(monkeypatch, local_only_on):
+    async def no_key():
+        return None
+
+    monkeypatch.setattr(tav, "_load_api_key_async", no_key)
+    web = FakeWeb()
+    client = AsyncTavilyClient(db_path=":memory:", web_client=web)
+
+    with pytest.raises(CloudDisabledError, match="Tavily search"):
+        await client.search("q")
+
+    assert web.calls == 0
     client.close()
 
 

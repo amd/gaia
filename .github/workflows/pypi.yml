@@ -54,7 +54,8 @@ jobs:
         # PRs from forks. A malicious lockfile could otherwise execute
         # arbitrary postinstall code on the runner. publish.yml's build-npm
         # job, which runs only on tag pushes from main, omits this flag.
-        run: npm ci --ignore-scripts
+        # Dependabot writes the Agent UI lockfile with npm 11; keep Node 22 but install with npm 11.
+        run: npx -y npm@11 ci --ignore-scripts
       - name: Build frontend
         working-directory: src/gaia/apps/webui
         run: npm run build

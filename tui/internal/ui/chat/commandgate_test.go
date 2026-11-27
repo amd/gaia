@@ -95,7 +95,7 @@ func TestEveryCommandIsDecidedForBothAgents(t *testing.T) {
 		}
 		word, _, _ := strings.Cut(c.Name, " ")
 		got := gateError(next)
-		for _, want := range []string{word + " needs the Python agent: gaiacpp", "--agent-program gaiapy"} {
+		for _, want := range []string{word + " needs Full-featured (the Python agent): gaiacpp", "--agent-program gaiapy"} {
 			if !strings.Contains(got, want) {
 				t.Errorf("%s on gaiacpp: the refusal does not say %q: %q", c.Name, want, got)
 			}
@@ -110,7 +110,7 @@ func TestEveryCommandIsDecidedForBothAgents(t *testing.T) {
 
 func TestTheNativeRefusalNamesTheWayToSwitch(t *testing.T) {
 	m := gaiacppChat(t)
-	if got := m.nativeUnavailable("/sessions"); got != "/sessions needs the Python agent: gaiacpp, the native agent "+
+	if got := m.nativeUnavailable("/sessions"); got != "/sessions needs Full-featured (the Python agent): gaiacpp, the Fast and light agent "+
 		"this session runs, doesn't keep sessions yet. Start gaia-cli with --agent-program gaiapy to use it." {
 		t.Errorf("refusal = %q", got)
 	}
@@ -120,7 +120,7 @@ func TestTheNativeRefusalNamesTheWayToSwitch(t *testing.T) {
 	for _, line := range []string{"/research tides", "/research-report tides", "/skills add x", "/image open", "/Sessions all"} {
 		updated, _ := m.submit(line)
 		next := updated.(ChatModel)
-		if next.streaming || !strings.Contains(gateError(next), "needs the Python agent") {
+		if next.streaming || !strings.Contains(gateError(next), "(the Python agent)") {
 			t.Errorf("%q on gaiacpp was not refused: streaming=%v, %q", line, next.streaming, gateError(next))
 		}
 	}

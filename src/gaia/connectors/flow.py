@@ -471,7 +471,7 @@ async def start_authorization(
     state = secrets.token_urlsafe(32)
     flow_id = uuid.uuid4().hex
 
-    loop = asyncio.get_event_loop()
+    loop = asyncio.get_running_loop()
     future: "asyncio.Future[Dict[str, Any]]" = loop.create_future()
     # The apps never await it; each failure also goes out as an event.
     future.add_done_callback(lambda f: f.cancelled() or f.exception())

@@ -223,6 +223,7 @@ const ROUTES: Record<string, unknown> = {
     'GET /setup/check': { ready: true, steps: [] },
     'GET /setup/status': { state: 'idle' },
     'GET /setup/needs/chat': { job: 'chat', needed: false, model: null, disk_free_gb: null },
+    'GET /setup/needs/embedding': { job: 'embedding', needed: false, model: null, disk_free_gb: null },
     'GET /settings': SETTINGS,
     'GET /agent-programs': AGENT_PROGRAMS,
     'GET /providers': {

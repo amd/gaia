@@ -4,6 +4,9 @@ Scoping review of [#2804](https://github.com/amd/gaia/issues/2804), the Phase 5 
 deliverable of [`cpp-framework-parity.md`](cpp-framework-parity.md). Assessed against `main` at
 `b38f5e60` (2026-08-12), after the day's C++ merges.
 
+> **Since then:** this agent shipped as `gaiacpp` (`cpp/agents/gaiacpp/`), and `gaia-bash`,
+> which this assessment uses as a template throughout, was removed in #8706.
+
 **Verdict: no-go to start today.** Four of the six declared dependencies are unstarted, one
 undeclared dependency ([#2791](https://github.com/amd/gaia/issues/2791), embeddings) is the root
 of the entire retrieval half, and the security spine the design rests on — refusing skills the

@@ -126,6 +126,19 @@ def test_allowlist_requires_justification(tmp_path, monkeypatch):
         gates.load_allowlist()
 
 
+def test_allowlist_rejects_a_repeated_entry(tmp_path, monkeypatch):
+    f = tmp_path / ".security-suppressions.json"
+    entry = '{"path": "src/a.py", "rule": "S603", "justification": "constructed args"}'
+    f.write_text(f'{{"suppressions": [{entry}, {entry}]}}', encoding="utf-8")
+    monkeypatch.setattr(gates, "SUPPRESSIONS_FILE", f)
+    with pytest.raises(ValueError, match=r"src/a\.py:S603 is listed more than once"):
+        gates.load_allowlist()
+
+
+def test_the_committed_allowlist_has_no_repeated_entries():
+    assert gates.load_allowlist()
+
+
 def test_allowlist_loads_valid_entries(tmp_path, monkeypatch):
     f = tmp_path / ".security-suppressions.json"
     f.write_text(

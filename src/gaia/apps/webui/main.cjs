@@ -72,6 +72,8 @@ try {
     onRendererGone: (contents, details) => {
       void handleRendererGone(contents, details);
     },
+    // A pane tab's crash is the pane's to report ("Reload to try again"), not GAIA's.
+    isPanePage: (contents) => contents.session === session.fromPartition(PANE_PARTITION),
   }));
 } catch (err) {
   try { process.stderr.write(`[main] safety-net load failed: ${err.message}\n`); } catch { }
@@ -114,6 +116,7 @@ const {
 const { showBackendCrashDialog } = require("./services/backend-crash-dialog.cjs");
 const { showRendererGoneDialog } = require("./services/renderer-gone-dialog.cjs");
 const { createBackendSupervisor } = require("./services/backend-supervisor.cjs");
+const { createBackendHealthMonitor } = require("./services/backend-health-monitor.cjs");
 const { buildIndexQuery, INSTALL_SCREEN_QUERY } = require("./services/index-query.cjs");
 const backendInstaller = require("./services/backend-installer.cjs");
 const { createEngineInstall } = require("./services/engine-install.cjs");
@@ -124,6 +127,9 @@ const {
   isAllowedExternalUrl,
   isInAppNavigation,
   describeBlockedUrl,
+  describeOpenFailure,
+  openExternalSafely,
+  linkNoticeText,
 } = require("./services/link-policy.cjs");
 const { installWindowKeys } = require("./services/window-keys.cjs");
 const { installContextMenu } = require("./services/context-menu.cjs");
@@ -230,6 +236,7 @@ const APP_NAME = "GAIA";
 // from prior aborted sessions (issue #782 / T5).
 const DEFAULT_BACKEND_PORT = 4200;
 const STARTUP_TIMEOUT = 30000;
+const BACKEND_HEALTH_CHECK_TIMEOUT = 2000;
 // A restart must answer within this, or it counts as a failed try.
 const RESTART_TIMEOUT = 90000;
 
@@ -261,6 +268,9 @@ const windowConfig = appConfig.window || {
 // ── State ──────────────────────────────────────────────────────────────────
 
 let backendProcess = null;
+let backendCleanupPending = null;
+let backendHealthMonitoringEnabled = false;
+let backendHealthMonitor = null;
 // The in-flight startBackend(), so a quit during startup can wait for the
 // spawn and stop it instead of leaving it behind.
 let backendStarting = null;
@@ -500,17 +510,47 @@ async function startBackend() {
   return child;
 }
 
+/** Stop a backend tree and keep its handle pending until termination is verified. */
+async function stopBackendTree(proc) {
+  backendCleanupPending = proc;
+  isIntentionalKill = true;
+  try {
+    const result = await portManager.killBackend(proc);
+    if (!result || !Array.isArray(result.survivors)) {
+      throw new Error("The backend stop did not confirm that its process tree exited.");
+    }
+    if (result.survivors.length) {
+      throw new Error(`The backend process tree is still running (pid ${result.survivors.join(", ")}).`);
+    }
+    if (result.verified !== true) {
+      throw new Error(
+        "The backend process tree could not be verified as stopped. " +
+          "Quit GAIA, end any leftover GAIA or Python processes in Task Manager, then reopen GAIA."
+      );
+    }
+  } catch (err) {
+    isIntentionalKill = false;
+    throw err;
+  }
+  if (backendCleanupPending === proc) backendCleanupPending = null;
+  if (backendProcess === proc) backendProcess = null;
+}
+
 /**
  * Start a new backend for the supervisor and resolve once it answers.
  * Rejects when it exits first or never answers, so the supervisor retries.
+ * A backend still alive here is a hung one Restart GAIA was pressed for:
+ * stop it first, or the new backend would run beside it on a new port.
  */
 async function restartBackend() {
+  const previousBackend = backendCleanupPending || backendProcess;
+  if (previousBackend) await stopBackendTree(previousBackend);
+
   backendStarting = startBackend();
   const child = await backendStarting;
   if (!child) throw Object.assign(new Error(missingBackendMessage()), { terminal: true });
   if (quitStarted()) {
-    isIntentionalKill = true;
-    await portManager.killBackend(child);
+    await stopBackendTree(child);
     throw new Error("GAIA is quitting, so the restarted backend was stopped.");
   }
   backendProcess = child;
@@ -520,10 +560,10 @@ async function restartBackend() {
     if (!alive()) {
       throw new Error(`The backend exited (code ${child.exitCode}, signal ${child.signalCode}) before it answered.`);
     }
-    isIntentionalKill = true;
-    await portManager.killBackend(child);
+    await stopBackendTree(child);
     throw new Error(`The backend did not answer within ${RESTART_TIMEOUT / 1000} s.`);
   }
+  enableBackendHealthMonitoring();
   console.log(`[main] Backend restarted on port ${backendPort} (pid=${child.pid})`);
   if (trayManager) {
     trayManager.setBackendPort(backendPort);
@@ -540,20 +580,41 @@ function backendStateForRenderer(state) {
 const backendSupervisor = createBackendSupervisor({
   start: restartBackend,
   onStopped: (state) => {
-    const { code = null, signal = null } = state.lastExit || {};
-    void handleBackendCrash(code, signal);
+    void handleBackendCrash(state);
   },
   onState: (state) => {
+    if (backendHealthMonitor) {
+      if (backendHealthMonitoringEnabled && state.status === "running") backendHealthMonitor.start();
+      else backendHealthMonitor.stop();
+    }
     console.log(
       `[main] Backend ${state.status}` +
         (state.status === "restarting" ? ` (try ${state.attempt} of ${state.maxRestarts})` : "") +
         (state.lastError ? `: ${state.lastError}` : "")
     );
+    // A backend up again after a failed start leaves nothing to roll back from.
+    if (state.status === "running") autoUpdater.clearStartFailure();
     if (mainWindow && !mainWindow.isDestroyed()) {
       mainWindow.webContents.send("backend:state", backendStateForRenderer(state));
     }
   },
 });
+
+backendHealthMonitor = createBackendHealthMonitor({
+  check: checkBackendHealth,
+  onUnhealthy: (error, failures) => {
+    const message = error && error.message ? error.message : String(error);
+    const reason = new Error(`Health check failed ${failures} consecutive times: ${message}`);
+    console.warn(`[main] ${reason.message}`);
+    backendSupervisor.healthFailed(reason);
+  },
+});
+
+function enableBackendHealthMonitoring() {
+  if (quitStarted()) return;
+  backendHealthMonitoringEnabled = true;
+  if (backendSupervisor.getState().status === "running") backendHealthMonitor.start();
+}
 
 ipcMain.handle("backend:get-state", () => backendStateForRenderer(backendSupervisor.getState()));
 ipcMain.handle("backend:restart", () => {
@@ -565,7 +626,8 @@ ipcMain.handle("backend:restart", () => {
  * Tell the user the backend stopped and offer Restart / Save diagnostics /
  * Quit. Invoked by the supervisor's onStopped once automatic restarts run out.
  */
-async function handleBackendCrash(code, signal) {
+async function handleBackendCrash(state) {
+  const { code = null, signal = null } = state.lastExit || {};
   autoUpdater.reportStartFailure();
   try {
     const choice = await showBackendCrashDialog({
@@ -573,6 +635,7 @@ async function handleBackendCrash(code, signal) {
       app,
       code,
       signal,
+      reason: state.lastError,
       tailLines: backendStderrTail.slice(-8),
       writeDiagnostics: () => portManager.writeDiagnosticsBundle(),
       // The backend is gone, so there is no running work to ask about.
@@ -615,30 +678,61 @@ async function handleRendererGone(contents, { reason }) {
 
 async function waitForBackend(timeoutMs, isAlive = () => true) {
   const start = Date.now();
-  const http = require("http");
 
   while (Date.now() - start < timeoutMs && isAlive()) {
     try {
-      await new Promise((resolve, reject) => {
-        const req = http.get(healthCheckUrl, (res) => {
-          if (res.statusCode === 200) {
-            resolve();
-          } else {
-            reject(new Error(`Status ${res.statusCode}`));
-          }
-        });
-        req.on("error", reject);
-        req.setTimeout(2000, () => {
-          req.destroy();
-          reject(new Error("timeout"));
-        });
-      });
+      await checkBackendHealth();
       return true;
     } catch {
       await new Promise((r) => setTimeout(r, 500));
     }
   }
   return false;
+}
+
+function checkBackendHealth(signal) {
+  const http = require("http");
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    let deadline = null;
+    let req = null;
+    const onAbort = () => {
+      const error = new Error("Health check was cancelled.");
+      finish(reject, error);
+      req.destroy(error);
+    };
+    const finish = (handler, value) => {
+      if (settled) return;
+      settled = true;
+      if (deadline) clearTimeout(deadline);
+      if (signal) signal.removeEventListener("abort", onAbort);
+      handler(value);
+    };
+    req = http.get(healthCheckUrl, (res) => {
+      if (res.statusCode !== 200) {
+        finish(reject, new Error(`Health endpoint returned status ${res.statusCode}.`));
+        res.destroy();
+        return;
+      }
+      res.once("end", () => finish(resolve));
+      res.once("aborted", () => finish(reject, new Error("Health endpoint response was aborted.")));
+      res.once("close", () => {
+        if (!res.complete) finish(reject, new Error("Health endpoint response closed before completion."));
+      });
+      res.once("error", (error) => finish(reject, error));
+      res.resume();
+    });
+    deadline = setTimeout(() => {
+      const error = new Error("Health endpoint did not answer within 2 s.");
+      finish(reject, error);
+      req.destroy(error);
+    }, BACKEND_HEALTH_CHECK_TIMEOUT);
+    req.once("error", (error) => finish(reject, error));
+    if (signal) {
+      if (signal.aborted) onAbort();
+      else signal.addEventListener("abort", onAbort, { once: true });
+    }
+  });
 }
 
 // ── Window ─────────────────────────────────────────────────────────────────
@@ -661,21 +755,41 @@ function findDistPath() {
 
 /** Refuse a link loudly — the user clicked it, so they get told why nothing happened. */
 function reportBlockedLink(url) {
-  const message = describeBlockedUrl(url);
-  console.error(`[main] ${message}`);
+  const locale = app.getLocale();
+  warnAboutLink(
+    linkNoticeText(locale).blockedTitle,
+    describeBlockedUrl(url, locale),
+    describeBlockedUrl(url),
+    locale,
+  );
+}
+
+function reportLinkNotOpened(url, err) {
+  const locale = app.getLocale();
+  warnAboutLink(
+    linkNoticeText(locale).notOpenedTitle,
+    describeOpenFailure(url, err, locale),
+    describeOpenFailure(url, err),
+    locale,
+  );
+}
+
+// The log line stays English so bug reports stay readable.
+function warnAboutLink(title, message, logMessage, locale) {
+  console.error(`[main] ${logMessage}`);
   // Non-blocking and parented: showErrorBox would freeze the main process.
   dialog
     .showMessageBox(mainWindow && !mainWindow.isDestroyed() ? mainWindow : null, {
       type: "warning",
-      title: "Link blocked",
-      message: "Link blocked",
+      title,
+      message: title,
       detail: message,
-      buttons: ["OK"],
+      buttons: [linkNoticeText(locale).ok],
       noLink: true,
     })
     .catch((err) =>
       console.error(
-        `[main] Could not show the link-blocked dialog: ${err && err.message ? err.message : err}`
+        `[main] Could not show the "${title}" dialog: ${err && err.message ? err.message : err}`
       )
     );
 }
@@ -749,7 +863,7 @@ function createWindow() {
   // arrives as file:///C:/… — check the scheme before handing it to the OS.
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
     if (isAllowedExternalUrl(url)) {
-      shell.openExternal(url);
+      openExternalSafely(shell, url, (err) => reportLinkNotOpened(url, err));
     } else {
       reportBlockedLink(url);
     }
@@ -763,7 +877,7 @@ function createWindow() {
     if (isInAppNavigation(url, currentUrl)) return;
     event.preventDefault();
     if (isAllowedExternalUrl(url)) {
-      shell.openExternal(url);
+      openExternalSafely(shell, url, (err) => reportLinkNotOpened(url, err));
       return;
     }
     reportBlockedLink(url);
@@ -871,9 +985,11 @@ async function loadApp() {
           </div>
         </body>
       </html>`;
-    mainWindow.loadURL(
-      "data:text/html;charset=utf-8," + encodeURIComponent(waitingHtml)
-    );
+    mainWindow
+      .loadURL("data:text/html;charset=utf-8," + encodeURIComponent(waitingHtml))
+      .catch((err) =>
+        console.error(`[main] Could not show the waiting page: ${err && err.message ? err.message : err}`)
+      );
   }
 }
 
@@ -1227,9 +1343,10 @@ app.whenReady().then(async () => {
   let backendReady = false;
   if (backendProcess) {
     console.log("Waiting for backend to start...");
-    backendReady = await waitForBackend(STARTUP_TIMEOUT);
+    backendReady = await waitForBackend(STARTUP_TIMEOUT, () => !quitStarted());
     if (backendReady) {
       console.log("Backend API is ready on port", backendPort);
+      enableBackendHealthMonitoring();
     } else {
       console.warn("Backend did not respond within timeout.");
     }
@@ -1237,8 +1354,16 @@ app.whenReady().then(async () => {
   if (!backendReady) {
     autoUpdater.reportStartFailure();
     if (backendProcess) {
-      waitForBackend(STARTUP_TIMEOUT * 10).then((ready) => {
-        if (ready) autoUpdater.clearStartFailure();
+      waitForBackend(STARTUP_TIMEOUT * 10, () => !quitStarted()).then((ready) => {
+        if (ready) {
+          autoUpdater.clearStartFailure();
+          enableBackendHealthMonitoring();
+        } else if (backendProcess && !quitStarted() && backendSupervisor.getState().status === "running") {
+          backendHealthMonitoringEnabled = true;
+          backendSupervisor.healthFailed(
+            new Error("The backend health endpoint did not respond during the startup grace period.")
+          );
+        }
       });
     }
   }
@@ -1324,6 +1449,7 @@ const quitGuard = installQuitGuard({
     // Mark any subsequent backend exit as intentional so we don't pop the
     // crash dialog during normal shutdown.
     isIntentionalKill = true;
+    backendHealthMonitor.stop();
     backendSupervisor.stop();
   },
   onError: (err) => {
@@ -1339,6 +1465,7 @@ const quitGuard = installQuitGuard({
 // The installer is already running: a restart now would hold its files open.
 electronAutoUpdater.on("before-quit-for-update", () => {
   updateQuitStarted = true;
+  backendHealthMonitor.stop();
   backendSupervisor.stop();
 });
 
@@ -1348,6 +1475,7 @@ installQuitCleanup({ app, cleanup });
 
 async function cleanup() {
   shutdownStarted = true;
+  backendHealthMonitor.stop();
   backendSupervisor.stop();
   const installStopped = engineInstall ? engineInstall.stop() : null;
   const updating = app.isPackaged && autoUpdater.installsOnQuit();
@@ -1430,7 +1558,7 @@ async function stopBackendForQuit() {
   if (backendStarting) {
     try {
       const started = await backendStarting;
-      if (started && !backendProcess && started.exitCode === null && started.signalCode === null) {
+      if (started && !backendProcess && !backendCleanupPending && started.exitCode === null && started.signalCode === null) {
         backendProcess = started;
       }
     } catch (err) {
@@ -1442,17 +1570,16 @@ async function stopBackendForQuit() {
   // (SIGTERM → wait 3 s → SIGKILL).
   // F5: previously we did this inline; extracted so main.cjs stays lean and
   // to prevent orphan leaks across runs (issue #782).
-  if (backendProcess) {
+  const processToStop = backendCleanupPending || backendProcess;
+  if (processToStop) {
     console.log("Stopping backend process...");
-    const proc = backendProcess;
+    const proc = processToStop;
     backendProcess = null;
-    isIntentionalKill = true;
 
     try {
-      // Pass the ChildProcess handle (not a bare pid) so port-manager
-      // can short-circuit via `proc.exitCode` and close the PID-reuse
-      // TOCTOU window.
-      await portManager.killBackend(proc);
+      // Pass the ChildProcess handle so the process-tree tracker can safely
+      // retry descendants if the launcher exits during termination.
+      await stopBackendTree(proc);
     } catch (err) {
       console.error("Error stopping backend:", err.message);
     }

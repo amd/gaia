@@ -8,7 +8,8 @@ import { isGuideWire, parseGuideDoc } from './guideDoc';
 import type { GuideDoc, GuideWire } from './guideDoc';
 import { formatGuideText, itemDisplay, servingsLabel, stepText, stepTitle } from './guideText';
 import type { GuideViewState } from './guideText';
-import { canShare, copyGuide, printGuide, shareGuide } from './guideActions';
+import { canShare, printGuide, shareGuide } from './guideActions';
+import { copyText } from '../../../utils/clipboard';
 import { StepText } from './StepText';
 import { GuidedView } from './GuidedView';
 import { useTimers } from './useTimers';
@@ -79,7 +80,7 @@ function Guide({ wire }: { wire: GuideWire }) {
         setNotice(t(key, { error: err instanceof Error ? err.message : String(err) }));
 
     const onCopy = () => {
-        copyGuide(formatGuideText(doc, state, t)).then(() => setNotice(copiedNotice), fail('cards.copyFailed'));
+        copyText(formatGuideText(doc, state, t)).then(() => setNotice(copiedNotice), fail('cards.copyFailed'));
     };
     const onShare = () => {
         shareGuide(doc.title, formatGuideText(doc, state, t)).catch(fail('cards.shareFailed'));

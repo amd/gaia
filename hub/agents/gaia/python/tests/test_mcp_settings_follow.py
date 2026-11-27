@@ -136,17 +136,124 @@ def test_an_unchanged_setup_keeps_the_agent(chat):
     assert not rebuilt and agent is first
 
 
-def test_a_server_not_active_for_gaia_offers_no_tools(home):
-    """Every way of building the flagship honours activation, as Settings shows it."""
-    from gaiapy.session_registry import build_session_agent, close_agent
+@pytest.fixture
+def toy_in_catalog(monkeypatch, tmp_path):
+    """Put the toy server in the connector catalog, as GitHub or Slack are."""
+    from gaia.connectors.registry import ConnectorRegistry
+    from gaia.connectors.spec import ConnectorSpec
 
-    home.set()  # enabled, never activated for GAIA
-    agent = build_session_agent(allowed_paths=[home.work])
+    catalog = ConnectorRegistry()
+    catalog.register(
+        ConnectorSpec(
+            id="toy",
+            display_name="Toy",
+            icon="",
+            category="dev-tools",
+            tier=1,
+            type="mcp_server",
+            description="The toy server, as a catalog connector",
+            mcp_command=sys.executable,
+            mcp_args=(str(TOY), "--log", str(tmp_path / "toy.log")),
+        )
+    )
+    monkeypatch.setattr("gaia.connectors.registry.REGISTRY", catalog)
+
+
+def _build_as(way, home):
+    """Build the flagship the way each front end does."""
+    from gaiapy.agent import GaiaAgent, GaiaAgentConfig
+    from gaiapy.session_registry import build_session_agent
+
+    if way == "agent-ui":
+        return build_session_agent(allowed_paths=[home.work])
+    if way == "tui":
+        return GaiaAgent(config=GaiaAgentConfig(silent_mode=True, streaming=True))
+    assert way == "gaia -p"
+    return GaiaAgent(
+        GaiaAgentConfig(silent_mode=True, streaming=True, allowed_paths=[home.work])
+    )
+
+
+WAYS = ["agent-ui", "tui", "gaia -p"]
+
+
+@pytest.mark.parametrize("way", WAYS)
+def test_a_catalog_server_not_active_for_gaia_offers_no_tools(
+    home, toy_in_catalog, way
+):
+    """Every way of building the flagship honours activation, as Settings shows it."""
+    from gaiapy.session_registry import close_agent
+
+    home.set()  # connected, never activated for GAIA
+    agent = _build_as(way, home)
     try:
         assert agent._namespaced_agent_id() == FLAGSHIP
         assert _mcp_tools(agent) == []
     finally:
         close_agent(agent)
+
+
+@pytest.mark.parametrize("way", WAYS)
+def test_a_server_the_user_added_reaches_gaia_without_activation(home, way):
+    """A server in mcp_servers.json from before the upgrade keeps working (#8668)."""
+    from gaiapy.session_registry import close_agent
+
+    home.set()  # the user's own entry; the ledger has never heard of it
+    agent = _build_as(way, home)
+    try:
+        assert agent._namespaced_agent_id() == FLAGSHIP
+        assert _mcp_tools(agent) == [TOOL]
+    finally:
+        close_agent(agent)
+
+
+@pytest.mark.parametrize("way", WAYS)
+def test_a_user_added_server_turned_off_for_gaia_offers_no_tools(home, way):
+    from gaiapy.session_registry import close_agent
+
+    from gaia.connectors.api import activate, deactivate
+
+    home.set()
+    deactivate("toy", FLAGSHIP)
+    agent = _build_as(way, home)
+    try:
+        assert _mcp_tools(agent) == []
+    finally:
+        close_agent(agent)
+
+    activate("toy", FLAGSHIP)
+    agent = _build_as(way, home)
+    try:
+        assert _mcp_tools(agent) == [TOOL]
+    finally:
+        close_agent(agent)
+
+
+def test_turning_a_user_added_server_off_reaches_an_open_chat(home):
+    """The off switch in Settings takes effect on the chat's next message."""
+    from gaiapy import session_registry as sr
+
+    from gaia.connectors.api import deactivate
+
+    home.set()
+    registry = sr._SessionRegistry()
+    kwargs = {"allowed_paths": [home.work]}
+
+    def turn():
+        session, took = registry.checkout("chat-1", **kwargs)
+        assert took
+        rebuilt = session.follow_settings(**kwargs)
+        session.run_lock.release()
+        return session.agent, rebuilt
+
+    try:
+        first, _ = turn()
+        assert _mcp_tools(first) == [TOOL]
+        deactivate("toy", FLAGSHIP)
+        agent, rebuilt = turn()
+        assert rebuilt and _mcp_tools(agent) == []
+    finally:
+        registry.clear()
 
 
 def test_a_new_agent_does_not_inherit_another_agents_mcp_tools(home):

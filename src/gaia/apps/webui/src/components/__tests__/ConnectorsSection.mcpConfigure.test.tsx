@@ -438,4 +438,17 @@ describe('MCP connector configure panel', () => {
 
         expect(screen.queryByRole('button', { name: 'Check' })).not.toBeInTheDocument();
     });
+
+    it('gives a server the user added an on/off switch and Check, but no setup or Disconnect', async () => {
+        await openTile(
+            mcpRow({ id: 'toy', display_name: 'toy', configured: true, custom: true, activations: { 'installed:gaia': true } }),
+        );
+
+        expect(screen.getByText(/You added this server in/)).toBeInTheDocument();
+        expect(screen.getByRole('checkbox', { name: /this MCP server/ })).toBeChecked();
+        expect(screen.getByRole('button', { name: 'Check' })).toBeInTheDocument();
+        expect(screen.queryByRole('button', { name: 'Disconnect' })).not.toBeInTheDocument();
+        expect(screen.queryByRole('button', { name: 'Connect' })).not.toBeInTheDocument();
+        expect(screen.queryByRole('button', { name: /Personalize/ })).not.toBeInTheDocument();
+    });
 });

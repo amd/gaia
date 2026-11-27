@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: MIT
 
 import { readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { describe, expect, it } from "vitest";
@@ -10,6 +11,8 @@ import { HttpError } from "../src/http";
 import { compareSemver, parseManifest } from "../src/manifest";
 import { latestVersion } from "../src/catalog";
 import { sampleManifest } from "./fake-r2";
+
+const HERE = dirname(fileURLToPath(import.meta.url));
 
 describe("parseManifest", () => {
   it("parses a valid manifest and defaults optional fields", () => {
@@ -63,9 +66,7 @@ describe("parseManifest", () => {
     ["terminal-hub", "component", "go"],
     ["agent-ui", "app", "typescript"],
   ])("parses the shipped %s manifest", (id, pkgType, language) => {
-    const path = fileURLToPath(
-      new URL(`../../../hub/components/${id}/gaia-agent.yaml`, import.meta.url)
-    );
+    const path = join(HERE, "..", "..", "..", "hub", "components", id, "gaia-agent.yaml");
     const m = parseManifest(readFileSync(path, "utf8"));
     expect(m.id).toBe(id);
     expect(m.type).toBe(pkgType);

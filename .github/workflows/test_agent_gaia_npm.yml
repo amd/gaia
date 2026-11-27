@@ -62,7 +62,8 @@ jobs:
           cache-dependency-path: hub/agents/gaia/npm/package-lock.json
 
       - name: Install dependencies
-        run: npm ci
+        # Dependabot writes lockfiles with npm 11; Node 22's npm 10 rejects them.
+        run: npx -y npm@11 ci
 
       - name: Build (tsc)
         run: npm run build

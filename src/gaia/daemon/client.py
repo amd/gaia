@@ -583,11 +583,14 @@ def _daemon_env(drop: tuple = ()) -> dict:
     a stale ``GAIA_HOST_CUSTODY_URL`` would reach its sidecars without a secret.
     ``GAIA_CHILD_ENV_DENY`` is not applied: the daemon is GAIA itself.
     """
+    from gaia.skills.human_only import AGENT_CHILD_ENV
+
+    # A daemon an agent's shell auto-started serves the user, not that agent.
     env = {
         name: value
         for name, value in os.environ.items()
         if not is_internal_secret(name)
-        and name != CUSTODY_URL_ENV_VAR
+        and name not in (CUSTODY_URL_ENV_VAR, AGENT_CHILD_ENV)
         and name not in drop
     }
     # The daemon runs from its host dir, so a relative path must not follow it.

@@ -1278,22 +1278,23 @@ describe('Chat App Integration', () => {
 
     it('should have copy feedback with Check icon', () => {
       expect(msgContent).toContain("import { Copy, Check");
-      expect(msgContent).toContain('copied');
-      expect(msgContent).toContain('setCopied(true)');
+      expect(msgContent).toContain("import { useCopyFeedback } from '../hooks/useCopyFeedback'");
+      expect(msgContent).toContain("copyState === 'copied' ? <Check");
     });
 
     it('should reset copy state after timeout', () => {
-      expect(msgContent).toContain('setCopied(false)');
-      expect(msgContent).toContain('2000');
+      const hook = fs.readFileSync(path.join(CHAT_APP_PATH, 'src/hooks/useCopyFeedback.ts'), 'utf8');
+      expect(hook).toContain('COPIED_MS = 2000');
+      expect(hook).toContain("setTimeout(() => setState('idle'), ms)");
     });
 
     it('should show Copied text in copy button', () => {
-      expectTranslated(msgContent, "{copied ? t('code.copied') : t('code.copy')}", 'code.copied', 'Copied');
+      expectTranslated(msgContent, "copyState === 'copied' ? t('code.copied')", 'code.copied', 'Copied');
       expect(EN_MESSAGES['code.copy']).toBe('Copy');
     });
 
     it('should have copy button aria-labels', () => {
-      expectTranslated(msgContent, "aria-label={copied ? t('msg.copiedAria') : t('code.copyAria')}", 'msg.copiedAria', 'Copied to clipboard');
+      expectTranslated(msgContent, "aria-label={copyState === 'copied' ? t('msg.copiedAria')", 'msg.copiedAria', 'Copied to clipboard');
       expect(EN_MESSAGES['code.copyAria']).toBe('Copy code');
     });
   });

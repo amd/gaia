@@ -90,6 +90,15 @@ def handle(args):
         print("Run 'gaia knowledge --help' for more information")
         return
 
+    from gaia.llm.local_only import CloudDisabledError, assert_web_permitted
+
+    try:
+        if action in {"search", "extract"}:
+            assert_web_permitted("Web research")
+    except CloudDisabledError as e:
+        print(f"❌ {e}")
+        sys.exit(1)
+
     import requests
 
     from gaia.web.client import SearchStatusError, SearchUnavailableError
@@ -125,6 +134,9 @@ def handle(args):
             _print_usage(client)
         elif action == "usage":
             _print_usage(client, show_session=False)
+    except CloudDisabledError as e:
+        print(f"❌ {e}")
+        sys.exit(1)
     except TavilyBudgetExceeded as e:
         print(f"🛑 {e}")
         sys.exit(1)

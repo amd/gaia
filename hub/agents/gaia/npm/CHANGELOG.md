@@ -27,6 +27,10 @@ Requires the `gaia` Python CLI 0.27.0+ on `PATH`.
   which `gaia -p` reads. On `gaiacpp` the time limit stops the turn without
   warning the model first, and an unmatched `disallowed_tools` glob is an
   in-stream `error` of `status` 400.
+- **A turn that recovered from a cut-off reply is no longer reported as failed.**
+  A reply that hit the output-token limit was asked to continue and the turn
+  went on to answer, but the turn still ended with `status: failed`, and
+  `gaia -p` exited 1. Only a turn that gives up on cut-off replies fails now.
 - **Docs: Ask and Accept edits refuse deletes, they don't ask.** A delete the
   shell would otherwise ask about is refused with no approval card; only Full
   access runs it. The SPEC and guides now say so.
@@ -64,10 +68,32 @@ Requires the `gaia` Python CLI 0.27.0+ on `PATH`.
   even when it holds a line break. Prose such as an event's description keeps them.
 - **Small models are held to what they actually did.** On a PC with 16 GB of
   RAM or less the default is now Qwen3.5 2B (Qwen3.5 4B on an 8 GB GPU), and
-  their answers are checked: a memory save that never happened is named, a
-  garbled answer is retried once, and a skill folder the user asked to add is
-  captured when the model skips it (the approval prompt still applies). Both
+  their answers are checked: a plain one-sentence request to remember one fact
+  now makes the save when the model skips it, other missing memory saves are
+  named, a garbled answer is retried once, and a skill folder the user asked to
+  add is captured when the model skips it (the approval prompt still applies).
+  The forced save is limited to a short ASCII sentence with no credential,
+  negation or second clause; every other request is left to the model. Both
   models are on the `compact` feature tier, like Gemma 4 E4B.
+- **MCP servers added by hand stay on for GAIA after an upgrade.** A server in
+  `mcp_servers.json` used to disappear from GAIA's tools after upgrading to
+  0.27.0, with no way to turn it back on. A user-added server is now on for
+  `installed:gaia` until you switch it off in Settings > Connectors or with
+  `gaia connectors activations deactivate`. Catalog connectors are still off
+  until activated, and other agents still need an explicit activation.
+- **A file an answer only cites is not a claimed save.** A correct `gaia -p`
+  run could exit 1 as incomplete when its answer said where its content came
+  from, such as "with the errors in app.log", even if the same sentence named a
+  file the turn really wrote. A cited source is now dropped from the save claim
+  only when that sentence also names a file written this turn. Edit phrasing
+  such as "I wrote the fix in config.py" is still flagged when the file was
+  not written.
+- **Made-up data you ask for is not flagged as unsourced.** A request for a
+  "fake customer list", "dummy data", "make up 10 orders", "made-up numbers"
+  or "synthetic test records" no longer ends with "figures I found no source
+  for this turn". The rule stays narrow: ambiguous words such as "sample" and
+  "test" on their own, negations, real-world details and figures from a file
+  read or lookup still get the note.
 - **The Python package is now `gaiapy`.** `import gaia_agent` and
   `gaia_agent.<module>` still work and return the same modules, so code that
   imports the old name keeps running. A `gaiapy` command now starts the harness

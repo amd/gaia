@@ -31,7 +31,7 @@ evals, with history, so we see trends rather than snapshots.
 | Page | Answers |
 |------|---------|
 | Users | Installs per release by OS and product (update-feed polling separated from installs), installs over time, PyPI and npm |
-| Growth | Monthly growth rate of stars and forks, active and new contributors, retention, outside share of merged PRs and bus factor, each scored against a target |
+| Growth | Monthly growth rate of stars and forks, active and new contributors, retention, outside share of merged PRs, bus factor, time to first response on outside issues and PRs, outside concentration, and a contributor funnel, each scored against a target |
 | Developers | Issue and PR flow, backlog, time to merge and close (median and P90), pending contributors, commits, lines of code, contributors, stars and forks |
 | CI | Run outcomes, unit-test counts, where CI time goes, per-workflow health and runtime |
 | Evals | Pass rate per run and tier tied to the commit or release measured, per-category and per-scenario results, regressions, SWE-bench |
@@ -42,9 +42,8 @@ listed at the top of the page.
 
 ## Next
 
-1. **Time to first human reply** on issues and pull requests, the one benchmarked
-   growth metric not collected yet: it needs each item's first comment or review by
-   someone other than the author or a bot, read nightly for new items.
+1. **Review verdicts in first-reply time:** an approval or change request with no
+   inline comment does not count as a reply yet; it needs each pull request's reviews.
 2. **Release quality:** issues filed within 7 days of a release, regressions per
    release, RC-to-final lead time.
 3. **Alerts and a weekly digest:** notify on a sharp drop in CI pass rate, eval score or

@@ -167,9 +167,10 @@ func checkClaudeSupported(agent catalog.Agent, useClaude bool) error {
 	if !useClaude || !agent.Native {
 		return nil
 	}
-	return fmt.Errorf("--use-claude cannot be used here. %s Or run the Python agent, which has a "+
+	return fmt.Errorf("--use-claude cannot be used here. %s Or run %s (the Python agent), which has a "+
 		"Claude provider, by setting %s=%s. See %s",
-		client.NativeClaudeUnavailable, catalog.AgentEnv, catalog.PythonAgentBinary, catalog.AgentChoiceDocsURL)
+		client.NativeClaudeUnavailable, catalog.HarnessLabel(catalog.PythonAgentChoice),
+		catalog.AgentEnv, catalog.PythonAgentBinary, catalog.AgentChoiceDocsURL)
 }
 
 // RunChat launches the chat TUI directly with a subprocess agent (standalone mode).
@@ -663,8 +664,9 @@ func resumeTarget(agent catalog.Agent, resume Resume) (*resumedSession, error) {
 			"this install runs %q over the %s transport, which keeps no sessions to reopen", agent.ID, agent.Transport)
 	}
 	if agent.Native {
-		return nil, fmt.Errorf("--resume needs the Python agent: gaiacpp, the native agent this launch would run, " +
-			"doesn't keep sessions yet. Start with GAIA_TUI_AGENT=gaia-agent (or --agent-program gaia-agent) to reopen one")
+		return nil, fmt.Errorf("--resume needs %s (the Python agent): gaiacpp, the %s agent this launch would run, "+
+			"doesn't keep sessions yet. Start with GAIA_TUI_AGENT=gaia-agent (or --agent-program gaia-agent) to reopen one",
+			catalog.HarnessLabel(catalog.PythonAgentChoice), catalog.HarnessLabel(catalog.NativeAgentBinary))
 	}
 	if pinned := os.Getenv(client.HistoryFileEnv); pinned != "" {
 		return nil, fmt.Errorf("--resume cannot be used while %s=%s pins every launch to that "+

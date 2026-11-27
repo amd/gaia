@@ -2091,3 +2091,132 @@ def test_backups_carried_from_earlier_turns_match_by_name(tmp_path):
     soft = []
     assert later.gaps(answer, _claims_file_write, soft=soft) == []
     assert soft == []
+
+
+_TRIAGE = "/log-triage What went wrong in app.log? Save the findings to report.json"
+
+
+def _ran(tmp_path, query, *written):
+    for name in ("config.py", "utils.py", "app.log", "data.csv"):
+        (tmp_path / name).write_text("x = 1\n")
+    ledger = CompletionEvidence(query, str(tmp_path))
+    for name in written:
+        write(ledger, name)
+        read(ledger, name)
+    return ledger
+
+
+@pytest.mark.parametrize(
+    "query, written, answer",
+    [
+        (_TRIAGE, "report.json", "I saved report.json with the 3 errors in app.log."),
+        (
+            _TRIAGE,
+            "report.json",
+            "I saved the findings to report.json, covering every error in app.log.",
+        ),
+        (_TRIAGE, "report.json", "I saved the findings from app.log to report.json."),
+        (
+            _TRIAGE,
+            "report.json",
+            "I saved report.json listing the errors found in app.log.",
+        ),
+        (
+            "Check app.log for errors that need fixing and save them to report.json",
+            "report.json",
+            "I saved report.json with the errors in app.log.",
+        ),
+        (
+            "Summarize the changes in app.log into report.md",
+            "report.md",
+            "I saved the summary to report.md covering the changes in app.log.",
+        ),
+        (
+            "Use data.csv to build chart.png",
+            "chart.png",
+            "I saved chart.png with the trends in data.csv.",
+        ),
+        (
+            "Explain the fix needed in config.py and save it to notes.md",
+            "notes.md",
+            "I saved the explanation to notes.md about the bug in config.py.",
+        ),
+        (
+            "Read the fix notes in notes.md and update config.py",
+            "config.py",
+            "I saved the changes to config.py following the fix notes in notes.md.",
+        ),
+    ],
+)
+def test_a_file_the_answer_cites_beside_a_real_save_is_not_a_claim(
+    tmp_path, query, written, answer
+):
+    assert gaps(_ran(tmp_path, query, written), answer) == []
+
+
+_FIX_AND_NOTE = [
+    "Fix the bug in config.py and save a summary to notes.md",
+    "Make config.py stop crashing and save a summary to notes.md",
+    "config.py: rename foo to bar, and save a summary to notes.md",
+    "Add error handling to config.py and save a summary to notes.md",
+    "Clean up config.py and save a summary to notes.md",
+    "Debug config.py and save a summary to notes.md",
+    "Please fix the crash. The file is config.py. Save a summary to notes.md",
+    "Open config.py, fix the typo, and save a summary to notes.md",
+    "Fix the bug from app.log in config.py and save a summary to notes.md",
+    "Look at config.py and fix whatever is wrong, then save a summary to notes.md",
+]
+
+
+@pytest.mark.parametrize("query", _FIX_AND_NOTE)
+@pytest.mark.parametrize(
+    "answer",
+    [
+        "I wrote the fix in config.py and saved the summary to notes.md.",
+        "I saved the summary to notes.md and the changes in config.py.",
+        "I saved the change at config.py and the summary to notes.md.",
+        "I saved the summary to notes.md with the fix in config.py.",
+        "I wrote the fix in config.py.",
+    ],
+)
+def test_an_unwritten_edit_beside_a_real_save_is_still_a_claim(tmp_path, query, answer):
+    found = " ".join(gaps(_ran(tmp_path, query, "notes.md"), answer))
+    assert "config.py" in found
+    assert "app.log" not in found
+
+
+@pytest.mark.parametrize(
+    "answer",
+    [
+        "I wrote the fix in app.log.",
+        "I saved report.md and wrote the fix in app.log.",
+        "I saved report.md with the errors and wrote the fix in app.log.",
+        "I saved the findings to report.md and the fix to app.log.",
+        "I saved report.md with the errors in app.log and the fix in app.log.",
+        "I saved report.md with the corrected lines in app.log.",
+        "I saved report.md with the new settings in app.log.",
+    ],
+)
+def test_a_claimed_save_to_a_file_the_request_reads_is_still_a_claim(tmp_path, answer):
+    ledger = _ran(tmp_path, "Summarize app.log into report.md", "report.md")
+    assert "app.log" in " ".join(gaps(ledger, answer))
+
+
+def test_a_cited_file_stays_claimed_when_nothing_else_was_saved(tmp_path):
+    ledger = _ran(tmp_path, _TRIAGE)
+    found = " ".join(gaps(ledger, "I saved report.json with the 3 errors in app.log."))
+    assert "report.json" in found
+    assert "app.log" in found
+
+
+def test_a_cited_file_stays_claimed_beside_an_unwritten_save(tmp_path):
+    query = "Read the fix notes in notes.md and update config.py"
+    answer = "I saved the changes to config.py following the fix notes in notes.md."
+    found = " ".join(gaps(_ran(tmp_path, query), answer))
+    assert "config.py" in found
+    assert "notes.md" in found
+
+
+def test_a_save_into_a_file_the_request_never_named_is_still_a_claim(tmp_path):
+    ledger = _ran(tmp_path, _TRIAGE, "report.json")
+    assert "notes.md" in " ".join(gaps(ledger, "I saved a copy in notes.md."))

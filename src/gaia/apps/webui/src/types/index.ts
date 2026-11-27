@@ -112,10 +112,9 @@ export interface AgentInfo {
      */
     consumes_mcp_servers?: boolean;
     /**
-     * Opaque grant-ledger key. Built-ins are `builtin:<id>`, custom agents
-     * are `custom:<sha256-prefix>:<id>`, installed agents are
-     * `installed:<id>`, and native agents are `native:<id>`. Pass this to
-     * the grants endpoint.
+     * Opaque grant-ledger key. Installed agents are `installed:<id>`,
+     * native agents are `native:<id>`, and custom agents are
+     * `custom:<sha256-prefix>:<id>`. Pass this to the grants endpoint.
      */
     namespaced_agent_id?: string;
     category?: string;
@@ -166,6 +165,11 @@ export interface ConnectorRow {
     docs_url: string | null;
     configured: boolean;
     /**
+     * An MCP server the user added to ``mcp_servers.json`` themselves. It can
+     * be switched on or off, but has no setup form and is removed in that file.
+     */
+    custom?: boolean;
+    /**
      * ``false`` when the connector cannot be instantiated as configured —
      * for example, an ``oauth_pkce`` provider whose required environment
      * variables (``GAIA_GOOGLE_CLIENT_ID`` etc.) aren't set. The UI uses
@@ -196,10 +200,11 @@ export interface ConnectorRow {
     scopes: string[];
     /**
      * Per-agent MCP-tool-visibility activation snapshot (issue #1005).
-     * Keys are namespaced agent ids (``builtin:chat``,
-     * ``custom:<hash>:<id>``, …), values are ``true`` when the agent is
-     * explicitly activated. Absence means inactive — activations are
-     * opt-in. Populated only for ``type === 'mcp_server'`` connectors;
+     * Keys are namespaced agent ids (``installed:gaia``,
+     * ``custom:<hash>:<id>``, …), values are ``true`` when the agent can
+     * see the server's tools and ``false`` once turned off. Absence means
+     * inactive, except that a ``custom`` server reports ``installed:gaia``
+     * as ``true`` until turned off. Populated only for ``type === 'mcp_server'`` connectors;
      * OAuth connectors always return ``{}`` because activation writes
      * are rejected for them at the API layer.
      */
@@ -492,6 +497,9 @@ export interface Message {
     stopError?: string;
     /** Client-side: this reply stands in for a turn that failed before answering. */
     failed?: boolean;
+    /** Client-side: GAIA never started this turn in time. Shown as an error, but the
+     *  run may still finish server-side, so it offers no Try again. */
+    stalled?: boolean;
     /** Client-side: the raw error, to recognize the server's saved copy of this failure. */
     failureText?: string;
     /** Client-side: the cause a failed turn named (`done.failure`), for its fix. */
@@ -779,12 +787,25 @@ export interface BrowseResponse {
     folder_refusal?: string | null;
 }
 
+/** Why folder indexing left a file out. Keep in sync with the backend model. */
+export type SkippedFileReason = 'unsupported_type' | 'credential_file';
+
+/** One skipped file from folder indexing and the reason it was left out. */
+export interface SkippedFile {
+    file: string;
+    reason: SkippedFileReason;
+}
+
 /** Response from the /documents/index-folder endpoint. */
 export interface IndexFolderResponse {
     indexed: number;
     failed: number;
     /** Files in the folder of a type GAIA doesn't index. */
     skipped?: number;
+    /** Named skipped files. ``reason`` is ``unsupported_type`` or ``credential_file``. */
+    skipped_files?: SkippedFile[];
+    /** Whether the server stopped recording skipped filenames at its cap. */
+    skipped_files_truncated?: boolean;
     /** Images in the folder; GAIA reads an image only when it is added on its own. */
     skipped_images?: number;
     documents: Document[];

@@ -587,6 +587,14 @@ A session on the `hybrid` model id gets `final.route` (contract ≥ 2.29): the
 turn's routing decision, with `model` naming the concrete model it ran on. Bill
 and label the turn by `route.model`, not by `hybrid`.
 
+`final` and `error` carry `session_created: true` (contract ≥ 2.31) when the
+sidecar built a fresh agent for this turn instead of finding a live one: the
+session's first turn, a session evicted from the retention table (§5.2), or a
+sidecar restart. Whatever the client kept for the old agent, such as files
+approved at a prompt, belonged to an agent that no longer exists. Drop only the
+client state from before this turn started, never what this turn's own prompts
+just granted. The field is absent otherwise, and older binaries never send it.
+
 `final` carries `context` (contract ≥ 2.21): what the next model call holds
 if the caller pushes this turn back as history — the same payload the Agent
 UI's Context panel shows. `window` is the model's context window in tokens,
@@ -729,7 +737,8 @@ never timed out mid-flight. A `/query` that lands on an
 evicted id gets a fresh agent (the conversation is not blocked) but the
 response stream's first event is a `{"type":"status","status":"warning",...}`
 telling the caller that per-turn state — most visibly any loaded skill — did
-not survive and should be reloaded.
+not survive and should be reloaded. That turn's `final` or `error` also carries
+`session_created: true` (§5.1).
 
 A second `/query` reusing a `run_id` that is still in flight gets `409` —
 `run_id` is caller-minted, so mint a fresh UUID per request; reusing one would

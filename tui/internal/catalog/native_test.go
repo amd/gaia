@@ -279,8 +279,8 @@ func TestAskingForThePythonAgentOnADaemonInstallIsNeverSilent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("the installed Python agent was refused: %v", err)
 	}
-	if notice != DaemonPythonNotice || !strings.Contains(notice, "background service") ||
-		!strings.Contains(notice, "full path") {
+	if notice != DaemonPythonNotice || !strings.Contains(notice, "Full-featured") ||
+		!strings.Contains(notice, "background service") || !strings.Contains(notice, "full path") {
 		t.Errorf("the user was not told how their request was honoured: %q", notice)
 	}
 	got := named.Get(FlagshipID)

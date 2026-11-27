@@ -2,9 +2,10 @@
 // SPDX-License-Identifier: MIT
 
 /**
- * Restarts GAIA's backend when it exits on its own: after a growing wait,
+ * Restarts GAIA's backend when it exits or stops answering: after a growing wait,
  * at most `maxRestarts` times in `windowMs`, then it stops and waits for the
- * user's Restart GAIA (restartNow). No Electron imports, so it unit-tests.
+ * user's Restart GAIA (restartNow), which also restarts a backend still
+ * reported running but hung. No Electron imports, so it unit-tests.
  *
  * State, as sent to the renderer:
  *   status        "running" | "restarting" | "stopped"
@@ -75,7 +76,7 @@ function createBackendSupervisor({
         ({ port }) => {
           starting = false;
           if (stopped) return;
-          emit({ status: "running", port, since: null, attempt: 0, lastError: null });
+          emit({ status: "running", port, since: null, attempt: 0, lastExit: null, lastError: null });
         },
         (err) => {
           starting = false;
@@ -112,7 +113,7 @@ function createBackendSupervisor({
   return {
     /** The backend is up on `port` (the first start, outside the supervisor). */
     running(port) {
-      emit({ status: "running", port, since: null, attempt: 0, nextAttemptAt: null, lastError: null });
+      emit({ status: "running", port, since: null, attempt: 0, nextAttemptAt: null, lastExit: null, lastError: null });
     },
 
     /** No backend could be started at all (its program is missing): wait for Restart GAIA. */
@@ -134,7 +135,17 @@ function createBackendSupervisor({
       return schedule({ lastExit: { code, signal } });
     },
 
-    /** The user's Restart GAIA: start now, with a fresh budget. */
+    /** A running backend stopped answering, though its child process may remain alive. */
+    healthFailed(error) {
+      if (stopped) return "stopped";
+      if (starting || timer || state.status !== "running") return state.status;
+      const lastError = error && error.message ? error.message : String(error);
+      return schedule({ lastError });
+    },
+
+    /** The user's Restart GAIA: start now, with a fresh budget. Also restarts
+     * a backend still reported "running": that is a hung backend the startup
+     * screen offers Restart for, and start() stops the old process first. */
     restartNow() {
       if (stopped || starting) return;
       if (timer) {
@@ -142,8 +153,10 @@ function createBackendSupervisor({
         timer = null;
       }
       history = [];
-      if (state.status === "running") return;
-      emit({ status: "restarting", attempt: 1 });
+      // A restart from running starts a new outage: stamp it so the banner's
+      // timer counts from here, as the crash path does. From stopped, the
+      // outage began when the backend gave up, so keep that time.
+      emit({ status: "restarting", attempt: 1, ...(state.status === "running" ? { since: now() } : {}) });
       attemptStart();
     },
 

@@ -75,16 +75,12 @@ def register_ephemeral_spec(monkeypatch):
 @pytest.fixture(autouse=True)
 def _autouse_in_memory_keyring(in_memory_keyring):  # noqa: F811
     """
-    Force every connections test through the session-scoped in-memory keyring.
+    Keep every connections test on the suite-wide in-memory keyring.
 
-    Linux CI runners do not ship SecretService and the production-default
-    ``keyrings.alt`` fallback writes plaintext; ``gaia.connectors.store``
-    explicitly refuses that backend, so without this fixture every test would
-    raise on first ``save_connection`` or first ``load_connection``.
-
-    Depends on the session-scoped ``in_memory_keyring`` fixture from
-    ``tests/conftest.py``. Clears the backing dict between tests so state
-    from a previous test does not leak.
+    The root conftest installs this backend for the whole session (#8848). This
+    fixture re-installs it at the start of each test because some tests switch
+    to a deliberately weak backend to assert refusal, then clears the backing
+    dict so state from a previous test does not leak.
     """
     # Some tests temporarily install an alternate backend (e.g. PlaintextKeyring
     # to assert refusal). Re-install the in-memory backend at the start of

@@ -7,6 +7,7 @@ import (
 
 	"github.com/charmbracelet/lipgloss"
 
+	"github.com/amd/gaia/tui/internal/textutil"
 	"github.com/amd/gaia/tui/internal/ui/components"
 	"github.com/amd/gaia/tui/internal/ui/theme"
 	"github.com/charmbracelet/x/ansi"
@@ -163,7 +164,7 @@ func (m Model) header(w int) string {
 	}
 	gap := w - 2*indentW - lipgloss.Width(left) - lipgloss.Width(right)
 	if gap < 1 {
-		return components.Pad(titleStyle.Render(truncate(left, w-2*indentW)))
+		return components.Pad(titleStyle.Render(textutil.Truncate(left, w-2*indentW)))
 	}
 	return components.Pad(titleStyle.Render(left) + strings.Repeat(" ", gap) + summaryStyle.Render(right))
 }
@@ -332,8 +333,8 @@ func (m Model) checklistLines(labelW, lineW, w int) (checklist, remedy []string,
 			line = "done"
 		}
 		marker := st.Render(fmt.Sprintf("%-*s", markerW-1, markerText)) + " "
-		label := labelStyle.Render(fmt.Sprintf("%-*s", labelW, truncate(row.Label, labelW)))
-		checklist = append(checklist, components.Pad(cursor+marker+label+bodyStyle.Render(truncate(line, lineW))))
+		label := labelStyle.Render(fmt.Sprintf("%-*s", labelW, textutil.Truncate(row.Label, labelW)))
+		checklist = append(checklist, components.Pad(cursor+marker+label+bodyStyle.Render(textutil.Truncate(line, lineW))))
 
 		if !focused || provisioning || row.State == StateOK || row.State == StatePending {
 			continue
@@ -369,7 +370,7 @@ func (m Model) trailerLines(w int) []string {
 		}
 		return []string{
 			"",
-			components.Pad(noteStyle.Render(truncate(m.spinPrefix()+m.progressLine(), w-2*indentW))),
+			components.Pad(noteStyle.Render(textutil.Truncate(m.spinPrefix()+m.progressLine(), w-2*indentW))),
 			components.Pad(dimStyle.Render(leaving)),
 		}
 	case m.HeldForReview() && m.rep.Ready():
@@ -381,9 +382,9 @@ func (m Model) trailerLines(w int) []string {
 			msg = "Setup finished and the models load. Chat runs on " + m.rep.Chat + "."
 		}
 		return append([]string{""}, components.IndentAll(styleAll(noteStyle,
-			wrap(msg+" Press enter to start "+m.cfg.AgentName+".", w-2*indentW)), indentW)...)
+			textutil.Wrap(msg+" Press enter to start "+m.cfg.AgentName+".", w-2*indentW)), indentW)...)
 	case m.note != "":
-		return append([]string{""}, components.IndentAll(wrap(m.note, w-2*indentW), indentW)...)
+		return append([]string{""}, components.IndentAll(textutil.Wrap(m.note, w-2*indentW), indentW)...)
 	case m.phase == phaseDone:
 		// Only when a hand-off is actually scheduled — under ManualProceed
 		// nothing is starting, and saying so would be a lie.
@@ -391,7 +392,7 @@ func (m Model) trailerLines(w int) []string {
 		if m.rep.Chat != "" {
 			msg = "Starting " + m.cfg.AgentName + " — chat runs on " + m.rep.Chat + "…"
 		}
-		return []string{"", components.Pad(dimStyle.Render(truncate(msg, w-2*indentW)))}
+		return []string{"", components.Pad(dimStyle.Render(textutil.Truncate(msg, w-2*indentW)))}
 	}
 	return nil
 }
@@ -436,7 +437,7 @@ func styleAll(s lipgloss.Style, lines []string) []string {
 func (m Model) remedyLines(row Row, w int) []string {
 	out := []string{}
 	if row.Detail != "" {
-		for _, l := range wrap(row.Detail, w) {
+		for _, l := range textutil.Wrap(row.Detail, w) {
 			out = append(out, dimStyle.Render(l))
 		}
 	}
@@ -445,7 +446,7 @@ func (m Model) remedyLines(row Row, w int) []string {
 		return append(out, keyStyle.Render("enter")+" "+dimStyle.Render(m.startStepLabel()))
 	}
 	if row.Remedy.Action != "" {
-		for _, l := range wrap(row.Remedy.Action, w) {
+		for _, l := range textutil.Wrap(row.Remedy.Action, w) {
 			out = append(out, labelStyle.Render(l))
 		}
 	}
@@ -471,7 +472,7 @@ func (m Model) remedyLines(row Row, w int) []string {
 			out = append(out, dimStyle.Render(label))
 			first = strings.Repeat(" ", 8)
 		}
-		for i, l := range wrap(c.Line, w-8) {
+		for i, l := range textutil.Wrap(c.Line, w-8) {
 			prefix := first
 			if i > 0 {
 				prefix = strings.Repeat(" ", 8)
@@ -480,7 +481,7 @@ func (m Model) remedyLines(row Row, w int) []string {
 		}
 	}
 	if row.Remedy.Where != "" {
-		for i, l := range wrap(row.Remedy.Where, w-8) {
+		for i, l := range textutil.Wrap(row.Remedy.Where, w-8) {
 			prefix := dimStyle.Render("look:   ")
 			if i > 0 {
 				prefix = "        "
@@ -511,7 +512,7 @@ func (m Model) detailLines(w, budget int) []string {
 	if strings.TrimSpace(raw) == "" {
 		raw = "(this check recorded no raw answer)"
 	}
-	for _, l := range wrap(raw, w-2*indentW) {
+	for _, l := range textutil.Wrap(raw, w-2*indentW) {
 		out = append(out, components.Pad(dimStyle.Render(l)))
 		if len(out) >= budget {
 			break
@@ -521,21 +522,6 @@ func (m Model) detailLines(w, budget int) []string {
 }
 
 // --- text helpers ----------------------------------------------------------
-
-// truncate cuts a plain (ANSI-free) string to w display columns.
-func truncate(s string, w int) string {
-	if w <= 0 {
-		return ""
-	}
-	if lipgloss.Width(s) <= w {
-		return s
-	}
-	runes := []rune(s)
-	for len(runes) > 0 && lipgloss.Width(string(runes))+1 > w {
-		runes = runes[:len(runes)-1]
-	}
-	return string(runes) + "…"
-}
 
 // truncateStyled cuts a string that may already carry ANSI styling. It only
 // drops whole segments, so it never leaves a half-written escape sequence.
@@ -555,49 +541,6 @@ func truncateStyled(s string, w int) string {
 			break
 		}
 		out = candidate
-	}
-	return out
-}
-
-// wrap breaks text into lines of at most w columns, on word boundaries where it
-// can and mid-token when a single token (a URL, a long command) is longer.
-func wrap(s string, w int) []string {
-	if w < 8 {
-		w = 8
-	}
-	var out []string
-	for _, paragraph := range strings.Split(s, "\n") {
-		line := ""
-		for _, word := range strings.Fields(paragraph) {
-			for lipgloss.Width(word) > w {
-				if line != "" {
-					out = append(out, line)
-					line = ""
-				}
-				runes := []rune(word)
-				cut := len(runes)
-				for cut > 0 && lipgloss.Width(string(runes[:cut])) > w {
-					cut--
-				}
-				out = append(out, string(runes[:cut]))
-				word = string(runes[cut:])
-			}
-			switch {
-			case line == "":
-				line = word
-			case lipgloss.Width(line)+1+lipgloss.Width(word) <= w:
-				line += " " + word
-			default:
-				out = append(out, line)
-				line = word
-			}
-		}
-		if line != "" {
-			out = append(out, line)
-		}
-	}
-	if len(out) == 0 {
-		return []string{""}
 	}
 	return out
 }

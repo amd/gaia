@@ -25,6 +25,7 @@ import os
 import signal
 import tempfile
 import threading
+from enum import Enum
 from typing import Callable, Dict, Optional, Set
 
 from gaia.chat.sdk import AgentConfig, AgentSDK
@@ -78,6 +79,29 @@ def get_or_create_session(user_id: int) -> AgentSDK:
 
 
 UNAUTHORIZED_REPLY = "Sorry — you're not authorized to use this bot."
+
+#: Posted when the final reply edit could not be delivered. It deliberately
+#: repeats neither the answer nor the Bot API error: both can carry private
+#: file contents, tool output or credentials from an error.
+FINAL_DELIVERY_WARNING = (
+    "⚠️ GAIA could not finish its reply here. Please resend your message and try again."
+)
+
+#: Posted when Telegram itself rejected the final edit, for example because it
+#: was too long. Resending the same request cannot help, so the wording does not
+#: ask the user to do that. It repeats neither the answer nor the API error.
+FINAL_CONTENT_WARNING = (
+    "⚠️ GAIA could not send its reply here because Telegram rejected the message."
+)
+
+
+class EditOutcome(Enum):
+    """Result of one stream edit, including why a final edit was not delivered."""
+
+    DELIVERED = "delivered"
+    TEMPORARY_FAILURE = "temporary_failure"
+    CONTENT_REJECTED = "content_rejected"
+
 
 #: Text of the refusal. One string so the CLI and the exception agree.
 NO_ALLOWLIST_ERROR = (
@@ -218,6 +242,78 @@ class TelegramAdapter:
             "Hello! I'm Gaia. Send a message and I'll respond (streaming)."
         )
 
+    async def _edit_stream_reply(
+        self, reply, text: str, user, *, final: bool
+    ) -> EditOutcome:
+        """Edit the streaming reply and report whether Telegram accepted it.
+
+        Mid-stream failures stay tolerant: the next chunk retries with newer
+        text. Only a network failure gets one final retry. A Telegram refusal
+        is not retried, and "message is not modified" means the earlier edit
+        did land even when its response was lost.
+        """
+        try:
+            await reply.edit_text(text)
+            return EditOutcome.DELIVERED
+        except TelegramRetryAfter as e:
+            if not final:
+                log.debug("Transient telegram edit failure: %s", e)
+                return EditOutcome.TEMPORARY_FAILURE
+            log.warning(
+                "Final Telegram edit was rate limited for user %s: %s", user.id, e
+            )
+            return EditOutcome.TEMPORARY_FAILURE
+        except TelegramNetworkError as e:
+            if not final:
+                log.debug("Transient telegram edit failure: %s", e)
+                return EditOutcome.TEMPORARY_FAILURE
+            log.warning("Final Telegram edit failed for user %s: %s", user.id, e)
+        except TelegramAPIError as e:
+            if "not modified" in (e.description or "").lower():
+                return EditOutcome.DELIVERED
+            if not final:
+                log.exception("Unexpected error editing telegram message: %s", e)
+            else:
+                log.warning(
+                    "Final Telegram edit was rejected for user %s: %s", user.id, e
+                )
+            return EditOutcome.CONTENT_REJECTED
+        except Exception as e:
+            if not final:
+                log.exception("Unexpected error editing telegram message: %s", e)
+                return EditOutcome.TEMPORARY_FAILURE
+            log.warning(
+                "Unexpected final Telegram edit failure for user %s: %s",
+                user.id,
+                e,
+                exc_info=True,
+            )
+            return EditOutcome.TEMPORARY_FAILURE
+
+        try:
+            await reply.edit_text(text)
+            return EditOutcome.DELIVERED
+        except TelegramRetryAfter as e:
+            log.warning(
+                "Final Telegram edit retry was rate limited for user %s: %s",
+                user.id,
+                e,
+            )
+            return EditOutcome.TEMPORARY_FAILURE
+        except TelegramNetworkError as e:
+            log.warning("Final Telegram edit retry failed for user %s: %s", user.id, e)
+            return EditOutcome.TEMPORARY_FAILURE
+        except TelegramAPIError as e:
+            if "not modified" in (e.description or "").lower():
+                return EditOutcome.DELIVERED
+            log.warning(
+                "Final Telegram edit retry was rejected for user %s: %s", user.id, e
+            )
+            return EditOutcome.CONTENT_REJECTED
+        except Exception as e:
+            log.warning("Final Telegram edit retry failed for user %s: %s", user.id, e)
+            return EditOutcome.TEMPORARY_FAILURE
+
     @require_allowed
     async def _handle_message(self, update, _context):
         user = update.effective_user
@@ -329,6 +425,7 @@ class TelegramAdapter:
         # so a turn that never finishes would hold every other chat.
         accumulated = ""
         last_edited = None
+        content_rejected_text = None
         while True:
             try:
                 text_chunk, done = await asyncio.wait_for(
@@ -367,16 +464,43 @@ class TelegramAdapter:
                 text_chunk = f"{accumulated}\n\n{note}" if accumulated else note
                 done = True
             accumulated = text_chunk
-            # Edit the reply with the latest accumulated text (Telegram rate limits apply)
-            try:
-                if accumulated != last_edited:
-                    await reply.edit_text(accumulated)
+            delivered = True
+            outcome = EditOutcome.DELIVERED
+            if accumulated != last_edited:
+                if done and accumulated == content_rejected_text:
+                    log.warning(
+                        "Final Telegram edit for user %s was already rejected", user.id
+                    )
+                    outcome = EditOutcome.CONTENT_REJECTED
+                else:
+                    outcome = await self._edit_stream_reply(
+                        reply, accumulated, user, final=done
+                    )
+                if outcome is EditOutcome.DELIVERED:
+                    delivered = True
                     last_edited = accumulated
-            except (TelegramRetryAfter, TelegramNetworkError) as e:
-                log.debug("Transient telegram edit failure: %s", e)
-            except Exception as e:
-                log.exception("Unexpected error editing telegram message: %s", e)
+                    content_rejected_text = None
+                elif outcome is EditOutcome.CONTENT_REJECTED:
+                    delivered = False
+                    content_rejected_text = accumulated
+                else:
+                    delivered = False
             if done:
+                if not delivered:
+                    warning = (
+                        FINAL_CONTENT_WARNING
+                        if outcome is EditOutcome.CONTENT_REJECTED
+                        else FINAL_DELIVERY_WARNING
+                    )
+                    try:
+                        await update.message.reply_text(warning)
+                    except Exception as e:
+                        log.warning(
+                            "Could not post the final Telegram warning for user %s: %s",
+                            user.id,
+                            e,
+                        )
+                        raise
                 break
 
     async def _dispatch(self, raw: dict) -> None:

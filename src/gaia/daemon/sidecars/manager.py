@@ -69,6 +69,7 @@ from gaia.utils.terminal import (
     background_popen_kwargs,
     windows_hidden_popen_kwargs,
 )
+from gaia.utils.win_acl import AclMessages, lock_down_to_current_user
 
 logger = get_logger(__name__)
 
@@ -125,87 +126,43 @@ def _major(version: str) -> int:
         ) from e
 
 
+_SECRET_ACL_MESSAGES = AclMessages(
+    missing_pywin32=(
+        "cannot lock down {path} to the current user: pywin32 is not "
+        "installed. There is no fallback — a launch secret without an "
+        "owner-only ACL is readable by other local accounts on NTFS. "
+        "Run `pip install pywin32` (it ships as a core amd-gaia "
+        "dependency on Windows, so a plain `pip install --upgrade "
+        "amd-gaia` also repairs this). See issue #2250."
+    ),
+    null_dacl=(
+        "{path} has no DACL after lockdown (a null DACL grants "
+        "everyone access on Windows) — refusing to spawn with an "
+        "unprotected secret."
+    ),
+    foreign_sid=(
+        "{path} DACL still grants access to a SID other than the "
+        "current user after lockdown — refusing to spawn with a "
+        "secret other local users could read."
+    ),
+    api_failure=(
+        "could not lock down {path} to the current user via a Windows "
+        "DACL: {error}. There is no fallback — fix the ACL/permissions on "
+        "the temp directory and retry."
+    ),
+)
+
+
 def _lock_down_windows_acl(path: Path) -> None:
     """Restrict *path*'s DACL to the current user only — the NTFS analog of
     ``chmod 0600`` (#2250: the POSIX mode bits below are a no-op on Windows).
 
-    Builds a fresh, non-inherited DACL with a single ACE granting the current
-    user full control, then re-reads it to confirm no other SID has access —
-    mirroring the ``mode != 0o600`` guard on POSIX. Any failure (missing
-    pywin32, a SetNamedSecurityInfo error, a foreign SID surviving the
-    lockdown) raises loudly; there is no fallback that leaves the secret
-    readable by other local users.
+    Raises :class:`SidecarSpawnError` on any failure; there is no fallback that
+    leaves the secret readable by other local users.
     """
-    try:
-        import ntsecuritycon
-        import win32api
-        import win32security
-    except ImportError as e:
-        raise SidecarSpawnError(
-            f"cannot lock down {path} to the current user: pywin32 is not "
-            "installed. There is no fallback — a launch secret without an "
-            "owner-only ACL is readable by other local accounts on NTFS. "
-            "Run `pip install pywin32` (it ships as a core amd-gaia "
-            "dependency on Windows, so a plain `pip install --upgrade "
-            "amd-gaia` also repairs this). See issue #2250."
-        ) from e
-
-    try:
-        # Read the SID from the process token, not by name: LookupAccountName
-        # fails with 1332 for the service/machine accounts a daemon runs as.
-        token = win32security.OpenProcessToken(
-            win32api.GetCurrentProcess(), win32security.TOKEN_QUERY
-        )
-        user_sid, _attributes = win32security.GetTokenInformation(
-            token, win32security.TokenUser
-        )
-
-        dacl = win32security.ACL()
-        dacl.AddAccessAllowedAce(
-            win32security.ACL_REVISION, ntsecuritycon.FILE_ALL_ACCESS, user_sid
-        )
-        # PROTECTED_DACL strips inherited ACEs — without it the parent temp
-        # dir's (looser) grants would survive alongside the new ACE.
-        win32security.SetNamedSecurityInfo(
-            str(path),
-            win32security.SE_FILE_OBJECT,
-            win32security.DACL_SECURITY_INFORMATION
-            | win32security.PROTECTED_DACL_SECURITY_INFORMATION,
-            None,
-            None,
-            dacl,
-            None,
-        )
-
-        sd = win32security.GetNamedSecurityInfo(
-            str(path),
-            win32security.SE_FILE_OBJECT,
-            win32security.DACL_SECURITY_INFORMATION,
-        )
-        result_dacl = sd.GetSecurityDescriptorDacl()
-        if result_dacl is None:
-            raise SidecarSpawnError(
-                f"{path} has no DACL after lockdown (a null DACL grants "
-                "everyone access on Windows) — refusing to spawn with an "
-                "unprotected secret."
-            )
-        for i in range(result_dacl.GetAceCount()):
-            _ace_type_flags, _mask, ace_sid = result_dacl.GetAce(i)
-            if ace_sid != user_sid:
-                raise SidecarSpawnError(
-                    f"{path} DACL still grants access to a SID other than the "
-                    "current user after lockdown — refusing to spawn with a "
-                    "secret other local users could read."
-                )
-    except SidecarSpawnError:
-        raise
-    except Exception as e:
-        # pywin32 raises pywintypes.error (not OSError) on API failures.
-        raise SidecarSpawnError(
-            f"could not lock down {path} to the current user via a Windows "
-            f"DACL: {e}. There is no fallback — fix the ACL/permissions on "
-            "the temp directory and retry."
-        ) from e
+    lock_down_to_current_user(
+        path, error_cls=SidecarSpawnError, messages=_SECRET_ACL_MESSAGES
+    )
 
 
 class AgentSidecarManager:

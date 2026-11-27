@@ -184,3 +184,17 @@ def test_smoke_talk_check_runs_against_this_checkout():
         check=False,
     )
     assert result.returncode == 0, result.stderr
+
+
+def test_core_and_agent_freezes_share_one_licence_exclusion_list():
+    """A GPL module added to the agent's list must stay out of the core too."""
+    agent = importlib.util.spec_from_file_location(
+        "core_extras_agent_freeze",
+        REPO / "hub" / "agents" / "gaia" / "python" / "packaging" / "freeze.py",
+    )
+    agent_freeze = importlib.util.module_from_spec(agent)
+    agent.loader.exec_module(agent_freeze)
+
+    assert freeze.GPL_EXCLUDES == agent_freeze.GPL_EXCLUDES
+    for name in agent_freeze.GPL_EXCLUDES + agent_freeze.ML_EXCLUDES:
+        assert freeze.is_excluded(name), name

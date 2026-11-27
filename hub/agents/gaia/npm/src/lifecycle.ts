@@ -62,10 +62,10 @@ export const API_VERSION = "2.32";
 /** The agent id in the sidecar's route prefix (`/v1/gaia/...`). */
 export const AGENT_ID = "gaia";
 
-/** MUST equal `gaia_agent.caller_auth.TOKEN_FILE_ENV_VAR`. */
+/** MUST equal `gaiapy.caller_auth.TOKEN_FILE_ENV_VAR`. */
 export const TOKEN_FILE_ENV_VAR = "GAIA_GAIA_SIDECAR_TOKEN_FILE";
 
-/** MUST equal `gaia_agent.caller_auth.TOKEN_ENV_VAR` (legacy, token in the env). */
+/** MUST equal `gaiapy.caller_auth.TOKEN_ENV_VAR` (legacy, token in the env). */
 export const TOKEN_ENV_VAR = "GAIA_GAIA_SIDECAR_TOKEN";
 
 /** A fresh per-session caller-auth token: 32 random bytes, URL-safe. */

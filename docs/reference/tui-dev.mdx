@@ -124,10 +124,10 @@ To exercise the download without a published release, point
 
 At launch, a saved `gaiacpp` that fails the same two ways opens
 `internal/ui/agentrecovery` (`recoverSavedAgent` in `internal/ui/agentrecover.go`)
-before the main program: download again, use the Python agent, or quit. The
-Python agent runs only when it is picked, and the pick is then saved. A flag or
-`GAIA_TUI_AGENT` is a demand for that launch and still fails with the error, as
-does a launch with no terminal to ask in. The control API names the screen
+before the main program: download again, use Full-featured (the Python agent),
+or quit. Full-featured runs only when it is picked, and the pick is then saved.
+A flag or `GAIA_TUI_AGENT` is a demand for that launch and still fails with the
+error, as does a launch with no terminal to ask in. The control API names the screen
 `agent-recovery`; it is a separate Bubble Tea program, so the control server
 restarts when the main session takes over.
 

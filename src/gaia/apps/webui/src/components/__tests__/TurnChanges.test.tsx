@@ -6,6 +6,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { TurnChanges } from '../TurnChanges';
+import { ChangesReview } from '../ChangesReview';
 import { DiffCard } from '../render/DiffCard';
 import { UndoHistorySettings } from '../settings/UndoHistorySettings';
 import { resetTurnChangesCache } from '../../hooks/useTurnChanges';
@@ -238,6 +239,27 @@ describe('TurnChanges', () => {
         expect(screen.getByText(/Binary file: 0 → 120 bytes/)).toBeInTheDocument();
         expect(screen.getByText(/Too large to show: 9000000 → 9000100 bytes/)).toBeInTheDocument();
         expect(screen.getAllByText('Edited')).toHaveLength(2);
+    });
+
+    it('the diff view speaks Arabic', async () => {
+        vi.spyOn(api, 'getTurnDiff').mockResolvedValue({
+            turn_id: 't1',
+            files: [
+                { path: 'img.png', change: 'created', binary: true, too_large: false, truncated: false,
+                    unified: '', before_size: 0, after_size: 120 },
+            ],
+        });
+        useChatStore.setState({ locale: 'ar' });
+        try {
+            render(<ChangesReview sessionId="s1" turn={turn({ restored_at: '2026-10-16T00:01:00+00:00' })} onClose={() => {}} />);
+            const dialog = await screen.findByRole('dialog', { name: /مراجعة التغييرات/ });
+            expect(dialog.querySelector('h3')).toHaveTextContent('التغييرات في هذه الجولة');
+            await waitFor(() => expect(dialog).toHaveTextContent('ملف ثنائي: 0 ← 120 بايت.'));
+            expect(dialog).toHaveTextContent('منشأ');
+            expect(dialog).toHaveTextContent('تم التراجع عن هذه الجولة');
+        } finally {
+            useChatStore.setState({ locale: 'en' });
+        }
     });
 });
 

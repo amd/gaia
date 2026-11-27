@@ -456,6 +456,112 @@ def test_watched_documents_reindex_after_save(agent, workdir, extension):
     assert str(path) in agent.indexed_files
 
 
+def test_successful_reindex_clears_document_restore_failure(agent, workdir):
+    path = workdir / "restored.txt"
+    path.write_text("Recovered document contents.", encoding="utf-8")
+    agent.attached_documents = [str(path)]
+    agent._document_restore_failures[str(path)] = "previous embedding failure"
+
+    agent.reindex_file(str(path))
+
+    assert str(path) in agent.indexed_files
+    assert str(path) not in agent._document_restore_failures
+    assert "Document restore failed" not in agent._indexed_documents_line()
+
+
+def test_restore_failure_context_snapshots_while_background_update_runs(agent):
+    snapshot_started = threading.Event()
+    release_snapshot = threading.Event()
+    writer_attempted = threading.Event()
+    writer_finished = threading.Event()
+    context = {}
+
+    class BlockingFailures(dict):
+        def copy(self):
+            snapshot_started.set()
+            assert release_snapshot.wait(timeout=2)
+            return super().copy()
+
+    class ObservedLock:
+        def __init__(self):
+            self._lock = threading.Lock()
+
+        def __enter__(self):
+            if threading.current_thread().name == "restore-failure-writer":
+                writer_attempted.set()
+            self._lock.acquire()
+
+        def __exit__(self, *_args):
+            self._lock.release()
+
+    agent._document_restore_failures = BlockingFailures(
+        {"/docs/old.pdf": "previous restore failure"}
+    )
+    agent._restore_failure_lock = ObservedLock()
+    reader = threading.Thread(
+        target=lambda: context.setdefault("line", agent._indexed_documents_line())
+    )
+    reader.start()
+    assert snapshot_started.wait(timeout=2)
+
+    def record_failure():
+        agent._record_document_restore_failure("/docs/new.pdf", "index failed")
+        writer_finished.set()
+
+    writer = threading.Thread(target=record_failure, name="restore-failure-writer")
+    writer.start()
+    try:
+        assert writer_attempted.wait(timeout=2)
+        assert not writer_finished.wait(timeout=0.1)
+    finally:
+        release_snapshot.set()
+        reader.join(timeout=2)
+        writer.join(timeout=2)
+
+    assert not reader.is_alive()
+    assert not writer.is_alive()
+    assert "old.pdf" in context["line"]
+    assert "new.pdf" not in context["line"]
+    assert agent._document_restore_failures["/docs/new.pdf"] == "index failed"
+
+
+def test_watcher_start_failure_is_removed_and_named(agent, workdir, monkeypatch):
+    class BrokenObserver:
+        def schedule(self, *_args, **_kwargs):
+            raise OSError("watcher unavailable")
+
+        def start(self):
+            raise AssertionError("observer should not start after schedule failed")
+
+    monkeypatch.setattr("gaiapy.chat_agent.check_watchdog_available", lambda: True)
+    monkeypatch.setattr("gaiapy.chat_agent.Observer", BrokenObserver)
+    agent.watch_directories = [str(workdir)]
+
+    agent._start_watching()
+
+    assert agent.watch_directories == []
+    assert agent._watch_failures[str(workdir)] == "OSError: watcher unavailable"
+    assert "Directory watching failed" in agent.get_memory_dynamic_context()
+
+    class WorkingObserver:
+        def schedule(self, *_args, **_kwargs):
+            pass
+
+        def start(self):
+            pass
+
+        def stop(self):
+            pass
+
+        def join(self):
+            pass
+
+    monkeypatch.setattr("gaiapy.chat_agent.Observer", WorkingObserver)
+    assert agent._watch_directory(str(workdir)) is True
+    assert str(workdir) not in agent._watch_failures
+    agent.stop_watching()
+
+
 @pytest.mark.parametrize("extension", [".docx", ".pptx", ".xlsx"])
 def test_watched_office_owner_files_are_ignored(agent, workdir, extension):
     owner = workdir / f"~$report{extension}"

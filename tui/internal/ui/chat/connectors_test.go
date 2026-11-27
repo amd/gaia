@@ -492,3 +492,72 @@ func TestLeavingTheChatStopsAPendingSignIn(t *testing.T) {
 		}
 	}
 }
+
+func stubAllow(t *testing.T) *[]string {
+	t.Helper()
+	var calls []string
+	prev := allowConnectorCmd
+	allowConnectorCmd = func(c gaiaconnectors.Connector) tea.Cmd {
+		calls = append(calls, c.ID)
+		return func() tea.Msg { return connectorsAllowedMsg{connector: c} }
+	}
+	t.Cleanup(func() { allowConnectorCmd = prev })
+	return &calls
+}
+
+func TestAllowTurnsOnTheFlagshipsAccessToAServer(t *testing.T) {
+	calls := stubAllow(t)
+	rows := []gaiaconnectors.Connector{
+		{ID: "toy", DisplayName: "toy", Type: "mcp_server", Configured: true,
+			Activations: map[string]bool{gaiaconnectors.FlagshipAgentID: false}},
+		{ID: "notes", DisplayName: "notes", Type: "mcp_server", Configured: true,
+			Activations: map[string]bool{gaiaconnectors.FlagshipAgentID: true}},
+		{ID: "mcp-jira", DisplayName: "Jira", Type: "mcp_server"},
+		{ID: "google", DisplayName: "Google", Type: "oauth_pkce", Configured: true},
+	}
+	m := slackModel(t)
+	before := len(m.messages)
+	updated, cmd := m.submit("/connectors allow toy")
+	if cmd == nil {
+		t.Fatal("/connectors allow must look the connector up")
+	}
+	for _, msg := range updated.(ChatModel).messages[before:] {
+		if msg.Role == RoleUser {
+			t.Fatal("/connectors allow must not go to the agent as a question")
+		}
+	}
+	updated, cmd = updated.(ChatModel).handleConnectorsList(connectorsListMsg{rows: rows, req: connectorsRequest{verb: connectorsAllow, arg: "toy"}})
+	if cmd == nil || len(*calls) != 1 || (*calls)[0] != "toy" {
+		t.Fatalf("want one activation of toy, got %v", *calls)
+	}
+	done, _ := updated.(ChatModel).handleConnectorsAllowed(cmd().(connectorsAllowedMsg))
+	if text := lastStatus(t, done.(ChatModel)); !strings.Contains(text, "GAIA can now use toy") ||
+		!strings.Contains(text, "/connectors revoke toy") {
+		t.Fatalf("allow must confirm and say how to undo it: %s", text)
+	}
+
+	for name, want := range map[string]string{
+		"notes":    "can already use notes",
+		"mcp-jira": "isn't connected yet",
+		"google":   "comes with signing in",
+	} {
+		updated, cmd := m.handleConnectorsList(connectorsListMsg{rows: rows, req: connectorsRequest{verb: connectorsAllow, arg: name}})
+		if cmd != nil {
+			t.Errorf("%s: must not run an activation", name)
+		}
+		if text := lastStatus(t, updated.(ChatModel)); !strings.Contains(text, want) {
+			t.Errorf("%s: want %q in %q", name, want, text)
+		}
+	}
+	if len(*calls) != 1 {
+		t.Fatalf("only toy should have been activated, got %v", *calls)
+	}
+}
+
+func TestRevokeSaysHowToTurnAccessBackOn(t *testing.T) {
+	done, _ := slackModel(t).handleConnectorsRevoked(connectorsRevokedMsg{
+		connector: gaiaconnectors.Connector{ID: "toy", DisplayName: "toy", Type: "mcp_server"}})
+	if text := lastStatus(t, done.(ChatModel)); !strings.Contains(text, "/connectors allow toy") {
+		t.Fatalf("revoke must name the command that undoes it: %s", text)
+	}
+}
