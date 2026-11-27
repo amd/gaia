@@ -46,7 +46,7 @@ from typing import (
     Union,
 )
 
-from gaia.agents.base import turn_metrics
+from gaia.agents.base import prefix_log, turn_metrics
 from gaia.agents.base.call_risk import (
     EXACT_TEXT_ARG,
     NEEDS_PERSON_ARG,
@@ -5762,6 +5762,45 @@ Do NOT wrap conversational replies in JSON.
         Default: no-op. Raises like the model call it precedes, and may run
         again if that call is retried.
         """
+
+    #: None before this agent's first request, True until its read is logged.
+    _prefix_read_due: Optional[bool] = None
+
+    def _log_prefix_sent(self) -> None:
+        """Before this agent's first request: log whether its prefix is reused."""
+        if self._prefix_read_due is not None:
+            return
+        self._prefix_read_due = True
+        # _openai_tools records the list as sent; keep the trace on the real send.
+        recorded = (
+            getattr(self, "_last_tool_schemas", None),
+            getattr(self, "_last_tool_filter", None),
+        )
+        tools = self._openai_tools
+        self._last_tool_schemas, self._last_tool_filter = recorded
+        prefix_log.note_sent(
+            self.model_id,
+            self._prefix_log_name(),
+            prefix_log.prefix_of(self.system_prompt, tools),
+            slot=self._conversation_request_kwargs().get("id_slot", 0),
+        )
+
+    def _log_prefix_read(self) -> None:
+        """After this agent's first request: log what the model read and reused."""
+        if self._prefix_read_due is not True:
+            return
+        self._prefix_read_due = False
+        client = getattr(getattr(self, "chat", None), "llm_client", None)
+        usage_of = getattr(client, "get_last_usage", None)
+        prefix_log.note_read(
+            self.model_id,
+            self._prefix_log_name(),
+            usage_of() if callable(usage_of) else None,
+        )
+
+    def _prefix_log_name(self) -> str:
+        session = getattr(getattr(self, "config", None), "ui_session_id", None)
+        return f"chat {session}" if session else f"agent {id(self):x}"
 
     def _refresh_active_tool_filter(self, user_input: str) -> None:
         """Update the active tool filter for this turn, recomputing on change.
@@ -13120,6 +13159,18 @@ Do NOT wrap conversational replies in JSON.
 
     def _send_warm_up(self, cancel: Optional[threading.Event], **request: Any) -> None:
         """One warm-up request with the live prompt and tools; *request* adds kwargs."""
+        self._send_warm_up_request(cancel, **request)
+        # After it returns: a stopped or failed warm-up primed nothing.
+        prefix_log.note_sent(
+            self.model_id,
+            "the warm-up",
+            prefix_log.prefix_of(self.system_prompt, self._openai_tools),
+            slot=request.get("id_slot", 0),
+        )
+
+    def _send_warm_up_request(
+        self, cancel: Optional[threading.Event], **request: Any
+    ) -> None:
         if cancel is None:
             self.chat.send_messages(
                 self._with_session_context(
@@ -14580,6 +14631,7 @@ Do NOT wrap conversational replies in JSON.
                 while True:
                     try:
                         self._before_model_call(messages)
+                        self._log_prefix_sent()
                         model_calls += 1
                         response_stream = self.chat.send_messages_stream(
                             messages=self._with_session_context(messages),
@@ -14632,6 +14684,7 @@ Do NOT wrap conversational replies in JSON.
                         self._turn_model_retries[
                             "request_retries"
                         ] += self._last_request_retries()
+                        self._log_prefix_read()
                         break
                     except LemonadeStreamCutOffError as e:
                         # A fragment is never the reply: ask for the whole one again.
@@ -14845,6 +14898,7 @@ Do NOT wrap conversational replies in JSON.
                 while True:
                     try:
                         self._before_model_call(messages)
+                        self._log_prefix_sent()
                         model_calls += 1
                         chat_response = self.chat.send_messages(
                             messages=self._with_session_context(messages),
@@ -14864,6 +14918,7 @@ Do NOT wrap conversational replies in JSON.
                         self._turn_model_retries[
                             "request_retries"
                         ] += self._last_request_retries()
+                        self._log_prefix_read()
                         break  # success → exit retry loop
                     except ConnectionError as e:
                         self.console.stop_progress()

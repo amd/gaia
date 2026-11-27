@@ -507,6 +507,12 @@ What GAIA does on a small PC:
   says why. Close other apps and re-run `gaia init` to get Qwen3.6.
 - **Under 24 GB of RAM, the Agent UI loads the model with your first message**,
   not at startup. That first answer takes longer.
+- **A new chat's first answer takes minutes on a small GPU.** At startup GAIA
+  reads its instructions into the model once, and each new chat reuses that
+  read. Search `~/.gaia/gaia.log` for `PROMPT_PREFIX`: each chat's first request
+  logs how many prompt tokens the model reused. A `WARNING` line there means a
+  chat could not reuse them and names the prompt section or tools that changed
+  (never the text itself); include it in a bug report.
 - **Another Lemonade counts as used memory.** GAIA runs its own Lemonade, so a
   server you started yourself keeps its models loaded beside GAIA's. To have GAIA
   use that server instead, set `LEMONADE_BASE_URL` (see

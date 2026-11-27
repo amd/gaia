@@ -427,7 +427,9 @@ the turn as untracked. Omit the field to record nothing. Pre-2.19 binaries
 
 `surface` (contract ≥ 2.20) is the front-end the turn comes from: `"agent_ui"`,
 `"tui"` or `"cli"`. With `"agent_ui"` the agent points recurring requests at the
-Agent UI's **Scheduled tasks** page instead of saying it cannot schedule. It is
+Agent UI's **Scheduled tasks** page instead of saying it cannot schedule; that
+instruction travels with the session's first user message, so every `surface`
+shares one system prompt and one cached read of it. It is
 read when a session is built and kept for that session. It also picks where a
 model-provider error tells the user to fix it: each front-end gets its own
 settings screen, and a headless caller, which omits it, is pointed at the model

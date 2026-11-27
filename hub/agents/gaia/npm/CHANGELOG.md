@@ -8,6 +8,13 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 Requires the `gaia` Python CLI 0.27.0+ on `PATH`.
 
+- **The first Agent UI message no longer re-reads the whole prompt.** A `/query`
+  with `surface: "agent_ui"` changed two lines of the system prompt, so the
+  start-up warm-up's read was thrown away and a local model read ~10K tokens
+  again: two minutes for "Hi" on a small GPU. The Scheduled tasks line now
+  travels with the first user message, and every `surface` shares one system
+  prompt. The log's new `PROMPT_PREFIX` lines say, per chat, how much of the
+  prompt the model reused, and warn with what changed when it could not.
 - **A turn that recovered from a cut-off reply is no longer reported as failed.**
   A reply that hit the output-token limit was asked to continue and the turn
   went on to answer, but the turn still ended with `status: failed`, and
