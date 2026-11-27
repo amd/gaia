@@ -14,7 +14,7 @@ import { expect, test, type Page } from '@playwright/test';
 
 import { ANSWER_SESSION, AUTOMATIONS, DISCORD_STATES, MESSAGES, MODEL_LIST, NOW, RESOURCES, SESSIONS, SYSTEM_STATUS, TOOL_STATUS, holdOnToolStatus, mockApi, shownText, useLocale, useTheme, withAutomations, withConnectors, withCrashedBackend, withDesktopBridges, withDiscord, withMemory, withModelPage, withSettingsPanes, withoutFlagship, withAgentPrograms, withResourceStrip, AGENT_DOWNLOADING, AGENT_DOWNLOAD_FAILED, type AgentProgramsAnswers, type MemoryState } from './fixtures';
 import { ENGINE_FAILED, NARROW_SCENES, PLAN_COLD, SETUP_SCENES, expectSnugTags, scene, withSetup } from './setup-scenes';
-import { translateBare } from '../src/i18n/registry';
+import { stripIsolates, translateBare } from '../src/i18n/registry';
 
 test.use({ viewport: { width: 1400, height: 900 } });
 
@@ -1495,9 +1495,12 @@ for (const locale of ['ar', 'en']) {
         await open(page, `#${ANSWER_SESSION}`, locale, withLongChat);
         await expect(page.getByText('Question 22')).toBeVisible();
         await page.locator('.messages-scroll').hover();
-        await page.mouse.wheel(0, -20_000);
         const button = page.locator('.scroll-bottom-btn');
-        await expect(button).toBeVisible();
+        // A slow runner can still be settling onto the last answer and pull the list back down.
+        await expect(async () => {
+            await page.mouse.wheel(0, -20_000);
+            await expect(button).toBeVisible({ timeout: 1_000 });
+        }).toPass({ timeout: 15_000 });
         await button.evaluate((el) => Promise.all(el.getAnimations().map((a) => a.finished)));
         const [btn, composer] = [await button.boundingBox(), await page.locator('.input-column').boundingBox()];
         // 12px above the composer, never over its border (#7864), at its end, never in the middle of a line.
@@ -1554,6 +1557,32 @@ for (const locale of ['ar', 'en']) {
         await expect(page.locator('.code-copy')).toBeInViewport();
         expect(await audit(page)).toEqual([]);
         await page.screenshot({ path: info.outputPath(`sticky-code-${locale}.png`) });
+    });
+
+    test(`a copy the clipboard refused says so, never Copied (${locale})`, async ({ page }, info) => {
+        await page.addInitScript(() => {
+            Object.defineProperty(navigator, 'clipboard', {
+                configurable: true,
+                value: { writeText: () => Promise.reject(new DOMException('denied', 'NotAllowedError')) },
+            });
+            document.execCommand = () => false;
+        });
+        await page.setViewportSize({ width: 1400, height: 900 });
+        await open(page, `#${ANSWER_SESSION}`, locale, withLongCode);
+        const failed = locale === 'ar' ? 'تعذّر النسخ' : "Couldn't copy";
+        const codeCopy = page.locator('.code-copy');
+        await codeCopy.click();
+        await expect(codeCopy).toHaveClass(/\bfailed\b/);
+        await expect(codeCopy).toContainText(failed);
+        const reply = page.locator('.msg-assistant').last();
+        await reply.hover();
+        const msgCopy = reply.locator('.msg-copy');
+        await msgCopy.click();
+        await expect(msgCopy).toHaveClass(/\bfailed\b/);
+        await expect(msgCopy).toHaveAttribute('aria-label', new RegExp(failed));
+        await expect(page.locator('.copied')).toHaveCount(0);
+        expect(await audit(page)).toEqual([]);
+        await page.screenshot({ path: info.outputPath(`copy-failed-${locale}.png`) });
     });
 }
 
@@ -3374,11 +3403,14 @@ for (const locale of ['ar', 'en']) {
 
         test('long list, every group and detail open', async ({ page }) => {
             await openModelPage(page, locale);
-            const closed = await groups(page).evaluateAll((els) => els.filter((el) => !(el as HTMLDetailsElement).open).length);
-            expect(closed).toBeGreaterThan(0);
-            await page.locator('.settings-disclosure:not([open]) > summary').evaluateAll((els) => els.forEach((el) => (el as HTMLElement).click()));
-            await page.locator('.settings-more:not([open]) > summary').evaluateAll((els) => els.forEach((el) => (el as HTMLElement).click()));
-            await expect(page.getByText('needs 180 GB of memory', { exact: false }).first()).toBeVisible();
+            await expect.poll(() => groups(page).evaluateAll((els) => els.filter((el) => !(el as HTMLDetailsElement).open).length))
+                .toBeGreaterThan(0);
+            // Open again until it shows: a group that renders late is still closed after one pass.
+            await expect(async () => {
+                await page.locator('.settings-disclosure:not([open]) > summary').evaluateAll((els) => els.forEach((el) => (el as HTMLElement).click()));
+                await page.locator('.settings-more:not([open]) > summary').evaluateAll((els) => els.forEach((el) => (el as HTMLElement).click()));
+                await expect(page.getByText('needs 180 GB of memory', { exact: false }).first()).toBeVisible({ timeout: 1_000 });
+            }).toPass({ timeout: 15_000 });
             // A model that fits but squeezes other apps says so instead of "Fits this PC".
             await expect(page.locator('.model-badge.is-tight')).toHaveCount(1);
             await page.locator('.model-badge.is-tight').scrollIntoViewIfNeeded();
@@ -6586,6 +6618,47 @@ for (const locale of ['en', 'ar']) {
         expect(shown, `model name cut to ${shown}px of ${full}px`).toBeGreaterThanOrEqual(Math.min(full, 140));
         const icon = label.locator('xpath=preceding-sibling::*[local-name()="svg"][1]');
         expect((await icon.boundingBox())?.width ?? 0, 'the cloud icon was squeezed').toBeGreaterThanOrEqual(12);
+        expect(await audit(page)).toEqual([]);
+    });
+}
+
+for (const locale of ['en', 'ar']) {
+    test(`a folder's skipped files are named by reason in the document library (${locale})`, async ({ page }) => {
+        await open(page, '', locale, async (p) => {
+            await p.route('**/api/documents/upload-path', (route) => route.fulfill({
+                status: 400,
+                contentType: 'application/json',
+                body: JSON.stringify({ detail: { status: 'is_folder', message: 'This is a folder' } }),
+            }));
+            await p.route('**/api/documents/index-folder', (route) => route.fulfill({ json: {
+                indexed: 1, failed: 0, skipped: 3, skipped_images: 0, skipped_files_truncated: true, errors: [],
+                documents: [{ id: 'd1', filename: 'notes.txt', filepath: '/docs/notes.txt', file_size: 12, chunk_count: 1, indexing_status: 'complete', indexed_at: NOW.toISOString(), last_accessed_at: null, sessions_using: 0 }],
+                skipped_files: [
+                    { file: 'program.exe', reason: 'unsupported_type' },
+                    { file: 'ملاحظات.exe', reason: 'unsupported_type' },
+                    { file: 'secrets.json', reason: 'credential_file' },
+                    { file: 'song.mp3', reason: 'unsupported_type' },
+                ],
+            } }));
+        });
+        await page.locator('.sb').getByRole('button', { name: locale === 'en' ? /Documents/ : /المستندات/ }).click();
+        await page.locator('.path-input').fill('/home/me/downloads');
+        await page.locator('.path-input-form button[type="submit"]').click();
+
+        const notice = page.locator('.doc-folder-notice[role="status"]');
+        await expect(notice).toBeVisible();
+        const text = stripIsolates(await notice.innerText());
+        const reasonLabels = locale === 'en'
+            ? ["Files GAIA can't add:", "Credential files GAIA won't add:", 'Showing the first 50 skipped files.']
+            : ['الملفات التي لا يستطيع GAIA إضافتها:', 'ملفات بيانات الدخول التي لن يضيفها GAIA:', 'تُعرض أول 50 ملفًا متخطّى فقط.'];
+        const names = locale === 'en'
+            ? ['program.exe', 'ملاحظات.exe', 'song.mp3', 'secrets.json']
+            : ['program.exe', 'song.mp3', 'secrets.json', 'ملاحظات.exe'];
+        for (const label of [...reasonLabels, ...names]) {
+            expect(text, `missing ${label} from: ${text}`).toContain(label);
+        }
+        expect(text.indexOf('program.exe')).toBeLessThan(text.indexOf('secrets.json'));
+        await shot(page, `documents-skipped-files-${locale}`);
         expect(await audit(page)).toEqual([]);
     });
 }

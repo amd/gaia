@@ -1243,8 +1243,13 @@ export function ChatView({ sessionId }: ChatViewProps) {
                     created_at: new Date().toISOString(),
                     rag_sources: null,
                     failed: !mayStillFinish(err),
+                    stalled: err instanceof api.StreamTimeoutError || undefined,
                     failureText: err.message || undefined,
                 };
+                // A send nobody started in time is the clearest sign GAIA is stuck; say so now.
+                if (err instanceof api.StreamTimeoutError && err.endpoint === 'send') {
+                    useChatStore.getState().setBackendStalled(true);
+                }
                 addMessage(errMsg);
                 setStreaming(false);
                 clearStreamContent();
@@ -1665,6 +1670,8 @@ export function ChatView({ sessionId }: ChatViewProps) {
             className={`task-view ${isDragOver ? 'drag-active' : ''}`}
             style={{ '--session-panel-w': `${panelWidth}px` } as CSSProperties}
             onDrop={handleDrop}
+            // The composer handles its own drops and stops them, so clear the overlay on the way down.
+            onDropCapture={() => setIsDragOver(false)}
             onDragOver={handleDragOver}
             onDragLeave={handleDragLeave}
             aria-label={shownTitle(session?.title) || 'Chat'}

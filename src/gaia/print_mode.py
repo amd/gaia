@@ -19,6 +19,7 @@ from fnmatch import fnmatchcase
 from typing import Any, Dict, List, Optional, Sequence
 
 from gaia.logger import get_logger
+from gaia.utils.download_tally import DownloadTally
 
 log = get_logger(__name__)
 
@@ -204,7 +205,8 @@ def _emit_failure(output_format: str, message: str, code: int = 1) -> int:
                 ensure_ascii=False,
             )
         )
-    print(f"❌ gaia -p: {message}", file=sys.stderr)
+    prefix = "" if message.startswith("gaia -p") else "gaia -p: "
+    print(f"❌ {prefix}{message}", file=sys.stderr)
     return code
 
 
@@ -477,11 +479,8 @@ class _DownloadProgress:
         self.live = bool(getattr(self.stream, "isatty", lambda: False)())
         self.bytes_done = 0
         self.bytes_total = planned_bytes
-        self._planned = planned_bytes
         self._clock = clock or time.monotonic
-        self._finished = 0
-        self._file: Optional[str] = None
-        self._file_total = 0
+        self._tally_bytes = DownloadTally(planned_bytes)
         self._drawn_at: Optional[float] = None
         self._next_log = self.LOG_STEP
         self._line_open = False
@@ -526,22 +525,9 @@ class _DownloadProgress:
             self._write("\n")
 
     def _tally(self, event: Dict[str, Any]) -> None:
-        name = event.get("file") or ""
-        done = int(event.get("bytes_downloaded") or 0)
-        if self._file is not None and name != self._file:
-            self._finished += self._file_total
-            self._file_total = 0
-        self._file = name
-        # Mid-file events can carry bytes_total 0, so keep the largest seen.
-        self._file_total = max(
-            self._file_total, int(event.get("bytes_total") or 0), done
-        )
-        self.bytes_done = self._finished + done
-        total = int(event.get("total_download_size") or 0)
-        self.bytes_total = max(
-            total or self._planned or self._finished + self._file_total,
-            self.bytes_done,
-        )
+        self._tally_bytes.add(event)
+        self.bytes_done = self._tally_bytes.bytes_done
+        self.bytes_total = self._tally_bytes.bytes_total
 
     def _sizes(self) -> str:
         unit, name = (1e9, "GB") if self.bytes_total >= 1e9 else (1e6, "MB")
@@ -778,6 +764,9 @@ def _run_turn(
             from gaia.agents.base.memory import drain_memory_extraction
 
             drain_memory_extraction(agent)
+            # Stop MCP servers now: at interpreter exit __del__ can't start the
+            # thread that stops them, and logs a traceback instead.
+            agent.close()
     record = summarize(
         result, agent.model_id or model, time.time() - started, verbose=verbose
     )

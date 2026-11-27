@@ -7,13 +7,21 @@ nothing structural stops a message from reaching a dangerous tool: only the
 allowlist, the DM rule, the workspace pin, and the confirmation gate do.
 """
 
+import logging
 import time
 
 import pytest
 
-from gaia.messaging.bridge import DECISION_ALLOW, DECISION_ALWAYS, DECISION_DENY, Turn
+from gaia.messaging.bridge import (
+    DECISION_ALLOW,
+    DECISION_ALWAYS,
+    DECISION_DENY,
+    WRITE_TOOLS,
+    Turn,
+)
 from gaia.messaging.slack import adapter as ad
 from gaia.messaging.slack.adapter import (
+    FINAL_DELIVERY_WARNING,
     ReplyTarget,
     SlackAdapter,
     SlackAllowlistError,
@@ -421,6 +429,174 @@ def test_the_final_answer_replaces_the_streamed_text(adapter):
     assert any(u["text"] == "the whole answer" for u in web.updated)
 
 
+def test_a_failed_final_update_posts_a_warning_in_the_original_thread(adapter, caplog):
+    """The user sees a failure without the answer or the Slack error being repeated."""
+    a, web, channel = adapter
+    turn = _target_for(adapter)
+    original = web.chat_update
+
+    def fail_final(**kwargs):
+        if kwargs.get("text") == "the whole answer":
+            raise RuntimeError("invalid_blocks")
+        return original(**kwargs)
+
+    web.chat_update = fail_final
+    with caplog.at_level(logging.WARNING, logger="gaia.messaging.slack.adapter"):
+        channel.on_event({"type": "final", "answer": "the whole answer"}, turn)
+
+    fallbacks = [p for p in web.posted if p["text"] == FINAL_DELIVERY_WARNING]
+    assert len(fallbacks) == 1
+    assert fallbacks[0]["thread_ts"] == turn.context.thread_ts
+    assert "the whole answer" not in fallbacks[0]["text"]
+    assert "invalid_blocks" not in fallbacks[0]["text"]
+    assert any(
+        record.levelno == logging.WARNING
+        and "Could not finish the Slack reply" in record.getMessage()
+        for record in caplog.records
+    )
+
+
+def test_a_failed_final_fallback_post_raises_instead_of_hiding_the_error(adapter):
+    """A warning the user cannot see must still surface to the bridge."""
+    a, web, channel = adapter
+    turn = _target_for(adapter)
+    original_update = web.chat_update
+    original_post = web.chat_postMessage
+
+    def fail_final(**kwargs):
+        if kwargs.get("text") == "the whole answer":
+            raise RuntimeError("invalid_blocks")
+        return original_update(**kwargs)
+
+    def fail_fallback(**kwargs):
+        if kwargs.get("text") == FINAL_DELIVERY_WARNING:
+            raise RuntimeError("ratelimited")
+        return original_post(**kwargs)
+
+    web.chat_update = fail_final
+    web.chat_postMessage = fail_fallback
+
+    with pytest.raises(SlackPostError, match="ratelimited"):
+        channel.on_event({"type": "final", "answer": "the whole answer"}, turn)
+
+    assert [p["text"] for p in web.posted] == ["_Thinking…_"]
+
+
+def test_a_failed_error_event_fallback_does_not_repeat_the_detail(adapter):
+    """Error details can contain private paths, tokens or URLs."""
+    a, web, channel = adapter
+    turn = _target_for(adapter)
+    original = web.chat_update
+
+    def fail_error_render(**kwargs):
+        if kwargs.get("text") == ":warning: token=secret":
+            raise RuntimeError("invalid_blocks")
+        return original(**kwargs)
+
+    web.chat_update = fail_error_render
+    channel.on_event({"type": "error", "detail": "token=secret"}, turn)
+
+    fallbacks = [p for p in web.posted if p["text"] == FINAL_DELIVERY_WARNING]
+    assert len(fallbacks) == 1
+    assert all("token=secret" not in p["text"] for p in web.posted)
+
+
+def test_a_failed_empty_answer_flush_posts_a_warning_in_the_original_thread(adapter):
+    """An empty final still has to flush the streamed tail visibly."""
+    a, web, channel = adapter
+    turn = _target_for(adapter)
+    original = web.chat_update
+    streamed = "partial answer"
+
+    def fail_final_flush(**kwargs):
+        if kwargs.get("text") == streamed:
+            raise RuntimeError("invalid_blocks")
+        return original(**kwargs)
+
+    web.chat_update = fail_final_flush
+    channel.on_event({"type": "token", "delta": streamed}, turn)
+    channel.on_event({"type": "final", "answer": ""}, turn)
+
+    fallbacks = [p for p in web.posted if p["text"] == FINAL_DELIVERY_WARNING]
+    assert len(fallbacks) == 1
+    assert fallbacks[0]["thread_ts"] == turn.context.thread_ts
+    assert streamed not in fallbacks[0]["text"]
+
+
+def test_a_failed_stream_flush_is_retried_at_finalization(adapter):
+    """A successful retry leaves the completed reply visible, without a warning."""
+    a, web, channel = adapter
+    turn = _target_for(adapter)
+    original = web.chat_update
+    streamed = "partial answer"
+    attempts = []
+
+    def fail_first(**kwargs):
+        attempts.append(kwargs["text"])
+        if len(attempts) == 1:
+            raise RuntimeError("ratelimited")
+        return original(**kwargs)
+
+    web.chat_update = fail_first
+    channel.on_event({"type": "token", "delta": streamed}, turn)
+    channel.on_event({"type": "final", "answer": ""}, turn)
+
+    assert attempts == [streamed, streamed]
+    assert any(u["text"] == streamed for u in web.updated)
+    assert not any(p["text"] == FINAL_DELIVERY_WARNING for p in web.posted)
+
+
+def test_a_failed_empty_answer_fallback_post_raises_instead_of_hiding_the_error(
+    adapter,
+):
+    a, web, channel = adapter
+    turn = _target_for(adapter)
+    original_update = web.chat_update
+    original_post = web.chat_postMessage
+    streamed = "partial answer"
+
+    def fail_final_flush(**kwargs):
+        if kwargs.get("text") == streamed:
+            raise RuntimeError("invalid_blocks")
+        return original_update(**kwargs)
+
+    def fail_fallback(**kwargs):
+        if kwargs.get("text") == FINAL_DELIVERY_WARNING:
+            raise RuntimeError("ratelimited")
+        return original_post(**kwargs)
+
+    web.chat_update = fail_final_flush
+    web.chat_postMessage = fail_fallback
+
+    channel.on_event({"type": "token", "delta": streamed}, turn)
+    with pytest.raises(SlackPostError, match="ratelimited"):
+        channel.on_event({"type": "final", "answer": ""}, turn)
+
+    assert [p["text"] for p in web.posted] == ["_Thinking…_"]
+
+
+def test_a_midstream_edit_failure_still_does_not_post_a_fallback(adapter):
+    """Only the final answer gains a warning; partial edits stay tolerant."""
+    a, web, channel = adapter
+    turn = _target_for(adapter)
+    original = web.chat_update
+    attempted = []
+
+    def fail_first(**kwargs):
+        attempted.append(kwargs["text"])
+        if len(attempted) == 1:
+            raise RuntimeError("ratelimited")
+        return original(**kwargs)
+
+    web.chat_update = fail_first
+    channel.on_event({"type": "status", "message": "Working"}, turn)
+    channel.on_event({"type": "final", "answer": "done"}, turn)
+
+    assert attempted == ["_Working_", "done"]
+    assert not any(p["text"] == FINAL_DELIVERY_WARNING for p in web.posted)
+    assert any(u["text"] == "done" for u in web.updated)
+
+
 def test_an_error_is_rendered_as_a_warning(adapter):
     a, web, channel = adapter
     turn = _target_for(adapter)
@@ -497,7 +673,7 @@ def _wrote(a, path, *, success=True, tool="write_file", target=None):
     return target
 
 
-@pytest.mark.parametrize("tool", sorted(ad.WRITE_TOOLS))
+@pytest.mark.parametrize("tool", sorted(WRITE_TOOLS))
 def test_a_file_a_write_tool_produced_is_sent_back(tmp_path, tool):
     a, web = _upload_adapter(tmp_path)
     written = tmp_path / "summary.md"

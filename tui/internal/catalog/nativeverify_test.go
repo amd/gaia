@@ -151,7 +151,7 @@ func TestDownloadedGaiacppIsCheckedAgainstItsRecord(t *testing.T) {
 				if !errors.As(err, &integrity) {
 					t.Fatalf("got %v, want an integrity refusal", err)
 				}
-				for _, want := range []string{tc.refused, binary, record, "Settings › Agent & model", "/agent gaiapy"} {
+				for _, want := range []string{tc.refused, binary, record, "Settings › Agent & model", "Full-featured", "/agent gaiapy"} {
 					if !strings.Contains(err.Error(), want) {
 						t.Errorf("the refusal does not say %q:\n%v", want, err)
 					}

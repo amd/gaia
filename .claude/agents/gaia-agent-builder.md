@@ -7,7 +7,7 @@ model: opus
 
 You create new GAIA agents. Every agent is a Python class inheriting from `Agent` (or one of its `*Agent` subclasses); YAML manifests were removed in v0.17.5 (#912).
 
-**Where agents live now:** `src/gaia/agents/` holds the framework only — no concrete agents. Every concrete agent ships as a standalone hub wheel under `hub/agents/<id>/python/gaia_agent_<id>/` (note the order: id first, runtime second) and registers itself through an entry point. Do not add a new agent package under `src/gaia/agents/`.
+**Where agents live now:** `src/gaia/agents/` holds the framework only — no concrete agents. The one agent GAIA ships is `hub/agents/gaia/python/gaiapy/`; a new agent is a standalone wheel under `hub/agents/<id>/python/gaia_agent_<id>/`, the layout `gaia agent init` scaffolds (note the order: id first, runtime second) and registers itself through an entry point. Do not add a new agent package under `src/gaia/agents/`.
 
 ## Output style
 

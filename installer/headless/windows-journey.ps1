@@ -235,7 +235,8 @@ function Setup-Journey {
     $env:PLAYWRIGHT_BROWSERS_PATH = "$work\playwright-browsers"
     Push-Location "$repo\src\gaia\apps\webui"
     try {
-        & npm ci --ignore-scripts
+        # Dependabot writes the Agent UI lockfile with npm 11; the runner's Node 22 ships npm 10.
+        & npx -y npm@11 ci --ignore-scripts
         if ($LASTEXITCODE -ne 0) { Fail 'npm ci failed in the web UI' }
         & npx playwright install chromium
         if ($LASTEXITCODE -ne 0) { Fail 'Playwright could not install Chromium' }

@@ -13,6 +13,7 @@ import * as api from '../services/api';
 import { LOG_SOURCES, useLogsStore, type LogSource } from '../stores/logsStore';
 import type { LogFileInfo, LogLineInfo, LogReadResponse } from '../types/api.gen';
 import { formatBytes } from './setup/format';
+import { useSaveReport } from './TroubleshootingReport';
 import { formatSize } from '../utils/format';
 import { setVisibleInterval } from '../utils/visibleInterval';
 import './LogsDialog.css';
@@ -255,31 +256,7 @@ export function LogView({ source, file }: { source: LogSource; file: string | nu
 /** "Save all logs": every GAIA log, redacted, with this PC's details, as one file to attach. */
 export function SaveAllLogs() {
     const t = useT();
-    const [saving, setSaving] = useState(false);
-    const [saved, setSaved] = useState<api.SetupReport | null>(null);
-    const [error, setError] = useState<string | null>(null);
-
-    const save = useCallback(async () => {
-        setSaving(true);
-        setError(null);
-        setSaved(null);
-        try {
-            const report = await api.createSetupReport();
-            const blob = await api.fetchSetupReport(report.name);
-            const url = URL.createObjectURL(blob);
-            const a = document.createElement('a');
-            a.href = url;
-            a.download = report.name;
-            a.click();
-            // Later, not now: the desktop app's save dialog reads the URL after the click.
-            setTimeout(() => URL.revokeObjectURL(url), 60_000);
-            setSaved(report);
-        } catch (err) {
-            setError(t('logs.saveAllFailed', { error: errorText(err) }));
-        } finally {
-            setSaving(false);
-        }
-    }, [t]);
+    const { saving, saved, error, save } = useSaveReport('logs.saveAllFailed');
 
     return (
         <div className="log-viewer-save-all">

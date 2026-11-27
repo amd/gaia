@@ -491,6 +491,10 @@ class _StubAgent:
         self.drained = True
         return True
 
+    def close(self):
+        assert self.drained, "closed before the memory pass finished"
+        self.closed = True
+
 
 class _StubConfig:
     def __init__(self, **kwargs):
@@ -1409,6 +1413,19 @@ def test_run_with_no_prompt_on_a_terminal_starts_nothing(stub_env, monkeypatch, 
     assert captured.out == ""
     assert "needs a prompt" in captured.err
     stub_env.assert_not_called()
+
+
+def test_the_agent_is_closed_before_the_process_exits(stub_env):
+    # Left to __del__ at interpreter exit, MCP servers can't be stopped cleanly.
+    assert print_mode.run("say pong", model="m1") == 0
+    assert getattr(_agent(), "closed", False)
+
+
+def test_a_failure_names_gaia_p_once(stub_env, capsys):
+    assert print_mode.run("   ", model="m") == 1
+    err = capsys.readouterr().err
+    assert "empty prompt" in err
+    assert err.count("gaia -p") == 1
 
 
 def test_memory_is_drained_even_when_the_turn_raises(stub_env):

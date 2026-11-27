@@ -23,6 +23,7 @@ const (
 	connectorsShow        connectorsVerb = ""
 	connectorsPersonalize connectorsVerb = "personalize"
 	connectorsRevoke      connectorsVerb = "revoke"
+	connectorsAllow       connectorsVerb = "allow"
 	connectorsRemove      connectorsVerb = "remove"
 	connectorsAdd         connectorsVerb = "add"
 	connectorsReconnect   connectorsVerb = "reconnect"
@@ -35,6 +36,8 @@ var connectorsAsk = map[connectorsVerb]string{
 		"Type /connectors to see their ids.",
 	connectorsRevoke: "Name the connector to turn off GAIA's access to: /connectors revoke <id>. " +
 		"Type /connectors to see which ones GAIA can use.",
+	connectorsAllow: "Name the MCP server to let GAIA use: /connectors allow <id>. " +
+		"Type /connectors to see which ones are off for GAIA.",
 	connectorsRemove: "Name the account to sign out of GAIA: /connectors remove <id> <address>. " +
 		"Type /connectors to see them.",
 	connectorsAdd: "Name the connector to add an account to: /connectors add <id>. " +
@@ -78,6 +81,19 @@ type connectorsActivatedMsg struct {
 var activateConnectorCmd = func(c gaiaconnectors.Connector) tea.Cmd {
 	return func() tea.Msg {
 		return connectorsActivatedMsg{connector: c, err: gaiaconnectors.Activate(context.Background(), c)}
+	}
+}
+
+// connectorsAllowedMsg reports that the flagship may now use an MCP server.
+type connectorsAllowedMsg struct {
+	connector gaiaconnectors.Connector
+	err       error
+}
+
+// allowConnectorCmd runs the CLI activation for /connectors allow.
+var allowConnectorCmd = func(c gaiaconnectors.Connector) tea.Cmd {
+	return func() tea.Msg {
+		return connectorsAllowedMsg{connector: c, err: gaiaconnectors.Activate(context.Background(), c)}
 	}
 }
 
@@ -203,6 +219,8 @@ func (m ChatModel) handleConnectorsList(msg connectorsListMsg) (tea.Model, tea.C
 				"/connectors personalize %s", c.DisplayName, c.ID)), nil
 		}
 		return m.personalizeConnector(c)
+	case connectorsAllow:
+		return m.allowActivation(c)
 	case connectorsRevoke:
 		switch c.Type {
 		case "oauth_pkce":
@@ -357,8 +375,36 @@ func (m ChatModel) handleConnectorsRevoked(msg connectorsRevokedMsg) (tea.Model,
 	if msg.err != nil {
 		return m.statusNote("Couldn't turn off GAIA's access: " + msg.err.Error()), nil
 	}
-	return m.statusNote(fmt.Sprintf("GAIA can no longer use %s. Turn it back on under Connectors "+
-		"in the Agent UI.", msg.connector.DisplayName)), nil
+	return m.statusNote(fmt.Sprintf("GAIA can no longer use %s. To turn it back on: "+
+		"/connectors allow %s", msg.connector.DisplayName, msg.connector.ID)), nil
+}
+
+// allowActivation gives the flagship standing use of an MCP server.
+func (m ChatModel) allowActivation(c gaiaconnectors.Connector) (tea.Model, tea.Cmd) {
+	if c.Type != "mcp_server" {
+		return m.statusNote(fmt.Sprintf("GAIA's access to %s comes with signing in: "+
+			"/connectors add %s", c.DisplayName, c.ID)), nil
+	}
+	if !c.Configured {
+		return m.statusNote(fmt.Sprintf("%s isn't connected yet. Connect it from Connectors in the "+
+			"Agent UI, then try again.", c.DisplayName)), nil
+	}
+	if !c.Usable() {
+		return m.statusNote(fmt.Sprintf("%s is switched off. Turn it on under Connectors in the "+
+			"Agent UI, then try again.", c.DisplayName)), nil
+	}
+	if c.FlagshipCanUse() {
+		return m.statusNote(fmt.Sprintf("GAIA can already use %s.", c.DisplayName)), nil
+	}
+	return m, allowConnectorCmd(c)
+}
+
+func (m ChatModel) handleConnectorsAllowed(msg connectorsAllowedMsg) (tea.Model, tea.Cmd) {
+	if msg.err != nil {
+		return m.statusNote("Couldn't turn on GAIA's access: " + msg.err.Error()), nil
+	}
+	return m.statusNote(fmt.Sprintf("GAIA can now use %s, from your next message. "+
+		"To turn it off: /connectors revoke %s", msg.connector.DisplayName, msg.connector.ID)), nil
 }
 
 // connectorsHint is the status bar's Connectors entry; clicking it runs /connectors.

@@ -803,7 +803,7 @@ stopped existing, and it was found only when a user tried to follow it.
 
 ## CLI Commands
 
-All commands are registered in [`src/gaia/cli.py`](src/gaia/cli.py). Run `gaia -h` for the authoritative list.
+The parser is built in [`src/gaia/cli.py`](src/gaia/cli.py); some command groups register from their own module through `add_subparser` / `handle` (`knowledge_cli.py`, `cache_cli.py`, `connectors/cli.py`, `project_trust_cli.py`, `llm/custom_models_cli.py`) or `add_parser` / `run` (`engineering/cli.py`). Run `gaia -h` for the authoritative list.
 
 **Agents & chat:**
 - `gaia chat` - Interactive chat with RAG
@@ -837,6 +837,8 @@ All commands are registered in [`src/gaia/cli.py`](src/gaia/cli.py). Run `gaia -
 - `gaia trust {list|add|decline|forget}` (also `gaia project trust`) - Saved folder trust decisions
 - `gaia skill` - Author and manage agent skills (`SKILL.md` capabilities)
 - `gaia download` - Download a model
+- `gaia model {check|add|remove|list}` - Add a chat model from a Hugging Face link
+- `gaia engineering {setup|connect|share|status|revoke|approve-code|open|append}` - Developer-only bridge to a coding app
 - `gaia kill` - Kill stray GAIA / Lemonade processes
 - `gaia test` - Smoke tests
 - `gaia youtube --download-transcript <url>` - YouTube utilities (transcript download)

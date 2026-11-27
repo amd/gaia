@@ -1011,12 +1011,30 @@ class TestGaiaToolMapsMatchTheFlagship:
             agent = GaiaAgent(config=GaiaAgentConfig(silent_mode=True))
             agent._memory_store = object()
             agent._register_tools()
-            return set(agent._tools_registry)
+            # A skill test that imports a tools.py leaves its bare-named tools in
+            # the shared registry; those carry no label by design.
+            return {
+                name
+                for name, entry in agent._tools_registry.items()
+                if not self._defined_in_a_skill(entry)
+            }
         finally:
             if previous is None:
                 os.environ.pop("GAIA_MEMORY_DISABLED", None)
             else:
                 os.environ["GAIA_MEMORY_DISABLED"] = previous
+
+    @staticmethod
+    def _defined_in_a_skill(entry):
+        import inspect
+        from pathlib import Path
+
+        fn = inspect.unwrap(entry.get("function"))
+        code = getattr(fn, "__code__", None)
+        if code is None:
+            return False
+        parts = Path(code.co_filename).parts
+        return any(a == "hub" and b == "skills" for a, b in zip(parts, parts[1:]))
 
     def test_the_registry_was_actually_read(self, flagship_tools):
         assert len(flagship_tools) > 50, "registry looks empty — fixture broke"

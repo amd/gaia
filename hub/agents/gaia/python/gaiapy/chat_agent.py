@@ -17,6 +17,7 @@ import shutil
 import sqlite3
 import sys
 import threading
+from _thread import LockType
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import (
@@ -29,9 +30,11 @@ from typing import (
     List,
     Optional,
     Set,
+    Tuple,
 )
 
 from gaia.config import gaia_home
+from gaia.llm.claude_defaults import DEFAULT_CLAUDE_MODEL
 from gaia.logger import get_logger
 
 logger = get_logger(__name__)
@@ -700,7 +703,7 @@ class ChatAgentConfig:
 
     # LLM settings
     use_claude: bool = False
-    claude_model: str = "claude-sonnet-5"
+    claude_model: str = DEFAULT_CLAUDE_MODEL
     base_url: Optional[str] = None
     model_id: Optional[str] = None  # None = use default model (Gemma)
     # True: build without starting Lemonade or preloading; the first request loads.
@@ -825,7 +828,7 @@ class ChatAgentConfig:
 
     # Per-agent identity for the connectors activation filter (#1005).
     # Must be set BEFORE ``Agent.__init__`` runs ``_register_tools``, because
-    # that's where ``_active_mcp_servers`` consults ``is_agent_active`` to
+    # that's where ``_active_mcp_servers`` consults ``is_mcp_server_active`` to
     # decide which MCP servers' tools to surface. The registry's
     # ``_wrap_factory_with_namespaced_id`` injects this via kwargs, and the
     # UI's direct construction paths in ``_chat_helpers`` pass it explicitly.
@@ -866,6 +869,25 @@ def _where_mcp_servers_are_set_up(names: List[str], config_path: Path) -> str:
             "command and settings there."
         )
     return " ".join(where)
+
+
+def _ensure_restore_failure_state(
+    agent: Any,
+) -> Tuple[LockType, Dict[str, str], Dict[str, str]]:
+    """Create restore failure state for lightweight test and embedding hosts."""
+    lock = getattr(agent, "_restore_failure_lock", None)
+    if lock is None:
+        lock = threading.Lock()
+        agent._restore_failure_lock = lock
+    document_failures = getattr(agent, "_document_restore_failures", None)
+    if document_failures is None:
+        document_failures = {}
+        agent._document_restore_failures = document_failures
+    watch_failures = getattr(agent, "_watch_failures", None)
+    if watch_failures is None:
+        watch_failures = {}
+        agent._watch_failures = watch_failures
+    return lock, document_failures, watch_failures
 
 
 class ChatAgent(
@@ -1046,6 +1068,9 @@ class ChatAgent(
         self.indexed_files = set()
         # Every document attached to the chat, held in the index or not.
         self.attached_documents: List[str] = []
+        self._restore_failure_lock = threading.Lock()
+        self._document_restore_failures: Dict[str, str] = {}
+        self._watch_failures: Dict[str, str] = {}
 
         # Initialize file system index service (optional)
         self._fs_index = None
@@ -1225,29 +1250,45 @@ class ChatAgent(
             loaded = self.session_manager.load_session(config.ui_session_id)
             if loaded:
                 self.current_session = loaded
+                self.attached_documents = list(loaded.indexed_documents)
                 for doc_path in loaded.indexed_documents:
                     if self.rag.is_full():
                         break
-                    if doc_path not in self.indexed_files and os.path.exists(doc_path):
-                        try:
-                            real = os.path.realpath(doc_path)
-                            if not hasattr(
-                                self, "_is_path_allowed"
-                            ) or self._is_path_allowed(real):
-                                result = self.rag.index_document(real)
-                                if result.get("success"):
-                                    _forget_evicted(
-                                        self.indexed_files, result.get("evicted", [])
-                                    )
-                                    self.indexed_files.add(doc_path)
-                                    logger.info(
-                                        "Restored indexed doc from prior turn: %s",
-                                        doc_path,
-                                    )
-                        except Exception as exc:
-                            logger.warning(
-                                "Failed to restore indexed doc %s: %s", doc_path, exc
+                    if doc_path in self.indexed_files:
+                        continue
+                    if not os.path.exists(doc_path):
+                        self._record_document_restore_failure(
+                            doc_path, "file not found"
+                        )
+                        continue
+                    try:
+                        real = os.path.realpath(doc_path)
+                        if hasattr(
+                            self, "_is_path_allowed"
+                        ) and not self._is_path_allowed(real):
+                            self._record_document_restore_failure(
+                                doc_path, "path is not allowed"
                             )
+                            continue
+                        result = self.rag.index_document(real)
+                        if result.get("success"):
+                            _forget_evicted(
+                                self.indexed_files, result.get("evicted", [])
+                            )
+                            self.indexed_files.add(doc_path)
+                            self._clear_document_restore_failure(doc_path)
+                            logger.info(
+                                "Restored indexed doc from prior turn: %s",
+                                doc_path,
+                            )
+                        else:
+                            self._record_document_restore_failure(
+                                doc_path, result.get("error", "Unknown error")
+                            )
+                    except Exception as exc:
+                        self._record_document_restore_failure(
+                            doc_path, f"{type(exc).__name__}: {exc}"
+                        )
             else:
                 # First turn for this UI session — create a persistent agent session
                 self.current_session = self.session_manager.create_session(
@@ -1275,9 +1316,24 @@ class ChatAgent(
         profile = getattr(self.config, "prompt_profile", "full")
         if "doc_rag" not in get_profile_spec(profile).tool_groups:
             return ""
-        if not self.rag:
-            return ""
         lines = []
+        restore_failures_state = getattr(self, "_document_restore_failures", {})
+        restore_failure_lock = getattr(self, "_restore_failure_lock", None)
+        if restore_failure_lock is None:
+            restore_failures = restore_failures_state.copy()
+        else:
+            with restore_failure_lock:
+                restore_failures = restore_failures_state.copy()
+        if restore_failures:
+            reasons = "; ".join(
+                f"{Path(fp).name}: {reason}" for fp, reason in restore_failures.items()
+            )
+            lines.append(
+                "[Document restore failed; tell the user before answering from it: "
+                f"{reasons}]"
+            )
+        if not self.rag:
+            return "\n".join(lines)
         # Copied first: a background index can add to the set during this loop.
         indexed = list(self.rag.indexed_files)
         if indexed:
@@ -1289,7 +1345,12 @@ class ChatAgent(
             lines.append(f"[Indexed documents: {', '.join(entries)}]")
             if any(s and s != ["Latin"] for s in scripts.values()):
                 lines.append(_CROSS_LANGUAGE_NOTE)
-        not_loaded = attached_not_loaded(self, self.rag)
+        failed_paths = {os.path.realpath(path) for path in restore_failures}
+        not_loaded = [
+            path
+            for path in attached_not_loaded(self, self.rag)
+            if os.path.realpath(path) not in failed_paths
+        ]
         if not_loaded:
             shown = ", ".join(Path(fp).name for fp in not_loaded[:_NOT_LOADED_SHOWN])
             more = len(not_loaded) - _NOT_LOADED_SHOWN
@@ -1311,6 +1372,20 @@ class ChatAgent(
             )
         return "\n".join(lines)
 
+    def _watch_failure_line(self) -> str:
+        """Tell the model when a configured watcher could not be started."""
+        watch_failures_state = getattr(self, "_watch_failures", {})
+        restore_failure_lock = getattr(self, "_restore_failure_lock", None)
+        if restore_failure_lock is None:
+            failures = watch_failures_state.copy()
+        else:
+            with restore_failure_lock:
+                failures = watch_failures_state.copy()
+        if not failures:
+            return ""
+        reasons = "; ".join(f"{path}: {reason}" for path, reason in failures.items())
+        return f"[Directory watching failed; tell the user: {reasons}]"
+
     def _scripts(self, file_path: str) -> List[str]:
         """Scripts a document's text is written in, e.g. ``["Arabic", "Latin"]``."""
         return self.rag.document_scripts(file_path)
@@ -1328,6 +1403,7 @@ class ChatAgent(
         parts = (
             super().get_memory_dynamic_context(),
             self._indexed_documents_line(),
+            self._watch_failure_line(),
             self._mcp_dropped_line(),
         )
         return "\n".join(part for part in parts if part)
@@ -1478,6 +1554,13 @@ class ChatAgent(
         else:
             logger.warning("RAG failed to start: %s", exc)
         logger.debug("RAG init traceback:", exc_info=True)
+
+    def _record_document_restore_failure(self, path: str, reason: str) -> None:
+        """Keep a failed session-document restore visible for this turn."""
+        lock, document_failures, _ = _ensure_restore_failure_state(self)
+        with lock:
+            document_failures[path] = reason
+        logger.warning("Failed to restore indexed doc %s: %s", path, reason)
 
     def _build_rag(self) -> Optional[RAGSDK]:
         """Build the ``RAGSDK`` from the ``RAGConfig`` frozen in ``__init__``.
@@ -4185,6 +4268,7 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
                     if result.get("success"):
                         _forget_evicted(self.indexed_files, result.get("evicted", []))
                         self.indexed_files.add(doc)
+                        self._clear_document_restore_failure(doc)
                         logger.info(
                             f"Successfully indexed: {doc} ({result.get('num_chunks', 0)} chunks)"
                         )
@@ -4205,10 +4289,11 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
 
     def _start_watching(self) -> None:
         """Start watching directories for changes."""
-        for directory in self.watch_directories:
-            self._watch_directory(directory)
+        for directory in list(self.watch_directories):
+            if not self._watch_directory(directory):
+                self.watch_directories.remove(directory)
 
-    def _watch_directory(self, directory: str) -> None:
+    def _watch_directory(self, directory: str) -> bool:
         """Watch a directory for file changes."""
         if not check_watchdog_available():
             error_msg = (
@@ -4220,8 +4305,13 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
                 '  uv pip install "watchdog>=2.1.0,<7"\n'
             )
             logger.error(error_msg)
-            raise ImportError(error_msg)
+            lock, _, failures = _ensure_restore_failure_state(self)
+            with lock:
+                failures[directory] = "watchdog package is not installed"
+            return False
 
+        observer = None
+        started = False
         try:
             # Use generic FileChangeHandler with callbacks
             event_handler = FileChangeHandler(
@@ -4234,11 +4324,24 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
             observer = Observer()
             observer.schedule(event_handler, directory, recursive=True)
             observer.start()
+            started = True
             self.observers.append(observer)
             self.file_handlers.append(event_handler)
+            lock, _, failures = _ensure_restore_failure_state(self)
+            with lock:
+                failures.pop(directory, None)
             logger.info(f"Started watching: {directory}")
+            return True
         except Exception as e:
+            if started and observer is not None:
+                observer.stop()
+                observer.join()
+            reason = f"{type(e).__name__}: {e}"
+            lock, _, failures = _ensure_restore_failure_state(self)
+            with lock:
+                failures[directory] = reason
             logger.error(f"Failed to watch {directory}: {e}")
+            return False
 
     @staticmethod
     def _should_watch_file(file_path: str) -> bool:
@@ -4319,6 +4422,7 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
             return
         if result.get("success"):
             self.indexed_files.add(file_path)
+            self._clear_document_restore_failure(real_file_path)
             logger.info(f"Successfully reindexed {real_file_path}")
             return
         error = result.get("error", "Unknown error")
@@ -4373,33 +4477,54 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
             if callable(forget_declined):
                 forget_declined()
             self.current_session = session
+            self.attached_documents = list(session.indexed_documents)
+            lock, document_failures, watch_failures = _ensure_restore_failure_state(
+                self
+            )
+            with lock:
+                document_failures.clear()
+                watch_failures.clear()
 
             # Restore indexed documents (only if RAG is available)
             if self.rag:
                 for doc_path in session.indexed_documents:
-                    if os.path.exists(doc_path):
-                        try:
-                            result = self.rag.index_document(doc_path)
-                            if result.get("success"):
-                                self.indexed_files.add(doc_path)
-                            else:
-                                logger.warning(
-                                    f"Failed to reindex {doc_path}: "
-                                    f"{result.get('error', 'Unknown error')}"
-                                )
-                        except Exception as e:
-                            logger.warning(f"Failed to reindex {doc_path}: {e}")
+                    if not os.path.exists(doc_path):
+                        ChatAgent._record_document_restore_failure(
+                            self, doc_path, "file not found"
+                        )
+                        continue
+                    try:
+                        result = self.rag.index_document(doc_path)
+                        if result.get("success"):
+                            self.indexed_files.add(doc_path)
+                            RAGToolsMixin._clear_document_restore_failure(
+                                self, doc_path
+                            )
+                        else:
+                            ChatAgent._record_document_restore_failure(
+                                self, doc_path, result.get("error", "Unknown error")
+                            )
+                    except Exception as e:
+                        ChatAgent._record_document_restore_failure(
+                            self, doc_path, f"{type(e).__name__}: {e}"
+                        )
             elif session.indexed_documents:
-                logger.warning(
-                    f"Cannot restore {len(session.indexed_documents)} indexed documents: "
-                    "RAG dependencies not installed"
-                )
+                for doc_path in session.indexed_documents:
+                    ChatAgent._record_document_restore_failure(
+                        self, doc_path, "RAG dependencies not installed"
+                    )
 
             # Restore watched directories
             for dir_path in session.watched_directories:
-                if os.path.exists(dir_path) and dir_path not in self.watch_directories:
+                if dir_path in self.watch_directories:
+                    continue
+                if not os.path.exists(dir_path):
+                    lock, _, watch_failures = _ensure_restore_failure_state(self)
+                    with lock:
+                        watch_failures[dir_path] = "directory not found"
+                    continue
+                if self._watch_directory(dir_path):
                     self.watch_directories.append(dir_path)
-                    self._watch_directory(dir_path)
 
             # Restore conversation history
             self.conversation_history = list(session.chat_history)

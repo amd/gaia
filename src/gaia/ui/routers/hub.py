@@ -25,19 +25,13 @@ from gaia.logger import get_logger
 from gaia.utils.file_lock import FileLockError
 
 from ..security import require_ui_header as _require_ui_header
+from .agents import _registry
 
 logger = get_logger(__name__)
 
 router = APIRouter(tags=["hub"])
 
 _LOCALHOST_HOSTS = {"127.0.0.1", "::1", "localhost", ""}
-
-
-def _registry(request: Request):
-    registry = getattr(request.app.state, "agent_registry", None)
-    if registry is None:
-        raise HTTPException(status_code=503, detail="Agent registry not initialized")
-    return registry
 
 
 def _require_localhost(request: Request) -> None:

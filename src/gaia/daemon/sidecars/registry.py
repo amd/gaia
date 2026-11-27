@@ -25,13 +25,13 @@ from gaia.daemon.sidecars.errors import (
     SidecarInhibitedError,
     SidecarNotRunningError,
     StopFailedError,
-    UnknownAgentError,
 )
 from gaia.daemon.sidecars.manager import AgentSidecarManager
 from gaia.daemon.sidecars.spec import (
     AgentSidecarSpec,
     repo_root_from_agent_binary_lock_path,
     repo_root_from_agent_dev_src_dir,
+    spec_for,
 )
 from gaia.logger import get_logger
 
@@ -117,13 +117,7 @@ class SidecarRegistry:
         self._manager_factory = AgentSidecarManager
 
     def _spec(self, agent_id: str) -> AgentSidecarSpec:
-        spec = self._specs.get(agent_id)
-        if spec is None:
-            raise UnknownAgentError(
-                f"unknown agent '{agent_id}'; registered agents: "
-                + ", ".join(sorted(self._specs))
-            )
-        return spec
+        return spec_for(self._specs, agent_id)
 
     def _resolve_mode(self, spec: AgentSidecarSpec, mode: Optional[str]) -> str:
         return mode or os.environ.get(spec.mode_env_var) or "user"

@@ -44,7 +44,7 @@ from gaia.eval.claude_outage import (
     switch_to_backup_account,
 )
 from gaia.eval.claude_usage import describe, merge_scenario_usage, usage_from_cli
-from gaia.eval.config import DEFAULT_AGENT_TYPE
+from gaia.eval.config import DEFAULT_AGENT_TYPE, DEFAULT_CLAUDE_MODEL
 from gaia.eval.eval_lock import exclusive_eval
 from gaia.eval.fixture_env import fixture_fingerprint
 from gaia.eval.fixture_env import from_env as fixture_env_from_env
@@ -52,6 +52,7 @@ from gaia.eval.fixture_env import localize
 from gaia.eval.scenario_backend import ScenarioBackend, validate_approve_prompts
 from gaia.eval.scorecard import NOT_RUN, SKIPPED_STATUSES
 from gaia.llm.local_only import assert_provider_permitted, cloud_blocked
+from gaia.ports import AGENT_UI_PORT
 from gaia.ui.api_token import UITokenError, auth_headers, read_token, token_path
 from gaia.utils.process_tree import kill_tree as _kill_tree
 
@@ -188,8 +189,8 @@ _KNOWN_PERSONAS = frozenset(
     }
 )
 
-DEFAULT_MODEL = "claude-opus-5"
-DEFAULT_BACKEND = "http://localhost:4200"
+DEFAULT_MODEL = DEFAULT_CLAUDE_MODEL
+DEFAULT_BACKEND = f"http://localhost:{AGENT_UI_PORT}"
 DEFAULT_BUDGET = "2.00"
 DEFAULT_TIMEOUT = 900  # seconds per scenario (base)
 # Extra seconds reserved for claude subprocess + MCP server cold-start.

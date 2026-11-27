@@ -291,7 +291,8 @@ jobs:
         # No silent fallback: if package-lock.json is broken, we want the
         # build to fail loudly here rather than ship a wheel with an
         # unexpected dependency tree (see CLAUDE.md "No Silent Fallbacks").
-        run: npm ci
+        # Dependabot writes the Agent UI lockfile with npm 11; keep Node 22 but install with npm 11.
+        run: npx -y npm@11 ci
 
       - name: Build frontend
         working-directory: src/gaia/apps/webui

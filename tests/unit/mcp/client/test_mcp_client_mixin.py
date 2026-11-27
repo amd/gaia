@@ -11,6 +11,22 @@ from gaia.mcp import MCPClientMixin
 from gaia.mcp.client.mcp_client import MCPTool
 
 
+@pytest.fixture
+def local_only_on(tmp_path, monkeypatch):
+    monkeypatch.setenv("GAIA_POLICY_FILE", str(tmp_path / "policy.json"))
+    from gaia.llm import local_only
+
+    local_only.set_policy("local_ai_only")
+
+
+@pytest.fixture
+def cloud_allowed(tmp_path, monkeypatch):
+    monkeypatch.setenv("GAIA_POLICY_FILE", str(tmp_path / "policy.json"))
+    from gaia.llm import local_only
+
+    local_only.set_policy("cloud_allowed")
+
+
 class MockAgent(MCPClientMixin):
     """Mock agent for testing the mixin."""
 
@@ -92,6 +108,100 @@ class TestMCPClientMixin:
         # Function is wrapped, not the same as mock_wrapper
         assert callable(registered_tool["function"])
         assert registered_tool["parameters"]["param"]["required"] is True
+
+    def test_local_only_blocks_a_registered_web_search_tool(self, local_only_on):
+        client = Mock()
+        client.name = "mcp-tavily"
+        client.prefix = "mcp_tavily"
+        tool = MCPTool(
+            name="tavily_search",
+            description="Search the web",
+            input_schema={
+                "type": "object",
+                "properties": {"query": {"type": "string"}},
+                "required": ["query"],
+            },
+        )
+        client.list_tools.return_value = [tool]
+        base_wrapper = Mock(return_value={"ok": True})
+        client.create_tool_wrapper.return_value = base_wrapper
+        host = object.__new__(MCPClientMixin)
+
+        converted = host._convert_mcp_tools(client)
+        host._register_mcp_tools(client, converted)
+        registered = next(
+            item
+            for item in _TOOL_REGISTRY.values()
+            if item["name"].endswith("tavily_search")
+        )
+        result = registered["function"](query="private question")
+
+        assert result["executed"] is False
+        assert (
+            "MCP tool tavily_search is unavailable while Local only is on"
+            in result["error"]
+        )
+        assert "cloud_allowed" in result["error"]
+        base_wrapper.assert_not_called()
+
+    def test_local_only_leaves_a_user_added_server_running(self, local_only_on):
+        # docs/reference/cli.mdx "Local only" says custom MCP servers aren't covered.
+        client = Mock()
+        client.name = "my-searxng"
+        client.prefix = "my_searxng"
+        tool = MCPTool(
+            name="searxng_web_search",
+            description="Search the web",
+            input_schema={
+                "type": "object",
+                "properties": {"query": {"type": "string"}},
+                "required": ["query"],
+            },
+        )
+        client.list_tools.return_value = [tool]
+        base_wrapper = Mock(return_value={"contents": [{"text": "hit"}]})
+        client.create_tool_wrapper.return_value = base_wrapper
+        host = object.__new__(MCPClientMixin)
+
+        converted = host._convert_mcp_tools(client)
+        host._register_mcp_tools(client, converted)
+        registered = next(
+            item
+            for item in _TOOL_REGISTRY.values()
+            if item["name"].endswith("searxng_web_search")
+        )
+
+        assert registered["function"](query="q")["status"] == "success"
+        base_wrapper.assert_called_once_with(query="q")
+
+    def test_cloud_allowed_registered_web_search_tool_still_runs(self, cloud_allowed):
+        client = Mock()
+        client.name = "mcp-brave-search"
+        client.prefix = "mcp_brave_search"
+        tool = MCPTool(
+            name="brave_web_search",
+            description="Search the web",
+            input_schema={
+                "type": "object",
+                "properties": {"query": {"type": "string"}},
+                "required": ["query"],
+            },
+        )
+        client.list_tools.return_value = [tool]
+        base_wrapper = Mock(return_value={"contents": [{"text": "hit"}]})
+        client.create_tool_wrapper.return_value = base_wrapper
+        host = object.__new__(MCPClientMixin)
+
+        converted = host._convert_mcp_tools(client)
+        host._register_mcp_tools(client, converted)
+        registered = next(
+            item
+            for item in _TOOL_REGISTRY.values()
+            if item["name"].endswith("brave_web_search")
+        )
+
+        assert registered["function"](query="q")["status"] == "success"
+        base_wrapper.assert_called_once_with(query="q")
 
     @patch("gaia.mcp.mixin.MCPClientManager")
     def test_tool_display_name_via_full_registration_path(self, mock_manager_class):

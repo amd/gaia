@@ -1766,13 +1766,9 @@ class RAGSDK:
 
     def _get_embedding_cache(self):
         """Lazy-init the content-keyed embedding cache (per-instance)."""
-        cache = getattr(self, "_embedding_cache", None)
-        if cache is None:
-            from gaia.llm.embedding_cache import EmbeddingCache
+        from gaia.llm.embedding_cache import cache_for
 
-            cache = EmbeddingCache()
-            self._embedding_cache = cache
-        return cache
+        return cache_for(self)
 
     def _encode_query(self, query: str) -> "np.ndarray":
         """Encode a single query to a (1, dim) array, served from the

@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/amd/gaia/tui/internal/gaiainit"
+	"github.com/amd/gaia/tui/internal/textutil"
 )
 
 // CheckTimeout bounds the status call: two small reads from the release.
@@ -76,17 +77,17 @@ func Check(ctx context.Context) (Status, error) {
 	refused := errors.As(runErr, &exitErr) && exitErr.ExitCode() == 1
 	if runErr != nil && !refused {
 		return Status{}, fmt.Errorf("could not ask GAIA about gaiacpp (%w): %s", runErr,
-			lastLine(stderr.String()+stdout.String()))
+			textutil.LastLine(stderr.String()+stdout.String()))
 	}
 	raw := stdout.Bytes()
 	i := bytes.IndexByte(raw, '{')
 	if i < 0 {
 		return Status{}, fmt.Errorf("GAIA gave no answer about gaiacpp: %s",
-			lastLine(stderr.String()+stdout.String()))
+			textutil.LastLine(stderr.String()+stdout.String()))
 	}
 	var st Status
 	if err := json.Unmarshal(raw[i:], &st); err != nil {
-		return Status{}, fmt.Errorf("GAIA's answer about gaiacpp could not be read (%w): %s", err, lastLine(stdout.String()))
+		return Status{}, fmt.Errorf("GAIA's answer about gaiacpp could not be read (%w): %s", err, textutil.LastLine(stdout.String()))
 	}
 	return st, nil
 }
@@ -149,17 +150,7 @@ func Download(ctx context.Context, onProgress func(Progress)) (string, error) {
 	case last.Event == "done" && waitErr == nil:
 		return last.Path, nil
 	}
-	return "", fmt.Errorf("the gaiacpp download ended without a result (%v): %s", waitErr, lastLine(stderr.String()))
-}
-
-func lastLine(s string) string {
-	lines := strings.Split(strings.TrimSpace(s), "\n")
-	for i := len(lines) - 1; i >= 0; i-- {
-		if line := strings.TrimSpace(lines[i]); line != "" {
-			return line
-		}
-	}
-	return "(no output)"
+	return "", fmt.Errorf("the gaiacpp download ended without a result (%v): %s", waitErr, textutil.LastLine(stderr.String()))
 }
 
 // HumanSize is a byte count for a sentence: "12.3 MB".

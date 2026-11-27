@@ -51,6 +51,7 @@ from pathlib import Path
 from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence, Tuple
 from urllib.parse import urlencode
 
+from gaia.eval.bench.git_runner import GIT_TIMEOUT_S, run_git
 from gaia.eval.bench.therock import HISTORY_DEPTH
 from gaia.logger import get_logger
 
@@ -114,7 +115,6 @@ COPY --from=docker:cli /usr/local/bin/docker /usr/local/bin/docker
 RUN pip install --no-cache-dir swebench=={GRADER_SWEBENCH}
 """
 GRADER_BUILD_TIMEOUT_S = 1800
-GIT_TIMEOUT_S = 900
 FETCH_TIMEOUT_S = 120
 DOCKER_PULL_TIMEOUT_S = 3600
 
@@ -349,30 +349,7 @@ def gold_patches(ids: Sequence[str], fetch: Optional[Fetcher] = None) -> Dict[st
 
 
 def _git(args: Sequence[str], cwd: Optional[Path] = None) -> str:
-    git = shutil.which("git")
-    if not git:
-        raise SweBenchError("SWE-bench tasks need git on PATH.")
-    try:
-        proc = subprocess.run(
-            [git, *args],
-            cwd=cwd,
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            stdin=subprocess.DEVNULL,
-            timeout=GIT_TIMEOUT_S,
-            check=True,
-        )
-    except subprocess.CalledProcessError as exc:
-        raise SweBenchError(
-            f"`git {' '.join(args)}` failed: {exc.stderr.strip()[-500:]}"
-        ) from exc
-    except subprocess.TimeoutExpired as exc:
-        raise SweBenchError(
-            f"`git {' '.join(args)}` did not finish in {GIT_TIMEOUT_S}s"
-        ) from exc
-    return proc.stdout
+    return run_git(args, cwd, SweBenchError, "SWE-bench tasks need git on PATH.")
 
 
 def repo_url(instance: Mapping[str, Any]) -> str:

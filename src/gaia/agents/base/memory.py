@@ -649,7 +649,10 @@ _SAVE_CLAIM = re.compile(
     r"(?:saved|stored|remembered|noted|save|store|remember|note)\b"
     r"|\b(?:is|was|has\s+been|have\s+been)\s+(?:now\s+)?"
     r"(?:saved|stored|remembered|noted)\b"
-    r"|^\W*(?:saved|stored|remembered|noted)\b",
+    r"|^\W*(?:saved|stored|remembered|noted)\b"
+    r"|\b(?:tucked|filed|locked)\s+away\b"
+    r"|\bnow\s+(?:in|part\s+of)\s+(?:your|my)\s+memory\b"
+    r"|\badded\s+(?:\S+\s+){0,3}?to\s+(?:your|my)\s+memory\b",
     re.IGNORECASE | re.MULTILINE,
 )
 _NOT_SAVED = re.compile(
@@ -671,6 +674,122 @@ _DECLINED_NOT_STORED = (
     "Not stored: the user said to leave this out of memory. Tell them you left "
     "it out. Do not save it another way."
 )
+
+
+#: Status words: "password is expired" names no password, so a later fact
+#: that merely uses one ("the meeting is long") is not blocked by it.
+_STATUS_WORDS = frozenset(
+    "expired required wrong optional long short weak strong new old same reset "
+    "changed empty blank correct incorrect invalid valid missing locked falsch "
+    "richtig abgelaufen erforderlich obligatoria obligatorio incorrecta "
+    "incorrecto caducada caducado obligatoire expiré expirée "
+    "the and his her its our your their".split()
+)
+#: A password word, an optional aside (", by the way,") and "is", ":" or "=".
+#: Any value after it is refused: a false refusal is fine, a leak is not.
+_PASSWORD_IS = (
+    r"\b(?:password|passphrase|passcode|contrase(?:ñ|n)a|passwort|kennwort"
+    r"|mot de passe|senha|wachtwoord|has(?:ł|l)o|api[_ -]?key|secret"
+    r"|access[_ -]?token|auth[_ -]?token|credential)s?\b"
+    r"(?:\s*,[^,\n]{1,40},)?\s*"
+    r"(?:(?:is|es|era|ist|war|est|é|e|jest|was)\b|[:=])"
+)
+#: The value itself: "is 'secret'", "is: blue42", "is the word falcon".
+_PASSWORD_VALUE_RE = re.compile(
+    _PASSWORD_IS + r"\s*[:=]?\s*(?:(?:the|a|an)\s+)?(?:(?:word|phrase)\s+)?"
+    r"[\"'`‘’“”]?(?P<value>[^\s\"'`‘’“”,;!?()]+)",
+    re.IGNORECASE,
+)
+#: A fact that is just a value with a label: "WiFi: sunshine".
+_LABELLED_VALUE = re.compile(r"^[^:\n]{1,30}:\s*\S+\s*$")
+
+#: Any word that may name a secret: a forced save never fires near one, so a
+#: model that declined to save "the alarm code is 9090" is not overruled.
+_CREDENTIAL_WORD = re.compile(
+    r"\b(?:pass(?:word|wd|code|phrase)?|pw|pwd|pin|code|login|key"
+    r"|token|secret|credential|contrase(?:ñ|n)a|clave|passwort"
+    r"|kennwort|mot de passe|c(?:ó|o)digo)s?\b",
+    re.IGNORECASE,
+)
+#: The longest message a forced save reads; anything longer is left to the model.
+_FORCED_SAVE_MAX_CHARS = 300
+#: Characters a forced fact may hold. No comma: one starts a second clause
+#: ("..., maar niet opslaan"), so a fact with one is left to the model.
+_FACT = r"(?P<fact>[A-Za-z0-9 '\"/:%$.\-]+?)"
+#: The only messages GAIA saves on its own, the whole message and nothing more:
+#: "(Please) remember (that) X." / "(Please) keep in mind (that) X.",
+#: "Remember this (for later): X." and
+#: "X. Please remember that." / "X. Please remember this."
+_FORCED_SAVE_SHAPES = (
+    re.compile(
+        r"(?:please\s+)?(?:remember|keep\s+in\s+mind)"
+        r"(?:\s+that|\s+this(?:\s+for\s+later)?\s*:)?\s+" + _FACT + r"[.!]?",
+        re.IGNORECASE,
+    ),
+    re.compile(_FACT + r"\.?\s+please\s+remember\s+(?:that|this)[.!]?", re.IGNORECASE),
+)
+#: A second sentence inside the fact: a stop, "!" or "?" before a space or the end.
+_SECOND_SENTENCE = re.compile(r"[.!?](?:\s|$)|[!?]")
+#: A second clause that may change or take back the first.
+_SECOND_CLAUSE = re.compile(
+    r"\b(?:but|then|except|unless|though|although|however|instead|actually|wait"
+    r"|also|jk|kidding|abort|strike|scrap|scratch|stop|cancel\w*|undo|forget\w*)\b",
+    re.IGNORECASE,
+)
+#: The words that ask to keep something in memory. A forced save needs exactly one.
+_MEMORY_ASK = re.compile(
+    r"\bremember\w*|\bmemori[sz]\w*|\bin\s+mind\b|\bmemor(?:y|ies)\b", re.IGNORECASE
+)
+#: A negation or decline anywhere in the message leaves the save to the model.
+#: Deliberately blunt: "remember that I'm not vegan" is left to the model too.
+_DECLINE_SIGNAL = re.compile(
+    r"\b(?:not|never|no|nah|nope|nevermind|cannot|forget\w*|skip\w*|cancel\w*"
+    r"|ignore|disregard|undo|delete|erase|remove|except|unless"
+    r"|nicht|nein|kein\w*|nunca|jamais|nada|non|niet|nie|inte|ikke|nej|ne|pas"
+    r"|nao|nem|nu)\b"
+    r"|n\s*'+\s*t\b"
+    r"|\b(?:do|does|did|wo|ca|could|would|should|must|need|is|are|was|were"
+    r"|has|have|had|ai|might)\s*n\s*t\b"
+    r"|\brather\s+(?:you|u)\b|\bprefer\s+(?:you|u|that\s+you)\b"
+    r"|\bhold\s+off\b|\bscratch\s+that\b|\bsecond\s+thoughts?\b"
+    r"|\bchanged?\s+my\s+mind\b",
+    re.IGNORECASE,
+)
+
+
+def fact_to_keep(request: str) -> str:
+    """The fact in *request* the user asked to remember, or "".
+
+    GAIA saves this itself when the model skips the save, so it only reads one
+    fixed shape: the whole message is a single plain-ASCII sentence such as
+    "Remember that my dog's name is Rex." or "My birthday is March 3. Please
+    remember that.", with no comma, no negation, no second clause and at most
+    300 characters. Every other request is left to the model.
+    """
+    text = _straight_apostrophes(request or "").strip()
+    if (
+        len(text) > _FORCED_SAVE_MAX_CHARS
+        or not all(" " <= ch <= "~" for ch in text)
+        or len(_MEMORY_ASK.findall(text)) != 1
+        or _DECLINE_SIGNAL.search(text)
+        or not asks_to_keep_in_memory(text)
+        or MemoryMixin._looks_like_credential(text)
+        or _CREDENTIAL_WORD.search(text)
+    ):
+        return ""
+    for shape in _FORCED_SAVE_SHAPES:
+        match = shape.fullmatch(text)
+        if match is None:
+            continue
+        fact = match.group("fact").strip()
+        if (
+            _SECOND_SENTENCE.search(fact)
+            or _SECOND_CLAUSE.search(fact)
+            or len(fact.split()) < 2
+        ):
+            return ""
+        return fact
+    return ""
 
 
 def claims_memory_save(answer: str) -> bool:
@@ -1327,6 +1446,275 @@ def _embedding_to_blob(vec: np.ndarray) -> bytes:
 def _blob_to_embedding(blob: bytes) -> np.ndarray:
     """Convert a raw bytes BLOB back to a float32 numpy vector."""
     return np.frombuffer(blob, dtype=np.float32).copy()
+
+
+# ============================================================================
+# Memory Reconciliation (shared by the agent and the dashboard)
+# ============================================================================
+
+#: System prompt sent with every ``_RECONCILIATION_PROMPT`` classification.
+RECONCILIATION_SYSTEM_PROMPT = (
+    "You are a memory reconciliation engine. Return valid JSON only."
+)
+
+#: Most recently updated memories a reconciliation run compares.
+RECONCILE_CANDIDATE_LIMIT = 200
+
+#: Nearest neighbours searched per memory when looking for similar pairs.
+RECONCILE_NEIGHBORS = 5
+
+
+def reconciliation_max_tokens(model_id: Optional[str]) -> int:
+    """Output budget for one classification reply on *model_id*."""
+    return 256 + reasoning_headroom(model_id)
+
+
+def empty_reconcile_result() -> Dict[str, int]:
+    """The counts a reconciliation run returns, all zero."""
+    return {
+        "pairs_checked": 0,
+        "reinforced": 0,
+        "contradicted": 0,
+        "weakened": 0,
+        "neutral": 0,
+    }
+
+
+def _parse_relationship(raw: str) -> Optional[str]:
+    """The ``relationship`` in a classification reply, or None if unreadable."""
+    text = strip_reasoning(raw).strip()
+    if text.startswith("```"):
+        text = re.sub(r"^```(?:json)?\s*", "", text)
+        text = re.sub(r"\s*```$", "", text).strip()
+    try:
+        classification = json.loads(text)
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(classification, dict):
+        return None
+    return str(classification.get("relationship", "neutral"))
+
+
+def _reconcile_metadata(item: Dict) -> Dict[str, Any]:
+    """A copy of *item*'s metadata with ``reconciled_with`` as a list."""
+    raw_meta = item.get("metadata") or {}
+    if isinstance(raw_meta, str):
+        try:
+            raw_meta = json.loads(raw_meta) if raw_meta else {}
+        except json.JSONDecodeError as exc:
+            raise ValueError(
+                f"memory {item['id']} has unreadable metadata ({exc}); "
+                "fix or delete that entry in the Memory dashboard, then retry"
+            ) from exc
+    if not isinstance(raw_meta, dict):
+        raise ValueError(
+            f"memory {item['id']} has metadata of type {type(raw_meta).__name__}, "
+            "not an object; fix or delete that entry in the Memory dashboard, "
+            "then retry"
+        )
+    meta = dict(raw_meta)
+    reconciled = meta.get("reconciled_with") or []
+    if not isinstance(reconciled, list):
+        raise ValueError(
+            f"memory {item['id']} has a reconciled_with marker of type "
+            f"{type(reconciled).__name__}, not a list; fix or delete that entry "
+            "in the Memory dashboard, then retry"
+        )
+    meta["reconciled_with"] = list(reconciled)
+    return meta
+
+
+def reconcile_memories(
+    store: Any,
+    classify: Callable[[str], str],
+    *,
+    max_pairs: int = 20,
+    embedding_dim: Optional[int] = None,
+    on_superseded: Optional[Callable[[str], None]] = None,
+) -> Dict[str, int]:
+    """Classify near-duplicate memories in pairs and apply each verdict.
+
+    Pairs are memories with cosine similarity of at least
+    ``RECONCILE_SIMILARITY_THRESHOLD``. Each new pair goes to *classify*,
+    which takes a ``_RECONCILIATION_PROMPT`` and returns the model's raw reply:
+
+    - ``reinforce``: both gain 0.05 confidence.
+    - ``contradict``: the older is superseded by the newer, which gains 0.1.
+    - ``weaken``: the older loses 0.1.
+    - anything else: no change.
+
+    Both memories of a classified pair are marked ``reconciled_with`` each
+    other, so no later run classifies that pair again.
+
+    Args:
+        store: The ``MemoryStore`` to read candidates from and write to.
+        classify: Sends one prompt to the LLM and returns its reply text.
+            Its errors propagate; only an unparseable reply skips a pair.
+        max_pairs: Most pairs classified in this run.
+        embedding_dim: Expected vector size; vectors of another size (a
+            previous embedder's) are skipped. None takes the first readable
+            vector's size.
+        on_superseded: Called with the id of each memory a contradiction
+            retires, e.g. to drop it from a cached search index.
+
+    Returns:
+        ``{pairs_checked, reinforced, contradicted, weakened, neutral}``.
+
+    Raises:
+        ImportError: faiss is not installed.
+        ValueError: a candidate memory's metadata cannot be read.
+        RuntimeError: an unsafe FAISS call, or a memory that vanished mid-run.
+    """
+    result = empty_reconcile_result()
+
+    items = store.get_items_for_reconciliation(limit=RECONCILE_CANDIDATE_LIMIT)
+    if len(items) < 2:
+        return result
+
+    ids: List[str] = []
+    vectors: List[np.ndarray] = []
+    item_map: Dict[str, Dict] = {}
+    expected_dim = embedding_dim
+    undecodable = 0
+    wrong_dim = 0
+    for item in items:
+        try:
+            vec = _blob_to_embedding(item["embedding"])
+        except (ValueError, TypeError, KeyError) as exc:
+            undecodable += 1
+            logger.debug("Reconcile skipping memory %s: %s", item.get("id"), exc)
+            continue
+        if expected_dim is None:
+            expected_dim = int(vec.shape[0])
+        if vec.shape[0] != expected_dim:
+            wrong_dim += 1
+            continue
+        norm = np.linalg.norm(vec)
+        if norm > 0:
+            vec = vec / norm
+        ids.append(item["id"])
+        vectors.append(vec)
+        item_map[item["id"]] = item
+
+    if undecodable or wrong_dim:
+        logger.warning(
+            "Reconcile skipped %d memory(ies) with an unreadable embedding and "
+            "%d from a different embedder; POST /api/memory/rebuild-embeddings "
+            "(Memory dashboard > Rebuild embeddings) to include them",
+            undecodable,
+            wrong_dim,
+        )
+
+    if len(vectors) < 2 or expected_dim is None:
+        return result
+
+    import faiss
+
+    assert_faiss_omp_safe("Memory reconciliation search")
+    mat = np.stack(vectors).astype(np.float32)
+    index = faiss.IndexFlatIP(expected_dim)
+    index.add(mat)
+    n_neighbors = min(RECONCILE_NEIGHBORS, len(vectors))
+    scores_all, indices_all = index.search(mat, n_neighbors)
+
+    # One metadata dict per id for the whole run: a memory in several pairs
+    # must keep every marker, not just the last pair's.
+    metas: Dict[str, Dict[str, Any]] = {}
+
+    def _meta(knowledge_id: str) -> Dict[str, Any]:
+        if knowledge_id not in metas:
+            metas[knowledge_id] = _reconcile_metadata(item_map[knowledge_id])
+        return metas[knowledge_id]
+
+    pairs: List[Tuple[str, str, float]] = []
+    seen: Set[Tuple[str, str]] = set()
+    for i in range(len(vectors)):
+        for j_pos in range(n_neighbors):
+            j = int(indices_all[i][j_pos])
+            if j in (i, -1):
+                continue
+            sim = float(scores_all[i][j_pos])
+            if sim < RECONCILE_SIMILARITY_THRESHOLD:
+                continue
+            key = (min(ids[i], ids[j]), max(ids[i], ids[j]))
+            if key in seen:
+                continue
+            seen.add(key)
+            # Drop settled pairs before the cap, or they fill it every run.
+            if ids[j] in _meta(ids[i])["reconciled_with"]:
+                continue
+            if ids[i] in _meta(ids[j])["reconciled_with"]:
+                continue
+            pairs.append((ids[i], ids[j], sim))
+
+    pairs.sort(key=lambda p: p[2], reverse=True)
+    pairs = pairs[:max_pairs]
+
+    superseded: Set[str] = set()
+    for id_a, id_b, _sim in pairs:
+        if id_a in superseded or id_b in superseded:
+            # Retired earlier in this run; it leaves the candidates next run.
+            continue
+        item_a = item_map[id_a]
+        item_b = item_map[id_b]
+        prompt = _RECONCILIATION_PROMPT.format(
+            date_a=str(item_a.get("created_at") or "unknown")[:10],
+            content_a=str(item_a.get("content", ""))[:500],
+            date_b=str(item_b.get("created_at") or "unknown")[:10],
+            content_b=str(item_b.get("content", ""))[:500],
+        )
+        relationship = _parse_relationship(classify(prompt))
+        if relationship is None:
+            logger.warning(
+                "Reconcile skipping pair %s/%s: the reply was not a JSON object; "
+                "it is classified again next run",
+                id_a,
+                id_b,
+            )
+            continue
+
+        result["pairs_checked"] += 1
+
+        # Marked before the verdict lands: a failed write must never let the
+        # next run apply this pair's verdict a second time.
+        meta_a = _meta(id_a)
+        meta_b = _meta(id_b)
+        meta_a["reconciled_with"].append(id_b)
+        meta_b["reconciled_with"].append(id_a)
+        for knowledge_id, meta in ((id_a, meta_a), (id_b, meta_b)):
+            if not store.update(knowledge_id, metadata=meta):
+                raise RuntimeError(
+                    f"could not mark memory {knowledge_id} as reconciled: "
+                    "the entry no longer exists"
+                )
+
+        a_is_older = str(item_a.get("created_at") or "") <= str(
+            item_b.get("created_at") or ""
+        )
+        older, newer = (id_a, id_b) if a_is_older else (id_b, id_a)
+
+        if relationship == "reinforce":
+            store.update_confidence(id_a, 0.05)
+            store.update_confidence(id_b, 0.05)
+            result["reinforced"] += 1
+        elif relationship == "contradict":
+            if not store.update(older, superseded_by=newer):
+                raise RuntimeError(
+                    f"could not supersede memory {older}: the entry no longer exists"
+                )
+            store.update_confidence(newer, 0.1)
+            superseded.add(older)
+            if on_superseded is not None:
+                on_superseded(older)
+            result["contradicted"] += 1
+        elif relationship == "weaken":
+            store.update_confidence(older, -0.1)
+            result["weakened"] += 1
+        else:
+            result["neutral"] += 1
+
+    logger.info("[memory] reconciliation: %s", result)
+    return result
 
 
 #: Reason codes for why memory is unavailable this session. Distinct
@@ -2221,13 +2609,9 @@ class MemoryMixin(ProceduralMemoryMixin):
 
     def _get_embedding_cache(self):
         """Lazy-init the content-keyed embedding cache (per-instance)."""
-        cache = getattr(self, "_embedding_cache", None)
-        if cache is None:
-            from gaia.llm.embedding_cache import EmbeddingCache
+        from gaia.llm.embedding_cache import cache_for
 
-            cache = EmbeddingCache()
-            self._embedding_cache = cache
-        return cache
+        return cache_for(self)
 
     def _embed_text(self, text: str) -> np.ndarray:
         """Embed text via Lemonade using the active embedder.
@@ -3396,9 +3780,7 @@ class MemoryMixin(ProceduralMemoryMixin):
         """
         # Step 6: reconcile_memory() (max 20 pairs)
         try:
-            recon = self.reconcile_memory(max_pairs=20)
-            if recon.get("pairs_checked", 0) > 0:
-                logger.info("[MemoryMixin] post-init reconciliation: %s", recon)
+            self.reconcile_memory(max_pairs=20)
         except Exception as e:
             logger.warning("[MemoryMixin] post-init reconciliation failed: %s", e)
 
@@ -3710,8 +4092,8 @@ class MemoryMixin(ProceduralMemoryMixin):
     def reconcile_memory(self, max_pairs: int = 20) -> Dict:
         """Pairwise similarity check on active items for conflict detection.
 
-        Finds pairs with >0.85 cosine similarity, then uses LLM to classify:
-        reinforce/contradict/weaken/neutral.
+        Runs :func:`reconcile_memories` with this agent's chat model; see it
+        for the verdicts and what each one changes.
 
         Args:
             max_pairs: Maximum number of pair classifications per run.
@@ -3719,222 +4101,29 @@ class MemoryMixin(ProceduralMemoryMixin):
         Returns:
             Dict with {pairs_checked, reinforced, contradicted, weakened, neutral}.
         """
-        result = {
-            "pairs_checked": 0,
-            "reinforced": 0,
-            "contradicted": 0,
-            "weakened": 0,
-            "neutral": 0,
-        }
-
         self._finish_deferred_memory_init()
         if self._faiss_index is None or self._faiss_index.ntotal < 2:
-            return result
+            return empty_reconcile_result()
 
-        store = self._memory_store
-
-        # Get all active items with embeddings for pairwise comparison
-        items = store.get_items_for_reconciliation()
-        if len(items) < 2:
-            return result
-
-        # Build a mapping for quick lookup
-        item_map = {}
-        vectors = []
-        ids = []
-        for item in items:
-            try:
-                vec = _blob_to_embedding(item["embedding"])
-                if vec.shape[0] != self._embedding_dim:
-                    continue
-                norm = np.linalg.norm(vec)
-                if norm > 0:
-                    vec = vec / norm
-                item_map[item["id"]] = item
-                vectors.append(vec)
-                ids.append(item["id"])
-            except Exception as e:
-                logger.warning(
-                    "Skipping memory %s in reconciliation: corrupt embedding: %s",
-                    item.get("id"),
-                    e,
-                )
-                continue
-
-        if len(vectors) < 2:
-            return result
-
-        # Stack all vectors and compute pairwise similarities
-        mat = np.stack(vectors)
-        # For efficiency with large sets, check each item against its top-K neighbors
-        import faiss
-
-        assert_faiss_omp_safe("Memory reconciliation search")
-        try:
-            temp_index = faiss.IndexFlatIP(self._embedding_dim)
-            temp_index.add(mat)
-
-            # Search each item for its top-5 neighbors
-            n_neighbors = min(5, len(vectors))
-            scores_all, indices_all = temp_index.search(mat, n_neighbors)
-        except (RuntimeError, ValueError) as e:
-            logger.warning(
-                "[MemoryMixin] reconciliation FAISS search over %d memories "
-                "failed, no conflicts were checked this run: %s",
-                len(vectors),
-                e,
+        def classify(prompt: str) -> str:
+            response = self.chat.send_messages(
+                messages=[{"role": "user", "content": prompt}],
+                system_prompt=RECONCILIATION_SYSTEM_PROMPT,
+                temperature=0.1,
+                max_tokens=reconciliation_max_tokens(
+                    getattr(self.chat, "effective_model", None)
+                ),
+                **self._side_request_kwargs(),
             )
-            return result
+            return response.text if hasattr(response, "text") else str(response)
 
-        # Collect high-similarity pairs
-        pairs = []
-        seen_pairs = set()
-        for i in range(len(vectors)):
-            for j_pos in range(n_neighbors):
-                j = int(indices_all[i][j_pos])
-                if j == i:
-                    continue
-                sim = float(scores_all[i][j_pos])
-                if sim >= RECONCILE_SIMILARITY_THRESHOLD:
-                    pair_key = tuple(sorted((ids[i], ids[j])))
-                    if pair_key not in seen_pairs:
-                        seen_pairs.add(pair_key)
-                        pairs.append((ids[i], ids[j], sim))
-
-        # Sort by similarity descending, take top max_pairs
-        pairs.sort(key=lambda x: x[2], reverse=True)
-        pairs = pairs[:max_pairs]
-
-        if not pairs:
-            return result
-
-        for id_a, id_b, sim in pairs:
-            try:
-                item_a = item_map.get(id_a)
-                item_b = item_map.get(id_b)
-                if not item_a or not item_b:
-                    continue
-
-                # Skip already reconciled pairs
-                meta_a = item_a.get("metadata") or {}
-                meta_b = item_b.get("metadata") or {}
-                if isinstance(meta_a, str):
-                    meta_a = json.loads(meta_a) if meta_a else {}
-                if isinstance(meta_b, str):
-                    meta_b = json.loads(meta_b) if meta_b else {}
-
-                # Check if already reconciled with each other
-                reconciled_a = meta_a.get("reconciled_with", [])
-                reconciled_b = meta_b.get("reconciled_with", [])
-                if id_b in reconciled_a or id_a in reconciled_b:
-                    continue
-
-                prompt = _RECONCILIATION_PROMPT.format(
-                    date_a=item_a.get("created_at", "unknown")[:10],
-                    content_a=item_a.get("content", "")[:500],
-                    date_b=item_b.get("created_at", "unknown")[:10],
-                    content_b=item_b.get("content", "")[:500],
-                )
-
-                response = self.chat.send_messages(
-                    messages=[{"role": "user", "content": prompt}],
-                    system_prompt="You are a memory reconciliation engine. Return valid JSON only.",
-                    temperature=0.1,
-                    max_tokens=256
-                    + reasoning_headroom(getattr(self.chat, "effective_model", None)),
-                    **self._side_request_kwargs(),
-                )
-
-                raw_text = response.text if hasattr(response, "text") else str(response)
-                raw_text = strip_reasoning(raw_text)
-                if raw_text.startswith("```"):
-                    raw_text = re.sub(r"^```(?:json)?\s*", "", raw_text)
-                    raw_text = re.sub(r"\s*```$", "", raw_text)
-
-                classification = json.loads(raw_text)
-                relationship = classification.get("relationship", "neutral")
-
-                result["pairs_checked"] += 1
-
-                if relationship == "reinforce":
-                    # Boost confidence of both items by +0.05
-                    store.update_confidence(id_a, 0.05)
-                    store.update_confidence(id_b, 0.05)
-                    result["reinforced"] += 1
-
-                elif relationship == "contradict":
-                    # Supersede the older item, boost newer confidence +0.1
-                    a_date = item_a.get("created_at", "")
-                    b_date = item_b.get("created_at", "")
-                    if a_date <= b_date:
-                        # A is older, B is newer
-                        store.update(id_a, superseded_by=id_b)
-                        store.update_confidence(id_b, 0.1)
-                        self._faiss_remove(id_a)
-                    else:
-                        # B is older, A is newer
-                        store.update(id_b, superseded_by=id_a)
-                        store.update_confidence(id_a, 0.1)
-                        self._faiss_remove(id_b)
-                    result["contradicted"] += 1
-
-                elif relationship == "weaken":
-                    # Reduce confidence of the older item by 0.1
-                    a_date = item_a.get("created_at", "")
-                    b_date = item_b.get("created_at", "")
-                    if a_date <= b_date:
-                        store.update_confidence(id_a, -0.1)
-                    else:
-                        store.update_confidence(id_b, -0.1)
-                    result["weakened"] += 1
-
-                else:
-                    result["neutral"] += 1
-
-                # Mark both items as reconciled with each other
-                # Merge with existing metadata rather than clobbering
-                try:
-                    merged_a = dict(meta_a) if isinstance(meta_a, dict) else {}
-                    if not isinstance(reconciled_a, list):
-                        reconciled_a = []
-                    reconciled_a.append(id_b)
-                    merged_a["reconciled_with"] = reconciled_a
-                    store.update(id_a, metadata=merged_a)
-
-                    merged_b = dict(meta_b) if isinstance(meta_b, dict) else {}
-                    if not isinstance(reconciled_b, list):
-                        reconciled_b = []
-                    reconciled_b.append(id_a)
-                    merged_b["reconciled_with"] = reconciled_b
-                    store.update(id_b, metadata=merged_b)
-                except Exception as e:
-                    # Loud: a failed mark means this pair is re-examined (and
-                    # re-sent to the LLM) on every startup until it succeeds.
-                    logger.warning(
-                        "[MemoryMixin] failed to mark pair %s/%s reconciled — "
-                        "it will be re-checked next startup: %s",
-                        id_a[:8],
-                        id_b[:8],
-                        e,
-                    )
-
-            except json.JSONDecodeError as e:
-                logger.warning(
-                    "[MemoryMixin] reconciliation reply for pair %s/%s was not JSON "
-                    "(%s) — it will be re-checked next startup",
-                    id_a[:8],
-                    id_b[:8],
-                    e,
-                )
-            except Exception as e:
-                logger.debug(
-                    "[MemoryMixin] reconciliation failed for pair %s/%s: %s",
-                    id_a[:8],
-                    id_b[:8],
-                    e,
-                )
-
-        return result
+        return reconcile_memories(
+            self._memory_store,
+            classify,
+            max_pairs=max_pairs,
+            embedding_dim=self._embedding_dim,
+            on_superseded=self._faiss_remove,
+        )
 
     # ------------------------------------------------------------------
     # Hook 1: System Prompt Injection
@@ -4096,9 +4285,9 @@ class MemoryMixin(ProceduralMemoryMixin):
             "=== MEMORY (Persistent Second Brain) ===\n"
             "You have persistent memory across sessions. USE IT PROACTIVELY:\n"
             "- GREETINGS: If you know the user's name or context, personalize greetings!\n"
-            "  WRONG: 'Hey! What are you working on?' (generic, ignores stored knowledge)\n"
-            "  RIGHT: 'Hey Jordan! How's the K8s migration going?' (uses stored name + project)\n"
-            "  Reference their name, project, or recent activity. Make them feel known.\n"
+            "  Greet them by the name stored below and mention the project or recent\n"
+            "  activity stored below. With nothing stored, greet them plainly: never\n"
+            "  guess a name or a project.\n"
             "- IMPERATIVE: Any storage request ('remember', 'store', 'set a reminder',\n"
             "  'remind me', 'add a journal entry', 'log this') → call `remember` FIRST,\n"
             "  even when they say 'just acknowledge'. A verbal 'Got it' WITHOUT a tool\n"
@@ -4818,6 +5007,19 @@ class MemoryMixin(ProceduralMemoryMixin):
             # keyword directly adjacent to a value: "password is X", "secret: X"
             r"\b(?:password|passphrase|api[_ -]?key|secret|access[_ -]?token"
             r"|auth[_ -]?token|credential)s?\b\s*(?:is|:|=)\s*\S+",
+            # the same in other languages or with an aside: "contraseña es X",
+            # "password, by the way, is X"
+            _PASSWORD_IS + r"\s*\S+",
+            # short forms need a value shaped like one: "pw is hunter2", never
+            # "pw editor is vim" or "pwd is /home/me"
+            r"\b(?:pw|pwd)\b"
+            r"\s*(?:(?:is|es|era|ist|war|est|é|e|jest|was)\b|[:=])\s*"
+            r"(?![/~])(?=\S*[0-9!@#$%^&*])\S{4,}",
+            # a password word right before a value with letters and a digit or
+            # symbol: "password hunter2", never "password manager" or "pw 2024"
+            r"\b(?:password|passphrase|passcode|pw|pwd|contrase(?:ñ|n)a"
+            r"|passwort|kennwort|senha|wachtwoord)\b\s+"
+            r"(?![/~])(?=\S*[A-Za-z])(?=\S*[0-9!@#$%^&*])\S{4,}",
             # dash/underscore-joined token in any case, e.g. HALIBUT-4417-ZULU
             # or tango-9921-delta; a file extension right after it
             # (sales_2024_report.pdf) marks a filename, not a secret.
@@ -5040,6 +5242,19 @@ class MemoryMixin(ProceduralMemoryMixin):
             problems.append(_NOTHING_SAVED)
         return problems
 
+    def required_calls(self):
+        calls = list(super().required_calls())
+        saves = self._memory_saves_this_turn()
+        if saves:
+            return calls
+        called = {r.get("tool") for r in getattr(self, "_turn_tool_executions", [])}
+        if not self._unsaved_memory_request(called):
+            return calls
+        fact = fact_to_keep(getattr(self, "_original_user_input", None) or "")
+        if fact:
+            calls.append(("remember", {"fact": fact}))
+        return calls
+
     def answer_repair_prompt(self, problems):
         prompt = super().answer_repair_prompt(problems)
         if _REFUSED_SAVE in problems or _REFUSED_SECRET in problems:
@@ -5071,6 +5286,30 @@ class MemoryMixin(ProceduralMemoryMixin):
         mean a leaked secret, so this errs conservative on what it flags.
         """
         return bool(text and cls._credential_spans(text))
+
+    def _holds_request_secret(self, text: str) -> bool:
+        """True when *text* keeps a secret value from this turn's request.
+
+        A small model saves the bare value ("Tr0ub4dor&3") of "my wifi
+        password is Tr0ub4dor&3", which no shape on its own reveals.
+        """
+        request = getattr(self, "_original_user_input", None) or ""
+        values = [m.group("value") for m in _PASSWORD_VALUE_RE.finditer(request)]
+        for start, end in self._credential_spans(request):
+            words = re.split(r"[\s:=]+", request[start:end].strip())
+            if words and re.search(r"[0-9!@#$%^&*]", words[-1]):
+                values.append(words[-1])
+        text = text or ""
+        bare = len(text.split()) <= 3 or bool(_LABELLED_VALUE.match(text.strip()))
+        for value in values:
+            value = value.strip(".,;!?\"'`()[]‘’“”")
+            if len(value) < 3:
+                continue
+            if not bare and value.lower() in _STATUS_WORDS:
+                continue
+            if re.search(rf"(?<!\w){re.escape(value)}(?!\w)", text, re.IGNORECASE):
+                return True
+        return False
 
     #: Argument keys naming what a call acted on, in priority order. A shell
     #: command is keyed by its binary, so ``pytest -q`` working again retires
@@ -6234,7 +6473,9 @@ class MemoryMixin(ProceduralMemoryMixin):
             # a local-first memory that quietly accumulates secrets is the
             # Microsoft Recall failure mode. See _looks_like_credential for
             # what this detector can and cannot catch.
-            if MemoryMixin._looks_like_credential(fact):
+            if MemoryMixin._looks_like_credential(fact) or mixin._holds_request_secret(
+                fact
+            ):
                 logger.info(
                     "[MemoryMixin] remember(): refusing credential-shaped content"
                 )
@@ -6543,7 +6784,9 @@ class MemoryMixin(ProceduralMemoryMixin):
                         "status": "error",
                         "message": "content must not be empty or whitespace-only.",
                     }
-                if MemoryMixin._looks_like_credential(content):
+                if MemoryMixin._looks_like_credential(
+                    content
+                ) or mixin._holds_request_secret(content):
                     logger.info(
                         "[MemoryMixin] update_memory(): refusing "
                         "credential-shaped content"

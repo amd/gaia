@@ -4,8 +4,9 @@
 
 ``~/.gaia/policy.json`` holds ``network_policy``: ``cloud_allowed`` (the
 default) or ``local_ai_only``. Under Local only no GAIA LLM request may reach a
-cloud model. The guard is an allowlist: a model is permitted only when
-Lemonade's catalog lists it with a recipe known to run on this machine. An
+cloud model, and no GAIA web search request may reach Tavily, DuckDuckGo or a
+web-search connector. The model guard is an allowlist: a model is permitted only
+when Lemonade's catalog lists it with a recipe known to run on this machine. An
 unknown id, a cloud or ``collection.*`` recipe, or a catalog that can't be read
 is refused, because a blocklist keyed on id prefixes misses router aliases and
 providers nobody listed.
@@ -74,10 +75,14 @@ SETTINGS_HINT = (
     "To allow cloud models again, run "
     "`gaia config set network_policy cloud_allowed`."
 )
+WEB_SETTINGS_HINT = (
+    "Turn it off with `gaia config set network_policy cloud_allowed` "
+    "(Settings > Privacy > Local only in the Agent UI) and try again."
+)
 
 
 class CloudDisabledError(RuntimeError):
-    """A request would reach a cloud model while Local only is on."""
+    """A request would reach a cloud service while Local only is on."""
 
 
 def policy_path() -> Path:
@@ -192,8 +197,22 @@ def effective_policy() -> NetworkPolicy:
 
 
 def cloud_blocked() -> bool:
-    """True while no LLM request may reach a cloud model."""
+    """True while the Local only policy is in force."""
     return effective_policy() is not NetworkPolicy.CLOUD_ALLOWED
+
+
+def web_call_refusal(service: str) -> str:
+    """The actionable reason an external web call is refused."""
+    return f"{service} is unavailable while Local only is on. {WEB_SETTINGS_HINT}"
+
+
+def assert_web_permitted(service: str) -> None:
+    """Refuse an external web call before it is made while Local only is on."""
+    if not cloud_blocked():
+        return
+    message = web_call_refusal(service)
+    log.warning(message)
+    raise CloudDisabledError(message)
 
 
 def set_policy(value: str) -> NetworkPolicy:

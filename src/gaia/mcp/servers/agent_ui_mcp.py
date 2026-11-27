@@ -35,6 +35,7 @@ from gaia.mcp.servers.agent_ui_control import (
     remote_token,
     transport_security_settings,
 )
+from gaia.ports import AGENT_UI_PORT
 from gaia.ui.api_token import UITokenError, auth_headers
 from gaia.ui.sse_handler import (
     _RAG_RESULT_JSON_SUB_RE,
@@ -50,7 +51,7 @@ if TYPE_CHECKING:  # import only for type checking; runtime import is lazy (#175
 logger = logging.getLogger(__name__)
 
 # Default GAIA Agent UI backend URL
-DEFAULT_BACKEND = "http://localhost:4200"
+DEFAULT_BACKEND = f"http://localhost:{AGENT_UI_PORT}"
 
 # Every /api request carries the X-Gaia-UI CSRF header and the Agent UI API
 # token (see gaia/ui/security.py and gaia/ui/api_token.py). ``auth_headers``
