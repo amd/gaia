@@ -240,9 +240,10 @@
 .doc-pill-failed {
     border-color: color-mix(in srgb, var(--danger) 40%, transparent);
 }
-/* Remove button - hidden by default, shown on pill hover */
+/* Remove button - faded until hover or focus; display:none would drop it from the tab order */
 .doc-pill-remove {
-    display: none;
+    display: inline-flex;
+    opacity: 0;
     align-items: center;
     justify-content: center;
     flex-shrink: 0;
@@ -259,7 +260,10 @@
 }
 .doc-pill:hover .doc-pill-remove,
 .doc-pill:focus-within .doc-pill-remove {
-    display: inline-flex;
+    opacity: 1;
+}
+@media (hover: none) {
+    .doc-pill-remove { opacity: 1; }
 }
 .doc-pill-remove:hover {
     background: var(--danger);
