@@ -11,6 +11,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
 
+	"github.com/amd/gaia/tui/internal/catalog"
 	"github.com/amd/gaia/tui/internal/client"
 	"github.com/amd/gaia/tui/internal/event"
 	"github.com/amd/gaia/tui/internal/ui/theme"
@@ -36,7 +37,7 @@ var paletteCommands = []paletteCommand{
 	{"/memory", "View this agent's memory"},
 	{"/full-access", "Run every tool without asking first — shows a warning before it turns on"},
 	{"/setup", "Run first-time setup (gaia flagship agent only)"},
-	{"/connectors", "See connected apps and accounts; then personalize, revoke, add, remove, reconnect or default <id>"},
+	{"/connectors", "See connected apps and accounts; then personalize, allow, revoke, add, remove, reconnect or default <id>"},
 	{"/models", "Choose the models on this PC: download, skip, or pick the chat model"},
 	{"/gpu", "Give the GPU more memory so bigger models fit (integrated-GPU PCs)"},
 	{"/slack", "Connect this agent to Slack, or show the connection's status"},
@@ -122,8 +123,8 @@ const agentPalettePrefix = agentCommand + " "
 func agentPaletteCommands() []paletteCommand {
 	return []paletteCommand{
 		{agentCommand, "Show both programs and which one is running"},
-		{agentPalettePrefix + "gaiapy", "Python agent: every tool, well tested, heavier"},
-		{agentPalettePrefix + "gaiacpp", "Native agent (Beta): fast, light, fewer tools"},
+		{agentPalettePrefix + "gaiapy", catalog.HarnessLabel(catalog.PythonAgentChoice) + ": every tool, well tested, heavier"},
+		{agentPalettePrefix + "gaiacpp", catalog.HarnessLabel(catalog.NativeAgentBinary) + " (Beta): starts quickly, fewer tools"},
 	}
 }
 

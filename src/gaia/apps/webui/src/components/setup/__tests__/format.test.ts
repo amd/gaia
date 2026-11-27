@@ -4,7 +4,7 @@
 import { describe, expect, it } from 'vitest';
 import { stripIsolates, translateBare, type Say } from '../../../i18n/registry';
 import { tEn } from '../../../i18n/useT';
-import { DownloadMeter, formatEta, formatSize, formatSpeed, spokenEta } from '../format';
+import { DownloadMeter, formatEta, formatSize, formatSpeed, formatWholeGb, spokenEta } from '../format';
 import { copyableCommand } from '../GpuMemoryPanel';
 import { driveName } from '../ModelChecklist';
 
@@ -16,6 +16,18 @@ describe('sizes, speeds and times', () => {
         expect(formatSize(0.3)).toBe('300 MB');
         expect(formatSize(0)).toBe('0.0 GB');
         expect(formatSize(0.0004)).toBe('1 MB');
+        expect(formatSize(999.9)).toBe('999.9 GB');
+    });
+
+    it('shows 1000 GB and more in TB, to one place', () => {
+        expect(formatSize(1794.4)).toBe('1.8 TB');
+        expect(formatSize(1788.1)).toBe('1.8 TB');
+        expect(formatSize(1000)).toBe('1.0 TB');
+        expect(formatSize(999.96)).toBe('1.0 TB');
+        expect(formatSize(12_345)).toBe('12.3 TB');
+        expect(formatWholeGb(251.4)).toBe('251 GB');
+        expect(formatWholeGb(999.4)).toBe('999 GB');
+        expect(formatWholeGb(1794.4)).toBe('1.8 TB');
     });
 
     it('shows speed in MB/s', () => {
@@ -75,14 +87,35 @@ describe('sizes, speeds and times', () => {
 });
 
 describe('DownloadMeter', () => {
-    it('estimates nothing for the first 10 seconds', () => {
+    it('estimates nothing for the first 20 seconds', () => {
         const m = new DownloadMeter();
-        m.update(0, 100e6, 0);
-        expect(m.update(20e6, 100e6, 5_000)).toMatchObject({ speed: null, eta: null });
-        expect(m.update(40e6, 100e6, 9_000).eta).toBeNull();
-        const e = m.update(50e6, 100e6, 10_000);
+        m.update(1e6, 1e9, 0);
+        for (let s = 1; s < 20; s++) expect(m.update(1e6 + s * 5e6, 1e9, s * 1000)).toMatchObject({ speed: null, eta: null });
+        const e = m.update(101e6, 1e9, 20_000);
         expect(e.speed).toBeGreaterThan(0);
         expect(e.eta).toBeGreaterThan(0);
+    });
+
+    // A real first run: about 2 MB/s in bursts for 200 s, then 45 MB/s to the end.
+    it('holds a steady estimate through a slow, bursty start, then follows the speed-up', () => {
+        const m = new DownloadMeter();
+        const total = 7e9;
+        let bytes = 0;
+        const etas: (number | null)[] = [];
+        for (let s = 0; bytes < total; s++) {
+            etas[s] = m.update(bytes, total, s * 1000).eta;
+            const burst = Math.floor(s / 5) % 2 ? 3.5e6 : 0.5e6;
+            bytes = Math.min(total, bytes + (s < 200 ? burst : 45e6));
+        }
+        // The first figure arrives at 1 s, so 20 s of data is in at 21 s.
+        expect(etas.slice(0, 21).every((e) => e === null)).toBe(true);
+        const slow = etas.slice(21, 200) as number[];
+        // About 57 min left at 2 MB/s; one burst or lull must not swing it.
+        expect(Math.min(...slow)).toBeGreaterThan(50 * 60);
+        expect(Math.max(...slow) / Math.min(...slow)).toBeLessThan(1.2);
+        // A minute after the speed-up the estimate is close to the true 84 s left.
+        expect(etas[260]).toBeGreaterThan(60);
+        expect(etas[260]).toBeLessThan(120);
     });
 
     it('eases down to a shorter estimate instead of dropping at once', () => {
@@ -102,13 +135,13 @@ describe('DownloadMeter', () => {
     it('catches up within seconds when an earlier estimate was far too high', () => {
         const m = new DownloadMeter();
         m.update(0, 30e9, 0);
-        // Ten seconds at a crawl while the next pull starts: a huge estimate.
-        for (let s = 1; s <= 10; s++) m.update(s * 1e6, 30e9, s * 1000);
-        const high = m.update(11e6, 30e9, 11_000).eta!;
+        // Twenty seconds at a crawl while the next pull starts: a huge estimate.
+        for (let s = 1; s <= 20; s++) m.update(s * 1e6, 30e9, s * 1000);
+        const high = m.update(21e6, 30e9, 21_000).eta!;
         // Then 900 MB/s with about 7 GB to go.
         let bytes = 23e9;
         let eta = high;
-        for (let s = 12; s <= 20; s++) {
+        for (let s = 22; s <= 30; s++) {
             bytes += 0.9e9;
             eta = m.update(bytes, 30e9 + 1e9, s * 1000).eta!;
         }
@@ -151,10 +184,10 @@ describe('DownloadMeter after a resume', () => {
         // The partial file shows up: 15 GB in one second is not a speed.
         expect(m.update(15e9, 23.3e9, 1_000)).toMatchObject({ speed: null, eta: null });
         let e = m.update(15e9, 23.3e9, 1_000);
-        for (let s = 2; s <= 12; s++) e = m.update(15e9 + (s - 1) * 150e6, 23.3e9, s * 1000);
+        for (let s = 2; s <= 22; s++) e = m.update(15e9 + (s - 1) * 150e6, 23.3e9, s * 1000);
         expect(e.speed).toBeCloseTo(150e6, -6);
-        // 8.3 GB left - 1.65 GB done since = 6.65 GB at 150 MB/s, about 44 s.
-        expect(e.eta).toBeGreaterThan(40);
-        expect(e.eta).toBeLessThan(50);
+        // 8.3 GB left - 3.15 GB done since = 5.15 GB at 150 MB/s, about 34 s.
+        expect(e.eta).toBeGreaterThan(30);
+        expect(e.eta).toBeLessThan(40);
     });
 });

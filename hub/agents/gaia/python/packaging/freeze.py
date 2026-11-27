@@ -190,7 +190,8 @@ GPL_EXCLUDES = [
 # ~170 MB instead of ~2 GB. pandas and matplotlib are NOT here: they are
 # SCRIPT_LIBRARIES. tkinter is: no GAIA module uses it, and a bundled Tk would
 # make matplotlib open windows from a headless agent.
-EXCLUDES = [
+# installer/core/freeze.py excludes GPL_EXCLUDES and ML_EXCLUDES from here too.
+ML_EXCLUDES = [
     "torch",
     "transformers",
     "sentence_transformers",
@@ -201,8 +202,8 @@ EXCLUDES = [
     "scipy",
     "sympy",
     "tkinter",
-    *GPL_EXCLUDES,
 ]
+EXCLUDES = [*ML_EXCLUDES, *GPL_EXCLUDES]
 
 
 def is_excluded(name: str) -> bool:

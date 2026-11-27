@@ -167,7 +167,8 @@ jobs:
         working-directory: src/gaia/apps/webui
         run: |
           set -euo pipefail
-          npm ci
+          # Dependabot writes the Agent UI lockfile with npm 11; keep Node 22 but install with npm 11.
+          npx -y npm@11 ci
           npm run build
           test -f dist/index.html || { echo "::error::dist/index.html was not built"; exit 1; }
           node --check bin/gaia-ui.cjs
@@ -541,7 +542,8 @@ jobs:
         run: |
           set -euo pipefail
           cp "${RUNNER_TEMP}/flagship/binaries.lock.json" binaries.lock.json
-          npm ci
+          # Dependabot writes lockfiles with npm 11; Node 22's npm 10 rejects them.
+          npx -y npm@11 ci
           npm run build
           npm pack --ignore-scripts --pack-destination "${RUNNER_TEMP}/flagship"
 

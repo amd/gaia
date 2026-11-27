@@ -21,7 +21,7 @@ from __future__ import annotations
 
 import time
 import uuid
-from dataclasses import asdict, dataclass, fields
+from dataclasses import asdict, dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -100,19 +100,13 @@ def _locked():
 
 
 def load() -> List[Automation]:
-    data = files.read_json_or_set_aside(path(), "automations")
-    if data is None:
-        return []
-    names = {f.name for f in fields(Automation)}
-    try:
-        return [
-            Automation(**{k: v for k, v in item.items() if k in names})
-            for item in data.get("automations", [])
-        ]
-    except TypeError as e:
-        raise files.CorruptStateFile(
-            f"{path()} is not usable: {e}. Delete it to clear your automations."
-        ) from e
+    return files.read_records(
+        path(),
+        "automations",
+        "automations",
+        Automation,
+        "Delete it to clear your automations.",
+    )
 
 
 def save(items: List[Automation]) -> None:

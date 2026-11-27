@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: MIT
 
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest';
 import * as api from '../../services/api';
 import { ConnectionBanner } from '../ConnectionBanner';
 import { ErrorNotice } from '../settings/ErrorNotice';
@@ -131,6 +131,34 @@ describe('the start-up banner', () => {
         const { container } = render(<ConnectionBanner backendSlow />);
         expect(container).toHaveTextContent('GAIA is slow to answer');
         expect(container).not.toHaveTextContent('Loading AI model');
+    });
+
+    const downAtBoot = (checkStatus: string) => useChatStore.setState({ systemStatus: {
+        lemonade_running: false, init_state: 'initializing',
+        init_tasks: [
+            { name: 'Checking LLM server', step: 'check_server', status: checkStatus },
+            { name: 'Loading AI model', step: 'load_model', status: checkStatus === 'running' ? 'pending' : 'running' },
+        ],
+    } as SystemStatus });
+
+    it('says the server is down, not "Loading the model", once the server check is over', () => {
+        downAtBoot('done');
+        const { container, unmount } = render(<ConnectionBanner />);
+        expect(container).toHaveTextContent("The model server isn't answering");
+        expect(container).not.toHaveTextContent('Loading the model');
+        unmount();
+
+        useChatStore.setState({ locale: 'ar' });
+        const ar = render(<ConnectionBanner />);
+        expect(ar.container).not.toHaveTextContent('جارٍ تحميل النموذج');
+        expect(ar.container.querySelector('.connection-banner--warning')).not.toBeNull();
+    });
+
+    it('keeps "Checking the model server" while that check may still start the server', () => {
+        downAtBoot('running');
+        const { container } = render(<ConnectionBanner />);
+        expect(screen.getByRole('status')).toHaveTextContent('Checking the model server');
+        expect(container).not.toHaveTextContent("The model server isn't answering");
     });
 });
 
@@ -385,6 +413,14 @@ describe('a slow backend', () => {
         render(<ConnectionBanner backendSlow />);
         expect(screen.getByText(/GAIA is slow to answer/)).toBeInTheDocument();
         expect(screen.queryByText(/Can’t reach GAIA’s assistant/)).toBeNull();
+    });
+
+    it('speaks Arabic, its Check again button too', () => {
+        useChatStore.setState({ systemStatus: null, locale: 'ar' });
+        onTestFinished(() => useChatStore.setState({ locale: 'en' }));
+        const { container } = render(<ConnectionBanner backendSlow onRetry={() => {}} />);
+        expect(container).toHaveTextContent('GAIA بطيء في الاستجابة.');
+        expect(screen.getByRole('button', { name: /تحقق مرة أخرى/ })).toBeInTheDocument();
     });
 });
 

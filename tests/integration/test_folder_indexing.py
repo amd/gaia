@@ -191,8 +191,41 @@ class TestFolderIndexing:
 
         assert body["indexed"] == 1
         assert body["failed"] == 0
+        assert body["skipped"] == 3
+        assert body["skipped_files_truncated"] is False
+        assert {f["reason"] for f in body["skipped_files"]} == {"unsupported_type"}
+        assert {f["file"] for f in body["skipped_files"]} == {
+            "program.exe",
+            "library.dll",
+            "song.mp3",
+        }
         assert len(body["documents"]) == 1
         assert body["documents"][0]["filename"] == "good.txt"
+
+    @patch("gaia.ui.server._index_document", new_callable=AsyncMock, return_value=5)
+    def test_index_folder_hides_dot_paths_and_os_junk_from_named_skips(
+        self, mock_index, client, temp_folder
+    ):
+        """Hidden and OS files still count as skipped but do not take a name slot."""
+        _create_file(temp_folder, "good.txt", "valid")
+        _create_file(temp_folder, "notes.exe", "binary")
+        _create_file(temp_folder, ".git/HEAD", "ref: refs/heads/main")
+        _create_file(temp_folder, ".DS_Store", "desktop settings")
+        _create_file(temp_folder, "Thumbs.db", "thumbnail cache")
+
+        resp = client.post(
+            "/api/documents/index-folder",
+            json={"folder_path": str(temp_folder), "recursive": True},
+        )
+        assert resp.status_code == 200
+        body = resp.json()
+
+        assert body["skipped"] == 4
+        assert body["skipped_files"] == [
+            {"file": "notes.exe", "reason": "unsupported_type"}
+        ]
+        assert body["skipped_files_truncated"] is False
+        assert [d["filename"] for d in body["documents"]] == ["good.txt"]
 
     @pytest.mark.skipif(
         platform.system() == "Windows",

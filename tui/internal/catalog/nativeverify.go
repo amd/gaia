@@ -36,9 +36,9 @@ func (e *NativeIntegrityError) Error() string {
 	return fmt.Sprintf(
 		"%s was not run: %s (download record: %s).\n"+
 			"Fix:        download gaiacpp again in the Agent UI (Settings › Agent & model), "+
-			"or switch to the Python agent with /agent %s (at launch: --agent-program %s)\n"+
+			"or switch to %s with /agent %s (at launch: --agent-program %s)\n"+
 			"look:       %s",
-		e.Binary, e.Reason, e.Record, PythonAgentChoice, PythonAgentBinary, AgentChoiceDocsURL)
+		e.Binary, e.Reason, e.Record, HarnessLabel(PythonAgentChoice), PythonAgentChoice, PythonAgentBinary, AgentChoiceDocsURL)
 }
 
 // nativeExecutableName is the exact file name the Agent UI downloads to.

@@ -2,9 +2,7 @@
 
 **Status:** proposed · **Owner:** TBD · **Date:** 2026-10-13 · **Epic:** #5070
 **Related:** [mcp-context-efficiency.md](mcp-context-efficiency.md) (partly superseded, see
-below), [subagent-context-isolation.md](subagent-context-isolation.md),
-[skill-bound-task-execution.md](skill-bound-task-execution.md),
-the Claude Code plugin plan (not yet published)
+below), the Claude Code plugin plan (not yet published)
 
 Long GAIA runs fail when the conversation outgrows the model's context window, and today
 some of those failures lose a turn silently or show a raw backend error. The main cause is
@@ -189,10 +187,9 @@ One item too big for the cap is a different problem from a long history.
   source code the agent may edit, diffs, configs, structured records, or a
   `read_tool_output` fetch.
 - **Fresh-context sub-tasks** for bulky read-heavy steps (multi-source research,
-  large-document search). The model starts one through the `delegate` tool in
-  [subagent-context-isolation.md](subagent-context-isolation.md), not the reducer, and
-  the parent sees only the ≤1–2K result. If that plan's cold-start-prompt eval fails,
-  extraction alone covers large items.
+  large-document search). The model starts one through a delegation tool (#3383), not
+  the reducer, and the parent sees only the ≤1–2K result. Where delegation is not
+  available, extraction alone covers large items.
 - **Side slot, always.** Every side call runs on `SIDE_SLOT`. On local endpoints it runs
   only after checking that both contexts fit the shared KV pool; otherwise the main
   context gets the condensed output plus the handle. `extract_document_items` moves to

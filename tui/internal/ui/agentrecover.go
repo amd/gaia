@@ -56,7 +56,8 @@ func savedNativeBroken(choice AgentChoice, loadErr error) (why, detail string, o
 }
 
 // recoverSavedAgent asks what to do about a saved gaiacpp that cannot run and
-// returns the catalog for the pick. The Python agent runs only if it is picked.
+// returns the catalog for the pick. Full-featured, the Python agent, runs only
+// if it is picked.
 func recoverSavedAgent(why, detail string, loadErr error, dev bool, ctrl *control.Options) (*catalog.Catalog, string, error) {
 	if ctrl == nil && !interactive() {
 		return nil, "", loadErr
@@ -76,11 +77,12 @@ func recoverSavedAgent(why, detail string, loadErr error, dev bool, ctrl *contro
 		}
 		path, err := saveFlagshipAgent(preflight.FlagshipAgentPython)
 		if err != nil {
-			return nil, "", fmt.Errorf("could not save the Python agent as your agent program: %w", err)
+			return nil, "", fmt.Errorf("could not save %s as your agent program: %w",
+				catalog.HarnessLabel(catalog.PythonAgentChoice), err)
 		}
 		return cat, joinNotices(fmt.Sprintf(
-			"You chose the Python agent because %s could not start. It is saved as your agent program (%s); /agent %s switches back.",
-			catalog.NativeAgentBinary, path, preflight.FlagshipAgentNative), notice), nil
+			"You chose %s because %s could not start. It is saved as your agent program (%s); /agent %s switches back.",
+			catalog.HarnessLabel(catalog.PythonAgentChoice), catalog.NativeAgentBinary, path, preflight.FlagshipAgentNative), notice), nil
 	}
 	return nil, "", errLeftRecovery
 }

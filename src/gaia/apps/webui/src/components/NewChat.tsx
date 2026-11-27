@@ -3,6 +3,7 @@
 
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { ChevronRight, FileText, X } from 'lucide-react';
+import { AgentChip } from './AgentChip';
 import { AgentRecovery } from './AgentRecovery';
 import { BrowserPaneToggle } from './browser-pane/BrowserPane';
 import { Composer } from './Composer';
@@ -11,7 +12,7 @@ import { RunModeChip } from './RunModeChip';
 import { NpuBackdrop } from './NpuBackdrop';
 import { PermissionModeChip } from './PermissionModeChip';
 import { PrivateChip } from './PrivateChip';
-import { ResearchChip } from './ResearchChip';
+import { readSkillsForResearch, researchNeedsSkills, ResearchChip } from './ResearchChip';
 import { TryChips } from './TryChips';
 import { useAttachments } from '../hooks/useAttachments';
 import { useWarmUp, type WarmUpProgress } from '../hooks/useWarmUp';
@@ -23,7 +24,7 @@ import { displayModelName, useModelNames, useModelStore } from '../stores/modelS
 import * as messageQueue from '../utils/messageQueue';
 import { setVisibleInterval } from '../utils/visibleInterval';
 import { log } from '../utils/logger';
-import { requestErrorText } from '../utils/requestErrors';
+import { requestErrorParam, requestErrorText } from '../utils/requestErrors';
 import { FlagshipMissing } from '../utils/newTask';
 import { durationMs, prefersReducedMotion } from '../utils/motion';
 import { deviceLabel } from '../utils/modelLabels';
@@ -53,6 +54,8 @@ interface NewChatProps {
 
 /** How often the start screen is asked for again while the assistant is unavailable. */
 export const START_RETRY_MS = 15_000;
+/** How long the starter row waits, unseen, for this PC's tasks before it shows the examples instead. */
+export const STARTERS_WAIT_MS = 3_000;
 
 /** A warm-up shorter than this finishes unseen, rather than flashing "0s". */
 export const WARM_UP_SHOWN_AFTER_S = 2;
@@ -206,11 +209,15 @@ export function NewChat({ onSend, initialText = '', focusRequest = 0, agentMissi
     const setupError = useChatStore((s) => (s.systemStatus?.model_loaded ? null : s.systemStatus?.setup_error ?? null));
     const remote = useModelStore((s) => !!s.active?.remote);
     const [text, setText] = useSavedDraft(NEW_CHAT_DRAFT_KEY, initialText);
+    const textNowRef = useRef(text);
+    textNowRef.current = text;
     const [error, setError] = useState<string | null>(null);
     const [agentRefused, setAgentRefused] = useState(heldRefused);
     const [sending, setSending] = useState(false);
     const [start, setStart] = useState<StartScreen | null>(null);
     const [startError, setStartError] = useState<string | null>(null);
+    // A start screen that never answers must not leave the starter row blank for good.
+    const [startSlow, setStartSlow] = useState(false);
     const [agentProblem, setAgentProblem] = useState<AgentProblem | null>(null);
     // A message sent while the chosen agent can't start: it stays in the box.
     const [keptForAgent, setKeptForAgent] = useState(false);
@@ -244,6 +251,11 @@ export function NewChat({ onSend, initialText = '', focusRequest = 0, agentMissi
         loadStart();
         return () => { live.current = false; };
     }, [loadStart]);
+
+    useEffect(() => {
+        const timer = window.setTimeout(() => setStartSlow(true), STARTERS_WAIT_MS);
+        return () => window.clearTimeout(timer);
+    }, []);
 
     useEffect(() => {
         api.listDocuments()
@@ -283,7 +295,7 @@ export function NewChat({ onSend, initialText = '', focusRequest = 0, agentMissi
             if (held.length > 0 && sessionId) {
                 // The chat is open now; if its first message never went out, the rest wait for Send again.
                 const add = (items: messageQueue.QueuedMessage[], text: string) => sent === false
-                    ? [...items, { ...messageQueue.item(text, 'failed'), error: 'The first message was not sent.' }]
+                    ? [...items, { ...messageQueue.item(text, 'failed'), error: messageQueue.FIRST_NOT_SENT_ERROR }]
                     : messageQueue.enqueue(items, text, 'queued');
                 useChatStore.getState().updateQueue(sessionId, (q) => held.reduce(add, q));
             }
@@ -299,14 +311,31 @@ export function NewChat({ onSend, initialText = '', focusRequest = 0, agentMissi
         }
     }, [attachments, onSend]);
 
-    const submit = useCallback(() => {
+    const readingSkillsRef = useRef(false);
+    const submit = useCallback(async () => {
         // It would only fail: the box keeps the message until the agent is back.
         if (agentProblem) {
             setKeptForAgent(true);
             return;
         }
-        return send(attachments.compose(withResearchCommand(text.trim(), researchOn(useChatStore.getState(), null))), text.trim());
-    }, [agentProblem, attachments, send, text]);
+        const typed = text.trim();
+        if (readingSkillsRef.current) return;
+        if (researchNeedsSkills(typed, null)) {
+            readingSkillsRef.current = true;
+            setError(null);
+            try {
+                await readSkillsForResearch(typed, null);
+            } catch (err) {
+                setError(t('composer.researchSkillsUnavailable', { error: requestErrorParam(err) }));
+                return;
+            } finally {
+                readingSkillsRef.current = false;
+            }
+            // Edited during the wait: the box now holds the message the user means, so it stays unsent.
+            if (textNowRef.current !== text) return;
+        }
+        await send(attachments.compose(withResearchCommand(typed, researchOn(useChatStore.getState(), null))), typed);
+    }, [agentProblem, attachments, send, text, t]);
 
     useEffect(() => {
         if (focusRequest) inputRef.current?.focus();
@@ -386,6 +415,8 @@ export function NewChat({ onSend, initialText = '', focusRequest = 0, agentMissi
                 </div>
                 <div className="new-chat-meta">
                     {folder && <FolderChip folder={folder} disabled={starting || sending} />}
+                    {/* Under the model chip: the box's own row has no room left beside it. */}
+                    <AgentChip />
                 </div>
                 <LibraryDocuments />
                 {warming !== null && !starting && warming.seconds >= WARM_UP_SHOWN_AFTER_S && (
@@ -393,7 +424,8 @@ export function NewChat({ onSend, initialText = '', focusRequest = 0, agentMissi
                 )}
                 {error && <p className="new-chat-error" role="alert">{error}</p>}
                 {agentRefused && agentMissing && <p className="new-chat-error" role="alert">{t('agentNotice.sendRefused')}</p>}
-                <TryChips onPick={fillPrompt} disabled={starting || sending} />
+                {/* Held unseen until the start screen answers, so examples don't flash up before this PC's tasks and nothing jumps. */}
+                <TryChips cards={start?.cards} pending={!start && !startError && !startSlow} onPick={fillPrompt} disabled={starting || sending} />
                 {!agentProblem && startError && <AssistantUnavailable detail={startError} onRetry={() => loadStart()} />}
             </div>
         </main>

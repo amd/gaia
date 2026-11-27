@@ -68,13 +68,12 @@ function findFreePort() {
 async function killBackend(procOrPid, logger) {
   const log = (logger && logger.log) || console.log;
   const logError = (logger && logger.error) || console.error;
-  if (!procOrPid) return;
+  if (!procOrPid) return { killed: [], survivors: [], verified: true };
   const proc = typeof procOrPid === "object" ? procOrPid : null;
   if (proc && (proc.exitCode !== null || proc.signalCode !== null)) {
     log(`[port-manager] child pid ${proc.pid} already exited (exitCode=${proc.exitCode} signal=${proc.signalCode})`);
-    return;
   }
-  await killProcessTree(procOrPid, {
+  return killProcessTree(procOrPid, {
     graceMs: BACKEND_KILL_GRACE_MS,
     forceWaitMs: BACKEND_FORCE_WAIT_MS,
     log,

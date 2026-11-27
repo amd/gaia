@@ -290,7 +290,7 @@ def error_profile(traces: List[Trace], include_subagents: bool = True) -> Dict:
     }
 
 
-def _percentile(values: List[float], pct: float) -> float:
+def percentile(values: List[float], pct: float) -> float:
     if not values:
         return 0.0
     ordered = sorted(values)
@@ -395,9 +395,9 @@ def analyze(traces: List[Trace], include_subagents: bool = True) -> Dict:
             "pct_sessions": round(100 * sessions_with_interrupt / n, 1),
         },
         "duration_minutes": {
-            "p50": round(_percentile(durations, 50), 1),
-            "p75": round(_percentile(durations, 75), 1),
-            "p90": round(_percentile(durations, 90), 1),
+            "p50": round(percentile(durations, 50), 1),
+            "p75": round(percentile(durations, 75), 1),
+            "p90": round(percentile(durations, 90), 1),
         },
         "thrash": {
             "traces_with_repeat_runs": thrash_sessions,

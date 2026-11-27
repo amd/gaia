@@ -46,6 +46,7 @@ from gaia.mcp.ports import (
 )
 from gaia.perf_analysis import run_perf_visualization
 from gaia.ports import (
+    AGENT_UI_PORT,
     is_killable_process,
     is_lemonade_process,
     listeners_on_port,
@@ -971,7 +972,9 @@ def _enable_backend_fault_log(log):
     )
 
 
-def _launch_agent_ui(port=4200, base_url=None, log=None, debug=False, webui_dist=None):
+def _launch_agent_ui(
+    port=AGENT_UI_PORT, base_url=None, log=None, debug=False, webui_dist=None
+):
     """Launch the Agent UI server (FastAPI + uvicorn).
 
     Reused by top-level --ui, gaia chat --ui, and the interactive menu.
@@ -1004,7 +1007,7 @@ def _launch_agent_ui(port=4200, base_url=None, log=None, debug=False, webui_dist
         import uvicorn
 
         # create_app() refuses an unsafe GAIA_HOME, so nothing is written there first.
-        app = create_app(webui_dist=webui_dist)
+        app = create_app(webui_dist=webui_dist, port=port)
         # Only to a terminal: the desktop app logs this process's stdout.
         if sys.stdout.isatty():
             print(
@@ -1250,8 +1253,8 @@ def build_parser():
     parser.add_argument(
         "--ui-port",
         type=int,
-        default=4200,
-        help="Port for the Agent UI server (default: 4200, used with --ui)",
+        default=AGENT_UI_PORT,
+        help=f"Port for the Agent UI server (default: {AGENT_UI_PORT}, used with --ui)",
     )
     parser.add_argument(
         "--ui-dist",
@@ -1612,8 +1615,8 @@ def build_parser():
     chat_parser.add_argument(
         "--ui-port",
         type=int,
-        default=4200,
-        help="Port for the Agent UI server (default: 4200)",
+        default=AGENT_UI_PORT,
+        help=f"Port for the Agent UI server (default: {AGENT_UI_PORT})",
     )
     chat_parser.add_argument(
         "--ui-dist",
@@ -2416,8 +2419,8 @@ Examples:
     )
     agent_eval_parser.add_argument(
         "--backend",
-        default="http://localhost:4200",
-        help="Agent UI backend URL (default: http://localhost:4200)",
+        default=f"http://localhost:{AGENT_UI_PORT}",
+        help=f"Agent UI backend URL (default: http://localhost:{AGENT_UI_PORT})",
     )
     agent_eval_parser.add_argument(
         "--agent-type",
@@ -3317,8 +3320,8 @@ afterwards (or `swebench <run_dir>` does, later).
     )
     mcp_serve_parser.add_argument(
         "--backend",
-        default="http://localhost:4200",
-        help="GAIA Agent UI backend URL (default: http://localhost:4200)",
+        default=f"http://localhost:{AGENT_UI_PORT}",
+        help=f"GAIA Agent UI backend URL (default: http://localhost:{AGENT_UI_PORT})",
     )
     mcp_serve_parser.add_argument(
         "--stdio",
@@ -4769,7 +4772,9 @@ def _handle_schedule(args):
         else:
             print(f"cron:       {s.cron}")
         print(f"target:     {'skill=' + s.skill if s.skill else 'prompt=' + s.prompt}")
-        print(f"sink:       {s.sink}  args={s.sink_args}")
+        from gaia.schedule.sinks import masked_sink_args
+
+        print(f"sink:       {s.sink}  args={masked_sink_args(s.sink_args)}")
         print(f"enabled:    {s.enabled}")
         from datetime import datetime as _datetime
 
@@ -5033,7 +5038,7 @@ def main():
                 ("--ui", args.ui),
                 ("--cli", args.cli),
                 ("--ui-dist", args.ui_dist is not None),
-                ("--ui-port", args.ui_port != 4200),
+                ("--ui-port", args.ui_port != AGENT_UI_PORT),
             )
             if given
         ]
@@ -5075,7 +5080,7 @@ def main():
         # Top-level --ui flag: launch Agent UI
         if getattr(args, "ui", False):
             _launch_agent_ui(
-                port=getattr(args, "ui_port", 4200),
+                port=getattr(args, "ui_port", AGENT_UI_PORT),
                 base_url=getattr(args, "base_url", None),
                 log=log,
                 debug=getattr(args, "debug", False),
@@ -5090,7 +5095,7 @@ def main():
 
         # No flags: launch Agent UI (default experience)
         _launch_agent_ui(
-            port=getattr(args, "ui_port", 4200),
+            port=getattr(args, "ui_port", AGENT_UI_PORT),
             base_url=getattr(args, "base_url", None),
             log=log,
             debug=getattr(args, "debug", False),
@@ -5168,7 +5173,7 @@ def main():
         if max_files:
             os.environ["GAIA_MAX_INDEXED_FILES"] = str(max_files)
         _launch_agent_ui(
-            port=getattr(args, "ui_port", 4200),
+            port=getattr(args, "ui_port", AGENT_UI_PORT),
             base_url=getattr(args, "base_url", None),
             log=log,
             debug=getattr(args, "debug", False),
@@ -10461,6 +10466,30 @@ def handle_mcp_start(args):
         sys.exit(1)
 
 
+def _is_mcp_bridge_process(pid: int) -> bool:
+    """True only for a live process started by ``gaia mcp start --background``.
+
+    Raises:
+        PermissionError: the process exists but its command line is unreadable.
+    """
+    import psutil
+
+    try:
+        argv = psutil.Process(pid).cmdline()
+    except (psutil.NoSuchProcess, psutil.ZombieProcess):
+        return False
+    except psutil.AccessDenied as e:
+        raise PermissionError(
+            f"cannot read the command line of pid {pid} to confirm it is the "
+            "GAIA MCP bridge; if it is not the bridge, delete gaia.mcp.pid "
+            "and leave the process alone"
+        ) from e
+    # The background child is `python -m gaia.cli mcp start ...`.
+    return "gaia.cli" in argv and any(
+        a == "mcp" and b == "start" for a, b in zip(argv, argv[1:])
+    )
+
+
 def handle_mcp_stop(_args):
     """Stop the background MCP bridge server."""
     log = get_logger(__name__)
@@ -10483,27 +10512,34 @@ def handle_mcp_stop(_args):
             print(f"❌ Error reading PID file: {e}")
             sys.exit(1)
 
+        if pid <= 0:
+            print(f"❌ PID file {pid_file_path} holds {pid}, not a process id")
+            os.remove(pid_file_path)
+            print("🧹 Removed the invalid PID file")
+            sys.exit(1)
+
+        # A stale file can name an unrelated process that inherited the id.
+        try:
+            is_bridge = _is_mcp_bridge_process(pid)
+        except PermissionError as e:
+            print(f"❌ {e}")
+            sys.exit(1)
+        if not is_bridge:
+            print(f"⚠️  PID {pid} is not a GAIA MCP bridge; removing stale PID file")
+            os.remove(pid_file_path)
+            return
+
         # Stop the process
         stop_failed = False
         try:
+            print(f"🔄 Stopping MCP bridge process (PID: {pid})")
             if sys.platform.startswith("win"):
-                # Windows - check if process exists first
-                result = subprocess.run(
-                    ["tasklist", "/FI", f"PID eq {pid}"],
-                    capture_output=True,
-                    text=True,
-                    check=False,
+                subprocess.run(
+                    ["taskkill", "/F", "/PID", str(pid)], check=True, timeout=30
                 )
-                if str(pid) in result.stdout:
-                    print(f"🔄 Stopping MCP bridge process (PID: {pid})")
-                    subprocess.run(["taskkill", "/F", "/PID", str(pid)], check=True)
-                    print(f"✅ Stopped MCP bridge (PID: {pid})")
-                else:
-                    print(f"⚠️  Process {pid} was not running")
+                print(f"✅ Stopped MCP bridge (PID: {pid})")
             else:
-                # Unix-like systems
                 try:
-                    print(f"🔄 Stopping MCP bridge process (PID: {pid})")
                     os.kill(pid, 15)  # SIGTERM
                     print(f"✅ Stopped MCP bridge (PID: {pid})")
                 except OSError:

@@ -58,7 +58,7 @@ describe('optional model added during the download', () => {
         // A second `gaia init` run would load-check every model again after Whisper downloads.
         expect(await screen.findByRole('button', { name: 'Start chatting' }, { timeout: 4000 })).toBeInTheDocument();
         expect(mockedApi.startSetup).not.toHaveBeenCalled();
-        expect(mockedApi.downloadSetupModel).toHaveBeenCalledWith(WHISPER.id, expect.objectContaining({ keepTrying: false }));
+        expect(mockedApi.downloadSetupModel).toHaveBeenCalledWith(WHISPER.id, expect.objectContaining({ keepTrying: true }));
         expect(screen.getByText(/Still downloading: Whisper/)).toBeInTheDocument();
     });
 

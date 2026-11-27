@@ -38,6 +38,8 @@ from pathlib import Path
 
 import pytest
 
+from tests.unit.real_home_guard import account_home, is_temporary_home, is_within
+
 REPO_ROOT = Path(__file__).resolve().parent
 
 
@@ -188,6 +190,11 @@ _EXIT_WITH_PID_ENV = "GAIA_DAEMON_EXIT_WITH_PID"
 
 #: The developer's real GAIA home, read before any test patches ``Path.home``.
 _REAL_GAIA_HOME = Path.home() / ".gaia"
+#: A run started with a temporary ``HOME`` has no developer install to protect:
+#: its ``<HOME>/.gaia`` is a test folder, not the person's.
+_REAL_HOME_IS_TEMPORARY = is_temporary_home(_REAL_GAIA_HOME.parent)
+#: Under a temporary ``HOME``, the account's own home; ``None`` if unknown.
+_ACCOUNT_HOME = account_home() if _REAL_HOME_IS_TEMPORARY else None
 
 #: Bound before any test patches ``os.path.realpath``: a test that breaks it
 #: must not break the guards, which coverage also reaches via sqlite3.connect.
@@ -211,6 +218,18 @@ _DB_HINT = "A database a test opens itself belongs under tmp_path."
 
 
 def _is_real_gaia_home(path: Path) -> bool:
+    if _REAL_HOME_IS_TEMPORARY:
+        # The run's own home is a test folder, but the person's real GAIA state
+        # is still their own, and stays protected however they got there.
+        if _ACCOUNT_HOME is None:
+            # Cannot identify the real account home: refuse rather than allow.
+            return True
+        try:
+            return is_within(path, _ACCOUNT_HOME / ".gaia")
+        except (OSError, ValueError):
+            # Cannot verify the path (e.g. realpath broken): refuse rather than
+            # allow a write into the protected home.
+            return True
     real = os.path.normcase(_REALPATH(_REAL_GAIA_HOME))
     candidate = os.path.normcase(_REALPATH(path))
     return candidate == real or candidate.startswith(real + os.sep)
@@ -311,6 +330,36 @@ def _no_embedded_lemonade_start():
             "start_embedded_if_stopped",
             classmethod(lambda cls: False),
         )
+        yield
+
+
+#: Tests point Lemonade at port 9 (discard) to mean "no server here".
+_DEAD_PORT = 9
+_LOCAL_HOSTS = {"127.0.0.1", "localhost", "::1"}
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _dead_port_refuses_at_once():
+    """Refuse a connection to the dead test port at once, as Linux does.
+
+    Windows retries a refused connect for about two seconds, so a test that
+    reaches the dead port many times took most of a minute there.
+    """
+    if sys.platform != "win32":
+        yield
+        return
+    from urllib3.util import connection
+
+    real = connection.create_connection
+
+    def create_connection(address, *args, **kwargs):
+        host, port = address[0], address[1]
+        if port == _DEAD_PORT and host in _LOCAL_HOSTS:
+            raise ConnectionRefusedError(10061, f"nothing listens on {host}:{port}")
+        return real(address, *args, **kwargs)
+
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(connection, "create_connection", create_connection)
         yield
 
 

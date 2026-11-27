@@ -134,7 +134,7 @@ for the version you have.
 ## 5. Prerequisites — the `gaia` CLI and a local Lemonade server
 
 The terminal UI starts the GAIA daemon from the **Python `gaia` CLI**, which this
-package does not install. It must be on `PATH` and be **0.26.0 or newer**: without
+package does not install. It must be on `PATH` and be **0.27.0 or newer**: without
 it the daemon never comes up, and an older one starts but cannot run this agent
 (see [Gotchas](#gotchas--read-before-debugging)). Install it with
 `curl -fsSL https://amd-gaia.ai/install.sh | sh` (Windows:

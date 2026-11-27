@@ -50,18 +50,18 @@ def _safe_load() -> Ledger:
 def diff_ledgers(old: Ledger, new: Ledger) -> List[Tuple[str, str, bool]]:
     """Return ``(connector_id, agent_id, active)`` for every changed pair.
 
-    Absence means inactive (the ledger deletes entries on deactivate), so a
-    pair present in ``old`` but missing in ``new`` yields ``active=False``.
+    A pair whose stored entry changed counts, including one first recorded as
+    off: a server the user added themselves is on for GAIA until then.
     """
     changes: List[Tuple[str, str, bool]] = []
     for connector_id in set(old) | set(new):
         old_agents = old.get(connector_id, {})
         new_agents = new.get(connector_id, {})
         for agent_id in set(old_agents) | set(new_agents):
-            before = bool(old_agents.get(agent_id, False))
-            after = bool(new_agents.get(agent_id, False))
+            before = old_agents.get(agent_id)
+            after = new_agents.get(agent_id)
             if before != after:
-                changes.append((connector_id, agent_id, after))
+                changes.append((connector_id, agent_id, bool(after)))
     return changes
 
 
@@ -100,12 +100,7 @@ class ActivationWatcher:
         pair is advanced — a concurrent out-of-process change to a *different*
         pair is still detected on the next poll.
         """
-        if active:
-            self._snapshot.setdefault(connector_id, {})[agent_id] = True
-        elif connector_id in self._snapshot:
-            self._snapshot[connector_id].pop(agent_id, None)
-            if not self._snapshot[connector_id]:
-                del self._snapshot[connector_id]
+        self._snapshot.setdefault(connector_id, {})[agent_id] = active
 
     async def _run(self) -> None:
         # CancelledError subclasses BaseException (not Exception) on 3.8+, so the

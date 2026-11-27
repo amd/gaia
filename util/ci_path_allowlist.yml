@@ -30,6 +30,13 @@ dependencies:
       synthetic audit backlog; it is fixture text, not a file the test reads.
     docs/guides/index.mdx: >-
       Same file, same reason: a path inside synthetic audit-key markers.
+    website/package-lock.json: >-
+      tests/unit/test_dependabot_npm_ci_versions.py compares it to a workflow's
+      cache-dependency-path string; it never opens the lockfile.
+    workers/admin/package-lock.json: >-
+      Same test, same reason: an expected cache-dependency-path value.
+    workers/agent-hub/package-lock.json: >-
+      Same test, same reason: an expected cache-dependency-path value.
 
   test_scale.yml:
     src/gaia/**: >-

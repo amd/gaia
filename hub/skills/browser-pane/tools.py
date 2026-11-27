@@ -289,8 +289,8 @@ def dev_server(
     server: it keeps running after the reply. A folder of plain HTML/CSS/JS
     needs no setup: browser-pane/dev_server(action="start",
     project="<folder>"). An app with its own dev command needs
-    <project>/.gaia/launch.json (the skill shows its format). Starting asks
-    the user first. A server already running is reused.
+    <project>/.gaia/launch.json (the skill shows its format), listening on
+    127.0.0.1 only. Starting asks the user first. A running server is reused.
 
     Args:
         action: 'start' (runs it and opens it in the pane), 'list', 'logs',

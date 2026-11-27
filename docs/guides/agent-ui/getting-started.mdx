@@ -51,14 +51,14 @@ From download to your first answer takes a few minutes, plus the model download.
   </Step>
 
   <Step title="Ask your first question">
-    Type a question in the message box and press `Enter`. The **Try** row under the box fills in an example if you'd rather start from one.
+    Type a question in the message box and press `Enter`. The starters under the box fill it in if you'd rather start from one; nothing is sent until you press `Enter`.
 
     > *"Give me a recipe for banana bread"*
     >
     > *"Split a $142 dinner four ways with a 20% tip"*
 
     <Frame>
-      <img src="/images/agent-ui/new-chat.png" alt="A new chat with the message box and the Try row of examples" />
+      <img src="/images/agent-ui/new-chat.png" alt="A new chat with the message box and a row of three starters" />
     </Frame>
   </Step>
 
@@ -75,7 +75,7 @@ From download to your first answer takes a few minutes, plus the model download.
   </Step>
 
   <Step title="Look at what the answer used">
-    The panel on the right of a chat shows what the answer read, what the chat made and changed, and what it may touch. See [The session panel](/guides/agent-ui/documents#the-session-panel).
+    The panel on the right of a chat shows what the answer read, what the chat made and changed, and what it may touch. Open it with the panel button at the right of the chat's title bar; it also opens by itself the first time GAIA creates or changes a file in a chat. See [The session panel](/guides/agent-ui/documents#the-session-panel).
 
     <Frame>
       <img src="/images/agent-ui/answer.png" alt="A finished answer with the session panel open on the right" />
@@ -144,8 +144,9 @@ GAIA's own**, recommended because it is the version GAIA is tested with
 and keeps its own copy of each model, or **Use the one I have**, which
 keeps one copy of each model. **Your setup** then offers two cards of equal
 weight: a model on this PC, recommended and picked, with its
-download size and the reasons, and **Use a cloud model**, which downloads
-no chat model, needs an API key and sends each message to the provider.
+download size and the reasons (where gaiacpp is on the PC or can be
+downloaded, it also names the agent, and **Change** opens Customize at the
+agent choice), and **Use a cloud model**, which downloads no chat model, needs an API key and sends each message to the provider.
 **Download and start** takes the local setup; with the cloud card picked,
 **Continue** opens the provider's key. Each step's main action is at the
 bottom right, and the language can be changed from the first screen.
@@ -161,9 +162,9 @@ chat list shows only that device's models. Setup keeps llama.cpp on Vulkan
 when it starts. On an integrated GPU, **Change how memory is split** opens GPU
 memory from there or from Check this PC. It is optional: unless you pick a
 new size, GAIA changes nothing. **Agent** picks the program that runs GAIA,
-each shown with its download size: **gaiapy** (Full-featured, recommended and
+each shown with its download size: **Full-featured** (`gaiapy`, recommended and
 the default) has every tool and feature and is the most tested, but uses more
-memory and starts more slowly; **gaiacpp** (Fast and light, beta) starts in a
+memory and starts more slowly; **Fast and light** (`gaiacpp`, beta) starts in a
 fraction of a second and uses a few megabytes of memory, but has fewer tools
 and features so far and is less tested. **Compare the two** under the choice
 says the same. Your pick is saved when you press **Continue**, before
@@ -177,14 +178,14 @@ a chat model updates the jobs that depend on it:
 
 | Job | What you choose |
 |---|---|
-| Chat | One model. **Recommended** is what GAIA evaluated as the default for this PC, **Verified** passed GAIA's evaluations, and **Untested** runs at your own risk |
+| Chat | One model, from the ones that fit this PC. **Recommended** is what GAIA evaluated as the default for this PC, and **Verified** passed GAIA's evaluations. **Untested** models run at your own risk and wait behind **Show untested models**, which opens on its own when your chat model is one. A model too big for this PC isn't listed, unless it is already your chat model |
 | Reading images | Nothing, when the chat model reads images itself. Otherwise Gemma 4 E4B is preselected, and you can pick another or skip it. Off when chat runs on the NPU: the NPU model doesn't read images, so setup says so and downloads nothing for it, and a chat with an image says the image won't be read |
 | Documents and memory | The embedding model |
 | Optional extras | Speech to text, text to speech and creating images, off by default. Creating images isn't available with Gemma 4 E4B |
 
-**What you'll get** shows the result of those choices. A model too big for
-this PC's memory, or a selection too big for the disk, gets a warning with
-the numbers, and you can still go ahead.
+**What you'll get** shows the result of those choices. A chat model you
+already chose that is too big for this PC's memory, or a selection too big for
+the disk, gets a warning with the numbers, and you can still go ahead.
 
 ### Download
 
@@ -195,8 +196,10 @@ with speed and time left. Before the models start, the line under the list
 names the part being set up and how far its download is. **Cancel** sits in
 the bottom bar while setup works, including while GAIA's model server
 starts on Check this PC. Cancel keeps what finished, and **Retry** or
-**Resume** continues from there. Tick **Keep trying if the connection
-drops** to wait out a dropped connection for up to two minutes. Optional
+**Resume** continues from there. A dropped connection is waited out for up
+to two minutes before a download fails; to fail straight away instead,
+untick **Keep trying if the connection drops** on Customize. While setup
+runs, a failed model's **Retry** appears once the other downloads finish. Optional
 extras can be added here too: they download once the rest is ready, so
 setup doesn't wait for them, and the Ready screen names any still coming.
 Extras you add are remembered if you quit setup. If you stop with only

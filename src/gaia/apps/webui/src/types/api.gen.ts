@@ -134,6 +134,7 @@ export interface ApiSchemas {
   SkillLinkAddRequest: SkillLinkAddRequest;
   SkillLinkRequest: SkillLinkRequest;
   SkipModelRequest: SkipModelRequest;
+  SkippedFile: SkippedFile;
   SourceInfo: SourceInfo;
   SourceLoc: SourceLoc;
   SpeakRequest: SpeakRequest;
@@ -841,7 +842,16 @@ export interface IndexFolderResponse {
   failed?: number;
   indexed?: number;
   skipped?: number;
+  skipped_files?: SkippedFile[];
+  skipped_files_truncated?: boolean;
   skipped_images?: number;
+}
+/**
+ * One file left out of folder indexing, with the reason it was left out.
+ */
+export interface SkippedFile {
+  file: string;
+  reason: "unsupported_type" | "credential_file";
 }
 export interface InferenceCommit {
   insights: InferenceCommitItem[];
@@ -873,6 +883,7 @@ export interface InferenceStatsResponse {
   steps?: number | null;
   time_to_first_token?: number;
   tokens_per_second?: number;
+  waiting_seconds?: number | null;
 }
 /**
  * The model a ``hybrid`` turn was routed to, and why.

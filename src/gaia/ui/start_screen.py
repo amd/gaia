@@ -41,6 +41,8 @@ class Context:
     indexed_documents: int
     mail_connected: bool
     folder_name: str
+    #: The chat works in GAIA's own documents folder, not a project of the user's.
+    gaia_folder: bool = False
 
 
 def _documents(ctx: Context) -> Optional[Card]:
@@ -76,7 +78,9 @@ def _research(_ctx: Context) -> Card:
     )
 
 
-def _code(ctx: Context) -> Card:
+def _code(ctx: Context) -> Optional[Card]:
+    if ctx.gaia_folder:
+        return None
     return Card(
         "coding",
         "Work on code",
@@ -186,5 +190,6 @@ def start_screen(db, skills: List[Dict[str, Any]], choosable: bool) -> Dict[str,
         ),
         mail_connected=_mail_connected(),
         folder_name=folder["name"],
+        gaia_folder=folder["gaia_folder"],
     )
     return {"cards": pick_cards(ctx), "working_folder": folder}

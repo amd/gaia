@@ -2000,3 +2000,39 @@ def test_a_stderr_line_with_no_end_does_not_grow_memory(tmp_path):
     assert "[line cut]" in kept
     assert len(kept) < 9000
     assert peak - before < 20 * 1024 * 1024, f"grew {(peak - before) >> 20} MB"
+
+
+class _ExitingServer:
+    """A server whose input is already closed while poll() still says it runs."""
+
+    def __init__(self):
+        self.returncode = None
+        self.stdin = self
+        self.stderr = object()
+
+    def write(self, _payload):
+        raise BrokenPipeError(32, "Broken pipe")
+
+    def flush(self):
+        pass
+
+    def poll(self):
+        return self.returncode
+
+    def wait(self, timeout=None):
+        self.returncode = 1
+        return 1
+
+
+def test_a_server_that_quits_on_a_bad_token_says_why():
+    """The write fails mid-exit; the error must still carry the server's stderr."""
+    import collections
+
+    transport = StdioTransport(sys.executable, args=["-c", "pass"])
+    transport.name = "stub"
+    server = _ExitingServer()
+    transport._process = server
+    transport._stderr_tail = collections.deque(["Authentication failed - bad token\n"])
+
+    with pytest.raises(RuntimeError, match="Authentication failed"):
+        transport._write(server, {"jsonrpc": "2.0", "id": 1, "method": "tools/list"})

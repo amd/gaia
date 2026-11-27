@@ -98,6 +98,12 @@ TIME_LIMIT_CUT_RUN = (
     "available. Write the result you have now."
 )
 
+#: Replaces "raise the timeout" advice when the turn has no room for a longer one.
+TIME_LIMIT_NO_LONGER_RUN = (
+    "The turn's time limit leaves no room for a longer timeout. Make the "
+    "script do less per run, or write the result you have now."
+)
+
 
 def time_capped(host: Any, seconds: int) -> int:
     """*seconds* cut to the time *host*'s turn has left; 0 means start nothing.

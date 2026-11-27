@@ -517,7 +517,9 @@ has `id`, `roles` (`chat`, `vision`, `embedding`), `purpose`, `if_skipped`,
 `downloaded`, `recommended` (for this PC), `selected` (setup will download it),
 `skipped`, `chat_choice`, and `fits` (`null` when unknown) with `need_gb`,
 `capacity_gb` and `fit_reason` (decimal GB, converted from the GiB Lemonade reports, as
-the GPU memory API does).
+the GPU memory API does). `setup_offer` says whether the setup screen lists it as a chat
+choice: not when it doesn't fit, never for Qwen3.8 Flash Next, always for your current
+chat model.
 `disk` is the model drive's `path` and `free_gb` (decimal GB, like every size);
 `download_gb` and `disk_warning` cover the selected models. A choice that needs
 confirming exits `4` and prints `{"needs_acknowledgement": {...}}` with the `code`
@@ -1824,14 +1826,14 @@ gaia connectors <subcommand> [OPTIONS]
 
 | Subcommand | Description |
 |-----------|-------------|
-| `list` (alias `status`) | List connectors in the catalog with their status (`--json` for machine-readable output). A connector with several accounts, or one whose sign-in expired, gets a line per account underneath; the JSON row carries them in `accounts` |
+| `list` (alias `status`) | List connectors in the catalog with their status, then the MCP servers you added to `mcp_servers.json` yourself (`--json` for machine-readable output; those rows have `"custom": true`). A connector with several accounts, or one whose sign-in expired, gets a line per account underneath; the JSON row carries them in `accounts` |
 | `connect <id>` | Authorize an OAuth connector (opens a browser); `--scopes` to request specific scopes, `--grant-agent <agent-id>` to also grant the connector to that agent (e.g. `installed:gaia`) in the same flow, `--device` for the device-code flow, `--callback-port <port>` to pin the callback port for SSH forwarding. The browser sign-in link works for 15 minutes. `--add` connects another account beside the ones already connected (the provider shows its account picker); `--account <address>` reconnects that account. Signing in as the same account again updates it; a different account is added, never written over another |
 | `configure <id>` | Configure a connector — `--set KEY=VALUE` (repeatable) or `--json '<object>'` (e.g. MCP API keys), or `--client-id` / `--client-secret` to store an OAuth connector's client credentials (the secret is required for Google only; cannot be combined with `--set`/`--json`) |
 | `test <id>` | Check a configured connector. An OAuth account refreshes its sign-in. An MCP server is started once, and the check reports whether it started (with its tool count) or why it didn't. Some servers, like GitHub and Tavily, only check their key when a tool runs, so they pass with a bad key |
 | `disconnect <id>` | Remove local credentials and reset a connector's state. Also attempts a provider-side revoke when the connector supports one and owns the token — Microsoft has no revoke endpoint, and a forwarded connection's token belongs to the host app, so neither is revoked remotely; the command reports which happened. With several accounts connected, name one with `--account <address>` or remove them all with `--all`; a bare `disconnect` refuses and lists them. Agent grants are kept until the last account is removed |
 | `set-default <id> <account>` | Make that account the one agents use when they don't name an account. The first account connected is the default until changed |
 | `grants {list\|grant\|revoke}` | Manage per-agent scope grants (credential access) |
-| `activations {list\|activate\|deactivate}` | Manage per-agent MCP tool visibility (`mcp_server` connectors only) |
+| `activations {list\|activate\|deactivate}` | Manage per-agent MCP tool visibility (`mcp_server` connectors only). Takes a catalog id or the name of a server you added to `mcp_servers.json`; a server you added is on for GAIA (`installed:gaia`) until you deactivate it |
 
 **Examples:**
 
@@ -1979,7 +1981,7 @@ gaia config set default_model Qwen3.6-35B-A3B-GGUF # persist a default model
 | `hybrid_classifier_model` | _(the cheap model)_ | Model that labels each turn for `hybrid` |
 | `hybrid_classifier_timeout` | `15` | Seconds `hybrid` waits for the label (1-120) before running the turn on the strong model |
 | `hybrid_policy` | `quality` | How readily `hybrid` uses the cheap model: `quality` or `balanced`, which also sends medium-difficulty code changes to the cheap model — cheaper, with a measurable quality cost on harder fixes. See [Hybrid model](/guides/llm-gateway#hybrid-model) |
-| `flagship_agent` | unset | Which program is the GAIA agent in the Agent UI and the terminal UI: `gaiapy` (the Python agent: every tool and feature, the most tested) or `gaiacpp` (the native C++ agent: fast and light, fewer features so far, beta). Unset, both run the Python agent, even when `gaiacpp` is installed. Both apps have the same switch: Settings > Agent & model in the Agent UI, `/agent` in the terminal UI |
+| `flagship_agent` | unset | Which program is the GAIA agent in the Agent UI and the terminal UI: `gaiapy` (Full-featured, the Python agent: every tool and feature, the most tested) or `gaiacpp` (Fast and light, the native C++ agent: fewer features so far, beta). Unset, both run Full-featured, even when `gaiacpp` is installed. Both apps have the same switch: Settings > Agent & model in the Agent UI, `/agent` in the terminal UI |
 | `cloud_reasoning_effort` | `off` | `off` sends cloud models no `reasoning_effort`, leaving each in its provider's default mode. `low`, `medium` or `high` probes each cloud model once and sends that effort to the ones that reason, at the cost of more tokens and slower replies. See [Reasoning](/guides/llm-gateway#reasoning) |
 | `run_mode` | _(unset)_ | Where chat last ran: `local` or `cloud`. `gaia config set run_mode cloud` (or `local`) switches by writing that mode's chat model to `last_model` (already in that mode, it keeps the model in use and changes nothing); an Agent UI that is open picks it up on its next start. Cloud is refused while Local only is on and, for a Fireworks AI model, without a key; it does not check that the model can run, so whatever starts it next reports that. The running model decides the mode, so picking a cloud model anywhere reads as `cloud` — see [Choose where GAIA runs](/guides/agent-ui/control#choose-where-gaia-runs) |
 | `run_profiles` | `{}` | The chat model each run mode uses when it differs from that mode's default, for example `{"cloud": {"chat": "fireworks.glm-5p3-flash"}}`. Set from the Agent UI under Settings › Run mode; `gaia config set` refuses it |
@@ -1998,20 +2000,25 @@ gaia config set default_model Qwen3.6-35B-A3B-GGUF # persist a default model
 | `read_aloud_voice` | _(unset = `af_bella`)_ | The Kokoro voice the Agent UI and the TUI read replies in, such as `bm_george`; any other value is refused — see [Read aloud](/guides/agent-ui/chat#read-aloud) |
 | `read_aloud_speed` | `100` | Read-aloud speed, as a percentage of normal (50–200) |
 | `read_aloud_auto` | `false` | Read each finished reply aloud without being asked |
-| `network_policy` | `cloud_allowed` | `local_ai_only` makes GAIA refuse every cloud AI model — see [Local only](#local-only). Stored in `~/.gaia/policy.json`, not in `config.json` |
+| `network_policy` | `cloud_allowed` | `local_ai_only` makes GAIA refuse every cloud AI model and every GAIA web search or knowledge request; see [Local only](#local-only). Stored in `~/.gaia/policy.json`, not in `config.json` |
 
 ### Local only
 
 ```bash
 gaia config set network_policy local_ai_only   # no AI request reaches a cloud model
 gaia config get network_policy
-gaia config set network_policy cloud_allowed   # allow cloud models again
+gaia config set network_policy cloud_allowed   # allow cloud models and web search again
 ```
 
 With `local_ai_only`, GAIA refuses every AI request to a model Lemonade's catalog
 doesn't list as local: Fireworks and AMD LLM Gateway models, Lemonade router
 collections, and any model id the catalog doesn't know. The refusal names the model
 and how to turn the setting off. Downloading a local model still works.
+
+It also refuses GAIA's web search before any request is sent: the agent's
+`search_web` tool, its Tavily and DuckDuckGo paths, direct MCP tools from web-search
+connectors, and `gaia knowledge search` and `gaia knowledge extract`. The refusal
+says how to turn the setting off. Cached results are not used while it is on.
 
 It applies everywhere GAIA sends a prompt or a key:
 
@@ -2033,8 +2040,14 @@ wasn't checked. `gaia config show` lists the policy file and the current level.
 
 What it does not cover:
 
-- Non-AI network features: web page fetch, connectors and MCP servers keep working
-  and keep their own permissions.
+- Other network features: web page fetch, file download, connectors and MCP servers
+  keep working and keep their own permissions. Web-search calls from GAIA's own
+  search, `gaia knowledge`, and web-search connectors are the exception described
+  above.
+- An MCP server you add yourself rather than from the connector catalog, even one
+  that searches the web (a Brave or SearXNG server, for example): GAIA can't tell
+  what it reaches, so its tools keep running. Remove its entry from
+  `~/.gaia/mcp_servers.json` if it must not run while Local only is on.
 - A Lemonade Server you run on another machine: GAIA treats the models it lists as
   local, so prompts go to that machine.
 - An agent sidecar built before this setting existed: it runs its

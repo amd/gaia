@@ -11,7 +11,7 @@
 import { isBot, type CommitRow, type DailyRow, type ItemRow } from "./momentum";
 
 const DAY = 86_400_000;
-const CORE_ASSOC = new Set(["OWNER", "MEMBER", "COLLABORATOR"]);
+export const CORE_ASSOC = new Set(["OWNER", "MEMBER", "COLLABORATOR"]);
 const NO_ACCOUNT = "(no GitHub account)";
 
 export type Gran = "week" | "month";
@@ -77,7 +77,7 @@ export function periodStart(day: string, gran: Gran): string {
   return new Date(t - ((new Date(t).getUTCDay() + 6) % 7) * DAY).toISOString().slice(0, 10);
 }
 
-function nextStart(start: string, gran: Gran): string {
+export function nextStart(start: string, gran: Gran): string {
   if (gran === "week") return new Date(Date.parse(start + "T00:00:00Z") + 7 * DAY).toISOString().slice(0, 10);
   const [y, m] = start.split("-").map(Number) as [number, number];
   return m === 12 ? `${y + 1}-01-01` : `${y}-${String(m + 1).padStart(2, "0")}-01`;

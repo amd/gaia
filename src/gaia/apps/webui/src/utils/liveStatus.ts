@@ -4,6 +4,7 @@
 import { enMessages } from '../i18n/locales/en';
 import { ref, type MessageKey, type Param } from '../i18n/registry';
 import type { Translate } from '../i18n/useT';
+import { placeInLine } from './chatAlerts';
 
 let toolActions: Map<string, MessageKey> | null = null;
 
@@ -71,6 +72,9 @@ export function localizeLiveStatus(t: Translate, label: string): string {
     if (m) return t('live.loadingModel', { model: m[1] });
     m = /^Reading page (\d+) of (\d+)…$/.exec(label);
     if (m) return t('live.readingPage', { page: m[1], total: m[2] });
+    // `_queued_status_event` in _chat_helpers.py.
+    m = /^Waiting for the GPU — (\d+)(?:st|nd|rd|th) in line$/.exec(label);
+    if (m) return placeInLine(t, 'live.queued', Number(m[1]));
     m = /^Downloading the speech model, one time \(([\d.]+) GB\)$/.exec(label);
     if (m) return t('live.speechModelStart', { size: m[1] });
     m = /^Downloading the speech model, one time — (\d+)% of ([\d.]+) GB$/.exec(label);

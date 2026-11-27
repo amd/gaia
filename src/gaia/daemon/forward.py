@@ -50,8 +50,7 @@ from gaia.connectors.errors import (
     ConnectionRevokedError,
 )
 from gaia.connectors.providers.base import ConnectorRequirement
-from gaia.daemon.sidecars.errors import UnknownAgentError
-from gaia.daemon.sidecars.spec import AgentSidecarSpec
+from gaia.daemon.sidecars.spec import AgentSidecarSpec, spec_for
 from gaia.logger import get_logger
 
 logger = get_logger(__name__)
@@ -151,13 +150,7 @@ class ConnectionForwarder:
     # -- spec resolution ---------------------------------------------------
 
     def _spec(self, agent_id: str) -> AgentSidecarSpec:
-        spec = self._specs.get(agent_id)
-        if spec is None:
-            raise UnknownAgentError(
-                f"unknown agent '{agent_id}'; registered agents: "
-                + ", ".join(sorted(self._specs))
-            )
-        return spec
+        return spec_for(self._specs, agent_id)
 
     def _grant_agent_id(self, spec: AgentSidecarSpec) -> str:
         if not spec.grant_agent_id:

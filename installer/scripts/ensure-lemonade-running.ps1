@@ -65,9 +65,6 @@
 .PARAMETER InitWaitTime
     Job-scoped only. Seconds to wait after loading the model (default 10).
 
-.PARAMETER ClearCache
-    Job-scoped only. Clear the model cache before pulling.
-
 .PARAMETER NoModel
     Job-scoped only. Start the server only (skip pull/load). Use when the caller
     registers/loads its own models afterwards (e.g. a custom user-model via
@@ -97,7 +94,7 @@
     .\installer\scripts\ensure-lemonade-running.ps1 -JobScoped -Port 13305 -NoModel
 
 .EXAMPLE
-    .\installer\scripts\ensure-lemonade-running.ps1 -JobScoped -ModelName "Qwen3-0.6B-GGUF" -AdditionalModels "Qwen3-VL-4B-Instruct-GGUF" -InitWaitTime 30 -ClearCache
+    .\installer\scripts\ensure-lemonade-running.ps1 -JobScoped -ModelName "Qwen3-0.6B-GGUF" -AdditionalModels "Qwen3-VL-4B-Instruct-GGUF" -InitWaitTime 30
 
 .NOTES
     Concurrency caveat (persistent mode): the drift restart below
@@ -127,13 +124,12 @@ param(
     [string]$AdditionalModels = "",
     [int]$CtxSize = 32768,
     [int]$InitWaitTime = 10,
-    [switch]$ClearCache,
     [switch]$NoModel,
     [string]$Backend = ""
 )
 
 $PersistentOnly = @("WarmModel", "ForceRestart")
-$JobScopedOnly = @("ModelName", "AdditionalModels", "CtxSize", "InitWaitTime", "ClearCache", "NoModel", "Backend")
+$JobScopedOnly = @("ModelName", "AdditionalModels", "CtxSize", "InitWaitTime", "NoModel", "Backend")
 # Captured first: inside a Where-Object block $PSBoundParameters is that block's own.
 $Bound = $PSBoundParameters
 $WrongMode = @(if ($JobScoped) { $PersistentOnly } else { $JobScopedOnly }) |
@@ -228,16 +224,6 @@ if ($JobScoped) {
         }
         Write-Host ""
 
-        # Clear cache if requested
-        if ($ClearCache) {
-            Write-Host "=== Clearing Model Cache ==="
-            $cacheDir = "$env:LOCALAPPDATA\lemonade-server\models"
-            if (Test-Path $cacheDir) {
-                Write-Host "Removing: $cacheDir"
-                Remove-Item $cacheDir -Recurse -Force -ErrorAction SilentlyContinue
-            }
-            Write-Host ""
-        }
 
         # Start the server. v10.5 removed the `lemonade-server` shim, so launch
         # LemonadeServer.exe directly with a bare `--port` (there is no `serve`

@@ -174,7 +174,8 @@ jobs:
           ELECTRON_SKIP_BINARY_DOWNLOAD: '1'
         run: |
           set -euo pipefail
-          npm ci
+          # Dependabot writes the Agent UI lockfile with npm 11; keep Node 22 but install with npm 11.
+          npx -y npm@11 ci
           npm run build
           test -f dist/index.html
 

@@ -111,7 +111,10 @@ def test_text_that_reads_differently_than_it_runs_is_never_prompted(repo, comman
     )
 
     assert _prompts(events) == [], f"{command!r} reached the prompt"
-    assert result["status"] == "error"
+    # A policy no is "denied" by GAIA, never a user's no.
+    assert result["status"] == "error" or (
+        result["status"] == "denied" and result.get("denied_by") == "policy"
+    )
     assert result["executed"] is False
     assert result.get("tier", TIER_REFUSE) == TIER_REFUSE
 

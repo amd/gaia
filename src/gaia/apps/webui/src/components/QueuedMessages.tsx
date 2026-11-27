@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: MIT
 
 import { AlertCircle, Clock, CornerDownRight, RotateCw, X } from 'lucide-react';
-import type { QueuedMessage } from '../utils/messageQueue';
+import type { QueueError, QueuedMessage } from '../utils/messageQueue';
 import type { MessageKey } from '../i18n/registry';
 import { useT, type Translate } from '../i18n/useT';
 import './QueuedMessages.css';
@@ -32,6 +32,14 @@ export function queuedLabel(replying: boolean, busyRetry: boolean, t: Translate)
     return t(busyRetry ? 'queue.busy' : 'queue.next');
 }
 
+/** "Not sent." and why, as one line, with GAIA's own reasons in the chosen language. */
+export function notSentText(error: QueueError | undefined, t: Translate): string {
+    if (!error) return t('queue.notSentBare');
+    return t.compose((say) => say('queue.notSent', {
+        error: typeof error === 'string' ? error : say(error.key, error.params),
+    }));
+}
+
 /** Messages typed while GAIA answers, above the composer, oldest first. */
 export function QueuedMessages({ items, onRemove, onSteer, onRetry, replying = true, busyRetry = false }: QueuedMessagesProps) {
     const t = useT();
@@ -47,10 +55,10 @@ export function QueuedMessages({ items, onRemove, onSteer, onRetry, replying = t
                         : item.state === 'queued'
                             ? <Clock size={12} aria-hidden="true" />
                             : <CornerDownRight size={12} aria-hidden="true" />}
-                    <span className="queued-message-text" title={item.text}>{item.text}</span>
-                    <span className="queued-message-state" title={item.error}>
+                    <span className="queued-message-text" dir="auto" title={item.text}>{item.text}</span>
+                    <span className="queued-message-state" title={item.state === 'failed' ? notSentText(item.error, t) : undefined}>
                         {item.state === 'failed'
-                            ? (item.error ? t('queue.notSent', { error: item.error }) : t('queue.notSentBare'))
+                            ? notSentText(item.error, t)
                             : item.state === 'queued'
                                 ? (replying && item.note ? t(item.note) : '') || queuedLabel(replying, busyRetry, t)
                                 : t(STATE_LABEL[item.state as keyof typeof STATE_LABEL])}

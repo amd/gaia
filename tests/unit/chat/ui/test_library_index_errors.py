@@ -541,3 +541,36 @@ def test_dropping_the_same_file_again_while_down_keeps_one_row(client):
 
     assert second["id"] == first["id"]
     assert len(client.get("/api/documents").json()["documents"]) == 1
+
+
+class TestTildeFilePath:
+    """``~/file`` is checked as the home path it opens, not as typed."""
+
+    @pytest.fixture
+    def tilde_home(self, home, monkeypatch):
+        monkeypatch.setenv("HOME", str(home))
+        monkeypatch.setenv("USERPROFILE", str(home))
+        return home
+
+    def test_tilde_document_is_added(self, tilde_home, client):
+        (tilde_home / "notes.md").write_text("# Notes")
+
+        async def fake_index(_path):
+            return 1
+
+        with patch("gaia.ui.server._index_document", fake_index):
+            resp = _upload(client, "~/notes.md")
+
+        assert resp.status_code == 200, resp.text
+        assert Path(resp.json()["filepath"]) == (tilde_home / "notes.md").resolve()
+
+    @pytest.mark.parametrize("rel", [".ssh/id_rsa", "secrets.json"])
+    def test_tilde_credential_file_is_refused(self, tilde_home, client, rel):
+        secret = tilde_home / rel
+        secret.parent.mkdir(parents=True, exist_ok=True)
+        secret.write_text("SECRET")
+
+        resp = _upload(client, f"~/{rel}")
+
+        assert resp.status_code == 403
+        assert "credentials" in resp.json()["detail"]

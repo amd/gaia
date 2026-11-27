@@ -953,7 +953,12 @@ class StdioTransport(MCPTransport):
         if error is None:
             return
         if isinstance(error, (BrokenPipeError, OSError, ValueError)):
-            # Process likely died - include stderr in the error
+            # A server that closed its input is usually exiting; wait for it so
+            # its stderr can say why, as _closed_error does for its output.
+            try:
+                proc.wait(timeout=1)
+            except subprocess.TimeoutExpired:
+                pass
             if proc.poll() is not None:
                 raise self._process_died_error() from error
             raise RuntimeError(

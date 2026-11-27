@@ -36,8 +36,6 @@ from dataclasses import dataclass
 from gaia.env import load_env
 from gaia.eval.claude_credential import (  # noqa: F401  # pylint: disable=unused-import
     API_KEY_VAR,
-    MISSING_CREDENTIAL_ERROR,
-    TOKEN_WITHOUT_CLI_ERROR,
     announce,
     credential_present,
     resolve_claude_credential,

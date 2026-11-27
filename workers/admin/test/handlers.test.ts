@@ -210,6 +210,28 @@ describe("/api/growth", () => {
   });
 });
 
+describe("/api/growth community engagement", () => {
+  it("withholds first-response figures until comments are collected, then times outside items to the core team's first answer", async () => {
+    const db = memoryD1();
+    await put(db, "items", ["number", "kind", "created_at", "closed_at", "merged_at", "assoc", "author"], [
+      [1, "issue", iso(5), null, null, "NONE", "carol"],
+      [2, "pr", iso(4), iso(3), iso(3), "CONTRIBUTOR", "carol"],
+      [3, "pr", iso(4), iso(3.5), iso(3.5), "CONTRIBUTOR", "dave"],
+      [4, "pr", iso(4), iso(3), iso(3), "CONTRIBUTOR", "alice"],
+    ]);
+    const before = await get(db, "/api/growth", "range=7&core=alice");
+    expect(before.responses).toBeNull();
+    expect(before.funnel).toMatchObject({ people: 2, openedPr: 2, merged: 2, issueFirst: 1, issueThenPr: 1 });
+    expect(before.concentration).toMatchObject({ merged: 2, people: 2, topTwoShare: null });
+    await put(db, "item_responses", ["number", "login", "assoc", "at"], [[1, "alice", "CONTRIBUTOR", iso(4.5)]]);
+    await put(db, "collect_log", ["finished_at", "source", "ok", "detail"], [[iso(0), "comments", 1, ""], [iso(0), "issues", 1, ""]]);
+    const g = await get(db, "/api/growth", "range=7&core=alice");
+    expect(g.responses.current.issue).toEqual({ opened: 1, medianHours: 12, within2d: 1, waiting: 0 });
+    expect(g.responses.current.pr).toMatchObject({ opened: 2, medianHours: 18 });
+    expect(g.responses.periods.length).toBeGreaterThan(0);
+  });
+});
+
 describe("/api/growth newcomer retention", () => {
   it("does not count a newcomer's own PR landing as a commit as coming back", async () => {
     const db = memoryD1();

@@ -559,10 +559,10 @@ describe('SetupScreen: the recommendation', () => {
 });
 
 describe('SetupScreen: first run, local', () => {
-    it('downloads the recommended set with keep-trying off, then says it is ready', async () => {
+    it('downloads the recommended set asking to keep trying through a dropped connection, then says it is ready', async () => {
         await startLocal();
         await waitFor(() => expect(mockedApi.startSetup).toHaveBeenCalledExactlyOnceWith(false, false, {
-            acknowledgeLowDisk: false, keepTrying: false, extraModels: [],
+            acknowledgeLowDisk: false, keepTrying: true, extraModels: [],
         }));
         expect(mockedApi.chooseSetupChatModel).not.toHaveBeenCalled();
         expect(mockedApi.chooseSetupVisionModel).not.toHaveBeenCalled();
@@ -590,12 +590,14 @@ describe('SetupScreen: first run, local', () => {
         await waitFor(() => expect(mockedApi.startSetup).toHaveBeenCalledTimes(1));
     });
 
-    it('passes keep-trying through only when the user ticks it', async () => {
+    it('starts with keep-trying ticked and sends it off once the user unticks it', async () => {
         await open();
         await toModels();
-        fireEvent.click(screen.getByRole('checkbox', { name: /Keep trying if the connection drops/ }));
+        const box = screen.getByRole('checkbox', { name: /Keep trying if the connection drops/ });
+        expect(box).toBeChecked();
+        fireEvent.click(box);
         clickContinue();
-        await waitFor(() => expect(mockedApi.startSetup).toHaveBeenCalledWith(false, false, expect.objectContaining({ keepTrying: true })));
+        await waitFor(() => expect(mockedApi.startSetup).toHaveBeenCalledWith(false, false, expect.objectContaining({ keepTrying: false })));
     });
 
     it('saves a skipped model and an extra one before downloading', async () => {
@@ -986,6 +988,40 @@ describe('SetupScreen: agent', () => {
         expect(agent.getByRole('radio', { name })).toHaveAttribute('aria-checked', 'true');
     }
 
+    it('the plan names the agent, and Change opens Customize at the agent picker', async () => {
+        const scrolled = vi.spyOn(HTMLElement.prototype, 'scrollIntoView');
+        const plan = within(await open().then(planScreen));
+        expect(await plan.findByText(/^Agent: Full-featured/)).toBeInTheDocument();
+        fireEvent.click(plan.getByRole('button', { name: 'Change the agent' }));
+        expect(await screen.findByRole('heading', { name: 'Choose your agent and models' })).toBeInTheDocument();
+        const title = screen.getByRole('heading', { name: 'Agent' });
+        await waitFor(() => expect(title).toHaveFocus());
+        expect(scrolled.mock.contexts).toContain(title);
+        expect(within(screen.getByRole('region', { name: 'Agent' })).getByRole('heading', { name: 'Agent' })).toBe(title);
+        scrolled.mockRestore();
+    });
+
+    it('names Fast and light when that is the agent already in use', async () => {
+        mockedApi.getAgentPrograms.mockResolvedValue({ ...AGENT_PROGRAMS, current: 'gaiacpp' });
+        const plan = within(await open().then(planScreen));
+        expect(await plan.findByText(/^Agent: Fast and light/)).toBeInTheDocument();
+    });
+
+    it('names the agent a downloadable gaiacpp could replace', async () => {
+        mockedApi.getAgentPrograms.mockResolvedValue(withoutGaiacpp());
+        const plan = within(await open().then(planScreen));
+        expect(await plan.findByText(/^Agent: Full-featured/)).toBeInTheDocument();
+    });
+
+    it("leaves the agent out where gaiacpp can't be had, so there is nothing to change", async () => {
+        mockedApi.getAgentPrograms.mockResolvedValue(withoutGaiacpp('this GAIA release has no gaiacpp to download.'));
+        const plan = within(await open().then(planScreen));
+        await waitFor(() => expect(mockedApi.getAgentPrograms).toHaveBeenCalled());
+        await act(async () => {});
+        expect(plan.queryByText(/^Agent:/)).toBeNull();
+        expect(plan.queryByRole('button', { name: 'Change the agent' })).toBeNull();
+    });
+
     it('gaiapy: nothing about the agent is saved, and the run starts as before', async () => {
         await open();
         await toModels();
@@ -1207,7 +1243,7 @@ describe('SetupScreen: downloading', () => {
         const retry = await screen.findByRole('button', { name: 'Retry' });
         expect(retry).toHaveAccessibleDescription(/The connection dropped while downloading Qwen3\.6-35B-A3B/);
         fireEvent.click(retry);
-        await waitFor(() => expect(mockedApi.downloadSetupModel).toHaveBeenCalledWith(QWEN.id, { keepTrying: false }));
+        await waitFor(() => expect(mockedApi.downloadSetupModel).toHaveBeenCalledWith(QWEN.id, { keepTrying: true }));
     });
 
     it('keeps the models that downloaded when a later one fails, and deletes nothing', async () => {
@@ -1224,7 +1260,7 @@ describe('SetupScreen: downloading', () => {
         expect(within(qwen).queryByRole('button')).not.toBeInTheDocument();
         expect(screen.getAllByRole('button', { name: 'Retry' })).toHaveLength(1);
         fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
-        await waitFor(() => expect(mockedApi.downloadSetupModel).toHaveBeenCalledWith(GEMMA.id, { keepTrying: false }));
+        await waitFor(() => expect(mockedApi.downloadSetupModel).toHaveBeenCalledWith(GEMMA.id, { keepTrying: true }));
         expect(mockedApi.removeSetupModel).not.toHaveBeenCalled();
     });
 
@@ -1283,7 +1319,7 @@ describe('SetupScreen: downloading', () => {
         expect(mockedApi.removeSetupModel).not.toHaveBeenCalled();
         fireEvent.click(screen.getByRole('button', { name: 'Delete and download again' }));
         await waitFor(() => expect(mockedApi.removeSetupModel).toHaveBeenCalledWith(QWEN.id));
-        await waitFor(() => expect(mockedApi.downloadSetupModel).toHaveBeenCalledWith(QWEN.id, { keepTrying: false }));
+        await waitFor(() => expect(mockedApi.downloadSetupModel).toHaveBeenCalledWith(QWEN.id, { keepTrying: true }));
     });
 
     it('tests a model again without deleting it when its test failed for want of memory', async () => {
@@ -1295,7 +1331,7 @@ describe('SetupScreen: downloading', () => {
         await startLocal();
         fireEvent.click(await screen.findByRole('button', { name: 'Retry' }));
         expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument();
-        await waitFor(() => expect(mockedApi.downloadSetupModel).toHaveBeenCalledWith(QWEN.id, { keepTrying: false }));
+        await waitFor(() => expect(mockedApi.downloadSetupModel).toHaveBeenCalledWith(QWEN.id, { keepTrying: true }));
         expect(mockedApi.removeSetupModel).not.toHaveBeenCalled();
     });
 
@@ -1313,9 +1349,9 @@ describe('SetupScreen: downloading', () => {
         fireEvent.click(await screen.findByRole('button', { name: 'Retry' }));
         const sheet = await screen.findByRole('alertdialog', { name: 'Not enough free disk space' });
         expect(mockedApi.downloadSetupModel).toHaveBeenCalledTimes(1);
-        expect(mockedApi.downloadSetupModel).toHaveBeenLastCalledWith(QWEN.id, { keepTrying: false });
+        expect(mockedApi.downloadSetupModel).toHaveBeenLastCalledWith(QWEN.id, { keepTrying: true });
         fireEvent.click(within(sheet).getByRole('button', { name: 'Download anyway' }));
-        await waitFor(() => expect(mockedApi.downloadSetupModel).toHaveBeenLastCalledWith(QWEN.id, { keepTrying: false, acknowledgeLowDisk: true }));
+        await waitFor(() => expect(mockedApi.downloadSetupModel).toHaveBeenLastCalledWith(QWEN.id, { keepTrying: true, acknowledgeLowDisk: true }));
     });
 
     it('cancels and resumes the whole run with the same choices', async () => {
@@ -1422,7 +1458,7 @@ describe('SetupScreen: optional extras added during the download', () => {
         mockedApi.downloadSetupModel.mockImplementation(async () => { status = pulling; return pulling; });
         status = READY;
         expect(await startChatting(4000)).toBeInTheDocument();
-        expect(mockedApi.downloadSetupModel).toHaveBeenCalledWith(WHISPER.id, { keepTrying: false });
+        expect(mockedApi.downloadSetupModel).toHaveBeenCalledWith(WHISPER.id, { keepTrying: true });
         expect(mockedApi.startSetup).toHaveBeenCalledTimes(1);
     });
 
@@ -1496,7 +1532,7 @@ describe('SetupScreen: testing', () => {
         expect(mockedApi.removeSetupModel).not.toHaveBeenCalled();
         fireEvent.click(await screen.findByRole('button', { name: 'Delete and download again' }));
         await waitFor(() => expect(mockedApi.removeSetupModel).toHaveBeenCalledWith(QWEN.id));
-        await waitFor(() => expect(mockedApi.downloadSetupModel).toHaveBeenCalledWith(QWEN.id, { keepTrying: false }));
+        await waitFor(() => expect(mockedApi.downloadSetupModel).toHaveBeenCalledWith(QWEN.id, { keepTrying: true }));
     });
 
     it('reaches ready when only an optional extra failed', async () => {
@@ -1660,8 +1696,8 @@ describe('SetupScreen: cloud', () => {
         const gateway = screen.getByRole('radio', { name: /AMD LLM Gateway/ });
         expect(fireworks).toBeDisabled();
         expect(gateway).toBeDisabled();
-        expect(fireworks).toHaveTextContent('Blocked by Local only. Turn it off in Settings to use cloud models.');
-        expect(screen.getByRole('alert')).toHaveTextContent('Blocked by Local only. Turn it off in Settings to use cloud models.');
+        expect(fireworks).toHaveTextContent('Blocked by Local only. Turn it off in Settings to use cloud models or web search.');
+        expect(screen.getByRole('alert')).toHaveTextContent('Blocked by Local only. Turn it off in Settings to use cloud models or web search.');
         expect(screen.getByRole('button', { name: /Test and connect/ })).toBeDisabled();
         expect(mockedApi.getCloudPrices).not.toHaveBeenCalled();
     });

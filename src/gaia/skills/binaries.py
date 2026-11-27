@@ -2551,10 +2551,12 @@ def _bare_word(token: str) -> str:
     return word
 
 
-#: Modules that run ``gaia skill`` or change skill or folder trust when imported and called.
+#: Modules that run ``gaia skill``, change skill or folder trust, or install
+#: agent code when imported and called.
 TRUST_MODULES = re.compile(
     r"^gaia\.(?:cli|__main__|project_trust|project_trust_cli|skills\.(?:cli|capture|"
-    r"install|signing|drift|publish|link|migrate|human_only))(?!\w)"
+    r"install|signing|drift|publish|link|migrate|human_only)|hub\.installer|"
+    r"installer\.export_import)(?!\w)"
 )
 
 

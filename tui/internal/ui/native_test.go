@@ -19,7 +19,7 @@ func TestUseClaudeIsRefusedForTheNativeAgentAtLaunch(t *testing.T) {
 	if err == nil {
 		t.Fatal("--use-claude was accepted for gaiacpp, which exits on it")
 	}
-	for _, want := range []string{"--use-claude", client.NativeClaudeUnavailable,
+	for _, want := range []string{"--use-claude", client.NativeClaudeUnavailable, "Full-featured",
 		catalog.AgentEnv + "=" + catalog.PythonAgentBinary, catalog.AgentChoiceDocsURL} {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("the refusal does not say %q:\n%s", want, err)
