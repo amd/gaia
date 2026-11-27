@@ -2988,7 +2988,7 @@ def _credential_globs() -> List[str]:
     """A glob for every credential file name and extension the read tools refuse."""
     from gaia import security
 
-    names = sorted({name.lower() for name in security.READ_BLOCKED_FILE_NAMES})
+    names = sorted({name.lower() for name in security.SENSITIVE_FILE_NAMES})
     return names + [f"*{ext}" for ext in sorted(security.SENSITIVE_EXTENSIONS)]
 
 

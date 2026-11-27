@@ -35,7 +35,7 @@ WINDOWS_ONLY = pytest.mark.skipif(os.name != "nt", reason="Windows command")
 CREDENTIAL_NAMES = sorted(
     {
         variant
-        for name in security.READ_BLOCKED_FILE_NAMES
+        for name in security.SENSITIVE_FILE_NAMES
         for variant in (name, name.upper(), name.title())
     }
     | {

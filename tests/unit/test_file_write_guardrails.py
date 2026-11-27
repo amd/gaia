@@ -28,6 +28,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from gaia import security
 from gaia.agents.base.verification import check_was_executed
 from gaia.security import (
     BACKUP_GENERATIONS,
@@ -1944,44 +1945,50 @@ class TestPythonSyntaxGate:
 
 
 class TestAccountListIsReadableNotWritable:
-    """``passwd`` holds no secrets (hashes live in ``shadow``): read yes, write no."""
+    """Only ``/etc/passwd`` itself is readable; any other ``passwd`` stays refused."""
 
     @pytest.fixture
     def validator(self, tmp_path):
         return PathValidator(allowed_paths=[str(tmp_path)])
 
-    def test_passwd_can_be_read(self, validator, tmp_path):
-        passwd = tmp_path / "passwd"
-        passwd.write_text("root:x:0:0:root:/root:/bin/bash\n")
-        is_blocked, _ = validator.is_read_blocked(str(passwd))
-        assert not is_blocked
-
-    def test_passwd_still_cannot_be_written(self, validator, tmp_path):
-        is_blocked, _ = validator.is_write_blocked(str(tmp_path / "passwd"))
-        assert is_blocked
-
-    def test_shadow_is_still_refused_to_read(self, validator, tmp_path):
-        shadow = tmp_path / "shadow"
-        shadow.write_text("root:$6$hash:19000:0:99999:7:::\n")
-        is_blocked, _ = validator.is_read_blocked(str(shadow))
-        assert is_blocked
-
-    @pytest.mark.parametrize(
-        "spelling", ["{d}//passwd", "{d}/./passwd", "{d}/x/../passwd"]
-    )
-    def test_other_spellings_of_passwd_read_but_never_write(
-        self, validator, tmp_path, spelling
+    @pytest.mark.parametrize("folder", ["", "project", ".ssh", "etc"])
+    def test_a_file_named_passwd_elsewhere_is_still_refused(
+        self, validator, tmp_path, folder
     ):
-        (tmp_path / "x").mkdir()
-        (tmp_path / "passwd").write_text("root:x:0:0:root:/root:/bin/bash\n")
-        path = spelling.format(d=tmp_path.as_posix())
-        assert not validator.is_read_blocked(path)[0]
-        assert validator.is_write_blocked(path)[0]
+        passwd = tmp_path / folder / "passwd"
+        passwd.parent.mkdir(parents=True, exist_ok=True)
+        passwd.write_text("root:x:0:0:root:/root:/bin/bash")
+        assert validator.is_read_blocked(str(passwd))[0]
+        assert validator.is_write_blocked(str(passwd))[0]
+
+    def test_passwd_in_the_real_ssh_folder_is_refused(self, validator):
+        assert validator.is_read_blocked(str(Path.home() / ".ssh" / "passwd"))[0]
+
+    @pytest.mark.skipif(
+        not os.path.isfile("/etc/passwd") or os.name == "nt", reason="POSIX only"
+    )
+    @pytest.mark.parametrize(
+        "spelling", ["/etc/passwd", "/etc//passwd", "/etc/./passwd"]
+    )
+    def test_etc_passwd_reads_but_never_writes(self, spelling):
+        validator = PathValidator(allowed_paths=["/etc"])
+        assert not validator.is_read_blocked(spelling)[0]
+        assert validator.is_write_blocked(spelling)[0]
+
+    @pytest.mark.skipif(os.name != "nt", reason="Windows has no /etc/passwd")
+    def test_nothing_is_exempt_on_windows(self):
+        assert not security.is_public_system_file("/etc/passwd")
+        assert not security.is_public_system_file(r"C:\etc\passwd")
+
+    def test_a_relative_passwd_is_never_exempt(self):
+        assert not security.is_public_system_file("passwd")
+        assert not security.is_public_system_file("etc/passwd")
 
     def test_link_named_passwd_to_shadow_is_refused_to_read(self, validator, tmp_path):
         shadow = tmp_path / "shadow"
-        shadow.write_text("root:$6$hash:19000:0:99999:7:::\n")
-        link = tmp_path / "passwd"
+        shadow.write_text("root:$6$hash:19000:0:99999:7:::")
+        link = tmp_path / "x" / "passwd"
+        link.parent.mkdir()
         try:
             link.symlink_to(shadow)
         except OSError as e:
@@ -1993,12 +2000,20 @@ class TestAccountListIsReadableNotWritable:
     )
     def test_other_secret_files_stay_refused(self, validator, tmp_path, name):
         target = tmp_path / name
-        target.write_text("secret\n")
+        target.write_text("secret")
         assert validator.is_read_blocked(str(target))[0]
 
-    def test_only_passwd_was_opened_up(self):
-        from gaia import security
+    @pytest.mark.skipif(
+        not os.path.isfile("/etc/passwd") or os.name == "nt", reason="POSIX only"
+    )
+    def test_shell_and_python_reads_of_etc_passwd_pass(self, tmp_path):
+        assert security.credential_file_read("/etc/passwd", str(tmp_path)) is None
 
-        assert security.SENSITIVE_FILE_NAMES - security.READ_BLOCKED_FILE_NAMES == {
-            "passwd"
-        }
+    def test_shell_and_python_reads_of_another_passwd_are_caught(self, tmp_path):
+        (tmp_path / "project").mkdir()
+        (tmp_path / "project" / "passwd").write_text("x")
+        assert security.credential_file_read("project/passwd", str(tmp_path))
+
+    def test_passwd_is_still_a_credential_name(self):
+        assert "passwd" in security.SENSITIVE_FILE_NAMES
+        assert security.is_credential_file_name("passwd")

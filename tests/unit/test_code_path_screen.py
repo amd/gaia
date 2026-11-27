@@ -160,9 +160,20 @@ def test_ordinary_code_is_not_named(home, code):
     assert _named(code, home) == []
 
 
-def test_code_reading_the_account_list_passes_but_shadow_is_named(home):
+@pytest.mark.skipif(
+    os.name == "nt" or not os.path.isfile("/etc/passwd"), reason="POSIX only"
+)
+def test_code_reading_etc_passwd_passes_but_writing_it_is_named(home):
     assert _named("print(open('/etc/passwd').read())", home, may_write=False) == []
+    assert _named("open('/etc/passwd', 'a').write('x')", home, may_write=True)
+
+
+def test_code_naming_another_passwd_or_shadow_is_named(home):
     assert _named("print(open('/etc/shadow').read())", home, may_write=False)
+    assert _named("print(open('project/passwd').read())", home, may_write=False)
+    assert _named(
+        f"print(open(r'{home / 'project' / 'passwd'}').read())", home, may_write=False
+    )
 
 
 def test_gaia_settings_are_named_only_by_code_that_may_write(home):
