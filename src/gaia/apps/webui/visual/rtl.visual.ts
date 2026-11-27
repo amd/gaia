@@ -1558,6 +1558,32 @@ for (const locale of ['ar', 'en']) {
         expect(await audit(page)).toEqual([]);
         await page.screenshot({ path: info.outputPath(`sticky-code-${locale}.png`) });
     });
+
+    test(`a copy the clipboard refused says so, never Copied (${locale})`, async ({ page }, info) => {
+        await page.addInitScript(() => {
+            Object.defineProperty(navigator, 'clipboard', {
+                configurable: true,
+                value: { writeText: () => Promise.reject(new DOMException('denied', 'NotAllowedError')) },
+            });
+            document.execCommand = () => false;
+        });
+        await page.setViewportSize({ width: 1400, height: 900 });
+        await open(page, `#${ANSWER_SESSION}`, locale, withLongCode);
+        const failed = locale === 'ar' ? 'تعذّر النسخ' : "Couldn't copy";
+        const codeCopy = page.locator('.code-copy');
+        await codeCopy.click();
+        await expect(codeCopy).toHaveClass(/\bfailed\b/);
+        await expect(codeCopy).toContainText(failed);
+        const reply = page.locator('.msg-assistant').last();
+        await reply.hover();
+        const msgCopy = reply.locator('.msg-copy');
+        await msgCopy.click();
+        await expect(msgCopy).toHaveClass(/\bfailed\b/);
+        await expect(msgCopy).toHaveAttribute('aria-label', new RegExp(failed));
+        await expect(page.locator('.copied')).toHaveCount(0);
+        expect(await audit(page)).toEqual([]);
+        await page.screenshot({ path: info.outputPath(`copy-failed-${locale}.png`) });
+    });
 }
 
 async function withLongPasteAndTable(page: Page): Promise<void> {

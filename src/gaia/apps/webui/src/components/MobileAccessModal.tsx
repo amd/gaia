@@ -2,12 +2,13 @@
 // SPDX-License-Identifier: MIT
 
 import { useState, useEffect, useRef, useCallback } from 'react';
-import { X, Smartphone, Copy, Check, ExternalLink, RotateCw } from 'lucide-react';
+import { X, Smartphone, Copy, Check, AlertCircle, ExternalLink, RotateCw } from 'lucide-react';
 import type { TunnelStatus } from '../types';
 import * as api from '../services/api';
 import { useEscapeToClose } from '../hooks/useEscapeToClose';
 import { useFocusTrap } from '../hooks/useFocusTrap';
 import { useDialogFocus } from '../hooks/useDialogFocus';
+import { useCopyFeedback } from '../hooks/useCopyFeedback';
 import { log } from '../utils/logger';
 import { useT } from '../i18n/useT';
 import type { MessageKey } from '../i18n/registry';
@@ -32,7 +33,7 @@ const NGROK_DOWNLOAD_URL = 'https://ngrok.com/download';
 
 export function MobileAccessModal({ isOpen, onClose, onStop, error, setupCommands, onRetry }: MobileAccessModalProps) {
     const [status, setStatus] = useState<TunnelStatus | null>(null);
-    const [copied, setCopied] = useState(false);
+    const [copyState, copy] = useCopyFeedback();
     const t = useT();
     const needsSetup = Array.isArray(setupCommands);
     // Nothing to poll for or scan while the tunnel cannot start.
@@ -127,24 +128,10 @@ export function MobileAccessModal({ isOpen, onClose, onStop, error, setupCommand
         generateQR();
     }, [status?.active, status?.url, status?.token]);
 
-    // Copy URL to clipboard
-    const copyTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
     const copyUrl = useCallback(() => {
         if (!status?.url || !status?.token) return;
-        const mobileUrl = `${status.url}/?token=${status.token}`;
-        navigator.clipboard.writeText(mobileUrl).then(() => {
-            setCopied(true);
-            if (copyTimerRef.current) clearTimeout(copyTimerRef.current);
-            copyTimerRef.current = setTimeout(() => setCopied(false), 2000);
-        });
-    }, [status]);
-
-    // Clean up copy timer on unmount
-    useEffect(() => {
-        return () => {
-            if (copyTimerRef.current) clearTimeout(copyTimerRef.current);
-        };
-    }, []);
+        copy(`${status.url}/?token=${status.token}`);
+    }, [status, copy]);
 
     if (!isOpen) return null;
 
@@ -229,12 +216,12 @@ export function MobileAccessModal({ isOpen, onClose, onStop, error, setupCommand
                             <div className="tunnel-url-row">
                                 <input type="text" readOnly dir="ltr" value={mobileUrl} />
                                 <button
-                                    className={`copy-url-btn ${copied ? 'copied' : ''}`}
+                                    className={`copy-url-btn ${copyState === 'idle' ? '' : copyState}`}
                                     onClick={copyUrl}
                                     title={t('mobile.copyUrl')}
                                 >
-                                    {copied ? <Check size={13} /> : <Copy size={13} />}
-                                    {copied ? t('mobile.copied') : t('mobile.copy')}
+                                    {copyState === 'copied' ? <Check size={13} /> : copyState === 'failed' ? <AlertCircle size={13} /> : <Copy size={13} />}
+                                    {copyState === 'copied' ? t('mobile.copied') : copyState === 'failed' ? t('msg.copyFailed') : t('mobile.copy')}
                                 </button>
                             </div>
                         </div>
