@@ -453,6 +453,15 @@ class TestQualityReport:
         monkeypatch.setenv("GAIA_EVAL_SCORECARDS_DIR", str(tmp_path / "eval-out"))
 
         mod = _load("eval_quality_report")
+        monkeypatch.setattr(
+            mod,
+            "load_thresholds",
+            lambda: {
+                "enforce": True,
+                "min_judged_pass_rate": 0.5,
+                "min_avg_score": 5.0,
+            },
+        )
         assert mod.main() == 1
 
         report = json.loads(
