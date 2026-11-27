@@ -278,7 +278,8 @@ setup_journey() {
   (
     cd "${REPO}/src/gaia/apps/webui"
     export PLAYWRIGHT_BROWSERS_PATH="${WORK}/playwright-browsers"
-    npm ci --ignore-scripts
+    # Dependabot writes the Agent UI lockfile with npm 11; the runner's Node 22 ships npm 10.
+    npx -y npm@11 ci --ignore-scripts
     npx playwright install --with-deps chromium
     GAIA_E2E_BASE_URL="http://127.0.0.1:${port}" GAIA_E2E_SCREENS="${LOGS}/setup-screens" \
       npx playwright test -c e2e/playwright.config.ts --project=en
