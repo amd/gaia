@@ -267,6 +267,16 @@ _SOURCE_EXTS = (
     ".f90", ".s",
 )  # fmt: skip
 _SEPARATORS = frozenset({"&&", "||", ";", ";;", "|", "|&", "&", "(", ")"})
+#: Separators after which the call's exit status is not this command's.
+_MASKING = frozenset({"||", ";", ";;", "&", "|", "|&"})
+#: Output that shows a program crashed or reported an error.
+_RUN_ERROR = re.compile(
+    r"Traceback \(most recent call last\)|\b[A-Z]\w*(?:Error|Exception)\b:?"
+    r"|(?im:^\s*(?:fatal\s+)?error\b)|\bError:|Segmentation fault|core dumped"
+    r"|\bpanic:|\bAborted\b|exit(?:ed)? (?:with )?(?:code|status) -?[1-9]"
+    r"|returned non-zero|command not found|No such file or directory"
+    r"|is not recognized as an internal or external command"
+)
 _ASSIGNMENT = re.compile(r"^[A-Za-z_]\w*=")
 _ABSOLUTE = re.compile(r"^(?:/|~|[a-z]:/)")
 
@@ -282,15 +292,23 @@ def _command_words(command: str) -> List[str]:
         return re.findall(r"&&|\|\||[;|&()<>]+|[^\s;|&()<>]+", text)
 
 
-def _segments(words: Sequence[str]) -> Iterable[List[str]]:
+def _segments(words: Sequence[str]) -> Iterable[Tuple[List[str], bool]]:
+    """Each simple command, and whether the command's exit status is lost.
+
+    ``f || true``, ``f; echo``, ``f &`` and ``f | head`` all report another
+    command's status, so the call's success says nothing about ``f``.
+    """
     segment: List[str] = []
+    pending: Optional[Tuple[List[str], str]] = None
     skip_target = False
     for word in words:
         if skip_target:
             skip_target = False
         elif word in _SEPARATORS:
             if segment:
-                yield segment
+                if pending:
+                    yield pending[0], pending[1] in _MASKING
+                pending = (segment, word)
             segment = []
         elif word and set(word) <= set("<>&|"):
             # A redirect: drop its fd (``2>``) and its target.
@@ -299,8 +317,13 @@ def _segments(words: Sequence[str]) -> Iterable[List[str]]:
             skip_target = True
         else:
             segment.append(word)
+    if pending:
+        # ``f;`` with nothing after keeps f's status; ``f &`` never does.
+        yield pending[0], pending[1] in _MASKING and (
+            bool(segment) or pending[1] in ("&", "|", "|&")
+        )
     if segment:
-        yield segment
+        yield segment, False
 
 
 def _program_name(word: str) -> str:
@@ -309,31 +332,29 @@ def _program_name(word: str) -> str:
     return re.sub(r"[\d.]+$", "", name) or name
 
 
+#: A directory the record can't place (``cd -``): nothing resolves into it.
+_UNKNOWN_DIR = "?"
+
+
 def _resolve(path: str, cwd: Optional[str]) -> str:
-    """*path* made absolute, or left relative to the agent's own directory."""
+    """*path* made absolute, or left relative to the session's workspace.
+
+    File tools and the shell share that workspace as their relative base, so
+    a relative path names the same file on both sides, and never an absolute
+    one: the workspace itself isn't in the record.
+    """
+    if path.startswith("~"):
+        path = os.path.expanduser(path)
     path = path.replace("\\", "/").lower()
     if cwd and not _ABSOLUTE.match(path):
         path = posixpath.join(cwd, path)
     return posixpath.normpath(path)
 
 
-def _same_path(a: str, b: str) -> bool:
-    if a == b:
-        return True
-    a_abs, b_abs = bool(_ABSOLUTE.match(a)), bool(_ABSOLUTE.match(b))
-    if a_abs == b_abs:
-        return False
-    # The relative side is under a directory the record doesn't name.
-    rel, full = (b, a) if a_abs else (a, b)
-    return full.endswith("/" + rel)
-
-
 def _under(path: str, directory: str) -> bool:
     if directory == ".":
-        return True
-    if bool(_ABSOLUTE.match(path)) == bool(_ABSOLUTE.match(directory)):
-        return path.startswith(directory.rstrip("/") + "/")
-    return f"/{directory}/" in f"/{path}"
+        return not _ABSOLUTE.match(path) and not path.startswith("../")
+    return path.startswith(directory.rstrip("/") + "/")
 
 
 def _skip_flags(words: List[str]) -> List[str]:
@@ -352,6 +373,8 @@ def _interpreted(name: str, args: List[str]) -> Tuple[str, List[str]]:
             return "none", []
         if name in _SHELLS and word == "-c":
             return ("shell", args[:1]) if args else ("none", [])
+        if name in ("pwsh", "powershell") and word.lower() in ("-c", "-command"):
+            return ("shell", [" ".join(args)]) if args else ("none", [])
         if word in inline:
             return "none", []
         if word == "-m" and name in ("python", "py", "pypy"):
@@ -368,23 +391,34 @@ def _interpreted(name: str, args: List[str]) -> Tuple[str, List[str]]:
     return "none", []
 
 
-def _run_events(command: str, cwd: Optional[str]) -> Iterable[Tuple[Any, ...]]:
+def _run_events(
+    command: str, cwd: Optional[str], masked: bool = False, subshell: bool = False
+) -> Iterable[Tuple[Any, ...]]:
     """What a shell command runs or builds, segment by segment, after ``cd``.
 
-    Yields ``("run", path)``, ``("run_dir", directory, extensions)`` and
-    ``("build", sources, output)``.
+    Yields ``("run", path, masked)``, ``("run_dir", directory, extensions,
+    masked)``, ``("build", sources, output, masked)`` and, outside a subshell,
+    ``("cd", directory)``. *masked* means the call's exit status isn't the
+    command's own.
     """
-    for words in _segments(_command_words(command)):
+    for words, lost in _segments(_command_words(command)):
+        lost = lost or masked
         while words and _ASSIGNMENT.match(words[0]):
             words = words[1:]
         name = _program_name(words[0]) if words else ""
-        if name in ("cd", "pushd"):
-            target = words[1] if len(words) > 1 else "-"
-            cwd = None if target == "-" else _resolve(target, cwd)
+        if name in ("cd", "pushd", "chdir"):
+            target = words[1] if len(words) > 1 else "~"
+            cwd = _UNKNOWN_DIR if target == "-" else _resolve(target, cwd)
+            if not subshell:
+                yield ("cd", cwd)
+            continue
+        if name == "cmd" and len(words) > 2 and words[1].lower() in ("/c", "/k"):
+            yield from _run_events(" ".join(words[2:]), cwd, lost, True)
             continue
         while words and (
             name in _WRAPPERS or (name in _RUN_WRAPPERS and words[1:2] == ["run"])
         ):
+            lost = lost or name == "nohup"
             words = _skip_flags(words[2:] if name in _RUN_WRAPPERS else words[1:])
             if name == "timeout" and words:
                 words = words[1:]  # the duration
@@ -398,10 +432,10 @@ def _run_events(command: str, cwd: Optional[str]) -> Iterable[Tuple[Any, ...]]:
                 operands = [a for a in args[1:] if not a.startswith("-")]
                 files = [a for a in operands if a.endswith(exts)]
                 for path in files:
-                    yield ("run", _resolve(path, cwd))
+                    yield ("run", _resolve(path, cwd), lost)
                 if not files:
                     target = operands[0] if operands and name == "go" else "."
-                    yield ("run_dir", _resolve(target, cwd), exts)
+                    yield ("run_dir", _resolve(target, cwd), exts, lost)
             continue
         if name in _COMPILERS:
             if "-c" in args or "-fsyntax-only" in args or "-S" in args:
@@ -424,19 +458,44 @@ def _run_events(command: str, cwd: Optional[str]) -> Iterable[Tuple[Any, ...]]:
             else:
                 outputs = [_resolve(output or "a.out", cwd)]
             for out in outputs if sources else []:
-                yield ("build", sources, out)
-                yield ("build", sources, out + ".exe")
+                yield ("build", sources, out, lost)
+                yield ("build", sources, out + ".exe", lost)
             continue
         if name in ("deno", "bun") and args[:1] == ["run"]:
             args = args[1:]
         if name in _INTERPRETERS:
             kind, values = _interpreted(name, args)
             if kind == "shell":
-                yield from _run_events(values[0], cwd)
+                yield from _run_events(values[0], cwd, lost, True)
             for path in values if kind == "files" else []:
-                yield ("run", _resolve(path, cwd))
+                yield ("run", _resolve(path, cwd), lost)
             continue
-        yield ("run", _resolve(words[0], cwd))
+        yield ("run", _resolve(words[0], cwd), lost)
+
+
+#: Result fields that describe the call, each followed by its value.
+_RESULT_META = frozenset(
+    "status return_code returncode exit_code duration_seconds cwd command "
+    "truncated timed_out shell pid".split()
+)
+#: Result fields that hold what the program printed.
+_RESULT_STREAMS = frozenset({"stdout", "stderr", "output", "steps"})
+
+
+def _program_output(observed: str) -> str:
+    """What the program printed, from a flattened tool result."""
+    lines = observed.split("\n")
+    kept: List[str] = []
+    skip = False
+    for line in lines:
+        key = line.strip().lower()
+        if skip:
+            skip = False
+        elif key in _RESULT_META:
+            skip = True
+        elif key not in _RESULT_STREAMS:
+            kept.append(line)
+    return "\n".join(kept)
 
 
 def _ran_what_it_wrote(records: Sequence[Dict[str, Any]]) -> bool:
@@ -445,16 +504,17 @@ def _ran_what_it_wrote(records: Sequence[Dict[str, Any]]) -> bool:
 
     Where there is no test suite, running the program is the test. A binary
     counts only when built from a written source after that source's last write.
+    Output that shows an error never counts; a run whose exit status the shell
+    hid (``|| true``, ``; echo``, ``&``, a pipe) counts only on clean output.
     """
     written: List[str] = []
     built: Dict[str, Set[str]] = {}
     ran: Set[str] = set()
+    session_cwd: Optional[str] = None
 
     def credit(path: str) -> None:
-        ran.update(w for w in written if _same_path(path, w))
-        for out, sources in built.items():
-            if _same_path(path, out):
-                ran.update(sources)
+        ran.update(w for w in written if w == path)
+        ran.update(built.get(path, ()))
 
     for record in records:
         args = record.get("args")
@@ -470,28 +530,36 @@ def _ran_what_it_wrote(records: Sequence[Dict[str, Any]]) -> bool:
                 built = {
                     out: sources
                     for out, sources in built.items()
-                    if not any(_same_path(s, path) for s in sources)
+                    if path not in sources
                 }
             continue
-        if not written or not _executed(record) or record.get("failed"):
+        if not _executed(record) or record.get("failed"):
             continue
+        output = _program_output(record.get("observed") or "")
+        errored = bool(_RUN_ERROR.search(output))
+        shown = bool(output.strip())
         command = args.get("command")
         if not isinstance(command, str):
-            for key, value in args.items():
+            for key, value in args.items() if not errored else ():
                 if isinstance(value, str) and value and key.endswith("path"):
                     credit(_resolve(value, None))
             continue
         cwd = args.get("working_directory") or args.get("cwd")
-        cwd = _resolve(cwd, None) if isinstance(cwd, str) and cwd else None
+        cwd = _resolve(cwd, None) if isinstance(cwd, str) and cwd else session_cwd
         for event in _run_events(command, cwd):
-            if event[0] == "run":
+            if event[0] == "cd":
+                # The shell session keeps the directory a command moved to.
+                session_cwd = event[1]
+            elif errored or (event[-1] and not shown):
+                continue
+            elif event[0] == "run":
                 credit(event[1])
             elif event[0] == "run_dir":
                 ran.update(
                     w for w in written if w.endswith(event[2]) and _under(w, event[1])
                 )
             else:
-                fresh = {w for w in written if any(_same_path(s, w) for s in event[1])}
+                fresh = {w for w in written if w in event[1]}
                 if fresh:
                     built[event[2]] = fresh
     return bool(ran)

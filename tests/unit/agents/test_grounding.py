@@ -588,11 +588,11 @@ def _wrote(path):
     return record
 
 
-def _shell(command, failed=False):
+def _shell(command, failed=False, stdout="832040\n"):
     record = _rec(
         "run_shell_command",
         {"command": command},
-        {"status": "success", "stdout": "832040\n", "return_code": 0},
+        {"status": "success", "stdout": stdout, "return_code": 0},
     )
     record["failed"] = failed
     return record
@@ -652,6 +652,14 @@ def _shell_in(command, working_directory):
         ("src/main.py", "python src/main.py"),
         ("/repo/src/main.py", "cd /repo/src && python main.py"),
         ("/repo/src/main.py", "cd /repo && cd src && python ./main.py"),
+        # Windows shells.
+        ("f.py", "cmd /c python f.py"),
+        ("f.py", 'cmd.exe /c "python f.py"'),
+        ("f.py", 'powershell -Command "python f.py"'),
+        ("f.ps1", "pwsh -File f.ps1"),
+        # A hidden exit status still counts when the output shows no error.
+        ("f.py", "python f.py 2>&1 | head"),
+        ("f.py", "python f.py || true"),
     ],
 )
 def test_tested_is_backed_by_running_the_program_this_turn_wrote(written, command):
@@ -748,6 +756,88 @@ def test_tested_is_not_backed_by_a_run_of_something_else(records):
     findings = action_findings("The fix is complete and tested.", records)
 
     assert [f.gate for f in findings] == [ACTION]
+
+
+def test_the_shell_session_keeps_the_directory_a_command_moved_to():
+    records = [
+        _wrote("/repo/src/main.py"),
+        _shell("cd /repo/src", stdout=""),
+        _shell("python main.py"),
+    ]
+
+    assert action_findings("The fix is complete and tested.", records) == []
+
+
+_MASKED = [
+    "python f.py || true",
+    "python f.py; echo done",
+    "python f.py 2>&1 | head",
+    "python f.py & wait",
+    "nohup python f.py &",
+    "python f.py &",
+    "sh -c 'python f.py' || true",
+    "cmd /c python f.py & echo done",
+]
+_CRASHES = [
+    'Traceback (most recent call last):\n  File "f.py", line 3\nZeroDivisionError: x',
+    "Error: cannot open weights.json",
+    "error: unknown flag --fast",
+    "Segmentation fault (core dumped)",
+    "panic: runtime error: index out of range",
+    "process exited with code 1",
+    "python: can't open file 'f.py': [Errno 2] No such file or directory",
+]
+
+
+@pytest.mark.parametrize("command", _MASKED)
+def test_a_run_whose_exit_status_is_hidden_needs_output(command):
+    """``|| true`` and friends make the call succeed whatever the program did."""
+    records = [_wrote("f.py"), _shell(command, stdout="")]
+
+    assert [
+        f.gate for f in action_findings("The fix is complete and tested.", records)
+    ] == [ACTION]
+
+
+@pytest.mark.parametrize("stdout", _CRASHES)
+@pytest.mark.parametrize("command", _MASKED + ["python f.py", "uv run f.py"])
+def test_a_run_whose_output_shows_a_crash_is_not_a_test(command, stdout):
+    records = [_wrote("f.py"), _shell(command, stdout=stdout)]
+
+    assert [
+        f.gate for f in action_findings("The fix is complete and tested.", records)
+    ] == [ACTION]
+
+
+@pytest.mark.parametrize(
+    "records",
+    [
+        # Same file name, any other directory.
+        [_wrote("f.py"), _shell("python /tmp/other/f.py")],
+        [_wrote("f.py"), _shell("/tmp/other/f.py")],
+        [_wrote("src/main.py"), _shell("python /repo/src/main.py")],
+        [_wrote("/repo/f.py"), _shell("python f.py")],
+        [_wrote("f.py"), _shell("cd /tmp && python f.py")],
+        [_wrote("f.py"), _shell("cd /tmp", stdout=""), _shell("python f.py")],
+        [_wrote("f.py"), _shell("cd - && python f.py")],
+        [_wrote("/app/main.go"), _shell("go run .")],
+        # A file tool's run that crashed.
+        [
+            _wrote("/app/f.py"),
+            _rec(
+                "execute_python_file",
+                {"file_path": "/app/f.py"},
+                {"status": "success", "stdout": "Traceback (most recent call last):"},
+            ),
+        ],
+        # A compile whose status was hidden, with no output to show it worked.
+        [_wrote("f.c"), _shell("gcc f.c; ./a.out", stdout="")],
+    ],
+)
+def test_a_run_of_a_same_named_file_elsewhere_is_not_a_test(records):
+    assert [
+        f.gate for f in action_findings("The fix is complete and tested.", records)
+    ] == [ACTION]
 
 
 @pytest.mark.parametrize("tool_name", ["query_specific_file", "query_documents"])
