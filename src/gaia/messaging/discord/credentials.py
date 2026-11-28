@@ -48,8 +48,15 @@ NO_STORE_HINT = (
 )
 
 
+def _vault_keyring_override():
+    from gaia.connectors import keyring_access
+
+    kr = _keyring()
+    return None if kr is keyring_access else kr
+
+
 def save(bot_token: str) -> None:
-    """Store the bot token in the OS keyring.
+    """Store the bot token in the encrypted credential vault.
 
     Nothing to store when the environment already supplies this very token:
     that is the way to run where there is no keyring.
@@ -60,11 +67,15 @@ def save(bot_token: str) -> None:
     if os.environ.get(BOT_TOKEN_ENV_VAR) == bot_token:
         log.info("The Discord bot token comes from %s; not stored", BOT_TOKEN_ENV_VAR)
         return
+    from gaia.connectors import vault
+
     try:
-        _keyring().write(SERVICE_NAME, BOT_TOKEN_KEY, bot_token)
+        vault.put(BOT_TOKEN_KEY, bot_token, keyring_mod=_vault_keyring_override())
     except Exception as e:  # noqa: BLE001 - re-raised with the remedy below
         raise DiscordCredentialsError(NO_STORE_HINT.format(detail=_short(e))) from e
-    log.info("Stored the Discord bot token in the OS keyring under %s", SERVICE_NAME)
+    log.info(
+        "Stored the Discord bot token in the encrypted vault under %s", SERVICE_NAME
+    )
 
 
 def _short(error: Exception) -> str:
@@ -78,13 +89,11 @@ def clear() -> None:
     Raises:
         DiscordCredentialsError: the keyring could not be reached, with why.
     """
+    from gaia.connectors import vault
     from gaia.connectors.errors import ConnectorsError
 
-    keyring = _keyring()
     try:
-        keyring.delete(SERVICE_NAME, BOT_TOKEN_KEY)
-    except keyring.errors.PasswordDeleteError:
-        log.debug("No stored Discord bot token to remove")
+        vault.delete(BOT_TOKEN_KEY, keyring_mod=_vault_keyring_override())
     except ConnectorsError as e:
         raise DiscordCredentialsError(
             f"Could not remove the Discord bot token from the OS keyring: {e}"
@@ -92,7 +101,7 @@ def clear() -> None:
 
 
 def load() -> str:
-    """Return the bot token, environment first, then the keyring.
+    """Return the bot token, environment first, then the credential vault.
 
     Raises:
         DiscordCredentialsError: when no token is stored or the keyring fails.
@@ -100,10 +109,11 @@ def load() -> str:
     token = os.environ.get(BOT_TOKEN_ENV_VAR)
     if token:
         return token
+    from gaia.connectors import vault
     from gaia.connectors.errors import ConnectorsError
 
     try:
-        token = _keyring().read(SERVICE_NAME, BOT_TOKEN_KEY)
+        token = vault.get(BOT_TOKEN_KEY, keyring_mod=_vault_keyring_override())
     except ConnectorsError as e:
         raise DiscordCredentialsError(str(e)) from e
     except Exception as e:  # noqa: BLE001 - re-raised with the remedy below
