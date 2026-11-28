@@ -195,6 +195,20 @@ TEST(GaiaAgentTest, ThePromptListsTheWorkingFolderTwoLevelsDeep) {
     EXPECT_EQ(system.find("hidden-by-depth"), std::string::npos);
 }
 
+TEST(GaiaAgentTest, ThePromptSaysMailNeedsTheFullFeaturedAgent) {
+    Workdir w;
+    bench::MockLlmServer mock;
+    mock.pushResponse(answer("ok"));
+    GaiaAgent agent(cfgFor(mock), optionsFor(w));
+    agent.processQuery("can you see my email?");
+
+    ASSERT_EQ(mock.receivedBodies().size(), 1u);
+    const std::string system = json::parse(mock.receivedBodies()[0])["messages"][0]["content"];
+    EXPECT_NE(system.find("have no email or calendar tools"), std::string::npos);
+    EXPECT_NE(system.find("Full-featured agent (gaiapy) can"), std::string::npos);
+    EXPECT_NE(system.find("Settings › Agent & model"), std::string::npos);
+}
+
 TEST(GaiaAgentTest, ALargeFolderIsListedUpToALimit) {
     Workdir w;
     for (int i = 0; i < 80; ++i) std::ofstream(w.path / ("file" + std::to_string(100 + i) + ".txt")) << "x";

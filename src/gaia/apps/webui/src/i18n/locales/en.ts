@@ -2292,6 +2292,7 @@ export const enMessages = {
     'setup.agent.diff.undo': "File changes it makes can't be undone from the chat.",
     'setup.agent.diff.search': 'Document search matches words, not meaning.',
     'setup.agent.diff.media': "It can't create images, transcribe audio or turn a document into speech.",
+    'setup.agent.diff.email': "It can't read your email or calendar, even with an account connected.",
     'setup.agent.diff.context': "The context meter doesn't show how full the conversation is.",
     'setup.agent.notInstalledMore': "It isn't installed on this PC, so it can't be picked.",
     'setup.agent.cantDownload': "It isn't on this PC and can't be downloaded here: {reason}",
