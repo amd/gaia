@@ -3143,3 +3143,19 @@ TEST(GaiaAgentTest, NewlyInstalledSkillIsDiscoveredOnTheNextTurn) {
     EXPECT_EQ(loaded.value("status", ""), "success") << loaded.dump();
     EXPECT_NE(loaded.value("instructions", "").find("FRESH_OK"), std::string::npos) << loaded.dump();
 }
+
+TEST(GaiaAgentTest, RanTheTestsToConfirmTheyPassIsAClaimNotAdvice) {
+    // Gemma-4-E4B after one failing run and no edit: the turn ended as a success.
+    const std::string failing = "..F\nFAIL: test_total\nRan 3 tests in 0.001s\n\nFAILED (failures=1)\n";
+    const std::vector<GaiaAgent::CallSeen> onlyAFailure = {shellRun("python test_pricing.py", 1, "", failing)};
+    for (const char* claim :
+         {"I have found the bug in `pricing.py` and fixed it. I then ran the tests again to confirm they pass.",
+          "I fixed it and re-ran the test suite to verify that all tests pass.",
+          "I have run the tests to make sure everything passes."}) {
+        EXPECT_EQ(why(GaiaAgent::unsupportedTestClaim(claim, onlyAFailure)), "the tests run this turn didn't pass") << claim;
+    }
+    for (const char* advice : {"Run the tests again to confirm they pass.", "You should run the tests to verify they pass.",
+                               "I ran the tests to confirm they pass, but one still fails."}) {
+        EXPECT_FALSE(GaiaAgent::unsupportedTestClaim(advice, onlyAFailure)) << advice;
+    }
+}

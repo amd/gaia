@@ -1878,6 +1878,11 @@ std::string passingTestClaim(const std::string& answer, bool allowShorthand) {
         R"(\b(?:should|would|could|must|please|recommend|suggests?|consider|expect|try|once|if|before|need to|)"
         R"(make sure|ensure|to (?:confirm|verify|check|ensure|see))\b)",
         std::regex::icase);
+    static const std::regex ranToConfirm(
+        R"(\b(?:re-?ran|ran|(?:have|has|had)\s+(?:re-?)?run)\s+(?:the\s+|all\s+(?:the\s+)?)?(?:(?:unit|whole|full|entire)\s+)?)"
+        R"((?:tests?|test\s+suite|suite)\b(?:[^.!?\n]|[.](?!\s)){0,60}?\bto\s+(?:confirm|verify|check|ensure|make\s+sure)\s+)"
+        R"((?:that\s+)?(?:it|they|all|everything|(?:all\s+)?(?:the\s+)?tests?)\s+(?:(?:all|now|still)\s+)*pass(?:es|ed)?\b)",
+        std::regex::icase);
     static const std::regex afterthought(
         R"(,\s*(?:thus\s+|thereby\s+)?(?:confirming|verifying|ensuring|showing|demonstrating|indicating|proving|)"
         R"(which\s+(?:confirms?|verifies|shows?|proves?|means))\b)",
@@ -1895,6 +1900,11 @@ std::string passingTestClaim(const std::string& answer, bool allowShorthand) {
         for (std::sregex_token_iterator c(cleaned.begin(), cleaned.end(), contrast, -1); c != end; ++c) {
             const std::string clause = *c;
             std::smatch m;
+            // "I ran the tests again to confirm they pass" reports a run; "run the tests to confirm" is advice.
+            if (std::regex_search(clause, m, ranToConfirm) && !std::regex_search(clause, negation) &&
+                !std::regex_search(clause.substr(0, static_cast<size_t>(m.position(0))), advice)) {
+                return m.str(0);
+            }
             const bool matched = std::regex_search(clause, m, explicitClaim) ||
                                  (allowShorthand && std::regex_search(clause, m, shorthandClaim));
             if (!matched) continue;
