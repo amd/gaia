@@ -1724,6 +1724,8 @@ const messages: Messages = {
     'settings.title': 'الإعدادات',
     'settings.sections': 'أقسام الإعدادات',
     'chat.loadingTools': 'جارٍ تحميل المزيد من الأدوات',
+    'chat.reasoningWords.one': 'جارٍ الاستدلال — كلمة واحدة حتى الآن',
+    'chat.reasoningWords.other': 'جارٍ الاستدلال — الكلمات حتى الآن: {n}',
     'chat.loadingMessages': 'جارٍ تحميل الرسائل',
     'chat.empty.title': 'هذه المحادثة فارغة',
     'chat.empty.hint': 'أرسل رسالة في الأسفل لتبدأ.',
