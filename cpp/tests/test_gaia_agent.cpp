@@ -2568,6 +2568,9 @@ TEST(GaiaAgentTest, SourceFilesAnAnswerSaysItWroteAreClaimedFilesToo) {
     EXPECT_EQ(GaiaAgent::claimedFiles("`slug.test.js` has been created."), Files{"slug.test.js"});
     // A library with a file's ending is not a file.
     EXPECT_TRUE(GaiaAgent::claimedFiles("I created the server with Node.js and Express.js.").empty());
+    EXPECT_TRUE(GaiaAgent::claimedFiles("I built the frontend with Svelte.js, not Angular.js or jQuery.js.").empty());
+    // A component file with a capital letter is still a file.
+    EXPECT_EQ(GaiaAgent::claimedFiles("I created `App.js` and `Button.jsx`."), (Files{"App.js", "Button.jsx"}));
     EXPECT_TRUE(GaiaAgent::claimedFiles("The bug is in utils.js, on line 4.").empty());
 }
 

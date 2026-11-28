@@ -4,6 +4,7 @@
 #include "gaia/json_utils.h"
 
 #include <algorithm>
+#include <cctype>
 #include <cstring>
 
 namespace gaia {
@@ -254,6 +255,21 @@ bool insideCodeFence(const std::string& text, size_t at) {
     return fences % 2 == 1;
 }
 
+// Nothing but space and code-fence marks: calls on either side of it were written as one run.
+bool onlySpaceOrFences(const std::string& text) {
+    for (size_t i = 0; i < text.size();) {
+        if (std::isspace(static_cast<unsigned char>(text[i])) != 0) {
+            ++i;
+        } else if (text.compare(i, 3, "```") == 0) {
+            i += 3;
+            while (i < text.size() && std::isalpha(static_cast<unsigned char>(text[i])) != 0) ++i;
+        } else {
+            return false;
+        }
+    }
+    return true;
+}
+
 // The call a JSON object holds, with its arguments in "tool_args"; nullopt when it is not only a call.
 // Arguments beside "tool" count only for a tool that exists: {"tool": "saw", "teeth": 40} is data.
 std::optional<json> asTextToolCall(const std::string& object, const ToolNameCheck& isTool) {
@@ -293,9 +309,11 @@ std::optional<std::pair<json, std::string>> trailingToolCall(const std::string& 
             continue;
         }
         if (!asTextToolCall(candidate, isTool)) return std::nullopt;
-        // The reply ends in a call. Calls run in the order written, so the first one is the one to run.
+        // The reply ends in a run of calls. They run in the order written, so the first of the run is the
+        // one to run. Prose between two calls ends a run: "that call failed, retrying: {...}" quotes the first.
         json call;
         size_t dropped = 0;
+        size_t runEnd = 0;
         const size_t closing = at;
         for (size_t from = body.find('{'); from != std::string::npos && from <= closing;) {
             const std::string object = extractFirstJsonObject(body.substr(from));
@@ -305,13 +323,15 @@ std::optional<std::pair<json, std::string>> trailingToolCall(const std::string& 
                 from = body.find('{', from + (object.empty() ? 1 : object.size()));
                 continue;
             }
-            if (call.is_null()) {
+            if (call.is_null() || !onlySpaceOrFences(body.substr(runEnd, from - runEnd))) {
                 call = std::move(*found);
                 at = from;
+                dropped = 0;
             } else {
                 ++dropped;
             }
-            from = body.find('{', from + object.size());
+            runEnd = from + object.size();
+            from = body.find('{', runEnd);
         }
         if (call.is_null()) {  // the closing call sits in a code fence the reply never closed
             call = *asTextToolCall(candidate, isTool);

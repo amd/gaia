@@ -967,7 +967,8 @@ bool isLibraryName(const std::string& name) {
     static const std::set<std::string> libraries = {"node.js",  "next.js",  "nuxt.js",  "vue.js",   "react.js",
                                                     "three.js", "d3.js",    "express.js", "nest.js", "chart.js",
                                                     "p5.js",    "alpine.js", "ember.js", "backbone.js", "moment.js",
-                                                    "discord.js"};
+                                                    "discord.js", "angular.js", "svelte.js", "solid.js",
+                                                    "electron.js", "jquery.js", "preact.js", "knockout.js"};
     std::string lower = name;
     std::transform(lower.begin(), lower.end(), lower.begin(),
                    [](unsigned char c) { return static_cast<char>(std::tolower(c)); });

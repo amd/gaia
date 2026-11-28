@@ -454,3 +454,23 @@ TEST(JsonUtilsTest, BracesInsideAnEarlierCallsTextDoNotHideTheCalls) {
     EXPECT_EQ(*p.toolName, "file_write");
     EXPECT_EQ(p.droppedToolCalls, 1u);
 }
+
+TEST(JsonUtilsTest, ACallQuotedBeforeProseIsNotTheOneThatRuns) {
+    auto p = parseLlmResponse(
+        "The last attempt {\"tool\": \"bash_execute\", \"tool_args\": {\"command\": \"rm -rf build && make\"}} "
+        "failed. Retrying:\n\n{\"tool\": \"bash_execute\", \"tool_args\": {\"command\": \"make\"}}",
+        knownTool);
+    ASSERT_TRUE(p.toolName.has_value());
+    EXPECT_EQ((*p.toolArgs)["command"], "make") << "the quoted call ran instead of the new one";
+    EXPECT_EQ(p.droppedToolCalls, 0u);
+
+    // Prose, then a run of two calls: the run's first call runs, the quoted one is not counted.
+    auto run = parseLlmResponse(
+        "That {\"tool\": \"bash_execute\", \"command\": \"ls\"} showed no file. Writing it, then compiling.\n\n"
+        "{\"tool\": \"file_write\", \"path\": \"p.c\", \"content\": \"x\"}\n\n"
+        "{\"tool\": \"bash_execute\", \"command\": \"gcc p.c\"}",
+        knownTool);
+    ASSERT_TRUE(run.toolName.has_value());
+    EXPECT_EQ(*run.toolName, "file_write");
+    EXPECT_EQ(run.droppedToolCalls, 1u);
+}
