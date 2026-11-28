@@ -1059,7 +1059,7 @@ def _should_skip_prompt(yes: bool) -> bool:
 
     NOTE: This applies to Tier 2 (``--venv``) only. ``--purge`` adds an
     extra guardrail in :func:`run` that refuses to proceed on non-TTY stdin
-    without an explicit ``--yes`` — see ``_refuse_silent_purge``.
+    without an explicit ``--yes`` (the inline guard before ``build_plan``).
     """
     if yes:
         return True

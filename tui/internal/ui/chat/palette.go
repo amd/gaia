@@ -60,6 +60,7 @@ var paletteCommands = []paletteCommand{
 	{"/update", "Check for a newer GAIA, install one (/update now, /update v0.25.0), or set auto-update"},
 	{"/sessions", "Reopen a past session — ones waiting on you come first"},
 	{"/sessions all", "Every session, eval and scheduled runs included"},
+	{quitCommand, "Quit GAIA; /exit and Ctrl+C do the same"},
 }
 
 // modelPalettePrefix is what turns the palette into the model picker: the

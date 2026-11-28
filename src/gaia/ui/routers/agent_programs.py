@@ -159,6 +159,15 @@ def _fails_check() -> bool:
     return False
 
 
+def _installed_version(binary) -> Optional[str]:
+    """The version of the gaiacpp on this PC, for the Agent card; ``None`` when it can't be read."""
+    try:
+        return gaiacpp_fetch.installed_version(binary)
+    except (SidecarError, OSError) as e:
+        logger.warning("agent programs: no version for %s: %s", binary, e)
+        return None
+
+
 def _job_view() -> Dict[str, Any]:
     with _lock:
         return dict(_job)
@@ -197,6 +206,8 @@ def _listing() -> Dict[str, Any]:
                 "update_available": False,
                 "unavailable_reason": None,
                 "unavailable_code": None,
+                "version": None,
+                "release_version": None,
             },
             {
                 "id": fetch.NATIVE_FLAGSHIP,
@@ -211,6 +222,11 @@ def _listing() -> Dict[str, Any]:
                 "unavailable_code": (
                     native_code if native_path is None or broken else None
                 ),
+                # Both set and different when the copy is from another release.
+                "version": (
+                    _installed_version(native_path) if native_path is not None else None
+                ),
+                "release_version": gaiacpp_fetch.release_version(),
             },
         ],
         "download": _job_view(),

@@ -2001,3 +2001,27 @@ textarea.mem-input { resize: vertical; }
     .mem-tab-bar { overflow-x: auto; padding: 0 12px; }
     .mem-tab-btn { flex-shrink: 0; white-space: nowrap; padding: 10px 12px; }
 }
+
+/* Whose memory the page shows: one quiet line under the tabs, on every tab. */
+.mem-store-banner {
+    flex-shrink: 0;
+    margin: 0;
+    padding: 8px 24px;
+    font-size: 13px;
+    line-height: 1.5;
+    color: var(--text-secondary);
+    background: var(--bg-hover);
+    border-bottom: 1px solid var(--border);
+}
+.mem-store-banner .link-btn { font-size: inherit; }
+.mem-store-only {
+    margin-block: 0 20px;
+    font-size: 14px;
+    line-height: 1.5;
+    color: var(--text-secondary);
+}
+.mem-about-limits {
+    margin: -10px 0 18px;
+    font-size: 13px;
+    color: var(--text-muted);
+}

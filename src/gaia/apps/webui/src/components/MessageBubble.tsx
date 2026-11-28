@@ -30,6 +30,7 @@ import { MODEL_WAIT_HINT_S, isModelWaitLabel } from '../utils/modelWait';
 import { localizeLiveStatus } from '../utils/liveStatus';
 import type { Message, AgentStep, RenderCardData, SkillInfo } from '../types';
 import { TurnChanges } from './TurnChanges';
+import { ranChangingTool } from '../hooks/useSessionProgram';
 import { ReadAloudButton, ReadAloudError, ReadAloudNote } from './ReadAloudButton';
 import { TroubleshootingReport, namesFailureRecord, type ReportClasses } from './TroubleshootingReport';
 import { CODE_COLLAPSE_LINES, CODE_PREVIEW_LINES, ExpandToggle, countLines, isLongUserMessage, lineCount, messageExcerpt, sizeLabel } from './LongContent';
@@ -984,7 +985,7 @@ export function MessageBubble({ message, isStreaming, agentSteps, agentStepsActi
                         <div className="msg-route-notice" role="status">{message.stats.route.notice}</div>
                     )}
                     {message.role === 'assistant' && !isStreaming && message.id > 0 && message.session_id && (
-                        <TurnChanges sessionId={message.session_id} messageId={message.id} />
+                        <TurnChanges sessionId={message.session_id} messageId={message.id} ranChangingTool={ranChangingTool(agentSteps)} />
                     )}
                     {message.role === 'assistant' && <ReadAloudNote messageId={readAloudId} />}
                     {message.role === 'assistant' && <ReadAloudError messageId={readAloudId} />}

@@ -60,12 +60,19 @@ from gaia.agents.tools.search_scope import (
     root_depth,
     search_roots,
 )
-from gaia.agents.tools.text_files import match_excerpt, read_text, text_encoding
+from gaia.agents.tools.text_files import (
+    match_excerpt,
+    read_exact,
+    read_text,
+    text_encoding,
+    write_exact,
+)
 from gaia.agents.tools.workspace_paths import _resolve_target, _workspace_default
 from gaia.filesystem.name_match import fold_name, strip_accents
 from gaia.logger import get_logger
 from gaia.security import BackupError
 from gaia.utils.image_formats import IMAGE_EXTENSIONS
+from gaia.utils.sizes import format_size
 from gaia.utils.text_decoding import TRIED_ENCODINGS, decode_text
 from gaia.utils.user_folders import documents_dir
 
@@ -217,36 +224,38 @@ def _looks_like_text(path: Path) -> bool:
     return b"\x00" not in head
 
 
-def _read_exact(path) -> str:
-    """Read *path* as text without translating its line endings.
-
-    ``open()`` in text mode, and ``Path.read_text``, default to universal
-    newlines: every CRLF in the file arrives as a bare LF. Paired with
-    :func:`_write_exact` this keeps a read/modify/write round trip
-    byte-exact, so a one-line edit stays a one-line diff on every platform.
-    """
-    with open(path, "r", encoding="utf-8", newline="") as fh:
-        return fh.read()
-
-
-def _write_exact(path, content: str) -> None:
-    """Write *content* to *path* with its line endings left alone.
-
-    ``open()`` in text mode, and ``Path.write_text``, translate every LF to
-    ``os.linesep`` on write. On Windows that silently turns an LF-terminated
-    file into a CRLF one, which no byte-comparing tool treats as a no-op: a
-    three-line edit to a 400-line file is reported as 400 lines changed.
-    """
-    with open(path, "w", encoding="utf-8", newline="") as fh:
-        fh.write(content)
-
-
 #: Rows searched for a table's header below title and note rows.
 HEADER_SEARCH_ROWS = 20
 
 
 def _count(n: int, noun: str) -> str:
     return f"{n} {noun}" if n == 1 else f"{n} {noun}s"
+
+
+def _relative_time(dt: datetime) -> str:
+    """Convert a datetime to a human-readable relative time string."""
+    now = datetime.now()
+    diff = now - dt
+    seconds = diff.total_seconds()
+
+    if seconds < 60:
+        return "just now"
+    elif seconds < 3600:
+        minutes = int(seconds / 60)
+        return f"{minutes} minute{'s' if minutes != 1 else ''} ago"
+    elif seconds < 86400:
+        hours = int(seconds / 3600)
+        return f"{hours} hour{'s' if hours != 1 else ''} ago"
+    elif seconds < 172800:
+        return "yesterday"
+    elif seconds < 604800:
+        days = int(seconds / 86400)
+        return f"{days} days ago"
+    elif seconds < 2592000:
+        weeks = int(seconds / 604800)
+        return f"{weeks} week{'s' if weeks != 1 else ''} ago"
+    else:
+        return dt.strftime("%Y-%m-%d")
 
 
 def _header_row_index(rows: List[tuple]) -> int:
@@ -1798,42 +1807,6 @@ class FileSearchToolsMixin:
 
         # --- Helper functions for new file browsing/analysis tools ---
 
-        def _human_readable_size(size_bytes: int) -> str:
-            """Convert bytes to human-readable string."""
-            if size_bytes < 1024:
-                return f"{size_bytes} B"
-            elif size_bytes < 1024 * 1024:
-                return f"{size_bytes / 1024:.1f} KB"
-            elif size_bytes < 1024 * 1024 * 1024:
-                return f"{size_bytes / (1024 * 1024):.1f} MB"
-            else:
-                return f"{size_bytes / (1024 * 1024 * 1024):.2f} GB"
-
-        def _relative_time(dt: datetime) -> str:
-            """Convert a datetime to a human-readable relative time string."""
-            now = datetime.now()
-            diff = now - dt
-            seconds = diff.total_seconds()
-
-            if seconds < 60:
-                return "just now"
-            elif seconds < 3600:
-                minutes = int(seconds / 60)
-                return f"{minutes} minute{'s' if minutes != 1 else ''} ago"
-            elif seconds < 86400:
-                hours = int(seconds / 3600)
-                return f"{hours} hour{'s' if hours != 1 else ''} ago"
-            elif seconds < 172800:
-                return "yesterday"
-            elif seconds < 604800:
-                days = int(seconds / 86400)
-                return f"{days} days ago"
-            elif seconds < 2592000:
-                weeks = int(seconds / 604800)
-                return f"{weeks} week{'s' if weeks != 1 else ''} ago"
-            else:
-                return dt.strftime("%Y-%m-%d")
-
         def _read_tabular_file(file_path: str, sheet: Optional[str] = None) -> tuple:
             """
             Read a tabular data file (CSV, TSV, or Excel) into a list of dicts.
@@ -2097,7 +2070,7 @@ class FileSearchToolsMixin:
                     return {**refusal, "operation": "edit_file"}
 
                 # Read current content
-                current_content = _read_exact(resolved_path)
+                current_content = read_exact(resolved_path)
 
                 updated_content, edit_error = apply_unique_replacement(
                     str(resolved_path), current_content, old_content, new_content
@@ -2156,7 +2129,7 @@ class FileSearchToolsMixin:
 
                 before_change(resolved_path, "edit_file")
                 # Write updated content
-                _write_exact(resolved_path, updated_content)
+                write_exact(resolved_path, updated_content)
                 reads.note(resolved_path)
                 reads.note_edit(resolved_path, old_content, new_content, turn_of(self))
 
@@ -2300,7 +2273,7 @@ class FileSearchToolsMixin:
                             "type": "folder" if is_dir else "file",
                             "size_bytes": stat_info.st_size if not is_dir else 0,
                             "size": (
-                                _human_readable_size(stat_info.st_size)
+                                format_size(stat_info.st_size, gb_decimals=2)
                                 if not is_dir
                                 else "-"
                             ),
@@ -2432,7 +2405,7 @@ class FileSearchToolsMixin:
                     "file_name": fp.name,
                     "file_path": str(fp.resolve()),
                     "file_size_bytes": size_bytes,
-                    "file_size": _human_readable_size(size_bytes),
+                    "file_size": format_size(size_bytes, gb_decimals=2),
                     "extension": fp.suffix.lower(),
                     "mime_type": mime_type,
                     "created": created_dt.strftime("%Y-%m-%d %H:%M:%S"),
@@ -2515,7 +2488,7 @@ class FileSearchToolsMixin:
                 else:
                     result["encoding"] = "binary"
                     result["preview"] = (
-                        f"[Binary file, {_human_readable_size(size_bytes)}]"
+                        f"[Binary file, {format_size(size_bytes, gb_decimals=2)}]"
                     )
 
                 return result
@@ -3538,7 +3511,9 @@ class FileSearchToolsMixin:
                                     "file_name": item.name,
                                     "file_path": str(item),
                                     "size_bytes": stat_info.st_size,
-                                    "size": _human_readable_size(stat_info.st_size),
+                                    "size": format_size(
+                                        stat_info.st_size, gb_decimals=2
+                                    ),
                                     "modified": modified_dt.strftime("%Y-%m-%d %H:%M"),
                                     "modified_ago": _relative_time(modified_dt),
                                     "extension": item.suffix.lower(),

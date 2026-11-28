@@ -75,10 +75,10 @@ func TestTheNativeAgentIsNeverPointedAtClaude(t *testing.T) {
 func TestTheHeaderNamesTheNativeAgent(t *testing.T) {
 	m := nativeChat(t)
 	m.agentVersion = "0.25.4"
-	if got := m.agentIdentity(); got != "agent gaia v0.25.4 (gaiacpp · Beta)" {
+	if got := m.agentIdentity(); got != "agent gaia v0.25.4 (Fast and light · Beta)" {
 		t.Errorf("identity = %q", got)
 	}
-	if !strings.Contains(m.renderHeader(), "(gaiacpp · Beta)") {
+	if !strings.Contains(m.renderHeader(), "(Fast and light · Beta)") {
 		t.Errorf("the header does not name the native agent: %q", m.renderHeader())
 	}
 

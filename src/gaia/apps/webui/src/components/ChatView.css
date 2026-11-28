@@ -555,6 +555,16 @@
     border-color: var(--border-light);
 }
 
+.native-agent-notice {
+    border-color: var(--border-light);
+}
+
+.native-agent-notice__settings {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+}
+
 .server-down-notice__title {
     display: inline-flex;
     align-items: center;

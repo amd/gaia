@@ -35,26 +35,14 @@ import pytest
 import yaml
 from gaiapy import build_gaia
 from gaiapy.agent import GaiaAgent, GaiaAgentConfig
+from registry_isolation import isolated_registry
 
 # The canonical name set for the memory surface — hand-copying it here is
 # exactly the drift these tests exist to catch.
 from gaia.agents.base.memory import _MEMORY_TOOLS
-from gaia.agents.base.tools import _TOOL_REGISTRY
 from gaia.agents.tools.browser_use_tools import BrowserUseToolsMixin
 
 MANIFEST = Path(__file__).resolve().parent.parent / "gaia-agent.yaml"
-
-
-@contextlib.contextmanager
-def _isolated_registry():
-    """@tool writes into a process-global dict shared with every other agent."""
-    saved = dict(_TOOL_REGISTRY)
-    _TOOL_REGISTRY.clear()
-    try:
-        yield
-    finally:
-        _TOOL_REGISTRY.clear()
-        _TOOL_REGISTRY.update(saved)
 
 
 @pytest.fixture(scope="module")
@@ -64,7 +52,7 @@ def tool_surfaces():
     Both are pinned open in GAIA desktop's browser pane, where the browser
     tools register Playwright or not, so the count doesn't depend on the machine.
     """
-    with _isolated_registry(), pytest.MonkeyPatch.context() as mp:
+    with isolated_registry(), pytest.MonkeyPatch.context() as mp:
         mp.setenv("GAIA_MEMORY_DISABLED", "1")
         mp.setattr(BrowserUseToolsMixin, "_pane_at_startup", lambda self: (True, True))
         agent = GaiaAgent(config=GaiaAgentConfig(silent_mode=True))
@@ -103,7 +91,7 @@ def test_re_registering_tools_keeps_the_repo_selected_for_code_index(
     selected_repo = workspace / "selected-repo"
     selected_repo.mkdir(parents=True)
 
-    with _isolated_registry():
+    with isolated_registry():
         monkeypatch.setenv("GAIA_MEMORY_DISABLED", "1")
         agent = GaiaAgent(
             config=GaiaAgentConfig(silent_mode=True, allowed_paths=[str(workspace)])
@@ -129,7 +117,7 @@ def test_re_registering_tools_drops_repo_outside_narrowed_allowed_paths(
     outside.mkdir(parents=True)
     workspace.mkdir()
 
-    with _isolated_registry():
+    with isolated_registry():
         monkeypatch.setenv("GAIA_MEMORY_DISABLED", "1")
         agent = GaiaAgent(
             config=GaiaAgentConfig(silent_mode=True, allowed_paths=[str(tmp_path)])
@@ -146,7 +134,7 @@ def test_re_registering_tools_drops_repo_outside_narrowed_allowed_paths(
 
 
 def _retained_repo_after_narrowing(tmp_path, repo, workspace):
-    with _isolated_registry():
+    with isolated_registry():
         agent = GaiaAgent(
             config=GaiaAgentConfig(silent_mode=True, allowed_paths=[str(tmp_path)])
         )
@@ -475,7 +463,7 @@ def _agent(env=None, **overrides):
     ``_tools_registry`` reads the process-global dict, which is restored the
     moment the context exits.
     """
-    with _isolated_registry(), pytest.MonkeyPatch.context() as mp:
+    with isolated_registry(), pytest.MonkeyPatch.context() as mp:
         mp.setenv("GAIA_MEMORY_DISABLED", "1")
         mp.delenv("GAIA_FAST", raising=False)
         for key, value in (env or {}).items():

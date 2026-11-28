@@ -51,6 +51,8 @@ struct GAIA_API LemonadeHealth {
     int contextSize = 0;   // active n_ctx (0 if unknown)
     json raw;              // full health response JSON
     std::string error;     // why the server could not be reached (empty when it answered)
+    int errorStatus = 0;   // HTTP status of an error reply; 0 when nothing answered
+    std::string errorBody; // that reply's body
 };
 
 /// How many requests a loaded model serves at once.
@@ -272,6 +274,9 @@ public:
     void setApiKey(const std::string& key);
     bool hasApiKey() const { return hasApiKey_; }
 
+    /// Called with each piece of reasoning a streamed reply carries; empty stops that.
+    void setReasoningCallback(StreamCallback cb) { reasoningCallback_ = std::move(cb); }
+
     /// Polled on every streamed chunk; returning true ends the stream early.
     void setAbortCheck(std::function<bool()> check) {
         abortCheck_ = check;
@@ -305,6 +310,7 @@ private:
     bool debug_ = false;
     bool hasApiKey_ = false;
     std::function<bool()> abortCheck_;
+    StreamCallback reasoningCallback_;
     HttpClient http_;
 };
 
