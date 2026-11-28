@@ -4,6 +4,7 @@
 import { useCallback, useEffect, useId, useRef, useState } from 'react';
 import { AlertCircle, Check, RotateCw } from 'lucide-react';
 import { useT, type Translate } from '../../i18n/useT';
+import type { MessageKey } from '../../i18n/registry';
 import * as api from '../../services/api';
 import type { AgentDownload } from '../../types';
 import { formatBytes, ltrIn } from './format';
@@ -13,12 +14,21 @@ const POLL_MS = 1000;
 
 const messageOf = (err: unknown) => (err instanceof Error ? err.message : String(err));
 
+const REFUSALS: Record<string, MessageKey> = {
+    gaiacpp_update_chat_busy: 'setup.agent.refused.updateChatBusy',
+    gaiacpp_update_setup_busy: 'setup.agent.refused.updateSetupBusy',
+    gaiacpp_already_installed: 'setup.agent.refused.alreadyInstalled',
+};
+
+/** The job as this UI holds it: a refusal the server explained is kept as a message key. */
+export type AgentDownloadView = AgentDownload & { refusal?: MessageKey };
+
 /**
  * The gaiacpp download: start (or join) it, poll it once a second while it runs,
  * and call `onDone` once when it finishes, saying whether `start` here began it.
  */
 export function useAgentDownload(onDone: (startedHere: boolean) => void) {
-    const [job, setJob] = useState<AgentDownload | null>(null);
+    const [job, setJob] = useState<AgentDownloadView | null>(null);
     // The server answered "idle" mid-download: it restarted and the download is gone.
     const [interrupted, setInterrupted] = useState(false);
     const doneRef = useRef(onDone);
@@ -34,7 +44,10 @@ export function useAgentDownload(onDone: (startedHere: boolean) => void) {
         try {
             setJob(await api.startAgentDownload());
         } catch (err) {
-            setJob({ state: 'failed', bytes_done: 0, bytes_total: null, error: messageOf(err) });
+            const refusal = err instanceof api.ApiError && err.reason ? REFUSALS[err.reason] : undefined;
+            setJob(refusal
+                ? { state: 'failed', bytes_done: 0, bytes_total: null, error: null, refusal }
+                : { state: 'failed', bytes_done: 0, bytes_total: null, error: messageOf(err) });
         }
     }, []);
 
@@ -81,7 +94,7 @@ function stateWord(job: AgentDownload, t: Translate): string {
 }
 
 interface RowProps {
-    job: AgentDownload;
+    job: AgentDownloadView;
     name: string;
     onRetry: () => void;
     /** What happens meanwhile, said under the failure. */
@@ -125,6 +138,7 @@ export function AgentDownloadRow({ job, name, onRetry, failedNote, interrupted =
                     <div className="dl-fail" role="alert">
                         <p className="dl-error" id={errId}>{t('setup.agent.downloadFailed', { name })}</p>
                         {interrupted && <p className="dl-detail">{t('setup.agent.downloadInterrupted')}</p>}
+                        {job.refusal && <p className="dl-detail">{t(job.refusal)}</p>}
                         {failedNote && <p className="dl-detail">{failedNote}</p>}
                         {job.error && (
                             <details className="dl-details">

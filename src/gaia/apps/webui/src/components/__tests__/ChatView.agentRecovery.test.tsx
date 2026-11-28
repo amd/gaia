@@ -149,6 +149,40 @@ describe('an open chat whose agent could not start', () => {
         expect(document.querySelector('.agent-recovery')).toBeNull();
     });
 
+    it('keeps the Fast and light failure notice after a live failed turn reloads without failed flag', async () => {
+        server = [];
+        useChatStore.setState({ messages: [] });
+        mockedApi.getStartScreen.mockResolvedValue({ ...MISSING, skills_error: null, agent_problem: null });
+        mockedApi.sendMessageStream.mockImplementation((_sid, text, callbacks) => {
+            sends.push(text as string);
+            server = [
+                { ...question, content: text as string },
+                { id: 42, session_id: SESSION.id, role: 'assistant', content: 'The model call failed at step 1.', created_at: '2026-06-10T00:00:01Z', rag_sources: null },
+            ];
+            if (typeof callbacks === 'object' && callbacks) {
+                callbacks.onDone?.({
+                    type: 'done',
+                    message_id: 42,
+                    content: 'The model call failed at step 1.',
+                    failed: true,
+                    agent_program: 'gaiacpp',
+                } as any);
+            }
+            return new AbortController();
+        });
+        render(<ChatView sessionId={SESSION.id} />);
+
+        const box = await screen.findByRole('textbox');
+        fireEvent.change(box, { target: { value: QUESTION } });
+        fireEvent.keyDown(box, { key: 'Enter' });
+
+        expect(await screen.findByText(/This chat is running on Fast and light \(Beta\)\./)).toBeInTheDocument();
+        expect(document.querySelectorAll('.native-agent-notice')).toHaveLength(1);
+        // After the 300ms getMessages refetch returns rows without `failed`, the notice still stays up.
+        await new Promise((r) => setTimeout(r, 400));
+        expect(document.querySelectorAll('.native-agent-notice')).toHaveLength(1);
+    });
+
     it('does not ask about the agent for a turn that did not fail', async () => {
         server = [question, { ...agentDown, failed: false, agentSteps: undefined, content: 'Day one: Alfama.' }];
         useChatStore.setState({ messages: [...server] });

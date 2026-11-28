@@ -10,7 +10,10 @@ translation only: the sidecar's own ``confirm_id`` and ``always_scope`` are
 never touched, so approvals and grants still reach the tool that asked.
 """
 
+import re
 from typing import Any, Dict, Optional, Tuple
+
+_DENIED_BY_USER_RE = re.compile(r"^Tool '[^']+' execution denied by user$")
 
 #: gaiacpp tool -> (flagship tool, {gaiacpp argument: flagship argument}).
 _TWINS: Dict[str, Tuple[str, Dict[str, str]]] = {
@@ -113,15 +116,39 @@ def _count(n: int, one: str, many: str) -> str:
     return f"{n:,} {one if n == 1 else many}"
 
 
+def is_native_denied(tool: str, data: Any) -> bool:
+    """Whether *data* is a user-declined result from a gaiacpp tool."""
+    if not isinstance(data, dict):
+        return False
+    err = data.get("error")
+    if isinstance(err, str) and _DENIED_BY_USER_RE.match(err.strip()):
+        return True
+    if tool not in NATIVE_TOOL_NAMES:
+        return False
+    return data.get("status") == "denied" or data.get("already_declined") is True
+
+
+def normalize_native_result(tool: str, data: Any) -> Any:
+    """Ensure a gaiacpp user-declined tool result carries ``status: "denied"``."""
+    if not is_native_denied(tool, data) or data.get("status") == "denied":
+        return data
+    return {**data, "status": "denied"}
+
+
 def native_result_summary(tool: str, data: Any) -> Optional[str]:
     """A gaiacpp tool's result in plain words, or None to summarize it generically.
 
     *tool* is gaiacpp's own name. Failures generally return None so the generic
-    path shows them; ``web_fetch`` returns its plain error text directly so the
-    UI does not prepend ``error: `` or clip it mid-word.
+    path shows them, except declined gaiacpp calls (whose raw error exposes the
+    C++ tool name) and ``web_fetch`` (which returns its plain error text
+    directly so the UI does not prepend ``error: `` or clip it mid-word).
     """
     if not isinstance(data, dict):
         return None
+    if is_native_denied(tool, data):
+        if data.get("already_declined") is True:
+            return "Not run (declined earlier)"
+        return "Declined by user"
     if tool == "web_fetch" and data.get("error"):
         err = str(data["error"]).strip()
         http_status = data.get("http_status")
@@ -164,6 +191,8 @@ def _shell_summary(data: Dict[str, Any]) -> str:
         return "Command timed out"
     code = data.get("exit_code")
     stdout = str(data.get("stdout") or "").strip()
+    if code not in (0, None) and isinstance(data.get("expected_exit"), str):
+        return f"{data['expected_exit']} (exit {code})"
     if code not in (0, None):
         detail = (str(data.get("stderr") or "").strip() or stdout)[:150]
         return f"Command failed (exit {code})" + (f": {detail}" if detail else "")
