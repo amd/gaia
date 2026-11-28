@@ -90,6 +90,7 @@ module_skips:
       - tests/unit/test_tool_admission_order.py
       - tests/unit/test_tool_loader_disambiguation.py
       - tests/unit/test_profilespec_characterization.py
+      - tests/unit/test_ruled_out_step_prompt.py
 
   - reason: Needs the gaia-agent (flagship) wheel, which test_unit.yml does not install.
     runs_in: test_gaia_agent.yml
