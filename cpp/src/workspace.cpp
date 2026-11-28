@@ -458,11 +458,13 @@ Workspace::Outside Workspace::judgeCommand(const std::string& command, bool posi
                            "instead of cmd.exe switches.");
         }
         // A wildcard is read from one folder: the one before its first wildcard, asked about as itself.
+        // A wildcard in a root (/*, C:\*) names no one place: the card never offers a whole disk.
         const size_t wild = expanded.find_first_of("*?[{");
         std::string place = expanded;
         if (wild != std::string::npos) {
             const size_t slash = expanded.find_last_of("/\\", wild);
-            place = slash == std::string::npos || slash == 0 ? "" : expanded.substr(0, slash);
+            place = slash == std::string::npos ? "" : expanded.substr(0, slash + 1);
+            if (!place.empty() && fs::u8path(place).relative_path().empty()) place.clear();
         }
         return Outside{refusal(token), place.empty() ? "" : resolveWriteTarget(place)};
     }
