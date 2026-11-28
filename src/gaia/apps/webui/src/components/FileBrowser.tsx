@@ -430,6 +430,7 @@ export function FileBrowser({ onStartChat }: FileBrowserProps) {
 
     // A second click can land before the re-render that disables the button.
     const askingRef = useRef(false);
+    const crumbsRef = useRef<HTMLDivElement>(null);
     const handleAskAgent = useCallback(async () => {
         if (selectedFiles.size === 0 || askingRef.current) return;
         askingRef.current = true;
@@ -517,6 +518,12 @@ export function FileBrowser({ onStartChat }: FileBrowserProps) {
         : showHidden ? entries : visibleEntries;
     const hiddenCount = entries.length - visibleEntries.length;
 
+    // A long path scrolls, so keep its last folder in view.
+    useEffect(() => {
+        const strip = crumbsRef.current;
+        if (strip) strip.scrollLeft = getComputedStyle(strip).direction === 'rtl' ? -strip.scrollWidth : strip.scrollWidth;
+    }, [currentPath, searchResults]);
+
     // Nothing the user can't see gets indexed: covers Show hidden turned off and leaving a search.
     useEffect(() => {
         if (showHidden || searchResults) return;
@@ -598,7 +605,7 @@ export function FileBrowser({ onStartChat }: FileBrowserProps) {
                     {/* Breadcrumb */}
                     {!searchResults && (
                         <div className="fb-pathbar">
-                            <div className="fb-breadcrumb">
+                            <div className="fb-breadcrumb" ref={crumbsRef}>
                                 <button className="fb-crumb" onClick={() => loadDirectory('/')}>
                                     <HardDrive size={12} />
                                 </button>
@@ -610,16 +617,16 @@ export function FileBrowser({ onStartChat }: FileBrowserProps) {
                                         </button>
                                     </span>
                                 ))}
-                                {parentPath && (
-                                    <button
-                                        className="fb-up-btn"
-                                        onClick={() => loadDirectory(parentPath)}
-                                        title={t('fileBrowser.goUp')}
-                                    >
-                                        <ArrowUp size={14} />
-                                    </button>
-                                )}
                             </div>
+                            {parentPath && (
+                                <button
+                                    className="fb-up-btn"
+                                    onClick={() => loadDirectory(parentPath)}
+                                    title={t('fileBrowser.goUp')}
+                                >
+                                    <ArrowUp size={14} />
+                                </button>
+                            )}
                             <label className="fb-hidden-toggle">
                                 <input
                                     type="checkbox"
